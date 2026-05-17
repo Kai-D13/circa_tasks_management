@@ -61,7 +61,7 @@ export function Sidebar() {
     : []
 
   return (
-    <aside className="flex h-screen w-56 flex-col border-r bg-sidebar">
+    <aside className="hidden md:flex h-screen w-56 flex-col border-r bg-sidebar">
       {/* Logo / Brand */}
       <div className="flex h-14 items-center gap-2 px-4 border-b border-sidebar-border">
         <div className="h-6 w-6 rounded-full bg-primary flex items-center justify-center shrink-0">

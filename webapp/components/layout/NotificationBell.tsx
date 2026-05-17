@@ -69,10 +69,19 @@ export function NotificationBell({ userId }: { userId: string }) {
 
     if (next && wrapperRef.current) {
       const rect = wrapperRef.current.getBoundingClientRect()
+      const POPUP_W = 320
       const POPUP_H = 340
-      // Anchor to the right of the sidebar, vertically centered on the button
-      const top  = Math.max(8, Math.min(rect.bottom - POPUP_H, window.innerHeight - POPUP_H - 8))
-      const left = rect.right + 8
+
+      // Horizontal: open right if space, else align right edge with button
+      const left = (window.innerWidth - rect.right) >= POPUP_W
+        ? rect.right + 8
+        : Math.max(8, rect.right - POPUP_W)
+
+      // Vertical: open below if space, else open above
+      const top = (window.innerHeight - rect.bottom) >= POPUP_H
+        ? rect.bottom + 8
+        : Math.max(8, rect.top - POPUP_H - 8)
+
       setPopupPos({ top, left })
     }
 
@@ -108,6 +117,7 @@ export function NotificationBell({ userId }: { userId: string }) {
       {open && (
         <div
           ref={popupRef}
+          /* eslint-disable-next-line react/forbid-component-props */
           style={{ position: 'fixed', top: popupPos.top, left: popupPos.left }}
           className="w-80 rounded-lg border bg-popover shadow-xl z-[300] overflow-hidden"
         >
