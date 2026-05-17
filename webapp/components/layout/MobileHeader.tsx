@@ -37,8 +37,8 @@ export function MobileHeader() {
 
   return (
     <header
-      className="sticky top-0 z-30 bg-sidebar border-b border-sidebar-border flex items-center gap-2 px-4 h-14 md:hidden"
-      style={{ paddingTop: 'env(safe-area-inset-top)' }}
+      className="sticky top-0 z-30 bg-sidebar border-b border-sidebar-border flex items-center gap-2 px-4 md:hidden"
+      style={{ height: 'calc(3.5rem + env(safe-area-inset-top))', paddingTop: 'env(safe-area-inset-top)' }}
     >
       {/* Logo + user */}
       <div className="flex items-center gap-2 flex-1 min-w-0">

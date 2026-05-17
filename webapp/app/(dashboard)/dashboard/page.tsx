@@ -34,18 +34,16 @@ export default async function DashboardPage() {
   ]
 
   return (
-    <div className="p-6 space-y-6">
-      <h1 className="text-xl font-semibold">Tổng quan</h1>
+    <div className="p-4 md:p-6 space-y-4 md:space-y-6">
+      <h1 className="text-lg md:text-xl font-semibold">Tổng quan</h1>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+      {/* KPI Cards — 2 cols on mobile, 4 on desktop */}
+      <div className="grid grid-cols-2 gap-3 md:gap-4 md:grid-cols-4">
         {kpis.map(({ label, value, color }) => (
           <Card key={label}>
-            <CardHeader className="pb-1 pt-4 px-4">
-              <CardTitle className="text-xs font-medium text-muted-foreground">{label}</CardTitle>
-            </CardHeader>
-            <CardContent className="pb-4 px-4">
-              <p className={`text-3xl font-bold ${color}`}>{value}</p>
+            <CardContent className="p-4">
+              <p className="text-xs font-medium text-muted-foreground leading-snug">{label}</p>
+              <p className={`text-3xl font-bold mt-1 ${color}`}>{value}</p>
             </CardContent>
           </Card>
         ))}
@@ -53,47 +51,74 @@ export default async function DashboardPage() {
 
       {/* Recent Tasks */}
       <Card>
-        <CardHeader className="pb-2">
+        <CardHeader className="pb-2 px-4 pt-4">
           <CardTitle className="text-sm font-medium">Tasks gần đây</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Tiêu đề</TableHead>
-                <TableHead>Cửa hàng</TableHead>
-                <TableHead>Ưu tiên</TableHead>
-                <TableHead>Trạng thái</TableHead>
-                <TableHead>Deadline</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(recentTasks ?? []).map((task) => (
-                <TableRow key={task.id}>
-                  <TableCell>
-                    <Link href={`/tasks/${task.id}`} className="font-medium hover:underline">
-                      {task.title}
-                    </Link>
-                  </TableCell>
-                  <TableCell className="text-muted-foreground text-sm">
-                    {(task.stores as unknown as { name: string } | null)?.name ?? '—'}
-                  </TableCell>
-                  <TableCell><TaskPriorityBadge priority={task.priority as 'urgent' | 'normal'} /></TableCell>
-                  <TableCell><TaskStatusBadge status={task.status as 'todo' | 'in_progress' | 'done' | 'overdue'} /></TableCell>
-                  <TableCell className="text-muted-foreground text-sm">
-                    {task.deadline ? formatDistanceToNow(task.deadline) : '—'}
-                  </TableCell>
-                </TableRow>
-              ))}
-              {(recentTasks ?? []).length === 0 && (
+          {/* Desktop: table view */}
+          <div className="hidden md:block">
+            <Table>
+              <TableHeader>
                 <TableRow>
-                  <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
-                    Chưa có task nào
-                  </TableCell>
+                  <TableHead>Tiêu đề</TableHead>
+                  <TableHead>Cửa hàng</TableHead>
+                  <TableHead>Ưu tiên</TableHead>
+                  <TableHead>Trạng thái</TableHead>
+                  <TableHead>Deadline</TableHead>
                 </TableRow>
-              )}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {(recentTasks ?? []).map((task) => (
+                  <TableRow key={task.id}>
+                    <TableCell>
+                      <Link href={`/tasks/${task.id}`} className="font-medium hover:underline">
+                        {task.title}
+                      </Link>
+                    </TableCell>
+                    <TableCell className="text-muted-foreground text-sm">
+                      {(task.stores as unknown as { name: string } | null)?.name ?? '—'}
+                    </TableCell>
+                    <TableCell><TaskPriorityBadge priority={task.priority as 'urgent' | 'normal'} /></TableCell>
+                    <TableCell><TaskStatusBadge status={task.status as 'todo' | 'in_progress' | 'done' | 'overdue'} /></TableCell>
+                    <TableCell className="text-muted-foreground text-sm">
+                      {task.deadline ? formatDistanceToNow(task.deadline) : '—'}
+                    </TableCell>
+                  </TableRow>
+                ))}
+                {(recentTasks ?? []).length === 0 && (
+                  <TableRow>
+                    <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                      Chưa có task nào
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+
+          {/* Mobile: card list */}
+          <div className="md:hidden divide-y">
+            {(recentTasks ?? []).length === 0 && (
+              <p className="text-center text-muted-foreground py-8 text-sm">Chưa có task nào</p>
+            )}
+            {(recentTasks ?? []).map((task) => (
+              <Link key={task.id} href={`/tasks/${task.id}`} className="flex flex-col gap-1.5 px-4 py-3 hover:bg-muted/40 active:bg-muted/60">
+                <div className="flex items-start justify-between gap-2">
+                  <span className="font-medium text-sm leading-snug">{task.title}</span>
+                  <TaskPriorityBadge priority={task.priority as 'urgent' | 'normal'} />
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <TaskStatusBadge status={task.status as 'todo' | 'in_progress' | 'done' | 'overdue'} />
+                  <span className="text-xs text-muted-foreground">
+                    {(task.stores as unknown as { name: string } | null)?.name ?? '—'}
+                  </span>
+                  {task.deadline && (
+                    <span className="text-xs text-muted-foreground">{formatDistanceToNow(task.deadline)}</span>
+                  )}
+                </div>
+              </Link>
+            ))}
+          </div>
         </CardContent>
       </Card>
     </div>
