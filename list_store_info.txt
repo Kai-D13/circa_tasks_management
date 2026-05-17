@@ -1,0 +1,3709 @@
+[{
+  "lot_pattern": "AAAAAA",
+  "lot_length": "6",
+  "frequency": "630275",
+  "examples": ["030924", "25N055", "031225", "253002", "AHS346"],
+  "distinct_pos": "78493"
+}, {
+  "lot_pattern": "AAAAAAA",
+  "lot_length": "7",
+  "frequency": "346199",
+  "examples": ["25011CN", "ABH8269", "25010AN", "26020HN", "6128184"],
+  "distinct_pos": "58479"
+}, {
+  "lot_pattern": "AAAAA",
+  "lot_length": "5",
+  "frequency": "195664",
+  "examples": ["25002", "85721", "25003", "22421", "25920"],
+  "distinct_pos": "36900"
+}, {
+  "lot_pattern": "AAAA",
+  "lot_length": "4",
+  "frequency": "135477",
+  "examples": ["VKNK", "XMYG", "0226", "0125", "1124"],
+  "distinct_pos": "32875"
+}, {
+  "lot_pattern": "AAAAAAAA",
+  "lot_length": "8",
+  "frequency": "53554",
+  "examples": ["LF41203A", "LF43707A", "02062025", "07112025", "01112024"],
+  "distinct_pos": "21549"
+}, {
+  "lot_pattern": "AAAAAAAAA",
+  "lot_length": "9",
+  "frequency": "19558",
+  "examples": ["F14T24092", "112320002", "F518A0824", "12250108A", "3246C0624"],
+  "distinct_pos": "10605"
+}, {
+  "lot_pattern": "AAA-AAAAAA",
+  "lot_length": "10",
+  "frequency": "18205",
+  "examples": ["004-231025", "119-201223", "002-280425", "008-250426", "054-301225"],
+  "distinct_pos": "3089"
+}, {
+  "lot_pattern": "AAAAAAAAAA",
+  "lot_length": "10",
+  "frequency": "17841",
+  "examples": ["SLAL010823", "1003189608", "BNC1025015", "1003034204", "4325UM0730"],
+  "distinct_pos": "7171"
+}, {
+  "lot_pattern": "AAA",
+  "lot_length": "3",
+  "frequency": "7982",
+  "examples": ["D23", "197", "L01", "D40", "015"],
+  "distinct_pos": "4394"
+}, {
+  "lot_pattern": "AAA-AAAA",
+  "lot_length": "8",
+  "frequency": "5643",
+  "examples": ["CIT-5002", "LST-4004", "CIT-5003", "CCT-4009", "ANO-5007"],
+  "distinct_pos": "1018"
+}, {
+  "lot_pattern": "AA-AAAA",
+  "lot_length": "7",
+  "frequency": "4286",
+  "examples": ["24-1022", "26-1011", "25-1068", "25-1028", "24-1007"],
+  "distinct_pos": "1070"
+}, {
+  "lot_pattern": "AAA AAAA",
+  "lot_length": "8",
+  "frequency": "3722",
+  "examples": ["CRT 5002", "CLT 5005", "EXP 5007", "SAS 6001", "ACT 6001"],
+  "distinct_pos": "519"
+}, {
+  "lot_pattern": "AA/AAAA",
+  "lot_length": "7",
+  "frequency": "2059",
+  "examples": ["13/0126", "30/0425", "44/0625", "01/0125", "09/1224"],
+  "distinct_pos": "976"
+}, {
+  "lot_pattern": "AA",
+  "lot_length": "2",
+  "frequency": "1990",
+  "examples": ["B8", "A8", "02", "05", "32"],
+  "distinct_pos": "1530"
+}, {
+  "lot_pattern": "AA/AA",
+  "lot_length": "5",
+  "frequency": "1919",
+  "examples": ["12/24", "04/25", "10/23", "11/24", "06/25"],
+  "distinct_pos": "379"
+}, {
+  "lot_pattern": "AA/AA/AAAA",
+  "lot_length": "10",
+  "frequency": "1803",
+  "examples": ["31/03/2027", "30/05/2025", "08/03/2025", "10/02/2025", "07/10/2024"],
+  "distinct_pos": "893"
+}, {
+  "lot_pattern": "AA-AA",
+  "lot_length": "5",
+  "frequency": "1674",
+  "examples": ["09-24", "19-24", "04-22", "08-24", "24-25"],
+  "distinct_pos": "873"
+}, {
+  "lot_pattern": "AAAAA-A",
+  "lot_length": "7",
+  "frequency": "1411",
+  "examples": ["10125-2", "02425-2", "06625-1", "04725-1", "01425-2"],
+  "distinct_pos": "601"
+}, {
+  "lot_pattern": "A AAAAAA",
+  "lot_length": "8",
+  "frequency": "1368",
+  "examples": ["G 240589", "K 240986", "C 250232", "B 250131", "K 240994"],
+  "distinct_pos": "669"
+}, {
+  "lot_pattern": "AAAAAAAAAAA",
+  "lot_length": "11",
+  "frequency": "1130",
+  "examples": ["MG39062460A", "603774811K1", "B53254811K4", "89029012024", "D2503019VN3"],
+  "distinct_pos": "713"
+}, {
+  "lot_pattern": "AA.AAAA",
+  "lot_length": "7",
+  "frequency": "1036",
+  "examples": ["01.2025", "01.2026", "08.2025", "08.0425", "05.0325"],
+  "distinct_pos": "770"
+}, {
+  "lot_pattern": "AA.AA.AAAA",
+  "lot_length": "10",
+  "frequency": "877",
+  "examples": ["22.05.2025", "01.06.2024", "04.11.2024", "09.07.2027", "25.02.2026"],
+  "distinct_pos": "377"
+}, {
+  "lot_pattern": "AAAA-AAAA",
+  "lot_length": "9",
+  "frequency": "694",
+  "examples": ["HSNT-4002", "HGIT-5005", "HVZT-5004", "0705-2025", "HVZT-4001"],
+  "distinct_pos": "349"
+}, {
+  "lot_pattern": "AAAAAA ",
+  "lot_length": "7",
+  "frequency": "642",
+  "examples": ["511188 ", "190425 ", "221195 ", "KT0SB6 ", "23001B "],
+  "distinct_pos": "487"
+}, {
+  "lot_pattern": "A",
+  "lot_length": "1",
+  "frequency": "606",
+  "examples": ["8", "E", "4", "7", "5"],
+  "distinct_pos": "461"
+}, {
+  "lot_pattern": "AAAA AAAA",
+  "lot_length": "9",
+  "frequency": "583",
+  "examples": ["HVZT 5003", "HVAC 5004", "HCST 4001", "HVAC 5003", "HSNT 4001"],
+  "distinct_pos": "187"
+}, {
+  "lot_pattern": "A-AAA",
+  "lot_length": "5",
+  "frequency": "545",
+  "examples": ["0-118", "V-242", "V-293", "V-260", "V-221"],
+  "distinct_pos": "526"
+}, {
+  "lot_pattern": "AAA/AA",
+  "lot_length": "6",
+  "frequency": "544",
+  "examples": ["004/26", "002/26", "159/24", "192/24", "319/24"],
+  "distinct_pos": "362"
+}, {
+  "lot_pattern": "AAAAA/AA",
+  "lot_length": "8",
+  "frequency": "510",
+  "examples": ["DP001/25", "DP003/25", "M0507/24", "M0410/24", "DP006/24"],
+  "distinct_pos": "328"
+}, {
+  "lot_pattern": "AAAAAAA ",
+  "lot_length": "8",
+  "frequency": "473",
+  "examples": ["272E001 ", "0220524 ", "RV25379 ", "K316302 ", "0050226 "],
+  "distinct_pos": "385"
+}, {
+  "lot_pattern": "AAAAAAAAAAAA",
+  "lot_length": "12",
+  "frequency": "425",
+  "examples": ["230225CN122L", "17BC0086X1M9", "20250820P102", "011024CN121Z", "25BC0069X1M2"],
+  "distinct_pos": "344"
+}, {
+  "lot_pattern": "AAAA-A",
+  "lot_length": "6",
+  "frequency": "413",
+  "examples": ["GA02-3", "GA03-2", "LZ01-2", "LZ05-2", "JZ01-2"],
+  "distinct_pos": "363"
+}, {
+  "lot_pattern": "A.A.AA",
+  "lot_length": "6",
+  "frequency": "396",
+  "examples": ["2.1.G8", "2.5.G5", "1.7.G8", "2.1.G5", "1.7.G5"],
+  "distinct_pos": "233"
+}, {
+  "lot_pattern": "AAAAAA-AAAA",
+  "lot_length": "11",
+  "frequency": "380",
+  "examples": ["150925-0159", "121024-1210", "161224-1162", "090125-0091", "200225-0202"],
+  "distinct_pos": "245"
+}, {
+  "lot_pattern": "AAA AA/AA",
+  "lot_length": "9",
+  "frequency": "324",
+  "examples": ["M08 03/26", "M02 11/25", "M12 10/24", "M08 11/25", "M11 10/24"],
+  "distinct_pos": "229"
+}, {
+  "lot_pattern": "\t AAAAAA",
+  "lot_length": "8",
+  "frequency": "311",
+  "examples": ["\t 407040", "\t 512143", "\t 508013", "\t 506172", "\t 504016"],
+  "distinct_pos": "128"
+}, {
+  "lot_pattern": "AA.AA/+AAA/A",
+  "lot_length": "12",
+  "frequency": "273",
+  "examples": ["27.09/+DSL/I", "27.04/+DBS/B", "27.11/+DCS/A", "27.07/+DYI/A", "27.07/+DFL/E"],
+  "distinct_pos": "151"
+}, {
+  "lot_pattern": "AAAAAAA-A",
+  "lot_length": "9",
+  "frequency": "226",
+  "examples": ["F240498-1", "G240188-3", "0523G02-1", "0325K01-2", "C240188-2"],
+  "distinct_pos": "202"
+}, {
+  "lot_pattern": "AA-AA-AAAA",
+  "lot_length": "10",
+  "frequency": "224",
+  "examples": ["07-05-2025", "12-03-2025", "11-07-2025", "07-08-2025", "11-08-2025"],
+  "distinct_pos": "69"
+}, {
+  "lot_pattern": "AA.AA.AAAAAA",
+  "lot_length": "12",
+  "frequency": "214",
+  "examples": ["25.04.202504", "15.05.202405", "15.06.202506", "28.11.202411", "10.01.202601"],
+  "distinct_pos": "206"
+}, {
+  "lot_pattern": "AAAAAAAAAAAAA",
+  "lot_length": "13",
+  "frequency": "213",
+  "examples": ["ZSDE22A1DE262", "C47B007111027", "20250904964VF", "20251101048VF", "20250702160VF"],
+  "distinct_pos": "156"
+}, {
+  "lot_pattern": "A AAAAAA-A",
+  "lot_length": "10",
+  "frequency": "205",
+  "examples": ["G 240188-2", "B 250051-1", "C 240188-2", "F 240498-1", "C 240188-3"],
+  "distinct_pos": "203"
+}, {
+  "lot_pattern": "AA-AAAAAA",
+  "lot_length": "9",
+  "frequency": "192",
+  "examples": ["02-070324", "04-200925", "01-050225", "01-210725", "A1-110822"],
+  "distinct_pos": "149"
+}, {
+  "lot_pattern": "AAAAAAA/A",
+  "lot_length": "9",
+  "frequency": "188",
+  "examples": ["O25525G/1", "2304702/1", "O25B36G/2", "O25511G/2", "O25609G/1"],
+  "distinct_pos": "140"
+}, {
+  "lot_pattern": "AAAA.AA.AA",
+  "lot_length": "10",
+  "frequency": "177",
+  "examples": ["2025.12.05", "DM02.03.25", "DM01.03.25", "2027.06.10", "2028.10.15"],
+  "distinct_pos": "160"
+}, {
+  "lot_pattern": "AAAA ",
+  "lot_length": "5",
+  "frequency": "177",
+  "examples": ["0325 ", "V008 ", "0324 ", "0226 ", "0424 "],
+  "distinct_pos": "139"
+}, {
+  "lot_pattern": "AA AA AAAA",
+  "lot_length": "10",
+  "frequency": "168",
+  "examples": ["06 05 2025", "19 11 2024", "21 07 2025", "19 05 2025", "28 07 2025"],
+  "distinct_pos": "106"
+}, {
+  "lot_pattern": "AAAAAAAA-AA",
+  "lot_length": "11",
+  "frequency": "165",
+  "examples": ["14231120-01", "25122604-10", "14241203-01", "47240520-01", "47250630-01"],
+  "distinct_pos": "154"
+}, {
+  "lot_pattern": "AAAAAA-A",
+  "lot_length": "8",
+  "frequency": "165",
+  "examples": ["25C124-1", "240498-1", "24H105-1", "501171-3", "24F105-1"],
+  "distinct_pos": "112"
+}, {
+  "lot_pattern": "AAAAA-AA",
+  "lot_length": "8",
+  "frequency": "159",
+  "examples": ["S2025-06", "S2023-02", "L2502-21", "L2502-20", "S2022-05"],
+  "distinct_pos": "122"
+}, {
+  "lot_pattern": "AA.AA.AA",
+  "lot_length": "8",
+  "frequency": "153",
+  "examples": ["11.10.25", "25.05.25", "05.09.25", "25.05.24", "25.09.24"],
+  "distinct_pos": "137"
+}, {
+  "lot_pattern": "AAAAAA  ",
+  "lot_length": "8",
+  "frequency": "151",
+  "examples": ["691225  ", "080525  ", "25003B  ", "243014  ", "240251  "],
+  "distinct_pos": "55"
+}, {
+  "lot_pattern": "AAAA A",
+  "lot_length": "6",
+  "frequency": "147",
+  "examples": ["0204 P", "0301 N", "2201 N", "0912 N", "1704 P"],
+  "distinct_pos": "59"
+}, {
+  "lot_pattern": "AAAAA ",
+  "lot_length": "6",
+  "frequency": "133",
+  "examples": ["0V08A ", "20725 ", "00224 ", "MC246 ", "7020C "],
+  "distinct_pos": "126"
+}, {
+  "lot_pattern": "AA/AA/AA",
+  "lot_length": "8",
+  "frequency": "129",
+  "examples": ["08/09/25", "11/06/25", "19/02/25", "01/06/25", "30/08/25"],
+  "distinct_pos": "98"
+}, {
+  "lot_pattern": "AAAAAAA/AA",
+  "lot_length": "10",
+  "frequency": "121",
+  "examples": ["KT0PTB2/V3", "KT0S4P1/V1", "KT0PTB3/V1", "KT10A6V/V3", "KT0PTB3/V4"],
+  "distinct_pos": "117"
+}, {
+  "lot_pattern": "AAAAAAAA ",
+  "lot_length": "9",
+  "frequency": "119",
+  "examples": ["25050002 ", "22210524 ", "S51A0325 ", "WT032125 ", "B1561B28 "],
+  "distinct_pos": "116"
+}, {
+  "lot_pattern": "AAAAA/A",
+  "lot_length": "7",
+  "frequency": "118",
+  "examples": ["L4036/2", "L5253/1", "L3278/2", "L5322/2", "L4253/3"],
+  "distinct_pos": "89"
+}, {
+  "lot_pattern": "AA AAA/AA",
+  "lot_length": "9",
+  "frequency": "117",
+  "examples": ["TT 002/25", "TT 004/25", "TT 001/25", "TT 003/25", "TT 003/28"],
+  "distinct_pos": "49"
+}, {
+  "lot_pattern": "AAAA/AAAAAA",
+  "lot_length": "11",
+  "frequency": "104",
+  "examples": ["0824/061224", "2402/060724", "2412/211124", "2415/071024", "3925/210325"],
+  "distinct_pos": "37"
+}, {
+  "lot_pattern": "AAA AAAAAA",
+  "lot_length": "10",
+  "frequency": "95",
+  "examples": ["MDN 072023", "024 230625", "MGN 010725", "MGA 010725", "007 130426"],
+  "distinct_pos": "81"
+}, {
+  "lot_pattern": "AAA.AAAAAA",
+  "lot_length": "10",
+  "frequency": "92",
+  "examples": ["HLX.010525", "ALP.011224", "DMF.061223", "OTC.170925", "CLB.010426"],
+  "distinct_pos": "59"
+}, {
+  "lot_pattern": "\t AAAA",
+  "lot_length": "6",
+  "frequency": "90",
+  "examples": ["\t 6111", "\t 5216", "\t 5041", "\t 4443", "\t 4551"],
+  "distinct_pos": "80"
+}, {
+  "lot_pattern": "A-AA",
+  "lot_length": "4",
+  "frequency": "88",
+  "examples": ["V-40", "V-45", "K-28", "L-10", "K-18"],
+  "distinct_pos": "88"
+}, {
+  "lot_pattern": "+++AAAAAAAAA",
+  "lot_length": "12",
+  "frequency": "82",
+  "examples": ["+++0011024M2", "+++0070425M2", "+++0010424M3", "+++0180923M2", "+++0081224M2"],
+  "distinct_pos": "49"
+}, {
+  "lot_pattern": "AA.AA/AAA/A",
+  "lot_length": "11",
+  "frequency": "80",
+  "examples": ["26.11/DFL/R", "27.06/DFL/J", "27.11/DSC/B", "27.09/DSL/J", "27.06/DFL/B"],
+  "distinct_pos": "42"
+}, {
+  "lot_pattern": "A.A.AAAAA.AA",
+  "lot_length": "12",
+  "frequency": "80",
+  "examples": ["2.6.WHITE.3L", "1.4.WHITE.3L", "2.6.BLACK.3L", "2.5.WHITE.3L", "2.5.White.3L"],
+  "distinct_pos": "64"
+}, {
+  "lot_pattern": "AAAAAAA  ",
+  "lot_length": "9",
+  "frequency": "79",
+  "examples": ["2407004  ", "1171224  ", "0040724  ", "24001HN  ", "GC25008  "],
+  "distinct_pos": "45"
+}, {
+  "lot_pattern": "A.A.AAA",
+  "lot_length": "7",
+  "frequency": "79",
+  "examples": ["2.5.G10", "1.8.G10", "2.6.RON", "6.2.G10", "1.4.G10"],
+  "distinct_pos": "67"
+}, {
+  "lot_pattern": "A.A.AAA.AA",
+  "lot_length": "10",
+  "frequency": "78",
+  "examples": ["2.5.DPC.4L", "1.3.BK2.55", "2.5.BK2.55", "1.4.DPS.4L", "2.6.DPC.4L"],
+  "distinct_pos": "74"
+}, {
+  "lot_pattern": "A AA",
+  "lot_length": "4",
+  "frequency": "71",
+  "examples": ["S 11", "E 68", "O 61", "6 H5", "Y 22"],
+  "distinct_pos": "66"
+}, {
+  "lot_pattern": "AA-AAAAA-AA",
+  "lot_length": "11",
+  "frequency": "70",
+  "examples": ["VN-17152-13", "VD-18887-13", "VD-29245-18", "VD-32340-19", "VD-23267-15"],
+  "distinct_pos": "13"
+}, {
+  "lot_pattern": "A AAAAAAA",
+  "lot_length": "9",
+  "frequency": "69",
+  "examples": ["B 1022171", "B 1142028", "B 1123602", "B 1160679", "B 1112731"],
+  "distinct_pos": "60"
+}, {
+  "lot_pattern": "AAAA/AA/AA",
+  "lot_length": "10",
+  "frequency": "69",
+  "examples": ["2025/09/05", "2023/08/02", "2025/03/25", "2025/07/20", "2025/09/06"],
+  "distinct_pos": "55"
+}, {
+  "lot_pattern": "AA AA",
+  "lot_length": "5",
+  "frequency": "65",
+  "examples": ["01 25", "05 25", "04 23", "10 24", "02 25"],
+  "distinct_pos": "40"
+}, {
+  "lot_pattern": "AA.AA",
+  "lot_length": "5",
+  "frequency": "65",
+  "examples": ["02.25", "26.11", "27.05", "27.07", "28.04"],
+  "distinct_pos": "58"
+}, {
+  "lot_pattern": "A/AAAA",
+  "lot_length": "6",
+  "frequency": "62",
+  "examples": ["6/2025", "5/2025"],
+  "distinct_pos": "42"
+}, {
+  "lot_pattern": "AAAAAA-AA",
+  "lot_length": "9",
+  "frequency": "61",
+  "examples": ["210325-03", "L002IC-PS", "L002TC-HS", "151225-03", "160125-11"],
+  "distinct_pos": "42"
+}, {
+  "lot_pattern": "AAAAAAAAAA-A",
+  "lot_length": "12",
+  "frequency": "60",
+  "examples": ["51560386N0-1", "51050386N3-1", "51400386N3-1", "51700386N2-2", "50510386N1-2"],
+  "distinct_pos": "43"
+}, {
+  "lot_pattern": "AAAA AAAAA",
+  "lot_length": "10",
+  "frequency": "59",
+  "examples": ["BATE JE006", "2525 00871", "BATE JE007", "1236 03994", "2025 02441"],
+  "distinct_pos": "50"
+}, {
+  "lot_pattern": "AAAA/AA",
+  "lot_length": "7",
+  "frequency": "58",
+  "examples": ["NY01/24", "T003/25", "BC02/26", "BC10/26", "BC05/26"],
+  "distinct_pos": "40"
+}, {
+  "lot_pattern": "AAAAA/AAAA",
+  "lot_length": "10",
+  "frequency": "57",
+  "examples": ["40495/0313", "41306/0818", "50002/0002", "MFG09/2024", "40899/0531"],
+  "distinct_pos": "56"
+}, {
+  "lot_pattern": "AA.AA/+AA/A",
+  "lot_length": "11",
+  "frequency": "55",
+  "examples": ["26.07/+DF/B", "28.04/+DF/A", "26.08/+DF/A", "28.03/+DF/A", "27.08/+DF/A"],
+  "distinct_pos": "46"
+}, {
+  "lot_pattern": " AAAAAA",
+  "lot_length": "7",
+  "frequency": "54",
+  "examples": [" 404701", " 011025", " 030624", " 321124", " A01RBD"],
+  "distinct_pos": "52"
+}, {
+  "lot_pattern": "AAAA  ",
+  "lot_length": "6",
+  "frequency": "53",
+  "examples": ["0125  ", "0611  ", "1124  ", "0924  ", "0824  "],
+  "distinct_pos": "24"
+}, {
+  "lot_pattern": "AAA-A",
+  "lot_length": "5",
+  "frequency": "52",
+  "examples": ["016-1", "172-1", "117-1", "025-1", "068-1"],
+  "distinct_pos": "51"
+}, {
+  "lot_pattern": "AAAAAAAAA ",
+  "lot_length": "10",
+  "frequency": "52",
+  "examples": ["472407069 ", "200193185 ", "030040425 ", "A08892502 ", "X2041120X "],
+  "distinct_pos": "47"
+}, {
+  "lot_pattern": "AA/AA/AAAA A",
+  "lot_length": "12",
+  "frequency": "50",
+  "examples": ["05/06/2025 G", "16/07/2025 D", "04/08/2025 G", "06/08/2025 G", "03/06/2025 G"],
+  "distinct_pos": "36"
+}, {
+  "lot_pattern": "AAAAAAAA-A",
+  "lot_length": "10",
+  "frequency": "49",
+  "examples": ["20250116-1", "VNAN2503-2", "20250717-E", "20250116-2"],
+  "distinct_pos": "42"
+}, {
+  "lot_pattern": "AAAA-AA-AA",
+  "lot_length": "10",
+  "frequency": "49",
+  "examples": ["2025-05-30", "2025-05-27", "2024-09-27", "2025-11-24", "2024-11-20"],
+  "distinct_pos": "47"
+}, {
+  "lot_pattern": "A.AA",
+  "lot_length": "4",
+  "frequency": "47",
+  "examples": ["Y.17", "S.05", "E.68", "N.71", "N.68"],
+  "distinct_pos": "45"
+}, {
+  "lot_pattern": "AA AA AA",
+  "lot_length": "8",
+  "frequency": "47",
+  "examples": ["02 06 25", "01 08 24", "02 10 24", "02 12 25", "01 06 25"],
+  "distinct_pos": "47"
+}, {
+  "lot_pattern": "A.AAAAAA",
+  "lot_length": "8",
+  "frequency": "46",
+  "examples": ["B.349T17", "B.360F13", "B.275T16", "B.193T24", "B.370F13"],
+  "distinct_pos": "33"
+}, {
+  "lot_pattern": "AAAAA-AA-AAAAAA",
+  "lot_length": "15",
+  "frequency": "45",
+  "examples": ["S2024-12-271614", "N2024-12-170409", "S2024-12-271115", "S2024-12-273981", "S2024-12-270572"],
+  "distinct_pos": "33"
+}, {
+  "lot_pattern": "AAAAAA/A",
+  "lot_length": "8",
+  "frequency": "44",
+  "examples": ["31139B/5", "31238C/1"],
+  "distinct_pos": "44"
+}, {
+  "lot_pattern": "AAAAAA-AAA",
+  "lot_length": "10",
+  "frequency": "44",
+  "examples": ["25HL04-001", "IM2401-019", "111124-111", "240613-035", "240328-019"],
+  "distinct_pos": "30"
+}, {
+  "lot_pattern": "AAAAAAA-AAAAAA",
+  "lot_length": "14",
+  "frequency": "44",
+  "examples": ["0090226-060228", "0020326-020329", "0071225-241228", "0321225-271228", "0510825-040828"],
+  "distinct_pos": "15"
+}, {
+  "lot_pattern": "AAAAA  ",
+  "lot_length": "7",
+  "frequency": "43",
+  "examples": ["24012  ", "5R527  ", "00224  ", "25006  ", "00125  "],
+  "distinct_pos": "24"
+}, {
+  "lot_pattern": "AAAAAAAA/A",
+  "lot_length": "10",
+  "frequency": "42",
+  "examples": ["2406401C/2", "2427402D/2", "BMT01025/3", "20280415/A", "2406402A/1"],
+  "distinct_pos": "36"
+}, {
+  "lot_pattern": "AAAAA-AAA",
+  "lot_length": "9",
+  "frequency": "42",
+  "examples": ["L2412-191", "M2401-019", "SCMML-122", "M2505-043", "L2412-249"],
+  "distinct_pos": "37"
+}, {
+  "lot_pattern": "AAAAAA A",
+  "lot_length": "8",
+  "frequency": "41",
+  "examples": ["011224 A", "K19Y15 M", "091023 T", "1D0528 5", "070923 T"],
+  "distinct_pos": "40"
+}, {
+  "lot_pattern": "AAAAAA-AA-AA-AAAAA",
+  "lot_length": "18",
+  "frequency": "41",
+  "examples": ["42CTBH-KD-25-00125", "67CTBH-KD-25-00325", "42CTBH-KD-25-00225", "42CTBH-KD-25-00624", "23CTBH-KD-25-01124"],
+  "distinct_pos": "13"
+}, {
+  "lot_pattern": "AA-AAA",
+  "lot_length": "6",
+  "frequency": "41",
+  "examples": ["BG-124", "BC-109", "BL-113", "25-004", "BS-130"],
+  "distinct_pos": "34"
+}, {
+  "lot_pattern": "AAAAAAAA-AAA",
+  "lot_length": "12",
+  "frequency": "41",
+  "examples": ["12032025-046", "21102025-197", "18062024-135", "11062025-BFU", "21062025-BFE"],
+  "distinct_pos": "37"
+}, {
+  "lot_pattern": "A AAAAA",
+  "lot_length": "7",
+  "frequency": "40",
+  "examples": ["B 27936", "B 4377D", "R 12301", "B 27330", "L 12401"],
+  "distinct_pos": "32"
+}, {
+  "lot_pattern": "AAAAAA-AAAAAA",
+  "lot_length": "13",
+  "frequency": "40",
+  "examples": ["HT2510-000112", "HT2512-001141", "HT2603-001555", "HT2504-005109", "HT2504-000263"],
+  "distinct_pos": "22"
+}, {
+  "lot_pattern": "AAAA/AA-AAA/AAA",
+  "lot_length": "15",
+  "frequency": "39",
+  "examples": ["TP03/25-005/013", "TP07/24-115/012", "TP04/24-058/003", "TP12/24-018/005", "TP03/25-038/003"],
+  "distinct_pos": "7"
+}, {
+  "lot_pattern": "AAA AAAA ",
+  "lot_length": "9",
+  "frequency": "38",
+  "examples": ["GTO 5069 ", "VAS 5044 ", "VAS 5035 ", "FGT 5001 ", "VAS 5036 "],
+  "distinct_pos": "31"
+}, {
+  "lot_pattern": "AA AAAAAA",
+  "lot_length": "9",
+  "frequency": "38",
+  "examples": ["EO 624004", "SL 020525", "BH 010325", "SL 170225", "SL 050325"],
+  "distinct_pos": "27"
+}, {
+  "lot_pattern": "AAAAAA AAAAAA",
+  "lot_length": "13",
+  "frequency": "38",
+  "examples": ["TAMLAN 528366", "TANLAN 528366", "300724 CN123J", "TAMLAN 396188", "TAMLAN 133555"],
+  "distinct_pos": "24"
+}, {
+  "lot_pattern": "A A-AAA",
+  "lot_length": "7",
+  "frequency": "37",
+  "examples": ["B O-118", "B S-125", "B T-596", "B S-129", "B T-624"],
+  "distinct_pos": "29"
+}, {
+  "lot_pattern": "AAAAAAAAA-A",
+  "lot_length": "11",
+  "frequency": "36",
+  "examples": ["P01201725-2", "5147086N1-1", "PO1200425-2", "P01200425-2", "PO1200226-2"],
+  "distinct_pos": "32"
+}, {
+  "lot_pattern": "A.A.AAA.AAAAAAA",
+  "lot_length": "15",
+  "frequency": "36",
+  "examples": ["1.7.BC0.086X1M9", "1.7.BC0.069X1M2", "1.8.BC0.086X1M9", "1.4.BC0.069X1M2", "1.3.BC0.086X1M9"],
+  "distinct_pos": "30"
+}, {
+  "lot_pattern": "AA-AAAAA",
+  "lot_length": "8",
+  "frequency": "35",
+  "examples": ["25-00824", "25-00323", "25-00223", "25-00125", "25-00224"],
+  "distinct_pos": "23"
+}, {
+  "lot_pattern": "AA.AAAA.AA",
+  "lot_length": "10",
+  "frequency": "33",
+  "examples": ["09.2025.3W", "09.2025.3K", "01.2025.3W", "02.2025.3W", "07.2025.3K"],
+  "distinct_pos": "27"
+}, {
+  "lot_pattern": " AAAAAAA",
+  "lot_length": "8",
+  "frequency": "33",
+  "examples": [" 25002CN", " C130247", " B859729", " 6131024", " CLT5003"],
+  "distinct_pos": "32"
+}, {
+  "lot_pattern": "AA.AAAAAA",
+  "lot_length": "9",
+  "frequency": "32",
+  "examples": ["SR.010625", "01.062024", "SR.010225", "BH.010725", "02.122024"],
+  "distinct_pos": "32"
+}, {
+  "lot_pattern": "AAAAAA:",
+  "lot_length": "7",
+  "frequency": "32",
+  "examples": ["080125:", "540325:", "711224:", "791224:", "661124:"],
+  "distinct_pos": "32"
+}, {
+  "lot_pattern": "A-AAAAA",
+  "lot_length": "7",
+  "frequency": "31",
+  "examples": ["L-U030C", "L-U030B", "L-U030A"],
+  "distinct_pos": "20"
+}, {
+  "lot_pattern": "AAAAAA/AA",
+  "lot_length": "9",
+  "frequency": "30",
+  "examples": ["050225/MP", "041125/MP", "WE12MR/V1", "WEX9N2/V1", "WEX9NX/V1"],
+  "distinct_pos": "30"
+}, {
+  "lot_pattern": "A.AAAAAAAAA",
+  "lot_length": "11",
+  "frequency": "29",
+  "examples": ["1.4BKCN3572", "1.4BKCN1872", "1.7BKCN3572"],
+  "distinct_pos": "28"
+}, {
+  "lot_pattern": "A.AA.AA",
+  "lot_length": "7",
+  "frequency": "29",
+  "examples": ["2.12.G8", "1.11.G8", "1.12.BC", "1.11.BC", "2.12.G5"],
+  "distinct_pos": "26"
+}, {
+  "lot_pattern": "AAA-AAA",
+  "lot_length": "7",
+  "frequency": "27",
+  "examples": ["FST-118", "242-425", "BST-107", "FST-088", "PRO-922"],
+  "distinct_pos": "27"
+}, {
+  "lot_pattern": "A.AAAA.AAA",
+  "lot_length": "10",
+  "frequency": "27",
+  "examples": ["1.4BK1.255", "2.1BK1.255"],
+  "distinct_pos": "27"
+}, {
+  "lot_pattern": "AAAAAA:AAAAAA",
+  "lot_length": "13",
+  "frequency": "26",
+  "examples": ["TAMLAN:528366", "TAMLAN:528115", "TAMLAN:288366", "TAMLAN:115144", "TAMLAN:133555"],
+  "distinct_pos": "19"
+}, {
+  "lot_pattern": "AAAA/AAAA",
+  "lot_length": "9",
+  "frequency": "26",
+  "examples": ["0224/3SPN", "1124/3SPN", "1023/3SPN", "NY08/2025", "3SPN/0523"],
+  "distinct_pos": "21"
+}, {
+  "lot_pattern": "AA-AA-AAAAA",
+  "lot_length": "11",
+  "frequency": "26",
+  "examples": ["KD-25-00825", "KD-25-00125", "KD-25-06125", "KD-25-01125", "KD-25-05825"],
+  "distinct_pos": "15"
+}, {
+  "lot_pattern": "AAA-AAAAAA ",
+  "lot_length": "11",
+  "frequency": "26",
+  "examples": ["015-110924 ", "003-260425 ", "017-030525 ", "003-141124 ", "021-081124 "],
+  "distinct_pos": "22"
+}, {
+  "lot_pattern": "AAA-AA",
+  "lot_length": "6",
+  "frequency": "25",
+  "examples": ["MED-61", "BST-92", "PRO-35", "PRO-36", "FLB-21"],
+  "distinct_pos": "20"
+}, {
+  "lot_pattern": "AAAA.AA/A",
+  "lot_length": "9",
+  "frequency": "25",
+  "examples": ["2027.02/A", "2026.11/A"],
+  "distinct_pos": "25"
+}, {
+  "lot_pattern": "AAA-AAAAA-AA",
+  "lot_length": "12",
+  "frequency": "25",
+  "examples": ["012-BLACK-3L", "008-BLACK-3L", "SAS-34954-21", "010-White-3L", "012-Black-3L"],
+  "distinct_pos": "18"
+}, {
+  "lot_pattern": "AAAAA-",
+  "lot_length": "6",
+  "frequency": "25",
+  "examples": ["14987-", "80366-", "79581-", "80364-", "79728-"],
+  "distinct_pos": "6"
+}, {
+  "lot_pattern": "AAAAAAAAAA ",
+  "lot_length": "11",
+  "frequency": "25",
+  "examples": ["SAT0211241 ", "YSH0472501 ", "0111080425 ", "KU09252005 ", "210125TBYT "],
+  "distinct_pos": "25"
+}, {
+  "lot_pattern": "AA/AA/AAAAA",
+  "lot_length": "11",
+  "frequency": "24",
+  "examples": ["16/05/2025C", "10/11/2025C", "20/12/2024A", "08/09/2025A", "22/11/20234"],
+  "distinct_pos": "21"
+}, {
+  "lot_pattern": "AAAAA-AAAAAA-AA",
+  "lot_length": "15",
+  "frequency": "24",
+  "examples": ["LIG07-280126-01", "LIG02-280126-03", "LIG02-280126-01", "LIG02-280126-02"],
+  "distinct_pos": "18"
+}, {
+  "lot_pattern": "AA-AAAA/AA-AAAA",
+  "lot_length": "15",
+  "frequency": "22",
+  "examples": ["W0-KS01/09-1025", "W0-IW02/07-0825", "WO-IW03/05-0625", "WO-KS02/03-0325", "W0-KS02/03-0325"],
+  "distinct_pos": "14"
+}, {
+  "lot_pattern": "AAAAAAAA-AAAAAAAAAA",
+  "lot_length": "19",
+  "frequency": "22",
+  "examples": ["20250312-2503757668", "20241221-2412727254", "20250115-2501737935", "20250210-2502744762", "20241221-2412726972"],
+  "distinct_pos": "12"
+}, {
+  "lot_pattern": "AAAAAAAAAA-A AAAA",
+  "lot_length": "17",
+  "frequency": "22",
+  "examples": ["51400386N3-2 E133", "51050386N3-2 E099", "50510386N1-1 E044", "50800386N1-1 E066", "51550386N0-1 E149"],
+  "distinct_pos": "19"
+}, {
+  "lot_pattern": "AAAA.AAA",
+  "lot_length": "8",
+  "frequency": "21",
+  "examples": ["0125.142", "2030.09B", "0325.146", "1025.146", "2026.12A"],
+  "distinct_pos": "21"
+}, {
+  "lot_pattern": "AAAAAA-AAAAAAAA",
+  "lot_length": "15",
+  "frequency": "21",
+  "examples": ["658525-01102027", "HT3103-00007101", "HT3103-00012601", "HT3103-00014001", "HT3103-00009001"],
+  "distinct_pos": "15"
+}, {
+  "lot_pattern": "AAAAAAAAAAAAAA",
+  "lot_length": "14",
+  "frequency": "21",
+  "examples": ["18904180802135", "10010136228059", "10010686632446", "10010651500581", "DORIO0225KFKID"],
+  "distinct_pos": "20"
+}, {
+  "lot_pattern": " AAAAA",
+  "lot_length": "6",
+  "frequency": "20",
+  "examples": [" 24007", " B0218", " 00126", " HV048", " 00226"],
+  "distinct_pos": "20"
+}, {
+  "lot_pattern": " AAAA",
+  "lot_length": "5",
+  "frequency": "20",
+  "examples": [" 0825", " CB02", " 0125", " CB01", " 0124"],
+  "distinct_pos": "19"
+}, {
+  "lot_pattern": "AAAAA.A",
+  "lot_length": "7",
+  "frequency": "19",
+  "examples": ["20089.2", "21215.1"],
+  "distinct_pos": "19"
+}, {
+  "lot_pattern": "AA AAAA",
+  "lot_length": "7",
+  "frequency": "19",
+  "examples": ["SL 0124", "G1 0851", "C9 1046", "C9 1313", "C9 1803"],
+  "distinct_pos": "18"
+}, {
+  "lot_pattern": "AAAAA-AA-AAAAAAA",
+  "lot_length": "16",
+  "frequency": "18",
+  "examples": ["S2025-11-0709420", "S2025-02-2503154", "S2025-02-2501384", "S2025-02-2508111", "S2025-02-2503289"],
+  "distinct_pos": "18"
+}, {
+  "lot_pattern": "A.A.AA.A.AAAAA.AA",
+  "lot_length": "17",
+  "frequency": "18",
+  "examples": ["3.9.BC.0.069X1.2M", "1.4.BC.0.069X1.2M", "1.7.BC.O.086X1.9M", "1.7.BC.0.086X1.9M"],
+  "distinct_pos": "13"
+}, {
+  "lot_pattern": "AAAAA.AAAA",
+  "lot_length": "10",
+  "frequency": "18",
+  "examples": ["SPR05.2025", "SPR02.2025", "SPR03.2025", "SPR06.2025", "VPC01.2025"],
+  "distinct_pos": "14"
+}, {
+  "lot_pattern": "AA_AAAA/AA-AAAA",
+  "lot_length": "15",
+  "frequency": "17",
+  "examples": ["WO_IW04/06-0725", "WO_IW01/06-0625", "WO_IW03/07-0825", "WO_IW02/07-0825", "WO_KS03/07-0825"],
+  "distinct_pos": "10"
+}, {
+  "lot_pattern": "AAA.AA",
+  "lot_length": "6",
+  "frequency": "17",
+  "examples": ["008.G8", "008.G5", "329.38", "986.17"],
+  "distinct_pos": "13"
+}, {
+  "lot_pattern": "AAA ",
+  "lot_length": "4",
+  "frequency": "17",
+  "examples": ["C52 ", "782 ", "G33 ", "423 ", "KMI "],
+  "distinct_pos": "17"
+}, {
+  "lot_pattern": "AAA/A",
+  "lot_length": "5",
+  "frequency": "17",
+  "examples": ["DBW/B", "DFL/A", "DFL/P", "DFL/M", "DSL/F"],
+  "distinct_pos": "10"
+}, {
+  "lot_pattern": "AAAAAAA-AA",
+  "lot_length": "10",
+  "frequency": "17",
+  "examples": ["KT0PJAF-V3", "1679014-6D", "B280325-01", "B230425-04", "B011225-02"],
+  "distinct_pos": "14"
+}, {
+  "lot_pattern": "A.AAAA.AAAAAAA",
+  "lot_length": "14",
+  "frequency": "15",
+  "examples": ["2.1BC0.086X1M9", "4.9BC0.069X1M9", "1.4BC0.069X1M2", "2.5BC0.069X1M3", "1.7BC0.086X1M9"],
+  "distinct_pos": "13"
+}, {
+  "lot_pattern": "+++AAAAAAA",
+  "lot_length": "10",
+  "frequency": "15",
+  "examples": ["+++0010123", "+++0020824", "+++0010325", "+++0020125", "+++0070425"],
+  "distinct_pos": "14"
+}, {
+  "lot_pattern": "AAAA.AAAA",
+  "lot_length": "9",
+  "frequency": "15",
+  "examples": ["VPC7.2024", "VOLC.0125", "VPC4.2025", "XDCS.1125", "VOLH.0125"],
+  "distinct_pos": "15"
+}, {
+  "lot_pattern": "A.AAAAAAA",
+  "lot_length": "9",
+  "frequency": "15",
+  "examples": ["S.S000106", "2.1BK3572"],
+  "distinct_pos": "15"
+}, {
+  "lot_pattern": "AAAAA AA",
+  "lot_length": "8",
+  "frequency": "15",
+  "examples": ["VF0MT 39", "VFOMT 39", "VF0MT 41", "A309V N8", "VFOMT 42"],
+  "distinct_pos": "14"
+}, {
+  "lot_pattern": "AAAAA-AAAAAA",
+  "lot_length": "12",
+  "frequency": "14",
+  "examples": ["00124-180627", "00325-270229", "00124-051126", "01124-061127", "01224-261226"],
+  "distinct_pos": "8"
+}, {
+  "lot_pattern": "AAAAA-AA-AA",
+  "lot_length": "11",
+  "frequency": "14",
+  "examples": ["N2022-06-07", "S2025-02-25", "N2022-05-10", "S2025-10-10"],
+  "distinct_pos": "12"
+}, {
+  "lot_pattern": "AA/AA/AAA",
+  "lot_length": "9",
+  "frequency": "14",
+  "examples": ["10/09/25A", "21/01/25A", "15/07/25A", "16/02/25A", "09/07/025"],
+  "distinct_pos": "11"
+}, {
+  "lot_pattern": "A.AA.AA.A.AAAAA.AA",
+  "lot_length": "18",
+  "frequency": "14",
+  "examples": ["1.10.BC.0.069X1.2M", "1.10.BC.0.086X1.9M"],
+  "distinct_pos": "12"
+}, {
+  "lot_pattern": "AAAA-AA",
+  "lot_length": "7",
+  "frequency": "14",
+  "examples": ["0105-08", "0106-05", "2022-12", "5004-26", "BTHM-03"],
+  "distinct_pos": "12"
+}, {
+  "lot_pattern": "AAAA.AA.AA/A",
+  "lot_length": "12",
+  "frequency": "13",
+  "examples": ["2028.01.14/B", "2028.05.13/C", "2028.04.15/A", "2028.09.25/A", "2027.02.08/C"],
+  "distinct_pos": "12"
+}, {
+  "lot_pattern": "AAAA.",
+  "lot_length": "5",
+  "frequency": "13",
+  "examples": ["0125.", "0123.", "0225.", "0224.", "2402."],
+  "distinct_pos": "13"
+}, {
+  "lot_pattern": "AAAA-AAAAAAAA",
+  "lot_length": "13",
+  "frequency": "13",
+  "examples": ["SS11-02111224", "SS11-02110725", "SS11-05291225", "SS11-02080525", "SS11-06151025"],
+  "distinct_pos": "11"
+}, {
+  "lot_pattern": "AAA-AAA-AA",
+  "lot_length": "10",
+  "frequency": "13",
+  "examples": ["089-GLX-4L", "009-GLX-4L", "006-DPC-4L"],
+  "distinct_pos": "9"
+}, {
+  "lot_pattern": "AA/AAAA/AAA",
+  "lot_length": "11",
+  "frequency": "13",
+  "examples": ["07/2025/NMT", "01/2025/KTM", "03/2025/NTM", "07/2025/NTM", "01/2025/TMK"],
+  "distinct_pos": "12"
+}, {
+  "lot_pattern": "AA.AA/AA/A",
+  "lot_length": "10",
+  "frequency": "12",
+  "examples": ["26.07/DF/B", "27.07/DF/A", "27.08/DF/A", "27.11/DF/B"],
+  "distinct_pos": "10"
+}, {
+  "lot_pattern": "AA/AA/AAAA-AAA",
+  "lot_length": "14",
+  "frequency": "12",
+  "examples": ["18/04/2025-083", "02/04/2024-019", "26/04/2024-022", "01/09/2025-158", "18/06/2024-136"],
+  "distinct_pos": "10"
+}, {
+  "lot_pattern": "AAAAA-AA/AA/AAAA",
+  "lot_length": "16",
+  "frequency": "12",
+  "examples": ["25001-12/02/2028", "24077-23/07/2027", "24004-15/01/2026", "25001-10/02/2028", "24013-13/11/2027"],
+  "distinct_pos": "6"
+}, {
+  "lot_pattern": "A+AAAA",
+  "lot_length": "6",
+  "frequency": "12",
+  "examples": ["D+PR29", "C+PR29", "B+PR29", "B+PR28"],
+  "distinct_pos": "12"
+}, {
+  "lot_pattern": " AAAAAAAA",
+  "lot_length": "9",
+  "frequency": "12",
+  "examples": [" 01105001", " BH040725", " 10241584", " 03312025", " CE06L001"],
+  "distinct_pos": "11"
+}, {
+  "lot_pattern": "AAAAAA-AA-AA-AAAAA-AAAAAA-AAA A",
+  "lot_length": "31",
+  "frequency": "12",
+  "examples": ["23CTBH-KD-25-00922-281225-DMC 0", "22CTBH-KD-25-00524-150627-DMC 1", "22CTBH-KD-25-00125-230127-DMC 2", "22CTBH-KD-25-00224-261127-DMC 2", "22CTBH-KD-25-01124-251127-DMC 2"],
+  "distinct_pos": "6"
+}, {
+  "lot_pattern": "AAA/AAAAAA",
+  "lot_length": "10",
+  "frequency": "12",
+  "examples": ["004/170225", "004/310524", "003/311224", "004/121124", "003/141124"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAA A",
+  "lot_length": "10",
+  "frequency": "12",
+  "examples": ["20241120 V", "12ED0727 6", "10ED1128 6", "9AED1127 3", "12E00727 6"],
+  "distinct_pos": "10"
+}, {
+  "lot_pattern": "AAA AA AAAAAA",
+  "lot_length": "13",
+  "frequency": "12",
+  "examples": ["782 14 012025", "676 13 012025", "299 19 112024", "456 09 012025", "771 24 092024"],
+  "distinct_pos": "8"
+}, {
+  "lot_pattern": "A.AA.AAAA",
+  "lot_length": "9",
+  "frequency": "12",
+  "examples": ["1.10.GC89", "1.11.GC89"],
+  "distinct_pos": "12"
+}, {
+  "lot_pattern": "A.AAAAAAAAAAAAA",
+  "lot_length": "15",
+  "frequency": "11",
+  "examples": ["2.5BCNTRONG1872", "6.2BCNtrong1872", "6.2BCNTRONG1872"],
+  "distinct_pos": "11"
+}, {
+  "lot_pattern": "A AA-AA",
+  "lot_length": "7",
+  "frequency": "11",
+  "examples": ["B NC-31", "B SN-95", "B ST-85", "B ST-96", "B ST-90"],
+  "distinct_pos": "11"
+}, {
+  "lot_pattern": "AAA-AA/AAAAAA",
+  "lot_length": "13",
+  "frequency": "11",
+  "examples": ["T06-01/220725", "E01-01/011024", "M05-01/281124", "M11-01/021024", "E01-01/010724"],
+  "distinct_pos": "9"
+}, {
+  "lot_pattern": "AAAAAA-AA/AA/AAAA",
+  "lot_length": "17",
+  "frequency": "11",
+  "examples": ["308041-04/08/2028", "312051-05/12/2028", "523055-27/05/2028", "L12401-02/01/2029", "303091-21/03/2027"],
+  "distinct_pos": "7"
+}, {
+  "lot_pattern": "AA AAA",
+  "lot_length": "6",
+  "frequency": "11",
+  "examples": ["BU W04", "BU V03", "BU W05", "BU V04", "BU W02"],
+  "distinct_pos": "8"
+}, {
+  "lot_pattern": "A AAA-AA",
+  "lot_length": "8",
+  "frequency": "10",
+  "examples": ["B FBL-15", "B CFF-23", "B FLB-22", "B FLB-21", "B TGC-03"],
+  "distinct_pos": "9"
+}, {
+  "lot_pattern": "AAA-AAAAA",
+  "lot_length": "9",
+  "frequency": "10",
+  "examples": ["MLP-V2026", "MLP-V2025", "009-29092"],
+  "distinct_pos": "10"
+}, {
+  "lot_pattern": "AAA-AAAA ",
+  "lot_length": "9",
+  "frequency": "10",
+  "examples": ["MED-3000 ", "CRT-5001 ", "MEC-5006 ", "GTO-5050 ", "HS1-06J5 "],
+  "distinct_pos": "8"
+}, {
+  "lot_pattern": "A AAAA",
+  "lot_length": "6",
+  "frequency": "10",
+  "examples": ["C 0136", "B S434", "C 0140", "C 0138", "C 0137"],
+  "distinct_pos": "10"
+}, {
+  "lot_pattern": "AA/AAAA ",
+  "lot_length": "8",
+  "frequency": "10",
+  "examples": ["11/0425 ", "03/2025 ", "11/0125 ", "03/0125 ", "04/2025 "],
+  "distinct_pos": "8"
+}, {
+  "lot_pattern": "AAAAAAA A",
+  "lot_length": "9",
+  "frequency": "10",
+  "examples": ["N0923BY 0", "4ED0528 3", "8ED0528 5", "2ED1128 3", "N0915LX 0"],
+  "distinct_pos": "9"
+}, {
+  "lot_pattern": "AAA-AAAA-AA",
+  "lot_length": "11",
+  "frequency": "10",
+  "examples": ["HEM-8712-AP", "002-MASK-3L", "011-MASK-3L", "007-THAN-4L", "011-Mask-3L"],
+  "distinct_pos": "10"
+}, {
+  "lot_pattern": "AAAAAAA:",
+  "lot_length": "8",
+  "frequency": "9",
+  "examples": ["1140725:", "1040725:"],
+  "distinct_pos": "9"
+}, {
+  "lot_pattern": "AAAAAAAA-AAAAAA",
+  "lot_length": "15",
+  "frequency": "9",
+  "examples": ["13671125-110528", "02180225-022029", "14951225-190628", "13691125-110528", "14991225-190628"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "AA.A.AA",
+  "lot_length": "7",
+  "frequency": "9",
+  "examples": ["D2.1.G8", "24.4.25"],
+  "distinct_pos": "9"
+}, {
+  "lot_pattern": "AAAAAA.",
+  "lot_length": "7",
+  "frequency": "9",
+  "examples": ["010225.", "L002IC.", "506193.", "051123.", "020125."],
+  "distinct_pos": "9"
+}, {
+  "lot_pattern": "AAAA-AAA-AA",
+  "lot_length": "11",
+  "frequency": "9",
+  "examples": ["QLSP-955-16", "QLSP-854-15", "QLSP-954-16", "QLSP-853-15"],
+  "distinct_pos": "8"
+}, {
+  "lot_pattern": "AAAA-AA/AA/AAAA",
+  "lot_length": "15",
+  "frequency": "9",
+  "examples": ["4008-19/05/2027", "4005-23/12/2026", "5003-20/02/2027", "4005-24/09/2027", "5002-05/02/2027"],
+  "distinct_pos": "5"
+}, {
+  "lot_pattern": "AAAA-AAAAA",
+  "lot_length": "10",
+  "frequency": "9",
+  "examples": ["2025-00224", "2025-02025", "2025-01825", "2025-00125", "2025-02624"],
+  "distinct_pos": "5"
+}, {
+  "lot_pattern": "AAAA AA",
+  "lot_length": "7",
+  "frequency": "9",
+  "examples": ["2216 09", "1323 09", "0830 09", "0103 26", "1854 09"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAA A.AAAA",
+  "lot_length": "10",
+  "frequency": "9",
+  "examples": ["VPC 9.2024", "VPC 4.2025", "VCP 4.2025", "VPC 7.2024"],
+  "distinct_pos": "7"
+}, {
+  "lot_pattern": "A.AA.AAA",
+  "lot_length": "8",
+  "frequency": "9",
+  "examples": ["1.12.G12", "1.12.G10", "1.11.G12", "2.12.G12", "2.01.G10"],
+  "distinct_pos": "8"
+}, {
+  "lot_pattern": "AAAA.AA/+AAA",
+  "lot_length": "12",
+  "frequency": "9",
+  "examples": ["2028.03/+ET2", "2027.11/+ET2", "2028.05/+ET2"],
+  "distinct_pos": "9"
+}, {
+  "lot_pattern": "AAAAAAAAA  ",
+  "lot_length": "11",
+  "frequency": "8",
+  "examples": ["U23T1075A  ", "010524T11  ", "BRE03282A  ", "A08872506  ", "A08902402  "],
+  "distinct_pos": "5"
+}, {
+  "lot_pattern": "A AAAAAA-AA",
+  "lot_length": "11",
+  "frequency": "8",
+  "examples": ["B 210525-05", "B 230425-04", "B 040226-10", "B 210325-03", "B 080126-08"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "AAAAAAA.",
+  "lot_length": "8",
+  "frequency": "8",
+  "examples": ["1860225.", "B523055.", "1720325.", "A402VN7.", "B322035."],
+  "distinct_pos": "8"
+}, {
+  "lot_pattern": "AAA-AAAA  ",
+  "lot_length": "10",
+  "frequency": "8",
+  "examples": ["ACT-4006  ", "DMT-5001  ", "GRS-5002  ", "SAS-5001  ", "ANO-5001  "],
+  "distinct_pos": "5"
+}, {
+  "lot_pattern": "AAAAAA-AAAAA",
+  "lot_length": "12",
+  "frequency": "8",
+  "examples": ["101224-11322", "010425-02633", "101224-11425", "030325-00533", "030325-00535"],
+  "distinct_pos": "8"
+}, {
+  "lot_pattern": "AAAAAAAA/AAAA",
+  "lot_length": "13",
+  "frequency": "8",
+  "examples": ["DKDCC173/PURE", "30072507/SRMN", "19072507/NGHE", "03122511/KDDT", "09122507/LYNA"],
+  "distinct_pos": "7"
+}, {
+  "lot_pattern": "AAA-AAAAAA-AA/AA/AAAA",
+  "lot_length": "21",
+  "frequency": "8",
+  "examples": ["006-190724-19/07/2027", "013-191124-19/11/2027", "007-190724-19/07/2027", "005-180225-18/02/2028"],
+  "distinct_pos": "6"
+}, {
+  "lot_pattern": "AAA AA",
+  "lot_length": "6",
+  "frequency": "8",
+  "examples": ["SLC 44", "782 14", "884 29", "SLC 42"],
+  "distinct_pos": "6"
+}, {
+  "lot_pattern": "AA-AAAAA-AAAAAA-AAA A",
+  "lot_length": "21",
+  "frequency": "8",
+  "examples": ["25-00625-120228-DMC 1", "25-00624-171226-DMC 0", "25-00323-220927-DMC 0", "25-00125-230127-DMC 2", "25-00922-281225-DMC 0"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AA/AA/AA A",
+  "lot_length": "10",
+  "frequency": "8",
+  "examples": ["11/06/25 A", "20/12/24 A", "04/12/24 A", "07/12/24 A", "30/03/25 A"],
+  "distinct_pos": "7"
+}, {
+  "lot_pattern": "AAAAAAAA.AA",
+  "lot_length": "11",
+  "frequency": "8",
+  "examples": ["R1505784.25", "P1505784.25", "P1508783.25", "V1505783.25"],
+  "distinct_pos": "8"
+}, {
+  "lot_pattern": "AAA A",
+  "lot_length": "5",
+  "frequency": "8",
+  "examples": ["KGW 3", "601 P", "KMI 3", "KGW 6", "KMD 3"],
+  "distinct_pos": "5"
+}, {
+  "lot_pattern": "AAAAAAA AA",
+  "lot_length": "10",
+  "frequency": "8",
+  "examples": ["240925A 01", "KT0PTB2 V1", "KT0PTB2 V4", "KT0PTB2 V2"],
+  "distinct_pos": "8"
+}, {
+  "lot_pattern": "AAAAAAA/A ",
+  "lot_length": "10",
+  "frequency": "7",
+  "examples": ["O25C16G/1 ", "O25525G/1 ", "O25A14G/1 ", "O25310G/2 ", "O25C08G/2 "],
+  "distinct_pos": "7"
+}, {
+  "lot_pattern": "\t AAAAAAAAAA",
+  "lot_length": "12",
+  "frequency": "7",
+  "examples": ["\t 2000217472", "\t 2000203325", "\t 2000208440", "\t 2000199199", "\t 2000221465"],
+  "distinct_pos": "5"
+}, {
+  "lot_pattern": "A.A.AAAA.AA",
+  "lot_length": "11",
+  "frequency": "7",
+  "examples": ["2.6.MASK.3L", "2.6.MASK.3I"],
+  "distinct_pos": "7"
+}, {
+  "lot_pattern": "AAAA.AAAAAAAA.AA",
+  "lot_length": "16",
+  "frequency": "7",
+  "examples": ["BBFC.21102025.01", "SFBM.11102025.01", "BKSH.13102025.01"],
+  "distinct_pos": "7"
+}, {
+  "lot_pattern": ":AAAAAA",
+  "lot_length": "7",
+  "frequency": "7",
+  "examples": [":010825", ":120625", ":666024", ":020525"],
+  "distinct_pos": "7"
+}, {
+  "lot_pattern": "AAAAAAA-AA/AA/AAAA",
+  "lot_length": "18",
+  "frequency": "7",
+  "examples": ["24L061A-30/09/2027", "LN00451-30/11/2027", "24E104B-30/04/2027", "L524014-02/05/2029"],
+  "distinct_pos": "5"
+}, {
+  "lot_pattern": "A . AA",
+  "lot_length": "6",
+  "frequency": "7",
+  "examples": ["N . 71", "L . 10", "L . 14", "E . 68", "N . 68"],
+  "distinct_pos": "6"
+}, {
+  "lot_pattern": "AAAAA_A",
+  "lot_length": "7",
+  "frequency": "7",
+  "examples": ["C0719_D"],
+  "distinct_pos": "7"
+}, {
+  "lot_pattern": "AAAAAAA-AA/AA/AA",
+  "lot_length": "16",
+  "frequency": "7",
+  "examples": ["II00254-02/10/28", "1022172-25/10/27", "G402235-06/08/27"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "+AAAA",
+  "lot_length": "5",
+  "frequency": "6",
+  "examples": ["+PR30", "+PR44", "+TKKC", "+PR47"],
+  "distinct_pos": "6"
+}, {
+  "lot_pattern": "AA/AAA/AAAA-AAAA",
+  "lot_length": "16",
+  "frequency": "6",
+  "examples": ["01/KID/FBAB-2023"],
+  "distinct_pos": "6"
+}, {
+  "lot_pattern": "AAAAAAAA  ",
+  "lot_length": "10",
+  "frequency": "6",
+  "examples": ["LF35490B  ", "PAF01772  ", "B1022174  ", "001D0105  ", "C0700326  "],
+  "distinct_pos": "6"
+}, {
+  "lot_pattern": "A.A.AAAAAAAAAAA",
+  "lot_length": "15",
+  "frequency": "6",
+  "examples": ["1.4.BKCNDUC1872", "2.6.BKCNDUC1872"],
+  "distinct_pos": "6"
+}, {
+  "lot_pattern": "AAAA AAAAAA",
+  "lot_length": "11",
+  "frequency": "6",
+  "examples": ["CO42 270325", "X205 312011", "X238 311703", "L104 232510", "0524 112201"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "A.AAAAAAAĐ",
+  "lot_length": "10",
+  "frequency": "6",
+  "examples": ["1.3BK1872Đ"],
+  "distinct_pos": "6"
+}, {
+  "lot_pattern": "AAA AA-AA",
+  "lot_length": "9",
+  "frequency": "6",
+  "examples": ["M05 10-24", "M09 10-24"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "A.A.AA.AAAA.Đ",
+  "lot_length": "13",
+  "frequency": "6",
+  "examples": ["1.4.BK.1872.Đ"],
+  "distinct_pos": "6"
+}, {
+  "lot_pattern": "AAAAAA-AA.AA",
+  "lot_length": "12",
+  "frequency": "6",
+  "examples": ["L004IC-PS.25"],
+  "distinct_pos": "6"
+}, {
+  "lot_pattern": "AAAAAA   ",
+  "lot_length": "9",
+  "frequency": "6",
+  "examples": ["B9663H   ", "242013   ", "670126   ", "361224   ", "255008   "],
+  "distinct_pos": "6"
+}, {
+  "lot_pattern": "A.AA.AAA.AA",
+  "lot_length": "11",
+  "frequency": "6",
+  "examples": ["1.10.BK2.55"],
+  "distinct_pos": "6"
+}, {
+  "lot_pattern": "A.AAAA",
+  "lot_length": "6",
+  "frequency": "6",
+  "examples": ["1.7G12", "B.WELL", "1.7G10", "2.6G12", "6.2RON"],
+  "distinct_pos": "5"
+}, {
+  "lot_pattern": "AAA AAA",
+  "lot_length": "7",
+  "frequency": "6",
+  "examples": ["SIL 116", "ACT 502", "SIL 117", "SIL 118"],
+  "distinct_pos": "6"
+}, {
+  "lot_pattern": "AAAA/+AA/A",
+  "lot_length": "10",
+  "frequency": "6",
+  "examples": ["2708/+DF/A", "2804/+DF/A"],
+  "distinct_pos": "6"
+}, {
+  "lot_pattern": "A-AA-AA",
+  "lot_length": "7",
+  "frequency": "6",
+  "examples": ["1-06-25", "1-02-25", "1-04-25", "1-12-24"],
+  "distinct_pos": "6"
+}, {
+  "lot_pattern": "AAAAAAAAAA AAAA",
+  "lot_length": "15",
+  "frequency": "6",
+  "examples": ["42390386M3 D217", "41910386E0 D195", "43480386E0 D352"],
+  "distinct_pos": "6"
+}, {
+  "lot_pattern": "AA-AAAAAAA",
+  "lot_length": "10",
+  "frequency": "6",
+  "examples": ["25-GL52506", "25-GL52507", "AF-K21ABCD", "AF-K30ABCD"],
+  "distinct_pos": "6"
+}, {
+  "lot_pattern": "AA/A/AAAA",
+  "lot_length": "9",
+  "frequency": "6",
+  "examples": ["15/1/2024", "29/7/2025", "20/4/2023", "20/6/2023", "10/4/2023"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "A.A.AA.A.A",
+  "lot_length": "10",
+  "frequency": "6",
+  "examples": ["1.7.BK.2.5"],
+  "distinct_pos": "6"
+}, {
+  "lot_pattern": "A.AAAAAA.AA",
+  "lot_length": "11",
+  "frequency": "6",
+  "examples": ["2.6BLACK.3L", "3.9BLACK.3L", "2.6WHITE.3L"],
+  "distinct_pos": "6"
+}, {
+  "lot_pattern": "A.A.AA ",
+  "lot_length": "7",
+  "frequency": "5",
+  "examples": ["2.6.G8 ", "2.1.G8 ", "1.4.G5 "],
+  "distinct_pos": "5"
+}, {
+  "lot_pattern": "AA-A",
+  "lot_length": "4",
+  "frequency": "5",
+  "examples": ["S6-B", "S6-A", "WS-2"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "A.A.AAAA",
+  "lot_length": "8",
+  "frequency": "5",
+  "examples": ["1.7.GC10"],
+  "distinct_pos": "5"
+}, {
+  "lot_pattern": "AA.AA.AAA",
+  "lot_length": "9",
+  "frequency": "5",
+  "examples": ["11.06.25L", "26.05.25L", "29.05.250", "05.06.25R", "09.04.25P"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AA-AA.AAAA",
+  "lot_length": "10",
+  "frequency": "5",
+  "examples": ["H5-01.1504"],
+  "distinct_pos": "5"
+}, {
+  "lot_pattern": "AA. AAAA",
+  "lot_length": "8",
+  "frequency": "5",
+  "examples": ["10. 1224"],
+  "distinct_pos": "5"
+}, {
+  "lot_pattern": "AAAAAAAAAA AA",
+  "lot_length": "13",
+  "frequency": "5",
+  "examples": ["5052B68700 B4", "5090B68700 B4", "5064B68700 B4", "5058B68700 B4"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "A.AAAAAAAAAAAA",
+  "lot_length": "14",
+  "frequency": "5",
+  "examples": ["1.4BKCNDUC1872", "2.5BKCNduc1872", "2.5CNTRONG1872"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "AA_AAAA",
+  "lot_length": "7",
+  "frequency": "5",
+  "examples": ["08_2025", "10_2025", "05_2025", "02_2025"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "AAAAAAAAAAA ",
+  "lot_length": "12",
+  "frequency": "5",
+  "examples": ["MED30002403 ", "4310A2217X0 ", "14MFG260404 ", "B51404811K3 ", "88429012024 "],
+  "distinct_pos": "5"
+}, {
+  "lot_pattern": "AAA-AAAAAAA",
+  "lot_length": "11",
+  "frequency": "5",
+  "examples": ["001-0360125", "003-2106925", "004-0805325", "016-1310235", "010-1600224"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "AAAAAAA-AA/AAAA",
+  "lot_length": "15",
+  "frequency": "5",
+  "examples": ["53I0660-08/2026", "GC24016-08/2029", "GC24008-04/2029"],
+  "distinct_pos": "5"
+}, {
+  "lot_pattern": "A.A.AA.AAAA.A",
+  "lot_length": "13",
+  "frequency": "4",
+  "examples": ["1.8.BK.1872.T", "1.4.BK.1872.D", "1.4.BK.1782.D"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "AAAAA   ",
+  "lot_length": "8",
+  "frequency": "4",
+  "examples": ["24009   ", "00725   ", "25004   ", "00125   "],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AAAA-AAAAAA",
+  "lot_length": "11",
+  "frequency": "4",
+  "examples": ["1814-211024", "0003-080225", "1325-110928", "0193-100925"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "AAAA-AAA",
+  "lot_length": "8",
+  "frequency": "4",
+  "examples": ["7278-504", "L001-YIS", "BFNC-101"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": " AA-AA",
+  "lot_length": "6",
+  "frequency": "4",
+  "examples": [" WT-04", " WT-03"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AA-AA ",
+  "lot_length": "6",
+  "frequency": "4",
+  "examples": ["WT-03 ", "WT-04 "],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "A.A.AAAAAAAAAA",
+  "lot_length": "14",
+  "frequency": "4",
+  "examples": ["2.1.BC0086X1M9", "1.4.BC0069X1M2"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "AA/AA/AAAA ",
+  "lot_length": "11",
+  "frequency": "4",
+  "examples": ["18/04/2025 ", "29/11/2025 ", "25/03/2025 ", "11/07/2025 "],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "AA.AAA.AA",
+  "lot_length": "9",
+  "frequency": "4",
+  "examples": ["TT.001.25"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAAAAAA/AA/AA",
+  "lot_length": "13",
+  "frequency": "4",
+  "examples": ["MFG2025/09/05", "MFG2025/08/28"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAAAAA - AAAAAAAA",
+  "lot_length": "17",
+  "frequency": "4",
+  "examples": ["011023 - 07102026", "270924 - 04092027", "030524 - 20052027"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "AA/AA/AAAAAA",
+  "lot_length": "12",
+  "frequency": "4",
+  "examples": ["23/05/2025CM", "14/02/2024GM", "18/11/2025CH", "03/02/2025GH"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "AAAAAAA AAAAAA",
+  "lot_length": "14",
+  "frequency": "4",
+  "examples": ["1111125 181128", "0291025 101028", "0030425 260427", "0081124 091129"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AAAAAA*",
+  "lot_length": "7",
+  "frequency": "4",
+  "examples": ["080924*", "011024*"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "AA-AAA-AA",
+  "lot_length": "9",
+  "frequency": "4",
+  "examples": ["NE-C28-C1", "GC-313-19"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": " AAAAAAAAAA",
+  "lot_length": "11",
+  "frequency": "4",
+  "examples": [" RRO1650524", " ALEC011124", " 2000199199", " 089DC00625"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "AAAA A ",
+  "lot_length": "7",
+  "frequency": "4",
+  "examples": ["0603 N ", "2502 L ", "0802 N ", "2502 N "],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "\t AA/AAAA",
+  "lot_length": "9",
+  "frequency": "4",
+  "examples": ["\t 14/0425", "\t 06/0325", "\t 13/0425"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "AAAAA-AA/AA/AA",
+  "lot_length": "14",
+  "frequency": "4",
+  "examples": ["70325-03/02/28", "71824-09/12/27"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AAAAAA-AA/AA/AA",
+  "lot_length": "15",
+  "frequency": "4",
+  "examples": ["102024-01/02/27", "070325-24/03/27"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "A.AA.AAA.AAAA.AA",
+  "lot_length": "16",
+  "frequency": "4",
+  "examples": ["1.10.GLX.THAN.4L"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "AAAAA-AAAAAA-AAA A",
+  "lot_length": "18",
+  "frequency": "4",
+  "examples": ["00625-161029-DMC 0", "00325-190328-DMC 0", "02625-161229-DMC 2", "00325-180427-DMC 2"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "AAAAAA-A-AAA",
+  "lot_length": "12",
+  "frequency": "4",
+  "examples": ["1SA022-1-1T2", "1SA021-1-1T2"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AAAAAAA A-AA",
+  "lot_length": "12",
+  "frequency": "4",
+  "examples": ["239D007 X-NT", "239D009 X-NT"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": " AAAAAAAAA",
+  "lot_length": "10",
+  "frequency": "4",
+  "examples": [" 5457A0325", " B00064280", " 251318062", " A23012025"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "AAAAAA AA/AAAA",
+  "lot_length": "14",
+  "frequency": "4",
+  "examples": ["220825 08/SRMN", "050126 01/SRMN", "160925 09/HBUM"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "AAAA.AA.AAA/+AA",
+  "lot_length": "15",
+  "frequency": "4",
+  "examples": ["2024.12.25A/+PR", "2027.08.21A/+PR", "2028.08.25A/+PR"],
+  "distinct_pos": "4"
+}, {
+  "lot_pattern": "AA/AA/AAAAAAA",
+  "lot_length": "13",
+  "frequency": "3",
+  "examples": ["08/08/2025L01", "09/08/2025L03"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "A.A.AAAA.AAAAA.AAAA",
+  "lot_length": "19",
+  "frequency": "3",
+  "examples": ["2.5.BKCN.TRONG.1872", "1.7.BKCN.TRONG.1872"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "A AAAAAAAAAA",
+  "lot_length": "12",
+  "frequency": "3",
+  "examples": ["B 50644811C3", "B 50994811K5", "B 51414811K3"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.A.AA.A.AAAAA",
+  "lot_length": "14",
+  "frequency": "3",
+  "examples": ["3.9.BC.0.09X2M", "2.6.BC.0.09X2M"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AAAAA/AAAAAA",
+  "lot_length": "12",
+  "frequency": "3",
+  "examples": ["11124/091224", "11324/131224"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AAAAAAAA.",
+  "lot_length": "9",
+  "frequency": "3",
+  "examples": ["BA097889.", "A4B458AA.", "01062024."],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AA.AAAA ",
+  "lot_length": "8",
+  "frequency": "3",
+  "examples": ["02.2025 ", "08.0425 ", "05.0624 "],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AAA- AAAAAA",
+  "lot_length": "11",
+  "frequency": "3",
+  "examples": ["077- 061125", "020- 301124", "003- 240525"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AAAA-AA/AAAAAA",
+  "lot_length": "14",
+  "frequency": "3",
+  "examples": ["M14D-01/050124", "M14D-01/020125", "M14D-01/200125"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AAAAA.AA",
+  "lot_length": "8",
+  "frequency": "3",
+  "examples": ["VM100.04", "DP001.26", "DP001.25"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AA.AA.AA/AAA",
+  "lot_length": "12",
+  "frequency": "3",
+  "examples": ["28.12.25/41S", "22.09.24/03P", "29.10.24/12W"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": ".AAAAAA",
+  "lot_length": "7",
+  "frequency": "3",
+  "examples": [".351025", ".030325", ".101224"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AAAA.AA",
+  "lot_length": "7",
+  "frequency": "3",
+  "examples": ["BC02.26", "BC03.26", "2028.05"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAAAAAAAAAAAAAA",
+  "lot_length": "15",
+  "frequency": "3",
+  "examples": ["SN20251101049VF", "MFG270225TH112L", "DORIO02225KFKID"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AAAAA-AA-AAAAAA ",
+  "lot_length": "16",
+  "frequency": "3",
+  "examples": ["S2023-02-101869 ", "S2025-06-271567 ", "S2024-12-273969 "],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AA/A",
+  "lot_length": "4",
+  "frequency": "3",
+  "examples": ["25/6", "DF/A"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "A.A.AAAAAAA.AA",
+  "lot_length": "14",
+  "frequency": "3",
+  "examples": ["2.6.GLXTHAN.4L"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AAAA/AAA/A",
+  "lot_length": "10",
+  "frequency": "3",
+  "examples": ["2711/DSC/A", "2706/DFL/H", "2709/DSL/I"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": " AAA",
+  "lot_length": "4",
+  "frequency": "3",
+  "examples": [" 133", " C50", " PUB"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "+AAAAAAAAA",
+  "lot_length": "10",
+  "frequency": "3",
+  "examples": ["+0040325M5", "+0040325M3"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AA.AA+AAA/A",
+  "lot_length": "11",
+  "frequency": "3",
+  "examples": ["27.07+DSC/D", "26.07+DFL/A", "27.06+DFL/H"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AAA AAAA  ",
+  "lot_length": "10",
+  "frequency": "3",
+  "examples": ["AZT 4014  ", "DMT 5004  ", "AZT 4027  "],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAAAAA AA",
+  "lot_length": "9",
+  "frequency": "3",
+  "examples": ["CFPVFM 33", "020524 13", "CFPVFM 32"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AAA.AAAAAAAA.AA",
+  "lot_length": "15",
+  "frequency": "3",
+  "examples": ["CPS.21102025.02"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AA-AAAA ",
+  "lot_length": "8",
+  "frequency": "3",
+  "examples": ["25-1013 ", "25-1026 ", "25-1001 "],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AAA - AAAA",
+  "lot_length": "10",
+  "frequency": "3",
+  "examples": ["HC1 - 28F5", "HS1 - 03G5", "CIT - 5002"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAAAAAAA AAAA",
+  "lot_length": "13",
+  "frequency": "3",
+  "examples": ["20062024 C174", "20082024 G240", "31072024 C215"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "+AAA",
+  "lot_length": "4",
+  "frequency": "3",
+  "examples": ["+ET2"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AAAAAAAA AA",
+  "lot_length": "11",
+  "frequency": "3",
+  "examples": ["33713308 DU", "G0U31185 42"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AAA  AAAA",
+  "lot_length": "9",
+  "frequency": "3",
+  "examples": ["AZT  4014", "GTO  4106", "SAS  4008"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AA/AAAAAA",
+  "lot_length": "9",
+  "frequency": "3",
+  "examples": ["18/122024", "07/072024", "13/072023"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "\t\t AAAAAA",
+  "lot_length": "9",
+  "frequency": "3",
+  "examples": ["\t\t 512245", "\t\t 504047", "\t\t 511199"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AA/AA/AAAA_AA A",
+  "lot_length": "15",
+  "frequency": "3",
+  "examples": ["22/07/2025_04 A", "01/10/2025_01 A", "18/07/2025_08 A"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAA AA.AAAA",
+  "lot_length": "11",
+  "frequency": "3",
+  "examples": ["VPC 09.2024", "SPR 05.2025", "SPR 04.2025"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAAAAA AAAA",
+  "lot_length": "11",
+  "frequency": "3",
+  "examples": ["030925 0012", "260824 0017", "012024 6859"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AAAAAA/+AAA",
+  "lot_length": "11",
+  "frequency": "3",
+  "examples": ["202803/+ET2"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AAAA  A",
+  "lot_length": "7",
+  "frequency": "3",
+  "examples": ["0703  L", "0301  N"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AAAA.AA/AAA",
+  "lot_length": "11",
+  "frequency": "3",
+  "examples": ["2028.03/ET2"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "A/A/AAAA",
+  "lot_length": "8",
+  "frequency": "3",
+  "examples": ["2/3/2023", "1/1/2026"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "A.AA.AA.A.AAAAA",
+  "lot_length": "15",
+  "frequency": "3",
+  "examples": ["1.12.BC.0.09X2M"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "\t AAAAAAA",
+  "lot_length": "9",
+  "frequency": "3",
+  "examples": ["\t 7300425", "\t 1506236", "\t EVH1137"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": "AAAA.AA.AA/+AA",
+  "lot_length": "14",
+  "frequency": "3",
+  "examples": ["2027.12.04/+PR", "2028.05.16/+PR"],
+  "distinct_pos": "3"
+}, {
+  "lot_pattern": " AA/AAAA",
+  "lot_length": "8",
+  "frequency": "2",
+  "examples": [" 04/0925", " 06/0126"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "A.AA.AAAAAAA",
+  "lot_length": "12",
+  "frequency": "2",
+  "examples": ["B.NO.PGF4022", "1.12.00691M3"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AA-AAAA-AA",
+  "lot_length": "10",
+  "frequency": "2",
+  "examples": ["HV-F128-C1", "VN-1985-15"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AA.AAAAA/A",
+  "lot_length": "10",
+  "frequency": "2",
+  "examples": ["27.11DSC/A", "26.11DFL/R"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "A.AAAAA.AAAAAAA",
+  "lot_length": "15",
+  "frequency": "2",
+  "examples": ["2.12BC0.069X1M3"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AA/AAA/AAAA",
+  "lot_length": "11",
+  "frequency": "2",
+  "examples": ["28/004/2025", "07/010/2024"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAAA   ",
+  "lot_length": "7",
+  "frequency": "2",
+  "examples": ["0425   ", "0125   "],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAAAAA AA.AA",
+  "lot_length": "12",
+  "frequency": "2",
+  "examples": ["L003IC HS.25"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AA AAAAAA ",
+  "lot_length": "10",
+  "frequency": "2",
+  "examples": ["EO 824007 ", "EO 725006 "],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "  AAAAA",
+  "lot_length": "7",
+  "frequency": "2",
+  "examples": ["  18924", "  01424"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": ".AAAA",
+  "lot_length": "5",
+  "frequency": "2",
+  "examples": [".1124", ".0380"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAAA-AAAAA-AAAAAA-AAA-AAA",
+  "lot_length": "25",
+  "frequency": "2",
+  "examples": ["KHTT-00124-140328-CK2-DMC", "KHTT-00123-040226-CK5-DMC"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA.AAA",
+  "lot_length": "6",
+  "frequency": "2",
+  "examples": ["42.421", "24.033"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AA.AA/-AAA/A",
+  "lot_length": "12",
+  "frequency": "2",
+  "examples": ["26.10/-DFL/A", "27.11/-DSC/B"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A/+AA",
+  "lot_length": "5",
+  "frequency": "2",
+  "examples": ["A/+PR"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "(AA) AAAAAAAA",
+  "lot_length": "13",
+  "frequency": "2",
+  "examples": ["(10) 42524235", "(10) 10824034"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAA. AAAAAA",
+  "lot_length": "11",
+  "frequency": "2",
+  "examples": ["DMF. 061223"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AA/AA ",
+  "lot_length": "6",
+  "frequency": "2",
+  "examples": ["02/24 ", "01/24 "],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "A.AA.A.AAAAA.AA",
+  "lot_length": "15",
+  "frequency": "2",
+  "examples": ["1.12.0.069X1.3M"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "A/AA/AAAA",
+  "lot_length": "9",
+  "frequency": "2",
+  "examples": ["1/11/2025", "G/25/1654"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAA-AAAAA-AAA",
+  "lot_length": "13",
+  "frequency": "2",
+  "examples": ["NGS-52409-213"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "A:AAAAA",
+  "lot_length": "7",
+  "frequency": "2",
+  "examples": ["B:38817", "B:35544"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AA/AA/AAAA-AA A",
+  "lot_length": "15",
+  "frequency": "2",
+  "examples": ["30/07/2028-03 A", "19/08/2025-02 A"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAA-AAAAAA AAAAAA",
+  "lot_length": "17",
+  "frequency": "2",
+  "examples": ["003-291024 291027", "017-211224 211227"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "A.AAAA AAA AAA AAAAA",
+  "lot_length": "20",
+  "frequency": "2",
+  "examples": ["B.WELL PRO 165 BLACK"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAA -AAAAAA",
+  "lot_length": "11",
+  "frequency": "2",
+  "examples": ["125 -050724", "025 -161024"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "A AAAAAAA ",
+  "lot_length": "10",
+  "frequency": "2",
+  "examples": ["B 1123606 ", "B 1122177 "],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAA- AAAA",
+  "lot_length": "9",
+  "frequency": "2",
+  "examples": ["DMT- 5001", "CIT- 4003"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAAA.AA.AA ",
+  "lot_length": "11",
+  "frequency": "2",
+  "examples": ["DM02.03.25 ", "DM03.08.25 "],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAA-AA A.AAA",
+  "lot_length": "12",
+  "frequency": "2",
+  "examples": ["PRO-35 B.WEL", "PRO-36 B.WEL"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.A.AốA",
+  "lot_length": "7",
+  "frequency": "2",
+  "examples": ["6.2.Rốn"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "  AAAA",
+  "lot_length": "6",
+  "frequency": "2",
+  "examples": ["  RFET", "  1224"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAAAA/AA ",
+  "lot_length": "9",
+  "frequency": "2",
+  "examples": ["TT001/25 ", "DP001/25 "],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAAAAAA.AA",
+  "lot_length": "10",
+  "frequency": "2",
+  "examples": ["LBD100L.40", "LBD100S.35"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": " AA.AA.AAAA",
+  "lot_length": "11",
+  "frequency": "2",
+  "examples": [" 24.02.2026", " 22.08.2025"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAAAAAA(AA)",
+  "lot_length": "11",
+  "frequency": "2",
+  "examples": ["KT0PTB3(V4)", "KTOPTB2(V1)"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAA:AA/AA/AAAA",
+  "lot_length": "14",
+  "frequency": "2",
+  "examples": ["NSX:20/12/2024"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "A:AAAAAA",
+  "lot_length": "8",
+  "frequency": "2",
+  "examples": ["B:37470A"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "A-A-AAA",
+  "lot_length": "7",
+  "frequency": "2",
+  "examples": ["1-4-G10", "6-2-G10"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAA: AA/AA/AAAA",
+  "lot_length": "15",
+  "frequency": "2",
+  "examples": ["NSX: 08/10/2024", "NSX: 05/02/2025"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.AAAAAĐAAAAAA",
+  "lot_length": "14",
+  "frequency": "2",
+  "examples": ["1.4BKCNĐUC1872"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "A-AAAA",
+  "lot_length": "6",
+  "frequency": "2",
+  "examples": ["S-0124", "S-1024"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAAA/+AAA/A",
+  "lot_length": "11",
+  "frequency": "2",
+  "examples": ["2711/+DSC/A", "2711/+DSC/B"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAAA AAAA AA",
+  "lot_length": "12",
+  "frequency": "2",
+  "examples": ["5294 A217 Q0"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "A.A.AAA.AAA",
+  "lot_length": "11",
+  "frequency": "2",
+  "examples": ["1.4.BK1.255"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "\tAAAAAAAA",
+  "lot_length": "9",
+  "frequency": "2",
+  "examples": ["\t24110023", "\t25010151"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAAA/AAA",
+  "lot_length": "8",
+  "frequency": "2",
+  "examples": ["1173/KGQ"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A A-AAA ",
+  "lot_length": "8",
+  "frequency": "2",
+  "examples": ["B 0-124 ", "B S-130 "],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "A. AA",
+  "lot_length": "5",
+  "frequency": "2",
+  "examples": ["N. 71", "N. 68"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA:AAAAAAAA",
+  "lot_length": "11",
+  "frequency": "2",
+  "examples": ["KU:06251922"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AA.AA-AAA-A",
+  "lot_length": "11",
+  "frequency": "2",
+  "examples": ["26.05-DFL-B", "27.09-DSL-I"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.AA.AA.AAAAAAAA",
+  "lot_length": "16",
+  "frequency": "2",
+  "examples": ["1.12.BC.0069X1M3", "1.10.BC.0069X1M2"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA/AA/AAAA AA",
+  "lot_length": "13",
+  "frequency": "2",
+  "examples": ["19/09/2025 DH"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AA.AAAA.A",
+  "lot_length": "9",
+  "frequency": "2",
+  "examples": ["02.2025.W"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAAAAAAAA/A",
+  "lot_length": "11",
+  "frequency": "2",
+  "examples": ["24026402B/1", "BMTR00425/3"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": " AAA AAAA",
+  "lot_length": "9",
+  "frequency": "2",
+  "examples": [" MEC 5007", " ART 5002"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "A.A.AAA.AAAA.AA",
+  "lot_length": "15",
+  "frequency": "2",
+  "examples": ["2.6.GLX.THAN.4L"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAA.AA.AA",
+  "lot_length": "9",
+  "frequency": "2",
+  "examples": ["L15.06.24", "L10.04.24"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.A.AAA.AAAAA",
+  "lot_length": "13",
+  "frequency": "2",
+  "examples": ["1.4.BC0.09X2M", "1.3.BC0.09X2M"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "A-AAA-AA/AA/AAAA",
+  "lot_length": "16",
+  "frequency": "2",
+  "examples": ["V-244-04/06/2027", "V-221-03/01/2026"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAA-AAAAAA  ",
+  "lot_length": "12",
+  "frequency": "2",
+  "examples": ["014-131124  ", "005-190724  "],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AA.AA - AAA - A",
+  "lot_length": "15",
+  "frequency": "2",
+  "examples": ["27.09 - DSL - G", "27.06 - DFL - H"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAA-AAAA ",
+  "lot_length": "12",
+  "frequency": "2",
+  "examples": ["020924-TBYT "],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "  AAAAAAA",
+  "lot_length": "9",
+  "frequency": "2",
+  "examples": ["  0770125", "  0010825"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AA AAA/AA ",
+  "lot_length": "10",
+  "frequency": "2",
+  "examples": ["TT 002/25 ", "TT 001/25 "],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "A.A.AAAAAAAA",
+  "lot_length": "12",
+  "frequency": "2",
+  "examples": ["1.4.BKCN3572"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AA/AA/AAAA AAA",
+  "lot_length": "14",
+  "frequency": "2",
+  "examples": ["30/07/2025 L03", "12/06/2025 L03"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "/+AA",
+  "lot_length": "4",
+  "frequency": "2",
+  "examples": ["/+PR"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "A.AA.AA.A.AAAAAAA",
+  "lot_length": "17",
+  "frequency": "2",
+  "examples": ["1.10.BC.0.069X1M2", "1.12.BC.0.069X1M3"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAA-AAAAAA - AA/AA/AAAA",
+  "lot_length": "23",
+  "frequency": "2",
+  "examples": ["003-050125 - 05/01/2028", "001-050125 - 05/01/2028"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAAAAAAAAA AAAAA",
+  "lot_length": "16",
+  "frequency": "2",
+  "examples": ["40740386E0 D064B", "40740386E0 D064b"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA.AA-AAAA",
+  "lot_length": "10",
+  "frequency": "2",
+  "examples": ["27.09-DSLG"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAA-A-AA-AA",
+  "lot_length": "14",
+  "frequency": "2",
+  "examples": ["270720-D-12-KK", "270823-D-52-KK"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAA AA/AAA",
+  "lot_length": "13",
+  "frequency": "2",
+  "examples": ["201125 09/SAM", "150525 03/BKM"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAA  ",
+  "lot_length": "5",
+  "frequency": "2",
+  "examples": ["C52  ", "033  "],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAAAAAAA\t",
+  "lot_length": "9",
+  "frequency": "2",
+  "examples": ["86SKP282\t", "86SLE731\t"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.AAA",
+  "lot_length": "5",
+  "frequency": "2",
+  "examples": ["B.035", "L.A01"],
+  "distinct_pos": "2"
+}, {
+  "lot_pattern": "AAAA/AA/AA ",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["2024/01/23 "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "#AAAAAAA",
+  "lot_length": "8",
+  "frequency": "1",
+  "examples": ["#B404VN1"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAAAAAA:AA",
+  "lot_length": "15",
+  "frequency": "1",
+  "examples": ["43177811S007:56"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAA AAAAAAA AAA AAAAAA",
+  "lot_length": "25",
+  "frequency": "1",
+  "examples": ["2Jouri Dessert Tea 4007AN"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.A.AAAAA.AA ",
+  "lot_length": "13",
+  "frequency": "1",
+  "examples": ["2.5.WHITE.3L "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA+AAAAA",
+  "lot_length": "8",
+  "frequency": "1",
+  "examples": ["29+4D005"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAA-AA/A/AA",
+  "lot_length": "14",
+  "frequency": "1",
+  "examples": ["012025-15/1/28"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA.AA/+AAA/A ",
+  "lot_length": "13",
+  "frequency": "1",
+  "examples": ["26.05/+DFL/B "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAA.",
+  "lot_length": "6",
+  "frequency": "1",
+  "examples": ["24103."],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA.A/+AA/A",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["27.7/+DF/A"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAA AAAA-AA",
+  "lot_length": "13",
+  "frequency": "1",
+  "examples": ["54999 2029-10"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAA-AA ",
+  "lot_length": "9",
+  "frequency": "1",
+  "examples": ["S2025-06 "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAAAA A",
+  "lot_length": "12",
+  "frequency": "1",
+  "examples": ["4YX7000237 2"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAA AAAAA AAA",
+  "lot_length": "13",
+  "frequency": "1",
+  "examples": ["CAS 26001 36M"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.AA.AA.",
+  "lot_length": "8",
+  "frequency": "1",
+  "examples": ["1.12.BC."],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A-AAAAAA",
+  "lot_length": "8",
+  "frequency": "1",
+  "examples": ["G-240590"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAA(AA)",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["WEX9NX(V1)"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAA-AAAA-AAAA-AAAAA",
+  "lot_length": "21",
+  "frequency": "1",
+  "examples": ["168DN-CNHN-2025-00924"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAA.AAAAAA",
+  "lot_length": "13",
+  "frequency": "1",
+  "examples": ["TAMLAN.288366"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAA ",
+  "lot_length": "9",
+  "frequency": "1",
+  "examples": ["86SHN112 "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA.AAA/AA",
+  "lot_length": "9",
+  "frequency": "1",
+  "examples": ["TT.003/25"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A-AAAAAAAAA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["1-4BKCN3572"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAA.A",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["BR150578.1"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAA.AA.AAA +AAAA",
+  "lot_length": "17",
+  "frequency": "1",
+  "examples": ["2026.04.12A +PR30"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA.AA.AAAA ",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["07.05.2025 "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAA AAAAAA",
+  "lot_length": "12",
+  "frequency": "1",
+  "examples": ["24043 041027"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.A.AA.AAAAA.AA",
+  "lot_length": "15",
+  "frequency": "1",
+  "examples": ["1.7.BC.086X1.9M"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA-A\t",
+  "lot_length": "5",
+  "frequency": "1",
+  "examples": ["WS-2\t"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.A.AA.AAAA.Đ ",
+  "lot_length": "14",
+  "frequency": "1",
+  "examples": ["1.4.BK.1872.Đ "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.A.AAA.A",
+  "lot_length": "9",
+  "frequency": "1",
+  "examples": ["1.7.BK2.5"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAA-AAAA   ",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["GRS-5005   "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAA: AA/AA/AAAA - AAA: AA/AA/AAAA",
+  "lot_length": "33",
+  "frequency": "1",
+  "examples": ["NSX: 05/02/2025 - HSD: 05/02/2027"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "   AAAAAAAAAA",
+  "lot_length": "13",
+  "frequency": "1",
+  "examples": ["   KU05241590"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": " AA/AA/AAAA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": [" 22/09/2025"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A AAA",
+  "lot_length": "5",
+  "frequency": "1",
+  "examples": ["9 H10"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAA-",
+  "lot_length": "8",
+  "frequency": "1",
+  "examples": ["C240188-"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAA . AAAAAA",
+  "lot_length": "12",
+  "frequency": "1",
+  "examples": ["DMF . 041223"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAA-AAAAAA-AAA-AAA A -AAAAAA-AA-AA-",
+  "lot_length": "37",
+  "frequency": "1",
+  "examples": ["00124-010328-CK4-DMC 0 -23CTBH-KD-25-"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAA-A-AA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["270823-D-52"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA/AA/AAAA-AA",
+  "lot_length": "13",
+  "frequency": "1",
+  "examples": ["09/09/2025-01"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAA/AAA",
+  "lot_length": "12",
+  "frequency": "1",
+  "examples": ["20112509/SAM"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.A.AAAAAAAAAAAA",
+  "lot_length": "16",
+  "frequency": "1",
+  "examples": ["2.5.BCNTRONG1872"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": " +++AAAAAAAAA",
+  "lot_length": "13",
+  "frequency": "1",
+  "examples": [" +++0010325M2"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA-AAAA/AA/AAA",
+  "lot_length": "14",
+  "frequency": "1",
+  "examples": ["60-1022/TR/PUR"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA/AAA",
+  "lot_length": "6",
+  "frequency": "1",
+  "examples": ["54/900"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "(AA)AAAAAAAAA",
+  "lot_length": "13",
+  "frequency": "1",
+  "examples": ["(21)241000965"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA/AA/AA/AA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["07/10/20/24"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA.AA.AA ",
+  "lot_length": "9",
+  "frequency": "1",
+  "examples": ["14.12.25 "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": " AAAAAA A",
+  "lot_length": "9",
+  "frequency": "1",
+  "examples": [" 202412 V"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": " AA.AAAA",
+  "lot_length": "8",
+  "frequency": "1",
+  "examples": [" 02.2025"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA.AAAAAAAA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["10.08202508"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A AAAAAA-AA ",
+  "lot_length": "12",
+  "frequency": "1",
+  "examples": ["B 230425-04 "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAA.AAAAAAAA.A",
+  "lot_length": "15",
+  "frequency": "1",
+  "examples": ["BKSH.13102025.1"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": " AAA-AA ",
+  "lot_length": "8",
+  "frequency": "1",
+  "examples": [" PRO-39 "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA//AA/AAAA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["31//12/2027"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAA.AA.AA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["28028.07.02"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAA-A-AAAA",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["043-3-1124"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.AAốA",
+  "lot_length": "6",
+  "frequency": "1",
+  "examples": ["6.2Rốn"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.AAAAAAAA",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["2.12BK1255"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.A.AA.A.AAAAAA",
+  "lot_length": "15",
+  "frequency": "1",
+  "examples": ["2.1.BC.0.86X1M9"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAAAAAA.AA",
+  "lot_length": "15",
+  "frequency": "1",
+  "examples": ["SFBM11102025.01"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.AA.AA.AAAAAAA",
+  "lot_length": "15",
+  "frequency": "1",
+  "examples": ["1.10.BC.00691M2"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA--AAAA",
+  "lot_length": "8",
+  "frequency": "1",
+  "examples": ["25--1014"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAA\t",
+  "lot_length": "7",
+  "frequency": "1",
+  "examples": ["350524\t"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.A.AAAAA-AA",
+  "lot_length": "12",
+  "frequency": "1",
+  "examples": ["2.5.BLACK-3L"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "     AAAAAA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["     010725"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": " +++AAAAAAAA",
+  "lot_length": "12",
+  "frequency": "1",
+  "examples": [" +++00704125"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAA\t",
+  "lot_length": "6",
+  "frequency": "1",
+  "examples": ["00625\t"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAA-AAAAAAA",
+  "lot_length": "12",
+  "frequency": "1",
+  "examples": ["2025-GL52509"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAA-AAA.AA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["L002-YIS.25"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAAAA/A",
+  "lot_length": "12",
+  "frequency": "1",
+  "examples": ["BMTTR01125/3"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAA.AA",
+  "lot_length": "9",
+  "frequency": "1",
+  "examples": ["VM1000.04"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAĐAAAA.AAAA",
+  "lot_length": "12",
+  "frequency": "1",
+  "examples": ["LBĐ100L.35TC"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "\tAAAAAAAAAA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["\t2000218382"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA - AA",
+  "lot_length": "7",
+  "frequency": "1",
+  "examples": ["01 - 23"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA.AAA/AAA/A",
+  "lot_length": "12",
+  "frequency": "1",
+  "examples": ["27.025/DFL/B"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": " AA-AA AAAA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": [" WT-03 BASE"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAA/A ",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["024209G/2 "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAAAA  ",
+  "lot_length": "12",
+  "frequency": "1",
+  "examples": ["SAT0206251  "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAA.A/+A",
+  "lot_length": "13",
+  "frequency": "1",
+  "examples": ["20280201.A/+H"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAA-A ",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["20250116-1 "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAA. ",
+  "lot_length": "6",
+  "frequency": "1",
+  "examples": ["0224. "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.AAAA.A.AAAAA.AA",
+  "lot_length": "17",
+  "frequency": "1",
+  "examples": ["1.10BC.0.086X1.9M"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAA.A.AA",
+  "lot_length": "12",
+  "frequency": "1",
+  "examples": ["H150578.2.24"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA A",
+  "lot_length": "4",
+  "frequency": "1",
+  "examples": ["03 A"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": ".AAAAAAA",
+  "lot_length": "8",
+  "frequency": "1",
+  "examples": [".2840324"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": ".AA.AA.AAAA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": [".08.05.2024"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAA AAAAAA",
+  "lot_length": "15",
+  "frequency": "1",
+  "examples": ["24375221 120927"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAA AA AA",
+  "lot_length": "9",
+  "frequency": "1",
+  "examples": ["HL1 04 F5"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.AAAAA.AAA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["2.12BK1.255"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAA/AA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["11082025/13"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.A.AAA.AA.AA",
+  "lot_length": "13",
+  "frequency": "1",
+  "examples": ["6.2.BC0.09.2M"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAA.AA +AAAA",
+  "lot_length": "13",
+  "frequency": "1",
+  "examples": ["2028.06 +TKKC"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAA -AAAA",
+  "lot_length": "12",
+  "frequency": "1",
+  "examples": ["150125 -0151"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAA/AA/AA-AA-A",
+  "lot_length": "15",
+  "frequency": "1",
+  "examples": ["TP11/24/12-01-1"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAA/A",
+  "lot_length": "6",
+  "frequency": "1",
+  "examples": ["5322/3"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAA-AA:AA",
+  "lot_length": "14",
+  "frequency": "1",
+  "examples": ["26022316-13:16"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": ".AAAAAAAA",
+  "lot_length": "9",
+  "frequency": "1",
+  "examples": [".02012025"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.A.AAA.AAA.AẠ̣A",
+  "lot_length": "17",
+  "frequency": "1",
+  "examples": ["2.1.BC0.086.1Ṃ̣9"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAA-AA/AA/AAA",
+  "lot_length": "17",
+  "frequency": "1",
+  "examples": ["LN00451-30/11/227"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA ",
+  "lot_length": "3",
+  "frequency": "1",
+  "examples": ["01 "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAAA A",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["125ED1127 1"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAAAAAAAAAAAA",
+  "lot_length": "18",
+  "frequency": "1",
+  "examples": ["3SYZ060B0H4JR4012Y"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAA-AAA ",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["L2412-191 "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": " AAAAA-A",
+  "lot_length": "8",
+  "frequency": "1",
+  "examples": [" 50459-9"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA/AA/AA-AAA",
+  "lot_length": "12",
+  "frequency": "1",
+  "examples": ["22/07/25-226"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.AA.AAAAAAA.AA",
+  "lot_length": "15",
+  "frequency": "1",
+  "examples": ["1.10.GLXTHAN.4L"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "\t AA.AAAA",
+  "lot_length": "9",
+  "frequency": "1",
+  "examples": ["\t 08.0425"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA.AA+AA/A",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["27.08+DF/A"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A AA-AAA",
+  "lot_length": "8",
+  "frequency": "1",
+  "examples": ["B ST-107"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA*AAAA",
+  "lot_length": "7",
+  "frequency": "1",
+  "examples": ["25*1002"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.AA  ",
+  "lot_length": "6",
+  "frequency": "1",
+  "examples": ["N.71  "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAA AA ",
+  "lot_length": "9",
+  "frequency": "1",
+  "examples": ["VF0MT 39 "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAA AA AAAAAAA",
+  "lot_length": "14",
+  "frequency": "1",
+  "examples": ["890 29 0120224"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A-AAAA-AAAAAAA",
+  "lot_length": "14",
+  "frequency": "1",
+  "examples": ["1-4BC0-069X1M2"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAA  AA/AAA",
+  "lot_length": "14",
+  "frequency": "1",
+  "examples": ["140825  05/BKM"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAA  A",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["NO914LX  0"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAA-AA-AA-AAAAA-AAAAAA-AAA-AAA A",
+  "lot_length": "35",
+  "frequency": "1",
+  "examples": ["23CTBH-KD-25-00524-310127-CK4-DMC 0"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAA-AAA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["0100612-MTT"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": " AA AAA",
+  "lot_length": "7",
+  "frequency": "1",
+  "examples": [" AL 313"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAA AAA",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["LD4333 L05"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAA-AAAA",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["WI912-0425"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA AA AAAAAAAAAA AAAAAA",
+  "lot_length": "23",
+  "frequency": "1",
+  "examples": ["B5 R3 R025511020 K06JUN"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "#AAAAA",
+  "lot_length": "6",
+  "frequency": "1",
+  "examples": ["#22874"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAA.AA.AAAA",
+  "lot_length": "12",
+  "frequency": "1",
+  "examples": ["DM01.05.2025"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAAAAA-A",
+  "lot_length": "13",
+  "frequency": "1",
+  "examples": ["551550386N0-1"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAA/AAAA/AA",
+  "lot_length": "12",
+  "frequency": "1",
+  "examples": ["0001/2025/NV"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "  AAAAAAAAAA",
+  "lot_length": "12",
+  "frequency": "1",
+  "examples": ["  251224CN12"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAA.AAAA",
+  "lot_length": "8",
+  "frequency": "1",
+  "examples": ["GTO.5035"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAA.AA.AA/A +AAAA AAAA",
+  "lot_length": "23",
+  "frequency": "1",
+  "examples": ["2027.01.16/4 +PR44 4194"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": " AAAAAA(AA)",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": [" WEX9NX(V1)"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA.A/+AAA/A",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["27.6/+DAS/B"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": " A AAAAAAA",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": [" B 1122186"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": " AAAAA/AAAA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": [" 40495/0314"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAA/AA  ",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["TT001/25  "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAA- AAAA",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["HVCT- 5003"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.A.AAA ",
+  "lot_length": "8",
+  "frequency": "1",
+  "examples": ["1.8.G10 "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A AAA-A",
+  "lot_length": "7",
+  "frequency": "1",
+  "examples": ["B THA-3"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAA - AAAAA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["MLP - V2025"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA:AA",
+  "lot_length": "5",
+  "frequency": "1",
+  "examples": ["KF:09"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAA\t ",
+  "lot_length": "8",
+  "frequency": "1",
+  "examples": ["010825\t "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "\tAAAAAA",
+  "lot_length": "7",
+  "frequency": "1",
+  "examples": ["\t502035"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAA--AAAAAA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["017--071025"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAA-AAAAAAAAA",
+  "lot_length": "15",
+  "frequency": "1",
+  "examples": ["LSXCT-310323106"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAA-AAA-AA-AA",
+  "lot_length": "14",
+  "frequency": "1",
+  "examples": ["QLSP-853-04-24"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA AAAAAAA",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["EO 1225007"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "(AA)AAAAAAAAAA",
+  "lot_length": "14",
+  "frequency": "1",
+  "examples": ["(10)1003151116"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "-AAA-AAAAAA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["-011-081124"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAA A",
+  "lot_length": "7",
+  "frequency": "1",
+  "examples": ["24265 E"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAA/AA/AA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["20924/01/23"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAAAAAAA ",
+  "lot_length": "14",
+  "frequency": "1",
+  "examples": ["20250904223VF "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAA-AAAA.AA",
+  "lot_length": "15",
+  "frequency": "1",
+  "examples": ["NTKBLBX-L100.35"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA.AA AAA/A",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["26.10 DFL/A"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "(A) AAAAAA",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["(B) 144077"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "  AAAAAAAA",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["  WT044022"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA AA:AA.AA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["R5 17:18.12"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.AA.AA.A.AAAAA ",
+  "lot_length": "16",
+  "frequency": "1",
+  "examples": ["1.12.BC.0.09X2M "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAA/AAA",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["WEX9NX/V12"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAA-A AAAAA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["108-1 30625"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": " AAA-AA",
+  "lot_length": "7",
+  "frequency": "1",
+  "examples": [" MED-62"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAA AAAA ",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["HCST 4001 "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAA -A ",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["PS7A08X -8 "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAA                 AAAA",
+  "lot_length": "24",
+  "frequency": "1",
+  "examples": ["008                 0924"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": " AAA-AAAAAA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": [" 037-180425"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAA-AAAAAAAA",
+  "lot_length": "16",
+  "frequency": "1",
+  "examples": ["0050925-16092028"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAA-AAAAAA-AAA-AAA",
+  "lot_length": "20",
+  "frequency": "1",
+  "examples": ["00524-260827-CK5-DMC"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA-AA AAAA",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["WT-03 BASE"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA.AA.AA  ",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["11.10.24  "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.A.AA.AAAA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["1.4.BK.1872"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAA-AAAA-AAAAA-AAAAAA-AAA-AAA A",
+  "lot_length": "32",
+  "frequency": "1",
+  "examples": ["2025-KHTT-00424-251226-CK2-DMC 0"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAAAA -A",
+  "lot_length": "13",
+  "frequency": "1",
+  "examples": ["51700386N2 -1"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAA-AAAAAAAA",
+  "lot_length": "14",
+  "frequency": "1",
+  "examples": ["LSXCT-04042283"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAA.AAAAAA ",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["DMF.041223 "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAA-A ",
+  "lot_length": "8",
+  "frequency": "1",
+  "examples": ["41258-9 "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": " AAAAAAA/A",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": [" O25310G/2"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA.AA/+AA",
+  "lot_length": "9",
+  "frequency": "1",
+  "examples": ["27.09/+DS"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA AA AAA",
+  "lot_length": "9",
+  "frequency": "1",
+  "examples": ["06 10 205"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAA-AA ",
+  "lot_length": "7",
+  "frequency": "1",
+  "examples": ["MED-62 "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA.A/AAA/A",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["27.9/DSL/F"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA AAAAAAAA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["F1 3Y004F30"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAA.",
+  "lot_length": "4",
+  "frequency": "1",
+  "examples": ["T38."],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA  AAA/AA",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["TT  002/25"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAA-AAAAA-AAAAAA",
+  "lot_length": "17",
+  "frequency": "1",
+  "examples": ["KHTT-00524-260827"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAAA\t",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["7992A1023\t"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.AA.AAAA ",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["1.10.GC10 "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A-AA-AAAA",
+  "lot_length": "9",
+  "frequency": "1",
+  "examples": ["1-10-2024"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": " AAAAAAA ",
+  "lot_length": "9",
+  "frequency": "1",
+  "examples": [" 2950925 "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAA  AA",
+  "lot_length": "9",
+  "frequency": "1",
+  "examples": ["26003  CD"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAA.AA.AA",
+  "lot_length": "13",
+  "frequency": "1",
+  "examples": ["NKY2025.11.25"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "+AAAAAAA",
+  "lot_length": "8",
+  "frequency": "1",
+  "examples": ["+0020725"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA/AAAAA",
+  "lot_length": "8",
+  "frequency": "1",
+  "examples": ["08/60525"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAA/AAA",
+  "lot_length": "9",
+  "frequency": "1",
+  "examples": ["L2412/191"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A-AAAAA ",
+  "lot_length": "8",
+  "frequency": "1",
+  "examples": ["L-U030C "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAA-A-AA",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["N2022-5-10"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA..AA.AAAA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["23..09.2025"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA-AAAAAA ",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["03-080425 "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA.AAAAAAAAAA",
+  "lot_length": "13",
+  "frequency": "1",
+  "examples": ["TL.209MT24001"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAA AA/A",
+  "lot_length": "8",
+  "frequency": "1",
+  "examples": ["M12 10/2"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.AA.A.AAA",
+  "lot_length": "10",
+  "frequency": "1",
+  "examples": ["1.12.0.069"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAAAA-AAAAA",
+  "lot_length": "16",
+  "frequency": "1",
+  "examples": ["51050386N3-1E099"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "\t AA AAA/AA",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["\t TT 001/25"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.AA.AA.A.A.AAAAA",
+  "lot_length": "17",
+  "frequency": "1",
+  "examples": ["1.12.BC.0.0.09X2M"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "                     AAAA",
+  "lot_length": "25",
+  "frequency": "1",
+  "examples": ["                     0224"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAAĐ",
+  "lot_length": "9",
+  "frequency": "1",
+  "examples": ["14BK1872Đ"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA-AAAA/AA/AAAA",
+  "lot_length": "15",
+  "frequency": "1",
+  "examples": ["WO-KS01/09/1025"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AA.AA/++AA/A",
+  "lot_length": "12",
+  "frequency": "1",
+  "examples": ["26.07/++DF/B"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAA.AAAAA",
+  "lot_length": "9",
+  "frequency": "1",
+  "examples": ["DMF.41223"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAA-AA-AA-AAAAA",
+  "lot_length": "19",
+  "frequency": "1",
+  "examples": ["232CTBH-KD-25-00524"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAAAAA\t",
+  "lot_length": "11",
+  "frequency": "1",
+  "examples": ["BF25004457\t"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAA-AAAA.AAAA",
+  "lot_length": "17",
+  "frequency": "1",
+  "examples": ["NTKBLBX-M100.25DN"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAAA-AA-AAAA-AAAAA",
+  "lot_length": "21",
+  "frequency": "1",
+  "examples": ["42DCTBH-KD-2025-00324"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.AAAAAA ",
+  "lot_length": "9",
+  "frequency": "1",
+  "examples": ["B.360F13 "],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAA-AAAA-AAAAA-AAAAAA-AAA-AAA A -AAAA-",
+  "lot_length": "39",
+  "frequency": "1",
+  "examples": ["2025-KHTT-02224-081128-CK2-DMC 0 -CSBH-"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "A.AAAA.AA",
+  "lot_length": "9",
+  "frequency": "1",
+  "examples": ["1.3BK2.55"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAAAA-AA-AA/AA",
+  "lot_length": "15",
+  "frequency": "1",
+  "examples": ["070325-24-03/27"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "ĐAAAAAAAA",
+  "lot_length": "9",
+  "frequency": "1",
+  "examples": ["ĐD2504001"],
+  "distinct_pos": "1"
+}, {
+  "lot_pattern": "AAAA.AAAAAAAA. AA ",
+  "lot_length": "18",
+  "frequency": "1",
+  "examples": ["SFBM.11102025. 01 "],
+  "distinct_pos": "1"
+}]

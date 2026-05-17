@@ -1,0 +1,17 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# Vercel CLI
+.vercel/
+
+# Node (webapp/.gitignore covers this, but explicit for safety)
+webapp/node_modules/
+webapp/.next/
+webapp/.env.local
+webapp/.env*.local
