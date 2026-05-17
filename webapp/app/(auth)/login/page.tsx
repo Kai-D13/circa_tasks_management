@@ -1,14 +1,13 @@
 'use client'
 
-import { useActionState } from 'react'
-import { login } from '@/app/actions/auth'
+import { useSearchParams } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
 export default function LoginPage() {
-  const [state, formAction, isPending] = useActionState(login, null)
+  const errorMsg = useSearchParams().get('error')
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-muted/40">
@@ -18,7 +17,8 @@ export default function LoginPage() {
           <CardDescription>Sign in to your account</CardDescription>
         </CardHeader>
         <CardContent>
-          <form action={formAction} className="flex flex-col gap-4">
+          {/* Native POST — browser handles cookie + redirect natively, no JS timing issues */}
+          <form method="POST" action="/api/auth/login" className="flex flex-col gap-4">
             <div className="grid gap-2">
               <Label htmlFor="email">Email</Label>
               <Input
@@ -40,11 +40,11 @@ export default function LoginPage() {
                 autoComplete="current-password"
               />
             </div>
-            {state?.error && (
-              <p className="text-sm text-destructive text-center">{state.error}</p>
+            {errorMsg && (
+              <p className="text-sm text-destructive text-center">{errorMsg}</p>
             )}
-            <Button type="submit" disabled={isPending} className="w-full mt-2">
-              {isPending ? 'Đang đăng nhập...' : 'Sign In'}
+            <Button type="submit" className="w-full mt-2">
+              Sign In
             </Button>
           </form>
         </CardContent>
