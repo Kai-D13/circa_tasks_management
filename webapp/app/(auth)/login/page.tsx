@@ -1,34 +1,14 @@
 'use client'
 
-import { useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { useActionState } from 'react'
+import { login } from '@/app/actions/auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { toast } from 'sonner'
 
 export default function LoginPage() {
-  const [loading, setLoading] = useState(false)
-
-  async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
-    e.preventDefault()
-    setLoading(true)
-    const form = e.currentTarget
-    const email = (form.elements.namedItem('email') as HTMLInputElement).value
-    const password = (form.elements.namedItem('password') as HTMLInputElement).value
-
-    const supabase = createClient()
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-
-    if (error) {
-      toast.error(error.message)
-      setLoading(false)
-      return
-    }
-
-    window.location.href = '/dashboard'
-  }
+  const [state, formAction, isPending] = useActionState(login, null)
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-muted/40">
@@ -38,7 +18,7 @@ export default function LoginPage() {
           <CardDescription>Sign in to your account</CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <form action={formAction} className="flex flex-col gap-4">
             <div className="grid gap-2">
               <Label htmlFor="email">Email</Label>
               <Input
@@ -60,8 +40,11 @@ export default function LoginPage() {
                 autoComplete="current-password"
               />
             </div>
-            <Button type="submit" disabled={loading} className="w-full mt-2">
-              {loading ? 'Signing in...' : 'Sign In'}
+            {state?.error && (
+              <p className="text-sm text-destructive text-center">{state.error}</p>
+            )}
+            <Button type="submit" disabled={isPending} className="w-full mt-2">
+              {isPending ? 'Đang đăng nhập...' : 'Sign In'}
             </Button>
           </form>
         </CardContent>
