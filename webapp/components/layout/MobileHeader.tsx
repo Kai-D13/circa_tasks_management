@@ -36,11 +36,8 @@ export function MobileHeader() {
   }
 
   return (
-    <header
-      className="sticky top-0 z-30 bg-sidebar border-b border-sidebar-border flex items-center gap-2 px-4 md:hidden"
-      style={{ height: 'calc(3.5rem + env(safe-area-inset-top))', paddingTop: 'env(safe-area-inset-top)' }}
-    >
-      {/* Logo + user */}
+    <header className="sticky top-0 z-30 bg-sidebar border-b border-sidebar-border flex items-center gap-2 px-4 h-14 md:hidden">
+      {/* Logo + user info */}
       <div className="flex items-center gap-2 flex-1 min-w-0">
         <div className="h-7 w-7 rounded-full bg-primary flex items-center justify-center shrink-0">
           <span className="text-[11px] font-bold text-primary-foreground">C</span>
@@ -60,22 +57,10 @@ export function MobileHeader() {
       {/* Actions */}
       <div className="flex items-center gap-1 shrink-0">
         {profile?.id && <NotificationBell userId={profile.id} />}
-        <Button
-          variant="ghost"
-          size="sm"
-          className="w-8 px-0 text-sidebar-foreground/70"
-          onClick={toggle}
-          title={theme === 'dark' ? 'Chế độ sáng' : 'Chế độ tối'}
-        >
+        <Button variant="ghost" size="sm" className="w-9 h-9 px-0 text-sidebar-foreground/70" onClick={toggle}>
           {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
         </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="w-8 px-0 text-sidebar-foreground/70"
-          onClick={handleLogout}
-          title="Đăng xuất"
-        >
+        <Button variant="ghost" size="sm" className="w-9 h-9 px-0 text-sidebar-foreground/70" onClick={handleLogout}>
           <LogOut className="h-4 w-4" />
         </Button>
       </div>

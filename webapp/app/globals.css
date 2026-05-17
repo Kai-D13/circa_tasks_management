@@ -138,9 +138,3 @@
   }
 }
 
-/* Force-hide desktop sidebar on mobile — ensures it never bleeds through on small screens */
-@media (max-width: 767px) {
-  [data-sidebar="desktop"] {
-    display: none !important;
-  }
-}

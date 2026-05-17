@@ -13,30 +13,15 @@ export default async function DashboardLayout({
   children: React.ReactNode
 }) {
   const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
 
-  let user
-  try {
-    const { data, error } = await supabase.auth.getUser()
-    if (error || !data.user) redirect('/login')
-    user = data.user
-  } catch (e: unknown) {
-    // Re-throw Next.js redirect/not-found signals
-    if (typeof e === 'object' && e !== null && 'digest' in e) throw e
-    redirect('/login')
-  }
+  if (!user) redirect('/login')
 
-  let profile: UserProfile | null = null
-  try {
-    const { data } = await supabase
-      .from('users')
-      .select('*, stores(*)')
-      .eq('id', user!.id)
-      .single()
-    profile = data as UserProfile | null
-  } catch (e: unknown) {
-    if (typeof e === 'object' && e !== null && 'digest' in e) throw e
-    redirect('/login')
-  }
+  const { data: profile } = await supabase
+    .from('users')
+    .select('*, stores(*)')
+    .eq('id', user.id)
+    .single()
 
   if (!profile) redirect('/login')
 
@@ -44,7 +29,7 @@ export default async function DashboardLayout({
     <ThemeProvider>
       <UserProvider profile={profile as UserProfile}>
         <div className="flex h-screen overflow-hidden">
-          {/* Sidebar — desktop only */}
+          {/* Desktop sidebar — hidden on mobile */}
           <Sidebar />
 
           {/* Main content — full width on mobile */}

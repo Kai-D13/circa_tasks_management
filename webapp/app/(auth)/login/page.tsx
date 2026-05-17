@@ -1,19 +1,38 @@
 'use client'
 
-import { Suspense } from 'react'
-import { useSearchParams } from 'next/navigation'
+import { useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-
-function ErrorMessage() {
-  const errorMsg = useSearchParams().get('error')
-  if (!errorMsg) return null
-  return <p className="text-sm text-destructive text-center">{errorMsg}</p>
-}
+import { toast } from 'sonner'
 
 export default function LoginPage() {
+  const router = useRouter()
+  const [loading, setLoading] = useState(false)
+
+  async function handleSubmit(e: React.SyntheticEvent<HTMLFormElement>) {
+    e.preventDefault()
+    setLoading(true)
+    const form = e.currentTarget
+    const email = (form.elements.namedItem('email') as HTMLInputElement).value
+    const password = (form.elements.namedItem('password') as HTMLInputElement).value
+
+    const supabase = createClient()
+    const { error } = await supabase.auth.signInWithPassword({ email, password })
+
+    if (error) {
+      toast.error(error.message)
+      setLoading(false)
+      return
+    }
+
+    router.push('/dashboard')
+    router.refresh()
+  }
+
   return (
     <div className="min-h-screen flex items-center justify-center bg-muted/40">
       <Card className="w-full max-w-sm">
@@ -22,7 +41,7 @@ export default function LoginPage() {
           <CardDescription>Sign in to your account</CardDescription>
         </CardHeader>
         <CardContent>
-          <form method="POST" action="/api/auth/login" className="flex flex-col gap-4">
+          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
             <div className="grid gap-2">
               <Label htmlFor="email">Email</Label>
               <Input
@@ -44,11 +63,8 @@ export default function LoginPage() {
                 autoComplete="current-password"
               />
             </div>
-            <Suspense>
-              <ErrorMessage />
-            </Suspense>
-            <Button type="submit" className="w-full mt-2">
-              Sign In
+            <Button type="submit" disabled={loading} className="w-full mt-2">
+              {loading ? 'Signing in...' : 'Sign In'}
             </Button>
           </form>
         </CardContent>

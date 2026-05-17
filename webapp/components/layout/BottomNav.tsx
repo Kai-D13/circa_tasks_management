@@ -22,8 +22,7 @@ export function BottomNav() {
   const visible = role ? NAV_ITEMS.filter((item) => item.roles.includes(role)) : []
 
   return (
-    <nav
-      className="fixed bottom-0 left-0 right-0 z-40 bg-sidebar border-t border-sidebar-border md:hidden"
+    <nav className="fixed bottom-0 left-0 right-0 z-40 bg-sidebar border-t border-sidebar-border md:hidden"
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
     >
       <div className="flex items-center justify-around h-14">
