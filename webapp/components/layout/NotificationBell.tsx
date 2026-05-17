@@ -25,6 +25,10 @@ export function NotificationBell({ userId }: { userId: string }) {
   const [popupPos, setPopupPos] = useState({ top: 0, left: 0 })
   const wrapperRef = useRef<HTMLDivElement>(null)
   const popupRef  = useRef<HTMLDivElement>(null)
+  // Unique per instance: supabase.channel() returns existing channels by name,
+  // so two NotificationBell components (Sidebar + MobileHeader) sharing the same
+  // userId would get the same already-subscribed channel, causing .on() to throw.
+  const instanceId = useRef(Math.random().toString(36).slice(2, 8))
 
   const unread = notifications.filter((n) => !n.is_read).length
 
@@ -38,7 +42,7 @@ export function NotificationBell({ userId }: { userId: string }) {
       .then(({ data }) => setNotifications(data ?? []))
 
     const channel = supabase
-      .channel(`notifications-${userId}`)
+      .channel(`notifications-${userId}-${instanceId.current}`)
       .on('postgres_changes', {
         event: 'INSERT',
         schema: 'public',
