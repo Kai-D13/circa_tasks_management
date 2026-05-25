@@ -18,9 +18,10 @@ interface ReviewEntry {
 interface Props {
   taskId: string
   reviews: ReviewEntry[]
+  canAddNote?: boolean
 }
 
-export function TaskReviewNote({ taskId, reviews }: Props) {
+export function TaskReviewNote({ taskId, reviews, canAddNote = true }: Props) {
   const [note, setNote] = useState('')
   const [pending, startTransition] = useTransition()
 
@@ -35,6 +36,8 @@ export function TaskReviewNote({ taskId, reviews }: Props) {
       }
     })
   }
+
+  if (!canAddNote && reviews.length === 0) return null
 
   return (
     <Card>
@@ -60,18 +63,20 @@ export function TaskReviewNote({ taskId, reviews }: Props) {
           </div>
         )}
 
-        <div className="space-y-2">
-          <Textarea
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="Yêu cầu Staff bổ sung thông tin, mô tả, làm lại..."
-            rows={3}
-            className="text-sm"
-          />
-          <Button size="sm" disabled={pending || !note.trim()} onClick={handleSubmit}>
-            {pending ? 'Đang gửi...' : 'Gửi ghi chú'}
-          </Button>
-        </div>
+        {canAddNote && (
+          <div className="space-y-2">
+            <Textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              placeholder="Yêu cầu Staff bổ sung thông tin, mô tả, làm lại..."
+              rows={3}
+              className="text-sm"
+            />
+            <Button size="sm" disabled={pending || !note.trim()} onClick={handleSubmit}>
+              {pending ? 'Đang gửi...' : 'Gửi ghi chú'}
+            </Button>
+          </div>
+        )}
       </CardContent>
     </Card>
   )

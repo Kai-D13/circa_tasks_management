@@ -7,7 +7,7 @@ import { Store } from '@/types'
 
 interface Props {
   stores: Pick<Store, 'id' | 'name'>[]
-  currentParams: { status?: string; priority?: string; store_id?: string }
+  currentParams: { status?: string; priority?: string; store_id?: string; category?: string }
 }
 
 const ALL = '__all__'
@@ -24,6 +24,15 @@ const PRIORITY_LABEL: Record<string, string> = {
   [ALL]:   'Tất cả ưu tiên',
   urgent:  'Khẩn cấp',
   normal:  'Bình thường',
+}
+
+const CATEGORY_LABEL: Record<string, string> = {
+  [ALL]:     'Tất cả loại',
+  training:  'Training',
+  recall:    'Thu hồi',
+  display:   'Trưng bày',
+  audit:     'Kiểm tra',
+  other:     'Khác',
 }
 
 export function TaskFilters({ stores, currentParams }: Props) {
@@ -48,6 +57,7 @@ export function TaskFilters({ stores, currentParams }: Props) {
   const statusVal   = currentParams.status   ?? ALL
   const priorityVal = currentParams.priority ?? ALL
   const storeIdVal  = currentParams.store_id ?? ALL
+  const categoryVal = currentParams.category ?? ALL
   const selectedStoreName = stores.find((s) => s.id === storeIdVal)?.name
 
   return (
@@ -91,6 +101,20 @@ export function TaskFilters({ stores, currentParams }: Props) {
           </SelectContent>
         </Select>
       )}
+
+      <Select value={categoryVal} onValueChange={(v) => update('category', v)}>
+        <SelectTrigger className="w-36 h-8 text-sm">
+          <SelectValue>{CATEGORY_LABEL[categoryVal] ?? 'Tất cả loại'}</SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={ALL}>Tất cả loại</SelectItem>
+          <SelectItem value="training">Training</SelectItem>
+          <SelectItem value="recall">Thu hồi</SelectItem>
+          <SelectItem value="display">Trưng bày</SelectItem>
+          <SelectItem value="audit">Kiểm tra</SelectItem>
+          <SelectItem value="other">Khác</SelectItem>
+        </SelectContent>
+      </Select>
 
       {hasFilters && (
         <Button variant="ghost" size="sm" onClick={clear} className="h-8 text-xs">

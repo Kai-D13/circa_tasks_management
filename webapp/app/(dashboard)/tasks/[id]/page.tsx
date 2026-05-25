@@ -10,12 +10,28 @@ import { TaskSubmitForm } from '@/components/tasks/TaskSubmitForm'
 import { TaskStatusSelector } from '@/components/tasks/TaskStatusSelector'
 import { TaskReassignForm } from '@/components/tasks/TaskReassignForm'
 import { TaskReviewNote } from '@/components/tasks/TaskReviewNote'
+import { RequestResubmitSection } from '@/components/tasks/RequestResubmitSection'
 import { TaskResultCard } from '@/components/tasks/TaskResultCard'
 import { InputDataDisplay } from '@/components/tasks/InputDataDisplay'
-import { deleteTask } from '@/app/actions/tasks'
+import { deleteTask, requestResubmit } from '@/app/actions/tasks'
 import { formatDate } from '@/lib/dateUtils'
-import { Task, RequiredOutput, UserRole } from '@/types'
-import { Pencil, Trash2 } from 'lucide-react'
+import { Task, RequiredOutput, UserRole, TaskCategory } from '@/types'
+import { Pencil, Trash2, Radio } from 'lucide-react'
+
+const CATEGORY_STYLE: Record<TaskCategory, string> = {
+  training: 'bg-blue-100 text-blue-700',
+  recall:   'bg-red-100 text-red-700',
+  display:  'bg-green-100 text-green-700',
+  audit:    'bg-amber-100 text-amber-700',
+  other:    'bg-gray-100 text-gray-600',
+}
+const CATEGORY_LABEL_VN: Record<TaskCategory, string> = {
+  training: 'Training',
+  recall:   'Thu hồi / Kiểm kê',
+  display:  'Trưng bày',
+  audit:    'Kiểm tra',
+  other:    'Khác',
+}
 import { cn } from '@/lib/utils'
 
 const OUTPUT_LABEL: Record<string, string> = {
@@ -48,7 +64,6 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   const canReassign = userRole === 'admin' || userRole === 'store_manager'
   const canEdit     = userRole === 'admin'
   const userId      = user!.id
-  const canSubmit   = task.status !== 'done' && task.assigned_to === userId
 
   // Round 2: store users (needed for reassign form + results filter for store_manager)
   const { data: storeUsers } = canReassign && task.store_id
@@ -80,6 +95,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   }
 
   // Round 3: results + logs in parallel
+  // reviewLogs: always query — RLS controls visibility per role
   const [
     { data: results },
     { data: lastAssignLog },
@@ -96,15 +112,21 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           .limit(1)
           .maybeSingle()
       : Promise.resolve({ data: null }),
-    canReassign
-      ? supabase
-          .from('task_logs')
-          .select('id, created_at, metadata, users(full_name)')
-          .eq('task_id', id)
-          .eq('action', 'review_note')
-          .order('created_at', { ascending: false })
-      : Promise.resolve({ data: [] }),
+    supabase
+      .from('task_logs')
+      .select('id, created_at, metadata, users(full_name)')
+      .eq('task_id', id)
+      .eq('action', 'review_note')
+      .order('created_at', { ascending: false }),
   ])
+
+  // Staff has already submitted if there's at least one result for their userId
+  const staffHasSubmitted = userRole === 'staff' && (results ?? []).length > 0
+  const canSubmit = task.status !== 'done' && task.assigned_to === userId && !staffHasSubmitted
+  const staffCanChangeStatus = userRole === 'staff'
+    && task.assigned_to === userId
+    && !['done', 'overdue'].includes(task.status)
+    && !staffHasSubmitted
 
   const assignerName: string | null = lastAssignLog
     ? (lastAssignLog.users as unknown as { full_name: string } | null)?.full_name ?? null
@@ -122,7 +144,22 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold">{task.title}</h1>
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="text-xl font-semibold">{task.title}</h1>
+            {task.category && (
+              <span className={cn(
+                'text-xs px-2 py-0.5 rounded font-medium',
+                CATEGORY_STYLE[task.category as TaskCategory] ?? 'bg-gray-100 text-gray-600'
+              )}>
+                {CATEGORY_LABEL_VN[task.category as TaskCategory] ?? task.category}
+              </span>
+            )}
+            {task.broadcast_id && (
+              <span className="flex items-center gap-1 text-xs text-primary bg-primary/10 px-2 py-0.5 rounded">
+                <Radio className="h-3 w-3" /> Broadcast
+              </span>
+            )}
+          </div>
           <p className="text-sm text-muted-foreground mt-1">
             Tạo bởi {(task.creator as { full_name: string } | null)?.full_name ?? '—'}
             {task.created_at && ` · ${formatDate(task.created_at)}`}
@@ -157,7 +194,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
               <span className="text-muted-foreground">Trạng thái</span>
               <div className="mt-1 flex items-center gap-2 flex-wrap">
                 <TaskStatusBadge status={task.status as Task['status']} />
-                {(canEdit || canReassign) && (
+                {(canEdit || canReassign || staffCanChangeStatus) && (
                   <TaskStatusSelector
                     taskId={id}
                     currentStatus={task.status as Task['status']}
@@ -286,18 +323,22 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
         </Card>
       )}
 
-      {/* Manager review notes (admin + store_manager) */}
-      {canReassign && (
-        <TaskReviewNote
-          taskId={id}
-          reviews={(reviewLogs ?? []).map((r) => ({
-            id:         r.id,
-            created_at: r.created_at,
-            metadata:   r.metadata as Record<string, unknown> | null,
-            users:      (r.users as unknown as { full_name: string } | null),
-          }))}
-        />
+      {/* Request resubmit — manager can ask staff to redo after submission */}
+      {canReassign && task.status === 'done' && (results ?? []).length > 0 && (
+        <RequestResubmitSection taskId={id} requestFn={requestResubmit} />
       )}
+
+      {/* Manager review notes — admin/manager can add; staff can read on their own tasks */}
+      <TaskReviewNote
+        taskId={id}
+        reviews={(reviewLogs ?? []).map((r) => ({
+          id:         r.id,
+          created_at: r.created_at,
+          metadata:   r.metadata as Record<string, unknown> | null,
+          users:      (r.users as unknown as { full_name: string } | null),
+        }))}
+        canAddNote={canReassign}
+      />
     </div>
   )
 }

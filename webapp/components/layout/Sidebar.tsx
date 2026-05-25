@@ -53,7 +53,7 @@ export function Sidebar() {
     { href: '/tasks',     label: 'Tasks',        icon: CheckSquare,     roles: ['admin', 'store_manager', 'staff'] },
     { href: '/users',     label: 'Người dùng',   icon: Users,           roles: ['admin'] },
     { href: '/stores',    label: 'Cửa hàng',     icon: Store,           roles: ['admin', 'store_manager'] },
-    { href: '/logs',      label: 'Nhật ký',      icon: ScrollText,      roles: ['admin', 'store_manager'] },
+    { href: '/logs',      label: 'Nhật ký',      icon: ScrollText,      roles: ['admin', 'store_manager', 'staff'] },
   ]
 
   const visibleItems = role

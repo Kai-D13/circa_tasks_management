@@ -68,9 +68,10 @@ export default async function LogsPage() {
   const { data: profile } = await supabase
     .from('users').select('role, store_id').eq('id', user.id).single()
 
-  if (profile?.role === 'staff') redirect('/dashboard')
-
-  // Build query — store_manager only sees logs for tasks in their store
+  // Build query with role-based filtering
+  // Admin: all logs
+  // Store Manager: own logs + store users' logs
+  // Staff: own logs only
   let logsQuery = supabase
     .from('task_logs')
     .select('*, tasks(id, title), users(full_name)')
@@ -79,15 +80,17 @@ export default async function LogsPage() {
 
   if (profile?.role === 'store_manager') {
     if (profile.store_id) {
-      const { data: storeTasks } = await supabase
-        .from('tasks')
+      const { data: storeUsers } = await supabase
+        .from('users')
         .select('id')
         .eq('store_id', profile.store_id)
-      const ids = (storeTasks ?? []).map((t) => t.id)
-      logsQuery = ids.length > 0
-        ? logsQuery.in('task_id', ids)
-        : logsQuery.eq('task_id', '00000000-0000-0000-0000-000000000000')
+      const userIds = [user.id, ...(storeUsers ?? []).map((u) => u.id)]
+      logsQuery = logsQuery.in('user_id', userIds)
+    } else {
+      logsQuery = logsQuery.eq('user_id', user.id)
     }
+  } else if (profile?.role === 'staff') {
+    logsQuery = logsQuery.eq('user_id', user.id)
   }
 
   const { data: logs } = await logsQuery

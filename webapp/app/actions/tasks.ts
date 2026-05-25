@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { TaskPriority, TaskStatus, TaskVisibility, RequiredOutput } from '@/types'
+import { TaskCategory, TaskPriority, TaskStatus, TaskVisibility, RequiredOutput } from '@/types'
 
 async function writeLog(
   supabase: Awaited<ReturnType<typeof createClient>>,
@@ -41,9 +41,18 @@ export async function createTask(formData: FormData) {
   const requiredOutputsRaw = formData.getAll('required_outputs') as RequiredOutput[]
   const assignedTo = formData.get('assigned_to') as string || null
 
+  const attachmentsRaw = formData.get('input_attachments') as string
+  const linksRaw = formData.get('input_links') as string
+  const inputAttachments = attachmentsRaw ? JSON.parse(attachmentsRaw) : []
+  const inputLinks = linksRaw ? JSON.parse(linksRaw) : []
+  const inputData = (inputAttachments.length > 0 || inputLinks.length > 0)
+    ? { attachments: inputAttachments, links: inputLinks }
+    : null
+
   const { data: task, error } = await supabase.from('tasks').insert({
     title:            formData.get('title') as string,
     description:      formData.get('description') as string || null,
+    category:         (formData.get('category') as TaskCategory) || 'other',
     priority:         formData.get('priority') as TaskPriority,
     visibility:       formData.get('visibility') as TaskVisibility,
     store_id:         formData.get('store_id') as string || null,
@@ -52,6 +61,7 @@ export async function createTask(formData: FormData) {
     deadline:         formData.get('deadline') as string || null,
     required_outputs: requiredOutputsRaw,
     created_by:       user.id,
+    input_data:       inputData,
   }).select().single()
 
   if (error) return { error: error.message }
@@ -85,13 +95,25 @@ export async function updateTask(taskId: string, formData: FormData) {
   const requiredOutputsRaw = formData.getAll('required_outputs') as RequiredOutput[]
   const assignedTo = formData.get('assigned_to') as string || null
 
-  // Check if assignee changed to send notification
-  const { data: prevTask } = await supabase
-    .from('tasks').select('assigned_to, title').eq('id', taskId).single()
+  const attachmentsRaw = formData.get('input_attachments') as string
+  const linksRaw = formData.get('input_links') as string
+  const inputAttachments = attachmentsRaw ? JSON.parse(attachmentsRaw) : []
+  const inputLinks = linksRaw ? JSON.parse(linksRaw) : []
+
+  // Merge with existing input_data to preserve bulk-import rows
+  const { data: existingTask } = await supabase.from('tasks').select('input_data, assigned_to, title').eq('id', taskId).single()
+  const prevTask = existingTask
+  const existingInputData = (existingTask?.input_data as Record<string, unknown>) ?? {}
+  const newInputData = {
+    ...existingInputData,
+    attachments: inputAttachments,
+    links: inputLinks,
+  }
 
   const { error } = await supabase.from('tasks').update({
     title:            formData.get('title') as string,
     description:      formData.get('description') as string || null,
+    category:         (formData.get('category') as TaskCategory) || 'other',
     priority:         formData.get('priority') as TaskPriority,
     visibility:       formData.get('visibility') as TaskVisibility,
     store_id:         formData.get('store_id') as string || null,
@@ -99,6 +121,7 @@ export async function updateTask(taskId: string, formData: FormData) {
     start_date:       formData.get('start_date') as string || null,
     deadline:         formData.get('deadline') as string || null,
     required_outputs: requiredOutputsRaw,
+    input_data:       newInputData,
   }).eq('id', taskId)
 
   if (error) return { error: error.message }
@@ -129,6 +152,28 @@ export async function updateTaskStatus(taskId: string, status: TaskStatus, note?
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
+
+  const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
+  const role = profile?.role ?? 'staff'
+
+  // Staff: can only set todo or in_progress, cannot change status after submitting
+  if (role === 'staff') {
+    const { data: submitted } = await supabase
+      .from('task_results')
+      .select('id')
+      .eq('task_id', taskId)
+      .eq('user_id', user.id)
+      .maybeSingle()
+    if (submitted) {
+      return { error: 'Bạn đã nộp kết quả rồi, không thể thay đổi trạng thái' }
+    }
+    if (!['todo', 'in_progress'].includes(status)) {
+      return { error: 'Không có quyền đổi sang trạng thái này' }
+    }
+    if (status === 'in_progress' && !note?.trim()) {
+      return { error: 'Bắt buộc phải ghi chú khi chuyển sang Đang thực hiện' }
+    }
+  }
 
   const { data: current } = await supabase
     .from('tasks').select('status, created_by, title').eq('id', taskId).single()
@@ -171,6 +216,14 @@ export async function submitTask(taskId: string, outputData: Record<string, stri
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
+
+  const { data: existing } = await supabase
+    .from('task_results')
+    .select('id')
+    .eq('task_id', taskId)
+    .eq('user_id', user.id)
+    .maybeSingle()
+  if (existing) return { error: 'Bạn đã nộp kết quả cho task này rồi' }
 
   const { data: task } = await supabase
     .from('tasks').select('created_by, title').eq('id', taskId).single()
@@ -246,6 +299,93 @@ export async function reassignTask(taskId: string, assignedTo: string | null) {
   return { success: true }
 }
 
+export async function createBroadcastTask(params: {
+  title: string
+  description: string
+  category: TaskCategory
+  priority: TaskPriority
+  visibility: TaskVisibility
+  storeIds: string[]
+  startDate: string | null
+  deadline: string | null
+  requiredOutputs: RequiredOutput[]
+  attachments?: { url: string; name: string; type: string; size?: number }[]
+  links?: { label: string; url: string }[]
+}) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Not authenticated' }
+
+  const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
+  if (profile?.role !== 'admin') return { error: 'Chỉ admin mới được tạo task broadcast' }
+
+  if (!params.storeIds.length) return { error: 'Vui lòng chọn ít nhất một cửa hàng' }
+
+  const { data: broadcast, error: bcastError } = await supabase
+    .from('task_broadcasts')
+    .insert({ title: params.title, created_by: user.id, store_count: params.storeIds.length })
+    .select().single()
+
+  if (bcastError) return { error: bcastError.message }
+
+  const inputData = (params.attachments?.length || params.links?.length)
+    ? { attachments: params.attachments ?? [], links: params.links ?? [] }
+    : null
+
+  const tasksToInsert = params.storeIds.map((storeId) => ({
+    title:            params.title,
+    description:      params.description || null,
+    category:         params.category,
+    priority:         params.priority,
+    visibility:       params.visibility,
+    store_id:         storeId,
+    assigned_to:      null,
+    created_by:       user.id,
+    start_date:       params.startDate || null,
+    deadline:         params.deadline || null,
+    required_outputs: params.requiredOutputs,
+    broadcast_id:     broadcast.id,
+    status:           'todo' as TaskStatus,
+    input_data:       inputData,
+  }))
+
+  const { data: created, error } = await supabase
+    .from('tasks').insert(tasksToInsert).select('id, title, store_id')
+  if (error) return { error: error.message }
+
+  const logs = (created ?? []).map((t) => ({
+    task_id:  t.id,
+    action:   'created',
+    user_id:  user.id,
+    metadata: { method: 'broadcast', broadcast_id: broadcast.id, title: t.title },
+  }))
+  if (logs.length > 0) await supabase.from('task_logs').insert(logs)
+
+  // Notify store managers of selected stores
+  const { data: managers } = await supabase
+    .from('users')
+    .select('id, store_id')
+    .eq('role', 'store_manager')
+    .in('store_id', params.storeIds)
+
+  if (managers?.length) {
+    const notifications = managers.map((m) => {
+      const storeTask = (created ?? []).find((t) => t.store_id === m.store_id)
+      return {
+        user_id: m.id,
+        type:    'task_assigned',
+        task_id: storeTask?.id ?? null,
+        title:   'Task mới được giao cho cửa hàng',
+        message: `Task mới: ${params.title}`,
+      }
+    })
+    await supabase.from('notifications').insert(notifications)
+  }
+
+  revalidatePath('/tasks')
+  redirect('/tasks')
+}
+
 export async function createBulkTasks(params: {
   title: string
   description: string
@@ -298,6 +438,40 @@ export async function createBulkTasks(params: {
   return { success: true, count: created?.length ?? 0 }
 }
 
+export async function requestResubmit(taskId: string, reason?: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Not authenticated' }
+
+  const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
+  if (!['admin', 'store_manager'].includes(profile?.role ?? ''))
+    return { error: 'Không có quyền yêu cầu làm lại' }
+
+  const { data: task } = await supabase
+    .from('tasks').select('assigned_to, title').eq('id', taskId).single()
+
+  const { error } = await supabase.from('tasks').update({ status: 'todo' }).eq('id', taskId)
+  if (error) return { error: error.message }
+
+  await writeLog(supabase, taskId, 'resubmit_requested', user.id, {
+    reason: reason ?? null,
+  })
+
+  if (task?.assigned_to) {
+    await insertNotification(
+      supabase,
+      task.assigned_to,
+      'resubmit_requested',
+      taskId,
+      'Yêu cầu thực hiện lại task',
+      `Quản lý yêu cầu bạn thực hiện lại: "${task.title}"${reason ? ` — ${reason}` : ''}`
+    )
+  }
+
+  revalidatePath(`/tasks/${taskId}`)
+  return { success: true }
+}
+
 export async function addReviewNote(taskId: string, note: string) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -308,7 +482,23 @@ export async function addReviewNote(taskId: string, note: string) {
   if (!['admin', 'store_manager'].includes(profile?.role ?? ''))
     return { error: 'Không có quyền ghi chú' }
 
+  const { data: task } = await supabase
+    .from('tasks').select('assigned_to, title').eq('id', taskId).single()
+
   await writeLog(supabase, taskId, 'review_note', user.id, { note })
+
+  // Notify assigned staff about the manager's review note
+  if (task?.assigned_to && task.assigned_to !== user.id) {
+    await insertNotification(
+      supabase,
+      task.assigned_to,
+      'review_note',
+      taskId,
+      'Ghi chú mới từ quản lý',
+      `Task "${task.title}": ${note.length > 60 ? note.slice(0, 60) + '…' : note}`
+    )
+  }
+
   revalidatePath(`/tasks/${taskId}`)
   return { success: true }
 }

@@ -11,7 +11,7 @@ const NAV_ITEMS = [
   { href: '/tasks',     label: 'Tasks',      icon: CheckSquare,     roles: ['admin', 'store_manager', 'staff'] },
   { href: '/users',     label: 'Users',      icon: Users,           roles: ['admin'] },
   { href: '/stores',    label: 'Cửa hàng',   icon: Store,           roles: ['admin', 'store_manager'] },
-  { href: '/logs',      label: 'Nhật ký',    icon: ScrollText,      roles: ['admin', 'store_manager'] },
+  { href: '/logs',      label: 'Nhật ký',    icon: ScrollText,      roles: ['admin', 'store_manager', 'staff'] },
 ]
 
 export function BottomNav() {

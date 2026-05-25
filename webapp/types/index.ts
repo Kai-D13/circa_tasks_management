@@ -3,6 +3,14 @@ export type TaskPriority = 'urgent' | 'normal'
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'overdue'
 export type TaskVisibility = 'public' | 'store' | 'private'
 export type RequiredOutput = 'image' | 'video' | 'file' | 'text'
+export type TaskCategory = 'training' | 'recall' | 'display' | 'audit' | 'other'
+
+export interface TaskAttachment {
+  url: string
+  name: string
+  type: string  // mime type
+  size?: number
+}
 
 export interface Store {
   id: string
@@ -29,6 +37,7 @@ export interface Task {
   priority: TaskPriority
   status: TaskStatus
   visibility: TaskVisibility
+  category: TaskCategory
   store_id: string | null
   assigned_to: string | null
   created_by: string | null
@@ -36,11 +45,20 @@ export interface Task {
   required_outputs: RequiredOutput[]
   start_date: string | null
   deadline: string | null
+  broadcast_id: string | null
   created_at: string
   updated_at: string
   stores?: Store
   assignee?: UserProfile
   creator?: UserProfile
+}
+
+export interface TaskBroadcast {
+  id: string
+  title: string
+  created_by: string | null
+  store_count: number
+  created_at: string
 }
 
 export interface TaskAssignment {
@@ -66,6 +84,7 @@ export interface TaskTemplate {
   title: string
   config: {
     description?: string
+    category: TaskCategory
     priority: TaskPriority
     visibility: TaskVisibility
     required_outputs: RequiredOutput[]
