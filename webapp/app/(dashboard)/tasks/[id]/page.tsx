@@ -96,10 +96,12 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
 
   // Round 3: results + logs in parallel
   // reviewLogs: always query — RLS controls visibility per role
+  const resubmitAt = (task.resubmit_requested_at as string | null) ?? null
   const [
     { data: results },
     { data: lastAssignLog },
     { data: reviewLogs },
+    { data: lastResubmitLog },
   ] = await Promise.all([
     buildResultsQuery(),
     task.assigned_to
@@ -118,10 +120,24 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       .eq('task_id', id)
       .eq('action', 'review_note')
       .order('created_at', { ascending: false }),
+    // Fetch last resubmit reason (for staff notification banner)
+    userRole === 'staff' && resubmitAt
+      ? supabase
+          .from('task_logs')
+          .select('metadata')
+          .eq('task_id', id)
+          .eq('action', 'resubmit_requested')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle()
+      : Promise.resolve({ data: null }),
   ])
 
-  // Staff has already submitted if there's at least one result for their userId
-  const staffHasSubmitted = userRole === 'staff' && (results ?? []).length > 0
+  // staffHasSubmitted: true only if there's a result submitted AFTER the last resubmit request
+  // (old results from before resubmit request don't block — staff can submit again)
+  const staffHasSubmitted = userRole === 'staff' && (results ?? []).some(
+    (r) => !resubmitAt || new Date((r as { submitted_at: string }).submitted_at) > new Date(resubmitAt)
+  )
   const canSubmit = task.status !== 'done' && task.assigned_to === userId && !staffHasSubmitted
   const staffCanChangeStatus = userRole === 'staff'
     && task.assigned_to === userId
@@ -185,6 +201,18 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           </div>
         )}
       </div>
+
+      {/* Resubmit request banner — shown to staff when manager requested resubmission */}
+      {userRole === 'staff' && resubmitAt && !staffHasSubmitted && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
+          <p className="font-medium text-amber-900">Quản lý yêu cầu bạn thực hiện lại task này</p>
+          {(() => {
+            const reason = (lastResubmitLog?.metadata as Record<string, unknown> | null)?.reason
+            return reason ? <p className="text-amber-800 mt-1">Lý do: {String(reason)}</p> : null
+          })()}
+          <p className="text-xs text-amber-700 mt-1">Kết quả cũ đã được lưu lại. Vui lòng nộp lại bên dưới.</p>
+        </div>
+      )}
 
       {/* Details card */}
       <Card>

@@ -46,6 +46,7 @@ export interface Task {
   start_date: string | null
   deadline: string | null
   broadcast_id: string | null
+  resubmit_requested_at: string | null
   created_at: string
   updated_at: string
   stores?: Store

@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { UserProvider } from '@/components/providers/UserProvider'
 import { ThemeProvider } from '@/components/providers/ThemeProvider'
+import { NotificationProvider } from '@/components/layout/NotificationProvider'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { MobileHeader } from '@/components/layout/MobileHeader'
 import { BottomNav } from '@/components/layout/BottomNav'
@@ -28,6 +29,7 @@ export default async function DashboardLayout({
   return (
     <ThemeProvider>
       <UserProvider profile={profile as UserProfile}>
+        <NotificationProvider>
         <div className="flex h-screen overflow-hidden">
           {/* Desktop sidebar — hidden on mobile */}
           <Sidebar />
@@ -42,6 +44,7 @@ export default async function DashboardLayout({
 
         {/* Bottom navigation — mobile only */}
         <BottomNav />
+        </NotificationProvider>
       </UserProvider>
     </ThemeProvider>
   )

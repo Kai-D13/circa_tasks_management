@@ -156,25 +156,32 @@ export async function updateTaskStatus(taskId: string, status: TaskStatus, note?
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
   const role = profile?.role ?? 'staff'
 
-  // Staff: can only set todo or in_progress, cannot change status after submitting
+  // Staff: route through SECURITY DEFINER RPC (only allows status column update,
+  // validates assignment + submission state at DB level)
   if (role === 'staff') {
-    const { data: submitted } = await supabase
-      .from('task_results')
-      .select('id')
-      .eq('task_id', taskId)
-      .eq('user_id', user.id)
-      .maybeSingle()
-    if (submitted) {
-      return { error: 'Bạn đã nộp kết quả rồi, không thể thay đổi trạng thái' }
+    const { data: rpcResult, error: rpcError } = await supabase.rpc(
+      'rpc_staff_update_task_status',
+      { p_task_id: taskId, p_status: status, p_note: note ?? null }
+    )
+    if (rpcError) return { error: rpcError.message }
+    if ((rpcResult as { error?: string })?.error) return { error: (rpcResult as { error: string }).error }
+
+    // Notify task creator
+    const { data: taskInfo } = await supabase
+      .from('tasks').select('created_by, title').eq('id', taskId).single()
+    if (taskInfo?.created_by && taskInfo.created_by !== user.id) {
+      await insertNotification(supabase, taskInfo.created_by, 'status_changed', taskId,
+        'Trạng thái task thay đổi',
+        `Task "${taskInfo.title}" chuyển sang: ${STATUS_LABEL_VN[status] ?? status}`
+      )
     }
-    if (!['todo', 'in_progress'].includes(status)) {
-      return { error: 'Không có quyền đổi sang trạng thái này' }
-    }
-    if (status === 'in_progress' && !note?.trim()) {
-      return { error: 'Bắt buộc phải ghi chú khi chuyển sang Đang thực hiện' }
-    }
+
+    revalidatePath('/tasks')
+    revalidatePath(`/tasks/${taskId}`)
+    return { success: true }
   }
 
+  // Admin / Store Manager: direct update
   const { data: current } = await supabase
     .from('tasks').select('status, created_by, title').eq('id', taskId).single()
 
@@ -187,7 +194,6 @@ export async function updateTaskStatus(taskId: string, status: TaskStatus, note?
     ...(note ? { note } : {}),
   })
 
-  // Notify task creator if someone else changed the status
   if (current?.created_by && current.created_by !== user.id) {
     await insertNotification(supabase, current.created_by, 'status_changed', taskId,
       'Trạng thái task thay đổi',
@@ -217,16 +223,29 @@ export async function submitTask(taskId: string, outputData: Record<string, stri
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
 
-  const { data: existing } = await supabase
+  // Fetch task — check assignment and resubmit timestamp in one query
+  const { data: task } = await supabase
+    .from('tasks')
+    .select('created_by, title, assigned_to, resubmit_requested_at')
+    .eq('id', taskId)
+    .single()
+
+  if (!task || task.assigned_to !== user.id) {
+    return { error: 'Task này không được giao cho bạn' }
+  }
+
+  // Smart duplicate check: block only if submitted AFTER the last resubmit request
+  // (if resubmit_requested_at is set, old results from before it don't block)
+  let dupQuery = supabase
     .from('task_results')
     .select('id')
     .eq('task_id', taskId)
     .eq('user_id', user.id)
-    .maybeSingle()
+  if (task.resubmit_requested_at) {
+    dupQuery = dupQuery.gt('submitted_at', task.resubmit_requested_at)
+  }
+  const { data: existing } = await dupQuery.maybeSingle()
   if (existing) return { error: 'Bạn đã nộp kết quả cho task này rồi' }
-
-  const { data: task } = await supabase
-    .from('tasks').select('created_by, title').eq('id', taskId).single()
 
   const { error: resultError } = await supabase.from('task_results').insert({
     task_id:     taskId,
@@ -450,7 +469,9 @@ export async function requestResubmit(taskId: string, reason?: string) {
   const { data: task } = await supabase
     .from('tasks').select('assigned_to, title').eq('id', taskId).single()
 
-  const { error } = await supabase.from('tasks').update({ status: 'todo' }).eq('id', taskId)
+  const { error } = await supabase.from('tasks')
+    .update({ status: 'todo', resubmit_requested_at: new Date().toISOString() })
+    .eq('id', taskId)
   if (error) return { error: error.message }
 
   await writeLog(supabase, taskId, 'resubmit_requested', user.id, {

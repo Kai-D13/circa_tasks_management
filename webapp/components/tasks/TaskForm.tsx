@@ -42,7 +42,7 @@ const CATEGORY_LABEL: Record<TaskCategory, string> = {
 const CATEGORY_DEFAULTS: Record<TaskCategory, {
   outputs: RequiredOutput[]; priority: TaskPriority; visibility: TaskVisibility
 }> = {
-  training: { outputs: ['text'],          priority: 'normal', visibility: 'public' },
+  training: { outputs: ['text'],          priority: 'normal', visibility: 'store' },
   recall:   { outputs: ['text', 'image'], priority: 'urgent', visibility: 'store' },
   display:  { outputs: ['image'],         priority: 'normal', visibility: 'store' },
   audit:    { outputs: ['image', 'text'], priority: 'urgent', visibility: 'store' },

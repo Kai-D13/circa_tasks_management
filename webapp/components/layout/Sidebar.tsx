@@ -121,7 +121,7 @@ export function Sidebar() {
             <LogOut className="h-3.5 w-3.5" />
             Đăng xuất
           </Button>
-          {profile?.id && <NotificationBell userId={profile.id} />}
+          <NotificationBell />
           <Button
             variant="outline"
             size="sm"

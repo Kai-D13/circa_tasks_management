@@ -1,68 +1,25 @@
 'use client'
 
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { useEffect, useRef, useState } from 'react'
+import { useNotifications } from '@/components/layout/NotificationProvider'
 import { Bell } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { formatDate } from '@/lib/dateUtils'
 import Link from 'next/link'
 
-interface Notification {
-  id: string
-  type: string
-  task_id: string | null
-  title: string
-  message: string
-  is_read: boolean
-  created_at: string
-}
-
-export function NotificationBell({ userId }: { userId: string }) {
-  const supabase = useMemo(() => createClient(), [])
-  const [notifications, setNotifications] = useState<Notification[]>([])
-  const [open, setOpen] = useState(false)
+export function NotificationBell() {
+  const { notifications, unread, markRead } = useNotifications()
+  const [open, setOpen]         = useState(false)
   const [popupPos, setPopupPos] = useState({ top: 0, left: 0 })
   const wrapperRef = useRef<HTMLDivElement>(null)
-  const popupRef  = useRef<HTMLDivElement>(null)
-  // Unique per instance: supabase.channel() returns existing channels by name,
-  // so two NotificationBell components (Sidebar + MobileHeader) sharing the same
-  // userId would get the same already-subscribed channel, causing .on() to throw.
-  const instanceId = useRef(Math.random().toString(36).slice(2, 8))
+  const popupRef   = useRef<HTMLDivElement>(null)
 
-  const unread = notifications.filter((n) => !n.is_read).length
-
-  useEffect(() => {
-    supabase
-      .from('notifications')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(20)
-      .then(({ data }) => setNotifications(data ?? []))
-
-    const channel = supabase
-      .channel(`notifications-${userId}-${instanceId.current}`)
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'notifications',
-        filter: `user_id=eq.${userId}`,
-      }, (payload) => {
-        setNotifications((prev) => [payload.new as Notification, ...prev.slice(0, 19)])
-      })
-      .subscribe()
-
-    return () => { supabase.removeChannel(channel) }
-  }, [userId, supabase])
-
-  // Close on outside click — check both wrapper and the fixed popup
+  // Close on outside click
   useEffect(() => {
     function handleClick(e: MouseEvent) {
       const t = e.target as Node
-      const inWrapper = wrapperRef.current?.contains(t) ?? false
-      const inPopup   = popupRef.current?.contains(t) ?? false
-      if (!inWrapper && !inPopup) setOpen(false)
+      if (!wrapperRef.current?.contains(t) && !popupRef.current?.contains(t)) setOpen(false)
     }
     document.addEventListener('mousedown', handleClick)
     return () => document.removeEventListener('mousedown', handleClick)
@@ -75,17 +32,12 @@ export function NotificationBell({ userId }: { userId: string }) {
       const rect = wrapperRef.current.getBoundingClientRect()
       const POPUP_W = 320
       const POPUP_H = 340
-
-      // Horizontal: open right if space, else align right edge with button
       const left = (window.innerWidth - rect.right) >= POPUP_W
         ? rect.right + 8
         : Math.max(8, rect.right - POPUP_W)
-
-      // Vertical: open below if space, else open above
       const top = (window.innerHeight - rect.bottom) >= POPUP_H
         ? rect.bottom + 8
         : Math.max(8, rect.top - POPUP_H - 8)
-
       setPopupPos({ top, left })
     }
 
@@ -93,8 +45,7 @@ export function NotificationBell({ userId }: { userId: string }) {
 
     if (next && unread > 0) {
       const ids = notifications.filter((n) => !n.is_read).map((n) => n.id)
-      await supabase.from('notifications').update({ is_read: true }).in('id', ids)
-      setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })))
+      await markRead(ids)
     }
   }
 
@@ -117,7 +68,6 @@ export function NotificationBell({ userId }: { userId: string }) {
         </Button>
       </div>
 
-      {/* Fixed-positioned popup — escapes overflow-hidden on parent layout */}
       {open && (
         <div
           ref={popupRef}
@@ -140,15 +90,9 @@ export function NotificationBell({ userId }: { userId: string }) {
           ) : (
             <ul className="max-h-72 overflow-y-auto divide-y">
               {notifications.map((n) => (
-                <li key={n.id}
-                  className={cn(
-                    'hover:bg-muted/60 transition-colors',
-                    !n.is_read && 'bg-primary/5'
-                  )}
-                >
+                <li key={n.id} className={cn('hover:bg-muted/60 transition-colors', !n.is_read && 'bg-primary/5')}>
                   {n.task_id ? (
-                    <Link href={`/tasks/${n.task_id}`} onClick={() => setOpen(false)}
-                      className="block px-3 py-2.5">
+                    <Link href={`/tasks/${n.task_id}`} onClick={() => setOpen(false)} className="block px-3 py-2.5">
                       <NotificationItem n={n} />
                     </Link>
                   ) : (
@@ -166,7 +110,7 @@ export function NotificationBell({ userId }: { userId: string }) {
   )
 }
 
-function NotificationItem({ n }: { n: Notification }) {
+function NotificationItem({ n }: { n: { title: string; message: string; created_at: string } }) {
   return (
     <>
       <p className="text-xs font-medium text-foreground leading-snug">{n.title}</p>

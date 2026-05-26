@@ -56,7 +56,7 @@ export function MobileHeader() {
 
       {/* Actions */}
       <div className="flex items-center gap-1 shrink-0">
-        {profile?.id && <NotificationBell userId={profile.id} />}
+        <NotificationBell />
         <Button variant="ghost" size="sm" className="w-9 h-9 px-0 text-sidebar-foreground/70" onClick={toggle}>
           {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
         </Button>
