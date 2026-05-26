@@ -1,11 +1,12 @@
 import type { Metadata, Viewport } from "next"
-import { Geist } from "next/font/google"
+import { Roboto } from "next/font/google"
 import { Toaster } from "@/components/ui/sonner"
 import "./globals.css"
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
+const roboto = Roboto({
+  variable: "--font-sans",
+  subsets: ["latin", "vietnamese"],
+  weight: ["400", "500", "700"],
 })
 
 export const metadata: Metadata = {
@@ -23,7 +24,7 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="vi" className={`${geistSans.variable} h-full antialiased`}>
+    <html lang="vi" className={`${roboto.variable} h-full antialiased`}>
       <body className="min-h-full">
         {children}
         <Toaster richColors position="top-center" />

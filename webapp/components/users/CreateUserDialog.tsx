@@ -29,6 +29,12 @@ export function CreateUserDialog({ stores }: { stores: Pick<Store, 'id' | 'name'
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
+
+    if (role !== 'admin' && !storeId) {
+      toast.error('Vui lòng chọn cửa hàng cho tài khoản này')
+      return
+    }
+
     const formData = new FormData(e.currentTarget)
     // Inject controlled values
     formData.set('role', role)
@@ -40,7 +46,7 @@ export function CreateUserDialog({ stores }: { stores: Pick<Store, 'id' | 'name'
       if (result?.error) {
         toast.error(result.error)
       } else {
-        toast.success('User created successfully')
+        toast.success('Tạo người dùng thành công')
         setOpen(false)
         setRole('staff')
         setStoreId('')

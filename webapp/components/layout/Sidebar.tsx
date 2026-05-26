@@ -15,11 +15,8 @@ import {
   Store,
   ScrollText,
   LogOut,
-  Sun,
-  Moon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { useTheme } from '@/components/providers/ThemeProvider'
 import { NotificationBell } from '@/components/layout/NotificationBell'
 
 const ROLE_COLORS: Record<string, string> = {
@@ -39,7 +36,6 @@ export function Sidebar() {
   const router   = useRouter()
   const profile  = useUserStore((s) => s.profile)
   const role     = profile?.role
-  const { theme, toggle } = useTheme()
 
   async function handleLogout() {
     const supabase = createClient()
@@ -61,13 +57,13 @@ export function Sidebar() {
     : []
 
   return (
-    <aside className="hidden md:flex h-screen w-56 flex-col border-r bg-sidebar">
-      {/* Logo / Brand */}
-      <div className="flex h-14 items-center gap-2 px-4 border-b border-sidebar-border">
-        <div className="h-6 w-6 rounded-full bg-primary flex items-center justify-center shrink-0">
-          <span className="text-[10px] font-bold text-primary-foreground">C</span>
+    <aside className="hidden md:flex h-screen w-[210px] flex-col border-r bg-sidebar">
+      {/* Logo / Brand — orange header bar */}
+      <div className="flex h-[46px] items-center gap-2 px-4 bg-primary shrink-0">
+        <div className="h-6 w-6 rounded-full bg-white/20 flex items-center justify-center shrink-0">
+          <span className="text-[10px] font-bold text-white">C</span>
         </div>
-        <span className="font-semibold text-sm tracking-tight text-sidebar-foreground">
+        <span className="font-semibold text-sm tracking-tight text-white">
           Circa Tasks
         </span>
       </div>
@@ -81,8 +77,8 @@ export function Sidebar() {
             className={cn(
               'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
               pathname === href || (href !== '/dashboard' && pathname.startsWith(href))
-                ? 'bg-primary text-primary-foreground font-medium'
-                : 'text-sidebar-foreground/70 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+                ? 'bg-sidebar-accent text-primary font-medium'
+                : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-primary/80'
             )}
           >
             <Icon className="h-4 w-4 shrink-0" />
@@ -110,7 +106,6 @@ export function Sidebar() {
             {ROLE_LABELS[role] ?? role}
           </Badge>
         )}
-        {/* Dark mode toggle + notifications + logout */}
         <div className="flex gap-1.5">
           <Button
             variant="outline"
@@ -122,15 +117,6 @@ export function Sidebar() {
             Đăng xuất
           </Button>
           <NotificationBell />
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-8 px-0"
-            onClick={toggle}
-            title={theme === 'dark' ? 'Chế độ sáng' : 'Chế độ tối'}
-          >
-            {theme === 'dark' ? <Sun className="h-3.5 w-3.5" /> : <Moon className="h-3.5 w-3.5" />}
-          </Button>
         </div>
       </div>
     </aside>

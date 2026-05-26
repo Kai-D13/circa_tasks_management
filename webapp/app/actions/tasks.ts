@@ -523,3 +523,26 @@ export async function addReviewNote(taskId: string, note: string) {
   revalidatePath(`/tasks/${taskId}`)
   return { success: true }
 }
+
+export async function archiveTasks(ids: string[]) {
+  if (!ids.length) return { error: 'Không có task nào được chọn' }
+
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Chưa đăng nhập' }
+
+  const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
+  if (!['admin', 'store_manager'].includes(profile?.role ?? ''))
+    return { error: 'Không có quyền lưu trữ' }
+
+  const { data: updated, error } = await supabase
+    .from('tasks')
+    .update({ archived_at: new Date().toISOString() })
+    .in('id', ids)
+    .select('id')
+
+  if (error) return { error: error.message }
+
+  revalidatePath('/tasks')
+  return { success: true, count: updated?.length ?? 0 }
+}
