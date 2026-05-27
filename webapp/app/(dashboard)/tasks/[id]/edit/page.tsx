@@ -28,8 +28,7 @@ export default async function EditTaskPage({ params }: { params: Promise<{ id: s
   ])
 
   return (
-    <div className="p-6 max-w-2xl">
-      <h1 className="text-xl font-semibold mb-6">Chỉnh sửa Task</h1>
+    <div className="flex flex-col h-full">
       <TaskForm
         task={task as Task}
         stores={stores ?? []}

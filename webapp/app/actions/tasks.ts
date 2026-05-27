@@ -3,6 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { TaskCategory, TaskPriority, TaskStatus, TaskVisibility, RequiredOutput } from '@/types'
 
 async function writeLog(
@@ -37,6 +38,9 @@ export async function createTask(formData: FormData) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
+
+  const storeIdVal = formData.get('store_id') as string | null
+  if (!storeIdVal) return { error: 'Vui lòng chọn cửa hàng nhận task' }
 
   const requiredOutputsRaw = formData.getAll('required_outputs') as RequiredOutput[]
   const assignedTo = formData.get('assigned_to') as string || null
@@ -223,29 +227,51 @@ export async function submitTask(taskId: string, outputData: Record<string, stri
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
 
-  // Fetch task — check assignment and resubmit timestamp in one query
-  const { data: task } = await supabase
-    .from('tasks')
-    .select('created_by, title, assigned_to, resubmit_requested_at')
-    .eq('id', taskId)
-    .single()
+  // Fetch task + profile in parallel
+  const [{ data: task }, { data: profile }] = await Promise.all([
+    supabase
+      .from('tasks')
+      .select('created_by, title, assigned_to, store_id, resubmit_requested_at')
+      .eq('id', taskId)
+      .single(),
+    supabase
+      .from('users')
+      .select('role, store_id')
+      .eq('id', user.id)
+      .single(),
+  ])
 
-  if (!task || task.assigned_to !== user.id) {
-    return { error: 'Task này không được giao cho bạn' }
+  if (!task) return { error: 'Task không tồn tại' }
+
+  // Who can submit:
+  // (a) direct assignment: task.assigned_to = user.id
+  // (b) store-level: task has no assignee, user is store_manager of that store
+  const isDirectAssignee = task.assigned_to === user.id
+  const isStoreSubmitter = task.assigned_to === null
+    && task.store_id !== null
+    && task.store_id === profile?.store_id
+    && profile?.role === 'store_manager'
+
+  if (!isDirectAssignee && !isStoreSubmitter) {
+    return { error: 'Bạn không có quyền nộp kết quả cho task này' }
   }
 
-  // Smart duplicate check: block only if submitted AFTER the last resubmit request
-  // (if resubmit_requested_at is set, old results from before it don't block)
+  // Duplicate check: block if a result already exists after the last resubmit request.
+  // Direct-assign: per user (same user can't double-submit).
+  // Store-level: per task (any submission from the store counts).
   let dupQuery = supabase
     .from('task_results')
     .select('id')
     .eq('task_id', taskId)
-    .eq('user_id', user.id)
+  if (isDirectAssignee) {
+    dupQuery = dupQuery.eq('user_id', user.id)
+  }
   if (task.resubmit_requested_at) {
     dupQuery = dupQuery.gt('submitted_at', task.resubmit_requested_at)
   }
-  const { data: existing } = await dupQuery.maybeSingle()
-  if (existing) return { error: 'Bạn đã nộp kết quả cho task này rồi' }
+  const { data: existingList, error: dupError } = await dupQuery.limit(1)
+  if (dupError) return { error: dupError.message }
+  if ((existingList?.length ?? 0) > 0) return { error: 'Task này đã có kết quả nộp rồi' }
 
   const { error: resultError } = await supabase.from('task_results').insert({
     task_id:     taskId,
@@ -254,7 +280,13 @@ export async function submitTask(taskId: string, outputData: Record<string, stri
   })
   if (resultError) return { error: resultError.message }
 
-  await supabase.from('tasks').update({ status: 'done' }).eq('id', taskId)
+  // Use admin client — staff RLS no longer allows direct UPDATE on tasks (dropped in 010)
+  const { error: statusError } = await supabaseAdmin
+    .from('tasks')
+    .update({ status: 'done' })
+    .eq('id', taskId)
+  if (statusError) return { error: `Đã nộp kết quả nhưng không thể cập nhật trạng thái: ${statusError.message}` }
+
   await writeLog(supabase, taskId, 'submitted', user.id, {
     output_types: Object.keys(outputData),
   })
@@ -467,7 +499,7 @@ export async function requestResubmit(taskId: string, reason?: string) {
     return { error: 'Không có quyền yêu cầu làm lại' }
 
   const { data: task } = await supabase
-    .from('tasks').select('assigned_to, title').eq('id', taskId).single()
+    .from('tasks').select('assigned_to, title, store_id').eq('id', taskId).single()
 
   const { error } = await supabase.from('tasks')
     .update({ status: 'todo', resubmit_requested_at: new Date().toISOString() })
@@ -487,6 +519,24 @@ export async function requestResubmit(taskId: string, reason?: string) {
       'Yêu cầu thực hiện lại task',
       `Quản lý yêu cầu bạn thực hiện lại: "${task.title}"${reason ? ` — ${reason}` : ''}`
     )
+  } else if (task?.store_id) {
+    // Unassigned store-level task — notify all store managers of that store
+    const { data: storeManagers } = await supabase
+      .from('users')
+      .select('id')
+      .eq('store_id', task.store_id)
+      .eq('role', 'store_manager')
+    if (storeManagers?.length) {
+      await supabase.from('notifications').insert(
+        storeManagers.map((m) => ({
+          user_id: m.id,
+          type:    'resubmit_requested',
+          task_id: taskId,
+          title:   'Yêu cầu thực hiện lại task',
+          message: `Quản lý yêu cầu thực hiện lại: "${task.title}"${reason ? ` — ${reason}` : ''}`,
+        }))
+      )
+    }
   }
 
   revalidatePath(`/tasks/${taskId}`)
@@ -544,5 +594,30 @@ export async function archiveTasks(ids: string[]) {
   if (error) return { error: error.message }
 
   revalidatePath('/tasks')
+  revalidatePath('/dashboard')
+  return { success: true, count: updated?.length ?? 0 }
+}
+
+export async function restoreTasks(ids: string[]) {
+  if (!ids.length) return { error: 'Không có task nào được chọn' }
+
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Chưa đăng nhập' }
+
+  const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
+  if (!['admin', 'store_manager'].includes(profile?.role ?? ''))
+    return { error: 'Không có quyền khôi phục' }
+
+  const { data: updated, error } = await supabase
+    .from('tasks')
+    .update({ archived_at: null })
+    .in('id', ids)
+    .select('id')
+
+  if (error) return { error: error.message }
+
+  revalidatePath('/tasks')
+  revalidatePath('/dashboard')
   return { success: true, count: updated?.length ?? 0 }
 }

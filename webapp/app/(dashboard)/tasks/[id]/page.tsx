@@ -70,6 +70,12 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
     ? await supabase.from('users').select('id, full_name, role').eq('store_id', task.store_id).order('full_name')
     : { data: [] }
 
+  // Compute isStoreSubmitter here — needed to gate lastResubmitLog fetch below
+  const isStoreSubmitter = task.assigned_to === null
+    && task.store_id !== null
+    && task.store_id === profile?.store_id
+    && userRole === 'store_manager'
+
   // Build submissions query with role-based visibility
   // - admin: all submissions for this task
   // - store_manager: only submissions from users in their store
@@ -120,8 +126,8 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       .eq('task_id', id)
       .eq('action', 'review_note')
       .order('created_at', { ascending: false }),
-    // Fetch last resubmit reason (for staff notification banner)
-    userRole === 'staff' && resubmitAt
+    // Fetch last resubmit reason (for staff/store-manager notification banner)
+    (userRole === 'staff' || isStoreSubmitter) && resubmitAt
       ? supabase
           .from('task_logs')
           .select('metadata')
@@ -133,16 +139,27 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       : Promise.resolve({ data: null }),
   ])
 
-  // staffHasSubmitted: true only if there's a result submitted AFTER the last resubmit request
-  // (old results from before resubmit request don't block — staff can submit again)
-  const staffHasSubmitted = userRole === 'staff' && (results ?? []).some(
-    (r) => !resubmitAt || new Date((r as { submitted_at: string }).submitted_at) > new Date(resubmitAt)
-  )
-  const canSubmit = task.status !== 'done' && task.assigned_to === userId && !staffHasSubmitted
+  // Who can submit:
+  // (a) direct assignment: task assigned to this user
+  // (b) store-level: task has no assignee, current user is store_manager of the task's store
+  // isStoreSubmitter is computed above (before Round 3) so lastResubmitLog can use it
+  const isDirectAssignee = task.assigned_to === userId
+
+  // hasAlreadySubmitted: a result exists submitted AFTER the last resubmit request
+  // (results before resubmit_requested_at don't block — can submit again)
+  const hasAlreadySubmitted = (isDirectAssignee || isStoreSubmitter)
+    && (results ?? []).some(
+      (r) => !resubmitAt || new Date((r as { submitted_at: string }).submitted_at) > new Date(resubmitAt)
+    )
+
+  const canSubmit = task.status !== 'done'
+    && (isDirectAssignee || isStoreSubmitter)
+    && !hasAlreadySubmitted
+
   const staffCanChangeStatus = userRole === 'staff'
-    && task.assigned_to === userId
+    && isDirectAssignee
     && !['done', 'overdue'].includes(task.status)
-    && !staffHasSubmitted
+    && !hasAlreadySubmitted
 
   const assignerName: string | null = lastAssignLog
     ? (lastAssignLog.users as unknown as { full_name: string } | null)?.full_name ?? null
@@ -203,7 +220,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       </div>
 
       {/* Resubmit request banner — shown to staff when manager requested resubmission */}
-      {userRole === 'staff' && resubmitAt && !staffHasSubmitted && (
+      {(userRole === 'staff' || isStoreSubmitter) && resubmitAt && !hasAlreadySubmitted && (
         <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
           <p className="font-medium text-amber-900">Quản lý yêu cầu bạn thực hiện lại task này</p>
           {(() => {

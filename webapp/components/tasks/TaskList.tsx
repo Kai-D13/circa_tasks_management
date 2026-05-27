@@ -4,13 +4,13 @@ import React, { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { toast } from 'sonner'
-import { archiveTasks } from '@/app/actions/tasks'
+import { archiveTasks, restoreTasks } from '@/app/actions/tasks'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
 import { TaskPriorityBadge } from '@/components/tasks/TaskPriorityBadge'
 import { formatDistanceToNow } from '@/lib/dateUtils'
-import { Radio, Archive, ChevronRight, ChevronDown } from 'lucide-react'
+import { Radio, Archive, ArchiveRestore, ChevronRight, ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Task, TaskCategory } from '@/types'
 
@@ -68,12 +68,13 @@ export type TaskRow = {
 export type TaskListItem = BroadcastGroup | TaskRow
 
 interface Props {
-  items:        TaskListItem[]
-  canArchive:   boolean
+  items:         TaskListItem[]
+  canArchive:    boolean
+  canRestore?:   boolean
   showArchived?: boolean
 }
 
-export function TaskList({ items, canArchive, showArchived }: Props) {
+export function TaskList({ items, canArchive, canRestore, showArchived }: Props) {
   const router = useRouter()
   const [selected, setSelected]    = useState<Set<string>>(new Set())
   const [expanded, setExpanded]    = useState<Set<string>>(new Set())
@@ -138,32 +139,62 @@ export function TaskList({ items, canArchive, showArchived }: Props) {
     })
   }
 
+  function handleRestore() {
+    const ids = Array.from(selected)
+    startTransition(async () => {
+      const result = await restoreTasks(ids)
+      if (result?.error) {
+        toast.error(result.error)
+      } else {
+        const count = (result as { count?: number }).count ?? ids.length
+        toast.success(`Đã khôi phục ${count} task`)
+        setSelected(new Set())
+        router.refresh()
+      }
+    })
+  }
+
   const allSelected  = allTaskIds.length > 0 && selected.size === allTaskIds.length
   const someSelected = selected.size > 0
-  const colCount     = canArchive ? 7 : 6
+  const showCheckbox = canArchive || canRestore
+  const colCount     = showCheckbox ? 7 : 6
 
   return (
     <div className="space-y-2">
-      {canArchive && someSelected && (
+      {someSelected && (canArchive || canRestore) && (
         <div className="flex items-center gap-2 px-1 pt-2">
           <span className="text-sm text-muted-foreground">{selected.size} task đã chọn</span>
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-7 text-xs gap-1"
-            onClick={handleArchive}
-            disabled={pending}
-          >
-            <Archive className="h-3.5 w-3.5" />
-            {pending ? 'Đang lưu trữ...' : 'Lưu trữ đã chọn'}
-          </Button>
+          {canArchive && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs gap-1"
+              onClick={handleArchive}
+              disabled={pending}
+            >
+              <Archive className="h-3.5 w-3.5" />
+              {pending ? 'Đang xử lý...' : 'Lưu trữ đã chọn'}
+            </Button>
+          )}
+          {canRestore && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs gap-1"
+              onClick={handleRestore}
+              disabled={pending}
+            >
+              <ArchiveRestore className="h-3.5 w-3.5" />
+              {pending ? 'Đang xử lý...' : 'Khôi phục đã chọn'}
+            </Button>
+          )}
         </div>
       )}
 
       <Table>
         <TableHeader>
           <TableRow>
-            {canArchive && (
+            {showCheckbox && (
               <TableHead className="w-[40px]">
                 <input
                   type="checkbox"
@@ -195,7 +226,7 @@ export function TaskList({ items, canArchive, showArchived }: Props) {
                   <TableRow
                     className="bg-primary/5 hover:bg-primary/10 cursor-pointer"
                   >
-                    {canArchive && (
+                    {showCheckbox && (
                       <TableCell>
                         <input
                           type="checkbox"
@@ -246,7 +277,7 @@ export function TaskList({ items, canArchive, showArchived }: Props) {
                   {/* Expanded child rows */}
                   {isExpanded && item.childTasks.map((child) => (
                     <TableRow key={child.id} className="bg-muted/30 hover:bg-muted/50">
-                      {canArchive && <TableCell />}
+                      {showCheckbox && <TableCell />}
                       <TableCell>
                         <Link
                           href={`/tasks/${child.id}`}
@@ -283,7 +314,7 @@ export function TaskList({ items, canArchive, showArchived }: Props) {
                 key={task.id}
                 className={cn('cursor-pointer hover:bg-muted/50', isSelected && 'bg-primary/5')}
               >
-                {canArchive && (
+                {showCheckbox && (
                   <TableCell>
                     <input
                       type="checkbox"

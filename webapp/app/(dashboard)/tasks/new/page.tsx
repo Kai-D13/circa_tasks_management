@@ -18,8 +18,7 @@ export default async function NewTaskPage() {
   ])
 
   return (
-    <div className="p-6 max-w-2xl">
-      <h1 className="text-xl font-semibold mb-6">Tạo Task mới</h1>
+    <div className="flex flex-col h-full">
       <TaskForm
         stores={stores ?? []}
         users={users ?? []}

@@ -4,7 +4,7 @@ import { buttonVariants } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { TaskFilters } from '@/components/tasks/TaskFilters'
 import { TaskList, TaskListItem, BroadcastGroup, TaskRow, ChildTask } from '@/components/tasks/TaskList'
-import { Plus, Upload, AlertCircle } from 'lucide-react'
+import { Plus, AlertCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 export default async function TasksPage({
@@ -45,6 +45,7 @@ export default async function TasksPage({
   const storesForFilter = profile?.role === 'staff' ? [] : (stores ?? [])
   const canCreate  = profile?.role === 'admin' || profile?.role === 'store_manager'
   const canArchive = !showArchived && (profile?.role === 'admin' || profile?.role === 'store_manager')
+  const canRestore = showArchived  && (profile?.role === 'admin' || profile?.role === 'store_manager')
 
   // Group tasks: collapse same broadcast_id into one broadcast row
   const grouped: TaskListItem[] = []
@@ -108,16 +109,10 @@ export default async function TasksPage({
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Danh sách Tasks</h1>
         {canCreate && (
-          <div className="flex gap-2">
-            <Link href="/tasks/import" className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}>
-              <Upload className="h-4 w-4 mr-1" />
-              Import File
-            </Link>
-            <Link href="/tasks/new" className={cn(buttonVariants({ size: 'sm' }))}>
-              <Plus className="h-4 w-4 mr-1" />
-              Tạo Task
-            </Link>
-          </div>
+          <Link href="/tasks/new" className={cn(buttonVariants({ size: 'sm' }))}>
+            <Plus className="h-4 w-4 mr-1" />
+            Tạo Task
+          </Link>
         )}
       </div>
 
@@ -143,7 +138,7 @@ export default async function TasksPage({
       ) : (
         <Card>
           <CardContent className="p-0">
-            <TaskList items={grouped} canArchive={canArchive} showArchived={showArchived} />
+            <TaskList items={grouped} canArchive={canArchive} canRestore={canRestore} showArchived={showArchived} />
           </CardContent>
         </Card>
       )}

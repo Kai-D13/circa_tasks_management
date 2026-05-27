@@ -6,10 +6,9 @@ import { toast } from 'sonner'
 import { createTask, updateTask, createBroadcastTask } from '@/app/actions/tasks'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Plus, X } from 'lucide-react'
+import { Plus, X, Paperclip, Link2 } from 'lucide-react'
 import { TaskInputAttachments } from '@/components/tasks/TaskInputAttachments'
 import {
   Task, Store, UserProfile, RequiredOutput, UserRole,
@@ -17,20 +16,15 @@ import {
 } from '@/types'
 
 const OUTPUT_OPTIONS: { value: RequiredOutput; label: string }[] = [
-  { value: 'text',  label: 'Ghi chú văn bản' },
+  { value: 'text',  label: 'Ghi chú' },
   { value: 'image', label: 'Ảnh' },
   { value: 'video', label: 'Video' },
-  { value: 'file',  label: 'File đính kèm' },
+  { value: 'file',  label: 'File' },
 ]
 
 const PRIORITY_LABEL: Record<TaskPriority, string> = {
   urgent: 'Khẩn cấp',
   normal: 'Bình thường',
-}
-const VISIBILITY_LABEL: Record<TaskVisibility, string> = {
-  public:  'Tất cả (public)',
-  store:   'Cả store',
-  private: 'Chỉ người được giao',
 }
 const CATEGORY_LABEL: Record<TaskCategory, string> = {
   training: 'Training',
@@ -49,7 +43,8 @@ const CATEGORY_DEFAULTS: Record<TaskCategory, {
   other:    { outputs: [],               priority: 'normal', visibility: 'store' },
 }
 
-type Scope = 'single' | 'multi' | 'all'
+type Scope    = 'single' | 'multi' | 'all'
+type TaskType = 'adhoc' | 'recurring'
 
 interface Props {
   stores: Pick<Store, 'id' | 'name'>[]
@@ -63,21 +58,20 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   const [pending, startTransition] = useTransition()
   const router = useRouter()
 
-  const [category, setCategory]   = useState<TaskCategory>(task?.category ?? 'other')
-  const [storeId, setStoreId]     = useState(task?.store_id    ?? currentUserStoreId ?? '')
+  const [category, setCategory]     = useState<TaskCategory>(task?.category ?? 'other')
+  const [storeId, setStoreId]       = useState(task?.store_id ?? currentUserStoreId ?? '')
   const [assignedTo, setAssignedTo] = useState(task?.assigned_to ?? '')
-  const [priority, setPriority]   = useState<TaskPriority>(task?.priority   ?? 'normal')
-  const [visibility, setVisibility] = useState<TaskVisibility>(task?.visibility ?? 'private')
-  const [outputs, setOutputs]     = useState<RequiredOutput[]>(task?.required_outputs ?? [])
+  const [priority, setPriority]     = useState<TaskPriority>(task?.priority ?? 'normal')
+  const [outputs, setOutputs]       = useState<RequiredOutput[]>(task?.required_outputs ?? [])
+  const [taskType, setTaskType]     = useState<TaskType>('adhoc')
 
-  // Broadcast scope (admin + new task only)
-  const [scope, setScope]               = useState<Scope>('single')
+  const [scope, setScope]                     = useState<Scope>('single')
   const [selectedStoreIds, setSelectedStoreIds] = useState<string[]>([])
 
-  // Input attachments + links
-  const uploadIdRef = useRef(
-    (task?.id) ?? crypto.randomUUID()
-  )
+  const [showAttachments, setShowAttachments] = useState(false)
+  const [showLinks, setShowLinks]             = useState(false)
+
+  const uploadIdRef       = useRef((task?.id) ?? crypto.randomUUID())
   const existingInputData = task?.input_data as Record<string, unknown> | null
   const [attachments, setAttachments] = useState<TaskAttachment[]>(
     (existingInputData?.attachments as TaskAttachment[]) ?? []
@@ -88,6 +82,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
 
   function addLink() {
     setLinks((prev) => [...prev, { label: '', url: '' }])
+    setShowLinks(true)
   }
   function updateLink(i: number, field: 'label' | 'url', val: string) {
     setLinks((prev) => prev.map((l, idx) => idx === i ? { ...l, [field]: val } : l))
@@ -96,18 +91,20 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
     setLinks((prev) => prev.filter((_, idx) => idx !== i))
   }
 
-  const isAdmin       = currentUserRole === 'admin'
-  const isBroadcast   = isAdmin && !task && scope !== 'single'
+  const isAdmin     = currentUserRole === 'admin'
+  const isBroadcast = isAdmin && !task && scope !== 'single'
+  const isEditMode  = !!task
 
   const visibleStores = isAdmin ? stores : stores.filter((s) => s.id === currentUserStoreId)
   const storeUsers    = storeId ? users.filter((u) => u.store_id === storeId) : users
 
   const selectedStoreName = visibleStores.find((s) => s.id === storeId)?.name
   const selectedUserName  = users.find((u) => u.id === assignedTo)?.full_name
+  const broadcastCount    = scope === 'all' ? visibleStores.length : selectedStoreIds.length
 
-  const broadcastCount = scope === 'all'
-    ? visibleStores.length
-    : selectedStoreIds.length
+  function deriveVisibility(): TaskVisibility {
+    return assignedTo ? 'private' : 'store'
+  }
 
   function handleCategoryChange(v: string | null) {
     if (!v) return
@@ -117,13 +114,11 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
       const d = CATEGORY_DEFAULTS[cat]
       setOutputs(d.outputs)
       setPriority(d.priority)
-      setVisibility(d.visibility)
     }
   }
 
-  function handleScopeChange(v: string | null) {
-    if (!v) return
-    setScope(v as Scope)
+  function handleScopeChange(scopeVal: Scope) {
+    setScope(scopeVal)
     setSelectedStoreIds([])
   }
 
@@ -136,15 +131,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   function handleStoreChange(v: string | null) {
     if (!v) return
     setStoreId(v)
-    const stillValid = users.find((u) => u.id === assignedTo && u.store_id === v)
-    if (!stillValid) setAssignedTo('')
-  }
-
-  function handleAssigneeChange(v: string | null) {
-    const val = v ?? ''
-    setAssignedTo(val)
-    if (val) setVisibility('private')
-    else     setVisibility('store')
+    if (!users.find((u) => u.id === assignedTo && u.store_id === v)) setAssignedTo('')
   }
 
   function toggleOutput(val: RequiredOutput) {
@@ -155,15 +142,24 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
-    const formData = new FormData(e.currentTarget)
 
+    if (taskType === 'recurring') {
+      toast.info('Tính năng task định kỳ đang được phát triển')
+      return
+    }
+
+    const formData = new FormData(e.currentTarget)
     formData.set('category',   category)
     formData.set('priority',   priority)
-    formData.set('visibility', visibility)
+    formData.set('visibility', deriveVisibility())
     formData.delete('required_outputs')
     outputs.forEach((o) => formData.append('required_outputs', o))
 
-    // Broadcast path — admin + new task + multi/all scope
+    if (!isBroadcast && !storeId) {
+      toast.error('Vui lòng chọn cửa hàng nhận task')
+      return
+    }
+
     if (isBroadcast) {
       const storeIds = scope === 'all' ? visibleStores.map((s) => s.id) : selectedStoreIds
       if (!storeIds.length) {
@@ -174,9 +170,8 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
         const result = await createBroadcastTask({
           title:           formData.get('title') as string,
           description:     (formData.get('description') as string) || '',
-          category,
-          priority,
-          visibility,
+          category, priority,
+          visibility:      deriveVisibility(),
           storeIds,
           startDate:       (formData.get('start_date') as string) || null,
           deadline:        (formData.get('deadline') as string) || null,
@@ -189,11 +184,10 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
       return
     }
 
-    // Single-store path
-    formData.set('store_id',    storeId)
-    formData.set('assigned_to', assignedTo)
-    formData.set('input_attachments', JSON.stringify(attachments))
-    formData.set('input_links',       JSON.stringify(links.filter((l) => l.url.trim())))
+    formData.set('store_id',           storeId)
+    formData.set('assigned_to',        assignedTo)
+    formData.set('input_attachments',  JSON.stringify(attachments))
+    formData.set('input_links',        JSON.stringify(links.filter((l) => l.url.trim())))
 
     startTransition(async () => {
       const result = task
@@ -203,265 +197,339 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
     })
   }
 
+  const submitLabel = pending
+    ? 'Đang lưu...'
+    : isBroadcast
+      ? `Tạo ${broadcastCount > 0 ? broadcastCount + ' ' : ''}Task`
+      : task ? 'Cập nhật' : 'Tạo Task'
+
+  // Shared label style for right panel sections
+  const sectionLabel = 'block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70 mb-2'
+
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
-      {/* Title */}
-      <div className="grid gap-1.5">
-        <Label htmlFor="title">Tiêu đề *</Label>
-        <Input id="title" name="title" defaultValue={task?.title} required placeholder="Nhập tiêu đề task" />
-      </div>
+    <form onSubmit={handleSubmit} className="flex flex-col h-full">
 
-      {/* Description */}
-      <div className="grid gap-1.5">
-        <Label htmlFor="description">Mô tả</Label>
-        <Textarea id="description" name="description" defaultValue={task?.description ?? ''} rows={4} placeholder="Nội dung chi tiết..." />
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        {/* Category */}
-        <div className="grid gap-1.5">
-          <Label>Loại task</Label>
-          <Select value={category} onValueChange={handleCategoryChange}>
-            <SelectTrigger>
-              <SelectValue>{CATEGORY_LABEL[category]}</SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              {(Object.keys(CATEGORY_LABEL) as TaskCategory[]).map((c) => (
-                <SelectItem key={c} value={c}>{CATEGORY_LABEL[c]}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        {/* Scope selector — admin + new task only */}
-        {isAdmin && !task && (
-          <div className="grid gap-1.5">
-            <Label>Phạm vi giao task</Label>
-            <Select value={scope} onValueChange={handleScopeChange}>
-              <SelectTrigger>
-                <SelectValue>
-                  {scope === 'single' ? 'Một cửa hàng' : scope === 'multi' ? 'Nhiều cửa hàng' : 'Tất cả cửa hàng'}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="single">Một cửa hàng</SelectItem>
-                <SelectItem value="multi">Nhiều cửa hàng</SelectItem>
-                <SelectItem value="all">Tất cả cửa hàng ({visibleStores.length})</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
-        )}
-      </div>
-
-      <div className="grid grid-cols-2 gap-4">
-        {/* Priority */}
-        <div className="grid gap-1.5">
-          <Label>Độ ưu tiên</Label>
-          <Select value={priority} onValueChange={(v) => { if (v) setPriority(v as TaskPriority) }}>
-            <SelectTrigger>
-              <SelectValue>{PRIORITY_LABEL[priority]}</SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="normal">Bình thường</SelectItem>
-              <SelectItem value="urgent">Khẩn cấp</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        {/* Visibility */}
-        <div className="grid gap-1.5">
-          <Label>Ai thấy task này?</Label>
-          <Select value={visibility} onValueChange={(v) => { if (v) setVisibility(v as TaskVisibility) }}>
-            <SelectTrigger>
-              <SelectValue>{VISIBILITY_LABEL[visibility]}</SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="private">Chỉ người được giao</SelectItem>
-              <SelectItem value="store">Cả store (manager + staff)</SelectItem>
-              <SelectItem value="public">Tất cả (public)</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
-      {/* Store section — changes based on scope */}
-      {isBroadcast ? (
-        <div className="grid gap-1.5">
-          <div className="flex items-center justify-between">
-            <Label>Cửa hàng nhận task</Label>
-            {broadcastCount > 0 && (
-              <span className="text-xs bg-primary/10 text-primary px-2 py-0.5 rounded-full font-medium">
-                Sẽ tạo {broadcastCount} task cho {broadcastCount} cửa hàng
-              </span>
-            )}
-          </div>
-          {scope === 'all' ? (
-            <div className="rounded-md border border-dashed px-3 py-2.5 text-sm text-muted-foreground">
-              Tất cả {visibleStores.length} cửa hàng sẽ nhận task này
-            </div>
-          ) : (
-            <div className="rounded-md border max-h-48 overflow-y-auto divide-y">
-              {visibleStores.map((s) => (
-                <label key={s.id} className="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-muted/40 text-sm">
-                  <input
-                    type="checkbox"
-                    checked={selectedStoreIds.includes(s.id)}
-                    onChange={() => toggleStoreSelection(s.id)}
-                    className="accent-primary h-4 w-4 shrink-0"
-                  />
-                  {s.name}
-                </label>
-              ))}
-            </div>
-          )}
-        </div>
-      ) : (
-        <div className="grid grid-cols-2 gap-4">
-          {/* Store */}
-          <div className="grid gap-1.5">
-            <Label>Store</Label>
-            <Select value={storeId} onValueChange={handleStoreChange}>
-              <SelectTrigger>
-                <SelectValue>
-                  {selectedStoreName ?? <span className="text-muted-foreground">Chọn store</span>}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {visibleStores.map((s) => (
-                  <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          {/* Assign To */}
-          <div className="grid gap-1.5">
-            <Label>Giao cho</Label>
-            <Select value={assignedTo} onValueChange={handleAssigneeChange}>
-              <SelectTrigger>
-                <SelectValue>
-                  {selectedUserName ?? <span className="text-muted-foreground">Chưa phân công</span>}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="">Chưa phân công</SelectItem>
-                {storeUsers.map((u) => (
-                  <SelectItem key={u.id} value={u.id}>
-                    {u.full_name}
-                    <span className="ml-1 text-xs text-muted-foreground">({u.role.replace('_', ' ')})</span>
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </div>
-      )}
-
-      <div className="grid grid-cols-2 gap-4">
-        {/* Start Date */}
-        <div className="grid gap-1.5">
-          <Label htmlFor="start_date">Ngày bắt đầu</Label>
-          <Input
-            id="start_date"
-            name="start_date"
-            type="datetime-local"
-            defaultValue={task?.start_date ? new Date(task.start_date).toISOString().slice(0, 16) : ''}
-          />
-        </div>
-
-        {/* Deadline */}
-        <div className="grid gap-1.5">
-          <Label htmlFor="deadline">Deadline</Label>
-          <Input
-            id="deadline"
-            name="deadline"
-            type="datetime-local"
-            defaultValue={task?.deadline ? new Date(task.deadline).toISOString().slice(0, 16) : ''}
-          />
-        </div>
-      </div>
-
-      {/* Required Outputs */}
-      <div className="grid gap-2">
-        <Label>Output cần nộp</Label>
-        <div className="flex flex-wrap gap-3">
-          {OUTPUT_OPTIONS.map(({ value, label }) => (
-            <label key={value} className="flex items-center gap-2 cursor-pointer text-sm">
-              <input
-                type="checkbox"
-                checked={outputs.includes(value)}
-                onChange={() => toggleOutput(value)}
-                className="accent-primary h-4 w-4"
-              />
-              {label}
-            </label>
-          ))}
-        </div>
-      </div>
-
-      {/* Input attachments — images / PDFs attached to the task itself */}
-      <div className="grid gap-1.5">
-        <Label>Tài liệu đính kèm cho task</Label>
-        <p className="text-xs text-muted-foreground">
-          Ảnh hướng dẫn, file Excel, PDF... staff sẽ thấy khi xem task.
-        </p>
-        <TaskInputAttachments
-          uploadId={uploadIdRef.current}
-          value={attachments}
-          onChange={setAttachments}
-        />
-      </div>
-
-      {/* Links */}
-      <div className="grid gap-2">
-        <div className="flex items-center justify-between">
-          <Label>Đường dẫn (Links)</Label>
-          <Button type="button" variant="ghost" size="sm" onClick={addLink} className="h-7 text-xs gap-1 px-2">
-            <Plus className="h-3 w-3" /> Thêm link
+      {/* ── Header bar (56px) ── */}
+      <div className="h-14 flex items-center justify-between gap-3 px-5 border-b bg-background sticky top-0 z-10 shrink-0">
+        <h1 className="text-sm font-semibold">
+          {isEditMode ? 'Chỉnh sửa Task' : 'Tạo task mới'}
+        </h1>
+        <div className="flex items-center gap-2">
+          <Button type="button" variant="outline" size="sm" onClick={() => router.back()}>
+            Huỷ
+          </Button>
+          <Button type="submit" size="sm" disabled={pending}>
+            {submitLabel}
           </Button>
         </div>
-        {links.length === 0 && (
-          <p className="text-xs text-muted-foreground">
-            Link đăng ký, link meeting, link tài liệu...
-          </p>
-        )}
-        {links.map((link, i) => (
-          <div key={i} className="grid grid-cols-[1fr_1.5fr_auto] gap-2">
-            <Input
-              placeholder="Nhãn (vd: Link đăng ký)"
-              value={link.label}
-              onChange={(e) => updateLink(i, 'label', e.target.value)}
-            />
-            <Input
-              placeholder="https://..."
-              type="url"
-              value={link.url}
-              onChange={(e) => updateLink(i, 'url', e.target.value)}
-            />
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-9 w-9 p-0 text-muted-foreground hover:text-destructive"
-              onClick={() => removeLink(i)}
-            >
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
-        ))}
       </div>
 
-      <div className="flex gap-3 pt-2">
-        <Button type="submit" disabled={pending}>
-          {pending
-            ? 'Đang lưu...'
-            : isBroadcast
-              ? `Tạo ${broadcastCount > 0 ? broadcastCount : ''} Task${broadcastCount > 1 ? 's' : ''}`
-              : task ? 'Cập nhật' : 'Tạo Task'}
-        </Button>
-        <Button type="button" variant="outline" onClick={() => router.back()}>
-          Huỷ
-        </Button>
+      {/* ── Body — stacks on mobile, side-by-side on lg+ ── */}
+      <div className="flex flex-1 min-h-0 overflow-auto flex-col lg:flex-row">
+
+        {/* ── Left: compose area ── */}
+        <div className="flex-1 min-w-0 flex flex-col lg:border-r">
+
+          {/* Title row */}
+          <div className="border-b px-5 py-3">
+            <Input
+              name="title"
+              defaultValue={task?.title}
+              required
+              placeholder="Tiêu đề task..."
+              className="w-full text-base font-semibold border-0 p-0 h-auto focus-visible:ring-0 shadow-none placeholder:text-muted-foreground/40 bg-transparent"
+            />
+          </div>
+
+          {/* Scope pills row — admin + new only */}
+          {isAdmin && !isEditMode && (
+            <div className="border-b px-5 py-2.5 flex items-center gap-2 flex-wrap">
+              <span className="text-xs text-muted-foreground shrink-0">Giao đến:</span>
+              {(['single', 'multi', 'all'] as Scope[]).map((s) => {
+                const label = s === 'single' ? 'Một CH' : s === 'multi' ? 'Nhiều CH' : `Tất cả (${visibleStores.length})`
+                return (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => handleScopeChange(s)}
+                    className={[
+                      'text-xs px-3 py-1 rounded-full border transition-colors',
+                      scope === s
+                        ? 'bg-primary text-white border-primary'
+                        : 'border-border text-muted-foreground hover:border-primary/60 hover:text-foreground',
+                    ].join(' ')}
+                  >
+                    {label}
+                  </button>
+                )
+              })}
+            </div>
+          )}
+
+          {/* Store / assignee row */}
+          <div className="border-b px-5 py-3">
+            {isBroadcast ? (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  {scope === 'all'
+                    ? `Tất cả ${visibleStores.length} cửa hàng sẽ nhận task này`
+                    : `Chọn cửa hàng (${selectedStoreIds.length} đã chọn)`}
+                </p>
+                {scope !== 'all' && (
+                  <div className="rounded border max-h-44 overflow-y-auto divide-y">
+                    {visibleStores.map((s) => (
+                      <label key={s.id} className="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-sidebar-accent text-sm">
+                        <input
+                          type="checkbox"
+                          checked={selectedStoreIds.includes(s.id)}
+                          onChange={() => toggleStoreSelection(s.id)}
+                          className="accent-primary h-4 w-4 shrink-0"
+                        />
+                        {s.name}
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex flex-col sm:flex-row gap-2.5">
+                <div className="flex-1">
+                  <Select value={storeId} onValueChange={handleStoreChange}>
+                    <SelectTrigger className="h-8 text-sm bg-background">
+                      <SelectValue>
+                        {selectedStoreName ?? <span className="text-muted-foreground">Cửa hàng...</span>}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      {visibleStores.map((s) => (
+                        <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex-1">
+                  <Select value={assignedTo} onValueChange={(v) => setAssignedTo(v ?? '')}>
+                    <SelectTrigger className="h-8 text-sm bg-background">
+                      <SelectValue>
+                        {selectedUserName ?? <span className="text-muted-foreground">Người thực hiện...</span>}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="">Chưa phân công</SelectItem>
+                      {storeUsers.map((u) => (
+                        <SelectItem key={u.id} value={u.id}>
+                          {u.full_name}
+                          <span className="ml-1 text-xs text-muted-foreground">({u.role.replace('_', ' ')})</span>
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Description — fills remaining height */}
+          <div className="flex-1 px-5 pt-3 pb-1">
+            <Textarea
+              name="description"
+              defaultValue={task?.description ?? ''}
+              placeholder="Nội dung chi tiết, hướng dẫn thực hiện..."
+              className="w-full min-h-[180px] h-full border-0 resize-none p-0 focus-visible:ring-0 shadow-none text-sm bg-transparent placeholder:text-muted-foreground/40"
+            />
+          </div>
+
+          {/* Attachment / link panels — above toolbar */}
+          {showAttachments && (
+            <div className="px-5 pb-3 space-y-1.5 border-t">
+              <p className="text-xs text-muted-foreground pt-3">Ảnh hướng dẫn, file Excel, PDF...</p>
+              <TaskInputAttachments
+                uploadId={uploadIdRef.current}
+                value={attachments}
+                onChange={setAttachments}
+              />
+            </div>
+          )}
+
+          {showLinks && (
+            <div className="px-5 pb-3 space-y-2 border-t">
+              {links.length === 0 && (
+                <p className="text-xs text-muted-foreground pt-3">Link đăng ký, meeting, tài liệu...</p>
+              )}
+              {links.map((link, i) => (
+                <div key={i} className={`grid grid-cols-[1fr_1.5fr_auto] gap-2 ${i === 0 ? 'pt-3' : ''}`}>
+                  <Input placeholder="Nhãn" value={link.label} onChange={(e) => updateLink(i, 'label', e.target.value)} className="h-8 text-sm" />
+                  <Input placeholder="https://..." type="url" value={link.url} onChange={(e) => updateLink(i, 'url', e.target.value)} className="h-8 text-sm" />
+                  <button type="button" aria-label="Xoá link" onClick={() => removeLink(i)} className="h-8 w-8 flex items-center justify-center text-muted-foreground hover:text-destructive">
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+              <Button type="button" variant="ghost" size="sm" onClick={addLink} className="h-7 text-xs gap-1 px-2 mt-1">
+                <Plus className="h-3 w-3" /> Thêm link
+              </Button>
+            </div>
+          )}
+
+          {/* Toolbar — ribbon at the bottom of compose area */}
+          <div className="border-t px-4 py-1.5 flex items-center gap-0.5 shrink-0">
+            <button
+              type="button"
+              onClick={() => { setShowAttachments((v) => !v); setShowLinks(false) }}
+              className={[
+                'flex items-center gap-1.5 text-xs px-3 py-1.5 rounded transition-colors',
+                showAttachments
+                  ? 'bg-sidebar-accent text-primary'
+                  : 'text-muted-foreground hover:bg-sidebar-accent hover:text-primary',
+              ].join(' ')}
+            >
+              <Paperclip className="h-3.5 w-3.5" />
+              Đính kèm
+              {attachments.length > 0 && (
+                <span className="ml-0.5 bg-primary text-white text-[10px] px-1.5 py-0 rounded-full leading-4">
+                  {attachments.length}
+                </span>
+              )}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setShowLinks((v) => !v); setShowAttachments(false) }}
+              className={[
+                'flex items-center gap-1.5 text-xs px-3 py-1.5 rounded transition-colors',
+                showLinks
+                  ? 'bg-sidebar-accent text-primary'
+                  : 'text-muted-foreground hover:bg-sidebar-accent hover:text-primary',
+              ].join(' ')}
+            >
+              <Link2 className="h-3.5 w-3.5" />
+              Link
+              {links.filter((l) => l.url.trim()).length > 0 && (
+                <span className="ml-0.5 bg-primary text-white text-[10px] px-1.5 py-0 rounded-full leading-4">
+                  {links.filter((l) => l.url.trim()).length}
+                </span>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* ── Right: config panel ── */}
+        <div className="w-full lg:w-[320px] lg:max-w-[320px] shrink-0 bg-muted/20 border-t lg:border-t-0 lg:border-l flex flex-col">
+
+          {/* Panel heading */}
+          <div className="px-5 py-3 border-b">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Cấu hình task
+            </p>
+          </div>
+
+          <div className="flex-1 overflow-y-auto">
+
+            {/* Section: Loại task — new tasks only */}
+            {!isEditMode && (
+              <div className="px-5 py-4 border-b">
+                <span className={sectionLabel}>Loại task</span>
+                <div className="flex rounded-[4px] border overflow-hidden">
+                  {(['adhoc', 'recurring'] as TaskType[]).map((t) => (
+                    <button
+                      key={t}
+                      type="button"
+                      onClick={() => setTaskType(t)}
+                      className={[
+                        'flex-1 py-1.5 text-xs font-medium transition-colors',
+                        taskType === t
+                          ? 'bg-primary text-white'
+                          : 'text-muted-foreground hover:bg-muted',
+                      ].join(' ')}
+                    >
+                      {t === 'adhoc' ? 'Phát sinh' : 'Định kỳ'}
+                    </button>
+                  ))}
+                </div>
+                {taskType === 'recurring' && (
+                  <div className="mt-2.5 rounded bg-blue-50 border border-blue-200 px-3 py-2.5 space-y-1">
+                    <p className="text-xs font-semibold text-blue-800">Task định kỳ đang được xây dựng.</p>
+                    <p className="text-xs text-blue-700 leading-relaxed">
+                      Bạn sẽ có thể tạo task Daily / Weekly / Monthly và hệ thống tự giao xuống store theo lịch.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Section: Danh mục */}
+            <div className="px-5 py-4 border-b">
+              <span className={sectionLabel}>Danh mục</span>
+              <Select value={category} onValueChange={handleCategoryChange}>
+                <SelectTrigger className="h-8 text-sm bg-background">
+                  <SelectValue>{CATEGORY_LABEL[category]}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {(Object.keys(CATEGORY_LABEL) as TaskCategory[]).map((c) => (
+                    <SelectItem key={c} value={c}>{CATEGORY_LABEL[c]}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Section: Ưu tiên */}
+            <div className="px-5 py-4 border-b">
+              <span className={sectionLabel}>Ưu tiên</span>
+              <Select value={priority} onValueChange={(v) => { if (v) setPriority(v as TaskPriority) }}>
+                <SelectTrigger className="h-8 text-sm bg-background">
+                  <SelectValue>{PRIORITY_LABEL[priority]}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="normal">Bình thường</SelectItem>
+                  <SelectItem value="urgent">Khẩn cấp</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* Section: Thời gian */}
+            <div className="px-5 py-4 border-b space-y-3">
+              <span className={sectionLabel}>Thời gian</span>
+              <div>
+                <label htmlFor="start_date" className="text-xs text-muted-foreground block mb-1.5">Ngày bắt đầu</label>
+                <Input
+                  id="start_date"
+                  name="start_date"
+                  type="datetime-local"
+                  className="h-8 text-sm bg-background"
+                  defaultValue={task?.start_date ? new Date(task.start_date).toISOString().slice(0, 16) : ''}
+                />
+              </div>
+              <div>
+                <label htmlFor="deadline" className="text-xs text-muted-foreground block mb-1.5">Deadline</label>
+                <Input
+                  id="deadline"
+                  name="deadline"
+                  type="datetime-local"
+                  className="h-8 text-sm bg-background"
+                  defaultValue={task?.deadline ? new Date(task.deadline).toISOString().slice(0, 16) : ''}
+                />
+              </div>
+            </div>
+
+            {/* Section: Output cần nộp */}
+            <div className="px-5 py-4">
+              <span className={sectionLabel}>Output cần nộp</span>
+              <div className="space-y-2.5">
+                {OUTPUT_OPTIONS.map(({ value, label }) => (
+                  <label key={value} className="flex items-center gap-2.5 cursor-pointer text-sm">
+                    <input
+                      type="checkbox"
+                      checked={outputs.includes(value)}
+                      onChange={() => toggleOutput(value)}
+                      className="accent-primary h-4 w-4 shrink-0"
+                    />
+                    <span>{label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+          </div>
+        </div>
       </div>
     </form>
   )

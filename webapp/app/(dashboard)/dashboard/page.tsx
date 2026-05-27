@@ -32,82 +32,169 @@ type DashboardRow =
       total:       number
       done:        number
       deadline:    string | null
+      createdAt:   string
     }
   | {
-      type:     'task'
-      id:       string
-      title:    string
-      category: string | null
-      status:   string
-      store:    string | null
-      deadline: string | null
+      type:      'task'
+      id:        string
+      title:     string
+      category:  string | null
+      status:    string
+      store:     string | null
+      deadline:  string | null
+      createdAt: string
     }
 
 export default async function DashboardPage() {
   const supabase = await createClient()
 
+  const { data: { user } } = await supabase.auth.getUser()
+  const { data: profile } = await supabase
+    .from('users').select('role').eq('id', user!.id).single()
+  const isAdmin = profile?.role === 'admin'
+
+  // ── KPI queries (same for all roles — RLS already scopes visibility) ──────
   const [
     { count: total,      error: e1 },
     { count: done,       error: e2 },
     { count: overdue,    error: e3 },
     { count: inProgress, error: e4 },
-    { data: recentRaw,   error: e5 },
   ] = await Promise.all([
     supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null),
     supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null).eq('status', 'done'),
     supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null).eq('status', 'overdue'),
     supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null).eq('status', 'in_progress'),
-    supabase
+  ])
+  const kpiError = e1 ?? e2 ?? e3 ?? e4
+
+  // ── Recent activity — role-aware ─────────────────────────────────────────
+  let recentRows: DashboardRow[] = []
+  let recentError: { message: string } | null = null
+
+  if (isAdmin) {
+    // Admin: query task_broadcasts table for accurate global progress
+    const [
+      { data: recentBroadcastsRaw, error: eb },
+      { data: recentIndividualRaw, error: ei },
+    ] = await Promise.all([
+      supabase
+        .from('task_broadcasts')
+        .select('id, title, created_at')
+        .order('created_at', { ascending: false })
+        .limit(8),
+      supabase
+        .from('tasks')
+        .select('id, title, status, category, deadline, created_at, stores(name)')
+        .is('broadcast_id', null)
+        .is('archived_at', null)
+        .order('created_at', { ascending: false })
+        .limit(8),
+    ])
+
+    recentError = eb ?? ei ?? null
+
+    if (!recentError) {
+      // Fetch all task stats for those broadcasts in one query
+      const broadcastIds = (recentBroadcastsRaw ?? []).map((b) => b.id)
+      const broadcastStatResult = broadcastIds.length > 0
+        ? await supabase
+            .from('tasks')
+            .select('broadcast_id, status, category, deadline')
+            .in('broadcast_id', broadcastIds)
+            .is('archived_at', null)
+        : { data: [] as { broadcast_id: string; status: string; category: string | null; deadline: string | null }[], error: null }
+      const { data: broadcastTasksRaw, error: est } = broadcastStatResult
+      if (est) recentError = est
+
+      const broadcastRows: DashboardRow[] = (recentBroadcastsRaw ?? [])
+        .map((b): DashboardRow | null => {
+          const bTasks = (broadcastTasksRaw ?? []).filter((t) => t.broadcast_id === b.id)
+          if (bTasks.length === 0) return null
+          return {
+            type:        'broadcast',
+            broadcastId: b.id,
+            title:       b.title,
+            category:    bTasks[0]?.category ?? null,
+            total:       bTasks.length,
+            done:        bTasks.filter((t) => t.status === 'done').length,
+            deadline:    bTasks.reduce<string | null>((min, t) =>
+              t.deadline && (!min || t.deadline < min) ? t.deadline : min, null),
+            createdAt:   b.created_at,
+          }
+        })
+        .filter((r): r is DashboardRow => r !== null)
+
+      const taskRows: DashboardRow[] = (recentIndividualRaw ?? []).map((t) => ({
+        type:      'task' as const,
+        id:        t.id,
+        title:     t.title,
+        category:  t.category ?? null,
+        status:    t.status,
+        store:     (t.stores as unknown as { name: string } | null)?.name ?? null,
+        deadline:  t.deadline ?? null,
+        createdAt: t.created_at,
+      }))
+
+      recentRows = [...broadcastRows, ...taskRows]
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, 8)
+    }
+  } else {
+    // Store manager / staff: query only tasks visible to them (RLS scopes to their store).
+    // Group by broadcast_id so broadcasts appear as 1 row — counts reflect visible tasks only.
+    const { data: visibleTasks, error: ev } = await supabase
       .from('tasks')
-      .select('id, title, status, priority, deadline, category, broadcast_id, stores(name)')
+      .select('id, title, status, category, deadline, created_at, broadcast_id, stores(name)')
       .is('archived_at', null)
       .order('created_at', { ascending: false })
-      .limit(50),
-  ])
+      .limit(50)
 
-  const kpiError = e1 ?? e2 ?? e3 ?? e4
-  const recentError = e5
+    recentError = ev ?? null
 
-  // Build grouped recent list (max 8 display rows)
-  const recentRows: DashboardRow[] = []
-  const seenBroadcast = new Map<string, number>()
+    if (!recentError) {
+      const seenBc = new Map<string, DashboardRow & { type: 'broadcast' }>()
+      const bcRows: DashboardRow[] = []
+      const indRows: DashboardRow[] = []
 
-  for (const task of recentRaw ?? []) {
-    if (!task.broadcast_id) {
-      recentRows.push({
-        type:     'task',
-        id:       task.id,
-        title:    task.title,
-        category: task.category ?? null,
-        status:   task.status,
-        store:    (task.stores as unknown as { name: string } | null)?.name ?? null,
-        deadline: task.deadline ?? null,
-      })
-    } else {
-      if (seenBroadcast.has(task.broadcast_id)) {
-        const idx = seenBroadcast.get(task.broadcast_id)!
-        const row = recentRows[idx] as Extract<DashboardRow, { type: 'broadcast' }>
-        row.total++
-        if (task.status === 'done') row.done++
-        if (task.deadline && (!row.deadline || task.deadline < row.deadline)) {
-          row.deadline = task.deadline
+      for (const t of visibleTasks ?? []) {
+        if (!t.broadcast_id) {
+          indRows.push({
+            type:      'task',
+            id:        t.id,
+            title:     t.title,
+            category:  t.category ?? null,
+            status:    t.status,
+            store:     (t.stores as unknown as { name: string } | null)?.name ?? null,
+            deadline:  t.deadline ?? null,
+            createdAt: t.created_at,
+          })
+        } else {
+          if (seenBc.has(t.broadcast_id)) {
+            const row = seenBc.get(t.broadcast_id)!
+            row.total++
+            if (t.status === 'done') row.done++
+            if (t.deadline && (!row.deadline || t.deadline < row.deadline)) row.deadline = t.deadline
+          } else {
+            const row: DashboardRow & { type: 'broadcast' } = {
+              type:        'broadcast',
+              broadcastId: t.broadcast_id,
+              title:       t.title,
+              category:    t.category ?? null,
+              total:       1,
+              done:        t.status === 'done' ? 1 : 0,
+              deadline:    t.deadline ?? null,
+              createdAt:   t.created_at,
+            }
+            seenBc.set(t.broadcast_id, row)
+            bcRows.push(row)
+          }
         }
-      } else {
-        const idx = recentRows.length
-        seenBroadcast.set(task.broadcast_id, idx)
-        recentRows.push({
-          type:        'broadcast',
-          broadcastId: task.broadcast_id,
-          title:       task.title,
-          category:    task.category ?? null,
-          total:       1,
-          done:        task.status === 'done' ? 1 : 0,
-          deadline:    task.deadline ?? null,
-        })
       }
-    }
 
-    if (recentRows.length >= 8) break
+      recentRows = [...bcRows, ...indRows]
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, 8)
+    }
   }
 
   const kpis = [
@@ -121,7 +208,6 @@ export default async function DashboardPage() {
     <div className="p-4 md:p-6 space-y-4 md:space-y-6">
       <h1 className="text-lg md:text-xl font-semibold">Tổng quan</h1>
 
-      {/* KPI error */}
       {kpiError && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 flex items-center gap-2 text-sm">
           <AlertCircle className="h-4 w-4 text-destructive shrink-0" />
@@ -177,7 +263,7 @@ export default async function DashboardPage() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {recentRows.map((row, idx) => {
+                    {recentRows.map((row) => {
                       if (row.type === 'broadcast') {
                         return (
                           <TableRow key={`bc-${row.broadcastId}`} className="bg-primary/5">
@@ -209,7 +295,6 @@ export default async function DashboardPage() {
                           </TableRow>
                         )
                       }
-
                       return (
                         <TableRow key={`task-${row.id}`}>
                           <TableCell>
@@ -274,7 +359,6 @@ export default async function DashboardPage() {
                       </div>
                     )
                   }
-
                   return (
                     <Link key={`task-${row.id}`} href={`/tasks/${row.id}`} className="flex flex-col gap-1.5 px-4 py-3 hover:bg-muted/40 active:bg-muted/60">
                       <div className="flex items-start justify-between gap-2">
