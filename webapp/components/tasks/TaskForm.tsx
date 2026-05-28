@@ -8,8 +8,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Plus, X, Paperclip, Link2 } from 'lucide-react'
+import { Plus, X, Paperclip, Link2, Settings } from 'lucide-react'
 import { TaskInputAttachments } from '@/components/tasks/TaskInputAttachments'
+import { cn } from '@/lib/utils'
 import {
   Task, Store, UserProfile, RequiredOutput, UserRole,
   TaskPriority, TaskVisibility, TaskCategory, TaskAttachment,
@@ -68,17 +69,18 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   // Recurring-only config
   const [frequency, setFrequency]           = useState<'daily' | 'weekly' | 'monthly'>('weekly')
   const [runTime, setRunTime]               = useState('08:00')
-  const [weekdays, setWeekdays]             = useState<number[]>([1]) // Mon default
+  const [weekdays, setWeekdays]             = useState<number[]>([1])
   const [monthDay, setMonthDay]             = useState(1)
   const [schedStartDate, setSchedStartDate] = useState('')
   const [schedEndDate, setSchedEndDate]     = useState('')
   const [deadlineOffset, setDeadlineOffset] = useState(24)
 
-  const [scope, setScope]                     = useState<Scope>('single')
+  const [scope, setScope]                       = useState<Scope>('single')
   const [selectedStoreIds, setSelectedStoreIds] = useState<string[]>([])
 
-  const [showAttachments, setShowAttachments] = useState(false)
-  const [showLinks, setShowLinks]             = useState(false)
+  const [showAttachments, setShowAttachments]   = useState(false)
+  const [showLinks, setShowLinks]               = useState(false)
+  const [showMobileConfig, setShowMobileConfig] = useState(false)
 
   const uploadIdRef       = useRef((task?.id) ?? crypto.randomUUID())
   const existingInputData = task?.input_data as Record<string, unknown> | null
@@ -103,13 +105,14 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   const isAdmin     = currentUserRole === 'admin'
   const isBroadcast = isAdmin && !task && scope !== 'single'
   const isEditMode  = !!task
+  const isRecurring = taskType === 'recurring' && !isEditMode
 
-  const visibleStores = isAdmin ? stores : stores.filter((s) => s.id === currentUserStoreId)
-  const storeUsers    = storeId ? users.filter((u) => u.store_id === storeId) : users
-
+  const visibleStores  = isAdmin ? stores : stores.filter((s) => s.id === currentUserStoreId)
+  const storeUsers     = storeId ? users.filter((u) => u.store_id === storeId) : users
   const selectedStoreName = visibleStores.find((s) => s.id === storeId)?.name
   const selectedUserName  = users.find((u) => u.id === assignedTo)?.full_name
   const broadcastCount    = scope === 'all' ? visibleStores.length : selectedStoreIds.length
+  const showMultiStore    = isBroadcast || isRecurring
 
   function deriveVisibility(): TaskVisibility {
     return assignedTo ? 'private' : 'store'
@@ -133,7 +136,6 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
 
   function handleSetTaskType(t: TaskType) {
     setTaskType(t)
-    // Recurring tasks are always multi-store — switch away from single if needed
     if (t === 'recurring' && scope === 'single') setScope('multi')
   }
 
@@ -165,19 +167,16 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
     e.preventDefault()
     const formData = new FormData(e.currentTarget)
 
-    // ── Recurring path ──────────────────────────────────────────────────────
+    // ── Recurring path ────────────────────────────────────────────────────
     if (taskType === 'recurring') {
-      const title = (formData.get('title') as string)?.trim() ?? ''
+      const title       = (formData.get('title') as string)?.trim() ?? ''
       const description = (formData.get('description') as string) ?? ''
       if (!schedStartDate) { toast.error('Vui lòng chọn ngày bắt đầu lịch'); return }
       const storeIds = scope === 'all' ? visibleStores.map((s) => s.id) : selectedStoreIds
       if (!storeIds.length) { toast.error('Vui lòng chọn ít nhất một cửa hàng'); return }
       startTransition(async () => {
         const result = await createTaskSchedule({
-          title,
-          description,
-          category,
-          priority,
+          title, description, category, priority,
           requiredOutputs: outputs,
           attachments,
           links: links.filter((l) => l.url.trim()),
@@ -185,9 +184,9 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
           runTime,
           weekdays: frequency === 'weekly'  ? weekdays : null,
           monthDay: frequency === 'monthly' ? monthDay : null,
-          startDate:            schedStartDate,
-          endDate:              schedEndDate || null,
-          deadlineOffsetHours:  deadlineOffset,
+          startDate:           schedStartDate,
+          endDate:             schedEndDate || null,
+          deadlineOffsetHours: deadlineOffset,
           storeIds,
         })
         if (result?.error) toast.error(result.error)
@@ -199,7 +198,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
       return
     }
 
-    // ── Phát sinh path ──────────────────────────────────────────────────────
+    // ── Phát sinh path ────────────────────────────────────────────────────
     formData.set('category',   category)
     formData.set('priority',   priority)
     formData.set('visibility', deriveVisibility())
@@ -213,10 +212,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
 
     if (isBroadcast) {
       const storeIds = scope === 'all' ? visibleStores.map((s) => s.id) : selectedStoreIds
-      if (!storeIds.length) {
-        toast.error('Vui lòng chọn ít nhất một cửa hàng')
-        return
-      }
+      if (!storeIds.length) { toast.error('Vui lòng chọn ít nhất một cửa hàng'); return }
       startTransition(async () => {
         const result = await createBroadcastTask({
           title:           formData.get('title') as string,
@@ -235,10 +231,10 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
       return
     }
 
-    formData.set('store_id',           storeId)
-    formData.set('assigned_to',        assignedTo)
-    formData.set('input_attachments',  JSON.stringify(attachments))
-    formData.set('input_links',        JSON.stringify(links.filter((l) => l.url.trim())))
+    formData.set('store_id',          storeId)
+    formData.set('assigned_to',       assignedTo)
+    formData.set('input_attachments', JSON.stringify(attachments))
+    formData.set('input_links',       JSON.stringify(links.filter((l) => l.url.trim())))
 
     startTransition(async () => {
       const result = task
@@ -248,10 +244,6 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
     })
   }
 
-  const isRecurring = taskType === 'recurring' && !isEditMode
-  // Recurring mode forces multi-store selector; broadcast also uses it
-  const showMultiStore = isBroadcast || isRecurring
-
   const submitLabel = pending
     ? 'Đang lưu...'
     : isRecurring
@@ -260,7 +252,6 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
         ? `Tạo ${broadcastCount > 0 ? broadcastCount + ' ' : ''}Task`
         : task ? 'Cập nhật' : 'Tạo Task'
 
-  // Shared label style for right panel sections
   const sectionLabel = 'block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70 mb-2'
 
   const WEEKDAY_LABELS: Record<number, string> = { 0: 'CN', 1: 'T2', 2: 'T3', 3: 'T4', 4: 'T5', 5: 'T6', 6: 'T7' }
@@ -268,56 +259,55 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   return (
     <form onSubmit={handleSubmit} className="flex flex-col h-full">
 
-      {/* ── Header bar (56px) ── */}
-      <div className="h-14 flex items-center justify-between gap-3 px-5 border-b bg-background sticky top-0 z-10 shrink-0">
-        <h1 className="text-sm font-semibold">
+      {/* ── Header (h-16) ── */}
+      <div className="h-16 flex items-center justify-between gap-3 px-5 border-b bg-background sticky top-0 z-10 shrink-0">
+        <h1 className="text-lg font-semibold">
           {isEditMode ? 'Chỉnh sửa Task' : 'Tạo task mới'}
         </h1>
         <div className="flex items-center gap-2">
-          <Button type="button" variant="outline" size="sm" onClick={() => router.back()}>
+          {/* Config toggle — mobile only */}
+          <button
+            type="button"
+            aria-label="Cấu hình task"
+            onClick={() => setShowMobileConfig(true)}
+            className="lg:hidden flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground px-2.5 h-9 rounded border border-border transition-colors"
+          >
+            <Settings className="h-3.5 w-3.5" />
+            Cấu hình
+          </button>
+          <Button type="button" variant="outline" onClick={() => router.back()} className="h-9 px-4">
             Huỷ
           </Button>
-          <Button type="submit" size="sm" disabled={pending}>
+          <Button type="submit" disabled={pending} className="h-9 px-4">
             {submitLabel}
           </Button>
         </div>
       </div>
 
-      {/* ── Body — stacks on mobile, side-by-side on lg+ ── */}
+      {/* ── Body ── */}
       <div className="flex flex-1 min-h-0 overflow-auto flex-col lg:flex-row">
 
         {/* ── Left: compose area ── */}
         <div className="flex-1 min-w-0 flex flex-col lg:border-r">
 
-          {/* Title row */}
-          <div className="border-b px-5 py-3">
-            <Input
-              name="title"
-              defaultValue={task?.title}
-              required
-              placeholder="Tiêu đề task..."
-              className="w-full text-base font-semibold border-0 p-0 h-auto focus-visible:ring-0 shadow-none placeholder:text-muted-foreground/40 bg-transparent"
-            />
-          </div>
-
-          {/* Scope pills row — admin + new only; recurring hides "Một CH" */}
+          {/* Row 1: Scope pills — admin + new only; recurring hides "Một CH" */}
           {isAdmin && !isEditMode && (
             <div className="border-b px-5 py-2.5 flex items-center gap-2 flex-wrap">
               <span className="text-xs text-muted-foreground shrink-0">Giao đến:</span>
               {(['single', 'multi', 'all'] as Scope[]).map((s) => {
-                if (s === 'single' && isRecurring) return null // recurring is always multi-store
+                if (s === 'single' && isRecurring) return null
                 const label = s === 'single' ? 'Một CH' : s === 'multi' ? 'Nhiều CH' : `Tất cả (${visibleStores.length})`
                 return (
                   <button
                     key={s}
                     type="button"
                     onClick={() => handleScopeChange(s)}
-                    className={[
+                    className={cn(
                       'text-xs px-3 py-1 rounded-full border transition-colors',
                       scope === s
                         ? 'bg-primary text-white border-primary'
-                        : 'border-border text-muted-foreground hover:border-primary/60 hover:text-foreground',
-                    ].join(' ')}
+                        : 'border-border text-muted-foreground hover:border-primary/60 hover:text-foreground'
+                    )}
                   >
                     {label}
                   </button>
@@ -326,7 +316,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
             </div>
           )}
 
-          {/* Store / assignee row */}
+          {/* Row 2: Store / assignee */}
           <div className="border-b px-5 py-3">
             {showMultiStore ? (
               <div className="space-y-2">
@@ -389,8 +379,24 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
             )}
           </div>
 
-          {/* Description — fills remaining height */}
+          {/* Row 3: Title — subject line, larger */}
+          <div className="border-b px-5 py-3">
+            <Input
+              name="title"
+              defaultValue={task?.title}
+              required
+              placeholder="Tiêu đề task..."
+              className="w-full text-xl font-semibold border-0 p-0 h-auto focus-visible:ring-0 shadow-none placeholder:text-muted-foreground/40 bg-transparent"
+            />
+          </div>
+
+          {/* Row 4: Description */}
           <div className="flex-1 px-5 pt-3 pb-1">
+            {/* TODO Sprint N: Replace with Tiptap editor
+                - paste image: upload to Supabase Storage → insert img tag
+                - paste Excel table: parse HTML table / TSV → render table
+                - store as input_data.content_json (Tiptap JSON) + description as plain-text fallback
+                - DOMPurify sanitize before rendering in task detail page */}
             <Textarea
               name="description"
               defaultValue={task?.description ?? ''}
@@ -399,7 +405,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
             />
           </div>
 
-          {/* Attachment / link panels — above toolbar */}
+          {/* Attachment panel */}
           {showAttachments && (
             <div className="px-5 pb-3 space-y-1.5 border-t">
               <p className="text-xs text-muted-foreground pt-3">Ảnh hướng dẫn, file Excel, PDF...</p>
@@ -411,13 +417,14 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
             </div>
           )}
 
+          {/* Links panel */}
           {showLinks && (
             <div className="px-5 pb-3 space-y-2 border-t">
               {links.length === 0 && (
                 <p className="text-xs text-muted-foreground pt-3">Link đăng ký, meeting, tài liệu...</p>
               )}
               {links.map((link, i) => (
-                <div key={i} className={`grid grid-cols-[1fr_1.5fr_auto] gap-2 ${i === 0 ? 'pt-3' : ''}`}>
+                <div key={i} className={cn('grid grid-cols-[1fr_1.5fr_auto] gap-2', i === 0 && 'pt-3')}>
                   <Input placeholder="Nhãn" value={link.label} onChange={(e) => updateLink(i, 'label', e.target.value)} className="h-8 text-sm" />
                   <Input placeholder="https://..." type="url" value={link.url} onChange={(e) => updateLink(i, 'url', e.target.value)} className="h-8 text-sm" />
                   <button type="button" aria-label="Xoá link" onClick={() => removeLink(i)} className="h-8 w-8 flex items-center justify-center text-muted-foreground hover:text-destructive">
@@ -431,17 +438,15 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
             </div>
           )}
 
-          {/* Toolbar — ribbon at the bottom of compose area */}
+          {/* Toolbar */}
           <div className="border-t px-4 py-1.5 flex items-center gap-0.5 shrink-0">
             <button
               type="button"
               onClick={() => { setShowAttachments((v) => !v); setShowLinks(false) }}
-              className={[
+              className={cn(
                 'flex items-center gap-1.5 text-xs px-3 py-1.5 rounded transition-colors',
-                showAttachments
-                  ? 'bg-sidebar-accent text-primary'
-                  : 'text-muted-foreground hover:bg-sidebar-accent hover:text-primary',
-              ].join(' ')}
+                showAttachments ? 'bg-sidebar-accent text-primary' : 'text-muted-foreground hover:bg-sidebar-accent hover:text-primary'
+              )}
             >
               <Paperclip className="h-3.5 w-3.5" />
               Đính kèm
@@ -454,12 +459,10 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
             <button
               type="button"
               onClick={() => { setShowLinks((v) => !v); setShowAttachments(false) }}
-              className={[
+              className={cn(
                 'flex items-center gap-1.5 text-xs px-3 py-1.5 rounded transition-colors',
-                showLinks
-                  ? 'bg-sidebar-accent text-primary'
-                  : 'text-muted-foreground hover:bg-sidebar-accent hover:text-primary',
-              ].join(' ')}
+                showLinks ? 'bg-sidebar-accent text-primary' : 'text-muted-foreground hover:bg-sidebar-accent hover:text-primary'
+              )}
             >
               <Link2 className="h-3.5 w-3.5" />
               Link
@@ -473,18 +476,32 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
         </div>
 
         {/* ── Right: config panel ── */}
-        <div className="w-full lg:w-[320px] lg:max-w-[320px] shrink-0 bg-muted/20 border-t lg:border-t-0 lg:border-l flex flex-col">
-
-          {/* Panel heading */}
-          <div className="px-5 py-3 border-b">
+        {/* Desktop: always-visible sidebar. Mobile: hidden by default, overlay when showMobileConfig. */}
+        <div className={cn(
+          'bg-muted/20 flex flex-col',
+          'lg:w-[360px] lg:max-w-[360px] lg:shrink-0 lg:border-l',
+          showMobileConfig
+            ? 'fixed inset-0 z-50 bg-background overflow-y-auto'
+            : 'hidden lg:flex'
+        )}>
+          {/* Panel heading + mobile close */}
+          <div className="px-5 py-3 border-b flex items-center justify-between shrink-0">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
               Cấu hình task
             </p>
+            <button
+              type="button"
+              aria-label="Đóng"
+              onClick={() => setShowMobileConfig(false)}
+              className="lg:hidden text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
           </div>
 
           <div className="flex-1 overflow-y-auto">
 
-            {/* Section: Loại task — admin + new tasks only */}
+            {/* Loại task — admin + new only */}
             {isAdmin && !isEditMode && (
               <div className="px-5 py-4 border-b">
                 <span className={sectionLabel}>Loại task</span>
@@ -494,12 +511,10 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                       key={t}
                       type="button"
                       onClick={() => handleSetTaskType(t)}
-                      className={[
+                      className={cn(
                         'flex-1 py-1.5 text-xs font-medium transition-colors',
-                        taskType === t
-                          ? 'bg-primary text-white'
-                          : 'text-muted-foreground hover:bg-muted',
-                      ].join(' ')}
+                        taskType === t ? 'bg-primary text-white' : 'text-muted-foreground hover:bg-muted'
+                      )}
                     >
                       {t === 'adhoc' ? 'Phát sinh' : 'Định kỳ'}
                     </button>
@@ -508,12 +523,11 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
               </div>
             )}
 
-            {/* Section: Lịch định kỳ — only when recurring mode */}
+            {/* Lịch định kỳ — recurring mode only */}
             {isRecurring && (
               <div className="px-5 py-4 border-b space-y-3">
                 <span className={sectionLabel}>Lịch chạy</span>
 
-                {/* Tần suất */}
                 <div>
                   <p className="text-xs text-muted-foreground mb-1.5">Tần suất</p>
                   <div className="flex rounded-[4px] border overflow-hidden">
@@ -522,10 +536,10 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                         key={f}
                         type="button"
                         onClick={() => setFrequency(f)}
-                        className={[
+                        className={cn(
                           'flex-1 py-1.5 text-xs transition-colors',
-                          frequency === f ? 'bg-primary text-white' : 'text-muted-foreground hover:bg-muted',
-                        ].join(' ')}
+                          frequency === f ? 'bg-primary text-white' : 'text-muted-foreground hover:bg-muted'
+                        )}
                       >
                         {f === 'daily' ? 'Mỗi ngày' : f === 'weekly' ? 'Mỗi tuần' : 'Mỗi tháng'}
                       </button>
@@ -533,7 +547,6 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                   </div>
                 </div>
 
-                {/* Weekly: day-of-week selector */}
                 {frequency === 'weekly' && (
                   <div>
                     <p className="text-xs text-muted-foreground mb-1.5">Ngày trong tuần</p>
@@ -543,12 +556,12 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                           key={d}
                           type="button"
                           onClick={() => toggleWeekday(d)}
-                          className={[
+                          className={cn(
                             'text-xs px-2 py-1 rounded border transition-colors',
                             weekdays.includes(d)
                               ? 'bg-primary text-white border-primary'
-                              : 'border-border text-muted-foreground hover:border-primary/50',
-                          ].join(' ')}
+                              : 'border-border text-muted-foreground hover:border-primary/50'
+                          )}
                         >
                           {WEEKDAY_LABELS[d]}
                         </button>
@@ -557,33 +570,22 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                   </div>
                 )}
 
-                {/* Monthly: day-of-month */}
                 {frequency === 'monthly' && (
                   <div>
                     <label className="text-xs text-muted-foreground block mb-1.5">Ngày trong tháng (1–28)</label>
                     <Input
-                      type="number"
-                      min={1}
-                      max={28}
-                      value={monthDay}
+                      type="number" min={1} max={28} value={monthDay}
                       onChange={(e) => setMonthDay(Number(e.target.value))}
                       className="h-8 text-sm bg-background w-20"
                     />
                   </div>
                 )}
 
-                {/* Giờ tạo task */}
                 <div>
                   <label className="text-xs text-muted-foreground block mb-1.5">Giờ tạo task</label>
-                  <Input
-                    type="time"
-                    value={runTime}
-                    onChange={(e) => setRunTime(e.target.value)}
-                    className="h-8 text-sm bg-background w-28"
-                  />
+                  <Input type="time" value={runTime} onChange={(e) => setRunTime(e.target.value)} className="h-8 text-sm bg-background w-28" />
                 </div>
 
-                {/* Deadline offset */}
                 <div>
                   <label className="text-xs text-muted-foreground block mb-1.5">Deadline sau khi tạo</label>
                   <Select value={String(deadlineOffset)} onValueChange={(v) => { if (v) setDeadlineOffset(Number(v)) }}>
@@ -598,32 +600,19 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                   </Select>
                 </div>
 
-                {/* Ngày bắt đầu (required) */}
                 <div>
                   <label className="text-xs text-muted-foreground block mb-1.5">Ngày bắt đầu *</label>
-                  <Input
-                    type="date"
-                    value={schedStartDate}
-                    onChange={(e) => setSchedStartDate(e.target.value)}
-                    required={isRecurring}
-                    className="h-8 text-sm bg-background"
-                  />
+                  <Input type="date" value={schedStartDate} onChange={(e) => setSchedStartDate(e.target.value)} required={isRecurring} className="h-8 text-sm bg-background" />
                 </div>
 
-                {/* Ngày kết thúc (optional) */}
                 <div>
                   <label className="text-xs text-muted-foreground block mb-1.5">Ngày kết thúc (tuỳ chọn)</label>
-                  <Input
-                    type="date"
-                    value={schedEndDate}
-                    onChange={(e) => setSchedEndDate(e.target.value)}
-                    className="h-8 text-sm bg-background"
-                  />
+                  <Input type="date" value={schedEndDate} onChange={(e) => setSchedEndDate(e.target.value)} className="h-8 text-sm bg-background" />
                 </div>
               </div>
             )}
 
-            {/* Section: Danh mục */}
+            {/* Danh mục */}
             <div className="px-5 py-4 border-b">
               <span className={sectionLabel}>Danh mục</span>
               <Select value={category} onValueChange={handleCategoryChange}>
@@ -638,7 +627,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
               </Select>
             </div>
 
-            {/* Section: Ưu tiên */}
+            {/* Ưu tiên */}
             <div className="px-5 py-4 border-b">
               <span className={sectionLabel}>Ưu tiên</span>
               <Select value={priority} onValueChange={(v) => { if (v) setPriority(v as TaskPriority) }}>
@@ -652,47 +641,41 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
               </Select>
             </div>
 
-            {/* Section: Thời gian — hidden for recurring (schedule has its own dates) */}
+            {/* Thời gian — hidden for recurring */}
             {!isRecurring && (
               <div className="px-5 py-4 border-b space-y-3">
                 <span className={sectionLabel}>Thời gian</span>
                 <div>
                   <label htmlFor="start_date" className="text-xs text-muted-foreground block mb-1.5">Ngày bắt đầu</label>
-                  <Input
-                    id="start_date"
-                    name="start_date"
-                    type="datetime-local"
-                    className="h-8 text-sm bg-background"
-                    defaultValue={task?.start_date ? new Date(task.start_date).toISOString().slice(0, 16) : ''}
-                  />
+                  <Input id="start_date" name="start_date" type="datetime-local" className="h-8 text-sm bg-background"
+                    defaultValue={task?.start_date ? new Date(task.start_date).toISOString().slice(0, 16) : ''} />
                 </div>
                 <div>
                   <label htmlFor="deadline" className="text-xs text-muted-foreground block mb-1.5">Deadline</label>
-                  <Input
-                    id="deadline"
-                    name="deadline"
-                    type="datetime-local"
-                    className="h-8 text-sm bg-background"
-                    defaultValue={task?.deadline ? new Date(task.deadline).toISOString().slice(0, 16) : ''}
-                  />
+                  <Input id="deadline" name="deadline" type="datetime-local" className="h-8 text-sm bg-background"
+                    defaultValue={task?.deadline ? new Date(task.deadline).toISOString().slice(0, 16) : ''} />
                 </div>
               </div>
             )}
 
-            {/* Section: Output cần nộp */}
+            {/* Output cần nộp — chips */}
             <div className="px-5 py-4">
               <span className={sectionLabel}>Output cần nộp</span>
-              <div className="space-y-2.5">
+              <div className="flex flex-wrap gap-1.5">
                 {OUTPUT_OPTIONS.map(({ value, label }) => (
-                  <label key={value} className="flex items-center gap-2.5 cursor-pointer text-sm">
-                    <input
-                      type="checkbox"
-                      checked={outputs.includes(value)}
-                      onChange={() => toggleOutput(value)}
-                      className="accent-primary h-4 w-4 shrink-0"
-                    />
-                    <span>{label}</span>
-                  </label>
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => toggleOutput(value)}
+                    className={cn(
+                      'text-xs px-3 py-1.5 rounded-full border transition-colors',
+                      outputs.includes(value)
+                        ? 'bg-primary text-white border-primary'
+                        : 'border-border text-muted-foreground hover:border-primary/60 hover:text-foreground'
+                    )}
+                  >
+                    {label}
+                  </button>
                 ))}
               </div>
             </div>

@@ -35,6 +35,27 @@ const STATUS_LABEL_VN: Record<string, string> = {
   overdue:     'Quá hạn',
 }
 
+// Shared per-file attachment validation used by all task creation paths
+type AttachmentMeta = { type?: string; size?: number }
+const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
+function validateAttachments(atts: AttachmentMeta[]): string | null {
+  if (atts.length > 20) return 'Tối đa 20 file đính kèm mỗi task'
+  let totalSize = 0
+  for (const a of atts) {
+    const size = a.size ?? 0
+    totalSize += size
+    if (a.type?.startsWith('image/')) {
+      if (!ALLOWED_IMAGE_TYPES.includes(a.type))
+        return `Định dạng ảnh không hỗ trợ (${a.type}). Chỉ hỗ trợ jpg, png, webp`
+      if (size > 5 * 1024 * 1024) return 'Ảnh quá lớn (tối đa 5MB mỗi ảnh)'
+    } else {
+      if (size > 10 * 1024 * 1024) return 'File quá lớn (tối đa 10MB mỗi file)'
+    }
+  }
+  if (totalSize > 30 * 1024 * 1024) return 'Tổng dung lượng file đính kèm vượt 30MB'
+  return null
+}
+
 export async function createTask(formData: FormData) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -48,8 +69,17 @@ export async function createTask(formData: FormData) {
 
   const attachmentsRaw = formData.get('input_attachments') as string
   const linksRaw = formData.get('input_links') as string
-  const inputAttachments = attachmentsRaw ? JSON.parse(attachmentsRaw) : []
-  const inputLinks = linksRaw ? JSON.parse(linksRaw) : []
+  let inputAttachments: AttachmentMeta[]
+  let inputLinks: unknown[]
+  try {
+    inputAttachments = attachmentsRaw ? JSON.parse(attachmentsRaw) : []
+    inputLinks       = linksRaw       ? JSON.parse(linksRaw)       : []
+  } catch {
+    return { error: 'Dữ liệu đính kèm không hợp lệ' }
+  }
+  const attachErr = validateAttachments(inputAttachments)
+  if (attachErr) return { error: attachErr }
+
   const inputData = (inputAttachments.length > 0 || inputLinks.length > 0)
     ? { attachments: inputAttachments, links: inputLinks }
     : null
@@ -105,8 +135,16 @@ export async function updateTask(taskId: string, formData: FormData) {
 
   const attachmentsRaw = formData.get('input_attachments') as string
   const linksRaw = formData.get('input_links') as string
-  const inputAttachments = attachmentsRaw ? JSON.parse(attachmentsRaw) : []
-  const inputLinks = linksRaw ? JSON.parse(linksRaw) : []
+  let inputAttachments: AttachmentMeta[]
+  let inputLinks: unknown[]
+  try {
+    inputAttachments = attachmentsRaw ? JSON.parse(attachmentsRaw) : []
+    inputLinks       = linksRaw       ? JSON.parse(linksRaw)       : []
+  } catch {
+    return { error: 'Dữ liệu đính kèm không hợp lệ' }
+  }
+  const attachErrU = validateAttachments(inputAttachments)
+  if (attachErrU) return { error: attachErrU }
 
   // Merge with existing input_data to preserve bulk-import rows
   const { data: existingTask } = await supabase.from('tasks').select('input_data, assigned_to, title').eq('id', taskId).single()
@@ -302,6 +340,11 @@ export async function submitTask(taskId: string, outputData: Record<string, stri
     )
   }
 
+  // TODO Sprint N: Teams webhook notification
+  //   - store_teams_webhook table: store_id → webhook_url (encrypted, never exposed to client)
+  //   - trigger on: task submitted, overdue, recurring task generated, resubmit requested
+  //   - use notification_outbox pattern for retry on webhook failure
+  //   - Microsoft Teams Workflows Incoming Webhook (not Graph API for MVP)
   revalidatePath(`/tasks/${taskId}`)
   return { success: true }
 }
@@ -375,6 +418,9 @@ export async function createBroadcastTask(params: {
   if (profile?.role !== 'admin') return { error: 'Chỉ admin mới được tạo task broadcast' }
 
   if (!params.storeIds.length) return { error: 'Vui lòng chọn ít nhất một cửa hàng' }
+
+  const attachErrB = validateAttachments(params.attachments ?? [])
+  if (attachErrB) return { error: attachErrB }
 
   const { data: broadcast, error: bcastError } = await supabase
     .from('task_broadcasts')
@@ -668,6 +714,8 @@ export async function createTaskSchedule(data: {
     return { error: 'Ngày trong tháng phải từ 1 đến 28' }
   if (data.endDate && data.endDate < data.startDate)
     return { error: 'Ngày kết thúc phải sau ngày bắt đầu' }
+  const attachErrS = validateAttachments(data.attachments)
+  if (attachErrS) return { error: attachErrS }
 
   const uniqueStoreIds = [...new Set(data.storeIds)]
 

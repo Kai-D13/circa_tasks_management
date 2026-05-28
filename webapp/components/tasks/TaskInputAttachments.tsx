@@ -18,8 +18,50 @@ export function TaskInputAttachments({ uploadId, value, onChange }: Props) {
   const inputRef = useRef<HTMLInputElement>(null)
 
   async function handleFiles(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files ?? [])
-    if (!files.length) return
+    const rawFiles = Array.from(e.target.files ?? [])
+    if (!rawFiles.length) return
+
+    const MAX_IMAGE_SIZE = 5  * 1024 * 1024
+    const MAX_DOC_SIZE   = 10 * 1024 * 1024
+    const MAX_TOTAL_SIZE = 30 * 1024 * 1024
+    const MAX_COUNT      = 20
+    const ALLOWED_IMAGES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
+
+    if (value.length + rawFiles.length > MAX_COUNT) {
+      toast.error(`Tối đa ${MAX_COUNT} file đính kèm mỗi task`)
+      if (inputRef.current) inputRef.current.value = ''
+      return
+    }
+
+    const currentTotal = value.reduce((s, a) => s + (a.size ?? 0), 0)
+    const newTotal      = rawFiles.reduce((s, f) => s + f.size, 0)
+    if (currentTotal + newTotal > MAX_TOTAL_SIZE) {
+      toast.error('Tổng dung lượng file đính kèm vượt 30MB')
+      if (inputRef.current) inputRef.current.value = ''
+      return
+    }
+
+    const files = rawFiles.filter((file) => {
+      if (file.type.startsWith('image/')) {
+        if (!ALLOWED_IMAGES.includes(file.type)) {
+          toast.error(`${file.name}: Chỉ hỗ trợ jpg, png, webp`)
+          return false
+        }
+        if (file.size > MAX_IMAGE_SIZE) {
+          toast.error(`${file.name}: Ảnh quá lớn (tối đa 5MB)`)
+          return false
+        }
+      } else if (file.size > MAX_DOC_SIZE) {
+        toast.error(`${file.name}: File quá lớn (tối đa 10MB)`)
+        return false
+      }
+      return true
+    })
+    if (!files.length) {
+      if (inputRef.current) inputRef.current.value = ''
+      return
+    }
+
     setUploading(true)
     const supabase = createClient()
     const uploaded: TaskAttachment[] = []

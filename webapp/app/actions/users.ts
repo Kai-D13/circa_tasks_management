@@ -59,6 +59,16 @@ export async function resetUserPassword(userId: string, newPassword: string) {
   return { success: true }
 }
 
+export async function changeOwnPassword(newPassword: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Chưa đăng nhập' }
+  if (newPassword.length < 8) return { error: 'Mật khẩu phải có ít nhất 8 ký tự' }
+  const { error } = await supabase.auth.updateUser({ password: newPassword })
+  if (error) return { error: error.message }
+  return { success: true }
+}
+
 export async function updateUserRole(userId: string, role: string, storeId: string | null) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()

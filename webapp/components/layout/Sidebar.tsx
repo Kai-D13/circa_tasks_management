@@ -19,6 +19,7 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { NotificationBell } from '@/components/layout/NotificationBell'
+import { ChangePasswordDialog } from '@/components/layout/ChangePasswordDialog'
 
 const ROLE_COLORS: Record<string, string> = {
   admin:         'bg-orange-100 text-orange-700',
@@ -108,6 +109,7 @@ export function Sidebar() {
             {ROLE_LABELS[role] ?? role}
           </Badge>
         )}
+        <ChangePasswordDialog />
         <div className="flex gap-1.5">
           <Button
             variant="outline"
