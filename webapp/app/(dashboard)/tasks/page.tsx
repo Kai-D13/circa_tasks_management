@@ -47,7 +47,7 @@ export default async function TasksPage({
   const canArchive = !showArchived && (profile?.role === 'admin' || profile?.role === 'store_manager')
   const canRestore = showArchived  && (profile?.role === 'admin' || profile?.role === 'store_manager')
 
-  // Group tasks: collapse same broadcast_id into one broadcast row
+  // Group tasks: collapse same broadcast_id into one broadcast row with full progress
   const grouped: TaskListItem[] = []
   const seenBroadcast = new Map<string, number>()
 

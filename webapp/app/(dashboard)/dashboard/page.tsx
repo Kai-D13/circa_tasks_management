@@ -3,8 +3,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import Link from 'next/link'
-import { formatDistanceToNow } from '@/lib/dateUtils'
-import { Radio, AlertCircle } from 'lucide-react'
+import { formatDistanceToNow, formatDate } from '@/lib/dateUtils'
+import { Radio, AlertCircle, CalendarClock } from 'lucide-react'
 import { TaskCategory } from '@/types'
 import { cn } from '@/lib/utils'
 
@@ -66,6 +66,31 @@ export default async function DashboardPage() {
     supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null).eq('status', 'in_progress'),
   ])
   const kpiError = e1 ?? e2 ?? e3 ?? e4
+
+  // ── Recurring schedules summary (admin only) ────────────────────────────
+  let recurringActive = 0
+  let recurringPaused = 0
+  let upcomingSchedules: { id: string; next_run_at: string; task_templates: unknown }[] = []
+
+  if (isAdmin) {
+    const [
+      { count: rActive },
+      { count: rPaused },
+      { data: rUpcoming },
+    ] = await Promise.all([
+      supabase.from('task_schedules').select('*', { count: 'exact', head: true }).eq('is_active', true),
+      supabase.from('task_schedules').select('*', { count: 'exact', head: true }).eq('is_active', false),
+      supabase
+        .from('task_schedules')
+        .select('id, next_run_at, task_templates(title)')
+        .eq('is_active', true)
+        .order('next_run_at', { ascending: true })
+        .limit(3),
+    ])
+    recurringActive   = rActive ?? 0
+    recurringPaused   = rPaused ?? 0
+    upcomingSchedules = (rUpcoming ?? []) as typeof upcomingSchedules
+  }
 
   // ── Recent activity — role-aware ─────────────────────────────────────────
   let recentRows: DashboardRow[] = []
@@ -230,6 +255,53 @@ export default async function DashboardPage() {
           </Card>
         ))}
       </div>
+
+      {/* Recurring summary — admin only */}
+      {isAdmin && (recurringActive > 0 || recurringPaused > 0) && (
+        <Card>
+          <CardHeader className="pb-2 px-4 pt-4 flex flex-row items-center justify-between">
+            <CardTitle className="text-sm font-medium flex items-center gap-1.5">
+              <CalendarClock className="h-4 w-4 text-muted-foreground" />
+              Task định kỳ
+            </CardTitle>
+            <Link href="/tasks/schedules" className="text-xs text-primary hover:underline">
+              Xem tất cả →
+            </Link>
+          </CardHeader>
+          <CardContent className="px-4 pb-4">
+            <div className="flex gap-4 mb-3 text-sm">
+              <span>
+                <span className="font-semibold text-green-600">{recurringActive}</span>
+                <span className="text-muted-foreground ml-1">đang hoạt động</span>
+              </span>
+              {recurringPaused > 0 && (
+                <span>
+                  <span className="font-semibold text-gray-500">{recurringPaused}</span>
+                  <span className="text-muted-foreground ml-1">tạm dừng</span>
+                </span>
+              )}
+            </div>
+            {upcomingSchedules.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground mb-2">Sắp chạy tiếp</p>
+                {upcomingSchedules.map((s) => {
+                  const title = (s.task_templates as unknown as { title: string } | null)?.title ?? '—'
+                  return (
+                    <div key={s.id} className="flex items-center justify-between text-sm">
+                      <Link href={`/tasks/schedules/${s.id}`} className="hover:underline truncate max-w-[60%]">
+                        {title}
+                      </Link>
+                      <span className="text-xs text-muted-foreground whitespace-nowrap ml-2">
+                        {formatDate(s.next_run_at)}
+                      </span>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* Recent Activity */}
       <Card>

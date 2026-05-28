@@ -47,6 +47,11 @@ export interface Task {
   deadline: string | null
   broadcast_id: string | null
   resubmit_requested_at: string | null
+  // Recurring-origin fields (nullable for ad-hoc tasks)
+  source_template_id?: string | null
+  source_schedule_id?: string | null
+  scheduled_for?: string | null
+  assignment_mode?: 'store' | 'user'
   created_at: string
   updated_at: string
   stores?: Store
@@ -91,8 +96,40 @@ export interface TaskTemplate {
     required_outputs: RequiredOutput[]
     input_data?: Record<string, unknown>
   }
+  is_active: boolean
   created_by: string | null
   created_at: string
+  updated_at: string
+}
+
+export interface TaskSchedule {
+  id: string
+  template_id: string
+  frequency: 'daily' | 'weekly' | 'monthly'
+  timezone: string
+  run_time: string           // "HH:MM"
+  weekdays: number[] | null  // 0=Sun 1=Mon … 6=Sat
+  month_day: number | null   // 1–28
+  start_date: string
+  end_date: string | null
+  deadline_offset_hours: number
+  next_run_at: string
+  last_run_at: string | null
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface TaskGenerationRun {
+  id: string
+  schedule_id: string | null
+  scheduled_for: string
+  status: 'running' | 'success' | 'failed' | 'skipped'
+  created_count: number
+  error_message: string | null
+  idempotency_key: string
+  started_at: string
+  finished_at: string | null
 }
 
 export interface TaskLog {

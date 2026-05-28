@@ -11,6 +11,7 @@ import { Separator } from '@/components/ui/separator'
 import {
   LayoutDashboard,
   CheckSquare,
+  CalendarClock,
   Users,
   Store,
   ScrollText,
@@ -45,11 +46,12 @@ export function Sidebar() {
   }
 
   const navItems = [
-    { href: '/dashboard', label: 'Tổng quan',   icon: LayoutDashboard, roles: ['admin', 'store_manager', 'staff'] },
-    { href: '/tasks',     label: 'Tasks',        icon: CheckSquare,     roles: ['admin', 'store_manager', 'staff'] },
-    { href: '/users',     label: 'Người dùng',   icon: Users,           roles: ['admin'] },
-    { href: '/stores',    label: 'Cửa hàng',     icon: Store,           roles: ['admin', 'store_manager'] },
-    { href: '/logs',      label: 'Nhật ký',      icon: ScrollText,      roles: ['admin', 'store_manager', 'staff'] },
+    { href: '/dashboard',        label: 'Tổng quan',   icon: LayoutDashboard, roles: ['admin', 'store_manager', 'staff'] },
+    { href: '/tasks',            label: 'Tasks',        icon: CheckSquare,     roles: ['admin', 'store_manager', 'staff'] },
+    { href: '/tasks/schedules',  label: 'Định kỳ',     icon: CalendarClock,   roles: ['admin'] },
+    { href: '/users',            label: 'Người dùng',   icon: Users,           roles: ['admin'] },
+    { href: '/stores',           label: 'Cửa hàng',     icon: Store,           roles: ['admin', 'store_manager'] },
+    { href: '/logs',             label: 'Nhật ký',      icon: ScrollText,      roles: ['admin', 'store_manager', 'staff'] },
   ]
 
   const visibleItems = role

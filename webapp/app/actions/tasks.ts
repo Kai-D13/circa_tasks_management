@@ -4,7 +4,8 @@ import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
-import { TaskCategory, TaskPriority, TaskStatus, TaskVisibility, RequiredOutput } from '@/types'
+import { computeNextRunAt } from '@/lib/recurring'
+import { TaskCategory, TaskPriority, TaskStatus, TaskVisibility, RequiredOutput, TaskAttachment } from '@/types'
 
 async function writeLog(
   supabase: Awaited<ReturnType<typeof createClient>>,
@@ -95,6 +96,9 @@ export async function updateTask(taskId: string, formData: FormData) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
+
+  const storeIdVal = formData.get('store_id') as string | null
+  if (!storeIdVal) return { error: 'Vui lòng chọn cửa hàng nhận task' }
 
   const requiredOutputsRaw = formData.getAll('required_outputs') as RequiredOutput[]
   const assignedTo = formData.get('assigned_to') as string || null
@@ -620,4 +624,180 @@ export async function restoreTasks(ids: string[]) {
   revalidatePath('/tasks')
   revalidatePath('/dashboard')
   return { success: true, count: updated?.length ?? 0 }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Recurring task foundation
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function createTaskSchedule(data: {
+  title: string
+  description: string
+  category: TaskCategory
+  priority: TaskPriority
+  requiredOutputs: RequiredOutput[]
+  attachments: TaskAttachment[]
+  links: { label: string; url: string }[]
+  frequency: 'daily' | 'weekly' | 'monthly'
+  runTime: string            // "HH:MM"
+  weekdays: number[] | null  // 0=Sun … 6=Sat
+  monthDay: number | null    // 1–28
+  startDate: string          // ISO date "YYYY-MM-DD"
+  endDate: string | null
+  deadlineOffsetHours: number
+  storeIds: string[]
+}) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Not authenticated' }
+
+  const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
+  if (profile?.role !== 'admin') return { error: 'Chỉ Admin mới có thể tạo task định kỳ' }
+
+  // Server-side validation
+  if (!data.title.trim())       return { error: 'Tiêu đề không được để trống' }
+  if (!data.startDate)          return { error: 'Vui lòng chọn ngày bắt đầu' }
+  if (!data.storeIds.length)    return { error: 'Vui lòng chọn ít nhất một cửa hàng' }
+  if (!/^\d{2}:\d{2}$/.test(data.runTime))
+    return { error: 'Giờ chạy không hợp lệ' }
+  if (data.deadlineOffsetHours <= 0)
+    return { error: 'Deadline offset phải lớn hơn 0' }
+  if (data.frequency === 'weekly' && (!data.weekdays || data.weekdays.length === 0))
+    return { error: 'Vui lòng chọn ít nhất một ngày trong tuần' }
+  if (data.frequency === 'monthly' && (!data.monthDay || data.monthDay < 1 || data.monthDay > 28))
+    return { error: 'Ngày trong tháng phải từ 1 đến 28' }
+  if (data.endDate && data.endDate < data.startDate)
+    return { error: 'Ngày kết thúc phải sau ngày bắt đầu' }
+
+  const uniqueStoreIds = [...new Set(data.storeIds)]
+
+  // 1. Create template
+  const config = {
+    description:      data.description || undefined,
+    category:         data.category,
+    priority:         data.priority,
+    visibility:       'store' as const,
+    required_outputs: data.requiredOutputs,
+    ...(data.attachments.length || data.links.length
+      ? { input_data: { attachments: data.attachments, links: data.links } }
+      : {}),
+  }
+
+  const { data: template, error: templateError } = await supabase
+    .from('task_templates')
+    .insert({ title: data.title, config, created_by: user.id })
+    .select('id')
+    .single()
+
+  if (templateError || !template) return { error: templateError?.message ?? 'Không thể tạo template' }
+
+  // 2. Compute first next_run_at using proper frequency logic
+  const nextRunAt = computeNextRunAt(
+    data.startDate, data.runTime, data.frequency, data.weekdays, data.monthDay
+  )
+
+  // 3. Create schedule
+  const { data: schedule, error: schedError } = await supabase
+    .from('task_schedules')
+    .insert({
+      template_id:           template.id,
+      frequency:             data.frequency,
+      timezone:              'Asia/Ho_Chi_Minh',
+      run_time:              data.runTime,
+      weekdays:              data.weekdays,
+      month_day:             data.monthDay,
+      start_date:            data.startDate,
+      end_date:              data.endDate,
+      deadline_offset_hours: data.deadlineOffsetHours,
+      next_run_at:           nextRunAt,
+    })
+    .select('id')
+    .single()
+
+  if (schedError || !schedule) {
+    await supabase.from('task_templates').delete().eq('id', template.id)
+    return { error: schedError?.message ?? 'Không thể tạo lịch' }
+  }
+
+  // 4. Link stores
+  const storeRows = uniqueStoreIds.map((storeId) => ({ schedule_id: schedule.id, store_id: storeId }))
+  const { error: storesError } = await supabase.from('task_schedule_stores').insert(storeRows)
+  if (storesError) {
+    // Full rollback: schedule depends on template via FK CASCADE, so deleting template removes schedule too
+    await supabase.from('task_schedules').delete().eq('id', schedule.id)
+    await supabase.from('task_templates').delete().eq('id', template.id)
+    return { error: storesError.message }
+  }
+
+  // 5. Audit log (no task_id — schedule-level event)
+  await supabase.from('task_logs').insert({
+    task_id:  null,
+    action:   'schedule_created',
+    user_id:  user.id,
+    metadata: {
+      schedule_id: schedule.id,
+      template_id: template.id,
+      title:       data.title,
+      frequency:   data.frequency,
+      store_count: uniqueStoreIds.length,
+    },
+  })
+
+  revalidatePath('/tasks')
+  revalidatePath('/tasks/schedules')
+  return { success: true, scheduleId: schedule.id }
+}
+
+export async function pauseSchedule(scheduleId: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Not authenticated' }
+  const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
+  if (profile?.role !== 'admin') return { error: 'Không có quyền' }
+
+  const { error } = await supabase
+    .from('task_schedules').update({ is_active: false }).eq('id', scheduleId)
+  if (error) return { error: error.message }
+
+  await supabase.from('task_logs').insert({
+    task_id: null, action: 'schedule_paused', user_id: user.id,
+    metadata: { schedule_id: scheduleId },
+  })
+  revalidatePath('/tasks/schedules')
+  return { success: true }
+}
+
+export async function resumeSchedule(scheduleId: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Not authenticated' }
+  const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
+  if (profile?.role !== 'admin') return { error: 'Không có quyền' }
+
+  // Fetch schedule to recompute next_run_at
+  const { data: sched } = await supabase
+    .from('task_schedules')
+    .select('frequency, run_time, weekdays, month_day, start_date')
+    .eq('id', scheduleId)
+    .single()
+
+  const nextRunAt = sched ? computeNextRunAt(
+    sched.start_date,
+    sched.run_time,
+    sched.frequency as 'daily' | 'weekly' | 'monthly',
+    sched.weekdays as number[] | null,
+    sched.month_day as number | null
+  ) : null
+
+  const { error } = await supabase.from('task_schedules')
+    .update({ is_active: true, ...(nextRunAt ? { next_run_at: nextRunAt } : {}) })
+    .eq('id', scheduleId)
+  if (error) return { error: error.message }
+
+  await supabase.from('task_logs').insert({
+    task_id: null, action: 'schedule_resumed', user_id: user.id,
+    metadata: { schedule_id: scheduleId },
+  })
+  revalidatePath('/tasks/schedules')
+  return { success: true }
 }

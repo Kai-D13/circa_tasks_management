@@ -3,7 +3,7 @@
 import { useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { createTask, updateTask, createBroadcastTask } from '@/app/actions/tasks'
+import { createTask, updateTask, createBroadcastTask, createTaskSchedule } from '@/app/actions/tasks'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -65,6 +65,15 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   const [outputs, setOutputs]       = useState<RequiredOutput[]>(task?.required_outputs ?? [])
   const [taskType, setTaskType]     = useState<TaskType>('adhoc')
 
+  // Recurring-only config
+  const [frequency, setFrequency]           = useState<'daily' | 'weekly' | 'monthly'>('weekly')
+  const [runTime, setRunTime]               = useState('08:00')
+  const [weekdays, setWeekdays]             = useState<number[]>([1]) // Mon default
+  const [monthDay, setMonthDay]             = useState(1)
+  const [schedStartDate, setSchedStartDate] = useState('')
+  const [schedEndDate, setSchedEndDate]     = useState('')
+  const [deadlineOffset, setDeadlineOffset] = useState(24)
+
   const [scope, setScope]                     = useState<Scope>('single')
   const [selectedStoreIds, setSelectedStoreIds] = useState<string[]>([])
 
@@ -122,6 +131,18 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
     setSelectedStoreIds([])
   }
 
+  function handleSetTaskType(t: TaskType) {
+    setTaskType(t)
+    // Recurring tasks are always multi-store — switch away from single if needed
+    if (t === 'recurring' && scope === 'single') setScope('multi')
+  }
+
+  function toggleWeekday(day: number) {
+    setWeekdays((prev) =>
+      prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]
+    )
+  }
+
   function toggleStoreSelection(id: string) {
     setSelectedStoreIds((prev) =>
       prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]
@@ -142,13 +163,43 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
+    const formData = new FormData(e.currentTarget)
 
+    // ── Recurring path ──────────────────────────────────────────────────────
     if (taskType === 'recurring') {
-      toast.info('Tính năng task định kỳ đang được phát triển')
+      const title = (formData.get('title') as string)?.trim() ?? ''
+      const description = (formData.get('description') as string) ?? ''
+      if (!schedStartDate) { toast.error('Vui lòng chọn ngày bắt đầu lịch'); return }
+      const storeIds = scope === 'all' ? visibleStores.map((s) => s.id) : selectedStoreIds
+      if (!storeIds.length) { toast.error('Vui lòng chọn ít nhất một cửa hàng'); return }
+      startTransition(async () => {
+        const result = await createTaskSchedule({
+          title,
+          description,
+          category,
+          priority,
+          requiredOutputs: outputs,
+          attachments,
+          links: links.filter((l) => l.url.trim()),
+          frequency,
+          runTime,
+          weekdays: frequency === 'weekly'  ? weekdays : null,
+          monthDay: frequency === 'monthly' ? monthDay : null,
+          startDate:            schedStartDate,
+          endDate:              schedEndDate || null,
+          deadlineOffsetHours:  deadlineOffset,
+          storeIds,
+        })
+        if (result?.error) toast.error(result.error)
+        else {
+          toast.success('Đã tạo lịch task định kỳ')
+          router.push('/tasks/schedules')
+        }
+      })
       return
     }
 
-    const formData = new FormData(e.currentTarget)
+    // ── Phát sinh path ──────────────────────────────────────────────────────
     formData.set('category',   category)
     formData.set('priority',   priority)
     formData.set('visibility', deriveVisibility())
@@ -197,14 +248,22 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
     })
   }
 
+  const isRecurring = taskType === 'recurring' && !isEditMode
+  // Recurring mode forces multi-store selector; broadcast also uses it
+  const showMultiStore = isBroadcast || isRecurring
+
   const submitLabel = pending
     ? 'Đang lưu...'
-    : isBroadcast
-      ? `Tạo ${broadcastCount > 0 ? broadcastCount + ' ' : ''}Task`
-      : task ? 'Cập nhật' : 'Tạo Task'
+    : isRecurring
+      ? 'Tạo lịch định kỳ'
+      : isBroadcast
+        ? `Tạo ${broadcastCount > 0 ? broadcastCount + ' ' : ''}Task`
+        : task ? 'Cập nhật' : 'Tạo Task'
 
   // Shared label style for right panel sections
   const sectionLabel = 'block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70 mb-2'
+
+  const WEEKDAY_LABELS: Record<number, string> = { 0: 'CN', 1: 'T2', 2: 'T3', 3: 'T4', 4: 'T5', 5: 'T6', 6: 'T7' }
 
   return (
     <form onSubmit={handleSubmit} className="flex flex-col h-full">
@@ -241,11 +300,12 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
             />
           </div>
 
-          {/* Scope pills row — admin + new only */}
+          {/* Scope pills row — admin + new only; recurring hides "Một CH" */}
           {isAdmin && !isEditMode && (
             <div className="border-b px-5 py-2.5 flex items-center gap-2 flex-wrap">
               <span className="text-xs text-muted-foreground shrink-0">Giao đến:</span>
               {(['single', 'multi', 'all'] as Scope[]).map((s) => {
+                if (s === 'single' && isRecurring) return null // recurring is always multi-store
                 const label = s === 'single' ? 'Một CH' : s === 'multi' ? 'Nhiều CH' : `Tất cả (${visibleStores.length})`
                 return (
                   <button
@@ -268,11 +328,11 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
 
           {/* Store / assignee row */}
           <div className="border-b px-5 py-3">
-            {isBroadcast ? (
+            {showMultiStore ? (
               <div className="space-y-2">
                 <p className="text-xs text-muted-foreground">
                   {scope === 'all'
-                    ? `Tất cả ${visibleStores.length} cửa hàng sẽ nhận task này`
+                    ? `Tất cả ${visibleStores.length} cửa hàng ${isRecurring ? 'sẽ nhận task định kỳ' : 'sẽ nhận task này'}`
                     : `Chọn cửa hàng (${selectedStoreIds.length} đã chọn)`}
                 </p>
                 {scope !== 'all' && (
@@ -424,8 +484,8 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
 
           <div className="flex-1 overflow-y-auto">
 
-            {/* Section: Loại task — new tasks only */}
-            {!isEditMode && (
+            {/* Section: Loại task — admin + new tasks only */}
+            {isAdmin && !isEditMode && (
               <div className="px-5 py-4 border-b">
                 <span className={sectionLabel}>Loại task</span>
                 <div className="flex rounded-[4px] border overflow-hidden">
@@ -433,7 +493,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                     <button
                       key={t}
                       type="button"
-                      onClick={() => setTaskType(t)}
+                      onClick={() => handleSetTaskType(t)}
                       className={[
                         'flex-1 py-1.5 text-xs font-medium transition-colors',
                         taskType === t
@@ -445,14 +505,121 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                     </button>
                   ))}
                 </div>
-                {taskType === 'recurring' && (
-                  <div className="mt-2.5 rounded bg-blue-50 border border-blue-200 px-3 py-2.5 space-y-1">
-                    <p className="text-xs font-semibold text-blue-800">Task định kỳ đang được xây dựng.</p>
-                    <p className="text-xs text-blue-700 leading-relaxed">
-                      Bạn sẽ có thể tạo task Daily / Weekly / Monthly và hệ thống tự giao xuống store theo lịch.
-                    </p>
+              </div>
+            )}
+
+            {/* Section: Lịch định kỳ — only when recurring mode */}
+            {isRecurring && (
+              <div className="px-5 py-4 border-b space-y-3">
+                <span className={sectionLabel}>Lịch chạy</span>
+
+                {/* Tần suất */}
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1.5">Tần suất</p>
+                  <div className="flex rounded-[4px] border overflow-hidden">
+                    {(['daily', 'weekly', 'monthly'] as const).map((f) => (
+                      <button
+                        key={f}
+                        type="button"
+                        onClick={() => setFrequency(f)}
+                        className={[
+                          'flex-1 py-1.5 text-xs transition-colors',
+                          frequency === f ? 'bg-primary text-white' : 'text-muted-foreground hover:bg-muted',
+                        ].join(' ')}
+                      >
+                        {f === 'daily' ? 'Mỗi ngày' : f === 'weekly' ? 'Mỗi tuần' : 'Mỗi tháng'}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Weekly: day-of-week selector */}
+                {frequency === 'weekly' && (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1.5">Ngày trong tuần</p>
+                    <div className="flex gap-1 flex-wrap">
+                      {[0, 1, 2, 3, 4, 5, 6].map((d) => (
+                        <button
+                          key={d}
+                          type="button"
+                          onClick={() => toggleWeekday(d)}
+                          className={[
+                            'text-xs px-2 py-1 rounded border transition-colors',
+                            weekdays.includes(d)
+                              ? 'bg-primary text-white border-primary'
+                              : 'border-border text-muted-foreground hover:border-primary/50',
+                          ].join(' ')}
+                        >
+                          {WEEKDAY_LABELS[d]}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 )}
+
+                {/* Monthly: day-of-month */}
+                {frequency === 'monthly' && (
+                  <div>
+                    <label className="text-xs text-muted-foreground block mb-1.5">Ngày trong tháng (1–28)</label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={28}
+                      value={monthDay}
+                      onChange={(e) => setMonthDay(Number(e.target.value))}
+                      className="h-8 text-sm bg-background w-20"
+                    />
+                  </div>
+                )}
+
+                {/* Giờ tạo task */}
+                <div>
+                  <label className="text-xs text-muted-foreground block mb-1.5">Giờ tạo task</label>
+                  <Input
+                    type="time"
+                    value={runTime}
+                    onChange={(e) => setRunTime(e.target.value)}
+                    className="h-8 text-sm bg-background w-28"
+                  />
+                </div>
+
+                {/* Deadline offset */}
+                <div>
+                  <label className="text-xs text-muted-foreground block mb-1.5">Deadline sau khi tạo</label>
+                  <Select value={String(deadlineOffset)} onValueChange={(v) => { if (v) setDeadlineOffset(Number(v)) }}>
+                    <SelectTrigger className="h-8 text-sm bg-background">
+                      <SelectValue>{deadlineOffset}h</SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="24">24h</SelectItem>
+                      <SelectItem value="48">48h</SelectItem>
+                      <SelectItem value="72">72h</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {/* Ngày bắt đầu (required) */}
+                <div>
+                  <label className="text-xs text-muted-foreground block mb-1.5">Ngày bắt đầu *</label>
+                  <Input
+                    type="date"
+                    value={schedStartDate}
+                    onChange={(e) => setSchedStartDate(e.target.value)}
+                    required={isRecurring}
+                    className="h-8 text-sm bg-background"
+                  />
+                </div>
+
+                {/* Ngày kết thúc (optional) */}
+                <div>
+                  <label className="text-xs text-muted-foreground block mb-1.5">Ngày kết thúc (tuỳ chọn)</label>
+                  <Input
+                    type="date"
+                    value={schedEndDate}
+                    onChange={(e) => setSchedEndDate(e.target.value)}
+                    className="h-8 text-sm bg-background"
+                  />
+                </div>
               </div>
             )}
 
@@ -485,30 +652,32 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
               </Select>
             </div>
 
-            {/* Section: Thời gian */}
-            <div className="px-5 py-4 border-b space-y-3">
-              <span className={sectionLabel}>Thời gian</span>
-              <div>
-                <label htmlFor="start_date" className="text-xs text-muted-foreground block mb-1.5">Ngày bắt đầu</label>
-                <Input
-                  id="start_date"
-                  name="start_date"
-                  type="datetime-local"
-                  className="h-8 text-sm bg-background"
-                  defaultValue={task?.start_date ? new Date(task.start_date).toISOString().slice(0, 16) : ''}
-                />
+            {/* Section: Thời gian — hidden for recurring (schedule has its own dates) */}
+            {!isRecurring && (
+              <div className="px-5 py-4 border-b space-y-3">
+                <span className={sectionLabel}>Thời gian</span>
+                <div>
+                  <label htmlFor="start_date" className="text-xs text-muted-foreground block mb-1.5">Ngày bắt đầu</label>
+                  <Input
+                    id="start_date"
+                    name="start_date"
+                    type="datetime-local"
+                    className="h-8 text-sm bg-background"
+                    defaultValue={task?.start_date ? new Date(task.start_date).toISOString().slice(0, 16) : ''}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="deadline" className="text-xs text-muted-foreground block mb-1.5">Deadline</label>
+                  <Input
+                    id="deadline"
+                    name="deadline"
+                    type="datetime-local"
+                    className="h-8 text-sm bg-background"
+                    defaultValue={task?.deadline ? new Date(task.deadline).toISOString().slice(0, 16) : ''}
+                  />
+                </div>
               </div>
-              <div>
-                <label htmlFor="deadline" className="text-xs text-muted-foreground block mb-1.5">Deadline</label>
-                <Input
-                  id="deadline"
-                  name="deadline"
-                  type="datetime-local"
-                  className="h-8 text-sm bg-background"
-                  defaultValue={task?.deadline ? new Date(task.deadline).toISOString().slice(0, 16) : ''}
-                />
-              </div>
-            </div>
+            )}
 
             {/* Section: Output cần nộp */}
             <div className="px-5 py-4">

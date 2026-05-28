@@ -6,21 +6,35 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import Link from 'next/link'
 
 const ACTION_COLORS: Record<string, string> = {
-  created:        'bg-blue-100 text-blue-700',
-  updated:        'bg-yellow-100 text-yellow-700',
-  deleted:        'bg-red-100 text-red-700',
-  submitted:      'bg-green-100 text-green-700',
-  status_changed: 'bg-purple-100 text-purple-700',
-  reassigned:     'bg-orange-100 text-orange-700',
+  created:                     'bg-blue-100 text-blue-700',
+  updated:                     'bg-yellow-100 text-yellow-700',
+  deleted:                     'bg-red-100 text-red-700',
+  submitted:                   'bg-green-100 text-green-700',
+  status_changed:              'bg-purple-100 text-purple-700',
+  reassigned:                  'bg-orange-100 text-orange-700',
+  resubmit_requested:          'bg-amber-100 text-amber-700',
+  review_note:                 'bg-indigo-100 text-indigo-700',
+  schedule_created:            'bg-teal-100 text-teal-700',
+  schedule_paused:             'bg-gray-100 text-gray-600',
+  schedule_resumed:            'bg-teal-100 text-teal-700',
+  recurring_tasks_generated:   'bg-teal-100 text-teal-700',
+  cron_run_failed:             'bg-red-100 text-red-700',
 }
 
 const ACTION_LABELS: Record<string, string> = {
-  created:        'Đã tạo',
-  updated:        'Cập nhật',
-  deleted:        'Đã xoá',
-  submitted:      'Đã nộp',
-  status_changed: 'Đổi trạng thái',
-  reassigned:     'Phân công lại',
+  created:                     'Đã tạo',
+  updated:                     'Cập nhật',
+  deleted:                     'Đã xoá',
+  submitted:                   'Đã nộp',
+  status_changed:              'Đổi trạng thái',
+  reassigned:                  'Phân công lại',
+  resubmit_requested:          'Yêu cầu làm lại',
+  review_note:                 'Ghi chú đánh giá',
+  schedule_created:            'Tạo lịch định kỳ',
+  schedule_paused:             'Tạm dừng lịch',
+  schedule_resumed:            'Kích hoạt lại lịch',
+  recurring_tasks_generated:   'Tạo task định kỳ',
+  cron_run_failed:             'Cron lỗi',
 }
 
 const STATUS_VI: Record<string, string> = {
@@ -55,6 +69,21 @@ function formatMeta(action: string, metadata: Meta | null): string {
       const types = metadata.output_types as string[] | undefined
       return types?.length ? `Nộp: ${types.join(', ')}` : '—'
     }
+    case 'resubmit_requested':
+      return metadata.reason ? `Lý do: ${String(metadata.reason)}` : '—'
+    case 'review_note': {
+      const note = metadata.note as string | undefined
+      return note ? note.slice(0, 80) : '—'
+    }
+    case 'schedule_created':
+    case 'recurring_tasks_generated': {
+      const freq: Record<string, string> = { daily: 'mỗi ngày', weekly: 'mỗi tuần', monthly: 'mỗi tháng' }
+      const f = freq[metadata.frequency as string] ?? (metadata.frequency as string)
+      const sc = metadata.store_count ? ` · ${metadata.store_count} cửa hàng` : ''
+      return `"${metadata.title ?? '—'}" · ${f}${sc}`
+    }
+    case 'cron_run_failed':
+      return metadata.error_message ? String(metadata.error_message).slice(0, 80) : '—'
     default:
       return Object.keys(metadata).length > 0 ? JSON.stringify(metadata) : '—'
   }
