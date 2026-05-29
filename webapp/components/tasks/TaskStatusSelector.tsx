@@ -35,7 +35,7 @@ export function TaskStatusSelector({ taskId, currentStatus, userRole }: Props) {
     ? allStatuses
     : userRole === 'staff'
       ? ['todo', 'in_progress'] as TaskStatus[]
-      : allStatuses.filter((s) => s !== 'overdue') // store_manager
+      : ['todo', 'in_progress'] as TaskStatus[] // store_manager: done only via submit form
 
   function handleChange(status: string | null) {
     if (!status) return

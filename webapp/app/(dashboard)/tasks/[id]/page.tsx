@@ -11,10 +11,11 @@ import { TaskStatusSelector } from '@/components/tasks/TaskStatusSelector'
 import { TaskReassignForm } from '@/components/tasks/TaskReassignForm'
 import { TaskReviewNote } from '@/components/tasks/TaskReviewNote'
 import { RequestResubmitSection } from '@/components/tasks/RequestResubmitSection'
+import { ExtendDeadlineForm } from '@/components/tasks/ExtendDeadlineForm'
 import { TaskResultCard } from '@/components/tasks/TaskResultCard'
 import { InputDataDisplay } from '@/components/tasks/InputDataDisplay'
-import { deleteTask, requestResubmit } from '@/app/actions/tasks'
-import { formatDate } from '@/lib/dateUtils'
+import { deleteTask, requestResubmit, extendDeadline } from '@/app/actions/tasks'
+import { formatDate, getEffectiveStatus } from '@/lib/dateUtils'
 import { Task, RequiredOutput, UserRole, TaskCategory } from '@/types'
 import { Pencil, Trash2, Radio } from 'lucide-react'
 
@@ -156,10 +157,30 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
     && (isDirectAssignee || isStoreSubmitter)
     && !hasAlreadySubmitted
 
-  const staffCanChangeStatus = userRole === 'staff'
-    && isDirectAssignee
-    && !['done', 'overdue'].includes(task.status)
-    && !hasAlreadySubmitted
+  // isSubmitterForTask: user is responsible for submitting this task (direct assignee or store-level)
+  const isSubmitterForTask = isDirectAssignee || isStoreSubmitter
+
+  // displayStatus: effective status shown in UI — reflects overdue even when DB status is in_progress/todo
+  const displayStatus = getEffectiveStatus(task.deadline, task.status) as Task['status']
+
+  // Admin always sees selector. Store manager reviewing (not the submitter) always sees it.
+  // Submitter (any role) loses the selector once they have a valid submission or task is effectively overdue/done.
+  const canSeeStatusSelector =
+    canEdit
+    || (canReassign && !isSubmitterForTask)
+    || (isSubmitterForTask && !hasAlreadySubmitted && !['done', 'overdue'].includes(displayStatus))
+
+  // Helper text shown when submitter is locked after valid submission
+  const submittedLocked = isSubmitterForTask && hasAlreadySubmitted
+
+  // Admin/manager-visible: is there a valid submission regardless of viewer's role?
+  const hasValidSubmission = (results ?? []).some(
+    (r) => !resubmitAt || new Date((r as { submitted_at: string }).submitted_at) > new Date(resubmitAt)
+  )
+
+  // canReviewTask: can see RequestResubmitSection and review actions.
+  // Store manager who is the submitter for this task cannot review their own submission.
+  const canReviewTask = userRole === 'admin' || (canReassign && !isSubmitterForTask)
 
   const assignerName: string | null = lastAssignLog
     ? (lastAssignLog.users as unknown as { full_name: string } | null)?.full_name ?? null
@@ -190,6 +211,11 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
             {task.broadcast_id && (
               <span className="flex items-center gap-1 text-xs text-primary bg-primary/10 px-2 py-0.5 rounded">
                 <Radio className="h-3 w-3" /> Broadcast
+              </span>
+            )}
+            {(task as { source_schedule_id?: string | null }).source_schedule_id && (
+              <span className="text-xs bg-teal-100 text-teal-700 px-2 py-0.5 rounded font-medium">
+                Định kỳ
               </span>
             )}
           </div>
@@ -238,13 +264,23 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
             <div>
               <span className="text-muted-foreground">Trạng thái</span>
               <div className="mt-1 flex items-center gap-2 flex-wrap">
-                <TaskStatusBadge status={task.status as Task['status']} />
-                {(canEdit || canReassign || staffCanChangeStatus) && (
+                <TaskStatusBadge status={displayStatus} />
+                {canSeeStatusSelector && (
                   <TaskStatusSelector
                     taskId={id}
-                    currentStatus={task.status as Task['status']}
+                    currentStatus={displayStatus}
                     userRole={userRole}
                   />
+                )}
+                {submittedLocked && (
+                  <p className="text-xs text-amber-700 mt-1">
+                    Task đã nộp. Nếu cần chỉnh sửa, vui lòng chờ quản lý yêu cầu làm lại.
+                  </p>
+                )}
+                {displayStatus === 'overdue' && isSubmitterForTask && !hasAlreadySubmitted && (
+                  <p className="text-xs text-red-600 mt-1">
+                    Task đã quá hạn. Bạn vẫn có thể nộp kết quả nhưng sẽ ghi nhận là trễ hạn.
+                  </p>
                 )}
               </div>
             </div>
@@ -329,6 +365,15 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
         <InputDataDisplay inputData={task.input_data as Record<string, unknown>} />
       )}
 
+      {/* Extend deadline — for admin/manager when task is overdue */}
+      {canReviewTask && displayStatus === 'overdue' && (
+        <ExtendDeadlineForm
+          taskId={id}
+          extendFn={extendDeadline}
+          currentDeadline={task.deadline ?? null}
+        />
+      )}
+
       {/* Submit form — only for the assigned person */}
       {canSubmit && (
         <Card>
@@ -359,7 +404,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                 result={{
                   id:             r.id,
                   submitted_at:   r.submitted_at,
-                  output_data:    r.output_data as Record<string, string>,
+                  output_data:    r.output_data as Record<string, unknown>,
                   submitter_name: (r.users as unknown as { full_name: string } | null)?.full_name ?? null,
                 }}
               />
@@ -368,8 +413,15 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
         </Card>
       )}
 
+      {/* Warning when task has results but status is not done (e.g. status was changed back) */}
+      {canReviewTask && hasValidSubmission && task.status !== 'done' && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+          Task đã có kết quả nộp nhưng trạng thái hiện không phải Hoàn thành. Có thể yêu cầu làm lại hoặc chỉnh trạng thái.
+        </div>
+      )}
+
       {/* Request resubmit — manager can ask staff to redo after submission */}
-      {canReassign && task.status === 'done' && (results ?? []).length > 0 && (
+      {canReviewTask && hasValidSubmission && (
         <RequestResubmitSection taskId={id} requestFn={requestResubmit} />
       )}
 

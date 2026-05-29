@@ -28,12 +28,31 @@ function getFileName(url: string): string {
 export interface TaskResult {
   id: string
   submitted_at: string
-  output_data: Record<string, string>
+  output_data: Record<string, unknown>
   submitter_name: string | null
 }
 
-function OutputItem({ outputKey, val }: { outputKey: string; val: string }) {
-  if (outputKey === 'image') {
+// Handles both new (array of attachment objects) and legacy (string URL) image formats
+function ImageOutput({ val }: { val: unknown }) {
+  // New format: array of { url, name, type, size }
+  if (Array.isArray(val) && val.length > 0) {
+    return (
+      <div className="grid grid-cols-2 gap-2">
+        {val.map((att: { url: string; name: string }, i) => (
+          <a key={i} href={att.url} target="_blank" rel="noreferrer" className="block group">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={att.url}
+              alt={att.name}
+              className="w-full h-32 rounded border object-cover group-hover:opacity-90 transition-opacity"
+            />
+          </a>
+        ))}
+      </div>
+    )
+  }
+  // Legacy format: single string URL
+  if (typeof val === 'string') {
     return (
       <a href={val} target="_blank" rel="noreferrer" className="block group">
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -46,6 +65,15 @@ function OutputItem({ outputKey, val }: { outputKey: string; val: string }) {
       </a>
     )
   }
+  return null
+}
+
+function OutputItem({ outputKey, val }: { outputKey: string; val: unknown }) {
+  if (outputKey === 'image') {
+    return <ImageOutput val={val} />
+  }
+  if (typeof val !== 'string') return null
+
   if (outputKey === 'video') {
     return (
       <a href={val} target="_blank" rel="noreferrer"
@@ -65,6 +93,13 @@ function OutputItem({ outputKey, val }: { outputKey: string; val: string }) {
   return <p className="text-sm whitespace-pre-wrap leading-relaxed">{val}</p>
 }
 
+// Count how many images in an output value (array or single)
+function imageCount(val: unknown): number {
+  if (Array.isArray(val)) return val.length
+  if (typeof val === 'string' && val) return 1
+  return 0
+}
+
 export function TaskResultCard({ result }: { result: TaskResult }) {
   const outputKeys = Object.keys(result.output_data)
 
@@ -79,11 +114,17 @@ export function TaskResultCard({ result }: { result: TaskResult }) {
               {result.submitter_name ?? '—'}
             </span>
             <div className="flex gap-1 flex-wrap">
-              {outputKeys.map((k) => (
-                <span key={k} className="text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded-sm font-medium">
-                  {OUTPUT_LABEL[k] ?? k}
-                </span>
-              ))}
+              {outputKeys.map((k) => {
+                const val = result.output_data[k]
+                const label = k === 'image'
+                  ? `${OUTPUT_LABEL[k]} (${imageCount(val)})`
+                  : (OUTPUT_LABEL[k] ?? k)
+                return (
+                  <span key={k} className="text-xs bg-primary/10 text-primary px-1.5 py-0.5 rounded-sm font-medium">
+                    {label}
+                  </span>
+                )
+              })}
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0 text-muted-foreground">

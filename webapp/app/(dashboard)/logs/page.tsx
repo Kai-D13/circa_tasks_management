@@ -2,8 +2,13 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import Link from 'next/link'
+import { cn } from '@/lib/utils'
+import { formatDateTime } from '@/lib/dateUtils'
+
+const PAGE_SIZE = 50
 
 const ACTION_COLORS: Record<string, string> = {
   created:                     'bg-blue-100 text-blue-700',
@@ -19,6 +24,7 @@ const ACTION_COLORS: Record<string, string> = {
   schedule_resumed:            'bg-teal-100 text-teal-700',
   recurring_tasks_generated:   'bg-teal-100 text-teal-700',
   cron_run_failed:             'bg-red-100 text-red-700',
+  deadline_extended:           'bg-orange-100 text-orange-700',
 }
 
 const ACTION_LABELS: Record<string, string> = {
@@ -35,7 +41,10 @@ const ACTION_LABELS: Record<string, string> = {
   schedule_resumed:            'Kích hoạt lại lịch',
   recurring_tasks_generated:   'Tạo task định kỳ',
   cron_run_failed:             'Cron lỗi',
+  deadline_extended:           'Gia hạn deadline',
 }
+
+const ACTION_OPTIONS = Object.entries(ACTION_LABELS)
 
 const STATUS_VI: Record<string, string> = {
   todo:        'Chờ thực hiện',
@@ -82,6 +91,11 @@ function formatMeta(action: string, metadata: Meta | null): string {
       const sc = metadata.store_count ? ` · ${metadata.store_count} cửa hàng` : ''
       return `"${metadata.title ?? '—'}" · ${f}${sc}`
     }
+    case 'deadline_extended': {
+      const from = metadata.from ? new Date(metadata.from as string).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) : '—'
+      const to   = metadata.to   ? new Date(metadata.to   as string).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) : '—'
+      return `${from} → ${to}`
+    }
     case 'cron_run_failed':
       return metadata.error_message ? String(metadata.error_message).slice(0, 80) : '—'
     default:
@@ -89,7 +103,21 @@ function formatMeta(action: string, metadata: Meta | null): string {
   }
 }
 
-export default async function LogsPage() {
+function buildUrl(base: Record<string, string | undefined>, patch: Record<string, string | undefined>): string {
+  const merged = { ...base, ...patch }
+  const qs = Object.entries(merged)
+    .filter(([, v]) => v !== undefined && v !== '')
+    .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v!)}`)
+    .join('&')
+  return qs ? `?${qs}` : '?'
+}
+
+export default async function LogsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ page?: string; action?: string }>
+}) {
+  const params = await searchParams
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
@@ -97,36 +125,67 @@ export default async function LogsPage() {
   const { data: profile } = await supabase
     .from('users').select('role, store_id').eq('id', user.id).single()
 
-  // Build query with role-based filtering
-  // Admin: all logs
-  // Store Manager: own logs + store users' logs
-  // Staff: own logs only
+  const page = Math.max(1, parseInt(params.page ?? '1', 10))
+  const from = (page - 1) * PAGE_SIZE
+  const to   = from + PAGE_SIZE - 1
+
+  // Build base query. RLS on task_logs handles role visibility:
+  //   admin        → all logs (tl_select_admin)
+  //   store_manager → all logs on tasks in their store (tl_select_manager, migration 014)
+  //   staff         → own logs + logs on tasks assigned to them (tl_select_staff)
   let logsQuery = supabase
     .from('task_logs')
-    .select('*, tasks(id, title), users(full_name)')
+    .select('*, tasks(id, title), users(full_name)', { count: 'exact' })
     .order('created_at', { ascending: false })
-    .limit(300)
+    .range(from, to)
 
-  if (profile?.role === 'store_manager') {
-    if (profile.store_id) {
-      const { data: storeUsers } = await supabase
-        .from('users')
-        .select('id')
-        .eq('store_id', profile.store_id)
-      const userIds = [user.id, ...(storeUsers ?? []).map((u) => u.id)]
-      logsQuery = logsQuery.in('user_id', userIds)
-    } else {
-      logsQuery = logsQuery.eq('user_id', user.id)
-    }
-  } else if (profile?.role === 'staff') {
+  // Staff: restrict to own logs (narrower than RLS, avoids showing unrelated task logs)
+  if (profile?.role === 'staff') {
     logsQuery = logsQuery.eq('user_id', user.id)
   }
 
-  const { data: logs } = await logsQuery
+  if (params.action) {
+    logsQuery = logsQuery.eq('action', params.action)
+  }
+
+  const { data: logs, count } = await logsQuery
+
+  const totalPages = Math.max(1, Math.ceil((count ?? 0) / PAGE_SIZE))
+  const currentParams = { page: params.page, action: params.action }
 
   return (
     <div className="p-6 space-y-4">
       <h1 className="text-xl font-semibold">Nhật ký hoạt động</h1>
+
+      {/* Action filter */}
+      <form method="GET" className="flex items-center gap-2">
+        <select
+          name="action"
+          defaultValue={params.action ?? ''}
+          aria-label="Lọc theo hành động"
+          className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
+        >
+          <option value="">Tất cả hành động</option>
+          {ACTION_OPTIONS.map(([value, label]) => (
+            <option key={value} value={value}>{label}</option>
+          ))}
+        </select>
+        <input type="hidden" name="page" value="1" />
+        <button
+          type="submit"
+          className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}
+        >
+          Lọc
+        </button>
+        {params.action && (
+          <Link
+            href={buildUrl(currentParams, { action: undefined, page: '1' })}
+            className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }))}
+          >
+            Xoá lọc
+          </Link>
+        )}
+      </form>
 
       <Card>
         <CardContent className="p-0">
@@ -144,7 +203,7 @@ export default async function LogsPage() {
               {(logs ?? []).map((log) => (
                 <TableRow key={log.id}>
                   <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
-                    {new Date(log.created_at).toLocaleString('vi-VN')}
+                    {formatDateTime(log.created_at)}
                   </TableCell>
                   <TableCell>
                     <Badge className={ACTION_COLORS[log.action] ?? 'bg-muted text-muted-foreground'}>
@@ -175,6 +234,33 @@ export default async function LogsPage() {
               )}
             </TableBody>
           </Table>
+
+          {/* Pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center justify-between px-4 py-3 border-t text-sm">
+              <span className="text-muted-foreground">
+                Trang {page} / {totalPages} · {count ?? 0} bản ghi
+              </span>
+              <div className="flex gap-2">
+                {page > 1 && (
+                  <Link
+                    href={buildUrl(currentParams, { page: String(page - 1) })}
+                    className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}
+                  >
+                    ← Trước
+                  </Link>
+                )}
+                {page < totalPages && (
+                  <Link
+                    href={buildUrl(currentParams, { page: String(page + 1) })}
+                    className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}
+                  >
+                    Tiếp →
+                  </Link>
+                )}
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

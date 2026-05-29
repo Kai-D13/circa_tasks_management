@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Button } from '@/components/ui/button'
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
 import { TaskPriorityBadge } from '@/components/tasks/TaskPriorityBadge'
-import { formatDistanceToNow } from '@/lib/dateUtils'
+import { formatDistanceToNow, getEffectiveStatus } from '@/lib/dateUtils'
 import { Radio, Archive, ArchiveRestore, ChevronRight, ChevronDown } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Task, TaskCategory } from '@/types'
@@ -52,16 +52,17 @@ export type BroadcastGroup = {
 export type TaskRow = {
   type: 'task'
   task: {
-    id:           string
-    title:        string
-    status:       string
-    priority:     string
-    category:     string | null
-    broadcast_id: string | null
-    stores:       { name: string } | null
-    assignee:     { full_name: string } | null
-    deadline:     string | null
-    created_at:   string
+    id:                 string
+    title:              string
+    status:             string
+    priority:           string
+    category:           string | null
+    broadcast_id:       string | null
+    source_schedule_id: string | null
+    stores:             { name: string } | null
+    assignee:           { full_name: string } | null
+    deadline:           string | null
+    created_at:         string
   }
 }
 
@@ -295,7 +296,7 @@ export function TaskList({ items, canArchive, canRestore, showArchived }: Props)
                       </TableCell>
                       <TableCell />
                       <TableCell>
-                        <TaskStatusBadge status={child.status as Task['status']} />
+                        <TaskStatusBadge status={getEffectiveStatus(child.deadline, child.status) as Task['status']} />
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {child.deadline ? formatDistanceToNow(child.deadline) : '—'}
@@ -308,11 +309,16 @@ export function TaskList({ items, canArchive, canRestore, showArchived }: Props)
 
             const { task } = item
             const isSelected = selected.has(task.id)
+            const effStatus = getEffectiveStatus(task.deadline, task.status)
 
             return (
               <TableRow
                 key={task.id}
-                className={cn('cursor-pointer hover:bg-muted/50', isSelected && 'bg-primary/5')}
+                className={cn(
+                  'cursor-pointer hover:bg-muted/50',
+                  isSelected && 'bg-primary/5',
+                  effStatus === 'overdue' && !isSelected && 'bg-red-50/60 hover:bg-red-50',
+                )}
               >
                 {showCheckbox && (
                   <TableCell>
@@ -332,6 +338,11 @@ export function TaskList({ items, canArchive, canRestore, showArchived }: Props)
                       <Radio className="h-3.5 w-3.5 text-primary shrink-0" />
                     )}
                   </Link>
+                  {task.source_schedule_id && (
+                    <span className="mt-0.5 inline-block text-xs px-1.5 py-0.5 rounded bg-teal-100 text-teal-700">
+                      Định kỳ
+                    </span>
+                  )}
                   {task.category && task.category !== 'other' && (
                     <span className={cn(
                       'mt-0.5 inline-block text-xs px-1.5 py-0.5 rounded',
@@ -351,7 +362,7 @@ export function TaskList({ items, canArchive, canRestore, showArchived }: Props)
                   <TaskPriorityBadge priority={task.priority as Task['priority']} />
                 </TableCell>
                 <TableCell>
-                  <TaskStatusBadge status={task.status as Task['status']} />
+                  <TaskStatusBadge status={effStatus as Task['status']} />
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">
                   {task.deadline ? formatDistanceToNow(task.deadline) : '—'}

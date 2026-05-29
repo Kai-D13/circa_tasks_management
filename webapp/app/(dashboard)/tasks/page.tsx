@@ -23,7 +23,7 @@ export default async function TasksPage({
 
   let query = supabase
     .from('tasks')
-    .select('*, stores(name), assignee:users!assigned_to(full_name)')
+    .select('*, stores(name), assignee:users!assigned_to(full_name), source_schedule_id')
     .order('created_at', { ascending: false })
 
   if (showArchived) {
@@ -32,7 +32,20 @@ export default async function TasksPage({
     query = query.is('archived_at', null)
   }
 
-  if (params.status)   query = query.eq('status', params.status)
+  if (params.status) {
+    const now = new Date().toISOString()
+    if (params.status === 'overdue') {
+      // Explicitly overdue OR deadline passed and not done
+      query = query.or(`status.eq.overdue,and(deadline.lt.${now},status.neq.done)`)
+    } else if (params.status === 'todo' || params.status === 'in_progress') {
+      // Exact status match AND deadline not yet passed (exclude tasks that are effectively overdue)
+      query = query
+        .eq('status', params.status)
+        .or(`deadline.is.null,deadline.gte.${now}`)
+    } else {
+      query = query.eq('status', params.status)
+    }
+  }
   if (params.priority) query = query.eq('priority', params.priority)
   if (params.store_id) query = query.eq('store_id', params.store_id)
   if (params.category) query = query.eq('category', params.category)
@@ -56,16 +69,17 @@ export default async function TasksPage({
       const row: TaskRow = {
         type: 'task',
         task: {
-          id:           task.id,
-          title:        task.title,
-          status:       task.status,
-          priority:     task.priority,
-          category:     task.category ?? null,
-          broadcast_id: task.broadcast_id ?? null,
-          stores:       (task.stores as { name: string } | null),
-          assignee:     (task.assignee as { full_name: string } | null),
-          deadline:     task.deadline ?? null,
-          created_at:   task.created_at,
+          id:                 task.id,
+          title:              task.title,
+          status:             task.status,
+          priority:           task.priority,
+          category:           task.category ?? null,
+          broadcast_id:       task.broadcast_id ?? null,
+          source_schedule_id: (task as { source_schedule_id?: string | null }).source_schedule_id ?? null,
+          stores:             (task.stores as { name: string } | null),
+          assignee:           (task.assignee as { full_name: string } | null),
+          deadline:           task.deadline ?? null,
+          created_at:         task.created_at,
         },
       }
       grouped.push(row)
