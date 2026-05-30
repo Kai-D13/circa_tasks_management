@@ -15,6 +15,8 @@ import { ExtendDeadlineForm } from '@/components/tasks/ExtendDeadlineForm'
 import { TaskResultCard } from '@/components/tasks/TaskResultCard'
 import { InputDataDisplay } from '@/components/tasks/InputDataDisplay'
 import { deleteTask, requestResubmit, extendDeadline } from '@/app/actions/tasks'
+import { createFeedbackThread, addFeedbackMessage, resolveFeedbackThread } from '@/app/actions/feedback'
+import { FeedbackSection, type FeedbackThread } from '@/components/feedback/FeedbackSection'
 import { formatDate, getEffectiveStatus } from '@/lib/dateUtils'
 import { Task, RequiredOutput, UserRole, TaskCategory } from '@/types'
 import { Pencil, Trash2, Radio } from 'lucide-react'
@@ -101,14 +103,15 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
     return base // admin: no filter
   }
 
-  // Round 3: results + logs in parallel
-  // reviewLogs: always query — RLS controls visibility per role
+  // Round 3: results + logs + feedback in parallel
+  // reviewLogs / feedbackThreads: RLS controls visibility per role
   const resubmitAt = (task.resubmit_requested_at as string | null) ?? null
   const [
     { data: results },
     { data: lastAssignLog },
     { data: reviewLogs },
     { data: lastResubmitLog },
+    { data: feedbackThreads },
   ] = await Promise.all([
     buildResultsQuery(),
     task.assigned_to
@@ -138,6 +141,12 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           .limit(1)
           .maybeSingle()
       : Promise.resolve({ data: null }),
+    // Feedback threads — RLS returns only what caller is allowed to see
+    supabase
+      .from('task_feedback_threads')
+      .select('id, title, status, created_at, created_by, users(full_name), task_feedback_messages(id, user_id, message, created_at, users(full_name))')
+      .eq('task_id', id)
+      .order('created_at', { ascending: false }),
   ])
 
   // Who can submit:
@@ -181,6 +190,13 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   // canReviewTask: can see RequestResubmitSection and review actions.
   // Store manager who is the submitter for this task cannot review their own submission.
   const canReviewTask = userRole === 'admin' || (canReassign && !isSubmitterForTask)
+
+  // Feedback: any store_manager of this task's store can create AND reply.
+  // Store-level submitters CAN create feedback (different from resubmit rule).
+  // Staff: no access to feedback.
+  const isManagerOfTaskStore = userRole === 'store_manager' && task.store_id === profile?.store_id
+  const canCreateFeedback = isManagerOfTaskStore
+  const canReplyFeedback  = userRole === 'admin' || isManagerOfTaskStore
 
   const assignerName: string | null = lastAssignLog
     ? (lastAssignLog.users as unknown as { full_name: string } | null)?.full_name ?? null
@@ -436,6 +452,19 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
         }))}
         canAddNote={canReassign}
       />
+
+      {/* Feedback threads — store_manager ↔ admin Q&A; staff cannot see */}
+      {(canCreateFeedback || canReplyFeedback) && (
+        <FeedbackSection
+          taskId={id}
+          threads={(feedbackThreads ?? []) as unknown as FeedbackThread[]}
+          canCreate={canCreateFeedback}
+          canReply={canReplyFeedback}
+          createFn={createFeedbackThread}
+          replyFn={addFeedbackMessage}
+          resolveFn={resolveFeedbackThread}
+        />
+      )}
     </div>
   )
 }

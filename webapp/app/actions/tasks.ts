@@ -616,6 +616,13 @@ export async function requestResubmit(taskId: string, reason?: string) {
       return { error: 'Bạn là người nộp task này, không thể tự yêu cầu làm lại' }
   }
 
+  // Ensure task actually has results before allowing resubmit request
+  const { count: resultCount } = await supabase
+    .from('task_results')
+    .select('id', { count: 'exact', head: true })
+    .eq('task_id', taskId)
+  if (!resultCount) return { error: 'Task chưa có kết quả nộp, không thể yêu cầu làm lại' }
+
   const { error } = await supabase.from('tasks')
     .update({ status: 'todo', resubmit_requested_at: new Date().toISOString() })
     .eq('id', taskId)
@@ -669,6 +676,8 @@ export async function extendDeadline(taskId: string, newDeadline: string) {
     return { error: 'Không có quyền gia hạn deadline' }
 
   if (!newDeadline) return { error: 'Vui lòng chọn ngày gia hạn' }
+  if (new Date(newDeadline) <= new Date())
+    return { error: 'Deadline mới phải ở tương lai' }
 
   const { data: current } = await supabase
     .from('tasks').select('deadline, title').eq('id', taskId).single()

@@ -19,10 +19,9 @@ export function ExtendDeadlineForm({ taskId, extendFn, currentDeadline }: Props)
   const [date, setDate]           = useState('')
   const [pending, startTransition] = useTransition()
 
-  // Minimum date: tomorrow (can't re-set to a past date)
-  const tomorrow = new Date()
-  tomorrow.setDate(tomorrow.getDate() + 1)
-  const minDate = tomorrow.toISOString().slice(0, 10)
+  // Minimum date: tomorrow in VN timezone (UTC+7)
+  const minDate = new Date(Date.now() + 7 * 3600 * 1000 + 86400 * 1000)
+    .toISOString().slice(0, 10)
 
   function handleSubmit() {
     if (!date) return

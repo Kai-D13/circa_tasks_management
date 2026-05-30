@@ -15,6 +15,7 @@ import {
   Users,
   Store,
   ScrollText,
+  FileImage,
   LogOut,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -52,6 +53,7 @@ export function Sidebar() {
     { href: '/tasks/schedules',  label: 'Định kỳ',     icon: CalendarClock,   roles: ['admin'] },
     { href: '/users',            label: 'Người dùng',   icon: Users,           roles: ['admin'] },
     { href: '/stores',           label: 'Cửa hàng',     icon: Store,           roles: ['admin', 'store_manager'] },
+    { href: '/prescriptions',     label: 'Toa thuốc',    icon: FileImage,       roles: ['admin', 'store_manager', 'staff'] },
     { href: '/logs',             label: 'Nhật ký',      icon: ScrollText,      roles: ['admin', 'store_manager', 'staff'] },
   ]
 

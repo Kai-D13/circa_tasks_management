@@ -16,11 +16,12 @@ const ROLE_LABELS: Record<string, string> = {
 }
 
 const SECTION_TITLES: Record<string, string> = {
-  dashboard: 'Tổng quan',
-  tasks:     'Tasks',
-  users:     'Người dùng',
-  stores:    'Cửa hàng',
-  logs:      'Nhật ký',
+  dashboard:     'Tổng quan',
+  tasks:         'Tasks',
+  prescriptions: 'Toa thuốc',
+  users:         'Người dùng',
+  stores:        'Cửa hàng',
+  logs:          'Nhật ký',
 }
 
 export function MobileHeader() {
