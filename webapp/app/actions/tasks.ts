@@ -63,6 +63,14 @@ function validateAttachments(atts: AttachmentMeta[]): string | null {
   return null
 }
 
+// Ad-hoc tasks must have a start date and a deadline, with deadline after start.
+function validateTaskDates(startDate: string | null, deadline: string | null): string | null {
+  if (!startDate) return 'Vui lòng chọn ngày bắt đầu'
+  if (!deadline)  return 'Vui lòng chọn deadline'
+  if (new Date(deadline) <= new Date(startDate)) return 'Deadline phải sau ngày bắt đầu'
+  return null
+}
+
 export async function createTask(formData: FormData) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -70,6 +78,12 @@ export async function createTask(formData: FormData) {
 
   const storeIdVal = formData.get('store_id') as string | null
   if (!storeIdVal) return { error: 'Vui lòng chọn cửa hàng nhận task' }
+
+  const dateErr = validateTaskDates(
+    formData.get('start_date') as string || null,
+    formData.get('deadline') as string || null,
+  )
+  if (dateErr) return { error: dateErr }
 
   const requiredOutputsRaw = formData.getAll('required_outputs') as RequiredOutput[]
   const assignedTo = formData.get('assigned_to') as string || null
@@ -161,6 +175,12 @@ export async function updateTask(taskId: string, formData: FormData) {
 
   const storeIdVal = formData.get('store_id') as string | null
   if (!storeIdVal) return { error: 'Vui lòng chọn cửa hàng nhận task' }
+
+  const dateErrU = validateTaskDates(
+    formData.get('start_date') as string || null,
+    formData.get('deadline') as string || null,
+  )
+  if (dateErrU) return { error: dateErrU }
 
   const requiredOutputsRaw = formData.getAll('required_outputs') as RequiredOutput[]
   const assignedTo = formData.get('assigned_to') as string || null
@@ -487,6 +507,9 @@ export async function createBroadcastTask(params: {
   if (profile?.role !== 'admin') return { error: 'Chỉ admin mới được tạo task broadcast' }
 
   if (!params.storeIds.length) return { error: 'Vui lòng chọn ít nhất một cửa hàng' }
+
+  const dateErrB = validateTaskDates(params.startDate, params.deadline)
+  if (dateErrB) return { error: dateErrB }
 
   const attachErrB = validateAttachments(params.attachments ?? [])
   if (attachErrB) return { error: attachErrB }

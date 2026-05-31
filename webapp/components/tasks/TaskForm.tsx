@@ -207,6 +207,15 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
     formData.delete('required_outputs')
     outputs.forEach((o) => formData.append('required_outputs', o))
 
+    // Ad-hoc tasks must have start date + deadline (deadline after start)
+    const startDateVal = (formData.get('start_date') as string) || ''
+    const deadlineVal  = (formData.get('deadline') as string) || ''
+    if (!startDateVal) { toast.error('Vui lòng chọn ngày bắt đầu'); return }
+    if (!deadlineVal)  { toast.error('Vui lòng chọn deadline'); return }
+    if (new Date(deadlineVal) <= new Date(startDateVal)) {
+      toast.error('Deadline phải sau ngày bắt đầu'); return
+    }
+
     if (!isBroadcast && !storeId) {
       toast.error('Vui lòng chọn cửa hàng nhận task')
       return
@@ -648,12 +657,12 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
               <div className="px-5 py-4 border-b space-y-3">
                 <span className={sectionLabel}>Thời gian</span>
                 <div>
-                  <label htmlFor="start_date" className="text-xs text-muted-foreground block mb-1.5">Ngày bắt đầu</label>
+                  <label htmlFor="start_date" className="text-xs text-muted-foreground block mb-1.5">Ngày bắt đầu <span className="text-destructive">*</span></label>
                   <Input id="start_date" name="start_date" type="datetime-local" className="h-8 text-sm bg-background"
                     defaultValue={task?.start_date ? new Date(task.start_date).toISOString().slice(0, 16) : ''} />
                 </div>
                 <div>
-                  <label htmlFor="deadline" className="text-xs text-muted-foreground block mb-1.5">Deadline</label>
+                  <label htmlFor="deadline" className="text-xs text-muted-foreground block mb-1.5">Deadline <span className="text-destructive">*</span></label>
                   <Input id="deadline" name="deadline" type="datetime-local" className="h-8 text-sm bg-background"
                     defaultValue={task?.deadline ? new Date(task.deadline).toISOString().slice(0, 16) : ''} />
                 </div>
