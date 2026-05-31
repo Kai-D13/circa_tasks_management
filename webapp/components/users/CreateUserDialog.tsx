@@ -12,6 +12,8 @@ import {
 } from '@/components/ui/dialog'
 import { Store } from '@/types'
 import { UserPlus } from 'lucide-react'
+import { useUserStore } from '@/store/userStore'
+import { isSuperAdminEmail } from '@/lib/authz'
 
 const ROLE_LABEL: Record<string, string> = {
   staff:         'Staff',
@@ -24,6 +26,7 @@ export function CreateUserDialog({ stores }: { stores: Pick<Store, 'id' | 'name'
   const [pending, startTransition] = useTransition()
   const [role, setRole]       = useState('staff')
   const [storeId, setStoreId] = useState('')
+  const canCreateAdmin = isSuperAdminEmail(useUserStore((s) => s.profile)?.email)
 
   const selectedStoreName = stores.find((s) => s.id === storeId)?.name
 
@@ -86,7 +89,7 @@ export function CreateUserDialog({ stores }: { stores: Pick<Store, 'id' | 'name'
               <SelectContent>
                 <SelectItem value="staff">Staff</SelectItem>
                 <SelectItem value="store_manager">Store Manager</SelectItem>
-                <SelectItem value="admin">Admin</SelectItem>
+                {canCreateAdmin && <SelectItem value="admin">Admin</SelectItem>}
               </SelectContent>
             </Select>
           </div>

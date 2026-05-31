@@ -7,6 +7,7 @@ import { CreateUserDialog } from '@/components/users/CreateUserDialog'
 import { EditUserDialog } from '@/components/users/EditUserDialog'
 import { ResetPasswordDialog } from '@/components/users/ResetPasswordDialog'
 import { formatDate } from '@/lib/dateUtils'
+import { isSuperAdminEmail } from '@/lib/authz'
 import { AlertTriangle } from 'lucide-react'
 
 const ROLE_COLORS: Record<string, string> = {
@@ -30,6 +31,8 @@ export default async function UsersPage() {
     .from('users').select('role').eq('id', user.id).single()
 
   if (profile?.role !== 'admin') redirect('/dashboard')
+
+  const isSuper = isSuperAdminEmail(user.email)
 
   const [{ data: users }, { data: stores }] = await Promise.all([
     supabase
@@ -85,19 +88,24 @@ export default async function UsersPage() {
                     {formatDate(u.created_at)}
                   </TableCell>
                   <TableCell>
-                    <div className="flex items-center gap-1">
-                      <EditUserDialog
-                        userId={u.id}
-                        userName={u.full_name}
-                        currentRole={u.role}
-                        currentStoreId={u.store_id}
-                        stores={stores ?? []}
-                      />
-                      <ResetPasswordDialog
-                        userId={u.id}
-                        userName={u.full_name}
-                      />
-                    </div>
+                    {/* Admin-target rows are manageable only by the super admin */}
+                    {u.role === 'admin' && !isSuper ? (
+                      <span className="text-xs text-muted-foreground">—</span>
+                    ) : (
+                      <div className="flex items-center gap-1">
+                        <EditUserDialog
+                          userId={u.id}
+                          userName={u.full_name}
+                          currentRole={u.role}
+                          currentStoreId={u.store_id}
+                          stores={stores ?? []}
+                        />
+                        <ResetPasswordDialog
+                          userId={u.id}
+                          userName={u.full_name}
+                        />
+                      </div>
+                    )}
                   </TableCell>
                 </TableRow>
               ))}

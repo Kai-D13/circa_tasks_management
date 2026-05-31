@@ -45,3 +45,12 @@ export function getEffectiveStatus(deadline: string | null, status: string): str
   if (deadline && new Date(deadline) < new Date()) return 'overdue'
   return status
 }
+
+// Format an already-VN-local timestamp string (e.g. company POS "completed_at_vn"
+// like "2026-05-30T23:30:00") to "DD/MM/YYYY HH:mm". Never parses via Date() —
+// avoids a UTC shift when the server runs in UTC. Returns '—' for empty input.
+export function formatVnLocalDateTimeString(value: string | null | undefined): string {
+  if (!value) return '—'
+  const m = String(value).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/)
+  return m ? `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}` : String(value)
+}

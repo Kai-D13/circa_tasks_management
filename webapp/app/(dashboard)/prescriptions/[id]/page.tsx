@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { PrescriptionSyncForm } from '@/components/prescriptions/PrescriptionSyncForm'
 import { CheckCircle2, Clock } from 'lucide-react'
-import { formatDateTime } from '@/lib/dateUtils'
+import { formatDateTime, formatVnLocalDateTimeString } from '@/lib/dateUtils'
 import Link from 'next/link'
 import { PRESCRIPTION_BUCKET } from '@/lib/prescriptions/constants'
 
@@ -155,14 +155,7 @@ export default async function PrescriptionDetailPage({
                       <td className="px-3 py-2 font-mono">{p.lot_date}</td>
                       <td className="px-3 py-2 text-muted-foreground">{p.employee_name ?? '—'}</td>
                       <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
-                        {p.completed_at_vn
-                          ? (() => {
-                              // completed_at_vn is already a VN-local timestamp string —
-                              // just reformat it, never re-interpret through JS Date (avoids UTC shift).
-                              const m = String(p.completed_at_vn).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/)
-                              return m ? `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}` : String(p.completed_at_vn)
-                            })()
-                          : '—'}
+                        {formatVnLocalDateTimeString(p.completed_at_vn)}
                       </td>
                       <td className="px-3 py-2 text-muted-foreground">{p.pos_name ?? p.pos_code ?? '—'}</td>
                     </tr>

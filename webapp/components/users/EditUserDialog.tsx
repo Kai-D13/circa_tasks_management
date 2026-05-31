@@ -11,6 +11,8 @@ import {
 } from '@/components/ui/dialog'
 import { Store } from '@/types'
 import { Pencil } from 'lucide-react'
+import { useUserStore } from '@/store/userStore'
+import { isSuperAdminEmail } from '@/lib/authz'
 
 const ROLE_LABEL: Record<string, string> = {
   staff:         'Nhân viên',
@@ -31,6 +33,8 @@ export function EditUserDialog({ userId, userName, currentRole, currentStoreId, 
   const [pending, startTransition] = useTransition()
   const [role, setRole]       = useState(currentRole)
   const [storeId, setStoreId] = useState(currentStoreId ?? '')
+  // Only super admin may assign the admin role; keep the option if the target is already admin
+  const showAdminOption = isSuperAdminEmail(useUserStore((s) => s.profile)?.email) || currentRole === 'admin'
 
   function handleOpen(next: boolean) {
     if (next) {
@@ -81,7 +85,7 @@ export function EditUserDialog({ userId, userName, currentRole, currentStoreId, 
               <SelectContent>
                 <SelectItem value="staff">Nhân viên</SelectItem>
                 <SelectItem value="store_manager">Quản lý</SelectItem>
-                <SelectItem value="admin">Admin</SelectItem>
+                {showAdminOption && <SelectItem value="admin">Admin</SelectItem>}
               </SelectContent>
             </Select>
           </div>

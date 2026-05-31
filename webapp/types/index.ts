@@ -17,6 +17,7 @@ export interface Store {
   name: string
   code: string
   address: string | null
+  region: 'north' | 'central' | 'south' | null
   created_at: string
 }
 

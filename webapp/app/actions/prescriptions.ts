@@ -11,6 +11,7 @@ import {
   DHC_PATTERN,
 } from '@/lib/prescriptions/constants'
 import type { PrescriptionImageInput, ProductRow } from '@/lib/prescriptions/types'
+import { isSuperAdminEmail } from '@/lib/authz'
 
 // ─── submitPrescription ───────────────────────────────────────────────────────
 // Staff submits a new toa thuốc: DHC code + images.
@@ -111,6 +112,8 @@ export async function syncPrescriptionProducts(products: ProductRow[]) {
     .from('users').select('role').eq('id', user.id).single()
   if (profile?.role !== 'admin')
     return { error: 'Chỉ admin mới có thể đồng bộ sản phẩm' }
+  if (!isSuperAdminEmail(user.email))
+    return { error: 'Không có quyền đồng bộ Toa thuốc' }
 
   if (!products.length) return { error: 'Danh sách sản phẩm không được rỗng' }
 
