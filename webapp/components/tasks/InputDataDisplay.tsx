@@ -1,6 +1,6 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { FileText, Image as ImageIcon, Link as LinkIcon } from 'lucide-react'
+import { FileText, Image as ImageIcon, Link as LinkIcon, Music } from 'lucide-react'
 import { TaskAttachment } from '@/types'
 
 interface Props {
@@ -47,9 +47,25 @@ export function InputDataDisplay({ inputData }: Props) {
                   ))}
               </div>
             )}
-            {/* Non-image files */}
+            {/* Audio players */}
             {attachments
-              .filter((a) => !a.type.startsWith('image/'))
+              .filter((a) => a.type.startsWith('audio/'))
+              .map((att, i) => (
+                <div key={`audio-${i}`} className="p-2 border rounded bg-muted/20 space-y-1.5">
+                  <div className="flex items-center gap-2 text-sm">
+                    <Music className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <a href={att.url} target="_blank" rel="noopener noreferrer" className="flex-1 truncate text-primary hover:underline">
+                      {att.name}
+                    </a>
+                  </div>
+                  {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+                  <audio controls preload="none" src={att.url} className="w-full h-9" />
+                </div>
+              ))}
+
+            {/* Other files (non-image, non-audio) */}
+            {attachments
+              .filter((a) => !a.type.startsWith('image/') && !a.type.startsWith('audio/'))
               .map((att, i) => (
                 <a
                   key={i}

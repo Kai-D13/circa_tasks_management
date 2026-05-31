@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { computeNextRunAt } from '@/lib/recurring'
+import { notifyTaskCreated } from '@/lib/teams/notifyTaskCreated'
 import { TaskCategory, TaskPriority, TaskStatus, TaskVisibility, RequiredOutput, TaskAttachment } from '@/types'
 
 async function writeLog(
@@ -35,9 +36,11 @@ const STATUS_LABEL_VN: Record<string, string> = {
   overdue:     'Quá hạn',
 }
 
-// Shared per-file attachment validation used by all task creation paths
+// Shared per-file attachment validation used by all task creation paths.
+// Keep limits in sync with TaskInputAttachments.tsx (client).
 type AttachmentMeta = { type?: string; size?: number }
 const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
+const ALLOWED_AUDIO_TYPES = ['audio/mpeg', 'audio/wav', 'audio/x-wav', 'audio/webm', 'audio/mp4', 'audio/aac', 'audio/ogg', 'audio/x-m4a', 'audio/m4a']
 function validateAttachments(atts: AttachmentMeta[]): string | null {
   if (atts.length > 20) return 'Tối đa 20 file đính kèm mỗi task'
   let totalSize = 0
@@ -48,6 +51,10 @@ function validateAttachments(atts: AttachmentMeta[]): string | null {
       if (!ALLOWED_IMAGE_TYPES.includes(a.type))
         return `Định dạng ảnh không hỗ trợ (${a.type}). Chỉ hỗ trợ jpg, png, webp`
       if (size > 5 * 1024 * 1024) return 'Ảnh quá lớn (tối đa 5MB mỗi ảnh)'
+    } else if (a.type?.startsWith('audio/')) {
+      if (!ALLOWED_AUDIO_TYPES.includes(a.type))
+        return `Định dạng audio không hỗ trợ (${a.type})`
+      if (size > 15 * 1024 * 1024) return 'Audio quá lớn (tối đa 15MB mỗi file)'
     } else {
       if (size > 10 * 1024 * 1024) return 'File quá lớn (tối đa 10MB mỗi file)'
     }
@@ -133,6 +140,15 @@ export async function createTask(formData: FormData) {
       )
     }
   }
+
+  // Microsoft Teams notification (MVP). Never throws — task already created.
+  await notifyTaskCreated({
+    taskId:    task.id,
+    storeId:   storeIdVal,
+    taskTitle: task.title,
+    taskType:  'Phát sinh',
+    deadline:  task.deadline,
+  })
 
   revalidatePath('/tasks')
   redirect('/tasks')

@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Plus, X, Paperclip, Link2, Settings } from 'lucide-react'
-import { TaskInputAttachments } from '@/components/tasks/TaskInputAttachments'
+import { TaskInputAttachments, type TaskInputAttachmentsHandle } from '@/components/tasks/TaskInputAttachments'
 import { cn } from '@/lib/utils'
 import {
   Task, Store, UserProfile, RequiredOutput, UserRole,
@@ -78,15 +78,17 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   const [scope, setScope]                       = useState<Scope>('single')
   const [selectedStoreIds, setSelectedStoreIds] = useState<string[]>([])
 
-  const [showAttachments, setShowAttachments]   = useState(false)
+  const uploadIdRef       = useRef((task?.id) ?? crypto.randomUUID())
+  const attachRef         = useRef<TaskInputAttachmentsHandle>(null)
+  const existingInputData = task?.input_data as Record<string, unknown> | null
+  const existingAttachments = (existingInputData?.attachments as TaskAttachment[]) ?? []
+
+  const [attachments, setAttachments] = useState<TaskAttachment[]>(existingAttachments)
+  // Attachment panel is visible by default when creating a task (or editing one
+  // that already has attachments); the toolbar button just re-opens the picker.
+  const [showAttachments, setShowAttachments]   = useState(!task || existingAttachments.length > 0)
   const [showLinks, setShowLinks]               = useState(false)
   const [showMobileConfig, setShowMobileConfig] = useState(false)
-
-  const uploadIdRef       = useRef((task?.id) ?? crypto.randomUUID())
-  const existingInputData = task?.input_data as Record<string, unknown> | null
-  const [attachments, setAttachments] = useState<TaskAttachment[]>(
-    (existingInputData?.attachments as TaskAttachment[]) ?? []
-  )
   const [links, setLinks] = useState<{ label: string; url: string }[]>(
     (existingInputData?.links as { label: string; url: string }[]) ?? []
   )
@@ -405,17 +407,17 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
             />
           </div>
 
-          {/* Attachment panel */}
-          {showAttachments && (
-            <div className="px-5 pb-3 space-y-1.5 border-t">
-              <p className="text-xs text-muted-foreground pt-3">Ảnh hướng dẫn, file Excel, PDF...</p>
-              <TaskInputAttachments
-                uploadId={uploadIdRef.current}
-                value={attachments}
-                onChange={setAttachments}
-              />
-            </div>
-          )}
+          {/* Attachment panel — always mounted (hidden when inactive) so the
+              toolbar button can open the file picker imperatively via ref */}
+          <div className={cn('px-5 pb-3 space-y-1.5 border-t', !showAttachments && 'hidden')}>
+            <p className="text-xs text-muted-foreground pt-3">Ảnh hướng dẫn, file Excel, PDF, audio...</p>
+            <TaskInputAttachments
+              ref={attachRef}
+              uploadId={uploadIdRef.current}
+              value={attachments}
+              onChange={setAttachments}
+            />
+          </div>
 
           {/* Links panel */}
           {showLinks && (
@@ -442,7 +444,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
           <div className="border-t px-4 py-1.5 flex items-center gap-0.5 shrink-0">
             <button
               type="button"
-              onClick={() => { setShowAttachments((v) => !v); setShowLinks(false) }}
+              onClick={() => { setShowLinks(false); setShowAttachments(true); attachRef.current?.openFilePicker() }}
               className={cn(
                 'flex items-center gap-1.5 text-xs px-3 py-1.5 rounded transition-colors',
                 showAttachments ? 'bg-sidebar-accent text-primary' : 'text-muted-foreground hover:bg-sidebar-accent hover:text-primary'
@@ -458,7 +460,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
             </button>
             <button
               type="button"
-              onClick={() => { setShowLinks((v) => !v); setShowAttachments(false) }}
+              onClick={() => { setShowLinks((v) => !v); if (isEditMode) setShowAttachments(false) }}
               className={cn(
                 'flex items-center gap-1.5 text-xs px-3 py-1.5 rounded transition-colors',
                 showLinks ? 'bg-sidebar-accent text-primary' : 'text-muted-foreground hover:bg-sidebar-accent hover:text-primary'
