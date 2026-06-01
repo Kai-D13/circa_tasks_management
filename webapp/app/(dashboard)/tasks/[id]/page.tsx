@@ -163,15 +163,18 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       (r) => !resubmitAt || new Date((r as { submitted_at: string }).submitted_at) > new Date(resubmitAt)
     )
 
-  const canSubmit = task.status !== 'done'
-    && (isDirectAssignee || isStoreSubmitter)
-    && !hasAlreadySubmitted
-
   // isSubmitterForTask: user is responsible for submitting this task (direct assignee or store-level)
   const isSubmitterForTask = isDirectAssignee || isStoreSubmitter
 
   // displayStatus: effective status shown in UI — reflects overdue even when DB status is in_progress/todo
   const displayStatus = getEffectiveStatus(task.deadline, task.status) as Task['status']
+
+  // Overdue tasks cannot be submitted — an admin/manager must extend the deadline
+  // first (mirrors the server guard in submitTask).
+  const canSubmit = displayStatus !== 'done'
+    && displayStatus !== 'overdue'
+    && isSubmitterForTask
+    && !hasAlreadySubmitted
 
   // Admin always sees selector. Store manager reviewing (not the submitter) always sees it.
   // Submitter (any role) loses the selector once they have a valid submission or task is effectively overdue/done.
@@ -297,7 +300,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                 )}
                 {displayStatus === 'overdue' && isSubmitterForTask && !hasAlreadySubmitted && (
                   <p className="text-xs text-red-600 mt-1">
-                    Task đã quá hạn. Bạn vẫn có thể nộp kết quả nhưng sẽ ghi nhận là trễ hạn.
+                    Task đã quá hạn. Vui lòng liên hệ quản lý để gia hạn deadline trước khi nộp kết quả.
                   </p>
                 )}
               </div>

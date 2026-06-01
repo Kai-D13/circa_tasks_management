@@ -6,6 +6,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { computeNextRunAt } from '@/lib/recurring'
 import { notifyTaskCreated } from '@/lib/teams/notifyTaskCreated'
+import { getEffectiveStatus } from '@/lib/dateUtils'
 import { TaskCategory, TaskPriority, TaskStatus, TaskVisibility, RequiredOutput, TaskAttachment } from '@/types'
 
 async function writeLog(
@@ -346,7 +347,7 @@ export async function submitTask(taskId: string, outputData: Record<string, unkn
   const [{ data: task }, { data: profile }] = await Promise.all([
     supabase
       .from('tasks')
-      .select('created_by, title, assigned_to, store_id, resubmit_requested_at, required_outputs')
+      .select('created_by, title, assigned_to, store_id, resubmit_requested_at, required_outputs, deadline, status')
       .eq('id', taskId)
       .single(),
     supabase
@@ -369,6 +370,14 @@ export async function submitTask(taskId: string, outputData: Record<string, unkn
 
   if (!isDirectAssignee && !isStoreSubmitter) {
     return { error: 'Bạn không có quyền nộp kết quả cho task này' }
+  }
+
+  // Block overdue submits. A task is effectively overdue when its DB status is
+  // 'overdue' (flipped by the cron) OR its deadline has passed while not done.
+  // resubmit_requested_at does NOT unlock a passed deadline — an admin/manager
+  // must extend the deadline (which resets status) before the submitter can nộp.
+  if (getEffectiveStatus(task.deadline as string | null, task.status as string) === 'overdue') {
+    return { error: 'Task đã quá hạn. Vui lòng liên hệ quản lý để gia hạn deadline trước khi nộp kết quả.' }
   }
 
   // Duplicate check: block if a result already exists after the last resubmit request.
@@ -642,7 +651,7 @@ export async function requestResubmit(taskId: string, reason?: string) {
     return { error: 'Không có quyền yêu cầu làm lại' }
 
   const { data: task } = await supabase
-    .from('tasks').select('assigned_to, title, store_id').eq('id', taskId).single()
+    .from('tasks').select('assigned_to, title, store_id, deadline, status').eq('id', taskId).single()
 
   // Store manager who is the submitter cannot request resubmit on their own task.
   // Two submitter cases: direct assignee OR store-level (assigned_to = null, same store).
@@ -661,6 +670,13 @@ export async function requestResubmit(taskId: string, reason?: string) {
     .select('id', { count: 'exact', head: true })
     .eq('task_id', taskId)
   if (!resultCount) return { error: 'Task chưa có kết quả nộp, không thể yêu cầu làm lại' }
+
+  // A resubmit request flips status to 'todo', but if the deadline has already
+  // passed the task is immediately overdue again and the submitter is blocked.
+  // Require the deadline be extended first so the request is actionable.
+  if (getEffectiveStatus(task?.deadline as string | null, task?.status as string) === 'overdue') {
+    return { error: 'Task đã quá hạn. Vui lòng gia hạn deadline trước khi yêu cầu làm lại.' }
+  }
 
   const { error } = await supabase.from('tasks')
     .update({ status: 'todo', resubmit_requested_at: new Date().toISOString() })
@@ -719,15 +735,23 @@ export async function extendDeadline(taskId: string, newDeadline: string) {
     return { error: 'Deadline mới phải ở tương lai' }
 
   const { data: current } = await supabase
-    .from('tasks').select('deadline, title').eq('id', taskId).single()
+    .from('tasks').select('deadline, title, status').eq('id', taskId).single()
+
+  // Extending the deadline must clear a literal 'overdue' status, otherwise
+  // getEffectiveStatus short-circuits on 'overdue' and the submitter stays
+  // locked out even with a future deadline. Reset to 'todo'; leave other
+  // statuses (done, in_progress, todo) untouched.
+  const update: { deadline: string; status?: TaskStatus } = { deadline: newDeadline }
+  if (current?.status === 'overdue') update.status = 'todo'
 
   const { error } = await supabase
-    .from('tasks').update({ deadline: newDeadline }).eq('id', taskId)
+    .from('tasks').update(update).eq('id', taskId)
   if (error) return { error: error.message }
 
   await writeLog(supabase, taskId, 'deadline_extended', user.id, {
     from: current?.deadline ?? null,
     to:   newDeadline,
+    status_reset: current?.status === 'overdue',
   })
 
   revalidatePath('/tasks')
