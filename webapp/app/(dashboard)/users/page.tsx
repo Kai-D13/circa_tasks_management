@@ -88,10 +88,8 @@ export default async function UsersPage() {
                     {formatDate(u.created_at)}
                   </TableCell>
                   <TableCell>
-                    {/* Admin-target rows are manageable only by the super admin */}
-                    {u.role === 'admin' && !isSuper ? (
-                      <span className="text-xs text-muted-foreground">—</span>
-                    ) : (
+                    {/* Edit / reset password: super admin only */}
+                    {isSuper ? (
                       <div className="flex items-center gap-1">
                         <EditUserDialog
                           userId={u.id}
@@ -105,6 +103,8 @@ export default async function UsersPage() {
                           userName={u.full_name}
                         />
                       </div>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">—</span>
                     )}
                   </TableCell>
                 </TableRow>

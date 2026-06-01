@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 
 // ─── createFeedbackThread ─────────────────────────────────────────────────────
 // Store manager opens a new feedback thread on a task, with a required first message.
@@ -56,7 +57,7 @@ export async function createFeedbackThread(taskId: string, title: string, messag
   if (admins?.length) {
     const { data: taskInfo } = await supabase
       .from('tasks').select('title').eq('id', taskId).single()
-    await supabase.from('notifications').insert(
+    await supabaseAdmin.from('notifications').insert(
       admins.map((a) => ({
         user_id: a.id,
         type:    'feedback_created',
@@ -116,7 +117,7 @@ export async function addFeedbackMessage(threadId: string, message: string) {
     const { data: managers } = await supabase
       .from('users').select('id').eq('role', 'store_manager').eq('store_id', thread.store_id)
     if (managers?.length) {
-      await supabase.from('notifications').insert(
+      await supabaseAdmin.from('notifications').insert(
         managers.map((m) => ({
           user_id: m.id,
           type:    'feedback_replied',
@@ -130,7 +131,7 @@ export async function addFeedbackMessage(threadId: string, message: string) {
     // Store manager replied → notify admins
     const { data: admins } = await supabase.from('users').select('id').eq('role', 'admin')
     if (admins?.length) {
-      await supabase.from('notifications').insert(
+      await supabaseAdmin.from('notifications').insert(
         admins.map((a) => ({
           user_id: a.id,
           type:    'feedback_replied',

@@ -22,11 +22,12 @@ const ROLE_LABEL: Record<string, string> = {
 }
 
 export function CreateUserDialog({ stores }: { stores: Pick<Store, 'id' | 'name'>[] }) {
+  const isSuper = isSuperAdminEmail(useUserStore((s) => s.profile)?.email)
   const [open, setOpen] = useState(false)
   const [pending, startTransition] = useTransition()
-  const [role, setRole]       = useState('staff')
+  // Sub-admins may only create store managers; the super admin, any role.
+  const [role, setRole]       = useState(isSuper ? 'staff' : 'store_manager')
   const [storeId, setStoreId] = useState('')
-  const canCreateAdmin = isSuperAdminEmail(useUserStore((s) => s.profile)?.email)
 
   const selectedStoreName = stores.find((s) => s.id === storeId)?.name
 
@@ -87,9 +88,9 @@ export function CreateUserDialog({ stores }: { stores: Pick<Store, 'id' | 'name'
                 <SelectValue>{ROLE_LABEL[role]}</SelectValue>
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="staff">Staff</SelectItem>
+                {isSuper && <SelectItem value="staff">Staff</SelectItem>}
                 <SelectItem value="store_manager">Store Manager</SelectItem>
-                {canCreateAdmin && <SelectItem value="admin">Admin</SelectItem>}
+                {isSuper && <SelectItem value="admin">Admin</SelectItem>}
               </SelectContent>
             </Select>
           </div>

@@ -20,8 +20,10 @@ export async function createUser(formData: FormData) {
 
   const storeId = formData.get('store_id') as string
   const role    = formData.get('role') as string
-  if (role === 'admin' && !isSuperAdminEmail(user.email))
-    return { error: 'Chỉ super admin mới tạo được tài khoản admin' }
+  // Sub-admins may only create store managers. The super admin may create any
+  // role (staff / store_manager / admin).
+  if (!isSuperAdminEmail(user.email) && role !== 'store_manager')
+    return { error: 'Bạn chỉ được tạo tài khoản Quản lý cửa hàng' }
   if (role !== 'admin' && !storeId)
     return { error: 'Tài khoản Quản lý và Nhân viên phải được gán cửa hàng' }
 
@@ -55,17 +57,9 @@ export async function resetUserPassword(userId: string, newPassword: string) {
 
   if (profile?.role !== 'admin') return { error: 'Không có quyền thực hiện' }
   if (newPassword.length < 8) return { error: 'Mật khẩu phải có ít nhất 8 ký tự' }
-
-  // Only super admin may reset the password of an admin account.
-  // Fail closed: if the target profile is missing/unreadable, a regular admin is blocked.
-  if (!isSuperAdminEmail(user.email)) {
-    const { data: target, error: targetErr } = await supabase
-      .from('users').select('role').eq('id', userId).single()
-    if (targetErr || !target)
-      return { error: 'Không tìm thấy tài khoản người dùng' }
-    if (target.role === 'admin')
-      return { error: 'Chỉ super admin mới đặt lại mật khẩu cho tài khoản admin' }
-  }
+  // Sub-admins cannot reset anyone's password — only the super admin may do this.
+  if (!isSuperAdminEmail(user.email))
+    return { error: 'Chỉ super admin mới đặt lại được mật khẩu người dùng' }
 
   const { error } = await supabaseAdmin.auth.admin.updateUserById(userId, { password: newPassword })
   if (error) return { error: error.message }
@@ -95,16 +89,10 @@ export async function updateUserRole(userId: string, role: string, storeId: stri
     .single()
 
   if (profile?.role !== 'admin') return { error: 'Only admins can update roles' }
-
-  // Only super admin may set role=admin or modify an existing admin user
-  if (!isSuperAdminEmail(user.email)) {
-    if (role === 'admin')
-      return { error: 'Chỉ super admin mới gán được quyền admin' }
-    const { data: target } = await supabase
-      .from('users').select('role').eq('id', userId).single()
-    if (target?.role === 'admin')
-      return { error: 'Chỉ super admin mới chỉnh sửa được tài khoản admin' }
-  }
+  // Only the super admin may edit any user — sub-admins can create store managers
+  // but cannot edit or change roles for anyone.
+  if (!isSuperAdminEmail(user.email))
+    return { error: 'Chỉ super admin mới chỉnh sửa được tài khoản người dùng' }
 
   if (role !== 'admin' && !storeId)
     return { error: 'Tài khoản Quản lý và Nhân viên phải được gán cửa hàng' }

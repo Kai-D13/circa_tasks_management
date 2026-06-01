@@ -7,3 +7,25 @@ export const SUPER_ADMIN_EMAIL = 'hoangvudn96@gmail.com'
 export function isSuperAdminEmail(email: string | null | undefined): boolean {
   return !!email && email.toLowerCase() === SUPER_ADMIN_EMAIL
 }
+
+// True for the super admin only (role=admin + the hardcoded email).
+export function isSuperAdmin(
+  email: string | null | undefined,
+  role: string | null | undefined,
+): boolean {
+  return role === 'admin' && isSuperAdminEmail(email)
+}
+
+// App-layer mirror of the DB own-scope RLS: a non-super admin may only act on
+// tasks/broadcasts/schedules they created; the super admin may act on any.
+// Used for defense-in-depth in server actions (RLS remains the primary gate).
+export function canAdminManageOwn(args: {
+  email: string | null | undefined
+  role: string | null | undefined
+  createdBy: string | null | undefined
+  userId: string | null | undefined
+}): boolean {
+  if (args.role !== 'admin') return false
+  if (isSuperAdminEmail(args.email)) return true
+  return !!args.createdBy && args.createdBy === args.userId
+}

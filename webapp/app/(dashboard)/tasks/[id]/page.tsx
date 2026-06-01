@@ -19,6 +19,7 @@ import { createFeedbackThread, addFeedbackMessage, resolveFeedbackThread } from 
 import { FeedbackSection, type FeedbackThread } from '@/components/feedback/FeedbackSection'
 import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { formatDate, getEffectiveStatus } from '@/lib/dateUtils'
+import { isSuperAdminEmail } from '@/lib/authz'
 import { Task, RequiredOutput, UserRole, TaskCategory } from '@/types'
 import { Pencil, Trash2, Radio } from 'lucide-react'
 
@@ -66,7 +67,9 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
 
   const userRole   = (profile?.role ?? 'staff') as UserRole
   const canReassign = userRole === 'admin' || userRole === 'store_manager'
+  // Sub-admins may edit/delete only tasks they created; the super admin, any.
   const canEdit     = userRole === 'admin'
+    && (isSuperAdminEmail(user!.email) || task.created_by === user!.id)
   const userId      = user!.id
 
   // Round 2: store users (needed for reassign form + results filter for store_manager)
@@ -126,18 +129,18 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           .maybeSingle()
       : Promise.resolve({ data: null }),
     supabase
-      .from('task_logs')
-      .select('id, created_at, metadata, users(full_name)')
+      .from('task_review_notes')
+      .select('id, created_at, note, author:users!author_id(full_name)')
       .eq('task_id', id)
-      .eq('action', 'review_note')
+      .eq('kind', 'review_note')
       .order('created_at', { ascending: false }),
     // Fetch last resubmit reason (for staff/store-manager notification banner)
     (userRole === 'staff' || isStoreSubmitter) && resubmitAt
       ? supabase
-          .from('task_logs')
-          .select('metadata')
+          .from('task_review_notes')
+          .select('note')
           .eq('task_id', id)
-          .eq('action', 'resubmit_requested')
+          .eq('kind', 'resubmit_request')
           .order('created_at', { ascending: false })
           .limit(1)
           .maybeSingle()
@@ -213,263 +216,299 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
     await deleteTask(id)
   }
 
+  // Shared review-note entries mapped for TaskReviewNote
+  const reviewEntries = (reviewLogs ?? []).map((r) => ({
+    id:         r.id,
+    created_at: r.created_at,
+    metadata:   { note: (r as unknown as { note: string }).note },
+    users:      (r as unknown as { author: { full_name: string } | null }).author,
+  }))
+
+  // Resubmit reason text (shown in the banner)
+  const resubmitReason = (lastResubmitLog as { note?: string } | null)?.note
+
   return (
-    <div className="p-6 max-w-3xl space-y-6">
+    // lg:h-full constrains the two-column body to viewport height on desktop so
+    // each column gets independent overflow-y-auto scroll. On mobile no height
+    // constraint — <main> (overflow-y-auto) handles natural page scroll.
+    <div className="flex flex-col lg:h-full">
       <AutoRefresh intervalMs={12000} />
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 flex-wrap">
-            <h1 className="text-xl font-semibold">{task.title}</h1>
-            {task.category && (
-              <span className={cn(
-                'text-xs px-2 py-0.5 rounded font-medium',
-                CATEGORY_STYLE[task.category as TaskCategory] ?? 'bg-gray-100 text-gray-600'
-              )}>
-                {CATEGORY_LABEL_VN[task.category as TaskCategory] ?? task.category}
-              </span>
-            )}
-            {task.broadcast_id && (
-              <span className="flex items-center gap-1 text-xs text-primary bg-primary/10 px-2 py-0.5 rounded">
-                <Radio className="h-3 w-3" /> Broadcast
-              </span>
-            )}
-            {(task as { source_schedule_id?: string | null }).source_schedule_id && (
-              <span className="text-xs bg-teal-100 text-teal-700 px-2 py-0.5 rounded font-medium">
-                Định kỳ
-              </span>
-            )}
-          </div>
-          <p className="text-sm text-muted-foreground mt-1">
-            Tạo bởi {(task.creator as { full_name: string } | null)?.full_name ?? '—'}
-            {task.created_at && ` · ${formatDate(task.created_at)}`}
-          </p>
-          {assignerName && task.assigned_to && (
-            <p className="text-sm text-muted-foreground">
-              Phân công bởi{' '}
-              <span className="font-medium text-foreground">{assignerName}</span>
-              {lastAssignLog?.created_at && ` · ${formatDate(lastAssignLog.created_at as string)}`}
+
+      {/* ── Page header (full width) ── */}
+      <div className="px-4 pt-4 pb-3 border-b bg-background shrink-0">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h1 className="text-lg font-semibold leading-tight">{task.title}</h1>
+              {task.category && (
+                <span className={cn(
+                  'text-xs px-2 py-0.5 rounded font-medium shrink-0',
+                  CATEGORY_STYLE[task.category as TaskCategory] ?? 'bg-gray-100 text-gray-600'
+                )}>
+                  {CATEGORY_LABEL_VN[task.category as TaskCategory] ?? task.category}
+                </span>
+              )}
+              {task.broadcast_id && (
+                <span className="flex items-center gap-1 text-xs text-primary bg-primary/10 px-2 py-0.5 rounded shrink-0">
+                  <Radio className="h-3 w-3" /> Broadcast
+                </span>
+              )}
+              {(task as { source_schedule_id?: string | null }).source_schedule_id && (
+                <span className="text-xs bg-teal-100 text-teal-700 px-2 py-0.5 rounded font-medium shrink-0">
+                  Định kỳ
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Tạo bởi {(task.creator as { full_name: string } | null)?.full_name ?? '—'}
+              {task.created_at && ` · ${formatDate(task.created_at)}`}
+              {assignerName && task.assigned_to && (
+                <> · Phân công: <span className="text-foreground">{assignerName}</span>
+                  {lastAssignLog?.created_at && ` (${formatDate(lastAssignLog.created_at as string)})`}
+                </>
+              )}
             </p>
+          </div>
+          {canEdit && (
+            <div className="flex gap-2 shrink-0">
+              <Link href={`/tasks/${id}/edit`} className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}>
+                <Pencil className="h-4 w-4 mr-1" /> Chỉnh sửa
+              </Link>
+              <form action={handleDelete}>
+                <Button variant="destructive" size="sm" type="submit">
+                  <Trash2 className="h-4 w-4 mr-1" /> Xoá
+                </Button>
+              </form>
+            </div>
           )}
         </div>
-        {canEdit && (
-          <div className="flex gap-2 shrink-0">
-            <Link href={`/tasks/${id}/edit`} className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}>
-              <Pencil className="h-4 w-4 mr-1" /> Chỉnh sửa
-            </Link>
-            <form action={handleDelete}>
-              <Button variant="destructive" size="sm" type="submit">
-                <Trash2 className="h-4 w-4 mr-1" /> Xoá
-              </Button>
-            </form>
-          </div>
-        )}
       </div>
 
-      {/* Resubmit request banner — shown to staff when manager requested resubmission */}
-      {(userRole === 'staff' || isStoreSubmitter) && resubmitAt && !hasAlreadySubmitted && (
-        <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
-          <p className="font-medium text-amber-900">Quản lý yêu cầu bạn thực hiện lại task này</p>
-          {(() => {
-            const reason = (lastResubmitLog?.metadata as Record<string, unknown> | null)?.reason
-            return reason ? <p className="text-amber-800 mt-1">Lý do: {String(reason)}</p> : null
-          })()}
-          <p className="text-xs text-amber-700 mt-1">Kết quả cũ đã được lưu lại. Vui lòng nộp lại bên dưới.</p>
-        </div>
-      )}
+      {/* ── Two-column body ── */}
+      {/* Desktop (lg): flex-row, each column independently overflow-y-auto within the
+          constrained height from lg:h-full above → the right panel effectively "sticks"
+          without requiring position:sticky (which breaks inside overflow containers).
+          Mobile: flex-col. order-2 on left, order-1 on right → right panel (status +
+          submit CTA) appears first on mobile. Using order-* avoids the DOM/focus
+          mismatch that flex-col-reverse causes for keyboard navigation. */}
+      <div className="flex flex-col lg:flex-row lg:flex-1 lg:min-h-0">
 
-      {/* Details card */}
-      <Card>
-        <CardContent className="pt-4 space-y-3">
-          <div className="grid grid-cols-2 gap-3 text-sm">
+        {/* ── Left — task content (order-2 mobile → below, order-first desktop → left) ── */}
+        <div className="order-2 lg:order-first flex-[2] min-w-0 px-4 py-4 space-y-4 lg:border-r lg:overflow-y-auto">
+
+          {/* Description */}
+          {task.description && (
             <div>
-              <span className="text-muted-foreground">Trạng thái</span>
-              <div className="mt-1 flex items-center gap-2 flex-wrap">
-                <TaskStatusBadge status={displayStatus} />
-                {canSeeStatusSelector && (
-                  <TaskStatusSelector
-                    taskId={id}
-                    currentStatus={displayStatus}
-                    userRole={userRole}
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70 mb-1.5">Mô tả</p>
+              <p className="text-sm whitespace-pre-wrap leading-relaxed">{task.description}</p>
+            </div>
+          )}
+
+          {/* Input data (task attachments / links from creation) */}
+          {task.input_data && Object.keys(task.input_data as object).length > 0 && (
+            <InputDataDisplay inputData={task.input_data as Record<string, unknown>} />
+          )}
+
+          {/* Admin review notes — read-only for managers/staff; only admins can add.
+              Store managers use "Trao đổi với Admin" for their own messages. */}
+          {(userRole === 'admin' || reviewEntries.length > 0) && (
+            <TaskReviewNote
+              taskId={id}
+              reviews={reviewEntries}
+              canAddNote={userRole === 'admin'}
+            />
+          )}
+
+          {/* Trao đổi với Admin — store_manager ↔ admin; staff cannot see */}
+          {(canCreateFeedback || canReplyFeedback) && (
+            <FeedbackSection
+              taskId={id}
+              threads={(feedbackThreads ?? []) as unknown as FeedbackThread[]}
+              canCreate={canCreateFeedback}
+              canReply={canReplyFeedback}
+              createFn={createFeedbackThread}
+              replyFn={addFeedbackMessage}
+              resolveFn={resolveFeedbackThread}
+            />
+          )}
+
+          {/* Previous submissions */}
+          {(results ?? []).length > 0 && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm">Kết quả đã nộp ({results?.length})</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2">
+                {results!.map((r) => (
+                  <TaskResultCard
+                    key={r.id}
+                    result={{
+                      id:             r.id,
+                      submitted_at:   r.submitted_at,
+                      output_data:    r.output_data as Record<string, unknown>,
+                      submitter_name: (r.users as unknown as { full_name: string } | null)?.full_name ?? null,
+                    }}
                   />
-                )}
+                ))}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Admin-only review actions */}
+          {canReviewTask && hasValidSubmission && task.status !== 'done' && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+              Task đã có kết quả nộp nhưng trạng thái hiện không phải Hoàn thành. Có thể yêu cầu làm lại hoặc chỉnh trạng thái.
+            </div>
+          )}
+          {canReviewTask && hasValidSubmission && (
+            <RequestResubmitSection taskId={id} requestFn={requestResubmit} />
+          )}
+        </div>
+
+        {/* ── Right — action sidebar (order-1 mobile → above, order-last desktop → right) ── */}
+        <div className="order-1 lg:order-last lg:w-[340px] lg:shrink-0 px-4 py-4 space-y-4 lg:border-l lg:overflow-y-auto">
+
+          {/* Resubmit request banner — submitters only */}
+          {(userRole === 'staff' || isStoreSubmitter) && resubmitAt && !hasAlreadySubmitted && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
+              <p className="font-medium text-amber-900">Quản lý yêu cầu thực hiện lại</p>
+              {resubmitReason && <p className="text-amber-800 mt-1">Lý do: {resubmitReason}</p>}
+              <p className="text-xs text-amber-700 mt-1">Kết quả cũ đã được lưu. Vui lòng nộp lại bên dưới.</p>
+            </div>
+          )}
+
+          {/* Submit form — primary CTA, shown first in sidebar */}
+          {canSubmit && (
+            <Card className="border-primary/30">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm text-primary">Nộp kết quả</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <TaskSubmitForm
+                  taskId={id}
+                  requiredOutputs={(task.required_outputs as RequiredOutput[]) ?? []}
+                />
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Extend deadline — admin/manager when overdue */}
+          {canReviewTask && displayStatus === 'overdue' && (
+            <ExtendDeadlineForm
+              taskId={id}
+              extendFn={extendDeadline}
+              currentDeadline={task.deadline ?? null}
+            />
+          )}
+
+          {/* Status + metadata */}
+          <Card>
+            <CardContent className="pt-4 space-y-3 text-sm">
+
+              {/* Status */}
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Trạng thái</p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <TaskStatusBadge status={displayStatus} />
+                  {canSeeStatusSelector && (
+                    <TaskStatusSelector taskId={id} currentStatus={displayStatus} userRole={userRole} />
+                  )}
+                </div>
                 {submittedLocked && (
                   <p className="text-xs text-amber-700 mt-1">
-                    Task đã nộp. Nếu cần chỉnh sửa, vui lòng chờ quản lý yêu cầu làm lại.
+                    Task đã nộp. Vui lòng chờ quản lý yêu cầu làm lại nếu cần chỉnh sửa.
                   </p>
                 )}
                 {displayStatus === 'overdue' && isSubmitterForTask && !hasAlreadySubmitted && (
                   <p className="text-xs text-red-600 mt-1">
-                    Task đã quá hạn. Vui lòng liên hệ quản lý để gia hạn deadline trước khi nộp kết quả.
+                    Task đã quá hạn. Liên hệ quản lý để gia hạn deadline.
                   </p>
                 )}
               </div>
-            </div>
-            <div>
-              <span className="text-muted-foreground">Ưu tiên</span>
-              <div className="mt-1"><TaskPriorityBadge priority={task.priority as Task['priority']} /></div>
-            </div>
-            <div>
-              <span className="text-muted-foreground">Cửa hàng</span>
-              <p className="mt-1 font-medium">
-                {(task.stores as { name: string } | null)?.name ?? '—'}
-              </p>
-            </div>
-            <div>
-              <span className="text-muted-foreground">Người thực hiện</span>
-              {canReassign ? (
-                <div className="mt-1">
+
+              <Separator />
+
+              {/* Deadline + start date */}
+              <div className="grid grid-cols-2 gap-3">
+                {task.start_date && (
+                  <div>
+                    <p className="text-xs text-muted-foreground">Bắt đầu</p>
+                    <p className="font-medium mt-0.5">{formatDate(task.start_date)}</p>
+                  </div>
+                )}
+                <div>
+                  <p className="text-xs text-muted-foreground">Deadline</p>
+                  <p className={cn('font-medium mt-0.5', displayStatus === 'overdue' && 'text-red-600')}>
+                    {task.deadline ? formatDate(task.deadline) : '—'}
+                  </p>
+                </div>
+              </div>
+
+              <Separator />
+
+              {/* Priority */}
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Ưu tiên</p>
+                <TaskPriorityBadge priority={task.priority as Task['priority']} />
+              </div>
+
+              {/* Store */}
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Cửa hàng</p>
+                <p className="font-medium">{(task.stores as { name: string } | null)?.name ?? '—'}</p>
+              </div>
+
+              {/* Assignee */}
+              <div>
+                <p className="text-xs text-muted-foreground mb-1">Người thực hiện</p>
+                {canReassign ? (
                   <TaskReassignForm
                     taskId={id}
                     currentAssignedTo={task.assigned_to}
                     storeUsers={storeUsers ?? []}
                   />
-                </div>
-              ) : (
-                <p className="mt-1 font-medium">
-                  {(task.assignee as { full_name: string } | null)?.full_name ?? 'Chưa phân công'}
-                </p>
+                ) : (
+                  <p className="font-medium">
+                    {(task.assignee as { full_name: string } | null)?.full_name ?? 'Chưa phân công'}
+                  </p>
+                )}
+              </div>
+
+              {/* Required outputs */}
+              {(task.required_outputs as RequiredOutput[])?.length > 0 && (
+                <>
+                  <Separator />
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1.5">Output cần nộp</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {(task.required_outputs as RequiredOutput[]).map((o) => (
+                        <span key={o} className="text-xs bg-muted px-2 py-0.5 rounded">
+                          {OUTPUT_LABEL[o] ?? o}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                </>
               )}
-            </div>
-            {task.start_date && (
-              <div>
-                <span className="text-muted-foreground">Ngày bắt đầu</span>
-                <p className="mt-1 font-medium">{formatDate(task.start_date)}</p>
-              </div>
-            )}
-            <div>
-              <span className="text-muted-foreground">Deadline</span>
-              <p className="mt-1 font-medium">
-                {task.deadline ? formatDate(task.deadline) : '—'}
-              </p>
-            </div>
-            <div>
-              <span className="text-muted-foreground">Phạm vi hiển thị</span>
-              <p className="mt-1 font-medium">
-                {task.visibility === 'public' ? 'Tất cả'
-                  : task.visibility === 'store' ? 'Cả store'
-                  : 'Chỉ người được giao'}
-              </p>
-            </div>
-          </div>
 
-          {task.description && (
-            <>
-              <Separator />
-              <div>
-                <p className="text-xs text-muted-foreground mb-1">Mô tả</p>
-                <p className="text-sm whitespace-pre-wrap">{task.description}</p>
-              </div>
-            </>
-          )}
-
-          {(task.required_outputs as RequiredOutput[])?.length > 0 && (
-            <>
-              <Separator />
-              <div>
-                <p className="text-xs text-muted-foreground mb-1">Output cần nộp</p>
-                <div className="flex flex-wrap gap-1.5">
-                  {(task.required_outputs as RequiredOutput[]).map((o) => (
-                    <span key={o} className="text-xs bg-muted px-2 py-0.5 rounded">
-                      {OUTPUT_LABEL[o] ?? o}
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </>
-          )}
-        </CardContent>
-      </Card>
-
-      {/* Input data table */}
-      {task.input_data && Object.keys(task.input_data as object).length > 0 && (
-        <InputDataDisplay inputData={task.input_data as Record<string, unknown>} />
-      )}
-
-      {/* Extend deadline — for admin/manager when task is overdue */}
-      {canReviewTask && displayStatus === 'overdue' && (
-        <ExtendDeadlineForm
-          taskId={id}
-          extendFn={extendDeadline}
-          currentDeadline={task.deadline ?? null}
-        />
-      )}
-
-      {/* Submit form — only for the assigned person */}
-      {canSubmit && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">Nộp kết quả</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <TaskSubmitForm
-              taskId={id}
-              requiredOutputs={(task.required_outputs as RequiredOutput[]) ?? []}
-            />
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Submissions — click each card to view full detail */}
-      {(results ?? []).length > 0 && (
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-sm">
-              Kết quả đã nộp ({results?.length})
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            {results!.map((r) => (
-              <TaskResultCard
-                key={r.id}
-                result={{
-                  id:             r.id,
-                  submitted_at:   r.submitted_at,
-                  output_data:    r.output_data as Record<string, unknown>,
-                  submitter_name: (r.users as unknown as { full_name: string } | null)?.full_name ?? null,
-                }}
-              />
-            ))}
-          </CardContent>
-        </Card>
-      )}
-
-      {/* Warning when task has results but status is not done (e.g. status was changed back) */}
-      {canReviewTask && hasValidSubmission && task.status !== 'done' && (
-        <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
-          Task đã có kết quả nộp nhưng trạng thái hiện không phải Hoàn thành. Có thể yêu cầu làm lại hoặc chỉnh trạng thái.
+              {/* Visibility — less prominent, admin/manager context only */}
+              {canReassign && (
+                <>
+                  <Separator />
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-1">Phạm vi</p>
+                    <p className="text-sm">
+                      {task.visibility === 'public' ? 'Tất cả'
+                        : task.visibility === 'store' ? 'Cả store'
+                        : 'Chỉ người được giao'}
+                    </p>
+                  </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
         </div>
-      )}
-
-      {/* Request resubmit — manager can ask staff to redo after submission */}
-      {canReviewTask && hasValidSubmission && (
-        <RequestResubmitSection taskId={id} requestFn={requestResubmit} />
-      )}
-
-      {/* Manager review notes — admin/manager can add; staff can read on their own tasks */}
-      <TaskReviewNote
-        taskId={id}
-        reviews={(reviewLogs ?? []).map((r) => ({
-          id:         r.id,
-          created_at: r.created_at,
-          metadata:   r.metadata as Record<string, unknown> | null,
-          users:      (r.users as unknown as { full_name: string } | null),
-        }))}
-        canAddNote={canReassign}
-      />
-
-      {/* Feedback threads — store_manager ↔ admin Q&A; staff cannot see */}
-      {(canCreateFeedback || canReplyFeedback) && (
-        <FeedbackSection
-          taskId={id}
-          threads={(feedbackThreads ?? []) as unknown as FeedbackThread[]}
-          canCreate={canCreateFeedback}
-          canReply={canReplyFeedback}
-          createFn={createFeedbackThread}
-          replyFn={addFeedbackMessage}
-          resolveFn={resolveFeedbackThread}
-        />
-      )}
+      </div>
     </div>
   )
 }

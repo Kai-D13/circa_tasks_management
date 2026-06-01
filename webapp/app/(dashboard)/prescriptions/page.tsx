@@ -9,6 +9,7 @@ import { PrescriptionSyncForm } from '@/components/prescriptions/PrescriptionSyn
 import { Plus, CheckCircle2, Clock, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { formatDateTime } from '@/lib/dateUtils'
+import { isSuperAdminEmail } from '@/lib/authz'
 
 const PAGE_SIZE = 50
 
@@ -27,6 +28,8 @@ export default async function PrescriptionsPage({
 
   const isStaff = profile?.role === 'staff'
   const isAdmin = profile?.role === 'admin'
+  // Product sync is super-admin only (mirrors the DB is_super_admin() gate).
+  const isSuper = isSuperAdminEmail(user.email)
 
   const page = Math.max(1, parseInt(params.page ?? '1', 10))
   const from = (page - 1) * PAGE_SIZE
@@ -88,7 +91,7 @@ export default async function PrescriptionsPage({
       </div>
 
       {/* Admin batch sync form */}
-      {isAdmin && <PrescriptionSyncForm />}
+      {isSuper && <PrescriptionSyncForm />}
 
       {/* Search + filters */}
       <form method="GET" className="flex flex-wrap gap-2 items-end">

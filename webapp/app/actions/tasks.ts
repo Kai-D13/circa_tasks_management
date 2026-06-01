@@ -19,15 +19,17 @@ async function writeLog(
   await supabase.from('task_logs').insert({ task_id: taskId, action, user_id: userId, metadata })
 }
 
+// Always uses supabaseAdmin — the public INSERT policy on notifications is
+// locked to service role (migration 021) to prevent clients forging alerts.
 async function insertNotification(
-  supabase: Awaited<ReturnType<typeof createClient>>,
+  _supabase: unknown,
   userId: string,
   type: string,
   taskId: string,
   title: string,
   message: string
 ) {
-  await supabase.from('notifications').insert({ user_id: userId, type, task_id: taskId, title, message })
+  await supabaseAdmin.from('notifications').insert({ user_id: userId, type, task_id: taskId, title, message })
 }
 
 const STATUS_LABEL_VN: Record<string, string> = {
@@ -144,7 +146,7 @@ export async function createTask(formData: FormData) {
       .from('users').select('id')
       .eq('role', 'store_manager').eq('store_id', storeIdVal)
     if (managers?.length) {
-      await supabase.from('notifications').insert(
+      await supabaseAdmin.from('notifications').insert(
         managers.map((m) => ({
           user_id: m.id,
           type:    'task_assigned',
@@ -581,7 +583,7 @@ export async function createBroadcastTask(params: {
         message: `Task mới: ${params.title}`,
       }
     })
-    await supabase.from('notifications').insert(notifications)
+    await supabaseAdmin.from('notifications').insert(notifications)
   }
 
   revalidatePath('/tasks')
@@ -683,9 +685,17 @@ export async function requestResubmit(taskId: string, reason?: string) {
     .eq('id', taskId)
   if (error) return { error: error.message }
 
-  await writeLog(supabase, taskId, 'resubmit_requested', user.id, {
-    reason: reason ?? null,
-  })
+  // Reason text goes to task_review_notes (visible to the submitter on the task
+  // detail) — kept out of the audit log. task_logs keeps only the event marker.
+  if (reason && reason.trim()) {
+    await supabase.from('task_review_notes').insert({
+      task_id:   taskId,
+      author_id: user.id,
+      kind:      'resubmit_request',
+      note:      reason.trim(),
+    })
+  }
+  await writeLog(supabase, taskId, 'resubmit_requested', user.id, {})
 
   if (task?.assigned_to) {
     await insertNotification(
@@ -704,7 +714,7 @@ export async function requestResubmit(taskId: string, reason?: string) {
       .eq('store_id', task.store_id)
       .eq('role', 'store_manager')
     if (storeManagers?.length) {
-      await supabase.from('notifications').insert(
+      await supabaseAdmin.from('notifications').insert(
         storeManagers.map((m) => ({
           user_id: m.id,
           type:    'resubmit_requested',
@@ -766,13 +776,25 @@ export async function addReviewNote(taskId: string, note: string) {
 
   const { data: profile } = await supabase
     .from('users').select('role').eq('id', user.id).single()
-  if (!['admin', 'store_manager'].includes(profile?.role ?? ''))
-    return { error: 'Không có quyền ghi chú' }
+  // Review notes are admin-only — store managers use the feedback thread channel.
+  if (profile?.role !== 'admin')
+    return { error: 'Chỉ admin mới được ghi chú quản lý' }
 
   const { data: task } = await supabase
     .from('tasks').select('assigned_to, title').eq('id', taskId).single()
 
-  await writeLog(supabase, taskId, 'review_note', user.id, { note })
+  // Review notes live in task_review_notes (not task_logs) so the audit log
+  // stays clean and store managers don't see other admins' note text.
+  const { error: noteErr } = await supabase.from('task_review_notes').insert({
+    task_id:   taskId,
+    author_id: user.id,
+    kind:      'review_note',
+    note,
+  })
+  if (noteErr) return { error: noteErr.message }
+
+  // Audit marker — records the event without leaking note content to the log.
+  await writeLog(supabase, taskId, 'review_note', user.id, {})
 
   // Notify assigned staff about the manager's review note
   if (task?.assigned_to && task.assigned_to !== user.id) {

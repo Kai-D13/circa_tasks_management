@@ -187,7 +187,7 @@ export function FeedbackSection({ taskId, threads, canCreate, canReply, createFn
         <div className="flex items-center justify-between">
           <CardTitle className="text-sm flex items-center gap-2">
             <MessageSquare className="h-4 w-4" />
-            Phản hồi
+            Trao đổi với Admin
             {openCount > 0 && (
               <Badge className="bg-amber-100 text-amber-700">{openCount} đang mở</Badge>
             )}
