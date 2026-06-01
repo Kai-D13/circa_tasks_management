@@ -7,6 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { toast } from 'sonner'
+import { getDefaultRoute } from '@/lib/routes'
 
 export default function LoginPage() {
   const [loading, setLoading] = useState(false)
@@ -19,7 +20,7 @@ export default function LoginPage() {
     const password = (form.elements.namedItem('password') as HTMLInputElement).value
 
     const supabase = createClient()
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
+    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
 
     if (error) {
       toast.error(error.message)
@@ -27,8 +28,16 @@ export default function LoginPage() {
       return
     }
 
+    // Resolve role-based landing route
+    let role: string | null = null
+    if (data.user) {
+      const { data: profile } = await supabase
+        .from('users').select('role').eq('id', data.user.id).single()
+      role = profile?.role ?? null
+    }
+
     // Hard navigation — avoids router.push + router.refresh race condition
-    window.location.href = '/dashboard'
+    window.location.href = getDefaultRoute(role)
   }
 
   return (

@@ -17,6 +17,7 @@ import { InputDataDisplay } from '@/components/tasks/InputDataDisplay'
 import { deleteTask, requestResubmit, extendDeadline } from '@/app/actions/tasks'
 import { createFeedbackThread, addFeedbackMessage, resolveFeedbackThread } from '@/app/actions/feedback'
 import { FeedbackSection, type FeedbackThread } from '@/components/feedback/FeedbackSection'
+import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { formatDate, getEffectiveStatus } from '@/lib/dateUtils'
 import { Task, RequiredOutput, UserRole, TaskCategory } from '@/types'
 import { Pencil, Trash2, Radio } from 'lucide-react'
@@ -211,6 +212,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
 
   return (
     <div className="p-6 max-w-3xl space-y-6">
+      <AutoRefresh intervalMs={12000} />
       {/* Header */}
       <div className="flex items-start justify-between gap-4">
         <div>

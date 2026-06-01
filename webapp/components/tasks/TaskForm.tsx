@@ -1,7 +1,8 @@
 'use client'
 
-import { useRef, useState, useTransition } from 'react'
+import { useEffect, useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
+import { useUserStore } from '@/store/userStore'
 import { toast } from 'sonner'
 import { createTask, updateTask, createBroadcastTask, createTaskSchedule } from '@/app/actions/tasks'
 import { Button } from '@/components/ui/button'
@@ -93,6 +94,122 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
     (existingInputData?.links as { label: string; url: string }[]) ?? []
   )
 
+  // ── Draft (localStorage) — create mode only ──────────────────────────────
+  const isCreate = !task
+  const formRef  = useRef<HTMLFormElement>(null)
+  const userId   = useUserStore((s) => s.profile?.id)
+  const draftKey = isCreate && userId ? `circa.taskDraft.v1.${userId}` : null
+  const [hasDraft, setHasDraft] = useState(false)
+  const [dirtyTick, setDirtyTick] = useState(0)   // bumped by uncontrolled input onInput
+
+  function collectDraft() {
+    const f = formRef.current
+    const dom = (name: string) =>
+      ((f?.elements.namedItem(name) as HTMLInputElement | HTMLTextAreaElement | null)?.value) ?? ''
+    return {
+      taskType, category, priority, storeId, assignedTo, scope, selectedStoreIds,
+      outputs, links, attachments,
+      frequency, runTime, weekdays, monthDay, schedStartDate, schedEndDate, deadlineOffset,
+      title: dom('title'), description: dom('description'),
+      start_date: dom('start_date'), deadline: dom('deadline'),
+    }
+  }
+
+  // Detect existing draft (banner only — never auto-restore).
+  // Keyed on draftKey, not [], because userId (hence the key) resolves from the
+  // Zustand store only after the first render on a direct reload of /tasks/new —
+  // a bare [] would run before the key exists and miss the saved draft.
+  useEffect(() => {
+    if (!draftKey) return
+    try { setHasDraft(!!localStorage.getItem(draftKey)) } catch { /* ignore */ }
+  }, [draftKey])
+
+  // Debounced autosave; skips empty drafts so a bare visit doesn't create one.
+  // Paused while an unrestored draft is pending (hasDraft): otherwise the empty
+  // form on a fresh reload would overwrite — or, via the removeItem branch
+  // below, delete — the saved draft before the user can hit "Khôi phục".
+  useEffect(() => {
+    if (!draftKey || hasDraft) return
+    const t = setTimeout(() => {
+      const d = collectDraft()
+      const meaningful = !!(d.title || d.description || d.attachments.length ||
+        d.links.some((l) => l.url.trim()) || d.storeId || d.selectedStoreIds.length || d.outputs.length)
+      try {
+        if (meaningful) localStorage.setItem(draftKey, JSON.stringify(d))
+        else localStorage.removeItem(draftKey)
+      } catch { /* ignore quota / disabled storage */ }
+    }, 1000)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey, hasDraft, dirtyTick, taskType, category, priority, storeId, assignedTo, scope,
+      selectedStoreIds, outputs, links, attachments, frequency, runTime, weekdays,
+      monthDay, schedStartDate, schedEndDate, deadlineOffset])
+
+  function clearDraft() {
+    if (draftKey) { try { localStorage.removeItem(draftKey) } catch { /* ignore */ } }
+  }
+
+  // Submit-time draft safety: capture the current draft, clear it up-front (so a
+  // successful submit that redirects leaves nothing behind), and write it back
+  // verbatim if the server action returns an error so nothing is lost.
+  function snapshotDraft(): string | null {
+    if (!draftKey) return null
+    try { return JSON.stringify(collectDraft()) } catch { return null }
+  }
+  function restoreDraftSnapshot(raw: string | null) {
+    if (!draftKey || !raw) return
+    // Re-persist the draft and flag it pending so the banner reappears and
+    // autosave (paused while hasDraft) can't wipe it right after the error.
+    try { localStorage.setItem(draftKey, raw); setHasDraft(true) } catch { /* ignore */ }
+  }
+
+  function discardDraft() {
+    clearDraft()
+    setHasDraft(false)
+  }
+
+  function restoreDraft() {
+    if (!draftKey) return
+    try {
+      const raw = localStorage.getItem(draftKey)
+      if (!raw) { setHasDraft(false); return }
+      const d = JSON.parse(raw)
+      setTaskType(d.taskType ?? 'adhoc')
+      setCategory(d.category ?? 'other')
+      setPriority(d.priority ?? 'normal')
+      setStoreId(d.storeId ?? '')
+      setAssignedTo(d.assignedTo ?? '')
+      setScope(d.scope ?? 'single')
+      setSelectedStoreIds(d.selectedStoreIds ?? [])
+      setOutputs(d.outputs ?? [])
+      setLinks(d.links ?? [])
+      setAttachments(d.attachments ?? [])
+      setFrequency(d.frequency ?? 'weekly')
+      setRunTime(d.runTime ?? '08:00')
+      setWeekdays(d.weekdays ?? [1])
+      setMonthDay(d.monthDay ?? 1)
+      setSchedStartDate(d.schedStartDate ?? '')
+      setSchedEndDate(d.schedEndDate ?? '')
+      setDeadlineOffset(d.deadlineOffset ?? 24)
+      if (d.links?.length) setShowLinks(true)
+      if (d.attachments?.length) setShowAttachments(true)
+      // Uncontrolled DOM fields
+      const f = formRef.current
+      if (f) {
+        const setVal = (name: string, val: string) => {
+          const el = f.elements.namedItem(name) as HTMLInputElement | HTMLTextAreaElement | null
+          if (el) el.value = val ?? ''
+        }
+        setVal('title', d.title); setVal('description', d.description)
+        setVal('start_date', d.start_date); setVal('deadline', d.deadline)
+      }
+      setHasDraft(false)
+      toast.success('Đã khôi phục bản nháp')
+    } catch {
+      toast.error('Không đọc được bản nháp')
+    }
+  }
+
   function addLink() {
     setLinks((prev) => [...prev, { label: '', url: '' }])
     setShowLinks(true)
@@ -176,6 +293,8 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
       if (!schedStartDate) { toast.error('Vui lòng chọn ngày bắt đầu lịch'); return }
       const storeIds = scope === 'all' ? visibleStores.map((s) => s.id) : selectedStoreIds
       if (!storeIds.length) { toast.error('Vui lòng chọn ít nhất một cửa hàng'); return }
+      const draftSnapshot = snapshotDraft()
+      clearDraft()
       startTransition(async () => {
         const result = await createTaskSchedule({
           title, description, category, priority,
@@ -191,8 +310,10 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
           deadlineOffsetHours: deadlineOffset,
           storeIds,
         })
-        if (result?.error) toast.error(result.error)
-        else {
+        if (result?.error) {
+          restoreDraftSnapshot(draftSnapshot)
+          toast.error(result.error)
+        } else {
           toast.success('Đã tạo lịch task định kỳ')
           router.push('/tasks/schedules')
         }
@@ -207,13 +328,20 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
     formData.delete('required_outputs')
     outputs.forEach((o) => formData.append('required_outputs', o))
 
-    // Ad-hoc tasks must have start date + deadline (deadline after start)
+    // Ad-hoc tasks must have start date + deadline (deadline after start).
+    // The date fields live in the config panel (hidden on mobile) — open it on
+    // failure so a mobile user can see where to fix the problem.
     const startDateVal = (formData.get('start_date') as string) || ''
     const deadlineVal  = (formData.get('deadline') as string) || ''
-    if (!startDateVal) { toast.error('Vui lòng chọn ngày bắt đầu'); return }
-    if (!deadlineVal)  { toast.error('Vui lòng chọn deadline'); return }
+    const revealConfig = () => {
+      if (typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches) {
+        setShowMobileConfig(true)
+      }
+    }
+    if (!startDateVal) { toast.error('Vui lòng chọn ngày bắt đầu'); revealConfig(); return }
+    if (!deadlineVal)  { toast.error('Vui lòng chọn deadline'); revealConfig(); return }
     if (new Date(deadlineVal) <= new Date(startDateVal)) {
-      toast.error('Deadline phải sau ngày bắt đầu'); return
+      toast.error('Deadline phải sau ngày bắt đầu'); revealConfig(); return
     }
 
     if (!isBroadcast && !storeId) {
@@ -224,6 +352,8 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
     if (isBroadcast) {
       const storeIds = scope === 'all' ? visibleStores.map((s) => s.id) : selectedStoreIds
       if (!storeIds.length) { toast.error('Vui lòng chọn ít nhất một cửa hàng'); return }
+      const draftSnapshot = snapshotDraft()
+      clearDraft()
       startTransition(async () => {
         const result = await createBroadcastTask({
           title:           formData.get('title') as string,
@@ -237,7 +367,10 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
           attachments,
           links: links.filter((l) => l.url.trim()),
         })
-        if (result?.error) toast.error(result.error)
+        if (result?.error) {
+          restoreDraftSnapshot(draftSnapshot)
+          toast.error(result.error)
+        }
       })
       return
     }
@@ -247,11 +380,16 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
     formData.set('input_attachments', JSON.stringify(attachments))
     formData.set('input_links',       JSON.stringify(links.filter((l) => l.url.trim())))
 
+    const draftSnapshot = snapshotDraft()
+    if (!task) clearDraft()
     startTransition(async () => {
       const result = task
         ? await updateTask(task.id, formData)
         : await createTask(formData)
-      if (result?.error) toast.error(result.error)
+      if (result?.error) {
+        restoreDraftSnapshot(draftSnapshot)
+        toast.error(result.error)
+      }
     })
   }
 
@@ -268,7 +406,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   const WEEKDAY_LABELS: Record<number, string> = { 0: 'CN', 1: 'T2', 2: 'T3', 3: 'T4', 4: 'T5', 5: 'T6', 6: 'T7' }
 
   return (
-    <form onSubmit={handleSubmit} className="flex flex-col h-full">
+    <form ref={formRef} onSubmit={handleSubmit} onInput={() => setDirtyTick((t) => t + 1)} className="flex flex-col h-full">
 
       {/* ── Header (h-16) ── */}
       <div className="h-16 flex items-center justify-between gap-3 px-5 border-b bg-background sticky top-0 z-10 shrink-0">
@@ -300,6 +438,29 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
 
         {/* ── Left: compose area ── */}
         <div className="flex-1 min-w-0 flex flex-col lg:border-r">
+
+          {/* Draft restore banner — create mode only, no silent restore */}
+          {isCreate && hasDraft && (
+            <div className="border-b px-5 py-2 flex items-center justify-between gap-2 bg-amber-50">
+              <span className="text-xs text-amber-800">Có bản nháp chưa gửi</span>
+              <div className="flex gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={restoreDraft}
+                  className="text-xs px-2.5 py-1 rounded border border-amber-300 text-amber-800 hover:bg-amber-100"
+                >
+                  Khôi phục
+                </button>
+                <button
+                  type="button"
+                  onClick={discardDraft}
+                  className="text-xs px-2.5 py-1 rounded text-muted-foreground hover:text-destructive"
+                >
+                  Xóa
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Row 1: Scope pills — admin + new only; recurring hides "Một CH" */}
           {isAdmin && !isEditMode && (

@@ -4,6 +4,7 @@ import { buttonVariants } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { TaskFilters } from '@/components/tasks/TaskFilters'
 import { TaskList, TaskListItem, BroadcastGroup, TaskRow, ChildTask } from '@/components/tasks/TaskList'
+import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { Plus, AlertCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -120,6 +121,7 @@ export default async function TasksPage({
 
   return (
     <div className="p-6 space-y-4">
+      <AutoRefresh intervalMs={25000} />
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Danh sách Tasks</h1>
         {canCreate && (

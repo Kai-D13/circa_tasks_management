@@ -8,6 +8,7 @@ import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { formatDateTime } from '@/lib/dateUtils'
 import { LogFilters, type LogFilterParams } from '@/components/logs/LogFilters'
+import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { LOGS_PAGE_SIZE, ACTION_COLORS, ACTION_LABELS, formatMeta } from '@/lib/logs/constants'
 
 type Meta = Record<string, unknown>
@@ -93,6 +94,7 @@ export default async function LogsPage({
 
   return (
     <div className="p-6 space-y-4">
+      <AutoRefresh intervalMs={30000} />
       <h1 className="text-xl font-semibold">Nhật ký hoạt động</h1>
 
       <LogFilters
