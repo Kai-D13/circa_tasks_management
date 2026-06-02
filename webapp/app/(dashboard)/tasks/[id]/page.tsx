@@ -314,27 +314,29 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
             <InputDataDisplay inputData={task.input_data as Record<string, unknown>} />
           )}
 
-          {/* Admin review notes — read-only for managers/staff; only admins can add.
-              Store managers use "Trao đổi với Admin" for their own messages. */}
-          {(userRole === 'admin' || reviewEntries.length > 0) && (
-            <TaskReviewNote
-              taskId={id}
-              reviews={reviewEntries}
-              canAddNote={userRole === 'admin'}
-            />
+          {/* Resubmit request banner — above submit form so the reason is visible
+              before the submitter starts filling in the form */}
+          {(userRole === 'staff' || isStoreSubmitter) && resubmitAt && !hasAlreadySubmitted && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
+              <p className="font-medium text-amber-900">Quản lý yêu cầu thực hiện lại</p>
+              {resubmitReason && <p className="text-amber-800 mt-1">Lý do: {resubmitReason}</p>}
+              <p className="text-xs text-amber-700 mt-1">Kết quả cũ đã được lưu. Vui lòng nộp lại bên dưới.</p>
+            </div>
           )}
 
-          {/* Trao đổi với Admin — store_manager ↔ admin; staff cannot see */}
-          {(canCreateFeedback || canReplyFeedback) && (
-            <FeedbackSection
-              taskId={id}
-              threads={(feedbackThreads ?? []) as unknown as FeedbackThread[]}
-              canCreate={canCreateFeedback}
-              canReply={canReplyFeedback}
-              createFn={createFeedbackThread}
-              replyFn={addFeedbackMessage}
-              resolveFn={resolveFeedbackThread}
-            />
+          {/* Submit form — primary workflow step, right after task content */}
+          {canSubmit && (
+            <Card className="border-primary/30">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm text-primary">Nộp kết quả</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <TaskSubmitForm
+                  taskId={id}
+                  requiredOutputs={(task.required_outputs as RequiredOutput[]) ?? []}
+                />
+              </CardContent>
+            </Card>
           )}
 
           {/* Previous submissions */}
@@ -359,7 +361,29 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
             </Card>
           )}
 
-          {/* Admin-only review actions */}
+          {/* Trao đổi với Admin — store_manager ↔ admin; staff cannot see */}
+          {(canCreateFeedback || canReplyFeedback) && (
+            <FeedbackSection
+              taskId={id}
+              threads={(feedbackThreads ?? []) as unknown as FeedbackThread[]}
+              canCreate={canCreateFeedback}
+              canReply={canReplyFeedback}
+              createFn={createFeedbackThread}
+              replyFn={addFeedbackMessage}
+              resolveFn={resolveFeedbackThread}
+            />
+          )}
+
+          {/* Admin review notes — read-only for managers/staff; only admins can add */}
+          {(userRole === 'admin' || reviewEntries.length > 0) && (
+            <TaskReviewNote
+              taskId={id}
+              reviews={reviewEntries}
+              canAddNote={userRole === 'admin'}
+            />
+          )}
+
+          {/* Admin-only review actions — after results so context is clear */}
           {canReviewTask && hasValidSubmission && task.status !== 'done' && (
             <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
               Task đã có kết quả nộp nhưng trạng thái hiện không phải Hoàn thành. Có thể yêu cầu làm lại hoặc chỉnh trạng thái.
@@ -370,34 +394,11 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           )}
         </div>
 
-        {/* ── Right — action sidebar (order-1 mobile → above, order-last desktop → right) ── */}
+        {/* ── Right — metadata sidebar (order-1 mobile → above, order-last desktop → right) ── */}
         <div className="order-1 lg:order-last lg:w-[340px] lg:shrink-0 px-4 py-4 space-y-4 lg:border-l lg:overflow-y-auto">
 
-          {/* Resubmit request banner — submitters only */}
-          {(userRole === 'staff' || isStoreSubmitter) && resubmitAt && !hasAlreadySubmitted && (
-            <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
-              <p className="font-medium text-amber-900">Quản lý yêu cầu thực hiện lại</p>
-              {resubmitReason && <p className="text-amber-800 mt-1">Lý do: {resubmitReason}</p>}
-              <p className="text-xs text-amber-700 mt-1">Kết quả cũ đã được lưu. Vui lòng nộp lại bên dưới.</p>
-            </div>
-          )}
-
-          {/* Submit form — primary CTA, shown first in sidebar */}
-          {canSubmit && (
-            <Card className="border-primary/30">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-primary">Nộp kết quả</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <TaskSubmitForm
-                  taskId={id}
-                  requiredOutputs={(task.required_outputs as RequiredOutput[]) ?? []}
-                />
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Extend deadline — admin/manager when overdue */}
+          {/* Extend deadline — admin when overdue; at the top so the action is
+              immediately visible alongside the overdue status badge */}
           {canReviewTask && displayStatus === 'overdue' && (
             <ExtendDeadlineForm
               taskId={id}
@@ -406,7 +407,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
             />
           )}
 
-          {/* Status + metadata */}
+          {/* Status + metadata card */}
           <Card>
             <CardContent className="pt-4 space-y-3 text-sm">
 

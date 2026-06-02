@@ -76,7 +76,7 @@ export function TaskSubmitForm({ taskId, requiredOutputs }: Props) {
               placeholder="Nhập nội dung ghi chú..."
               value={strOutputs[type] ?? ''}
               onChange={(e) => set(type, e.target.value)}
-              rows={3}
+              rows={5}
             />
           ) : type === 'image' ? (
             <MultiImageUpload
@@ -94,9 +94,12 @@ export function TaskSubmitForm({ taskId, requiredOutputs }: Props) {
           )}
         </div>
       ))}
-      <Button type="submit" disabled={pending} size="sm">
-        {pending ? 'Đang nộp...' : 'Nộp kết quả'}
-      </Button>
+      {/* Full-width on mobile, right-aligned on sm+ */}
+      <div className="flex justify-end">
+        <Button type="submit" disabled={pending} className="w-full sm:w-auto">
+          {pending ? 'Đang nộp...' : 'Nộp kết quả'}
+        </Button>
+      </div>
     </form>
   )
 }
