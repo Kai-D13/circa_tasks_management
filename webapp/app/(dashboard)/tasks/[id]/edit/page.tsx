@@ -1,6 +1,7 @@
 import { notFound, redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { TaskForm } from '@/components/tasks/TaskForm'
+import { isSuperAdminEmail } from '@/lib/authz'
 import { Task } from '@/types'
 
 export default async function EditTaskPage({ params }: { params: Promise<{ id: string }> }) {
@@ -17,8 +18,9 @@ export default async function EditTaskPage({ params }: { params: Promise<{ id: s
 
   if (!task) notFound()
 
-  const canEdit = profile?.role === 'admin' ||
-    (profile?.role === 'store_manager' && task.store_id === profile.store_id)
+  // Admin-only + own-scope: super admin any task, sub-admin only ones they created.
+  const canEdit = profile?.role === 'admin'
+    && (isSuperAdminEmail(user.email) || task.created_by === user.id)
 
   if (!canEdit) redirect(`/tasks/${id}`)
 

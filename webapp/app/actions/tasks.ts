@@ -7,6 +7,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { computeNextRunAt } from '@/lib/recurring'
 import { notifyTaskCreated } from '@/lib/teams/notifyTaskCreated'
 import { getEffectiveStatus } from '@/lib/dateUtils'
+import { canAdminManageOwn } from '@/lib/authz'
 import { TaskCategory, TaskPriority, TaskStatus, TaskVisibility, RequiredOutput, TaskAttachment } from '@/types'
 
 async function writeLog(
@@ -78,6 +79,11 @@ export async function createTask(formData: FormData) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
+
+  // Task creation is admin-only (own-scope: created_by = caller). Store managers
+  // are executors, not task admins.
+  const { data: creatorProfile } = await supabase.from('users').select('role').eq('id', user.id).single()
+  if (creatorProfile?.role !== 'admin') return { error: 'Chỉ admin mới được tạo task' }
 
   const storeIdVal = formData.get('store_id') as string | null
   if (!storeIdVal) return { error: 'Vui lòng chọn cửa hàng nhận task' }
@@ -176,6 +182,12 @@ export async function updateTask(taskId: string, formData: FormData) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
 
+  // Admin-only + own-scope: super admin any task, sub-admin only ones they created.
+  const { data: editorProfile } = await supabase.from('users').select('role').eq('id', user.id).single()
+  const { data: ownerRow } = await supabase.from('tasks').select('created_by').eq('id', taskId).single()
+  if (!canAdminManageOwn({ email: user.email, role: editorProfile?.role, createdBy: ownerRow?.created_by, userId: user.id }))
+    return { error: 'Bạn không có quyền chỉnh sửa task này' }
+
   const storeIdVal = formData.get('store_id') as string | null
   if (!storeIdVal) return { error: 'Vui lòng chọn cửa hàng nhận task' }
 
@@ -262,9 +274,11 @@ export async function updateTaskStatus(taskId: string, status: TaskStatus, note?
     return { error: 'Dùng form "Nộp kết quả" để hoàn thành task' }
   }
 
-  // Staff: route through SECURITY DEFINER RPC (only allows status column update,
-  // validates assignment + submission state at DB level)
-  if (role === 'staff') {
+  // Executors (staff + store_manager submitters): route through the SECURITY
+  // DEFINER RPC, which only allows the status column and validates submitter +
+  // todo/in_progress + submission state at the DB level. Managers no longer have
+  // a direct tasks UPDATE policy (migration 022).
+  if (role === 'staff' || role === 'store_manager') {
     const { data: rpcResult, error: rpcError } = await supabase.rpc(
       'rpc_staff_update_task_status',
       { p_task_id: taskId, p_status: status, p_note: note ?? null }
@@ -287,25 +301,13 @@ export async function updateTaskStatus(taskId: string, status: TaskStatus, note?
     return { success: true }
   }
 
-  // Admin / Store Manager: direct update
+  // Admin only: direct update. RLS (tasks_update_admin, own-scope) enforces that
+  // a sub-admin can only touch tasks they created; super admin any.
   const { data: current } = await supabase
     .from('tasks')
     .select('status, created_by, title, assigned_to, store_id, resubmit_requested_at')
     .eq('id', taskId)
     .single()
-
-  // Store manager acting as submitter cannot change status after submitting
-  if (role === 'store_manager' && current) {
-    const isDirectAssignee = current.assigned_to === user.id
-    const isStoreLevel = current.assigned_to === null && current.store_id !== null
-    if (isDirectAssignee || isStoreLevel) {
-      let q = supabase.from('task_results').select('id').eq('task_id', taskId)
-      if (current.resubmit_requested_at) q = q.gt('submitted_at', current.resubmit_requested_at)
-      if (isDirectAssignee) q = q.eq('user_id', user.id)
-      const { data: existingResult } = await q.limit(1).maybeSingle()
-      if (existingResult) return { error: 'Task đã nộp kết quả, không thể đổi trạng thái' }
-    }
-  }
 
   const { error } = await supabase.from('tasks').update({ status }).eq('id', taskId)
   if (error) return { error: error.message }
@@ -332,6 +334,12 @@ export async function deleteTask(taskId: string) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
+
+  // Admin-only + own-scope: super admin any, sub-admin only ones they created.
+  const { data: delProfile } = await supabase.from('users').select('role').eq('id', user.id).single()
+  const { data: delOwner } = await supabase.from('tasks').select('created_by').eq('id', taskId).single()
+  if (!canAdminManageOwn({ email: user.email, role: delProfile?.role, createdBy: delOwner?.created_by, userId: user.id }))
+    return { error: 'Bạn không có quyền xoá task này' }
 
   const { error } = await supabase.from('tasks').delete().eq('id', taskId)
   if (error) return { error: error.message }
@@ -454,14 +462,17 @@ export async function reassignTask(taskId: string, assignedTo: string | null) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
 
-  const { data: profile } = await supabase.from('users').select('role, store_id').eq('id', user.id).single()
-  if (!['admin', 'store_manager'].includes(profile?.role ?? '')) {
-    return { error: 'Không có quyền phân công task' }
-  }
+  // Admin-only + own-scope: reassigning is a task-management action.
+  const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
+  const { data: reassignTask } = await supabase.from('tasks').select('created_by, store_id').eq('id', taskId).single()
+  if (!canAdminManageOwn({ email: user.email, role: profile?.role, createdBy: reassignTask?.created_by, userId: user.id }))
+    return { error: 'Không có quyền phân công task này' }
 
-  if (profile?.role === 'store_manager') {
-    const { data: task } = await supabase.from('tasks').select('store_id').eq('id', taskId).single()
-    if (task?.store_id !== profile.store_id) return { error: 'Không có quyền phân công task này' }
+  // If assigning to a specific user, they must belong to the same store as the task.
+  if (assignedTo) {
+    const { data: assignee } = await supabase.from('users').select('store_id').eq('id', assignedTo).single()
+    if (assignee?.store_id !== reassignTask?.store_id)
+      return { error: 'Người được phân công phải thuộc cùng cửa hàng với task' }
   }
 
   const visibility: TaskVisibility = assignedTo ? 'private' : 'store'
@@ -604,8 +615,8 @@ export async function createBulkTasks(params: {
   if (!user) return { error: 'Not authenticated' }
 
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
-  if (!['admin', 'store_manager'].includes(profile?.role ?? '')) {
-    return { error: 'Chỉ admin hoặc store manager mới được tạo task hàng loạt' }
+  if (profile?.role !== 'admin') {
+    return { error: 'Chỉ admin mới được tạo task hàng loạt' }
   }
 
   const tasksToInsert = params.storeItems.map((item) => ({
@@ -647,24 +658,13 @@ export async function requestResubmit(taskId: string, reason?: string) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
 
+  // Requesting resubmit is a review action — admin-only + own-scope.
   const { data: profile } = await supabase
-    .from('users').select('role, store_id').eq('id', user.id).single()
-  if (!['admin', 'store_manager'].includes(profile?.role ?? ''))
-    return { error: 'Không có quyền yêu cầu làm lại' }
-
+    .from('users').select('role').eq('id', user.id).single()
   const { data: task } = await supabase
-    .from('tasks').select('assigned_to, title, store_id, deadline, status').eq('id', taskId).single()
-
-  // Store manager who is the submitter cannot request resubmit on their own task.
-  // Two submitter cases: direct assignee OR store-level (assigned_to = null, same store).
-  if (profile?.role === 'store_manager') {
-    const isDirectAssignee = task?.assigned_to === user.id
-    const isStoreSubmitter = task?.assigned_to === null
-      && task?.store_id !== null
-      && task?.store_id === profile.store_id
-    if (isDirectAssignee || isStoreSubmitter)
-      return { error: 'Bạn là người nộp task này, không thể tự yêu cầu làm lại' }
-  }
+    .from('tasks').select('created_by, assigned_to, title, store_id, deadline, status').eq('id', taskId).single()
+  if (!canAdminManageOwn({ email: user.email, role: profile?.role, createdBy: task?.created_by, userId: user.id }))
+    return { error: 'Không có quyền yêu cầu làm lại task này' }
 
   // Ensure task actually has results before allowing resubmit request
   const { count: resultCount } = await supabase
@@ -737,15 +737,16 @@ export async function extendDeadline(taskId: string, newDeadline: string) {
 
   const { data: profile } = await supabase
     .from('users').select('role').eq('id', user.id).single()
-  if (!['admin', 'store_manager'].includes(profile?.role ?? ''))
-    return { error: 'Không có quyền gia hạn deadline' }
 
   if (!newDeadline) return { error: 'Vui lòng chọn ngày gia hạn' }
   if (new Date(newDeadline) <= new Date())
     return { error: 'Deadline mới phải ở tương lai' }
 
+  // Admin-only + own-scope.
   const { data: current } = await supabase
-    .from('tasks').select('deadline, title, status').eq('id', taskId).single()
+    .from('tasks').select('created_by, deadline, title, status').eq('id', taskId).single()
+  if (!canAdminManageOwn({ email: user.email, role: profile?.role, createdBy: current?.created_by, userId: user.id }))
+    return { error: 'Không có quyền gia hạn deadline cho task này' }
 
   // Extending the deadline must clear a literal 'overdue' status, otherwise
   // getEffectiveStatus short-circuits on 'overdue' and the submitter stays
@@ -819,8 +820,10 @@ export async function archiveTasks(ids: string[]) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Chưa đăng nhập' }
 
+  // Admin-only. Own-scope is enforced by RLS (tasks_update_admin): a sub-admin's
+  // update only affects their own tasks; super admin affects any.
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
-  if (!['admin', 'store_manager'].includes(profile?.role ?? ''))
+  if (profile?.role !== 'admin')
     return { error: 'Không có quyền lưu trữ' }
 
   const { data: updated, error } = await supabase
@@ -843,8 +846,9 @@ export async function restoreTasks(ids: string[]) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Chưa đăng nhập' }
 
+  // Admin-only. Own-scope enforced by RLS (tasks_update_admin).
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
-  if (!['admin', 'store_manager'].includes(profile?.role ?? ''))
+  if (profile?.role !== 'admin')
     return { error: 'Không có quyền khôi phục' }
 
   const { data: updated, error } = await supabase

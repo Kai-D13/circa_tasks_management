@@ -66,14 +66,18 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   if (!task) notFound()
 
   const userRole   = (profile?.role ?? 'staff') as UserRole
-  const canReassign = userRole === 'admin' || userRole === 'store_manager'
-  // Sub-admins may edit/delete only tasks they created; the super admin, any.
-  const canEdit     = userRole === 'admin'
-    && (isSuperAdminEmail(user!.email) || task.created_by === user!.id)
   const userId      = user!.id
+  // canManageTask: admin task-management capability (edit/delete/reassign/extend/
+  // review). Sub-admins only on tasks they created; super admin on any. Store
+  // managers/staff are executors and never manage.
+  const canManageTask = userRole === 'admin'
+    && (isSuperAdminEmail(user!.email) || task.created_by === userId)
+  // canViewStoreRoster: read-only — fetch store users for results filtering
+  // (store_manager) and the reassign dropdown (admin). Not a mutation right.
+  const canViewStoreRoster = userRole === 'admin' || userRole === 'store_manager'
 
   // Round 2: store users (needed for reassign form + results filter for store_manager)
-  const { data: storeUsers } = canReassign && task.store_id
+  const { data: storeUsers } = canViewStoreRoster && task.store_id
     ? await supabase.from('users').select('id, full_name, role').eq('store_id', task.store_id).order('full_name')
     : { data: [] }
 
@@ -179,11 +183,12 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
     && isSubmitterForTask
     && !hasAlreadySubmitted
 
-  // Admin always sees selector. Store manager reviewing (not the submitter) always sees it.
-  // Submitter (any role) loses the selector once they have a valid submission or task is effectively overdue/done.
+  // Admin (manager of this task) always sees the selector. The submitter
+  // (staff/store) keeps it for execution status (todo/in_progress) until they
+  // have a valid submission or the task is effectively overdue/done. Store
+  // managers who are NOT the submitter no longer get a reviewer selector.
   const canSeeStatusSelector =
-    canEdit
-    || (canReassign && !isSubmitterForTask)
+    canManageTask
     || (isSubmitterForTask && !hasAlreadySubmitted && !['done', 'overdue'].includes(displayStatus))
 
   // Helper text shown when submitter is locked after valid submission
@@ -194,9 +199,9 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
     (r) => !resubmitAt || new Date((r as { submitted_at: string }).submitted_at) > new Date(resubmitAt)
   )
 
-  // canReviewTask: can see RequestResubmitSection and review actions.
-  // Store manager who is the submitter for this task cannot review their own submission.
-  const canReviewTask = userRole === 'admin' || (canReassign && !isSubmitterForTask)
+  // canReviewTask: RequestResubmitSection + review actions (extend deadline,
+  // resubmit warnings). Admin-only now — store managers use "Trao đổi với Admin".
+  const canReviewTask = canManageTask
 
   // Feedback: any store_manager of this task's store can create AND reply.
   // Store-level submitters CAN create feedback (different from resubmit rule).
@@ -269,7 +274,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
               )}
             </p>
           </div>
-          {canEdit && (
+          {canManageTask && (
             <div className="flex gap-2 shrink-0">
               <Link href={`/tasks/${id}/edit`} className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}>
                 <Pencil className="h-4 w-4 mr-1" /> Chỉnh sửa
@@ -461,7 +466,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
               {/* Assignee */}
               <div>
                 <p className="text-xs text-muted-foreground mb-1">Người thực hiện</p>
-                {canReassign ? (
+                {canManageTask ? (
                   <TaskReassignForm
                     taskId={id}
                     currentAssignedTo={task.assigned_to}
@@ -492,7 +497,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
               )}
 
               {/* Visibility — less prominent, admin/manager context only */}
-              {canReassign && (
+              {canViewStoreRoster && (
                 <>
                   <Separator />
                   <div>

@@ -57,9 +57,10 @@ export default async function TasksPage({
   ])
 
   const storesForFilter = profile?.role === 'staff' ? [] : (stores ?? [])
-  const canCreate  = profile?.role === 'admin' || profile?.role === 'store_manager'
-  const canArchive = !showArchived && (profile?.role === 'admin' || profile?.role === 'store_manager')
-  const canRestore = showArchived  && (profile?.role === 'admin' || profile?.role === 'store_manager')
+  // Task creation / archive / restore are admin-only management actions.
+  const canCreate  = profile?.role === 'admin'
+  const canArchive = !showArchived && profile?.role === 'admin'
+  const canRestore = showArchived  && profile?.role === 'admin'
 
   // Group tasks: collapse same broadcast_id into one broadcast row with full progress
   const grouped: TaskListItem[] = []

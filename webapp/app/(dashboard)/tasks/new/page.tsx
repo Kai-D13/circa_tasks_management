@@ -10,7 +10,8 @@ export default async function NewTaskPage() {
   const { data: profile } = await supabase
     .from('users').select('role, store_id').eq('id', user.id).single()
 
-  if (profile?.role === 'staff') redirect('/tasks')
+  // Task creation is admin-only — store managers/staff are executors.
+  if (profile?.role !== 'admin') redirect('/tasks')
 
   const [{ data: stores }, { data: users }] = await Promise.all([
     supabase.from('stores').select('id, name').order('name'),

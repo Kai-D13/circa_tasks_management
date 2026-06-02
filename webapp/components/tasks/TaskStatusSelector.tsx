@@ -37,11 +37,14 @@ export function TaskStatusSelector({ taskId, currentStatus, userRole }: Props) {
       ? ['todo', 'in_progress'] as TaskStatus[]
       : ['todo', 'in_progress'] as TaskStatus[] // store_manager: done only via submit form
 
+  // RPC requires a note for any executor (staff or store_manager submitter)
+  // switching to in_progress — mirror the DB guard in the UI.
+  const isExecutor = userRole === 'staff' || userRole === 'store_manager'
+
   function handleChange(status: string | null) {
     if (!status) return
     const s = status as TaskStatus
-    // Staff changing to in_progress → show note prompt
-    if (userRole === 'staff' && s === 'in_progress') {
+    if (isExecutor && s === 'in_progress') {
       setPendingStatus(s)
       setNote('')
       return
@@ -80,7 +83,7 @@ export function TaskStatusSelector({ taskId, currentStatus, userRole }: Props) {
       {pendingStatus && (
         <div className="rounded-md border bg-muted/40 p-3 space-y-2 text-sm">
           <p className="text-xs text-muted-foreground">
-            Ghi chú tiến độ{userRole === 'staff' ? ' (bắt buộc)' : ' (không bắt buộc)'}
+            Ghi chú tiến độ (bắt buộc)
           </p>
           <Textarea
             value={note}
@@ -92,7 +95,7 @@ export function TaskStatusSelector({ taskId, currentStatus, userRole }: Props) {
           <div className="flex gap-2">
             <Button
               size="sm" className="text-xs h-7"
-              disabled={pending || (userRole === 'staff' && !note.trim())}
+              disabled={pending || (isExecutor && !note.trim())}
               onClick={() => applyChange(pendingStatus, note || undefined)}
             >
               Xác nhận
