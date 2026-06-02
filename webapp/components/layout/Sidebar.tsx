@@ -47,14 +47,17 @@ export function Sidebar() {
     router.refresh()
   }
 
+  // prefetch=false on data-heavy routes so hovering the sidebar doesn't silently
+  // fetch large RSC payloads in the background. First-click latency is negligible
+  // since these are server-rendered with a fast DB query.
   const navItems = [
-    { href: '/dashboard',        label: 'Tổng quan',   icon: LayoutDashboard, roles: ['admin', 'store_manager', 'staff'] },
-    { href: '/tasks',            label: 'Tasks',        icon: CheckSquare,     roles: ['admin', 'store_manager', 'staff'] },
-    { href: '/tasks/schedules',  label: 'Định kỳ',     icon: CalendarClock,   roles: ['admin'] },
-    { href: '/users',            label: 'Người dùng',   icon: Users,           roles: ['admin'] },
-    { href: '/stores',           label: 'Cửa hàng',     icon: Store,           roles: ['admin', 'store_manager'] },
-    { href: '/prescriptions',     label: 'Toa thuốc',    icon: FileImage,       roles: ['admin', 'store_manager', 'staff'] },
-    { href: '/logs',             label: 'Nhật ký',      icon: ScrollText,      roles: ['admin', 'store_manager', 'staff'] },
+    { href: '/dashboard',        label: 'Tổng quan',   icon: LayoutDashboard, roles: ['admin', 'store_manager', 'staff'], prefetch: false },
+    { href: '/tasks',            label: 'Tasks',        icon: CheckSquare,     roles: ['admin', 'store_manager', 'staff'], prefetch: false },
+    { href: '/tasks/schedules',  label: 'Định kỳ',     icon: CalendarClock,   roles: ['admin'],                          prefetch: false },
+    { href: '/users',            label: 'Người dùng',   icon: Users,           roles: ['admin'],                          prefetch: false },
+    { href: '/stores',           label: 'Cửa hàng',     icon: Store,           roles: ['admin', 'store_manager'],         prefetch: false },
+    { href: '/prescriptions',    label: 'Toa thuốc',    icon: FileImage,       roles: ['admin', 'store_manager', 'staff'], prefetch: false },
+    { href: '/logs',             label: 'Nhật ký',      icon: ScrollText,      roles: ['admin', 'store_manager', 'staff'], prefetch: false },
   ]
 
   const visibleItems = role
@@ -75,10 +78,11 @@ export function Sidebar() {
 
       {/* Nav */}
       <nav className="flex-1 overflow-y-auto p-2 space-y-0.5">
-        {visibleItems.map(({ href, label, icon: Icon }) => (
+        {visibleItems.map(({ href, label, icon: Icon, prefetch }) => (
           <Link
             key={href}
             href={href}
+            prefetch={prefetch}
             className={cn(
               'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
               pathname === href || (href !== '/dashboard' && pathname.startsWith(href))

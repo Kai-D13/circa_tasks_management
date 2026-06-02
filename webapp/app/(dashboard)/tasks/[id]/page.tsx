@@ -237,7 +237,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
     // each column gets independent overflow-y-auto scroll. On mobile no height
     // constraint — <main> (overflow-y-auto) handles natural page scroll.
     <div className="flex flex-col lg:h-full">
-      <AutoRefresh intervalMs={12000} />
+      <AutoRefresh intervalMs={30000} />
 
       {/* ── Page header (full width) ── */}
       <div className="px-4 pt-4 pb-3 border-b bg-background shrink-0">

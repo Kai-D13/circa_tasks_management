@@ -7,12 +7,12 @@ import { LayoutDashboard, CheckSquare, Users, Store, FileImage, ScrollText } fro
 import { cn } from '@/lib/utils'
 
 const NAV_ITEMS = [
-  { href: '/dashboard',     label: 'Tổng quan', icon: LayoutDashboard, roles: ['admin', 'store_manager', 'staff'] },
-  { href: '/tasks',         label: 'Tasks',      icon: CheckSquare,     roles: ['admin', 'store_manager', 'staff'] },
-  { href: '/prescriptions', label: 'Toa thuốc', icon: FileImage,       roles: ['admin', 'store_manager', 'staff'] },
-  { href: '/users',         label: 'Users',      icon: Users,           roles: ['admin'] },
-  { href: '/stores',        label: 'Cửa hàng',  icon: Store,           roles: ['admin', 'store_manager'] },
-  { href: '/logs',          label: 'Nhật ký',   icon: ScrollText,      roles: ['admin', 'store_manager', 'staff'] },
+  { href: '/dashboard',     label: 'Tổng quan', icon: LayoutDashboard, roles: ['admin', 'store_manager', 'staff'], prefetch: false },
+  { href: '/tasks',         label: 'Tasks',      icon: CheckSquare,     roles: ['admin', 'store_manager', 'staff'], prefetch: false },
+  { href: '/prescriptions', label: 'Toa thuốc', icon: FileImage,       roles: ['admin', 'store_manager', 'staff'], prefetch: false },
+  { href: '/users',         label: 'Users',      icon: Users,           roles: ['admin'],                           prefetch: false },
+  { href: '/stores',        label: 'Cửa hàng',  icon: Store,           roles: ['admin', 'store_manager'],          prefetch: false },
+  { href: '/logs',          label: 'Nhật ký',   icon: ScrollText,      roles: ['admin', 'store_manager', 'staff'], prefetch: false },
 ]
 
 export function BottomNav() {
@@ -27,12 +27,13 @@ export function BottomNav() {
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
     >
       <div className="flex items-center justify-around h-14">
-        {visible.map(({ href, label, icon: Icon }) => {
+        {visible.map(({ href, label, icon: Icon, prefetch }) => {
           const isActive = pathname === href || (href !== '/dashboard' && pathname.startsWith(href))
           return (
             <Link
               key={href}
               href={href}
+              prefetch={prefetch}
               className={cn(
                 'flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-colors',
                 isActive
