@@ -43,7 +43,7 @@ export default async function UsersPage() {
   ])
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-4 space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Quản lý người dùng</h1>
         <CreateUserDialog stores={stores ?? []} />

@@ -93,7 +93,7 @@ export default async function LogsPage({
   }
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-4 space-y-4">
       <AutoRefresh intervalMs={60000} />
       <h1 className="text-xl font-semibold">Nhật ký hoạt động</h1>
 

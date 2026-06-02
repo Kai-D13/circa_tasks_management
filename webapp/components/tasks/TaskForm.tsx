@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { SearchableSelect } from '@/components/ui/searchable-select'
 import { Plus, X, Paperclip, Link2, Settings } from 'lucide-react'
 import { TaskInputAttachments, type TaskInputAttachmentsHandle } from '@/components/tasks/TaskInputAttachments'
 import { cn } from '@/lib/utils'
@@ -228,8 +229,6 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
 
   const visibleStores  = isAdmin ? stores : stores.filter((s) => s.id === currentUserStoreId)
   const storeUsers     = storeId ? users.filter((u) => u.store_id === storeId) : users
-  const selectedStoreName = visibleStores.find((s) => s.id === storeId)?.name
-  const selectedUserName  = users.find((u) => u.id === assignedTo)?.full_name
   const broadcastCount    = scope === 'all' ? visibleStores.length : selectedStoreIds.length
   const showMultiStore    = isBroadcast || isRecurring
 
@@ -516,36 +515,29 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
             ) : (
               <div className="flex flex-col sm:flex-row gap-2.5">
                 <div className="flex-1">
-                  <Select value={storeId} onValueChange={handleStoreChange}>
-                    <SelectTrigger className="h-8 text-sm bg-background">
-                      <SelectValue>
-                        {selectedStoreName ?? <span className="text-muted-foreground">Cửa hàng...</span>}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {visibleStores.map((s) => (
-                        <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <SearchableSelect
+                    value={storeId}
+                    options={visibleStores.map((s) => ({ value: s.id, label: s.name }))}
+                    onValueChange={handleStoreChange}
+                    placeholder="Cửa hàng..."
+                    triggerClassName="h-8 text-sm bg-background"
+                  />
                 </div>
                 <div className="flex-1">
-                  <Select value={assignedTo} onValueChange={(v) => setAssignedTo(v ?? '')}>
-                    <SelectTrigger className="h-8 text-sm bg-background">
-                      <SelectValue>
-                        {selectedUserName ?? <span className="text-muted-foreground">Người thực hiện...</span>}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="">Chưa phân công</SelectItem>
-                      {storeUsers.map((u) => (
-                        <SelectItem key={u.id} value={u.id}>
-                          {u.full_name}
-                          <span className="ml-1 text-xs text-muted-foreground">({u.role.replace('_', ' ')})</span>
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <SearchableSelect
+                    value={assignedTo}
+                    options={[
+                      { value: '', label: 'Chưa phân công' },
+                      ...storeUsers.map((u) => ({
+                        value: u.id,
+                        label: u.full_name,
+                        description: u.role.replace('_', ' '),
+                      })),
+                    ]}
+                    onValueChange={(v) => setAssignedTo(v ?? '')}
+                    placeholder="Người thực hiện..."
+                    triggerClassName="h-8 text-sm bg-background"
+                  />
                 </div>
               </div>
             )}

@@ -3,7 +3,6 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button, buttonVariants } from '@/components/ui/button'
-import { Separator } from '@/components/ui/separator'
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
 import { TaskPriorityBadge } from '@/components/tasks/TaskPriorityBadge'
 import { TaskSubmitForm } from '@/components/tasks/TaskSubmitForm'
@@ -407,12 +406,13 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
             />
           )}
 
-          {/* Status + metadata card */}
+          {/* Status + metadata card — rows use border-t spacing rather than
+              heavy Separators between every field */}
           <Card>
-            <CardContent className="pt-4 space-y-3 text-sm">
+            <CardContent className="pt-4 text-sm divide-y divide-border/60">
 
               {/* Status */}
-              <div>
+              <div className="pb-3">
                 <p className="text-xs text-muted-foreground mb-1">Trạng thái</p>
                 <div className="flex items-center gap-2 flex-wrap">
                   <TaskStatusBadge status={displayStatus} />
@@ -432,10 +432,8 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                 )}
               </div>
 
-              <Separator />
-
               {/* Deadline + start date */}
-              <div className="grid grid-cols-2 gap-3">
+              <div className="py-3 grid grid-cols-2 gap-3">
                 {task.start_date && (
                   <div>
                     <p className="text-xs text-muted-foreground">Bắt đầu</p>
@@ -450,22 +448,20 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                 </div>
               </div>
 
-              <Separator />
-
-              {/* Priority */}
-              <div>
-                <p className="text-xs text-muted-foreground mb-1">Ưu tiên</p>
-                <TaskPriorityBadge priority={task.priority as Task['priority']} />
-              </div>
-
-              {/* Store */}
-              <div>
-                <p className="text-xs text-muted-foreground mb-1">Cửa hàng</p>
-                <p className="font-medium">{(task.stores as { name: string } | null)?.name ?? '—'}</p>
+              {/* Priority + Store — same row group */}
+              <div className="py-3 grid grid-cols-2 gap-3">
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Ưu tiên</p>
+                  <TaskPriorityBadge priority={task.priority as Task['priority']} />
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-1">Cửa hàng</p>
+                  <p className="font-medium truncate">{(task.stores as { name: string } | null)?.name ?? '—'}</p>
+                </div>
               </div>
 
               {/* Assignee */}
-              <div>
+              <div className="py-3">
                 <p className="text-xs text-muted-foreground mb-1">Người thực hiện</p>
                 {canManageTask ? (
                   <TaskReassignForm
@@ -482,34 +478,28 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
 
               {/* Required outputs */}
               {(task.required_outputs as RequiredOutput[])?.length > 0 && (
-                <>
-                  <Separator />
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-1.5">Output cần nộp</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {(task.required_outputs as RequiredOutput[]).map((o) => (
-                        <span key={o} className="text-xs bg-muted px-2 py-0.5 rounded">
-                          {OUTPUT_LABEL[o] ?? o}
-                        </span>
-                      ))}
-                    </div>
+                <div className="py-3">
+                  <p className="text-xs text-muted-foreground mb-1.5">Output cần nộp</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {(task.required_outputs as RequiredOutput[]).map((o) => (
+                      <span key={o} className="text-xs bg-muted px-2 py-0.5 rounded">
+                        {OUTPUT_LABEL[o] ?? o}
+                      </span>
+                    ))}
                   </div>
-                </>
+                </div>
               )}
 
               {/* Visibility — less prominent, admin/manager context only */}
               {canViewStoreRoster && (
-                <>
-                  <Separator />
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-1">Phạm vi</p>
-                    <p className="text-sm">
-                      {task.visibility === 'public' ? 'Tất cả'
-                        : task.visibility === 'store' ? 'Cả store'
-                        : 'Chỉ người được giao'}
-                    </p>
-                  </div>
-                </>
+                <div className="pt-3">
+                  <p className="text-xs text-muted-foreground mb-1">Phạm vi</p>
+                  <p className="text-sm">
+                    {task.visibility === 'public' ? 'Tất cả'
+                      : task.visibility === 'store' ? 'Cả store'
+                      : 'Chỉ người được giao'}
+                  </p>
+                </div>
               )}
             </CardContent>
           </Card>

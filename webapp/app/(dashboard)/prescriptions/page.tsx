@@ -74,7 +74,7 @@ export default async function PrescriptionsPage({
   }
 
   return (
-    <div className="p-6 space-y-4 pb-24">
+    <div className="p-4 space-y-4 pb-24">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h1 className="text-xl font-semibold">Toa thuốc</h1>

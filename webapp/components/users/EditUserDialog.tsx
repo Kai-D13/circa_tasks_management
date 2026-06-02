@@ -6,6 +6,7 @@ import { updateUserRole } from '@/app/actions/users'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { SearchableSelect } from '@/components/ui/searchable-select'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter,
 } from '@/components/ui/dialog'
@@ -64,7 +65,6 @@ export function EditUserDialog({ userId, userName, currentRole, currentStoreId, 
     })
   }
 
-  const selectedStoreName = stores.find((s) => s.id === storeId)?.name
 
   return (
     <Dialog open={open} onOpenChange={handleOpen}>
@@ -92,18 +92,12 @@ export function EditUserDialog({ userId, userName, currentRole, currentStoreId, 
           {role !== 'admin' && (
             <div className="grid gap-1.5">
               <Label>Cửa hàng</Label>
-              <Select value={storeId} onValueChange={(v) => { if (v) setStoreId(v) }}>
-                <SelectTrigger>
-                  <SelectValue>
-                    {selectedStoreName ?? <span className="text-muted-foreground">Chọn cửa hàng</span>}
-                  </SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {stores.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <SearchableSelect
+                value={storeId}
+                options={stores.map((s) => ({ value: s.id, label: s.name }))}
+                onValueChange={(v) => { if (v) setStoreId(v) }}
+                placeholder="Chọn cửa hàng"
+              />
             </div>
           )}
           <DialogFooter>

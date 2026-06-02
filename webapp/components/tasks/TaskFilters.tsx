@@ -2,6 +2,7 @@
 
 import { useRouter, usePathname } from 'next/navigation'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { SearchableSelect } from '@/components/ui/searchable-select'
 import { Button } from '@/components/ui/button'
 import { Store } from '@/types'
 import { Archive, ArrowLeft } from 'lucide-react'
@@ -70,7 +71,11 @@ export function TaskFilters({ stores, currentParams, showArchived }: Props) {
   const priorityVal = currentParams.priority ?? ALL
   const storeIdVal  = currentParams.store_id ?? ALL
   const categoryVal = currentParams.category ?? ALL
-  const selectedStoreName = stores.find((s) => s.id === storeIdVal)?.name
+
+  const storeOptions = [
+    { value: ALL, label: 'Tất cả cửa hàng' },
+    ...stores.map((s) => ({ value: s.id, label: s.name })),
+  ]
 
   return (
     <div className="flex flex-wrap gap-2 items-center">
@@ -101,19 +106,13 @@ export function TaskFilters({ stores, currentParams, showArchived }: Props) {
           </Select>
 
           {stores.length > 0 && (
-            <Select value={storeIdVal} onValueChange={(v) => update('store_id', v)}>
-              <SelectTrigger className="w-40 h-8 text-sm">
-                <SelectValue>
-                  {selectedStoreName ?? (storeIdVal === ALL ? 'Tất cả cửa hàng' : storeIdVal)}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL}>Tất cả cửa hàng</SelectItem>
-                {stores.map((s) => (
-                  <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <SearchableSelect
+              value={storeIdVal}
+              options={storeOptions}
+              onValueChange={(v) => update('store_id', v)}
+              placeholder="Tất cả cửa hàng"
+              triggerClassName="w-40 h-8 text-sm"
+            />
           )}
 
           <Select value={categoryVal} onValueChange={(v) => update('category', v)}>
