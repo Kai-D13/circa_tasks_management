@@ -16,6 +16,7 @@ import { InputDataDisplay } from '@/components/tasks/InputDataDisplay'
 import { deleteTask, requestResubmit, extendDeadline } from '@/app/actions/tasks'
 import { createFeedbackThread, addFeedbackMessage, resolveFeedbackThread } from '@/app/actions/feedback'
 import { FeedbackSection, type FeedbackThread } from '@/components/feedback/FeedbackSection'
+import { ShareTaskDialog, type CollaboratorRow } from '@/components/tasks/ShareTaskDialog'
 import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { formatDate, getEffectiveStatus } from '@/lib/dateUtils'
 import { isSuperAdminEmail } from '@/lib/authz'
@@ -75,10 +76,28 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   // (store_manager) and the reassign dropdown (admin). Not a mutation right.
   const canViewStoreRoster = userRole === 'admin' || userRole === 'store_manager'
 
-  // Round 2: store users (needed for reassign form + results filter for store_manager)
-  const { data: storeUsers } = canViewStoreRoster && task.store_id
-    ? await supabase.from('users').select('id, full_name, role').eq('store_id', task.store_id).order('full_name')
-    : { data: [] }
+  // Round 2: store users + collaborators (parallel)
+  const [{ data: storeUsers }, { data: collaborators }, { data: allAdmins }, { data: myCollaboratorRow }] = await Promise.all([
+    canViewStoreRoster && task.store_id
+      ? supabase.from('users').select('id, full_name, role').eq('store_id', task.store_id).order('full_name')
+      : Promise.resolve({ data: [] as { id: string; full_name: string; role: string }[] }),
+    // Full collaborator list — only the task owner needs this (for the Share dialog)
+    canManageTask
+      ? supabase.from('task_collaborators').select('admin_id, permission, users!admin_id(full_name)').eq('task_id', id)
+      : Promise.resolve({ data: [] as CollaboratorRow[] }),
+    // Admin options for the Share dialog
+    canManageTask
+      ? supabase.from('users').select('id, full_name, email').eq('role', 'admin').neq('id', userId).order('full_name')
+      : Promise.resolve({ data: [] as { id: string; full_name: string; email: string }[] }),
+    // Current user's own collaborator row (only needed when not the owner)
+    !canManageTask && userRole === 'admin'
+      ? supabase.from('task_collaborators').select('permission').eq('task_id', id).eq('admin_id', userId).maybeSingle()
+      : Promise.resolve({ data: null }),
+  ])
+
+  // True when the current user is an 'editor' collaborator (not the owner)
+  const isEditorCollaborator = !canManageTask
+    && (myCollaboratorRow as { permission?: string } | null)?.permission === 'editor'
 
   // Compute isStoreSubmitter here — needed to gate lastResubmitLog fetch below
   const isStoreSubmitter = task.assigned_to === null
@@ -198,16 +217,29 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
     (r) => !resubmitAt || new Date((r as { submitted_at: string }).submitted_at) > new Date(resubmitAt)
   )
 
-  // canReviewTask: RequestResubmitSection + review actions (extend deadline,
-  // resubmit warnings). Admin-only now — store managers use "Trao đổi với Admin".
-  const canReviewTask = canManageTask
+  // canReviewTask: gates RequestResubmitSection + "has results but not done" warning.
+  // Extended to editor collaborators (they can request resubmit after validation).
+  const canReviewTask = canManageTask || isEditorCollaborator
+  // canExtendDeadline: owner + super only — not open to editor collaborators.
+  const canExtendDeadline = canManageTask
+  // canAddReviewNote: owner/super + editor collaborators (server action validates).
+  // view-only collaborators are also admin, so checking just userRole='admin'
+  // would let them through — use the specific flag instead.
+  const canAddReviewNote = canManageTask || isEditorCollaborator
 
   // Feedback: any store_manager of this task's store can create AND reply.
   // Store-level submitters CAN create feedback (different from resubmit rule).
   // Staff: no access to feedback.
   const isManagerOfTaskStore = userRole === 'store_manager' && task.store_id === profile?.store_id
   const canCreateFeedback = isManagerOfTaskStore
-  const canReplyFeedback  = userRole === 'admin' || isManagerOfTaskStore
+  // Feedback reply: task owner/super (canManageTask) or the store's manager.
+  // Collaborators (view or editor) can read threads but cannot reply — their
+  // channel is review notes, not the store-admin Q&A thread.
+  const canReplyFeedback  = canManageTask || isManagerOfTaskStore
+  // Collaborators can read threads (RLS permits it) but the UI gate must be
+  // explicit — neither canCreateFeedback nor canReplyFeedback is true for them.
+  const isTaskCollaborator = !!myCollaboratorRow
+  const canViewFeedback   = canCreateFeedback || canReplyFeedback || isTaskCollaborator
 
   const assignerName: string | null = lastAssignLog
     ? (lastAssignLog.users as unknown as { full_name: string } | null)?.full_name ?? null
@@ -275,6 +307,16 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           </div>
           {canManageTask && (
             <div className="flex gap-2 shrink-0">
+              <ShareTaskDialog
+                taskId={id}
+                collaborators={(collaborators ?? []) as CollaboratorRow[]}
+                adminOptions={(allAdmins ?? []).map((a) => ({
+                  value: a.id,
+                  label: a.full_name,
+                  description: a.email,
+                  keywords: [a.email],
+                }))}
+              />
               <Link href={`/tasks/${id}/edit`} className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}>
                 <Pencil className="h-4 w-4 mr-1" /> Chỉnh sửa
               </Link>
@@ -361,7 +403,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           )}
 
           {/* Trao đổi với Admin — store_manager ↔ admin; staff cannot see */}
-          {(canCreateFeedback || canReplyFeedback) && (
+          {canViewFeedback && (
             <FeedbackSection
               taskId={id}
               threads={(feedbackThreads ?? []) as unknown as FeedbackThread[]}
@@ -374,11 +416,11 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           )}
 
           {/* Admin review notes — read-only for managers/staff; only admins can add */}
-          {(userRole === 'admin' || reviewEntries.length > 0) && (
+          {(canAddReviewNote || reviewEntries.length > 0) && (
             <TaskReviewNote
               taskId={id}
               reviews={reviewEntries}
-              canAddNote={userRole === 'admin'}
+              canAddNote={canAddReviewNote}
             />
           )}
 
@@ -398,7 +440,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
 
           {/* Extend deadline — admin when overdue; at the top so the action is
               immediately visible alongside the overdue status badge */}
-          {canReviewTask && displayStatus === 'overdue' && (
+          {canExtendDeadline && displayStatus === 'overdue' && (
             <ExtendDeadlineForm
               taskId={id}
               extendFn={extendDeadline}

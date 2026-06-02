@@ -8,6 +8,22 @@ import { computeNextRunAt } from '@/lib/recurring'
 import { notifyTaskCreated } from '@/lib/teams/notifyTaskCreated'
 import { getEffectiveStatus } from '@/lib/dateUtils'
 import { canAdminManageOwn } from '@/lib/authz'
+
+// True when the given admin is an 'editor' collaborator on the task.
+// Used by addReviewNote + requestResubmit to accept collaborator editors.
+async function isCollaboratorEditor(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+  taskId: string,
+): Promise<boolean> {
+  const { count } = await supabase
+    .from('task_collaborators')
+    .select('id', { count: 'exact', head: true })
+    .eq('task_id', taskId)
+    .eq('admin_id', userId)
+    .eq('permission', 'editor')
+  return (count ?? 0) > 0
+}
 import { TaskCategory, TaskPriority, TaskStatus, TaskVisibility, RequiredOutput, TaskAttachment } from '@/types'
 
 async function writeLog(
@@ -658,12 +674,13 @@ export async function requestResubmit(taskId: string, reason?: string) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
 
-  // Requesting resubmit is a review action — admin-only + own-scope.
+  // Requesting resubmit is a review action — task owner / super admin OR editor collaborator.
   const { data: profile } = await supabase
     .from('users').select('role').eq('id', user.id).single()
   const { data: task } = await supabase
     .from('tasks').select('created_by, assigned_to, title, store_id, deadline, status').eq('id', taskId).single()
-  if (!canAdminManageOwn({ email: user.email, role: profile?.role, createdBy: task?.created_by, userId: user.id }))
+  const isOwnerR = canAdminManageOwn({ email: user.email, role: profile?.role, createdBy: task?.created_by, userId: user.id })
+  if (!isOwnerR && !(await isCollaboratorEditor(supabase, user.id, taskId)))
     return { error: 'Không có quyền yêu cầu làm lại task này' }
 
   // Ensure task actually has results before allowing resubmit request
@@ -680,15 +697,19 @@ export async function requestResubmit(taskId: string, reason?: string) {
     return { error: 'Task đã quá hạn. Vui lòng gia hạn deadline trước khi yêu cầu làm lại.' }
   }
 
-  const { error } = await supabase.from('tasks')
+  // Use supabaseAdmin for both the task update and the resubmit_request note.
+  // Collaborator editors don't have a DB-level UPDATE policy on tasks; they rely
+  // on the server-side validation above. Service role bypasses RLS, so the write
+  // succeeds regardless of who the caller is, after validation has passed.
+  const { error } = await supabaseAdmin.from('tasks')
     .update({ status: 'todo', resubmit_requested_at: new Date().toISOString() })
     .eq('id', taskId)
   if (error) return { error: error.message }
 
-  // Reason text goes to task_review_notes (visible to the submitter on the task
-  // detail) — kept out of the audit log. task_logs keeps only the event marker.
+  // Reason text goes to task_review_notes. Also uses supabaseAdmin so a
+  // collaborator editor doesn't need the 'resubmit_request' kind INSERT policy.
   if (reason && reason.trim()) {
-    await supabase.from('task_review_notes').insert({
+    await supabaseAdmin.from('task_review_notes').insert({
       task_id:   taskId,
       author_id: user.id,
       kind:      'resubmit_request',
@@ -777,12 +798,15 @@ export async function addReviewNote(taskId: string, note: string) {
 
   const { data: profile } = await supabase
     .from('users').select('role').eq('id', user.id).single()
-  // Review notes are admin-only — store managers use the feedback thread channel.
   if (profile?.role !== 'admin')
     return { error: 'Chỉ admin mới được ghi chú quản lý' }
 
+  // Task owner / super admin OR collaborator with editor permission.
   const { data: task } = await supabase
-    .from('tasks').select('assigned_to, title').eq('id', taskId).single()
+    .from('tasks').select('assigned_to, title, created_by').eq('id', taskId).single()
+  const isOwner = canAdminManageOwn({ email: user.email, role: profile?.role, createdBy: task?.created_by, userId: user.id })
+  const isEditor = isOwner || await isCollaboratorEditor(supabase, user.id, taskId)
+  if (!isEditor) return { error: 'Chỉ admin tạo task hoặc editor được ghi chú' }
 
   // Review notes live in task_review_notes (not task_logs) so the audit log
   // stays clean and store managers don't see other admins' note text.
