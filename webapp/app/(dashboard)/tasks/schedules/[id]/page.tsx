@@ -203,7 +203,7 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
               <Row label="Tài liệu đính kèm">
                 <div className="space-y-1">
                   {config!.input_data!.attachments!.map((a, i) => (
-                    <a key={i} href={a.url} target="_blank" rel="noreferrer" className="text-primary hover:underline block">{a.name}</a>
+                    <a key={i} href={a.url} target="_blank" rel="noreferrer" className="text-primary hover:underline block break-words">{a.name}</a>
                   ))}
                 </div>
               </Row>
@@ -212,7 +212,7 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
               <Row label="Links">
                 <div className="space-y-1">
                   {config!.input_data!.links!.map((l, i) => (
-                    <a key={i} href={l.url} target="_blank" rel="noreferrer" className="text-primary hover:underline block">{l.label || l.url}</a>
+                    <a key={i} href={l.url} target="_blank" rel="noreferrer" className="text-primary hover:underline block break-words">{l.label || l.url}</a>
                   ))}
                 </div>
               </Row>

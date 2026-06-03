@@ -340,7 +340,11 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       <div className="flex flex-col lg:flex-row lg:flex-1 lg:min-h-0">
 
         {/* ── Left — task content (order-2 mobile → below, order-first desktop → left) ── */}
-        <div className="order-2 lg:order-first flex-[2] min-w-0 px-4 py-4 space-y-4 lg:border-r lg:overflow-y-auto">
+        <div className="order-2 lg:order-first flex-[2] min-w-0 px-4 py-4 lg:border-r lg:overflow-y-auto">
+          {/* Content capped to a readable measure (left-aligned with the header
+              title) so cards don't sprawl across the full grow-column on wide
+              monitors — the pane + its border stay full-bleed. */}
+          <div className="max-w-4xl space-y-4">
 
           {/* Description */}
           {task.description && (
@@ -433,6 +437,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           {canReviewTask && hasValidSubmission && (
             <RequestResubmitSection taskId={id} requestFn={requestResubmit} />
           )}
+          </div>
         </div>
 
         {/* ── Right — metadata sidebar (order-1 mobile → above, order-last desktop → right) ── */}
