@@ -35,14 +35,16 @@ export async function GET(request: NextRequest) {
   for (const sched of schedules ?? []) {
     const idempotencyKey = `${sched.id}_${today}`
 
-    // Skip if already ran today (idempotency)
+    // Skip only if a run already SUCCEEDED today. A failed or interrupted
+    // ('running') run is allowed to retry — we reuse its row below rather than
+    // letting the idempotency record block the schedule for the rest of the day.
     const { data: existingRun } = await supabaseAdmin
       .from('task_generation_runs')
-      .select('id')
+      .select('id, status')
       .eq('idempotency_key', idempotencyKey)
       .maybeSingle()
 
-    if (existingRun) {
+    if (existingRun?.status === 'success') {
       results.push({ scheduleId: sched.id, created: 0 })
       continue
     }
@@ -54,17 +56,25 @@ export async function GET(request: NextRequest) {
       continue
     }
 
-    // Create run record
-    const { data: run, error: runError } = await supabaseAdmin
-      .from('task_generation_runs')
-      .insert({
-        schedule_id:     sched.id,
-        scheduled_for:   today,
-        status:          'running',
-        idempotency_key: idempotencyKey,
-      })
-      .select('id')
-      .single()
+    // Create the run record, or reuse a prior failed/interrupted one so the
+    // retry runs under the same (unique) idempotency key without conflicting.
+    const { data: run, error: runError } = existingRun
+      ? await supabaseAdmin
+          .from('task_generation_runs')
+          .update({ status: 'running', error_message: null, created_count: 0, finished_at: null })
+          .eq('id', existingRun.id)
+          .select('id')
+          .single()
+      : await supabaseAdmin
+          .from('task_generation_runs')
+          .insert({
+            schedule_id:     sched.id,
+            scheduled_for:   today,
+            status:          'running',
+            idempotency_key: idempotencyKey,
+          })
+          .select('id')
+          .single()
 
     if (runError || !run) {
       results.push({ scheduleId: sched.id, created: 0, error: runError?.message })
@@ -92,75 +102,93 @@ export async function GET(request: NextRequest) {
 
       if (!template) throw new Error('Template not found')
 
-      // Create a broadcast group for this run
-      const { data: broadcast, error: bcError } = await supabaseAdmin
-        .from('task_broadcasts')
-        .insert({
-          title:       template.title,
-          created_by:  template.created_by,
-          store_count: storeIds.length,
-        })
-        .select('id')
-        .single()
-
-      if (bcError || !broadcast) throw new Error(bcError?.message ?? 'Broadcast insert failed')
-
-      // Compute deadline
-      const deadlineMs = now.getTime() + (sched.deadline_offset_hours ?? 24) * 3600_000
-      const deadline   = new Date(deadlineMs).toISOString()
-
-      // Build task rows — skip stores that already have a task for this schedule+day
-      const tasksToInsert = storeIds.map((storeId) => ({
-        title:              template.title,
-        description:        template.config.description ?? null,
-        category:           template.config.category,
-        priority:           template.config.priority,
-        visibility:         template.config.visibility,
-        status:             'todo' as TaskStatus,
-        store_id:           storeId,
-        assigned_to:        null,
-        created_by:         template.created_by,
-        broadcast_id:       broadcast.id,
-        deadline,
-        required_outputs:   template.config.required_outputs,
-        input_data:         template.config.input_data ?? null,
-        source_template_id: template.id,
-        source_schedule_id: sched.id,
-        scheduled_for:      today,
-        assignment_mode:    'store',
-      }))
-
-      // Insert — unique index on (source_schedule_id, store_id, scheduled_for) prevents duplicates
-      const { data: created, error: insertError } = await supabaseAdmin
+      // Retry-safe: an interrupted prior run may have already created tasks for
+      // some stores today. Skip those so this run neither duplicates (the partial
+      // unique index would reject the batch) nor false-fails on a conflict.
+      const { data: existingTasks } = await supabaseAdmin
         .from('tasks')
-        .insert(tasksToInsert)
-        .select('id, store_id, title')
+        .select('store_id')
+        .eq('source_schedule_id', sched.id)
+        .eq('scheduled_for', today)
 
-      if (insertError) throw new Error(insertError.message)
+      const alreadyCreated  = new Set((existingTasks ?? []).map((t) => t.store_id))
+      const pendingStoreIds = storeIds.filter((id) => !alreadyCreated.has(id))
 
-      const createdCount = created?.length ?? 0
+      let createdCount = 0
+      let broadcastId: string | null = null
 
-      // Notify store managers
-      if (createdCount > 0) {
-        const { data: managers } = await supabaseAdmin
-          .from('users')
-          .select('id, store_id')
-          .eq('role', 'store_manager')
-          .in('store_id', storeIds)
+      if (pendingStoreIds.length) {
+        // Create a broadcast group for this run
+        const { data: broadcast, error: bcError } = await supabaseAdmin
+          .from('task_broadcasts')
+          .insert({
+            title:       template.title,
+            created_by:  template.created_by,
+            store_count: pendingStoreIds.length,
+          })
+          .select('id')
+          .single()
 
-        if (managers?.length) {
-          await supabaseAdmin.from('notifications').insert(
-            managers.map((mgr) => {
-              const task = (created ?? []).find((t) => t.store_id === mgr.store_id)
-              return {
-                user_id: mgr.id,
-                type:    'task_assigned',
-                task_id: task?.id ?? null,
-                title:   'Task định kỳ mới',
-                message: `Task mới: ${template.title}`,
-              }
-            })
-          )
+        if (bcError || !broadcast) throw new Error(bcError?.message ?? 'Broadcast insert failed')
+        broadcastId = broadcast.id
+
+        // Compute deadline
+        const deadlineMs = now.getTime() + (sched.deadline_offset_hours ?? 24) * 3600_000
+        const deadline   = new Date(deadlineMs).toISOString()
+
+        // Build task rows for the stores that still need one today
+        const tasksToInsert = pendingStoreIds.map((storeId) => ({
+          title:              template.title,
+          description:        template.config.description ?? null,
+          category:           template.config.category,
+          priority:           template.config.priority,
+          visibility:         template.config.visibility,
+          status:             'todo' as TaskStatus,
+          store_id:           storeId,
+          assigned_to:        null,
+          created_by:         template.created_by,
+          broadcast_id:       broadcast.id,
+          deadline,
+          required_outputs:   template.config.required_outputs,
+          input_data:         template.config.input_data ?? null,
+          source_template_id: template.id,
+          source_schedule_id: sched.id,
+          scheduled_for:      today,
+          assignment_mode:    'store',
+        }))
+
+        // Insert — unique index on (source_schedule_id, store_id, scheduled_for) prevents duplicates
+        const { data: created, error: insertError } = await supabaseAdmin
+          .from('tasks')
+          .insert(tasksToInsert)
+          .select('id, store_id, title')
+
+        if (insertError) throw new Error(insertError.message)
+
+        createdCount = created?.length ?? 0
+
+        // Notify store managers of the newly created tasks
+        if (createdCount > 0) {
+          const { data: managers } = await supabaseAdmin
+            .from('users')
+            .select('id, store_id')
+            .eq('role', 'store_manager')
+            .in('store_id', pendingStoreIds)
+
+          if (managers?.length) {
+            await supabaseAdmin.from('notifications').insert(
+              managers.map((mgr) => {
+                const task = (created ?? []).find((t) => t.store_id === mgr.store_id)
+                return {
+                  user_id: mgr.id,
+                  type:    'task_assigned',
+                  task_id: task?.id ?? null,
+                  title:   'Task định kỳ mới',
+                  message: `Task mới: ${template.title}`,
+                }
+              })
+            )
+          }
         }
       }
 
@@ -171,7 +199,7 @@ export async function GET(request: NextRequest) {
         user_id:  null,
         metadata: {
           schedule_id:  sched.id,
-          broadcast_id: broadcast.id,
+          broadcast_id: broadcastId,
           title:        template.title,
           frequency:    sched.frequency,
           store_count:  createdCount,
