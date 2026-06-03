@@ -194,10 +194,9 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   // displayStatus: effective status shown in UI — reflects overdue even when DB status is in_progress/todo
   const displayStatus = getEffectiveStatus(task.deadline, task.status) as Task['status']
 
-  // Overdue tasks cannot be submitted — an admin/manager must extend the deadline
-  // first (mirrors the server guard in submitTask).
+  // Overdue tasks are still submittable (lateness is tracked, not blocked) — the
+  // submit form stays available until there is a valid submission or it's done.
   const canSubmit = displayStatus !== 'done'
-    && displayStatus !== 'overdue'
     && isSubmitterForTask
     && !hasAlreadySubmitted
 
@@ -207,7 +206,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   // managers who are NOT the submitter no longer get a reviewer selector.
   const canSeeStatusSelector =
     canManageTask
-    || (isSubmitterForTask && !hasAlreadySubmitted && !['done', 'overdue'].includes(displayStatus))
+    || (isSubmitterForTask && !hasAlreadySubmitted && displayStatus !== 'done')
 
   // Helper text shown when submitter is locked after valid submission
   const submittedLocked = isSubmitterForTask && hasAlreadySubmitted
@@ -462,7 +461,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
               <div className="pb-3">
                 <p className="text-xs text-muted-foreground mb-1">Trạng thái</p>
                 <div className="flex items-center gap-2 flex-wrap">
-                  <TaskStatusBadge status={displayStatus} />
+                  <TaskStatusBadge status={displayStatus} late={!!task.overdue_at} />
                   {canSeeStatusSelector && (
                     <TaskStatusSelector taskId={id} currentStatus={displayStatus} userRole={userRole} />
                   )}
@@ -473,8 +472,8 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                   </p>
                 )}
                 {displayStatus === 'overdue' && isSubmitterForTask && !hasAlreadySubmitted && (
-                  <p className="text-xs text-red-600 mt-1">
-                    Task đã quá hạn. Liên hệ quản lý để gia hạn deadline.
+                  <p className="text-xs text-amber-700 mt-1">
+                    Task đã quá hạn — vẫn có thể nộp, kết quả sẽ được ghi nhận là nộp trễ.
                   </p>
                 )}
               </div>

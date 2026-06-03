@@ -373,7 +373,7 @@ export async function submitTask(taskId: string, outputData: Record<string, unkn
   const [{ data: task }, { data: profile }] = await Promise.all([
     supabase
       .from('tasks')
-      .select('created_by, title, assigned_to, store_id, resubmit_requested_at, required_outputs, deadline, status')
+      .select('created_by, title, assigned_to, store_id, resubmit_requested_at, required_outputs, deadline, status, overdue_at')
       .eq('id', taskId)
       .single(),
     supabase
@@ -398,13 +398,11 @@ export async function submitTask(taskId: string, outputData: Record<string, unkn
     return { error: 'Bạn không có quyền nộp kết quả cho task này' }
   }
 
-  // Block overdue submits. A task is effectively overdue when its DB status is
-  // 'overdue' (flipped by the cron) OR its deadline has passed while not done.
-  // resubmit_requested_at does NOT unlock a passed deadline — an admin/manager
-  // must extend the deadline (which resets status) before the submitter can nộp.
-  if (getEffectiveStatus(task.deadline as string | null, task.status as string) === 'overdue') {
-    return { error: 'Task đã quá hạn. Vui lòng liên hệ quản lý để gia hạn deadline trước khi nộp kết quả.' }
-  }
+  // Overdue tasks are submittable. We record lateness instead of blocking: a
+  // submission counts as late when the task is effectively overdue (DB status
+  // 'overdue', or deadline passed while not done) at submit time.
+  const submittedLate =
+    getEffectiveStatus(task.deadline as string | null, task.status as string) === 'overdue'
 
   // Duplicate check: block if a result already exists after the last resubmit request.
   // Direct-assign: per user (same user can't double-submit).
@@ -446,21 +444,30 @@ export async function submitTask(taskId: string, outputData: Record<string, unkn
   })
   if (resultError) return { error: resultError.message }
 
-  // Use admin client — staff RLS no longer allows direct UPDATE on tasks (dropped in 010)
+  // Use admin client — staff RLS no longer allows direct UPDATE on tasks (dropped in 010).
+  // When the submission is late, stamp overdue_at (preserving an earlier cron-set value)
+  // so the "Hoàn thành trễ" marker survives the done transition.
+  const statusUpdate: { status: 'done'; overdue_at?: string } = { status: 'done' }
+  if (submittedLate) {
+    statusUpdate.overdue_at = (task.overdue_at as string | null) ?? new Date().toISOString()
+  }
   const { error: statusError } = await supabaseAdmin
     .from('tasks')
-    .update({ status: 'done' })
+    .update(statusUpdate)
     .eq('id', taskId)
   if (statusError) return { error: `Đã nộp kết quả nhưng không thể cập nhật trạng thái: ${statusError.message}` }
 
   await writeLog(supabase, taskId, 'submitted', user.id, {
     output_types: Object.keys(outputData),
+    submitted_after_deadline: submittedLate,
   })
 
   if (task?.created_by && task.created_by !== user.id) {
     await insertNotification(supabase, task.created_by, 'task_submitted', taskId,
       'Kết quả task đã được nộp',
-      `Task "${task.title}" đã được nộp kết quả`
+      submittedLate
+        ? `Task "${task.title}" đã được nộp (sau deadline)`
+        : `Task "${task.title}" đã được nộp kết quả`
     )
   }
 
@@ -690,12 +697,9 @@ export async function requestResubmit(taskId: string, reason?: string) {
     .eq('task_id', taskId)
   if (!resultCount) return { error: 'Task chưa có kết quả nộp, không thể yêu cầu làm lại' }
 
-  // A resubmit request flips status to 'todo', but if the deadline has already
-  // passed the task is immediately overdue again and the submitter is blocked.
-  // Require the deadline be extended first so the request is actionable.
-  if (getEffectiveStatus(task?.deadline as string | null, task?.status as string) === 'overdue') {
-    return { error: 'Task đã quá hạn. Vui lòng gia hạn deadline trước khi yêu cầu làm lại.' }
-  }
+  // A resubmit request flips status to 'todo'. Overdue is no longer a blocker —
+  // the submitter can re-submit even past the deadline (it will be tracked as
+  // late via tasks.overdue_at), so no deadline extension is required first.
 
   // Use supabaseAdmin for both the task update and the resubmit_request note.
   // Collaborator editors don't have a DB-level UPDATE policy on tasks; they rely
@@ -765,16 +769,22 @@ export async function extendDeadline(taskId: string, newDeadline: string) {
 
   // Admin-only + own-scope.
   const { data: current } = await supabase
-    .from('tasks').select('created_by, deadline, title, status').eq('id', taskId).single()
+    .from('tasks').select('created_by, deadline, title, status, overdue_at').eq('id', taskId).single()
   if (!canAdminManageOwn({ email: user.email, role: profile?.role, createdBy: current?.created_by, userId: user.id }))
     return { error: 'Không có quyền gia hạn deadline cho task này' }
 
-  // Extending the deadline must clear a literal 'overdue' status, otherwise
-  // getEffectiveStatus short-circuits on 'overdue' and the submitter stays
-  // locked out even with a future deadline. Reset to 'todo'; leave other
-  // statuses (done, in_progress, todo) untouched.
-  const update: { deadline: string; status?: TaskStatus } = { deadline: newDeadline }
-  if (current?.status === 'overdue') update.status = 'todo'
+  // Extending to a future deadline makes the task actionable again. For any
+  // non-done task we clear overdue_at so a subsequent on-time submission does
+  // NOT render as "Hoàn thành trễ". This covers three cases:
+  //   (a) status='overdue'   — also reset to 'todo' so getEffectiveStatus unlocks
+  //   (b) status='in_progress' — store changed via RPC after cron flipped overdue_at
+  //   (c) status='todo'      — admin requested resubmit on a late-done task;
+  //                             task now has overdue_at set but is back to todo
+  const update: { deadline: string; status?: TaskStatus; overdue_at?: null } = { deadline: newDeadline }
+  if (current?.status !== 'done') {
+    update.overdue_at = null
+    if (current?.status === 'overdue') update.status = 'todo'
+  }
 
   const { error } = await supabase
     .from('tasks').update(update).eq('id', taskId)

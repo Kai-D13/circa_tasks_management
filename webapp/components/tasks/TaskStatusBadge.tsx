@@ -16,7 +16,13 @@ const STATUS_LABELS: Record<TaskStatus, string> = {
   overdue:     'Quá hạn',
 }
 
-export function TaskStatusBadge({ status }: { status: TaskStatus }) {
+// `late` marks a task that was completed after its deadline (status 'done' with
+// tasks.overdue_at set). It surfaces an amber "Hoàn thành trễ" badge instead of
+// the green "Hoàn thành" so the lateness stays visible after submission.
+export function TaskStatusBadge({ status, late }: { status: TaskStatus; late?: boolean }) {
+  if (status === 'done' && late) {
+    return <Badge className="bg-amber-100 text-amber-700">Hoàn thành trễ</Badge>
+  }
   return (
     <Badge className={cn(STATUS_STYLES[status])}>
       {STATUS_LABELS[status]}

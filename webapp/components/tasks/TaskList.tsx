@@ -30,11 +30,12 @@ const CATEGORY_LABEL: Record<TaskCategory, string> = {
 }
 
 export type ChildTask = {
-  id:       string
-  status:   string
-  stores:   { name: string } | null
-  assignee: { full_name: string } | null
-  deadline: string | null
+  id:         string
+  status:     string
+  stores:     { name: string } | null
+  assignee:   { full_name: string } | null
+  deadline:   string | null
+  overdue_at: string | null
 }
 
 export type BroadcastGroup = {
@@ -62,6 +63,7 @@ export type TaskRow = {
     stores:             { name: string } | null
     assignee:           { full_name: string } | null
     deadline:           string | null
+    overdue_at:         string | null
     created_at:         string
   }
 }
@@ -296,7 +298,7 @@ export function TaskList({ items, canArchive, canRestore, showArchived }: Props)
                       </TableCell>
                       <TableCell />
                       <TableCell>
-                        <TaskStatusBadge status={getEffectiveStatus(child.deadline, child.status) as Task['status']} />
+                        <TaskStatusBadge status={getEffectiveStatus(child.deadline, child.status) as Task['status']} late={child.status === 'done' && !!child.overdue_at} />
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
                         {child.deadline ? formatDistanceToNow(child.deadline) : '—'}
@@ -362,7 +364,7 @@ export function TaskList({ items, canArchive, canRestore, showArchived }: Props)
                   <TaskPriorityBadge priority={task.priority as Task['priority']} />
                 </TableCell>
                 <TableCell>
-                  <TaskStatusBadge status={effStatus as Task['status']} />
+                  <TaskStatusBadge status={effStatus as Task['status']} late={task.status === 'done' && !!task.overdue_at} />
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">
                   {task.deadline ? formatDistanceToNow(task.deadline) : '—'}

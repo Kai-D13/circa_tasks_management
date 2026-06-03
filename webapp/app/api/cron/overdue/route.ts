@@ -17,7 +17,10 @@ export async function GET(request: NextRequest) {
 
   const { data: flipped, error } = await supabaseAdmin
     .from('tasks')
-    .update({ status: 'overdue' })
+    // Stamp overdue_at as the persistent "đã từng quá hạn" marker. Rows here are
+    // todo/in_progress (not yet overdue, or reset by extendDeadline which clears
+    // overdue_at), so setting it now is safe and effectively first-time-only.
+    .update({ status: 'overdue', overdue_at: now })
     .lt('deadline', now)
     .in('status', ['todo', 'in_progress'])
     .select('id, title, created_by')

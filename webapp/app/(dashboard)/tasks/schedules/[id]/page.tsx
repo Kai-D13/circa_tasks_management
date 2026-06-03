@@ -86,7 +86,7 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
       .limit(10),
     supabase
       .from('tasks')
-      .select('id, title, status, scheduled_for, deadline, created_at, stores(name)')
+      .select('id, title, status, scheduled_for, deadline, created_at, overdue_at, stores(name)')
       .eq('source_schedule_id', id)
       .order('created_at', { ascending: false })
       .limit(20),
@@ -317,7 +317,7 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
                       {(t.scheduled_for as string | null) ?? '—'}
                     </td>
                     <td className="px-4 py-2.5">
-                      <TaskStatusBadge status={t.status as TaskStatus} />
+                      <TaskStatusBadge status={t.status as TaskStatus} late={t.status === 'done' && !!(t as { overdue_at?: string | null }).overdue_at} />
                     </td>
                     <td className="px-4 py-2.5 text-muted-foreground whitespace-nowrap">
                       {t.deadline ? formatDate(t.deadline) : '—'}

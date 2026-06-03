@@ -24,7 +24,7 @@ export default async function TasksPage({
 
   let query = supabase
     .from('tasks')
-    .select('*, stores(name), assignee:users!assigned_to(full_name), source_schedule_id')
+    .select('*, stores(name), assignee:users!assigned_to(full_name), source_schedule_id, overdue_at')
     .order('created_at', { ascending: false })
 
   if (showArchived) {
@@ -81,17 +81,19 @@ export default async function TasksPage({
           stores:             (task.stores as { name: string } | null),
           assignee:           (task.assignee as { full_name: string } | null),
           deadline:           task.deadline ?? null,
+          overdue_at:         (task as { overdue_at?: string | null }).overdue_at ?? null,
           created_at:         task.created_at,
         },
       }
       grouped.push(row)
     } else {
       const child: ChildTask = {
-        id:       task.id,
-        status:   task.status,
-        stores:   (task.stores as { name: string } | null),
-        assignee: (task.assignee as { full_name: string } | null),
-        deadline: task.deadline ?? null,
+        id:         task.id,
+        status:     task.status,
+        stores:     (task.stores as { name: string } | null),
+        assignee:   (task.assignee as { full_name: string } | null),
+        deadline:   task.deadline ?? null,
+        overdue_at: (task as { overdue_at?: string | null }).overdue_at ?? null,
       }
 
       if (seenBroadcast.has(task.broadcast_id)) {

@@ -42,6 +42,7 @@ type DashboardRow =
       status:    string
       store:     string | null
       deadline:  string | null
+      overdueAt: string | null
       createdAt: string
     }
 
@@ -62,7 +63,11 @@ export default async function DashboardPage() {
   ] = await Promise.all([
     supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null),
     supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null).eq('status', 'done'),
-    supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null).eq('status', 'overdue'),
+    // Count tasks that are effectively overdue: DB status='overdue' (set by cron)
+    // OR deadline already passed and not yet done. Mirrors the /tasks filter so
+    // the KPI stays accurate even when a store moves an overdue task to in_progress.
+    supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null)
+      .or(`status.eq.overdue,and(deadline.lt.${new Date().toISOString()},status.neq.done)`),
     supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null).eq('status', 'in_progress'),
   ])
   const kpiError = e1 ?? e2 ?? e3 ?? e4
@@ -109,7 +114,7 @@ export default async function DashboardPage() {
         .limit(8),
       supabase
         .from('tasks')
-        .select('id, title, status, category, deadline, created_at, stores(name)')
+        .select('id, title, status, category, deadline, created_at, overdue_at, stores(name)')
         .is('broadcast_id', null)
         .is('archived_at', null)
         .order('created_at', { ascending: false })
@@ -157,6 +162,7 @@ export default async function DashboardPage() {
         status:    t.status,
         store:     (t.stores as unknown as { name: string } | null)?.name ?? null,
         deadline:  t.deadline ?? null,
+        overdueAt: (t as { overdue_at?: string | null }).overdue_at ?? null,
         createdAt: t.created_at,
       }))
 
@@ -169,7 +175,7 @@ export default async function DashboardPage() {
     // Group by broadcast_id so broadcasts appear as 1 row — counts reflect visible tasks only.
     const { data: visibleTasks, error: ev } = await supabase
       .from('tasks')
-      .select('id, title, status, category, deadline, created_at, broadcast_id, stores(name)')
+      .select('id, title, status, category, deadline, created_at, overdue_at, broadcast_id, stores(name)')
       .is('archived_at', null)
       .order('created_at', { ascending: false })
       .limit(50)
@@ -191,6 +197,7 @@ export default async function DashboardPage() {
             status:    t.status,
             store:     (t.stores as unknown as { name: string } | null)?.name ?? null,
             deadline:  t.deadline ?? null,
+            overdueAt: (t as { overdue_at?: string | null }).overdue_at ?? null,
             createdAt: t.created_at,
           })
         } else {
@@ -383,7 +390,7 @@ export default async function DashboardPage() {
                           </TableCell>
                           <TableCell className="text-muted-foreground text-sm">{row.store ?? '—'}</TableCell>
                           <TableCell>
-                            <TaskStatusBadge status={row.status as 'todo' | 'in_progress' | 'done' | 'overdue'} />
+                            <TaskStatusBadge status={row.status as 'todo' | 'in_progress' | 'done' | 'overdue'} late={row.status === 'done' && !!row.overdueAt} />
                           </TableCell>
                           <TableCell className="text-muted-foreground text-sm">
                             {row.deadline ? formatDistanceToNow(row.deadline) : '—'}
@@ -442,7 +449,7 @@ export default async function DashboardPage() {
                         )}
                       </div>
                       <div className="flex items-center gap-2 flex-wrap">
-                        <TaskStatusBadge status={row.status as 'todo' | 'in_progress' | 'done' | 'overdue'} />
+                        <TaskStatusBadge status={row.status as 'todo' | 'in_progress' | 'done' | 'overdue'} late={row.status === 'done' && !!row.overdueAt} />
                         <span className="text-xs text-muted-foreground">{row.store ?? '—'}</span>
                         {row.deadline && (
                           <span className="text-xs text-muted-foreground">{formatDistanceToNow(row.deadline)}</span>
