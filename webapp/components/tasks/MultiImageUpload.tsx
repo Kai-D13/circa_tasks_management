@@ -352,7 +352,8 @@ export function MultiImageUpload({ taskId, value, onChange }: Props) {
 
       {(value.length > 0 || activeSlots.length > 0) && (
         <p className="text-xs text-muted-foreground">
-          {value.length} ảnh đã lưu · còn {MAX_COUNT - totalVisible} slot
+          {value.length}/{MAX_COUNT} ảnh cho lần nộp này
+          {activeSlots.length > 0 && ` · ${activeSlots.length} đang tải lên`}
         </p>
       )}
 

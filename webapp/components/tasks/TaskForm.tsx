@@ -400,7 +400,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
         ? `Tạo ${broadcastCount > 0 ? broadcastCount + ' ' : ''}Task`
         : task ? 'Cập nhật' : 'Tạo Task'
 
-  const sectionLabel = 'block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70 mb-2'
+  const sectionLabel = 'block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70 mb-1.5'
 
   const WEEKDAY_LABELS: Record<number, string> = { 0: 'CN', 1: 'T2', 2: 'T3', 3: 'T4', 4: 'T5', 5: 'T6', 6: 'T7' }
 
@@ -554,18 +554,13 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
             />
           </div>
 
-          {/* Row 4: Description */}
-          <div className="flex-1 px-5 pt-3 pb-1">
-            {/* TODO Sprint N: Replace with Tiptap editor
-                - paste image: upload to Supabase Storage → insert img tag
-                - paste Excel table: parse HTML table / TSV → render table
-                - store as input_data.content_json (Tiptap JSON) + description as plain-text fallback
-                - DOMPurify sanitize before rendering in task detail page */}
+          {/* Row 4: Description — fixed height, no flex-fill so compose area stays compact */}
+          <div className="px-5 pt-3 pb-2">
             <Textarea
               name="description"
               defaultValue={task?.description ?? ''}
               placeholder="Nội dung chi tiết, hướng dẫn thực hiện..."
-              className="w-full min-h-[180px] h-full border-0 resize-none p-0 focus-visible:ring-0 shadow-none text-sm bg-transparent placeholder:text-muted-foreground/40"
+              className="w-full min-h-[180px] max-h-[400px] border-0 resize-y p-0 focus-visible:ring-0 shadow-none text-sm bg-transparent placeholder:text-muted-foreground/40"
             />
           </div>
 
@@ -667,7 +662,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
 
             {/* Loại task — admin + new only */}
             {isAdmin && !isEditMode && (
-              <div className="px-5 py-4 border-b">
+              <div className="px-5 py-3 border-b">
                 <span className={sectionLabel}>Loại task</span>
                 <div className="flex rounded-[4px] border overflow-hidden">
                   {(['adhoc', 'recurring'] as TaskType[]).map((t) => (
@@ -689,7 +684,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
 
             {/* Lịch định kỳ — recurring mode only */}
             {isRecurring && (
-              <div className="px-5 py-4 border-b space-y-3">
+              <div className="px-5 py-3 border-b space-y-3">
                 <span className={sectionLabel}>Lịch chạy</span>
 
                 <div>
@@ -777,7 +772,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
             )}
 
             {/* Danh mục */}
-            <div className="px-5 py-4 border-b">
+            <div className="px-5 py-3 border-b">
               <span className={sectionLabel}>Danh mục</span>
               <Select value={category} onValueChange={handleCategoryChange}>
                 <SelectTrigger className="h-8 text-sm bg-background">
@@ -792,7 +787,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
             </div>
 
             {/* Ưu tiên */}
-            <div className="px-5 py-4 border-b">
+            <div className="px-5 py-3 border-b">
               <span className={sectionLabel}>Ưu tiên</span>
               <Select value={priority} onValueChange={(v) => { if (v) setPriority(v as TaskPriority) }}>
                 <SelectTrigger className="h-8 text-sm bg-background">
@@ -807,7 +802,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
 
             {/* Thời gian — hidden for recurring */}
             {!isRecurring && (
-              <div className="px-5 py-4 border-b space-y-3">
+              <div className="px-5 py-3 border-b space-y-3">
                 <span className={sectionLabel}>Thời gian</span>
                 <div>
                   <label htmlFor="start_date" className="text-xs text-muted-foreground block mb-1.5">Ngày bắt đầu <span className="text-destructive">*</span></label>
@@ -823,7 +818,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
             )}
 
             {/* Output cần nộp — chips */}
-            <div className="px-5 py-4">
+            <div className="px-5 py-3">
               <span className={sectionLabel}>Output cần nộp</span>
               <div className="flex flex-wrap gap-1.5">
                 {OUTPUT_OPTIONS.map(({ value, label }) => (
