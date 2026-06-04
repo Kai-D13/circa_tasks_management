@@ -9,6 +9,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { MessageSquare, ChevronDown, ChevronRight, CheckCheck } from 'lucide-react'
 import { formatDateTime } from '@/lib/dateUtils'
+import { cn } from '@/lib/utils'
 
 const STATUS_LABEL: Record<string, string> = {
   open:     'Chờ phản hồi',
@@ -82,11 +83,11 @@ function ThreadCard({ thread, canReply, replyFn, resolveFn }: {
   }
 
   return (
-    <div className="border rounded-lg overflow-hidden">
+    <div className={cn('border rounded-lg overflow-hidden', thread.status === 'resolved' && 'opacity-60')}>
       {/* Thread header */}
       <button
         type="button"
-        className="w-full flex items-center justify-between px-4 py-3 bg-muted/30 hover:bg-muted/50 text-left"
+        className="w-full flex items-center justify-between px-3 py-2 bg-muted/30 hover:bg-muted/50 text-left"
         onClick={() => setExpanded((v) => !v)}
       >
         <div className="flex items-center gap-2 min-w-0">
@@ -102,11 +103,11 @@ function ThreadCard({ thread, canReply, replyFn, resolveFn }: {
       </button>
 
       {expanded && (
-        <div className="px-4 py-3 space-y-3">
+        <div className="px-3 py-2 space-y-2">
           {/* Messages */}
           {thread.task_feedback_messages.map((msg) => (
-            <div key={msg.id} className="flex gap-3">
-              <div className="flex-1 rounded-md bg-muted/40 px-3 py-2 text-sm">
+            <div key={msg.id} className="flex gap-2">
+              <div className="flex-1 rounded-md bg-muted/40 px-2.5 py-1.5 text-sm">
                 <span className="font-medium text-foreground">{msg.users?.full_name ?? '—'}</span>
                 <span className="text-muted-foreground text-xs ml-2">{formatDateTime(msg.created_at)}</span>
                 <p className="mt-1 whitespace-pre-wrap">{msg.message}</p>

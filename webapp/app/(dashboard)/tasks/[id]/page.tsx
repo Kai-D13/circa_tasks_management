@@ -338,11 +338,8 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       <div className="flex flex-col lg:flex-row lg:flex-1 lg:min-h-0">
 
         {/* ── Left — task content (order-2 mobile → below, order-first desktop → left) ── */}
-        <div className="order-2 lg:order-first flex-[2] min-w-0 px-4 py-4 lg:border-r lg:overflow-y-auto">
-          {/* Content capped to a readable measure (left-aligned with the header
-              title) so cards don't sprawl across the full grow-column on wide
-              monitors — the pane + its border stay full-bleed. */}
-          <div className="max-w-4xl space-y-4">
+        <div className="order-2 lg:order-first flex-[2] min-w-0 px-4 py-3 lg:border-r lg:overflow-y-auto">
+          <div className="max-w-4xl space-y-3">
 
           {/* Description */}
           {task.description && (
@@ -370,10 +367,15 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           {/* Submit form — primary workflow step, right after task content */}
           {canSubmit && (
             <Card className="border-primary/30">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm text-primary">Nộp kết quả</CardTitle>
+              <CardHeader className="pb-1">
+                <CardTitle className="text-sm text-primary flex items-center gap-2">
+                  Nộp kết quả
+                  {displayStatus === 'overdue' && (
+                    <span className="text-[11px] font-medium bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">Quá hạn</span>
+                  )}
+                </CardTitle>
               </CardHeader>
-              <CardContent>
+              <CardContent className="pt-0">
                 <TaskSubmitForm
                   taskId={id}
                   requiredOutputs={(task.required_outputs as RequiredOutput[]) ?? []}
@@ -439,7 +441,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
         </div>
 
         {/* ── Right — metadata sidebar (order-1 mobile → above, order-last desktop → right) ── */}
-        <div className="order-1 lg:order-last lg:w-[340px] lg:shrink-0 px-4 py-4 space-y-4 lg:border-l lg:overflow-y-auto">
+        <div className="order-1 lg:order-last lg:w-[340px] lg:shrink-0 px-4 py-3 space-y-3 lg:border-l lg:overflow-y-auto">
 
           {/* Extend deadline — admin when overdue; at the top so the action is
               immediately visible alongside the overdue status badge */}

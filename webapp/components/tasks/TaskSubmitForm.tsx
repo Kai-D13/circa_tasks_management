@@ -64,10 +64,10 @@ export function TaskSubmitForm({ taskId, requiredOutputs }: Props) {
   }
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-5">
+    <form onSubmit={handleSubmit} className="space-y-3">
       {outputList.map((type) => (
-        <div key={type} className="grid gap-1.5">
-          <Label>
+        <div key={type} className="grid gap-1">
+          <Label className="text-xs font-medium">
             {OUTPUT_LABEL[type]}
             <span className="text-red-500 ml-0.5">*</span>
           </Label>
@@ -76,7 +76,7 @@ export function TaskSubmitForm({ taskId, requiredOutputs }: Props) {
               placeholder="Nhập nội dung ghi chú..."
               value={strOutputs[type] ?? ''}
               onChange={(e) => set(type, e.target.value)}
-              rows={5}
+              rows={3}
             />
           ) : type === 'image' ? (
             <MultiImageUpload
