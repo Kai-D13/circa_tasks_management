@@ -44,7 +44,8 @@ export function TaskFilters({ stores, currentParams, showArchived }: Props) {
 
   function update(key: string, value: string | null) {
     const params = new URLSearchParams()
-    const current = { ...currentParams, [key]: value ?? '' }
+    // Exclude 'page' — changing a filter always resets to page 1.
+    const current = { ...currentParams, [key]: value ?? '', page: '' }
     Object.entries(current).forEach(([k, v]) => {
       if (v && v !== ALL) params.set(k, v)
     })

@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import {
   Dialog,
   DialogContent,
@@ -8,7 +9,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { formatDate } from '@/lib/dateUtils'
-import { Eye } from 'lucide-react'
+import { Eye, X, ChevronLeft, ChevronRight } from 'lucide-react'
 
 export const OUTPUT_LABEL: Record<string, string> = {
   image: 'Ảnh',
@@ -32,25 +33,112 @@ export interface TaskResult {
   submitter_name: string | null
 }
 
-// Handles both new (array of attachment objects) and legacy (string URL) image formats
+// ── Image attachment shape (Batch 5C+: has thumbnailUrl; pre-5C: only url) ──
+interface ImgAtt { url: string; thumbnailUrl?: string; name: string }
+
+// ── Lightbox ─────────────────────────────────────────────────────────────────
+function ImageLightbox({ images, initial, onClose }: {
+  images: ImgAtt[]
+  initial: number
+  onClose: () => void
+}) {
+  const [idx, setIdx] = useState(initial)
+  const img = images[idx]
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/90"
+      onClick={onClose}
+    >
+      {/* Close */}
+      <button
+        type="button"
+        onClick={onClose}
+        aria-label="Đóng"
+        className="absolute top-4 right-4 text-white/70 hover:text-white"
+      >
+        <X className="h-6 w-6" />
+      </button>
+
+      {/* Prev */}
+      {images.length > 1 && (
+        <button
+          type="button"
+          aria-label="Ảnh trước"
+          onClick={(e) => { e.stopPropagation(); setIdx((i) => (i - 1 + images.length) % images.length) }}
+          className="absolute left-4 text-white/70 hover:text-white p-2"
+        >
+          <ChevronLeft className="h-7 w-7" />
+        </button>
+      )}
+
+      {/* Image */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        key={img.url}
+        src={img.url}
+        alt={img.name}
+        onClick={(e) => e.stopPropagation()}
+        className="max-h-[90vh] max-w-[90vw] object-contain rounded shadow-2xl"
+      />
+
+      {/* Next */}
+      {images.length > 1 && (
+        <button
+          type="button"
+          aria-label="Ảnh tiếp"
+          onClick={(e) => { e.stopPropagation(); setIdx((i) => (i + 1) % images.length) }}
+          className="absolute right-4 text-white/70 hover:text-white p-2"
+        >
+          <ChevronRight className="h-7 w-7" />
+        </button>
+      )}
+
+      {/* Counter */}
+      {images.length > 1 && (
+        <span className="absolute bottom-4 text-xs text-white/60">
+          {idx + 1} / {images.length}
+        </span>
+      )}
+    </div>
+  )
+}
+
+// ── Image output in result dialog ─────────────────────────────────────────────
 function ImageOutput({ val }: { val: unknown }) {
-  // New format: array of { url, name, type, size }
+  const [lightbox, setLightbox] = useState<number | null>(null)
+
+  // New format: array of attachment objects
   if (Array.isArray(val) && val.length > 0) {
+    const imgs = val as ImgAtt[]
     return (
-      <div className="grid grid-cols-2 gap-2">
-        {val.map((att: { url: string; name: string }, i) => (
-          <a key={i} href={att.url} target="_blank" rel="noreferrer" className="block group">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={att.url}
-              alt={att.name}
-              className="w-full h-32 rounded border object-cover group-hover:opacity-90 transition-opacity"
-            />
-          </a>
-        ))}
-      </div>
+      <>
+        <div className="grid grid-cols-3 gap-1.5">
+          {imgs.map((att, i) => (
+            <button
+              key={i}
+              type="button"
+              onClick={() => setLightbox(i)}
+              className="aspect-square rounded border overflow-hidden bg-muted hover:opacity-90 transition-opacity focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label={att.name}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={att.thumbnailUrl ?? att.url}
+                alt={att.name}
+                className="w-full h-full object-cover"
+                loading="lazy"
+              />
+            </button>
+          ))}
+        </div>
+        {lightbox !== null && (
+          <ImageLightbox images={imgs} initial={lightbox} onClose={() => setLightbox(null)} />
+        )}
+      </>
     )
   }
+
   // Legacy format: single string URL
   if (typeof val === 'string') {
     return (
@@ -93,7 +181,6 @@ function OutputItem({ outputKey, val }: { outputKey: string; val: unknown }) {
   return <p className="text-sm whitespace-pre-wrap leading-relaxed">{val}</p>
 }
 
-// Count how many images in an output value (array or single)
 function imageCount(val: unknown): number {
   if (Array.isArray(val)) return val.length
   if (typeof val === 'string' && val) return 1
