@@ -333,6 +333,15 @@ export async function updateTaskStatus(taskId: string, status: TaskStatus, note?
     to:   status,
     ...(note ? { note } : {}),
   })
+  // Structured status event for admin direct-update path
+  { const { error: seErr } = await supabaseAdmin.from('task_status_events').insert({
+    task_id:     taskId,
+    from_status: current?.status ?? null,
+    to_status:   status,
+    note:        note || null,
+    actor_id:    user.id,
+    source:      'admin',
+  }); if (seErr) console.error('[task_status_events] updateTaskStatus:', seErr.message) }
 
   if (current?.created_by && current.created_by !== user.id) {
     await insertNotification(supabase, current.created_by, 'status_changed', taskId,
@@ -437,12 +446,31 @@ export async function submitTask(taskId: string, outputData: Record<string, unkn
     return { error: `Vui lòng nộp đủ: ${missing.map((t) => OUTPUT_LABEL_VN[t] ?? t).join(', ')}` }
   }
 
-  const { error: resultError } = await supabase.from('task_results').insert({
-    task_id:     taskId,
-    user_id:     user.id,
-    output_data: outputData,
-  })
+  const { data: resultRow, error: resultError } = await supabase
+    .from('task_results')
+    .insert({ task_id: taskId, user_id: user.id, output_data: outputData })
+    .select('id')
+    .single()
   if (resultError) return { error: resultError.message }
+
+  // Mark the most recent open resubmit request as fulfilled now that a result exists.
+  const { data: openReq } = await supabaseAdmin
+    .from('task_resubmit_requests')
+    .select('id')
+    .eq('task_id', taskId)
+    .eq('status', 'open')
+    .order('requested_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (openReq) {
+    const { error: rrErr } = await supabaseAdmin.from('task_resubmit_requests').update({
+      status:              'fulfilled',
+      fulfilled_result_id: resultRow?.id ?? null,
+      fulfilled_at:        new Date().toISOString(),
+    }).eq('id', openReq.id)
+    if (rrErr) console.error('[task_resubmit_requests] fulfill on submit:', rrErr.message)
+  }
 
   // Use admin client — staff RLS no longer allows direct UPDATE on tasks (dropped in 010).
   // When the submission is late, stamp overdue_at (preserving an earlier cron-set value)
@@ -456,6 +484,15 @@ export async function submitTask(taskId: string, outputData: Record<string, unkn
     .update(statusUpdate)
     .eq('id', taskId)
   if (statusError) return { error: `Đã nộp kết quả nhưng không thể cập nhật trạng thái: ${statusError.message}` }
+
+  // Structured status event
+  { const { error: seErr } = await supabaseAdmin.from('task_status_events').insert({
+    task_id:     taskId,
+    from_status: task.status as string,
+    to_status:   'done',
+    actor_id:    user.id,
+    source:      profile?.role === 'store_manager' ? 'store_manager' : 'staff',
+  }); if (seErr) console.error('[task_status_events] submitTask:', seErr.message) }
 
   await writeLog(supabase, taskId, 'submitted', user.id, {
     output_types: Object.keys(outputData),
@@ -710,8 +747,8 @@ export async function requestResubmit(taskId: string, reason?: string) {
     .eq('id', taskId)
   if (error) return { error: error.message }
 
-  // Reason text goes to task_review_notes. Also uses supabaseAdmin so a
-  // collaborator editor doesn't need the 'resubmit_request' kind INSERT policy.
+  // Reason text: dual-write to task_review_notes (UI display, backward compat)
+  // AND task_resubmit_requests (structured reporting).
   if (reason && reason.trim()) {
     await supabaseAdmin.from('task_review_notes').insert({
       task_id:   taskId,
@@ -720,6 +757,31 @@ export async function requestResubmit(taskId: string, reason?: string) {
       note:      reason.trim(),
     })
   }
+  // Cancel any prior open requests so there is at most one 'open' per task.
+  // An admin may hit "yêu cầu làm lại" multiple times; only the latest matters.
+  { const { error: rrCancelErr } = await supabaseAdmin
+      .from('task_resubmit_requests')
+      .update({ status: 'cancelled' })
+      .eq('task_id', taskId)
+      .eq('status', 'open')
+    if (rrCancelErr) console.error('[task_resubmit_requests] cancel old open:', rrCancelErr.message)
+  }
+  { const { error: rrInsertErr } = await supabaseAdmin.from('task_resubmit_requests').insert({
+      task_id:      taskId,
+      requested_by: user.id,
+      reason:       reason?.trim() || null,
+    })
+    if (rrInsertErr) console.error('[task_resubmit_requests] insert new request:', rrInsertErr.message)
+  }
+  // Structured status event: status flips to 'todo' on resubmit request
+  { const { error: seErr } = await supabaseAdmin.from('task_status_events').insert({
+    task_id:     taskId,
+    from_status: task?.status as string ?? null,
+    to_status:   'todo',
+    note:        reason?.trim() || null,
+    actor_id:    user.id,
+    source:      'admin',
+  }); if (seErr) console.error('[task_status_events] requestResubmit:', seErr.message) }
   await writeLog(supabase, taskId, 'resubmit_requested', user.id, {})
 
   if (task?.assigned_to) {
@@ -795,6 +857,19 @@ export async function extendDeadline(taskId: string, newDeadline: string) {
     to:   newDeadline,
     status_reset: current?.status === 'overdue',
   })
+  // Structured status event only when overdue task is revived (the meaningful
+  // status transition). Non-overdue deadline changes don't alter status.
+  if (current?.status === 'overdue') {
+    const { error: seErr } = await supabaseAdmin.from('task_status_events').insert({
+      task_id:     taskId,
+      from_status: 'overdue',
+      to_status:   'todo',
+      note:        'deadline extended',
+      actor_id:    user.id,
+      source:      'admin',
+    })
+    if (seErr) console.error('[task_status_events] extendDeadline:', seErr.message)
+  }
 
   revalidatePath('/tasks')
   revalidatePath(`/tasks/${taskId}`)

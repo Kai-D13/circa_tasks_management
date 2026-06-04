@@ -18,9 +18,9 @@ export async function createFeedbackThread(taskId: string, title: string, messag
   if (!profile.store_id)
     return { error: 'Tài khoản chưa được gán cửa hàng' }
 
-  // Verify task belongs to manager's store
+  // Verify task belongs to manager's store and get owner for notification
   const { data: taskCheck } = await supabase
-    .from('tasks').select('store_id').eq('id', taskId).single()
+    .from('tasks').select('store_id, created_by, title').eq('id', taskId).single()
   if (!taskCheck) return { error: 'Task không tồn tại' }
   if (taskCheck.store_id !== profile.store_id)
     return { error: 'Task không thuộc cửa hàng của bạn' }
@@ -51,21 +51,16 @@ export async function createFeedbackThread(taskId: string, title: string, messag
     return { error: `Không thể lưu nội dung phản hồi: ${msgErr.message}` }
   }
 
-  // Notify all admins
-  const { data: admins } = await supabase
-    .from('users').select('id').eq('role', 'admin')
-  if (admins?.length) {
-    const { data: taskInfo } = await supabase
-      .from('tasks').select('title').eq('id', taskId).single()
-    await supabaseAdmin.from('notifications').insert(
-      admins.map((a) => ({
-        user_id: a.id,
-        type:    'feedback_created',
-        task_id: taskId,
-        title:   'Phản hồi mới từ cửa hàng',
-        message: `"${trimmedTitle}" — task: ${taskInfo?.title ?? taskId}`,
-      }))
-    )
+  // Notify the task owner only (not all admins — that was a privacy leak).
+  // taskCheck already contains created_by and title from the store validation above.
+  if (taskCheck.created_by) {
+    await supabaseAdmin.from('notifications').insert({
+      user_id: taskCheck.created_by,
+      type:    'feedback_created',
+      task_id: taskId,
+      title:   'Phản hồi mới từ cửa hàng',
+      message: `"${trimmedTitle}" — task: ${taskCheck.title ?? taskId}`,
+    })
   }
 
   revalidatePath(`/tasks/${taskId}`)
@@ -128,18 +123,17 @@ export async function addFeedbackMessage(threadId: string, message: string) {
       )
     }
   } else {
-    // Store manager replied → notify admins
-    const { data: admins } = await supabase.from('users').select('id').eq('role', 'admin')
-    if (admins?.length) {
-      await supabaseAdmin.from('notifications').insert(
-        admins.map((a) => ({
-          user_id: a.id,
-          type:    'feedback_replied',
-          task_id: thread.task_id,
-          title:   'Cửa hàng có phản hồi mới',
-          message: `"${thread.title}": ${trimmed.slice(0, 80)}`,
-        }))
-      )
+    // Store manager replied → notify task owner only (not all admins).
+    const { data: taskInfo } = await supabase
+      .from('tasks').select('created_by').eq('id', thread.task_id).single()
+    if (taskInfo?.created_by) {
+      await supabaseAdmin.from('notifications').insert({
+        user_id: taskInfo.created_by,
+        type:    'feedback_replied',
+        task_id: thread.task_id,
+        title:   'Cửa hàng có phản hồi mới',
+        message: `"${thread.title}": ${trimmed.slice(0, 80)}`,
+      })
     }
   }
 

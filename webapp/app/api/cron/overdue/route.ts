@@ -51,6 +51,19 @@ export async function GET(request: NextRequest) {
       user_id:  null,
       metadata: { count, ran_at: now },
     })
+
+    // Structured status events — one row per flipped task.
+    // from_status is null: the update returns post-flip rows (status='overdue');
+    // the cron filter guarantees prior status was 'todo' or 'in_progress'.
+    { const { error: seErr } = await supabaseAdmin.from('task_status_events').insert(
+      (flipped ?? []).map((t) => ({
+        task_id:     t.id,
+        from_status: null as string | null,
+        to_status:   'overdue',
+        actor_id:    null as string | null,
+        source:      'cron',
+      }))
+    ); if (seErr) console.error('[task_status_events] cron/overdue:', seErr.message) }
   }
 
   return NextResponse.json({

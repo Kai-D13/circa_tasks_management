@@ -235,10 +235,9 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   // Collaborators (view or editor) can read threads but cannot reply — their
   // channel is review notes, not the store-admin Q&A thread.
   const canReplyFeedback  = canManageTask || isManagerOfTaskStore
-  // Collaborators can read threads (RLS permits it) but the UI gate must be
-  // explicit — neither canCreateFeedback nor canReplyFeedback is true for them.
-  const isTaskCollaborator = !!myCollaboratorRow
-  const canViewFeedback   = canCreateFeedback || canReplyFeedback || isTaskCollaborator
+  // Feedback is a private Q&A between the task owner/super admin and the store
+  // manager. Collaborators are not part of this channel (they use review notes).
+  const canViewFeedback = canCreateFeedback || canReplyFeedback
 
   const assignerName: string | null = lastAssignLog
     ? (lastAssignLog.users as unknown as { full_name: string } | null)?.full_name ?? null
