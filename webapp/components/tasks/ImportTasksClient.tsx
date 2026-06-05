@@ -73,11 +73,8 @@ export function ImportTasksClient({ stores }: { stores: Store[] }) {
   const [title, setTitle] = useState('Kiểm tra TRF thiếu hàng')
   const [description, setDescription] = useState(DEFAULT_DESCRIPTION)
   const [priority, setPriority] = useState<'urgent' | 'normal'>('urgent')
-  const [deadline, setDeadline] = useState(() => {
-    const d = new Date()
-    d.setHours(d.getHours() + 48)
-    return d.toISOString().slice(0, 16)
-  })
+  const [deadlineDate, setDeadlineDate] = useState(() => new Date(Date.now() + 48 * 3600 * 1000).toISOString().slice(0, 10))
+  const [deadlineTime, setDeadlineTime] = useState(() => new Date(Date.now() + 48 * 3600 * 1000).toISOString().slice(11, 16))
   const [requiredOutputs, setRequiredOutputs] = useState<RequiredOutput[]>(['video', 'text'])
 
   // File state
@@ -145,6 +142,9 @@ export function ImportTasksClient({ stores }: { stores: Store[] }) {
   function handleCreate() {
     if (!title.trim()) { toast.error('Vui lòng nhập tiêu đề task'); return }
     if (matched.length === 0) { toast.error('Không có store nào được match. Kiểm tra lại file và cột POS Code'); return }
+
+    const deadline = deadlineDate && deadlineTime ? `${deadlineDate}T${deadlineTime}` : ''
+    if (!deadline) { toast.error('Vui lòng chọn deadline'); return }
 
     startTransition(async () => {
       const result = await createBulkTasks({
@@ -219,14 +219,11 @@ export function ImportTasksClient({ stores }: { stores: Store[] }) {
                   </Select>
                 </div>
                 <div className="grid gap-1.5">
-                  <Label htmlFor="deadline">Deadline</Label>
-                  <Input
-                    id="deadline"
-                    type="datetime-local"
-                    value={deadline}
-                    onChange={(e) => setDeadline(e.target.value)}
-                    className="text-xs"
-                  />
+                  <Label>Deadline <span className="text-destructive">*</span></Label>
+                  <div className="flex gap-1.5">
+                    <Input type="date" required value={deadlineDate} onChange={(e) => setDeadlineDate(e.target.value)} className="h-9 text-xs bg-background flex-1" />
+                    <Input type="time" required value={deadlineTime} onChange={(e) => setDeadlineTime(e.target.value)} className="h-9 text-xs bg-background w-[80px]" />
+                  </div>
                 </div>
               </div>
 
