@@ -284,6 +284,9 @@ export function TaskList({ items, canArchive, canRestore, showArchived }: Props)
                       <TableCell>
                         <Link
                           href={`/tasks/${child.id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          prefetch={false}
                           className="flex items-center gap-1.5 text-sm hover:underline pl-8"
                         >
                           <span className="text-muted-foreground">↳</span>
@@ -334,7 +337,7 @@ export function TaskList({ items, canArchive, canRestore, showArchived }: Props)
                   </TableCell>
                 )}
                 <TableCell>
-                  <Link href={`/tasks/${task.id}`} className="font-medium hover:underline flex items-center gap-1.5">
+                  <Link href={`/tasks/${task.id}`} target="_blank" rel="noopener noreferrer" prefetch={false} className="font-medium hover:underline flex items-center gap-1.5">
                     {task.title}
                     {task.broadcast_id && (
                       <Radio className="h-3.5 w-3.5 text-primary shrink-0" />
