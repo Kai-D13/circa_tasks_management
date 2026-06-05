@@ -21,6 +21,7 @@ import {
 import { cn } from '@/lib/utils'
 import { NotificationBell } from '@/components/layout/NotificationBell'
 import { ChangePasswordDialog } from '@/components/layout/ChangePasswordDialog'
+import { ThemeToggle } from '@/components/layout/ThemeToggle'
 
 const ROLE_COLORS: Record<string, string> = {
   admin:         'bg-orange-100 text-orange-700',
@@ -127,6 +128,7 @@ export function Sidebar() {
             Đăng xuất
           </Button>
           <NotificationBell />
+          <ThemeToggle />
         </div>
       </div>
     </aside>

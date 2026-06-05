@@ -5,6 +5,7 @@ import { useRouter, usePathname } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useUserStore } from '@/store/userStore'
 import { NotificationBell } from '@/components/layout/NotificationBell'
+import { ThemeToggle } from '@/components/layout/ThemeToggle'
 import { Button } from '@/components/ui/button'
 import { LogOut, ArrowLeft } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -81,6 +82,7 @@ export function MobileHeader() {
       {/* Actions — always visible */}
       <div className="flex items-center gap-1 shrink-0">
         <NotificationBell />
+        <ThemeToggle className="w-9 h-9 px-0 text-white/80 hover:bg-white/10 hover:text-white" />
         <Button
           variant="ghost"
           size="sm"
