@@ -23,6 +23,9 @@ export async function GET(request: NextRequest) {
     .update({ status: 'overdue', overdue_at: now })
     .lt('deadline', now)
     .in('status', ['todo', 'in_progress'])
+    // staff_all parents are overview-only and not submittable; never flip them to
+    // overdue (they'd be stuck). Their per-staff children flip individually.
+    .neq('assignment_mode', 'staff_all')
     .select('id, title, created_by')
 
   if (error) {

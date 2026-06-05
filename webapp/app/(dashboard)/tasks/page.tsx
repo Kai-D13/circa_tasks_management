@@ -3,7 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { buttonVariants } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { TaskFilters } from '@/components/tasks/TaskFilters'
-import { TaskList, TaskListItem, BroadcastGroup, TaskRow, ChildTask } from '@/components/tasks/TaskList'
+import { TaskList, TaskListItem, BroadcastGroup, StaffGroup, TaskRow, ChildTask } from '@/components/tasks/TaskList'
 import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { Plus, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -31,7 +31,7 @@ export default async function TasksPage({
     // Narrow select — excludes description/input_data/required_outputs which grow
     // large when tasks have many attachments. Must be a single string literal so
     // Supabase's type inference doesn't fall back to GenericStringError.
-    .select('id, title, status, priority, category, broadcast_id, source_schedule_id, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name)', { count: 'exact' })
+    .select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name)', { count: 'exact' })
     .order('created_at', { ascending: false })
     .range(offset, offset + PAGE_SIZE - 1)
 
@@ -44,7 +44,10 @@ export default async function TasksPage({
   if (params.status) {
     const now = new Date().toISOString()
     if (params.status === 'overdue') {
-      query = query.or(`status.eq.overdue,and(deadline.lt.${now},status.neq.done)`)
+      // staff_all parents are never submittable/overdue; exclude them from overdue filter
+      query = query
+        .or(`status.eq.overdue,and(deadline.lt.${now},status.neq.done)`)
+        .neq('assignment_mode', 'staff_all')
     } else if (params.status === 'todo' || params.status === 'in_progress') {
       query = query
         .eq('status', params.status)
@@ -56,6 +59,12 @@ export default async function TasksPage({
   if (params.priority) query = query.eq('priority', params.priority)
   if (params.store_id) query = query.eq('store_id', params.store_id)
   if (params.category) query = query.eq('category', params.category)
+
+  // For admin/manager with no status filter: exclude staff_all children from the
+  // paginated count so the page count isn't inflated by N children per parent.
+  // Children are fetched separately after this query and appended to allTasks.
+  const topLevelOnly = (profile?.role === 'admin' || profile?.role === 'store_manager') && !params.status
+  if (topLevelOnly) query = query.is('parent_task_id', null)
 
   const [{ data: tasks, error: tasksError, count }, { data: stores }] = await Promise.all([
     query,
@@ -70,11 +79,82 @@ export default async function TasksPage({
   const canArchive = !showArchived && profile?.role === 'admin'
   const canRestore = showArchived  && profile?.role === 'admin'
 
-  // Group tasks: collapse same broadcast_id into one broadcast row with full progress
+  // Fetch children for staff_all parents on this page (excluded from paginated query).
+  let extraChildren: NonNullable<typeof tasks> = []
+  if (topLevelOnly) {
+    const parentIds = (tasks ?? [])
+      .filter(t => (t as { assignment_mode?: string }).assignment_mode === 'staff_all')
+      .map(t => t.id)
+    if (parentIds.length > 0) {
+      let childQ = supabase
+        .from('tasks')
+        .select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name)')
+        .in('parent_task_id', parentIds)
+        .order('created_at', { ascending: true })
+      if (showArchived) childQ = childQ.not('archived_at', 'is', null)
+      else              childQ = childQ.is('archived_at', null)
+      const { data: childData } = await childQ
+      extraChildren = (childData ?? []) as unknown as NonNullable<typeof tasks>
+    }
+  }
+
+  const allTasks = [...(tasks ?? []), ...extraChildren]
+
+  // Pre-pass for staff_all groups: map each staff_all parent to its children, in
+  // case pagination/ordering interleaves the parent and child rows. The parent is
+  // created slightly before its children so it can appear later in created_at-desc.
+  const staffParentIds = new Set<string>(
+    allTasks.filter((t) => (t as { assignment_mode?: string }).assignment_mode === 'staff_all').map((t) => t.id)
+  )
+  const childrenByParent = new Map<string, ChildTask[]>()
+  for (const t of allTasks) {
+    const pid = (t as { parent_task_id?: string | null }).parent_task_id ?? null
+    if (pid && staffParentIds.has(pid)) {
+      const child: ChildTask = {
+        id:         t.id,
+        status:     t.status,
+        stores:     (t.stores as unknown as { name: string } | null),
+        assignee:   (t.assignee as unknown as { full_name: string } | null),
+        deadline:   t.deadline ?? null,
+        overdue_at: (t as { overdue_at?: string | null }).overdue_at ?? null,
+      }
+      const arr = childrenByParent.get(pid) ?? []
+      arr.push(child)
+      childrenByParent.set(pid, arr)
+    }
+  }
+
+  // Group tasks: collapse same broadcast_id into one broadcast row, fold staff_all
+  // children under their parent, leave everything else as individual rows.
   const grouped: TaskListItem[] = []
   const seenBroadcast = new Map<string, number>()
 
-  for (const task of tasks ?? []) {
+  for (const task of allTasks) {
+    const parentTaskId = (task as { parent_task_id?: string | null }).parent_task_id ?? null
+
+    // staff_all parent → one group row with per-staff children folded in
+    if ((task as { assignment_mode?: string }).assignment_mode === 'staff_all') {
+      const kids = childrenByParent.get(task.id) ?? []
+      const group: StaffGroup = {
+        type:       'staff',
+        parentId:   task.id,
+        title:      task.title,
+        category:   task.category ?? null,
+        storeName:  (task.stores as unknown as { name: string } | null)?.name ?? null,
+        total:      kids.length,
+        done:       kids.filter((k) => k.status === 'done').length,
+        createdAt:  task.created_at,
+        taskIds:    [task.id, ...kids.map((k) => k.id)],
+        childTasks: kids,
+      }
+      grouped.push(group)
+      continue
+    }
+    // staff_all child whose parent is present → already folded into the group above
+    if (parentTaskId && staffParentIds.has(parentTaskId)) {
+      continue
+    }
+
     if (!task.broadcast_id) {
       const row: TaskRow = {
         type: 'task',
@@ -88,7 +168,7 @@ export default async function TasksPage({
           source_schedule_id: (task as { source_schedule_id?: string | null }).source_schedule_id ?? null,
           stores:             (task.stores as unknown as { name: string } | null),
           assignee:           (task.assignee as unknown as { full_name: string } | null),
-          deadline:           task.deadline ?? null,
+          deadline:           (task.deadline as string | null) ?? null,
           overdue_at:         (task as { overdue_at?: string | null }).overdue_at ?? null,
           created_at:         task.created_at,
         },

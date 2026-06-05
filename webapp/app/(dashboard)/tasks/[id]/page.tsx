@@ -21,7 +21,7 @@ import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { formatDate, getEffectiveStatus } from '@/lib/dateUtils'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { Task, RequiredOutput, UserRole, TaskCategory } from '@/types'
-import { Pencil, Trash2, Radio } from 'lucide-react'
+import { Pencil, Trash2, Radio, Users } from 'lucide-react'
 
 const CATEGORY_STYLE: Record<TaskCategory, string> = {
   training: 'bg-blue-100 text-blue-700',
@@ -75,6 +75,30 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   // canViewStoreRoster: read-only — fetch store users for results filtering
   // (store_manager) and the reassign dropdown (admin). Not a mutation right.
   const canViewStoreRoster = userRole === 'admin' || userRole === 'store_manager'
+
+  // staff_all parent: overview only. It is never submittable and has no status
+  // lifecycle — instead it shows a per-staff child progress table. A child task
+  // shows a breadcrumb back to its parent.
+  const isStaffParent = task.assignment_mode === 'staff_all'
+  const parentTaskId  = (task.parent_task_id as string | null) ?? null
+  const [{ data: childTasks }, { data: parentInfo }] = await Promise.all([
+    isStaffParent
+      ? supabase
+          .from('tasks')
+          .select('id, status, deadline, overdue_at, assignee:users!assigned_to(full_name)')
+          .eq('parent_task_id', id)
+          .order('created_at')
+      : Promise.resolve({ data: null }),
+    parentTaskId
+      ? supabase.from('tasks').select('title').eq('id', parentTaskId).maybeSingle()
+      : Promise.resolve({ data: null }),
+  ])
+  const staffChildren = (childTasks ?? []) as unknown as Array<{
+    id: string; status: string; deadline: string | null; overdue_at: string | null
+    assignee: { full_name: string } | null
+  }>
+  const staffDone  = staffChildren.filter((c) => c.status === 'done').length
+  const staffTotal = staffChildren.length
 
   // Round 2: store users + collaborators (parallel)
   const [{ data: storeUsers }, { data: collaborators }, { data: allAdmins }, { data: myCollaboratorRow }] = await Promise.all([
@@ -191,12 +215,16 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   // isSubmitterForTask: user is responsible for submitting this task (direct assignee or store-level)
   const isSubmitterForTask = isDirectAssignee || isStoreSubmitter
 
-  // displayStatus: effective status shown in UI — reflects overdue even when DB status is in_progress/todo
-  const displayStatus = getEffectiveStatus(task.deadline, task.status) as Task['status']
+  // displayStatus: for staff_all parents roll up from children (parent is never
+  // submitted or flipped by cron); for regular tasks apply deadline-based overdue.
+  const displayStatus = isStaffParent
+    ? (staffDone === staffTotal && staffTotal > 0 ? 'done' : staffDone > 0 ? 'in_progress' : 'todo') as Task['status']
+    : getEffectiveStatus(task.deadline, task.status) as Task['status']
 
   // Overdue tasks are still submittable (lateness is tracked, not blocked) — the
   // submit form stays available until there is a valid submission or it's done.
-  const canSubmit = displayStatus !== 'done'
+  const canSubmit = !isStaffParent
+    && displayStatus !== 'done'
     && isSubmitterForTask
     && !hasAlreadySubmitted
 
@@ -204,9 +232,10 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   // (staff/store) keeps it for execution status (todo/in_progress) until they
   // have a valid submission or the task is effectively overdue/done. Store
   // managers who are NOT the submitter no longer get a reviewer selector.
-  const canSeeStatusSelector =
+  const canSeeStatusSelector = !isStaffParent && (
     canManageTask
     || (isSubmitterForTask && !hasAlreadySubmitted && displayStatus !== 'done')
+  )
 
   // Helper text shown when submitter is locked after valid submission
   const submittedLocked = isSubmitterForTask && hasAlreadySubmitted
@@ -292,7 +321,20 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                   Định kỳ
                 </span>
               )}
+              {isStaffParent && (
+                <span className="flex items-center gap-1 text-xs text-primary bg-primary/10 px-2 py-0.5 rounded font-medium shrink-0">
+                  <Users className="h-3 w-3" /> Từng dược sĩ nộp
+                </span>
+              )}
             </div>
+            {parentTaskId && parentInfo && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Task con của{' '}
+                <Link href={`/tasks/${parentTaskId}`} className="text-primary hover:underline">
+                  {(parentInfo as { title: string }).title}
+                </Link>
+              </p>
+            )}
             <p className="text-xs text-muted-foreground mt-0.5">
               Tạo bởi {(task.creator as { full_name: string } | null)?.full_name ?? '—'}
               {task.created_at && ` · ${formatDate(task.created_at)}`}
@@ -315,9 +357,11 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                   keywords: [a.email],
                 }))}
               />
-              <Link href={`/tasks/${id}/edit`} className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}>
-                <Pencil className="h-4 w-4 mr-1" /> Chỉnh sửa
-              </Link>
+              {!isStaffParent && (
+                <Link href={`/tasks/${id}/edit`} className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}>
+                  <Pencil className="h-4 w-4 mr-1" /> Chỉnh sửa
+                </Link>
+              )}
               <form action={handleDelete}>
                 <Button variant="destructive" size="sm" type="submit">
                   <Trash2 className="h-4 w-4 mr-1" /> Xoá
@@ -352,6 +396,47 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           {/* Input data (task attachments / links from creation) */}
           {task.input_data && Object.keys(task.input_data as object).length > 0 && (
             <InputDataDisplay inputData={task.input_data as Record<string, unknown>} />
+          )}
+
+          {/* staff_all parent: per-staff progress table instead of a submit form */}
+          {isStaffParent && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  Tiến độ dược sĩ
+                  <span className={cn(
+                    'text-xs font-medium px-1.5 py-0.5 rounded',
+                    staffTotal > 0 && staffDone === staffTotal ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
+                  )}>
+                    {staffDone}/{staffTotal} đã nộp
+                  </span>
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="pt-0">
+                {staffTotal === 0 ? (
+                  <p className="text-sm text-muted-foreground">Chưa có task con nào.</p>
+                ) : (
+                  <div className="divide-y divide-border/60">
+                    {staffChildren.map((c) => (
+                      <div key={c.id} className="flex items-center justify-between gap-2 py-2">
+                        <Link href={`/tasks/${c.id}`} className="text-sm font-medium hover:underline truncate">
+                          {c.assignee?.full_name ?? 'Chưa phân công'}
+                        </Link>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <TaskStatusBadge
+                            status={getEffectiveStatus(c.deadline, c.status) as Task['status']}
+                            late={c.status === 'done' && !!c.overdue_at}
+                          />
+                          <span className="text-xs text-muted-foreground whitespace-nowrap">
+                            {c.deadline ? formatDate(c.deadline) : '—'}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           )}
 
           {/* Resubmit request banner — above submit form so the reason is visible
@@ -510,7 +595,9 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
               {/* Assignee */}
               <div className="py-3">
                 <p className="text-xs text-muted-foreground mb-1">Người thực hiện</p>
-                {canManageTask ? (
+                {isStaffParent ? (
+                  <p className="font-medium">Từng dược sĩ ({staffTotal})</p>
+                ) : canManageTask ? (
                   <TaskReassignForm
                     taskId={id}
                     currentAssignedTo={task.assigned_to}

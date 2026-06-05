@@ -61,14 +61,17 @@ export default async function DashboardPage() {
     { count: overdue,    error: e3 },
     { count: inProgress, error: e4 },
   ] = await Promise.all([
-    supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null),
-    supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null).eq('status', 'done'),
+    // staff_all parents are oversight-only (not submittable work items); exclude
+    // them from all KPI counts so children aren't double-counted with the parent.
+    supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null).neq('assignment_mode', 'staff_all'),
+    supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null).eq('status', 'done').neq('assignment_mode', 'staff_all'),
     // Count tasks that are effectively overdue: DB status='overdue' (set by cron)
     // OR deadline already passed and not yet done. Mirrors the /tasks filter so
     // the KPI stays accurate even when a store moves an overdue task to in_progress.
     supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null)
-      .or(`status.eq.overdue,and(deadline.lt.${new Date().toISOString()},status.neq.done)`),
-    supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null).eq('status', 'in_progress'),
+      .or(`status.eq.overdue,and(deadline.lt.${new Date().toISOString()},status.neq.done)`)
+      .neq('assignment_mode', 'staff_all'),
+    supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null).eq('status', 'in_progress').neq('assignment_mode', 'staff_all'),
   ])
   const kpiError = e1 ?? e2 ?? e3 ?? e4
 
@@ -116,6 +119,7 @@ export default async function DashboardPage() {
         .from('tasks')
         .select('id, title, status, category, deadline, created_at, overdue_at, stores(name)')
         .is('broadcast_id', null)
+        .is('parent_task_id', null)       // exclude staff_all children (they're folded under parent)
         .is('archived_at', null)
         .order('created_at', { ascending: false })
         .limit(8),

@@ -78,6 +78,9 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   const [priority, setPriority]     = useState<TaskPriority>(task?.priority ?? 'normal')
   const [outputs, setOutputs]       = useState<RequiredOutput[]>(task?.required_outputs ?? [])
   const [taskType, setTaskType]     = useState<TaskType>('adhoc')
+  // staff_all: each pharmacist in the store gets their own child task to submit.
+  // Ad-hoc + single-store + new only.
+  const [staffMode, setStaffMode]   = useState(false)
 
   const [startDate, setStartDate]       = useState(task?.start_date ? new Date(task.start_date).toISOString().slice(0, 10) : '')
   const [startTime, setStartTime]       = useState(task?.start_date ? new Date(task.start_date).toISOString().slice(11, 16) : '')
@@ -124,7 +127,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
     const dom = (name: string) =>
       ((f?.elements.namedItem(name) as HTMLInputElement | HTMLTextAreaElement | null)?.value) ?? ''
     return {
-      taskType, category, priority, storeId, assignedTo, scope, selectedStoreIds,
+      taskType, category, priority, storeId, assignedTo, scope, selectedStoreIds, staffMode,
       outputs, links, attachments,
       frequency, runTime, weekdays, monthDay, schedStartDate, schedEndDate, deadlineOffset,
       title: dom('title'), description: dom('description'),
@@ -160,7 +163,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
     return () => clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftKey, hasDraft, dirtyTick, taskType, category, priority, storeId, assignedTo, scope,
-      selectedStoreIds, outputs, links, attachments, frequency, runTime, weekdays,
+      selectedStoreIds, staffMode, outputs, links, attachments, frequency, runTime, weekdays,
       monthDay, schedStartDate, schedEndDate, deadlineOffset,
       startDate, startTime, deadlineDate, deadlineTime])
 
@@ -200,6 +203,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
       setAssignedTo(d.assignedTo ?? '')
       setScope(d.scope ?? 'single')
       setSelectedStoreIds(d.selectedStoreIds ?? [])
+      setStaffMode(d.staffMode ?? false)
       setOutputs(d.outputs ?? [])
       setLinks(d.links ?? [])
       setAttachments(d.attachments ?? [])
@@ -253,6 +257,13 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   const broadcastCount    = scope === 'all' ? visibleStores.length : selectedStoreIds.length
   const showMultiStore    = isBroadcast || isRecurring
 
+  // staff_all only applies to a single-store ad-hoc task created by an admin.
+  const canStaffMode      = isAdmin && !isEditMode && !isRecurring && scope === 'single'
+  const effectiveStaffMode = staffMode && canStaffMode
+  const staffCount        = storeId
+    ? users.filter((u) => u.store_id === storeId && u.role === 'staff').length
+    : 0
+
   function deriveVisibility(): TaskVisibility {
     return assignedTo ? 'private' : 'store'
   }
@@ -271,10 +282,12 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   function handleScopeChange(scopeVal: Scope) {
     setScope(scopeVal)
     setSelectedStoreIds([])
+    if (scopeVal !== 'single') setStaffMode(false)
   }
 
   function handleSetTaskType(t: TaskType) {
     setTaskType(t)
+    if (t === 'recurring') setStaffMode(false)
     if (t === 'recurring' && scope === 'single') setScope('multi')
   }
 
@@ -369,6 +382,12 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
       return
     }
 
+    // Per-pharmacist mode needs at least one staff in the store (server re-checks).
+    if (effectiveStaffMode && staffCount === 0) {
+      toast.error('Cửa hàng chưa có dược sĩ nào để giao task')
+      return
+    }
+
     if (isBroadcast) {
       const storeIds = scope === 'all' ? visibleStores.map((s) => s.id) : selectedStoreIds
       if (!storeIds.length) { toast.error('Vui lòng chọn ít nhất một cửa hàng'); return }
@@ -396,7 +415,14 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
     }
 
     formData.set('store_id',          storeId)
-    formData.set('assigned_to',       assignedTo)
+    // staff_all generates one child per pharmacist server-side; the parent has no
+    // single assignee, so clear assigned_to and flag the mode.
+    if (effectiveStaffMode) {
+      formData.set('assignment_mode', 'staff_all')
+      formData.set('assigned_to', '')
+    } else {
+      formData.set('assigned_to', assignedTo)
+    }
     formData.set('input_attachments', JSON.stringify(attachments))
     formData.set('input_links',       JSON.stringify(links.filter((l) => l.url.trim())))
 
@@ -534,32 +560,67 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                 )}
               </div>
             ) : (
-              <div className="flex flex-col sm:flex-row gap-2.5">
-                <div className="flex-1">
-                  <SearchableSelect
-                    value={storeId}
-                    options={visibleStores.map((s) => ({ value: s.id, label: s.name }))}
-                    onValueChange={handleStoreChange}
-                    placeholder="Cửa hàng..."
-                    triggerClassName="h-8 text-sm bg-background"
-                  />
+              <div className="space-y-2.5">
+                {/* Submit mode — store-level vs per-pharmacist (single-store ad-hoc only) */}
+                {canStaffMode && (
+                  <div className="flex rounded-[4px] border overflow-hidden">
+                    {([['store', 'Cửa hàng nộp'], ['staff_all', 'Từng dược sĩ nộp']] as const).map(([val, label]) => {
+                      const active = (val === 'staff_all') === staffMode
+                      return (
+                        <button
+                          key={val}
+                          type="button"
+                          onClick={() => setStaffMode(val === 'staff_all')}
+                          className={cn(
+                            'flex-1 py-1.5 text-xs font-medium transition-colors',
+                            active ? 'bg-primary text-white' : 'text-muted-foreground hover:bg-muted'
+                          )}
+                        >
+                          {label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+                <div className="flex flex-col sm:flex-row gap-2.5">
+                  <div className="flex-1">
+                    <SearchableSelect
+                      value={storeId}
+                      options={visibleStores.map((s) => ({ value: s.id, label: s.name }))}
+                      onValueChange={handleStoreChange}
+                      placeholder="Cửa hàng..."
+                      triggerClassName="h-8 text-sm bg-background"
+                    />
+                  </div>
+                  {!effectiveStaffMode && (
+                    <div className="flex-1">
+                      <SearchableSelect
+                        value={assignedTo}
+                        options={[
+                          { value: '', label: 'Chưa phân công' },
+                          ...storeUsers.map((u) => ({
+                            value: u.id,
+                            label: u.full_name,
+                            description: u.role.replace('_', ' '),
+                          })),
+                        ]}
+                        onValueChange={(v) => setAssignedTo(v ?? '')}
+                        placeholder="Người thực hiện..."
+                        triggerClassName="h-8 text-sm bg-background"
+                      />
+                    </div>
+                  )}
                 </div>
-                <div className="flex-1">
-                  <SearchableSelect
-                    value={assignedTo}
-                    options={[
-                      { value: '', label: 'Chưa phân công' },
-                      ...storeUsers.map((u) => ({
-                        value: u.id,
-                        label: u.full_name,
-                        description: u.role.replace('_', ' '),
-                      })),
-                    ]}
-                    onValueChange={(v) => setAssignedTo(v ?? '')}
-                    placeholder="Người thực hiện..."
-                    triggerClassName="h-8 text-sm bg-background"
-                  />
-                </div>
+                {/* Preview when per-pharmacist mode is active */}
+                {effectiveStaffMode && (
+                  <p className={cn('text-xs', storeId && staffCount === 0 ? 'text-destructive' : 'text-muted-foreground')}>
+                    {!storeId
+                      ? 'Chọn cửa hàng để xem số dược sĩ sẽ nhận task.'
+                      : staffCount === 0
+                        ? 'Cửa hàng này chưa có dược sĩ nào — không thể tạo task theo dược sĩ.'
+                        : `Sẽ tạo ${staffCount} task con cho ${staffCount} dược sĩ. Quản lý cửa hàng nhận thông báo tổng quan.`}
+                  </p>
+                )}
               </div>
             )}
           </div>

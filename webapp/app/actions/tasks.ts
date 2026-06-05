@@ -130,6 +130,24 @@ export async function createTask(formData: FormData) {
     ? { attachments: inputAttachments, links: inputLinks }
     : null
 
+  // ── staff_all mode: parent (overview, not submittable) + one child per staff ──
+  // Each pharmacist in the store gets their own child task they must submit.
+  // The parent is private/unassigned so staff can't see it (RLS); managers and
+  // admins see it via their role policies.
+  if (formData.get('assignment_mode') === 'staff_all') {
+    return createStaffRequiredTask(supabase, user.id, {
+      storeId:         storeIdVal,
+      title:           formData.get('title') as string,
+      description:     formData.get('description') as string || null,
+      category:        (formData.get('category') as TaskCategory) || 'other',
+      priority:        formData.get('priority') as TaskPriority,
+      startDate:       formData.get('start_date') as string || null,
+      deadline:        formData.get('deadline') as string || null,
+      requiredOutputs: requiredOutputsRaw,
+      inputData,
+    })
+  }
+
   const { data: task, error } = await supabase.from('tasks').insert({
     title:            formData.get('title') as string,
     description:      formData.get('description') as string || null,
@@ -193,6 +211,121 @@ export async function createTask(formData: FormData) {
   redirect('/tasks')
 }
 
+// staff_all helper — called by createTask when the admin picks "Từng dược sĩ nộp".
+// Creates one private parent (overview only) plus one private child per active
+// staff member of the store. Already authenticated/admin-checked by the caller.
+async function createStaffRequiredTask(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+  p: {
+    storeId:         string
+    title:           string
+    description:     string | null
+    category:        TaskCategory
+    priority:        TaskPriority
+    startDate:       string | null
+    deadline:        string | null
+    requiredOutputs: RequiredOutput[]
+    inputData:       unknown
+  },
+) {
+  // 1. Active pharmacists of the store. No is_active flag exists → all role='staff'.
+  const { data: staff } = await supabase
+    .from('users').select('id, full_name')
+    .eq('role', 'staff').eq('store_id', p.storeId)
+  if (!staff || staff.length === 0) {
+    return { error: 'Cửa hàng chưa có dược sĩ nào để giao task' }
+  }
+
+  // 2. Parent — private + unassigned so staff can't see it; managers/admins can.
+  const { data: parent, error: parentErr } = await supabase.from('tasks').insert({
+    title:            p.title,
+    description:      p.description,
+    category:         p.category,
+    priority:         p.priority,
+    visibility:       'private' as TaskVisibility,
+    store_id:         p.storeId,
+    assigned_to:      null,
+    assignment_mode:  'staff_all',
+    start_date:       p.startDate,
+    deadline:         p.deadline,
+    required_outputs: p.requiredOutputs,
+    created_by:       userId,
+    input_data:       p.inputData,
+  }).select().single()
+  if (parentErr || !parent) return { error: parentErr?.message ?? 'Không thể tạo task cha' }
+
+  // 3. One child per staff. Private + assigned so each staff sees only their own.
+  const { data: children, error: childErr } = await supabase.from('tasks').insert(
+    staff.map((s) => ({
+      title:            p.title,
+      description:      p.description,
+      category:         p.category,
+      priority:         p.priority,
+      visibility:       'private' as TaskVisibility,
+      store_id:         p.storeId,
+      assigned_to:      s.id,
+      assignment_mode:  'user',
+      parent_task_id:   parent.id,
+      start_date:       p.startDate,
+      deadline:         p.deadline,
+      required_outputs: p.requiredOutputs,
+      created_by:       userId,
+      input_data:       p.inputData,
+    })),
+  ).select('id, assigned_to')
+  if (childErr || !children) {
+    // Rollback the orphan parent (best-effort) so we never leave a childless parent.
+    await supabase.from('tasks').delete().eq('id', parent.id)
+    return { error: childErr?.message ?? 'Không thể tạo task con cho nhân viên' }
+  }
+
+  // 4. Logs: parent created + child-generation summary.
+  await writeLog(supabase, parent.id, 'created', userId, {
+    title:            p.title,
+    assignment_mode:  'staff_all',
+  })
+  await writeLog(supabase, parent.id, 'staff_children_generated', userId, {
+    child_count: children.length,
+  })
+
+  // 5. Notifications: each store_manager about the parent, each staff about their child.
+  const { data: managers } = await supabase
+    .from('users').select('id')
+    .eq('role', 'store_manager').eq('store_id', p.storeId)
+  const notifications = [
+    ...(managers ?? []).map((m) => ({
+      user_id: m.id,
+      type:    'task_assigned',
+      task_id: parent.id,
+      title:   'Task mới cho cửa hàng (từng dược sĩ nộp)',
+      message: `Task mới: ${p.title} — ${children.length} dược sĩ cần nộp`,
+    })),
+    ...children.map((c) => ({
+      user_id: c.assigned_to as string,
+      type:    'task_assigned',
+      task_id: c.id,
+      title:   'Task mới được giao',
+      message: `Bạn được giao task: ${p.title}`,
+    })),
+  ]
+  if (notifications.length) {
+    await supabaseAdmin.from('notifications').insert(notifications)
+  }
+
+  // 6. Microsoft Teams notification (best-effort, never throws).
+  await notifyTaskCreated({
+    taskId:    parent.id,
+    storeId:   p.storeId,
+    taskTitle: p.title,
+    taskType:  'Phát sinh',
+    deadline:  p.deadline,
+  })
+
+  revalidatePath('/tasks')
+  redirect('/tasks')
+}
+
 export async function updateTask(taskId: string, formData: FormData) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -200,9 +333,11 @@ export async function updateTask(taskId: string, formData: FormData) {
 
   // Admin-only + own-scope: super admin any task, sub-admin only ones they created.
   const { data: editorProfile } = await supabase.from('users').select('role').eq('id', user.id).single()
-  const { data: ownerRow } = await supabase.from('tasks').select('created_by').eq('id', taskId).single()
+  const { data: ownerRow } = await supabase.from('tasks').select('created_by, assignment_mode').eq('id', taskId).single()
   if (!canAdminManageOwn({ email: user.email, role: editorProfile?.role, createdBy: ownerRow?.created_by, userId: user.id }))
     return { error: 'Bạn không có quyền chỉnh sửa task này' }
+  if ((ownerRow as { assignment_mode?: string } | null)?.assignment_mode === 'staff_all')
+    return { error: 'Không thể chỉnh sửa task cha — hãy xoá và tạo lại nếu cần.' }
 
   const storeIdVal = formData.get('store_id') as string | null
   if (!storeIdVal) return { error: 'Vui lòng chọn cửa hàng nhận task' }
@@ -382,7 +517,7 @@ export async function submitTask(taskId: string, outputData: Record<string, unkn
   const [{ data: task }, { data: profile }] = await Promise.all([
     supabase
       .from('tasks')
-      .select('created_by, title, assigned_to, store_id, resubmit_requested_at, required_outputs, deadline, status, overdue_at')
+      .select('created_by, title, assigned_to, store_id, resubmit_requested_at, required_outputs, deadline, status, overdue_at, assignment_mode')
       .eq('id', taskId)
       .single(),
     supabase
@@ -393,6 +528,12 @@ export async function submitTask(taskId: string, outputData: Record<string, unkn
   ])
 
   if (!task) return { error: 'Task không tồn tại' }
+
+  // A staff_all parent is overview-only — results are submitted on the per-staff
+  // child tasks, never on the parent.
+  if (task.assignment_mode === 'staff_all') {
+    return { error: 'Đây là task cha — vui lòng nộp kết quả trên task con của bạn.' }
+  }
 
   // Who can submit:
   // (a) direct assignment: task.assigned_to = user.id
@@ -951,10 +1092,14 @@ export async function archiveTasks(ids: string[]) {
   if (profile?.role !== 'admin')
     return { error: 'Không có quyền lưu trữ' }
 
+  // Cascade: if any selected IDs are staff_all parents, also archive their children
+  const { data: childRows } = await supabase.from('tasks').select('id').in('parent_task_id', ids)
+  const allIds = childRows?.length ? [...new Set([...ids, ...childRows.map(r => r.id)])] : ids
+
   const { data: updated, error } = await supabase
     .from('tasks')
     .update({ archived_at: new Date().toISOString() })
-    .in('id', ids)
+    .in('id', allIds)
     .select('id')
 
   if (error) return { error: error.message }
@@ -976,10 +1121,14 @@ export async function restoreTasks(ids: string[]) {
   if (profile?.role !== 'admin')
     return { error: 'Không có quyền khôi phục' }
 
+  // Cascade: if any selected IDs are staff_all parents, also restore their children
+  const { data: childRows } = await supabase.from('tasks').select('id').in('parent_task_id', ids)
+  const allIds = childRows?.length ? [...new Set([...ids, ...childRows.map(r => r.id)])] : ids
+
   const { data: updated, error } = await supabase
     .from('tasks')
     .update({ archived_at: null })
-    .in('id', ids)
+    .in('id', allIds)
     .select('id')
 
   if (error) return { error: error.message }

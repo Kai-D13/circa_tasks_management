@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
 import { TaskPriorityBadge } from '@/components/tasks/TaskPriorityBadge'
 import { formatDistanceToNow, getEffectiveStatus } from '@/lib/dateUtils'
-import { Radio, Archive, ArchiveRestore, ChevronRight, ChevronDown } from 'lucide-react'
+import { Radio, Archive, ArchiveRestore, ChevronRight, ChevronDown, Users } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Task, TaskCategory } from '@/types'
 
@@ -50,6 +50,22 @@ export type BroadcastGroup = {
   childTasks:  ChildTask[]
 }
 
+// staff_all parent: overview row that folds in one child per pharmacist. Unlike a
+// broadcast (a virtual group), the parent is a real task with its own detail page,
+// so the title links to /tasks/<parentId> while the chevron expands inline.
+export type StaffGroup = {
+  type:       'staff'
+  parentId:   string
+  title:      string
+  category:   string | null
+  storeName:  string | null
+  total:      number
+  done:       number
+  createdAt:  string
+  taskIds:    string[]      // parent + children, for archive selection
+  childTasks: ChildTask[]   // one per staff; child.assignee = pharmacist name
+}
+
 export type TaskRow = {
   type: 'task'
   task: {
@@ -68,7 +84,7 @@ export type TaskRow = {
   }
 }
 
-export type TaskListItem = BroadcastGroup | TaskRow
+export type TaskListItem = BroadcastGroup | StaffGroup | TaskRow
 
 interface Props {
   items:         TaskListItem[]
@@ -97,14 +113,14 @@ export function TaskList({ items, canArchive, canRestore, showArchived }: Props)
     })
   }
 
-  function toggleBroadcast(group: BroadcastGroup) {
-    const allInGroup = group.taskIds.every((id) => selected.has(id))
+  function toggleGroup(taskIds: string[]) {
+    const allInGroup = taskIds.every((id) => selected.has(id))
     setSelected((prev) => {
       const next = new Set(prev)
       if (allInGroup) {
-        group.taskIds.forEach((id) => next.delete(id))
+        taskIds.forEach((id) => next.delete(id))
       } else {
-        group.taskIds.forEach((id) => next.add(id))
+        taskIds.forEach((id) => next.add(id))
       }
       return next
     })
@@ -235,7 +251,7 @@ export function TaskList({ items, canArchive, canRestore, showArchived }: Props)
                           type="checkbox"
                           checked={allInSelected}
                           ref={(el) => { if (el) el.indeterminate = !allInSelected && someInSelected }}
-                          onChange={() => toggleBroadcast(item)}
+                          onChange={() => toggleGroup(item.taskIds)}
                           aria-label="Chọn broadcast group"
                           className="h-4 w-4 cursor-pointer accent-primary"
                         />
@@ -299,6 +315,110 @@ export function TaskList({ items, canArchive, canRestore, showArchived }: Props)
                       <TableCell className="text-sm text-muted-foreground">
                         {child.assignee?.full_name ?? 'Chưa phân công'}
                       </TableCell>
+                      <TableCell />
+                      <TableCell>
+                        <TaskStatusBadge status={getEffectiveStatus(child.deadline, child.status) as Task['status']} late={child.status === 'done' && !!child.overdue_at} />
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {child.deadline ? formatDistanceToNow(child.deadline) : '—'}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </React.Fragment>
+              )
+            }
+
+            if (item.type === 'staff') {
+              const isExpanded     = expanded.has(item.parentId)
+              const allInSelected  = item.taskIds.length > 0 && item.taskIds.every((id) => selected.has(id))
+              const someInSelected = item.taskIds.some((id) => selected.has(id))
+
+              return (
+                <React.Fragment key={`staff-${item.parentId}`}>
+                  {/* Staff-required parent header row */}
+                  <TableRow className="bg-primary/5 hover:bg-primary/10">
+                    {showCheckbox && (
+                      <TableCell>
+                        <input
+                          type="checkbox"
+                          checked={allInSelected}
+                          ref={(el) => { if (el) el.indeterminate = !allInSelected && someInSelected }}
+                          onChange={() => toggleGroup(item.taskIds)}
+                          aria-label="Chọn nhóm task dược sĩ"
+                          className="h-4 w-4 cursor-pointer accent-primary"
+                        />
+                      </TableCell>
+                    )}
+                    <TableCell colSpan={4}>
+                      <div className="flex items-center gap-2 font-medium">
+                        <button
+                          type="button"
+                          onClick={() => toggleExpand(item.parentId)}
+                          className="shrink-0"
+                          aria-label={isExpanded ? 'Thu gọn' : 'Mở rộng'}
+                        >
+                          {isExpanded
+                            ? <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                            : <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                          }
+                        </button>
+                        <Users className="h-4 w-4 text-primary shrink-0" />
+                        <Link
+                          href={`/tasks/${item.parentId}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          prefetch={false}
+                          className="hover:underline"
+                        >
+                          {item.title}
+                        </Link>
+                        {item.category && item.category !== 'other' && (
+                          <span className={cn(
+                            'text-xs px-1.5 py-0.5 rounded',
+                            CATEGORY_STYLE[item.category as TaskCategory] ?? 'bg-gray-100 text-gray-600'
+                          )}>
+                            {CATEGORY_LABEL[item.category as TaskCategory] ?? item.category}
+                          </span>
+                        )}
+                        <span className="text-xs text-muted-foreground font-normal ml-1">
+                          {item.storeName ? `${item.storeName} · ` : ''}{item.total} dược sĩ
+                        </span>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-sm whitespace-nowrap" onClick={() => toggleExpand(item.parentId)}>
+                      <span className={cn(
+                        'font-medium',
+                        item.total > 0 && item.done === item.total ? 'text-green-600' : 'text-amber-600'
+                      )}>
+                        {item.done}/{item.total}
+                      </span>
+                      <span className="text-muted-foreground"> đã nộp</span>
+                    </TableCell>
+                    <TableCell onClick={() => toggleExpand(item.parentId)} />
+                  </TableRow>
+
+                  {/* Expanded per-staff child rows */}
+                  {isExpanded && item.childTasks.map((child) => (
+                    <TableRow key={child.id} className="bg-muted/30 hover:bg-muted/50">
+                      {showCheckbox && <TableCell />}
+                      <TableCell>
+                        <Link
+                          href={`/tasks/${child.id}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          prefetch={false}
+                          className="flex items-center gap-1.5 text-sm hover:underline pl-8"
+                        >
+                          <span className="text-muted-foreground">↳</span>
+                          <span className="font-medium">
+                            {child.assignee?.full_name ?? 'Chưa phân công'}
+                          </span>
+                        </Link>
+                      </TableCell>
+                      <TableCell className="text-sm text-muted-foreground">
+                        {child.stores?.name ?? '—'}
+                      </TableCell>
+                      <TableCell />
                       <TableCell />
                       <TableCell>
                         <TaskStatusBadge status={getEffectiveStatus(child.deadline, child.status) as Task['status']} late={child.status === 'done' && !!child.overdue_at} />
