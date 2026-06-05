@@ -8,13 +8,16 @@ import { Camera, Plus, X, Loader2, AlertCircle, RotateCcw, Image as ImageIcon } 
 
 // ── Public shape (stored in output_data / task input_data) ──────────────────
 export interface ImageAttachment {
-  url:           string
-  thumbnailUrl?: string   // optional — absent in records created before Batch 5C
-  name:          string
-  type:          string
-  size:          number   // original file size before client compression
-  width?:        number
-  height?:       number
+  url:            string
+  thumbnailUrl?:  string   // optional — absent in records created before Batch 5C
+  path?:          string   // storage path — absent in pre-Batch D records
+  thumbnailPath?: string
+  fileId?:        string   // task_uploaded_files.id — used to link on submit
+  name:           string
+  type:           string
+  size:           number   // original file size before client compression
+  width?:         number
+  height?:        number
 }
 
 // ── Internal per-file upload state ──────────────────────────────────────────
@@ -88,6 +91,10 @@ export function MultiImageUpload({ taskId, value, onChange }: Props) {
     const supabase = createClient()
     patchSlot(slot.id, { status: 'processing', progress: 10 })
 
+    // Session is cached client-side — no network round-trip
+    const { data: { session } } = await supabase.auth.getSession()
+    const userId = session?.user.id ?? null
+
     const base      = `tasks/${taskId}/image/${Date.now()}_${slot.id.slice(0, 8)}`
     const origPath  = `${base}_orig.jpg`
     const thumbPath = `${base}_thumb.jpg`
@@ -120,11 +127,30 @@ export function MultiImageUpload({ taskId, value, onChange }: Props) {
       const { data: { publicUrl: url } }      = supabase.storage.from('task-uploads').getPublicUrl(origPath)
       const { data: { publicUrl: thumbUrl } } = supabase.storage.from('task-uploads').getPublicUrl(thumbPath)
 
+      // 5. Register metadata — best-effort (don't fail the upload if this fails)
+      let fileId: string | undefined
+      const { data: fileRecord } = await supabase
+        .from('task_uploaded_files')
+        .insert({
+          task_id:        taskId,
+          path:           origPath,
+          thumbnail_path: thumbPath,
+          mime_type:      'image/jpeg',
+          size_bytes:     origBlob.size,
+          uploaded_by:    userId,
+        })
+        .select('id')
+        .maybeSingle()
+      fileId = fileRecord?.id ?? undefined
+
       patchSlot(slot.id, { status: 'done', progress: 100 })
 
       return {
         url,
-        thumbnailUrl: thumbUrl,
+        thumbnailUrl:  thumbUrl,
+        path:          origPath,
+        thumbnailPath: thumbPath,
+        fileId,
         name:   slot.file.name,
         type:   'image/jpeg',
         size:   slot.file.size,

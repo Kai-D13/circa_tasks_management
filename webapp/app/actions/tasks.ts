@@ -453,6 +453,19 @@ export async function submitTask(taskId: string, outputData: Record<string, unkn
     .single()
   if (resultError) return { error: resultError.message }
 
+  // Link any tracked upload metadata rows to this result.
+  // fileId is stored in each ImageAttachment by MultiImageUpload (Batch D+).
+  // Best-effort: a link failure must not block the submission.
+  const imageAtts = (outputData['image'] as Array<{ fileId?: string }> | undefined) ?? []
+  const fileIds = imageAtts.map((a) => a.fileId).filter((id): id is string => !!id)
+  if (fileIds.length > 0) {
+    const { error: linkErr } = await supabaseAdmin
+      .from('task_uploaded_files')
+      .update({ result_id: resultRow.id, linked_at: new Date().toISOString() })
+      .in('id', fileIds)
+    if (linkErr) console.error('[task_uploaded_files link]', linkErr.message)
+  }
+
   // Mark the most recent open resubmit request as fulfilled now that a result exists.
   const { data: openReq } = await supabaseAdmin
     .from('task_resubmit_requests')
