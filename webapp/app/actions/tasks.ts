@@ -463,6 +463,9 @@ export async function submitTask(taskId: string, outputData: Record<string, unkn
       .from('task_uploaded_files')
       .update({ result_id: resultRow.id, linked_at: new Date().toISOString() })
       .in('id', fileIds)
+      .eq('task_id', taskId)
+      .eq('uploaded_by', user.id)
+      .is('linked_at', null)
     if (linkErr) console.error('[task_uploaded_files link]', linkErr.message)
   }
 

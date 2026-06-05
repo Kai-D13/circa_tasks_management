@@ -19,6 +19,7 @@ export async function GET(request: NextRequest) {
     .is('linked_at', null)
     .is('deleted_at', null)
     .lt('created_at', cutoff)
+    .limit(200)
 
   if (fetchErr) {
     return NextResponse.json({ error: fetchErr.message }, { status: 500 })
@@ -34,13 +35,16 @@ export async function GET(request: NextRequest) {
     [f.path, f.thumbnail_path].filter((p): p is string => !!p)
   )
 
-  // Remove from Storage — best-effort: log but don't abort on partial failure
+  // Remove from Storage — abort if delete fails so rows stay queryable for retry
   const { error: storageErr } = await supabaseAdmin.storage
     .from('task-uploads')
     .remove(storagePaths)
-  if (storageErr) console.error('[cleanup-uploads] storage.remove:', storageErr.message)
+  if (storageErr) {
+    console.error('[cleanup-uploads] storage.remove:', storageErr.message)
+    return NextResponse.json({ error: 'Storage delete failed; will retry next run' }, { status: 500 })
+  }
 
-  // Mark rows deleted so they're excluded from future orphan queries
+  // Mark rows deleted only after successful storage deletion
   const now = new Date().toISOString()
   const { error: dbErr } = await supabaseAdmin
     .from('task_uploaded_files')

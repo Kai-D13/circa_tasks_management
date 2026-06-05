@@ -127,9 +127,8 @@ export function MultiImageUpload({ taskId, value, onChange }: Props) {
       const { data: { publicUrl: url } }      = supabase.storage.from('task-uploads').getPublicUrl(origPath)
       const { data: { publicUrl: thumbUrl } } = supabase.storage.from('task-uploads').getPublicUrl(thumbPath)
 
-      // 5. Register metadata — best-effort (don't fail the upload if this fails)
-      let fileId: string | undefined
-      const { data: fileRecord } = await supabase
+      // 5. Register metadata — if insert fails, undo storage uploads to prevent untracked orphans
+      const { data: fileRecord, error: fileErr } = await supabase
         .from('task_uploaded_files')
         .insert({
           task_id:        taskId,
@@ -141,7 +140,12 @@ export function MultiImageUpload({ taskId, value, onChange }: Props) {
         })
         .select('id')
         .maybeSingle()
-      fileId = fileRecord?.id ?? undefined
+      if (fileErr) {
+        console.error('[task_uploaded_files] metadata insert:', fileErr.message)
+        supabase.storage.from('task-uploads').remove([origPath, thumbPath]).catch(() => {})
+        throw new Error('Không thể lưu metadata ảnh — vui lòng thử lại')
+      }
+      const fileId = fileRecord?.id ?? undefined
 
       patchSlot(slot.id, { status: 'done', progress: 100 })
 
