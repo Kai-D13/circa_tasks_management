@@ -46,6 +46,17 @@ const CATEGORY_DEFAULTS: Record<TaskCategory, {
   other:    { outputs: [],               priority: 'normal', visibility: 'store' },
 }
 
+function splitDateTimeStr(value: string): [string, string] {
+  if (!value) return ['', '']
+  const t = value.indexOf('T')
+  if (t === -1) return [value, '']
+  return [value.slice(0, t), value.slice(t + 1, t + 6)]
+}
+function combineDateTimeStr(date: string, time: string): string {
+  if (!date) return ''
+  return `${date}T${time || '00:00'}`
+}
+
 type Scope    = 'single' | 'multi' | 'all'
 type TaskType = 'adhoc' | 'recurring'
 
@@ -67,6 +78,11 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   const [priority, setPriority]     = useState<TaskPriority>(task?.priority ?? 'normal')
   const [outputs, setOutputs]       = useState<RequiredOutput[]>(task?.required_outputs ?? [])
   const [taskType, setTaskType]     = useState<TaskType>('adhoc')
+
+  const [startDate, setStartDate]       = useState(task?.start_date ? new Date(task.start_date).toISOString().slice(0, 10) : '')
+  const [startTime, setStartTime]       = useState(task?.start_date ? new Date(task.start_date).toISOString().slice(11, 16) : '')
+  const [deadlineDate, setDeadlineDate] = useState(task?.deadline ? new Date(task.deadline).toISOString().slice(0, 10) : '')
+  const [deadlineTime, setDeadlineTime] = useState(task?.deadline ? new Date(task.deadline).toISOString().slice(11, 16) : '')
 
   // Recurring-only config
   const [frequency, setFrequency]           = useState<'daily' | 'weekly' | 'monthly'>('weekly')
@@ -112,7 +128,8 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
       outputs, links, attachments,
       frequency, runTime, weekdays, monthDay, schedStartDate, schedEndDate, deadlineOffset,
       title: dom('title'), description: dom('description'),
-      start_date: dom('start_date'), deadline: dom('deadline'),
+      start_date: combineDateTimeStr(startDate, startTime),
+      deadline: combineDateTimeStr(deadlineDate, deadlineTime),
     }
   }
 
@@ -144,7 +161,8 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftKey, hasDraft, dirtyTick, taskType, category, priority, storeId, assignedTo, scope,
       selectedStoreIds, outputs, links, attachments, frequency, runTime, weekdays,
-      monthDay, schedStartDate, schedEndDate, deadlineOffset])
+      monthDay, schedStartDate, schedEndDate, deadlineOffset,
+      startDate, startTime, deadlineDate, deadlineTime])
 
   function clearDraft() {
     if (draftKey) { try { localStorage.removeItem(draftKey) } catch { /* ignore */ } }
@@ -192,6 +210,10 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
       setSchedStartDate(d.schedStartDate ?? '')
       setSchedEndDate(d.schedEndDate ?? '')
       setDeadlineOffset(d.deadlineOffset ?? 24)
+      const [sd, st] = splitDateTimeStr(d.start_date ?? '')
+      const [dd, dt] = splitDateTimeStr(d.deadline ?? '')
+      setStartDate(sd); setStartTime(st)
+      setDeadlineDate(dd); setDeadlineTime(dt)
       if (d.links?.length) setShowLinks(true)
       if (d.attachments?.length) setShowAttachments(true)
       // Uncontrolled DOM fields
@@ -202,7 +224,6 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
           if (el) el.value = val ?? ''
         }
         setVal('title', d.title); setVal('description', d.description)
-        setVal('start_date', d.start_date); setVal('deadline', d.deadline)
       }
       setHasDraft(false)
       toast.success('Đã khôi phục bản nháp')
@@ -805,14 +826,20 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
               <div className="px-5 py-3 border-b space-y-3">
                 <span className={sectionLabel}>Thời gian</span>
                 <div>
-                  <label htmlFor="start_date" className="text-xs text-muted-foreground block mb-1.5">Ngày bắt đầu <span className="text-destructive">*</span></label>
-                  <Input id="start_date" name="start_date" type="datetime-local" className="h-8 text-sm bg-background"
-                    defaultValue={task?.start_date ? new Date(task.start_date).toISOString().slice(0, 16) : ''} />
+                  <label className="text-xs text-muted-foreground block mb-1.5">Ngày bắt đầu <span className="text-destructive">*</span></label>
+                  <div className="flex gap-1.5">
+                    <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="h-8 text-sm bg-background flex-1" />
+                    <Input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className="h-8 text-sm bg-background w-[88px]" />
+                  </div>
+                  <input type="hidden" name="start_date" value={combineDateTimeStr(startDate, startTime)} />
                 </div>
                 <div>
-                  <label htmlFor="deadline" className="text-xs text-muted-foreground block mb-1.5">Deadline <span className="text-destructive">*</span></label>
-                  <Input id="deadline" name="deadline" type="datetime-local" className="h-8 text-sm bg-background"
-                    defaultValue={task?.deadline ? new Date(task.deadline).toISOString().slice(0, 16) : ''} />
+                  <label className="text-xs text-muted-foreground block mb-1.5">Deadline <span className="text-destructive">*</span></label>
+                  <div className="flex gap-1.5">
+                    <Input type="date" value={deadlineDate} onChange={(e) => setDeadlineDate(e.target.value)} className="h-8 text-sm bg-background flex-1" />
+                    <Input type="time" value={deadlineTime} onChange={(e) => setDeadlineTime(e.target.value)} className="h-8 text-sm bg-background w-[88px]" />
+                  </div>
+                  <input type="hidden" name="deadline" value={combineDateTimeStr(deadlineDate, deadlineTime)} />
                 </div>
               </div>
             )}
