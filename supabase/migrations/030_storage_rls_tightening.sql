@@ -20,7 +20,12 @@
 DROP POLICY IF EXISTS "task_uploads_update" ON storage.objects;
 
 
--- ── 2. Tighten storage INSERT: path prefix + task access ─────────────────────
+-- ── 2. Tighten storage INSERT: per-prefix rules ───────────────────────────────
+-- bucket 'task-uploads' serves three distinct path prefixes:
+--   tasks/<task_id>/image/...   — task result images (MultiImageUpload)
+--   task-inputs/<uploadId>/...  — task instruction attachments (TaskInputAttachments)
+--   prescriptions/<storeId>/... — prescription images (PrescriptionImageUpload)
+--
 -- foldername(name) returns an array of path components excluding the filename.
 -- For 'tasks/<task_id>/image/<file>.jpg' → [1]='tasks', [2]='<task_id>', [3]='image'.
 DROP POLICY IF EXISTS "task_uploads_insert" ON storage.objects;
@@ -29,26 +34,32 @@ CREATE POLICY "task_uploads_insert" ON storage.objects
   FOR INSERT TO authenticated
   WITH CHECK (
     bucket_id = 'task-uploads'
-    AND (storage.foldername(name))[1] = 'tasks'
-    AND EXISTS (
-      SELECT 1
-      FROM   public.tasks t
-      JOIN   public.users u ON u.id = auth.uid()
-      WHERE  t.id::text = (storage.foldername(name))[2]
-        AND  t.archived_at IS NULL
-        AND  (
-          -- Direct assignee
-          t.assigned_to = auth.uid()
-          -- Store-level submit (unassigned task, user belongs to same store)
-          OR (
-            t.assigned_to IS NULL
-            AND t.store_id IS NOT NULL
-            AND t.store_id = u.store_id
-            AND u.role IN ('staff', 'store_manager')
-          )
-          -- Admin can upload to any active task
-          OR u.role = 'admin'
+    AND (
+      -- tasks/* — verify submit access to the specific task via path component [2]
+      (
+        (storage.foldername(name))[1] = 'tasks'
+        AND EXISTS (
+          SELECT 1
+          FROM   public.tasks t
+          JOIN   public.users u ON u.id = auth.uid()
+          WHERE  t.id::text = (storage.foldername(name))[2]
+            AND  t.archived_at IS NULL
+            AND  (
+              t.assigned_to = auth.uid()
+              OR (
+                t.assigned_to IS NULL
+                AND t.store_id IS NOT NULL
+                AND t.store_id = u.store_id
+                AND u.role IN ('staff', 'store_manager')
+              )
+              OR u.role = 'admin'
+            )
         )
+      )
+      -- task-inputs/* — instruction/guide files attached when creating tasks
+      OR (storage.foldername(name))[1] = 'task-inputs'
+      -- prescriptions/* — prescription images; per-store isolation via path convention
+      OR (storage.foldername(name))[1] = 'prescriptions'
     )
   );
 
