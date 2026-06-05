@@ -737,6 +737,7 @@ export async function createBroadcastTask(params: {
   requiredOutputs: RequiredOutput[]
   attachments?: { url: string; name: string; type: string; size?: number }[]
   links?: { label: string; url: string }[]
+  assignmentMode?: 'store' | 'staff_all'
 }) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -752,6 +753,142 @@ export async function createBroadcastTask(params: {
 
   const attachErrB = validateAttachments(params.attachments ?? [])
   if (attachErrB) return { error: attachErrB }
+
+  // ── staff_all branch: one parent per store + N children per pharmacist ──────
+  if (params.assignmentMode === 'staff_all') {
+    const { data: allStaff, error: staffErr } = await supabaseAdmin
+      .from('users').select('id, store_id, full_name').eq('role', 'staff').in('store_id', params.storeIds)
+    if (staffErr) return { error: staffErr.message }
+
+    const staffByStore = new Map<string, { id: string; full_name: string }[]>()
+    for (const s of allStaff ?? []) {
+      if (!s.store_id) continue
+      const arr = staffByStore.get(s.store_id) ?? []
+      arr.push({ id: s.id, full_name: s.full_name })
+      staffByStore.set(s.store_id, arr)
+    }
+    const emptyStoreIds = params.storeIds.filter(id => !(staffByStore.get(id)?.length))
+    if (emptyStoreIds.length > 0) {
+      const { data: emptyNames } = await supabaseAdmin
+        .from('stores').select('id, name').in('id', emptyStoreIds)
+      const names = (emptyNames ?? []).map(s => s.name).join(', ')
+      return { error: `Cửa hàng chưa có dược sĩ: ${names}. Vui lòng thêm dược sĩ trước.` }
+    }
+
+    const { data: bcast, error: bcastErrSA } = await supabase
+      .from('task_broadcasts')
+      .insert({ title: params.title, created_by: user.id, store_count: params.storeIds.length })
+      .select().single()
+    if (bcastErrSA || !bcast) return { error: bcastErrSA?.message ?? 'Lỗi tạo broadcast' }
+
+    const saInputData = (params.attachments?.length || params.links?.length)
+      ? { attachments: params.attachments ?? [], links: params.links ?? [] }
+      : null
+
+    const parentsToInsert = params.storeIds.map(sid => ({
+      title:            params.title,
+      description:      params.description || null,
+      category:         params.category,
+      priority:         params.priority,
+      visibility:       'private' as TaskVisibility,
+      store_id:         sid,
+      assigned_to:      null as string | null,
+      created_by:       user.id,
+      start_date:       params.startDate || null,
+      deadline:         params.deadline || null,
+      required_outputs: params.requiredOutputs,
+      broadcast_id:     bcast.id,
+      assignment_mode:  'staff_all' as const,
+      status:           'todo' as TaskStatus,
+      input_data:       saInputData,
+    }))
+
+    const { data: saParents, error: parentsErr } = await supabaseAdmin
+      .from('tasks').insert(parentsToInsert).select('id, store_id')
+    if (parentsErr || !saParents?.length) {
+      await supabaseAdmin.from('task_broadcasts').delete().eq('id', bcast.id)
+      return { error: parentsErr?.message ?? 'Lỗi tạo task cha' }
+    }
+
+    const childrenToInsert = saParents.flatMap(parent => {
+      const staffList = staffByStore.get(parent.store_id!) ?? []
+      return staffList.map(staff => ({
+        title:            params.title,
+        description:      params.description || null,
+        category:         params.category,
+        priority:         params.priority,
+        visibility:       'private' as TaskVisibility,
+        store_id:         parent.store_id,
+        assigned_to:      staff.id,
+        created_by:       user.id,
+        start_date:       params.startDate || null,
+        deadline:         params.deadline || null,
+        required_outputs: params.requiredOutputs,
+        broadcast_id:     bcast.id,
+        assignment_mode:  'user' as const,
+        parent_task_id:   parent.id,
+        status:           'todo' as TaskStatus,
+        input_data:       saInputData,
+      }))
+    })
+
+    const { data: saChildren, error: childrenErr } = await supabaseAdmin
+      .from('tasks').insert(childrenToInsert).select('id, assigned_to, store_id')
+    if (childrenErr) {
+      await supabaseAdmin.from('tasks').delete().in('id', saParents.map(p => p.id))
+      await supabaseAdmin.from('task_broadcasts').delete().eq('id', bcast.id)
+      return { error: childrenErr.message }
+    }
+
+    // One log per parent: includes child count so it's filterable per store
+    const saLogs = saParents.map(p => ({
+      task_id:  p.id,
+      action:   'created',
+      user_id:  user.id,
+      metadata: {
+        method:       'broadcast_staff_all',
+        broadcast_id: bcast.id,
+        title:        params.title,
+        child_count:  (saChildren ?? []).filter(c => c.store_id === p.store_id).length,
+      },
+    }))
+    await supabase.from('task_logs').insert(saLogs)
+
+    const { data: saManagers } = await supabaseAdmin
+      .from('users').select('id, store_id').eq('role', 'store_manager').in('store_id', params.storeIds)
+    const saNotifications = [
+      ...(saManagers ?? []).map(m => ({
+        user_id: m.id,
+        type:    'task_assigned',
+        task_id: saParents.find(p => p.store_id === m.store_id)?.id ?? null as string | null,
+        title:   'Task mới cho cửa hàng (từng dược sĩ nộp)',
+        message: `Task mới: ${params.title} — ${staffByStore.get(m.store_id!)?.length ?? 0} dược sĩ cần nộp`,
+      })),
+      ...(saChildren ?? []).filter(c => c.assigned_to).map(c => ({
+        user_id: c.assigned_to as string,
+        type:    'task_assigned',
+        task_id: c.id,
+        title:   'Task mới được giao',
+        message: `Bạn được giao task: ${params.title}`,
+      })),
+    ]
+    if (saNotifications.length) await supabaseAdmin.from('notifications').insert(saNotifications)
+
+    // Teams notification per store parent — parallel, best-effort
+    await Promise.allSettled(saParents.map(p =>
+      notifyTaskCreated({
+        taskId:    p.id,
+        storeId:   p.store_id!,
+        taskTitle: params.title,
+        taskType:  'Phát sinh',
+        deadline:  params.deadline,
+      })
+    ))
+
+    revalidatePath('/tasks')
+    redirect('/tasks')
+  }
+  // ─────────────────────────────────────────────────────────────────────────────
 
   const { data: broadcast, error: bcastError } = await supabase
     .from('task_broadcasts')

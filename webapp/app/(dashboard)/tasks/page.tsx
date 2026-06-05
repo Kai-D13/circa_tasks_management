@@ -150,8 +150,28 @@ export default async function TasksPage({
       grouped.push(group)
       continue
     }
-    // staff_all child whose parent is present → already folded into the group above
-    if (parentTaskId && staffParentIds.has(parentTaskId)) {
+    // staff_all children: if parent is in results, fold into the group above.
+    // If parent was filtered out (e.g. status filter), show as standalone task row —
+    // never as a broadcast group (children have broadcast_id but are not store-level tasks).
+    if (parentTaskId) {
+      if (staffParentIds.has(parentTaskId)) continue
+      grouped.push({
+        type: 'task',
+        task: {
+          id:                 task.id,
+          title:              task.title,
+          status:             task.status,
+          priority:           task.priority,
+          category:           task.category ?? null,
+          broadcast_id:       task.broadcast_id ?? null,
+          source_schedule_id: (task as { source_schedule_id?: string | null }).source_schedule_id ?? null,
+          stores:             (task.stores as unknown as { name: string } | null),
+          assignee:           (task.assignee as unknown as { full_name: string } | null),
+          deadline:           (task.deadline as string | null) ?? null,
+          overdue_at:         (task as { overdue_at?: string | null }).overdue_at ?? null,
+          created_at:         task.created_at,
+        },
+      })
       continue
     }
 

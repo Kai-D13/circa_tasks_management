@@ -257,12 +257,24 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   const broadcastCount    = scope === 'all' ? visibleStores.length : selectedStoreIds.length
   const showMultiStore    = isBroadcast || isRecurring
 
-  // staff_all only applies to a single-store ad-hoc task created by an admin.
-  const canStaffMode      = isAdmin && !isEditMode && !isRecurring && scope === 'single'
+  // staff_all: admin + ad-hoc + new task. Works for all scopes (single/multi/all).
+  const canStaffMode       = isAdmin && !isEditMode && !isRecurring
   const effectiveStaffMode = staffMode && canStaffMode
-  const staffCount        = storeId
+  const staffCount         = storeId
     ? users.filter((u) => u.store_id === storeId && u.role === 'staff').length
     : 0
+
+  // Multi-store staff breakdown: used when broadcast + effectiveStaffMode for preview + guard
+  const activeStoreIds     = (isBroadcast && effectiveStaffMode)
+    ? (scope === 'all' ? visibleStores.map(s => s.id) : selectedStoreIds)
+    : []
+  const perStoreStaffInfo  = activeStoreIds.map(id => ({
+    id,
+    name:  visibleStores.find(s => s.id === id)?.name ?? id,
+    count: users.filter(u => u.store_id === id && u.role === 'staff').length,
+  }))
+  const broadcastStaffTotal = perStoreStaffInfo.reduce((sum, s) => sum + s.count, 0)
+  const storesWithoutStaff  = perStoreStaffInfo.filter(s => s.count === 0)
 
   function deriveVisibility(): TaskVisibility {
     return assignedTo ? 'private' : 'store'
@@ -282,7 +294,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   function handleScopeChange(scopeVal: Scope) {
     setScope(scopeVal)
     setSelectedStoreIds([])
-    if (scopeVal !== 'single') setStaffMode(false)
+    // staffMode intentionally preserved — staff_all works for all scopes
   }
 
   function handleSetTaskType(t: TaskType) {
@@ -382,8 +394,8 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
       return
     }
 
-    // Per-pharmacist mode needs at least one staff in the store (server re-checks).
-    if (effectiveStaffMode && staffCount === 0) {
+    // Per-pharmacist mode (single-store): needs at least one staff (server re-checks).
+    if (effectiveStaffMode && !isBroadcast && staffCount === 0) {
       toast.error('Cửa hàng chưa có dược sĩ nào để giao task')
       return
     }
@@ -391,6 +403,14 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
     if (isBroadcast) {
       const storeIds = scope === 'all' ? visibleStores.map((s) => s.id) : selectedStoreIds
       if (!storeIds.length) { toast.error('Vui lòng chọn ít nhất một cửa hàng'); return }
+      // Per-pharmacist broadcast: block if any selected store has no staff
+      if (effectiveStaffMode && storesWithoutStaff.length > 0) {
+        const MAX_NAMES = 3
+        const shown = storesWithoutStaff.slice(0, MAX_NAMES).map(s => s.name).join(', ')
+        const extra = storesWithoutStaff.length > MAX_NAMES ? ` +${storesWithoutStaff.length - MAX_NAMES} cửa hàng khác` : ''
+        toast.error(`Cửa hàng chưa có dược sĩ: ${shown}${extra}`)
+        return
+      }
       const draftSnapshot = snapshotDraft()
       clearDraft()
       startTransition(async () => {
@@ -405,6 +425,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
           requiredOutputs: outputs,
           attachments,
           links: links.filter((l) => l.url.trim()),
+          assignmentMode:  effectiveStaffMode ? 'staff_all' : 'store',
         })
         if (result?.error) {
           restoreDraftSnapshot(draftSnapshot)
@@ -557,6 +578,36 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                       </label>
                     ))}
                   </div>
+                )}
+                {/* Submit mode toggle — broadcast + admin + ad-hoc */}
+                {canStaffMode && (
+                  <div className="flex rounded-[4px] border overflow-hidden">
+                    {([['store', 'Cửa hàng nộp'], ['staff_all', 'Từng dược sĩ nộp']] as const).map(([val, label]) => {
+                      const active = (val === 'staff_all') === staffMode
+                      return (
+                        <button
+                          key={val}
+                          type="button"
+                          onClick={() => setStaffMode(val === 'staff_all')}
+                          className={cn(
+                            'flex-1 py-1.5 text-xs font-medium transition-colors',
+                            active ? 'bg-primary text-white' : 'text-muted-foreground hover:bg-muted'
+                          )}
+                        >
+                          {label}
+                        </button>
+                      )
+                    })}
+                  </div>
+                )}
+                {effectiveStaffMode && (
+                  <p className={cn('text-xs', storesWithoutStaff.length > 0 ? 'text-destructive' : 'text-muted-foreground')}>
+                    {activeStoreIds.length === 0
+                      ? 'Chọn cửa hàng để xem số dược sĩ sẽ nhận task.'
+                      : storesWithoutStaff.length > 0
+                        ? `Cửa hàng chưa có dược sĩ: ${storesWithoutStaff.map(s => s.name).join(', ')}.`
+                        : `Sẽ tạo ${broadcastStaffTotal} task con cho ${broadcastStaffTotal} dược sĩ trên ${activeStoreIds.length} cửa hàng.`}
+                  </p>
                 )}
               </div>
             ) : (

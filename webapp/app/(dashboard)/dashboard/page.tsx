@@ -136,6 +136,7 @@ export default async function DashboardPage() {
             .select('broadcast_id, status, category, deadline')
             .in('broadcast_id', broadcastIds)
             .is('archived_at', null)
+            .neq('assignment_mode', 'staff_all')  // parents are overview-only, count children only
         : { data: [] as { broadcast_id: string; status: string; category: string | null; deadline: string | null }[], error: null }
       const { data: broadcastTasksRaw, error: est } = broadcastStatResult
       if (est) recentError = est
