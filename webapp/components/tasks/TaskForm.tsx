@@ -53,8 +53,8 @@ function splitDateTimeStr(value: string): [string, string] {
   return [value.slice(0, t), value.slice(t + 1, t + 6)]
 }
 function combineDateTimeStr(date: string, time: string): string {
-  if (!date) return ''
-  return `${date}T${time || '00:00'}`
+  if (!date || !time) return ''
+  return `${date}T${time}`
 }
 
 type Scope    = 'single' | 'multi' | 'all'
@@ -828,16 +828,16 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                 <div>
                   <label className="text-xs text-muted-foreground block mb-1.5">Ngày bắt đầu <span className="text-destructive">*</span></label>
                   <div className="flex gap-1.5">
-                    <Input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className="h-8 text-sm bg-background flex-1" />
-                    <Input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} className="h-8 text-sm bg-background w-[88px]" />
+                    <Input type="date" required value={startDate} onChange={(e) => setStartDate(e.target.value)} className="h-8 text-sm bg-background flex-1" />
+                    <Input type="time" required value={startTime} onChange={(e) => setStartTime(e.target.value)} className="h-8 text-sm bg-background w-[88px]" />
                   </div>
                   <input type="hidden" name="start_date" value={combineDateTimeStr(startDate, startTime)} />
                 </div>
                 <div>
                   <label className="text-xs text-muted-foreground block mb-1.5">Deadline <span className="text-destructive">*</span></label>
                   <div className="flex gap-1.5">
-                    <Input type="date" value={deadlineDate} onChange={(e) => setDeadlineDate(e.target.value)} className="h-8 text-sm bg-background flex-1" />
-                    <Input type="time" value={deadlineTime} onChange={(e) => setDeadlineTime(e.target.value)} className="h-8 text-sm bg-background w-[88px]" />
+                    <Input type="date" required value={deadlineDate} onChange={(e) => setDeadlineDate(e.target.value)} className="h-8 text-sm bg-background flex-1" />
+                    <Input type="time" required value={deadlineTime} onChange={(e) => setDeadlineTime(e.target.value)} className="h-8 text-sm bg-background w-[88px]" />
                   </div>
                   <input type="hidden" name="deadline" value={combineDateTimeStr(deadlineDate, deadlineTime)} />
                 </div>
