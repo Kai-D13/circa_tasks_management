@@ -180,7 +180,7 @@ export default async function DashboardPage() {
     // Group by broadcast_id so broadcasts appear as 1 row — counts reflect visible tasks only.
     const { data: visibleTasks, error: ev } = await supabase
       .from('tasks')
-      .select('id, title, status, category, deadline, created_at, overdue_at, broadcast_id, stores(name)')
+      .select('id, title, status, category, deadline, created_at, overdue_at, broadcast_id, assignment_mode, parent_task_id, stores(name)')
       .is('archived_at', null)
       .order('created_at', { ascending: false })
       .limit(50)
@@ -193,7 +193,16 @@ export default async function DashboardPage() {
       const indRows: DashboardRow[] = []
 
       for (const t of visibleTasks ?? []) {
-        if (!t.broadcast_id) {
+        const assignmentMode = (t as { assignment_mode?: string | null }).assignment_mode
+        const parentTaskId   = (t as { parent_task_id?: string | null }).parent_task_id
+
+        // staff_all parents are overview-only; store_manager RLS still surfaces them
+        // but they should not appear in the activity feed or inflate broadcast counts.
+        if (assignmentMode === 'staff_all') continue
+
+        // staff_all children carry broadcast_id but must appear as individual task rows
+        // so the store_manager sees each pharmacist's progress directly.
+        if (!t.broadcast_id || parentTaskId) {
           indRows.push({
             type:      'task',
             id:        t.id,
