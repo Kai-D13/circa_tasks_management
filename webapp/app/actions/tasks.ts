@@ -852,7 +852,8 @@ export async function createBroadcastTask(params: {
         child_count:  (saChildren ?? []).filter(c => c.store_id === p.store_id).length,
       },
     }))
-    await supabase.from('task_logs').insert(saLogs)
+    const { error: saLogErr } = await supabase.from('task_logs').insert(saLogs)
+    if (saLogErr) console.error('[broadcast_staff_all] task_logs:', saLogErr.message)
 
     const { data: saManagers } = await supabaseAdmin
       .from('users').select('id, store_id').eq('role', 'store_manager').in('store_id', params.storeIds)
@@ -872,7 +873,10 @@ export async function createBroadcastTask(params: {
         message: `Bạn được giao task: ${params.title}`,
       })),
     ]
-    if (saNotifications.length) await supabaseAdmin.from('notifications').insert(saNotifications)
+    if (saNotifications.length) {
+      const { error: saNotiErr } = await supabaseAdmin.from('notifications').insert(saNotifications)
+      if (saNotiErr) console.error('[broadcast_staff_all] notifications:', saNotiErr.message)
+    }
 
     // Teams notification per store parent — parallel, best-effort
     await Promise.allSettled(saParents.map(p =>

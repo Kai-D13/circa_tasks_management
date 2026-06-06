@@ -605,7 +605,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                     {activeStoreIds.length === 0
                       ? 'Chọn cửa hàng để xem số dược sĩ sẽ nhận task.'
                       : storesWithoutStaff.length > 0
-                        ? `Cửa hàng chưa có dược sĩ: ${storesWithoutStaff.map(s => s.name).join(', ')}.`
+                        ? `Cửa hàng chưa có dược sĩ: ${storesWithoutStaff.slice(0, 3).map(s => s.name).join(', ')}${storesWithoutStaff.length > 3 ? ` +${storesWithoutStaff.length - 3} khác` : ''}.`
                         : `Sẽ tạo ${broadcastStaffTotal} task con cho ${broadcastStaffTotal} dược sĩ trên ${activeStoreIds.length} cửa hàng.`}
                   </p>
                 )}
