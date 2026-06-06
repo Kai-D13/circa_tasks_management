@@ -974,8 +974,11 @@ export async function createImportedStoreTasks(params: {
   masterPath:      string
   sheetName:       string
   posColumn:       string
+  scope:           'multi' | 'all'
+  allowedStoreIds: string[]
   title:           string
   description:     string
+  category:        TaskCategory
   priority:        TaskPriority
   startDate:       string
   deadline:        string
@@ -993,6 +996,7 @@ export async function createImportedStoreTasks(params: {
   if (!params.posColumn)                return { error: 'Chưa xác định cột POS code' }
   if (!params.sheetName)                return { error: 'Chưa chọn sheet dữ liệu' }
   if (!params.requiredOutputs?.length)  return { error: 'Chọn ít nhất 1 loại output yêu cầu' }
+  if (!params.allowedStoreIds?.length)  return { error: 'Vui lòng chọn ít nhất một cửa hàng' }
   const dateErr = validateTaskDates(params.startDate || null, params.deadline || null)
   if (dateErr) return { error: dateErr }
 
@@ -1054,15 +1058,25 @@ export async function createImportedStoreTasks(params: {
   // Resolve POS → store against stores.code (server-side re-match; client mapping not trusted).
   const { data: stores } = await supabase.from('stores').select('id, name, code')
   const storeByCode = new Map((stores ?? []).map((s) => [s.code.toUpperCase(), s]))
+  const allowed = new Set(params.allowedStoreIds)
 
+  // Strict scoping: every POS in the file must map to a store INSIDE the chosen
+  // scope (multi = selected stores, all = every store). A POS that matches no
+  // store, or matches a store outside the allow-list, blocks the whole import so
+  // data never lands on a store the admin didn't target.
   const matched: { store: { id: string; name: string; code: string }; posCode: string; rows: Record<string, unknown>[] }[] = []
-  const unmatched: string[] = []
+  const outside: string[] = []
   for (const [code, list] of grouped) {
     const store = storeByCode.get(code)
-    if (store) matched.push({ store, posCode: code, rows: list })
-    else unmatched.push(code)
+    if (store && allowed.has(store.id)) matched.push({ store, posCode: code, rows: list })
+    else outside.push(code)
   }
 
+  if (outside.length > 0) {
+    const shown = outside.slice(0, 10).join(', ')
+    const extra = outside.length > 10 ? ` +${outside.length - 10} POS khác` : ''
+    return fail(`POS ngoài phạm vi cửa hàng đã chọn: ${shown}${extra}. Vui lòng tách file đúng phạm vi.`)
+  }
   if (matched.length === 0)               return fail('Không có cửa hàng nào khớp POS code')
   if (matched.length > IMPORT_MAX_STORES) return fail(`Vượt giới hạn ${IMPORT_MAX_STORES} cửa hàng (hiện ${matched.length})`)
 
@@ -1088,7 +1102,7 @@ export async function createImportedStoreTasks(params: {
       store_id:         m.store.id,
       title:            params.title,
       description:      params.description || null,
-      category:         'other',
+      category:         params.category || 'other',
       priority:         params.priority,
       start_date:       params.startDate || null,
       deadline:         params.deadline || null,
@@ -1115,7 +1129,7 @@ export async function createImportedStoreTasks(params: {
       pos_column:      params.posColumn,
       total_rows:      rows.length,
       matched_count:   matched.length,
-      unmatched_pos:   unmatched,
+      unmatched_pos:   [],
       master_file_url: masterUrl,
     },
     p_tasks: tasksPayload,
@@ -1161,7 +1175,7 @@ export async function createImportedStoreTasks(params: {
   }
 
   revalidatePath('/tasks')
-  return { success: true, count: matched.length, skipped: unmatched.length }
+  return { success: true, count: matched.length }
 }
 
 export async function requestResubmit(taskId: string, reason?: string) {

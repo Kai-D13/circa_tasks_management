@@ -1,10 +1,11 @@
 'use client'
 
-import { useEffect, useRef, useState, useTransition } from 'react'
+import { useCallback, useEffect, useRef, useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { useUserStore } from '@/store/userStore'
 import { toast } from 'sonner'
-import { createTask, updateTask, createBroadcastTask, createTaskSchedule } from '@/app/actions/tasks'
+import { createTask, updateTask, createBroadcastTask, createTaskSchedule, createImportedStoreTasks } from '@/app/actions/tasks'
+import { createClient as createBrowserClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -12,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { SearchableSelect } from '@/components/ui/searchable-select'
 import { Plus, X, Paperclip, Link2, Settings } from 'lucide-react'
 import { TaskInputAttachments, type TaskInputAttachmentsHandle } from '@/components/tasks/TaskInputAttachments'
+import { TaskExcelSplitPanel, type ExcelSplitState } from '@/components/tasks/TaskExcelSplitPanel'
 import { cn } from '@/lib/utils'
 import {
   Task, Store, UserProfile, RequiredOutput, UserRole,
@@ -61,7 +63,7 @@ type Scope    = 'single' | 'multi' | 'all'
 type TaskType = 'adhoc' | 'recurring'
 
 interface Props {
-  stores: Pick<Store, 'id' | 'name'>[]
+  stores: Pick<Store, 'id' | 'name' | 'code'>[]
   users: Pick<UserProfile, 'id' | 'full_name' | 'email' | 'store_id' | 'role'>[]
   currentUserRole: UserRole
   currentUserStoreId: string | null
@@ -98,6 +100,10 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
 
   const [scope, setScope]                       = useState<Scope>('single')
   const [selectedStoreIds, setSelectedStoreIds] = useState<string[]>([])
+
+  // Excel split (broadcast + store-mode only): null = no file / plain broadcast.
+  const [excelImport, setExcelImport] = useState<ExcelSplitState | null>(null)
+  const handleExcelChange = useCallback((s: ExcelSplitState | null) => setExcelImport(s), [])
 
   const uploadIdRef       = useRef((task?.id) ?? crypto.randomUUID())
   const attachRef         = useRef<TaskInputAttachmentsHandle>(null)
@@ -276,6 +282,15 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   const broadcastStaffTotal = perStoreStaffInfo.reduce((sum, s) => sum + s.count, 0)
   const storesWithoutStaff  = perStoreStaffInfo.filter(s => s.count === 0)
 
+  // Excel split: adhoc + broadcast (multi/all) + store-mode (not per-pharmacist).
+  const showExcelSplit  = isBroadcast && !isRecurring && !effectiveStaffMode
+  const allowedStoreIds = scope === 'all' ? visibleStores.map((s) => s.id) : selectedStoreIds
+  // Drop any staged import when the conditions stop applying (scope→single, staff
+  // mode, recurring) so a hidden file can never leak into a different submit path.
+  useEffect(() => {
+    if (!showExcelSplit && excelImport) setExcelImport(null)
+  }, [showExcelSplit, excelImport])
+
   function deriveVisibility(): TaskVisibility {
     return assignedTo ? 'private' : 'store'
   }
@@ -403,6 +418,43 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
     if (isBroadcast) {
       const storeIds = scope === 'all' ? visibleStores.map((s) => s.id) : selectedStoreIds
       if (!storeIds.length) { toast.error('Vui lòng chọn ít nhất một cửa hàng'); return }
+
+      // Excel split path: a file is staged → upload it, then create one task per
+      // in-scope store (each with its own data slice). Same "Tạo Task" button.
+      if (showExcelSplit && excelImport) {
+        if (!excelImport.ready) {
+          toast.error('File Excel chưa hợp lệ — kiểm tra sheet, cột POS và phạm vi cửa hàng')
+          return
+        }
+        const importFile = excelImport.file
+        const draftSnapshot = snapshotDraft()
+        clearDraft()
+        startTransition(async () => {
+          const sb = createBrowserClient()
+          const tmpId = crypto.randomUUID()
+          const masterPath = `task-inputs/import/${tmpId}/${Date.now()}_${importFile.name}`
+          const { error: upErr } = await sb.storage
+            .from('task-uploads').upload(masterPath, importFile, { upsert: false })
+          if (upErr) { restoreDraftSnapshot(draftSnapshot); toast.error(`Tải file lên thất bại: ${upErr.message}`); return }
+          const result = await createImportedStoreTasks({
+            masterPath,
+            sheetName:       excelImport.sheetName,
+            posColumn:       excelImport.posColumn,
+            scope:           scope === 'all' ? 'all' : 'multi',
+            allowedStoreIds: storeIds,
+            title:           formData.get('title') as string,
+            description:     (formData.get('description') as string) || '',
+            category, priority,
+            startDate:       (formData.get('start_date') as string) || '',
+            deadline:        (formData.get('deadline') as string) || '',
+            requiredOutputs: outputs,
+          })
+          if (result?.error) { restoreDraftSnapshot(draftSnapshot); toast.error(result.error) }
+          else { toast.success(`Đã tạo ${result.count} task`); router.push('/tasks') }
+        })
+        return
+      }
+
       // Per-pharmacist broadcast: block if any selected store has no staff
       if (effectiveStaffMode && storesWithoutStaff.length > 0) {
         const MAX_NAMES = 3
@@ -460,12 +512,16 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
     })
   }
 
+  // When an Excel split is staged + valid, the real count is the in-scope stores.
+  const effectiveBroadcastCount = (showExcelSplit && excelImport?.ready)
+    ? excelImport.inScopeCount
+    : broadcastCount
   const submitLabel = pending
     ? 'Đang lưu...'
     : isRecurring
       ? 'Tạo lịch định kỳ'
       : isBroadcast
-        ? `Tạo ${broadcastCount > 0 ? broadcastCount + ' ' : ''}Task`
+        ? `Tạo ${effectiveBroadcastCount > 0 ? effectiveBroadcastCount + ' ' : ''}Task`
         : task ? 'Cập nhật' : 'Tạo Task'
 
   const sectionLabel = 'block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70 mb-1.5'
@@ -608,6 +664,14 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                         ? `Cửa hàng chưa có dược sĩ: ${storesWithoutStaff.slice(0, 3).map(s => s.name).join(', ')}${storesWithoutStaff.length > 3 ? ` +${storesWithoutStaff.length - 3} khác` : ''}.`
                         : `Sẽ tạo ${broadcastStaffTotal} task con cho ${broadcastStaffTotal} dược sĩ trên ${activeStoreIds.length} cửa hàng.`}
                   </p>
+                )}
+                {/* Excel split — store-mode broadcast only; per-store data slices */}
+                {showExcelSplit && (
+                  <TaskExcelSplitPanel
+                    stores={visibleStores}
+                    allowedStoreIds={allowedStoreIds}
+                    onChange={handleExcelChange}
+                  />
                 )}
               </div>
             ) : (

@@ -5,7 +5,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { TaskFilters } from '@/components/tasks/TaskFilters'
 import { TaskList, TaskListItem, BroadcastGroup, StaffGroup, TaskRow, ChildTask } from '@/components/tasks/TaskList'
 import { AutoRefresh } from '@/components/common/AutoRefresh'
-import { Plus, AlertCircle, ChevronLeft, ChevronRight, FileSpreadsheet } from 'lucide-react'
+import { Plus, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const PAGE_SIZE = 30
@@ -246,16 +246,10 @@ export default async function TasksPage({
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Danh sách Tasks</h1>
         {canCreate && (
-          <div className="flex items-center gap-2">
-            <Link href="/tasks/import" className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}>
-              <FileSpreadsheet className="h-4 w-4 mr-1" />
-              Import Excel
-            </Link>
-            <Link href="/tasks/new" className={cn(buttonVariants({ size: 'sm' }))}>
-              <Plus className="h-4 w-4 mr-1" />
-              Tạo Task
-            </Link>
-          </div>
+          <Link href="/tasks/new" className={cn(buttonVariants({ size: 'sm' }))}>
+            <Plus className="h-4 w-4 mr-1" />
+            Tạo Task
+          </Link>
         )}
       </div>
 

@@ -14,7 +14,7 @@ export default async function NewTaskPage() {
   if (profile?.role !== 'admin') redirect('/tasks')
 
   const [{ data: stores }, { data: users }] = await Promise.all([
-    supabase.from('stores').select('id, name').order('name'),
+    supabase.from('stores').select('id, name, code').order('name'),
     supabase.from('users').select('id, full_name, email, store_id, role').order('full_name'),
   ])
 
