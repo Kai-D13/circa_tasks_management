@@ -6,7 +6,7 @@ import { toast } from 'sonner'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { CheckCircle, XCircle, Upload, FileSpreadsheet, AlertTriangle } from 'lucide-react'
+import { CheckCircle, XCircle, Upload, FileSpreadsheet, AlertTriangle, X } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 // Keep in sync with the server limits in createImportedStoreTasks.
@@ -25,7 +25,7 @@ interface Store { id: string; name: string; code: string }
 
 interface Props {
   stores:          Store[]
-  allowedStoreIds: string[]                       // scope allow-list (selected stores, or all)
+  allowedStoreIds: string[]
   onChange:        (state: ExcelSplitState | null) => void  // must be stable (useCallback)
 }
 
@@ -34,7 +34,7 @@ function detectPosCodeColumn(headers: string[], rows: Record<string, unknown>[])
     const sample = rows.slice(0, 30).map((r) => String(r[header] ?? '').trim())
     if (sample.some((v) => /^POS\d+$/i.test(v))) return header
   }
-  const keywords = ['pos', 'code', 'mã', 'store', 'cửa hàng', 'chi nhánh']
+  const keywords = ['pos', 'code', 'store']
   for (const header of headers) {
     if (keywords.some((k) => header.toLowerCase().includes(k))) return header
   }
@@ -83,15 +83,23 @@ export function TaskExcelSplitPanel({ stores, allowedStoreIds, onChange }: Props
     rows.length > 0 && inScope.length > 0 &&
     outside.length === 0 && !overRows && !overStore
 
-  // Emit state up so TaskForm can route the submit (import vs plain broadcast).
   useEffect(() => {
     if (!file) { onChange(null); return }
     onChange({ file, sheetName: selectedSheet, posColumn: posCodeCol, ready, inScopeCount: inScope.length })
   }, [file, selectedSheet, posCodeCol, ready, inScope.length, onChange])
 
+  const inputId = 'excel-split-file'
+
+  function resetFile() {
+    setFile(null); setWorkbook(null); setSheetNames([]); setSelected('')
+    setRows([]); setHeaders([]); setPosCodeCol('')
+    const input = document.getElementById(inputId) as HTMLInputElement | null
+    if (input) input.value = ''
+  }
+
   function parseSheet(wb: XLSX.WorkBook, sheetName: string) {
     const sheet = wb.Sheets[sheetName]
-    // raw:false → match the server parse (dates as readable text, not serials).
+    // raw:false matches the server parse (dates as readable text, not serial numbers).
     const parsed = sheet ? XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '', raw: false }) : []
     setRows(parsed)
     const hdrs = parsed.length > 0 ? Object.keys(parsed[0]) : []
@@ -102,13 +110,19 @@ export function TaskExcelSplitPanel({ stores, allowedStoreIds, onChange }: Props
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const f = e.target.files?.[0]
     if (!f) return
+    if (f.size > 20 * 1024 * 1024) {
+      toast.error('File quá lớn (tối đa 20MB)')
+      e.target.value = ''
+      return
+    }
     try {
       const wb = XLSX.read(await f.arrayBuffer(), { type: 'array' })
-      if (wb.SheetNames.length === 0) { toast.error('File không có sheet nào'); return }
+      if (wb.SheetNames.length === 0) { toast.error('File không có sheet nào'); resetFile(); return }
       setFile(f); setWorkbook(wb); setSheetNames(wb.SheetNames)
       setSelected(wb.SheetNames[0]); parseSheet(wb, wb.SheetNames[0])
     } catch {
       toast.error('Không đọc được file. Hãy dùng .xlsx hoặc .csv')
+      resetFile()
     }
   }
 
@@ -116,8 +130,6 @@ export function TaskExcelSplitPanel({ stores, allowedStoreIds, onChange }: Props
     setSelected(name)
     if (workbook) parseSheet(workbook, name)
   }
-
-  const inputId = 'excel-split-file'
 
   return (
     <div className="rounded border bg-background/60 p-3 space-y-3">
@@ -130,23 +142,42 @@ export function TaskExcelSplitPanel({ stores, allowedStoreIds, onChange }: Props
         trong phạm vi đã chọn. Bỏ trống nếu muốn gửi cùng một nội dung cho mọi cửa hàng.
       </p>
 
-      <div
-        className="border-2 border-dashed rounded-lg p-4 text-center cursor-pointer hover:bg-muted/40 transition-colors"
-        onClick={() => document.getElementById(inputId)?.click()}
-      >
-        {file ? (
-          <div className="space-y-0.5">
-            <FileSpreadsheet className="h-6 w-6 mx-auto text-green-600" />
-            <p className="text-xs font-medium">{file.name}</p>
-            <p className="text-[11px] text-muted-foreground">{rows.length} dòng · sheet “{selectedSheet}”</p>
-          </div>
-        ) : (
-          <div className="space-y-0.5">
-            <Upload className="h-6 w-6 mx-auto text-muted-foreground" />
-            <p className="text-xs text-muted-foreground">Click để chọn file .xlsx hoặc .csv</p>
-          </div>
+      <div className="relative">
+        <div
+          className="border-2 border-dashed rounded-lg p-4 text-center cursor-pointer hover:bg-muted/40 transition-colors"
+          onClick={() => document.getElementById(inputId)?.click()}
+        >
+          {file ? (
+            <div className="space-y-0.5">
+              <FileSpreadsheet className="h-6 w-6 mx-auto text-green-600" />
+              <p className="text-xs font-medium">{file.name}</p>
+              <p className="text-[11px] text-muted-foreground">{rows.length} dòng &#183; sheet {selectedSheet}</p>
+            </div>
+          ) : (
+            <div className="space-y-0.5">
+              <Upload className="h-6 w-6 mx-auto text-muted-foreground" />
+              <p className="text-xs text-muted-foreground">Click để chọn file .xlsx hoặc .csv</p>
+            </div>
+          )}
+          <input
+            id={inputId}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            className="hidden"
+            aria-label="Chon file Excel"
+            onChange={handleFileChange}
+          />
+        </div>
+        {file && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); resetFile() }}
+            className="absolute top-1.5 right-1.5 rounded p-0.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+            aria-label="Xoa file"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
         )}
-        <input id={inputId} type="file" accept=".xlsx,.xls,.csv" className="hidden" aria-label="Chọn file Excel" onChange={handleFileChange} />
       </div>
 
       {sheetNames.length > 0 && (
@@ -237,7 +268,7 @@ export function TaskExcelSplitPanel({ stores, allowedStoreIds, onChange }: Props
 
           {ready && (
             <p className={cn('text-[11px] text-muted-foreground')}>
-              Khi bấm “Tạo Task”, sẽ tạo {inScope.length} task — mỗi cửa hàng nhận file dữ liệu riêng.
+              Khi bấm &quot;Tạo Task&quot;, sẽ tạo {inScope.length} task — mỗi cửa hàng nhận file dữ liệu riêng.
             </p>
           )}
         </div>

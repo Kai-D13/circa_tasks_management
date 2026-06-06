@@ -991,15 +991,6 @@ export async function createImportedStoreTasks(params: {
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
   if (profile?.role !== 'admin') return { error: 'Chỉ admin mới được import task' }
 
-  // Task field validation (reuse the shared adhoc date rule: deadline > start).
-  if (!params.title?.trim())            return { error: 'Vui lòng nhập tiêu đề task' }
-  if (!params.posColumn)                return { error: 'Chưa xác định cột POS code' }
-  if (!params.sheetName)                return { error: 'Chưa chọn sheet dữ liệu' }
-  if (!params.requiredOutputs?.length)  return { error: 'Chọn ít nhất 1 loại output yêu cầu' }
-  if (!params.allowedStoreIds?.length)  return { error: 'Vui lòng chọn ít nhất một cửa hàng' }
-  const dateErr = validateTaskDates(params.startDate || null, params.deadline || null)
-  if (dateErr) return { error: dateErr }
-
   // masterPath is passed by the client and fed to a service-role download, so it
   // must be validated: confined to the import prefix, no traversal, known ext.
   const masterPath = params.masterPath ?? ''
@@ -1010,12 +1001,23 @@ export async function createImportedStoreTasks(params: {
 
   // Cleanup helper: best-effort removal of the master + any generated slices so a
   // validation/RPC failure doesn't leave orphans under task-inputs/import/.
+  // Defined before param checks so early validation failures also remove the master
+  // the client already uploaded to storage.
   const uploadedPaths: string[] = []
   const cleanup = async () => {
     const paths = [masterPath, ...uploadedPaths]
     try { await supabaseAdmin.storage.from('task-uploads').remove(paths) } catch { /* best-effort */ }
   }
   const fail = async (error: string) => { await cleanup(); return { error } }
+
+  // Task field validation — use fail() so the master upload is cleaned up on error.
+  if (!params.title?.trim())            return fail('Vui lòng nhập tiêu đề task')
+  if (!params.posColumn)                return fail('Chưa xác định cột POS code')
+  if (!params.sheetName)                return fail('Chưa chọn sheet dữ liệu')
+  if (!params.requiredOutputs?.length)  return fail('Chọn ít nhất 1 loại output yêu cầu')
+  if (!params.allowedStoreIds?.length)  return fail('Vui lòng chọn ít nhất một cửa hàng')
+  const dateErr = validateTaskDates(params.startDate || null, params.deadline || null)
+  if (dateErr) return fail(dateErr)
 
   // Download + parse the master file (service role; lives under task-inputs/).
   const { data: fileBlob, error: dlErr } = await supabaseAdmin.storage
@@ -1056,7 +1058,8 @@ export async function createImportedStoreTasks(params: {
   if (grouped.size === 0) return fail('Không tìm thấy POS code nào trong cột đã chọn')
 
   // Resolve POS → store against stores.code (server-side re-match; client mapping not trusted).
-  const { data: stores } = await supabase.from('stores').select('id, name, code')
+  const { data: stores, error: storesErr } = await supabase.from('stores').select('id, name, code')
+  if (storesErr) return fail('Lỗi khi lấy danh sách cửa hàng: ' + storesErr.message)
   const storeByCode = new Map((stores ?? []).map((s) => [s.code.toUpperCase(), s]))
   const allowed = new Set(params.allowedStoreIds)
 
@@ -1134,8 +1137,8 @@ export async function createImportedStoreTasks(params: {
     },
     p_tasks: tasksPayload,
   })
-  // On failure, remove the slices but KEEP the master (its URL is recorded in the
-  // batch on success; here there's no batch, and dropping it aids a retry/debug).
+  // On failure, clean up the master + all slices — no batch row was created so all
+  // storage files are orphans.
   if (rpcErr)        { await cleanup(); return { error: rpcErr.message } }
   const result = rpcData as { error?: string; success?: boolean } | null
   if (result?.error) { await cleanup(); return { error: result.error } }
