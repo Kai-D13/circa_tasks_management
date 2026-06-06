@@ -2,6 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
+import * as XLSX from 'xlsx'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { computeNextRunAt } from '@/lib/recurring'
@@ -959,56 +960,208 @@ export async function createBroadcastTask(params: {
   redirect('/tasks')
 }
 
-export async function createBulkTasks(params: {
-  title: string
-  description: string
-  priority: TaskPriority
-  deadline: string
+// Excel split import: admin uploads one master file (already in storage at
+// masterPath); we split rows by pos_code (= stores.code) into one store task each,
+// attaching that store's slice as an xlsx. All parsing/validation is server-side
+// (the client preview is not trusted) and the batch + tasks + logs are inserted
+// atomically via rpc_create_import_tasks. See migration 034.
+const IMPORT_MAX_ROWS       = 2000
+const IMPORT_MAX_STORES     = 30
+const IMPORT_MAX_FILE_BYTES = 20 * 1024 * 1024
+const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
+export async function createImportedStoreTasks(params: {
+  masterPath:      string
+  sheetName:       string
+  posColumn:       string
+  title:           string
+  description:     string
+  priority:        TaskPriority
+  startDate:       string
+  deadline:        string
   requiredOutputs: RequiredOutput[]
-  fileName: string
-  storeItems: { storeId: string; posCode: string; rows: Record<string, string>[] }[]
 }) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
 
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
-  if (profile?.role !== 'admin') {
-    return { error: 'Chỉ admin mới được tạo task hàng loạt' }
+  if (profile?.role !== 'admin') return { error: 'Chỉ admin mới được import task' }
+
+  // Task field validation (reuse the shared adhoc date rule: deadline > start).
+  if (!params.title?.trim())            return { error: 'Vui lòng nhập tiêu đề task' }
+  if (!params.posColumn)                return { error: 'Chưa xác định cột POS code' }
+  if (!params.sheetName)                return { error: 'Chưa chọn sheet dữ liệu' }
+  if (!params.requiredOutputs?.length)  return { error: 'Chọn ít nhất 1 loại output yêu cầu' }
+  const dateErr = validateTaskDates(params.startDate || null, params.deadline || null)
+  if (dateErr) return { error: dateErr }
+
+  // masterPath is passed by the client and fed to a service-role download, so it
+  // must be validated: confined to the import prefix, no traversal, known ext.
+  const masterPath = params.masterPath ?? ''
+  if (!masterPath.startsWith('task-inputs/import/') || masterPath.includes('..') ||
+      !/\.(xlsx|xls|csv)$/i.test(masterPath)) {
+    return { error: 'Đường dẫn file không hợp lệ' }
   }
 
-  const tasksToInsert = params.storeItems.map((item) => ({
-    title:            params.title,
-    description:      params.description || null,
-    priority:         params.priority,
-    status:           'todo' as TaskStatus,
-    visibility:       'store' as TaskVisibility,
-    store_id:         item.storeId,
-    assigned_to:      null,
-    created_by:       user.id,
-    deadline:         params.deadline || null,
-    required_outputs: params.requiredOutputs,
-    input_data: {
-      pos_code:  item.posCode,
-      file_name: params.fileName,
-      rows:      item.rows,
-      row_count: item.rows.length,
+  // Cleanup helper: best-effort removal of the master + any generated slices so a
+  // validation/RPC failure doesn't leave orphans under task-inputs/import/.
+  const uploadedPaths: string[] = []
+  const cleanup = async () => {
+    const paths = [masterPath, ...uploadedPaths]
+    try { await supabaseAdmin.storage.from('task-uploads').remove(paths) } catch { /* best-effort */ }
+  }
+  const fail = async (error: string) => { await cleanup(); return { error } }
+
+  // Download + parse the master file (service role; lives under task-inputs/).
+  const { data: fileBlob, error: dlErr } = await supabaseAdmin.storage
+    .from('task-uploads').download(masterPath)
+  if (dlErr || !fileBlob) return fail('Không tải được file import')
+
+  if (fileBlob.size > IMPORT_MAX_FILE_BYTES) {
+    return fail(`File quá lớn (tối đa ${IMPORT_MAX_FILE_BYTES / (1024 * 1024)}MB)`)
+  }
+
+  let rows: Record<string, unknown>[]
+  try {
+    const buf = await fileBlob.arrayBuffer()
+    const wb = XLSX.read(buf, { type: 'array' })
+    const sheet = wb.Sheets[params.sheetName]
+    if (!sheet) return fail(`Không tìm thấy sheet "${params.sheetName}" trong file`)
+    // raw:false → cells are formatted text (dates render as readable strings, not
+    // Excel serial numbers) so the per-store slice stays human-readable.
+    rows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: '', raw: false })
+  } catch {
+    return fail('Không đọc được file Excel')
+  }
+
+  if (rows.length === 0) return fail('Sheet không có dữ liệu')
+  if (rows.length > IMPORT_MAX_ROWS) {
+    return fail(`File vượt giới hạn ${IMPORT_MAX_ROWS.toLocaleString('vi-VN')} dòng (hiện ${rows.length.toLocaleString('vi-VN')})`)
+  }
+
+  // Group rows by POS code (case-insensitive on the chosen column).
+  const grouped = new Map<string, Record<string, unknown>[]>()
+  for (const row of rows) {
+    const code = String(row[params.posColumn] ?? '').trim().toUpperCase()
+    if (!code) continue
+    const list = grouped.get(code) ?? []
+    list.push(row)
+    grouped.set(code, list)
+  }
+  if (grouped.size === 0) return fail('Không tìm thấy POS code nào trong cột đã chọn')
+
+  // Resolve POS → store against stores.code (server-side re-match; client mapping not trusted).
+  const { data: stores } = await supabase.from('stores').select('id, name, code')
+  const storeByCode = new Map((stores ?? []).map((s) => [s.code.toUpperCase(), s]))
+
+  const matched: { store: { id: string; name: string; code: string }; posCode: string; rows: Record<string, unknown>[] }[] = []
+  const unmatched: string[] = []
+  for (const [code, list] of grouped) {
+    const store = storeByCode.get(code)
+    if (store) matched.push({ store, posCode: code, rows: list })
+    else unmatched.push(code)
+  }
+
+  if (matched.length === 0)               return fail('Không có cửa hàng nào khớp POS code')
+  if (matched.length > IMPORT_MAX_STORES) return fail(`Vượt giới hạn ${IMPORT_MAX_STORES} cửa hàng (hiện ${matched.length})`)
+
+  // Generate + upload one xlsx slice per store; build the per-task payloads.
+  const batchId  = crypto.randomUUID()
+  const fileName = masterPath.split('/').pop() ?? 'import.xlsx'
+  const baseName = fileName.replace(/\.[^.]+$/, '')
+
+  const tasksPayload: Record<string, unknown>[] = []
+  for (const m of matched) {
+    const sliceWb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(sliceWb, XLSX.utils.json_to_sheet(m.rows), 'Data')
+    const sliceBuf = XLSX.write(sliceWb, { type: 'buffer', bookType: 'xlsx' }) as Buffer
+
+    const path = `task-inputs/import/${batchId}/${m.posCode}.xlsx`
+    const { error: upErr } = await supabaseAdmin.storage
+      .from('task-uploads').upload(path, sliceBuf, { contentType: XLSX_MIME, upsert: true })
+    if (upErr) return fail(`Lỗi tải file cho ${m.posCode}: ${upErr.message}`)
+    uploadedPaths.push(path)
+    const { data: { publicUrl } } = supabaseAdmin.storage.from('task-uploads').getPublicUrl(path)
+
+    tasksPayload.push({
+      store_id:         m.store.id,
+      title:            params.title,
+      description:      params.description || null,
+      category:         'other',
+      priority:         params.priority,
+      start_date:       params.startDate || null,
+      deadline:         params.deadline || null,
+      required_outputs: params.requiredOutputs,
+      input_data: {
+        attachments: [{ url: publicUrl, name: `${m.posCode}_${baseName}.xlsx`, type: XLSX_MIME, size: sliceBuf.length }],
+        pos_code:        m.posCode,
+        file_name:       fileName,
+        row_count:       m.rows.length,
+        import_batch_id: batchId,
+      },
+    })
+  }
+
+  const { data: { publicUrl: masterUrl } } = supabaseAdmin.storage
+    .from('task-uploads').getPublicUrl(masterPath)
+
+  // Atomic: batch + N tasks + logs (rpc returns { error } or { success, task_ids }).
+  const { data: rpcData, error: rpcErr } = await supabase.rpc('rpc_create_import_tasks', {
+    p_batch: {
+      id:              batchId,
+      file_name:       fileName,
+      sheet_name:      params.sheetName,
+      pos_column:      params.posColumn,
+      total_rows:      rows.length,
+      matched_count:   matched.length,
+      unmatched_pos:   unmatched,
+      master_file_url: masterUrl,
     },
-  }))
+    p_tasks: tasksPayload,
+  })
+  // On failure, remove the slices but KEEP the master (its URL is recorded in the
+  // batch on success; here there's no batch, and dropping it aids a retry/debug).
+  if (rpcErr)        { await cleanup(); return { error: rpcErr.message } }
+  const result = rpcData as { error?: string; success?: boolean } | null
+  if (result?.error) { await cleanup(); return { error: result.error } }
 
-  const { data: created, error } = await supabase.from('tasks').insert(tasksToInsert).select('id, title')
-  if (error) return { error: error.message }
+  // Best-effort, outside the transaction: notify store managers + Teams.
+  // Re-fetch by batch to map store → task (RPC array order is not guaranteed).
+  try {
+    const { data: created } = await supabase
+      .from('tasks').select('id, store_id').eq('import_batch_id', batchId)
+    const taskByStore = new Map((created ?? []).map((t) => [t.store_id, t.id]))
 
-  const logs = (created ?? []).map((t) => ({
-    task_id:  t.id,
-    action:   'created',
-    user_id:  user.id,
-    metadata: { method: 'bulk_import', file: params.fileName, title: t.title },
-  }))
-  if (logs.length > 0) await supabase.from('task_logs').insert(logs)
+    const { data: managers } = await supabase
+      .from('users').select('id, store_id')
+      .eq('role', 'store_manager')
+      .in('store_id', matched.map((m) => m.store.id))
+
+    const notifications = (managers ?? [])
+      .map((mgr) => {
+        const taskId = taskByStore.get(mgr.store_id)
+        return taskId ? {
+          user_id: mgr.id, type: 'task_assigned', task_id: taskId,
+          title:   'Task mới cho cửa hàng',
+          message: `Task mới: ${params.title}`,
+        } : null
+      })
+      .filter((n): n is NonNullable<typeof n> => n !== null)
+    if (notifications.length) await supabaseAdmin.from('notifications').insert(notifications)
+
+    await Promise.allSettled(matched.map((m) => {
+      const taskId = taskByStore.get(m.store.id)
+      return taskId
+        ? notifyTaskCreated({ taskId, storeId: m.store.id, taskTitle: params.title, taskType: 'Phát sinh', deadline: params.deadline || null })
+        : Promise.resolve()
+    }))
+  } catch (e) {
+    console.error('createImportedStoreTasks notifications error:', e)
+  }
 
   revalidatePath('/tasks')
-  return { success: true, count: created?.length ?? 0 }
+  return { success: true, count: matched.length, skipped: unmatched.length }
 }
 
 export async function requestResubmit(taskId: string, reason?: string) {
