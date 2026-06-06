@@ -34,7 +34,7 @@ function detectPosCodeColumn(headers: string[], rows: Record<string, unknown>[])
     const sample = rows.slice(0, 30).map((r) => String(r[header] ?? '').trim())
     if (sample.some((v) => /^POS\d+$/i.test(v))) return header
   }
-  const keywords = ['pos', 'code', 'store']
+  const keywords = ['pos', 'code', 'store', 'mã', 'cửa hàng', 'chi nhánh']
   for (const header of headers) {
     if (keywords.some((k) => header.toLowerCase().includes(k))) return header
   }
@@ -112,7 +112,7 @@ export function TaskExcelSplitPanel({ stores, allowedStoreIds, onChange }: Props
     if (!f) return
     if (f.size > 20 * 1024 * 1024) {
       toast.error('File quá lớn (tối đa 20MB)')
-      e.target.value = ''
+      resetFile()
       return
     }
     try {
