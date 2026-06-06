@@ -139,11 +139,16 @@ CREATE POLICY tuf_insert ON public.task_uploaded_files
 
 
 -- ── Verification ─────────────────────────────────────────────────────────────
--- SELECT policyname, cmd, qual FROM pg_policies
+-- INSERT policies use WITH CHECK, not USING — inspect with_check column:
+
+-- SELECT policyname, cmd, with_check FROM pg_policies
 -- WHERE tablename = 'task_results' AND policyname = 'tr_insert';
 
--- SELECT policyname, cmd, qual FROM pg_policies
+-- SELECT policyname, cmd, with_check FROM pg_policies
 -- WHERE tablename = 'objects' AND schemaname = 'storage' AND policyname = 'task_uploads_insert';
 
--- SELECT policyname, cmd, qual FROM pg_policies
+-- SELECT policyname, cmd, with_check FROM pg_policies
 -- WHERE tablename = 'task_uploaded_files' AND policyname = 'tuf_insert';
+
+-- Note: 033_storage_tuf_admin_branch_removal.sql supersedes the tasks/* and
+-- tuf_insert policies created here by removing the admin result-upload branch.
