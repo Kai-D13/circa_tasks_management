@@ -165,7 +165,7 @@ export default async function PrescriptionsPage({
               {(submissions ?? []).map((s) => (
                 <TableRow key={s.id} className="cursor-pointer hover:bg-muted/50">
                   <TableCell className="font-mono font-medium">
-                    <Link href={`/prescriptions/${s.id}`} className="hover:underline">
+                    <Link href={`/prescriptions/${s.id}`} prefetch={false} className="hover:underline">
                       {s.order_code}
                     </Link>
                   </TableCell>

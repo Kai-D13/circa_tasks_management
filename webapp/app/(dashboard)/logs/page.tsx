@@ -146,7 +146,7 @@ export default async function LogsPage({
                     </TableCell>
                     <TableCell className="text-sm max-w-[180px] truncate">
                       {task ? (
-                        <Link href={`/tasks/${task.id}`} className="hover:underline">{task.title}</Link>
+                        <Link href={`/tasks/${task.id}`} prefetch={false} className="hover:underline">{task.title}</Link>
                       ) : '—'}
                     </TableCell>
                     {!isManager && (
