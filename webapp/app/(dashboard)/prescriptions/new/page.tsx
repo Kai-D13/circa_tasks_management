@@ -1,14 +1,10 @@
 import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { PrescriptionForm } from '@/components/prescriptions/PrescriptionForm'
 
 export default async function NewPrescriptionPage() {
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const { user, profile } = await getSessionProfile()
   if (!user) redirect('/login')
-
-  const { data: profile } = await supabase
-    .from('users').select('role, store_id').eq('id', user.id).single()
 
   if (profile?.role !== 'staff') redirect('/prescriptions')
   if (!profile.store_id) redirect('/prescriptions')

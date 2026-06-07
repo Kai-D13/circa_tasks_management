@@ -1,6 +1,7 @@
 import { notFound, redirect } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
+import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
@@ -50,19 +51,18 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   const { id } = await params
   const supabase = await createClient()
 
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) redirect('/login')
-
-  // Round 1: task + profile in parallel
-  const [{ data: task }, { data: profile }] = await Promise.all([
+  // Session/profile is request-memoized (already fetched by the dashboard layout),
+  // so fetch the task in parallel with it — only the task is a fresh round-trip.
+  const [{ user, profile }, { data: task }] = await Promise.all([
+    getSessionProfile(),
     supabase
       .from('tasks')
       .select('*, stores(name), assignee:users!assigned_to(full_name, email), creator:users!created_by(full_name)')
       .eq('id', id)
       .single(),
-    supabase.from('users').select('role, store_id').eq('id', user.id).single(),
   ])
 
+  if (!user) redirect('/login')
   if (!task) notFound()
 
   const userRole   = (profile?.role ?? 'staff') as UserRole
@@ -156,6 +156,12 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   // Round 3: results + logs + feedback in parallel
   // reviewLogs / feedbackThreads: RLS controls visibility per role
   const resubmitAt = (task.resubmit_requested_at as string | null) ?? null
+
+  // Feedback is an admin↔store_manager channel; staff and view-only collaborators
+  // never see it. Compute visibility here (same value as canViewFeedback below) so
+  // we can skip the feedbackThreads round-trip entirely for those who can't view it.
+  const canViewFeedbackThreads =
+    canManageTask || (userRole === 'store_manager' && task.store_id === profile?.store_id)
   const [
     { data: results },
     { data: lastAssignLog },
@@ -191,12 +197,15 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           .limit(1)
           .maybeSingle()
       : Promise.resolve({ data: null }),
-    // Feedback threads — RLS returns only what caller is allowed to see
-    supabase
-      .from('task_feedback_threads')
-      .select('id, title, status, created_at, created_by, users(full_name), task_feedback_messages(id, user_id, message, created_at, users(full_name))')
-      .eq('task_id', id)
-      .order('created_at', { ascending: false }),
+    // Feedback threads — only fetched for those who can view feedback (admin owner/
+    // collaborator-manager or the store's manager); skipped for staff & view-only.
+    canViewFeedbackThreads
+      ? supabase
+          .from('task_feedback_threads')
+          .select('id, title, status, created_at, created_by, users(full_name), task_feedback_messages(id, user_id, message, created_at, users(full_name))')
+          .eq('task_id', id)
+          .order('created_at', { ascending: false })
+      : Promise.resolve({ data: [] as unknown[] }),
   ])
 
   // Who can submit:

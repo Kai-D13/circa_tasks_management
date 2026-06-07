@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
+import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { buttonVariants } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { TaskFilters } from '@/components/tasks/TaskFilters'
@@ -18,9 +19,7 @@ export default async function TasksPage({
   const params = await searchParams
   const supabase = await createClient()
 
-  const { data: { user } } = await supabase.auth.getUser()
-  const { data: profile } = await supabase
-    .from('users').select('role, store_id').eq('id', user!.id).single()
+  const { profile } = await getSessionProfile()
 
   const showArchived = params.archived === 'true'
   const page   = Math.max(1, parseInt(params.page ?? '1', 10) || 1)
@@ -66,15 +65,20 @@ export default async function TasksPage({
   const topLevelOnly = (profile?.role === 'admin' || profile?.role === 'store_manager') && !params.status
   if (topLevelOnly) query = query.is('parent_task_id', null)
 
+  // Staff have no store filter (storesForFilter is [] for them), so skip the query
+  // entirely instead of fetching and discarding it.
+  const isStaff = profile?.role === 'staff'
   const [{ data: tasks, error: tasksError, count }, { data: stores }] = await Promise.all([
     query,
-    supabase.from('stores').select('id, name').order('name'),
+    isStaff
+      ? Promise.resolve({ data: [] as { id: string; name: string }[] })
+      : supabase.from('stores').select('id, name').order('name'),
   ])
 
   const totalRows  = count ?? 0
   const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE))
 
-  const storesForFilter = profile?.role === 'staff' ? [] : (stores ?? [])
+  const storesForFilter = isStaff ? [] : (stores ?? [])
   const canCreate  = profile?.role === 'admin'
   const canArchive = !showArchived && profile?.role === 'admin'
   const canRestore = showArchived  && profile?.role === 'admin'
