@@ -1,7 +1,6 @@
 import type { Metadata, Viewport } from "next"
 import { Roboto } from "next/font/google"
 import { Toaster } from "@/components/ui/sonner"
-import { ServiceWorkerRegister } from "@/components/pwa/ServiceWorkerRegister"
 import "./globals.css"
 
 const roboto = Roboto({
@@ -32,7 +31,6 @@ export default function RootLayout({
       <body className="min-h-full">
         {children}
         <Toaster richColors position="top-center" />
-        <ServiceWorkerRegister />
       </body>
     </html>
   )

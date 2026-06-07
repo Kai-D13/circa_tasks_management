@@ -6,7 +6,6 @@ import { NotificationProvider } from '@/components/layout/NotificationProvider'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { MobileHeader } from '@/components/layout/MobileHeader'
 import { BottomNav } from '@/components/layout/BottomNav'
-import { InstallBanner } from '@/components/pwa/InstallBanner'
 import { UserProfile } from '@/types'
 
 export default async function DashboardLayout({
@@ -37,9 +36,6 @@ export default async function DashboardLayout({
 
         {/* Bottom navigation — mobile only */}
         <BottomNav />
-
-        {/* PWA install prompt — staff only, mobile */}
-        <InstallBanner />
         </NotificationProvider>
       </UserProvider>
     </ThemeProvider>

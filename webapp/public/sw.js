@@ -1,20 +1,37 @@
-// Minimal service worker for installability ONLY — caches nothing.
+// KILL-SWITCH service worker — unregisters itself to roll back the PWA.
 //
-// The app uses Supabase auth + RLS + file uploads, so we deliberately do NOT
-// cache any responses (no stale data, no cached credentials, no stale-after-deploy).
+// The PWA rollout caused navigation lag on mobile *browsers* (not just the installed
+// app), because a service worker was registered at scope '/' for every mobile visitor.
+// Devices that registered an earlier SW stay controlled by it until a new SW actively
+// unregisters. This version does exactly that: it installs, removes its own
+// registration, and reloads any open pages so they run with NO service worker.
 //
-// There is intentionally NO `fetch` listener: the app caches nothing, so a fetch
-// handler would only wake the SW thread on every request for zero benefit. Modern
-// Chrome no longer requires a fetch handler for installability (manifest + HTTPS +
-// a registered SW is sufficient), so the home-screen install is unaffected.
+// /sw.js is served with Cache-Control: no-store (see next.config.ts), and browsers
+// soft-update an already-registered SW on navigation, so existing devices fetch this
+// cleanup script and free themselves on next open — even though the app no longer
+// calls navigator.serviceWorker.register().
 
 self.addEventListener('install', () => {
-  // Activate this SW immediately, replacing any previous version (incl. older ones
-  // that registered a fetch listener — they're dropped on this update).
   self.skipWaiting()
 })
 
 self.addEventListener('activate', (event) => {
-  // Take control of open clients right away.
-  event.waitUntil(self.clients.claim())
+  event.waitUntil(
+    (async () => {
+      try {
+        await self.registration.unregister()
+      } catch {
+        // ignore — best effort
+      }
+      // Reload controlled/open windows so they detach from this SW immediately.
+      try {
+        const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true })
+        for (const client of clients) {
+          client.navigate(client.url)
+        }
+      } catch {
+        // ignore — best effort
+      }
+    })(),
+  )
 })
