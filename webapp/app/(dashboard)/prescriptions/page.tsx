@@ -31,17 +31,26 @@ export default async function PrescriptionsPage({
   // Product sync is super-admin only (mirrors the DB is_super_admin() gate).
   const isSuper = isSuperAdminEmail(user.email)
 
+  // Staff hit this list on mobile hot paths: smaller page, no exact count, and a
+  // lighter select (drop the per-row prescription_images embed — the "Ảnh" column is
+  // hidden for staff). The submitted_by filter mirrors the RLS policy ps_select_staff
+  // (submitted_by = auth.uid()) so the planner can use the submitted_by index.
+  const pageSize = isStaff ? 20 : PAGE_SIZE
   const page = Math.max(1, parseInt(params.page ?? '1', 10))
-  const from = (page - 1) * PAGE_SIZE
-  const to   = from + PAGE_SIZE - 1
+  const from = (page - 1) * pageSize
+  const to   = isStaff ? from + pageSize : from + pageSize - 1   // staff: +1 row for next-page detection
 
-  // Build filtered query
+  // Build filtered query. Select must be a single string literal so PostgREST's
+  // compile-time parser keeps the row types. The prescription_images embed is a
+  // cheap indexed lookup once idx_pi_submission exists (migration 036); the "Ảnh"
+  // column is hidden for staff, so they don't render it. Staff skip the exact count.
   let query = supabase
     .from('prescription_submissions')
-    .select('id, order_code, submitted_at, status, stores(name), submitter:users!submitted_by(full_name), prescription_images(id)', { count: 'exact' })
+    .select('id, order_code, submitted_at, status, stores(name), submitter:users!submitted_by(full_name), prescription_images(id)', isStaff ? undefined : { count: 'exact' })
     .order('submitted_at', { ascending: false })
     .range(from, to)
 
+  if (isStaff)          query = query.eq('submitted_by', user.id)
   if (params.status)    query = query.eq('status', params.status)
   if (params.store_id)  query = query.eq('store_id', params.store_id)
   if (params.q)         query = query.ilike('order_code', `%${params.q.trim()}%`)
@@ -55,7 +64,11 @@ export default async function PrescriptionsPage({
       : Promise.resolve({ data: [] }),
   ])
 
-  const totalPages   = Math.max(1, Math.ceil((count ?? 0) / PAGE_SIZE))
+  const totalPages   = Math.max(1, Math.ceil((count ?? 0) / pageSize))
+  // Staff: no exact count — the (pageSize + 1)th row, if present, signals a next page.
+  const rows         = submissions ?? []
+  const pageRows     = isStaff ? rows.slice(0, pageSize) : rows
+  const hasNextStaff = isStaff && rows.length > pageSize
   const pendingCount = isAdmin
     ? (await supabase.from('prescription_submissions').select('id', { count: 'exact', head: true }).eq('status', 'pending_sync')).count ?? 0
     : 0
@@ -157,15 +170,15 @@ export default async function PrescriptionsPage({
                 {!isStaff && <TableHead>Cửa hàng</TableHead>}
                 {isAdmin  && <TableHead>Dược sĩ</TableHead>}
                 <TableHead>Ngày nộp</TableHead>
-                <TableHead>Ảnh</TableHead>
+                {!isStaff && <TableHead>Ảnh</TableHead>}
                 <TableHead>Trạng thái</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {(submissions ?? []).map((s) => (
+              {pageRows.map((s) => (
                 <TableRow key={s.id} className="cursor-pointer hover:bg-muted/50">
                   <TableCell className="font-mono font-medium">
-                    <Link href={`/prescriptions/${s.id}`} prefetch={false} className="hover:underline">
+                    <Link href={`/prescriptions/${s.id}`} target="_blank" rel="noopener noreferrer" prefetch={false} className="hover:underline">
                       {s.order_code}
                     </Link>
                   </TableCell>
@@ -182,9 +195,11 @@ export default async function PrescriptionsPage({
                   <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
                     {formatDateTime(s.submitted_at)}
                   </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">
-                    {Array.isArray(s.prescription_images) ? s.prescription_images.length : 0} ảnh
-                  </TableCell>
+                  {!isStaff && (
+                    <TableCell className="text-sm text-muted-foreground">
+                      {Array.isArray(s.prescription_images) ? s.prescription_images.length : 0} ảnh
+                    </TableCell>
+                  )}
                   <TableCell>
                     {s.status === 'synced' ? (
                       <Badge className="bg-green-100 text-green-700 gap-1 text-xs">
@@ -208,8 +223,27 @@ export default async function PrescriptionsPage({
             </TableBody>
           </Table>
 
-          {/* Pagination */}
-          {totalPages > 1 && (
+          {/* Staff pagination — Prev/Next only (no exact count, so no total) */}
+          {isStaff && (page > 1 || hasNextStaff) && (
+            <div className="flex items-center justify-between px-4 py-3 border-t text-sm">
+              <span className="text-muted-foreground">Trang {page}</span>
+              <div className="flex gap-2">
+                {page > 1 && (
+                  <Link href={buildUrl({ page: String(page - 1) })} className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}>
+                    ← Trước
+                  </Link>
+                )}
+                {hasNextStaff && (
+                  <Link href={buildUrl({ page: String(page + 1) })} className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}>
+                    Tiếp →
+                  </Link>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Admin/manager pagination — numbered, driven by the exact count */}
+          {!isStaff && totalPages > 1 && (
             <div className="flex items-center justify-between px-4 py-3 border-t text-sm">
               <span className="text-muted-foreground">
                 Trang {page} / {totalPages} · {count ?? 0} bản ghi

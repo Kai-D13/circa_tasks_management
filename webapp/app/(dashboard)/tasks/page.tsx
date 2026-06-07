@@ -22,17 +22,24 @@ export default async function TasksPage({
   const { profile } = await getSessionProfile()
 
   const showArchived = params.archived === 'true'
+  // Staff hit this list on mobile hot paths: use a smaller page and skip the exact
+  // count (which runs a second full aggregate under RLS). Admin/manager keep 30 +
+  // exact count for the numbered pager. isStaff is computed here (was below) so the
+  // query options can branch on it.
+  const isStaff  = profile?.role === 'staff'
+  const pageSize = isStaff ? 15 : PAGE_SIZE
   const page   = Math.max(1, parseInt(params.page ?? '1', 10) || 1)
-  const offset = (page - 1) * PAGE_SIZE
+  const offset = (page - 1) * pageSize
 
   let query = supabase
     .from('tasks')
     // Narrow select — excludes description/input_data/required_outputs which grow
     // large when tasks have many attachments. Must be a single string literal so
     // Supabase's type inference doesn't fall back to GenericStringError.
-    .select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name)', { count: 'exact' })
+    .select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name)', isStaff ? undefined : { count: 'exact' })
     .order('created_at', { ascending: false })
-    .range(offset, offset + PAGE_SIZE - 1)
+    // Staff fetch one extra row to detect a next page without an exact count.
+    .range(offset, isStaff ? offset + pageSize : offset + pageSize - 1)
 
   if (showArchived) {
     query = query.not('archived_at', 'is', null)
@@ -66,8 +73,7 @@ export default async function TasksPage({
   if (topLevelOnly) query = query.is('parent_task_id', null)
 
   // Staff have no store filter (storesForFilter is [] for them), so skip the query
-  // entirely instead of fetching and discarding it.
-  const isStaff = profile?.role === 'staff'
+  // entirely instead of fetching and discarding it. (isStaff computed above.)
   const [{ data: tasks, error: tasksError, count }, { data: stores }] = await Promise.all([
     query,
     isStaff
@@ -76,7 +82,10 @@ export default async function TasksPage({
   ])
 
   const totalRows  = count ?? 0
-  const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE))
+  const totalPages = Math.max(1, Math.ceil(totalRows / pageSize))
+  // Staff: no exact count — the (pageSize + 1)th row, if present, signals a next page.
+  const pageTasks    = isStaff ? (tasks ?? []).slice(0, pageSize) : (tasks ?? [])
+  const hasNextStaff = isStaff && (tasks ?? []).length > pageSize
 
   const storesForFilter = isStaff ? [] : (stores ?? [])
   const canCreate  = profile?.role === 'admin'
@@ -102,7 +111,7 @@ export default async function TasksPage({
     }
   }
 
-  const allTasks = [...(tasks ?? []), ...extraChildren]
+  const allTasks = [...pageTasks, ...extraChildren]
 
   // Pre-pass for staff_all groups: map each staff_all parent to its children, in
   // case pagination/ordering interleaves the parent and child rows. The parent is
@@ -284,11 +293,40 @@ export default async function TasksPage({
             </CardContent>
           </Card>
 
-          {/* Pagination — only shown when there are multiple pages */}
-          {totalPages > 1 && (
+          {/* Staff pagination — simple Prev/Next (no exact count, so no page numbers) */}
+          {isStaff && (page > 1 || hasNextStaff) && (
+            <div className="flex items-center justify-between gap-2 pt-1">
+              <Link
+                href={pageHref(page - 1)}
+                aria-disabled={page <= 1}
+                className={cn(
+                  buttonVariants({ variant: 'outline', size: 'sm' }),
+                  'h-8',
+                  page <= 1 && 'pointer-events-none opacity-40',
+                )}
+              >
+                <ChevronLeft className="h-3.5 w-3.5 mr-1" /> Trước
+              </Link>
+              <span className="text-xs text-muted-foreground">Trang {page}</span>
+              <Link
+                href={pageHref(page + 1)}
+                aria-disabled={!hasNextStaff}
+                className={cn(
+                  buttonVariants({ variant: 'outline', size: 'sm' }),
+                  'h-8',
+                  !hasNextStaff && 'pointer-events-none opacity-40',
+                )}
+              >
+                Tiếp <ChevronRight className="h-3.5 w-3.5 ml-1" />
+              </Link>
+            </div>
+          )}
+
+          {/* Admin/manager pagination — numbered, driven by the exact count */}
+          {!isStaff && totalPages > 1 && (
             <div className="flex items-center justify-between gap-2 pt-1">
               <span className="text-xs text-muted-foreground">
-                {offset + 1}–{Math.min(offset + PAGE_SIZE, totalRows)} / {totalRows} task
+                {offset + 1}–{Math.min(offset + pageSize, totalRows)} / {totalRows} task
               </span>
               <div className="flex items-center gap-1">
                 <Link
