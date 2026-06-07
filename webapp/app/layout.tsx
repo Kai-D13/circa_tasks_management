@@ -12,8 +12,6 @@ const roboto = Roboto({
 export const metadata: Metadata = {
   title: "Circa Tasks",
   description: "Internal task operation platform",
-  appleWebApp: { capable: true, statusBarStyle: "default", title: "Circa" },
-  icons: { apple: "/apple-touch-icon.png" },
 }
 
 export const viewport: Viewport = {
