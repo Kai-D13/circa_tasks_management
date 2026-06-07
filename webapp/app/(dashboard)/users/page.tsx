@@ -6,9 +6,13 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { CreateUserDialog } from '@/components/users/CreateUserDialog'
 import { EditUserDialog } from '@/components/users/EditUserDialog'
 import { ResetPasswordDialog } from '@/components/users/ResetPasswordDialog'
+import { UserFilters } from '@/components/users/UserFilters'
+import { Pagination } from '@/components/common/Pagination'
 import { formatDate } from '@/lib/dateUtils'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { AlertTriangle } from 'lucide-react'
+
+const PAGE_SIZE = 30
 
 const ROLE_COLORS: Record<string, string> = {
   admin:         'bg-red-100 text-red-700',
@@ -22,7 +26,12 @@ const ROLE_LABELS: Record<string, string> = {
   staff:         'Nhân viên',
 }
 
-export default async function UsersPage() {
+export default async function UsersPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ q?: string; role?: string; store_id?: string; missing_store?: string; page?: string }>
+}) {
+  const params   = await searchParams
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
@@ -34,13 +43,44 @@ export default async function UsersPage() {
 
   const isSuper = isSuperAdminEmail(user.email)
 
-  const [{ data: users }, { data: stores }] = await Promise.all([
-    supabase
-      .from('users')
-      .select('*, stores(name)')
-      .order('created_at', { ascending: false }),
-    supabase.from('stores').select('id, name').order('name'),
+  const page   = Math.max(1, parseInt(params.page ?? '1', 10) || 1)
+  const offset = (page - 1) * PAGE_SIZE
+
+  let query = supabase
+    .from('users')
+    .select('*, stores(name)', { count: 'exact' })
+    .order('created_at', { ascending: false })
+    .range(offset, offset + PAGE_SIZE - 1)
+
+  if (params.role) query = query.eq('role', params.role)
+  if (params.store_id) query = query.eq('store_id', params.store_id)
+  // Admins legitimately have no store, so exclude them from the missing-store filter.
+  if (params.missing_store === 'true') query = query.is('store_id', null).neq('role', 'admin')
+
+  if (params.q) {
+    // Sanitize before building the PostgREST or-filter: strip the characters that
+    // would break its mini-syntax or act as ilike wildcards (, ( ) % * \).
+    const safe = params.q.trim().replace(/[,()%*\\]/g, '')
+    if (safe) query = query.or(`full_name.ilike.%${safe}%,email.ilike.%${safe}%`)
+  }
+
+  const [{ data: users, count }, { data: stores }] = await Promise.all([
+    query,
+    supabase.from('stores').select('id, name, code').order('name'),
   ])
+
+  const totalRows  = count ?? 0
+  const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE))
+
+  // Build a page href that preserves the active filters.
+  function pageHref(p: number) {
+    const q = new URLSearchParams()
+    const carry = ['q', 'role', 'store_id', 'missing_store'] as const
+    carry.forEach((k) => { if (params[k]) q.set(k, params[k]!) })
+    if (p > 1) q.set('page', String(p))
+    const qs = q.toString()
+    return `/users${qs ? `?${qs}` : ''}`
+  }
 
   return (
     <div className="p-4 space-y-4">
@@ -48,6 +88,8 @@ export default async function UsersPage() {
         <h1 className="text-xl font-semibold">Quản lý người dùng</h1>
         <CreateUserDialog stores={stores ?? []} />
       </div>
+
+      <UserFilters stores={stores ?? []} currentParams={params} />
 
       <Card>
         <CardContent className="p-0">
@@ -112,7 +154,7 @@ export default async function UsersPage() {
               {(users ?? []).length === 0 && (
                 <TableRow>
                   <TableCell colSpan={6} className="text-center text-muted-foreground py-8">
-                    Chưa có người dùng nào
+                    Không tìm thấy người dùng nào
                   </TableCell>
                 </TableRow>
               )}
@@ -120,6 +162,14 @@ export default async function UsersPage() {
           </Table>
         </CardContent>
       </Card>
+
+      <Pagination
+        page={page}
+        totalPages={totalPages}
+        totalRows={totalRows}
+        pageSize={PAGE_SIZE}
+        hrefForPage={pageHref}
+      />
     </div>
   )
 }
