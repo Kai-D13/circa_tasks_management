@@ -45,6 +45,10 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
   useEffect(() => {
     if (!userId) return
+    // Staff are executors — they don't send or receive notifications on mobile hot paths.
+    // Skipping the realtime channel and initial fetch removes a persistent WebSocket
+    // and an extra DB round-trip on every dashboard mount for the most common mobile role.
+    if (profile?.role === 'staff') return
 
     supabase
       .from('notifications')
@@ -68,7 +72,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       .subscribe()
 
     return () => { supabase.removeChannel(channel) }
-  }, [userId, supabase])
+  }, [userId, supabase, profile?.role])
 
   return (
     <NotificationContext.Provider value={{ notifications, unread, markRead }}>

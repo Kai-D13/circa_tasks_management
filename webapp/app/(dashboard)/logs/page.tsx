@@ -37,6 +37,7 @@ export default async function LogsPage({
     .from('users').select('role, store_id').eq('id', user.id).single()
   const isAdmin   = profile?.role === 'admin'
   const isManager = profile?.role === 'store_manager'
+  const isStaff   = profile?.role === 'staff'
 
   const page = Math.max(1, parseInt(params.page ?? '1', 10))
   const from = (page - 1) * LOGS_PAGE_SIZE
@@ -94,7 +95,7 @@ export default async function LogsPage({
 
   return (
     <div className="p-4 space-y-4">
-      <AutoRefresh intervalMs={60000} />
+      {!isStaff && <AutoRefresh intervalMs={60000} />}
       <h1 className="text-xl font-semibold">Nhật ký hoạt động</h1>
 
       <LogFilters

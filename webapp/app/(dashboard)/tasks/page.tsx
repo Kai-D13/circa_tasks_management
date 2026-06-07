@@ -246,7 +246,7 @@ export default async function TasksPage({
 
   return (
     <div className="p-4 space-y-4">
-      <AutoRefresh intervalMs={45000} />
+      {!isStaff && <AutoRefresh intervalMs={45000} />}
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Danh sách Tasks</h1>
         {canCreate && (
