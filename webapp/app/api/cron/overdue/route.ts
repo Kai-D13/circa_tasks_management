@@ -26,7 +26,7 @@ export async function GET(request: NextRequest) {
     // staff_all parents are overview-only and not submittable; never flip them to
     // overdue (they'd be stuck). Their per-staff children flip individually.
     .neq('assignment_mode', 'staff_all')
-    .select('id, title, created_by')
+    .select('id, title, created_by, parent_task_id')
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 })
@@ -35,8 +35,12 @@ export async function GET(request: NextRequest) {
   const count = flipped?.length ?? 0
 
   if (count > 0) {
-    const notifications = (flipped ?? [])
-      .filter((t) => t.created_by)
+    type Flipped = { id: string; title: string; created_by: string | null; parent_task_id: string | null }
+    const rows = (flipped ?? []) as Flipped[]
+
+    // Regular tasks (no parent): one notification each, pointing at the task itself.
+    const regularNotifs = rows
+      .filter((t) => !t.parent_task_id && t.created_by)
       .map((t) => ({
         user_id: t.created_by as string,
         type:    'task_overdue',
@@ -44,6 +48,26 @@ export async function GET(request: NextRequest) {
         title:   'Task quá hạn',
         message: `Task "${t.title}" đã quá hạn`,
       }))
+
+    // staff_all children share their parent's deadline, so they all flip in the same
+    // run. Aggregate each parent's overdue children into ONE notification that points
+    // at the parent task — the admin opens the per-pharmacist overview from there.
+    const childGroups = new Map<string, { created_by: string; title: string; count: number }>()
+    for (const t of rows) {
+      if (!t.parent_task_id || !t.created_by) continue
+      const g = childGroups.get(t.parent_task_id)
+      if (g) g.count++
+      else childGroups.set(t.parent_task_id, { created_by: t.created_by, title: t.title, count: 1 })
+    }
+    const aggregateNotifs = [...childGroups.entries()].map(([parentId, g]) => ({
+      user_id: g.created_by,
+      type:    'task_overdue',
+      task_id: parentId,
+      title:   'Dược sĩ quá hạn',
+      message: `Task "${g.title}" có ${g.count} dược sĩ quá hạn`,
+    }))
+
+    const notifications = [...regularNotifs, ...aggregateNotifs]
     if (notifications.length > 0) {
       await supabaseAdmin.from('notifications').insert(notifications)
     }
