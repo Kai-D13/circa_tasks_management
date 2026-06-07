@@ -1,44 +1,17 @@
 'use client'
 
-import { useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { useActionState } from 'react'
+import { login } from '@/app/actions/auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { toast } from 'sonner'
-import { getDefaultRoute } from '@/lib/routes'
 
 export default function LoginPage() {
-  const [loading, setLoading] = useState(false)
-
-  async function handleSubmit(e: React.SyntheticEvent<HTMLFormElement>) {
-    e.preventDefault()
-    setLoading(true)
-    const form = e.currentTarget
-    const email = (form.elements.namedItem('email') as HTMLInputElement).value
-    const password = (form.elements.namedItem('password') as HTMLInputElement).value
-
-    const supabase = createClient()
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password })
-
-    if (error) {
-      toast.error(error.message)
-      setLoading(false)
-      return
-    }
-
-    // Resolve role-based landing route
-    let role: string | null = null
-    if (data.user) {
-      const { data: profile } = await supabase
-        .from('users').select('role').eq('id', data.user.id).single()
-      role = profile?.role ?? null
-    }
-
-    // Hard navigation — avoids router.push + router.refresh race condition
-    window.location.href = getDefaultRoute(role)
-  }
+  // Server action sets the Supabase auth cookies server-side and redirects on
+  // success; on failure it returns { error } which we render inline. Inline (not
+  // a toast) so it survives on mobile even if no Toaster is mounted in this route.
+  const [state, formAction, pending] = useActionState(login, null)
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-muted/40">
@@ -48,7 +21,7 @@ export default function LoginPage() {
           <CardDescription>Sign in to your account</CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          <form action={formAction} className="flex flex-col gap-4">
             <div className="grid gap-2">
               <Label htmlFor="email">Email</Label>
               <Input
@@ -70,8 +43,11 @@ export default function LoginPage() {
                 autoComplete="current-password"
               />
             </div>
-            <Button type="submit" disabled={loading} className="w-full mt-2">
-              {loading ? 'Signing in...' : 'Sign In'}
+            {state?.error && (
+              <p className="text-sm text-destructive" role="alert">{state.error}</p>
+            )}
+            <Button type="submit" disabled={pending} className="w-full mt-2">
+              {pending ? 'Signing in...' : 'Sign In'}
             </Button>
           </form>
         </CardContent>
