@@ -48,7 +48,7 @@ export default async function UsersPage({
 
   let query = supabase
     .from('users')
-    .select('*, stores(name)', { count: 'exact' })
+    .select('id, email, full_name, role, store_id, created_at, stores(name)', { count: 'exact' })
     .order('created_at', { ascending: false })
     .range(offset, offset + PAGE_SIZE - 1)
 
@@ -71,6 +71,16 @@ export default async function UsersPage({
 
   const totalRows  = count ?? 0
   const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE))
+
+  // Out-of-range page: redirect to page 1 (preserving filters) so the admin
+  // doesn't land on an empty table that looks like "no results".
+  if ((users ?? []).length === 0 && page > 1) {
+    const q = new URLSearchParams()
+    const carry = ['q', 'role', 'store_id', 'missing_store'] as const
+    carry.forEach((k) => { if (params[k]) q.set(k, params[k]!) })
+    const qs = q.toString()
+    redirect(`/users${qs ? `?${qs}` : ''}`)
+  }
 
   // Build a page href that preserves the active filters.
   function pageHref(p: number) {
@@ -122,7 +132,7 @@ export default async function UsersPage({
                       </span>
                     ) : (
                       <span className="text-muted-foreground">
-                        {(u.stores as { name: string } | null)?.name ?? '—'}
+                        {(u.stores as unknown as { name: string } | null)?.name ?? '—'}
                       </span>
                     )}
                   </TableCell>
