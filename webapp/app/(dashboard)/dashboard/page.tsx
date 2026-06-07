@@ -1,4 +1,6 @@
+import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { getDefaultRoute } from '@/lib/routes'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -52,6 +54,12 @@ export default async function DashboardPage() {
   const { data: { user } } = await supabase.auth.getUser()
   const { data: profile } = await supabase
     .from('users').select('role').eq('id', user!.id).single()
+
+  // Staff don't need the heavy oversight dashboard (4 KPI counts + recent-activity
+  // query). Redirect them to their workflow before any of those queries run — covers
+  // direct /dashboard URLs too (the nav entry is already hidden for staff).
+  if (profile?.role === 'staff') redirect(getDefaultRoute('staff'))
+
   const isAdmin = profile?.role === 'admin'
 
   // ── KPI queries (same for all roles — RLS already scopes visibility) ──────

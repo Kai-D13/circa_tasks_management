@@ -52,7 +52,7 @@ export function Sidebar() {
   // fetch large RSC payloads in the background. First-click latency is negligible
   // since these are server-rendered with a fast DB query.
   const navItems = [
-    { href: '/dashboard',        label: 'Tổng quan',   icon: LayoutDashboard, roles: ['admin', 'store_manager', 'staff'], prefetch: false },
+    { href: '/dashboard',        label: 'Tổng quan',   icon: LayoutDashboard, roles: ['admin', 'store_manager'], prefetch: false },
     { href: '/tasks',            label: 'Tasks',        icon: CheckSquare,     roles: ['admin', 'store_manager', 'staff'], prefetch: false },
     { href: '/tasks/schedules',  label: 'Định kỳ',     icon: CalendarClock,   roles: ['admin'],                          prefetch: false },
     { href: '/users',            label: 'Người dùng',   icon: Users,           roles: ['admin'],                          prefetch: false },

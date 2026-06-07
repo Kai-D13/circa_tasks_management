@@ -5,6 +5,7 @@ import { createClient } from '@/lib/supabase/client'
 import { toast } from 'sonner'
 import { Camera, Plus, X, Loader2 } from 'lucide-react'
 import { PRESCRIPTION_BUCKET } from '@/lib/prescriptions/constants'
+import { compressImage } from '@/lib/prescriptions/compressImage'
 
 export interface PrescriptionImage {
   path:       string  // storage_path for server (stored in DB)
@@ -22,7 +23,8 @@ interface Props {
 }
 
 const MAX_COUNT     = 10
-const MAX_PER_IMAGE = 5 * 1024 * 1024
+const MAX_RAW       = 25 * 1024 * 1024 // pre-compression guard: don't load absurd files into a canvas
+const MAX_PER_IMAGE = 5 * 1024 * 1024  // post-compression cap actually uploaded
 const ALLOWED_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
 
 export function PrescriptionImageUpload({ submissionId, storeId, value, onChange }: Props) {
@@ -39,13 +41,15 @@ export function PrescriptionImageUpload({ submissionId, storeId, value, onChange
       return
     }
 
+    // Validate the ORIGINAL by type + a generous raw cap. Per-image size is checked
+    // after compression below, so large camera photos aren't rejected up front.
     const validFiles = fileArr.filter((f) => {
       if (!ALLOWED_TYPES.includes(f.type)) {
         toast.error(`${f.name}: chỉ hỗ trợ jpg, png, webp`)
         return false
       }
-      if (f.size > MAX_PER_IMAGE) {
-        toast.error(`${f.name}: tối đa 5MB`)
+      if (f.size > MAX_RAW) {
+        toast.error(`${f.name}: file quá lớn (tối đa 25MB)`)
         return false
       }
       return true
@@ -56,8 +60,15 @@ export function PrescriptionImageUpload({ submissionId, storeId, value, onChange
     const supabase  = createClient()
     const uploaded: PrescriptionImage[] = []
 
-    for (const file of validFiles) {
+    for (const original of validFiles) {
       try {
+        // Downscale/re-encode large photos client-side before upload (faster on
+        // mobile data, smaller storage). Falls back to the original on any failure.
+        const file = await compressImage(original)
+        if (file.size > MAX_PER_IMAGE) {
+          toast.error(`${original.name}: ảnh quá lớn sau khi nén (tối đa 5MB)`)
+          continue
+        }
         // Path includes store_id for store-level isolation
         const path = `prescriptions/${storeId}/${submissionId}/${Date.now()}_${file.name}`
         const { error } = await supabase.storage
@@ -72,7 +83,7 @@ export function PrescriptionImageUpload({ submissionId, storeId, value, onChange
 
         uploaded.push({ path, previewUrl: publicUrl, name: file.name, type: file.type, size: file.size })
       } catch {
-        toast.error(`Tải lên thất bại: ${file.name}`)
+        toast.error(`Tải lên thất bại: ${original.name}`)
       }
     }
 
@@ -136,7 +147,7 @@ export function PrescriptionImageUpload({ submissionId, storeId, value, onChange
       )}
 
       {value.length === 0 && !uploading && (
-        <p className="text-xs text-muted-foreground">Tối đa {MAX_COUNT} ảnh · 5MB/ảnh · jpg, png, webp</p>
+        <p className="text-xs text-muted-foreground">Tối đa {MAX_COUNT} ảnh · ảnh lớn sẽ tự động nén · jpg, png, webp</p>
       )}
 
       <input ref={galleryRef} aria-label="Chọn ảnh từ thư viện" type="file" multiple accept="image/jpeg,image/jpg,image/png,image/webp" className="hidden" onChange={(e) => handleFiles(e.target.files)} disabled={uploading} />

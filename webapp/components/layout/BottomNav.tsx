@@ -7,7 +7,7 @@ import { LayoutDashboard, CheckSquare, Users, Store, FileImage, ScrollText } fro
 import { cn } from '@/lib/utils'
 
 const NAV_ITEMS = [
-  { href: '/dashboard',     label: 'Tổng quan', icon: LayoutDashboard, roles: ['admin', 'store_manager', 'staff'], prefetch: false },
+  { href: '/dashboard',     label: 'Tổng quan', icon: LayoutDashboard, roles: ['admin', 'store_manager'], prefetch: false },
   { href: '/tasks',         label: 'Tasks',      icon: CheckSquare,     roles: ['admin', 'store_manager', 'staff'], prefetch: false },
   { href: '/prescriptions', label: 'Toa thuốc', icon: FileImage,       roles: ['admin', 'store_manager', 'staff'], prefetch: false },
   { href: '/users',         label: 'Users',      icon: Users,           roles: ['admin'],                           prefetch: false },

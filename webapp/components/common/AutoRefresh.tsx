@@ -28,6 +28,14 @@ export function AutoRefresh({ intervalMs = 30000 }: Props) {
   const pausedRef    = useRef(false)
 
   useEffect(() => {
+    // Installed PWA (standalone): skip background polling entirely. Staff use the
+    // home-screen app to upload/submit; a mid-action router.refresh() causes jank.
+    // Desktop browser tabs (admin/manager) are unaffected — they keep auto-refreshing.
+    const isStandalone =
+      window.matchMedia('(display-mode: standalone)').matches ||
+      (window.navigator as unknown as { standalone?: boolean }).standalone === true
+    if (isStandalone) return
+
     function isEditable(el: Element | null): boolean {
       if (!el) return false
       return el.tagName === 'INPUT'
