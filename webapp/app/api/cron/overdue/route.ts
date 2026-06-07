@@ -69,7 +69,17 @@ export async function GET(request: NextRequest) {
 
     const notifications = [...regularNotifs, ...aggregateNotifs]
     if (notifications.length > 0) {
-      await supabaseAdmin.from('notifications').insert(notifications)
+      const { error: notiErr } = await supabaseAdmin.from('notifications').insert(notifications)
+      // Tasks are already flipped to 'overdue' (and won't re-enter the filter next
+      // run), so a failed insert here is silently lost unless surfaced. Log it and
+      // return 500 so Coolify marks the run failed and it's visible in logs.
+      if (notiErr) {
+        console.error('[notifications] cron/overdue insert failed:', notiErr.message)
+        return NextResponse.json(
+          { ok: false, ran_at: now, count, notify_error: notiErr.message },
+          { status: 500 },
+        )
+      }
     }
 
     await supabaseAdmin.from('task_logs').insert({
