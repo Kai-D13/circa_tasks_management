@@ -22,7 +22,7 @@ function normalizeCompletedBy(task: unknown): { full_name: string } | null {
 export default async function TasksPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; priority?: string; store_id?: string; category?: string; archived?: string; page?: string }>
+  searchParams: Promise<{ view?: string; status?: string; priority?: string; store_id?: string; category?: string; archived?: string; page?: string }>
 }) {
   const params = await searchParams
   const supabase = await createClient()
@@ -30,14 +30,21 @@ export default async function TasksPage({
   const { profile } = await getSessionProfile()
 
   const showArchived = params.archived === 'true'
+  // Primary split: "pending" (anything not done) vs "done". Default is pending for
+  // ALL roles — the first thing everyone needs is "what's still open", not history.
+  // Archive view ignores the tab (it's a separate axis).
+  const view: 'pending' | 'done' = params.view === 'done' ? 'done' : 'pending'
+
   // Staff hit this list on mobile hot paths: use a smaller page and skip the exact
   // count (which runs a second full aggregate under RLS). Admin/manager keep 30 +
-  // exact count for the numbered pager. isStaff is computed here (was below) so the
-  // query options can branch on it.
+  // exact count for the numbered pager. The done view is lighter (history), so it
+  // uses a smaller page for everyone.
   const isStaff  = profile?.role === 'staff'
-  const pageSize = isStaff ? 15 : PAGE_SIZE
+  const pageSize = view === 'done' ? 15 : (isStaff ? 12 : PAGE_SIZE)
   const page   = Math.max(1, parseInt(params.page ?? '1', 10) || 1)
   const offset = (page - 1) * pageSize
+
+  const nowIso = new Date().toISOString()
 
   let query = supabase
     .from('tasks')
@@ -45,9 +52,24 @@ export default async function TasksPage({
     // large when tasks have many attachments. Must be a single string literal so
     // Supabase's type inference doesn't fall back to GenericStringError.
     .select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, completed_by, completed_at, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), completed_by_user:users!completed_by(full_name)', isStaff ? undefined : { count: 'exact' })
-    .order('created_at', { ascending: false })
-    // Staff fetch one extra row to detect a next page without an exact count.
-    .range(offset, isStaff ? offset + pageSize : offset + pageSize - 1)
+
+  // Ordering per view:
+  //   pending -> deadline asc (overdue/soonest first), then newest created
+  //   done    -> most recently completed first
+  //   archive -> newest first (the view/status split doesn't apply to archive)
+  if (showArchived) {
+    query = query.order('created_at', { ascending: false })
+  } else if (view === 'done') {
+    query = query
+      .order('completed_at', { ascending: false, nullsFirst: false })
+      .order('created_at', { ascending: false })
+  } else {
+    query = query
+      .order('deadline', { ascending: true, nullsFirst: false })
+      .order('created_at', { ascending: false })
+  }
+  // Staff fetch one extra row to detect a next page without an exact count.
+  query = query.range(offset, isStaff ? offset + pageSize : offset + pageSize - 1)
 
   if (showArchived) {
     query = query.not('archived_at', 'is', null)
@@ -55,29 +77,35 @@ export default async function TasksPage({
     query = query.is('archived_at', null)
   }
 
-  if (params.status) {
-    const now = new Date().toISOString()
-    if (params.status === 'overdue') {
+  // View gate — skipped entirely in archive view (archive shows ALL archived tasks,
+  // done or not). Done view: status = done (ignores the status sub-filter). Pending
+  // view: everything not done, optionally refined by the status sub-filter.
+  if (!showArchived) {
+    if (view === 'done') {
+      query = query.eq('status', 'done')
+    } else if (params.status === 'overdue') {
       // staff_all parents are never submittable/overdue; exclude them from overdue filter
       query = query
-        .or(`status.eq.overdue,and(deadline.lt.${now},status.neq.done)`)
+        .or(`status.eq.overdue,and(deadline.lt.${nowIso},status.neq.done)`)
         .neq('assignment_mode', 'staff_all')
     } else if (params.status === 'todo' || params.status === 'in_progress') {
       query = query
         .eq('status', params.status)
-        .or(`deadline.is.null,deadline.gte.${now}`)
+        .or(`deadline.is.null,deadline.gte.${nowIso}`)
     } else {
-      query = query.eq('status', params.status)
+      query = query.neq('status', 'done')
     }
   }
   if (params.priority) query = query.eq('priority', params.priority)
   if (params.store_id) query = query.eq('store_id', params.store_id)
   if (params.category) query = query.eq('category', params.category)
 
-  // For admin/manager with no status filter: exclude staff_all children from the
-  // paginated count so the page count isn't inflated by N children per parent.
-  // Children are fetched separately after this query and appended to allTasks.
-  const topLevelOnly = (profile?.role === 'admin' || profile?.role === 'store_manager') && !params.status
+  // For admin/manager in the pending view with no status sub-filter: exclude
+  // staff_all children from the paginated count so the page count isn't inflated by
+  // N children per parent. Children are fetched separately and appended. In the done
+  // view, parents are never 'done', so done children show standalone — no folding.
+  const topLevelOnly = (profile?.role === 'admin' || profile?.role === 'store_manager')
+    && view === 'pending' && !params.status
   if (topLevelOnly) query = query.is('parent_task_id', null)
 
   // Staff have no store filter (storesForFilter is [] for them), so skip the query
@@ -262,7 +290,7 @@ export default async function TasksPage({
   // Build href that preserves all current filters but changes page
   function pageHref(p: number) {
     const q = new URLSearchParams()
-    const carry = ['status', 'priority', 'store_id', 'category', 'archived'] as const
+    const carry = ['view', 'status', 'priority', 'store_id', 'category', 'archived'] as const
     carry.forEach((k) => { if (params[k]) q.set(k, params[k]!) })
     if (p > 1) q.set('page', String(p))
     const qs = q.toString()
@@ -286,6 +314,7 @@ export default async function TasksPage({
         stores={storesForFilter}
         currentParams={params as Record<string, string>}
         showArchived={showArchived}
+        view={view}
       />
 
       {tasksError ? (
@@ -309,9 +338,11 @@ export default async function TasksPage({
             </CardContent>
           </Card>
 
-          {/* Staff pagination — simple Prev/Next (no exact count, so no page numbers) */}
+          {/* Staff pagination — simple Prev/Next (no exact count, so no page numbers).
+              Sticky above the mobile bottom nav so it's always reachable; static on
+              desktop. -mx-4 px-4 makes the sticky bar full-bleed inside the page padding. */}
           {isStaff && (page > 1 || hasNextStaff) && (
-            <div className="flex items-center justify-between gap-2 pt-1">
+            <div className="flex items-center justify-between gap-2 pt-1 sticky bottom-16 z-10 -mx-4 px-4 py-2 bg-muted/20 border-t md:static md:bottom-auto md:mx-0 md:px-0 md:py-0 md:bg-transparent md:border-0">
               <Link
                 href={pageHref(page - 1)}
                 aria-disabled={page <= 1}

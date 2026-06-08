@@ -125,16 +125,31 @@ function isDueSoon(deadline: string | null, effStatus: string): boolean {
 
 // Badge cluster shared by the desktop table title cell and the mobile card, so
 // the two layouts never drift. The broadcast Radio icon stays next to the title.
+// Two always-on taxonomy badges + situational signals:
+//   source  -> Định kỳ (recurring) | Phát sinh (one-off)
+//   method  -> Cửa hàng nộp (unassigned store task) | Dược sĩ nộp (assigned/per-staff)
+//   signals -> Bạn có thể nộp (executor, open) · Sắp hết hạn (≤24h)
 function TaskBadges({ task, userRole, effStatus }: {
   task: TaskRow['task']; userRole?: string; effStatus: string
 }) {
   const isStoreLevelRow = task.assignment_mode === 'store' && task.assigned_to === null
   const canSubmitHint = isStoreLevelRow && effStatus !== 'done'
     && (userRole === 'staff' || userRole === 'store_manager')
+  const isRecurring = !!task.source_schedule_id
   return (
     <>
-      {task.source_schedule_id && (
-        <span className="text-xs px-1.5 py-0.5 rounded bg-teal-100 text-teal-700">Định kỳ</span>
+      <span className={cn(
+        'text-xs px-1.5 py-0.5 rounded',
+        isRecurring ? 'bg-teal-100 text-teal-700' : 'bg-slate-100 text-slate-600',
+      )}>
+        {isRecurring ? 'Định kỳ' : 'Phát sinh'}
+      </span>
+      {isStoreLevelRow ? (
+        <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">
+          <Users className="h-3 w-3" /> Cửa hàng nộp
+        </span>
+      ) : (
+        <span className="text-xs px-1.5 py-0.5 rounded bg-sky-100 text-sky-700">Dược sĩ nộp</span>
       )}
       {task.category && task.category !== 'other' && (
         <span className={cn(
@@ -142,11 +157,6 @@ function TaskBadges({ task, userRole, effStatus }: {
           CATEGORY_STYLE[task.category as TaskCategory] ?? 'bg-gray-100 text-gray-600'
         )}>
           {CATEGORY_LABEL[task.category as TaskCategory] ?? task.category}
-        </span>
-      )}
-      {isStoreLevelRow && (
-        <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">
-          <Users className="h-3 w-3" /> Cửa hàng nộp
         </span>
       )}
       {canSubmitHint && (

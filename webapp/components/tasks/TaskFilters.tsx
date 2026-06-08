@@ -6,11 +6,13 @@ import { SearchableSelect } from '@/components/ui/searchable-select'
 import { Button } from '@/components/ui/button'
 import { Store } from '@/types'
 import { Archive, ArrowLeft } from 'lucide-react'
+import { cn } from '@/lib/utils'
 
 interface Props {
   stores:        Pick<Store, 'id' | 'name'>[]
-  currentParams: { status?: string; priority?: string; store_id?: string; category?: string; archived?: string }
+  currentParams: { view?: string; status?: string; priority?: string; store_id?: string; category?: string; archived?: string }
   showArchived?: boolean
+  view?:         'pending' | 'done'
 }
 
 const ALL = '__all__'
@@ -38,7 +40,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   other:     'Khác',
 }
 
-export function TaskFilters({ stores, currentParams, showArchived }: Props) {
+export function TaskFilters({ stores, currentParams, showArchived, view = 'pending' }: Props) {
   const router   = useRouter()
   const pathname = usePathname()
 
@@ -50,6 +52,22 @@ export function TaskFilters({ stores, currentParams, showArchived }: Props) {
       if (v && v !== ALL) params.set(k, v)
     })
     router.push(`${pathname}?${params.toString()}`)
+  }
+
+  // Switch the primary view tab. Going to "done" drops the status sub-filter
+  // (done view ignores it) and resets to page 1; "pending" is the default so it's
+  // omitted from the URL. Priority/store/category carry over.
+  function setView(v: 'pending' | 'done') {
+    const params = new URLSearchParams()
+    if (v === 'done') params.set('view', 'done')
+    ;(['priority', 'store_id', 'category'] as const).forEach((k) => {
+      if (currentParams[k]) params.set(k, currentParams[k]!)
+    })
+    if (v === 'pending' && currentParams.status && currentParams.status !== 'done') {
+      params.set('status', currentParams.status)
+    }
+    const qs = params.toString()
+    router.push(qs ? `${pathname}?${qs}` : pathname)
   }
 
   function toggleArchive() {
@@ -79,21 +97,45 @@ export function TaskFilters({ stores, currentParams, showArchived }: Props) {
   ]
 
   return (
+    <div className="space-y-2">
+      {/* Primary view tab — always visible (except in archive view). The single
+          most important control: "what's still open" vs "history". */}
+      {!showArchived && (
+        <div className="inline-flex rounded-lg border bg-muted/40 p-0.5 w-full sm:w-auto">
+          {(['pending', 'done'] as const).map((v) => (
+            <button
+              key={v}
+              type="button"
+              onClick={() => setView(v)}
+              className={cn(
+                'flex-1 sm:flex-none px-4 h-8 rounded-md text-sm font-medium transition-colors',
+                view === v ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              {v === 'pending' ? 'Chờ thực hiện' : 'Hoàn thành'}
+            </button>
+          ))}
+        </div>
+      )}
+
     <div className="flex flex-wrap gap-2 items-center">
       {!showArchived ? (
         <>
-          <Select value={statusVal} onValueChange={(v) => update('status', v)}>
-            <SelectTrigger className="w-40 h-8 text-sm">
-              <SelectValue>{STATUS_LABEL[statusVal]}</SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL}>Tất cả trạng thái</SelectItem>
-              <SelectItem value="todo">Chờ thực hiện</SelectItem>
-              <SelectItem value="in_progress">Đang thực hiện</SelectItem>
-              <SelectItem value="done">Hoàn thành</SelectItem>
-              <SelectItem value="overdue">Quá hạn</SelectItem>
-            </SelectContent>
-          </Select>
+          {/* Status sub-filter: only refines the pending view, desktop only
+              (on mobile the tab is the status control). */}
+          {view === 'pending' && (
+            <Select value={statusVal} onValueChange={(v) => update('status', v)}>
+              <SelectTrigger className="w-40 h-8 text-sm hidden md:flex">
+                <SelectValue>{STATUS_LABEL[statusVal]}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>Tất cả trạng thái</SelectItem>
+                <SelectItem value="todo">Chờ thực hiện</SelectItem>
+                <SelectItem value="in_progress">Đang thực hiện</SelectItem>
+                <SelectItem value="overdue">Quá hạn</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
 
           <Select value={priorityVal} onValueChange={(v) => update('priority', v)}>
             <SelectTrigger className="w-36 h-8 text-sm">
@@ -157,6 +199,7 @@ export function TaskFilters({ stores, currentParams, showArchived }: Props) {
           Quay lại task đang hoạt động
         </Button>
       )}
+    </div>
     </div>
   )
 }
