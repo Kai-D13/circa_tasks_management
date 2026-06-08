@@ -11,6 +11,14 @@ import { cn } from '@/lib/utils'
 
 const PAGE_SIZE = 30
 
+// Supabase types FK relations as arrays; the completed_by embed can arrive as an
+// object or a one-element array depending on inference. Normalize to object | null.
+function normalizeCompletedBy(task: unknown): { full_name: string } | null {
+  const x = (task as { completed_by_user?: unknown }).completed_by_user
+  if (Array.isArray(x)) return (x[0] as { full_name: string } | undefined) ?? null
+  return (x as { full_name: string } | null) ?? null
+}
+
 export default async function TasksPage({
   searchParams,
 }: {
@@ -36,7 +44,7 @@ export default async function TasksPage({
     // Narrow select — excludes description/input_data/required_outputs which grow
     // large when tasks have many attachments. Must be a single string literal so
     // Supabase's type inference doesn't fall back to GenericStringError.
-    .select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name)', isStaff ? undefined : { count: 'exact' })
+    .select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, completed_by, completed_at, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), completed_by_user:users!completed_by(full_name)', isStaff ? undefined : { count: 'exact' })
     .order('created_at', { ascending: false })
     // Staff fetch one extra row to detect a next page without an exact count.
     .range(offset, isStaff ? offset + pageSize : offset + pageSize - 1)
@@ -101,7 +109,7 @@ export default async function TasksPage({
     if (parentIds.length > 0) {
       let childQ = supabase
         .from('tasks')
-        .select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name)')
+        .select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, completed_by, completed_at, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), completed_by_user:users!completed_by(full_name)')
         .in('parent_task_id', parentIds)
         .order('created_at', { ascending: true })
       if (showArchived) childQ = childQ.not('archived_at', 'is', null)
@@ -171,20 +179,22 @@ export default async function TasksPage({
       grouped.push({
         type: 'task',
         task: {
-          id:                 task.id,
-          title:              task.title,
-          status:             task.status,
-          priority:           task.priority,
-          category:           task.category ?? null,
-          broadcast_id:       task.broadcast_id ?? null,
-          source_schedule_id: (task as { source_schedule_id?: string | null }).source_schedule_id ?? null,
-          assignment_mode:    (task as { assignment_mode?: string | null }).assignment_mode ?? null,
-          assigned_to:        (task as { assigned_to?: string | null }).assigned_to ?? null,
-          stores:             (task.stores as unknown as { name: string } | null),
-          assignee:           (task.assignee as unknown as { full_name: string } | null),
-          deadline:           (task.deadline as string | null) ?? null,
-          overdue_at:         (task as { overdue_at?: string | null }).overdue_at ?? null,
-          created_at:         task.created_at,
+          id:                  task.id,
+          title:               task.title,
+          status:              task.status,
+          priority:            task.priority,
+          category:            task.category ?? null,
+          broadcast_id:        task.broadcast_id ?? null,
+          source_schedule_id:  (task as { source_schedule_id?: string | null }).source_schedule_id ?? null,
+          assignment_mode:     (task as { assignment_mode?: string | null }).assignment_mode ?? null,
+          assigned_to:         (task as { assigned_to?: string | null }).assigned_to ?? null,
+          stores:              (task.stores as unknown as { name: string } | null),
+          assignee:            (task.assignee as unknown as { full_name: string } | null),
+          completed_by_user:   normalizeCompletedBy(task),
+          completed_at:        (task as { completed_at?: string | null }).completed_at ?? null,
+          deadline:            (task.deadline as string | null) ?? null,
+          overdue_at:          (task as { overdue_at?: string | null }).overdue_at ?? null,
+          created_at:          task.created_at,
         },
       })
       continue
@@ -194,20 +204,22 @@ export default async function TasksPage({
       const row: TaskRow = {
         type: 'task',
         task: {
-          id:                 task.id,
-          title:              task.title,
-          status:             task.status,
-          priority:           task.priority,
-          category:           task.category ?? null,
-          broadcast_id:       task.broadcast_id ?? null,
-          source_schedule_id: (task as { source_schedule_id?: string | null }).source_schedule_id ?? null,
-          assignment_mode:    (task as { assignment_mode?: string | null }).assignment_mode ?? null,
-          assigned_to:        (task as { assigned_to?: string | null }).assigned_to ?? null,
-          stores:             (task.stores as unknown as { name: string } | null),
-          assignee:           (task.assignee as unknown as { full_name: string } | null),
-          deadline:           (task.deadline as string | null) ?? null,
-          overdue_at:         (task as { overdue_at?: string | null }).overdue_at ?? null,
-          created_at:         task.created_at,
+          id:                  task.id,
+          title:               task.title,
+          status:              task.status,
+          priority:            task.priority,
+          category:            task.category ?? null,
+          broadcast_id:        task.broadcast_id ?? null,
+          source_schedule_id:  (task as { source_schedule_id?: string | null }).source_schedule_id ?? null,
+          assignment_mode:     (task as { assignment_mode?: string | null }).assignment_mode ?? null,
+          assigned_to:         (task as { assigned_to?: string | null }).assigned_to ?? null,
+          stores:              (task.stores as unknown as { name: string } | null),
+          assignee:            (task.assignee as unknown as { full_name: string } | null),
+          completed_by_user:   normalizeCompletedBy(task),
+          completed_at:        (task as { completed_at?: string | null }).completed_at ?? null,
+          deadline:            (task.deadline as string | null) ?? null,
+          overdue_at:          (task as { overdue_at?: string | null }).overdue_at ?? null,
+          created_at:          task.created_at,
         },
       }
       grouped.push(row)

@@ -19,7 +19,7 @@ import { createFeedbackThread, addFeedbackMessage, resolveFeedbackThread } from 
 import { FeedbackSection, type FeedbackThread } from '@/components/feedback/FeedbackSection'
 import { ShareTaskDialog, type CollaboratorRow } from '@/components/tasks/ShareTaskDialog'
 import { AutoRefresh } from '@/components/common/AutoRefresh'
-import { formatDate, getEffectiveStatus } from '@/lib/dateUtils'
+import { formatDate, formatDateTime, getEffectiveStatus } from '@/lib/dateUtils'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { Task, RequiredOutput, UserRole, TaskCategory } from '@/types'
 import { Pencil, Trash2, Radio, Users } from 'lucide-react'
@@ -57,7 +57,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
     getSessionProfile(),
     supabase
       .from('tasks')
-      .select('*, stores(name), assignee:users!assigned_to(full_name, email), creator:users!created_by(full_name)')
+      .select('*, stores(name), assignee:users!assigned_to(full_name, email), creator:users!created_by(full_name), completed_by_user:users!completed_by(full_name)')
       .eq('id', id)
       .single(),
   ])
@@ -615,9 +615,33 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
 
               {/* Assignee */}
               <div className="py-3">
-                <p className="text-xs text-muted-foreground mb-1">Người thực hiện</p>
+                <p className="text-xs text-muted-foreground mb-1">
+                  {displayStatus === 'done' && isStoreLevelTask ? 'Người đã nộp' : 'Người thực hiện'}
+                </p>
                 {isStaffParent ? (
                   <p className="font-medium">Từng dược sĩ ({staffTotal})</p>
+                ) : displayStatus === 'done' ? (
+                  // Done: show who submitted (from completed_by_user for store-level,
+                  // or assignee for direct-assigned tasks). Never show reassign form.
+                  // completed_by_user can arrive as object or 1-element array (Supabase FK).
+                  <>
+                    <p className="font-medium">
+                      {(() => {
+                        const cb = task.completed_by_user as unknown
+                        const name = Array.isArray(cb)
+                          ? (cb[0] as { full_name?: string } | undefined)?.full_name
+                          : (cb as { full_name?: string } | null)?.full_name
+                        return name
+                          ?? (task.assignee as { full_name: string } | null)?.full_name
+                          ?? 'Cửa hàng nộp'
+                      })()}
+                    </p>
+                    {task.completed_at && (
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Nộp lúc: {formatDateTime(task.completed_at as string)}
+                      </p>
+                    )}
+                  </>
                 ) : canManageTask ? (
                   <TaskReassignForm
                     taskId={id}
@@ -626,7 +650,8 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                   />
                 ) : (
                   <p className="font-medium">
-                    {(task.assignee as { full_name: string } | null)?.full_name ?? 'Chưa phân công'}
+                    {(task.assignee as { full_name: string } | null)?.full_name
+                      ?? (isStoreLevelTask ? 'Cửa hàng nộp' : 'Chưa phân công')}
                   </p>
                 )}
               </div>

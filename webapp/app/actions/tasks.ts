@@ -602,9 +602,25 @@ export async function reassignTask(taskId: string, assignedTo: string | null) {
 
   // Admin-only + own-scope: reassigning is a task-management action.
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
-  const { data: reassignTask } = await supabase.from('tasks').select('created_by, store_id').eq('id', taskId).single()
+  const { data: reassignTask } = await supabase.from('tasks')
+    .select('created_by, store_id, status, completed_by, resubmit_requested_at')
+    .eq('id', taskId).single()
   if (!canAdminManageOwn({ email: user.email, role: profile?.role, createdBy: reassignTask?.created_by, userId: user.id }))
     return { error: 'Không có quyền phân công task này' }
+
+  // Block reassign once the task has a valid submission. Gate on the submission
+  // itself (completed_by, or a result after the last resubmit request), not just
+  // status — status can drift in old data while a real result exists.
+  if (reassignTask?.completed_by || reassignTask?.status === 'done') {
+    return { error: 'Task đã có kết quả nộp, không thể phân công lại. Vui lòng yêu cầu làm lại nếu cần chỉnh sửa.' }
+  }
+  {
+    let resultQ = supabase.from('task_results').select('id', { count: 'exact', head: true }).eq('task_id', taskId)
+    if (reassignTask?.resubmit_requested_at) resultQ = resultQ.gt('submitted_at', reassignTask.resubmit_requested_at)
+    const { count: validResultCount } = await resultQ
+    if ((validResultCount ?? 0) > 0)
+      return { error: 'Task đã có kết quả nộp, không thể phân công lại. Vui lòng yêu cầu làm lại nếu cần chỉnh sửa.' }
+  }
 
   // If assigning to a specific user, they must belong to the same store as the task.
   if (assignedTo) {
@@ -1131,7 +1147,14 @@ export async function requestResubmit(taskId: string, reason?: string) {
   // on the server-side validation above. Service role bypasses RLS, so the write
   // succeeds regardless of who the caller is, after validation has passed.
   const { error } = await supabaseAdmin.from('tasks')
-    .update({ status: 'todo', resubmit_requested_at: new Date().toISOString() })
+    .update({
+      status: 'todo',
+      resubmit_requested_at: new Date().toISOString(),
+      // Reopening the task: clear the completion metadata so it no longer claims
+      // "đã hoàn thành bởi X" while awaiting a fresh result (keeps reporting honest).
+      completed_by: null,
+      completed_at: null,
+    })
     .eq('id', taskId)
   if (error) return { error: error.message }
 
