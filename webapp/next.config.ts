@@ -9,6 +9,19 @@ const nextConfig: NextConfig = {
         hostname: '*.supabase.co',
         pathname: '/storage/v1/object/public/**',
       },
+      // New production self-host domain
+      {
+        protocol: 'https',
+        hostname: 'database-duocsi.circa.vn',
+        pathname: '/storage/v1/object/public/**',
+      },
+      // Keep old domain during transition — existing DB rows may contain URLs
+      // pointing at database.hao-nguyen.site. Remove once all rows are migrated.
+      {
+        protocol: 'https',
+        hostname: 'database.hao-nguyen.site',
+        pathname: '/storage/v1/object/public/**',
+      },
     ],
   },
   // Never cache the service worker so a redeployed sw.js is picked up immediately.
