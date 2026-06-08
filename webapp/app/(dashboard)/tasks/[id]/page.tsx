@@ -123,16 +123,21 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   const isEditorCollaborator = !canManageTask
     && (myCollaboratorRow as { permission?: string } | null)?.permission === 'editor'
 
-  // Compute isStoreSubmitter here — needed to gate lastResubmitLog fetch below
-  const isStoreSubmitter = task.assigned_to === null
+  // Compute isStoreModeSubmitter here — needed to gate lastResubmitLog fetch below.
+  // Store-level ("Cửa hàng nộp"): unassigned store task; any staff OR store_manager
+  // of that store may submit. One valid result completes it for the whole store.
+  const isStoreLevelTask = task.assigned_to === null
+    && task.assignment_mode === 'store'
     && task.store_id !== null
     && task.store_id === profile?.store_id
-    && userRole === 'store_manager'
+  const isStoreModeSubmitter = isStoreLevelTask
+    && (userRole === 'staff' || userRole === 'store_manager')
 
   // Build submissions query with role-based visibility
   // - admin: all submissions for this task
   // - store_manager: only submissions from users in their store
-  // - staff: only their own submission
+  // - staff: their own submission; for a store-level task, the store's submission
+  //   too (RLS tr_select_staff scopes it to the store) so colleagues see the result
   function buildResultsQuery() {
     const base = supabase
       .from('task_results')
@@ -140,7 +145,9 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       .eq('task_id', id)
       .order('submitted_at', { ascending: false })
 
-    if (userRole === 'staff') return base.eq('user_id', userId)
+    // Store-level task: show the store's submission to any staff of the store.
+    // Otherwise staff only see their own.
+    if (userRole === 'staff') return isStoreLevelTask ? base : base.eq('user_id', userId)
 
     if (userRole === 'store_manager') {
       const ids = (storeUsers ?? []).map((u) => u.id)
@@ -187,7 +194,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       .eq('kind', 'review_note')
       .order('created_at', { ascending: false }),
     // Fetch last resubmit reason (for staff/store-manager notification banner)
-    (userRole === 'staff' || isStoreSubmitter) && resubmitAt
+    (userRole === 'staff' || isStoreModeSubmitter) && resubmitAt
       ? supabase
           .from('task_review_notes')
           .select('note')
@@ -211,18 +218,18 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   // Who can submit:
   // (a) direct assignment: task assigned to this user
   // (b) store-level: task has no assignee, current user is store_manager of the task's store
-  // isStoreSubmitter is computed above (before Round 3) so lastResubmitLog can use it
+  // isStoreModeSubmitter is computed above (before Round 3) so lastResubmitLog can use it
   const isDirectAssignee = task.assigned_to === userId
 
   // hasAlreadySubmitted: a result exists submitted AFTER the last resubmit request
   // (results before resubmit_requested_at don't block — can submit again)
-  const hasAlreadySubmitted = (isDirectAssignee || isStoreSubmitter)
+  const hasAlreadySubmitted = (isDirectAssignee || isStoreModeSubmitter)
     && (results ?? []).some(
       (r) => !resubmitAt || new Date((r as { submitted_at: string }).submitted_at) > new Date(resubmitAt)
     )
 
   // isSubmitterForTask: user is responsible for submitting this task (direct assignee or store-level)
-  const isSubmitterForTask = isDirectAssignee || isStoreSubmitter
+  const isSubmitterForTask = isDirectAssignee || isStoreModeSubmitter
 
   // displayStatus: for staff_all parents roll up from children (parent is never
   // submitted or flipped by cron); for regular tasks apply deadline-based overdue.
@@ -450,7 +457,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
 
           {/* Resubmit request banner — above submit form so the reason is visible
               before the submitter starts filling in the form */}
-          {(userRole === 'staff' || isStoreSubmitter) && resubmitAt && !hasAlreadySubmitted && (
+          {(userRole === 'staff' || isStoreModeSubmitter) && resubmitAt && !hasAlreadySubmitted && (
             <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
               <p className="font-medium text-amber-900">Quản lý yêu cầu thực hiện lại</p>
               {resubmitReason && <p className="text-amber-800 mt-1">Lý do: {resubmitReason}</p>}
@@ -470,6 +477,11 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                 </CardTitle>
               </CardHeader>
               <CardContent className="pt-0">
+                {isStoreLevelTask && (
+                  <p className="text-xs text-muted-foreground mb-2">
+                    Task cửa hàng: Staff hoặc Quản lý cửa hàng đều có thể nộp. Chỉ cần một kết quả cho cả cửa hàng.
+                  </p>
+                )}
                 <TaskSubmitForm
                   taskId={id}
                   requiredOutputs={(task.required_outputs as RequiredOutput[]) ?? []}

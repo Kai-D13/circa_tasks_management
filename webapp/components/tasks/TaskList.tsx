@@ -76,6 +76,8 @@ export type TaskRow = {
     category:           string | null
     broadcast_id:       string | null
     source_schedule_id: string | null
+    assignment_mode:    string | null
+    assigned_to:        string | null
     stores:             { name: string } | null
     assignee:           { full_name: string } | null
     deadline:           string | null
@@ -91,9 +93,10 @@ interface Props {
   canArchive:    boolean
   canRestore?:   boolean
   showArchived?: boolean
+  userRole?:     string
 }
 
-export function TaskList({ items, canArchive, canRestore, showArchived }: Props) {
+export function TaskList({ items, canArchive, canRestore, showArchived, userRole }: Props) {
   const router = useRouter()
   const [selected, setSelected]    = useState<Set<string>>(new Set())
   const [expanded, setExpanded]    = useState<Set<string>>(new Set())
@@ -435,6 +438,13 @@ export function TaskList({ items, canArchive, canRestore, showArchived }: Props)
             const { task } = item
             const isSelected = selected.has(task.id)
             const effStatus = getEffectiveStatus(task.deadline, task.status)
+            // Store-level ("Cửa hàng nộp"): unassigned task in 'store' mode. Any
+            // staff/manager of the store can submit; show a badge, plus a "can
+            // submit" hint to executors while the task is still open.
+            const isStoreLevelRow = task.assignment_mode === 'store' && task.assigned_to === null
+            const canSubmitHint = isStoreLevelRow
+              && effStatus !== 'done'
+              && (userRole === 'staff' || userRole === 'store_manager')
 
             return (
               <TableRow
@@ -474,6 +484,16 @@ export function TaskList({ items, canArchive, canRestore, showArchived }: Props)
                       CATEGORY_STYLE[task.category as TaskCategory] ?? 'bg-gray-100 text-gray-600'
                     )}>
                       {CATEGORY_LABEL[task.category as TaskCategory] ?? task.category}
+                    </span>
+                  )}
+                  {isStoreLevelRow && (
+                    <span className="mt-0.5 ml-1 inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">
+                      <Users className="h-3 w-3" /> Cửa hàng nộp
+                    </span>
+                  )}
+                  {canSubmitHint && (
+                    <span className="mt-0.5 ml-1 inline-block text-xs px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">
+                      Bạn có thể nộp
                     </span>
                   )}
                 </TableCell>

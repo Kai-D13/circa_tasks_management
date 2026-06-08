@@ -46,32 +46,53 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   useEffect(() => {
     if (!userId) return
     // Staff are executors — they don't send or receive notifications on mobile hot paths.
-    // Skipping the realtime channel and initial fetch removes a persistent WebSocket
-    // and an extra DB round-trip on every dashboard mount for the most common mobile role.
+    // Skipping the fetch entirely removes a DB round-trip on every dashboard mount for
+    // the most common mobile role.
     if (profile?.role === 'staff') return
 
-    supabase
-      .from('notifications')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false })
-      .limit(20)
-      .then(({ data }) => setNotifications(data ?? []))
+    // Polling instead of realtime: a persistent realtime subscription per admin/manager
+    // tab drove ~99% of DB time via realtime.list_changes WAL polling. For the handful
+    // of non-staff users, a 60s poll gives near-real-time notifications at a fraction of
+    // the load. Removing the client subscription is what actually sheds the WAL-poll load.
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | null = null
 
-    // One channel per user session — no instanceId needed since Provider mounts once
-    const channel = supabase
-      .channel(`notifications-${userId}`)
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'notifications',
-        filter: `user_id=eq.${userId}`,
-      }, (payload) => {
-        setNotifications((prev) => [payload.new as AppNotification, ...prev.slice(0, 19)])
-      })
-      .subscribe()
+    async function fetchNotifications() {
+      const { data } = await supabase
+        .from('notifications')
+        .select('*')
+        .eq('user_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(20)
+      if (!cancelled && data) setNotifications(data)
+    }
 
-    return () => { supabase.removeChannel(channel) }
+    function schedule() {
+      // 60s ± 15% jitter so multiple admins don't all poll the same wall-clock second.
+      const delay = 60000 + (Math.random() * 2 - 1) * 9000
+      timer = setTimeout(() => {
+        // Skip the fetch while the tab is hidden; keep rescheduling so it resumes
+        // automatically when the tab is foregrounded again.
+        if (document.visibilityState === 'visible') void fetchNotifications()
+        schedule()
+      }, delay)
+    }
+
+    void fetchNotifications()   // immediate on mount
+    schedule()
+
+    // Refresh as soon as the tab becomes visible so a returning user sees current
+    // state without waiting up to a full interval.
+    function onVisibility() {
+      if (document.visibilityState === 'visible') void fetchNotifications()
+    }
+    document.addEventListener('visibilitychange', onVisibility)
+
+    return () => {
+      cancelled = true
+      if (timer) clearTimeout(timer)
+      document.removeEventListener('visibilitychange', onVisibility)
+    }
   }, [userId, supabase, profile?.role])
 
   return (

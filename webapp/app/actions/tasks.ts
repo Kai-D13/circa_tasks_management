@@ -7,7 +7,6 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { computeNextRunAt } from '@/lib/recurring'
 import { notifyTaskCreated } from '@/lib/teams/notifyTaskCreated'
-import { getEffectiveStatus } from '@/lib/dateUtils'
 import { canAdminManageOwn } from '@/lib/authz'
 
 // True when the given admin is an 'editor' collaborator on the task.
@@ -514,65 +513,26 @@ export async function submitTask(taskId: string, outputData: Record<string, unkn
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
 
-  // Fetch task + profile in parallel
-  const [{ data: task }, { data: profile }] = await Promise.all([
-    supabase
-      .from('tasks')
-      .select('created_by, title, assigned_to, store_id, resubmit_requested_at, required_outputs, deadline, status, overdue_at, assignment_mode')
-      .eq('id', taskId)
-      .single(),
-    supabase
-      .from('users')
-      .select('role, store_id')
-      .eq('id', user.id)
-      .single(),
-  ])
+  // Fetch the task for fast-fail checks + required-output validation. The submit
+  // itself (dup-check + insert result + flip to done + status event + log) runs
+  // atomically in rpc_submit_task_result under a row lock, so two store members
+  // submitting at the same time can't create duplicate results or leave the task
+  // with a result but not 'done'.
+  const { data: task } = await supabase
+    .from('tasks')
+    .select('created_by, title, required_outputs, assignment_mode')
+    .eq('id', taskId)
+    .single()
 
   if (!task) return { error: 'Task không tồn tại' }
 
-  // A staff_all parent is overview-only — results are submitted on the per-staff
-  // child tasks, never on the parent.
+  // A staff_all parent is overview-only — fast-fail with a clear message (the RPC
+  // rejects it too).
   if (task.assignment_mode === 'staff_all') {
     return { error: 'Đây là task cha — vui lòng nộp kết quả trên task con của bạn.' }
   }
 
-  // Who can submit:
-  // (a) direct assignment: task.assigned_to = user.id
-  // (b) store-level: task has no assignee, user is store_manager of that store
-  const isDirectAssignee = task.assigned_to === user.id
-  const isStoreSubmitter = task.assigned_to === null
-    && task.store_id !== null
-    && task.store_id === profile?.store_id
-    && profile?.role === 'store_manager'
-
-  if (!isDirectAssignee && !isStoreSubmitter) {
-    return { error: 'Bạn không có quyền nộp kết quả cho task này' }
-  }
-
-  // Overdue tasks are submittable. We record lateness instead of blocking: a
-  // submission counts as late when the task is effectively overdue (DB status
-  // 'overdue', or deadline passed while not done) at submit time.
-  const submittedLate =
-    getEffectiveStatus(task.deadline as string | null, task.status as string) === 'overdue'
-
-  // Duplicate check: block if a result already exists after the last resubmit request.
-  // Direct-assign: per user (same user can't double-submit).
-  // Store-level: per task (any submission from the store counts).
-  let dupQuery = supabase
-    .from('task_results')
-    .select('id')
-    .eq('task_id', taskId)
-  if (isDirectAssignee) {
-    dupQuery = dupQuery.eq('user_id', user.id)
-  }
-  if (task.resubmit_requested_at) {
-    dupQuery = dupQuery.gt('submitted_at', task.resubmit_requested_at)
-  }
-  const { data: existingList, error: dupError } = await dupQuery.limit(1)
-  if (dupError) return { error: dupError.message }
-  if ((existingList?.length ?? 0) > 0) return { error: 'Task này đã có kết quả nộp rồi' }
-
-  // Validate each required output is present
+  // Validate each required output is present (pure + race-free) before the RPC.
   const requiredOutputs = (task.required_outputs as string[]) ?? []
   const OUTPUT_LABEL_VN: Record<string, string> = {
     text: 'Ghi chú văn bản', image: 'Ảnh', video: 'Video', file: 'File đính kèm',
@@ -588,22 +548,28 @@ export async function submitTask(taskId: string, outputData: Record<string, unkn
     return { error: `Vui lòng nộp đủ: ${missing.map((t) => OUTPUT_LABEL_VN[t] ?? t).join(', ')}` }
   }
 
-  const { data: resultRow, error: resultError } = await supabase
-    .from('task_results')
-    .insert({ task_id: taskId, user_id: user.id, output_data: outputData })
-    .select('id')
-    .single()
-  if (resultError) return { error: resultError.message }
+  // Atomic core: validates submitter/role/store, blocks duplicates under a row
+  // lock, inserts the result, flips the task to done, writes the status event + log.
+  const { data: rpcData, error: rpcError } = await supabase.rpc('rpc_submit_task_result', {
+    p_task_id:     taskId,
+    p_output_data: outputData,
+  })
+  if (rpcError) return { error: rpcError.message }
+  const rpc = rpcData as { error?: string; result_id?: string; submitted_late?: boolean } | null
+  if (rpc?.error) return { error: rpc.error }
+  const resultId      = rpc?.result_id ?? null
+  const submittedLate = rpc?.submitted_late ?? false
 
-  // Link any tracked upload metadata rows to this result.
-  // fileId is stored in each ImageAttachment by MultiImageUpload (Batch D+).
-  // Best-effort: a link failure must not block the submission.
+  // ---- Best-effort side effects (outside the transaction; never block success) ----
+
+  // Link tracked upload metadata rows to this result. fileId is stored in each
+  // ImageAttachment by MultiImageUpload (Batch D+). A link failure must not block.
   const imageAtts = (outputData['image'] as Array<{ fileId?: string }> | undefined) ?? []
   const fileIds = imageAtts.map((a) => a.fileId).filter((id): id is string => !!id)
-  if (fileIds.length > 0) {
+  if (resultId && fileIds.length > 0) {
     const { error: linkErr } = await supabaseAdmin
       .from('task_uploaded_files')
-      .update({ result_id: resultRow.id, linked_at: new Date().toISOString() })
+      .update({ result_id: resultId, linked_at: new Date().toISOString() })
       .in('id', fileIds)
       .eq('task_id', taskId)
       .eq('uploaded_by', user.id)
@@ -611,53 +577,7 @@ export async function submitTask(taskId: string, outputData: Record<string, unkn
     if (linkErr) console.error('[task_uploaded_files link]', linkErr.message)
   }
 
-  // Mark the most recent open resubmit request as fulfilled now that a result exists.
-  const { data: openReq } = await supabaseAdmin
-    .from('task_resubmit_requests')
-    .select('id')
-    .eq('task_id', taskId)
-    .eq('status', 'open')
-    .order('requested_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
-
-  if (openReq) {
-    const { error: rrErr } = await supabaseAdmin.from('task_resubmit_requests').update({
-      status:              'fulfilled',
-      fulfilled_result_id: resultRow?.id ?? null,
-      fulfilled_at:        new Date().toISOString(),
-    }).eq('id', openReq.id)
-    if (rrErr) console.error('[task_resubmit_requests] fulfill on submit:', rrErr.message)
-  }
-
-  // Use admin client — staff RLS no longer allows direct UPDATE on tasks (dropped in 010).
-  // When the submission is late, stamp overdue_at (preserving an earlier cron-set value)
-  // so the "Hoàn thành trễ" marker survives the done transition.
-  const statusUpdate: { status: 'done'; overdue_at?: string } = { status: 'done' }
-  if (submittedLate) {
-    statusUpdate.overdue_at = (task.overdue_at as string | null) ?? new Date().toISOString()
-  }
-  const { error: statusError } = await supabaseAdmin
-    .from('tasks')
-    .update(statusUpdate)
-    .eq('id', taskId)
-  if (statusError) return { error: `Đã nộp kết quả nhưng không thể cập nhật trạng thái: ${statusError.message}` }
-
-  // Structured status event
-  { const { error: seErr } = await supabaseAdmin.from('task_status_events').insert({
-    task_id:     taskId,
-    from_status: task.status as string,
-    to_status:   'done',
-    actor_id:    user.id,
-    source:      profile?.role === 'store_manager' ? 'store_manager' : 'staff',
-  }); if (seErr) console.error('[task_status_events] submitTask:', seErr.message) }
-
-  await writeLog(supabase, taskId, 'submitted', user.id, {
-    output_types: Object.keys(outputData),
-    submitted_after_deadline: submittedLate,
-  })
-
-  if (task?.created_by && task.created_by !== user.id) {
+  if (task.created_by && task.created_by !== user.id) {
     await insertNotification(supabase, task.created_by, 'task_submitted', taskId,
       'Kết quả task đã được nộp',
       submittedLate
