@@ -34,6 +34,16 @@ const nextConfig: NextConfig = {
           { key: 'Cache-Control', value: 'no-cache, no-store, must-revalidate' },
         ],
       },
+      // Never let a shared cache (e.g. Cloudflare) store /login. The page embeds a
+      // per-deploy Server Action ID; serving stale cached HTML after a redeploy
+      // makes the login POST resolve to a missing action → 500. force-dynamic on
+      // the page already does this, but pin the header so no CDN overrides it.
+      {
+        source: '/login',
+        headers: [
+          { key: 'Cache-Control', value: 'no-store, must-revalidate' },
+        ],
+      },
     ]
   },
 };
