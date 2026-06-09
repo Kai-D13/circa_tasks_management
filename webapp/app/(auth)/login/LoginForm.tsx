@@ -1,6 +1,6 @@
 'use client'
 
-import { useActionState } from 'react'
+import { useActionState, useEffect, useState } from 'react'
 import { login } from '@/app/actions/auth'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -8,10 +8,24 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
 export function LoginForm() {
-  // Server action sets the Supabase auth cookies server-side and redirects on
-  // success; on failure it returns { error } which we render inline. Inline (not
-  // a toast) so it survives on mobile even if no Toaster is mounted in this route.
+  // The server action sets the Supabase auth cookies and returns { success,
+  // redirectTo }. We perform a HARD navigation (window.location) rather than a
+  // client-router push: a full top-level GET guarantees the freshly-committed
+  // auth cookie is attached and bypasses any stale logged-out router cache, which
+  // is what caused the post-login bounce back to /login. On failure the action
+  // returns { error } which we render inline (survives on mobile w/o a Toaster).
   const [state, formAction, pending] = useActionState(login, null)
+  const [redirecting, setRedirecting] = useState(false)
+
+  useEffect(() => {
+    if (state && 'success' in state && state.success) {
+      setRedirecting(true)
+      window.location.assign(state.redirectTo)
+    }
+  }, [state])
+
+  const error = state && 'error' in state ? state.error : null
+  const busy = pending || redirecting
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-muted/40">
@@ -43,11 +57,11 @@ export function LoginForm() {
                 autoComplete="current-password"
               />
             </div>
-            {state?.error && (
-              <p className="text-sm text-destructive" role="alert">{state.error}</p>
+            {error && (
+              <p className="text-sm text-destructive" role="alert">{error}</p>
             )}
-            <Button type="submit" disabled={pending} className="w-full mt-2">
-              {pending ? 'Signing in...' : 'Sign In'}
+            <Button type="submit" disabled={busy} className="w-full mt-2">
+              {busy ? 'Signing in...' : 'Sign In'}
             </Button>
           </form>
         </CardContent>
