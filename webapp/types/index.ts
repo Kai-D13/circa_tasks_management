@@ -52,7 +52,9 @@ export interface Task {
   source_template_id?: string | null
   source_schedule_id?: string | null
   scheduled_for?: string | null
-  assignment_mode?: 'store' | 'user'
+  assignment_mode?: 'store' | 'user' | 'staff_all'
+  completed_by?: string | null
+  completed_by_account?: string | null
   created_at: string
   updated_at: string
   stores?: Store
@@ -81,9 +83,13 @@ export interface TaskResult {
   id: string
   task_id: string
   user_id: string
+  performed_by: string | null
   output_data: Record<string, unknown>
   submitted_at: string
+  /** @deprecated — dùng submitter (khớp query alias submitter:users!user_id) */
   users?: Pick<UserProfile, 'id' | 'full_name' | 'email'>
+  submitter?: Pick<UserProfile, 'id' | 'full_name' | 'email'> | null
+  performer?: Pick<UserProfile, 'id' | 'full_name' | 'email'> | null
 }
 
 export interface TaskTemplate {

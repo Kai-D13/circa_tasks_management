@@ -141,7 +141,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   function buildResultsQuery() {
     const base = supabase
       .from('task_results')
-      .select('*, users(full_name)')
+      .select('*, submitter:users!user_id(full_name), performer:users!performed_by(full_name)')
       .eq('task_id', id)
       .order('submitted_at', { ascending: false })
 
@@ -485,6 +485,9 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                 <TaskSubmitForm
                   taskId={id}
                   requiredOutputs={(task.required_outputs as RequiredOutput[]) ?? []}
+                  role={userRole}
+                  isStoreLevelTask={isStoreLevelTask}
+                  storeStaff={(storeUsers ?? []).filter((u) => u.role === 'staff')}
                 />
               </CardContent>
             </Card>
@@ -504,7 +507,10 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                       id:             r.id,
                       submitted_at:   r.submitted_at,
                       output_data:    r.output_data as Record<string, unknown>,
-                      submitter_name: (r.users as unknown as { full_name: string } | null)?.full_name ?? null,
+                      submitter_name: (r.submitter as unknown as { full_name: string } | null)?.full_name ?? null,
+                      performer_name: (r.performer as unknown as { full_name: string } | null)?.full_name ?? null,
+                      submitted_by:   r.user_id as string,
+                      performed_by:   r.performed_by as string | null,
                     }}
                   />
                 ))}

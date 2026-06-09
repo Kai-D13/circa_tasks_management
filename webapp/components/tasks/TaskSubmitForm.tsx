@@ -6,13 +6,17 @@ import { submitTask } from '@/app/actions/tasks'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { FileUploadInput } from '@/components/tasks/FileUploadInput'
 import { MultiImageUpload, type ImageAttachment } from '@/components/tasks/MultiImageUpload'
-import { RequiredOutput } from '@/types'
+import { RequiredOutput, UserRole } from '@/types'
 
 interface Props {
   taskId: string
   requiredOutputs: RequiredOutput[]
+  role?: UserRole
+  isStoreLevelTask?: boolean
+  storeStaff?: { id: string; full_name: string }[]
 }
 
 const OUTPUT_LABEL: Record<RequiredOutput, string> = {
@@ -22,15 +26,20 @@ const OUTPUT_LABEL: Record<RequiredOutput, string> = {
   file:  'File đính kèm',
 }
 
-export function TaskSubmitForm({ taskId, requiredOutputs }: Props) {
+export function TaskSubmitForm({ taskId, requiredOutputs, role, isStoreLevelTask, storeStaff }: Props) {
   const [pending, startTransition] = useTransition()
-  // String outputs (text, video, file)
   const [strOutputs, setStrOutputs] = useState<Record<string, string>>({})
-  // Image output — array of attachment objects
   const [images, setImages] = useState<ImageAttachment[]>([])
+  const [performedBy, setPerformedBy] = useState<string>('')
 
   const outputList = requiredOutputs.length > 0 ? requiredOutputs : (['text'] as RequiredOutput[])
   const needsImage = outputList.includes('image')
+
+  // Store Manager submit store-level task → phải chọn staff thực hiện
+  const requiresPerformer = role === 'store_manager' && isStoreLevelTask === true
+  const hasStaff = (storeStaff?.length ?? 0) > 0
+  // Chỉ render dropdown khi có staff; nếu không có, block submit với thông báo rõ
+  const needsPerformerSelect = requiresPerformer && hasStaff
 
   function set(key: string, value: string) {
     setStrOutputs((prev) => ({ ...prev, [key]: value }))
@@ -39,7 +48,6 @@ export function TaskSubmitForm({ taskId, requiredOutputs }: Props) {
   function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
 
-    // Client-side validation
     const missingStr = outputList
       .filter((t) => t !== 'image')
       .filter((t) => !strOutputs[t]?.trim())
@@ -51,16 +59,35 @@ export function TaskSubmitForm({ taskId, requiredOutputs }: Props) {
       toast.error('Vui lòng nộp ít nhất 1 ảnh')
       return
     }
+    if (requiresPerformer && !performedBy) {
+      toast.error('Vui lòng chọn nhân viên đã thực hiện ca này')
+      return
+    }
 
-    // Build outputData: string keys stay as strings; image becomes array
     const outputData: Record<string, unknown> = { ...strOutputs }
     if (needsImage) outputData['image'] = images
 
     startTransition(async () => {
-      const result = await submitTask(taskId, outputData)
+      const result = await submitTask(
+        taskId,
+        outputData,
+        needsPerformerSelect ? performedBy : null,
+      )
       if (result?.error) toast.error(result.error)
       else toast.success('Đã nộp kết quả thành công!')
     })
+  }
+
+  // Cửa hàng chưa có nhân viên → không thể nộp bằng tài khoản cửa hàng
+  if (requiresPerformer && !hasStaff) {
+    return (
+      <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+        <p className="font-medium">Không thể nộp bằng tài khoản cửa hàng</p>
+        <p className="text-xs mt-1 text-destructive/80">
+          Cửa hàng chưa có nhân viên nào. Vui lòng yêu cầu admin thêm nhân viên trước khi nộp.
+        </p>
+      </div>
+    )
   }
 
   return (
@@ -94,7 +121,32 @@ export function TaskSubmitForm({ taskId, requiredOutputs }: Props) {
           )}
         </div>
       ))}
-      {/* Full-width on mobile, right-aligned on sm+ */}
+
+      {/* Dropdown chọn nhân viên thực hiện — chỉ hiện khi Store Manager nộp thay */}
+      {needsPerformerSelect && (
+        <div className="grid gap-1 rounded-md border border-amber-200 bg-amber-50 p-3">
+          <Label className="text-xs font-medium text-amber-900">
+            Nhân viên đã thực hiện ca này
+            <span className="text-red-500 ml-0.5">*</span>
+          </Label>
+          <p className="text-xs text-amber-700 mb-1">
+            Bạn đang nộp bằng tài khoản cửa hàng. Chọn nhân viên thực tế thực hiện để admin tracking được.
+          </p>
+          <Select value={performedBy} onValueChange={(v) => setPerformedBy(v ?? '')}>
+            <SelectTrigger className="h-9 text-sm bg-white">
+              <SelectValue placeholder="Chọn nhân viên..." />
+            </SelectTrigger>
+            <SelectContent>
+              {storeStaff!.map((s) => (
+                <SelectItem key={s.id} value={s.id}>
+                  {s.full_name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
       <div className="flex justify-end">
         <Button type="submit" disabled={pending} className="w-full sm:w-auto">
           {pending ? 'Đang nộp...' : 'Nộp kết quả'}

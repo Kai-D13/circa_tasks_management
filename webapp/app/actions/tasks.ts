@@ -508,7 +508,11 @@ export async function deleteTask(taskId: string) {
   redirect('/tasks')
 }
 
-export async function submitTask(taskId: string, outputData: Record<string, unknown>) {
+export async function submitTask(
+  taskId: string,
+  outputData: Record<string, unknown>,
+  performedBy?: string | null,
+) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
@@ -551,8 +555,9 @@ export async function submitTask(taskId: string, outputData: Record<string, unkn
   // Atomic core: validates submitter/role/store, blocks duplicates under a row
   // lock, inserts the result, flips the task to done, writes the status event + log.
   const { data: rpcData, error: rpcError } = await supabase.rpc('rpc_submit_task_result', {
-    p_task_id:     taskId,
-    p_output_data: outputData,
+    p_task_id:      taskId,
+    p_output_data:  outputData,
+    p_performed_by: performedBy ?? null,
   })
   if (rpcError) return { error: rpcError.message }
   const rpc = rpcData as { error?: string; result_id?: string; submitted_late?: boolean } | null

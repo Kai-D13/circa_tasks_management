@@ -31,6 +31,9 @@ export interface TaskResult {
   submitted_at: string
   output_data: Record<string, unknown>
   submitter_name: string | null
+  performer_name?: string | null
+  submitted_by?: string | null
+  performed_by?: string | null
 }
 
 // ── Image attachment shape (Batch 5C+: has thumbnailUrl; pre-5C: only url) ──
@@ -190,6 +193,14 @@ function imageCount(val: unknown): number {
 export function TaskResultCard({ result }: { result: TaskResult }) {
   const outputKeys = Object.keys(result.output_data)
 
+  // Ưu tiên hiển thị người thực hiện thật; fallback về tài khoản submit
+  const displayName = result.performer_name ?? result.submitter_name ?? '—'
+  // So sánh bằng ID để tránh false positive khi 2 người trùng tên
+  const showSubmitAccount =
+    result.performed_by &&
+    result.submitted_by &&
+    result.performed_by !== result.submitted_by
+
   return (
     <Dialog>
       <DialogTrigger
@@ -198,7 +209,7 @@ export function TaskResultCard({ result }: { result: TaskResult }) {
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-sm font-medium truncate">
-              {result.submitter_name ?? '—'}
+              {displayName}
             </span>
             <div className="flex gap-1 flex-wrap">
               {outputKeys.map((k) => {
@@ -224,13 +235,20 @@ export function TaskResultCard({ result }: { result: TaskResult }) {
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>
-            Kết quả nộp — {result.submitter_name ?? '—'}
+            Kết quả nộp — {displayName}
           </DialogTitle>
         </DialogHeader>
 
-        <p className="text-xs text-muted-foreground -mt-2">
-          Nộp lúc {formatDate(result.submitted_at)}
-        </p>
+        <div className="-mt-2 space-y-0.5">
+          <p className="text-xs text-muted-foreground">
+            Nộp lúc {formatDate(result.submitted_at)}
+          </p>
+          {showSubmitAccount && (
+            <p className="text-xs text-muted-foreground">
+              Tài khoản nộp: <span className="text-foreground">{result.submitter_name}</span>
+            </p>
+          )}
+        </div>
 
         <div className="space-y-4 mt-1 max-h-[60vh] overflow-y-auto pr-1">
           {outputKeys.map((key) => (
