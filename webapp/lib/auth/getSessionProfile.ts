@@ -13,19 +13,19 @@ import { createClient } from '@/lib/supabase/server'
 // pages (which need role/store_id) can both source from this single call.
 export const getSessionProfile = cache(async () => {
   const supabase = await createClient()
-  const { data: { user }, error: userErr } = await supabase.auth.getUser()
-  // TEMP DIAGNOSTIC — remove after login bounce is resolved.
-  console.log(`[AUTH-DEBUG] getSessionProfile getUser user=${user?.id ?? 'null'} err=${userErr?.message ?? 'none'}`)
+  const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { user: null, profile: null }
 
-  const { data: profile, error: profileErr } = await supabase
+  // Disambiguate the stores embed by the FK constraint name. Migration 045 added
+  // sm_store_assignments (FK to both users and stores), so a bare stores(*) embed
+  // is now ambiguous ("more than one relationship was found") and errors out —
+  // which made profile null and bounced every login back to /login. The
+  // users_store_id_fkey hint pins it to the direct users.store_id -> stores FK.
+  const { data: profile } = await supabase
     .from('users')
-    .select('*, stores(*)')
+    .select('*, stores!users_store_id_fkey(*)')
     .eq('id', user.id)
     .single()
-
-  // TEMP DIAGNOSTIC — remove after login bounce is resolved.
-  console.log(`[AUTH-DEBUG] getSessionProfile profile=${profile?.id ?? 'null'} role=${profile?.role ?? 'null'} err=${profileErr?.message ?? 'none'}`)
 
   return { user, profile }
 })

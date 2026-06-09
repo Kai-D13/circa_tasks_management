@@ -62,7 +62,9 @@ export default async function UsersPage({
 
   let query = supabase
     .from('users')
-    .select('id, email, full_name, role, store_id, created_at, stores(name)', { count: 'exact' })
+    // FK-disambiguated embed: sm_store_assignments (migration 045) added a second
+    // users<->stores relationship, so a bare stores(name) embed now errors.
+    .select('id, email, full_name, role, store_id, created_at, stores!users_store_id_fkey(name)', { count: 'exact' })
     .order('created_at', { ascending: false })
     .range(offset, offset + PAGE_SIZE - 1)
 
