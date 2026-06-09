@@ -660,7 +660,9 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                   <TaskReassignForm
                     taskId={id}
                     currentAssignedTo={task.assigned_to}
-                    storeUsers={storeUsers ?? []}
+                    storeUsers={isSmForStore
+                      ? (storeUsers ?? []).filter((u) => u.role === 'staff')
+                      : (storeUsers ?? [])}
                   />
                 ) : (
                   <p className="font-medium">

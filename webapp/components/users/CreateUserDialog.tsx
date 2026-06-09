@@ -36,15 +36,19 @@ export function CreateUserDialog({ stores }: { stores: Pick<Store, 'id' | 'name'
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault()
 
-    if (role !== 'admin' && !storeId) {
+    // SM profile may arrive from Zustand after initial render, so derive the
+    // effective role at submit time rather than relying on initialised state.
+    const effectiveRole = isSm ? 'staff' : role
+
+    if (effectiveRole !== 'admin' && !storeId) {
       toast.error('Vui lòng chọn cửa hàng cho tài khoản này')
       return
     }
 
     const formData = new FormData(e.currentTarget)
     // Inject controlled values
-    formData.set('role', role)
-    if (role !== 'admin') formData.set('store_id', storeId)
+    formData.set('role', effectiveRole)
+    if (effectiveRole !== 'admin') formData.set('store_id', storeId)
     else formData.delete('store_id')
 
     startTransition(async () => {

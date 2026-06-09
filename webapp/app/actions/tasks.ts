@@ -636,10 +636,13 @@ export async function reassignTask(taskId: string, assignedTo: string | null) {
   }
 
   // If assigning to a specific user, they must belong to the same store as the task.
+  // SM may only assign to staff (not other managers or admins).
   if (assignedTo) {
-    const { data: assignee } = await supabase.from('users').select('store_id').eq('id', assignedTo).single()
+    const { data: assignee } = await supabase.from('users').select('store_id, role').eq('id', assignedTo).single()
     if (assignee?.store_id !== reassignTask?.store_id)
       return { error: 'Người được phân công phải thuộc cùng cửa hàng với task' }
+    if (isSmForTask && assignee?.role !== 'staff')
+      return { error: 'SM chỉ được phân công task cho Nhân viên' }
   }
 
   const visibility: TaskVisibility = assignedTo ? 'private' : 'store'
@@ -1212,7 +1215,7 @@ export async function requestResubmit(taskId: string, reason?: string) {
     to_status:   'todo',
     note:        reason?.trim() || null,
     actor_id:    user.id,
-    source:      'admin',
+    source:      isSmForTask ? 'sm' : 'admin',
   }); if (seErr) console.error('[task_status_events] requestResubmit:', seErr.message) }
   await writeLog(supabase, taskId, 'resubmit_requested', user.id, {})
 
@@ -1367,17 +1370,19 @@ export async function archiveTasks(ids: string[]) {
   if (profile?.role !== 'admin' && !isSm)
     return { error: 'Không có quyền lưu trữ' }
 
-  // SM: validate every selected task belongs to their assigned stores
+  // Cascade first: build the full set of IDs (parents + any staff_all children)
+  // so the SM scope check below covers every row that will be written.
+  const { data: childRows } = await supabaseAdmin.from('tasks').select('id').in('parent_task_id', ids)
+  const allIds = childRows?.length ? [...new Set([...ids, ...childRows.map(r => r.id)])] : ids
+
+  // SM: validate the full allIds set (parents + cascaded children) are all in scope.
+  // Using allIds here prevents a bypass where a parent is in scope but its children are not.
   if (isSm) {
     const smStoreIds = await getSmStoreIds(supabase, user.id)
-    const { data: taskRows } = await supabaseAdmin.from('tasks').select('id, store_id').in('id', ids)
+    const { data: taskRows } = await supabaseAdmin.from('tasks').select('id, store_id').in('id', allIds)
     const allInScope = (taskRows ?? []).every((t) => smHasStore(smStoreIds, t.store_id as string | null))
     if (!allInScope) return { error: 'Bạn không có quyền lưu trữ task này' }
   }
-
-  // Cascade: if any selected IDs are staff_all parents, also archive their children
-  const { data: childRows } = await supabaseAdmin.from('tasks').select('id').in('parent_task_id', ids)
-  const allIds = childRows?.length ? [...new Set([...ids, ...childRows.map(r => r.id)])] : ids
 
   // Admin: RLS-scoped via supabase client (own-scope enforced by tasks_update_admin).
   // SM: no RLS UPDATE policy — must use supabaseAdmin; app-layer validation above is the gate.
@@ -1408,17 +1413,18 @@ export async function restoreTasks(ids: string[]) {
   if (profile?.role !== 'admin' && !isSm)
     return { error: 'Không có quyền khôi phục' }
 
-  // SM: validate every selected task belongs to their assigned stores
+  // Cascade first: build the full set of IDs (parents + any staff_all children)
+  // so the SM scope check below covers every row that will be written.
+  const { data: childRows } = await supabaseAdmin.from('tasks').select('id').in('parent_task_id', ids)
+  const allIds = childRows?.length ? [...new Set([...ids, ...childRows.map(r => r.id)])] : ids
+
+  // SM: validate the full allIds set (parents + cascaded children) are all in scope.
   if (isSm) {
     const smStoreIds = await getSmStoreIds(supabase, user.id)
-    const { data: taskRows } = await supabaseAdmin.from('tasks').select('id, store_id').in('id', ids)
+    const { data: taskRows } = await supabaseAdmin.from('tasks').select('id, store_id').in('id', allIds)
     const allInScope = (taskRows ?? []).every((t) => smHasStore(smStoreIds, t.store_id as string | null))
     if (!allInScope) return { error: 'Bạn không có quyền khôi phục task này' }
   }
-
-  // Cascade: if any selected IDs are staff_all parents, also restore their children
-  const { data: childRows } = await supabaseAdmin.from('tasks').select('id').in('parent_task_id', ids)
-  const allIds = childRows?.length ? [...new Set([...ids, ...childRows.map(r => r.id)])] : ids
 
   const client = isSm ? supabaseAdmin : supabase
   const { data: updated, error } = await client
