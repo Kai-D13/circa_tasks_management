@@ -238,7 +238,11 @@ export default async function TasksPage({
       continue
     }
 
-    if (!task.broadcast_id) {
+    // Staff only ever see their own store's copy of a broadcast task (RLS ensures
+    // this). Grouping into a BroadcastGroup would show a meaningless "0/1 cửa hàng"
+    // counter on mobile. Render as a plain TaskRow so the card looks identical to
+    // every other task — same status badge, deadline, submitter info.
+    if (!task.broadcast_id || isStaff) {
       const row: TaskRow = {
         type: 'task',
         task: {

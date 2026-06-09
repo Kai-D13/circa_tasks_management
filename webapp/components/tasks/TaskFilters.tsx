@@ -110,7 +110,11 @@ export function TaskFilters({ stores, currentParams, showArchived, view = 'pendi
               onClick={() => setView(v)}
               className={cn(
                 'flex-1 sm:flex-none px-4 h-8 rounded-md text-sm font-medium transition-colors',
-                view === v ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground',
+                view === v
+                  ? v === 'pending'
+                    ? 'bg-primary text-primary-foreground shadow-sm'
+                    : 'bg-green-600 text-white shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground',
               )}
             >
               {v === 'pending' ? 'Chờ thực hiện' : 'Hoàn thành'}
