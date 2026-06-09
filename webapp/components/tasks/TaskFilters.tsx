@@ -57,15 +57,18 @@ export function TaskFilters({ stores, currentParams, showArchived, view = 'pendi
 
   // Switch the primary view tab. Going to "done" drops the status sub-filter
   // (done view ignores it) and resets to page 1; "pending" is the default so it's
-  // omitted from the URL. Priority/store/category carry over.
+  // omitted from the URL. Priority/store/category carry over — except for Staff,
+  // who never see those filters, so we keep their URL clean (view only).
   function setView(v: 'pending' | 'done') {
     const params = new URLSearchParams()
     if (v === 'done') params.set('view', 'done')
-    ;(['priority', 'store_id', 'category'] as const).forEach((k) => {
-      if (currentParams[k]) params.set(k, currentParams[k]!)
-    })
-    if (v === 'pending' && currentParams.status && currentParams.status !== 'done') {
-      params.set('status', currentParams.status)
+    if (!isStaff) {
+      ;(['priority', 'store_id', 'category'] as const).forEach((k) => {
+        if (currentParams[k]) params.set(k, currentParams[k]!)
+      })
+      if (v === 'pending' && currentParams.status && currentParams.status !== 'done') {
+        params.set('status', currentParams.status)
+      }
     }
     const qs = params.toString()
     router.push(qs ? `${pathname}?${qs}` : pathname)
