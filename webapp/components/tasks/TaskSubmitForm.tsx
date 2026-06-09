@@ -134,7 +134,9 @@ export function TaskSubmitForm({ taskId, requiredOutputs, role, isStoreLevelTask
           </p>
           <Select value={performedBy} onValueChange={(v) => setPerformedBy(v ?? '')}>
             <SelectTrigger className="h-9 text-sm bg-white">
-              <SelectValue placeholder="Chọn nhân viên..." />
+              <SelectValue>
+                {storeStaff?.find((s) => s.id === performedBy)?.full_name ?? 'Chọn nhân viên...'}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {storeStaff!.map((s) => (

@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Button } from '@/components/ui/button'
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
 import { TaskPriorityBadge } from '@/components/tasks/TaskPriorityBadge'
-import { formatDate, formatDateTime, getEffectiveStatus } from '@/lib/dateUtils'
+import { formatDate, formatShiftTime, getEffectiveStatus } from '@/lib/dateUtils'
 import { Radio, Archive, ArchiveRestore, ChevronRight, ChevronDown, Users } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Task, TaskCategory } from '@/types'
@@ -105,7 +105,7 @@ interface Props {
 //   else                -> "Chưa phân công"
 function getSubmitterDisplay(task: TaskRow['task']): { primary: string; sub: string | null } {
   const isStoreLevel = task.assignment_mode === 'store' && task.assigned_to === null
-  const submitSub = task.completed_at ? `Nộp ${formatDateTime(task.completed_at)}` : null
+  const submitSub = task.completed_at ? formatShiftTime(task.completed_at) : null
   if (isStoreLevel) {
     if (task.status === 'done' && task.completed_by_user)
       return { primary: `Đã nộp: ${task.completed_by_user.full_name}`, sub: submitSub }

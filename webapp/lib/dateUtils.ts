@@ -1,5 +1,28 @@
 const VN_TZ = 'Asia/Ho_Chi_Minh'
 
+// Lấy giờ VN local từ UTC timestamp — dùng internal so không phụ thuộc locale rendering
+function vnHour(dateStr: string): number {
+  return new Date(new Date(dateStr).getTime() + 7 * 60 * 60 * 1000).getUTCHours()
+}
+
+export function getWorkShift(dateStr: string): 'Ca 1' | 'Ca 2' | 'Ca 3' {
+  const h = vnHour(dateStr)
+  if (h >= 6 && h < 14) return 'Ca 1'
+  if (h >= 14 && h < 22) return 'Ca 2'
+  return 'Ca 3'
+}
+
+// compact=false (default): "Ca 2 · Nộp 15:54 09/06/2026" — dialog, list subtext
+// compact=true:            "Ca 2 · 15:54 09/06/2026"      — card trigger, badge
+export function formatShiftTime(dateStr: string, compact = false): string {
+  const time = new Date(dateStr).toLocaleTimeString('vi-VN', {
+    hour: '2-digit', minute: '2-digit', hour12: false, timeZone: VN_TZ,
+  })
+  const shift = getWorkShift(dateStr)
+  const date  = formatDate(dateStr)
+  return compact ? `${shift} · ${time} ${date}` : `${shift} · Nộp ${time} ${date}`
+}
+
 export function formatDistanceToNow(dateStr: string): string {
   const date = new Date(dateStr)
   const now = new Date()

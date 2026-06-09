@@ -8,7 +8,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { formatDate } from '@/lib/dateUtils'
+import { formatShiftTime } from '@/lib/dateUtils'
 import { Eye, X, ChevronLeft, ChevronRight } from 'lucide-react'
 
 export const OUTPUT_LABEL: Record<string, string> = {
@@ -226,7 +226,7 @@ export function TaskResultCard({ result }: { result: TaskResult }) {
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0 text-muted-foreground">
-            <span className="text-xs">{formatDate(result.submitted_at)}</span>
+            <span className="text-xs">{formatShiftTime(result.submitted_at, true)}</span>
             <Eye className="h-3.5 w-3.5" />
           </div>
         </div>
@@ -240,9 +240,7 @@ export function TaskResultCard({ result }: { result: TaskResult }) {
         </DialogHeader>
 
         <div className="-mt-2 space-y-0.5">
-          <p className="text-xs text-muted-foreground">
-            Nộp lúc {formatDate(result.submitted_at)}
-          </p>
+          <p className="text-xs text-muted-foreground">{formatShiftTime(result.submitted_at)}</p>
           {showSubmitAccount && (
             <p className="text-xs text-muted-foreground">
               Tài khoản nộp: <span className="text-foreground">{result.submitter_name}</span>
