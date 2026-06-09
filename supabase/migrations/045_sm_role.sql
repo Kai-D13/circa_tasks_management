@@ -20,6 +20,7 @@
 --   DROP FUNCTION is_sm_for_store(uuid);
 --   DROP POLICY tasks_select_sm ON tasks; (and all sm policies below)
 --   Restore old tuf_select from migration 038.
+--   Restore task_status_events.source CHECK to the 027 set (without 'sm').
 -- ============================================================
 
 BEGIN;
@@ -36,6 +37,9 @@ CREATE TABLE IF NOT EXISTS public.sm_store_assignments (
   sm_user_id  uuid        NOT NULL REFERENCES public.users(id)  ON DELETE CASCADE,
   store_id    uuid        NOT NULL REFERENCES public.stores(id) ON DELETE CASCADE,
   assigned_at timestamptz NOT NULL DEFAULT now(),
+  -- Audit: which admin granted this store to the SM. SET NULL so removing the
+  -- granting admin's account doesn't cascade-delete the assignment itself.
+  assigned_by uuid        REFERENCES public.users(id) ON DELETE SET NULL,
   PRIMARY KEY (sm_user_id, store_id)
 );
 
@@ -234,10 +238,22 @@ CREATE POLICY "tse_select_sm" ON public.task_status_events
   );
 
 
+-- ── 14. task_status_events.source: allow 'sm' ──────────────────────────────
+-- requestResubmit (and future SM-driven transitions) writes source='sm'.
+-- The original CHECK from migration 027 only allowed admin/staff/store_manager/
+-- cron/system, so an SM resubmit would silently fail the status-event insert
+-- and leave reporting/audit incomplete. Extend the allowed set here.
+ALTER TABLE public.task_status_events
+  DROP CONSTRAINT IF EXISTS task_status_events_source_check;
+ALTER TABLE public.task_status_events
+  ADD CONSTRAINT task_status_events_source_check
+  CHECK (source IN ('admin', 'staff', 'store_manager', 'sm', 'cron', 'system'));
+
+
 -- ── Migration tracking ───────────────────────────────────────────────────────
 INSERT INTO public.app_migrations (version, name, notes)
 VALUES ('045', 'sm_role',
-        'SM role: sm_store_assignments table + RLS, is_sm_for_store() helper, SM SELECT policies on tasks/results/logs/uploads/notes/feedback/broadcasts/resubmit/events')
+        'SM role: sm_store_assignments table (+assigned_by) + RLS, is_sm_for_store() helper, SM SELECT policies on tasks/results/logs/uploads/notes/feedback/broadcasts/resubmit/events, task_status_events.source allows sm')
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;
@@ -268,3 +284,13 @@ NOTIFY pgrst, 'reload schema';
 -- SELECT proname, prosecdef FROM pg_proc
 -- WHERE proname = 'is_sm_for_store';
 -- expect: 1 row, prosecdef = true
+--
+-- 5) task_status_events.source CHECK includes 'sm':
+-- SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint
+-- WHERE conrelid = 'public.task_status_events'::regclass AND conname LIKE '%source%';
+-- expect: source IN ('admin','staff','store_manager','sm','cron','system')
+--
+-- 6) assigned_by column exists on sm_store_assignments:
+-- SELECT column_name FROM information_schema.columns
+-- WHERE table_name = 'sm_store_assignments' AND column_name = 'assigned_by';
+-- expect: 1 row
