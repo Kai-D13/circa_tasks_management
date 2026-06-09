@@ -9,7 +9,7 @@ import { ResetPasswordDialog } from '@/components/users/ResetPasswordDialog'
 import { UserFilters } from '@/components/users/UserFilters'
 import { Pagination } from '@/components/common/Pagination'
 import { formatDate } from '@/lib/dateUtils'
-import { isSuperAdminEmail } from '@/lib/authz'
+import { isSuperAdminEmail, getSmStoreIds } from '@/lib/authz'
 import { AlertTriangle } from 'lucide-react'
 
 const PAGE_SIZE = 30
@@ -18,12 +18,14 @@ const ROLE_COLORS: Record<string, string> = {
   admin:         'bg-red-100 text-red-700',
   store_manager: 'bg-blue-100 text-blue-700',
   staff:         'bg-green-100 text-green-700',
+  sm:            'bg-purple-100 text-purple-700',
 }
 
 const ROLE_LABELS: Record<string, string> = {
   admin:         'Admin',
   store_manager: 'Quản lý',
   staff:         'Nhân viên',
+  sm:            'SM',
 }
 
 export default async function UsersPage({
@@ -39,9 +41,21 @@ export default async function UsersPage({
   const { data: profile } = await supabase
     .from('users').select('role').eq('id', user.id).single()
 
-  if (profile?.role !== 'admin') redirect('/dashboard')
+  const isSm = profile?.role === 'sm'
+  if (profile?.role !== 'admin' && !isSm) redirect('/dashboard')
 
   const isSuper = isSuperAdminEmail(user.email)
+
+  // SM: pre-load assigned store IDs for filtering
+  const smStoreIds = isSm ? await getSmStoreIds(supabase, user.id) : []
+  if (isSm && smStoreIds.length === 0) {
+    return (
+      <div className="p-4 space-y-4">
+        <h1 className="text-xl font-semibold">Người dùng</h1>
+        <p className="text-sm text-muted-foreground">Chưa được phân công cửa hàng nào. Vui lòng liên hệ Admin.</p>
+      </div>
+    )
+  }
 
   const page   = Math.max(1, parseInt(params.page ?? '1', 10) || 1)
   const offset = (page - 1) * PAGE_SIZE
@@ -52,10 +66,15 @@ export default async function UsersPage({
     .order('created_at', { ascending: false })
     .range(offset, offset + PAGE_SIZE - 1)
 
-  if (params.role) query = query.eq('role', params.role)
-  if (params.store_id) query = query.eq('store_id', params.store_id)
-  // Admins legitimately have no store, so exclude them from the missing-store filter.
-  if (params.missing_store === 'true') query = query.is('store_id', null).neq('role', 'admin')
+  // SM: only see staff in their assigned stores
+  if (isSm) {
+    query = query.eq('role', 'staff').in('store_id', smStoreIds)
+  } else {
+    if (params.role) query = query.eq('role', params.role)
+    if (params.store_id) query = query.eq('store_id', params.store_id)
+    // Admins legitimately have no store, so exclude them from the missing-store filter.
+    if (params.missing_store === 'true') query = query.is('store_id', null).neq('role', 'admin')
+  }
 
   if (params.q) {
     // Sanitize before building the PostgREST or-filter: strip the characters that
@@ -66,7 +85,9 @@ export default async function UsersPage({
 
   const [{ data: users, count }, { data: stores }] = await Promise.all([
     query,
-    supabase.from('stores').select('id, name, code').order('name'),
+    isSm
+      ? supabase.from('stores').select('id, name, code').in('id', smStoreIds).order('name')
+      : supabase.from('stores').select('id, name, code').order('name'),
   ])
 
   const totalRows  = count ?? 0
@@ -95,11 +116,13 @@ export default async function UsersPage({
   return (
     <div className="p-4 space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Quản lý người dùng</h1>
+        <h1 className="text-xl font-semibold">
+          {isSm ? 'Nhân viên cửa hàng' : 'Quản lý người dùng'}
+        </h1>
         <CreateUserDialog stores={stores ?? []} />
       </div>
 
-      <UserFilters stores={stores ?? []} currentParams={params} />
+      {!isSm && <UserFilters stores={stores ?? []} currentParams={params} />}
 
       <Card>
         <CardContent className="p-0">
@@ -125,7 +148,7 @@ export default async function UsersPage({
                     </Badge>
                   </TableCell>
                   <TableCell className="text-sm">
-                    {u.role !== 'admin' && !u.store_id ? (
+                    {u.role !== 'admin' && u.role !== 'sm' && !u.store_id ? (
                       <span className="flex items-center gap-1 text-amber-600">
                         <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                         <span>Chưa có cửa hàng</span>
@@ -141,7 +164,7 @@ export default async function UsersPage({
                   </TableCell>
                   <TableCell>
                     {/* Edit / reset password: super admin only */}
-                    {isSuper ? (
+                    {isSuper && !isSm ? (
                       <div className="flex items-center gap-1">
                         <EditUserDialog
                           userId={u.id}

@@ -23,11 +23,13 @@ const ROLE_LABEL: Record<string, string> = {
 }
 
 export function CreateUserDialog({ stores }: { stores: Pick<Store, 'id' | 'name'>[] }) {
-  const isSuper = isSuperAdminEmail(useUserStore((s) => s.profile)?.email)
+  const profile  = useUserStore((s) => s.profile)
+  const isSuper  = isSuperAdminEmail(profile?.email)
+  const isSm     = profile?.role === 'sm'
   const [open, setOpen] = useState(false)
   const [pending, startTransition] = useTransition()
-  // Sub-admins may only create store managers; the super admin, any role.
-  const [role, setRole]       = useState(isSuper ? 'staff' : 'store_manager')
+  // SM: staff only. Sub-admins: store_manager only. Super admin: any role.
+  const [role, setRole]       = useState(isSm ? 'staff' : isSuper ? 'staff' : 'store_manager')
   const [storeId, setStoreId] = useState('')
 
 
@@ -83,16 +85,20 @@ export function CreateUserDialog({ stores }: { stores: Pick<Store, 'id' | 'name'
           </div>
           <div className="grid gap-1.5">
             <Label>Phân quyền *</Label>
-            <Select value={role} onValueChange={(v) => { if (v) { setRole(v); setStoreId('') } }}>
-              <SelectTrigger>
-                <SelectValue>{ROLE_LABEL[role]}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {isSuper && <SelectItem value="staff">Staff</SelectItem>}
-                <SelectItem value="store_manager">Store Manager</SelectItem>
-                {isSuper && <SelectItem value="admin">Admin</SelectItem>}
-              </SelectContent>
-            </Select>
+            {isSm ? (
+              <p className="text-sm text-muted-foreground">Nhân viên (Staff)</p>
+            ) : (
+              <Select value={role} onValueChange={(v) => { if (v) { setRole(v); setStoreId('') } }}>
+                <SelectTrigger>
+                  <SelectValue>{ROLE_LABEL[role]}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  {isSuper && <SelectItem value="staff">Staff</SelectItem>}
+                  <SelectItem value="store_manager">Store Manager</SelectItem>
+                  {isSuper && <SelectItem value="admin">Admin</SelectItem>}
+                </SelectContent>
+              </Select>
+            )}
           </div>
           {role !== 'admin' && (
             <div className="grid gap-1.5">

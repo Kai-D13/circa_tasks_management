@@ -10,6 +10,7 @@ import { formatDateTime } from '@/lib/dateUtils'
 import { LogFilters, type LogFilterParams } from '@/components/logs/LogFilters'
 import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { LOGS_PAGE_SIZE, ACTION_COLORS, ACTION_LABELS, formatMeta } from '@/lib/logs/constants'
+import { getSmStoreIds } from '@/lib/authz'
 
 type Meta = Record<string, unknown>
 type LogTask = { id: string; title: string; store_id: string | null; source_schedule_id: string | null; stores: { name: string } | null }
@@ -38,6 +39,17 @@ export default async function LogsPage({
   const isAdmin   = profile?.role === 'admin'
   const isManager = profile?.role === 'store_manager'
   const isStaff   = profile?.role === 'staff'
+  const isSm      = profile?.role === 'sm'
+
+  const smStoreIds = isSm ? await getSmStoreIds(supabase, user.id) : []
+  if (isSm && smStoreIds.length === 0) {
+    return (
+      <div className="p-4 space-y-4">
+        <h1 className="text-xl font-semibold">Nhật ký hoạt động</h1>
+        <p className="text-sm text-muted-foreground">Chưa được phân công cửa hàng nào. Vui lòng liên hệ Admin.</p>
+      </div>
+    )
+  }
 
   const page = Math.max(1, parseInt(params.page ?? '1', 10))
   const from = (page - 1) * LOGS_PAGE_SIZE
@@ -45,7 +57,7 @@ export default async function LogsPage({
 
   // A joined task is required when filtering by store / task type / title search.
   // store_manager ignores any store_id param (RLS already scopes to their store).
-  const storeFilter = isAdmin ? params.store_id : undefined
+  const storeFilter = (isAdmin || isSm) ? params.store_id : undefined
   const needsTaskJoin = !!(storeFilter || params.task_type || params.q)
   const taskEmbed = needsTaskJoin
     ? 'tasks!inner(id, title, store_id, source_schedule_id, stores(name))'
@@ -58,7 +70,7 @@ export default async function LogsPage({
     .range(from, to)
 
   // Staff: own logs only (narrower than RLS)
-  if (profile?.role === 'staff') logsQuery = logsQuery.eq('user_id', user.id)
+  if (isStaff) logsQuery = logsQuery.eq('user_id', user.id)
 
   if (params.action)  logsQuery = logsQuery.eq('action', params.action)
   if (params.user_id) logsQuery = logsQuery.eq('user_id', params.user_id)
@@ -70,16 +82,22 @@ export default async function LogsPage({
   if (params.task_type === 'recurring') logsQuery = logsQuery.not('tasks.source_schedule_id', 'is', null)
   if (params.task_type === 'adhoc')     logsQuery = logsQuery.is('tasks.source_schedule_id', null)
 
-  // Dropdown data: stores (admin only), users (admin: all; manager: own store)
+  // Dropdown data: stores (admin/SM), users (admin: all; manager/SM: their store(s))
   const usersQuery = isAdmin
     ? supabase.from('users').select('id, full_name').order('full_name')
-    : isManager && profile?.store_id
+    : (isManager && profile?.store_id)
       ? supabase.from('users').select('id, full_name').eq('store_id', profile.store_id).order('full_name')
-      : Promise.resolve({ data: [] as { id: string; full_name: string }[] })
+      : isSm
+        ? supabase.from('users').select('id, full_name').in('store_id', smStoreIds).order('full_name')
+        : Promise.resolve({ data: [] as { id: string; full_name: string }[] })
 
   const [{ data: logs, count }, { data: stores }, { data: users }, { data: managerStore }] = await Promise.all([
     logsQuery,
-    isAdmin ? supabase.from('stores').select('id, name').order('name') : Promise.resolve({ data: [] }),
+    isAdmin
+      ? supabase.from('stores').select('id, name').order('name')
+      : isSm
+        ? supabase.from('stores').select('id, name').in('id', smStoreIds).order('name')
+        : Promise.resolve({ data: [] as { id: string; name: string }[] }),
     usersQuery,
     isManager && profile?.store_id
       ? supabase.from('stores').select('name').eq('id', profile.store_id).single()
@@ -100,7 +118,7 @@ export default async function LogsPage({
 
       <LogFilters
         params={params}
-        isAdmin={isAdmin}
+        isAdmin={isAdmin || isSm}
         stores={stores ?? []}
         users={users ?? []}
         managerStoreName={(managerStore as { name: string } | null)?.name ?? null}

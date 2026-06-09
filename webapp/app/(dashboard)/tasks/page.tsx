@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
+import { getSmStoreIds } from '@/lib/authz'
 import { buttonVariants } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { TaskFilters } from '@/components/tasks/TaskFilters'
@@ -29,6 +30,10 @@ export default async function TasksPage({
 
   const { profile } = await getSessionProfile()
   const isStaff = profile?.role === 'staff'
+  const isSm    = profile?.role === 'sm'
+
+  // SM: load assigned store IDs upfront (single query; used for filtering tasks + stores)
+  const smStoreIds = isSm ? await getSmStoreIds(supabase, profile!.id) : []
 
   // Staff must never see archived tasks and must not have filter params honoured —
   // an old link like /tasks?priority=urgent would silently hide tasks, making users
@@ -57,6 +62,15 @@ export default async function TasksPage({
   // type level (a variable would collapse to a ParserError type).
   const needsCompleted = showArchived || view === 'done'
   const countOpt = isStaff ? undefined : { count: 'exact' as const }
+  // SM with no assigned stores: skip query entirely
+  if (isSm && smStoreIds.length === 0) {
+    return (
+      <div className="p-4 space-y-4">
+        <h1 className="text-xl font-semibold">Danh sách Tasks</h1>
+        <p className="text-sm text-muted-foreground">Chưa được phân công cửa hàng nào. Vui lòng liên hệ Admin.</p>
+      </div>
+    )
+  }
   let query = needsCompleted
     ? supabase.from('tasks').select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, completed_by, completed_at, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), completed_by_user:users!completed_by(full_name)', countOpt)
     : supabase.from('tasks').select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name)', countOpt)
@@ -107,12 +121,14 @@ export default async function TasksPage({
   if (!isStaff && params.priority) query = query.eq('priority', params.priority)
   if (!isStaff && params.store_id) query = query.eq('store_id', params.store_id)
   if (!isStaff && params.category) query = query.eq('category', params.category)
+  // SM: scope to assigned stores (RLS SELECT policy is the gate; this is the app-layer filter)
+  if (isSm) query = query.in('store_id', smStoreIds)
 
-  // For admin/manager in the pending view with no status sub-filter: exclude
+  // For admin/manager/sm in the pending view with no status sub-filter: exclude
   // staff_all children from the paginated count so the page count isn't inflated by
   // N children per parent. Children are fetched separately and appended. In the done
   // view, parents are never 'done', so done children show standalone — no folding.
-  const topLevelOnly = (profile?.role === 'admin' || profile?.role === 'store_manager')
+  const topLevelOnly = (profile?.role === 'admin' || profile?.role === 'store_manager' || isSm)
     && view === 'pending' && !params.status
   if (topLevelOnly) query = query.is('parent_task_id', null)
 
@@ -122,7 +138,9 @@ export default async function TasksPage({
     query,
     isStaff
       ? Promise.resolve({ data: [] as { id: string; name: string }[] })
-      : supabase.from('stores').select('id, name').order('name'),
+      : isSm
+        ? supabase.from('stores').select('id, name').in('id', smStoreIds).order('name')
+        : supabase.from('stores').select('id, name').order('name'),
   ])
 
   const totalRows  = count ?? 0
@@ -133,8 +151,8 @@ export default async function TasksPage({
 
   const storesForFilter = isStaff ? [] : (stores ?? [])
   const canCreate  = profile?.role === 'admin'
-  const canArchive = !showArchived && profile?.role === 'admin'
-  const canRestore = showArchived  && profile?.role === 'admin'
+  const canArchive = !showArchived && (profile?.role === 'admin' || isSm)
+  const canRestore = showArchived  && (profile?.role === 'admin' || isSm)
 
   // Fetch children for staff_all parents on this page (excluded from paginated query).
   let extraChildren: NonNullable<typeof tasks> = []
@@ -150,6 +168,7 @@ export default async function TasksPage({
         .select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name)')
         .in('parent_task_id', parentIds)
         .order('created_at', { ascending: true })
+      if (isSm) childQ = childQ.in('store_id', smStoreIds)
       if (showArchived) childQ = childQ.not('archived_at', 'is', null)
       else              childQ = childQ.is('archived_at', null)
       const { data: childData } = await childQ

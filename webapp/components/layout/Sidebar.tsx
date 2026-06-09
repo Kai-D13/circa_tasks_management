@@ -27,12 +27,14 @@ const ROLE_COLORS: Record<string, string> = {
   admin:         'bg-orange-100 text-orange-700',
   store_manager: 'bg-blue-100 text-blue-700',
   staff:         'bg-green-100 text-green-700',
+  sm:            'bg-purple-100 text-purple-700',
 }
 
 const ROLE_LABELS: Record<string, string> = {
   admin:         'Admin',
   store_manager: 'Quản lý',
   staff:         'Nhân viên',
+  sm:            'SM',
 }
 
 export function Sidebar() {
@@ -52,13 +54,13 @@ export function Sidebar() {
   // fetch large RSC payloads in the background. First-click latency is negligible
   // since these are server-rendered with a fast DB query.
   const navItems = [
-    { href: '/dashboard',        label: 'Tổng quan',   icon: LayoutDashboard, roles: ['admin', 'store_manager'], prefetch: false },
-    { href: '/tasks',            label: 'Tasks',        icon: CheckSquare,     roles: ['admin', 'store_manager', 'staff'], prefetch: false },
-    { href: '/tasks/schedules',  label: 'Định kỳ',     icon: CalendarClock,   roles: ['admin'],                          prefetch: false },
-    { href: '/users',            label: 'Người dùng',   icon: Users,           roles: ['admin'],                          prefetch: false },
-    { href: '/stores',           label: 'Cửa hàng',     icon: Store,           roles: ['admin', 'store_manager'],         prefetch: false },
-    { href: '/prescriptions',    label: 'Toa thuốc',    icon: FileImage,       roles: ['admin', 'store_manager', 'staff'], prefetch: false },
-    { href: '/logs',             label: 'Nhật ký',      icon: ScrollText,      roles: ['admin', 'store_manager', 'staff'], prefetch: false },
+    { href: '/dashboard',        label: 'Tổng quan',   icon: LayoutDashboard, roles: ['admin', 'store_manager', 'sm'],        prefetch: false },
+    { href: '/tasks',            label: 'Tasks',        icon: CheckSquare,     roles: ['admin', 'store_manager', 'staff', 'sm'], prefetch: false },
+    { href: '/tasks/schedules',  label: 'Định kỳ',     icon: CalendarClock,   roles: ['admin'],                                 prefetch: false },
+    { href: '/users',            label: 'Người dùng',   icon: Users,           roles: ['admin', 'sm'],                           prefetch: false },
+    { href: '/stores',           label: 'Cửa hàng',     icon: Store,           roles: ['admin', 'store_manager', 'sm'],          prefetch: false },
+    { href: '/prescriptions',    label: 'Toa thuốc',    icon: FileImage,       roles: ['admin', 'store_manager', 'staff'],       prefetch: false },
+    { href: '/logs',             label: 'Nhật ký',      icon: ScrollText,      roles: ['admin', 'store_manager', 'staff', 'sm'], prefetch: false },
   ]
 
   const visibleItems = role

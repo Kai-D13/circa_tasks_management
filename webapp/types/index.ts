@@ -1,4 +1,4 @@
-export type UserRole = 'admin' | 'store_manager' | 'staff'
+export type UserRole = 'admin' | 'store_manager' | 'staff' | 'sm'
 export type TaskPriority = 'urgent' | 'normal'
 export type TaskStatus = 'todo' | 'in_progress' | 'done' | 'overdue'
 export type TaskVisibility = 'public' | 'store' | 'private'

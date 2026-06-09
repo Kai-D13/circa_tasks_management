@@ -7,7 +7,7 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { computeNextRunAt } from '@/lib/recurring'
 import { notifyTaskCreated } from '@/lib/teams/notifyTaskCreated'
-import { canAdminManageOwn } from '@/lib/authz'
+import { canAdminManageOwn, getSmStoreIds, smHasStore } from '@/lib/authz'
 
 // True when the given admin is an 'editor' collaborator on the task.
 // Used by addReviewNote + requestResubmit to accept collaborator editors.
@@ -605,12 +605,20 @@ export async function reassignTask(taskId: string, assignedTo: string | null) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
 
-  // Admin-only + own-scope: reassigning is a task-management action.
+  // Admin + own-scope, OR SM for tasks in their assigned stores.
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
-  const { data: reassignTask } = await supabase.from('tasks')
+  const isSm = profile?.role === 'sm'
+  const { data: reassignTask } = await supabaseAdmin.from('tasks')
     .select('created_by, store_id, status, completed_by, resubmit_requested_at')
     .eq('id', taskId).single()
-  if (!canAdminManageOwn({ email: user.email, role: profile?.role, createdBy: reassignTask?.created_by, userId: user.id }))
+
+  const isAdminOwner = canAdminManageOwn({ email: user.email, role: profile?.role, createdBy: reassignTask?.created_by, userId: user.id })
+  let isSmForTask = false
+  if (isSm) {
+    const smStoreIds = await getSmStoreIds(supabase, user.id)
+    isSmForTask = smHasStore(smStoreIds, reassignTask?.store_id as string | null)
+  }
+  if (!isAdminOwner && !isSmForTask)
     return { error: 'Không có quyền phân công task này' }
 
   // Block reassign once the task has a valid submission. Gate on the submission
@@ -636,7 +644,9 @@ export async function reassignTask(taskId: string, assignedTo: string | null) {
 
   const visibility: TaskVisibility = assignedTo ? 'private' : 'store'
 
-  const { error } = await supabase
+  // SM has no RLS UPDATE policy — use supabaseAdmin after app-layer validation above.
+  const updateClient = isSmForTask ? supabaseAdmin : supabase
+  const { error } = await updateClient
     .from('tasks')
     .update({ assigned_to: assignedTo, visibility })
     .eq('id', taskId)
@@ -1127,17 +1137,23 @@ export async function requestResubmit(taskId: string, reason?: string) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
 
-  // Requesting resubmit is a review action — task owner / super admin OR editor collaborator.
+  // Requesting resubmit: task owner/super admin OR editor collaborator OR SM for their stores.
   const { data: profile } = await supabase
     .from('users').select('role').eq('id', user.id).single()
-  const { data: task } = await supabase
+  const { data: task } = await supabaseAdmin
     .from('tasks').select('created_by, assigned_to, title, store_id, deadline, status').eq('id', taskId).single()
+  const isSm = profile?.role === 'sm'
   const isOwnerR = canAdminManageOwn({ email: user.email, role: profile?.role, createdBy: task?.created_by, userId: user.id })
-  if (!isOwnerR && !(await isCollaboratorEditor(supabase, user.id, taskId)))
+  let isSmForTask = false
+  if (isSm) {
+    const smStoreIds = await getSmStoreIds(supabase, user.id)
+    isSmForTask = smHasStore(smStoreIds, task?.store_id as string | null)
+  }
+  if (!isOwnerR && !isSmForTask && !(await isCollaboratorEditor(supabase, user.id, taskId)))
     return { error: 'Không có quyền yêu cầu làm lại task này' }
 
   // Ensure task actually has results before allowing resubmit request
-  const { count: resultCount } = await supabase
+  const { count: resultCount } = await supabaseAdmin
     .from('task_results')
     .select('id', { count: 'exact', head: true })
     .eq('task_id', taskId)
@@ -1345,17 +1361,28 @@ export async function archiveTasks(ids: string[]) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Chưa đăng nhập' }
 
-  // Admin-only. Own-scope is enforced by RLS (tasks_update_admin): a sub-admin's
-  // update only affects their own tasks; super admin affects any.
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
-  if (profile?.role !== 'admin')
+  const isSm = profile?.role === 'sm'
+
+  if (profile?.role !== 'admin' && !isSm)
     return { error: 'Không có quyền lưu trữ' }
 
+  // SM: validate every selected task belongs to their assigned stores
+  if (isSm) {
+    const smStoreIds = await getSmStoreIds(supabase, user.id)
+    const { data: taskRows } = await supabaseAdmin.from('tasks').select('id, store_id').in('id', ids)
+    const allInScope = (taskRows ?? []).every((t) => smHasStore(smStoreIds, t.store_id as string | null))
+    if (!allInScope) return { error: 'Bạn không có quyền lưu trữ task này' }
+  }
+
   // Cascade: if any selected IDs are staff_all parents, also archive their children
-  const { data: childRows } = await supabase.from('tasks').select('id').in('parent_task_id', ids)
+  const { data: childRows } = await supabaseAdmin.from('tasks').select('id').in('parent_task_id', ids)
   const allIds = childRows?.length ? [...new Set([...ids, ...childRows.map(r => r.id)])] : ids
 
-  const { data: updated, error } = await supabase
+  // Admin: RLS-scoped via supabase client (own-scope enforced by tasks_update_admin).
+  // SM: no RLS UPDATE policy — must use supabaseAdmin; app-layer validation above is the gate.
+  const client = isSm ? supabaseAdmin : supabase
+  const { data: updated, error } = await client
     .from('tasks')
     .update({ archived_at: new Date().toISOString() })
     .in('id', allIds)
@@ -1375,16 +1402,26 @@ export async function restoreTasks(ids: string[]) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Chưa đăng nhập' }
 
-  // Admin-only. Own-scope enforced by RLS (tasks_update_admin).
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
-  if (profile?.role !== 'admin')
+  const isSm = profile?.role === 'sm'
+
+  if (profile?.role !== 'admin' && !isSm)
     return { error: 'Không có quyền khôi phục' }
 
+  // SM: validate every selected task belongs to their assigned stores
+  if (isSm) {
+    const smStoreIds = await getSmStoreIds(supabase, user.id)
+    const { data: taskRows } = await supabaseAdmin.from('tasks').select('id, store_id').in('id', ids)
+    const allInScope = (taskRows ?? []).every((t) => smHasStore(smStoreIds, t.store_id as string | null))
+    if (!allInScope) return { error: 'Bạn không có quyền khôi phục task này' }
+  }
+
   // Cascade: if any selected IDs are staff_all parents, also restore their children
-  const { data: childRows } = await supabase.from('tasks').select('id').in('parent_task_id', ids)
+  const { data: childRows } = await supabaseAdmin.from('tasks').select('id').in('parent_task_id', ids)
   const allIds = childRows?.length ? [...new Set([...ids, ...childRows.map(r => r.id)])] : ids
 
-  const { data: updated, error } = await supabase
+  const client = isSm ? supabaseAdmin : supabase
+  const { data: updated, error } = await client
     .from('tasks')
     .update({ archived_at: null })
     .in('id', allIds)

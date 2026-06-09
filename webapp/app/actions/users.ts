@@ -3,7 +3,7 @@
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
-import { isSuperAdminEmail } from '@/lib/authz'
+import { isSuperAdminEmail, getSmStoreIds, smHasStore } from '@/lib/authz'
 
 export async function createUser(formData: FormData) {
   const supabase = await createClient()
@@ -16,16 +16,26 @@ export async function createUser(formData: FormData) {
     .eq('id', user.id)
     .single()
 
-  if (profile?.role !== 'admin') return { error: 'Only admins can create users' }
+  const isSm = profile?.role === 'sm'
+  if (profile?.role !== 'admin' && !isSm) return { error: 'Only admins can create users' }
 
   const storeId = formData.get('store_id') as string
   const role    = formData.get('role') as string
-  // Sub-admins may only create store managers. The super admin may create any
-  // role (staff / store_manager / admin).
-  if (!isSuperAdminEmail(user.email) && role !== 'store_manager')
-    return { error: 'Bạn chỉ được tạo tài khoản Quản lý cửa hàng' }
-  if (role !== 'admin' && !storeId)
-    return { error: 'Tài khoản Quản lý và Nhân viên phải được gán cửa hàng' }
+
+  if (isSm) {
+    // SM: can only create staff in their assigned stores
+    if (role !== 'staff') return { error: 'SM chỉ được tạo tài khoản Nhân viên' }
+    if (!storeId) return { error: 'Vui lòng chọn cửa hàng cho nhân viên' }
+    const smStoreIds = await getSmStoreIds(supabase, user.id)
+    if (!smHasStore(smStoreIds, storeId)) return { error: 'Bạn không quản lý cửa hàng này' }
+  } else {
+    // Sub-admins may only create store managers. The super admin may create any
+    // role (staff / store_manager / admin).
+    if (!isSuperAdminEmail(user.email) && role !== 'store_manager')
+      return { error: 'Bạn chỉ được tạo tài khoản Quản lý cửa hàng' }
+    if (role !== 'admin' && !storeId)
+      return { error: 'Tài khoản Quản lý và Nhân viên phải được gán cửa hàng' }
+  }
 
   const { data, error } = await supabaseAdmin.auth.admin.createUser({
     email:         formData.get('email') as string,

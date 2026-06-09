@@ -26,6 +26,9 @@ export default async function PrescriptionsPage({
   const { data: profile } = await supabase
     .from('users').select('role, store_id').eq('id', user.id).single()
 
+  // SM has no access to prescriptions
+  if (profile?.role === 'sm') redirect('/dashboard')
+
   const isStaff = profile?.role === 'staff'
   const isAdmin = profile?.role === 'admin'
   // Product sync is super-admin only (mirrors the DB is_super_admin() gate).

@@ -20,7 +20,7 @@ import { FeedbackSection, type FeedbackThread } from '@/components/feedback/Feed
 import { ShareTaskDialog, type CollaboratorRow } from '@/components/tasks/ShareTaskDialog'
 import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { formatDate, formatDateTime, getEffectiveStatus } from '@/lib/dateUtils'
-import { isSuperAdminEmail } from '@/lib/authz'
+import { isSuperAdminEmail, getSmStoreIds, smHasStore } from '@/lib/authz'
 import { Task, RequiredOutput, UserRole, TaskCategory } from '@/types'
 import { Pencil, Trash2, Radio, Users } from 'lucide-react'
 
@@ -67,14 +67,21 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
 
   const userRole   = (profile?.role ?? 'staff') as UserRole
   const userId      = user!.id
+  const isSm        = userRole === 'sm'
+
+  // SM: load assigned store IDs and gate access to this task
+  const smStoreIds   = isSm ? await getSmStoreIds(supabase, userId) : []
+  const isSmForStore = isSm && smHasStore(smStoreIds, task.store_id as string | null)
+  if (isSm && !isSmForStore) notFound()
+
   // canManageTask: admin task-management capability (edit/delete/reassign/extend/
   // review). Sub-admins only on tasks they created; super admin on any. Store
   // managers/staff are executors and never manage.
   const canManageTask = userRole === 'admin'
     && (isSuperAdminEmail(user!.email) || task.created_by === userId)
   // canViewStoreRoster: read-only — fetch store users for results filtering
-  // (store_manager) and the reassign dropdown (admin). Not a mutation right.
-  const canViewStoreRoster = userRole === 'admin' || userRole === 'store_manager'
+  // (store_manager) and the reassign dropdown (admin/SM). Not a mutation right.
+  const canViewStoreRoster = userRole === 'admin' || userRole === 'store_manager' || isSmForStore
 
   // staff_all parent: overview only. It is never submittable and has no status
   // lifecycle — instead it shows a per-staff child progress table. A child task
@@ -149,7 +156,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
     // Otherwise staff only see their own.
     if (userRole === 'staff') return isStoreLevelTask ? base : base.eq('user_id', userId)
 
-    if (userRole === 'store_manager') {
+    if (userRole === 'store_manager' || isSmForStore) {
       const ids = (storeUsers ?? []).map((u) => u.id)
       // If no users in store, use a fake UUID so we get 0 rows (not all rows)
       return ids.length > 0
@@ -168,7 +175,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   // never see it. Compute visibility here (same value as canViewFeedback below) so
   // we can skip the feedbackThreads round-trip entirely for those who can't view it.
   const canViewFeedbackThreads =
-    canManageTask || (userRole === 'store_manager' && task.store_id === profile?.store_id)
+    canManageTask || (userRole === 'store_manager' && task.store_id === profile?.store_id) || isSmForStore
   const [
     { data: results },
     { data: lastAssignLog },
@@ -262,9 +269,9 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   )
 
   // canReviewTask: gates RequestResubmitSection + "has results but not done" warning.
-  // Extended to editor collaborators (they can request resubmit after validation).
-  const canReviewTask = canManageTask || isEditorCollaborator
-  // canExtendDeadline: owner + super only — not open to editor collaborators.
+  // Extended to editor collaborators and SM (they can request resubmit after validation).
+  const canReviewTask = canManageTask || isEditorCollaborator || isSmForStore
+  // canExtendDeadline: owner + super only — not open to editor collaborators or SM.
   const canExtendDeadline = canManageTask
   // canAddReviewNote: owner/super + editor collaborators (server action validates).
   // view-only collaborators are also admin, so checking just userRole='admin'
@@ -282,7 +289,8 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   const canReplyFeedback  = canManageTask || isManagerOfTaskStore
   // Feedback is a private Q&A between the task owner/super admin and the store
   // manager. Collaborators are not part of this channel (they use review notes).
-  const canViewFeedback = canCreateFeedback || canReplyFeedback
+  // SM can view feedback threads for their stores (read-only observer role).
+  const canViewFeedback = canCreateFeedback || canReplyFeedback || isSmForStore
 
   const assignerName: string | null = lastAssignLog
     ? (lastAssignLog.users as unknown as { full_name: string } | null)?.full_name ?? null
@@ -648,7 +656,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                       </p>
                     )}
                   </>
-                ) : canManageTask ? (
+                ) : (canManageTask || isSmForStore) ? (
                   <TaskReassignForm
                     taskId={id}
                     currentAssignedTo={task.assigned_to}

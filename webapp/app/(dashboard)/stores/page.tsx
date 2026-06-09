@@ -4,6 +4,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { formatDate } from '@/lib/dateUtils'
+import { getSmStoreIds } from '@/lib/authz'
 
 const REGION_LABEL: Record<string, string> = {
   north:   'Miền Bắc',
@@ -26,10 +27,22 @@ export default async function StoresPage() {
 
   if (profile?.role === 'staff') redirect('/dashboard')
 
-  const { data: stores } = await supabase
-    .from('stores')
-    .select('*')
-    .order('name')
+  const isSm = profile?.role === 'sm'
+
+  const smStoreIds = isSm ? await getSmStoreIds(supabase, user.id) : []
+  if (isSm && smStoreIds.length === 0) {
+    return (
+      <div className="p-4 space-y-4">
+        <h1 className="text-xl font-semibold">Cửa hàng</h1>
+        <p className="text-sm text-muted-foreground">Chưa được phân công cửa hàng nào. Vui lòng liên hệ Admin.</p>
+      </div>
+    )
+  }
+
+  let query = supabase.from('stores').select('*').order('name')
+  if (isSm) query = query.in('id', smStoreIds)
+
+  const { data: stores } = await query
 
   return (
     <div className="p-4 space-y-4">
