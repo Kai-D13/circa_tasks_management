@@ -26,11 +26,16 @@ export async function proxy(request: NextRequest) {
   if (pathname === '/sw.js')             return NextResponse.next()
 
   // Filter only the current project's auth cookies (base + any .0/.1 chunks).
+  const allCookieNames = request.cookies.getAll().map((c) => c.name)
   const authCookies = request.cookies
     .getAll()
     .filter((c) => c.name === AUTH_COOKIE_BASE || c.name.startsWith(AUTH_COOKIE_BASE + '.'))
 
+  // TEMP DIAGNOSTIC — remove after login bounce is resolved.
+  console.log(`[AUTH-DEBUG] proxy path=${pathname} base=${AUTH_COOKIE_BASE} allCookies=[${allCookieNames.join(',')}] authCount=${authCookies.length}`)
+
   if (authCookies.length === 0) {
+    console.log(`[AUTH-DEBUG] proxy REDIRECT->/login (no auth cookie) path=${pathname}`)
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     return NextResponse.redirect(url)
@@ -41,8 +46,10 @@ export async function proxy(request: NextRequest) {
   // is what keeps mobile navigation fast on self-hosted Supabase, where the
   // symmetric JWT secret makes getUser()/getClaims() a network round-trip.
   if (!isExpiringSoon(authCookies)) {
+    console.log(`[AUTH-DEBUG] proxy PASS (fresh cookie) path=${pathname}`)
     return NextResponse.next()
   }
+  console.log(`[AUTH-DEBUG] proxy slow-path getUser path=${pathname}`)
 
   // Token expired/near-expiry: refresh once and persist the new cookies onto the
   // response so the session survives across cold opens (the iOS Safari / mobile
@@ -70,9 +77,13 @@ export async function proxy(request: NextRequest) {
 
   // Triggers a token refresh when needed; setAll above writes the refreshed
   // (rotated) tokens back to the browser with their persistent Max-Age.
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user }, error: getUserErr } = await supabase.auth.getUser()
+
+  // TEMP DIAGNOSTIC — remove after login bounce is resolved.
+  console.log(`[AUTH-DEBUG] proxy slow-path getUser result user=${user?.id ?? 'null'} err=${getUserErr?.message ?? 'none'} path=${pathname}`)
 
   if (!user) {
+    console.log(`[AUTH-DEBUG] proxy REDIRECT->/login (getUser null) path=${pathname}`)
     const url = request.nextUrl.clone()
     url.pathname = '/login'
     return NextResponse.redirect(url)

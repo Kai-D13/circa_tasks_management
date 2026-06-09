@@ -13,14 +13,19 @@ import { createClient } from '@/lib/supabase/server'
 // pages (which need role/store_id) can both source from this single call.
 export const getSessionProfile = cache(async () => {
   const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { user }, error: userErr } = await supabase.auth.getUser()
+  // TEMP DIAGNOSTIC — remove after login bounce is resolved.
+  console.log(`[AUTH-DEBUG] getSessionProfile getUser user=${user?.id ?? 'null'} err=${userErr?.message ?? 'none'}`)
   if (!user) return { user: null, profile: null }
 
-  const { data: profile } = await supabase
+  const { data: profile, error: profileErr } = await supabase
     .from('users')
     .select('*, stores(*)')
     .eq('id', user.id)
     .single()
+
+  // TEMP DIAGNOSTIC — remove after login bounce is resolved.
+  console.log(`[AUTH-DEBUG] getSessionProfile profile=${profile?.id ?? 'null'} role=${profile?.role ?? 'null'} err=${profileErr?.message ?? 'none'}`)
 
   return { user, profile }
 })
