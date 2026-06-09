@@ -104,15 +104,70 @@ export async function updateUserRole(userId: string, role: string, storeId: stri
   if (!isSuperAdminEmail(user.email))
     return { error: 'Chỉ super admin mới chỉnh sửa được tài khoản người dùng' }
 
-  if (role !== 'admin' && !storeId)
+  // SM scopes via sm_store_assignments, not a single store_id — exempt it (and
+  // admin) from the single-store requirement and always null their store_id.
+  if (role !== 'admin' && role !== 'sm' && !storeId)
     return { error: 'Tài khoản Quản lý và Nhân viên phải được gán cửa hàng' }
+
+  const effectiveStoreId = (role === 'admin' || role === 'sm') ? null : storeId
 
   const { error } = await supabase
     .from('users')
-    .update({ role, store_id: storeId })
+    .update({ role, store_id: effectiveStoreId })
     .eq('id', userId)
 
   if (error) return { error: error.message }
+
+  // If the user is no longer an SM, drop any store assignments so a future
+  // re-promotion doesn't silently inherit stale scope.
+  if (role !== 'sm') {
+    await supabaseAdmin.from('sm_store_assignments').delete().eq('sm_user_id', userId)
+  }
+
+  revalidatePath('/users')
+  return { success: true }
+}
+
+// Read a user's SM store assignments (for the edit dialog). Admins may read via
+// RLS ssa_select_admin; returns the assigned store IDs.
+export async function getSmStores(userId: string): Promise<string[]> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return []
+  const { data } = await supabase
+    .from('sm_store_assignments')
+    .select('store_id')
+    .eq('sm_user_id', userId)
+  return (data ?? []).map((r: { store_id: string }) => r.store_id)
+}
+
+// Replace a user's SM store assignments. Super-admin only; writes via
+// supabaseAdmin (there is no RLS write policy for SM assignments) and stamps
+// assigned_by for audit. storeIds = the complete desired set (replace semantics).
+export async function setSmStores(userId: string, storeIds: string[]) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Not authenticated' }
+  if (!isSuperAdminEmail(user.email))
+    return { error: 'Chỉ super admin mới gán cửa hàng cho SM' }
+
+  const { data: target } = await supabaseAdmin
+    .from('users').select('role').eq('id', userId).single()
+  if (target?.role !== 'sm')
+    return { error: 'Tài khoản này không phải SM' }
+
+  const unique = [...new Set(storeIds)].filter(Boolean)
+
+  // Replace semantics: clear then insert the desired set.
+  const { error: delErr } = await supabaseAdmin
+    .from('sm_store_assignments').delete().eq('sm_user_id', userId)
+  if (delErr) return { error: delErr.message }
+
+  if (unique.length) {
+    const rows = unique.map((sid) => ({ sm_user_id: userId, store_id: sid, assigned_by: user.id }))
+    const { error: insErr } = await supabaseAdmin.from('sm_store_assignments').insert(rows)
+    if (insErr) return { error: insErr.message }
+  }
 
   revalidatePath('/users')
   return { success: true }
