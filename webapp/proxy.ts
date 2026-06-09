@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
+import { AUTH_COOKIE_OPTIONS } from '@/lib/supabase/cookieOptions'
 
 // Derive the exact cookie name Supabase SSR uses for THIS deployment.
 // @supabase/ssr generates the key as: sb-<first-hostname-segment>-auth-token
@@ -52,6 +53,7 @@ export async function proxy(request: NextRequest) {
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      cookieOptions: AUTH_COOKIE_OPTIONS,
       cookies: {
         getAll() {
           return request.cookies.getAll()

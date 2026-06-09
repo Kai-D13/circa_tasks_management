@@ -28,8 +28,12 @@ export default async function TasksPage({
   const supabase = await createClient()
 
   const { profile } = await getSessionProfile()
+  const isStaff = profile?.role === 'staff'
 
-  const showArchived = params.archived === 'true'
+  // Staff must never see archived tasks and must not have filter params honoured —
+  // an old link like /tasks?priority=urgent would silently hide tasks, making users
+  // think tasks are missing. Ignore all filter params for staff.
+  const showArchived = !isStaff && params.archived === 'true'
   // Primary split: "pending" (anything not done) vs "done". Default is pending for
   // ALL roles — the first thing everyone needs is "what's still open", not history.
   // Archive view ignores the tab (it's a separate axis).
@@ -39,19 +43,23 @@ export default async function TasksPage({
   // count (which runs a second full aggregate under RLS). Admin/manager keep 30 +
   // exact count for the numbered pager. The done view is lighter (history), so it
   // uses a smaller page for everyone.
-  const isStaff  = profile?.role === 'staff'
   const pageSize = view === 'done' ? 15 : (isStaff ? 12 : PAGE_SIZE)
   const page   = Math.max(1, parseInt(params.page ?? '1', 10) || 1)
   const offset = (page - 1) * pageSize
 
   const nowIso = new Date().toISOString()
 
-  let query = supabase
-    .from('tasks')
-    // Narrow select — excludes description/input_data/required_outputs which grow
-    // large when tasks have many attachments. Must be a single string literal so
-    // Supabase's type inference doesn't fall back to GenericStringError.
-    .select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, completed_by, completed_at, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), completed_by_user:users!completed_by(full_name)', isStaff ? undefined : { count: 'exact' })
+  // Narrow select — excludes description/input_data/required_outputs which grow
+  // large when tasks have many attachments. The completion columns + completed_by
+  // embed are only meaningful for done tasks, so the pending view omits them to
+  // drop one RLS-checked join per row (a real cost on the staff mobile hot path).
+  // Each branch passes a string LITERAL so Supabase can parse the columns at the
+  // type level (a variable would collapse to a ParserError type).
+  const needsCompleted = showArchived || view === 'done'
+  const countOpt = isStaff ? undefined : { count: 'exact' as const }
+  let query = needsCompleted
+    ? supabase.from('tasks').select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, completed_by, completed_at, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), completed_by_user:users!completed_by(full_name)', countOpt)
+    : supabase.from('tasks').select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name)', countOpt)
 
   // Ordering per view:
   //   pending -> deadline asc (overdue/soonest first), then newest created
@@ -83,12 +91,12 @@ export default async function TasksPage({
   if (!showArchived) {
     if (view === 'done') {
       query = query.eq('status', 'done')
-    } else if (params.status === 'overdue') {
+    } else if (!isStaff && params.status === 'overdue') {
       // staff_all parents are never submittable/overdue; exclude them from overdue filter
       query = query
         .or(`status.eq.overdue,and(deadline.lt.${nowIso},status.neq.done)`)
         .neq('assignment_mode', 'staff_all')
-    } else if (params.status === 'todo' || params.status === 'in_progress') {
+    } else if (!isStaff && (params.status === 'todo' || params.status === 'in_progress')) {
       query = query
         .eq('status', params.status)
         .or(`deadline.is.null,deadline.gte.${nowIso}`)
@@ -96,9 +104,9 @@ export default async function TasksPage({
       query = query.neq('status', 'done')
     }
   }
-  if (params.priority) query = query.eq('priority', params.priority)
-  if (params.store_id) query = query.eq('store_id', params.store_id)
-  if (params.category) query = query.eq('category', params.category)
+  if (!isStaff && params.priority) query = query.eq('priority', params.priority)
+  if (!isStaff && params.store_id) query = query.eq('store_id', params.store_id)
+  if (!isStaff && params.category) query = query.eq('category', params.category)
 
   // For admin/manager in the pending view with no status sub-filter: exclude
   // staff_all children from the paginated count so the page count isn't inflated by
@@ -135,9 +143,11 @@ export default async function TasksPage({
       .filter(t => (t as { assignment_mode?: string }).assignment_mode === 'staff_all')
       .map(t => t.id)
     if (parentIds.length > 0) {
+      // staff_all children only ever appear in the pending view, so the base
+      // (no completion columns) select matches; cast unifies it with `tasks`.
       let childQ = supabase
         .from('tasks')
-        .select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, completed_by, completed_at, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), completed_by_user:users!completed_by(full_name)')
+        .select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name)')
         .in('parent_task_id', parentIds)
         .order('created_at', { ascending: true })
       if (showArchived) childQ = childQ.not('archived_at', 'is', null)
@@ -287,11 +297,17 @@ export default async function TasksPage({
     }
   }
 
-  // Build href that preserves all current filters but changes page
+  // Build href that preserves filters but changes page.
+  // Staff only carry 'view' — never status/priority/store_id/category/archived,
+  // since those params are ignored server-side for staff and could confuse state.
   function pageHref(p: number) {
     const q = new URLSearchParams()
-    const carry = ['view', 'status', 'priority', 'store_id', 'category', 'archived'] as const
-    carry.forEach((k) => { if (params[k]) q.set(k, params[k]!) })
+    if (isStaff) {
+      if (params.view) q.set('view', params.view)
+    } else {
+      const carry = ['view', 'status', 'priority', 'store_id', 'category', 'archived'] as const
+      carry.forEach((k) => { if (params[k]) q.set(k, params[k]!) })
+    }
     if (p > 1) q.set('page', String(p))
     const qs = q.toString()
     return `/tasks${qs ? `?${qs}` : ''}`
@@ -315,6 +331,7 @@ export default async function TasksPage({
         currentParams={params as Record<string, string>}
         showArchived={showArchived}
         view={view}
+        isStaff={isStaff}
       />
 
       {tasksError ? (

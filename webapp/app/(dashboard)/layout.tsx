@@ -27,7 +27,7 @@ export default async function DashboardLayout({
           <Sidebar />
 
           {/* Main content — full width on mobile */}
-          <main className="flex-1 min-w-0 overflow-y-auto bg-muted/20 pb-16 md:pb-0">
+          <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden bg-muted/20 pb-16 md:pb-0">
             {/* Mobile top header */}
             <MobileHeader />
             {children}

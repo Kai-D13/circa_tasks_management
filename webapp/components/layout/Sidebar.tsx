@@ -127,7 +127,7 @@ export function Sidebar() {
             <LogOut className="h-3.5 w-3.5" />
             Đăng xuất
           </Button>
-          <NotificationBell />
+          {role !== 'staff' && <NotificationBell />}
           <ThemeToggle />
         </div>
       </div>

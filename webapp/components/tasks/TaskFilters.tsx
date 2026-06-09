@@ -13,6 +13,7 @@ interface Props {
   currentParams: { view?: string; status?: string; priority?: string; store_id?: string; category?: string; archived?: string }
   showArchived?: boolean
   view?:         'pending' | 'done'
+  isStaff?:      boolean
 }
 
 const ALL = '__all__'
@@ -40,7 +41,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   other:     'Khác',
 }
 
-export function TaskFilters({ stores, currentParams, showArchived, view = 'pending' }: Props) {
+export function TaskFilters({ stores, currentParams, showArchived, view = 'pending', isStaff = false }: Props) {
   const router   = useRouter()
   const pathname = usePathname()
 
@@ -122,8 +123,9 @@ export function TaskFilters({ stores, currentParams, showArchived, view = 'pendi
       {!showArchived ? (
         <>
           {/* Status sub-filter: only refines the pending view, desktop only
-              (on mobile the tab is the status control). */}
-          {view === 'pending' && (
+              (on mobile the tab is the status control). Staff never see it —
+              their screen is just the two tabs. */}
+          {!isStaff && view === 'pending' && (
             <Select value={statusVal} onValueChange={(v) => update('status', v)}>
               <SelectTrigger className="w-40 h-8 text-sm hidden md:flex">
                 <SelectValue>{STATUS_LABEL[statusVal]}</SelectValue>
@@ -137,16 +139,18 @@ export function TaskFilters({ stores, currentParams, showArchived, view = 'pendi
             </Select>
           )}
 
-          <Select value={priorityVal} onValueChange={(v) => update('priority', v)}>
-            <SelectTrigger className="w-36 h-8 text-sm">
-              <SelectValue>{PRIORITY_LABEL[priorityVal]}</SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL}>Tất cả ưu tiên</SelectItem>
-              <SelectItem value="urgent">Khẩn cấp</SelectItem>
-              <SelectItem value="normal">Bình thường</SelectItem>
-            </SelectContent>
-          </Select>
+          {!isStaff && (
+            <Select value={priorityVal} onValueChange={(v) => update('priority', v)}>
+              <SelectTrigger className="w-36 h-8 text-sm">
+                <SelectValue>{PRIORITY_LABEL[priorityVal]}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>Tất cả ưu tiên</SelectItem>
+                <SelectItem value="urgent">Khẩn cấp</SelectItem>
+                <SelectItem value="normal">Bình thường</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
 
           {stores.length > 0 && (
             <SearchableSelect
@@ -158,35 +162,39 @@ export function TaskFilters({ stores, currentParams, showArchived, view = 'pendi
             />
           )}
 
-          <Select value={categoryVal} onValueChange={(v) => update('category', v)}>
-            <SelectTrigger className="w-36 h-8 text-sm">
-              <SelectValue>{CATEGORY_LABEL[categoryVal] ?? 'Tất cả loại'}</SelectValue>
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value={ALL}>Tất cả loại</SelectItem>
-              <SelectItem value="training">Training</SelectItem>
-              <SelectItem value="recall">Thu hồi</SelectItem>
-              <SelectItem value="display">Trưng bày</SelectItem>
-              <SelectItem value="audit">Kiểm tra</SelectItem>
-              <SelectItem value="other">Khác</SelectItem>
-            </SelectContent>
-          </Select>
+          {!isStaff && (
+            <Select value={categoryVal} onValueChange={(v) => update('category', v)}>
+              <SelectTrigger className="w-36 h-8 text-sm">
+                <SelectValue>{CATEGORY_LABEL[categoryVal] ?? 'Tất cả loại'}</SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>Tất cả loại</SelectItem>
+                <SelectItem value="training">Training</SelectItem>
+                <SelectItem value="recall">Thu hồi</SelectItem>
+                <SelectItem value="display">Trưng bày</SelectItem>
+                <SelectItem value="audit">Kiểm tra</SelectItem>
+                <SelectItem value="other">Khác</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
 
-          {hasFilters && (
+          {!isStaff && hasFilters && (
             <Button variant="ghost" size="sm" onClick={clear} className="h-8 text-xs">
               Xoá bộ lọc
             </Button>
           )}
 
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 text-xs gap-1.5 ml-auto"
-            onClick={toggleArchive}
-          >
-            <Archive className="h-3.5 w-3.5" />
-            Xem task đã lưu trữ
-          </Button>
+          {!isStaff && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 text-xs gap-1.5 ml-auto"
+              onClick={toggleArchive}
+            >
+              <Archive className="h-3.5 w-3.5" />
+              Xem task đã lưu trữ
+            </Button>
+          )}
         </>
       ) : (
         <Button

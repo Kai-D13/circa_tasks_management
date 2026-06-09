@@ -9,7 +9,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Button } from '@/components/ui/button'
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
 import { TaskPriorityBadge } from '@/components/tasks/TaskPriorityBadge'
-import { formatDistanceToNow, formatDateTime, getEffectiveStatus } from '@/lib/dateUtils'
+import { formatDate, formatDateTime, getEffectiveStatus } from '@/lib/dateUtils'
 import { Radio, Archive, ArchiveRestore, ChevronRight, ChevronDown, Users } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Task, TaskCategory } from '@/types'
@@ -371,7 +371,7 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
                     </TableCell>
                     <TableCell onClick={() => toggleExpand(item.broadcastId)} />
                     <TableCell className="text-sm text-muted-foreground" onClick={() => toggleExpand(item.broadcastId)}>
-                      {formatDistanceToNow(item.createdAt)}
+                      {formatDate(item.createdAt)}
                     </TableCell>
                   </TableRow>
 
@@ -402,7 +402,7 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
                         <TaskStatusBadge status={getEffectiveStatus(child.deadline, child.status) as Task['status']} late={child.status === 'done' && !!child.overdue_at} />
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        {child.deadline ? formatDistanceToNow(child.deadline) : '—'}
+                        {child.deadline ? formatDate(child.deadline) : '—'}
                       </TableCell>
                       <TableCell />
                     </TableRow>
@@ -479,7 +479,7 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
                     </TableCell>
                     <TableCell onClick={() => toggleExpand(item.parentId)} />
                     <TableCell className="text-sm text-muted-foreground" onClick={() => toggleExpand(item.parentId)}>
-                      {formatDistanceToNow(item.createdAt)}
+                      {formatDate(item.createdAt)}
                     </TableCell>
                   </TableRow>
 
@@ -510,7 +510,7 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
                         <TaskStatusBadge status={getEffectiveStatus(child.deadline, child.status) as Task['status']} late={child.status === 'done' && !!child.overdue_at} />
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        {child.deadline ? formatDistanceToNow(child.deadline) : '—'}
+                        {child.deadline ? formatDate(child.deadline) : '—'}
                       </TableCell>
                       <TableCell />
                     </TableRow>
@@ -571,10 +571,10 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
                   <TaskStatusBadge status={effStatus as Task['status']} late={task.status === 'done' && !!task.overdue_at} />
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">
-                  {task.deadline ? formatDistanceToNow(task.deadline) : '—'}
+                  {task.deadline ? formatDate(task.deadline) : '—'}
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">
-                  {formatDistanceToNow(task.created_at)}
+                  {formatDate(task.created_at)}
                 </TableCell>
               </TableRow>
             )
@@ -673,8 +673,8 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
               {submitter.sub && <p className="text-xs text-muted-foreground">{submitter.sub}</p>}
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                 <TaskPriorityBadge priority={task.priority as Task['priority']} />
-                <span>Hạn: {task.deadline ? formatDistanceToNow(task.deadline) : '—'}</span>
-                <span>Tạo: {formatDistanceToNow(task.created_at)}</span>
+                <span>Hạn: {task.deadline ? formatDate(task.deadline) : '—'}</span>
+                <span>Tạo: {formatDate(task.created_at)}</span>
               </div>
             </Link>
           )
