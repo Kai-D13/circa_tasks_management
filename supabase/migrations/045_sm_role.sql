@@ -43,6 +43,11 @@ CREATE TABLE IF NOT EXISTS public.sm_store_assignments (
   PRIMARY KEY (sm_user_id, store_id)
 );
 
+-- Safety net: if the table was created by a partial/earlier apply without
+-- assigned_by, ADD COLUMN IF NOT EXISTS makes the migration idempotent.
+ALTER TABLE public.sm_store_assignments
+  ADD COLUMN IF NOT EXISTS assigned_by uuid REFERENCES public.users(id) ON DELETE SET NULL;
+
 CREATE INDEX IF NOT EXISTS idx_ssa_sm_user ON public.sm_store_assignments (sm_user_id);
 CREATE INDEX IF NOT EXISTS idx_ssa_store   ON public.sm_store_assignments (store_id);
 
@@ -272,11 +277,15 @@ NOTIFY pgrst, 'reload schema';
 -- WHERE tablename = 'sm_store_assignments';
 -- expect: 1 row, rowsecurity = true
 --
--- 3) All 13 SM policies created:
+-- 3) All SM-related policies exist (note: tuf_select / ssa_* don't match %_sm so list explicitly):
 -- SELECT tablename, policyname FROM pg_policies
--- WHERE schemaname = 'public' AND policyname LIKE '%_sm%'
+-- WHERE schemaname = 'public'
+--   AND (
+--     policyname LIKE '%\_sm' ESCAPE '\'
+--     OR policyname IN ('tuf_select', 'ssa_all_super', 'ssa_select_admin', 'ssa_select_sm')
+--   )
 -- ORDER BY tablename, policyname;
--- expect: tasks_select_sm, tr_select_sm, tl_select_sm, tuf_select (updated),
+-- expect 13 rows: tasks_select_sm, tr_select_sm, tl_select_sm, tuf_select,
 --   trn_select_sm, tft_select_sm, tfm_select_sm, tb_select_sm,
 --   trr_select_sm, tse_select_sm, ssa_all_super, ssa_select_admin, ssa_select_sm
 --
