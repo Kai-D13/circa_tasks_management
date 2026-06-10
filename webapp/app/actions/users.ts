@@ -141,33 +141,43 @@ export async function getSmStores(userId: string): Promise<string[]> {
   return (data ?? []).map((r: { store_id: string }) => r.store_id)
 }
 
-// Replace a user's SM store assignments. Super-admin only; writes via
-// supabaseAdmin (there is no RLS write policy for SM assignments) and stamps
-// assigned_by for audit. storeIds = the complete desired set (replace semantics).
-export async function setSmStores(userId: string, storeIds: string[]) {
+// Promote a user to SM AND set their store assignments in one call. Super-admin
+// only. Combining the two mutations avoids the partial state where a user becomes
+// 'sm' with no stores (and thus an empty SM view). All store IDs are validated
+// BEFORE any write so the replace (delete + insert) cannot fail mid-way on a bad
+// FK. Writes go through supabaseAdmin (no RLS write policy for SM assignments)
+// and stamp assigned_by for audit. storeIds = the complete desired set.
+export async function setSmRole(userId: string, storeIds: string[]) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
   if (!isSuperAdminEmail(user.email))
-    return { error: 'Chỉ super admin mới gán cửa hàng cho SM' }
-
-  const { data: target } = await supabaseAdmin
-    .from('users').select('role').eq('id', userId).single()
-  if (target?.role !== 'sm')
-    return { error: 'Tài khoản này không phải SM' }
+    return { error: 'Chỉ super admin mới gán quyền SM' }
 
   const unique = [...new Set(storeIds)].filter(Boolean)
+  if (unique.length === 0)
+    return { error: 'Chọn ít nhất 1 cửa hàng cho tài khoản SM' }
 
-  // Replace semantics: clear then insert the desired set.
+  // Validate every store exists up front so the insert below (after the delete)
+  // can never fail on an invalid FK and strand the user with no assignments.
+  const { data: validStores } = await supabaseAdmin
+    .from('stores').select('id').in('id', unique)
+  if ((validStores?.length ?? 0) !== unique.length)
+    return { error: 'Có cửa hàng không hợp lệ trong danh sách' }
+
+  // 1) Promote to SM. store_id is null — SM scope lives in sm_store_assignments.
+  const { error: roleErr } = await supabaseAdmin
+    .from('users').update({ role: 'sm', store_id: null }).eq('id', userId)
+  if (roleErr) return { error: roleErr.message }
+
+  // 2) Replace assignments with the validated set.
   const { error: delErr } = await supabaseAdmin
     .from('sm_store_assignments').delete().eq('sm_user_id', userId)
   if (delErr) return { error: delErr.message }
 
-  if (unique.length) {
-    const rows = unique.map((sid) => ({ sm_user_id: userId, store_id: sid, assigned_by: user.id }))
-    const { error: insErr } = await supabaseAdmin.from('sm_store_assignments').insert(rows)
-    if (insErr) return { error: insErr.message }
-  }
+  const rows = unique.map((sid) => ({ sm_user_id: userId, store_id: sid, assigned_by: user.id }))
+  const { error: insErr } = await supabaseAdmin.from('sm_store_assignments').insert(rows)
+  if (insErr) return { error: insErr.message }
 
   revalidatePath('/users')
   return { success: true }

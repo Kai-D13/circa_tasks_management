@@ -23,6 +23,7 @@ const ROLE_LABEL: Record<string, string> = {
   admin:         'Admin',
   store_manager: 'Quản lý',
   staff:         'Nhân viên',
+  sm:            'SM',
 }
 
 export function UserFilters({ stores, currentParams }: Props) {
@@ -106,6 +107,7 @@ export function UserFilters({ stores, currentParams }: Props) {
         <SelectContent>
           <SelectItem value={ALL}>Tất cả phân quyền</SelectItem>
           <SelectItem value="admin">Admin</SelectItem>
+          <SelectItem value="sm">SM</SelectItem>
           <SelectItem value="store_manager">Quản lý</SelectItem>
           <SelectItem value="staff">Nhân viên</SelectItem>
         </SelectContent>

@@ -2,8 +2,9 @@
 
 import { useEffect, useState, useTransition } from 'react'
 import { toast } from 'sonner'
-import { updateUserRole, getSmStores, setSmStores } from '@/app/actions/users'
+import { updateUserRole, getSmStores, setSmRole } from '@/app/actions/users'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { SearchableSelect } from '@/components/ui/searchable-select'
@@ -38,6 +39,7 @@ export function EditUserDialog({ userId, userName, currentRole, currentStoreId, 
   // SM scope: a set of store IDs (sm_store_assignments). Loaded on open.
   const [smStoreIds, setSmStoreIds] = useState<string[]>([])
   const [smLoading, setSmLoading]   = useState(false)
+  const [smSearch, setSmSearch]     = useState('')
   const isSuper = isSuperAdminEmail(useUserStore((s) => s.profile)?.email)
   // Only super admin may assign admin/SM; keep the option if the target already has it
   const showAdminOption = isSuper || currentRole === 'admin'
@@ -59,6 +61,7 @@ export function EditUserDialog({ userId, userName, currentRole, currentStoreId, 
       setRole(currentRole)
       setStoreId(currentStoreId ?? '')
       setSmStoreIds([])
+      setSmSearch('')
     }
     setOpen(next)
   }
@@ -75,11 +78,11 @@ export function EditUserDialog({ userId, userName, currentRole, currentStoreId, 
         toast.error('Chọn ít nhất 1 cửa hàng cho tài khoản SM')
         return
       }
+      // One action does promote + assign atomically (validate-first), so the
+      // user can never end up 'sm' with no stores.
       startTransition(async () => {
-        const r1 = await updateUserRole(userId, 'sm', null)
-        if (r1?.error) { toast.error(r1.error); return }
-        const r2 = await setSmStores(userId, smStoreIds)
-        if (r2?.error) { toast.error(r2.error); return }
+        const r = await setSmRole(userId, smStoreIds)
+        if (r?.error) { toast.error(r.error); return }
         toast.success('Đã cập nhật SM và cửa hàng quản lý')
         setOpen(false)
       })
@@ -136,22 +139,34 @@ export function EditUserDialog({ userId, userName, currentRole, currentStoreId, 
               {smLoading ? (
                 <p className="text-sm text-muted-foreground">Đang tải...</p>
               ) : (
-                <div className="max-h-52 overflow-y-auto rounded-md border divide-y">
-                  {stores.length === 0 && (
-                    <p className="text-sm text-muted-foreground p-2">Chưa có cửa hàng nào</p>
+                <>
+                  {stores.length > 8 && (
+                    <Input
+                      value={smSearch}
+                      onChange={(e) => setSmSearch(e.target.value)}
+                      placeholder="Tìm cửa hàng..."
+                      className="h-8 text-sm"
+                    />
                   )}
-                  {stores.map((s) => (
-                    <label key={s.id} className="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-muted/40">
-                      <input
-                        type="checkbox"
-                        className="h-4 w-4"
-                        checked={smStoreIds.includes(s.id)}
-                        onChange={() => toggleSmStore(s.id)}
-                      />
-                      <span>{s.name}</span>
-                    </label>
-                  ))}
-                </div>
+                  <div className="max-h-52 overflow-y-auto rounded-md border divide-y">
+                    {stores.length === 0 && (
+                      <p className="text-sm text-muted-foreground p-2">Chưa có cửa hàng nào</p>
+                    )}
+                    {stores
+                      .filter((s) => s.name.toLowerCase().includes(smSearch.trim().toLowerCase()))
+                      .map((s) => (
+                        <label key={s.id} className="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-muted/40">
+                          <input
+                            type="checkbox"
+                            className="h-4 w-4"
+                            checked={smStoreIds.includes(s.id)}
+                            onChange={() => toggleSmStore(s.id)}
+                          />
+                          <span>{s.name}</span>
+                        </label>
+                      ))}
+                  </div>
+                </>
               )}
               <p className="text-xs text-muted-foreground">SM chỉ thấy/quản lý task, nhân viên của các cửa hàng được chọn.</p>
             </div>
