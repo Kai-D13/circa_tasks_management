@@ -478,8 +478,26 @@ export async function updateStaffAllInstruction(parentTaskId: string, data: {
     return { error: 'Bạn không có quyền chỉnh sửa task này' }
 
   if (!data.title?.trim()) return { error: 'Vui lòng nhập tiêu đề' }
-  const attachments = data.attachments ?? []
-  const links = (data.links ?? []).filter((l) => l.url?.trim())
+
+  // Normalize + shape-validate the client-supplied payload before it touches
+  // input_data. Attachments must have string url/name/type and a numeric size (if
+  // present); links get their label/url trimmed and empties dropped.
+  const attachments: TaskAttachment[] = []
+  for (const raw of (data.attachments ?? [])) {
+    const a = raw as unknown as Record<string, unknown>
+    if (typeof a?.url !== 'string' || typeof a?.name !== 'string' || typeof a?.type !== 'string')
+      return { error: 'Dữ liệu file đính kèm không hợp lệ' }
+    if (a.size != null && (typeof a.size !== 'number' || !Number.isFinite(a.size) || a.size < 0))
+      return { error: 'Dữ liệu file đính kèm không hợp lệ' }
+    attachments.push({
+      url: a.url.trim(), name: a.name.trim(), type: a.type.trim(),
+      ...(a.size != null ? { size: a.size as number } : {}),
+    })
+  }
+  const links = (data.links ?? [])
+    .map((l) => ({ label: (l.label ?? '').trim(), url: (l.url ?? '').trim() }))
+    .filter((l) => l.url)
+
   const attachErr = validateAttachments(attachments)
   if (attachErr) return { error: attachErr }
 
