@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button'
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
 import { TaskPriorityBadge } from '@/components/tasks/TaskPriorityBadge'
 import { formatDate, formatShiftTime, getEffectiveStatus } from '@/lib/dateUtils'
-import { Radio, Archive, ArchiveRestore, ChevronRight, ChevronDown, Users } from 'lucide-react'
+import { Radio, Archive, ArchiveRestore, ChevronRight, ChevronDown, Users, ExternalLink } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Task, TaskCategory } from '@/types'
 
@@ -783,47 +783,73 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
             const allDone = item.totalStaff > 0 && item.doneStaff === item.totalStaff
             return (
               <div key={`m-sbc-${item.broadcastId}`} className="rounded-lg border bg-primary/5">
-                <button
-                  type="button"
-                  onClick={() => toggleExpand(item.broadcastId)}
-                  className="w-full flex items-center gap-2 p-3 text-left"
-                >
-                  {isExpanded
-                    ? <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
-                    : <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />}
-                  <Radio className="h-4 w-4 text-primary shrink-0" />
-                  <span className="font-medium flex-1 min-w-0">
-                    <span className="block truncate">{item.title}</span>
-                    <span className="block text-xs text-muted-foreground font-normal">
-                      {item.totalStores} cửa hàng · {item.totalStaff} dược sĩ
+                <div className="flex items-center">
+                  <button
+                    type="button"
+                    onClick={() => toggleExpand(item.broadcastId)}
+                    className="flex-1 min-w-0 flex items-center gap-2 p-3 text-left"
+                  >
+                    {isExpanded
+                      ? <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
+                      : <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />}
+                    <Radio className="h-4 w-4 text-primary shrink-0" />
+                    <span className="font-medium flex-1 min-w-0">
+                      <span className="block truncate">{item.title}</span>
+                      <span className="block text-xs text-muted-foreground font-normal">
+                        {item.totalStores} cửa hàng · {item.totalStaff} dược sĩ
+                      </span>
                     </span>
-                  </span>
-                  <span className={cn('text-sm font-medium whitespace-nowrap', allDone ? 'text-green-600' : 'text-amber-600')}>
-                    {item.doneStaff}/{item.totalStaff}
-                  </span>
-                </button>
+                    <span className={cn('text-sm font-medium whitespace-nowrap', allDone ? 'text-green-600' : 'text-amber-600')}>
+                      {item.doneStaff}/{item.totalStaff}
+                    </span>
+                  </button>
+                  {/* Detail link to a representative parent — where the
+                      "Chỉnh sửa hướng dẫn" propagation dialog lives. */}
+                  <Link
+                    href={`/tasks/${item.stores[0]?.parentId ?? ''}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    prefetch={false}
+                    aria-label="Mở task tổng"
+                    className="p-3 text-muted-foreground active:text-primary shrink-0"
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                  </Link>
+                </div>
                 {isExpanded && (
                   <div className="border-t divide-y divide-border/60">
                     {item.stores.map((store) => (
                       <div key={store.parentId}>
-                        <button
-                          type="button"
-                          onClick={() => toggleExpand(store.parentId)}
-                          className="w-full flex items-center justify-between gap-2 p-2 pl-6 text-sm active:bg-muted/50"
-                        >
-                          <span className="flex items-center gap-1.5 min-w-0">
-                            {expanded.has(store.parentId)
-                              ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                              : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
-                            <span className="truncate font-medium">{store.storeName ?? 'Không rõ cửa hàng'}</span>
-                          </span>
-                          <span className={cn(
-                            'text-xs font-medium whitespace-nowrap',
-                            store.total > 0 && store.done === store.total ? 'text-green-600' : 'text-amber-600'
-                          )}>
-                            {store.done}/{store.total}
-                          </span>
-                        </button>
+                        <div className="flex items-center">
+                          <button
+                            type="button"
+                            onClick={() => toggleExpand(store.parentId)}
+                            className="flex-1 min-w-0 flex items-center justify-between gap-2 p-2 pl-6 text-sm active:bg-muted/50"
+                          >
+                            <span className="flex items-center gap-1.5 min-w-0">
+                              {expanded.has(store.parentId)
+                                ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                                : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
+                              <span className="truncate font-medium">{store.storeName ?? 'Không rõ cửa hàng'}</span>
+                            </span>
+                            <span className={cn(
+                              'text-xs font-medium whitespace-nowrap',
+                              store.total > 0 && store.done === store.total ? 'text-green-600' : 'text-amber-600'
+                            )}>
+                              {store.done}/{store.total}
+                            </span>
+                          </button>
+                          <Link
+                            href={`/tasks/${store.parentId}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            prefetch={false}
+                            aria-label={`Chi tiết ${store.storeName ?? 'cửa hàng'}`}
+                            className="p-2 text-muted-foreground active:text-primary shrink-0"
+                          >
+                            <ExternalLink className="h-3.5 w-3.5" />
+                          </Link>
+                        </div>
                         {expanded.has(store.parentId) && store.childTasks.map((child) => (
                           <Link
                             key={child.id}

@@ -156,6 +156,7 @@ export default async function TasksPage({
 
   // Fetch children for staff_all parents on this page (excluded from paginated query).
   let extraChildren: NonNullable<typeof tasks> = []
+  let childrenError: { message: string } | null = null
   if (topLevelOnly) {
     const parentIds = (tasks ?? [])
       .filter(t => (t as { assignment_mode?: string }).assignment_mode === 'staff_all')
@@ -171,10 +172,14 @@ export default async function TasksPage({
       if (isSm) childQ = childQ.in('store_id', smStoreIds)
       if (showArchived) childQ = childQ.not('archived_at', 'is', null)
       else              childQ = childQ.is('archived_at', null)
-      const { data: childData } = await childQ
+      const { data: childData, error: childErr } = await childQ
+      // A failed children fetch must surface as an error, not render every
+      // broadcast tree as a misleading "0/0 đã nộp".
+      if (childErr) childrenError = childErr
       extraChildren = (childData ?? []) as unknown as NonNullable<typeof tasks>
     }
   }
+  const listError = tasksError ?? childrenError
 
   const allTasks = [...pageTasks, ...extraChildren]
 
@@ -271,10 +276,70 @@ export default async function TasksPage({
       continue
     }
     // staff_all children: if parent is in results, fold into the group above.
-    // If parent was filtered out (e.g. status filter), show as standalone task row —
-    // never as a broadcast group (children have broadcast_id but are not store-level tasks).
     if (parentTaskId) {
       if (staffParentIds.has(parentTaskId)) continue
+
+      // Parent absent (e.g. a status filter matched the child but not the parent).
+      // Admin/PIC must still see the broadcast tree, never stray pharmacist rows —
+      // group the orphan by broadcast_id, keying its store entry by parent id.
+      // Counts then reflect only the children matching the current filter.
+      if (isAdminRole && view === 'pending' && task.broadcast_id) {
+        const child: ChildTask = {
+          id:         task.id,
+          status:     task.status,
+          stores:     (task.stores as unknown as { name: string } | null),
+          assignee:   (task.assignee as unknown as { full_name: string } | null),
+          deadline:   task.deadline ?? null,
+          overdue_at: (task as { overdue_at?: string | null }).overdue_at ?? null,
+        }
+        const isDone = task.status === 'done'
+        const existingIdx = seenStaffBroadcast.get(task.broadcast_id)
+        if (existingIdx !== undefined) {
+          const row = grouped[existingIdx] as StaffBroadcastGroup
+          let store = row.stores.find((s) => s.parentId === parentTaskId)
+          if (!store) {
+            store = {
+              parentId:   parentTaskId,
+              storeName:  (task.stores as unknown as { name: string } | null)?.name ?? null,
+              total:      0,
+              done:       0,
+              childTasks: [],
+            }
+            row.stores.push(store)
+            row.totalStores++
+          }
+          store.childTasks.push(child)
+          store.total++
+          if (isDone) store.done++
+          row.totalStaff++
+          if (isDone) row.doneStaff++
+          row.taskIds.push(task.id)
+        } else {
+          seenStaffBroadcast.set(task.broadcast_id, grouped.length)
+          grouped.push({
+            type:        'staff_broadcast',
+            broadcastId: task.broadcast_id,
+            title:       task.title,
+            category:    task.category ?? null,
+            createdAt:   task.created_at,
+            taskIds:     [task.id],
+            stores:      [{
+              parentId:   parentTaskId,
+              storeName:  (task.stores as unknown as { name: string } | null)?.name ?? null,
+              total:      1,
+              done:       isDone ? 1 : 0,
+              childTasks: [child],
+            }],
+            totalStores: 1,
+            totalStaff:  1,
+            doneStaff:   isDone ? 1 : 0,
+          })
+        }
+        continue
+      }
+
+      // Non-admin (or done/archive view): show as standalone task row — never as
+      // a store-level broadcast group.
       grouped.push({
         type: 'task',
         task: {
@@ -407,13 +472,13 @@ export default async function TasksPage({
         isStaff={isStaff}
       />
 
-      {tasksError ? (
+      {listError ? (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-4 flex items-start gap-3">
           <AlertCircle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
           <div className="text-sm">
             <p className="font-medium text-destructive">Không thể tải danh sách task</p>
-            <p className="text-muted-foreground mt-1">{tasksError.message}</p>
-            {tasksError.message.includes('archived_at') && (
+            <p className="text-muted-foreground mt-1">{listError.message}</p>
+            {listError.message.includes('archived_at') && (
               <p className="text-muted-foreground mt-1">
                 Vui lòng chạy migration <code className="font-mono text-xs bg-muted px-1 rounded">011_archive_tasks.sql</code> trong Supabase SQL Editor.
               </p>
