@@ -17,6 +17,7 @@ export const ACTION_COLORS: Record<string, string> = {
   recurring_tasks_generated:   'bg-teal-100 text-teal-700',
   cron_run_failed:             'bg-red-100 text-red-700',
   deadline_extended:           'bg-orange-100 text-orange-700',
+  staff_all_instruction_updated: 'bg-yellow-100 text-yellow-700',
 }
 
 export const ACTION_LABELS: Record<string, string> = {
@@ -34,6 +35,7 @@ export const ACTION_LABELS: Record<string, string> = {
   recurring_tasks_generated:   'Tạo task định kỳ',
   cron_run_failed:             'Cron lỗi',
   deadline_extended:           'Gia hạn deadline',
+  staff_all_instruction_updated: 'Cập nhật hướng dẫn (toàn bộ dược sĩ)',
 }
 
 export const ACTION_OPTIONS = Object.entries(ACTION_LABELS)
@@ -87,6 +89,16 @@ export function formatMeta(action: string, metadata: Meta | null): string {
       const from = metadata.from ? new Date(metadata.from as string).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) : '—'
       const to   = metadata.to   ? new Date(metadata.to   as string).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' }) : '—'
       return `${from} → ${to}`
+    }
+    case 'staff_all_instruction_updated': {
+      const fieldVi: Record<string, string> = {
+        title: 'tiêu đề', description: 'mô tả', category: 'phân loại',
+        priority: 'ưu tiên', attachments: 'file đính kèm',
+      }
+      const fields = (metadata.changed_fields as string[] | undefined) ?? []
+      const changed = fields.length ? fields.map((f) => fieldVi[f] ?? f).join(', ') : 'không đổi'
+      const applied = metadata.applied_to ? ` · ${metadata.applied_to} task` : ''
+      return `Sửa: ${changed}${applied}`
     }
     case 'cron_run_failed':
       return metadata.error_message ? String(metadata.error_message).slice(0, 80) : '—'

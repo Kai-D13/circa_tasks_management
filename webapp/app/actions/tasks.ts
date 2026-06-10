@@ -83,6 +83,33 @@ function validateAttachments(atts: AttachmentMeta[]): string | null {
   return null
 }
 
+// Server-side URL whitelist for staff_all instruction propagation. The dialog
+// posts attachments + links straight into input_data (rendered downstream as
+// <a href>), so the server must not trust them: attachments may only point at our
+// own task-uploads bucket under task-inputs/, and links must be plain http(s) —
+// blocks javascript:/data:/file: and malformed URLs a client could smuggle in.
+function validateInstructionUrls(
+  attachments: { url?: string }[],
+  links: { url?: string }[],
+): string | null {
+  let supaHost = ''
+  try { supaHost = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL!).host } catch { /* empty host blocks all */ }
+  const PUBLIC_PREFIX = '/storage/v1/object/public/task-uploads/task-inputs/'
+  for (const a of attachments) {
+    let u: URL
+    try { u = new URL(a.url ?? '') } catch { return `Đường dẫn file không hợp lệ: ${a.url ?? '(trống)'}` }
+    if (u.protocol !== 'https:' || u.host !== supaHost || !u.pathname.startsWith(PUBLIC_PREFIX))
+      return 'File đính kèm phải nằm trong kho lưu trữ của hệ thống'
+  }
+  for (const l of links) {
+    let u: URL
+    try { u = new URL(l.url ?? '') } catch { return `Link không hợp lệ: ${l.url ?? '(trống)'}` }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:')
+      return 'Link chỉ chấp nhận http hoặc https'
+  }
+  return null
+}
+
 // Ad-hoc tasks must have a start date and a deadline, with deadline after start.
 function validateTaskDates(startDate: string | null, deadline: string | null): string | null {
   if (!startDate) return 'Vui lòng chọn ngày bắt đầu'
@@ -433,7 +460,9 @@ export async function updateStaffAllInstruction(parentTaskId: string, data: {
 
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
   const { data: anchor } = await supabaseAdmin
-    .from('tasks').select('created_by, broadcast_id, assignment_mode').eq('id', parentTaskId).single()
+    .from('tasks')
+    .select('created_by, broadcast_id, assignment_mode, title, description, category, priority, input_data')
+    .eq('id', parentTaskId).single()
 
   if (!anchor) return { error: 'Task không tồn tại' }
   if ((anchor as { assignment_mode?: string }).assignment_mode !== 'staff_all')
@@ -444,8 +473,13 @@ export async function updateStaffAllInstruction(parentTaskId: string, data: {
     return { error: 'Bạn không có quyền chỉnh sửa task này' }
 
   if (!data.title?.trim()) return { error: 'Vui lòng nhập tiêu đề' }
-  const attachErr = validateAttachments(data.attachments ?? [])
+  const attachments = data.attachments ?? []
+  const links = (data.links ?? []).filter((l) => l.url?.trim())
+  const attachErr = validateAttachments(attachments)
   if (attachErr) return { error: attachErr }
+  // Don't trust client-supplied URLs — whitelist before they land in input_data.
+  const urlErr = validateInstructionUrls(attachments, links)
+  if (urlErr) return { error: urlErr }
 
   // Resolve the full set of tasks to update. Multi-store broadcasts share a
   // broadcast_id across their staff_all parents; a single-store staff_all
@@ -464,12 +498,21 @@ export async function updateStaffAllInstruction(parentTaskId: string, data: {
     .from('tasks').select('id').in('parent_task_id', parentIds)
   // Not filtered by archived_at on purpose — keep the reference doc consistent
   // across archived copies too.
-  const allIds = [...parentIds, ...(children ?? []).map((c: { id: string }) => c.id)]
+  const childIds = (children ?? []).map((c: { id: string }) => c.id)
+  const allIds = [...parentIds, ...childIds]
 
-  const links = (data.links ?? []).filter((l) => l.url?.trim())
-  const inputData = (data.attachments?.length || links.length)
-    ? { attachments: data.attachments, links }
-    : null
+  // Merge onto the anchor's existing input_data so any future metadata keys are
+  // preserved (we only own attachments + links). All broadcast rows are created
+  // identically, so the anchor's other keys mirror every row's — applying the
+  // anchor's merged object uniformly is safe here. Collapse to null only when
+  // there is genuinely nothing left to store.
+  const baseMeta = { ...((anchor.input_data as Record<string, unknown> | null) ?? {}) }
+  delete baseMeta.attachments
+  delete baseMeta.links
+  const hasOtherMeta = Object.keys(baseMeta).length > 0
+  const inputData = (attachments.length || links.length)
+    ? { ...baseMeta, attachments, links }
+    : (hasOtherMeta ? baseMeta : null)
 
   const { error: updErr } = await supabaseAdmin.from('tasks').update({
     title:       data.title.trim(),
@@ -480,12 +523,30 @@ export async function updateStaffAllInstruction(parentTaskId: string, data: {
   }).in('id', allIds)
   if (updErr) return { error: updErr.message }
 
+  // Audit: which fields actually changed (vs the anchor) + reach of the propagation.
+  const prevAtts = ((anchor.input_data as { attachments?: unknown[] } | null)?.attachments ?? [])
+  const changed: string[] = []
+  if (anchor.title !== data.title.trim())             changed.push('title')
+  if ((anchor.description ?? null) !== data.description) changed.push('description')
+  if (anchor.category !== data.category)              changed.push('category')
+  if (anchor.priority !== data.priority)              changed.push('priority')
+  if ((prevAtts as unknown[]).length !== attachments.length) changed.push('attachments')
+
   // One log per parent (filterable per store), tagged with the broadcast + reach.
   const logs = parentIds.map((pid) => ({
     task_id:  pid,
     action:   'staff_all_instruction_updated',
     user_id:  user.id,
-    metadata: { broadcast_id: anchor.broadcast_id ?? null, applied_to: allIds.length },
+    metadata: {
+      broadcast_id:   anchor.broadcast_id ?? null,
+      title:          data.title.trim(),
+      changed_fields: changed,
+      parent_count:   parentIds.length,
+      child_count:    childIds.length,
+      applied_to:     allIds.length,
+      old_attachment_count: (prevAtts as unknown[]).length,
+      new_attachment_count: attachments.length,
+    },
   }))
   const { error: logErr } = await supabaseAdmin.from('task_logs').insert(logs)
   if (logErr) console.error('[updateStaffAllInstruction] task_logs:', logErr.message)
