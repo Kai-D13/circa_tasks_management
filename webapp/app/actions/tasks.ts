@@ -85,17 +85,22 @@ function validateAttachments(atts: AttachmentMeta[]): string | null {
 
 // Server-side URL whitelist for staff_all instruction propagation. The dialog
 // posts attachments + links straight into input_data (rendered downstream as
-// <a href>), so the server must not trust them: attachments may only point at our
-// own task-uploads bucket under task-inputs/, and links must be plain http(s) —
+// <a href>), so the server must not trust them: NEW attachments may only point at
+// our own task-uploads bucket under task-inputs/, and links must be plain http(s) —
 // blocks javascript:/data:/file: and malformed URLs a client could smuggle in.
+// Attachments already on the task (`grandfathered` set) are passed through even if
+// they use a legacy storage host, so editing an old broadcast's text doesn't get
+// rejected over a pre-existing file the admin never touched.
 function validateInstructionUrls(
   attachments: { url?: string }[],
   links: { url?: string }[],
+  grandfathered: Set<string>,
 ): string | null {
   let supaHost = ''
   try { supaHost = new URL(process.env.NEXT_PUBLIC_SUPABASE_URL!).host } catch { /* empty host blocks all */ }
   const PUBLIC_PREFIX = '/storage/v1/object/public/task-uploads/task-inputs/'
   for (const a of attachments) {
+    if (a.url && grandfathered.has(a.url)) continue // pre-existing file — trust as-is
     let u: URL
     try { u = new URL(a.url ?? '') } catch { return `Đường dẫn file không hợp lệ: ${a.url ?? '(trống)'}` }
     if (u.protocol !== 'https:' || u.host !== supaHost || !u.pathname.startsWith(PUBLIC_PREFIX))
@@ -477,8 +482,16 @@ export async function updateStaffAllInstruction(parentTaskId: string, data: {
   const links = (data.links ?? []).filter((l) => l.url?.trim())
   const attachErr = validateAttachments(attachments)
   if (attachErr) return { error: attachErr }
-  // Don't trust client-supplied URLs — whitelist before they land in input_data.
-  const urlErr = validateInstructionUrls(attachments, links)
+
+  // Previous attachments/links — used both to grandfather pre-existing files
+  // through URL validation and to detect what actually changed for the audit log.
+  const prevAtts  = ((anchor.input_data as { attachments?: TaskAttachment[] } | null)?.attachments ?? [])
+  const prevLinks = ((anchor.input_data as { links?: { label: string; url: string }[] } | null)?.links ?? [])
+  const existingUrls = new Set(prevAtts.map((a) => a.url).filter(Boolean) as string[])
+
+  // Don't trust client-supplied URLs — whitelist (new) attachments + links before
+  // they land in input_data; pre-existing files are grandfathered.
+  const urlErr = validateInstructionUrls(attachments, links, existingUrls)
   if (urlErr) return { error: urlErr }
 
   // Resolve the full set of tasks to update. Multi-store broadcasts share a
@@ -524,13 +537,18 @@ export async function updateStaffAllInstruction(parentTaskId: string, data: {
   if (updErr) return { error: updErr.message }
 
   // Audit: which fields actually changed (vs the anchor) + reach of the propagation.
-  const prevAtts = ((anchor.input_data as { attachments?: unknown[] } | null)?.attachments ?? [])
+  // Attachments/links are compared by normalized content (not just count) so
+  // swapping PDF A → PDF B, or editing a link, is recorded even when the count is
+  // unchanged.
+  const normAtts  = (a: TaskAttachment[]) => JSON.stringify(a.map((x) => [x.url, x.name, x.type, x.size ?? null]))
+  const normLinks = (l: { label: string; url: string }[]) => JSON.stringify(l.map((x) => [x.label, x.url]))
   const changed: string[] = []
-  if (anchor.title !== data.title.trim())             changed.push('title')
+  if (anchor.title !== data.title.trim())               changed.push('title')
   if ((anchor.description ?? null) !== data.description) changed.push('description')
-  if (anchor.category !== data.category)              changed.push('category')
-  if (anchor.priority !== data.priority)              changed.push('priority')
-  if ((prevAtts as unknown[]).length !== attachments.length) changed.push('attachments')
+  if (anchor.category !== data.category)                changed.push('category')
+  if (anchor.priority !== data.priority)                changed.push('priority')
+  if (normAtts(prevAtts) !== normAtts(attachments))     changed.push('attachments')
+  if (normLinks(prevLinks) !== normLinks(links))        changed.push('links')
 
   // One log per parent (filterable per store), tagged with the broadcast + reach.
   const logs = parentIds.map((pid) => ({
@@ -544,8 +562,10 @@ export async function updateStaffAllInstruction(parentTaskId: string, data: {
       parent_count:   parentIds.length,
       child_count:    childIds.length,
       applied_to:     allIds.length,
-      old_attachment_count: (prevAtts as unknown[]).length,
+      old_attachment_count: prevAtts.length,
       new_attachment_count: attachments.length,
+      old_link_count: prevLinks.length,
+      new_link_count: links.length,
     },
   }))
   const { error: logErr } = await supabaseAdmin.from('task_logs').insert(logs)

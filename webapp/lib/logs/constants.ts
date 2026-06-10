@@ -93,7 +93,7 @@ export function formatMeta(action: string, metadata: Meta | null): string {
     case 'staff_all_instruction_updated': {
       const fieldVi: Record<string, string> = {
         title: 'tiêu đề', description: 'mô tả', category: 'phân loại',
-        priority: 'ưu tiên', attachments: 'file đính kèm',
+        priority: 'ưu tiên', attachments: 'file đính kèm', links: 'link',
       }
       const fields = (metadata.changed_fields as string[] | undefined) ?? []
       const changed = fields.length ? fields.map((f) => fieldVi[f] ?? f).join(', ') : 'không đổi'
