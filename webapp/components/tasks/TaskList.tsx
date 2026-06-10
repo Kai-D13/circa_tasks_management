@@ -66,6 +66,32 @@ export type StaffGroup = {
   childTasks: ChildTask[]   // one per staff; child.assignee = pharmacist name
 }
 
+// One store inside a staff_all broadcast: its parent task + per-pharmacist children.
+export type StaffBroadcastStore = {
+  parentId:   string        // the store's staff_all parent (detail page lives here)
+  storeName:  string | null
+  total:      number
+  done:       number
+  childTasks: ChildTask[]
+}
+
+// Admin/PIC view of a multi-store "Từng dược sĩ nộp" broadcast: ONE summary row
+// for the whole broadcast (Task → Store → Dược sĩ) instead of N per-store rows.
+// The title links to a representative parent (first store) where the
+// "Chỉnh sửa hướng dẫn" propagation dialog lives.
+export type StaffBroadcastGroup = {
+  type:        'staff_broadcast'
+  broadcastId: string
+  title:       string
+  category:    string | null
+  createdAt:   string
+  taskIds:     string[]     // all parents + children, for archive selection
+  stores:      StaffBroadcastStore[]
+  totalStores: number
+  totalStaff:  number
+  doneStaff:   number
+}
+
 export type TaskRow = {
   type: 'task'
   task: {
@@ -88,7 +114,7 @@ export type TaskRow = {
   }
 }
 
-export type TaskListItem = BroadcastGroup | StaffGroup | TaskRow
+export type TaskListItem = BroadcastGroup | StaffGroup | StaffBroadcastGroup | TaskRow
 
 interface Props {
   items:         TaskListItem[]
@@ -411,6 +437,164 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
               )
             }
 
+            // Two-level group: broadcast header → store rows → per-pharmacist rows.
+            // The shared `expanded` set holds both broadcastIds (level 1) and store
+            // parentIds (level 2) — the IDs never collide.
+            if (item.type === 'staff_broadcast') {
+              const isExpanded     = expanded.has(item.broadcastId)
+              const allInSelected  = item.taskIds.length > 0 && item.taskIds.every((id) => selected.has(id))
+              const someInSelected = item.taskIds.some((id) => selected.has(id))
+
+              return (
+                <React.Fragment key={`sbc-${item.broadcastId}`}>
+                  {/* Broadcast summary row */}
+                  <TableRow className="bg-primary/5 hover:bg-primary/10">
+                    {showCheckbox && (
+                      <TableCell>
+                        <input
+                          type="checkbox"
+                          checked={allInSelected}
+                          ref={(el) => { if (el) el.indeterminate = !allInSelected && someInSelected }}
+                          onChange={() => toggleGroup(item.taskIds)}
+                          aria-label="Chọn nhóm broadcast dược sĩ"
+                          className="h-4 w-4 cursor-pointer accent-primary"
+                        />
+                      </TableCell>
+                    )}
+                    <TableCell colSpan={4}>
+                      <div className="flex items-center gap-2 font-medium">
+                        <button
+                          type="button"
+                          onClick={() => toggleExpand(item.broadcastId)}
+                          className="shrink-0"
+                          aria-label={isExpanded ? 'Thu gọn' : 'Mở rộng'}
+                        >
+                          {isExpanded
+                            ? <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                            : <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                          }
+                        </button>
+                        <Radio className="h-4 w-4 text-primary shrink-0" />
+                        <Users className="h-4 w-4 text-primary shrink-0" />
+                        <Link
+                          href={`/tasks/${item.stores[0]?.parentId ?? ''}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          prefetch={false}
+                          className="hover:underline"
+                        >
+                          {item.title}
+                        </Link>
+                        {item.category && item.category !== 'other' && (
+                          <span className={cn(
+                            'text-xs px-1.5 py-0.5 rounded',
+                            CATEGORY_STYLE[item.category as TaskCategory] ?? 'bg-gray-100 text-gray-600'
+                          )}>
+                            {CATEGORY_LABEL[item.category as TaskCategory] ?? item.category}
+                          </span>
+                        )}
+                        <span className="text-xs text-muted-foreground font-normal ml-1">
+                          {item.totalStores} cửa hàng · {item.totalStaff} dược sĩ
+                        </span>
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-sm whitespace-nowrap" onClick={() => toggleExpand(item.broadcastId)}>
+                      <span className={cn(
+                        'font-medium',
+                        item.totalStaff > 0 && item.doneStaff === item.totalStaff ? 'text-green-600' : 'text-amber-600'
+                      )}>
+                        {item.doneStaff}/{item.totalStaff}
+                      </span>
+                      <span className="text-muted-foreground"> đã nộp</span>
+                    </TableCell>
+                    <TableCell onClick={() => toggleExpand(item.broadcastId)} />
+                    <TableCell className="text-sm text-muted-foreground" onClick={() => toggleExpand(item.broadcastId)}>
+                      {formatDate(item.createdAt)}
+                    </TableCell>
+                  </TableRow>
+
+                  {/* Level 2: one row per store */}
+                  {isExpanded && item.stores.map((store) => {
+                    const storeExpanded = expanded.has(store.parentId)
+                    return (
+                      <React.Fragment key={store.parentId}>
+                        <TableRow className="bg-muted/30 hover:bg-muted/50">
+                          {showCheckbox && <TableCell />}
+                          <TableCell>
+                            <div className="flex items-center gap-1.5 pl-8 text-sm">
+                              <button
+                                type="button"
+                                onClick={() => toggleExpand(store.parentId)}
+                                className="shrink-0"
+                                aria-label={storeExpanded ? 'Thu gọn cửa hàng' : 'Mở rộng cửa hàng'}
+                              >
+                                {storeExpanded
+                                  ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                                  : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                                }
+                              </button>
+                              <Link
+                                href={`/tasks/${store.parentId}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                prefetch={false}
+                                className="font-medium hover:underline"
+                              >
+                                {store.storeName ?? 'Không rõ cửa hàng'}
+                              </Link>
+                            </div>
+                          </TableCell>
+                          <TableCell />
+                          <TableCell className="text-sm whitespace-nowrap">
+                            <span className={cn(
+                              'font-medium',
+                              store.total > 0 && store.done === store.total ? 'text-green-600' : 'text-amber-600'
+                            )}>
+                              {store.done}/{store.total}
+                            </span>
+                            <span className="text-muted-foreground"> đã nộp</span>
+                          </TableCell>
+                          <TableCell />
+                          <TableCell />
+                          <TableCell />
+                          <TableCell />
+                        </TableRow>
+
+                        {/* Level 3: per-pharmacist rows */}
+                        {storeExpanded && store.childTasks.map((child) => (
+                          <TableRow key={child.id} className="bg-muted/20 hover:bg-muted/40">
+                            {showCheckbox && <TableCell />}
+                            <TableCell>
+                              <Link
+                                href={`/tasks/${child.id}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                prefetch={false}
+                                className="flex items-center gap-1.5 text-sm hover:underline pl-14"
+                              >
+                                <span className="text-muted-foreground">↳</span>
+                                <span>{child.assignee?.full_name ?? 'Chưa phân công'}</span>
+                              </Link>
+                            </TableCell>
+                            <TableCell />
+                            <TableCell />
+                            <TableCell />
+                            <TableCell>
+                              <TaskStatusBadge status={getEffectiveStatus(child.deadline, child.status) as Task['status']} late={child.status === 'done' && !!child.overdue_at} />
+                            </TableCell>
+                            <TableCell className="text-sm text-muted-foreground">
+                              {child.deadline ? formatDate(child.deadline) : '—'}
+                            </TableCell>
+                            <TableCell />
+                          </TableRow>
+                        ))}
+                      </React.Fragment>
+                    )
+                  })}
+                </React.Fragment>
+              )
+            }
+
             if (item.type === 'staff') {
               const isExpanded     = expanded.has(item.parentId)
               const allInSelected  = item.taskIds.length > 0 && item.taskIds.every((id) => selected.has(id))
@@ -594,6 +778,76 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
       {/* Mobile: card list — same items, tap-to-open, groups expand inline. */}
       <div className="md:hidden space-y-2">
         {items.map((item) => {
+          if (item.type === 'staff_broadcast') {
+            const isExpanded = expanded.has(item.broadcastId)
+            const allDone = item.totalStaff > 0 && item.doneStaff === item.totalStaff
+            return (
+              <div key={`m-sbc-${item.broadcastId}`} className="rounded-lg border bg-primary/5">
+                <button
+                  type="button"
+                  onClick={() => toggleExpand(item.broadcastId)}
+                  className="w-full flex items-center gap-2 p-3 text-left"
+                >
+                  {isExpanded
+                    ? <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
+                    : <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />}
+                  <Radio className="h-4 w-4 text-primary shrink-0" />
+                  <span className="font-medium flex-1 min-w-0">
+                    <span className="block truncate">{item.title}</span>
+                    <span className="block text-xs text-muted-foreground font-normal">
+                      {item.totalStores} cửa hàng · {item.totalStaff} dược sĩ
+                    </span>
+                  </span>
+                  <span className={cn('text-sm font-medium whitespace-nowrap', allDone ? 'text-green-600' : 'text-amber-600')}>
+                    {item.doneStaff}/{item.totalStaff}
+                  </span>
+                </button>
+                {isExpanded && (
+                  <div className="border-t divide-y divide-border/60">
+                    {item.stores.map((store) => (
+                      <div key={store.parentId}>
+                        <button
+                          type="button"
+                          onClick={() => toggleExpand(store.parentId)}
+                          className="w-full flex items-center justify-between gap-2 p-2 pl-6 text-sm active:bg-muted/50"
+                        >
+                          <span className="flex items-center gap-1.5 min-w-0">
+                            {expanded.has(store.parentId)
+                              ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                              : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
+                            <span className="truncate font-medium">{store.storeName ?? 'Không rõ cửa hàng'}</span>
+                          </span>
+                          <span className={cn(
+                            'text-xs font-medium whitespace-nowrap',
+                            store.total > 0 && store.done === store.total ? 'text-green-600' : 'text-amber-600'
+                          )}>
+                            {store.done}/{store.total}
+                          </span>
+                        </button>
+                        {expanded.has(store.parentId) && store.childTasks.map((child) => (
+                          <Link
+                            key={child.id}
+                            href={`/tasks/${child.id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            prefetch={false}
+                            className="flex items-center justify-between gap-2 p-2 pl-12 text-sm active:bg-muted/50"
+                          >
+                            <span className="truncate">{child.assignee?.full_name ?? 'Chưa phân công'}</span>
+                            <TaskStatusBadge
+                              status={getEffectiveStatus(child.deadline, child.status) as Task['status']}
+                              late={child.status === 'done' && !!child.overdue_at}
+                            />
+                          </Link>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          }
+
           if (item.type === 'broadcast' || item.type === 'staff') {
             const id        = item.type === 'broadcast' ? item.broadcastId : item.parentId
             const isExpanded = expanded.has(id)

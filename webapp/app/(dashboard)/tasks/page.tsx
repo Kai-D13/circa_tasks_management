@@ -5,7 +5,7 @@ import { getSmStoreIds } from '@/lib/authz'
 import { buttonVariants } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { TaskFilters } from '@/components/tasks/TaskFilters'
-import { TaskList, TaskListItem, BroadcastGroup, StaffGroup, TaskRow, ChildTask } from '@/components/tasks/TaskList'
+import { TaskList, TaskListItem, BroadcastGroup, StaffGroup, StaffBroadcastGroup, StaffBroadcastStore, TaskRow, ChildTask } from '@/components/tasks/TaskList'
 import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { Plus, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -204,15 +204,57 @@ export default async function TasksPage({
 
   // Group tasks: collapse same broadcast_id into one broadcast row, fold staff_all
   // children under their parent, leave everything else as individual rows.
+  // Admin/PIC additionally collapse all staff_all store-parents of one broadcast
+  // into a single "task tổng" tree row (Task → Store → Dược sĩ) — 26 stores must
+  // read as ONE task, not 26. Store managers/SM keep per-store rows (their scope
+  // is one or a few stores, a global rollup adds nothing).
+  const isAdminRole = profile?.role === 'admin'
   const grouped: TaskListItem[] = []
   const seenBroadcast = new Map<string, number>()
+  const seenStaffBroadcast = new Map<string, number>()
 
   for (const task of allTasks) {
     const parentTaskId = (task as { parent_task_id?: string | null }).parent_task_id ?? null
 
-    // staff_all parent → one group row with per-staff children folded in
+    // staff_all parent → admin: fold into the broadcast tree row; others: one
+    // per-store group row with per-staff children folded in
     if ((task as { assignment_mode?: string }).assignment_mode === 'staff_all') {
       const kids = childrenByParent.get(task.id) ?? []
+
+      if (isAdminRole && task.broadcast_id) {
+        const storeEntry: StaffBroadcastStore = {
+          parentId:   task.id,
+          storeName:  (task.stores as unknown as { name: string } | null)?.name ?? null,
+          total:      kids.length,
+          done:       kids.filter((k) => k.status === 'done').length,
+          childTasks: kids,
+        }
+        const existingIdx = seenStaffBroadcast.get(task.broadcast_id)
+        if (existingIdx !== undefined) {
+          const row = grouped[existingIdx] as StaffBroadcastGroup
+          row.stores.push(storeEntry)
+          row.totalStores++
+          row.totalStaff += storeEntry.total
+          row.doneStaff  += storeEntry.done
+          row.taskIds.push(task.id, ...kids.map((k) => k.id))
+        } else {
+          seenStaffBroadcast.set(task.broadcast_id, grouped.length)
+          grouped.push({
+            type:        'staff_broadcast',
+            broadcastId: task.broadcast_id,
+            title:       task.title,
+            category:    task.category ?? null,
+            createdAt:   task.created_at,
+            taskIds:     [task.id, ...kids.map((k) => k.id)],
+            stores:      [storeEntry],
+            totalStores: 1,
+            totalStaff:  storeEntry.total,
+            doneStaff:   storeEntry.done,
+          })
+        }
+        continue
+      }
+
       const group: StaffGroup = {
         type:       'staff',
         parentId:   task.id,
@@ -317,6 +359,14 @@ export default async function TasksPage({
         }
         grouped.push(row)
       }
+    }
+  }
+
+  // Inside each broadcast tree, list stores alphabetically — page order is
+  // insertion order from the query, which is meaningless to the admin.
+  for (const item of grouped) {
+    if (item.type === 'staff_broadcast') {
+      item.stores.sort((a, b) => (a.storeName ?? '').localeCompare(b.storeName ?? '', 'vi'))
     }
   }
 
