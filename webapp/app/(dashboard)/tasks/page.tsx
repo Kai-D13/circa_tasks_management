@@ -130,7 +130,15 @@ export default async function TasksPage({
   // view, parents are never 'done', so done children show standalone — no folding.
   const topLevelOnly = (profile?.role === 'admin' || profile?.role === 'store_manager' || isSm)
     && view === 'pending' && !params.status
-  if (topLevelOnly) query = query.is('parent_task_id', null)
+
+  // Admin/PIC with a status sub-filter: ALSO exclude children from pagination.
+  // Otherwise a 26-store/106-staff broadcast floods the 30-row page under 'todo'
+  // (parents + children all match) — partial trees, broadcast repeating across
+  // pages, inflated count. Matching children are re-fetched per page below.
+  const isAdminRole = profile?.role === 'admin'
+  const adminTreeFilter = isAdminRole && view === 'pending' && !showArchived
+    && (params.status === 'todo' || params.status === 'in_progress' || params.status === 'overdue')
+  if (topLevelOnly || adminTreeFilter) query = query.is('parent_task_id', null)
 
   // Staff have no store filter (storesForFilter is [] for them), so skip the query
   // entirely instead of fetching and discarding it. (isStaff computed above.)
@@ -157,6 +165,7 @@ export default async function TasksPage({
   // Fetch children for staff_all parents on this page (excluded from paginated query).
   let extraChildren: NonNullable<typeof tasks> = []
   let childrenError: { message: string } | null = null
+  const CHILD_COLS = 'id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name)'
   if (topLevelOnly) {
     const parentIds = (tasks ?? [])
       .filter(t => (t as { assignment_mode?: string }).assignment_mode === 'staff_all')
@@ -166,7 +175,7 @@ export default async function TasksPage({
       // (no completion columns) select matches; cast unifies it with `tasks`.
       let childQ = supabase
         .from('tasks')
-        .select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name)')
+        .select(CHILD_COLS)
         .in('parent_task_id', parentIds)
         .order('created_at', { ascending: true })
       if (isSm) childQ = childQ.in('store_id', smStoreIds)
@@ -175,6 +184,49 @@ export default async function TasksPage({
       const { data: childData, error: childErr } = await childQ
       // A failed children fetch must surface as an error, not render every
       // broadcast tree as a misleading "0/0 đã nộp".
+      if (childErr) childrenError = childErr
+      extraChildren = (childData ?? []) as unknown as NonNullable<typeof tasks>
+    }
+  } else if (adminTreeFilter) {
+    // Status-filtered admin view: fetch the children MATCHING the filter so the
+    // broadcast tree shows exactly the pharmacists the filter is about.
+    //
+    //   todo        → parents match the filter themselves (their status is the
+    //                 constant 'todo'), so scope children to the parents on this
+    //                 page — trees stay complete and never duplicate across pages.
+    //   overdue /   → parents can never match (overdue excludes staff_all parents
+    //   in_progress   by design; parents are never 'in_progress'), so pull ALL
+    //                 matching children (bounded) and let the orphan grouping
+    //                 assemble the per-broadcast trees. Page 1 only — the trees
+    //                 ride alongside the top-level pagination, and repeating them
+    //                 on every page would be worse than the rare long list.
+    let childQ = supabase.from('tasks').select(CHILD_COLS).is('archived_at', null)
+    let run = false
+    if (params.status === 'todo') {
+      const parentIds = (tasks ?? [])
+        .filter(t => (t as { assignment_mode?: string }).assignment_mode === 'staff_all')
+        .map(t => t.id)
+      if (parentIds.length > 0) {
+        childQ = childQ
+          .in('parent_task_id', parentIds)
+          .eq('status', 'todo')
+          .or(`deadline.is.null,deadline.gte.${nowIso}`)
+          .order('created_at', { ascending: true })
+        run = true
+      }
+    } else if (page === 1) {
+      childQ = childQ.not('parent_task_id', 'is', null)
+      childQ = params.status === 'overdue'
+        ? childQ.or(`status.eq.overdue,and(deadline.lt.${nowIso},status.neq.done)`)
+        : childQ.eq('status', 'in_progress').or(`deadline.is.null,deadline.gte.${nowIso}`)
+      childQ = childQ.order('created_at', { ascending: true }).limit(300)
+      run = true
+    }
+    if (run) {
+      if (params.priority) childQ = childQ.eq('priority', params.priority)
+      if (params.store_id) childQ = childQ.eq('store_id', params.store_id)
+      if (params.category) childQ = childQ.eq('category', params.category)
+      const { data: childData, error: childErr } = await childQ
       if (childErr) childrenError = childErr
       extraChildren = (childData ?? []) as unknown as NonNullable<typeof tasks>
     }
@@ -212,8 +264,8 @@ export default async function TasksPage({
   // Admin/PIC additionally collapse all staff_all store-parents of one broadcast
   // into a single "task tổng" tree row (Task → Store → Dược sĩ) — 26 stores must
   // read as ONE task, not 26. Store managers/SM keep per-store rows (their scope
-  // is one or a few stores, a global rollup adds nothing).
-  const isAdminRole = profile?.role === 'admin'
+  // is one or a few stores, a global rollup adds nothing). (isAdminRole is
+  // computed above, before the paginated query.)
   const grouped: TaskListItem[] = []
   const seenBroadcast = new Map<string, number>()
   const seenStaffBroadcast = new Map<string, number>()
@@ -435,6 +487,14 @@ export default async function TasksPage({
     }
   }
 
+  // Under a status sub-filter, a staff_all group whose children all missed the
+  // filter (e.g. parent is 'todo' but every pharmacist is in_progress/done) has
+  // nothing actionable — drop the empty shell instead of rendering "0 dược sĩ".
+  const visibleItems = adminTreeFilter
+    ? grouped.filter((g) =>
+        (g.type !== 'staff_broadcast' || g.totalStaff > 0) && (g.type !== 'staff' || g.total > 0))
+    : grouped
+
   // Build href that preserves filters but changes page.
   // Staff only carry 'view' — never status/priority/store_id/category/archived,
   // since those params are ignored server-side for staff and could confuse state.
@@ -489,7 +549,7 @@ export default async function TasksPage({
         <>
           <Card>
             <CardContent className="p-0">
-              <TaskList items={grouped} canArchive={canArchive} canRestore={canRestore} showArchived={showArchived} userRole={profile?.role ?? 'staff'} />
+              <TaskList items={visibleItems} canArchive={canArchive} canRestore={canRestore} showArchived={showArchived} userRole={profile?.role ?? 'staff'} />
             </CardContent>
           </Card>
 
