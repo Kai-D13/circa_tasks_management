@@ -165,8 +165,9 @@ export default async function UsersPage({
                     {formatDate(u.created_at)}
                   </TableCell>
                   <TableCell>
-                    {/* Edit / reset password: super admin only */}
-                    {isSuper && !isSm ? (
+                    {/* Edit / reset password: super admin only, never on your own
+                        row (self-demote would break is_super_admin()). */}
+                    {isSuper && !isSm && u.id !== user.id ? (
                       <div className="flex items-center gap-1">
                         <EditUserDialog
                           userId={u.id}

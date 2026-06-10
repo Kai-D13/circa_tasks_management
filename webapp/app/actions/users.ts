@@ -104,12 +104,22 @@ export async function updateUserRole(userId: string, role: string, storeId: stri
   if (!isSuperAdminEmail(user.email))
     return { error: 'Chỉ super admin mới chỉnh sửa được tài khoản người dùng' }
 
-  // SM scopes via sm_store_assignments, not a single store_id — exempt it (and
-  // admin) from the single-store requirement and always null their store_id.
-  if (role !== 'admin' && role !== 'sm' && !storeId)
+  // Never let the super admin change their own role. Demoting yourself out of
+  // 'admin' would break public.is_super_admin() (it requires role='admin') and
+  // lock the account out of super-admin powers.
+  if (userId === user.id)
+    return { error: 'Không thể tự đổi quyền của chính mình' }
+
+  // SM must be provisioned via setSmRole() so the store assignments are written
+  // atomically — block it on the generic path to avoid creating an SM with no
+  // stores (an empty, broken SM view).
+  if (role === 'sm')
+    return { error: 'Để tạo SM, chọn role SM và tích cửa hàng (chức năng gán SM)' }
+
+  if (role !== 'admin' && !storeId)
     return { error: 'Tài khoản Quản lý và Nhân viên phải được gán cửa hàng' }
 
-  const effectiveStoreId = (role === 'admin' || role === 'sm') ? null : storeId
+  const effectiveStoreId = role === 'admin' ? null : storeId
 
   const { error } = await supabase
     .from('users')
@@ -118,11 +128,9 @@ export async function updateUserRole(userId: string, role: string, storeId: stri
 
   if (error) return { error: error.message }
 
-  // If the user is no longer an SM, drop any store assignments so a future
-  // re-promotion doesn't silently inherit stale scope.
-  if (role !== 'sm') {
-    await supabaseAdmin.from('sm_store_assignments').delete().eq('sm_user_id', userId)
-  }
+  // Changing to any non-SM role drops stale store assignments so a future
+  // re-promotion doesn't silently inherit old scope. (No-op for non-SMs.)
+  await supabaseAdmin.from('sm_store_assignments').delete().eq('sm_user_id', userId)
 
   revalidatePath('/users')
   return { success: true }
@@ -142,11 +150,13 @@ export async function getSmStores(userId: string): Promise<string[]> {
 }
 
 // Promote a user to SM AND set their store assignments in one call. Super-admin
-// only. Combining the two mutations avoids the partial state where a user becomes
-// 'sm' with no stores (and thus an empty SM view). All store IDs are validated
-// BEFORE any write so the replace (delete + insert) cannot fail mid-way on a bad
-// FK. Writes go through supabaseAdmin (no RLS write policy for SM assignments)
-// and stamp assigned_by for audit. storeIds = the complete desired set.
+// only. Combining the two mutations into one action avoids the partial state
+// where a user becomes 'sm' with no stores (an empty SM view). Store IDs and the
+// target user are validated BEFORE any write so the replace (delete + insert)
+// won't fail mid-way on a bad FK. The action is idempotent — re-running it
+// re-sets role='sm' and replaces the assignments, so a rare transient DB error
+// between the writes is fully recoverable by retrying. Writes go through
+// supabaseAdmin (no RLS write policy for SM) and stamp assigned_by for audit.
 export async function setSmRole(userId: string, storeIds: string[]) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -154,12 +164,23 @@ export async function setSmRole(userId: string, storeIds: string[]) {
   if (!isSuperAdminEmail(user.email))
     return { error: 'Chỉ super admin mới gán quyền SM' }
 
+  // Don't let the super admin turn themselves into an SM (would break
+  // is_super_admin(), which requires role='admin').
+  if (userId === user.id)
+    return { error: 'Không thể tự gán quyền SM cho chính mình' }
+
   const unique = [...new Set(storeIds)].filter(Boolean)
   if (unique.length === 0)
     return { error: 'Chọn ít nhất 1 cửa hàng cho tài khoản SM' }
 
+  // Target user must exist (a bad userId would otherwise no-op the update and
+  // then fail the assignment insert on the FK).
+  const { data: target } = await supabaseAdmin
+    .from('users').select('id').eq('id', userId).single()
+  if (!target) return { error: 'Không tìm thấy người dùng' }
+
   // Validate every store exists up front so the insert below (after the delete)
-  // can never fail on an invalid FK and strand the user with no assignments.
+  // won't fail on an invalid FK and strand the user with no assignments.
   const { data: validStores } = await supabaseAdmin
     .from('stores').select('id').in('id', unique)
   if ((validStores?.length ?? 0) !== unique.length)

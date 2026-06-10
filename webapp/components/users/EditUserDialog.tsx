@@ -28,7 +28,7 @@ interface Props {
   userName:      string
   currentRole:   string
   currentStoreId: string | null
-  stores:        Pick<Store, 'id' | 'name'>[]
+  stores:        Pick<Store, 'id' | 'name' | 'code'>[]
 }
 
 export function EditUserDialog({ userId, userName, currentRole, currentStoreId, stores }: Props) {
@@ -153,7 +153,11 @@ export function EditUserDialog({ userId, userName, currentRole, currentStoreId, 
                       <p className="text-sm text-muted-foreground p-2">Chưa có cửa hàng nào</p>
                     )}
                     {stores
-                      .filter((s) => s.name.toLowerCase().includes(smSearch.trim().toLowerCase()))
+                      .filter((s) => {
+                        const q = smSearch.trim().toLowerCase()
+                        if (!q) return true
+                        return s.name.toLowerCase().includes(q) || (s.code ?? '').toLowerCase().includes(q)
+                      })
                       .map((s) => (
                         <label key={s.id} className="flex items-center gap-2 px-3 py-2 text-sm cursor-pointer hover:bg-muted/40">
                           <input
