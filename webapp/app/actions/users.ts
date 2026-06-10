@@ -22,6 +22,12 @@ export async function createUser(formData: FormData) {
   const storeId = formData.get('store_id') as string
   const role    = formData.get('role') as string
 
+  // Whitelist allowed roles at the action boundary. SM must be provisioned via
+  // setSmRole() so assignments are written together — creating an SM directly
+  // would produce a broken SM with no store scope.
+  const ALLOWED_ROLES = ['staff', 'store_manager', 'admin']
+  if (!ALLOWED_ROLES.includes(role)) return { error: 'Role không hợp lệ' }
+
   if (isSm) {
     // SM: can only create staff in their assigned stores
     if (role !== 'staff') return { error: 'SM chỉ được tạo tài khoản Nhân viên' }
@@ -130,7 +136,9 @@ export async function updateUserRole(userId: string, role: string, storeId: stri
 
   // Changing to any non-SM role drops stale store assignments so a future
   // re-promotion doesn't silently inherit old scope. (No-op for non-SMs.)
-  await supabaseAdmin.from('sm_store_assignments').delete().eq('sm_user_id', userId)
+  const { error: delErr } = await supabaseAdmin
+    .from('sm_store_assignments').delete().eq('sm_user_id', userId)
+  if (delErr) return { error: delErr.message }
 
   revalidatePath('/users')
   return { success: true }
@@ -161,7 +169,11 @@ export async function setSmRole(userId: string, storeIds: string[]) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
-  if (!isSuperAdminEmail(user.email))
+
+  // Mirror public.is_super_admin(): must be role='admin' AND the hardcoded email.
+  const { data: callerProfile } = await supabase
+    .from('users').select('role').eq('id', user.id).single()
+  if (callerProfile?.role !== 'admin' || !isSuperAdminEmail(user.email))
     return { error: 'Chỉ super admin mới gán quyền SM' }
 
   // Don't let the super admin turn themselves into an SM (would break

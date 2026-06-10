@@ -78,8 +78,9 @@ export function EditUserDialog({ userId, userName, currentRole, currentStoreId, 
         toast.error('Chọn ít nhất 1 cửa hàng cho tài khoản SM')
         return
       }
-      // One action does promote + assign atomically (validate-first), so the
-      // user can never end up 'sm' with no stores.
+      // setSmRole validates stores first, then writes role + assignments in two
+      // sequential statements (not a DB transaction). Retrying on transient error
+      // is safe because the action is idempotent.
       startTransition(async () => {
         const r = await setSmRole(userId, smStoreIds)
         if (r?.error) { toast.error(r.error); return }
