@@ -21,9 +21,12 @@ export async function proxy(request: NextRequest) {
 
   // Cron is self-protected via CRON_SECRET; /sw.js is the PWA cleanup worker and
   // must stay reachable without auth so old devices can unregister their SW.
+  // /documents is the public static usage guide (public/documents.html via
+  // rewrite) — staff open it from shared links, possibly before logging in.
   if (pathname.startsWith('/login'))     return NextResponse.next()
   if (pathname.startsWith('/api/cron/')) return NextResponse.next()
   if (pathname === '/sw.js')             return NextResponse.next()
+  if (pathname === '/documents' || pathname === '/documents.html') return NextResponse.next()
 
   // Filter only the current project's auth cookies (base + any .0/.1 chunks).
   const authCookies = request.cookies

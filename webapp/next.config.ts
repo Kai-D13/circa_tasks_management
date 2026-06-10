@@ -24,6 +24,15 @@ const nextConfig: NextConfig = {
       },
     ],
   },
+  // /documents → the static usage-guide HTML in /public. Array-form rewrites run
+  // after the filesystem check, and /documents has no page, so this serves
+  // public/documents.html directly — no React tree, no Supabase queries.
+  // (proxy.ts exempts the path from the auth gate.)
+  async rewrites() {
+    return [
+      { source: '/documents', destination: '/documents.html' },
+    ]
+  },
   // Never cache the service worker so a redeployed sw.js is picked up immediately.
   async headers() {
     return [
@@ -32,6 +41,14 @@ const nextConfig: NextConfig = {
         headers: [
           { key: 'Content-Type', value: 'application/javascript; charset=utf-8' },
           { key: 'Cache-Control', value: 'no-cache, no-store, must-revalidate' },
+        ],
+      },
+      // The static usage guide: cache for an hour (it changes only on redeploy),
+      // keeping repeat visits free for the server without pinning stale docs.
+      {
+        source: '/documents',
+        headers: [
+          { key: 'Cache-Control', value: 'public, max-age=3600' },
         ],
       },
       // Never let a shared cache (e.g. Cloudflare) store /login. The page embeds a
