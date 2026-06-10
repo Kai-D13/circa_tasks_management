@@ -18,10 +18,11 @@ import { deleteTask, requestResubmit, extendDeadline } from '@/app/actions/tasks
 import { createFeedbackThread, addFeedbackMessage, resolveFeedbackThread } from '@/app/actions/feedback'
 import { FeedbackSection, type FeedbackThread } from '@/components/feedback/FeedbackSection'
 import { ShareTaskDialog, type CollaboratorRow } from '@/components/tasks/ShareTaskDialog'
+import { EditStaffAllInstructionDialog } from '@/components/tasks/EditStaffAllInstructionDialog'
 import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { formatDate, formatDateTime, getEffectiveStatus } from '@/lib/dateUtils'
 import { isSuperAdminEmail, getSmStoreIds, smHasStore } from '@/lib/authz'
-import { Task, RequiredOutput, UserRole, TaskCategory } from '@/types'
+import { Task, RequiredOutput, UserRole, TaskCategory, TaskAttachment } from '@/types'
 import { Pencil, Trash2, Radio, Users } from 'lucide-react'
 
 const CATEGORY_STYLE: Record<TaskCategory, string> = {
@@ -381,7 +382,20 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                   keywords: [a.email],
                 }))}
               />
-              {!isStaffParent && (
+              {isStaffParent ? (
+                <EditStaffAllInstructionDialog
+                  taskId={id}
+                  isBroadcast={!!task.broadcast_id}
+                  defaults={{
+                    title:       task.title as string,
+                    description: (task.description as string | null) ?? null,
+                    category:    (task.category as TaskCategory),
+                    priority:    (task.priority as Task['priority']),
+                    attachments: ((task.input_data as { attachments?: TaskAttachment[] } | null)?.attachments ?? []),
+                    links:       ((task.input_data as { links?: { label: string; url: string }[] } | null)?.links ?? []),
+                  }}
+                />
+              ) : (
                 <Link href={`/tasks/${id}/edit`} className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}>
                   <Pencil className="h-4 w-4 mr-1" /> Chỉnh sửa
                 </Link>

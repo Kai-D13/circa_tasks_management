@@ -412,6 +412,89 @@ export async function updateTask(taskId: string, formData: FormData) {
   redirect(`/tasks/${taskId}`)
 }
 
+// Edit the shared instruction/attachments of a "staff_all" broadcast and propagate
+// the change to EVERY parent + child task of that broadcast (all stores, all
+// pharmacists), including already-done children — the attachment is reference
+// material (e.g. a PDF guide), so a done pharmacist must still see the new file.
+// This is the only sanctioned way to edit a staff_all parent (updateTask blocks it).
+// Only the broadcast creator (or super admin) may do this. Does NOT touch status,
+// deadline, required_outputs, assignment, store scope or completion metadata.
+export async function updateStaffAllInstruction(parentTaskId: string, data: {
+  title:       string
+  description: string | null
+  category:    TaskCategory
+  priority:    TaskPriority
+  attachments: TaskAttachment[]
+  links:       { label: string; url: string }[]
+}) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Not authenticated' }
+
+  const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
+  const { data: anchor } = await supabaseAdmin
+    .from('tasks').select('created_by, broadcast_id, assignment_mode').eq('id', parentTaskId).single()
+
+  if (!anchor) return { error: 'Task không tồn tại' }
+  if ((anchor as { assignment_mode?: string }).assignment_mode !== 'staff_all')
+    return { error: 'Chỉ áp dụng cho task "Toàn bộ dược sĩ"' }
+  // Admin + own-scope: super admin any broadcast, sub-admin (PIC) only ones they
+  // created. All parents of a broadcast share created_by, so one check covers the set.
+  if (!canAdminManageOwn({ email: user.email, role: profile?.role, createdBy: anchor.created_by, userId: user.id }))
+    return { error: 'Bạn không có quyền chỉnh sửa task này' }
+
+  if (!data.title?.trim()) return { error: 'Vui lòng nhập tiêu đề' }
+  const attachErr = validateAttachments(data.attachments ?? [])
+  if (attachErr) return { error: attachErr }
+
+  // Resolve the full set of tasks to update. Multi-store broadcasts share a
+  // broadcast_id across their staff_all parents; a single-store staff_all
+  // (createStaffRequiredTask) has none, so it's just this one parent.
+  let parentIds: string[]
+  if (anchor.broadcast_id) {
+    const { data: parents } = await supabaseAdmin
+      .from('tasks').select('id').eq('broadcast_id', anchor.broadcast_id).eq('assignment_mode', 'staff_all')
+    parentIds = (parents ?? []).map((p: { id: string }) => p.id)
+  } else {
+    parentIds = [parentTaskId]
+  }
+  if (parentIds.length === 0) parentIds = [parentTaskId]
+
+  const { data: children } = await supabaseAdmin
+    .from('tasks').select('id').in('parent_task_id', parentIds)
+  // Not filtered by archived_at on purpose — keep the reference doc consistent
+  // across archived copies too.
+  const allIds = [...parentIds, ...(children ?? []).map((c: { id: string }) => c.id)]
+
+  const links = (data.links ?? []).filter((l) => l.url?.trim())
+  const inputData = (data.attachments?.length || links.length)
+    ? { attachments: data.attachments, links }
+    : null
+
+  const { error: updErr } = await supabaseAdmin.from('tasks').update({
+    title:       data.title.trim(),
+    description: data.description,
+    category:    data.category,
+    priority:    data.priority,
+    input_data:  inputData,
+  }).in('id', allIds)
+  if (updErr) return { error: updErr.message }
+
+  // One log per parent (filterable per store), tagged with the broadcast + reach.
+  const logs = parentIds.map((pid) => ({
+    task_id:  pid,
+    action:   'staff_all_instruction_updated',
+    user_id:  user.id,
+    metadata: { broadcast_id: anchor.broadcast_id ?? null, applied_to: allIds.length },
+  }))
+  const { error: logErr } = await supabaseAdmin.from('task_logs').insert(logs)
+  if (logErr) console.error('[updateStaffAllInstruction] task_logs:', logErr.message)
+
+  revalidatePath('/tasks')
+  revalidatePath(`/tasks/${parentTaskId}`)
+  return { success: true, count: allIds.length }
+}
+
 export async function updateTaskStatus(taskId: string, status: TaskStatus, note?: string) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
