@@ -517,16 +517,20 @@ export async function updateStaffAllInstruction(parentTaskId: string, data: {
   // (createStaffRequiredTask) has none, so it's just this one parent.
   let parentIds: string[]
   if (anchor.broadcast_id) {
-    const { data: parents } = await supabaseAdmin
+    const { data: parents, error: parentsErr } = await supabaseAdmin
       .from('tasks').select('id').eq('broadcast_id', anchor.broadcast_id).eq('assignment_mode', 'staff_all')
+    // A transient query error here would silently shrink the scope to a single
+    // parent — fail instead of doing a partial propagation that reports success.
+    if (parentsErr) return { error: 'Không tải được danh sách task cha: ' + parentsErr.message }
     parentIds = (parents ?? []).map((p: { id: string }) => p.id)
+    if (parentIds.length === 0) return { error: 'Không tìm thấy task cha của broadcast này' }
   } else {
     parentIds = [parentTaskId]
   }
-  if (parentIds.length === 0) parentIds = [parentTaskId]
 
-  const { data: children } = await supabaseAdmin
+  const { data: children, error: childrenErr } = await supabaseAdmin
     .from('tasks').select('id').in('parent_task_id', parentIds)
+  if (childrenErr) return { error: 'Không tải được danh sách task con: ' + childrenErr.message }
   // Not filtered by archived_at on purpose — keep the reference doc consistent
   // across archived copies too.
   const childIds = (children ?? []).map((c: { id: string }) => c.id)
