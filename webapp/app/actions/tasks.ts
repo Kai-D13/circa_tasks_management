@@ -8,6 +8,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { computeNextRunAt } from '@/lib/recurring'
 import { notifyTaskCreated } from '@/lib/teams/notifyTaskCreated'
 import { canAdminManageOwn, getSmStoreIds, smHasStore } from '@/lib/authz'
+import { publicStorageUrl } from '@/lib/storage/publicUrl'
 
 // True when the given admin is an 'editor' collaborator on the task.
 // Used by addReviewNote + requestResubmit to accept collaborator editors.
@@ -1239,7 +1240,7 @@ export async function createImportedStoreTasks(params: {
       .from('task-uploads').upload(path, sliceBuf, { contentType: XLSX_MIME, upsert: true })
     if (upErr) return fail(`Lỗi tải file cho ${m.posCode}: ${upErr.message}`)
     uploadedPaths.push(path)
-    const { data: { publicUrl } } = supabaseAdmin.storage.from('task-uploads').getPublicUrl(path)
+    const publicUrl = publicStorageUrl('task-uploads', path)
 
     tasksPayload.push({
       store_id:         m.store.id,
@@ -1260,8 +1261,7 @@ export async function createImportedStoreTasks(params: {
     })
   }
 
-  const { data: { publicUrl: masterUrl } } = supabaseAdmin.storage
-    .from('task-uploads').getPublicUrl(masterPath)
+  const masterUrl = publicStorageUrl('task-uploads', masterPath)
 
   // Atomic: batch + N tasks + logs (rpc returns { error } or { success, task_ids }).
   const { data: rpcData, error: rpcErr } = await supabase.rpc('rpc_create_import_tasks', {

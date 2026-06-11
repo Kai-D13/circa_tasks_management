@@ -7,6 +7,7 @@ import { CheckCircle2, Clock } from 'lucide-react'
 import { formatDateTime, formatVnLocalDateTimeString } from '@/lib/dateUtils'
 import Link from 'next/link'
 import { PRESCRIPTION_BUCKET } from '@/lib/prescriptions/constants'
+import { publicStorageUrl } from '@/lib/storage/publicUrl'
 
 export default async function PrescriptionDetailPage({
   params,
@@ -49,10 +50,11 @@ export default async function PrescriptionDetailPage({
   const isAdmin  = profile?.role === 'admin'
   const isSynced = sub.status === 'synced'
 
-  // Generate image URLs server-side (public URL for task-uploads bucket)
+  // Generate image URLs server-side — always from the PUBLIC origin (the
+  // server client may be talking to Kong over the internal docker network).
   const imageUrls = (images ?? []).map((img) => ({
     ...img,
-    url: supabase.storage.from(PRESCRIPTION_BUCKET).getPublicUrl(img.storage_path).data.publicUrl,
+    url: publicStorageUrl(PRESCRIPTION_BUCKET, img.storage_path),
   }))
 
   return (
