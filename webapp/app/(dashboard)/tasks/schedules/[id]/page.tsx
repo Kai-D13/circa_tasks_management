@@ -1,9 +1,11 @@
 import { notFound, redirect } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
+import { canAdminManageOwn } from '@/lib/authz'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { ScheduleActions } from '@/components/tasks/ScheduleActions'
+import { ShareScheduleDialog, type ScheduleCollaboratorRow } from '@/components/tasks/ShareScheduleDialog'
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
 import { ArrowLeft, CalendarClock, Store } from 'lucide-react'
 import { formatDate } from '@/lib/dateUtils'
@@ -61,19 +63,20 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
 
-  const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
+  const { data: profile } = await supabase.from('users').select('role, email').eq('id', user.id).single()
   if (profile?.role !== 'admin') redirect('/tasks')
 
   const [
     { data: sched },
     { data: runs },
     { data: recentTasks },
+    { data: myCollabRow },
   ] = await Promise.all([
     supabase
       .from('task_schedules')
       .select(`
         *,
-        task_templates ( id, title, config ),
+        task_templates ( id, title, config, created_by ),
         task_schedule_stores ( store_id, stores ( id, name ) )
       `)
       .eq('id', id)
@@ -90,6 +93,13 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
       .eq('source_schedule_id', id)
       .order('created_at', { ascending: false })
       .limit(20),
+    // Own collaborator row — decides whether a non-owner may pause/resume.
+    supabase
+      .from('task_schedule_collaborators')
+      .select('permission')
+      .eq('schedule_id', id)
+      .eq('admin_id', user.id)
+      .maybeSingle(),
   ])
 
   if (!sched) notFound()
@@ -101,7 +111,34 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
       visibility: string; required_outputs: string[]
       input_data?: { attachments?: { name: string; url: string }[]; links?: { label: string; url: string }[] }
     }
+    created_by: string | null
   } | null
+
+  const isOwner = canAdminManageOwn({
+    email: profile?.email, role: profile?.role,
+    createdBy: template?.created_by, userId: user.id,
+  })
+  const isEditorCollaborator = !isOwner && myCollabRow?.permission === 'editor'
+
+  // Share dialog data — only the owner (or super admin) needs it.
+  const [{ data: collaborators }, { data: allAdmins }] = isOwner
+    ? await Promise.all([
+        supabase
+          .from('task_schedule_collaborators')
+          .select('admin_id, permission, users!admin_id(full_name)')
+          .eq('schedule_id', id),
+        supabase
+          .from('users')
+          .select('id, full_name, email')
+          .eq('role', 'admin')
+          .neq('id', user.id)
+          .order('full_name'),
+      ])
+    : [{ data: [] as ScheduleCollaboratorRow[] }, { data: [] as { id: string; full_name: string; email: string }[] }]
+
+  const adminOptions = (allAdmins ?? [])
+    .filter((a) => a.id !== template?.created_by)
+    .map((a) => ({ value: a.id, label: a.full_name, description: a.email }))
 
   const schedStores = (sched.task_schedule_stores as unknown as { store_id: string; stores: { id: string; name: string } | null }[]) ?? []
   const weekdays    = (sched.weekdays as number[] | null) ?? []
@@ -138,7 +175,20 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
             {FREQ_LABEL[sched.frequency] ?? sched.frequency} · Lần tiếp: {sched.next_run_at ? formatDate(sched.next_run_at) : '—'}
           </p>
         </div>
-        <ScheduleActions scheduleId={id} isActive={sched.is_active} />
+        <div className="flex items-center gap-2 shrink-0">
+          {isOwner && (
+            <ShareScheduleDialog
+              scheduleId={id}
+              collaborators={(collaborators ?? []) as unknown as ScheduleCollaboratorRow[]}
+              adminOptions={adminOptions}
+            />
+          )}
+          {/* View-only collaborators get no pause/resume — RLS would reject it
+              as a silent 0-row update, which the action would misreport as success. */}
+          {(isOwner || isEditorCollaborator) && (
+            <ScheduleActions scheduleId={id} isActive={sched.is_active} />
+          )}
+        </div>
       </div>
 
       {/* 2-col layout on md+ */}

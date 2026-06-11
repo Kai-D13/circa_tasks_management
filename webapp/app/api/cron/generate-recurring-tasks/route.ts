@@ -192,6 +192,40 @@ export async function GET(request: NextRequest) {
         }
       }
 
+      // Grant schedule collaborators access to today's tasks (migration 047).
+      // Runs OUTSIDE the pendingStoreIds block and covers ALL of today's tasks
+      // for this schedule, so a retry after a partial failure still grants the
+      // missed rows. ignoreDuplicates keeps manual per-task permission changes.
+      const { data: schedCollabs, error: scError } = await supabaseAdmin
+        .from('task_schedule_collaborators')
+        .select('admin_id, permission, invited_by')
+        .eq('schedule_id', sched.id)
+      if (scError) throw new Error(scError.message)
+
+      if (schedCollabs?.length) {
+        const { data: todaysTasks, error: ttError } = await supabaseAdmin
+          .from('tasks')
+          .select('id')
+          .eq('source_schedule_id', sched.id)
+          .eq('scheduled_for', today)
+        if (ttError) throw new Error(ttError.message)
+
+        const collabRows = (todaysTasks ?? []).flatMap((t) =>
+          schedCollabs.map((c) => ({
+            task_id:    t.id,
+            admin_id:   c.admin_id,
+            permission: c.permission,
+            invited_by: c.invited_by ?? template.created_by,
+          }))
+        )
+        if (collabRows.length) {
+          const { error: tcError } = await supabaseAdmin
+            .from('task_collaborators')
+            .upsert(collabRows, { onConflict: 'task_id,admin_id', ignoreDuplicates: true })
+          if (tcError) throw new Error(tcError.message)
+        }
+      }
+
       // Log success
       await supabaseAdmin.from('task_logs').insert({
         task_id:  null,
