@@ -231,6 +231,55 @@ export default async function TasksPage({
       extraChildren = (childData ?? []) as unknown as NonNullable<typeof tasks>
     }
   }
+
+  // Done view (admin/PIC): staff_all parents never reach status='done' (overview-only
+  // by design, migration 031), so the paginated rows are bare pharmacist children —
+  // 106 flat rows for one broadcast. Group them into the same Task → Store → Dược sĩ
+  // tree as the pending tab: fetch ALL done children of the broadcasts on this page
+  // (bounded 500) so each tree renders complete, plus a lightweight stats query for
+  // the true "61/106 đã nộp" badge. Accepted limitation (same family as the
+  // in_progress/overdue trees): a broadcast whose children straddle pages renders
+  // its full tree on each of those pages.
+  const adminDoneTree = isAdminRole && view === 'done' && !showArchived
+  const doneStatsByParent = new Map<string, { total: number; done: number }>()
+  if (adminDoneTree) {
+    const pageBroadcastIds = [...new Set(
+      pageTasks
+        .filter((t) => (t as { parent_task_id?: string | null }).parent_task_id && t.broadcast_id)
+        .map((t) => t.broadcast_id as string)
+    )]
+    if (pageBroadcastIds.length > 0) {
+      const [{ data: sibData, error: sibErr }, { data: statRows, error: statErr }] = await Promise.all([
+        supabase
+          .from('tasks')
+          .select(`${CHILD_COLS}, completed_at`)
+          .in('broadcast_id', pageBroadcastIds)
+          .not('parent_task_id', 'is', null)
+          .eq('status', 'done')
+          .is('archived_at', null)
+          .order('completed_at', { ascending: false, nullsFirst: false })
+          .limit(500),
+        supabase
+          .from('tasks')
+          .select('broadcast_id, parent_task_id, status')
+          .in('broadcast_id', pageBroadcastIds)
+          .not('parent_task_id', 'is', null)
+          .is('archived_at', null)
+          .limit(2000),
+      ])
+      if (sibErr)  childrenError = sibErr
+      if (statErr) childrenError = childrenError ?? statErr
+      const pageIds = new Set(pageTasks.map((t) => t.id))
+      extraChildren = ((sibData ?? []) as unknown as NonNullable<typeof tasks>)
+        .filter((t) => !pageIds.has(t.id))
+      for (const r of (statRows ?? []) as { parent_task_id: string; status: string }[]) {
+        const s = doneStatsByParent.get(r.parent_task_id) ?? { total: 0, done: 0 }
+        s.total++
+        if (r.status === 'done') s.done++
+        doneStatsByParent.set(r.parent_task_id, s)
+      }
+    }
+  }
   const listError = tasksError ?? childrenError
 
   const allTasks = [...pageTasks, ...extraChildren]
@@ -335,14 +384,15 @@ export default async function TasksPage({
       // Admin/PIC must still see the broadcast tree, never stray pharmacist rows —
       // group the orphan by broadcast_id, keying its store entry by parent id.
       // Counts then reflect only the children matching the current filter.
-      if (isAdminRole && view === 'pending' && task.broadcast_id) {
+      if (isAdminRole && (view === 'pending' || adminDoneTree) && task.broadcast_id) {
         const child: ChildTask = {
-          id:         task.id,
-          status:     task.status,
-          stores:     (task.stores as unknown as { name: string } | null),
-          assignee:   (task.assignee as unknown as { full_name: string } | null),
-          deadline:   task.deadline ?? null,
-          overdue_at: (task as { overdue_at?: string | null }).overdue_at ?? null,
+          id:           task.id,
+          status:       task.status,
+          stores:       (task.stores as unknown as { name: string } | null),
+          assignee:     (task.assignee as unknown as { full_name: string } | null),
+          deadline:     task.deadline ?? null,
+          overdue_at:   (task as { overdue_at?: string | null }).overdue_at ?? null,
+          completed_at: (task as { completed_at?: string | null }).completed_at ?? null,
         }
         const isDone = task.status === 'done'
         const existingIdx = seenStaffBroadcast.get(task.broadcast_id)
@@ -484,6 +534,25 @@ export default async function TasksPage({
   for (const item of grouped) {
     if (item.type === 'staff_broadcast') {
       item.stores.sort((a, b) => (a.storeName ?? '').localeCompare(b.storeName ?? '', 'vi'))
+    }
+  }
+
+  // Done view: the trees were built from done children only, so the running
+  // counts say "61/61". Overwrite with the real totals from the stats query so
+  // the badges read "61/106 đã nộp" exactly like the pending tab.
+  if (adminDoneTree && doneStatsByParent.size > 0) {
+    for (const item of grouped) {
+      if (item.type !== 'staff_broadcast') continue
+      let total = 0
+      let done  = 0
+      for (const store of item.stores) {
+        const s = doneStatsByParent.get(store.parentId)
+        if (s) { store.total = s.total; store.done = s.done }
+        total += store.total
+        done  += store.done
+      }
+      item.totalStaff = total
+      item.doneStaff  = done
     }
   }
 

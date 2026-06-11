@@ -36,6 +36,8 @@ export type ChildTask = {
   assignee:   { full_name: string } | null
   deadline:   string | null
   overdue_at: string | null
+  // Done view: submit time shown inline on the tree's pharmacist rows.
+  completed_at?: string | null
 }
 
 export type BroadcastGroup = {
@@ -574,6 +576,9 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
                               >
                                 <span className="text-muted-foreground">↳</span>
                                 <span>{child.assignee?.full_name ?? 'Chưa phân công'}</span>
+                                {child.completed_at && (
+                                  <span className="text-xs text-muted-foreground">· {formatShiftTime(child.completed_at)}</span>
+                                )}
                               </Link>
                             </TableCell>
                             <TableCell />
@@ -859,7 +864,12 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
                             prefetch={false}
                             className="flex items-center justify-between gap-2 p-2 pl-12 text-sm active:bg-muted/50"
                           >
-                            <span className="truncate">{child.assignee?.full_name ?? 'Chưa phân công'}</span>
+                            <span className="truncate">
+                              {child.assignee?.full_name ?? 'Chưa phân công'}
+                              {child.completed_at && (
+                                <span className="text-xs text-muted-foreground"> · {formatShiftTime(child.completed_at)}</span>
+                              )}
+                            </span>
                             <TaskStatusBadge
                               status={getEffectiveStatus(child.deadline, child.status) as Task['status']}
                               late={child.status === 'done' && !!child.overdue_at}
