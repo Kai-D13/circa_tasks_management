@@ -7,7 +7,9 @@ import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { KeyRound, X } from 'lucide-react'
 
-export function ChangePasswordDialog() {
+// 'sidebar' (default) = full-width text row used in the desktop Sidebar;
+// 'mobile' = icon-only trigger styled like the other MobileHeader action buttons.
+export function ChangePasswordDialog({ variant = 'sidebar' }: { variant?: 'sidebar' | 'mobile' }) {
   const [open, setOpen]           = useState(false)
   const [newPass, setNewPass]     = useState('')
   const [confirm, setConfirm]     = useState('')
@@ -43,14 +45,26 @@ export function ChangePasswordDialog() {
 
   return (
     <>
-      <button
-        type="button"
-        onClick={handleOpen}
-        className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-sidebar-accent rounded transition-colors"
-      >
-        <KeyRound className="h-4 w-4 shrink-0" />
-        Đổi mật khẩu
-      </button>
+      {variant === 'mobile' ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label="Đổi mật khẩu"
+          className="w-9 h-9 px-0 text-white/80 hover:bg-white/10 hover:text-white"
+          onClick={handleOpen}
+        >
+          <KeyRound className="h-4 w-4" />
+        </Button>
+      ) : (
+        <button
+          type="button"
+          onClick={handleOpen}
+          className="flex items-center gap-2 w-full px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-sidebar-accent rounded transition-colors"
+        >
+          <KeyRound className="h-4 w-4 shrink-0" />
+          Đổi mật khẩu
+        </button>
+      )}
 
       {open && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
