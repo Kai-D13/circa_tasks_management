@@ -40,6 +40,7 @@ const CATEGORY_LABEL_VN: Record<TaskCategory, string> = {
   other:    'Khác',
 }
 import { cn } from '@/lib/utils'
+import { deptBadgeClass } from '@/lib/departments'
 
 const OUTPUT_LABEL: Record<string, string> = {
   image: 'Ảnh',
@@ -58,7 +59,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
     getSessionProfile(),
     supabase
       .from('tasks')
-      .select('*, stores(name), assignee:users!assigned_to(full_name, email), creator:users!created_by(full_name), completed_by_user:users!completed_by(full_name)')
+      .select('*, stores(name), assignee:users!assigned_to(full_name, email), creator:users!created_by(full_name), completed_by_user:users!completed_by(full_name), department:departments(name, color)')
       .eq('id', id)
       .single(),
   ])
@@ -339,6 +340,14 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
               {task.broadcast_id && (
                 <span className="flex items-center gap-1 text-xs text-primary bg-primary/10 px-2 py-0.5 rounded shrink-0">
                   <Radio className="h-3 w-3" /> Broadcast
+                </span>
+              )}
+              {(task.department as unknown as { name: string; color: string | null } | null) && (
+                <span className={cn(
+                  'text-xs px-2 py-0.5 rounded font-medium shrink-0',
+                  deptBadgeClass((task.department as unknown as { color: string | null }).color)
+                )}>
+                  {(task.department as unknown as { name: string }).name}
                 </span>
               )}
               {(task as { source_schedule_id?: string | null }).source_schedule_id && (

@@ -56,6 +56,22 @@ export async function createUser(formData: FormData) {
 
   if (error) return { error: error.message }
 
+  // Optional department label (super admin only — mirrors setUserDepartment).
+  // The profile row exists by now (created from the auth metadata trigger).
+  const departmentId = (formData.get('department_id') as string) || null
+  if (departmentId && isSuperAdminEmail(user.email) && data.user?.id) {
+    const { data: dept } = await supabase
+      .from('departments').select('id').eq('id', departmentId).single()
+    if (dept) {
+      const { error: deptErr } = await supabaseAdmin
+        .from('users').update({ department_id: departmentId }).eq('id', data.user.id)
+      if (deptErr) {
+        revalidatePath('/users')
+        return { error: `Đã tạo user nhưng gán phòng ban lỗi: ${deptErr.message}` }
+      }
+    }
+  }
+
   revalidatePath('/users')
   return { success: true, userId: data.user?.id }
 }

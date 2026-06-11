@@ -22,7 +22,12 @@ const ROLE_LABEL: Record<string, string> = {
   admin:         'Admin',
 }
 
-export function CreateUserDialog({ stores }: { stores: Pick<Store, 'id' | 'name'>[] }) {
+interface Department { id: string; name: string; color: string }
+
+export function CreateUserDialog({ stores, departments = [] }: {
+  stores: Pick<Store, 'id' | 'name'>[]
+  departments?: Department[]
+}) {
   const profile  = useUserStore((s) => s.profile)
   const isSuper  = isSuperAdminEmail(profile?.email)
   const isSm     = profile?.role === 'sm'
@@ -31,6 +36,7 @@ export function CreateUserDialog({ stores }: { stores: Pick<Store, 'id' | 'name'
   // SM: staff only. Sub-admins: store_manager only. Super admin: any role.
   const [role, setRole]       = useState(isSm ? 'staff' : isSuper ? 'staff' : 'store_manager')
   const [storeId, setStoreId] = useState('')
+  const [departmentId, setDepartmentId] = useState('')
 
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
@@ -50,6 +56,7 @@ export function CreateUserDialog({ stores }: { stores: Pick<Store, 'id' | 'name'
     formData.set('role', effectiveRole)
     if (effectiveRole !== 'admin') formData.set('store_id', storeId)
     else formData.delete('store_id')
+    if (departmentId) formData.set('department_id', departmentId)
 
     startTransition(async () => {
       const result = await createUser(formData)
@@ -60,6 +67,7 @@ export function CreateUserDialog({ stores }: { stores: Pick<Store, 'id' | 'name'
         setOpen(false)
         setRole('staff')
         setStoreId('')
+        setDepartmentId('')
       }
     })
   }
@@ -113,6 +121,27 @@ export function CreateUserDialog({ stores }: { stores: Pick<Store, 'id' | 'name'
                 onValueChange={(v) => { if (v) setStoreId(v) }}
                 placeholder="Chọn cửa hàng"
               />
+            </div>
+          )}
+          {/* Department label — super admin only (mirrors the server gate). */}
+          {isSuper && !isSm && departments.length > 0 && (
+            <div className="grid gap-1.5">
+              <Label>Phòng ban (tùy chọn)</Label>
+              <Select value={departmentId || '__none__'} onValueChange={(v) => { if (v) setDepartmentId(v === '__none__' ? '' : v) }}>
+                <SelectTrigger>
+                  <SelectValue>
+                    {departmentId
+                      ? (departments.find((d) => d.id === departmentId)?.name ?? '—')
+                      : 'Không thuộc phòng ban'}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">Không thuộc phòng ban</SelectItem>
+                  {departments.map((d) => (
+                    <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
           )}
           <DialogFooter>

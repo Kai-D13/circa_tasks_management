@@ -72,8 +72,8 @@ export default async function TasksPage({
     )
   }
   let query = needsCompleted
-    ? supabase.from('tasks').select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, completed_by, completed_at, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), completed_by_user:users!completed_by(full_name)', countOpt)
-    : supabase.from('tasks').select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name)', countOpt)
+    ? supabase.from('tasks').select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, completed_by, completed_at, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), completed_by_user:users!completed_by(full_name), department:departments(name, color)', countOpt)
+    : supabase.from('tasks').select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), department:departments(name, color)', countOpt)
 
   // Ordering per view:
   //   pending -> deadline asc (overdue/soonest first), then newest created
@@ -165,7 +165,7 @@ export default async function TasksPage({
   // Fetch children for staff_all parents on this page (excluded from paginated query).
   let extraChildren: NonNullable<typeof tasks> = []
   let childrenError: { message: string } | null = null
-  const CHILD_COLS = 'id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name)'
+  const CHILD_COLS = 'id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), department:departments(name, color)'
   if (topLevelOnly) {
     const parentIds = (tasks ?? [])
       .filter(t => (t as { assignment_mode?: string }).assignment_mode === 'staff_all')
@@ -319,6 +319,11 @@ export default async function TasksPage({
   const seenBroadcast = new Map<string, number>()
   const seenStaffBroadcast = new Map<string, number>()
 
+  // Department tag stamped on the task at insert (migration 050) — embedded as
+  // department:departments(name, color) on both selects above.
+  const deptOf = (t: unknown) =>
+    ((t as { department?: { name: string; color: string | null } | null }).department ?? null)
+
   for (const task of allTasks) {
     const parentTaskId = (task as { parent_task_id?: string | null }).parent_task_id ?? null
 
@@ -350,6 +355,7 @@ export default async function TasksPage({
             broadcastId: task.broadcast_id,
             title:       task.title,
             category:    task.category ?? null,
+            department:  deptOf(task),
             createdAt:   task.created_at,
             taskIds:     [task.id, ...kids.map((k) => k.id)],
             stores:      [storeEntry],
@@ -366,6 +372,7 @@ export default async function TasksPage({
         parentId:   task.id,
         title:      task.title,
         category:   task.category ?? null,
+        department: deptOf(task),
         storeName:  (task.stores as unknown as { name: string } | null)?.name ?? null,
         total:      kids.length,
         done:       kids.filter((k) => k.status === 'done').length,
@@ -423,6 +430,7 @@ export default async function TasksPage({
             broadcastId: task.broadcast_id,
             title:       task.title,
             category:    task.category ?? null,
+            department:  deptOf(task),
             createdAt:   task.created_at,
             taskIds:     [task.id],
             stores:      [{
@@ -454,6 +462,7 @@ export default async function TasksPage({
           source_schedule_id:  (task as { source_schedule_id?: string | null }).source_schedule_id ?? null,
           assignment_mode:     (task as { assignment_mode?: string | null }).assignment_mode ?? null,
           assigned_to:         (task as { assigned_to?: string | null }).assigned_to ?? null,
+          department:          deptOf(task),
           stores:              (task.stores as unknown as { name: string } | null),
           assignee:            (task.assignee as unknown as { full_name: string } | null),
           completed_by_user:   normalizeCompletedBy(task),
@@ -483,6 +492,7 @@ export default async function TasksPage({
           source_schedule_id:  (task as { source_schedule_id?: string | null }).source_schedule_id ?? null,
           assignment_mode:     (task as { assignment_mode?: string | null }).assignment_mode ?? null,
           assigned_to:         (task as { assigned_to?: string | null }).assigned_to ?? null,
+          department:          deptOf(task),
           stores:              (task.stores as unknown as { name: string } | null),
           assignee:            (task.assignee as unknown as { full_name: string } | null),
           completed_by_user:   normalizeCompletedBy(task),
@@ -518,6 +528,7 @@ export default async function TasksPage({
           broadcastId: task.broadcast_id,
           title:       task.title,
           category:    task.category ?? null,
+          department:  deptOf(task),
           total:       1,
           done:        task.status === 'done' ? 1 : 0,
           createdAt:   task.created_at,

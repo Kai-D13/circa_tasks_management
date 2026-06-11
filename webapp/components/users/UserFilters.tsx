@@ -10,10 +10,12 @@ import { Search, UserX } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface Store { id: string; name: string; code?: string }
+interface Department { id: string; name: string; color: string }
 
 interface Props {
   stores:        Store[]
-  currentParams: { q?: string; role?: string; store_id?: string; missing_store?: string }
+  departments?:  Department[]
+  currentParams: { q?: string; role?: string; store_id?: string; missing_store?: string; department_id?: string }
 }
 
 const ALL = '__all__'
@@ -26,7 +28,7 @@ const ROLE_LABEL: Record<string, string> = {
   sm:            'SM',
 }
 
-export function UserFilters({ stores, currentParams }: Props) {
+export function UserFilters({ stores, departments = [], currentParams }: Props) {
   const router   = useRouter()
   const pathname = usePathname()
 
@@ -72,11 +74,13 @@ export function UserFilters({ stores, currentParams }: Props) {
   }
 
   const missingActive = currentParams.missing_store === 'true'
-  const roleVal       = currentParams.role     ?? ALL
-  const storeIdVal    = currentParams.store_id ?? ALL
+  const roleVal       = currentParams.role          ?? ALL
+  const storeIdVal    = currentParams.store_id      ?? ALL
+  const deptVal       = currentParams.department_id ?? ALL
 
   const hasFilters =
-    !!currentParams.q || !!currentParams.role || !!currentParams.store_id || missingActive
+    !!currentParams.q || !!currentParams.role || !!currentParams.store_id
+    || !!currentParams.department_id || missingActive
 
   const storeOptions = [
     { value: ALL, label: 'Tất cả cửa hàng' },
@@ -112,6 +116,24 @@ export function UserFilters({ stores, currentParams }: Props) {
           <SelectItem value="staff">Nhân viên</SelectItem>
         </SelectContent>
       </Select>
+
+      {departments.length > 0 && (
+        <Select value={deptVal} onValueChange={(v) => update({ department_id: v })}>
+          <SelectTrigger className="w-40 h-8 text-sm">
+            <SelectValue>
+              {deptVal === ALL
+                ? 'Tất cả phòng ban'
+                : (departments.find((d) => d.id === deptVal)?.name ?? 'Phòng ban')}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={ALL}>Tất cả phòng ban</SelectItem>
+            {departments.map((d) => (
+              <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      )}
 
       {stores.length > 0 && (
         <SearchableSelect

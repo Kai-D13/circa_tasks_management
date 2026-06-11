@@ -10,6 +10,7 @@ import { Button } from '@/components/ui/button'
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
 import { TaskPriorityBadge } from '@/components/tasks/TaskPriorityBadge'
 import { formatDate, formatShiftTime, getEffectiveStatus } from '@/lib/dateUtils'
+import { deptBadgeClass } from '@/lib/departments'
 import { Radio, Archive, ArchiveRestore, ChevronRight, ChevronDown, Users, ExternalLink } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Task, TaskCategory } from '@/types'
@@ -40,11 +41,15 @@ export type ChildTask = {
   completed_at?: string | null
 }
 
+// Creating department's label — stamped on tasks at insert (migration 050).
+export type DeptTag = { name: string; color: string | null } | null
+
 export type BroadcastGroup = {
   type:        'broadcast'
   broadcastId: string
   title:       string
   category:    string | null
+  department?: DeptTag
   total:       number
   done:        number
   createdAt:   string
@@ -57,6 +62,7 @@ export type BroadcastGroup = {
 // so the title links to /tasks/<parentId> while the chevron expands inline.
 export type StaffGroup = {
   type:       'staff'
+  department?: DeptTag
   parentId:   string
   title:      string
   category:   string | null
@@ -86,6 +92,7 @@ export type StaffBroadcastGroup = {
   broadcastId: string
   title:       string
   category:    string | null
+  department?: DeptTag
   createdAt:   string
   taskIds:     string[]     // all parents + children, for archive selection
   stores:      StaffBroadcastStore[]
@@ -106,6 +113,7 @@ export type TaskRow = {
     source_schedule_id: string | null
     assignment_mode:    string | null
     assigned_to:        string | null
+    department?:        DeptTag
     stores:             { name: string } | null
     assignee:           { full_name: string } | null
     completed_by_user:  { full_name: string } | null
@@ -185,6 +193,11 @@ function TaskBadges({ task, userRole, effStatus }: {
           CATEGORY_STYLE[task.category as TaskCategory] ?? 'bg-gray-100 text-gray-600'
         )}>
           {CATEGORY_LABEL[task.category as TaskCategory] ?? task.category}
+        </span>
+      )}
+      {task.department && (
+        <span className={cn('text-xs px-1.5 py-0.5 rounded', deptBadgeClass(task.department.color))}>
+          {task.department.name}
         </span>
       )}
       {canSubmitHint && (
@@ -383,6 +396,11 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
                             {CATEGORY_LABEL[item.category as TaskCategory] ?? item.category}
                           </span>
                         )}
+                        {item.department && (
+                          <span className={cn('text-xs px-1.5 py-0.5 rounded', deptBadgeClass(item.department.color))}>
+                            {item.department.name}
+                          </span>
+                        )}
                         <span className="text-xs text-muted-foreground font-normal ml-1">
                           {item.total} cửa hàng
                         </span>
@@ -493,6 +511,11 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
                             CATEGORY_STYLE[item.category as TaskCategory] ?? 'bg-gray-100 text-gray-600'
                           )}>
                             {CATEGORY_LABEL[item.category as TaskCategory] ?? item.category}
+                          </span>
+                        )}
+                        {item.department && (
+                          <span className={cn('text-xs px-1.5 py-0.5 rounded', deptBadgeClass(item.department.color))}>
+                            {item.department.name}
                           </span>
                         )}
                         <span className="text-xs text-muted-foreground font-normal ml-1">
@@ -650,6 +673,11 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
                             CATEGORY_STYLE[item.category as TaskCategory] ?? 'bg-gray-100 text-gray-600'
                           )}>
                             {CATEGORY_LABEL[item.category as TaskCategory] ?? item.category}
+                          </span>
+                        )}
+                        {item.department && (
+                          <span className={cn('text-xs px-1.5 py-0.5 rounded', deptBadgeClass(item.department.color))}>
+                            {item.department.name}
                           </span>
                         )}
                         <span className="text-xs text-muted-foreground font-normal ml-1">

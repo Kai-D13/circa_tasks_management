@@ -3,6 +3,8 @@
 import { useEffect, useState, useTransition } from 'react'
 import { toast } from 'sonner'
 import { updateUserRole, getSmStores, setSmRole } from '@/app/actions/users'
+import { setUserDepartment } from '@/app/actions/departments'
+import type { Department } from '@/lib/departments'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -28,14 +30,17 @@ interface Props {
   userName:      string
   currentRole:   string
   currentStoreId: string | null
+  currentDepartmentId?: string | null
   stores:        Pick<Store, 'id' | 'name' | 'code'>[]
+  departments?:  Department[]
 }
 
-export function EditUserDialog({ userId, userName, currentRole, currentStoreId, stores }: Props) {
+export function EditUserDialog({ userId, userName, currentRole, currentStoreId, currentDepartmentId = null, stores, departments = [] }: Props) {
   const [open, setOpen]       = useState(false)
   const [pending, startTransition] = useTransition()
   const [role, setRole]       = useState(currentRole)
   const [storeId, setStoreId] = useState(currentStoreId ?? '')
+  const [departmentId, setDepartmentId] = useState(currentDepartmentId ?? '')
   // SM scope: a set of store IDs (sm_store_assignments). Loaded on open.
   const [smStoreIds, setSmStoreIds] = useState<string[]>([])
   const [smLoading, setSmLoading]   = useState(false)
@@ -60,10 +65,20 @@ export function EditUserDialog({ userId, userName, currentRole, currentStoreId, 
     if (next) {
       setRole(currentRole)
       setStoreId(currentStoreId ?? '')
+      setDepartmentId(currentDepartmentId ?? '')
       setSmStoreIds([])
       setSmSearch('')
     }
     setOpen(next)
+  }
+
+  // Department is saved separately from role/store — run after the main save
+  // succeeds so a failed role update doesn't half-apply the form.
+  async function saveDepartmentIfChanged(): Promise<string | null> {
+    const next = departmentId || null
+    if (next === (currentDepartmentId ?? null)) return null
+    const r = await setUserDepartment(userId, next)
+    return 'error' in r ? (r.error ?? null) : null
   }
 
   function toggleSmStore(id: string) {
@@ -84,6 +99,8 @@ export function EditUserDialog({ userId, userName, currentRole, currentStoreId, 
       startTransition(async () => {
         const r = await setSmRole(userId, smStoreIds)
         if (r?.error) { toast.error(r.error); return }
+        const deptErr = await saveDepartmentIfChanged()
+        if (deptErr) { toast.error(`Đã lưu SM nhưng phòng ban lỗi: ${deptErr}`); return }
         toast.success('Đã cập nhật SM và cửa hàng quản lý')
         setOpen(false)
       })
@@ -100,10 +117,12 @@ export function EditUserDialog({ userId, userName, currentRole, currentStoreId, 
       const result = await updateUserRole(userId, role, store)
       if (result?.error) {
         toast.error(result.error)
-      } else {
-        toast.success('Đã cập nhật thông tin')
-        setOpen(false)
+        return
       }
+      const deptErr = await saveDepartmentIfChanged()
+      if (deptErr) { toast.error(`Đã lưu quyền nhưng phòng ban lỗi: ${deptErr}`); return }
+      toast.success('Đã cập nhật thông tin')
+      setOpen(false)
     })
   }
 
@@ -186,6 +205,30 @@ export function EditUserDialog({ userId, userName, currentRole, currentStoreId, 
               />
             </div>
           ) : null}
+
+          {departments.length > 0 && (
+            <div className="grid gap-1.5">
+              <Label>Phòng ban</Label>
+              <Select value={departmentId || '__none__'} onValueChange={(v) => { if (v) setDepartmentId(v === '__none__' ? '' : v) }}>
+                <SelectTrigger>
+                  <SelectValue>
+                    {departmentId
+                      ? (departments.find((d) => d.id === departmentId)?.name ?? '—')
+                      : 'Không thuộc phòng ban'}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">Không thuộc phòng ban</SelectItem>
+                  {departments.map((d) => (
+                    <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Nhãn nhận diện trên task — chỉ áp dụng cho task tạo từ giờ trở đi.
+              </p>
+            </div>
+          )}
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>Huỷ</Button>
