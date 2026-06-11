@@ -1,7 +1,7 @@
 -- ============================================================
 -- Migration 046: Super admin email allowlist
 -- ============================================================
--- Adds ngoc.ta@buymed.com as a second super admin. The app-layer mirror is
+-- Adds ngoc.ta@buymed.com and thao@buymed.com as super admins. The app-layer mirror is
 -- SUPER_ADMIN_EMAILS in webapp/lib/authz.ts — the two lists MUST stay in sync.
 -- Same function shape as migration 017 (SECURITY DEFINER, role='admin' still
 -- required); only the email check becomes an IN list.
@@ -20,7 +20,8 @@ AS $$
     WHERE id = auth.uid()
       AND lower(email) IN (
         'hoangvudn96@gmail.com',
-        'ngoc.ta@buymed.com'
+        'ngoc.ta@buymed.com',
+        'thao@buymed.com'
       )
       AND role = 'admin'
   )
@@ -40,7 +41,7 @@ ON CONFLICT (version) DO NOTHING;
 -- SELECT pg_get_functiondef(p.oid)
 -- FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
 -- WHERE n.nspname = 'public' AND p.proname = 'is_super_admin';
--- expect: IN ('hoangvudn96@gmail.com', 'ngoc.ta@buymed.com'), prosecdef intact
+-- expect: IN ('hoangvudn96@gmail.com', 'ngoc.ta@buymed.com', 'thao@buymed.com'), prosecdef intact
 --
 -- 2) Migration recorded:
 -- SELECT version, name, applied_at FROM public.app_migrations WHERE version = '046';
