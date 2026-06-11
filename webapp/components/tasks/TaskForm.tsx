@@ -62,15 +62,21 @@ function combineDateTimeStr(date: string, time: string): string {
 type Scope    = 'single' | 'multi' | 'all'
 type TaskType = 'adhoc' | 'recurring'
 
+// Recurring deadline-offset presets (hours); anything else uses the custom input.
+const DEADLINE_PRESETS = [3, 6, 12, 24, 48, 72]
+
 interface Props {
   stores: Pick<Store, 'id' | 'name' | 'code'>[]
   users: Pick<UserProfile, 'id' | 'full_name' | 'email' | 'store_id' | 'role'>[]
   currentUserRole: UserRole
   currentUserStoreId: string | null
   task?: Task
+  // Preselects the task-type toggle (e.g. /tasks/new?mode=recurring from the
+  // schedules page). Create mode only — edit always stays adhoc.
+  initialTaskType?: TaskType
 }
 
-export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, task }: Props) {
+export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, task, initialTaskType }: Props) {
   const [pending, startTransition] = useTransition()
   const router = useRouter()
 
@@ -79,7 +85,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   const [assignedTo, setAssignedTo] = useState(task?.assigned_to ?? '')
   const [priority, setPriority]     = useState<TaskPriority>(task?.priority ?? 'normal')
   const [outputs, setOutputs]       = useState<RequiredOutput[]>(task?.required_outputs ?? [])
-  const [taskType, setTaskType]     = useState<TaskType>('adhoc')
+  const [taskType, setTaskType]     = useState<TaskType>(!task && initialTaskType === 'recurring' ? 'recurring' : 'adhoc')
   // staff_all: each pharmacist in the store gets their own child task to submit.
   // Ad-hoc + single-store + new only.
   const [staffMode, setStaffMode]   = useState(false)
@@ -97,8 +103,10 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   const [schedStartDate, setSchedStartDate] = useState('')
   const [schedEndDate, setSchedEndDate]     = useState('')
   const [deadlineOffset, setDeadlineOffset] = useState(24)
+  const [customDeadline, setCustomDeadline] = useState(false)
 
-  const [scope, setScope]                       = useState<Scope>('single')
+  // Recurring has no single-store scope (mirrors handleSetTaskType).
+  const [scope, setScope]                       = useState<Scope>(!task && initialTaskType === 'recurring' ? 'multi' : 'single')
   const [selectedStoreIds, setSelectedStoreIds] = useState<string[]>([])
 
   // Excel split (broadcast + store-mode only): null = no file / plain broadcast.
@@ -220,6 +228,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
       setSchedStartDate(d.schedStartDate ?? '')
       setSchedEndDate(d.schedEndDate ?? '')
       setDeadlineOffset(d.deadlineOffset ?? 24)
+      setCustomDeadline(!DEADLINE_PRESETS.includes(d.deadlineOffset ?? 24))
       const [sd, st] = splitDateTimeStr(d.start_date ?? '')
       const [dd, dt] = splitDateTimeStr(d.deadline ?? '')
       setStartDate(sd); setStartTime(st)
@@ -944,16 +953,40 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
 
                 <div>
                   <label className="text-xs text-muted-foreground block mb-1.5">Deadline sau khi tạo</label>
-                  <Select value={String(deadlineOffset)} onValueChange={(v) => { if (v) setDeadlineOffset(Number(v)) }}>
-                    <SelectTrigger className="h-8 text-sm bg-background">
-                      <SelectValue>{deadlineOffset}h</SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="24">24h</SelectItem>
-                      <SelectItem value="48">48h</SelectItem>
-                      <SelectItem value="72">72h</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <div className="flex items-center gap-2">
+                    <Select
+                      value={customDeadline ? 'custom' : String(deadlineOffset)}
+                      onValueChange={(v) => {
+                        if (!v) return
+                        if (v === 'custom') { setCustomDeadline(true); return }
+                        setCustomDeadline(false)
+                        setDeadlineOffset(Number(v))
+                      }}
+                    >
+                      <SelectTrigger className="h-8 text-sm bg-background w-32">
+                        <SelectValue>{customDeadline ? 'Tùy chỉnh' : `${deadlineOffset}h`}</SelectValue>
+                      </SelectTrigger>
+                      <SelectContent>
+                        {DEADLINE_PRESETS.map((h) => (
+                          <SelectItem key={h} value={String(h)}>{h}h</SelectItem>
+                        ))}
+                        <SelectItem value="custom">Tùy chỉnh…</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    {customDeadline && (
+                      <div className="flex items-center gap-1">
+                        <Input
+                          type="number" min={1} max={168} value={deadlineOffset}
+                          onChange={(e) => {
+                            const n = Number(e.target.value)
+                            if (Number.isFinite(n)) setDeadlineOffset(Math.max(1, Math.min(168, Math.round(n))))
+                          }}
+                          className="h-8 text-sm bg-background w-20"
+                        />
+                        <span className="text-xs text-muted-foreground">giờ</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
 
                 <div>

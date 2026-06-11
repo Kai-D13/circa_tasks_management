@@ -40,7 +40,7 @@ export default async function SchedulesPage() {
           <CalendarClock className="h-5 w-5 text-muted-foreground" />
           <h1 className="text-xl font-semibold">Task định kỳ</h1>
         </div>
-        <Link href="/tasks/new" className={cn(buttonVariants({ size: 'sm' }))}>
+        <Link href="/tasks/new?mode=recurring" className={cn(buttonVariants({ size: 'sm' }))}>
           <Plus className="h-4 w-4 mr-1" />
           Tạo lịch mới
         </Link>
@@ -52,8 +52,8 @@ export default async function SchedulesPage() {
             <CalendarClock className="h-8 w-8 mx-auto mb-3 opacity-30" />
             <p>Chưa có lịch định kỳ nào.</p>
             <p className="mt-1">
-              <Link href="/tasks/new" className="text-primary hover:underline">Tạo lịch đầu tiên</Link>
-              {' '}bằng cách chọn loại &ldquo;Định kỳ&rdquo; khi tạo task mới.
+              <Link href="/tasks/new?mode=recurring" className="text-primary hover:underline">Tạo lịch đầu tiên</Link>
+              {' '}— form sẽ mở sẵn ở chế độ &ldquo;Định kỳ&rdquo;.
             </p>
           </CardContent>
         </Card>

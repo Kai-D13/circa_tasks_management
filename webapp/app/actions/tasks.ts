@@ -1660,8 +1660,8 @@ export async function createTaskSchedule(data: {
   if (!data.storeIds.length)    return { error: 'Vui lòng chọn ít nhất một cửa hàng' }
   if (!/^\d{2}:\d{2}$/.test(data.runTime))
     return { error: 'Giờ chạy không hợp lệ' }
-  if (data.deadlineOffsetHours <= 0)
-    return { error: 'Deadline offset phải lớn hơn 0' }
+  if (!Number.isInteger(data.deadlineOffsetHours) || data.deadlineOffsetHours < 1 || data.deadlineOffsetHours > 168)
+    return { error: 'Deadline offset phải là số giờ nguyên từ 1 đến 168' }
   if (data.frequency === 'weekly' && (!data.weekdays || data.weekdays.length === 0))
     return { error: 'Vui lòng chọn ít nhất một ngày trong tuần' }
   if (data.frequency === 'monthly' && (!data.monthDay || data.monthDay < 1 || data.monthDay > 28))
@@ -1801,5 +1801,51 @@ export async function resumeSchedule(scheduleId: string) {
     metadata: { schedule_id: scheduleId },
   })
   revalidatePath('/tasks/schedules')
+  return { success: true }
+}
+
+// Permanently deletes a recurring schedule. Only the schedule owner (template
+// creator) or the super admin may delete (RLS tt_modify_admin is the DB gate).
+// Deleting the TEMPLATE cascades the schedule + store links + collaborators
+// (FKs from 013/047); generated tasks and run history are KEPT — their
+// source_template_id/source_schedule_id are SET NULL, so completed work and
+// audit data survive.
+export async function deleteSchedule(scheduleId: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Not authenticated' }
+  const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
+  if (profile?.role !== 'admin') return { error: 'Không có quyền' }
+
+  const { data: sched } = await supabase
+    .from('task_schedules')
+    .select('id, template_id, task_templates ( title, created_by ), task_schedule_stores ( store_id )')
+    .eq('id', scheduleId)
+    .single()
+  const template = sched?.task_templates as unknown as { title: string; created_by: string | null } | null
+  if (!sched || !template) return { error: 'Lịch không tồn tại' }
+  if (!canAdminManageOwn({ email: user.email, role: profile?.role, createdBy: template.created_by, userId: user.id }))
+    return { error: 'Chỉ admin tạo lịch hoặc super admin mới xóa được' }
+
+  const { data: deleted, error } = await supabase
+    .from('task_templates')
+    .delete()
+    .eq('id', sched.template_id)
+    .select('id')
+  if (error) return { error: error.message }
+  if (!deleted?.length) return { error: 'Không xóa được lịch (RLS từ chối)' }
+
+  await supabase.from('task_logs').insert({
+    task_id: null, action: 'schedule_deleted', user_id: user.id,
+    metadata: {
+      schedule_id: scheduleId,
+      template_id: sched.template_id,
+      title:       template.title,
+      store_count: (sched.task_schedule_stores as unknown as unknown[] | null)?.length ?? 0,
+    },
+  })
+
+  revalidatePath('/tasks/schedules')
+  revalidatePath('/tasks')
   return { success: true }
 }

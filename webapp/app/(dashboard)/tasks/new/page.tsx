@@ -2,7 +2,12 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { TaskForm } from '@/components/tasks/TaskForm'
 
-export default async function NewTaskPage() {
+export default async function NewTaskPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ mode?: string }>
+}) {
+  const { mode } = await searchParams
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
@@ -25,6 +30,7 @@ export default async function NewTaskPage() {
         users={users ?? []}
         currentUserRole={profile?.role ?? 'staff'}
         currentUserStoreId={profile?.store_id ?? null}
+        initialTaskType={mode === 'recurring' ? 'recurring' : undefined}
       />
     </div>
   )

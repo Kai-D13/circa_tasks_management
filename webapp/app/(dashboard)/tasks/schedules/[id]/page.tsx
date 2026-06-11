@@ -186,7 +186,7 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
           {/* View-only collaborators get no pause/resume — RLS would reject it
               as a silent 0-row update, which the action would misreport as success. */}
           {(isOwner || isEditorCollaborator) && (
-            <ScheduleActions scheduleId={id} isActive={sched.is_active} />
+            <ScheduleActions scheduleId={id} isActive={sched.is_active} canDelete={isOwner} />
           )}
         </div>
       </div>
