@@ -82,8 +82,8 @@ export function ManageDepartmentsDialog({ departments }: Props) {
     if (confirmDeleteId !== id) { setConfirmDeleteId(id); return }
     startTransition(async () => {
       const r = await deleteDepartment(id)
-      if ('error' in r) { toast.error(r.error); return }
-      toast.success('Đã xóa phòng ban (thành viên và task cũ chỉ mất nhãn)')
+      if ('error' in r) { toast.error(r.error); setConfirmDeleteId(null); return }
+      toast.success('Đã xóa phòng ban')
       setConfirmDeleteId(null)
     })
   }

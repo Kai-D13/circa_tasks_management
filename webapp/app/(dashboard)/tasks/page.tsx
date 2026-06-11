@@ -138,7 +138,14 @@ export default async function TasksPage({
   const isAdminRole = profile?.role === 'admin'
   const adminTreeFilter = isAdminRole && view === 'pending' && !showArchived
     && (params.status === 'todo' || params.status === 'in_progress' || params.status === 'overdue')
-  if (topLevelOnly || adminTreeFilter) query = query.is('parent_task_id', null)
+
+  // Admin/PIC done view: staff_all parents never reach status='done' (overview-only,
+  // migration 031), so without exclusion the page would be bare pharmacist children —
+  // 106 flat rows for one broadcast, with count/pagination driven by children. Page
+  // by TOP-LEVEL done tasks instead, and assemble the broadcast trees from a separate
+  // children fetch (page 1 only) — exactly the in_progress/overdue tree pattern.
+  const adminDoneTree = isAdminRole && view === 'done' && !showArchived
+  if (topLevelOnly || adminTreeFilter || adminDoneTree) query = query.is('parent_task_id', null)
 
   // Staff have no store filter (storesForFilter is [] for them), so skip the query
   // entirely instead of fetching and discarding it. (isStaff computed above.)
@@ -232,51 +239,55 @@ export default async function TasksPage({
     }
   }
 
-  // Done view (admin/PIC): staff_all parents never reach status='done' (overview-only
-  // by design, migration 031), so the paginated rows are bare pharmacist children —
-  // 106 flat rows for one broadcast. Group them into the same Task → Store → Dược sĩ
-  // tree as the pending tab: fetch ALL done children of the broadcasts on this page
-  // (bounded 500) so each tree renders complete, plus a lightweight stats query for
-  // the true "61/106 đã nộp" badge. Accepted limitation (same family as the
-  // in_progress/overdue trees): a broadcast whose children straddle pages renders
-  // its full tree on each of those pages.
-  const adminDoneTree = isAdminRole && view === 'done' && !showArchived
-  const doneStatsByParent = new Map<string, { total: number; done: number }>()
-  if (adminDoneTree) {
-    const pageBroadcastIds = [...new Set(
-      pageTasks
-        .filter((t) => (t as { parent_task_id?: string | null }).parent_task_id && t.broadcast_id)
-        .map((t) => t.broadcast_id as string)
+  // Done view (admin/PIC): children are excluded from pagination above; on page 1
+  // fetch ALL done children (bounded 500, most recently submitted first) and let the
+  // orphan grouping assemble the Task → Store → Dược sĩ trees. A lightweight stats
+  // query then provides the TRUE per-broadcast totals so the badge reads "61/106 đã
+  // nộp" even when some stores have zero submissions (those stores simply have no
+  // tree row — there is nothing to list for them). Page 1 only — same accepted
+  // trade-off as the in_progress/overdue trees.
+  const doneStatsByParent    = new Map<string, { total: number; done: number }>()
+  const doneStatsByBroadcast = new Map<string, { total: number; done: number; parents: Set<string> }>()
+  if (adminDoneTree && page === 1) {
+    let doneChildQ = supabase
+      .from('tasks')
+      .select(`${CHILD_COLS}, completed_at`)
+      .not('parent_task_id', 'is', null)
+      .eq('status', 'done')
+      .is('archived_at', null)
+      .order('completed_at', { ascending: false, nullsFirst: false })
+      .limit(500)
+    if (params.priority) doneChildQ = doneChildQ.eq('priority', params.priority)
+    if (params.store_id) doneChildQ = doneChildQ.eq('store_id', params.store_id)
+    if (params.category) doneChildQ = doneChildQ.eq('category', params.category)
+    const { data: doneKids, error: doneKidsErr } = await doneChildQ
+    if (doneKidsErr) childrenError = childrenError ?? doneKidsErr
+    extraChildren = (doneKids ?? []) as unknown as NonNullable<typeof tasks>
+
+    const broadcastIds = [...new Set(
+      extraChildren.map((t) => t.broadcast_id).filter((b): b is string => !!b)
     )]
-    if (pageBroadcastIds.length > 0) {
-      const [{ data: sibData, error: sibErr }, { data: statRows, error: statErr }] = await Promise.all([
-        supabase
-          .from('tasks')
-          .select(`${CHILD_COLS}, completed_at`)
-          .in('broadcast_id', pageBroadcastIds)
-          .not('parent_task_id', 'is', null)
-          .eq('status', 'done')
-          .is('archived_at', null)
-          .order('completed_at', { ascending: false, nullsFirst: false })
-          .limit(500),
-        supabase
-          .from('tasks')
-          .select('broadcast_id, parent_task_id, status')
-          .in('broadcast_id', pageBroadcastIds)
-          .not('parent_task_id', 'is', null)
-          .is('archived_at', null)
-          .limit(2000),
-      ])
-      if (sibErr)  childrenError = sibErr
+    if (broadcastIds.length > 0) {
+      const { data: statRows, error: statErr } = await supabase
+        .from('tasks')
+        .select('broadcast_id, parent_task_id, status')
+        .in('broadcast_id', broadcastIds)
+        .not('parent_task_id', 'is', null)
+        .is('archived_at', null)
+        .limit(2000)
       if (statErr) childrenError = childrenError ?? statErr
-      const pageIds = new Set(pageTasks.map((t) => t.id))
-      extraChildren = ((sibData ?? []) as unknown as NonNullable<typeof tasks>)
-        .filter((t) => !pageIds.has(t.id))
-      for (const r of (statRows ?? []) as { parent_task_id: string; status: string }[]) {
-        const s = doneStatsByParent.get(r.parent_task_id) ?? { total: 0, done: 0 }
-        s.total++
-        if (r.status === 'done') s.done++
-        doneStatsByParent.set(r.parent_task_id, s)
+      for (const r of (statRows ?? []) as { broadcast_id: string; parent_task_id: string; status: string }[]) {
+        const p = doneStatsByParent.get(r.parent_task_id) ?? { total: 0, done: 0 }
+        p.total++
+        if (r.status === 'done') p.done++
+        doneStatsByParent.set(r.parent_task_id, p)
+
+        const b = doneStatsByBroadcast.get(r.broadcast_id)
+          ?? { total: 0, done: 0, parents: new Set<string>() }
+        b.total++
+        if (r.status === 'done') b.done++
+        b.parents.add(r.parent_task_id)
+        doneStatsByBroadcast.set(r.broadcast_id, b)
       }
     }
   }
@@ -549,21 +560,22 @@ export default async function TasksPage({
   }
 
   // Done view: the trees were built from done children only, so the running
-  // counts say "61/61". Overwrite with the real totals from the stats query so
-  // the badges read "61/106 đã nộp" exactly like the pending tab.
-  if (adminDoneTree && doneStatsByParent.size > 0) {
+  // counts say "61/61". Overwrite with the real totals from the stats query —
+  // per-broadcast for the header badge (counts stores/staff with ZERO
+  // submissions too, which have no tree row) and per-parent for each store row.
+  if (adminDoneTree && doneStatsByBroadcast.size > 0) {
     for (const item of grouped) {
       if (item.type !== 'staff_broadcast') continue
-      let total = 0
-      let done  = 0
       for (const store of item.stores) {
         const s = doneStatsByParent.get(store.parentId)
         if (s) { store.total = s.total; store.done = s.done }
-        total += store.total
-        done  += store.done
       }
-      item.totalStaff = total
-      item.doneStaff  = done
+      const b = doneStatsByBroadcast.get(item.broadcastId)
+      if (b) {
+        item.totalStaff  = b.total
+        item.doneStaff   = b.done
+        item.totalStores = b.parents.size
+      }
     }
   }
 

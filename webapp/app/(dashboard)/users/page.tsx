@@ -119,6 +119,8 @@ export default async function UsersPage({
 
   // allProfiles: one lightweight pass (role + department per user) powers the
   // stat cards AND the department member counts — no per-card count queries.
+  // limit(2000) is 10x+ the current ~150-account fleet; revisit (switch to
+  // grouped count queries) if the user base ever approaches it.
   const [{ data: users, count }, { data: stores }, { data: departments }, { data: allProfiles }] = await Promise.all([
     query,
     isSm

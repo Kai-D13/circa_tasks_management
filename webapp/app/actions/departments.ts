@@ -65,12 +65,21 @@ export async function updateDepartment(id: string, name: string, color: string) 
   return { success: true }
 }
 
-// FK behavior on delete: users.department_id and tasks.department_id are both
-// ON DELETE SET NULL — members lose the label, old tasks lose the tag. Nothing
-// else changes (no scope/permission impact).
+// Deleting a department whose FK rows would be SET NULL silently erases the
+// audit trail ("task này thuộc phòng ban nào tạo"). Block the delete while the
+// department is still referenced by users OR tasks — rename it instead.
 export async function deleteDepartment(id: string) {
   const ctx = await requireSuperAdmin()
   if ('error' in ctx) return ctx
+
+  const [{ count: memberCount }, { count: taskCount }] = await Promise.all([
+    ctx.supabase.from('users').select('id', { count: 'exact', head: true }).eq('department_id', id),
+    ctx.supabase.from('tasks').select('id', { count: 'exact', head: true }).eq('department_id', id),
+  ])
+  if ((memberCount ?? 0) > 0)
+    return { error: `Phòng ban còn ${memberCount} thành viên — gỡ thành viên trước khi xóa` }
+  if ((taskCount ?? 0) > 0)
+    return { error: `Phòng ban đã gắn nhãn ${taskCount} task — không thể xóa (hãy đổi tên nếu cần)` }
 
   const { error } = await ctx.supabase.from('departments').delete().eq('id', id)
   if (error) return { error: error.message }
