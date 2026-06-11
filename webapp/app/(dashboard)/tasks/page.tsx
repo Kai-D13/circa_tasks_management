@@ -246,6 +246,12 @@ export default async function TasksPage({
   // nộp" even when some stores have zero submissions (those stores simply have no
   // tree row — there is nothing to list for them). Page 1 only — same accepted
   // trade-off as the in_progress/overdue trees.
+  //
+  // ACCEPTED BOUNDS (revisit with an RPC that paginates by group unit when the
+  // history grows): trees render on page 1 only, from the 500 most recently
+  // submitted children — at the current scale (1-2 broadcasts/day × ~106 staff)
+  // that covers the several most recent broadcasts, which is what admins review.
+  // Older broadcasts are reachable via their store rows / the task detail pages.
   const doneStatsByParent    = new Map<string, { total: number; done: number }>()
   const doneStatsByBroadcast = new Map<string, { total: number; done: number; parents: Set<string> }>()
   if (adminDoneTree && page === 1) {
@@ -268,13 +274,20 @@ export default async function TasksPage({
       extraChildren.map((t) => t.broadcast_id).filter((b): b is string => !!b)
     )]
     if (broadcastIds.length > 0) {
-      const { data: statRows, error: statErr } = await supabase
+      // Mirror the children filters so the X/Y badge describes the SAME subset
+      // the tree shows (pending view behaves this way too): filtering one store
+      // must yield that store's 4/6, not the whole broadcast's 61/106.
+      let statQ = supabase
         .from('tasks')
         .select('broadcast_id, parent_task_id, status')
         .in('broadcast_id', broadcastIds)
         .not('parent_task_id', 'is', null)
         .is('archived_at', null)
         .limit(2000)
+      if (params.priority) statQ = statQ.eq('priority', params.priority)
+      if (params.store_id) statQ = statQ.eq('store_id', params.store_id)
+      if (params.category) statQ = statQ.eq('category', params.category)
+      const { data: statRows, error: statErr } = await statQ
       if (statErr) childrenError = childrenError ?? statErr
       for (const r of (statRows ?? []) as { broadcast_id: string; parent_task_id: string; status: string }[]) {
         const p = doneStatsByParent.get(r.parent_task_id) ?? { total: 0, done: 0 }

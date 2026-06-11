@@ -72,10 +72,18 @@ export async function deleteDepartment(id: string) {
   const ctx = await requireSuperAdmin()
   if ('error' in ctx) return ctx
 
-  const [{ count: memberCount }, { count: taskCount }] = await Promise.all([
+  const [
+    { count: memberCount, error: memberErr },
+    { count: taskCount, error: taskErr },
+  ] = await Promise.all([
     ctx.supabase.from('users').select('id', { count: 'exact', head: true }).eq('department_id', id),
     ctx.supabase.from('tasks').select('id', { count: 'exact', head: true }).eq('department_id', id),
   ])
+  // A failed count must BLOCK the delete — a transient error returning null
+  // counts would otherwise let an in-use department slip through and erase
+  // the audit tags via the FK SET NULL.
+  if (memberErr) return { error: `Không kiểm tra được thành viên: ${memberErr.message}` }
+  if (taskErr)   return { error: `Không kiểm tra được task gắn nhãn: ${taskErr.message}` }
   if ((memberCount ?? 0) > 0)
     return { error: `Phòng ban còn ${memberCount} thành viên — gỡ thành viên trước khi xóa` }
   if ((taskCount ?? 0) > 0)
