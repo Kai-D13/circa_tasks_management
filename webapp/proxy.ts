@@ -25,6 +25,8 @@ export async function proxy(request: NextRequest) {
   // rewrite) — staff open it from shared links, possibly before logging in.
   if (pathname.startsWith('/login'))     return NextResponse.next()
   if (pathname.startsWith('/api/cron/')) return NextResponse.next()
+  // BI targets feed — self-protected via TARGETS_INGEST_SECRET (same model as cron).
+  if (pathname === '/api/targets/ingest') return NextResponse.next()
   if (pathname === '/sw.js')             return NextResponse.next()
   if (pathname === '/documents' || pathname === '/documents.html') return NextResponse.next()
 
