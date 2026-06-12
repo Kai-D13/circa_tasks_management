@@ -1,6 +1,7 @@
 import 'server-only'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { normalizeStoreName, type TargetRow } from './parse'
+import { POS_CODE_BY_NAME } from './posMap'
 
 // Matches normalized pos_name → stores.name and upserts one row per
 // (store, week). Service-role writes — store_weekly_targets has no write
@@ -11,15 +12,23 @@ export async function upsertTargetRows(
   source: 'upload' | 'api',
   uploadedBy: string | null,
 ): Promise<{ upserted: number; unmatched: string[] }> {
-  const { data: stores, error } = await supabaseAdmin.from('stores').select('id, name')
+  const { data: stores, error } = await supabaseAdmin.from('stores').select('id, name, code')
   if (error) throw new Error(error.message)
 
   const byName = new Map((stores ?? []).map((s) => [normalizeStoreName(s.name), s.id]))
+  const byCode = new Map(
+    (stores ?? [])
+      .filter((s) => s.code)
+      .map((s) => [String(s.code).trim().toUpperCase(), s.id]),
+  )
   const unmatched: string[] = []
   const payload: Record<string, unknown>[] = []
 
   for (const r of rows) {
-    const storeId = byName.get(normalizeStoreName(r.pos_name))
+    const key = normalizeStoreName(r.pos_name)
+    // Name match first; fall back to the stakeholder's pos_name → POS code
+    // map so a renamed store still resolves through stores.code.
+    const storeId = byName.get(key) ?? byCode.get(POS_CODE_BY_NAME[key] ?? '')
     if (!storeId) { unmatched.push(r.pos_name); continue }
     payload.push({
       store_id:          storeId,
