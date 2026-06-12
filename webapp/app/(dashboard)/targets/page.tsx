@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { TargetUploadForm } from '@/components/targets/TargetUploadForm'
 import { formatDateTime } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
-import { TrendingUp } from 'lucide-react'
+import { Flame, Target, TrendingUp } from 'lucide-react'
 
 // Weekly sales targets from the BI feed (migration 051).
 //   staff       → their store's card (the stakeholder feature)
@@ -46,14 +46,25 @@ interface TargetRecord {
   stores?:           { name: string } | null
 }
 
-function ProgressBar({ pct }: { pct: number }) {
+// SVG completion ring for the "Hôm nay cần đạt" card — server-rendered, no JS.
+function ProgressRing({ pct }: { pct: number }) {
+  const r = 32
+  const c = 2 * Math.PI * r
   const clamped = Math.max(0, Math.min(100, pct))
   return (
-    <div className="h-2.5 w-full rounded-full bg-muted overflow-hidden">
-      <div
-        className={cn('h-full rounded-full', clamped >= 100 ? 'bg-green-500' : 'bg-primary')}
-        style={{ width: `${clamped}%` }}
-      />
+    <div className="relative h-[84px] w-[84px] shrink-0">
+      <svg width="84" height="84" viewBox="0 0 84 84" className="-rotate-90">
+        <circle cx="42" cy="42" r={r} fill="none" strokeWidth="8" className="stroke-muted" />
+        <circle
+          cx="42" cy="42" r={r} fill="none" strokeWidth="8" strokeLinecap="round"
+          className="stroke-primary"
+          strokeDasharray={`${(clamped / 100) * c} ${c}`}
+        />
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center">
+        <span className="text-base font-bold leading-none">{Math.round(clamped)}%</span>
+        <span className="text-[9px] text-muted-foreground mt-0.5">hoàn thành</span>
+      </div>
     </div>
   )
 }
@@ -103,11 +114,47 @@ export default async function TargetsPage() {
     const storeName = (profile.stores as unknown as { name: string } | null)?.name ?? 'Cửa hàng của bạn'
     const pct = current ? (current.run_rate ?? (current.target > 0 ? (current.actual / current.target) * 100 : 0)) : 0
 
+    // ── "Hôm nay cần đạt" math (stakeholder spec 2026-06-12) ─────────────────
+    // remaining ÷ days left in the week (today included, VN timezone), rounded
+    // UP to the next 100k for display. remaining_target is vs the 90% MIN
+    // target (BI semantics). Week over / achieved → celebratory states.
+    const remaining = current?.remaining_target
+      ?? (current?.min_weekly_target !== null && current?.min_weekly_target !== undefined
+        ? Math.max(current.min_weekly_target - (current?.actual ?? 0), 0)
+        : null)
+    const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
+    const weekEndMs  = current ? Date.parse(current.week_start) + 6 * 86400_000 : 0
+    const weekEndISO = current ? new Date(weekEndMs).toISOString().slice(0, 10) : ''
+    const rawDaysLeft = current
+      ? Math.floor((weekEndMs - Date.parse(vnTodayISO)) / 86400_000) + 1
+      : 0
+    const daysLeft  = Math.max(0, Math.min(7, rawDaysLeft))
+    const achieved  = (remaining ?? 1) <= 0
+    const weekOver  = daysLeft === 0
+    const needToday = !achieved && remaining !== null
+      ? Math.ceil(remaining / Math.max(daysLeft, 1) / 100_000) * 100_000
+      : 0
+    // Pace check: % of week elapsed vs % of target achieved.
+    const expectedPct = ((7 - daysLeft) / 7) * 100
+    const paceMessage = achieved
+      ? '🎉 Cửa hàng đã đạt mục tiêu tuần — xuất sắc!'
+      : weekOver
+        ? 'Tuần đã kết thúc — chờ dữ liệu tuần mới.'
+        : pct >= expectedPct
+          ? 'Giữ nhịp này, bạn sẽ đạt mục tiêu tuần!'
+          : 'Cần tăng tốc để kịp mục tiêu tuần!'
+    const weekEndLabel = weekEndISO
+      ? `${weekEndISO.slice(8, 10)}/${weekEndISO.slice(5, 7)}`
+      : ''
+
     return (
       <div className="p-4 space-y-4 max-w-xl mx-auto">
-        <div className="flex items-center gap-2">
-          <TrendingUp className="h-5 w-5 text-primary" />
-          <h1 className="text-xl font-semibold">Doanh số tuần</h1>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-5 w-5 text-primary" />
+            <h1 className="text-xl font-semibold">Doanh số tuần</h1>
+          </div>
+          <span className="text-sm text-muted-foreground">{storeName}</span>
         </div>
 
         {!current ? (
@@ -118,46 +165,101 @@ export default async function TargetsPage() {
             </CardContent>
           </Card>
         ) : (
-          <Card>
-            <CardHeader className="pb-2">
-              <div className="flex items-start justify-between gap-2 flex-wrap">
+          <>
+            {/* ── Card 1: HÔM NAY CẦN ĐẠT ───────────────────────────────── */}
+            <Card>
+              <CardContent className="p-4 space-y-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="flex items-center gap-1.5 font-semibold text-sm uppercase tracking-wide">
+                      <Flame className="h-4 w-4 text-primary" />
+                      Hôm nay cần đạt
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">Để kịp KPI tuần</p>
+                    <p className="text-3xl font-bold text-primary mt-2 leading-tight">
+                      {achieved ? 'Đã đạt 🎉' : weekOver ? '—' : vnd(needToday)}
+                    </p>
+                  </div>
+                  <ProgressRing pct={pct} />
+                </div>
+
+                <div className="grid grid-cols-3 gap-2 text-center">
+                  <div className="rounded-lg border p-2">
+                    <p className="text-[10px] text-muted-foreground uppercase">Đã đạt hôm nay</p>
+                    <p className="text-sm font-semibold mt-0.5 text-muted-foreground">—</p>
+                  </div>
+                  <div className="rounded-lg border p-2">
+                    <p className="text-[10px] text-muted-foreground uppercase">Còn thiếu hôm nay</p>
+                    <p className="text-sm font-semibold mt-0.5 text-muted-foreground">—</p>
+                  </div>
+                  <div className="rounded-lg border p-2">
+                    <p className="text-[10px] text-muted-foreground uppercase">Thời gian còn lại</p>
+                    <p className="text-sm font-semibold mt-0.5">{daysLeft} ngày</p>
+                    <p className="text-[10px] text-muted-foreground">đến {weekEndLabel}</p>
+                  </div>
+                </div>
+
+                <p className={cn(
+                  'rounded-lg px-3 py-2 text-sm font-medium',
+                  achieved || pct >= expectedPct
+                    ? 'bg-green-100 text-green-700'
+                    : 'bg-amber-100 text-amber-700',
+                )}>
+                  {paceMessage}
+                </p>
+              </CardContent>
+            </Card>
+
+            {/* ── Card 2: KPI TUẦN (gradient) ───────────────────────────── */}
+            <div className="rounded-xl bg-gradient-to-br from-primary to-orange-600 text-white p-4 space-y-4 shadow-sm">
+              <div className="flex items-center justify-between gap-2">
                 <div>
-                  <CardTitle className="text-base">{storeName}</CardTitle>
-                  <p className="text-xs text-muted-foreground mt-0.5">{weekLabel(current.week_start)}</p>
+                  <p className="flex items-center gap-1.5 font-semibold text-sm uppercase tracking-wide">
+                    <Target className="h-4 w-4" />
+                    KPI tuần
+                  </p>
+                  <p className="text-xs text-white/80 mt-0.5">{weekLabel(current.week_start)}</p>
                 </div>
                 <StatusBadge status={current.status} />
               </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-1.5">
-                <div className="flex items-baseline justify-between">
-                  <span className="text-2xl font-semibold">{vnd(current.actual)}</span>
-                  <span className="text-sm text-muted-foreground">/ {vnd(current.target)}</span>
-                </div>
-                <ProgressBar pct={pct} />
-                <p className="text-xs text-muted-foreground text-right">
-                  Đạt {current.run_rate !== null ? `${current.run_rate.toFixed(1)}%` : '—'} mục tiêu tuần
+
+              <div>
+                <p className="text-xs uppercase text-white/80">Còn thiếu</p>
+                <p className="text-3xl font-bold leading-tight">
+                  {achieved ? '0₫' : vnd(remaining)}
+                </p>
+                <p className="text-xs text-white/80 mt-0.5">
+                  để đạt mục tiêu tối thiểu {vnd(current.min_weekly_target)} và nhận thưởng
                 </p>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                <div className="rounded-lg border p-3">
-                  <p className="text-xs text-muted-foreground">Mục tiêu tối thiểu (90%)</p>
-                  <p className="font-medium mt-0.5">{vnd(current.min_weekly_target)}</p>
+              <div className="space-y-1.5">
+                <p className="text-right text-xs font-semibold">
+                  {current.run_rate !== null ? `${current.run_rate.toFixed(1)}%` : '—'}
+                </p>
+                <div className="h-2.5 w-full rounded-full bg-white/25 overflow-hidden">
+                  <div
+                    className="h-full rounded-full bg-white"
+                    style={{ width: `${Math.max(0, Math.min(100, pct))}%` }}
+                  />
                 </div>
-                <div className="rounded-lg border p-3">
-                  <p className="text-xs text-muted-foreground">Còn thiếu (so với tối thiểu)</p>
-                  <p className={cn('font-medium mt-0.5', (current.remaining_target ?? 0) <= 0 ? 'text-green-600' : 'text-amber-600')}>
-                    {(current.remaining_target ?? 0) <= 0 ? 'Đã đạt 🎉' : vnd(current.remaining_target)}
-                  </p>
+                <div className="flex items-end justify-between text-xs">
+                  <div>
+                    <p className="font-semibold text-sm">{vnd(current.actual)}</p>
+                    <p className="text-white/80">Đã đạt</p>
+                  </div>
+                  <div className="text-right">
+                    <p className="font-semibold text-sm">{vnd(current.target)}</p>
+                    <p className="text-white/80">Mục tiêu tuần</p>
+                  </div>
                 </div>
               </div>
+            </div>
 
-              <p className="text-[11px] text-muted-foreground">
-                Cập nhật lúc {formatDateTime(current.refreshed_at)} · Nguồn: báo cáo BI
-              </p>
-            </CardContent>
-          </Card>
+            <p className="text-[11px] text-muted-foreground">
+              Cập nhật lúc {formatDateTime(current.refreshed_at)} · Nguồn: báo cáo BI
+            </p>
+          </>
         )}
 
         {history.length > 0 && (
