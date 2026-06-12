@@ -1,113 +1,143 @@
+import { createSign } from 'crypto'
 import { NextRequest, NextResponse } from 'next/server'
 import { normalizeRow, type TargetRow } from '@/lib/targets/parse'
 import { upsertTargetRows } from '@/lib/targets/ingest'
 
-// DEPRECATED (2026-06-12): the Power BI service-principal path was abandoned
-// (BI owner cannot support the tenant-level permission grant). Kept inert —
-// it answers 503 unless the PBI_* envs are set, and they must NOT be set.
-// The replacement source will be BigQuery (stakeholder builds the query;
-// a future cron route will reuse lib/targets/ingest the same way).
-//
-// GET /api/cron/pull-targets — pulls the BI report data straight from the
-// Power BI REST API (service principal + executeQueries) and upserts
+// GET /api/cron/pull-targets — pulls weekly KPI rows from BigQuery
+// (gold_buymed_vn2.fact_fin_circa_current_week_gmv) and upserts
 // store_weekly_targets. Scheduled 3x/day like the other /api/cron/* routes.
+// (This replaced the abandoned Power BI service-principal pull on 2026-06-13.)
 //
-// Required env (all five, else 503 with the missing names):
-//   PBI_TENANT_ID     — Entra Directory (tenant) ID
-//   PBI_CLIENT_ID     — App registration (client) ID
-//   PBI_CLIENT_SECRET — App client secret
-//   PBI_WORKSPACE_ID  — workspace (group) GUID from the dataset URL
-//   PBI_DATASET_ID    — dataset GUID from the dataset URL
-//   PBI_DAX_QUERY     — single-line DAX (EVALUATE ...) returning the 8 columns
+// Required env:
+//   BQ_SERVICE_ACCOUNT_KEY — full service-account JSON (one line, \n in key)
+//                            needs BigQuery Data Viewer on the dataset and
+//                            BigQuery Job User on the project
+//   BQ_QUERY (optional)    — override of DEFAULT_QUERY below
 //
-// All upstream fetches carry timeouts — a hung Microsoft endpoint must never
+// Column mapping (BQ → store_weekly_targets):
+//   monday_of_week → week_start        pos_code → stores.code (exact match)
+//   gmv → actual                       target → target
+//   weekly_target → min_weekly_target  kpi_pct → run_rate (fraction, vs MIN)
+//   status / remaining_target          → derived vs MIN target in normalizeRow
+//
+// All upstream fetches carry timeouts — a hung Google endpoint must never
 // hold this handler open (the lag-investigation lesson).
+
+const DEFAULT_QUERY = `
+  SELECT monday_of_week, pos_code, gmv, target, weekly_target, kpi_pct
+  FROM \`lakehouse-prod-394907.gold_buymed_vn2.fact_fin_circa_current_week_gmv\`
+  WHERE pos_code NOT IN ("POS0001", "POS0010")
+`
+
+interface ServiceAccount {
+  client_email: string
+  private_key:  string
+  project_id:   string
+}
+
+function b64url(input: Buffer | string): string {
+  return Buffer.from(input).toString('base64url')
+}
+
+// Client-credentials token via signed JWT — no Google SDK dependency.
+async function getAccessToken(sa: ServiceAccount): Promise<string> {
+  const now = Math.floor(Date.now() / 1000)
+  const unsigned =
+    b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' })) + '.' +
+    b64url(JSON.stringify({
+      iss:   sa.client_email,
+      scope: 'https://www.googleapis.com/auth/bigquery.readonly',
+      aud:   'https://oauth2.googleapis.com/token',
+      iat:   now,
+      exp:   now + 3600,
+    }))
+  const signature = createSign('RSA-SHA256').update(unsigned).sign(sa.private_key)
+  const assertion = `${unsigned}.${b64url(signature)}`
+
+  const res = await fetch('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion,
+    }),
+    signal: AbortSignal.timeout(15_000),
+  })
+  if (!res.ok) throw new Error(`Google token failed (${res.status}): ${(await res.text()).slice(0, 300)}`)
+  const { access_token } = (await res.json()) as { access_token: string }
+  return access_token
+}
+
 export async function GET(request: NextRequest) {
   const secret = request.headers.get('authorization')?.replace('Bearer ', '')
   if (!secret || secret !== process.env.CRON_SECRET) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const env = {
-    PBI_TENANT_ID:     process.env.PBI_TENANT_ID,
-    PBI_CLIENT_ID:     process.env.PBI_CLIENT_ID,
-    PBI_CLIENT_SECRET: process.env.PBI_CLIENT_SECRET,
-    PBI_WORKSPACE_ID:  process.env.PBI_WORKSPACE_ID,
-    PBI_DATASET_ID:    process.env.PBI_DATASET_ID,
-    PBI_DAX_QUERY:     process.env.PBI_DAX_QUERY,
+  const saRaw = process.env.BQ_SERVICE_ACCOUNT_KEY
+  if (!saRaw) {
+    return NextResponse.json({ error: 'Pull disabled — BQ_SERVICE_ACCOUNT_KEY not set' }, { status: 503 })
   }
-  const missing = Object.entries(env).filter(([, v]) => !v).map(([k]) => k)
-  if (missing.length) {
-    return NextResponse.json({ error: `Pull disabled — missing env: ${missing.join(', ')}` }, { status: 503 })
+  let sa: ServiceAccount
+  try {
+    sa = JSON.parse(saRaw) as ServiceAccount
+    if (!sa.client_email || !sa.private_key || !sa.project_id) throw new Error('missing fields')
+  } catch {
+    return NextResponse.json(
+      { error: 'BQ_SERVICE_ACCOUNT_KEY is not valid service-account JSON (client_email/private_key/project_id)' },
+      { status: 503 },
+    )
   }
 
   try {
-    // 1) App-only token (client credentials).
-    const tokenRes = await fetch(
-      `https://login.microsoftonline.com/${env.PBI_TENANT_ID}/oauth2/v2.0/token`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          grant_type:    'client_credentials',
-          client_id:     env.PBI_CLIENT_ID!,
-          client_secret: env.PBI_CLIENT_SECRET!,
-          scope:         'https://analysis.windows.net/powerbi/api/.default',
-        }),
-        signal: AbortSignal.timeout(15_000),
-      },
-    )
-    if (!tokenRes.ok) {
-      const detail = await tokenRes.text()
-      return NextResponse.json(
-        { error: `AAD token failed (${tokenRes.status})`, detail: detail.slice(0, 500) },
-        { status: 502 },
-      )
-    }
-    const { access_token } = (await tokenRes.json()) as { access_token: string }
+    const token = await getAccessToken(sa)
 
-    // 2) Run the DAX query against the dataset.
     const queryRes = await fetch(
-      `https://api.powerbi.com/v1.0/myorg/groups/${env.PBI_WORKSPACE_ID}/datasets/${env.PBI_DATASET_ID}/executeQueries`,
+      `https://bigquery.googleapis.com/bigquery/v2/projects/${sa.project_id}/queries`,
       {
         method: 'POST',
         headers: {
           'Content-Type':  'application/json',
-          'Authorization': `Bearer ${access_token}`,
+          'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify({
-          queries:            [{ query: env.PBI_DAX_QUERY }],
-          serializerSettings: { includeNulls: true },
+          query:        process.env.BQ_QUERY || DEFAULT_QUERY,
+          useLegacySql: false,
+          timeoutMs:    30_000,
+          maxResults:   1000,
         }),
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.timeout(45_000),
       },
     )
     if (!queryRes.ok) {
       const detail = await queryRes.text()
       return NextResponse.json(
-        { error: `executeQueries failed (${queryRes.status})`, detail: detail.slice(0, 800) },
+        { error: `BigQuery query failed (${queryRes.status})`, detail: detail.slice(0, 800) },
         { status: 502 },
       )
     }
     const data = (await queryRes.json()) as {
-      results?: { tables?: { rows?: Record<string, unknown>[] }[] }[]
+      jobComplete?: boolean
+      schema?: { fields?: { name: string }[] }
+      rows?: { f: { v: unknown }[] }[]
     }
-    const rawRows = data.results?.[0]?.tables?.[0]?.rows ?? []
+    if (!data.jobComplete) {
+      return NextResponse.json({ error: 'BigQuery job did not complete within 30s' }, { status: 504 })
+    }
+    const fields = (data.schema?.fields ?? []).map((f) => f.name)
+    const rawRows = (data.rows ?? []).map((r) =>
+      Object.fromEntries(fields.map((name, i) => [name, r.f[i]?.v ?? null]))
+    )
     if (rawRows.length === 0) {
-      return NextResponse.json({ error: 'Query returned 0 rows — check PBI_DAX_QUERY' }, { status: 422 })
+      return NextResponse.json({ error: 'Query returned 0 rows' }, { status: 422 })
     }
 
-    // 3) DAX keys come as 'Table[column]' / '[Measure]' — strip to the bare
-    //    name so the shared normalizer's header aliases match.
     const rows: TargetRow[] = []
     const rowErrors: string[] = []
     for (const raw of rawRows) {
-      const cleaned: Record<string, unknown> = {}
-      for (const [k, v] of Object.entries(raw)) {
-        const m = k.match(/\[([^\]]+)\]$/)
-        cleaned[m ? m[1] : k] = v
-      }
-      const r = normalizeRow(cleaned, { runRateIsFraction: false }) // scale auto-detected
+      // kpi_pct is a fraction vs the MIN target; the normalizer's scale check
+      // converts it to percent.
+      const r = normalizeRow(raw, { runRateIsFraction: true })
       if ('error' in r) rowErrors.push(r.error)
       else rows.push(r)
     }

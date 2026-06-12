@@ -30,10 +30,12 @@ export async function upsertTargetRows(
 
   for (const r of rows) {
     const key = normalizeStoreName(r.pos_name)
-    // Name match first; fall back to the stakeholder's pos_name → POS code
-    // map so a renamed store still resolves through stores.code.
-    const storeId = byName.get(key) ?? byCode.get(POS_CODE_BY_NAME[key] ?? '')
-    if (!storeId) { unmatched.push(r.pos_name); continue }
+    // Exact pos_code first (BigQuery feed), then name, then the stakeholder's
+    // pos_name → POS code map so a renamed store still resolves.
+    const storeId = (r.pos_code ? byCode.get(r.pos_code) : undefined)
+      ?? byName.get(key)
+      ?? byCode.get(POS_CODE_BY_NAME[key] ?? '')
+    if (!storeId) { unmatched.push(r.pos_code ? `${r.pos_name} (${r.pos_code})` : r.pos_name); continue }
     const upsertKey = `${storeId}|${r.week_start}`
     if (byUpsertKey.has(upsertKey)) duplicates++
     byUpsertKey.set(upsertKey, {
