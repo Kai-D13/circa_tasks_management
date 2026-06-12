@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 import { normalizeRow, type TargetRow } from '@/lib/targets/parse'
 import { upsertTargetRows } from '@/lib/targets/ingest'
 
+// DEPRECATED (2026-06-12): the Power BI service-principal path was abandoned
+// (BI owner cannot support the tenant-level permission grant). Kept inert —
+// it answers 503 unless the PBI_* envs are set, and they must NOT be set.
+// The replacement source will be BigQuery (stakeholder builds the query;
+// a future cron route will reuse lib/targets/ingest the same way).
+//
 // GET /api/cron/pull-targets — pulls the BI report data straight from the
 // Power BI REST API (service principal + executeQueries) and upserts
 // store_weekly_targets. Scheduled 3x/day like the other /api/cron/* routes.
@@ -109,8 +115,8 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'No valid rows after normalize', rowErrors }, { status: 422 })
     }
 
-    const { upserted, unmatched } = await upsertTargetRows(rows, 'api', null)
-    return NextResponse.json({ ok: true, pulled: rawRows.length, upserted, unmatched, rowErrors })
+    const { upserted, unmatched, duplicates } = await upsertTargetRows(rows, 'api', null)
+    return NextResponse.json({ ok: true, pulled: rawRows.length, upserted, unmatched, duplicates, rowErrors })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     return NextResponse.json({ error: msg }, { status: 500 })

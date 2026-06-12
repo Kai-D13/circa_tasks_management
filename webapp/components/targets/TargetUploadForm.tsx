@@ -7,9 +7,10 @@ import { uploadWeeklyTargets } from '@/app/actions/targets'
 import { Button } from '@/components/ui/button'
 
 interface UploadResult {
-  upserted:  number
-  unmatched: string[]
-  rowErrors: string[]
+  upserted:   number
+  unmatched:  string[]
+  duplicates: number
+  rowErrors:  string[]
 }
 
 // Manual fallback loader for the BI XLSX export — the daily path is the
@@ -28,7 +29,12 @@ export function TargetUploadForm() {
     startTransition(async () => {
       const r = await uploadWeeklyTargets(formData)
       if ('error' in r) { toast.error(r.error); return }
-      setResult({ upserted: r.upserted ?? 0, unmatched: r.unmatched ?? [], rowErrors: r.rowErrors ?? [] })
+      setResult({
+        upserted:   r.upserted ?? 0,
+        unmatched:  r.unmatched ?? [],
+        duplicates: r.duplicates ?? 0,
+        rowErrors:  r.rowErrors ?? [],
+      })
       toast.success(`Đã cập nhật doanh số cho ${r.upserted} cửa hàng`)
       if (inputRef.current) inputRef.current.value = ''
     })
@@ -52,6 +58,11 @@ export function TargetUploadForm() {
       {result && (
         <div className="text-xs space-y-1">
           <p className="text-muted-foreground">Đã ghi {result.upserted} cửa hàng.</p>
+          {result.duplicates > 0 && (
+            <p className="text-amber-600">
+              File có {result.duplicates} dòng trùng (cùng cửa hàng + tuần) — đã lấy dòng cuối.
+            </p>
+          )}
           {result.unmatched.length > 0 && (
             <p className="text-amber-600">
               Không khớp tên cửa hàng ({result.unmatched.length}): {result.unmatched.join(', ')}

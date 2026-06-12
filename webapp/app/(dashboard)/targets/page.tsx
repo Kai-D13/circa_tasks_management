@@ -79,12 +79,24 @@ export default async function TargetsPage() {
         </div>
       )
     }
-    const { data: rows } = await supabase
+    const { data: rows, error: rowsError } = await supabase
       .from('store_weekly_targets')
       .select('week_start, target, min_weekly_target, actual, run_rate, status, remaining_target, refreshed_at')
       .eq('store_id', profile.store_id)
       .order('week_start', { ascending: false })
       .limit(5)
+    if (rowsError) {
+      // Operational failure ≠ "no data yet" — surface it so QA never reads a
+      // broken page as an empty one. Details go to the server log only.
+      console.error('[targets] staff query failed:', rowsError.message)
+      return (
+        <div className="p-4">
+          <p className="text-sm text-destructive">
+            Không tải được dữ liệu doanh số. Vui lòng thử lại sau hoặc báo Admin.
+          </p>
+        </div>
+      )
+    }
 
     const current = (rows ?? [])[0] as TargetRecord | undefined
     const history = ((rows ?? []) as TargetRecord[]).slice(1)
@@ -169,7 +181,7 @@ export default async function TargetsPage() {
   }
 
   // ── Super admin: all stores for the latest week + manual upload fallback ───
-  const { data: allRows } = await supabase
+  const { data: allRows, error: allRowsError } = await supabase
     .from('store_weekly_targets')
     .select('week_start, target, min_weekly_target, actual, run_rate, status, remaining_target, refreshed_at, stores(name)')
     .order('week_start', { ascending: false })
@@ -191,6 +203,11 @@ export default async function TargetsPage() {
               ? `${weekLabel(latestWeek)} · ${weekRows.length} cửa hàng · cập nhật ${formatDateTime(weekRows[0]?.refreshed_at ?? '')}`
               : 'Chưa có dữ liệu — nạp file XLSX export từ Power BI hoặc kích hoạt feed tự động.'}
           </p>
+          {allRowsError && (
+            <p className="text-sm text-destructive mt-1">
+              Lỗi truy vấn dữ liệu: {allRowsError.message} — kiểm tra migration 051/052 đã apply chưa.
+            </p>
+          )}
         </div>
       </div>
 

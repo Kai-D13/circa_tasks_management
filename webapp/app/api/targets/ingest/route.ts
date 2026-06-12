@@ -52,8 +52,8 @@ export async function POST(request: NextRequest) {
   }
 
   try {
-    const { upserted, unmatched } = await upsertTargetRows(rows, 'api', null)
-    return NextResponse.json({ ok: true, upserted, unmatched, rowErrors })
+    const { upserted, unmatched, duplicates } = await upsertTargetRows(rows, 'api', null)
+    return NextResponse.json({ ok: true, upserted, unmatched, duplicates, rowErrors })
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : String(err) },

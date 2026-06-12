@@ -40,8 +40,9 @@ export async function uploadWeeklyTargets(formData: FormData) {
   const rowErrors: string[] = []
   for (const raw of rawRows) {
     // Power BI table exports append a "Total" row and an "Applied filters:"
-    // footer — skip those silently instead of alarming the uploader.
-    const pn = raw['pos_name']
+    // footer — skip those silently instead of alarming the uploader. Check
+    // every pos_name header alias the normalizer accepts.
+    const pn = raw['pos_name'] ?? raw['POS Name'] ?? raw['pos']
     const isExportArtifact = typeof pn === 'string'
       && (/^total$/i.test(pn.trim()) || pn.trimStart().startsWith('Applied filters'))
     // XLSX export carries RunRate as a 0-1 fraction.
@@ -53,9 +54,9 @@ export async function uploadWeeklyTargets(formData: FormData) {
     return { error: `Không có dòng hợp lệ nào (${rowErrors[0] ?? 'sai định dạng cột'})` }
 
   try {
-    const { upserted, unmatched } = await upsertTargetRows(rows, 'upload', user.id)
+    const { upserted, unmatched, duplicates } = await upsertTargetRows(rows, 'upload', user.id)
     revalidatePath('/targets')
-    return { success: true, upserted, unmatched, rowErrors }
+    return { success: true, upserted, unmatched, duplicates, rowErrors }
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) }
   }

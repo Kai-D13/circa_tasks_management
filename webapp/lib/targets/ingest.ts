@@ -11,7 +11,7 @@ export async function upsertTargetRows(
   rows: TargetRow[],
   source: 'upload' | 'api',
   uploadedBy: string | null,
-): Promise<{ upserted: number; unmatched: string[] }> {
+): Promise<{ upserted: number; unmatched: string[]; duplicates: number }> {
   const { data: stores, error } = await supabaseAdmin.from('stores').select('id, name, code')
   if (error) throw new Error(error.message)
 
@@ -22,7 +22,11 @@ export async function upsertTargetRows(
       .map((s) => [String(s.code).trim().toUpperCase(), s.id]),
   )
   const unmatched: string[] = []
-  const payload: Record<string, unknown>[] = []
+  // Keyed store|week so a feed carrying the same store twice for one week
+  // can never trip Postgres' "ON CONFLICT DO UPDATE cannot affect row a
+  // second time" — last occurrence wins, duplicates are reported.
+  const byUpsertKey = new Map<string, Record<string, unknown>>()
+  let duplicates = 0
 
   for (const r of rows) {
     const key = normalizeStoreName(r.pos_name)
@@ -30,7 +34,9 @@ export async function upsertTargetRows(
     // map so a renamed store still resolves through stores.code.
     const storeId = byName.get(key) ?? byCode.get(POS_CODE_BY_NAME[key] ?? '')
     if (!storeId) { unmatched.push(r.pos_name); continue }
-    payload.push({
+    const upsertKey = `${storeId}|${r.week_start}`
+    if (byUpsertKey.has(upsertKey)) duplicates++
+    byUpsertKey.set(upsertKey, {
       store_id:          storeId,
       week_start:        r.week_start,
       target:            r.target,
@@ -45,6 +51,7 @@ export async function upsertTargetRows(
     })
   }
 
+  const payload = [...byUpsertKey.values()]
   if (payload.length) {
     const { error: upErr } = await supabaseAdmin
       .from('store_weekly_targets')
@@ -52,5 +59,5 @@ export async function upsertTargetRows(
     if (upErr) throw new Error(upErr.message)
   }
 
-  return { upserted: payload.length, unmatched }
+  return { upserted: payload.length, unmatched, duplicates }
 }
