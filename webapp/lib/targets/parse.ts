@@ -46,12 +46,14 @@ function toNumber(v: unknown): number | null {
   return null
 }
 
-// Accepts 'YYYY-MM-DD', 'MM/DD/YYYY' (BI's US format) or an Excel serial.
+// Accepts 'YYYY-MM-DD' (with optional time part — Power Automate's DAX output
+// is '2026-06-08T00:00:00'), 'MM/DD/YYYY' (BI's US format) or an Excel serial.
 export function parseWeek(v: unknown): string | null {
   if (typeof v === 'number') return excelSerialToISO(v)
   if (typeof v !== 'string') return null
   const s = v.trim()
-  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s
+  const iso = s.match(/^(\d{4}-\d{2}-\d{2})([T ]|$)/)
+  if (iso) return iso[1]
   const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
   if (us) return `${us[3]}-${us[1].padStart(2, '0')}-${us[2].padStart(2, '0')}`
   return null
@@ -83,6 +85,14 @@ export function normalizeRow(
 
   let runRate = toNumber(pick('run_rate', 'RunRate', 'Run Rate'))
   if (runRate !== null && opts.runRateIsFraction) runRate = runRate * 100
+  // Scale sanity check: we hold actual+target, so we can tell whether the
+  // sender used a fraction (0.7499) or a percent (74.99) regardless of the
+  // hint — pick whichever scale lands closer to actual/target. Protects the
+  // Power Automate path, where the measure's format is the BI owner's choice.
+  if (runRate !== null && target > 0) {
+    const expected = (actual / target) * 100
+    if (Math.abs(runRate * 100 - expected) < Math.abs(runRate - expected)) runRate = runRate * 100
+  }
   if (runRate !== null) runRate = Math.round(runRate * 100) / 100
 
   const status = pick('status', 'Status')
