@@ -39,9 +39,14 @@ export async function uploadWeeklyTargets(formData: FormData) {
   const rows: TargetRow[] = []
   const rowErrors: string[] = []
   for (const raw of rawRows) {
+    // Power BI table exports append a "Total" row and an "Applied filters:"
+    // footer — skip those silently instead of alarming the uploader.
+    const pn = raw['pos_name']
+    const isExportArtifact = typeof pn === 'string'
+      && (/^total$/i.test(pn.trim()) || pn.trimStart().startsWith('Applied filters'))
     // XLSX export carries RunRate as a 0-1 fraction.
     const r = normalizeRow(raw, { runRateIsFraction: true })
-    if ('error' in r) rowErrors.push(r.error)
+    if ('error' in r) { if (!isExportArtifact) rowErrors.push(r.error) }
     else rows.push(r)
   }
   if (rows.length === 0)
