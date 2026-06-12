@@ -112,7 +112,13 @@ export default async function TargetsPage() {
     const current = (rows ?? [])[0] as TargetRecord | undefined
     const history = ((rows ?? []) as TargetRecord[]).slice(1)
     const storeName = (profile.stores as unknown as { name: string } | null)?.name ?? 'Cửa hàng của bạn'
-    const pct = current ? (current.run_rate ?? (current.target > 0 ? (current.actual / current.target) * 100 : 0)) : 0
+    // Stakeholder pivot (2026-06-12): the staff view's "Mục tiêu tuần" is the
+    // 90% MIN target, and ALL percentages use it as the denominator so the
+    // numbers add up on screen (đã đạt + còn thiếu = mục tiêu; 48.0M/116M =
+    // 41.4% ≈ the mock's 42%). BI's run_rate (vs the full target) stays on
+    // the super-admin table only.
+    const weekGoal = current?.min_weekly_target ?? current?.target ?? 0
+    const pct = current && weekGoal > 0 ? (current.actual / weekGoal) * 100 : 0
 
     // ── "Hôm nay cần đạt" math (stakeholder spec 2026-06-12) ─────────────────
     // remaining ÷ days left in the week (today included, VN timezone), rounded
@@ -229,14 +235,12 @@ export default async function TargetsPage() {
                   {achieved ? '0₫' : vnd(remaining)}
                 </p>
                 <p className="text-xs text-white/80 mt-0.5">
-                  để đạt mục tiêu tối thiểu {vnd(current.min_weekly_target)} và nhận thưởng
+                  để đạt mục tiêu tuần và nhận thưởng
                 </p>
               </div>
 
               <div className="space-y-1.5">
-                <p className="text-right text-xs font-semibold">
-                  {current.run_rate !== null ? `${current.run_rate.toFixed(1)}%` : '—'}
-                </p>
+                <p className="text-right text-xs font-semibold">{pct.toFixed(1)}%</p>
                 <div className="h-2.5 w-full rounded-full bg-white/25 overflow-hidden">
                   <div
                     className="h-full rounded-full bg-white"
@@ -249,7 +253,7 @@ export default async function TargetsPage() {
                     <p className="text-white/80">Đã đạt</p>
                   </div>
                   <div className="text-right">
-                    <p className="font-semibold text-sm">{vnd(current.target)}</p>
+                    <p className="font-semibold text-sm">{vnd(weekGoal)}</p>
                     <p className="text-white/80">Mục tiêu tuần</p>
                   </div>
                 </div>
