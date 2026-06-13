@@ -623,7 +623,7 @@ export default async function TasksPage({
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Danh sách Tasks</h1>
         <div className="flex items-center gap-2">
-          {!isStaff && <ExportButton endpoint="/api/export/tasks" />}
+          {(canCreate || isSm) && <ExportButton endpoint="/api/export/tasks" />}
           {canCreate && (
             <Link href="/tasks/new" className={cn(buttonVariants({ size: 'sm' }))}>
               <Plus className="h-4 w-4 mr-1" />

@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { ScheduleActions } from '@/components/tasks/ScheduleActions'
 import { ShareScheduleDialog, type ScheduleCollaboratorRow } from '@/components/tasks/ShareScheduleDialog'
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
-import { ArrowLeft, CalendarClock, Store } from 'lucide-react'
+import { ArrowLeft, CalendarClock, ChevronRight, Store } from 'lucide-react'
 import { formatDate } from '@/lib/dateUtils'
 import { TaskCategory, TaskStatus } from '@/types'
 import { cn } from '@/lib/utils'
@@ -92,7 +92,7 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
       .select('id, title, status, scheduled_for, deadline, created_at, overdue_at, stores(name)')
       .eq('source_schedule_id', id)
       .order('created_at', { ascending: false })
-      .limit(20),
+      .limit(300),
     // Own collaborator row — decides whether a non-owner may pause/resume.
     supabase
       .from('task_schedule_collaborators')
@@ -143,6 +143,21 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
   const schedStores = (sched.task_schedule_stores as unknown as { store_id: string; stores: { id: string; name: string } | null }[]) ?? []
   const weekdays    = (sched.weekdays as number[] | null) ?? []
   const config      = template?.config
+
+  // Group generated tasks by run date (scheduled_for) so each cron run collapses
+  // into one expandable row (Lần chạy → cửa hàng), instead of a long flat list.
+  type RecentTask = {
+    id: string; status: string; scheduled_for: string | null
+    deadline: string | null; overdue_at: string | null; stores: { name: string } | null
+  }
+  const recentByRun = new Map<string, RecentTask[]>()
+  for (const t of (recentTasks ?? []) as unknown as RecentTask[]) {
+    const key = t.scheduled_for ?? 'unknown'
+    const arr = recentByRun.get(key) ?? []
+    arr.push(t)
+    recentByRun.set(key, arr)
+  }
+  const runGroups = [...recentByRun.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1))
 
   return (
     <div className="p-6 max-w-4xl space-y-5">
@@ -343,39 +358,42 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
           <CardTitle className="text-sm">Task đã tạo gần đây</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          {(!recentTasks || recentTasks.length === 0) ? (
+          {runGroups.length === 0 ? (
             <p className="px-4 pb-4 text-sm text-muted-foreground">Chưa có task nào được tạo</p>
           ) : (
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b">
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Cửa hàng</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Ngày lịch</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Trạng thái</th>
-                  <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Deadline</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {recentTasks.map((t) => (
-                  <tr key={t.id} className="hover:bg-muted/30">
-                    <td className="px-4 py-2.5">
-                      <Link href={`/tasks/${t.id}`} className="hover:underline font-medium">
-                        {(t.stores as unknown as { name: string } | null)?.name ?? '—'}
-                      </Link>
-                    </td>
-                    <td className="px-4 py-2.5 text-muted-foreground">
-                      {(t.scheduled_for as string | null) ?? '—'}
-                    </td>
-                    <td className="px-4 py-2.5">
-                      <TaskStatusBadge status={t.status as TaskStatus} late={t.status === 'done' && !!(t as { overdue_at?: string | null }).overdue_at} />
-                    </td>
-                    <td className="px-4 py-2.5 text-muted-foreground whitespace-nowrap">
-                      {t.deadline ? formatDate(t.deadline) : '—'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            runGroups.map(([date, tasks], idx) => {
+              const done = tasks.filter((t) => t.status === 'done').length
+              return (
+                <details key={date} open={idx === 0} className="group border-b last:border-0">
+                  <summary className="flex items-center gap-2 px-4 py-2.5 cursor-pointer hover:bg-muted/30 list-none select-none">
+                    <ChevronRight className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-90 shrink-0" />
+                    <span className="font-medium text-sm">{date === 'unknown' ? '—' : formatDate(date)}</span>
+                    <span className="text-xs text-muted-foreground">
+                      · {tasks.length} task · <span className={done === tasks.length ? 'text-green-600' : 'text-amber-600'}>{done}/{tasks.length} hoàn thành</span>
+                    </span>
+                  </summary>
+                  <table className="w-full text-sm border-t">
+                    <tbody className="divide-y">
+                      {tasks.map((t) => (
+                        <tr key={t.id} className="hover:bg-muted/30">
+                          <td className="px-4 py-2 pl-10">
+                            <Link href={`/tasks/${t.id}`} className="hover:underline">
+                              {t.stores?.name ?? '—'}
+                            </Link>
+                          </td>
+                          <td className="px-4 py-2">
+                            <TaskStatusBadge status={t.status as TaskStatus} late={t.status === 'done' && !!t.overdue_at} />
+                          </td>
+                          <td className="px-4 py-2 text-muted-foreground whitespace-nowrap text-right">
+                            {t.deadline ? formatDate(t.deadline) : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </details>
+              )
+            })
           )}
         </CardContent>
       </Card>
