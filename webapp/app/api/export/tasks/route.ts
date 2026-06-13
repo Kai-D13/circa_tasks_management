@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { getSmStoreIds } from '@/lib/authz'
 import { xlsxResponse, stampVN, fmtVN } from '@/lib/export/xlsx'
 import { publicStorageUrl } from '@/lib/storage/publicUrl'
+import { formatTaskCode } from '@/lib/taskCode'
 
 const MAX_ROWS = 5000
 
@@ -40,7 +41,7 @@ export async function GET(request: NextRequest) {
 
   let query = supabase
     .from('tasks')
-    .select('title, status, priority, category, source_schedule_id, assignment_mode, deadline, created_at, completed_at, overdue_at, stores(name), department:departments(name), assignee:users!assigned_to(full_name), completed_by_user:users!completed_by(full_name), task_uploaded_files(bucket, path, deleted_at)')
+    .select('seq, title, status, priority, category, source_schedule_id, assignment_mode, deadline, created_at, completed_at, overdue_at, stores(name), department:departments(name), assignee:users!assigned_to(full_name), completed_by_user:users!completed_by(full_name), task_uploaded_files(bucket, path, deleted_at)')
     // Exclude staff_all OVERVIEW parents — they carry no submitter; the export
     // lists the per-pharmacist child rows instead.
     .neq('assignment_mode', 'staff_all')
@@ -91,6 +92,7 @@ export async function GET(request: NextRequest) {
       .map((f) => publicStorageUrl(f.bucket, f.path))
       .join('\n')
     return {
+      'Mã':              formatTaskCode((t as { seq?: number | null }).seq),
       'Tiêu đề':         t.title as string,
       'Cửa hàng':        (t.stores as unknown as { name?: string } | null)?.name ?? '',
       'Phòng ban':       (t.department as unknown as { name?: string } | null)?.name ?? '',

@@ -41,6 +41,7 @@ const CATEGORY_LABEL_VN: Record<TaskCategory, string> = {
 }
 import { cn } from '@/lib/utils'
 import { deptBadgeClass } from '@/lib/departments'
+import { formatTaskCode } from '@/lib/taskCode'
 
 const OUTPUT_LABEL: Record<string, string> = {
   image: 'Ảnh',
@@ -60,6 +61,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
     supabase
       .from('tasks')
       .select('*, stores(name), assignee:users!assigned_to(full_name, email), creator:users!created_by(full_name), completed_by_user:users!completed_by(full_name), department:departments(name, color)')
+      // (task.seq is included by '*' — rendered as T-000000 via formatTaskCode)
       .eq('id', id)
       .single(),
   ])
@@ -327,6 +329,9 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
       <div className="px-4 pt-4 pb-3 border-b bg-background shrink-0">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
+            {(task as { seq?: number | null }).seq != null && (
+              <p className="text-xs font-mono text-muted-foreground mb-0.5">{formatTaskCode((task as { seq?: number | null }).seq)}</p>
+            )}
             <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-lg font-semibold leading-tight">{task.title}</h1>
               {task.category && (
