@@ -7,6 +7,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { TaskFilters } from '@/components/tasks/TaskFilters'
 import { TaskList, TaskListItem, BroadcastGroup, StaffGroup, StaffBroadcastGroup, StaffBroadcastStore, TaskRow, ChildTask } from '@/components/tasks/TaskList'
 import { AutoRefresh } from '@/components/common/AutoRefresh'
+import { ExportButton } from '@/components/common/ExportButton'
 import { Plus, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -621,12 +622,15 @@ export default async function TasksPage({
       {!isStaff && <AutoRefresh intervalMs={45000} />}
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Danh sách Tasks</h1>
-        {canCreate && (
-          <Link href="/tasks/new" className={cn(buttonVariants({ size: 'sm' }))}>
-            <Plus className="h-4 w-4 mr-1" />
-            Tạo Task
-          </Link>
-        )}
+        <div className="flex items-center gap-2">
+          {!isStaff && <ExportButton endpoint="/api/export/tasks" />}
+          {canCreate && (
+            <Link href="/tasks/new" className={cn(buttonVariants({ size: 'sm' }))}>
+              <Plus className="h-4 w-4 mr-1" />
+              Tạo Task
+            </Link>
+          )}
+        </div>
       </div>
 
       <TaskFilters

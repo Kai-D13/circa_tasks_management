@@ -9,6 +9,7 @@ import { cn } from '@/lib/utils'
 import { formatDateTime } from '@/lib/dateUtils'
 import { LogFilters, type LogFilterParams } from '@/components/logs/LogFilters'
 import { AutoRefresh } from '@/components/common/AutoRefresh'
+import { ExportButton } from '@/components/common/ExportButton'
 import { LOGS_PAGE_SIZE, ACTION_COLORS, ACTION_LABELS, formatMeta } from '@/lib/logs/constants'
 import { getSmStoreIds } from '@/lib/authz'
 
@@ -114,7 +115,16 @@ export default async function LogsPage({
   return (
     <div className="p-4 space-y-4">
       {!isStaff && <AutoRefresh intervalMs={60000} />}
-      <h1 className="text-xl font-semibold">Nhật ký hoạt động</h1>
+      <div className="flex items-center justify-between gap-2">
+        <h1 className="text-xl font-semibold">Nhật ký hoạt động</h1>
+        {(isAdmin || isSm) && (
+          <ExportButton
+            endpoint="/api/export/logs"
+            requireParams={['date_from', 'date_to']}
+            requireMessage="Vui lòng chọn khoảng ngày (Từ ngày / Đến ngày) trước khi xuất Excel"
+          />
+        )}
+      </div>
 
       <LogFilters
         params={params}

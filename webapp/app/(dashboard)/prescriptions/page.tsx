@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { PrescriptionSyncForm } from '@/components/prescriptions/PrescriptionSyncForm'
 import { Plus, CheckCircle2, Clock, Search } from 'lucide-react'
+import { ExportButton } from '@/components/common/ExportButton'
 import { cn } from '@/lib/utils'
 import { formatDateTime } from '@/lib/dateUtils'
 import { isSuperAdminEmail } from '@/lib/authz'
@@ -98,12 +99,15 @@ export default async function PrescriptionsPage({
             <p className="text-sm text-amber-700 mt-0.5">{pendingCount} đơn chờ đồng bộ</p>
           )}
         </div>
-        {isStaff && (
-          <Link href="/prescriptions/new" className={cn(buttonVariants({ size: 'sm' }))}>
-            <Plus className="h-4 w-4 mr-1" />
-            Nộp toa thuốc
-          </Link>
-        )}
+        <div className="flex items-center gap-2">
+          {isAdmin && <ExportButton endpoint="/api/export/prescriptions" />}
+          {isStaff && (
+            <Link href="/prescriptions/new" className={cn(buttonVariants({ size: 'sm' }))}>
+              <Plus className="h-4 w-4 mr-1" />
+              Nộp toa thuốc
+            </Link>
+          )}
+        </div>
       </div>
 
       {/* Admin batch sync form */}
