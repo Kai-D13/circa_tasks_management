@@ -78,13 +78,21 @@ export async function GET(request: NextRequest) {
   if (!saRaw) {
     return NextResponse.json({ error: 'Pull disabled — BQ_SERVICE_ACCOUNT_KEY not set' }, { status: 503 })
   }
+  // Accept either raw JSON or base64-encoded JSON. Base64 is the recommended
+  // form: the service-account JSON has quotes / \n / + / = that env editors
+  // (Coolify) routinely mangle, breaking JSON.parse.
+  const trimmed = saRaw.trim()
+  let saJson = trimmed
+  if (!trimmed.startsWith('{')) {
+    try { saJson = Buffer.from(trimmed, 'base64').toString('utf8') } catch { /* fall through */ }
+  }
   let sa: ServiceAccount
   try {
-    sa = JSON.parse(saRaw) as ServiceAccount
+    sa = JSON.parse(saJson) as ServiceAccount
     if (!sa.client_email || !sa.private_key || !sa.project_id) throw new Error('missing fields')
   } catch {
     return NextResponse.json(
-      { error: 'BQ_SERVICE_ACCOUNT_KEY is not valid service-account JSON (client_email/private_key/project_id)' },
+      { error: 'BQ_SERVICE_ACCOUNT_KEY is not valid service-account JSON/base64 (cần client_email/private_key/project_id)' },
       { status: 503 },
     )
   }
