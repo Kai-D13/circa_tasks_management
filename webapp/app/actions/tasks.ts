@@ -384,6 +384,8 @@ export async function updateTask(taskId: string, formData: FormData) {
   if (dateErrU) return { error: dateErrU }
 
   const requiredOutputsRaw = formData.getAll('required_outputs') as RequiredOutput[]
+  if (requiredOutputsRaw.length === 0)
+    return { error: 'Vui lòng chọn ít nhất một loại kết quả cần nộp' }
   const assignedTo = formData.get('assigned_to') as string || null
 
   const attachmentsRaw = formData.get('input_attachments') as string
@@ -891,6 +893,7 @@ export async function createBroadcastTask(params: {
   if (profile?.role !== 'admin') return { error: 'Chỉ admin mới được tạo task broadcast' }
 
   if (!params.storeIds.length) return { error: 'Vui lòng chọn ít nhất một cửa hàng' }
+  if (!params.requiredOutputs?.length) return { error: 'Vui lòng chọn ít nhất một loại kết quả cần nộp' }
 
   const dateErrB = validateTaskDates(params.startDate, params.deadline)
   if (dateErrB) return { error: dateErrB }

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { getSmStoreIds } from '@/lib/authz'
 import { xlsxResponse, stampVN, fmtVN } from '@/lib/export/xlsx'
+import { publicStorageUrl } from '@/lib/storage/publicUrl'
 
 const MAX_ROWS = 5000
 
@@ -23,7 +24,8 @@ export async function GET(request: NextRequest) {
   if (!user) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
   const role = profile?.role
-  if (role !== 'admin' && role !== 'sm' && role !== 'store_manager')
+  // Admin / PIC (role 'admin') + SM only — per stakeholder spec.
+  if (role !== 'admin' && role !== 'sm')
     return NextResponse.json({ error: 'Không có quyền xuất dữ liệu' }, { status: 403 })
 
   const isSm = role === 'sm'
@@ -38,11 +40,13 @@ export async function GET(request: NextRequest) {
 
   let query = supabase
     .from('tasks')
-    .select('title, status, priority, category, source_schedule_id, assignment_mode, deadline, created_at, completed_at, overdue_at, stores(name), department:departments(name), assignee:users!assigned_to(full_name), completed_by_user:users!completed_by(full_name)')
+    .select('title, status, priority, category, source_schedule_id, assignment_mode, deadline, created_at, completed_at, overdue_at, stores(name), department:departments(name), assignee:users!assigned_to(full_name), completed_by_user:users!completed_by(full_name), task_uploaded_files(bucket, path, deleted_at)')
     // Exclude staff_all OVERVIEW parents — they carry no submitter; the export
     // lists the per-pharmacist child rows instead.
     .neq('assignment_mode', 'staff_all')
-    .limit(MAX_ROWS)
+    // +1 to detect overflow past the cap (silent truncation would read as a
+    // complete export).
+    .limit(MAX_ROWS + 1)
 
   if (showArchived) {
     query = query.not('archived_at', 'is', null).order('created_at', { ascending: false })
@@ -72,6 +76,8 @@ export async function GET(request: NextRequest) {
 
   const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if ((data?.length ?? 0) > MAX_ROWS)
+    return NextResponse.json({ error: `Quá nhiều dòng (>${MAX_ROWS}). Vui lòng lọc hẹp hơn (theo cửa hàng / trạng thái) rồi xuất lại.` }, { status: 400 })
 
   const effStatus = (status: string, deadline: string | null): string =>
     status !== 'done' && deadline && Date.parse(deadline) < Date.now() ? 'overdue' : status
@@ -79,6 +85,11 @@ export async function GET(request: NextRequest) {
   const rows = (data ?? []).map((t) => {
     const submitter = (t.completed_by_user as unknown as { full_name?: string } | null)?.full_name
     const assignee = (t.assignee as unknown as { full_name?: string } | null)?.full_name
+    const files = (t.task_uploaded_files as unknown as { bucket: string; path: string; deleted_at: string | null }[] | null) ?? []
+    const fileLinks = files
+      .filter((f) => !f.deleted_at)
+      .map((f) => publicStorageUrl(f.bucket, f.path))
+      .join('\n')
     return {
       'Tiêu đề':         t.title as string,
       'Cửa hàng':        (t.stores as unknown as { name?: string } | null)?.name ?? '',
@@ -91,6 +102,7 @@ export async function GET(request: NextRequest) {
       'Deadline':        fmtVN(t.deadline as string | null),
       'Ngày tạo':        fmtVN(t.created_at as string),
       'Ngày hoàn thành': fmtVN(t.completed_at as string | null),
+      'Link ảnh/file':   fileLinks,
     }
   })
 

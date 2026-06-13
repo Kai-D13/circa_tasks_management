@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
     .order('created_at', { ascending: false })
     .gte('created_at', dateFrom + 'T00:00:00+07:00')
     .lte('created_at', dateTo + 'T23:59:59+07:00')
-    .limit(MAX_ROWS)
+    .limit(MAX_ROWS + 1)
 
   if (p.get('action'))  query = query.eq('action', p.get('action') as string)
   if (p.get('user_id')) query = query.eq('user_id', p.get('user_id') as string)
@@ -60,6 +60,8 @@ export async function GET(request: NextRequest) {
 
   const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+  if ((data?.length ?? 0) > MAX_ROWS)
+    return NextResponse.json({ error: `Quá nhiều dòng (>${MAX_ROWS}). Vui lòng thu hẹp khoảng ngày hoặc thêm bộ lọc rồi xuất lại.` }, { status: 400 })
 
   const rows = (data ?? []).map((log) => {
     const task = log.tasks as unknown as { title?: string; source_schedule_id?: string | null; stores?: { name?: string } | null } | null
