@@ -4,8 +4,8 @@ import { normalizeRow, type TargetRow } from '@/lib/targets/parse'
 import { upsertTargetRows } from '@/lib/targets/ingest'
 
 // GET /api/cron/pull-targets — pulls weekly KPI rows from BigQuery
-// (gold_buymed_vn2.fact_fin_circa_current_week_gmv) and upserts
-// store_weekly_targets. Scheduled 3x/day like the other /api/cron/* routes.
+// (buymed_n8n.fact_kpi_circa_weekly) and upserts store_weekly_targets.
+// Scheduled 3x/day like the other /api/cron/* routes.
 // (This replaced the abandoned Power BI service-principal pull on 2026-06-13.)
 //
 // Required env:
@@ -25,8 +25,8 @@ import { upsertTargetRows } from '@/lib/targets/ingest'
 
 const DEFAULT_QUERY = `
   SELECT monday_of_week, pos_code, gmv, target, weekly_target, kpi_pct
-  FROM \`lakehouse-prod-394907.gold_buymed_vn2.fact_fin_circa_current_week_gmv\`
-  WHERE pos_code NOT IN ("POS0001", "POS0010")
+  FROM \`lakehouse-prod-394907.buymed_n8n.fact_kpi_circa_weekly\`
+  WHERE pos_code NOT IN ("POS0001")
 `
 
 interface ServiceAccount {
