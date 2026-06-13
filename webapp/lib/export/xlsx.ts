@@ -14,11 +14,11 @@ export function xlsxResponse(
   const wb = XLSX.utils.book_new()
   const ws = XLSX.utils.json_to_sheet(rows.length ? rows : [{ '(không có dữ liệu)': '' }])
   XLSX.utils.book_append_sheet(wb, ws, sheetName.slice(0, 31)) // Excel sheet-name limit
-  const raw = XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as Uint8Array
-  // Copy into a fresh plain-ArrayBuffer-backed view — xlsx returns
-  // Uint8Array<ArrayBufferLike>, which the strict TS BlobPart type rejects.
-  const bytes = new Uint8Array(raw.length)
-  bytes.set(raw)
+  // type:'base64' is the deterministic output — type:'array' returns an
+  // ArrayBuffer whose `.length` is undefined (a previous attempt produced
+  // 0-byte / corrupt files). Decode the base64 to a plain Uint8Array.
+  const b64 = XLSX.write(wb, { type: 'base64', bookType: 'xlsx' }) as string
+  const bytes = Uint8Array.from(Buffer.from(b64, 'base64'))
   const body = new Blob([bytes], { type: XLSX_MIME })
 
   // ASCII-safe filename + RFC 5987 UTF-8 variant for Vietnamese.
