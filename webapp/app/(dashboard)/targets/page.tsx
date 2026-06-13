@@ -213,6 +213,7 @@ export default async function TargetsPage() {
                 )}>
                   {paceMessage}
                 </p>
+                <p className="text-xs text-muted-foreground">* Không bao gồm đơn online</p>
               </CardContent>
             </Card>
 
