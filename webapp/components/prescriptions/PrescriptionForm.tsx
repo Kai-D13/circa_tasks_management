@@ -27,11 +27,12 @@ export function PrescriptionForm({ storeId }: Props) {
     const trimmed = orderCode.trim().toUpperCase()
     if (!trimmed) { toast.error('Vui lòng nhập mã đơn hàng DHC'); return }
     if (images.length === 0) { toast.error('Vui lòng chụp ít nhất 1 ảnh toa thuốc'); return }
+    if (!notes.trim()) { toast.error('Vui lòng nhập ghi chú toa thuốc'); return }
 
     startTransition(async () => {
       // Pass only storage paths (not preview URLs) to the server
       const imagePaths = images.map(({ path, name, type, size }) => ({ path, name, type, size }))
-      const result = await submitPrescription(submissionId, trimmed, imagePaths, notes || undefined)
+      const result = await submitPrescription(submissionId, trimmed, imagePaths, notes.trim())
       // redirect() is called server-side on success — only error path returns here
       if (result?.error) toast.error(result.error)
     })
@@ -75,17 +76,21 @@ export function PrescriptionForm({ storeId }: Props) {
             />
           </div>
 
-          {/* Optional notes */}
+          {/* Required notes */}
           <div className="space-y-1.5">
             <label className="text-sm font-medium" htmlFor="notes">
-              Ghi chú
+              Ghi chú <span className="text-destructive">*</span>
             </label>
+            <p className="text-xs text-muted-foreground">
+              Note thông tin của toa thuốc: hoạt chất, loại thuốc kê đơn...
+            </p>
             <Textarea
               id="notes"
-              placeholder="Ghi chú thêm nếu có..."
+              placeholder="VD: Kháng sinh Amoxicillin, thuốc kê đơn ETC..."
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               rows={2}
+              required
             />
           </div>
         </CardContent>

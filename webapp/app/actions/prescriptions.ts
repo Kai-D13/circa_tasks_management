@@ -37,6 +37,10 @@ export async function submitPrescription(
   if (!DHC_PATTERN.test(trimmedCode))
     return { error: 'Mã đơn hàng phải có dạng DHC theo sau bởi các chữ số (VD: DHC00878115)' }
 
+  // Note is required (stakeholder 2026-06-13) — active ingredient / prescription type.
+  const trimmedNotes = notes?.trim() ?? ''
+  if (!trimmedNotes) return { error: 'Vui lòng nhập ghi chú toa thuốc' }
+
   // Validate images server-side — don't trust client metadata/path
   if (images.length < 1 || images.length > PRESCRIPTION_MAX_IMAGES)
     return { error: `Cần 1–${PRESCRIPTION_MAX_IMAGES} ảnh toa thuốc` }
@@ -68,7 +72,7 @@ export async function submitPrescription(
       order_code:   trimmedCode,
       store_id:     profile.store_id,
       submitted_by: user.id,
-      notes:        notes?.trim() || null,
+      notes:        trimmedNotes,
     })
     .select('id')
     .single()

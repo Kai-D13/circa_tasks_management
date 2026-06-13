@@ -355,6 +355,14 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
     e.preventDefault()
     const formData = new FormData(e.currentTarget)
 
+    // Every task must define at least one output, else staff get a submit form
+    // with no upload widgets (the recurring "quên chọn output" incident). Applies
+    // to both adhoc and recurring create paths.
+    if (outputs.length === 0) {
+      toast.error('Vui lòng chọn ít nhất một loại kết quả cần nộp (Ảnh, Ghi chú, File hoặc Video)')
+      return
+    }
+
     // ── Recurring path ────────────────────────────────────────────────────
     if (taskType === 'recurring') {
       const title       = (formData.get('title') as string)?.trim() ?? ''
@@ -1055,7 +1063,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
 
             {/* Output cần nộp — chips */}
             <div className="px-5 py-3">
-              <span className={sectionLabel}>Output cần nộp</span>
+              <span className={sectionLabel}>Output cần nộp <span className="text-destructive">*</span></span>
               <div className="flex flex-wrap gap-1.5">
                 {OUTPUT_OPTIONS.map(({ value, label }) => (
                   <button

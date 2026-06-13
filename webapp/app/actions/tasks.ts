@@ -144,6 +144,8 @@ export async function createTask(formData: FormData) {
   if (dateErr) return { error: dateErr }
 
   const requiredOutputsRaw = formData.getAll('required_outputs') as RequiredOutput[]
+  if (requiredOutputsRaw.length === 0)
+    return { error: 'Vui lòng chọn ít nhất một loại kết quả cần nộp' }
   const assignedTo = formData.get('assigned_to') as string || null
 
   const attachmentsRaw = formData.get('input_attachments') as string
@@ -1668,6 +1670,8 @@ export async function createTaskSchedule(data: {
     return { error: 'Ngày trong tháng phải từ 1 đến 28' }
   if (data.endDate && data.endDate < data.startDate)
     return { error: 'Ngày kết thúc phải sau ngày bắt đầu' }
+  if (!data.requiredOutputs || data.requiredOutputs.length === 0)
+    return { error: 'Vui lòng chọn ít nhất một loại kết quả cần nộp' }
   const attachErrS = validateAttachments(data.attachments)
   if (attachErrS) return { error: attachErrS }
 
