@@ -13,7 +13,9 @@ const OPTIONS: sanitizeHtml.IOptions = {
   allowedStyles: {
     '*': {
       'text-align':       [/^(left|right|center|justify)$/],
-      'font-size':        [/^\d{1,3}(\.\d+)?(px|rem|em|%)$/],
+      // Only the sizes the toolbar produces (13/18/24px) — blocks a hand-crafted
+      // 999px payload that would blow up the layout for staff.
+      'font-size':        [/^(13|18|24)px$/],
       'color':            [/^#(0x)?[0-9a-f]{3,8}$/i, /^rgb\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\)$/],
       'background-color': [/^#(0x)?[0-9a-f]{3,8}$/i, /^rgb\(\s*\d{1,3}\s*,\s*\d{1,3}\s*,\s*\d{1,3}\s*\)$/],
     },

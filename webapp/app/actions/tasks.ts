@@ -555,9 +555,13 @@ export async function updateStaffAllInstruction(parentTaskId: string, data: {
     ? { ...baseMeta, attachments, links }
     : (hasOtherMeta ? baseMeta : null)
 
+  // Sanitize once → used for BOTH the write and the changed-fields compare so
+  // the audit can't disagree with what was actually stored.
+  const cleanDescription = sanitizeRichText(data.description)
+
   const { error: updErr } = await supabaseAdmin.from('tasks').update({
     title:       data.title.trim(),
-    description: sanitizeRichText(data.description),
+    description: cleanDescription,
     category:    data.category,
     priority:    data.priority,
     input_data:  inputData,
@@ -572,7 +576,7 @@ export async function updateStaffAllInstruction(parentTaskId: string, data: {
   const normLinks = (l: { label: string; url: string }[]) => JSON.stringify(l.map((x) => [x.label, x.url]))
   const changed: string[] = []
   if (anchor.title !== data.title.trim())               changed.push('title')
-  if ((anchor.description ?? null) !== data.description) changed.push('description')
+  if ((anchor.description ?? '') !== cleanDescription)   changed.push('description')
   if (anchor.category !== data.category)                changed.push('category')
   if (anchor.priority !== data.priority)                changed.push('priority')
   if (normAtts(prevAtts) !== normAtts(attachments))     changed.push('attachments')
