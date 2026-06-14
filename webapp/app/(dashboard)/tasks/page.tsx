@@ -349,6 +349,13 @@ export default async function TasksPage({
   const deptOf = (t: unknown) =>
     ((t as { department?: { name: string; color: string | null } | null }).department ?? null)
 
+  // Which children to DISPLAY when a tree is expanded: pending tab shows only
+  // not-yet-done pharmacists ("who still needs to do it"), done tab shows the
+  // submitted ones. Counts (total/done) are kept from the FULL kids set so the
+  // "X/Y đã nộp" badge still reflects overall progress.
+  const displayKids = (kids: ChildTask[]) =>
+    view === 'done' ? kids.filter((k) => k.status === 'done') : kids.filter((k) => k.status !== 'done')
+
   for (const task of allTasks) {
     const parentTaskId = (task as { parent_task_id?: string | null }).parent_task_id ?? null
 
@@ -363,7 +370,7 @@ export default async function TasksPage({
           storeName:  (task.stores as unknown as { name: string } | null)?.name ?? null,
           total:      kids.length,
           done:       kids.filter((k) => k.status === 'done').length,
-          childTasks: kids,
+          childTasks: displayKids(kids),
         }
         const existingIdx = seenStaffBroadcast.get(task.broadcast_id)
         if (existingIdx !== undefined) {
@@ -403,7 +410,7 @@ export default async function TasksPage({
         done:       kids.filter((k) => k.status === 'done').length,
         createdAt:  task.created_at,
         taskIds:    [task.id, ...kids.map((k) => k.id)],
-        childTasks: kids,
+        childTasks: displayKids(kids),
       }
       grouped.push(group)
       continue
