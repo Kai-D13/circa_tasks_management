@@ -334,7 +334,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
               <p className="text-xs font-mono text-muted-foreground mb-0.5">{formatTaskCode((task as { seq?: number | null }).seq)}</p>
             )}
             <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-lg font-semibold leading-tight">{task.title}</h1>
+              <h1 className="text-xl font-bold leading-tight tracking-tight">{task.title}</h1>
               {task.category && (
                 <span className={cn(
                   'text-xs px-2 py-0.5 rounded font-medium shrink-0',
@@ -441,7 +441,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           {/* Description */}
           {task.description && (
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70 mb-1.5">Mô tả</p>
+              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Mô tả</p>
               <RichText value={task.description as string} />
             </div>
           )}
