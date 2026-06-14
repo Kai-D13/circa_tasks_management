@@ -42,6 +42,7 @@ const CATEGORY_LABEL_VN: Record<TaskCategory, string> = {
 import { cn } from '@/lib/utils'
 import { deptBadgeClass } from '@/lib/departments'
 import { formatTaskCode } from '@/lib/taskCode'
+import { RichText } from '@/components/tasks/RichText'
 
 const OUTPUT_LABEL: Record<string, string> = {
   image: 'Ảnh',
@@ -441,7 +442,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           {task.description && (
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground/70 mb-1.5">Mô tả</p>
-              <p className="text-sm whitespace-pre-wrap leading-relaxed">{task.description}</p>
+              <RichText value={task.description as string} />
             </div>
           )}
 

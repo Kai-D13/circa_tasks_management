@@ -8,7 +8,7 @@ import { createTask, updateTask, createBroadcastTask, createTaskSchedule, create
 import { createClient as createBrowserClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Textarea } from '@/components/ui/textarea'
+import { RichTextEditor } from '@/components/tasks/RichTextEditor'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { SearchableSelect } from '@/components/ui/searchable-select'
 import { Plus, X, Paperclip, Link2, Settings } from 'lucide-react'
@@ -85,6 +85,9 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   const [assignedTo, setAssignedTo] = useState(task?.assigned_to ?? '')
   const [priority, setPriority]     = useState<TaskPriority>(task?.priority ?? 'normal')
   const [outputs, setOutputs]       = useState<RequiredOutput[]>(task?.required_outputs ?? [])
+  // Description is now rich-text HTML (controlled) — fed to RichTextEditor + a
+  // hidden input named "description" so form/draft plumbing is unchanged.
+  const [description, setDescription] = useState<string>(task?.description ?? '')
   const [taskType, setTaskType]     = useState<TaskType>(!task && initialTaskType === 'recurring' ? 'recurring' : 'adhoc')
   // staff_all: each pharmacist in the store gets their own child task to submit.
   // Ad-hoc + single-store + new only.
@@ -178,7 +181,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draftKey, hasDraft, dirtyTick, taskType, category, priority, storeId, assignedTo, scope,
       selectedStoreIds, staffMode, outputs, links, attachments, frequency, runTime, weekdays,
-      monthDay, schedStartDate, schedEndDate, deadlineOffset,
+      monthDay, schedStartDate, schedEndDate, deadlineOffset, description,
       startDate, startTime, deadlineDate, deadlineTime])
 
   function clearDraft() {
@@ -235,6 +238,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
       setDeadlineDate(dd); setDeadlineTime(dt)
       if (d.links?.length) setShowLinks(true)
       if (d.attachments?.length) setShowAttachments(true)
+      setDescription(d.description ?? '')   // controlled rich-text field
       // Uncontrolled DOM fields
       const f = formRef.current
       if (f) {
@@ -242,7 +246,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
           const el = f.elements.namedItem(name) as HTMLInputElement | HTMLTextAreaElement | null
           if (el) el.value = val ?? ''
         }
-        setVal('title', d.title); setVal('description', d.description)
+        setVal('title', d.title)
       }
       setHasDraft(false)
       toast.success('Đã khôi phục bản nháp')
@@ -768,14 +772,12 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
             />
           </div>
 
-          {/* Row 4: Description — fixed height, no flex-fill so compose area stays compact */}
+          {/* Row 4: Description — WYSIWYG (bold/size/highlight/underline/align).
+              Controlled `description` HTML mirrored into a hidden input so the
+              existing formData('description') + draft DOM-read paths are unchanged. */}
           <div className="px-5 pt-3 pb-2">
-            <Textarea
-              name="description"
-              defaultValue={task?.description ?? ''}
-              placeholder="Nội dung chi tiết, hướng dẫn thực hiện..."
-              className="w-full min-h-[180px] max-h-[400px] border-0 resize-y p-0 focus-visible:ring-0 shadow-none text-sm bg-transparent placeholder:text-muted-foreground/40"
-            />
+            <input type="hidden" name="description" value={description} />
+            <RichTextEditor value={description} onChange={setDescription} />
           </div>
 
           {/* Attachment panel — always mounted (hidden when inactive) so the

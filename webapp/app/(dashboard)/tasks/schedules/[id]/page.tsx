@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { ScheduleActions } from '@/components/tasks/ScheduleActions'
 import { ShareScheduleDialog, type ScheduleCollaboratorRow } from '@/components/tasks/ShareScheduleDialog'
+import { RichText } from '@/components/tasks/RichText'
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
 import { ArrowLeft, CalendarClock, ChevronRight, Store } from 'lucide-react'
 import { formatDate } from '@/lib/dateUtils'
@@ -261,7 +262,7 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
             </Row>
             {config?.description && (
               <Row label="Mô tả">
-                <span className="whitespace-pre-wrap leading-relaxed">{config.description}</span>
+                <RichText value={config.description} />
               </Row>
             )}
             {(config?.input_data?.attachments?.length ?? 0) > 0 && (

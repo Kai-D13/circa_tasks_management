@@ -9,6 +9,7 @@ import { computeNextRunAt } from '@/lib/recurring'
 import { notifyTaskCreated } from '@/lib/teams/notifyTaskCreated'
 import { canAdminManageOwn, getSmStoreIds, smHasStore } from '@/lib/authz'
 import { publicStorageUrl } from '@/lib/storage/publicUrl'
+import { sanitizeRichText } from '@/lib/richtext/sanitize'
 
 // True when the given admin is an 'editor' collaborator on the task.
 // Used by addReviewNote + requestResubmit to accept collaborator editors.
@@ -173,7 +174,7 @@ export async function createTask(formData: FormData) {
     return createStaffRequiredTask(supabase, user.id, {
       storeId:         storeIdVal,
       title:           formData.get('title') as string,
-      description:     formData.get('description') as string || null,
+      description:     sanitizeRichText(formData.get('description') as string) || null,
       category:        (formData.get('category') as TaskCategory) || 'other',
       priority:        formData.get('priority') as TaskPriority,
       startDate:       formData.get('start_date') as string || null,
@@ -185,7 +186,7 @@ export async function createTask(formData: FormData) {
 
   const { data: task, error } = await supabase.from('tasks').insert({
     title:            formData.get('title') as string,
-    description:      formData.get('description') as string || null,
+    description:      sanitizeRichText(formData.get('description') as string) || null,
     category:         (formData.get('category') as TaskCategory) || 'other',
     priority:         formData.get('priority') as TaskPriority,
     visibility:       formData.get('visibility') as TaskVisibility,
@@ -275,7 +276,7 @@ async function createStaffRequiredTask(
   // 2. Parent — private + unassigned so staff can't see it; managers/admins can.
   const { data: parent, error: parentErr } = await supabase.from('tasks').insert({
     title:            p.title,
-    description:      p.description,
+    description:      sanitizeRichText(p.description) || null,
     category:         p.category,
     priority:         p.priority,
     visibility:       'private' as TaskVisibility,
@@ -294,7 +295,7 @@ async function createStaffRequiredTask(
   const { data: children, error: childErr } = await supabase.from('tasks').insert(
     staff.map((s) => ({
       title:            p.title,
-      description:      p.description,
+      description:      sanitizeRichText(p.description) || null,
       category:         p.category,
       priority:         p.priority,
       visibility:       'private' as TaskVisibility,
@@ -413,7 +414,7 @@ export async function updateTask(taskId: string, formData: FormData) {
 
   const { error } = await supabase.from('tasks').update({
     title:            formData.get('title') as string,
-    description:      formData.get('description') as string || null,
+    description:      sanitizeRichText(formData.get('description') as string) || null,
     category:         (formData.get('category') as TaskCategory) || 'other',
     priority:         formData.get('priority') as TaskPriority,
     visibility:       formData.get('visibility') as TaskVisibility,
@@ -556,7 +557,7 @@ export async function updateStaffAllInstruction(parentTaskId: string, data: {
 
   const { error: updErr } = await supabaseAdmin.from('tasks').update({
     title:       data.title.trim(),
-    description: data.description,
+    description: sanitizeRichText(data.description),
     category:    data.category,
     priority:    data.priority,
     input_data:  inputData,
@@ -934,7 +935,7 @@ export async function createBroadcastTask(params: {
 
     const parentsToInsert = params.storeIds.map(sid => ({
       title:            params.title,
-      description:      params.description || null,
+      description:      sanitizeRichText(params.description) || null,
       category:         params.category,
       priority:         params.priority,
       visibility:       'private' as TaskVisibility,
@@ -961,7 +962,7 @@ export async function createBroadcastTask(params: {
       const staffList = staffByStore.get(parent.store_id!) ?? []
       return staffList.map(staff => ({
         title:            params.title,
-        description:      params.description || null,
+        description:      sanitizeRichText(params.description) || null,
         category:         params.category,
         priority:         params.priority,
         visibility:       'private' as TaskVisibility,
@@ -1054,7 +1055,7 @@ export async function createBroadcastTask(params: {
 
   const tasksToInsert = params.storeIds.map((storeId) => ({
     title:            params.title,
-    description:      params.description || null,
+    description:      sanitizeRichText(params.description) || null,
     category:         params.category,
     priority:         params.priority,
     visibility:       params.visibility,
@@ -1250,7 +1251,7 @@ export async function createImportedStoreTasks(params: {
     tasksPayload.push({
       store_id:         m.store.id,
       title:            params.title,
-      description:      params.description || null,
+      description:      sanitizeRichText(params.description) || null,
       category:         params.category || 'other',
       priority:         params.priority,
       start_date:       params.startDate || null,
@@ -1682,7 +1683,7 @@ export async function createTaskSchedule(data: {
 
   // 1. Create template
   const config = {
-    description:      data.description || undefined,
+    description:      sanitizeRichText(data.description) || undefined,
     category:         data.category,
     priority:         data.priority,
     visibility:       'store' as const,
