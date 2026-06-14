@@ -6,25 +6,27 @@
 -- task join. As the audit log grows every read is a full scan. These indexes
 -- fix that; data is unchanged (no retention here).
 --
--- IMPORTANT: run this file AS-IS in the Supabase SQL editor (do NOT wrap in a
--- transaction). CREATE INDEX CONCURRENTLY cannot run inside BEGIN/COMMIT and
--- builds without locking writes on the live table.
+-- NOTE: plain CREATE INDEX (not CONCURRENTLY) because the Supabase SQL editor
+-- runs statements inside a transaction, where CONCURRENTLY is not allowed.
+-- A plain build takes a SHARE lock that briefly blocks WRITES to task_logs
+-- (reads unaffected, other tables unaffected) — at the current table size this
+-- is seconds; run during low traffic. Idempotent via IF NOT EXISTS.
 -- ============================================================
 
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_task_logs_created_at
+CREATE INDEX IF NOT EXISTS idx_task_logs_created_at
   ON public.task_logs (created_at DESC);
 
 -- Covers RLS staff/manager (user_id = auth.uid()) + the user_id filter, with
 -- created_at for the ordering.
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_task_logs_user_created
+CREATE INDEX IF NOT EXISTS idx_task_logs_user_created
   ON public.task_logs (user_id, created_at DESC);
 
 -- Task join (tasks!inner) + RLS branches that match on task_id.
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_task_logs_task_id
+CREATE INDEX IF NOT EXISTS idx_task_logs_task_id
   ON public.task_logs (task_id);
 
 -- Optional action filter on /logs.
-CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_task_logs_action
+CREATE INDEX IF NOT EXISTS idx_task_logs_action
   ON public.task_logs (action);
 
 -- Record this migration.
