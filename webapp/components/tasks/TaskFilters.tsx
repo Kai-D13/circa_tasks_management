@@ -117,7 +117,7 @@ export function TaskFilters({ stores, currentParams, showArchived, view = 'pendi
                   ? v === 'pending'
                     ? 'bg-primary text-primary-foreground shadow-sm'
                     : 'bg-green-600 text-white shadow-sm'
-                  : 'text-muted-foreground hover:text-foreground',
+                  : 'text-muted-foreground hover:text-foreground hover:bg-background/60',
               )}
             >
               {v === 'pending' ? 'Chờ thực hiện' : 'Hoàn thành'}

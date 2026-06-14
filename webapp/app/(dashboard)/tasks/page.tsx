@@ -8,7 +8,7 @@ import { TaskFilters } from '@/components/tasks/TaskFilters'
 import { TaskList, TaskListItem, BroadcastGroup, StaffGroup, StaffBroadcastGroup, StaffBroadcastStore, TaskRow, ChildTask } from '@/components/tasks/TaskList'
 import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { ExportButton } from '@/components/common/ExportButton'
-import { Plus, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Plus, AlertCircle, ChevronLeft, ChevronRight, ClipboardList } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const PAGE_SIZE = 30
@@ -608,6 +608,9 @@ export default async function TasksPage({
         (g.type !== 'staff_broadcast' || g.totalStaff > 0) && (g.type !== 'staff' || g.total > 0))
     : grouped
 
+  // Drives the empty-state copy: are filters narrowing the (empty) result?
+  const hasActiveFilters = !isStaff && !!(params.status || params.priority || params.store_id || params.category)
+
   // Build href that preserves filters but changes page.
   // Staff only carry 'view' — never status/priority/store_id/category/archived,
   // since those params are ignored server-side for staff and could confuse state.
@@ -625,7 +628,7 @@ export default async function TasksPage({
   }
 
   return (
-    <div className="p-4 space-y-4">
+    <div className="p-4 md:p-6 space-y-4 max-w-[1400px]">
       {!isStaff && <AutoRefresh intervalMs={45000} />}
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold">Danh sách Tasks</h1>
@@ -663,11 +666,40 @@ export default async function TasksPage({
         </div>
       ) : (
         <>
+          {visibleItems.length === 0 ? (
+            <Card>
+              <CardContent className="py-16 flex flex-col items-center justify-center text-center gap-3">
+                <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
+                  <ClipboardList className="h-6 w-6 text-primary" />
+                </div>
+                <div>
+                  <p className="font-medium">
+                    {showArchived ? 'Chưa có task lưu trữ' : view === 'done' ? 'Chưa có task hoàn thành' : 'Không có task nào'}
+                  </p>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {hasActiveFilters
+                      ? 'Thử xoá bớt bộ lọc để xem thêm task.'
+                      : view === 'done'
+                        ? 'Các task hoàn thành sẽ hiện ở đây.'
+                        : canCreate
+                          ? 'Tạo task đầu tiên để bắt đầu.'
+                          : 'Hiện chưa có task nào cần làm.'}
+                  </p>
+                </div>
+                {canCreate && !hasActiveFilters && view !== 'done' && !showArchived && (
+                  <Link href="/tasks/new" className={cn(buttonVariants({ size: 'sm' }), 'mt-1')}>
+                    <Plus className="h-4 w-4 mr-1" /> Tạo Task
+                  </Link>
+                )}
+              </CardContent>
+            </Card>
+          ) : (
           <Card>
             <CardContent className="p-0">
               <TaskList items={visibleItems} canArchive={canArchive} canRestore={canRestore} showArchived={showArchived} userRole={profile?.role ?? 'staff'} />
             </CardContent>
           </Card>
+          )}
 
           {/* Staff pagination — simple Prev/Next (no exact count, so no page numbers).
               Sticky above the mobile bottom nav so it's always reachable; static on

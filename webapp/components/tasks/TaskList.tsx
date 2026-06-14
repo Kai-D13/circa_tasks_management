@@ -331,7 +331,7 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
       <div className="hidden md:block">
       <Table>
         <TableHeader>
-          <TableRow>
+          <TableRow className="bg-muted/40 hover:bg-muted/40 [&>th]:text-xs [&>th]:uppercase [&>th]:tracking-wide [&>th]:font-medium [&>th]:text-muted-foreground">
             {showCheckbox && (
               <TableHead className="w-[40px]">
                 <input
