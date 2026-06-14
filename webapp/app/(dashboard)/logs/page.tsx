@@ -66,7 +66,10 @@ export default async function LogsPage({
 
   let logsQuery = supabase
     .from('task_logs')
-    .select(`*, ${taskEmbed}, users(id, full_name)`, { count: 'exact' })
+    // 'estimated' uses the planner row estimate for large result sets (avoids a
+    // full COUNT scan on every load) and falls back to exact for small ones —
+    // an approximate total is fine for paginating an audit log.
+    .select(`*, ${taskEmbed}, users(id, full_name)`, { count: 'estimated' })
     .order('created_at', { ascending: false })
     .range(from, to)
 
@@ -114,7 +117,7 @@ export default async function LogsPage({
 
   return (
     <div className="p-4 space-y-4">
-      {!isStaff && <AutoRefresh intervalMs={60000} />}
+      {!isStaff && <AutoRefresh intervalMs={120000} />}
       <div className="flex items-center justify-between gap-2">
         <h1 className="text-xl font-semibold">Nhật ký hoạt động</h1>
         {(isAdmin || isSm) && (
