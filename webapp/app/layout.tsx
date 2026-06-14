@@ -1,18 +1,14 @@
 import type { Metadata, Viewport } from "next"
-import { Raleway, Quicksand } from "next/font/google"
+import { Be_Vietnam_Pro } from "next/font/google"
 import { Toaster } from "@/components/ui/sonner"
 import "./globals.css"
 
-// Circa brand fonts: Raleway for body text, Quicksand for titles/headings.
-const raleway = Raleway({
+// Be Vietnam Pro — one neutral, Vietnamese-optimized family for the whole ops
+// dashboard; hierarchy comes from weight/size, not a second display font.
+const beVietnamPro = Be_Vietnam_Pro({
   variable: "--font-sans",
   subsets: ["latin", "vietnamese"],
   weight: ["400", "500", "600", "700"],
-})
-const quicksand = Quicksand({
-  variable: "--font-heading",
-  subsets: ["latin", "vietnamese"],
-  weight: ["500", "600", "700"],
 })
 
 export const metadata: Metadata = {
@@ -31,7 +27,7 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="vi" suppressHydrationWarning className={`${raleway.variable} ${quicksand.variable} h-full antialiased`}>
+    <html lang="vi" suppressHydrationWarning className={`${beVietnamPro.variable} h-full antialiased`}>
       <head>
         {/*
           Kill any lingering service worker from the old PWA build. The app no
