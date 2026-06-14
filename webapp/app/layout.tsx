@@ -1,12 +1,18 @@
 import type { Metadata, Viewport } from "next"
-import { Roboto } from "next/font/google"
+import { Raleway, Quicksand } from "next/font/google"
 import { Toaster } from "@/components/ui/sonner"
 import "./globals.css"
 
-const roboto = Roboto({
+// Circa brand fonts: Raleway for body text, Quicksand for titles/headings.
+const raleway = Raleway({
   variable: "--font-sans",
   subsets: ["latin", "vietnamese"],
-  weight: ["400", "500", "700"],
+  weight: ["400", "500", "600", "700"],
+})
+const quicksand = Quicksand({
+  variable: "--font-heading",
+  subsets: ["latin", "vietnamese"],
+  weight: ["500", "600", "700"],
 })
 
 export const metadata: Metadata = {
@@ -25,7 +31,7 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="vi" suppressHydrationWarning className={`${roboto.variable} h-full antialiased`}>
+    <html lang="vi" suppressHydrationWarning className={`${raleway.variable} ${quicksand.variable} h-full antialiased`}>
       <head>
         {/*
           Kill any lingering service worker from the old PWA build. The app no
