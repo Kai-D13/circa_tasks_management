@@ -125,7 +125,10 @@ let inFlight: Promise<TargetRow[]> | null = null
 async function fetchLive(): Promise<TargetRow[]> {
   const sa = loadServiceAccount()
   if (!sa) throw new Error('BQ_SERVICE_ACCOUNT_KEY chưa cấu hình')
-  const raw = await runBigQuery(sa, process.env.BQ_QUERY || DEFAULT_QUERY)
+  // Always DEFAULT_QUERY for the live read — it carries the ORDER BY that
+  // guarantees the latest week is within the cap. A BQ_QUERY env override (used
+  // by the cron) must not silently drop that ordering on the staff-facing path.
+  const raw = await runBigQuery(sa, DEFAULT_QUERY)
   const rows: TargetRow[] = []
   for (const r of raw) {
     const n = normalizeRow(r, { runRateIsFraction: true })

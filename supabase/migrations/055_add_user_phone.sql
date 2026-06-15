@@ -27,17 +27,34 @@ LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
+DECLARE
+  v_name  text := btrim(coalesce(p_full_name, ''));
+  -- Strip spaces / . / - / ( ) before validating, then NULL if empty.
+  v_phone text := nullif(regexp_replace(coalesce(p_phone, ''), '[[:space:].()-]', '', 'g'), '');
 BEGIN
-  IF (SELECT role FROM public.users WHERE id = auth.uid()) <> 'staff' THEN
+  -- Validation lives here too (not only in the server action) because the RPC is
+  -- granted to every authenticated user and could be called directly. phone_number
+  -- feeds an important downstream batch, so guard its shape at the DB layer.
+  IF (SELECT role FROM public.users WHERE id = auth.uid()) IS DISTINCT FROM 'staff' THEN
     RAISE EXCEPTION 'Chỉ nhân viên được tự cập nhật hồ sơ';
   END IF;
-  IF coalesce(btrim(p_full_name), '') = '' THEN
+  IF v_name = '' THEN
     RAISE EXCEPTION 'Họ tên không được để trống';
   END IF;
+  IF char_length(v_name) > 100 THEN
+    RAISE EXCEPTION 'Họ tên quá dài (tối đa 100 ký tự)';
+  END IF;
+  IF v_phone IS NOT NULL AND v_phone !~ '^(0|[+]84)[0-9]{9,10}$' THEN
+    RAISE EXCEPTION 'Số điện thoại không hợp lệ';
+  END IF;
+
   UPDATE public.users
-     SET full_name    = btrim(p_full_name),
-         phone_number = nullif(btrim(coalesce(p_phone, '')), '')
+     SET full_name    = v_name,
+         phone_number = v_phone
    WHERE id = auth.uid();
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'Không tìm thấy hồ sơ người dùng';
+  END IF;
 END
 $$;
 
@@ -57,9 +74,11 @@ ON CONFLICT (version) DO NOTHING;
 -- WHERE table_schema='public' AND table_name='users' AND column_name='phone_number';
 -- expect: phone_number | text
 --
--- 2) RPC exists + is SECURITY DEFINER:
+-- 2) RPC exists + is SECURITY DEFINER (REQUIRED — an earlier 055 only added the
+--    column, so app_migrations having '055' does NOT prove the RPC exists; this
+--    file is CREATE OR REPLACE + idempotent, safe to re-run to add the RPC):
 -- SELECT proname, prosecdef FROM pg_proc
--- WHERE proname='update_own_profile';   -- expect prosecdef = true
+-- WHERE proname='update_own_profile';   -- expect 1 row, prosecdef = true
 --
 -- 3) Self-write policy is super-admin only (no users_update_own — that's expected):
 -- SELECT policyname, cmd FROM pg_policies WHERE tablename='users';

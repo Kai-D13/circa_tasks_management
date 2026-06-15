@@ -123,12 +123,16 @@ export default async function TargetsPage() {
     }
 
     if (rows.length === 0) {
-      const { data: dbRows } = await supabase
+      const { data: dbRows, error: dbErr } = await supabase
         .from('store_weekly_targets')
         .select('week_start, target, min_weekly_target, actual, run_rate, status, remaining_target, refreshed_at')
         .eq('store_id', profile.store_id)
         .order('week_start', { ascending: false })
         .limit(5)
+      if (dbErr) {
+        console.error('[targets] staff DB fallback failed:', dbErr.message)
+        bqFailed = true   // an operational failure, not "no data yet"
+      }
       rows = (dbRows ?? []) as TargetRecord[]
     }
 
@@ -344,12 +348,13 @@ export default async function TargetsPage() {
       .sort((a, b) => (a.stores?.name ?? '').localeCompare(b.stores?.name ?? '', 'vi'))
   } else {
     // Fallback to the DB table (latest week present there).
-    const { data: dbRows } = await supabase
+    const { data: dbRows, error: dbErr } = await supabase
       .from('store_weekly_targets')
       .select('week_start, target, min_weekly_target, actual, run_rate, status, remaining_target, refreshed_at, stores(name)')
       .order('week_start', { ascending: false })
       .order('refreshed_at', { ascending: false })
       .limit(120)
+    if (dbErr) console.error('[targets] super-admin DB fallback failed:', dbErr.message)
     const fallbackLatest = (dbRows ?? [])[0]?.week_start as string | undefined
     weekRows = ((dbRows ?? []) as unknown as TargetRecord[])
       .filter((r) => r.week_start === fallbackLatest)
