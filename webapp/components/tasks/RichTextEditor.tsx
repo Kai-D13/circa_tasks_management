@@ -142,8 +142,20 @@ export function RichTextEditor({ value, onChange }: Props) {
           onChange={(e) => {
             const v = e.target.value
             setFontSize(v)
-            if (v) editor.chain().focus().setFontSize(v).run()
-            else editor.chain().focus().unsetFontSize().run()
+            // On a COLLAPSED caret, setFontSize only sets a "stored mark", which
+            // the editor's refocus transaction then clears — so the size never
+            // applied and the dropdown snapped back (the recurring bug). Select
+            // the current block so the change is real and visible. A genuine
+            // text range is used as-is.
+            const chain = editor.chain().focus()
+            if (editor.state.selection.empty) {
+              const { $from } = editor.state.selection
+              const from = $from.start()
+              const to = $from.end()
+              if (to > from) chain.setTextSelection({ from, to })
+            }
+            if (v) chain.setFontSize(v).run()
+            else chain.unsetFontSize().run()
           }}
           title="Cỡ chữ"
           aria-label="Cỡ chữ"
