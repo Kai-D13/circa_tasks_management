@@ -1,6 +1,8 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { isSuperAdminEmail } from '@/lib/authz'
+import { getWeeklyTargetsLive } from '@/lib/targets/bigquery'
+import type { TargetRow } from '@/lib/targets/parse'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { TargetUploadForm } from '@/components/targets/TargetUploadForm'
 import { formatDateTime } from '@/lib/dateUtils'
@@ -75,13 +77,13 @@ export default async function TargetsPage() {
   if (!user) redirect('/login')
 
   const { data: profile } = await supabase
-    .from('users').select('role, store_id, stores!users_store_id_fkey(name)').eq('id', user.id).single()
+    .from('users').select('role, store_id, stores!users_store_id_fkey(name, code)').eq('id', user.id).single()
 
   const isSuper = profile?.role === 'admin' && isSuperAdminEmail(user.email)
   const isStaff = profile?.role === 'staff'
   if (!isStaff && !isSuper) redirect('/tasks')
 
-  // ── Staff: own store's weekly card ─────────────────────────────────────────
+  // ── Staff: own store's weekly card (live from BigQuery) ────────────────────
   if (isStaff) {
     if (!profile?.store_id) {
       return (
@@ -90,16 +92,24 @@ export default async function TargetsPage() {
         </div>
       )
     }
-    const { data: rows, error: rowsError } = await supabase
-      .from('store_weekly_targets')
-      .select('week_start, target, min_weekly_target, actual, run_rate, status, remaining_target, refreshed_at')
-      .eq('store_id', profile.store_id)
-      .order('week_start', { ascending: false })
-      .limit(5)
-    if (rowsError) {
+    const store = profile.stores as unknown as { name: string; code: string | null } | null
+    const storeCode = store?.code ? store.code.trim().toUpperCase() : null
+    if (!storeCode) {
+      // Distinct from "no data yet": the store has no POS code to match the feed.
+      return (
+        <div className="p-4">
+          <p className="text-sm text-muted-foreground">Cửa hàng chưa có mã POS để lấy dữ liệu doanh số. Vui lòng liên hệ Admin.</p>
+        </div>
+      )
+    }
+
+    let liveRows: TargetRow[]
+    try {
+      liveRows = await getWeeklyTargetsLive()
+    } catch (e) {
       // Operational failure ≠ "no data yet" — surface it so QA never reads a
       // broken page as an empty one. Details go to the server log only.
-      console.error('[targets] staff query failed:', rowsError.message)
+      console.error('[targets] live BigQuery read failed:', e instanceof Error ? e.message : e)
       return (
         <div className="p-4">
           <p className="text-sm text-destructive">
@@ -109,9 +119,16 @@ export default async function TargetsPage() {
       )
     }
 
-    const current = (rows ?? [])[0] as TargetRecord | undefined
-    const history = ((rows ?? []) as TargetRecord[]).slice(1)
-    const storeName = (profile.stores as unknown as { name: string } | null)?.name ?? 'Cửa hàng của bạn'
+    const nowIso = new Date().toISOString()
+    const rows: TargetRecord[] = liveRows
+      .filter((r) => (r.pos_code ?? '').toUpperCase() === storeCode)
+      .sort((a, b) => b.week_start.localeCompare(a.week_start))
+      .slice(0, 5)
+      .map((r) => ({ ...r, refreshed_at: nowIso }))
+
+    const current = rows[0] as TargetRecord | undefined
+    const history = rows.slice(1)
+    const storeName = store?.name ?? 'Cửa hàng của bạn'
     // Stakeholder pivot (2026-06-12): the staff view's "Mục tiêu tuần" is the
     // 90% MIN target, and ALL percentages use it as the denominator so the
     // numbers add up on screen (đã đạt + còn thiếu = mục tiêu; 48.0M/116M =
@@ -287,17 +304,21 @@ export default async function TargetsPage() {
     )
   }
 
-  // ── Super admin: all stores for the latest week + manual upload fallback ───
-  const { data: allRows, error: allRowsError } = await supabase
-    .from('store_weekly_targets')
-    .select('week_start, target, min_weekly_target, actual, run_rate, status, remaining_target, refreshed_at, stores(name)')
-    .order('week_start', { ascending: false })
-    .order('refreshed_at', { ascending: false })
-    .limit(120)
-
-  const latestWeek = (allRows ?? [])[0]?.week_start as string | undefined
-  const weekRows = ((allRows ?? []) as unknown as TargetRecord[])
+  // ── Super admin: all stores for the latest week (live BigQuery) + upload ───
+  let allLive: TargetRow[] = []
+  let allRowsError: { message: string } | null = null
+  try {
+    allLive = await getWeeklyTargetsLive()
+  } catch (e) {
+    allRowsError = { message: e instanceof Error ? e.message : String(e) }
+  }
+  const nowIsoAdmin = new Date().toISOString()
+  const latestWeek = allLive
+    .map((r) => r.week_start)
+    .sort((a, b) => b.localeCompare(a))[0] as string | undefined
+  const weekRows = allLive
     .filter((r) => r.week_start === latestWeek)
+    .map((r) => ({ ...r, refreshed_at: nowIsoAdmin, stores: { name: r.pos_name } }) as TargetRecord)
     .sort((a, b) => (a.stores?.name ?? '').localeCompare(b.stores?.name ?? '', 'vi'))
 
   return (
@@ -312,7 +333,7 @@ export default async function TargetsPage() {
           </p>
           {allRowsError && (
             <p className="text-sm text-destructive mt-1">
-              Lỗi truy vấn dữ liệu: {allRowsError.message} — kiểm tra migration 051/052 đã apply chưa.
+              Lỗi đọc dữ liệu BigQuery: {allRowsError.message} — kiểm tra BQ_SERVICE_ACCOUNT_KEY.
             </p>
           )}
         </div>
