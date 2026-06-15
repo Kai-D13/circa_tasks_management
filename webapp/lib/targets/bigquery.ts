@@ -14,10 +14,14 @@ import { normalizeRow, type TargetRow } from './parse'
 //   BQ_QUERY (optional)            — override of DEFAULT_QUERY.
 //   TARGETS_TTL_SECONDS (optional) — live-read cache TTL, default 3600 (1h).
 
+// ORDER BY monday_of_week DESC guarantees the latest week is within the
+// maxResults cap even if the fact table accumulates history (no page-token
+// handling). At this scale (~30 stores/week) the most recent weeks come first.
 export const DEFAULT_QUERY = `
   SELECT monday_of_week, pos_code, pos_name, gmv, target, weekly_target, kpi_pct
   FROM \`lakehouse-prod-394907.buymed_n8n.fact_kpi_circa_weekly\`
   WHERE pos_code NOT IN ("POS0001")
+  ORDER BY monday_of_week DESC
 `
 
 export interface ServiceAccount {

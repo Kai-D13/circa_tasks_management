@@ -86,7 +86,7 @@ export function MobileHeader() {
         {/* Staff don't receive notifications (provider skips their fetch), so the bell
             is dead weight for them — hide it. */}
         {role !== 'staff' && <NotificationBell />}
-        <EditProfileDialog variant="mobile" />
+        {role === 'staff' && <EditProfileDialog variant="mobile" />}
         <ChangePasswordDialog variant="mobile" />
         <ThemeToggle className="w-9 h-9 px-0 text-white/80 hover:bg-white/10 hover:text-white" />
         <Button

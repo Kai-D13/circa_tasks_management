@@ -109,13 +109,19 @@ export async function changeOwnPassword(newPassword: string) {
   return { success: true }
 }
 
-// Staff self-edit of their own profile (full_name + phone_number). Gated by the
-// RLS "users_update_own" policy (id = auth.uid()) — no admin rights needed. Phone
-// is optional with a light VN-format check; blank clears it.
+// Staff self-edit of their own profile (full_name + phone_number). public.users
+// writes are locked to super admin since migration 021, so this goes through the
+// SECURITY DEFINER RPC update_own_profile (migration 055), which only touches
+// full_name/phone_number on the caller's own row and only for role='staff'.
+// Phone is optional with a light VN-format check; blank clears it.
 export async function updateOwnProfile(input: { full_name: string; phone_number: string | null }) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Chưa đăng nhập' }
+
+  // Scope: staff only (matches the feature spec; the RPC also enforces this).
+  const { data: me } = await supabase.from('users').select('role').eq('id', user.id).single()
+  if (me?.role !== 'staff') return { error: 'Chỉ nhân viên được tự cập nhật hồ sơ' }
 
   const fullName = (input.full_name ?? '').trim()
   if (!fullName) return { error: 'Vui lòng nhập họ tên' }
@@ -131,10 +137,7 @@ export async function updateOwnProfile(input: { full_name: string; phone_number:
     phone = compact
   }
 
-  const { error } = await supabase
-    .from('users')
-    .update({ full_name: fullName, phone_number: phone })
-    .eq('id', user.id)
+  const { error } = await supabase.rpc('update_own_profile', { p_full_name: fullName, p_phone: phone })
   if (error) return { error: error.message }
 
   // Keep auth metadata's full_name in sync (createUser seeds it there).

@@ -121,7 +121,7 @@ export function Sidebar() {
             {ROLE_LABELS[role] ?? role}
           </Badge>
         )}
-        <EditProfileDialog />
+        {role === 'staff' && <EditProfileDialog />}
         <ChangePasswordDialog />
         <div className="flex gap-1.5">
           <Button
