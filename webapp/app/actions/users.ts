@@ -109,6 +109,41 @@ export async function changeOwnPassword(newPassword: string) {
   return { success: true }
 }
 
+// Staff self-edit of their own profile (full_name + phone_number). Gated by the
+// RLS "users_update_own" policy (id = auth.uid()) — no admin rights needed. Phone
+// is optional with a light VN-format check; blank clears it.
+export async function updateOwnProfile(input: { full_name: string; phone_number: string | null }) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Chưa đăng nhập' }
+
+  const fullName = (input.full_name ?? '').trim()
+  if (!fullName) return { error: 'Vui lòng nhập họ tên' }
+  if (fullName.length > 100) return { error: 'Họ tên quá dài (tối đa 100 ký tự)' }
+
+  const phoneRaw = (input.phone_number ?? '').trim()
+  let phone: string | null = null
+  if (phoneRaw) {
+    const compact = phoneRaw.replace(/[\s.\-()]/g, '')
+    if (!/^(0|\+84)\d{9,10}$/.test(compact)) {
+      return { error: 'Số điện thoại không hợp lệ (vd 0xxxxxxxxx hoặc +84xxxxxxxxx)' }
+    }
+    phone = compact
+  }
+
+  const { error } = await supabase
+    .from('users')
+    .update({ full_name: fullName, phone_number: phone })
+    .eq('id', user.id)
+  if (error) return { error: error.message }
+
+  // Keep auth metadata's full_name in sync (createUser seeds it there).
+  await supabase.auth.updateUser({ data: { full_name: fullName } })
+
+  revalidatePath('/')
+  return { success: true, full_name: fullName, phone_number: phone }
+}
+
 export async function updateUserRole(userId: string, role: string, storeId: string | null) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()

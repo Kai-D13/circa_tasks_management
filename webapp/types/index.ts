@@ -25,6 +25,7 @@ export interface UserProfile {
   id: string
   email: string
   full_name: string
+  phone_number?: string | null
   role: UserRole
   store_id: string | null
   created_at: string

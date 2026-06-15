@@ -22,6 +22,7 @@ import {
 import { cn } from '@/lib/utils'
 import { NotificationBell } from '@/components/layout/NotificationBell'
 import { ChangePasswordDialog } from '@/components/layout/ChangePasswordDialog'
+import { EditProfileDialog } from '@/components/layout/EditProfileDialog'
 import { ThemeToggle } from '@/components/layout/ThemeToggle'
 
 const ROLE_COLORS: Record<string, string> = {
@@ -120,6 +121,7 @@ export function Sidebar() {
             {ROLE_LABELS[role] ?? role}
           </Badge>
         )}
+        <EditProfileDialog />
         <ChangePasswordDialog />
         <div className="flex gap-1.5">
           <Button
