@@ -952,9 +952,12 @@ export async function createBroadcastTask(params: {
     // tampered/foreign id can't receive a task). Stores not listed keep all staff.
     if (params.selectedStaffByStore) {
       for (const [sid, ids] of Object.entries(params.selectedStaffByStore)) {
+        // Validate the payload shape before trusting it — a malformed value must
+        // return a clean error, never throw a 500 at `new Set(ids)`.
+        if (!Array.isArray(ids)) return { error: 'Danh sách dược sĩ không hợp lệ' }
         const cur = staffByStore.get(sid)
         if (!cur) continue
-        const allow = new Set(ids)
+        const allow = new Set(ids.filter((x): x is string => typeof x === 'string'))
         staffByStore.set(sid, cur.filter((s) => allow.has(s.id)))
       }
     }

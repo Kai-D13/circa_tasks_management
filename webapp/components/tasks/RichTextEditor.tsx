@@ -82,8 +82,14 @@ export function RichTextEditor({ value, onChange }: Props) {
       },
     },
     onUpdate: ({ editor }) => onChange(editor.getHTML()),
-    // Keep the size dropdown in sync with the caret/selection.
-    onSelectionUpdate: ({ editor }) => setFontSize(editor.getAttributes('textStyle').fontSize ?? ''),
+    // Keep the size dropdown in sync with the caret/selection — but NEVER let a
+    // collapsed caret (which reports fontSize '') clobber the size the user just
+    // picked. Only adopt the editor's value when it actually reports a size, or
+    // when a real (non-collapsed) range is selected. This was the snap-back bug.
+    onSelectionUpdate: ({ editor }) => {
+      const fs = editor.getAttributes('textStyle').fontSize ?? ''
+      if (fs || !editor.state.selection.empty) setFontSize(fs)
+    },
   })
 
   // External value changes (draft restore / edit load) → sync editor once.

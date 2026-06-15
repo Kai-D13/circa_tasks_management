@@ -59,6 +59,10 @@ function combineDateTimeStr(date: string, time: string): string {
   return `${date}T${time}`
 }
 
+// Accent/case-insensitive search key so "duoc" matches "Dược" (Vietnamese staff).
+const deburr = (s: string) =>
+  s.normalize('NFD').replace(/\p{Diacritic}/gu, '').replace(/đ/gi, 'd').toLowerCase()
+
 type Scope    = 'single' | 'multi' | 'all'
 type TaskType = 'adhoc' | 'recurring'
 
@@ -95,6 +99,9 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   // staff_all subset: ids the admin UNCHECKED (default = everyone selected, which
   // matches the legacy "all staff" behavior — an empty set sends no override).
   const [excludedStaff, setExcludedStaff] = useState<Set<string>>(new Set())
+  // Global pharmacist search for the broadcast (multi-store) picker — one box that
+  // filters across every store at once (each store has only 3-5 staff individually).
+  const [staffQuery, setStaffQuery] = useState('')
 
   const [startDate, setStartDate]       = useState(task?.start_date ? new Date(task.start_date).toISOString().slice(0, 10) : '')
   const [startTime, setStartTime]       = useState(task?.start_date ? new Date(task.start_date).toISOString().slice(11, 16) : '')
@@ -758,22 +765,44 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                   </p>
                 )}
                 {/* Per-store pharmacist pickers — default all checked (legacy behavior).
-                    Stores cleared to zero are skipped on submit. */}
-                {effectiveStaffMode && activeStoreIds.length > 0 && storesWithoutStaff.length === 0 && (
-                  <div className="space-y-2 max-h-72 overflow-y-auto pr-0.5">
-                    {perStoreStaffInfo.map((s) => (
-                      <div key={s.id} className="space-y-1">
-                        <p className="text-[11px] font-medium text-foreground/80 px-0.5">{s.name}</p>
-                        <StaffChecklist
-                          staff={s.staff}
-                          excluded={excludedStaff}
-                          onToggle={toggleStaffExcluded}
-                          onBulk={setStoreStaffExcluded}
-                        />
+                    Stores cleared to zero are skipped on submit. One global search
+                    filters across every store (each store alone has only 3-5 staff). */}
+                {effectiveStaffMode && activeStoreIds.length > 0 && storesWithoutStaff.length === 0 && (() => {
+                  const gq = deburr(staffQuery.trim())
+                  const matches = (u: { full_name: string; email?: string | null }) =>
+                    !gq || deburr(u.full_name).includes(gq) || deburr(u.email ?? '').includes(gq)
+                  const visiblePerStore = gq
+                    ? perStoreStaffInfo.filter((s) => s.staff.some(matches))
+                    : perStoreStaffInfo
+                  return (
+                    <div className="space-y-2">
+                      <input
+                        type="text"
+                        value={staffQuery}
+                        onChange={(e) => setStaffQuery(e.target.value)}
+                        placeholder="Tìm dược sĩ theo tên / email (mọi cửa hàng)…"
+                        className="w-full h-8 rounded border bg-background px-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary/40"
+                      />
+                      <div className="space-y-2 max-h-72 overflow-y-auto pr-0.5">
+                        {visiblePerStore.length === 0 ? (
+                          <p className="text-xs text-muted-foreground px-0.5 py-2">Không tìm thấy dược sĩ phù hợp.</p>
+                        ) : visiblePerStore.map((s) => (
+                          <div key={s.id} className="space-y-1">
+                            <p className="text-[11px] font-medium text-foreground/80 px-0.5">{s.name}</p>
+                            <StaffChecklist
+                              staff={s.staff}
+                              excluded={excludedStaff}
+                              onToggle={toggleStaffExcluded}
+                              onBulk={setStoreStaffExcluded}
+                              externalQuery={staffQuery}
+                              hideOwnSearch
+                            />
+                          </div>
+                        ))}
                       </div>
-                    ))}
-                  </div>
-                )}
+                    </div>
+                  )
+                })()}
                 {/* Excel split — store-mode broadcast only; per-store data slices */}
                 {showExcelSplit && (
                   <TaskExcelSplitPanel
@@ -1196,23 +1225,27 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
 // "excluded" set in the parent, so an untouched form sends no override. A search
 // box (shown when the list is long) filters by name/email; bulk select/clear acts
 // on the currently-filtered rows so it composes with the search.
-function StaffChecklist({ staff, excluded, onToggle, onBulk }: {
+function StaffChecklist({ staff, excluded, onToggle, onBulk, externalQuery, hideOwnSearch }: {
   staff: { id: string; full_name: string; email?: string | null }[]
   excluded: Set<string>
   onToggle: (id: string) => void
   onBulk: (ids: string[], exclude: boolean) => void
+  // Broadcast multi-store passes a single global search down (hideOwnSearch=true)
+  // so we filter by it but don't render a per-store box. Single-store keeps its own.
+  externalQuery?: string
+  hideOwnSearch?: boolean
 }) {
-  const [query, setQuery] = useState('')
-  const q = query.trim().toLowerCase()
+  const [internalQuery, setInternalQuery] = useState('')
+  const activeQuery = hideOwnSearch ? (externalQuery ?? '') : internalQuery
+  const q = deburr(activeQuery.trim())
   const filtered = q
-    ? staff.filter((s) =>
-        s.full_name.toLowerCase().includes(q) || (s.email ?? '').toLowerCase().includes(q))
+    ? staff.filter((s) => deburr(s.full_name).includes(q) || deburr(s.email ?? '').includes(q))
     : staff
   const selectedCount = staff.filter((s) => !excluded.has(s.id)).length
   // Bulk acts on the filtered rows; the label reflects whether they're all selected.
   const filteredIds = filtered.map((s) => s.id)
   const allFilteredSelected = filtered.length > 0 && filtered.every((s) => !excluded.has(s.id))
-  const showSearch = staff.length > 6
+  const showSearch = !hideOwnSearch && staff.length > 3
   return (
     <div className="rounded border">
       <div className="flex items-center justify-between px-2.5 py-1.5 border-b bg-muted/40">
@@ -1230,8 +1263,8 @@ function StaffChecklist({ staff, excluded, onToggle, onBulk }: {
         <div className="px-2 py-1.5 border-b">
           <input
             type="text"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            value={internalQuery}
+            onChange={(e) => setInternalQuery(e.target.value)}
             placeholder="Tìm dược sĩ theo tên / email…"
             className="w-full h-7 rounded border bg-background px-2 text-xs focus:outline-none focus:ring-1 focus:ring-primary/40"
           />
