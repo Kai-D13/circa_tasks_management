@@ -2,14 +2,14 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useNotifications } from '@/components/layout/NotificationProvider'
-import { Bell } from 'lucide-react'
+import { Bell, Volume2, VolumeX } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { formatDate } from '@/lib/dateUtils'
 import Link from 'next/link'
 
 export function NotificationBell() {
-  const { notifications, unread, markRead } = useNotifications()
+  const { notifications, unread, markRead, soundEnabled, toggleSound } = useNotifications()
   const [open, setOpen]         = useState(false)
   const [popupPos, setPopupPos] = useState({ top: 0, left: 0 })
   const wrapperRef = useRef<HTMLDivElement>(null)
@@ -77,9 +77,20 @@ export function NotificationBell() {
         >
           <div className="px-3 py-2.5 border-b bg-muted/50 flex items-center justify-between">
             <p className="text-xs font-semibold">Thông báo</p>
-            {notifications.length > 0 && (
-              <span className="text-[10px] text-muted-foreground">{notifications.length} mục</span>
-            )}
+            <div className="flex items-center gap-2">
+              {notifications.length > 0 && (
+                <span className="text-[10px] text-muted-foreground">{notifications.length} mục</span>
+              )}
+              <button
+                type="button"
+                onClick={toggleSound}
+                title={soundEnabled ? 'Tắt âm thông báo' : 'Bật âm thông báo'}
+                aria-label={soundEnabled ? 'Tắt âm thông báo' : 'Bật âm thông báo'}
+                className="h-6 w-6 inline-flex items-center justify-center rounded text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+              >
+                {soundEnabled ? <Volume2 className="h-3.5 w-3.5" /> : <VolumeX className="h-3.5 w-3.5" />}
+              </button>
+            </div>
           </div>
 
           {notifications.length === 0 ? (
