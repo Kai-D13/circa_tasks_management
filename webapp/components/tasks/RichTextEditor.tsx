@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useEditor, EditorContent } from '@tiptap/react'
 import StarterKit from '@tiptap/starter-kit'
 import Highlight from '@tiptap/extension-highlight'
@@ -27,7 +27,39 @@ interface Props {
   onChange: (html: string) => void
 }
 
+const escapeHtml = (s: string) =>
+  s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+// Pasting from Excel / Microsoft 365 yields HTML <table> markup. StarterKit has
+// no table extension, so Tiptap would drop or mangle it. Convert tables to plain
+// paragraphs (cells joined, one row per line) BEFORE Tiptap parses — result is
+// clean text matching the sanitize allowlist.
+function transformPastedHTML(html: string): string {
+  if (typeof window === 'undefined' || !/<table/i.test(html)) return html
+  try {
+    const doc = new DOMParser().parseFromString(html, 'text/html')
+    doc.querySelectorAll('table').forEach((table) => {
+      const rows: string[] = []
+      table.querySelectorAll('tr').forEach((tr) => {
+        const cells = Array.from(tr.querySelectorAll('th,td')).map((c) => (c.textContent ?? '').trim())
+        const line = cells.filter(Boolean).join('  ')
+        if (line) rows.push(line)
+      })
+      const repl = doc.createElement('div')
+      repl.innerHTML = rows.map((r) => `<p>${escapeHtml(r)}</p>`).join('')
+      table.replaceWith(repl)
+    })
+    return doc.body.innerHTML
+  } catch {
+    return html
+  }
+}
+
 export function RichTextEditor({ value, onChange }: Props) {
+  // Local state for the font-size <select> — binding it to editor.getAttributes
+  // made it snap back to "Vừa" on a collapsed cursor (getAttributes returns '').
+  const [fontSize, setFontSize] = useState<string>('')
+
   const editor = useEditor({
     immediatelyRender: false,
     extensions: [
@@ -39,6 +71,7 @@ export function RichTextEditor({ value, onChange }: Props) {
     ],
     content: value || '',
     editorProps: {
+      transformPastedHTML,
       attributes: {
         class: cn(
           'min-h-[180px] max-h-[400px] overflow-y-auto px-3 py-2 text-sm focus:outline-none',
@@ -49,6 +82,8 @@ export function RichTextEditor({ value, onChange }: Props) {
       },
     },
     onUpdate: ({ editor }) => onChange(editor.getHTML()),
+    // Keep the size dropdown in sync with the caret/selection.
+    onSelectionUpdate: ({ editor }) => setFontSize(editor.getAttributes('textStyle').fontSize ?? ''),
   })
 
   // External value changes (draft restore / edit load) → sync editor once.
@@ -80,8 +115,6 @@ export function RichTextEditor({ value, onChange }: Props) {
     </button>
   )
 
-  const currentSize = editor.getAttributes('textStyle').fontSize ?? ''
-
   return (
     <div className="rounded-md border bg-background">
       {/* Toolbar */}
@@ -99,9 +132,10 @@ export function RichTextEditor({ value, onChange }: Props) {
         <span className="mx-1 h-5 w-px bg-border" />
 
         <select
-          value={currentSize}
+          value={fontSize}
           onChange={(e) => {
             const v = e.target.value
+            setFontSize(v)
             if (v) editor.chain().focus().setFontSize(v).run()
             else editor.chain().focus().unsetFontSize().run()
           }}
