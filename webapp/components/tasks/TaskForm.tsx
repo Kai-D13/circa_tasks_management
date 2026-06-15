@@ -1184,30 +1184,54 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
 
 // Pharmacist multi-select for staff_all mode. A checked box = that pharmacist gets
 // a task; default is all checked (the legacy behavior). Selection is tracked by an
-// "excluded" set in the parent, so an untouched form sends no override.
+// "excluded" set in the parent, so an untouched form sends no override. A search
+// box (shown when the list is long) filters by name/email; bulk select/clear acts
+// on the currently-filtered rows so it composes with the search.
 function StaffChecklist({ staff, excluded, onToggle, onBulk }: {
-  staff: { id: string; full_name: string }[]
+  staff: { id: string; full_name: string; email?: string | null }[]
   excluded: Set<string>
   onToggle: (id: string) => void
   onBulk: (ids: string[], exclude: boolean) => void
 }) {
-  const ids = staff.map((s) => s.id)
+  const [query, setQuery] = useState('')
+  const q = query.trim().toLowerCase()
+  const filtered = q
+    ? staff.filter((s) =>
+        s.full_name.toLowerCase().includes(q) || (s.email ?? '').toLowerCase().includes(q))
+    : staff
   const selectedCount = staff.filter((s) => !excluded.has(s.id)).length
-  const allSelected = selectedCount === staff.length
+  // Bulk acts on the filtered rows; the label reflects whether they're all selected.
+  const filteredIds = filtered.map((s) => s.id)
+  const allFilteredSelected = filtered.length > 0 && filtered.every((s) => !excluded.has(s.id))
+  const showSearch = staff.length > 6
   return (
     <div className="rounded border">
       <div className="flex items-center justify-between px-2.5 py-1.5 border-b bg-muted/40">
         <span className="text-[11px] text-muted-foreground">{selectedCount}/{staff.length} dược sĩ</span>
         <button
           type="button"
-          onClick={() => onBulk(ids, allSelected)}
-          className="text-[11px] text-primary hover:underline"
+          onClick={() => onBulk(filteredIds, allFilteredSelected)}
+          className="text-[11px] text-primary hover:underline disabled:opacity-40 disabled:no-underline"
+          disabled={filtered.length === 0}
         >
-          {allSelected ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
+          {allFilteredSelected ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}{q && filtered.length !== staff.length ? ` (${filtered.length})` : ''}
         </button>
       </div>
+      {showSearch && (
+        <div className="px-2 py-1.5 border-b">
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Tìm dược sĩ theo tên / email…"
+            className="w-full h-7 rounded border bg-background px-2 text-xs focus:outline-none focus:ring-1 focus:ring-primary/40"
+          />
+        </div>
+      )}
       <div className="max-h-40 overflow-y-auto divide-y">
-        {staff.map((s) => (
+        {filtered.length === 0 ? (
+          <p className="px-2.5 py-2 text-xs text-muted-foreground">Không tìm thấy dược sĩ phù hợp.</p>
+        ) : filtered.map((s) => (
           <label key={s.id} className="flex items-center gap-2.5 px-2.5 py-1.5 cursor-pointer hover:bg-sidebar-accent text-sm">
             <input
               type="checkbox"
@@ -1215,7 +1239,10 @@ function StaffChecklist({ staff, excluded, onToggle, onBulk }: {
               onChange={() => onToggle(s.id)}
               className="accent-primary h-4 w-4 shrink-0"
             />
-            <span className="truncate">{s.full_name}</span>
+            <span className="truncate">
+              {s.full_name}
+              {s.email ? <span className="text-muted-foreground/70 text-xs"> · {s.email}</span> : null}
+            </span>
           </label>
         ))}
       </div>

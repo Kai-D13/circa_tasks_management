@@ -171,14 +171,16 @@ export async function createTask(formData: FormData) {
   // The parent is private/unassigned so staff can't see it (RLS); managers and
   // admins see it via their role policies.
   if (formData.get('assignment_mode') === 'staff_all') {
-    // Optional per-staff subset (JSON array of user ids). Absent / invalid → all staff.
+    // Optional per-staff subset (JSON array of user ids). Key ABSENT → legacy
+    // "all staff". Key PRESENT but empty/malformed → the admin meant to pick a
+    // subset, so don't silently over-assign to everyone — surface an error.
     let selectedStaffIds: string[] | undefined
     const rawSel = formData.get('selected_staff_ids') as string | null
-    if (rawSel) {
-      try {
-        const parsed = JSON.parse(rawSel)
-        if (Array.isArray(parsed)) selectedStaffIds = parsed.filter((x): x is string => typeof x === 'string')
-      } catch { /* malformed → fall back to all staff */ }
+    if (rawSel !== null) {
+      let parsed: unknown
+      try { parsed = JSON.parse(rawSel) } catch { return { error: 'Danh sách dược sĩ không hợp lệ' } }
+      if (!Array.isArray(parsed)) return { error: 'Danh sách dược sĩ không hợp lệ' }
+      selectedStaffIds = parsed.filter((x): x is string => typeof x === 'string')
     }
     return createStaffRequiredTask(supabase, user.id, {
       storeId:         storeIdVal,
@@ -283,10 +285,12 @@ async function createStaffRequiredTask(
   if (!allStaff || allStaff.length === 0) {
     return { error: 'Cửa hàng chưa có dược sĩ nào để giao task' }
   }
-  // Subset selection: intersect with the DB-fetched staff so a tampered id (not a
-  // real staff of this store) can never receive a task. Empty selection = all.
+  // Subset selection: a provided list (even empty) means "use exactly this set";
+  // undefined means legacy "all staff". Intersect with the DB-fetched staff so a
+  // tampered id (not a real staff of this store) can never receive a task. An
+  // empty effective set is an error — never fall through to all.
   let staff = allStaff
-  if (p.selectedStaffIds && p.selectedStaffIds.length > 0) {
+  if (p.selectedStaffIds !== undefined) {
     const allow = new Set(p.selectedStaffIds)
     staff = allStaff.filter((s) => allow.has(s.id))
     if (staff.length === 0) {
