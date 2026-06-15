@@ -1,8 +1,6 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { isSuperAdminEmail } from '@/lib/authz'
-import { getWeeklyTargetsLive } from '@/lib/targets/bigquery'
-import type { TargetRow } from '@/lib/targets/parse'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { TargetUploadForm } from '@/components/targets/TargetUploadForm'
 import { formatDateTime } from '@/lib/dateUtils'
@@ -77,13 +75,14 @@ export default async function TargetsPage() {
   if (!user) redirect('/login')
 
   const { data: profile } = await supabase
-    .from('users').select('role, store_id, stores!users_store_id_fkey(name, code)').eq('id', user.id).single()
+    .from('users').select('role, store_id, stores!users_store_id_fkey(name)').eq('id', user.id).single()
 
   const isSuper = profile?.role === 'admin' && isSuperAdminEmail(user.email)
   const isStaff = profile?.role === 'staff'
   if (!isStaff && !isSuper) redirect('/tasks')
 
-  // ── Staff: own store's weekly card (live from BigQuery) ────────────────────
+  // ── Staff: own store's weekly card (from store_weekly_targets, fed by the
+  //    BigQuery cron — Coolify Scheduled Task "Pull weekly targets") ──────────
   if (isStaff) {
     if (!profile?.store_id) {
       return (
@@ -92,52 +91,16 @@ export default async function TargetsPage() {
         </div>
       )
     }
-    const store = profile.stores as unknown as { name: string; code: string | null } | null
-    const storeCode = store?.code ? store.code.trim().toUpperCase() : null
-    if (!storeCode) {
-      // Distinct from "no data yet": the store has no POS code to match the feed.
-      return (
-        <div className="p-4">
-          <p className="text-sm text-muted-foreground">Cửa hàng chưa có mã POS để lấy dữ liệu doanh số. Vui lòng liên hệ Admin.</p>
-        </div>
-      )
-    }
-
-    // Primary: live BigQuery (filtered by this store's POS code). On BQ failure
-    // OR when BQ has no row for this store/week, fall back to the last-known rows
-    // in store_weekly_targets (fed by the manual upload / optional hourly cron)
-    // so a BQ outage never blanks the staff KPI card.
-    const nowIso = new Date().toISOString()
-    let rows: TargetRecord[] = []
-    let bqFailed = false
-    try {
-      const liveRows = await getWeeklyTargetsLive()
-      rows = liveRows
-        .filter((r) => (r.pos_code ?? '').toUpperCase() === storeCode)
-        .sort((a, b) => b.week_start.localeCompare(a.week_start))
-        .slice(0, 5)
-        .map((r) => ({ ...r, refreshed_at: nowIso }))
-    } catch (e) {
-      bqFailed = true
-      console.error('[targets] live BigQuery read failed:', e instanceof Error ? e.message : e)
-    }
-
-    if (rows.length === 0) {
-      const { data: dbRows, error: dbErr } = await supabase
-        .from('store_weekly_targets')
-        .select('week_start, target, min_weekly_target, actual, run_rate, status, remaining_target, refreshed_at')
-        .eq('store_id', profile.store_id)
-        .order('week_start', { ascending: false })
-        .limit(5)
-      if (dbErr) {
-        console.error('[targets] staff DB fallback failed:', dbErr.message)
-        bqFailed = true   // an operational failure, not "no data yet"
-      }
-      rows = (dbRows ?? []) as TargetRecord[]
-    }
-
-    // Only a hard "broken" state (BQ down AND no cached fallback) shows the error.
-    if (bqFailed && rows.length === 0) {
+    const { data: rows, error: rowsError } = await supabase
+      .from('store_weekly_targets')
+      .select('week_start, target, min_weekly_target, actual, run_rate, status, remaining_target, refreshed_at')
+      .eq('store_id', profile.store_id)
+      .order('week_start', { ascending: false })
+      .limit(5)
+    if (rowsError) {
+      // Operational failure ≠ "no data yet" — surface it so QA never reads a
+      // broken page as an empty one. Details go to the server log only.
+      console.error('[targets] staff query failed:', rowsError.message)
       return (
         <div className="p-4">
           <p className="text-sm text-destructive">
@@ -147,9 +110,9 @@ export default async function TargetsPage() {
       )
     }
 
-    const current = rows[0] as TargetRecord | undefined
-    const history = rows.slice(1)
-    const storeName = store?.name ?? 'Cửa hàng của bạn'
+    const current = (rows ?? [])[0] as TargetRecord | undefined
+    const history = ((rows ?? []) as TargetRecord[]).slice(1)
+    const storeName = (profile.stores as unknown as { name: string } | null)?.name ?? 'Cửa hàng của bạn'
     // Stakeholder pivot (2026-06-12): the staff view's "Mục tiêu tuần" is the
     // 90% MIN target, and ALL percentages use it as the denominator so the
     // numbers add up on screen (đã đạt + còn thiếu = mục tiêu; 48.0M/116M =
@@ -325,49 +288,18 @@ export default async function TargetsPage() {
     )
   }
 
-  // ── Super admin: all stores for the latest week (live BigQuery) + upload ───
-  // Primary live; on BQ failure fall back to store_weekly_targets so the manual
-  // upload / cron-fed table still surfaces (and a BQ outage isn't a blank table).
-  let allLive: TargetRow[] = []
-  let allRowsError: { message: string } | null = null
-  try {
-    allLive = await getWeeklyTargetsLive()
-  } catch (e) {
-    allRowsError = { message: e instanceof Error ? e.message : String(e) }
-  }
-  const nowIsoAdmin = new Date().toISOString()
+  // ── Super admin: all stores for the latest week + manual upload fallback ───
+  const { data: allRows, error: allRowsError } = await supabase
+    .from('store_weekly_targets')
+    .select('week_start, target, min_weekly_target, actual, run_rate, status, remaining_target, refreshed_at, stores(name)')
+    .order('week_start', { ascending: false })
+    .order('refreshed_at', { ascending: false })
+    .limit(120)
 
-  let weekRows: TargetRecord[] = []
-  if (allLive.length > 0) {
-    const latestWeek = allLive
-      .map((r) => r.week_start)
-      .sort((a, b) => b.localeCompare(a))[0] as string | undefined
-    weekRows = allLive
-      .filter((r) => r.week_start === latestWeek)
-      .map((r) => ({ ...r, refreshed_at: nowIsoAdmin, stores: { name: r.pos_name } }) as TargetRecord)
-      .sort((a, b) => (a.stores?.name ?? '').localeCompare(b.stores?.name ?? '', 'vi'))
-  } else {
-    // Fallback to the DB table (latest week present there).
-    const { data: dbRows, error: dbErr } = await supabase
-      .from('store_weekly_targets')
-      .select('week_start, target, min_weekly_target, actual, run_rate, status, remaining_target, refreshed_at, stores(name)')
-      .order('week_start', { ascending: false })
-      .order('refreshed_at', { ascending: false })
-      .limit(120)
-    if (dbErr) {
-      console.error('[targets] super-admin DB fallback failed:', dbErr.message)
-      // Surface an operational error (parity with the staff path) instead of an
-      // empty table when BOTH live BQ and the DB fallback fail.
-      allRowsError = allRowsError ?? { message: dbErr.message }
-    }
-    const fallbackLatest = (dbRows ?? [])[0]?.week_start as string | undefined
-    weekRows = ((dbRows ?? []) as unknown as TargetRecord[])
-      .filter((r) => r.week_start === fallbackLatest)
-      .sort((a, b) => (a.stores?.name ?? '').localeCompare(b.stores?.name ?? '', 'vi'))
-    // BQ failing but DB serving fallback isn't a user-facing error.
-    if (weekRows.length > 0) allRowsError = null
-  }
-  const latestWeek = weekRows[0]?.week_start as string | undefined
+  const latestWeek = (allRows ?? [])[0]?.week_start as string | undefined
+  const weekRows = ((allRows ?? []) as unknown as TargetRecord[])
+    .filter((r) => r.week_start === latestWeek)
+    .sort((a, b) => (a.stores?.name ?? '').localeCompare(b.stores?.name ?? '', 'vi'))
 
   return (
     <div className="p-4 md:p-6 space-y-4 max-w-5xl">
@@ -381,7 +313,7 @@ export default async function TargetsPage() {
           </p>
           {allRowsError && (
             <p className="text-sm text-destructive mt-1">
-              Lỗi đọc dữ liệu BigQuery: {allRowsError.message} — kiểm tra BQ_SERVICE_ACCOUNT_KEY.
+              Lỗi truy vấn dữ liệu: {allRowsError.message} — kiểm tra migration 051/052 đã apply chưa.
             </p>
           )}
         </div>

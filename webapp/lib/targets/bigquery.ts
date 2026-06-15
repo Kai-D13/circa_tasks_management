@@ -1,18 +1,17 @@
 import 'server-only'
 import { createSign } from 'crypto'
-import { normalizeRow, type TargetRow } from './parse'
 
 // Shared BigQuery client for the weekly-targets feed (buymed_n8n.fact_kpi_circa_weekly).
-// Used by the cron pull route AND the live staff/super-admin reads. No Google SDK —
-// a signed JWT gets a read-only access token. All fetches carry timeouts so a hung
-// Google endpoint can never hold a handler open (the lag-investigation lesson).
+// Used by the cron pull route (/api/cron/pull-targets) which upserts
+// store_weekly_targets. No Google SDK — a signed JWT gets a read-only access
+// token. All fetches carry timeouts so a hung Google endpoint can never hold a
+// handler open (the lag-investigation lesson).
 //
 // Required env:
 //   BQ_SERVICE_ACCOUNT_KEY — service-account JSON (raw or base64). base64 is
 //     recommended: the JSON has quotes / \n / + / = that env editors (Coolify)
 //     routinely mangle, breaking JSON.parse.
-//   BQ_QUERY (optional)            — override of DEFAULT_QUERY.
-//   TARGETS_TTL_SECONDS (optional) — live-read cache TTL, default 3600 (1h).
+//   BQ_QUERY (optional)    — override of DEFAULT_QUERY.
 
 // ORDER BY monday_of_week DESC guarantees the latest week is within the
 // maxResults cap even if the fact table accumulates history (no page-token
@@ -107,47 +106,4 @@ export async function runBigQuery(sa: ServiceAccount, sql: string): Promise<Reco
   return (data.rows ?? []).map((r) =>
     Object.fromEntries(fields.map((name, i) => [name, r.f[i]?.v ?? null])),
   )
-}
-
-// ── Live read with a small in-memory TTL cache ──────────────────────────────
-// The app runs as a long-lived Coolify container (not serverless), so a
-// module-level cache is shared across requests: one BigQuery hit per TTL serves
-// every staff/admin view. TTL default 1h (the stakeholder's cadence) — no cron
-// or store_weekly_targets persistence needed for reads.
-const TTL_MS = (() => {
-  const n = Number(process.env.TARGETS_TTL_SECONDS)
-  return Number.isFinite(n) && n > 0 ? n * 1000 : 3600_000
-})()
-
-let cache: { rows: TargetRow[]; expires: number } | null = null
-let inFlight: Promise<TargetRow[]> | null = null
-
-async function fetchLive(): Promise<TargetRow[]> {
-  const sa = loadServiceAccount()
-  if (!sa) throw new Error('BQ_SERVICE_ACCOUNT_KEY chưa cấu hình')
-  // Always DEFAULT_QUERY for the live read — it carries the ORDER BY that
-  // guarantees the latest week is within the cap. A BQ_QUERY env override (used
-  // by the cron) must not silently drop that ordering on the staff-facing path.
-  const raw = await runBigQuery(sa, DEFAULT_QUERY)
-  const rows: TargetRow[] = []
-  for (const r of raw) {
-    const n = normalizeRow(r, { runRateIsFraction: true })
-    if (!('error' in n)) rows.push(n)
-  }
-  return rows
-}
-
-// Returns all weekly-target rows from BigQuery (normalized), cached for TTL.
-// Throws on a hard failure (no SA / BQ error) — callers render an error state.
-export async function getWeeklyTargetsLive(): Promise<TargetRow[]> {
-  if (cache && cache.expires > Date.now()) return cache.rows
-  // Coalesce concurrent misses so a burst of page loads triggers one BQ call.
-  if (inFlight) return inFlight
-  inFlight = fetchLive()
-    .then((rows) => {
-      cache = { rows, expires: Date.now() + TTL_MS }
-      return rows
-    })
-    .finally(() => { inFlight = null })
-  return inFlight
 }
