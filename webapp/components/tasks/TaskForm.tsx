@@ -92,6 +92,9 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   // staff_all: each pharmacist in the store gets their own child task to submit.
   // Ad-hoc + single-store + new only.
   const [staffMode, setStaffMode]   = useState(false)
+  // staff_all subset: ids the admin UNCHECKED (default = everyone selected, which
+  // matches the legacy "all staff" behavior — an empty set sends no override).
+  const [excludedStaff, setExcludedStaff] = useState<Set<string>>(new Set())
 
   const [startDate, setStartDate]       = useState(task?.start_date ? new Date(task.start_date).toISOString().slice(0, 10) : '')
   const [startTime, setStartTime]       = useState(task?.start_date ? new Date(task.start_date).toISOString().slice(11, 16) : '')
@@ -279,20 +282,30 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   // staff_all: admin + ad-hoc + new task. Works for all scopes (single/multi/all).
   const canStaffMode       = isAdmin && !isEditMode && !isRecurring
   const effectiveStaffMode = staffMode && canStaffMode
-  const staffCount         = storeId
-    ? users.filter((u) => u.store_id === storeId && u.role === 'staff').length
-    : 0
+  // Single-store pharmacist list + selected count (selected = not unchecked).
+  const singleStoreStaff   = storeId
+    ? users.filter((u) => u.store_id === storeId && u.role === 'staff')
+    : []
+  const staffCount         = singleStoreStaff.length
+  const staffSelectedCount = singleStoreStaff.filter((u) => !excludedStaff.has(u.id)).length
 
   // Multi-store staff breakdown: used when broadcast + effectiveStaffMode for preview + guard
   const activeStoreIds     = (isBroadcast && effectiveStaffMode)
     ? (scope === 'all' ? visibleStores.map(s => s.id) : selectedStoreIds)
     : []
-  const perStoreStaffInfo  = activeStoreIds.map(id => ({
-    id,
-    name:  visibleStores.find(s => s.id === id)?.name ?? id,
-    count: users.filter(u => u.store_id === id && u.role === 'staff').length,
-  }))
-  const broadcastStaffTotal = perStoreStaffInfo.reduce((sum, s) => sum + s.count, 0)
+  const perStoreStaffInfo  = activeStoreIds.map(id => {
+    const staff = users.filter(u => u.store_id === id && u.role === 'staff')
+    return {
+      id,
+      name:  visibleStores.find(s => s.id === id)?.name ?? id,
+      staff,
+      count: staff.length,
+      selectedCount: staff.filter(u => !excludedStaff.has(u.id)).length,
+    }
+  })
+  // Selected total drives the "sẽ tạo N task con" preview; stores with no DB staff
+  // are still a hard error (storesWithoutStaff), stores cleared via checkboxes skip.
+  const broadcastStaffTotal = perStoreStaffInfo.reduce((sum, s) => sum + s.selectedCount, 0)
   const storesWithoutStaff  = perStoreStaffInfo.filter(s => s.count === 0)
 
   // Excel split: adhoc + broadcast (multi/all) + store-mode (not per-pharmacist).
@@ -341,6 +354,39 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
     setSelectedStoreIds((prev) =>
       prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]
     )
+  }
+
+  function toggleStaffExcluded(id: string) {
+    setExcludedStaff((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+  // Bulk select/clear a store's pharmacists (exclude = remove all from selection).
+  function setStoreStaffExcluded(staffIds: string[], exclude: boolean) {
+    setExcludedStaff((prev) => {
+      const next = new Set(prev)
+      staffIds.forEach((id) => (exclude ? next.add(id) : next.delete(id)))
+      return next
+    })
+  }
+
+  // Per-store subset payload for a staff_all broadcast. undefined when nothing is
+  // unchecked → server keeps the legacy "all current staff" behavior.
+  function buildSelectedByStore(ids: string[]): Record<string, string[]> | undefined {
+    if (excludedStaff.size === 0) return undefined
+    const out: Record<string, string[]> = {}
+    let any = false
+    for (const sid of ids) {
+      const staff = users.filter((u) => u.store_id === sid && u.role === 'staff')
+      if (staff.some((u) => excludedStaff.has(u.id))) {
+        out[sid] = staff.filter((u) => !excludedStaff.has(u.id)).map((u) => u.id)
+        any = true
+      }
+    }
+    return any ? out : undefined
   }
 
   function handleStoreChange(v: string | null) {
@@ -435,6 +481,10 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
       toast.error('Cửa hàng chưa có dược sĩ nào để giao task')
       return
     }
+    if (effectiveStaffMode && !isBroadcast && staffSelectedCount === 0) {
+      toast.error('Vui lòng chọn ít nhất một dược sĩ để giao task')
+      return
+    }
 
     if (isBroadcast) {
       const storeIds = scope === 'all' ? visibleStores.map((s) => s.id) : selectedStoreIds
@@ -476,12 +526,17 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
         return
       }
 
-      // Per-pharmacist broadcast: block if any selected store has no staff
+      // Per-pharmacist broadcast: block if any selected store has no staff at all
       if (effectiveStaffMode && storesWithoutStaff.length > 0) {
         const MAX_NAMES = 3
         const shown = storesWithoutStaff.slice(0, MAX_NAMES).map(s => s.name).join(', ')
         const extra = storesWithoutStaff.length > MAX_NAMES ? ` +${storesWithoutStaff.length - MAX_NAMES} cửa hàng khác` : ''
         toast.error(`Cửa hàng chưa có dược sĩ: ${shown}${extra}`)
+        return
+      }
+      // …or if the admin unchecked everyone across all selected stores.
+      if (effectiveStaffMode && broadcastStaffTotal === 0) {
+        toast.error('Vui lòng chọn ít nhất một dược sĩ để giao task')
         return
       }
       const draftSnapshot = snapshotDraft()
@@ -499,6 +554,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
           attachments,
           links: links.filter((l) => l.url.trim()),
           assignmentMode:  effectiveStaffMode ? 'staff_all' : 'store',
+          selectedStaffByStore: effectiveStaffMode ? buildSelectedByStore(storeIds) : undefined,
         })
         if (result?.error) {
           restoreDraftSnapshot(draftSnapshot)
@@ -514,6 +570,12 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
     if (effectiveStaffMode) {
       formData.set('assignment_mode', 'staff_all')
       formData.set('assigned_to', '')
+      // Only send a subset when the admin actually unchecked someone in this store;
+      // otherwise omit so the server creates for all current staff (legacy behavior).
+      if (singleStoreStaff.some((u) => excludedStaff.has(u.id))) {
+        const selected = singleStoreStaff.filter((u) => !excludedStaff.has(u.id)).map((u) => u.id)
+        formData.set('selected_staff_ids', JSON.stringify(selected))
+      }
     } else {
       formData.set('assigned_to', assignedTo)
     }
@@ -683,8 +745,25 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                       ? 'Chọn cửa hàng để xem số dược sĩ sẽ nhận task.'
                       : storesWithoutStaff.length > 0
                         ? `Cửa hàng chưa có dược sĩ: ${storesWithoutStaff.slice(0, 3).map(s => s.name).join(', ')}${storesWithoutStaff.length > 3 ? ` +${storesWithoutStaff.length - 3} khác` : ''}.`
-                        : `Sẽ tạo ${broadcastStaffTotal} task con cho ${broadcastStaffTotal} dược sĩ trên ${activeStoreIds.length} cửa hàng.`}
+                        : `Sẽ tạo ${broadcastStaffTotal} task con cho ${broadcastStaffTotal} dược sĩ trên ${perStoreStaffInfo.filter(s => s.selectedCount > 0).length} cửa hàng.`}
                   </p>
+                )}
+                {/* Per-store pharmacist pickers — default all checked (legacy behavior).
+                    Stores cleared to zero are skipped on submit. */}
+                {effectiveStaffMode && activeStoreIds.length > 0 && storesWithoutStaff.length === 0 && (
+                  <div className="space-y-2 max-h-72 overflow-y-auto pr-0.5">
+                    {perStoreStaffInfo.map((s) => (
+                      <div key={s.id} className="space-y-1">
+                        <p className="text-[11px] font-medium text-foreground/80 px-0.5">{s.name}</p>
+                        <StaffChecklist
+                          staff={s.staff}
+                          excluded={excludedStaff}
+                          onToggle={toggleStaffExcluded}
+                          onBulk={setStoreStaffExcluded}
+                        />
+                      </div>
+                    ))}
+                  </div>
                 )}
                 {/* Excel split — store-mode broadcast only; per-store data slices */}
                 {showExcelSplit && (
@@ -749,13 +828,24 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                 </div>
                 {/* Preview when per-pharmacist mode is active */}
                 {effectiveStaffMode && (
-                  <p className={cn('text-xs', storeId && staffCount === 0 ? 'text-destructive' : 'text-muted-foreground')}>
+                  <p className={cn('text-xs', storeId && staffSelectedCount === 0 ? 'text-destructive' : 'text-muted-foreground')}>
                     {!storeId
                       ? 'Chọn cửa hàng để xem số dược sĩ sẽ nhận task.'
                       : staffCount === 0
                         ? 'Cửa hàng này chưa có dược sĩ nào — không thể tạo task theo dược sĩ.'
-                        : `Sẽ tạo ${staffCount} task con cho ${staffCount} dược sĩ. Quản lý cửa hàng nhận thông báo tổng quan.`}
+                        : staffSelectedCount === 0
+                          ? 'Chưa chọn dược sĩ nào — chọn ít nhất một người bên dưới.'
+                          : `Sẽ tạo ${staffSelectedCount} task con cho ${staffSelectedCount} dược sĩ. Quản lý cửa hàng nhận thông báo tổng quan.`}
                   </p>
+                )}
+                {/* Per-pharmacist picker (default = all checked = legacy behavior) */}
+                {effectiveStaffMode && storeId && staffCount > 0 && (
+                  <StaffChecklist
+                    staff={singleStoreStaff}
+                    excluded={excludedStaff}
+                    onToggle={toggleStaffExcluded}
+                    onBulk={setStoreStaffExcluded}
+                  />
                 )}
               </div>
             )}
@@ -1089,5 +1179,46 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
         </div>
       </div>
     </form>
+  )
+}
+
+// Pharmacist multi-select for staff_all mode. A checked box = that pharmacist gets
+// a task; default is all checked (the legacy behavior). Selection is tracked by an
+// "excluded" set in the parent, so an untouched form sends no override.
+function StaffChecklist({ staff, excluded, onToggle, onBulk }: {
+  staff: { id: string; full_name: string }[]
+  excluded: Set<string>
+  onToggle: (id: string) => void
+  onBulk: (ids: string[], exclude: boolean) => void
+}) {
+  const ids = staff.map((s) => s.id)
+  const selectedCount = staff.filter((s) => !excluded.has(s.id)).length
+  const allSelected = selectedCount === staff.length
+  return (
+    <div className="rounded border">
+      <div className="flex items-center justify-between px-2.5 py-1.5 border-b bg-muted/40">
+        <span className="text-[11px] text-muted-foreground">{selectedCount}/{staff.length} dược sĩ</span>
+        <button
+          type="button"
+          onClick={() => onBulk(ids, allSelected)}
+          className="text-[11px] text-primary hover:underline"
+        >
+          {allSelected ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}
+        </button>
+      </div>
+      <div className="max-h-40 overflow-y-auto divide-y">
+        {staff.map((s) => (
+          <label key={s.id} className="flex items-center gap-2.5 px-2.5 py-1.5 cursor-pointer hover:bg-sidebar-accent text-sm">
+            <input
+              type="checkbox"
+              checked={!excluded.has(s.id)}
+              onChange={() => onToggle(s.id)}
+              className="accent-primary h-4 w-4 shrink-0"
+            />
+            <span className="truncate">{s.full_name}</span>
+          </label>
+        ))}
+      </div>
+    </div>
   )
 }

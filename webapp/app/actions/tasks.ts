@@ -171,6 +171,15 @@ export async function createTask(formData: FormData) {
   // The parent is private/unassigned so staff can't see it (RLS); managers and
   // admins see it via their role policies.
   if (formData.get('assignment_mode') === 'staff_all') {
+    // Optional per-staff subset (JSON array of user ids). Absent / invalid → all staff.
+    let selectedStaffIds: string[] | undefined
+    const rawSel = formData.get('selected_staff_ids') as string | null
+    if (rawSel) {
+      try {
+        const parsed = JSON.parse(rawSel)
+        if (Array.isArray(parsed)) selectedStaffIds = parsed.filter((x): x is string => typeof x === 'string')
+      } catch { /* malformed → fall back to all staff */ }
+    }
     return createStaffRequiredTask(supabase, user.id, {
       storeId:         storeIdVal,
       title:           formData.get('title') as string,
@@ -181,6 +190,7 @@ export async function createTask(formData: FormData) {
       deadline:        formData.get('deadline') as string || null,
       requiredOutputs: requiredOutputsRaw,
       inputData,
+      selectedStaffIds,
     })
   }
 
@@ -263,14 +273,25 @@ async function createStaffRequiredTask(
     deadline:        string | null
     requiredOutputs: RequiredOutput[]
     inputData:       unknown
+    selectedStaffIds?: string[]   // admin picked a subset; undefined = all staff
   },
 ) {
   // 1. Active pharmacists of the store. No is_active flag exists → all role='staff'.
-  const { data: staff } = await supabase
+  const { data: allStaff } = await supabase
     .from('users').select('id, full_name')
     .eq('role', 'staff').eq('store_id', p.storeId)
-  if (!staff || staff.length === 0) {
+  if (!allStaff || allStaff.length === 0) {
     return { error: 'Cửa hàng chưa có dược sĩ nào để giao task' }
+  }
+  // Subset selection: intersect with the DB-fetched staff so a tampered id (not a
+  // real staff of this store) can never receive a task. Empty selection = all.
+  let staff = allStaff
+  if (p.selectedStaffIds && p.selectedStaffIds.length > 0) {
+    const allow = new Set(p.selectedStaffIds)
+    staff = allStaff.filter((s) => allow.has(s.id))
+    if (staff.length === 0) {
+      return { error: 'Chưa chọn dược sĩ nào hợp lệ để giao task' }
+    }
   }
 
   // 2. Parent — private + unassigned so staff can't see it; managers/admins can.
@@ -889,6 +910,9 @@ export async function createBroadcastTask(params: {
   attachments?: { url: string; name: string; type: string; size?: number }[]
   links?: { label: string; url: string }[]
   assignmentMode?: 'store' | 'staff_all'
+  // staff_all only: per-store subset of pharmacist ids. A store absent here keeps
+  // all its staff (backward compatible); a store present gets only the listed ids.
+  selectedStaffByStore?: Record<string, string[]>
 }) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -919,17 +943,38 @@ export async function createBroadcastTask(params: {
       arr.push({ id: s.id, full_name: s.full_name })
       staffByStore.set(s.store_id, arr)
     }
-    const emptyStoreIds = params.storeIds.filter(id => !(staffByStore.get(id)?.length))
-    if (emptyStoreIds.length > 0) {
-      const { data: emptyNames } = await supabaseAdmin
-        .from('stores').select('id, name').in('id', emptyStoreIds)
-      const names = (emptyNames ?? []).map(s => s.name).join(', ')
-      return { error: `Cửa hàng chưa có dược sĩ: ${names}. Vui lòng thêm dược sĩ trước.` }
+
+    // Per-store subset: intersect each store's selection with its DB staff (so a
+    // tampered/foreign id can't receive a task). Stores not listed keep all staff.
+    if (params.selectedStaffByStore) {
+      for (const [sid, ids] of Object.entries(params.selectedStaffByStore)) {
+        const cur = staffByStore.get(sid)
+        if (!cur) continue
+        const allow = new Set(ids)
+        staffByStore.set(sid, cur.filter((s) => allow.has(s.id)))
+      }
+    }
+
+    // Without a selection, a store with zero pharmacists is a data error the admin
+    // must fix (preserve the original hard stop). With a selection, a store left
+    // with nobody was intentionally cleared in the form — skip it silently.
+    if (!params.selectedStaffByStore) {
+      const emptyStoreIds = params.storeIds.filter(id => !(staffByStore.get(id)?.length))
+      if (emptyStoreIds.length > 0) {
+        const { data: emptyNames } = await supabaseAdmin
+          .from('stores').select('id, name').in('id', emptyStoreIds)
+        const names = (emptyNames ?? []).map(s => s.name).join(', ')
+        return { error: `Cửa hàng chưa có dược sĩ: ${names}. Vui lòng thêm dược sĩ trước.` }
+      }
+    }
+    const effectiveStoreIds = params.storeIds.filter(id => (staffByStore.get(id)?.length ?? 0) > 0)
+    if (effectiveStoreIds.length === 0) {
+      return { error: 'Chưa chọn dược sĩ nào để giao task' }
     }
 
     const { data: bcast, error: bcastErrSA } = await supabase
       .from('task_broadcasts')
-      .insert({ title: params.title, created_by: user.id, store_count: params.storeIds.length })
+      .insert({ title: params.title, created_by: user.id, store_count: effectiveStoreIds.length })
       .select().single()
     if (bcastErrSA || !bcast) return { error: bcastErrSA?.message ?? 'Lỗi tạo broadcast' }
 
@@ -937,7 +982,7 @@ export async function createBroadcastTask(params: {
       ? { attachments: params.attachments ?? [], links: params.links ?? [] }
       : null
 
-    const parentsToInsert = params.storeIds.map(sid => ({
+    const parentsToInsert = effectiveStoreIds.map(sid => ({
       title:            params.title,
       description:      sanitizeRichText(params.description) || null,
       category:         params.category,
@@ -1008,7 +1053,7 @@ export async function createBroadcastTask(params: {
     if (saLogErr) console.error('[broadcast_staff_all] task_logs:', saLogErr.message)
 
     const { data: saManagers } = await supabaseAdmin
-      .from('users').select('id, store_id').eq('role', 'store_manager').in('store_id', params.storeIds)
+      .from('users').select('id, store_id').eq('role', 'store_manager').in('store_id', effectiveStoreIds)
     const saNotifications = [
       ...(saManagers ?? []).map(m => ({
         user_id: m.id,
