@@ -354,7 +354,12 @@ export default async function TargetsPage() {
       .order('week_start', { ascending: false })
       .order('refreshed_at', { ascending: false })
       .limit(120)
-    if (dbErr) console.error('[targets] super-admin DB fallback failed:', dbErr.message)
+    if (dbErr) {
+      console.error('[targets] super-admin DB fallback failed:', dbErr.message)
+      // Surface an operational error (parity with the staff path) instead of an
+      // empty table when BOTH live BQ and the DB fallback fail.
+      allRowsError = allRowsError ?? { message: dbErr.message }
+    }
     const fallbackLatest = (dbRows ?? [])[0]?.week_start as string | undefined
     weekRows = ((dbRows ?? []) as unknown as TargetRecord[])
       .filter((r) => r.week_start === fallbackLatest)
