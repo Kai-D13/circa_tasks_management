@@ -173,6 +173,12 @@ export default async function TasksPage({
 
   const totalRows  = count ?? 0
   const totalPages = Math.max(1, Math.ceil(totalRows / pageSize))
+  // Group pagination fetches top-level parents with a hard cap of 1000 (range 0–999).
+  // Beyond that, later broadcasts would silently vanish — log it so the tactical fix
+  // is visibly outgrown and we move to an RPC that paginates by broadcast_id.
+  if (groupPaginate && totalRows > 1000) {
+    console.warn(`[tasks] group pagination hit the 1000-parent fetch cap (${totalRows} top-level parents exist); some groups are not shown. Replace range(0,999) with a broadcast_id-grouped RPC.`)
+  }
   // Staff: no exact count — the (pageSize + 1)th row, if present, signals a next page.
   const pageTasks    = isStaff ? (tasks ?? []).slice(0, pageSize) : (tasks ?? [])
   const hasNextStaff = isStaff && (tasks ?? []).length > pageSize

@@ -307,6 +307,9 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   // are still a hard error (storesWithoutStaff), stores cleared via checkboxes skip.
   const broadcastStaffTotal = perStoreStaffInfo.reduce((sum, s) => sum + s.selectedCount, 0)
   const storesWithoutStaff  = perStoreStaffInfo.filter(s => s.count === 0)
+  // Stores that HAVE pharmacists but the admin unchecked them all → skipped on
+  // submit (product decision: skip, but warn visibly so it's never silent).
+  const storesClearedBySelection = perStoreStaffInfo.filter(s => s.count > 0 && s.selectedCount === 0)
 
   // Excel split: adhoc + broadcast (multi/all) + store-mode (not per-pharmacist).
   const showExcelSplit  = isBroadcast && !isRecurring && !effectiveStaffMode
@@ -746,6 +749,12 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                       : storesWithoutStaff.length > 0
                         ? `Cửa hàng chưa có dược sĩ: ${storesWithoutStaff.slice(0, 3).map(s => s.name).join(', ')}${storesWithoutStaff.length > 3 ? ` +${storesWithoutStaff.length - 3} khác` : ''}.`
                         : `Sẽ tạo ${broadcastStaffTotal} task con cho ${broadcastStaffTotal} dược sĩ trên ${perStoreStaffInfo.filter(s => s.selectedCount > 0).length} cửa hàng.`}
+                  </p>
+                )}
+                {/* Cleared stores are skipped (not blocked) — warn so it's never silent */}
+                {effectiveStaffMode && storesWithoutStaff.length === 0 && storesClearedBySelection.length > 0 && (
+                  <p className="text-xs text-amber-600 dark:text-amber-500">
+                    ⚠ Sẽ bỏ qua {storesClearedBySelection.length} cửa hàng chưa chọn dược sĩ: {storesClearedBySelection.slice(0, 3).map(s => s.name).join(', ')}{storesClearedBySelection.length > 3 ? ` +${storesClearedBySelection.length - 3} khác` : ''}.
                   </p>
                 )}
                 {/* Per-store pharmacist pickers — default all checked (legacy behavior).
