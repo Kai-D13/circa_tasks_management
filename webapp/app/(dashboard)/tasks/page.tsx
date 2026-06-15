@@ -55,6 +55,15 @@ export default async function TasksPage({
 
   const nowIso = new Date().toISOString()
 
+  // Admin folding views (pending without a status sub-filter, and done) collapse
+  // many staff_all store-parents into ONE broadcast row. Paginate by GROUP unit
+  // (slice after grouping) instead of a row window, so a broadcast's stores never
+  // split across pages. Fetch all top-level parents (bounded) for these views.
+  const isAdminRole = profile?.role === 'admin'
+  const groupPaginate = isAdminRole && !showArchived
+    && ((view === 'pending' && !params.status) || view === 'done')
+  const GROUPS_PER_PAGE = 15
+
   // Narrow select — excludes description/input_data/required_outputs which grow
   // large when tasks have many attachments. The completion columns + completed_by
   // embed are only meaningful for done tasks, so the pending view omits them to
@@ -91,8 +100,12 @@ export default async function TasksPage({
       .order('deadline', { ascending: true, nullsFirst: false })
       .order('created_at', { ascending: false })
   }
-  // Staff fetch one extra row to detect a next page without an exact count.
-  query = query.range(offset, isStaff ? offset + pageSize : offset + pageSize - 1)
+  // Group-paginated admin views fetch all top-level parents (bounded) and slice
+  // by group below; other views use a row window. Staff fetch +1 row to detect a
+  // next page without an exact count.
+  query = groupPaginate
+    ? query.range(0, 999)
+    : query.range(offset, isStaff ? offset + pageSize : offset + pageSize - 1)
 
   if (showArchived) {
     query = query.not('archived_at', 'is', null)
@@ -136,7 +149,6 @@ export default async function TasksPage({
   // Otherwise a 26-store/106-staff broadcast floods the 30-row page under 'todo'
   // (parents + children all match) — partial trees, broadcast repeating across
   // pages, inflated count. Matching children are re-fetched per page below.
-  const isAdminRole = profile?.role === 'admin'
   const adminTreeFilter = isAdminRole && view === 'pending' && !showArchived
     && (params.status === 'todo' || params.status === 'in_progress' || params.status === 'overdue')
 
@@ -255,7 +267,9 @@ export default async function TasksPage({
   // Older broadcasts are reachable via their store rows / the task detail pages.
   const doneStatsByParent    = new Map<string, { total: number; done: number }>()
   const doneStatsByBroadcast = new Map<string, { total: number; done: number; parents: Set<string> }>()
-  if (adminDoneTree && page === 1) {
+  // Group-paginated: fetch the done children once (we slice groups, not rows), so
+  // no per-page gate. (adminDoneTree ⊂ groupPaginate.)
+  if (adminDoneTree) {
     let doneChildQ = supabase
       .from('tasks')
       .select(`${CHILD_COLS}, completed_at`)
@@ -608,6 +622,17 @@ export default async function TasksPage({
         (g.type !== 'staff_broadcast' || g.totalStaff > 0) && (g.type !== 'staff' || g.total > 0))
     : grouped
 
+  // Group-paginated admin views: the query fetched ALL top-level parents, so
+  // `visibleItems` holds every group. Slice by GROUP unit here — a broadcast's
+  // stores stay whole on one page (fixes the original row-window straddle bug).
+  // Other views keep their server-side row pagination (pageItems === visibleItems).
+  const groupTotalPages = Math.max(1, Math.ceil(visibleItems.length / GROUPS_PER_PAGE))
+  const clampedPage = groupPaginate ? Math.min(page, groupTotalPages) : page
+  const pageItems = groupPaginate
+    ? visibleItems.slice((clampedPage - 1) * GROUPS_PER_PAGE, clampedPage * GROUPS_PER_PAGE)
+    : visibleItems
+  const effectiveTotalPages = groupPaginate ? groupTotalPages : totalPages
+
   // Drives the empty-state copy: are filters narrowing the (empty) result?
   const hasActiveFilters = !isStaff && !!(params.status || params.priority || params.store_id || params.category)
 
@@ -666,7 +691,7 @@ export default async function TasksPage({
         </div>
       ) : (
         <>
-          {visibleItems.length === 0 ? (
+          {pageItems.length === 0 ? (
             <Card>
               <CardContent className="py-16 flex flex-col items-center justify-center text-center gap-3">
                 <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
@@ -696,7 +721,7 @@ export default async function TasksPage({
           ) : (
           <Card>
             <CardContent className="p-0">
-              <TaskList items={visibleItems} canArchive={canArchive} canRestore={canRestore} showArchived={showArchived} userRole={profile?.role ?? 'staff'} />
+              <TaskList items={pageItems} canArchive={canArchive} canRestore={canRestore} showArchived={showArchived} userRole={profile?.role ?? 'staff'} />
             </CardContent>
           </Card>
           )}
@@ -732,20 +757,23 @@ export default async function TasksPage({
             </div>
           )}
 
-          {/* Admin/manager pagination — numbered, driven by the exact count */}
-          {!isStaff && totalPages > 1 && (
+          {/* Admin/manager pagination — numbered. Group-paginated views count by
+              GROUP (slice above); row-paginated views use the exact row count. */}
+          {!isStaff && effectiveTotalPages > 1 && (
             <div className="flex items-center justify-between gap-2 pt-1">
               <span className="text-xs text-muted-foreground">
-                {offset + 1}–{Math.min(offset + pageSize, totalRows)} / {totalRows} task
+                {groupPaginate
+                  ? `${(clampedPage - 1) * GROUPS_PER_PAGE + 1}–${Math.min(clampedPage * GROUPS_PER_PAGE, visibleItems.length)} / ${visibleItems.length} nhóm`
+                  : `${offset + 1}–${Math.min(offset + pageSize, totalRows)} / ${totalRows} task`}
               </span>
               <div className="flex items-center gap-1">
                 <Link
-                  href={pageHref(page - 1)}
-                  aria-disabled={page <= 1}
+                  href={pageHref(clampedPage - 1)}
+                  aria-disabled={clampedPage <= 1}
                   className={cn(
                     buttonVariants({ variant: 'outline', size: 'sm' }),
                     'h-7 w-7 p-0',
-                    page <= 1 && 'pointer-events-none opacity-40',
+                    clampedPage <= 1 && 'pointer-events-none opacity-40',
                   )}
                   aria-label="Trang trước"
                 >
@@ -753,8 +781,8 @@ export default async function TasksPage({
                 </Link>
 
                 {/* Page number buttons — show at most 5 around current page */}
-                {Array.from({ length: totalPages }, (_, i) => i + 1)
-                  .filter((p) => p === 1 || p === totalPages || Math.abs(p - page) <= 2)
+                {Array.from({ length: effectiveTotalPages }, (_, i) => i + 1)
+                  .filter((p) => p === 1 || p === effectiveTotalPages || Math.abs(p - clampedPage) <= 2)
                   .reduce<(number | '…')[]>((acc, p, i, arr) => {
                     if (i > 0 && (p as number) - (arr[i - 1] as number) > 1) acc.push('…')
                     acc.push(p)
@@ -768,7 +796,7 @@ export default async function TasksPage({
                         key={p}
                         href={pageHref(p as number)}
                         className={cn(
-                          buttonVariants({ variant: p === page ? 'default' : 'outline', size: 'sm' }),
+                          buttonVariants({ variant: p === clampedPage ? 'default' : 'outline', size: 'sm' }),
                           'h-7 w-7 p-0 text-xs',
                         )}
                       >
@@ -778,12 +806,12 @@ export default async function TasksPage({
                   )}
 
                 <Link
-                  href={pageHref(page + 1)}
-                  aria-disabled={page >= totalPages}
+                  href={pageHref(clampedPage + 1)}
+                  aria-disabled={clampedPage >= effectiveTotalPages}
                   className={cn(
                     buttonVariants({ variant: 'outline', size: 'sm' }),
                     'h-7 w-7 p-0',
-                    page >= totalPages && 'pointer-events-none opacity-40',
+                    clampedPage >= effectiveTotalPages && 'pointer-events-none opacity-40',
                   )}
                   aria-label="Trang tiếp"
                 >
