@@ -35,18 +35,23 @@ Ghi lại kết quả 1a (danh sách bảng) để có thể khôi phục, và 1
 
 ---
 
-## Bước 2 — Hành động chính (KHUYẾN NGHỊ): bỏ trống publication
+## Bước 2 — Hành động chính (KHUYẾN NGHỊ): gỡ bảng khỏi publication
+
+> **BẮT BUỘC chạy Bước 1 trước và LƯU danh sách bảng (1a)** — đó là cách duy nhất để khôi phục chính xác cấu hình cũ.
 
 Realtime chỉ stream thay đổi cho các bảng nằm trong publication `supabase_realtime`. Bỏ hết bảng → `list_changes` không còn gì để decode → tải gần như về 0. **Không đụng container, không đụng slot → an toàn nhất.**
 
+**Cách ưu tiên (ít rủi ro nhất): gỡ từng bảng theo danh sách 1a** — giữ nguyên publication, dễ khôi phục:
 ```sql
--- (Khuyến nghị) tạo lại publication rỗng — realtime sẽ không theo dõi bảng nào:
-DROP PUBLICATION IF EXISTS supabase_realtime;
-CREATE PUBLICATION supabase_realtime;
+ALTER PUBLICATION supabase_realtime DROP TABLE public.<ten_bang>;
+-- lặp lại cho mọi bảng liệt kê ở 1a
 ```
 
-> Nếu muốn nhẹ tay hơn (không drop), gỡ từng bảng đã thấy ở 1a:
-> `ALTER PUBLICATION supabase_realtime DROP TABLE public.<ten_bang>;`
+> Cách thay thế (chỉ khi 1a rất nhiều bảng và bạn chấp nhận drop/create): bỏ trống bằng cách tạo lại publication rỗng. **Lưu danh sách 1a trước** vì lệnh này xoá toàn bộ cấu hình publication:
+> ```sql
+> DROP PUBLICATION IF EXISTS supabase_realtime;
+> CREATE PUBLICATION supabase_realtime;
+> ```
 
 ### Verify (sau 2–5 phút)
 ```sql

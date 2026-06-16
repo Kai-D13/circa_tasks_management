@@ -7,10 +7,13 @@ import { DEFAULT_QUERY, loadServiceAccount, runBigQuery } from '@/lib/targets/bi
 // (buymed_n8n.fact_kpi_circa_weekly) and upserts store_weekly_targets.
 // (This replaced the abandoned Power BI service-principal pull on 2026-06-13.)
 //
-// NOTE (2026-06-15): staff + super-admin /targets now read BigQuery LIVE
-// (lib/targets/bigquery.ts getWeeklyTargetsLive, cached 1h), so this cron is no
-// longer required for reads. It's kept harmless to keep store_weekly_targets
-// warm for the manual-upload fallback; the Coolify schedule can be disabled.
+// ⚠ OPERATIONAL (2026-06-16): /targets reads store_weekly_targets directly
+// (app/(dashboard)/targets/page.tsx), so THIS CRON IS THE SOURCE that updates
+// the KPI staff see. It MUST stay scheduled — do NOT disable it. Run it on the
+// Coolify Scheduled Task "Pull weekly targets" (every 2h: `0 */2 * * *`, or
+// hourly `0 * * * *`). A short-lived live-BigQuery read on the page was tried
+// and reverted on 2026-06-16; lib/targets/bigquery.ts keeps only the shared
+// JWT/query helpers this route uses.
 //
 // Column mapping (BQ → store_weekly_targets):
 //   monday_of_week → week_start        pos_code → stores.code (exact match)
