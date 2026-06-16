@@ -95,7 +95,7 @@ export default async function UsersPage({
     // FK-disambiguated embed: sm_store_assignments (migration 045) added a second
     // users<->stores relationship, so a bare stores(name) embed now errors.
     // departments has a single FK from users → bare embed is safe.
-    .select('id, email, full_name, role, store_id, department_id, created_at, stores!users_store_id_fkey(name), department:departments(id, name, color)', { count: 'exact' })
+    .select('id, email, full_name, phone_number, role, store_id, department_id, created_at, stores!users_store_id_fkey(name), department:departments(id, name, color)', { count: 'exact' })
     .order('created_at', { ascending: false })
     .range(offset, offset + PAGE_SIZE - 1)
 
@@ -235,6 +235,7 @@ export default async function UsersPage({
                 <TableHead>Phân quyền</TableHead>
                 {!isSm && <TableHead>Phòng ban</TableHead>}
                 <TableHead>Cửa hàng</TableHead>
+                <TableHead>Số điện thoại</TableHead>
                 <TableHead>Ngày tạo</TableHead>
                 <TableHead className="w-[80px]"></TableHead>
               </TableRow>
@@ -288,6 +289,11 @@ export default async function UsersPage({
                         </span>
                       )}
                     </TableCell>
+                    <TableCell className="text-sm whitespace-nowrap">
+                      {(u as { phone_number?: string | null }).phone_number
+                        ? <span className="font-mono text-xs">{(u as { phone_number?: string | null }).phone_number}</span>
+                        : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
                     <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
                       {formatDate(u.created_at)}
                     </TableCell>
@@ -319,7 +325,7 @@ export default async function UsersPage({
               })}
               {(users ?? []).length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={isSm ? 5 : 6} className="py-12">
+                  <TableCell colSpan={isSm ? 6 : 7} className="py-12">
                     <div className="flex flex-col items-center gap-2 text-muted-foreground">
                       <UsersIcon className="h-8 w-8 opacity-30" />
                       <p className="text-sm">Không tìm thấy người dùng nào</p>
