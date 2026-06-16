@@ -2,6 +2,7 @@
 
 import { useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { safeStorageName } from '@/lib/storage'
 import { toast } from 'sonner'
 import { Camera, Plus, X, Loader2 } from 'lucide-react'
 import { PRESCRIPTION_BUCKET } from '@/lib/prescriptions/constants'
@@ -69,8 +70,9 @@ export function PrescriptionImageUpload({ submissionId, storeId, value, onChange
           toast.error(`${original.name}: ảnh quá lớn sau khi nén (tối đa 5MB)`)
           continue
         }
-        // Path includes store_id for store-level isolation
-        const path = `prescriptions/${storeId}/${submissionId}/${Date.now()}_${file.name}`
+        // Path includes store_id for store-level isolation. Sanitize the key —
+        // Supabase rejects non-ASCII keys (InvalidKey); original name kept below.
+        const path = `prescriptions/${storeId}/${submissionId}/${Date.now()}_${safeStorageName(file.name)}`
         const { error } = await supabase.storage
           .from(PRESCRIPTION_BUCKET)
           .upload(path, file, { upsert: false })

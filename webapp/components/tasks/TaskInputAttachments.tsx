@@ -2,6 +2,7 @@
 
 import { forwardRef, useImperativeHandle, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { safeStorageName } from '@/lib/storage'
 import { Button } from '@/components/ui/button'
 import { Upload, X, Loader2, FileText, Image as ImageIcon, Music } from 'lucide-react'
 import { toast } from 'sonner'
@@ -72,7 +73,7 @@ export const TaskInputAttachments = forwardRef<TaskInputAttachmentsHandle, Props
             return false
           }
         } else if (file.size > MAX_DOC_SIZE) {
-          toast.error(`${file.name}: File quá lớn (tối đa 10MB)`)
+          toast.error(`${file.name}: File quá lớn (tối đa 10MB). Hãy tải lên Google Drive (chia sẻ cho mọi người) rồi dán link ở mục "Link".`)
           return false
         }
         return true
@@ -86,28 +87,35 @@ export const TaskInputAttachments = forwardRef<TaskInputAttachmentsHandle, Props
       const supabase = createClient()
       const uploaded: TaskAttachment[] = []
 
-      for (const file of files) {
-        try {
-          const path = `task-inputs/${uploadId}/${Date.now()}_${file.name}`
-          const { error } = await supabase.storage
-            .from('task-uploads')
-            .upload(path, file, { upsert: false })
-          if (error) throw error
-          const { data: { publicUrl } } = supabase.storage
-            .from('task-uploads')
-            .getPublicUrl(path)
-          uploaded.push({ url: publicUrl, name: file.name, type: file.type, size: file.size })
-        } catch {
-          toast.error(`Tải lên thất bại: ${file.name}`)
+      try {
+        for (const file of files) {
+          try {
+            // Sanitize the storage KEY — Supabase rejects non-ASCII keys with a
+            // 400 InvalidKey (Vietnamese names, en-dash, spaces…). The original
+            // name is kept below for display.
+            const path = `task-inputs/${uploadId}/${Date.now()}_${safeStorageName(file.name)}`
+            const { error } = await supabase.storage
+              .from('task-uploads')
+              .upload(path, file, { upsert: false })
+            if (error) throw error
+            const { data: { publicUrl } } = supabase.storage
+              .from('task-uploads')
+              .getPublicUrl(path)
+            uploaded.push({ url: publicUrl, name: file.name, type: file.type, size: file.size })
+          } catch {
+            toast.error(`Tải lên thất bại: ${file.name}`)
+          }
         }
-      }
 
-      if (uploaded.length) {
-        onChange([...value, ...uploaded])
-        toast.success(`Đã tải lên ${uploaded.length} tệp`)
+        if (uploaded.length) {
+          onChange([...value, ...uploaded])
+          toast.success(`Đã tải lên ${uploaded.length} tệp`)
+        }
+      } finally {
+        // Always release the spinner, even if something throws mid-loop.
+        setUploading(false)
+        if (inputRef.current) inputRef.current.value = ''
       }
-      setUploading(false)
-      if (inputRef.current) inputRef.current.value = ''
     }
 
     function remove(i: number) {
@@ -171,6 +179,10 @@ export const TaskInputAttachments = forwardRef<TaskInputAttachmentsHandle, Props
             </div>
           )}
         </div>
+        <p className="text-[11px] text-muted-foreground">
+          Tối đa 10MB/tệp (ảnh 5MB, audio 15MB). File nặng hơn: tải lên Google Drive,
+          chia sẻ cho mọi người, rồi dán link ở mục <span className="font-medium">Link</span> thay vì đính kèm.
+        </p>
         <input
           ref={inputRef}
           type="file"

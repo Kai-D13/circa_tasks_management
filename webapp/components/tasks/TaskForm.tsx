@@ -6,6 +6,7 @@ import { useUserStore } from '@/store/userStore'
 import { toast } from 'sonner'
 import { createTask, updateTask, createBroadcastTask, createTaskSchedule, createImportedStoreTasks } from '@/app/actions/tasks'
 import { createClient as createBrowserClient } from '@/lib/supabase/client'
+import { safeStorageName } from '@/lib/storage'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { RichTextEditor } from '@/components/tasks/RichTextEditor'
@@ -513,7 +514,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
         startTransition(async () => {
           const sb = createBrowserClient()
           const tmpId = crypto.randomUUID()
-          const masterPath = `task-inputs/import/${tmpId}/${Date.now()}_${importFile.name}`
+          const masterPath = `task-inputs/import/${tmpId}/${Date.now()}_${safeStorageName(importFile.name)}`
           const { error: upErr } = await sb.storage
             .from('task-uploads').upload(masterPath, importFile, { upsert: false })
           if (upErr) { restoreDraftSnapshot(draftSnapshot); toast.error(`Tải file lên thất bại: ${upErr.message}`); return }
