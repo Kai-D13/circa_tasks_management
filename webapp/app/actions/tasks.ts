@@ -1159,6 +1159,18 @@ export async function createBroadcastTask(params: {
     await supabaseAdmin.from('notifications').insert(notifications)
   }
 
+  // Teams notification per store — parallel, best-effort (mirrors the staff_all
+  // branch). Without this, store-mode broadcasts never reached n8n/Teams.
+  await Promise.allSettled((created ?? []).map((t) =>
+    notifyTaskCreated({
+      taskId:    t.id,
+      storeId:   t.store_id,
+      taskTitle: params.title,
+      taskType:  'Phát sinh',
+      deadline:  params.deadline || null,
+    })
+  ))
+
   revalidatePath('/tasks')
   redirect('/tasks')
 }
