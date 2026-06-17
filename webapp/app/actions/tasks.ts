@@ -6,7 +6,7 @@ import * as XLSX from 'xlsx'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { computeNextRunAt } from '@/lib/recurring'
-import { notifyTaskCreated } from '@/lib/teams/notifyTaskCreated'
+import { enqueueTaskCreated } from '@/lib/teams/notifyTaskCreated'
 import { canAdminManageOwn, getSmStoreIds, smHasStore } from '@/lib/authz'
 import { publicStorageUrl } from '@/lib/storage/publicUrl'
 import { sanitizeRichText } from '@/lib/richtext/sanitize'
@@ -247,13 +247,7 @@ export async function createTask(formData: FormData) {
   }
 
   // Microsoft Teams notification (MVP). Never throws — task already created.
-  await notifyTaskCreated({
-    taskId:    task.id,
-    storeId:   storeIdVal,
-    taskTitle: task.title,
-    taskType:  'Phát sinh',
-    deadline:  task.deadline,
-  })
+  await enqueueTaskCreated([{ taskId: task.id, storeId: storeIdVal }])
 
   revalidatePath('/tasks')
   redirect('/tasks')
@@ -375,13 +369,7 @@ async function createStaffRequiredTask(
   }
 
   // 6. Microsoft Teams notification (best-effort, never throws).
-  await notifyTaskCreated({
-    taskId:    parent.id,
-    storeId:   p.storeId,
-    taskTitle: p.title,
-    taskType:  'Phát sinh',
-    deadline:  p.deadline,
-  })
+  await enqueueTaskCreated([{ taskId: parent.id, storeId: p.storeId }])
 
   revalidatePath('/tasks')
   redirect('/tasks')
@@ -1082,16 +1070,8 @@ export async function createBroadcastTask(params: {
       if (saNotiErr) console.error('[broadcast_staff_all] notifications:', saNotiErr.message)
     }
 
-    // Teams notification per store parent — parallel, best-effort
-    await Promise.allSettled(saParents.map(p =>
-      notifyTaskCreated({
-        taskId:    p.id,
-        storeId:   p.store_id!,
-        taskTitle: params.title,
-        taskType:  'Phát sinh',
-        deadline:  params.deadline,
-      })
-    ))
+    // Teams notification per store parent — enqueue (sent by cron dispatcher)
+    await enqueueTaskCreated(saParents.map(p => ({ taskId: p.id, storeId: p.store_id! })))
 
     revalidatePath('/tasks')
     redirect('/tasks')
@@ -1159,17 +1139,9 @@ export async function createBroadcastTask(params: {
     await supabaseAdmin.from('notifications').insert(notifications)
   }
 
-  // Teams notification per store — parallel, best-effort (mirrors the staff_all
-  // branch). Without this, store-mode broadcasts never reached n8n/Teams.
-  await Promise.allSettled((created ?? []).map((t) =>
-    notifyTaskCreated({
-      taskId:    t.id,
-      storeId:   t.store_id,
-      taskTitle: params.title,
-      taskType:  'Phát sinh',
-      deadline:  params.deadline || null,
-    })
-  ))
+  // Teams notification per store — enqueue (sent by cron dispatcher). Without
+  // this, store-mode broadcasts never reached n8n/Teams.
+  await enqueueTaskCreated((created ?? []).map((t) => ({ taskId: t.id, storeId: t.store_id })))
 
   revalidatePath('/tasks')
   redirect('/tasks')
@@ -1381,12 +1353,11 @@ export async function createImportedStoreTasks(params: {
       .filter((n): n is NonNullable<typeof n> => n !== null)
     if (notifications.length) await supabaseAdmin.from('notifications').insert(notifications)
 
-    await Promise.allSettled(matched.map((m) => {
-      const taskId = taskByStore.get(m.store.id)
-      return taskId
-        ? notifyTaskCreated({ taskId, storeId: m.store.id, taskTitle: params.title, taskType: 'Phát sinh', deadline: params.deadline || null })
-        : Promise.resolve()
-    }))
+    await enqueueTaskCreated(
+      matched
+        .map((m) => ({ taskId: taskByStore.get(m.store.id), storeId: m.store.id }))
+        .filter((x): x is { taskId: string; storeId: string } => !!x.taskId),
+    )
   } catch (e) {
     console.error('createImportedStoreTasks notifications error:', e)
   }
