@@ -2,6 +2,7 @@
 
 import { useState, useRef } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { uploadViaGcs } from '@/lib/storage/uploadClient'
 import { Button } from '@/components/ui/button'
 import { Upload, X, CheckCircle, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -36,6 +37,15 @@ export function FileUploadInput({ taskId, outputType, value, onChange }: Props) 
 
     setUploading(true)
     try {
+      // Try GCS first (server-side flag). On 'fallback' use the Supabase path.
+      const g = await uploadViaGcs(file, { purpose: 'task_result', taskId, outputType, filename: file.name })
+      if (g !== 'fallback') {
+        if ('error' in g) { toast.error(g.error); return }
+        onChange(g.url)
+        toast.success('Tải lên thành công')
+        return
+      }
+
       const supabase = createClient()
       const nameParts = file.name.split('.')
       const ext = nameParts.length > 1 ? nameParts.pop() : ''

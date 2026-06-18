@@ -3,6 +3,7 @@
 import { forwardRef, useImperativeHandle, useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { safeStorageName } from '@/lib/storage'
+import { uploadViaGcs } from '@/lib/storage/uploadClient'
 import { Button } from '@/components/ui/button'
 import { Upload, X, Loader2, FileText, Image as ImageIcon, Music } from 'lucide-react'
 import { toast } from 'sonner'
@@ -90,6 +91,13 @@ export const TaskInputAttachments = forwardRef<TaskInputAttachmentsHandle, Props
       try {
         for (const file of files) {
           try {
+            // Try GCS first (server-side flag). On 'fallback' use Supabase.
+            const g = await uploadViaGcs(file, { purpose: 'task_input', uploadId, filename: file.name, contentType: file.type })
+            if (g !== 'fallback') {
+              if ('error' in g) { toast.error(`Tải lên thất bại: ${file.name}`); continue }
+              uploaded.push({ url: g.url, name: file.name, type: file.type, size: file.size })
+              continue
+            }
             // Sanitize the storage KEY — Supabase rejects non-ASCII keys with a
             // 400 InvalidKey (Vietnamese names, en-dash, spaces…). The original
             // name is kept below for display.
