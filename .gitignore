@@ -15,3 +15,11 @@ webapp/node_modules/
 webapp/.next/
 webapp/.env.local
 webapp/.env*.local
+
+# Secrets — service-account keys / credential exports. NEVER commit.
+*-gcs.tar
+*-sa
+circa-v2-sa
+*sa*.json
+*.key
+*.pem

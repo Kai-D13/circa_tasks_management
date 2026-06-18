@@ -1,17 +1,17 @@
 import 'server-only'
-import { createSign } from 'crypto'
+import { getAccessToken, loadServiceAccount as loadSA, type ServiceAccount } from '@/lib/google/auth'
 
-// Shared BigQuery client for the weekly-targets feed (buymed_n8n.fact_kpi_circa_weekly).
+// BigQuery client for the weekly-targets feed (buymed_n8n.fact_kpi_circa_weekly).
 // Used by the cron pull route (/api/cron/pull-targets) which upserts
-// store_weekly_targets. No Google SDK — a signed JWT gets a read-only access
-// token. All fetches carry timeouts so a hung Google endpoint can never hold a
-// handler open (the lag-investigation lesson).
+// store_weekly_targets. Google auth (JWT→token) lives in lib/google/auth (shared
+// with GCS). All fetches carry timeouts so a hung Google endpoint can never hold
+// a handler open (the lag-investigation lesson).
 //
 // Required env:
-//   BQ_SERVICE_ACCOUNT_KEY — service-account JSON (raw or base64). base64 is
-//     recommended: the JSON has quotes / \n / + / = that env editors (Coolify)
-//     routinely mangle, breaking JSON.parse.
+//   BQ_SERVICE_ACCOUNT_KEY — service-account JSON (raw or base64).
 //   BQ_QUERY (optional)    — override of DEFAULT_QUERY.
+
+const BQ_SCOPE = 'https://www.googleapis.com/auth/bigquery.readonly'
 
 // ORDER BY monday_of_week DESC guarantees the latest week is within the
 // maxResults cap even if the fact table accumulates history (no page-token
@@ -23,67 +23,14 @@ export const DEFAULT_QUERY = `
   ORDER BY monday_of_week DESC
 `
 
-export interface ServiceAccount {
-  client_email: string
-  private_key:  string
-  project_id:   string
-}
-
-function b64url(input: Buffer | string): string {
-  return Buffer.from(input).toString('base64url')
-}
-
-// Reads + parses the service account from env (raw JSON or base64). Returns null
-// when unset or invalid — callers decide whether that's a 503 or a soft empty.
+// No-arg wrapper preserved for the cron route — reads BQ_SERVICE_ACCOUNT_KEY.
 export function loadServiceAccount(): ServiceAccount | null {
-  const saRaw = process.env.BQ_SERVICE_ACCOUNT_KEY
-  if (!saRaw) return null
-  const trimmed = saRaw.trim()
-  let saJson = trimmed
-  if (!trimmed.startsWith('{')) {
-    try { saJson = Buffer.from(trimmed, 'base64').toString('utf8') } catch { /* fall through */ }
-  }
-  try {
-    const sa = JSON.parse(saJson) as ServiceAccount
-    if (!sa.client_email || !sa.private_key || !sa.project_id) return null
-    return sa
-  } catch {
-    return null
-  }
-}
-
-// Client-credentials token via signed JWT.
-export async function getAccessToken(sa: ServiceAccount): Promise<string> {
-  const now = Math.floor(Date.now() / 1000)
-  const unsigned =
-    b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' })) + '.' +
-    b64url(JSON.stringify({
-      iss:   sa.client_email,
-      scope: 'https://www.googleapis.com/auth/bigquery.readonly',
-      aud:   'https://oauth2.googleapis.com/token',
-      iat:   now,
-      exp:   now + 3600,
-    }))
-  const signature = createSign('RSA-SHA256').update(unsigned).sign(sa.private_key)
-  const assertion = `${unsigned}.${b64url(signature)}`
-
-  const res = await fetch('https://oauth2.googleapis.com/token', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({
-      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
-      assertion,
-    }),
-    signal: AbortSignal.timeout(15_000),
-  })
-  if (!res.ok) throw new Error(`Google token failed (${res.status}): ${(await res.text()).slice(0, 300)}`)
-  const { access_token } = (await res.json()) as { access_token: string }
-  return access_token
+  return loadSA('BQ_SERVICE_ACCOUNT_KEY')
 }
 
 // Runs a query and returns raw rows as { columnName: value } objects.
 export async function runBigQuery(sa: ServiceAccount, sql: string): Promise<Record<string, unknown>[]> {
-  const token = await getAccessToken(sa)
+  const token = await getAccessToken(sa, BQ_SCOPE)
   const queryRes = await fetch(
     `https://bigquery.googleapis.com/bigquery/v2/projects/${sa.project_id}/queries`,
     {
