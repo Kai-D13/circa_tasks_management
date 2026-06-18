@@ -76,18 +76,22 @@ export async function createUploadUrl(input: CreateUploadUrlInput): Promise<Resu
   } else if (input.purpose === 'task_input') {
     const { data: me } = await supabase.from('users').select('role').eq('id', user.id).single()
     if (me?.role !== 'admin') return { error: 'Chỉ admin được tải tệp hướng dẫn' }
-    if (!input.uploadId) return { error: 'Thiếu uploadId' }
-    // uploadId may be 'import/<tmpId>' (Excel) or a per-form uuid — both live under task-inputs/.
-    const sub = input.uploadId.replace(/[^a-zA-Z0-9/_-]/g, '')
-    key = `task-inputs/${sub}/${uniq}_${safe}`
+    // uploadId is a per-form uuid OR 'import/<tmpId>' (Excel) — reject anything
+    // else (no traversal, no empty, no stray slashes).
+    if (!input.uploadId || !/^(import\/)?[A-Za-z0-9_-]{1,100}$/.test(input.uploadId)) {
+      return { error: 'uploadId không hợp lệ' }
+    }
+    key = `task-inputs/${input.uploadId}/${uniq}_${safe}`
 
   } else if (input.purpose === 'prescription') {
-    if (!input.storeId || !input.submissionId) return { error: 'Thiếu store/submission' }
+    if (!input.storeId) return { error: 'Thiếu store' }
+    if (!input.submissionId || !/^[A-Za-z0-9_-]{1,100}$/.test(input.submissionId)) {
+      return { error: 'submissionId không hợp lệ' }
+    }
     const { data: me } = await supabase.from('users').select('role, store_id').eq('id', user.id).single()
     const ok = (me?.role === 'staff' || me?.role === 'store_manager') && me?.store_id === input.storeId
     if (!ok) return { error: 'Không có quyền upload cho cửa hàng này' }
-    const submission = input.submissionId.replace(/[^a-zA-Z0-9_-]/g, '')
-    key = `prescriptions/${input.storeId}/${submission}/${uniq}_${safe}`
+    key = `prescriptions/${input.storeId}/${input.submissionId}/${uniq}_${safe}`
 
   } else {
     return { error: 'purpose không hợp lệ' }
@@ -97,7 +101,7 @@ export async function createUploadUrl(input: CreateUploadUrlInput): Promise<Resu
   const origin = (await headers()).get('origin') || process.env.NEXT_PUBLIC_APP_URL || 'https://duocsi.circa.vn'
 
   try {
-    const sessionUrl = await createResumableUploadSession(key, ct, origin)
+    const sessionUrl = await createResumableUploadSession(key, ct, origin, size)
     return { sessionUrl, publicUrl: publicUrlForKey(key), key }
   } catch (e) {
     return { error: e instanceof Error ? e.message : 'Không tạo được phiên upload' }

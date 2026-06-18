@@ -35,9 +35,18 @@ export function loadServiceAccount(envVar: string): ServiceAccount | null {
   }
 }
 
+// Module-level token cache (long-lived container) keyed by service-account +
+// scope, so a burst (e.g. submitting 15-18 images) reuses one token instead of
+// minting per file. Cached until ~5 min before expiry.
+const tokenCache = new Map<string, { token: string; expiresAt: number }>()
+
 // Client-credentials access token via signed JWT. `scope` is a space-delimited
 // list of OAuth scopes (e.g. 'https://www.googleapis.com/auth/devstorage.read_write').
 export async function getAccessToken(sa: ServiceAccount, scope: string): Promise<string> {
+  const cacheKey = `${sa.client_email}|${scope}`
+  const cached = tokenCache.get(cacheKey)
+  if (cached && cached.expiresAt > Date.now()) return cached.token
+
   const now = Math.floor(Date.now() / 1000)
   const unsigned =
     b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' })) + '.' +
@@ -61,6 +70,8 @@ export async function getAccessToken(sa: ServiceAccount, scope: string): Promise
     signal: AbortSignal.timeout(15_000),
   })
   if (!res.ok) throw new Error(`Google token failed (${res.status}): ${(await res.text()).slice(0, 300)}`)
-  const { access_token } = (await res.json()) as { access_token: string }
+  const { access_token, expires_in } = (await res.json()) as { access_token: string; expires_in?: number }
+  const ttlMs = (typeof expires_in === 'number' ? expires_in : 3600) * 1000
+  tokenCache.set(cacheKey, { token: access_token, expiresAt: Date.now() + ttlMs - 5 * 60_000 })
   return access_token
 }

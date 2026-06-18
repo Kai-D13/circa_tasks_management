@@ -46,20 +46,29 @@ export async function createResumableUploadSession(
   key: string,
   contentType: string,
   origin: string,
+  contentLength?: number,
 ): Promise<string> {
   const sa = loadGcsSA()
   const token = await getAccessToken(sa, RW_SCOPE)
   const url = `https://storage.googleapis.com/upload/storage/v1/b/${encodeURIComponent(bucket())}/o`
     + `?uploadType=resumable&name=${encodeURIComponent(key)}`
 
+  const headers: Record<string, string> = {
+    'Authorization':         `Bearer ${token}`,
+    'Content-Type':          'application/json; charset=UTF-8',
+    'X-Upload-Content-Type': contentType || 'application/octet-stream',
+    'Origin':                origin,
+  }
+  // Bind the declared size: GCS then requires the PUT to deliver exactly this many
+  // bytes, so a client can't declare a small size to pass the server limit then
+  // PUT a larger file.
+  if (typeof contentLength === 'number' && contentLength > 0) {
+    headers['X-Upload-Content-Length'] = String(contentLength)
+  }
+
   const res = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Authorization':         `Bearer ${token}`,
-      'Content-Type':          'application/json; charset=UTF-8',
-      'X-Upload-Content-Type': contentType || 'application/octet-stream',
-      'Origin':                origin,
-    },
+    headers,
     body: '{}',
     signal: AbortSignal.timeout(TIMEOUT_MS),
   })
