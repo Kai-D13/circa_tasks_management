@@ -22,6 +22,12 @@ const nextConfig: NextConfig = {
         hostname: 'database.hao-nguyen.site',
         pathname: '/storage/v1/object/public/**',
       },
+      // Google Cloud Storage (public bucket) — new uploads when STORAGE_PROVIDER=gcs.
+      {
+        protocol: 'https',
+        hostname: 'storage.googleapis.com',
+        pathname: '/duocsi-circa-vn/**',
+      },
     ],
   },
   // /documents → the static usage-guide HTML in /public. Array-form rewrites run
