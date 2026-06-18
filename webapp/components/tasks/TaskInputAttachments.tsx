@@ -94,7 +94,7 @@ export const TaskInputAttachments = forwardRef<TaskInputAttachmentsHandle, Props
             // Try GCS first (server-side flag). On 'fallback' use Supabase.
             const g = await uploadViaGcs(file, { purpose: 'task_input', uploadId, filename: file.name, contentType: file.type })
             if (g !== 'fallback') {
-              if ('error' in g) { toast.error(`Tải lên thất bại: ${file.name}`); continue }
+              if ('error' in g) { console.error('[upload gcs]', file.name, g.error); toast.error(`Tải lên thất bại: ${file.name}`); continue }
               uploaded.push({ url: g.url, name: file.name, type: file.type, size: file.size })
               continue
             }

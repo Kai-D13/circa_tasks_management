@@ -9,5 +9,11 @@ const PUBLIC_ORIGIN = (process.env.NEXT_PUBLIC_SUPABASE_URL ?? '').replace(/\/+$
 
 export function publicStorageUrl(bucket: string, path: string): string {
   const clean = path.replace(/^\/+/, '')
+  // GCS-stored files (task_uploaded_files.bucket = 'gcs') live in the public GCS
+  // bucket, not Supabase — build the GCS public URL (used by export routes).
+  if (bucket === 'gcs') {
+    const gcsBase = (process.env.GCS_PUBLIC_BASE_URL ?? '').replace(/\/+$/, '')
+    return encodeURI(`${gcsBase}/${clean}`)
+  }
   return encodeURI(`${PUBLIC_ORIGIN}/storage/v1/object/public/${bucket}/${clean}`)
 }

@@ -17,6 +17,7 @@ import { safeStorageName } from '@/lib/storage'
 
 const MAX_IMAGE = 5  * 1024 * 1024
 const MAX_AUDIO = 15 * 1024 * 1024
+const MAX_VIDEO = 50 * 1024 * 1024  // matches the Supabase bucket cap (no video regression)
 const MAX_DOC   = 10 * 1024 * 1024
 
 type UploadPurpose = 'task_result' | 'task_input' | 'prescription'
@@ -46,7 +47,10 @@ export async function createUploadUrl(input: CreateUploadUrlInput): Promise<Resu
   // Size/type guard (mirrors the client limits; server is the real gate).
   const ct = input.contentType || ''
   const size = Number(input.size) || 0
-  const limit = ct.startsWith('image/') ? MAX_IMAGE : ct.startsWith('audio/') ? MAX_AUDIO : MAX_DOC
+  const limit = ct.startsWith('image/') ? MAX_IMAGE
+    : ct.startsWith('audio/') ? MAX_AUDIO
+    : ct.startsWith('video/') ? MAX_VIDEO
+    : MAX_DOC
   if (size <= 0) return { error: 'File rỗng' }
   if (size > limit) return { error: 'File vượt giới hạn dung lượng' }
 
