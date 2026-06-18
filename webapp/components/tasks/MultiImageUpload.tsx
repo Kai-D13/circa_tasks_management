@@ -2,6 +2,7 @@
 
 import { useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { uploadViaGcs } from '@/lib/storage/uploadClient'
 import { toast } from 'sonner'
 import { resizeImageBlob, getImageDimensions } from '@/lib/imageUtils'
 import { Camera, Plus, X, Loader2, AlertCircle, RotateCcw, Image as ImageIcon } from 'lucide-react'
@@ -108,41 +109,60 @@ export function MultiImageUpload({ taskId, value, onChange }: Props) {
       const dims = await getImageDimensions(thumbBlob)
       patchSlot(slot.id, { progress: 40 })
 
-      // 2. Upload thumbnail (smaller → faster round-trip)
-      const { error: te } = await supabase.storage
-        .from('task-uploads').upload(thumbPath, thumbBlob, { contentType: 'image/jpeg', upsert: false })
-      if (te) throw te
-      patchSlot(slot.id, { status: 'uploading', progress: 65 })
+      // 2-4. Upload thumb + original. Try GCS first (server flag); on 'fallback'
+      // use the Supabase path. Both produce: url, thumbUrl, stored keys/paths.
+      let url: string, thumbUrl: string, storedOrig: string, storedThumb: string
+      let gcsBucket: string | undefined
 
-      // 3. Upload original — on failure, best-effort delete the orphaned thumbnail
-      const { error: oe } = await supabase.storage
-        .from('task-uploads').upload(origPath, origBlob, { contentType: 'image/jpeg', upsert: false })
-      if (oe) {
-        supabase.storage.from('task-uploads').remove([thumbPath]).catch(() => {})
-        throw oe
+      const gThumb = await uploadViaGcs(thumbBlob, { purpose: 'task_result', taskId, outputType: 'image', filename: `${slot.id}_thumb.jpg`, contentType: 'image/jpeg' })
+      if (gThumb !== 'fallback') {
+        if ('error' in gThumb) throw new Error(gThumb.error)
+        patchSlot(slot.id, { status: 'uploading', progress: 65 })
+        const gOrig = await uploadViaGcs(origBlob, { purpose: 'task_result', taskId, outputType: 'image', filename: `${slot.id}_orig.jpg`, contentType: 'image/jpeg' })
+        if (gOrig === 'fallback' || 'error' in gOrig) {
+          throw new Error(gOrig !== 'fallback' && 'error' in gOrig ? gOrig.error : 'Tải ảnh gốc thất bại')
+        }
+        url = gOrig.url; thumbUrl = gThumb.url
+        storedOrig = gOrig.key; storedThumb = gThumb.key
+        gcsBucket = 'gcs'
+        patchSlot(slot.id, { progress: 90 })
+      } else {
+        // Supabase path
+        const { error: te } = await supabase.storage
+          .from('task-uploads').upload(thumbPath, thumbBlob, { contentType: 'image/jpeg', upsert: false })
+        if (te) throw te
+        patchSlot(slot.id, { status: 'uploading', progress: 65 })
+        const { error: oe } = await supabase.storage
+          .from('task-uploads').upload(origPath, origBlob, { contentType: 'image/jpeg', upsert: false })
+        if (oe) {
+          supabase.storage.from('task-uploads').remove([thumbPath]).catch(() => {})
+          throw oe
+        }
+        patchSlot(slot.id, { progress: 90 })
+        url      = supabase.storage.from('task-uploads').getPublicUrl(origPath).data.publicUrl
+        thumbUrl = supabase.storage.from('task-uploads').getPublicUrl(thumbPath).data.publicUrl
+        storedOrig = origPath; storedThumb = thumbPath
       }
-      patchSlot(slot.id, { progress: 90 })
 
-      // 4. Resolve public URLs (no extra network call)
-      const { data: { publicUrl: url } }      = supabase.storage.from('task-uploads').getPublicUrl(origPath)
-      const { data: { publicUrl: thumbUrl } } = supabase.storage.from('task-uploads').getPublicUrl(thumbPath)
-
-      // 5. Register metadata — if insert fails, undo storage uploads to prevent untracked orphans
+      // 5. Register metadata — record provider in `bucket` so cleanup deletes from
+      // the right place. If insert fails, undo Supabase uploads (GCS orphans are
+      // reaped by the cleanup cron's provider-aware delete).
       const { data: fileRecord, error: fileErr } = await supabase
         .from('task_uploaded_files')
         .insert({
           task_id:        taskId,
-          path:           origPath,
-          thumbnail_path: thumbPath,
+          path:           storedOrig,
+          thumbnail_path: storedThumb,
           mime_type:      'image/jpeg',
           size_bytes:     origBlob.size,
           uploaded_by:    userId,
+          ...(gcsBucket ? { bucket: gcsBucket } : {}),
         })
         .select('id')
         .maybeSingle()
       if (fileErr) {
         console.error('[task_uploaded_files] metadata insert:', fileErr.message)
-        supabase.storage.from('task-uploads').remove([origPath, thumbPath]).catch(() => {})
+        if (!gcsBucket) supabase.storage.from('task-uploads').remove([origPath, thumbPath]).catch(() => {})
         throw new Error('Không thể lưu metadata ảnh — vui lòng thử lại')
       }
       const fileId = fileRecord?.id ?? undefined
@@ -152,8 +172,8 @@ export function MultiImageUpload({ taskId, value, onChange }: Props) {
       return {
         url,
         thumbnailUrl:  thumbUrl,
-        path:          origPath,
-        thumbnailPath: thumbPath,
+        path:          storedOrig,
+        thumbnailPath: storedThumb,
         fileId,
         name:   slot.file.name,
         type:   'image/jpeg',
