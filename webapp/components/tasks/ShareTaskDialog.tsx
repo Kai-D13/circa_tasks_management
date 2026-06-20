@@ -3,7 +3,7 @@
 import { useState, useTransition } from 'react'
 import { toast } from 'sonner'
 import { Share2, X } from 'lucide-react'
-import { shareTask, updateCollaboratorPermission, removeCollaborator } from '@/app/actions/collaborators'
+import { shareTask, shareBroadcast, updateCollaboratorPermission, removeCollaborator } from '@/app/actions/collaborators'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { SearchableSelect } from '@/components/ui/searchable-select'
@@ -21,6 +21,9 @@ interface Props {
   taskId:        string
   collaborators: CollaboratorRow[]
   adminOptions:  { value: string; label: string; description?: string }[]
+  // When the task belongs to a broadcast, allow sharing the whole group at once.
+  broadcastId?:    string | null
+  broadcastCount?: number
 }
 
 const PERMISSION_LABEL: Record<string, string> = {
@@ -28,11 +31,14 @@ const PERMISSION_LABEL: Record<string, string> = {
   editor: 'Biên tập',
 }
 
-export function ShareTaskDialog({ taskId, collaborators, adminOptions }: Props) {
+export function ShareTaskDialog({ taskId, collaborators, adminOptions, broadcastId, broadcastCount }: Props) {
   const [open, setOpen]             = useState(false)
   const [adminId, setAdminId]       = useState('')
   const [permission, setPermission] = useState<'view' | 'editor'>('view')
+  const [shareAll, setShareAll]     = useState(false)
   const [pending, startTransition]  = useTransition()
+
+  const isBroadcast = !!broadcastId && (broadcastCount ?? 0) > 1
 
   // Filter out admins who are already collaborators
   const alreadyShared = new Set(collaborators.map((c) => c.admin_id))
@@ -41,9 +47,11 @@ export function ShareTaskDialog({ taskId, collaborators, adminOptions }: Props) 
   function handleShare() {
     if (!adminId) return
     startTransition(async () => {
-      const result = await shareTask(taskId, adminId, permission)
+      const result = isBroadcast && shareAll
+        ? await shareBroadcast(broadcastId!, adminId, permission)
+        : await shareTask(taskId, adminId, permission)
       if ('error' in result) { toast.error(result.error); return }
-      toast.success('Đã chia sẻ task')
+      toast.success(isBroadcast && shareAll ? `Đã chia sẻ cả nhóm (${broadcastCount} task)` : 'Đã chia sẻ task')
       setAdminId('')
       setPermission('view')
     })
@@ -104,13 +112,24 @@ export function ShareTaskDialog({ taskId, collaborators, adminOptions }: Props) 
                 ))}
               </div>
             </div>
+            {isBroadcast && (
+              <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={shareAll}
+                  onChange={(e) => setShareAll(e.target.checked)}
+                  className="accent-primary h-3.5 w-3.5"
+                />
+                Chia sẻ cả nhóm broadcast ({broadcastCount} task) — không phải chỉ task này
+              </label>
+            )}
             <Button
               size="sm"
               onClick={handleShare}
               disabled={pending || !adminId}
               className="w-full"
             >
-              {pending ? 'Đang chia sẻ...' : 'Chia sẻ'}
+              {pending ? 'Đang chia sẻ...' : (isBroadcast && shareAll ? `Chia sẻ cả nhóm (${broadcastCount})` : 'Chia sẻ')}
             </Button>
           </div>
 

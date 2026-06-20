@@ -113,7 +113,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   const staffTotal = staffChildren.length
 
   // Round 2: store users + collaborators (parallel)
-  const [{ data: storeUsers }, { data: collaborators }, { data: allAdmins }, { data: myCollaboratorRow }] = await Promise.all([
+  const [{ data: storeUsers }, { data: collaborators }, { data: allAdmins }, { data: myCollaboratorRow }, { count: broadcastCount }] = await Promise.all([
     canViewStoreRoster && task.store_id
       ? supabase.from('users').select('id, full_name, role').eq('store_id', task.store_id).order('full_name')
       : Promise.resolve({ data: [] as { id: string; full_name: string; role: string }[] }),
@@ -129,6 +129,10 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
     !canManageTask && userRole === 'admin'
       ? supabase.from('task_collaborators').select('permission').eq('task_id', id).eq('admin_id', userId).maybeSingle()
       : Promise.resolve({ data: null }),
+    // Count of tasks in this broadcast → enables "share whole broadcast" in the dialog
+    canManageTask && task.broadcast_id
+      ? supabase.from('tasks').select('id', { count: 'exact', head: true }).eq('broadcast_id', task.broadcast_id as string)
+      : Promise.resolve({ count: 0 }),
   ])
 
   // True when the current user is an 'editor' collaborator (not the owner)
@@ -389,6 +393,8 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
             <div className="flex gap-2 shrink-0">
               <ShareTaskDialog
                 taskId={id}
+                broadcastId={task.broadcast_id as string | null}
+                broadcastCount={broadcastCount ?? 0}
                 collaborators={(collaborators ?? []) as CollaboratorRow[]}
                 adminOptions={(allAdmins ?? []).map((a) => ({
                   value: a.id,
