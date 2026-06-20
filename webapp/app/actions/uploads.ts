@@ -6,10 +6,10 @@ import { createResumableUploadSession, publicUrlForKey, isGcsEnabled } from '@/l
 import { safeStorageName } from '@/lib/storage'
 
 // Authorized upload-URL minting for direct-to-GCS uploads. THIS IS THE SECURITY
-// BOUNDARY that replaces Supabase Storage RLS (migration 033) for GCS uploads —
-// it must mirror those exact rules:
-//   tasks/<taskId>/...        → the task's direct assignee, OR the store_manager
-//                               of a store-level (non staff_all) task. Not archived.
+// BOUNDARY that replaces Supabase Storage RLS for GCS uploads — it must mirror
+// the CURRENT storage.objects task_uploads_insert policy (migration 039):
+//   tasks/<taskId>/...        → the task's direct assignee, OR ANY staff/
+//                               store_manager of a store-level task. Not archived.
 //   task-inputs/<uploadId>/...→ admin only.
 //   prescriptions/<storeId>/..→ staff/store_manager of that store.
 // Returns a resumable session URL the browser PUTs the file to, plus the final
@@ -68,13 +68,16 @@ export async function createUploadUrl(input: CreateUploadUrlInput): Promise<Resu
     if (!task || task.archived_at) return { error: 'Task không hợp lệ' }
     const { data: me } = await supabase.from('users').select('role, store_id').eq('id', user.id).single()
     const isAssignee = task.assigned_to === user.id
-    const isStoreMgr =
+    // Store-level task (assignment_mode='store', unassigned): ANY staff OR
+    // store_manager of the task's store may submit/upload — migration 039 widened
+    // this from store_manager-only. Mirror it exactly.
+    const isStoreLevelSubmitter =
       task.assigned_to === null &&
-      task.assignment_mode !== 'staff_all' &&
+      task.assignment_mode === 'store' &&
       !!task.store_id &&
       task.store_id === me?.store_id &&
-      me?.role === 'store_manager'
-    if (!isAssignee && !isStoreMgr) return { error: 'Không có quyền upload cho task này' }
+      (me?.role === 'staff' || me?.role === 'store_manager')
+    if (!isAssignee && !isStoreLevelSubmitter) return { error: 'Không có quyền upload cho task này' }
     key = `tasks/${input.taskId}/${outputType}/${uniq}_${safe}`
 
   } else if (input.purpose === 'task_input') {
