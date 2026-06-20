@@ -1,16 +1,15 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import * as XLSX from 'xlsx'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { excelSerialToISO } from '@/lib/targets/parse'
 
 // Manual snapshot loader for the "Giới thiệu bạn bè" campaign. Super admin uploads
-// the xlsx exported from BigQuery; we parse it and REPLACE all rows in
-// staff_referrals. Staff then read their own rows (RLS by normalized phone).
-// Campaign-scoped — reusable next round by uploading a fresh export.
+// the JSON exported from BigQuery (array of row objects); we parse it and REPLACE
+// all rows in staff_referrals. Staff then read their own rows (RLS by normalized
+// phone). Campaign-scoped — reusable next round by uploading a fresh export.
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024
 const MAX_ROWS       = 5000
@@ -60,12 +59,13 @@ export async function uploadReferralReport(formData: FormData) {
 
   let rawRows: Record<string, unknown>[]
   try {
-    const wb = XLSX.read(Buffer.from(await file.arrayBuffer()), { type: 'buffer' })
-    const sheetName = wb.SheetNames[0]
-    if (!sheetName) return { error: 'File không có sheet nào' }
-    rawRows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: null })
+    const parsed = JSON.parse(await file.text())
+    if (!Array.isArray(parsed)) {
+      return { error: 'File JSON phải là một mảng các dòng (array of objects)' }
+    }
+    rawRows = parsed.filter((r) => r && typeof r === 'object') as Record<string, unknown>[]
   } catch {
-    return { error: 'Không đọc được file — cần đúng file .xlsx export từ BigQuery' }
+    return { error: 'Không đọc được file — cần đúng file JSON export từ BigQuery' }
   }
   if (rawRows.length === 0) return { error: 'File không có dòng dữ liệu nào' }
   if (rawRows.length > MAX_ROWS) return { error: `File quá nhiều dòng (>${MAX_ROWS}) — sai file?` }

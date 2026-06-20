@@ -66,7 +66,7 @@ export default async function GioiThieuPage() {
 
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm">Nạp dữ liệu (xlsx export từ BigQuery)</CardTitle>
+          <CardTitle className="text-sm">Nạp dữ liệu (file JSON từ BigQuery)</CardTitle>
         </CardHeader>
         <CardContent>
           <ReferralUploadForm />
