@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { TargetUploadForm } from '@/components/targets/TargetUploadForm'
+import { ReferralCard, type ReferralItem } from '@/components/referral/ReferralCard'
 import { formatDateTime } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
 import { Flame, Target, TrendingUp } from 'lucide-react'
@@ -75,7 +76,7 @@ export default async function TargetsPage() {
   if (!user) redirect('/login')
 
   const { data: profile } = await supabase
-    .from('users').select('role, store_id, stores!users_store_id_fkey(name)').eq('id', user.id).single()
+    .from('users').select('role, store_id, phone_number, stores!users_store_id_fkey(name)').eq('id', user.id).single()
 
   const isSuper = profile?.role === 'admin' && isSuperAdminEmail(user.email)
   const isStaff = profile?.role === 'staff'
@@ -113,6 +114,24 @@ export default async function TargetsPage() {
     const current = (rows ?? [])[0] as TargetRecord | undefined
     const history = ((rows ?? []) as TargetRecord[]).slice(1)
     const storeName = (profile.stores as unknown as { name: string } | null)?.name ?? 'Cửa hàng của bạn'
+
+    // Referral campaign card (staff_referrals, uploaded by super admin; RLS
+    // filters to this staff's normalized phone). Show only if the staff is in the
+    // latest upload (≥1 row). Missing phone → prompt to add it.
+    const staffPhone = (profile as { phone_number?: string | null }).phone_number ?? null
+    let referral: { total: number; success: number; sameDay: number; noOrder: number; items: ReferralItem[] } | null = null
+    if (staffPhone) {
+      const { data: refRows } = await supabase
+        .from('staff_referrals')
+        .select('referred_phone, status, referral_date, same_day_order')
+        .order('referral_date', { ascending: false, nullsFirst: false })
+      if (refRows && refRows.length > 0) {
+        const items = (refRows as ReferralItem[]).filter((r) => r.referred_phone)
+        const success = items.filter((r) => (r.status ?? '').toUpperCase() === 'SUCCESS').length
+        const sameDay = items.filter((r) => r.same_day_order).length
+        referral = { total: items.length, success, sameDay, noOrder: items.length - sameDay, items }
+      }
+    }
     // Stakeholder pivot (2026-06-12): the staff view's "Mục tiêu tuần" is the
     // 90% MIN target, and ALL percentages use it as the denominator so the
     // numbers add up on screen (đã đạt + còn thiếu = mục tiêu; 48.0M/116M =
@@ -281,6 +300,16 @@ export default async function TargetsPage() {
                   <StatusBadge status={h.status} />
                 </div>
               ))}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Referral campaign ("Giới thiệu bạn bè") — under Doanh số */}
+        {referral && <ReferralCard {...referral} />}
+        {staffPhone === null && (
+          <Card>
+            <CardContent className="py-4 text-sm text-muted-foreground">
+              Cập nhật <span className="font-medium">số điện thoại</span> (biểu tượng &ldquo;Sửa thông tin&rdquo; ở đầu trang) để xem chương trình giới thiệu bạn bè.
             </CardContent>
           </Card>
         )}

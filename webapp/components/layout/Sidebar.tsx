@@ -17,9 +17,11 @@ import {
   ScrollText,
   FileImage,
   TrendingUp,
+  Gift,
   LogOut,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { isSuperAdmin } from '@/lib/authz'
 import { NotificationBell } from '@/components/layout/NotificationBell'
 import { ChangePasswordDialog } from '@/components/layout/ChangePasswordDialog'
 import { EditProfileDialog } from '@/components/layout/EditProfileDialog'
@@ -63,11 +65,13 @@ export function Sidebar() {
     { href: '/users',            label: 'Người dùng',   icon: Users,           roles: ['admin', 'sm'],                           prefetch: false },
     { href: '/stores',           label: 'Cửa hàng',     icon: Store,           roles: ['admin', 'store_manager', 'sm'],          prefetch: false },
     { href: '/prescriptions',    label: 'Toa thuốc',    icon: FileImage,       roles: ['admin', 'store_manager', 'staff'],       prefetch: false },
+    { href: '/gioi-thieu',       label: 'Giới thiệu',   icon: Gift,            roles: ['admin'],                                 prefetch: false, superAdmin: true },
     { href: '/logs',             label: 'Nhật ký',      icon: ScrollText,      roles: ['admin', 'store_manager', 'staff', 'sm'], prefetch: false },
   ]
 
+  const isSuper = isSuperAdmin(profile?.email, role)
   const visibleItems = role
-    ? navItems.filter((item) => item.roles.includes(role))
+    ? navItems.filter((item) => item.roles.includes(role) && (!('superAdmin' in item && item.superAdmin) || isSuper))
     : []
 
   return (
