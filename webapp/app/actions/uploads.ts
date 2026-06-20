@@ -95,8 +95,10 @@ export async function createUploadUrl(input: CreateUploadUrlInput): Promise<Resu
     if (!input.submissionId || !/^[A-Za-z0-9_-]{1,100}$/.test(input.submissionId)) {
       return { error: 'submissionId không hợp lệ' }
     }
+    // Only staff submit prescriptions (submitPrescription gates role='staff'), so
+    // narrow the upload to staff too — avoids store_manager minting orphan objects.
     const { data: me } = await supabase.from('users').select('role, store_id').eq('id', user.id).single()
-    const ok = (me?.role === 'staff' || me?.role === 'store_manager') && me?.store_id === input.storeId
+    const ok = me?.role === 'staff' && me?.store_id === input.storeId
     if (!ok) return { error: 'Không có quyền upload cho cửa hàng này' }
     key = `prescriptions/${input.storeId}/${input.submissionId}/${uniq}_${safe}`
 

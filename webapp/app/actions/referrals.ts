@@ -70,9 +70,15 @@ export async function uploadReferralReport(formData: FormData) {
   if (rawRows.length === 0) return { error: 'File không có dòng dữ liệu nào' }
   if (rawRows.length > MAX_ROWS) return { error: `File quá nhiều dòng (>${MAX_ROWS}) — sai file?` }
 
-  const headerKeys = new Set(Object.keys(rawRows[0]).map((k) => k.trim().toLowerCase()))
-  const required = ['phone_number', 'referred_phone', 'status', 'same_day_order', 'referral_date']
-  const missing = required.filter((h) => !headerKeys.has(h))
+  // Canonicalize headers (drop spaces/underscores/case) so 'phone_number',
+  // 'Phone Number', 'phonenumber' all match — robust to BI/Excel header styles.
+  const canon = (k: string) => k.trim().toLowerCase().replace(/[^a-z0-9]/g, '')
+  const headerKeys = new Set(Object.keys(rawRows[0]).map(canon))
+  const required: [string, string][] = [
+    ['phonenumber', 'phone_number'], ['referredphone', 'referred_phone'], ['status', 'status'],
+    ['samedayorder', 'same_day_order'], ['referraldate', 'referral_date'],
+  ]
+  const missing = required.filter(([c]) => !headerKeys.has(c)).map(([, label]) => label)
   if (missing.length) {
     return { error: `File thiếu cột: ${missing.join(', ')} — kiểm tra lại file xuất từ BigQuery` }
   }
@@ -80,18 +86,18 @@ export async function uploadReferralReport(formData: FormData) {
   const rows = rawRows
     .map((raw) => {
       const lo: Record<string, unknown> = {}
-      for (const [k, v] of Object.entries(raw)) lo[k.trim().toLowerCase()] = v
+      for (const [k, v] of Object.entries(raw)) lo[canon(k)] = v
       return {
-        store_code:           str(lo['store_code']),
-        store_name:           str(lo['store_name']),
-        phone_number:         normPhone(lo['phone_number']),
-        full_name:            str(lo['full_name']),
+        store_code:           str(lo['storecode']),
+        store_name:           str(lo['storename']),
+        phone_number:         normPhone(lo['phonenumber']),
+        full_name:            str(lo['fullname']),
         status:               str(lo['status']),
-        referred_phone:       str(lo['referred_phone']),
-        referral_date:        dateStr(lo['referral_date']),
-        same_day_order:       asBool(lo['same_day_order']),
-        customer_id:          str(lo['customer_id']),
-        is_exist_in_referral: asBool(lo['is_exist_in_referral']),
+        referred_phone:       str(lo['referredphone']),
+        referral_date:        dateStr(lo['referraldate']),
+        same_day_order:       asBool(lo['samedayorder']),
+        customer_id:          str(lo['customerid']),
+        is_exist_in_referral: asBool(lo['isexistinreferral']),
       }
     })
     .filter((r) => r.phone_number) // a staff phone is required to map the row
