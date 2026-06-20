@@ -54,7 +54,11 @@ export default async function PrescriptionDetailPage({
   // server client may be talking to Kong over the internal docker network).
   const imageUrls = (images ?? []).map((img) => ({
     ...img,
-    url: publicStorageUrl(PRESCRIPTION_BUCKET, img.storage_path),
+    // GCS-stored rows keep a full URL in storage_path → use as-is (dual-read);
+    // legacy Supabase rows store a key → build the public URL.
+    url: img.storage_path?.startsWith('http')
+      ? img.storage_path
+      : publicStorageUrl(PRESCRIPTION_BUCKET, img.storage_path),
   }))
 
   return (

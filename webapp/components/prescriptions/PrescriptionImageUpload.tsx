@@ -3,6 +3,7 @@
 import { useRef, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
 import { safeStorageName } from '@/lib/storage'
+import { uploadViaGcs } from '@/lib/storage/uploadClient'
 import { toast } from 'sonner'
 import { Camera, Plus, X, Loader2 } from 'lucide-react'
 import { PRESCRIPTION_BUCKET } from '@/lib/prescriptions/constants'
@@ -70,6 +71,17 @@ export function PrescriptionImageUpload({ submissionId, storeId, value, onChange
           toast.error(`${original.name}: ảnh quá lớn sau khi nén (tối đa 5MB)`)
           continue
         }
+
+        // Try GCS first (server-side flag). On GCS, store the full public URL as
+        // `path` (storage_path) — the serve paths detect a full URL and use it
+        // as-is (dual-read). On 'fallback' use the existing Supabase upload.
+        const g = await uploadViaGcs(file, { purpose: 'prescription', storeId, submissionId, filename: file.name })
+        if (g !== 'fallback') {
+          if ('error' in g) { toast.error(`Tải lên thất bại: ${original.name}`); continue }
+          uploaded.push({ path: g.url, previewUrl: g.url, name: file.name, type: file.type, size: file.size })
+          continue
+        }
+
         // Path includes store_id for store-level isolation. Sanitize the key —
         // Supabase rejects non-ASCII keys (InvalidKey); original name kept below.
         const path = `prescriptions/${storeId}/${submissionId}/${Date.now()}_${safeStorageName(file.name)}`

@@ -50,7 +50,7 @@ export async function GET(request: NextRequest) {
       'Số ảnh':       imgs.length,
       'Ghi chú':      (s.notes as string | null) ?? '',
       'Thời gian nộp': fmtVN(s.submitted_at as string),
-      'Link ảnh':     imgs.map((i) => publicStorageUrl(PRESCRIPTION_BUCKET, i.storage_path)).join('\n'),
+      'Link ảnh':     imgs.map((i) => i.storage_path?.startsWith('http') ? i.storage_path : publicStorageUrl(PRESCRIPTION_BUCKET, i.storage_path)).join('\n'),
     }
   })
 
