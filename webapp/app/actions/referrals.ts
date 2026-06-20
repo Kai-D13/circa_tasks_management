@@ -5,6 +5,7 @@ import * as XLSX from 'xlsx'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { isSuperAdminEmail } from '@/lib/authz'
+import { excelSerialToISO } from '@/lib/targets/parse'
 
 // Manual snapshot loader for the "Giới thiệu bạn bè" campaign. Super admin uploads
 // the xlsx exported from BigQuery; we parse it and REPLACE all rows in
@@ -34,10 +35,15 @@ function str(v: unknown): string | null {
   return s === '' ? null : s
 }
 function dateStr(v: unknown): string | null {
-  const s = str(v)
-  if (!s) return null
-  const m = s.match(/^(\d{4}-\d{2}-\d{2})/) // BigQuery exports ISO dates
-  return m ? m[1] : null
+  if (v === null || v === undefined || v === '') return null
+  if (v instanceof Date) return v.toISOString().slice(0, 10)
+  if (typeof v === 'number') return excelSerialToISO(v) // Excel serial date
+  const s = String(v).trim()
+  const iso = s.match(/^(\d{4}-\d{2}-\d{2})/) // ISO (BigQuery export)
+  if (iso) return iso[1]
+  const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/) // MM/DD/YYYY
+  if (us) return `${us[3]}-${us[1].padStart(2, '0')}-${us[2].padStart(2, '0')}`
+  return null
 }
 
 export async function uploadReferralReport(formData: FormData) {
@@ -65,8 +71,10 @@ export async function uploadReferralReport(formData: FormData) {
   if (rawRows.length > MAX_ROWS) return { error: `File quá nhiều dòng (>${MAX_ROWS}) — sai file?` }
 
   const headerKeys = new Set(Object.keys(rawRows[0]).map((k) => k.trim().toLowerCase()))
-  if (!headerKeys.has('phone_number')) {
-    return { error: 'Thiếu cột phone_number — kiểm tra lại file xuất từ BigQuery' }
+  const required = ['phone_number', 'referred_phone', 'status', 'same_day_order', 'referral_date']
+  const missing = required.filter((h) => !headerKeys.has(h))
+  if (missing.length) {
+    return { error: `File thiếu cột: ${missing.join(', ')} — kiểm tra lại file xuất từ BigQuery` }
   }
 
   const rows = rawRows
@@ -84,7 +92,6 @@ export async function uploadReferralReport(formData: FormData) {
         same_day_order:       asBool(lo['same_day_order']),
         customer_id:          str(lo['customer_id']),
         is_exist_in_referral: asBool(lo['is_exist_in_referral']),
-        uploaded_by:          user.id,
       }
     })
     .filter((r) => r.phone_number) // a staff phone is required to map the row
@@ -92,17 +99,17 @@ export async function uploadReferralReport(formData: FormData) {
   if (rows.length === 0) return { error: 'Không có dòng nào có phone_number hợp lệ' }
 
   try {
-    // Replace-all snapshot (campaign tool; super admin re-uploads if interrupted).
-    const { error: delErr } = await supabaseAdmin.from('staff_referrals').delete().not('id', 'is', null)
-    if (delErr) return { error: `Xóa dữ liệu cũ lỗi: ${delErr.message}` }
-    for (let i = 0; i < rows.length; i += 500) {
-      const { error: insErr } = await supabaseAdmin.from('staff_referrals').insert(rows.slice(i, i + 500))
-      if (insErr) return { error: `Ghi dữ liệu lỗi: ${insErr.message}` }
-    }
+    // Atomic replace via RPC (delete-all + insert in one transaction) so a failed
+    // upload never leaves the report empty/partial.
+    const { data: inserted, error: rpcErr } = await supabaseAdmin.rpc('replace_staff_referrals', {
+      p_rows: rows,
+      p_uploaded_by: user.id,
+    })
+    if (rpcErr) return { error: `Ghi dữ liệu lỗi: ${rpcErr.message}` }
     revalidatePath('/gioi-thieu')
     revalidatePath('/targets')
     const staffCount = new Set(rows.map((r) => r.phone_number)).size
-    return { success: true, inserted: rows.length, staffCount }
+    return { success: true, inserted: (inserted as number | null) ?? rows.length, staffCount }
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) }
   }

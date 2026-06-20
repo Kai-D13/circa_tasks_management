@@ -120,12 +120,18 @@ export default async function TargetsPage() {
     // latest upload (≥1 row). Missing phone → prompt to add it.
     const staffPhone = (profile as { phone_number?: string | null }).phone_number ?? null
     let referral: { total: number; success: number; sameDay: number; noOrder: number; items: ReferralItem[] } | null = null
+    let referralError = false
     if (staffPhone) {
-      const { data: refRows } = await supabase
+      const { data: refRows, error: refErr } = await supabase
         .from('staff_referrals')
         .select('referred_phone, status, referral_date, same_day_order')
         .order('referral_date', { ascending: false, nullsFirst: false })
-      if (refRows && refRows.length > 0) {
+      if (refErr) {
+        // Surface (log) instead of silently showing "no data" — e.g. migration 059
+        // not applied yet, or an RLS error.
+        console.error('[referral] staff query failed:', refErr.message)
+        referralError = true
+      } else if (refRows && refRows.length > 0) {
         const items = (refRows as ReferralItem[]).filter((r) => r.referred_phone)
         const success = items.filter((r) => (r.status ?? '').toUpperCase() === 'SUCCESS').length
         const sameDay = items.filter((r) => r.same_day_order).length
@@ -306,6 +312,13 @@ export default async function TargetsPage() {
 
         {/* Referral campaign ("Giới thiệu bạn bè") — under Doanh số */}
         {referral && <ReferralCard {...referral} />}
+        {referralError && (
+          <Card>
+            <CardContent className="py-4 text-sm text-destructive">
+              Không tải được dữ liệu chương trình giới thiệu. Vui lòng thử lại sau hoặc báo Admin.
+            </CardContent>
+          </Card>
+        )}
         {staffPhone === null && (
           <Card>
             <CardContent className="py-4 text-sm text-muted-foreground">

@@ -45,12 +45,18 @@ export async function submitPrescription(
   if (images.length < 1 || images.length > PRESCRIPTION_MAX_IMAGES)
     return { error: `Cần 1–${PRESCRIPTION_MAX_IMAGES} ảnh toa thuốc` }
   const prefix = `prescriptions/${profile.store_id}/${submissionId}/`
+  // GCS uploads store a FULL public URL in path — accept it only when it points
+  // at the exact bucket + store + submission prefix (never an arbitrary https://).
+  const gcsBase = (process.env.GCS_PUBLIC_BASE_URL ?? '').replace(/\/+$/, '')
+  const gcsPrefix = gcsBase ? `${gcsBase}/${prefix}` : null
   for (const img of images) {
     if (!PRESCRIPTION_ALLOWED_TYPES.includes(img.type))
       return { error: `Định dạng ảnh không hợp lệ: ${img.name}` }
     if (img.size > PRESCRIPTION_MAX_SIZE)
       return { error: `Ảnh quá lớn (tối đa 5MB): ${img.name}` }
-    if (!img.path.startsWith(prefix) || img.path.includes('..'))
+    const validKey = img.path.startsWith(prefix)              // legacy Supabase key
+    const validGcs = !!gcsPrefix && img.path.startsWith(gcsPrefix) // GCS public URL
+    if ((!validKey && !validGcs) || img.path.includes('..'))
       return { error: 'Đường dẫn ảnh không hợp lệ' }
   }
 

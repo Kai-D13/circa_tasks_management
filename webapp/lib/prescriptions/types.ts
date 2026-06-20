@@ -2,7 +2,10 @@
 // pulling in the server-action module.
 
 export interface PrescriptionImageInput {
-  path: string  // storage_path — not a public URL
+  // storage_path. Supabase uploads store a bucket KEY (prescriptions/<store>/…);
+  // GCS uploads (STORAGE_PROVIDER=gcs) store a FULL public URL. Serve paths +
+  // submit validation handle both (key vs http URL).
+  path: string
   name: string
   type: string
   size: number
