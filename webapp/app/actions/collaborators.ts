@@ -82,8 +82,9 @@ export async function shareBroadcast(
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
 
   // All tasks of the broadcast (RLS lets the owner/super read them).
-  const { data: tasks } = await supabase
+  const { data: tasks, error: tasksErr } = await supabase
     .from('tasks').select('id, created_by, title').eq('broadcast_id', broadcastId)
+  if (tasksErr) return { error: tasksErr.message }
   if (!tasks || tasks.length === 0) return { error: 'Không tìm thấy nhóm task (broadcast)' }
 
   const createdBy = tasks[0].created_by
@@ -117,6 +118,36 @@ export async function shareBroadcast(
   return { success: true, count: tasks.length }
 }
 
+// ── broadcast collaborator: update permission across the whole group ────────────
+export async function updateBroadcastCollaboratorPermission(
+  broadcastId: string,
+  adminId: string,
+  permission: 'view' | 'editor',
+) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Not authenticated' }
+  const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
+
+  const { data: tasks, error: tasksErr } = await supabase
+    .from('tasks').select('id, created_by').eq('broadcast_id', broadcastId)
+  if (tasksErr) return { error: tasksErr.message }
+  if (!tasks || tasks.length === 0) return { error: 'Không tìm thấy nhóm task (broadcast)' }
+  if (!canAdminManageOwn({ email: user.email, role: profile?.role, createdBy: tasks[0].created_by, userId: user.id }))
+    return { error: 'Chỉ admin tạo nhóm task hoặc super admin mới đổi quyền được' }
+
+  const { error } = await supabase
+    .from('task_collaborators')
+    .update({ permission })
+    .in('task_id', tasks.map((t) => t.id))
+    .eq('admin_id', adminId)
+  if (error) return { error: error.message }
+
+  revalidatePath('/tasks')
+  revalidatePath(`/tasks/${tasks[0].id}`)
+  return { success: true, count: tasks.length }
+}
+
 // ── removeBroadcastCollaborator ────────────────────────────────────────────────
 export async function removeBroadcastCollaborator(broadcastId: string, adminId: string) {
   const supabase = await createClient()
@@ -124,8 +155,9 @@ export async function removeBroadcastCollaborator(broadcastId: string, adminId: 
   if (!user) return { error: 'Not authenticated' }
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
 
-  const { data: tasks } = await supabase
+  const { data: tasks, error: tasksErr } = await supabase
     .from('tasks').select('id, created_by').eq('broadcast_id', broadcastId)
+  if (tasksErr) return { error: tasksErr.message }
   if (!tasks || tasks.length === 0) return { error: 'Không tìm thấy nhóm task (broadcast)' }
   if (!canAdminManageOwn({ email: user.email, role: profile?.role, createdBy: tasks[0].created_by, userId: user.id }))
     return { error: 'Chỉ admin tạo nhóm task hoặc super admin mới gỡ được' }

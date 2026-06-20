@@ -3,7 +3,11 @@
 import { useState, useTransition } from 'react'
 import { toast } from 'sonner'
 import { Share2, X } from 'lucide-react'
-import { shareTask, shareBroadcast, updateCollaboratorPermission, removeCollaborator } from '@/app/actions/collaborators'
+import {
+  shareTask, shareBroadcast,
+  updateCollaboratorPermission, updateBroadcastCollaboratorPermission,
+  removeCollaborator, removeBroadcastCollaborator,
+} from '@/app/actions/collaborators'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { SearchableSelect } from '@/components/ui/searchable-select'
@@ -40,9 +44,12 @@ export function ShareTaskDialog({ taskId, collaborators, adminOptions, broadcast
 
   const isBroadcast = !!broadcastId && (broadcastCount ?? 0) > 1
 
-  // Filter out admins who are already collaborators
+  // Filter out admins already on THIS task — except in broadcast "share all" mode,
+  // where applying the group share to someone already on this one task is valid.
   const alreadyShared = new Set(collaborators.map((c) => c.admin_id))
-  const availableAdmins = adminOptions.filter((o) => !alreadyShared.has(o.value))
+  const availableAdmins = (isBroadcast && shareAll)
+    ? adminOptions
+    : adminOptions.filter((o) => !alreadyShared.has(o.value))
 
   function handleShare() {
     if (!adminId) return
@@ -57,18 +64,24 @@ export function ShareTaskDialog({ taskId, collaborators, adminOptions, broadcast
     })
   }
 
+  // For a broadcast task, manage permission/revoke across the WHOLE group so
+  // changes don't leave the other N-1 tasks shared (P1 fix).
   function handleUpdatePermission(aid: string, perm: 'view' | 'editor') {
     startTransition(async () => {
-      const result = await updateCollaboratorPermission(taskId, aid, perm)
+      const result = isBroadcast
+        ? await updateBroadcastCollaboratorPermission(broadcastId!, aid, perm)
+        : await updateCollaboratorPermission(taskId, aid, perm)
       if ('error' in result) toast.error(result.error)
     })
   }
 
   function handleRemove(aid: string) {
     startTransition(async () => {
-      const result = await removeCollaborator(taskId, aid)
+      const result = isBroadcast
+        ? await removeBroadcastCollaborator(broadcastId!, aid)
+        : await removeCollaborator(taskId, aid)
       if ('error' in result) toast.error(result.error)
-      else toast.success('Đã xoá quyền truy cập')
+      else toast.success(isBroadcast ? 'Đã xoá quyền truy cập cả nhóm' : 'Đã xoá quyền truy cập')
     })
   }
 
@@ -137,7 +150,7 @@ export function ShareTaskDialog({ taskId, collaborators, adminOptions, broadcast
           {collaborators.length > 0 && (
             <div className="space-y-1.5">
               <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">
-                Đang chia sẻ ({collaborators.length})
+                Đang chia sẻ ({collaborators.length}){isBroadcast ? ' — đổi quyền / gỡ áp dụng cả nhóm' : ''}
               </p>
               {collaborators.map((c) => (
                 <div key={c.admin_id} className="flex items-center gap-2 rounded-md border px-3 py-2">

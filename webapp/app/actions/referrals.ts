@@ -61,7 +61,7 @@ export async function uploadReferralReport(formData: FormData) {
   try {
     const parsed = JSON.parse(await file.text())
     if (!Array.isArray(parsed)) {
-      return { error: 'File JSON phải là một mảng các dòng (array of objects)' }
+      return { error: 'File JSON phải là một mảng các dòng dữ liệu' }
     }
     rawRows = parsed.filter((r) => r && typeof r === 'object') as Record<string, unknown>[]
   } catch {
