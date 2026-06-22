@@ -23,8 +23,18 @@ function weekLabel(weekStart: string): string {
   return `Tuần ${fmt(start)} – ${fmt(end)}`
 }
 
-function StatusBadge({ status }: { status: string | null }) {
-  const achieved = status?.toLowerCase() === 'achieved'
+function StatusBadge({ status, hasGoal = true }: { status: string | null; hasGoal?: boolean }) {
+  const s = status?.toLowerCase()
+  const known = s === 'achieved' || s === 'not achieved'
+  // No weekly target set (or unknown status) → neutral, never "đã/chưa đạt".
+  if (!hasGoal || !known) {
+    return (
+      <span className="text-xs px-2 py-0.5 rounded font-medium bg-muted text-muted-foreground">
+        Chưa có mục tiêu
+      </span>
+    )
+  }
+  const achieved = s === 'achieved'
   return (
     <span className={cn(
       'text-xs px-2 py-0.5 rounded font-medium',
@@ -143,17 +153,20 @@ export default async function TargetsPage() {
     // numbers add up on screen (đã đạt + còn thiếu = mục tiêu; 48.0M/116M =
     // 41.4% ≈ the mock's 42%). BI's run_rate (vs the full target) stays on
     // the super-admin table only.
-    const weekGoal = current?.min_weekly_target ?? current?.target ?? 0
-    const pct = current && weekGoal > 0 ? (current.actual / weekGoal) * 100 : 0
+    // "Mục tiêu tuần" is the weekly MIN target only. A 0/null value means the BI
+    // feed hasn't set a weekly target (currently the case for ALL stores) — do
+    // NOT fall back to the monthly `target`, and do NOT treat it as achieved.
+    const hasGoal  = (current?.min_weekly_target ?? 0) > 0
+    const weekGoal = hasGoal ? (current!.min_weekly_target as number) : 0
+    const pct = hasGoal ? (current!.actual / weekGoal) * 100 : 0
 
     // ── "Hôm nay cần đạt" math (stakeholder spec 2026-06-12) ─────────────────
     // remaining ÷ days left in the week (today included, VN timezone), rounded
     // UP to the next 100k for display. remaining_target is vs the 90% MIN
     // target (BI semantics). Week over / achieved → celebratory states.
-    const remaining = current?.remaining_target
-      ?? (current?.min_weekly_target !== null && current?.min_weekly_target !== undefined
-        ? Math.max(current.min_weekly_target - (current?.actual ?? 0), 0)
-        : null)
+    const remaining = hasGoal
+      ? (current!.remaining_target ?? Math.max(weekGoal - (current!.actual ?? 0), 0))
+      : null
     const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
     const weekEndMs  = current ? Date.parse(current.week_start) + 6 * 86400_000 : 0
     const weekEndISO = current ? new Date(weekEndMs).toISOString().slice(0, 10) : ''
@@ -161,20 +174,23 @@ export default async function TargetsPage() {
       ? Math.floor((weekEndMs - Date.parse(vnTodayISO)) / 86400_000) + 1
       : 0
     const daysLeft  = Math.max(0, Math.min(7, rawDaysLeft))
-    const achieved  = (remaining ?? 1) <= 0
+    // Achievement only means something when a weekly target exists.
+    const achieved  = hasGoal && (remaining ?? 1) <= 0
     const weekOver  = daysLeft === 0
-    const needToday = !achieved && remaining !== null
+    const needToday = hasGoal && !achieved && remaining !== null
       ? Math.ceil(remaining / Math.max(daysLeft, 1) / 100_000) * 100_000
       : 0
     // Pace check: % of week elapsed vs % of target achieved.
     const expectedPct = ((7 - daysLeft) / 7) * 100
-    const paceMessage = achieved
-      ? '🎉 Cửa hàng đã đạt mục tiêu tuần — xuất sắc!'
-      : weekOver
-        ? 'Tuần đã kết thúc — chờ dữ liệu tuần mới.'
-        : pct >= expectedPct
-          ? 'Giữ nhịp này, bạn sẽ đạt mục tiêu tuần!'
-          : 'Cần tăng tốc để kịp mục tiêu tuần!'
+    const paceMessage = !hasGoal
+      ? 'Mục tiêu tuần chưa được cập nhật từ báo cáo BI.'
+      : achieved
+        ? '🎉 Cửa hàng đã đạt mục tiêu tuần — xuất sắc!'
+        : weekOver
+          ? 'Tuần đã kết thúc — chờ dữ liệu tuần mới.'
+          : pct >= expectedPct
+            ? 'Giữ nhịp này, bạn sẽ đạt mục tiêu tuần!'
+            : 'Cần tăng tốc để kịp mục tiêu tuần!'
     const weekEndLabel = weekEndISO
       ? `${weekEndISO.slice(8, 10)}/${weekEndISO.slice(5, 7)}`
       : ''
@@ -209,7 +225,7 @@ export default async function TargetsPage() {
                     </p>
                     <p className="text-xs text-muted-foreground mt-0.5">Để kịp KPI tuần</p>
                     <p className="text-3xl font-bold text-primary mt-2 leading-tight">
-                      {achieved ? 'Đã đạt 🎉' : weekOver ? '—' : vnd(needToday)}
+                      {!hasGoal ? '—' : achieved ? 'Đã đạt 🎉' : weekOver ? '—' : vnd(needToday)}
                     </p>
                   </div>
                   <ProgressRing pct={pct} />
@@ -233,9 +249,11 @@ export default async function TargetsPage() {
 
                 <p className={cn(
                   'rounded-lg px-3 py-2 text-sm font-medium',
-                  achieved || pct >= expectedPct
-                    ? 'bg-green-100 text-green-700'
-                    : 'bg-amber-100 text-amber-700',
+                  !hasGoal
+                    ? 'bg-muted text-muted-foreground'
+                    : achieved || pct >= expectedPct
+                      ? 'bg-green-100 text-green-700'
+                      : 'bg-amber-100 text-amber-700',
                 )}>
                   {paceMessage}
                 </p>
@@ -253,13 +271,13 @@ export default async function TargetsPage() {
                   </p>
                   <p className="text-xs text-white/80 mt-0.5">{weekLabel(current.week_start)}</p>
                 </div>
-                <StatusBadge status={current.status} />
+                <StatusBadge status={current.status} hasGoal={hasGoal} />
               </div>
 
               <div>
                 <p className="text-xs uppercase text-white/80">Còn thiếu</p>
                 <p className="text-3xl font-bold leading-tight">
-                  {achieved ? '0₫' : vnd(remaining)}
+                  {!hasGoal ? '—' : achieved ? '0₫' : vnd(remaining)}
                 </p>
                 <p className="text-xs text-white/80 mt-0.5">
                   để đạt mục tiêu tuần và nhận thưởng
@@ -280,7 +298,7 @@ export default async function TargetsPage() {
                     <p className="text-white/80">Đã đạt</p>
                   </div>
                   <div className="text-right">
-                    <p className="font-semibold text-sm">{vnd(weekGoal)}</p>
+                    <p className="font-semibold text-sm">{hasGoal ? vnd(weekGoal) : 'Chưa cập nhật'}</p>
                     <p className="text-white/80">Mục tiêu tuần</p>
                   </div>
                 </div>
@@ -303,7 +321,7 @@ export default async function TargetsPage() {
                 <div key={h.week_start} className="flex items-center justify-between px-4 py-2.5 border-t text-sm">
                   <span className="text-muted-foreground">{weekLabel(h.week_start)}</span>
                   <span className="font-medium">{vnd(h.actual)}</span>
-                  <StatusBadge status={h.status} />
+                  <StatusBadge status={h.status} hasGoal={(h.min_weekly_target ?? 0) > 0} />
                 </div>
               ))}
             </CardContent>
@@ -392,7 +410,7 @@ export default async function TargetsPage() {
                     <td className="px-4 py-2.5 text-right">
                       {r.run_rate !== null ? `${r.run_rate.toFixed(1)}%` : '—'}
                     </td>
-                    <td className="px-4 py-2.5"><StatusBadge status={r.status} /></td>
+                    <td className="px-4 py-2.5"><StatusBadge status={r.status} hasGoal={(r.min_weekly_target ?? 0) > 0} /></td>
                   </tr>
                 ))}
               </tbody>

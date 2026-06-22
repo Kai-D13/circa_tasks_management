@@ -103,15 +103,20 @@ export function normalizeRow(
   if (runRate !== null) runRate = Math.round(runRate * 100) / 100
 
   const minWeekly = toNumber(pick('min_weekly_target', 'Min Weekly Target (90% Target)', 'Min Weekly Target', 'weekly_target'))
+  // A weekly target of 0 (or absent) means "not set yet" in the feed — NOT a
+  // goal of zero. Deriving status/remaining against 0 would falsely report
+  // "Achieved" for any non-negative actual (BigQuery weekly_target is currently
+  // 0 for all stores). Treat <= 0 as "no weekly target".
+  const hasMinWeekly = minWeekly !== null && minWeekly > 0
 
   // status / remaining are vs the MIN target (BI semantics). Sources that
   // don't carry them (BigQuery feed) get them derived the same way.
   const statusRaw = pick('status', 'Status')
   const status = typeof statusRaw === 'string'
     ? statusRaw.trim()
-    : minWeekly !== null ? (actual >= minWeekly ? 'Achieved' : 'Not Achieved') : null
+    : hasMinWeekly ? (actual >= (minWeekly as number) ? 'Achieved' : 'Not Achieved') : null
   const remaining = toNumber(pick('remaining_target', 'Remaining Target'))
-    ?? (minWeekly !== null ? Math.max(minWeekly - actual, 0) : null)
+    ?? (hasMinWeekly ? Math.max((minWeekly as number) - actual, 0) : null)
 
   return {
     pos_name:          label,
