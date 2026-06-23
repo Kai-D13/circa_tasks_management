@@ -267,6 +267,8 @@ export default async function TasksPage({
       if (params.priority) childQ = childQ.eq('priority', params.priority)
       if (params.store_id) childQ = childQ.eq('store_id', params.store_id)
       if (params.category) childQ = childQ.eq('category', params.category)
+      if (params.department_id) childQ = childQ.eq('department_id', params.department_id)
+      if (!showOld) childQ = childQ.gte('created_at', ageCutoffIso)
       const { data: childData, error: childErr } = await childQ
       if (childErr) childrenError = childErr
       extraChildren = (childData ?? []) as unknown as NonNullable<typeof tasks>
@@ -302,6 +304,8 @@ export default async function TasksPage({
     if (params.priority) doneChildQ = doneChildQ.eq('priority', params.priority)
     if (params.store_id) doneChildQ = doneChildQ.eq('store_id', params.store_id)
     if (params.category) doneChildQ = doneChildQ.eq('category', params.category)
+    if (params.department_id) doneChildQ = doneChildQ.eq('department_id', params.department_id)
+    if (!showOld) doneChildQ = doneChildQ.gte('created_at', ageCutoffIso)
     const { data: doneKids, error: doneKidsErr } = await doneChildQ
     if (doneKidsErr) childrenError = childrenError ?? doneKidsErr
     extraChildren = (doneKids ?? []) as unknown as NonNullable<typeof tasks>
@@ -323,6 +327,8 @@ export default async function TasksPage({
       if (params.priority) statQ = statQ.eq('priority', params.priority)
       if (params.store_id) statQ = statQ.eq('store_id', params.store_id)
       if (params.category) statQ = statQ.eq('category', params.category)
+      if (params.department_id) statQ = statQ.eq('department_id', params.department_id)
+      if (!showOld) statQ = statQ.gte('created_at', ageCutoffIso)
       const { data: statRows, error: statErr } = await statQ
       if (statErr) childrenError = childrenError ?? statErr
       for (const r of (statRows ?? []) as { broadcast_id: string; parent_task_id: string; status: string }[]) {

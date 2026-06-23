@@ -89,7 +89,7 @@ export function TaskFilters({ stores, departments, currentParams, showArchived, 
   }
 
   const hasFilters = !showArchived && Object.entries(currentParams).some(
-    ([k, v]) => k !== 'archived' && v && v !== 'false'
+    ([k, v]) => k !== 'archived' && k !== 'show_old' && v && v !== 'false'
   )
 
   const statusVal   = currentParams.status   ?? ALL

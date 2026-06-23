@@ -66,8 +66,11 @@ export async function GET(request: NextRequest) {
         { status: 422 },
       )
     }
-    const { count: currentCount } = await supabaseAdmin
+    const { count: currentCount, error: countErr } = await supabaseAdmin
       .from('staff_referrals').select('*', { count: 'exact', head: true })
+    // If we can't read the current count, the shrink guard would silently no-op —
+    // abort rather than risk overwriting with a smaller set.
+    if (countErr) return NextResponse.json({ error: `Không đọc được số dòng hiện tại: ${countErr.message}` }, { status: 500 })
     if ((currentCount ?? 0) >= 20 && rows.length < (currentCount ?? 0) * 0.5) {
       return NextResponse.json(
         { error: `Số dòng mới (${rows.length}) thấp bất thường so với hiện có (${currentCount}) — bỏ qua để tránh ghi đè dữ liệu sai. Kiểm tra query/Google Sheet rồi chạy lại.`, pulled: rawRows.length },
