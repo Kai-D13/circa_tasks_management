@@ -107,10 +107,18 @@ export default async function TasksPage({
     ? query.range(0, 999)
     : query.range(offset, isStaff ? offset + pageSize : offset + pageSize - 1)
 
+  // Auto-declutter: hide tasks created more than 14 days ago from the default
+  // views (overview focus). They stay reachable in the Archive view. Staff are
+  // EXEMPT — they have no Archive tab and must act on their open tasks regardless
+  // of age, so hiding would orphan their work. No data is mutated (view-only).
+  const HIDE_AFTER_DAYS = 14
+  const ageCutoffIso = new Date(Date.now() - HIDE_AFTER_DAYS * 86400_000).toISOString()
   if (showArchived) {
-    query = query.not('archived_at', 'is', null)
+    // Archive = truly-archived tasks OR anything auto-hidden by the 14-day cutoff.
+    query = query.or(`archived_at.not.is.null,created_at.lt.${ageCutoffIso}`)
   } else {
     query = query.is('archived_at', null)
+    if (!isStaff) query = query.gte('created_at', ageCutoffIso)
   }
 
   // View gate — skipped entirely in archive view (archive shows ALL archived tasks,
