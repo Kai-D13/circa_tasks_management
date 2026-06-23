@@ -113,6 +113,7 @@ export interface TaskTemplate {
 export interface TaskSchedule {
   id: string
   template_id: string
+  assignment_mode: 'store' | 'staff_all'
   frequency: 'daily' | 'weekly' | 'monthly'
   timezone: string
   run_time: string           // "HH:MM"

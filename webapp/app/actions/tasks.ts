@@ -1691,6 +1691,7 @@ export async function createTaskSchedule(data: {
   endDate: string | null
   deadlineOffsetHours: number
   storeIds: string[]
+  assignmentMode?: 'store' | 'staff_all'   // 'staff_all' = one task per pharmacist per store, each run
 }) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -1698,6 +1699,7 @@ export async function createTaskSchedule(data: {
 
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
   if (profile?.role !== 'admin') return { error: 'Chỉ Admin mới có thể tạo task định kỳ' }
+  const assignmentMode = data.assignmentMode === 'staff_all' ? 'staff_all' : 'store'
 
   // Server-side validation
   if (!data.title.trim())       return { error: 'Tiêu đề không được để trống' }
@@ -1750,6 +1752,7 @@ export async function createTaskSchedule(data: {
     .from('task_schedules')
     .insert({
       template_id:           template.id,
+      assignment_mode:       assignmentMode,
       frequency:             data.frequency,
       timezone:              'Asia/Ho_Chi_Minh',
       run_time:              data.runTime,
@@ -1784,11 +1787,12 @@ export async function createTaskSchedule(data: {
     action:   'schedule_created',
     user_id:  user.id,
     metadata: {
-      schedule_id: schedule.id,
-      template_id: template.id,
-      title:       data.title,
-      frequency:   data.frequency,
-      store_count: uniqueStoreIds.length,
+      schedule_id:     schedule.id,
+      template_id:     template.id,
+      title:           data.title,
+      frequency:       data.frequency,
+      store_count:     uniqueStoreIds.length,
+      assignment_mode: assignmentMode,
     },
   })
 

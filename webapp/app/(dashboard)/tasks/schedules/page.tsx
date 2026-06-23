@@ -27,7 +27,7 @@ export default async function SchedulesPage() {
   const { data: schedules } = await supabase
     .from('task_schedules')
     .select(`
-      id, frequency, run_time, next_run_at, last_run_at, is_active, created_at,
+      id, frequency, run_time, next_run_at, last_run_at, is_active, created_at, assignment_mode,
       task_templates ( title ),
       task_schedule_stores ( store_id )
     `)
@@ -79,10 +79,14 @@ export default async function SchedulesPage() {
                   const storeCount = (s.task_schedule_stores as { store_id: string }[] | null)?.length ?? 0
                   return (
                     <tr key={s.id} className="hover:bg-muted/30 transition-colors">
-                      <td className="px-4 py-3 font-medium max-w-[200px] truncate">
-                        <Link href={`/tasks/schedules/${s.id}`} className="hover:underline">
+                      <td className="px-4 py-3 font-medium max-w-[200px]">
+                        <Link href={`/tasks/schedules/${s.id}`} className="hover:underline block truncate">
                           {template?.title ?? '—'}
                         </Link>
+                        <Badge className={cn('mt-0.5 text-[10px] font-normal',
+                          s.assignment_mode === 'staff_all' ? 'bg-primary/10 text-primary' : 'bg-gray-100 text-gray-600')}>
+                          {s.assignment_mode === 'staff_all' ? 'Từng dược sĩ' : 'Cửa hàng'}
+                        </Badge>
                       </td>
                       <td className="px-4 py-3 text-muted-foreground">
                         {FREQ_LABEL[s.frequency] ?? s.frequency}

@@ -287,8 +287,10 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   const broadcastCount    = scope === 'all' ? visibleStores.length : selectedStoreIds.length
   const showMultiStore    = isBroadcast || isRecurring
 
-  // staff_all: admin + ad-hoc + new task. Works for all scopes (single/multi/all).
-  const canStaffMode       = isAdmin && !isEditMode && !isRecurring
+  // staff_all: admin + new task. Works for all scopes (single/multi/all) AND for
+  // recurring schedules (migration 062). For recurring it's dynamic — every
+  // current pharmacist of each store at each run, so no per-store subset picker.
+  const canStaffMode       = isAdmin && !isEditMode
   const effectiveStaffMode = staffMode && canStaffMode
   // Single-store pharmacist list + selected count (selected = not unchecked).
   const singleStoreStaff   = storeId
@@ -297,8 +299,10 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   const staffCount         = singleStoreStaff.length
   const staffSelectedCount = singleStoreStaff.filter((u) => !excludedStaff.has(u.id)).length
 
-  // Multi-store staff breakdown: used when broadcast + effectiveStaffMode for preview + guard
-  const activeStoreIds     = (isBroadcast && effectiveStaffMode)
+  // Multi-store staff breakdown: used when broadcast + effectiveStaffMode for the
+  // per-pharmacist subset picker. Recurring staff_all is dynamic (all current
+  // staff at each run) → no picker, so exclude recurring here.
+  const activeStoreIds     = (isBroadcast && effectiveStaffMode && !isRecurring)
     ? (scope === 'all' ? visibleStores.map(s => s.id) : selectedStoreIds)
     : []
   const perStoreStaffInfo  = activeStoreIds.map(id => {
@@ -351,7 +355,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
 
   function handleSetTaskType(t: TaskType) {
     setTaskType(t)
-    if (t === 'recurring') setStaffMode(false)
+    // staff_all is now allowed for recurring (dynamic all-staff); keep the toggle.
     if (t === 'recurring' && scope === 'single') setScope('multi')
   }
 
@@ -447,6 +451,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
           endDate:             schedEndDate || null,
           deadlineOffsetHours: deadlineOffset,
           storeIds,
+          assignmentMode:      effectiveStaffMode ? 'staff_all' : 'store',
         })
         if (result?.error) {
           restoreDraftSnapshot(draftSnapshot)
@@ -750,7 +755,12 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                     })}
                   </div>
                 )}
-                {effectiveStaffMode && (
+                {effectiveStaffMode && isRecurring && (
+                  <p className="text-xs text-muted-foreground">
+                    Mỗi lần chạy sẽ giao cho <span className="font-medium">tất cả dược sĩ hiện có</span> của mỗi cửa hàng (cửa hàng chưa có dược sĩ sẽ được bỏ qua).
+                  </p>
+                )}
+                {effectiveStaffMode && !isRecurring && (
                   <p className={cn('text-xs', storesWithoutStaff.length > 0 ? 'text-destructive' : 'text-muted-foreground')}>
                     {activeStoreIds.length === 0
                       ? 'Chọn cửa hàng để xem số dược sĩ sẽ nhận task.'

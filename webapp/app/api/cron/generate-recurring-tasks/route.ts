@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
     .from('task_schedules')
     .select(`
       id, frequency, run_time, weekdays, month_day, start_date, end_date,
-      deadline_offset_hours, is_active, next_run_at,
+      deadline_offset_hours, is_active, next_run_at, assignment_mode,
       task_templates ( id, title, config, created_by )
     `)
     .eq('is_active', true)
@@ -116,78 +116,197 @@ export async function GET(request: NextRequest) {
 
       let createdCount = 0
       let broadcastId: string | null = null
+      let skippedEmptyStores: string[] = []
 
       if (pendingStoreIds.length) {
-        // Create a broadcast group for this run
-        const { data: broadcast, error: bcError } = await supabaseAdmin
-          .from('task_broadcasts')
-          .insert({
-            title:       template.title,
-            created_by:  template.created_by,
-            store_count: pendingStoreIds.length,
-          })
-          .select('id')
-          .single()
-
-        if (bcError || !broadcast) throw new Error(bcError?.message ?? 'Broadcast insert failed')
-        broadcastId = broadcast.id
-
-        // Compute deadline
+        // Deadline — shared by both modes.
         const deadlineMs = now.getTime() + (sched.deadline_offset_hours ?? 24) * 3600_000
         const deadline   = new Date(deadlineMs).toISOString()
 
-        // Build task rows for the stores that still need one today
-        const tasksToInsert = pendingStoreIds.map((storeId) => ({
-          title:              template.title,
-          description:        template.config.description ?? null,
-          category:           template.config.category,
-          priority:           template.config.priority,
-          visibility:         template.config.visibility,
-          status:             'todo' as TaskStatus,
-          store_id:           storeId,
-          assigned_to:        null,
-          created_by:         template.created_by,
-          broadcast_id:       broadcast.id,
-          deadline,
-          required_outputs:   template.config.required_outputs,
-          input_data:         template.config.input_data ?? null,
-          source_template_id: template.id,
-          source_schedule_id: sched.id,
-          scheduled_for:      today,
-          assignment_mode:    'store',
-        }))
+        if (sched.assignment_mode === 'staff_all') {
+          // ── staff_all: 1 parent + 1 child per pharmacist, per store ──────────
+          // Dynamic — every CURRENT role='staff' of each store at run time
+          // (new hires included, leavers excluded). Mirrors createStaffRequiredTask.
+          const { data: staffRows } = await supabaseAdmin
+            .from('users').select('id, store_id')
+            .eq('role', 'staff').in('store_id', pendingStoreIds)
 
-        // Insert — unique index on (source_schedule_id, store_id, scheduled_for) prevents duplicates
-        const { data: created, error: insertError } = await supabaseAdmin
-          .from('tasks')
-          .insert(tasksToInsert)
-          .select('id, store_id, title')
+          const staffByStore = new Map<string, string[]>()
+          for (const s of staffRows ?? []) {
+            const arr = staffByStore.get(s.store_id) ?? []
+            arr.push(s.id)
+            staffByStore.set(s.store_id, arr)
+          }
+          const storesWithStaff = pendingStoreIds.filter((id) => (staffByStore.get(id)?.length ?? 0) > 0)
+          // Stores with no pharmacist: skip (don't fail the run, don't create an
+          // empty parent) — recorded in the run log.
+          skippedEmptyStores = pendingStoreIds.filter((id) => !(staffByStore.get(id)?.length))
 
-        if (insertError) throw new Error(insertError.message)
+          if (storesWithStaff.length) {
+            const { data: broadcast, error: bcError } = await supabaseAdmin
+              .from('task_broadcasts')
+              .insert({ title: template.title, created_by: template.created_by, store_count: storesWithStaff.length })
+              .select('id')
+              .single()
+            if (bcError || !broadcast) throw new Error(bcError?.message ?? 'Broadcast insert failed')
+            broadcastId = broadcast.id
 
-        createdCount = created?.length ?? 0
+            // Store managers (parent notifications), grouped by store.
+            const { data: managers } = await supabaseAdmin
+              .from('users').select('id, store_id')
+              .eq('role', 'store_manager').in('store_id', storesWithStaff)
+            const mgrByStore = new Map<string, string[]>()
+            for (const m of managers ?? []) {
+              const arr = mgrByStore.get(m.store_id) ?? []
+              arr.push(m.id)
+              mgrByStore.set(m.store_id, arr)
+            }
 
-        // Notify store managers of the newly created tasks
-        if (createdCount > 0) {
-          const { data: managers } = await supabaseAdmin
-            .from('users')
-            .select('id, store_id')
-            .eq('role', 'store_manager')
-            .in('store_id', pendingStoreIds)
+            const notifications: { user_id: string; type: string; task_id: string; title: string; message: string }[] = []
 
-          if (managers?.length) {
-            await supabaseAdmin.from('notifications').insert(
-              managers.map((mgr) => {
-                const task = (created ?? []).find((t) => t.store_id === mgr.store_id)
-                return {
-                  user_id: mgr.id,
-                  type:    'task_assigned',
-                  task_id: task?.id ?? null,
-                  title:   'Task định kỳ mới',
-                  message: `Task mới: ${template.title}`,
-                }
-              })
-            )
+            for (const storeId of storesWithStaff) {
+              const staffIds = staffByStore.get(storeId)!
+              // Parent — private + unassigned (overview only).
+              const { data: parent, error: parentErr } = await supabaseAdmin.from('tasks').insert({
+                title:              template.title,
+                description:        template.config.description ?? null,
+                category:           template.config.category,
+                priority:           template.config.priority,
+                visibility:         'private' as TaskVisibility,
+                status:             'todo' as TaskStatus,
+                store_id:           storeId,
+                assigned_to:        null,
+                assignment_mode:    'staff_all',
+                created_by:         template.created_by,
+                broadcast_id:       broadcast.id,
+                deadline,
+                required_outputs:   template.config.required_outputs,
+                input_data:         template.config.input_data ?? null,
+                source_template_id: template.id,
+                source_schedule_id: sched.id,
+                scheduled_for:      today,
+              }).select('id').single()
+              if (parentErr || !parent) throw new Error(parentErr?.message ?? 'Parent insert failed')
+
+              // One child per pharmacist — private + assigned.
+              const { data: children, error: childErr } = await supabaseAdmin.from('tasks').insert(
+                staffIds.map((sid) => ({
+                  title:              template.title,
+                  description:        template.config.description ?? null,
+                  category:           template.config.category,
+                  priority:           template.config.priority,
+                  visibility:         'private' as TaskVisibility,
+                  status:             'todo' as TaskStatus,
+                  store_id:           storeId,
+                  assigned_to:        sid,
+                  assignment_mode:    'user',
+                  parent_task_id:     parent.id,
+                  created_by:         template.created_by,
+                  broadcast_id:       broadcast.id,
+                  deadline,
+                  required_outputs:   template.config.required_outputs,
+                  input_data:         template.config.input_data ?? null,
+                  source_template_id: template.id,
+                  source_schedule_id: sched.id,
+                  scheduled_for:      today,
+                })),
+              ).select('id, assigned_to')
+              if (childErr || !children) {
+                // Best-effort rollback so a childless parent never blocks the
+                // per-store retry skip permanently.
+                await supabaseAdmin.from('tasks').delete().eq('id', parent.id)
+                throw new Error(childErr?.message ?? 'Children insert failed')
+              }
+
+              createdCount++  // count parents (one per store) — consistent with store mode
+              for (const m of (mgrByStore.get(storeId) ?? [])) {
+                notifications.push({
+                  user_id: m, type: 'task_assigned', task_id: parent.id,
+                  title:   'Task định kỳ mới (từng dược sĩ nộp)',
+                  message: `Task mới: ${template.title} — ${staffIds.length} dược sĩ cần nộp`,
+                })
+              }
+              for (const c of children) {
+                notifications.push({
+                  user_id: c.assigned_to as string, type: 'task_assigned', task_id: c.id,
+                  title:   'Task định kỳ mới được giao',
+                  message: `Bạn được giao task: ${template.title}`,
+                })
+              }
+            }
+
+            if (notifications.length) {
+              await supabaseAdmin.from('notifications').insert(notifications)
+            }
+          }
+        } else {
+          // ── store mode (unchanged) ──────────────────────────────────────────
+          const { data: broadcast, error: bcError } = await supabaseAdmin
+            .from('task_broadcasts')
+            .insert({
+              title:       template.title,
+              created_by:  template.created_by,
+              store_count: pendingStoreIds.length,
+            })
+            .select('id')
+            .single()
+
+          if (bcError || !broadcast) throw new Error(bcError?.message ?? 'Broadcast insert failed')
+          broadcastId = broadcast.id
+
+          // Build task rows for the stores that still need one today
+          const tasksToInsert = pendingStoreIds.map((storeId) => ({
+            title:              template.title,
+            description:        template.config.description ?? null,
+            category:           template.config.category,
+            priority:           template.config.priority,
+            visibility:         template.config.visibility,
+            status:             'todo' as TaskStatus,
+            store_id:           storeId,
+            assigned_to:        null,
+            created_by:         template.created_by,
+            broadcast_id:       broadcast.id,
+            deadline,
+            required_outputs:   template.config.required_outputs,
+            input_data:         template.config.input_data ?? null,
+            source_template_id: template.id,
+            source_schedule_id: sched.id,
+            scheduled_for:      today,
+            assignment_mode:    'store',
+          }))
+
+          // Insert — unique index on (source_schedule_id, store_id, scheduled_for) prevents duplicates
+          const { data: created, error: insertError } = await supabaseAdmin
+            .from('tasks')
+            .insert(tasksToInsert)
+            .select('id, store_id, title')
+
+          if (insertError) throw new Error(insertError.message)
+
+          createdCount = created?.length ?? 0
+
+          // Notify store managers of the newly created tasks
+          if (createdCount > 0) {
+            const { data: managers } = await supabaseAdmin
+              .from('users')
+              .select('id, store_id')
+              .eq('role', 'store_manager')
+              .in('store_id', pendingStoreIds)
+
+            if (managers?.length) {
+              await supabaseAdmin.from('notifications').insert(
+                managers.map((mgr) => {
+                  const task = (created ?? []).find((t) => t.store_id === mgr.store_id)
+                  return {
+                    user_id: mgr.id,
+                    type:    'task_assigned',
+                    task_id: task?.id ?? null,
+                    title:   'Task định kỳ mới',
+                    message: `Task mới: ${template.title}`,
+                  }
+                })
+              )
+            }
           }
         }
       }
@@ -232,12 +351,14 @@ export async function GET(request: NextRequest) {
         action:   'recurring_tasks_generated',
         user_id:  null,
         metadata: {
-          schedule_id:  sched.id,
-          broadcast_id: broadcastId,
-          title:        template.title,
-          frequency:    sched.frequency,
-          store_count:  createdCount,
-          scheduled_for: today,
+          schedule_id:     sched.id,
+          broadcast_id:    broadcastId,
+          title:           template.title,
+          frequency:       sched.frequency,
+          assignment_mode: sched.assignment_mode,
+          store_count:     createdCount,
+          skipped_empty_stores: skippedEmptyStores.length,
+          scheduled_for:   today,
         },
       })
 

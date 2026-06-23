@@ -92,6 +92,7 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
       .from('tasks')
       .select('id, title, status, scheduled_for, deadline, created_at, overdue_at, stores(name)')
       .eq('source_schedule_id', id)
+      .is('parent_task_id', null)   // staff_all: show one parent per store/run, not every child
       .order('created_at', { ascending: false })
       .limit(300),
     // Own collaborator row — decides whether a non-owner may pause/resume.
@@ -215,6 +216,9 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
             <CardTitle className="text-sm">Cấu hình lịch</CardTitle>
           </CardHeader>
           <CardContent className="text-sm px-4 pb-4">
+            <Row label="Chế độ giao">
+              {sched.assignment_mode === 'staff_all' ? 'Từng dược sĩ nộp' : 'Cửa hàng nộp'}
+            </Row>
             <Row label="Tần suất">{FREQ_LABEL[sched.frequency] ?? sched.frequency}</Row>
             {sched.frequency === 'weekly' && weekdays.length > 0 && (
               <Row label="Ngày trong tuần">
