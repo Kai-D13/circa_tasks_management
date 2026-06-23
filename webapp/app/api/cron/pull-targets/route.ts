@@ -4,7 +4,7 @@ import { upsertTargetRows } from '@/lib/targets/ingest'
 import { DEFAULT_QUERY, loadServiceAccount, runBigQuery } from '@/lib/targets/bigquery'
 
 // GET /api/cron/pull-targets — pulls weekly KPI rows from BigQuery
-// (buymed_n8n.fact_kpi_circa_weekly) and upserts store_weekly_targets.
+// (buymed_tech.tech__fact_kpi_circa_weekly) and upserts store_weekly_targets.
 // (This replaced the abandoned Power BI service-principal pull on 2026-06-13.)
 //
 // ⚠ OPERATIONAL (2026-06-16): /targets reads store_weekly_targets directly
