@@ -4,46 +4,15 @@ import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { isSuperAdminEmail } from '@/lib/authz'
-import { excelSerialToISO } from '@/lib/targets/parse'
+import { parseReferralRows } from '@/lib/referrals/parse'
 
-// Manual snapshot loader for the "Giới thiệu bạn bè" campaign. Super admin uploads
+// Manual snapshot loader for the "Giới thiệu bạn bè" campaign — super admin uploads
 // the JSON exported from BigQuery (array of row objects); we parse it and REPLACE
-// all rows in staff_referrals. Staff then read their own rows (RLS by normalized
-// phone). Campaign-scoped — reusable next round by uploading a fresh export.
+// all rows in staff_referrals. The same data also arrives automatically via the
+// Google Sheet cron (app/api/cron/pull-referrals) using parseReferralRows. Staff
+// read their own rows (RLS by normalized phone).
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024
-const MAX_ROWS       = 5000
-
-// Mirror migration 059 normalize_phone: digits only, 84→0, ensure leading 0.
-function normPhone(p: unknown): string | null {
-  if (p === null || p === undefined) return null
-  let d = String(p).replace(/[^0-9]/g, '')
-  if (!d) return null
-  if (d.startsWith('84')) d = '0' + d.slice(2)
-  else if (!d.startsWith('0')) d = '0' + d
-  return d
-}
-function asBool(v: unknown): boolean {
-  if (typeof v === 'boolean') return v
-  const s = String(v ?? '').trim().toUpperCase()
-  return s === 'TRUE' || s === '1' || s === 'YES'
-}
-function str(v: unknown): string | null {
-  if (v === null || v === undefined) return null
-  const s = String(v).trim()
-  return s === '' ? null : s
-}
-function dateStr(v: unknown): string | null {
-  if (v === null || v === undefined || v === '') return null
-  if (v instanceof Date) return v.toISOString().slice(0, 10)
-  if (typeof v === 'number') return excelSerialToISO(v) // Excel serial date
-  const s = String(v).trim()
-  const iso = s.match(/^(\d{4}-\d{2}-\d{2})/) // ISO (BigQuery export)
-  if (iso) return iso[1]
-  const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/) // MM/DD/YYYY
-  if (us) return `${us[3]}-${us[1].padStart(2, '0')}-${us[2].padStart(2, '0')}`
-  return null
-}
 
 export async function uploadReferralReport(formData: FormData) {
   const supabase = await createClient()
@@ -67,42 +36,10 @@ export async function uploadReferralReport(formData: FormData) {
   } catch {
     return { error: 'Không đọc được file — cần đúng file JSON export từ BigQuery' }
   }
-  if (rawRows.length === 0) return { error: 'File không có dòng dữ liệu nào' }
-  if (rawRows.length > MAX_ROWS) return { error: `File quá nhiều dòng (>${MAX_ROWS}) — sai file?` }
 
-  // Canonicalize headers (drop spaces/underscores/case) so 'phone_number',
-  // 'Phone Number', 'phonenumber' all match — robust to BI/Excel header styles.
-  const canon = (k: string) => k.trim().toLowerCase().replace(/[^a-z0-9]/g, '')
-  const headerKeys = new Set(Object.keys(rawRows[0]).map(canon))
-  const required: [string, string][] = [
-    ['phonenumber', 'phone_number'], ['referredphone', 'referred_phone'], ['status', 'status'],
-    ['samedayorder', 'same_day_order'], ['referraldate', 'referral_date'],
-  ]
-  const missing = required.filter(([c]) => !headerKeys.has(c)).map(([, label]) => label)
-  if (missing.length) {
-    return { error: `File thiếu cột: ${missing.join(', ')} — kiểm tra lại file xuất từ BigQuery` }
-  }
-
-  const rows = rawRows
-    .map((raw) => {
-      const lo: Record<string, unknown> = {}
-      for (const [k, v] of Object.entries(raw)) lo[canon(k)] = v
-      return {
-        store_code:           str(lo['storecode']),
-        store_name:           str(lo['storename']),
-        phone_number:         normPhone(lo['phonenumber']),
-        full_name:            str(lo['fullname']),
-        status:               str(lo['status']),
-        referred_phone:       str(lo['referredphone']),
-        referral_date:        dateStr(lo['referraldate']),
-        same_day_order:       asBool(lo['samedayorder']),
-        customer_id:          str(lo['customerid']),
-        is_exist_in_referral: asBool(lo['isexistinreferral']),
-      }
-    })
-    .filter((r) => r.phone_number) // a staff phone is required to map the row
-
-  if (rows.length === 0) return { error: 'Không có dòng nào có phone_number hợp lệ' }
+  const parsedRows = parseReferralRows(rawRows)
+  if ('error' in parsedRows) return { error: parsedRows.error }
+  const rows = parsedRows.rows
 
   try {
     // Atomic replace via RPC (delete-all + insert in one transaction) so a failed

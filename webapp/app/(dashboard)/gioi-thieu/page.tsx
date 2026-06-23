@@ -66,9 +66,12 @@ export default async function GioiThieuPage() {
 
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-sm">Nạp dữ liệu (file JSON từ BigQuery)</CardTitle>
+          <CardTitle className="text-sm">Nạp dữ liệu (tự động từ Google Sheet · upload JSON dự phòng)</CardTitle>
         </CardHeader>
         <CardContent>
+          <p className="text-xs text-muted-foreground mb-2">
+            Dữ liệu được đồng bộ tự động từ Google Sheet theo lịch. Có thể nạp tay bằng file JSON khi cần.
+          </p>
           <ReferralUploadForm />
           {error && <p className="text-sm text-destructive mt-2">Lỗi đọc dữ liệu: {error.message} — đã chạy migration 059 chưa?</p>}
         </CardContent>
