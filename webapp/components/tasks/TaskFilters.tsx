@@ -5,14 +5,15 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { SearchableSelect } from '@/components/ui/searchable-select'
 import { Button } from '@/components/ui/button'
 import { Store } from '@/types'
-import { Archive, ArrowLeft } from 'lucide-react'
+import { Archive, ArrowLeft, History } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface Props {
   stores:        Pick<Store, 'id' | 'name'>[]
   departments:   { id: string; name: string }[]
-  currentParams: { view?: string; status?: string; priority?: string; store_id?: string; category?: string; department_id?: string; archived?: string }
+  currentParams: { view?: string; status?: string; priority?: string; store_id?: string; category?: string; department_id?: string; archived?: string; show_old?: string }
   showArchived?: boolean
+  showOld?:      boolean
   view?:         'pending' | 'done'
   isStaff?:      boolean
 }
@@ -42,7 +43,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   other:     'Khác',
 }
 
-export function TaskFilters({ stores, departments, currentParams, showArchived, view = 'pending', isStaff = false }: Props) {
+export function TaskFilters({ stores, departments, currentParams, showArchived, showOld = false, view = 'pending', isStaff = false }: Props) {
   const router   = useRouter()
   const pathname = usePathname()
 
@@ -209,11 +210,25 @@ export function TaskFilters({ stores, departments, currentParams, showArchived, 
             </Button>
           )}
 
+          {/* Reveal tasks older than 14 days (hidden by default for a clean
+              overview). View-only — no archiving involved. */}
+          {!isStaff && (
+            <Button
+              variant={showOld ? 'default' : 'outline'}
+              size="sm"
+              className="h-8 text-xs gap-1.5 ml-auto"
+              onClick={() => update('show_old', showOld ? null : 'true')}
+            >
+              <History className="h-3.5 w-3.5" />
+              {showOld ? 'Ẩn task cũ' : 'Hiện task cũ (>14 ngày)'}
+            </Button>
+          )}
+
           {!isStaff && (
             <Button
               variant="outline"
               size="sm"
-              className="h-8 text-xs gap-1.5 ml-auto"
+              className="h-8 text-xs gap-1.5"
               onClick={toggleArchive}
             >
               <Archive className="h-3.5 w-3.5" />

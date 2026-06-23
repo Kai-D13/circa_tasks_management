@@ -45,10 +45,19 @@ export function dateStr(v: unknown): string | null {
   if (v instanceof Date) return v.toISOString().slice(0, 10)
   if (typeof v === 'number') return excelSerialToISO(v) // Excel/Sheets serial date
   const s = String(v).trim()
-  const iso = s.match(/^(\d{4}-\d{2}-\d{2})/) // ISO (BigQuery/Sheets export)
+  const iso = s.match(/^(\d{4}-\d{2}-\d{2})/) // ISO (BigQuery/Sheets export) — primary
   if (iso) return iso[1]
-  const us = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/) // MM/DD/YYYY
-  if (us) return `${us[3]}-${us[1].padStart(2, '0')}-${us[2].padStart(2, '0')}`
+  // Slashed date: a Sheet rendered in VN locale shows DD/MM/YYYY, BI/US shows
+  // MM/DD/YYYY. Disambiguate by the first part: >12 ⇒ it's the day (DD/MM);
+  // otherwise assume MM/DD (the BigQuery/BI convention). Ambiguous ≤12/≤12 dates
+  // fall to MM/DD — but the source is BigQuery, which exports ISO, so this is a
+  // rare fallback.
+  const slash = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/)
+  if (slash) {
+    const a = slash[1], b = slash[2], y = slash[3]
+    const [mm, dd] = parseInt(a, 10) > 12 ? [b, a] : [a, b]
+    return `${y}-${mm.padStart(2, '0')}-${dd.padStart(2, '0')}`
+  }
   return null
 }
 

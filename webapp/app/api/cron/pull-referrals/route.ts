@@ -52,8 +52,28 @@ export async function GET(request: NextRequest) {
   try {
     const rawRows = await readSheetRows()
     const parsed = parseReferralRows(rawRows)
-    if ('error' in parsed) return NextResponse.json({ error: parsed.error }, { status: 422 })
+    if ('error' in parsed) return NextResponse.json({ error: parsed.error, pulled: rawRows.length }, { status: 422 })
     const rows = parsed.rows
+
+    // Safety guard — this is a REPLACE-ALL. A broken/empty Sheet must never wipe a
+    // healthy snapshot. Abort (don't replace) if the new set is suspiciously small
+    // vs. what's already stored, or below an optional floor. Manual JSON upload
+    // stays available to recover.
+    const minRows = parseInt(process.env.REFERRAL_MIN_ROWS ?? '1', 10) || 1
+    if (rows.length < minRows) {
+      return NextResponse.json(
+        { error: `Chỉ có ${rows.length} dòng hợp lệ (< ${minRows}) — bỏ qua để khỏi ghi đè. Kiểm tra Google Sheet.`, pulled: rawRows.length },
+        { status: 422 },
+      )
+    }
+    const { count: currentCount } = await supabaseAdmin
+      .from('staff_referrals').select('*', { count: 'exact', head: true })
+    if ((currentCount ?? 0) >= 20 && rows.length < (currentCount ?? 0) * 0.5) {
+      return NextResponse.json(
+        { error: `Số dòng mới (${rows.length}) thấp bất thường so với hiện có (${currentCount}) — bỏ qua để tránh ghi đè dữ liệu sai. Kiểm tra query/Google Sheet rồi chạy lại.`, pulled: rawRows.length },
+        { status: 422 },
+      )
+    }
 
     // Atomic replace via RPC (delete-all + insert in one transaction). No user in
     // the cron context → uploaded_by = null (column is nullable).

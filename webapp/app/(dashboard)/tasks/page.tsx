@@ -24,7 +24,7 @@ function normalizeCompletedBy(task: unknown): { full_name: string } | null {
 export default async function TasksPage({
   searchParams,
 }: {
-  searchParams: Promise<{ view?: string; status?: string; priority?: string; store_id?: string; category?: string; department_id?: string; archived?: string; page?: string }>
+  searchParams: Promise<{ view?: string; status?: string; priority?: string; store_id?: string; category?: string; department_id?: string; archived?: string; show_old?: string; page?: string }>
 }) {
   const params = await searchParams
   const supabase = await createClient()
@@ -40,6 +40,9 @@ export default async function TasksPage({
   // an old link like /tasks?priority=urgent would silently hide tasks, making users
   // think tasks are missing. Ignore all filter params for staff.
   const showArchived = !isStaff && params.archived === 'true'
+  // "Hiện task cũ": opt-in to see tasks older than 14 days in the normal views
+  // (they're hidden by default for a clean overview). Non-staff only.
+  const showOld = !isStaff && params.show_old === 'true'
   // Primary split: "pending" (anything not done) vs "done". Default is pending for
   // ALL roles — the first thing everyone needs is "what's still open", not history.
   // Archive view ignores the tab (it's a separate axis).
@@ -108,17 +111,17 @@ export default async function TasksPage({
     : query.range(offset, isStaff ? offset + pageSize : offset + pageSize - 1)
 
   // Auto-declutter: hide tasks created more than 14 days ago from the default
-  // views (overview focus). They stay reachable in the Archive view. Staff are
-  // EXEMPT — they have no Archive tab and must act on their open tasks regardless
-  // of age, so hiding would orphan their work. No data is mutated (view-only).
+  // views (overview focus). They remain reachable on demand via the "Hiện task
+  // cũ" toggle (show_old) — NOT mixed into Archive, so Archive stays purely
+  // archived tasks and Restore behaves correctly. Staff are EXEMPT (they have no
+  // toggle and must act on their open tasks). No data is mutated (view-only).
   const HIDE_AFTER_DAYS = 14
   const ageCutoffIso = new Date(Date.now() - HIDE_AFTER_DAYS * 86400_000).toISOString()
   if (showArchived) {
-    // Archive = truly-archived tasks OR anything auto-hidden by the 14-day cutoff.
-    query = query.or(`archived_at.not.is.null,created_at.lt.${ageCutoffIso}`)
+    query = query.not('archived_at', 'is', null) // truly-archived only
   } else {
     query = query.is('archived_at', null)
-    if (!isStaff) query = query.gte('created_at', ageCutoffIso)
+    if (!isStaff && !showOld) query = query.gte('created_at', ageCutoffIso)
   }
 
   // View gate — skipped entirely in archive view (archive shows ALL archived tasks,
@@ -658,7 +661,7 @@ export default async function TasksPage({
   const effectiveTotalPages = groupPaginate ? groupTotalPages : totalPages
 
   // Drives the empty-state copy: are filters narrowing the (empty) result?
-  const hasActiveFilters = !isStaff && !!(params.status || params.priority || params.store_id || params.category)
+  const hasActiveFilters = !isStaff && !!(params.status || params.priority || params.store_id || params.category || params.department_id)
 
   // Build href that preserves filters but changes page.
   // Staff only carry 'view' — never status/priority/store_id/category/archived,
@@ -668,7 +671,7 @@ export default async function TasksPage({
     if (isStaff) {
       if (params.view) q.set('view', params.view)
     } else {
-      const carry = ['view', 'status', 'priority', 'store_id', 'category', 'department_id', 'archived'] as const
+      const carry = ['view', 'status', 'priority', 'store_id', 'category', 'department_id', 'archived', 'show_old'] as const
       carry.forEach((k) => { if (params[k]) q.set(k, params[k]!) })
     }
     if (p > 1) q.set('page', String(p))
@@ -697,6 +700,7 @@ export default async function TasksPage({
         departments={departments ?? []}
         currentParams={params as Record<string, string>}
         showArchived={showArchived}
+        showOld={showOld}
         view={view}
         isStaff={isStaff}
       />

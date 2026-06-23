@@ -37,7 +37,11 @@ export async function GET(request: NextRequest) {
   const p = request.nextUrl.searchParams
   const view = p.get('view') === 'done' ? 'done' : 'pending'
   const showArchived = p.get('archived') === 'true'
+  const showOld = p.get('show_old') === 'true'
   const nowIso = new Date().toISOString()
+  // Mirror /tasks: hide tasks created >14 days ago from non-archived exports
+  // unless "show_old" is on, so the file matches what's on screen.
+  const ageCutoffIso = new Date(Date.now() - 14 * 86400_000).toISOString()
 
   let query = supabase
     .from('tasks')
@@ -53,6 +57,7 @@ export async function GET(request: NextRequest) {
     query = query.not('archived_at', 'is', null).order('created_at', { ascending: false })
   } else {
     query = query.is('archived_at', null)
+    if (!showOld) query = query.gte('created_at', ageCutoffIso)
     if (view === 'done') {
       query = query.eq('status', 'done')
         .order('completed_at', { ascending: false, nullsFirst: false })
@@ -73,6 +78,7 @@ export async function GET(request: NextRequest) {
   if (p.get('priority')) query = query.eq('priority', p.get('priority') as string)
   if (p.get('store_id')) query = query.eq('store_id', p.get('store_id') as string)
   if (p.get('category')) query = query.eq('category', p.get('category') as string)
+  if (p.get('department_id')) query = query.eq('department_id', p.get('department_id') as string)
   if (isSm) query = query.in('store_id', smStoreIds)
 
   const { data, error } = await query
