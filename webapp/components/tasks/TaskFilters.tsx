@@ -10,7 +10,8 @@ import { cn } from '@/lib/utils'
 
 interface Props {
   stores:        Pick<Store, 'id' | 'name'>[]
-  currentParams: { view?: string; status?: string; priority?: string; store_id?: string; category?: string; archived?: string }
+  departments:   { id: string; name: string }[]
+  currentParams: { view?: string; status?: string; priority?: string; store_id?: string; category?: string; department_id?: string; archived?: string }
   showArchived?: boolean
   view?:         'pending' | 'done'
   isStaff?:      boolean
@@ -41,7 +42,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   other:     'Khác',
 }
 
-export function TaskFilters({ stores, currentParams, showArchived, view = 'pending', isStaff = false }: Props) {
+export function TaskFilters({ stores, departments, currentParams, showArchived, view = 'pending', isStaff = false }: Props) {
   const router   = useRouter()
   const pathname = usePathname()
 
@@ -63,7 +64,7 @@ export function TaskFilters({ stores, currentParams, showArchived, view = 'pendi
     const params = new URLSearchParams()
     if (v === 'done') params.set('view', 'done')
     if (!isStaff) {
-      ;(['priority', 'store_id', 'category'] as const).forEach((k) => {
+      ;(['priority', 'store_id', 'category', 'department_id'] as const).forEach((k) => {
         if (currentParams[k]) params.set(k, currentParams[k]!)
       })
       if (v === 'pending' && currentParams.status && currentParams.status !== 'done') {
@@ -94,6 +95,7 @@ export function TaskFilters({ stores, currentParams, showArchived, view = 'pendi
   const priorityVal = currentParams.priority ?? ALL
   const storeIdVal  = currentParams.store_id ?? ALL
   const categoryVal = currentParams.category ?? ALL
+  const deptIdVal   = currentParams.department_id ?? ALL
 
   const storeOptions = [
     { value: ALL, label: 'Tất cả cửa hàng' },
@@ -181,6 +183,22 @@ export function TaskFilters({ stores, currentParams, showArchived, view = 'pendi
                 <SelectItem value="display">Trưng bày</SelectItem>
                 <SelectItem value="audit">Kiểm tra</SelectItem>
                 <SelectItem value="other">Khác</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
+
+          {!isStaff && departments.length > 0 && (
+            <Select value={deptIdVal} onValueChange={(v) => update('department_id', v)}>
+              <SelectTrigger className="w-40 h-8 text-sm">
+                <SelectValue>
+                  {deptIdVal === ALL ? 'Tất cả bộ phận' : (departments.find((d) => d.id === deptIdVal)?.name ?? 'Bộ phận')}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>Tất cả bộ phận</SelectItem>
+                {departments.map((d) => (
+                  <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
           )}

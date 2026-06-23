@@ -24,7 +24,7 @@ function normalizeCompletedBy(task: unknown): { full_name: string } | null {
 export default async function TasksPage({
   searchParams,
 }: {
-  searchParams: Promise<{ view?: string; status?: string; priority?: string; store_id?: string; category?: string; archived?: string; page?: string }>
+  searchParams: Promise<{ view?: string; status?: string; priority?: string; store_id?: string; category?: string; department_id?: string; archived?: string; page?: string }>
 }) {
   const params = await searchParams
   const supabase = await createClient()
@@ -143,6 +143,7 @@ export default async function TasksPage({
   if (!isStaff && params.priority) query = query.eq('priority', params.priority)
   if (!isStaff && params.store_id) query = query.eq('store_id', params.store_id)
   if (!isStaff && params.category) query = query.eq('category', params.category)
+  if (!isStaff && params.department_id) query = query.eq('department_id', params.department_id)
   // SM: scope to assigned stores (RLS SELECT policy is the gate; this is the app-layer filter)
   if (isSm) query = query.in('store_id', smStoreIds)
 
@@ -170,13 +171,16 @@ export default async function TasksPage({
 
   // Staff have no store filter (storesForFilter is [] for them), so skip the query
   // entirely instead of fetching and discarding it. (isStaff computed above.)
-  const [{ data: tasks, error: tasksError, count }, { data: stores }] = await Promise.all([
+  const [{ data: tasks, error: tasksError, count }, { data: stores }, { data: departments }] = await Promise.all([
     query,
     isStaff
       ? Promise.resolve({ data: [] as { id: string; name: string }[] })
       : isSm
         ? supabase.from('stores').select('id, name').in('id', smStoreIds).order('name')
         : supabase.from('stores').select('id, name').order('name'),
+    isStaff
+      ? Promise.resolve({ data: [] as { id: string; name: string }[] })
+      : supabase.from('departments').select('id, name').order('name'),
   ])
 
   const totalRows  = count ?? 0
@@ -664,7 +668,7 @@ export default async function TasksPage({
     if (isStaff) {
       if (params.view) q.set('view', params.view)
     } else {
-      const carry = ['view', 'status', 'priority', 'store_id', 'category', 'archived'] as const
+      const carry = ['view', 'status', 'priority', 'store_id', 'category', 'department_id', 'archived'] as const
       carry.forEach((k) => { if (params[k]) q.set(k, params[k]!) })
     }
     if (p > 1) q.set('page', String(p))
@@ -690,6 +694,7 @@ export default async function TasksPage({
 
       <TaskFilters
         stores={storesForFilter}
+        departments={departments ?? []}
         currentParams={params as Record<string, string>}
         showArchived={showArchived}
         view={view}
