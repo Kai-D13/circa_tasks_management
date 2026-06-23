@@ -82,8 +82,8 @@ export default async function TasksPage({
     )
   }
   let query = needsCompleted
-    ? supabase.from('tasks').select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, completed_by, completed_at, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), completed_by_user:users!completed_by(full_name), department:departments(name, color)', countOpt)
-    : supabase.from('tasks').select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), department:departments(name, color)', countOpt)
+    ? supabase.from('tasks').select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, completed_by, completed_at, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), completed_by_user:users!completed_by(full_name), creator:users!created_by(full_name), department:departments(name, color)', countOpt)
+    : supabase.from('tasks').select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), creator:users!created_by(full_name), department:departments(name, color)', countOpt)
 
   // Ordering per view:
   //   pending -> deadline asc (overdue/soonest first), then newest created
@@ -518,6 +518,7 @@ export default async function TasksPage({
           stores:              (task.stores as unknown as { name: string } | null),
           assignee:            (task.assignee as unknown as { full_name: string } | null),
           completed_by_user:   normalizeCompletedBy(task),
+          creator:             (task.creator as unknown as { full_name: string } | null) ?? null,
           completed_at:        (task as { completed_at?: string | null }).completed_at ?? null,
           deadline:            (task.deadline as string | null) ?? null,
           overdue_at:          (task as { overdue_at?: string | null }).overdue_at ?? null,
@@ -548,6 +549,7 @@ export default async function TasksPage({
           stores:              (task.stores as unknown as { name: string } | null),
           assignee:            (task.assignee as unknown as { full_name: string } | null),
           completed_by_user:   normalizeCompletedBy(task),
+          creator:             (task.creator as unknown as { full_name: string } | null) ?? null,
           completed_at:        (task as { completed_at?: string | null }).completed_at ?? null,
           deadline:            (task.deadline as string | null) ?? null,
           overdue_at:          (task as { overdue_at?: string | null }).overdue_at ?? null,

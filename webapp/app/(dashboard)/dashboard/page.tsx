@@ -43,6 +43,7 @@ type DashboardRow =
       category:  string | null
       status:    string
       store:     string | null
+      creator:   string | null
       deadline:  string | null
       overdueAt: string | null
       createdAt: string
@@ -125,7 +126,7 @@ export default async function DashboardPage() {
         .limit(8),
       supabase
         .from('tasks')
-        .select('id, title, status, category, deadline, created_at, overdue_at, stores(name)')
+        .select('id, title, status, category, deadline, created_at, overdue_at, stores(name), creator:users!created_by(full_name)')
         .is('broadcast_id', null)
         .is('parent_task_id', null)       // exclude staff_all children (they're folded under parent)
         .is('archived_at', null)
@@ -174,6 +175,7 @@ export default async function DashboardPage() {
         category:  t.category ?? null,
         status:    t.status,
         store:     (t.stores as unknown as { name: string } | null)?.name ?? null,
+        creator:   (t.creator as unknown as { full_name: string } | null)?.full_name ?? null,
         deadline:  t.deadline ?? null,
         overdueAt: (t as { overdue_at?: string | null }).overdue_at ?? null,
         createdAt: t.created_at,
@@ -188,7 +190,7 @@ export default async function DashboardPage() {
     // Group by broadcast_id so broadcasts appear as 1 row — counts reflect visible tasks only.
     const { data: visibleTasks, error: ev } = await supabase
       .from('tasks')
-      .select('id, title, status, category, deadline, created_at, overdue_at, broadcast_id, assignment_mode, parent_task_id, stores(name)')
+      .select('id, title, status, category, deadline, created_at, overdue_at, broadcast_id, assignment_mode, parent_task_id, stores(name), creator:users!created_by(full_name)')
       .is('archived_at', null)
       .order('created_at', { ascending: false })
       .limit(50)
@@ -218,6 +220,7 @@ export default async function DashboardPage() {
             category:  t.category ?? null,
             status:    t.status,
             store:     (t.stores as unknown as { name: string } | null)?.name ?? null,
+            creator:   (t.creator as unknown as { full_name: string } | null)?.full_name ?? null,
             deadline:  t.deadline ?? null,
             overdueAt: (t as { overdue_at?: string | null }).overdue_at ?? null,
             createdAt: t.created_at,
@@ -402,6 +405,7 @@ export default async function DashboardPage() {
                             <Link href={`/tasks/${row.id}`} className="font-medium hover:underline">
                               {row.title}
                             </Link>
+                            <p className="mt-0.5 text-xs text-muted-foreground">Tạo bởi {row.creator ?? '—'}</p>
                           </TableCell>
                           <TableCell>
                             {row.category && row.category !== 'other' ? (
@@ -470,6 +474,7 @@ export default async function DashboardPage() {
                           </span>
                         )}
                       </div>
+                      <p className="text-xs text-muted-foreground">Tạo bởi {row.creator ?? '—'}</p>
                       <div className="flex items-center gap-2 flex-wrap">
                         <TaskStatusBadge status={row.status as 'todo' | 'in_progress' | 'done' | 'overdue'} late={row.status === 'done' && !!row.overdueAt} />
                         <span className="text-xs text-muted-foreground">{row.store ?? '—'}</span>

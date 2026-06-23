@@ -117,6 +117,7 @@ export type TaskRow = {
     stores:             { name: string } | null
     assignee:           { full_name: string } | null
     completed_by_user:  { full_name: string } | null
+    creator:            { full_name: string } | null
     completed_at:       string | null
     deadline:           string | null
     overdue_at:         string | null
@@ -771,6 +772,7 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
                   <div className="mt-0.5 flex flex-wrap items-center gap-1">
                     <TaskBadges task={task} userRole={userRole} effStatus={effStatus} />
                   </div>
+                  <p className="mt-0.5 text-xs text-muted-foreground">Tạo bởi {task.creator?.full_name ?? '—'}</p>
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">
                   {task.stores?.name ?? '—'}
@@ -989,6 +991,7 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
               <p className="mt-1.5 text-sm text-muted-foreground">{task.stores?.name ?? '—'}</p>
               <p className="text-sm font-medium">{submitter.primary}</p>
               {submitter.sub && <p className="text-xs text-muted-foreground">{submitter.sub}</p>}
+              <p className="text-xs text-muted-foreground">Tạo bởi {task.creator?.full_name ?? '—'}</p>
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                 <TaskPriorityBadge priority={task.priority as Task['priority']} />
                 <span>Hạn: {task.deadline ? formatDate(task.deadline) : '—'}</span>
