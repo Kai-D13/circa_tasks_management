@@ -83,10 +83,11 @@ export async function GET(request: NextRequest) {
 
     try {
       // Fetch store list for this schedule
-      const { data: schedStores } = await supabaseAdmin
+      const { data: schedStores, error: schedStoresErr } = await supabaseAdmin
         .from('task_schedule_stores')
         .select('store_id')
         .eq('schedule_id', sched.id)
+      if (schedStoresErr) throw new Error(`Store list query failed: ${schedStoresErr.message}`)
 
       const storeIds = (schedStores ?? []).map((s) => s.store_id)
       if (!storeIds.length) throw new Error('No stores configured for schedule')
@@ -105,11 +106,14 @@ export async function GET(request: NextRequest) {
       // Retry-safe: an interrupted prior run may have already created tasks for
       // some stores today. Skip those so this run neither duplicates (the partial
       // unique index would reject the batch) nor false-fails on a conflict.
-      const { data: existingTasks } = await supabaseAdmin
+      const { data: existingTasks, error: existingErr } = await supabaseAdmin
         .from('tasks')
         .select('store_id')
         .eq('source_schedule_id', sched.id)
         .eq('scheduled_for', today)
+      // Throw on error: an empty alreadyCreated from a failed query would make a
+      // retry re-create rows (caught by the unique index, but better to fail loud).
+      if (existingErr) throw new Error(`Existing-tasks query failed: ${existingErr.message}`)
 
       const alreadyCreated  = new Set((existingTasks ?? []).map((t) => t.store_id))
       const pendingStoreIds = storeIds.filter((id) => !alreadyCreated.has(id))
@@ -117,6 +121,7 @@ export async function GET(request: NextRequest) {
       let createdCount = 0
       let broadcastId: string | null = null
       let skippedEmptyStores: string[] = []
+      let staffChildCount = 0   // staff_all: total children across stores (ops signal)
 
       if (pendingStoreIds.length) {
         // Deadline — shared by both modes.
@@ -127,9 +132,13 @@ export async function GET(request: NextRequest) {
           // ── staff_all: 1 parent + 1 child per pharmacist, per store ──────────
           // Dynamic — every CURRENT role='staff' of each store at run time
           // (new hires included, leavers excluded). Mirrors createStaffRequiredTask.
-          const { data: staffRows } = await supabaseAdmin
+          // MUST throw on error: a failed query would otherwise look like "every
+          // store has 0 staff" → skip all + mark success + advance next_run_at = a
+          // silently missed run.
+          const { data: staffRows, error: staffErr } = await supabaseAdmin
             .from('users').select('id, store_id')
             .eq('role', 'staff').in('store_id', pendingStoreIds)
+          if (staffErr) throw new Error(`Staff query failed: ${staffErr.message}`)
 
           const staffByStore = new Map<string, string[]>()
           for (const s of staffRows ?? []) {
@@ -219,6 +228,7 @@ export async function GET(request: NextRequest) {
               }
 
               createdCount++  // count parents (one per store) — consistent with store mode
+              staffChildCount += children.length
               for (const m of (mgrByStore.get(storeId) ?? [])) {
                 notifications.push({
                   user_id: m, type: 'task_assigned', task_id: parent.id,
@@ -357,7 +367,9 @@ export async function GET(request: NextRequest) {
           frequency:       sched.frequency,
           assignment_mode: sched.assignment_mode,
           store_count:     createdCount,
-          skipped_empty_stores: skippedEmptyStores.length,
+          child_count:     staffChildCount,   // staff_all only; 0 for store mode
+          skipped_empty_stores:    skippedEmptyStores.length,
+          skipped_empty_store_ids: skippedEmptyStores,
           scheduled_for:   today,
         },
       })

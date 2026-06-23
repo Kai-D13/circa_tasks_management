@@ -31,6 +31,7 @@ type DashboardRow =
       broadcastId: string
       title:       string
       category:    string | null
+      creator:     string | null
       total:       number
       done:        number
       deadline:    string | null
@@ -142,11 +143,11 @@ export default async function DashboardPage() {
       const broadcastStatResult = broadcastIds.length > 0
         ? await supabase
             .from('tasks')
-            .select('broadcast_id, status, category, deadline')
+            .select('broadcast_id, status, category, deadline, creator:users!created_by(full_name)')
             .in('broadcast_id', broadcastIds)
             .is('archived_at', null)
             .neq('assignment_mode', 'staff_all')  // parents are overview-only, count children only
-        : { data: [] as { broadcast_id: string; status: string; category: string | null; deadline: string | null }[], error: null }
+        : { data: [] as { broadcast_id: string; status: string; category: string | null; deadline: string | null; creator?: { full_name: string } | null }[], error: null }
       const { data: broadcastTasksRaw, error: est } = broadcastStatResult
       if (est) recentError = est
 
@@ -159,6 +160,7 @@ export default async function DashboardPage() {
             broadcastId: b.id,
             title:       b.title,
             category:    bTasks[0]?.category ?? null,
+            creator:     (bTasks[0]?.creator as unknown as { full_name: string } | null)?.full_name ?? null,
             total:       bTasks.length,
             done:        bTasks.filter((t) => t.status === 'done').length,
             deadline:    bTasks.reduce<string | null>((min, t) =>
@@ -237,6 +239,7 @@ export default async function DashboardPage() {
               broadcastId: t.broadcast_id,
               title:       t.title,
               category:    t.category ?? null,
+              creator:     (t.creator as unknown as { full_name: string } | null)?.full_name ?? null,
               total:       1,
               done:        t.status === 'done' ? 1 : 0,
               deadline:    t.deadline ?? null,
@@ -376,6 +379,7 @@ export default async function DashboardPage() {
                                 <Radio className="h-3.5 w-3.5 text-primary shrink-0" />
                                 {row.title}
                               </div>
+                              <p className="mt-0.5 ml-5 text-xs text-muted-foreground">Tạo bởi {row.creator ?? '—'}</p>
                             </TableCell>
                             <TableCell>
                               {row.category && row.category !== 'other' ? (
@@ -448,6 +452,7 @@ export default async function DashboardPage() {
                           <Radio className="h-3.5 w-3.5 text-primary shrink-0 mt-0.5" />
                           <span className="font-medium text-sm leading-snug">{row.title}</span>
                         </div>
+                        <p className="pl-5 text-xs text-muted-foreground">Tạo bởi {row.creator ?? '—'}</p>
                         <div className="flex items-center gap-2 flex-wrap pl-5">
                           {row.category && row.category !== 'other' && (
                             <span className={cn('text-xs px-1.5 py-0.5 rounded', CATEGORY_STYLE[row.category as TaskCategory] ?? 'bg-gray-100 text-gray-600')}>

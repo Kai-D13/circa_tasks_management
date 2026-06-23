@@ -50,6 +50,7 @@ export type BroadcastGroup = {
   title:       string
   category:    string | null
   department?: DeptTag
+  creator?:    { full_name: string } | null
   total:       number
   done:        number
   createdAt:   string
@@ -63,6 +64,7 @@ export type BroadcastGroup = {
 export type StaffGroup = {
   type:       'staff'
   department?: DeptTag
+  creator?:   { full_name: string } | null
   parentId:   string
   title:      string
   category:   string | null
@@ -93,6 +95,7 @@ export type StaffBroadcastGroup = {
   title:       string
   category:    string | null
   department?: DeptTag
+  creator?:    { full_name: string } | null
   createdAt:   string
   taskIds:     string[]     // all parents + children, for archive selection
   stores:      StaffBroadcastStore[]
@@ -406,6 +409,7 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
                           {item.total} cửa hàng
                         </span>
                       </div>
+                      <p className="text-xs text-muted-foreground font-normal ml-6 mt-0.5">Tạo bởi {item.creator?.full_name ?? '—'}</p>
                     </TableCell>
                     <TableCell className="text-sm whitespace-nowrap" onClick={() => toggleExpand(item.broadcastId)}>
                       <span className={cn(
@@ -523,6 +527,7 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
                           {item.totalStores} cửa hàng · {item.totalStaff} dược sĩ
                         </span>
                       </div>
+                      <p className="text-xs text-muted-foreground font-normal ml-6 mt-0.5">Tạo bởi {item.creator?.full_name ?? '—'}</p>
                     </TableCell>
                     <TableCell className="text-sm whitespace-nowrap" onClick={() => toggleExpand(item.broadcastId)}>
                       <span className={cn(
@@ -685,6 +690,7 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
                           {item.storeName ? `${item.storeName} · ` : ''}{item.total} dược sĩ
                         </span>
                       </div>
+                      <p className="text-xs text-muted-foreground font-normal ml-6 mt-0.5">Tạo bởi {item.creator?.full_name ?? '—'}</p>
                     </TableCell>
                     <TableCell className="text-sm whitespace-nowrap" onClick={() => toggleExpand(item.parentId)}>
                       <span className={cn(
@@ -833,6 +839,7 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
                       <span className="block text-xs text-muted-foreground font-normal">
                         {item.totalStores} cửa hàng · {item.totalStaff} dược sĩ
                       </span>
+                      <span className="block text-xs text-muted-foreground font-normal">Tạo bởi {item.creator?.full_name ?? '—'}</span>
                     </span>
                     <span className={cn('text-sm font-medium whitespace-nowrap', allDone ? 'text-green-600' : 'text-amber-600')}>
                       {item.doneStaff}/{item.totalStaff}
@@ -930,7 +937,10 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
                     ? <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
                     : <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />}
                   <Icon className="h-4 w-4 text-primary shrink-0" />
-                  <span className="font-medium flex-1 truncate">{item.title}</span>
+                  <span className="font-medium flex-1 min-w-0">
+                    <span className="block truncate">{item.title}</span>
+                    <span className="block text-xs text-muted-foreground font-normal">Tạo bởi {item.creator?.full_name ?? '—'}</span>
+                  </span>
                   <span className={cn('text-sm font-medium whitespace-nowrap', allDone ? 'text-green-600' : 'text-amber-600')}>
                     {item.done}/{item.total}
                   </span>
