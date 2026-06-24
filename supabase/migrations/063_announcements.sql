@@ -49,18 +49,26 @@ CREATE POLICY ann_select ON public.announcements FOR SELECT TO authenticated
   USING (
     (select public.is_super_admin())
     OR (select public.get_user_role()) = 'admin'
-    OR visibility = 'all'
-    OR EXISTS (
-      SELECT 1 FROM public.announcement_stores a
-      WHERE a.announcement_id = announcements.id
-        AND a.store_id = (select public.get_user_store_id())
-    )
     OR (
-      (select public.get_user_role()) = 'sm' AND EXISTS (
-        SELECT 1 FROM public.announcement_stores a
-        JOIN public.sm_store_assignments s ON s.store_id = a.store_id
-        WHERE a.announcement_id = announcements.id
-          AND s.sm_user_id = (select auth.uid())
+      -- Non-admin viewers: only NON-EXPIRED announcements in their audience.
+      -- Putting expiry in RLS makes it a real boundary — a kept direct link / API
+      -- call / read-receipt for an expired announcement is rejected too.
+      (expires_at IS NULL OR expires_at > now())
+      AND (
+        visibility = 'all'
+        OR EXISTS (
+          SELECT 1 FROM public.announcement_stores a
+          WHERE a.announcement_id = announcements.id
+            AND a.store_id = (select public.get_user_store_id())
+        )
+        OR (
+          (select public.get_user_role()) = 'sm' AND EXISTS (
+            SELECT 1 FROM public.announcement_stores a
+            JOIN public.sm_store_assignments s ON s.store_id = a.store_id
+            WHERE a.announcement_id = announcements.id
+              AND s.sm_user_id = (select auth.uid())
+          )
+        )
       )
     )
   );

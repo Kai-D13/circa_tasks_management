@@ -4,7 +4,7 @@ import { isSuperAdminEmail } from '@/lib/authz'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { TargetUploadForm } from '@/components/targets/TargetUploadForm'
 import { ReferralCard, type ReferralItem } from '@/components/referral/ReferralCard'
-import { formatDateTime, weekEndISO, weekLenDays } from '@/lib/dateUtils'
+import { formatDateTime, weekEndISO, weekLenDays, currentWeekStart } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
 import { Flame, Target, TrendingUp } from 'lucide-react'
 
@@ -120,8 +120,14 @@ export default async function TargetsPage() {
       )
     }
 
-    const current = (rows ?? [])[0] as TargetRecord | undefined
-    const history = ((rows ?? []) as TargetRecord[]).slice(1)
+    // CURRENT week = the row whose [week_start, weekEnd] range contains today —
+    // NOT simply the newest row. Prevents jumping to a 29/06 row on 29–30 June
+    // while the 22/06 week still runs to month-end (30/06).
+    const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
+    const allWeekRows = (rows ?? []) as TargetRecord[]
+    const currentWs = currentWeekStart(allWeekRows.map((r) => r.week_start), vnTodayISO)
+    const current = allWeekRows.find((r) => r.week_start === currentWs)
+    const history = allWeekRows.filter((r) => r.week_start !== currentWs)
     const storeName = (profile.stores as unknown as { name: string } | null)?.name ?? 'Cửa hàng của bạn'
 
     // Referral campaign card (staff_referrals, uploaded by super admin; RLS
@@ -166,7 +172,6 @@ export default async function TargetsPage() {
     const remaining = hasGoal
       ? (current!.remaining_target ?? Math.max(weekGoal - (current!.actual ?? 0), 0))
       : null
-    const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
     // Week end extends to month-end for the last partial week (weekEndISO); the
     // week length (7, or more at month-end) drives days-left + pace, so "Hôm nay
     // cần đạt" divides by the real number of remaining days.
@@ -359,8 +364,12 @@ export default async function TargetsPage() {
     .order('refreshed_at', { ascending: false })
     .limit(120)
 
-  const latestWeek = (allRows ?? [])[0]?.week_start as string | undefined
-  const weekRows = ((allRows ?? []) as unknown as TargetRecord[])
+  const adminTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
+  const allTargetRows = (allRows ?? []) as unknown as TargetRecord[]
+  // Current week by range-contains-today (same rule as the staff card), so the
+  // all-stores table doesn't jump to a 29/06 week while 22/06 runs to month-end.
+  const latestWeek = currentWeekStart(allTargetRows.map((r) => r.week_start), adminTodayISO)
+  const weekRows = allTargetRows
     .filter((r) => r.week_start === latestWeek)
     .sort((a, b) => (a.stores?.name ?? '').localeCompare(b.stores?.name ?? '', 'vi'))
 

@@ -25,7 +25,7 @@ export async function createAnnouncement(input: {
   if (!title) return { error: 'Vui lòng nhập tiêu đề' }
   const body = sanitizeRichText(input.body)
   if (!body) return { error: 'Vui lòng nhập nội dung' }
-  const excerpt = richTextToPlain(input.body).slice(0, 160)
+  const excerpt = richTextToPlain(body).slice(0, 160)
   const visibility = input.visibility === 'stores' ? 'stores' : 'all'
   const storeIds = visibility === 'stores'
     ? [...new Set((input.storeIds ?? []).filter((s): s is string => typeof s === 'string'))]

@@ -98,6 +98,25 @@ export function weekEndISO(weekStart: string): string {
   return end.toISOString().slice(0, 10)
 }
 
+// Pick the KPI week that is CURRENT for `todayISO` ('YYYY-MM-DD'): the week whose
+// [week_start, weekEndISO] range contains today. On the month-end overlap (e.g.
+// 22/06's extended week 22–30 vs a 29/06 week), prefer the EARLIEST week_start so
+// the extended last-of-month week wins through month-end (stakeholder intent).
+// Falls back to the latest week_start ≤ today, else the most recent week.
+export function currentWeekStart(weekStarts: string[], todayISO: string): string | undefined {
+  const uniq = [...new Set(weekStarts.filter(Boolean))]
+  if (!uniq.length) return undefined
+  const today = Date.parse(`${todayISO}T00:00:00Z`)
+  const inRange = uniq.filter((ws) => {
+    const s = Date.parse(`${ws}T00:00:00Z`)
+    const e = Date.parse(`${weekEndISO(ws)}T00:00:00Z`)
+    return s <= today && today <= e
+  })
+  if (inRange.length) return inRange.reduce((a, b) => (a <= b ? a : b)) // earliest
+  const past = uniq.filter((ws) => Date.parse(`${ws}T00:00:00Z`) <= today).sort().reverse()
+  return past[0] ?? [...uniq].sort().reverse()[0]
+}
+
 // Inclusive length in days of the KPI week (7 normally, more for an extended
 // last-of-month week).
 export function weekLenDays(weekStart: string): number {

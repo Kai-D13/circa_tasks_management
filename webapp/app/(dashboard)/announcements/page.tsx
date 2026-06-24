@@ -17,15 +17,13 @@ export default async function AnnouncementsPage() {
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
   const isAdmin = profile?.role === 'admin'
 
-  const nowIso = new Date().toISOString()
-  let annQuery = supabase
+  // Expiry is enforced in RLS (ann_select) — non-admin never receive expired
+  // rows; admins see all (to manage), with an "Hết hạn" tag below.
+  const { data: anns, error: annErr } = await supabase
     .from('announcements')
     .select('id, title, excerpt, visibility, published_at, expires_at, creator:users!created_by(full_name)')
     .order('published_at', { ascending: false })
     .limit(100)
-  // Non-admin viewers don't see expired announcements; admins see all (to manage).
-  if (!isAdmin) annQuery = annQuery.or(`expires_at.is.null,expires_at.gt.${nowIso}`)
-  const { data: anns, error: annErr } = await annQuery
   if (annErr) {
     // Surface (don't read a broken migration/RLS as "no announcements").
     console.error('[announcements] list query failed:', annErr.message)
@@ -37,14 +35,21 @@ export default async function AnnouncementsPage() {
   }
   const list = anns ?? []
 
-  // Unread highlight for non-admin viewers.
+  // Unread highlight for non-admin viewers. If the reads query fails, DON'T mark
+  // everything "Mới" (misleading) — skip the badge entirely.
   let readIds = new Set<string>()
+  let readsOk = true
   if (!isAdmin && list.length) {
-    const { data: reads } = await supabase
+    const { data: reads, error: readsErr } = await supabase
       .from('announcement_reads')
       .select('announcement_id')
       .in('announcement_id', list.map((a) => a.id))
-    readIds = new Set((reads ?? []).map((r) => r.announcement_id))
+    if (readsErr) {
+      console.error('[announcements] reads query failed:', readsErr.message)
+      readsOk = false
+    } else {
+      readIds = new Set((reads ?? []).map((r) => r.announcement_id))
+    }
   }
 
   return (
@@ -71,7 +76,7 @@ export default async function AnnouncementsPage() {
       ) : (
         <div className="space-y-2">
           {list.map((a) => {
-            const unread = !isAdmin && !readIds.has(a.id)
+            const unread = !isAdmin && readsOk && !readIds.has(a.id)
             const creator = (a.creator as unknown as { full_name: string } | null)?.full_name ?? '—'
             const expired = !!a.expires_at && Date.parse(a.expires_at as string) < Date.now()
             return (
