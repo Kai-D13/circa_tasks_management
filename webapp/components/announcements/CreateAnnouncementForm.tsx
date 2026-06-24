@@ -15,6 +15,7 @@ export function CreateAnnouncementForm({ stores }: { stores: { id: string; name:
   const [body, setBody]             = useState('')
   const [visibility, setVisibility] = useState<'all' | 'stores'>('all')
   const [storeIds, setStoreIds]     = useState<Set<string>>(new Set())
+  const [expiresAt, setExpiresAt]   = useState('')
   const [pending, start]            = useTransition()
 
   function toggleStore(id: string) {
@@ -29,7 +30,7 @@ export function CreateAnnouncementForm({ stores }: { stores: { id: string; name:
     if (!title.trim()) { toast.error('Vui lòng nhập tiêu đề'); return }
     if (visibility === 'stores' && storeIds.size === 0) { toast.error('Chọn ít nhất một cửa hàng'); return }
     start(async () => {
-      const r = await createAnnouncement({ title, body, visibility, storeIds: [...storeIds] })
+      const r = await createAnnouncement({ title, body, visibility, storeIds: [...storeIds], expiresAt: expiresAt || null })
       if ('error' in r) { toast.error(r.error); return }
       toast.success('Đã tạo thông báo')
       router.push('/announcements')
@@ -83,6 +84,12 @@ export function CreateAnnouncementForm({ stores }: { stores: { id: string; name:
           {stores.length === 0 && <p className="px-3 py-2 text-sm text-muted-foreground">Chưa có cửa hàng.</p>}
         </div>
       )}
+
+      <div>
+        <label className="text-sm font-medium">Ngày hết hạn <span className="text-muted-foreground font-normal">(tùy chọn)</span></label>
+        <Input type="date" value={expiresAt} onChange={(e) => setExpiresAt(e.target.value)} className="mt-1 w-fit" />
+        <p className="text-xs text-muted-foreground mt-1">Sau ngày này, Staff/Store sẽ không còn thấy thông báo. Để trống = không hết hạn.</p>
+      </div>
 
       <Button onClick={submit} disabled={pending}>
         {pending ? 'Đang tạo...' : 'Tạo thông báo'}

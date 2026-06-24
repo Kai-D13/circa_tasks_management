@@ -13,6 +13,7 @@ export async function createAnnouncement(input: {
   body: string
   visibility: 'all' | 'stores'
   storeIds?: string[]
+  expiresAt?: string | null   // 'YYYY-MM-DD'; null = no expiry
 }) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -32,10 +33,16 @@ export async function createAnnouncement(input: {
   if (visibility === 'stores' && storeIds.length === 0)
     return { error: 'Chọn ít nhất một cửa hàng (hoặc gửi cho tất cả)' }
 
+  // Expiry: keep the announcement active through the END of the chosen day (VN).
+  let expires_at: string | null = null
+  if (input.expiresAt && /^\d{4}-\d{2}-\d{2}$/.test(input.expiresAt)) {
+    expires_at = `${input.expiresAt}T23:59:59+07:00`
+  }
+
   // Insert via the authed client so RLS (ann_insert) enforces admin + created_by.
   const { data: ann, error: annErr } = await supabase
     .from('announcements')
-    .insert({ title, body, excerpt, visibility, created_by: user.id })
+    .insert({ title, body, excerpt, visibility, created_by: user.id, expires_at })
     .select('id')
     .single()
   if (annErr || !ann) return { error: annErr?.message ?? 'Không tạo được thông báo' }

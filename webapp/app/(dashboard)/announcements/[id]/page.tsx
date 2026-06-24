@@ -16,11 +16,19 @@ export default async function AnnouncementDetailPage({ params }: { params: Promi
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
   const isAdmin = profile?.role === 'admin'
 
-  const { data: ann } = await supabase
+  const { data: ann, error: annErr } = await supabase
     .from('announcements')
     .select('id, title, body, visibility, published_at, creator:users!created_by(full_name)')
     .eq('id', id)
-    .single()
+    .maybeSingle()
+  if (annErr) {
+    console.error('[announcements] detail query failed:', annErr.message)
+    return (
+      <div className="p-4 md:p-6 max-w-2xl">
+        <p className="text-sm text-destructive">Không tải được thông báo. Vui lòng thử lại sau hoặc báo Admin.</p>
+      </div>
+    )
+  }
   if (!ann) notFound()
 
   // Admin: read-receipt stats (who viewed).

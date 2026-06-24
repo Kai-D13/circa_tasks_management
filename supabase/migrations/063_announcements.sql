@@ -91,9 +91,15 @@ CREATE POLICY anns_write ON public.announcement_stores FOR ALL TO authenticated
 
 -- ── RLS: announcement_reads ─────────────────────────────────────────────────
 -- A user records + sees their own reads; super/admin see all (read stats).
+-- A user may only mark-read an announcement they can actually SEE. The EXISTS
+-- subquery runs under the user's RLS on announcements (ann_select), so a guessed
+-- UUID for a non-visible announcement is rejected — keeps read stats honest.
 DROP POLICY IF EXISTS ar_insert ON public.announcement_reads;
 CREATE POLICY ar_insert ON public.announcement_reads FOR INSERT TO authenticated
-  WITH CHECK (user_id = (select auth.uid()));
+  WITH CHECK (
+    user_id = (select auth.uid())
+    AND EXISTS (SELECT 1 FROM public.announcements a WHERE a.id = announcement_id)
+  );
 
 DROP POLICY IF EXISTS ar_select ON public.announcement_reads;
 CREATE POLICY ar_select ON public.announcement_reads FOR SELECT TO authenticated
