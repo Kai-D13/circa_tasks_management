@@ -77,3 +77,32 @@ export function formatVnLocalDateTimeString(value: string | null | undefined): s
   const m = String(value).match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/)
   return m ? `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}` : String(value)
 }
+
+// KPI week end (ISO 'YYYY-MM-DD') for a week starting on the given Monday.
+// Normally Monday + 6 (Sunday). BUT the LAST partial week of a month absorbs the
+// leftover days to month-end: if the tail after Sunday is a stub (< 7 days), the
+// week extends to the last day of the month (e.g. 2026-06-22 → 2026-06-30, while
+// 2026-06-15 stays 2026-06-21). All UTC to avoid timezone drift; the input is a
+// pure date. Management sets the BigQuery target for the extended period.
+export function weekEndISO(weekStart: string): string {
+  const start = Date.parse(`${weekStart}T00:00:00Z`)
+  if (Number.isNaN(start)) return weekStart
+  const DAY = 86400_000
+  const normalEnd = new Date(start + 6 * DAY)
+  const monthEnd = new Date(Date.UTC(normalEnd.getUTCFullYear(), normalEnd.getUTCMonth() + 1, 0))
+  // month-end of the week's START month (so a Sun spilling into next month doesn't
+  // mis-target); compare leftover against the start month's end.
+  const startMonthEnd = new Date(Date.UTC(new Date(start).getUTCFullYear(), new Date(start).getUTCMonth() + 1, 0))
+  const leftoverDays = Math.round((startMonthEnd.getTime() - normalEnd.getTime()) / DAY)
+  const end = leftoverDays > 0 && leftoverDays < 7 ? startMonthEnd : (normalEnd <= monthEnd ? normalEnd : monthEnd)
+  return end.toISOString().slice(0, 10)
+}
+
+// Inclusive length in days of the KPI week (7 normally, more for an extended
+// last-of-month week).
+export function weekLenDays(weekStart: string): number {
+  const start = Date.parse(`${weekStart}T00:00:00Z`)
+  const end = Date.parse(`${weekEndISO(weekStart)}T00:00:00Z`)
+  if (Number.isNaN(start) || Number.isNaN(end)) return 7
+  return Math.round((end - start) / 86400_000) + 1
+}

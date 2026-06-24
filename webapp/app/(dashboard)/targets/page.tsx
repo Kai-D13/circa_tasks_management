@@ -4,7 +4,7 @@ import { isSuperAdminEmail } from '@/lib/authz'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { TargetUploadForm } from '@/components/targets/TargetUploadForm'
 import { ReferralCard, type ReferralItem } from '@/components/referral/ReferralCard'
-import { formatDateTime } from '@/lib/dateUtils'
+import { formatDateTime, weekEndISO, weekLenDays } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
 import { Flame, Target, TrendingUp } from 'lucide-react'
 
@@ -17,10 +17,9 @@ const vnd = (n: number | null | undefined) =>
   n === null || n === undefined ? '—' : `${new Intl.NumberFormat('vi-VN').format(Math.round(n))}₫`
 
 function weekLabel(weekStart: string): string {
-  const start = new Date(`${weekStart}T00:00:00`)
-  const end   = new Date(start.getTime() + 6 * 86400_000)
-  const fmt = (d: Date) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`
-  return `Tuần ${fmt(start)} – ${fmt(end)}`
+  // End extends to month-end for the last partial week of a month (weekEndISO).
+  const fmt = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`
+  return `Tuần ${fmt(weekStart)} – ${fmt(weekEndISO(weekStart))}`
 }
 
 function StatusBadge({ status, hasGoal = true }: { status: string | null; hasGoal?: boolean }) {
@@ -168,12 +167,16 @@ export default async function TargetsPage() {
       ? (current!.remaining_target ?? Math.max(weekGoal - (current!.actual ?? 0), 0))
       : null
     const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
-    const weekEndMs  = current ? Date.parse(current.week_start) + 6 * 86400_000 : 0
-    const weekEndISO = current ? new Date(weekEndMs).toISOString().slice(0, 10) : ''
+    // Week end extends to month-end for the last partial week (weekEndISO); the
+    // week length (7, or more at month-end) drives days-left + pace, so "Hôm nay
+    // cần đạt" divides by the real number of remaining days.
+    const weekEndStr = current ? weekEndISO(current.week_start) : ''
+    const weekLen    = current ? weekLenDays(current.week_start) : 7
+    const weekEndMs  = weekEndStr ? Date.parse(`${weekEndStr}T00:00:00Z`) : 0
     const rawDaysLeft = current
       ? Math.floor((weekEndMs - Date.parse(vnTodayISO)) / 86400_000) + 1
       : 0
-    const daysLeft  = Math.max(0, Math.min(7, rawDaysLeft))
+    const daysLeft  = Math.max(0, Math.min(weekLen, rawDaysLeft))
     // Achievement only means something when a weekly target exists.
     const achieved  = hasGoal && (remaining ?? 1) <= 0
     const weekOver  = daysLeft === 0
@@ -181,7 +184,7 @@ export default async function TargetsPage() {
       ? Math.ceil(remaining / Math.max(daysLeft, 1) / 100_000) * 100_000
       : 0
     // Pace check: % of week elapsed vs % of target achieved.
-    const expectedPct = ((7 - daysLeft) / 7) * 100
+    const expectedPct = weekLen > 0 ? ((weekLen - daysLeft) / weekLen) * 100 : 0
     const paceMessage = !hasGoal
       ? 'Mục tiêu tuần chưa được cập nhật từ báo cáo BI.'
       : achieved
@@ -191,8 +194,8 @@ export default async function TargetsPage() {
           : pct >= expectedPct
             ? 'Giữ nhịp này, bạn sẽ đạt mục tiêu tuần!'
             : 'Cần tăng tốc để kịp mục tiêu tuần!'
-    const weekEndLabel = weekEndISO
-      ? `${weekEndISO.slice(8, 10)}/${weekEndISO.slice(5, 7)}`
+    const weekEndLabel = weekEndStr
+      ? `${weekEndStr.slice(8, 10)}/${weekEndStr.slice(5, 7)}`
       : ''
 
     return (

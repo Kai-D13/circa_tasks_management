@@ -99,9 +99,9 @@ export default async function TasksPage({
       .order('completed_at', { ascending: false, nullsFirst: false })
       .order('created_at', { ascending: false })
   } else {
-    query = query
-      .order('deadline', { ascending: true, nullsFirst: false })
-      .order('created_at', { ascending: false })
+    // Pending: newest-created first (stakeholder request) — a just-created task
+    // shows at the top. (Done/archive keep their own ordering.)
+    query = query.order('created_at', { ascending: false })
   }
   // Group-paginated admin views fetch all top-level parents (bounded) and slice
   // by group below; other views use a row window. Staff fetch +1 row to detect a
