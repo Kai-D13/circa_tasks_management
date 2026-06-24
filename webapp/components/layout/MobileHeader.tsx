@@ -22,6 +22,7 @@ const SECTION_TITLES: Record<string, string> = {
   dashboard:     'Tổng quan',
   tasks:         'Tasks',
   prescriptions: 'Toa thuốc',
+  announcements: 'Bảng tin',
   users:         'Người dùng',
   stores:        'Cửa hàng',
   logs:          'Nhật ký',

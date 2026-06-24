@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { useUserStore } from '@/store/userStore'
-import { LayoutDashboard, CheckSquare, Users, Store, FileImage, ScrollText, TrendingUp } from 'lucide-react'
+import { LayoutDashboard, CheckSquare, Users, Store, FileImage, ScrollText, TrendingUp, Megaphone } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const NAV_ITEMS = [
@@ -11,6 +11,7 @@ const NAV_ITEMS = [
   { href: '/tasks',         label: 'Tasks',      icon: CheckSquare,     roles: ['admin', 'store_manager', 'staff'], prefetch: false },
   { href: '/targets',       label: 'Doanh số',  icon: TrendingUp,      roles: ['staff'],                           prefetch: false },
   { href: '/prescriptions', label: 'Toa thuốc', icon: FileImage,       roles: ['admin', 'store_manager', 'staff'], prefetch: false },
+  { href: '/announcements', label: 'Bảng tin',  icon: Megaphone,       roles: ['store_manager', 'staff'],          prefetch: false },
   { href: '/users',         label: 'Users',      icon: Users,           roles: ['admin'],                           prefetch: false },
   { href: '/stores',        label: 'Cửa hàng',  icon: Store,           roles: ['admin', 'store_manager'],          prefetch: false },
   { href: '/logs',          label: 'Nhật ký',   icon: ScrollText,      roles: ['admin', 'store_manager', 'staff'], prefetch: false },
