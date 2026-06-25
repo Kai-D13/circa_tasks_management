@@ -1503,14 +1503,16 @@ export async function bulkRequestResubmit(
   const smStoreIds = isSm ? await getSmStoreIds(supabase, user.id) : []
 
   type Row = { id: string; created_by: string | null; assigned_to: string | null; title: string; store_id: string | null; status: string; assignment_mode: string | null }
-  const { data: rows } = await supabaseAdmin
+  const { data: rows, error: rowsErr } = await supabaseAdmin
     .from('tasks')
     .select('id, created_by, assigned_to, title, store_id, status, assignment_mode')
     .in('id', ids)
+  if (rowsErr) return { error: rowsErr.message }
   const taskMap = new Map<string, Row>((rows ?? []).map((t) => [t.id as string, t as Row]))
 
-  const { data: resultRows } = await supabaseAdmin
+  const { data: resultRows, error: resultErr } = await supabaseAdmin
     .from('task_results').select('task_id').in('task_id', ids)
+  if (resultErr) return { error: resultErr.message }
   const hasResult = new Set((resultRows ?? []).map((r) => r.task_id as string))
 
   const valid: Row[] = []
@@ -1535,19 +1537,16 @@ export async function bulkRequestResubmit(
 
   const validIds = valid.map((t) => t.id)
   const trimmed = reason?.trim() || null
-  const nowIso = new Date().toISOString()
 
-  const { error: updErr } = await supabaseAdmin.from('tasks')
-    .update({ status: 'todo', resubmit_requested_at: nowIso, completed_by: null, completed_at: null })
-    .in('id', validIds)
-  if (updErr) return { error: updErr.message }
-
-  // Mirror the single-resubmit writes (best-effort logging — don't fail the batch).
-  await supabaseAdmin.from('task_resubmit_requests').update({ status: 'cancelled' }).in('task_id', validIds).eq('status', 'open')
-  await supabaseAdmin.from('task_resubmit_requests').insert(validIds.map((id) => ({ task_id: id, requested_by: user.id, reason: trimmed })))
-  if (trimmed) await supabaseAdmin.from('task_review_notes').insert(validIds.map((id) => ({ task_id: id, author_id: user.id, kind: 'resubmit_request', note: trimmed })))
-  await supabaseAdmin.from('task_status_events').insert(valid.map((t) => ({ task_id: t.id, from_status: t.status, to_status: 'todo', note: trimmed, actor_id: user.id, source: isSm ? 'sm' : 'admin' })))
-  await supabaseAdmin.from('task_logs').insert(validIds.map((id) => ({ task_id: id, action: 'resubmit_requested', user_id: user.id, metadata: { bulk: true } })))
+  // Atomic: task reopen + resubmit_requests + review_notes + status_events + logs
+  // all in ONE transaction (migration 065) — no partial audit on failure.
+  const { error: rpcErr } = await supabaseAdmin.rpc('rpc_bulk_request_resubmit', {
+    p_task_ids: validIds,
+    p_reason:   trimmed,
+    p_actor:    user.id,
+    p_source:   isSm ? 'sm' : 'admin',
+  })
+  if (rpcErr) return { error: rpcErr.message }
 
   // Notifications: assignee (user tasks) + store managers (store-level tasks).
   const notifs: { user_id: string; type: string; task_id: string; title: string; message: string }[] = []

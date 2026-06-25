@@ -5,6 +5,7 @@ import { MarkAnnouncementRead } from '@/components/announcements/MarkAnnouncemen
 import { AnnouncementAdminActions } from '@/components/announcements/AnnouncementAdminActions'
 import { Card, CardContent } from '@/components/ui/card'
 import { formatDateTime } from '@/lib/dateUtils'
+import { isSuperAdminEmail } from '@/lib/authz'
 import { Megaphone, Check } from 'lucide-react'
 
 interface Member { id: string; full_name: string; store_id: string | null; store: string }
@@ -20,7 +21,7 @@ export default async function AnnouncementDetailPage({ params }: { params: Promi
 
   const [{ data: ann, error: annErr }, { data: assets }] = await Promise.all([
     supabase.from('announcements')
-      .select('id, title, body, visibility, published_at, creator:users!created_by(full_name)')
+      .select('id, title, body, visibility, published_at, created_by, creator:users!created_by(full_name)')
       .eq('id', id).maybeSingle(),
     supabase.from('announcement_assets').select('kind, url, position').eq('announcement_id', id).order('position'),
   ])
@@ -33,6 +34,8 @@ export default async function AnnouncementDetailPage({ params }: { params: Promi
   const cover = (assets ?? []).find((a) => a.kind === 'cover')?.url as string | undefined
   const carousel = (assets ?? []).filter((a) => a.kind === 'carousel').map((a) => a.url as string)
   const creator = (ann.creator as unknown as { full_name: string } | null)?.full_name ?? '—'
+  // Edit/Delete only for the creator or a super admin (matches RLS ann_update/delete).
+  const canManage = isAdmin && (ann.created_by === user.id || isSuperAdminEmail(user.email))
 
   // ── Admin read-receipt tree: audience (Store → Staff) read/unread ──────────
   let storeGroups: { store: string; members: (Member & { readAt: string | null })[]; read: number }[] = []
@@ -102,7 +105,7 @@ export default async function AnnouncementDetailPage({ params }: { params: Promi
           <h1 className="text-xl font-semibold mt-1">{ann.title}</h1>
           <p className="text-xs text-muted-foreground mt-1">{creator} · {formatDateTime(ann.published_at)}</p>
         </div>
-        {isAdmin && <AnnouncementAdminActions announcementId={id} />}
+        {canManage && <AnnouncementAdminActions announcementId={id} />}
       </div>
 
       {cover && (

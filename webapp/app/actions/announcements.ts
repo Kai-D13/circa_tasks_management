@@ -25,36 +25,31 @@ function normExpiry(expiresAt?: string | null): string | null {
   return expiresAt && /^\d{4}-\d{2}-\d{2}$/.test(expiresAt) ? `${expiresAt}T23:59:59+07:00` : null
 }
 
-// Replace audience + assets for an announcement (service role; the action is the
-// trusted boundary). DELETE carries a WHERE so pg_safeupdate is satisfied.
-async function replaceStores(announcementId: string, visibility: string, storeIds: string[]) {
-  await supabaseAdmin.from('announcement_stores').delete().eq('announcement_id', announcementId)
-  if (visibility === 'stores' && storeIds.length) {
-    const rows = storeIds.map((store_id) => ({ announcement_id: announcementId, store_id }))
-    const { error } = await supabaseAdmin.from('announcement_stores').insert(rows)
-    if (error) return error.message
-  }
-  return null
+// Atomic replace of audience + assets via the SECURITY DEFINER RPC (one
+// transaction → no partial write; DELETEs inside carry WHERE for pg_safeupdate).
+async function saveAudienceAssets(announcementId: string, storeIds: string[], coverUrl: string | null, carouselUrls: string[]) {
+  const { error } = await supabaseAdmin.rpc('replace_announcement_audience_assets', {
+    p_announcement_id: announcementId,
+    p_store_ids:       storeIds,
+    p_cover:           coverUrl,
+    p_carousel:        carouselUrls,
+  })
+  return error?.message ?? null
 }
-async function replaceAssets(announcementId: string, coverUrl: string | null, carouselUrls: string[]) {
-  await supabaseAdmin.from('announcement_assets').delete().eq('announcement_id', announcementId)
-  const rows: { announcement_id: string; kind: string; url: string; position: number }[] = []
-  if (coverUrl) rows.push({ announcement_id: announcementId, kind: 'cover', url: coverUrl, position: 0 })
-  carouselUrls.slice(0, MAX_CAROUSEL).forEach((url, i) =>
-    rows.push({ announcement_id: announcementId, kind: 'carousel', url, position: i }))
-  if (rows.length) {
-    const { error } = await supabaseAdmin.from('announcement_assets').insert(rows)
-    if (error) return error.message
-  }
-  return null
-}
+
+// Only accept image URLs we minted (GCS key or Supabase fallback) — both live
+// under an `/announcement_assets/` path. Blocks storing arbitrary external URLs.
+const isOwnAsset = (u: string) => u.includes('/announcement_assets/')
 
 function clean(input: AnnouncementInput) {
   const title = input.title.trim()
   if (!title) return { error: 'Vui lòng nhập tiêu đề' }
   const body = sanitizeRichText(input.body)
-  const coverUrl = input.coverUrl?.trim() || null
-  const carouselUrls = (input.carouselUrls ?? []).filter((u): u is string => typeof u === 'string' && !!u.trim()).slice(0, MAX_CAROUSEL)
+  const rawCover = input.coverUrl?.trim() || null
+  const coverUrl = rawCover && isOwnAsset(rawCover) ? rawCover : null
+  const carouselUrls = (input.carouselUrls ?? [])
+    .filter((u): u is string => typeof u === 'string' && !!u.trim() && isOwnAsset(u))
+    .slice(0, MAX_CAROUSEL)
   // Need at least some content: body OR a cover/carousel image.
   if (!body && !coverUrl && carouselUrls.length === 0) return { error: 'Vui lòng nhập nội dung hoặc thêm ảnh' }
   const visibility = input.visibility === 'stores' ? 'stores' : 'all'
@@ -82,10 +77,8 @@ export async function createAnnouncement(input: AnnouncementInput) {
     .single()
   if (annErr || !ann) return { error: annErr?.message ?? 'Không tạo được thông báo' }
 
-  const sErr = await replaceStores(ann.id, c.visibility, c.storeIds)
-  if (sErr) { await supabaseAdmin.from('announcements').delete().eq('id', ann.id); return { error: `Lỗi gán cửa hàng: ${sErr}` } }
-  const aErr = await replaceAssets(ann.id, c.coverUrl, c.carouselUrls)
-  if (aErr) { await supabaseAdmin.from('announcements').delete().eq('id', ann.id); return { error: `Lỗi lưu ảnh: ${aErr}` } }
+  const err = await saveAudienceAssets(ann.id, c.storeIds, c.coverUrl, c.carouselUrls)
+  if (err) { await supabaseAdmin.from('announcements').delete().eq('id', ann.id); return { error: `Lỗi lưu cửa hàng/ảnh: ${err}` } }
 
   revalidatePath('/announcements')
   return { success: true, id: ann.id }
@@ -108,10 +101,8 @@ export async function updateAnnouncement(id: string, input: AnnouncementInput) {
   if (updErr) return { error: updErr.message }
   if (!updated || updated.length === 0) return { error: 'Không có quyền sửa thông báo này' }
 
-  const sErr = await replaceStores(id, c.visibility, c.storeIds)
-  if (sErr) return { error: `Lỗi gán cửa hàng: ${sErr}` }
-  const aErr = await replaceAssets(id, c.coverUrl, c.carouselUrls)
-  if (aErr) return { error: `Lỗi lưu ảnh: ${aErr}` }
+  const err = await saveAudienceAssets(id, c.storeIds, c.coverUrl, c.carouselUrls)
+  if (err) return { error: `Lỗi lưu cửa hàng/ảnh: ${err}` }
 
   revalidatePath('/announcements')
   revalidatePath(`/announcements/${id}`)
@@ -133,8 +124,11 @@ export async function deleteAnnouncement(announcementId: string) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
-  const { error } = await supabase.from('announcements').delete().eq('id', announcementId)
+  // RLS ann_delete gates super OR creator; .select() lets us detect a 0-row
+  // (no-permission) delete instead of reporting a false success.
+  const { data, error } = await supabase.from('announcements').delete().eq('id', announcementId).select('id')
   if (error) return { error: error.message }
+  if (!data || data.length === 0) return { error: 'Không có quyền xóa thông báo này' }
   revalidatePath('/announcements')
   return { success: true }
 }
@@ -144,7 +138,10 @@ export async function getUnreadAnnouncementCount(): Promise<number> {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return 0
-  const { data: anns } = await supabase.from('announcements').select('id') // RLS-filtered to visible/non-expired
+  // Cap to the last 60 days so the hot-path query stays light as the board grows
+  // (old unread rarely matters for a "new" badge).
+  const since = new Date(Date.now() - 60 * 86400_000).toISOString()
+  const { data: anns } = await supabase.from('announcements').select('id').gte('published_at', since) // RLS-filtered
   if (!anns?.length) return 0
   const { data: reads } = await supabase.from('announcement_reads').select('announcement_id').eq('user_id', user.id)
   const read = new Set((reads ?? []).map((r) => r.announcement_id))

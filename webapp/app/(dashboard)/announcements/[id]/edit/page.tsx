@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { buttonVariants } from '@/components/ui/button'
 import { CreateAnnouncementForm } from '@/components/announcements/CreateAnnouncementForm'
+import { isSuperAdminEmail } from '@/lib/authz'
 import { ArrowLeft } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -21,6 +22,8 @@ export default async function EditAnnouncementPage({ params }: { params: Promise
     supabase.from('announcement_assets').select('kind, url, position').eq('announcement_id', id).order('position'),
   ])
   if (!ann) notFound()
+  // Only the creator or a super admin may edit (matches RLS ann_update).
+  if (ann.created_by !== user.id && !isSuperAdminEmail(user.email)) redirect(`/announcements/${id}`)
 
   const initial = {
     title: ann.title as string,
