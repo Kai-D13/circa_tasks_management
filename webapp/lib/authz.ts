@@ -2,12 +2,14 @@
 // supabaseAdmin, bypassing RLS); the DB function public.is_super_admin() mirrors
 // this for RLS-protected paths (prescription sync).
 // TODO (later): replace the hardcoded allowlist with a users.is_super_admin column.
-// Must stay in sync with public.is_super_admin() (migration 046).
+// Must stay in sync with public.is_super_admin() (migration 046 → synced in 066).
 export const SUPER_ADMIN_EMAILS = [
   'hoangvudn96@gmail.com',
   'ngoc.ta@buymed.com',
   'thao@buymed.com',
   'son.kieu@buymed.com',
+  'lan.pham@buymed.com',
+  'vu@buymed.com',
 ]
 
 export function isSuperAdminEmail(email: string | null | undefined): boolean {
