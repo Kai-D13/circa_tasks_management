@@ -42,7 +42,7 @@ const ROLE_LABELS: Record<string, string> = {
   sm:            'SM',
 }
 
-export function Sidebar() {
+export function Sidebar({ announcementsUnread = 0 }: { announcementsUnread?: number }) {
   const pathname = usePathname()
   const router   = useRouter()
   const profile  = useUserStore((s) => s.profile)
@@ -103,7 +103,12 @@ export function Sidebar() {
             )}
           >
             <Icon className="h-4 w-4 shrink-0" />
-            {label}
+            <span className="flex-1">{label}</span>
+            {href === '/announcements' && announcementsUnread > 0 && (
+              <span className="ml-auto min-w-5 h-5 px-1 rounded-full bg-primary text-white text-[10px] font-semibold flex items-center justify-center">
+                {announcementsUnread > 99 ? '99+' : announcementsUnread}
+              </span>
+            )}
           </Link>
         ))}
       </nav>

@@ -17,7 +17,7 @@ const NAV_ITEMS = [
   { href: '/logs',          label: 'Nhật ký',   icon: ScrollText,      roles: ['admin', 'store_manager', 'staff'], prefetch: false },
 ]
 
-export function BottomNav() {
+export function BottomNav({ announcementsUnread = 0 }: { announcementsUnread?: number }) {
   const pathname = usePathname()
   const profile  = useUserStore((s) => s.profile)
   const role     = profile?.role
@@ -37,13 +37,20 @@ export function BottomNav() {
               href={href}
               prefetch={prefetch}
               className={cn(
-                'flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-colors',
+                'relative flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-colors',
                 isActive
                   ? 'text-primary'
                   : 'text-sidebar-foreground/50 active:text-sidebar-foreground'
               )}
             >
-              <Icon className="h-5 w-5" />
+              <span className="relative">
+                <Icon className="h-5 w-5" />
+                {href === '/announcements' && announcementsUnread > 0 && (
+                  <span className="absolute -top-1.5 -right-2 min-w-4 h-4 px-1 rounded-full bg-primary text-white text-[9px] font-semibold flex items-center justify-center">
+                    {announcementsUnread > 9 ? '9+' : announcementsUnread}
+                  </span>
+                )}
+              </span>
               <span className="text-[10px] font-medium">{label}</span>
             </Link>
           )

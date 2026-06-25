@@ -20,7 +20,7 @@ const MAX_AUDIO = 15 * 1024 * 1024
 const MAX_VIDEO = 50 * 1024 * 1024  // matches the Supabase bucket cap (no video regression)
 const MAX_DOC   = 10 * 1024 * 1024
 
-type UploadPurpose = 'task_result' | 'task_input' | 'prescription'
+type UploadPurpose = 'task_result' | 'task_input' | 'prescription' | 'announcement_asset'
 
 export interface CreateUploadUrlInput {
   purpose:      UploadPurpose
@@ -32,6 +32,7 @@ export interface CreateUploadUrlInput {
   uploadId?:    string  // task_input — the per-form upload id (e.g. 'import/<tmpId>' for Excel)
   storeId?:     string  // prescription
   submissionId?: string // prescription
+  announcementId?: string // announcement_asset — real id (edit) or a client temp id (create)
 }
 
 type Result = { error: string } | { sessionUrl: string; publicUrl: string; key: string }
@@ -101,6 +102,18 @@ export async function createUploadUrl(input: CreateUploadUrlInput): Promise<Resu
     const ok = me?.role === 'staff' && me?.store_id === input.storeId
     if (!ok) return { error: 'Không có quyền upload cho cửa hàng này' }
     key = `prescriptions/${input.storeId}/${input.submissionId}/${uniq}_${safe}`
+
+  } else if (input.purpose === 'announcement_asset') {
+    // Cover/carousel images for an announcement — admin only (mirrors ann_insert).
+    // announcementId is the real id (edit) or a client temp uuid (create); the GCS
+    // key is arbitrary, the DB row links the real announcement id.
+    const { data: me } = await supabase.from('users').select('role').eq('id', user.id).single()
+    if (me?.role !== 'admin') return { error: 'Chỉ admin được tải ảnh thông báo' }
+    if (!input.announcementId || !/^[A-Za-z0-9_-]{1,100}$/.test(input.announcementId)) {
+      return { error: 'announcementId không hợp lệ' }
+    }
+    if (!ct.startsWith('image/')) return { error: 'Chỉ chấp nhận ảnh' }
+    key = `announcement_assets/${input.announcementId}/${uniq}_${safe}`
 
   } else {
     return { error: 'purpose không hợp lệ' }

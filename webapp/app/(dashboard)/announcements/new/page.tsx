@@ -1,6 +1,10 @@
 import { redirect } from 'next/navigation'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
+import { buttonVariants } from '@/components/ui/button'
 import { CreateAnnouncementForm } from '@/components/announcements/CreateAnnouncementForm'
+import { ArrowLeft } from 'lucide-react'
+import { cn } from '@/lib/utils'
 
 export default async function NewAnnouncementPage() {
   const supabase = await createClient()
@@ -14,6 +18,9 @@ export default async function NewAnnouncementPage() {
 
   return (
     <div className="p-4 md:p-6 max-w-2xl">
+      <Link href="/announcements" className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'mb-2 -ml-2')}>
+        <ArrowLeft className="h-4 w-4 mr-1" /> Bảng tin
+      </Link>
       <h1 className="text-xl font-semibold mb-4">Tạo thông báo</h1>
       {storesErr && (
         <p className="text-sm text-destructive mb-3">
