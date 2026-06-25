@@ -53,11 +53,14 @@ function clean(input: AnnouncementInput) {
   const title = input.title.trim()
   if (!title) return { error: 'Vui lòng nhập tiêu đề' }
   const body = sanitizeRichText(input.body)
+  // Reject (don't silently drop) images outside our own storage — the admin must
+  // know the image wasn't saved.
   const rawCover = input.coverUrl?.trim() || null
-  const coverUrl = rawCover && isOwnAsset(rawCover) ? rawCover : null
-  const carouselUrls = (input.carouselUrls ?? [])
-    .filter((u): u is string => typeof u === 'string' && !!u.trim() && isOwnAsset(u))
-    .slice(0, MAX_CAROUSEL)
+  if (rawCover && !isOwnAsset(rawCover)) return { error: 'Ảnh bìa không hợp lệ, vui lòng tải lại' }
+  const coverUrl = rawCover
+  const rawCarousel = (input.carouselUrls ?? []).filter((u): u is string => typeof u === 'string' && !!u.trim())
+  if (rawCarousel.some((u) => !isOwnAsset(u))) return { error: 'Ảnh carousel không hợp lệ, vui lòng tải lại' }
+  const carouselUrls = rawCarousel.slice(0, MAX_CAROUSEL)
   // Need at least some content: body OR a cover/carousel image.
   if (!body && !coverUrl && carouselUrls.length === 0) return { error: 'Vui lòng nhập nội dung hoặc thêm ảnh' }
   const visibility = input.visibility === 'stores' ? 'stores' : 'all'

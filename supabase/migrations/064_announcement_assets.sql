@@ -110,11 +110,14 @@ CREATE OR REPLACE FUNCTION public.rpc_update_announcement(
   p_id uuid, p_title text, p_body text, p_excerpt text, p_visibility text,
   p_expires_at timestamptz, p_store_ids uuid[], p_cover text, p_carousel text[]
 ) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE n integer;
 BEGIN
   UPDATE public.announcements
     SET title = p_title, body = p_body, excerpt = p_excerpt, visibility = p_visibility,
         expires_at = p_expires_at, updated_at = now()
     WHERE id = p_id;
+  GET DIAGNOSTICS n = ROW_COUNT;
+  IF n = 0 THEN RAISE EXCEPTION 'announcement % not found', p_id; END IF;  -- aborts the tx (no orphan asset/audience writes)
   PERFORM public.replace_announcement_audience_assets(p_id, p_store_ids, p_cover, p_carousel);
 END $$;
 REVOKE ALL ON FUNCTION public.rpc_update_announcement(uuid, text, text, text, text, timestamptz, uuid[], text, text[]) FROM public;

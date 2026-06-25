@@ -4,6 +4,7 @@ import { headers } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
 import { createResumableUploadSession, publicUrlForKey, isGcsEnabled } from '@/lib/storage/gcs'
 import { safeStorageName } from '@/lib/storage'
+import { isSuperAdminEmail } from '@/lib/authz'
 
 // Authorized upload-URL minting for direct-to-GCS uploads. THIS IS THE SECURITY
 // BOUNDARY that replaces Supabase Storage RLS for GCS uploads — it must mirror
@@ -113,6 +114,16 @@ export async function createUploadUrl(input: CreateUploadUrlInput): Promise<Resu
       return { error: 'announcementId không hợp lệ' }
     }
     if (!ct.startsWith('image/')) return { error: 'Chỉ chấp nhận ảnh' }
+    // Editing an EXISTING announcement → only its creator or a super admin may
+    // upload (mirrors ann_update). A create-time temp UUID isn't in the table yet
+    // → any admin may upload. (UUID-shaped check avoids an invalid-uuid query.)
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.announcementId)
+    if (isUuid) {
+      const { data: existing } = await supabase.from('announcements').select('created_by').eq('id', input.announcementId).maybeSingle()
+      if (existing && existing.created_by !== user.id && !isSuperAdminEmail(user.email)) {
+        return { error: 'Không có quyền sửa thông báo này' }
+      }
+    }
     key = `announcement_assets/${input.announcementId}/${uniq}_${safe}`
 
   } else {
