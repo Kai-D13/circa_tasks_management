@@ -22,14 +22,18 @@ export default async function DashboardLayout({
   // Bảng tin unread badge — viewers only (admins are creators, no badge). No
   // realtime: recomputed each navigation (server render), 2 light queries.
   const announcementsUnread = profile.role !== 'admin' ? await getUnreadAnnouncementCount() : 0
+  // Staff are mobile-only: skip rendering/hydrating the desktop Sidebar entirely
+  // (it's display:none for them anyway) for a leaner shell. 100dvh avoids the
+  // mobile address-bar resize jank.
+  const isStaff = profile.role === 'staff'
 
   return (
     <ThemeProvider>
       <UserProvider profile={profile as UserProfile}>
         <NotificationProvider>
-        <div className="flex h-screen overflow-hidden">
-          {/* Desktop sidebar — hidden on mobile */}
-          <Sidebar announcementsUnread={announcementsUnread} />
+        <div className="flex h-[100dvh] overflow-hidden">
+          {/* Desktop sidebar — hidden on mobile; not rendered for staff */}
+          {!isStaff && <Sidebar announcementsUnread={announcementsUnread} />}
 
           {/* Main content — full width on mobile */}
           <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden bg-muted/20 pb-16 md:pb-0">

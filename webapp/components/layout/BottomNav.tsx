@@ -28,7 +28,7 @@ export function BottomNav({ announcementsUnread = 0 }: { announcementsUnread?: n
     <nav className="fixed bottom-0 left-0 right-0 z-40 bg-sidebar border-t border-sidebar-border md:hidden"
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
     >
-      <div className="flex items-center justify-around h-14">
+      <div className="flex items-center justify-around h-16">
         {visible.map(({ href, label, icon: Icon, prefetch }) => {
           const isActive = pathname === href || (href !== '/dashboard' && pathname.startsWith(href))
           return (
@@ -44,7 +44,7 @@ export function BottomNav({ announcementsUnread = 0 }: { announcementsUnread?: n
               )}
             >
               <span className="relative">
-                <Icon className="h-5 w-5" />
+                <Icon className="h-6 w-6" />
                 {href === '/announcements' && announcementsUnread > 0 && (
                   <span className="absolute -top-1.5 -right-2 min-w-4 h-4 px-1 rounded-full bg-primary text-white text-[9px] font-semibold flex items-center justify-center">
                     {announcementsUnread > 9 ? '9+' : announcementsUnread}

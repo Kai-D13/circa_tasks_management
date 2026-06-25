@@ -171,8 +171,8 @@ function isDueSoon(deadline: string | null, effStatus: string): boolean {
 //   source  -> Định kỳ (recurring) | Phát sinh (one-off)
 //   method  -> Cửa hàng nộp (unassigned store task) | Dược sĩ nộp (assigned/per-staff)
 //   signals -> Bạn có thể nộp (executor, open) · Sắp hết hạn (≤24h)
-function TaskBadges({ task, userRole, effStatus }: {
-  task: TaskRow['task']; userRole?: string; effStatus: string
+function TaskBadges({ task, userRole, effStatus, compact }: {
+  task: TaskRow['task']; userRole?: string; effStatus: string; compact?: boolean
 }) {
   const isStoreLevelRow = task.assignment_mode === 'store' && task.assigned_to === null
   const canSubmitHint = isStoreLevelRow && effStatus !== 'done'
@@ -180,12 +180,15 @@ function TaskBadges({ task, userRole, effStatus }: {
   const isRecurring = !!task.source_schedule_id
   return (
     <>
-      <span className={cn(
-        'text-xs px-1.5 py-0.5 rounded',
-        isRecurring ? 'bg-teal-100 text-teal-700' : 'bg-slate-100 text-slate-600',
-      )}>
-        {isRecurring ? 'Định kỳ' : 'Phát sinh'}
-      </span>
+      {/* compact (mobile): drop the source + department badges to declutter */}
+      {!compact && (
+        <span className={cn(
+          'text-xs px-1.5 py-0.5 rounded',
+          isRecurring ? 'bg-teal-100 text-teal-700' : 'bg-slate-100 text-slate-600',
+        )}>
+          {isRecurring ? 'Định kỳ' : 'Phát sinh'}
+        </span>
+      )}
       {isStoreLevelRow ? (
         <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">
           <Users className="h-3 w-3" /> Cửa hàng nộp
@@ -201,7 +204,7 @@ function TaskBadges({ task, userRole, effStatus }: {
           {CATEGORY_LABEL[task.category as TaskCategory] ?? task.category}
         </span>
       )}
-      {task.department && (
+      {!compact && task.department && (
         <span className={cn('text-xs px-1.5 py-0.5 rounded', deptBadgeClass(task.department.color))}>
           {task.department.name}
         </span>
@@ -1001,7 +1004,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                 <TaskStatusBadge status={effStatus as Task['status']} late={task.status === 'done' && !!task.overdue_at} />
               </div>
               <div className="mt-1 flex flex-wrap items-center gap-1">
-                <TaskBadges task={task} userRole={userRole} effStatus={effStatus} />
+                <TaskBadges task={task} userRole={userRole} effStatus={effStatus} compact />
               </div>
               <p className="mt-1.5 text-sm text-muted-foreground">{task.stores?.name ?? '—'}</p>
               <p className="text-sm font-medium">{submitter.primary}</p>
