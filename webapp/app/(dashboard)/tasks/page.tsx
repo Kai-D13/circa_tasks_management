@@ -202,6 +202,8 @@ export default async function TasksPage({
   const canCreate  = profile?.role === 'admin'
   const canArchive = !showArchived && (profile?.role === 'admin' || isSm)
   const canRestore = showArchived  && (profile?.role === 'admin' || isSm)
+  // Bulk "yêu cầu làm lại" — admin/SM in the Done view (tasks there have results).
+  const canBulkResubmit = !showArchived && view === 'done' && (profile?.role === 'admin' || isSm)
 
   // Fetch children for staff_all parents on this page (excluded from paginated query).
   let extraChildren: NonNullable<typeof tasks> = []
@@ -756,7 +758,7 @@ export default async function TasksPage({
           ) : (
           <Card>
             <CardContent className="p-0">
-              <TaskList items={pageItems} canArchive={canArchive} canRestore={canRestore} showArchived={showArchived} userRole={profile?.role ?? 'staff'} />
+              <TaskList items={pageItems} canArchive={canArchive} canRestore={canRestore} canBulkResubmit={canBulkResubmit} showArchived={showArchived} userRole={profile?.role ?? 'staff'} />
             </CardContent>
           </Card>
           )}

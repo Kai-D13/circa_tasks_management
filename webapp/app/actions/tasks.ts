@@ -1483,6 +1483,91 @@ export async function requestResubmit(taskId: string, reason?: string) {
   return { success: true }
 }
 
+// Bulk version of requestResubmit — same side-effects, server-side, with a
+// preflight so the admin sees how many are valid vs skipped before committing.
+// Eligible = has a submitted result + NOT a staff_all parent + caller has rights
+// (owner/super OR editor collaborator OR SM for the store). Skips the rest.
+export async function bulkRequestResubmit(
+  taskIds: string[],
+  reason?: string,
+  opts?: { preflight?: boolean },
+) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Not authenticated' }
+  const ids = [...new Set((taskIds ?? []).filter((x): x is string => typeof x === 'string'))]
+  if (!ids.length) return { error: 'Chưa chọn task nào' }
+
+  const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
+  const isSm = profile?.role === 'sm'
+  const smStoreIds = isSm ? await getSmStoreIds(supabase, user.id) : []
+
+  type Row = { id: string; created_by: string | null; assigned_to: string | null; title: string; store_id: string | null; status: string; assignment_mode: string | null }
+  const { data: rows } = await supabaseAdmin
+    .from('tasks')
+    .select('id, created_by, assigned_to, title, store_id, status, assignment_mode')
+    .in('id', ids)
+  const taskMap = new Map<string, Row>((rows ?? []).map((t) => [t.id as string, t as Row]))
+
+  const { data: resultRows } = await supabaseAdmin
+    .from('task_results').select('task_id').in('task_id', ids)
+  const hasResult = new Set((resultRows ?? []).map((r) => r.task_id as string))
+
+  const valid: Row[] = []
+  let skippedCount = 0
+  for (const id of ids) {
+    const t = taskMap.get(id)
+    if (!t) { skippedCount++; continue }
+    if (t.assignment_mode === 'staff_all') { skippedCount++; continue }   // overview parent
+    if (!hasResult.has(id)) { skippedCount++; continue }                  // nothing submitted yet
+    const isOwnerR = canAdminManageOwn({ email: user.email, role: profile?.role, createdBy: t.created_by, userId: user.id })
+    const isSmForTask = isSm && smHasStore(smStoreIds, t.store_id)
+    let ok = isOwnerR || isSmForTask
+    if (!ok) ok = await isCollaboratorEditor(supabase, user.id, id)
+    if (!ok) { skippedCount++; continue }
+    valid.push(t)
+  }
+
+  if (opts?.preflight) {
+    return { preflight: true as const, validCount: valid.length, skippedCount }
+  }
+  if (!valid.length) return { error: 'Không có task hợp lệ để yêu cầu làm lại (task cha / chưa có kết quả / không có quyền)' }
+
+  const validIds = valid.map((t) => t.id)
+  const trimmed = reason?.trim() || null
+  const nowIso = new Date().toISOString()
+
+  const { error: updErr } = await supabaseAdmin.from('tasks')
+    .update({ status: 'todo', resubmit_requested_at: nowIso, completed_by: null, completed_at: null })
+    .in('id', validIds)
+  if (updErr) return { error: updErr.message }
+
+  // Mirror the single-resubmit writes (best-effort logging — don't fail the batch).
+  await supabaseAdmin.from('task_resubmit_requests').update({ status: 'cancelled' }).in('task_id', validIds).eq('status', 'open')
+  await supabaseAdmin.from('task_resubmit_requests').insert(validIds.map((id) => ({ task_id: id, requested_by: user.id, reason: trimmed })))
+  if (trimmed) await supabaseAdmin.from('task_review_notes').insert(validIds.map((id) => ({ task_id: id, author_id: user.id, kind: 'resubmit_request', note: trimmed })))
+  await supabaseAdmin.from('task_status_events').insert(valid.map((t) => ({ task_id: t.id, from_status: t.status, to_status: 'todo', note: trimmed, actor_id: user.id, source: isSm ? 'sm' : 'admin' })))
+  await supabaseAdmin.from('task_logs').insert(validIds.map((id) => ({ task_id: id, action: 'resubmit_requested', user_id: user.id, metadata: { bulk: true } })))
+
+  // Notifications: assignee (user tasks) + store managers (store-level tasks).
+  const notifs: { user_id: string; type: string; task_id: string; title: string; message: string }[] = []
+  for (const t of valid) {
+    if (t.assigned_to) notifs.push({ user_id: t.assigned_to, type: 'resubmit_requested', task_id: t.id, title: 'Yêu cầu thực hiện lại task', message: `Quản lý yêu cầu bạn thực hiện lại: "${t.title}"${trimmed ? ` — ${trimmed}` : ''}` })
+  }
+  const storeLevel = valid.filter((t) => !t.assigned_to && t.store_id)
+  if (storeLevel.length) {
+    const storeIds = [...new Set(storeLevel.map((t) => t.store_id as string))]
+    const { data: mgrs } = await supabaseAdmin.from('users').select('id, store_id').eq('role', 'store_manager').in('store_id', storeIds)
+    for (const t of storeLevel) for (const m of (mgrs ?? []).filter((x) => x.store_id === t.store_id)) {
+      notifs.push({ user_id: m.id as string, type: 'resubmit_requested', task_id: t.id, title: 'Yêu cầu thực hiện lại task', message: `Quản lý yêu cầu thực hiện lại: "${t.title}"${trimmed ? ` — ${trimmed}` : ''}` })
+    }
+  }
+  if (notifs.length) await supabaseAdmin.from('notifications').insert(notifs)
+
+  revalidatePath('/tasks')
+  return { success: true, count: validIds.length, skippedCount }
+}
+
 export async function extendDeadline(taskId: string, newDeadline: string) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()

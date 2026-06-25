@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { archiveTasks, restoreTasks } from '@/app/actions/tasks'
+import { BulkResubmitButton } from '@/components/tasks/BulkResubmitButton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
@@ -131,11 +132,12 @@ export type TaskRow = {
 export type TaskListItem = BroadcastGroup | StaffGroup | StaffBroadcastGroup | TaskRow
 
 interface Props {
-  items:         TaskListItem[]
-  canArchive:    boolean
-  canRestore?:   boolean
-  showArchived?: boolean
-  userRole?:     string
+  items:           TaskListItem[]
+  canArchive:      boolean
+  canRestore?:     boolean
+  canBulkResubmit?: boolean
+  showArchived?:   boolean
+  userRole?:       string
 }
 
 // "Thực hiện / Đã nộp" cell content — shared by table and mobile cards.
@@ -214,7 +216,7 @@ function TaskBadges({ task, userRole, effStatus }: {
   )
 }
 
-export function TaskList({ items, canArchive, canRestore, showArchived, userRole }: Props) {
+export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showArchived, userRole }: Props) {
   const router = useRouter()
   const [selected, setSelected]    = useState<Set<string>>(new Set())
   const [expanded, setExpanded]    = useState<Set<string>>(new Set())
@@ -296,14 +298,17 @@ export function TaskList({ items, canArchive, canRestore, showArchived, userRole
 
   const allSelected  = allTaskIds.length > 0 && selected.size === allTaskIds.length
   const someSelected = selected.size > 0
-  const showCheckbox = canArchive || canRestore
+  const showCheckbox = canArchive || canRestore || !!canBulkResubmit
   const colCount     = showCheckbox ? 8 : 7
 
   return (
     <div className="space-y-2">
-      {someSelected && (canArchive || canRestore) && (
-        <div className="flex items-center gap-2 px-1 pt-2">
+      {someSelected && showCheckbox && (
+        <div className="flex items-center gap-2 px-1 pt-2 flex-wrap">
           <span className="text-sm text-muted-foreground">{selected.size} task đã chọn</span>
+          {canBulkResubmit && (
+            <BulkResubmitButton taskIds={Array.from(selected)} onDone={() => setSelected(new Set())} />
+          )}
           {canArchive && (
             <Button
               variant="outline"
