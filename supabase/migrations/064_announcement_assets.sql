@@ -103,6 +103,23 @@ END $$;
 REVOKE ALL ON FUNCTION public.replace_announcement_audience_assets(uuid, uuid[], text, text[]) FROM public;
 GRANT EXECUTE ON FUNCTION public.replace_announcement_audience_assets(uuid, uuid[], text, text[]) TO service_role;
 
+-- Full atomic UPDATE: parent fields + audience + assets in ONE transaction (so an
+-- edit can't change the title while leaving audience/assets half-applied). The
+-- caller (server action) has already verified creator/super; service-role only.
+CREATE OR REPLACE FUNCTION public.rpc_update_announcement(
+  p_id uuid, p_title text, p_body text, p_excerpt text, p_visibility text,
+  p_expires_at timestamptz, p_store_ids uuid[], p_cover text, p_carousel text[]
+) RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  UPDATE public.announcements
+    SET title = p_title, body = p_body, excerpt = p_excerpt, visibility = p_visibility,
+        expires_at = p_expires_at, updated_at = now()
+    WHERE id = p_id;
+  PERFORM public.replace_announcement_audience_assets(p_id, p_store_ids, p_cover, p_carousel);
+END $$;
+REVOKE ALL ON FUNCTION public.rpc_update_announcement(uuid, text, text, text, text, timestamptz, uuid[], text, text[]) FROM public;
+GRANT EXECUTE ON FUNCTION public.rpc_update_announcement(uuid, text, text, text, text, timestamptz, uuid[], text, text[]) TO service_role;
+
 INSERT INTO public.app_migrations (version, name)
 VALUES ('064', 'announcement_assets')
 ON CONFLICT (version) DO NOTHING;

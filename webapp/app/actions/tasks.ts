@@ -1540,13 +1540,17 @@ export async function bulkRequestResubmit(
 
   // Atomic: task reopen + resubmit_requests + review_notes + status_events + logs
   // all in ONE transaction (migration 065) — no partial audit on failure.
-  const { error: rpcErr } = await supabaseAdmin.rpc('rpc_bulk_request_resubmit', {
+  const { data: updatedCount, error: rpcErr } = await supabaseAdmin.rpc('rpc_bulk_request_resubmit', {
     p_task_ids: validIds,
     p_reason:   trimmed,
     p_actor:    user.id,
     p_source:   isSm ? 'sm' : 'admin',
   })
   if (rpcErr) return { error: rpcErr.message }
+  const applied = typeof updatedCount === 'number' ? updatedCount : validIds.length
+  if (applied !== validIds.length) {
+    console.error(`[bulkRequestResubmit] expected ${validIds.length} updates, RPC applied ${applied}`)
+  }
 
   // Notifications: assignee (user tasks) + store managers (store-level tasks).
   const notifs: { user_id: string; type: string; task_id: string; title: string; message: string }[] = []
@@ -1561,10 +1565,13 @@ export async function bulkRequestResubmit(
       notifs.push({ user_id: m.id as string, type: 'resubmit_requested', task_id: t.id, title: 'Yêu cầu thực hiện lại task', message: `Quản lý yêu cầu thực hiện lại: "${t.title}"${trimmed ? ` — ${trimmed}` : ''}` })
     }
   }
-  if (notifs.length) await supabaseAdmin.from('notifications').insert(notifs)
+  if (notifs.length) {
+    const { error: notifErr } = await supabaseAdmin.from('notifications').insert(notifs)
+    if (notifErr) console.error('[bulkRequestResubmit] notifications insert failed:', notifErr.message)
+  }
 
   revalidatePath('/tasks')
-  return { success: true, count: validIds.length, skippedCount }
+  return { success: true, count: applied, skippedCount }
 }
 
 export async function extendDeadline(taskId: string, newDeadline: string) {

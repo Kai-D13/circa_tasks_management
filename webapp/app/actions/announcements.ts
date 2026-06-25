@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { sanitizeRichText, richTextToPlain } from '@/lib/richtext/sanitize'
+import { isSuperAdminEmail } from '@/lib/authz'
 
 // Announcements / Bảng tin — read-only broadcasts with a view receipt (migrations
 // 063/064). Admin creates/edits; Staff/Store read (no submission). Audience =
@@ -37,9 +38,16 @@ async function saveAudienceAssets(announcementId: string, storeIds: string[], co
   return error?.message ?? null
 }
 
-// Only accept image URLs we minted (GCS key or Supabase fallback) — both live
-// under an `/announcement_assets/` path. Blocks storing arbitrary external URLs.
-const isOwnAsset = (u: string) => u.includes('/announcement_assets/')
+// Only accept image URLs we minted — strict origin + path. GCS public base or the
+// Supabase public task-uploads path, both under announcement_assets/. Blocks an
+// external URL like https://evil/announcement_assets/x.jpg (tracking/injection).
+function isOwnAsset(u: string): boolean {
+  const gcs  = process.env.GCS_PUBLIC_BASE_URL?.replace(/\/+$/, '')
+  const supa = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/+$/, '')
+  if (gcs && u.startsWith(`${gcs}/announcement_assets/`)) return true
+  if (supa && u.startsWith(`${supa}/storage/v1/object/public/task-uploads/announcement_assets/`)) return true
+  return false
+}
 
 function clean(input: AnnouncementInput) {
   const title = input.title.trim()
@@ -89,20 +97,23 @@ export async function updateAnnouncement(id: string, input: AnnouncementInput) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
 
+  const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
+  if (profile?.role !== 'admin') return { error: 'Chỉ admin mới sửa được thông báo' }
+
   const c = clean(input)
   if ('error' in c) return c
 
-  // RLS ann_update gates super OR creator; this UPDATE fails (0 rows) otherwise.
-  const { data: updated, error: updErr } = await supabase
-    .from('announcements')
-    .update({ title: c.title, body: c.body, excerpt: c.excerpt, visibility: c.visibility, expires_at: c.expires_at, updated_at: new Date().toISOString() })
-    .eq('id', id)
-    .select('id')
-  if (updErr) return { error: updErr.message }
-  if (!updated || updated.length === 0) return { error: 'Không có quyền sửa thông báo này' }
+  // The atomic RPC runs as service role (no auth.uid), so verify creator/super here.
+  const { data: existing } = await supabase.from('announcements').select('created_by').eq('id', id).maybeSingle()
+  if (!existing) return { error: 'Thông báo không tồn tại' }
+  if (existing.created_by !== user.id && !isSuperAdminEmail(user.email)) return { error: 'Không có quyền sửa thông báo này' }
 
-  const err = await saveAudienceAssets(id, c.storeIds, c.coverUrl, c.carouselUrls)
-  if (err) return { error: `Lỗi lưu cửa hàng/ảnh: ${err}` }
+  // Parent fields + audience + assets in one transaction (migration 064).
+  const { error: rpcErr } = await supabaseAdmin.rpc('rpc_update_announcement', {
+    p_id: id, p_title: c.title, p_body: c.body, p_excerpt: c.excerpt, p_visibility: c.visibility,
+    p_expires_at: c.expires_at, p_store_ids: c.storeIds, p_cover: c.coverUrl, p_carousel: c.carouselUrls,
+  })
+  if (rpcErr) return { error: rpcErr.message }
 
   revalidatePath('/announcements')
   revalidatePath(`/announcements/${id}`)
