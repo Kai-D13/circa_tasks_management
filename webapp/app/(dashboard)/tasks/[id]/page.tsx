@@ -510,7 +510,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
 
           {/* Admin/PIC/SM banner — explains why a previously-submitted task is still
               "Quá hạn"/chờ: an open resubmit request the pharmacist hasn't fulfilled. */}
-          {canReviewTask && resubmitAt && !hasAlreadySubmitted && (
+          {canReviewTask && resubmitAt && !hasValidSubmission && (
             <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
               <p className="font-medium text-amber-900">Đang chờ nộp lại</p>
               <p className="text-amber-800 mt-1">
