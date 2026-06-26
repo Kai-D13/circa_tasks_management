@@ -5,11 +5,32 @@ import sanitizeHtml from 'sanitize-html'
 // purpose — the primary XSS defense is HERE, at write time. Only the formatting
 // the toolbar can produce: bold/italic/underline/strike, highlight (<mark>),
 // font-size + color (<span style>), text-align (on block elems), lists.
+// Clamp colspan/rowspan to a sane integer (1–100); drop anything non-numeric.
+function clampSpans(tagName: string, attribs: sanitizeHtml.Attributes): sanitizeHtml.Tag {
+  const out = { ...attribs }
+  for (const k of ['colspan', 'rowspan']) {
+    if (out[k] !== undefined) {
+      const n = parseInt(out[k], 10)
+      if (!Number.isFinite(n) || n < 1 || n > 100) delete out[k]
+      else out[k] = String(n)
+    }
+  }
+  return { tagName, attribs: out }
+}
+
 const OPTIONS: sanitizeHtml.IOptions = {
-  allowedTags: ['p', 'br', 'strong', 'b', 'em', 'i', 'u', 's', 'mark', 'span', 'ul', 'ol', 'li', 'h1', 'h2', 'h3'],
+  allowedTags: [
+    'p', 'br', 'strong', 'b', 'em', 'i', 'u', 's', 'mark', 'span', 'ul', 'ol', 'li', 'h1', 'h2', 'h3',
+    // Tables (pasted from Excel/Sheets or inserted) — structure only.
+    'table', 'thead', 'tbody', 'tr', 'th', 'td', 'colgroup', 'col',
+  ],
   allowedAttributes: {
-    '*': ['style'],
+    '*':   ['style'],
+    td:    ['colspan', 'rowspan'],
+    th:    ['colspan', 'rowspan'],
+    col:   ['span'],
   },
+  transformTags: { td: clampSpans, th: clampSpans },
   allowedStyles: {
     '*': {
       'text-align':       [/^(left|right|center|justify)$/],

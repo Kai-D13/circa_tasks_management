@@ -6,8 +6,13 @@ import StarterKit from '@tiptap/starter-kit'
 import Highlight from '@tiptap/extension-highlight'
 import TextAlign from '@tiptap/extension-text-align'
 import { TextStyle, FontSize } from '@tiptap/extension-text-style'
-import { Bold, Underline as UnderlineIcon, Highlighter, AlignLeft, AlignCenter, AlignRight } from 'lucide-react'
+import { TableKit } from '@tiptap/extension-table'
+import { Bold, Underline as UnderlineIcon, Highlighter, AlignLeft, AlignCenter, AlignRight, Table as TableIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
+
+// Cap pasted tables so a giant Excel paste can't bloat the doc / lag Staff
+// mobile render. Larger tables fall back to flattened text.
+const MAX_PASTE_CELLS = 200
 
 // WYSIWYG editor for the task description ("như Outlook"): bold, font size,
 // highlight, underline, alignment. Controlled — emits sanitized-on-save HTML.
@@ -30,15 +35,17 @@ interface Props {
 const escapeHtml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-// Pasting from Excel / Microsoft 365 yields HTML <table> markup. StarterKit has
-// no table extension, so Tiptap would drop or mangle it. Convert tables to plain
-// paragraphs (cells joined, one row per line) BEFORE Tiptap parses — result is
-// clean text matching the sanitize allowlist.
+// Pasting from Excel / Microsoft 365 yields HTML <table> markup. With the Table
+// extension enabled, Tiptap parses normal tables into real table nodes (it keeps
+// only schema attrs — colspan/rowspan — and drops Excel's inline styles/mso junk).
+// We only intervene to PROTECT PERFORMANCE: a table over MAX_PASTE_CELLS is
+// flattened to plain paragraphs so a huge paste can't bloat the doc.
 function transformPastedHTML(html: string): string {
   if (typeof window === 'undefined' || !/<table/i.test(html)) return html
   try {
     const doc = new DOMParser().parseFromString(html, 'text/html')
     doc.querySelectorAll('table').forEach((table) => {
+      if (table.querySelectorAll('th,td').length <= MAX_PASTE_CELLS) return // keep — parsed as a real table
       const rows: string[] = []
       table.querySelectorAll('tr').forEach((tr) => {
         const cells = Array.from(tr.querySelectorAll('th,td')).map((c) => (c.textContent ?? '').trim())
@@ -68,6 +75,7 @@ export function RichTextEditor({ value, onChange }: Props) {
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
       TextStyle,
       FontSize,
+      TableKit.configure({ table: { resizable: false } }),
     ],
     content: value || '',
     editorProps: {
@@ -78,6 +86,10 @@ export function RichTextEditor({ value, onChange }: Props) {
           '[&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5',
           '[&_mark]:bg-yellow-200 [&_mark]:rounded-sm [&_mark]:px-0.5',
           '[&_h1]:text-lg [&_h1]:font-semibold [&_h2]:text-base [&_h2]:font-semibold',
+          // Pasted/inserted tables
+          '[&_table]:border-collapse [&_table]:my-2 [&_table]:w-full',
+          '[&_td]:border [&_td]:border-border [&_td]:p-1.5 [&_td]:align-top',
+          '[&_th]:border [&_th]:border-border [&_th]:p-1.5 [&_th]:bg-muted [&_th]:text-left',
         ),
       },
     },
@@ -176,6 +188,17 @@ export function RichTextEditor({ value, onChange }: Props) {
         </Btn>
         <Btn active={editor.isActive({ textAlign: 'right' })} onClick={() => editor.chain().focus().setTextAlign('right').run()} title="Căn phải">
           <AlignRight className="h-4 w-4" />
+        </Btn>
+
+        <span className="mx-1 h-5 w-px bg-border" />
+
+        {/* Insert a small table; you can also paste a table from Excel/Sheets. */}
+        <Btn
+          active={editor.isActive('table')}
+          onClick={() => editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run()}
+          title="Chèn bảng (hoặc dán bảng từ Excel)"
+        >
+          <TableIcon className="h-4 w-4" />
         </Btn>
       </div>
 
