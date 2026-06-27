@@ -29,6 +29,58 @@ export const DEFAULT_QUERY = `
   ORDER BY monday_of_week DESC
 `
 
+// KPI v2 — aggregate the THREE current periods (day/week/month) per store IN
+// BigQuery so the cron pulls ~78 rows (26 stores × 3 grains), well under the
+// 1000-row maxResults cap (runBigQuery has no page-token handling). Used by
+// /api/cron/pull-kpi-targets → store_kpi_targets (migration 067).
+//
+// Source: lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi (DAILY).
+//   month/week/date DATE, pos_code/pos_name STRING, gmv/final_target FLOAT.
+//
+// Why this shape (verified from the BI sample 2026-06-26):
+//  * The `week` column ALREADY encodes the business-week incl. the month-end
+//    merge (22/06–30/06 all map to week 2026-06-22) — group by it, don't
+//    recompute. current_week = MAX(week) among rows with date <= today, which is
+//    robust to today's row not having landed yet (a recent past day still
+//    carries the current week's value).
+//  * The table holds FUTURE-dated rows with final_target pre-set, so summing by
+//    week/month naturally gives the WHOLE-period target; period_end = MAX(date).
+//  * `date`/`month`/`week` are backticked (column names that collide with BQ
+//    date keywords).
+export const KPI_AGGREGATE_QUERY = `
+  WITH base AS (
+    SELECT \`month\`, \`week\`, \`date\`, pos_code, pos_name, gmv, final_target
+    FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`
+    WHERE pos_code NOT IN ("POS0001")
+  ),
+  today AS (SELECT CURRENT_DATE("Asia/Ho_Chi_Minh") AS d),
+  current_week AS (
+    SELECT MAX(\`week\`) AS week_start FROM base, today WHERE \`date\` <= today.d
+  ),
+  current_month AS (SELECT DATE_TRUNC(d, MONTH) AS month_start FROM today)
+  SELECT 'day' AS period_type, \`date\` AS period_start, \`date\` AS period_end,
+         pos_code, pos_name, SUM(gmv) AS actual, SUM(final_target) AS target,
+         COUNT(*) AS raw_row_count
+  FROM base, today
+  WHERE \`date\` = today.d
+  GROUP BY \`date\`, pos_code, pos_name
+  UNION ALL
+  SELECT 'week' AS period_type, \`week\` AS period_start, MAX(\`date\`) AS period_end,
+         pos_code, pos_name, SUM(gmv) AS actual, SUM(final_target) AS target,
+         COUNT(*) AS raw_row_count
+  FROM base
+  WHERE \`week\` = (SELECT week_start FROM current_week)
+  GROUP BY \`week\`, pos_code, pos_name
+  UNION ALL
+  SELECT 'month' AS period_type, \`month\` AS period_start, MAX(\`date\`) AS period_end,
+         pos_code, pos_name, SUM(gmv) AS actual, SUM(final_target) AS target,
+         COUNT(*) AS raw_row_count
+  FROM base
+  WHERE \`month\` = (SELECT month_start FROM current_month)
+  GROUP BY \`month\`, pos_code, pos_name
+  ORDER BY period_type, pos_code
+`
+
 // No-arg wrapper preserved for the cron route — reads BQ_SERVICE_ACCOUNT_KEY.
 export function loadServiceAccount(): ServiceAccount | null {
   return loadSA('BQ_SERVICE_ACCOUNT_KEY')
