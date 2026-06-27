@@ -47,13 +47,19 @@ export const DEFAULT_QUERY = `
 //    week/month naturally gives the WHOLE-period target; period_end = MAX(date).
 //  * `date`/`month`/`week` are backticked (column names that collide with BQ
 //    date keywords).
+//  * base is windowed to [current-month-start − 7 days, current-month-end] so BQ
+//    scans a slice, not the whole table. The −7 day tail covers a current week
+//    that leads in from the prior month (a month starting mid-week); the table's
+//    future-dated rows up to month-end keep week/month targets whole.
 export const KPI_AGGREGATE_QUERY = `
-  WITH base AS (
+  WITH today AS (SELECT CURRENT_DATE("Asia/Ho_Chi_Minh") AS d),
+  base AS (
     SELECT \`month\`, \`week\`, \`date\`, pos_code, pos_name, gmv, final_target
-    FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`
+    FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`, today
     WHERE pos_code NOT IN ("POS0001")
+      AND \`date\` BETWEEN DATE_SUB(DATE_TRUNC(today.d, MONTH), INTERVAL 7 DAY)
+                     AND LAST_DAY(today.d)
   ),
-  today AS (SELECT CURRENT_DATE("Asia/Ho_Chi_Minh") AS d),
   current_week AS (
     SELECT MAX(\`week\`) AS week_start FROM base, today WHERE \`date\` <= today.d
   ),

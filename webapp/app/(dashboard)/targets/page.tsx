@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { isSuperAdminEmail } from '@/lib/authz'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent } from '@/components/ui/card'
 import { PeriodTabs, type TargetPeriod } from '@/components/targets/PeriodTabs'
 import { ReferralCard, type ReferralItem } from '@/components/referral/ReferralCard'
 import { formatDateTime, weekEndISO, weekLenDays, currentWeekStart } from '@/lib/dateUtils'
@@ -26,13 +26,6 @@ function currentLabel(period: TargetPeriod, start: string): string {
   if (period === 'day') return `Hôm nay · ${dmy(start)}`
   if (period === 'month') return `Tháng ${start.slice(5, 7)}/${start.slice(0, 4)}`
   // End extends to month-end for the last partial week of a month (weekEndISO).
-  return `Tuần ${start.slice(8, 10)}/${start.slice(5, 7)} – ${weekEndISO(start).slice(8, 10)}/${weekEndISO(start).slice(5, 7)}`
-}
-
-// Shorter label for the history list rows.
-function historyLabel(period: TargetPeriod, start: string): string {
-  if (period === 'day') return `Ngày ${start.slice(8, 10)}/${start.slice(5, 7)}`
-  if (period === 'month') return `Tháng ${start.slice(5, 7)}/${start.slice(0, 4)}`
   return `Tuần ${start.slice(8, 10)}/${start.slice(5, 7)} – ${weekEndISO(start).slice(8, 10)}/${weekEndISO(start).slice(5, 7)}`
 }
 
@@ -207,7 +200,6 @@ export default async function TargetsPage({
         ? `${vnTodayISO.slice(0, 7)}-01`
         : currentWeekStart(allRows.map((r) => r.period_start), vnTodayISO)
     const current = allRows.find((r) => r.period_start === currentStart)
-    const history = allRows.filter((r) => r.period_start !== currentStart)
     const storeName = (profile.stores as unknown as { name: string } | null)?.name ?? 'Cửa hàng của bạn'
 
     // Referral campaign card (staff_referrals; RLS filters to this staff's phone).
@@ -352,25 +344,6 @@ export default async function TargetsPage({
               Cập nhật lúc {formatDateTime(current.refreshed_at)} · Nguồn: báo cáo BI
             </p>
           </>
-        )}
-
-        {history.length > 0 && (
-          <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm">
-                {period === 'day' ? 'Các ngày trước' : period === 'month' ? 'Các tháng trước' : 'Các tuần trước'}
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-0">
-              {history.map((h) => (
-                <div key={h.period_start} className="flex items-center justify-between px-4 py-2.5 border-t text-sm">
-                  <span className="text-muted-foreground">{historyLabel(period, h.period_start)}</span>
-                  <span className="font-medium">{vnd(h.actual)}</span>
-                  <StatusBadge status={h.status} hasGoal={(h.target ?? 0) > 0} />
-                </div>
-              ))}
-            </CardContent>
-          </Card>
         )}
 
         {/* Referral campaign ("Giới thiệu bạn bè") — under Doanh số */}
