@@ -76,24 +76,43 @@ ALTER PUBLICATION supabase_realtime ADD TABLE public.<ten_bang>;
 
 ---
 
-## Bước 3 — (TÙY CHỌN, mạnh tay hơn) dừng hẳn dịch vụ Realtime
+## Bước 3 — (THỰC TẾ LÀ BƯỚC CHÍNH) dừng hẳn dịch vụ Realtime
 
-Chỉ làm nếu sau Bước 2, `list_changes` **vẫn** tốn đáng kể (do bản thân nhịp poll). Dừng container `realtime` trong Coolify (stack Supabase) → loại bỏ hoàn toàn việc poll.
+> **Bài học 2026-06-27 (đã thực chiến):** Khi chạy thật, publication **đã rỗng sẵn** (`pg_publication_tables` trả 0 dòng, `puballtables=false`) mà `wal->>` (chính là `realtime.list_changes`) **vẫn chiếm ~96% thời gian DB** — tức tải đến từ **bản thân nhịp poll/decode WAL của container realtime**, KHÔNG phải từ bảng trong publication. ⇒ **Bước 2 (bỏ trống publication) là no-op trong trường hợp này; phải làm Bước 3 (dừng container) mới hết tải.** Vẫn chạy Bước 1+2 trước để loại trừ, nhưng đừng kỳ vọng Bước 2 tự đủ.
 
-**⚠ Lưu ý WAL slot:** nếu dừng realtime mà **không** xử lý replication slot của nó, slot ở trạng thái `active=false` sẽ **giữ WAL → đĩa phình dần**. Sau khi dừng container, xử lý slot:
+Dừng container `realtime` trong Coolify (stack Supabase) → loại bỏ hoàn toàn việc poll.
 
-```sql
--- Xem lại slot (Bước 1b) rồi drop slot của realtime (chỉ khi đã dừng container):
-SELECT pg_drop_replication_slot('<slot_name_tu_buoc_1b>');
-```
-- Rollback: start lại container `realtime` trong Coolify (nó tự tạo lại slot khi cần).
-- Vì Bước 2 đã reversible và đủ an toàn, **ưu tiên Bước 2**; chỉ tới Bước 3 nếu cần.
+### ⚠ Bài học 1 — Slot của realtime là TEMPORARY → tự dọn, KHÔNG drop tay
+Slot `cainophile_*` (tên ngẫu nhiên, đổi mỗi lần container khởi động) là **temporary replication slot**: nó **tự biến mất ngay khi consumer (container realtime) ngắt kết nối**. Hệ quả:
+- **KHÔNG** cần `pg_drop_replication_slot(...)`. Nếu thử drop sau khi đã ngắt → lỗi `slot does not exist` (vì nó đã tự xoá). WAL được giải phóng theo.
+- Nếu container đã `Exited` nhưng slot vẫn `active=true` + giữ WAL → đó là **walsender treo** (Postgres chưa nhận ra TCP đã ngắt). Kill nó để slot tự dọn ngay:
+  ```sql
+  SELECT slot_name, active, active_pid FROM pg_replication_slots WHERE slot_name LIKE 'cainophile%';
+  SELECT pg_terminate_backend(active_pid)
+  FROM pg_replication_slots WHERE slot_name LIKE 'cainophile%' AND active_pid IS NOT NULL;
+  -- slot temporary biến mất ngay sau khi terminate; KHÔNG cần pg_drop_replication_slot.
+  ```
+- (Lưu ý cũ chỉ đúng cho slot *persistent*: slot inactive mới giữ WAL phình đĩa. Slot temporary của realtime không rơi vào trường hợp đó vì tự xoá khi ngắt.)
+
+### ⚠ Bài học 2 — Coolify TỰ DỰNG LẠI container → `docker stop` không đủ
+`docker stop realtime-dev-...` (hoặc `docker update --restart=no` rồi stop) **KHÔNG bền**: Coolify reconcile/redeploy sẽ **bật lại** container → nó tạo **slot mới** (`cainophile_<id-khác>`) và poll lại → tải 96% quay về. Phải tắt ở **tầng Coolify**:
+
+1. Coolify → resource **Supabase** → mở phần **Docker Compose / Compose file** (KHÔNG phải tab "General" — đó chỉ là dòng version/trạng thái, không tắt được).
+2. **Comment/xoá khối service `realtime:`** (image `supabase/realtime`).
+3. **Xoá `realtime` khỏi MỌI `depends_on:`** của service khác (vd `kong`, `analytics`) — không thì deploy fail.
+4. Save → **Redeploy** stack Supabase (cả stack restart ~30–60s → **làm lúc khuya**).
+5. Verify: `docker ps -a | grep realtime-dev` → không còn; `SELECT slot_name FROM pg_replication_slots;` → hết `cainophile`; `pg_stat_statements WHERE query ILIKE '%wal->>%'` → no rows / không tăng.
+
+> Mức tối thiểu (nếu không muốn sửa compose ngay): để container `Exited`. Nó chỉ bị dựng lại khi **redeploy chính resource Supabase** — **redeploy app Circa KHÔNG đụng** tới stack Supabase (2 resource riêng). Nên thực tế nó nằm im tới lần redeploy Supabase kế; sửa compose khi có maintenance window để chốt vĩnh viễn.
+
+- Rollback: bỏ comment service `realtime` (+ `depends_on`) → redeploy; nó tự tạo slot mới khi chạy.
+- Route `/realtime/*` qua Kong trỏ tới container đã tắt → ai gọi sẽ nhận 502; **app không gọi realtime nên vô hại**, không cần sửa Kong.
 
 ---
 
-## Tóm tắt khuyến nghị
+## Tóm tắt khuyến nghị (cập nhật sau thực chiến 2026-06-27)
 1. Chạy **Bước 1** (chẩn đoán) → lưu kết quả.
-2. Làm **Bước 2** (bỏ trống publication) lúc traffic thấp → **verify** → quan sát 1 ngày.
-3. Nếu vẫn còn tải realtime đáng kể → cân nhắc **Bước 3** (dừng container + drop slot, để ý WAL).
+2. **Bước 2** (bỏ trống publication) lúc traffic thấp → **verify**. Nếu publication đã rỗng sẵn mà `wal->>` vẫn đắt → đi thẳng Bước 3.
+3. **Bước 3** (thực tế là bước quyết định): **sửa compose Coolify để gỡ service realtime + redeploy khuya**. Slot temporary tự dọn (kill walsender treo nếu cần); KHÔNG drop slot tay.
 
-Không có thay đổi code/deploy nào ở đây — đây là cấu hình DB/hạ tầng, bạn thực hiện trên Supabase/Coolify; reversible toàn bộ.
+Không có thay đổi code/deploy app nào ở đây — đây là cấu hình DB/hạ tầng, thực hiện trên Supabase/Coolify; reversible toàn bộ.
