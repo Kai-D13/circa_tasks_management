@@ -46,7 +46,7 @@ export function MobileHeader() {
   }
 
   return (
-    <header className="sticky top-0 z-30 bg-primary flex items-center gap-2 px-3 h-[46px] md:hidden">
+    <header className="sticky top-0 z-30 bg-primary flex items-center gap-2 px-4 h-14 md:hidden">
 
       {isSubPage ? (
         /* Sub-page: back button + section title */
@@ -54,7 +54,7 @@ export function MobileHeader() {
           <Button
             variant="ghost"
             size="sm"
-            className="w-9 h-9 px-0 text-white hover:bg-white/10 shrink-0"
+            className="w-10 h-10 px-0 text-white hover:bg-white/10 shrink-0"
             onClick={() => router.back()}
           >
             <ArrowLeft className="h-5 w-5" />
@@ -89,11 +89,11 @@ export function MobileHeader() {
         {role !== 'staff' && <NotificationBell />}
         {role === 'staff' && <EditProfileDialog variant="mobile" />}
         <ChangePasswordDialog variant="mobile" />
-        <ThemeToggle className="w-9 h-9 px-0 text-white/80 hover:bg-white/10 hover:text-white" />
+        <ThemeToggle className="w-10 h-10 px-0 text-white/80 hover:bg-white/10 hover:text-white" />
         <Button
           variant="ghost"
           size="sm"
-          className="w-9 h-9 px-0 text-white/80 hover:bg-white/10 hover:text-white"
+          className="w-10 h-10 px-0 text-white/80 hover:bg-white/10 hover:text-white"
           onClick={handleLogout}
         >
           <LogOut className="h-4 w-4" />

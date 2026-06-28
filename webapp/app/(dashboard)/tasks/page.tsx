@@ -764,32 +764,33 @@ export default async function TasksPage({
           )}
 
           {/* Staff pagination — simple Prev/Next (no exact count, so no page numbers).
-              Sticky above the mobile bottom nav so it's always reachable; static on
-              desktop. -mx-4 px-4 makes the sticky bar full-bleed inside the page padding. */}
+              Plain block AFTER the list (no sticky/translucent overlay) with large
+              touch targets (h-11 ≈ 44px, Apple/Material guideline) so it never floats
+              over a card and is easy to tap on mobile. */}
           {isStaff && (page > 1 || hasNextStaff) && (
-            <div className="flex items-center justify-between gap-2 pt-1 sticky bottom-16 z-10 -mx-4 px-4 py-2 bg-muted/20 border-t md:static md:bottom-auto md:mx-0 md:px-0 md:py-0 md:bg-transparent md:border-0">
+            <div className="flex items-center justify-between gap-3 mt-4 mb-5">
               <Link
                 href={pageHref(page - 1)}
                 aria-disabled={page <= 1}
                 className={cn(
-                  buttonVariants({ variant: 'outline', size: 'sm' }),
-                  'h-8',
+                  buttonVariants({ variant: 'outline' }),
+                  'h-11 px-5 text-sm',
                   page <= 1 && 'pointer-events-none opacity-40',
                 )}
               >
-                <ChevronLeft className="h-3.5 w-3.5 mr-1" /> Trước
+                <ChevronLeft className="h-4 w-4 mr-1" /> Trước
               </Link>
-              <span className="text-xs text-muted-foreground">Trang {page}</span>
+              <span className="text-sm font-medium text-muted-foreground">Trang {page}</span>
               <Link
                 href={pageHref(page + 1)}
                 aria-disabled={!hasNextStaff}
                 className={cn(
-                  buttonVariants({ variant: 'outline', size: 'sm' }),
-                  'h-8',
+                  buttonVariants({ variant: 'outline' }),
+                  'h-11 px-5 text-sm',
                   !hasNextStaff && 'pointer-events-none opacity-40',
                 )}
               >
-                Tiếp <ChevronRight className="h-3.5 w-3.5 ml-1" />
+                Tiếp <ChevronRight className="h-4 w-4 ml-1" />
               </Link>
             </div>
           )}

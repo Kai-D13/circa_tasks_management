@@ -57,7 +57,7 @@ export function EditProfileDialog({ variant = 'sidebar' }: { variant?: 'sidebar'
           variant="ghost"
           size="sm"
           aria-label="Sửa thông tin"
-          className="w-9 h-9 px-0 text-white/80 hover:bg-white/10 hover:text-white"
+          className="w-10 h-10 px-0 text-white/80 hover:bg-white/10 hover:text-white"
           onClick={handleOpen}
         >
           <UserCog className="h-4 w-4" />
