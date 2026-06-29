@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { createClient } from '@/lib/supabase/server'
 import { isSuperAdminEmail } from '@/lib/authz'
+import { embeddedName } from '@/lib/utils'
 import { CYCLE_COUNT_DEPT_ID } from '@/lib/inventory/constants'
 import { Card, CardContent } from '@/components/ui/card'
 import { TrfBoard, type TrfRow } from '@/components/inventory/TrfBoard'
@@ -19,7 +20,7 @@ interface RawTrf {
   store_id: string | null
   input_data: { trf_code?: string; reason?: string; internal_created_by?: string; pos_code_check?: string } | null
   stores: { name: string } | null
-  completed_by_user: { full_name: string } | null
+  completed_by_user: unknown
 }
 
 export default async function InventoryTrfPage() {
@@ -69,7 +70,7 @@ export default async function InventoryTrfPage() {
     store_id: t.store_id ?? null,
     status: t.status,
     deadline: t.deadline ?? null,
-    completed_by_name: t.completed_by_user?.full_name ?? null,
+    completed_by_name: embeddedName(t.completed_by_user),
   }))
 
   return (

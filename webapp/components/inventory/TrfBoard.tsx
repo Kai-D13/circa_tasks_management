@@ -54,8 +54,12 @@ function TrfRowItem({ r }: { r: TrfRow }) {
           Hạn {r.deadline ? formatDate(r.deadline) : '—'}{r.completed_by_name ? ` · Đã nộp: ${r.completed_by_name}` : ''}
         </p>
       </div>
-      <span className={cn('text-xs px-2 py-0.5 rounded font-medium shrink-0', m.cls)}>{m.label}</span>
-      <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+      <div className="flex flex-col items-end gap-1 shrink-0">
+        <span className={cn('text-xs px-2 py-0.5 rounded font-medium', m.cls)}>{m.label}</span>
+        <span className="flex items-center gap-0.5 text-[11px] text-primary font-medium">
+          Mở phiếu <ChevronRight className="h-3 w-3" />
+        </span>
+      </div>
     </Link>
   )
 }
@@ -76,7 +80,7 @@ export function TrfBoard({ rows, isAllStores }: { rows: TrfRow[]; isAllStores: b
     if (filter !== 'all') list = list.filter((r) => effKey(r) === filter)
     if (term) {
       list = list.filter((r) =>
-        deburr(`${r.trf_code} ${r.pos_code ?? ''} ${r.store_name ?? ''} ${r.internal_created_by ?? ''}`).includes(term))
+        deburr(`${r.trf_code} ${r.pos_code ?? ''} ${r.store_name ?? ''} ${r.internal_created_by ?? ''} ${r.reason ?? ''}`).includes(term))
     }
     return [...list].sort((a, b) => {
       const d = RANK[effKey(a)] - RANK[effKey(b)]
@@ -139,26 +143,27 @@ export function TrfBoard({ rows, isAllStores }: { rows: TrfRow[]; isAllStores: b
   )
 }
 
-// Admin / Cycle Count: group by store (native <details> accordion).
+// Admin / Cycle Count: group by store (native <details> accordion). Group key is
+// store_id (display = store_name) so duplicate/empty names never collide.
 function TrfAccordion({ rows }: { rows: TrfRow[] }) {
-  const byStore = new Map<string, TrfRow[]>()
+  const byStore = new Map<string, { name: string; items: TrfRow[] }>()
   for (const r of rows) {
-    const k = r.store_name ?? r.store_id ?? '—'
-    if (!byStore.has(k)) byStore.set(k, [])
-    byStore.get(k)!.push(r)
+    const k = r.store_id ?? r.store_name ?? '—'
+    if (!byStore.has(k)) byStore.set(k, { name: r.store_name ?? '—', items: [] })
+    byStore.get(k)!.items.push(r)
   }
-  const groups = [...byStore.entries()].sort((a, b) => a[0].localeCompare(b[0], 'vi'))
+  const groups = [...byStore.entries()].sort((a, b) => a[1].name.localeCompare(b[1].name, 'vi'))
 
   return (
     <Card>
       <CardContent className="p-0">
-        {groups.map(([storeName, items], idx) => {
+        {groups.map(([storeKey, { name: storeName, items }], idx) => {
           const done = items.filter((r) => effKey(r) === 'done').length
           const overdue = items.filter((r) => effKey(r) === 'overdue').length
           const pending = items.filter((r) => effKey(r) === 'pending').length
           const pos = items.find((r) => r.pos_code)?.pos_code
           return (
-            <details key={storeName} open={idx === 0} className="group border-b last:border-0">
+            <details key={storeKey} open={idx === 0} className="group border-b last:border-0">
               <summary className="flex items-center gap-2 px-4 py-3 cursor-pointer hover:bg-muted/30 list-none">
                 <ChevronRight className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-90 shrink-0" />
                 <div className="min-w-0 flex-1">

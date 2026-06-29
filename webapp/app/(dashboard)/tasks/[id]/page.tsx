@@ -39,7 +39,7 @@ const CATEGORY_LABEL_VN: Record<TaskCategory, string> = {
   audit:    'Kiểm tra',
   other:    'Khác',
 }
-import { cn } from '@/lib/utils'
+import { cn, embeddedName } from '@/lib/utils'
 import { deptBadgeClass } from '@/lib/departments'
 import { formatTaskCode } from '@/lib/taskCode'
 import { RichText } from '@/components/tasks/RichText'
@@ -395,11 +395,19 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
               </p>
             )}
             <p className="text-xs text-muted-foreground mt-0.5">
-              Tạo bởi {(task.creator as { full_name: string } | null)?.full_name ?? '—'}
-              {task.created_at && ` · ${formatDate(task.created_at)}`}
-              {assignerName && task.assigned_to && (
-                <> · Phân công: <span className="text-foreground">{assignerName}</span>
-                  {lastAssignLog?.created_at && ` (${formatDate(lastAssignLog.created_at as string)})`}
+              {isTrfTask ? (
+                // TRF: created_by is the Cycle Count system owner, NOT the phiếu
+                // author (that's "Người tạo phiếu" in TrfInfoPanel) — avoid the mix-up.
+                <>Đồng bộ từ Google Sheet{task.created_at && ` · ${formatDate(task.created_at)}`}</>
+              ) : (
+                <>
+                  Tạo bởi {(task.creator as { full_name: string } | null)?.full_name ?? '—'}
+                  {task.created_at && ` · ${formatDate(task.created_at)}`}
+                  {assignerName && task.assigned_to && (
+                    <> · Phân công: <span className="text-foreground">{assignerName}</span>
+                      {lastAssignLog?.created_at && ` (${formatDate(lastAssignLog.created_at as string)})`}
+                    </>
+                  )}
                 </>
               )}
             </p>
@@ -468,7 +476,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
               reason={trfInput?.reason ?? null}
               internalCreatedBy={trfInput?.internal_created_by ?? null}
               deadline={task.deadline as string | null}
-              completedByName={(task.completed_by_user as unknown as { full_name: string } | null)?.full_name ?? null}
+              completedByName={embeddedName(task.completed_by_user)}
               completedAt={task.completed_at as string | null}
             />
           )}
