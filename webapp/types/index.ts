@@ -28,6 +28,7 @@ export interface UserProfile {
   phone_number?: string | null
   role: UserRole
   store_id: string | null
+  department_id?: string | null
   created_at: string
   stores?: Store
 }
