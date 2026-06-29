@@ -44,6 +44,7 @@ import { deptBadgeClass } from '@/lib/departments'
 import { formatTaskCode } from '@/lib/taskCode'
 import { RichText } from '@/components/tasks/RichText'
 import { CYCLE_COUNT_DEPT_ID } from '@/lib/inventory/constants'
+import { TrfInfoPanel } from '@/components/inventory/TrfInfoPanel'
 
 const OUTPUT_LABEL: Record<string, string> = {
   image: 'Ảnh',
@@ -85,11 +86,16 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   // managers/staff are executors and never manage.
   const canManageTask = userRole === 'admin'
     && (isSuperAdminEmail(user!.email) || task.created_by === userId)
+  // Inventory → TRF task: surface business context (TrfInfoPanel) + a clean title.
+  const isTrfTask = (task as { source_type?: string }).source_type === 'inventory_trf'
+  const trfInput = isTrfTask
+    ? (task.input_data as { trf_code?: string; reason?: string; internal_created_by?: string; pos_code_check?: string; pos_name_check?: string } | null)
+    : null
   // Cycle Count admins get VIEW + REQUEST-RESUBMIT on TRF tasks (not full manage):
   // they don't own these (created_by = system user), so canManageTask is false, but
   // they may bounce a bad submission. Gates canReviewTask only (migration 068).
   const isCycleCountTrfReviewer = userRole === 'admin'
-    && (task as { source_type?: string }).source_type === 'inventory_trf'
+    && isTrfTask
     && (profile as { department_id?: string | null } | null)?.department_id === CYCLE_COUNT_DEPT_ID
   // canViewStoreRoster: read-only — fetch store users for results filtering
   // (store_manager) and the reassign dropdown (admin/SM). Not a mutation right.
@@ -345,7 +351,9 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
               <p className="text-xs font-mono text-muted-foreground mb-0.5">{formatTaskCode((task as { seq?: number | null }).seq)}</p>
             )}
             <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-xl font-bold leading-tight tracking-tight">{task.title}</h1>
+              <h1 className="text-xl font-bold leading-tight tracking-tight">
+                {isTrfTask && trfInput?.trf_code ? `Phiếu ${trfInput.trf_code}` : task.title}
+              </h1>
               {task.category && (
                 <span className={cn(
                   'text-xs px-2 py-0.5 rounded font-medium shrink-0',
@@ -451,8 +459,22 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
         <div className="order-2 lg:order-first flex-[2] min-w-0 px-4 py-3 lg:border-r lg:overflow-y-auto">
           <div className="space-y-3">
 
-          {/* Description */}
-          {task.description && (
+          {/* Inventory → TRF: business-context panel (incl. "Người tạo phiếu") */}
+          {isTrfTask && (
+            <TrfInfoPanel
+              trfCode={trfInput?.trf_code ?? null}
+              posCode={trfInput?.pos_code_check ?? null}
+              posName={(task.stores as unknown as { name: string } | null)?.name ?? trfInput?.pos_name_check ?? null}
+              reason={trfInput?.reason ?? null}
+              internalCreatedBy={trfInput?.internal_created_by ?? null}
+              deadline={task.deadline as string | null}
+              completedByName={(task.completed_by_user as unknown as { full_name: string } | null)?.full_name ?? null}
+              completedAt={task.completed_at as string | null}
+            />
+          )}
+
+          {/* Description — hidden for TRF (the reason is shown in TrfInfoPanel) */}
+          {task.description && !isTrfTask && (
             <div>
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Mô tả</p>
               <RichText value={task.description as string} />
