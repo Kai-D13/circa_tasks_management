@@ -43,6 +43,7 @@ import { cn } from '@/lib/utils'
 import { deptBadgeClass } from '@/lib/departments'
 import { formatTaskCode } from '@/lib/taskCode'
 import { RichText } from '@/components/tasks/RichText'
+import { CYCLE_COUNT_DEPT_ID } from '@/lib/inventory/constants'
 
 const OUTPUT_LABEL: Record<string, string> = {
   image: 'Ảnh',
@@ -84,6 +85,12 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
   // managers/staff are executors and never manage.
   const canManageTask = userRole === 'admin'
     && (isSuperAdminEmail(user!.email) || task.created_by === userId)
+  // Cycle Count admins get VIEW + REQUEST-RESUBMIT on TRF tasks (not full manage):
+  // they don't own these (created_by = system user), so canManageTask is false, but
+  // they may bounce a bad submission. Gates canReviewTask only (migration 068).
+  const isCycleCountTrfReviewer = userRole === 'admin'
+    && (task as { source_type?: string }).source_type === 'inventory_trf'
+    && (profile as { department_id?: string | null } | null)?.department_id === CYCLE_COUNT_DEPT_ID
   // canViewStoreRoster: read-only — fetch store users for results filtering
   // (store_manager) and the reassign dropdown (admin/SM). Not a mutation right.
   const canViewStoreRoster = userRole === 'admin' || userRole === 'store_manager' || isSmForStore
@@ -279,7 +286,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
 
   // canReviewTask: gates RequestResubmitSection + "has results but not done" warning.
   // Extended to editor collaborators and SM (they can request resubmit after validation).
-  const canReviewTask = canManageTask || isEditorCollaborator || isSmForStore
+  const canReviewTask = canManageTask || isEditorCollaborator || isSmForStore || isCycleCountTrfReviewer
   // canExtendDeadline: owner + super only — not open to editor collaborators or SM.
   const canExtendDeadline = canManageTask
   // canAddReviewNote: owner/super + editor collaborators (server action validates).
