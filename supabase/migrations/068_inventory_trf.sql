@@ -53,6 +53,13 @@ CREATE TABLE IF NOT EXISTS public.inventory_trf_import_runs (
   started_at    timestamptz NOT NULL DEFAULT now(),
   finished_at   timestamptz
 );
+-- Idempotent backfill: if an earlier 068 (pre-metadata) already created the table,
+-- CREATE TABLE IF NOT EXISTS is a no-op and the new columns would be missing.
+ALTER TABLE public.inventory_trf_import_runs
+  ADD COLUMN IF NOT EXISTS sheet_id       text,
+  ADD COLUMN IF NOT EXISTS sheet_range    text,
+  ADD COLUMN IF NOT EXISTS deadline_hours integer,
+  ADD COLUMN IF NOT EXISTS created_by     uuid REFERENCES public.users(id) ON DELETE SET NULL;
 ALTER TABLE public.inventory_trf_import_runs ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS itr_runs_select ON public.inventory_trf_import_runs;
 CREATE POLICY itr_runs_select ON public.inventory_trf_import_runs
