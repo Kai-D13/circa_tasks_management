@@ -73,15 +73,15 @@ export default async function DashboardPage() {
   ] = await Promise.all([
     // staff_all parents are oversight-only (not submittable work items); exclude
     // them from all KPI counts so children aren't double-counted with the parent.
-    supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null).neq('assignment_mode', 'staff_all'),
-    supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null).eq('status', 'done').neq('assignment_mode', 'staff_all'),
+    supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null).neq('assignment_mode', 'staff_all').neq('source_type', 'inventory_trf'),
+    supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null).eq('status', 'done').neq('assignment_mode', 'staff_all').neq('source_type', 'inventory_trf'),
     // Count tasks that are effectively overdue: DB status='overdue' (set by cron)
     // OR deadline already passed and not yet done. Mirrors the /tasks filter so
     // the KPI stays accurate even when a store moves an overdue task to in_progress.
     supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null)
       .or(`status.eq.overdue,and(deadline.lt.${new Date().toISOString()},status.neq.done)`)
-      .neq('assignment_mode', 'staff_all'),
-    supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null).eq('status', 'in_progress').neq('assignment_mode', 'staff_all'),
+      .neq('assignment_mode', 'staff_all').neq('source_type', 'inventory_trf'),
+    supabase.from('tasks').select('*', { count: 'exact', head: true }).is('archived_at', null).eq('status', 'in_progress').neq('assignment_mode', 'staff_all').neq('source_type', 'inventory_trf'),
   ])
   const kpiError = e1 ?? e2 ?? e3 ?? e4
 
@@ -131,6 +131,7 @@ export default async function DashboardPage() {
         .is('broadcast_id', null)
         .is('parent_task_id', null)       // exclude staff_all children (they're folded under parent)
         .is('archived_at', null)
+        .neq('source_type', 'inventory_trf')
         .order('created_at', { ascending: false })
         .limit(8),
     ])
@@ -146,7 +147,7 @@ export default async function DashboardPage() {
             .select('broadcast_id, status, category, deadline, creator:users!created_by(full_name)')
             .in('broadcast_id', broadcastIds)
             .is('archived_at', null)
-            .neq('assignment_mode', 'staff_all')  // parents are overview-only, count children only
+            .neq('assignment_mode', 'staff_all').neq('source_type', 'inventory_trf')  // parents are overview-only, count children only
         : { data: [] as { broadcast_id: string; status: string; category: string | null; deadline: string | null; creator?: { full_name: string } | null }[], error: null }
       const { data: broadcastTasksRaw, error: est } = broadcastStatResult
       if (est) recentError = est
@@ -194,6 +195,7 @@ export default async function DashboardPage() {
       .from('tasks')
       .select('id, title, status, category, deadline, created_at, overdue_at, broadcast_id, assignment_mode, parent_task_id, stores(name), creator:users!created_by(full_name)')
       .is('archived_at', null)
+      .neq('source_type', 'inventory_trf')
       .order('created_at', { ascending: false })
       .limit(50)
 

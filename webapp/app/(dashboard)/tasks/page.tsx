@@ -88,6 +88,10 @@ export default async function TasksPage({
     ? supabase.from('tasks').select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, completed_by, completed_at, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), completed_by_user:users!completed_by(full_name), creator:users!created_by(full_name), department:departments(name, color)', countOpt)
     : supabase.from('tasks').select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), creator:users!created_by(full_name), department:departments(name, color)', countOpt)
 
+  // Inventory→TRF tasks are surfaced only under /inventory/trf — never in the
+  // normal task list (any role, any view). source_type is NOT NULL DEFAULT 'task'.
+  query = query.neq('source_type', 'inventory_trf')
+
   // Ordering per view:
   //   pending -> deadline asc (overdue/soonest first), then newest created
   //   done    -> most recently completed first

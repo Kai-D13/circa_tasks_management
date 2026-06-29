@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
@@ -19,10 +20,14 @@ import {
   TrendingUp,
   Gift,
   Megaphone,
+  Boxes,
+  ClipboardCheck,
+  ChevronRight,
   LogOut,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { isSuperAdmin } from '@/lib/authz'
+import { CYCLE_COUNT_DEPT_ID } from '@/lib/inventory/constants'
 import { NotificationBell } from '@/components/layout/NotificationBell'
 import { ChangePasswordDialog } from '@/components/layout/ChangePasswordDialog'
 import { EditProfileDialog } from '@/components/layout/EditProfileDialog'
@@ -76,6 +81,13 @@ export function Sidebar({ announcementsUnread = 0 }: { announcementsUnread?: num
     ? navItems.filter((item) => item.roles.includes(role) && (!('superAdmin' in item && item.superAdmin) || isSuper))
     : []
 
+  // Inventory accordion (→ TRF): super, Cycle Count admin, or store manager.
+  // Non-Cycle-Count admins and the multi-store sm role do NOT see it (phase 1).
+  const showInventory = isSuper
+    || (role === 'admin' && profile?.department_id === CYCLE_COUNT_DEPT_ID)
+    || role === 'store_manager'
+  const [invOpen, setInvOpen] = useState(() => pathname.startsWith('/inventory'))
+
   return (
     <aside className="hidden md:flex h-screen w-[210px] flex-col border-r bg-sidebar">
       {/* Logo / Brand — orange header bar */}
@@ -111,6 +123,43 @@ export function Sidebar({ announcementsUnread = 0 }: { announcementsUnread?: num
             )}
           </Link>
         ))}
+
+        {/* Inventory — collapsible parent → submodules (TRF) */}
+        {showInventory && (
+          <div>
+            <button
+              type="button"
+              onClick={() => setInvOpen((o) => !o)}
+              className={cn(
+                'w-full flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
+                pathname.startsWith('/inventory')
+                  ? 'bg-sidebar-accent text-primary font-medium'
+                  : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-primary/80',
+              )}
+            >
+              <Boxes className="h-4 w-4 shrink-0" />
+              <span className="flex-1 text-left">Inventory</span>
+              <ChevronRight className={cn('h-4 w-4 transition-transform', invOpen && 'rotate-90')} />
+            </button>
+            {invOpen && (
+              <div className="mt-0.5 space-y-0.5 pl-4">
+                <Link
+                  href="/inventory/trf"
+                  prefetch={false}
+                  className={cn(
+                    'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
+                    pathname.startsWith('/inventory/trf')
+                      ? 'bg-sidebar-accent text-primary font-medium'
+                      : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-primary/80',
+                  )}
+                >
+                  <ClipboardCheck className="h-4 w-4 shrink-0" />
+                  <span className="flex-1">TRF</span>
+                </Link>
+              </div>
+            )}
+          </div>
+        )}
       </nav>
 
       {/* User info + controls */}

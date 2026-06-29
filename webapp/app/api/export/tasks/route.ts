@@ -49,6 +49,8 @@ export async function GET(request: NextRequest) {
     // Exclude staff_all OVERVIEW parents — they carry no submitter; the export
     // lists the per-pharmacist child rows instead.
     .neq('assignment_mode', 'staff_all')
+    // Inventory→TRF tasks live under /inventory, not the task export.
+    .neq('source_type', 'inventory_trf')
     // +1 to detect overflow past the cap (silent truncation would read as a
     // complete export).
     .limit(MAX_ROWS + 1)

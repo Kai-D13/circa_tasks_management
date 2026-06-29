@@ -8,6 +8,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { computeNextRunAt } from '@/lib/recurring'
 import { enqueueTaskCreated } from '@/lib/teams/notifyTaskCreated'
 import { canAdminManageOwn, getSmStoreIds, smHasStore } from '@/lib/authz'
+import { CYCLE_COUNT_DEPT_ID } from '@/lib/inventory/constants'
 import { publicStorageUrl } from '@/lib/storage/publicUrl'
 import { sanitizeRichText } from '@/lib/richtext/sanitize'
 
@@ -1373,17 +1374,21 @@ export async function requestResubmit(taskId: string, reason?: string) {
 
   // Requesting resubmit: task owner/super admin OR editor collaborator OR SM for their stores.
   const { data: profile } = await supabase
-    .from('users').select('role').eq('id', user.id).single()
+    .from('users').select('role, department_id').eq('id', user.id).single()
   const { data: task } = await supabaseAdmin
-    .from('tasks').select('created_by, assigned_to, title, store_id, deadline, status').eq('id', taskId).single()
+    .from('tasks').select('created_by, assigned_to, title, store_id, deadline, status, source_type').eq('id', taskId).single()
   const isSm = profile?.role === 'sm'
   const isOwnerR = canAdminManageOwn({ email: user.email, role: profile?.role, createdBy: task?.created_by, userId: user.id })
+  // Cycle Count admins may request resubmit on TRF tasks (view+resubmit only).
+  const isCycleCountTrf = profile?.role === 'admin'
+    && (task as { source_type?: string } | null)?.source_type === 'inventory_trf'
+    && (profile as { department_id?: string | null } | null)?.department_id === CYCLE_COUNT_DEPT_ID
   let isSmForTask = false
   if (isSm) {
     const smStoreIds = await getSmStoreIds(supabase, user.id)
     isSmForTask = smHasStore(smStoreIds, task?.store_id as string | null)
   }
-  if (!isOwnerR && !isSmForTask && !(await isCollaboratorEditor(supabase, user.id, taskId)))
+  if (!isOwnerR && !isSmForTask && !isCycleCountTrf && !(await isCollaboratorEditor(supabase, user.id, taskId)))
     return { error: 'Không có quyền yêu cầu làm lại task này' }
 
   // Ensure task actually has results before allowing resubmit request
