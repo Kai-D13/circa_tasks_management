@@ -36,17 +36,22 @@ CREATE INDEX IF NOT EXISTS idx_tasks_source_type
 
 -- 2) import-run log -----------------------------------------------------------
 CREATE TABLE IF NOT EXISTS public.inventory_trf_import_runs (
-  id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
-  pulled      integer     NOT NULL DEFAULT 0,
-  created     integer     NOT NULL DEFAULT 0,
-  skipped     integer     NOT NULL DEFAULT 0,
-  unmatched   integer     NOT NULL DEFAULT 0,
-  duplicates  integer     NOT NULL DEFAULT 0,
-  status      text        NOT NULL DEFAULT 'running'
-              CHECK (status IN ('running', 'success', 'failed')),
-  error       jsonb,                       -- { message, unmatched: [...] }
-  started_at  timestamptz NOT NULL DEFAULT now(),
-  finished_at timestamptz
+  id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+  pulled        integer     NOT NULL DEFAULT 0,
+  created       integer     NOT NULL DEFAULT 0,
+  skipped       integer     NOT NULL DEFAULT 0,
+  unmatched     integer     NOT NULL DEFAULT 0,
+  duplicates    integer     NOT NULL DEFAULT 0,
+  status        text        NOT NULL DEFAULT 'running'
+                CHECK (status IN ('running', 'success', 'failed')),
+  error         jsonb,                     -- { message, unmatched:[...], stores_without_store_manager:[...] }
+  -- Source metadata (trace which Sheet/config produced this batch).
+  sheet_id      text,
+  sheet_range   text,
+  deadline_hours integer,
+  created_by    uuid        REFERENCES public.users(id) ON DELETE SET NULL,
+  started_at    timestamptz NOT NULL DEFAULT now(),
+  finished_at   timestamptz
 );
 ALTER TABLE public.inventory_trf_import_runs ENABLE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS itr_runs_select ON public.inventory_trf_import_runs;
@@ -159,6 +164,25 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION public.rpc_create_inventory_trf_items(jsonb, uuid, integer, uuid) FROM public;
 GRANT EXECUTE ON FUNCTION public.rpc_create_inventory_trf_items(jsonb, uuid, integer, uuid) TO service_role;
+
+-- 4b) task_review_notes: let same-store STAFF read the resubmit reason on TRF
+--     tasks. The existing trn_select_staff requires t.assigned_to = auth.uid(),
+--     but TRF tasks are store-level (assigned_to NULL), so staff couldn't see the
+--     "lý do làm lại". ADDITIVE policy (RLS ORs permissive policies) → the
+--     existing trn_select_staff is untouched. Scoped to source_type='inventory_trf'.
+DROP POLICY IF EXISTS "trn_select_staff_trf" ON public.task_review_notes;
+CREATE POLICY "trn_select_staff_trf" ON public.task_review_notes
+  FOR SELECT TO authenticated
+  USING (
+    (select public.get_user_role()) = 'staff'
+    AND EXISTS (
+      SELECT 1 FROM public.tasks t
+      WHERE t.id = task_review_notes.task_id
+        AND t.source_type = 'inventory_trf'
+        AND t.assigned_to IS NULL
+        AND t.store_id = (select public.get_user_store_id())
+    )
+  );
 
 -- 5) CORE EDIT #1: tasks_select_admin — VERBATIM 4 branches from migration 060,
 --    APPEND a 5th for inventory_trf (Cycle Count dept; created_by may be null).

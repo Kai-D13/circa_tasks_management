@@ -74,7 +74,15 @@ export async function GET(request: NextRequest) {
 
   // Open an import run for audit + as the FK target for inventory_trf_items.
   const { data: run, error: runErr } = await supabaseAdmin
-    .from('inventory_trf_import_runs').insert({ status: 'running' }).select('id').single()
+    .from('inventory_trf_import_runs')
+    .insert({
+      status: 'running',
+      sheet_id: SHEET_ID,
+      sheet_range: SHEET_RANGE,
+      deadline_hours: deadlineHours,
+      created_by: createdBy,
+    })
+    .select('id').single()
   if (runErr || !run) {
     return NextResponse.json({ error: `Không tạo được import run: ${runErr?.message}` }, { status: 500 })
   }
@@ -93,15 +101,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: result.error, pulled: rawRows.length }, { status: 422 })
     }
 
-    await supabaseAdmin.from('inventory_trf_import_runs').update({
-      status: 'success',
-      pulled: result.pulled, created: result.created, skipped: result.skipped,
-      unmatched: result.unmatched.length, duplicates: result.duplicates,
-      error: result.unmatched.length ? { unmatched: result.unmatched } : null,
-      finished_at: new Date().toISOString(),
-    }).eq('id', runId)
-
-    // Summary notification per store (store managers only; staff get none).
+    // Summary notification per store (store managers only; staff get none) +
+    // detect stores that received TRF but have NO store_manager (silent gap).
+    const storesWithoutManager: string[] = []
     if (result.created > 0) {
       const { data: newItems } = await supabaseAdmin
         .from('inventory_trf_items').select('store_id').eq('source_run_id', runId)
@@ -113,6 +115,8 @@ export async function GET(request: NextRequest) {
       if (storeIds.length) {
         const { data: managers } = await supabaseAdmin
           .from('users').select('id, store_id').eq('role', 'store_manager').in('store_id', storeIds)
+        const withManager = new Set((managers ?? []).map((m) => m.store_id))
+        for (const sid of storeIds) if (!withManager.has(sid)) storesWithoutManager.push(sid)
         const notifs = (managers ?? []).map((m) => ({
           user_id: m.id,
           type: 'inventory_trf',
@@ -124,12 +128,25 @@ export async function GET(request: NextRequest) {
           const { error: notifErr } = await supabaseAdmin.from('notifications').insert(notifs)
           if (notifErr) console.error('[inventory-trf] notif insert failed:', notifErr.message)
         }
+        if (storesWithoutManager.length) {
+          console.warn(`[inventory-trf] ${storesWithoutManager.length} store(s) got TRF but have no store_manager — no notification sent:`, storesWithoutManager)
+        }
       }
     }
 
+    await supabaseAdmin.from('inventory_trf_import_runs').update({
+      status: 'success',
+      pulled: result.pulled, created: result.created, skipped: result.skipped,
+      unmatched: result.unmatched.length, duplicates: result.duplicates,
+      error: (result.unmatched.length || storesWithoutManager.length)
+        ? { unmatched: result.unmatched, stores_without_store_manager: storesWithoutManager }
+        : null,
+      finished_at: new Date().toISOString(),
+    }).eq('id', runId)
+
     revalidatePath('/inventory')
     revalidatePath('/inventory/trf')
-    return NextResponse.json({ ok: true, ...result })
+    return NextResponse.json({ ok: true, ...result, storesWithoutManager })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     await supabaseAdmin.from('inventory_trf_import_runs').update({
