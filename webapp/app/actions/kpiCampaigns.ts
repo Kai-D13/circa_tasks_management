@@ -7,6 +7,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { isKpiCampaignEnabled, isKpiCampaignTestMode } from '@/lib/kpi/flags'
 import { parseCampaignRows, type CampaignImportResult } from '@/lib/kpi/campaignImport'
+import { syncCampaign } from '@/lib/kpi/actuals'
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024
 
@@ -103,6 +104,21 @@ export async function toggleCampaign(id: string) {
   revalidatePath('/targets/campaigns')
   revalidatePath(`/targets/campaigns/${id}`)
   return { success: true }
+}
+
+// "Đồng bộ ngay" — manual actual-GMV sync for one campaign (super admin; QA
+// doesn't wait for the 2h cron). Same lib as the cron.
+export async function syncCampaignActuals(id: string) {
+  const auth = await requireSuper()
+  if ('error' in auth) return { error: auth.error }
+  const { data: c } = await auth.supabase
+    .from('kpi_campaigns').select('id, start_date, end_date').eq('id', id).single()
+  if (!c) return { error: 'Không tìm thấy chiến dịch' }
+  const r = await syncCampaign(c)
+  if ('error' in r) return { error: r.error }
+  revalidatePath(`/targets/campaigns/${id}`)
+  revalidatePath('/targets')
+  return { success: true, upserted: r.upserted, unmatched: r.unmatched }
 }
 
 export async function deleteCampaign(id: string) {
