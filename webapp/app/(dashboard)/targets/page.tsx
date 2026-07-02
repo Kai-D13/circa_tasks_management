@@ -4,29 +4,31 @@ import { isSuperAdminEmail } from '@/lib/authz'
 import { Card, CardContent } from '@/components/ui/card'
 import { PeriodTabs, type TargetPeriod } from '@/components/targets/PeriodTabs'
 import { ReferralCard, type ReferralItem } from '@/components/referral/ReferralCard'
-import { formatDateTime, weekEndISO, weekLenDays, currentWeekStart } from '@/lib/dateUtils'
+import { formatDateTime, currentWeekStart } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
-import { Flame, Target, TrendingUp } from 'lucide-react'
+import { Target, TrendingUp } from 'lucide-react'
 
 // KPI v2 (migration 067): Day / Week / Month sales targets from the daily
 // BigQuery feed (store_kpi_targets, fed by /api/cron/pull-kpi-targets).
 //   staff       → their store's card for the selected period (?period=)
 //   super admin → all-stores table for the selected period
 //   everyone else (PIC / store_manager / SM) → no access per spec
-// Week keeps the full "Hôm nay cần đạt" pace card; day/month show the KPI
-// summary card only (stakeholder hasn't specced their pace yet).
+// All 3 periods (day/week/month) display UNIFORMLY: one KPI summary card =
+// actual vs target (SUM of daily final_target) + run-rate + remaining + status.
+// (The old week-only "pace" card was removed — there's no weekly-specific target
+// anymore; every grain just sums the daily final_target.)
 
 const vnd = (n: number | null | undefined) =>
   n === null || n === undefined ? '—' : `${new Intl.NumberFormat('vi-VN').format(Math.round(n))}₫`
 
 const dmy = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`
 
-// Subtitle for the current-period card.
-function currentLabel(period: TargetPeriod, start: string): string {
+// Subtitle for the current-period card. Week range comes straight from the data
+// (period_start – period_end), so it always matches the aggregated grain.
+function currentLabel(period: TargetPeriod, start: string, end: string): string {
   if (period === 'day') return `Hôm nay · ${dmy(start)}`
   if (period === 'month') return `Tháng ${start.slice(5, 7)}/${start.slice(0, 4)}`
-  // End extends to month-end for the last partial week of a month (weekEndISO).
-  return `Tuần ${start.slice(8, 10)}/${start.slice(5, 7)} – ${weekEndISO(start).slice(8, 10)}/${weekEndISO(start).slice(5, 7)}`
+  return `Tuần ${start.slice(8, 10)}/${start.slice(5, 7)} – ${end.slice(8, 10)}/${end.slice(5, 7)}`
 }
 
 const NOUN: Record<TargetPeriod, string> = { day: 'ngày', week: 'tuần', month: 'tháng' }
@@ -65,29 +67,6 @@ interface KpiRecord {
   remaining_target: number | null
   refreshed_at:     string
   stores?:          { name: string } | null
-}
-
-// SVG completion ring for the week pace card — server-rendered, no JS.
-function ProgressRing({ pct }: { pct: number }) {
-  const r = 32
-  const c = 2 * Math.PI * r
-  const clamped = Math.max(0, Math.min(100, pct))
-  return (
-    <div className="relative h-[84px] w-[84px] shrink-0">
-      <svg width="84" height="84" viewBox="0 0 84 84" className="-rotate-90">
-        <circle cx="42" cy="42" r={r} fill="none" strokeWidth="8" className="stroke-muted" />
-        <circle
-          cx="42" cy="42" r={r} fill="none" strokeWidth="8" strokeLinecap="round"
-          className="stroke-primary"
-          strokeDasharray={`${(clamped / 100) * c} ${c}`}
-        />
-      </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className="text-base font-bold leading-none">{Math.round(clamped)}%</span>
-        <span className="text-[9px] text-muted-foreground mt-0.5">hoàn thành</span>
-      </div>
-    </div>
-  )
 }
 
 // KPI summary (gradient) card — shared by all three periods.
@@ -231,28 +210,6 @@ export default async function TargetsPage({
       : null
     const achieved = hasGoal && (remaining ?? 1) <= 0
 
-    // ── Week-only "Hôm nay cần đạt" pace math (kept from the weekly card) ─────
-    const weekEndStr = current ? weekEndISO(current.period_start) : ''
-    const weekLen = current ? weekLenDays(current.period_start) : 7
-    const weekEndMs = weekEndStr ? Date.parse(`${weekEndStr}T00:00:00Z`) : 0
-    const rawDaysLeft = current ? Math.floor((weekEndMs - Date.parse(vnTodayISO)) / 86400_000) + 1 : 0
-    const daysLeft = Math.max(0, Math.min(weekLen, rawDaysLeft))
-    const weekOver = daysLeft === 0
-    const needToday = hasGoal && !achieved && remaining !== null
-      ? Math.ceil(remaining / Math.max(daysLeft, 1) / 100_000) * 100_000
-      : 0
-    const expectedPct = weekLen > 0 ? ((weekLen - daysLeft) / weekLen) * 100 : 0
-    const paceMessage = !hasGoal
-      ? 'Mục tiêu tuần chưa được cập nhật từ báo cáo BI.'
-      : achieved
-        ? '🎉 Cửa hàng đã đạt mục tiêu tuần — xuất sắc!'
-        : weekOver
-          ? 'Tuần đã kết thúc — chờ dữ liệu tuần mới.'
-          : pct >= expectedPct
-            ? 'Giữ nhịp này, bạn sẽ đạt mục tiêu tuần!'
-            : 'Cần tăng tốc để kịp mục tiêu tuần!'
-    const weekEndLabel = weekEndStr ? `${weekEndStr.slice(8, 10)}/${weekEndStr.slice(5, 7)}` : ''
-
     const emptyMsg = period === 'day'
       ? 'Chưa có dữ liệu doanh số hôm nay (dữ liệu cập nhật trong ngày).'
       : `Chưa có dữ liệu doanh số ${NOUN[period]} cho cửa hàng của bạn.`
@@ -278,59 +235,10 @@ export default async function TargetsPage({
           </Card>
         ) : (
           <>
-            {/* ── Week only: HÔM NAY CẦN ĐẠT pace card ──────────────────────── */}
-            {period === 'week' && (
-              <Card>
-                <CardContent className="p-4 space-y-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="flex items-center gap-1.5 font-semibold text-sm uppercase tracking-wide">
-                        <Flame className="h-4 w-4 text-primary" />
-                        Hôm nay cần đạt
-                      </p>
-                      <p className="text-xs text-muted-foreground mt-0.5">Để kịp KPI tuần</p>
-                      <p className="text-3xl font-bold text-primary mt-2 leading-tight">
-                        {!hasGoal ? '—' : achieved ? 'Đã đạt 🎉' : weekOver ? '—' : vnd(needToday)}
-                      </p>
-                    </div>
-                    <ProgressRing pct={pct} />
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-2 text-center">
-                    <div className="rounded-lg border p-2">
-                      <p className="text-[10px] text-muted-foreground uppercase">Đã đạt hôm nay</p>
-                      <p className="text-sm font-semibold mt-0.5 text-muted-foreground">—</p>
-                    </div>
-                    <div className="rounded-lg border p-2">
-                      <p className="text-[10px] text-muted-foreground uppercase">Còn thiếu hôm nay</p>
-                      <p className="text-sm font-semibold mt-0.5 text-muted-foreground">—</p>
-                    </div>
-                    <div className="rounded-lg border p-2">
-                      <p className="text-[10px] text-muted-foreground uppercase">Thời gian còn lại</p>
-                      <p className="text-sm font-semibold mt-0.5">{daysLeft} ngày</p>
-                      <p className="text-[10px] text-muted-foreground">đến {weekEndLabel}</p>
-                    </div>
-                  </div>
-
-                  <p className={cn(
-                    'rounded-lg px-3 py-2 text-sm font-medium',
-                    !hasGoal
-                      ? 'bg-muted text-muted-foreground'
-                      : achieved || pct >= expectedPct
-                        ? 'bg-green-100 text-green-700'
-                        : 'bg-amber-100 text-amber-700',
-                  )}>
-                    {paceMessage}
-                  </p>
-                  <p className="text-xs text-muted-foreground">* Không bao gồm đơn online</p>
-                </CardContent>
-              </Card>
-            )}
-
-            {/* ── KPI summary card (all periods) ────────────────────────────── */}
+            {/* KPI summary card — identical for day / week / month */}
             <KpiSummaryCard
               noun={NOUN[period]}
-              label={currentLabel(period, current.period_start)}
+              label={currentLabel(period, current.period_start, current.period_end)}
               status={current.status}
               hasGoal={hasGoal}
               actual={current.actual}
@@ -341,7 +249,7 @@ export default async function TargetsPage({
             />
 
             <p className="text-[11px] text-muted-foreground">
-              Cập nhật lúc {formatDateTime(current.refreshed_at)} · Nguồn: báo cáo BI
+              Cập nhật lúc {formatDateTime(current.refreshed_at)} · Nguồn: báo cáo BI · * Không bao gồm đơn online
             </p>
           </>
         )}
@@ -392,7 +300,7 @@ export default async function TargetsPage({
           <h1 className="text-xl font-semibold">{TITLE[period]} theo cửa hàng</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             {periodRows.length > 0 && currentStart
-              ? `${currentLabel(period, currentStart)} · ${periodRows.length} cửa hàng · cập nhật ${formatDateTime(periodRows[0]?.refreshed_at ?? '')}`
+              ? `${currentLabel(period, currentStart, periodRows[0]?.period_end ?? currentStart)} · ${periodRows.length} cửa hàng · cập nhật ${formatDateTime(periodRows[0]?.refreshed_at ?? '')}`
               : 'Chưa có dữ liệu cho kỳ này — kiểm tra cron /api/cron/pull-kpi-targets đã chạy chưa.'}
           </p>
           {allRowsError && (
