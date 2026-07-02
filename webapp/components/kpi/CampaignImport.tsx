@@ -6,6 +6,41 @@ import { toast } from 'sonner'
 import { previewCampaignImport, commitCampaignImport } from '@/app/actions/kpiCampaigns'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { Download } from 'lucide-react'
+
+// Column guide (business language) + a downloadable sample so ops fills the file
+// without asking dev. Keep in sync with the parser (lib/kpi/campaignImport.ts).
+const COLUMN_GUIDE: { col: string; meaning: string; example: string; optional?: boolean }[] = [
+  { col: 'pos_code', meaning: 'Mã cửa hàng', example: 'POS0059' },
+  { col: 'final_target', meaning: 'Target doanh số toàn chiến dịch', example: '100000000' },
+  { col: 'tier_1_threshold_pct', meaning: 'Mốc đạt target bậc 1 (%)', example: '90' },
+  { col: 'tier_1_commission_pct', meaning: '% hoa hồng bậc 1', example: '1' },
+  { col: 'tier_2_threshold_pct', meaning: 'Mốc đạt target bậc 2 (%)', example: '100' },
+  { col: 'tier_2_commission_pct', meaning: '% hoa hồng bậc 2', example: '2' },
+  { col: 'tier_3_threshold_pct', meaning: 'Mốc đạt target bậc 3 (%)', example: '105' },
+  { col: 'tier_3_commission_pct', meaning: '% hoa hồng bậc 3', example: '3' },
+  { col: 'pos_name', meaning: 'Tên cửa hàng', example: 'CIRCA TAM VIET', optional: true },
+  { col: 'note', meaning: 'Ghi chú', example: 'Demo', optional: true },
+]
+
+const SAMPLE_CSV = [
+  'pos_code,final_target,tier_1_threshold_pct,tier_1_commission_pct,tier_2_threshold_pct,tier_2_commission_pct,tier_3_threshold_pct,tier_3_commission_pct,pos_name,note',
+  'POS0059,100000000,90,1,100,2,105,3,CIRCA TAM VIET,Demo',
+  'POS0009,80000000,90,1,100,2,105,3,CIRCA CENTRAL,Demo',
+].join('\n')
+
+function downloadTemplate() {
+  // BOM so Excel opens the UTF-8 CSV correctly.
+  const blob = new Blob(['﻿' + SAMPLE_CSV], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = 'mau-chien-dich-kpi.csv'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
 
 interface Preview {
   validCount: number
@@ -51,17 +86,48 @@ export function CampaignImport({ campaignId, redirectTo }: { campaignId: string;
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-muted-foreground">
-        Cột yêu cầu: <code>pos_code</code>, <code>final_target</code>, và các cặp bậc{' '}
-        <code>tier_1_threshold_pct</code> / <code>tier_1_commission_pct</code>, <code>tier_2_…</code> (linh hoạt). Tuỳ chọn: <code>pos_name</code>, <code>note</code>.
-      </p>
+      {/* Column guide (collapsible) + sample download — business language */}
+      <details className="rounded-md border bg-muted/20 text-xs">
+        <summary className="cursor-pointer px-3 py-2 font-medium select-none">
+          Hướng dẫn định dạng file Excel
+        </summary>
+        <div className="px-3 pb-3 space-y-2">
+          <p className="text-muted-foreground">File cần các cột sau (một dòng = một cửa hàng):</p>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="text-left text-muted-foreground">
+                  <th className="py-1 pr-3 font-medium">Cột</th>
+                  <th className="py-1 pr-3 font-medium">Ý nghĩa</th>
+                  <th className="py-1 font-medium">Ví dụ</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {COLUMN_GUIDE.map((r) => (
+                  <tr key={r.col}>
+                    <td className="py-1 pr-3 whitespace-nowrap"><code>{r.col}</code>{r.optional && <span className="text-muted-foreground"> (tuỳ chọn)</span>}</td>
+                    <td className="py-1 pr-3">{r.meaning}</td>
+                    <td className="py-1 text-muted-foreground">{r.example}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-muted-foreground">Cần thêm bậc? Thêm cặp cột <code>tier_4_threshold_pct</code> / <code>tier_4_commission_pct</code>… (mốc phải tăng dần).</p>
+        </div>
+      </details>
+
       <div className="flex flex-wrap items-center gap-2">
         <input
           type="file"
-          accept=".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          aria-label="Chọn file Excel target chiến dịch"
+          accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
           onChange={(e) => { setFile(e.target.files?.[0] ?? null); setPreview(null) }}
           className="text-sm"
         />
+        <Button size="sm" variant="ghost" onClick={downloadTemplate} className="gap-1.5">
+          <Download className="h-3.5 w-3.5" /> Tải file mẫu
+        </Button>
         <Button size="sm" variant="outline" onClick={doPreview} disabled={pending || !file}>
           {pending ? 'Đang đọc…' : 'Xem trước'}
         </Button>
