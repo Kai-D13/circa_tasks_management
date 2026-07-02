@@ -7,6 +7,7 @@ import { NotificationProvider } from '@/components/layout/NotificationProvider'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { MobileHeader } from '@/components/layout/MobileHeader'
 import { BottomNav } from '@/components/layout/BottomNav'
+import { isKpiCampaignEnabled } from '@/lib/kpi/flags'
 import { UserProfile } from '@/types'
 
 export default async function DashboardLayout({
@@ -26,6 +27,9 @@ export default async function DashboardLayout({
   // (it's display:none for them anyway) for a leaner shell. 100dvh avoids the
   // mobile address-bar resize jank.
   const isStaff = profile.role === 'staff'
+  // KPI Campaign nav gate (server env) → passed to the client Sidebar as a prop
+  // (avoids a NEXT_PUBLIC_ var; keeps the flag server-controlled).
+  const kpiCampaignEnabled = isKpiCampaignEnabled()
 
   return (
     <ThemeProvider>
@@ -33,7 +37,7 @@ export default async function DashboardLayout({
         <NotificationProvider>
         <div className="flex h-[100dvh] overflow-hidden">
           {/* Desktop sidebar — hidden on mobile; not rendered for staff */}
-          {!isStaff && <Sidebar announcementsUnread={announcementsUnread} />}
+          {!isStaff && <Sidebar announcementsUnread={announcementsUnread} kpiCampaignEnabled={kpiCampaignEnabled} />}
 
           {/* Main content — full width on mobile */}
           {/* Mobile bottom padding clears the fixed BottomNav (h-16) + the iPhone

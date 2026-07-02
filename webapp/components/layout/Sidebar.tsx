@@ -47,7 +47,7 @@ const ROLE_LABELS: Record<string, string> = {
   sm:            'SM',
 }
 
-export function Sidebar({ announcementsUnread = 0 }: { announcementsUnread?: number }) {
+export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false }: { announcementsUnread?: number; kpiCampaignEnabled?: boolean }) {
   const pathname = usePathname()
   const router   = useRouter()
   const profile  = useUserStore((s) => s.profile)
@@ -87,6 +87,11 @@ export function Sidebar({ announcementsUnread = 0 }: { announcementsUnread?: num
     || (role === 'admin' && profile?.department_id === CYCLE_COUNT_DEPT_ID)
     || role === 'store_manager'
   const [invOpen, setInvOpen] = useState(() => pathname.startsWith('/inventory'))
+
+  // KPI accordion (→ Chiến dịch): super admin only, gated by the feature flag
+  // (Phase 1). Contains the campaign config + the existing all-stores Doanh số view.
+  const showKpi = isSuper && kpiCampaignEnabled
+  const [kpiOpen, setKpiOpen] = useState(() => pathname.startsWith('/targets'))
 
   return (
     <aside className="hidden md:flex h-screen w-[210px] flex-col border-r bg-sidebar">
@@ -155,6 +160,56 @@ export function Sidebar({ announcementsUnread = 0 }: { announcementsUnread?: num
                 >
                   <ClipboardCheck className="h-4 w-4 shrink-0" />
                   <span className="flex-1">TRF</span>
+                </Link>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* KPI — collapsible parent → Doanh số + Chiến dịch (super admin, flag on) */}
+        {showKpi && (
+          <div>
+            <button
+              type="button"
+              onClick={() => setKpiOpen((o) => !o)}
+              className={cn(
+                'w-full flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
+                pathname.startsWith('/targets')
+                  ? 'bg-sidebar-accent text-primary font-medium'
+                  : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-primary/80',
+              )}
+            >
+              <TrendingUp className="h-4 w-4 shrink-0" />
+              <span className="flex-1 text-left">KPI</span>
+              <ChevronRight className={cn('h-4 w-4 transition-transform', kpiOpen && 'rotate-90')} />
+            </button>
+            {kpiOpen && (
+              <div className="mt-0.5 space-y-0.5 pl-4">
+                <Link
+                  href="/targets"
+                  prefetch={false}
+                  className={cn(
+                    'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
+                    pathname === '/targets'
+                      ? 'bg-sidebar-accent text-primary font-medium'
+                      : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-primary/80',
+                  )}
+                >
+                  <TrendingUp className="h-4 w-4 shrink-0" />
+                  <span className="flex-1">Doanh số</span>
+                </Link>
+                <Link
+                  href="/targets/campaigns"
+                  prefetch={false}
+                  className={cn(
+                    'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
+                    pathname.startsWith('/targets/campaigns')
+                      ? 'bg-sidebar-accent text-primary font-medium'
+                      : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-primary/80',
+                  )}
+                >
+                  <Megaphone className="h-4 w-4 shrink-0" />
+                  <span className="flex-1">Chiến dịch</span>
                 </Link>
               </div>
             )}
