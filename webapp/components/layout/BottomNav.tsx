@@ -22,6 +22,9 @@ const NAV_ITEMS: NavItem[] = [
   { href: '/targets',       label: 'Doanh số',  icon: TrendingUp,      roles: ['staff'] },
   { href: '/prescriptions', label: 'Toa thuốc', icon: FileImage,       roles: ['admin', 'store_manager', 'staff'] },
   { href: '/announcements', label: 'Bảng tin',  icon: Megaphone,       roles: ['store_manager', 'staff'] },
+  // Store manager reaches Doanh số (campaign view) via the "Thêm" drawer —
+  // placed AFTER the primary four so neither staff's nor SM's main tabs shift.
+  { href: '/targets',       label: 'Doanh số',  icon: TrendingUp,      roles: ['store_manager'] },
   { href: '/users',         label: 'Users',      icon: Users,           roles: ['admin'] },
   { href: '/stores',        label: 'Cửa hàng',  icon: Store,           roles: ['admin', 'store_manager'] },
   { href: '/logs',          label: 'Nhật ký',   icon: ScrollText,      roles: ['admin', 'store_manager', 'staff'] },

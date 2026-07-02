@@ -3,6 +3,8 @@ import { createClient } from '@/lib/supabase/server'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { Card, CardContent } from '@/components/ui/card'
 import { PeriodTabs, type TargetPeriod } from '@/components/targets/PeriodTabs'
+import { CampaignKpiView, type CampaignView } from '@/components/kpi/CampaignKpiView'
+import { isKpiCampaignEnabled } from '@/lib/kpi/flags'
 import { ReferralCard, type ReferralItem } from '@/components/referral/ReferralCard'
 import { formatDateTime, currentWeekStart } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
@@ -121,10 +123,61 @@ function parsePeriod(v: string | undefined): TargetPeriod {
   return v === 'day' || v === 'month' ? v : 'week'
 }
 
+// Fetch the store's ACTIVE campaigns (RLS: kct_read_store + can_read_kpi_campaign
+// scopes to own store + active + non-test) joined with tiers + actual snapshots.
+async function fetchCampaignViews(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  storeId: string,
+): Promise<CampaignView[]> {
+  const [{ data: targets, error: tErr }, { data: actuals, error: aErr }] = await Promise.all([
+    supabase
+      .from('kpi_campaign_store_targets')
+      .select('final_target, campaign:kpi_campaigns!inner(id, name, start_date, end_date), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
+      .eq('store_id', storeId),
+    supabase
+      .from('kpi_campaign_store_actuals')
+      .select('campaign_id, actual_gmv, run_rate, remaining_target, achieved_tier_order, achieved_commission_amount, synced_at')
+      .eq('store_id', storeId),
+  ])
+  if (tErr || aErr) {
+    // Campaign read failure must never take down the whole Doanh số page — log
+    // and fall back to the period view.
+    console.error('[targets] campaign query failed:', tErr?.message ?? aErr?.message)
+    return []
+  }
+  const actualByCampaign = new Map(
+    ((actuals ?? []) as { campaign_id: string; actual_gmv: number; run_rate: number | null; remaining_target: number | null; achieved_tier_order: number | null; achieved_commission_amount: number | null; synced_at: string }[])
+      .map((a) => [a.campaign_id, a]),
+  )
+  return ((targets ?? []) as unknown as {
+    final_target: number
+    campaign: { id: string; name: string; start_date: string; end_date: string }
+    kpi_campaign_store_tiers: { tier_order: number; threshold_pct: number; commission_amount: number }[]
+  }[])
+    .map((t) => {
+      const a = actualByCampaign.get(t.campaign.id)
+      return {
+        id: t.campaign.id,
+        name: t.campaign.name,
+        start_date: t.campaign.start_date,
+        end_date: t.campaign.end_date,
+        final_target: Number(t.final_target) || 0,
+        tiers: t.kpi_campaign_store_tiers ?? [],
+        actual_gmv: a ? Number(a.actual_gmv) : null,
+        run_rate: a?.run_rate ?? null,
+        remaining_target: a?.remaining_target ?? null,
+        achieved_tier_order: a?.achieved_tier_order ?? null,
+        achieved_commission_amount: a?.achieved_commission_amount ?? null,
+        synced_at: a?.synced_at ?? null,
+      }
+    })
+    .sort((a, b) => a.end_date.localeCompare(b.end_date)) // nearest deadline first
+}
+
 export default async function TargetsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ period?: string }>
+  searchParams: Promise<{ period?: string; campaign?: string }>
 }) {
   const params = await searchParams
   const period = parsePeriod(params.period)
@@ -138,9 +191,45 @@ export default async function TargetsPage({
 
   const isSuper = profile?.role === 'admin' && isSuperAdminEmail(user.email)
   const isStaff = profile?.role === 'staff'
-  if (!isStaff && !isSuper) redirect('/tasks')
+  const isStoreMgr = profile?.role === 'store_manager'
+  const campaignEnabled = isKpiCampaignEnabled()
+  // Store managers only have a Doanh số view through campaigns (no day/week/month
+  // RLS access) — without the flag they keep the old redirect.
+  if (!isStaff && !isSuper && !(isStoreMgr && campaignEnabled)) redirect('/tasks')
 
   const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
+
+  // ── Campaign mode (Staff + Store Manager): active campaigns REPLACE the
+  //    Ngày/Tuần/Tháng tabs; no campaign → staff falls back to the period view,
+  //    store manager gets an empty state. ────────────────────────────────────
+  const campaignViews = campaignEnabled && (isStaff || isStoreMgr) && profile?.store_id
+    ? await fetchCampaignViews(supabase, profile.store_id)
+    : []
+
+  if (isStoreMgr) {
+    const storeName = (profile?.stores as unknown as { name: string } | null)?.name ?? 'Cửa hàng của bạn'
+    return (
+      <div className="p-4 space-y-4 max-w-xl mx-auto">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-5 w-5 text-primary" />
+            <h1 className="text-xl font-semibold">Doanh số chiến dịch</h1>
+          </div>
+          <span className="text-sm text-muted-foreground">{storeName}</span>
+        </div>
+        {campaignViews.length > 0 ? (
+          <CampaignKpiView items={campaignViews} selectedId={params.campaign} />
+        ) : (
+          <Card>
+            <CardContent className="py-12 text-center text-sm text-muted-foreground">
+              <TrendingUp className="h-8 w-8 mx-auto mb-3 opacity-30" />
+              Hiện chưa có chiến dịch doanh số đang áp dụng.
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    )
+  }
 
   // ── Staff: own store's card for the selected period (store_kpi_targets,
   //    fed by the BigQuery cron "Pull KPI targets") ──────────────────────────
@@ -199,6 +288,37 @@ export default async function TargetsPage({
         const sameDay = items.filter((r) => r.same_day_order).length
         referral = { total: items.length, success, sameDay, noOrder: items.length - sameDay, items }
       }
+    }
+
+    // ── Campaign mode: active campaigns REPLACE the Ngày/Tuần/Tháng tabs ─────
+    if (campaignViews.length > 0) {
+      return (
+        <div className="p-4 space-y-4 max-w-xl mx-auto">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <TrendingUp className="h-5 w-5 text-primary" />
+              <h1 className="text-xl font-semibold">Doanh số chiến dịch</h1>
+            </div>
+            <span className="text-sm text-muted-foreground">{storeName}</span>
+          </div>
+          <CampaignKpiView items={campaignViews} selectedId={params.campaign} />
+          {referral && <ReferralCard {...referral} />}
+          {referralError && (
+            <Card>
+              <CardContent className="py-4 text-sm text-destructive">
+                Không tải được dữ liệu chương trình giới thiệu. Vui lòng thử lại sau hoặc báo Admin.
+              </CardContent>
+            </Card>
+          )}
+          {staffPhone === null && (
+            <Card>
+              <CardContent className="py-4 text-sm text-muted-foreground">
+                Cập nhật <span className="font-medium">số điện thoại</span> (biểu tượng &ldquo;Sửa thông tin&rdquo; ở đầu trang) để xem chương trình giới thiệu bạn bè.
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )
     }
 
     // KPI v2 uniform rule: target = SUM(final_target), no separate weekly min.
