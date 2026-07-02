@@ -5,9 +5,11 @@ import 'server-only'
 // touches this module. Pure: takes raw rows + a pos_code→store_id map.
 //
 // Expected columns (canonicalized): pos_code, final_target, optional pos_name/note,
-// and dynamic tier pairs tier_1_threshold_pct / tier_1_commission_pct, tier_2_*, …
+// and dynamic tier pairs tier_1_threshold_pct / tier_1_commission (FIXED AMOUNT,
+// v2), tier_2_*, … The legacy header tier_N_commission_pct is still accepted as
+// an alias so files made for Phase 1 don't break.
 
-export interface CampaignTierInput { tier_order: number; threshold_pct: number; commission_pct: number }
+export interface CampaignTierInput { tier_order: number; threshold_pct: number; commission_amount: number }
 export interface CampaignTargetInput {
   store_id: string
   pos_code: string
@@ -67,17 +69,18 @@ export function parseCampaignRows(
 
     if (finalTargetRaw === null || finalTargetRaw <= 0) { invalid.push({ row: rowNo, pos_code: posCode, error: 'final_target phải > 0' }); return }
 
-    // Dynamic tiers: read pairs until both empty.
+    // Dynamic tiers: read pairs until both empty. Commission = fixed amount
+    // (tier_N_commission); legacy tier_N_commission_pct accepted as alias.
     const tiers: CampaignTierInput[] = []
     let tierErr: string | null = null
     for (let n = 1; n <= MAX_TIERS; n++) {
       const th = num(lo[`tier${n}thresholdpct`])
-      const cm = num(lo[`tier${n}commissionpct`])
+      const cm = num(lo[`tier${n}commission`]) ?? num(lo[`tier${n}commissionpct`])
       if (th === null && cm === null) break
-      if (th === null || cm === null) { tierErr = `Bậc ${n}: thiếu threshold hoặc commission`; break }
-      if (th <= 0) { tierErr = `Bậc ${n}: threshold phải > 0`; break }
-      if (cm < 0) { tierErr = `Bậc ${n}: commission phải ≥ 0`; break }
-      tiers.push({ tier_order: n, threshold_pct: th, commission_pct: cm })
+      if (th === null || cm === null) { tierErr = `Bậc ${n}: thiếu mốc % hoặc tiền thưởng`; break }
+      if (th <= 0) { tierErr = `Bậc ${n}: mốc % phải > 0`; break }
+      if (cm < 0) { tierErr = `Bậc ${n}: tiền thưởng phải ≥ 0`; break }
+      tiers.push({ tier_order: n, threshold_pct: th, commission_amount: cm })
     }
     if (tierErr) { invalid.push({ row: rowNo, pos_code: posCode, error: tierErr }); return }
     if (tiers.length === 0) { invalid.push({ row: rowNo, pos_code: posCode, error: 'Cần ít nhất 1 bậc target' }); return }

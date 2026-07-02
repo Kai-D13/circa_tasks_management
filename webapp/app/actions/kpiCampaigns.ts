@@ -72,8 +72,9 @@ export async function updateCampaign(
   return { success: true }
 }
 
-// ON/OFF (draft/paused → active, active → paused). Activating enforces: has targets
-// + no other active campaign overlapping dates shares a store (Q6 = no overlap).
+// ON/OFF (draft/paused → active, active → paused). v2: multiple campaigns MAY run
+// simultaneously on the same store (stakeholder hybrid) — the old no-overlap guard
+// is gone. Activation still requires imported targets (fail closed on read error).
 export async function toggleCampaign(id: string) {
   const auth = await requireSuper()
   if ('error' in auth) return { error: auth.error }
@@ -87,28 +88,10 @@ export async function toggleCampaign(id: string) {
     if (error) return { error: error.message }
     console.info(`[kpi-campaign] paused ${id} by ${auth.user.id}`)
   } else if (c.status === 'draft' || c.status === 'paused') {
-    // Must have targets before going live. FAIL CLOSED on any query error — never
-    // activate on a transient read failure (would risk violating the no-overlap rule).
     const { data: myTargets, error: tErr } = await auth.supabase
-      .from('kpi_campaign_store_targets').select('store_id').eq('campaign_id', id)
+      .from('kpi_campaign_store_targets').select('store_id').eq('campaign_id', id).limit(1)
     if (tErr) return { error: `Không kiểm tra được target: ${tErr.message}` }
-    const storeIds = (myTargets ?? []).map((t) => t.store_id as string)
-    if (storeIds.length === 0) return { error: 'Chưa import target cho chiến dịch này' }
-
-    // Overlap guard: other active campaigns whose date range overlaps + share a store.
-    const { data: others, error: oErr } = await auth.supabase
-      .from('kpi_campaigns').select('id, start_date, end_date').eq('status', 'active').neq('id', id)
-    if (oErr) return { error: `Không kiểm tra được chồng lấn: ${oErr.message}` }
-    const overlappingIds = (others ?? [])
-      .filter((o) => (o.start_date as string) <= c.end_date && (o.end_date as string) >= c.start_date)
-      .map((o) => o.id as string)
-    if (overlappingIds.length) {
-      const { data: otherTargets, error: otErr } = await auth.supabase
-        .from('kpi_campaign_store_targets').select('store_id').in('campaign_id', overlappingIds)
-      if (otErr) return { error: `Không kiểm tra được chồng lấn: ${otErr.message}` }
-      const clash = (otherTargets ?? []).some((t) => storeIds.includes(t.store_id as string))
-      if (clash) return { error: 'Có cửa hàng đã thuộc một chiến dịch đang chạy trùng khoảng ngày' }
-    }
+    if ((myTargets ?? []).length === 0) return { error: 'Chưa import target cho chiến dịch này' }
 
     const { error } = await auth.supabase.from('kpi_campaigns')
       .update({ status: 'active', updated_at: new Date().toISOString() }).eq('id', id)
@@ -146,7 +129,7 @@ async function parseFile(formData: FormData): Promise<CampaignImportResult | { e
     if (!sheetName) return { error: 'File không có sheet nào' }
     rawRows = XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: null })
   } catch {
-    return { error: 'Không đọc được file — cần đúng file XLSX' }
+    return { error: 'Không đọc được file — cần đúng định dạng XLSX hoặc CSV' }
   }
   if (rawRows.length > 2000) return { error: 'File quá nhiều dòng — sai file?' }
   const { data: stores, error: storesErr } = await supabaseAdmin.from('stores').select('id, code')

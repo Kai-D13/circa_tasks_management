@@ -14,7 +14,7 @@ import { ChevronLeft } from 'lucide-react'
 
 const vnd = (n: number) => new Intl.NumberFormat('vi-VN').format(Math.round(n))
 
-interface TierRow { tier_order: number; threshold_pct: number; commission_pct: number }
+interface TierRow { tier_order: number; threshold_pct: number; commission_amount: number }
 interface TargetRow {
   id: string; pos_code: string | null; final_target: number
   stores: { name: string } | null
@@ -35,7 +35,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
   const [{ data: targetsRaw }, { data: runs }] = await Promise.all([
     supabase
       .from('kpi_campaign_store_targets')
-      .select('id, pos_code, final_target, stores(name), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_pct)')
+      .select('id, pos_code, final_target, stores(name), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
       .eq('campaign_id', id)
       .order('pos_code'),
     supabase
@@ -83,7 +83,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
                 <tr className="border-b bg-muted/40 text-xs text-muted-foreground">
                   <th className="text-left px-4 py-2.5">Cửa hàng</th>
                   <th className="text-right px-4 py-2.5">Target</th>
-                  <th className="text-left px-4 py-2.5">Bậc (threshold% → commission%)</th>
+                  <th className="text-left px-4 py-2.5">Bậc (mốc % → tiền thưởng)</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -93,7 +93,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
                     <td className="px-4 py-2.5 text-right">{vnd(t.final_target)}</td>
                     <td className="px-4 py-2.5 text-xs">
                       {[...t.kpi_campaign_store_tiers].sort((a, b) => a.tier_order - b.tier_order)
-                        .map((tier) => `${tier.threshold_pct}%→${tier.commission_pct}%`).join('  ·  ') || '—'}
+                        .map((tier) => `${tier.threshold_pct}% → ${vnd(tier.commission_amount)}`).join('  ·  ') || '—'}
                     </td>
                   </tr>
                 ))}

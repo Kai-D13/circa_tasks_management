@@ -14,19 +14,19 @@ const COLUMN_GUIDE: { col: string; meaning: string; example: string; optional?: 
   { col: 'pos_code', meaning: 'Mã cửa hàng', example: 'POS0059' },
   { col: 'final_target', meaning: 'Target doanh số toàn chiến dịch', example: '100000000' },
   { col: 'tier_1_threshold_pct', meaning: 'Mốc đạt target bậc 1 (%)', example: '90' },
-  { col: 'tier_1_commission_pct', meaning: '% hoa hồng bậc 1', example: '1' },
+  { col: 'tier_1_commission', meaning: 'Tiền thưởng bậc 1 (số tiền)', example: '1000000' },
   { col: 'tier_2_threshold_pct', meaning: 'Mốc đạt target bậc 2 (%)', example: '100' },
-  { col: 'tier_2_commission_pct', meaning: '% hoa hồng bậc 2', example: '2' },
+  { col: 'tier_2_commission', meaning: 'Tiền thưởng bậc 2 (số tiền)', example: '2000000' },
   { col: 'tier_3_threshold_pct', meaning: 'Mốc đạt target bậc 3 (%)', example: '105' },
-  { col: 'tier_3_commission_pct', meaning: '% hoa hồng bậc 3', example: '3' },
+  { col: 'tier_3_commission', meaning: 'Tiền thưởng bậc 3 (số tiền)', example: '3000000' },
   { col: 'pos_name', meaning: 'Tên cửa hàng', example: 'CIRCA TAM VIET', optional: true },
   { col: 'note', meaning: 'Ghi chú', example: 'Demo', optional: true },
 ]
 
 const SAMPLE_CSV = [
-  'pos_code,final_target,tier_1_threshold_pct,tier_1_commission_pct,tier_2_threshold_pct,tier_2_commission_pct,tier_3_threshold_pct,tier_3_commission_pct,pos_name,note',
-  'POS0059,100000000,90,1,100,2,105,3,CIRCA TAM VIET,Demo',
-  'POS0009,80000000,90,1,100,2,105,3,CIRCA CENTRAL,Demo',
+  'pos_code,final_target,tier_1_threshold_pct,tier_1_commission,tier_2_threshold_pct,tier_2_commission,tier_3_threshold_pct,tier_3_commission,pos_name,note',
+  'POS0059,100000000,90,1000000,100,2000000,105,3000000,CIRCA TAM VIET,Demo',
+  'POS0009,80000000,90,1000000,100,2000000,105,3000000,CIRCA CENTRAL,Demo',
 ].join('\n')
 
 function downloadTemplate() {
@@ -46,7 +46,7 @@ interface Preview {
   validCount: number
   invalid: { row: number; pos_code: string | null; error: string }[]
   unmatched: string[]
-  preview: { pos_code: string; final_target: number; tiers: { threshold_pct: number; commission_pct: number }[] }[]
+  preview: { pos_code: string; final_target: number; tiers: { threshold_pct: number; commission_amount: number }[] }[]
 }
 
 const vnd = (n: number) => new Intl.NumberFormat('vi-VN').format(Math.round(n))
@@ -87,7 +87,7 @@ export function CampaignImport({ campaignId, redirectTo }: { campaignId: string;
   return (
     <div className="space-y-3">
       {/* Column guide (collapsible) + sample download — business language */}
-      <details className="rounded-md border bg-muted/20 text-xs">
+      <details open className="rounded-md border bg-muted/20 text-xs">
         <summary className="cursor-pointer px-3 py-2 font-medium select-none">
           Hướng dẫn định dạng file Excel
         </summary>
@@ -126,7 +126,7 @@ export function CampaignImport({ campaignId, redirectTo }: { campaignId: string;
           className="text-sm"
         />
         <Button size="sm" variant="ghost" onClick={downloadTemplate} className="gap-1.5">
-          <Download className="h-3.5 w-3.5" /> Tải file mẫu
+          <Download className="h-3.5 w-3.5" /> Tải file mẫu CSV
         </Button>
         <Button size="sm" variant="outline" onClick={doPreview} disabled={pending || !file}>
           {pending ? 'Đang đọc…' : 'Xem trước'}
@@ -162,7 +162,7 @@ export function CampaignImport({ campaignId, redirectTo }: { campaignId: string;
                   <tr>
                     <th className="text-left px-3 py-2">POS</th>
                     <th className="text-right px-3 py-2">Target</th>
-                    <th className="text-left px-3 py-2">Bậc (threshold% → commission%)</th>
+                    <th className="text-left px-3 py-2">Bậc (mốc % → tiền thưởng)</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
@@ -170,7 +170,7 @@ export function CampaignImport({ campaignId, redirectTo }: { campaignId: string;
                     <tr key={r.pos_code}>
                       <td className="px-3 py-1.5 font-medium">{r.pos_code}</td>
                       <td className="px-3 py-1.5 text-right">{vnd(r.final_target)}</td>
-                      <td className="px-3 py-1.5">{r.tiers.map((t) => `${t.threshold_pct}%→${t.commission_pct}%`).join('  ·  ')}</td>
+                      <td className="px-3 py-1.5">{r.tiers.map((t) => `${t.threshold_pct}% → ${vnd(t.commission_amount)}`).join('  ·  ')}</td>
                     </tr>
                   ))}
                 </tbody>
