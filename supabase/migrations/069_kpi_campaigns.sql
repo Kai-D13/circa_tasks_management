@@ -89,50 +89,75 @@ CREATE TABLE IF NOT EXISTS public.kpi_campaign_store_actuals (
 -- Delete (has WHERE → pg_safeupdate-safe; cascade drops tiers) then insert.
 CREATE OR REPLACE FUNCTION public.rpc_replace_campaign_targets(
   p_campaign_id uuid,
-  p_rows        jsonb   -- [{store_id, pos_code, final_target, import_row, note, tiers:[{tier_order, threshold_pct, commission_pct}]}]
+  p_rows        jsonb,   -- [{store_id, pos_code, final_target, import_row, note, tiers:[{tier_order, threshold_pct, commission_pct}]}]
+  p_file_name   text DEFAULT NULL,
+  p_uploaded_by uuid DEFAULT NULL
 ) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE
   v_row       jsonb;
   v_tier      jsonb;
   v_target_id uuid;
   v_count     integer := 0;
+  v_status    text;
+  v_tiers     integer;
+  v_ft        numeric;
+  v_th        numeric;
+  v_cm        numeric;
 BEGIN
+  -- DB-side guards (defense-in-depth; this is commission data). Any RAISE rolls
+  -- back the whole tx → no partial write.
+  SELECT status INTO v_status FROM public.kpi_campaigns WHERE id = p_campaign_id;
+  IF v_status IS NULL THEN RAISE EXCEPTION 'Campaign % không tồn tại', p_campaign_id; END IF;
+  IF v_status NOT IN ('draft', 'paused') THEN
+    RAISE EXCEPTION 'Chỉ nạp target khi chiến dịch draft/paused (hiện: %)', v_status;
+  END IF;
+
   DELETE FROM public.kpi_campaign_store_targets WHERE campaign_id = p_campaign_id;
 
   FOR v_row IN SELECT * FROM jsonb_array_elements(p_rows)
   LOOP
+    v_ft := (v_row->>'final_target')::numeric;
+    IF v_ft IS NULL OR v_ft <= 0 THEN RAISE EXCEPTION 'final_target phải > 0'; END IF;
+
     INSERT INTO public.kpi_campaign_store_targets
       (campaign_id, store_id, pos_code, final_target, import_row, note)
     VALUES (
       p_campaign_id,
       (v_row->>'store_id')::uuid,
       v_row->>'pos_code',
-      (v_row->>'final_target')::numeric,
+      v_ft,
       NULLIF(v_row->>'import_row', '')::integer,
       NULLIF(v_row->>'note', '')
     )
     RETURNING id INTO v_target_id;
 
+    v_tiers := 0;
     FOR v_tier IN SELECT * FROM jsonb_array_elements(coalesce(v_row->'tiers', '[]'::jsonb))
     LOOP
+      v_th := (v_tier->>'threshold_pct')::numeric;
+      v_cm := (v_tier->>'commission_pct')::numeric;
+      IF v_th IS NULL OR v_th <= 0 THEN RAISE EXCEPTION 'threshold_pct phải > 0'; END IF;
+      IF v_cm IS NULL OR v_cm < 0 THEN RAISE EXCEPTION 'commission_pct phải >= 0'; END IF;
       INSERT INTO public.kpi_campaign_store_tiers
         (target_id, tier_order, threshold_pct, commission_pct)
-      VALUES (
-        v_target_id,
-        (v_tier->>'tier_order')::integer,
-        (v_tier->>'threshold_pct')::numeric,
-        (v_tier->>'commission_pct')::numeric
-      );
+      VALUES (v_target_id, (v_tier->>'tier_order')::integer, v_th, v_cm);
+      v_tiers := v_tiers + 1;
     END LOOP;
+    IF v_tiers = 0 THEN RAISE EXCEPTION 'Mỗi target cần ít nhất 1 bậc'; END IF;
 
     v_count := v_count + 1;
   END LOOP;
 
+  -- Audit row in the SAME transaction (targets + tiers + import_run atomic).
+  INSERT INTO public.kpi_campaign_import_runs
+    (campaign_id, file_name, uploaded_by, row_count, success_count, error_count)
+  VALUES (p_campaign_id, p_file_name, p_uploaded_by, v_count, v_count, 0);
+
   UPDATE public.kpi_campaigns SET updated_at = now() WHERE id = p_campaign_id;
   RETURN v_count;
 END $$;
-REVOKE ALL ON FUNCTION public.rpc_replace_campaign_targets(uuid, jsonb) FROM public;
-GRANT EXECUTE ON FUNCTION public.rpc_replace_campaign_targets(uuid, jsonb) TO service_role;
+REVOKE ALL ON FUNCTION public.rpc_replace_campaign_targets(uuid, jsonb, text, uuid) FROM public;
+GRANT EXECUTE ON FUNCTION public.rpc_replace_campaign_targets(uuid, jsonb, text, uuid) TO service_role;
 
 -- 7) RLS — Phase 1: super admin only, every table (FOR ALL = select+ins+upd+del).
 --    Import writes also go via the service-role RPC (bypasses RLS). Staff/SM read

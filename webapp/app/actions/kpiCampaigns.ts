@@ -5,15 +5,16 @@ import * as XLSX from 'xlsx'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { isSuperAdminEmail } from '@/lib/authz'
-import { isKpiCampaignTestMode } from '@/lib/kpi/flags'
+import { isKpiCampaignEnabled, isKpiCampaignTestMode } from '@/lib/kpi/flags'
 import { parseCampaignRows, type CampaignImportResult } from '@/lib/kpi/campaignImport'
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024
 
-// All campaign config is super-admin only (Phase 1). RLS on the kpi_campaign_*
-// tables enforces this too; this app-layer gate gives a clean error + guards the
-// service-role writes.
+// All campaign config is super-admin only + gated by KPI_CAMPAIGN_ENABLED (Phase 1
+// safety — the flag must gate the ACTIONS too, not just routes/nav, so a stale
+// client can't mutate when the feature is off in prod). RLS also enforces super.
 async function requireSuper() {
+  if (!isKpiCampaignEnabled()) return { error: 'Tính năng KPI Campaign chưa được bật' as const }
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' as const }
@@ -86,21 +87,25 @@ export async function toggleCampaign(id: string) {
     if (error) return { error: error.message }
     console.info(`[kpi-campaign] paused ${id} by ${auth.user.id}`)
   } else if (c.status === 'draft' || c.status === 'paused') {
-    // Must have targets before going live.
-    const { data: myTargets } = await auth.supabase
+    // Must have targets before going live. FAIL CLOSED on any query error — never
+    // activate on a transient read failure (would risk violating the no-overlap rule).
+    const { data: myTargets, error: tErr } = await auth.supabase
       .from('kpi_campaign_store_targets').select('store_id').eq('campaign_id', id)
+    if (tErr) return { error: `Không kiểm tra được target: ${tErr.message}` }
     const storeIds = (myTargets ?? []).map((t) => t.store_id as string)
     if (storeIds.length === 0) return { error: 'Chưa import target cho chiến dịch này' }
 
     // Overlap guard: other active campaigns whose date range overlaps + share a store.
-    const { data: others } = await auth.supabase
+    const { data: others, error: oErr } = await auth.supabase
       .from('kpi_campaigns').select('id, start_date, end_date').eq('status', 'active').neq('id', id)
+    if (oErr) return { error: `Không kiểm tra được chồng lấn: ${oErr.message}` }
     const overlappingIds = (others ?? [])
       .filter((o) => (o.start_date as string) <= c.end_date && (o.end_date as string) >= c.start_date)
       .map((o) => o.id as string)
     if (overlappingIds.length) {
-      const { data: otherTargets } = await auth.supabase
+      const { data: otherTargets, error: otErr } = await auth.supabase
         .from('kpi_campaign_store_targets').select('store_id').in('campaign_id', overlappingIds)
+      if (otErr) return { error: `Không kiểm tra được chồng lấn: ${otErr.message}` }
       const clash = (otherTargets ?? []).some((t) => storeIds.includes(t.store_id as string))
       if (clash) return { error: 'Có cửa hàng đã thuộc một chiến dịch đang chạy trùng khoảng ngày' }
     }
@@ -144,7 +149,8 @@ async function parseFile(formData: FormData): Promise<CampaignImportResult | { e
     return { error: 'Không đọc được file — cần đúng file XLSX' }
   }
   if (rawRows.length > 2000) return { error: 'File quá nhiều dòng — sai file?' }
-  const { data: stores } = await supabaseAdmin.from('stores').select('id, code')
+  const { data: stores, error: storesErr } = await supabaseAdmin.from('stores').select('id, code')
+  if (storesErr) return { error: `Không đọc được danh sách cửa hàng: ${storesErr.message}` }
   const byCode = new Map((stores ?? []).filter((s) => s.code).map((s) => [String(s.code).trim().toUpperCase(), s.id]))
   return parseCampaignRows(rawRows, byCode)
 }
@@ -181,21 +187,16 @@ export async function commitCampaignImport(campaignId: string, formData: FormDat
   }
   if (res.valid.length === 0) return { error: 'Không có dòng hợp lệ nào' }
 
+  // Atomic: targets + tiers + import_run audit in ONE transaction inside the RPC
+  // (with DB-side status/data guards). Any failure → full rollback, no partial.
+  const fileName = (formData.get('file') as File | null)?.name ?? null
   const { data: count, error } = await supabaseAdmin.rpc('rpc_replace_campaign_targets', {
     p_campaign_id: campaignId,
     p_rows: res.valid,
+    p_file_name: fileName,
+    p_uploaded_by: auth.user.id,
   })
   if (error) return { error: `Ghi dữ liệu lỗi: ${error.message}` }
-
-  const fileName = (formData.get('file') as File | null)?.name ?? null
-  await supabaseAdmin.from('kpi_campaign_import_runs').insert({
-    campaign_id: campaignId,
-    file_name: fileName,
-    uploaded_by: auth.user.id,
-    row_count: res.valid.length,
-    success_count: (count as number | null) ?? res.valid.length,
-    error_count: 0,
-  })
 
   revalidatePath('/targets/campaigns')
   revalidatePath(`/targets/campaigns/${campaignId}`)
