@@ -33,7 +33,11 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
     .from('kpi_campaigns').select('id, name, start_date, end_date, status, is_test, updated_at').eq('id', id).single()
   if (!c) notFound()
 
-  const [{ data: targetsRaw }, { data: runs }, { data: actualsRaw }] = await Promise.all([
+  const [
+    { data: targetsRaw, error: targetsErr },
+    { data: runs, error: runsErr },
+    { data: actualsRaw, error: actualsErr },
+  ] = await Promise.all([
     supabase
       .from('kpi_campaign_store_targets')
       .select('id, store_id, pos_code, final_target, stores(name), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
@@ -48,6 +52,11 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
       .select('store_id, actual_gmv, run_rate, achieved_tier_order, achieved_commission_amount, synced_at')
       .eq('campaign_id', id),
   ])
+  // Don't swallow sub-query failures — a broken migration/RLS/query would
+  // otherwise render as "chưa có dữ liệu" and mislead QA.
+  const queryError = targetsErr?.message ?? runsErr?.message ?? actualsErr?.message ?? null
+  if (queryError) console.error('[campaign-detail] query failed:', queryError)
+
   const targets = (targetsRaw ?? []) as unknown as TargetRow[]
   const actualByStore = new Map(
     ((actualsRaw ?? []) as { store_id: string; actual_gmv: number; run_rate: number | null; achieved_tier_order: number | null; achieved_commission_amount: number | null; synced_at: string }[])
@@ -79,6 +88,11 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
           {formatDate(c.start_date)} – {formatDate(c.end_date)} · {targets.length} cửa hàng
           {lastSynced ? ` · Doanh số đồng bộ ${formatDateTime(lastSynced)}` : ' · Chưa đồng bộ doanh số'}
         </p>
+        {queryError && (
+          <p className="text-sm text-destructive mt-1">
+            Lỗi truy vấn dữ liệu: {queryError} — kiểm tra migration 070 đã apply chưa.
+          </p>
+        )}
       </div>
 
       {canImport && (

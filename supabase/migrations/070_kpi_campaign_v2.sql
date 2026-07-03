@@ -119,11 +119,13 @@ END $$;
 REVOKE ALL ON FUNCTION public.rpc_replace_campaign_targets(uuid, jsonb, text, uuid) FROM public;
 GRANT EXECUTE ON FUNCTION public.rpc_replace_campaign_targets(uuid, jsonb, text, uuid) TO service_role;
 
--- 4) SECDEF read gate: a campaign is readable by the CURRENT user (staff or
---    store_manager — anyone whose users.store_id participates) iff it is
---    active, non-test, and has a target for their store. Runs as the function
---    owner (bypasses RLS) → policies below never reference another RLS table
---    directly → no cross-table recursion.
+-- 4) SECDEF read gate: a campaign is readable by the CURRENT user iff they are
+--    a staff/store_manager whose store participates AND the campaign is active
+--    and non-test. The ROLE check lives HERE too (not only in the app pages) —
+--    RLS is its own security boundary, so a stray account that happens to carry
+--    a store_id can't read campaigns via direct PostgREST calls. Runs as the
+--    function owner (bypasses RLS) → policies below never reference another RLS
+--    table directly → no cross-table recursion.
 CREATE OR REPLACE FUNCTION public.can_read_kpi_campaign(p_campaign_id uuid)
 RETURNS boolean
 LANGUAGE sql
@@ -131,15 +133,16 @@ STABLE
 SECURITY DEFINER
 SET search_path = public
 AS $$
-  SELECT EXISTS (
-    SELECT 1
-    FROM public.kpi_campaigns c
-    JOIN public.kpi_campaign_store_targets t ON t.campaign_id = c.id
-    WHERE c.id = p_campaign_id
-      AND c.status = 'active'
-      AND c.is_test = false
-      AND t.store_id = (SELECT public.get_user_store_id())
-  )
+  SELECT (SELECT public.get_user_role()) IN ('staff', 'store_manager')
+    AND EXISTS (
+      SELECT 1
+      FROM public.kpi_campaigns c
+      JOIN public.kpi_campaign_store_targets t ON t.campaign_id = c.id
+      WHERE c.id = p_campaign_id
+        AND c.status = 'active'
+        AND c.is_test = false
+        AND t.store_id = (SELECT public.get_user_store_id())
+    )
 $$;
 GRANT EXECUTE ON FUNCTION public.can_read_kpi_campaign(uuid) TO authenticated;
 

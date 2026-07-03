@@ -113,7 +113,7 @@ export function CampaignImport({ campaignId, redirectTo }: { campaignId: string;
               </tbody>
             </table>
           </div>
-          <p className="text-muted-foreground">Cần thêm bậc? Thêm cặp cột <code>tier_4_threshold_pct</code> / <code>tier_4_commission_pct</code>… (mốc phải tăng dần).</p>
+          <p className="text-muted-foreground">Cần thêm bậc? Thêm cặp cột <code>tier_4_threshold_pct</code> / <code>tier_4_commission</code>… (mốc phải tăng dần).</p>
         </div>
       </details>
 

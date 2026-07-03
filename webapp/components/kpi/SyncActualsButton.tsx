@@ -15,11 +15,20 @@ export function SyncActualsButton({ campaignId }: { campaignId: string }) {
   function handleSync() {
     startTransition(async () => {
       const r = await syncCampaignActuals(campaignId)
-      if (r?.error) toast.error(r.error)
-      else {
-        toast.success(`Đã đồng bộ ${(r as { upserted?: number }).upserted ?? 0} cửa hàng`)
-        router.refresh()
+      if (r?.error) { toast.error(r.error); return }
+      const ok = r as { upserted?: number; unmatched?: string[] }
+      const unmatched = ok.unmatched ?? []
+      if (unmatched.length > 0) {
+        // A store has a target but ZERO BigQuery rows in the range — surface it
+        // so admin doesn't read a silent 0 as a clean sync.
+        toast.warning(
+          `Đồng bộ ${ok.upserted ?? 0} cửa hàng — ${unmatched.length} POS chưa có dữ liệu BigQuery: ${unmatched.slice(0, 5).join(', ')}${unmatched.length > 5 ? '…' : ''}`,
+          { duration: 8000 },
+        )
+      } else {
+        toast.success(`Đã đồng bộ ${ok.upserted ?? 0} cửa hàng`)
       }
+      router.refresh()
     })
   }
 
