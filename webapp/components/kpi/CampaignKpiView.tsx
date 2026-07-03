@@ -80,11 +80,13 @@ export function CampaignKpiView({ items, selectedId }: { items: CampaignView[]; 
               {sel.store_kpi_group ? ` · Nhóm: ${sel.store_kpi_group}` : ''}
             </p>
           </div>
+          {/* "Đạt KPI 100%" (not "mục tiêu") — a store at 90–99% already earns a
+              tier-90 pool, so a generic "chưa đạt" badge would read as a dispute. */}
           <span className={cn(
             'text-xs px-2 py-0.5 rounded font-medium shrink-0',
             achieved ? 'bg-green-100 text-green-700' : 'bg-white/20 text-white',
           )}>
-            {achieved ? 'Đã đạt mục tiêu' : 'Chưa đạt mục tiêu'}
+            {achieved ? 'Đạt KPI 100%' : 'Chưa đạt KPI 100%'}
           </span>
         </div>
 

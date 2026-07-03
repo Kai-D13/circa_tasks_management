@@ -91,7 +91,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
         </p>
         {queryError && (
           <p className="text-sm text-destructive mt-1">
-            Lỗi truy vấn dữ liệu: {queryError} — kiểm tra migration 070 đã apply chưa.
+            Lỗi truy vấn dữ liệu: {queryError} — kiểm tra migration 070/071 đã apply chưa.
           </p>
         )}
       </div>

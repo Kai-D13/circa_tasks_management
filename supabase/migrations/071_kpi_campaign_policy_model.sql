@@ -76,6 +76,7 @@ DECLARE
   v_group     text;
   v_th        numeric;
   v_cm        numeric;
+  v_prev_th   numeric;
 BEGIN
   SELECT status INTO v_status FROM public.kpi_campaigns WHERE id = p_campaign_id;
   IF v_status IS NULL THEN RAISE EXCEPTION 'Campaign % không tồn tại', p_campaign_id; END IF;
@@ -106,15 +107,23 @@ BEGIN
     RETURNING id INTO v_target_id;
 
     v_tiers := 0;
+    v_prev_th := NULL;
+    -- jsonb_array_elements preserves array order = tier_order ascending from the
+    -- parser; thresholds must STRICTLY increase (commission data — harden at the
+    -- DB layer too, not only in the app parser).
     FOR v_tier IN SELECT * FROM jsonb_array_elements(coalesce(v_row->'tiers', '[]'::jsonb))
     LOOP
       v_th := (v_tier->>'threshold_pct')::numeric;
       v_cm := (v_tier->>'commission_amount')::numeric;
       IF v_th IS NULL OR v_th <= 0 THEN RAISE EXCEPTION 'threshold_pct phải > 0'; END IF;
+      IF v_prev_th IS NOT NULL AND v_th <= v_prev_th THEN
+        RAISE EXCEPTION 'threshold các bậc phải tăng dần (% <= %)', v_th, v_prev_th;
+      END IF;
       IF v_cm IS NULL OR v_cm < 0 THEN RAISE EXCEPTION 'commission_amount phải >= 0'; END IF;
       INSERT INTO public.kpi_campaign_store_tiers
         (target_id, tier_order, threshold_pct, commission_amount)
       VALUES (v_target_id, (v_tier->>'tier_order')::integer, v_th, v_cm);
+      v_prev_th := v_th;
       v_tiers := v_tiers + 1;
     END LOOP;
     IF v_tiers = 0 THEN RAISE EXCEPTION 'Mỗi target cần ít nhất 1 bậc'; END IF;
