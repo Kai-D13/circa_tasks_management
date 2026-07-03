@@ -113,6 +113,25 @@ export function campaignRangeQuery(startDate: string, endDate: string): string {
   `
 }
 
+// Per-DAY GMV per store over a range — drives the staff "Tiến độ theo ngày"
+// chart AND the aggregate snapshot (summed app-side so they always agree).
+// Caller must chunk long ranges by month: 26 stores × 31 days ≈ 806 rows per
+// chunk, under the 1000-row cap; a 2-month range in one call would exceed it.
+export function campaignDailyQuery(startDate: string, endDate: string): string {
+  const ISO = /^\d{4}-\d{2}-\d{2}$/
+  if (!ISO.test(startDate) || !ISO.test(endDate)) {
+    throw new Error(`campaignDailyQuery: ngày không hợp lệ (${startDate} – ${endDate})`)
+  }
+  return `
+    SELECT pos_code, \`date\`, SUM(COALESCE(gmv, 0)) AS gmv
+    FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`
+    WHERE pos_code NOT IN ("POS0001")
+      AND \`date\` BETWEEN '${startDate}' AND '${endDate}'
+    GROUP BY pos_code, \`date\`
+    ORDER BY pos_code, \`date\`
+  `
+}
+
 // Runs a query and returns raw rows as { columnName: value } objects.
 export async function runBigQuery(sa: ServiceAccount, sql: string): Promise<Record<string, unknown>[]> {
   const token = await getAccessToken(sa, BQ_SCOPE)
