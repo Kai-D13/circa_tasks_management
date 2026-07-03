@@ -132,11 +132,11 @@ async function fetchCampaignViews(
   const [{ data: targets, error: tErr }, { data: actuals, error: aErr }] = await Promise.all([
     supabase
       .from('kpi_campaign_store_targets')
-      .select('final_target, campaign:kpi_campaigns!inner(id, name, start_date, end_date), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
+      .select('kpi_target, store_kpi_group, campaign:kpi_campaigns!inner(id, name, start_date, end_date), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
       .eq('store_id', storeId),
     supabase
       .from('kpi_campaign_store_actuals')
-      .select('campaign_id, actual_gmv, run_rate, remaining_target, achieved_tier_order, achieved_commission_amount, synced_at')
+      .select('campaign_id, actual_value, run_rate, remaining_target, achieved_tier_order, store_commission_pool, synced_at')
       .eq('store_id', storeId),
   ])
   if (tErr || aErr) {
@@ -146,11 +146,12 @@ async function fetchCampaignViews(
     return []
   }
   const actualByCampaign = new Map(
-    ((actuals ?? []) as { campaign_id: string; actual_gmv: number; run_rate: number | null; remaining_target: number | null; achieved_tier_order: number | null; achieved_commission_amount: number | null; synced_at: string }[])
+    ((actuals ?? []) as { campaign_id: string; actual_value: number; run_rate: number | null; remaining_target: number | null; achieved_tier_order: number | null; store_commission_pool: number | null; synced_at: string }[])
       .map((a) => [a.campaign_id, a]),
   )
   return ((targets ?? []) as unknown as {
-    final_target: number
+    kpi_target: number
+    store_kpi_group: string | null
     campaign: { id: string; name: string; start_date: string; end_date: string }
     kpi_campaign_store_tiers: { tier_order: number; threshold_pct: number; commission_amount: number }[]
   }[])
@@ -161,13 +162,14 @@ async function fetchCampaignViews(
         name: t.campaign.name,
         start_date: t.campaign.start_date,
         end_date: t.campaign.end_date,
-        final_target: Number(t.final_target) || 0,
+        kpi_target: Number(t.kpi_target) || 0,
+        store_kpi_group: t.store_kpi_group ?? null,
         tiers: t.kpi_campaign_store_tiers ?? [],
-        actual_gmv: a ? Number(a.actual_gmv) : null,
+        actual_value: a ? Number(a.actual_value) : null,
         run_rate: a?.run_rate ?? null,
         remaining_target: a?.remaining_target ?? null,
         achieved_tier_order: a?.achieved_tier_order ?? null,
-        achieved_commission_amount: a?.achieved_commission_amount ?? null,
+        store_commission_pool: a?.store_commission_pool ?? null,
         synced_at: a?.synced_at ?? null,
       }
     })

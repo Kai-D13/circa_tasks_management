@@ -15,13 +15,14 @@ export interface CampaignView {
   name: string
   start_date: string
   end_date: string
-  final_target: number
+  kpi_target: number
+  store_kpi_group: string | null     // policy classification label (email 07/2026)
   tiers: CampaignTierView[]
-  actual_gmv: number | null          // null = chưa đồng bộ
+  actual_value: number | null        // null = chưa đồng bộ
   run_rate: number | null
   remaining_target: number | null
   achieved_tier_order: number | null
-  achieved_commission_amount: number | null
+  store_commission_pool: number | null
   synced_at: string | null
 }
 
@@ -30,8 +31,8 @@ const vnd = (n: number | null | undefined) =>
 
 export function CampaignKpiView({ items, selectedId }: { items: CampaignView[]; selectedId?: string }) {
   const sel = items.find((i) => i.id === selectedId) ?? items[0]
-  const target = sel.final_target
-  const actual = sel.actual_gmv ?? 0
+  const target = sel.kpi_target
+  const actual = sel.actual_value ?? 0
   const pct = sel.run_rate ?? (target > 0 ? (actual / target) * 100 : 0)
   const remaining = sel.remaining_target ?? Math.max(target - actual, 0)
   const achieved = target > 0 && actual >= target
@@ -41,7 +42,7 @@ export function CampaignKpiView({ items, selectedId }: { items: CampaignView[]; 
     ?? tiers.filter((t) => t.threshold_pct <= pct).map((t) => t.tier_order).pop()
     ?? null
   const reachedTier = tiers.find((t) => t.tier_order === reachedOrder) ?? null
-  const expectedCommission = sel.achieved_commission_amount ?? reachedTier?.commission_amount ?? 0
+  const expectedPool = sel.store_commission_pool ?? reachedTier?.commission_amount ?? 0
   const nextTier = tiers.find((t) => t.threshold_pct > pct) ?? null
 
   return (
@@ -76,6 +77,7 @@ export function CampaignKpiView({ items, selectedId }: { items: CampaignView[]; 
             </p>
             <p className="text-xs text-white/80 mt-0.5">
               {formatDate(sel.start_date)} – {formatDate(sel.end_date)}
+              {sel.store_kpi_group ? ` · Nhóm: ${sel.store_kpi_group}` : ''}
             </p>
           </div>
           <span className={cn(
@@ -89,7 +91,7 @@ export function CampaignKpiView({ items, selectedId }: { items: CampaignView[]; 
         <div>
           <p className="text-xs uppercase text-white/80">Còn thiếu</p>
           <p className="text-3xl font-bold leading-tight">{achieved ? '0₫' : vnd(remaining)}</p>
-          <p className="text-xs text-white/80 mt-0.5">để đạt target chiến dịch</p>
+          <p className="text-xs text-white/80 mt-0.5">để đạt KPI chiến dịch</p>
         </div>
 
         <div className="space-y-1.5">
@@ -99,12 +101,12 @@ export function CampaignKpiView({ items, selectedId }: { items: CampaignView[]; 
           </div>
           <div className="flex items-end justify-between text-xs">
             <div>
-              <p className="font-semibold text-sm">{sel.actual_gmv === null ? 'Chưa đồng bộ' : vnd(actual)}</p>
+              <p className="font-semibold text-sm">{sel.actual_value === null ? 'Chưa đồng bộ' : vnd(actual)}</p>
               <p className="text-white/80">Đã đạt</p>
             </div>
             <div className="text-right">
               <p className="font-semibold text-sm">{vnd(target)}</p>
-              <p className="text-white/80">Target chiến dịch</p>
+              <p className="text-white/80">KPI target</p>
             </div>
           </div>
         </div>
@@ -114,15 +116,18 @@ export function CampaignKpiView({ items, selectedId }: { items: CampaignView[]; 
       {tiers.length > 0 && (
         <Card>
           <CardContent className="p-4 space-y-2.5">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center justify-between gap-2 flex-wrap">
               <p className="font-semibold text-sm">Các bậc thưởng</p>
               <p className="text-sm">
-                <span className="text-muted-foreground">Thưởng dự kiến: </span>
-                <span className={cn('font-bold', expectedCommission > 0 ? 'text-green-600' : 'text-muted-foreground')}>
-                  {vnd(expectedCommission)}
+                <span className="text-muted-foreground">Quỹ thưởng Store dự kiến: </span>
+                <span className={cn('font-bold', expectedPool > 0 ? 'text-green-600' : 'text-muted-foreground')}>
+                  {vnd(expectedPool)}
                 </span>
               </p>
             </div>
+            <p className="text-xs text-muted-foreground">
+              Đây là <span className="font-medium">tổng quỹ commission của Store</span>, chưa phải commission cá nhân — quỹ sẽ được phân bổ cho Dược sĩ theo thực công trong tháng.
+            </p>
             <div className="space-y-1.5">
               {tiers.map((t) => {
                 const reached = reachedOrder !== null && t.tier_order <= reachedOrder
@@ -141,7 +146,7 @@ export function CampaignKpiView({ items, selectedId }: { items: CampaignView[]; 
                       : <Circle className="h-4 w-4 text-muted-foreground/50 shrink-0" />}
                     <div className="min-w-0 flex-1">
                       <p className={cn('font-medium', reached && 'text-green-700')}>
-                        Đạt {t.threshold_pct}% target → thưởng {vnd(t.commission_amount)}
+                        Đạt {t.threshold_pct}% KPI → quỹ thưởng {vnd(t.commission_amount)}
                       </p>
                       {isNext && !achieved && gapToTier > 0 && (
                         <p className="text-xs text-muted-foreground mt-0.5">

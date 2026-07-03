@@ -54,11 +54,18 @@ export function CampaignWizard() {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
                 <label className="text-xs text-muted-foreground">Từ ngày</label>
-                <input type="date" value={start} onChange={(e) => setStart(e.target.value)} className="w-full h-9 px-3 rounded-md border bg-background text-sm" />
+                <input type="date" aria-label="Từ ngày" value={start} onChange={(e) => setStart(e.target.value)} className="w-full h-9 px-3 rounded-md border bg-background text-sm" />
               </div>
               <div className="space-y-1">
                 <label className="text-xs text-muted-foreground">Đến ngày</label>
-                <input type="date" value={end} onChange={(e) => setEnd(e.target.value)} className="w-full h-9 px-3 rounded-md border bg-background text-sm" />
+                <input type="date" aria-label="Đến ngày" value={end} onChange={(e) => setEnd(e.target.value)} className="w-full h-9 px-3 rounded-md border bg-background text-sm" />
+              </div>
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">Loại chỉ số</label>
+              <div className="flex gap-2">
+                <span className="text-xs px-3 py-1.5 rounded-md border border-primary bg-primary/5 text-primary font-medium">GMV (doanh số)</span>
+                <span className="text-xs px-3 py-1.5 rounded-md border text-muted-foreground/60 cursor-not-allowed" title="Sắp có">Loại khác · Sắp có</span>
               </div>
             </div>
             <div className="space-y-1">
