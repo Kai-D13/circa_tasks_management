@@ -35,7 +35,7 @@ export function SyncActualsButton({ campaignId }: { campaignId: string }) {
   return (
     <Button size="sm" variant="outline" onClick={handleSync} disabled={pending} className="gap-1.5">
       <RefreshCw className={pending ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
-      {pending ? 'Đang đồng bộ…' : 'Đồng bộ ngay'}
+      {pending ? 'Đang đồng bộ…' : 'Đồng bộ doanh số từ BI'}
     </Button>
   )
 }

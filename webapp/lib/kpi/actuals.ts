@@ -21,7 +21,7 @@ export interface SyncResult { upserted: number; unmatched: string[] }
 
 export async function syncCampaign(campaign: CampaignRef): Promise<SyncResult | { error: string }> {
   const sa = loadServiceAccount()
-  if (!sa) return { error: 'BQ_SERVICE_ACCOUNT_KEY chưa hợp lệ' }
+  if (!sa) return { error: 'Chưa cấu hình BigQuery key cho môi trường này. Kiểm tra BQ_SERVICE_ACCOUNT_KEY rồi thử lại.' }
 
   // Targets + tiers of this campaign (tiers needed to grade the achieved tier).
   const { data: targets, error: tErr } = await supabaseAdmin

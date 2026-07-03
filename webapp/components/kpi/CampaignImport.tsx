@@ -15,11 +15,11 @@ const COLUMN_GUIDE: { col: string; meaning: string; example: string; optional?: 
   { col: 'kpi_target', meaning: 'KPI doanh số của Store trong kỳ chiến dịch', example: '450000000' },
   { col: 'store_kpi_group', meaning: 'Phân loại Store theo KPI (nhãn hiển thị)', example: 'Nhỏ hơn 500 triệu' },
   { col: 'tier_1_threshold_pct', meaning: 'Mốc đạt KPI bậc 1 (%)', example: '90' },
-  { col: 'tier_1_commission_amount', meaning: 'Quỹ commission Store bậc 1 (số tiền)', example: '15000000' },
+  { col: 'tier_1_commission_amount', meaning: 'Commission Store bậc 1 (số tiền)', example: '15000000' },
   { col: 'tier_2_threshold_pct', meaning: 'Mốc đạt KPI bậc 2 (%)', example: '100' },
-  { col: 'tier_2_commission_amount', meaning: 'Quỹ commission Store bậc 2 (số tiền)', example: '20800000' },
+  { col: 'tier_2_commission_amount', meaning: 'Commission Store bậc 2 (số tiền)', example: '20800000' },
   { col: 'tier_3_threshold_pct', meaning: 'Mốc đạt KPI bậc 3 (%)', example: '105' },
-  { col: 'tier_3_commission_amount', meaning: 'Quỹ commission Store bậc 3 (số tiền)', example: '26300000' },
+  { col: 'tier_3_commission_amount', meaning: 'Commission Store bậc 3 (số tiền)', example: '26300000' },
   { col: 'pos_name', meaning: 'Tên cửa hàng', example: 'CIRCA TAM VIET', optional: true },
   { col: 'note', meaning: 'Ghi chú', example: 'Demo', optional: true },
 ]
@@ -114,7 +114,8 @@ export function CampaignImport({ campaignId, redirectTo }: { campaignId: string;
               </tbody>
             </table>
           </div>
-          <p className="text-muted-foreground">Cần thêm bậc? Thêm cặp cột <code>tier_4_threshold_pct</code> / <code>tier_4_commission_amount</code>… (mốc phải tăng dần). Số tiền là <span className="font-medium">tổng quỹ commission của Store</span>, không phải tiền từng dược sĩ. Lưu ý: <code>kpi_target</code> không được trùng đúng ranh giới nhóm (200/300/500/800 triệu, 1 tỷ).</p>
+          <p className="text-muted-foreground">Thêm cặp cột <code>tier_4_threshold_pct</code> / <code>tier_4_commission_amount</code>… nếu cần tăng bậc.</p>
+          <p className="text-muted-foreground">Lưu ý: <code>kpi_target</code> không được trùng đúng ranh giới nhóm (200/300/500/800 triệu, 1 tỷ).</p>
         </div>
       </details>
 
@@ -164,7 +165,7 @@ export function CampaignImport({ campaignId, redirectTo }: { campaignId: string;
                     <th className="text-left px-3 py-2">POS</th>
                     <th className="text-left px-3 py-2">Phân loại</th>
                     <th className="text-right px-3 py-2">KPI target</th>
-                    <th className="text-left px-3 py-2">Bậc (mốc % → quỹ commission)</th>
+                    <th className="text-left px-3 py-2">Bậc (mốc % → Commission)</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
@@ -173,7 +174,15 @@ export function CampaignImport({ campaignId, redirectTo }: { campaignId: string;
                       <td className="px-3 py-1.5 font-medium">{r.pos_code}</td>
                       <td className="px-3 py-1.5">{r.store_kpi_group}</td>
                       <td className="px-3 py-1.5 text-right">{vnd(r.kpi_target)}</td>
-                      <td className="px-3 py-1.5">{r.tiers.map((t) => `${t.threshold_pct}% → ${vnd(t.commission_amount)}`).join('  ·  ')}</td>
+                      <td className="px-3 py-1.5">
+                        <div className="flex flex-wrap gap-1">
+                          {r.tiers.map((t) => (
+                            <span key={t.threshold_pct} className="inline-flex whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-[11px]">
+                              {t.threshold_pct}% → {vnd(t.commission_amount)}
+                            </span>
+                          ))}
+                        </div>
+                      </td>
                     </tr>
                   ))}
                 </tbody>

@@ -116,8 +116,8 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
                   <th className="text-right px-4 py-2.5">KPI target</th>
                   <th className="text-right px-4 py-2.5">Thực đạt</th>
                   <th className="text-right px-4 py-2.5">%</th>
-                  <th className="text-left px-4 py-2.5">Bậc đạt · Quỹ commission</th>
-                  <th className="text-left px-4 py-2.5">Bậc (mốc % → quỹ commission)</th>
+                  <th className="text-left px-4 py-2.5">Bậc đạt · Commission</th>
+                  <th className="text-left px-4 py-2.5">Bậc (mốc % → Commission)</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -135,9 +135,16 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
                           ? <span className="text-green-700 font-medium">Bậc {a.achieved_tier_order} · {vnd(a.store_commission_pool ?? 0)}</span>
                           : a ? <span className="text-muted-foreground">Chưa đạt bậc</span> : '—'}
                       </td>
-                      <td className="px-4 py-2.5 text-xs">
-                        {[...t.kpi_campaign_store_tiers].sort((x, y) => x.tier_order - y.tier_order)
-                          .map((tier) => `${tier.threshold_pct}% → ${vnd(tier.commission_amount)}`).join('  ·  ') || '—'}
+                      <td className="px-4 py-2.5">
+                        <div className="flex flex-wrap gap-1">
+                          {[...t.kpi_campaign_store_tiers].sort((x, y) => x.tier_order - y.tier_order)
+                            .map((tier) => (
+                              <span key={tier.tier_order} className="inline-flex whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-[11px]">
+                                {tier.threshold_pct}% → {vnd(tier.commission_amount)}
+                              </span>
+                            ))}
+                          {t.kpi_campaign_store_tiers.length === 0 && <span className="text-xs text-muted-foreground">—</span>}
+                        </div>
                       </td>
                     </tr>
                   )
