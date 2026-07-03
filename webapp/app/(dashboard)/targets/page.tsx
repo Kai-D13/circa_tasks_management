@@ -208,6 +208,23 @@ export default async function TargetsPage({
     ? await fetchCampaignViews(supabase, profile.store_id)
     : []
 
+  // Daily GMV series for the SELECTED campaign (drives the chart + "GMV hôm nay").
+  // Selection resolved here so the fetch matches what the component will render.
+  let selectedCampaignId: string | undefined
+  let campaignDaily: { date: string; gmv: number }[] = []
+  if (campaignViews.length > 0 && profile?.store_id) {
+    selectedCampaignId = (campaignViews.find((c) => c.id === params.campaign) ?? campaignViews[0]).id
+    const { data: dailyRows, error: dErr } = await supabase
+      .from('kpi_campaign_store_daily_actuals')
+      .select('date, gmv')
+      .eq('campaign_id', selectedCampaignId)
+      .eq('store_id', profile.store_id)
+      .order('date')
+    if (dErr) console.error('[targets] daily query failed:', dErr.message)
+    campaignDaily = ((dailyRows ?? []) as { date: string; gmv: number }[])
+      .map((r) => ({ date: r.date, gmv: Number(r.gmv) || 0 }))
+  }
+
   if (isStoreMgr) {
     const storeName = (profile?.stores as unknown as { name: string } | null)?.name ?? 'Cửa hàng của bạn'
     return (
@@ -220,7 +237,7 @@ export default async function TargetsPage({
           <span className="text-sm text-muted-foreground">{storeName}</span>
         </div>
         {campaignViews.length > 0 ? (
-          <CampaignKpiView items={campaignViews} selectedId={params.campaign} />
+          <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} roleLabel="Quản lý" todayISO={vnTodayISO} />
         ) : (
           <Card>
             <CardContent className="py-12 text-center text-sm text-muted-foreground">
@@ -303,7 +320,7 @@ export default async function TargetsPage({
             </div>
             <span className="text-sm text-muted-foreground">{storeName}</span>
           </div>
-          <CampaignKpiView items={campaignViews} selectedId={params.campaign} />
+          <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} roleLabel="Dược sĩ" todayISO={vnTodayISO} />
           {referral && <ReferralCard {...referral} />}
           {referralError && (
             <Card>
