@@ -212,6 +212,7 @@ export default async function TargetsPage({
   // Selection resolved here so the fetch matches what the component will render.
   let selectedCampaignId: string | undefined
   let campaignDaily: { date: string; gmv: number }[] = []
+  let campaignDailyError = false
   if (campaignViews.length > 0 && profile?.store_id) {
     selectedCampaignId = (campaignViews.find((c) => c.id === params.campaign) ?? campaignViews[0]).id
     const { data: dailyRows, error: dErr } = await supabase
@@ -220,7 +221,11 @@ export default async function TargetsPage({
       .eq('campaign_id', selectedCampaignId)
       .eq('store_id', profile.store_id)
       .order('date')
-    if (dErr) console.error('[targets] daily query failed:', dErr.message)
+    if (dErr) {
+      // Degrade with a visible hint (not silently as "no data yet").
+      console.error('[targets] daily query failed:', dErr.message)
+      campaignDailyError = true
+    }
     campaignDaily = ((dailyRows ?? []) as { date: string; gmv: number }[])
       .map((r) => ({ date: r.date, gmv: Number(r.gmv) || 0 }))
   }
@@ -237,7 +242,7 @@ export default async function TargetsPage({
           <span className="text-sm text-muted-foreground">{storeName}</span>
         </div>
         {campaignViews.length > 0 ? (
-          <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} roleLabel="Quản lý" todayISO={vnTodayISO} />
+          <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Quản lý" todayISO={vnTodayISO} />
         ) : (
           <Card>
             <CardContent className="py-12 text-center text-sm text-muted-foreground">
@@ -320,7 +325,7 @@ export default async function TargetsPage({
             </div>
             <span className="text-sm text-muted-foreground">{storeName}</span>
           </div>
-          <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} roleLabel="Dược sĩ" todayISO={vnTodayISO} />
+          <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Dược sĩ" todayISO={vnTodayISO} />
           {referral && <ReferralCard {...referral} />}
           {referralError && (
             <Card>

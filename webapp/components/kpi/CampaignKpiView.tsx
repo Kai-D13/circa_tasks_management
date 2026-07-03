@@ -78,11 +78,12 @@ function markerFraction(pct: number, thresholds: number[], positions: number[]):
 }
 
 export function CampaignKpiView({
-  items, selectedId, daily, roleLabel, todayISO,
+  items, selectedId, daily, dailyError = false, roleLabel, todayISO,
 }: {
   items: CampaignView[]
   selectedId?: string
   daily: DailyPoint[]
+  dailyError?: boolean
   roleLabel: string
   todayISO: string
 }) {
@@ -166,7 +167,9 @@ export function CampaignKpiView({
         <Card>
           <CardContent className="p-3 text-center">
             <CalendarDays className="h-4 w-4 mx-auto text-primary" />
-            <p className="text-[10px] text-muted-foreground mt-1">Số ngày còn lại</p>
+            {/* Inclusive rule (today counts — the store still sells today), so the
+                label says "ngày bán" to keep the TB/ngày math uncontested. */}
+            <p className="text-[10px] text-muted-foreground mt-1">Số ngày bán còn lại</p>
             <p className="text-sm font-bold mt-0.5">{campaignOver ? 'Đã kết thúc' : `${daysLeft} ngày`}</p>
           </CardContent>
         </Card>
@@ -193,7 +196,11 @@ export function CampaignKpiView({
           {daily.length > 0 ? (
             <CampaignDailyChart start={sel.start_date} end={sel.end_date} daily={daily} todayISO={todayISO} />
           ) : (
-            <p className="text-sm text-muted-foreground py-6 text-center">Chưa có dữ liệu doanh số theo ngày.</p>
+            <p className="text-sm text-muted-foreground py-6 text-center">
+              {dailyError
+                ? 'Chưa tải được tiến độ theo ngày, vui lòng thử lại sau.'
+                : 'Chưa có dữ liệu doanh số theo ngày.'}
+            </p>
           )}
         </CardContent>
       </Card>

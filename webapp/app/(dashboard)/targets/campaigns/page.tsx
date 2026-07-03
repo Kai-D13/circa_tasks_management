@@ -26,13 +26,21 @@ export default async function CampaignsPage() {
   if (!(profile?.role === 'admin' && isSuperAdminEmail(user.email) && isKpiCampaignEnabled())) notFound()
 
   const supabase = await createClient()
-  const [{ data: campaigns }, { data: targets }, { data: actuals }] = await Promise.all([
+  const [
+    { data: campaigns, error: campaignsErr },
+    { data: targets, error: targetsErr },
+    { data: actuals, error: actualsErr },
+  ] = await Promise.all([
     supabase.from('kpi_campaigns')
       .select('id, name, start_date, end_date, status, is_test, updated_at')
       .order('created_at', { ascending: false }),
     supabase.from('kpi_campaign_store_targets').select('campaign_id, kpi_target'),
     supabase.from('kpi_campaign_store_actuals').select('campaign_id, actual_value, synced_at'),
   ])
+  // A failed side-query must NOT render as "0đ / chưa đồng bộ" — that reads as
+  // real data on a money screen. Surface it like the detail page does.
+  const queryError = campaignsErr?.message ?? targetsErr?.message ?? actualsErr?.message ?? null
+  if (queryError) console.error('[campaigns-list] query failed:', queryError)
 
   const agg = new Map<string, { stores: number; target: number; actual: number; lastSync: string | null }>()
   for (const t of (targets ?? [])) {
@@ -61,6 +69,12 @@ export default async function CampaignsPage() {
           <Plus className="h-4 w-4 mr-1" /> Tạo chiến dịch
         </Link>
       </div>
+
+      {queryError && (
+        <p className="text-sm text-destructive">
+          Lỗi truy vấn dữ liệu campaign: {queryError} — kiểm tra migration 070/071/072 đã apply chưa.
+        </p>
+      )}
 
       {list.length === 0 ? (
         <Card><CardContent className="py-12 text-center text-sm text-muted-foreground">Chưa có chiến dịch nào. Bấm “Tạo chiến dịch” để bắt đầu.</CardContent></Card>

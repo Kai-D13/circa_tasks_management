@@ -108,7 +108,18 @@ export async function syncCampaign(campaign: CampaignRef): Promise<SyncResult | 
     }
   })
 
-  // Daily rows first (chart data), chunked to keep payloads sane.
+  // REPLACE-ALL daily rows for this campaign: BI corrections, a changed date
+  // range, or a day that no longer returns from BQ must never leave ghost bars
+  // (the chart and the aggregate are not allowed to disagree). Delete carries a
+  // WHERE (pg_safeupdate-safe) and runs even when the new payload is EMPTY.
+  // Not one transaction with the insert — worst case a failed insert leaves an
+  // empty chart until the next sync (error is returned, admin re-syncs).
+  const { error: delErr } = await supabaseAdmin
+    .from('kpi_campaign_store_daily_actuals')
+    .delete()
+    .eq('campaign_id', campaign.id)
+  if (delErr) return { error: `Xoá daily actuals cũ lỗi: ${delErr.message}` }
+
   for (let i = 0; i < dailyPayload.length; i += 500) {
     const { error: dErr } = await supabaseAdmin
       .from('kpi_campaign_store_daily_actuals')
