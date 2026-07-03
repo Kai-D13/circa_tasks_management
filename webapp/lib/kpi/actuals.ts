@@ -108,29 +108,16 @@ export async function syncCampaign(campaign: CampaignRef): Promise<SyncResult | 
     }
   })
 
-  // REPLACE-ALL daily rows for this campaign: BI corrections, a changed date
-  // range, or a day that no longer returns from BQ must never leave ghost bars
-  // (the chart and the aggregate are not allowed to disagree). Delete carries a
-  // WHERE (pg_safeupdate-safe) and runs even when the new payload is EMPTY.
-  // Not one transaction with the insert — worst case a failed insert leaves an
-  // empty chart until the next sync (error is returned, admin re-syncs).
-  const { error: delErr } = await supabaseAdmin
-    .from('kpi_campaign_store_daily_actuals')
-    .delete()
-    .eq('campaign_id', campaign.id)
-  if (delErr) return { error: `Xoá daily actuals cũ lỗi: ${delErr.message}` }
+  // ATOMIC write via rpc_replace_campaign_actuals (migration 072): replace-all
+  // daily rows + upsert aggregate snapshots in ONE transaction. A partial
+  // failure can never leave a fresh chart next to a stale total (or vice versa)
+  // on a commission screen — any error rolls back everything; caller retries.
+  const { data: count, error: rpcErr } = await supabaseAdmin.rpc('rpc_replace_campaign_actuals', {
+    p_campaign_id: campaign.id,
+    p_daily: dailyPayload,
+    p_actuals: payload,
+  })
+  if (rpcErr) return { error: `Ghi actuals lỗi: ${rpcErr.message}` }
 
-  for (let i = 0; i < dailyPayload.length; i += 500) {
-    const { error: dErr } = await supabaseAdmin
-      .from('kpi_campaign_store_daily_actuals')
-      .upsert(dailyPayload.slice(i, i + 500), { onConflict: 'campaign_id,store_id,date' })
-    if (dErr) return { error: `Ghi daily actuals lỗi: ${dErr.message}` }
-  }
-
-  const { error: upErr } = await supabaseAdmin
-    .from('kpi_campaign_store_actuals')
-    .upsert(payload, { onConflict: 'campaign_id,store_id' })
-  if (upErr) return { error: `Ghi actuals lỗi: ${upErr.message}` }
-
-  return { upserted: payload.length, unmatched, dailyRows: dailyPayload.length }
+  return { upserted: (count as number | null) ?? payload.length, unmatched, dailyRows: dailyPayload.length }
 }

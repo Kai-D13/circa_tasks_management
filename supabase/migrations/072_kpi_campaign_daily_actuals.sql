@@ -46,9 +46,66 @@ CREATE POLICY "kcda_read_store" ON public.kpi_campaign_store_daily_actuals
   );
 -- No write policies: service role (sync) only.
 
+-- Atomic sync write: replace the campaign's daily rows AND upsert the aggregate
+-- snapshots in ONE transaction — a partial failure can never leave a fresh chart
+-- next to a stale total (or vice versa) on a commission screen. Any RAISE rolls
+-- back everything; the caller (cron / "Đồng bộ doanh số từ BI") just retries.
+CREATE OR REPLACE FUNCTION public.rpc_replace_campaign_actuals(
+  p_campaign_id uuid,
+  p_daily   jsonb,  -- [{store_id, date, gmv, synced_at}]
+  p_actuals jsonb   -- [{store_id, actual_value, run_rate, remaining_target, achieved_tier_order, store_commission_pool, raw_row_count, synced_at}]
+) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_row   jsonb;
+  v_count integer := 0;
+BEGIN
+  -- Replace-all daily rows (WHERE'd delete — pg_safeupdate-safe; also clears
+  -- ghosts when the new payload is empty).
+  DELETE FROM public.kpi_campaign_store_daily_actuals WHERE campaign_id = p_campaign_id;
+
+  INSERT INTO public.kpi_campaign_store_daily_actuals (campaign_id, store_id, date, gmv, synced_at)
+  SELECT p_campaign_id,
+         (e->>'store_id')::uuid,
+         (e->>'date')::date,
+         coalesce((e->>'gmv')::numeric, 0),
+         coalesce((e->>'synced_at')::timestamptz, now())
+  FROM jsonb_array_elements(coalesce(p_daily, '[]'::jsonb)) e;
+
+  FOR v_row IN SELECT * FROM jsonb_array_elements(coalesce(p_actuals, '[]'::jsonb))
+  LOOP
+    INSERT INTO public.kpi_campaign_store_actuals
+      (campaign_id, store_id, actual_value, run_rate, remaining_target,
+       achieved_tier_order, store_commission_pool, raw_row_count, synced_at)
+    VALUES (
+      p_campaign_id,
+      (v_row->>'store_id')::uuid,
+      coalesce((v_row->>'actual_value')::numeric, 0),
+      (v_row->>'run_rate')::numeric,
+      (v_row->>'remaining_target')::numeric,
+      (v_row->>'achieved_tier_order')::integer,
+      (v_row->>'store_commission_pool')::numeric,
+      coalesce((v_row->>'raw_row_count')::integer, 0),
+      coalesce((v_row->>'synced_at')::timestamptz, now())
+    )
+    ON CONFLICT (campaign_id, store_id) DO UPDATE SET
+      actual_value          = EXCLUDED.actual_value,
+      run_rate              = EXCLUDED.run_rate,
+      remaining_target      = EXCLUDED.remaining_target,
+      achieved_tier_order   = EXCLUDED.achieved_tier_order,
+      store_commission_pool = EXCLUDED.store_commission_pool,
+      raw_row_count         = EXCLUDED.raw_row_count,
+      synced_at             = EXCLUDED.synced_at;
+    v_count := v_count + 1;
+  END LOOP;
+
+  RETURN v_count;
+END $$;
+REVOKE ALL ON FUNCTION public.rpc_replace_campaign_actuals(uuid, jsonb, jsonb) FROM public;
+GRANT EXECUTE ON FUNCTION public.rpc_replace_campaign_actuals(uuid, jsonb, jsonb) TO service_role;
+
 INSERT INTO public.app_migrations (version, name, notes)
 VALUES ('072', 'kpi_campaign_daily_actuals',
-        'per-day GMV per campaign/store for the staff progress chart; sync derives aggregates from these rows')
+        'per-day GMV per campaign/store for the staff progress chart; rpc_replace_campaign_actuals writes daily + aggregate in one tx')
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;
@@ -59,6 +116,7 @@ COMMIT;
 -- SELECT table_name FROM information_schema.tables WHERE table_name='kpi_campaign_store_daily_actuals';
 -- SELECT policyname FROM pg_policies WHERE tablename='kpi_campaign_store_daily_actuals';
 --   expect: kcda_super_all, kcda_read_store
+-- SELECT proname, prosecdef FROM pg_proc WHERE proname='rpc_replace_campaign_actuals';
 -- Consistency check (run after a sync): expect 0 rows
 -- SELECT a.campaign_id, a.store_id, a.actual_value, d.sum_gmv
 -- FROM public.kpi_campaign_store_actuals a
