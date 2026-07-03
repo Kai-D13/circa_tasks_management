@@ -49,7 +49,8 @@ function Ring({ pct }: { pct: number }) {
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className="text-lg font-bold leading-none">{Math.round(pct)}%</span>
+        {/* Template: the ring % reads as achievement → green once moving */}
+        <span className={cn('text-lg font-bold leading-none', clamped > 0 && 'text-green-600')}>{Math.round(pct)}%</span>
         <span className="text-[9px] text-muted-foreground mt-0.5">hoàn thành</span>
       </div>
     </div>
@@ -114,15 +115,16 @@ export function CampaignKpiView({
 
   return (
     <div className="space-y-4">
-      {/* Campaign tabs */}
+      {/* Campaign tabs — horizontal scroll, no wrap: many campaigns must not
+          push the hero below the fold on 360px */}
       {items.length > 1 && (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex gap-2 overflow-x-auto pb-1 -mb-1">
           {items.map((i) => (
             <Link
               key={i.id}
               href={`/targets?campaign=${i.id}`}
               className={cn(
-                'text-xs px-3 py-1.5 rounded-full border font-medium transition-colors',
+                'text-xs px-3 py-1.5 rounded-full border font-medium transition-colors shrink-0 whitespace-nowrap',
                 i.id === sel.id
                   ? 'border-primary bg-primary/10 text-primary'
                   : 'border-border text-muted-foreground hover:text-foreground',
@@ -134,8 +136,10 @@ export function CampaignKpiView({
         </div>
       )}
 
-      {/* ── Hero: mục tiêu / đã đạt / progress / ring / còn thiếu ── */}
-      <Card>
+      {/* ── Hero: mục tiêu / đã đạt / progress / ring / còn thiếu ──
+          Brand-tinted flat background (template hero is a warm cream card;
+          guide says no heavy gradients) */}
+      <Card className="border-primary/20 bg-secondary">
         <CardContent className="p-4 space-y-3">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
@@ -162,29 +166,38 @@ export function CampaignKpiView({
         </CardContent>
       </Card>
 
-      {/* ── 3 metric cards ── */}
+      {/* ── 3 metric cards — solid colored icon circles per template
+             (brand triad: blue-grey / coral / green) ── */}
       <div className="grid grid-cols-3 gap-2">
         <Card>
           <CardContent className="p-3 text-center">
-            <CalendarDays className="h-4 w-4 mx-auto text-primary" />
+            <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-[#a3b2bf] text-white">
+              <CalendarDays className="h-4 w-4" />
+            </span>
             {/* Inclusive rule (today counts — the store still sells today), so the
                 label says "ngày bán" to keep the TB/ngày math uncontested. */}
-            <p className="text-[10px] text-muted-foreground mt-1">Số ngày bán còn lại</p>
+            <p className="text-[11px] text-muted-foreground mt-1.5">Số ngày bán còn lại</p>
             <p className="text-sm font-bold mt-0.5">{campaignOver ? 'Đã kết thúc' : `${daysLeft} ngày`}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-3 text-center">
-            <TrendingUp className="h-4 w-4 mx-auto text-primary" />
-            <p className="text-[10px] text-muted-foreground mt-1">Trung bình/ngày cần đạt</p>
-            <p className="text-sm font-bold mt-0.5">{achieved ? '0₫' : campaignOver ? '—' : vnd(needPerDay)}</p>
+            <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground">
+              <TrendingUp className="h-4 w-4" />
+            </span>
+            <p className="text-[11px] text-muted-foreground mt-1.5">Trung bình/ngày cần đạt</p>
+            <p className="text-sm font-bold mt-0.5 text-primary">{achieved ? '0₫' : campaignOver ? '—' : vnd(needPerDay)}</p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-3 text-center">
-            <Wallet className="h-4 w-4 mx-auto text-green-600" />
-            <p className="text-[10px] text-muted-foreground mt-1">GMV hôm nay</p>
-            <p className="text-sm font-bold mt-0.5">{todayGmv !== null ? vnd(todayGmv) : '—'}</p>
+            <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-green-500 text-white">
+              <Wallet className="h-4 w-4" />
+            </span>
+            <p className="text-[11px] text-muted-foreground mt-1.5">GMV hôm nay</p>
+            <p className={cn('text-sm font-bold mt-0.5', todayGmv !== null && todayGmv > 0 && 'text-green-600')}>
+              {todayGmv !== null ? vnd(todayGmv) : '—'}
+            </p>
           </CardContent>
         </Card>
       </div>
@@ -214,7 +227,7 @@ export function CampaignKpiView({
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 text-sm">
             <p className="py-1"><span className="text-muted-foreground">Chiến dịch: </span><span className="font-medium text-primary">{sel.name}</span></p>
             <p className="py-1"><span className="text-muted-foreground">Phân loại store: </span><span className="font-medium">{sel.store_kpi_group ?? '—'}</span></p>
-            <p className="py-1"><span className="text-muted-foreground">Thời gian áp dụng: </span><span className="font-medium">{formatDate(sel.start_date)} – {formatDate(sel.end_date)}</span></p>
+            <p className="py-1"><span className="text-muted-foreground">Thời gian áp dụng: </span><span className="font-medium text-primary">{formatDate(sel.start_date)} – {formatDate(sel.end_date)}</span></p>
             <p className="py-1"><span className="text-muted-foreground">Vị trí của bạn: </span><span className="font-medium">{roleLabel}</span></p>
           </div>
         </CardContent>
@@ -263,25 +276,47 @@ export function CampaignKpiView({
               </div>
             </div>
 
-            {/* Tier boxes */}
-            <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(tiers.length, 4)}, minmax(0, 1fr))` }}>
-              {tiers.map((t) => {
-                const reached = reachedOrder !== null && t.tier_order <= reachedOrder
-                const isNext = nextTier?.tier_order === t.tier_order
-                return (
-                  <div
-                    key={t.tier_order}
-                    className={cn(
-                      'rounded-lg border p-2 text-center',
-                      reached ? 'border-green-300 bg-green-50' : isNext ? 'border-primary/50 bg-primary/5' : 'bg-muted/20',
-                    )}
-                  >
-                    <p className={cn('text-base font-bold', reached ? 'text-green-700' : isNext ? 'text-primary' : '')}>{t.threshold_pct}%</p>
-                    <p className="text-[10px] text-muted-foreground">Thưởng: <span className="font-semibold text-foreground">{vnd(t.commission_amount)}</span></p>
-                  </div>
-                )
-              })}
-            </div>
+            {/* Tier boxes — grid up to 4 tiers (template layout); 5+ tiers fall
+                back to a vertical list so 360px never gets unreadable slivers */}
+            {tiers.length <= 4 ? (
+              <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(tiers.length, 4)}, minmax(0, 1fr))` }}>
+                {tiers.map((t) => {
+                  const reached = reachedOrder !== null && t.tier_order <= reachedOrder
+                  const isNext = nextTier?.tier_order === t.tier_order
+                  return (
+                    <div
+                      key={t.tier_order}
+                      className={cn(
+                        'rounded-lg border p-2 text-center',
+                        reached ? 'border-green-300 bg-green-50' : isNext ? 'border-primary bg-secondary' : 'bg-muted/20',
+                      )}
+                    >
+                      <p className={cn('text-base font-bold', reached ? 'text-green-700' : isNext ? 'text-primary' : '')}>{t.threshold_pct}%</p>
+                      <p className="text-[10px] text-muted-foreground">Thưởng: <span className={cn('font-semibold', isNext ? 'text-primary' : 'text-foreground')}>{vnd(t.commission_amount)}</span></p>
+                    </div>
+                  )
+                })}
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                {tiers.map((t) => {
+                  const reached = reachedOrder !== null && t.tier_order <= reachedOrder
+                  const isNext = nextTier?.tier_order === t.tier_order
+                  return (
+                    <div
+                      key={t.tier_order}
+                      className={cn(
+                        'flex items-center justify-between gap-2 rounded-lg border px-3 py-2',
+                        reached ? 'border-green-300 bg-green-50' : isNext ? 'border-primary bg-secondary' : 'bg-muted/20',
+                      )}
+                    >
+                      <p className={cn('text-sm font-bold', reached ? 'text-green-700' : isNext ? 'text-primary' : '')}>{t.threshold_pct}%</p>
+                      <p className="text-xs text-muted-foreground">Thưởng: <span className={cn('font-semibold', isNext ? 'text-primary' : 'text-foreground')}>{vnd(t.commission_amount)}</span></p>
+                    </div>
+                  )
+                })}
+              </div>
+            )}
 
             <p className="text-xs text-muted-foreground">
               Đây là <span className="font-medium">tổng commission của Store</span>, chưa phải commission cá nhân — sẽ được phân bổ cho Dược sĩ theo thực công trong tháng.

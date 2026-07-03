@@ -8,10 +8,10 @@
 interface DailyPoint { date: string; gmv: number }
 
 const W = 360
-const H = 150
+const H = 170
 const PAD_L = 34
 const PAD_B = 18
-const PAD_T = 8
+const PAD_T = 16 // room for the value callout above today's bar
 
 const compactVnd = (v: number) =>
   v >= 1_000_000_000 ? `${(v / 1_000_000_000).toFixed(1)}tỷ`
@@ -48,7 +48,7 @@ export function CampaignDailyChart({
   const plotW = W - PAD_L - 4
   const plotH = H - PAD_T - PAD_B
   const slot = plotW / days.length
-  const barW = Math.max(2, Math.min(10, slot - 2)) // ≥2px bar, 2px slot gap
+  const barW = Math.max(3, Math.min(12, slot - 2)) // ≥3px bar, 2px slot gap
   const y = (v: number) => PAD_T + plotH - (v / max) * plotH
 
   // Sparse day ticks: ~6 evenly spaced, always first + last.
@@ -86,6 +86,19 @@ export function CampaignDailyChart({
               >
                 <title>{`${dayNo}/${d.slice(5, 7)}: ${fullVnd(v)}`}</title>
               </rect>
+            )}
+            {/* Selective label: only today's value gets a callout (template) */}
+            {v !== undefined && v > 0 && d === todayISO && (
+              <text
+                x={Math.min(Math.max(cx, PAD_L + 14), W - 18)}
+                y={y(v) - 4}
+                textAnchor="middle"
+                fontSize="8"
+                fontWeight="600"
+                className="fill-primary"
+              >
+                {compactVnd(v)}
+              </text>
             )}
             {showTick && (
               <text x={cx} y={H - 4} textAnchor="middle" fontSize="8" className="fill-muted-foreground">{dayNo}</text>
