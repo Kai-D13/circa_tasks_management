@@ -2,13 +2,16 @@ import 'server-only'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { campaignRangeQuery, loadServiceAccount, runBigQuery } from '@/lib/targets/bigquery'
 
-// KPI Campaign actual-GMV sync. For one campaign: pull SUM(gmv) per pos_code over
-// [start_date, end_date] from BigQuery, join to the campaign's store targets, and
-// snapshot everything the display needs into kpi_campaign_store_actuals:
-//   actual_gmv, run_rate = actual/final_target*100,
+// KPI Campaign actual sync (metric_type='gmv' this phase). For one campaign:
+// pull SUM(gmv) per pos_code over [start_date, end_date] from BigQuery, join to
+// the campaign's store targets, and snapshot everything the display needs into
+// kpi_campaign_store_actuals:
+//   actual_value, run_rate = actual/kpi_target*100,
 //   remaining_target = max(target-actual, 0),
-//   achieved tier = HIGHEST tier with threshold_pct <= run_rate (not cumulative),
-//   achieved_commission_amount = that tier's fixed amount.
+//   achieved tier = HIGHEST tier with threshold_pct <= run_rate (not cumulative;
+//   below the lowest tier → none),
+//   store_commission_pool = that tier's fixed amount — the STORE's total
+//   commission pool per the 07/2026 policy (NOT per-pharmacist money).
 // Shared by the 2h cron (/api/cron/sync-kpi-campaign-actuals) and the super-admin
 // "Đồng bộ ngay" action. Service-role writes (no write RLS on the table).
 
@@ -23,7 +26,7 @@ export async function syncCampaign(campaign: CampaignRef): Promise<SyncResult | 
   // Targets + tiers of this campaign (tiers needed to grade the achieved tier).
   const { data: targets, error: tErr } = await supabaseAdmin
     .from('kpi_campaign_store_targets')
-    .select('store_id, pos_code, final_target, kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
+    .select('store_id, pos_code, kpi_target, kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
     .eq('campaign_id', campaign.id)
   if (tErr) return { error: `Không đọc được targets: ${tErr.message}` }
   if (!targets || targets.length === 0) return { upserted: 0, unmatched: [] }
@@ -48,7 +51,7 @@ export async function syncCampaign(campaign: CampaignRef): Promise<SyncResult | 
     const hit = pos ? actualByPos.get(pos) : undefined
     if (pos && !hit) unmatched.push(pos) // store has a target but no BQ rows yet
     const actual = hit?.gmv ?? 0
-    const target = Number(t.final_target) || 0
+    const target = Number(t.kpi_target) || 0
     const runRate = target > 0 ? Math.round((actual / target) * 100 * 100) / 100 : null
     const tiers = ((t.kpi_campaign_store_tiers ?? []) as { tier_order: number; threshold_pct: number; commission_amount: number }[])
       .filter((x) => runRate !== null && Number(x.threshold_pct) <= runRate)
@@ -57,11 +60,11 @@ export async function syncCampaign(campaign: CampaignRef): Promise<SyncResult | 
     return {
       campaign_id: campaign.id,
       store_id: t.store_id,
-      actual_gmv: actual,
+      actual_value: actual,
       run_rate: runRate,
       remaining_target: Math.max(target - actual, 0),
       achieved_tier_order: achieved?.tier_order ?? null,
-      achieved_commission_amount: achieved ? Number(achieved.commission_amount) : null,
+      store_commission_pool: achieved ? Number(achieved.commission_amount) : null,
       raw_row_count: hit?.rows ?? 0,
       synced_at: syncedAt,
     }

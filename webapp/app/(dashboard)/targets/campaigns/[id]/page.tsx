@@ -17,7 +17,8 @@ const vnd = (n: number) => new Intl.NumberFormat('vi-VN').format(Math.round(n))
 
 interface TierRow { tier_order: number; threshold_pct: number; commission_amount: number }
 interface TargetRow {
-  id: string; store_id: string; pos_code: string | null; final_target: number
+  id: string; store_id: string; pos_code: string | null; kpi_target: number
+  store_kpi_group: string | null
   stores: { name: string } | null
   kpi_campaign_store_tiers: TierRow[]
 }
@@ -40,7 +41,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
   ] = await Promise.all([
     supabase
       .from('kpi_campaign_store_targets')
-      .select('id, store_id, pos_code, final_target, stores(name), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
+      .select('id, store_id, pos_code, kpi_target, store_kpi_group, stores(name), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
       .eq('campaign_id', id)
       .order('pos_code'),
     supabase
@@ -49,7 +50,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
       .eq('campaign_id', id).order('created_at', { ascending: false }).limit(5),
     supabase
       .from('kpi_campaign_store_actuals')
-      .select('store_id, actual_gmv, run_rate, achieved_tier_order, achieved_commission_amount, synced_at')
+      .select('store_id, actual_value, run_rate, achieved_tier_order, store_commission_pool, synced_at')
       .eq('campaign_id', id),
   ])
   // Don't swallow sub-query failures — a broken migration/RLS/query would
@@ -59,7 +60,7 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
 
   const targets = (targetsRaw ?? []) as unknown as TargetRow[]
   const actualByStore = new Map(
-    ((actualsRaw ?? []) as { store_id: string; actual_gmv: number; run_rate: number | null; achieved_tier_order: number | null; achieved_commission_amount: number | null; synced_at: string }[])
+    ((actualsRaw ?? []) as { store_id: string; actual_value: number; run_rate: number | null; achieved_tier_order: number | null; store_commission_pool: number | null; synced_at: string }[])
       .map((a) => [a.store_id, a]),
   )
   const lastSynced = (actualsRaw ?? []).reduce<string | null>(
@@ -111,11 +112,12 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
               <thead>
                 <tr className="border-b bg-muted/40 text-xs text-muted-foreground">
                   <th className="text-left px-4 py-2.5">Cửa hàng</th>
-                  <th className="text-right px-4 py-2.5">Target</th>
+                  <th className="text-left px-4 py-2.5">Phân loại</th>
+                  <th className="text-right px-4 py-2.5">KPI target</th>
                   <th className="text-right px-4 py-2.5">Thực đạt</th>
                   <th className="text-right px-4 py-2.5">%</th>
-                  <th className="text-left px-4 py-2.5">Bậc đạt · Thưởng dự kiến</th>
-                  <th className="text-left px-4 py-2.5">Bậc (mốc % → tiền thưởng)</th>
+                  <th className="text-left px-4 py-2.5">Bậc đạt · Quỹ commission</th>
+                  <th className="text-left px-4 py-2.5">Bậc (mốc % → quỹ commission)</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -124,12 +126,13 @@ export default async function CampaignDetailPage({ params }: { params: Promise<{
                   return (
                     <tr key={t.id} className="hover:bg-muted/30">
                       <td className="px-4 py-2.5 font-medium">{t.stores?.name ?? '—'}{t.pos_code ? ` · ${t.pos_code}` : ''}</td>
-                      <td className="px-4 py-2.5 text-right">{vnd(t.final_target)}</td>
-                      <td className="px-4 py-2.5 text-right">{a ? vnd(a.actual_gmv) : '—'}</td>
+                      <td className="px-4 py-2.5 text-xs">{t.store_kpi_group ?? '—'}</td>
+                      <td className="px-4 py-2.5 text-right">{vnd(t.kpi_target)}</td>
+                      <td className="px-4 py-2.5 text-right">{a ? vnd(a.actual_value) : '—'}</td>
                       <td className="px-4 py-2.5 text-right">{a?.run_rate != null ? `${a.run_rate.toFixed(1)}%` : '—'}</td>
                       <td className="px-4 py-2.5 text-xs">
                         {a?.achieved_tier_order != null
-                          ? <span className="text-green-700 font-medium">Bậc {a.achieved_tier_order} · {vnd(a.achieved_commission_amount ?? 0)}</span>
+                          ? <span className="text-green-700 font-medium">Bậc {a.achieved_tier_order} · {vnd(a.store_commission_pool ?? 0)}</span>
                           : a ? <span className="text-muted-foreground">Chưa đạt bậc</span> : '—'}
                       </td>
                       <td className="px-4 py-2.5 text-xs">
