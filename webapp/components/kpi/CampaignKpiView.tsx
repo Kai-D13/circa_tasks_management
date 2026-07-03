@@ -34,7 +34,9 @@ const vnd = (n: number | null | undefined) =>
   n === null || n === undefined ? '—' : `${new Intl.NumberFormat('vi-VN').format(Math.round(n))}₫`
 
 // % completion ring (server-rendered SVG, theme-aware via stroke tokens).
-function Ring({ pct }: { pct: number }) {
+// Green is reserved for a REACHED commission tier (or >=100%) — on a
+// commission screen, a green 8% would read as "already achieved".
+function Ring({ pct, tierReached }: { pct: number; tierReached: boolean }) {
   const r = 34
   const c = 2 * Math.PI * r
   const clamped = Math.max(0, Math.min(100, pct))
@@ -49,8 +51,9 @@ function Ring({ pct }: { pct: number }) {
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        {/* Template: the ring % reads as achievement → green once moving */}
-        <span className={cn('text-lg font-bold leading-none', clamped > 0 && 'text-green-600')}>{Math.round(pct)}%</span>
+        <span className={cn('text-lg font-bold leading-none', tierReached ? 'text-green-600' : clamped > 0 && 'text-primary')}>
+          {Math.round(pct)}%
+        </span>
         <span className="text-[9px] text-muted-foreground mt-0.5">hoàn thành</span>
       </div>
     </div>
@@ -150,7 +153,7 @@ export function CampaignKpiView({
                 {sel.actual_value === null ? 'Chưa đồng bộ' : vnd(actual)}
               </p>
             </div>
-            <Ring pct={pct} />
+            <Ring pct={pct} tierReached={reachedOrder !== null || pct >= 100} />
           </div>
           <div className="flex items-center gap-2">
             <div className="h-2.5 flex-1 rounded-full bg-muted overflow-hidden">
