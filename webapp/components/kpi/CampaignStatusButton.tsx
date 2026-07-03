@@ -37,9 +37,14 @@ export function CampaignStatusButton({ id, status }: { id: string; status: strin
           {isActive ? <><Pause className="h-3.5 w-3.5" /> Tạm dừng</> : <><Play className="h-3.5 w-3.5" /> Kích hoạt</>}
         </Button>
       )}
+      {/* Delete stays quiet (ghost icon) — a red button per row shouts on the list */}
       {status === 'draft' && (
-        <Button size="sm" variant="outline" onClick={handleDelete} disabled={pending} className="gap-1.5 text-destructive hover:text-destructive">
-          <Trash2 className="h-3.5 w-3.5" /> Xoá
+        <Button
+          size="sm" variant="ghost" onClick={handleDelete} disabled={pending}
+          aria-label="Xoá chiến dịch nháp" title="Xoá chiến dịch nháp"
+          className="px-2 text-muted-foreground hover:text-destructive"
+        >
+          <Trash2 className="h-4 w-4" />
         </Button>
       )}
     </div>

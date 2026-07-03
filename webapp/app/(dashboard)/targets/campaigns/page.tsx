@@ -57,6 +57,12 @@ export default async function CampaignsPage() {
   }
 
   const list = (campaigns ?? []) as { id: string; name: string; start_date: string; end_date: string; status: string; is_test: boolean; updated_at: string }[]
+  const counts = {
+    total: list.length,
+    active: list.filter((c) => c.status === 'active').length,
+    paused: list.filter((c) => c.status === 'paused').length,
+    draft: list.filter((c) => c.status === 'draft').length,
+  }
 
   return (
     <div className="p-4 md:p-6 max-w-5xl space-y-4">
@@ -76,6 +82,28 @@ export default async function CampaignsPage() {
         </p>
       )}
 
+      {/* Summary strip — dashboard feel: how many campaigns, in which states */}
+      {list.length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+          {[
+            { label: 'Tổng chiến dịch', value: counts.total, dot: 'bg-primary' },
+            { label: 'Đang chạy', value: counts.active, dot: 'bg-green-500' },
+            { label: 'Tạm dừng', value: counts.paused, dot: 'bg-amber-500' },
+            { label: 'Nháp', value: counts.draft, dot: 'bg-muted-foreground/40' },
+          ].map((s) => (
+            <Card key={s.label}>
+              <CardContent className="px-3 py-2.5 flex items-center gap-2.5">
+                <span className={cn('h-2 w-2 rounded-full shrink-0', s.dot)} />
+                <div className="min-w-0">
+                  <p className="text-lg font-bold leading-tight">{s.value}</p>
+                  <p className="text-[11px] text-muted-foreground truncate">{s.label}</p>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+
       {list.length === 0 ? (
         <Card><CardContent className="py-12 text-center text-sm text-muted-foreground">Chưa có chiến dịch nào. Bấm “Tạo chiến dịch” để bắt đầu.</CardContent></Card>
       ) : (
@@ -84,43 +112,71 @@ export default async function CampaignsPage() {
             {list.map((c) => {
               const s = STATUS_META[c.status] ?? STATUS_META.draft
               const a = agg.get(c.id) ?? { stores: 0, target: 0, actual: 0, lastSync: null }
+              const synced = a.lastSync !== null
               const pct = a.target > 0 ? (a.actual / a.target) * 100 : 0
+              // Money-screen color rule: grey until synced (0% must not read as a
+              // real result), brand orange while running, green only at ≥100%
+              // (brand guide: green stays a small accent).
+              const barCls = !synced ? 'bg-muted-foreground/30' : pct >= 100 ? 'bg-green-500' : 'bg-primary'
+              const pctCls = !synced ? 'text-muted-foreground' : pct >= 100 ? 'text-green-600' : 'text-primary'
+              const progress = (
+                <div className="flex items-center gap-2">
+                  <div className="h-2 flex-1 rounded-full bg-muted overflow-hidden">
+                    <div className={cn('h-full rounded-full', barCls)} style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
+                  </div>
+                  <span className={cn('text-xs font-semibold w-11 text-right', pctCls)}>{synced ? `${pct.toFixed(1)}%` : '—'}</span>
+                </div>
+              )
               return (
-                <div key={c.id} className="flex items-center gap-4 px-4 py-3.5 border-t first:border-t-0 hover:bg-muted/30 transition-colors">
-                  {/* Name + range + status */}
-                  <div className="min-w-0 flex-[1.4]">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Link href={`/targets/campaigns/${c.id}`} className="font-medium hover:text-primary hover:underline truncate">
-                        {c.name}
+                <div key={c.id} className="px-4 py-3.5 border-t first:border-t-0 hover:bg-muted/30 transition-colors">
+                  <div className="flex items-start md:items-center gap-3">
+                    <span
+                      className={cn(
+                        'hidden sm:flex h-10 w-10 rounded-lg items-center justify-center shrink-0',
+                        c.status === 'active' ? 'bg-primary/10 text-primary' : 'bg-muted text-muted-foreground',
+                      )}
+                    >
+                      <Megaphone className="h-5 w-5" />
+                    </span>
+
+                    {/* Name + range + status */}
+                    <div className="min-w-0 flex-[1.4]">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Link href={`/targets/campaigns/${c.id}`} className="text-[15px] font-semibold hover:text-primary hover:underline truncate">
+                          {c.name}
+                        </Link>
+                        <span className={cn('text-[11px] px-2 py-0.5 rounded-full font-medium shrink-0', s.cls)}>{s.label}</span>
+                        {c.is_test && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 shrink-0">TEST</span>}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {drange(c.start_date, c.end_date)} · {a.stores} cửa hàng
+                        {a.lastSync ? ` · Đồng bộ ${formatDateTime(a.lastSync)}` : ' · Chưa đồng bộ'}
+                      </p>
+                      {/* Mobile: money + progress stay visible — this is a money screen */}
+                      <div className="mt-2 md:hidden space-y-1.5">
+                        <p className="text-sm">
+                          <span className="text-muted-foreground">Mục tiêu </span><span className="font-semibold">{vnd(a.target)}</span>
+                          <span className="text-muted-foreground"> · Đã đạt </span><span className="font-semibold">{synced ? vnd(a.actual) : '—'}</span>
+                        </p>
+                        {progress}
+                      </div>
+                    </div>
+
+                    {/* Targets + actual (desktop) */}
+                    <div className="hidden md:block flex-1 text-sm">
+                      <p><span className="text-muted-foreground">Mục tiêu: </span><span className="font-semibold">{vnd(a.target)}</span></p>
+                      <p><span className="text-muted-foreground">Đã đạt: </span><span className="font-semibold">{synced ? vnd(a.actual) : '—'}</span></p>
+                    </div>
+
+                    {/* Progress (desktop) */}
+                    <div className="hidden md:block w-40 shrink-0">{progress}</div>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <CampaignStatusButton id={c.id} status={c.status} />
+                      <Link href={`/targets/campaigns/${c.id}`} aria-label={`Xem ${c.name}`} className="text-muted-foreground hover:text-primary">
+                        <ChevronRight className="h-4 w-4" />
                       </Link>
-                      <span className={cn('text-[11px] px-2 py-0.5 rounded font-medium shrink-0', s.cls)}>{s.label}</span>
-                      {c.is_test && <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 shrink-0">TEST</span>}
                     </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {drange(c.start_date, c.end_date)} · {a.stores} cửa hàng
-                      {a.lastSync ? ` · Đồng bộ ${formatDateTime(a.lastSync)}` : ' · Chưa đồng bộ'}
-                    </p>
-                  </div>
-
-                  {/* Targets + actual */}
-                  <div className="hidden sm:block flex-1 text-sm">
-                    <p><span className="text-muted-foreground">Mục tiêu: </span><span className="font-semibold">{vnd(a.target)}</span></p>
-                    <p><span className="text-muted-foreground">Đã đạt: </span><span className="font-semibold">{a.lastSync ? vnd(a.actual) : '—'}</span></p>
-                  </div>
-
-                  {/* Progress */}
-                  <div className="hidden md:flex items-center gap-2 w-40 shrink-0">
-                    <div className="h-2 flex-1 rounded-full bg-muted overflow-hidden">
-                      <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
-                    </div>
-                    <span className="text-xs font-semibold text-primary w-11 text-right">{pct.toFixed(1)}%</span>
-                  </div>
-
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    <CampaignStatusButton id={c.id} status={c.status} />
-                    <Link href={`/targets/campaigns/${c.id}`} aria-label={`Xem ${c.name}`} className="text-muted-foreground hover:text-primary">
-                      <ChevronRight className="h-4 w-4" />
-                    </Link>
                   </div>
                 </div>
               )
