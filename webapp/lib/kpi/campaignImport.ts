@@ -4,20 +4,28 @@ import 'server-only'
 // weekly-targets normalizeRow (different shape) so a future template change only
 // touches this module. Pure: takes raw rows + a pos_code→store_id map.
 //
-// Expected columns (canonicalized): pos_code, final_target, optional pos_name/note,
-// and dynamic tier pairs tier_1_threshold_pct / tier_1_commission (FIXED AMOUNT,
-// v2), tier_2_*, … The legacy header tier_N_commission_pct is still accepted as
-// an alias so files made for Phase 1 don't break.
+// v3 policy-model columns (canonicalized): pos_code, kpi_target, store_kpi_group
+// (REQUIRED — the store's policy classification label, free text), optional
+// pos_name/note, and dynamic tier pairs tier_N_threshold_pct /
+// tier_N_commission_amount (fixed amount = the STORE's commission POOL at that
+// tier). Transition aliases still read: final_target, tier_N_commission,
+// tier_N_commission_pct — but the UI/template only advertise the new format.
 
 export interface CampaignTierInput { tier_order: number; threshold_pct: number; commission_amount: number }
 export interface CampaignTargetInput {
   store_id: string
   pos_code: string
-  final_target: number
+  kpi_target: number
+  store_kpi_group: string
   import_row: number
   note: string | null
   tiers: CampaignTierInput[]
 }
+
+// The policy email defines groups with OVERLAPPING boundaries (200tr sits in both
+// "<200tr" and "<300tr") — a target exactly on a boundary is ambiguous, so the
+// import BLOCKS it and the admin nudges the number per policy.
+const GROUP_BOUNDARIES = [200_000_000, 300_000_000, 500_000_000, 800_000_000, 1_000_000_000]
 export interface CampaignImportResult {
   valid: CampaignTargetInput[]
   invalid: { row: number; pos_code: string | null; error: string }[]
@@ -44,7 +52,8 @@ export function parseCampaignRows(
   if (rawRows.length === 0) return { error: 'File không có dòng dữ liệu nào' }
   const headerKeys = new Set(Object.keys(rawRows[0]).map(canon))
   if (!headerKeys.has('poscode')) return { error: 'Thiếu cột pos_code' }
-  if (!headerKeys.has('finaltarget')) return { error: 'Thiếu cột final_target' }
+  if (!headerKeys.has('kpitarget') && !headerKeys.has('finaltarget')) return { error: 'Thiếu cột kpi_target' }
+  if (!headerKeys.has('storekpigroup')) return { error: 'Thiếu cột store_kpi_group (phân loại Store theo KPI)' }
 
   const valid: CampaignTargetInput[] = []
   const invalid: { row: number; pos_code: string | null; error: string }[] = []
@@ -57,8 +66,8 @@ export function parseCampaignRows(
     for (const [k, v] of Object.entries(raw)) lo[canon(k)] = v
 
     const posCode = str(lo['poscode'])?.toUpperCase() ?? null
-    const finalTargetRaw = num(lo['finaltarget'])
-    if (!posCode && finalTargetRaw === null) return // fully-empty row → skip
+    const kpiTargetRaw = num(lo['kpitarget']) ?? num(lo['finaltarget']) // alias: v2 files
+    if (!posCode && kpiTargetRaw === null) return // fully-empty row → skip
 
     if (!posCode) { invalid.push({ row: rowNo, pos_code: null, error: 'Thiếu pos_code' }); return }
     if (seen.has(posCode)) { invalid.push({ row: rowNo, pos_code: posCode, error: 'pos_code trùng trong file' }); return }
@@ -67,15 +76,22 @@ export function parseCampaignRows(
     const storeId = byCode.get(posCode)
     if (!storeId) { unmatched.add(posCode); invalid.push({ row: rowNo, pos_code: posCode, error: 'pos_code không có trong hệ thống' }); return }
 
-    if (finalTargetRaw === null || finalTargetRaw <= 0) { invalid.push({ row: rowNo, pos_code: posCode, error: 'final_target phải > 0' }); return }
+    if (kpiTargetRaw === null || kpiTargetRaw <= 0) { invalid.push({ row: rowNo, pos_code: posCode, error: 'kpi_target phải > 0' }); return }
+    if (GROUP_BOUNDARIES.includes(kpiTargetRaw)) {
+      invalid.push({ row: rowNo, pos_code: posCode, error: `kpi_target = ${kpiTargetRaw.toLocaleString('vi-VN')} trùng ranh giới nhóm KPI — chỉnh lại theo policy (nhóm bị chồng biên)` })
+      return
+    }
 
-    // Dynamic tiers: read pairs until both empty. Commission = fixed amount
-    // (tier_N_commission); legacy tier_N_commission_pct accepted as alias.
+    const storeKpiGroup = str(lo['storekpigroup'])
+    if (!storeKpiGroup) { invalid.push({ row: rowNo, pos_code: posCode, error: 'Thiếu store_kpi_group (phân loại Store)' }); return }
+
+    // Dynamic tiers: read pairs until both empty. Commission = fixed POOL amount
+    // (tier_N_commission_amount); v2/v1 aliases accepted.
     const tiers: CampaignTierInput[] = []
     let tierErr: string | null = null
     for (let n = 1; n <= MAX_TIERS; n++) {
       const th = num(lo[`tier${n}thresholdpct`])
-      const cm = num(lo[`tier${n}commission`]) ?? num(lo[`tier${n}commissionpct`])
+      const cm = num(lo[`tier${n}commissionamount`]) ?? num(lo[`tier${n}commission`]) ?? num(lo[`tier${n}commissionpct`])
       if (th === null && cm === null) break
       if (th === null || cm === null) { tierErr = `Bậc ${n}: thiếu mốc % hoặc tiền thưởng`; break }
       if (th <= 0) { tierErr = `Bậc ${n}: mốc % phải > 0`; break }
@@ -91,7 +107,7 @@ export function parseCampaignRows(
       }
     }
 
-    valid.push({ store_id: storeId, pos_code: posCode, final_target: finalTargetRaw, import_row: rowNo, note: str(lo['note']), tiers })
+    valid.push({ store_id: storeId, pos_code: posCode, kpi_target: kpiTargetRaw, store_kpi_group: storeKpiGroup, import_row: rowNo, note: str(lo['note']), tiers })
   })
 
   return { valid, invalid, unmatched: [...unmatched] }

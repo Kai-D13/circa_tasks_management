@@ -39,6 +39,8 @@ export async function createCampaign(input: { name: string; start_date: string; 
       start_date: input.start_date,
       end_date: input.end_date,
       scope_type: 'store',
+      metric_type: 'gmv',   // phase 1: GMV only (other metrics = "Sắp có")
+      order_type: 'all',    // online/offline reserved until BI provides a field
       status: 'draft',
       is_test: isKpiCampaignTestMode(),
       created_by: auth.user.id,

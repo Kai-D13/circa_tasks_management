@@ -12,21 +12,22 @@ import { Download } from 'lucide-react'
 // without asking dev. Keep in sync with the parser (lib/kpi/campaignImport.ts).
 const COLUMN_GUIDE: { col: string; meaning: string; example: string; optional?: boolean }[] = [
   { col: 'pos_code', meaning: 'Mã cửa hàng', example: 'POS0059' },
-  { col: 'final_target', meaning: 'Target doanh số toàn chiến dịch', example: '100000000' },
-  { col: 'tier_1_threshold_pct', meaning: 'Mốc đạt target bậc 1 (%)', example: '90' },
-  { col: 'tier_1_commission', meaning: 'Tiền thưởng bậc 1 (số tiền)', example: '1000000' },
-  { col: 'tier_2_threshold_pct', meaning: 'Mốc đạt target bậc 2 (%)', example: '100' },
-  { col: 'tier_2_commission', meaning: 'Tiền thưởng bậc 2 (số tiền)', example: '2000000' },
-  { col: 'tier_3_threshold_pct', meaning: 'Mốc đạt target bậc 3 (%)', example: '105' },
-  { col: 'tier_3_commission', meaning: 'Tiền thưởng bậc 3 (số tiền)', example: '3000000' },
+  { col: 'kpi_target', meaning: 'KPI doanh số của Store trong kỳ chiến dịch', example: '450000000' },
+  { col: 'store_kpi_group', meaning: 'Phân loại Store theo KPI (nhãn hiển thị)', example: 'Nhỏ hơn 500 triệu' },
+  { col: 'tier_1_threshold_pct', meaning: 'Mốc đạt KPI bậc 1 (%)', example: '90' },
+  { col: 'tier_1_commission_amount', meaning: 'Quỹ commission Store bậc 1 (số tiền)', example: '15000000' },
+  { col: 'tier_2_threshold_pct', meaning: 'Mốc đạt KPI bậc 2 (%)', example: '100' },
+  { col: 'tier_2_commission_amount', meaning: 'Quỹ commission Store bậc 2 (số tiền)', example: '20800000' },
+  { col: 'tier_3_threshold_pct', meaning: 'Mốc đạt KPI bậc 3 (%)', example: '105' },
+  { col: 'tier_3_commission_amount', meaning: 'Quỹ commission Store bậc 3 (số tiền)', example: '26300000' },
   { col: 'pos_name', meaning: 'Tên cửa hàng', example: 'CIRCA TAM VIET', optional: true },
   { col: 'note', meaning: 'Ghi chú', example: 'Demo', optional: true },
 ]
 
 const SAMPLE_CSV = [
-  'pos_code,final_target,tier_1_threshold_pct,tier_1_commission,tier_2_threshold_pct,tier_2_commission,tier_3_threshold_pct,tier_3_commission,pos_name,note',
-  'POS0059,100000000,90,1000000,100,2000000,105,3000000,CIRCA TAM VIET,Demo',
-  'POS0009,80000000,90,1000000,100,2000000,105,3000000,CIRCA CENTRAL,Demo',
+  'pos_code,kpi_target,store_kpi_group,tier_1_threshold_pct,tier_1_commission_amount,tier_2_threshold_pct,tier_2_commission_amount,tier_3_threshold_pct,tier_3_commission_amount,pos_name,note',
+  'POS0059,450000000,Nhỏ hơn 500 triệu,90,15000000,100,20800000,105,26300000,CIRCA TAM VIET,Demo',
+  'POS0009,250000000,Nhỏ hơn 300 triệu,90,10600000,100,14700000,105,18500000,CIRCA CENTRAL,Demo',
 ].join('\n')
 
 function downloadTemplate() {
@@ -46,7 +47,7 @@ interface Preview {
   validCount: number
   invalid: { row: number; pos_code: string | null; error: string }[]
   unmatched: string[]
-  preview: { pos_code: string; final_target: number; tiers: { threshold_pct: number; commission_amount: number }[] }[]
+  preview: { pos_code: string; kpi_target: number; store_kpi_group: string; tiers: { threshold_pct: number; commission_amount: number }[] }[]
 }
 
 const vnd = (n: number) => new Intl.NumberFormat('vi-VN').format(Math.round(n))
@@ -113,7 +114,7 @@ export function CampaignImport({ campaignId, redirectTo }: { campaignId: string;
               </tbody>
             </table>
           </div>
-          <p className="text-muted-foreground">Cần thêm bậc? Thêm cặp cột <code>tier_4_threshold_pct</code> / <code>tier_4_commission</code>… (mốc phải tăng dần).</p>
+          <p className="text-muted-foreground">Cần thêm bậc? Thêm cặp cột <code>tier_4_threshold_pct</code> / <code>tier_4_commission_amount</code>… (mốc phải tăng dần). Số tiền là <span className="font-medium">tổng quỹ commission của Store</span>, không phải tiền từng dược sĩ. Lưu ý: <code>kpi_target</code> không được trùng đúng ranh giới nhóm (200/300/500/800 triệu, 1 tỷ).</p>
         </div>
       </details>
 
@@ -161,15 +162,17 @@ export function CampaignImport({ campaignId, redirectTo }: { campaignId: string;
                 <thead className="bg-muted/40">
                   <tr>
                     <th className="text-left px-3 py-2">POS</th>
-                    <th className="text-right px-3 py-2">Target</th>
-                    <th className="text-left px-3 py-2">Bậc (mốc % → tiền thưởng)</th>
+                    <th className="text-left px-3 py-2">Phân loại</th>
+                    <th className="text-right px-3 py-2">KPI target</th>
+                    <th className="text-left px-3 py-2">Bậc (mốc % → quỹ commission)</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
                   {preview.preview.map((r) => (
                     <tr key={r.pos_code}>
                       <td className="px-3 py-1.5 font-medium">{r.pos_code}</td>
-                      <td className="px-3 py-1.5 text-right">{vnd(r.final_target)}</td>
+                      <td className="px-3 py-1.5">{r.store_kpi_group}</td>
+                      <td className="px-3 py-1.5 text-right">{vnd(r.kpi_target)}</td>
                       <td className="px-3 py-1.5">{r.tiers.map((t) => `${t.threshold_pct}% → ${vnd(t.commission_amount)}`).join('  ·  ')}</td>
                     </tr>
                   ))}
