@@ -59,9 +59,12 @@ DECLARE
   v_row   jsonb;
   v_count integer := 0;
 BEGIN
-  -- Replace-all daily rows (WHERE'd delete — pg_safeupdate-safe; also clears
-  -- ghosts when the new payload is empty).
+  -- Replace-all BOTH tables (WHERE'd deletes — pg_safeupdate-safe; also clears
+  -- ghosts when payloads are empty). Aggregate rows of stores REMOVED from the
+  -- campaign (re-import with fewer stores) must not keep contributing to the
+  -- totals on the Kết quả tab / campaign list.
   DELETE FROM public.kpi_campaign_store_daily_actuals WHERE campaign_id = p_campaign_id;
+  DELETE FROM public.kpi_campaign_store_actuals       WHERE campaign_id = p_campaign_id;
 
   INSERT INTO public.kpi_campaign_store_daily_actuals (campaign_id, store_id, date, gmv, synced_at)
   SELECT p_campaign_id,
@@ -102,6 +105,96 @@ BEGIN
 END $$;
 REVOKE ALL ON FUNCTION public.rpc_replace_campaign_actuals(uuid, jsonb, jsonb) FROM public;
 GRANT EXECUTE ON FUNCTION public.rpc_replace_campaign_actuals(uuid, jsonb, jsonb) TO service_role;
+
+-- FINAL version of the import RPC (supersedes 071's — defined here because it
+-- now touches the daily table created above): identical body PLUS clearing the
+-- campaign's actual snapshots + daily series in the SAME transaction. A target
+-- re-import invalidates every previously computed number (they were graded
+-- against the OLD targets/tiers); the UI then shows "Chưa đồng bộ doanh số"
+-- until the next "Đồng bộ doanh số từ BI".
+CREATE OR REPLACE FUNCTION public.rpc_replace_campaign_targets(
+  p_campaign_id uuid,
+  p_rows        jsonb,   -- [{store_id, pos_code, kpi_target, store_kpi_group, import_row, note, tiers:[{tier_order, threshold_pct, commission_amount}]}]
+  p_file_name   text DEFAULT NULL,
+  p_uploaded_by uuid DEFAULT NULL
+) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_row       jsonb;
+  v_tier      jsonb;
+  v_target_id uuid;
+  v_count     integer := 0;
+  v_status    text;
+  v_tiers     integer;
+  v_kt        numeric;
+  v_group     text;
+  v_th        numeric;
+  v_cm        numeric;
+  v_prev_th   numeric;
+BEGIN
+  SELECT status INTO v_status FROM public.kpi_campaigns WHERE id = p_campaign_id;
+  IF v_status IS NULL THEN RAISE EXCEPTION 'Campaign % không tồn tại', p_campaign_id; END IF;
+  IF v_status NOT IN ('draft', 'paused') THEN
+    RAISE EXCEPTION 'Chỉ nạp target khi chiến dịch draft/paused (hiện: %)', v_status;
+  END IF;
+
+  DELETE FROM public.kpi_campaign_store_targets WHERE campaign_id = p_campaign_id;
+
+  FOR v_row IN SELECT * FROM jsonb_array_elements(p_rows)
+  LOOP
+    v_kt := (v_row->>'kpi_target')::numeric;
+    IF v_kt IS NULL OR v_kt <= 0 THEN RAISE EXCEPTION 'kpi_target phải > 0'; END IF;
+    v_group := NULLIF(trim(coalesce(v_row->>'store_kpi_group', '')), '');
+    IF v_group IS NULL THEN RAISE EXCEPTION 'store_kpi_group là bắt buộc'; END IF;
+
+    INSERT INTO public.kpi_campaign_store_targets
+      (campaign_id, store_id, pos_code, kpi_target, store_kpi_group, import_row, note)
+    VALUES (
+      p_campaign_id,
+      (v_row->>'store_id')::uuid,
+      v_row->>'pos_code',
+      v_kt,
+      v_group,
+      NULLIF(v_row->>'import_row', '')::integer,
+      NULLIF(v_row->>'note', '')
+    )
+    RETURNING id INTO v_target_id;
+
+    v_tiers := 0;
+    v_prev_th := NULL;
+    FOR v_tier IN SELECT * FROM jsonb_array_elements(coalesce(v_row->'tiers', '[]'::jsonb))
+    LOOP
+      v_th := (v_tier->>'threshold_pct')::numeric;
+      v_cm := (v_tier->>'commission_amount')::numeric;
+      IF v_th IS NULL OR v_th <= 0 THEN RAISE EXCEPTION 'threshold_pct phải > 0'; END IF;
+      IF v_prev_th IS NOT NULL AND v_th <= v_prev_th THEN
+        RAISE EXCEPTION 'threshold các bậc phải tăng dần (% <= %)', v_th, v_prev_th;
+      END IF;
+      IF v_cm IS NULL OR v_cm < 0 THEN RAISE EXCEPTION 'commission_amount phải >= 0'; END IF;
+      INSERT INTO public.kpi_campaign_store_tiers
+        (target_id, tier_order, threshold_pct, commission_amount)
+      VALUES (v_target_id, (v_tier->>'tier_order')::integer, v_th, v_cm);
+      v_prev_th := v_th;
+      v_tiers := v_tiers + 1;
+    END LOOP;
+    IF v_tiers = 0 THEN RAISE EXCEPTION 'Mỗi target cần ít nhất 1 bậc'; END IF;
+
+    v_count := v_count + 1;
+  END LOOP;
+
+  INSERT INTO public.kpi_campaign_import_runs
+    (campaign_id, file_name, uploaded_by, row_count, success_count, error_count)
+  VALUES (p_campaign_id, p_file_name, p_uploaded_by, v_count, v_count, 0);
+
+  -- Targets changed → every previously computed actual/pool is stale. Clear in
+  -- the same tx; next sync repopulates.
+  DELETE FROM public.kpi_campaign_store_actuals       WHERE campaign_id = p_campaign_id;
+  DELETE FROM public.kpi_campaign_store_daily_actuals WHERE campaign_id = p_campaign_id;
+
+  UPDATE public.kpi_campaigns SET updated_at = now() WHERE id = p_campaign_id;
+  RETURN v_count;
+END $$;
+REVOKE ALL ON FUNCTION public.rpc_replace_campaign_targets(uuid, jsonb, text, uuid) FROM public;
+GRANT EXECUTE ON FUNCTION public.rpc_replace_campaign_targets(uuid, jsonb, text, uuid) TO service_role;
 
 INSERT INTO public.app_migrations (version, name, notes)
 VALUES ('072', 'kpi_campaign_daily_actuals',

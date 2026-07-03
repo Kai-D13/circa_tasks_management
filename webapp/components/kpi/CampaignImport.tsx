@@ -77,7 +77,12 @@ export function CampaignImport({ campaignId, redirectTo }: { campaignId: string;
     startTransition(async () => {
       const r = await commitCampaignImport(campaignId, fd)
       if ('error' in r && r.error) { toast.error(r.error); return }
-      toast.success(`Đã nạp ${(r as { upserted?: number }).upserted ?? ''} cửa hàng`)
+      // Import clears previous actuals server-side (stale vs new targets) — tell
+      // the admin the next step explicitly.
+      toast.success(
+        `Đã nạp ${(r as { upserted?: number }).upserted ?? ''} cửa hàng — kết quả cũ đã được xoá, bấm "Đồng bộ doanh số từ BI" ở tab Kết quả để cập nhật`,
+        { duration: 8000 },
+      )
       if (redirectTo) router.push(redirectTo)
       else { setFile(null); setPreview(null); router.refresh() }
     })
