@@ -11,7 +11,7 @@ import { SyncActualsButton } from '@/components/kpi/SyncActualsButton'
 import { STATUS_META } from '@/lib/kpi/status'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
-import { ChevronLeft } from 'lucide-react'
+import { ChevronLeft, Target, TrendingUp, Percent, Wallet, Award, CalendarDays, type LucideIcon } from 'lucide-react'
 
 // Campaign detail — ONE url, TWO tabs (?tab=):
 //   config → campaign info + import + the IMPORTED configuration only
@@ -133,8 +133,8 @@ export default async function CampaignDetailPage({
         <div className="flex items-center justify-between gap-3 flex-wrap mt-1">
           <div className="flex items-center gap-2 flex-wrap">
             <h1 className="text-xl font-semibold">{c.name}</h1>
-            <span className={cn('text-xs px-2 py-0.5 rounded font-medium', s.cls)}>{s.label}</span>
-            {c.is_test && <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">TEST</span>}
+            <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', s.cls)}>{s.label}</span>
+            {c.is_test && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700">TEST</span>}
           </div>
           <CampaignStatusButton id={c.id} status={c.status} />
         </div>
@@ -143,7 +143,7 @@ export default async function CampaignDetailPage({
         </p>
         {queryError && (
           <p className="text-sm text-destructive mt-1">
-            Lỗi truy vấn dữ liệu: {queryError} — kiểm tra migration 070/071 đã apply chưa.
+            Lỗi truy vấn dữ liệu: {queryError} — kiểm tra migration 070/071/072 đã apply chưa.
           </p>
         )}
       </div>
@@ -160,7 +160,7 @@ export default async function CampaignDetailPage({
             <Card>
               <CardContent className="p-4">
                 <p className="text-sm font-medium mb-2">Nạp / cập nhật target (thay toàn bộ)</p>
-                <CampaignImport campaignId={c.id} />
+                <CampaignImport campaignId={c.id} guideDefaultOpen={targets.length === 0} />
               </CardContent>
             </Card>
           )}
@@ -211,25 +211,46 @@ export default async function CampaignDetailPage({
         <>
           {/* ── Kết quả ── */}
           <div className="flex items-center justify-between gap-2 flex-wrap">
-            <p className="text-xs text-muted-foreground">
+            <span className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground">
+              <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', lastSynced ? 'bg-green-500' : 'bg-amber-500')} />
               {lastSynced ? `Doanh số đồng bộ ${formatDateTime(lastSynced)}` : 'Chưa đồng bộ doanh số'}
-            </p>
+            </span>
             <SyncActualsButton campaignId={c.id} />
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            {[
-              { label: 'Tổng KPI target', value: vnd(totalTarget) },
-              { label: 'Tổng actual GMV', value: lastSynced ? vnd(totalActual) : '—' },
-              { label: 'Hoàn thành', value: lastSynced ? `${totalPct.toFixed(1)}%` : '—' },
-              { label: 'Tổng commission đạt', value: lastSynced ? vnd(totalPool) : '—' },
-              { label: 'Store đạt bậc', value: lastSynced ? `${reachedCount}/${targets.length}` : '—' },
-              { label: 'Thời hạn', value: deadlineLabel },
-            ].map((card) => (
+            {([
+              { label: 'Tổng KPI target', value: vnd(totalTarget), icon: Target, tile: 'bg-primary/10 text-primary' },
+              { label: 'Tổng actual GMV', value: lastSynced ? vnd(totalActual) : '—', icon: TrendingUp,
+                tile: lastSynced && totalActual > 0 ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground' },
+              { label: 'Hoàn thành', value: lastSynced ? `${totalPct.toFixed(1)}%` : '—', icon: Percent,
+                tile: 'bg-primary/10 text-primary', bar: true,
+                valueCls: !lastSynced ? undefined : totalPct >= 100 ? 'text-green-600' : 'text-primary' },
+              { label: 'Tổng commission đạt', value: lastSynced ? vnd(totalPool) : '—', icon: Wallet,
+                tile: lastSynced && totalPool > 0 ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground',
+                valueCls: lastSynced && totalPool > 0 ? 'text-green-600' : undefined },
+              { label: 'Store đạt bậc', value: lastSynced ? `${reachedCount}/${targets.length}` : '—', icon: Award, tile: 'bg-primary/10 text-primary' },
+              { label: 'Thời hạn', value: deadlineLabel, icon: CalendarDays, tile: 'bg-muted text-muted-foreground' },
+            ] as { label: string; value: string; icon: LucideIcon; tile: string; valueCls?: string; bar?: boolean }[]).map((card) => (
               <Card key={card.label}>
                 <CardContent className="p-3">
-                  <p className="text-[11px] text-muted-foreground uppercase">{card.label}</p>
-                  <p className="text-lg font-bold mt-0.5">{card.value}</p>
+                  <div className="flex items-start gap-2.5">
+                    <span className={cn('h-8 w-8 rounded-full flex items-center justify-center shrink-0', card.tile)}>
+                      <card.icon className="h-4 w-4" />
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[11px] text-muted-foreground uppercase truncate">{card.label}</p>
+                      <p className={cn('text-lg font-bold mt-0.5 leading-tight', card.valueCls)}>{card.value}</p>
+                      {card.bar && lastSynced && (
+                        <div className="mt-1.5 h-1.5 rounded-full bg-muted overflow-hidden">
+                          <div
+                            className={cn('h-full rounded-full', totalPct >= 100 ? 'bg-green-500' : 'bg-primary')}
+                            style={{ width: `${Math.min(100, Math.max(0, totalPct))}%` }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </CardContent>
               </Card>
             ))}
@@ -260,12 +281,34 @@ export default async function CampaignDetailPage({
                           <td className="px-4 py-2.5 text-xs">{t.store_kpi_group ?? '—'}</td>
                           <td className="px-4 py-2.5 text-right">{vnd(t.kpi_target)}</td>
                           <td className="px-4 py-2.5 text-right">{a ? vnd(a.actual_value) : '—'}</td>
-                          <td className="px-4 py-2.5 text-right">{a?.run_rate != null ? `${a.run_rate.toFixed(1)}%` : '—'}</td>
+                          <td className="px-4 py-2.5">
+                            {a?.run_rate != null ? (
+                              <div className="flex items-center justify-end gap-2">
+                                <div className="h-1.5 w-14 rounded-full bg-muted overflow-hidden shrink-0">
+                                  <div
+                                    className={cn('h-full rounded-full', a.run_rate >= 100 ? 'bg-green-500' : 'bg-primary')}
+                                    style={{ width: `${Math.min(100, Math.max(0, a.run_rate))}%` }}
+                                  />
+                                </div>
+                                <span className={cn('text-xs font-semibold', a.run_rate >= 100 ? 'text-green-600' : 'text-primary')}>
+                                  {a.run_rate.toFixed(1)}%
+                                </span>
+                              </div>
+                            ) : <span className="block text-right">—</span>}
+                          </td>
                           <td className="px-4 py-2.5 text-right">{remaining != null ? vnd(remaining) : '—'}</td>
-                          <td className="px-4 py-2.5 text-xs">
+                          <td className="px-4 py-2.5">
                             {a?.achieved_tier_order != null
-                              ? <span className="text-green-700 font-medium">Bậc {a.achieved_tier_order} · {vnd(a.store_commission_pool ?? 0)}</span>
-                              : a ? <span className="text-muted-foreground">Chưa đạt bậc</span> : '—'}
+                              ? (
+                                <span className="inline-flex items-center whitespace-nowrap rounded-full bg-green-100 text-green-700 px-2 py-0.5 text-[11px] font-medium">
+                                  Bậc {a.achieved_tier_order} · {vnd(a.store_commission_pool ?? 0)}
+                                </span>
+                              )
+                              : a ? (
+                                <span className="inline-flex items-center whitespace-nowrap rounded-full bg-muted text-muted-foreground px-2 py-0.5 text-[11px]">
+                                  Chưa đạt bậc
+                                </span>
+                              ) : '—'}
                           </td>
                         </tr>
                       )

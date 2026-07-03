@@ -4,9 +4,9 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { previewCampaignImport, commitCampaignImport } from '@/app/actions/kpiCampaigns'
-import { Button } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { Download } from 'lucide-react'
+import { Download, FileUp, X } from 'lucide-react'
 
 // Column guide (business language) + a downloadable sample so ops fills the file
 // without asking dev. Keep in sync with the parser (lib/kpi/campaignImport.ts).
@@ -55,10 +55,19 @@ const vnd = (n: number) => new Intl.NumberFormat('vi-VN').format(Math.round(n))
 // Reusable XLSX import (upload → preview → confirm). Used by the create wizard
 // and the campaign detail re-import. Holds the File client-side so both the
 // preview and the confirm re-send it (commit re-parses server-side).
-export function CampaignImport({ campaignId, redirectTo }: { campaignId: string; redirectTo?: string }) {
+export function CampaignImport({
+  campaignId, redirectTo, guideDefaultOpen = true,
+}: {
+  campaignId: string
+  redirectTo?: string
+  /** Pass false when the campaign already has targets — the format guide then
+      starts collapsed instead of dominating the config tab. */
+  guideDefaultOpen?: boolean
+}) {
   const router = useRouter()
   const [file, setFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<Preview | null>(null)
+  const [guideOpen, setGuideOpen] = useState(guideDefaultOpen)
   const [pending, startTransition] = useTransition()
 
   function doPreview() {
@@ -93,7 +102,11 @@ export function CampaignImport({ campaignId, redirectTo }: { campaignId: string;
   return (
     <div className="space-y-3">
       {/* Column guide (collapsible) + sample download — business language */}
-      <details open className="rounded-md border bg-muted/20 text-xs">
+      <details
+        open={guideOpen}
+        onToggle={(e) => setGuideOpen((e.currentTarget as HTMLDetailsElement).open)}
+        className="rounded-md border bg-muted/20 text-xs"
+      >
         <summary className="cursor-pointer px-3 py-2 font-medium select-none">
           Hướng dẫn định dạng file Excel
         </summary>
@@ -125,13 +138,36 @@ export function CampaignImport({ campaignId, redirectTo }: { campaignId: string;
       </details>
 
       <div className="flex flex-wrap items-center gap-2">
+        {/* Native file input stays for a11y but hidden — the browser's English
+            "Choose File / No file chosen" broke the Vietnamese-only screen. */}
         <input
+          id={`campaign-file-${campaignId}`}
           type="file"
           aria-label="Chọn file Excel target chiến dịch"
           accept=".xlsx,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,text/csv"
+          onClick={(e) => { (e.currentTarget as HTMLInputElement).value = '' }}
           onChange={(e) => { setFile(e.target.files?.[0] ?? null); setPreview(null) }}
-          className="text-sm"
+          className="sr-only"
         />
+        <label
+          htmlFor={`campaign-file-${campaignId}`}
+          className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'cursor-pointer gap-1.5')}
+        >
+          <FileUp className="h-3.5 w-3.5" /> Chọn file Excel/CSV
+        </label>
+        {file && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-secondary text-secondary-foreground text-xs font-medium pl-2.5 pr-1 py-1 max-w-[240px]">
+            <span className="truncate">{file.name}</span>
+            <button
+              type="button"
+              aria-label="Bỏ chọn file"
+              onClick={() => { setFile(null); setPreview(null) }}
+              className="rounded-full p-0.5 hover:bg-primary/10"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        )}
         <Button size="sm" variant="ghost" onClick={downloadTemplate} className="gap-1.5">
           <Download className="h-3.5 w-3.5" /> Tải file mẫu CSV
         </Button>
