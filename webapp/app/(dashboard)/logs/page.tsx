@@ -37,6 +37,9 @@ export default async function LogsPage({
 
   const { data: profile } = await supabase
     .from('users').select('role, store_id').eq('id', user.id).single()
+  // Staff no longer have the activity log (removed from nav to lighten the mobile
+  // app) — bounce them even on a direct URL, mirroring the peer-page guards.
+  if (profile?.role === 'staff') redirect('/tasks')
   const isAdmin   = profile?.role === 'admin'
   const isManager = profile?.role === 'store_manager'
   const isStaff   = profile?.role === 'staff'

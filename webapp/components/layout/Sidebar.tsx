@@ -73,7 +73,7 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false }:
     { href: '/prescriptions',    label: 'Toa thuốc',    icon: FileImage,       roles: ['admin', 'store_manager', 'staff'],       prefetch: false },
     { href: '/announcements',    label: 'Bảng tin',     icon: Megaphone,       roles: ['admin', 'store_manager', 'staff', 'sm'], prefetch: false },
     { href: '/gioi-thieu',       label: 'Giới thiệu',   icon: Gift,            roles: ['admin'],                                 prefetch: false, superAdmin: true },
-    { href: '/logs',             label: 'Nhật ký',      icon: ScrollText,      roles: ['admin', 'store_manager', 'staff', 'sm'], prefetch: false },
+    { href: '/logs',             label: 'Nhật ký',      icon: ScrollText,      roles: ['admin', 'store_manager', 'sm'], prefetch: false },
   ]
 
   const isSuper = isSuperAdmin(profile?.email, role)

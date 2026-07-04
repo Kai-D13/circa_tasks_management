@@ -27,7 +27,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: '/targets',       label: 'Doanh số',  icon: TrendingUp,      roles: ['store_manager'] },
   { href: '/users',         label: 'Users',      icon: Users,           roles: ['admin'] },
   { href: '/stores',        label: 'Cửa hàng',  icon: Store,           roles: ['admin', 'store_manager'] },
-  { href: '/logs',          label: 'Nhật ký',   icon: ScrollText,      roles: ['admin', 'store_manager', 'staff'] },
+  { href: '/logs',          label: 'Nhật ký',   icon: ScrollText,      roles: ['admin', 'store_manager'] },
 ]
 
 const MAX_PRIMARY = 4
