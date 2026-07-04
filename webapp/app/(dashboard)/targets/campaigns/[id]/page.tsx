@@ -11,7 +11,7 @@ import { SyncActualsButton } from '@/components/kpi/SyncActualsButton'
 import { STATUS_META } from '@/lib/kpi/status'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
-import { ChevronLeft, Target, TrendingUp, Percent, Wallet, Award, CalendarDays, type LucideIcon } from 'lucide-react'
+import { ChevronLeft, Target, TrendingUp, Percent, Wallet, Award, CalendarDays, SlidersHorizontal, BarChart3, type LucideIcon } from 'lucide-react'
 
 // Campaign detail — ONE url, TWO tabs (?tab=):
 //   config → campaign info + import + the IMPORTED configuration only
@@ -112,14 +112,19 @@ export default async function CampaignDetailPage({
   const totalPool = actuals.reduce((sum, a) => sum + (Number(a.store_commission_pool) || 0), 0)
   const reachedCount = actuals.filter((a) => a.achieved_tier_order !== null).length
 
-  const tabLink = (t: 'config' | 'result', label: string) => (
+  // Branded segmented control (review r2): active = Circa coral, inactive =
+  // coral text on the tinted track; ~36px touch target.
+  const tabLink = (t: 'config' | 'result', label: string, Icon: LucideIcon) => (
     <Link
       href={`/targets/campaigns/${c.id}?tab=${t}`}
       className={cn(
-        'px-4 py-1.5 rounded-md font-medium text-sm transition-colors',
-        tab === t ? 'bg-background shadow-sm text-foreground' : 'text-muted-foreground hover:text-foreground',
+        'inline-flex items-center gap-1.5 px-4 py-2 rounded-md font-medium text-sm transition-colors',
+        tab === t
+          ? 'bg-primary text-primary-foreground shadow-sm'
+          : 'text-primary/80 hover:bg-primary/10 hover:text-primary',
       )}
     >
+      <Icon className="h-4 w-4" />
       {label}
     </Link>
   )
@@ -149,9 +154,9 @@ export default async function CampaignDetailPage({
       </div>
 
       {/* Tabs — one URL, two views */}
-      <div className="inline-flex rounded-lg border bg-muted/40 p-0.5">
-        {tabLink('config', 'Cấu hình')}
-        {tabLink('result', 'Kết quả')}
+      <div className="inline-flex rounded-lg border border-primary/20 bg-secondary p-0.5">
+        {tabLink('config', 'Cấu hình', SlidersHorizontal)}
+        {tabLink('result', 'Kết quả', BarChart3)}
       </div>
 
       {tab === 'config' ? (

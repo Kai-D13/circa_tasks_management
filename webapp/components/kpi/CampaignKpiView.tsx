@@ -33,6 +33,9 @@ export interface DailyPoint { date: string; gmv: number }
 const vnd = (n: number | null | undefined) =>
   n === null || n === undefined ? '—' : `${new Intl.NumberFormat('vi-VN').format(Math.round(n))}₫`
 
+// Short dd/MM for the campaign-chip date range.
+const dm = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`
+
 // % completion ring (server-rendered SVG, theme-aware via stroke tokens).
 // Green is reserved for a REACHED commission tier (or >=100%) — on a
 // commission screen, a green 8% would read as "already achieved".
@@ -119,23 +122,31 @@ export function CampaignKpiView({
   return (
     <div className="space-y-4">
       {/* Campaign tabs — horizontal scroll, no wrap: many campaigns must not
-          push the hero below the fold on 360px */}
+          push the hero below the fold on 360px. Review r2: active chip = solid
+          Circa coral; each chip carries its short date range so overlapping
+          campaigns stay tellable-apart. */}
       {items.length > 1 && (
         <div className="flex gap-2 overflow-x-auto pb-1 -mb-1">
-          {items.map((i) => (
-            <Link
-              key={i.id}
-              href={`/targets?campaign=${i.id}`}
-              className={cn(
-                'text-xs px-3 py-1.5 rounded-full border font-medium transition-colors shrink-0 whitespace-nowrap',
-                i.id === sel.id
-                  ? 'border-primary bg-primary/10 text-primary'
-                  : 'border-border text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {i.name}
-            </Link>
-          ))}
+          {items.map((i) => {
+            const active = i.id === sel.id
+            return (
+              <Link
+                key={i.id}
+                href={`/targets?campaign=${i.id}`}
+                className={cn(
+                  'inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-full border font-medium transition-colors shrink-0 max-w-[250px]',
+                  active
+                    ? 'border-primary bg-primary text-primary-foreground shadow-sm'
+                    : 'border-border text-muted-foreground hover:text-primary hover:bg-primary/5',
+                )}
+              >
+                <span className="truncate">{i.name}</span>
+                <span className={cn('shrink-0 whitespace-nowrap font-normal', active ? 'text-primary-foreground/85' : '')}>
+                  · {dm(i.start_date)}–{dm(i.end_date)}
+                </span>
+              </Link>
+            )
+          })}
         </div>
       )}
 
