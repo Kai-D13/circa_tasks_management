@@ -693,15 +693,28 @@ export default async function TasksPage({
         (g.type !== 'staff_broadcast' || g.totalStaff > 0) && (g.type !== 'staff' || g.total > 0))
     : grouped
 
+  // Restore created_at-desc order at the GROUP level. Grouping builds items in
+  // iteration order of [pageTasks, ...extraChildren]; in the done view the
+  // broadcast trees come only from extraChildren (staff_all parents are never
+  // 'done'), so a fresh broadcast group would otherwise sink below older
+  // standalone tasks and slip to page 2. Re-sort by each item's created_at so
+  // the group page order matches the query's sort (both views on the same axis).
+  const itemCreatedAt = (item: TaskListItem): string =>
+    item.type === 'task' ? item.task.created_at : item.createdAt
+  const orderedVisibleItems = groupPaginate
+    ? [...visibleItems].sort((a, b) => Date.parse(itemCreatedAt(b)) - Date.parse(itemCreatedAt(a)))
+    : visibleItems
+
   // Group-paginated admin views: the query fetched ALL top-level parents, so
-  // `visibleItems` holds every group. Slice by GROUP unit here — a broadcast's
-  // stores stay whole on one page (fixes the original row-window straddle bug).
-  // Other views keep their server-side row pagination (pageItems === visibleItems).
-  const groupTotalPages = Math.max(1, Math.ceil(visibleItems.length / GROUPS_PER_PAGE))
+  // `orderedVisibleItems` holds every group. Slice by GROUP unit here — a
+  // broadcast's stores stay whole on one page (fixes the original row-window
+  // straddle bug). Other views keep server-side row pagination (pageItems ===
+  // orderedVisibleItems).
+  const groupTotalPages = Math.max(1, Math.ceil(orderedVisibleItems.length / GROUPS_PER_PAGE))
   const clampedPage = groupPaginate ? Math.min(page, groupTotalPages) : page
   const pageItems = groupPaginate
-    ? visibleItems.slice((clampedPage - 1) * GROUPS_PER_PAGE, clampedPage * GROUPS_PER_PAGE)
-    : visibleItems
+    ? orderedVisibleItems.slice((clampedPage - 1) * GROUPS_PER_PAGE, clampedPage * GROUPS_PER_PAGE)
+    : orderedVisibleItems
   const effectiveTotalPages = groupPaginate ? groupTotalPages : totalPages
 
   // Drives the empty-state copy: are filters narrowing the (empty) result?
