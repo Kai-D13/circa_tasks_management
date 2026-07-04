@@ -239,10 +239,11 @@ export default async function TargetsPage({
             <TrendingUp className="h-5 w-5 text-primary" />
             <h1 className="text-xl font-semibold">Doanh số chiến dịch</h1>
           </div>
-          <span className="text-sm text-muted-foreground">{storeName}</span>
+          {/* Campaign view carries its own store pill (r3) — avoid duplicating */}
+          {campaignViews.length === 0 && <span className="text-sm text-muted-foreground">{storeName}</span>}
         </div>
         {campaignViews.length > 0 ? (
-          <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Quản lý" todayISO={vnTodayISO} />
+          <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Quản lý" todayISO={vnTodayISO} storeName={storeName} />
         ) : (
           <Card>
             <CardContent className="py-12 text-center text-sm text-muted-foreground">
@@ -318,14 +319,12 @@ export default async function TargetsPage({
     if (campaignViews.length > 0) {
       return (
         <div className="p-4 space-y-4 max-w-xl mx-auto">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2">
-              <TrendingUp className="h-5 w-5 text-primary" />
-              <h1 className="text-xl font-semibold">Doanh số chiến dịch</h1>
-            </div>
-            <span className="text-sm text-muted-foreground">{storeName}</span>
+          <div className="flex items-center gap-2">
+            <TrendingUp className="h-5 w-5 text-primary" />
+            <h1 className="text-xl font-semibold">Doanh số chiến dịch</h1>
           </div>
-          <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Dược sĩ" todayISO={vnTodayISO} />
+          {/* Store name lives in the campaign view's store pill (r3) */}
+          <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Dược sĩ" todayISO={vnTodayISO} storeName={storeName} />
           {referral && <ReferralCard {...referral} />}
           {referralError && (
             <Card>

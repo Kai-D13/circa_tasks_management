@@ -1,9 +1,9 @@
-import Link from 'next/link'
 import { Card, CardContent } from '@/components/ui/card'
 import { CampaignDailyChart } from '@/components/kpi/CampaignDailyChart'
+import { CampaignPicker } from '@/components/kpi/CampaignPicker'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
-import { Target, CalendarDays, TrendingUp, Wallet, Info, Gift } from 'lucide-react'
+import { Target, CalendarDays, TrendingUp, Wallet, Info, Gift, Store } from 'lucide-react'
 
 // Staff / Store Manager campaign view (stakeholder mockup):
 //   hero (Mục tiêu GMV · Đã đạt · progress + % ring · Còn thiếu)
@@ -85,7 +85,7 @@ function markerFraction(pct: number, thresholds: number[], positions: number[]):
 }
 
 export function CampaignKpiView({
-  items, selectedId, daily, dailyError = false, roleLabel, todayISO,
+  items, selectedId, daily, dailyError = false, roleLabel, todayISO, storeName,
 }: {
   items: CampaignView[]
   selectedId?: string
@@ -93,6 +93,7 @@ export function CampaignKpiView({
   dailyError?: boolean
   roleLabel: string
   todayISO: string
+  storeName: string
 }) {
   const sel = items.find((i) => i.id === selectedId) ?? items[0]
   const target = sel.kpi_target
@@ -121,34 +122,32 @@ export function CampaignKpiView({
 
   return (
     <div className="space-y-4">
-      {/* Campaign tabs — horizontal scroll, no wrap: many campaigns must not
-          push the hero below the fold on 360px. Review r2: active chip = solid
-          Circa coral; each chip carries its short date range so overlapping
-          campaigns stay tellable-apart. */}
-      {items.length > 1 && (
-        <div className="flex gap-2 overflow-x-auto pb-1 -mb-1">
-          {items.map((i) => {
-            const active = i.id === sel.id
-            return (
-              <Link
-                key={i.id}
-                href={`/targets?campaign=${i.id}`}
-                className={cn(
-                  'inline-flex items-center gap-1 text-xs px-3 py-1.5 rounded-full border font-medium transition-colors shrink-0 max-w-[250px]',
-                  active
-                    ? 'border-primary bg-primary text-primary-foreground shadow-sm'
-                    : 'border-border text-muted-foreground hover:text-primary hover:bg-primary/5',
-                )}
-              >
-                <span className="truncate">{i.name}</span>
-                <span className={cn('shrink-0 whitespace-nowrap font-normal', active ? 'text-primary-foreground/85' : '')}>
-                  · {dm(i.start_date)}–{dm(i.end_date)}
-                </span>
-              </Link>
-            )
-          })}
+      {/* ── Campaign header (review r3, per mockup): the SELECTED campaign is
+             the screen's focus — its name is the title, with a date pill that
+             opens the picker (scales to 3-5 long-named campaigns where the old
+             chip row broke down) and a store pill. ── */}
+      <div className="space-y-2">
+        <h2 className="text-lg font-bold leading-snug">{sel.name}</h2>
+        <div className="flex flex-wrap items-center gap-2">
+          <CampaignPicker
+            items={items.map((i) => {
+              const dl = Math.floor((Date.parse(i.end_date) - Date.parse(todayISO)) / 86400_000) + 1
+              return {
+                id: i.id,
+                name: i.name,
+                rangeLabel: `${dm(i.start_date)} – ${dm(i.end_date)}`,
+                statusLabel: dl <= 0 ? 'Đã kết thúc' : `Còn ${dl} ngày`,
+                pctLabel: i.run_rate !== null ? `${Math.round(i.run_rate)}%` : null,
+              }
+            })}
+            selectedId={sel.id}
+          />
+          <span className="inline-flex items-center gap-1.5 rounded-full border bg-card px-3 py-1.5 text-xs font-medium text-muted-foreground max-w-[220px]">
+            <Store className="h-3.5 w-3.5 text-primary shrink-0" />
+            <span className="truncate">{storeName}</span>
+          </span>
         </div>
-      )}
+      </div>
 
       {/* ── Hero: mục tiêu / đã đạt / progress / ring / còn thiếu ──
           Brand-tinted flat background (template hero is a warm cream card;
