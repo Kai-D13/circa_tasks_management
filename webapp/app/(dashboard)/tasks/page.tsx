@@ -501,7 +501,10 @@ export default async function TasksPage({
       // Admin/PIC must still see the broadcast tree, never stray pharmacist rows —
       // group the orphan by broadcast_id, keying its store entry by parent id.
       // Counts then reflect only the children matching the current filter.
-      if (isAdminRole && (view === 'pending' || adminDoneTree) && task.broadcast_id) {
+      // EXCEPT under the "Người thực hiện" filter: that view is deliberately flat
+      // (one person's tasks), so a matching child renders standalone, not folded
+      // into a broadcast tree it would otherwise misrepresent as "1/1 store".
+      if (!userFilter && isAdminRole && (view === 'pending' || adminDoneTree) && task.broadcast_id) {
         const child: ChildTask = {
           id:           task.id,
           status:       task.status,
