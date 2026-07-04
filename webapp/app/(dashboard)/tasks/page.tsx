@@ -24,7 +24,7 @@ function normalizeCompletedBy(task: unknown): { full_name: string } | null {
 export default async function TasksPage({
   searchParams,
 }: {
-  searchParams: Promise<{ view?: string; status?: string; priority?: string; store_id?: string; category?: string; department_id?: string; archived?: string; show_old?: string; page?: string }>
+  searchParams: Promise<{ view?: string; status?: string; priority?: string; store_id?: string; category?: string; department_id?: string; assignee?: string; archived?: string; show_old?: string; page?: string }>
 }) {
   const params = await searchParams
   const supabase = await createClient()
@@ -62,8 +62,14 @@ export default async function TasksPage({
   // many staff_all store-parents into ONE broadcast row. Paginate by GROUP unit
   // (slice after grouping) instead of a row window, so a broadcast's stores never
   // split across pages. Fetch all top-level parents (bounded) for these views.
+  // A "Người thực hiện" (assignee) filter targets ONE person's tasks — a flat
+  // list is exactly that. Folding a broadcast is meaningless here (a staff_all
+  // parent has assigned_to=null so it can't match), and would hide the matching
+  // child under a dropped parent. So when this filter is active, disable ALL
+  // folding paths → the main query returns a flat, correctly-paginated list.
+  const userFilter = !isStaff && !!params.assignee
   const isAdminRole = profile?.role === 'admin'
-  const groupPaginate = isAdminRole && !showArchived
+  const groupPaginate = isAdminRole && !showArchived && !userFilter
     && ((view === 'pending' && !params.status) || view === 'done')
   const GROUPS_PER_PAGE = 15
 
@@ -99,9 +105,10 @@ export default async function TasksPage({
   if (showArchived) {
     query = query.order('created_at', { ascending: false })
   } else if (view === 'done') {
-    query = query
-      .order('completed_at', { ascending: false, nullsFirst: false })
-      .order('created_at', { ascending: false })
+    // Done sorts by created_at desc too — same axis as pending (stakeholder:
+    // the two tabs must agree on order), so a task keeps its position when it
+    // moves from pending to done.
+    query = query.order('created_at', { ascending: false })
   } else {
     // Pending: newest-created first (stakeholder request) — a just-created task
     // shows at the top. (Done/archive keep their own ordering.)
@@ -151,6 +158,14 @@ export default async function TasksPage({
   if (!isStaff && params.store_id) query = query.eq('store_id', params.store_id)
   if (!isStaff && params.category) query = query.eq('category', params.category)
   if (!isStaff && params.department_id) query = query.eq('department_id', params.department_id)
+  // "Người thực hiện": pending → who the task is ASSIGNED to; done → who actually
+  // SUBMITTED it (completed_by, mig 044). Folding is already disabled above, so a
+  // matching broadcast child appears standalone in the flat list.
+  if (userFilter) {
+    query = view === 'done'
+      ? query.eq('completed_by', params.assignee!)
+      : query.eq('assigned_to', params.assignee!)
+  }
   // SM: scope to assigned stores (RLS SELECT policy is the gate; this is the app-layer filter)
   if (isSm) query = query.in('store_id', smStoreIds)
 
@@ -159,13 +174,13 @@ export default async function TasksPage({
   // N children per parent. Children are fetched separately and appended. In the done
   // view, parents are never 'done', so done children show standalone — no folding.
   const topLevelOnly = (profile?.role === 'admin' || profile?.role === 'store_manager' || isSm)
-    && view === 'pending' && !params.status
+    && view === 'pending' && !params.status && !userFilter
 
   // Admin/PIC with a status sub-filter: ALSO exclude children from pagination.
   // Otherwise a 26-store/106-staff broadcast floods the 30-row page under 'todo'
   // (parents + children all match) — partial trees, broadcast repeating across
   // pages, inflated count. Matching children are re-fetched per page below.
-  const adminTreeFilter = isAdminRole && view === 'pending' && !showArchived
+  const adminTreeFilter = isAdminRole && view === 'pending' && !showArchived && !userFilter
     && (params.status === 'todo' || params.status === 'in_progress' || params.status === 'overdue')
 
   // Admin/PIC done view: staff_all parents never reach status='done' (overview-only,
@@ -173,12 +188,22 @@ export default async function TasksPage({
   // 106 flat rows for one broadcast, with count/pagination driven by children. Page
   // by TOP-LEVEL done tasks instead, and assemble the broadcast trees from a separate
   // children fetch (page 1 only) — exactly the in_progress/overdue tree pattern.
-  const adminDoneTree = isAdminRole && view === 'done' && !showArchived
+  const adminDoneTree = isAdminRole && view === 'done' && !showArchived && !userFilter
   if (topLevelOnly || adminTreeFilter || adminDoneTree) query = query.is('parent_task_id', null)
 
   // Staff have no store filter (storesForFilter is [] for them), so skip the query
   // entirely instead of fetching and discarding it. (isStaff computed above.)
-  const [{ data: tasks, error: tasksError, count }, { data: stores }, { data: departments }] = await Promise.all([
+  // Users list backs the "Người thực hiện" filter — role='staff' scoped like the
+  // stores list (admin: all; SM: assigned stores; store_manager: own store).
+  const usersQuery = isStaff
+    ? Promise.resolve({ data: [] as { id: string; full_name: string; store_id: string | null }[] })
+    : (() => {
+        let uq = supabase.from('users').select('id, full_name, store_id').eq('role', 'staff').order('full_name')
+        if (isSm) uq = uq.in('store_id', smStoreIds)
+        else if (profile?.role === 'store_manager' && profile?.store_id) uq = uq.eq('store_id', profile.store_id)
+        return uq
+      })()
+  const [{ data: tasks, error: tasksError, count }, { data: stores }, { data: departments }, { data: assigneeUsers }] = await Promise.all([
     query,
     isStaff
       ? Promise.resolve({ data: [] as { id: string; name: string }[] })
@@ -188,6 +213,7 @@ export default async function TasksPage({
     isStaff
       ? Promise.resolve({ data: [] as { id: string; name: string }[] })
       : supabase.from('departments').select('id, name').order('name'),
+    usersQuery,
   ])
 
   const totalRows  = count ?? 0
@@ -305,7 +331,10 @@ export default async function TasksPage({
       .not('parent_task_id', 'is', null)
       .eq('status', 'done')
       .is('archived_at', null)
-      .order('completed_at', { ascending: false, nullsFirst: false })
+      // created_at desc to match the done view's ordering axis (and the top-level
+      // done parents fetched above) — the 500-cap then covers the same recent
+      // broadcasts the admin is reviewing.
+      .order('created_at', { ascending: false })
       .limit(500)
     if (params.priority) doneChildQ = doneChildQ.eq('priority', params.priority)
     if (params.store_id) doneChildQ = doneChildQ.eq('store_id', params.store_id)
@@ -673,7 +702,7 @@ export default async function TasksPage({
   const effectiveTotalPages = groupPaginate ? groupTotalPages : totalPages
 
   // Drives the empty-state copy: are filters narrowing the (empty) result?
-  const hasActiveFilters = !isStaff && !!(params.status || params.priority || params.store_id || params.category || params.department_id)
+  const hasActiveFilters = !isStaff && !!(params.status || params.priority || params.store_id || params.category || params.department_id || params.assignee)
 
   // Build href that preserves filters but changes page.
   // Staff only carry 'view' — never status/priority/store_id/category/archived,
@@ -683,7 +712,7 @@ export default async function TasksPage({
     if (isStaff) {
       if (params.view) q.set('view', params.view)
     } else {
-      const carry = ['view', 'status', 'priority', 'store_id', 'category', 'department_id', 'archived', 'show_old'] as const
+      const carry = ['view', 'status', 'priority', 'store_id', 'category', 'department_id', 'assignee', 'archived', 'show_old'] as const
       carry.forEach((k) => { if (params[k]) q.set(k, params[k]!) })
     }
     if (p > 1) q.set('page', String(p))
@@ -710,6 +739,7 @@ export default async function TasksPage({
       <TaskFilters
         stores={storesForFilter}
         departments={departments ?? []}
+        users={isStaff ? [] : (assigneeUsers ?? [])}
         currentParams={params as Record<string, string>}
         showArchived={showArchived}
         showOld={showOld}

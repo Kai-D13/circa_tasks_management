@@ -11,7 +11,8 @@ import { cn } from '@/lib/utils'
 interface Props {
   stores:        Pick<Store, 'id' | 'name'>[]
   departments:   { id: string; name: string }[]
-  currentParams: { view?: string; status?: string; priority?: string; store_id?: string; category?: string; department_id?: string; archived?: string; show_old?: string }
+  users:         { id: string; full_name: string; store_id?: string | null }[]
+  currentParams: { view?: string; status?: string; priority?: string; store_id?: string; category?: string; department_id?: string; assignee?: string; archived?: string; show_old?: string }
   showArchived?: boolean
   showOld?:      boolean
   view?:         'pending' | 'done'
@@ -43,7 +44,7 @@ const CATEGORY_LABEL: Record<string, string> = {
   other:     'Khác',
 }
 
-export function TaskFilters({ stores, departments, currentParams, showArchived, showOld = false, view = 'pending', isStaff = false }: Props) {
+export function TaskFilters({ stores, departments, users, currentParams, showArchived, showOld = false, view = 'pending', isStaff = false }: Props) {
   const router   = useRouter()
   const pathname = usePathname()
 
@@ -65,7 +66,7 @@ export function TaskFilters({ stores, departments, currentParams, showArchived, 
     const params = new URLSearchParams()
     if (v === 'done') params.set('view', 'done')
     if (!isStaff) {
-      ;(['priority', 'store_id', 'category', 'department_id'] as const).forEach((k) => {
+      ;(['priority', 'store_id', 'category', 'department_id', 'assignee'] as const).forEach((k) => {
         if (currentParams[k]) params.set(k, currentParams[k]!)
       })
       if (v === 'pending' && currentParams.status && currentParams.status !== 'done') {
@@ -97,10 +98,19 @@ export function TaskFilters({ stores, departments, currentParams, showArchived, 
   const storeIdVal  = currentParams.store_id ?? ALL
   const categoryVal = currentParams.category ?? ALL
   const deptIdVal   = currentParams.department_id ?? ALL
+  const assigneeVal = currentParams.assignee ?? ALL
 
   const storeOptions = [
     { value: ALL, label: 'Tất cả cửa hàng' },
     ...stores.map((s) => ({ value: s.id, label: s.name })),
+  ]
+
+  // "Người thực hiện": semantics differ by view — pending = who it's assigned to,
+  // done = who submitted it. Placeholder carries that meaning.
+  const assigneeAllLabel = view === 'done' ? 'Tất cả người nộp' : 'Tất cả người được giao'
+  const userOptions = [
+    { value: ALL, label: assigneeAllLabel },
+    ...users.map((u) => ({ value: u.id, label: u.full_name })),
   ]
 
   return (
@@ -202,6 +212,18 @@ export function TaskFilters({ stores, departments, currentParams, showArchived, 
                 ))}
               </SelectContent>
             </Select>
+          )}
+
+          {/* Người thực hiện: pending = người được giao (assigned_to), done =
+              người đã nộp (completed_by). Searchable — a store can have many staff. */}
+          {!isStaff && users.length > 0 && (
+            <SearchableSelect
+              value={assigneeVal}
+              options={userOptions}
+              onValueChange={(v) => update('assignee', v)}
+              placeholder={assigneeAllLabel}
+              triggerClassName="w-44 h-8 text-sm"
+            />
           )}
 
           {!isStaff && hasFilters && (
