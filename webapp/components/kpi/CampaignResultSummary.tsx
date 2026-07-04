@@ -1,0 +1,72 @@
+import { Card, CardContent } from '@/components/ui/card'
+import type { CampaignView } from '@/components/kpi/CampaignKpiView'
+import { cn } from '@/lib/utils'
+import { Target, TrendingUp, Percent, Wallet, Award, CalendarDays, ClipboardCheck, type LucideIcon } from 'lucide-react'
+
+// Store Manager "Kết quả" management block (r3): the same 6-card summary idiom
+// as the super-admin campaign detail Result tab, but scoped to the manager's OWN
+// store (one actual row). Read-only — SM has no config access. Reuses the
+// already-fetched selected CampaignView, so no extra query.
+
+const vnd = (n: number) => `${new Intl.NumberFormat('vi-VN').format(Math.round(n))}₫`
+
+export function CampaignResultSummary({ campaign, todayISO }: { campaign: CampaignView; todayISO: string }) {
+  const target = campaign.kpi_target
+  const synced = campaign.actual_value !== null
+  const actual = campaign.actual_value ?? 0
+  const pct = campaign.run_rate ?? (target > 0 ? (actual / target) * 100 : 0)
+  const pool = campaign.store_commission_pool ?? 0
+  const tierCount = campaign.tiers.length
+  const reached = campaign.achieved_tier_order
+
+  const daysLeft = Math.floor((Date.parse(campaign.end_date) - Date.parse(todayISO)) / 86400_000) + 1
+  const deadlineLabel = daysLeft <= 0 ? 'Đã kết thúc' : `Còn ${daysLeft} ngày`
+
+  const cards: { label: string; value: string; icon: LucideIcon; tile: string; valueCls?: string; bar?: boolean }[] = [
+    { label: 'KPI target', value: vnd(target), icon: Target, tile: 'bg-primary/10 text-primary' },
+    { label: 'Actual GMV', value: synced ? vnd(actual) : '—', icon: TrendingUp,
+      tile: synced && actual > 0 ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground' },
+    { label: 'Hoàn thành', value: synced ? `${pct.toFixed(1)}%` : '—', icon: Percent,
+      tile: 'bg-primary/10 text-primary', bar: true,
+      valueCls: !synced ? undefined : pct >= 100 ? 'text-green-600' : 'text-primary' },
+    { label: 'Commission Store dự kiến', value: synced ? vnd(pool) : '—', icon: Wallet,
+      tile: synced && pool > 0 ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground',
+      valueCls: synced && pool > 0 ? 'text-green-600' : undefined },
+    { label: 'Bậc đạt', value: reached != null ? `Bậc ${reached}/${tierCount}` : (synced ? 'Chưa đạt' : '—'), icon: Award,
+      tile: reached != null ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground' },
+    { label: 'Thời hạn', value: deadlineLabel, icon: CalendarDays, tile: 'bg-muted text-muted-foreground' },
+  ]
+
+  return (
+    <Card>
+      <CardContent className="p-4 space-y-3">
+        <p className="flex items-center gap-1.5 font-semibold text-sm">
+          <ClipboardCheck className="h-4 w-4 text-primary" /> Kết quả chiến dịch · Quản lý cửa hàng
+        </p>
+        <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5">
+          {cards.map((card) => (
+            <div key={card.label} className="rounded-lg border p-2.5">
+              <div className="flex items-start gap-2">
+                <span className={cn('h-7 w-7 rounded-full flex items-center justify-center shrink-0', card.tile)}>
+                  <card.icon className="h-3.5 w-3.5" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[10px] text-muted-foreground uppercase leading-tight truncate">{card.label}</p>
+                  <p className={cn('text-sm font-bold mt-0.5 leading-tight', card.valueCls)}>{card.value}</p>
+                  {card.bar && synced && (
+                    <div className="mt-1 h-1 rounded-full bg-muted overflow-hidden">
+                      <div
+                        className={cn('h-full rounded-full', pct >= 100 ? 'bg-green-500' : 'bg-primary')}
+                        style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
+  )
+}

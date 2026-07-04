@@ -4,6 +4,7 @@ import { isSuperAdminEmail } from '@/lib/authz'
 import { Card, CardContent } from '@/components/ui/card'
 import { PeriodTabs, type TargetPeriod } from '@/components/targets/PeriodTabs'
 import { CampaignKpiView, type CampaignView } from '@/components/kpi/CampaignKpiView'
+import { CampaignResultSummary } from '@/components/kpi/CampaignResultSummary'
 import { isKpiCampaignEnabled } from '@/lib/kpi/flags'
 import { ReferralCard, type ReferralItem } from '@/components/referral/ReferralCard'
 import { formatDateTime, currentWeekStart } from '@/lib/dateUtils'
@@ -243,7 +244,16 @@ export default async function TargetsPage({
           {campaignViews.length === 0 && <span className="text-sm text-muted-foreground">{storeName}</span>}
         </div>
         {campaignViews.length > 0 ? (
-          <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Quản lý" todayISO={vnTodayISO} storeName={storeName} />
+          <>
+            {/* Manager "Kết quả" block (r3): store-scoped summary above the detail
+                view. Picker in CampaignKpiView changes selectedCampaignId → both
+                stay in sync on the selected campaign. */}
+            <CampaignResultSummary
+              campaign={campaignViews.find((c) => c.id === selectedCampaignId) ?? campaignViews[0]}
+              todayISO={vnTodayISO}
+            />
+            <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Quản lý" todayISO={vnTodayISO} storeName={storeName} />
+          </>
         ) : (
           <Card>
             <CardContent className="py-12 text-center text-sm text-muted-foreground">
