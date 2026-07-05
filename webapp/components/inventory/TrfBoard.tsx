@@ -43,7 +43,7 @@ function TrfRowItem({ r }: { r: TrfRow }) {
   return (
     <Link
       href={`/tasks/${r.id}`}
-      className="flex items-center gap-3 px-4 py-3 border-t first:border-t-0 hover:bg-muted/30 transition-colors"
+      className="flex items-center gap-3 px-4 py-3 border-t first:border-t-0 hover:bg-muted/30 active:bg-muted/40 transition-colors"
     >
       <div className="min-w-0 flex-1">
         <p className="font-medium text-sm truncate">{r.trf_code}</p>
@@ -55,7 +55,7 @@ function TrfRowItem({ r }: { r: TrfRow }) {
         </p>
       </div>
       <div className="flex flex-col items-end gap-1 shrink-0">
-        <span className={cn('text-xs px-2 py-0.5 rounded font-medium', m.cls)}>{m.label}</span>
+        <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', m.cls)}>{m.label}</span>
         <span className="flex items-center gap-0.5 text-[11px] text-primary font-medium">
           Mở phiếu <ChevronRight className="h-3 w-3" />
         </span>
@@ -105,7 +105,8 @@ export function TrfBoard({ rows, isAllStores }: { rows: TrfRow[]; isAllStores: b
             type="button"
             onClick={() => setFilter(c.key)}
             className={cn(
-              'text-xs px-2.5 py-1 rounded-full font-medium border transition-colors',
+              // py-1.5/px-3 ≈ 32px touch height on mobile chips
+              'text-xs px-3 py-1.5 rounded-full font-medium border transition-colors',
               c.cls,
               filter === c.key ? 'ring-2 ring-primary/40 border-transparent' : 'border-transparent opacity-80 hover:opacity-100',
             )}
@@ -119,7 +120,7 @@ export function TrfBoard({ rows, isAllStores }: { rows: TrfRow[]; isAllStores: b
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder="Tìm mã TRF, POS, người tạo…"
-            className="w-full h-9 pl-8 pr-3 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-primary/30"
+            className="w-full h-10 md:h-9 pl-8 pr-3 rounded-md border bg-background text-sm outline-none focus:ring-2 focus:ring-primary/30"
           />
         </div>
       </div>

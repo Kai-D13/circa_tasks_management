@@ -24,12 +24,12 @@ export default async function InventoryPage() {
     <div className="p-4 md:p-6 space-y-4 max-w-3xl">
       <div className="flex items-center gap-2">
         <Boxes className="h-5 w-5 text-primary" />
-        <h1 className="text-xl font-semibold">Inventory</h1>
+        <h1 className="text-xl font-semibold">Tồn kho</h1>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
         <Link href="/inventory/trf">
-          <Card className="hover:bg-muted/30 transition-colors">
+          <Card className="hover:bg-muted/30 active:bg-muted/40 transition-colors">
             <CardContent className="p-4 flex items-center gap-3">
               <div className="h-10 w-10 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
                 <ClipboardCheck className="h-5 w-5 text-primary" />
