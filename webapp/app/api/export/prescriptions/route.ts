@@ -36,12 +36,20 @@ export async function GET(request: NextRequest) {
   if (p.get('date_from')) query = query.gte('submitted_at', p.get('date_from') + 'T00:00:00+07:00')
   if (p.get('date_to'))   query = query.lte('submitted_at', p.get('date_to') + 'T23:59:59+07:00')
 
+  // Mirror the list's chronic-care tab so an export from a care tab matches the
+  // screen (mig 073).
+  const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
+  const care = ['chronic', 'due', 'done', 'error'].includes(p.get('care') ?? '') ? p.get('care') : null
+  if (care === 'chronic') query = query.eq('is_chronic', true)
+  else if (care === 'due') query = query.eq('is_chronic', true).eq('order_sync_status', 'synced').eq('care_status', 'none').lte('reminder_date', vnTodayISO)
+  else if (care === 'done') query = query.eq('is_chronic', true).eq('care_status', 'done')
+  else if (care === 'error') query = query.eq('order_sync_status', 'error')
+
   const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   if ((data?.length ?? 0) > MAX_ROWS)
     return NextResponse.json({ error: `Quá nhiều dòng (>${MAX_ROWS}). Vui lòng lọc theo khoảng ngày / cửa hàng rồi xuất lại.` }, { status: 400 })
 
-  const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
   const rows = (data ?? []).map((s) => {
     const imgs = (s.prescription_images as unknown as { storage_path: string }[] | null) ?? []
     const careState = deriveCareState(s as unknown as Parameters<typeof deriveCareState>[0], vnTodayISO)

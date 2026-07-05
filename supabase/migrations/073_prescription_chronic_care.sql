@@ -80,6 +80,9 @@ CREATE TABLE IF NOT EXISTS public.prescription_care_logs (
   cared_at        timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_pcl_submission ON public.prescription_care_logs (submission_id);
+-- Phase 1 = care ONCE per prescription. Hard DB guard against a concurrent
+-- double-submit racing past the app-level care_status check.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_pcl_one_per_submission ON public.prescription_care_logs (submission_id);
 
 ALTER TABLE public.prescription_care_logs ENABLE ROW LEVEL SECURITY;
 

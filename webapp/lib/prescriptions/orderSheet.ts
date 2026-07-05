@@ -35,9 +35,13 @@ export function parseVnSlashDate(v: unknown): string | null {
   if (slash) {
     const d = parseInt(slash[1], 10)
     const m = parseInt(slash[2], 10)
-    const y = slash[3]
+    const y = parseInt(slash[3], 10)
     if (m < 1 || m > 12 || d < 1 || d > 31) return null
-    return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+    // Round-trip guard: reject impossible calendar dates (31/2, 30/2, 31/4…)
+    // so a bad Sheet cell can't produce '2026-02-31' and a nonsense reminder.
+    const dt = new Date(Date.UTC(y, m - 1, d))
+    if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null
+    return `${slash[3]}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
   }
   return null
 }

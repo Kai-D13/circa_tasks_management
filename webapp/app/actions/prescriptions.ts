@@ -262,8 +262,10 @@ const DAY_MS = 86400_000
 const addDaysISO = (iso: string, days: number) =>
   new Date(Date.parse(`${iso}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10)
 
-// Any pharmacist OR the store manager of the submission's store may log the
-// care visit (PM decision 2026-07-04 — customers meet whoever is on shift).
+// Care permission (locked 2026-07-04, review r): a STAFF may care only for a
+// prescription they submitted; a STORE MANAGER may care for any in their store.
+// This mirrors the read RLS (staff = own submissions, manager = store) so the
+// action can never grant more than the user can see.
 export async function submitPrescriptionCare(
   submissionId: string,
   note:         string,
@@ -282,11 +284,14 @@ export async function submitPrescriptionCare(
 
   const { data: sub } = await supabaseAdmin
     .from('prescription_submissions')
-    .select('id, store_id, is_chronic, care_status')
+    .select('id, store_id, submitted_by, is_chronic, care_status')
     .eq('id', submissionId)
     .maybeSingle()
   if (!sub) return { error: 'Không tìm thấy toa thuốc' }
-  if (sub.store_id !== me.store_id) return { error: 'Toa thuốc không thuộc cửa hàng của bạn' }
+  const canCare =
+    (me.role === 'store_manager' && sub.store_id === me.store_id) ||
+    (me.role === 'staff' && sub.submitted_by === user.id)
+  if (!canCare) return { error: 'Bạn không có quyền chăm sóc toa thuốc này' }
   if (!sub.is_chronic) return { error: 'Toa này không phải toa mạn tính' }
   if (sub.care_status === 'done') return { error: 'Toa này đã được chăm sóc' }
 
@@ -307,21 +312,28 @@ export async function submitPrescriptionCare(
     if (!ok || img.path.includes('..')) return { error: 'Đường dẫn ảnh không hợp lệ' }
   }
 
-  const { data: log, error: logErr } = await supabaseAdmin
-    .from('prescription_care_logs')
-    .insert({ submission_id: submissionId, care_by: user.id, care_note: trimmedNote, evidence_images: images })
-    .select('id')
-    .single()
-  if (logErr) return { error: `Lưu chăm sóc thất bại: ${logErr.message}` }
-
-  const { error: upErr } = await supabaseAdmin
+  // Flip the status FIRST as an atomic mutex — the conditional WHERE care_status
+  // ='none' means two concurrent carers can't both proceed (Postgres serializes
+  // the row update; the loser matches 0 rows). Only the winner writes a log.
+  const { data: claimed, error: claimErr } = await supabaseAdmin
     .from('prescription_submissions')
     .update({ care_status: 'done', last_care_at: new Date().toISOString(), last_care_by: user.id })
     .eq('id', submissionId)
-  if (upErr) {
-    // Roll the log back so a retry doesn't double-record (mirror submitPrescription).
-    await supabaseAdmin.from('prescription_care_logs').delete().eq('id', log.id)
-    return { error: `Cập nhật trạng thái thất bại: ${upErr.message}` }
+    .eq('care_status', 'none')
+    .select('id')
+  if (claimErr) return { error: `Cập nhật trạng thái thất bại: ${claimErr.message}` }
+  if (!claimed || claimed.length === 0) return { error: 'Toa này đã được chăm sóc' }
+
+  const { error: logErr } = await supabaseAdmin
+    .from('prescription_care_logs')
+    .insert({ submission_id: submissionId, care_by: user.id, care_note: trimmedNote, evidence_images: images })
+  if (logErr) {
+    // Release the mutex so a retry can succeed (uq_pcl_one_per_submission is the
+    // hard backstop; if it ever fired, the status revert keeps state consistent).
+    await supabaseAdmin.from('prescription_submissions')
+      .update({ care_status: 'none', last_care_at: null, last_care_by: null })
+      .eq('id', submissionId)
+    return { error: `Lưu chăm sóc thất bại: ${logErr.message}` }
   }
 
   revalidatePath('/prescriptions')

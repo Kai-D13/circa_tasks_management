@@ -65,10 +65,13 @@ export default async function PrescriptionDetailPage({
   // Chronic care (mig 073) — derived display state + who may log the care visit
   const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
   const careState = deriveCareState(sub, vnTodayISO)
-  const canCare = sub.is_chronic
-    && sub.care_status === 'none'
-    && (profile?.role === 'staff' || profile?.role === 'store_manager')
-    && profile?.store_id === sub.store_id
+  // Care gate mirrors submitPrescriptionCare (locked 2026-07-04): staff care for
+  // their OWN submission, store manager for any in their store. (RLS already
+  // hides other staff's submissions, so a staff only ever reaches their own.)
+  const canCare = sub.is_chronic && sub.care_status === 'none' && (
+    (profile?.role === 'store_manager' && profile?.store_id === sub.store_id) ||
+    (profile?.role === 'staff' && sub.submitted_by === user.id)
+  )
   const careImageUrl = (p: string) => (p.startsWith('http') ? p : publicStorageUrl(PRESCRIPTION_BUCKET, p))
 
   // Generate image URLs server-side — always from the PUBLIC origin (the

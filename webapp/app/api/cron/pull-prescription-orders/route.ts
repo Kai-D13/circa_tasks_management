@@ -88,16 +88,33 @@ export async function GET(request: NextRequest) {
     }
     const { byCode, rowErrors } = parsed
 
-    // Submissions still waiting for order data — 'error' rows are retried too
-    // (the Sheet fills in over time; a corrected POS entry should self-heal).
-    const { data: pending, error: pendErr } = await supabaseAdmin
-      .from('prescription_submissions')
-      .select('id, order_code, submitted_at, is_chronic, days_supply, order_sync_status')
-      .in('order_sync_status', ['pending', 'error'])
-    if (pendErr) {
-      await failRun(pendErr.message)
-      return NextResponse.json({ error: `Không đọc được submissions: ${pendErr.message}` }, { status: 500 })
+    // Candidates = submissions still needing order data. Two sets, merged:
+    //   A) order_sync_status IN (pending, error) — never synced, or flagged; error
+    //      rows are retried so a corrected POS entry self-heals.
+    //   B) chronic + synced but reminder_date still NULL — a row that synced
+    //      before its created_date was readable, or was marked chronic after
+    //      sync (super edit). Without this, such a row would never be revisited
+    //      and its reminder date would stay null forever.
+    const [{ data: setA, error: errA }, { data: setB, error: errB }] = await Promise.all([
+      supabaseAdmin
+        .from('prescription_submissions')
+        .select('id, order_code, submitted_at, is_chronic, days_supply, order_sync_status')
+        .in('order_sync_status', ['pending', 'error']),
+      supabaseAdmin
+        .from('prescription_submissions')
+        .select('id, order_code, submitted_at, is_chronic, days_supply, order_sync_status')
+        .eq('is_chronic', true)
+        .eq('order_sync_status', 'synced')
+        .is('reminder_date', null),
+    ])
+    if (errA || errB) {
+      const m = (errA ?? errB)!.message
+      await failRun(m)
+      return NextResponse.json({ error: `Không đọc được submissions: ${m}` }, { status: 500 })
     }
+    const pending = [...(setA ?? []), ...(setB ?? [])].filter(
+      (r, i, arr) => arr.findIndex((x) => x.id === r.id) === i,
+    )
 
     let matched = 0
     let flaggedError = 0
@@ -116,18 +133,23 @@ export async function GET(request: NextRequest) {
           pos_code:           row.pos_code,
           pos_name:           row.pos_name,
           order_products_raw: row.products_raw,
-          order_sync_status:  'synced',
           order_sync_error:   null,
           expected_refill_date: null,
           reminder_date:        null,
         }
-        // Chronic schedule needs a readable order date; a row with an unparsable
-        // created_date still syncs customer data but leaves the dates null (the
-        // rowErrors log carries the parse failure for the admin).
-        if (sub.is_chronic && Number(sub.days_supply) > 0 && row.created_date) {
+        if (!sub.is_chronic) {
+          patch.order_sync_status = 'synced'
+        } else if (Number(sub.days_supply) > 0 && row.created_date) {
           const expected = addDaysISO(row.created_date, Number(sub.days_supply))
           patch.expected_refill_date = expected
           patch.reminder_date = addDaysISO(expected, -2)
+          patch.order_sync_status = 'synced'
+        } else {
+          // Chronic but no usable order date yet — DON'T mark synced, or the row
+          // is never revisited and its reminder stays null. Keep it 'pending'
+          // ("Chờ dữ liệu đơn") so the next cron retries when the Sheet fills in.
+          patch.order_sync_status = 'pending'
+          rowErrors.push({ row: 0, error: `Toa mạn tính ${code}: thiếu/không đọc được created_date — chờ dữ liệu đơn` })
         }
         const { error: upErr } = await supabaseAdmin
           .from('prescription_submissions').update(patch).eq('id', sub.id)
@@ -135,9 +157,11 @@ export async function GET(request: NextRequest) {
         else matched++
       } else {
         unmatchedCodes.push(code)
-        // Only age into a visible error after the Sheet has had time to catch up.
+        // Only a still-'pending' row ages into a visible error (the Sheet lags
+        // BigQuery by hours). 'error' rows stay error; already-'synced' set-B
+        // rows are never downgraded to error on a transient miss.
         const age = now - Date.parse(sub.submitted_at as string)
-        if (age > ERROR_AFTER_MS && sub.order_sync_status !== 'error') {
+        if (age > ERROR_AFTER_MS && sub.order_sync_status === 'pending') {
           const { error: upErr } = await supabaseAdmin
             .from('prescription_submissions')
             .update({ order_sync_status: 'error', order_sync_error: UNMATCHED_HELP })

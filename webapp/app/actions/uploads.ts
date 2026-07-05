@@ -2,6 +2,7 @@
 
 import { headers } from 'next/headers'
 import { createClient } from '@/lib/supabase/server'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { createResumableUploadSession, publicUrlForKey, isGcsEnabled } from '@/lib/storage/gcs'
 import { safeStorageName } from '@/lib/storage'
 import { isSuperAdminEmail } from '@/lib/authz'
@@ -105,17 +106,26 @@ export async function createUploadUrl(input: CreateUploadUrlInput): Promise<Resu
     key = `prescriptions/${input.storeId}/${input.submissionId}/${uniq}_${safe}`
 
   } else if (input.purpose === 'prescription_care') {
-    // Chronic-care evidence photos. Any pharmacist OR store manager of the
-    // submission's store may care for the customer (PM decision 2026-07-04) —
-    // submitPrescriptionCare re-validates against the submission itself.
-    if (!input.storeId) return { error: 'Thiếu store' }
+    // Chronic-care evidence photos. Match submitPrescriptionCare's rule (locked
+    // 2026-07-04): a STAFF may upload only for a prescription they submitted; a
+    // STORE MANAGER for any in their store. Verified against the submission row.
     if (!input.submissionId || !/^[A-Za-z0-9_-]{1,100}$/.test(input.submissionId)) {
       return { error: 'submissionId không hợp lệ' }
     }
     if (!ct.startsWith('image/')) return { error: 'Chỉ chấp nhận ảnh' }
     const { data: me } = await supabase.from('users').select('role, store_id').eq('id', user.id).single()
-    const ok = (me?.role === 'staff' || me?.role === 'store_manager') && me?.store_id === input.storeId
-    if (!ok) return { error: 'Không có quyền upload cho cửa hàng này' }
+    // Read the submission via the service client so the check doesn't depend on
+    // the caller's own read-RLS (which would already hide non-owned rows).
+    const { data: sub } = await supabaseAdmin
+      .from('prescription_submissions')
+      .select('store_id, submitted_by')
+      .eq('id', input.submissionId)
+      .maybeSingle()
+    if (!sub) return { error: 'Không tìm thấy toa thuốc' }
+    const ok =
+      (me?.role === 'store_manager' && me?.store_id === sub.store_id) ||
+      (me?.role === 'staff' && sub.submitted_by === user.id)
+    if (!ok) return { error: 'Không có quyền chăm sóc toa thuốc này' }
     key = `prescription-care/${input.submissionId}/${uniq}_${safe}`
 
   } else if (input.purpose === 'announcement_asset') {
