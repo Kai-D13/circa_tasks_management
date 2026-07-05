@@ -228,8 +228,26 @@ export default async function PrescriptionDetailPage({
         </Card>
       )}
 
-      {/* Care form — same-store staff/store manager, chronic + not yet cared */}
-      {canCare && <CareForm submissionId={sub.id} storeId={sub.store_id} />}
+      {/* Care form — prominent only when the customer is actually due for care;
+          before the reminder date it's tucked into a secondary disclosure so we
+          don't push an early visit (review r-ui). */}
+      {canCare && (
+        careState?.key === 'due' ? (
+          <CareForm submissionId={sub.id} storeId={sub.store_id} />
+        ) : (
+          <details className="group">
+            <summary className="cursor-pointer select-none inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground">
+              Ghi nhận chăm sóc sớm
+              {careState?.key === 'upcoming' && sub.reminder_date
+                ? ` (chưa tới kỳ · nhắc ${formatDate(sub.reminder_date)})`
+                : ''}
+            </summary>
+            <div className="mt-3">
+              <CareForm submissionId={sub.id} storeId={sub.store_id} />
+            </div>
+          </details>
+        )
+      )}
 
       {/* Notes */}
       {sub.notes && (

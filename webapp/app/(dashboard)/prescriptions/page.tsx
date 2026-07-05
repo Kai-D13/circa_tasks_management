@@ -18,7 +18,7 @@ const PAGE_SIZE = 50
 export default async function PrescriptionsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; q?: string; store_id?: string; date_from?: string; date_to?: string; care?: string; page?: string }>
+  searchParams: Promise<{ status?: string; q?: string; store_id?: string; date_from?: string; date_to?: string; care?: string; care_state?: string; page?: string }>
 }) {
   const params = await searchParams
   const supabase = await createClient()
@@ -51,7 +51,7 @@ export default async function PrescriptionsPage({
   // column is hidden for staff, so they don't render it. Staff skip the exact count.
   let query = supabase
     .from('prescription_submissions')
-    .select('id, order_code, submitted_at, status, is_chronic, order_sync_status, care_status, reminder_date, expected_refill_date, customer_name, customer_phone, stores(name), submitter:users!submitted_by(full_name), prescription_images(id)', isStaff ? undefined : { count: 'exact' })
+    .select('id, order_code, submitted_at, status, is_chronic, order_sync_status, care_status, reminder_date, expected_refill_date, order_created_at, customer_name, customer_phone, stores(name), submitter:users!submitted_by(full_name), prescription_images(id)', isStaff ? undefined : { count: 'exact' })
     .order('submitted_at', { ascending: false })
     .range(from, to)
 
@@ -62,21 +62,29 @@ export default async function PrescriptionsPage({
   if (params.date_from) query = query.gte('submitted_at', params.date_from + 'T00:00:00+07:00')
   if (params.date_to)   query = query.lte('submitted_at', params.date_to   + 'T23:59:59+07:00')
 
-  // Chronic-care tabs (mig 073). "Cần chăm sóc" = derived due state expressed
-  // directly in SQL: chronic + order synced + not yet cared + reminder reached.
+  // Chronic-care (mig 073). Two axes, kept apart (review r-ui): a top-level TYPE
+  // tab (care: Tất cả | Mạn tính) for everyone, and — for admin/SM only — a care
+  // STATE dropdown (care_state). All states are chronic-scoped so they match the
+  // per-row care chip (deriveCareState only labels chronic rows).
   const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
-  const care = ['chronic', 'due', 'done', 'error'].includes(params.care ?? '') ? params.care : undefined
+  const care = params.care === 'chronic' ? 'chronic' : undefined
+  const careState = !isStaff && ['waiting', 'due', 'done', 'error'].includes(params.care_state ?? '')
+    ? params.care_state : undefined
   if (care === 'chronic') query = query.eq('is_chronic', true)
-  else if (care === 'due') query = query.eq('is_chronic', true).eq('order_sync_status', 'synced').eq('care_status', 'none').lte('reminder_date', vnTodayISO)
-  else if (care === 'done') query = query.eq('is_chronic', true).eq('care_status', 'done')
-  else if (care === 'error') query = query.eq('order_sync_status', 'error')
+  if (careState === 'waiting') query = query.eq('is_chronic', true).eq('order_sync_status', 'pending').neq('care_status', 'done')
+  else if (careState === 'due') query = query.eq('is_chronic', true).eq('order_sync_status', 'synced').eq('care_status', 'none').lte('reminder_date', vnTodayISO)
+  else if (careState === 'done') query = query.eq('is_chronic', true).eq('care_status', 'done')
+  else if (careState === 'error') query = query.eq('is_chronic', true).eq('order_sync_status', 'error')
 
-  const [{ data: submissions, count }, { data: stores }] = await Promise.all([
+  const [{ data: submissions, count, error: listErr }, { data: stores }] = await Promise.all([
     query,
     isAdmin
       ? supabase.from('stores').select('id, name').order('name')
       : Promise.resolve({ data: [] }),
   ])
+  // A failed query must NOT read as "no prescriptions" (missing migration/column
+  // or RLS error) — surface it. Common cause here: migration 073 not yet run.
+  if (listErr) console.error('[prescriptions] list query failed:', listErr.message)
 
   const totalPages   = Math.max(1, Math.ceil((count ?? 0) / pageSize))
   // Staff: no exact count — the (pageSize + 1)th row, if present, signals a next page.
@@ -90,7 +98,8 @@ export default async function PrescriptionsPage({
   function buildUrl(patch: Record<string, string | undefined>) {
     const next = {
       status: params.status, q: params.q, store_id: params.store_id,
-      date_from: params.date_from, date_to: params.date_to, care: params.care, page: params.page,
+      date_from: params.date_from, date_to: params.date_to,
+      care: params.care, care_state: params.care_state, page: params.page,
       ...patch,
     }
     const qs = Object.entries(next)
@@ -135,25 +144,35 @@ export default async function PrescriptionsPage({
       {/* Admin batch sync form */}
       {isSuper && <PrescriptionSyncForm />}
 
-      {/* Chronic-care tabs (mobile: horizontal scroll) */}
-      <div className="flex gap-2 overflow-x-auto pb-1 -mb-1">
+      {listErr && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm">
+          <p className="font-medium text-destructive">Không tải được danh sách toa thuốc</p>
+          <p className="text-muted-foreground mt-1">{listErr.message}</p>
+          {(listErr.message.includes('care_status') || listErr.message.includes('is_chronic') || listErr.message.includes('order_sync')) && (
+            <p className="text-muted-foreground mt-1">
+              Có thể migration <code className="font-mono text-xs bg-muted px-1 rounded">073_prescription_chronic_care.sql</code> chưa được chạy.
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Type tabs — only Tất cả | Mạn tính (review r-ui: states moved to the
+          per-row chip + the admin/SM status dropdown below). */}
+      <div className="inline-flex rounded-full border bg-muted/40 p-0.5">
         {([
-          { key: undefined,  label: 'Tất cả' },
-          { key: 'chronic',  label: 'Mạn tính' },
-          { key: 'due',      label: 'Cần chăm sóc' },
-          { key: 'done',     label: 'Đã chăm sóc' },
-          { key: 'error',    label: 'Lỗi DHC' },
+          { key: undefined, label: 'Tất cả' },
+          { key: 'chronic', label: 'Mạn tính' },
         ] as { key?: string; label: string }[]).map((t) => {
           const active = care === t.key
           return (
             <Link
               key={t.label}
-              href={buildUrl({ care: t.key, page: undefined })}
+              href={buildUrl({ care: t.key, care_state: undefined, page: undefined })}
               className={cn(
-                'shrink-0 whitespace-nowrap px-3 py-1.5 rounded-full border text-xs font-medium transition-colors',
+                'px-4 py-1.5 rounded-full text-sm font-medium transition-colors',
                 active
-                  ? 'border-primary bg-primary text-primary-foreground shadow-sm'
-                  : 'text-muted-foreground hover:text-primary hover:bg-primary/5',
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground',
               )}
             >
               {t.label}
@@ -198,20 +217,35 @@ export default async function PrescriptionsPage({
         <input name="date_to"   type="date" defaultValue={params.date_to   ?? ''} aria-label="Đến ngày"
           className="h-10 md:h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm" />
 
-        {/* Status filter */}
-        <select name="status" defaultValue={params.status ?? ''} aria-label="Lọc theo trạng thái"
+        {/* Product-sync status (compliance JSON) */}
+        <select name="status" defaultValue={params.status ?? ''} aria-label="Lọc theo trạng thái đồng bộ"
           className="h-10 md:h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm">
           <option value="">Tất cả trạng thái</option>
           <option value="pending_sync">Chờ đồng bộ</option>
           <option value="synced">Đã đồng bộ</option>
         </select>
 
+        {/* Care status (mig 073) — admin/SM only; the states that used to be tabs */}
+        {!isStaff && (
+          <select name="care_state" defaultValue={params.care_state ?? ''} aria-label="Lọc theo trạng thái chăm sóc"
+            className="h-10 md:h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm">
+            <option value="">Chăm sóc: tất cả</option>
+            <option value="waiting">Chờ dữ liệu đơn</option>
+            <option value="due">Cần chăm sóc</option>
+            <option value="done">Đã chăm sóc</option>
+            <option value="error">Lỗi DHC</option>
+          </select>
+        )}
+
+        {/* Preserve the active TYPE tab across a filter submit */}
+        {care && <input type="hidden" name="care" value={care} />}
         <input type="hidden" name="page" value="1" />
         <button type="submit" className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'h-10 md:h-8')}>
           Lọc
         </button>
-        {(params.q || params.store_id || params.date_from || params.date_to || params.status) && (
-          <Link href="/prescriptions" className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'h-10 md:h-8')}>
+        {(params.q || params.store_id || params.date_from || params.date_to || params.status || params.care_state) && (
+          <Link href={buildUrl({ q: undefined, store_id: undefined, date_from: undefined, date_to: undefined, status: undefined, care_state: undefined, page: undefined })}
+            className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'h-10 md:h-8')}>
             Xoá lọc
           </Link>
         )}
@@ -243,14 +277,25 @@ export default async function PrescriptionsPage({
                       {statusBadge(s.status)}
                     </span>
                   </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    {!isStaff && storeName ? `${storeName} · ` : ''}{formatDateTime(s.submitted_at)}
-                  </p>
-                  {s.is_chronic && (s.customer_name || s.expected_refill_date) && (
-                    <p className="mt-0.5 text-xs text-muted-foreground">
-                      {s.customer_name ?? 'Khách hàng —'}
-                      {s.customer_phone ? ` · ${s.customer_phone}` : ''}
-                      {s.expected_refill_date ? ` · hết thuốc ${formatDate(s.expected_refill_date)}` : ''}
+                  {/* Chronic rows read as a customer-care list: khách + SĐT, ngày
+                      bán → hết thuốc, and a "Chăm sóc" affordance when due. */}
+                  {s.is_chronic ? (
+                    <div className="mt-1.5 space-y-0.5">
+                      <p className="text-sm font-medium">{s.customer_name ?? 'Khách hàng —'}
+                        {s.customer_phone && <span className="text-muted-foreground font-normal"> · {s.customer_phone}</span>}
+                      </p>
+                      <p className="text-xs text-muted-foreground">
+                        {s.order_created_at ? `Bán ${formatDate(s.order_created_at)}` : 'Chờ dữ liệu đơn'}
+                        {s.expected_refill_date ? ` · Hết thuốc ${formatDate(s.expected_refill_date)}` : ''}
+                        {!isStaff && storeName ? ` · ${storeName}` : ''}
+                      </p>
+                      {careState?.key === 'due' && (
+                        <p className="text-xs font-medium text-primary">Chăm sóc khách ngay →</p>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {!isStaff && storeName ? `${storeName} · ` : ''}{formatDateTime(s.submitted_at)}
                     </p>
                   )}
                 </Link>
