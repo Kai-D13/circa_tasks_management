@@ -9,6 +9,8 @@ import {
   PRESCRIPTION_MAX_SIZE,
   PRESCRIPTION_ALLOWED_TYPES,
   DHC_PATTERN,
+  DHC_STRICT_PATTERN,
+  DHC_FORMAT_HINT,
 } from '@/lib/prescriptions/constants'
 import type { PrescriptionImageInput, ProductRow } from '@/lib/prescriptions/types'
 import { isSuperAdminEmail } from '@/lib/authz'
@@ -20,6 +22,9 @@ export async function submitPrescription(
   orderCode:    string,
   images:       PrescriptionImageInput[],
   notes?:       string,
+  // Chronic prescription (2026-07-04): tick + days of supply. Optional — the
+  // legacy call shape stays valid.
+  options?:     { isChronic: boolean; daysSupply?: number },
 ) {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -34,12 +39,20 @@ export async function submitPrescription(
 
   const trimmedCode = orderCode.trim().toUpperCase()
   if (!trimmedCode) return { error: 'Vui lòng nhập mã đơn hàng DHC' }
-  if (!DHC_PATTERN.test(trimmedCode))
-    return { error: 'Mã đơn hàng phải có dạng DHC theo sau bởi các chữ số (VD: DHC00878115)' }
+  // STRICT format for new submissions (legacy loose DHC_PATTERN stays for the
+  // product-sync path only — existing rows predate this rule).
+  if (!DHC_STRICT_PATTERN.test(trimmedCode))
+    return { error: DHC_FORMAT_HINT }
 
   // Note is required (stakeholder 2026-06-13) — active ingredient / prescription type.
   const trimmedNotes = notes?.trim() ?? ''
   if (!trimmedNotes) return { error: 'Vui lòng nhập ghi chú toa thuốc' }
+
+  // Chronic: days of supply must be a positive integer.
+  const isChronic = options?.isChronic === true
+  const daysSupply = isChronic ? Math.floor(Number(options?.daysSupply)) : null
+  if (isChronic && (!Number.isFinite(daysSupply as number) || (daysSupply as number) <= 0))
+    return { error: 'Toa mạn tính cần số ngày dùng thuốc (lớn hơn 0)' }
 
   // Validate images server-side — don't trust client metadata/path
   if (images.length < 1 || images.length > PRESCRIPTION_MAX_IMAGES)
@@ -79,6 +92,10 @@ export async function submitPrescription(
       store_id:     profile.store_id,
       submitted_by: user.id,
       notes:        trimmedNotes,
+      // Chronic care (mig 073) — order_sync_status defaults to 'pending' in DB;
+      // the pull-prescription-orders cron fills the order/customer fields.
+      is_chronic:   isChronic,
+      days_supply:  isChronic ? daysSupply : null,
     })
     .select('id')
     .single()

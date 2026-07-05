@@ -21,7 +21,7 @@ const MAX_AUDIO = 15 * 1024 * 1024
 const MAX_VIDEO = 50 * 1024 * 1024  // matches the Supabase bucket cap (no video regression)
 const MAX_DOC   = 10 * 1024 * 1024
 
-type UploadPurpose = 'task_result' | 'task_input' | 'prescription' | 'announcement_asset'
+type UploadPurpose = 'task_result' | 'task_input' | 'prescription' | 'prescription_care' | 'announcement_asset'
 
 export interface CreateUploadUrlInput {
   purpose:      UploadPurpose
@@ -103,6 +103,20 @@ export async function createUploadUrl(input: CreateUploadUrlInput): Promise<Resu
     const ok = me?.role === 'staff' && me?.store_id === input.storeId
     if (!ok) return { error: 'Không có quyền upload cho cửa hàng này' }
     key = `prescriptions/${input.storeId}/${input.submissionId}/${uniq}_${safe}`
+
+  } else if (input.purpose === 'prescription_care') {
+    // Chronic-care evidence photos. Any pharmacist OR store manager of the
+    // submission's store may care for the customer (PM decision 2026-07-04) —
+    // submitPrescriptionCare re-validates against the submission itself.
+    if (!input.storeId) return { error: 'Thiếu store' }
+    if (!input.submissionId || !/^[A-Za-z0-9_-]{1,100}$/.test(input.submissionId)) {
+      return { error: 'submissionId không hợp lệ' }
+    }
+    if (!ct.startsWith('image/')) return { error: 'Chỉ chấp nhận ảnh' }
+    const { data: me } = await supabase.from('users').select('role, store_id').eq('id', user.id).single()
+    const ok = (me?.role === 'staff' || me?.role === 'store_manager') && me?.store_id === input.storeId
+    if (!ok) return { error: 'Không có quyền upload cho cửa hàng này' }
+    key = `prescription-care/${input.submissionId}/${uniq}_${safe}`
 
   } else if (input.purpose === 'announcement_asset') {
     // Cover/carousel images for an announcement — admin only (mirrors ann_insert).

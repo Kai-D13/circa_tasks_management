@@ -22,6 +22,11 @@ interface Props {
   storeId:      string
   value:        PrescriptionImage[]
   onChange:     (imgs: PrescriptionImage[]) => void
+  /** 'prescription' (default, submit flow) | 'prescription_care' (care evidence,
+      GCS key prescription-care/{submissionId}/...; Supabase fallback stays under
+      the prescriptions/{store}/{submission}/ prefix with a care_ name so the
+      existing storage RLS (mig 039, same-store staff/SM) keeps applying). */
+  purpose?:     'prescription' | 'prescription_care'
 }
 
 const MAX_COUNT     = 10
@@ -29,7 +34,7 @@ const MAX_RAW       = 25 * 1024 * 1024 // pre-compression guard: don't load absu
 const MAX_PER_IMAGE = 5 * 1024 * 1024  // post-compression cap actually uploaded
 const ALLOWED_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp']
 
-export function PrescriptionImageUpload({ submissionId, storeId, value, onChange }: Props) {
+export function PrescriptionImageUpload({ submissionId, storeId, value, onChange, purpose = 'prescription' }: Props) {
   const [uploading, setUploading] = useState(false)
   const galleryRef = useRef<HTMLInputElement>(null)
   const cameraRef  = useRef<HTMLInputElement>(null)
@@ -75,7 +80,7 @@ export function PrescriptionImageUpload({ submissionId, storeId, value, onChange
         // Try GCS first (server-side flag). On GCS, store the full public URL as
         // `path` (storage_path) — the serve paths detect a full URL and use it
         // as-is (dual-read). On 'fallback' use the existing Supabase upload.
-        const g = await uploadViaGcs(file, { purpose: 'prescription', storeId, submissionId, filename: file.name })
+        const g = await uploadViaGcs(file, { purpose, storeId, submissionId, filename: file.name })
         if (g !== 'fallback') {
           if ('error' in g) { toast.error(`Tải lên thất bại: ${original.name}`); continue }
           uploaded.push({ path: g.url, previewUrl: g.url, name: file.name, type: file.type, size: file.size })
@@ -84,7 +89,9 @@ export function PrescriptionImageUpload({ submissionId, storeId, value, onChange
 
         // Path includes store_id for store-level isolation. Sanitize the key —
         // Supabase rejects non-ASCII keys (InvalidKey); original name kept below.
-        const path = `prescriptions/${storeId}/${submissionId}/${Date.now()}_${safeStorageName(file.name)}`
+        // Care evidence keeps the prescriptions/ prefix (storage RLS 039) with a
+        // care_ marker in the filename.
+        const path = `prescriptions/${storeId}/${submissionId}/${purpose === 'prescription_care' ? 'care_' : ''}${Date.now()}_${safeStorageName(file.name)}`
         const { error } = await supabase.storage
           .from(PRESCRIPTION_BUCKET)
           .upload(path, file, { upsert: false })
