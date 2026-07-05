@@ -1996,3 +1996,20 @@ export async function deleteSchedule(scheduleId: string) {
   revalidatePath('/tasks')
   return { success: true }
 }
+
+// Bottom-nav badge: how many tasks the staff user still has open. Head-count
+// only (no rows), RLS-scoped, and the predicate MIRRORS the staff pending list
+// in app/(dashboard)/tasks/page.tsx (not-done + not-archived + no TRF; staff
+// are exempt from the 14-day declutter) so the badge always equals the list.
+export async function getStaffPendingTaskCount(): Promise<number> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return 0
+  const { count } = await supabase
+    .from('tasks')
+    .select('id', { count: 'exact', head: true })
+    .neq('status', 'done')
+    .is('archived_at', null)
+    .neq('source_type', 'inventory_trf')
+  return count ?? 0
+}

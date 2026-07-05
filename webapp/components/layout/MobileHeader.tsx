@@ -21,8 +21,10 @@ const ROLE_LABELS: Record<string, string> = {
 const SECTION_TITLES: Record<string, string> = {
   dashboard:     'Tổng quan',
   tasks:         'Tasks',
+  targets:       'Doanh số',
   prescriptions: 'Toa thuốc',
   announcements: 'Bảng tin',
+  inventory:     'Tồn kho',
   users:         'Người dùng',
   stores:        'Cửa hàng',
   logs:          'Nhật ký',

@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { getUnreadAnnouncementCount } from '@/app/actions/announcements'
+import { getStaffPendingTaskCount } from '@/app/actions/tasks'
 import { UserProvider } from '@/components/providers/UserProvider'
 import { ThemeProvider } from '@/components/providers/ThemeProvider'
 import { NotificationProvider } from '@/components/layout/NotificationProvider'
@@ -27,6 +28,9 @@ export default async function DashboardLayout({
   // (it's display:none for them anyway) for a leaner shell. 100dvh avoids the
   // mobile address-bar resize jank.
   const isStaff = profile.role === 'staff'
+  // Tasks-tab badge (staff only): head-count of the staff pending list, same
+  // posture as the announcements badge — recomputed per navigation, no polling.
+  const tasksPending = isStaff ? await getStaffPendingTaskCount() : 0
   // KPI Campaign nav gate (server env) → passed to the client Sidebar as a prop
   // (avoids a NEXT_PUBLIC_ var; keeps the flag server-controlled).
   const kpiCampaignEnabled = isKpiCampaignEnabled()
@@ -51,7 +55,7 @@ export default async function DashboardLayout({
         </div>
 
         {/* Bottom navigation — mobile only */}
-        <BottomNav announcementsUnread={announcementsUnread} />
+        <BottomNav announcementsUnread={announcementsUnread} tasksPending={tasksPending} />
         </NotificationProvider>
       </UserProvider>
     </ThemeProvider>
