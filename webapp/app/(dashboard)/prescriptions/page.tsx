@@ -90,6 +90,18 @@ export default async function PrescriptionsPage({
     return qs ? `/prescriptions?${qs}` : '/prescriptions'
   }
 
+  // Shared status chip (mobile card + desktop table render the same rows).
+  const statusBadge = (status: string) =>
+    status === 'synced' ? (
+      <Badge className="bg-green-100 text-green-700 gap-1 text-xs">
+        <CheckCircle2 className="h-3 w-3" /> Đã đồng bộ
+      </Badge>
+    ) : (
+      <Badge className="bg-amber-100 text-amber-700 gap-1 text-xs">
+        <Clock className="h-3 w-3" /> Chờ đồng bộ
+      </Badge>
+    )
+
   return (
     <div className="p-4 space-y-4 pb-24">
       <div className="flex items-center justify-between flex-wrap gap-2">
@@ -102,7 +114,7 @@ export default async function PrescriptionsPage({
         <div className="flex items-center gap-2">
           {isAdmin && <ExportButton endpoint="/api/export/prescriptions" />}
           {isStaff && (
-            <Link href="/prescriptions/new" className={cn(buttonVariants({ size: 'sm' }))}>
+            <Link href="/prescriptions/new" className={cn(buttonVariants({ size: 'sm' }), 'max-md:h-10 max-md:px-4')}>
               <Plus className="h-4 w-4 mr-1" />
               Nộp toa thuốc
             </Link>
@@ -115,8 +127,8 @@ export default async function PrescriptionsPage({
 
       {/* Search + filters */}
       <form method="GET" className="flex flex-wrap gap-2 items-end">
-        {/* DHC search */}
-        <div className="relative">
+        {/* DHC search — 40px tall on mobile for touch, compact on desktop */}
+        <div className="relative w-full sm:w-auto">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
           <input
             name="q"
@@ -124,7 +136,7 @@ export default async function PrescriptionsPage({
             defaultValue={params.q ?? ''}
             placeholder="Tìm mã DHC..."
             aria-label="Tìm theo mã DHC"
-            className="pl-8 h-8 w-44 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
+            className="pl-8 h-10 md:h-8 w-full sm:w-44 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
           />
         </div>
 
@@ -134,7 +146,7 @@ export default async function PrescriptionsPage({
             name="store_id"
             defaultValue={params.store_id ?? ''}
             aria-label="Lọc theo cửa hàng"
-            className="h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm"
+            className="h-10 md:h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm"
           >
             <option value="">Tất cả cửa hàng</option>
             {(stores ?? []).map((s) => (
@@ -145,24 +157,24 @@ export default async function PrescriptionsPage({
 
         {/* Date range */}
         <input name="date_from" type="date" defaultValue={params.date_from ?? ''} aria-label="Từ ngày"
-          className="h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm" />
+          className="h-10 md:h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm" />
         <input name="date_to"   type="date" defaultValue={params.date_to   ?? ''} aria-label="Đến ngày"
-          className="h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm" />
+          className="h-10 md:h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm" />
 
         {/* Status filter */}
         <select name="status" defaultValue={params.status ?? ''} aria-label="Lọc theo trạng thái"
-          className="h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm">
+          className="h-10 md:h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm">
           <option value="">Tất cả trạng thái</option>
           <option value="pending_sync">Chờ đồng bộ</option>
           <option value="synced">Đã đồng bộ</option>
         </select>
 
         <input type="hidden" name="page" value="1" />
-        <button type="submit" className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'h-8')}>
+        <button type="submit" className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'h-10 md:h-8')}>
           Lọc
         </button>
         {(params.q || params.store_id || params.date_from || params.date_to || params.status) && (
-          <Link href="/prescriptions" className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'h-8')}>
+          <Link href="/prescriptions" className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'h-10 md:h-8')}>
             Xoá lọc
           </Link>
         )}
@@ -170,6 +182,36 @@ export default async function PrescriptionsPage({
 
       <Card>
         <CardContent className="p-0">
+          {/* Mobile: card list — the multi-column table is unreadable at 390px.
+              Renders the SAME pageRows as the table below (no data drift). */}
+          <div className="md:hidden divide-y">
+            {pageRows.map((s) => {
+              const storeName = (s.stores as unknown as { name: string } | null)?.name
+              return (
+                <Link
+                  key={`m-${s.id}`}
+                  href={`/prescriptions/${s.id}`}
+                  prefetch={false}
+                  className="block p-3.5 active:bg-muted/50"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono font-semibold text-sm truncate">{s.order_code}</span>
+                    {statusBadge(s.status)}
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {!isStaff && storeName ? `${storeName} · ` : ''}{formatDateTime(s.submitted_at)}
+                  </p>
+                </Link>
+              )
+            })}
+            {pageRows.length === 0 && (
+              <p className="text-center text-sm text-muted-foreground py-10">
+                {isStaff ? 'Bạn chưa nộp toa thuốc nào' : 'Không tìm thấy toa thuốc nào'}
+              </p>
+            )}
+          </div>
+
+          <div className="hidden md:block">
           <Table>
             <TableHeader>
               <TableRow>
@@ -207,17 +249,7 @@ export default async function PrescriptionsPage({
                       {Array.isArray(s.prescription_images) ? s.prescription_images.length : 0} ảnh
                     </TableCell>
                   )}
-                  <TableCell>
-                    {s.status === 'synced' ? (
-                      <Badge className="bg-green-100 text-green-700 gap-1 text-xs">
-                        <CheckCircle2 className="h-3 w-3" /> Đã đồng bộ
-                      </Badge>
-                    ) : (
-                      <Badge className="bg-amber-100 text-amber-700 gap-1 text-xs">
-                        <Clock className="h-3 w-3" /> Chờ đồng bộ
-                      </Badge>
-                    )}
-                  </TableCell>
+                  <TableCell>{statusBadge(s.status)}</TableCell>
                 </TableRow>
               ))}
               {(submissions ?? []).length === 0 && (
@@ -229,6 +261,7 @@ export default async function PrescriptionsPage({
               )}
             </TableBody>
           </Table>
+          </div>
 
           {/* Staff pagination — Prev/Next only (no exact count, so no total) */}
           {isStaff && (page > 1 || hasNextStaff) && (
