@@ -228,24 +228,33 @@ export default async function PrescriptionDetailPage({
         </Card>
       )}
 
-      {/* Care form — prominent only when the customer is actually due for care;
-          before the reminder date it's tucked into a secondary disclosure so we
-          don't push an early visit (review r-ui). */}
-      {canCare && (
-        careState?.key === 'due' ? (
+      {/* Care form gating (review r-ui2):
+          due       → prominent form (act now)
+          upcoming  → secondary disclosure (early care possible, not pushed)
+          waiting   → no form yet (no order data → can't schedule/care)
+          error     → no form (DHC must be fixed on POS first)
+          canCare already means chronic + not yet cared + permitted. */}
+      {canCare && careState && (
+        careState.key === 'due' ? (
           <CareForm submissionId={sub.id} storeId={sub.store_id} />
-        ) : (
+        ) : careState.key === 'upcoming' ? (
           <details className="group">
             <summary className="cursor-pointer select-none inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground">
               Ghi nhận chăm sóc sớm
-              {careState?.key === 'upcoming' && sub.reminder_date
-                ? ` (chưa tới kỳ · nhắc ${formatDate(sub.reminder_date)})`
-                : ''}
+              {sub.reminder_date ? ` (chưa tới kỳ · nhắc ${formatDate(sub.reminder_date)})` : ''}
             </summary>
             <div className="mt-3">
               <CareForm submissionId={sub.id} storeId={sub.store_id} />
             </div>
           </details>
+        ) : (
+          <Card>
+            <CardContent className="py-3 text-sm text-muted-foreground">
+              {careState.key === 'error'
+                ? 'Chưa thể chăm sóc: mã DHC chưa khớp dữ liệu đơn POS. Kiểm tra lại mã trên POS, hệ thống sẽ tự cập nhật ở lần đồng bộ kế tiếp.'
+                : 'Chưa thể chăm sóc: đang chờ dữ liệu đơn từ POS để lên lịch nhắc khách.'}
+            </CardContent>
+          </Card>
         )
       )}
 

@@ -71,10 +71,18 @@ export default async function PrescriptionsPage({
   const careState = !isStaff && ['waiting', 'due', 'done', 'error'].includes(params.care_state ?? '')
     ? params.care_state : undefined
   if (care === 'chronic') query = query.eq('is_chronic', true)
-  if (careState === 'waiting') query = query.eq('is_chronic', true).eq('order_sync_status', 'pending').neq('care_status', 'done')
-  else if (careState === 'due') query = query.eq('is_chronic', true).eq('order_sync_status', 'synced').eq('care_status', 'none').lte('reminder_date', vnTodayISO)
-  else if (careState === 'done') query = query.eq('is_chronic', true).eq('care_status', 'done')
-  else if (careState === 'error') query = query.eq('is_chronic', true).eq('order_sync_status', 'error')
+  // Mirror deriveCareState exactly so the dropdown filter == the on-screen chip.
+  if (careState === 'waiting') {
+    // chronic, uncared, not-error, and (not synced OR no reminder date yet)
+    query = query.eq('is_chronic', true).eq('care_status', 'none').neq('order_sync_status', 'error')
+      .or('order_sync_status.neq.synced,reminder_date.is.null')
+  } else if (careState === 'due') {
+    query = query.eq('is_chronic', true).eq('order_sync_status', 'synced').eq('care_status', 'none').lte('reminder_date', vnTodayISO)
+  } else if (careState === 'done') {
+    query = query.eq('is_chronic', true).eq('care_status', 'done')
+  } else if (careState === 'error') {
+    query = query.eq('is_chronic', true).eq('order_sync_status', 'error').eq('care_status', 'none')
+  }
 
   const [{ data: submissions, count, error: listErr }, { data: stores }] = await Promise.all([
     query,
@@ -274,7 +282,9 @@ export default async function PrescriptionsPage({
                           {careState.label}
                         </span>
                       )}
-                      {statusBadge(s.status)}
+                      {/* Legacy product-sync status is an admin/compliance concern;
+                          hide it from staff so it isn't confused with care sync. */}
+                      {!isStaff && statusBadge(s.status)}
                     </span>
                   </div>
                   {/* Chronic rows read as a customer-care list: khách + SĐT, ngày
@@ -301,7 +311,7 @@ export default async function PrescriptionsPage({
                 </Link>
               )
             })}
-            {pageRows.length === 0 && (
+            {pageRows.length === 0 && !listErr && (
               <p className="text-center text-sm text-muted-foreground py-10">
                 {isStaff ? 'Bạn chưa nộp toa thuốc nào' : 'Không tìm thấy toa thuốc nào'}
               </p>
@@ -360,7 +370,7 @@ export default async function PrescriptionsPage({
                   </TableCell>
                 </TableRow>
               ))}
-              {(submissions ?? []).length === 0 && (
+              {(submissions ?? []).length === 0 && !listErr && (
                 <TableRow>
                   <TableCell colSpan={7} className="text-center text-muted-foreground py-10">
                     {isStaff ? 'Bạn chưa nộp toa thuốc nào' : 'Không tìm thấy toa thuốc nào'}

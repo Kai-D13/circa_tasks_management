@@ -36,14 +36,21 @@ export async function GET(request: NextRequest) {
   if (p.get('date_from')) query = query.gte('submitted_at', p.get('date_from') + 'T00:00:00+07:00')
   if (p.get('date_to'))   query = query.lte('submitted_at', p.get('date_to') + 'T23:59:59+07:00')
 
-  // Mirror the list's chronic-care tab so an export from a care tab matches the
-  // screen (mig 073).
+  // Mirror the list's chronic-care filters (type tab + care-status dropdown) so
+  // an export matches the screen (mig 073; kept in sync with page.tsx).
   const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
-  const care = ['chronic', 'due', 'done', 'error'].includes(p.get('care') ?? '') ? p.get('care') : null
-  if (care === 'chronic') query = query.eq('is_chronic', true)
-  else if (care === 'due') query = query.eq('is_chronic', true).eq('order_sync_status', 'synced').eq('care_status', 'none').lte('reminder_date', vnTodayISO)
-  else if (care === 'done') query = query.eq('is_chronic', true).eq('care_status', 'done')
-  else if (care === 'error') query = query.eq('order_sync_status', 'error')
+  if (p.get('care') === 'chronic') query = query.eq('is_chronic', true)
+  const careState = ['waiting', 'due', 'done', 'error'].includes(p.get('care_state') ?? '') ? p.get('care_state') : null
+  if (careState === 'waiting') {
+    query = query.eq('is_chronic', true).eq('care_status', 'none').neq('order_sync_status', 'error')
+      .or('order_sync_status.neq.synced,reminder_date.is.null')
+  } else if (careState === 'due') {
+    query = query.eq('is_chronic', true).eq('order_sync_status', 'synced').eq('care_status', 'none').lte('reminder_date', vnTodayISO)
+  } else if (careState === 'done') {
+    query = query.eq('is_chronic', true).eq('care_status', 'done')
+  } else if (careState === 'error') {
+    query = query.eq('is_chronic', true).eq('order_sync_status', 'error').eq('care_status', 'none')
+  }
 
   const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
