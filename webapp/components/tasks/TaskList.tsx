@@ -959,8 +959,6 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                       <Link
                         key={child.id}
                         href={`/tasks/${child.id}`}
-                        target="_blank"
-                        rel="noopener noreferrer"
                         prefetch={false}
                         className="flex items-center justify-between gap-2 p-2 pl-9 text-sm active:bg-muted/50"
                       >
@@ -984,20 +982,21 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
           const { task } = item
           const effStatus = getEffectiveStatus(task.deadline, task.status)
           const submitter = getSubmitterDisplay(task)
+          // Urgency cue: deadline already past or within 24h, task still open.
+          const deadlineHot = !!task.deadline && task.status !== 'done'
+            && Date.parse(task.deadline) - Date.now() < 24 * 3600_000
           return (
             <Link
               key={`m-${task.id}`}
               href={`/tasks/${task.id}`}
-              target="_blank"
-              rel="noopener noreferrer"
               prefetch={false}
               className={cn(
-                'block rounded-lg border p-3 active:bg-muted/50',
-                effStatus === 'overdue' && 'border-red-200 bg-red-50/50',
+                'block rounded-xl border bg-card p-3.5 active:bg-muted/50',
+                effStatus === 'overdue' && 'border-red-200 bg-red-50/50 dark:border-red-900 dark:bg-red-950/20',
               )}
             >
               <div className="flex items-start justify-between gap-2">
-                <span className="font-medium flex items-center gap-1.5 min-w-0">
+                <span className="font-semibold flex items-center gap-1.5 min-w-0">
                   <span className="truncate">{task.title}</span>
                   {task.broadcast_id && <Radio className="h-3.5 w-3.5 text-primary shrink-0" />}
                 </span>
@@ -1006,13 +1005,18 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
               <div className="mt-1 flex flex-wrap items-center gap-1">
                 <TaskBadges task={task} userRole={userRole} effStatus={effStatus} compact />
               </div>
-              <p className="mt-1.5 text-sm text-muted-foreground">{task.stores?.name ?? '—'}</p>
-              <p className="text-sm font-medium">{submitter.primary}</p>
+              {/* One strong line (who acts / submitted) + one muted context line —
+                  the old 3 stacked lines read as noise on a phone. */}
+              <p className="mt-1.5 text-sm font-medium">{submitter.primary}</p>
               {submitter.sub && <p className="text-xs text-muted-foreground">{submitter.sub}</p>}
-              <p className="text-xs text-muted-foreground">Tạo bởi {task.creator?.full_name ?? '—'}</p>
+              <p className="text-xs text-muted-foreground">
+                {task.stores?.name ?? '—'} · Tạo bởi {task.creator?.full_name ?? '—'}
+              </p>
               <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                 <TaskPriorityBadge priority={task.priority as Task['priority']} />
-                <span>Hạn: {task.deadline ? formatDate(task.deadline) : '—'}</span>
+                <span className={cn(deadlineHot && 'text-red-600 font-medium')}>
+                  Hạn: {task.deadline ? formatDate(task.deadline) : '—'}
+                </span>
                 <span>Tạo: {formatDate(task.created_at)}</span>
               </div>
             </Link>

@@ -118,14 +118,15 @@ export function TaskFilters({ stores, departments, users, currentParams, showArc
       {/* Primary view tab — always visible (except in archive view). The single
           most important control: "what's still open" vs "history". */}
       {!showArchived && (
-        <div className="inline-flex rounded-lg border bg-muted/40 p-0.5 w-full sm:w-auto">
+        <div className="inline-flex rounded-full sm:rounded-lg border bg-muted/40 p-0.5 w-full sm:w-auto">
           {(['pending', 'done'] as const).map((v) => (
             <button
               key={v}
               type="button"
               onClick={() => setView(v)}
               className={cn(
-                'flex-1 sm:flex-none px-4 h-8 rounded-md text-sm font-medium transition-colors',
+                // Mobile: pill look + 40px touch height; desktop keeps the compact strip.
+                'flex-1 sm:flex-none px-4 h-10 sm:h-8 rounded-full sm:rounded-md text-sm font-medium transition-colors',
                 view === v
                   ? v === 'pending'
                     ? 'bg-primary text-primary-foreground shadow-sm'
