@@ -52,6 +52,22 @@ export default async function AnnouncementsPage() {
     }
   }
 
+  // Cover thumbnails for the feed (same RLS path the detail page uses). One
+  // indexed IN query over ≤100 ids; on failure just skip thumbnails (mirror the
+  // reads-query posture) — the card degrades to text-only.
+  const coverByAnn = new Map<string, string>()
+  if (list.length) {
+    const { data: covers, error: coverErr } = await supabase
+      .from('announcement_assets')
+      .select('announcement_id, url')
+      .eq('kind', 'cover')
+      .in('announcement_id', list.map((a) => a.id))
+    if (coverErr) console.error('[announcements] covers query failed:', coverErr.message)
+    for (const c of (covers ?? []) as { announcement_id: string; url: string }[]) {
+      if (!coverByAnn.has(c.announcement_id)) coverByAnn.set(c.announcement_id, c.url)
+    }
+  }
+
   return (
     <div className="p-4 md:p-6 space-y-4 max-w-3xl">
       <div className="flex items-center justify-between">
@@ -79,27 +95,41 @@ export default async function AnnouncementsPage() {
             const unread = !isAdmin && readsOk && !readIds.has(a.id)
             const creator = (a.creator as unknown as { full_name: string } | null)?.full_name ?? '—'
             const expired = !!a.expires_at && Date.parse(a.expires_at as string) < Date.now()
+            const cover = coverByAnn.get(a.id)
             return (
               <Link
                 key={a.id}
                 href={`/announcements/${a.id}`}
                 className={cn(
-                  'block rounded-lg border p-4 hover:bg-muted/40 transition-colors',
+                  'block rounded-xl border bg-card p-4 hover:bg-muted/40 active:bg-muted/40 transition-colors',
                   unread && 'border-primary/40 bg-primary/5',
                 )}
               >
-                <div className="flex items-start justify-between gap-2">
-                  <p className="font-medium">{a.title}</p>
-                  <span className="flex items-center gap-1 shrink-0">
-                    {expired && <Badge className="bg-muted text-muted-foreground text-[10px]">Hết hạn</Badge>}
-                    {unread && <Badge className="bg-primary text-white text-[10px]">Mới</Badge>}
-                  </span>
+                <div className="flex items-start gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="font-medium">{a.title}</p>
+                      <span className="flex items-center gap-1 shrink-0">
+                        {expired && <Badge className="bg-muted text-muted-foreground text-[10px]">Hết hạn</Badge>}
+                        {unread && <Badge className="bg-primary text-white text-[10px]">Mới</Badge>}
+                      </span>
+                    </div>
+                    {a.excerpt && <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{a.excerpt}</p>}
+                    <p className="text-xs text-muted-foreground mt-1.5">
+                      {creator} · {formatDateTime(a.published_at)}
+                      {a.visibility === 'stores' && ' · theo cửa hàng'}
+                    </p>
+                  </div>
+                  {cover && (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={cover}
+                      alt=""
+                      loading="lazy"
+                      className="h-14 w-14 rounded-lg border object-cover shrink-0"
+                    />
+                  )}
                 </div>
-                {a.excerpt && <p className="text-sm text-muted-foreground mt-1 line-clamp-2">{a.excerpt}</p>}
-                <p className="text-xs text-muted-foreground mt-1.5">
-                  {creator} · {formatDateTime(a.published_at)}
-                  {a.visibility === 'stores' && ' · theo cửa hàng'}
-                </p>
               </Link>
             )
           })}
