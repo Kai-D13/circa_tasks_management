@@ -9,15 +9,16 @@ import { PrescriptionSyncForm } from '@/components/prescriptions/PrescriptionSyn
 import { Plus, CheckCircle2, Clock, Search } from 'lucide-react'
 import { ExportButton } from '@/components/common/ExportButton'
 import { cn } from '@/lib/utils'
-import { formatDateTime } from '@/lib/dateUtils'
+import { formatDate, formatDateTime } from '@/lib/dateUtils'
 import { isSuperAdminEmail } from '@/lib/authz'
+import { deriveCareState } from '@/lib/prescriptions/careStatus'
 
 const PAGE_SIZE = 50
 
 export default async function PrescriptionsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; q?: string; store_id?: string; date_from?: string; date_to?: string; page?: string }>
+  searchParams: Promise<{ status?: string; q?: string; store_id?: string; date_from?: string; date_to?: string; care?: string; page?: string }>
 }) {
   const params = await searchParams
   const supabase = await createClient()
@@ -50,7 +51,7 @@ export default async function PrescriptionsPage({
   // column is hidden for staff, so they don't render it. Staff skip the exact count.
   let query = supabase
     .from('prescription_submissions')
-    .select('id, order_code, submitted_at, status, stores(name), submitter:users!submitted_by(full_name), prescription_images(id)', isStaff ? undefined : { count: 'exact' })
+    .select('id, order_code, submitted_at, status, is_chronic, order_sync_status, care_status, reminder_date, expected_refill_date, customer_name, customer_phone, stores(name), submitter:users!submitted_by(full_name), prescription_images(id)', isStaff ? undefined : { count: 'exact' })
     .order('submitted_at', { ascending: false })
     .range(from, to)
 
@@ -60,6 +61,15 @@ export default async function PrescriptionsPage({
   if (params.q)         query = query.ilike('order_code', `%${params.q.trim()}%`)
   if (params.date_from) query = query.gte('submitted_at', params.date_from + 'T00:00:00+07:00')
   if (params.date_to)   query = query.lte('submitted_at', params.date_to   + 'T23:59:59+07:00')
+
+  // Chronic-care tabs (mig 073). "Cần chăm sóc" = derived due state expressed
+  // directly in SQL: chronic + order synced + not yet cared + reminder reached.
+  const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
+  const care = ['chronic', 'due', 'done', 'error'].includes(params.care ?? '') ? params.care : undefined
+  if (care === 'chronic') query = query.eq('is_chronic', true)
+  else if (care === 'due') query = query.eq('is_chronic', true).eq('order_sync_status', 'synced').eq('care_status', 'none').lte('reminder_date', vnTodayISO)
+  else if (care === 'done') query = query.eq('is_chronic', true).eq('care_status', 'done')
+  else if (care === 'error') query = query.eq('order_sync_status', 'error')
 
   const [{ data: submissions, count }, { data: stores }] = await Promise.all([
     query,
@@ -80,7 +90,7 @@ export default async function PrescriptionsPage({
   function buildUrl(patch: Record<string, string | undefined>) {
     const next = {
       status: params.status, q: params.q, store_id: params.store_id,
-      date_from: params.date_from, date_to: params.date_to, page: params.page,
+      date_from: params.date_from, date_to: params.date_to, care: params.care, page: params.page,
       ...patch,
     }
     const qs = Object.entries(next)
@@ -124,6 +134,33 @@ export default async function PrescriptionsPage({
 
       {/* Admin batch sync form */}
       {isSuper && <PrescriptionSyncForm />}
+
+      {/* Chronic-care tabs (mobile: horizontal scroll) */}
+      <div className="flex gap-2 overflow-x-auto pb-1 -mb-1">
+        {([
+          { key: undefined,  label: 'Tất cả' },
+          { key: 'chronic',  label: 'Mạn tính' },
+          { key: 'due',      label: 'Cần chăm sóc' },
+          { key: 'done',     label: 'Đã chăm sóc' },
+          { key: 'error',    label: 'Lỗi DHC' },
+        ] as { key?: string; label: string }[]).map((t) => {
+          const active = care === t.key
+          return (
+            <Link
+              key={t.label}
+              href={buildUrl({ care: t.key, page: undefined })}
+              className={cn(
+                'shrink-0 whitespace-nowrap px-3 py-1.5 rounded-full border text-xs font-medium transition-colors',
+                active
+                  ? 'border-primary bg-primary text-primary-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-primary hover:bg-primary/5',
+              )}
+            >
+              {t.label}
+            </Link>
+          )
+        })}
+      </div>
 
       {/* Search + filters */}
       <form method="GET" className="flex flex-wrap gap-2 items-end">
@@ -187,6 +224,7 @@ export default async function PrescriptionsPage({
           <div className="md:hidden divide-y">
             {pageRows.map((s) => {
               const storeName = (s.stores as unknown as { name: string } | null)?.name
+              const careState = deriveCareState(s, vnTodayISO)
               return (
                 <Link
                   key={`m-${s.id}`}
@@ -196,11 +234,25 @@ export default async function PrescriptionsPage({
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-mono font-semibold text-sm truncate">{s.order_code}</span>
-                    {statusBadge(s.status)}
+                    <span className="flex items-center gap-1 shrink-0">
+                      {careState && (
+                        <span className={cn('text-[11px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap', careState.cls)}>
+                          {careState.label}
+                        </span>
+                      )}
+                      {statusBadge(s.status)}
+                    </span>
                   </div>
                   <p className="mt-1 text-xs text-muted-foreground">
                     {!isStaff && storeName ? `${storeName} · ` : ''}{formatDateTime(s.submitted_at)}
                   </p>
+                  {s.is_chronic && (s.customer_name || s.expected_refill_date) && (
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {s.customer_name ?? 'Khách hàng —'}
+                      {s.customer_phone ? ` · ${s.customer_phone}` : ''}
+                      {s.expected_refill_date ? ` · hết thuốc ${formatDate(s.expected_refill_date)}` : ''}
+                    </p>
+                  )}
                 </Link>
               )
             })}
@@ -221,6 +273,7 @@ export default async function PrescriptionsPage({
                 <TableHead>Ngày nộp</TableHead>
                 {!isStaff && <TableHead>Ảnh</TableHead>}
                 <TableHead>Trạng thái</TableHead>
+                <TableHead>Chăm sóc</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -250,11 +303,21 @@ export default async function PrescriptionsPage({
                     </TableCell>
                   )}
                   <TableCell>{statusBadge(s.status)}</TableCell>
+                  <TableCell>
+                    {(() => {
+                      const cs = deriveCareState(s, vnTodayISO)
+                      return cs ? (
+                        <span className={cn('text-[11px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap', cs.cls)}>
+                          {cs.label}
+                        </span>
+                      ) : <span className="text-xs text-muted-foreground">—</span>
+                    })()}
+                  </TableCell>
                 </TableRow>
               ))}
               {(submissions ?? []).length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground py-10">
+                  <TableCell colSpan={7} className="text-center text-muted-foreground py-10">
                     {isStaff ? 'Bạn chưa nộp toa thuốc nào' : 'Không tìm thấy toa thuốc nào'}
                   </TableCell>
                 </TableRow>

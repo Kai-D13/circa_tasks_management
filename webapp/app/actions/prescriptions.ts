@@ -252,3 +252,125 @@ export async function syncPrescriptionProducts(products: ProductRow[]) {
     unmatched_codes: unmatched,
   }
 }
+
+// ─── Chronic care (migration 073) ────────────────────────────────────────────
+// prescription_submissions UPDATE is super-only under RLS (ps_update_super), so
+// these actions write through the service client and are themselves the
+// security boundary — mirror the submitPrescription posture.
+
+const DAY_MS = 86400_000
+const addDaysISO = (iso: string, days: number) =>
+  new Date(Date.parse(`${iso}T00:00:00Z`) + days * DAY_MS).toISOString().slice(0, 10)
+
+// Any pharmacist OR the store manager of the submission's store may log the
+// care visit (PM decision 2026-07-04 — customers meet whoever is on shift).
+export async function submitPrescriptionCare(
+  submissionId: string,
+  note:         string,
+  images:       PrescriptionImageInput[],
+) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Not authenticated' }
+  const { data: me } = await supabase.from('users').select('role, store_id').eq('id', user.id).single()
+  if (!me || (me.role !== 'staff' && me.role !== 'store_manager'))
+    return { error: 'Chỉ dược sĩ hoặc quản lý cửa hàng được ghi nhận chăm sóc' }
+  if (!me.store_id) return { error: 'Tài khoản chưa được gán cửa hàng' }
+
+  const trimmedNote = note.trim()
+  if (!trimmedNote) return { error: 'Vui lòng nhập ghi chú chăm sóc' }
+
+  const { data: sub } = await supabaseAdmin
+    .from('prescription_submissions')
+    .select('id, store_id, is_chronic, care_status')
+    .eq('id', submissionId)
+    .maybeSingle()
+  if (!sub) return { error: 'Không tìm thấy toa thuốc' }
+  if (sub.store_id !== me.store_id) return { error: 'Toa thuốc không thuộc cửa hàng của bạn' }
+  if (!sub.is_chronic) return { error: 'Toa này không phải toa mạn tính' }
+  if (sub.care_status === 'done') return { error: 'Toa này đã được chăm sóc' }
+
+  // Evidence photos — required; path-integrity guard mirrors submitPrescription
+  // (GCS prescription-care/ URL, or the Supabase care_ fallback under the
+  // submission's own prescriptions/ prefix).
+  if (images.length < 1 || images.length > PRESCRIPTION_MAX_IMAGES)
+    return { error: `Cần 1–${PRESCRIPTION_MAX_IMAGES} ảnh bằng chứng chăm sóc` }
+  const gcsBase = (process.env.GCS_PUBLIC_BASE_URL ?? '').replace(/\/+$/, '')
+  const gcsPrefix = gcsBase ? `${gcsBase}/prescription-care/${submissionId}/` : null
+  const fallbackPrefix = `prescriptions/${sub.store_id}/${submissionId}/care_`
+  for (const img of images) {
+    if (!PRESCRIPTION_ALLOWED_TYPES.includes(img.type))
+      return { error: `Định dạng ảnh không hợp lệ: ${img.name}` }
+    if (img.size > PRESCRIPTION_MAX_SIZE)
+      return { error: `Ảnh quá lớn (tối đa 5MB): ${img.name}` }
+    const ok = (!!gcsPrefix && img.path.startsWith(gcsPrefix)) || img.path.startsWith(fallbackPrefix)
+    if (!ok || img.path.includes('..')) return { error: 'Đường dẫn ảnh không hợp lệ' }
+  }
+
+  const { data: log, error: logErr } = await supabaseAdmin
+    .from('prescription_care_logs')
+    .insert({ submission_id: submissionId, care_by: user.id, care_note: trimmedNote, evidence_images: images })
+    .select('id')
+    .single()
+  if (logErr) return { error: `Lưu chăm sóc thất bại: ${logErr.message}` }
+
+  const { error: upErr } = await supabaseAdmin
+    .from('prescription_submissions')
+    .update({ care_status: 'done', last_care_at: new Date().toISOString(), last_care_by: user.id })
+    .eq('id', submissionId)
+  if (upErr) {
+    // Roll the log back so a retry doesn't double-record (mirror submitPrescription).
+    await supabaseAdmin.from('prescription_care_logs').delete().eq('id', log.id)
+    return { error: `Cập nhật trạng thái thất bại: ${upErr.message}` }
+  }
+
+  revalidatePath('/prescriptions')
+  revalidatePath(`/prescriptions/${submissionId}`)
+  return { success: true }
+}
+
+// Super admin corrects a mistaken chronic tick / wrong days_supply. Refill and
+// reminder dates recompute from the already-synced order date (or stay null
+// until the next order sync fills them).
+export async function updateChronicSettings(
+  submissionId: string,
+  input: { isChronic: boolean; daysSupply?: number },
+) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Not authenticated' }
+  const { data: me } = await supabase.from('users').select('role').eq('id', user.id).single()
+  if (me?.role !== 'admin' || !isSuperAdminEmail(user.email))
+    return { error: 'Chỉ super admin được chỉnh thông tin toa mạn tính' }
+
+  const { data: sub } = await supabaseAdmin
+    .from('prescription_submissions')
+    .select('id, order_created_at')
+    .eq('id', submissionId)
+    .maybeSingle()
+  if (!sub) return { error: 'Không tìm thấy toa thuốc' }
+
+  let patch: Record<string, unknown>
+  if (input.isChronic) {
+    const days = Math.floor(Number(input.daysSupply))
+    if (!Number.isFinite(days) || days <= 0) return { error: 'Số ngày dùng thuốc phải lớn hơn 0' }
+    patch = { is_chronic: true, days_supply: days, expected_refill_date: null, reminder_date: null }
+    if (sub.order_created_at) {
+      const expected = addDaysISO(sub.order_created_at as string, days)
+      patch.expected_refill_date = expected
+      patch.reminder_date = addDaysISO(expected, -2)
+    }
+  } else {
+    patch = { is_chronic: false, days_supply: null, expected_refill_date: null, reminder_date: null }
+  }
+
+  const { error } = await supabaseAdmin
+    .from('prescription_submissions')
+    .update(patch)
+    .eq('id', submissionId)
+  if (error) return { error: error.message }
+
+  revalidatePath('/prescriptions')
+  revalidatePath(`/prescriptions/${submissionId}`)
+  return { success: true }
+}

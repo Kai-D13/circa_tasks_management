@@ -3,11 +3,16 @@ import { createClient } from '@/lib/supabase/server'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { PrescriptionSyncForm } from '@/components/prescriptions/PrescriptionSyncForm'
-import { CheckCircle2, Clock } from 'lucide-react'
-import { formatDateTime, formatVnLocalDateTimeString } from '@/lib/dateUtils'
+import { CareForm } from '@/components/prescriptions/CareForm'
+import { ChronicSettingsForm } from '@/components/prescriptions/ChronicSettingsForm'
+import { deriveCareState } from '@/lib/prescriptions/careStatus'
+import { CheckCircle2, Clock, HeartPulse } from 'lucide-react'
+import { formatDate, formatDateTime, formatVnLocalDateTimeString } from '@/lib/dateUtils'
 import Link from 'next/link'
 import { PRESCRIPTION_BUCKET } from '@/lib/prescriptions/constants'
 import { publicStorageUrl } from '@/lib/storage/publicUrl'
+import { isSuperAdminEmail } from '@/lib/authz'
+import { cn } from '@/lib/utils'
 
 export default async function PrescriptionDetailPage({
   params,
@@ -27,6 +32,7 @@ export default async function PrescriptionDetailPage({
     { data: sub },
     { data: images },
     { data: products },
+    { data: careLogs },
   ] = await Promise.all([
     supabase
       .from('prescription_submissions')
@@ -43,12 +49,27 @@ export default async function PrescriptionDetailPage({
       .select('*')
       .eq('submission_id', id)
       .order('created_at', { ascending: true }),
+    supabase
+      .from('prescription_care_logs')
+      .select('id, care_note, evidence_images, cared_at, carer:users!care_by(full_name)')
+      .eq('submission_id', id)
+      .order('cared_at', { ascending: false }),
   ])
 
   if (!sub) notFound()
 
   const isAdmin  = profile?.role === 'admin'
+  const isSuper  = isAdmin && isSuperAdminEmail(user.email)
   const isSynced = sub.status === 'synced'
+
+  // Chronic care (mig 073) — derived display state + who may log the care visit
+  const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
+  const careState = deriveCareState(sub, vnTodayISO)
+  const canCare = sub.is_chronic
+    && sub.care_status === 'none'
+    && (profile?.role === 'staff' || profile?.role === 'store_manager')
+    && profile?.store_id === sub.store_id
+  const careImageUrl = (p: string) => (p.startsWith('http') ? p : publicStorageUrl(PRESCRIPTION_BUCKET, p))
 
   // Generate image URLs server-side — always from the PUBLIC origin (the
   // server client may be talking to Kong over the internal docker network).
@@ -121,6 +142,91 @@ export default async function PrescriptionDetailPage({
           )}
         </CardContent>
       </Card>
+
+      {/* Chronic care info (mig 073) */}
+      {sub.is_chronic && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm flex items-center justify-between gap-2 flex-wrap">
+              <span className="flex items-center gap-1.5">
+                <HeartPulse className="h-4 w-4 text-primary" /> Toa mạn tính
+              </span>
+              {careState && (
+                <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', careState.cls)}>
+                  {careState.label}
+                </span>
+              )}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
+              <p><span className="text-muted-foreground">Khách hàng: </span><span className="font-medium">{sub.customer_name ?? '—'}</span></p>
+              <p><span className="text-muted-foreground">SĐT: </span><span className="font-medium">{sub.customer_phone ?? '—'}</span></p>
+              <p><span className="text-muted-foreground">Ngày bán: </span><span className="font-medium">{sub.order_created_at ? formatDate(sub.order_created_at) : '—'}</span></p>
+              <p><span className="text-muted-foreground">Số ngày dùng: </span><span className="font-medium">{sub.days_supply ?? '—'}</span></p>
+              <p><span className="text-muted-foreground">Dự kiến hết thuốc: </span><span className="font-medium text-primary">{sub.expected_refill_date ? formatDate(sub.expected_refill_date) : '—'}</span></p>
+              <p><span className="text-muted-foreground">Ngày cần nhắc: </span><span className="font-medium">{sub.reminder_date ? formatDate(sub.reminder_date) : '—'}</span></p>
+            </div>
+            {sub.order_sync_error && (
+              <p className="text-xs text-destructive">{sub.order_sync_error}</p>
+            )}
+            {sub.order_products_raw && (
+              <p className="text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">Sản phẩm (POS): </span>{sub.order_products_raw}
+              </p>
+            )}
+            {isSuper && (
+              <ChronicSettingsForm
+                submissionId={sub.id}
+                isChronic={!!sub.is_chronic}
+                daysSupply={sub.days_supply ?? null}
+              />
+            )}
+          </CardContent>
+        </Card>
+      )}
+      {/* Super admin can also mark a non-chronic prescription chronic (fix a missed tick) */}
+      {!sub.is_chronic && isSuper && (
+        <ChronicSettingsForm submissionId={sub.id} isChronic={false} daysSupply={null} />
+      )}
+
+      {/* Care history */}
+      {(careLogs ?? []).length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">Lịch sử chăm sóc</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {(careLogs ?? []).map((log) => {
+              const evidences = (log.evidence_images as { path: string; name?: string }[] | null) ?? []
+              return (
+                <div key={log.id} className="rounded-lg border p-3 space-y-2">
+                  <p className="text-xs text-muted-foreground">
+                    <span className="font-medium text-foreground">
+                      {(log.carer as unknown as { full_name: string } | null)?.full_name ?? '—'}
+                    </span>
+                    {' · '}{formatDateTime(log.cared_at)}
+                  </p>
+                  <p className="text-sm whitespace-pre-wrap">{log.care_note}</p>
+                  {evidences.length > 0 && (
+                    <div className="flex gap-2 overflow-x-auto">
+                      {evidences.map((img, i) => (
+                        <a key={i} href={careImageUrl(img.path)} target="_blank" rel="noreferrer" className="shrink-0">
+                          {/* eslint-disable-next-line @next/next/no-img-element */}
+                          <img src={careImageUrl(img.path)} alt={img.name ?? 'Ảnh chăm sóc'} className="h-24 w-24 object-cover rounded border" />
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Care form — same-store staff/store manager, chronic + not yet cared */}
+      {canCare && <CareForm submissionId={sub.id} storeId={sub.store_id} />}
 
       {/* Notes */}
       {sub.notes && (

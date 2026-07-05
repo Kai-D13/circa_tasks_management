@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { xlsxResponse, stampVN, fmtVN } from '@/lib/export/xlsx'
 import { publicStorageUrl } from '@/lib/storage/publicUrl'
 import { PRESCRIPTION_BUCKET } from '@/lib/prescriptions/constants'
+import { deriveCareState } from '@/lib/prescriptions/careStatus'
 
 const MAX_ROWS = 5000
 
@@ -25,7 +26,7 @@ export async function GET(request: NextRequest) {
   const p = request.nextUrl.searchParams
   let query = supabase
     .from('prescription_submissions')
-    .select('order_code, submitted_at, status, notes, stores(name), submitter:users!submitted_by(full_name), prescription_images(storage_path)')
+    .select('order_code, submitted_at, status, notes, is_chronic, days_supply, order_created_at, expected_refill_date, reminder_date, customer_name, customer_phone, order_sync_status, care_status, stores(name), submitter:users!submitted_by(full_name), prescription_images(storage_path)')
     .order('submitted_at', { ascending: false })
     .limit(MAX_ROWS + 1)
 
@@ -40,8 +41,10 @@ export async function GET(request: NextRequest) {
   if ((data?.length ?? 0) > MAX_ROWS)
     return NextResponse.json({ error: `Quá nhiều dòng (>${MAX_ROWS}). Vui lòng lọc theo khoảng ngày / cửa hàng rồi xuất lại.` }, { status: 400 })
 
+  const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
   const rows = (data ?? []).map((s) => {
     const imgs = (s.prescription_images as unknown as { storage_path: string }[] | null) ?? []
+    const careState = deriveCareState(s as unknown as Parameters<typeof deriveCareState>[0], vnTodayISO)
     return {
       'Mã đơn':       s.order_code as string,
       'Cửa hàng':     (s.stores as unknown as { name?: string } | null)?.name ?? '',
@@ -50,6 +53,14 @@ export async function GET(request: NextRequest) {
       'Số ảnh':       imgs.length,
       'Ghi chú':      (s.notes as string | null) ?? '',
       'Thời gian nộp': fmtVN(s.submitted_at as string),
+      'Mạn tính':     s.is_chronic ? 'Có' : '',
+      'Khách hàng':   (s.customer_name as string | null) ?? '',
+      'SĐT khách':    (s.customer_phone as string | null) ?? '',
+      'Ngày bán':     (s.order_created_at as string | null) ?? '',
+      'Số ngày dùng': (s.days_supply as number | null) ?? '',
+      'Dự kiến hết thuốc': (s.expected_refill_date as string | null) ?? '',
+      'Ngày cần nhắc': (s.reminder_date as string | null) ?? '',
+      'Trạng thái chăm sóc': careState?.label ?? '',
       'Link ảnh':     imgs.map((i) => i.storage_path?.startsWith('http') ? i.storage_path : publicStorageUrl(PRESCRIPTION_BUCKET, i.storage_path)).join('\n'),
     }
   })
