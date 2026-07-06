@@ -95,10 +95,13 @@ export default async function PrescriptionsPage({
   // dueCount = chronic customers whose refill reminder has arrived (today >=
   // reminder_date) and haven't been cared for. errorCount = DHC didn't match.
   const base = () => supabase.from('prescription_submissions').select('id', { count: 'exact', head: true })
-  const [{ count: dueCount }, { count: errCount }] = await Promise.all([
+  const [{ count: dueCount, error: dueErr }, { count: errCount, error: errErr }] = await Promise.all([
     base().eq('is_chronic', true).eq('order_sync_status', 'synced').eq('care_status', 'none').lte('reminder_date', vnTodayISO),
     base().eq('order_sync_status', 'error'),
   ])
+  // Surface a failed count (missing migration / RLS) instead of a silent 0.
+  if (dueErr) console.error('[prescriptions] due count failed:', dueErr.message)
+  if (errErr) console.error('[prescriptions] error count failed:', errErr.message)
   const dueN = dueCount ?? 0
   const errorCount = errCount ?? 0
 
