@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { toast } from 'sonner'
 import { archiveTasks, restoreTasks } from '@/app/actions/tasks'
 import { BulkResubmitButton } from '@/components/tasks/BulkResubmitButton'
+import { ExportSelectedButton } from '@/components/tasks/ExportSelectedButton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
@@ -309,6 +310,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
       {someSelected && showCheckbox && (
         <div className="flex items-center gap-2 px-1 pt-2 flex-wrap">
           <span className="text-sm text-muted-foreground">{selected.size} task đã chọn</span>
+          <ExportSelectedButton ids={Array.from(selected)} />
           {canBulkResubmit && (
             <BulkResubmitButton taskIds={Array.from(selected)} onDone={() => setSelected(new Set())} />
           )}

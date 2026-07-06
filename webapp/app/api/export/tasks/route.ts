@@ -1,19 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { getSmStoreIds } from '@/lib/authz'
-import { xlsxResponse, stampVN, fmtVN } from '@/lib/export/xlsx'
-import { publicStorageUrl } from '@/lib/storage/publicUrl'
-import { formatTaskCode } from '@/lib/taskCode'
+import { xlsxResponse, stampVN } from '@/lib/export/xlsx'
+import { TASK_EXPORT_SELECT, shapeTaskRows } from '@/lib/export/taskRows'
 
 const MAX_ROWS = 5000
-
-const STATUS_VI: Record<string, string> = {
-  todo: 'Chờ thực hiện', in_progress: 'Đang thực hiện', done: 'Hoàn thành', overdue: 'Quá hạn',
-}
-const PRIORITY_VI: Record<string, string> = { urgent: 'Khẩn cấp', normal: 'Bình thường' }
-const CATEGORY_VI: Record<string, string> = {
-  training: 'Training', recall: 'Thu hồi / Kiểm kê', display: 'Trưng bày', audit: 'Kiểm tra', other: 'Khác',
-}
 
 // GET /api/export/tasks — Excel of the task list, honoring the page filters.
 // Mirrors app/(dashboard)/tasks/page.tsx WHERE logic but FLATTENS: staff_all
@@ -45,7 +36,7 @@ export async function GET(request: NextRequest) {
 
   let query = supabase
     .from('tasks')
-    .select('seq, title, status, priority, category, source_schedule_id, assignment_mode, deadline, created_at, completed_at, overdue_at, stores(name), department:departments(name), assignee:users!assigned_to(full_name), completed_by_user:users!completed_by(full_name), task_uploaded_files(bucket, path, deleted_at)')
+    .select(TASK_EXPORT_SELECT)
     // Exclude staff_all OVERVIEW parents — they carry no submitter; the export
     // lists the per-pharmacist child rows instead.
     .neq('assignment_mode', 'staff_all')
@@ -88,33 +79,6 @@ export async function GET(request: NextRequest) {
   if ((data?.length ?? 0) > MAX_ROWS)
     return NextResponse.json({ error: `Quá nhiều dòng (>${MAX_ROWS}). Vui lòng lọc hẹp hơn (theo cửa hàng / trạng thái) rồi xuất lại.` }, { status: 400 })
 
-  const effStatus = (status: string, deadline: string | null): string =>
-    status !== 'done' && deadline && Date.parse(deadline) < Date.now() ? 'overdue' : status
-
-  const rows = (data ?? []).map((t) => {
-    const submitter = (t.completed_by_user as unknown as { full_name?: string } | null)?.full_name
-    const assignee = (t.assignee as unknown as { full_name?: string } | null)?.full_name
-    const files = (t.task_uploaded_files as unknown as { bucket: string; path: string; deleted_at: string | null }[] | null) ?? []
-    const fileLinks = files
-      .filter((f) => !f.deleted_at)
-      .map((f) => publicStorageUrl(f.bucket, f.path))
-      .join('\n')
-    return {
-      'Mã':              formatTaskCode((t as { seq?: number | null }).seq),
-      'Tiêu đề':         t.title as string,
-      'Cửa hàng':        (t.stores as unknown as { name?: string } | null)?.name ?? '',
-      'Phòng ban':       (t.department as unknown as { name?: string } | null)?.name ?? '',
-      'Loại':            (t.source_schedule_id as string | null) ? 'Định kỳ' : 'Phát sinh',
-      'Trạng thái':      STATUS_VI[effStatus(t.status as string, t.deadline as string | null)] ?? (t.status as string),
-      'Ưu tiên':         PRIORITY_VI[t.priority as string] ?? (t.priority as string),
-      'Danh mục':        CATEGORY_VI[t.category as string] ?? (t.category as string ?? ''),
-      'Người thực hiện': submitter ?? assignee ?? '',
-      'Deadline':        fmtVN(t.deadline as string | null),
-      'Ngày tạo':        fmtVN(t.created_at as string),
-      'Ngày hoàn thành': fmtVN(t.completed_at as string | null),
-      'Link ảnh/file':   fileLinks,
-    }
-  })
-
+  const rows = shapeTaskRows((data ?? []) as unknown as Record<string, unknown>[])
   return xlsxResponse(rows, 'Tasks', `tasks_${view}_${stampVN()}`)
 }
