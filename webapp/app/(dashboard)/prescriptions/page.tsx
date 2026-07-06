@@ -36,7 +36,7 @@ export default async function PrescriptionsPage({
   // lighter select (drop the per-row prescription_images embed — the "Ảnh" column is
   // hidden for staff). The submitted_by filter mirrors the RLS policy ps_select_staff
   // (submitted_by = auth.uid()) so the planner can use the submitted_by index.
-  const pageSize = isStaff ? 20 : PAGE_SIZE
+  const pageSize = isStaff ? 12 : PAGE_SIZE   // lighter mobile page (stakeholder)
   const page = Math.max(1, parseInt(params.page ?? '1', 10))
   const from = (page - 1) * pageSize
   const to   = isStaff ? from + pageSize : from + pageSize - 1   // staff: +1 row for next-page detection
@@ -53,21 +53,21 @@ export default async function PrescriptionsPage({
 
   if (isStaff)          query = query.eq('submitted_by', user.id)
   // Order-sync status (the primary status now: Sheet-fed order data, mig 073).
-  // The legacy product-sync `status` is no longer a filter.
-  if (!isStaff && params.order_sync && ['pending', 'synced', 'error'].includes(params.order_sync))
+  // Available to staff too (they reach it via the reminder strip); RLS already
+  // scopes staff to their own rows. The legacy product-sync `status` is gone.
+  if (params.order_sync && ['pending', 'synced', 'error'].includes(params.order_sync))
     query = query.eq('order_sync_status', params.order_sync)
   if (params.store_id)  query = query.eq('store_id', params.store_id)
   if (params.q)         query = query.ilike('order_code', `%${params.q.trim()}%`)
   if (params.date_from) query = query.gte('submitted_at', params.date_from + 'T00:00:00+07:00')
   if (params.date_to)   query = query.lte('submitted_at', params.date_to   + 'T23:59:59+07:00')
 
-  // Chronic-care (mig 073). Type tab (care: Tất cả | Mạn tính) for everyone; a
-  // care-workflow dropdown (care_state: due/done) for admin/SM. Order-sync
-  // states (pending/error) live in the order_sync filter above, not here.
+  // Chronic-care (mig 073). Type tab (care: Tất cả | Mạn tính) for everyone;
+  // care-workflow filter (care_state: due/done) — staff reach 'due' via the
+  // reminder strip. Order-sync states (pending/error) use the order_sync filter.
   const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
   const care = params.care === 'chronic' ? 'chronic' : undefined
-  const careState = !isStaff && ['due', 'done'].includes(params.care_state ?? '')
-    ? params.care_state : undefined
+  const careState = ['due', 'done'].includes(params.care_state ?? '') ? params.care_state : undefined
   if (care === 'chronic') query = query.eq('is_chronic', true)
   if (careState === 'due') {
     query = query.eq('is_chronic', true).eq('order_sync_status', 'synced').eq('care_status', 'none').lte('reminder_date', vnTodayISO)
@@ -90,10 +90,17 @@ export default async function PrescriptionsPage({
   const rows         = submissions ?? []
   const pageRows     = isStaff ? rows.slice(0, pageSize) : rows
   const hasNextStaff = isStaff && rows.length > pageSize
-  // Actionable admin signal: prescriptions whose DHC didn't match the Sheet.
-  const errorCount = isAdmin
-    ? (await supabase.from('prescription_submissions').select('id', { count: 'exact', head: true }).eq('order_sync_status', 'error')).count ?? 0
-    : 0
+  // Reminder counts (RLS-scoped: staff = own, SM = store, admin = all). Head
+  // counts only, no rows — cheap enough for the mobile hot path.
+  // dueCount = chronic customers whose refill reminder has arrived (today >=
+  // reminder_date) and haven't been cared for. errorCount = DHC didn't match.
+  const base = () => supabase.from('prescription_submissions').select('id', { count: 'exact', head: true })
+  const [{ count: dueCount }, { count: errCount }] = await Promise.all([
+    base().eq('is_chronic', true).eq('order_sync_status', 'synced').eq('care_status', 'none').lte('reminder_date', vnTodayISO),
+    base().eq('order_sync_status', 'error'),
+  ])
+  const dueN = dueCount ?? 0
+  const errorCount = errCount ?? 0
 
   function buildUrl(patch: Record<string, string | undefined>) {
     const next = {
@@ -119,12 +126,7 @@ export default async function PrescriptionsPage({
   return (
     <div className="p-4 space-y-4 pb-24">
       <div className="flex items-center justify-between flex-wrap gap-2">
-        <div>
-          <h1 className="text-xl font-semibold">Toa thuốc</h1>
-          {errorCount > 0 && isAdmin && (
-            <p className="text-sm text-red-700 mt-0.5">{errorCount} đơn lỗi mã DHC (chưa khớp dữ liệu đơn)</p>
-          )}
-        </div>
+        <h1 className="text-xl font-semibold">Toa thuốc</h1>
         <div className="flex items-center gap-2">
           {isAdmin && <ExportButton endpoint="/api/export/prescriptions" />}
           {isStaff && (
@@ -135,6 +137,33 @@ export default async function PrescriptionsPage({
           )}
         </div>
       </div>
+
+      {/* Reminder strip — proactive prompts for pharmacists (stakeholder). Only
+          renders when there's something to act on; tapping filters the list. */}
+      {(dueN > 0 || errorCount > 0) && (
+        <div className="grid grid-cols-2 gap-2">
+          <Link
+            href={buildUrl({ care: 'chronic', care_state: 'due', order_sync: undefined, page: undefined })}
+            className={cn(
+              'rounded-xl border p-3 transition-colors',
+              dueN > 0 ? 'border-primary/30 bg-primary/5 active:bg-primary/10' : 'opacity-50 pointer-events-none',
+            )}
+          >
+            <p className="text-2xl font-bold text-primary leading-none">{dueN}</p>
+            <p className="text-xs text-muted-foreground mt-1">Cần chăm sóc hôm nay</p>
+          </Link>
+          <Link
+            href={buildUrl({ order_sync: 'error', care: undefined, care_state: undefined, page: undefined })}
+            className={cn(
+              'rounded-xl border p-3 transition-colors',
+              errorCount > 0 ? 'border-red-200 bg-red-50/60 active:bg-red-100 dark:border-red-900 dark:bg-red-950/20' : 'opacity-50 pointer-events-none',
+            )}
+          >
+            <p className="text-2xl font-bold text-red-600 leading-none">{errorCount}</p>
+            <p className="text-xs text-muted-foreground mt-1">Lỗi mã DHC cần sửa</p>
+          </Link>
+        </div>
+      )}
 
       {listErr && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm">
@@ -258,25 +287,36 @@ export default async function PrescriptionsPage({
         <CardContent className="p-0">
           {/* Mobile: card list — the multi-column table is unreadable at 390px.
               Renders the SAME pageRows as the table below (no data drift). */}
-          <div className="md:hidden divide-y">
+          <div className="md:hidden">
             {pageRows.map((s) => {
               const storeName = (s.stores as unknown as { name: string } | null)?.name
               const careState = deriveCareState(s, vnTodayISO)
+              // 'upcoming' (before the reminder date) is NOT emphasized — the
+              // reminder rule is "2 days before" = reminder_date, so only 'due'
+              // stands out (review r; stakeholder).
+              const careChip = careState && careState.key !== 'upcoming' ? careState : null
+              // Left-accent tone by state so staff can scan the list at a glance:
+              // error red · cần chăm sóc coral · đã chăm sóc green · chờ đồng bộ
+              // amber (subtle) · else neutral. Border-left keeps the card clean.
+              const tone =
+                s.order_sync_status === 'error' ? 'border-l-red-500 bg-red-50/40 dark:bg-red-950/10'
+                : careChip?.key === 'due' ? 'border-l-primary bg-primary/5'
+                : careChip?.key === 'done' ? 'border-l-green-500'
+                : s.order_sync_status === 'pending' ? 'border-l-amber-400'
+                : 'border-l-transparent'
               return (
                 <Link
                   key={`m-${s.id}`}
                   href={`/prescriptions/${s.id}`}
                   prefetch={false}
-                  className="block p-3.5 active:bg-muted/50"
+                  className={cn('block p-3.5 border-b border-l-4 active:bg-muted/50', tone)}
                 >
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-mono font-semibold text-sm truncate">{s.order_code}</span>
                     <span className="flex items-center gap-1 shrink-0">
-                      {/* Primary = order-sync status (relevant to staff too — an
-                          error means they should re-check the DHC). Care chip adds on. */}
-                      {careState && (
-                        <span className={cn('text-[11px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap', careState.cls)}>
-                          {careState.label}
+                      {careChip && (
+                        <span className={cn('text-[11px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap', careChip.cls)}>
+                          {careChip.label}
                         </span>
                       )}
                       {orderBadge(s)}
