@@ -170,12 +170,12 @@ export function PrescriptionForm({ storeId }: Props) {
         />
       </StepCard>
 
-      {/* Sticky submit — sits above the mobile bottom nav (64px + safe area). */}
-      <div className="sticky bottom-[calc(4rem+env(safe-area-inset-bottom))] md:bottom-0 z-10 -mx-4 md:mx-0 border-t md:border-0 bg-background/95 backdrop-blur px-4 md:px-0 py-3">
-        <Button type="submit" disabled={pending} className="w-full h-12 text-base">
-          {pending ? 'Đang nộp...' : 'Nộp toa thuốc'}
-        </Button>
-      </div>
+      {/* Plain full-width submit at the end of a short form — a sticky bar here
+          stacked awkwardly on top of the fixed bottom nav ("stuck" feel). The
+          page's bottom padding keeps it clear of the nav. */}
+      <Button type="submit" disabled={pending} className="w-full h-12 text-base">
+        {pending ? 'Đang nộp...' : 'Nộp toa thuốc'}
+      </Button>
     </form>
   )
 }

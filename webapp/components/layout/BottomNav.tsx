@@ -92,30 +92,33 @@ export function BottomNav({
           isActive ? 'text-primary' : 'text-sidebar-foreground/60 active:text-sidebar-foreground',
         )}
       >
-        {/* Soft pill behind the icon marks the active tab — color alone was too quiet */}
-        <span className={cn('rounded-full px-3.5 py-0.5 transition-colors', isActive && 'bg-primary/10')}>
+        {/* Active tab = coral pill wrapping icon+label (modern floating-nav look) */}
+        <span className={cn('flex flex-col items-center gap-0.5 rounded-2xl px-3 py-1 transition-colors', isActive && 'bg-primary/10')}>
           <span className="relative block">
-            <Icon className="h-6 w-6" />
+            <Icon className="h-[22px] w-[22px]" />
             {badge > 0 && (
               <span className="absolute -top-1.5 -right-2 min-w-4 h-4 px-1 rounded-full bg-primary text-white text-[9px] font-semibold flex items-center justify-center">
                 {badge > 9 ? '9+' : badge}
               </span>
             )}
           </span>
+          <span className={cn('text-[10px] leading-none', isActive ? 'font-semibold' : 'font-medium')}>{item.label}</span>
         </span>
-        <span className={cn('text-[11px]', isActive ? 'font-semibold' : 'font-medium')}>{item.label}</span>
       </Link>
     )
   }
 
   return (
     <>
+      {/* Floating rounded nav — detached from the screen edges (mx/mb margins),
+          soft shadow, no hard top border. Reads far more premium than a
+          full-width bar. Main content padding (layout.tsx) clears its height. */}
       <nav
         aria-label="Điều hướng chính"
-        className="fixed bottom-0 left-0 right-0 z-40 bg-sidebar border-t border-sidebar-border shadow-[0_-2px_10px_rgb(0_0_0/0.06)] md:hidden"
-        style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+        className="fixed bottom-0 left-0 right-0 z-40 px-3 pointer-events-none md:hidden"
+        style={{ paddingBottom: 'calc(0.5rem + env(safe-area-inset-bottom))' }}
       >
-        <div className="flex items-center justify-around h-16">
+        <div className="pointer-events-auto flex items-center justify-around h-16 rounded-3xl border border-border/60 bg-sidebar/95 backdrop-blur shadow-[0_8px_30px_rgb(0_0_0/0.12)]">
           {primary.map((item) => <NavBtn key={item.href} item={item} />)}
           {needsMore && (
             <button
@@ -124,14 +127,14 @@ export function BottomNav({
               aria-label="Thêm"
               aria-haspopup="dialog"
               className={cn(
-                'flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-colors',
+                'flex flex-col items-center justify-center flex-1 h-full transition-colors',
                 moreActive ? 'text-primary' : 'text-sidebar-foreground/60 active:text-sidebar-foreground',
               )}
             >
-              <span className={cn('rounded-full px-3.5 py-0.5 transition-colors', moreActive && 'bg-primary/10')}>
-                <MoreHorizontal className="h-6 w-6" />
+              <span className={cn('flex flex-col items-center gap-0.5 rounded-2xl px-3 py-1 transition-colors', moreActive && 'bg-primary/10')}>
+                <MoreHorizontal className="h-[22px] w-[22px]" />
+                <span className={cn('text-[10px] leading-none', moreActive ? 'font-semibold' : 'font-medium')}>Thêm</span>
               </span>
-              <span className={cn('text-[11px]', moreActive ? 'font-semibold' : 'font-medium')}>Thêm</span>
             </button>
           )}
         </div>

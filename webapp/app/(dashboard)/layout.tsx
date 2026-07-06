@@ -47,7 +47,7 @@ export default async function DashboardLayout({
           {/* Mobile bottom padding clears the fixed BottomNav (h-16) + the iPhone
               home-indicator safe area + a little breathing room, so the last card /
               Staff pager is never hidden behind the nav. Desktop has no bottom nav. */}
-          <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden bg-muted/20 pb-[calc(4rem_+_env(safe-area-inset-bottom)_+_1rem)] md:pb-0">
+          <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden bg-muted/20 pb-[calc(5.5rem_+_env(safe-area-inset-bottom))] md:pb-0">
             {/* Mobile top header */}
             <MobileHeader />
             {children}
