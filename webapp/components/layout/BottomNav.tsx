@@ -92,8 +92,9 @@ export function BottomNav({
           isActive ? 'text-primary' : 'text-sidebar-foreground/60 active:text-sidebar-foreground',
         )}
       >
-        {/* Active tab = coral pill wrapping icon+label (modern floating-nav look) */}
-        <span className={cn('flex flex-col items-center gap-0.5 rounded-2xl px-3 py-1 transition-colors', isActive && 'bg-primary/10')}>
+        {/* Active tab = coral pill wrapping icon+label (modern floating-nav look).
+            nowrap + tight padding keeps 2-word labels on ONE line at 360px. */}
+        <span className={cn('flex flex-col items-center gap-0.5 rounded-2xl px-1.5 py-1 transition-colors', isActive && 'bg-primary/10')}>
           <span className="relative block">
             <Icon className="h-[22px] w-[22px]" />
             {badge > 0 && (
@@ -102,7 +103,7 @@ export function BottomNav({
               </span>
             )}
           </span>
-          <span className={cn('text-[10px] leading-none', isActive ? 'font-semibold' : 'font-medium')}>{item.label}</span>
+          <span className={cn('text-[10px] leading-none whitespace-nowrap', isActive ? 'font-semibold' : 'font-medium')}>{item.label}</span>
         </span>
       </Link>
     )
@@ -131,9 +132,9 @@ export function BottomNav({
                 moreActive ? 'text-primary' : 'text-sidebar-foreground/60 active:text-sidebar-foreground',
               )}
             >
-              <span className={cn('flex flex-col items-center gap-0.5 rounded-2xl px-3 py-1 transition-colors', moreActive && 'bg-primary/10')}>
+              <span className={cn('flex flex-col items-center gap-0.5 rounded-2xl px-1.5 py-1 transition-colors', moreActive && 'bg-primary/10')}>
                 <MoreHorizontal className="h-[22px] w-[22px]" />
-                <span className={cn('text-[10px] leading-none', moreActive ? 'font-semibold' : 'font-medium')}>Thêm</span>
+                <span className={cn('text-[10px] leading-none whitespace-nowrap', moreActive ? 'font-semibold' : 'font-medium')}>Thêm</span>
               </span>
             </button>
           )}

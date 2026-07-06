@@ -11,7 +11,9 @@ export default defineConfig({
     baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:3000',
   },
   projects: [
-    { name: 'mobile-390', use: { ...devices['iPhone 12'] } },
+    // Chromium-engine devices so only `npx playwright install chromium` is needed.
+    // (For real iOS Safari testing, add a webkit device + `install webkit`.)
+    { name: 'mobile-390', use: { ...devices['Pixel 5'] } },
     { name: 'mobile-360', use: { ...devices['Galaxy S9+'], viewport: { width: 360, height: 800 } } },
   ],
 })

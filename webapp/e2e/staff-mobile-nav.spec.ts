@@ -33,7 +33,10 @@ test.describe('staff bottom nav', () => {
     await expect(nav.getByRole('button', { name: 'Thêm' })).toHaveCount(0)
 
     for (const tab of TABS) {
-      await nav.getByRole('link', { name: tab.label }).click()
+      // force: true — in `next dev` the dev-tools portal (<nextjs-portal>) floats
+      // over the bottom-left, intercepting clicks on the first tab. It doesn't
+      // exist in production, so a forced click reflects the real prod behaviour.
+      await nav.getByRole('link', { name: tab.label }).click({ force: true })
       await page.waitForURL(`**${tab.path}**`)
       await expect(nav.getByRole('link', { name: tab.label })).toHaveAttribute('aria-current', 'page')
       const noOverflow = await page.evaluate(
