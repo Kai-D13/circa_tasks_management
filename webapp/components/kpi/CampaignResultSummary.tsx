@@ -1,7 +1,8 @@
 import { Card, CardContent } from '@/components/ui/card'
 import type { CampaignView } from '@/components/kpi/CampaignKpiView'
 import { cn } from '@/lib/utils'
-import { Target, TrendingUp, Percent, Wallet, Award, CalendarDays, ClipboardCheck, type LucideIcon } from 'lucide-react'
+import { campaignPerformance, performanceTone } from '@/lib/kpi/performance'
+import { Target, TrendingUp, Percent, Wallet, Award, CalendarDays, Gauge, ClipboardCheck, type LucideIcon } from 'lucide-react'
 
 // Store Manager "Kết quả" management block (r3): the same 6-card summary idiom
 // as the super-admin campaign detail Result tab, but scoped to the manager's OWN
@@ -21,6 +22,7 @@ export function CampaignResultSummary({ campaign, todayISO }: { campaign: Campai
 
   const daysLeft = Math.floor((Date.parse(campaign.end_date) - Date.parse(todayISO)) / 86400_000) + 1
   const deadlineLabel = daysLeft <= 0 ? 'Đã kết thúc' : `Còn ${daysLeft} ngày`
+  const perf = campaignPerformance(target, campaign.actual_value, campaign.start_date, campaign.end_date, todayISO)
 
   const cards: { label: string; value: string; icon: LucideIcon; tile: string; valueCls?: string; bar?: boolean }[] = [
     { label: 'KPI target', value: vnd(target), icon: Target, tile: 'bg-primary/10 text-primary' },
@@ -34,6 +36,8 @@ export function CampaignResultSummary({ campaign, todayISO }: { campaign: Campai
       valueCls: synced && pool > 0 ? 'text-green-600' : undefined },
     { label: 'Bậc đạt', value: reached != null ? `Bậc ${reached}/${tierCount}` : (synced ? 'Chưa đạt' : '—'), icon: Award,
       tile: reached != null ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground' },
+    { label: 'Nhịp độ (Performance)', value: perf != null ? `${perf.toFixed(1)}%` : '—', icon: Gauge,
+      tile: 'bg-primary/10 text-primary', valueCls: perf != null ? performanceTone(perf) : undefined },
     { label: 'Thời hạn', value: deadlineLabel, icon: CalendarDays, tile: 'bg-muted text-muted-foreground' },
   ]
 

@@ -11,7 +11,8 @@ import { SyncActualsButton } from '@/components/kpi/SyncActualsButton'
 import { STATUS_META } from '@/lib/kpi/status'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
-import { ChevronLeft, Target, TrendingUp, Percent, Wallet, Award, CalendarDays, SlidersHorizontal, BarChart3, type LucideIcon } from 'lucide-react'
+import { ChevronLeft, Target, TrendingUp, Percent, Wallet, Award, CalendarDays, Gauge, SlidersHorizontal, BarChart3, type LucideIcon } from 'lucide-react'
+import { campaignPerformance, performanceTone } from '@/lib/kpi/performance'
 
 // Campaign detail — ONE url, TWO tabs (?tab=):
 //   config → campaign info + import + the IMPORTED configuration only
@@ -111,6 +112,10 @@ export default async function CampaignDetailPage({
   const totalPct = totalTarget > 0 ? (totalActual / totalTarget) * 100 : 0
   const totalPool = actuals.reduce((sum, a) => sum + (Number(a.store_commission_pool) || 0), 0)
   const reachedCount = actuals.filter((a) => a.achieved_tier_order !== null).length
+  // Campaign pace: whole-campaign actual/target normalized by elapsed vs total days.
+  const totalPerformance = lastSynced
+    ? campaignPerformance(totalTarget, totalActual, c.start_date, c.end_date, vnTodayISO)
+    : null
 
   // Branded segmented control (review r2): active = Circa coral, inactive =
   // coral text on the tinted track; ~36px touch target.
@@ -235,6 +240,9 @@ export default async function CampaignDetailPage({
                 tile: lastSynced && totalPool > 0 ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground',
                 valueCls: lastSynced && totalPool > 0 ? 'text-green-600' : undefined },
               { label: 'Store đạt bậc', value: lastSynced ? `${reachedCount}/${targets.length}` : '—', icon: Award, tile: 'bg-primary/10 text-primary' },
+              { label: 'Nhịp độ (Performance)', value: totalPerformance != null ? `${totalPerformance.toFixed(1)}%` : '—', icon: Gauge,
+                tile: 'bg-primary/10 text-primary',
+                valueCls: totalPerformance != null ? performanceTone(totalPerformance) : undefined },
               { label: 'Thời hạn', value: deadlineLabel, icon: CalendarDays, tile: 'bg-muted text-muted-foreground' },
             ] as { label: string; value: string; icon: LucideIcon; tile: string; valueCls?: string; bar?: boolean }[]).map((card) => (
               <Card key={card.label}>
@@ -272,6 +280,7 @@ export default async function CampaignDetailPage({
                       <th className="text-right px-4 py-2.5">KPI target</th>
                       <th className="text-right px-4 py-2.5">Actual GMV</th>
                       <th className="text-right px-4 py-2.5">%</th>
+                      <th className="text-right px-4 py-2.5">Nhịp độ</th>
                       <th className="text-right px-4 py-2.5">Còn thiếu</th>
                       <th className="text-left px-4 py-2.5">Bậc đạt · Commission</th>
                     </tr>
@@ -280,6 +289,7 @@ export default async function CampaignDetailPage({
                     {targets.map((t) => {
                       const a = actualByStore.get(t.store_id)
                       const remaining = a?.remaining_target ?? null
+                      const perf = campaignPerformance(t.kpi_target, a?.actual_value ?? null, c.start_date, c.end_date, vnTodayISO)
                       return (
                         <tr key={t.id} className="hover:bg-muted/30">
                           <td className="px-4 py-2.5 font-medium">{t.stores?.name ?? '—'}{t.pos_code ? ` · ${t.pos_code}` : ''}</td>
@@ -300,6 +310,11 @@ export default async function CampaignDetailPage({
                                 </span>
                               </div>
                             ) : <span className="block text-right">—</span>}
+                          </td>
+                          <td className="px-4 py-2.5 text-right">
+                            {perf != null
+                              ? <span className={cn('text-xs font-semibold', performanceTone(perf))}>{perf.toFixed(1)}%</span>
+                              : '—'}
                           </td>
                           <td className="px-4 py-2.5 text-right">{remaining != null ? vnd(remaining) : '—'}</td>
                           <td className="px-4 py-2.5">
