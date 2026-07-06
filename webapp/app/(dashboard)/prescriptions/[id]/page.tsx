@@ -1,12 +1,11 @@
 import { notFound, redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
-import { PrescriptionSyncForm } from '@/components/prescriptions/PrescriptionSyncForm'
 import { CareForm } from '@/components/prescriptions/CareForm'
 import { ChronicSettingsForm } from '@/components/prescriptions/ChronicSettingsForm'
-import { deriveCareState } from '@/lib/prescriptions/careStatus'
-import { CheckCircle2, Clock, HeartPulse } from 'lucide-react'
+import { OrderCodeFixForm } from '@/components/prescriptions/OrderCodeFixForm'
+import { deriveCareState, deriveOrderStatus } from '@/lib/prescriptions/careStatus'
+import { HeartPulse } from 'lucide-react'
 import { formatDate, formatDateTime, formatVnLocalDateTimeString } from '@/lib/dateUtils'
 import Link from 'next/link'
 import { PRESCRIPTION_BUCKET } from '@/lib/prescriptions/constants'
@@ -58,9 +57,11 @@ export default async function PrescriptionDetailPage({
 
   if (!sub) notFound()
 
-  const isAdmin  = profile?.role === 'admin'
-  const isSuper  = isAdmin && isSuperAdminEmail(user.email)
-  const isSynced = sub.status === 'synced'
+  const isSuper  = profile?.role === 'admin' && isSuperAdminEmail(user.email)
+  const orderStatus = deriveOrderStatus(sub.order_sync_status)
+  // Legacy product-sync data (paste-JSON → prescription_submission_products) is
+  // deprecated but kept read-only when it exists (old compliance rows).
+  const hasLegacyProducts = (products ?? []).length > 0
 
   // Chronic care (mig 073) — derived display state + who may log the care visit
   const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
@@ -71,6 +72,11 @@ export default async function PrescriptionDetailPage({
   const canCare = sub.is_chronic && sub.care_status === 'none' && (
     (profile?.role === 'store_manager' && profile?.store_id === sub.store_id) ||
     (profile?.role === 'staff' && sub.submitted_by === user.id)
+  )
+  // DHC correction: owner staff / super may fix a wrong code while the order is
+  // still pending/error and the toa hasn't been cared for (mirrors the action).
+  const canFixCode = ['pending', 'error'].includes(sub.order_sync_status) && sub.care_status !== 'done' && (
+    isSuper || (profile?.role === 'staff' && sub.submitted_by === user.id)
   )
   const careImageUrl = (p: string) => (p.startsWith('http') ? p : publicStorageUrl(PRESCRIPTION_BUCKET, p))
 
@@ -91,15 +97,8 @@ export default async function PrescriptionDetailPage({
       <div>
         <div className="flex items-center gap-3 flex-wrap">
           <h1 className="text-2xl font-bold font-mono tracking-wide">{sub.order_code}</h1>
-          {isSynced ? (
-            <Badge className="bg-green-100 text-green-700 gap-1">
-              <CheckCircle2 className="h-3 w-3" /> Đã đồng bộ
-            </Badge>
-          ) : (
-            <Badge className="bg-amber-100 text-amber-700 gap-1">
-              <Clock className="h-3 w-3" /> Chờ đồng bộ
-            </Badge>
-          )}
+          {/* Primary status = order-sync from the Sheet (mig 073). */}
+          <span className={cn('text-xs px-2.5 py-1 rounded-full font-medium', orderStatus.cls)}>{orderStatus.label}</span>
         </div>
         <p className="text-sm text-muted-foreground mt-1">
           Nộp bởi{' '}
@@ -113,13 +112,16 @@ export default async function PrescriptionDetailPage({
             {(sub.stores as unknown as { name: string } | null)?.name ?? '—'}
           </span>
         </p>
-        {isSynced && (
-          <p className="text-xs text-muted-foreground mt-1">
-            Đồng bộ bởi {(sub.syncer as unknown as { full_name: string } | null)?.full_name ?? '—'}
-            {' · '}{sub.synced_at ? formatDateTime(sub.synced_at) : '—'}
-          </p>
-        )}
       </div>
+
+      {/* DHC correction when the order failed to sync (or is still pending) */}
+      {canFixCode && (
+        <OrderCodeFixForm
+          submissionId={sub.id}
+          currentCode={sub.order_code}
+          isError={sub.order_sync_status === 'error'}
+        />
+      )}
 
       {/* Prescription images */}
       <Card>
@@ -228,34 +230,22 @@ export default async function PrescriptionDetailPage({
         </Card>
       )}
 
-      {/* Care form gating (review r-ui2):
-          due       → prominent form (act now)
-          upcoming  → secondary disclosure (early care possible, not pushed)
-          waiting   → no form yet (no order data → can't schedule/care)
-          error     → no form (DHC must be fixed on POS first)
-          canCare already means chronic + not yet cared + permitted. */}
-      {canCare && careState && (
-        careState.key === 'due' ? (
-          <CareForm submissionId={sub.id} storeId={sub.store_id} />
-        ) : careState.key === 'upcoming' ? (
-          <details className="group">
-            <summary className="cursor-pointer select-none inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground">
-              Ghi nhận chăm sóc sớm
-              {sub.reminder_date ? ` (chưa tới kỳ · nhắc ${formatDate(sub.reminder_date)})` : ''}
-            </summary>
-            <div className="mt-3">
-              <CareForm submissionId={sub.id} storeId={sub.store_id} />
-            </div>
-          </details>
-        ) : (
-          <Card>
-            <CardContent className="py-3 text-sm text-muted-foreground">
-              {careState.key === 'error'
-                ? 'Chưa thể chăm sóc: mã DHC chưa khớp dữ liệu đơn POS. Kiểm tra lại mã trên POS, hệ thống sẽ tự cập nhật ở lần đồng bộ kế tiếp.'
-                : 'Chưa thể chăm sóc: đang chờ dữ liệu đơn từ POS để lên lịch nhắc khách.'}
-            </CardContent>
-          </Card>
-        )
+      {/* Care form gating (review r-ui2): careState is care-only now (waiting/
+          error are the order-sync badge, handled in the chronic card above).
+          due → prominent form; upcoming → early-care disclosure. */}
+      {canCare && careState?.key === 'due' && (
+        <CareForm submissionId={sub.id} storeId={sub.store_id} />
+      )}
+      {canCare && careState?.key === 'upcoming' && (
+        <details className="group">
+          <summary className="cursor-pointer select-none inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm font-medium text-muted-foreground hover:text-foreground">
+            Ghi nhận chăm sóc sớm
+            {sub.reminder_date ? ` (chưa tới kỳ · nhắc ${formatDate(sub.reminder_date)})` : ''}
+          </summary>
+          <div className="mt-3">
+            <CareForm submissionId={sub.id} storeId={sub.store_id} />
+          </div>
+        </details>
       )}
 
       {/* Notes */}
@@ -268,8 +258,10 @@ export default async function PrescriptionDetailPage({
         </Card>
       )}
 
-      {/* Products (synced data — compliance view for health inspector) */}
-      {isSynced && (products ?? []).length > 0 && (
+      {/* Legacy product data (read-only) — only for old rows that were
+          product-synced before the Sheet workflow. New prescriptions carry the
+          product list as text in the chronic card's "Sản phẩm (POS)". */}
+      {hasLegacyProducts && (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm">
@@ -307,19 +299,6 @@ export default async function PrescriptionDetailPage({
             </div>
           </CardContent>
         </Card>
-      )}
-
-      {/* Admin: global sync form (not per-submission — admin pastes batch JSON) */}
-      {isAdmin && !isSynced && (
-        <>
-          <p className="text-sm text-muted-foreground">
-            Để đồng bộ đơn hàng này, dán JSON chứa mã{' '}
-            <code className="font-mono text-xs bg-muted px-1 rounded">{sub.order_code}</code>{' '}
-            vào form bên dưới. Nếu muốn đồng bộ hàng loạt, dùng trang{' '}
-            <Link href="/prescriptions" className="underline">danh sách</Link>.
-          </p>
-          <PrescriptionSyncForm />
-        </>
       )}
 
       <div className="pt-2">

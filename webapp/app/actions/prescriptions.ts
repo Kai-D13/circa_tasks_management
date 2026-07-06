@@ -386,3 +386,61 @@ export async function updateChronicSettings(
   revalidatePath(`/prescriptions/${submissionId}`)
   return { success: true }
 }
+
+// Staff/super correct a wrong DHC so the next order-sync cron can match it.
+// Allowed while the order isn't synced yet (pending/error) and the prescription
+// hasn't been cared for. Resets the order-sync fields so the cron re-syncs clean.
+export async function updatePrescriptionOrderCode(submissionId: string, newOrderCode: string) {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Not authenticated' }
+  const { data: me } = await supabase.from('users').select('role').eq('id', user.id).single()
+
+  const code = newOrderCode.trim().toUpperCase()
+  if (!DHC_STRICT_PATTERN.test(code)) return { error: DHC_FORMAT_HINT }
+
+  const { data: sub } = await supabaseAdmin
+    .from('prescription_submissions')
+    .select('id, submitted_by, order_sync_status, care_status')
+    .eq('id', submissionId)
+    .maybeSingle()
+  if (!sub) return { error: 'Không tìm thấy toa thuốc' }
+
+  const isSuper = me?.role === 'admin' && isSuperAdminEmail(user.email)
+  const isOwnerStaff = me?.role === 'staff' && sub.submitted_by === user.id
+  if (!isSuper && !isOwnerStaff) return { error: 'Bạn không có quyền sửa mã đơn của toa này' }
+  if (!['pending', 'error'].includes(sub.order_sync_status))
+    return { error: 'Chỉ sửa được mã khi đơn chưa đồng bộ hoặc đang lỗi' }
+  if (sub.care_status === 'done') return { error: 'Toa đã chăm sóc — không thể sửa mã đơn' }
+
+  // order_code is globally UNIQUE — reject a code already used by another toa.
+  const { data: dup } = await supabaseAdmin
+    .from('prescription_submissions').select('id').eq('order_code', code).maybeSingle()
+  if (dup && dup.id !== submissionId) return { error: `Mã đơn ${code} đã tồn tại ở toa khác` }
+
+  // Reset order fields so the next cron re-syncs from scratch against the new DHC.
+  const { error } = await supabaseAdmin
+    .from('prescription_submissions')
+    .update({
+      order_code: code,
+      order_sync_status: 'pending',
+      order_sync_error: null,
+      order_created_at: null,
+      customer_name: null,
+      customer_phone: null,
+      pos_code: null,
+      pos_name: null,
+      order_products_raw: null,
+      expected_refill_date: null,
+      reminder_date: null,
+    })
+    .eq('id', submissionId)
+  if (error) {
+    if ((error as { code?: string }).code === '23505') return { error: `Mã đơn ${code} đã tồn tại ở toa khác` }
+    return { error: error.message }
+  }
+
+  revalidatePath('/prescriptions')
+  revalidatePath(`/prescriptions/${submissionId}`)
+  return { success: true }
+}

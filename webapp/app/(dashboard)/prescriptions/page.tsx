@@ -3,15 +3,12 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { Card, CardContent } from '@/components/ui/card'
 import { buttonVariants } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { PrescriptionSyncForm } from '@/components/prescriptions/PrescriptionSyncForm'
-import { Plus, CheckCircle2, Clock, Search } from 'lucide-react'
+import { Plus, Search } from 'lucide-react'
 import { ExportButton } from '@/components/common/ExportButton'
 import { cn } from '@/lib/utils'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
-import { isSuperAdminEmail } from '@/lib/authz'
-import { deriveCareState } from '@/lib/prescriptions/careStatus'
+import { deriveCareState, deriveOrderStatus } from '@/lib/prescriptions/careStatus'
 import { PrescriptionDateRangeFilter } from '@/components/prescriptions/PrescriptionDateRangeFilter'
 
 const PAGE_SIZE = 50
@@ -19,7 +16,7 @@ const PAGE_SIZE = 50
 export default async function PrescriptionsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; q?: string; store_id?: string; date_from?: string; date_to?: string; care?: string; care_state?: string; page?: string }>
+  searchParams: Promise<{ order_sync?: string; q?: string; store_id?: string; date_from?: string; date_to?: string; care?: string; care_state?: string; page?: string }>
 }) {
   const params = await searchParams
   const supabase = await createClient()
@@ -34,8 +31,6 @@ export default async function PrescriptionsPage({
 
   const isStaff = profile?.role === 'staff'
   const isAdmin = profile?.role === 'admin'
-  // Product sync is super-admin only (mirrors the DB is_super_admin() gate).
-  const isSuper = isSuperAdminEmail(user.email)
 
   // Staff hit this list on mobile hot paths: smaller page, no exact count, and a
   // lighter select (drop the per-row prescription_images embed — the "Ảnh" column is
@@ -57,32 +52,27 @@ export default async function PrescriptionsPage({
     .range(from, to)
 
   if (isStaff)          query = query.eq('submitted_by', user.id)
-  if (params.status)    query = query.eq('status', params.status)
+  // Order-sync status (the primary status now: Sheet-fed order data, mig 073).
+  // The legacy product-sync `status` is no longer a filter.
+  if (!isStaff && params.order_sync && ['pending', 'synced', 'error'].includes(params.order_sync))
+    query = query.eq('order_sync_status', params.order_sync)
   if (params.store_id)  query = query.eq('store_id', params.store_id)
   if (params.q)         query = query.ilike('order_code', `%${params.q.trim()}%`)
   if (params.date_from) query = query.gte('submitted_at', params.date_from + 'T00:00:00+07:00')
   if (params.date_to)   query = query.lte('submitted_at', params.date_to   + 'T23:59:59+07:00')
 
-  // Chronic-care (mig 073). Two axes, kept apart (review r-ui): a top-level TYPE
-  // tab (care: Tất cả | Mạn tính) for everyone, and — for admin/SM only — a care
-  // STATE dropdown (care_state). All states are chronic-scoped so they match the
-  // per-row care chip (deriveCareState only labels chronic rows).
+  // Chronic-care (mig 073). Type tab (care: Tất cả | Mạn tính) for everyone; a
+  // care-workflow dropdown (care_state: due/done) for admin/SM. Order-sync
+  // states (pending/error) live in the order_sync filter above, not here.
   const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
   const care = params.care === 'chronic' ? 'chronic' : undefined
-  const careState = !isStaff && ['waiting', 'due', 'done', 'error'].includes(params.care_state ?? '')
+  const careState = !isStaff && ['due', 'done'].includes(params.care_state ?? '')
     ? params.care_state : undefined
   if (care === 'chronic') query = query.eq('is_chronic', true)
-  // Mirror deriveCareState exactly so the dropdown filter == the on-screen chip.
-  if (careState === 'waiting') {
-    // chronic, uncared, not-error, and (not synced OR no reminder date yet)
-    query = query.eq('is_chronic', true).eq('care_status', 'none').neq('order_sync_status', 'error')
-      .or('order_sync_status.neq.synced,reminder_date.is.null')
-  } else if (careState === 'due') {
+  if (careState === 'due') {
     query = query.eq('is_chronic', true).eq('order_sync_status', 'synced').eq('care_status', 'none').lte('reminder_date', vnTodayISO)
   } else if (careState === 'done') {
     query = query.eq('is_chronic', true).eq('care_status', 'done')
-  } else if (careState === 'error') {
-    query = query.eq('is_chronic', true).eq('order_sync_status', 'error').eq('care_status', 'none')
   }
 
   const [{ data: submissions, count, error: listErr }, { data: stores }] = await Promise.all([
@@ -100,13 +90,14 @@ export default async function PrescriptionsPage({
   const rows         = submissions ?? []
   const pageRows     = isStaff ? rows.slice(0, pageSize) : rows
   const hasNextStaff = isStaff && rows.length > pageSize
-  const pendingCount = isAdmin
-    ? (await supabase.from('prescription_submissions').select('id', { count: 'exact', head: true }).eq('status', 'pending_sync')).count ?? 0
+  // Actionable admin signal: prescriptions whose DHC didn't match the Sheet.
+  const errorCount = isAdmin
+    ? (await supabase.from('prescription_submissions').select('id', { count: 'exact', head: true }).eq('order_sync_status', 'error')).count ?? 0
     : 0
 
   function buildUrl(patch: Record<string, string | undefined>) {
     const next = {
-      status: params.status, q: params.q, store_id: params.store_id,
+      order_sync: params.order_sync, q: params.q, store_id: params.store_id,
       date_from: params.date_from, date_to: params.date_to,
       care: params.care, care_state: params.care_state, page: params.page,
       ...patch,
@@ -118,25 +109,20 @@ export default async function PrescriptionsPage({
     return qs ? `/prescriptions?${qs}` : '/prescriptions'
   }
 
-  // Shared status chip (mobile card + desktop table render the same rows).
-  const statusBadge = (status: string) =>
-    status === 'synced' ? (
-      <Badge className="bg-green-100 text-green-700 gap-1 text-xs">
-        <CheckCircle2 className="h-3 w-3" /> Đã đồng bộ
-      </Badge>
-    ) : (
-      <Badge className="bg-amber-100 text-amber-700 gap-1 text-xs">
-        <Clock className="h-3 w-3" /> Chờ đồng bộ
-      </Badge>
-    )
+  // Primary status chip = order-sync (Sheet), shown for every row. The chronic
+  // care chip (deriveCareState) shows additionally, only once synced.
+  const orderBadge = (s: { order_sync_status: string }) => {
+    const b = deriveOrderStatus(s.order_sync_status)
+    return <span className={cn('text-[11px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap', b.cls)}>{b.label}</span>
+  }
 
   return (
     <div className="p-4 space-y-4 pb-24">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div>
           <h1 className="text-xl font-semibold">Toa thuốc</h1>
-          {pendingCount > 0 && isAdmin && (
-            <p className="text-sm text-amber-700 mt-0.5">{pendingCount} đơn chờ đồng bộ</p>
+          {errorCount > 0 && isAdmin && (
+            <p className="text-sm text-red-700 mt-0.5">{errorCount} đơn lỗi mã DHC (chưa khớp dữ liệu đơn)</p>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -149,9 +135,6 @@ export default async function PrescriptionsPage({
           )}
         </div>
       </div>
-
-      {/* Admin batch sync form */}
-      {isSuper && <PrescriptionSyncForm />}
 
       {listErr && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm">
@@ -224,25 +207,25 @@ export default async function PrescriptionsPage({
             </select>
           )}
 
-          {/* Product-sync status (compliance JSON) — admin/SM only */}
+          {/* Order-sync status (Sheet) — admin/SM only. Replaces the legacy
+              product-sync filter (that flow is deprecated). */}
           {!isStaff && (
-            <select name="status" defaultValue={params.status ?? ''} aria-label="Lọc theo trạng thái đồng bộ"
+            <select name="order_sync" defaultValue={params.order_sync ?? ''} aria-label="Lọc theo trạng thái đồng bộ đơn"
               className="h-10 md:h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm">
-              <option value="">Tất cả trạng thái</option>
-              <option value="pending_sync">Chờ đồng bộ</option>
+              <option value="">Đồng bộ: tất cả</option>
+              <option value="pending">Chờ đồng bộ</option>
               <option value="synced">Đã đồng bộ</option>
+              <option value="error">Lỗi đơn hàng</option>
             </select>
           )}
 
-          {/* Care status (mig 073) — admin/SM only; the states that used to be tabs */}
+          {/* Chronic care workflow — admin/SM only */}
           {!isStaff && (
             <select name="care_state" defaultValue={params.care_state ?? ''} aria-label="Lọc theo trạng thái chăm sóc"
               className="h-10 md:h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm">
               <option value="">Chăm sóc: tất cả</option>
-              <option value="waiting">Chờ dữ liệu đơn</option>
               <option value="due">Cần chăm sóc</option>
               <option value="done">Đã chăm sóc</option>
-              <option value="error">Lỗi DHC</option>
             </select>
           )}
 
@@ -263,8 +246,8 @@ export default async function PrescriptionsPage({
 
         <PrescriptionDateRangeFilter />
 
-        {(params.q || params.store_id || params.date_from || params.date_to || params.status || params.care_state) && (
-          <Link href={buildUrl({ q: undefined, store_id: undefined, date_from: undefined, date_to: undefined, status: undefined, care_state: undefined, page: undefined })}
+        {(params.q || params.store_id || params.date_from || params.date_to || params.order_sync || params.care_state) && (
+          <Link href={buildUrl({ q: undefined, store_id: undefined, date_from: undefined, date_to: undefined, order_sync: undefined, care_state: undefined, page: undefined })}
             className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'h-10 md:h-8')}>
             Xoá lọc
           </Link>
@@ -289,14 +272,14 @@ export default async function PrescriptionsPage({
                   <div className="flex items-center justify-between gap-2">
                     <span className="font-mono font-semibold text-sm truncate">{s.order_code}</span>
                     <span className="flex items-center gap-1 shrink-0">
+                      {/* Primary = order-sync status (relevant to staff too — an
+                          error means they should re-check the DHC). Care chip adds on. */}
                       {careState && (
                         <span className={cn('text-[11px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap', careState.cls)}>
                           {careState.label}
                         </span>
                       )}
-                      {/* Legacy product-sync status is an admin/compliance concern;
-                          hide it from staff so it isn't confused with care sync. */}
-                      {!isStaff && statusBadge(s.status)}
+                      {orderBadge(s)}
                     </span>
                   </div>
                   {/* Chronic rows read as a customer-care list: khách + SĐT, ngày
@@ -339,7 +322,7 @@ export default async function PrescriptionsPage({
                 {isAdmin  && <TableHead>Dược sĩ</TableHead>}
                 <TableHead>Ngày nộp</TableHead>
                 {!isStaff && <TableHead>Ảnh</TableHead>}
-                <TableHead>Trạng thái</TableHead>
+                <TableHead>Đồng bộ đơn</TableHead>
                 <TableHead>Chăm sóc</TableHead>
               </TableRow>
             </TableHeader>
@@ -369,7 +352,7 @@ export default async function PrescriptionsPage({
                       {Array.isArray(s.prescription_images) ? s.prescription_images.length : 0} ảnh
                     </TableCell>
                   )}
-                  <TableCell>{statusBadge(s.status)}</TableCell>
+                  <TableCell>{orderBadge(s)}</TableCell>
                   <TableCell>
                     {(() => {
                       const cs = deriveCareState(s, vnTodayISO)

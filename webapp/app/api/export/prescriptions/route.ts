@@ -3,14 +3,9 @@ import { createClient } from '@/lib/supabase/server'
 import { xlsxResponse, stampVN, fmtVN } from '@/lib/export/xlsx'
 import { publicStorageUrl } from '@/lib/storage/publicUrl'
 import { PRESCRIPTION_BUCKET } from '@/lib/prescriptions/constants'
-import { deriveCareState } from '@/lib/prescriptions/careStatus'
+import { deriveCareState, deriveOrderStatus } from '@/lib/prescriptions/careStatus'
 
 const MAX_ROWS = 5000
-
-const STATUS_VI: Record<string, string> = {
-  pending_sync: 'Chờ đồng bộ',
-  synced:       'Đã đồng bộ',
-}
 
 // GET /api/export/prescriptions — Excel of prescription submissions, honoring
 // the page filters. Admin only (SM has no access; staff use the mobile list).
@@ -26,30 +21,26 @@ export async function GET(request: NextRequest) {
   const p = request.nextUrl.searchParams
   let query = supabase
     .from('prescription_submissions')
-    .select('order_code, submitted_at, status, notes, is_chronic, days_supply, order_created_at, expected_refill_date, reminder_date, customer_name, customer_phone, order_sync_status, care_status, stores(name), submitter:users!submitted_by(full_name), prescription_images(storage_path)')
+    .select('order_code, submitted_at, notes, is_chronic, days_supply, order_created_at, expected_refill_date, reminder_date, customer_name, customer_phone, order_sync_status, care_status, stores(name), submitter:users!submitted_by(full_name), prescription_images(storage_path)')
     .order('submitted_at', { ascending: false })
     .limit(MAX_ROWS + 1)
 
-  if (p.get('status'))    query = query.eq('status', p.get('status') as string)
+  if (p.get('order_sync') && ['pending', 'synced', 'error'].includes(p.get('order_sync') as string))
+    query = query.eq('order_sync_status', p.get('order_sync') as string)
   if (p.get('store_id'))  query = query.eq('store_id', p.get('store_id') as string)
   if (p.get('q'))         query = query.ilike('order_code', `%${(p.get('q') as string).trim()}%`)
   if (p.get('date_from')) query = query.gte('submitted_at', p.get('date_from') + 'T00:00:00+07:00')
   if (p.get('date_to'))   query = query.lte('submitted_at', p.get('date_to') + 'T23:59:59+07:00')
 
-  // Mirror the list's chronic-care filters (type tab + care-status dropdown) so
-  // an export matches the screen (mig 073; kept in sync with page.tsx).
+  // Mirror the list's chronic filters (type tab + care dropdown) so an export
+  // matches the screen (mig 073; kept in sync with page.tsx).
   const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
   if (p.get('care') === 'chronic') query = query.eq('is_chronic', true)
-  const careState = ['waiting', 'due', 'done', 'error'].includes(p.get('care_state') ?? '') ? p.get('care_state') : null
-  if (careState === 'waiting') {
-    query = query.eq('is_chronic', true).eq('care_status', 'none').neq('order_sync_status', 'error')
-      .or('order_sync_status.neq.synced,reminder_date.is.null')
-  } else if (careState === 'due') {
+  const careState = ['due', 'done'].includes(p.get('care_state') ?? '') ? p.get('care_state') : null
+  if (careState === 'due') {
     query = query.eq('is_chronic', true).eq('order_sync_status', 'synced').eq('care_status', 'none').lte('reminder_date', vnTodayISO)
   } else if (careState === 'done') {
     query = query.eq('is_chronic', true).eq('care_status', 'done')
-  } else if (careState === 'error') {
-    query = query.eq('is_chronic', true).eq('order_sync_status', 'error').eq('care_status', 'none')
   }
 
   const { data, error } = await query
@@ -64,7 +55,7 @@ export async function GET(request: NextRequest) {
       'Mã đơn':       s.order_code as string,
       'Cửa hàng':     (s.stores as unknown as { name?: string } | null)?.name ?? '',
       'Người nộp':    (s.submitter as unknown as { full_name?: string } | null)?.full_name ?? '',
-      'Trạng thái':   STATUS_VI[s.status as string] ?? (s.status as string),
+      'Đồng bộ đơn':  deriveOrderStatus(s.order_sync_status as string).label,
       'Số ảnh':       imgs.length,
       'Ghi chú':      (s.notes as string | null) ?? '',
       'Thời gian nộp': fmtVN(s.submitted_at as string),
