@@ -8,6 +8,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { CampaignStatusButton } from '@/components/kpi/CampaignStatusButton'
 import { CampaignImport } from '@/components/kpi/CampaignImport'
 import { SyncActualsButton } from '@/components/kpi/SyncActualsButton'
+import { CampaignExportButton } from '@/components/kpi/CampaignExportButton'
 import { STATUS_META } from '@/lib/kpi/status'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
@@ -225,7 +226,10 @@ export default async function CampaignDetailPage({
               <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', lastSynced ? 'bg-green-500' : 'bg-amber-500')} />
               {lastSynced ? `Doanh số đồng bộ ${formatDateTime(lastSynced)}` : 'Chưa đồng bộ doanh số'}
             </span>
-            <SyncActualsButton campaignId={c.id} />
+            <div className="flex items-center gap-2">
+              <CampaignExportButton campaignId={c.id} />
+              <SyncActualsButton campaignId={c.id} />
+            </div>
           </div>
 
           <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
