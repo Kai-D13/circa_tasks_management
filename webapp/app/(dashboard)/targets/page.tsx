@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
-import { isSuperAdminEmail } from '@/lib/authz'
+import { isSuperAdminEmail, getSmStoreIds } from '@/lib/authz'
 import { Card, CardContent } from '@/components/ui/card'
 import { PeriodTabs, type TargetPeriod } from '@/components/targets/PeriodTabs'
 import { CampaignKpiView, type CampaignView } from '@/components/kpi/CampaignKpiView'
@@ -124,6 +125,18 @@ function parsePeriod(v: string | undefined): TargetPeriod {
   return v === 'day' || v === 'month' ? v : 'week'
 }
 
+// SM's assigned stores (id + name) for the store selector. getSmStoreIds reads
+// sm_store_assignments (RLS ssa_select_sm) → then resolve names.
+async function fetchSmStores(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  smUserId: string,
+): Promise<{ id: string; name: string }[]> {
+  const ids = await getSmStoreIds(supabase, smUserId)
+  if (ids.length === 0) return []
+  const { data } = await supabase.from('stores').select('id, name').in('id', ids).order('name')
+  return (data ?? []) as { id: string; name: string }[]
+}
+
 // Fetch the store's ACTIVE campaigns (RLS: kct_read_store + can_read_kpi_campaign
 // scopes to own store + active + non-test) joined with tiers + actual snapshots.
 async function fetchCampaignViews(
@@ -180,7 +193,7 @@ async function fetchCampaignViews(
 export default async function TargetsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ period?: string; campaign?: string }>
+  searchParams: Promise<{ period?: string; campaign?: string; store?: string }>
 }) {
   const params = await searchParams
   const period = parsePeriod(params.period)
@@ -195,18 +208,34 @@ export default async function TargetsPage({
   const isSuper = profile?.role === 'admin' && isSuperAdminEmail(user.email)
   const isStaff = profile?.role === 'staff'
   const isStoreMgr = profile?.role === 'store_manager'
+  const isSm = profile?.role === 'sm'
   const campaignEnabled = isKpiCampaignEnabled()
-  // Store managers only have a Doanh số view through campaigns (no day/week/month
-  // RLS access) — without the flag they keep the old redirect.
-  if (!isStaff && !isSuper && !(isStoreMgr && campaignEnabled)) redirect('/tasks')
+
+  // SM (area manager) manages several stores via sm_store_assignments (store_id
+  // is null). They get a campaign VIEW scoped to a chosen store (store selector).
+  const smStores = isSm && campaignEnabled ? await fetchSmStores(supabase, user.id) : []
+
+  // Store managers/SM only have a Doanh số view through campaigns (no day/week/
+  // month RLS access) — without the flag they keep the old redirect. SM needs at
+  // least one assigned store.
+  if (!isStaff && !isSuper
+      && !(isStoreMgr && campaignEnabled)
+      && !(isSm && campaignEnabled && smStores.length > 0)) redirect('/tasks')
 
   const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
 
-  // ── Campaign mode (Staff + Store Manager): active campaigns REPLACE the
+  // The store whose campaigns we render: staff/store_manager → own store; SM →
+  // the selected store (?store=, else the first assigned one).
+  const smSelectedStoreId = isSm && smStores.length > 0
+    ? (smStores.find((s) => s.id === params.store)?.id ?? smStores[0].id)
+    : undefined
+  const resolvedStoreId = isSm ? smSelectedStoreId : (profile?.store_id ?? undefined)
+
+  // ── Campaign mode (Staff + Store Manager + SM): active campaigns REPLACE the
   //    Ngày/Tuần/Tháng tabs; no campaign → staff falls back to the period view,
-  //    store manager gets an empty state. ────────────────────────────────────
-  const campaignViews = campaignEnabled && (isStaff || isStoreMgr) && profile?.store_id
-    ? await fetchCampaignViews(supabase, profile.store_id)
+  //    manager/SM get an empty state. ─────────────────────────────────────────
+  const campaignViews = campaignEnabled && (isStaff || isStoreMgr || isSm) && resolvedStoreId
+    ? await fetchCampaignViews(supabase, resolvedStoreId)
     : []
 
   // Daily GMV series for the SELECTED campaign (drives the chart + "GMV hôm nay").
@@ -214,13 +243,13 @@ export default async function TargetsPage({
   let selectedCampaignId: string | undefined
   let campaignDaily: { date: string; gmv: number }[] = []
   let campaignDailyError = false
-  if (campaignViews.length > 0 && profile?.store_id) {
+  if (campaignViews.length > 0 && resolvedStoreId) {
     selectedCampaignId = (campaignViews.find((c) => c.id === params.campaign) ?? campaignViews[0]).id
     const { data: dailyRows, error: dErr } = await supabase
       .from('kpi_campaign_store_daily_actuals')
       .select('date, gmv')
       .eq('campaign_id', selectedCampaignId)
-      .eq('store_id', profile.store_id)
+      .eq('store_id', resolvedStoreId)
       .order('date')
     if (dErr) {
       // Degrade with a visible hint (not silently as "no data yet").
@@ -229,6 +258,60 @@ export default async function TargetsPage({
     }
     campaignDaily = ((dailyRows ?? []) as { date: string; gmv: number }[])
       .map((r) => ({ date: r.date, gmv: Number(r.gmv) || 0 }))
+  }
+
+  // ── SM render branch: store selector + the store's campaign view ────────────
+  if (isSm) {
+    const selStore = smStores.find((s) => s.id === smSelectedStoreId)
+    return (
+      <div className="p-4 space-y-4 max-w-xl mx-auto">
+        <div className="flex items-center gap-2">
+          <TrendingUp className="h-5 w-5 text-primary" />
+          <h1 className="text-xl font-semibold">Doanh số chiến dịch</h1>
+        </div>
+
+        {/* Store selector — SM manages several stores */}
+        {smStores.length > 1 && (
+          <div className="flex gap-2 overflow-x-auto pb-1 -mb-1">
+            {smStores.map((s) => {
+              const active = s.id === smSelectedStoreId
+              return (
+                <Link
+                  key={s.id}
+                  href={`/targets?store=${s.id}`}
+                  className={cn(
+                    'shrink-0 whitespace-nowrap text-xs px-3 py-1.5 rounded-full border font-medium transition-colors',
+                    active ? 'border-primary bg-primary text-primary-foreground shadow-sm'
+                           : 'border-border text-muted-foreground hover:text-primary hover:bg-primary/5',
+                  )}
+                >
+                  {s.name}
+                </Link>
+              )
+            })}
+          </div>
+        )}
+
+        {campaignViews.length > 0 ? (
+          <>
+            <CampaignResultSummary
+              campaign={campaignViews.find((c) => c.id === selectedCampaignId) ?? campaignViews[0]}
+              todayISO={vnTodayISO}
+            />
+            <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily}
+              dailyError={campaignDailyError} roleLabel="Quản lý vùng" todayISO={vnTodayISO}
+              storeName={selStore?.name ?? 'Cửa hàng'} />
+          </>
+        ) : (
+          <Card>
+            <CardContent className="py-12 text-center text-sm text-muted-foreground">
+              <TrendingUp className="h-8 w-8 mx-auto mb-3 opacity-30" />
+              {selStore ? `Cửa hàng ${selStore.name} hiện chưa có chiến dịch đang áp dụng.` : 'Chưa có chiến dịch.'}
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    )
   }
 
   if (isStoreMgr) {

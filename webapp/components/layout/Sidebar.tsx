@@ -66,7 +66,7 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false }:
   const navItems = [
     { href: '/dashboard',        label: 'Tổng quan',   icon: LayoutDashboard, roles: ['admin', 'store_manager', 'sm'],        prefetch: false },
     { href: '/tasks',            label: 'Tasks',        icon: CheckSquare,     roles: ['admin', 'store_manager', 'staff', 'sm'], prefetch: false },
-    { href: '/targets',          label: 'Doanh số',     icon: TrendingUp,      roles: ['staff', 'store_manager'],                prefetch: false },
+    { href: '/targets',          label: 'Doanh số',     icon: TrendingUp,      roles: ['staff', 'store_manager', 'sm'],          prefetch: false },
     { href: '/tasks/schedules',  label: 'Định kỳ',     icon: CalendarClock,   roles: ['admin'],                                 prefetch: false },
     { href: '/users',            label: 'Người dùng',   icon: Users,           roles: ['admin', 'sm'],                           prefetch: false },
     { href: '/stores',           label: 'Cửa hàng',     icon: Store,           roles: ['admin', 'store_manager', 'sm'],          prefetch: false },
