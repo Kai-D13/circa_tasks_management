@@ -19,7 +19,9 @@ export default async function NewTaskPage({
   if (profile?.role !== 'admin') redirect('/tasks')
 
   const [{ data: stores }, { data: users }] = await Promise.all([
-    supabase.from('stores').select('id, name, code').order('name'),
+    // Only active stores are assignable — a deactivated store (mig 074) must not
+    // receive new tasks.
+    supabase.from('stores').select('id, name, code').eq('is_active', true).order('name'),
     supabase.from('users').select('id, full_name, email, store_id, role').order('full_name'),
   ])
 

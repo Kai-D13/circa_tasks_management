@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { formatDate } from '@/lib/dateUtils'
 import { getSmStoreIds } from '@/lib/authz'
+import { cn } from '@/lib/utils'
 
 const REGION_LABEL: Record<string, string> = {
   north:   'Miền Bắc',
@@ -61,8 +62,15 @@ export default async function StoresPage() {
             </TableHeader>
             <TableBody>
               {(stores ?? []).map((s) => (
-                <TableRow key={s.id}>
-                  <TableCell className="font-medium">{s.name}</TableCell>
+                <TableRow key={s.id} className={cn(s.is_active === false && 'opacity-60')}>
+                  <TableCell className="font-medium">
+                    <span className="flex items-center gap-2">
+                      {s.name}
+                      {s.is_active === false && (
+                        <Badge className="bg-muted text-muted-foreground text-[10px]">Ngừng hoạt động</Badge>
+                      )}
+                    </span>
+                  </TableCell>
                   <TableCell className="text-sm text-muted-foreground font-mono">{s.code}</TableCell>
                   <TableCell>
                     {s.region ? (

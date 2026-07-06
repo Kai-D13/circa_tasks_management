@@ -1245,8 +1245,11 @@ export async function createImportedStoreTasks(params: {
   }
   if (grouped.size === 0) return fail('Không tìm thấy POS code nào trong cột đã chọn')
 
-  // Resolve POS → store against stores.code (server-side re-match; client mapping not trusted).
-  const { data: stores, error: storesErr } = await supabase.from('stores').select('id, name, code')
+  // Resolve POS → store against stores.code (server-side re-match; client mapping
+  // not trusted). Active stores only — an import must not create tasks on a
+  // deactivated store (mig 074); a POS matching only an inactive store falls into
+  // the unmatched/blocked path below.
+  const { data: stores, error: storesErr } = await supabase.from('stores').select('id, name, code').eq('is_active', true)
   if (storesErr) return fail('Lỗi khi lấy danh sách cửa hàng: ' + storesErr.message)
   const storeByCode = new Map((stores ?? []).map((s) => [s.code.toUpperCase(), s]))
   const allowed = new Set(params.allowedStoreIds)

@@ -61,7 +61,9 @@ export async function preflightTrf(
   const missing = REQUIRED.filter(([c]) => !headerKeys.has(c)).map(([, label]) => label)
   if (missing.length) return { error: `Thiếu cột: ${missing.join(', ')} — kiểm tra lại Google Sheet` }
 
-  const { data: stores, error: storesErr } = await supabaseAdmin.from('stores').select('id, code')
+  // Active stores only — a TRF row for a deactivated store (mig 074) falls into
+  // the unmatched list rather than spawning a new cycle-count task there.
+  const { data: stores, error: storesErr } = await supabaseAdmin.from('stores').select('id, code').eq('is_active', true)
   if (storesErr) return { error: `Không đọc được stores: ${storesErr.message}` }
   const byCode = new Map(
     (stores ?? []).filter((s) => s.code).map((s) => [String(s.code).trim().toUpperCase(), s.id]),

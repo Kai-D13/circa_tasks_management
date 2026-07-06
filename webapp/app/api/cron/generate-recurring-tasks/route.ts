@@ -89,8 +89,17 @@ export async function GET(request: NextRequest) {
         .eq('schedule_id', sched.id)
       if (schedStoresErr) throw new Error(`Store list query failed: ${schedStoresErr.message}`)
 
-      const storeIds = (schedStores ?? []).map((s) => s.store_id)
-      if (!storeIds.length) throw new Error('No stores configured for schedule')
+      const configuredStoreIds = (schedStores ?? []).map((s) => s.store_id)
+      if (!configuredStoreIds.length) throw new Error('No stores configured for schedule')
+
+      // Drop deactivated stores (mig 074) — a schedule may still list a store
+      // that was later set inactive; stop generating tasks for it. All target
+      // stores inactive → nothing to create (run succeeds with 0), not an error.
+      const { data: activeStores, error: activeErr } = await supabaseAdmin
+        .from('stores').select('id').in('id', configuredStoreIds).eq('is_active', true)
+      if (activeErr) throw new Error(`Active-store query failed: ${activeErr.message}`)
+      const activeSet = new Set((activeStores ?? []).map((s) => s.id))
+      const storeIds = configuredStoreIds.filter((id) => activeSet.has(id))
 
       const template = sched.task_templates as unknown as {
         id: string; title: string

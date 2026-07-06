@@ -25,7 +25,8 @@ export default async function EditTaskPage({ params }: { params: Promise<{ id: s
   if (!canEdit) redirect(`/tasks/${id}`)
 
   const [{ data: stores }, { data: users }] = await Promise.all([
-    supabase.from('stores').select('id, name, code').order('name'),
+    // Active stores only — re-assigning to a deactivated store (mig 074) isn't allowed.
+    supabase.from('stores').select('id, name, code').eq('is_active', true).order('name'),
     supabase.from('users').select('id, full_name, email, store_id, role').order('full_name'),
   ])
 

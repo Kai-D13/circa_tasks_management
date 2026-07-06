@@ -251,9 +251,14 @@ export default async function PrescriptionsPage({
           {params.date_from && <input type="hidden" name="date_from" value={params.date_from} />}
           {params.date_to && <input type="hidden" name="date_to" value={params.date_to} />}
           <input type="hidden" name="page" value="1" />
-          <button type="submit" className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'h-10 md:h-8')}>
-            Lọc
-          </button>
+          {/* Staff have only the DHC search (submits on Enter) + the date range,
+              so the explicit 'Lọc' button is redundant — it's for the admin/SM
+              multi-dropdown row (review r-ui). */}
+          {!isStaff && (
+            <button type="submit" className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'h-10 md:h-8')}>
+              Lọc
+            </button>
+          )}
         </form>
 
         <PrescriptionDateRangeFilter />
