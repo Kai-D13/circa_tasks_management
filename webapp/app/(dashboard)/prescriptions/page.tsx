@@ -12,6 +12,7 @@ import { cn } from '@/lib/utils'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { deriveCareState } from '@/lib/prescriptions/careStatus'
+import { PrescriptionDateRangeFilter } from '@/components/prescriptions/PrescriptionDateRangeFilter'
 
 const PAGE_SIZE = 50
 
@@ -189,75 +190,81 @@ export default async function PrescriptionsPage({
         })}
       </div>
 
-      {/* Search + filters */}
-      <form method="GET" className="flex flex-wrap gap-2 items-end">
-        {/* DHC search — 40px tall on mobile for touch, compact on desktop */}
-        <div className="relative w-full sm:w-auto">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-          <input
-            name="q"
-            type="text"
-            defaultValue={params.q ?? ''}
-            placeholder="Tìm mã DHC..."
-            aria-label="Tìm theo mã DHC"
-            className="pl-8 h-10 md:h-8 w-full sm:w-44 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
-          />
-        </div>
+      {/* Search + filters. Staff get only DHC search + a single date-range
+          control; the compliance/care selects are admin/SM concerns (review
+          r-ui3). The date range is a client control (navigates itself); a
+          filter submit preserves it via hidden inputs. */}
+      <div className="flex flex-wrap gap-2 items-end">
+        <form method="GET" className="flex flex-wrap gap-2 items-end">
+          {/* DHC search — 40px tall on mobile for touch, compact on desktop */}
+          <div className="relative w-full sm:w-auto">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+            <input
+              name="q"
+              type="text"
+              defaultValue={params.q ?? ''}
+              placeholder="Tìm mã DHC..."
+              aria-label="Tìm theo mã DHC"
+              className="pl-8 h-10 md:h-8 w-full sm:w-44 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
+            />
+          </div>
 
-        {/* Store filter (admin only) */}
-        {isAdmin && (
-          <select
-            name="store_id"
-            defaultValue={params.store_id ?? ''}
-            aria-label="Lọc theo cửa hàng"
-            className="h-10 md:h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm"
-          >
-            <option value="">Tất cả cửa hàng</option>
-            {(stores ?? []).map((s) => (
-              <option key={s.id} value={s.id}>{s.name}</option>
-            ))}
-          </select>
-        )}
+          {/* Store filter (admin only) */}
+          {isAdmin && (
+            <select
+              name="store_id"
+              defaultValue={params.store_id ?? ''}
+              aria-label="Lọc theo cửa hàng"
+              className="h-10 md:h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm"
+            >
+              <option value="">Tất cả cửa hàng</option>
+              {(stores ?? []).map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          )}
 
-        {/* Date range */}
-        <input name="date_from" type="date" defaultValue={params.date_from ?? ''} aria-label="Từ ngày"
-          className="h-10 md:h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm" />
-        <input name="date_to"   type="date" defaultValue={params.date_to   ?? ''} aria-label="Đến ngày"
-          className="h-10 md:h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm" />
+          {/* Product-sync status (compliance JSON) — admin/SM only */}
+          {!isStaff && (
+            <select name="status" defaultValue={params.status ?? ''} aria-label="Lọc theo trạng thái đồng bộ"
+              className="h-10 md:h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm">
+              <option value="">Tất cả trạng thái</option>
+              <option value="pending_sync">Chờ đồng bộ</option>
+              <option value="synced">Đã đồng bộ</option>
+            </select>
+          )}
 
-        {/* Product-sync status (compliance JSON) */}
-        <select name="status" defaultValue={params.status ?? ''} aria-label="Lọc theo trạng thái đồng bộ"
-          className="h-10 md:h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm">
-          <option value="">Tất cả trạng thái</option>
-          <option value="pending_sync">Chờ đồng bộ</option>
-          <option value="synced">Đã đồng bộ</option>
-        </select>
+          {/* Care status (mig 073) — admin/SM only; the states that used to be tabs */}
+          {!isStaff && (
+            <select name="care_state" defaultValue={params.care_state ?? ''} aria-label="Lọc theo trạng thái chăm sóc"
+              className="h-10 md:h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm">
+              <option value="">Chăm sóc: tất cả</option>
+              <option value="waiting">Chờ dữ liệu đơn</option>
+              <option value="due">Cần chăm sóc</option>
+              <option value="done">Đã chăm sóc</option>
+              <option value="error">Lỗi DHC</option>
+            </select>
+          )}
 
-        {/* Care status (mig 073) — admin/SM only; the states that used to be tabs */}
-        {!isStaff && (
-          <select name="care_state" defaultValue={params.care_state ?? ''} aria-label="Lọc theo trạng thái chăm sóc"
-            className="h-10 md:h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm">
-            <option value="">Chăm sóc: tất cả</option>
-            <option value="waiting">Chờ dữ liệu đơn</option>
-            <option value="due">Cần chăm sóc</option>
-            <option value="done">Đã chăm sóc</option>
-            <option value="error">Lỗi DHC</option>
-          </select>
-        )}
+          {/* Hidden: preserve the active tab + date range across a filter submit */}
+          {care && <input type="hidden" name="care" value={care} />}
+          {params.date_from && <input type="hidden" name="date_from" value={params.date_from} />}
+          {params.date_to && <input type="hidden" name="date_to" value={params.date_to} />}
+          <input type="hidden" name="page" value="1" />
+          <button type="submit" className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'h-10 md:h-8')}>
+            Lọc
+          </button>
+        </form>
 
-        {/* Preserve the active TYPE tab across a filter submit */}
-        {care && <input type="hidden" name="care" value={care} />}
-        <input type="hidden" name="page" value="1" />
-        <button type="submit" className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'h-10 md:h-8')}>
-          Lọc
-        </button>
+        <PrescriptionDateRangeFilter />
+
         {(params.q || params.store_id || params.date_from || params.date_to || params.status || params.care_state) && (
           <Link href={buildUrl({ q: undefined, store_id: undefined, date_from: undefined, date_to: undefined, status: undefined, care_state: undefined, page: undefined })}
             className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'h-10 md:h-8')}>
             Xoá lọc
           </Link>
         )}
-      </form>
+      </div>
 
       <Card>
         <CardContent className="p-0">
