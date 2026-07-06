@@ -142,16 +142,20 @@ export default async function PrescriptionsPage({
           the cards that have something to act on render (1 → full width, 2 →
           two columns; review r-r3); tapping filters the list. */}
       {(() => {
+        // Fresh focused URLs (NOT buildUrl) so a reminder click clears any active
+        // search/date/store filter — otherwise the strip count (global, RLS-scoped)
+        // could point at an empty filtered list. Label drops "hôm nay": the query
+        // is reminder_date <= today, so it includes overdue days too.
         const cards = [
           dueN > 0 && {
             key: 'due',
-            href: buildUrl({ care: 'chronic', care_state: 'due', order_sync: undefined, page: undefined }),
-            n: dueN, label: 'Cần chăm sóc hôm nay',
+            href: '/prescriptions?care=chronic&care_state=due',
+            n: dueN, label: 'Cần chăm sóc',
             cls: 'border-primary/30 bg-primary/5 active:bg-primary/10', num: 'text-primary',
           },
           errorCount > 0 && {
             key: 'error',
-            href: buildUrl({ order_sync: 'error', care: undefined, care_state: undefined, page: undefined }),
+            href: '/prescriptions?order_sync=error',
             n: errorCount, label: 'Lỗi mã DHC cần sửa',
             cls: 'border-red-200 bg-red-50/60 active:bg-red-100 dark:border-red-900 dark:bg-red-950/20', num: 'text-red-600',
           },
