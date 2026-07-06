@@ -139,31 +139,35 @@ export default async function PrescriptionsPage({
       </div>
 
       {/* Reminder strip — proactive prompts for pharmacists (stakeholder). Only
-          renders when there's something to act on; tapping filters the list. */}
-      {(dueN > 0 || errorCount > 0) && (
-        <div className="grid grid-cols-2 gap-2">
-          <Link
-            href={buildUrl({ care: 'chronic', care_state: 'due', order_sync: undefined, page: undefined })}
-            className={cn(
-              'rounded-xl border p-3 transition-colors',
-              dueN > 0 ? 'border-primary/30 bg-primary/5 active:bg-primary/10' : 'opacity-50 pointer-events-none',
-            )}
-          >
-            <p className="text-2xl font-bold text-primary leading-none">{dueN}</p>
-            <p className="text-xs text-muted-foreground mt-1">Cần chăm sóc hôm nay</p>
-          </Link>
-          <Link
-            href={buildUrl({ order_sync: 'error', care: undefined, care_state: undefined, page: undefined })}
-            className={cn(
-              'rounded-xl border p-3 transition-colors',
-              errorCount > 0 ? 'border-red-200 bg-red-50/60 active:bg-red-100 dark:border-red-900 dark:bg-red-950/20' : 'opacity-50 pointer-events-none',
-            )}
-          >
-            <p className="text-2xl font-bold text-red-600 leading-none">{errorCount}</p>
-            <p className="text-xs text-muted-foreground mt-1">Lỗi mã DHC cần sửa</p>
-          </Link>
-        </div>
-      )}
+          the cards that have something to act on render (1 → full width, 2 →
+          two columns; review r-r3); tapping filters the list. */}
+      {(() => {
+        const cards = [
+          dueN > 0 && {
+            key: 'due',
+            href: buildUrl({ care: 'chronic', care_state: 'due', order_sync: undefined, page: undefined }),
+            n: dueN, label: 'Cần chăm sóc hôm nay',
+            cls: 'border-primary/30 bg-primary/5 active:bg-primary/10', num: 'text-primary',
+          },
+          errorCount > 0 && {
+            key: 'error',
+            href: buildUrl({ order_sync: 'error', care: undefined, care_state: undefined, page: undefined }),
+            n: errorCount, label: 'Lỗi mã DHC cần sửa',
+            cls: 'border-red-200 bg-red-50/60 active:bg-red-100 dark:border-red-900 dark:bg-red-950/20', num: 'text-red-600',
+          },
+        ].filter(Boolean) as { key: string; href: string; n: number; label: string; cls: string; num: string }[]
+        if (!cards.length) return null
+        return (
+          <div className={cn('grid gap-2', cards.length === 1 ? 'grid-cols-1' : 'grid-cols-2')}>
+            {cards.map((c) => (
+              <Link key={c.key} href={c.href} className={cn('rounded-xl border p-3 transition-colors', c.cls)}>
+                <p className={cn('text-2xl font-bold leading-none', c.num)}>{c.n}</p>
+                <p className="text-xs text-muted-foreground mt-1">{c.label}</p>
+              </Link>
+            ))}
+          </div>
+        )
+      })()}
 
       {listErr && (
         <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm">
@@ -396,9 +400,12 @@ export default async function PrescriptionsPage({
                   <TableCell>
                     {(() => {
                       const cs = deriveCareState(s, vnTodayISO)
-                      return cs ? (
-                        <span className={cn('text-[11px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap', cs.cls)}>
-                          {cs.label}
+                      // Consistent with mobile: only 'due'/'done' stand out;
+                      // 'upcoming' (before the reminder date) is not emphasized.
+                      const chip = cs && cs.key !== 'upcoming' ? cs : null
+                      return chip ? (
+                        <span className={cn('text-[11px] px-2 py-0.5 rounded-full font-medium whitespace-nowrap', chip.cls)}>
+                          {chip.label}
                         </span>
                       ) : <span className="text-xs text-muted-foreground">—</span>
                     })()}
