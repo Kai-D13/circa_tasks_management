@@ -3,29 +3,29 @@ import Link from 'next/link'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { createClient } from '@/lib/supabase/server'
 import { isSuperAdminEmail } from '@/lib/authz'
-import { POLICY_DEPT_ID, FS_SESSION_STATUS, FS_ITEM_STATUS } from '@/lib/fs/constants'
+import { POLICY_DEPT_ID, FS_SESSION_STATUS } from '@/lib/fs/constants'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { formatDate, formatDateTime } from '@/lib/dateUtils'
+import { formatDateTime } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
 import { ChevronLeft, Settings2, ClipboardList, AlertTriangle } from 'lucide-react'
+import { FsResultTab, type FsReviewItem } from '@/components/fs/FsResultTab'
 
 // Session detail (mirror of a KPI campaign detail): tabs Cấu hình (session
-// metadata) + Kết quả (product/item list + progress). F3 extends Kết quả with
-// per-item photos, per-box/bulk resubmit, and Excel export.
+// metadata) + Kết quả (interactive product review — search/filter/pagination,
+// per-item photo boxes, per-box/bulk resubmit, close/cancel).
 
+const PAGE_SIZE = 50
 type Embed = { name?: string | null; code?: string | null }
 function one<T>(v: T | T[] | null | undefined): T | null {
   return Array.isArray(v) ? (v[0] ?? null) : (v ?? null)
 }
-const dims = (l: number | null, w: number | null, h: number | null) =>
-  l || w || h ? `${l ?? '—'} × ${w ?? '—'} × ${h ?? '—'} mm` : '—'
 
 export default async function FsSessionDetailPage({
   params, searchParams,
 }: {
   params: Promise<{ id: string }>
-  searchParams: Promise<{ tab?: string }>
+  searchParams: Promise<{ tab?: string; q?: string; status?: string; page?: string }>
 }) {
   const { user, profile } = await getSessionProfile()
   if (!user) redirect('/login')
@@ -34,7 +34,11 @@ export default async function FsSessionDetailPage({
   if (!isSuper && !isPolicy) redirect('/tasks')
 
   const { id } = await params
-  const tab = (await searchParams).tab === 'config' ? 'config' : 'result'
+  const sp = await searchParams
+  const tab = sp.tab === 'config' ? 'config' : 'result'
+  const q = (sp.q ?? '').trim()
+  const statusFilter = ['pending', 'done', 'redo'].includes(sp.status ?? '') ? (sp.status as string) : ''
+  const pageNum = Math.max(1, Number.parseInt(sp.page ?? '1', 10) || 1)
   const supabase = await createClient()
 
   const { data: session, error: sErr } = await supabase
@@ -44,7 +48,6 @@ export default async function FsSessionDetailPage({
   if (sErr) console.error('[fs-session-detail] session query failed:', sErr.message)
   if (!session) {
     if (!sErr) notFound() // RLS-scoped: a non-authorized/absent session → 404
-    // A genuine query error (migration/RLS) must read as an error, not a 404.
     return (
       <div className="p-4 space-y-4 max-w-5xl">
         <Link href="/fs/products" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
@@ -58,19 +61,46 @@ export default async function FsSessionDetailPage({
     )
   }
 
-  const [{ data: items, error: iErr }, { data: run, error: rErr }, { data: people, error: pErr }] = await Promise.all([
-    supabase.from('fs_session_items')
-      .select('id, product_id, product_name, status, dim_length_mm, dim_width_mm, dim_height_mm, processed_by, processed_at, resubmit_note')
-      .eq('session_id', id).order('created_at', { ascending: true }),
+  // Counts (all items, status only) for the progress strip + Cấu hình total.
+  const [{ data: statusRows, error: cErr }, { data: run, error: rErr }, { data: people, error: pErr }] = await Promise.all([
+    supabase.from('fs_session_items').select('status').eq('session_id', id),
     supabase.from('fs_import_runs')
       .select('file_name, sheet_name, row_count, success_count, created_at')
       .eq('session_id', id).order('created_at', { ascending: false }).limit(1).maybeSingle(),
     supabase.from('users').select('id, full_name, email')
       .in('id', [session.created_by, session.claimed_by].filter(Boolean) as string[]),
   ])
-  // Surface a failed side-query — otherwise a broken items/run/people read reads
-  // as "phiên chưa có sản phẩm" / a missing creator (a false empty state).
-  const queryError = iErr?.message ?? rErr?.message ?? pErr?.message ?? null
+
+  // Result tab: filtered + paginated page of items + their photos.
+  let reviewItems: FsReviewItem[] = []
+  let filteredCount = 0
+  let iErr: string | null = null
+  if (tab === 'result') {
+    let iq = supabase.from('fs_session_items')
+      .select('id, product_id, product_name, status, dim_length_mm, dim_width_mm, dim_height_mm, resubmit_note', { count: 'exact' })
+      .eq('session_id', id)
+    if (statusFilter) iq = iq.eq('status', statusFilter)
+    if (q) {
+      const safe = q.replace(/[,()*%]/g, '').slice(0, 80) // strip PostgREST filter metachars
+      if (safe) iq = iq.or(`product_id.ilike.%${safe}%,product_name.ilike.%${safe}%`)
+    }
+    const { data: pageItems, count, error } = await iq
+      .order('created_at', { ascending: true })
+      .range((pageNum - 1) * PAGE_SIZE, pageNum * PAGE_SIZE - 1)
+    iErr = error?.message ?? null
+    filteredCount = count ?? 0
+    const ids = (pageItems ?? []).map((i) => i.id)
+    const { data: photos } = ids.length
+      ? await supabase.from('fs_item_photos').select('item_id, box_key, storage_path, status, resubmit_note').in('item_id', ids)
+      : { data: [] as { item_id: string; box_key: number; storage_path: string; status: string; resubmit_note: string | null }[] }
+    reviewItems = (pageItems ?? []).map((it) => ({
+      ...it,
+      photos: (photos ?? []).filter((p) => p.item_id === it.id)
+        .map((p) => ({ box_key: p.box_key, storage_path: p.storage_path, status: p.status, resubmit_note: p.resubmit_note })),
+    }))
+  }
+
+  const queryError = cErr?.message ?? rErr?.message ?? pErr?.message ?? iErr ?? null
   if (queryError) console.error('[fs-session-detail] query failed:', queryError)
 
   const store = one<Embed>(session.store)
@@ -78,12 +108,13 @@ export default async function FsSessionDetailPage({
   const creator = byId.get(session.created_by)
   const claimer = session.claimed_by ? byId.get(session.claimed_by) : null
 
-  const all = items ?? []
-  const done = all.filter((i) => i.status === 'done').length
-  const redo = all.filter((i) => i.status === 'redo').length
-  const pending = all.filter((i) => i.status === 'pending').length
-  const total = all.length
+  const rows = statusRows ?? []
+  const total = rows.length
+  const done = rows.filter((r) => r.status === 'done').length
+  const redo = rows.filter((r) => r.status === 'redo').length
+  const pending = rows.filter((r) => r.status === 'pending').length
   const pct = total > 0 ? Math.round((done / total) * 100) : 0
+  const isActive = session.status === 'active'
 
   const meta = FS_SESSION_STATUS[session.status] ?? { label: session.status, cls: 'bg-muted text-muted-foreground' }
   const tabCls = (active: boolean) =>
@@ -149,44 +180,16 @@ export default async function FsSessionDetailPage({
           </CardContent>
         </Card>
       ) : (
-        <Card>
-          <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/40">
-                  <tr className="text-left text-muted-foreground">
-                    <th className="px-4 py-2.5 font-medium w-32">product_id</th>
-                    <th className="px-4 py-2.5 font-medium">Tên sản phẩm</th>
-                    <th className="px-4 py-2.5 font-medium">Kích thước (D×R×C)</th>
-                    <th className="px-4 py-2.5 font-medium">Trạng thái</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y">
-                  {all.map((it) => {
-                    const im = FS_ITEM_STATUS[it.status] ?? { label: it.status, cls: 'bg-muted text-muted-foreground' }
-                    return (
-                      <tr key={it.id}>
-                        <td className="px-4 py-2.5 font-mono">{it.product_id}</td>
-                        <td className="px-4 py-2.5">
-                          {it.product_name}
-                          {it.resubmit_note && <div className="text-xs text-amber-700 mt-0.5">Ghi chú làm lại: {it.resubmit_note}</div>}
-                        </td>
-                        <td className="px-4 py-2.5 text-muted-foreground">{dims(it.dim_length_mm, it.dim_width_mm, it.dim_height_mm)}</td>
-                        <td className="px-4 py-2.5"><Badge className={cn('text-[10px]', im.cls)}>{im.label}</Badge></td>
-                      </tr>
-                    )
-                  })}
-                  {all.length === 0 && !queryError && (
-                    <tr><td colSpan={4} className="text-center text-muted-foreground py-8">Phiên chưa có sản phẩm.</td></tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-            <p className="px-4 py-3 text-xs text-muted-foreground border-t">
-              Ảnh sản phẩm, yêu cầu làm lại từng box và xuất Excel sẽ có ở bước tiếp theo (F3/F4).
-            </p>
-          </CardContent>
-        </Card>
+        <FsResultTab
+          sessionId={id}
+          isActive={isActive}
+          items={reviewItems}
+          page={pageNum}
+          totalPages={Math.max(1, Math.ceil(filteredCount / PAGE_SIZE))}
+          filteredCount={filteredCount}
+          q={q}
+          status={statusFilter}
+        />
       )}
     </div>
   )

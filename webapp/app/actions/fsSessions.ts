@@ -120,3 +120,50 @@ export async function createFsSession(
   revalidatePath('/fs/products')
   return { success: true as const, sessionId: sessionId as string, created: items.length }
 }
+
+const NOTE_MAX = 500
+
+// ── F3 review actions (Policy/super) ────────────────────────────────────────
+// Bulk (or single) whole-item resubmit. note required (stakeholder).
+export async function resubmitFsItems(sessionId: string, itemIds: string[], note: string) {
+  const auth = await requireFsManager()
+  if ('error' in auth) return { error: auth.error }
+  if (!sessionId || !itemIds?.length) return { error: 'Chưa chọn sản phẩm' }
+  const n = note?.trim()
+  if (!n) return { error: 'Vui lòng nhập lý do làm lại' }
+  const { data, error } = await supabaseAdmin.rpc('rpc_fs_resubmit_items', {
+    p_session_id: sessionId, p_item_ids: itemIds, p_note: n.slice(0, NOTE_MAX), p_actor: auth.user.id,
+  })
+  if (error) return { error: 'Không gửi được yêu cầu làm lại: ' + error.message }
+  revalidatePath(`/fs/products/${sessionId}`)
+  return { success: true as const, count: (data as number) ?? 0 }
+}
+
+// Per-box resubmit (single item). note required.
+export async function resubmitFsBox(sessionId: string, itemId: string, boxKey: number, note: string) {
+  const auth = await requireFsManager()
+  if ('error' in auth) return { error: auth.error }
+  if (!itemId || !(boxKey >= 1 && boxKey <= 5)) return { error: 'Box ảnh không hợp lệ' }
+  const n = note?.trim()
+  if (!n) return { error: 'Vui lòng nhập lý do làm lại' }
+  const { error } = await supabaseAdmin.rpc('rpc_fs_resubmit_box', {
+    p_item_id: itemId, p_box_key: boxKey, p_note: n.slice(0, NOTE_MAX), p_actor: auth.user.id,
+  })
+  if (error) return { error: 'Không gửi được yêu cầu làm lại: ' + error.message }
+  revalidatePath(`/fs/products/${sessionId}`)
+  return { success: true as const }
+}
+
+// Close a session (complete) or cancel it. Active-only (enforced in the RPC).
+export async function closeFsSession(sessionId: string, status: 'completed' | 'cancelled', note?: string) {
+  const auth = await requireFsManager()
+  if ('error' in auth) return { error: auth.error }
+  if (status !== 'completed' && status !== 'cancelled') return { error: 'Trạng thái không hợp lệ' }
+  const { error } = await supabaseAdmin.rpc('rpc_fs_close_session', {
+    p_session_id: sessionId, p_status: status, p_actor: auth.user.id, p_note: note?.trim()?.slice(0, NOTE_MAX) ?? null,
+  })
+  if (error) return { error: (status === 'completed' ? 'Không đóng được phiên: ' : 'Không huỷ được phiên: ') + error.message }
+  revalidatePath(`/fs/products/${sessionId}`)
+  revalidatePath('/fs/products')
+  return { success: true as const }
+}
