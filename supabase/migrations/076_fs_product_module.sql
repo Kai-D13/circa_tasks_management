@@ -21,6 +21,12 @@
 -- Additive + idempotent + pg_safeupdate-safe. Records app_migrations '076'.
 -- IMPORTANT deploy order: run this BEFORE inserting any FS store (the OS
 -- surfaces filter store_type='os' from the same app build).
+--
+-- r2 (stakeholder review): DB-level FS/OS isolation — a BEFORE trigger forbids
+-- fs_sessions.store_id from pointing at a non-FS / inactive store even if a
+-- service-role write is buggy (defence-in-depth beside the app-layer
+-- assertOsStoreIds guard on the OS side). Also: fs_item_photos gains
+-- uploaded_by/content_type/size_bytes; hot-path indexes on import_runs/events.
 -- ============================================================================
 
 BEGIN;
@@ -74,8 +80,13 @@ CREATE TABLE IF NOT EXISTS public.fs_item_photos (
   storage_path  text NOT NULL,           -- GCS public URL (GCS-only, no Supabase fallback)
   status        text NOT NULL DEFAULT 'ok' CHECK (status IN ('ok', 'redo')),
   resubmit_note text,                    -- admin note for THIS box
-  updated_at    timestamptz NOT NULL DEFAULT now(),
-  UNIQUE (item_id, box_key)              -- one photo per box — re-upload OVERWRITES
+  uploaded_by   uuid REFERENCES public.users(id),  -- who set the CURRENT (last) version
+  content_type  text,                    -- e.g. image/jpeg — metadata for export/debug
+  size_bytes    bigint,
+  updated_at    timestamptz NOT NULL DEFAULT now(),  -- also = "uploaded_at" of last version
+  UNIQUE (item_id, box_key)              -- one photo per box — re-upload OVERWRITES.
+  -- The UNIQUE(item_id, box_key) btree indexes item_id as its leftmost column →
+  -- per-item photo lookups are already covered; no standalone item_id index.
 );
 
 CREATE TABLE IF NOT EXISTS public.fs_import_runs (
@@ -91,6 +102,8 @@ CREATE TABLE IF NOT EXISTS public.fs_import_runs (
   uploaded_by   uuid REFERENCES public.users(id),
   created_at    timestamptz NOT NULL DEFAULT now()
 );
+CREATE INDEX IF NOT EXISTS idx_fir_session      ON public.fs_import_runs (session_id);
+CREATE INDEX IF NOT EXISTS idx_fir_store_created ON public.fs_import_runs (store_id, created_at DESC);
 
 -- Business/action audit (photos keep only the LAST version; the history of who
 -- did what lives here): resubmits, re-uploads, claims, closes, cleanup failures.
@@ -109,6 +122,40 @@ CREATE TABLE IF NOT EXISTS public.fs_item_events (
   created_at  timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_fse_session ON public.fs_item_events (session_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_fse_item    ON public.fs_item_events (item_id, created_at DESC);
+
+-- ── 2b. FS store guard (r2) ──────────────────────────────────────────────────
+-- Hard boundary at the DB: an FS session may ONLY reference an active FS store.
+-- Even a buggy service-role write (or a future direct SQL insert) cannot attach
+-- a session to an OS store — which would otherwise let OS staff/store_manager of
+-- that store read it via can_read_fs_session (store_id match). Mirror of the
+-- app-layer assertOsStoreIds() guard that keeps FS ids out of OS writes.
+CREATE OR REPLACE FUNCTION public.ensure_fs_session_store_is_fs()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+DECLARE
+  v_type   text;
+  v_active boolean;
+BEGIN
+  SELECT store_type, is_active INTO v_type, v_active
+  FROM public.stores WHERE id = NEW.store_id;
+  IF v_type IS NULL THEN
+    RAISE EXCEPTION 'FS session: store % không tồn tại', NEW.store_id;
+  ELSIF v_type <> 'fs' THEN
+    RAISE EXCEPTION 'FS session chỉ gắn được với cửa hàng FS (store % có store_type=%)', NEW.store_id, v_type;
+  ELSIF v_active IS FALSE THEN
+    RAISE EXCEPTION 'FS session: cửa hàng % đã ngừng hoạt động', NEW.store_id;
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_fs_session_store_is_fs ON public.fs_sessions;
+CREATE TRIGGER trg_fs_session_store_is_fs
+  BEFORE INSERT OR UPDATE OF store_id ON public.fs_sessions
+  FOR EACH ROW EXECUTE FUNCTION public.ensure_fs_session_store_is_fs();
 
 -- ── 3. RLS ───────────────────────────────────────────────────────────────────
 ALTER TABLE public.fs_sessions      ENABLE ROW LEVEL SECURITY;
@@ -167,7 +214,7 @@ CREATE POLICY fse_select ON public.fs_item_events
 
 INSERT INTO public.app_migrations (version, name, notes)
 VALUES ('076', 'fs_product_module',
-        'FS product module phase 1: stores.store_type os|fs + fs_sessions/items/photos(UNIQUE item,box last-version-only)/import_runs/item_events(audit). RLS read: super | Policy-dept admin | store staff/mgr via can_read_fs_session (SECDEF). Writes service-role only. Run BEFORE inserting FS stores.')
+        'FS product module phase 1 (r2): stores.store_type os|fs + fs_sessions/items/photos(UNIQUE item,box last-version-only, +uploaded_by/content_type/size_bytes)/import_runs/item_events(audit). BEFORE-trigger ensure_fs_session_store_is_fs enforces store_type=fs+active. RLS read: super | Policy-dept admin | store staff/mgr via can_read_fs_session (SECDEF). Writes service-role only. Run BEFORE inserting FS stores.')
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;
@@ -175,5 +222,9 @@ COMMIT;
 -- Verify (run separately):
 -- SELECT column_name FROM information_schema.columns WHERE table_name='stores' AND column_name='store_type';
 -- SELECT tablename, policyname FROM pg_policies WHERE tablename LIKE 'fs\_%' ORDER BY 1;  -- 5 select policies
--- SELECT proname, prosecdef FROM pg_proc WHERE proname='can_read_fs_session';
+-- SELECT proname, prosecdef FROM pg_proc WHERE proname IN ('can_read_fs_session','ensure_fs_session_store_is_fs');
+-- SELECT tgname FROM pg_trigger WHERE tgname='trg_fs_session_store_is_fs';
+-- SELECT indexname FROM pg_indexes WHERE tablename LIKE 'fs\_%' ORDER BY 1;
 -- SELECT version FROM public.app_migrations WHERE version='076';
+-- Guard smoke (expect it to RAISE): INSERT INTO fs_sessions(name,store_id,created_by)
+--   VALUES ('x',(SELECT id FROM stores WHERE store_type='os' LIMIT 1),(SELECT id FROM users LIMIT 1));

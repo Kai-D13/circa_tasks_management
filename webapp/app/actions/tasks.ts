@@ -11,6 +11,7 @@ import { canAdminManageOwn, getSmStoreIds, smHasStore } from '@/lib/authz'
 import { CYCLE_COUNT_DEPT_ID } from '@/lib/inventory/constants'
 import { publicStorageUrl } from '@/lib/storage/publicUrl'
 import { sanitizeRichText } from '@/lib/richtext/sanitize'
+import { assertOsStoreIds } from '@/lib/stores/assertOsStore'
 
 // True when the given admin is an 'editor' collaborator on the task.
 // Used by addReviewNote + requestResubmit to accept collaborator editors.
@@ -138,6 +139,11 @@ export async function createTask(formData: FormData) {
 
   const storeIdVal = formData.get('store_id') as string | null
   if (!storeIdVal) return { error: 'Vui lòng chọn cửa hàng nhận task' }
+
+  // FS/OS isolation (mig 076): reject an FS store_id before any write — covers
+  // both the single-store and staff_all branches below.
+  const osErr = await assertOsStoreIds([storeIdVal], { requireActive: true })
+  if (osErr) return { error: osErr }
 
   const dateErr = validateTaskDates(
     formData.get('start_date') as string || null,
@@ -916,6 +922,10 @@ export async function createBroadcastTask(params: {
 
   if (!params.storeIds.length) return { error: 'Vui lòng chọn ít nhất một cửa hàng' }
   if (!params.requiredOutputs?.length) return { error: 'Vui lòng chọn ít nhất một loại kết quả cần nộp' }
+
+  // FS/OS isolation (mig 076): no OS broadcast task may target an FS store.
+  const osErrB = await assertOsStoreIds(params.storeIds, { requireActive: true })
+  if (osErrB) return { error: osErrB }
 
   const dateErrB = validateTaskDates(params.startDate, params.deadline)
   if (dateErrB) return { error: dateErrB }
@@ -1820,6 +1830,10 @@ export async function createTaskSchedule(data: {
   if (attachErrS) return { error: attachErrS }
 
   const uniqueStoreIds = [...new Set(data.storeIds)]
+
+  // FS/OS isolation (mig 076): a recurring schedule must not target an FS store.
+  const osErrSched = await assertOsStoreIds(uniqueStoreIds, { requireActive: true })
+  if (osErrSched) return { error: osErrSched }
 
   // 1. Create template
   const config = {

@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { isSuperAdminEmail, getSmStoreIds, smHasStore } from '@/lib/authz'
+import { assertOsStoreIds } from '@/lib/stores/assertOsStore'
 
 export async function createUser(formData: FormData) {
   const supabase = await createClient()
@@ -42,6 +43,11 @@ export async function createUser(formData: FormData) {
     if (role !== 'admin' && !storeId)
       return { error: 'Tài khoản Quản lý và Nhân viên phải được gán cửa hàng' }
   }
+
+  // FS/OS isolation (mig 076): the generic /users flow only provisions OS-store
+  // accounts. FS store_manager/staff accounts are created via the FS module.
+  const osErr = await assertOsStoreIds([storeId])
+  if (osErr) return { error: osErr }
 
   const { data, error } = await supabaseAdmin.auth.admin.createUser({
     email:         formData.get('email') as string,
@@ -181,6 +187,10 @@ export async function updateUserRole(userId: string, role: string, storeId: stri
 
   const effectiveStoreId = role === 'admin' ? null : storeId
 
+  // FS/OS isolation (mig 076): the generic /users flow only assigns OS stores.
+  const osErr = await assertOsStoreIds([effectiveStoreId])
+  if (osErr) return { error: osErr }
+
   const { error } = await supabase
     .from('users')
     .update({ role, store_id: effectiveStoreId })
@@ -245,12 +255,11 @@ export async function setSmRole(userId: string, storeIds: string[]) {
     .from('users').select('id').eq('id', userId).single()
   if (!target) return { error: 'Không tìm thấy người dùng' }
 
-  // Validate every store exists up front so the insert below (after the delete)
-  // won't fail on an invalid FK and strand the user with no assignments.
-  const { data: validStores } = await supabaseAdmin
-    .from('stores').select('id').in('id', unique)
-  if ((validStores?.length ?? 0) !== unique.length)
-    return { error: 'Có cửa hàng không hợp lệ trong danh sách' }
+  // Validate every store exists AND is an OS store up front (FS/OS isolation,
+  // mig 076 — an SM only ever manages OS stores) so the insert below (after the
+  // delete) won't fail on a bad FK / leak an FS store into SM scope.
+  const smOsErr = await assertOsStoreIds(unique)
+  if (smOsErr) return { error: smOsErr }
 
   // 1) Promote to SM. store_id is null — SM scope lives in sm_store_assignments.
   const { error: roleErr } = await supabaseAdmin

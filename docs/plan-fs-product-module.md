@@ -222,3 +222,23 @@ mọi role OS không thấy module FS; Policy member B thấy phiên do member A
 chống leak**) → **F0** (provisioning 3 FS store + account — chỉ chạy SAU F1 để không leak
 trên QA) → F2 → F3 → F4 → F5 (FS nav/guard + store_manager tạo account) → F6 (QA: leak test
 dropdown OS, RLS PostgREST trực tiếp, stress upload, GCS orphan cleanup).
+
+### 9.1 F1 r2 — siết isolation ở SERVER + DB (theo review P1, đã build)
+Review chỉ ra: F1 mới chặn leak ở UI/dropdown; server action + DB vẫn có thể nhận
+FS store_id nếu request bị craft. Đã bổ sung:
+- **`lib/stores/assertOsStore.ts` → `assertOsStoreIds(ids, {requireActive})`**: kiểm tra
+  store tồn tại + `store_type='os'` (+ `is_active` nếu bắt buộc). Gọi TRƯỚC mọi OS write:
+  `createTask` (bao cả nhánh staff_all), `createBroadcastTask`, `createTaskSchedule`
+  (requireActive), `createUser`, `updateUserRole`, `setSmRole`. `createImportedStoreTasks`
+  đã an toàn sẵn (map byCode chỉ chứa store OS). Account FS chỉ tạo qua module FS (F5),
+  không qua /users generic.
+- **DB trigger `ensure_fs_session_store_is_fs()`** (mig 076) — BEFORE INSERT/UPDATE OF
+  store_id trên `fs_sessions`: RAISE nếu store không phải FS / không active. Chặn cả khi
+  service-role write bị bug (nếu không, OS staff/mgr của store đó đọc được session qua
+  `can_read_fs_session`).
+- Bổ sung P2: `fs_item_photos` +`uploaded_by`/`content_type`/`size_bytes`; index
+  `fs_import_runs(session_id)`, `(store_id, created_at desc)`, `fs_item_events(item_id,
+  created_at desc)`. Status phiên chốt **active/completed/cancelled** (bỏ `draft` — import
+  tạo phiên active ngay, không có bước nháp). Trang Cửa hàng: badge "FS" chỉ là nhãn
+  read-only trên bảng tham chiếu (super/admin/manager, staff bị redirect) — không phải
+  dropdown chọn được, giữ nguyên.
