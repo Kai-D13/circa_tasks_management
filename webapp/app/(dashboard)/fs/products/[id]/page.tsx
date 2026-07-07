@@ -10,6 +10,7 @@ import { formatDateTime } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
 import { ChevronLeft, Settings2, ClipboardList, AlertTriangle } from 'lucide-react'
 import { FsResultTab, type FsReviewItem } from '@/components/fs/FsResultTab'
+import { FsExportButton } from '@/components/fs/FsExportButton'
 
 // Session detail (mirror of a KPI campaign detail): tabs Cấu hình (session
 // metadata) + Kết quả (interactive product review — search/filter/pagination,
@@ -138,6 +139,7 @@ export default async function FsSessionDetailPage({
         <h1 className="text-xl font-semibold">{session.name}</h1>
         <Badge className={cn('text-[10px]', meta.cls)}>{meta.label}</Badge>
         <span className="text-sm text-muted-foreground">{store?.name}{store?.code ? ` · ${store.code}` : ''}</span>
+        <div className="ml-auto"><FsExportButton sessionId={id} /></div>
       </div>
 
       {/* progress strip */}
