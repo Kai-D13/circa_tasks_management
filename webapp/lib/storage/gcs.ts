@@ -40,6 +40,15 @@ export function publicUrlForKey(key: string): string {
   return `${base}/${key}`
 }
 
+// Inverse of publicUrlForKey: the object key from a public URL (null if the URL
+// isn't in our bucket base — e.g. a legacy Supabase URL). Used to delete the old
+// object when a photo is replaced (FS "last version only").
+export function keyFromPublicUrl(url: string): string | null {
+  const base = (process.env.GCS_PUBLIC_BASE_URL ?? '').replace(/\/+$/, '')
+  if (!base || !url?.startsWith(base + '/')) return null
+  return url.slice(base.length + 1)
+}
+
 // Start a resumable upload session and return the session URL the browser PUTs to.
 // The session is bound to `origin` so the cross-origin browser PUT passes CORS.
 export async function createResumableUploadSession(

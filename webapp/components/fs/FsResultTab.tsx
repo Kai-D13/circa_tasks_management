@@ -248,7 +248,9 @@ export function FsResultTab({
                                   <span className="text-[11px] text-muted-foreground truncate">{b.label}{b.required ? ' *' : ''}</span>
                                   {photo?.status === 'redo' && <Badge className="bg-amber-100 text-amber-700 text-[9px] shrink-0">làm lại</Badge>}
                                 </div>
-                                {canResubmit && (
+                                {/* Only offer per-box resubmit for a box that HAS a photo (option 1,
+                                    reviewer) — an empty optional box has nothing to "chụp lại". */}
+                                {canResubmit && photo && (
                                   <button
                                     type="button"
                                     onClick={() => setModal({ kind: 'box', id: it.id, box: b.key })}

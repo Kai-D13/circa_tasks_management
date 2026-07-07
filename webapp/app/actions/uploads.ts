@@ -6,6 +6,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { createResumableUploadSession, publicUrlForKey, isGcsEnabled } from '@/lib/storage/gcs'
 import { safeStorageName } from '@/lib/storage'
 import { isSuperAdminEmail } from '@/lib/authz'
+import { FS_PHOTO_BOXES } from '@/lib/fs/constants'
 
 // Authorized upload-URL minting for direct-to-GCS uploads. THIS IS THE SECURITY
 // BOUNDARY that replaces Supabase Storage RLS for GCS uploads — it must mirror
@@ -22,7 +23,7 @@ const MAX_AUDIO = 15 * 1024 * 1024
 const MAX_VIDEO = 50 * 1024 * 1024  // matches the Supabase bucket cap (no video regression)
 const MAX_DOC   = 10 * 1024 * 1024
 
-type UploadPurpose = 'task_result' | 'task_input' | 'prescription' | 'prescription_care' | 'announcement_asset'
+type UploadPurpose = 'task_result' | 'task_input' | 'prescription' | 'prescription_care' | 'announcement_asset' | 'fs_product'
 
 export interface CreateUploadUrlInput {
   purpose:      UploadPurpose
@@ -35,6 +36,8 @@ export interface CreateUploadUrlInput {
   storeId?:     string  // prescription
   submissionId?: string // prescription
   announcementId?: string // announcement_asset — real id (edit) or a client temp id (create)
+  itemId?:      string  // fs_product — the fs_session_items id
+  boxKey?:      number  // fs_product — 1..5
 }
 
 type Result = { error: string } | { sessionUrl: string; publicUrl: string; key: string }
@@ -149,6 +152,27 @@ export async function createUploadUrl(input: CreateUploadUrlInput): Promise<Resu
       }
     }
     key = `announcement_assets/${input.announcementId}/${uniq}_${safe}`
+
+  } else if (input.purpose === 'fs_product') {
+    // FS product photo. GCS-only (no Supabase fallback). Only the CLAIMER of an
+    // ACTIVE session (a staff/store_manager of its FS store) may upload, for an
+    // item of that session. Box 1..5. Key embeds product_id + box slug.
+    if (!ct.startsWith('image/')) return { error: 'Chỉ chấp nhận ảnh' }
+    if (!input.itemId || !/^[0-9a-f-]{36}$/i.test(input.itemId)) return { error: 'itemId không hợp lệ' }
+    const box = FS_PHOTO_BOXES.find((b) => b.key === input.boxKey)
+    if (!box) return { error: 'Box ảnh không hợp lệ' }
+    const { data: item } = await supabaseAdmin
+      .from('fs_session_items')
+      .select('id, product_id, session_id, fs_sessions!inner(store_id, status, claimed_by)')
+      .eq('id', input.itemId).maybeSingle()
+    const sess = item ? (Array.isArray(item.fs_sessions) ? item.fs_sessions[0] : item.fs_sessions) as { store_id: string; status: string; claimed_by: string | null } : null
+    if (!item || !sess) return { error: 'Sản phẩm không tồn tại' }
+    if (sess.status !== 'active') return { error: 'Phiên không ở trạng thái đang xử lý' }
+    if (sess.claimed_by !== user.id) return { error: 'Bạn chưa nhận phiên này' }
+    const { data: me } = await supabase.from('users').select('role, store_id').eq('id', user.id).single()
+    const ok = (me?.role === 'staff' || me?.role === 'store_manager') && me?.store_id === sess.store_id
+    if (!ok) return { error: 'Không có quyền upload cho phiên này' }
+    key = `fs-products/${item.session_id}/${input.itemId}/${item.product_id}_${box.slug}_${uniq}_${safe}`
 
   } else {
     return { error: 'purpose không hợp lệ' }

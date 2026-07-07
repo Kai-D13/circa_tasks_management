@@ -7,6 +7,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { POLICY_DEPT_ID } from '@/lib/fs/constants'
 import { parseFsRows, type FsImportResult } from '@/lib/fs/import'
+import { deleteObject, keyFromPublicUrl } from '@/lib/storage/gcs'
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024
 
@@ -166,5 +167,79 @@ export async function closeFsSession(sessionId: string, status: 'completed' | 'c
   if (error) return { error: (status === 'completed' ? 'Không đóng được phiên: ' : 'Không huỷ được phiên: ') + error.message }
   revalidatePath(`/fs/products/${sessionId}`)
   revalidatePath('/fs/products')
+  return { success: true as const }
+}
+
+// Policy/super release a stuck claim (staff/store_manager cannot — stakeholder).
+export async function releaseFsClaim(sessionId: string) {
+  const auth = await requireFsManager()
+  if ('error' in auth) return { error: auth.error }
+  const { error } = await supabaseAdmin.rpc('rpc_fs_release_claim', { p_session_id: sessionId, p_actor: auth.user.id })
+  if (error) return { error: 'Không gỡ được người xử lý: ' + error.message }
+  revalidatePath(`/fs/products/${sessionId}`)
+  revalidatePath(`/fs/products/${sessionId}/process`)
+  return { success: true as const }
+}
+
+// ── F4 staff processing ─────────────────────────────────────────────────────
+async function currentUserId(): Promise<string | null> {
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  return user?.id ?? null
+}
+
+// Claim a session (1 staff/store_manager owns an active session at a time).
+export async function claimFsSession(sessionId: string) {
+  const uid = await currentUserId()
+  if (!uid) return { error: 'Chưa đăng nhập' }
+  const { error } = await supabaseAdmin.rpc('rpc_fs_claim_session', { p_session_id: sessionId, p_user_id: uid })
+  if (error) return { error: error.message }
+  revalidatePath(`/fs/products/${sessionId}/process`)
+  revalidatePath('/fs/products')
+  return { success: true as const }
+}
+
+interface FsPhotoInput { box_key: number; storage_path: string; content_type?: string; size_bytes?: number }
+
+// Submit one item: dims + box photos → 'done'. The claimer only (RPC-enforced).
+// After the DB commit, replaced GCS objects are deleted (last-version-only);
+// a delete failure is logged (gcs_delete_failed) and never fails the submit.
+export async function submitFsItem(input: {
+  sessionId: string; itemId: string
+  length: number; width: number; height: number
+  photos: FsPhotoInput[]
+}) {
+  const uid = await currentUserId()
+  if (!uid) return { error: 'Chưa đăng nhập' }
+  if (!input.itemId) return { error: 'Thiếu sản phẩm' }
+
+  // Capture current photos BEFORE the upsert so we can delete replaced objects.
+  const { data: oldPhotos } = await supabaseAdmin
+    .from('fs_item_photos').select('box_key, storage_path').eq('item_id', input.itemId)
+  const oldByBox = new Map((oldPhotos ?? []).map((p) => [p.box_key, p.storage_path]))
+
+  const { error } = await supabaseAdmin.rpc('rpc_fs_submit_item', {
+    p_item_id: input.itemId, p_user_id: uid,
+    p_length: input.length, p_width: input.width, p_height: input.height,
+    p_photos: input.photos ?? [],
+  })
+  if (error) return { error: error.message }
+
+  for (const p of input.photos ?? []) {
+    const old = oldByBox.get(p.box_key)
+    if (old && old !== p.storage_path) {
+      const key = keyFromPublicUrl(old)
+      const ok = key ? await deleteObject(key).catch(() => false) : true
+      if (!ok) {
+        await supabaseAdmin.from('fs_item_events').insert({
+          session_id: input.sessionId, item_id: input.itemId, box_key: p.box_key,
+          event_type: 'gcs_delete_failed', note: old, actor: uid,
+        })
+      }
+    }
+  }
+
+  revalidatePath(`/fs/products/${input.sessionId}/process`)
+  revalidatePath(`/fs/products/${input.sessionId}`)
   return { success: true as const }
 }

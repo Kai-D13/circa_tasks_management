@@ -28,9 +28,20 @@ export default async function FsProductsPage() {
 
   const isSuper = profile?.role === 'admin' && isSuperAdminEmail(user.email)
   const isPolicy = profile?.role === 'admin' && profile?.department_id === POLICY_DEPT_ID
-  if (!isSuper && !isPolicy) redirect('/tasks')
+  const isAdmin = isSuper || isPolicy
 
   const supabase = await createClient()
+
+  // FS store staff/manager also land here — but only if their store is an FS
+  // store (an OS-store user must never reach the FS module). RLS then scopes the
+  // session list to their store; their rows link to the processing wizard.
+  let isFsStaff = false
+  if (!isAdmin && (profile?.role === 'staff' || profile?.role === 'store_manager') && profile?.store_id) {
+    const { data: st } = await supabase.from('stores').select('store_type').eq('id', profile.store_id).maybeSingle()
+    isFsStaff = st?.store_type === 'fs'
+  }
+  if (!isAdmin && !isFsStaff) redirect('/tasks')
+
   const { data: sessions, error: sessionsErr } = await supabase
     .from('fs_sessions')
     .select('id, name, status, created_at, created_by, store:stores(name, code)')
@@ -83,9 +94,11 @@ export default async function FsProductsPage() {
           <Boxes className="h-5 w-5 text-primary" />
           <h1 className="text-xl font-semibold">Quản lý FS · Sản phẩm</h1>
         </div>
-        <Link href="/fs/products/new" className={cn(buttonVariants({ size: 'sm' }), 'gap-1.5')}>
-          <Plus className="h-4 w-4" /> Tạo phiên
-        </Link>
+        {isAdmin && (
+          <Link href="/fs/products/new" className={cn(buttonVariants({ size: 'sm' }), 'gap-1.5')}>
+            <Plus className="h-4 w-4" /> Tạo phiên
+          </Link>
+        )}
       </div>
 
       {queryError && (
@@ -110,7 +123,7 @@ export default async function FsProductsPage() {
         <CardContent className="p-0">
           {list.length === 0 && !queryError ? (
             <div className="text-center text-muted-foreground py-10 text-sm">
-              Chưa có phiên nào. Bấm <b>Tạo phiên</b> để nhập sản phẩm từ file.
+              {isAdmin ? <>Chưa có phiên nào. Bấm <b>Tạo phiên</b> để nhập sản phẩm từ file.</> : 'Cửa hàng chưa có phiên xử lý nào.'}
             </div>
           ) : (
             <div className="divide-y">
@@ -122,7 +135,7 @@ export default async function FsProductsPage() {
                 return (
                   <Link
                     key={s.id}
-                    href={`/fs/products/${s.id}`}
+                    href={isAdmin ? `/fs/products/${s.id}` : `/fs/products/${s.id}/process`}
                     prefetch={false}
                     className="flex items-center gap-4 px-4 py-3 hover:bg-muted/40 transition-colors"
                   >
