@@ -13,7 +13,7 @@ export default async function NewAnnouncementPage() {
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
   if (profile?.role !== 'admin') redirect('/announcements')
 
-  const { data: stores, error: storesErr } = await supabase.from('stores').select('id, name').order('name')
+  const { data: stores, error: storesErr } = await supabase.from('stores').select('id, name').eq('store_type', 'os').order('name')
   if (storesErr) console.error('[announcements] stores query failed:', storesErr.message)
 
   return (

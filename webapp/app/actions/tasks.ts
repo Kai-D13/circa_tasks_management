@@ -1249,7 +1249,7 @@ export async function createImportedStoreTasks(params: {
   // not trusted). Active stores only — an import must not create tasks on a
   // deactivated store (mig 074); a POS matching only an inactive store falls into
   // the unmatched/blocked path below.
-  const { data: stores, error: storesErr } = await supabase.from('stores').select('id, name, code').eq('is_active', true)
+  const { data: stores, error: storesErr } = await supabase.from('stores').select('id, name, code').eq('is_active', true).eq('store_type', 'os')
   if (storesErr) return fail('Lỗi khi lấy danh sách cửa hàng: ' + storesErr.message)
   const storeByCode = new Map((stores ?? []).map((s) => [s.code.toUpperCase(), s]))
   const allowed = new Set(params.allowedStoreIds)

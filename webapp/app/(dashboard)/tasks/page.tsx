@@ -209,7 +209,7 @@ export default async function TasksPage({
       ? Promise.resolve({ data: [] as { id: string; name: string }[] })
       : isSm
         ? supabase.from('stores').select('id, name').in('id', smStoreIds).order('name')
-        : supabase.from('stores').select('id, name').order('name'),
+        : supabase.from('stores').select('id, name').eq('store_type', 'os').order('name'),
     isStaff
       ? Promise.resolve({ data: [] as { id: string; name: string }[] })
       : supabase.from('departments').select('id, name').order('name'),

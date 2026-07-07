@@ -96,7 +96,7 @@ export async function GET(request: NextRequest) {
       // that was later set inactive; stop generating tasks for it. All target
       // stores inactive → nothing to create (run succeeds with 0), not an error.
       const { data: activeStores, error: activeErr } = await supabaseAdmin
-        .from('stores').select('id').in('id', configuredStoreIds).eq('is_active', true)
+        .from('stores').select('id').in('id', configuredStoreIds).eq('is_active', true).eq('store_type', 'os')
       if (activeErr) throw new Error(`Active-store query failed: ${activeErr.message}`)
       const activeSet = new Set((activeStores ?? []).map((s) => s.id))
       const storeIds = configuredStoreIds.filter((id) => activeSet.has(id))

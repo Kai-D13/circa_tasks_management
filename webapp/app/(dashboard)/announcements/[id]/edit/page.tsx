@@ -17,7 +17,7 @@ export default async function EditAnnouncementPage({ params }: { params: Promise
 
   const [{ data: ann }, { data: stores }, { data: aStores }, { data: assets }] = await Promise.all([
     supabase.from('announcements').select('id, title, body, visibility, expires_at, created_by').eq('id', id).maybeSingle(),
-    supabase.from('stores').select('id, name').order('name'),
+    supabase.from('stores').select('id, name').eq('store_type', 'os').order('name'),
     supabase.from('announcement_stores').select('store_id').eq('announcement_id', id),
     supabase.from('announcement_assets').select('kind, url, position').eq('announcement_id', id).order('position'),
   ])

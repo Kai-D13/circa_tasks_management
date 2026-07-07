@@ -66,6 +66,11 @@ export default async function StoresPage() {
                   <TableCell className="font-medium">
                     <span className="flex items-center gap-2">
                       {s.name}
+                      {/* Read-only badge (mig 076) — FS stores are managed in the FS
+                          module; they never appear in OS pickers/workflows. */}
+                      {(s as { store_type?: string }).store_type === 'fs' && (
+                        <Badge className="bg-sky-100 text-sky-700 text-[10px]">FS</Badge>
+                      )}
                       {s.is_active === false && (
                         <Badge className="bg-muted text-muted-foreground text-[10px]">Ngừng hoạt động</Badge>
                       )}

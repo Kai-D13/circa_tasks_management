@@ -78,7 +78,7 @@ export default async function PrescriptionsPage({
   const [{ data: submissions, count, error: listErr }, { data: stores }] = await Promise.all([
     query,
     isAdmin
-      ? supabase.from('stores').select('id, name').order('name')
+      ? supabase.from('stores').select('id, name').eq('store_type', 'os').order('name')
       : Promise.resolve({ data: [] }),
   ])
   // A failed query must NOT read as "no prescriptions" (missing migration/column

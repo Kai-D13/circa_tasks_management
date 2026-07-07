@@ -12,7 +12,8 @@ export async function upsertTargetRows(
   source: 'upload' | 'api',
   uploadedBy: string | null,
 ): Promise<{ upserted: number; unmatched: string[]; duplicates: number }> {
-  const { data: stores, error } = await supabaseAdmin.from('stores').select('id, name, code')
+  // OS stores only — FS (franchise, mig 076) stores are out of the weekly-targets flow.
+  const { data: stores, error } = await supabaseAdmin.from('stores').select('id, name, code').eq('store_type', 'os')
   if (error) throw new Error(error.message)
 
   const byName = new Map((stores ?? []).map((s) => [normalizeStoreName(s.name), s.id]))

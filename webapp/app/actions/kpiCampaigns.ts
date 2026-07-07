@@ -150,7 +150,8 @@ async function parseFile(formData: FormData): Promise<CampaignImportResult | { e
     return { error: 'Không đọc được file — cần đúng định dạng XLSX hoặc CSV' }
   }
   if (rawRows.length > 2000) return { error: 'File quá nhiều dòng — sai file?' }
-  const { data: stores, error: storesErr } = await supabaseAdmin.from('stores').select('id, code')
+  // OS stores only — a campaign import must never match an FS (mig 076) POS code.
+  const { data: stores, error: storesErr } = await supabaseAdmin.from('stores').select('id, code').eq('store_type', 'os')
   if (storesErr) return { error: `Không đọc được danh sách cửa hàng: ${storesErr.message}` }
   const byCode = new Map((stores ?? []).filter((s) => s.code).map((s) => [String(s.code).trim().toUpperCase(), s.id]))
   return parseCampaignRows(rawRows, byCode)

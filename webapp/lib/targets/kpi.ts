@@ -45,7 +45,8 @@ export interface KpiAggregateResult {
 export async function aggregateAndUpsertKpi(
   rawRows: Record<string, unknown>[],
 ): Promise<KpiAggregateResult> {
-  const { data: stores, error } = await supabaseAdmin.from('stores').select('id, name, code')
+  // OS stores only — FS (franchise, mig 076) stores never receive OS KPI rows.
+  const { data: stores, error } = await supabaseAdmin.from('stores').select('id, name, code').eq('store_type', 'os')
   if (error) throw new Error(error.message)
 
   // Same 3-tier matching as lib/targets/ingest.ts (store_weekly_targets path):

@@ -63,7 +63,7 @@ export async function preflightTrf(
 
   // Active stores only — a TRF row for a deactivated store (mig 074) falls into
   // the unmatched list rather than spawning a new cycle-count task there.
-  const { data: stores, error: storesErr } = await supabaseAdmin.from('stores').select('id, code').eq('is_active', true)
+  const { data: stores, error: storesErr } = await supabaseAdmin.from('stores').select('id, code').eq('is_active', true).eq('store_type', 'os')
   if (storesErr) return { error: `Không đọc được stores: ${storesErr.message}` }
   const byCode = new Map(
     (stores ?? []).filter((s) => s.code).map((s) => [String(s.code).trim().toUpperCase(), s.id]),

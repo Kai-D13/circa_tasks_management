@@ -125,7 +125,7 @@ export default async function UsersPage({
     query,
     isSm
       ? supabase.from('stores').select('id, name, code').in('id', smStoreIds).order('name')
-      : supabase.from('stores').select('id, name, code').order('name'),
+      : supabase.from('stores').select('id, name, code').eq('store_type', 'os').order('name'),
     isSm
       ? Promise.resolve({ data: [] as Department[] })
       : supabase.from('departments').select('id, name, color').order('name'),

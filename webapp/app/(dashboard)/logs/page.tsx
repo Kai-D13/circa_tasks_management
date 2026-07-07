@@ -101,7 +101,7 @@ export default async function LogsPage({
   const [{ data: logs, count }, { data: stores }, { data: users }, { data: managerStore }] = await Promise.all([
     logsQuery,
     isAdmin
-      ? supabase.from('stores').select('id, name').order('name')
+      ? supabase.from('stores').select('id, name').eq('store_type', 'os').order('name')
       : isSm
         ? supabase.from('stores').select('id, name').in('id', smStoreIds).order('name')
         : Promise.resolve({ data: [] as { id: string; name: string }[] }),
