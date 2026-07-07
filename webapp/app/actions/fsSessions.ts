@@ -128,11 +128,12 @@ const NOTE_MAX = 500
 export async function resubmitFsItems(sessionId: string, itemIds: string[], note: string) {
   const auth = await requireFsManager()
   if ('error' in auth) return { error: auth.error }
-  if (!sessionId || !itemIds?.length) return { error: 'Chưa chọn sản phẩm' }
+  const ids = [...new Set((itemIds ?? []).filter(Boolean))] // dedupe (RPC RAISEs on count mismatch)
+  if (!sessionId || !ids.length) return { error: 'Chưa chọn sản phẩm' }
   const n = note?.trim()
   if (!n) return { error: 'Vui lòng nhập lý do làm lại' }
   const { data, error } = await supabaseAdmin.rpc('rpc_fs_resubmit_items', {
-    p_session_id: sessionId, p_item_ids: itemIds, p_note: n.slice(0, NOTE_MAX), p_actor: auth.user.id,
+    p_session_id: sessionId, p_item_ids: ids, p_note: n.slice(0, NOTE_MAX), p_actor: auth.user.id,
   })
   if (error) return { error: 'Không gửi được yêu cầu làm lại: ' + error.message }
   revalidatePath(`/fs/products/${sessionId}`)

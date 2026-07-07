@@ -116,6 +116,9 @@ export default async function FsSessionDetailPage({
   const pending = rows.filter((r) => r.status === 'pending').length
   const pct = total > 0 ? Math.round((done / total) * 100) : 0
   const isActive = session.status === 'active'
+  // Session can be finalised only when every item is done (no pending/redo) —
+  // mirrors the DB guard in rpc_fs_close_session.
+  const canComplete = total > 0 && pending === 0 && redo === 0
 
   const meta = FS_SESSION_STATUS[session.status] ?? { label: session.status, cls: 'bg-muted text-muted-foreground' }
   const tabCls = (active: boolean) =>
@@ -185,6 +188,7 @@ export default async function FsSessionDetailPage({
         <FsResultTab
           sessionId={id}
           isActive={isActive}
+          canComplete={canComplete}
           items={reviewItems}
           page={pageNum}
           totalPages={Math.max(1, Math.ceil(filteredCount / PAGE_SIZE))}

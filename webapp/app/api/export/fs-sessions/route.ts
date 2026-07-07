@@ -22,8 +22,9 @@ export async function GET(request: NextRequest) {
   const sessionId = request.nextUrl.searchParams.get('session_id')
   if (!sessionId) return NextResponse.json({ error: 'Thiếu session_id' }, { status: 400 })
 
-  const { data: session } = await supabase
+  const { data: session, error: sErr } = await supabase
     .from('fs_sessions').select('id, name, store:stores(name, code)').eq('id', sessionId).maybeSingle()
+  if (sErr) return NextResponse.json({ error: 'Lỗi tải phiên: ' + sErr.message }, { status: 500 })
   if (!session) return NextResponse.json({ error: 'Không tìm thấy phiên' }, { status: 404 })
 
   const { data: items, error: iErr } = await supabase

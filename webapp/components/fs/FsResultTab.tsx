@@ -49,10 +49,11 @@ function NoteModal({ title, open, pending, onConfirm, onClose }: {
 }
 
 export function FsResultTab({
-  sessionId, isActive, items, page, totalPages, filteredCount, q, status,
+  sessionId, isActive, canComplete, items, page, totalPages, filteredCount, q, status,
 }: {
   sessionId: string
   isActive: boolean
+  canComplete: boolean   // every item done (no pending/redo) → session can be finalised
   items: FsReviewItem[]
   page: number
   totalPages: number
@@ -108,12 +109,12 @@ export function FsResultTab({
   }
 
   function doClose(next: 'completed' | 'cancelled') {
-    const msg = next === 'completed' ? 'Đóng phiên (đánh dấu hoàn thành)?' : 'Huỷ phiên này?'
+    const msg = next === 'completed' ? 'Chốt phiên (đánh dấu hoàn thành)?' : 'Huỷ phiên này?'
     if (!window.confirm(msg)) return
     startTransition(async () => {
       const r = await closeFsSession(sessionId, next)
       if (r.error) { toast.error(r.error); return }
-      toast.success(next === 'completed' ? 'Đã đóng phiên' : 'Đã huỷ phiên')
+      toast.success(next === 'completed' ? 'Đã chốt phiên' : 'Đã huỷ phiên')
       router.refresh()
     })
   }
@@ -130,12 +131,13 @@ export function FsResultTab({
       {/* Session actions */}
       {isActive && (
         <div className="flex flex-wrap items-center gap-2">
-          <Button size="sm" variant="outline" className="gap-1.5" onClick={() => doClose('completed')} disabled={pending}>
-            <CheckCircle2 className="h-4 w-4" /> Đóng phiên (Hoàn thành)
+          <Button size="sm" variant="outline" className="gap-1.5" onClick={() => doClose('completed')} disabled={pending || !canComplete}>
+            <CheckCircle2 className="h-4 w-4" /> Chốt phiên
           </Button>
           <Button size="sm" variant="ghost" className="gap-1.5 text-red-600 hover:text-red-700" onClick={() => doClose('cancelled')} disabled={pending}>
             <XCircle className="h-4 w-4" /> Huỷ phiên
           </Button>
+          {!canComplete && <span className="text-xs text-muted-foreground">Chỉ chốt khi toàn bộ sản phẩm đã hoàn thành.</span>}
         </div>
       )}
 
