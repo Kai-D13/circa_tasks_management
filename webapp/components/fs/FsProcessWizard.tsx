@@ -61,8 +61,9 @@ export function FsProcessWizard({
     return uploaded[boxKey]?.url ?? it.photos.find((p) => p.box_key === boxKey)?.storage_path ?? null
   }
   function parseDim(s: string): number | null {
-    const n = Number.parseInt(s, 10)
-    return Number.isFinite(n) ? n : null
+    const t = s.trim()
+    // Integer millimetres only — reject decimals / non-numeric (no silent 12.5→12).
+    return /^\d+$/.test(t) ? Number(t) : null
   }
   const dimsValid = [dimL, dimW, dimH].every((s) => {
     const n = parseDim(s); return n != null && n > 0 && n <= FS_DIM_MAX_MM
@@ -116,7 +117,8 @@ export function FsProcessWizard({
       {sorted.map((it) => {
         const im = FS_ITEM_STATUS[it.status] ?? { label: it.status, cls: 'bg-muted text-muted-foreground' }
         const isOpen = selectedId === it.id
-        const editable = it.status !== 'done' || isOpen
+        // A 'done' item is reference-only — reopened only by an admin resubmit (r1).
+        const editable = it.status !== 'done'
         return (
           <div key={it.id} className={cn('rounded-md border', isOpen && 'ring-1 ring-primary/40')}>
             <div className="flex items-center gap-3 px-3 py-2.5">
@@ -132,7 +134,7 @@ export function FsProcessWizard({
               <Badge className={cn('text-[10px] shrink-0', im.cls)}>{im.label}</Badge>
               {editable && (
                 <Button size="sm" variant={isOpen ? 'outline' : 'default'} onClick={() => (isOpen ? setSelectedId(null) : openItem(it))} disabled={pending}>
-                  {isOpen ? 'Đóng' : it.status === 'done' ? 'Sửa' : 'Xử lý'}
+                  {isOpen ? 'Đóng' : 'Xử lý'}
                 </Button>
               )}
             </div>

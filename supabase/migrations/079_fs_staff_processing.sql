@@ -71,15 +71,20 @@ CREATE OR REPLACE FUNCTION public.rpc_fs_submit_item(
 ) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
-DECLARE v_session uuid; v_sess_status text; v_claimed uuid;
+DECLARE v_session uuid; v_sess_status text; v_claimed uuid; v_item_status text;
 BEGIN
-  SELECT i.session_id, s.status, s.claimed_by
-    INTO v_session, v_sess_status, v_claimed
+  SELECT i.session_id, s.status, s.claimed_by, i.status
+    INTO v_session, v_sess_status, v_claimed, v_item_status
     FROM public.fs_session_items i JOIN public.fs_sessions s ON s.id = i.session_id
     WHERE i.id = p_item_id;
   IF v_session IS NULL THEN RAISE EXCEPTION 'Sản phẩm không tồn tại'; END IF;
   IF v_sess_status <> 'active' THEN RAISE EXCEPTION 'Phiên không ở trạng thái đang xử lý'; END IF;
   IF v_claimed IS DISTINCT FROM p_user_id THEN RAISE EXCEPTION 'Bạn chưa nhận phiên này'; END IF;
+  -- Staff only process pending/redo items; a 'done' item is re-opened by an admin
+  -- resubmit (→ redo), never edited directly (r1 review).
+  IF v_item_status NOT IN ('pending', 'redo') THEN
+    RAISE EXCEPTION 'Sản phẩm đã hoàn thành — chỉ xử lý lại khi admin yêu cầu làm lại';
+  END IF;
 
   IF p_length IS NULL OR p_width IS NULL OR p_height IS NULL
      OR p_length <= 0 OR p_width <= 0 OR p_height <= 0
@@ -88,7 +93,8 @@ BEGIN
   END IF;
 
   -- Upsert the provided box photos (last-version-only via UNIQUE(item_id,box_key)).
-  -- An out-of-range box_key fails the table CHECK (1..5) → rollback.
+  -- A (re)uploaded box becomes 'ok'; an out-of-range box_key fails the table
+  -- CHECK (1..5) → rollback.
   INSERT INTO public.fs_item_photos (item_id, box_key, storage_path, status, uploaded_by, content_type, size_bytes, updated_at)
   SELECT p_item_id, (e->>'box_key')::int, e->>'storage_path', 'ok', p_user_id,
          e->>'content_type', NULLIF(e->>'size_bytes','')::bigint, now()
@@ -100,6 +106,12 @@ BEGIN
   -- Box 1 (mặt trước) + box 2 (mặt sau) are mandatory (after this upsert).
   IF (SELECT count(*) FROM public.fs_item_photos WHERE item_id = p_item_id AND box_key IN (1, 2)) < 2 THEN
     RAISE EXCEPTION 'Cần đủ ảnh Mặt trước và Mặt sau';
+  END IF;
+
+  -- Every box an admin flagged 'redo' must actually be re-uploaded (→ 'ok') before
+  -- the item can complete — no "fake clear" by submitting without re-shooting (r1).
+  IF EXISTS (SELECT 1 FROM public.fs_item_photos WHERE item_id = p_item_id AND status = 'redo') THEN
+    RAISE EXCEPTION 'Còn box ảnh bị yêu cầu chụp lại — vui lòng tải lại ảnh cho các box đó';
   END IF;
 
   UPDATE public.fs_session_items
@@ -121,7 +133,7 @@ GRANT EXECUTE ON FUNCTION public.rpc_fs_submit_item(uuid, uuid, int, int, int, j
 
 INSERT INTO public.app_migrations (version, name, notes)
 VALUES ('079', 'fs_staff_processing',
-        'FS F4: rpc_fs_claim_session (race-safe mutex, store staff/mgr only), rpc_fs_release_claim (Policy/super), rpc_fs_submit_item (claimer only, upsert box photos, box 1+2 required, dims mm required, item→done). SECDEF service_role, log fs_item_events.')
+        'FS F4 (r1): rpc_fs_claim_session (race-safe mutex, store staff/mgr only), rpc_fs_release_claim (Policy/super), rpc_fs_submit_item (claimer only, item pending/redo only, upsert box photos, box 1+2 required, NO redo box left, dims mm required, item→done). SECDEF service_role, log fs_item_events.')
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;

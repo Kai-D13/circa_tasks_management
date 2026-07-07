@@ -24,6 +24,7 @@ export function FsBoxUpload({
   async function onFile(f: File | null) {
     if (!f) return
     if (!f.type.startsWith('image/')) { toast.error('Chỉ chấp nhận ảnh'); return }
+    if (f.type === 'image/svg+xml') { toast.error('Không hỗ trợ ảnh SVG'); return }
     if (f.size > 5 * 1024 * 1024) { toast.error('Ảnh vượt 5MB'); return }
     setUploading(true)
     try {
