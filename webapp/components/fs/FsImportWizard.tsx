@@ -101,8 +101,9 @@ export function FsImportWizard({ fsStores }: { fsStores: FsStore[] }) {
       const res = r as { sessionId?: string; created?: number }
       toast.success(`Đã tạo phiên · ${res.created ?? ''} sản phẩm`, { duration: 5000 })
       setFile(null); setSheets([]); setSheetName(''); setSessionName(''); setPreview(null)
-      // Land on Kết quả with the new session highlighted + a banner.
-      router.push(`/fs/products?tab=result&session=${res.sessionId ?? ''}&created=${res.created ?? ''}`)
+      // Land straight on the new session's detail page (mirror KPI campaign flow).
+      if (res.sessionId) router.push(`/fs/products/${res.sessionId}`)
+      else router.push('/fs/products')
       router.refresh()
     })
   }

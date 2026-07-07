@@ -21,3 +21,17 @@ export const FS_MAX_PHOTOS = 5
 // Dimensions are integer millimetres, required on every item (stakeholder).
 export const FS_DIM_MAX_MM = 3000
 export const FS_DIM_HINT = 'Nhập theo mm (1cm = 10mm) — vui lòng không nhầm sang cm.'
+
+// Session status labels/colours (shared by list + detail).
+export const FS_SESSION_STATUS: Record<string, { label: string; cls: string }> = {
+  active:    { label: 'Đang xử lý', cls: 'bg-sky-100 text-sky-700' },
+  completed: { label: 'Hoàn thành', cls: 'bg-green-100 text-green-700' },
+  cancelled: { label: 'Đã huỷ',    cls: 'bg-muted text-muted-foreground' },
+}
+
+// Item processing status labels/colours (shared by detail Kết quả tab + F3/F4).
+export const FS_ITEM_STATUS: Record<string, { label: string; cls: string }> = {
+  pending: { label: 'Chưa xử lý',  cls: 'bg-muted text-muted-foreground' },
+  done:    { label: 'Hoàn thành',  cls: 'bg-green-100 text-green-700' },
+  redo:    { label: 'Cần làm lại', cls: 'bg-amber-100 text-amber-700' },
+}
