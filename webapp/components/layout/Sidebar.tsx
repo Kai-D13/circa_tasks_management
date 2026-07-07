@@ -22,12 +22,15 @@ import {
   Megaphone,
   Boxes,
   ClipboardCheck,
+  Package,
+  PackageSearch,
   ChevronRight,
   LogOut,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { isSuperAdmin } from '@/lib/authz'
 import { CYCLE_COUNT_DEPT_ID } from '@/lib/inventory/constants'
+import { POLICY_DEPT_ID } from '@/lib/fs/constants'
 import { NotificationBell } from '@/components/layout/NotificationBell'
 import { ChangePasswordDialog } from '@/components/layout/ChangePasswordDialog'
 import { EditProfileDialog } from '@/components/layout/EditProfileDialog'
@@ -91,6 +94,11 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false }:
   // KPI (→ Chiến dịch): super admin only, gated by the feature flag. Single flat
   // link now that the old all-stores Doanh số (/targets) is hidden from super admin.
   const showKpi = isSuper && kpiCampaignEnabled
+
+  // Quản lý FS (→ Sản phẩm): super admin or an admin of dept Policy. FS staff/
+  // store_manager get their own FS nav in F5 (not this OS-admin sidebar).
+  const showFs = isSuper || (role === 'admin' && profile?.department_id === POLICY_DEPT_ID)
+  const [fsOpen, setFsOpen] = useState(() => pathname.startsWith('/fs'))
 
   return (
     <aside className="hidden md:flex h-screen w-[210px] flex-col border-r bg-sidebar">
@@ -182,6 +190,43 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false }:
             <Megaphone className="h-4 w-4 shrink-0" />
             <span className="flex-1">Chiến dịch KPI</span>
           </Link>
+        )}
+
+        {/* Quản lý FS — collapsible parent → submodules (Sản phẩm) */}
+        {showFs && (
+          <div>
+            <button
+              type="button"
+              onClick={() => setFsOpen((o) => !o)}
+              className={cn(
+                'w-full flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
+                pathname.startsWith('/fs')
+                  ? 'bg-sidebar-accent text-primary font-medium'
+                  : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-primary/80',
+              )}
+            >
+              <Package className="h-4 w-4 shrink-0" />
+              <span className="flex-1 text-left">Quản lý FS</span>
+              <ChevronRight className={cn('h-4 w-4 transition-transform', fsOpen && 'rotate-90')} />
+            </button>
+            {fsOpen && (
+              <div className="mt-0.5 space-y-0.5 pl-4">
+                <Link
+                  href="/fs/products"
+                  prefetch={false}
+                  className={cn(
+                    'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
+                    pathname.startsWith('/fs/products')
+                      ? 'bg-sidebar-accent text-primary font-medium'
+                      : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-primary/80',
+                  )}
+                >
+                  <PackageSearch className="h-4 w-4 shrink-0" />
+                  <span className="flex-1">Sản phẩm</span>
+                </Link>
+              </div>
+            )}
+          </div>
         )}
       </nav>
 
