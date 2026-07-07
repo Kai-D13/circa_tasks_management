@@ -16,12 +16,28 @@ export interface FsImportResult {
 
 const canon = (k: string) => k.trim().toLowerCase().replace(/[^a-z0-9]/g, '')
 
+// product_id allows only word chars, dash, underscore (no spaces, dots, sci-
+// notation, punctuation) — it becomes part of the GCS object path in F4.
+const PRODUCT_ID_RE = /^[A-Za-z0-9_-]+$/
+
 function str(v: unknown): string | null {
   if (v === null || v === undefined) return null
-  // Excel numeric product_id → plain integer string (no ".0" / sci-notation).
-  const s = typeof v === 'number' ? (Number.isInteger(v) ? v.toFixed(0) : String(v)) : String(v)
-  const t = s.trim()
+  const t = String(v).trim()
   return t === '' ? null : t
+}
+
+// Coerce + validate a product_id. null = empty cell; {error} = present but bad.
+function coerceProductId(v: unknown): { id: string } | { error: string } | null {
+  if (v === null || v === undefined) return null
+  if (typeof v === 'number') {
+    if (!Number.isInteger(v)) return { error: 'product_id không hợp lệ (không được có phần thập phân)' }
+    return { id: v.toFixed(0) } // 2005946 → "2005946" (no ".0"/sci-notation)
+  }
+  const t = String(v).trim()
+  if (t === '') return null
+  if (!PRODUCT_ID_RE.test(t))
+    return { error: 'product_id chứa ký tự không hợp lệ (chỉ cho phép chữ, số, "_" và "-")' }
+  return { id: t }
 }
 
 export function parseFsRows(rawRows: Record<string, unknown>[]): FsImportResult | { error: string } {
@@ -40,11 +56,13 @@ export function parseFsRows(rawRows: Record<string, unknown>[]): FsImportResult 
     const lo: Record<string, unknown> = {}
     for (const [k, v] of Object.entries(raw)) lo[canon(k)] = v
 
-    const productId = str(lo['productid'])
+    const pid = coerceProductId(lo['productid'])
     const productName = str(lo['productname'])
-    if (!productId && !productName) return // fully-empty row → skip
+    if (pid === null && !productName) return // fully-empty row → skip
 
-    if (!productId) { invalid.push({ row: rowNo, product_id: null, error: 'Thiếu product_id' }); return }
+    if (pid === null) { invalid.push({ row: rowNo, product_id: null, error: 'Thiếu product_id' }); return }
+    if ('error' in pid) { invalid.push({ row: rowNo, product_id: null, error: pid.error }); return }
+    const productId = pid.id
     if (!productName) { invalid.push({ row: rowNo, product_id: productId, error: 'Thiếu product_name' }); return }
 
     const firstRow = seen.get(productId)

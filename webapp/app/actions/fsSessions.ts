@@ -103,7 +103,8 @@ export async function createFsSession(
 
   const file = formData.get('file')
   const fileName = file instanceof File ? file.name : null
-  const sessionName = input.sessionName?.trim() || wb.sheetName || store.name
+  let sessionName = (input.sessionName?.trim() || wb.sheetName || store.name)
+  if (sessionName.length > 120) sessionName = sessionName.slice(0, 120)
 
   const items = r.valid.map((v) => ({ product_id: v.product_id, product_name: v.product_name }))
   const { data: sessionId, error } = await supabaseAdmin.rpc('rpc_create_fs_session', {
