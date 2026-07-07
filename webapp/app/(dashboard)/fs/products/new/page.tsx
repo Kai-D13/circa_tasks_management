@@ -6,7 +6,7 @@ import { isSuperAdminEmail } from '@/lib/authz'
 import { POLICY_DEPT_ID } from '@/lib/fs/constants'
 import { Card, CardContent } from '@/components/ui/card'
 import { FsImportWizard } from '@/components/fs/FsImportWizard'
-import { ChevronLeft } from 'lucide-react'
+import { ChevronLeft, AlertTriangle } from 'lucide-react'
 
 // Create a session from a product Excel/CSV (Policy/super). Success → the wizard
 // redirects to /fs/products/[id].
@@ -18,9 +18,10 @@ export default async function FsProductNewPage() {
   if (!isSuper && !isPolicy) redirect('/tasks')
 
   const supabase = await createClient()
-  const { data: fsStores } = await supabase
+  const { data: fsStores, error: storesErr } = await supabase
     .from('stores').select('id, name, code')
     .eq('store_type', 'fs').eq('is_active', true).order('name')
+  if (storesErr) console.error('[fs-products-new] stores query failed:', storesErr.message)
 
   return (
     <div className="p-4 space-y-4 max-w-3xl">
@@ -28,6 +29,12 @@ export default async function FsProductNewPage() {
         <ChevronLeft className="h-4 w-4" /> Danh sách phiên
       </Link>
       <h1 className="text-xl font-semibold">Tạo phiên xử lý sản phẩm</h1>
+      {storesErr && (
+        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 flex items-center gap-2">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>Không tải được danh sách cửa hàng FS: {storesErr.message}</span>
+        </div>
+      )}
       <Card>
         <CardContent className="p-4">
           <FsImportWizard fsStores={fsStores ?? []} />

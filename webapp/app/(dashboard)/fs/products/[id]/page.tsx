@@ -8,7 +8,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
-import { ChevronLeft, Settings2, ClipboardList } from 'lucide-react'
+import { ChevronLeft, Settings2, ClipboardList, AlertTriangle } from 'lucide-react'
 
 // Session detail (mirror of a KPI campaign detail): tabs Cấu hình (session
 // metadata) + Kết quả (product/item list + progress). F3 extends Kết quả with
@@ -44,7 +44,7 @@ export default async function FsSessionDetailPage({
   if (sErr) console.error('[fs-session-detail] session query failed:', sErr.message)
   if (!session) notFound() // RLS-scoped: a non-authorized/absent session → 404
 
-  const [{ data: items, error: iErr }, { data: run }, { data: people }] = await Promise.all([
+  const [{ data: items, error: iErr }, { data: run, error: rErr }, { data: people, error: pErr }] = await Promise.all([
     supabase.from('fs_session_items')
       .select('id, product_id, product_name, status, dim_length_mm, dim_width_mm, dim_height_mm, processed_by, processed_at, resubmit_note')
       .eq('session_id', id).order('created_at', { ascending: true }),
@@ -54,7 +54,10 @@ export default async function FsSessionDetailPage({
     supabase.from('users').select('id, full_name, email')
       .in('id', [session.created_by, session.claimed_by].filter(Boolean) as string[]),
   ])
-  if (iErr) console.error('[fs-session-detail] items query failed:', iErr.message)
+  // Surface a failed side-query — otherwise a broken items/run/people read reads
+  // as "phiên chưa có sản phẩm" / a missing creator (a false empty state).
+  const queryError = iErr?.message ?? rErr?.message ?? pErr?.message ?? null
+  if (queryError) console.error('[fs-session-detail] query failed:', queryError)
 
   const store = one<Embed>(session.store)
   const byId = new Map((people ?? []).map((u) => [u.id, u]))
@@ -78,6 +81,13 @@ export default async function FsSessionDetailPage({
       <Link href="/fs/products" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
         <ChevronLeft className="h-4 w-4" /> Danh sách phiên
       </Link>
+
+      {queryError && (
+        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700 flex items-center gap-2">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
+          <span>Lỗi tải dữ liệu phiên: {queryError}</span>
+        </div>
+      )}
 
       <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-xl font-semibold">{session.name}</h1>
@@ -109,7 +119,7 @@ export default async function FsSessionDetailPage({
       {tab === 'config' ? (
         <Card>
           <CardContent className="p-4">
-            <dl className="grid sm:grid-cols-2 gap-x-6 gap-y-3 text-sm">
+            <div className="grid sm:grid-cols-2 gap-x-6 gap-y-3 text-sm">
               <Row k="Cửa hàng">{store?.name ?? '—'}{store?.code ? ` (${store.code})` : ''}</Row>
               <Row k="Trạng thái"><Badge className={cn('text-[10px]', meta.cls)}>{meta.label}</Badge></Row>
               <Row k="Người tạo">{creator?.full_name ?? '—'}{creator?.email ? <span className="text-muted-foreground"> ({creator.email})</span> : null}</Row>
@@ -121,7 +131,7 @@ export default async function FsSessionDetailPage({
                 {claimer ? `${claimer.full_name}${claimer.email ? ` (${claimer.email})` : ''}` : 'Chưa có ai nhận'}
                 {session.claimed_at ? <span className="text-muted-foreground"> · từ {formatDateTime(session.claimed_at)}</span> : null}
               </Row>
-            </dl>
+            </div>
           </CardContent>
         </Card>
       ) : (
@@ -171,8 +181,8 @@ export default async function FsSessionDetailPage({
 function Row({ k, children }: { k: string; children: React.ReactNode }) {
   return (
     <div className="flex flex-col gap-0.5">
-      <dt className="text-xs text-muted-foreground">{k}</dt>
-      <dd className="font-medium">{children}</dd>
+      <span className="text-xs text-muted-foreground">{k}</span>
+      <span className="font-medium">{children}</span>
     </div>
   )
 }
