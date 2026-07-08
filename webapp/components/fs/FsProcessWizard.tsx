@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { FS_PHOTO_BOXES, FS_ITEM_STATUS, FS_DIM_MAX_MM, FS_DIM_HINT } from '@/lib/fs/constants'
 import { FsBoxUpload } from '@/components/fs/FsBoxUpload'
-import { Lock, HandMetal, PackageCheck } from 'lucide-react'
+import { Lock, HandMetal, PackageCheck, Search } from 'lucide-react'
 
 interface Photo { box_key: number; storage_path: string; status: string; resubmit_note: string | null }
 export interface FsProcessItem {
@@ -36,8 +36,14 @@ export function FsProcessWizard({
   // Boxes (re)uploaded in THIS editing session: box_key → {url, ct, size}.
   const [uploaded, setUploaded] = useState<Record<number, { url: string; ct: string; size: number }>>({})
   const [dimL, setDimL] = useState(''); const [dimW, setDimW] = useState(''); const [dimH, setDimH] = useState('')
+  const [search, setSearch] = useState('')
 
   const sorted = [...items].sort((a, b) => (ORDER[a.status] ?? 9) - (ORDER[b.status] ?? 9))
+  // Client-side search (product_id / name) so staff jump to a code without scrolling.
+  const q = search.trim().toLowerCase()
+  const filtered = q
+    ? sorted.filter((i) => i.product_id.toLowerCase().includes(q) || i.product_name.toLowerCase().includes(q))
+    : sorted
   const selected = items.find((i) => i.id === selectedId) ?? null
 
   function openItem(it: FsProcessItem) {
@@ -109,6 +115,19 @@ export function FsProcessWizard({
   const redoLeft = selected ? selected.photos.some((p) => p.status === 'redo' && !uploaded[p.box_key]) : false
   const canSubmit = !!selected && dimsValid && box12Ready && !redoLeft && !pending
 
+  // The single most relevant blocker, in priority order (photos → redo → dims).
+  function submitHint(it: FsProcessItem): string | null {
+    if (!currentUrl(it, 1) && !currentUrl(it, 2)) return 'Cần ảnh Mặt trước & Mặt sau'
+    if (!currentUrl(it, 1)) return 'Cần ảnh Mặt trước'
+    if (!currentUrl(it, 2)) return 'Cần ảnh Mặt sau'
+    if (it.photos.some((p) => p.status === 'redo' && !uploaded[p.box_key])) return 'Còn box cần chụp lại'
+    const missDims = ([['Dài', dimL], ['Rộng', dimW], ['Cao', dimH]] as [string, string][])
+      .filter(([, s]) => { const n = parseDim(s); return !(n != null && n > 0 && n <= FS_DIM_MAX_MM) })
+      .map(([l]) => l)
+    if (missDims.length) return `Nhập đủ: ${missDims.join(' / ')}`
+    return null
+  }
+
   function doSubmit() {
     if (!selected) return
     const photos = Object.entries(uploaded).map(([box_key, v]) => ({
@@ -152,11 +171,20 @@ export function FsProcessWizard({
   // ── Owner mode: item queue + inline editor ────────────────────────────────
   return (
     <div className="space-y-2">
-      {sorted.map((it) => {
+      {sorted.length > 5 && (
+        <div className="relative">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <input
+            value={search} onChange={(e) => setSearch(e.target.value)}
+            placeholder="Tìm mã hoặc tên sản phẩm"
+            aria-label="Tìm sản phẩm"
+            className="h-10 w-full rounded-md border bg-background pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+          />
+        </div>
+      )}
+      {filtered.map((it) => {
         const im = FS_ITEM_STATUS[it.status] ?? { label: it.status, cls: 'bg-muted text-muted-foreground' }
         const isOpen = selectedId === it.id
-        // A 'done' item is reference-only — reopened only by an admin resubmit (r1).
-        const editable = it.status !== 'done'
         return (
           <div key={it.id} className={cn('rounded-md border', isOpen && 'ring-1 ring-primary/40')}>
             <div className="flex items-center gap-3 px-3 py-2.5">
@@ -170,18 +198,18 @@ export function FsProcessWizard({
                 )}
               </div>
               <Badge className={cn('text-[10px] shrink-0', im.cls)}>{im.label}</Badge>
-              {editable && (
-                <Button size="sm" variant={isOpen ? 'outline' : 'default'} onClick={() => (isOpen ? closeEditor() : openItem(it))} disabled={pending}>
-                  {isOpen ? 'Đóng' : 'Xử lý'}
-                </Button>
-              )}
+              {/* Any item is editable by the claimer while the session is active —
+                  incl. a 'done' item the staff wants to self-correct (r4). */}
+              <Button size="sm" variant={isOpen || it.status === 'done' ? 'outline' : 'default'} onClick={() => (isOpen ? closeEditor() : openItem(it))} disabled={pending}>
+                {isOpen ? 'Đóng' : it.status === 'done' ? 'Sửa thông tin' : 'Xử lý'}
+              </Button>
             </div>
 
             {isOpen && selected && selected.id === it.id && (
               <div className="border-t px-3 py-3 space-y-3 bg-muted/10">
                 <div>
                   <p className="text-xs font-medium mb-1.5">Ảnh sản phẩm — nền trắng (Mặt trước & Mặt sau bắt buộc)</p>
-                  <div className="flex flex-wrap gap-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
                     {FS_PHOTO_BOXES.map((b) => (
                       <FsBoxUpload
                         key={b.key}
@@ -209,26 +237,29 @@ export function FsProcessWizard({
                   <p className="text-[11px] text-muted-foreground mt-1">{FS_DIM_HINT}</p>
                 </div>
 
-                <p className="text-xs text-muted-foreground">
-                  Đã có {FS_PHOTO_BOXES.filter((b) => currentUrl(it, b.key)).length}/5 ảnh
-                  {!dimsValid && ' · thiếu kích thước'}
-                  {redoLeft && ' · còn box cần chụp lại'}
-                </p>
-                {/* Sticky above the floating BottomNav on mobile so it's always reachable. */}
-                <div className="flex flex-wrap items-center gap-3 sticky bottom-[calc(4.5rem_+_env(safe-area-inset-bottom))] md:static -mx-3 px-3 py-2 border-t bg-background/95 backdrop-blur md:mx-0 md:px-0 md:py-0 md:border-t-0 md:bg-transparent z-10">
-                  <Button size="sm" className="gap-1.5" onClick={doSubmit} disabled={!canSubmit}>
-                    <PackageCheck className="h-4 w-4" /> Hoàn thành sản phẩm
-                  </Button>
-                  {!box12Ready && <span className="text-xs text-amber-600">Cần ảnh Mặt trước & Mặt sau</span>}
-                  {box12Ready && !dimsValid && <span className="text-xs text-amber-600">Nhập đủ kích thước hợp lệ (mm)</span>}
-                  {box12Ready && dimsValid && redoLeft && <span className="text-xs text-amber-600">Còn box cần chụp lại — tải lại ảnh cho box được yêu cầu</span>}
+                {/* Sticky above the floating BottomNav on mobile; vertical layout so
+                    the primary CTA gets its own full-width row (no cramped wrap). */}
+                <div className="sticky bottom-[calc(4.5rem_+_env(safe-area-inset-bottom))] md:static -mx-3 px-3 py-2 border-t bg-background/95 backdrop-blur md:mx-0 md:px-0 md:py-0 md:border-t-0 md:bg-transparent z-10 space-y-1.5">
+                  <p className="text-xs text-muted-foreground">
+                    Đã có {FS_PHOTO_BOXES.filter((b) => currentUrl(it, b.key)).length}/5 ảnh
+                  </p>
+                  <div className="flex flex-col md:flex-row md:items-center gap-2">
+                    <Button className="gap-1.5 w-full md:w-auto h-11 md:h-9" onClick={doSubmit} disabled={!canSubmit}>
+                      <PackageCheck className="h-4 w-4" /> Hoàn thành sản phẩm
+                    </Button>
+                    {submitHint(it) && <span className="text-xs text-amber-600">{submitHint(it)}</span>}
+                  </div>
                 </div>
               </div>
             )}
           </div>
         )
       })}
-      {sorted.length === 0 && <p className="text-sm text-muted-foreground text-center py-8">Chưa có sản phẩm.</p>}
+      {filtered.length === 0 && (
+        <p className="text-sm text-muted-foreground text-center py-8">
+          {sorted.length === 0 ? 'Chưa có sản phẩm.' : 'Không tìm thấy sản phẩm khớp.'}
+        </p>
+      )}
     </div>
   )
 }

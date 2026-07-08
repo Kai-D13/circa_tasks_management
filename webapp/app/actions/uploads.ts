@@ -171,7 +171,9 @@ export async function createUploadUrl(input: CreateUploadUrlInput): Promise<Resu
     if (!item || !sess) return { error: 'Sản phẩm không tồn tại' }
     if (sess.status !== 'active') return { error: 'Phiên không ở trạng thái đang xử lý' }
     if (sess.claimed_by !== user.id) return { error: 'Bạn chưa nhận phiên này' }
-    if (!['pending', 'redo'].includes(item.status as string)) return { error: 'Sản phẩm đã hoàn thành — không cần tải thêm ảnh' }
+    // pending/redo = processing; done = self-correction (r4). Any is uploadable by
+    // the claimer while the session is active.
+    if (!['pending', 'redo', 'done'].includes(item.status as string)) return { error: 'Trạng thái sản phẩm không hợp lệ' }
     const { data: me } = await supabase.from('users').select('role, store_id').eq('id', user.id).single()
     const ok = (me?.role === 'staff' || me?.role === 'store_manager') && me?.store_id === sess.store_id
     if (!ok) return { error: 'Không có quyền upload cho phiên này' }

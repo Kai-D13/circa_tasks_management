@@ -56,7 +56,7 @@ export function FsBoxUpload({
   const resetInput = (e: React.MouseEvent<HTMLInputElement>) => { (e.currentTarget as HTMLInputElement).value = '' }
 
   return (
-    <div className="w-32 space-y-1">
+    <div className="w-full space-y-1">
       <div className={cn(
         'aspect-square rounded-md border-2 border-dashed relative bg-muted/30',
         isRedo && 'border-amber-400',
