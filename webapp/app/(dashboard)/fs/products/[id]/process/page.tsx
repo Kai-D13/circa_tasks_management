@@ -65,7 +65,7 @@ export default async function FsProcessPage({ params }: { params: Promise<{ id: 
   return (
     <div className="p-4 space-y-4 max-w-4xl">
       <Link href="/fs/products" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-        <ChevronLeft className="h-4 w-4" /> Phiên của cửa hàng
+        <ChevronLeft className="h-4 w-4" /> Danh sách sản phẩm bổ sung thông tin
       </Link>
 
       <div className="flex flex-wrap items-center gap-3">
@@ -84,7 +84,7 @@ export default async function FsProcessPage({ params }: { params: Promise<{ id: 
       {!isActive ? (
         <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 flex items-center gap-2">
           <AlertTriangle className="h-4 w-4 shrink-0" />
-          <span>Phiên đã {meta.label.toLowerCase()} — không thể xử lý thêm.</span>
+          <span>Danh sách này đã {meta.label.toLowerCase()} — không thể xử lý thêm.</span>
         </div>
       ) : (
         <FsProcessWizard

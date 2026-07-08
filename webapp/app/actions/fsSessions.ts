@@ -271,3 +271,44 @@ export async function deleteFsStagedPhoto(url: string) {
   if (!ok) return { error: 'Không xoá được ảnh trên lưu trữ' }
   return { success: true as const }
 }
+
+// Batch variant — one call when closing an item with several staged photos (fewer
+// round trips than N single deletes). Same gating as deleteFsStagedPhoto: each url
+// under fs-products/, NOT referenced in fs_item_photos, caller = the session claimer.
+export async function deleteFsStagedPhotos(urls: string[]) {
+  const uid = await currentUserId()
+  if (!uid) return { error: 'Chưa đăng nhập' }
+  const items = [...new Set((urls ?? []).filter(Boolean))]
+    .map((url) => ({ url, key: keyFromPublicUrl(url) }))
+    .filter((x): x is { url: string; key: string } => !!x.key && x.key.startsWith('fs-products/'))
+  if (items.length === 0) return { success: true as const, deleted: 0, failed: [] as string[] }
+
+  // Only delete objects NOT saved in the DB (protect committed photos).
+  const { data: refs } = await supabaseAdmin
+    .from('fs_item_photos').select('storage_path').in('storage_path', items.map((i) => i.url))
+  const saved = new Set((refs ?? []).map((r) => r.storage_path))
+
+  // Verify the caller claims each object's session (cache one check per session).
+  const claimOk = new Map<string, boolean>()
+  async function canDelete(key: string): Promise<boolean> {
+    const sessionId = key.split('/')[1]
+    if (!/^[0-9a-f-]{36}$/i.test(sessionId ?? '')) return false
+    if (claimOk.has(sessionId)) return claimOk.get(sessionId)!
+    const { data: sess } = await supabaseAdmin
+      .from('fs_sessions').select('claimed_by, status').eq('id', sessionId).maybeSingle()
+    const ok = !!sess && sess.status === 'active' && sess.claimed_by === uid
+    claimOk.set(sessionId, ok)
+    return ok
+  }
+
+  const failed: string[] = []
+  let deleted = 0
+  for (const it of items) {
+    if (saved.has(it.url)) continue // saved photo → never delete here
+    if (!(await canDelete(it.key))) { failed.push(it.url); continue }
+    const ok = await deleteObject(it.key).catch(() => false)
+    if (ok) deleted++
+    else failed.push(it.url)
+  }
+  return { success: true as const, deleted, failed }
+}

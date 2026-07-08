@@ -3,7 +3,7 @@
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { claimFsSession, submitFsItem, deleteFsStagedPhoto } from '@/app/actions/fsSessions'
+import { claimFsSession, submitFsItem, deleteFsStagedPhoto, deleteFsStagedPhotos } from '@/app/actions/fsSessions'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
@@ -52,7 +52,7 @@ export function FsProcessWizard({
     startTransition(async () => {
       const r = await claimFsSession(sessionId)
       if (r.error) { toast.error(r.error); return }
-      toast.success('Đã nhận phiên')
+      toast.success('Đã bắt đầu xử lý')
       router.refresh()
     })
   }
@@ -88,14 +88,18 @@ export function FsProcessWizard({
       setUploaded((p) => { const n = { ...p }; delete n[bk]; return n })
     })
   }
-  // Closing with staged (unsaved) photos → confirm + discard the GCS objects.
+  // Closing with staged (unsaved) photos → confirm + discard the GCS objects in
+  // ONE batch call (fewer requests); surface any that failed to delete.
   function closeEditor() {
-    const staged = Object.values(uploaded)
-    if (staged.length > 0) {
-      if (!window.confirm('Ảnh vừa chụp chưa được lưu. Huỷ các ảnh tạm này?')) return
-      staged.forEach((u) => { deleteFsStagedPhoto(u.url).catch(() => {}) })
-    }
-    setSelectedId(null); setUploaded({})
+    const urls = Object.values(uploaded).map((u) => u.url)
+    if (urls.length === 0) { setSelectedId(null); return }
+    if (!window.confirm('Ảnh vừa chụp chưa được lưu. Huỷ các ảnh tạm này?')) return
+    startTransition(async () => {
+      const r = await deleteFsStagedPhotos(urls)
+      const failedCount = ('failed' in r ? r.failed?.length : 0) ?? 0
+      if (failedCount > 0) toast.error(`Không xoá được ${failedCount} ảnh tạm`)
+      setSelectedId(null); setUploaded({})
+    })
   }
 
   const dimsValid = [dimL, dimW, dimH].every((s) => {
@@ -128,8 +132,8 @@ export function FsProcessWizard({
     return (
       <div className="rounded-md border bg-muted/30 px-4 py-6 text-center space-y-1">
         <Lock className="h-5 w-5 mx-auto text-muted-foreground" />
-        <p className="text-sm font-medium">Phiên đang được xử lý bởi {claimerLabel ?? 'người khác'}</p>
-        <p className="text-xs text-muted-foreground">Chỉ một người xử lý một phiên tại một thời điểm. Vui lòng chờ hoặc liên hệ quản lý để được gỡ.</p>
+        <p className="text-sm font-medium">Danh sách đang được xử lý bởi {claimerLabel ?? 'người khác'}</p>
+        <p className="text-xs text-muted-foreground">Chỉ một người xử lý một danh sách tại một thời điểm. Vui lòng chờ hoặc liên hệ quản lý để được gỡ.</p>
       </div>
     )
   }
@@ -137,9 +141,9 @@ export function FsProcessWizard({
   if (!claimedByMe) {
     return (
       <div className="rounded-md border bg-muted/30 px-4 py-6 text-center space-y-3">
-        <p className="text-sm text-muted-foreground">Nhận phiên để bắt đầu chụp ảnh & nhập kích thước sản phẩm.</p>
+        <p className="text-sm text-muted-foreground">Bắt đầu để bổ sung ảnh & kích thước sản phẩm.</p>
         <Button size="sm" className="gap-1.5" onClick={doClaim} disabled={pending}>
-          <HandMetal className="h-4 w-4" /> Nhận phiên xử lý
+          <HandMetal className="h-4 w-4" /> Bắt đầu xử lý
         </Button>
       </div>
     )
@@ -205,7 +209,13 @@ export function FsProcessWizard({
                   <p className="text-[11px] text-muted-foreground mt-1">{FS_DIM_HINT}</p>
                 </div>
 
-                <div className="flex items-center gap-3">
+                <p className="text-xs text-muted-foreground">
+                  Đã có {FS_PHOTO_BOXES.filter((b) => currentUrl(it, b.key)).length}/5 ảnh
+                  {!dimsValid && ' · thiếu kích thước'}
+                  {redoLeft && ' · còn box cần chụp lại'}
+                </p>
+                {/* Sticky above the floating BottomNav on mobile so it's always reachable. */}
+                <div className="flex flex-wrap items-center gap-3 sticky bottom-[calc(4.5rem_+_env(safe-area-inset-bottom))] md:static -mx-3 px-3 py-2 border-t bg-background/95 backdrop-blur md:mx-0 md:px-0 md:py-0 md:border-t-0 md:bg-transparent z-10">
                   <Button size="sm" className="gap-1.5" onClick={doSubmit} disabled={!canSubmit}>
                     <PackageCheck className="h-4 w-4" /> Hoàn thành sản phẩm
                   </Button>
@@ -218,7 +228,7 @@ export function FsProcessWizard({
           </div>
         )
       })}
-      {sorted.length === 0 && <p className="text-sm text-muted-foreground text-center py-8">Phiên chưa có sản phẩm.</p>}
+      {sorted.length === 0 && <p className="text-sm text-muted-foreground text-center py-8">Chưa có sản phẩm.</p>}
     </div>
   )
 }

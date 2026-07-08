@@ -123,7 +123,7 @@ export default async function FsProductsPage() {
         <CardContent className="p-0">
           {list.length === 0 && !queryError ? (
             <div className="text-center text-muted-foreground py-10 text-sm">
-              {isAdmin ? <>Chưa có phiên nào. Bấm <b>Tạo phiên</b> để nhập sản phẩm từ file.</> : 'Cửa hàng chưa có phiên xử lý nào.'}
+              {isAdmin ? <>Chưa có phiên nào. Bấm <b>Tạo phiên</b> để nhập sản phẩm từ file.</> : 'Cửa hàng chưa có danh sách sản phẩm cần bổ sung.'}
             </div>
           ) : (
             <div className="divide-y">
