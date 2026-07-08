@@ -5,6 +5,7 @@ import { redirectIfFsStaff } from '@/lib/fs/isolation'
 import { isSuperAdminEmail, getSmStoreIds } from '@/lib/authz'
 import { Card, CardContent } from '@/components/ui/card'
 import { PeriodTabs, type TargetPeriod } from '@/components/targets/PeriodTabs'
+import { CampaignCardList } from '@/components/kpi/CampaignCardList'
 import { CampaignKpiView, type CampaignView } from '@/components/kpi/CampaignKpiView'
 import { CampaignResultSummary } from '@/components/kpi/CampaignResultSummary'
 import { isKpiCampaignEnabled } from '@/lib/kpi/flags'
@@ -240,12 +241,18 @@ export default async function TargetsPage({
     ? await fetchCampaignViews(supabase, resolvedStoreId)
     : []
 
+  // Campaign LIST landing (stakeholder): with >1 active campaign and none picked,
+  // show tappable cards; a ?campaign=<id> (or a single active campaign) → detail.
+  const showCampaignList = campaignViews.length > 1 && !params.campaign
+  const campaignHref = (cid: string) => isSm ? `/targets?store=${smSelectedStoreId}&campaign=${cid}` : `/targets?campaign=${cid}`
+  const campaignListHref = isSm ? `/targets?store=${smSelectedStoreId}` : '/targets'
+
   // Daily GMV series for the SELECTED campaign (drives the chart + "GMV hôm nay").
   // Selection resolved here so the fetch matches what the component will render.
   let selectedCampaignId: string | undefined
   let campaignDaily: { date: string; gmv: number }[] = []
   let campaignDailyError = false
-  if (campaignViews.length > 0 && resolvedStoreId) {
+  if (campaignViews.length > 0 && resolvedStoreId && !showCampaignList) {
     selectedCampaignId = (campaignViews.find((c) => c.id === params.campaign) ?? campaignViews[0]).id
     const { data: dailyRows, error: dErr } = await supabase
       .from('kpi_campaign_store_daily_actuals')
@@ -294,8 +301,20 @@ export default async function TargetsPage({
           </div>
         )}
 
-        {campaignViews.length > 0 ? (
+        {campaignViews.length === 0 ? (
+          <Card>
+            <CardContent className="py-12 text-center text-sm text-muted-foreground">
+              <TrendingUp className="h-8 w-8 mx-auto mb-3 opacity-30" />
+              {selStore ? `Cửa hàng ${selStore.name} hiện chưa có chiến dịch đang áp dụng.` : 'Chưa có chiến dịch.'}
+            </CardContent>
+          </Card>
+        ) : showCampaignList ? (
+          <CampaignCardList items={campaignViews} hrefFor={campaignHref} />
+        ) : (
           <>
+            {campaignViews.length > 1 && (
+              <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">← Danh sách chiến dịch</Link>
+            )}
             <CampaignResultSummary
               campaign={campaignViews.find((c) => c.id === selectedCampaignId) ?? campaignViews[0]}
               todayISO={vnTodayISO}
@@ -304,13 +323,6 @@ export default async function TargetsPage({
               dailyError={campaignDailyError} roleLabel="Quản lý vùng" todayISO={vnTodayISO}
               storeName={selStore?.name ?? 'Cửa hàng'} />
           </>
-        ) : (
-          <Card>
-            <CardContent className="py-12 text-center text-sm text-muted-foreground">
-              <TrendingUp className="h-8 w-8 mx-auto mb-3 opacity-30" />
-              {selStore ? `Cửa hàng ${selStore.name} hiện chưa có chiến dịch đang áp dụng.` : 'Chưa có chiến dịch.'}
-            </CardContent>
-          </Card>
         )}
       </div>
     )
@@ -328,24 +340,26 @@ export default async function TargetsPage({
           {/* Campaign view carries its own store pill (r3) — avoid duplicating */}
           {campaignViews.length === 0 && <span className="text-sm text-muted-foreground">{storeName}</span>}
         </div>
-        {campaignViews.length > 0 ? (
-          <>
-            {/* Manager "Kết quả" block (r3): store-scoped summary above the detail
-                view. Picker in CampaignKpiView changes selectedCampaignId → both
-                stay in sync on the selected campaign. */}
-            <CampaignResultSummary
-              campaign={campaignViews.find((c) => c.id === selectedCampaignId) ?? campaignViews[0]}
-              todayISO={vnTodayISO}
-            />
-            <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Quản lý" todayISO={vnTodayISO} storeName={storeName} />
-          </>
-        ) : (
+        {campaignViews.length === 0 ? (
           <Card>
             <CardContent className="py-12 text-center text-sm text-muted-foreground">
               <TrendingUp className="h-8 w-8 mx-auto mb-3 opacity-30" />
               Hiện chưa có chiến dịch doanh số đang áp dụng.
             </CardContent>
           </Card>
+        ) : showCampaignList ? (
+          <CampaignCardList items={campaignViews} hrefFor={campaignHref} />
+        ) : (
+          <>
+            {campaignViews.length > 1 && (
+              <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">← Danh sách chiến dịch</Link>
+            )}
+            <CampaignResultSummary
+              campaign={campaignViews.find((c) => c.id === selectedCampaignId) ?? campaignViews[0]}
+              todayISO={vnTodayISO}
+            />
+            <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Quản lý" todayISO={vnTodayISO} storeName={storeName} />
+          </>
         )}
       </div>
     )
@@ -418,8 +432,17 @@ export default async function TargetsPage({
             <TrendingUp className="h-5 w-5 text-primary" />
             <h1 className="text-xl font-semibold">Doanh số chiến dịch</h1>
           </div>
-          {/* Store name lives in the campaign view's store pill (r3) */}
-          <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Dược sĩ" todayISO={vnTodayISO} storeName={storeName} />
+          {/* Card list to pick a campaign (stakeholder); a picked/single one → detail */}
+          {showCampaignList ? (
+            <CampaignCardList items={campaignViews} hrefFor={campaignHref} />
+          ) : (
+            <>
+              {campaignViews.length > 1 && (
+                <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">← Danh sách chiến dịch</Link>
+              )}
+              <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Dược sĩ" todayISO={vnTodayISO} storeName={storeName} />
+            </>
+          )}
           {referral && <ReferralCard {...referral} />}
           {referralError && (
             <Card>

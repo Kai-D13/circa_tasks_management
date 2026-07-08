@@ -27,18 +27,20 @@ const STAFF_NAV: NavItem[] = [
   { href: '/inventory',     label: 'Tồn kho',   icon: Boxes,       roles: [] },
 ]
 
-// Non-staff roles keep the role-filter + overflow-drawer pipeline.
+// Non-staff roles keep the role-filter + overflow-drawer pipeline. SM (area
+// manager) previously had NO bottom nav at all (bug) — now added via 'sm' roles.
+// Order unchanged so store_manager's primary tabs don't shift; SM isn't in
+// tasks/prescriptions/announcements so Doanh số bubbles up to a primary tab.
 const NAV_ITEMS: NavItem[] = [
-  { href: '/dashboard',     label: 'Tổng quan', icon: LayoutDashboard, roles: ['admin', 'store_manager'] },
+  { href: '/dashboard',     label: 'Tổng quan', icon: LayoutDashboard, roles: ['admin', 'store_manager', 'sm'] },
   { href: '/tasks',         label: 'Tasks',      icon: CheckSquare,     roles: ['admin', 'store_manager'] },
   { href: '/prescriptions', label: 'Toa thuốc', icon: FileImage,       roles: ['admin', 'store_manager'] },
   { href: '/announcements', label: 'Bảng tin',  icon: Megaphone,       roles: ['store_manager'] },
-  // Store manager reaches Doanh số (campaign view) via the "Thêm" drawer —
-  // placed AFTER the primary four so SM's main tabs don't shift.
-  { href: '/targets',       label: 'Doanh số',  icon: TrendingUp,      roles: ['store_manager'] },
-  { href: '/users',         label: 'Users',      icon: Users,           roles: ['admin'] },
-  { href: '/stores',        label: 'Cửa hàng',  icon: Store,           roles: ['admin', 'store_manager'] },
-  { href: '/logs',          label: 'Nhật ký',   icon: ScrollText,      roles: ['admin', 'store_manager'] },
+  // Store manager reaches Doanh số via the "Thêm" drawer; SM gets it as a primary.
+  { href: '/targets',       label: 'Doanh số',  icon: TrendingUp,      roles: ['store_manager', 'sm'] },
+  { href: '/users',         label: 'Users',      icon: Users,           roles: ['admin', 'sm'] },
+  { href: '/stores',        label: 'Cửa hàng',  icon: Store,           roles: ['admin', 'store_manager', 'sm'] },
+  { href: '/logs',          label: 'Nhật ký',   icon: ScrollText,      roles: ['admin', 'store_manager', 'sm'] },
 ]
 
 // FS staff see ONLY their module — a single tab (F5 isolation).
