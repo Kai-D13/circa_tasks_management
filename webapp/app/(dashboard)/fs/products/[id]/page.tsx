@@ -123,8 +123,8 @@ export default async function FsSessionDetailPage({
 
   const meta = FS_SESSION_STATUS[session.status] ?? { label: session.status, cls: 'bg-muted text-muted-foreground' }
   const tabCls = (active: boolean) =>
-    cn('px-4 py-2 text-sm font-medium border-b-2 -mb-px transition-colors',
-      active ? 'border-primary text-primary' : 'border-transparent text-muted-foreground hover:text-foreground')
+    cn('px-3.5 py-1.5 rounded-md text-sm font-medium transition-colors',
+      active ? 'bg-background text-primary shadow-sm' : 'text-muted-foreground hover:text-foreground')
 
   return (
     <div className="p-4 space-y-4 max-w-5xl">
@@ -158,7 +158,7 @@ export default async function FsSessionDetailPage({
         {pending > 0 && <Badge className="bg-muted text-muted-foreground text-[10px]">Chưa xử lý {pending}</Badge>}
       </div>
 
-      <div className="flex border-b">
+      <div className="inline-flex rounded-lg border bg-muted/40 p-1 gap-1">
         <Link href={`/fs/products/${id}?tab=config`} className={tabCls(tab === 'config')}>
           <span className="inline-flex items-center gap-1.5"><Settings2 className="h-4 w-4" /> Cấu hình</span>
         </Link>

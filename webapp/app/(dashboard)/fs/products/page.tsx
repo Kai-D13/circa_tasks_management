@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { buttonVariants } from '@/components/ui/button'
 import { formatDate } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
-import { Boxes, Plus, ChevronRight, AlertTriangle } from 'lucide-react'
+import { Boxes, Plus, ChevronRight, AlertTriangle, Layers, Loader, CheckCircle2, RotateCcw } from 'lucide-react'
 
 // Landing = session list + overview (mirror of the KPI Campaign dashboard IA):
 // summary cards + one row per session → click into /fs/products/[id]. Creating a
@@ -101,10 +101,10 @@ export default async function FsProductsPage() {
   const redoN = list.filter((s) => (counts.get(s.id)?.redo ?? 0) > 0).length
 
   const summary = [
-    { label: 'Tổng phiên', value: total, cls: 'text-foreground' },
-    { label: 'Đang xử lý', value: activeN, cls: 'text-sky-600' },
-    { label: 'Hoàn thành', value: completedN, cls: 'text-green-600' },
-    { label: 'Cần làm lại', value: redoN, cls: 'text-amber-600' },
+    { label: 'Tổng phiên', value: total, cls: 'text-foreground', icon: Layers, tint: 'bg-muted text-foreground' },
+    { label: 'Đang xử lý', value: activeN, cls: 'text-sky-600', icon: Loader, tint: 'bg-sky-100 text-sky-700' },
+    { label: 'Hoàn thành', value: completedN, cls: 'text-green-600', icon: CheckCircle2, tint: 'bg-green-100 text-green-700' },
+    { label: 'Cần làm lại', value: redoN, cls: 'text-amber-600', icon: RotateCcw, tint: 'bg-amber-100 text-amber-700' },
   ]
 
   return (
@@ -129,14 +129,22 @@ export default async function FsProductsPage() {
       )}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        {summary.map((c) => (
-          <Card key={c.label}>
-            <CardContent className="p-3">
-              <p className="text-xs text-muted-foreground">{c.label}</p>
-              <p className={cn('text-2xl font-semibold tabular-nums', c.cls)}>{c.value}</p>
-            </CardContent>
-          </Card>
-        ))}
+        {summary.map((c) => {
+          const Icon = c.icon
+          return (
+            <Card key={c.label}>
+              <CardContent className="p-3 flex items-center gap-3">
+                <span className={cn('h-9 w-9 rounded-lg flex items-center justify-center shrink-0', c.tint)}>
+                  <Icon className="h-4 w-4" />
+                </span>
+                <div className="min-w-0">
+                  <p className="text-xs text-muted-foreground truncate">{c.label}</p>
+                  <p className={cn('text-2xl font-semibold tabular-nums leading-none', c.cls)}>{c.value}</p>
+                </div>
+              </CardContent>
+            </Card>
+          )
+        })}
       </div>
 
       <Card>
