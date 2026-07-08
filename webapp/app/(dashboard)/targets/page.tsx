@@ -279,8 +279,9 @@ export default async function TargetsPage({
           <h1 className="text-xl font-semibold">Doanh số chiến dịch</h1>
         </div>
 
-        {/* Store selector — SM manages several stores */}
-        {smStores.length > 1 && (
+        {/* Store selector — SM manages several stores. LIST mode only; in a
+            campaign detail the store is fixed, so show a static label instead. */}
+        {smStores.length > 1 && showCampaignList && (
           <div className="flex gap-2 overflow-x-auto pb-1 -mb-1">
             {smStores.map((s) => {
               const active = s.id === smSelectedStoreId
@@ -299,6 +300,9 @@ export default async function TargetsPage({
               )
             })}
           </div>
+        )}
+        {!showCampaignList && campaignViews.length > 0 && selStore && (
+          <p className="text-sm"><span className="text-muted-foreground">Cửa hàng:</span> <span className="font-medium">{selStore.name}</span></p>
         )}
 
         {campaignViews.length === 0 ? (
@@ -443,20 +447,26 @@ export default async function TargetsPage({
               <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Dược sĩ" todayISO={vnTodayISO} storeName={storeName} />
             </>
           )}
-          {referral && <ReferralCard {...referral} />}
-          {referralError && (
-            <Card>
-              <CardContent className="py-4 text-sm text-destructive">
-                Không tải được dữ liệu chương trình giới thiệu. Vui lòng thử lại sau hoặc báo Admin.
-              </CardContent>
-            </Card>
-          )}
-          {staffPhone === null && (
-            <Card>
-              <CardContent className="py-4 text-sm text-muted-foreground">
-                Cập nhật <span className="font-medium">số điện thoại</span> (biểu tượng &ldquo;Sửa thông tin&rdquo; ở đầu trang) để xem chương trình giới thiệu bạn bè.
-              </CardContent>
-            </Card>
+          {/* "Giới thiệu bạn bè" belongs on the /targets landing (list / single-
+              campaign home) — hidden inside a drilled-in campaign detail (?campaign). */}
+          {!params.campaign && (
+            <>
+              {referral && <ReferralCard {...referral} />}
+              {referralError && (
+                <Card>
+                  <CardContent className="py-4 text-sm text-destructive">
+                    Không tải được dữ liệu chương trình giới thiệu. Vui lòng thử lại sau hoặc báo Admin.
+                  </CardContent>
+                </Card>
+              )}
+              {staffPhone === null && (
+                <Card>
+                  <CardContent className="py-4 text-sm text-muted-foreground">
+                    Cập nhật <span className="font-medium">số điện thoại</span> (biểu tượng &ldquo;Sửa thông tin&rdquo; ở đầu trang) để xem chương trình giới thiệu bạn bè.
+                  </CardContent>
+                </Card>
+              )}
+            </>
           )}
         </div>
       )
