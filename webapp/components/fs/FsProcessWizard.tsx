@@ -237,9 +237,10 @@ export function FsProcessWizard({
                   <p className="text-[11px] text-muted-foreground mt-1">{FS_DIM_HINT}</p>
                 </div>
 
-                {/* Sticky above the floating BottomNav on mobile; vertical layout so
-                    the primary CTA gets its own full-width row (no cramped wrap). */}
-                <div className="sticky bottom-[calc(4.5rem_+_env(safe-area-inset-bottom))] md:static -mx-3 px-3 py-2 border-t bg-background/95 backdrop-blur md:mx-0 md:px-0 md:py-0 md:border-t-0 md:bg-transparent z-10 space-y-1.5">
+                {/* Static footer at the end of the editor (after all 5 boxes + dims).
+                    NOT sticky — a nested sticky panel overlapped the boxes on scroll
+                    (r5). Vertical so the primary CTA gets its own full-width row. */}
+                <div className="border-t pt-3 space-y-1.5">
                   <p className="text-xs text-muted-foreground">
                     Đã có {FS_PHOTO_BOXES.filter((b) => currentUrl(it, b.key)).length}/5 ảnh
                   </p>
