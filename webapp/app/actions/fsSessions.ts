@@ -170,6 +170,63 @@ export async function closeFsSession(sessionId: string, status: 'completed' | 'c
   return { success: true as const }
 }
 
+// ── Item actions (Policy/super, Batch A) ────────────────────────────────────
+// Soft-remove an item (product sold out → no stock to shoot). Audit kept.
+export async function removeFsItem(sessionId: string, itemId: string, reason: string) {
+  const auth = await requireFsManager()
+  if ('error' in auth) return { error: auth.error }
+  const r = reason?.trim()
+  if (!r) return { error: 'Vui lòng nhập lý do xoá' }
+  const { error } = await supabaseAdmin.rpc('rpc_fs_remove_item', {
+    p_session_id: sessionId, p_item_id: itemId, p_reason: r.slice(0, NOTE_MAX), p_actor: auth.user.id,
+  })
+  if (error) return { error: 'Không xoá được sản phẩm: ' + error.message }
+  revalidatePath(`/fs/products/${sessionId}`)
+  revalidatePath('/fs/products')
+  return { success: true as const }
+}
+
+// Edit an item: product_name anytime; product_id only when pending + photoless
+// (enforced in the RPC). productId omitted/unchanged → name-only edit.
+export async function updateFsItem(
+  sessionId: string, itemId: string, input: { productName: string; productId?: string },
+) {
+  const auth = await requireFsManager()
+  if ('error' in auth) return { error: auth.error }
+  const name = input.productName?.trim()
+  if (!name) return { error: 'Tên sản phẩm không được trống' }
+  const { error } = await supabaseAdmin.rpc('rpc_fs_update_item', {
+    p_item_id: itemId, p_product_name: name.slice(0, 300),
+    p_product_id: input.productId?.trim() || null, p_actor: auth.user.id,
+  })
+  if (error) return { error: 'Không sửa được sản phẩm: ' + error.message }
+  revalidatePath(`/fs/products/${sessionId}`)
+  return { success: true as const }
+}
+
+// Item history for the "Lịch sử" drawer — the audit trail from fs_item_events.
+export async function getFsItemEvents(itemId: string) {
+  const auth = await requireFsManager()
+  if ('error' in auth) return { error: auth.error }
+  const { data, error } = await supabaseAdmin
+    .from('fs_item_events')
+    .select('id, event_type, box_key, note, actor, created_at')
+    .eq('item_id', itemId).order('created_at', { ascending: false })
+  if (error) return { error: error.message }
+  const ids = [...new Set((data ?? []).map((e) => e.actor).filter(Boolean))] as string[]
+  const { data: users } = ids.length
+    ? await supabaseAdmin.from('users').select('id, full_name').in('id', ids)
+    : { data: [] as { id: string; full_name: string }[] }
+  const nameById = new Map((users ?? []).map((u) => [u.id, u.full_name]))
+  return {
+    success: true as const,
+    events: (data ?? []).map((e) => ({
+      id: e.id, event_type: e.event_type, box_key: e.box_key, note: e.note,
+      created_at: e.created_at, actor_name: e.actor ? (nameById.get(e.actor) ?? null) : null,
+    })),
+  }
+}
+
 // Policy/super release a stuck claim (staff/store_manager cannot — stakeholder).
 export async function releaseFsClaim(sessionId: string) {
   const auth = await requireFsManager()

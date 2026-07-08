@@ -166,7 +166,7 @@ export async function createUploadUrl(input: CreateUploadUrlInput): Promise<Resu
     const { data: item } = await supabaseAdmin
       .from('fs_session_items')
       .select('id, product_id, session_id, status, fs_sessions!inner(store_id, status, claimed_by)')
-      .eq('id', input.itemId).maybeSingle()
+      .eq('id', input.itemId).is('removed_at', null).maybeSingle()
     const sess = item ? (Array.isArray(item.fs_sessions) ? item.fs_sessions[0] : item.fs_sessions) as { store_id: string; status: string; claimed_by: string | null } : null
     if (!item || !sess) return { error: 'Sản phẩm không tồn tại' }
     if (sess.status !== 'active') return { error: 'Phiên không ở trạng thái đang xử lý' }

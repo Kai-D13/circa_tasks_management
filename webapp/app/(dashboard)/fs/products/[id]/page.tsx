@@ -65,7 +65,7 @@ export default async function FsSessionDetailPage({
 
   // Counts (all items, status only) for the progress strip + Cấu hình total.
   const [{ data: statusRows, error: cErr }, { data: run, error: rErr }, { data: people, error: pErr }] = await Promise.all([
-    supabase.from('fs_session_items').select('status').eq('session_id', id),
+    supabase.from('fs_session_items').select('status').eq('session_id', id).is('removed_at', null),
     supabase.from('fs_import_runs')
       .select('file_name, sheet_name, row_count, success_count, created_at')
       .eq('session_id', id).order('created_at', { ascending: false }).limit(1).maybeSingle(),
@@ -80,7 +80,7 @@ export default async function FsSessionDetailPage({
   if (tab === 'result') {
     let iq = supabase.from('fs_session_items')
       .select('id, product_id, product_name, status, dim_length_mm, dim_width_mm, dim_height_mm, resubmit_note', { count: 'exact' })
-      .eq('session_id', id)
+      .eq('session_id', id).is('removed_at', null)
     if (statusFilter) iq = iq.eq('status', statusFilter)
     if (q) {
       const safe = q.replace(/[,()*%]/g, '').slice(0, 80) // strip PostgREST filter metachars

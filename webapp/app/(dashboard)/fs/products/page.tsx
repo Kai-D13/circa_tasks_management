@@ -71,7 +71,7 @@ export default async function FsProductsPage() {
   const peopleIds = [...new Set((sessions ?? []).flatMap((s) => [s.created_by, s.claimed_by]).filter(Boolean))] as string[]
   const [{ data: items, error: itemsErr }, { data: people, error: peopleErr }] = await Promise.all([
     sessionIds.length
-      ? supabase.from('fs_session_items').select('session_id, status').in('session_id', sessionIds)
+      ? supabase.from('fs_session_items').select('session_id, status').in('session_id', sessionIds).is('removed_at', null)
       : Promise.resolve({ data: [] as { session_id: string; status: string }[], error: null }),
     peopleIds.length
       ? supabase.from('users').select('id, full_name, email').in('id', peopleIds)

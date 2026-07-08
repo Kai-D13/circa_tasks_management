@@ -30,7 +30,7 @@ export async function GET(request: NextRequest) {
   const { data: items, error: iErr } = await supabase
     .from('fs_session_items')
     .select('id, product_id, product_name, status, dim_length_mm, dim_width_mm, dim_height_mm, resubmit_note')
-    .eq('session_id', sessionId).order('created_at', { ascending: true })
+    .eq('session_id', sessionId).is('removed_at', null).order('created_at', { ascending: true })
   if (iErr) return NextResponse.json({ error: iErr.message }, { status: 500 })
 
   const ids = (items ?? []).map((i) => i.id)
