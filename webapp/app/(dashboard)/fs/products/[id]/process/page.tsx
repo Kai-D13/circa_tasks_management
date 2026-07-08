@@ -29,9 +29,11 @@ export default async function FsProcessPage({ params }: { params: Promise<{ id: 
   const isSuper = profile?.role === 'admin' && isSuperAdminEmail(user.email)
   const isPolicy = profile?.role === 'admin' && profile?.department_id === POLICY_DEPT_ID
   if (isSuper || isPolicy) redirect(`/fs/products/${id}`) // admins review, not process
-  // FS module is staff-only (F5) — only a 'staff' of the FS store processes.
+  // FS module is staff-only (F5) — only a 'staff' of the FS store processes. A
+  // non-staff who can read the session (an FS store_manager) goes to the module
+  // landing (→ no-access notice), never the OS app.
   const isStoreStaff = profile?.role === 'staff' && profile?.store_id === session.store_id
-  if (!isStoreStaff) redirect('/tasks')
+  if (!isStoreStaff) redirect('/fs/products')
 
   const [{ data: items, error: iErr }, { data: claimer }] = await Promise.all([
     supabase.from('fs_session_items')

@@ -50,7 +50,7 @@ const ROLE_LABELS: Record<string, string> = {
   sm:            'SM',
 }
 
-export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false }: { announcementsUnread?: number; kpiCampaignEnabled?: boolean }) {
+export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, isFsStore = false }: { announcementsUnread?: number; kpiCampaignEnabled?: boolean; isFsStore?: boolean }) {
   const pathname = usePathname()
   const router   = useRouter()
   const profile  = useUserStore((s) => s.profile)
@@ -80,25 +80,27 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false }:
   ]
 
   const isSuper = isSuperAdmin(profile?.email, role)
-  const visibleItems = role
+  // An FS store_manager (isFsStore) is contained to the FS module — hide ALL OS
+  // nav; only the "Quản lý FS → Sản phẩm" item shows.
+  const visibleItems = role && !isFsStore
     ? navItems.filter((item) => item.roles.includes(role) && (!('superAdmin' in item && item.superAdmin) || isSuper))
     : []
 
   // Inventory accordion (→ TRF): super, Cycle Count admin, or store manager.
   // Non-Cycle-Count admins and the multi-store sm role do NOT see it (phase 1).
-  const showInventory = isSuper
+  const showInventory = !isFsStore && (isSuper
     || (role === 'admin' && profile?.department_id === CYCLE_COUNT_DEPT_ID)
-    || role === 'store_manager'
+    || role === 'store_manager')
   const [invOpen, setInvOpen] = useState(() => pathname.startsWith('/inventory'))
 
   // KPI (→ Chiến dịch): super admin only, gated by the feature flag. Single flat
   // link now that the old all-stores Doanh số (/targets) is hidden from super admin.
   const showKpi = isSuper && kpiCampaignEnabled
 
-  // Quản lý FS (→ Sản phẩm): super admin or an admin of dept Policy. FS staff/
-  // store_manager get their own FS nav in F5 (not this OS-admin sidebar).
-  const showFs = isSuper || (role === 'admin' && profile?.department_id === POLICY_DEPT_ID)
-  const [fsOpen, setFsOpen] = useState(() => pathname.startsWith('/fs'))
+  // Quản lý FS (→ Sản phẩm): super admin, an admin of dept Policy, OR an FS
+  // store_manager (their ONLY nav item — everything else is hidden above).
+  const showFs = isFsStore || isSuper || (role === 'admin' && profile?.department_id === POLICY_DEPT_ID)
+  const [fsOpen, setFsOpen] = useState(() => pathname.startsWith('/fs') || isFsStore)
 
   return (
     <aside className="hidden md:flex h-screen w-[210px] flex-col border-r bg-sidebar">

@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { FS_PHOTO_BOXES, FS_ITEM_STATUS, FS_DIM_MAX_MM, FS_DIM_HINT } from '@/lib/fs/constants'
 import { FsBoxUpload } from '@/components/fs/FsBoxUpload'
-import { Lock, HandMetal, PackageCheck, Search, LogOut } from 'lucide-react'
+import { Lock, HandMetal, PackageCheck, Search, LogOut, UserCheck } from 'lucide-react'
 
 interface Photo { box_key: number; storage_path: string; status: string; resubmit_note: string | null }
 export interface FsProcessItem {
@@ -185,18 +185,21 @@ export function FsProcessWizard({
   // ── Owner mode: item queue + inline editor ────────────────────────────────
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2 rounded-md border bg-muted/20 px-3 py-2">
-        <span className="text-xs text-muted-foreground">Bạn đang xử lý danh sách này.</span>
-        <Button size="sm" variant="ghost" className="gap-1.5 text-muted-foreground shrink-0" onClick={doRelease} disabled={pending}>
-          <LogOut className="h-3.5 w-3.5" /> Ngừng xử lý
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2.5">
+        <span className="inline-flex items-center gap-1.5 text-sm font-medium">
+          <UserCheck className="h-4 w-4 text-primary shrink-0" /> Bạn đang xử lý danh sách này
+        </span>
+        <Button size="sm" variant="outline" className="gap-1.5 w-full sm:w-auto border-primary/40 text-primary hover:bg-primary/10 hover:text-primary" onClick={doRelease} disabled={pending}>
+          <LogOut className="h-3.5 w-3.5" /> Bàn giao phiên
         </Button>
       </div>
-      {sorted.length > 5 && (
+      {sorted.length > 0 && (
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <input
+            type="search"
             value={search} onChange={(e) => setSearch(e.target.value)}
-            placeholder="Tìm mã hoặc tên sản phẩm"
+            placeholder="Tìm product_id hoặc tên sản phẩm"
             aria-label="Tìm sản phẩm"
             className="h-10 w-full rounded-md border bg-background pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
           />

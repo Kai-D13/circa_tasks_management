@@ -36,11 +36,29 @@ export default async function FsProductsPage() {
   // store (an OS-store user must never reach the FS module). RLS then scopes the
   // session list to their store; their rows link to the processing wizard.
   let isFsStaff = false
-  if (!isAdmin && profile?.role === 'staff' && profile?.store_id) {
+  let isFsStoreManager = false
+  if (!isAdmin && profile?.store_id && (profile.role === 'staff' || profile.role === 'store_manager')) {
     const { data: st } = await supabase.from('stores').select('store_type').eq('id', profile.store_id).maybeSingle()
-    isFsStaff = st?.store_type === 'fs'
+    if (st?.store_type === 'fs') {
+      if (profile.role === 'staff') isFsStaff = true
+      else isFsStoreManager = true
+    }
   }
-  if (!isAdmin && !isFsStaff) redirect('/tasks')
+  if (!isAdmin && !isFsStaff && !isFsStoreManager) redirect('/tasks')
+
+  // A store_manager of an FS store is NOT an operator (module is staff-only, F5) —
+  // but they must not fall through to the OS app either. Show a contained notice.
+  if (isFsStoreManager) {
+    return (
+      <div className="p-4 max-w-md mx-auto mt-12 text-center space-y-3">
+        <Boxes className="h-8 w-8 mx-auto text-primary" />
+        <h1 className="text-lg font-semibold">Quản lý sản phẩm</h1>
+        <p className="text-sm text-muted-foreground">
+          Tài khoản Quản lý cửa hàng FS chưa được cấp quyền xử lý sản phẩm. Vui lòng dùng tài khoản Nhân viên (Staff).
+        </p>
+      </div>
+    )
+  }
 
   const { data: sessions, error: sessionsErr } = await supabase
     .from('fs_sessions')

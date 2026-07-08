@@ -20,6 +20,7 @@ const SECTION_TITLES: Record<string, string> = {
   users:         'Người dùng',
   stores:        'Cửa hàng',
   logs:          'Nhật ký',
+  fs:            'Quản lý sản phẩm',
 }
 
 export function MobileHeader() {
@@ -30,8 +31,13 @@ export function MobileHeader() {
   const role     = profile?.role
 
   const segments   = pathname.split('/').filter(Boolean)
+  const section    = segments[0]
   const isSubPage  = segments.length > 1
-  const parentTitle = SECTION_TITLES[segments[0]] ?? 'Quay lại'
+  // The FS module root (/fs/products) is an FS user's home — no "back". Deeper FS
+  // pages keep a back button (labelled "Quản lý sản phẩm").
+  const isFsRoot   = section === 'fs' && segments.length <= 2
+  const showBack   = isSubPage && !isFsRoot
+  const parentTitle = SECTION_TITLES[section] ?? 'Quay lại'
 
   async function handleLogout() {
     await supabase.auth.signOut()
@@ -42,7 +48,7 @@ export function MobileHeader() {
   return (
     <header className="sticky top-0 z-30 bg-primary flex items-center gap-2 px-4 h-14 md:hidden">
 
-      {isSubPage ? (
+      {showBack ? (
         /* Sub-page: back button + section title */
         <>
           <Button
@@ -57,6 +63,14 @@ export function MobileHeader() {
             {parentTitle}
           </span>
         </>
+      ) : section === 'fs' ? (
+        /* FS module root — clean module title, no back (it's the FS home). */
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          <div className="h-8 w-8 rounded-full bg-white/20 flex items-center justify-center shrink-0">
+            <span className="text-xs font-bold text-white">C</span>
+          </div>
+          <p className="text-sm font-semibold text-white leading-tight truncate min-w-0">Quản lý sản phẩm</p>
+        </div>
       ) : (
         /* Top-level: logo + name (role label dropped for a cleaner compact header) */
         <div className="flex items-center gap-2 flex-1 min-w-0">

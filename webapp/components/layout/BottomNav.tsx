@@ -51,29 +51,29 @@ const MAX_PRIMARY = 4
 export function BottomNav({
   announcementsUnread = 0,
   tasksPending = 0,
-  isFsStaff = false,
+  isFsStore = false,
 }: {
   announcementsUnread?: number
   tasksPending?: number
-  isFsStaff?: boolean
+  isFsStore?: boolean
 }) {
   const pathname = usePathname()
   const profile  = useUserStore((s) => s.profile)
   const role     = profile?.role
   const [moreOpen, setMoreOpen] = useState(false)
 
-  const isStaffNav = role === 'staff' && !isFsStaff
-  const visible = isFsStaff ? FS_NAV : isStaffNav ? STAFF_NAV : role ? NAV_ITEMS.filter((item) => item.roles.includes(role)) : []
+  const isStaffNav = role === 'staff' && !isFsStore
+  const visible = isFsStore ? FS_NAV : isStaffNav ? STAFF_NAV : role ? NAV_ITEMS.filter((item) => item.roles.includes(role)) : []
 
   // Inventory (→ TRF) in the overflow for NON-staff: store_manager (own store) +
   // super / Cycle Count admin. Staff carry it as a primary tab. Not 'sm' (phase 1).
-  const showInventory = !isStaffNav && (role === 'store_manager'
+  const showInventory = !isStaffNav && !isFsStore && (role === 'store_manager'
     || (role === 'admin' && (isSuperAdmin(profile?.email, role) || profile?.department_id === CYCLE_COUNT_DEPT_ID)))
   const extra: NavItem[] = showInventory
     ? [{ href: '/inventory', label: 'Tồn kho', icon: Boxes, roles: [] }]
     : []
 
-  const needsMore = !isStaffNav && (visible.length > MAX_PRIMARY || extra.length > 0)
+  const needsMore = !isStaffNav && !isFsStore && (visible.length > MAX_PRIMARY || extra.length > 0)
   const primary = needsMore ? visible.slice(0, MAX_PRIMARY) : visible
   const drawerItems = needsMore ? [...visible.slice(MAX_PRIMARY), ...extra] : []
   const moreActive = drawerItems.some((i) => pathname === i.href || pathname.startsWith(i.href + '/'))
