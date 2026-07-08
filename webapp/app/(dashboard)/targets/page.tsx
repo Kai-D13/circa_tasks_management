@@ -437,9 +437,7 @@ export default async function TargetsPage({
             <CampaignCardList items={campaignViews} hrefFor={campaignHref} />
           ) : (
             <>
-              {campaignViews.length > 1 && (
-                <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">← Danh sách chiến dịch</Link>
-              )}
+              <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">← Danh sách chiến dịch</Link>
               <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Dược sĩ" todayISO={vnTodayISO} storeName={storeName} />
             </>
           )}
