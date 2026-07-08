@@ -241,9 +241,9 @@ export default async function TargetsPage({
     ? await fetchCampaignViews(supabase, resolvedStoreId)
     : []
 
-  // Campaign LIST landing (stakeholder): with >1 active campaign and none picked,
-  // show tappable cards; a ?campaign=<id> (or a single active campaign) → detail.
-  const showCampaignList = campaignViews.length > 1 && !params.campaign
+  // Campaign LIST landing (stakeholder): /targets is always the campaign card
+  // list when the store has any active campaign; a ?campaign=<id> opens detail.
+  const showCampaignList = campaignViews.length > 0 && !params.campaign
   const campaignHref = (cid: string) => isSm ? `/targets?store=${smSelectedStoreId}&campaign=${cid}` : `/targets?campaign=${cid}`
   const campaignListHref = isSm ? `/targets?store=${smSelectedStoreId}` : '/targets'
 
@@ -316,9 +316,7 @@ export default async function TargetsPage({
           <CampaignCardList items={campaignViews} hrefFor={campaignHref} />
         ) : (
           <>
-            {campaignViews.length > 1 && (
-              <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">← Danh sách chiến dịch</Link>
-            )}
+            <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">← Danh sách chiến dịch</Link>
             <CampaignResultSummary
               campaign={campaignViews.find((c) => c.id === selectedCampaignId) ?? campaignViews[0]}
               todayISO={vnTodayISO}
@@ -355,9 +353,7 @@ export default async function TargetsPage({
           <CampaignCardList items={campaignViews} hrefFor={campaignHref} />
         ) : (
           <>
-            {campaignViews.length > 1 && (
-              <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">← Danh sách chiến dịch</Link>
-            )}
+            <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">← Danh sách chiến dịch</Link>
             <CampaignResultSummary
               campaign={campaignViews.find((c) => c.id === selectedCampaignId) ?? campaignViews[0]}
               todayISO={vnTodayISO}
