@@ -411,6 +411,7 @@ export function FsResultTab({
       )}
 
       <NoteModal
+        key={modal ? `${modal.kind}:${'id' in modal ? modal.id : ''}` : 'closed'}
         open={modal !== null}
         pending={pending}
         title={modal?.kind === 'remove' ? 'Xoá sản phẩm khỏi phiên' : modal?.kind === 'box' ? 'Yêu cầu chụp lại box ảnh' : 'Yêu cầu làm lại sản phẩm'}

@@ -63,13 +63,20 @@ CREATE OR REPLACE FUNCTION public.rpc_fs_update_item(
 ) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
-DECLARE v_session uuid; v_status text; v_cur_pid text; v_has_photo boolean; v_removed timestamptz;
+DECLARE
+  v_session uuid; v_status text; v_cur_pid text; v_cur_name text; v_removed timestamptz;
+  v_sess_status text; v_has_photo boolean; v_new_name text := btrim(p_product_name); v_note text;
 BEGIN
-  SELECT session_id, status, product_id, removed_at INTO v_session, v_status, v_cur_pid, v_removed
-    FROM public.fs_session_items WHERE id = p_item_id;
+  SELECT i.session_id, i.status, i.product_id, i.product_name, i.removed_at, s.status
+    INTO v_session, v_status, v_cur_pid, v_cur_name, v_removed, v_sess_status
+    FROM public.fs_session_items i JOIN public.fs_sessions s ON s.id = i.session_id
+    WHERE i.id = p_item_id;
   IF v_session IS NULL THEN RAISE EXCEPTION 'Sản phẩm không tồn tại'; END IF;
+  IF v_sess_status <> 'active' THEN RAISE EXCEPTION 'Phiên không ở trạng thái đang xử lý'; END IF;
   IF v_removed IS NOT NULL THEN RAISE EXCEPTION 'Sản phẩm đã bị xoá khỏi phiên'; END IF;
-  IF p_product_name IS NULL OR btrim(p_product_name) = '' THEN RAISE EXCEPTION 'Tên sản phẩm không được trống'; END IF;
+  IF v_new_name = '' THEN RAISE EXCEPTION 'Tên sản phẩm không được trống'; END IF;
+
+  v_note := 'Tên: ' || v_cur_name || ' → ' || v_new_name;
 
   -- product_id change requested?
   IF p_product_id IS NOT NULL AND p_product_id <> v_cur_pid THEN
@@ -83,14 +90,15 @@ BEGIN
                WHERE session_id = v_session AND product_id = p_product_id AND id <> p_item_id) THEN
       RAISE EXCEPTION 'Mã sản phẩm đã tồn tại trong phiên';
     END IF;
-    UPDATE public.fs_session_items SET product_id = p_product_id, product_name = btrim(p_product_name)
+    v_note := 'Mã: ' || v_cur_pid || ' → ' || p_product_id || '; ' || v_note;
+    UPDATE public.fs_session_items SET product_id = p_product_id, product_name = v_new_name
       WHERE id = p_item_id;
   ELSE
-    UPDATE public.fs_session_items SET product_name = btrim(p_product_name) WHERE id = p_item_id;
+    UPDATE public.fs_session_items SET product_name = v_new_name WHERE id = p_item_id;
   END IF;
 
   INSERT INTO public.fs_item_events (session_id, item_id, event_type, note, actor)
-    VALUES (v_session, p_item_id, 'item_edited', btrim(p_product_name), p_actor);
+    VALUES (v_session, p_item_id, 'item_edited', v_note, p_actor);
 END;
 $$;
 
@@ -107,11 +115,17 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM public.fs_sessions WHERE id = p_session_id AND status = 'active') THEN
     RAISE EXCEPTION 'Phiên không ở trạng thái đang xử lý';
   END IF;
-  -- Only ACTIVE (non-removed) items must all be done.
-  IF p_status = 'completed'
-     AND EXISTS (SELECT 1 FROM public.fs_session_items
-                 WHERE session_id = p_session_id AND removed_at IS NULL AND status <> 'done') THEN
-    RAISE EXCEPTION 'Chỉ chốt phiên khi tất cả sản phẩm đã hoàn thành';
+  IF p_status = 'completed' THEN
+    -- Must still have at least one ACTIVE (non-removed) item …
+    IF NOT EXISTS (SELECT 1 FROM public.fs_session_items
+                   WHERE session_id = p_session_id AND removed_at IS NULL) THEN
+      RAISE EXCEPTION 'Phiên không còn sản phẩm nào để chốt';
+    END IF;
+    -- … and every active item must be done.
+    IF EXISTS (SELECT 1 FROM public.fs_session_items
+               WHERE session_id = p_session_id AND removed_at IS NULL AND status <> 'done') THEN
+      RAISE EXCEPTION 'Chỉ chốt phiên khi tất cả sản phẩm đã hoàn thành';
+    END IF;
   END IF;
   UPDATE public.fs_sessions SET status = p_status, closed_at = now() WHERE id = p_session_id AND status = 'active';
   INSERT INTO public.fs_item_events (session_id, event_type, note, actor)
