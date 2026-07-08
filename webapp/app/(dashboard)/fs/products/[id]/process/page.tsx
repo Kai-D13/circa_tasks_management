@@ -44,14 +44,15 @@ export default async function FsProcessPage({ params }: { params: Promise<{ id: 
 
   const itemIds = (items ?? []).map((i) => i.id)
   const { data: allPhotos, error: phErr } = itemIds.length
-    ? await supabase.from('fs_item_photos').select('item_id, box_key, storage_path').in('item_id', itemIds)
-    : { data: [] as { item_id: string; box_key: number; storage_path: string }[], error: null }
+    ? await supabase.from('fs_item_photos').select('item_id, box_key, storage_path, status, resubmit_note').in('item_id', itemIds)
+    : { data: [] as { item_id: string; box_key: number; storage_path: string; status: string; resubmit_note: string | null }[], error: null }
   const queryError = iErr?.message ?? phErr?.message ?? null
   if (queryError) console.error('[fs-process] query failed:', queryError)
 
   const reviewItems: FsProcessItem[] = (items ?? []).map((it) => ({
     ...it,
-    photos: (allPhotos ?? []).filter((p) => p.item_id === it.id).map((p) => ({ box_key: p.box_key, storage_path: p.storage_path })),
+    photos: (allPhotos ?? []).filter((p) => p.item_id === it.id)
+      .map((p) => ({ box_key: p.box_key, storage_path: p.storage_path, status: p.status, resubmit_note: p.resubmit_note })),
   }))
 
   const store = Array.isArray(session.store) ? (session.store[0] as Embed) : (session.store as Embed | null)

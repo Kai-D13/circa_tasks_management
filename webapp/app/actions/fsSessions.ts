@@ -243,3 +243,31 @@ export async function submitFsItem(input: {
   revalidatePath(`/fs/products/${input.sessionId}`)
   return { success: true as const }
 }
+
+// Delete a STAGED FS photo (uploaded to GCS but not yet saved to fs_item_photos)
+// — the 'X' on a not-yet-submitted box, a replace, or a discard-on-close. Gated:
+// the object must be under fs-products/, NOT referenced in the DB (protects saved
+// photos), and the caller must be the active session's claimer.
+export async function deleteFsStagedPhoto(url: string) {
+  const uid = await currentUserId()
+  if (!uid) return { error: 'Chưa đăng nhập' }
+  const key = keyFromPublicUrl(url)
+  if (!key || !key.startsWith('fs-products/')) return { error: 'Đường dẫn ảnh không hợp lệ' }
+
+  // Never delete a saved photo through this path.
+  const { data: ref } = await supabaseAdmin.from('fs_item_photos').select('id').eq('storage_path', url).maybeSingle()
+  if (ref) return { error: 'Ảnh đã lưu — không thể xoá tạm' }
+
+  // key = fs-products/<sessionId>/<itemId>/<file> → authorise via the session claim.
+  const parts = key.split('/')
+  const sessionId = parts[1]
+  if (!/^[0-9a-f-]{36}$/i.test(sessionId ?? '')) return { error: 'Đường dẫn ảnh không hợp lệ' }
+  const { data: sess } = await supabaseAdmin
+    .from('fs_sessions').select('claimed_by, status').eq('id', sessionId).maybeSingle()
+  if (!sess || sess.status !== 'active' || sess.claimed_by !== uid)
+    return { error: 'Không có quyền xoá ảnh này' }
+
+  const ok = await deleteObject(key).catch(() => false)
+  if (!ok) return { error: 'Không xoá được ảnh trên lưu trữ' }
+  return { success: true as const }
+}

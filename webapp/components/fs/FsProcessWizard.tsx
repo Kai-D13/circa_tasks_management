@@ -3,7 +3,7 @@
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { claimFsSession, submitFsItem } from '@/app/actions/fsSessions'
+import { claimFsSession, submitFsItem, deleteFsStagedPhoto } from '@/app/actions/fsSessions'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
@@ -11,7 +11,7 @@ import { FS_PHOTO_BOXES, FS_ITEM_STATUS, FS_DIM_MAX_MM, FS_DIM_HINT } from '@/li
 import { FsBoxUpload } from '@/components/fs/FsBoxUpload'
 import { Lock, HandMetal, PackageCheck } from 'lucide-react'
 
-interface Photo { box_key: number; storage_path: string }
+interface Photo { box_key: number; storage_path: string; status: string; resubmit_note: string | null }
 export interface FsProcessItem {
   id: string; product_id: string; product_name: string; status: string
   dim_length_mm: number | null; dim_width_mm: number | null; dim_height_mm: number | null
@@ -57,19 +57,53 @@ export function FsProcessWizard({
     })
   }
 
+  function savedPhoto(it: FsProcessItem, boxKey: number): Photo | null {
+    return it.photos.find((p) => p.box_key === boxKey) ?? null
+  }
   function currentUrl(it: FsProcessItem, boxKey: number): string | null {
-    return uploaded[boxKey]?.url ?? it.photos.find((p) => p.box_key === boxKey)?.storage_path ?? null
+    return uploaded[boxKey]?.url ?? savedPhoto(it, boxKey)?.storage_path ?? null
+  }
+  // A box the admin flagged 'redo' that hasn't been re-shot this session.
+  function isRedoBox(it: FsProcessItem, boxKey: number): boolean {
+    return !uploaded[boxKey] && savedPhoto(it, boxKey)?.status === 'redo'
   }
   function parseDim(s: string): number | null {
     const t = s.trim()
     // Integer millimetres only — reject decimals / non-numeric (no silent 12.5→12).
     return /^\d+$/.test(t) ? Number(t) : null
   }
+
+  // Replacing a staged box supersedes its GCS object → delete the old one.
+  function handleUploaded(bk: number, url: string, ct: string, size: number) {
+    const prev = uploaded[bk]
+    if (prev && prev.url !== url) deleteFsStagedPhoto(prev.url).catch(() => {})
+    setUploaded((p) => ({ ...p, [bk]: { url, ct, size } }))
+  }
+  function removeStaged(bk: number) {
+    const u = uploaded[bk]
+    if (!u) return
+    startTransition(async () => {
+      const r = await deleteFsStagedPhoto(u.url)
+      if (r.error) { toast.error(r.error); return }
+      setUploaded((p) => { const n = { ...p }; delete n[bk]; return n })
+    })
+  }
+  // Closing with staged (unsaved) photos → confirm + discard the GCS objects.
+  function closeEditor() {
+    const staged = Object.values(uploaded)
+    if (staged.length > 0) {
+      if (!window.confirm('Ảnh vừa chụp chưa được lưu. Huỷ các ảnh tạm này?')) return
+      staged.forEach((u) => { deleteFsStagedPhoto(u.url).catch(() => {}) })
+    }
+    setSelectedId(null); setUploaded({})
+  }
+
   const dimsValid = [dimL, dimW, dimH].every((s) => {
     const n = parseDim(s); return n != null && n > 0 && n <= FS_DIM_MAX_MM
   })
   const box12Ready = selected ? !!currentUrl(selected, 1) && !!currentUrl(selected, 2) : false
-  const canSubmit = !!selected && dimsValid && box12Ready && !pending
+  const redoLeft = selected ? selected.photos.some((p) => p.status === 'redo' && !uploaded[p.box_key]) : false
+  const canSubmit = !!selected && dimsValid && box12Ready && !redoLeft && !pending
 
   function doSubmit() {
     if (!selected) return
@@ -133,7 +167,7 @@ export function FsProcessWizard({
               </div>
               <Badge className={cn('text-[10px] shrink-0', im.cls)}>{im.label}</Badge>
               {editable && (
-                <Button size="sm" variant={isOpen ? 'outline' : 'default'} onClick={() => (isOpen ? setSelectedId(null) : openItem(it))} disabled={pending}>
+                <Button size="sm" variant={isOpen ? 'outline' : 'default'} onClick={() => (isOpen ? closeEditor() : openItem(it))} disabled={pending}>
                   {isOpen ? 'Đóng' : 'Xử lý'}
                 </Button>
               )}
@@ -150,7 +184,12 @@ export function FsProcessWizard({
                         itemId={it.id}
                         box={b}
                         currentUrl={currentUrl(it, b.key)}
-                        onUploaded={(bk, url, ct, size) => setUploaded((prev) => ({ ...prev, [bk]: { url, ct, size } }))}
+                        isStaged={!!uploaded[b.key]}
+                        isRedo={isRedoBox(it, b.key)}
+                        note={savedPhoto(it, b.key)?.resubmit_note ?? null}
+                        disabled={pending}
+                        onUploaded={handleUploaded}
+                        onRemoveStaged={removeStaged}
                       />
                     ))}
                   </div>
@@ -172,6 +211,7 @@ export function FsProcessWizard({
                   </Button>
                   {!box12Ready && <span className="text-xs text-amber-600">Cần ảnh Mặt trước & Mặt sau</span>}
                   {box12Ready && !dimsValid && <span className="text-xs text-amber-600">Nhập đủ kích thước hợp lệ (mm)</span>}
+                  {box12Ready && dimsValid && redoLeft && <span className="text-xs text-amber-600">Còn box cần chụp lại — tải lại ảnh cho box được yêu cầu</span>}
                 </div>
               </div>
             )}
