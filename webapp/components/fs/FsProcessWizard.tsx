@@ -3,13 +3,13 @@
 import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { claimFsSession, submitFsItem, deleteFsStagedPhoto, deleteFsStagedPhotos } from '@/app/actions/fsSessions'
+import { claimFsSession, submitFsItem, deleteFsStagedPhoto, deleteFsStagedPhotos, releaseFsClaimSelf } from '@/app/actions/fsSessions'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { FS_PHOTO_BOXES, FS_ITEM_STATUS, FS_DIM_MAX_MM, FS_DIM_HINT } from '@/lib/fs/constants'
 import { FsBoxUpload } from '@/components/fs/FsBoxUpload'
-import { Lock, HandMetal, PackageCheck, Search } from 'lucide-react'
+import { Lock, HandMetal, PackageCheck, Search, LogOut } from 'lucide-react'
 
 interface Photo { box_key: number; storage_path: string; status: string; resubmit_note: string | null }
 export interface FsProcessItem {
@@ -60,6 +60,20 @@ export function FsProcessWizard({
       if (r.error) { toast.error(r.error); return }
       toast.success('Đã bắt đầu xử lý')
       router.refresh()
+    })
+  }
+
+  // Hand the list back so it isn't stuck if the staff steps away. Discards any
+  // staged (unsaved) photos first; done items stay done.
+  function doRelease() {
+    if (!window.confirm('Bàn giao danh sách này để người khác xử lý tiếp? Ảnh chưa lưu sẽ bị huỷ.')) return
+    const urls = Object.values(uploaded).map((u) => u.url)
+    startTransition(async () => {
+      if (urls.length > 0) await deleteFsStagedPhotos(urls)
+      const r = await releaseFsClaimSelf(sessionId)
+      if (r.error) { toast.error(r.error); return }
+      toast.success('Đã bàn giao danh sách')
+      router.push('/fs/products')
     })
   }
 
@@ -171,6 +185,12 @@ export function FsProcessWizard({
   // ── Owner mode: item queue + inline editor ────────────────────────────────
   return (
     <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2 rounded-md border bg-muted/20 px-3 py-2">
+        <span className="text-xs text-muted-foreground">Bạn đang xử lý danh sách này.</span>
+        <Button size="sm" variant="ghost" className="gap-1.5 text-muted-foreground shrink-0" onClick={doRelease} disabled={pending}>
+          <LogOut className="h-3.5 w-3.5" /> Ngừng xử lý
+        </Button>
+      </div>
       {sorted.length > 5 && (
         <div className="relative">
           <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />

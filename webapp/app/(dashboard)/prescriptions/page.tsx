@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
+import { redirectIfFsStaff } from '@/lib/fs/isolation'
 import { Card, CardContent } from '@/components/ui/card'
 import { buttonVariants } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -25,6 +26,7 @@ export default async function PrescriptionsPage({
 
   const { data: profile } = await supabase
     .from('users').select('role, store_id').eq('id', user.id).single()
+  await redirectIfFsStaff(supabase, profile) // FS staff never see OS surfaces
 
   // SM has no access to prescriptions
   if (profile?.role === 'sm') redirect('/dashboard')

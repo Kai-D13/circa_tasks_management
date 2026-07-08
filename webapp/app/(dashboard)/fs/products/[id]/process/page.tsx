@@ -29,7 +29,8 @@ export default async function FsProcessPage({ params }: { params: Promise<{ id: 
   const isSuper = profile?.role === 'admin' && isSuperAdminEmail(user.email)
   const isPolicy = profile?.role === 'admin' && profile?.department_id === POLICY_DEPT_ID
   if (isSuper || isPolicy) redirect(`/fs/products/${id}`) // admins review, not process
-  const isStoreStaff = (profile?.role === 'staff' || profile?.role === 'store_manager') && profile?.store_id === session.store_id
+  // FS module is staff-only (F5) — only a 'staff' of the FS store processes.
+  const isStoreStaff = profile?.role === 'staff' && profile?.store_id === session.store_id
   if (!isStoreStaff) redirect('/tasks')
 
   const [{ data: items, error: iErr }, { data: claimer }] = await Promise.all([

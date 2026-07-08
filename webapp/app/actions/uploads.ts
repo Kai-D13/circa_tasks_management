@@ -175,7 +175,8 @@ export async function createUploadUrl(input: CreateUploadUrlInput): Promise<Resu
     // the claimer while the session is active.
     if (!['pending', 'redo', 'done'].includes(item.status as string)) return { error: 'Trạng thái sản phẩm không hợp lệ' }
     const { data: me } = await supabase.from('users').select('role, store_id').eq('id', user.id).single()
-    const ok = (me?.role === 'staff' || me?.role === 'store_manager') && me?.store_id === sess.store_id
+    // FS module is staff-only (F5) — the claimer is a 'staff' of the FS store.
+    const ok = me?.role === 'staff' && me?.store_id === sess.store_id
     if (!ok) return { error: 'Không có quyền upload cho phiên này' }
     const EXT: Record<string, string> = {
       'image/jpeg': 'jpg', 'image/jpg': 'jpg', 'image/png': 'png',

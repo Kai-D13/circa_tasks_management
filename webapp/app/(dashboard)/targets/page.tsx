@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
+import { redirectIfFsStaff } from '@/lib/fs/isolation'
 import { isSuperAdminEmail, getSmStoreIds } from '@/lib/authz'
 import { Card, CardContent } from '@/components/ui/card'
 import { PeriodTabs, type TargetPeriod } from '@/components/targets/PeriodTabs'
@@ -204,6 +205,7 @@ export default async function TargetsPage({
 
   const { data: profile } = await supabase
     .from('users').select('role, store_id, phone_number, stores!users_store_id_fkey(name)').eq('id', user.id).single()
+  await redirectIfFsStaff(supabase, profile) // FS staff never see OS surfaces
 
   const isSuper = profile?.role === 'admin' && isSuperAdminEmail(user.email)
   const isStaff = profile?.role === 'staff'

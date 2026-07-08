@@ -11,6 +11,7 @@ import { cn } from '@/lib/utils'
 import { ChevronLeft, Settings2, ClipboardList, AlertTriangle } from 'lucide-react'
 import { FsResultTab, type FsReviewItem } from '@/components/fs/FsResultTab'
 import { FsExportButton } from '@/components/fs/FsExportButton'
+import { FsReleaseClaimButton } from '@/components/fs/FsReleaseClaimButton'
 
 // Session detail (mirror of a KPI campaign detail): tabs Cấu hình (session
 // metadata) + Kết quả (interactive product review — search/filter/pagination,
@@ -178,8 +179,13 @@ export default async function FsSessionDetailPage({
               <Row k="Sheet">{run?.sheet_name ?? '—'}</Row>
               <Row k="Số sản phẩm">{total}{run && run.row_count !== run.success_count ? ` (nạp ${run.success_count}/${run.row_count})` : ''}</Row>
               <Row k="Người đang xử lý">
-                {claimer ? `${claimer.full_name}${claimer.email ? ` (${claimer.email})` : ''}` : 'Chưa có ai nhận'}
-                {session.claimed_at ? <span className="text-muted-foreground"> · từ {formatDateTime(session.claimed_at)}</span> : null}
+                <span className="inline-flex flex-wrap items-center gap-2">
+                  <span>
+                    {claimer ? `${claimer.full_name}${claimer.email ? ` (${claimer.email})` : ''}` : 'Chưa có ai nhận'}
+                    {session.claimed_at ? <span className="text-muted-foreground"> · từ {formatDateTime(session.claimed_at)}</span> : null}
+                  </span>
+                  {session.claimed_by && isActive && <FsReleaseClaimButton sessionId={id} />}
+                </span>
               </Row>
             </div>
           </CardContent>

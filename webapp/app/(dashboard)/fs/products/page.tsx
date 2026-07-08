@@ -36,7 +36,7 @@ export default async function FsProductsPage() {
   // store (an OS-store user must never reach the FS module). RLS then scopes the
   // session list to their store; their rows link to the processing wizard.
   let isFsStaff = false
-  if (!isAdmin && (profile?.role === 'staff' || profile?.role === 'store_manager') && profile?.store_id) {
+  if (!isAdmin && profile?.role === 'staff' && profile?.store_id) {
     const { data: st } = await supabase.from('stores').select('store_type').eq('id', profile.store_id).maybeSingle()
     isFsStaff = st?.store_type === 'fs'
   }
@@ -44,21 +44,23 @@ export default async function FsProductsPage() {
 
   const { data: sessions, error: sessionsErr } = await supabase
     .from('fs_sessions')
-    .select('id, name, status, created_at, created_by, store:stores(name, code)')
+    .select('id, name, status, created_at, created_by, claimed_by, store:stores(name, code)')
     .order('created_at', { ascending: false })
 
   const sessionIds = (sessions ?? []).map((s) => s.id)
-  const [{ data: items, error: itemsErr }, { data: creators, error: creatorsErr }] = await Promise.all([
+  // fs_sessions has TWO user FKs (created_by/claimed_by) → bare users(...) embed
+  // is ambiguous; resolve both by id in one query.
+  const peopleIds = [...new Set((sessions ?? []).flatMap((s) => [s.created_by, s.claimed_by]).filter(Boolean))] as string[]
+  const [{ data: items, error: itemsErr }, { data: people, error: peopleErr }] = await Promise.all([
     sessionIds.length
       ? supabase.from('fs_session_items').select('session_id, status').in('session_id', sessionIds)
       : Promise.resolve({ data: [] as { session_id: string; status: string }[], error: null }),
-    // fs_sessions has TWO user FKs (created_by/claimed_by) → bare users(...) embed
-    // is ambiguous; resolve creators by id instead.
-    sessionIds.length
-      ? supabase.from('users').select('id, full_name, email')
-          .in('id', [...new Set((sessions ?? []).map((s) => s.created_by).filter(Boolean))] as string[])
+    peopleIds.length
+      ? supabase.from('users').select('id, full_name, email').in('id', peopleIds)
       : Promise.resolve({ data: [] as { id: string; full_name: string; email: string }[], error: null }),
   ])
+  const creators = people
+  const creatorsErr = peopleErr
 
   const queryError = sessionsErr?.message ?? itemsErr?.message ?? creatorsErr?.message ?? null
   if (queryError) console.error('[fs-products] query failed:', queryError)
@@ -143,6 +145,11 @@ export default async function FsProductsPage() {
                       <div className="font-medium truncate">{s.name}</div>
                       <div className="text-xs text-muted-foreground truncate">
                         {storeName(s)} · {u?.full_name ?? '—'}{u?.email ? ` (${u.email})` : ''} · {formatDate(s.created_at)}
+                      </div>
+                      <div className="text-xs truncate">
+                        {s.claimed_by
+                          ? <span className="text-sky-700">Đang xử lý bởi {creator.get(s.claimed_by)?.full_name ?? '—'}</span>
+                          : s.status === 'active' ? <span className="text-muted-foreground">Chưa ai xử lý</span> : null}
                       </div>
                     </div>
                     <div className="hidden sm:flex items-center gap-2 w-40 shrink-0">

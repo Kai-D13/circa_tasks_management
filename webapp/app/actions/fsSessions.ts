@@ -188,11 +188,23 @@ async function currentUserId(): Promise<string | null> {
   return user?.id ?? null
 }
 
-// Claim a session (1 staff/store_manager owns an active session at a time).
+// Claim a session (1 staff of the FS store owns an active session at a time).
 export async function claimFsSession(sessionId: string) {
   const uid = await currentUserId()
   if (!uid) return { error: 'Chưa đăng nhập' }
   const { error } = await supabaseAdmin.rpc('rpc_fs_claim_session', { p_session_id: sessionId, p_user_id: uid })
+  if (error) return { error: error.message }
+  revalidatePath(`/fs/products/${sessionId}/process`)
+  revalidatePath('/fs/products')
+  return { success: true as const }
+}
+
+// Staff self-release (hand over) — clears the caller's own claim so the list
+// doesn't stay stuck when they step away. Race-safe in the RPC (holder-only).
+export async function releaseFsClaimSelf(sessionId: string) {
+  const uid = await currentUserId()
+  if (!uid) return { error: 'Chưa đăng nhập' }
+  const { error } = await supabaseAdmin.rpc('rpc_fs_release_claim_self', { p_session_id: sessionId, p_user_id: uid })
   if (error) return { error: error.message }
   revalidatePath(`/fs/products/${sessionId}/process`)
   revalidatePath('/fs/products')

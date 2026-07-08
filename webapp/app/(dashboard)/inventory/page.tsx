@@ -1,7 +1,9 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
+import { createClient } from '@/lib/supabase/server'
 import { isSuperAdminEmail } from '@/lib/authz'
+import { redirectIfFsStaff } from '@/lib/fs/isolation'
 import { CYCLE_COUNT_DEPT_ID } from '@/lib/inventory/constants'
 import { Card, CardContent } from '@/components/ui/card'
 import { Boxes, ClipboardCheck, ChevronRight } from 'lucide-react'
@@ -12,6 +14,7 @@ import { Boxes, ClipboardCheck, ChevronRight } from 'lucide-react'
 export default async function InventoryPage() {
   const { user, profile } = await getSessionProfile()
   if (!user) redirect('/login')
+  await redirectIfFsStaff(await createClient(), profile) // FS staff never see OS surfaces
 
   const role = profile?.role
   const deptId = (profile as { department_id?: string | null } | null)?.department_id ?? null

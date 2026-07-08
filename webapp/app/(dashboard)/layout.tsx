@@ -21,16 +21,23 @@ export default async function DashboardLayout({
   if (!user) redirect('/login')
   if (!profile) redirect('/login')
 
+  // FS staff (role 'staff' whose store is an FS store) see ONLY the FS module —
+  // the store is already embedded by getSessionProfile, so this is query-free.
+  const embeddedStore = (profile as { stores?: { store_type?: string | null } | { store_type?: string | null }[] | null }).stores
+  const store = Array.isArray(embeddedStore) ? embeddedStore[0] : embeddedStore
+  const isFsStaff = profile.role === 'staff' && store?.store_type === 'fs'
+
   // Bảng tin unread badge — viewers only (admins are creators, no badge). No
-  // realtime: recomputed each navigation (server render), 2 light queries.
-  const announcementsUnread = profile.role !== 'admin' ? await getUnreadAnnouncementCount() : 0
+  // realtime: recomputed each navigation (server render), 2 light queries. Skipped
+  // for FS staff (they never see the announcements tab).
+  const announcementsUnread = profile.role !== 'admin' && !isFsStaff ? await getUnreadAnnouncementCount() : 0
   // Staff are mobile-only: skip rendering/hydrating the desktop Sidebar entirely
   // (it's display:none for them anyway) for a leaner shell. 100dvh avoids the
   // mobile address-bar resize jank.
   const isStaff = profile.role === 'staff'
-  // Tasks-tab badge (staff only): head-count of the staff pending list, same
+  // Tasks-tab badge (OS staff only): head-count of the staff pending list, same
   // posture as the announcements badge — recomputed per navigation, no polling.
-  const tasksPending = isStaff ? await getStaffPendingTaskCount() : 0
+  const tasksPending = isStaff && !isFsStaff ? await getStaffPendingTaskCount() : 0
   // KPI Campaign nav gate (server env) → passed to the client Sidebar as a prop
   // (avoids a NEXT_PUBLIC_ var; keeps the flag server-controlled).
   const kpiCampaignEnabled = isKpiCampaignEnabled()
@@ -41,6 +48,8 @@ export default async function DashboardLayout({
         <NotificationProvider>
         <div className="flex h-[100dvh] overflow-hidden">
           {/* Desktop sidebar — hidden on mobile; not rendered for staff */}
+          {/* Staff (incl. FS staff) get no desktop Sidebar; FS-staff nav-hiding is
+              handled by BottomNav. Sidebar users are always non-FS-staff. */}
           {!isStaff && <Sidebar announcementsUnread={announcementsUnread} kpiCampaignEnabled={kpiCampaignEnabled} />}
 
           {/* Main content — full width on mobile */}
@@ -55,7 +64,7 @@ export default async function DashboardLayout({
         </div>
 
         {/* Bottom navigation — mobile only */}
-        <BottomNav announcementsUnread={announcementsUnread} tasksPending={tasksPending} />
+        <BottomNav announcementsUnread={announcementsUnread} tasksPending={tasksPending} isFsStaff={isFsStaff} />
         </NotificationProvider>
       </UserProvider>
     </ThemeProvider>

@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation'
 import { useUserStore } from '@/store/userStore'
 import {
   LayoutDashboard, CheckSquare, Users, Store, FileImage, ScrollText,
-  TrendingUp, Megaphone, Boxes, MoreHorizontal,
+  TrendingUp, Megaphone, Boxes, MoreHorizontal, Package,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -41,22 +41,29 @@ const NAV_ITEMS: NavItem[] = [
   { href: '/logs',          label: 'Nhật ký',   icon: ScrollText,      roles: ['admin', 'store_manager'] },
 ]
 
+// FS staff see ONLY their module — a single tab (F5 isolation).
+const FS_NAV: NavItem[] = [
+  { href: '/fs/products', label: 'Quản lý sản phẩm', icon: Package, roles: [] },
+]
+
 const MAX_PRIMARY = 4
 
 export function BottomNav({
   announcementsUnread = 0,
   tasksPending = 0,
+  isFsStaff = false,
 }: {
   announcementsUnread?: number
   tasksPending?: number
+  isFsStaff?: boolean
 }) {
   const pathname = usePathname()
   const profile  = useUserStore((s) => s.profile)
   const role     = profile?.role
   const [moreOpen, setMoreOpen] = useState(false)
 
-  const isStaffNav = role === 'staff'
-  const visible = isStaffNav ? STAFF_NAV : role ? NAV_ITEMS.filter((item) => item.roles.includes(role)) : []
+  const isStaffNav = role === 'staff' && !isFsStaff
+  const visible = isFsStaff ? FS_NAV : isStaffNav ? STAFF_NAV : role ? NAV_ITEMS.filter((item) => item.roles.includes(role)) : []
 
   // Inventory (→ TRF) in the overflow for NON-staff: store_manager (own store) +
   // super / Cycle Count admin. Staff carry it as a primary tab. Not 'sm' (phase 1).
