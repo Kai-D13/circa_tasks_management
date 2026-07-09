@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { formatDate } from '@/lib/dateUtils'
 import { getSmStoreIds } from '@/lib/authz'
+import { canSeeFs } from '@/lib/fs/access'
 import { cn } from '@/lib/utils'
 
 const REGION_LABEL: Record<string, string> = {
@@ -24,11 +25,14 @@ export default async function StoresPage() {
   if (!user) redirect('/login')
 
   const { data: profile } = await supabase
-    .from('users').select('role').eq('id', user.id).single()
+    .from('users').select('role, department_id').eq('id', user.id).single()
 
   if (profile?.role === 'staff') redirect('/dashboard')
 
   const isSm = profile?.role === 'sm'
+  // OS/FS visibility (RBAC): only super admin / Policy-dept admin see FS stores;
+  // every other admin/SM is OS-only. Filter at the query, not just the badge.
+  const showFs = canSeeFs({ role: profile?.role, department_id: profile?.department_id, email: user.email })
 
   const smStoreIds = isSm ? await getSmStoreIds(supabase, user.id) : []
   if (isSm && smStoreIds.length === 0) {
@@ -42,6 +46,7 @@ export default async function StoresPage() {
 
   let query = supabase.from('stores').select('*').order('name')
   if (isSm) query = query.in('id', smStoreIds)
+  if (!showFs) query = query.eq('store_type', 'os')
 
   const { data: stores } = await query
 
