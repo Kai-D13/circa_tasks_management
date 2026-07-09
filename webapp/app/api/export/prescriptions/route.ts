@@ -59,7 +59,7 @@ export async function GET(request: NextRequest) {
       'Số ảnh':       imgs.length,
       'Ghi chú':      (s.notes as string | null) ?? '',
       'Thời gian nộp': fmtVN(s.submitted_at as string),
-      'Mạn tính':     s.is_chronic ? 'Có' : '',
+      'Có ngày dùng': s.is_chronic ? 'Có' : '',
       'Khách hàng':   (s.customer_name as string | null) ?? '',
       'SĐT khách':    (s.customer_phone as string | null) ?? '',
       'Ngày bán':     (s.order_created_at as string | null) ?? '',

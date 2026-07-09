@@ -64,7 +64,7 @@ export default async function PrescriptionsPage({
   if (params.date_from) query = query.gte('submitted_at', params.date_from + 'T00:00:00+07:00')
   if (params.date_to)   query = query.lte('submitted_at', params.date_to   + 'T23:59:59+07:00')
 
-  // Chronic-care (mig 073). Type tab (care: Tất cả | Mạn tính) for everyone;
+  // Days-supply care (mig 073). Type tab (care: Tất cả | Có ngày dùng) for everyone;
   // care-workflow filter (care_state: due/done) — staff reach 'due' via the
   // reminder strip. Order-sync states (pending/error) use the order_sync filter.
   const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
@@ -190,7 +190,7 @@ export default async function PrescriptionsPage({
         </div>
       )}
 
-      {/* Type tabs — only Tất cả | Mạn tính (review r-ui: states moved to the
+      {/* Type tabs — only Tất cả | Có ngày dùng (review r-ui: states moved to the
           per-row chip + the admin/SM status dropdown below). */}
       <div className="inline-flex rounded-full border bg-muted/40 p-0.5">
         {([

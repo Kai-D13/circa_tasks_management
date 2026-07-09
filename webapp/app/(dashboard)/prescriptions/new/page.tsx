@@ -23,7 +23,7 @@ export default async function NewPrescriptionPage() {
         </span>
         <div>
           <h1 className="text-lg font-bold">Nộp toa thuốc</h1>
-          <p className="text-xs text-muted-foreground">Nhập mã DHC → chụp toa → gửi. Tick mạn tính nếu cần chăm sóc.</p>
+          <p className="text-xs text-muted-foreground">Nhập mã DHC → chụp toa → gửi. Thêm số ngày dùng nếu cần nhắc chăm sóc.</p>
         </div>
       </div>
       <PrescriptionForm storeId={profile.store_id} />
