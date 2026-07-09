@@ -3,7 +3,6 @@ import Link from 'next/link'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { createClient } from '@/lib/supabase/server'
 import { isSuperAdminEmail } from '@/lib/authz'
-import { requireSite } from '@/lib/site/context'
 import { POLICY_DEPT_ID, FS_SESSION_STATUS } from '@/lib/fs/constants'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
@@ -17,7 +16,6 @@ type Embed = { name?: string | null; code?: string | null }
 export default async function FsProcessPage({ params }: { params: Promise<{ id: string }> }) {
   const { user, profile } = await getSessionProfile()
   if (!user) redirect('/login')
-  await requireSite('fs') // OS site users never see the FS module
   const { id } = await params
   const supabase = await createClient()
 

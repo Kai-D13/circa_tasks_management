@@ -9,7 +9,7 @@ import { ChangePasswordDialog } from '@/components/layout/ChangePasswordDialog'
 import { EditProfileDialog } from '@/components/layout/EditProfileDialog'
 import { ThemeToggle } from '@/components/layout/ThemeToggle'
 import { Button } from '@/components/ui/button'
-import { LogOut, ArrowLeft, ArrowLeftRight } from 'lucide-react'
+import { LogOut, ArrowLeft } from 'lucide-react'
 const SECTION_TITLES: Record<string, string> = {
   dashboard:     'Tổng quan',
   tasks:         'Tasks',
@@ -23,7 +23,7 @@ const SECTION_TITLES: Record<string, string> = {
   fs:            'Quản lý sản phẩm',
 }
 
-export function MobileHeader({ canSwitchSite = false }: { canSwitchSite?: boolean }) {
+export function MobileHeader() {
   const supabase = useMemo(() => createClient(), [])
   const router   = useRouter()
   const pathname = usePathname()
@@ -85,11 +85,6 @@ export function MobileHeader({ canSwitchSite = false }: { canSwitchSite?: boolea
 
       {/* Actions — always visible */}
       <div className="flex items-center gap-1 shrink-0">
-        {canSwitchSite && (
-          <Button variant="ghost" size="sm" aria-label="Đổi site" className="w-10 h-10 px-0 text-white/80 hover:bg-white/10 hover:text-white" onClick={() => router.push('/select-site')}>
-            <ArrowLeftRight className="h-4 w-4" />
-          </Button>
-        )}
         {/* Staff don't receive notifications (provider skips their fetch), so the bell
             is dead weight for them — hide it. */}
         {role !== 'staff' && <NotificationBell />}

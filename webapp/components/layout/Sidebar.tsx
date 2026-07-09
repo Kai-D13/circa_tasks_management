@@ -6,7 +6,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useUserStore } from '@/store/userStore'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { Button, buttonVariants } from '@/components/ui/button'
+import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import {
@@ -25,7 +25,6 @@ import {
   Package,
   PackageSearch,
   ChevronRight,
-  ArrowLeftRight,
   LogOut,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -51,7 +50,7 @@ const ROLE_LABELS: Record<string, string> = {
   sm:            'SM',
 }
 
-export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, isFsStore = false, canSwitchSite = false }: { announcementsUnread?: number; kpiCampaignEnabled?: boolean; isFsStore?: boolean; canSwitchSite?: boolean }) {
+export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, isFsStore = false }: { announcementsUnread?: number; kpiCampaignEnabled?: boolean; isFsStore?: boolean }) {
   const pathname = usePathname()
   const router   = useRouter()
   const profile  = useUserStore((s) => s.profile)
@@ -251,11 +250,6 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, i
           <Badge className={cn('text-xs w-full justify-center', ROLE_COLORS[role])}>
             {ROLE_LABELS[role] ?? role}
           </Badge>
-        )}
-        {canSwitchSite && (
-          <Link href="/select-site" className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'w-full justify-start gap-2 text-xs')}>
-            <ArrowLeftRight className="h-3.5 w-3.5" /> Đổi site
-          </Link>
         )}
         {role === 'staff' && <EditProfileDialog />}
         <ChangePasswordDialog />

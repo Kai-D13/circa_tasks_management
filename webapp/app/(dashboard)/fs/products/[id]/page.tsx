@@ -3,7 +3,6 @@ import Link from 'next/link'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { createClient } from '@/lib/supabase/server'
 import { isSuperAdminEmail } from '@/lib/authz'
-import { requireSite } from '@/lib/site/context'
 import { POLICY_DEPT_ID, FS_SESSION_STATUS } from '@/lib/fs/constants'
 import { Card, CardContent } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
@@ -32,10 +31,9 @@ export default async function FsSessionDetailPage({
 }) {
   const { user, profile } = await getSessionProfile()
   if (!user) redirect('/login')
-  await requireSite('fs') // OS site users never see the FS module
   const isSuper = profile?.role === 'admin' && isSuperAdminEmail(user.email)
   const isPolicy = profile?.role === 'admin' && profile?.department_id === POLICY_DEPT_ID
-  if (!isSuper && !isPolicy) redirect('/fs/products')
+  if (!isSuper && !isPolicy) redirect('/tasks')
 
   const { id } = await params
   const sp = await searchParams
