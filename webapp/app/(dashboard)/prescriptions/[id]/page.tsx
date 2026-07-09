@@ -5,7 +5,7 @@ import { CareForm } from '@/components/prescriptions/CareForm'
 import { ChronicSettingsForm } from '@/components/prescriptions/ChronicSettingsForm'
 import { OrderCodeFixForm } from '@/components/prescriptions/OrderCodeFixForm'
 import { deriveCareState, deriveOrderStatus } from '@/lib/prescriptions/careStatus'
-import { HeartPulse } from 'lucide-react'
+import { CalendarClock } from 'lucide-react'
 import { formatDate, formatDateTime, formatVnLocalDateTimeString } from '@/lib/dateUtils'
 import Link from 'next/link'
 import { PRESCRIPTION_BUCKET } from '@/lib/prescriptions/constants'
@@ -66,6 +66,13 @@ export default async function PrescriptionDetailPage({
   // Chronic care (mig 073) — derived display state + who may log the care visit
   const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
   const careState = deriveCareState(sub, vnTodayISO)
+  // Order info (customer/POS/products from the Sheet sync) is shown for ANY toa
+  // that has synced data — chronic or not. Previously it was wrongly nested inside
+  // the is_chronic block, so a plain synced toa showed none of its order data.
+  const hasOrderInfo = !!(
+    sub.customer_name || sub.customer_phone || sub.order_created_at ||
+    sub.pos_code || sub.pos_name || sub.order_products_raw || sub.order_sync_error
+  )
   // Care gate mirrors submitPrescriptionCare (locked 2026-07-04): staff care for
   // their OWN submission, store manager for any in their store. (RLS already
   // hides other staff's submissions, so a staff only ever reaches their own.)
@@ -148,13 +155,41 @@ export default async function PrescriptionDetailPage({
         </CardContent>
       </Card>
 
-      {/* Chronic care info (mig 073) */}
+      {/* Order info (Sheet sync, mig 073) — shown for ANY toa that has synced
+          data, chronic or not (previously wrongly nested inside is_chronic). */}
+      {hasOrderInfo && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-sm">Thông tin đơn hàng</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
+              <p><span className="text-muted-foreground">Khách hàng: </span><span className="font-medium">{sub.customer_name ?? '—'}</span></p>
+              <p><span className="text-muted-foreground">SĐT: </span><span className="font-medium">{sub.customer_phone ?? '—'}</span></p>
+              <p><span className="text-muted-foreground">Ngày bán: </span><span className="font-medium">{sub.order_created_at ? formatDate(sub.order_created_at) : '—'}</span></p>
+              <p><span className="text-muted-foreground">POS: </span><span className="font-medium">{sub.pos_name ?? sub.pos_code ?? '—'}</span></p>
+            </div>
+            {sub.order_products_raw && (
+              <div className="text-sm">
+                <p className="text-muted-foreground mb-0.5">Sản phẩm trong đơn:</p>
+                <p className="whitespace-pre-wrap text-foreground">{sub.order_products_raw}</p>
+              </div>
+            )}
+            {sub.order_sync_error && (
+              <p className="text-xs text-destructive">{sub.order_sync_error}</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Days-supply tracking (mig 073) — only when the toa has a days_supply
+          (is_chronic = "có ngày dùng"). Care badge + refill/reminder dates. */}
       {sub.is_chronic && (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-sm flex items-center justify-between gap-2 flex-wrap">
               <span className="flex items-center gap-1.5">
-                <HeartPulse className="h-4 w-4 text-primary" /> Toa mạn tính
+                <CalendarClock className="h-4 w-4 text-primary" /> Theo dõi ngày dùng
               </span>
               {careState && (
                 <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', careState.cls)}>
@@ -165,21 +200,10 @@ export default async function PrescriptionDetailPage({
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-sm">
-              <p><span className="text-muted-foreground">Khách hàng: </span><span className="font-medium">{sub.customer_name ?? '—'}</span></p>
-              <p><span className="text-muted-foreground">SĐT: </span><span className="font-medium">{sub.customer_phone ?? '—'}</span></p>
-              <p><span className="text-muted-foreground">Ngày bán: </span><span className="font-medium">{sub.order_created_at ? formatDate(sub.order_created_at) : '—'}</span></p>
               <p><span className="text-muted-foreground">Số ngày dùng: </span><span className="font-medium">{sub.days_supply ?? '—'}</span></p>
               <p><span className="text-muted-foreground">Dự kiến hết thuốc: </span><span className="font-medium text-primary">{sub.expected_refill_date ? formatDate(sub.expected_refill_date) : '—'}</span></p>
               <p><span className="text-muted-foreground">Ngày cần nhắc: </span><span className="font-medium">{sub.reminder_date ? formatDate(sub.reminder_date) : '—'}</span></p>
             </div>
-            {sub.order_sync_error && (
-              <p className="text-xs text-destructive">{sub.order_sync_error}</p>
-            )}
-            {sub.order_products_raw && (
-              <p className="text-xs text-muted-foreground">
-                <span className="font-medium text-foreground">Sản phẩm (POS): </span>{sub.order_products_raw}
-              </p>
-            )}
             {isSuper && (
               <ChronicSettingsForm
                 submissionId={sub.id}
@@ -190,7 +214,7 @@ export default async function PrescriptionDetailPage({
           </CardContent>
         </Card>
       )}
-      {/* Super admin can also mark a non-chronic prescription chronic (fix a missed tick) */}
+      {/* Super admin can add days-supply tracking to a toa that has none. */}
       {!sub.is_chronic && isSuper && (
         <ChronicSettingsForm submissionId={sub.id} isChronic={false} daysSupply={null} />
       )}

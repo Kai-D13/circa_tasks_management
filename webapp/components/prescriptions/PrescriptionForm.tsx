@@ -9,7 +9,7 @@ import { PrescriptionImageUpload, type PrescriptionImage } from '@/components/pr
 import { submitPrescription } from '@/app/actions/prescriptions'
 import { DHC_STRICT_PATTERN, DHC_FORMAT_HINT } from '@/lib/prescriptions/constants'
 import { cn } from '@/lib/utils'
-import { FileText, Camera, HeartPulse, NotebookPen } from 'lucide-react'
+import { FileText, Camera, CalendarClock, NotebookPen } from 'lucide-react'
 
 interface Props {
   storeId: string
@@ -60,7 +60,7 @@ export function PrescriptionForm({ storeId }: Props) {
     if (!notes.trim()) { toast.error('Vui lòng nhập ghi chú toa thuốc'); return }
     const days = parseInt(daysSupply, 10)
     if (isChronic && (!Number.isFinite(days) || days <= 0)) {
-      toast.error('Toa mạn tính cần số ngày dùng thuốc (lớn hơn 0)')
+      toast.error('Cần nhập số ngày dùng thuốc (lớn hơn 0)')
       return
     }
 
@@ -112,8 +112,8 @@ export function PrescriptionForm({ storeId }: Props) {
         <CardContent className="p-4 space-y-3">
           <label className="flex items-center gap-2 cursor-pointer">
             <span className="flex h-6 w-6 items-center justify-center rounded-full bg-primary/10 text-primary text-xs font-bold shrink-0">3</span>
-            <HeartPulse className="h-4 w-4 text-primary shrink-0" />
-            <span className="text-sm font-semibold flex-1">Toa thuốc mạn tính</span>
+            <CalendarClock className="h-4 w-4 text-primary shrink-0" />
+            <span className="text-sm font-semibold flex-1">Toa có ngày dùng</span>
             <input
               type="checkbox"
               checked={isChronic}
@@ -124,7 +124,7 @@ export function PrescriptionForm({ storeId }: Props) {
           {isChronic && (
             <div className="space-y-2">
               <p className="text-xs text-muted-foreground">
-                Số ngày dùng thuốc — hệ thống nhắc chăm sóc khách trước khi hết thuốc 2 ngày.
+                Nếu biết số ngày dùng thuốc, nhập để hệ thống nhắc chăm sóc khách trước khi hết thuốc 2 ngày.
               </p>
               <div className="flex flex-wrap items-center gap-2">
                 {DAYS_PRESETS.map((d) => (

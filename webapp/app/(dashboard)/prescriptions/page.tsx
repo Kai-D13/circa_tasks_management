@@ -195,7 +195,7 @@ export default async function PrescriptionsPage({
       <div className="inline-flex rounded-full border bg-muted/40 p-0.5">
         {([
           { key: undefined, label: 'Tất cả' },
-          { key: 'chronic', label: 'Mạn tính' },
+          { key: 'chronic', label: 'Có ngày dùng' },
         ] as { key?: string; label: string }[]).map((t) => {
           const active = care === t.key
           return (
