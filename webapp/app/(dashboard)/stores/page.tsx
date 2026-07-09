@@ -5,6 +5,7 @@ import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { formatDate } from '@/lib/dateUtils'
 import { getSmStoreIds } from '@/lib/authz'
+import { requireSite } from '@/lib/site/context'
 import { cn } from '@/lib/utils'
 
 const REGION_LABEL: Record<string, string> = {
@@ -22,6 +23,7 @@ export default async function StoresPage() {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
+  await requireSite('os') // FS site users never see OS surfaces
 
   const { data: profile } = await supabase
     .from('users').select('role').eq('id', user.id).single()

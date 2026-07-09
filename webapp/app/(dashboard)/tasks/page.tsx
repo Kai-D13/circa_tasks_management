@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
-import { redirectIfFsStaff } from '@/lib/fs/isolation'
+import { requireSite } from '@/lib/site/context'
 import { getSmStoreIds } from '@/lib/authz'
 import { buttonVariants } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -31,7 +31,7 @@ export default async function TasksPage({
   const supabase = await createClient()
 
   const { profile } = await getSessionProfile()
-  await redirectIfFsStaff(supabase, profile) // FS staff never see OS surfaces
+  await requireSite('os') // FS site users never see OS surfaces
   const isStaff = profile?.role === 'staff'
   const isSm    = profile?.role === 'sm'
 

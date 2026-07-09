@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { Megaphone, Plus } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { formatDateTime } from '@/lib/dateUtils'
-import { redirectIfFsStaff } from '@/lib/fs/isolation'
+import { requireSite } from '@/lib/site/context'
 
 // Bảng tin / Thông báo — read-only broadcasts (migration 063). RLS scopes which
 // announcements each role sees; admins see all + can create.
@@ -16,7 +16,7 @@ export default async function AnnouncementsPage() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
   const { data: profile } = await supabase.from('users').select('role, store_id').eq('id', user.id).single()
-  await redirectIfFsStaff(supabase, profile) // FS staff never see OS surfaces
+  await requireSite('os') // FS site users never see OS surfaces
   const isAdmin = profile?.role === 'admin'
 
   // Expiry is enforced in RLS (ann_select) — non-admin never receive expired

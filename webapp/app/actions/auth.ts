@@ -1,8 +1,11 @@
 'use server'
 
+import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getDefaultRoute } from '@/lib/routes'
+import { baseAllowedSites, SITE_COOKIE } from '@/lib/site/context'
 
 export type LoginState =
   | { error: string }
@@ -33,17 +36,33 @@ export async function login(_prevState: LoginState, formData: FormData): Promise
       : error.message
     return { error: friendly }
   }
+  // Always clear the site cookie so a dual-site account re-chooses each login
+  // (stakeholder: never auto-enter the last site).
+  ;(await cookies()).delete(SITE_COOKIE)
+
   let role: string | null = null
+  let redirectTo = getDefaultRoute(null)
   if (data.user) {
     const { data: profile } = await supabase
-      .from('users').select('role').eq('id', data.user.id).single()
+      .from('users').select('role, department_id, stores!users_store_id_fkey(store_type)')
+      .eq('id', data.user.id).single()
     role = profile?.role ?? null
+    const allowed = baseAllowedSites({ ...profile, email: data.user.email })
+    if (allowed.size < 2) {
+      const { data: grants } = await supabaseAdmin
+        .from('user_site_permissions').select('site').eq('user_id', data.user.id)
+      for (const g of grants ?? []) if (g.site === 'os' || g.site === 'fs') allowed.add(g.site)
+    }
+    redirectTo = allowed.size > 1 ? '/select-site'
+      : allowed.has('fs') ? '/fs/products'
+      : getDefaultRoute(role)
   }
-  return { success: true, redirectTo: getDefaultRoute(role) }
+  return { success: true, redirectTo }
 }
 
 export async function logout() {
   const supabase = await createClient()
   await supabase.auth.signOut()
+  ;(await cookies()).delete(SITE_COOKIE)
   redirect('/login')
 }

@@ -12,6 +12,7 @@ import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { ExportButton } from '@/components/common/ExportButton'
 import { LOGS_PAGE_SIZE, ACTION_COLORS, ACTION_LABELS, formatMeta } from '@/lib/logs/constants'
 import { getSmStoreIds } from '@/lib/authz'
+import { requireSite } from '@/lib/site/context'
 
 type Meta = Record<string, unknown>
 type LogTask = { id: string; title: string; store_id: string | null; source_schedule_id: string | null; stores: { name: string } | null }
@@ -34,6 +35,7 @@ export default async function LogsPage({
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
+  await requireSite('os') // FS site users never see OS surfaces
 
   const { data: profile } = await supabase
     .from('users').select('role, store_id').eq('id', user.id).single()

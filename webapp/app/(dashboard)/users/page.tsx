@@ -11,6 +11,7 @@ import { UserFilters } from '@/components/users/UserFilters'
 import { Pagination } from '@/components/common/Pagination'
 import { formatDate } from '@/lib/dateUtils'
 import { isSuperAdminEmail, getSmStoreIds } from '@/lib/authz'
+import { requireSite } from '@/lib/site/context'
 import { deptBadgeClass, type Department } from '@/lib/departments'
 import { cn } from '@/lib/utils'
 import { AlertTriangle, ShieldCheck, Store as StoreIcon, UserRound, Users as UsersIcon } from 'lucide-react'
@@ -67,6 +68,7 @@ export default async function UsersPage({
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')
+  await requireSite('os') // FS site users never see OS surfaces
 
   const { data: profile } = await supabase
     .from('users').select('role').eq('id', user.id).single()

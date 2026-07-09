@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { getDefaultRoute } from '@/lib/routes'
+import { requireSite } from '@/lib/site/context'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -54,6 +55,7 @@ export default async function DashboardPage() {
   const supabase = await createClient()
 
   const { data: { user } } = await supabase.auth.getUser()
+  await requireSite('os') // FS site users never see OS surfaces
   const { data: profile } = await supabase
     .from('users').select('role').eq('id', user!.id).single()
 
