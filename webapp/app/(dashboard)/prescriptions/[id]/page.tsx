@@ -58,6 +58,9 @@ export default async function PrescriptionDetailPage({
   if (!sub) notFound()
 
   const isSuper  = profile?.role === 'admin' && isSuperAdminEmail(user.email)
+  // Owner staff may set/clear days_supply until the toa is cared for (RX-V2.3);
+  // mirrors updateChronicSettings' server authz.
+  const canEditDays = profile?.role === 'staff' && sub.submitted_by === user.id && sub.care_status !== 'done'
   const orderStatus = deriveOrderStatus(sub.order_sync_status)
   // Legacy product-sync data (paste-JSON → prescription_submission_products) is
   // deprecated but kept read-only when it exists (old compliance rows).
@@ -204,7 +207,7 @@ export default async function PrescriptionDetailPage({
               <p><span className="text-muted-foreground">Dự kiến hết thuốc: </span><span className="font-medium text-primary">{sub.expected_refill_date ? formatDate(sub.expected_refill_date) : '—'}</span></p>
               <p><span className="text-muted-foreground">Ngày cần nhắc: </span><span className="font-medium">{sub.reminder_date ? formatDate(sub.reminder_date) : '—'}</span></p>
             </div>
-            {isSuper && (
+            {(isSuper || canEditDays) && (
               <ChronicSettingsForm
                 submissionId={sub.id}
                 isChronic={!!sub.is_chronic}
@@ -215,7 +218,7 @@ export default async function PrescriptionDetailPage({
         </Card>
       )}
       {/* Super admin can add days-supply tracking to a toa that has none. */}
-      {!sub.is_chronic && isSuper && (
+      {!sub.is_chronic && (isSuper || canEditDays) && (
         <ChronicSettingsForm submissionId={sub.id} isChronic={false} daysSupply={null} />
       )}
 

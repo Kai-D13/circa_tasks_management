@@ -341,9 +341,10 @@ export async function submitPrescriptionCare(
   return { success: true }
 }
 
-// Super admin corrects a mistaken chronic tick / wrong days_supply. Refill and
-// reminder dates recompute from the already-synced order date (or stay null
-// until the next order sync fills them).
+// Set / clear a prescription's days_supply ("có ngày dùng"). Refill and reminder
+// dates recompute from the already-synced order date (or stay null until the next
+// order sync fills them). Super admin may edit any toa; the OWNER staff may edit
+// their own toa until it has been cared for (stakeholder RX-V2.3).
 export async function updateChronicSettings(
   submissionId: string,
   input: { isChronic: boolean; daysSupply?: number },
@@ -352,15 +353,20 @@ export async function updateChronicSettings(
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
   const { data: me } = await supabase.from('users').select('role').eq('id', user.id).single()
-  if (me?.role !== 'admin' || !isSuperAdminEmail(user.email))
-    return { error: 'Chỉ super admin được chỉnh thông tin toa mạn tính' }
+  const isSuper = me?.role === 'admin' && isSuperAdminEmail(user.email)
 
   const { data: sub } = await supabaseAdmin
     .from('prescription_submissions')
-    .select('id, order_created_at')
+    .select('id, order_created_at, submitted_by, care_status')
     .eq('id', submissionId)
     .maybeSingle()
   if (!sub) return { error: 'Không tìm thấy toa thuốc' }
+
+  const isOwnerStaff = me?.role === 'staff' && sub.submitted_by === user.id
+  if (!isSuper && !isOwnerStaff) return { error: 'Bạn không có quyền chỉnh sửa toa này' }
+  // Staff can only edit before the care visit is logged; super has no such limit.
+  if (isOwnerStaff && sub.care_status === 'done')
+    return { error: 'Toa đã chăm sóc xong — không thể chỉnh ngày dùng' }
 
   let patch: Record<string, unknown>
   if (input.isChronic) {

@@ -6,7 +6,8 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { updateChronicSettings } from '@/app/actions/prescriptions'
 
-// Super-admin correction for a mistaken chronic tick / wrong days_supply.
+// Set / clear a toa's days_supply ("có ngày dùng"). Super admin edits any toa;
+// the owner staff edits their own until it's cared for (server enforces both).
 // Dates recompute server-side from the synced order date.
 export function ChronicSettingsForm({
   submissionId, isChronic, daysSupply,
@@ -30,7 +31,7 @@ export function ChronicSettingsForm({
     startTransition(async () => {
       const r = await updateChronicSettings(submissionId, { isChronic: chronic, daysSupply: chronic ? n : undefined })
       if (r?.error) { toast.error(r.error); return }
-      toast.success('Đã cập nhật thông tin toa mạn tính')
+      toast.success('Đã cập nhật ngày dùng')
       setOpen(false)
       router.refresh()
     })
@@ -39,7 +40,7 @@ export function ChronicSettingsForm({
   if (!open) {
     return (
       <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
-        Sửa toa mạn tính
+        Thiết lập ngày dùng
       </Button>
     )
   }
@@ -53,7 +54,7 @@ export function ChronicSettingsForm({
           onChange={(e) => setChronic(e.target.checked)}
           className="h-4 w-4 accent-primary"
         />
-        Toa thuốc mạn tính
+        Toa có ngày dùng
       </label>
       {chronic && (
         <div className="flex items-center gap-2">
