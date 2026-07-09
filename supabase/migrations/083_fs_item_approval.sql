@@ -103,7 +103,9 @@ BEGIN
 END;
 $$;
 
--- 4) Resubmit (items + box) — reproduce 078 + CLEAR approval on send-back --------
+-- 4) Resubmit (items + box) — reproduce 078 + CLEAR approval on send-back +
+--    block a soft-removed item at the DB boundary (removed items keep status='done',
+--    so without this guard a removed id passed in could be resurrected to 'redo').
 CREATE OR REPLACE FUNCTION public.rpc_fs_resubmit_items(
   p_session_id uuid, p_item_ids uuid[], p_note text, p_actor uuid
 ) RETURNS int
@@ -118,10 +120,10 @@ BEGIN
 
   UPDATE public.fs_session_items
     SET status = 'redo', resubmit_note = p_note, approved_at = NULL, approved_by = NULL
-    WHERE session_id = p_session_id AND id = ANY(p_item_ids) AND status = 'done';
+    WHERE session_id = p_session_id AND id = ANY(p_item_ids) AND status = 'done' AND removed_at IS NULL;
   GET DIAGNOSTICS v_n = ROW_COUNT;
   IF v_n <> v_req THEN
-    RAISE EXCEPTION 'Có % sản phẩm không hợp lệ để làm lại (không thuộc phiên / chưa hoàn thành / trùng)', v_req - v_n;
+    RAISE EXCEPTION 'Có % sản phẩm không hợp lệ để làm lại (không thuộc phiên / chưa hoàn thành / đã xoá / trùng)', v_req - v_n;
   END IF;
 
   UPDATE public.fs_item_photos SET status = 'redo' WHERE item_id = ANY(p_item_ids);
@@ -136,13 +138,14 @@ CREATE OR REPLACE FUNCTION public.rpc_fs_resubmit_box(
 ) RETURNS void
 LANGUAGE plpgsql SECURITY DEFINER SET search_path = public
 AS $$
-DECLARE v_session uuid; v_item_status text; v_sess_status text;
+DECLARE v_session uuid; v_item_status text; v_sess_status text; v_removed timestamptz;
 BEGIN
   IF p_box_key < 1 OR p_box_key > 5 THEN RAISE EXCEPTION 'Box ảnh không hợp lệ (1..5)'; END IF;
-  SELECT i.session_id, i.status, s.status INTO v_session, v_item_status, v_sess_status
+  SELECT i.session_id, i.status, s.status, i.removed_at INTO v_session, v_item_status, v_sess_status, v_removed
     FROM public.fs_session_items i JOIN public.fs_sessions s ON s.id = i.session_id WHERE i.id = p_item_id;
   IF v_session IS NULL THEN RAISE EXCEPTION 'Sản phẩm không tồn tại'; END IF;
   IF v_sess_status <> 'active' THEN RAISE EXCEPTION 'Phiên không ở trạng thái đang xử lý'; END IF;
+  IF v_removed IS NOT NULL THEN RAISE EXCEPTION 'Sản phẩm đã bị xoá khỏi phiên'; END IF;
   IF v_item_status <> 'done' THEN RAISE EXCEPTION 'Chỉ yêu cầu làm lại sản phẩm đã hoàn thành'; END IF;
 
   UPDATE public.fs_item_photos SET status = 'redo', resubmit_note = p_note
@@ -192,7 +195,7 @@ GRANT EXECUTE ON FUNCTION public.rpc_fs_close_session(uuid, text, uuid, text)   
 
 INSERT INTO public.app_migrations (version, name, notes)
 VALUES ('083', 'fs_item_approval',
-        'FS Batch E: fs_session_items.approved_at/by + item_approved event; rpc_fs_approve_item; submit_item blocks approved/removed; resubmit clears approval; close_session requires all active done+approved.')
+        'FS Batch E (r1): fs_session_items.approved_at/by + item_approved event; rpc_fs_approve_item; submit_item blocks approved/removed; resubmit clears approval AND blocks removed items; close_session requires all active done+approved.')
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;
