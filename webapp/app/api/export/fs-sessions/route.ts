@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { POLICY_DEPT_ID, FS_PHOTO_BOXES, FS_ITEM_STATUS } from '@/lib/fs/constants'
-import { xlsxResponse, stampVN } from '@/lib/export/xlsx'
+import { xlsxResponse, stampVN, fmtVN } from '@/lib/export/xlsx'
 
 // GET /api/export/fs-sessions?session_id=... — Excel of a session's items with
 // dimensions, status, and the photo URL per box (super OR Policy-dept admin).
@@ -29,7 +29,7 @@ export async function GET(request: NextRequest) {
 
   const { data: items, error: iErr } = await supabase
     .from('fs_session_items')
-    .select('id, product_id, product_name, status, dim_length_mm, dim_width_mm, dim_height_mm, resubmit_note')
+    .select('id, product_id, product_name, status, dim_length_mm, dim_width_mm, dim_height_mm, resubmit_note, approved_at, approved_by')
     .eq('session_id', sessionId).is('removed_at', null).order('created_at', { ascending: true })
   if (iErr) return NextResponse.json({ error: iErr.message }, { status: 500 })
 
@@ -41,6 +41,13 @@ export async function GET(request: NextRequest) {
 
   const photoUrl = new Map<string, string>()
   for (const p of photos ?? []) photoUrl.set(`${p.item_id}:${p.box_key}`, p.storage_path)
+
+  // Approver names for the "Người duyệt" column.
+  const approverIds = [...new Set((items ?? []).map((i) => i.approved_by).filter(Boolean))] as string[]
+  const { data: approvers } = approverIds.length
+    ? await supabase.from('users').select('id, full_name').in('id', approverIds)
+    : { data: [] as { id: string; full_name: string }[] }
+  const approverName = new Map((approvers ?? []).map((u) => [u.id, u.full_name]))
 
   const store = Array.isArray(session.store) ? (session.store[0] as Embed) : (session.store as Embed | null)
 
@@ -58,6 +65,9 @@ export async function GET(request: NextRequest) {
     // One column per box; boxes 3 & 4 share a label so prefix with the box number
     // to keep the header keys unique (json_to_sheet uses object keys).
     for (const b of FS_PHOTO_BOXES) row[`Box ${b.key} (${b.label})`] = photoUrl.get(`${it.id}:${b.key}`) ?? ''
+    row['Trạng thái duyệt'] = it.approved_at ? 'Đã duyệt' : 'Chưa duyệt'
+    row['Người duyệt'] = it.approved_by ? (approverName.get(it.approved_by) ?? '') : ''
+    row['Thời gian duyệt'] = it.approved_at ? fmtVN(it.approved_at) : ''
     row['Ghi chú làm lại'] = it.resubmit_note ?? ''
     return row
   })

@@ -15,7 +15,7 @@ interface Photo { box_key: number; storage_path: string; status: string; resubmi
 export interface FsProcessItem {
   id: string; product_id: string; product_name: string; status: string
   dim_length_mm: number | null; dim_width_mm: number | null; dim_height_mm: number | null
-  resubmit_note: string | null; photos: Photo[]
+  resubmit_note: string | null; approved_at: string | null; photos: Photo[]
 }
 
 // redo first (needs rework), then pending, then done (reference).
@@ -221,11 +221,16 @@ export function FsProcessWizard({
                 )}
               </div>
               <Badge className={cn('text-[10px] shrink-0', im.cls)}>{im.label}</Badge>
-              {/* Any item is editable by the claimer while the session is active —
-                  incl. a 'done' item the staff wants to self-correct (r4). */}
-              <Button size="sm" variant={isOpen || it.status === 'done' ? 'outline' : 'default'} onClick={() => (isOpen ? closeEditor() : openItem(it))} disabled={pending}>
-                {isOpen ? 'Đóng' : it.status === 'done' ? 'Sửa thông tin' : 'Xử lý'}
-              </Button>
+              {/* An APPROVED item is locked (Batch E) — staff can't edit; only an
+                  admin resubmit re-opens it. Otherwise editable by the claimer
+                  while active (incl. a 'done' item self-correction, r4). */}
+              {it.approved_at ? (
+                <Badge className="bg-green-100 text-green-700 text-[10px] shrink-0">Đã duyệt</Badge>
+              ) : (
+                <Button size="sm" variant={isOpen || it.status === 'done' ? 'outline' : 'default'} onClick={() => (isOpen ? closeEditor() : openItem(it))} disabled={pending}>
+                  {isOpen ? 'Đóng' : it.status === 'done' ? 'Sửa thông tin' : 'Xử lý'}
+                </Button>
+              )}
             </div>
 
             {isOpen && selected && selected.id === it.id && (
@@ -252,7 +257,7 @@ export function FsProcessWizard({
 
                 <div>
                   <p className="text-xs font-medium mb-1">Kích thước (mm) — bắt buộc</p>
-                  <div className="flex flex-wrap gap-2">
+                  <div className="grid grid-cols-3 gap-2">
                     <DimInput label="Dài" value={dimL} onChange={setDimL} />
                     <DimInput label="Rộng" value={dimW} onChange={setDimW} />
                     <DimInput label="Cao" value={dimH} onChange={setDimH} />
@@ -290,15 +295,16 @@ export function FsProcessWizard({
 
 function DimInput({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   return (
-    <label className="flex items-center gap-1.5 text-sm">
-      <span className="text-muted-foreground w-10">{label}</span>
+    // Label on top + full-width input; text-base = 16px so iOS Safari does NOT
+    // auto-zoom on focus (the zoom bug happened with <16px inputs).
+    <label className="flex flex-col gap-1 text-xs">
+      <span className="text-muted-foreground">{label} (mm)</span>
       <input
         type="number" inputMode="numeric" min={1} max={FS_DIM_MAX_MM} value={value}
         onChange={(e) => onChange(e.target.value)}
         aria-label={`Kích thước ${label} (mm)`}
-        className="h-9 w-24 rounded-md border bg-background px-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+        className="h-10 w-full rounded-md border bg-background px-2 text-base focus:outline-none focus:ring-2 focus:ring-primary/30"
       />
-      <span className="text-muted-foreground text-xs">mm</span>
     </label>
   )
 }

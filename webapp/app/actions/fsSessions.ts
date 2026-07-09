@@ -156,6 +156,18 @@ export async function resubmitFsBox(sessionId: string, itemId: string, boxKey: n
   return { success: true as const }
 }
 
+// Approve a done item (Policy/super review layer). Once approved, staff can't
+// self-edit it; an admin resubmit clears approval.
+export async function approveFsItem(sessionId: string, itemId: string) {
+  const auth = await requireFsManager()
+  if ('error' in auth) return { error: auth.error }
+  if (!itemId) return { error: 'Thiếu sản phẩm' }
+  const { error } = await supabaseAdmin.rpc('rpc_fs_approve_item', { p_item_id: itemId, p_actor: auth.user.id })
+  if (error) return { error: 'Không duyệt được: ' + error.message }
+  revalidatePath(`/fs/products/${sessionId}`)
+  return { success: true as const }
+}
+
 // Close a session (complete) or cancel it. Active-only (enforced in the RPC).
 export async function closeFsSession(sessionId: string, status: 'completed' | 'cancelled', note?: string) {
   const auth = await requireFsManager()

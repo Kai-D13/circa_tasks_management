@@ -65,7 +65,7 @@ export default async function FsSessionDetailPage({
 
   // Counts (all items, status only) for the progress strip + Cấu hình total.
   const [{ data: statusRows, error: cErr }, { data: run, error: rErr }, { data: people, error: pErr }] = await Promise.all([
-    supabase.from('fs_session_items').select('status').eq('session_id', id).is('removed_at', null),
+    supabase.from('fs_session_items').select('status, approved_at').eq('session_id', id).is('removed_at', null),
     supabase.from('fs_import_runs')
       .select('file_name, sheet_name, row_count, success_count, created_at')
       .eq('session_id', id).order('created_at', { ascending: false }).limit(1).maybeSingle(),
@@ -79,7 +79,7 @@ export default async function FsSessionDetailPage({
   let iErr: string | null = null
   if (tab === 'result') {
     let iq = supabase.from('fs_session_items')
-      .select('id, product_id, product_name, status, dim_length_mm, dim_width_mm, dim_height_mm, resubmit_note', { count: 'exact' })
+      .select('id, product_id, product_name, status, dim_length_mm, dim_width_mm, dim_height_mm, resubmit_note, approved_at', { count: 'exact' })
       .eq('session_id', id).is('removed_at', null)
     if (statusFilter) iq = iq.eq('status', statusFilter)
     if (q) {
@@ -99,7 +99,7 @@ export default async function FsSessionDetailPage({
       ...it,
       photos: (photos ?? []).filter((p) => p.item_id === it.id)
         .map((p) => ({ box_key: p.box_key, storage_path: p.storage_path, status: p.status, resubmit_note: p.resubmit_note })),
-    }))
+    })) as FsReviewItem[]
   }
 
   const queryError = cErr?.message ?? rErr?.message ?? pErr?.message ?? iErr ?? null
@@ -110,16 +110,17 @@ export default async function FsSessionDetailPage({
   const creator = byId.get(session.created_by)
   const claimer = session.claimed_by ? byId.get(session.claimed_by) : null
 
-  const rows = statusRows ?? []
+  const rows = (statusRows ?? []) as { status: string; approved_at: string | null }[]
   const total = rows.length
   const done = rows.filter((r) => r.status === 'done').length
   const redo = rows.filter((r) => r.status === 'redo').length
   const pending = rows.filter((r) => r.status === 'pending').length
+  const approved = rows.filter((r) => r.approved_at != null).length
   const pct = total > 0 ? Math.round((done / total) * 100) : 0
   const isActive = session.status === 'active'
-  // Session can be finalised only when every item is done (no pending/redo) —
-  // mirrors the DB guard in rpc_fs_close_session.
-  const canComplete = total > 0 && pending === 0 && redo === 0
+  // Session can be finalised only when every active item is done AND approved —
+  // mirrors the DB guard in rpc_fs_close_session (Batch E).
+  const canComplete = total > 0 && pending === 0 && redo === 0 && approved === total
 
   const meta = FS_SESSION_STATUS[session.status] ?? { label: session.status, cls: 'bg-muted text-muted-foreground' }
   const tabCls = (active: boolean) =>
@@ -156,6 +157,7 @@ export default async function FsSessionDetailPage({
         </div>
         {redo > 0 && <Badge className="bg-amber-100 text-amber-700 text-[10px]">Cần làm lại {redo}</Badge>}
         {pending > 0 && <Badge className="bg-muted text-muted-foreground text-[10px]">Chưa xử lý {pending}</Badge>}
+        <Badge className="bg-green-100 text-green-700 text-[10px]">Đã duyệt {approved}/{total}</Badge>
       </div>
 
       <div className="inline-flex rounded-lg border bg-muted/40 p-1 gap-1">

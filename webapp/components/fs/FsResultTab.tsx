@@ -3,12 +3,12 @@
 import { Fragment, useState, useTransition } from 'react'
 import { useRouter, usePathname, useSearchParams } from 'next/navigation'
 import { toast } from 'sonner'
-import { resubmitFsItems, resubmitFsBox, closeFsSession, removeFsItem, updateFsItem, getFsItemEvents } from '@/app/actions/fsSessions'
+import { resubmitFsItems, resubmitFsBox, closeFsSession, removeFsItem, updateFsItem, getFsItemEvents, approveFsItem } from '@/app/actions/fsSessions'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { FS_PHOTO_BOXES, FS_ITEM_STATUS } from '@/lib/fs/constants'
-import { ChevronDown, Search, RotateCcw, CheckCircle2, XCircle, ImageOff, Trash2, Pencil, History, Loader2, X } from 'lucide-react'
+import { ChevronDown, Search, RotateCcw, CheckCircle2, XCircle, ImageOff, Trash2, Pencil, History, Loader2, X, BadgeCheck } from 'lucide-react'
 
 const FS_EVENT_LABEL: Record<string, string> = {
   session_created: 'Tạo phiên', session_claimed: 'Nhận xử lý', session_released: 'Bàn giao/Gỡ',
@@ -16,6 +16,7 @@ const FS_EVENT_LABEL: Record<string, string> = {
   item_submitted: 'Hoàn thành sản phẩm', item_resubmit_requested: 'Yêu cầu làm lại (cả SP)',
   box_resubmit_requested: 'Yêu cầu chụp lại box', box_reuploaded: 'Tải lại ảnh box',
   gcs_delete_failed: 'Lỗi xoá ảnh cũ', item_removed: 'Xoá khỏi phiên', item_edited: 'Chỉnh sửa',
+  item_approved: 'Đã duyệt',
 }
 const fmtDT = (iso: string) => { const d = new Date(Date.parse(iso) + 7 * 3600_000); const p = (n: number) => String(n).padStart(2, '0'); return `${p(d.getUTCDate())}/${p(d.getUTCMonth() + 1)} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}` }
 
@@ -23,7 +24,7 @@ interface Photo { box_key: number; storage_path: string; status: string; resubmi
 export interface FsReviewItem {
   id: string; product_id: string; product_name: string; status: string
   dim_length_mm: number | null; dim_width_mm: number | null; dim_height_mm: number | null
-  resubmit_note: string | null; photos: Photo[]
+  resubmit_note: string | null; approved_at: string | null; photos: Photo[]
 }
 
 const dims = (l: number | null, w: number | null, h: number | null) =>
@@ -212,6 +213,15 @@ export function FsResultTab({
     })
   }
 
+  function doApprove(itemId: string) {
+    startTransition(async () => {
+      const r = await approveFsItem(sessionId, itemId)
+      if (r.error) { toast.error(r.error); return }
+      toast.success('Đã duyệt sản phẩm')
+      router.refresh()
+    })
+  }
+
   function doClose(next: 'completed' | 'cancelled') {
     const msg = next === 'completed' ? 'Chốt phiên (đánh dấu hoàn thành)?' : 'Huỷ phiên này?'
     if (!window.confirm(msg)) return
@@ -241,7 +251,7 @@ export function FsResultTab({
           <Button size="sm" variant="ghost" className="gap-1.5 text-red-600 hover:text-red-700" onClick={() => doClose('cancelled')} disabled={pending}>
             <XCircle className="h-4 w-4" /> Huỷ phiên
           </Button>
-          {!canComplete && <span className="text-xs text-muted-foreground">Chỉ chốt khi toàn bộ sản phẩm đã hoàn thành.</span>}
+          {!canComplete && <span className="text-xs text-muted-foreground">Chỉ chốt khi toàn bộ sản phẩm đã hoàn thành và được duyệt.</span>}
         </div>
       )}
 
@@ -325,9 +335,17 @@ export function FsResultTab({
                       {it.resubmit_note && <div className="text-xs text-amber-700 mt-0.5">Ghi chú làm lại: {it.resubmit_note}</div>}
                     </td>
                     <td className="px-3 py-2.5 text-muted-foreground whitespace-nowrap">{dims(it.dim_length_mm, it.dim_width_mm, it.dim_height_mm)}</td>
-                    <td className="px-3 py-2.5"><Badge className={cn('text-[10px]', im.cls)}>{im.label}</Badge></td>
+                    <td className="px-3 py-2.5">
+                      <div className="flex flex-wrap items-center gap-1">
+                        <Badge className={cn('text-[10px]', im.cls)}>{im.label}</Badge>
+                        {it.approved_at && <Badge className="bg-green-100 text-green-700 text-[10px] gap-0.5"><BadgeCheck className="h-3 w-3" />Đã duyệt</Badge>}
+                      </div>
+                    </td>
                     <td className="px-3 py-2.5">
                       <div className="flex items-center gap-0.5 justify-end">
+                        {isActive && it.status === 'done' && !it.approved_at && (
+                          <button type="button" aria-label="Đã duyệt" onClick={() => doApprove(it.id)} disabled={pending} className="p-1 rounded hover:bg-green-50 text-green-600"><BadgeCheck className="h-3.5 w-3.5" /></button>
+                        )}
                         {isActive && (
                           <>
                             <button type="button" aria-label="Chỉnh sửa" onClick={() => setEditing(it)} className="p-1 rounded hover:bg-muted text-muted-foreground"><Pencil className="h-3.5 w-3.5" /></button>

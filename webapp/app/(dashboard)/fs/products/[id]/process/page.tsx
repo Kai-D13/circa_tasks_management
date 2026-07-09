@@ -37,7 +37,7 @@ export default async function FsProcessPage({ params }: { params: Promise<{ id: 
 
   const [{ data: items, error: iErr }, { data: claimer }] = await Promise.all([
     supabase.from('fs_session_items')
-      .select('id, product_id, product_name, status, dim_length_mm, dim_width_mm, dim_height_mm, resubmit_note')
+      .select('id, product_id, product_name, status, dim_length_mm, dim_width_mm, dim_height_mm, resubmit_note, approved_at')
       .eq('session_id', id).is('removed_at', null).order('created_at', { ascending: true }),
     session.claimed_by
       ? supabase.from('users').select('full_name, email').eq('id', session.claimed_by).maybeSingle()
