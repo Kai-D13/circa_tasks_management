@@ -1,13 +1,14 @@
 import { excelSerialToISO } from '@/lib/targets/parse'
 import { DHC_PATTERN } from '@/lib/prescriptions/constants'
 
-// Parser for the chronic-Rx order Sheet (Circa_prescription / order_data):
+// Parser for the order Sheet (Circa_prescription / order_data):
 //   order_code · created_date · pos_code · pos_name · phone_number ·
 //   customer_name · products
-// Feeds /api/cron/pull-prescription-orders. Header-tolerant (canon), and the
-// date parser is DAY-FIRST: this Sheet renders created_date as d/m/yyyy (VN).
-// Do NOT reuse lib/referrals/parse.ts dateStr here — it resolves the ambiguous
-// ≤12/≤12 case as MM/DD (BigQuery convention) and would read 5/6/2026 as May 6.
+// Feeds /api/cron/pull-prescription-orders. Header-tolerant (canon). BI now
+// exports created_date as ISO (yyyy-mm-dd) — the normal path; a VN day-first
+// d/m/yyyy cell is still accepted as a fallback. Do NOT reuse lib/referrals/
+// parse.ts dateStr here — it resolves the ambiguous ≤12/≤12 case as MM/DD and
+// would read 5/6/2026 as May 6.
 
 export const MAX_ORDER_ROWS = 20000
 
@@ -21,28 +22,30 @@ export interface OrderRow {
   products_raw:  string | null
 }
 
-// d/m/yyyy (VN, day-first) → ISO. Also accepts ISO passthrough and Excel/Sheets
-// serial numbers. A month > 12 (i.e. a US M/D sheet snuck in) returns null —
-// dropping is safer than misparsing on a customer-facing reminder date.
+// Round-trip guard: only return the ISO string if (y,m,d) is a real calendar
+// date, so an impossible '2026-02-31' (from any branch) becomes null rather than
+// a nonsense customer-facing reminder.
+function isoIfValid(y: number, m: number, d: number): string | null {
+  if (m < 1 || m > 12 || d < 1 || d > 31) return null
+  const dt = new Date(Date.UTC(y, m - 1, d))
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null
+  return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
+}
+
+// created_date → ISO. ISO yyyy-m-d is the normal path (BI exports it, 1–2 digit
+// month/day tolerated, optional time suffix); VN day-first d/m/yyyy is a fallback
+// (month > 12 → null, never MM/DD). Also accepts Date objects and Excel/Sheets
+// serials. Every path is round-trip-validated — dropping is safer than misparsing
+// on a customer-facing reminder date.
 export function parseVnSlashDate(v: unknown): string | null {
   if (v === null || v === undefined || v === '') return null
-  if (v instanceof Date) return v.toISOString().slice(0, 10)
+  if (v instanceof Date) return Number.isNaN(v.getTime()) ? null : v.toISOString().slice(0, 10)
   if (typeof v === 'number') return excelSerialToISO(v)
   const s = String(v).trim()
-  const iso = s.match(/^(\d{4}-\d{2}-\d{2})/)
-  if (iso) return iso[1]
+  const iso = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ].*)?$/)
+  if (iso) return isoIfValid(parseInt(iso[1], 10), parseInt(iso[2], 10), parseInt(iso[3], 10))
   const slash = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/)
-  if (slash) {
-    const d = parseInt(slash[1], 10)
-    const m = parseInt(slash[2], 10)
-    const y = parseInt(slash[3], 10)
-    if (m < 1 || m > 12 || d < 1 || d > 31) return null
-    // Round-trip guard: reject impossible calendar dates (31/2, 30/2, 31/4…)
-    // so a bad Sheet cell can't produce '2026-02-31' and a nonsense reminder.
-    const dt = new Date(Date.UTC(y, m - 1, d))
-    if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== m - 1 || dt.getUTCDate() !== d) return null
-    return `${slash[3]}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`
-  }
+  if (slash) return isoIfValid(parseInt(slash[3], 10), parseInt(slash[2], 10), parseInt(slash[1], 10))
   return null
 }
 
