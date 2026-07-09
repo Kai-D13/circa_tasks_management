@@ -11,6 +11,7 @@ import { UserFilters } from '@/components/users/UserFilters'
 import { Pagination } from '@/components/common/Pagination'
 import { formatDate } from '@/lib/dateUtils'
 import { isSuperAdminEmail, getSmStoreIds } from '@/lib/authz'
+import { canSeeFs } from '@/lib/fs/access'
 import { deptBadgeClass, type Department } from '@/lib/departments'
 import { cn } from '@/lib/utils'
 import { AlertTriangle, ShieldCheck, Store as StoreIcon, UserRound, Users as UsersIcon } from 'lucide-react'
@@ -69,12 +70,14 @@ export default async function UsersPage({
   if (!user) redirect('/login')
 
   const { data: profile } = await supabase
-    .from('users').select('role').eq('id', user.id).single()
+    .from('users').select('role, department_id').eq('id', user.id).single()
 
   const isSm = profile?.role === 'sm'
   if (profile?.role !== 'admin' && !isSm) redirect('/dashboard')
 
   const isSuper = isSuperAdminEmail(user.email)
+  // OS/FS visibility (RBAC): only super admin / Policy-dept admin see FS-store users.
+  const showFs = canSeeFs({ role: profile?.role, department_id: profile?.department_id, email: user.email })
 
   // SM: pre-load assigned store IDs for filtering
   const smStoreIds = isSm ? await getSmStoreIds(supabase, user.id) : []
@@ -117,6 +120,15 @@ export default async function UsersPage({
     if (safe) query = query.or(`full_name.ilike.%${safe}%,email.ilike.%${safe}%`)
   }
 
+  // Exclude FS-store users for non-Policy admins (null-store admins stay visible).
+  // SM is already scoped to its OS stores, so this only applies to the admin branch.
+  let fsStoreIds: string[] = []
+  if (!isSm && !showFs) {
+    const { data: fsStores } = await supabase.from('stores').select('id').eq('store_type', 'fs')
+    fsStoreIds = (fsStores ?? []).map((s) => s.id)
+    if (fsStoreIds.length) query = query.not('store_id', 'in', `(${fsStoreIds.join(',')})`)
+  }
+
   // allProfiles: one lightweight pass (role + department per user) powers the
   // stat cards AND the department member counts — no per-card count queries.
   // limit(2000) is 10x+ the current ~150-account fleet; revisit (switch to
@@ -130,8 +142,8 @@ export default async function UsersPage({
       ? Promise.resolve({ data: [] as Department[] })
       : supabase.from('departments').select('id, name, color').order('name'),
     isSm
-      ? Promise.resolve({ data: [] as { role: string; department_id: string | null }[] })
-      : supabase.from('users').select('role, department_id').limit(2000),
+      ? Promise.resolve({ data: [] as { role: string; department_id: string | null; store_id: string | null }[] })
+      : supabase.from('users').select('role, department_id, store_id').limit(2000),
   ])
 
   const totalRows  = count ?? 0
@@ -157,13 +169,18 @@ export default async function UsersPage({
     return `/users${qs ? `?${qs}` : ''}`
   }
 
-  const roleCounts = (allProfiles ?? []).reduce<Record<string, number>>((acc, p) => {
+  // Stat cards mirror the visible list — a non-Policy admin's counts exclude FS-store
+  // users (fsStoreIds is empty for super/Policy admins → counts stay org-wide).
+  const visibleProfiles = fsStoreIds.length
+    ? (allProfiles ?? []).filter((p) => !p.store_id || !fsStoreIds.includes(p.store_id))
+    : (allProfiles ?? [])
+  const roleCounts = visibleProfiles.reduce<Record<string, number>>((acc, p) => {
     acc[p.role] = (acc[p.role] ?? 0) + 1
     return acc
   }, {})
-  const totalUsers = (allProfiles ?? []).length
+  const totalUsers = visibleProfiles.length
 
-  const deptMemberCounts = (allProfiles ?? []).reduce<Record<string, number>>((acc, p) => {
+  const deptMemberCounts = visibleProfiles.reduce<Record<string, number>>((acc, p) => {
     if (p.department_id) acc[p.department_id] = (acc[p.department_id] ?? 0) + 1
     return acc
   }, {})
