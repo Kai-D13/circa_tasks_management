@@ -149,7 +149,7 @@ export async function GET(request: NextRequest) {
           // is never revisited and its reminder stays null. Keep it 'pending'
           // ("Chờ dữ liệu đơn") so the next cron retries when the Sheet fills in.
           patch.order_sync_status = 'pending'
-          rowErrors.push({ row: 0, error: `Toa mạn tính ${code}: thiếu/không đọc được created_date — chờ dữ liệu đơn` })
+          rowErrors.push({ row: 0, error: `Toa ${code}: thiếu/không đọc được created_date — chờ dữ liệu đơn` })
         }
         const { error: upErr } = await supabaseAdmin
           .from('prescription_submissions').update(patch).eq('id', sub.id)

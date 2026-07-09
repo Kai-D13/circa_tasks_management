@@ -52,7 +52,7 @@ export async function submitPrescription(
   const isChronic = options?.isChronic === true
   const daysSupply = isChronic ? Math.floor(Number(options?.daysSupply)) : null
   if (isChronic && (!Number.isFinite(daysSupply as number) || (daysSupply as number) <= 0))
-    return { error: 'Toa mạn tính cần số ngày dùng thuốc (lớn hơn 0)' }
+    return { error: 'Cần nhập số ngày dùng thuốc (lớn hơn 0)' }
 
   // Validate images server-side — don't trust client metadata/path
   if (images.length < 1 || images.length > PRESCRIPTION_MAX_IMAGES)
@@ -292,7 +292,7 @@ export async function submitPrescriptionCare(
     (me.role === 'store_manager' && sub.store_id === me.store_id) ||
     (me.role === 'staff' && sub.submitted_by === user.id)
   if (!canCare) return { error: 'Bạn không có quyền chăm sóc toa thuốc này' }
-  if (!sub.is_chronic) return { error: 'Toa này không phải toa mạn tính' }
+  if (!sub.is_chronic) return { error: 'Toa này chưa có ngày dùng để theo dõi' }
   if (sub.care_status === 'done') return { error: 'Toa này đã được chăm sóc' }
 
   // Evidence photos — required; path-integrity guard mirrors submitPrescription
