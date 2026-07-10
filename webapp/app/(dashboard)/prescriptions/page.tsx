@@ -36,8 +36,9 @@ export default async function PrescriptionsPage({
 
   // Staff hit this list on mobile hot paths: smaller page, no exact count, and a
   // lighter select (drop the per-row prescription_images embed — the "Ảnh" column is
-  // hidden for staff). The submitted_by filter mirrors the RLS policy ps_select_staff
-  // (submitted_by = auth.uid()) so the planner can use the submitted_by index.
+  // hidden for staff). Since mig 085 staff READ every store's toa (cross-store
+  // lookup, stakeholder 2026-07-10) — the list/search is company-wide; only the
+  // care workflow (reminder strip + care_state filters) stays scoped to their own.
   const pageSize = isStaff ? 12 : PAGE_SIZE   // lighter mobile page (stakeholder)
   const page = Math.max(1, parseInt(params.page ?? '1', 10))
   const from = (page - 1) * pageSize
@@ -53,10 +54,9 @@ export default async function PrescriptionsPage({
     .order('submitted_at', { ascending: false })
     .range(from, to)
 
-  if (isStaff)          query = query.eq('submitted_by', user.id)
   // Order-sync status (the primary status now: Sheet-fed order data, mig 073).
-  // Available to staff too (they reach it via the reminder strip); RLS already
-  // scopes staff to their own rows. The legacy product-sync `status` is gone.
+  // Available to staff too (they reach it via the reminder strip). The legacy
+  // product-sync `status` is gone.
   if (params.order_sync && ['pending', 'synced', 'error'].includes(params.order_sync))
     query = query.eq('order_sync_status', params.order_sync)
   if (params.store_id)  query = query.eq('store_id', params.store_id)
@@ -76,6 +76,11 @@ export default async function PrescriptionsPage({
   } else if (careState === 'done') {
     query = query.eq('is_chronic', true).eq('care_status', 'done')
   }
+  // Workflow filters are OWN work for staff (they can only care for / DHC-fix
+  // their own toa) — matching the reminder-strip counts — even though plain
+  // browsing/search is company-wide since mig 085. order_sync=error is only
+  // reachable for staff via the strip.
+  if (isStaff && (careState || params.order_sync === 'error')) query = query.eq('submitted_by', user.id)
 
   const [{ data: submissions, count, error: listErr }, { data: stores }] = await Promise.all([
     query,
@@ -92,11 +97,15 @@ export default async function PrescriptionsPage({
   const rows         = submissions ?? []
   const pageRows     = isStaff ? rows.slice(0, pageSize) : rows
   const hasNextStaff = isStaff && rows.length > pageSize
-  // Reminder counts (RLS-scoped: staff = own, SM = store, admin = all). Head
-  // counts only, no rows — cheap enough for the mobile hot path.
+  // Reminder counts — actionable work, so staff are scoped to their OWN toa
+  // (they can only care for / fix their own; mig 085 made read company-wide).
+  // Store managers stay store-scoped by RLS; admin = all. Head counts only.
   // dueCount = chronic customers whose refill reminder has arrived (today >=
   // reminder_date) and haven't been cared for. errorCount = DHC didn't match.
-  const base = () => supabase.from('prescription_submissions').select('id', { count: 'exact', head: true })
+  const base = () => {
+    const q = supabase.from('prescription_submissions').select('id', { count: 'exact', head: true })
+    return isStaff ? q.eq('submitted_by', user.id) : q
+  }
   const [{ count: dueCount, error: dueErr }, { count: errCount, error: errErr }] = await Promise.all([
     base().eq('is_chronic', true).eq('order_sync_status', 'synced').eq('care_status', 'none').lte('reminder_date', vnTodayISO),
     base().eq('order_sync_status', 'error'),
@@ -345,7 +354,7 @@ export default async function PrescriptionsPage({
                       <p className="text-xs text-muted-foreground">
                         {s.order_created_at ? `Bán ${formatDate(s.order_created_at)}` : 'Chờ dữ liệu đơn'}
                         {s.expected_refill_date ? ` · Hết thuốc ${formatDate(s.expected_refill_date)}` : ''}
-                        {!isStaff && storeName ? ` · ${storeName}` : ''}
+                        {storeName ? ` · ${storeName}` : ''}
                       </p>
                       {careState?.key === 'due' && (
                         <p className="text-xs font-medium text-primary">Chăm sóc khách ngay →</p>
@@ -353,7 +362,7 @@ export default async function PrescriptionsPage({
                     </div>
                   ) : (
                     <p className="mt-1 text-xs text-muted-foreground">
-                      {!isStaff && storeName ? `${storeName} · ` : ''}{formatDateTime(s.submitted_at)}
+                      {storeName ? `${storeName} · ` : ''}{formatDateTime(s.submitted_at)}
                     </p>
                   )}
                 </Link>
@@ -361,7 +370,7 @@ export default async function PrescriptionsPage({
             })}
             {pageRows.length === 0 && !listErr && (
               <p className="text-center text-sm text-muted-foreground py-10">
-                {isStaff ? 'Bạn chưa nộp toa thuốc nào' : 'Không tìm thấy toa thuốc nào'}
+                Không tìm thấy toa thuốc nào
               </p>
             )}
           </div>
@@ -371,7 +380,7 @@ export default async function PrescriptionsPage({
             <TableHeader>
               <TableRow>
                 <TableHead>Mã DHC</TableHead>
-                {!isStaff && <TableHead>Cửa hàng</TableHead>}
+                <TableHead>Cửa hàng</TableHead>
                 {isAdmin  && <TableHead>Dược sĩ</TableHead>}
                 <TableHead>Ngày nộp</TableHead>
                 {!isStaff && <TableHead>Ảnh</TableHead>}
@@ -387,11 +396,9 @@ export default async function PrescriptionsPage({
                       {s.order_code}
                     </Link>
                   </TableCell>
-                  {!isStaff && (
-                    <TableCell className="text-sm text-muted-foreground">
-                      {(s.stores as unknown as { name: string } | null)?.name ?? '—'}
-                    </TableCell>
-                  )}
+                  <TableCell className="text-sm text-muted-foreground">
+                    {(s.stores as unknown as { name: string } | null)?.name ?? '—'}
+                  </TableCell>
                   {isAdmin && (
                     <TableCell className="text-sm text-muted-foreground">
                       {(s.submitter as unknown as { full_name: string } | null)?.full_name ?? '—'}
@@ -424,7 +431,7 @@ export default async function PrescriptionsPage({
               {(submissions ?? []).length === 0 && !listErr && (
                 <TableRow>
                   <TableCell colSpan={7} className="text-center text-muted-foreground py-10">
-                    {isStaff ? 'Bạn chưa nộp toa thuốc nào' : 'Không tìm thấy toa thuốc nào'}
+                    Không tìm thấy toa thuốc nào
                   </TableCell>
                 </TableRow>
               )}
