@@ -29,8 +29,9 @@ export async function GET(request: NextRequest) {
   if (p.get('order_sync') && ['pending', 'synced', 'error'].includes(p.get('order_sync') as string))
     query = query.eq('order_sync_status', p.get('order_sync') as string)
   if (p.get('store_id'))  query = query.eq('store_id', p.get('store_id') as string)
-  // Same fuzzy search as the list (shared helper, mig 086) so the export
-  // matches the screen exactly.
+  // Same fuzzy search as the list (shared helper, mig 086) — the export
+  // contains the SAME ROWS as the screen. Ordering differs by design: the
+  // screen ranks by relevance, a spreadsheet keeps submitted_at desc.
   const qTrim = (p.get('q') ?? '').trim().slice(0, 100)
   if (qTrim) {
     const hits = await searchPrescriptionIds(supabase, qTrim, parseSearchBy(p.get('search_by')), 500)

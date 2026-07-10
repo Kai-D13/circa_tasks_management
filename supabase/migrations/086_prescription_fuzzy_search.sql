@@ -67,8 +67,9 @@ AS $$
       ))
       -- product_id — EXACT token "<id> -" (an identifier is never fuzzy);
       -- boundary = start or any non-digit, so '1535' can't match '91535 - …'
+      -- ([[:space:]] over \s — POSIX class, review P2)
       OR (c.nby IN ('all', 'product') AND c.is_pid AND s.order_products_raw IS NOT NULL
-          AND s.order_products_raw ~ ('(^|[^0-9])' || c.nq || '\s*-'))
+          AND s.order_products_raw ~ ('(^|[^0-9])' || c.nq || '[[:space:]]*-'))
       -- product NAME — fuzzy for text queries (unaccented substring or trigram)
       OR (c.nby IN ('all', 'product') AND c.has_alpha AND NOT c.is_dhc
           AND s.order_products_raw IS NOT NULL AND (
@@ -87,7 +88,7 @@ AS $$
   ORDER BY GREATEST(
       -- exact product-id token is the strongest signal
       CASE WHEN c.nby IN ('all', 'product') AND c.is_pid AND s.order_products_raw IS NOT NULL
-                AND s.order_products_raw ~ ('(^|[^0-9])' || c.nq || '\s*-')
+                AND s.order_products_raw ~ ('(^|[^0-9])' || c.nq || '[[:space:]]*-')
            THEN 1.0 ELSE 0 END,
       -- a DHC text/digit hit outranks fuzzy text matches
       CASE WHEN c.nby IN ('all', 'order') AND (c.is_dhc OR NOT c.has_alpha) AND (
