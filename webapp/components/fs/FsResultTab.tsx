@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { cn } from '@/lib/utils'
 import { FS_PHOTO_BOXES, FS_ITEM_STATUS } from '@/lib/fs/constants'
-import { ChevronDown, Search, RotateCcw, CheckCircle2, XCircle, ImageOff, Trash2, Pencil, History, Loader2, X, BadgeCheck } from 'lucide-react'
+import { ChevronDown, Search, RotateCcw, CheckCircle2, XCircle, ImageOff, Trash2, Pencil, History, Loader2, X, CircleCheck } from 'lucide-react'
 
 const FS_EVENT_LABEL: Record<string, string> = {
   session_created: 'Tạo phiên', session_claimed: 'Nhận xử lý', session_released: 'Bàn giao/Gỡ',
@@ -51,6 +51,38 @@ function NoteModal({ title, placeholder = 'Lý do yêu cầu làm lại (bắt b
           <Button size="sm" variant="outline" onClick={onClose} disabled={pending}>Huỷ</Button>
           <Button size="sm" onClick={() => onConfirm(note.trim())} disabled={pending || !note.trim()}>
             {pending ? 'Đang gửi…' : confirmLabel}
+          </Button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function ApproveConfirmModal({ open, pending, onConfirm, onClose }: {
+  open: boolean; pending: boolean; onConfirm: () => void; onClose: () => void
+}) {
+  if (!open) return null
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+      <div className="w-full max-w-sm overflow-hidden rounded-xl bg-background shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div className="bg-secondary px-4 py-3 border-b border-primary/15">
+          <div className="flex items-center gap-2">
+            <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-primary text-primary-foreground">
+              <CircleCheck className="h-5 w-5" />
+            </span>
+            <div>
+              <h3 className="font-semibold text-sm">Duyệt kết quả sản phẩm?</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">Bạn có muốn duyệt kết quả sản phẩm này?</p>
+            </div>
+          </div>
+        </div>
+        <div className="p-4 text-sm text-muted-foreground">
+          Sản phẩm sau khi duyệt sẽ được đánh dấu để các admin khác không cần kiểm tra lại.
+        </div>
+        <div className="flex justify-end gap-2 border-t bg-muted/40 px-4 py-3">
+          <Button size="sm" variant="outline" onClick={onClose} disabled={pending}>Không</Button>
+          <Button size="sm" onClick={onConfirm} disabled={pending} className="gap-1.5">
+            <CircleCheck className="h-4 w-4" /> {pending ? 'Đang duyệt…' : 'Có, duyệt'}
           </Button>
         </div>
       </div>
@@ -152,6 +184,7 @@ export function FsResultTab({
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   // Active note modal: resubmit (bulk/item/box) or remove-item.
   const [modal, setModal] = useState<null | { kind: 'bulk' } | { kind: 'item'; id: string } | { kind: 'box'; id: string; box: number } | { kind: 'remove'; id: string }>(null)
+  const [approveItemId, setApproveItemId] = useState<string | null>(null)
   const [editing, setEditing] = useState<FsReviewItem | null>(null)
   const [history, setHistory] = useState<{ productId: string } | null>(null)
   const [historyEvents, setHistoryEvents] = useState<FsEvent[] | null>(null)
@@ -213,15 +246,16 @@ export function FsResultTab({
     })
   }
 
-  function doApprove(itemId: string) {
+  function confirmApprove() {
+    if (!approveItemId) return
     startTransition(async () => {
-      const r = await approveFsItem(sessionId, itemId)
+      const r = await approveFsItem(sessionId, approveItemId)
       if (r.error) { toast.error(r.error); return }
       toast.success('Đã duyệt sản phẩm')
+      setApproveItemId(null)
       router.refresh()
     })
   }
-
   function doClose(next: 'completed' | 'cancelled') {
     const msg = next === 'completed' ? 'Chốt phiên (đánh dấu hoàn thành)?' : 'Huỷ phiên này?'
     if (!window.confirm(msg)) return
@@ -237,6 +271,7 @@ export function FsResultTab({
     { key: '', label: 'Tất cả' },
     { key: 'pending', label: 'Chưa xử lý' },
     { key: 'done', label: 'Hoàn thành' },
+    { key: 'approved', label: 'Đã duyệt' },
     { key: 'redo', label: 'Cần làm lại' },
   ]
 
@@ -338,13 +373,13 @@ export function FsResultTab({
                     <td className="px-3 py-2.5">
                       <div className="flex flex-wrap items-center gap-1">
                         <Badge className={cn('text-[10px]', im.cls)}>{im.label}</Badge>
-                        {it.approved_at && <Badge className="bg-green-100 text-green-700 text-[10px] gap-0.5"><BadgeCheck className="h-3 w-3" />Đã duyệt</Badge>}
+                        {it.approved_at && <Badge className="bg-green-100 text-green-700 text-[10px] gap-0.5"><CircleCheck className="h-3 w-3" />Đã duyệt</Badge>}
                       </div>
                     </td>
                     <td className="px-3 py-2.5">
                       <div className="flex items-center gap-0.5 justify-end">
                         {isActive && it.status === 'done' && !it.approved_at && (
-                          <button type="button" aria-label="Đã duyệt" onClick={() => doApprove(it.id)} disabled={pending} className="p-1 rounded hover:bg-green-50 text-green-600"><BadgeCheck className="h-3.5 w-3.5" /></button>
+                          <button type="button" aria-label="Đã duyệt" onClick={() => setApproveItemId(it.id)} disabled={pending} className="p-1 rounded hover:bg-green-50 text-green-600"><CircleCheck className="h-3.5 w-3.5" /></button>
                         )}
                         {isActive && (
                           <>
@@ -438,6 +473,7 @@ export function FsResultTab({
         onConfirm={confirmNote}
         onClose={() => setModal(null)}
       />
+      <ApproveConfirmModal open={approveItemId !== null} pending={pending} onConfirm={confirmApprove} onClose={() => setApproveItemId(null)} />
       {editing && (
         <EditItemModal item={editing} pending={pending} onSave={doEdit} onClose={() => setEditing(null)} />
       )}

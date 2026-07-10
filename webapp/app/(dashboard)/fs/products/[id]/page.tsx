@@ -39,7 +39,7 @@ export default async function FsSessionDetailPage({
   const sp = await searchParams
   const tab = sp.tab === 'config' ? 'config' : 'result'
   const q = (sp.q ?? '').trim()
-  const statusFilter = ['pending', 'done', 'redo'].includes(sp.status ?? '') ? (sp.status as string) : ''
+  const statusFilter = ['pending', 'done', 'redo', 'approved'].includes(sp.status ?? '') ? (sp.status as string) : ''
   const pageNum = Math.max(1, Number.parseInt(sp.page ?? '1', 10) || 1)
   const supabase = await createClient()
 
@@ -81,7 +81,8 @@ export default async function FsSessionDetailPage({
     let iq = supabase.from('fs_session_items')
       .select('id, product_id, product_name, status, dim_length_mm, dim_width_mm, dim_height_mm, resubmit_note, approved_at', { count: 'exact' })
       .eq('session_id', id).is('removed_at', null)
-    if (statusFilter) iq = iq.eq('status', statusFilter)
+    if (statusFilter === 'approved') iq = iq.not('approved_at', 'is', null)
+    else if (statusFilter) iq = iq.eq('status', statusFilter)
     if (q) {
       const safe = q.replace(/[,()*%]/g, '').slice(0, 80) // strip PostgREST filter metachars
       if (safe) iq = iq.or(`product_id.ilike.%${safe}%,product_name.ilike.%${safe}%`)

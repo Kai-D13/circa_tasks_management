@@ -10,26 +10,63 @@ import { ExportButton } from '@/components/common/ExportButton'
 import { cn } from '@/lib/utils'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
 import { deriveCareState, deriveOrderStatus } from '@/lib/prescriptions/careStatus'
-import { searchPrescriptionIds, parseSearchBy, NO_MATCH_ID } from '@/lib/prescriptions/search'
+import { searchPrescriptionsPage, parseSearchBy } from '@/lib/prescriptions/search'
 
 const PAGE_SIZE = 50
 
-// Short context window around the first literal match of q (case-insensitive)
-// — shown under a mobile card so a product/note search explains WHY the row
-// matched. Fuzzy-only matches (typo/diacritics) get no snippet — acceptable.
+// Short context window around the DB-selected match text. Migration 089 returns
+// match metadata so fuzzy product/note results explain WHY a row appeared.
+type SearchMatchMeta = {
+  order_products_raw?: string | null
+  notes?: string | null
+  match_source?: 'order' | 'product_id' | 'product' | 'note' | null
+  match_quality?: 'exact' | 'token' | 'fuzzy' | null
+  match_text?: string | null
+}
+
+const normalizeSearchText = (value: string) =>
+  value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+
+function compactMatchText(text: string, q: string) {
+  const t = text.replace(/\s+/g, ' ').trim()
+  const needle = normalizeSearchText(q.trim())
+  const haystack = normalizeSearchText(t)
+  const i = needle ? haystack.indexOf(needle) : -1
+  if (i < 0) return t.length > 140 ? t.slice(0, 137) + '...' : t
+  const start = Math.max(0, i - 24)
+  const end = Math.min(t.length, i + q.length + 72)
+  return (start > 0 ? '...' : '') + t.slice(start, end) + (end < t.length ? '...' : '')
+}
+
+function matchLabel(source?: SearchMatchMeta['match_source'], quality?: SearchMatchMeta['match_quality']) {
+  if (source === 'order') return 'Khớp mã DHC'
+  if (source === 'product_id') return 'Khớp mã SP'
+  if (source === 'product') return quality === 'fuzzy' ? 'Gợi ý gần đúng sản phẩm' : 'Khớp sản phẩm'
+  if (source === 'note') return quality === 'fuzzy' ? 'Gợi ý gần đúng ghi chú' : 'Khớp ghi chú'
+  return 'Khớp tìm kiếm'
+}
+
 function searchSnippet(
-  s: { order_products_raw?: string | null; notes?: string | null },
+  s: SearchMatchMeta,
   q: string,
   by: string,
 ): { label: string; text: string } | null {
+  if (s.match_text) {
+    return {
+      label: matchLabel(s.match_source, s.match_quality),
+      text: compactMatchText(s.match_text, q),
+    }
+  }
+
+  // Backward-compatible fallback when the app is running before migration 089.
   const find = (text: string | null | undefined) => {
     if (!text) return null
     const t = text.replace(/\s+/g, ' ').trim()
-    const i = t.toLowerCase().indexOf(q.toLowerCase())
+    const i = normalizeSearchText(t).indexOf(normalizeSearchText(q))
     if (i < 0) return null
     const start = Math.max(0, i - 20)
     const end = Math.min(t.length, i + q.length + 60)
-    return (start > 0 ? '…' : '') + t.slice(start, end) + (end < t.length ? '…' : '')
+    return (start > 0 ? '...' : '') + t.slice(start, end) + (end < t.length ? '...' : '')
   }
   if (by !== 'note') {
     const p = find(s.order_products_raw)
@@ -62,98 +99,101 @@ export default async function PrescriptionsPage({
   const isStaff = profile?.role === 'staff'
   const isAdmin = profile?.role === 'admin'
 
-  // Staff hit this list on mobile hot paths: smaller page, no exact count, and a
-  // lighter select (drop the per-row prescription_images embed — the "Ảnh" column is
-  // hidden for staff). Since mig 085 staff READ every store's toa (cross-store
-  // lookup, stakeholder 2026-07-10) — the list/search is company-wide; only the
-  // care workflow (reminder strip + care_state filters) stays scoped to their own.
+  // Staff hit this list on mobile hot paths: smaller page and no exact
+  // count. Since mig 088, OS staff browse/search all OS-store prescriptions;
+  // care/DHC-fix actions stay scoped to the submitter.
   const pageSize = isStaff ? 12 : PAGE_SIZE   // lighter mobile page (stakeholder)
   const page = Math.max(1, parseInt(params.page ?? '1', 10))
   const from = (page - 1) * pageSize
   const to   = isStaff ? from + pageSize : from + pageSize - 1   // staff: +1 row for next-page detection
 
-  // Smart search (mig 086): resolve BEFORE building the query. The RPC returns
-  // ids RELEVANCE-ordered (SECURITY INVOKER — the caller's RLS scopes them) and
-  // classifies the query itself: product_id exact / DHC partial / name+note
-  // fuzzy. While searching we fetch every matching row (≤500, the RPC cap),
-  // restore the RPC order app-side and paginate the sorted set — the closest
-  // match is always first (review P2). RPC missing → plain DHC ilike fallback.
+  // Smart search (mig 087/089): resolve a PAGE of rows on the DB side. The old
+  // ids -> .in(id, [...]) path can exceed PostgREST URL length for broad DHC
+  // searches, so search no longer sends UUID lists through the URL.
   const qTrim = (params.q ?? '').trim().slice(0, 100)
   const searchBy = parseSearchBy(params.search_by)
-  const searchHits = qTrim ? await searchPrescriptionIds(supabase, qTrim, searchBy, 500) : null
-  const searching = Array.isArray(searchHits)
-
-  // Build filtered query. Select must be a single string literal so PostgREST's
-  // compile-time parser keeps the row types. The prescription_images embed is a
-  // cheap indexed lookup once idx_pi_submission exists (migration 036); the "Ảnh"
-  // column is hidden for staff, so they don't render it. Staff skip the exact
-  // count; a search skips it too (≤500 fetched rows count themselves).
-  let query = supabase
-    .from('prescription_submissions')
-    .select('id, order_code, submitted_at, status, is_chronic, order_sync_status, care_status, reminder_date, expected_refill_date, order_created_at, customer_name, customer_phone, notes, order_products_raw, stores(name), submitter:users!submitted_by(full_name), prescription_images(id)', isStaff || searching ? undefined : { count: 'exact' })
-
-  if (searching) {
-    query = query.in('id', (searchHits as string[]).length ? (searchHits as string[]) : [NO_MATCH_ID]).limit(500)
-  } else {
-    // RPC unavailable (mig 086 not applied) → degrade to a DHC-only ilike so
-    // search never breaks the page.
-    if (qTrim) query = query.ilike('order_code', `%${qTrim}%`)
-    query = query.order('submitted_at', { ascending: false }).range(from, to)
-  }
-
-  // Order-sync status (the primary status now: Sheet-fed order data, mig 073).
-  // Available to staff too (they reach it via the reminder strip). The legacy
-  // product-sync `status` is gone.
-  if (params.order_sync && ['pending', 'synced', 'error'].includes(params.order_sync))
-    query = query.eq('order_sync_status', params.order_sync)
-  if (params.store_id)  query = query.eq('store_id', params.store_id)
-  if (params.date_from) query = query.gte('submitted_at', params.date_from + 'T00:00:00+07:00')
-  if (params.date_to)   query = query.lte('submitted_at', params.date_to   + 'T23:59:59+07:00')
-
-  // Days-supply care (mig 073). Type tab (care: Tất cả | Có ngày dùng) for everyone;
-  // care-workflow filter (care_state: due/done) — staff reach 'due' via the
-  // reminder strip. Order-sync states (pending/error) use the order_sync filter.
   const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
   const care = params.care === 'chronic' ? 'chronic' : undefined
   const careState = ['due', 'done'].includes(params.care_state ?? '') ? params.care_state : undefined
-  if (care === 'chronic') query = query.eq('is_chronic', true)
-  if (careState === 'due') {
-    query = query.eq('is_chronic', true).eq('order_sync_status', 'synced').eq('care_status', 'none').lte('reminder_date', vnTodayISO)
-  } else if (careState === 'done') {
-    query = query.eq('is_chronic', true).eq('care_status', 'done')
-  }
-  // Workflow filters are OWN work for staff (they can only care for / DHC-fix
-  // their own toa) — matching the reminder-strip counts — even though plain
-  // browsing/search is company-wide since mig 085. order_sync=error is only
-  // reachable for staff via the strip.
-  if (isStaff && (careState || params.order_sync === 'error')) query = query.eq('submitted_by', user.id)
+  const orderSync = params.order_sync && ['pending', 'synced', 'error'].includes(params.order_sync) ? params.order_sync : undefined
+  const ownerOnly = isStaff && (Boolean(careState) || orderSync === 'error')
+  const searchPage = qTrim
+    ? await searchPrescriptionsPage(supabase, {
+        q: qTrim,
+        by: searchBy,
+        limit: isStaff ? pageSize + 1 : pageSize,
+        offset: from,
+        orderSync,
+        storeId: params.store_id,
+        care,
+        careState,
+        ownerOnly,
+        today: vnTodayISO,
+        dateFrom: params.date_from ? params.date_from + 'T00:00:00+07:00' : null,
+        dateTo: params.date_to ? params.date_to + 'T23:59:59+07:00' : null,
+      })
+    : null
+  const usingSearchPage = searchPage !== null && searchPage !== 'fallback'
 
-  const [{ data: submissions, count, error: listErr }, { data: stores }] = await Promise.all([
-    query,
-    isAdmin
-      ? supabase.from('stores').select('id, name').eq('store_type', 'os').order('name')
-      : Promise.resolve({ data: [] }),
-  ])
+  let submissions: any[] | null = null
+  let count: number | null = null
+  let listErr: { message: string } | null = null
+
+  const storesPromise = isAdmin
+    ? supabase.from('stores').select('id, name').eq('store_type', 'os').order('name')
+    : Promise.resolve({ data: [] as { id: string; name: string }[] })
+
+  if (usingSearchPage) {
+    submissions = searchPage.rows.map((s) => ({
+      ...s,
+      stores: s.store_name ? { name: s.store_name } : null,
+      submitter: s.submitter_full_name ? { full_name: s.submitter_full_name } : null,
+      prescription_images: Array.from({ length: Number(s.image_count ?? 0) }, (_, i) => ({ id: `${s.id}:${i}` })),
+    }))
+    count = searchPage.total
+  } else {
+    // Non-search path stays on the existing PostgREST query. If mig 087 is not
+    // applied yet, search degrades to DHC-only ilike instead of breaking the page.
+    let query = supabase
+      .from('prescription_submissions')
+      .select('id, order_code, submitted_at, status, is_chronic, order_sync_status, care_status, reminder_date, expected_refill_date, order_created_at, customer_name, customer_phone, notes, order_products_raw, stores(name), submitter:users!submitted_by(full_name), prescription_images(id)', isStaff ? undefined : { count: 'exact' })
+
+    if (qTrim) query = query.ilike('order_code', `%${qTrim}%`)
+    query = query.order('submitted_at', { ascending: false }).range(from, to)
+
+    if (orderSync) query = query.eq('order_sync_status', orderSync)
+    if (params.store_id)  query = query.eq('store_id', params.store_id)
+    if (params.date_from) query = query.gte('submitted_at', params.date_from + 'T00:00:00+07:00')
+    if (params.date_to)   query = query.lte('submitted_at', params.date_to   + 'T23:59:59+07:00')
+
+    if (care === 'chronic') query = query.eq('is_chronic', true)
+    if (careState === 'due') {
+      query = query.eq('is_chronic', true).eq('order_sync_status', 'synced').eq('care_status', 'none').lte('reminder_date', vnTodayISO)
+    } else if (careState === 'done') {
+      query = query.eq('is_chronic', true).eq('care_status', 'done')
+    }
+    if (ownerOnly) query = query.eq('submitted_by', user.id)
+
+    const res = await query
+    submissions = res.data ?? []
+    count = res.count ?? null
+    listErr = res.error
+  }
+
+  const { data: stores } = await storesPromise
   // A failed query must NOT read as "no prescriptions" (missing migration/column
   // or RLS error) — surface it. Common cause here: migration 073 not yet run.
   if (listErr) console.error('[prescriptions] list query failed:', listErr.message)
 
-  // Searching: restore the RPC's relevance order (a .in() query loses it), then
-  // paginate the sorted set app-side (≤500 rows, exact total). Otherwise the
-  // usual SQL order/range applies; staff detect next-page via the +1 row.
-  const fetched = submissions ?? []
-  const rows = searching
-    ? (() => {
-        const pos = new Map((searchHits as string[]).map((sid, i) => [sid, i]))
-        return [...fetched].sort((a, b) => (pos.get(a.id) ?? 1e9) - (pos.get(b.id) ?? 1e9))
-      })()
-    : fetched
-  const totalRows    = searching ? rows.length : (count ?? 0)
+  // Search and non-search both return a ready page of rows. Staff fetch one
+  // extra row to detect "next" without an expensive exact count.
+  const rows = submissions ?? []
+  const totalRows    = count ?? 0
   const totalPages   = Math.max(1, Math.ceil(totalRows / pageSize))
-  const pageRows     = searching ? rows.slice(from, from + pageSize) : (isStaff ? rows.slice(0, pageSize) : rows)
-  const hasNextStaff = isStaff && (searching ? rows.length > from + pageSize : rows.length > pageSize)
-  // Reminder counts — actionable work, so staff are scoped to their OWN toa
-  // (they can only care for / fix their own; mig 085 made read company-wide).
+  const pageRows     = isStaff ? rows.slice(0, pageSize) : rows
+  const hasNextStaff = isStaff && rows.length > pageSize
+  // Reminder counts: actionable work, so staff are scoped to their OWN toa
+  // even though browse/search visibility spans all OS-store prescriptions.
   // Store managers stay store-scoped by RLS; admin = all. Head counts only.
   // dueCount = chronic customers whose refill reminder has arrived (today >=
   // reminder_date) and haven't been cared for. errorCount = DHC didn't match.
@@ -285,10 +325,10 @@ export default async function PrescriptionsPage({
           params still filter for backward compatibility, just no UI sets them. */}
       <div className="flex flex-wrap gap-2 items-end">
         <form method="GET" className="flex flex-wrap gap-2 items-end">
-          {/* Smart search (mig 086 r2) — ONE box, no mode chips (stakeholder:
+          {/* Smart search (mig 089) — ONE box, no mode chips (stakeholder:
               mobile must stay minimal). The RPC classifies the query itself:
               digits 3-8 → product_id EXACT + DHC partial; DHC… → DHC;
-              text → product name + note fuzzy (typo/diacritics tolerant). */}
+              text → product/note exact-token first, fuzzy only when high confidence. */}
           <div className="relative w-full sm:w-auto">
             <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
             <input
