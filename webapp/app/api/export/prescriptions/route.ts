@@ -4,6 +4,7 @@ import { xlsxResponse, stampVN, fmtVN } from '@/lib/export/xlsx'
 import { publicStorageUrl } from '@/lib/storage/publicUrl'
 import { PRESCRIPTION_BUCKET } from '@/lib/prescriptions/constants'
 import { deriveCareState, deriveOrderStatus } from '@/lib/prescriptions/careStatus'
+import { searchPrescriptionIds, parseSearchBy, NO_MATCH_ID } from '@/lib/prescriptions/search'
 
 const MAX_ROWS = 5000
 
@@ -28,7 +29,14 @@ export async function GET(request: NextRequest) {
   if (p.get('order_sync') && ['pending', 'synced', 'error'].includes(p.get('order_sync') as string))
     query = query.eq('order_sync_status', p.get('order_sync') as string)
   if (p.get('store_id'))  query = query.eq('store_id', p.get('store_id') as string)
-  if (p.get('q'))         query = query.ilike('order_code', `%${(p.get('q') as string).trim()}%`)
+  // Same fuzzy search as the list (shared helper, mig 086) so the export
+  // matches the screen exactly.
+  const qTrim = (p.get('q') ?? '').trim().slice(0, 100)
+  if (qTrim) {
+    const hits = await searchPrescriptionIds(supabase, qTrim, parseSearchBy(p.get('search_by')), 500)
+    if (hits === 'fallback') query = query.ilike('order_code', `%${qTrim}%`)
+    else query = query.in('id', hits.length ? hits : [NO_MATCH_ID])
+  }
   if (p.get('date_from')) query = query.gte('submitted_at', p.get('date_from') + 'T00:00:00+07:00')
   if (p.get('date_to'))   query = query.lte('submitted_at', p.get('date_to') + 'T23:59:59+07:00')
 

@@ -10,6 +10,7 @@ import { ExportButton } from '@/components/common/ExportButton'
 import { cn } from '@/lib/utils'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
 import { deriveCareState, deriveOrderStatus } from '@/lib/prescriptions/careStatus'
+import { searchPrescriptionIds, parseSearchBy, NO_MATCH_ID } from '@/lib/prescriptions/search'
 import { PrescriptionDateRangeFilter } from '@/components/prescriptions/PrescriptionDateRangeFilter'
 
 const PAGE_SIZE = 50
@@ -17,7 +18,7 @@ const PAGE_SIZE = 50
 export default async function PrescriptionsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ order_sync?: string; q?: string; store_id?: string; date_from?: string; date_to?: string; care?: string; care_state?: string; page?: string }>
+  searchParams: Promise<{ order_sync?: string; q?: string; search_by?: string; store_id?: string; date_from?: string; date_to?: string; care?: string; care_state?: string; page?: string }>
 }) {
   const params = await searchParams
   const supabase = await createClient()
@@ -60,7 +61,16 @@ export default async function PrescriptionsPage({
   if (params.order_sync && ['pending', 'synced', 'error'].includes(params.order_sync))
     query = query.eq('order_sync_status', params.order_sync)
   if (params.store_id)  query = query.eq('store_id', params.store_id)
-  if (params.q)         query = query.ilike('order_code', `%${params.q.trim()}%`)
+  // Fuzzy search (mig 086): DHC / product / note, typo + diacritics tolerant.
+  // The RPC is SECURITY INVOKER (session client) so the caller's RLS scopes the
+  // ids; feeding them back via .in keeps every other filter + count intact.
+  const qTrim = (params.q ?? '').trim().slice(0, 100)
+  const searchBy = parseSearchBy(params.search_by)
+  if (qTrim) {
+    const hits = await searchPrescriptionIds(supabase, qTrim, searchBy)
+    if (hits === 'fallback') query = query.ilike('order_code', `%${qTrim}%`)
+    else query = query.in('id', hits.length ? hits : [NO_MATCH_ID])
+  }
   if (params.date_from) query = query.gte('submitted_at', params.date_from + 'T00:00:00+07:00')
   if (params.date_to)   query = query.lte('submitted_at', params.date_to   + 'T23:59:59+07:00')
 
@@ -118,7 +128,7 @@ export default async function PrescriptionsPage({
 
   function buildUrl(patch: Record<string, string | undefined>) {
     const next = {
-      order_sync: params.order_sync, q: params.q, store_id: params.store_id,
+      order_sync: params.order_sync, q: params.q, search_by: params.search_by, store_id: params.store_id,
       date_from: params.date_from, date_to: params.date_to,
       care: params.care, care_state: params.care_state, page: params.page,
       ...patch,
@@ -230,18 +240,46 @@ export default async function PrescriptionsPage({
           filter submit preserves it via hidden inputs. */}
       <div className="flex flex-wrap gap-2 items-end">
         <form method="GET" className="flex flex-wrap gap-2 items-end">
-          {/* DHC search — 40px tall on mobile for touch, compact on desktop */}
-          <div className="relative w-full sm:w-auto">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-            <input
-              name="q"
-              type="text"
-              defaultValue={params.q ?? ''}
-              placeholder="Tìm mã DHC..."
-              aria-label="Tìm theo mã DHC"
-              className="pl-8 h-10 md:h-8 w-full sm:w-44 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
-            />
+          {/* Fuzzy search (mig 086) — one box + scope chips, not 4 inputs
+              (stakeholder: mobile must stay clean). 40px tall on mobile. */}
+          <div className="w-full sm:w-auto space-y-1.5">
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+              <input
+                name="q"
+                type="text"
+                defaultValue={params.q ?? ''}
+                placeholder="Tìm DHC, sản phẩm, ghi chú..."
+                aria-label="Tìm theo mã DHC, sản phẩm hoặc ghi chú"
+                className="pl-8 h-10 md:h-8 w-full sm:w-64 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
+              />
+            </div>
+            {/* Scope chips — links so a tap re-searches instantly (keeps the
+                submitted q); the hidden input keeps the chip on Enter-submit. */}
+            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Phạm vi tìm kiếm">
+              {([
+                { v: 'all',     label: 'Tất cả' },
+                { v: 'order',   label: 'DHC' },
+                { v: 'product', label: 'Sản phẩm' },
+                { v: 'note',    label: 'Ghi chú' },
+              ] as const).map((o) => (
+                <Link
+                  key={o.v}
+                  href={buildUrl({ search_by: o.v === 'all' ? undefined : o.v, page: undefined })}
+                  aria-current={searchBy === o.v ? 'true' : undefined}
+                  className={cn(
+                    'px-3 py-1 rounded-full border text-xs font-medium transition-colors',
+                    searchBy === o.v
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {o.label}
+                </Link>
+              ))}
+            </div>
           </div>
+          {searchBy !== 'all' && <input type="hidden" name="search_by" value={searchBy} />}
 
           {/* Store filter (admin only) */}
           {isAdmin && (
@@ -297,8 +335,8 @@ export default async function PrescriptionsPage({
 
         <PrescriptionDateRangeFilter />
 
-        {(params.q || params.store_id || params.date_from || params.date_to || params.order_sync || params.care_state) && (
-          <Link href={buildUrl({ q: undefined, store_id: undefined, date_from: undefined, date_to: undefined, order_sync: undefined, care_state: undefined, page: undefined })}
+        {(params.q || params.search_by || params.store_id || params.date_from || params.date_to || params.order_sync || params.care_state) && (
+          <Link href={buildUrl({ q: undefined, search_by: undefined, store_id: undefined, date_from: undefined, date_to: undefined, order_sync: undefined, care_state: undefined, page: undefined })}
             className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'h-10 md:h-8')}>
             Xoá lọc
           </Link>
