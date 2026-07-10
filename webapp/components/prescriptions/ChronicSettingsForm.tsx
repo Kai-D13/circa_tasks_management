@@ -40,7 +40,7 @@ export function ChronicSettingsForm({
   if (!open) {
     return (
       <Button size="sm" variant="outline" onClick={() => setOpen(true)}>
-        Thiết lập ngày dùng
+        Cập nhật ngày dùng
       </Button>
     )
   }

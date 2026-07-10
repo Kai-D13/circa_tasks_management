@@ -15,6 +15,34 @@ import { PrescriptionDateRangeFilter } from '@/components/prescriptions/Prescrip
 
 const PAGE_SIZE = 50
 
+// Short context window around the first literal match of q (case-insensitive)
+// — shown under a mobile card so a product/note search explains WHY the row
+// matched. Fuzzy-only matches (typo/diacritics) get no snippet — acceptable.
+function searchSnippet(
+  s: { order_products_raw?: string | null; notes?: string | null },
+  q: string,
+  by: string,
+): { label: string; text: string } | null {
+  const find = (text: string | null | undefined) => {
+    if (!text) return null
+    const t = text.replace(/\s+/g, ' ').trim()
+    const i = t.toLowerCase().indexOf(q.toLowerCase())
+    if (i < 0) return null
+    const start = Math.max(0, i - 20)
+    const end = Math.min(t.length, i + q.length + 60)
+    return (start > 0 ? '…' : '') + t.slice(start, end) + (end < t.length ? '…' : '')
+  }
+  if (by !== 'note') {
+    const p = find(s.order_products_raw)
+    if (p) return { label: 'Sản phẩm', text: p }
+  }
+  if (by !== 'product') {
+    const n = find(s.notes)
+    if (n) return { label: 'Ghi chú', text: n }
+  }
+  return null
+}
+
 export default async function PrescriptionsPage({
   searchParams,
 }: {
@@ -51,7 +79,7 @@ export default async function PrescriptionsPage({
   // column is hidden for staff, so they don't render it. Staff skip the exact count.
   let query = supabase
     .from('prescription_submissions')
-    .select('id, order_code, submitted_at, status, is_chronic, order_sync_status, care_status, reminder_date, expected_refill_date, order_created_at, customer_name, customer_phone, stores(name), submitter:users!submitted_by(full_name), prescription_images(id)', isStaff ? undefined : { count: 'exact' })
+    .select('id, order_code, submitted_at, status, is_chronic, order_sync_status, care_status, reminder_date, expected_refill_date, order_created_at, customer_name, customer_phone, notes, order_products_raw, stores(name), submitter:users!submitted_by(full_name), prescription_images(id)', isStaff ? undefined : { count: 'exact' })
     .order('submitted_at', { ascending: false })
     .range(from, to)
 
@@ -350,6 +378,7 @@ export default async function PrescriptionsPage({
           <div className="md:hidden">
             {pageRows.map((s) => {
               const storeName = (s.stores as unknown as { name: string } | null)?.name
+              const snippet = qTrim ? searchSnippet(s, qTrim, searchBy) : null
               const careState = deriveCareState(s, vnTodayISO)
               // 'upcoming' (before the reminder date) is NOT emphasized — the
               // reminder rule is "2 days before" = reminder_date, so only 'due'
@@ -399,8 +428,22 @@ export default async function PrescriptionsPage({
                       )}
                     </div>
                   ) : (
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      {storeName ? `${storeName} · ` : ''}{formatDateTime(s.submitted_at)}
+                    <div className="mt-1 space-y-0.5">
+                      {/* Synced customer info — the list is a lookup tool now (mig 085) */}
+                      {s.customer_name && (
+                        <p className="text-sm font-medium">{s.customer_name}
+                          {s.customer_phone && <span className="text-muted-foreground font-normal"> · {s.customer_phone}</span>}
+                        </p>
+                      )}
+                      <p className="text-xs text-muted-foreground">
+                        {storeName ? `${storeName} · ` : ''}{formatDateTime(s.submitted_at)}
+                      </p>
+                    </div>
+                  )}
+                  {/* Why this row matched the search (product/note context) */}
+                  {snippet && (
+                    <p className="mt-1 text-xs text-muted-foreground line-clamp-2">
+                      <span className="font-medium text-foreground">{snippet.label}: </span>{snippet.text}
                     </p>
                   )}
                 </Link>
