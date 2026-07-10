@@ -54,7 +54,7 @@ export async function GET(request: NextRequest) {
   const { data, error } = await query
   if (error) return NextResponse.json({ error: error.message }, { status: 500 })
   if ((data?.length ?? 0) > MAX_ROWS)
-    return NextResponse.json({ error: `Quá nhiều dòng (>${MAX_ROWS}). Vui lòng lọc theo khoảng ngày / cửa hàng rồi xuất lại.` }, { status: 400 })
+    return NextResponse.json({ error: `Quá nhiều dòng (>${MAX_ROWS}). Vui lòng lọc theo cửa hàng/trạng thái/từ khóa rồi xuất lại.` }, { status: 400 })
 
   const rows = (data ?? []).map((s) => {
     const imgs = (s.prescription_images as unknown as { storage_path: string }[] | null) ?? []

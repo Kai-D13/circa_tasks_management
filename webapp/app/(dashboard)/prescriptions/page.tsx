@@ -11,7 +11,6 @@ import { cn } from '@/lib/utils'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
 import { deriveCareState, deriveOrderStatus } from '@/lib/prescriptions/careStatus'
 import { searchPrescriptionIds, parseSearchBy, NO_MATCH_ID } from '@/lib/prescriptions/search'
-import { PrescriptionDateRangeFilter } from '@/components/prescriptions/PrescriptionDateRangeFilter'
 
 const PAGE_SIZE = 50
 
@@ -73,15 +72,34 @@ export default async function PrescriptionsPage({
   const from = (page - 1) * pageSize
   const to   = isStaff ? from + pageSize : from + pageSize - 1   // staff: +1 row for next-page detection
 
+  // Smart search (mig 086): resolve BEFORE building the query. The RPC returns
+  // ids RELEVANCE-ordered (SECURITY INVOKER — the caller's RLS scopes them) and
+  // classifies the query itself: product_id exact / DHC partial / name+note
+  // fuzzy. While searching we fetch every matching row (≤500, the RPC cap),
+  // restore the RPC order app-side and paginate the sorted set — the closest
+  // match is always first (review P2). RPC missing → plain DHC ilike fallback.
+  const qTrim = (params.q ?? '').trim().slice(0, 100)
+  const searchBy = parseSearchBy(params.search_by)
+  const searchHits = qTrim ? await searchPrescriptionIds(supabase, qTrim, searchBy, 500) : null
+  const searching = Array.isArray(searchHits)
+
   // Build filtered query. Select must be a single string literal so PostgREST's
   // compile-time parser keeps the row types. The prescription_images embed is a
   // cheap indexed lookup once idx_pi_submission exists (migration 036); the "Ảnh"
-  // column is hidden for staff, so they don't render it. Staff skip the exact count.
+  // column is hidden for staff, so they don't render it. Staff skip the exact
+  // count; a search skips it too (≤500 fetched rows count themselves).
   let query = supabase
     .from('prescription_submissions')
-    .select('id, order_code, submitted_at, status, is_chronic, order_sync_status, care_status, reminder_date, expected_refill_date, order_created_at, customer_name, customer_phone, notes, order_products_raw, stores(name), submitter:users!submitted_by(full_name), prescription_images(id)', isStaff ? undefined : { count: 'exact' })
-    .order('submitted_at', { ascending: false })
-    .range(from, to)
+    .select('id, order_code, submitted_at, status, is_chronic, order_sync_status, care_status, reminder_date, expected_refill_date, order_created_at, customer_name, customer_phone, notes, order_products_raw, stores(name), submitter:users!submitted_by(full_name), prescription_images(id)', isStaff || searching ? undefined : { count: 'exact' })
+
+  if (searching) {
+    query = query.in('id', (searchHits as string[]).length ? (searchHits as string[]) : [NO_MATCH_ID]).limit(500)
+  } else {
+    // RPC unavailable (mig 086 not applied) → degrade to a DHC-only ilike so
+    // search never breaks the page.
+    if (qTrim) query = query.ilike('order_code', `%${qTrim}%`)
+    query = query.order('submitted_at', { ascending: false }).range(from, to)
+  }
 
   // Order-sync status (the primary status now: Sheet-fed order data, mig 073).
   // Available to staff too (they reach it via the reminder strip). The legacy
@@ -89,16 +107,6 @@ export default async function PrescriptionsPage({
   if (params.order_sync && ['pending', 'synced', 'error'].includes(params.order_sync))
     query = query.eq('order_sync_status', params.order_sync)
   if (params.store_id)  query = query.eq('store_id', params.store_id)
-  // Fuzzy search (mig 086): DHC / product / note, typo + diacritics tolerant.
-  // The RPC is SECURITY INVOKER (session client) so the caller's RLS scopes the
-  // ids; feeding them back via .in keeps every other filter + count intact.
-  const qTrim = (params.q ?? '').trim().slice(0, 100)
-  const searchBy = parseSearchBy(params.search_by)
-  if (qTrim) {
-    const hits = await searchPrescriptionIds(supabase, qTrim, searchBy)
-    if (hits === 'fallback') query = query.ilike('order_code', `%${qTrim}%`)
-    else query = query.in('id', hits.length ? hits : [NO_MATCH_ID])
-  }
   if (params.date_from) query = query.gte('submitted_at', params.date_from + 'T00:00:00+07:00')
   if (params.date_to)   query = query.lte('submitted_at', params.date_to   + 'T23:59:59+07:00')
 
@@ -130,11 +138,20 @@ export default async function PrescriptionsPage({
   // or RLS error) — surface it. Common cause here: migration 073 not yet run.
   if (listErr) console.error('[prescriptions] list query failed:', listErr.message)
 
-  const totalPages   = Math.max(1, Math.ceil((count ?? 0) / pageSize))
-  // Staff: no exact count — the (pageSize + 1)th row, if present, signals a next page.
-  const rows         = submissions ?? []
-  const pageRows     = isStaff ? rows.slice(0, pageSize) : rows
-  const hasNextStaff = isStaff && rows.length > pageSize
+  // Searching: restore the RPC's relevance order (a .in() query loses it), then
+  // paginate the sorted set app-side (≤500 rows, exact total). Otherwise the
+  // usual SQL order/range applies; staff detect next-page via the +1 row.
+  const fetched = submissions ?? []
+  const rows = searching
+    ? (() => {
+        const pos = new Map((searchHits as string[]).map((sid, i) => [sid, i]))
+        return [...fetched].sort((a, b) => (pos.get(a.id) ?? 1e9) - (pos.get(b.id) ?? 1e9))
+      })()
+    : fetched
+  const totalRows    = searching ? rows.length : (count ?? 0)
+  const totalPages   = Math.max(1, Math.ceil(totalRows / pageSize))
+  const pageRows     = searching ? rows.slice(from, from + pageSize) : (isStaff ? rows.slice(0, pageSize) : rows)
+  const hasNextStaff = isStaff && (searching ? rows.length > from + pageSize : rows.length > pageSize)
   // Reminder counts — actionable work, so staff are scoped to their OWN toa
   // (they can only care for / fix their own; mig 085 made read company-wide).
   // Store managers stay store-scoped by RLS; admin = all. Head counts only.
@@ -262,52 +279,27 @@ export default async function PrescriptionsPage({
         })}
       </div>
 
-      {/* Search + filters. Staff get only DHC search + a single date-range
-          control; the compliance/care selects are admin/SM concerns (review
-          r-ui3). The date range is a client control (navigates itself); a
-          filter submit preserves it via hidden inputs. */}
+      {/* Search + filters. Staff get only the search box (submits on Enter);
+          the compliance/care selects are admin/SM concerns. The date-range
+          control was removed (stakeholder 2026-07-10) — date_from/date_to URL
+          params still filter for backward compatibility, just no UI sets them. */}
       <div className="flex flex-wrap gap-2 items-end">
         <form method="GET" className="flex flex-wrap gap-2 items-end">
-          {/* Fuzzy search (mig 086) — one box + scope chips, not 4 inputs
-              (stakeholder: mobile must stay clean). 40px tall on mobile. */}
-          <div className="w-full sm:w-auto space-y-1.5">
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-              <input
-                name="q"
-                type="text"
-                defaultValue={params.q ?? ''}
-                placeholder="Tìm DHC, sản phẩm, ghi chú..."
-                aria-label="Tìm theo mã DHC, sản phẩm hoặc ghi chú"
-                className="pl-8 h-10 md:h-8 w-full sm:w-64 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
-              />
-            </div>
-            {/* Scope chips — links so a tap re-searches instantly (keeps the
-                submitted q); the hidden input keeps the chip on Enter-submit. */}
-            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Phạm vi tìm kiếm">
-              {([
-                { v: 'all',     label: 'Tất cả' },
-                { v: 'order',   label: 'DHC' },
-                { v: 'product', label: 'Sản phẩm' },
-                { v: 'note',    label: 'Ghi chú' },
-              ] as const).map((o) => (
-                <Link
-                  key={o.v}
-                  href={buildUrl({ search_by: o.v === 'all' ? undefined : o.v, page: undefined })}
-                  aria-current={searchBy === o.v ? 'true' : undefined}
-                  className={cn(
-                    'px-3 py-1 rounded-full border text-xs font-medium transition-colors',
-                    searchBy === o.v
-                      ? 'bg-primary text-primary-foreground border-primary'
-                      : 'text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  {o.label}
-                </Link>
-              ))}
-            </div>
+          {/* Smart search (mig 086 r2) — ONE box, no mode chips (stakeholder:
+              mobile must stay minimal). The RPC classifies the query itself:
+              digits 3-8 → product_id EXACT + DHC partial; DHC… → DHC;
+              text → product name + note fuzzy (typo/diacritics tolerant). */}
+          <div className="relative w-full sm:w-auto">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+            <input
+              name="q"
+              type="text"
+              defaultValue={params.q ?? ''}
+              placeholder="Tìm DHC, mã SP, tên thuốc, ghi chú..."
+              aria-label="Tìm theo mã DHC, mã hoặc tên sản phẩm, ghi chú"
+              className="pl-8 h-10 md:h-8 w-full sm:w-72 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
+            />
           </div>
-          {searchBy !== 'all' && <input type="hidden" name="search_by" value={searchBy} />}
 
           {/* Store filter (admin only) */}
           {isAdmin && (
@@ -346,22 +338,17 @@ export default async function PrescriptionsPage({
             </select>
           )}
 
-          {/* Hidden: preserve the active tab + date range across a filter submit */}
+          {/* Hidden: preserve the active tab across a filter submit */}
           {care && <input type="hidden" name="care" value={care} />}
-          {params.date_from && <input type="hidden" name="date_from" value={params.date_from} />}
-          {params.date_to && <input type="hidden" name="date_to" value={params.date_to} />}
           <input type="hidden" name="page" value="1" />
-          {/* Staff have only the DHC search (submits on Enter) + the date range,
-              so the explicit 'Lọc' button is redundant — it's for the admin/SM
-              multi-dropdown row (review r-ui). */}
+          {/* Staff have only the search box (submits on Enter), so the explicit
+              'Lọc' button is redundant — it's for the admin/SM dropdown row. */}
           {!isStaff && (
             <button type="submit" className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'h-10 md:h-8')}>
               Lọc
             </button>
           )}
         </form>
-
-        <PrescriptionDateRangeFilter />
 
         {(params.q || params.search_by || params.store_id || params.date_from || params.date_to || params.order_sync || params.care_state) && (
           <Link href={buildUrl({ q: undefined, search_by: undefined, store_id: undefined, date_from: undefined, date_to: undefined, order_sync: undefined, care_state: undefined, page: undefined })}
@@ -509,7 +496,7 @@ export default async function PrescriptionsPage({
                   </TableCell>
                 </TableRow>
               ))}
-              {(submissions ?? []).length === 0 && !listErr && (
+              {pageRows.length === 0 && !listErr && (
                 <TableRow>
                   <TableCell colSpan={7} className="text-center text-muted-foreground py-10">
                     Không tìm thấy toa thuốc nào
@@ -543,7 +530,7 @@ export default async function PrescriptionsPage({
           {!isStaff && totalPages > 1 && (
             <div className="flex items-center justify-between px-4 py-3 border-t text-sm">
               <span className="text-muted-foreground">
-                Trang {page} / {totalPages} · {count ?? 0} bản ghi
+                Trang {page} / {totalPages} · {totalRows} bản ghi
               </span>
               <div className="flex gap-2">
                 {page > 1 && (
