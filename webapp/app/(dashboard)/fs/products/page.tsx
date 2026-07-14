@@ -21,6 +21,10 @@ function storeName(s: { store?: StoreEmbed | StoreEmbed[] | null }): string {
   const st = Array.isArray(s.store) ? s.store[0] : s.store
   return st?.name ?? '—'
 }
+function storeCode(s: { store?: StoreEmbed | StoreEmbed[] | null }): string | null {
+  const st = Array.isArray(s.store) ? s.store[0] : s.store
+  return st?.code ?? null
+}
 
 export default async function FsProductsPage() {
   const { user, profile } = await getSessionProfile()
@@ -153,47 +157,104 @@ export default async function FsProductsPage() {
             <div className="text-center text-muted-foreground py-10 text-sm">
               {isAdmin ? <>Chưa có phiên nào. Bấm <b>Tạo phiên</b> để nhập sản phẩm từ file.</> : 'Cửa hàng chưa có danh sách sản phẩm cần bổ sung.'}
             </div>
-          ) : (
-            <div className="divide-y">
-              {list.map((s) => {
-                const c = counts.get(s.id) ?? { total: 0, done: 0, redo: 0, pending: 0 }
-                const pct = c.total > 0 ? Math.round((c.done / c.total) * 100) : 0
-                const meta = FS_SESSION_STATUS[s.status] ?? { label: s.status, cls: 'bg-muted text-muted-foreground' }
-                const u = creator.get(s.created_by)
-                return (
-                  <Link
-                    key={s.id}
-                    href={isAdmin ? `/fs/products/${s.id}` : `/fs/products/${s.id}/process`}
-                    prefetch={false}
-                    className="flex items-center gap-4 px-4 py-3 hover:bg-muted/40 transition-colors"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium truncate">{s.name}</div>
-                      <div className="text-xs text-muted-foreground truncate">
-                        {storeName(s)} · {u?.full_name ?? '—'}{u?.email ? ` (${u.email})` : ''} · {formatDate(s.created_at)}
-                      </div>
-                      <div className="text-xs truncate">
-                        {s.claimed_by
-                          ? <span className="text-sky-700">Đang xử lý bởi {creator.get(s.claimed_by)?.full_name ?? '—'}</span>
-                          : s.status === 'active' ? <span className="text-muted-foreground">Chưa ai xử lý</span> : null}
-                      </div>
-                    </div>
-                    <div className="hidden sm:flex items-center gap-2 w-40 shrink-0">
-                      <div className="h-1.5 flex-1 rounded-full bg-muted overflow-hidden">
-                        <div className="h-full bg-primary" style={{ width: `${pct}%` }} />
-                      </div>
-                      <span className="text-xs text-muted-foreground tabular-nums">{c.done}/{c.total}</span>
-                    </div>
-                    {c.redo > 0 && <span className="hidden sm:inline text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 shrink-0">Làm lại {c.redo}</span>}
-                    <Badge className={cn('text-[10px] shrink-0', meta.cls)}>{meta.label}</Badge>
-                    <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
-                  </Link>
+          ) : isAdmin ? (
+            /* Admin: sessions grouped by FS STORE (stakeholder 2026-07-13) —
+               one branch per store, click to reveal its sessions; per-session
+               metrics unchanged. Native <details> (house pattern, no client JS). */
+            (() => {
+              const groups = new Map<string, typeof list>()
+              for (const s of list) {
+                const key = storeName(s)
+                const arr = groups.get(key) ?? []
+                arr.push(s)
+                groups.set(key, arr)
+              }
+              const sorted = [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0], 'vi'))
+              return sorted.map(([name, sess]) => {
+                const code = storeCode(sess[0])
+                const agg = sess.reduce(
+                  (a, s) => {
+                    const c = counts.get(s.id) ?? { total: 0, done: 0, redo: 0, pending: 0 }
+                    a.total += c.total; a.done += c.done; a.redo += c.redo
+                    if (s.status === 'active') a.active++
+                    return a
+                  },
+                  { total: 0, done: 0, redo: 0, active: 0 },
                 )
-              })}
+                return (
+                  <details key={name} className="group border-b last:border-b-0">
+                    <summary className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden hover:bg-muted/40 transition-colors">
+                      <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0 transition-transform group-open:rotate-90" />
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium truncate">
+                          {name}
+                          {code && <span className="text-xs text-muted-foreground font-mono font-normal"> · {code}</span>}
+                        </div>
+                        <div className="text-xs text-muted-foreground truncate">
+                          {sess.length} phiên · {agg.active} đang xử lý · {agg.done}/{agg.total} sản phẩm hoàn thành
+                        </div>
+                      </div>
+                      {agg.redo > 0 && <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 shrink-0">Làm lại {agg.redo}</span>}
+                    </summary>
+                    <div className="divide-y border-t bg-muted/20">
+                      {sess.map((s) => <SessionRow key={s.id} s={s} isAdmin showStore={false} counts={counts} creator={creator} />)}
+                    </div>
+                  </details>
+                )
+              })
+            })()
+          ) : (
+            /* FS staff: RLS already scopes to their single store — flat list. */
+            <div className="divide-y">
+              {list.map((s) => <SessionRow key={s.id} s={s} isAdmin={false} showStore counts={counts} creator={creator} />)}
             </div>
           )}
         </CardContent>
       </Card>
     </div>
+  )
+}
+
+// One session row — shared by the admin store-groups and the staff flat list.
+// Metrics/markup identical to the pre-grouping list (stakeholder: keep the
+// chỉ số/run-time display); showStore=false inside a store group (redundant).
+function SessionRow({ s, isAdmin, showStore, counts, creator }: {
+  s: { id: string; name: string; status: string; created_at: string; created_by: string; claimed_by: string | null; store?: StoreEmbed | StoreEmbed[] | null }
+  isAdmin: boolean
+  showStore: boolean
+  counts: Map<string, { total: number; done: number; redo: number; pending: number }>
+  creator: Map<string, { id: string; full_name: string; email: string }>
+}) {
+  const c = counts.get(s.id) ?? { total: 0, done: 0, redo: 0, pending: 0 }
+  const pct = c.total > 0 ? Math.round((c.done / c.total) * 100) : 0
+  const meta = FS_SESSION_STATUS[s.status] ?? { label: s.status, cls: 'bg-muted text-muted-foreground' }
+  const u = creator.get(s.created_by)
+  return (
+    <Link
+      href={isAdmin ? `/fs/products/${s.id}` : `/fs/products/${s.id}/process`}
+      prefetch={false}
+      className="flex items-center gap-4 px-4 py-3 hover:bg-muted/40 transition-colors"
+    >
+      <div className="flex-1 min-w-0">
+        <div className="font-medium truncate">{s.name}</div>
+        <div className="text-xs text-muted-foreground truncate">
+          {showStore ? `${storeName(s)} · ` : ''}{u?.full_name ?? '—'}{u?.email ? ` (${u.email})` : ''} · {formatDate(s.created_at)}
+        </div>
+        <div className="text-xs truncate">
+          {s.claimed_by
+            ? <span className="text-sky-700">Đang xử lý bởi {creator.get(s.claimed_by)?.full_name ?? '—'}</span>
+            : s.status === 'active' ? <span className="text-muted-foreground">Chưa ai xử lý</span> : null}
+        </div>
+      </div>
+      <div className="hidden sm:flex items-center gap-2 w-40 shrink-0">
+        <div className="h-1.5 flex-1 rounded-full bg-muted overflow-hidden">
+          <div className="h-full bg-primary" style={{ width: `${pct}%` }} />
+        </div>
+        <span className="text-xs text-muted-foreground tabular-nums">{c.done}/{c.total}</span>
+      </div>
+      {c.redo > 0 && <span className="hidden sm:inline text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 shrink-0">Làm lại {c.redo}</span>}
+      <Badge className={cn('text-[10px] shrink-0', meta.cls)}>{meta.label}</Badge>
+      <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
+    </Link>
   )
 }
