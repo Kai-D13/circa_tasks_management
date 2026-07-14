@@ -210,31 +210,42 @@ export function FsProcessWizard({
         const isOpen = selectedId === it.id
         return (
           <div key={it.id} className={cn('rounded-md border', isOpen && 'ring-1 ring-primary/40')}>
-            <div className="flex items-center gap-3 px-3 py-2.5">
+            {/* Two stable columns (review r2): identity left (id on its own line,
+                name up to 2 lines — no more one-line truncate hiding long names),
+                fixed action column right so the button never gets pushed around.
+                No tooltip/popup — this is a mobile flow. */}
+            <div className="flex items-start gap-3 px-3 py-2.5">
               <div className="flex-1 min-w-0">
-                <div className="font-medium text-sm truncate">
-                  <span className="font-mono text-xs text-muted-foreground mr-1.5">{it.product_id}</span>
-                  {it.product_name}
-                </div>
+                <div className="font-mono text-xs text-muted-foreground">{it.product_id}</div>
+                <div className="font-medium text-sm line-clamp-2 break-words">{it.product_name}</div>
                 {it.resubmit_note && it.status === 'redo' && (
                   <div className="text-xs text-amber-700 mt-0.5">Yêu cầu làm lại: {it.resubmit_note}</div>
                 )}
               </div>
-              <Badge className={cn('text-[10px] shrink-0', im.cls)}>{im.label}</Badge>
-              {/* An APPROVED item is locked (Batch E) — staff can't edit; only an
-                  admin resubmit re-opens it. Otherwise editable by the claimer
-                  while active (incl. a 'done' item self-correction, r4). */}
-              {it.approved_at ? (
-                <Badge className="bg-green-100 text-green-700 text-[10px] shrink-0">Đã duyệt</Badge>
-              ) : (
-                <Button size="sm" variant={isOpen || it.status === 'done' ? 'outline' : 'default'} onClick={() => (isOpen ? closeEditor() : openItem(it))} disabled={pending}>
-                  {isOpen ? 'Đóng' : it.status === 'done' ? 'Sửa thông tin' : 'Xử lý'}
-                </Button>
-              )}
+              <div className="flex flex-col items-end gap-1.5 shrink-0">
+                <Badge className={cn('text-[10px]', im.cls)}>{im.label}</Badge>
+                {/* An APPROVED item is locked (Batch E) — staff can't edit; only an
+                    admin resubmit re-opens it. Otherwise editable by the claimer
+                    while active (incl. a 'done' item self-correction, r4). */}
+                {it.approved_at ? (
+                  <Badge className="bg-green-100 text-green-700 text-[10px]">Đã duyệt</Badge>
+                ) : (
+                  <Button size="sm" variant={isOpen || it.status === 'done' ? 'outline' : 'default'} onClick={() => (isOpen ? closeEditor() : openItem(it))} disabled={pending}>
+                    {isOpen ? 'Đóng' : it.status === 'done' ? 'Sửa thông tin' : 'Xử lý'}
+                  </Button>
+                )}
+              </div>
             </div>
 
             {isOpen && selected && selected.id === it.id && (
               <div className="border-t px-3 py-3 space-y-3 bg-muted/10">
+                {/* Full identity while editing — the closed row clamps the name
+                    to 2 lines; here it wraps completely (review r2). */}
+                <div>
+                  <p className="font-mono text-xs text-muted-foreground">{it.product_id}</p>
+                  <p className="text-sm font-medium break-words">{it.product_name}</p>
+                </div>
+
                 <div>
                   <p className="text-xs font-medium mb-1.5">Ảnh sản phẩm — nền trắng (Mặt trước & Mặt sau bắt buộc)</p>
                   <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">

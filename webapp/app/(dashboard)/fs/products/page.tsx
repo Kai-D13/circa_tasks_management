@@ -66,7 +66,7 @@ export default async function FsProductsPage() {
 
   const { data: sessions, error: sessionsErr } = await supabase
     .from('fs_sessions')
-    .select('id, name, status, created_at, created_by, claimed_by, store:stores(name, code)')
+    .select('id, name, status, created_at, created_by, claimed_by, store_id, store:stores(name, code)')
     .order('created_at', { ascending: false })
 
   const sessionIds = (sessions ?? []).map((s) => s.id)
@@ -162,15 +162,18 @@ export default async function FsProductsPage() {
                one branch per store, click to reveal its sessions; per-session
                metrics unchanged. Native <details> (house pattern, no client JS). */
             (() => {
+              // Key by store_id — two stores could share a display name (review
+              // r2); name/POS code are display-only, taken from the group's rows.
               const groups = new Map<string, typeof list>()
               for (const s of list) {
-                const key = storeName(s)
+                const key = s.store_id
                 const arr = groups.get(key) ?? []
                 arr.push(s)
                 groups.set(key, arr)
               }
-              const sorted = [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0], 'vi'))
-              return sorted.map(([name, sess]) => {
+              const sorted = [...groups.values()].sort((a, b) => storeName(a[0]).localeCompare(storeName(b[0]), 'vi'))
+              return sorted.map((sess) => {
+                const name = storeName(sess[0])
                 const code = storeCode(sess[0])
                 const agg = sess.reduce(
                   (a, s) => {
@@ -182,7 +185,7 @@ export default async function FsProductsPage() {
                   { total: 0, done: 0, redo: 0, active: 0 },
                 )
                 return (
-                  <details key={name} className="group border-b last:border-b-0">
+                  <details key={sess[0].store_id} className="group border-b last:border-b-0">
                     <summary className="flex items-center gap-3 px-4 py-3 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden hover:bg-muted/40 transition-colors">
                       <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0 transition-transform group-open:rotate-90" />
                       <div className="flex-1 min-w-0">
