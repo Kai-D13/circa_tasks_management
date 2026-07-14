@@ -337,7 +337,7 @@ export default async function PrescriptionsPage({
               defaultValue={params.q ?? ''}
               placeholder="Tìm DHC, mã SP, tên thuốc, ghi chú..."
               aria-label="Tìm theo mã DHC, mã hoặc tên sản phẩm, ghi chú"
-              className="pl-8 h-10 md:h-8 w-full sm:w-72 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
+              className="pl-8 h-10 md:h-8 w-full sm:w-72 rounded-md border border-input bg-background px-3 py-1 text-[16px] md:text-sm shadow-sm"
             />
           </div>
 
