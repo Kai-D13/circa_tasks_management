@@ -201,7 +201,7 @@ export function FsProcessWizard({
             value={search} onChange={(e) => setSearch(e.target.value)}
             placeholder="Tìm product_id hoặc tên sản phẩm"
             aria-label="Tìm sản phẩm"
-            className="h-10 w-full rounded-md border bg-background pl-9 pr-3 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+            className="h-10 w-full rounded-md border bg-background pl-9 pr-3 text-[16px] md:text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
           />
         </div>
       )}
@@ -306,15 +306,17 @@ export function FsProcessWizard({
 
 function DimInput({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
   return (
-    // Label on top + full-width input; text-base = 16px so iOS Safari does NOT
-    // auto-zoom on focus (the zoom bug happened with <16px inputs).
-    <label className="flex flex-col gap-1 text-xs">
+    // Label on top + full-width input. iOS Safari auto-zooms any input under a
+    // REAL 16px — and the app root is 15px (globals.css), so text-base = 15px
+    // still zoomed (review r2). Use an explicit 16px on mobile, compact on
+    // desktop. min-w-0 keeps the 3-col grid from overflowing at 360px.
+    <label className="flex flex-col gap-1 text-xs min-w-0">
       <span className="text-muted-foreground">{label} (mm)</span>
       <input
         type="number" inputMode="numeric" min={1} max={FS_DIM_MAX_MM} value={value}
         onChange={(e) => onChange(e.target.value)}
         aria-label={`Kích thước ${label} (mm)`}
-        className="h-10 w-full rounded-md border bg-background px-2 text-base focus:outline-none focus:ring-2 focus:ring-primary/30"
+        className="h-10 w-full min-w-0 rounded-md border bg-background px-2 text-[16px] md:text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
       />
     </label>
   )
