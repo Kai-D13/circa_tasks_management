@@ -82,6 +82,10 @@ export default async function FsSessionDetailPage({
       .select('id, product_id, product_name, status, dim_length_mm, dim_width_mm, dim_height_mm, resubmit_note, approved_at', { count: 'exact' })
       .eq('session_id', id).is('removed_at', null)
     if (statusFilter === 'approved') iq = iq.not('approved_at', 'is', null)
+    // "Hoàn thành" = the QC queue: done but NOT yet approved (an approved item
+    // keeps status='done', so without this it leaked into both tabs —
+    // stakeholder 2026-07-13).
+    else if (statusFilter === 'done') iq = iq.eq('status', 'done').is('approved_at', null)
     else if (statusFilter) iq = iq.eq('status', statusFilter)
     if (q) {
       const safe = q.replace(/[,()*%]/g, '').slice(0, 80) // strip PostgREST filter metachars
@@ -158,6 +162,8 @@ export default async function FsSessionDetailPage({
         </div>
         {redo > 0 && <Badge className="bg-amber-100 text-amber-700 text-[10px]">Cần làm lại {redo}</Badge>}
         {pending > 0 && <Badge className="bg-muted text-muted-foreground text-[10px]">Chưa xử lý {pending}</Badge>}
+        {/* QC queue = done but not yet approved (mirrors the "Hoàn thành" tab) */}
+        {done - approved > 0 && <Badge className="bg-sky-100 text-sky-700 text-[10px]">Chờ duyệt {done - approved}</Badge>}
         <Badge className="bg-green-100 text-green-700 text-[10px]">Đã duyệt {approved}/{total}</Badge>
       </div>
 
