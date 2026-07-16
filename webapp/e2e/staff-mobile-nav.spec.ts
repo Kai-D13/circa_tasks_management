@@ -17,7 +17,7 @@ const TABS = [
   { label: 'Tồn kho', path: '/inventory' },
 ]
 
-test.describe('staff bottom nav', () => {
+test.describe('staff bottom nav @mobile', () => {
   test.skip(!EMAIL || !PASSWORD, 'E2E_STAFF_EMAIL / E2E_STAFF_PASSWORD not set')
 
   test('5 tabs navigate, mark active, no horizontal overflow', async ({ page }) => {
