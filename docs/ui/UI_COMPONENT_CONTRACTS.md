@@ -7,6 +7,7 @@
 - **State ownership**: trang (server component) quyết định state nào render — component KHÔNG tự suy luận. Trang fetch → nếu `error` → render `ErrorState`; nếu rỗng → `EmptyState`; `loading.tsx` của route → `LoadingState`. Component ds không nhận cờ `isLoading/isError`.
 - **Semantics**: 1 `<h1>` duy nhất/trang (do `PageHeader`/`DetailPageShell` render). Bên trong card/section dùng `<h2>`/`<h3>` theo cấp. Vùng lặp dữ liệu = `<ul>/<li>` hoặc `<table>` đúng nghĩa; KHÔNG div-soup cho bảng.
 - **Long-text**: mọi text tự do (tên SP/phiên/note/khách) `truncate` hoặc `line-clamp-2` + nơi đọc đầy đủ (pattern FS-UI-3). Mobile: wrap được, không đẩy cột hành động (2-cột: nội dung `flex-1 min-w-0`, hành động `shrink-0`).
+- **Action buttons trong PageHeader/DataToolbar**: hit target mobile = `h-[44px] md:h-8` (responsive contract — desktop compact, mobile 44px thật; catalog là mẫu chuẩn để copy).
 - **Acceptance mỗi component**: render đúng ở 360px + 1366px × light/dark; text 120 ký tự không vỡ; focus-visible rõ; contrast pass (token đã đo ở FOUNDATION_SPEC §2).
 
 ## Contracts

@@ -55,7 +55,7 @@ export default async function UiCatalogPage() {
         title="Design System Catalog"
         subtitle="Dev-only · fixtures giả 100% · nguồn snapshot component"
         icon={Boxes}
-        actions={<Button size="sm" className="gap-1.5"><Plus className="h-4 w-4" /> Action</Button>}
+        actions={<Button size="sm" className="gap-1.5 h-[44px] md:h-8"><Plus className="h-4 w-4" /> Action</Button>}
       />
 
       <Section title="StatusBadge — 5 tone × 2 size">
@@ -104,14 +104,14 @@ export default async function UiCatalogPage() {
             </div>
           }
           filters={
-            <select aria-label="Lọc" className="h-10 md:h-8 rounded-md border border-input bg-background px-2 py-1 text-sm shadow-sm" defaultValue="">
+            <select aria-label="Lọc" className="h-10 md:h-8 rounded-md border border-input bg-background px-2 py-1 text-[16px] md:text-sm shadow-sm" defaultValue="">
               <option value="">Tất cả cửa hàng</option>
             </select>
           }
           actions={
             <>
-              <span className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}>Làm mới</span>
-              <span className={cn(buttonVariants({ size: 'sm' }))}>Áp dụng</span>
+              <span className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'h-[44px] md:h-8')}>Làm mới</span>
+              <span className={cn(buttonVariants({ size: 'sm' }), 'h-[44px] md:h-8')}>Áp dụng</span>
             </>
           }
         />

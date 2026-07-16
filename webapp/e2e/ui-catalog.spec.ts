@@ -50,7 +50,9 @@ async function snapCatalog(page: Page, theme: (typeof THEMES)[number]) {
   await page.evaluate(() => {
     // nextjs-portal = the black "N" Next.js indicator (renders even on npm
     // start locally) — an environment artifact, not app UI; hide it too.
-    document.querySelectorAll('header, aside, nav[aria-label="Điều hướng chính"], nextjs-portal').forEach((el) => {
+    // Precise SHELL selectors only (r1.3): a future catalog demo could use
+    // <header>/<aside> itself — target the app bars by their identity classes.
+    document.querySelectorAll('header.bg-primary, aside.bg-sidebar, nav[aria-label="Điều hướng chính"], nextjs-portal').forEach((el) => {
       ;(el as HTMLElement).style.display = 'none'
     })
     const main = document.querySelector('main')
@@ -110,6 +112,18 @@ test.describe('ds guardrails @mobile', () => {
     expect((await back.boundingBox())!.height).toBeGreaterThanOrEqual(44)
     // aria-current="page" semantics on the active tab
     await page.locator('nav[aria-label="Bộ lọc"] a[aria-current="page"]').first().waitFor()
+    // r1.3: EVERY form control on the catalog must render ≥16px real font on
+    // mobile (root is 15px — iOS zooms anything under 16).
+    const fonts = await page
+      .locator('main input, main select, main textarea')
+      .evaluateAll((els) => els.map((el) => parseFloat(getComputedStyle(el).fontSize)))
+    expect(fonts.length).toBeGreaterThan(0)
+    for (const f of fonts) expect(f).toBeGreaterThanOrEqual(16)
+    // r1.3: action buttons (PageHeader + DataToolbar) ≥44px on mobile
+    const actionBtn = page.getByRole('button', { name: 'Action' })
+    expect((await actionBtn.boundingBox())!.height).toBeGreaterThanOrEqual(44)
+    const apply = page.getByText('Áp dụng', { exact: true })
+    expect((await apply.boundingBox())!.height).toBeGreaterThanOrEqual(44)
   })
 })
 
