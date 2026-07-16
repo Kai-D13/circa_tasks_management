@@ -74,16 +74,18 @@ export default async function StoresPage() {
           <TableBody>
             {(stores ?? []).map((s) => (
               <TableRow key={s.id} className={cn(s.is_active === false && 'opacity-60')}>
-                <TableCell className="font-medium">
-                  <span className="flex items-center gap-2">
-                    {s.name}
+                {/* Long-text contract: name truncates (title = full text),
+                    badges never shrink; address capped + truncated below. */}
+                <TableCell className="font-medium max-w-[320px]">
+                  <span className="flex items-center gap-2 min-w-0">
+                    <span className="truncate" title={s.name}>{s.name}</span>
                     {/* Read-only badge (mig 076) — FS stores are managed in the FS
                         module; they never appear in OS pickers/workflows. */}
                     {(s as { store_type?: string }).store_type === 'fs' && (
-                      <StatusBadge tone="info" size="sm">FS</StatusBadge>
+                      <StatusBadge tone="info" size="sm" className="shrink-0">FS</StatusBadge>
                     )}
                     {s.is_active === false && (
-                      <StatusBadge tone="neutral" size="sm">Ngừng hoạt động</StatusBadge>
+                      <StatusBadge tone="neutral" size="sm" className="shrink-0">Ngừng hoạt động</StatusBadge>
                     )}
                   </span>
                 </TableCell>
@@ -97,8 +99,10 @@ export default async function StoresPage() {
                     <span className="text-xs text-muted-foreground">Chưa gán</span>
                   )}
                 </TableCell>
-                <TableCell className="text-sm text-muted-foreground">{s.address ?? '—'}</TableCell>
-                <TableCell className="text-sm text-muted-foreground">{formatDate(s.created_at)}</TableCell>
+                <TableCell className="text-sm text-muted-foreground max-w-[280px]">
+                  <span className="block truncate" title={s.address ?? undefined}>{s.address ?? '—'}</span>
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{formatDate(s.created_at)}</TableCell>
               </TableRow>
             ))}
             {(stores ?? []).length === 0 && (
