@@ -37,6 +37,17 @@
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
+  /* Status tones (UI design system P1.1) — bg-status-*-bg / text-status-* */
+  --color-status-success: var(--status-success);
+  --color-status-success-bg: var(--status-success-bg);
+  --color-status-warning: var(--status-warning);
+  --color-status-warning-bg: var(--status-warning-bg);
+  --color-status-danger: var(--status-danger);
+  --color-status-danger-bg: var(--status-danger-bg);
+  --color-status-neutral: var(--status-neutral);
+  --color-status-neutral-bg: var(--status-neutral-bg);
+  --color-status-info: var(--status-info);
+  --color-status-info-bg: var(--status-info-bg);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -75,6 +86,18 @@
   --chart-4: oklch(0.37 0 0);
   --chart-5: oklch(0.27 0 0);
   --radius: 0.5rem;
+  /* Status tones (P1.1) — MEASURED WCAG pairs, all ≥6.48:1 on their bg
+     (docs/ui/UI_FOUNDATION_SPEC §2 — copy-only values, never re-tune here). */
+  --status-success:    oklch(0.44 0.11 150);
+  --status-success-bg: oklch(0.96 0.04 150);
+  --status-warning:    oklch(0.42 0.10 70);
+  --status-warning-bg: oklch(0.97 0.05 85);
+  --status-danger:     oklch(0.47 0.17 25);
+  --status-danger-bg:  oklch(0.96 0.03 20);
+  --status-neutral:    oklch(0.45 0 0);
+  --status-neutral-bg: oklch(0.96 0 0);
+  --status-info:       oklch(0.44 0.10 240);
+  --status-info-bg:    oklch(0.95 0.03 235);
   /* Sidebar — pure white with #FEF8ED warm cream active state */
   --sidebar: oklch(1 0 0);
   --sidebar-foreground: oklch(0.13 0 0);
@@ -108,6 +131,17 @@
   --border: oklch(0.28 0 0);
   --input: oklch(0.33 0 0);
   --ring: oklch(0.73 0.16 42);
+  /* Status tones (P1.1) — dark pairs, MEASURED ≥7.69:1 (không đảo máy móc). */
+  --status-success:    oklch(0.80 0.11 150);
+  --status-success-bg: oklch(0.25 0.04 150);
+  --status-warning:    oklch(0.82 0.11 80);
+  --status-warning-bg: oklch(0.25 0.04 80);
+  --status-danger:     oklch(0.78 0.13 25);
+  --status-danger-bg:  oklch(0.25 0.05 25);
+  --status-neutral:    oklch(0.78 0 0);
+  --status-neutral-bg: oklch(0.25 0 0);
+  --status-info:       oklch(0.80 0.09 240);
+  --status-info-bg:    oklch(0.25 0.04 240);
   --chart-1: oklch(0.73 0.16 42);
   --chart-2: oklch(0.58 0.15 44);
   --chart-3: oklch(0.76 0 0);

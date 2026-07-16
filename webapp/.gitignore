@@ -39,3 +39,12 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Playwright artifacts — ROUTE screenshots contain PRODUCTION data (PII).
+# Local-only; NEVER commit (UI program r2A). Any NEW spec that captures real
+# app routes MUST have its snapshot folder listed here.
+# /e2e/__screenshots__/ui-catalog.spec.ts/ is COMMITTED on purpose: the /__ui
+# catalog renders 100% mock fixtures (P1.4 component baseline).
+/test-results/
+/playwright-report/
+/e2e/__screenshots__/ui-baseline.spec.ts/
