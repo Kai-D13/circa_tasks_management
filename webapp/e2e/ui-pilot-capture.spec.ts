@@ -88,16 +88,16 @@ test.describe('pilot after-capture @desktop', () => {
       // every row that has a badge next to the name (FS / Ngừng hoạt động).
       const spans = [...document.querySelectorAll<HTMLElement>('main tbody span.truncate[title]')]
       const targets = spans.filter((s, i) => i === 0 || s.parentElement!.querySelector('span:not(.truncate)'))
-      targets.forEach((s) => { s.textContent = longName; s.title = longName })
+      targets.forEach((s) => { s.textContent = longName; s.title = longName; s.dataset.longtext = '1' })
       return targets.length
     }, LONG)
     expect(mutated).toBeGreaterThan(0)
-    // Truncation must engage (content wider than the box) …
+    // Truncation must engage on EVERY mutated row (content wider than the box) …
     const truncating = await page.evaluate(() =>
-      [...document.querySelectorAll<HTMLElement>('main tbody span.truncate[title]')]
+      [...document.querySelectorAll<HTMLElement>('main tbody span.truncate[data-longtext]')]
         .filter((s) => s.scrollWidth > s.clientWidth + 1).length,
     )
-    expect(truncating).toBeGreaterThan(0)
+    expect(truncating).toBe(mutated)
     // … and the BODY must not scroll horizontally (the table wrapper may).
     const overflow = await page.evaluate(() => ({
       doc: document.documentElement.scrollWidth - document.documentElement.clientWidth,
