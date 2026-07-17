@@ -1,22 +1,29 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { Card, CardContent } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { PageHeader } from '@/components/ds/PageHeader'
+import { DataTableShell } from '@/components/ds/DataTableShell'
+import { StatusBadge, type StatusTone } from '@/components/ds/StatusBadge'
+import { EmptyState } from '@/components/ds/EmptyState'
 import { formatDate } from '@/lib/dateUtils'
 import { getSmStoreIds } from '@/lib/authz'
 import { canSeeFs } from '@/lib/fs/access'
 import { cn } from '@/lib/utils'
+import { Store } from 'lucide-react'
 
+// PILOT 1 (UI design system): visual-only migration to components/ds/ —
+// queries, RBAC (canSeeFs), SM scoping and wording are byte-identical.
 const REGION_LABEL: Record<string, string> = {
   north:   'Miền Bắc',
   central: 'Miền Trung',
   south:   'Miền Nam',
 }
-const REGION_COLOR: Record<string, string> = {
-  north:   'bg-blue-100 text-blue-700',
-  central: 'bg-amber-100 text-amber-700',
-  south:   'bg-green-100 text-green-700',
+// Region is categorical — tones chosen to keep the pre-migration hues
+// (blue/amber/green) while sourcing colors from the status tokens.
+const REGION_TONE: Record<string, StatusTone> = {
+  north:   'info',
+  central: 'warning',
+  south:   'success',
 }
 
 export default async function StoresPage() {
@@ -38,8 +45,8 @@ export default async function StoresPage() {
   if (isSm && smStoreIds.length === 0) {
     return (
       <div className="p-4 space-y-4">
-        <h1 className="text-xl font-semibold">Cửa hàng</h1>
-        <p className="text-sm text-muted-foreground">Chưa được phân công cửa hàng nào. Vui lòng liên hệ Admin.</p>
+        <PageHeader title="Cửa hàng" icon={Store} />
+        <EmptyState title="Chưa được phân công cửa hàng nào" hint="Vui lòng liên hệ Admin." />
       </div>
     )
   }
@@ -52,60 +59,62 @@ export default async function StoresPage() {
 
   return (
     <div className="p-4 space-y-4">
-      <h1 className="text-xl font-semibold">Danh sách cửa hàng</h1>
-      <Card>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Tên cửa hàng</TableHead>
-                <TableHead>Mã POS</TableHead>
-                <TableHead>Vùng</TableHead>
-                <TableHead>Địa chỉ</TableHead>
-                <TableHead>Ngày tạo</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(stores ?? []).map((s) => (
-                <TableRow key={s.id} className={cn(s.is_active === false && 'opacity-60')}>
-                  <TableCell className="font-medium">
-                    <span className="flex items-center gap-2">
-                      {s.name}
-                      {/* Read-only badge (mig 076) — FS stores are managed in the FS
-                          module; they never appear in OS pickers/workflows. */}
-                      {(s as { store_type?: string }).store_type === 'fs' && (
-                        <Badge className="bg-sky-100 text-sky-700 text-[10px]">FS</Badge>
-                      )}
-                      {s.is_active === false && (
-                        <Badge className="bg-muted text-muted-foreground text-[10px]">Ngừng hoạt động</Badge>
-                      )}
-                    </span>
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground font-mono">{s.code}</TableCell>
-                  <TableCell>
-                    {s.region ? (
-                      <Badge className={REGION_COLOR[s.region] ?? 'bg-gray-100 text-gray-600'}>
-                        {REGION_LABEL[s.region] ?? s.region}
-                      </Badge>
-                    ) : (
-                      <span className="text-xs text-muted-foreground">Chưa gán</span>
+      <PageHeader title="Danh sách cửa hàng" icon={Store} />
+      <DataTableShell>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Tên cửa hàng</TableHead>
+              <TableHead>Mã POS</TableHead>
+              <TableHead>Vùng</TableHead>
+              <TableHead>Địa chỉ</TableHead>
+              <TableHead>Ngày tạo</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {(stores ?? []).map((s) => (
+              <TableRow key={s.id} className={cn(s.is_active === false && 'opacity-60')}>
+                {/* Long-text contract: name truncates (title = full text),
+                    badges never shrink; address capped + truncated below. */}
+                <TableCell className="font-medium max-w-[320px]">
+                  <span className="flex items-center gap-2 min-w-0">
+                    <span className="truncate" title={s.name}>{s.name}</span>
+                    {/* Read-only badge (mig 076) — FS stores are managed in the FS
+                        module; they never appear in OS pickers/workflows. */}
+                    {(s as { store_type?: string }).store_type === 'fs' && (
+                      <StatusBadge tone="info" size="sm" className="shrink-0">FS</StatusBadge>
                     )}
-                  </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{s.address ?? '—'}</TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{formatDate(s.created_at)}</TableCell>
-                </TableRow>
-              ))}
-              {(stores ?? []).length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
-                    Chưa có cửa hàng nào
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+                    {s.is_active === false && (
+                      <StatusBadge tone="neutral" size="sm" className="shrink-0">Ngừng hoạt động</StatusBadge>
+                    )}
+                  </span>
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground font-mono">{s.code}</TableCell>
+                <TableCell>
+                  {s.region ? (
+                    <StatusBadge tone={REGION_TONE[s.region] ?? 'neutral'}>
+                      {REGION_LABEL[s.region] ?? s.region}
+                    </StatusBadge>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">Chưa gán</span>
+                  )}
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground max-w-[280px]">
+                  <span className="block truncate" title={s.address ?? undefined}>{s.address ?? '—'}</span>
+                </TableCell>
+                <TableCell className="text-sm text-muted-foreground whitespace-nowrap">{formatDate(s.created_at)}</TableCell>
+              </TableRow>
+            ))}
+            {(stores ?? []).length === 0 && (
+              <TableRow>
+                <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                  Chưa có cửa hàng nào
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+        </Table>
+      </DataTableShell>
     </div>
   )
 }

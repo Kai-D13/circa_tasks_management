@@ -48,3 +48,6 @@ next-env.d.ts
 /test-results/
 /playwright-report/
 /e2e/__screenshots__/ui-baseline.spec.ts/
+# Pilot before/after evidence — local-only review artifacts
+/e2e/__screenshots__/pilot-before/
+/e2e/__screenshots__/pilot-after/
