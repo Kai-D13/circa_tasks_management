@@ -21,20 +21,40 @@ import { expect, test, type Page } from '@playwright/test'
 // shot ALWAYS hash-differs and proves nothing.
 
 const SUPER = { email: process.env.E2E_SUPER_EMAIL, password: process.env.E2E_SUPER_PASSWORD }
+const STAFF = { email: process.env.E2E_STAFF_EMAIL, password: process.env.E2E_STAFF_PASSWORD }
 const OUT_DIR = process.env.PILOT_CAPTURE_DIR ?? 'e2e/__screenshots__/pilot-after'
 const THEMES = ['light', 'dark'] as const
 // Pilot routes — extend per pilot/wave.
 const ROUTES: [string, string, string][] = [
   ['/stores', 'stores', 'Danh sách cửa hàng'],
+  ['/tasks', 'tasks', 'Danh sách Tasks'],
 ]
 
-async function login(page: Page) {
+async function login(page: Page, who: { email?: string; password?: string } = SUPER) {
   await page.goto('/login')
   await page.waitForLoadState('networkidle')
-  await page.fill('#email', SUPER.email!)
-  await page.fill('#password', SUPER.password!)
+  await page.fill('#email', who.email!)
+  await page.fill('#password', who.password!)
   await page.getByRole('button', { name: /sign in/i }).click()
   await page.waitForURL(/\/(tasks|dashboard|targets|fs)/, { timeout: 20_000, waitUntil: 'commit' })
+}
+
+// Test-only: unlock the nested dashboard scroll so <main> captures full-height,
+// and hide overlays that would bake into the element shot (Next dev indicator;
+// on mobile the fixed BottomNav, which would smear mid-image once main grows).
+async function unlockForCapture(page: Page, { hideBottomNav = false } = {}) {
+  await page.evaluate((hideNav) => {
+    const main = document.querySelector('main')
+    const outer = main?.parentElement
+    if (outer instanceof HTMLElement) { outer.style.height = 'auto'; outer.style.overflow = 'visible' }
+    if (main instanceof HTMLElement) { main.style.overflow = 'visible' }
+    document.querySelectorAll('nextjs-portal').forEach((el) => { (el as HTMLElement).style.display = 'none' })
+    if (hideNav) {
+      document.querySelectorAll<HTMLElement>('nav[aria-label="Điều hướng chính"]').forEach((el) => { el.style.display = 'none' })
+    }
+  }, hideBottomNav)
+  await page.evaluate(() => document.fonts.ready)
+  await page.waitForTimeout(250)
 }
 
 test.describe('pilot after-capture @desktop', () => {
@@ -54,17 +74,8 @@ test.describe('pilot after-capture @desktop', () => {
           (h) => [...document.querySelectorAll('h1')].some((el) => (el.textContent ?? '').normalize('NFC').toLowerCase().includes(h)),
           heading.normalize('NFC').toLowerCase(), { timeout: 15_000 },
         )
-        // Unlock the nested dashboard scroll (test-only) so the full route
-        // content is captured, then shoot <main> (excludes sidebar profile).
-        await page.evaluate(() => {
-          const main = document.querySelector('main')
-          const outer = main?.parentElement
-          if (outer instanceof HTMLElement) { outer.style.height = 'auto'; outer.style.overflow = 'visible' }
-          if (main instanceof HTMLElement) { main.style.overflow = 'visible' }
-          document.querySelectorAll('nextjs-portal').forEach((el) => { (el as HTMLElement).style.display = 'none' })
-        })
-        await page.evaluate(() => document.fonts.ready)
-        await page.waitForTimeout(250)
+        // Shoot <main> only (excludes sidebar profile).
+        await unlockForCapture(page)
         await page.locator('main').screenshot({ path: `${OUT_DIR}/${name}-${theme}.png` })
       }
     }
@@ -103,13 +114,48 @@ test.describe('pilot after-capture @desktop', () => {
       doc: document.documentElement.scrollWidth - document.documentElement.clientWidth,
     }))
     expect(overflow.doc).toBeLessThanOrEqual(1)
-    await page.evaluate(() => {
-      const main = document.querySelector('main')
-      const outer = main?.parentElement
-      if (outer instanceof HTMLElement) { outer.style.height = 'auto'; outer.style.overflow = 'visible' }
-      if (main instanceof HTMLElement) { main.style.overflow = 'visible' }
-      document.querySelectorAll('nextjs-portal').forEach((el) => { (el as HTMLElement).style.display = 'none' })
-    })
+    await unlockForCapture(page)
     await page.locator('main').screenshot({ path: `${OUT_DIR}/stores-longtext-light.png` })
+  })
+})
+
+// Pilot 2: staff on mobile is THE primary persona for /tasks. Captures the
+// staff flat list (pending + done) on the mobile-390 project. BottomNav is
+// hidden test-only (fixed overlay would smear into the tall element shot);
+// no-horizontal-overflow is asserted before hiding anything.
+test.describe('pilot after-capture staff @mobile', () => {
+  test.skip(!STAFF.email || !STAFF.password, 'E2E_STAFF_* not set')
+  test('capture /tasks staff mobile light+dark + done view', async ({ page }) => {
+    // Both mobile projects match @mobile; capture once at the canonical 390
+    // width (360/430 = manual stakeholder QA per the Pilot-2 review).
+    test.skip(test.info().project.name !== 'mobile-390', 'mobile-390 captures only')
+    test.setTimeout(180_000)
+    await login(page, STAFF)
+    for (const theme of THEMES) {
+      await page.evaluate((t) => localStorage.setItem('theme', t), theme)
+      await page.goto('/tasks')
+      await page.waitForFunction(
+        (t) => document.documentElement.classList.contains('dark') === (t === 'dark'),
+        theme, { timeout: 10_000 },
+      )
+      await page.waitForFunction(
+        () => [...document.querySelectorAll('h1')].some((el) => (el.textContent ?? '').normalize('NFC').toLowerCase().includes('danh sách tasks')),
+        undefined, { timeout: 15_000 },
+      )
+      const overflow = await page.evaluate(() =>
+        document.documentElement.scrollWidth - document.documentElement.clientWidth)
+      expect(overflow).toBeLessThanOrEqual(1)
+      await unlockForCapture(page, { hideBottomNav: true })
+      await page.locator('main').screenshot({ path: `${OUT_DIR}/tasks-staff-390-${theme}.png` })
+    }
+    // Done view, light only — enough to show the history layout + pager.
+    await page.evaluate(() => localStorage.setItem('theme', 'light'))
+    await page.goto('/tasks?view=done')
+    await page.waitForFunction(
+      () => [...document.querySelectorAll('h1')].some((el) => (el.textContent ?? '').normalize('NFC').toLowerCase().includes('danh sách tasks')),
+      undefined, { timeout: 15_000 },
+    )
+    await unlockForCapture(page, { hideBottomNav: true })
+    await page.locator('main').screenshot({ path: `${OUT_DIR}/tasks-staff-390-done-light.png` })
   })
 })
