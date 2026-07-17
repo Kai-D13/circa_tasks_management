@@ -1,12 +1,13 @@
-import { Badge } from '@/components/ui/badge'
+import { StatusBadge, type StatusTone } from '@/components/ds/StatusBadge'
 import { TaskStatus } from '@/types'
-import { cn } from '@/lib/utils'
 
-const STATUS_STYLES: Record<TaskStatus, string> = {
-  todo:        'bg-slate-100 text-slate-700',
-  in_progress: 'bg-blue-100 text-blue-700',
-  done:        'bg-green-100 text-green-700',
-  overdue:     'bg-red-100 text-red-700',
+// Status colors come from the DS status tokens (single source — circa-ui rule
+// 2). Same hue families as the old hand-rolled pastels, now dark-mode-safe.
+const STATUS_TONES: Record<TaskStatus, StatusTone> = {
+  todo:        'neutral',
+  in_progress: 'info',
+  done:        'success',
+  overdue:     'danger',
 }
 
 const STATUS_LABELS: Record<TaskStatus, string> = {
@@ -21,11 +22,7 @@ const STATUS_LABELS: Record<TaskStatus, string> = {
 // the green "Hoàn thành" so the lateness stays visible after submission.
 export function TaskStatusBadge({ status, late }: { status: TaskStatus; late?: boolean }) {
   if (status === 'done' && late) {
-    return <Badge className="bg-amber-100 text-amber-700">Hoàn thành trễ</Badge>
+    return <StatusBadge tone="warning">Hoàn thành trễ</StatusBadge>
   }
-  return (
-    <Badge className={cn(STATUS_STYLES[status])}>
-      {STATUS_LABELS[status]}
-    </Badge>
-  )
+  return <StatusBadge tone={STATUS_TONES[status]}>{STATUS_LABELS[status]}</StatusBadge>
 }

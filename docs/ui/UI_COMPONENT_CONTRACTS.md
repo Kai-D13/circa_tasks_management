@@ -22,7 +22,11 @@
 
 ### 3. StatusBadge (server)
 `{ tone: 'success'|'warning'|'danger'|'neutral'|'info'; children: ReactNode; size?: 'sm'|'md'; className? }`
-- `rounded` (4-6px), sm=`text-[10px] px-1.5 py-0.5`, md=`text-[11px] px-2 py-0.5`; màu CHỈ từ `--status-*` token. KHÔNG icon mặc định. Là NGUỒN DUY NHẤT màu status; route map nhãn→tone tại chỗ. `TaskStatusBadge` GIỮ public API, refactor ruột dùng StatusBadge.
+- `rounded` (4-6px), sm=`text-[10px] px-1.5 py-0.5`, md=`text-[11px] px-2 py-0.5`; màu CHỈ từ `--status-*` token. KHÔNG icon mặc định. Là NGUỒN DUY NHẤT màu status; route map nhãn→tone tại chỗ. `TaskStatusBadge` + `TaskPriorityBadge` GIỮ public API, ruột dùng StatusBadge (Pilot 2): todo=neutral · in_progress=info · done=success · overdue=danger · Hoàn-thành-trễ=warning · urgent=warning · normal=neutral.
+
+### 3b. TagBadge (server — Pilot 2)
+`{ hue: 'blue'|'red'|'green'|'amber'|'teal'|'indigo'|'sky'|'slate'|'gray'; children: ReactNode; className? }`
+- Chip PHÂN LOẠI (taxonomy: loại task, Định kỳ/Phát sinh, Cửa hàng/Dược sĩ nộp…) — hue thuần phân biệt, KHÔNG mang nghĩa tốt/xấu ("Thu hồi" đỏ ≠ lỗi). Kết quả/tín hiệu (thành công, quá hạn, sắp hết hạn, bạn có thể nộp) BẮT BUỘC dùng StatusBadge. `text-xs px-1.5 py-0.5 rounded`, light+dark pair per hue. Raw pastel chỉ được sống trong file này (ds/) — route map giá trị domain→hue tại chỗ. Badge phòng ban (`deptBadgeClass`, màu user cấu hình) nằm NGOÀI hệ này.
 
 ### 4. FilterTabs (server)
 `{ tabs: { key: string; label: string; count?: number; href: string }[]; activeKey?: string; className? }`

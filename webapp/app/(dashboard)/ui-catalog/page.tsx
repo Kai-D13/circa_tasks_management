@@ -7,6 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { PageHeader } from '@/components/ds/PageHeader'
 import { StatCard } from '@/components/ds/StatCard'
 import { StatusBadge } from '@/components/ds/StatusBadge'
+import { TagBadge } from '@/components/ds/TagBadge'
 import { FilterTabs } from '@/components/ds/FilterTabs'
 import { DataToolbar } from '@/components/ds/DataToolbar'
 import { DataTableShell } from '@/components/ds/DataTableShell'
@@ -70,6 +71,20 @@ export default async function UiCatalogPage() {
           <StatusBadge tone="danger" size="sm">Lỗi DHC</StatusBadge>
           <StatusBadge tone="neutral" size="sm">Ngừng hoạt động</StatusBadge>
           <StatusBadge tone="info" size="sm">Đang xử lý bởi Nguyễn Văn A</StatusBadge>
+        </div>
+      </Section>
+
+      <Section title="TagBadge — 9 hue phân loại (taxonomy, KHÔNG phải status)">
+        <div className="flex flex-wrap items-center gap-2">
+          <TagBadge hue="blue">Training</TagBadge>
+          <TagBadge hue="red">Thu hồi</TagBadge>
+          <TagBadge hue="green">Trưng bày</TagBadge>
+          <TagBadge hue="amber">Kiểm tra</TagBadge>
+          <TagBadge hue="teal">Định kỳ</TagBadge>
+          <TagBadge hue="slate">Phát sinh</TagBadge>
+          <TagBadge hue="indigo">Cửa hàng nộp</TagBadge>
+          <TagBadge hue="sky">Dược sĩ nộp</TagBadge>
+          <TagBadge hue="gray">Khác</TagBadge>
         </div>
       </Section>
 
