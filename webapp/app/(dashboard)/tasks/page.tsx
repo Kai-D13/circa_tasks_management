@@ -4,12 +4,15 @@ import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { redirectIfFsStaff } from '@/lib/fs/isolation'
 import { getSmStoreIds } from '@/lib/authz'
 import { buttonVariants } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
+import { PageHeader } from '@/components/ds/PageHeader'
+import { EmptyState } from '@/components/ds/EmptyState'
+import { ErrorState } from '@/components/ds/ErrorState'
 import { TaskFilters } from '@/components/tasks/TaskFilters'
 import { TaskList, TaskListItem, BroadcastGroup, StaffGroup, StaffBroadcastGroup, StaffBroadcastStore, TaskRow, ChildTask } from '@/components/tasks/TaskList'
 import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { ExportButton } from '@/components/common/ExportButton'
-import { Plus, AlertCircle, ChevronLeft, ChevronRight, ClipboardList } from 'lucide-react'
+import { Pagination } from '@/components/common/Pagination'
+import { Plus, ChevronLeft, ChevronRight, ClipboardList } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 const PAGE_SIZE = 30
@@ -87,8 +90,8 @@ export default async function TasksPage({
   if (isSm && smStoreIds.length === 0) {
     return (
       <div className="p-4 space-y-4">
-        <h1 className="text-xl font-semibold">Danh sách Tasks</h1>
-        <p className="text-sm text-muted-foreground">Chưa được phân công cửa hàng nào. Vui lòng liên hệ Admin.</p>
+        <PageHeader title="Danh sách Tasks" icon={ClipboardList} />
+        <EmptyState title="Chưa được phân công cửa hàng nào" hint="Vui lòng liên hệ Admin." />
       </div>
     )
   }
@@ -741,18 +744,21 @@ export default async function TasksPage({
   return (
     <div className="p-4 md:p-6 space-y-4 max-w-[1400px]">
       {!isStaff && <AutoRefresh intervalMs={45000} />}
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold">Danh sách Tasks</h1>
-        <div className="flex items-center gap-2">
-          {(canCreate || isSm) && <ExportButton endpoint="/api/export/tasks" />}
-          {canCreate && (
-            <Link href="/tasks/new" className={cn(buttonVariants({ size: 'sm' }))}>
-              <Plus className="h-4 w-4 mr-1" />
-              Tạo Task
-            </Link>
-          )}
-        </div>
-      </div>
+      <PageHeader
+        title="Danh sách Tasks"
+        icon={ClipboardList}
+        actions={
+          <>
+            {(canCreate || isSm) && <ExportButton endpoint="/api/export/tasks" />}
+            {canCreate && (
+              <Link href="/tasks/new" className={cn(buttonVariants({ size: 'sm' }), 'h-[44px] md:h-8')}>
+                <Plus className="h-4 w-4 mr-1" />
+                Tạo Task
+              </Link>
+            )}
+          </>
+        }
+      />
 
       <TaskFilters
         stores={storesForFilter}
@@ -766,85 +772,49 @@ export default async function TasksPage({
       />
 
       {listError ? (
-        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-4 flex items-start gap-3">
-          <AlertCircle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
-          <div className="text-sm">
-            <p className="font-medium text-destructive">Không thể tải danh sách task</p>
-            <p className="text-muted-foreground mt-1">{listError.message}</p>
-            {listError.message.includes('archived_at') && (
-              <p className="text-muted-foreground mt-1">
-                Vui lòng chạy migration <code className="font-mono text-xs bg-muted px-1 rounded">011_archive_tasks.sql</code> trong Supabase SQL Editor.
-              </p>
-            )}
-          </div>
-        </div>
+        <ErrorState
+          message="Không thể tải danh sách task"
+          hint={
+            listError.message
+            + (listError.message.includes('archived_at')
+              ? ' — Vui lòng chạy migration 011_archive_tasks.sql trong Supabase SQL Editor.'
+              : '')
+          }
+        />
       ) : (
         <>
           {pageItems.length === 0 ? (
-            <Card>
-              <CardContent className="py-16 flex flex-col items-center justify-center text-center gap-3">
-                <div className="h-12 w-12 rounded-full bg-primary/10 flex items-center justify-center">
-                  <ClipboardList className="h-6 w-6 text-primary" />
-                </div>
-                <div>
-                  <p className="font-medium">
-                    {showArchived ? 'Chưa có task lưu trữ' : view === 'done' ? 'Chưa có task hoàn thành' : 'Không có task nào'}
-                  </p>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    {hasActiveFilters
-                      ? 'Thử xoá bớt bộ lọc để xem thêm task.'
-                      : view === 'done'
-                        ? 'Các task hoàn thành sẽ hiện ở đây.'
-                        : canCreate
-                          ? 'Tạo task đầu tiên để bắt đầu.'
-                          : 'Hiện chưa có task nào cần làm.'}
-                  </p>
-                </div>
-                {canCreate && !hasActiveFilters && view !== 'done' && !showArchived && (
-                  <Link href="/tasks/new" className={cn(buttonVariants({ size: 'sm' }), 'mt-1')}>
+            <EmptyState
+              className="py-16"
+              icon={ClipboardList}
+              title={showArchived ? 'Chưa có task lưu trữ' : view === 'done' ? 'Chưa có task hoàn thành' : 'Không có task nào'}
+              hint={
+                hasActiveFilters
+                  ? 'Thử xoá bớt bộ lọc để xem thêm task.'
+                  : view === 'done'
+                    ? 'Các task hoàn thành sẽ hiện ở đây.'
+                    : canCreate
+                      ? 'Tạo task đầu tiên để bắt đầu.'
+                      : 'Hiện chưa có task nào cần làm.'
+              }
+              action={
+                canCreate && !hasActiveFilters && view !== 'done' && !showArchived ? (
+                  <Link href="/tasks/new" className={cn(buttonVariants({ size: 'sm' }), 'h-[44px] md:h-8')}>
                     <Plus className="h-4 w-4 mr-1" /> Tạo Task
                   </Link>
-                )}
-              </CardContent>
-            </Card>
+                ) : undefined
+              }
+            />
           ) : (
-          <Card>
-            <CardContent className="p-0">
-              <TaskList items={pageItems} canArchive={canArchive} canRestore={canRestore} canBulkResubmit={canBulkResubmit} showArchived={showArchived} userRole={profile?.role ?? 'staff'} />
-            </CardContent>
-          </Card>
+            <TaskList items={pageItems} canArchive={canArchive} canRestore={canRestore} canBulkResubmit={canBulkResubmit} showArchived={showArchived} userRole={profile?.role ?? 'staff'} />
           )}
 
-          {/* Staff pagination — simple Prev/Next (no exact count, so no page numbers).
-              Plain block AFTER the list (no sticky/translucent overlay) with large
-              touch targets (h-11 ≈ 44px, Apple/Material guideline) so it never floats
-              over a card and is easy to tap on mobile. */}
-          {isStaff && (page > 1 || hasNextStaff) && (
-            <div className="flex items-center justify-between gap-3 mt-4 mb-5">
-              <Link
-                href={pageHref(page - 1)}
-                aria-disabled={page <= 1}
-                className={cn(
-                  buttonVariants({ variant: 'outline' }),
-                  'h-11 px-5 text-sm',
-                  page <= 1 && 'pointer-events-none opacity-40',
-                )}
-              >
-                <ChevronLeft className="h-4 w-4 mr-1" /> Trước
-              </Link>
-              <span className="text-sm font-medium text-muted-foreground">Trang {page}</span>
-              <Link
-                href={pageHref(page + 1)}
-                aria-disabled={!hasNextStaff}
-                className={cn(
-                  buttonVariants({ variant: 'outline' }),
-                  'h-11 px-5 text-sm',
-                  !hasNextStaff && 'pointer-events-none opacity-40',
-                )}
-              >
-                Tiếp <ChevronRight className="h-4 w-4 ml-1" />
-              </Link>
-            </div>
+          {/* Staff pagination — ds simple mode: Trang N + Trước/Tiếp, [44px]
+              PIXEL touch targets (the old h-11 was only 41.25 real px at the
+              15px root). Renders nothing when there's no prev AND no next.
+              pageHref/hasNextStaff semantics unchanged. */}
+          {isStaff && (
+            <Pagination mode="simple" page={page} hasNext={hasNextStaff} hrefForPage={pageHref} />
           )}
 
           {/* Admin/manager pagination — numbered. Group-paginated views count by
