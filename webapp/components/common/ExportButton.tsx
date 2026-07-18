@@ -13,13 +13,16 @@ interface Props {
   // for logs). Shows a toast instead of fetching when missing.
   requireParams?: string[]
   requireMessage?: string
+  // Styling only (e.g. 'h-[44px] md:h-8' to meet the mobile touch-target
+  // contract on migrated routes). Omitted → unchanged default look.
+  className?: string
 }
 
 // Reuses the page's active filters (URL searchParams) and fetches the export
 // route, then triggers a blob download. Unlike a raw <a>/location navigation,
 // a non-200 (403 / "too many rows" / 500) surfaces as a toast instead of
 // dumping a JSON error page on the user.
-export function ExportButton({ endpoint, label = 'Xuất Excel', requireParams, requireMessage }: Props) {
+export function ExportButton({ endpoint, label = 'Xuất Excel', requireParams, requireMessage, className }: Props) {
   const searchParams = useSearchParams()
   const [pending, setPending] = useState(false)
 
@@ -61,7 +64,7 @@ export function ExportButton({ endpoint, label = 'Xuất Excel', requireParams, 
   }
 
   return (
-    <Button variant="outline" size="sm" onClick={handleClick} disabled={pending}>
+    <Button variant="outline" size="sm" className={className} onClick={handleClick} disabled={pending}>
       <Download className="h-4 w-4 mr-1" />
       {pending ? 'Đang xuất...' : label}
     </Button>

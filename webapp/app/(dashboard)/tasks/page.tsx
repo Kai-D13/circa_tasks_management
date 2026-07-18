@@ -749,7 +749,7 @@ export default async function TasksPage({
         icon={ClipboardList}
         actions={
           <>
-            {(canCreate || isSm) && <ExportButton endpoint="/api/export/tasks" />}
+            {(canCreate || isSm) && <ExportButton endpoint="/api/export/tasks" className="h-[44px] md:h-8" />}
             {canCreate && (
               <Link href="/tasks/new" className={cn(buttonVariants({ size: 'sm' }), 'h-[44px] md:h-8')}>
                 <Plus className="h-4 w-4 mr-1" />
