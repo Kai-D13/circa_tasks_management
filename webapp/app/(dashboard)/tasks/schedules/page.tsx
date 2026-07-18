@@ -6,6 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { PageHeader } from '@/components/ds/PageHeader'
 import { DataTableShell } from '@/components/ds/DataTableShell'
 import { EmptyState } from '@/components/ds/EmptyState'
+import { ErrorState } from '@/components/ds/ErrorState'
 import { StatusBadge } from '@/components/ds/StatusBadge'
 import { TagBadge } from '@/components/ds/TagBadge'
 import { ScheduleActions } from '@/components/tasks/ScheduleActions'
@@ -30,7 +31,7 @@ export default async function SchedulesPage() {
     .from('users').select('role').eq('id', user.id).single()
   if (profile?.role !== 'admin') redirect('/tasks')
 
-  const { data: schedules } = await supabase
+  const { data: schedules, error: schedulesError } = await supabase
     .from('task_schedules')
     .select(`
       id, frequency, run_time, next_run_at, last_run_at, is_active, created_at, assignment_mode,
@@ -52,7 +53,9 @@ export default async function SchedulesPage() {
         }
       />
 
-      {(!schedules || schedules.length === 0) ? (
+      {schedulesError ? (
+        <ErrorState message="Không thể tải danh sách lịch định kỳ" hint={schedulesError.message} />
+      ) : (!schedules || schedules.length === 0) ? (
         <EmptyState
           className="py-12"
           icon={CalendarClock}

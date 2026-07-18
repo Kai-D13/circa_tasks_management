@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { pauseSchedule, resumeSchedule, deleteSchedule } from '@/app/actions/tasks'
 import { Pause, Play, Trash2 } from 'lucide-react'
+import { cn } from '@/lib/utils'
 
 interface Props {
   scheduleId: string
@@ -13,6 +14,9 @@ interface Props {
   // sees a button RLS would silently reject.
   canDelete?: boolean
 }
+
+// [44px] PIXEL touch target on mobile (root 15px → rem lies), compact on md+.
+const ACTION_BTN = 'flex items-center justify-center gap-1.5 text-xs px-3 min-h-[44px] md:min-h-0 md:px-2.5 md:py-1.5 rounded border transition-colors'
 
 export function ScheduleActions({ scheduleId, isActive, canDelete = false }: Props) {
   const [pending, startTransition] = useTransition()
@@ -56,13 +60,13 @@ export function ScheduleActions({ scheduleId, isActive, canDelete = false }: Pro
         type="button"
         disabled={pending}
         onClick={handleToggle}
-        className={[
-          'flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border transition-colors',
+        className={cn(
+          ACTION_BTN,
           isActive
-            ? 'border-border text-muted-foreground hover:border-amber-300 hover:text-amber-700 hover:bg-amber-50'
-            : 'border-border text-muted-foreground hover:border-green-300 hover:text-green-700 hover:bg-green-50',
-          pending ? 'opacity-50 pointer-events-none' : '',
-        ].join(' ')}
+            ? 'border-border text-muted-foreground hover:border-status-warning hover:text-status-warning hover:bg-status-warning-bg'
+            : 'border-border text-muted-foreground hover:border-status-success hover:text-status-success hover:bg-status-success-bg',
+          pending && 'opacity-50 pointer-events-none',
+        )}
       >
         {isActive
           ? <><Pause className="h-3.5 w-3.5" /> Tạm dừng</>
@@ -75,13 +79,13 @@ export function ScheduleActions({ scheduleId, isActive, canDelete = false }: Pro
           type="button"
           disabled={pending}
           onClick={handleDelete}
-          className={[
-            'flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded border transition-colors',
+          className={cn(
+            ACTION_BTN,
             confirmDelete
-              ? 'border-red-300 bg-red-50 text-red-700 font-medium'
-              : 'border-border text-muted-foreground hover:border-red-300 hover:text-red-700 hover:bg-red-50',
-            pending ? 'opacity-50 pointer-events-none' : '',
-          ].join(' ')}
+              ? 'border-status-danger bg-status-danger-bg text-status-danger font-medium'
+              : 'border-border text-muted-foreground hover:border-status-danger hover:text-status-danger hover:bg-status-danger-bg',
+            pending && 'opacity-50 pointer-events-none',
+          )}
         >
           <Trash2 className="h-3.5 w-3.5" />
           {confirmDelete ? 'Bấm lần nữa để xóa' : 'Xóa lịch'}

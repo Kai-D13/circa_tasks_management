@@ -66,7 +66,7 @@ export function ShareScheduleDialog({ scheduleId, collaborators, adminOptions }:
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger render={<Button variant="outline" size="sm" />}>
+      <DialogTrigger render={<Button variant="outline" size="sm" className="min-h-[44px] md:min-h-0" />}>
         <Share2 className="h-4 w-4 mr-1" /> Chia sẻ
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">

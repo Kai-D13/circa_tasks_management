@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { canAdminManageOwn } from '@/lib/authz'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { DetailPageShell } from '@/components/ds/DetailPageShell'
+import { ErrorState } from '@/components/ds/ErrorState'
 import { StatusBadge, type StatusTone } from '@/components/ds/StatusBadge'
 import { TagBadge, type TagHue } from '@/components/ds/TagBadge'
 import { ScheduleActions } from '@/components/tasks/ScheduleActions'
@@ -66,7 +67,7 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
   if (profile?.role !== 'admin') redirect('/tasks')
 
   const [
-    { data: sched },
+    { data: sched, error: schedError },
     { data: runs },
     { data: recentTasks },
     { data: myCollabRow },
@@ -102,6 +103,15 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
       .maybeSingle(),
   ])
 
+  // Distinguish a genuine 404 (single() with no rows → PGRST116) from a real
+  // query/RLS failure — the latter must surface as an error, not "not found".
+  if (schedError && schedError.code !== 'PGRST116') {
+    return (
+      <DetailPageShell backHref="/tasks/schedules" backLabel="Định kỳ" title="Chi tiết lịch">
+        <ErrorState message="Không thể tải lịch định kỳ" hint={schedError.message} />
+      </DetailPageShell>
+    )
+  }
   if (!sched) notFound()
 
   const template = sched.task_templates as unknown as {
@@ -360,32 +370,34 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
               const done = tasks.filter((t) => t.status === 'done').length
               return (
                 <details key={date} open={idx === 0} className="group border-b last:border-0">
-                  <summary className="flex items-center gap-2 px-4 py-2.5 cursor-pointer hover:bg-muted/30 list-none select-none">
+                  <summary className="flex items-center gap-2 px-4 min-h-[44px] py-2.5 cursor-pointer hover:bg-muted/30 list-none select-none">
                     <ChevronRight className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-90 shrink-0" />
                     <span className="font-medium text-sm">{date === 'unknown' ? '—' : formatDate(date)}</span>
                     <span className="text-xs text-muted-foreground">
                       · {tasks.length} task · <span className={done === tasks.length ? 'text-status-success' : 'text-status-warning'}>{done}/{tasks.length} hoàn thành</span>
                     </span>
                   </summary>
-                  <table className="w-full text-sm border-t">
-                    <tbody className="divide-y">
-                      {tasks.map((t) => (
-                        <tr key={t.id} className="hover:bg-muted/30">
-                          <td className="px-4 py-2 pl-10">
-                            <Link href={`/tasks/${t.id}`} className="hover:underline">
-                              {t.stores?.name ?? '—'}
-                            </Link>
-                          </td>
-                          <td className="px-4 py-2">
-                            <TaskStatusBadge status={t.status as TaskStatus} late={t.status === 'done' && !!t.overdue_at} />
-                          </td>
-                          <td className="px-4 py-2 text-muted-foreground whitespace-nowrap text-right">
-                            {t.deadline ? formatDate(t.deadline) : '—'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  <div className="overflow-x-auto border-t">
+                    <table className="w-full text-sm">
+                      <tbody className="divide-y">
+                        {tasks.map((t) => (
+                          <tr key={t.id} className="hover:bg-muted/30">
+                            <td className="px-4 py-2 pl-10 max-w-[220px]">
+                              <Link href={`/tasks/${t.id}`} className="hover:underline block truncate" title={t.stores?.name ?? undefined}>
+                                {t.stores?.name ?? '—'}
+                              </Link>
+                            </td>
+                            <td className="px-4 py-2">
+                              <TaskStatusBadge status={t.status as TaskStatus} late={t.status === 'done' && !!t.overdue_at} />
+                            </td>
+                            <td className="px-4 py-2 text-muted-foreground whitespace-nowrap text-right">
+                              {t.deadline ? formatDate(t.deadline) : '—'}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
                 </details>
               )
             })
