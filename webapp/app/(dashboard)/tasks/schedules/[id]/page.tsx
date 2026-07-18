@@ -68,9 +68,9 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
 
   const [
     { data: sched, error: schedError },
-    { data: runs },
-    { data: recentTasks },
-    { data: myCollabRow },
+    { data: runs, error: runsError },
+    { data: recentTasks, error: recentTasksError },
+    { data: myCollabRow, error: myCollabError },
   ] = await Promise.all([
     supabase
       .from('task_schedules')
@@ -131,7 +131,10 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
   const isEditorCollaborator = !isOwner && myCollabRow?.permission === 'editor'
 
   // Share dialog data — only the owner (or super admin) needs it.
-  const [{ data: collaborators }, { data: allAdmins }] = isOwner
+  const [
+    { data: collaborators, error: collaboratorsError },
+    { data: allAdmins, error: allAdminsError },
+  ] = isOwner
     ? await Promise.all([
         supabase
           .from('task_schedule_collaborators')
@@ -144,7 +147,10 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
           .neq('id', user.id)
           .order('full_name'),
       ])
-    : [{ data: [] as ScheduleCollaboratorRow[] }, { data: [] as { id: string; full_name: string; email: string }[] }]
+    : [{ data: [] as ScheduleCollaboratorRow[], error: null }, { data: [] as { id: string; full_name: string; email: string }[], error: null }]
+  // A failed collaborator/admin fetch must NOT render the share dialog with
+  // empty lists (reads as "no one to share with"); suppress it + warn instead.
+  const shareDataError = collaboratorsError ?? allAdminsError
 
   const adminOptions = (allAdmins ?? [])
     .filter((a) => a.id !== template?.created_by)
@@ -195,7 +201,9 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
       }
       actions={
         <>
-          {isOwner && (
+          {/* Owner share dialog — suppressed if its data failed to load (an
+              empty dialog reads as "no admins to share with"). */}
+          {isOwner && !shareDataError && (
             <ShareScheduleDialog
               scheduleId={id}
               collaborators={(collaborators ?? []) as unknown as ScheduleCollaboratorRow[]}
@@ -210,6 +218,18 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
         </>
       }
     >
+      {/* A failed own-collaborator read leaves pause/resume gating uncertain;
+          a failed share-data read hides the dialog — warn in both cases. */}
+      {(myCollabError || shareDataError) && (
+        <ErrorState
+          message="Một số thông tin quyền không tải được"
+          hint={
+            (myCollabError ? 'Không kiểm tra được quyền cộng tác. ' : '')
+            + (shareDataError ? 'Danh sách chia sẻ tạm thời không khả dụng. ' : '')
+            + 'Vui lòng tải lại trang.'
+          }
+        />
+      )}
       {/* 2-col layout on md+ */}
       <div className="grid gap-4 md:grid-cols-2">
         {/* Schedule config */}
@@ -318,7 +338,9 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
           <CardTitle className="text-sm">Lịch sử chạy</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          {(!runs || runs.length === 0) ? (
+          {runsError ? (
+            <div className="px-4 pb-4"><ErrorState message="Không tải được lịch sử chạy" hint={runsError.message} /></div>
+          ) : (!runs || runs.length === 0) ? (
             <p className="px-4 pb-4 text-sm text-muted-foreground">Chưa có lần chạy nào</p>
           ) : (
             <div className="overflow-x-auto">
@@ -363,7 +385,9 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
           <CardTitle className="text-sm">Task đã tạo gần đây</CardTitle>
         </CardHeader>
         <CardContent className="p-0">
-          {runGroups.length === 0 ? (
+          {recentTasksError ? (
+            <div className="px-4 pb-4"><ErrorState message="Không tải được task đã tạo" hint={recentTasksError.message} /></div>
+          ) : runGroups.length === 0 ? (
             <p className="px-4 pb-4 text-sm text-muted-foreground">Chưa có task nào được tạo</p>
           ) : (
             runGroups.map(([date, tasks], idx) => {
