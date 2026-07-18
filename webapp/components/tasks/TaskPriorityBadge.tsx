@@ -1,10 +1,11 @@
-import { Badge } from '@/components/ui/badge'
+import { StatusBadge, type StatusTone } from '@/components/ds/StatusBadge'
 import { TaskPriority } from '@/types'
-import { cn } from '@/lib/utils'
 
-const PRIORITY_STYLES: Record<TaskPriority, string> = {
-  urgent: 'bg-orange-100 text-orange-700',
-  normal: 'bg-gray-100 text-gray-600',
+// Priority is an attention signal → DS status tones (urgent = warning, same
+// amber/orange family as the old pastel; normal = neutral).
+const PRIORITY_TONES: Record<TaskPriority, StatusTone> = {
+  urgent: 'warning',
+  normal: 'neutral',
 }
 
 const PRIORITY_LABELS: Record<TaskPriority, string> = {
@@ -13,9 +14,5 @@ const PRIORITY_LABELS: Record<TaskPriority, string> = {
 }
 
 export function TaskPriorityBadge({ priority }: { priority: TaskPriority }) {
-  return (
-    <Badge className={cn(PRIORITY_STYLES[priority])}>
-      {PRIORITY_LABELS[priority]}
-    </Badge>
-  )
+  return <StatusBadge tone={PRIORITY_TONES[priority]}>{PRIORITY_LABELS[priority]}</StatusBadge>
 }

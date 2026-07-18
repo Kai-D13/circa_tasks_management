@@ -124,13 +124,14 @@ export function TaskFilters({ stores, departments, users, currentParams, showArc
               key={v}
               type="button"
               onClick={() => setView(v)}
+              aria-pressed={view === v}
               className={cn(
-                // Mobile: pill look + 40px touch height; desktop keeps the compact strip.
-                'flex-1 sm:flex-none px-4 h-10 sm:h-8 rounded-full sm:rounded-md text-sm font-medium transition-colors',
+                // Mobile: pill + [44px] PIXEL touch height (root 15px rem-trap);
+                // desktop keeps the compact strip. Active = coral for BOTH tabs
+                // (tab-selection state, not a completion status — Pilot-2 review).
+                'flex-1 sm:flex-none px-4 min-h-[44px] sm:min-h-0 sm:h-8 rounded-full sm:rounded-md text-sm font-medium transition-colors',
                 view === v
-                  ? v === 'pending'
-                    ? 'bg-primary text-primary-foreground shadow-sm'
-                    : 'bg-green-600 text-white shadow-sm'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
                   : 'text-muted-foreground hover:text-foreground hover:bg-background/60',
               )}
             >
@@ -162,7 +163,7 @@ export function TaskFilters({ stores, departments, users, currentParams, showArc
 
           {!isStaff && (
             <Select value={priorityVal} onValueChange={(v) => update('priority', v)}>
-              <SelectTrigger className="w-36 h-8 text-sm">
+              <SelectTrigger className="w-36 h-10 md:h-8 text-[16px] md:text-sm">
                 <SelectValue>{PRIORITY_LABEL[priorityVal]}</SelectValue>
               </SelectTrigger>
               <SelectContent>
@@ -179,13 +180,13 @@ export function TaskFilters({ stores, departments, users, currentParams, showArc
               options={storeOptions}
               onValueChange={(v) => update('store_id', v)}
               placeholder="Tất cả cửa hàng"
-              triggerClassName="w-40 h-8 text-sm"
+              triggerClassName="w-40 h-10 md:h-8 text-[16px] md:text-sm"
             />
           )}
 
           {!isStaff && (
             <Select value={categoryVal} onValueChange={(v) => update('category', v)}>
-              <SelectTrigger className="w-36 h-8 text-sm">
+              <SelectTrigger className="w-36 h-10 md:h-8 text-[16px] md:text-sm">
                 <SelectValue>{CATEGORY_LABEL[categoryVal] ?? 'Tất cả loại'}</SelectValue>
               </SelectTrigger>
               <SelectContent>
@@ -201,7 +202,7 @@ export function TaskFilters({ stores, departments, users, currentParams, showArc
 
           {!isStaff && departments.length > 0 && (
             <Select value={deptIdVal} onValueChange={(v) => update('department_id', v)}>
-              <SelectTrigger className="w-40 h-8 text-sm">
+              <SelectTrigger className="w-40 h-10 md:h-8 text-[16px] md:text-sm">
                 <SelectValue>
                   {deptIdVal === ALL ? 'Tất cả bộ phận' : (departments.find((d) => d.id === deptIdVal)?.name ?? 'Bộ phận')}
                 </SelectValue>
@@ -223,12 +224,12 @@ export function TaskFilters({ stores, departments, users, currentParams, showArc
               options={userOptions}
               onValueChange={(v) => update('assignee', v)}
               placeholder={assigneeAllLabel}
-              triggerClassName="w-44 h-8 text-sm"
+              triggerClassName="w-44 h-10 md:h-8 text-[16px] md:text-sm"
             />
           )}
 
           {!isStaff && hasFilters && (
-            <Button variant="ghost" size="sm" onClick={clear} className="h-8 text-xs">
+            <Button variant="ghost" size="sm" onClick={clear} className="h-[44px] md:h-8 text-xs">
               Xoá bộ lọc
             </Button>
           )}
@@ -239,7 +240,7 @@ export function TaskFilters({ stores, departments, users, currentParams, showArc
             <Button
               variant={showOld ? 'default' : 'outline'}
               size="sm"
-              className="h-8 text-xs gap-1.5 ml-auto"
+              className="h-[44px] md:h-8 text-xs gap-1.5 ml-auto"
               onClick={() => update('show_old', showOld ? null : 'true')}
             >
               <History className="h-3.5 w-3.5" />
@@ -251,7 +252,7 @@ export function TaskFilters({ stores, departments, users, currentParams, showArc
             <Button
               variant="outline"
               size="sm"
-              className="h-8 text-xs gap-1.5"
+              className="h-[44px] md:h-8 text-xs gap-1.5"
               onClick={toggleArchive}
             >
               <Archive className="h-3.5 w-3.5" />
@@ -263,7 +264,7 @@ export function TaskFilters({ stores, departments, users, currentParams, showArc
         <Button
           variant="outline"
           size="sm"
-          className="h-8 text-xs gap-1.5"
+          className="h-[44px] md:h-8 text-xs gap-1.5"
           onClick={toggleArchive}
         >
           <ArrowLeft className="h-3.5 w-3.5" />

@@ -9,6 +9,9 @@ import { BulkResubmitButton } from '@/components/tasks/BulkResubmitButton'
 import { ExportSelectedButton } from '@/components/tasks/ExportSelectedButton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { Button } from '@/components/ui/button'
+import { DataTableShell } from '@/components/ds/DataTableShell'
+import { StatusBadge } from '@/components/ds/StatusBadge'
+import { TagBadge, type TagHue } from '@/components/ds/TagBadge'
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
 import { TaskPriorityBadge } from '@/components/tasks/TaskPriorityBadge'
 import { formatDate, formatShiftTime, getEffectiveStatus } from '@/lib/dateUtils'
@@ -17,12 +20,14 @@ import { Radio, Archive, ArchiveRestore, ChevronRight, ChevronDown, Users, Exter
 import { cn } from '@/lib/utils'
 import { Task, TaskCategory } from '@/types'
 
-const CATEGORY_STYLE: Record<TaskCategory, string> = {
-  training: 'bg-blue-100 text-blue-700',
-  recall:   'bg-red-100 text-red-700',
-  display:  'bg-green-100 text-green-700',
-  audit:    'bg-amber-100 text-amber-700',
-  other:    'bg-gray-100 text-gray-600',
+// Category is TAXONOMY → ds/TagBadge hues (purely distinctive — same hue
+// families as before, now dark-safe). Status/priority/signals use StatusBadge.
+const CATEGORY_HUE: Record<TaskCategory, TagHue> = {
+  training: 'blue',
+  recall:   'red',
+  display:  'green',
+  audit:    'amber',
+  other:    'gray',
 }
 const CATEGORY_LABEL: Record<TaskCategory, string> = {
   training: 'Training',
@@ -183,39 +188,26 @@ function TaskBadges({ task, userRole, effStatus, compact }: {
     <>
       {/* compact (mobile): drop the source + department badges to declutter */}
       {!compact && (
-        <span className={cn(
-          'text-xs px-1.5 py-0.5 rounded',
-          isRecurring ? 'bg-teal-100 text-teal-700' : 'bg-slate-100 text-slate-600',
-        )}>
-          {isRecurring ? 'Định kỳ' : 'Phát sinh'}
-        </span>
+        <TagBadge hue={isRecurring ? 'teal' : 'slate'}>{isRecurring ? 'Định kỳ' : 'Phát sinh'}</TagBadge>
       )}
       {isStoreLevelRow ? (
-        <span className="inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded bg-indigo-100 text-indigo-700">
-          <Users className="h-3 w-3" /> Cửa hàng nộp
-        </span>
+        <TagBadge hue="indigo"><Users className="h-3 w-3" /> Cửa hàng nộp</TagBadge>
       ) : (
-        <span className="text-xs px-1.5 py-0.5 rounded bg-sky-100 text-sky-700">Dược sĩ nộp</span>
+        <TagBadge hue="sky">Dược sĩ nộp</TagBadge>
       )}
       {task.category && task.category !== 'other' && (
-        <span className={cn(
-          'text-xs px-1.5 py-0.5 rounded',
-          CATEGORY_STYLE[task.category as TaskCategory] ?? 'bg-gray-100 text-gray-600'
-        )}>
+        <TagBadge hue={CATEGORY_HUE[task.category as TaskCategory] ?? 'gray'}>
           {CATEGORY_LABEL[task.category as TaskCategory] ?? task.category}
-        </span>
+        </TagBadge>
       )}
       {!compact && task.department && (
         <span className={cn('text-xs px-1.5 py-0.5 rounded', deptBadgeClass(task.department.color))}>
           {task.department.name}
         </span>
       )}
-      {canSubmitHint && (
-        <span className="text-xs px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">Bạn có thể nộp</span>
-      )}
-      {isDueSoon(task.deadline, effStatus) && (
-        <span className="text-xs px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">Sắp hết hạn</span>
-      )}
+      {/* True signals (not taxonomy) → semantic StatusBadge tones */}
+      {canSubmitHint && <StatusBadge tone="success">Bạn có thể nộp</StatusBadge>}
+      {isDueSoon(task.deadline, effStatus) && <StatusBadge tone="warning">Sắp hết hạn</StatusBadge>}
     </>
   )
 }
@@ -318,7 +310,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
             <Button
               variant="outline"
               size="sm"
-              className="h-7 text-xs gap-1"
+              className="h-8 text-xs gap-1"
               onClick={handleArchive}
               disabled={pending}
             >
@@ -330,7 +322,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
             <Button
               variant="outline"
               size="sm"
-              className="h-7 text-xs gap-1"
+              className="h-8 text-xs gap-1"
               onClick={handleRestore}
               disabled={pending}
             >
@@ -341,11 +333,14 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
         </div>
       )}
 
-      {/* Desktop: dense table. Mobile: card list (below). */}
+      {/* Desktop: dense table in the DS shell (page no longer wraps a Card).
+          Mobile: card list (below), standalone cards. */}
       <div className="hidden md:block">
+      <DataTableShell>
       <Table>
         <TableHeader>
-          <TableRow className="bg-muted/40 hover:bg-muted/40 [&>th]:text-xs [&>th]:uppercase [&>th]:tracking-wide [&>th]:font-medium [&>th]:text-muted-foreground">
+          {/* Header band styling comes from DataTableShell (thead bg + th type) */}
+          <TableRow className="hover:bg-transparent">
             {showCheckbox && (
               <TableHead className="w-[40px]">
                 <input
@@ -403,12 +398,9 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                         <Radio className="h-4 w-4 text-primary shrink-0" />
                         <span>{item.title}</span>
                         {item.category && item.category !== 'other' && (
-                          <span className={cn(
-                            'text-xs px-1.5 py-0.5 rounded',
-                            CATEGORY_STYLE[item.category as TaskCategory] ?? 'bg-gray-100 text-gray-600'
-                          )}>
+                          <TagBadge hue={CATEGORY_HUE[item.category as TaskCategory] ?? 'gray'}>
                             {CATEGORY_LABEL[item.category as TaskCategory] ?? item.category}
-                          </span>
+                          </TagBadge>
                         )}
                         {item.department && (
                           <span className={cn('text-xs px-1.5 py-0.5 rounded', deptBadgeClass(item.department.color))}>
@@ -424,7 +416,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                     <TableCell className="text-sm whitespace-nowrap" onClick={() => toggleExpand(item.broadcastId)}>
                       <span className={cn(
                         'font-medium',
-                        item.done === item.total ? 'text-green-600' : 'text-amber-600'
+                        item.done === item.total ? 'text-status-success' : 'text-status-warning'
                       )}>
                         {item.done}/{item.total}
                       </span>
@@ -521,12 +513,9 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                           {item.title}
                         </Link>
                         {item.category && item.category !== 'other' && (
-                          <span className={cn(
-                            'text-xs px-1.5 py-0.5 rounded',
-                            CATEGORY_STYLE[item.category as TaskCategory] ?? 'bg-gray-100 text-gray-600'
-                          )}>
+                          <TagBadge hue={CATEGORY_HUE[item.category as TaskCategory] ?? 'gray'}>
                             {CATEGORY_LABEL[item.category as TaskCategory] ?? item.category}
-                          </span>
+                          </TagBadge>
                         )}
                         {item.department && (
                           <span className={cn('text-xs px-1.5 py-0.5 rounded', deptBadgeClass(item.department.color))}>
@@ -542,7 +531,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                     <TableCell className="text-sm whitespace-nowrap" onClick={() => toggleExpand(item.broadcastId)}>
                       <span className={cn(
                         'font-medium',
-                        item.totalStaff > 0 && item.doneStaff === item.totalStaff ? 'text-green-600' : 'text-amber-600'
+                        item.totalStaff > 0 && item.doneStaff === item.totalStaff ? 'text-status-success' : 'text-status-warning'
                       )}>
                         {item.doneStaff}/{item.totalStaff}
                       </span>
@@ -589,7 +578,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                           <TableCell className="text-sm whitespace-nowrap">
                             <span className={cn(
                               'font-medium',
-                              store.total > 0 && store.done === store.total ? 'text-green-600' : 'text-amber-600'
+                              store.total > 0 && store.done === store.total ? 'text-status-success' : 'text-status-warning'
                             )}>
                               {store.done}/{store.total}
                             </span>
@@ -684,12 +673,9 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                           {item.title}
                         </Link>
                         {item.category && item.category !== 'other' && (
-                          <span className={cn(
-                            'text-xs px-1.5 py-0.5 rounded',
-                            CATEGORY_STYLE[item.category as TaskCategory] ?? 'bg-gray-100 text-gray-600'
-                          )}>
+                          <TagBadge hue={CATEGORY_HUE[item.category as TaskCategory] ?? 'gray'}>
                             {CATEGORY_LABEL[item.category as TaskCategory] ?? item.category}
-                          </span>
+                          </TagBadge>
                         )}
                         {item.department && (
                           <span className={cn('text-xs px-1.5 py-0.5 rounded', deptBadgeClass(item.department.color))}>
@@ -705,7 +691,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                     <TableCell className="text-sm whitespace-nowrap" onClick={() => toggleExpand(item.parentId)}>
                       <span className={cn(
                         'font-medium',
-                        item.total > 0 && item.done === item.total ? 'text-green-600' : 'text-amber-600'
+                        item.total > 0 && item.done === item.total ? 'text-status-success' : 'text-status-warning'
                       )}>
                         {item.done}/{item.total}
                       </span>
@@ -764,7 +750,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                 className={cn(
                   'cursor-pointer hover:bg-muted/50',
                   isSelected && 'bg-primary/5',
-                  effStatus === 'overdue' && !isSelected && 'bg-red-50/60 hover:bg-red-50',
+                  effStatus === 'overdue' && !isSelected && 'bg-status-danger-bg/40 hover:bg-status-danger-bg/60',
                 )}
               >
                 {showCheckbox && (
@@ -824,6 +810,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
           )}
         </TableBody>
       </Table>
+      </DataTableShell>
       </div>
 
       {/* Mobile: card list — same items, tap-to-open, groups expand inline. */}
@@ -851,7 +838,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                       </span>
                       <span className="block text-xs text-muted-foreground font-normal">Tạo bởi {item.creator?.full_name ?? '—'}</span>
                     </span>
-                    <span className={cn('text-sm font-medium whitespace-nowrap', allDone ? 'text-green-600' : 'text-amber-600')}>
+                    <span className={cn('text-sm font-medium whitespace-nowrap', allDone ? 'text-status-success' : 'text-status-warning')}>
                       {item.doneStaff}/{item.totalStaff}
                     </span>
                   </button>
@@ -863,7 +850,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                     rel="noopener noreferrer"
                     prefetch={false}
                     aria-label="Mở task tổng"
-                    className="p-3 text-muted-foreground active:text-primary shrink-0"
+                    className="min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground active:text-primary shrink-0"
                   >
                     <ExternalLink className="h-4 w-4" />
                   </Link>
@@ -876,7 +863,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                           <button
                             type="button"
                             onClick={() => toggleExpand(store.parentId)}
-                            className="flex-1 min-w-0 flex items-center justify-between gap-2 p-2 pl-6 text-sm active:bg-muted/50"
+                            className="flex-1 min-w-0 flex items-center justify-between gap-2 min-h-[44px] p-2 pl-6 text-sm active:bg-muted/50"
                           >
                             <span className="flex items-center gap-1.5 min-w-0">
                               {expanded.has(store.parentId)
@@ -886,7 +873,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                             </span>
                             <span className={cn(
                               'text-xs font-medium whitespace-nowrap',
-                              store.total > 0 && store.done === store.total ? 'text-green-600' : 'text-amber-600'
+                              store.total > 0 && store.done === store.total ? 'text-status-success' : 'text-status-warning'
                             )}>
                               {store.done}/{store.total}
                             </span>
@@ -897,7 +884,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                             rel="noopener noreferrer"
                             prefetch={false}
                             aria-label={`Chi tiết ${store.storeName ?? 'cửa hàng'}`}
-                            className="p-2 text-muted-foreground active:text-primary shrink-0"
+                            className="min-h-[44px] min-w-[44px] flex items-center justify-center text-muted-foreground active:text-primary shrink-0"
                           >
                             <ExternalLink className="h-3.5 w-3.5" />
                           </Link>
@@ -909,7 +896,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                             target="_blank"
                             rel="noopener noreferrer"
                             prefetch={false}
-                            className="flex items-center justify-between gap-2 p-2 pl-12 text-sm active:bg-muted/50"
+                            className="flex items-center justify-between gap-2 min-h-[44px] p-2 pl-12 text-sm active:bg-muted/50"
                           >
                             <span className="truncate">
                               {child.assignee?.full_name ?? 'Chưa phân công'}
@@ -951,7 +938,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                     <span className="block truncate">{item.title}</span>
                     <span className="block text-xs text-muted-foreground font-normal">Tạo bởi {item.creator?.full_name ?? '—'}</span>
                   </span>
-                  <span className={cn('text-sm font-medium whitespace-nowrap', allDone ? 'text-green-600' : 'text-amber-600')}>
+                  <span className={cn('text-sm font-medium whitespace-nowrap', allDone ? 'text-status-success' : 'text-status-warning')}>
                     {item.done}/{item.total}
                   </span>
                 </button>
@@ -962,7 +949,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                         key={child.id}
                         href={`/tasks/${child.id}`}
                         prefetch={false}
-                        className="flex items-center justify-between gap-2 p-2 pl-9 text-sm active:bg-muted/50"
+                        className="flex items-center justify-between gap-2 min-h-[44px] p-2 pl-9 text-sm active:bg-muted/50"
                       >
                         <span className="truncate">
                           {item.type === 'broadcast'
@@ -993,8 +980,8 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
               href={`/tasks/${task.id}`}
               prefetch={false}
               className={cn(
-                'block rounded-xl border bg-card p-3.5 active:bg-muted/50',
-                effStatus === 'overdue' && 'border-red-200 bg-red-50/50 dark:border-red-900 dark:bg-red-950/20',
+                'block rounded-lg border bg-card p-3.5 active:bg-muted/50',
+                effStatus === 'overdue' && 'border-status-danger/30 bg-status-danger-bg/50',
               )}
             >
               <div className="flex items-start justify-between gap-2">
