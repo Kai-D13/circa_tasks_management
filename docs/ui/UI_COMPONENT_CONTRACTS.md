@@ -65,8 +65,9 @@ type PaginationProps =
 `{ variant: 'list'|'table'|'cards'; rows?: number; className? }` — bọc `Skeleton` theo 3 khuôn; dùng trong `loading.tsx` các route (thay 4 file lặp code).
 
 ### 11. DetailPageShell (server)
-`{ backHref: string; backLabel: string; title: string; badges?: ReactNode; meta?: ReactNode; children; className? }`
+`{ backHref: string; backLabel: string; title: string; badges?: ReactNode; meta?: ReactNode; actions?: ReactNode; children; className? }`
 - Back-link (ChevronLeft + label) → `<h1>` + badges hàng ngang wrap → meta (`text-sm text-muted-foreground`) → children. Thay header tự chế ở tasks/[id], fs/[id], prescriptions/[id].
+- `actions` (Wave A1): cụm nút header (share/pause/delete…) dồn phải cạnh title trên md+, wrap xuống dưới trên mobile. Không truyền → markup y hệt trước (caller/snapshot cũ không đổi).
 
 ## Catalog dev-only (r1 — implementation thực tế)
 `app/(dashboard)/ui-catalog/page.tsx` — route là **`/ui-catalog`** (KHÔNG phải `/__ui`: App Router coi folder bắt đầu `_` là private, loại khỏi routing). Gate = **`UI_CATALOG=1` env** (Coolify không bao giờ set → production 404) + **super admin** (role khác 404). Render 11 component đủ tone/size/state × 2 theme; fixtures giả 100%; snapshot catalog được COMMIT (`e2e/__screenshots__/ui-catalog.spec.ts/`). Storybook = backlog sau khi API ổn.

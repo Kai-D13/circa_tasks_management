@@ -3,16 +3,20 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { canAdminManageOwn } from '@/lib/authz'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
+import { DetailPageShell } from '@/components/ds/DetailPageShell'
+import { StatusBadge, type StatusTone } from '@/components/ds/StatusBadge'
+import { TagBadge, type TagHue } from '@/components/ds/TagBadge'
 import { ScheduleActions } from '@/components/tasks/ScheduleActions'
 import { ShareScheduleDialog, type ScheduleCollaboratorRow } from '@/components/tasks/ShareScheduleDialog'
 import { RichText } from '@/components/tasks/RichText'
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
-import { ArrowLeft, CalendarClock, ChevronRight, Store } from 'lucide-react'
+import { TaskPriorityBadge } from '@/components/tasks/TaskPriorityBadge'
+import { CalendarClock, ChevronRight, Store } from 'lucide-react'
 import { formatDate } from '@/lib/dateUtils'
-import { TaskCategory, TaskStatus } from '@/types'
-import { cn } from '@/lib/utils'
+import { TaskCategory, TaskPriority, TaskStatus } from '@/types'
 
+// WAVE A1 (UI design system): visual-only — queries, RBAC (owner/collaborator),
+// pause/resume/delete, native <details> accordion all untouched.
 const FREQ_LABEL: Record<string, string> = {
   daily:   'Mỗi ngày',
   weekly:  'Mỗi tuần',
@@ -28,22 +32,16 @@ const CATEGORY_LABEL: Record<TaskCategory, string> = {
   training: 'Training', recall: 'Thu hồi / Kiểm kê',
   display: 'Trưng bày', audit: 'Kiểm tra', other: 'Khác',
 }
-const CATEGORY_STYLE: Record<TaskCategory, string> = {
-  training: 'bg-blue-100 text-blue-700', recall: 'bg-red-100 text-red-700',
-  display: 'bg-green-100 text-green-700', audit: 'bg-amber-100 text-amber-700',
-  other: 'bg-gray-100 text-gray-600',
+// Category = taxonomy → TagBadge hues (same axis as /tasks).
+const CATEGORY_HUE: Record<TaskCategory, TagHue> = {
+  training: 'blue', recall: 'red', display: 'green', audit: 'amber', other: 'gray',
 }
 const OUTPUT_LABEL: Record<string, string> = {
   text: 'Ghi chú', image: 'Ảnh', video: 'Video', file: 'File',
 }
-const PRIORITY_LABEL: Record<string, string> = {
-  urgent: 'Khẩn cấp', normal: 'Bình thường',
-}
-const RUN_STATUS_STYLE: Record<string, string> = {
-  success: 'bg-green-100 text-green-700',
-  failed:  'bg-red-100 text-red-700',
-  running: 'bg-blue-100 text-blue-700',
-  skipped: 'bg-gray-100 text-gray-600',
+// Run outcome = semantic status → StatusBadge tones.
+const RUN_STATUS_TONE: Record<string, StatusTone> = {
+  success: 'success', failed: 'danger', running: 'info', skipped: 'neutral',
 }
 const RUN_STATUS_LABEL: Record<string, string> = {
   success: 'Thành công', failed: 'Lỗi', running: 'Đang chạy', skipped: 'Bỏ qua',
@@ -162,37 +160,31 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
   const runGroups = [...recentByRun.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1))
 
   return (
-    <div className="p-6 max-w-4xl space-y-5">
-      {/* Breadcrumb */}
-      <div className="flex items-center gap-2 text-sm text-muted-foreground">
-        <Link href="/tasks/schedules" className="flex items-center gap-1 hover:text-foreground transition-colors">
-          <ArrowLeft className="h-3.5 w-3.5" />
-          Định kỳ
-        </Link>
-        <span>/</span>
-        <span className="text-foreground font-medium truncate">{template?.title ?? 'Chi tiết lịch'}</span>
-      </div>
-
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4">
-        <div className="space-y-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h1 className="text-xl font-semibold">{template?.title ?? '—'}</h1>
-            <Badge className={sched.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}>
-              {sched.is_active ? 'Đang hoạt động' : 'Tạm dừng'}
-            </Badge>
-            {config?.category && (
-              <span className={cn('text-xs px-2 py-0.5 rounded font-medium', CATEGORY_STYLE[config.category] ?? 'bg-gray-100 text-gray-600')}>
-                {CATEGORY_LABEL[config.category] ?? config.category}
-              </span>
-            )}
-          </div>
-          <p className="text-sm text-muted-foreground flex items-center gap-1.5">
-            <CalendarClock className="h-3.5 w-3.5" />
-            {FREQ_LABEL[sched.frequency] ?? sched.frequency} · Lần tiếp: {sched.next_run_at ? formatDate(sched.next_run_at) : '—'}
-          </p>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
+    <DetailPageShell
+      className="max-w-4xl md:p-6 space-y-5"
+      backHref="/tasks/schedules"
+      backLabel="Định kỳ"
+      title={template?.title ?? '—'}
+      badges={
+        <>
+          <StatusBadge tone={sched.is_active ? 'success' : 'neutral'}>
+            {sched.is_active ? 'Đang hoạt động' : 'Tạm dừng'}
+          </StatusBadge>
+          {config?.category && (
+            <TagBadge hue={CATEGORY_HUE[config.category] ?? 'gray'}>
+              {CATEGORY_LABEL[config.category] ?? config.category}
+            </TagBadge>
+          )}
+        </>
+      }
+      meta={
+        <span className="flex items-center gap-1.5">
+          <CalendarClock className="h-3.5 w-3.5" />
+          {FREQ_LABEL[sched.frequency] ?? sched.frequency} · Lần tiếp: {sched.next_run_at ? formatDate(sched.next_run_at) : '—'}
+        </span>
+      }
+      actions={
+        <>
           {isOwner && (
             <ShareScheduleDialog
               scheduleId={id}
@@ -205,13 +197,13 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
           {(isOwner || isEditorCollaborator) && (
             <ScheduleActions scheduleId={id} isActive={sched.is_active} canDelete={isOwner} />
           )}
-        </div>
-      </div>
-
+        </>
+      }
+    >
       {/* 2-col layout on md+ */}
       <div className="grid gap-4 md:grid-cols-2">
         {/* Schedule config */}
-        <Card>
+        <Card className="rounded-lg">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm">Cấu hình lịch</CardTitle>
           </CardHeader>
@@ -243,17 +235,13 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
         </Card>
 
         {/* Template content */}
-        <Card>
+        <Card className="rounded-lg">
           <CardHeader className="pb-2">
             <CardTitle className="text-sm">Nội dung task</CardTitle>
           </CardHeader>
           <CardContent className="text-sm px-4 pb-4">
             <Row label="Ưu tiên">
-              {config?.priority ? (
-                <span className={config.priority === 'urgent' ? 'text-red-600 font-medium' : ''}>
-                  {PRIORITY_LABEL[config.priority] ?? config.priority}
-                </span>
-              ) : '—'}
+              {config?.priority ? <TaskPriorityBadge priority={config.priority as TaskPriority} /> : '—'}
             </Row>
             <Row label="Output cần nộp">
               {config?.required_outputs?.length ? (
@@ -292,7 +280,7 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
       </div>
 
       {/* Stores */}
-      <Card>
+      <Card className="rounded-lg">
         <CardHeader className="pb-2">
           <CardTitle className="text-sm flex items-center gap-1.5">
             <Store className="h-4 w-4 text-muted-foreground" />
@@ -315,7 +303,7 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
       </Card>
 
       {/* Recent generation runs */}
-      <Card>
+      <Card className="rounded-lg">
         <CardHeader className="pb-2">
           <CardTitle className="text-sm">Lịch sử chạy</CardTitle>
         </CardHeader>
@@ -323,8 +311,9 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
           {(!runs || runs.length === 0) ? (
             <p className="px-4 pb-4 text-sm text-muted-foreground">Chưa có lần chạy nào</p>
           ) : (
+            <div className="overflow-x-auto">
             <table className="w-full text-sm">
-              <thead>
+              <thead className="bg-muted/50">
                 <tr className="border-b">
                   <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Ngày</th>
                   <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Kết quả</th>
@@ -339,9 +328,9 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
                       {r.scheduled_for ?? '—'}
                     </td>
                     <td className="px-4 py-2.5">
-                      <span className={cn('text-xs px-2 py-0.5 rounded', RUN_STATUS_STYLE[r.status] ?? 'bg-gray-100 text-gray-600')}>
+                      <StatusBadge tone={RUN_STATUS_TONE[r.status] ?? 'neutral'}>
                         {RUN_STATUS_LABEL[r.status] ?? r.status}
-                      </span>
+                      </StatusBadge>
                     </td>
                     <td className="px-4 py-2.5 text-muted-foreground">
                       {r.created_count ?? 0} task
@@ -353,12 +342,13 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </CardContent>
       </Card>
 
       {/* Recent tasks generated */}
-      <Card>
+      <Card className="rounded-lg">
         <CardHeader className="pb-2">
           <CardTitle className="text-sm">Task đã tạo gần đây</CardTitle>
         </CardHeader>
@@ -374,7 +364,7 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
                     <ChevronRight className="h-4 w-4 text-muted-foreground transition-transform group-open:rotate-90 shrink-0" />
                     <span className="font-medium text-sm">{date === 'unknown' ? '—' : formatDate(date)}</span>
                     <span className="text-xs text-muted-foreground">
-                      · {tasks.length} task · <span className={done === tasks.length ? 'text-green-600' : 'text-amber-600'}>{done}/{tasks.length} hoàn thành</span>
+                      · {tasks.length} task · <span className={done === tasks.length ? 'text-status-success' : 'text-status-warning'}>{done}/{tasks.length} hoàn thành</span>
                     </span>
                   </summary>
                   <table className="w-full text-sm border-t">
@@ -402,6 +392,6 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
           )}
         </CardContent>
       </Card>
-    </div>
+    </DetailPageShell>
   )
 }
