@@ -18,8 +18,11 @@ export function PeriodTabs({ period }: { period: TargetPeriod }) {
         <Link
           key={t.key}
           href={`/targets?period=${t.key}`}
+          aria-current={period === t.key ? 'page' : undefined}
           className={cn(
-            'px-4 py-1.5 rounded-md font-medium transition-colors',
+            // [44px] PIXEL touch height on mobile (root 15px → rem lies);
+            // desktop keeps the compact strip.
+            'px-4 inline-flex items-center justify-center min-h-[44px] md:min-h-0 md:py-1.5 rounded-md font-medium transition-colors',
             period === t.key
               ? 'bg-background shadow-sm text-foreground'
               : 'text-muted-foreground hover:text-foreground',

@@ -25,7 +25,7 @@ export function ReferralCard({ total, success, sameDay, noOrder, items }: {
     { label: 'Không phát sinh đơn',  value: noOrder, tint: 'text-status-warning' },
   ]
   return (
-    <Card>
+    <Card className="rounded-lg">
       <CardContent className="p-4 space-y-3">
         <p className="flex items-center gap-1.5 font-semibold text-sm uppercase tracking-wide">
           <Gift className="h-4 w-4 text-primary" /> Giới thiệu bạn bè

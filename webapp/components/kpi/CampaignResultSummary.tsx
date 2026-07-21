@@ -42,7 +42,7 @@ export function CampaignResultSummary({ campaign, todayISO }: { campaign: Campai
   ]
 
   return (
-    <Card>
+    <Card className="rounded-lg">
       <CardContent className="p-4 space-y-3">
         <p className="flex items-center gap-1.5 font-semibold text-sm">
           <ClipboardCheck className="h-4 w-4 text-primary" /> Kết quả chiến dịch · Quản lý cửa hàng

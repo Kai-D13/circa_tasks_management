@@ -152,7 +152,7 @@ export function CampaignKpiView({
       {/* ── Hero: mục tiêu / đã đạt / progress / ring / còn thiếu ──
           Brand-tinted flat background (template hero is a warm cream card;
           guide says no heavy gradients) */}
-      <Card className="border-primary/20 bg-secondary">
+      <Card className="rounded-lg border-primary/20 bg-secondary">
         <CardContent className="p-4 space-y-3">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
@@ -182,7 +182,7 @@ export function CampaignKpiView({
       {/* ── 3 metric cards — solid colored icon circles per template
              (brand triad: blue-grey / coral / green) ── */}
       <div className="grid grid-cols-3 gap-2">
-        <Card>
+        <Card className="rounded-lg">
           <CardContent className="p-3 text-center">
             <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-muted text-muted-foreground">
               <CalendarDays className="h-4 w-4" />
@@ -193,7 +193,7 @@ export function CampaignKpiView({
             <p className="text-sm font-bold mt-0.5">{campaignOver ? 'Đã kết thúc' : `${daysLeft} ngày`}</p>
           </CardContent>
         </Card>
-        <Card>
+        <Card className="rounded-lg">
           <CardContent className="p-3 text-center">
             <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground">
               <TrendingUp className="h-4 w-4" />
@@ -202,7 +202,7 @@ export function CampaignKpiView({
             <p className="text-sm font-bold mt-0.5 text-primary">{achieved ? '0₫' : campaignOver ? '—' : vnd(needPerDay)}</p>
           </CardContent>
         </Card>
-        <Card>
+        <Card className="rounded-lg">
           <CardContent className="p-3 text-center">
             <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-status-success-bg text-status-success">
               <Wallet className="h-4 w-4" />
@@ -216,7 +216,7 @@ export function CampaignKpiView({
       </div>
 
       {/* ── Tiến độ theo ngày ── */}
-      <Card>
+      <Card className="rounded-lg">
         <CardContent className="p-4">
           <p className="font-semibold text-sm mb-2">Tiến độ theo ngày</p>
           {daily.length > 0 ? (
@@ -232,7 +232,7 @@ export function CampaignKpiView({
       </Card>
 
       {/* ── Thông tin áp dụng ── */}
-      <Card>
+      <Card className="rounded-lg">
         <CardContent className="p-4">
           <p className="flex items-center gap-1.5 font-semibold text-sm mb-2">
             <Info className="h-4 w-4 text-primary" /> Thông tin áp dụng
@@ -248,7 +248,7 @@ export function CampaignKpiView({
 
       {/* ── Mốc thưởng (horizontal milestones) ── */}
       {tiers.length > 0 && (
-        <Card>
+        <Card className="rounded-lg">
           <CardContent className="p-4 space-y-4">
             <div className="flex items-center justify-between gap-2 flex-wrap">
               <p className="flex items-center gap-1.5 font-semibold text-sm">

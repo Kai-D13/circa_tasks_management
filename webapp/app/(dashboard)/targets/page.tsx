@@ -4,7 +4,10 @@ import { createClient } from '@/lib/supabase/server'
 import { redirectIfFsStaff } from '@/lib/fs/isolation'
 import { isSuperAdminEmail, getSmStoreIds } from '@/lib/authz'
 import { Card, CardContent } from '@/components/ui/card'
+import { PageHeader } from '@/components/ds/PageHeader'
 import { StatusBadge } from '@/components/ds/StatusBadge'
+import { EmptyState } from '@/components/ds/EmptyState'
+import { ErrorState } from '@/components/ds/ErrorState'
 import { PeriodTabs, type TargetPeriod } from '@/components/targets/PeriodTabs'
 import { CampaignCardList } from '@/components/kpi/CampaignCardList'
 import { CampaignKpiView, type CampaignView } from '@/components/kpi/CampaignKpiView'
@@ -278,10 +281,7 @@ export default async function TargetsPage({
     const selStore = smStores.find((s) => s.id === smSelectedStoreId)
     return (
       <div className="p-4 space-y-4 max-w-xl mx-auto">
-        <div className="flex items-center gap-2">
-          <TrendingUp className="h-5 w-5 text-primary" />
-          <h1 className="text-xl font-semibold">Doanh số chiến dịch</h1>
-        </div>
+        <PageHeader title="Doanh số chiến dịch" icon={TrendingUp} />
 
         {/* Store selector — SM manages several stores. LIST mode only; in a
             campaign detail the store is fixed, so show a static label instead. */}
@@ -294,7 +294,7 @@ export default async function TargetsPage({
                   key={s.id}
                   href={`/targets?store=${s.id}`}
                   className={cn(
-                    'shrink-0 whitespace-nowrap text-xs px-3 py-1.5 rounded-full border font-medium transition-colors',
+                    'shrink-0 whitespace-nowrap text-xs px-3 inline-flex items-center min-h-[44px] md:min-h-0 md:py-1.5 rounded-full border font-medium transition-colors',
                     active ? 'border-primary bg-primary text-primary-foreground shadow-sm'
                            : 'border-border text-muted-foreground hover:text-primary hover:bg-primary/5',
                   )}
@@ -310,17 +310,16 @@ export default async function TargetsPage({
         )}
 
         {campaignViews.length === 0 ? (
-          <Card>
-            <CardContent className="py-12 text-center text-sm text-muted-foreground">
-              <TrendingUp className="h-8 w-8 mx-auto mb-3 opacity-30" />
-              {selStore ? `Cửa hàng ${selStore.name} hiện chưa có chiến dịch đang áp dụng.` : 'Chưa có chiến dịch.'}
-            </CardContent>
-          </Card>
+          <EmptyState
+            className="py-12"
+            icon={TrendingUp}
+            title={selStore ? `Cửa hàng ${selStore.name} hiện chưa có chiến dịch đang áp dụng.` : 'Chưa có chiến dịch.'}
+          />
         ) : showCampaignList ? (
           <CampaignCardList items={campaignViews} hrefFor={campaignHref} />
         ) : (
           <>
-            <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">← Danh sách chiến dịch</Link>
+            <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0 -my-2.5 md:my-0">← Danh sách chiến dịch</Link>
             <CampaignResultSummary
               campaign={campaignViews.find((c) => c.id === selectedCampaignId) ?? campaignViews[0]}
               todayISO={vnTodayISO}
@@ -338,26 +337,19 @@ export default async function TargetsPage({
     const storeName = (profile?.stores as unknown as { name: string } | null)?.name ?? 'Cửa hàng của bạn'
     return (
       <div className="p-4 space-y-4 max-w-xl mx-auto">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <TrendingUp className="h-5 w-5 text-primary" />
-            <h1 className="text-xl font-semibold">Doanh số chiến dịch</h1>
-          </div>
-          {/* Campaign view carries its own store pill (r3) — avoid duplicating */}
-          {campaignViews.length === 0 && <span className="text-sm text-muted-foreground">{storeName}</span>}
-        </div>
+        <PageHeader
+          title="Doanh số chiến dịch"
+          icon={TrendingUp}
+          /* Campaign view carries its own store pill (r3) — avoid duplicating */
+          actions={campaignViews.length === 0 ? <span className="text-sm text-muted-foreground">{storeName}</span> : undefined}
+        />
         {campaignViews.length === 0 ? (
-          <Card>
-            <CardContent className="py-12 text-center text-sm text-muted-foreground">
-              <TrendingUp className="h-8 w-8 mx-auto mb-3 opacity-30" />
-              Hiện chưa có chiến dịch doanh số đang áp dụng.
-            </CardContent>
-          </Card>
+          <EmptyState className="py-12" icon={TrendingUp} title="Hiện chưa có chiến dịch doanh số đang áp dụng." />
         ) : showCampaignList ? (
           <CampaignCardList items={campaignViews} hrefFor={campaignHref} />
         ) : (
           <>
-            <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">← Danh sách chiến dịch</Link>
+            <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0 -my-2.5 md:my-0">← Danh sách chiến dịch</Link>
             <CampaignResultSummary
               campaign={campaignViews.find((c) => c.id === selectedCampaignId) ?? campaignViews[0]}
               todayISO={vnTodayISO}
@@ -374,8 +366,9 @@ export default async function TargetsPage({
   if (isStaff) {
     if (!profile?.store_id) {
       return (
-        <div className="p-4">
-          <p className="text-sm text-muted-foreground">Tài khoản chưa được gán cửa hàng. Vui lòng liên hệ Admin.</p>
+        <div className="p-4 space-y-4">
+          <PageHeader title="Doanh số" icon={TrendingUp} />
+          <EmptyState title="Tài khoản chưa được gán cửa hàng" hint="Vui lòng liên hệ Admin." />
         </div>
       )
     }
@@ -389,10 +382,9 @@ export default async function TargetsPage({
     if (rowsError) {
       console.error('[targets] staff query failed:', rowsError.message)
       return (
-        <div className="p-4">
-          <p className="text-sm text-destructive">
-            Không tải được dữ liệu doanh số. Vui lòng thử lại sau hoặc báo Admin.
-          </p>
+        <div className="p-4 space-y-4">
+          <PageHeader title="Doanh số" icon={TrendingUp} />
+          <ErrorState message="Không tải được dữ liệu doanh số" hint="Vui lòng thử lại sau hoặc báo Admin." />
         </div>
       )
     }
@@ -432,16 +424,13 @@ export default async function TargetsPage({
     if (campaignViews.length > 0) {
       return (
         <div className="p-4 space-y-4 max-w-xl mx-auto">
-          <div className="flex items-center gap-2">
-            <TrendingUp className="h-5 w-5 text-primary" />
-            <h1 className="text-xl font-semibold">Doanh số chiến dịch</h1>
-          </div>
+          <PageHeader title="Doanh số chiến dịch" icon={TrendingUp} />
           {/* Card list to pick a campaign (stakeholder); a picked/single one → detail */}
           {showCampaignList ? (
             <CampaignCardList items={campaignViews} hrefFor={campaignHref} />
           ) : (
             <>
-              <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">← Danh sách chiến dịch</Link>
+              <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0 -my-2.5 md:my-0">← Danh sách chiến dịch</Link>
               <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Dược sĩ" todayISO={vnTodayISO} storeName={storeName} />
             </>
           )}
@@ -451,14 +440,10 @@ export default async function TargetsPage({
             <>
               {referral && <ReferralCard {...referral} />}
               {referralError && (
-                <Card>
-                  <CardContent className="py-4 text-sm text-destructive">
-                    Không tải được dữ liệu chương trình giới thiệu. Vui lòng thử lại sau hoặc báo Admin.
-                  </CardContent>
-                </Card>
+                <ErrorState message="Không tải được dữ liệu chương trình giới thiệu" hint="Vui lòng thử lại sau hoặc báo Admin." />
               )}
               {staffPhone === null && (
-                <Card>
+                <Card className="rounded-lg">
                   <CardContent className="py-4 text-sm text-muted-foreground">
                     Cập nhật <span className="font-medium">số điện thoại</span> (biểu tượng &ldquo;Sửa thông tin&rdquo; ở đầu trang) để xem chương trình giới thiệu bạn bè.
                   </CardContent>
@@ -485,23 +470,16 @@ export default async function TargetsPage({
 
     return (
       <div className="p-4 space-y-4 max-w-xl mx-auto">
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <TrendingUp className="h-5 w-5 text-primary" />
-            <h1 className="text-xl font-semibold">{TITLE[period]}</h1>
-          </div>
-          <span className="text-sm text-muted-foreground">{storeName}</span>
-        </div>
+        <PageHeader
+          title={TITLE[period]}
+          icon={TrendingUp}
+          actions={<span className="text-sm text-muted-foreground">{storeName}</span>}
+        />
 
         <PeriodTabs period={period} />
 
         {!current ? (
-          <Card>
-            <CardContent className="py-12 text-center text-sm text-muted-foreground">
-              <TrendingUp className="h-8 w-8 mx-auto mb-3 opacity-30" />
-              {emptyMsg}
-            </CardContent>
-          </Card>
+          <EmptyState className="py-12" icon={TrendingUp} title={emptyMsg} />
         ) : (
           <>
             {/* KPI summary card — identical for day / week / month */}
@@ -526,14 +504,10 @@ export default async function TargetsPage({
         {/* Referral campaign ("Giới thiệu bạn bè") — under Doanh số */}
         {referral && <ReferralCard {...referral} />}
         {referralError && (
-          <Card>
-            <CardContent className="py-4 text-sm text-destructive">
-              Không tải được dữ liệu chương trình giới thiệu. Vui lòng thử lại sau hoặc báo Admin.
-            </CardContent>
-          </Card>
+          <ErrorState message="Không tải được dữ liệu chương trình giới thiệu" hint="Vui lòng thử lại sau hoặc báo Admin." />
         )}
         {staffPhone === null && (
-          <Card>
+          <Card className="rounded-lg">
             <CardContent className="py-4 text-sm text-muted-foreground">
               Cập nhật <span className="font-medium">số điện thoại</span> (biểu tượng &ldquo;Sửa thông tin&rdquo; ở đầu trang) để xem chương trình giới thiệu bạn bè.
             </CardContent>
@@ -564,30 +538,28 @@ export default async function TargetsPage({
 
   return (
     <div className="p-4 md:p-6 space-y-4 max-w-5xl">
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div>
-          <h1 className="text-xl font-semibold">{TITLE[period]} theo cửa hàng</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            {periodRows.length > 0 && currentStart
-              ? `${currentLabel(period, currentStart, periodRows[0]?.period_end ?? currentStart)} · ${periodRows.length} cửa hàng · cập nhật ${formatDateTime(periodRows[0]?.refreshed_at ?? '')}`
-              : 'Chưa có dữ liệu cho kỳ này — kiểm tra cron /api/cron/pull-kpi-targets đã chạy chưa.'}
-          </p>
-          {allRowsError && (
-            <p className="text-sm text-destructive mt-1">
-              Lỗi truy vấn dữ liệu: {allRowsError.message} — kiểm tra migration 067 đã apply chưa.
-            </p>
-          )}
-        </div>
-      </div>
+      <PageHeader
+        title={`${TITLE[period]} theo cửa hàng`}
+        icon={TrendingUp}
+        subtitle={periodRows.length > 0 && currentStart
+          ? `${currentLabel(period, currentStart, periodRows[0]?.period_end ?? currentStart)} · ${periodRows.length} cửa hàng · cập nhật ${formatDateTime(periodRows[0]?.refreshed_at ?? '')}`
+          : 'Chưa có dữ liệu cho kỳ này — kiểm tra cron /api/cron/pull-kpi-targets đã chạy chưa.'}
+      />
+      {allRowsError && (
+        <ErrorState
+          message="Lỗi truy vấn dữ liệu doanh số"
+          hint={`${allRowsError.message} — kiểm tra migration 067 đã apply chưa.`}
+        />
+      )}
 
       <PeriodTabs period={period} />
 
       {periodRows.length > 0 && (
-        <Card>
+        <Card className="rounded-lg">
           <CardContent className="p-0 overflow-x-auto">
             <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-muted/40">
+              <thead className="bg-muted/50">
+                <tr className="border-b">
                   <th className="text-left px-4 py-2.5 text-xs font-medium text-muted-foreground">Cửa hàng</th>
                   <th className="text-right px-4 py-2.5 text-xs font-medium text-muted-foreground">Mục tiêu</th>
                   <th className="text-right px-4 py-2.5 text-xs font-medium text-muted-foreground">Thực đạt</th>
