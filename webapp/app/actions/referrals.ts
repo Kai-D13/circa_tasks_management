@@ -4,6 +4,7 @@ import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { isSuperAdminEmail } from '@/lib/authz'
+import { isReferralEnabled } from '@/lib/affiliate/flags'
 import { parseReferralRows } from '@/lib/referrals/parse'
 
 // Manual snapshot loader for the "Giới thiệu bạn bè" campaign — super admin uploads
@@ -15,6 +16,11 @@ import { parseReferralRows } from '@/lib/referrals/parse'
 const MAX_FILE_BYTES = 5 * 1024 * 1024
 
 export async function uploadReferralReport(formData: FormData) {
+  // Program has ended — reject BEFORE reading the file (stakeholder audit P1:
+  // every entry point checks the flag, not just the UI).
+  if (!isReferralEnabled()) {
+    return { error: 'Chương trình Giới thiệu bạn bè đã ngưng (REFERRAL_ENABLED=false)' }
+  }
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Not authenticated' }
