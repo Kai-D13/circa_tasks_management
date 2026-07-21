@@ -1,8 +1,17 @@
 -- ============================================================================
--- 090: AFFILIATE PROGRAM — orders synced from Circa Online MongoDB  (F1 r1)
+-- 090: AFFILIATE PROGRAM — orders synced from Circa Online MongoDB  (F1 r2)
 -- ============================================================================
--- ⚠ DRAFT — KHÔNG chạy trên Supabase cho tới khi stakeholder audit r1 pass
+-- ⚠ DRAFT — KHÔNG chạy trên Supabase cho tới khi stakeholder audit r2 pass
 --   (plan: docs/plan-affiliate-program.md v2.1).
+--
+-- r2 (đóng P1 data-integrity audit r1):
+--   • Safety floor dựa trên SEEN đo trong DB (count last_seen_run_id = run),
+--     KHÔNG dùng p_pulled — edge case pulled=148/rejected=100 sẽ không còn
+--     tắt nhầm 100 đơn vẫn tồn tại trong Mongo.
+--   • Có rejected > 0 → đóng run success nhưng BỎ QUA deactivate + note.
+--   • Finish RPC validate contract: count không null/âm; upserted + rejected
+--     = pulled; seen (DB) = upserted — sai → RAISE, F2 gọi rpc_fail.
+--   • PREFLIGHT section (chạy TRƯỚC migration) + VERIFY map TỪNG partner_code.
 --
 -- r1 (đóng 2 P1 + P2 audit F1):
 --   • Thêm rpc_finish_affiliate_sync / rpc_fail_affiliate_sync — mark-missing
@@ -13,6 +22,21 @@
 --   • REVOKE PUBLIC trên helper; bảng dept_access tạo TRƯỚC helper; verify
 --     nêu đích danh 4 bảng; seed preflight check store_type + is_active;
 --     partial index (store_id, created_time DESC) WHERE source_active.
+--
+-- ============================================================================
+-- PREFLIGHT (chạy TRƯỚC migration — tất cả phải đúng kỳ vọng mới được chạy):
+--   SELECT count(*) FROM public.app_migrations WHERE version = '090';   -- = 0
+--   SELECT count(*) FROM pg_tables
+--     WHERE tablename IN ('affiliate_orders','affiliate_partner_mappings',
+--                         'affiliate_sync_runs','affiliate_department_access'); -- = 0
+--   SELECT code, store_type, is_active FROM public.stores
+--     WHERE code IN ('POS0080','POS0058','POS0067','POS0009','POS0073',
+--                    'POS0015','POS0068','POS0012','POS0063','POS0019',
+--                    'POS0066','POS0014','POS0065','POS0059',   -- 14 OS
+--                    'POS0088')                                 -- 1 FS
+--     ORDER BY code;
+--   -- kỳ vọng: đủ 15 row · 14 store_type='os' + POS0088='fs' · is_active=true hết
+-- ============================================================================
 --
 -- Thay thế chương trình Referral (đã ngưng — bảng staff_referrals GIỮ NGUYÊN).
 -- Nguồn: MongoDB circa-online_prd_order.order, marker = affiliate_partner_code
@@ -210,10 +234,16 @@ END $$;
 REVOKE ALL ON FUNCTION public.rpc_start_affiliate_sync() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.rpc_start_affiliate_sync() TO service_role;
 
--- Hoàn tất run: CHỈ chấp nhận đúng run đang 'running' (đúng lease); safety
--- floor enforce TRONG DB: chỉ mark-missing khi pulled ≥ 50% số đơn active
--- hiện có (chống mass-deactivate do pull hụt/cursor đứt — caller cũng chỉ
--- được gọi finish sau khi cursor Mongo hoàn tất trọn vẹn).
+-- Hoàn tất run: CHỈ chấp nhận đúng run đang 'running' (đúng lease).
+-- CONTRACT với F2 (khóa ngay tại DB — audit r1 P2): pulled/upserted/rejected
+-- không null/không âm; upserted + rejected = pulled; số row thực sự seen
+-- (last_seen_run_id = run) = upserted. Mỗi row F2 upsert thành công PHẢI set
+-- last_seen_run_id = run, source_active = true, synced_at = now().
+-- SAFETY FLOOR (audit r1 P1 — dựa trên SEEN thật trong DB, KHÔNG dùng pulled):
+-- chỉ mark-missing khi rejected = 0 VÀ seen ≥ 50% số đơn active hiện có.
+-- Có rejected → vẫn đóng run success nhưng BỎ QUA deactivate + ghi note
+-- (row rejected không được gắn last_seen_run_id nên deactivate lúc đó sẽ
+-- tắt nhầm đơn vẫn tồn tại trong Mongo).
 CREATE OR REPLACE FUNCTION public.rpc_finish_affiliate_sync(
   p_run_id   uuid,
   p_pulled   int,
@@ -229,9 +259,21 @@ SET search_path = public
 AS $$
 DECLARE
   v_active_before bigint;
+  v_seen          bigint;
   v_deactivated   int := 0;
   v_note          text := NULL;
 BEGIN
+  -- Validate contract F2 TRƯỚC mọi thứ — sai → RAISE (F2 bắt và gọi rpc_fail).
+  IF p_pulled IS NULL OR p_upserted IS NULL OR p_rejected IS NULL
+     OR p_pulled < 0 OR p_upserted < 0 OR p_rejected < 0 THEN
+    RAISE EXCEPTION 'rpc_finish_affiliate_sync: count null/âm (pulled=%, upserted=%, rejected=%)',
+      p_pulled, p_upserted, p_rejected;
+  END IF;
+  IF p_upserted + p_rejected <> p_pulled THEN
+    RAISE EXCEPTION 'rpc_finish_affiliate_sync: upserted(%) + rejected(%) <> pulled(%)',
+      p_upserted, p_rejected, p_pulled;
+  END IF;
+
   -- Xác nhận đúng run đang giữ lease — sai/đã đóng → RAISE, không ghi gì.
   PERFORM 1 FROM public.affiliate_sync_runs
    WHERE id = p_run_id AND status = 'running'
@@ -240,18 +282,27 @@ BEGIN
     RAISE EXCEPTION 'rpc_finish_affiliate_sync: run % không tồn tại hoặc không ở trạng thái running', p_run_id;
   END IF;
 
+  -- SEEN đo TRONG DB — nguồn sự thật, không tin count từ caller.
+  SELECT count(*) INTO v_seen
+    FROM public.affiliate_orders WHERE last_seen_run_id = p_run_id;
+  IF v_seen <> p_upserted THEN
+    RAISE EXCEPTION 'rpc_finish_affiliate_sync: seen trong DB (%) <> upserted báo cáo (%) — F2 vi phạm contract last_seen_run_id', v_seen, p_upserted;
+  END IF;
+
   SELECT count(*) INTO v_active_before
     FROM public.affiliate_orders WHERE source_active;
 
-  IF p_pulled >= GREATEST(1, floor(v_active_before * 0.5)::int) THEN
+  IF p_rejected > 0 THEN
+    v_note := format('có %s row rejected: bỏ qua mark-missing (row rejected không mang last_seen_run_id — deactivate sẽ tắt nhầm đơn còn tồn tại)', p_rejected);
+  ELSIF v_seen < GREATEST(1, floor(v_active_before * 0.5)::int) THEN
+    v_note := format('safety floor: bỏ qua mark-missing (seen %s < 50%% của %s đơn active)',
+                     v_seen, v_active_before);
+  ELSE
     UPDATE public.affiliate_orders
        SET source_active = false, synced_at = now()
      WHERE source_active
        AND (last_seen_run_id IS DISTINCT FROM p_run_id);
     GET DIAGNOSTICS v_deactivated = ROW_COUNT;
-  ELSE
-    v_note := format('safety floor: bỏ qua mark-missing (pulled %s < 50%% của %s đơn active)',
-                     p_pulled, v_active_before);
   END IF;
 
   UPDATE public.affiliate_sync_runs
@@ -266,7 +317,7 @@ BEGIN
          note = v_note
    WHERE id = p_run_id;
 
-  RETURN jsonb_build_object('deactivated', v_deactivated, 'note', v_note);
+  RETURN jsonb_build_object('deactivated', v_deactivated, 'seen', v_seen, 'note', v_note);
 END $$;
 REVOKE ALL ON FUNCTION public.rpc_finish_affiliate_sync(uuid, int, int, int, jsonb, jsonb) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION public.rpc_finish_affiliate_sync(uuid, int, int, int, jsonb, jsonb) TO service_role;
@@ -359,7 +410,7 @@ END $$;
 
 INSERT INTO public.app_migrations (version, name, notes)
 VALUES ('090', 'affiliate_program',
-        'Affiliate thay Referral (F1 r1): 4 bảng (orders/mappings/sync_runs/dept_access) + is_affiliate_dept_admin + bộ RPC start/finish/fail (lease race-safe, safety-floor mark-missing trong DB) + seed 22 mappings theo stores.code (check store_type + is_active). RLS: FS + external chỉ super; nhánh khác AND is_os_store. total_price NOT NULL không default. Nguồn: Mongo circa-online_prd_order.order.')
+        'Affiliate thay Referral (F1 r2): 4 bảng (orders/mappings/sync_runs/dept_access) + is_affiliate_dept_admin + bộ RPC start/finish/fail (lease race-safe; safety floor theo SEEN trong DB, rejected>0 → bỏ qua deactivate; finish validate contract count) + seed 22 mappings theo stores.code (check store_type + is_active). RLS: FS + external chỉ super; nhánh khác AND is_os_store. total_price NOT NULL không default. Nguồn: Mongo circa-online_prd_order.order.')
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;
@@ -387,15 +438,41 @@ COMMIT;
 --     WHERE a.attrelid = 'public.affiliate_orders'::regclass
 --       AND a.attname = 'total_price';                                     -- notnull=true, default=NULL
 --
+-- 1b) Mapping TỪNG partner_code (kỳ vọng: 0 row lệch — audit r1 P2):
+--   WITH expected(partner_code, store_code) AS (VALUES
+--     ('CIRCA-AKARI','POS0080'),('CIRCA-BEVERLY','POS0058'),
+--     ('CIRCA-CELADON','POS0067'),('CIRCA-CENTRAL','POS0009'),
+--     ('CIRCA-ECOGREEN','POS0073'),('CIRCA-ELARA','POS0015'),
+--     ('CIRCA-FLORITA','POS0068'),('CIRCA-LUMINA','POS0012'),
+--     ('CIRCA-MEDLY','POS0063'),('CIRCA-MIRA','POS0019'),
+--     ('CIRCA-PHARMAONE','POS0066'),('CIRCA-SUNRISE','POS0014'),
+--     ('CIRCA-SYMPHONY','POS0065'),('CIRCA-TAMVIET','POS0059'),
+--     ('CIRCA-HOABINH2','POS0088'),
+--     ('CIRCA-ONG-CHU-5',NULL),('CIRCA-MYHANH',NULL),
+--     ('CIRCA-YENMAI-TAYNINH',NULL),('NT-NGOC-VY',NULL),
+--     ('NT-BAO-TRAN',NULL),('NT THIÊN',NULL),('HOTEL-DN-LDH',NULL))
+--   SELECT e.partner_code, e.store_code AS expected, s.code AS actual
+--     FROM expected e
+--     LEFT JOIN public.affiliate_partner_mappings m ON m.partner_code = e.partner_code
+--     LEFT JOIN public.stores s ON s.id = m.store_id
+--     WHERE m.partner_code IS NULL                    -- thiếu mapping
+--        OR s.code IS DISTINCT FROM e.store_code;     -- map sai store
+--   -- kỳ vọng: 0 rows
+--
 -- 2) Vòng đời run (service role):
 --   SELECT public.rpc_start_affiliate_sync();          -- lần 1: uuid
 --   SELECT public.rpc_start_affiliate_sync();          -- lần 2 ngay sau: NULL (lease giữ)
 --   SELECT public.rpc_finish_affiliate_sync('<uuid>', 0, 0);
---     -- bảng rỗng: deactivated=0; run → success; note NULL (floor GREATEST(1,0)=1 > pulled 0
---     --            → thực tế note 'safety floor…' khi CHƯA có đơn nào — chấp nhận, backfill đầu
---     --            tiên luôn pulled>0)
+--     -- bảng rỗng: seen=0=upserted ✓; floor GREATEST(1,0)=1 > seen 0 → note
+--     -- 'safety floor…', deactivated=0, run → success (backfill thật luôn pulled>0)
 --   SELECT public.rpc_finish_affiliate_sync('<cùng uuid>', 1, 1);          -- RAISE (run đã đóng)
---   SELECT public.rpc_fail_affiliate_sync('<uuid mới>', 'test');           -- run → failed
+--   -- Contract validation (mở run mới cho từng case):
+--   SELECT public.rpc_finish_affiliate_sync('<uuid>', 10, 5, 3);           -- RAISE (5+3 <> 10)
+--   SELECT public.rpc_finish_affiliate_sync('<uuid>', 5, 5, 0);            -- RAISE (seen 0 <> upserted 5)
+--   SELECT public.rpc_finish_affiliate_sync('<uuid>', NULL, 0, 0);         -- RAISE (null)
+--   SELECT public.rpc_fail_affiliate_sync('<uuid>', 'test');               -- run → failed
+--   -- Case rejected>0 (sau khi có fixture): finish(pulled=n, upserted=n-1,
+--   -- rejected=1) → success + note 'có 1 row rejected…', deactivated=0
 --
 -- 3) QA Gate F1 — role matrix (fixture tạm: 1 đơn OS store A + 1 OS store B +
 --    1 FS + 1 external qua service role; CLEAN sau khi test):
