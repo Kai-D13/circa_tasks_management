@@ -1,24 +1,29 @@
 // Shared log constants — used by the logs page (server) and LogFilters (client).
+import type { TagHue } from '@/components/ds/TagBadge'
 
 export const LOGS_PAGE_SIZE = 50
 
-export const ACTION_COLORS: Record<string, string> = {
-  created:                     'bg-blue-100 text-blue-700',
-  updated:                     'bg-yellow-100 text-yellow-700',
-  deleted:                     'bg-red-100 text-red-700',
-  submitted:                   'bg-green-100 text-green-700',
-  status_changed:              'bg-purple-100 text-purple-700',
-  reassigned:                  'bg-orange-100 text-orange-700',
-  resubmit_requested:          'bg-amber-100 text-amber-700',
-  review_note:                 'bg-indigo-100 text-indigo-700',
-  schedule_created:            'bg-teal-100 text-teal-700',
-  schedule_paused:             'bg-gray-100 text-gray-600',
-  schedule_resumed:            'bg-teal-100 text-teal-700',
-  schedule_deleted:            'bg-red-100 text-red-700',
-  recurring_tasks_generated:   'bg-teal-100 text-teal-700',
-  cron_run_failed:             'bg-red-100 text-red-700',
-  deadline_extended:           'bg-orange-100 text-orange-700',
-  staff_all_instruction_updated: 'bg-yellow-100 text-yellow-700',
+// Log action = TAXONOMY (which operation happened), not a status → ds TagBadge
+// hues. Same hue families as the previous pastels; the palette has no
+// yellow/purple/orange, so those map to their nearest neighbours
+// (yellow→amber, purple→indigo, orange→sky).
+export const ACTION_HUE: Record<string, TagHue> = {
+  created:                     'blue',
+  updated:                     'amber',
+  deleted:                     'red',
+  submitted:                   'green',
+  status_changed:              'indigo',
+  reassigned:                  'sky',
+  resubmit_requested:          'amber',
+  review_note:                 'indigo',
+  schedule_created:            'teal',
+  schedule_paused:             'gray',
+  schedule_resumed:            'teal',
+  schedule_deleted:            'red',
+  recurring_tasks_generated:   'teal',
+  cron_run_failed:             'red',
+  deadline_extended:           'sky',
+  staff_all_instruction_updated: 'amber',
 }
 
 export const ACTION_LABELS: Record<string, string> = {
