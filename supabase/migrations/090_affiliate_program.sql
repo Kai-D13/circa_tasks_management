@@ -73,7 +73,10 @@ CREATE POLICY ada_select_super ON public.affiliate_department_access
 --   INSERT INTO public.affiliate_department_access (department_id)
 --   VALUES ('1b362298-7121-4604-9192-4a9ca2bb545f');
 
--- ── 2. Helper: admin thuộc phòng ban được cấp quyền affiliate ───────────────
+-- ── 2. Helper: ADMIN thuộc phòng ban được cấp quyền affiliate ───────────────
+-- Helper tự xác nhận role (r2.1): contract của tên hàm là "dept ADMIN" — nếu
+-- chỉ check department, F3 dùng trực tiếp sẽ vô tình mở Affiliate cho staff
+-- cùng phòng. RLS policy vẫn check get_user_role()='admin' riêng (phòng thủ kép).
 CREATE OR REPLACE FUNCTION public.is_affiliate_dept_admin()
 RETURNS boolean
 LANGUAGE sql
@@ -86,6 +89,7 @@ AS $$
     FROM public.users u
     JOIN public.affiliate_department_access a ON a.department_id = u.department_id
     WHERE u.id = auth.uid()
+      AND u.role = 'admin'
   )
 $$;
 REVOKE ALL ON FUNCTION public.is_affiliate_dept_admin() FROM PUBLIC;
