@@ -54,7 +54,7 @@ function Ring({ pct, tierReached }: { pct: number; tierReached: boolean }) {
         />
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
-        <span className={cn('text-lg font-bold leading-none', tierReached ? 'text-green-600' : clamped > 0 && 'text-primary')}>
+        <span className={cn('text-lg font-bold leading-none', tierReached ? 'text-status-success' : clamped > 0 && 'text-primary')}>
           {Math.round(pct)}%
         </span>
         <span className="text-[9px] text-muted-foreground mt-0.5">hoàn thành</span>
@@ -159,7 +159,7 @@ export function CampaignKpiView({
               <p className="text-xs text-muted-foreground">Mục tiêu GMV</p>
               <p className="text-2xl font-bold text-primary leading-tight">{vnd(target)}</p>
               <p className="text-xs text-muted-foreground mt-2">Đã đạt</p>
-              <p className="text-2xl font-bold text-green-600 leading-tight">
+              <p className="text-2xl font-bold text-status-success leading-tight">
                 {sel.actual_value === null ? 'Chưa đồng bộ' : vnd(actual)}
               </p>
             </div>
@@ -184,7 +184,7 @@ export function CampaignKpiView({
       <div className="grid grid-cols-3 gap-2">
         <Card>
           <CardContent className="p-3 text-center">
-            <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-[#a3b2bf] text-white">
+            <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-muted text-muted-foreground">
               <CalendarDays className="h-4 w-4" />
             </span>
             {/* Inclusive rule (today counts — the store still sells today), so the
@@ -204,11 +204,11 @@ export function CampaignKpiView({
         </Card>
         <Card>
           <CardContent className="p-3 text-center">
-            <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-green-500 text-white">
+            <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-status-success-bg text-status-success">
               <Wallet className="h-4 w-4" />
             </span>
             <p className="text-[11px] text-muted-foreground mt-1.5">GMV hôm nay</p>
-            <p className={cn('text-sm font-bold mt-0.5', todayGmv !== null && todayGmv > 0 && 'text-green-600')}>
+            <p className={cn('text-sm font-bold mt-0.5', todayGmv !== null && todayGmv > 0 && 'text-status-success')}>
               {todayGmv !== null ? vnd(todayGmv) : '—'}
             </p>
           </CardContent>
@@ -256,7 +256,7 @@ export function CampaignKpiView({
               </p>
               <p className="text-sm">
                 <span className="text-muted-foreground">Commission Store dự kiến: </span>
-                <span className={cn('font-bold', expectedPool > 0 ? 'text-green-600' : 'text-muted-foreground')}>
+                <span className={cn('font-bold', expectedPool > 0 ? 'text-status-success' : 'text-muted-foreground')}>
                   {vnd(expectedPool)}
                 </span>
               </p>
@@ -266,7 +266,7 @@ export function CampaignKpiView({
             <div className="px-2 pt-6 pb-1">
               <div className="relative">
                 <span
-                  className="absolute -top-6 -translate-x-1/2 whitespace-nowrap rounded-full bg-green-600 text-white text-[10px] font-semibold px-2 py-0.5"
+                  className="absolute -top-6 -translate-x-1/2 whitespace-nowrap rounded-full bg-status-success text-background text-[10px] font-semibold px-2 py-0.5"
                   style={{ left: `${frac * 100}%` }}
                 >
                   Hiện tại: {pct.toFixed(0)}%
@@ -301,10 +301,10 @@ export function CampaignKpiView({
                       key={t.tier_order}
                       className={cn(
                         'rounded-lg border p-2 text-center',
-                        reached ? 'border-green-300 bg-green-50' : isNext ? 'border-primary bg-secondary' : 'bg-muted/20',
+                        reached ? 'border-status-success/40 bg-status-success-bg' : isNext ? 'border-primary bg-secondary' : 'bg-muted/20',
                       )}
                     >
-                      <p className={cn('text-base font-bold', reached ? 'text-green-700' : isNext ? 'text-primary' : '')}>{t.threshold_pct}%</p>
+                      <p className={cn('text-base font-bold', reached ? 'text-status-success' : isNext ? 'text-primary' : '')}>{t.threshold_pct}%</p>
                       <p className="text-[10px] text-muted-foreground">Thưởng: <span className={cn('font-semibold', isNext ? 'text-primary' : 'text-foreground')}>{vnd(t.commission_amount)}</span></p>
                     </div>
                   )
@@ -320,10 +320,10 @@ export function CampaignKpiView({
                       key={t.tier_order}
                       className={cn(
                         'flex items-center justify-between gap-2 rounded-lg border px-3 py-2',
-                        reached ? 'border-green-300 bg-green-50' : isNext ? 'border-primary bg-secondary' : 'bg-muted/20',
+                        reached ? 'border-status-success/40 bg-status-success-bg' : isNext ? 'border-primary bg-secondary' : 'bg-muted/20',
                       )}
                     >
-                      <p className={cn('text-sm font-bold', reached ? 'text-green-700' : isNext ? 'text-primary' : '')}>{t.threshold_pct}%</p>
+                      <p className={cn('text-sm font-bold', reached ? 'text-status-success' : isNext ? 'text-primary' : '')}>{t.threshold_pct}%</p>
                       <p className="text-xs text-muted-foreground">Thưởng: <span className={cn('font-semibold', isNext ? 'text-primary' : 'text-foreground')}>{vnd(t.commission_amount)}</span></p>
                     </div>
                   )

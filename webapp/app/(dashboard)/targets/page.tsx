@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { redirectIfFsStaff } from '@/lib/fs/isolation'
 import { isSuperAdminEmail, getSmStoreIds } from '@/lib/authz'
 import { Card, CardContent } from '@/components/ui/card'
+import { StatusBadge } from '@/components/ds/StatusBadge'
 import { PeriodTabs, type TargetPeriod } from '@/components/targets/PeriodTabs'
 import { CampaignCardList } from '@/components/kpi/CampaignCardList'
 import { CampaignKpiView, type CampaignView } from '@/components/kpi/CampaignKpiView'
@@ -40,13 +41,16 @@ function currentLabel(period: TargetPeriod, start: string, end: string): string 
 const NOUN: Record<TargetPeriod, string> = { day: 'ngày', week: 'tuần', month: 'tháng' }
 const TITLE: Record<TargetPeriod, string> = { day: 'Doanh số hôm nay', week: 'Doanh số tuần', month: 'Doanh số tháng' }
 
-function StatusBadge({ status, hasGoal = true }: { status: string | null; hasGoal?: boolean }) {
+// KPI goal badge. Sits on the coral gradient hero, so it keeps its own
+// high-contrast white treatment there (DS status tokens are tuned for neutral
+// surfaces); wording + the "no target → never đã/chưa đạt" rule are unchanged.
+function GoalBadge({ status, hasGoal = true }: { status: string | null; hasGoal?: boolean }) {
   const s = status?.toLowerCase()
   const known = s === 'achieved' || s === 'not achieved'
   // No target set (or unknown status) → neutral, never "đã/chưa đạt".
   if (!hasGoal || !known) {
     return (
-      <span className="text-xs px-2 py-0.5 rounded font-medium bg-muted text-muted-foreground">
+      <span className="text-xs px-2 py-0.5 rounded font-medium bg-white/20 text-white whitespace-nowrap">
         Chưa có mục tiêu
       </span>
     )
@@ -54,8 +58,8 @@ function StatusBadge({ status, hasGoal = true }: { status: string | null; hasGoa
   const achieved = s === 'achieved'
   return (
     <span className={cn(
-      'text-xs px-2 py-0.5 rounded font-medium',
-      achieved ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700',
+      'text-xs px-2 py-0.5 rounded font-medium whitespace-nowrap',
+      achieved ? 'bg-white text-primary' : 'bg-white/20 text-white',
     )}>
       {achieved ? 'Đã đạt mục tiêu' : 'Chưa đạt mục tiêu'}
     </span>
@@ -92,7 +96,7 @@ function KpiSummaryCard({
           </p>
           <p className="text-xs text-white/80 mt-0.5">{label}</p>
         </div>
-        <StatusBadge status={status} hasGoal={hasGoal} />
+        <GoalBadge status={status} hasGoal={hasGoal} />
       </div>
 
       <div>
@@ -600,7 +604,17 @@ export default async function TargetsPage({
                     <td className="px-4 py-2.5 text-right">
                       {r.run_rate !== null ? `${r.run_rate.toFixed(1)}%` : '—'}
                     </td>
-                    <td className="px-4 py-2.5"><StatusBadge status={r.status} hasGoal={(r.target ?? 0) > 0} /></td>
+                    {/* Neutral surface → DS status tokens (the hero's GoalBadge
+                        is white-on-coral and would vanish here). */}
+                    <td className="px-4 py-2.5">
+                      {(r.target ?? 0) > 0 && (r.status?.toLowerCase() === 'achieved' || r.status?.toLowerCase() === 'not achieved') ? (
+                        <StatusBadge tone={r.status?.toLowerCase() === 'achieved' ? 'success' : 'warning'}>
+                          {r.status?.toLowerCase() === 'achieved' ? 'Đã đạt mục tiêu' : 'Chưa đạt mục tiêu'}
+                        </StatusBadge>
+                      ) : (
+                        <StatusBadge tone="neutral">Chưa có mục tiêu</StatusBadge>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

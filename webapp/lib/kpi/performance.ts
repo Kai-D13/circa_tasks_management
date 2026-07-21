@@ -33,9 +33,11 @@ export function campaignPerformance(
   return (Number(actual) * campaignDays) / (elapsedDays * target) * 100
 }
 
-// Shared badge tone: ≥100 on-pace (green), ≥80 slightly behind (amber), else red.
+// Shared badge tone, from the DS status tokens (dark-mode safe — the old
+// text-green-600/amber-600/red-600 had no dark pair). Thresholds unchanged:
+// >=100 on-pace (success), >=80 slightly behind (warning), else danger.
 export function performanceTone(pct: number): string {
-  if (pct >= 100) return 'text-green-600'
-  if (pct >= 80) return 'text-amber-600'
-  return 'text-red-600'
+  if (pct >= 100) return 'text-status-success'
+  if (pct >= 80) return 'text-status-warning'
+  return 'text-status-danger'
 }
