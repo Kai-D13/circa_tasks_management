@@ -1,132 +1,105 @@
 # Plan: KPI Campaign × GMV Affiliate — tick chọn chỉ số khi tạo chiến dịch
 
-**Phiên bản:** v1.0 · 22/07/2026 · Trình stakeholder duyệt trước khi build
+**Phiên bản:** v1.1 · 22/07/2026 · Đã cập nhật theo audit stakeholder (thay thế toàn bộ v1.0)
 **Phạm vi:** Enhance module KPI Campaign tại `/targets` — thêm chỉ số **GMV Affiliate** bên cạnh **GMV Offline** hiện tại.
-**Nguyên tắc:** Không deploy bất kỳ thay đổi nào tới khi toàn bộ pass QA; campaign hiện đang chạy trên production KHÔNG bị ảnh hưởng (mọi thay đổi schema là additive, mặc định = hành vi cũ).
+**Nguyên tắc:** Không deploy tới khi toàn bộ pass QA; campaign đang chạy production KHÔNG bị ảnh hưởng (schema additive, mặc định = hành vi cũ; checkbox affiliate ẩn sau flag `KPI_AFFILIATE_ENABLED=false` cho tới rollout).
 
 ---
 
-## 1. Tóm tắt request
+## 1. Contract nghiệp vụ (ĐÃ CHỐT — audit 22/07)
 
-Khi super admin tạo campaign (`/targets/campaigns/new`), bước "Thông tin" có thêm **2 ô tick chọn chỉ số**:
-
-| Tick | Nguồn dữ liệu | Ý nghĩa |
-|---|---|---|
-| ☑ **GMV Offline** (mặc định tick) | BigQuery BI (như hiện tại) | Doanh số bán tại cửa hàng |
-| ☐ **GMV Affiliate** | MongoDB Circa Online → bảng `affiliate_orders` (đồng bộ 2h/lần) | Doanh số đơn khách scan QR đặt trên circa.vn, ghi nhận cho store |
-
-Hành vi theo cấu hình:
-- **Chỉ tick GMV Offline** → toàn bộ cấu hình, cron, hàm xử lý, hiển thị **y hệt hiện tại** (campaign cũ tự động thuộc nhóm này).
-- **Chỉ tick GMV Affiliate** → mọi chỉ số (Đã đạt, %, bậc thưởng, chart) tính từ đơn Affiliate.
-- **Tick cả 2** → hero "Đã đạt" = **tổng gộp**, thêm khối "**Phân loại theo chỉ số**" tách riêng từng nguồn (theo mock UI stakeholder đã gửi).
-- **File import target KHÔNG đổi** — vẫn `pos_code, kpi_target, store_kpi_group, tier_N_threshold_pct, tier_N_commission_amount`.
-
----
-
-## 2. Quy tắc nghiệp vụ (đã chốt 22/07 — đề nghị stakeholder xác nhận lần cuối vì dính thưởng)
-
-### 2.1 Công thức khi tick cả 2 chỉ số (theo mock)
+```text
+Attribution store = affiliate_partner_code → affiliate_partner_mappings → stores.id (nguồn DUY NHẤT)
+Đơn được tính GMV = status = DELIVERED (chỉ đơn giao thành công)
+Giá trị GMV       = total_price
+Target            = kpi_target chung từ file import hiện tại (file KHÔNG đổi)
 ```
-Đã đạt        = GMV_offline + GMV_affiliate
-% hoàn thành  = Đã đạt / kpi_target × 100        (mock: (256,7tr + 57,9tr) / 491,3tr = 64%)
-Bậc đạt       = bậc CAO NHẤT có threshold ≤ % hoàn thành (trên % GỘP)
-Commission    = số tiền của bậc đạt (quỹ Store — chính sách hiện hành, không đổi)
-Còn thiếu     = max(kpi_target − Đã đạt, 0)
+
+- **`assigned_store_id` KHÔNG dùng cho attribution** — đó là cửa hàng xử lý đơn, không phải cửa hàng được ghi nhận Affiliate. Khách scan QR của `CIRCA-TAMVIET` → toàn bộ GMV Affiliate sau này luôn thuộc Tâm Việt, kể cả đơn do store khác xử lý. Mọi ý tưởng fallback/discovery bằng `assigned_store_id` trước đây đã **hủy hoàn toàn**.
+- **`systemNote` / admin note / payment / address: không pull, không parse, không lưu** (chứa dữ liệu vận hành nhạy cảm; projection đồng bộ hiện tại đã minimal và giữ nguyên).
+- **Tầng đồng bộ (ingestion) vẫn lưu MỌI status** — không lọc khi pull Mongo, vì đơn có thể chuyển `PROCESSING → DELIVERED` (phải cộng ở lần sync sau) hoặc `DELIVERED → CANCELED` (phải trừ). Việc lọc `DELIVERED` chỉ diễn ra ở tầng tính KPI: `source_active = true AND status_norm = 'delivered'`.
+- Khi tick cả 2 chỉ số: `Đã đạt = GMV_offline + GMV_affiliate`; % hoàn thành, bậc thưởng, commission pool, còn thiếu, nhịp độ đều tính trên **tổng gộp** so với `kpi_target`.
+
+## 2. Câu hỏi mở DUY NHẤT cần stakeholder chốt
+
+> Đơn `DELIVERED` được đưa vào campaign theo **ngày tạo đơn (`created_time`)** hay **ngày giao thành công**?
+
+Dữ kiện kỹ thuật: các field thời gian đã thấy trong Mongo = `created_time`, `confirmed_time`, `last_updated_time` — **chưa thấy field ngày giao thành công**. Trong phiên VPN dry-run tới, chúng tôi sẽ in danh sách field đầy đủ của 1 đơn DELIVERED để chốt trên dữ kiện thật. Nếu Mongo không có field ngày giao, proxy duy nhất là `last_updated_time` (thời điểm đổi status cuối — không chính xác tuyệt đối). Phần aggregation theo ngày chỉ hoàn tất sau khi điểm này được chốt; các phần khác build song song không bị chặn.
+
+## 3. Số liệu baseline (đã verify độc lập 22/07 — khớp audit 100%)
+
+Snapshot 153 đơn / 23 partner code; `DELIVERED` = **109 đơn / 36.836.230₫**. Sau khi map `CIRCA-MIZUKI`:
+
+| Nhóm | Đơn DELIVERED | GMV | Vào campaign OS? |
+|---|---|---|---|
+| OS (15 code, gồm MIZUKI) | 31 | 8.522.800₫ | ✅ |
+| FS (HOABINH2) | 5 | 2.124.100₫ | ❌ (chỉ super thấy) |
+| Đối tác ngoài (7 code) | 73 | 26.189.330₫ | ❌ (chỉ super thấy) |
+
+**`CIRCA-MIZUKI` là code mới** (1 đơn DELIVERED 248.900₫) chưa có trong mapping — đã verify DB: `POS0013` = "CIRCA MIZUKI", loại **os**, đang **active** → thêm mapping chính thức trong migration tiếp theo (kèm preflight). Manifest cập nhật 148/22 → **153/23**.
+
+## 4. Kiến trúc & đồng bộ 2 nguồn
+
+```text
+BigQuery BI ─(cron 2h, phút 20)──────────────┐
+                                             ├─> KPI aggregate ─> actuals (+offline/affiliate) ─> UI 4 role
+MongoDB ─(cron 2h, phút 05)─> affiliate_orders┘        │
+   (3-RPC lifecycle, đã audit 3 vòng)                  └─> daily (+gmv_affiliate) ─> chart
 ```
-Khối "Phân loại theo chỉ số": mỗi dòng hiện giá trị + `% riêng / cùng kpi_target` (mock: offline 53%, affiliate 12% — cộng lại = 64% hero).
 
-### 2.2 Quy tắc đếm GMV Affiliate (kế thừa nguyên các quyết định đã duyệt ở chương trình Affiliate)
-- Đếm **mọi đơn trừ CANCELED** (FAIL_TO_DELIVER và trạng thái lạ vẫn tính) — nhãn "Doanh số Affiliate ghi nhận".
-- Doanh thu = `total_price` (field tiền duy nhất trong Mongo); **giá trị âm vẫn cộng** (giữ để phát hiện case thực tế).
-- Đơn thuộc store nào = theo bảng mapping `affiliate_partner_mappings` đã seed (22 code). Đơn **Đối tác ngoài / code chưa map / mapping tắt** → không thuộc store nào → **KHÔNG tính vào campaign của bất kỳ store nào**.
-- Ngày ghi nhận = `created_time` quy về **ngày Việt Nam** (khớp cách BigQuery tính ngày cho GMV offline).
-- Chỉ tính đơn còn tồn tại ở nguồn (`source_active = true` — đơn biến mất khỏi Mongo bị loại khỏi số).
+- KPI aggregate **không gọi Mongo trực tiếp** — chỉ đọc `affiliate_orders` nội bộ; phép SUM chạy **trong database qua RPC service-role** (không giới hạn 1.000 dòng của API).
+- **Thứ tự bắt buộc:** Affiliate sync thành công → KPI aggregate. KPI **không recompute** nếu run affiliate mới nhất đang `running`/`failed` hoặc stale (quá 3h) → **giữ snapshot cũ**, không bao giờ ghi dữ liệu nửa thành công (ghi daily + tổng trong cùng 1 transaction). Campaign offline-only không bị ảnh hưởng.
+- 2 cron Coolify lệch phút: affiliate `5 */2 * * *`, KPI aggregate `20 */2 * * *`.
 
-### 2.3 Hiển thị phase này
-- Chart "Tiến độ theo ngày": **cột gộp** (offline + affiliate cùng 1 cột/ngày). "GMV hôm nay" = tổng ngày.
-- Dòng trong "Phân loại theo chỉ số" **chưa bấm được** (chevron trang trí hoặc bỏ) — bản stacked 2 màu / bấm xem danh sách đơn affiliate sẽ đề xuất sau khi stakeholder xem bản đầu.
+## 5. Thay đổi schema — migration mới (additive)
 
----
-
-## 3. Kiến trúc & luồng dữ liệu
-
-```
-BigQuery BI ──(cron 2h, như hiện tại)──┐
-                                       ├──> syncCampaign() ──> kpi_campaign_store_actuals   ──> UI 4 role
-MongoDB Circa Online ──(cron 2h,       │         │             (+ actual_offline/affiliate)
-  pull-affiliate-orders, đã build) ──> │         └──────────> kpi_campaign_store_daily_actuals
-  affiliate_orders (Supabase) ─────────┘                       (+ gmv_affiliate) ──> chart
-```
-- Campaign sync **KHÔNG gọi Mongo trực tiếp** — chỉ đọc bảng `affiliate_orders` nội bộ (đã có pipeline đồng bộ 2h qua 3-RPC lifecycle, audit 3 vòng, chống trùng/chống kẹt lease). Một nguồn sự thật, một chỗ đối soát.
-- Cadence 2 nguồn bằng nhau (2h) → số offline và affiliate luôn cùng độ tươi.
-
-## 4. Thay đổi schema — migration `092` (additive, an toàn với production)
-
-| Bảng | Thêm | Mặc định |
-|---|---|---|
-| `kpi_campaigns` | `metric_offline boolean`, `metric_affiliate boolean` + CHECK (ít nhất 1 bật) | `true` / `false` → **campaign cũ tự = offline-only, số không đổi 1 đồng** |
-| `kpi_campaign_store_actuals` | `actual_offline`, `actual_affiliate` (nullable) | `actual_value` GIỮ = tổng → mọi màn cũ chạy nguyên |
-| `kpi_campaign_store_daily_actuals` | `gmv_affiliate` | `0` (`gmv` giữ nghĩa = offline) |
-| RPC `rpc_replace_campaign_actuals` | Cập nhật body ghi cột mới — **signature giữ nguyên**, quyền EXECUTE re-assert chỉ service_role | — |
-
-Không đổi RLS row-level (cột mới đi theo policy sẵn có: staff/SM chỉ đọc store mình, campaign active + non-test).
-
-## 5. Hiển thị theo role (khi campaign tick cả 2)
-
-| Role | Màn | Thay đổi |
-|---|---|---|
-| **Staff** (mobile) | `/targets` campaign view | Theo mock: hero tổng gộp + Card "Phân loại theo chỉ số" (2 dòng offline/affiliate) + 3 thẻ metric + chart gộp |
-| **Store Manager** | `/targets` khối "Kết quả chiến dịch" | +2 card "GMV offline" / "GMV affiliate" |
-| **SM (quản lý vùng)** | `/targets` store selector | Như Store Manager (cùng component) |
-| **Super admin** | `/targets/campaigns/[id]` tab Kết quả | Bảng per-store +2 cột GMV offline/affiliate; tab Cấu hình hiện dòng "Chỉ số: …" |
-| **Super admin** | Export Excel campaign | +2 cột GMV offline / GMV affiliate |
-
-Campaign chỉ tick 1 chỉ số → không có khối phân loại, layout hiện tại giữ nguyên (số theo đúng chỉ số đã tick). Chú thích cuối trang đổi theo cấu hình (offline-only giữ "* Không bao gồm đơn online").
-
-## 6. Những gì KHÔNG thay đổi
-- File import target + toàn bộ validate/preview/commit.
-- Cách tính bậc thưởng/commission pool (chỉ đổi ĐẦU VÀO là tổng gộp khi tick cả 2).
-- Danh sách campaign `/targets/campaigns` (Đã đạt = tổng — đúng nghĩa mới luôn).
-- Campaign đang chạy trên production: tự nhận cấu hình offline-only, số y hệt trước migration (đây là regression gate số 1 khi QA).
-- `/targets` chế độ Ngày/Tuần/Tháng (khi store không có campaign).
-
-## 7. Chuỗi phụ thuộc & điều kiện go-live (QUAN TRỌNG)
-
-Để GMV Affiliate có **số thật**, bảng `affiliate_orders` phải được nạp và giữ tươi:
-1. **Audit F2 r1.1** (diff `65ad850..c5abaa2` — cron đồng bộ Mongo đã hardening 3 vòng) → pass.
-2. **Phiên VPN 2 gate** (đã thống nhất trước đó): gate 1 dry-run đối soát → duyệt → gate 2 first-write backfill (~153 đơn) + chạy lần 2 kiểm idempotent.
-3. **Prod dài hạn:** DevOps allowlist IP server Coolify trên MongoDB Atlas + bật `AFFILIATE_SYNC_ENABLED` + Coolify Scheduled Task `0 */2 * * *`. **Chưa xong bước này thì campaign tick affiliate trên prod sẽ không có số** — cần chốt ticket DevOps sớm.
-4. Không cần bật `AFFILIATE_ENABLED` (flag đó thuộc trang /affiliate riêng — xem mục 9).
-
-## 8. Kế hoạch build & QA
-
-**Build (3 batch, mỗi batch commit/push để audit diff):**
-- B1: migration 092 + sync engine (`lib/kpi/actuals.ts`) + actions + wizard tick box.
-- B2: màn Staff theo mock (fetch + CampaignKpiView).
-- B3: SM + super detail + export.
-
-**QA gate (trên campaign `is_test` — ẩn hoàn toàn khỏi staff/SM thật):**
-1. **Regression vàng:** campaign offline-only trước/sau migration — mọi màn, mọi role, số y hệt.
-2. Đối soát: SUM tay `affiliate_orders` per store = `actual_affiliate`; SUM(daily gmv + gmv_affiliate) = `actual_value`; offline 53% + affiliate 12% = hero 64% (số mock).
-3. Boundary: đơn CANCELED không tính; đơn Đối tác ngoài không tính; đơn 23h UTC rơi đúng ngày VN hôm sau; total_price âm cộng đúng; campaign affiliate-only không gọi BigQuery.
-4. Ma trận role: staff / store_manager / SM / admin thường (không thấy) / super — light+dark, mobile 360/390/430.
-5. tsc + build + full Playwright suite xanh.
-
-## 9. Ảnh hưởng tới kế hoạch Affiliate đã duyệt trước đó
-- **Không revert gì.** F1 (schema + mapping + RLS, migration 090/091 đã chạy) và F2 (cron đồng bộ) chính là NỀN của request này — tiếp tục dùng.
-- Trang `/affiliate` riêng + card "Đơn hàng Affiliate" trong /targets staff (F3/F4 cũ — **chưa build dòng nào**): tạm gác. Đề nghị stakeholder xác nhận sau: còn cần trang xem danh sách đơn affiliate riêng không, hay chỉ số trong campaign là đủ?
-- Referral vẫn tắt bằng flag như đã chốt (không liên quan batch này).
-
-## 10. Rủi ro & biện pháp
-
-| Rủi ro | Biện pháp |
+| Đối tượng | Thay đổi |
 |---|---|
-| Số affiliate stale nếu cron chưa chạy trên prod | Điều kiện go-live mục 7; UI luôn hiện "Cập nhật lúc" từ synced_at |
-| Campaign cũ bị lệch số sau migration | Cột mới nullable/default, actual_value giữ nghĩa tổng; regression gate số 1 |
-| Đơn affiliate của store ngoài campaign / Đối tác ngoài lọt vào | Sync chỉ đếm store_id thuộc danh sách target của campaign |
-| Lệch ngày UTC/VN giữa 2 nguồn | Cùng quy về ngày VN (+07:00) ở cả 2 pipeline; có test boundary |
-| RPC bị cấp quyền thừa khi REPLACE | Re-assert REVOKE anon/authenticated + GRANT service_role ngay trong migration (bài học 091) |
+| `kpi_campaigns` | + `metric_offline` (default **true**), `metric_affiliate` (default **false**), CHECK ≥1 bật → campaign cũ tự = offline-only, số không đổi |
+| `kpi_campaign_store_actuals` | + `actual_offline`, `actual_affiliate` (NOT NULL DEFAULT 0) + `offline_synced_at`, `affiliate_synced_at`; **backfill** `actual_offline = actual_value`, `actual_affiliate = 0`; `actual_value` giữ nghĩa = tổng |
+| `kpi_campaign_store_daily_actuals` | + `gmv_affiliate` (default 0); `gmv` giữ nghĩa Offline |
+| Mapping | + `CIRCA-MIZUKI → POS0013` (os) sau preflight store active/đúng loại |
+| Index | partial index `(store_id, created_time DESC) WHERE source_active AND status_norm='delivered'` phục vụ aggregation |
+| RPC | + `rpc_aggregate_affiliate_gmv` (SUM theo store × ngày VN trong DB); cập nhật `rpc_replace_campaign_actuals` ghi cột mới — cả hai chỉ `service_role` được EXECUTE (revoke anon/authenticated tường minh) |
+
+## 6. Cấu hình campaign
+
+- Màn tạo/sửa: 2 checkbox `☑ GMV Offline` (mặc định) / `☐ GMV Affiliate`; bắt buộc ≥1; campaign cũ mặc định Offline-only; file import giữ nguyên.
+- Chỉ sửa metric khi `draft/paused` (không sửa khi `active/ended` — rule sẵn có).
+- **Campaign có Affiliate chỉ được activate khi affiliate sync gần nhất thành công và không stale** (fail-closed).
+- Flag `KPI_AFFILIATE_ENABLED=false`: ẩn checkbox cho tới rollout — deploy code an toàn trước khi data sẵn sàng.
+
+## 7. Hiển thị theo role
+
+- **1 metric:** giữ layout hiện tại, label đúng nguồn (offline-only = y hệt màn hiện tại).
+- **2 metric:** hero tổng gộp + khối "Phân loại theo chỉ số" 2 dòng GMV Offline / GMV Affiliate (giá trị + % riêng trên cùng target). **Không đặt chevron** khi dòng chưa bấm được (drill-down đề xuất sau).
+- Chart "Tiến độ theo ngày": cột = tổng ngày; dữ liệu lưu riêng 2 nguồn để mở stacked chart sau.
+- Staff mobile 360/390/430; SM/Quản lý cửa hàng dùng chung khối "Kết quả" (+2 card breakdown); super detail +2 cột; **export gồm Offline · Affiliate · Total + timestamp từng nguồn**.
+
+## 8. Referral — đóng nốt 3 entry point (điều kiện trước deploy branch)
+
+`REFERRAL_ENABLED=false` hiện mới chặn upload + cron. Bổ sung gate: (1) mục "Giới thiệu" trên sidebar, (2) truy cập thẳng `/gioi-thieu` → redirect, (3) card Referral trong `/targets` của staff (kèm bỏ query). Code + data giữ nguyên — bật lại được bằng flag.
+
+## 9. QA bắt buộc
+
+1. **Regression vàng:** campaign offline-only trước/sau migration **bằng tuyệt đối** mọi màn, mọi role.
+2. Status: chỉ DELIVERED tính; PROCESSING/DELIVERING/CANCELED/FAIL_TO_DELIVER/status lạ không tính; `PROCESSING→DELIVERED` cộng ở sync sau; `DELIVERED→CANCELED` trừ ở sync sau.
+3. **Attribution:** đơn partner Tâm Việt nhưng store khác xử lý → vẫn ghi Tâm Việt; MIZUKI map đúng POS0013; FS/external/unmatched không lọt campaign OS (đối chiếu baseline mục 3).
+4. Đối soát SUM tay = `actual_affiliate`; SUM daily 2 nguồn = `actual_value`; giá âm cộng đúng.
+5. Staleness: affiliate run lỗi/stale → KPI giữ snapshot cũ; affiliate-only campaign không gọi BigQuery.
+6. Boundary ngày UTC/VN theo field stakeholder chốt; role/RLS, light/dark, mobile; F2 backfill run 1 + run 2 idempotent; typecheck, build, Playwright, Docker Node22 smoke.
+
+## 10. Rollout (thứ tự khóa)
+
+1. Deploy code với `KPI_AFFILIATE_ENABLED=false` (zero hành vi mới).
+2. Chạy migration + verify.
+3. Bật VPN: **dry-run** đồng bộ (kỳ vọng 153 rows, MIZUKI unmatched trước migration mapping; in field list đơn DELIVERED để chốt mục 2) → duyệt output → **backfill**.
+4. Chạy lần 2 kiểm idempotency (duplicate = 0, deactivated = 0).
+5. Coolify cron: affiliate phút 05, KPI aggregate phút 20 mỗi 2h + **Atlas allowlist IP server Coolify (ticket DevOps — bắt buộc cho prod)**.
+6. QA campaign test (`is_test` — ẩn khỏi staff/SM thật).
+7. Bật `KPI_AFFILIATE_ENABLED=true`.
+8. Trang `/affiliate` riêng: **superseded — không build/không bật** (đã đánh dấu trong kế hoạch Affiliate cũ).
 
 ---
 
-**Đề nghị stakeholder xác nhận:** (1) công thức tổng gộp mục 2.1 — đặc biệt bậc thưởng grade trên % gộp; (2) quy tắc đếm affiliate mục 2.2; (3) ticket DevOps Atlas allowlist (mục 7.3); (4) số phận trang /affiliate riêng (mục 9). PASS → build B1 ngay.
+**Trạng thái duyệt:** contract mục 1 + kiến trúc + schema + rollout = đã chốt theo audit 22/07. Còn lại duy nhất **mục 2 (field ngày ghi nhận)** chờ stakeholder — sẽ trình kèm bằng chứng field list từ phiên VPN dry-run.
