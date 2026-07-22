@@ -1,6 +1,6 @@
 # Plan: KPI Campaign × GMV Affiliate — tick chọn chỉ số khi tạo chiến dịch
 
-**Phiên bản:** v1.2 · 22/07/2026 · v1.1 + chốt ngày ghi nhận (`completed_time`) + 092 r2 (exact target-set validation, seed harden, QA script thực thi)
+**Phiên bản:** v1.3 · 22/07/2026 · v1.2 + r2.1: fail-closed đơn DELIVERED thiếu `completed_time`, seed `CIRCA-NAMVIET` (đã duyệt), QA script mở rộng (rule ngày/status/quyền), đồng bộ baseline 2 snapshot
 **Phạm vi:** Enhance module KPI Campaign tại `/targets` — thêm chỉ số **GMV Affiliate** bên cạnh **GMV Offline** hiện tại.
 **Nguyên tắc:** Không deploy tới khi toàn bộ pass QA; campaign đang chạy production KHÔNG bị ảnh hưởng (schema additive, mặc định = hành vi cũ; checkbox affiliate ẩn sau flag `KPI_AFFILIATE_ENABLED=false` cho tới rollout).
 
@@ -26,19 +26,20 @@ Bằng chứng từ phiên VPN (field list đầy đủ 66 field của đơn DEL
 - **`completed_time`** — mốc **giao thành công** chuyên dụng: **111/111** đơn DELIVERED có, trùng ngày VN với `last_updated_time` trên **111/111** đơn hiện tại → chọn field này (bền hơn `last_updated_time` vốn sẽ trôi nếu đơn bị cập nhật sau giao).
 - `delivery_date` = ngày giao **dự kiến** (nhiều đơn nhỏ hơn cả mốc giao thật cả ngày) → không dùng.
 - Hệ quả nghiệp vụ: đơn tạo TRƯỚC campaign nhưng giao TRONG campaign → **được tính**; đơn giao SAU end_date → không tính. 40/109 đơn DELIVERED trong snapshot lệch ngày VN giữa tạo và giao → lựa chọn field này thay đổi số thật.
-- Ingestion bổ sung: projection + cột `affiliate_orders.completed_time` (migration 092); full-snapshot 2h tự backfill sau lần sync đầu. Lưu ý thứ tự: chạy 092 TRƯỚC khi bật `AFFILIATE_SYNC_ENABLED`. Canary QA: đơn DELIVERED thiếu `completed_time` phải = 0.
+- Ingestion bổ sung: projection + cột `affiliate_orders.completed_time` (migration 092); full-snapshot 2h tự backfill sau lần sync đầu. Lưu ý thứ tự: chạy 092 TRƯỚC khi bật `AFFILIATE_SYNC_ENABLED`.
+- **Fail-closed (r2.1):** đơn DELIVERED thiếu `completed_time` KHÔNG bị loại im lặng — cron pull báo `delivered_missing_completed_time_count` + sample và trả `status: warning`; `rpc_aggregate_affiliate_gmv` RAISE nếu store được tính KPI còn đơn như vậy → KPI **giữ snapshot cũ** cho tới khi nguồn được xử lý. Ingestion vẫn lưu đủ mọi status. Canary QA: đơn DELIVERED thiếu `completed_time` phải = 0.
 
-## 3. Số liệu baseline (đã verify độc lập 22/07 — khớp audit 100%)
+## 3. Số liệu baseline (data SỐNG tăng liên tục — số cuối đối soát tại backfill)
 
-Snapshot 153 đơn / 23 partner code; `DELIVERED` = **109 đơn / 36.836.230₫**. Sau khi map `CIRCA-MIZUKI`:
+**Snapshot sáng 22/07** (xlsx thủ công): 153 đơn / 23 code; DELIVERED **109 / 36.836.230₫** — phân theo nhóm (sau khi map MIZUKI): OS **31 / 8.522.800₫** · FS 5 / 2.124.100₫ · External 73 / 26.189.330₫ (đã verify độc lập khớp audit 100%).
 
-| Nhóm | Đơn DELIVERED | GMV | Vào campaign OS? |
-|---|---|---|---|
-| OS (15 code, gồm MIZUKI) | 31 | 8.522.800₫ | ✅ |
-| FS (HOABINH2) | 5 | 2.124.100₫ | ❌ (chỉ super thấy) |
-| Đối tác ngoài (7 code) | 73 | 26.189.330₫ | ❌ (chỉ super thấy) |
+**Snapshot chiều 22/07** (VPN dry-run, read-only): **157 đơn / 24 code**; DELIVERED 111 · CANCELED 43 · FAIL_TO_DELIVER 2 · DELIVERING 1; 0 duplicate/reject/unknown-status/giá âm; matched os 37 · fs 8 · external 110.
 
-**`CIRCA-MIZUKI` là code mới** (1 đơn DELIVERED 248.900₫) chưa có trong mapping — đã verify DB: `POS0013` = "CIRCA MIZUKI", loại **os**, đang **active** → thêm mapping chính thức trong migration tiếp theo (kèm preflight). Manifest cập nhật 148/22 → **153/23**.
+Code mới đã xử lý:
+- **`CIRCA-MIZUKI` → POS0013** (os, active — verify DB): duyệt qua audit sáng, seed trong 092.
+- **`CIRCA-NAMVIET` → POS0077** "CIRCA NAM VIET" (os, active — verify DB): xuất hiện trong dry-run chiều, **đã được duyệt 22/07**, seed trong 092.
+
+FS + external không vào campaign OS (chỉ super thấy).
 
 ## 4. Kiến trúc & đồng bộ 2 nguồn
 
@@ -61,10 +62,10 @@ MongoDB ─(cron 2h, phút 05)─> affiliate_orders┘        │
 | `kpi_campaigns` | + `metric_offline` (default **true**), `metric_affiliate` (default **false**), CHECK ≥1 bật → campaign cũ tự = offline-only, số không đổi |
 | `kpi_campaign_store_actuals` | + `actual_offline`, `actual_affiliate` (NOT NULL DEFAULT 0) + `offline_synced_at`, `affiliate_synced_at`; **backfill** `actual_offline = actual_value`, `actual_affiliate = 0`; `actual_value` giữ nghĩa = tổng |
 | `kpi_campaign_store_daily_actuals` | + `gmv_affiliate` (default 0); `gmv` giữ nghĩa Offline |
-| Mapping | + `CIRCA-MIZUKI → POS0013` (os) sau preflight store active/đúng loại; mapping tồn tại nhưng SAI → migration FAIL (không im lặng giữ bản sai) |
+| Mapping | + `CIRCA-MIZUKI → POS0013` + `CIRCA-NAMVIET → POS0077` (os, đều đã duyệt) sau preflight store active/đúng loại; mapping tồn tại nhưng SAI → migration FAIL (không im lặng giữ bản sai) |
 | Index | partial index `(store_id, completed_time DESC) WHERE source_active AND status_norm='delivered'` phục vụ aggregation |
-| RPC | + `rpc_aggregate_affiliate_gmv` (SUM theo store × ngày VN `completed_time` trong DB); `rpc_replace_campaign_actuals` (r2): backward-compat caller cũ + **validate đầy đủ trước khi replace** — campaign tồn tại · không duplicate store/(store,date) · payload phủ đúng TOÀN BỘ targets (2 chiều) · daily ⊆ actuals · tổng = offline + affiliate · metric tắt = 0 · SUM(daily) khớp aggregate; lỗi → rollback toàn transaction. Cả hai RPC chỉ `service_role` EXECUTE |
-| QA | script thực thi `webapp/scripts/qa-kpi-affiliate-092.mjs`: legacy caller (100/100/0), both-metric, đủ 8 case RAISE + rollback + quyền anon + cleanup exact-ID |
+| RPC | + `rpc_aggregate_affiliate_gmv` (SUM theo store × ngày VN `completed_time` trong DB; **fail-closed** khi store còn đơn DELIVERED thiếu completed_time); `rpc_replace_campaign_actuals` (r2): backward-compat caller cũ + **validate đầy đủ trước khi replace** — campaign tồn tại · không duplicate store/(store,date) · payload phủ đúng TOÀN BỘ targets (2 chiều) · daily ⊆ actuals · tổng = offline + affiliate · metric tắt = 0 · SUM(daily) khớp aggregate; lỗi → rollback toàn transaction. Cả hai RPC chỉ `service_role` EXECUTE |
+| QA | script thực thi `webapp/scripts/qa-kpi-affiliate-092.mjs` (r2.1): legacy caller (100/100/0), both-metric, 8 case RAISE + rollback, **rule ngày bằng fixture đơn** (dùng completed_time không phải created_time; boundary VN 16:59:59Z/17:00:00Z; CANCELED/FAIL_TO_DELIVER không tính; fail-closed thiếu completed_time), quyền anon + authenticated deny, cleanup exact-ID trong `finally` |
 
 ## 6. Cấu hình campaign
 

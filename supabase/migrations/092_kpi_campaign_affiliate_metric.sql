@@ -93,39 +93,49 @@ WHERE offline_synced_at IS NULL AND affiliate_synced_at IS NULL;
 ALTER TABLE public.kpi_campaign_store_daily_actuals
   ADD COLUMN IF NOT EXISTS gmv_affiliate numeric NOT NULL DEFAULT 0;
 
--- ── 4) Seed CIRCA-MIZUKI → POS0013 (manifest 153/23; preflight y 090) ───────
+-- ── 4) Seed code mới ĐÃ DUYỆT (manifest 157/24; preflight y 090) ────────────
+--   • CIRCA-MIZUKI  → POS0013 (duyệt qua audit sáng 22/07)
+--   • CIRCA-NAMVIET → POS0077 (duyệt 22/07 chiều — user xác nhận)
 -- r2 (audit P2): mapping ĐÃ TỒN TẠI nhưng sai (khác store/loại/inactive) →
 -- RAISE thay vì ON CONFLICT DO NOTHING im lặng giữ bản sai.
 DO $$
 DECLARE
+  r record;
   v_store uuid; v_type text; v_active boolean;
   v_ex_store uuid; v_ex_type text; v_ex_active boolean;
 BEGIN
-  SELECT id, store_type, is_active INTO v_store, v_type, v_active
-  FROM public.stores WHERE code = 'POS0013';
-  IF v_store IS NULL THEN
-    RAISE EXCEPTION 'affiliate seed 092: store POS0013 (CIRCA-MIZUKI) không tồn tại';
-  END IF;
-  IF v_type IS DISTINCT FROM 'os' THEN
-    RAISE EXCEPTION 'affiliate seed 092: POS0013 có store_type=% nhưng manifest ghi os', v_type;
-  END IF;
-  IF v_active IS DISTINCT FROM true THEN
-    RAISE EXCEPTION 'affiliate seed 092: POS0013 đang ngưng hoạt động — xác nhận lại manifest';
-  END IF;
-
-  SELECT store_id, partner_type, is_active INTO v_ex_store, v_ex_type, v_ex_active
-  FROM public.affiliate_partner_mappings WHERE partner_code = 'CIRCA-MIZUKI';
-  IF FOUND THEN
-    IF v_ex_store IS DISTINCT FROM v_store OR v_ex_type IS DISTINCT FROM 'os'
-       OR v_ex_active IS DISTINCT FROM true THEN
-      RAISE EXCEPTION 'affiliate seed 092: mapping CIRCA-MIZUKI ĐÃ tồn tại nhưng SAI (store_id=%, type=%, active=%) — sửa tay rồi chạy lại, không im lặng giữ bản sai',
-        v_ex_store, v_ex_type, v_ex_active;
+  FOR r IN
+    SELECT * FROM (VALUES
+      ('CIRCA-MIZUKI',  'POS0013', 'CIRCA MIZUKI'),
+      ('CIRCA-NAMVIET', 'POS0077', 'CIRCA NAM VIET')
+    ) AS m(partner_code, store_code, display_name)
+  LOOP
+    SELECT id, store_type, is_active INTO v_store, v_type, v_active
+    FROM public.stores WHERE code = r.store_code;
+    IF v_store IS NULL THEN
+      RAISE EXCEPTION 'affiliate seed 092: store % (cho %) không tồn tại', r.store_code, r.partner_code;
     END IF;
-    -- đã tồn tại và ĐÚNG → idempotent, bỏ qua
-  ELSE
-    INSERT INTO public.affiliate_partner_mappings (partner_code, store_id, partner_type, display_name)
-    VALUES ('CIRCA-MIZUKI', v_store, 'os', 'CIRCA MIZUKI');
-  END IF;
+    IF v_type IS DISTINCT FROM 'os' THEN
+      RAISE EXCEPTION 'affiliate seed 092: store % có store_type=% nhưng manifest ghi os', r.store_code, v_type;
+    END IF;
+    IF v_active IS DISTINCT FROM true THEN
+      RAISE EXCEPTION 'affiliate seed 092: store % (partner %) đang ngưng hoạt động — xác nhận lại manifest', r.store_code, r.partner_code;
+    END IF;
+
+    SELECT store_id, partner_type, is_active INTO v_ex_store, v_ex_type, v_ex_active
+    FROM public.affiliate_partner_mappings WHERE partner_code = r.partner_code;
+    IF FOUND THEN
+      IF v_ex_store IS DISTINCT FROM v_store OR v_ex_type IS DISTINCT FROM 'os'
+         OR v_ex_active IS DISTINCT FROM true THEN
+        RAISE EXCEPTION 'affiliate seed 092: mapping % ĐÃ tồn tại nhưng SAI (store_id=%, type=%, active=%) — sửa tay rồi chạy lại, không im lặng giữ bản sai',
+          r.partner_code, v_ex_store, v_ex_type, v_ex_active;
+      END IF;
+      -- đã tồn tại và ĐÚNG → idempotent, bỏ qua
+    ELSE
+      INSERT INTO public.affiliate_partner_mappings (partner_code, store_id, partner_type, display_name)
+      VALUES (r.partner_code, v_store, 'os', r.display_name);
+    END IF;
+  END LOOP;
 END $$;
 
 -- ── 5) Partial index aggregation (KPI chỉ đọc delivered + active) ───────────
@@ -144,12 +154,31 @@ DROP INDEX IF EXISTS public.idx_affiliate_orders_store_delivered;
 -- THÀNH CÔNG — đơn tạo trước campaign nhưng giao trong campaign VẪN tính; đơn
 -- giao sau end_date KHÔNG tính. completed_time NULL → tự loại khỏi range
 -- (canary QA: đếm delivered thiếu completed_time phải = 0).
+-- r2.1 FAIL-CLOSED (audit P1): store được tính KPI mà còn đơn active+DELIVERED
+-- thiếu completed_time → RAISE (không âm thầm thiếu GMV); caller (syncCampaign)
+-- bắt lỗi → KHÔNG ghi, KPI giữ snapshot cũ. Check trên TOÀN BỘ thời gian (đơn
+-- thiếu mốc không thể xếp cửa sổ nào). Cron pull đã cảnh báo sớm cùng điều kiện
+-- (delivered_missing_completed_time_count + status warning).
 CREATE OR REPLACE FUNCTION public.rpc_aggregate_affiliate_gmv(
   p_store_ids uuid[],
   p_from      timestamptz,
   p_to        timestamptz
 ) RETURNS TABLE (store_id uuid, vn_date date, gmv numeric, order_count integer)
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_missing integer;
+BEGIN
+  SELECT count(*) INTO v_missing
+  FROM public.affiliate_orders o
+  WHERE o.source_active
+    AND o.status_norm = 'delivered'
+    AND o.store_id = ANY (p_store_ids)
+    AND o.completed_time IS NULL;
+  IF v_missing > 0 THEN
+    RAISE EXCEPTION 'rpc_aggregate_affiliate_gmv: % đơn DELIVERED active thiếu completed_time trong các store yêu cầu — fail-closed, giữ snapshot KPI cũ (kiểm tra nguồn/sync)', v_missing;
+  END IF;
+
+  RETURN QUERY
   SELECT o.store_id,
          (o.completed_time AT TIME ZONE 'Asia/Ho_Chi_Minh')::date AS vn_date,
          SUM(o.total_price)                                       AS gmv,
@@ -160,8 +189,8 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
     AND o.store_id = ANY (p_store_ids)
     AND o.completed_time >= p_from
     AND o.completed_time <  p_to
-  GROUP BY o.store_id, 2
-$$;
+  GROUP BY o.store_id, 2;
+END $$;
 
 REVOKE ALL ON FUNCTION public.rpc_aggregate_affiliate_gmv(uuid[], timestamptz, timestamptz)
   FROM PUBLIC, anon, authenticated;
@@ -352,7 +381,7 @@ GRANT EXECUTE ON FUNCTION public.rpc_replace_campaign_actuals(uuid, jsonb, jsonb
 -- ── app_migrations ──────────────────────────────────────────────────────────
 INSERT INTO public.app_migrations (version, name, notes)
 VALUES ('092', 'kpi_campaign_affiliate_metric',
-        'KPI Campaign × GMV Affiliate (plan v1.2, r2): affiliate_orders + completed_time (date basis CHỐT 22/07); metric_offline/metric_affiliate + CHECK ≥1; actuals actual_offline/actual_affiliate (backfill = actual_value/0) + offline/affiliate_synced_at; daily gmv_affiliate; seed CIRCA-MIZUKI→POS0013 (RAISE nếu mapping tồn tại sai); partial index (store_id, completed_time) delivered+active; RPC rpc_aggregate_affiliate_gmv (SUM trong DB theo ngày VN completed_time, DELIVERED-only) service_role-only; replace rpc_replace_campaign_actuals: backward-compat fallback caller cũ + validation đầy đủ TRƯỚC delete (campaign tồn tại; no-dup store/(store,date); targets==actuals 2 chiều; daily⊆actuals⊆targets; actual_value=offline+affiliate; metric tắt→0; SUM daily khớp aggregate; RAISE rollback toàn transaction), re-assert grants.')
+        'KPI Campaign × GMV Affiliate (plan v1.3, r2.1): affiliate_orders + completed_time (date basis CHỐT 22/07); metric_offline/metric_affiliate + CHECK ≥1; actuals actual_offline/actual_affiliate (backfill = actual_value/0) + offline/affiliate_synced_at; daily gmv_affiliate; seed CIRCA-MIZUKI→POS0013 + CIRCA-NAMVIET→POS0077 (đã duyệt; RAISE nếu mapping tồn tại sai); partial index (store_id, completed_time) delivered+active; RPC rpc_aggregate_affiliate_gmv (SUM trong DB theo ngày VN completed_time, DELIVERED-only, FAIL-CLOSED khi store có đơn delivered thiếu completed_time) service_role-only; replace rpc_replace_campaign_actuals: backward-compat fallback caller cũ + validation đầy đủ TRƯỚC delete (campaign tồn tại; no-dup store/(store,date); targets==actuals 2 chiều; daily⊆actuals⊆targets; actual_value=offline+affiliate; metric tắt→0; SUM daily khớp aggregate; RAISE rollback toàn transaction), re-assert grants.')
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;
@@ -376,11 +405,12 @@ COMMIT;
 -- 3) Backfill (regression vàng — actual_value KHÔNG đổi):
 --   SELECT count(*) FROM public.kpi_campaign_store_actuals
 --   WHERE actual_offline <> actual_value OR actual_affiliate <> 0;               -- 0
--- 4) Mapping MIZUKI:
+-- 4) Mapping mới (MIZUKI + NAMVIET):
 --   SELECT partner_code, partner_type, s.code FROM public.affiliate_partner_mappings m
---   JOIN public.stores s ON s.id = m.store_id WHERE partner_code='CIRCA-MIZUKI';
---   -- 1 row: os / POS0013;  tổng mapping = 23:
---   SELECT count(*) FROM public.affiliate_partner_mappings;                      -- 23
+--   JOIN public.stores s ON s.id = m.store_id
+--   WHERE partner_code IN ('CIRCA-MIZUKI','CIRCA-NAMVIET') ORDER BY partner_code;
+--   -- 2 row: os/POS0013 + os/POS0077;  tổng mapping = 24:
+--   SELECT count(*) FROM public.affiliate_partner_mappings;                      -- 24
 -- 4b) Cột completed_time + canary DELIVERED thiếu mốc giao (sau sync đầu hậu-092):
 --   SELECT column_name FROM information_schema.columns
 --   WHERE table_name='affiliate_orders' AND column_name='completed_time';       -- 1 row

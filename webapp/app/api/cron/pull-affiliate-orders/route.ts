@@ -91,7 +91,15 @@ export async function GET(request: NextRequest) {
     if (mapErr) throw new Error(`Đọc mappings: ${mapErr.message}`)
     const { resolved, report } = resolveStores(valid, (mappings ?? []) as PartnerMappingRow[])
     const unknownStatuses = [...new Set(valid.filter((r) => r.status_norm === 'other').map((r) => r.raw_status))]
-    return { rawFetched: rawDocs.length, duplicates, unique, resolved, rejected, report, unknownStatuses }
+    // Canary KPI (audit r2.1 P1): DELIVERED thiếu completed_time sẽ bị
+    // aggregation fail-closed (rpc_aggregate_affiliate_gmv RAISE) — báo sớm ở
+    // đây để vận hành thấy TRƯỚC khi KPI đứng snapshot. Ingest vẫn lưu đủ.
+    const deliveredMissingCompleted = valid.filter((r) => r.status_norm === 'delivered' && r.completed_time === null)
+    return {
+      rawFetched: rawDocs.length, duplicates, unique, resolved, rejected, report, unknownStatuses,
+      deliveredMissingCompletedCount: deliveredMissingCompleted.length,
+      deliveredMissingCompletedSample: deliveredMissingCompleted.slice(0, 10).map((r) => r.order_id),
+    }
   }
 
   // ── DRY-RUN: không lease, KHÔNG GHI GÌ — báo cáo đối soát trước first-write ─
@@ -110,6 +118,8 @@ export async function GET(request: NextRequest) {
         rejected_reasons: d.rejected.slice(0, 20),
         mapping_report: d.report,
         unknown_statuses: d.unknownStatuses,
+        delivered_missing_completed_time_count: d.deliveredMissingCompletedCount,
+        delivered_missing_completed_time_sample: d.deliveredMissingCompletedSample,
         status_distribution: statusCount,
         partner_code_distribution: codeCount,
       })
@@ -150,12 +160,16 @@ export async function GET(request: NextRequest) {
   let rejectedReasons: { order_id: unknown; reason: string }[] = []
   let report: ReturnType<typeof resolveStores>['report'] | null = null
   let unknownStatuses: string[] = []
+  let deliveredMissingCompletedCount = 0
+  let deliveredMissingCompletedSample: number[] = []
 
   try {
     const d = await readAndClassify()
     rejectedReasons = d.rejected
     report = d.report
     unknownStatuses = d.unknownStatuses
+    deliveredMissingCompletedCount = d.deliveredMissingCompletedCount
+    deliveredMissingCompletedSample = d.deliveredMissingCompletedSample
 
     // 2) Upsert batch — mỗi row set last_seen_run_id + source_active + synced_at.
     const nowIso = new Date().toISOString()
@@ -228,11 +242,17 @@ export async function GET(request: NextRequest) {
   if (report && report.negative_price_count > 0) {
     console.warn(`[affiliate-sync] ${report.negative_price_count} đơn total_price ÂM (giữ theo quyết định 22/07):`, report.negative_price_sample.join(', '))
   }
+  if (deliveredMissingCompletedCount > 0) {
+    // Audit r2.1 P1: các đơn này sẽ làm rpc_aggregate_affiliate_gmv fail-closed
+    // (KPI giữ snapshot cũ) — phải WARN + status warning để vận hành xử lý nguồn.
+    console.warn(`[affiliate-sync] ${deliveredMissingCompletedCount} đơn DELIVERED thiếu completed_time (KPI aggregate sẽ fail-closed):`,
+      deliveredMissingCompletedSample.join(', '))
+  }
 
   const hasNotes = (report?.unmatched_codes.length ?? 0) > 0 || (report?.inactive_codes.length ?? 0) > 0 || unknownStatuses.length > 0
   return NextResponse.json({
     ok: true,
-    status: rejectedReasons.length > 0 ? 'warning' : hasNotes ? 'success_with_notes' : 'success',
+    status: rejectedReasons.length > 0 || deliveredMissingCompletedCount > 0 ? 'warning' : hasNotes ? 'success_with_notes' : 'success',
     run_id: runId,
     raw_fetched: counts!.rawFetched,
     duplicates: counts!.duplicates,
@@ -244,6 +264,8 @@ export async function GET(request: NextRequest) {
     finish_note: finishResult?.note ?? null,
     mapping_report: report,
     unknown_statuses: unknownStatuses,
+    delivered_missing_completed_time_count: deliveredMissingCompletedCount,
+    delivered_missing_completed_time_sample: deliveredMissingCompletedSample,
     post_finish_notes: postFinishNotes,
   })
 }
