@@ -98,7 +98,12 @@ try {
 
   // ── 1) rpc_replace_campaign_actuals: legacy + both + RAISE ───────────────
   {
-    const { error } = await rpc(c1, [dayRow(sA), dayRow(sB)], [aggRow(sA), aggRow(sB)])
+    // Payload legacy ĐÚNG hình dạng caller production (actuals.ts luôn gửi
+    // synced_at từng row) — fallback offline_synced_at ← synced_at cần key này.
+    const ts = new Date().toISOString()
+    const { error } = await rpc(c1,
+      [dayRow(sA, { synced_at: ts }), dayRow(sB, { synced_at: ts })],
+      [aggRow(sA, { synced_at: ts }), aggRow(sB, { synced_at: ts })])
     out('legacy caller: RPC chấp nhận payload cũ', !error, error?.message ?? '')
     const { data } = await svc.from('kpi_campaign_store_actuals')
       .select('actual_value, actual_offline, actual_affiliate, offline_synced_at')
