@@ -50,7 +50,7 @@ const ROLE_LABELS: Record<string, string> = {
   sm:            'SM',
 }
 
-export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, isFsStore = false }: { announcementsUnread?: number; kpiCampaignEnabled?: boolean; isFsStore?: boolean }) {
+export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, referralEnabled = false, isFsStore = false }: { announcementsUnread?: number; kpiCampaignEnabled?: boolean; referralEnabled?: boolean; isFsStore?: boolean }) {
   const pathname = usePathname()
   const router   = useRouter()
   const profile  = useUserStore((s) => s.profile)
@@ -83,7 +83,10 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, i
   // An FS store_manager (isFsStore) is contained to the FS module — hide ALL OS
   // nav; only the "Quản lý FS → Sản phẩm" item shows.
   const visibleItems = role && !isFsStore
-    ? navItems.filter((item) => item.roles.includes(role) && (!('superAdmin' in item && item.superAdmin) || isSuper))
+    ? navItems.filter((item) => item.roles.includes(role)
+        && (!('superAdmin' in item && item.superAdmin) || isSuper)
+        // Referral đã ngưng: flag off ẩn "Giới thiệu" khỏi nav (route tự redirect)
+        && (item.href !== '/gioi-thieu' || referralEnabled))
     : []
 
   // Inventory accordion (→ TRF): super, Cycle Count admin, or store manager.
