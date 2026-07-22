@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { dedupeByOrderId, isCountedStatus, normalizeStatus, resolveStores, validateSourceOrder, type PartnerMappingRow } from '../lib/affiliate/normalize'
+import { dedupeByOrderId, isKpiAffiliateCountedStatus, normalizeStatus, resolveStores, validateSourceOrder, type PartnerMappingRow } from '../lib/affiliate/normalize'
 
 // Unit gate F2 (chạy không cần browser/server — logic thuần). Case theo QA
 // checklist stakeholder 22/07: status normalization, BSON number/date,
@@ -48,11 +48,14 @@ test.describe('affiliate normalize @desktop', () => {
     expect(normalizeStatus('SOME_NEW_STATUS')).toBe('other')
   })
 
-  test('quy tắc đếm: trừ CANCELED; FAIL_TO_DELIVER + status lạ VẪN tính', () => {
-    expect(isCountedStatus('CANCELED')).toBe(false)
-    expect(isCountedStatus('DELIVERED')).toBe(true)
-    expect(isCountedStatus('FAIL_TO_DELIVER')).toBe(true)
-    expect(isCountedStatus('SOME_NEW_STATUS')).toBe(true)
+  test('quy tắc đếm KPI (audit 22/07): CHỈ DELIVERED tính; mọi status khác KHÔNG', () => {
+    expect(isKpiAffiliateCountedStatus('DELIVERED')).toBe(true)
+    expect(isKpiAffiliateCountedStatus('CANCELED')).toBe(false)
+    expect(isKpiAffiliateCountedStatus('FAIL_TO_DELIVER')).toBe(false)
+    expect(isKpiAffiliateCountedStatus('DELIVERING')).toBe(false)
+    expect(isKpiAffiliateCountedStatus('PROCESSING')).toBe(false)
+    expect(isKpiAffiliateCountedStatus('WAIT_FOR_PAYMENT')).toBe(false)
+    expect(isKpiAffiliateCountedStatus('SOME_NEW_STATUS')).toBe(false)
   })
 
   test('reject: thiếu/sai field bắt buộc — không bao giờ ghi 0 âm thầm', () => {

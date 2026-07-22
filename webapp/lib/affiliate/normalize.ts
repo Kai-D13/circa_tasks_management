@@ -19,10 +19,13 @@ export function normalizeStatus(raw: string): string {
   return STATUS_NORM[raw] ?? 'other'
 }
 
-// Quy tắc đếm (PM chốt 21/07): mọi đơn trừ CANCELED; FAIL_TO_DELIVER VẪN tính
-// (user tái xác nhận 22/07). UI dùng nhãn "Doanh số Affiliate ghi nhận".
-export function isCountedStatus(rawStatus: string): boolean {
-  return normalizeStatus(rawStatus) !== 'canceled'
+// Quy tắc đếm KPI (audit 22/07 — THAY THẾ rule cũ "mọi đơn trừ CANCELED"):
+// CHỈ đơn giao thành công (DELIVERED) được tính GMV Affiliate trong KPI
+// Campaign. Ingestion (F2) vẫn LƯU đầy đủ mọi status — không lọc lúc pull, vì
+// PROCESSING→DELIVERED phải cộng và DELIVERED→CANCELED phải trừ ở sync sau;
+// việc lọc chỉ diễn ra ở tầng aggregate (rpc_aggregate_affiliate_gmv).
+export function isKpiAffiliateCountedStatus(rawStatus: string): boolean {
+  return normalizeStatus(rawStatus) === 'delivered'
 }
 
 // Doc Mongo (snake_case — KHÔNG phải camelCase của API layer).

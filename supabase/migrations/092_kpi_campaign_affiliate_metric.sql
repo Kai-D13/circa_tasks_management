@@ -1,8 +1,12 @@
 -- ============================================================================
--- 092_kpi_campaign_affiliate_metric.sql
--- ⚠ DRAFT — KHÔNG chạy cho tới rollout bước 2 (sau khi stakeholder duyệt plan
---   v1.1 [docs/plan-kpi-affiliate-metric.md] và code deploy với
---   KPI_AFFILIATE_ENABLED=false). Additive, idempotent, pg_safeupdate-safe.
+-- 092_kpi_campaign_affiliate_metric.sql  (r1 — audit 22/07: backward-compat
+--   fallback + DB validation trong rpc_replace_campaign_actuals)
+-- ⚠ DRAFT — 2 ĐIỀU KIỆN trước khi chạy:
+--   (1) stakeholder CHỐT field ngày ghi nhận (created_time vs ngày giao) —
+--       function mục 6 hard-code created_time, chạy trước rồi đổi = phải thêm
+--       migration mới chỉ để sửa function đã ghi version 092;
+--   (2) code deploy với KPI_AFFILIATE_ENABLED=false (rollout bước 1).
+--   Additive, idempotent, pg_safeupdate-safe.
 --
 -- KPI Campaign × GMV Affiliate (plan v1.1, audit stakeholder 22/07):
 --   1. kpi_campaigns: metric_offline / metric_affiliate (campaign cũ tự
@@ -133,24 +137,95 @@ REVOKE ALL ON FUNCTION public.rpc_aggregate_affiliate_gmv(uuid[], timestamptz, t
 GRANT EXECUTE ON FUNCTION public.rpc_aggregate_affiliate_gmv(uuid[], timestamptz, timestamptz)
   TO service_role;
 
--- ── 7) rpc_replace_campaign_actuals: ghi cột mới ────────────────────────────
--- SIGNATURE GIỮ NGUYÊN (uuid, jsonb, jsonb) — jsonb chỉ mang thêm key. Payload
--- thiếu key mới (caller cũ) → coalesce về default → hành vi cũ nguyên vẹn.
+-- ── 7) rpc_replace_campaign_actuals: ghi cột mới + VALIDATE (r1) ────────────
+-- SIGNATURE GIỮ NGUYÊN (uuid, jsonb, jsonb).
+-- BACKWARD-COMPAT (audit r1 P1): caller PRODUCTION CŨ chỉ gửi actual_value —
+--   fallback actual_offline = actual_value (legacy = 100% offline),
+--   actual_affiliate = 0, offline_synced_at = synced_at. Nếu coalesce về 0 như
+--   bản draft, cron cũ chạy sau migration sẽ ghi actual_offline=0 → phá
+--   breakdown + regression legacy.
+-- DB VALIDATION (audit r1 P1): RPC là boundary của số liệu thưởng — không tin
+--   payload service-role tuyệt đối. Validate TRƯỚC khi delete; mọi RAISE
+--   rollback toàn transaction (không bao giờ nửa thành công):
+--   • campaign tồn tại (đọc metric flags)
+--   • mọi store (actuals + daily) thuộc targets của campaign
+--   • actual_value = actual_offline + actual_affiliate (epsilon 0.01 — float
+--     JS ↔ numeric)
+--   • metric tắt → phần actual tương ứng phải = 0
+--   • SUM(daily) từng store khớp aggregate từng nguồn (epsilon 0.01)
 CREATE OR REPLACE FUNCTION public.rpc_replace_campaign_actuals(
   p_campaign_id uuid,
-  p_daily   jsonb,  -- [{store_id, date, gmv, gmv_affiliate, synced_at}]
-  p_actuals jsonb   -- [{store_id, actual_value, actual_offline, actual_affiliate,
+  p_daily   jsonb,  -- [{store_id, date, gmv, gmv_affiliate?, synced_at}]
+  p_actuals jsonb   -- [{store_id, actual_value, actual_offline?, actual_affiliate?,
                     --   run_rate, remaining_target, achieved_tier_order,
                     --   store_commission_pool, raw_row_count,
-                    --   offline_synced_at, affiliate_synced_at, synced_at}]
+                    --   offline_synced_at?, affiliate_synced_at?, synced_at}]
+                    -- (key có ? = caller cũ không gửi → fallback legacy)
 ) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 DECLARE
-  v_row   jsonb;
-  v_count integer := 0;
+  v_row         jsonb;
+  v_count       integer := 0;
+  v_m_offline   boolean;
+  v_m_affiliate boolean;
+  v_store       uuid;
+  v_value       numeric;
+  v_offline     numeric;
+  v_affiliate   numeric;
+  v_daily_off   numeric;
+  v_daily_aff   numeric;
 BEGIN
-  -- Replace-all cả 2 bảng (WHERE'd delete — pg_safeupdate-safe; dọn ghost khi
-  -- re-import bớt store). Toàn bộ trong 1 transaction: không bao giờ chart mới
-  -- cạnh tổng cũ trên màn hình commission.
+  -- ── VALIDATE (trước mọi thao tác ghi) ──
+  SELECT metric_offline, metric_affiliate INTO v_m_offline, v_m_affiliate
+  FROM public.kpi_campaigns WHERE id = p_campaign_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'rpc_replace_campaign_actuals: campaign % không tồn tại', p_campaign_id;
+  END IF;
+
+  IF EXISTS (
+    SELECT 1 FROM jsonb_array_elements(coalesce(p_daily, '[]'::jsonb)) e
+    WHERE NOT EXISTS (
+      SELECT 1 FROM public.kpi_campaign_store_targets t
+      WHERE t.campaign_id = p_campaign_id AND t.store_id = (e->>'store_id')::uuid)
+  ) THEN
+    RAISE EXCEPTION 'rpc_replace_campaign_actuals: p_daily chứa store ngoài targets của campaign %', p_campaign_id;
+  END IF;
+
+  FOR v_row IN SELECT * FROM jsonb_array_elements(coalesce(p_actuals, '[]'::jsonb))
+  LOOP
+    v_store     := (v_row->>'store_id')::uuid;
+    v_value     := coalesce((v_row->>'actual_value')::numeric, 0);
+    v_offline   := coalesce((v_row->>'actual_offline')::numeric, (v_row->>'actual_value')::numeric, 0);
+    v_affiliate := coalesce((v_row->>'actual_affiliate')::numeric, 0);
+
+    IF NOT EXISTS (SELECT 1 FROM public.kpi_campaign_store_targets t
+                   WHERE t.campaign_id = p_campaign_id AND t.store_id = v_store) THEN
+      RAISE EXCEPTION 'rpc_replace_campaign_actuals: store % không thuộc targets của campaign %', v_store, p_campaign_id;
+    END IF;
+    IF abs(v_value - (v_offline + v_affiliate)) > 0.01 THEN
+      RAISE EXCEPTION 'rpc_replace_campaign_actuals: store % actual_value(%) <> actual_offline(%) + actual_affiliate(%)',
+        v_store, v_value, v_offline, v_affiliate;
+    END IF;
+    IF NOT v_m_offline AND v_offline <> 0 THEN
+      RAISE EXCEPTION 'rpc_replace_campaign_actuals: campaign tắt metric_offline nhưng store % có actual_offline=%', v_store, v_offline;
+    END IF;
+    IF NOT v_m_affiliate AND v_affiliate <> 0 THEN
+      RAISE EXCEPTION 'rpc_replace_campaign_actuals: campaign tắt metric_affiliate nhưng store % có actual_affiliate=%', v_store, v_affiliate;
+    END IF;
+
+    SELECT coalesce(sum((e->>'gmv')::numeric), 0),
+           coalesce(sum(coalesce((e->>'gmv_affiliate')::numeric, 0)), 0)
+    INTO v_daily_off, v_daily_aff
+    FROM jsonb_array_elements(coalesce(p_daily, '[]'::jsonb)) e
+    WHERE (e->>'store_id')::uuid = v_store;
+    IF abs(v_daily_off - v_offline) > 0.01 OR abs(v_daily_aff - v_affiliate) > 0.01 THEN
+      RAISE EXCEPTION 'rpc_replace_campaign_actuals: store % SUM(daily) off=%/aff=% không khớp aggregate off=%/aff=%',
+        v_store, v_daily_off, v_daily_aff, v_offline, v_affiliate;
+    END IF;
+  END LOOP;
+
+  -- ── REPLACE-ALL (nguyên logic 072; WHERE'd delete — pg_safeupdate-safe;
+  --    dọn ghost khi re-import bớt store; 1 transaction: không bao giờ chart
+  --    mới cạnh tổng cũ trên màn commission) ──
   DELETE FROM public.kpi_campaign_store_daily_actuals WHERE campaign_id = p_campaign_id;
   DELETE FROM public.kpi_campaign_store_actuals       WHERE campaign_id = p_campaign_id;
 
@@ -174,14 +249,15 @@ BEGIN
       p_campaign_id,
       (v_row->>'store_id')::uuid,
       coalesce((v_row->>'actual_value')::numeric, 0),
-      coalesce((v_row->>'actual_offline')::numeric, 0),
+      -- fallback legacy: thiếu key mới → toàn bộ actual_value là offline
+      coalesce((v_row->>'actual_offline')::numeric, (v_row->>'actual_value')::numeric, 0),
       coalesce((v_row->>'actual_affiliate')::numeric, 0),
       (v_row->>'run_rate')::numeric,
       (v_row->>'remaining_target')::numeric,
       (v_row->>'achieved_tier_order')::integer,
       (v_row->>'store_commission_pool')::numeric,
       coalesce((v_row->>'raw_row_count')::integer, 0),
-      (v_row->>'offline_synced_at')::timestamptz,
+      coalesce((v_row->>'offline_synced_at')::timestamptz, (v_row->>'synced_at')::timestamptz),
       (v_row->>'affiliate_synced_at')::timestamptz,
       coalesce((v_row->>'synced_at')::timestamptz, now())
     )
@@ -212,7 +288,7 @@ GRANT EXECUTE ON FUNCTION public.rpc_replace_campaign_actuals(uuid, jsonb, jsonb
 -- ── app_migrations ──────────────────────────────────────────────────────────
 INSERT INTO public.app_migrations (version, name, notes)
 VALUES ('092', 'kpi_campaign_affiliate_metric',
-        'KPI Campaign × GMV Affiliate (plan v1.1): metric_offline/metric_affiliate + CHECK ≥1; actuals actual_offline/actual_affiliate (backfill = actual_value/0) + offline/affiliate_synced_at; daily gmv_affiliate; seed CIRCA-MIZUKI→POS0013 (manifest 153/23); partial index (store_id, created_time) delivered+active; RPC rpc_aggregate_affiliate_gmv (SUM trong DB, DELIVERED-only, ngày VN theo created_time — pending chốt field ngày) service_role-only; replace rpc_replace_campaign_actuals ghi cột mới, re-assert grants.')
+        'KPI Campaign × GMV Affiliate (plan v1.1, r1): metric_offline/metric_affiliate + CHECK ≥1; actuals actual_offline/actual_affiliate (backfill = actual_value/0) + offline/affiliate_synced_at; daily gmv_affiliate; seed CIRCA-MIZUKI→POS0013 (manifest 153/23); partial index (store_id, created_time) delivered+active; RPC rpc_aggregate_affiliate_gmv (SUM trong DB, DELIVERED-only, ngày VN theo created_time — pending chốt field ngày) service_role-only; replace rpc_replace_campaign_actuals: backward-compat fallback caller cũ (actual_offline←actual_value, affiliate←0, offline_synced_at←synced_at) + DB validation (campaign tồn tại; store thuộc targets; actual_value=offline+affiliate; metric tắt→0; SUM daily khớp aggregate; RAISE rollback toàn transaction), re-assert grants.')
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;
@@ -255,4 +331,17 @@ COMMIT;
 --     (SELECT array_agg(DISTINCT store_id) FROM public.affiliate_partner_mappings WHERE store_id IS NOT NULL),
 --     '2026-06-30T17:00:00Z', '2026-07-31T17:00:00Z');
 --   -- kỳ vọng: chỉ store OS/FS có đơn delivered; tổng khớp baseline manifest.
+-- 9) Backward-compat legacy caller (r1 — smoke trên campaign is_test, dạng
+--    payload CŨ không có key mới; yêu cầu store thuộc targets campaign đó):
+--   SELECT public.rpc_replace_campaign_actuals('<test_campaign_id>',
+--     '[{"store_id":"<store_in_targets>","date":"2026-07-01","gmv":100}]'::jsonb,
+--     '[{"store_id":"<store_in_targets>","actual_value":100,"run_rate":10,"remaining_target":900,"raw_row_count":1}]'::jsonb);
+--   SELECT actual_value, actual_offline, actual_affiliate, offline_synced_at IS NOT NULL AS has_off_ts
+--   FROM public.kpi_campaign_store_actuals WHERE campaign_id='<test_campaign_id>';
+--   -- kỳ vọng: 100 / 100 / 0 / true (KHÔNG phải 100/0/0 — đó chính là bug draft cũ)
+-- 10) Validation RAISE (kỳ vọng LỖI, transaction rollback):
+--   • store ngoài targets → 'không thuộc targets'
+--   • actual_value <> offline+affiliate → RAISE công thức
+--   • campaign metric_affiliate=false + actual_affiliate>0 → RAISE metric tắt
+--   • daily lệch aggregate → RAISE SUM(daily)
 -- ============================================================================

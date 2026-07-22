@@ -1,5 +1,11 @@
 # Kế hoạch v2.1: Chương trình AFFILIATE thay thế "Giới thiệu bạn bè"
 
+> ⚠ **SUPERSEDED (22/07/2026) cho toàn bộ phần UI/KPI bởi [`plan-kpi-affiliate-metric.md`](plan-kpi-affiliate-metric.md) v1.1.**
+> File này chỉ giữ làm lịch sử F1/F2 ingestion (schema 090/091 + cron đồng bộ). Các điểm ĐÃ HẾT HIỆU LỰC:
+> - Rule đếm "mọi đơn trừ CANCELED / FAIL_TO_DELIVER vẫn tính" → KPI mới = **CHỈ DELIVERED**.
+> - Trang `/affiliate` riêng + AffiliateOrdersCard trong /targets (F3/F4) → **không build/không bật**; affiliate = chỉ số trong KPI Campaign.
+> - Mọi ý tưởng discovery/fallback mapping bằng `assigned_store_id` → **hủy hoàn toàn** (attribution duy nhất = partner_code).
+
 Ngày lập: 21/07/2026 (v2.1 — đóng 4 P1 của audit lần 2) · Trạng thái: **F0 ĐÓNG · F1 = DRAFT migration (KHÔNG chạy Supabase) → stakeholder audit migration/RLS theo role matrix → mới chạy** · Manifest mapping: `docs/affiliate-partner-manifest.md` (22 code = 14 os + 1 fs + 7 external, checksum 148 ✓ — v2 ghi "15 OS" là đếm sai).
 
 ## 0. Trả lời 7 câu hỏi stakeholder (chốt với PM 21/07)
