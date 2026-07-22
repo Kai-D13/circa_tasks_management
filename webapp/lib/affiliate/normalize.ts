@@ -213,13 +213,19 @@ export function resolveStores(
 }
 
 // Dedupe theo order_id TRƯỚC khi validate/đếm (contract F2): trùng → giữ bản
-// có last_updated_time mới nhất (thiếu thì bản gặp sau thắng). Trả thêm số
-// bản trùng đã loại để report.
+// có last_updated_time mới nhất (thiếu thì bản gặp sau thắng). Khóa dedupe =
+// GIÁ TRỊ số canonical (toSafeInt) — number/Int32/Long cùng giá trị phải chung
+// 1 key (audit r1.1 P1: Long là object, dùng raw làm Map key thì 2 Long cùng
+// ID vẫn là 2 key → không dedupe → ON CONFLICT đụng cùng row 2 lần trong 1
+// batch upsert). Row KHÔNG có order_id hợp lệ giữ RIÊNG từng row (không gom
+// chung 1 key undefined) để validate phía sau đếm đủ rejected.
 export function dedupeByOrderId(docs: SourceOrderDoc[]): { unique: SourceOrderDoc[]; duplicates: number } {
-  const byId = new Map<unknown, SourceOrderDoc>()
+  const byId = new Map<number, SourceOrderDoc>()
+  const invalidId: SourceOrderDoc[] = []
   let duplicates = 0
   for (const doc of docs) {
-    const id = doc.order_id
+    const id = toSafeInt(doc.order_id)
+    if (id === null) { invalidId.push(doc); continue }
     const prev = byId.get(id)
     if (prev === undefined) { byId.set(id, doc); continue }
     duplicates++
@@ -227,5 +233,5 @@ export function dedupeByOrderId(docs: SourceOrderDoc[]): { unique: SourceOrderDo
     const curT = isoOrNull(doc.last_updated_time) ?? ''
     if (curT >= prevT) byId.set(id, doc)
   }
-  return { unique: [...byId.values()], duplicates }
+  return { unique: [...byId.values(), ...invalidId], duplicates }
 }

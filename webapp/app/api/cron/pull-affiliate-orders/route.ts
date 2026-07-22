@@ -9,6 +9,7 @@ import {
   validateSourceOrder,
   type AffiliateOrderRow,
   type PartnerMappingRow,
+  type SourceOrderDoc,
 } from '@/lib/affiliate/normalize'
 
 // GET /api/cron/pull-affiliate-orders — đồng bộ đơn Affiliate từ MongoDB Circa
@@ -38,6 +39,11 @@ const MONGO_MAX_TIME_MS = 60_000
 class DeadlineError extends Error {
   constructor(phase: string) { super(`hard deadline 10 phút vượt tại phase: ${phase}`) }
 }
+// Phân loại lỗi theo LOẠI, không theo prefix message (audit r1.1 P2 — driver
+// Mongo trả "Server selection timed out after 15000 ms", không bắt đầu bằng
+// "Mongo" nên nhánh prefix cũ rơi về 500 sai).
+class SourceError extends Error {}  // đọc upstream Mongo → 502
+class UpsertError extends Error {}  // ghi affiliate_orders → 502 (contract F2)
 
 export async function GET(request: NextRequest) {
   const secret = request.headers.get('authorization')?.replace('Bearer ', '')
@@ -59,7 +65,12 @@ export async function GET(request: NextRequest) {
   // ── Pipeline đọc dùng chung dry/real: snapshot → dedupe → validate → resolve ─
   const readAndClassify = async () => {
     guard('mongo snapshot')
-    const rawDocs = await fetchAffiliateOrdersSnapshot(Math.min(MONGO_MAX_TIME_MS, Math.max(1_000, timeLeft())))
+    let rawDocs: SourceOrderDoc[]
+    try {
+      rawDocs = await fetchAffiliateOrdersSnapshot(Math.min(MONGO_MAX_TIME_MS, Math.max(1_000, timeLeft())))
+    } catch (e) {
+      throw new SourceError(`Mongo: ${e instanceof Error ? e.message : 'unknown'}`)
+    }
     if (rawDocs.length > GROWTH_WARN_THRESHOLD) {
       console.warn(`[affiliate-sync] subset=${rawDocs.length} vượt ngưỡng ${GROWTH_WARN_THRESHOLD} — tạo ticket chuyển incremental theo last_updated_time (plan §3)`)
     }
@@ -103,8 +114,9 @@ export async function GET(request: NextRequest) {
         partner_code_distribution: codeCount,
       })
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Mongo error'
-      return NextResponse.json({ error: `Dry-run: ${msg}` }, { status: e instanceof DeadlineError ? 504 : 502 })
+      const msg = e instanceof Error ? e.message : 'unknown'
+      const status = e instanceof DeadlineError ? 504 : e instanceof SourceError ? 502 : 500
+      return NextResponse.json({ error: `Dry-run: ${msg}` }, { status })
     }
   }
 
@@ -118,12 +130,18 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Sync đang chạy (lease đang được giữ)' }, { status: 409 })
   }
 
-  // rpc_fail dùng signal RIÊNG (không dính deadline đã cháy) để luôn đóng được run.
+  // rpc_fail dùng signal RIÊNG (không dính deadline đã cháy) để luôn đóng được
+  // run, và TỰ NUỐT exception (audit r1.1 P2): nếu client throw (abort/network)
+  // thì response lỗi GỐC vẫn phải trả về; run kẹt sẽ được lease 15' thu hồi.
   const failRun = async (msg: string) => {
-    const { error } = await supabaseAdmin
-      .rpc('rpc_fail_affiliate_sync', { p_run_id: runId, p_error: msg })
-      .abortSignal(AbortSignal.timeout(30_000))
-    if (error) console.error('[affiliate-sync] rpc_fail cũng lỗi:', error.message)
+    try {
+      const { error } = await supabaseAdmin
+        .rpc('rpc_fail_affiliate_sync', { p_run_id: runId, p_error: msg })
+        .abortSignal(AbortSignal.timeout(30_000))
+      if (error) console.error('[affiliate-sync] rpc_fail cũng lỗi:', error.message)
+    } catch (e) {
+      console.error('[affiliate-sync] rpc_fail throw (nuốt để giữ lỗi gốc):', e instanceof Error ? e.message : e)
+    }
   }
 
   interface FinishResult { deactivated?: number; note?: string | null }
@@ -154,7 +172,7 @@ export async function GET(request: NextRequest) {
         .from('affiliate_orders')
         .upsert(chunk, { onConflict: 'order_id' })
         .abortSignal(sig())
-      if (upErr) throw new Error(`Upsert batch ${i / UPSERT_CHUNK + 1}: ${upErr.message}`)
+      if (upErr) throw new UpsertError(`Upsert batch ${i / UPSERT_CHUNK + 1}: ${upErr.message}`)
     }
 
     // 3) Finish — mark-missing + safety floor + đóng run trong 1 transaction ở DB.
@@ -177,7 +195,9 @@ export async function GET(request: NextRequest) {
     // post-finish tách riêng bên dưới.)
     const msg = e instanceof Error ? e.message : 'unknown'
     await failRun(msg)
-    const status = e instanceof DeadlineError ? 504 : msg.startsWith('Upsert') || msg.startsWith('Mongo') ? 502 : 500
+    const status = e instanceof DeadlineError ? 504
+      : e instanceof SourceError || e instanceof UpsertError ? 502
+      : 500
     return NextResponse.json({ error: msg }, { status })
   }
 

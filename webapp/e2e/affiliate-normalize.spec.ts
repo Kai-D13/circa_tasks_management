@@ -150,6 +150,34 @@ test.describe('affiliate normalize @desktop', () => {
     expect(resolved.find((r) => r.order_id === 3)?.store_id).toBeNull() // external giữ external
   })
 
+  test('dedupe canonical hóa key (r1.1): Long/number cùng giá trị chung 1 key', () => {
+    const longA = { toNumber: () => 23261, toString: () => '23261', _bsontype: 'Long' }
+    const longB = { toNumber: () => 23261, toString: () => '23261', _bsontype: 'Long' }
+    const older = { ...base, order_id: longA, total_price: 111, last_updated_time: new Date('2026-07-20T00:00:00Z') }
+    const newer = { ...base, order_id: longB, total_price: 222, last_updated_time: new Date('2026-07-21T00:00:00Z') }
+    // 2 Long object khác reference, cùng ID → PHẢI dedupe (raw-key thì không)
+    const r1 = dedupeByOrderId([older, newer])
+    expect(r1.duplicates).toBe(1)
+    expect(r1.unique.length).toBe(1)
+    expect(r1.unique[0].total_price).toBe(222)
+    // number + Long cùng ID → PHẢI dedupe
+    const numNewer = { ...base, order_id: 23261, total_price: 333, last_updated_time: new Date('2026-07-22T00:00:00Z') }
+    const r2 = dedupeByOrderId([older, numNewer])
+    expect(r2.duplicates).toBe(1)
+    expect(r2.unique.length).toBe(1)
+    expect(r2.unique[0].total_price).toBe(333)
+  })
+
+  test('dedupe giữ RIÊNG row không có order_id hợp lệ (r1.1) → đếm đủ rejected', () => {
+    const bad1 = { ...base, order_id: undefined }
+    const bad2 = { ...base, order_id: 'x' }
+    const { unique, duplicates } = dedupeByOrderId([bad1, bad2, base])
+    expect(duplicates).toBe(0)
+    expect(unique.length).toBe(3) // 2 row hỏng KHÔNG bị gom chung 1 key undefined
+    const rejected = unique.map((d) => validateSourceOrder(d)).filter((r) => !r.ok)
+    expect(rejected.length).toBe(2)
+  })
+
   test('dedupe theo order_id: giữ bản last_updated_time mới nhất', () => {
     const older = { ...base, total_price: 111, last_updated_time: new Date('2026-07-20T00:00:00Z') }
     const newer = { ...base, total_price: 222, last_updated_time: new Date('2026-07-21T00:00:00Z') }
