@@ -71,6 +71,33 @@ const str = (v: unknown): string | null => {
   return t === '' ? null : t
 }
 
+// ── BSON-safe numeric coercion (audit F2 P1) ────────────────────────────────
+// mongo.ts đặt promoteLongs:false → int64 tới đây là Long object (duck-type
+// .toNumber()); Decimal128 không bao giờ được driver tự convert. Số vượt
+// Number.MAX_SAFE_INTEGER → null → caller reject (không im lặng mất chính xác).
+type BsonNumericLike = { toNumber?: () => number; toString: () => string; _bsontype?: string }
+
+const toFiniteNumber = (v: unknown): number | null => {
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null
+  if (typeof v === 'object' && v !== null) {
+    const o = v as BsonNumericLike
+    if (o._bsontype === 'Decimal128') {
+      const n = Number(o.toString())
+      return Number.isFinite(n) ? n : null
+    }
+    if (typeof o.toNumber === 'function') {
+      const n = o.toNumber()
+      return Number.isFinite(n) ? n : null
+    }
+  }
+  return null
+}
+
+const toSafeInt = (v: unknown): number | null => {
+  const n = toFiniteNumber(v)
+  return n !== null && Number.isSafeInteger(n) ? n : null
+}
+
 // BSON Date qua driver = JS Date; fixture JSON = chuỗi ISO — nhận cả hai.
 const isoOrNull = (v: unknown): string | null => {
   if (v instanceof Date && !Number.isNaN(v.getTime())) return v.toISOString()
@@ -85,10 +112,9 @@ const isoOrNull = (v: unknown): string | null => {
 // affiliate_partner_code, status, created_time, total_price (số hữu hạn —
 // SỐ ÂM VẪN HỢP LỆ, user chốt 22/07: giữ để phát hiện và QA thực tế).
 export function validateSourceOrder(doc: SourceOrderDoc): NormalizeResult {
-  const orderIdRaw = doc.order_id
-  const orderId = typeof orderIdRaw === 'number' ? orderIdRaw : NaN
-  if (!Number.isInteger(orderId) || orderId <= 0) {
-    return { ok: false, orderId: orderIdRaw, reason: 'order_id thiếu/không phải số nguyên dương' }
+  const orderId = toSafeInt(doc.order_id)
+  if (orderId === null || orderId <= 0) {
+    return { ok: false, orderId: doc.order_id, reason: 'order_id thiếu/không phải số nguyên dương an toàn (safe integer)' }
   }
   const partnerCode = str(doc.affiliate_partner_code)
   if (!partnerCode) return { ok: false, orderId, reason: 'affiliate_partner_code rỗng' }
@@ -99,13 +125,12 @@ export function validateSourceOrder(doc: SourceOrderDoc): NormalizeResult {
   const createdTime = isoOrNull(doc.created_time)
   if (!createdTime) return { ok: false, orderId, reason: 'created_time thiếu/không parse được' }
 
-  const tp = doc.total_price
-  if (typeof tp !== 'number' || !Number.isFinite(tp)) {
-    return { ok: false, orderId, reason: 'total_price thiếu/không phải số' }
+  const tp = toFiniteNumber(doc.total_price)
+  if (tp === null) {
+    return { ok: false, orderId, reason: 'total_price thiếu/không phải số (hoặc BSON type không convert được)' }
   }
 
-  const totalItem = typeof doc.total_item === 'number' && Number.isInteger(doc.total_item)
-    ? doc.total_item : null
+  const totalItem = toSafeInt(doc.total_item)
 
   return {
     ok: true,
@@ -127,6 +152,64 @@ export function validateSourceOrder(doc: SourceOrderDoc): NormalizeResult {
       last_updated_time: isoOrNull(doc.last_updated_time),
     },
   }
+}
+
+// ── Resolver mapping DÙNG CHUNG cho dry-run và real run (audit F2 r1 P1 —
+// hai luồng không được lệch logic). Pure: mappings do caller đọc từ DB. ──────
+export interface PartnerMappingRow {
+  partner_code: string
+  store_id: string | null
+  partner_type: string
+  is_active: boolean
+}
+
+export interface ResolveReport {
+  matched_os: number          // đơn map store OS
+  matched_fs: number          // đơn map store FS (chỉ super thấy)
+  external: number            // đơn thuộc mapping external (store_id NULL chủ đích)
+  unmatched_codes: string[]   // code KHÔNG có trong mapping → store_id NULL + canary
+  inactive_codes: string[]    // code có mapping nhưng is_active=false → store_id NULL
+  null_store_orders: number   // tổng đơn sẽ nằm store_id NULL (external+unmatched+inactive)
+  negative_price_count: number
+  negative_price_sample: number[] // tối đa 10 order_id
+}
+
+export function resolveStores(
+  rows: AffiliateOrderRow[],
+  mappings: PartnerMappingRow[],
+): { resolved: (AffiliateOrderRow & { store_id: string | null })[]; report: ResolveReport } {
+  const byCode = new Map(mappings.map((m) => [m.partner_code, m]))
+  const unmatched = new Set<string>()
+  const inactive = new Set<string>()
+  const report: ResolveReport = {
+    matched_os: 0, matched_fs: 0, external: 0,
+    unmatched_codes: [], inactive_codes: [], null_store_orders: 0,
+    negative_price_count: 0, negative_price_sample: [],
+  }
+  const resolved = rows.map((r) => {
+    const m = byCode.get(r.partner_code)
+    let storeId: string | null = null
+    if (!m) {
+      unmatched.add(r.partner_code)
+    } else if (!m.is_active) {
+      inactive.add(r.partner_code)
+    } else if (m.store_id && m.partner_type === 'os') {
+      storeId = m.store_id; report.matched_os++
+    } else if (m.store_id && m.partner_type === 'fs') {
+      storeId = m.store_id; report.matched_fs++
+    } else {
+      report.external++ // mapping external chủ đích — KHÔNG fallback vào store
+    }
+    if (storeId === null) report.null_store_orders++
+    if (r.total_price < 0) {
+      report.negative_price_count++
+      if (report.negative_price_sample.length < 10) report.negative_price_sample.push(r.order_id)
+    }
+    return { ...r, store_id: storeId }
+  })
+  report.unmatched_codes = [...unmatched]
+  report.inactive_codes = [...inactive]
+  return { resolved, report }
 }
 
 // Dedupe theo order_id TRƯỚC khi validate/đếm (contract F2): trùng → giữ bản

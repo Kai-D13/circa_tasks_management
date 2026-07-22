@@ -22,6 +22,10 @@ export function getAffiliateMongo(): MongoClient {
       serverSelectionTimeoutMS: 15_000,
       connectTimeoutMS: 15_000,
       socketTimeoutMS: 60_000,
+      // int64 KHÔNG tự promote thành number (mất chính xác im lặng khi vượt
+      // 2^53) — Long tới normalize dưới dạng object, toSafeInt kiểm tra safe
+      // range tường minh, vượt → reject (audit F2 r1 P1 BSON contract).
+      promoteLongs: false,
     })
   }
   return g.__affiliateMongoClient
@@ -51,7 +55,7 @@ const PROJECTION = {
 // Pull TOÀN BỘ snapshot subset affiliate vào memory trước khi ghi DB
 // (stakeholder F2 #5 — ~150 đơn hiện tại, loại nguy cơ cursor đứt giữa upsert).
 // Không cửa sổ thời gian: mỗi run = full reconciliation (thiết kế plan §3).
-export async function fetchAffiliateOrdersSnapshot(): Promise<SourceOrderDoc[]> {
+export async function fetchAffiliateOrdersSnapshot(maxTimeMS = 60_000): Promise<SourceOrderDoc[]> {
   const client = getAffiliateMongo()
   await client.connect()
   return client
@@ -59,7 +63,7 @@ export async function fetchAffiliateOrdersSnapshot(): Promise<SourceOrderDoc[]> 
     .collection(COLLECTION)
     .find(
       { affiliate_partner_code: { $exists: true, $nin: [null, ''] } },
-      { projection: PROJECTION },
+      { projection: PROJECTION, maxTimeMS }, // server-side kill query treo (audit F2 r1)
     )
     .toArray() as Promise<SourceOrderDoc[]>
 }

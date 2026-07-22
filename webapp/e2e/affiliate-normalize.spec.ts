@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { dedupeByOrderId, isCountedStatus, normalizeStatus, validateSourceOrder } from '../lib/affiliate/normalize'
+import { dedupeByOrderId, isCountedStatus, normalizeStatus, resolveStores, validateSourceOrder, type PartnerMappingRow } from '../lib/affiliate/normalize'
 
 // Unit gate F2 (chạy không cần browser/server — logic thuần). Case theo QA
 // checklist stakeholder 22/07: status normalization, BSON number/date,
@@ -96,6 +96,58 @@ test.describe('affiliate normalize @desktop', () => {
     expect(r.row.total_item).toBeNull()
     expect(r.row.first_product_name).toBeNull()
     expect(r.row.customer_name).toBeNull()
+  })
+
+  test('BSON types (r1): Long/Int32 qua toNumber, Decimal128 qua toString, unsafe Long → reject', () => {
+    // promoteLongs:false → Long tới normalize dạng object duck-type
+    const longLike = { toNumber: () => 23261, toString: () => '23261', _bsontype: 'Long' }
+    const r1 = validateSourceOrder({ ...base, order_id: longLike })
+    expect(r1.ok).toBe(true)
+    if (r1.ok) expect(r1.row.order_id).toBe(23261)
+
+    const dec = { toString: () => '126000.5', _bsontype: 'Decimal128' }
+    const r2 = validateSourceOrder({ ...base, total_price: dec })
+    expect(r2.ok).toBe(true)
+    if (r2.ok) expect(r2.row.total_price).toBe(126000.5)
+
+    const unsafe = { toNumber: () => 2 ** 53 + 2, toString: () => String(2 ** 53 + 2), _bsontype: 'Long' }
+    const r3 = validateSourceOrder({ ...base, order_id: unsafe })
+    expect(r3.ok).toBe(false)
+    if (!r3.ok) expect(r3.reason).toContain('safe integer')
+
+    const badDec = { toString: () => 'not-a-number', _bsontype: 'Decimal128' }
+    const r4 = validateSourceOrder({ ...base, total_price: badDec })
+    expect(r4.ok).toBe(false)
+  })
+
+  test('resolveStores (r1): phân loại os/fs/external/unmatched/inactive + giá âm', () => {
+    const mappings: PartnerMappingRow[] = [
+      { partner_code: 'CODE-OS', store_id: 'uuid-os', partner_type: 'os', is_active: true },
+      { partner_code: 'CODE-FS', store_id: 'uuid-fs', partner_type: 'fs', is_active: true },
+      { partner_code: 'CODE-EXT', store_id: null, partner_type: 'external', is_active: true },
+      { partner_code: 'CODE-OFF', store_id: 'uuid-off', partner_type: 'os', is_active: false },
+    ]
+    const mk = (id: number, code: string, price = 1000) => {
+      const r = validateSourceOrder({ ...base, order_id: id, affiliate_partner_code: code, total_price: price })
+      if (!r.ok) throw new Error('fixture invalid')
+      return r.row
+    }
+    const rows = [
+      mk(1, 'CODE-OS'), mk(2, 'CODE-FS'), mk(3, 'CODE-EXT'),
+      mk(4, 'CODE-OFF'), mk(5, 'CODE-MOI'), mk(6, 'CODE-OS', -500),
+    ]
+    const { resolved, report } = resolveStores(rows, mappings)
+    expect(report.matched_os).toBe(2)            // #1 + #6
+    expect(report.matched_fs).toBe(1)            // #2
+    expect(report.external).toBe(1)              // #3
+    expect(report.unmatched_codes).toEqual(['CODE-MOI'])
+    expect(report.inactive_codes).toEqual(['CODE-OFF'])
+    expect(report.null_store_orders).toBe(3)     // ext + inactive + unmatched
+    expect(report.negative_price_count).toBe(1)
+    expect(report.negative_price_sample).toEqual([6])
+    expect(resolved.find((r) => r.order_id === 1)?.store_id).toBe('uuid-os')
+    expect(resolved.find((r) => r.order_id === 4)?.store_id).toBeNull() // inactive KHÔNG map
+    expect(resolved.find((r) => r.order_id === 3)?.store_id).toBeNull() // external giữ external
   })
 
   test('dedupe theo order_id: giữ bản last_updated_time mới nhất', () => {
