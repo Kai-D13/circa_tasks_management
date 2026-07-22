@@ -1,13 +1,13 @@
-// QA THỰC THI cho migration 092 (audit P2 r2 + r2.1). Chạy SAU khi 092 apply,
-// TRƯỚC khi mở Phase 3:
+// QA THỰC THI cho migration 092 (audit P2 r2 + r2.1 + r2.2). Chạy SAU khi 092
+// apply, TRƯỚC khi mở Phase 3:
 //   cd webapp && node scripts/qa-kpi-affiliate-092.mjs
 // Tùy chọn test authenticated-deny: đặt QA_AUTH_EMAIL + QA_PASSWORD (account
 // staff/admin bất kỳ) — thiếu thì case đó SKIP có cảnh báo.
 // Nguyên tắc: fixture campaign is_test=true + đơn affiliate ID vùng riêng
 // 999800001+ partner_code 'QA-092-FIXTURE', cửa sổ thời gian 01/2025 (trước
-// mọi data thật ~06/2026 → assert số TUYỆT ĐỐI kể cả sau backfill); cleanup
-// exact-ID trong FINALLY (script throw giữa chừng vẫn dọn); KHÔNG đụng
-// campaign/đơn thật. Exit 1 nếu bất kỳ case fail.
+// mọi data thật ~06/2026 → assert số TUYỆT ĐỐI kể cả sau backfill).
+// r2.2: KHÔNG process.exit trong try (throw để FINALLY luôn dọn); cleanup lỗi
+// hoặc còn fixture sót → suite FAIL. Exit 1 nếu bất kỳ case fail, 2 nếu abort.
 import fs from 'node:fs'
 import { createClient } from '@supabase/supabase-js'
 
@@ -20,6 +20,7 @@ const svc = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE
 const anon = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.NEXT_PUBLIC_SUPABASE_ANON_KEY, { auth: { persistSession: false } })
 
 let failed = 0
+let aborted = null
 const out = (label, ok, detail = '') => {
   console.log((ok ? 'PASS' : 'FAIL').padEnd(5), label.padEnd(66), detail)
   if (!ok) failed++
@@ -30,6 +31,8 @@ const expectRaise = async (label, promise, msgPart) => {
   const ok = !!error && error.message.includes(msgPart)
   out(label, ok, error ? error.message.slice(0, 72) : 'KHÔNG lỗi (phải RAISE)')
 }
+// r2.2: abort = throw (KHÔNG process.exit) để finally luôn chạy cleanup.
+const abort = (msg) => { throw new Error(`ABORT: ${msg}`) }
 
 // ID vùng QA riêng cho affiliate_orders (không đụng order_id thật ~2xxxx).
 const FX = { d1: 999800001, dBoundA: 999800002, dBoundB: 999800003, canceled: 999800004, fail: 999800005, dOut: 999800006, dNull: 999800007 }
@@ -39,14 +42,23 @@ const campaignIds = []
 try {
   // ── Preflight ─────────────────────────────────────────────────────────────
   const mig = await svc.from('app_migrations').select('version').eq('version', '092').maybeSingle()
-  if (!mig.data) { console.error('ABORT: migration 092 chưa chạy'); process.exit(2) }
+  if (!mig.data) abort('migration 092 chưa chạy (app_migrations không có 092)')
   const colCheck = await svc.from('affiliate_orders').select('completed_time').limit(1)
   out('preflight: cột affiliate_orders.completed_time tồn tại', !colCheck.error, colCheck.error?.message ?? '')
-  const map = await svc.from('affiliate_partner_mappings').select('partner_code, partner_type, stores(code)').in('partner_code', ['CIRCA-MIZUKI', 'CIRCA-NAMVIET'])
-  out('preflight: mapping MIZUKI→POS0013 + NAMVIET→POS0077 (os)',
-    map.data?.length === 2 && map.data.every((m) => m.partner_type === 'os')
-      && map.data.some((m) => m.stores?.code === 'POS0013') && map.data.some((m) => m.stores?.code === 'POS0077'),
-    JSON.stringify(map.data?.map((m) => `${m.partner_code}:${m.stores?.code}`)))
+  // r2.2 (audit P2): assert TỪNG CẶP partner→store, không chỉ "có đủ 2 POS" —
+  // map chéo MIZUKI↔NAMVIET phải bị bắt.
+  const map = await svc.from('affiliate_partner_mappings')
+    .select('partner_code, partner_type, is_active, stores(code)')
+    .in('partner_code', ['CIRCA-MIZUKI', 'CIRCA-NAMVIET'])
+  const byCode = new Map((map.data ?? []).map((m) => [m.partner_code, m]))
+  const miz = byCode.get('CIRCA-MIZUKI')
+  const nam = byCode.get('CIRCA-NAMVIET')
+  out('preflight: CIRCA-MIZUKI → POS0013 / os / active',
+    miz?.stores?.code === 'POS0013' && miz?.partner_type === 'os' && miz?.is_active === true,
+    JSON.stringify({ code: miz?.stores?.code, type: miz?.partner_type, active: miz?.is_active }))
+  out('preflight: CIRCA-NAMVIET → POS0077 / os / active',
+    nam?.stores?.code === 'POS0077' && nam?.partner_type === 'os' && nam?.is_active === true,
+    JSON.stringify({ code: nam?.stores?.code, type: nam?.partner_type, active: nam?.is_active }))
 
   // ── Backfill regression vàng (PostgREST không so cột-cột → so trong JS) ───
   const reg = await svc.from('kpi_campaign_store_actuals')
@@ -58,7 +70,7 @@ try {
 
   // ── Fixture stores + campaigns ────────────────────────────────────────────
   const { data: stores } = await svc.from('stores').select('id, code').eq('store_type', 'os').eq('is_active', true).order('code').limit(2)
-  if (!stores || stores.length < 2) { console.error('ABORT: không đủ 2 store os active'); process.exit(2) }
+  if (!stores || stores.length < 2) abort('không đủ 2 store os active')
   const [sA, sB] = stores
   const mkCampaign = async (name, metricAffiliate) => {
     const { data, error } = await svc.from('kpi_campaigns').insert({
@@ -66,12 +78,12 @@ try {
       metric_type: 'gmv', order_type: 'all', status: 'draft', is_test: true,
       metric_offline: true, metric_affiliate: metricAffiliate,
     }).select('id').single()
-    if (error) { console.error('ABORT fixture campaign:', error.message); process.exit(2) }
+    if (error) abort(`fixture campaign: ${error.message}`)
     campaignIds.push(data.id)
     for (const s of [sA, sB]) {
       const { error: tErr } = await svc.from('kpi_campaign_store_targets')
         .insert({ campaign_id: data.id, store_id: s.id, pos_code: s.code, kpi_target: 1000, store_kpi_group: 'QA-092' })
-      if (tErr) { console.error('ABORT fixture target:', tErr.message); process.exit(2) }
+      if (tErr) abort(`fixture target: ${tErr.message}`)
     }
     return data.id
   }
@@ -119,6 +131,10 @@ try {
     rpc(c1, [dayRow(sA), dayRow(sB)], [aggRow(sA), aggRow(sA), aggRow(sB)]), 'trùng lặp')
   await expectRaise('RAISE: duplicate (store,date) trong p_daily (r2)',
     rpc(c1, [dayRow(sA), dayRow(sA), dayRow(sB)], [aggRow(sA, { actual_value: 200 }), aggRow(sB)]), 'trùng lặp')
+  // r2.2 (audit P2): nhánh (d) daily ⊆ actuals — store trong p_daily không có
+  // aggregate (fakeStore ngoài targets; check (d) đứng TRƯỚC check (e)).
+  await expectRaise('RAISE: p_daily chứa store không có aggregate (r2.2, nhánh d)',
+    rpc(c1, [dayRow(sA), dayRow(sB), dayRow(fakeStore)], [aggRow(sA), aggRow(sB)]), 'không có aggregate')
   await expectRaise('RAISE: actual_value <> offline + affiliate',
     rpc(c2, [dayRow(sA), dayRow(sB)],
       [aggRow(sA, { actual_value: 100, actual_offline: 70, actual_affiliate: 50 }), aggRow(sB, { actual_offline: 100, actual_affiliate: 0 })]),
@@ -145,14 +161,14 @@ try {
     source_active: true,
   })
   const { error: fxErr } = await svc.from('affiliate_orders').upsert([
-    fxRow(FX.d1,     sA.id, 'DELIVERED', 'delivered', 100000, '2025-01-05T03:00:00Z', '2025-01-10T05:00:00Z'), // vn 10/01
+    fxRow(FX.d1,      sA.id, 'DELIVERED', 'delivered', 100000, '2025-01-05T03:00:00Z', '2025-01-10T05:00:00Z'), // vn 10/01
     fxRow(FX.dBoundA, sA.id, 'DELIVERED', 'delivered', 10000, '2025-01-14T03:00:00Z', '2025-01-15T16:59:59Z'), // vn 23:59:59 15/01
     fxRow(FX.dBoundB, sA.id, 'DELIVERED', 'delivered', 20000, '2025-01-14T03:00:00Z', '2025-01-15T17:00:00Z'), // vn 00:00 16/01
     fxRow(FX.canceled, sA.id, 'CANCELED', 'canceled', 50000, '2025-01-11T03:00:00Z', '2025-01-11T05:00:00Z'),  // không tính
     fxRow(FX.fail,    sA.id, 'FAIL_TO_DELIVER', 'fail_to_deliver', 60000, '2025-01-12T03:00:00Z', '2025-01-12T05:00:00Z'), // không tính
     fxRow(FX.dOut,    sA.id, 'DELIVERED', 'delivered', 70000, '2025-01-20T03:00:00Z', '2025-02-05T05:00:00Z'), // created TRONG cửa sổ, completed NGOÀI → loại (chứng minh dùng completed_time)
   ], { onConflict: 'order_id' })
-  if (fxErr) { console.error('ABORT fixture orders:', fxErr.message); process.exit(2) }
+  if (fxErr) abort(`fixture orders: ${fxErr.message}`)
 
   const win = { p_store_ids: [sA.id], p_from: '2024-12-31T17:00:00Z', p_to: '2025-01-31T17:00:00Z' } // 01/01–31/01 VN
   {
@@ -174,7 +190,7 @@ try {
     const { error: nErr } = await svc.from('affiliate_orders').upsert([
       fxRow(FX.dNull, sB.id, 'DELIVERED', 'delivered', 5000, '2025-01-08T03:00:00Z', null),
     ], { onConflict: 'order_id' })
-    if (nErr) { console.error('ABORT fixture null:', nErr.message); process.exit(2) }
+    if (nErr) abort(`fixture null: ${nErr.message}`)
     await expectRaise('fail-closed: store có DELIVERED thiếu completed_time → RAISE',
       svc.rpc('rpc_aggregate_affiliate_gmv', { ...win, p_store_ids: [sB.id] }), 'fail-closed')
     await svc.from('affiliate_orders').delete().eq('order_id', FX.dNull)
@@ -203,18 +219,26 @@ try {
       skip('quyền: authenticated deny (2 RPC)', 'đặt QA_AUTH_EMAIL + QA_PASSWORD để chạy')
     }
   }
+} catch (e) {
+  aborted = e instanceof Error ? e.message : String(e)
+  out(`ABORT giữa chừng: ${aborted}`, false)
 } finally {
-  // ── Cleanup exact-ID (chạy cả khi throw giữa chừng — audit P2 r2.1) ───────
+  // ── Cleanup exact-ID — LUÔN chạy; lỗi hoặc sót fixture → suite FAIL (r2.2) ─
   const delFx = await svc.from('affiliate_orders').delete().in('order_id', FX_IDS).select('order_id')
-  console.log('CLEANUP affiliate fixtures:', delFx.error ? `ERR ${delFx.error.message}` : `deleted=${delFx.data?.length}`)
+  out('CLEANUP: xóa fixture affiliate_orders không lỗi', !delFx.error, delFx.error?.message ?? `deleted=${delFx.data?.length}`)
+  const fxLeft = await svc.from('affiliate_orders').select('order_id', { count: 'exact', head: true }).in('order_id', FX_IDS)
+  out('CLEANUP: affiliate_orders còn lại trong vùng FX = 0', fxLeft.count === 0, `left=${fxLeft.count}`)
   if (campaignIds.length > 0) {
     const delC = await svc.from('kpi_campaigns').delete().in('id', campaignIds).select('id')
-    console.log('CLEANUP campaigns (cascade targets/actuals/daily):', delC.error ? `ERR ${delC.error.message}` : `deleted=${delC.data?.length}`)
-    const ghost = await svc.from('kpi_campaign_store_actuals').select('campaign_id', { count: 'exact', head: true }).in('campaign_id', campaignIds)
-    console.log('CLEANUP ghost actuals:', ghost.count === 0 ? 'PASS 0' : `FAIL ${ghost.count}`)
-    if (ghost.count !== 0) failed++
+    out(`CLEANUP: xóa đủ ${campaignIds.length} campaign fixture`, !delC.error && delC.data?.length === campaignIds.length,
+      delC.error?.message ?? `deleted=${delC.data?.length}`)
+    const gA = await svc.from('kpi_campaign_store_actuals').select('campaign_id', { count: 'exact', head: true }).in('campaign_id', campaignIds)
+    const gD = await svc.from('kpi_campaign_store_daily_actuals').select('campaign_id', { count: 'exact', head: true }).in('campaign_id', campaignIds)
+    const gT = await svc.from('kpi_campaign_store_targets').select('campaign_id', { count: 'exact', head: true }).in('campaign_id', campaignIds)
+    out('CLEANUP: 0 ghost actuals/daily/targets', gA.count === 0 && gD.count === 0 && gT.count === 0,
+      `actuals=${gA.count} daily=${gD.count} targets=${gT.count}`)
   }
 }
 
-console.log(failed === 0 ? '\nALL PASS' : `\n${failed} FAILED`)
-process.exit(failed === 0 ? 0 : 1)
+console.log(failed === 0 ? '\nALL PASS' : `\n${failed} FAILED${aborted ? ' (aborted)' : ''}`)
+process.exit(aborted ? 2 : failed === 0 ? 0 : 1)
