@@ -1,6 +1,6 @@
 # Plan: KPI Campaign × GMV Affiliate — tick chọn chỉ số khi tạo chiến dịch
 
-**Phiên bản:** v1.1 · 22/07/2026 · Đã cập nhật theo audit stakeholder (thay thế toàn bộ v1.0)
+**Phiên bản:** v1.2 · 22/07/2026 · v1.1 + chốt ngày ghi nhận (`completed_time`) + 092 r2 (exact target-set validation, seed harden, QA script thực thi)
 **Phạm vi:** Enhance module KPI Campaign tại `/targets` — thêm chỉ số **GMV Affiliate** bên cạnh **GMV Offline** hiện tại.
 **Nguyên tắc:** Không deploy tới khi toàn bộ pass QA; campaign đang chạy production KHÔNG bị ảnh hưởng (schema additive, mặc định = hành vi cũ; checkbox affiliate ẩn sau flag `KPI_AFFILIATE_ENABLED=false` cho tới rollout).
 
@@ -20,11 +20,13 @@ Target            = kpi_target chung từ file import hiện tại (file KHÔNG 
 - **Tầng đồng bộ (ingestion) vẫn lưu MỌI status** — không lọc khi pull Mongo, vì đơn có thể chuyển `PROCESSING → DELIVERED` (phải cộng ở lần sync sau) hoặc `DELIVERED → CANCELED` (phải trừ). Việc lọc `DELIVERED` chỉ diễn ra ở tầng tính KPI: `source_active = true AND status_norm = 'delivered'`.
 - Khi tick cả 2 chỉ số: `Đã đạt = GMV_offline + GMV_affiliate`; % hoàn thành, bậc thưởng, commission pool, còn thiếu, nhịp độ đều tính trên **tổng gộp** so với `kpi_target`.
 
-## 2. Câu hỏi mở DUY NHẤT cần stakeholder chốt
+## 2. Ngày ghi nhận GMV — ĐÃ CHỐT: `completed_time` (22/07)
 
-> Đơn `DELIVERED` được đưa vào campaign theo **ngày tạo đơn (`created_time`)** hay **ngày giao thành công**?
-
-Dữ kiện kỹ thuật: các field thời gian đã thấy trong Mongo = `created_time`, `confirmed_time`, `last_updated_time` — **chưa thấy field ngày giao thành công**. Trong phiên VPN dry-run tới, chúng tôi sẽ in danh sách field đầy đủ của 1 đơn DELIVERED để chốt trên dữ kiện thật. Nếu Mongo không có field ngày giao, proxy duy nhất là `last_updated_time` (thời điểm đổi status cuối — không chính xác tuyệt đối). Phần aggregation theo ngày chỉ hoàn tất sau khi điểm này được chốt; các phần khác build song song không bị chặn.
+Bằng chứng từ phiên VPN (field list đầy đủ 66 field của đơn DELIVERED):
+- **`completed_time`** — mốc **giao thành công** chuyên dụng: **111/111** đơn DELIVERED có, trùng ngày VN với `last_updated_time` trên **111/111** đơn hiện tại → chọn field này (bền hơn `last_updated_time` vốn sẽ trôi nếu đơn bị cập nhật sau giao).
+- `delivery_date` = ngày giao **dự kiến** (nhiều đơn nhỏ hơn cả mốc giao thật cả ngày) → không dùng.
+- Hệ quả nghiệp vụ: đơn tạo TRƯỚC campaign nhưng giao TRONG campaign → **được tính**; đơn giao SAU end_date → không tính. 40/109 đơn DELIVERED trong snapshot lệch ngày VN giữa tạo và giao → lựa chọn field này thay đổi số thật.
+- Ingestion bổ sung: projection + cột `affiliate_orders.completed_time` (migration 092); full-snapshot 2h tự backfill sau lần sync đầu. Lưu ý thứ tự: chạy 092 TRƯỚC khi bật `AFFILIATE_SYNC_ENABLED`. Canary QA: đơn DELIVERED thiếu `completed_time` phải = 0.
 
 ## 3. Số liệu baseline (đã verify độc lập 22/07 — khớp audit 100%)
 
@@ -55,12 +57,14 @@ MongoDB ─(cron 2h, phút 05)─> affiliate_orders┘        │
 
 | Đối tượng | Thay đổi |
 |---|---|
+| `affiliate_orders` | + `completed_time` (date basis KPI — mục 2); sync 2h tự backfill |
 | `kpi_campaigns` | + `metric_offline` (default **true**), `metric_affiliate` (default **false**), CHECK ≥1 bật → campaign cũ tự = offline-only, số không đổi |
 | `kpi_campaign_store_actuals` | + `actual_offline`, `actual_affiliate` (NOT NULL DEFAULT 0) + `offline_synced_at`, `affiliate_synced_at`; **backfill** `actual_offline = actual_value`, `actual_affiliate = 0`; `actual_value` giữ nghĩa = tổng |
 | `kpi_campaign_store_daily_actuals` | + `gmv_affiliate` (default 0); `gmv` giữ nghĩa Offline |
-| Mapping | + `CIRCA-MIZUKI → POS0013` (os) sau preflight store active/đúng loại |
-| Index | partial index `(store_id, created_time DESC) WHERE source_active AND status_norm='delivered'` phục vụ aggregation |
-| RPC | + `rpc_aggregate_affiliate_gmv` (SUM theo store × ngày VN trong DB); cập nhật `rpc_replace_campaign_actuals` ghi cột mới — cả hai chỉ `service_role` được EXECUTE (revoke anon/authenticated tường minh) |
+| Mapping | + `CIRCA-MIZUKI → POS0013` (os) sau preflight store active/đúng loại; mapping tồn tại nhưng SAI → migration FAIL (không im lặng giữ bản sai) |
+| Index | partial index `(store_id, completed_time DESC) WHERE source_active AND status_norm='delivered'` phục vụ aggregation |
+| RPC | + `rpc_aggregate_affiliate_gmv` (SUM theo store × ngày VN `completed_time` trong DB); `rpc_replace_campaign_actuals` (r2): backward-compat caller cũ + **validate đầy đủ trước khi replace** — campaign tồn tại · không duplicate store/(store,date) · payload phủ đúng TOÀN BỘ targets (2 chiều) · daily ⊆ actuals · tổng = offline + affiliate · metric tắt = 0 · SUM(daily) khớp aggregate; lỗi → rollback toàn transaction. Cả hai RPC chỉ `service_role` EXECUTE |
+| QA | script thực thi `webapp/scripts/qa-kpi-affiliate-092.mjs`: legacy caller (100/100/0), both-metric, đủ 8 case RAISE + rollback + quyền anon + cleanup exact-ID |
 
 ## 6. Cấu hình campaign
 

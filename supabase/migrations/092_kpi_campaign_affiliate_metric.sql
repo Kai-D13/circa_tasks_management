@@ -1,11 +1,16 @@
 -- ============================================================================
--- 092_kpi_campaign_affiliate_metric.sql  (r1 — audit 22/07: backward-compat
---   fallback + DB validation trong rpc_replace_campaign_actuals)
--- ⚠ DRAFT — 2 ĐIỀU KIỆN trước khi chạy:
---   (1) stakeholder CHỐT field ngày ghi nhận (created_time vs ngày giao) —
---       function mục 6 hard-code created_time, chạy trước rồi đổi = phải thêm
---       migration mới chỉ để sửa function đã ghi version 092;
+-- 092_kpi_campaign_affiliate_metric.sql  (r2 — audit 22/07 vòng 2: exact
+--   target-set validation + chống duplicate + seed MIZUKI harden + date basis
+--   CHỐT = completed_time)
+-- ⚠ DRAFT — ĐIỀU KIỆN trước khi chạy:
+--   (1) [ĐÃ ĐÓNG 22/07] field ngày ghi nhận = completed_time (stakeholder chốt
+--       sau bằng chứng field list Mongo: completed_time chuyên dụng "giao thành
+--       công", 111/111 đơn DELIVERED có, trùng ngày VN với last_updated_time
+--       111/111; delivery_date = ngày DỰ KIẾN nên không dùng).
 --   (2) code deploy với KPI_AFFILIATE_ENABLED=false (rollout bước 1).
+--   (3) chạy 092 TRƯỚC khi bật AFFILIATE_SYNC_ENABLED — F2 từ commit này upsert
+--       thêm cột completed_time (mục 0), sync chạy trước 092 sẽ fail sạch
+--       (rpc_fail) vì cột chưa tồn tại.
 --   Additive, idempotent, pg_safeupdate-safe.
 --
 -- KPI Campaign × GMV Affiliate (plan v1.1, audit stakeholder 22/07):
@@ -46,6 +51,12 @@
 
 BEGIN;
 
+-- ── 0) affiliate_orders: cột completed_time (KPI date basis) ────────────────
+-- F2 full-snapshot upsert mỗi 2h tự backfill giá trị cho mọi row sau lần sync
+-- đầu tiên hậu-092 (không cần backfill tay).
+ALTER TABLE public.affiliate_orders
+  ADD COLUMN IF NOT EXISTS completed_time timestamptz;
+
 -- ── 1) kpi_campaigns: metric flags ──────────────────────────────────────────
 ALTER TABLE public.kpi_campaigns
   ADD COLUMN IF NOT EXISTS metric_offline   boolean NOT NULL DEFAULT true,
@@ -83,8 +94,12 @@ ALTER TABLE public.kpi_campaign_store_daily_actuals
   ADD COLUMN IF NOT EXISTS gmv_affiliate numeric NOT NULL DEFAULT 0;
 
 -- ── 4) Seed CIRCA-MIZUKI → POS0013 (manifest 153/23; preflight y 090) ───────
+-- r2 (audit P2): mapping ĐÃ TỒN TẠI nhưng sai (khác store/loại/inactive) →
+-- RAISE thay vì ON CONFLICT DO NOTHING im lặng giữ bản sai.
 DO $$
-DECLARE v_store uuid; v_type text; v_active boolean;
+DECLARE
+  v_store uuid; v_type text; v_active boolean;
+  v_ex_store uuid; v_ex_type text; v_ex_active boolean;
 BEGIN
   SELECT id, store_type, is_active INTO v_store, v_type, v_active
   FROM public.stores WHERE code = 'POS0013';
@@ -97,20 +112,38 @@ BEGIN
   IF v_active IS DISTINCT FROM true THEN
     RAISE EXCEPTION 'affiliate seed 092: POS0013 đang ngưng hoạt động — xác nhận lại manifest';
   END IF;
-  INSERT INTO public.affiliate_partner_mappings (partner_code, store_id, partner_type, display_name)
-  VALUES ('CIRCA-MIZUKI', v_store, 'os', 'CIRCA MIZUKI')
-  ON CONFLICT (partner_code) DO NOTHING;
+
+  SELECT store_id, partner_type, is_active INTO v_ex_store, v_ex_type, v_ex_active
+  FROM public.affiliate_partner_mappings WHERE partner_code = 'CIRCA-MIZUKI';
+  IF FOUND THEN
+    IF v_ex_store IS DISTINCT FROM v_store OR v_ex_type IS DISTINCT FROM 'os'
+       OR v_ex_active IS DISTINCT FROM true THEN
+      RAISE EXCEPTION 'affiliate seed 092: mapping CIRCA-MIZUKI ĐÃ tồn tại nhưng SAI (store_id=%, type=%, active=%) — sửa tay rồi chạy lại, không im lặng giữ bản sai',
+        v_ex_store, v_ex_type, v_ex_active;
+    END IF;
+    -- đã tồn tại và ĐÚNG → idempotent, bỏ qua
+  ELSE
+    INSERT INTO public.affiliate_partner_mappings (partner_code, store_id, partner_type, display_name)
+    VALUES ('CIRCA-MIZUKI', v_store, 'os', 'CIRCA MIZUKI');
+  END IF;
 END $$;
 
 -- ── 5) Partial index aggregation (KPI chỉ đọc delivered + active) ───────────
-CREATE INDEX IF NOT EXISTS idx_affiliate_orders_store_delivered
-  ON public.affiliate_orders (store_id, created_time DESC)
+-- Date basis = completed_time (chốt 22/07).
+CREATE INDEX IF NOT EXISTS idx_affiliate_orders_store_completed
+  ON public.affiliate_orders (store_id, completed_time DESC)
   WHERE source_active AND status_norm = 'delivered';
+-- Dọn index bản draft cũ nếu đã lỡ tạo (draft chưa từng chạy → thường no-op).
+DROP INDEX IF EXISTS public.idx_affiliate_orders_store_delivered;
 
 -- ── 6) RPC aggregate GMV affiliate trong DB ─────────────────────────────────
 -- SUM/GROUP BY chạy trong Postgres → không đụng cap 1000 row PostgREST khi
 -- affiliate_orders lớn lên. STABLE + SECURITY DEFINER; CHỈ service_role.
 -- p_from inclusive (00:00 VN ngày start), p_to exclusive (00:00 VN ngày sau end).
+-- DATE BASIS = completed_time (CHỐT 22/07): đơn DELIVERED tính vào ngày GIAO
+-- THÀNH CÔNG — đơn tạo trước campaign nhưng giao trong campaign VẪN tính; đơn
+-- giao sau end_date KHÔNG tính. completed_time NULL → tự loại khỏi range
+-- (canary QA: đếm delivered thiếu completed_time phải = 0).
 CREATE OR REPLACE FUNCTION public.rpc_aggregate_affiliate_gmv(
   p_store_ids uuid[],
   p_from      timestamptz,
@@ -118,17 +151,15 @@ CREATE OR REPLACE FUNCTION public.rpc_aggregate_affiliate_gmv(
 ) RETURNS TABLE (store_id uuid, vn_date date, gmv numeric, order_count integer)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT o.store_id,
-         -- NGÀY GHI NHẬN (xem header): đổi biểu thức này nếu stakeholder chốt
-         -- field khác created_time.
-         (o.created_time AT TIME ZONE 'Asia/Ho_Chi_Minh')::date AS vn_date,
-         SUM(o.total_price)                                     AS gmv,
-         count(*)::integer                                      AS order_count
+         (o.completed_time AT TIME ZONE 'Asia/Ho_Chi_Minh')::date AS vn_date,
+         SUM(o.total_price)                                       AS gmv,
+         count(*)::integer                                        AS order_count
   FROM public.affiliate_orders o
   WHERE o.source_active
     AND o.status_norm = 'delivered'
     AND o.store_id = ANY (p_store_ids)
-    AND o.created_time >= p_from
-    AND o.created_time <  p_to
+    AND o.completed_time >= p_from
+    AND o.completed_time <  p_to
   GROUP BY o.store_id, 2
 $$;
 
@@ -181,6 +212,39 @@ BEGIN
     RAISE EXCEPTION 'rpc_replace_campaign_actuals: campaign % không tồn tại', p_campaign_id;
   END IF;
 
+  -- r2 (audit P1 tập payload): replace-all xóa snapshot cũ nên payload phải là
+  -- BỨC TRANH ĐẦY ĐỦ — thiếu/vượt/trùng đều từ chối trước khi xóa.
+  -- (a) Không duplicate store trong p_actuals.
+  IF (SELECT count(*) FROM jsonb_array_elements(coalesce(p_actuals, '[]'::jsonb)) e)
+     <> (SELECT count(DISTINCT e->>'store_id') FROM jsonb_array_elements(coalesce(p_actuals, '[]'::jsonb)) e) THEN
+    RAISE EXCEPTION 'rpc_replace_campaign_actuals: p_actuals có store trùng lặp';
+  END IF;
+  -- (b) Không duplicate (store_id, date) trong p_daily.
+  IF (SELECT count(*) FROM jsonb_array_elements(coalesce(p_daily, '[]'::jsonb)) e)
+     <> (SELECT count(DISTINCT (e->>'store_id') || '|' || (e->>'date')) FROM jsonb_array_elements(coalesce(p_daily, '[]'::jsonb)) e) THEN
+    RAISE EXCEPTION 'rpc_replace_campaign_actuals: p_daily có (store_id, date) trùng lặp';
+  END IF;
+  -- (c) MỖI target của campaign phải có ĐÚNG MỘT aggregate (targets ⊆ actuals;
+  --     chiều ngược actuals ⊆ targets check per-row bên dưới).
+  IF EXISTS (
+    SELECT 1 FROM public.kpi_campaign_store_targets t
+    WHERE t.campaign_id = p_campaign_id
+      AND NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(coalesce(p_actuals, '[]'::jsonb)) e
+        WHERE (e->>'store_id')::uuid = t.store_id)
+  ) THEN
+    RAISE EXCEPTION 'rpc_replace_campaign_actuals: p_actuals THIẾU aggregate cho ít nhất 1 store trong targets của campaign % — payload phải đủ toàn bộ targets (replace-all)', p_campaign_id;
+  END IF;
+  -- (d) Store trong p_daily phải có aggregate trong p_actuals (daily ⊆ actuals).
+  IF EXISTS (
+    SELECT 1 FROM jsonb_array_elements(coalesce(p_daily, '[]'::jsonb)) e
+    WHERE NOT EXISTS (
+      SELECT 1 FROM jsonb_array_elements(coalesce(p_actuals, '[]'::jsonb)) a
+      WHERE a->>'store_id' = e->>'store_id')
+  ) THEN
+    RAISE EXCEPTION 'rpc_replace_campaign_actuals: p_daily chứa store không có aggregate trong p_actuals';
+  END IF;
+  -- (e) Store trong p_daily phải thuộc targets của campaign.
   IF EXISTS (
     SELECT 1 FROM jsonb_array_elements(coalesce(p_daily, '[]'::jsonb)) e
     WHERE NOT EXISTS (
@@ -288,7 +352,7 @@ GRANT EXECUTE ON FUNCTION public.rpc_replace_campaign_actuals(uuid, jsonb, jsonb
 -- ── app_migrations ──────────────────────────────────────────────────────────
 INSERT INTO public.app_migrations (version, name, notes)
 VALUES ('092', 'kpi_campaign_affiliate_metric',
-        'KPI Campaign × GMV Affiliate (plan v1.1, r1): metric_offline/metric_affiliate + CHECK ≥1; actuals actual_offline/actual_affiliate (backfill = actual_value/0) + offline/affiliate_synced_at; daily gmv_affiliate; seed CIRCA-MIZUKI→POS0013 (manifest 153/23); partial index (store_id, created_time) delivered+active; RPC rpc_aggregate_affiliate_gmv (SUM trong DB, DELIVERED-only, ngày VN theo created_time — pending chốt field ngày) service_role-only; replace rpc_replace_campaign_actuals: backward-compat fallback caller cũ (actual_offline←actual_value, affiliate←0, offline_synced_at←synced_at) + DB validation (campaign tồn tại; store thuộc targets; actual_value=offline+affiliate; metric tắt→0; SUM daily khớp aggregate; RAISE rollback toàn transaction), re-assert grants.')
+        'KPI Campaign × GMV Affiliate (plan v1.2, r2): affiliate_orders + completed_time (date basis CHỐT 22/07); metric_offline/metric_affiliate + CHECK ≥1; actuals actual_offline/actual_affiliate (backfill = actual_value/0) + offline/affiliate_synced_at; daily gmv_affiliate; seed CIRCA-MIZUKI→POS0013 (RAISE nếu mapping tồn tại sai); partial index (store_id, completed_time) delivered+active; RPC rpc_aggregate_affiliate_gmv (SUM trong DB theo ngày VN completed_time, DELIVERED-only) service_role-only; replace rpc_replace_campaign_actuals: backward-compat fallback caller cũ + validation đầy đủ TRƯỚC delete (campaign tồn tại; no-dup store/(store,date); targets==actuals 2 chiều; daily⊆actuals⊆targets; actual_value=offline+affiliate; metric tắt→0; SUM daily khớp aggregate; RAISE rollback toàn transaction), re-assert grants.')
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;
@@ -317,8 +381,13 @@ COMMIT;
 --   JOIN public.stores s ON s.id = m.store_id WHERE partner_code='CIRCA-MIZUKI';
 --   -- 1 row: os / POS0013;  tổng mapping = 23:
 --   SELECT count(*) FROM public.affiliate_partner_mappings;                      -- 23
+-- 4b) Cột completed_time + canary DELIVERED thiếu mốc giao (sau sync đầu hậu-092):
+--   SELECT column_name FROM information_schema.columns
+--   WHERE table_name='affiliate_orders' AND column_name='completed_time';       -- 1 row
+--   SELECT count(*) FROM public.affiliate_orders
+--   WHERE status_norm='delivered' AND source_active AND completed_time IS NULL; -- 0 (sau backfill)
 -- 5) Index:
---   SELECT indexname FROM pg_indexes WHERE indexname='idx_affiliate_orders_store_delivered'; -- 1 row
+--   SELECT indexname FROM pg_indexes WHERE indexname='idx_affiliate_orders_store_completed'; -- 1 row
 -- 6) Quyền RPC (ma trận — kỳ vọng service_role=t, anon/authenticated=f):
 --   SELECT r.rolname,
 --          has_function_privilege(r.rolname,'public.rpc_aggregate_affiliate_gmv(uuid[],timestamptz,timestamptz)','EXECUTE') AS agg,
@@ -339,8 +408,13 @@ COMMIT;
 --   SELECT actual_value, actual_offline, actual_affiliate, offline_synced_at IS NOT NULL AS has_off_ts
 --   FROM public.kpi_campaign_store_actuals WHERE campaign_id='<test_campaign_id>';
 --   -- kỳ vọng: 100 / 100 / 0 / true (KHÔNG phải 100/0/0 — đó chính là bug draft cũ)
--- 10) Validation RAISE (kỳ vọng LỖI, transaction rollback):
+-- 10) Validation RAISE (kỳ vọng LỖI, transaction rollback — script thực thi:
+--     webapp/scripts/qa-kpi-affiliate-092.mjs chạy đủ các case này):
 --   • store ngoài targets → 'không thuộc targets'
+--   • p_actuals THIẾU 1 store trong targets → 'THIẾU aggregate' (r2)
+--   • duplicate store trong p_actuals → 'trùng lặp' (r2)
+--   • duplicate (store_id,date) trong p_daily → 'trùng lặp' (r2)
+--   • p_daily chứa store không có trong p_actuals → 'không có aggregate' (r2)
 --   • actual_value <> offline+affiliate → RAISE công thức
 --   • campaign metric_affiliate=false + actual_affiliate>0 → RAISE metric tắt
 --   • daily lệch aggregate → RAISE SUM(daily)

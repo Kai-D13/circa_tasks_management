@@ -20,6 +20,7 @@ const base = {
   customer_phone: '0935680630',
   created_time: new Date('2026-07-21T07:32:23.491Z'), // BSON Date qua driver = JS Date
   confirmed_time: '2026-07-21T07:35:04.448Z',          // fixture JSON = chuỗi ISO
+  completed_time: new Date('2026-07-21T08:40:35.909Z'), // mốc giao thành công (KPI date basis)
   last_updated_time: new Date('2026-07-21T08:40:35.909Z'),
 }
 
@@ -34,6 +35,7 @@ test.describe('affiliate normalize @desktop', () => {
     expect(r.row.total_price).toBe(126000)
     expect(r.row.created_time).toBe('2026-07-21T07:32:23.491Z')
     expect(r.row.confirmed_time).toBe('2026-07-21T07:35:04.448Z')
+    expect(r.row.completed_time).toBe('2026-07-21T08:40:35.909Z')
     expect(r.row.first_product_name).toContain('Kẹo the Play')
   })
 
@@ -88,6 +90,7 @@ test.describe('affiliate normalize @desktop', () => {
       ...base,
       order_code: undefined,
       confirmed_time: 'garbage',
+      completed_time: undefined, // đơn chưa giao — không reject, KPI tự loại
       total_item: 1.7,
       first_item: null,
       customer_name: '   ',
@@ -96,6 +99,7 @@ test.describe('affiliate normalize @desktop', () => {
     if (!r.ok) return
     expect(r.row.order_code).toBeNull()
     expect(r.row.confirmed_time).toBeNull()
+    expect(r.row.completed_time).toBeNull()
     expect(r.row.total_item).toBeNull()
     expect(r.row.first_product_name).toBeNull()
     expect(r.row.customer_name).toBeNull()

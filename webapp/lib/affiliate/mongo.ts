@@ -49,6 +49,10 @@ const PROJECTION = {
   customer_phone: 1,
   created_time: 1,
   confirmed_time: 1,
+  // Ngày ghi nhận GMV KPI (stakeholder chốt 22/07 sau bằng chứng field list:
+  // completed_time = mốc giao thành công chuyên dụng, 111/111 đơn DELIVERED có;
+  // delivery_date là ngày DỰ KIẾN — không dùng).
+  completed_time: 1,
   last_updated_time: 1,
 } as const
 

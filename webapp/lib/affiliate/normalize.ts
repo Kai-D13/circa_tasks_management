@@ -43,6 +43,7 @@ export interface SourceOrderDoc {
   customer_phone?: unknown
   created_time?: unknown
   confirmed_time?: unknown
+  completed_time?: unknown
   last_updated_time?: unknown
 }
 
@@ -61,6 +62,9 @@ export interface AffiliateOrderRow {
   customer_phone: string | null
   created_time: string
   confirmed_time: string | null
+  // Mốc giao thành công (KPI date basis — chốt 22/07). Optional trong nguồn:
+  // đơn chưa giao chưa có; DELIVERED thiếu → aggregation tự loại (canary QA).
+  completed_time: string | null
   last_updated_time: string | null
 }
 
@@ -152,6 +156,7 @@ export function validateSourceOrder(doc: SourceOrderDoc): NormalizeResult {
       customer_phone: str(doc.customer_phone),
       created_time: createdTime,
       confirmed_time: isoOrNull(doc.confirmed_time),
+      completed_time: isoOrNull(doc.completed_time),
       last_updated_time: isoOrNull(doc.last_updated_time),
     },
   }
