@@ -3,6 +3,7 @@ import { revalidatePath } from 'next/cache'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { isKpiCampaignEnabled } from '@/lib/kpi/flags'
 import { syncCampaign } from '@/lib/kpi/actuals'
+import { runSyncBatch } from '@/lib/kpi/syncBatch'
 
 // GET /api/cron/sync-kpi-campaign-actuals — KPI Campaign actual-GMV sync.
 // 1. Auto-transition: active campaigns past end_date → 'ended'.
@@ -40,39 +41,22 @@ export async function GET(request: NextRequest) {
       .or(`status.eq.active,and(status.eq.ended,end_date.gte.${cutoff})`)
     if (cErr) return NextResponse.json({ error: cErr.message }, { status: 500 })
 
-    // P3-B/C contract: engine tự đọc cấu hình theo id; response phân biệt
-    // success / snapshot_preserved / failed. Offline-only campaign vẫn sync
-    // bình thường khi nguồn affiliate stale (độc lập từng campaign).
-    let upserted = 0
-    const errors: string[] = []
-    const unmatched: string[] = []
-    const preserved: { campaign: string; reason: string }[] = []
-    for (const c of campaigns ?? []) {
-      const r = await syncCampaign(c.id)
-      if (r.status === 'failed') {
-        errors.push(`${c.name ?? c.id}: ${r.error}`)
-      } else if (r.status === 'snapshot_preserved') {
-        // Log rõ campaign + lý do giữ snapshot (audit P3-C) — không phải lỗi.
-        console.warn(`[sync-kpi-campaign] snapshot_preserved campaign=${c.id} (${c.name}):`, r.reason)
-        preserved.push({ campaign: c.name ?? c.id, reason: r.reason })
-      } else {
-        upserted += r.upserted
-        unmatched.push(...r.unmatched)
-      }
-    }
+    // P3-C: toàn bộ contract batch (200/207/500 + body + log lines) nằm trong
+    // runSyncBatch THUẦN (lib/kpi/syncBatch.ts — có test riêng); route chỉ IO.
+    // Một campaign preserve/failed không chặn campaign kế; offline-only vẫn
+    // sync khi nguồn affiliate stale.
+    const outcome = await runSyncBatch(campaigns ?? [], syncCampaign)
+    for (const line of outcome.logLines) console.warn(line)
 
-    revalidatePath('/targets')
-    revalidatePath('/targets/campaigns')
-    // HTTP: lỗi thật → 500; có snapshot_preserved → 207; sạch → 200.
-    return NextResponse.json({
-      ok: errors.length === 0,
-      campaigns: (campaigns ?? []).length,
-      upserted,
-      endedTransitioned: (endedRows ?? []).length,
-      unmatched: [...new Set(unmatched)],
-      preserved,
-      errors,
-    }, { status: errors.length ? 500 : preserved.length ? 207 : 200 })
+    // Chỉ revalidate khi có snapshot MỚI được ghi (preserved/failed giữ số cũ).
+    if (outcome.anySuccess) {
+      revalidatePath('/targets')
+      revalidatePath('/targets/campaigns')
+    }
+    return NextResponse.json(
+      { ...outcome.body, endedTransitioned: (endedRows ?? []).length },
+      { status: outcome.httpStatus },
+    )
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     const status = msg.includes('BigQuery') || msg.includes('Google token') ? 502 : 500

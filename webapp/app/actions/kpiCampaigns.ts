@@ -8,6 +8,7 @@ import { isSuperAdminEmail } from '@/lib/authz'
 import { isKpiCampaignEnabled, isKpiCampaignTestMode } from '@/lib/kpi/flags'
 import { parseCampaignRows, type CampaignImportResult } from '@/lib/kpi/campaignImport'
 import { syncCampaign } from '@/lib/kpi/actuals'
+import { manualSyncPlan } from '@/lib/kpi/syncBatch'
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024
 
@@ -113,18 +114,17 @@ export async function toggleCampaign(id: string) {
 export async function syncCampaignActuals(id: string) {
   const auth = await requireSuper()
   if ('error' in auth) return { error: auth.error }
-  // P3-B contract: engine tự đọc cấu hình campaign theo id (campaign không tồn
-  // tại → engine trả failed). Cùng một syncCampaign với cron — không có logic
-  // riêng cho nút manual (audit P3-C).
-  const r = await syncCampaign(id)
-  if (r.status === 'failed') return { error: r.error }
-  if (r.status === 'snapshot_preserved') {
-    // Không phải lỗi: nguồn chưa sẵn sàng → số cũ được giữ nguyên.
-    return { preserved: true as const, reason: r.reason }
+  // P3-B/C contract: cùng syncCampaign với cron; side-effect plan (revalidate
+  // hay không, toast loại gì) quyết định bởi manualSyncPlan THUẦN (có test).
+  const plan = manualSyncPlan(await syncCampaign(id))
+  if (plan.kind === 'failed') return { error: plan.error }
+  if (plan.kind === 'preserved') {
+    // Không phải lỗi: nguồn chưa sẵn sàng → số cũ giữ nguyên, KHÔNG revalidate.
+    return { preserved: true as const, reason: plan.reason }
   }
   revalidatePath(`/targets/campaigns/${id}`)
   revalidatePath('/targets')
-  return { success: true, upserted: r.upserted, unmatched: r.unmatched }
+  return { success: true, upserted: plan.upserted, unmatched: plan.unmatched }
 }
 
 export async function deleteCampaign(id: string) {
