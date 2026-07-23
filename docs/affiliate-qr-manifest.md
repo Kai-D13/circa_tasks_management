@@ -61,6 +61,12 @@ Nguồn: folder user cung cấp `C:\webapp_management\QR_code_affiliate` (25 fil
 4. QR hiển thị **cả khi store không có campaign active**; landing `/targets` only, ẩn trong `?campaign=`.
 5. Flag: **dùng chung `KPI_AFFILIATE_ENABLED`** — không thêm Coolify ENV.
 
+## Trạng thái triển khai (24/07 tối)
+
+- **Migration 095 ĐÃ CHẠY + verify PASS** (user 24/07 — lưu ý: chạy TRƯỚC upload GCS, ngược thứ tự khuyến nghị; không sự cố vì flag off + img onError, và upload đã hoàn tất ngay sau đó).
+- **Upload GCS XONG 24/07**: 25/25 UPLOADED + verify (200 · image/png · SHA-256 khớp file gốc); `--verify-only` lần 2: 25/25 OK; **rerun idempotent: 25/25 SKIP_OK — không ghi đè** (chứng minh guard `ifGenerationMatch=0` + SHA hoạt động thật).
+- Còn lại: QA H4 (RLS matrix + inactive + SM switch-store + quét thật 2 thiết bị) → Netbird re-sync → full gates → merge/deploy flag-off.
+
 ## Trạng thái build (24/07 — r1 sau audit)
 
 **r1 đóng 2 P1 + 4 P2 (audit 24/07):** (1) upload chống ghi đè — check tồn tại → SHA khớp SKIP_OK / khác FAIL / chưa có upload kèm `ifGenerationMatch=0`, race 412 → verify SHA; logic thuần `scripts/qr-upload-decision.mjs` có test; (2) RLS + query UI + unique index thêm `is_active=true` (+ index thêm `partner_type='os'`); (3) 4 CHECK: destination đúng ref, 3 field QR atomic, QR chỉ os + store_id NOT NULL, ảnh thuộc prefix `affiliate-qr/v1/`; (4) lỗi query ≠ missing — "Không tải được mã QR" vs "Chưa cấu hình" (contract `lib/affiliate/qrDisplay.ts`); (5) `img onError` → không broken image + modal `w-[calc(100vw-2rem)] max-w-sm`; (6) 6 test contract mới `e2e/affiliate-qr-display.spec.ts`.
