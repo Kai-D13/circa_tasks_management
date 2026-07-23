@@ -23,11 +23,10 @@ test.describe('kpi display contract @desktop', () => {
       .toContain('Circa Online · chỉ tính đơn giao thành công')
   })
 
-  test('BOTH: breakdown hiện, % từng nguồn trên CÙNG target; target=0 → null', () => {
+  test('BOTH: breakdown hiện, offline có %; affiliate KHÔNG có % (stakeholder 24/07); target=0 → null', () => {
     const bd = breakdownModel(VIEW({ metric_affiliate: true }))
-    expect(bd.show).toBe(true)
-    expect(bd.offlinePct).toBe(30)   // 300/1000
-    expect(bd.affiliatePct).toBe(20) // 200/1000
+    // toEqual khóa TOÀN BỘ contract — affiliatePct không được quay lại.
+    expect(bd).toEqual({ show: true, offlinePct: 30 }) // 300/1000; affiliate chỉ hiện số tiền
     expect(campaignFootnote({ metric_offline: true, metric_affiliate: true })).toContain('BI + Circa Online')
 
     const zero = breakdownModel(VIEW({ metric_affiliate: true, kpi_target: 0 }))

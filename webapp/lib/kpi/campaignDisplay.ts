@@ -14,8 +14,9 @@ export interface BreakdownInput {
 
 export interface BreakdownModel {
   show: boolean                 // CHỈ true khi campaign bật CẢ 2 chỉ số
-  offlinePct: number | null     // % trên CÙNG kpi_target
-  affiliatePct: number | null
+  offlinePct: number | null     // % trên kpi_target — CHỈ dòng Offline
+  // KHÔNG có affiliatePct (stakeholder 24/07): affiliate chia sẻ chung
+  // kpi_target nên % luôn ≈0 gây hiểu nhầm — dòng Affiliate chỉ hiện số tiền.
 }
 
 export function breakdownModel(v: BreakdownInput): BreakdownModel {
@@ -24,7 +25,6 @@ export function breakdownModel(v: BreakdownInput): BreakdownModel {
   return {
     show: v.metric_offline && v.metric_affiliate,
     offlinePct: pct(v.actual_offline),
-    affiliatePct: pct(v.actual_affiliate),
   }
 }
 

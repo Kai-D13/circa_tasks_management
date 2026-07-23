@@ -226,9 +226,10 @@ export function CampaignKpiView({
                 <p className="text-sm font-medium leading-tight">GMV Affiliate</p>
                 <p className="text-xs text-muted-foreground">Doanh số từ Circa Online (theo mã đối tác){sel.affiliate_synced_at ? ` · đồng bộ ${formatDateTime(sel.affiliate_synced_at)}` : ''}</p>
               </div>
+              {/* Stakeholder 24/07: dòng Affiliate KHÔNG hiện "% / target"
+                  (share chung kpi_target → % luôn ≈0 gây hiểu nhầm). */}
               <div className="text-right shrink-0">
                 <p className="text-sm font-bold">{vnd(sel.actual_affiliate)}</p>
-                <p className="text-xs text-muted-foreground">{bd.affiliatePct !== null ? `${bd.affiliatePct}% / ${vnd(target)}` : '—'}</p>
               </div>
             </div>
           </CardContent>

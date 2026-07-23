@@ -12,8 +12,9 @@ import { PeriodTabs, type TargetPeriod } from '@/components/targets/PeriodTabs'
 import { CampaignCardList } from '@/components/kpi/CampaignCardList'
 import { CampaignKpiView, type CampaignView } from '@/components/kpi/CampaignKpiView'
 import { CampaignResultSummary } from '@/components/kpi/CampaignResultSummary'
-import { isKpiCampaignEnabled } from '@/lib/kpi/flags'
+import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import { isReferralEnabled } from '@/lib/affiliate/flags'
+import { AffiliateQrCard } from '@/components/affiliate/AffiliateQrCard'
 import { ReferralCard, type ReferralItem } from '@/components/referral/ReferralCard'
 import { formatDateTime, currentWeekStart } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
@@ -283,6 +284,31 @@ export default async function TargetsPage({
       .map((r) => ({ date: r.date, gmv: Number(r.gmv) || 0, gmv_affiliate: Number(r.gmv_affiliate) || 0 }))
   }
 
+  // ── P3-H: QR Affiliate của store — CHỈ landing (không hiện trong ?campaign=),
+  //    chỉ khi KPI_AFFILIATE_ENABLED bật; 1 query mapping RLS-scoped (session
+  //    client — staff/SM/store_manager đọc qua policy apm_select_store_qr, mig
+  //    095); ảnh tĩnh public GCS, KHÔNG gọi Mongo. Hiện CẢ khi store không có
+  //    campaign active (giới thiệu khách không phụ thuộc vòng đời campaign). ──
+  type AffiliateQrRow = { partner_code: string; qr_image_url: string | null; qr_destination_url: string | null }
+  const affiliateQrEnabled = isKpiAffiliateEnabled() && (isStaff || isStoreMgr || isSm)
+  let affiliateQr: AffiliateQrRow | null = null
+  if (affiliateQrEnabled && resolvedStoreId && !params.campaign) {
+    const { data: qrRow, error: qrErr } = await supabase
+      .from('affiliate_partner_mappings')
+      .select('partner_code, qr_image_url, qr_destination_url')
+      .eq('store_id', resolvedStoreId)
+      .eq('partner_type', 'os')
+      .not('qr_image_url', 'is', null)
+      .limit(1)
+      .maybeSingle()
+    if (qrErr) {
+      // Degrade thành "chưa cấu hình" (không chặn trang) — vd 095 chưa chạy.
+      console.error('[targets] affiliate qr query failed:', qrErr.message)
+    }
+    affiliateQr = (qrRow as AffiliateQrRow | null) ?? null
+  }
+  const showAffiliateQr = affiliateQrEnabled && !!resolvedStoreId && !params.campaign
+
   // ── SM render branch: store selector + the store's campaign view ────────────
   if (isSm) {
     const selStore = smStores.find((s) => s.id === smSelectedStoreId)
@@ -336,6 +362,15 @@ export default async function TargetsPage({
               storeName={selStore?.name ?? 'Cửa hàng'} />
           </>
         )}
+        {/* P3-H: QR dưới danh sách campaign, theo store đang chọn — ẩn trong detail */}
+        {showAffiliateQr && (
+          <AffiliateQrCard
+            storeName={selStore?.name ?? 'Cửa hàng'}
+            partnerCode={affiliateQr?.partner_code ?? null}
+            imageUrl={affiliateQr?.qr_image_url ?? null}
+            destinationUrl={affiliateQr?.qr_destination_url ?? null}
+          />
+        )}
       </div>
     )
   }
@@ -363,6 +398,15 @@ export default async function TargetsPage({
             />
             <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Quản lý" todayISO={vnTodayISO} storeName={storeName} />
           </>
+        )}
+        {/* P3-H: QR dưới danh sách campaign (hiện cả khi chưa có campaign) — ẩn trong detail */}
+        {showAffiliateQr && (
+          <AffiliateQrCard
+            storeName={storeName}
+            partnerCode={affiliateQr?.partner_code ?? null}
+            imageUrl={affiliateQr?.qr_image_url ?? null}
+            destinationUrl={affiliateQr?.qr_destination_url ?? null}
+          />
         )}
       </div>
     )
@@ -448,6 +492,15 @@ export default async function TargetsPage({
               campaign home) — hidden inside a drilled-in campaign detail (?campaign). */}
           {!params.campaign && (
             <>
+              {/* P3-H: QR ngay dưới danh sách chiến dịch */}
+              {showAffiliateQr && (
+                <AffiliateQrCard
+                  storeName={storeName}
+                  partnerCode={affiliateQr?.partner_code ?? null}
+                  imageUrl={affiliateQr?.qr_image_url ?? null}
+                  destinationUrl={affiliateQr?.qr_destination_url ?? null}
+                />
+              )}
               {referral && <ReferralCard {...referral} />}
               {referralError && (
                 <ErrorState message="Không tải được dữ liệu chương trình giới thiệu" hint="Vui lòng thử lại sau hoặc báo Admin." />
@@ -509,6 +562,17 @@ export default async function TargetsPage({
               Cập nhật lúc {formatDateTime(current.refreshed_at)} · Nguồn: báo cáo BI · * Không bao gồm đơn online
             </p>
           </>
+        )}
+
+        {/* P3-H: QR hiện cả khi store chưa có campaign active (giới thiệu khách
+            không phụ thuộc vòng đời campaign) */}
+        {showAffiliateQr && (
+          <AffiliateQrCard
+            storeName={storeName}
+            partnerCode={affiliateQr?.partner_code ?? null}
+            imageUrl={affiliateQr?.qr_image_url ?? null}
+            destinationUrl={affiliateQr?.qr_destination_url ?? null}
+          />
         )}
 
         {/* Referral campaign ("Giới thiệu bạn bè") — under Doanh số */}
