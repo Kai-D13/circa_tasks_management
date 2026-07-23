@@ -187,7 +187,7 @@ export interface ResolveReport {
 // P3-A đọc từ đó; inactive_codes không có cột riêng — quyết định audit 23/07,
 // không cần migration).
 export function sourceIssueCodes(report: ResolveReport): string[] {
-  return [...report.unmatched_codes, ...report.inactive_codes]
+  return [...new Set([...report.unmatched_codes, ...report.inactive_codes])]
 }
 
 export function resolveStores(

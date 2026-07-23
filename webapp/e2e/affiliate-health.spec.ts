@@ -171,41 +171,43 @@ const fakeDb = (over: Partial<AffiliateHealthDb> = {}, dirtyStores: string[] = [
   ...over,
 })
 
+// r2.1: wrapper LUÔN nhận NOW inject — fixture minAgo() neo vào NOW nên kết quả
+// bất biến theo thời điểm chạy (audit: test từng lúc pass lúc fail theo clock).
 test.describe('affiliate sync health — wrapper scoped @desktop', () => {
   test('danh sách target rỗng → not ready (r1 — không kiểm canary được)', async () => {
-    const h = await getAffiliateSyncHealth(fakeDb(), [])
+    const h = await getAffiliateSyncHealth(fakeDb(), [], NOW)
     expect(h.ready).toBe(false)
     expect(h.reason).toContain('target rỗng')
   })
 
   test('đơn FS/external hỏng NHƯNG target OS sạch → READY (r1 P1#2)', async () => {
-    const h = await getAffiliateSyncHealth(fakeDb({}, ['store-fs-x', 'store-ext-y']), [OS_A, OS_B])
+    const h = await getAffiliateSyncHealth(fakeDb({}, ['store-fs-x', 'store-ext-y']), [OS_A, OS_B], NOW)
     expect(h.ready).toBe(true)
   })
 
   test('target OS có đơn hỏng → not ready', async () => {
-    const h = await getAffiliateSyncHealth(fakeDb({}, [OS_B]), [OS_A, OS_B])
+    const h = await getAffiliateSyncHealth(fakeDb({}, [OS_B]), [OS_A, OS_B], NOW)
     expect(h.ready).toBe(false)
     expect(h.reason).toContain('1 đơn DELIVERED thiếu completed_time')
   })
 
   test('lỗi query latestRun → not ready fail-closed', async () => {
     const h = await getAffiliateSyncHealth(
-      fakeDb({ latestRun: async () => ({ data: null, error: { message: 'boom' } }) }), [OS_A])
+      fakeDb({ latestRun: async () => ({ data: null, error: { message: 'boom' } }) }), [OS_A], NOW)
     expect(h.ready).toBe(false)
     expect(h.reason).toContain('không đọc được affiliate_sync_runs')
   })
 
   test('lỗi query canary → not ready fail-closed', async () => {
     const h = await getAffiliateSyncHealth(
-      fakeDb({ countDeliveredMissingCompleted: async () => ({ count: null, error: { message: 'net' } }) }), [OS_A])
+      fakeDb({ countDeliveredMissingCompleted: async () => ({ count: null, error: { message: 'net' } }) }), [OS_A], NOW)
     expect(h.ready).toBe(false)
     expect(h.reason).toContain('không đọc được canary')
   })
 
   test('canary count=null KHÔNG error → vẫn not ready (r2 P1#2 — null ≠ 0)', async () => {
     const h = await getAffiliateSyncHealth(
-      fakeDb({ countDeliveredMissingCompleted: async () => ({ count: null, error: null }) }), [OS_A])
+      fakeDb({ countDeliveredMissingCompleted: async () => ({ count: null, error: null }) }), [OS_A], NOW)
     expect(h.ready).toBe(false)
     expect(h.reason).toContain('không trả count')
   })
@@ -214,9 +216,18 @@ test.describe('affiliate sync health — wrapper scoped @desktop', () => {
     const h = await getAffiliateSyncHealth(fakeDb({
       latestRun: async () => ({ data: run({ status: 'failed', error: 'Mongo down' }), error: null }),
       lastSuccessFinishedAt: async () => ({ data: null, error: { message: 'timeout' } }),
-    }), [OS_A])
+    }), [OS_A], NOW)
     expect(h.ready).toBe(false)
     expect(h.reason).toContain('FAILED')
     expect(h.reason).toContain('mốc success gần nhất không xác định: timeout')
+  })
+
+  test('không truyền nowMs → mặc định Date.now() (production path)', async () => {
+    // finished_at neo theo giờ thật để chứng minh default hoạt động.
+    const fresh = new Date(Date.now() - 10 * 60_000).toISOString()
+    const h = await getAffiliateSyncHealth(fakeDb({
+      latestRun: async () => ({ data: run({ finished_at: fresh }), error: null }),
+    }), [OS_A])
+    expect(h.ready).toBe(true)
   })
 })

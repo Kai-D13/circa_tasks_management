@@ -192,15 +192,16 @@ export async function GET(request: NextRequest) {
 
     // 3) Finish — mark-missing + safety floor + đóng run trong 1 transaction ở DB.
     guard('rpc_finish')
+    const sourceIssues = sourceIssueCodes(report)
     const { data: finish, error: finErr } = await supabaseAdmin
       .rpc('rpc_finish_affiliate_sync', {
         p_run_id: runId,
         p_pulled: d.unique.length,
         p_upserted: upsertRows.length,
         p_rejected: rejectedReasons.length,
-        // Hợp nhất unmatched + inactive (P3-A r2 — health gate đọc từ run;
-        // inactive không có cột riêng, quyết định audit: không cần migration).
-        p_unmatched: sourceIssueCodes(report).length ? sourceIssueCodes(report) : null,
+        // Hợp nhất unmatched + inactive, dedupe (P3-A r2/r2.1 — health gate đọc
+        // từ run; inactive không có cột riêng, audit chốt: không cần migration).
+        p_unmatched: sourceIssues.length ? sourceIssues : null,
         p_unknown: unknownStatuses.length ? unknownStatuses : null,
       })
       .abortSignal(sig())

@@ -122,9 +122,11 @@ export interface AffiliateHealthDb {
 
 // targetStoreIds = danh sách store trong kpi_campaign_store_targets của
 // campaign (P3-B validate toàn bộ là OS trước khi gọi). Rỗng → fail-closed.
+// nowMs inject được (r2.1 — test determinism); production không truyền.
 export async function getAffiliateSyncHealth(
   db: AffiliateHealthDb,
   targetStoreIds: string[],
+  nowMs: number = Date.now(),
 ): Promise<AffiliateSyncHealth> {
   if (targetStoreIds.length === 0) {
     return { ready: false, reason: 'danh sách store target rỗng — campaign chưa có target để kiểm canary', runId: null, lastSuccessAt: null, ageMinutes: null }
@@ -166,7 +168,7 @@ export async function getAffiliateSyncHealth(
     lastSuccessAt,
     lastSuccessLookupError,
     deliveredMissingCompleted: count,
-    nowMs: Date.now(),
+    nowMs,
   })
 }
 
