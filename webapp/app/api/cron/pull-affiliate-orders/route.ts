@@ -6,6 +6,7 @@ import { fetchAffiliateOrdersSnapshot } from '@/lib/affiliate/mongo'
 import {
   dedupeByOrderId,
   resolveStores,
+  sourceIssueCodes,
   validateSourceOrder,
   type AffiliateOrderRow,
   type PartnerMappingRow,
@@ -197,7 +198,9 @@ export async function GET(request: NextRequest) {
         p_pulled: d.unique.length,
         p_upserted: upsertRows.length,
         p_rejected: rejectedReasons.length,
-        p_unmatched: report.unmatched_codes.length ? report.unmatched_codes : null,
+        // Hợp nhất unmatched + inactive (P3-A r2 — health gate đọc từ run;
+        // inactive không có cột riêng, quyết định audit: không cần migration).
+        p_unmatched: sourceIssueCodes(report).length ? sourceIssueCodes(report) : null,
         p_unknown: unknownStatuses.length ? unknownStatuses : null,
       })
       .abortSignal(sig())

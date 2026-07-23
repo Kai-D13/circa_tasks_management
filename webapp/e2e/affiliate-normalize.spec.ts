@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { dedupeByOrderId, isKpiAffiliateCountedStatus, normalizeStatus, resolveStores, validateSourceOrder, type PartnerMappingRow } from '../lib/affiliate/normalize'
+import { dedupeByOrderId, isKpiAffiliateCountedStatus, normalizeStatus, resolveStores, sourceIssueCodes, validateSourceOrder, type PartnerMappingRow } from '../lib/affiliate/normalize'
 
 // Unit gate F2 (chạy không cần browser/server — logic thuần). Case theo QA
 // checklist stakeholder 22/07: status normalization, BSON number/date,
@@ -155,6 +155,8 @@ test.describe('affiliate normalize @desktop', () => {
     expect(resolved.find((r) => r.order_id === 1)?.store_id).toBe('uuid-os')
     expect(resolved.find((r) => r.order_id === 4)?.store_id).toBeNull() // inactive KHÔNG map
     expect(resolved.find((r) => r.order_id === 3)?.store_id).toBeNull() // external giữ external
+    // P3-A r2: F2 lưu unmatched + inactive HỢP NHẤT vào sync_runs.unmatched_codes
+    expect(sourceIssueCodes(report)).toEqual(['CODE-MOI', 'CODE-OFF'])
   })
 
   test('dedupe canonical hóa key (r1.1): Long/number cùng giá trị chung 1 key', () => {

@@ -32,6 +32,17 @@ export interface AffiliateLatestRun {
   rejected: number | null
   note: string | null
   error: string | null
+  // jsonb từ affiliate_sync_runs — kiểu unknown vì DB không ép; validate khi đọc
+  // (r2 P1#1: code chưa map/status lạ = GMV có nguy cơ thiếu → chặn recompute).
+  unmatched_codes: unknown
+  unknown_statuses: unknown
+}
+
+// jsonb hợp lệ = null hoặc mảng; mọi kiểu khác = dữ liệu run không tin được.
+const issueList = (v: unknown): { ok: boolean; items: string[] } => {
+  if (v === null || v === undefined) return { ok: true, items: [] }
+  if (Array.isArray(v)) return { ok: true, items: v.map((x) => String(x)) }
+  return { ok: false, items: [] }
 }
 
 export interface AffiliateHealthInput {
@@ -46,8 +57,9 @@ export function evaluateAffiliateSyncHealth(input: AffiliateHealthInput): Affili
   const { latestRun, lastSuccessAt, lastSuccessLookupError, deliveredMissingCompleted, nowMs } = input
 
   const lastSuccessMs = lastSuccessAt !== null ? Date.parse(lastSuccessAt) : NaN
-  // ageMinutes CHỈ để hiển thị (floor) — mọi quyết định stale so sánh ms trực tiếp.
-  const ageMinutes = Number.isFinite(lastSuccessMs) ? Math.floor((nowMs - lastSuccessMs) / 60_000) : null
+  // ageMinutes CHỈ để hiển thị (floor, clamp ≥0 — trong clock-skew age có thể
+  // âm, r2 P2) — mọi quyết định stale so sánh ms trực tiếp.
+  const ageMinutes = Number.isFinite(lastSuccessMs) ? Math.max(0, Math.floor((nowMs - lastSuccessMs) / 60_000)) : null
   const base = { runId: latestRun?.id ?? null, lastSuccessAt, ageMinutes }
   const lookupNote = lastSuccessLookupError ? ` · mốc success gần nhất không xác định: ${lastSuccessLookupError}` : ''
   const notReady = (reason: string): AffiliateSyncHealth => ({ ready: false, reason: reason + lookupNote, ...base })
@@ -79,6 +91,18 @@ export function evaluateAffiliateSyncHealth(input: AffiliateHealthInput): Affili
     // rpc_finish chỉ ghi note khi có cảnh báo vận hành (vd safety-floor bỏ qua
     // mark-missing) → snapshot có thể không đầy đủ.
     return notReady(`run có note vận hành: ${latestRun.note}`)
+  }
+  // r2 P1#1: code chưa map (gồm cả inactive — F2 hợp nhất vào p_unmatched) hoặc
+  // status lạ = có đơn KHÔNG được phân loại đúng → GMV có nguy cơ thiếu.
+  const unmatched = issueList(latestRun.unmatched_codes)
+  if (!unmatched.ok) return notReady('unmatched_codes sai kiểu JSON — dữ liệu run không tin được')
+  if (unmatched.items.length > 0) {
+    return notReady(`run có ${unmatched.items.length} partner code chưa map/inactive: ${unmatched.items.slice(0, 5).join(', ')}`)
+  }
+  const unknownSt = issueList(latestRun.unknown_statuses)
+  if (!unknownSt.ok) return notReady('unknown_statuses sai kiểu JSON — dữ liệu run không tin được')
+  if (unknownSt.items.length > 0) {
+    return notReady(`run có status lạ chưa phân loại: ${unknownSt.items.slice(0, 5).join(', ')}`)
   }
   if (nowMs - finishedAtMs > STALE_LIMIT_MS) {
     return notReady(`snapshot stale ${Math.floor((nowMs - finishedAtMs) / 60_000)} phút (> ${AFFILIATE_STALE_LIMIT_MINUTES})`)
@@ -127,12 +151,21 @@ export async function getAffiliateSyncHealth(
       runId: latestRun?.id ?? null, lastSuccessAt, ageMinutes: null,
     }
   }
+  // r2 P1#2: count=null (PostgREST không trả count dù không error) = KHÔNG RÕ
+  // — fail-closed, không được coi là 0/sạch.
+  if (count === null || count === undefined) {
+    return {
+      ready: false,
+      reason: 'canary không trả count (null) — không xác nhận được dữ liệu sạch',
+      runId: latestRun?.id ?? null, lastSuccessAt, ageMinutes: null,
+    }
+  }
 
   return evaluateAffiliateSyncHealth({
     latestRun,
     lastSuccessAt,
     lastSuccessLookupError,
-    deliveredMissingCompleted: count ?? 0,
+    deliveredMissingCompleted: count,
     nowMs: Date.now(),
   })
 }
@@ -145,7 +178,7 @@ type LooseClient = { from: (t: string) => any } // eslint-disable-line @typescri
 export function supabaseAffiliateHealthDb(svc: LooseClient): AffiliateHealthDb {
   return {
     latestRun: () => svc.from('affiliate_sync_runs')
-      .select('id, status, finished_at, rejected, note, error')
+      .select('id, status, finished_at, rejected, note, error, unmatched_codes, unknown_statuses')
       .order('started_at', { ascending: false }).limit(1).maybeSingle(),
     lastSuccessFinishedAt: () => svc.from('affiliate_sync_runs')
       .select('finished_at').eq('status', 'success')

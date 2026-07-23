@@ -13,7 +13,8 @@ import {
 const NOW = Date.parse('2026-07-23T10:00:00Z')
 const minAgo = (m: number) => new Date(NOW - m * 60_000).toISOString()
 const run = (over: Partial<AffiliateLatestRun> = {}): AffiliateLatestRun => ({
-  id: 'run-1', status: 'success', finished_at: minAgo(10), rejected: 0, note: null, error: null, ...over,
+  id: 'run-1', status: 'success', finished_at: minAgo(10), rejected: 0, note: null, error: null,
+  unmatched_codes: null, unknown_statuses: null, ...over,
 })
 const evalWith = (latestRun: AffiliateLatestRun | null, over: Partial<Parameters<typeof evaluateAffiliateSyncHealth>[0]> = {}) =>
   evaluateAffiliateSyncHealth({
@@ -76,12 +77,36 @@ test.describe('affiliate sync health — evaluate thuần @desktop', () => {
     expect(h.ageMinutes).toBeNull()
   })
 
-  test('finished_at tương lai: +4 phút (trong skew) OK, +6 phút → not ready (r1 P2#4)', () => {
+  test('finished_at tương lai: +4 phút (trong skew) OK + ageMinutes clamp 0, +6 phút → not ready (r1 P2#4, r2 P2)', () => {
     const okSkew = evalWith(run({ finished_at: minAgo(-4) }))
     expect(okSkew.ready).toBe(true)
+    expect(okSkew.ageMinutes).toBe(0) // r2: không trả số âm cho UI/log
     const future = evalWith(run({ finished_at: minAgo(-6) }))
     expect(future.ready).toBe(false)
     expect(future.reason).toContain('tương lai')
+  })
+
+  test('unmatched_codes có phần tử → not ready (r2 P1#1 — code chưa map/inactive)', () => {
+    const h = evalWith(run({ unmatched_codes: ['CIRCA-CODE-MOI', 'CODE-X (đã hợp nhất inactive)'] }))
+    expect(h.ready).toBe(false)
+    expect(h.reason).toContain('2 partner code chưa map/inactive')
+    expect(h.reason).toContain('CIRCA-CODE-MOI')
+  })
+
+  test('unknown_statuses có phần tử → not ready (r2 P1#1)', () => {
+    const h = evalWith(run({ unknown_statuses: ['SOME_NEW_STATUS'] }))
+    expect(h.ready).toBe(false)
+    expect(h.reason).toContain('status lạ')
+    expect(h.reason).toContain('SOME_NEW_STATUS')
+  })
+
+  test('jsonb sai kiểu (không phải null/mảng) → not ready (r2 P1#1)', () => {
+    const bad1 = evalWith(run({ unmatched_codes: 'oops-string' }))
+    expect(bad1.ready).toBe(false)
+    expect(bad1.reason).toContain('unmatched_codes sai kiểu JSON')
+    const bad2 = evalWith(run({ unknown_statuses: { weird: true } }))
+    expect(bad2.ready).toBe(false)
+    expect(bad2.reason).toContain('unknown_statuses sai kiểu JSON')
   })
 
   test('rejected=null → not ready (r1 P1#1 — null KHÔNG phải 0)', () => {
@@ -176,6 +201,13 @@ test.describe('affiliate sync health — wrapper scoped @desktop', () => {
       fakeDb({ countDeliveredMissingCompleted: async () => ({ count: null, error: { message: 'net' } }) }), [OS_A])
     expect(h.ready).toBe(false)
     expect(h.reason).toContain('không đọc được canary')
+  })
+
+  test('canary count=null KHÔNG error → vẫn not ready (r2 P1#2 — null ≠ 0)', async () => {
+    const h = await getAffiliateSyncHealth(
+      fakeDb({ countDeliveredMissingCompleted: async () => ({ count: null, error: null }) }), [OS_A])
+    expect(h.ready).toBe(false)
+    expect(h.reason).toContain('không trả count')
   })
 
   test('latest failed + lỗi lookup success → reason mang cả hai, vẫn not ready', async () => {
