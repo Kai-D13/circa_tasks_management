@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { revalidatePath } from 'next/cache'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { loadServiceAccount, getAccessToken } from '@/lib/google/auth'
+import { isReferralEnabled } from '@/lib/affiliate/flags'
 import { parseReferralRows } from '@/lib/referrals/parse'
 
 // GET /api/cron/pull-referrals — pulls the "Giới thiệu bạn bè" feed from a Google
@@ -47,6 +48,11 @@ export async function GET(request: NextRequest) {
   const secret = request.headers.get('authorization')?.replace('Bearer ', '')
   if (!secret || secret !== process.env.CRON_SECRET) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
+  // Program has ended — the flag gates every entry point (stakeholder audit
+  // P1), so even a still-scheduled Coolify task becomes a no-op.
+  if (!isReferralEnabled()) {
+    return NextResponse.json({ error: 'Referral disabled (REFERRAL_ENABLED=false)' }, { status: 503 })
   }
 
   try {

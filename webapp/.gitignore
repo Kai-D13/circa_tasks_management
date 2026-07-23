@@ -51,3 +51,6 @@ next-env.d.ts
 # Pilot before/after evidence — local-only review artifacts
 /e2e/__screenshots__/pilot-before/
 /e2e/__screenshots__/pilot-after/
+
+# QA affiliate role-matrix — pre-state marker (scripts/qa-affiliate-rls.mjs)
+.qa-ops-grant.json
