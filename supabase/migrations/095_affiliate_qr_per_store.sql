@@ -8,8 +8,10 @@
 -- Nội dung:
 --   A. Preflight: đủ migration nền 090..094 đã chạy.
 --   B. Cột QR trên affiliate_partner_mappings: qr_image_url, qr_destination_url,
---      qr_updated_at + CHECK destination đúng format https://circa.vn/?ref=<code>
---      + partial unique index: mỗi store tối đa MỘT QR active.
+--      qr_updated_at + 4 CHECK (r1 audit P2#4: destination đúng format
+--      https://circa.vn/?ref=<code> · 3 field QR atomic cùng NULL/cùng đầy đủ ·
+--      QR chỉ trên os + store_id NOT NULL · ảnh thuộc prefix GCS tin cậy
+--      affiliate-qr/v1/) + partial unique: mỗi store os tối đa MỘT QR active.
 --   C. Seed 8 partner code MỚI (os — manifest docs/affiliate-qr-manifest.md,
 --      decode thật từ QR + đối chiếu stores DB, stakeholder duyệt 24/07):
 --      không ON CONFLICT DO NOTHING âm thầm — mapping tồn tại nhưng KHÁC kỳ
@@ -17,8 +19,9 @@
 --   D. Seed URL QR cho TOÀN BỘ 25 mapping os (GCS key
 --      affiliate-qr/v1/<store_code>/<partner_code>.png).
 --   E. RLS: policy SELECT store-scoped MỚI (Staff/Store Manager store mình;
---      SM qua is_sm_for_store; CHỈ partner_type='os' → FS/external/store khác
---      = 0 row). Policy super hiện có giữ nguyên. Write vẫn CHỈ service role.
+--      SM qua is_sm_for_store; CHỈ partner_type='os' + is_active=true (r1
+--      audit P1#2) → FS/external/inactive/store khác = 0 row). Policy super
+--      hiện có giữ nguyên. Write vẫn CHỈ service role.
 --
 -- Idempotent: re-run toàn bộ = no-op (trừ qr_updated_at chỉ bump khi giá trị
 -- đổi). ROLLBACK: DROP POLICY apm_select_store_qr; DROP INDEX
@@ -45,27 +48,44 @@ ALTER TABLE public.affiliate_partner_mappings
   ADD COLUMN IF NOT EXISTS qr_destination_url text,
   ADD COLUMN IF NOT EXISTS qr_updated_at      timestamptz;
 
--- Destination bị khóa cứng đúng format Circa Online của CHÍNH partner_code đó
--- (audit H1: "Destination phải đúng https://circa.vn/?ref=<partner_code>").
+-- r1 (audit P2 #4) — 4 CHECK khóa trạng thái QR chống ghi SQL sai:
+--   1. destination đúng format Circa Online của CHÍNH partner_code đó;
+--   2. atomic: 3 field QR cùng NULL hoặc cùng đầy đủ (không nửa vời);
+--   3. QR CHỈ trên mapping os + store_id NOT NULL (FS/external cấm);
+--   4. ảnh phải thuộc prefix GCS tin cậy affiliate-qr/v1/.
 DO $$
+DECLARE
+  c record;
 BEGIN
-  IF NOT EXISTS (
-    SELECT 1 FROM pg_constraint
-    WHERE conname = 'chk_apm_qr_destination'
-      AND conrelid = 'public.affiliate_partner_mappings'::regclass
-  ) THEN
-    ALTER TABLE public.affiliate_partner_mappings
-      ADD CONSTRAINT chk_apm_qr_destination
-      CHECK (qr_destination_url IS NULL
-             OR qr_destination_url = 'https://circa.vn/?ref=' || partner_code);
-  END IF;
+  FOR c IN
+    SELECT * FROM (VALUES
+      ('chk_apm_qr_destination',
+       'qr_destination_url IS NULL OR qr_destination_url = ''https://circa.vn/?ref='' || partner_code'),
+      ('chk_apm_qr_atomic',
+       '(qr_image_url IS NULL AND qr_destination_url IS NULL AND qr_updated_at IS NULL) OR (qr_image_url IS NOT NULL AND qr_destination_url IS NOT NULL AND qr_updated_at IS NOT NULL)'),
+      ('chk_apm_qr_os_only',
+       'qr_image_url IS NULL OR (partner_type = ''os'' AND store_id IS NOT NULL)'),
+      ('chk_apm_qr_image_prefix',
+       'qr_image_url IS NULL OR qr_image_url LIKE ''https://storage.googleapis.com/duocsi-circa-vn/affiliate-qr/v1/%''')
+    ) AS t(conname, expr)
+  LOOP
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname = c.conname
+        AND conrelid = 'public.affiliate_partner_mappings'::regclass
+    ) THEN
+      EXECUTE format('ALTER TABLE public.affiliate_partner_mappings ADD CONSTRAINT %I CHECK (%s)', c.conname, c.expr);
+    END IF;
+  END LOOP;
 END $$;
 
--- Mỗi store tối đa MỘT QR active (partial unique — external store_id NULL không
--- bị ảnh hưởng vì qr_image_url NULL).
-CREATE UNIQUE INDEX IF NOT EXISTS uq_apm_qr_one_per_store
+-- Mỗi store tối đa MỘT QR active — r1 (audit P1 #2): thêm partner_type='os'
+-- vào predicate cho khớp phạm vi QR (external store_id NULL vốn không ảnh
+-- hưởng vì qr_image_url NULL).
+DROP INDEX IF EXISTS uq_apm_qr_one_per_store;
+CREATE UNIQUE INDEX uq_apm_qr_one_per_store
   ON public.affiliate_partner_mappings (store_id)
-  WHERE qr_image_url IS NOT NULL AND is_active;
+  WHERE qr_image_url IS NOT NULL AND is_active AND partner_type = 'os';
 
 -- ── C + D. Seed 8 mapping mới + URL QR cho 25 mapping os ────────────────────
 DO $$
@@ -179,11 +199,14 @@ END $$;
 --     cross-table trong policy).
 --   · external (store_id NULL) không bao giờ khớp.
 -- Write policy KHÔNG thêm — mọi ghi QR/mapping vẫn qua service role/SQL.
+-- r1 (audit P1 #2): + is_active = true — mapping bị vô hiệu hóa (kể cả còn
+-- URL QR) KHÔNG hiển thị cho staff/store_manager/sm.
 DROP POLICY IF EXISTS apm_select_store_qr ON public.affiliate_partner_mappings;
 CREATE POLICY apm_select_store_qr ON public.affiliate_partner_mappings
   FOR SELECT TO authenticated
   USING (
     partner_type = 'os'
+    AND is_active = true
     AND store_id IS NOT NULL
     AND (
       ((SELECT public.get_user_role()) IN ('staff','store_manager')
@@ -194,7 +217,7 @@ CREATE POLICY apm_select_store_qr ON public.affiliate_partner_mappings
 
 INSERT INTO public.app_migrations (version, name, notes)
 VALUES ('095', 'affiliate_qr_per_store',
-        'P3-H: 3 cột QR trên affiliate_partner_mappings + CHECK destination=https://circa.vn/?ref=<code> + unique 1 QR active/store + seed 8 mapping os mới (URBAN/MORA/THONGNHAT/SIGNATURE/ASTORIA/CITYLAND/TAMAN/RAINBOW — manifest decode 24/07, stakeholder duyệt) + seed URL QR (GCS affiliate-qr/v1/) cho đủ 25 os + policy apm_select_store_qr (staff/store_manager store mình, sm qua is_sm_for_store, chỉ partner_type=os). Checksum 34 = 25 os + 2 fs + 7 external. CHẠY SAU khi upload GCS verify 25/25.')
+        'P3-H r1: 3 cột QR trên affiliate_partner_mappings + 4 CHECK (destination=https://circa.vn/?ref=<code>; 3 field QR atomic; QR chỉ os+store_id NOT NULL; ảnh thuộc prefix GCS affiliate-qr/v1/) + unique 1 QR active/store os + seed 8 mapping os mới (URBAN/MORA/THONGNHAT/SIGNATURE/ASTORIA/CITYLAND/TAMAN/RAINBOW — manifest decode 24/07, stakeholder duyệt) + seed URL QR cho đủ 25 os + policy apm_select_store_qr (staff/store_manager store mình, sm qua is_sm_for_store, CHỈ partner_type=os AND is_active=true). Checksum 34 = 25 os + 2 fs + 7 external. CHẠY SAU khi upload GCS verify 25/25.')
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;
@@ -207,10 +230,14 @@ COMMIT;
 --     ORDER BY 1;                                       -- 3 cột
 --   SELECT conname FROM pg_constraint
 --     WHERE conrelid='public.affiliate_partner_mappings'::regclass
---       AND conname='chk_apm_qr_destination';           -- 1 row
---   SELECT indexname FROM pg_indexes
+--       AND conname LIKE 'chk_apm_qr%' ORDER BY 1;
+--     -- 4 row: chk_apm_qr_atomic · chk_apm_qr_destination ·
+--     --        chk_apm_qr_image_prefix · chk_apm_qr_os_only
+--   SELECT indexdef FROM pg_indexes
 --     WHERE tablename='affiliate_partner_mappings'
---       AND indexname='uq_apm_qr_one_per_store';        -- 1 row
+--       AND indexname='uq_apm_qr_one_per_store';
+--     -- 1 row, predicate có: qr_image_url IS NOT NULL AND is_active
+--     --                      AND partner_type = 'os'
 -- 2) Seed:
 --   SELECT partner_type, count(*), count(qr_image_url) AS with_qr
 --     FROM public.affiliate_partner_mappings GROUP BY 1 ORDER BY 1;
@@ -232,6 +259,8 @@ COMMIT;
 --   · Staff store os A     → ĐÚNG 1 row (partner của store A)
 --   · Staff store os B     → không thấy row store A (đổi account = logout/incognito
 --     — [[feedback_qa_stale_auth_cookie]])
+--   · Mapping store A bị UPDATE is_active=false (service role, test xong nhớ
+--     bật lại) → Staff store A 0 row (r1 P1#2 — inactive không trả QR)
 --   · FS staff (POS1089)   → 0 row
 --   · SM assigned store    → rows các store được phân công; store ngoài → không
 --   · store_manager        → 1 row store mình

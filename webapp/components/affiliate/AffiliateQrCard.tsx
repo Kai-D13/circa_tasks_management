@@ -4,21 +4,26 @@ import { useState } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { QrCode, ExternalLink } from 'lucide-react'
+import { qrCardState } from '@/lib/affiliate/qrDisplay'
 
-// P3-H (stakeholder 24/07) — QR Affiliate của store trên landing /targets:
+// P3-H r1 (stakeholder 24/07) — QR Affiliate của store trên landing /targets:
 // khách quét → đặt hàng Circa Online → đơn gắn partner code của store (GMV
 // affiliate ghi nhận đúng store). Ảnh tĩnh public GCS: loading=lazy + cache
 // immutable, KHÔNG proxy qua Next.js, KHÔNG gọi Mongo. Parent quyết định khi
-// nào render (flag KPI_AFFILIATE_ENABLED bật + landing, ẩn trong ?campaign=).
-// Thiếu mapping → trạng thái gọn, không render ảnh vỡ.
+// nào render (qrCardVisible — flag + role + landing). 3 trạng thái phân biệt
+// (audit P2 #3): lỗi query DB → "Không tải được"; thiếu mapping → "Chưa cấu
+// hình"; có QR → ảnh (kèm onError → không bao giờ hiện broken image).
 
-export function AffiliateQrCard({ storeName, partnerCode, imageUrl, destinationUrl }: {
+export function AffiliateQrCard({ storeName, partnerCode, imageUrl, destinationUrl, queryError = false }: {
   storeName: string
   partnerCode: string | null
   imageUrl: string | null
   destinationUrl: string | null
+  queryError?: boolean
 }) {
   const [open, setOpen] = useState(false)
+  const [imgFailed, setImgFailed] = useState(false)
+  const state = qrCardState(queryError, imageUrl ? { qr_image_url: imageUrl } : null)
 
   return (
     <Card className="rounded-lg">
@@ -27,7 +32,7 @@ export function AffiliateQrCard({ storeName, partnerCode, imageUrl, destinationU
           <p className="flex items-center gap-1.5 font-semibold text-sm">
             <QrCode className="h-4 w-4 text-primary" /> Mã QR Circa Online
           </p>
-          {destinationUrl && (
+          {state === 'qr' && destinationUrl && (
             <a
               href={destinationUrl}
               target="_blank"
@@ -40,8 +45,13 @@ export function AffiliateQrCard({ storeName, partnerCode, imageUrl, destinationU
           )}
         </div>
 
-        {!imageUrl ? (
+        {state === 'error' ? (
+          <p className="text-sm text-muted-foreground">Không tải được mã QR. Vui lòng thử lại sau hoặc báo Admin.</p>
+        ) : state === 'missing' ? (
           <p className="text-sm text-muted-foreground">Chưa cấu hình mã QR cho cửa hàng.</p>
+        ) : imgFailed ? (
+          // Ảnh GCS lỗi (mạng/object) — không bao giờ hiện broken image.
+          <p className="text-sm text-muted-foreground">Không tải được ảnh mã QR. Vui lòng thử lại sau.</p>
         ) : (
           <>
             <div className="flex flex-col items-center gap-2">
@@ -55,9 +65,10 @@ export function AffiliateQrCard({ storeName, partnerCode, imageUrl, destinationU
               >
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={imageUrl}
+                  src={imageUrl!}
                   alt={`Mã QR Affiliate ${storeName}`}
                   loading="lazy"
+                  onError={() => setImgFailed(true)}
                   className="h-[220px] w-[220px] sm:h-[240px] sm:w-[240px] object-contain"
                 />
               </button>
@@ -69,15 +80,17 @@ export function AffiliateQrCard({ storeName, partnerCode, imageUrl, destinationU
               </p>
             </div>
 
+            {/* r1 (audit P2 #5): modal bo theo viewport — không sát/tràn 360px */}
             <Dialog open={open} onOpenChange={setOpen}>
-              <DialogContent className="w-fit">
+              <DialogContent className="w-[calc(100vw-2rem)] max-w-sm">
                 <DialogTitle className="text-sm pr-8">Mã QR Circa Online · {storeName}</DialogTitle>
-                <div className="mx-auto rounded-lg border bg-white p-2">
+                <div className="mx-auto w-full max-w-[320px] rounded-lg border bg-white p-2">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
-                    src={imageUrl}
+                    src={imageUrl!}
                     alt={`Mã QR Affiliate ${storeName}`}
-                    className="w-[300px] sm:w-[320px] max-w-full aspect-square object-contain"
+                    onError={() => setImgFailed(true)}
+                    className="w-full aspect-square object-contain"
                   />
                 </div>
               </DialogContent>

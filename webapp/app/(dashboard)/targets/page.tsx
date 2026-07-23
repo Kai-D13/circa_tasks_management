@@ -15,6 +15,7 @@ import { CampaignResultSummary } from '@/components/kpi/CampaignResultSummary'
 import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import { isReferralEnabled } from '@/lib/affiliate/flags'
 import { AffiliateQrCard } from '@/components/affiliate/AffiliateQrCard'
+import { AFFILIATE_QR_FILTER, qrCardVisible } from '@/lib/affiliate/qrDisplay'
 import { ReferralCard, type ReferralItem } from '@/components/referral/ReferralCard'
 import { formatDateTime, currentWeekStart } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
@@ -290,24 +291,32 @@ export default async function TargetsPage({
   //    095); ảnh tĩnh public GCS, KHÔNG gọi Mongo. Hiện CẢ khi store không có
   //    campaign active (giới thiệu khách không phụ thuộc vòng đời campaign). ──
   type AffiliateQrRow = { partner_code: string; qr_image_url: string | null; qr_destination_url: string | null }
-  const affiliateQrEnabled = isKpiAffiliateEnabled() && (isStaff || isStoreMgr || isSm)
+  // Contract query/render/trạng thái = lib/affiliate/qrDisplay (thuần, có test).
+  const showAffiliateQr = qrCardVisible({
+    flagEnabled: isKpiAffiliateEnabled(),
+    eligibleRole: isStaff || isStoreMgr || isSm,
+    storeResolved: !!resolvedStoreId,
+    inCampaignDetail: !!params.campaign,
+  })
   let affiliateQr: AffiliateQrRow | null = null
-  if (affiliateQrEnabled && resolvedStoreId && !params.campaign) {
+  let affiliateQrError = false
+  if (showAffiliateQr && resolvedStoreId) {
     const { data: qrRow, error: qrErr } = await supabase
       .from('affiliate_partner_mappings')
       .select('partner_code, qr_image_url, qr_destination_url')
       .eq('store_id', resolvedStoreId)
-      .eq('partner_type', 'os')
+      .match(AFFILIATE_QR_FILTER)
       .not('qr_image_url', 'is', null)
       .limit(1)
       .maybeSingle()
     if (qrErr) {
-      // Degrade thành "chưa cấu hình" (không chặn trang) — vd 095 chưa chạy.
+      // r1 (audit P2 #3): lỗi DB/RLS/migration ≠ "chưa cấu hình" — card hiện
+      // "Không tải được mã QR", không giả dạng missing.
       console.error('[targets] affiliate qr query failed:', qrErr.message)
+      affiliateQrError = true
     }
     affiliateQr = (qrRow as AffiliateQrRow | null) ?? null
   }
-  const showAffiliateQr = affiliateQrEnabled && !!resolvedStoreId && !params.campaign
 
   // ── SM render branch: store selector + the store's campaign view ────────────
   if (isSm) {
@@ -369,6 +378,7 @@ export default async function TargetsPage({
             partnerCode={affiliateQr?.partner_code ?? null}
             imageUrl={affiliateQr?.qr_image_url ?? null}
             destinationUrl={affiliateQr?.qr_destination_url ?? null}
+            queryError={affiliateQrError}
           />
         )}
       </div>
@@ -406,6 +416,7 @@ export default async function TargetsPage({
             partnerCode={affiliateQr?.partner_code ?? null}
             imageUrl={affiliateQr?.qr_image_url ?? null}
             destinationUrl={affiliateQr?.qr_destination_url ?? null}
+            queryError={affiliateQrError}
           />
         )}
       </div>
@@ -499,6 +510,7 @@ export default async function TargetsPage({
                   partnerCode={affiliateQr?.partner_code ?? null}
                   imageUrl={affiliateQr?.qr_image_url ?? null}
                   destinationUrl={affiliateQr?.qr_destination_url ?? null}
+                  queryError={affiliateQrError}
                 />
               )}
               {referral && <ReferralCard {...referral} />}
@@ -572,6 +584,7 @@ export default async function TargetsPage({
             partnerCode={affiliateQr?.partner_code ?? null}
             imageUrl={affiliateQr?.qr_image_url ?? null}
             destinationUrl={affiliateQr?.qr_destination_url ?? null}
+            queryError={affiliateQrError}
           />
         )}
 

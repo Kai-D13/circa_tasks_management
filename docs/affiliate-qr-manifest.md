@@ -61,7 +61,9 @@ Nguồn: folder user cung cấp `C:\webapp_management\QR_code_affiliate` (25 fil
 4. QR hiển thị **cả khi store không có campaign active**; landing `/targets` only, ẩn trong `?campaign=`.
 5. Flag: **dùng chung `KPI_AFFILIATE_ENABLED`** — không thêm Coolify ENV.
 
-## Trạng thái build (24/07)
+## Trạng thái build (24/07 — r1 sau audit)
+
+**r1 đóng 2 P1 + 4 P2 (audit 24/07):** (1) upload chống ghi đè — check tồn tại → SHA khớp SKIP_OK / khác FAIL / chưa có upload kèm `ifGenerationMatch=0`, race 412 → verify SHA; logic thuần `scripts/qr-upload-decision.mjs` có test; (2) RLS + query UI + unique index thêm `is_active=true` (+ index thêm `partner_type='os'`); (3) 4 CHECK: destination đúng ref, 3 field QR atomic, QR chỉ os + store_id NOT NULL, ảnh thuộc prefix `affiliate-qr/v1/`; (4) lỗi query ≠ missing — "Không tải được mã QR" vs "Chưa cấu hình" (contract `lib/affiliate/qrDisplay.ts`); (5) `img onError` → không broken image + modal `w-[calc(100vw-2rem)] max-w-sm`; (6) 6 test contract mới `e2e/affiliate-qr-display.spec.ts`.
 
 - **Migration [095_affiliate_qr_per_store.sql](../supabase/migrations/095_affiliate_qr_per_store.sql)** — DRAFT chờ audit; preflight 090–094; seed 8 mapping (RAISE khi lệch, guard insert ∈ {0,8}); 3 cột QR + CHECK destination + unique 1 QR active/store; seed URL 25 os; RLS store-scoped. **CHẠY SAU khi upload GCS verify 25/25.**
 - **Upload script [webapp/scripts/upload-affiliate-qr.mjs](../webapp/scripts/upload-affiliate-qr.mjs)** — key `affiliate-qr/v1/<store_code>/<partner_code>.png`, Content-Type `image/png`, Cache-Control `public,max-age=31536000,immutable`; verify 25/25 HTTP 200 + content-type + SHA-256 byte-identical file gốc (byte-identical ⇒ giữ nguyên khả năng decode đã chứng minh 25/25). Thay QR tương lai → `v2`, không ghi đè object immutable. Chạy sau audit, trước 095.
