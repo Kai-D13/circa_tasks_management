@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { isReferralEnabled } from '@/lib/affiliate/flags'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { ReferralUploadForm } from '@/components/referral/ReferralUploadForm'
@@ -26,6 +27,9 @@ interface Agg {
 }
 
 export default async function GioiThieuPage() {
+  // Chương trình referral đã ngưng — flag off chặn cả truy cập URL trực tiếp
+  // (entry cuối cùng còn hở sau khi action upload + cron đã gate).
+  if (!isReferralEnabled()) redirect('/targets')
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) redirect('/login')

@@ -9,6 +9,7 @@ import { Sidebar } from '@/components/layout/Sidebar'
 import { MobileHeader } from '@/components/layout/MobileHeader'
 import { BottomNav } from '@/components/layout/BottomNav'
 import { isKpiCampaignEnabled } from '@/lib/kpi/flags'
+import { isReferralEnabled } from '@/lib/affiliate/flags'
 import { UserProfile } from '@/types'
 
 export default async function DashboardLayout({
@@ -43,6 +44,7 @@ export default async function DashboardLayout({
   // KPI Campaign nav gate (server env) → passed to the client Sidebar as a prop
   // (avoids a NEXT_PUBLIC_ var; keeps the flag server-controlled).
   const kpiCampaignEnabled = isKpiCampaignEnabled()
+  const referralEnabled = isReferralEnabled()
 
   return (
     <ThemeProvider>
@@ -52,7 +54,7 @@ export default async function DashboardLayout({
           {/* Desktop sidebar — hidden on mobile; not rendered for staff */}
           {/* Staff get no desktop Sidebar. An FS store_manager DOES get one → pass
               isFsStore so it collapses to the single FS item (no OS links). */}
-          {!isStaff && <Sidebar announcementsUnread={announcementsUnread} kpiCampaignEnabled={kpiCampaignEnabled} isFsStore={isFsStore} />}
+          {!isStaff && <Sidebar announcementsUnread={announcementsUnread} kpiCampaignEnabled={kpiCampaignEnabled} referralEnabled={referralEnabled} isFsStore={isFsStore} />}
 
           {/* Main content — full width on mobile */}
           {/* Mobile bottom padding clears the fixed BottomNav (h-16) + the iPhone

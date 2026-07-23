@@ -13,6 +13,7 @@ import { CampaignCardList } from '@/components/kpi/CampaignCardList'
 import { CampaignKpiView, type CampaignView } from '@/components/kpi/CampaignKpiView'
 import { CampaignResultSummary } from '@/components/kpi/CampaignResultSummary'
 import { isKpiCampaignEnabled } from '@/lib/kpi/flags'
+import { isReferralEnabled } from '@/lib/affiliate/flags'
 import { ReferralCard, type ReferralItem } from '@/components/referral/ReferralCard'
 import { formatDateTime, currentWeekStart } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
@@ -401,10 +402,13 @@ export default async function TargetsPage({
     const storeName = (profile.stores as unknown as { name: string } | null)?.name ?? 'Cửa hàng của bạn'
 
     // Referral campaign card (staff_referrals; RLS filters to this staff's phone).
+    // REFERRAL_ENABLED=false (chương trình đã ngưng) → không query, không render
+    // card lẫn prompt SĐT — Affiliate thế chỗ, code/data referral giữ nguyên.
+    const referralOn = isReferralEnabled()
     const staffPhone = (profile as { phone_number?: string | null }).phone_number ?? null
     let referral: { total: number; success: number; sameDay: number; noOrder: number; items: ReferralItem[] } | null = null
     let referralError = false
-    if (staffPhone) {
+    if (referralOn && staffPhone) {
       const { data: refRows, error: refErr } = await supabase
         .from('staff_referrals')
         .select('referred_phone, status, referral_date, same_day_order')
@@ -442,7 +446,7 @@ export default async function TargetsPage({
               {referralError && (
                 <ErrorState message="Không tải được dữ liệu chương trình giới thiệu" hint="Vui lòng thử lại sau hoặc báo Admin." />
               )}
-              {staffPhone === null && (
+              {referralOn && staffPhone === null && (
                 <Card className="rounded-lg">
                   <CardContent className="py-4 text-sm text-muted-foreground">
                     Cập nhật <span className="font-medium">số điện thoại</span> (biểu tượng &ldquo;Sửa thông tin&rdquo; ở đầu trang) để xem chương trình giới thiệu bạn bè.
@@ -506,7 +510,7 @@ export default async function TargetsPage({
         {referralError && (
           <ErrorState message="Không tải được dữ liệu chương trình giới thiệu" hint="Vui lòng thử lại sau hoặc báo Admin." />
         )}
-        {staffPhone === null && (
+        {referralOn && staffPhone === null && (
           <Card className="rounded-lg">
             <CardContent className="py-4 text-sm text-muted-foreground">
               Cập nhật <span className="font-medium">số điện thoại</span> (biểu tượng &ldquo;Sửa thông tin&rdquo; ở đầu trang) để xem chương trình giới thiệu bạn bè.
