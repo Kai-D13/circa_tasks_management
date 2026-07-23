@@ -1,4 +1,5 @@
 import { Card, CardContent } from '@/components/ui/card'
+import { breakdownModel, campaignFootnote } from '@/lib/kpi/campaignDisplay'
 import { CampaignDailyChart } from '@/components/kpi/CampaignDailyChart'
 import { CampaignPicker } from '@/components/kpi/CampaignPicker'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
@@ -121,11 +122,10 @@ export function CampaignKpiView({
   const todayPoint = daily.find((d) => d.date === todayISO)
   const todayGmv = todayPoint ? todayPoint.gmv + todayPoint.gmv_affiliate : null
 
-  // P3-E: campaign CẢ 2 chỉ số → khối "Phân loại theo chỉ số" (mock stakeholder);
-  // 1 chỉ số → layout hiện tại giữ nguyên tuyệt đối.
-  const showBreakdown = sel.metric_offline && sel.metric_affiliate
-  const pctOf = (v: number | null) =>
-    v === null || target <= 0 ? null : Math.round((v / target) * 100)
+  // P3-E r1: contract breakdown/footnote nằm trong lib/kpi/campaignDisplay
+  // (THUẦN, có test khóa) — 1 chỉ số → layout hiện tại giữ nguyên tuyệt đối.
+  const bd = breakdownModel(sel)
+  const showBreakdown = bd.show
 
   // Tier milestones.
   const tiers = [...sel.tiers].sort((a, b) => a.tier_order - b.tier_order)
@@ -215,7 +215,7 @@ export function CampaignKpiView({
               </div>
               <div className="text-right shrink-0">
                 <p className="text-sm font-bold text-primary">{vnd(sel.actual_offline)}</p>
-                <p className="text-xs text-muted-foreground">{pctOf(sel.actual_offline) !== null ? `${pctOf(sel.actual_offline)}% / ${vnd(target)}` : '—'}</p>
+                <p className="text-xs text-muted-foreground">{bd.offlinePct !== null ? `${bd.offlinePct}% / ${vnd(target)}` : '—'}</p>
               </div>
             </div>
             <div className="flex items-start gap-3 border-t pt-3">
@@ -228,7 +228,7 @@ export function CampaignKpiView({
               </div>
               <div className="text-right shrink-0">
                 <p className="text-sm font-bold">{vnd(sel.actual_affiliate)}</p>
-                <p className="text-xs text-muted-foreground">{pctOf(sel.actual_affiliate) !== null ? `${pctOf(sel.actual_affiliate)}% / ${vnd(target)}` : '—'}</p>
+                <p className="text-xs text-muted-foreground">{bd.affiliatePct !== null ? `${bd.affiliatePct}% / ${vnd(target)}` : '—'}</p>
               </div>
             </div>
           </CardContent>
@@ -394,15 +394,10 @@ export function CampaignKpiView({
         </Card>
       )}
 
-      {/* P3-E: chú thích nguồn theo cấu hình metric — offline-only giữ nguyên
-          câu cũ; có affiliate → nêu rõ rule DELIVERED-only. */}
+      {/* P3-E r1: chú thích nguồn từ campaignFootnote (contract có test) —
+          offline-only giữ nguyên câu cũ; có affiliate → rule DELIVERED-only. */}
       <p className="text-[11px] text-muted-foreground">
-        {sel.synced_at ? `Cập nhật lúc ${formatDateTime(sel.synced_at)}` : 'Doanh số chưa được đồng bộ'}
-        {!sel.metric_affiliate
-          ? ' · Nguồn: báo cáo BI · * Không bao gồm đơn online'
-          : sel.metric_offline
-            ? ' · Nguồn: báo cáo BI + Circa Online · GMV Affiliate chỉ tính đơn giao thành công'
-            : ' · Nguồn: Circa Online · chỉ tính đơn giao thành công (DELIVERED)'}
+        {sel.synced_at ? `Cập nhật lúc ${formatDateTime(sel.synced_at)}` : 'Doanh số chưa được đồng bộ'} · {campaignFootnote(sel)}
       </p>
     </div>
   )

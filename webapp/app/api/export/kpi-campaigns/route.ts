@@ -3,7 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { isKpiCampaignEnabled } from '@/lib/kpi/flags'
 import { xlsxResponse, stampVN, fmtVN } from '@/lib/export/xlsx'
-import { campaignPerformance } from '@/lib/kpi/performance'
+import { buildCampaignExportRows } from '@/lib/kpi/exportRows'
 
 // GET /api/export/kpi-campaigns?campaign_id=... — Excel of a campaign's per-store
 // result (super admin only; mirrors the /targets/campaigns/[id] Result tab).
@@ -46,42 +46,18 @@ export async function GET(request: NextRequest) {
 
   const targets = (targetsRaw ?? []) as unknown as TargetRow[]
   const actuals = (actualsRaw ?? []) as ActualRow[]
-  const actualByStore = new Map(actuals.map((a) => [a.store_id, a]))
   const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
 
-  // P3-F: breakdown 2 nguồn + timestamp từng nguồn + trạng thái nguồn Affiliate
-  // (chỉ số vẫn theo RLS/role gate sẵn có — route này super-admin only).
-  const metricAffiliate = c.metric_affiliate === true
-  const affiliateStatus = (a: ActualRow | undefined): string => {
-    if (!metricAffiliate) return 'Không áp dụng'
-    if (!a || a.affiliate_synced_at === null) return 'Chưa đồng bộ'
-    return 'Đã đồng bộ'
-  }
-  const rows = targets.map((t) => {
-    const a = actualByStore.get(t.store_id)
-    const perf = campaignPerformance(t.kpi_target, a?.actual_value ?? null, c.start_date, c.end_date, vnTodayISO)
-    return {
-      'Chiến dịch':   c.name as string,
-      'Từ ngày':      c.start_date as string,
-      'Đến ngày':     c.end_date as string,
-      'POS':          t.pos_code ?? '',
-      'Cửa hàng':     t.stores?.name ?? '',
-      'Phân loại':    t.store_kpi_group ?? '',
-      'KPI target':   Number(t.kpi_target) || 0,
-      'GMV Offline':  a?.actual_offline != null ? Number(a.actual_offline) || 0 : '',
-      'GMV Affiliate': a?.actual_affiliate != null ? Number(a.actual_affiliate) || 0 : '',
-      'GMV Total':    a ? Number(a.actual_value) || 0 : '',
-      'Run rate %':   a?.run_rate != null ? Number(a.run_rate.toFixed(1)) : '',
-      'Performance %': perf != null ? Number(perf.toFixed(1)) : '',
-      'Còn thiếu':    a?.remaining_target != null ? Number(a.remaining_target) || 0 : '',
-      'Bậc đạt':      a?.achieved_tier_order ?? '',
-      'Commission pool': a?.store_commission_pool != null ? Number(a.store_commission_pool) || 0 : '',
-      'Offline Synced At':   a?.offline_synced_at ? fmtVN(a.offline_synced_at) : '',
-      'Affiliate Synced At': a?.affiliate_synced_at ? fmtVN(a.affiliate_synced_at) : '',
-      'Affiliate Data Status': affiliateStatus(a),
-      'Đồng bộ lúc':  a ? fmtVN(a.synced_at) : '',
-    }
-  })
+  // P3-F r1: contract cột nằm trong buildCampaignExportRows THUẦN (có test
+  // khóa) — GIỮ tên cột cũ 'Actual GMV', cột mới bổ sung; status nguồn
+  // Affiliate: Không áp dụng / Chưa đồng bộ / Đã đồng bộ.
+  const rows = buildCampaignExportRows(
+    {
+      name: c.name as string, start_date: c.start_date as string, end_date: c.end_date as string,
+      metric_offline: c.metric_offline === true, metric_affiliate: c.metric_affiliate === true,
+    },
+    targets, actuals, vnTodayISO, fmtVN,
+  )
 
   return xlsxResponse(rows, 'Kết quả chiến dịch', `campaign_${(c.name as string).slice(0, 20)}_${stampVN()}`)
 }

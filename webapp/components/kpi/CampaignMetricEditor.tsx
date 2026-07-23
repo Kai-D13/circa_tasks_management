@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { updateCampaign } from '@/app/actions/kpiCampaigns'
+import { metricEditorState } from '@/lib/kpi/campaignDisplay'
 import { Button } from '@/components/ui/button'
 
 // P3-E3 — Metric editor tab Cấu hình (audit): sửa CHỈ khi draft/paused;
@@ -25,10 +26,10 @@ export function CampaignMetricEditor({
   const [offline, setOffline] = useState(metricOffline)
   const [affiliate, setAffiliate] = useState(metricAffiliate)
 
-  const editable = status === 'draft' || status === 'paused'
-  // Flag tắt: không cho đụng metric của campaign affiliate (server sẽ reject) —
-  // hiển thị read-only để không tạo kỳ vọng sai.
-  const affiliateLocked = !affiliateEnabled
+  // r1 P2#1: trạng thái editor từ metricEditorState (contract THUẦN có test) —
+  // flag tắt + campaign affiliate → khóa CẢ HAI checkbox lẫn nút lưu (server
+  // sẽ reject anyway; UI không được tạo kỳ vọng sửa được).
+  const st = metricEditorState({ status, affiliateEnabled, metricAffiliate })
   const changed = offline !== metricOffline || affiliate !== metricAffiliate
 
   function save() {
@@ -58,17 +59,16 @@ export function CampaignMetricEditor({
   return (
     <div className="space-y-1.5">
       <div className="flex flex-col gap-0.5">
-        {row(offline, setOffline, !editable || pending, 'GMV Offline', '— doanh số bán tại cửa hàng (BI)')}
-        {(affiliateEnabled || metricAffiliate) &&
-          row(affiliate, setAffiliate, !editable || pending || affiliateLocked, 'GMV Affiliate', '— doanh số Circa Online ghi nhận theo mã đối tác của cửa hàng')}
+        {row(offline, setOffline, !st.editable || pending, 'GMV Offline', '— doanh số bán tại cửa hàng (BI)')}
+        {st.showAffiliateControl &&
+          row(affiliate, setAffiliate, !st.editable || pending, 'GMV Affiliate', '— doanh số Circa Online ghi nhận theo mã đối tác của cửa hàng')}
       </div>
-      {!editable && (
+      {st.metricsLocked ? (
+        <p className="text-xs text-muted-foreground">KPI_AFFILIATE_ENABLED đang tắt — chỉ số của chiến dịch affiliate ở chế độ chỉ đọc.</p>
+      ) : !st.editable ? (
         <p className="text-xs text-muted-foreground">Chỉ sửa được khi chiến dịch ở trạng thái nháp/tạm dừng.</p>
-      )}
-      {editable && affiliateLocked && metricAffiliate && (
-        <p className="text-xs text-muted-foreground">KPI_AFFILIATE_ENABLED đang tắt — không sửa được chỉ số của chiến dịch affiliate.</p>
-      )}
-      {editable && changed && (
+      ) : null}
+      {st.editable && changed && (
         <Button size="sm" onClick={save} disabled={pending}>
           {pending ? 'Đang lưu…' : 'Lưu chỉ số'}
         </Button>
