@@ -36,29 +36,43 @@ export async function GET(request: NextRequest) {
     const cutoff = new Date(Date.parse(vnTodayISO) - 3 * 86400_000).toISOString().slice(0, 10)
     const { data: campaigns, error: cErr } = await supabaseAdmin
       .from('kpi_campaigns')
-      .select('id, name, start_date, end_date, status')
+      .select('id, name')
       .or(`status.eq.active,and(status.eq.ended,end_date.gte.${cutoff})`)
     if (cErr) return NextResponse.json({ error: cErr.message }, { status: 500 })
 
+    // P3-B/C contract: engine tự đọc cấu hình theo id; response phân biệt
+    // success / snapshot_preserved / failed. Offline-only campaign vẫn sync
+    // bình thường khi nguồn affiliate stale (độc lập từng campaign).
     let upserted = 0
     const errors: string[] = []
     const unmatched: string[] = []
+    const preserved: { campaign: string; reason: string }[] = []
     for (const c of campaigns ?? []) {
-      const r = await syncCampaign(c as { id: string; start_date: string; end_date: string })
-      if ('error' in r) errors.push(`${(c as { name?: string }).name ?? c.id}: ${r.error}`)
-      else { upserted += r.upserted; unmatched.push(...r.unmatched) }
+      const r = await syncCampaign(c.id)
+      if (r.status === 'failed') {
+        errors.push(`${c.name ?? c.id}: ${r.error}`)
+      } else if (r.status === 'snapshot_preserved') {
+        // Log rõ campaign + lý do giữ snapshot (audit P3-C) — không phải lỗi.
+        console.warn(`[sync-kpi-campaign] snapshot_preserved campaign=${c.id} (${c.name}):`, r.reason)
+        preserved.push({ campaign: c.name ?? c.id, reason: r.reason })
+      } else {
+        upserted += r.upserted
+        unmatched.push(...r.unmatched)
+      }
     }
 
     revalidatePath('/targets')
     revalidatePath('/targets/campaigns')
+    // HTTP: lỗi thật → 500; có snapshot_preserved → 207; sạch → 200.
     return NextResponse.json({
       ok: errors.length === 0,
       campaigns: (campaigns ?? []).length,
       upserted,
       endedTransitioned: (endedRows ?? []).length,
       unmatched: [...new Set(unmatched)],
+      preserved,
       errors,
-    }, { status: errors.length ? 207 : 200 })
+    }, { status: errors.length ? 500 : preserved.length ? 207 : 200 })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     const status = msg.includes('BigQuery') || msg.includes('Google token') ? 502 : 500

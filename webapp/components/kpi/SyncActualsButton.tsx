@@ -15,7 +15,13 @@ export function SyncActualsButton({ campaignId }: { campaignId: string }) {
   function handleSync() {
     startTransition(async () => {
       const r = await syncCampaignActuals(campaignId)
-      if (r?.error) { toast.error(r.error); return }
+      if (r && 'error' in r && r.error) { toast.error(r.error); return }
+      if (r && 'preserved' in r && r.preserved) {
+        // Nguồn chưa sẵn sàng (stale/đang chạy/unmatched…) — số cũ được GIỮ,
+        // không ghi đè 0. Hiện lý do để super admin xử lý nguồn.
+        toast.info(`Giữ số liệu hiện tại — ${r.reason}`, { duration: 8000 })
+        return
+      }
       const ok = r as { upserted?: number; unmatched?: string[] }
       const unmatched = ok.unmatched ?? []
       if (unmatched.length > 0) {

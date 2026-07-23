@@ -113,11 +113,15 @@ export async function toggleCampaign(id: string) {
 export async function syncCampaignActuals(id: string) {
   const auth = await requireSuper()
   if ('error' in auth) return { error: auth.error }
-  const { data: c } = await auth.supabase
-    .from('kpi_campaigns').select('id, start_date, end_date').eq('id', id).single()
-  if (!c) return { error: 'Không tìm thấy chiến dịch' }
-  const r = await syncCampaign(c)
-  if ('error' in r) return { error: r.error }
+  // P3-B contract: engine tự đọc cấu hình campaign theo id (campaign không tồn
+  // tại → engine trả failed). Cùng một syncCampaign với cron — không có logic
+  // riêng cho nút manual (audit P3-C).
+  const r = await syncCampaign(id)
+  if (r.status === 'failed') return { error: r.error }
+  if (r.status === 'snapshot_preserved') {
+    // Không phải lỗi: nguồn chưa sẵn sàng → số cũ được giữ nguyên.
+    return { preserved: true as const, reason: r.reason }
+  }
   revalidatePath(`/targets/campaigns/${id}`)
   revalidatePath('/targets')
   return { success: true, upserted: r.upserted, unmatched: r.unmatched }
