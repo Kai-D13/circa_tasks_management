@@ -21,7 +21,12 @@
 
 BEGIN;
 
--- ── 1) rpc_replace_campaign_targets: thêm FOR UPDATE (body 071 giữ nguyên) ──
+-- ── 1) rpc_replace_campaign_targets: thêm FOR UPDATE ────────────────────────
+-- r1.1 (audit P1): body lấy từ MIGRATION 072 (bản đang có hiệu lực — 072 đã
+-- thêm 2 lệnh xóa actuals/daily khi thay target; bản draft trước lấy nhầm 071
+-- làm mất hành vi này). Thay đổi DUY NHẤT so với 072 = FOR UPDATE ở dòng đọc
+-- status. User đã verify pre-093: has_row_lock=false, clears_actuals=true,
+-- clears_daily_actuals=true → sau 093 cả 3 phải = true.
 CREATE OR REPLACE FUNCTION public.rpc_replace_campaign_targets(
   p_campaign_id uuid,
   p_rows        jsonb,   -- [{store_id, pos_code, kpi_target, store_kpi_group, import_row, note, tiers:[{tier_order, threshold_pct, commission_amount}]}]
@@ -73,9 +78,6 @@ BEGIN
 
     v_tiers := 0;
     v_prev_th := NULL;
-    -- jsonb_array_elements preserves array order = tier_order ascending from the
-    -- parser; thresholds must STRICTLY increase (commission data — harden at the
-    -- DB layer too, not only in the app parser).
     FOR v_tier IN SELECT * FROM jsonb_array_elements(coalesce(v_row->'tiers', '[]'::jsonb))
     LOOP
       v_th := (v_tier->>'threshold_pct')::numeric;
@@ -99,6 +101,11 @@ BEGIN
   INSERT INTO public.kpi_campaign_import_runs
     (campaign_id, file_name, uploaded_by, row_count, success_count, error_count)
   VALUES (p_campaign_id, p_file_name, p_uploaded_by, v_count, v_count, 0);
+
+  -- Targets changed → every previously computed actual/pool is stale. Clear in
+  -- the same tx; next sync repopulates. (Hành vi 072 — GIỮ NGUYÊN.)
+  DELETE FROM public.kpi_campaign_store_actuals       WHERE campaign_id = p_campaign_id;
+  DELETE FROM public.kpi_campaign_store_daily_actuals WHERE campaign_id = p_campaign_id;
 
   UPDATE public.kpi_campaigns SET updated_at = now() WHERE id = p_campaign_id;
   RETURN v_count;
@@ -177,13 +184,21 @@ GRANT EXECUTE ON FUNCTION public.rpc_activate_kpi_campaign(uuid, timestamptz, uu
 
 INSERT INTO public.app_migrations (version, name, notes)
 VALUES ('093', 'kpi_campaign_activation_guard',
-        'P3-D r1: rpc_replace_campaign_targets + FOR UPDATE (import/activation serialize); RPC mới rpc_activate_kpi_campaign — lock row, status draft/paused, updated_at đúng kỳ vọng (bắt import/sửa xen giữa), có target, affiliate: mọi target OS-active + latest affiliate run == expected_run_id (success). Grants: service_role only, revoke anon/authenticated tường minh. CHẠY TRƯỚC khi deploy code Phase 3.')
+        'P3-D r1.1: rpc_replace_campaign_targets = body 072 (GIỮ xóa actuals + daily khi thay target) + FOR UPDATE duy nhất (import/activation serialize); RPC mới rpc_activate_kpi_campaign — lock row, status draft/paused, updated_at đúng kỳ vọng (bắt import/sửa xen giữa), có target, affiliate: mọi target OS-active + latest affiliate run == expected_run_id (success). Grants: service_role only, revoke anon/authenticated tường minh. CHẠY TRƯỚC khi deploy code Phase 3.')
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;
 
 -- ============================================================================
 -- VERIFY (script thực thi: webapp/scripts/qa-kpi-activation-093.mjs)
+-- 0) REGRESSION ĐỊNH NGHĨA FUNCTION (chạy SQL tay SAU 093 — cả 3 phải TRUE;
+--    user đã verify pre-093: false/true/true):
+--    with f as (select lower(pg_get_functiondef(
+--      'public.rpc_replace_campaign_targets(uuid,jsonb,text,uuid)'::regprocedure)) as body)
+--    select position('for update' in body) > 0 as has_row_lock,
+--           position('delete from public.kpi_campaign_store_actuals' in body) > 0 as clears_actuals,
+--           position('delete from public.kpi_campaign_store_daily_actuals' in body) > 0 as clears_daily_actuals
+--    from f;
 -- 1) SELECT proname, prosecdef FROM pg_proc
 --    WHERE proname IN ('rpc_replace_campaign_targets','rpc_activate_kpi_campaign');  -- 2 row, secdef=t
 -- 2) has_function_privilege matrix: anon/authenticated=false, service_role=true cho cả 2.
@@ -193,5 +208,7 @@ COMMIT;
 -- 5) update campaign (bump updated_at) rồi activate bằng updated_at CŨ → RAISE
 --    (bằng chứng metric-update vs activation chỉ 1 thao tác thắng).
 -- 6) campaign affiliate: expected_run_id sai/thiếu → RAISE.
--- 7) app_migrations '093' = 1 row.
+-- 7) replace-target POSITIVE (service role): import mới → targets/tiers/import
+--    run đúng; actuals + daily actuals VỀ 0; import trên campaign ACTIVE bị RAISE.
+-- 8) app_migrations '093' = 1 row.
 -- ============================================================================

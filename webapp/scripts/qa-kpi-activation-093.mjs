@@ -16,12 +16,15 @@ const svc = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE
 const anon = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.NEXT_PUBLIC_SUPABASE_ANON_KEY, { auth: { persistSession: false } })
 
 let failed = 0
+let pending = 0
 let aborted = null
 const out = (label, ok, detail = '') => {
   console.log((ok ? 'PASS' : 'FAIL').padEnd(5), label.padEnd(66), detail)
   if (!ok) failed++
 }
-const skip = (label, why) => console.log('SKIP '.padEnd(5), label.padEnd(66), why)
+// r1.1 (audit P2#3): check BẮT BUỘC không chạy được → PENDING, exit ≠ 0 —
+// KHÔNG được tính là ALL PASS.
+const pendingSkip = (label, why) => { pending++; console.log('PEND '.padEnd(5), label.padEnd(66), why) }
 const expectRaise = async (label, promise, msgPart) => {
   const { error } = await promise
   const ok = !!error && error.message.includes(msgPart)
@@ -38,6 +41,14 @@ const activate = (id, expectedUpdatedAt, runId = null) =>
 try {
   const mig = await svc.from('app_migrations').select('version').eq('version', '093').maybeSingle()
   if (!mig.data) abort('migration 093 chưa chạy')
+
+  // ── 0) Regression định nghĩa function (r1.1 audit P2): file migration PHẢI
+  //    chứa FOR UPDATE + CẢ 2 lệnh xóa actuals (bản 072) — chống tái diễn lỗi
+  //    lấy nhầm body 071. (Định nghĩa LIVE verify bằng SQL tay — xem VERIFY #0.)
+  const sql = fs.readFileSync('../supabase/migrations/093_kpi_campaign_activation_guard.sql', 'utf8').toLowerCase()
+  out('regression 093: body có FOR UPDATE', sql.includes('for update'))
+  out('regression 093: giữ DELETE kpi_campaign_store_actuals', sql.includes('delete from public.kpi_campaign_store_actuals'))
+  out('regression 093: giữ DELETE kpi_campaign_store_daily_actuals', sql.includes('delete from public.kpi_campaign_store_daily_actuals'))
 
   const { data: store } = await svc.from('stores').select('id, code').eq('store_type', 'os').eq('is_active', true).order('code').limit(1).single()
   if (!store) abort('không có store os active')
@@ -95,8 +106,62 @@ try {
       const { data, error } = await activate(c3.id, c3.updated_at, latest.id)
       out('affiliate: run_id đúng latest success → activated', !error && data?.activated === true, error?.message ?? '')
     } else {
-      skip('affiliate: run_id đúng latest success → activated', `latest run status=${latest?.status ?? 'none'}`)
+      pendingSkip('affiliate: run_id đúng latest success → activated', `latest run status=${latest?.status ?? 'none'} — chạy lại sau 1 sync success`)
     }
+  }
+
+  // ── 3b) Replace-target POSITIVE path qua service role (r1.1 audit P2#2) ────
+  {
+    const c4 = await mkCampaign('QA-093 replace-target (xóa được)', false)
+    // fixture actuals + daily CŨ — import mới phải xóa sạch (hành vi 072 giữ lại)
+    const ts = new Date().toISOString()
+    const { error: aErr } = await svc.from('kpi_campaign_store_actuals').insert({
+      campaign_id: c4.id, store_id: store.id, actual_value: 999, actual_offline: 999, actual_affiliate: 0,
+      run_rate: 99, remaining_target: 1, raw_row_count: 1, offline_synced_at: ts, synced_at: ts,
+    })
+    const { error: dErr } = await svc.from('kpi_campaign_store_daily_actuals').insert({
+      campaign_id: c4.id, store_id: store.id, date: '2026-07-02', gmv: 999, gmv_affiliate: 0, synced_at: ts,
+    })
+    if (aErr || dErr) abort(`fixture actuals/daily: ${aErr?.message ?? dErr?.message}`)
+
+    const { data: cnt, error: repErr } = await svc.rpc('rpc_replace_campaign_targets', {
+      p_campaign_id: c4.id,
+      p_rows: [{
+        store_id: store.id, pos_code: store.code, kpi_target: 5000, store_kpi_group: 'QA-093-NEW',
+        import_row: 1, note: null,
+        tiers: [{ tier_order: 1, threshold_pct: 90, commission_amount: 1000000 }],
+      }],
+    })
+    out('replace-target (service role): import thành công, count=1', !repErr && cnt === 1, repErr?.message ?? `count=${cnt}`)
+
+    const { data: newTargets } = await svc.from('kpi_campaign_store_targets')
+      .select('kpi_target, store_kpi_group, kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
+      .eq('campaign_id', c4.id)
+    out('replace-target: target mới đúng (5000/QA-093-NEW) + tiers tồn tại',
+      newTargets?.length === 1 && Number(newTargets[0].kpi_target) === 5000
+        && newTargets[0].store_kpi_group === 'QA-093-NEW'
+        && (newTargets[0].kpi_campaign_store_tiers ?? []).length === 1,
+      JSON.stringify(newTargets?.[0]?.kpi_target))
+    const { count: runCnt } = await svc.from('kpi_campaign_import_runs')
+      .select('id', { count: 'exact', head: true }).eq('campaign_id', c4.id)
+    out('replace-target: import run được ghi', (runCnt ?? 0) >= 1, `runs=${runCnt}`)
+    const { count: aCnt } = await svc.from('kpi_campaign_store_actuals')
+      .select('campaign_id', { count: 'exact', head: true }).eq('campaign_id', c4.id)
+    const { count: dCnt } = await svc.from('kpi_campaign_store_daily_actuals')
+      .select('campaign_id', { count: 'exact', head: true }).eq('campaign_id', c4.id)
+    out('replace-target: actuals + daily CŨ về 0 (hành vi 072 GIỮ NGUYÊN)',
+      aCnt === 0 && dCnt === 0, `actuals=${aCnt} daily=${dCnt}`)
+
+    // import trên campaign ACTIVE bị chặn (sau khi kích hoạt bằng updated_at
+    // MỚI — replace vừa bump updated_at)
+    const { data: c4now } = await svc.from('kpi_campaigns').select('updated_at').eq('id', c4.id).single()
+    const { error: actNowErr } = await activate(c4.id, c4now.updated_at)
+    out('setup: kích hoạt c4 để test import-bị-chặn', !actNowErr, actNowErr?.message ?? '')
+    await expectRaise('replace-target trên campaign ACTIVE → RAISE draft/paused',
+      svc.rpc('rpc_replace_campaign_targets', {
+        p_campaign_id: c4.id,
+        p_rows: [{ store_id: store.id, pos_code: store.code, kpi_target: 1, store_kpi_group: 'X', tiers: [{ tier_order: 1, threshold_pct: 90, commission_amount: 1 }] }],
+      }), 'draft/paused')
   }
 
   // ── 4) Quyền: anon + authenticated bị chặn cả 2 RPC ────────────────────────
@@ -117,7 +182,7 @@ try {
         await authed.auth.signOut()
       }
     } else {
-      skip('quyền: authenticated deny (2 RPC)', 'đặt QA_AUTH_EMAIL + QA_PASSWORD để chạy')
+      pendingSkip('quyền: authenticated deny (2 RPC)', 'đặt QA_AUTH_EMAIL + QA_PASSWORD để chạy')
     }
   }
 } catch (e) {
@@ -125,13 +190,24 @@ try {
   out(`ABORT giữa chừng: ${aborted}`, false)
 } finally {
   if (campaignIds.length > 0) {
+    // import_runs không chắc cascade — xóa tường minh trước campaigns.
+    await svc.from('kpi_campaign_import_runs').delete().in('campaign_id', campaignIds)
     const del = await svc.from('kpi_campaigns').delete().in('id', campaignIds).select('id')
     out(`CLEANUP: xóa đủ ${campaignIds.length} campaign fixture`, !del.error && del.data?.length === campaignIds.length,
       del.error?.message ?? `deleted=${del.data?.length}`)
-    const ghost = await svc.from('kpi_campaign_store_targets').select('campaign_id', { count: 'exact', head: true }).in('campaign_id', campaignIds)
-    out('CLEANUP: 0 ghost targets', ghost.count === 0, `ghost=${ghost.count}`)
+    const gT = await svc.from('kpi_campaign_store_targets').select('campaign_id', { count: 'exact', head: true }).in('campaign_id', campaignIds)
+    const gA = await svc.from('kpi_campaign_store_actuals').select('campaign_id', { count: 'exact', head: true }).in('campaign_id', campaignIds)
+    const gD = await svc.from('kpi_campaign_store_daily_actuals').select('campaign_id', { count: 'exact', head: true }).in('campaign_id', campaignIds)
+    const gR = await svc.from('kpi_campaign_import_runs').select('campaign_id', { count: 'exact', head: true }).in('campaign_id', campaignIds)
+    out('CLEANUP: 0 ghost targets/actuals/daily/import_runs',
+      gT.count === 0 && gA.count === 0 && gD.count === 0 && gR.count === 0,
+      `targets=${gT.count} actuals=${gA.count} daily=${gD.count} runs=${gR.count}`)
   }
 }
 
-console.log(failed === 0 ? '\nALL PASS' : `\n${failed} FAILED${aborted ? ' (aborted)' : ''}`)
-process.exit(aborted ? 2 : failed === 0 ? 0 : 1)
+// r1.1: PENDING (check bắt buộc chưa chạy được) → KHÔNG phải ALL PASS, exit 3.
+if (aborted) { console.log(`\n${failed} FAILED (aborted)`); process.exit(2) }
+if (failed > 0) { console.log(`\n${failed} FAILED${pending ? ` + ${pending} PENDING` : ''}`); process.exit(1) }
+if (pending > 0) { console.log(`\nPARTIAL/PENDING — ${pending} check bắt buộc chưa chạy (KHÔNG phải full gate pass)`); process.exit(3) }
+console.log('\nALL PASS')
+process.exit(0)
