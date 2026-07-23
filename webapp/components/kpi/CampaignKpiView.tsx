@@ -3,7 +3,7 @@ import { CampaignDailyChart } from '@/components/kpi/CampaignDailyChart'
 import { CampaignPicker } from '@/components/kpi/CampaignPicker'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
-import { Target, CalendarDays, TrendingUp, Wallet, Info, Gift, Store } from 'lucide-react'
+import { Target, CalendarDays, TrendingUp, Wallet, Info, Gift, Store, Link2 as LinkIcon } from 'lucide-react'
 
 // Staff / Store Manager campaign view (stakeholder mockup):
 //   hero (Mục tiêu GMV · Đã đạt · progress + % ring · Còn thiếu)
@@ -21,14 +21,25 @@ export interface CampaignView {
   kpi_target: number
   store_kpi_group: string | null
   tiers: CampaignTierView[]
-  actual_value: number | null        // null = chưa đồng bộ
+  actual_value: number | null        // null = chưa đồng bộ; = offline + affiliate (P3-E)
   run_rate: number | null
   remaining_target: number | null
   achieved_tier_order: number | null
   store_commission_pool: number | null
   synced_at: string | null
+  // P3-E: metric flags + breakdown 2 nguồn + timestamp TỪNG nguồn.
+  // Campaign 1 metric → layout cũ giữ nguyên; cả 2 → thêm khối "Phân loại theo
+  // chỉ số". Legacy row (chưa sync dưới schema mới) có offline = actual_value.
+  metric_offline: boolean
+  metric_affiliate: boolean
+  actual_offline: number | null
+  actual_affiliate: number | null
+  offline_synced_at: string | null
+  affiliate_synced_at: string | null
 }
-export interface DailyPoint { date: string; gmv: number }
+// gmv = Offline, gmv_affiliate = Affiliate — chart hiển thị TỔNG, giữ riêng
+// 2 nguồn cho tooltip breakdown + stacked chart sau này.
+export interface DailyPoint { date: string; gmv: number; gmv_affiliate: number }
 
 const vnd = (n: number | null | undefined) =>
   n === null || n === undefined ? '—' : `${new Intl.NumberFormat('vi-VN').format(Math.round(n))}₫`
@@ -106,7 +117,15 @@ export function CampaignKpiView({
   const daysLeft = Math.floor((Date.parse(sel.end_date) - Date.parse(todayISO)) / 86400_000) + 1
   const campaignOver = daysLeft <= 0
   const needPerDay = campaignOver || achieved ? 0 : remaining / Math.max(daysLeft, 1)
-  const todayGmv = daily.find((d) => d.date === todayISO)?.gmv ?? null
+  // P3-E: "GMV hôm nay" = TỔNG 2 nguồn của ngày hôm nay.
+  const todayPoint = daily.find((d) => d.date === todayISO)
+  const todayGmv = todayPoint ? todayPoint.gmv + todayPoint.gmv_affiliate : null
+
+  // P3-E: campaign CẢ 2 chỉ số → khối "Phân loại theo chỉ số" (mock stakeholder);
+  // 1 chỉ số → layout hiện tại giữ nguyên tuyệt đối.
+  const showBreakdown = sel.metric_offline && sel.metric_affiliate
+  const pctOf = (v: number | null) =>
+    v === null || target <= 0 ? null : Math.round((v / target) * 100)
 
   // Tier milestones.
   const tiers = [...sel.tiers].sort((a, b) => a.tier_order - b.tier_order)
@@ -179,6 +198,43 @@ export function CampaignKpiView({
         </CardContent>
       </Card>
 
+      {/* ── P3-E: Phân loại theo chỉ số (CHỈ khi campaign bật cả 2 nguồn) —
+             mỗi nguồn: giá trị · % trên CÙNG kpi_target · mốc đồng bộ riêng.
+             Không chevron (chưa có trang chi tiết — audit P3-E). ── */}
+      {showBreakdown && (
+        <Card className="rounded-lg">
+          <CardContent className="p-4 space-y-3">
+            <p className="font-semibold text-sm">Phân loại theo chỉ số</p>
+            <div className="flex items-start gap-3">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+                <Store className="h-4 w-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium leading-tight">GMV Offline</p>
+                <p className="text-xs text-muted-foreground">Doanh số bán tại cửa hàng{sel.offline_synced_at ? ` · đồng bộ ${formatDateTime(sel.offline_synced_at)}` : ''}</p>
+              </div>
+              <div className="text-right shrink-0">
+                <p className="text-sm font-bold text-primary">{vnd(sel.actual_offline)}</p>
+                <p className="text-xs text-muted-foreground">{pctOf(sel.actual_offline) !== null ? `${pctOf(sel.actual_offline)}% / ${vnd(target)}` : '—'}</p>
+              </div>
+            </div>
+            <div className="flex items-start gap-3 border-t pt-3">
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[#a3b2bf]/20 text-[#5b6b7a] dark:text-[#a3b2bf]">
+                <LinkIcon className="h-4 w-4" />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-medium leading-tight">GMV Affiliate</p>
+                <p className="text-xs text-muted-foreground">Doanh số từ Circa Online (theo mã đối tác){sel.affiliate_synced_at ? ` · đồng bộ ${formatDateTime(sel.affiliate_synced_at)}` : ''}</p>
+              </div>
+              <div className="text-right shrink-0">
+                <p className="text-sm font-bold">{vnd(sel.actual_affiliate)}</p>
+                <p className="text-xs text-muted-foreground">{pctOf(sel.actual_affiliate) !== null ? `${pctOf(sel.actual_affiliate)}% / ${vnd(target)}` : '—'}</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* ── 3 metric cards — solid colored icon circles per template
              (brand triad: blue-grey / coral / green) ── */}
       <div className="grid grid-cols-3 gap-2">
@@ -220,7 +276,7 @@ export function CampaignKpiView({
         <CardContent className="p-4">
           <p className="font-semibold text-sm mb-2">Tiến độ theo ngày</p>
           {daily.length > 0 ? (
-            <CampaignDailyChart start={sel.start_date} end={sel.end_date} daily={daily} todayISO={todayISO} />
+            <CampaignDailyChart start={sel.start_date} end={sel.end_date} daily={daily} todayISO={todayISO} breakdown={showBreakdown} />
           ) : (
             <p className="text-sm text-muted-foreground py-6 text-center">
               {dailyError
@@ -338,8 +394,15 @@ export function CampaignKpiView({
         </Card>
       )}
 
+      {/* P3-E: chú thích nguồn theo cấu hình metric — offline-only giữ nguyên
+          câu cũ; có affiliate → nêu rõ rule DELIVERED-only. */}
       <p className="text-[11px] text-muted-foreground">
-        {sel.synced_at ? `Cập nhật lúc ${formatDateTime(sel.synced_at)}` : 'Doanh số chưa được đồng bộ'} · Nguồn: báo cáo BI · * Không bao gồm đơn online
+        {sel.synced_at ? `Cập nhật lúc ${formatDateTime(sel.synced_at)}` : 'Doanh số chưa được đồng bộ'}
+        {!sel.metric_affiliate
+          ? ' · Nguồn: báo cáo BI · * Không bao gồm đơn online'
+          : sel.metric_offline
+            ? ' · Nguồn: báo cáo BI + Circa Online · GMV Affiliate chỉ tính đơn giao thành công'
+            : ' · Nguồn: Circa Online · chỉ tính đơn giao thành công (DELIVERED)'}
       </p>
     </div>
   )

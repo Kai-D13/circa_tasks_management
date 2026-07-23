@@ -156,11 +156,11 @@ async function fetchCampaignViews(
   const [{ data: targets, error: tErr }, { data: actuals, error: aErr }] = await Promise.all([
     supabase
       .from('kpi_campaign_store_targets')
-      .select('kpi_target, store_kpi_group, campaign:kpi_campaigns!inner(id, name, start_date, end_date), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
+      .select('kpi_target, store_kpi_group, campaign:kpi_campaigns!inner(id, name, start_date, end_date, metric_offline, metric_affiliate), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
       .eq('store_id', storeId),
     supabase
       .from('kpi_campaign_store_actuals')
-      .select('campaign_id, actual_value, run_rate, remaining_target, achieved_tier_order, store_commission_pool, synced_at')
+      .select('campaign_id, actual_value, actual_offline, actual_affiliate, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
       .eq('store_id', storeId),
   ])
   if (tErr || aErr) {
@@ -170,13 +170,13 @@ async function fetchCampaignViews(
     return []
   }
   const actualByCampaign = new Map(
-    ((actuals ?? []) as { campaign_id: string; actual_value: number; run_rate: number | null; remaining_target: number | null; achieved_tier_order: number | null; store_commission_pool: number | null; synced_at: string }[])
+    ((actuals ?? []) as { campaign_id: string; actual_value: number; actual_offline: number | null; actual_affiliate: number | null; run_rate: number | null; remaining_target: number | null; achieved_tier_order: number | null; store_commission_pool: number | null; offline_synced_at: string | null; affiliate_synced_at: string | null; synced_at: string }[])
       .map((a) => [a.campaign_id, a]),
   )
   return ((targets ?? []) as unknown as {
     kpi_target: number
     store_kpi_group: string | null
-    campaign: { id: string; name: string; start_date: string; end_date: string }
+    campaign: { id: string; name: string; start_date: string; end_date: string; metric_offline: boolean; metric_affiliate: boolean }
     kpi_campaign_store_tiers: { tier_order: number; threshold_pct: number; commission_amount: number }[]
   }[])
     .map((t) => {
@@ -195,6 +195,12 @@ async function fetchCampaignViews(
         achieved_tier_order: a?.achieved_tier_order ?? null,
         store_commission_pool: a?.store_commission_pool ?? null,
         synced_at: a?.synced_at ?? null,
+        metric_offline: t.campaign.metric_offline === true,
+        metric_affiliate: t.campaign.metric_affiliate === true,
+        actual_offline: a?.actual_offline !== null && a?.actual_offline !== undefined ? Number(a.actual_offline) : null,
+        actual_affiliate: a?.actual_affiliate !== null && a?.actual_affiliate !== undefined ? Number(a.actual_affiliate) : null,
+        offline_synced_at: a?.offline_synced_at ?? null,
+        affiliate_synced_at: a?.affiliate_synced_at ?? null,
       }
     })
     .sort((a, b) => a.end_date.localeCompare(b.end_date)) // nearest deadline first
@@ -258,13 +264,13 @@ export default async function TargetsPage({
   // Daily GMV series for the SELECTED campaign (drives the chart + "GMV hôm nay").
   // Selection resolved here so the fetch matches what the component will render.
   let selectedCampaignId: string | undefined
-  let campaignDaily: { date: string; gmv: number }[] = []
+  let campaignDaily: { date: string; gmv: number; gmv_affiliate: number }[] = []
   let campaignDailyError = false
   if (campaignViews.length > 0 && resolvedStoreId && !showCampaignList) {
     selectedCampaignId = (campaignViews.find((c) => c.id === params.campaign) ?? campaignViews[0]).id
     const { data: dailyRows, error: dErr } = await supabase
       .from('kpi_campaign_store_daily_actuals')
-      .select('date, gmv')
+      .select('date, gmv, gmv_affiliate')
       .eq('campaign_id', selectedCampaignId)
       .eq('store_id', resolvedStoreId)
       .order('date')
@@ -273,8 +279,8 @@ export default async function TargetsPage({
       console.error('[targets] daily query failed:', dErr.message)
       campaignDailyError = true
     }
-    campaignDaily = ((dailyRows ?? []) as { date: string; gmv: number }[])
-      .map((r) => ({ date: r.date, gmv: Number(r.gmv) || 0 }))
+    campaignDaily = ((dailyRows ?? []) as { date: string; gmv: number; gmv_affiliate: number | null }[])
+      .map((r) => ({ date: r.date, gmv: Number(r.gmv) || 0, gmv_affiliate: Number(r.gmv_affiliate) || 0 }))
   }
 
   // ── SM render branch: store selector + the store's campaign view ────────────

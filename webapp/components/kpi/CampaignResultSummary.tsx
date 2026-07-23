@@ -2,7 +2,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import type { CampaignView } from '@/components/kpi/CampaignKpiView'
 import { cn } from '@/lib/utils'
 import { campaignPerformance, performanceTone } from '@/lib/kpi/performance'
-import { Target, TrendingUp, Percent, Wallet, Award, CalendarDays, Gauge, ClipboardCheck, type LucideIcon } from 'lucide-react'
+import { Target, TrendingUp, Percent, Wallet, Award, CalendarDays, Gauge, ClipboardCheck, Store as StoreIcon, Link2 as LinkIcon, type LucideIcon } from 'lucide-react'
 
 // Store Manager "Kết quả" management block (r3): the same 6-card summary idiom
 // as the super-admin campaign detail Result tab, but scoped to the manager's OWN
@@ -28,6 +28,14 @@ export function CampaignResultSummary({ campaign, todayISO }: { campaign: Campai
     { label: 'KPI target', value: vnd(target), icon: Target, tile: 'bg-primary/10 text-primary' },
     { label: 'Actual GMV', value: synced ? vnd(actual) : '—', icon: TrendingUp,
       tile: synced && actual > 0 ? 'bg-status-success-bg text-status-success' : 'bg-muted text-muted-foreground' },
+    // P3-E: breakdown 2 nguồn — CHỈ khi campaign bật cả 2 chỉ số (1 metric giữ
+    // layout cũ nguyên vẹn).
+    ...(campaign.metric_offline && campaign.metric_affiliate ? [
+      { label: 'GMV Offline', value: synced ? vnd(campaign.actual_offline ?? 0) : '—', icon: StoreIcon as LucideIcon,
+        tile: 'bg-primary/10 text-primary' },
+      { label: 'GMV Affiliate', value: synced ? vnd(campaign.actual_affiliate ?? 0) : '—', icon: LinkIcon as LucideIcon,
+        tile: 'bg-muted text-muted-foreground' },
+    ] : []),
     { label: 'Hoàn thành', value: synced ? `${pct.toFixed(1)}%` : '—', icon: Percent,
       tile: 'bg-primary/10 text-primary', bar: true,
       valueCls: !synced ? undefined : pct >= 100 ? 'text-status-success' : 'text-primary' },
