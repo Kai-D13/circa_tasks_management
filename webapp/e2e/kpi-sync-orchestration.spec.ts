@@ -181,6 +181,31 @@ test.describe('kpi sync orchestration @desktop', () => {
     expect(calls.replace).toBe(1)
   })
 
+  // P3-G (audit 24/07): campaign chưa đến kỳ → snapshot_preserved, KHÔNG gọi
+  // targets/health/Mongo/BigQuery/replace ở CẢ 3 cấu hình metric — không ghi
+  // snapshot 0đ, không cập nhật timestamp sync.
+  test('P3-G CHƯA ĐẾN KỲ: preserved + 0 call nguồn/ghi ở cả 3 cấu hình metric', async () => {
+    for (const metrics of [
+      { metric_offline: true, metric_affiliate: false },
+      { metric_offline: false, metric_affiliate: true },
+      { metric_offline: true, metric_affiliate: true },
+    ]) {
+      const { deps, calls } = mkDeps(CFG({ ...metrics, start_date: '2026-08-01', end_date: '2026-08-31' }))
+      const r = await syncCampaignWithDeps('camp-1', deps)
+      expect(r.status).toBe('snapshot_preserved')
+      if (r.status === 'snapshot_preserved') expect(r.reason).toContain('chưa đến kỳ')
+      expect(calls).toEqual({ campaign: 1, targets: 0, stores: 0, health: 0, agg: 0, sa: 0, bq: 0, replace: 0 })
+    }
+  })
+
+  test('P3-G BIÊN NGÀY BẮT ĐẦU: start_date == hôm nay VN → sync chạy bình thường', async () => {
+    // NOW (2026-07-23T10:00Z) = 23/07 giờ VN → start đúng hôm nay KHÔNG bị chặn.
+    const { deps, calls } = mkDeps(CFG({ start_date: '2026-07-23' }))
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('success')
+    expect(calls.replace).toBe(1)
+  })
+
   test('METRIC GUARD: cả 2 metric tắt → failed; mọi call sau campaign = 0 (r1.1)', async () => {
     const { deps, calls } = mkDeps(CFG({ metric_offline: false, metric_affiliate: false }))
     const r = await syncCampaignWithDeps('camp-1', deps)

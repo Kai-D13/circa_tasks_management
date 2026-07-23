@@ -68,6 +68,15 @@ export async function syncCampaignWithDeps(
     return preserved('KPI_AFFILIATE_ENABLED đang tắt — campaign có chỉ số affiliate không vận hành, giữ snapshot cũ')
   }
 
+  // P3-G (audit 24/07): campaign CHƯA ĐẾN KỲ (start_date > hôm nay VN) →
+  // không vận hành: không load targets, không gọi health/Mongo/BigQuery,
+  // không ghi snapshot 0đ, không cập nhật timestamp sync. Ngày bắt đầu
+  // (start == today) chạy bình thường.
+  const todayVn = vnTodayISO(deps.nowMs())
+  if (c.start_date > todayVn) {
+    return preserved(`campaign chưa đến kỳ (bắt đầu ${c.start_date}, hôm nay ${todayVn}) — không gọi nguồn dữ liệu, giữ snapshot`)
+  }
+
   const { data: targets, error: tErr } = await deps.loadTargets(campaignId)
   if (tErr) return failed(`Không đọc được targets: ${tErr.message}`)
   if (!targets || targets.length === 0) {
@@ -76,7 +85,6 @@ export async function syncCampaignWithDeps(
   }
   const storeIds = targets.map((t) => t.store_id)
 
-  const todayVn = vnTodayISO(deps.nowMs())
   const effEnd = effectiveEndISO(c.end_date, todayVn)
   const rangeValid = c.start_date <= effEnd
 

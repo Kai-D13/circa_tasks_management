@@ -28,7 +28,7 @@ export function SyncActualsButton({ campaignId }: { campaignId: string }) {
         // A store has a target but ZERO BigQuery rows in the range — surface it
         // so admin doesn't read a silent 0 as a clean sync.
         toast.warning(
-          `Đồng bộ ${ok.upserted ?? 0} cửa hàng — ${unmatched.length} POS chưa có dữ liệu BigQuery: ${unmatched.slice(0, 5).join(', ')}${unmatched.length > 5 ? '…' : ''}`,
+          `Đồng bộ ${ok.upserted ?? 0} cửa hàng — ${unmatched.length} POS chưa có dữ liệu Offline (BigQuery) trong kỳ: ${unmatched.slice(0, 5).join(', ')}${unmatched.length > 5 ? '…' : ''}`,
           { duration: 8000 },
         )
       } else {
@@ -41,7 +41,7 @@ export function SyncActualsButton({ campaignId }: { campaignId: string }) {
   return (
     <Button size="sm" variant="outline" onClick={handleSync} disabled={pending} className="gap-1.5">
       <RefreshCw className={pending ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
-      {pending ? 'Đang đồng bộ…' : 'Đồng bộ doanh số từ BI'}
+      {pending ? 'Đang đồng bộ…' : 'Đồng bộ doanh số'}
     </Button>
   )
 }
