@@ -35,6 +35,9 @@ export interface ActualRowPayload {
   actual_value: number; actual_offline: number; actual_affiliate: number
   run_rate: number | null; remaining_target: number
   achieved_tier_order: number | null; store_commission_pool: number | null
+  // CONTRACT (chốt audit P3-B r1): raw_row_count = SỐ DÒNG DAILY SNAPSHOT SAU
+  // MERGE (union ngày của 2 nguồn) — tức "số ngày có dữ liệu" của store, KHÔNG
+  // còn là số row BigQuery thuần. Export/UI phải diễn giải theo nghĩa này.
   raw_row_count: number
   offline_synced_at: string | null; affiliate_synced_at: string | null; synced_at: string
 }
