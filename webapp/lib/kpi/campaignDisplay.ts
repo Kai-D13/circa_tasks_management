@@ -1,8 +1,16 @@
 // P3-E/F r1 — Contract HIỂN THỊ campaign (THUẦN, audit P2#3): mọi quyết định
 // render breakdown / footnote / trạng thái metric-editor nằm ở đây để test
 // khóa contract — component chỉ tiêu thụ.
+// r2 (audit P3): structural type CỤC BỘ — tầng lib không import type từ
+// component UI (tránh đảo chiều phụ thuộc); CampaignView khớp structurally.
 
-import type { CampaignView } from '@/components/kpi/CampaignKpiView'
+export interface BreakdownInput {
+  metric_offline: boolean
+  metric_affiliate: boolean
+  kpi_target: number
+  actual_offline: number | null
+  actual_affiliate: number | null
+}
 
 export interface BreakdownModel {
   show: boolean                 // CHỈ true khi campaign bật CẢ 2 chỉ số
@@ -10,7 +18,7 @@ export interface BreakdownModel {
   affiliatePct: number | null
 }
 
-export function breakdownModel(v: Pick<CampaignView, 'metric_offline' | 'metric_affiliate' | 'kpi_target' | 'actual_offline' | 'actual_affiliate'>): BreakdownModel {
+export function breakdownModel(v: BreakdownInput): BreakdownModel {
   const pct = (x: number | null) =>
     x === null || v.kpi_target <= 0 ? null : Math.round((x / v.kpi_target) * 100)
   return {
