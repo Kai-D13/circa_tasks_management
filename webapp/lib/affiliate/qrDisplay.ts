@@ -17,6 +17,14 @@ export function qrCardVisible(p: {
   return p.flagEnabled && p.eligibleRole && p.storeResolved && !p.inCampaignDetail
 }
 
+// r1.1 (audit P2): state client gắn THEO URL ảnh — trạng thái ảnh-lỗi/modal
+// của store A không được "dính" sang store B khi SM đổi store. Component lưu
+// URL đã đánh dấu (failedUrl/openUrl); state chỉ active khi vẫn là ảnh hiện
+// tại — đổi imageUrl ⇒ tự reset, không cần effect.
+export function urlStateActive(markedUrl: string | null, currentUrl: string | null): boolean {
+  return markedUrl !== null && markedUrl === currentUrl
+}
+
 // Trạng thái card (audit P2 #3): lỗi query ≠ chưa cấu hình — lỗi DB/RLS/
 // migration phải hiện "Không tải được", không được giả dạng "chưa cấu hình".
 export type QrCardState = 'qr' | 'missing' | 'error'

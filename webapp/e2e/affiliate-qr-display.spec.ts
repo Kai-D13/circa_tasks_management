@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { AFFILIATE_QR_FILTER, qrCardVisible, qrCardState } from '../lib/affiliate/qrDisplay'
+import { AFFILIATE_QR_FILTER, qrCardVisible, qrCardState, urlStateActive } from '../lib/affiliate/qrDisplay'
 import { decideUpload } from '../scripts/qr-upload-decision.mjs'
 
 // P3-H r1 unit gate (audit 24/07) — khóa contract hiển thị QR + quyết định
@@ -37,6 +37,15 @@ test.describe('affiliate qr display + upload contract @desktop', () => {
     expect(qrCardState(false, null)).toBe('missing')
     expect(qrCardState(false, { qr_image_url: null })).toBe('missing')
     expect(qrCardState(false, { qr_image_url: 'https://x/qr.png' })).toBe('qr')
+  })
+
+  test('r1.1: ảnh store A lỗi → SM đổi store B → state lỗi/modal KHÔNG dính, QR B render', () => {
+    const qrA = 'https://storage.googleapis.com/duocsi-circa-vn/affiliate-qr/v1/POS0009/CIRCA-CENTRAL.png'
+    const qrB = 'https://storage.googleapis.com/duocsi-circa-vn/affiliate-qr/v1/POS0059/CIRCA-TAMVIET.png'
+    expect(urlStateActive(qrA, qrA)).toBe(true)   // đang ở A: trạng thái lỗi/modal hiện
+    expect(urlStateActive(qrA, qrB)).toBe(false)  // đổi sang B: tự reset → QR B render
+    expect(urlStateActive(null, qrB)).toBe(false) // chưa đánh dấu gì
+    expect(urlStateActive(qrA, null)).toBe(false) // store B chưa có QR → cũng không dính
   })
 
   test('upload immutable (audit P1#1): chưa có → UPLOAD_NEW; re-run SHA khớp → SKIP_OK; SHA khác → FAIL', () => {

@@ -26,7 +26,6 @@ import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const QR_DIR = 'C:/webapp_management/QR_code_affiliate'
 const VERIFY_ONLY = process.argv.includes('--verify-only')
 
 // Manifest (docs/affiliate-qr-manifest.md — decode 24/07, stakeholder duyệt).
@@ -71,6 +70,11 @@ try {
 const BUCKET = env.GCS_BUCKET
 const BASE = (env.GCS_PUBLIC_BASE_URL ?? '').replace(/\/+$/, '')
 if (!BUCKET || !BASE) { console.error('THIẾU GCS_BUCKET / GCS_PUBLIC_BASE_URL'); process.exit(2) }
+
+// r1.1 (audit P3): nguồn ảnh cấu hình được — --dir=<path> > AFFILIATE_QR_SOURCE_DIR
+// > default máy dev hiện tại.
+const dirArg = process.argv.find((a) => a.startsWith('--dir='))
+const QR_DIR = dirArg ? dirArg.slice('--dir='.length) : (env.AFFILIATE_QR_SOURCE_DIR ?? 'C:/webapp_management/QR_code_affiliate')
 
 function loadSA() {
   const raw = env.GCS_SA_KEY

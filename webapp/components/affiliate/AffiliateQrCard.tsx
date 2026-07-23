@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { QrCode, ExternalLink } from 'lucide-react'
-import { qrCardState } from '@/lib/affiliate/qrDisplay'
+import { qrCardState, urlStateActive } from '@/lib/affiliate/qrDisplay'
 
 // P3-H r1 (stakeholder 24/07) — QR Affiliate của store trên landing /targets:
 // khách quét → đặt hàng Circa Online → đơn gắn partner code của store (GMV
@@ -21,8 +21,12 @@ export function AffiliateQrCard({ storeName, partnerCode, imageUrl, destinationU
   destinationUrl: string | null
   queryError?: boolean
 }) {
-  const [open, setOpen] = useState(false)
-  const [imgFailed, setImgFailed] = useState(false)
+  // r1.1 (audit P2): state gắn theo URL — SM đổi store (imageUrl đổi) thì
+  // trạng thái ảnh-lỗi + modal của store cũ tự reset (urlStateActive, có test).
+  const [openUrl, setOpenUrl] = useState<string | null>(null)
+  const [failedUrl, setFailedUrl] = useState<string | null>(null)
+  const open = urlStateActive(openUrl, imageUrl)
+  const imgFailed = urlStateActive(failedUrl, imageUrl)
   const state = qrCardState(queryError, imageUrl ? { qr_image_url: imageUrl } : null)
 
   return (
@@ -59,7 +63,7 @@ export function AffiliateQrCard({ storeName, partnerCode, imageUrl, destinationU
                   máy khác quét ổn định. Chạm → modal phóng lớn. */}
               <button
                 type="button"
-                onClick={() => setOpen(true)}
+                onClick={() => setOpenUrl(imageUrl)}
                 aria-label="Phóng to mã QR"
                 className="rounded-lg border bg-white p-2 active:opacity-80"
               >
@@ -68,7 +72,7 @@ export function AffiliateQrCard({ storeName, partnerCode, imageUrl, destinationU
                   src={imageUrl!}
                   alt={`Mã QR Affiliate ${storeName}`}
                   loading="lazy"
-                  onError={() => setImgFailed(true)}
+                  onError={() => setFailedUrl(imageUrl)}
                   className="h-[220px] w-[220px] sm:h-[240px] sm:w-[240px] object-contain"
                 />
               </button>
@@ -81,7 +85,7 @@ export function AffiliateQrCard({ storeName, partnerCode, imageUrl, destinationU
             </div>
 
             {/* r1 (audit P2 #5): modal bo theo viewport — không sát/tràn 360px */}
-            <Dialog open={open} onOpenChange={setOpen}>
+            <Dialog open={open} onOpenChange={(o) => setOpenUrl(o ? imageUrl : null)}>
               <DialogContent className="w-[calc(100vw-2rem)] max-w-sm">
                 <DialogTitle className="text-sm pr-8">Mã QR Circa Online · {storeName}</DialogTitle>
                 <div className="mx-auto w-full max-w-[320px] rounded-lg border bg-white p-2">
@@ -89,7 +93,7 @@ export function AffiliateQrCard({ storeName, partnerCode, imageUrl, destinationU
                   <img
                     src={imageUrl!}
                     alt={`Mã QR Affiliate ${storeName}`}
-                    onError={() => setImgFailed(true)}
+                    onError={() => setFailedUrl(imageUrl)}
                     className="w-full aspect-square object-contain"
                   />
                 </div>
