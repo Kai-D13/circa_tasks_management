@@ -2,6 +2,7 @@ import 'server-only'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { campaignDailyQuery, loadServiceAccount, runBigQuery } from '@/lib/targets/bigquery'
 import { getAffiliateSyncHealth, supabaseAffiliateHealthDb } from '@/lib/affiliate/health'
+import { isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import {
   syncCampaignWithDeps,
   type SyncCampaignDeps, type SyncCampaignResult,
@@ -63,6 +64,7 @@ function realDeps(): SyncCampaignDeps {
       return { data: data as number | null, error }
     },
     nowMs: () => Date.now(),
+    isAffiliateFeatureEnabled: () => isKpiAffiliateEnabled(),
   }
 }
 

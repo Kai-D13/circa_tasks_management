@@ -121,6 +121,8 @@ export async function toggleCampaign(id: string) {
 
   if (c.status === 'active') {
     // Race guard: chỉ pause khi VẪN đang active (audit P3-D2).
+    // r1.2: pause CỐ TÌNH không kiểm tra KPI_AFFILIATE_ENABLED — campaign
+    // affiliate đang active khi flag tắt vẫn phải pause được để xử lý sự cố.
     const { data: paused, error } = await auth.supabase.from('kpi_campaigns')
       .update({ status: 'paused', updated_at: new Date().toISOString() })
       .eq('id', id).eq('status', 'active').select('id')
@@ -150,7 +152,7 @@ export async function toggleCampaign(id: string) {
         return { data, error }
       },
       getHealth: (storeIds) => getAffiliateSyncHealth(supabaseAffiliateHealthDb(auth.supabase), storeIds),
-    }, id)
+    }, id, isKpiAffiliateEnabled())
     if (!ev.ok) return { error: ev.error }
 
     const { error: actErr } = await supabaseAdmin.rpc('rpc_activate_kpi_campaign', {

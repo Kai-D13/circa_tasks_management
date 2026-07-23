@@ -32,6 +32,7 @@ export type ActivationEvaluation =
 export async function evaluateActivation(
   deps: ActivationDeps,
   campaignId: string,
+  affiliateFlagEnabled: boolean,
 ): Promise<ActivationEvaluation> {
   const fail = (error: string): ActivationEvaluation => ({ ok: false, error })
 
@@ -40,6 +41,13 @@ export async function evaluateActivation(
   if (!c) return fail('Không tìm thấy chiến dịch')
   if (c.status === 'active') return fail('Chiến dịch đang chạy')
   if (c.status !== 'draft' && c.status !== 'paused') return fail('Chiến dịch đã kết thúc')
+  // r1.2 (audit P1 flag boundary): flag tắt → KHÔNG kích hoạt campaign
+  // affiliate — dừng ngay sau load campaign, không load targets/stores/health.
+  // (Pause campaign affiliate đang active KHÔNG đi qua hàm này — vẫn pause
+  // được để xử lý sự cố.)
+  if (c.metric_affiliate && !affiliateFlagEnabled) {
+    return fail('Chỉ số GMV Affiliate đang tắt trên hệ thống (KPI_AFFILIATE_ENABLED) — không thể kích hoạt chiến dịch affiliate')
+  }
 
   const { data: targets, error: tErr } = await deps.loadTargets(campaignId)
   if (tErr) return fail(`Không kiểm tra được target: ${tErr.message}`)

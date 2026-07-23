@@ -37,6 +37,9 @@ export interface SyncCampaignDeps {
   runBqChunk(sa: unknown, chunkStart: string, chunkEnd: string): Promise<Record<string, unknown>[]>
   replaceActuals(campaignId: string, daily: DailyRowPayload[], actuals: ActualRowPayload[]): Promise<DbResult<number>>
   nowMs(): number
+  // r1.2 (audit P1 flag boundary): trạng thái KPI_AFFILIATE_ENABLED — campaign
+  // có metric_affiliate khi flag TẮT không được vận hành (kể cả hybrid).
+  isAffiliateFeatureEnabled(): boolean
 }
 
 export async function syncCampaignWithDeps(
@@ -56,6 +59,13 @@ export async function syncCampaignWithDeps(
   // không bao giờ dựng payload zero/gọi replace ở trạng thái này.
   if (!metricOffline && !metricAffiliate) {
     return failed('Campaign không bật chỉ số doanh số nào (metric_offline + metric_affiliate đều tắt)')
+  }
+  // r1.2 (audit P1): flag KPI_AFFILIATE_ENABLED tắt → campaign có affiliate
+  // (kể cả HYBRID) không vận hành — giữ TOÀN BỘ snapshot, không load targets,
+  // không health/BQ/replace, không ghi partial offline gây lệch nhất quán.
+  // Offline-only không bị ảnh hưởng.
+  if (metricAffiliate && !deps.isAffiliateFeatureEnabled()) {
+    return preserved('KPI_AFFILIATE_ENABLED đang tắt — campaign có chỉ số affiliate không vận hành, giữ snapshot cũ')
   }
 
   const { data: targets, error: tErr } = await deps.loadTargets(campaignId)

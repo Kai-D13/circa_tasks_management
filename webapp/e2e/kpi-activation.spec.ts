@@ -43,7 +43,7 @@ function mkDeps(camp: ActivationCampaign, behavior: Behavior = {}) {
 test.describe('kpi activation wiring @desktop', () => {
   test('OFFLINE-ONLY: stores/health 0 lần; expectedRunId=null; expectedUpdatedAt đúng', async () => {
     const { deps, calls } = mkDeps(CAMP())
-    const r = await evaluateActivation(deps, 'camp-1')
+    const r = await evaluateActivation(deps, 'camp-1', true)
     expect(r).toEqual({ ok: true, expectedUpdatedAt: '2026-07-23T08:00:00.000Z', expectedRunId: null })
     expect(calls).toEqual({ campaign: 1, targets: 1, stores: 0, health: 0 })
   })
@@ -56,7 +56,7 @@ test.describe('kpi activation wiring @desktop', () => {
         return { data: ids.map((id) => ({ id, code: id, store_type: 'os', is_active: true })), error: null }
       },
     })
-    const r = await evaluateActivation(deps, 'camp-1')
+    const r = await evaluateActivation(deps, 'camp-1', true)
     expect(r).toEqual({ ok: true, expectedUpdatedAt: '2026-07-23T08:00:00.000Z', expectedRunId: 'run-A' })
     expect(calls.health).toBe(1)
     expect(storesRequested).toEqual(['s-a', 's-b']) // đủ MỌI target, không limit
@@ -75,7 +75,7 @@ test.describe('kpi activation wiring @desktop', () => {
           error: null,
         }),
       })
-      const r = await evaluateActivation(deps, 'camp-1')
+      const r = await evaluateActivation(deps, 'camp-1', true)
       expect(r.ok).toBe(false)
       if (!r.ok) expect(r.error).toContain('không phải OS store active')
       expect(calls.health).toBe(0) // store sai → dừng trước health
@@ -86,7 +86,7 @@ test.describe('kpi activation wiring @desktop', () => {
     const { deps } = mkDeps(CAMP({ metric_affiliate: true }), {
       health: async () => ({ ...READY, ready: false, reason: 'snapshot stale 400 phút (> 180)' }),
     })
-    const r = await evaluateActivation(deps, 'camp-1')
+    const r = await evaluateActivation(deps, 'camp-1', true)
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error).toContain('stale')
   })
@@ -95,27 +95,42 @@ test.describe('kpi activation wiring @desktop', () => {
     const { deps, calls } = mkDeps(CAMP({ metric_affiliate: true }), {
       health: async () => { throw new Error('network down') },
     })
-    const r = await evaluateActivation(deps, 'camp-1')
+    const r = await evaluateActivation(deps, 'camp-1', true)
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error).toContain('Không kiểm tra được nguồn affiliate')
     expect(calls.health).toBe(1) // vẫn được đếm
   })
 
+  test('r1.2 FLAG OFF + campaign affiliate: lỗi NGAY sau load campaign — targets/stores/health đều 0', async () => {
+    const { deps, calls } = mkDeps(CAMP({ metric_affiliate: true }))
+    const r = await evaluateActivation(deps, 'camp-1', false)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('KPI_AFFILIATE_ENABLED')
+    expect(calls).toEqual({ campaign: 1, targets: 0, stores: 0, health: 0 })
+  })
+
+  test('r1.2 FLAG OFF + campaign OFFLINE-only: vẫn kích hoạt bình thường (không phụ thuộc flag)', async () => {
+    const { deps, calls } = mkDeps(CAMP())
+    const r = await evaluateActivation(deps, 'camp-1', false)
+    expect(r.ok).toBe(true)
+    expect(calls.stores + calls.health).toBe(0)
+  })
+
   test('no targets → lỗi; status active/ended/missing → lỗi tương ứng', async () => {
     const empty = mkDeps(CAMP({ metric_affiliate: true }), { targets: async () => ({ data: [], error: null }) })
-    const r1 = await evaluateActivation(empty.deps, 'camp-1')
+    const r1 = await evaluateActivation(empty.deps, 'camp-1', true)
     expect(r1.ok).toBe(false)
     if (!r1.ok) expect(r1.error).toContain('Chưa import target')
     expect(empty.calls.stores + empty.calls.health).toBe(0)
 
     const active = mkDeps(CAMP({ status: 'active' }))
-    expect((await evaluateActivation(active.deps, 'camp-1')).ok).toBe(false)
+    expect((await evaluateActivation(active.deps, 'camp-1', true)).ok).toBe(false)
 
     const ended = mkDeps(CAMP({ status: 'ended' }))
-    const r3 = await evaluateActivation(ended.deps, 'camp-1')
+    const r3 = await evaluateActivation(ended.deps, 'camp-1', true)
     if (!r3.ok) expect(r3.error).toContain('kết thúc')
 
     const missing = mkDeps(CAMP(), { campaign: async () => ({ data: null, error: null }) })
-    expect((await evaluateActivation(missing.deps, 'camp-1')).ok).toBe(false)
+    expect((await evaluateActivation(missing.deps, 'camp-1', true)).ok).toBe(false)
   })
 })

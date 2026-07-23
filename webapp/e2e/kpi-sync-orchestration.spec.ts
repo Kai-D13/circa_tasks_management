@@ -37,6 +37,7 @@ interface Behavior {
   sa?: () => unknown | null
   bq?: () => Promise<Record<string, unknown>[]>
   replace?: SyncCampaignDeps['replaceActuals']
+  flag?: boolean                                            // KPI_AFFILIATE_ENABLED (default true)
 }
 
 function mkDeps(cfg: CampaignConfig, behavior: Behavior = {}) {
@@ -69,6 +70,7 @@ function mkDeps(cfg: CampaignConfig, behavior: Behavior = {}) {
       return behavior.replace ? behavior.replace(id, daily, actuals) : { data: actuals.length, error: null }
     },
     nowMs: () => NOW,
+    isAffiliateFeatureEnabled: () => behavior.flag ?? true,
   }
   return { deps, calls, seq }
 }
@@ -153,6 +155,30 @@ test.describe('kpi sync orchestration @desktop', () => {
     expect(calls.sa).toBe(0)
     expect(calls.bq).toBe(0)
     expect(calls.replace).toBe(0)
+  })
+
+  test('r1.2 FLAG OFF + AFFILIATE-ONLY: snapshot_preserved; targets/health/BQ/replace đều 0', async () => {
+    const { deps, calls } = mkDeps(CFG({ metric_offline: false, metric_affiliate: true }), { flag: false })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    if (r.status === 'snapshot_preserved') expect(r.reason).toContain('KPI_AFFILIATE_ENABLED')
+    expect(calls).toEqual({ campaign: 1, targets: 0, stores: 0, health: 0, agg: 0, sa: 0, bq: 0, replace: 0 })
+  })
+
+  test('r1.2 FLAG OFF + HYBRID: preserve TOÀN BỘ — không ghi partial offline', async () => {
+    const { deps, calls } = mkDeps(CFG({ metric_affiliate: true }), { flag: false })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    expect(calls.sa).toBe(0)      // không đụng cả BigQuery
+    expect(calls.bq).toBe(0)
+    expect(calls.replace).toBe(0) // không partial write
+  })
+
+  test('r1.2 FLAG OFF + OFFLINE-ONLY: vẫn success bình thường', async () => {
+    const { deps, calls } = mkDeps(CFG(), { flag: false })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('success')
+    expect(calls.replace).toBe(1)
   })
 
   test('METRIC GUARD: cả 2 metric tắt → failed; mọi call sau campaign = 0 (r1.1)', async () => {
