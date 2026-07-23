@@ -15,7 +15,7 @@ import { CampaignResultSummary } from '@/components/kpi/CampaignResultSummary'
 import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import { isReferralEnabled } from '@/lib/affiliate/flags'
 import { AffiliateQrCard } from '@/components/affiliate/AffiliateQrCard'
-import { AFFILIATE_QR_FILTER, qrCardVisible } from '@/lib/affiliate/qrDisplay'
+import { AFFILIATE_QR_FILTER, qrCardVisible, qrCardKey } from '@/lib/affiliate/qrDisplay'
 import { ReferralCard, type ReferralItem } from '@/components/referral/ReferralCard'
 import { formatDateTime, currentWeekStart } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
@@ -374,6 +374,7 @@ export default async function TargetsPage({
         {/* P3-H: QR dưới danh sách campaign, theo store đang chọn — ẩn trong detail */}
         {showAffiliateQr && (
           <AffiliateQrCard
+            key={qrCardKey(resolvedStoreId ?? null, affiliateQr?.qr_image_url ?? null)}
             storeName={selStore?.name ?? 'Cửa hàng'}
             partnerCode={affiliateQr?.partner_code ?? null}
             imageUrl={affiliateQr?.qr_image_url ?? null}
@@ -412,6 +413,7 @@ export default async function TargetsPage({
         {/* P3-H: QR dưới danh sách campaign (hiện cả khi chưa có campaign) — ẩn trong detail */}
         {showAffiliateQr && (
           <AffiliateQrCard
+            key={qrCardKey(resolvedStoreId ?? null, affiliateQr?.qr_image_url ?? null)}
             storeName={storeName}
             partnerCode={affiliateQr?.partner_code ?? null}
             imageUrl={affiliateQr?.qr_image_url ?? null}
@@ -506,6 +508,7 @@ export default async function TargetsPage({
               {/* P3-H: QR ngay dưới danh sách chiến dịch */}
               {showAffiliateQr && (
                 <AffiliateQrCard
+                  key={qrCardKey(resolvedStoreId ?? null, affiliateQr?.qr_image_url ?? null)}
                   storeName={storeName}
                   partnerCode={affiliateQr?.partner_code ?? null}
                   imageUrl={affiliateQr?.qr_image_url ?? null}
@@ -580,6 +583,7 @@ export default async function TargetsPage({
             không phụ thuộc vòng đời campaign) */}
         {showAffiliateQr && (
           <AffiliateQrCard
+            key={qrCardKey(resolvedStoreId ?? null, affiliateQr?.qr_image_url ?? null)}
             storeName={storeName}
             partnerCode={affiliateQr?.partner_code ?? null}
             imageUrl={affiliateQr?.qr_image_url ?? null}

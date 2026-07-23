@@ -21,8 +21,10 @@ export function AffiliateQrCard({ storeName, partnerCode, imageUrl, destinationU
   destinationUrl: string | null
   queryError?: boolean
 }) {
-  // r1.1 (audit P2): state gắn theo URL — SM đổi store (imageUrl đổi) thì
-  // trạng thái ảnh-lỗi + modal của store cũ tự reset (urlStateActive, có test).
+  // r1.2 (audit P2 vòng A→B→A): parent gắn key={qrCardKey(storeId, imageUrl)}
+  // — đổi store/ảnh ⇒ REMOUNT instance mới, state sạch + browser retry ảnh;
+  // quay lại store cũ cũng là instance mới (React không giữ state qua unmount).
+  // urlStateActive (r1.1) giữ làm phòng thủ trong đời một instance.
   const [openUrl, setOpenUrl] = useState<string | null>(null)
   const [failedUrl, setFailedUrl] = useState<string | null>(null)
   const open = urlStateActive(openUrl, imageUrl)

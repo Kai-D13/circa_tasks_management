@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { AFFILIATE_QR_FILTER, qrCardVisible, qrCardState, urlStateActive } from '../lib/affiliate/qrDisplay'
+import { AFFILIATE_QR_FILTER, qrCardVisible, qrCardState, urlStateActive, qrCardKey } from '../lib/affiliate/qrDisplay'
 import { decideUpload } from '../scripts/qr-upload-decision.mjs'
 
 // P3-H r1 unit gate (audit 24/07) — khóa contract hiển thị QR + quyết định
@@ -46,6 +46,21 @@ test.describe('affiliate qr display + upload contract @desktop', () => {
     expect(urlStateActive(qrA, qrB)).toBe(false)  // đổi sang B: tự reset → QR B render
     expect(urlStateActive(null, qrB)).toBe(false) // chưa đánh dấu gì
     expect(urlStateActive(qrA, null)).toBe(false) // store B chưa có QR → cũng không dính
+  })
+
+  test('r1.2: qrCardKey — vòng A→B→A: MỖI lần đổi store/ảnh key ĐỔI → remount instance mới (lỗi/modal cũ không sống lại)', () => {
+    const qrA = 'https://storage.googleapis.com/duocsi-circa-vn/affiliate-qr/v1/POS0009/CIRCA-CENTRAL.png'
+    const qrB = 'https://storage.googleapis.com/duocsi-circa-vn/affiliate-qr/v1/POS0059/CIRCA-TAMVIET.png'
+    const kA = qrCardKey('store-a', qrA)
+    const kB = qrCardKey('store-b', qrB)
+    expect(kA).not.toBe(kB)                        // A→B: key đổi → remount
+    // B→A: key đổi so với instance B đang mount → remount instance A MỚI.
+    // (React discard state khi key đổi và KHÔNG cache state qua unmount —
+    // ảnh A được browser retry, modal không tự mở lại.)
+    expect(qrCardKey('store-a', qrA)).not.toBe(kB)
+    expect(qrCardKey('store-a', qrA)).toBe(kA)     // key ổn định khi không đổi gì
+    expect(qrCardKey('store-a', null)).not.toBe(kA)  // cùng store, ảnh đổi/mất → remount
+    expect(qrCardKey(null, null)).toBe('none|none')  // store chưa resolve vẫn có key hợp lệ
   })
 
   test('upload immutable (audit P1#1): chưa có → UPLOAD_NEW; re-run SHA khớp → SKIP_OK; SHA khác → FAIL', () => {

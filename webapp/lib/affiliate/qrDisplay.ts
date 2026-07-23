@@ -25,6 +25,16 @@ export function urlStateActive(markedUrl: string | null, currentUrl: string | nu
   return markedUrl !== null && markedUrl === currentUrl
 }
 
+// r1.2 (audit P2 — vòng A→B→A): page gắn key này cho AffiliateQrCard. Key đổi
+// ⇒ React DISCARD instance cũ + mount instance MỚI (state failedUrl/openUrl
+// sạch, browser retry tải ảnh). Quan trọng: React không "cache" state theo
+// key qua các lần unmount — quay lại A sau khi qua B vẫn là instance mới,
+// lỗi/modal cũ của A không sống lại. urlStateActive giữ làm phòng thủ trong
+// đời một instance (nếu parent nào quên gắn key).
+export function qrCardKey(storeId: string | null, imageUrl: string | null): string {
+  return `${storeId ?? 'none'}|${imageUrl ?? 'none'}`
+}
+
 // Trạng thái card (audit P2 #3): lỗi query ≠ chưa cấu hình — lỗi DB/RLS/
 // migration phải hiện "Không tải được", không được giả dạng "chưa cấu hình".
 export type QrCardState = 'qr' | 'missing' | 'error'
