@@ -152,6 +152,18 @@ test.describe('kpi sync batch contract @desktop', () => {
     expect(sanitizeOpsText('dòng1\r\ndòng2\ndòng3')).toBe('dòng1 dòng2 dòng3')
   })
 
+  test('r1.1 sanitizeOpsText: lowercase bearer + lỗi Supabase giả không lọt secret', () => {
+    // Bearer viết thường cũng phải che (regex case-insensitive)
+    expect(sanitizeOpsText('authorization: bearer fakeTok123')).toBe('authorization: Bearer ***')
+    // Message lỗi Supabase/PostgREST giả có chứa connection info → sạch
+    const fakeSupabaseErr = 'FetchError: request to https://db.example.supabase.co failed\nSUPABASE_SERVICE_ROLE_KEY=eyJfakeServiceKey reason: connect ETIMEDOUT'
+    const clean = sanitizeOpsText(fakeSupabaseErr)
+    expect(clean).not.toContain('eyJfakeServiceKey')
+    expect(clean).not.toContain('\n')
+    expect(clean).toContain('SUPABASE_SERVICE_ROLE_KEY=***')
+    expect(clean).toContain('ETIMEDOUT') // vẫn giữ dấu vết chẩn đoán
+  })
+
   test('r1 REVALIDATE: auto-end vẫn revalidate dù toàn bộ preserved; batch rỗng thì không', () => {
     expect(shouldRevalidateAfterBatch(false, 2)).toBe(true)   // auto-end đổi DB → refresh cache
     expect(shouldRevalidateAfterBatch(true, 0)).toBe(true)

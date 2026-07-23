@@ -9,8 +9,8 @@ export function sanitizeOpsText(input: string): string {
     .replace(/[\r\n]+/g, ' ')
     // Connection string Mongo (mongodb:// và mongodb+srv://) — che toàn bộ phần sau scheme
     .replace(/mongodb(\+srv)?:\/\/[^\s"']+/gi, 'mongodb$1://***')
-    // Authorization bearer token
-    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/g, 'Bearer ***')
+    // Authorization bearer token (case-insensitive — 'bearer x' cũng phải che)
+    .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer ***')
     // Cặp KEY=value / KEY: value của các secret đã biết + password nói chung
     .replace(/(MONGODB_AFFILIATE_URI|SUPABASE_SERVICE_ROLE_KEY|CRON_SECRET|BQ_SERVICE_ACCOUNT_KEY|QA_PASSWORD|password)\s*[=:]\s*[^\s"']+/gi, '$1=***')
 }

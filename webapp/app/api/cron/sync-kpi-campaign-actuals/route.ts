@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
       .eq('status', 'active')
       .lt('end_date', vnTodayISO)
       .select('id')
-    if (endErr) console.error('[sync-kpi-campaign] auto-end failed:', endErr.message)
+    if (endErr) console.error('[sync-kpi-campaign] auto-end failed:', sanitizeOpsText(endErr.message))
 
     // Active + recently-ended (≤3 days) campaigns to sync.
     const cutoff = new Date(Date.parse(vnTodayISO) - 3 * 86400_000).toISOString().slice(0, 10)
@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
       .from('kpi_campaigns')
       .select('id, name')
       .or(`status.eq.active,and(status.eq.ended,end_date.gte.${cutoff})`)
-    if (cErr) return NextResponse.json({ error: cErr.message }, { status: 500 })
+    if (cErr) return NextResponse.json({ error: sanitizeOpsText(cErr.message) }, { status: 500 })
 
     // P3-C: toàn bộ contract batch (200/207/500 + body + log lines) nằm trong
     // runSyncBatch THUẦN (lib/kpi/syncBatch.ts — có test riêng); route chỉ IO.
