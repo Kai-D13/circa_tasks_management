@@ -3,7 +3,8 @@ import { revalidatePath } from 'next/cache'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { isKpiCampaignEnabled } from '@/lib/kpi/flags'
 import { syncCampaign } from '@/lib/kpi/actuals'
-import { runSyncBatch } from '@/lib/kpi/syncBatch'
+import { runSyncBatch, shouldRevalidateAfterBatch } from '@/lib/kpi/syncBatch'
+import { sanitizeOpsText } from '@/lib/ops/sanitize'
 
 // GET /api/cron/sync-kpi-campaign-actuals — KPI Campaign actual-GMV sync.
 // 1. Auto-transition: active campaigns past end_date → 'ended'.
@@ -48,8 +49,9 @@ export async function GET(request: NextRequest) {
     const outcome = await runSyncBatch(campaigns ?? [], syncCampaign)
     for (const line of outcome.logLines) console.warn(line)
 
-    // Chỉ revalidate khi có snapshot MỚI được ghi (preserved/failed giữ số cũ).
-    if (outcome.anySuccess) {
+    // Revalidate khi có snapshot MỚI hoặc có campaign vừa auto-end (DB đã đổi
+    // status dù sync bị preserve/fail — audit r1 P2).
+    if (shouldRevalidateAfterBatch(outcome.anySuccess, (endedRows ?? []).length)) {
       revalidatePath('/targets')
       revalidatePath('/targets/campaigns')
     }
@@ -58,7 +60,8 @@ export async function GET(request: NextRequest) {
       { status: outcome.httpStatus },
     )
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
+    // Outer catch cũng phải sanitize — exception driver có thể chứa URI/token.
+    const msg = sanitizeOpsText(err instanceof Error ? err.message : String(err))
     const status = msg.includes('BigQuery') || msg.includes('Google token') ? 502 : 500
     return NextResponse.json({ error: msg }, { status })
   }

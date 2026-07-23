@@ -8,7 +8,7 @@ import { isSuperAdminEmail } from '@/lib/authz'
 import { isKpiCampaignEnabled, isKpiCampaignTestMode } from '@/lib/kpi/flags'
 import { parseCampaignRows, type CampaignImportResult } from '@/lib/kpi/campaignImport'
 import { syncCampaign } from '@/lib/kpi/actuals'
-import { manualSyncPlan } from '@/lib/kpi/syncBatch'
+import { safeManualSync } from '@/lib/kpi/syncBatch'
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024
 
@@ -115,8 +115,9 @@ export async function syncCampaignActuals(id: string) {
   const auth = await requireSuper()
   if ('error' in auth) return { error: auth.error }
   // P3-B/C contract: cùng syncCampaign với cron; side-effect plan (revalidate
-  // hay không, toast loại gì) quyết định bởi manualSyncPlan THUẦN (có test).
-  const plan = manualSyncPlan(await syncCampaign(id))
+  // hay không, toast loại gì) quyết định bởi safeManualSync THUẦN (có test) —
+  // exception cũng thành {error} có cấu trúc + sanitize, không throw ra UI.
+  const plan = await safeManualSync(syncCampaign, id)
   if (plan.kind === 'failed') return { error: plan.error }
   if (plan.kind === 'preserved') {
     // Không phải lỗi: nguồn chưa sẵn sàng → số cũ giữ nguyên, KHÔNG revalidate.

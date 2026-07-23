@@ -11,6 +11,7 @@
 //   • log có campaignId + name + reason; KHÔNG log secret/URI
 
 import type { SyncCampaignResult } from '@/lib/kpi/syncCampaignCore'
+import { sanitizeOpsText } from '@/lib/ops/sanitize'
 
 export interface BatchCampaignRef { id: string; name: string | null }
 
@@ -40,14 +41,24 @@ export async function runSyncBatch(
   let anySuccess = false
 
   for (const c of campaigns) {
-    const label = c.name ?? c.id
-    const r = await syncFn(c.id)
+    const label = sanitizeOpsText(c.name ?? c.id)
+    // r1 (audit P1#1): exception isolation TỪNG campaign — dependency throw bất
+    // ngờ được chuyển thành failed và batch TIẾP TỤC campaign kế tiếp.
+    let r: SyncCampaignResult
+    try {
+      r = await syncFn(c.id)
+    } catch (e) {
+      r = { status: 'failed', campaignId: c.id, error: `exception: ${e instanceof Error ? e.message : String(e)}` }
+    }
     if (r.status === 'failed') {
-      errors.push(`${label}: ${r.error}`)
-      logLines.push(`[sync-kpi-campaign] FAILED campaign=${c.id} (${label}): ${r.error}`)
+      // r1 (audit P1#2): sanitize TRƯỚC khi vào cả log lẫn response body.
+      const msg = sanitizeOpsText(r.error)
+      errors.push(`${label}: ${msg}`)
+      logLines.push(`[sync-kpi-campaign] FAILED campaign=${c.id} (${label}): ${msg}`)
     } else if (r.status === 'snapshot_preserved') {
-      preserved.push({ campaign: label, reason: r.reason })
-      logLines.push(`[sync-kpi-campaign] snapshot_preserved campaign=${c.id} (${label}): ${r.reason}`)
+      const why = sanitizeOpsText(r.reason)
+      preserved.push({ campaign: label, reason: why })
+      logLines.push(`[sync-kpi-campaign] snapshot_preserved campaign=${c.id} (${label}): ${why}`)
     } else {
       anySuccess = true
       upserted += r.upserted
@@ -83,7 +94,29 @@ export type ManualSyncPlan =
   | { kind: 'failed'; revalidate: false; error: string }
 
 export function manualSyncPlan(r: SyncCampaignResult): ManualSyncPlan {
-  if (r.status === 'failed') return { kind: 'failed', revalidate: false, error: r.error }
-  if (r.status === 'snapshot_preserved') return { kind: 'preserved', revalidate: false, reason: r.reason }
+  if (r.status === 'failed') return { kind: 'failed', revalidate: false, error: sanitizeOpsText(r.error) }
+  if (r.status === 'snapshot_preserved') return { kind: 'preserved', revalidate: false, reason: sanitizeOpsText(r.reason) }
   return { kind: 'success', revalidate: true, upserted: r.upserted, unmatched: r.unmatched }
+}
+
+// r1 (audit P1#1): nút manual cũng không được để server action throw ra UI —
+// exception → plan failed có cấu trúc (đã sanitize).
+export async function safeManualSync(
+  syncFn: (campaignId: string) => Promise<SyncCampaignResult>,
+  campaignId: string,
+): Promise<ManualSyncPlan> {
+  try {
+    return manualSyncPlan(await syncFn(campaignId))
+  } catch (e) {
+    return {
+      kind: 'failed', revalidate: false,
+      error: sanitizeOpsText(`exception: ${e instanceof Error ? e.message : String(e)}`),
+    }
+  }
+}
+
+// r1 (audit P2): auto-end đổi DB (campaign → ended) cũng phải refresh cache dù
+// toàn bộ sync bị preserve/fail; batch rỗng + không auto-end → không revalidate.
+export function shouldRevalidateAfterBatch(anySuccess: boolean, endedCount: number): boolean {
+  return anySuccess || endedCount > 0
 }

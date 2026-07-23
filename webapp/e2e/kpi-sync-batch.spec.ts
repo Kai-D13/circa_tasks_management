@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
-import { manualSyncPlan, runSyncBatch } from '../lib/kpi/syncBatch'
+import { manualSyncPlan, runSyncBatch, safeManualSync, shouldRevalidateAfterBatch } from '../lib/kpi/syncBatch'
+import { sanitizeOpsText } from '../lib/ops/sanitize'
 import type { SyncCampaignResult } from '../lib/kpi/syncCampaignCore'
 
 // P3-C unit gate — caller contract (audit 23/07): 200/207/500 mapping, loop
@@ -103,5 +104,71 @@ test.describe('kpi sync batch contract @desktop', () => {
 
     const f = manualSyncPlan(failed('c-1', 'Ghi actuals lỗi'))
     expect(f).toEqual({ kind: 'failed', revalidate: false, error: 'Ghi actuals lỗi' })
+  })
+
+  // ── P3-C r1 ────────────────────────────────────────────────────────────────
+  test('r1 EXCEPTION ISOLATION: campaign 1 throw → 2-3 VẪN chạy; 500 giữ success/preserved khác', async () => {
+    const seen: string[] = []
+    const out = await runSyncBatch(CAMPS, async (id) => {
+      seen.push(id)
+      if (id === 'c-1') throw new Error('Supabase fetch failed unexpectedly')
+      if (id === 'c-2') return preserved(id, 'stale')
+      return ok(id, 3)
+    })
+    expect(seen).toEqual(['c-1', 'c-2', 'c-3'])            // không dừng batch
+    expect(out.httpStatus).toBe(500)
+    expect(out.body.errors[0]).toContain('exception: Supabase fetch failed')
+    expect(out.body.preserved.length).toBe(1)               // preserved giữ nguyên
+    expect(out.body.upserted).toBe(3)                       // success giữ nguyên
+  })
+
+  test('r1 SANITIZE: secret GIẢ trong error/reason/name không lọt vào body lẫn logLines', async () => {
+    const dirtyCamps = [
+      { id: 'c-1', name: 'Camp Bearer abc123XYZ' },         // name cũng phải sạch
+      { id: 'c-2', name: 'Camp 2' },
+      { id: 'c-3', name: 'Camp 3' },
+    ]
+    const out = await runSyncBatch(dirtyCamps, async (id) => {
+      if (id === 'c-1') return failed(id, 'connect ECONNREFUSED mongodb+srv://fake_user:fakePass123@fake-host.mongodb.net/db?retryWrites=true')
+      if (id === 'c-2') return preserved(id, 'lỗi\r\n[FAKE-INJECTED-LOG] password=hunter2 SUPABASE_SERVICE_ROLE_KEY=eyJfakeKey')
+      return ok(id)
+    })
+    const everything = JSON.stringify(out.body) + out.logLines.join(' ')
+    expect(everything).not.toContain('fakePass123')
+    expect(everything).not.toContain('abc123XYZ')
+    expect(everything).not.toContain('hunter2')
+    expect(everything).not.toContain('eyJfakeKey')
+    expect(everything).not.toContain('\r')
+    expect(everything).not.toContain('\n')
+    expect(everything).toContain('mongodb+srv://***')       // che nhưng vẫn nhận diện được loại lỗi
+    expect(everything).toContain('Bearer ***')
+    expect(everything).toContain('password=***')
+  })
+
+  test('r1 sanitizeOpsText: từng pattern với secret giả', () => {
+    expect(sanitizeOpsText('mongodb://u:p@h/db')).toBe('mongodb://***')
+    expect(sanitizeOpsText('Authorization: Bearer tok.en-123')).toBe('Authorization: Bearer ***')
+    expect(sanitizeOpsText('MONGODB_AFFILIATE_URI=mongodb+srv://x CRON_SECRET: abc')).toBe('MONGODB_AFFILIATE_URI=*** CRON_SECRET=***')
+    expect(sanitizeOpsText('dòng1\r\ndòng2\ndòng3')).toBe('dòng1 dòng2 dòng3')
+  })
+
+  test('r1 REVALIDATE: auto-end vẫn revalidate dù toàn bộ preserved; batch rỗng thì không', () => {
+    expect(shouldRevalidateAfterBatch(false, 2)).toBe(true)   // auto-end đổi DB → refresh cache
+    expect(shouldRevalidateAfterBatch(true, 0)).toBe(true)
+    expect(shouldRevalidateAfterBatch(false, 0)).toBe(false)  // batch rỗng/toàn preserved, không auto-end
+  })
+
+  test('r1 MANUAL THROW: safeManualSync trả lỗi có cấu trúc + sanitize, không throw ra UI', async () => {
+    const plan = await safeManualSync(async () => {
+      throw new Error('driver died at mongodb+srv://fake_user:fakePass@h/x')
+    }, 'c-1')
+    expect(plan.kind).toBe('failed')
+    if (plan.kind === 'failed') {
+      expect(plan.error).toContain('exception:')
+      expect(plan.error).not.toContain('fakePass')
+      expect(plan.error).toContain('mongodb+srv://***')
+    }
+    const okPlan = await safeManualSync(async () => ok('c-1', 4), 'c-1')
+    expect(okPlan.kind).toBe('success')
   })
 })
