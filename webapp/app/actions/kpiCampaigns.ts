@@ -6,8 +6,10 @@ import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { isKpiAffiliateEnabled, isKpiCampaignEnabled, isKpiCampaignTestMode } from '@/lib/kpi/flags'
-import { activationBlockReason, resolveMetricInput, type MetricInput } from '@/lib/kpi/campaignConfig'
+import { resolveMetricInput, type MetricInput } from '@/lib/kpi/campaignConfig'
+import { evaluateActivation, type ActivationCampaign } from '@/lib/kpi/activation'
 import { getAffiliateSyncHealth, supabaseAffiliateHealthDb } from '@/lib/affiliate/health'
+import { sanitizeOpsText } from '@/lib/ops/sanitize'
 import { parseCampaignRows, type CampaignImportResult } from '@/lib/kpi/campaignImport'
 import { syncCampaign } from '@/lib/kpi/actuals'
 import { safeManualSync } from '@/lib/kpi/syncBatch'
@@ -68,7 +70,7 @@ export async function updateCampaign(
   const auth = await requireSuper()
   if ('error' in auth) return { error: auth.error }
   const { data: campaign } = await auth.supabase
-    .from('kpi_campaigns').select('status, metric_offline, metric_affiliate').eq('id', id).single()
+    .from('kpi_campaigns').select('status, updated_at, metric_offline, metric_affiliate').eq('id', id).single()
   if (!campaign) return { error: 'Không tìm thấy chiến dịch' }
   if (campaign.status === 'active') return { error: 'Chiến dịch đang chạy — tạm dừng trước khi sửa' }
   if (campaign.status === 'ended') return { error: 'Chiến dịch đã kết thúc' }
@@ -89,8 +91,19 @@ export async function updateCampaign(
     patch.metric_affiliate = metrics.metric_affiliate
   }
 
-  const { error } = await auth.supabase.from('kpi_campaigns').update(patch).eq('id', id)
+  // P3-D r1 (audit P1 race): update CÓ ĐIỀU KIỆN — status vẫn draft/paused VÀ
+  // updated_at vẫn là giá trị vừa đọc (kích hoạt/import song song sẽ đổi
+  // updated_at qua RPC 093). 0 row = conflict, KHÔNG báo thành công.
+  const { data: updated, error } = await auth.supabase.from('kpi_campaigns')
+    .update(patch)
+    .eq('id', id)
+    .in('status', ['draft', 'paused'])
+    .eq('updated_at', campaign.updated_at)
+    .select('id')
   if (error) return { error: error.message }
+  if ((updated ?? []).length === 0) {
+    return { error: 'Chiến dịch vừa thay đổi (kích hoạt/import song song) — tải lại trang rồi thử lại' }
+  }
   revalidatePath('/targets/campaigns')
   revalidatePath(`/targets/campaigns/${id}`)
   return { success: true }
@@ -115,48 +128,37 @@ export async function toggleCampaign(id: string) {
     if ((paused ?? []).length === 0) return { error: 'Trạng thái chiến dịch vừa thay đổi — tải lại trang' }
     console.info(`[kpi-campaign] paused ${id} by ${auth.user.id}`)
   } else if (c.status === 'draft' || c.status === 'paused') {
-    // P3-D2 activation gate: đọc TOÀN BỘ target (không .limit(1)).
-    const { data: myTargets, error: tErr } = await auth.supabase
-      .from('kpi_campaign_store_targets').select('store_id, pos_code').eq('campaign_id', id)
-    if (tErr) return { error: `Không kiểm tra được target: ${tErr.message}` }
-    const targets = myTargets ?? []
+    // P3-D r1 (audit P1 race): app EVALUATE (đọc toàn bộ target + OS-active +
+    // health qua session client — super đọc được qua RLS; offline-only không
+    // đụng health) → RPC 093 ACTIVATION ATOMIC trong DB (lock row + expected
+    // updated_at + expected affiliate run id) — import/sửa xen giữa bị chặn.
+    const ev = await evaluateActivation({
+      loadCampaign: async (cid) => {
+        const { data, error } = await auth.supabase
+          .from('kpi_campaigns').select('id, status, updated_at, metric_affiliate')
+          .eq('id', cid).maybeSingle()
+        return { data: data as ActivationCampaign | null, error }
+      },
+      loadTargets: async (cid) => {
+        const { data, error } = await auth.supabase
+          .from('kpi_campaign_store_targets').select('store_id, pos_code').eq('campaign_id', cid)
+        return { data, error }
+      },
+      loadStores: async (storeIds) => {
+        const { data, error } = await auth.supabase
+          .from('stores').select('id, code, store_type, is_active').in('id', storeIds)
+        return { data, error }
+      },
+      getHealth: (storeIds) => getAffiliateSyncHealth(supabaseAffiliateHealthDb(auth.supabase), storeIds),
+    }, id)
+    if (!ev.ok) return { error: ev.error }
 
-    // Affiliate campaign: mọi target phải OS-active + nguồn affiliate READY.
-    // Offline-only: KHÔNG fetch health/store-type (không phụ thuộc Mongo).
-    let invalidStores: string[] = []
-    let health = null
-    if (c.metric_affiliate === true && targets.length > 0) {
-      const storeIds = targets.map((t) => t.store_id)
-      const { data: stores, error: sErr } = await auth.supabase
-        .from('stores').select('id, code, store_type, is_active').in('id', storeIds)
-      if (sErr) return { error: `Không kiểm tra được store: ${sErr.message}` }
-      const byId = new Map((stores ?? []).map((s) => [s.id, s]))
-      invalidStores = targets
-        .filter((t) => {
-          const s = byId.get(t.store_id)
-          return !s || s.store_type !== 'os' || s.is_active !== true
-        })
-        .map((t) => {
-          const s = byId.get(t.store_id)
-          return `${t.pos_code ?? t.store_id}${!s ? ' (không tồn tại)' : s.store_type !== 'os' ? ` (${s.store_type})` : ' (ngưng hoạt động)'}`
-        })
-      // Super admin đọc được sync_runs/affiliate_orders qua RLS → dùng session client.
-      health = await getAffiliateSyncHealth(supabaseAffiliateHealthDb(auth.supabase), storeIds)
-    }
-    const blockReason = activationBlockReason({
-      metricAffiliate: c.metric_affiliate === true,
-      targetCount: targets.length,
-      invalidStores,
-      health,
+    const { error: actErr } = await supabaseAdmin.rpc('rpc_activate_kpi_campaign', {
+      p_campaign_id: id,
+      p_expected_updated_at: ev.expectedUpdatedAt,
+      p_expected_run_id: ev.expectedRunId,
     })
-    if (blockReason) return { error: blockReason }
-
-    // Race guard: DB điều kiện status IN (draft, paused) — 0 row = trạng thái đã đổi.
-    const { data: activated, error } = await auth.supabase.from('kpi_campaigns')
-      .update({ status: 'active', updated_at: new Date().toISOString() })
-      .eq('id', id).in('status', ['draft', 'paused']).select('id')
-    if (error) return { error: error.message }
-    if ((activated ?? []).length === 0) return { error: 'Trạng thái chiến dịch vừa thay đổi — tải lại trang' }
+    if (actErr) return { error: sanitizeOpsText(actErr.message) }
     console.info(`[kpi-campaign] activated ${id} by ${auth.user.id}`)
   } else {
     return { error: 'Chiến dịch đã kết thúc' }

@@ -93,7 +93,7 @@ export function CampaignWizard({ affiliateEnabled = false }: { affiliateEnabled?
                       className="h-4 w-4 accent-primary"
                     />
                     <span className="font-medium">GMV Affiliate</span>
-                    <span className="text-xs text-muted-foreground">— đơn khách scan QR đặt Circa Online</span>
+                    <span className="text-xs text-muted-foreground">— doanh số Circa Online ghi nhận theo mã đối tác của cửa hàng</span>
                   </label>
                 )}
               </div>
