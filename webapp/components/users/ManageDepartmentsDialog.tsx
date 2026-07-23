@@ -90,7 +90,7 @@ export function ManageDepartmentsDialog({ departments }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) { setEditId(null); setConfirmDeleteId(null) } }}>
-      <DialogTrigger render={<Button variant="outline" size="sm" />}>
+      <DialogTrigger render={<Button variant="outline" size="sm" className="min-h-[44px] md:min-h-0" />}>
         <Building2 className="h-4 w-4 mr-1" />
         Phòng ban
       </DialogTrigger>

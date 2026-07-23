@@ -74,7 +74,7 @@ export function CreateUserDialog({ stores, departments = [] }: {
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger render={<Button size="sm" />}>
+      <DialogTrigger render={<Button size="sm" className="min-h-[44px] md:min-h-0" />}>
         <UserPlus className="h-4 w-4 mr-1" />
         Thêm người dùng
       </DialogTrigger>

@@ -1,8 +1,12 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { Card, CardContent } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { PageHeader } from '@/components/ds/PageHeader'
+import { StatCard } from '@/components/ds/StatCard'
+import { DataTableShell } from '@/components/ds/DataTableShell'
+import { EmptyState } from '@/components/ds/EmptyState'
+import { ErrorState } from '@/components/ds/ErrorState'
+import { TagBadge, type TagHue } from '@/components/ds/TagBadge'
 import { CreateUserDialog } from '@/components/users/CreateUserDialog'
 import { EditUserDialog } from '@/components/users/EditUserDialog'
 import { ResetPasswordDialog } from '@/components/users/ResetPasswordDialog'
@@ -18,11 +22,13 @@ import { AlertTriangle, ShieldCheck, Store as StoreIcon, UserRound, Users as Use
 
 const PAGE_SIZE = 30
 
-const ROLE_COLORS: Record<string, string> = {
-  admin:         'bg-red-100 text-red-700',
-  store_manager: 'bg-blue-100 text-blue-700',
-  staff:         'bg-green-100 text-green-700',
-  sm:            'bg-purple-100 text-purple-700',
+// Role = taxonomy (permission class, not a good/bad status) → TagBadge hues,
+// same families as the previous pastels (sm purple → indigo, nearest hue).
+const ROLE_HUE: Record<string, TagHue> = {
+  admin:         'red',
+  store_manager: 'blue',
+  staff:         'green',
+  sm:            'indigo',
 }
 
 const ROLE_LABELS: Record<string, string> = {
@@ -39,24 +45,6 @@ function initials(name: string): string {
   if (parts.length === 0) return '?'
   if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase()
   return (parts[parts.length - 1][0] + parts[0][0]).toUpperCase()
-}
-
-function StatCard({ icon, label, value, tint }: {
-  icon: React.ReactNode; label: string; value: number; tint: string
-}) {
-  return (
-    <Card>
-      <CardContent className="px-4 py-3 flex items-center gap-3">
-        <div className={cn('h-9 w-9 rounded-lg flex items-center justify-center shrink-0', tint)}>
-          {icon}
-        </div>
-        <div className="min-w-0">
-          <p className="text-xl font-semibold leading-tight">{value}</p>
-          <p className="text-xs text-muted-foreground truncate">{label}</p>
-        </div>
-      </CardContent>
-    </Card>
-  )
 }
 
 export default async function UsersPage({
@@ -84,8 +72,8 @@ export default async function UsersPage({
   if (isSm && smStoreIds.length === 0) {
     return (
       <div className="p-4 space-y-4">
-        <h1 className="text-xl font-semibold">Người dùng</h1>
-        <p className="text-sm text-muted-foreground">Chưa được phân công cửa hàng nào. Vui lòng liên hệ Admin.</p>
+        <PageHeader title="Nhân viên cửa hàng" icon={UsersIcon} />
+        <EmptyState title="Chưa được phân công cửa hàng nào" hint="Vui lòng liên hệ Admin." />
       </div>
     )
   }
@@ -133,7 +121,7 @@ export default async function UsersPage({
   // stat cards AND the department member counts — no per-card count queries.
   // limit(2000) is 10x+ the current ~150-account fleet; revisit (switch to
   // grouped count queries) if the user base ever approaches it.
-  const [{ data: users, count }, { data: stores }, { data: departments }, { data: allProfiles }] = await Promise.all([
+  const [{ data: users, count, error: usersError }, { data: stores }, { data: departments }, { data: allProfiles }] = await Promise.all([
     query,
     isSm
       ? supabase.from('stores').select('id, name, code').in('id', smStoreIds).order('name')
@@ -150,8 +138,9 @@ export default async function UsersPage({
   const totalPages = Math.max(1, Math.ceil(totalRows / PAGE_SIZE))
 
   // Out-of-range page: redirect to page 1 (preserving filters) so the admin
-  // doesn't land on an empty table that looks like "no results".
-  if ((users ?? []).length === 0 && page > 1) {
+  // doesn't land on an empty table that looks like "no results". Skip on a
+  // query error — that must surface as an error, not bounce to page 1.
+  if (!usersError && (users ?? []).length === 0 && page > 1) {
     const q = new URLSearchParams()
     const carry = ['q', 'role', 'store_id', 'missing_store', 'department_id'] as const
     carry.forEach((k) => { if (params[k]) q.set(k, params[k]!) })
@@ -191,51 +180,27 @@ export default async function UsersPage({
 
   return (
     <div className="p-4 md:p-6 space-y-4 max-w-7xl">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-3 flex-wrap">
-        <div>
-          <h1 className="text-xl font-semibold">
-            {isSm ? 'Nhân viên cửa hàng' : 'Quản lý người dùng'}
-          </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            {isSm
-              ? `${totalRows} nhân viên trong các cửa hàng bạn quản lý`
-              : `${totalUsers} tài khoản trong hệ thống`}
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {isSuper && !isSm && <ManageDepartmentsDialog departments={departmentsWithCounts} />}
-          <CreateUserDialog stores={stores ?? []} departments={departments ?? []} />
-        </div>
-      </div>
+      <PageHeader
+        title={isSm ? 'Nhân viên cửa hàng' : 'Quản lý người dùng'}
+        icon={UsersIcon}
+        subtitle={isSm
+          ? `${totalRows} nhân viên trong các cửa hàng bạn quản lý`
+          : `${totalUsers} tài khoản trong hệ thống`}
+        actions={
+          <>
+            {isSuper && !isSm && <ManageDepartmentsDialog departments={departmentsWithCounts} />}
+            <CreateUserDialog stores={stores ?? []} departments={departments ?? []} />
+          </>
+        }
+      />
 
       {/* Stat cards — admin only (SM has a single-role scope, cards add nothing) */}
       {!isSm && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-          <StatCard
-            icon={<UsersIcon className="h-4.5 w-4.5 text-primary" />}
-            tint="bg-primary/10"
-            label="Tổng tài khoản"
-            value={totalUsers}
-          />
-          <StatCard
-            icon={<ShieldCheck className="h-4.5 w-4.5 text-red-600" />}
-            tint="bg-red-100"
-            label="Admin / PIC"
-            value={roleCounts['admin'] ?? 0}
-          />
-          <StatCard
-            icon={<StoreIcon className="h-4.5 w-4.5 text-blue-600" />}
-            tint="bg-blue-100"
-            label="Quản lý & SM"
-            value={(roleCounts['store_manager'] ?? 0) + (roleCounts['sm'] ?? 0)}
-          />
-          <StatCard
-            icon={<UserRound className="h-4.5 w-4.5 text-green-600" />}
-            tint="bg-green-100"
-            label="Dược sĩ"
-            value={roleCounts['staff'] ?? 0}
-          />
+          <StatCard icon={UsersIcon}    label="Tổng tài khoản" value={totalUsers} />
+          <StatCard icon={ShieldCheck}  label="Admin / PIC"    value={roleCounts['admin'] ?? 0} tone="danger" />
+          <StatCard icon={StoreIcon}    label="Quản lý & SM"   value={(roleCounts['store_manager'] ?? 0) + (roleCounts['sm'] ?? 0)} />
+          <StatCard icon={UserRound}    label="Dược sĩ"        value={roleCounts['staff'] ?? 0} tone="success" />
         </div>
       )}
 
@@ -243,21 +208,23 @@ export default async function UsersPage({
         <UserFilters stores={stores ?? []} departments={departments ?? []} currentParams={params} />
       )}
 
-      <Card>
-        <CardContent className="p-0 overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow className="bg-muted/40 hover:bg-muted/40">
-                <TableHead>Người dùng</TableHead>
-                <TableHead>Phân quyền</TableHead>
-                {!isSm && <TableHead>Phòng ban</TableHead>}
-                <TableHead>Cửa hàng</TableHead>
-                <TableHead>Số điện thoại</TableHead>
-                <TableHead>Ngày tạo</TableHead>
-                <TableHead className="w-[80px]"></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
+      {usersError ? (
+        <ErrorState message="Không thể tải danh sách người dùng" hint={usersError.message} />
+      ) : (
+      <DataTableShell>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Người dùng</TableHead>
+              <TableHead>Phân quyền</TableHead>
+              {!isSm && <TableHead>Phòng ban</TableHead>}
+              <TableHead>Cửa hàng</TableHead>
+              <TableHead>Số điện thoại</TableHead>
+              <TableHead>Ngày tạo</TableHead>
+              <TableHead className="w-[80px]"></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
               {(users ?? []).map((u) => {
                 const dept = u.department as unknown as Department | null
                 return (
@@ -279,9 +246,9 @@ export default async function UsersPage({
                       </div>
                     </TableCell>
                     <TableCell>
-                      <Badge className={ROLE_COLORS[u.role] ?? ''}>
+                      <TagBadge hue={ROLE_HUE[u.role] ?? 'gray'}>
                         {ROLE_LABELS[u.role] ?? u.role}
-                      </Badge>
+                      </TagBadge>
                     </TableCell>
                     {!isSm && (
                       <TableCell>
@@ -296,7 +263,7 @@ export default async function UsersPage({
                     )}
                     <TableCell className="text-sm">
                       {u.role !== 'admin' && u.role !== 'sm' && !u.store_id ? (
-                        <span className="flex items-center gap-1 text-amber-600">
+                        <span className="flex items-center gap-1 text-status-warning">
                           <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
                           <span>Chưa có cửa hàng</span>
                         </span>
@@ -342,18 +309,15 @@ export default async function UsersPage({
               })}
               {(users ?? []).length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={isSm ? 6 : 7} className="py-12">
-                    <div className="flex flex-col items-center gap-2 text-muted-foreground">
-                      <UsersIcon className="h-8 w-8 opacity-30" />
-                      <p className="text-sm">Không tìm thấy người dùng nào</p>
-                    </div>
+                  <TableCell colSpan={isSm ? 6 : 7} className="p-0">
+                    <EmptyState icon={UsersIcon} title="Không tìm thấy người dùng nào" className="py-12" />
                   </TableCell>
                 </TableRow>
               )}
             </TableBody>
           </Table>
-        </CardContent>
-      </Card>
+        </DataTableShell>
+      )}
 
       <Pagination
         page={page}

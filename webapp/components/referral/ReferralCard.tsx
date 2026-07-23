@@ -1,4 +1,5 @@
 import { Card, CardContent } from '@/components/ui/card'
+import { StatusBadge } from '@/components/ds/StatusBadge'
 import { cn } from '@/lib/utils'
 import { Gift } from 'lucide-react'
 
@@ -14,15 +15,17 @@ export interface ReferralItem {
 export function ReferralCard({ total, success, sameDay, noOrder, items }: {
   total: number; success: number; sameDay: number; noOrder: number; items: ReferralItem[]
 }) {
+  // Tints come from the status tokens — the old text-green-700 sank into the
+  // dark-mode background (measured); tokens carry a dark pair.
   const tiles = [
     { label: 'Giới thiệu được',      value: total,   tint: 'text-foreground' },
-    { label: 'Thành công',           value: success, tint: 'text-green-700' },
+    { label: 'Thành công',           value: success, tint: 'text-status-success' },
     { label: 'Voucher đã nhận',      value: success, tint: 'text-primary' },
-    { label: 'Đơn cùng ngày',        value: sameDay, tint: 'text-green-700' },
-    { label: 'Không phát sinh đơn',  value: noOrder, tint: 'text-amber-600' },
+    { label: 'Đơn cùng ngày',        value: sameDay, tint: 'text-status-success' },
+    { label: 'Không phát sinh đơn',  value: noOrder, tint: 'text-status-warning' },
   ]
   return (
-    <Card>
+    <Card className="rounded-lg">
       <CardContent className="p-4 space-y-3">
         <p className="flex items-center gap-1.5 font-semibold text-sm uppercase tracking-wide">
           <Gift className="h-4 w-4 text-primary" /> Giới thiệu bạn bè
@@ -42,12 +45,9 @@ export function ReferralCard({ total, success, sameDay, noOrder, items }: {
               <div key={i} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
                 <span className="font-mono text-xs">{it.referred_phone}</span>
                 <span className="text-xs text-muted-foreground shrink-0">{it.referral_date ?? ''}</span>
-                <span className={cn(
-                  'text-[11px] px-2 py-0.5 rounded shrink-0',
-                  it.same_day_order ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700',
-                )}>
+                <StatusBadge tone={it.same_day_order ? 'success' : 'warning'} className="shrink-0">
                   {it.same_day_order ? 'Có đơn cùng ngày' : 'Chưa có đơn'}
-                </span>
+                </StatusBadge>
               </div>
             ))}
           </div>

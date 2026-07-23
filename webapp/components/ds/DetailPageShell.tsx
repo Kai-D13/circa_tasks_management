@@ -6,16 +6,28 @@ import { cn } from '@/lib/utils'
 // content. Replaces the hand-rolled headers on tasks/[id], fs/[id],
 // prescriptions/[id] (migrated per-route in their waves).
 export function DetailPageShell({
-  backHref, backLabel, title, badges, meta, children, className,
+  backHref, backLabel, title, badges, meta, actions, children, className,
 }: {
   backHref: string
   backLabel: string
   title: string
   badges?: React.ReactNode
   meta?: React.ReactNode
+  // Header actions (share/pause/delete…), right of the title on md+. Optional —
+  // without it the markup is unchanged (existing callers/snapshots unaffected).
+  actions?: React.ReactNode
   children: React.ReactNode
   className?: string
 }) {
+  const titleBlock = (
+    <div className="min-w-0">
+      <div className="flex flex-wrap items-center gap-3">
+        <h1 className="text-xl font-semibold break-words min-w-0">{title}</h1>
+        {badges}
+      </div>
+      {meta && <div className="text-sm text-muted-foreground mt-1">{meta}</div>}
+    </div>
+  )
   return (
     <div className={cn('p-4 space-y-4 max-w-5xl', className)}>
       {/* min-h-[44px] PIXEL LITERAL hit area on mobile (root 15px → rem lies;
@@ -27,13 +39,12 @@ export function DetailPageShell({
       >
         <ChevronLeft className="h-4 w-4" /> {backLabel}
       </Link>
-      <div>
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-xl font-semibold break-words min-w-0">{title}</h1>
-          {badges}
+      {actions ? (
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          {titleBlock}
+          <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">{actions}</div>
         </div>
-        {meta && <div className="text-sm text-muted-foreground mt-1">{meta}</div>}
-      </div>
+      ) : titleBlock}
       {children}
     </div>
   )

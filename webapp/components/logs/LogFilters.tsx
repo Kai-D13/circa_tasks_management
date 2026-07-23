@@ -27,7 +27,9 @@ export function LogFilters({ params, isAdmin, stores, users, managerStoreName }:
   const hasFilter = !!(params.q || params.action || params.user_id || params.task_type
     || params.store_id || params.date_from || params.date_to)
 
-  const fieldCls = 'h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm'
+  // text-[16px] on mobile prevents the iOS focus-zoom (root font-size is 15px,
+  // so text-sm/text-base both fall under the 16px threshold); compact on md+.
+  const fieldCls = 'h-10 md:h-9 rounded-md border border-input bg-background px-3 py-1 text-[16px] md:text-sm shadow-sm'
 
   return (
     <form method="GET" className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 items-end">
@@ -101,9 +103,9 @@ export function LogFilters({ params, isAdmin, stores, users, managerStoreName }:
       {/* Actions */}
       <div className="flex items-end gap-2">
         <input type="hidden" name="page" value="1" />
-        <Button type="submit" variant="outline" size="sm" className="h-9">Lọc</Button>
+        <Button type="submit" variant="outline" size="sm" className="h-[44px] md:h-9">Lọc</Button>
         {hasFilter && (
-          <Link href="/logs" className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'h-9')}>
+          <Link href="/logs" className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'h-[44px] md:h-9')}>
             Xoá lọc
           </Link>
         )}

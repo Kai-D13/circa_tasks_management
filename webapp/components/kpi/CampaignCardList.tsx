@@ -20,8 +20,10 @@ export function CampaignCardList({ items, hrefFor }: { items: CampaignCard[]; hr
         const pct = target > 0 ? Math.round((actual / target) * 100) : 0
         return (
           <Link key={c.id} href={hrefFor(c.id)} prefetch={false} className="block">
-            <Card className="hover:border-primary/40 transition-colors">
-              <CardContent className="p-3 flex items-center gap-3">
+            {/* rounded-lg — DS surfaces cap at 8px; row is well past the 44px
+                touch minimum via its own padding. */}
+            <Card className="rounded-lg hover:border-primary/40 active:bg-muted/40 transition-colors">
+              <CardContent className="p-3 flex items-center gap-3 min-h-[44px]">
                 <span className="h-9 w-9 rounded-lg bg-primary/10 text-primary flex items-center justify-center shrink-0">
                   <TrendingUp className="h-4 w-4" />
                 </span>

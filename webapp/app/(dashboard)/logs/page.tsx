@@ -1,17 +1,20 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { Card, CardContent } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
-import { buttonVariants } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { PageHeader } from '@/components/ds/PageHeader'
+import { DataTableShell } from '@/components/ds/DataTableShell'
+import { EmptyState } from '@/components/ds/EmptyState'
+import { ErrorState } from '@/components/ds/ErrorState'
+import { TagBadge } from '@/components/ds/TagBadge'
 import Link from 'next/link'
-import { cn } from '@/lib/utils'
 import { formatDateTime } from '@/lib/dateUtils'
 import { LogFilters, type LogFilterParams } from '@/components/logs/LogFilters'
 import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { ExportButton } from '@/components/common/ExportButton'
-import { LOGS_PAGE_SIZE, ACTION_COLORS, ACTION_LABELS, formatMeta } from '@/lib/logs/constants'
+import { Pagination } from '@/components/common/Pagination'
+import { LOGS_PAGE_SIZE, ACTION_HUE, ACTION_LABELS, formatMeta } from '@/lib/logs/constants'
 import { getSmStoreIds } from '@/lib/authz'
+import { ScrollText } from 'lucide-react'
 
 type Meta = Record<string, unknown>
 type LogTask = { id: string; title: string; store_id: string | null; source_schedule_id: string | null; stores: { name: string } | null }
@@ -49,8 +52,8 @@ export default async function LogsPage({
   if (isSm && smStoreIds.length === 0) {
     return (
       <div className="p-4 space-y-4">
-        <h1 className="text-xl font-semibold">Nhật ký hoạt động</h1>
-        <p className="text-sm text-muted-foreground">Chưa được phân công cửa hàng nào. Vui lòng liên hệ Admin.</p>
+        <PageHeader title="Nhật ký hoạt động" icon={ScrollText} />
+        <EmptyState title="Chưa được phân công cửa hàng nào" hint="Vui lòng liên hệ Admin." />
       </div>
     )
   }
@@ -96,15 +99,20 @@ export default async function LogsPage({
       ? supabase.from('users').select('id, full_name').eq('store_id', profile.store_id).order('full_name')
       : isSm
         ? supabase.from('users').select('id, full_name').in('store_id', smStoreIds).order('full_name')
-        : Promise.resolve({ data: [] as { id: string; full_name: string }[] })
+        : Promise.resolve({ data: [] as { id: string; full_name: string }[], error: null })
 
-  const [{ data: logs, count }, { data: stores }, { data: users }, { data: managerStore }] = await Promise.all([
+  const [
+    { data: logs, count, error: logsError },
+    { data: stores, error: storesError },
+    { data: users, error: usersError },
+    { data: managerStore },
+  ] = await Promise.all([
     logsQuery,
     isAdmin
       ? supabase.from('stores').select('id, name').eq('store_type', 'os').order('name')
       : isSm
         ? supabase.from('stores').select('id, name').in('id', smStoreIds).order('name')
-        : Promise.resolve({ data: [] as { id: string; name: string }[] }),
+        : Promise.resolve({ data: [] as { id: string; name: string }[], error: null }),
     usersQuery,
     isManager && profile?.store_id
       ? supabase.from('stores').select('name').eq('id', profile.store_id).single()
@@ -121,16 +129,31 @@ export default async function LogsPage({
   return (
     <div className="p-4 space-y-4">
       {!isStaff && <AutoRefresh intervalMs={120000} />}
-      <div className="flex items-center justify-between gap-2">
-        <h1 className="text-xl font-semibold">Nhật ký hoạt động</h1>
-        {(isAdmin || isSm) && (
+      <PageHeader
+        title="Nhật ký hoạt động"
+        icon={ScrollText}
+        actions={(isAdmin || isSm) && (
           <ExportButton
             endpoint="/api/export/logs"
+            className="h-[44px] md:h-8"
             requireParams={['date_from', 'date_to']}
             requireMessage="Vui lòng chọn khoảng ngày (Từ ngày / Đến ngày) trước khi xuất Excel"
           />
         )}
-      </div>
+      />
+
+      {/* A failed dropdown fetch would render an EMPTY store/user picker, which
+          reads as "nothing to filter by" — say so instead of lying silently. */}
+      {(storesError || usersError) && (
+        <ErrorState
+          message="Một số bộ lọc không tải được"
+          hint={
+            (storesError ? 'Danh sách cửa hàng không khả dụng. ' : '')
+            + (usersError ? 'Danh sách nhân viên không khả dụng. ' : '')
+            + 'Nhật ký bên dưới vẫn đầy đủ; tải lại trang để dùng bộ lọc.'
+          }
+        />
+      )}
 
       <LogFilters
         params={params}
@@ -140,8 +163,10 @@ export default async function LogsPage({
         managerStoreName={(managerStore as { name: string } | null)?.name ?? null}
       />
 
-      <Card>
-        <CardContent className="p-0">
+      {logsError ? (
+        <ErrorState message="Không thể tải nhật ký hoạt động" hint={logsError.message} />
+      ) : (
+        <DataTableShell>
           <Table>
             <TableHeader>
               <TableRow>
@@ -164,23 +189,21 @@ export default async function LogsPage({
                       {formatDateTime(log.created_at)}
                     </TableCell>
                     <TableCell>
-                      <Badge className={ACTION_COLORS[log.action] ?? 'bg-muted text-muted-foreground'}>
+                      <TagBadge hue={ACTION_HUE[log.action] ?? 'gray'}>
                         {ACTION_LABELS[log.action] ?? log.action}
-                      </Badge>
+                      </TagBadge>
                     </TableCell>
+                    {/* Same taxonomy axis as /tasks: Định kỳ=teal, Phát sinh=slate. */}
                     <TableCell>
                       {task ? (
-                        <span className={cn(
-                          'text-xs px-1.5 py-0.5 rounded',
-                          isRecurring ? 'bg-teal-100 text-teal-700' : 'bg-gray-100 text-gray-600'
-                        )}>
+                        <TagBadge hue={isRecurring ? 'teal' : 'slate'}>
                           {isRecurring ? 'Định kỳ' : 'Phát sinh'}
-                        </span>
+                        </TagBadge>
                       ) : '—'}
                     </TableCell>
-                    <TableCell className="text-sm max-w-[180px] truncate">
+                    <TableCell className="text-sm max-w-[180px]">
                       {task ? (
-                        <Link href={`/tasks/${task.id}`} prefetch={false} className="hover:underline">{task.title}</Link>
+                        <Link href={`/tasks/${task.id}`} prefetch={false} className="hover:underline block truncate" title={task.title}>{task.title}</Link>
                       ) : '—'}
                     </TableCell>
                     {!isManager && (
@@ -199,38 +222,29 @@ export default async function LogsPage({
               })}
               {(logs ?? []).length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={isManager ? 6 : 7} className="text-center text-muted-foreground py-8">
-                    Không có nhật ký nào
+                  <TableCell colSpan={isManager ? 6 : 7} className="p-0">
+                    <EmptyState icon={ScrollText} title="Không có nhật ký nào" className="py-8" />
                   </TableCell>
                 </TableRow>
               )}
             </TableBody>
           </Table>
+        </DataTableShell>
+      )}
 
-          {/* Pagination */}
-          {totalPages > 1 && (
-            <div className="flex items-center justify-between px-4 py-3 border-t text-sm">
-              <span className="text-muted-foreground">
-                Trang {page} / {totalPages} · {count ?? 0} bản ghi
-              </span>
-              <div className="flex gap-2">
-                {page > 1 && (
-                  <Link href={buildUrl(currentParams, { page: String(page - 1) })}
-                    className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}>
-                    ← Trước
-                  </Link>
-                )}
-                {page < totalPages && (
-                  <Link href={buildUrl(currentParams, { page: String(page + 1) })}
-                    className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}>
-                    Tiếp →
-                  </Link>
-                )}
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      {/* Pagination — full mode keeps the total on screen ("1–50 / N") like the
+          previous "Trang x / y · N bản ghi" line; the row count stays the
+          planner ESTIMATE (count: 'estimated'), same source as before, and
+          buildUrl keeps every active filter in the href. */}
+      {!logsError && (
+        <Pagination
+          page={page}
+          totalPages={totalPages}
+          totalRows={count ?? 0}
+          pageSize={LOGS_PAGE_SIZE}
+          hrefForPage={(p) => buildUrl(currentParams, { page: String(p) })}
+        />
+      )}
     </div>
   )
 }

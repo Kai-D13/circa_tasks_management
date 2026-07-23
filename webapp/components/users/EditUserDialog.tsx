@@ -129,7 +129,7 @@ export function EditUserDialog({ userId, userName, currentRole, currentStoreId, 
 
   return (
     <Dialog open={open} onOpenChange={handleOpen}>
-      <DialogTrigger render={<Button variant="ghost" size="sm" className="h-7 px-2" />}>
+      <DialogTrigger render={<Button variant="ghost" size="sm" className="min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 md:h-7 px-2" />}>
         <Pencil className="h-3.5 w-3.5" />
       </DialogTrigger>
       <DialogContent className="sm:max-w-sm">

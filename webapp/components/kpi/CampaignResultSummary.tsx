@@ -27,22 +27,22 @@ export function CampaignResultSummary({ campaign, todayISO }: { campaign: Campai
   const cards: { label: string; value: string; icon: LucideIcon; tile: string; valueCls?: string; bar?: boolean }[] = [
     { label: 'KPI target', value: vnd(target), icon: Target, tile: 'bg-primary/10 text-primary' },
     { label: 'Actual GMV', value: synced ? vnd(actual) : '—', icon: TrendingUp,
-      tile: synced && actual > 0 ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground' },
+      tile: synced && actual > 0 ? 'bg-status-success-bg text-status-success' : 'bg-muted text-muted-foreground' },
     { label: 'Hoàn thành', value: synced ? `${pct.toFixed(1)}%` : '—', icon: Percent,
       tile: 'bg-primary/10 text-primary', bar: true,
-      valueCls: !synced ? undefined : pct >= 100 ? 'text-green-600' : 'text-primary' },
+      valueCls: !synced ? undefined : pct >= 100 ? 'text-status-success' : 'text-primary' },
     { label: 'Commission Store dự kiến', value: synced ? vnd(pool) : '—', icon: Wallet,
-      tile: synced && pool > 0 ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground',
-      valueCls: synced && pool > 0 ? 'text-green-600' : undefined },
+      tile: synced && pool > 0 ? 'bg-status-success-bg text-status-success' : 'bg-muted text-muted-foreground',
+      valueCls: synced && pool > 0 ? 'text-status-success' : undefined },
     { label: 'Bậc đạt', value: reached != null ? `Bậc ${reached}/${tierCount}` : (synced ? 'Chưa đạt' : '—'), icon: Award,
-      tile: reached != null ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground' },
+      tile: reached != null ? 'bg-status-success-bg text-status-success' : 'bg-muted text-muted-foreground' },
     { label: 'Nhịp độ (Performance)', value: perf != null ? `${perf.toFixed(1)}%` : '—', icon: Gauge,
       tile: 'bg-primary/10 text-primary', valueCls: perf != null ? performanceTone(perf) : undefined },
     { label: 'Thời hạn', value: deadlineLabel, icon: CalendarDays, tile: 'bg-muted text-muted-foreground' },
   ]
 
   return (
-    <Card>
+    <Card className="rounded-lg">
       <CardContent className="p-4 space-y-3">
         <p className="flex items-center gap-1.5 font-semibold text-sm">
           <ClipboardCheck className="h-4 w-4 text-primary" /> Kết quả chiến dịch · Quản lý cửa hàng
@@ -60,7 +60,7 @@ export function CampaignResultSummary({ campaign, todayISO }: { campaign: Campai
                   {card.bar && synced && (
                     <div className="mt-1 h-1 rounded-full bg-muted overflow-hidden">
                       <div
-                        className={cn('h-full rounded-full', pct >= 100 ? 'bg-green-500' : 'bg-primary')}
+                        className={cn('h-full rounded-full', pct >= 100 ? 'bg-status-success' : 'bg-primary')}
                         style={{ width: `${Math.min(100, Math.max(0, pct))}%` }}
                       />
                     </div>

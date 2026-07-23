@@ -24,6 +24,14 @@ type Props =
       hrefForPage: (p: number) => string
     }
 
+// Full-mode hit areas (Wave A3): the old h-7 w-7 was 26px — under the 44px
+// touch minimum. Mobile gets [44px] PIXEL boxes (page numbers stay narrower so
+// the strip still fits 360px; the row wraps if it can't), desktop keeps the
+// original compact 7×7 density. Only /users + /logs + the catalog use full
+// mode, all already migrated — no un-migrated route is restyled.
+const PAGE_BTN     = 'min-h-[44px] min-w-[44px] p-0 md:h-7 md:w-7 md:min-h-0 md:min-w-0'
+const PAGE_NUM_BTN = 'min-h-[44px] min-w-[36px] px-1 text-xs md:h-7 md:w-7 md:min-h-0 md:min-w-0 md:px-0'
+
 // Presentational pager. Full mode renders nothing for a single page; simple
 // mode renders nothing when there's neither a previous nor a next page.
 export function Pagination(props: Props) {
@@ -72,17 +80,17 @@ export function Pagination(props: Props) {
   const offset = (page - 1) * pageSize
 
   return (
-    <div className="flex items-center justify-between gap-2 pt-1">
+    <div className="flex items-center justify-between gap-2 pt-1 flex-wrap">
       <span className="text-xs text-muted-foreground">
         {offset + 1}–{Math.min(offset + pageSize, totalRows)} / {totalRows}
       </span>
-      <div className="flex items-center gap-1">
+      <div className="flex items-center gap-1 flex-wrap justify-end">
         <Link
           href={hrefForPage(page - 1)}
           aria-disabled={page <= 1}
           className={cn(
             buttonVariants({ variant: 'outline', size: 'sm' }),
-            'h-7 w-7 p-0',
+            PAGE_BTN,
             page <= 1 && 'pointer-events-none opacity-40',
           )}
           aria-label="Trang trước"
@@ -105,9 +113,10 @@ export function Pagination(props: Props) {
               <Link
                 key={p}
                 href={hrefForPage(p as number)}
+                aria-current={p === page ? 'page' : undefined}
                 className={cn(
                   buttonVariants({ variant: p === page ? 'default' : 'outline', size: 'sm' }),
-                  'h-7 w-7 p-0 text-xs',
+                  PAGE_NUM_BTN,
                 )}
               >
                 {p}
@@ -120,7 +129,7 @@ export function Pagination(props: Props) {
           aria-disabled={page >= totalPages}
           className={cn(
             buttonVariants({ variant: 'outline', size: 'sm' }),
-            'h-7 w-7 p-0',
+            PAGE_BTN,
             page >= totalPages && 'pointer-events-none opacity-40',
           )}
           aria-label="Trang tiếp"

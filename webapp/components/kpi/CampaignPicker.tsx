@@ -42,7 +42,9 @@ export function CampaignPicker({ items, selectedId }: { items: CampaignPickerIte
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger render={<button type="button" className={cn(pillCls, 'hover:bg-primary/10 transition-colors')} />}>
+      {/* [44px] touch height on mobile; the informational (single-campaign)
+          pill above stays compact since it isn't interactive. */}
+      <DialogTrigger render={<button type="button" className={cn(pillCls, 'min-h-[44px] md:min-h-0 hover:bg-primary/10 transition-colors')} />}>
         <CalendarDays className="h-3.5 w-3.5 text-primary shrink-0" />
         {sel.rangeLabel}
         <span className="text-muted-foreground">· {items.length} chiến dịch</span>

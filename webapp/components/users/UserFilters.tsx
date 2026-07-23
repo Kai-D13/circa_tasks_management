@@ -6,8 +6,8 @@ import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { SearchableSelect } from '@/components/ui/searchable-select'
 import { Button } from '@/components/ui/button'
+import { DataToolbar } from '@/components/ds/DataToolbar'
 import { Search, UserX } from 'lucide-react'
-import { cn } from '@/lib/utils'
 
 interface Store { id: string; name: string; code?: string }
 interface Department { id: string; name: string; color: string }
@@ -92,77 +92,83 @@ export function UserFilters({ stores, departments = [], currentParams }: Props) 
   ]
 
   return (
-    <div className="flex flex-wrap gap-2 items-center">
-      <div className="relative w-56">
-        <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
-        <Input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="Tìm theo tên hoặc email"
-          aria-label="Tìm người dùng"
-          className="h-8 pl-8 text-sm"
-        />
-      </div>
+    <DataToolbar
+      className="items-center"
+      search={
+        <div className="relative w-full sm:w-56">
+          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Tìm theo tên hoặc email"
+            aria-label="Tìm người dùng"
+            className="h-10 md:h-8 pl-8 text-[16px] md:text-sm"
+          />
+        </div>
+      }
+      filters={
+        <>
+          <Select value={roleVal} onValueChange={(v) => update({ role: v })}>
+            <SelectTrigger className="w-40 h-10 md:h-8 text-[16px] md:text-sm">
+              <SelectValue>{ROLE_LABEL[roleVal]}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL}>Tất cả phân quyền</SelectItem>
+              <SelectItem value="admin">Admin</SelectItem>
+              <SelectItem value="sm">SM</SelectItem>
+              <SelectItem value="store_manager">Quản lý</SelectItem>
+              <SelectItem value="staff">Nhân viên</SelectItem>
+            </SelectContent>
+          </Select>
 
-      <Select value={roleVal} onValueChange={(v) => update({ role: v })}>
-        <SelectTrigger className="w-40 h-8 text-sm">
-          <SelectValue>{ROLE_LABEL[roleVal]}</SelectValue>
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={ALL}>Tất cả phân quyền</SelectItem>
-          <SelectItem value="admin">Admin</SelectItem>
-          <SelectItem value="sm">SM</SelectItem>
-          <SelectItem value="store_manager">Quản lý</SelectItem>
-          <SelectItem value="staff">Nhân viên</SelectItem>
-        </SelectContent>
-      </Select>
+          {departments.length > 0 && (
+            <Select value={deptVal} onValueChange={(v) => update({ department_id: v })}>
+              <SelectTrigger className="w-40 h-10 md:h-8 text-[16px] md:text-sm">
+                <SelectValue>
+                  {deptVal === ALL
+                    ? 'Tất cả phòng ban'
+                    : (departments.find((d) => d.id === deptVal)?.name ?? 'Phòng ban')}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>Tất cả phòng ban</SelectItem>
+                {departments.map((d) => (
+                  <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
 
-      {departments.length > 0 && (
-        <Select value={deptVal} onValueChange={(v) => update({ department_id: v })}>
-          <SelectTrigger className="w-40 h-8 text-sm">
-            <SelectValue>
-              {deptVal === ALL
-                ? 'Tất cả phòng ban'
-                : (departments.find((d) => d.id === deptVal)?.name ?? 'Phòng ban')}
-            </SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={ALL}>Tất cả phòng ban</SelectItem>
-            {departments.map((d) => (
-              <SelectItem key={d.id} value={d.id}>{d.name}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      )}
+          {stores.length > 0 && (
+            <SearchableSelect
+              value={storeIdVal}
+              options={storeOptions}
+              // Selecting a store clears the missing_store toggle (they're mutually exclusive).
+              onValueChange={(v) => update({ store_id: v, missing_store: null })}
+              placeholder="Tất cả cửa hàng"
+              triggerClassName="w-44 h-10 md:h-8 text-[16px] md:text-sm"
+              disabled={missingActive}
+            />
+          )}
 
-      {stores.length > 0 && (
-        <SearchableSelect
-          value={storeIdVal}
-          options={storeOptions}
-          // Selecting a store clears the missing_store toggle (they're mutually exclusive).
-          onValueChange={(v) => update({ store_id: v, missing_store: null })}
-          placeholder="Tất cả cửa hàng"
-          triggerClassName="w-44 h-8 text-sm"
-          disabled={missingActive}
-        />
-      )}
+          <Button
+            variant={missingActive ? 'default' : 'outline'}
+            size="sm"
+            className="h-[44px] md:h-8 text-xs gap-1.5"
+            // Toggling missing_store clears store_id (they can't both apply).
+            onClick={() => update({ missing_store: missingActive ? null : 'true', store_id: null })}
+          >
+            <UserX className="h-3.5 w-3.5" />
+            Chưa gán cửa hàng
+          </Button>
 
-      <Button
-        variant={missingActive ? 'default' : 'outline'}
-        size="sm"
-        className="h-8 text-xs gap-1.5"
-        // Toggling missing_store clears store_id (they can't both apply).
-        onClick={() => update({ missing_store: missingActive ? null : 'true', store_id: null })}
-      >
-        <UserX className="h-3.5 w-3.5" />
-        Chưa gán cửa hàng
-      </Button>
-
-      {hasFilters && (
-        <Button variant="ghost" size="sm" onClick={clear} className={cn('h-8 text-xs')}>
-          Xoá bộ lọc
-        </Button>
-      )}
-    </div>
+          {hasFilters && (
+            <Button variant="ghost" size="sm" onClick={clear} className="h-[44px] md:h-8 text-xs">
+              Xoá bộ lọc
+            </Button>
+          )}
+        </>
+      }
+    />
   )
 }

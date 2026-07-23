@@ -8,6 +8,7 @@ import {
 } from '@/app/actions/scheduleCollaborators'
 import { Button } from '@/components/ui/button'
 import { SearchableSelect } from '@/components/ui/searchable-select'
+import { cn } from '@/lib/utils'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger,
 } from '@/components/ui/dialog'
@@ -66,7 +67,7 @@ export function ShareScheduleDialog({ scheduleId, collaborators, adminOptions }:
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger render={<Button variant="outline" size="sm" />}>
+      <DialogTrigger render={<Button variant="outline" size="sm" className="min-h-[44px] md:min-h-0" />}>
         <Share2 className="h-4 w-4 mr-1" /> Chia sẻ
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">
@@ -97,11 +98,12 @@ export function ShareScheduleDialog({ scheduleId, collaborators, adminOptions }:
                     key={p}
                     type="button"
                     onClick={() => setPermission(p)}
-                    className={
+                    className={cn(
+                      'text-xs px-3 min-h-[44px] md:min-h-0 md:px-2.5 md:py-1',
                       permission === p
-                        ? 'bg-primary text-white text-xs px-2.5 py-1 font-medium'
-                        : 'text-xs px-2.5 py-1 text-muted-foreground hover:bg-muted'
-                    }
+                        ? 'bg-primary text-white font-medium'
+                        : 'text-muted-foreground hover:bg-muted',
+                    )}
                   >
                     {PERMISSION_LABEL[p]}
                   </button>
@@ -112,7 +114,7 @@ export function ShareScheduleDialog({ scheduleId, collaborators, adminOptions }:
               size="sm"
               onClick={handleShare}
               disabled={pending || !adminId}
-              className="w-full"
+              className="w-full min-h-[44px] md:min-h-0"
             >
               {pending ? 'Đang chia sẻ...' : 'Chia sẻ'}
             </Button>
@@ -136,11 +138,12 @@ export function ShareScheduleDialog({ scheduleId, collaborators, adminOptions }:
                         type="button"
                         disabled={pending}
                         onClick={() => c.permission !== p && handleUpdatePermission(c.admin_id, p)}
-                        className={
+                        className={cn(
+                          'text-xs px-2.5 min-h-[44px] md:min-h-0 md:px-2 md:py-0.5 disabled:opacity-50',
                           c.permission === p
-                            ? 'bg-primary text-white text-xs px-2 py-0.5 font-medium'
-                            : 'text-xs px-2 py-0.5 text-muted-foreground hover:bg-muted disabled:opacity-50'
-                        }
+                            ? 'bg-primary text-white font-medium'
+                            : 'text-muted-foreground hover:bg-muted',
+                        )}
                       >
                         {PERMISSION_LABEL[p]}
                       </button>
@@ -150,7 +153,7 @@ export function ShareScheduleDialog({ scheduleId, collaborators, adminOptions }:
                     type="button"
                     disabled={pending}
                     onClick={() => handleRemove(c.admin_id)}
-                    className="text-muted-foreground hover:text-destructive disabled:opacity-50"
+                    className="flex items-center justify-center min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 text-muted-foreground hover:text-destructive disabled:opacity-50 shrink-0"
                     aria-label="Xoá quyền"
                   >
                     <X className="h-3.5 w-3.5" />
