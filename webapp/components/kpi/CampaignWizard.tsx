@@ -11,20 +11,30 @@ import { cn } from '@/lib/utils'
 // Create wizard: Step 1 campaign info → creates a DRAFT campaign → Step 2 import
 // targets (reusable CampaignImport) → redirect to detail. Store scope only (Staff
 // shown disabled "Sắp có").
-export function CampaignWizard() {
+// P3-D: chỉ số = 2 checkbox thật. GMV Affiliate CHỈ render khi affiliateEnabled
+// (KPI_AFFILIATE_ENABLED — prop server, không NEXT_PUBLIC); server action vẫn
+// là người gác cuối khi flag tắt.
+export function CampaignWizard({ affiliateEnabled = false }: { affiliateEnabled?: boolean }) {
   const [step, setStep] = useState<1 | 2>(1)
   const [campaignId, setCampaignId] = useState<string | null>(null)
   const [name, setName] = useState('')
   const [start, setStart] = useState('')
   const [end, setEnd] = useState('')
+  const [metricOffline, setMetricOffline] = useState(true)
+  const [metricAffiliate, setMetricAffiliate] = useState(false)
   const [pending, startTransition] = useTransition()
 
   function submitInfo() {
     if (!name.trim()) { toast.error('Nhập tên chiến dịch'); return }
     if (!start || !end) { toast.error('Chọn thời gian áp dụng'); return }
     if (end < start) { toast.error('Ngày kết thúc phải sau ngày bắt đầu'); return }
+    if (!metricOffline && !metricAffiliate) { toast.error('Chọn ít nhất một chỉ số doanh số'); return }
     startTransition(async () => {
-      const r = await createCampaign({ name: name.trim(), start_date: start, end_date: end })
+      const r = await createCampaign({
+        name: name.trim(), start_date: start, end_date: end,
+        metric_offline: metricOffline,
+        metric_affiliate: affiliateEnabled ? metricAffiliate : false,
+      })
       if ('error' in r && r.error) { toast.error(r.error); return }
       setCampaignId((r as { id: string }).id)
       setStep(2)
@@ -62,10 +72,30 @@ export function CampaignWizard() {
               </div>
             </div>
             <div className="space-y-1">
-              <label className="text-xs text-muted-foreground">Loại chỉ số</label>
-              <div className="flex gap-2">
-                <span className="text-xs px-3 py-1.5 rounded-md border border-primary bg-primary/5 text-primary font-medium">GMV (doanh số)</span>
-                <span className="text-xs px-3 py-1.5 rounded-md border text-muted-foreground/60 cursor-not-allowed" title="Sắp có">Loại khác · Sắp có</span>
+              <label className="text-xs text-muted-foreground">Chỉ số doanh số</label>
+              <div className="flex flex-col gap-1.5">
+                <label className="inline-flex items-center gap-2 text-sm min-h-[44px] md:min-h-0 md:py-1 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={metricOffline}
+                    onChange={(e) => setMetricOffline(e.target.checked)}
+                    className="h-4 w-4 accent-primary"
+                  />
+                  <span className="font-medium">GMV Offline</span>
+                  <span className="text-xs text-muted-foreground">— doanh số bán tại cửa hàng (BI)</span>
+                </label>
+                {affiliateEnabled && (
+                  <label className="inline-flex items-center gap-2 text-sm min-h-[44px] md:min-h-0 md:py-1 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={metricAffiliate}
+                      onChange={(e) => setMetricAffiliate(e.target.checked)}
+                      className="h-4 w-4 accent-primary"
+                    />
+                    <span className="font-medium">GMV Affiliate</span>
+                    <span className="text-xs text-muted-foreground">— đơn khách scan QR đặt Circa Online</span>
+                  </label>
+                )}
               </div>
             </div>
             <div className="space-y-1">

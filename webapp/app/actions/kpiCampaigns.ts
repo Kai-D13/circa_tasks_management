@@ -5,7 +5,9 @@ import * as XLSX from 'xlsx'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { isSuperAdminEmail } from '@/lib/authz'
-import { isKpiCampaignEnabled, isKpiCampaignTestMode } from '@/lib/kpi/flags'
+import { isKpiAffiliateEnabled, isKpiCampaignEnabled, isKpiCampaignTestMode } from '@/lib/kpi/flags'
+import { activationBlockReason, resolveMetricInput, type MetricInput } from '@/lib/kpi/campaignConfig'
+import { getAffiliateSyncHealth, supabaseAffiliateHealthDb } from '@/lib/affiliate/health'
 import { parseCampaignRows, type CampaignImportResult } from '@/lib/kpi/campaignImport'
 import { syncCampaign } from '@/lib/kpi/actuals'
 import { safeManualSync } from '@/lib/kpi/syncBatch'
@@ -25,13 +27,17 @@ async function requireSuper() {
   return { user, supabase }
 }
 
-export async function createCampaign(input: { name: string; start_date: string; end_date: string }) {
+export async function createCampaign(input: { name: string; start_date: string; end_date: string } & MetricInput) {
   const auth = await requireSuper()
   if ('error' in auth) return { error: auth.error }
   const name = input.name?.trim()
   if (!name) return { error: 'Thiếu tên chiến dịch' }
   if (!input.start_date || !input.end_date) return { error: 'Thiếu thời gian áp dụng' }
   if (input.end_date < input.start_date) return { error: 'Ngày kết thúc phải sau ngày bắt đầu' }
+  // P3-D: metric contract THUẦN — flag tắt thì affiliate bị từ chối tại server,
+  // không chỉ ẩn UI; mặc định (không gửi) = Offline-only như campaign cũ.
+  const metrics = resolveMetricInput(isKpiAffiliateEnabled(), input)
+  if (!metrics.ok) return { error: metrics.error }
 
   const { data, error } = await auth.supabase
     .from('kpi_campaigns')
@@ -40,8 +46,10 @@ export async function createCampaign(input: { name: string; start_date: string; 
       start_date: input.start_date,
       end_date: input.end_date,
       scope_type: 'store',
-      metric_type: 'gmv',   // phase 1: GMV only (other metrics = "Sắp có")
+      metric_type: 'gmv',   // legacy label; nguồn thật = metric_offline/metric_affiliate
       order_type: 'all',    // online/offline reserved until BI provides a field
+      metric_offline: metrics.metric_offline,
+      metric_affiliate: metrics.metric_affiliate,
       status: 'draft',
       is_test: isKpiCampaignTestMode(),
       created_by: auth.user.id,
@@ -55,11 +63,12 @@ export async function createCampaign(input: { name: string; start_date: string; 
 
 export async function updateCampaign(
   id: string,
-  input: { name?: string; start_date?: string; end_date?: string },
+  input: { name?: string; start_date?: string; end_date?: string } & MetricInput,
 ) {
   const auth = await requireSuper()
   if ('error' in auth) return { error: auth.error }
-  const { data: campaign } = await auth.supabase.from('kpi_campaigns').select('status').eq('id', id).single()
+  const { data: campaign } = await auth.supabase
+    .from('kpi_campaigns').select('status, metric_offline, metric_affiliate').eq('id', id).single()
   if (!campaign) return { error: 'Không tìm thấy chiến dịch' }
   if (campaign.status === 'active') return { error: 'Chiến dịch đang chạy — tạm dừng trước khi sửa' }
   if (campaign.status === 'ended') return { error: 'Chiến dịch đã kết thúc' }
@@ -68,6 +77,17 @@ export async function updateCampaign(
   if (input.name !== undefined) { const n = input.name.trim(); if (!n) return { error: 'Tên không hợp lệ' }; patch.name = n }
   if (input.start_date) patch.start_date = input.start_date
   if (input.end_date) patch.end_date = input.end_date
+  // P3-D: sửa metric CHỈ khi draft/paused (đã gate ở trên); field không gửi giữ
+  // giá trị hiện tại; flag tắt → affiliate bị từ chối server-side.
+  if (input.metric_offline !== undefined || input.metric_affiliate !== undefined) {
+    const metrics = resolveMetricInput(isKpiAffiliateEnabled(), input, {
+      metric_offline: campaign.metric_offline === true,
+      metric_affiliate: campaign.metric_affiliate === true,
+    })
+    if (!metrics.ok) return { error: metrics.error }
+    patch.metric_offline = metrics.metric_offline
+    patch.metric_affiliate = metrics.metric_affiliate
+  }
 
   const { error } = await auth.supabase.from('kpi_campaigns').update(patch).eq('id', id)
   if (error) return { error: error.message }
@@ -83,23 +103,60 @@ export async function toggleCampaign(id: string) {
   const auth = await requireSuper()
   if ('error' in auth) return { error: auth.error }
   const { data: c } = await auth.supabase
-    .from('kpi_campaigns').select('status, start_date, end_date').eq('id', id).single()
+    .from('kpi_campaigns').select('status, start_date, end_date, metric_affiliate').eq('id', id).single()
   if (!c) return { error: 'Không tìm thấy chiến dịch' }
 
   if (c.status === 'active') {
-    const { error } = await auth.supabase.from('kpi_campaigns')
-      .update({ status: 'paused', updated_at: new Date().toISOString() }).eq('id', id)
+    // Race guard: chỉ pause khi VẪN đang active (audit P3-D2).
+    const { data: paused, error } = await auth.supabase.from('kpi_campaigns')
+      .update({ status: 'paused', updated_at: new Date().toISOString() })
+      .eq('id', id).eq('status', 'active').select('id')
     if (error) return { error: error.message }
+    if ((paused ?? []).length === 0) return { error: 'Trạng thái chiến dịch vừa thay đổi — tải lại trang' }
     console.info(`[kpi-campaign] paused ${id} by ${auth.user.id}`)
   } else if (c.status === 'draft' || c.status === 'paused') {
+    // P3-D2 activation gate: đọc TOÀN BỘ target (không .limit(1)).
     const { data: myTargets, error: tErr } = await auth.supabase
-      .from('kpi_campaign_store_targets').select('store_id').eq('campaign_id', id).limit(1)
+      .from('kpi_campaign_store_targets').select('store_id, pos_code').eq('campaign_id', id)
     if (tErr) return { error: `Không kiểm tra được target: ${tErr.message}` }
-    if ((myTargets ?? []).length === 0) return { error: 'Chưa import target cho chiến dịch này' }
+    const targets = myTargets ?? []
 
-    const { error } = await auth.supabase.from('kpi_campaigns')
-      .update({ status: 'active', updated_at: new Date().toISOString() }).eq('id', id)
+    // Affiliate campaign: mọi target phải OS-active + nguồn affiliate READY.
+    // Offline-only: KHÔNG fetch health/store-type (không phụ thuộc Mongo).
+    let invalidStores: string[] = []
+    let health = null
+    if (c.metric_affiliate === true && targets.length > 0) {
+      const storeIds = targets.map((t) => t.store_id)
+      const { data: stores, error: sErr } = await auth.supabase
+        .from('stores').select('id, code, store_type, is_active').in('id', storeIds)
+      if (sErr) return { error: `Không kiểm tra được store: ${sErr.message}` }
+      const byId = new Map((stores ?? []).map((s) => [s.id, s]))
+      invalidStores = targets
+        .filter((t) => {
+          const s = byId.get(t.store_id)
+          return !s || s.store_type !== 'os' || s.is_active !== true
+        })
+        .map((t) => {
+          const s = byId.get(t.store_id)
+          return `${t.pos_code ?? t.store_id}${!s ? ' (không tồn tại)' : s.store_type !== 'os' ? ` (${s.store_type})` : ' (ngưng hoạt động)'}`
+        })
+      // Super admin đọc được sync_runs/affiliate_orders qua RLS → dùng session client.
+      health = await getAffiliateSyncHealth(supabaseAffiliateHealthDb(auth.supabase), storeIds)
+    }
+    const blockReason = activationBlockReason({
+      metricAffiliate: c.metric_affiliate === true,
+      targetCount: targets.length,
+      invalidStores,
+      health,
+    })
+    if (blockReason) return { error: blockReason }
+
+    // Race guard: DB điều kiện status IN (draft, paused) — 0 row = trạng thái đã đổi.
+    const { data: activated, error } = await auth.supabase.from('kpi_campaigns')
+      .update({ status: 'active', updated_at: new Date().toISOString() })
+      .eq('id', id).in('status', ['draft', 'paused']).select('id')
     if (error) return { error: error.message }
+    if ((activated ?? []).length === 0) return { error: 'Trạng thái chiến dịch vừa thay đổi — tải lại trang' }
     console.info(`[kpi-campaign] activated ${id} by ${auth.user.id}`)
   } else {
     return { error: 'Chiến dịch đã kết thúc' }
