@@ -52,6 +52,11 @@ export async function syncCampaignWithDeps(
   if (!c) return failed('Campaign không tồn tại')
   const metricOffline = c.metric_offline === true
   const metricAffiliate = c.metric_affiliate === true
+  // r1.1 (audit P2): DB đã CHECK ≥1 metric nhưng orchestrator vẫn fail-closed —
+  // không bao giờ dựng payload zero/gọi replace ở trạng thái này.
+  if (!metricOffline && !metricAffiliate) {
+    return failed('Campaign không bật chỉ số doanh số nào (metric_offline + metric_affiliate đều tắt)')
+  }
 
   const { data: targets, error: tErr } = await deps.loadTargets(campaignId)
   if (tErr) return failed(`Không đọc được targets: ${tErr.message}`)
@@ -81,9 +86,14 @@ export async function syncCampaignWithDeps(
       return preserved(`target không phải OS store active: ${badTargets.map((t) => t.pos_code ?? t.store_id).join(', ')} — không aggregate affiliate`)
     }
 
-    const health = await deps.getAffiliateHealth(storeIds)
-    if (!health.ready) return preserved(`nguồn affiliate chưa sẵn sàng: ${health.reason}`)
-    affiliateSyncedAt = health.lastSuccessAt
+    // r1.1 (audit P1 — race giữa cron affiliate và KPI aggregate): DOUBLE-CHECK
+    //   healthBefore READY (runId=A) → aggregate → healthAfter READY & runId==A
+    // Aggregate RPC là 1 statement (MVCC snapshot nhất quán); nếu một phiên sync
+    // bắt đầu/kết thúc TRONG lúc aggregate thì healthAfter sẽ lộ (running/failed
+    // hoặc runId đổi) → giữ snapshot cũ, không đụng BigQuery/replace.
+    const healthBefore = await deps.getAffiliateHealth(storeIds)
+    if (!healthBefore.ready) return preserved(`nguồn affiliate chưa sẵn sàng: ${healthBefore.reason}`)
+    affiliateSyncedAt = healthBefore.lastSuccessAt
 
     if (rangeValid) {
       const { from, to } = vnDayRange(c.start_date, effEnd)
@@ -92,6 +102,14 @@ export async function syncCampaignWithDeps(
       for (const r of aggRows ?? []) {
         if (!affiliateByStore.has(r.store_id)) affiliateByStore.set(r.store_id, new Map())
         affiliateByStore.get(r.store_id)!.set(String(r.vn_date).slice(0, 10), Number(r.gmv) || 0)
+      }
+
+      const healthAfter = await deps.getAffiliateHealth(storeIds)
+      if (!healthAfter.ready) {
+        return preserved(`nguồn affiliate đổi trạng thái trong lúc aggregate: ${healthAfter.reason}`)
+      }
+      if (healthAfter.runId !== healthBefore.runId) {
+        return preserved(`sync affiliate mới bắt đầu trong lúc aggregate (runId ${healthBefore.runId} → ${healthAfter.runId}) — dữ liệu vừa đọc có thể trộn 2 phiên, thử lại lượt sau`)
       }
     }
   }
