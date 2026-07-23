@@ -30,8 +30,10 @@ Quy tắc audit: **mọi** `affiliate_partner_code` distinct trong nguồn phả
 | `CIRCA-MIRA` | 1 | os | POS0019 | CIRCA MIRA |
 | `CIRCA-MIZUKI` | 1 | os | POS0013 | CIRCA MIZUKI — mới 22/07 sáng, **đã duyệt qua audit**, seed trong migration 092 (verify POS0013 os + active) |
 | `CIRCA-NAMVIET` | 1 | os | POS0077 | CIRCA NAM VIET — mới 22/07 chiều (dry-run), **ĐÃ DUYỆT 22/07**, seed trong migration 092 (verify POS0077 os + active; 1 đơn DELIVERED) |
+| `CIRCA-EHOME` | 1 | os | POS0079 | CIRCA EHOME — mới 23/07, **ĐÃ DUYỆT 23/07** (user), INSERT service role sau preflight os+active (1 đơn DELIVERED 205.000₫) |
+| `CIRCA-LONG TAM` | 3 | external | — | Đối tác ngoài: CIRCA-LONG TAM — mới 23/07, **ĐÃ DUYỆT 23/07** (user; không có store khớp; 3 đơn đều CANCELED) |
 
-**Checksum**: 24 code = 16 os (14 gốc + MIZUKI + NAMVIET — cả 2 đã duyệt, seed 092) + 1 fs + 7 external · Σ source_order_count = **157** ✓ (khớp `raw_fetched` dry-run 22/07 chiều, 0 duplicate/0 rejected).
+**Checksum**: **26 code = 17 os + 1 fs + 8 external** · snapshot mới nhất 23/07 tối = **167 đơn**, sync `success`, unmatched `[]`, canary completed_time = 0. Số đơn từng code drift liên tục theo data sống (bảng trên giữ count tại thời điểm code xuất hiện) — đối soát cuối cùng thực hiện tại rollout.
 
 **Baseline KPI (chỉ đơn DELIVERED — snapshot sáng 22/07, 153 đơn; đối soát lại chính thức lúc backfill):** tổng 109 đơn / 36.836.230₫ · OS-eligible 31 / 8.522.800₫ · FS 5 / 2.124.100₫ · External 73 / 26.189.330₫. Dry-run chiều: DELIVERED đã lên 111, status distribution CANCELED 43 · FAIL_TO_DELIVER 2 · DELIVERING 1.
 
