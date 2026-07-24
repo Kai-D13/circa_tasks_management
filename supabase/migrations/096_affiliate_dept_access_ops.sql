@@ -9,15 +9,25 @@
 -- thiết kế sẵn cho grant này — hiện RỖNG; version hóa INSERT tại đây thay vì
 -- SQL tay (bài học 094: mọi thay đổi DB phải tái tạo được từ source).
 --
+-- r1.2a (audit P1 — user xác nhận 24/07): Admin OPS CHỈ ĐƯỢC XEM AGGREGATE,
+-- TUYỆT ĐỐI KHÔNG đọc raw order (customer_name/customer_phone = PII). Grant B
+-- nếu giữ nguyên 090 sẽ đồng thời kích hoạt nhánh admin-dept của
+-- aff_orders_select → mở PostgREST đọc raw đơn. Vì vậy mục D REDEFINE
+-- aff_orders_select BỎ nhánh admin-department (các nhánh khác copy NGUYÊN VĂN
+-- từ 090 — contract cũ của super/sm/own-store GIỮ NGUYÊN; nhánh dept trước
+-- nay INERT vì bảng access rỗng → bỏ không đổi hành vi hiện hữu).
+--
 -- Nội dung:
 --   A. Preflight: đủ migration nền 090..095; dept đúng id + tên 'OPS'.
---   B. INSERT affiliate_department_access cho dept OPS (idempotent).
---      → kích hoạt các nhánh RLS sẵn có của is_affiliate_dept_admin():
---        aff_orders_select (admin OPS đọc đơn OS — 090).
+--   B. INSERT affiliate_department_access cho dept OPS (idempotent) — để
+--      route/sidebar nhận diện quyền màn tổng hợp.
 --   C. Policy MỚI apm_select_dept_admin: admin phòng được cấp quyền đọc
 --      mapping os + active (để màn tổng hợp lấy danh sách store qua session
 --      client — storeIds cho RPC aggregate derive TỪ rows RLS cho thấy).
 --      FS + external mapping vẫn chỉ super (apm_select_super).
+--   D. REDEFINE aff_orders_select: BỎ nhánh admin-dept (OPS không raw/PII);
+--      rpc_aggregate_affiliate_gmv GIỮ service_role-only (092) — page gọi
+--      sau gate với storeIds từ RLS.
 --
 -- Idempotent: re-run = no-op. ROLLBACK: DELETE FROM affiliate_department_access
 -- WHERE department_id='1b362298-…'; DROP POLICY apm_select_dept_admin;
@@ -68,9 +78,30 @@ CREATE POLICY apm_select_dept_admin ON public.affiliate_partner_mappings
     AND store_id IS NOT NULL
   );
 
+-- ── D. r1.2a (audit P1): aff_orders_select BỎ nhánh admin-department ────────
+-- Admin OPS chỉ aggregate — KHÔNG raw order/PII. Các nhánh còn lại COPY
+-- NGUYÊN VĂN từ 090 (super / sm / staff+store_manager own-store): sót hoặc
+-- sửa 1 nhánh = mất quyền hợp lệ hoặc rò rỉ — chỉ XÓA đúng nhánh dept.
+DROP POLICY IF EXISTS aff_orders_select ON public.affiliate_orders;
+CREATE POLICY aff_orders_select ON public.affiliate_orders
+  FOR SELECT TO authenticated
+  USING (
+    (SELECT public.is_super_admin())
+    OR (
+      (SELECT public.get_user_role()) = 'sm'
+      AND public.is_sm_for_store(store_id)
+      AND public.is_os_store(store_id)
+    )
+    OR (
+      (SELECT public.get_user_role()) IN ('staff','store_manager')
+      AND store_id = (SELECT public.get_user_store_id())
+      AND public.is_os_store(store_id)
+    )
+  );
+
 INSERT INTO public.app_migrations (version, name, notes)
 VALUES ('096', 'affiliate_dept_access_ops',
-        'P3-I.2: grant Affiliate cho phòng OPS (1b362298 — preflight id + tên) qua affiliate_department_access (insert-if-absent) + policy apm_select_dept_admin (admin phòng được cấp quyền đọc mapping os+active; FS/external/inactive vẫn chỉ super). Kích hoạt nhánh RLS aff_orders_select sẵn có của 090 cho admin OPS (đơn OS).')
+        'P3-I.2 r1.2a: grant Affiliate cho phòng OPS (1b362298 — preflight id + tên) qua affiliate_department_access (insert-if-absent) + policy apm_select_dept_admin (admin phòng được cấp quyền đọc mapping os+active; FS/external/inactive vẫn chỉ super) + REDEFINE aff_orders_select BỎ nhánh admin-department (user xác nhận 24/07: OPS CHỈ aggregate, không raw order/PII — các nhánh super/sm/own-store copy nguyên văn 090; nhánh dept trước nay inert). rpc_aggregate giữ service_role-only.')
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;
@@ -82,14 +113,25 @@ COMMIT;
 -- 2) SELECT policyname FROM pg_policies
 --      WHERE tablename='affiliate_partner_mappings' ORDER BY 1;
 --    -- 3 policy: apm_select_dept_admin · apm_select_store_qr · apm_select_super
--- 3) SELECT version FROM public.app_migrations WHERE version='096';  -- 1 row
+-- 3) r1.2a — aff_orders_select KHÔNG còn nhánh dept:
+--    SELECT qual FROM pg_policies
+--      WHERE tablename='affiliate_orders' AND policyname='aff_orders_select';
+--    -- qual KHÔNG chứa 'is_affiliate_dept_admin'; đủ 3 nhánh:
+--    --   is_super_admin · sm/is_sm_for_store · staff+store_manager own-store
+-- 4) rpc_aggregate vẫn service_role-only (không cấp thêm cho authenticated):
+--    SELECT has_function_privilege('authenticated',
+--      'public.rpc_aggregate_affiliate_gmv(uuid[],timestamptz,timestamptz)',
+--      'EXECUTE');                                            -- false
+-- 5) SELECT version FROM public.app_migrations WHERE version='096';  -- 1 row
 --
--- QA RLS (PostgREST, token từng role):
+-- QA RLS (PostgREST, token từng role — đổi account nhớ logout/incognito):
 --   GET /rest/v1/affiliate_partner_mappings?select=partner_code
 --   · Admin phòng OPS       → 25 rows (toàn bộ os active; KHÔNG thấy fs/external)
 --   · Admin phòng khác      → 0 row
 --   · Super admin           → 34 rows (đủ os+fs+external)
---   GET /rest/v1/affiliate_orders?select=order_id&limit=1
---   · Admin phòng OPS       → đọc được đơn OS (nhánh 090 kích hoạt)
+--   GET /rest/v1/affiliate_orders?select=customer_name,customer_phone&limit=5
+--   · Admin phòng OPS       → 0 row (r1.2a — KHÔNG raw order/PII)
 --   · Admin phòng khác      → 0 row
+--   · Super admin           → có rows (contract cũ giữ nguyên)
+--   · SM / QLCH / Staff OS  → chỉ rows store scope mình (contract 090 giữ nguyên)
 -- ============================================================================

@@ -6,7 +6,8 @@ import { isSuperAdminEmail } from '@/lib/authz'
 import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import { getAffiliateSyncHealth, supabaseAffiliateHealthDb } from '@/lib/affiliate/health'
 import { vnDayRange } from '@/lib/kpi/engine'
-import { reduceAffiliateAgg, parseOverviewRange, overviewDataState, overviewPageScope, type AffiliateAggInput } from '@/lib/affiliate/overview'
+import { reduceAffiliateAgg, parseOverviewRange, overviewDataState, overviewPageScope, canShowOwnOsGmv, type AffiliateAggInput } from '@/lib/affiliate/overview'
+import { getSmStoreIds } from '@/lib/authz'
 import Link from 'next/link'
 import { CampaignsTabs } from '@/components/kpi/CampaignsTabs'
 import { StatCard } from '@/components/ds/StatCard'
@@ -97,11 +98,27 @@ export default async function AffiliateOverviewPage({ searchParams }: {
   // ngược, clamp ≤366 ngày — URL sai không đổ 500, không phá range.
   const { from, to, clamped } = parseOverviewRange(params.from, params.to, vnTodayISO)
 
+  const supabase = await createClient()
+
+  // r1.2a (audit P2#2): biên scope kiểm TRƯỚC khi dựng trang —
+  // · QLCH: store PHẢI là OS active — FS store_manager gõ thẳng URL → notFound
+  //   (đúng isolation FS, không dựa vào empty-state RLS);
+  // · SM: không có store OS được phân công → notFound (behavior thống nhất).
+  if (scope === 'os-own') {
+    const { data: ownStore } = await supabase
+      .from('stores').select('store_type, is_active')
+      .eq('id', profile?.store_id ?? '').maybeSingle()
+    if (!canShowOwnOsGmv(ownStore as { store_type: string; is_active: boolean } | null)) notFound()
+  }
+  if (scope === 'os-assigned') {
+    const smIds = await getSmStoreIds(supabase, user.id)
+    if (smIds.length === 0) notFound()
+  }
+
   // Mappings qua SESSION client — RLS scope theo role: super = os+fs (filter
   // dưới), admin phòng OPS = os active (apm_select_dept_admin, 096), SM =
   // store phân công, QLCH = store mình (apm_select_store_qr, 095). External
   // (store NULL) ngoài phạm vi v1. 1 FK duy nhất mappings→stores → bare embed.
-  const supabase = await createClient()
   const { data: mapRows, error: mapErr } = await supabase
     .from('affiliate_partner_mappings')
     .select('partner_code, partner_type, store_id, stores(name, code)')

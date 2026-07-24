@@ -109,6 +109,17 @@ export function overviewDataState(healthReady: boolean, aggregateError: boolean)
 //   staff / admin thường / khác → 'denied' · flag tắt → 'denied' TẤT CẢ.
 // Data scoping thực thi = RLS (mappings đọc qua session client) — hàm này chỉ
 // quyết định gate route + biến thể UI; storeIds cho RPC derive từ rows RLS trả.
+// r1.2a (audit P2#1): item sidebar "Affiliate" CHỈ cho admin phòng được cấp
+// quyền KHÔNG PHẢI super (super đi qua Chiến dịch KPI → tab — không nhân đôi nav).
+export function opsSidebarVisible(p: {
+  flagEnabled: boolean
+  role: string | null | undefined
+  isSuper: boolean
+  isDeptAdmin: boolean
+}): boolean {
+  return p.flagEnabled && p.role === 'admin' && !p.isSuper && p.isDeptAdmin
+}
+
 export type OverviewPageScope = 'os-fs' | 'os-all' | 'os-assigned' | 'os-own' | 'denied'
 export function overviewPageScope(p: {
   flagEnabled: boolean

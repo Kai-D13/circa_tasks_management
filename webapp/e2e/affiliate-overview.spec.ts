@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import {
   reduceAffiliateAgg, currentVnMonthISO, overviewVisibleFor,
   canShowOwnOsGmv, isRealISODate, parseOverviewRange, overviewDataState,
-  overviewPageScope,
+  overviewPageScope, opsSidebarVisible,
   type AffiliateAggInput,
 } from '../lib/affiliate/overview'
 
@@ -110,6 +110,14 @@ test.describe('affiliate overview contract @desktop', () => {
     // FLAG OFF → denied tất cả
     expect(overviewPageScope({ flagEnabled: false, isSuper: true, isAffiliateDeptAdmin: true, role: 'admin' })).toBe('denied')
     expect(overviewPageScope({ flagEnabled: false, isSuper: false, isAffiliateDeptAdmin: false, role: 'sm' })).toBe('denied')
+  })
+
+  test('r1.2a P2#1 opsSidebarVisible: CHỈ admin phòng cấp quyền KHÔNG PHẢI super; super/role khác/flag off → ẩn', () => {
+    expect(opsSidebarVisible({ flagEnabled: true, role: 'admin', isSuper: false, isDeptAdmin: true })).toBe(true)
+    expect(opsSidebarVisible({ flagEnabled: true, role: 'admin', isSuper: true, isDeptAdmin: true })).toBe(false)  // super đi qua tab KPI, không nhân đôi nav
+    expect(opsSidebarVisible({ flagEnabled: true, role: 'admin', isSuper: false, isDeptAdmin: false })).toBe(false)
+    expect(opsSidebarVisible({ flagEnabled: true, role: 'sm', isSuper: false, isDeptAdmin: true })).toBe(false)
+    expect(opsSidebarVisible({ flagEnabled: false, role: 'admin', isSuper: false, isDeptAdmin: true })).toBe(false)
   })
 
   test('overviewVisibleFor: super full · sm/store_manager own-os · staff/admin thường none · flag off none', () => {
