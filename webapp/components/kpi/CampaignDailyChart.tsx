@@ -5,7 +5,9 @@
 // grid; sparse day ticks; today's bar accented. Theme-aware via Tailwind
 // fill-/stroke- color tokens (works in dark mode without extra CSS).
 
-interface DailyPoint { date: string; gmv: number }
+// P3-E: gmv = Offline, gmv_affiliate = Affiliate. Cột hiển thị TỔNG; tooltip
+// (<title>) breakdown 2 nguồn khi campaign có affiliate.
+interface DailyPoint { date: string; gmv: number; gmv_affiliate: number }
 
 const W = 360
 const H = 170
@@ -30,12 +32,15 @@ function niceMax(v: number): number {
 }
 
 export function CampaignDailyChart({
-  start, end, daily, todayISO,
+  start, end, daily, todayISO, breakdown = false,
 }: {
   start: string; end: string; daily: DailyPoint[]; todayISO: string
+  breakdown?: boolean // campaign có CẢ 2 chỉ số → tooltip tách Offline/Affiliate
 }) {
   // Full day axis across the campaign range (future days render empty).
-  const gmvByDate = new Map(daily.map((d) => [d.date, d.gmv]))
+  // Giá trị cột = TỔNG 2 nguồn; point gốc giữ lại cho tooltip breakdown.
+  const pointByDate = new Map(daily.map((d) => [d.date, d]))
+  const gmvByDate = new Map(daily.map((d) => [d.date, d.gmv + d.gmv_affiliate]))
   const days: string[] = []
   const DAY = 86400_000
   const endMs = Date.parse(`${end}T00:00:00Z`)
@@ -44,7 +49,7 @@ export function CampaignDailyChart({
   }
   if (days.length === 0) return null
 
-  const max = niceMax(Math.max(0, ...daily.map((d) => d.gmv)))
+  const max = niceMax(Math.max(0, ...daily.map((d) => d.gmv + d.gmv_affiliate)))
   const plotW = W - PAD_L - 4
   const plotH = H - PAD_T - PAD_B
   const slot = plotW / days.length
@@ -84,7 +89,9 @@ export function CampaignDailyChart({
                 rx={Math.min(2, barW / 2)}
                 className={d === todayISO ? 'fill-primary' : 'fill-primary/70'}
               >
-                <title>{`${dayNo}/${d.slice(5, 7)}: ${fullVnd(v)}`}</title>
+                <title>{breakdown && pointByDate.get(d)
+                  ? `${dayNo}/${d.slice(5, 7)}: ${fullVnd(v)} (Offline ${fullVnd(pointByDate.get(d)!.gmv)} · Affiliate ${fullVnd(pointByDate.get(d)!.gmv_affiliate)})`
+                  : `${dayNo}/${d.slice(5, 7)}: ${fullVnd(v)}`}</title>
               </rect>
             )}
             {/* Selective label: only today's value gets a callout (template) */}

@@ -8,8 +8,11 @@ import { NotificationProvider } from '@/components/layout/NotificationProvider'
 import { Sidebar } from '@/components/layout/Sidebar'
 import { MobileHeader } from '@/components/layout/MobileHeader'
 import { BottomNav } from '@/components/layout/BottomNav'
-import { isKpiCampaignEnabled } from '@/lib/kpi/flags'
+import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import { isReferralEnabled } from '@/lib/affiliate/flags'
+import { isSuperAdminEmail } from '@/lib/authz'
+import { opsSidebarVisible } from '@/lib/affiliate/overview'
+import { supabaseAdmin } from '@/lib/supabase/admin'
 import { UserProfile } from '@/types'
 
 export default async function DashboardLayout({
@@ -45,6 +48,25 @@ export default async function DashboardLayout({
   // (avoids a NEXT_PUBLIC_ var; keeps the flag server-controlled).
   const kpiCampaignEnabled = isKpiCampaignEnabled()
   const referralEnabled = isReferralEnabled()
+  // P3-I.2 r1.2a: item sidebar "Affiliate" cho admin PHÒNG ĐƯỢC CẤP QUYỀN
+  // (affiliate_department_access — grant 096; RLS bảng này super-only nên đọc
+  // bằng admin client, 1 PK lookup chỉ khi role=admin non-super có department).
+  // Super BỊ LOẠI tường minh (audit P2#1 — đi qua Chiến dịch KPI → tab, không
+  // nhân đôi nav; contract opsSidebarVisible có test). Route tự re-verify.
+  const affiliateNavCandidate = isKpiAffiliateEnabled() && kpiCampaignEnabled
+    && profile.role === 'admin' && !isSuperAdminEmail(user.email) && !!profile.department_id
+  const affiliateOverviewNav = opsSidebarVisible({
+    flagEnabled: isKpiAffiliateEnabled() && kpiCampaignEnabled,
+    role: profile.role,
+    isSuper: isSuperAdminEmail(user.email) && profile.role === 'admin',
+    isDeptAdmin: affiliateNavCandidate
+      ? !!(await supabaseAdmin
+          .from('affiliate_department_access')
+          .select('department_id')
+          .eq('department_id', profile.department_id!)
+          .maybeSingle()).data
+      : false,
+  })
 
   return (
     <ThemeProvider>
@@ -54,7 +76,7 @@ export default async function DashboardLayout({
           {/* Desktop sidebar — hidden on mobile; not rendered for staff */}
           {/* Staff get no desktop Sidebar. An FS store_manager DOES get one → pass
               isFsStore so it collapses to the single FS item (no OS links). */}
-          {!isStaff && <Sidebar announcementsUnread={announcementsUnread} kpiCampaignEnabled={kpiCampaignEnabled} referralEnabled={referralEnabled} isFsStore={isFsStore} />}
+          {!isStaff && <Sidebar announcementsUnread={announcementsUnread} kpiCampaignEnabled={kpiCampaignEnabled} referralEnabled={referralEnabled} isFsStore={isFsStore} affiliateOverviewNav={affiliateOverviewNav} />}
 
           {/* Main content — full width on mobile */}
           {/* Mobile bottom padding clears the fixed BottomNav (h-16) + the iPhone

@@ -3,16 +3,17 @@ import Link from 'next/link'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { createClient } from '@/lib/supabase/server'
 import { isSuperAdminEmail } from '@/lib/authz'
-import { isKpiCampaignEnabled } from '@/lib/kpi/flags'
+import { isKpiAffiliateEnabled, isKpiCampaignEnabled } from '@/lib/kpi/flags'
 import { Card, CardContent } from '@/components/ui/card'
 import { CampaignStatusButton } from '@/components/kpi/CampaignStatusButton'
 import { CampaignImport } from '@/components/kpi/CampaignImport'
+import { CampaignMetricEditor } from '@/components/kpi/CampaignMetricEditor'
 import { SyncActualsButton } from '@/components/kpi/SyncActualsButton'
 import { CampaignExportButton } from '@/components/kpi/CampaignExportButton'
 import { STATUS_META } from '@/lib/kpi/status'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
-import { ChevronLeft, Target, TrendingUp, Percent, Wallet, Award, CalendarDays, Gauge, SlidersHorizontal, BarChart3, type LucideIcon } from 'lucide-react'
+import { ChevronLeft, Target, TrendingUp, Percent, Wallet, Award, CalendarDays, Gauge, SlidersHorizontal, BarChart3, Store as StoreIcon, Link2 as LinkIcon, type LucideIcon } from 'lucide-react'
 import { campaignPerformance, performanceTone } from '@/lib/kpi/performance'
 
 // Campaign detail — ONE url, TWO tabs (?tab=):
@@ -33,6 +34,8 @@ interface ActualRow {
   store_id: string; actual_value: number; run_rate: number | null
   remaining_target: number | null; achieved_tier_order: number | null
   store_commission_pool: number | null; synced_at: string
+  actual_offline: number | null; actual_affiliate: number | null
+  offline_synced_at: string | null; affiliate_synced_at: string | null
 }
 
 function TierChips({ tiers }: { tiers: TierRow[] }) {
@@ -62,7 +65,7 @@ export default async function CampaignDetailPage({
 
   const supabase = await createClient()
   const { data: c } = await supabase
-    .from('kpi_campaigns').select('id, name, start_date, end_date, status, is_test, updated_at').eq('id', id).single()
+    .from('kpi_campaigns').select('id, name, start_date, end_date, status, is_test, updated_at, metric_offline, metric_affiliate').eq('id', id).single()
   if (!c) notFound()
 
   const tab: 'config' | 'result' = sp.tab === 'config' || sp.tab === 'result'
@@ -85,7 +88,7 @@ export default async function CampaignDetailPage({
       .eq('campaign_id', id).order('created_at', { ascending: false }).limit(5),
     supabase
       .from('kpi_campaign_store_actuals')
-      .select('store_id, actual_value, run_rate, remaining_target, achieved_tier_order, store_commission_pool, synced_at')
+      .select('store_id, actual_value, actual_offline, actual_affiliate, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
       .eq('campaign_id', id),
   ])
   const queryError = targetsErr?.message ?? runsErr?.message ?? actualsErr?.message ?? null
@@ -110,6 +113,10 @@ export default async function CampaignDetailPage({
   // Result summary aggregates.
   const totalTarget = targets.reduce((sum, t) => sum + (Number(t.kpi_target) || 0), 0)
   const totalActual = actuals.reduce((sum, a) => sum + (Number(a.actual_value) || 0), 0)
+  // P3-E: breakdown 2 nguồn — CHỈ render khi campaign bật cả 2 chỉ số.
+  const showBreakdown = c.metric_offline === true && c.metric_affiliate === true
+  const totalOffline = actuals.reduce((sum, a) => sum + (Number(a.actual_offline) || 0), 0)
+  const totalAffiliate = actuals.reduce((sum, a) => sum + (Number(a.actual_affiliate) || 0), 0)
   const totalPct = totalTarget > 0 ? (totalActual / totalTarget) * 100 : 0
   const totalPool = actuals.reduce((sum, a) => sum + (Number(a.store_commission_pool) || 0), 0)
   const reachedCount = actuals.filter((a) => a.achieved_tier_order !== null).length
@@ -154,7 +161,7 @@ export default async function CampaignDetailPage({
         </p>
         {queryError && (
           <p className="text-sm text-destructive mt-1">
-            Lỗi truy vấn dữ liệu: {queryError} — kiểm tra migration 070/071/072 đã apply chưa.
+            Lỗi truy vấn dữ liệu: {queryError} — kiểm tra migration 070/071/072/092/093 đã apply chưa.
           </p>
         )}
       </div>
@@ -167,6 +174,21 @@ export default async function CampaignDetailPage({
 
       {tab === 'config' ? (
         <>
+          {/* P3-E3: chỉ số doanh số của campaign — sửa khi draft/paused,
+              read-only khi active/ended; server action là boundary cuối. */}
+          <Card>
+            <CardContent className="p-4">
+              <p className="text-sm font-medium mb-2">Chỉ số doanh số</p>
+              <CampaignMetricEditor
+                campaignId={c.id}
+                status={c.status}
+                metricOffline={c.metric_offline === true}
+                metricAffiliate={c.metric_affiliate === true}
+                affiliateEnabled={isKpiAffiliateEnabled()}
+              />
+            </CardContent>
+          </Card>
+
           {canImport && (
             <Card>
               <CardContent className="p-4">
@@ -237,6 +259,13 @@ export default async function CampaignDetailPage({
               { label: 'Tổng KPI target', value: vnd(totalTarget), icon: Target, tile: 'bg-primary/10 text-primary' },
               { label: 'Tổng actual GMV', value: lastSynced ? vnd(totalActual) : '—', icon: TrendingUp,
                 tile: lastSynced && totalActual > 0 ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground' },
+              // P3-E: breakdown tổng 2 nguồn (chỉ khi campaign bật cả 2)
+              ...(showBreakdown ? [
+                { label: 'GMV Offline', value: lastSynced ? vnd(totalOffline) : '—', icon: StoreIcon,
+                  tile: 'bg-primary/10 text-primary' },
+                { label: 'GMV Affiliate', value: lastSynced ? vnd(totalAffiliate) : '—', icon: LinkIcon,
+                  tile: 'bg-muted text-muted-foreground' },
+              ] : []),
               { label: 'Hoàn thành', value: lastSynced ? `${totalPct.toFixed(1)}%` : '—', icon: Percent,
                 tile: 'bg-primary/10 text-primary', bar: true,
                 valueCls: !lastSynced ? undefined : totalPct >= 100 ? 'text-green-600' : 'text-primary' },
@@ -283,6 +312,8 @@ export default async function CampaignDetailPage({
                       <th className="text-left px-4 py-2.5">Phân loại</th>
                       <th className="text-right px-4 py-2.5">KPI target</th>
                       <th className="text-right px-4 py-2.5">Actual GMV</th>
+                      {showBreakdown && <th className="text-right px-4 py-2.5">GMV Offline</th>}
+                      {showBreakdown && <th className="text-right px-4 py-2.5">GMV Affiliate</th>}
                       <th className="text-right px-4 py-2.5">%</th>
                       <th className="text-right px-4 py-2.5">Nhịp độ</th>
                       <th className="text-right px-4 py-2.5">Còn thiếu</th>
@@ -300,6 +331,8 @@ export default async function CampaignDetailPage({
                           <td className="px-4 py-2.5 text-xs">{t.store_kpi_group ?? '—'}</td>
                           <td className="px-4 py-2.5 text-right">{vnd(t.kpi_target)}</td>
                           <td className="px-4 py-2.5 text-right">{a ? vnd(a.actual_value) : '—'}</td>
+                          {showBreakdown && <td className="px-4 py-2.5 text-right text-muted-foreground">{a?.actual_offline != null ? vnd(a.actual_offline) : '—'}</td>}
+                          {showBreakdown && <td className="px-4 py-2.5 text-right text-muted-foreground">{a?.actual_affiliate != null ? vnd(a.actual_affiliate) : '—'}</td>}
                           <td className="px-4 py-2.5">
                             {a?.run_rate != null ? (
                               <div className="flex items-center justify-end gap-2">

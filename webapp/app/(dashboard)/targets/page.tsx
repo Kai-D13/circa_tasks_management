@@ -12,8 +12,15 @@ import { PeriodTabs, type TargetPeriod } from '@/components/targets/PeriodTabs'
 import { CampaignCardList } from '@/components/kpi/CampaignCardList'
 import { CampaignKpiView, type CampaignView } from '@/components/kpi/CampaignKpiView'
 import { CampaignResultSummary } from '@/components/kpi/CampaignResultSummary'
-import { isKpiCampaignEnabled } from '@/lib/kpi/flags'
+import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import { isReferralEnabled } from '@/lib/affiliate/flags'
+import { AffiliateQrCard } from '@/components/affiliate/AffiliateQrCard'
+import { AffiliateGmvCard } from '@/components/affiliate/AffiliateGmvCard'
+import { AFFILIATE_QR_FILTER, qrCardVisible, qrCardKey, qrEligibleRole } from '@/lib/affiliate/qrDisplay'
+import { reduceAffiliateAgg, currentVnMonthISO, overviewVisibleFor, canShowOwnOsGmv, type AffiliateAggInput } from '@/lib/affiliate/overview'
+import { vnDayRange } from '@/lib/kpi/engine'
+import { supabaseAdmin } from '@/lib/supabase/admin'
+import { getAffiliateSyncHealth, supabaseAffiliateHealthDb } from '@/lib/affiliate/health'
 import { ReferralCard, type ReferralItem } from '@/components/referral/ReferralCard'
 import { formatDateTime, currentWeekStart } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
@@ -156,11 +163,11 @@ async function fetchCampaignViews(
   const [{ data: targets, error: tErr }, { data: actuals, error: aErr }] = await Promise.all([
     supabase
       .from('kpi_campaign_store_targets')
-      .select('kpi_target, store_kpi_group, campaign:kpi_campaigns!inner(id, name, start_date, end_date), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
+      .select('kpi_target, store_kpi_group, campaign:kpi_campaigns!inner(id, name, start_date, end_date, metric_offline, metric_affiliate), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
       .eq('store_id', storeId),
     supabase
       .from('kpi_campaign_store_actuals')
-      .select('campaign_id, actual_value, run_rate, remaining_target, achieved_tier_order, store_commission_pool, synced_at')
+      .select('campaign_id, actual_value, actual_offline, actual_affiliate, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
       .eq('store_id', storeId),
   ])
   if (tErr || aErr) {
@@ -170,13 +177,13 @@ async function fetchCampaignViews(
     return []
   }
   const actualByCampaign = new Map(
-    ((actuals ?? []) as { campaign_id: string; actual_value: number; run_rate: number | null; remaining_target: number | null; achieved_tier_order: number | null; store_commission_pool: number | null; synced_at: string }[])
+    ((actuals ?? []) as { campaign_id: string; actual_value: number; actual_offline: number | null; actual_affiliate: number | null; run_rate: number | null; remaining_target: number | null; achieved_tier_order: number | null; store_commission_pool: number | null; offline_synced_at: string | null; affiliate_synced_at: string | null; synced_at: string }[])
       .map((a) => [a.campaign_id, a]),
   )
   return ((targets ?? []) as unknown as {
     kpi_target: number
     store_kpi_group: string | null
-    campaign: { id: string; name: string; start_date: string; end_date: string }
+    campaign: { id: string; name: string; start_date: string; end_date: string; metric_offline: boolean; metric_affiliate: boolean }
     kpi_campaign_store_tiers: { tier_order: number; threshold_pct: number; commission_amount: number }[]
   }[])
     .map((t) => {
@@ -195,6 +202,12 @@ async function fetchCampaignViews(
         achieved_tier_order: a?.achieved_tier_order ?? null,
         store_commission_pool: a?.store_commission_pool ?? null,
         synced_at: a?.synced_at ?? null,
+        metric_offline: t.campaign.metric_offline === true,
+        metric_affiliate: t.campaign.metric_affiliate === true,
+        actual_offline: a?.actual_offline !== null && a?.actual_offline !== undefined ? Number(a.actual_offline) : null,
+        actual_affiliate: a?.actual_affiliate !== null && a?.actual_affiliate !== undefined ? Number(a.actual_affiliate) : null,
+        offline_synced_at: a?.offline_synced_at ?? null,
+        affiliate_synced_at: a?.affiliate_synced_at ?? null,
       }
     })
     .sort((a, b) => a.end_date.localeCompare(b.end_date)) // nearest deadline first
@@ -258,13 +271,13 @@ export default async function TargetsPage({
   // Daily GMV series for the SELECTED campaign (drives the chart + "GMV hôm nay").
   // Selection resolved here so the fetch matches what the component will render.
   let selectedCampaignId: string | undefined
-  let campaignDaily: { date: string; gmv: number }[] = []
+  let campaignDaily: { date: string; gmv: number; gmv_affiliate: number }[] = []
   let campaignDailyError = false
   if (campaignViews.length > 0 && resolvedStoreId && !showCampaignList) {
     selectedCampaignId = (campaignViews.find((c) => c.id === params.campaign) ?? campaignViews[0]).id
     const { data: dailyRows, error: dErr } = await supabase
       .from('kpi_campaign_store_daily_actuals')
-      .select('date, gmv')
+      .select('date, gmv, gmv_affiliate')
       .eq('campaign_id', selectedCampaignId)
       .eq('store_id', resolvedStoreId)
       .order('date')
@@ -273,8 +286,93 @@ export default async function TargetsPage({
       console.error('[targets] daily query failed:', dErr.message)
       campaignDailyError = true
     }
-    campaignDaily = ((dailyRows ?? []) as { date: string; gmv: number }[])
-      .map((r) => ({ date: r.date, gmv: Number(r.gmv) || 0 }))
+    campaignDaily = ((dailyRows ?? []) as { date: string; gmv: number; gmv_affiliate: number | null }[])
+      .map((r) => ({ date: r.date, gmv: Number(r.gmv) || 0, gmv_affiliate: Number(r.gmv_affiliate) || 0 }))
+  }
+
+  // ── P3-H: QR Affiliate của store — CHỈ landing (không hiện trong ?campaign=),
+  //    chỉ khi KPI_AFFILIATE_ENABLED bật; 1 query mapping RLS-scoped (session
+  //    client — staff/SM/store_manager đọc qua policy apm_select_store_qr, mig
+  //    095); ảnh tĩnh public GCS, KHÔNG gọi Mongo. Hiện CẢ khi store không có
+  //    campaign active (giới thiệu khách không phụ thuộc vòng đời campaign). ──
+  type AffiliateQrRow = { partner_code: string; qr_image_url: string | null; qr_destination_url: string | null }
+  // Contract query/render/trạng thái = lib/affiliate/qrDisplay (thuần, có test).
+  // Slice C (audit 24/07): SM KHÔNG thấy QR — qrEligibleRole chỉ nhận staff/
+  // store_manager (app không query; RLS 097 chặn tầng DB). SM giữ card GMV +
+  // link Overview phía dưới.
+  const showAffiliateQr = qrCardVisible({
+    flagEnabled: isKpiAffiliateEnabled(),
+    eligibleRole: qrEligibleRole(profile?.role),
+    storeResolved: !!resolvedStoreId,
+    inCampaignDetail: !!params.campaign,
+  })
+
+  // ── P3-I: GMV Affiliate tháng hiện tại cho SM/QLCH (own OS store) — CHỈ ĐỌC
+  //    snapshot Supabase (RPC service_role qua admin; authz app-layer:
+  //    resolvedStoreId đã derive server-side từ profile/sm assignments). Staff
+  //    KHÔNG thấy (overviewVisibleFor='none'). KHÔNG nút đồng bộ. ──
+  const gmvAccess = overviewVisibleFor({
+    isSuper: false, // các nhánh landing dưới đây chỉ dành cho staff/sm/store_manager
+    role: profile?.role,
+    flagEnabled: isKpiAffiliateEnabled(),
+  })
+  let showAffiliateGmv = gmvAccess === 'own-os' && !!resolvedStoreId && !params.campaign
+  const gmvMonth = currentVnMonthISO(vnTodayISO)
+  const gmvMonthLabel = `Tháng ${gmvMonth.from.slice(5, 7)}/${gmvMonth.from.slice(0, 4)}`
+  let affiliateGmv = { gmv: 0, orders: 0 }
+  let affiliateGmvError = false
+  let affiliateGmvSyncedAt: string | null = null
+  let affiliateGmvWarning: string | null = null
+  if (showAffiliateGmv && resolvedStoreId) {
+    // r1 (audit P1#1): RPC chạy service-role — RLS không cứu được lớp này nên
+    // BẮT BUỘC verify store là OS + active TRƯỚC khi gọi (canShowOwnOsGmv, có
+    // test). FS Store Manager / SM gán nhầm FS → ẩn card, 0 call RPC.
+    const { data: gmvStoreRow } = await supabase
+      .from('stores').select('store_type, is_active').eq('id', resolvedStoreId).maybeSingle()
+    if (!canShowOwnOsGmv(gmvStoreRow as { store_type: string; is_active: boolean } | null)) {
+      showAffiliateGmv = false
+    } else {
+      // r1.1 (audit HEALTH FAIL-CLOSED): health TRƯỚC (đầy đủ — r1 P2#5), CHỈ
+      // gọi RPC khi nguồn READY; !ready → không aggregate, card hiện '—' +
+      // lý do cụ thể + lần sync thành công gần nhất — không bao giờ 0 giả.
+      const health = await getAffiliateSyncHealth(supabaseAffiliateHealthDb(supabaseAdmin), [resolvedStoreId])
+      affiliateGmvSyncedAt = health.lastSuccessAt
+      if (!health.ready) {
+        affiliateGmvWarning = health.reason
+      } else {
+        const range = vnDayRange(gmvMonth.from, gmvMonth.to)
+        const { data: aggData, error: aggErr } = await supabaseAdmin
+          .rpc('rpc_aggregate_affiliate_gmv', { p_store_ids: [resolvedStoreId], p_from: range.from, p_to: range.to })
+        if (aggErr) {
+          // Gồm cả fail-closed (đơn DELIVERED thiếu completed_time) — card hiện lỗi gọn.
+          console.error('[targets] affiliate gmv query failed:', aggErr.message)
+          affiliateGmvError = true
+        } else {
+          const r = reduceAffiliateAgg((aggData ?? []) as AffiliateAggInput[])
+          const a = r.byStore.get(resolvedStoreId)
+          affiliateGmv = { gmv: a?.gmv ?? 0, orders: a?.orders ?? 0 }
+        }
+      }
+    }
+  }
+  let affiliateQr: AffiliateQrRow | null = null
+  let affiliateQrError = false
+  if (showAffiliateQr && resolvedStoreId) {
+    const { data: qrRow, error: qrErr } = await supabase
+      .from('affiliate_partner_mappings')
+      .select('partner_code, qr_image_url, qr_destination_url')
+      .eq('store_id', resolvedStoreId)
+      .match(AFFILIATE_QR_FILTER)
+      .not('qr_image_url', 'is', null)
+      .limit(1)
+      .maybeSingle()
+    if (qrErr) {
+      // r1 (audit P2 #3): lỗi DB/RLS/migration ≠ "chưa cấu hình" — card hiện
+      // "Không tải được mã QR", không giả dạng missing.
+      console.error('[targets] affiliate qr query failed:', qrErr.message)
+      affiliateQrError = true
+    }
+    affiliateQr = (qrRow as AffiliateQrRow | null) ?? null
   }
 
   // ── SM render branch: store selector + the store's campaign view ────────────
@@ -330,6 +428,29 @@ export default async function TargetsPage({
               storeName={selStore?.name ?? 'Cửa hàng'} />
           </>
         )}
+        {/* P3-H: QR dưới danh sách campaign, theo store đang chọn — ẩn trong detail */}
+        {showAffiliateQr && (
+          <AffiliateQrCard
+            key={qrCardKey(resolvedStoreId ?? null, affiliateQr?.qr_image_url ?? null)}
+            storeName={selStore?.name ?? 'Cửa hàng'}
+            partnerCode={affiliateQr?.partner_code ?? null}
+            imageUrl={affiliateQr?.qr_image_url ?? null}
+            destinationUrl={affiliateQr?.qr_destination_url ?? null}
+            queryError={affiliateQrError}
+          />
+        )}
+        {/* P3-I: GMV Affiliate tháng hiện tại của store đang chọn (chỉ đọc) */}
+        {showAffiliateGmv && (
+          <AffiliateGmvCard
+            monthLabel={gmvMonthLabel}
+            gmv={affiliateGmv.gmv}
+            orders={affiliateGmv.orders}
+            syncedAt={affiliateGmvSyncedAt}
+            error={affiliateGmvError}
+            sourceWarning={affiliateGmvWarning}
+            detailHref="/targets/campaigns/affiliate"
+          />
+        )}
       </div>
     )
   }
@@ -357,6 +478,29 @@ export default async function TargetsPage({
             />
             <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Quản lý" todayISO={vnTodayISO} storeName={storeName} />
           </>
+        )}
+        {/* P3-H: QR dưới danh sách campaign (hiện cả khi chưa có campaign) — ẩn trong detail */}
+        {showAffiliateQr && (
+          <AffiliateQrCard
+            key={qrCardKey(resolvedStoreId ?? null, affiliateQr?.qr_image_url ?? null)}
+            storeName={storeName}
+            partnerCode={affiliateQr?.partner_code ?? null}
+            imageUrl={affiliateQr?.qr_image_url ?? null}
+            destinationUrl={affiliateQr?.qr_destination_url ?? null}
+            queryError={affiliateQrError}
+          />
+        )}
+        {/* P3-I: GMV Affiliate tháng hiện tại của store mình (chỉ đọc) */}
+        {showAffiliateGmv && (
+          <AffiliateGmvCard
+            monthLabel={gmvMonthLabel}
+            gmv={affiliateGmv.gmv}
+            orders={affiliateGmv.orders}
+            syncedAt={affiliateGmvSyncedAt}
+            error={affiliateGmvError}
+            sourceWarning={affiliateGmvWarning}
+            detailHref="/targets/campaigns/affiliate"
+          />
         )}
       </div>
     )
@@ -442,6 +586,17 @@ export default async function TargetsPage({
               campaign home) — hidden inside a drilled-in campaign detail (?campaign). */}
           {!params.campaign && (
             <>
+              {/* P3-H: QR ngay dưới danh sách chiến dịch */}
+              {showAffiliateQr && (
+                <AffiliateQrCard
+                  key={qrCardKey(resolvedStoreId ?? null, affiliateQr?.qr_image_url ?? null)}
+                  storeName={storeName}
+                  partnerCode={affiliateQr?.partner_code ?? null}
+                  imageUrl={affiliateQr?.qr_image_url ?? null}
+                  destinationUrl={affiliateQr?.qr_destination_url ?? null}
+                  queryError={affiliateQrError}
+                />
+              )}
               {referral && <ReferralCard {...referral} />}
               {referralError && (
                 <ErrorState message="Không tải được dữ liệu chương trình giới thiệu" hint="Vui lòng thử lại sau hoặc báo Admin." />
@@ -503,6 +658,19 @@ export default async function TargetsPage({
               Cập nhật lúc {formatDateTime(current.refreshed_at)} · Nguồn: báo cáo BI · * Không bao gồm đơn online
             </p>
           </>
+        )}
+
+        {/* P3-H: QR hiện cả khi store chưa có campaign active (giới thiệu khách
+            không phụ thuộc vòng đời campaign) */}
+        {showAffiliateQr && (
+          <AffiliateQrCard
+            key={qrCardKey(resolvedStoreId ?? null, affiliateQr?.qr_image_url ?? null)}
+            storeName={storeName}
+            partnerCode={affiliateQr?.partner_code ?? null}
+            imageUrl={affiliateQr?.qr_image_url ?? null}
+            destinationUrl={affiliateQr?.qr_destination_url ?? null}
+            queryError={affiliateQrError}
+          />
         )}
 
         {/* Referral campaign ("Giới thiệu bạn bè") — under Doanh số */}

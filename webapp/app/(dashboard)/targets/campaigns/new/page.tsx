@@ -2,7 +2,7 @@ import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { isSuperAdminEmail } from '@/lib/authz'
-import { isKpiCampaignEnabled } from '@/lib/kpi/flags'
+import { isKpiAffiliateEnabled, isKpiCampaignEnabled } from '@/lib/kpi/flags'
 import { CampaignWizard } from '@/components/kpi/CampaignWizard'
 import { ChevronLeft } from 'lucide-react'
 
@@ -19,7 +19,7 @@ export default async function NewCampaignPage() {
         </Link>
         <h1 className="text-xl font-semibold mt-1">Tạo chiến dịch KPI</h1>
       </div>
-      <CampaignWizard />
+      <CampaignWizard affiliateEnabled={isKpiAffiliateEnabled()} />
     </div>
   )
 }

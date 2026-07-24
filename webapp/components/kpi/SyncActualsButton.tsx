@@ -15,14 +15,20 @@ export function SyncActualsButton({ campaignId }: { campaignId: string }) {
   function handleSync() {
     startTransition(async () => {
       const r = await syncCampaignActuals(campaignId)
-      if (r?.error) { toast.error(r.error); return }
+      if (r && 'error' in r && r.error) { toast.error(r.error); return }
+      if (r && 'preserved' in r && r.preserved) {
+        // Nguồn chưa sẵn sàng (stale/đang chạy/unmatched…) — số cũ được GIỮ,
+        // không ghi đè 0. Hiện lý do để super admin xử lý nguồn.
+        toast.info(`Giữ số liệu hiện tại — ${r.reason}`, { duration: 8000 })
+        return
+      }
       const ok = r as { upserted?: number; unmatched?: string[] }
       const unmatched = ok.unmatched ?? []
       if (unmatched.length > 0) {
         // A store has a target but ZERO BigQuery rows in the range — surface it
         // so admin doesn't read a silent 0 as a clean sync.
         toast.warning(
-          `Đồng bộ ${ok.upserted ?? 0} cửa hàng — ${unmatched.length} POS chưa có dữ liệu BigQuery: ${unmatched.slice(0, 5).join(', ')}${unmatched.length > 5 ? '…' : ''}`,
+          `Đồng bộ ${ok.upserted ?? 0} cửa hàng — ${unmatched.length} POS chưa có dữ liệu Offline (BigQuery) trong kỳ: ${unmatched.slice(0, 5).join(', ')}${unmatched.length > 5 ? '…' : ''}`,
           { duration: 8000 },
         )
       } else {
@@ -35,7 +41,7 @@ export function SyncActualsButton({ campaignId }: { campaignId: string }) {
   return (
     <Button size="sm" variant="outline" onClick={handleSync} disabled={pending} className="gap-1.5">
       <RefreshCw className={pending ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
-      {pending ? 'Đang đồng bộ…' : 'Đồng bộ doanh số từ BI'}
+      {pending ? 'Đang đồng bộ…' : 'Đồng bộ doanh số'}
     </Button>
   )
 }

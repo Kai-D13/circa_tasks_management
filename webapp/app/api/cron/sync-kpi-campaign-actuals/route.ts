@@ -3,6 +3,8 @@ import { revalidatePath } from 'next/cache'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { isKpiCampaignEnabled } from '@/lib/kpi/flags'
 import { syncCampaign } from '@/lib/kpi/actuals'
+import { runSyncBatch, shouldRevalidateAfterBatch } from '@/lib/kpi/syncBatch'
+import { sanitizeOpsText } from '@/lib/ops/sanitize'
 
 // GET /api/cron/sync-kpi-campaign-actuals — KPI Campaign actual-GMV sync.
 // 1. Auto-transition: active campaigns past end_date → 'ended'.
@@ -30,37 +32,36 @@ export async function GET(request: NextRequest) {
       .eq('status', 'active')
       .lt('end_date', vnTodayISO)
       .select('id')
-    if (endErr) console.error('[sync-kpi-campaign] auto-end failed:', endErr.message)
+    if (endErr) console.error('[sync-kpi-campaign] auto-end failed:', sanitizeOpsText(endErr.message))
 
     // Active + recently-ended (≤3 days) campaigns to sync.
     const cutoff = new Date(Date.parse(vnTodayISO) - 3 * 86400_000).toISOString().slice(0, 10)
     const { data: campaigns, error: cErr } = await supabaseAdmin
       .from('kpi_campaigns')
-      .select('id, name, start_date, end_date, status')
+      .select('id, name')
       .or(`status.eq.active,and(status.eq.ended,end_date.gte.${cutoff})`)
-    if (cErr) return NextResponse.json({ error: cErr.message }, { status: 500 })
+    if (cErr) return NextResponse.json({ error: sanitizeOpsText(cErr.message) }, { status: 500 })
 
-    let upserted = 0
-    const errors: string[] = []
-    const unmatched: string[] = []
-    for (const c of campaigns ?? []) {
-      const r = await syncCampaign(c as { id: string; start_date: string; end_date: string })
-      if ('error' in r) errors.push(`${(c as { name?: string }).name ?? c.id}: ${r.error}`)
-      else { upserted += r.upserted; unmatched.push(...r.unmatched) }
+    // P3-C: toàn bộ contract batch (200/207/500 + body + log lines) nằm trong
+    // runSyncBatch THUẦN (lib/kpi/syncBatch.ts — có test riêng); route chỉ IO.
+    // Một campaign preserve/failed không chặn campaign kế; offline-only vẫn
+    // sync khi nguồn affiliate stale.
+    const outcome = await runSyncBatch(campaigns ?? [], syncCampaign)
+    for (const line of outcome.logLines) console.warn(line)
+
+    // Revalidate khi có snapshot MỚI hoặc có campaign vừa auto-end (DB đã đổi
+    // status dù sync bị preserve/fail — audit r1 P2).
+    if (shouldRevalidateAfterBatch(outcome.anySuccess, (endedRows ?? []).length)) {
+      revalidatePath('/targets')
+      revalidatePath('/targets/campaigns')
     }
-
-    revalidatePath('/targets')
-    revalidatePath('/targets/campaigns')
-    return NextResponse.json({
-      ok: errors.length === 0,
-      campaigns: (campaigns ?? []).length,
-      upserted,
-      endedTransitioned: (endedRows ?? []).length,
-      unmatched: [...new Set(unmatched)],
-      errors,
-    }, { status: errors.length ? 207 : 200 })
+    return NextResponse.json(
+      { ...outcome.body, endedTransitioned: (endedRows ?? []).length },
+      { status: outcome.httpStatus },
+    )
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
+    // Outer catch cũng phải sanitize — exception driver có thể chứa URI/token.
+    const msg = sanitizeOpsText(err instanceof Error ? err.message : String(err))
     const status = msg.includes('BigQuery') || msg.includes('Google token') ? 502 : 500
     return NextResponse.json({ error: msg }, { status })
   }

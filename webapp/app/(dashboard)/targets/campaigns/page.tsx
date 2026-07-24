@@ -3,7 +3,8 @@ import Link from 'next/link'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { createClient } from '@/lib/supabase/server'
 import { isSuperAdminEmail } from '@/lib/authz'
-import { isKpiCampaignEnabled } from '@/lib/kpi/flags'
+import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
+import { CampaignsTabs } from '@/components/kpi/CampaignsTabs'
 import { Card, CardContent } from '@/components/ui/card'
 import { buttonVariants } from '@/components/ui/button'
 import { CampaignStatusButton } from '@/components/kpi/CampaignStatusButton'
@@ -75,6 +76,9 @@ export default async function CampaignsPage() {
           <Plus className="h-4 w-4 mr-1" /> Tạo chiến dịch
         </Link>
       </div>
+
+      {/* P3-I: tab Affiliate overview — chỉ render khi KPI_AFFILIATE_ENABLED */}
+      <CampaignsTabs active="campaigns" affiliateEnabled={isKpiAffiliateEnabled()} />
 
       {queryError && (
         <p className="text-sm text-destructive">

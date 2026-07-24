@@ -182,6 +182,14 @@ export interface ResolveReport {
   negative_price_sample: number[] // tối đa 10 order_id
 }
 
+// Danh sách code có VẤN ĐỀ NGUỒN (chưa map + mapping inactive) — F2 hợp nhất
+// vào p_unmatched của rpc_finish để affiliate_sync_runs lưu đủ (health gate
+// P3-A đọc từ đó; inactive_codes không có cột riêng — quyết định audit 23/07,
+// không cần migration).
+export function sourceIssueCodes(report: ResolveReport): string[] {
+  return [...new Set([...report.unmatched_codes, ...report.inactive_codes])]
+}
+
 export function resolveStores(
   rows: AffiliateOrderRow[],
   mappings: PartnerMappingRow[],

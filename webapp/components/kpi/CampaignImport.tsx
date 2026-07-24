@@ -89,7 +89,7 @@ export function CampaignImport({
       // Import clears previous actuals server-side (stale vs new targets) — tell
       // the admin the next step explicitly.
       toast.success(
-        `Đã nạp ${(r as { upserted?: number }).upserted ?? ''} cửa hàng — kết quả cũ đã được xoá, bấm "Đồng bộ doanh số từ BI" ở tab Kết quả để cập nhật`,
+        `Đã nạp ${(r as { upserted?: number }).upserted ?? ''} cửa hàng — kết quả cũ đã được xoá, bấm "Đồng bộ doanh số" ở tab Kết quả để cập nhật`,
         { duration: 8000 },
       )
       if (redirectTo) router.push(redirectTo)

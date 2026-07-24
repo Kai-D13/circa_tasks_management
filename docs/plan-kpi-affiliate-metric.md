@@ -108,3 +108,14 @@ MongoDB ─(cron 2h, phút 05)─> affiliate_orders┘        │
 ---
 
 **Trạng thái duyệt:** contract mục 1 + kiến trúc + schema + rollout = đã chốt theo audit 22/07. Còn lại duy nhất **mục 2 (field ngày ghi nhận)** chờ stakeholder — sẽ trình kèm bằng chứng field list từ phiên VPN dry-run.
+
+---
+
+## Source contract — cập nhật 24/07/2026 (P3-I)
+
+1. **Double-count hybrid: ĐÓNG.** BI xác nhận (24/07, qua stakeholder audit): feed offline `tech__circa_os_gmv_kpi.gmv` **KHÔNG chứa** GMV online/Affiliate → công thức hybrid `Actual = GMV Offline (BigQuery) + GMV Affiliate (affiliate_orders)` không double-count. Đây là điều kiện nguồn — nếu BI đổi định nghĩa cột `gmv` sau này thì phải re-review trước.
+2. **Mapping 1 store : 1 partner active: ĐÃ CHỨNG MINH.** Preflight SQL (user chạy 24/07): `GROUP BY store_id HAVING count(*) > 1` trên mapping active os/fs → **0 rows**. Semantics bảng Affiliate Overview (1 dòng/store) đứng vững; unique index `uq_apm_qr_one_per_store` (095) giữ bất biến này cho QR.
+3. **Ngày ghi nhận:** `completed_time` theo giờ VN (chốt từ 092) — DELIVERED thiếu `completed_time` → fail-closed toàn tuyến (RPC RAISE → engine giữ snapshot, overview hiện cảnh báo nguồn).
+4. **Rule số âm: ĐÃ CHỐT (stakeholder 24/07).** `GMV Affiliate = SUM(total_price)` trên đơn `source_active=true AND status_norm='delivered'`, **BAO GỒM `total_price < 0`** — giá trị âm làm giảm GMV; đơn âm vẫn tính vào số đơn delivered. Engine + overview đã đúng rule này sẵn (không cần migration/RPC mới); test khóa tại `e2e/affiliate-overview.spec.ts`. Blocker bật flag về rule số âm: **ĐÓNG**.
+5. **Role matrix màn tổng hợp /targets/campaigns/affiliate (P3-I r1.2a, user chốt 24/07):** super = OS + FS · **admin phòng OPS = CHỈ AGGREGATE toàn bộ OS — TUYỆT ĐỐI KHÔNG raw order/PII** (user xác nhận 24/07; migration **096 DRAFT**: grant `affiliate_department_access` + policy `apm_select_dept_admin` đọc mapping os+active + **REDEFINE `aff_orders_select` BỎ nhánh admin-department** — super/sm/own-store giữ nguyên văn 090) · SM = store OS được phân công (**0 store phân công → notFound**) · Store Manager = store mình (**verify os+active — FS QLCH gõ URL → notFound trước khi dựng trang**) · **Staff + admin thường = notFound**. Data scoping thực thi bằng RLS (mappings đọc session client; storeIds cho RPC derive từ rows RLS trả). Điều hướng: SM/QLCH qua link "Xem chi tiết Affiliate" trên card GMV ở /targets; admin OPS (non-super) qua item sidebar "Affiliate" (contract `opsSidebarVisible`); super qua tab trong Chiến dịch KPI.
+6. **Health fail-closed trên UI (P3-I r1.1, 24/07):** mọi màn hiển thị số Affiliate (overview super + card SM/QLCH) gọi `getAffiliateSyncHealth` TRƯỚC; chỉ khi READY mới gọi `rpc_aggregate_affiliate_gmv`. Không READY (run running/failed · stale >180' · rejected>0 · unmatched/unknown · note · canary completed_time · lỗi lookup) → không aggregate, hiện `—` + lý do + lần sync thành công gần nhất — không bao giờ 0 giả.

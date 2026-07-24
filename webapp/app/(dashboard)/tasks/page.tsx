@@ -9,6 +9,7 @@ import { EmptyState } from '@/components/ds/EmptyState'
 import { ErrorState } from '@/components/ds/ErrorState'
 import { TaskFilters } from '@/components/tasks/TaskFilters'
 import { TaskList, TaskListItem, BroadcastGroup, StaffGroup, StaffBroadcastGroup, StaffBroadcastStore, TaskRow, ChildTask } from '@/components/tasks/TaskList'
+import { buildImportBatchGroups, groupModeActive, sliceGroupPage, type ImportBatchMember } from '@/lib/tasks/importBatchGroups'
 import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { ExportButton } from '@/components/common/ExportButton'
 import { Pagination } from '@/components/common/Pagination'
@@ -63,10 +64,10 @@ export default async function TasksPage({
 
   const nowIso = new Date().toISOString()
 
-  // Admin folding views (pending without a status sub-filter, and done) collapse
-  // many staff_all store-parents into ONE broadcast row. Paginate by GROUP unit
-  // (slice after grouping) instead of a row window, so a broadcast's stores never
-  // split across pages. Fetch all top-level parents (bounded) for these views.
+  // Admin folding views (r1.1: pending — KỂ CẢ status sub-filter — và done)
+  // collapse many staff_all store-parents into ONE broadcast row. Paginate by
+  // GROUP unit (slice after grouping) instead of a row window, so a broadcast's
+  // stores never split across pages. Fetch all top-level parents (bounded).
   // A "Người thực hiện" (assignee) filter targets ONE person's tasks — a flat
   // list is exactly that. Folding a broadcast is meaningless here (a staff_all
   // parent has assigned_to=null so it can't match), and would hide the matching
@@ -74,8 +75,13 @@ export default async function TasksPage({
   // folding paths → the main query returns a flat, correctly-paginated list.
   const userFilter = !isStaff && !!params.assignee
   const isAdminRole = profile?.role === 'admin'
-  const groupPaginate = isAdminRole && !showArchived && !userFilter
-    && ((view === 'pending' && !params.status) || view === 'done')
+  // r1 (audit P1#1): group mode admin mở cho CẢ status sub-filter (todo/
+  // in_progress/overdue) lẫn pending mặc định + done — trước đây status hẹp
+  // rơi về row-pagination nên import batch vẫn 25 dòng ở màn "Chờ thực hiện".
+  // Điều kiện = contract groupModeActive (lib/tasks/importBatchGroups, có
+  // test): admin + không archive + không assignee filter. Phân trang theo
+  // GROUP unit (fetch-all rồi slice) → 1 batch/broadcast không lặp qua trang.
+  const groupPaginate = groupModeActive({ isAdmin: isAdminRole, showArchived, userFilter })
   const GROUPS_PER_PAGE = 15
 
   // Narrow select — excludes description/input_data/required_outputs which grow
@@ -96,8 +102,8 @@ export default async function TasksPage({
     )
   }
   let query = needsCompleted
-    ? supabase.from('tasks').select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, completed_by, completed_at, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), completed_by_user:users!completed_by(full_name), creator:users!created_by(full_name), department:departments(name, color)', countOpt)
-    : supabase.from('tasks').select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), creator:users!created_by(full_name), department:departments(name, color)', countOpt)
+    ? supabase.from('tasks').select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, import_batch_id, completed_by, completed_at, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), completed_by_user:users!completed_by(full_name), creator:users!created_by(full_name), department:departments(name, color)', countOpt)
+    : supabase.from('tasks').select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, import_batch_id, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), creator:users!created_by(full_name), department:departments(name, color)', countOpt)
 
   // Inventory→TRF tasks are surfaced only under /inventory/trf — never in the
   // normal task list (any role, any view). source_type is NOT NULL DEFAULT 'task'.
@@ -181,10 +187,10 @@ export default async function TasksPage({
   const topLevelOnly = (profile?.role === 'admin' || profile?.role === 'store_manager' || isSm)
     && view === 'pending' && !params.status && !userFilter
 
-  // Admin/PIC with a status sub-filter: ALSO exclude children from pagination.
-  // Otherwise a 26-store/106-staff broadcast floods the 30-row page under 'todo'
-  // (parents + children all match) — partial trees, broadcast repeating across
-  // pages, inflated count. Matching children are re-fetched per page below.
+  // Admin/PIC with a status sub-filter: ALSO exclude children from the main
+  // query — otherwise a 26-store/106-staff broadcast floods the page under
+  // 'todo' (parents + children all match). Matching children are fetched ONCE
+  // below (r1.1: same dataset for EVERY page — group slicing happens after).
   const adminTreeFilter = isAdminRole && view === 'pending' && !showArchived && !userFilter
     && (params.status === 'todo' || params.status === 'in_progress' || params.status === 'overdue')
 
@@ -192,7 +198,8 @@ export default async function TasksPage({
   // migration 031), so without exclusion the page would be bare pharmacist children —
   // 106 flat rows for one broadcast, with count/pagination driven by children. Page
   // by TOP-LEVEL done tasks instead, and assemble the broadcast trees from a separate
-  // children fetch (page 1 only) — exactly the in_progress/overdue tree pattern.
+  // children fetch (r1.1: fetched ONCE for every page — group slicing needs the
+  // same dataset on all pages) — exactly the in_progress/overdue tree pattern.
   const adminDoneTree = isAdminRole && view === 'done' && !showArchived && !userFilter
   if (topLevelOnly || adminTreeFilter || adminDoneTree) query = query.is('parent_task_id', null)
 
@@ -243,7 +250,7 @@ export default async function TasksPage({
   // Fetch children for staff_all parents on this page (excluded from paginated query).
   let extraChildren: NonNullable<typeof tasks> = []
   let childrenError: { message: string } | null = null
-  const CHILD_COLS = 'id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), department:departments(name, color)'
+  const CHILD_COLS = 'id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, import_batch_id, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), department:departments(name, color)'
   if (topLevelOnly) {
     const parentIds = (tasks ?? [])
       .filter(t => (t as { assignment_mode?: string }).assignment_mode === 'staff_all')
@@ -270,15 +277,15 @@ export default async function TasksPage({
     // broadcast tree shows exactly the pharmacists the filter is about.
     //
     //   todo        → parents match the filter themselves (their status is the
-    //                 constant 'todo'), so scope children to the parents on this
-    //                 page — trees stay complete and never duplicate across pages.
+    //                 constant 'todo'), so scope children to the fetched parents
+    //                 (r1.1: fetch-all parents → trees complete on every page).
     //   overdue /   → parents can never match (overdue excludes staff_all parents
     //   in_progress   by design; parents are never 'in_progress'), so pull ALL
-    //                 matching children (bounded) and let the orphan grouping
-    //                 assemble the per-broadcast trees. Page 1 only — the trees
-    //                 ride alongside the top-level pagination, and repeating them
-    //                 on every page would be worse than the rare long list.
-    let childQ = supabase.from('tasks').select(CHILD_COLS).is('archived_at', null)
+    //                 matching children (bounded + exact count) and let the
+    //                 orphan grouping assemble the per-broadcast trees.
+    //   r1.1 (audit P1#1): fetch ở MỌI page — group slicing cần dataset GIỐNG
+    //   NHAU cho mọi request; gate page===1 cũ làm trang 2 rỗng cây/sai số trang.
+    let childQ = supabase.from('tasks').select(CHILD_COLS, { count: 'exact' }).is('archived_at', null)
     let run = false
     if (params.status === 'todo') {
       const parentIds = (tasks ?? [])
@@ -292,7 +299,7 @@ export default async function TasksPage({
           .order('created_at', { ascending: true })
         run = true
       }
-    } else if (page === 1) {
+    } else {
       childQ = childQ.not('parent_task_id', 'is', null)
       childQ = params.status === 'overdue'
         ? childQ.or(`status.eq.overdue,and(deadline.lt.${nowIso},status.neq.done)`)
@@ -306,25 +313,34 @@ export default async function TasksPage({
       if (params.category) childQ = childQ.eq('category', params.category)
       if (params.department_id) childQ = childQ.eq('department_id', params.department_id)
       if (!showOld) childQ = childQ.gte('created_at', ageCutoffIso)
-      const { data: childData, error: childErr } = await childQ
+      const { data: childData, error: childErr, count: childCount } = await childQ
       if (childErr) childrenError = childErr
       extraChildren = (childData ?? []) as unknown as NonNullable<typeof tasks>
+      // r1.1 (audit): kết quả bị CAP cắt → fail-visible (tree thiếu con = badge
+      // sai), yêu cầu thu hẹp bộ lọc — không âm thầm bỏ phần còn lại.
+      if (!childErr && childCount !== null && childCount > extraChildren.length) {
+        childrenError = childrenError ?? {
+          message: `Bộ lọc khớp ${childCount} mục con — vượt giới hạn hiển thị (${extraChildren.length}). Thu hẹp bộ lọc (cửa hàng/bộ phận/loại) rồi thử lại.`,
+        }
+      }
     }
   }
 
-  // Done view (admin/PIC): children are excluded from pagination above; on page 1
-  // fetch ALL done children (bounded 500, most recently submitted first) and let the
-  // orphan grouping assemble the Task → Store → Dược sĩ trees. A lightweight stats
-  // query then provides the TRUE per-broadcast totals so the badge reads "61/106 đã
-  // nộp" even when some stores have zero submissions (those stores simply have no
-  // tree row — there is nothing to list for them). Page 1 only — same accepted
-  // trade-off as the in_progress/overdue trees.
+  // Done view (admin/PIC): children are excluded from pagination above; fetch
+  // ALL done children ONCE (bounded 500, most recently submitted first — r1.1:
+  // no per-page gate, same dataset for every page) and let the orphan grouping
+  // assemble the Task → Store → Dược sĩ trees. A lightweight stats query then
+  // provides the TRUE per-broadcast totals so the badge reads "61/106 đã nộp"
+  // even when some stores have zero submissions (those stores simply have no
+  // tree row — there is nothing to list for them).
   //
-  // ACCEPTED BOUNDS (revisit with an RPC that paginates by group unit when the
-  // history grows): trees render on page 1 only, from the 500 most recently
-  // submitted children — at the current scale (1-2 broadcasts/day × ~106 staff)
-  // that covers the several most recent broadcasts, which is what admins review.
-  // Older broadcasts are reachable via their store rows / the task detail pages.
+  // DEBT (audit r1.1 P2 — ticket mở, nâng P1 nếu QA Done thiếu dữ liệu thật):
+  // done children cap 500 CHƯA có exact-count guard như nhánh in_progress/
+  // overdue — lịch sử tăng có thể ẩn broadcast cũ khỏi cây (500 dòng mới nhất
+  // theo created_at desc; scale hiện tại 1-2 broadcast/ngày × ~106 staff phủ
+  // đủ các broadcast gần đây admin đang review). Hướng xử lý: exact count +
+  // fail-visible, hoặc RPC phân trang theo group unit. Broadcast cũ vẫn xem
+  // được qua store rows / task detail.
   const doneStatsByParent    = new Map<string, { total: number; done: number }>()
   const doneStatsByBroadcast = new Map<string, { total: number; done: number; parents: Set<string> }>()
   // Group-paginated: fetch the done children once (we slice groups, not rows), so
@@ -390,6 +406,62 @@ export default async function TasksPage({
 
   const allTasks = [...pageTasks, ...extraChildren]
 
+  // ── Slice A (audit 24/07, r1): task import Excel (import_batch_id set,
+  //    broadcast_id NULL — mig 034) gộp MỘT dòng/batch trong admin group views
+  //    (groupModeActive: admin + không archive + không assignee — GOM Ở MỌI
+  //    status sub-filter; chỉ assignee/archive/non-admin mới flat;
+  //    staff/QLCH/SM giữ nguyên vì query của họ vốn scope store).
+  //    Badge done/total lấy từ query bổ sung TOÀN batch (mirror các filter
+  //    store/category/dept/priority của query chính → không filter = toàn batch,
+  //    filter store = subset đúng contract). KHÔNG broadcastId giả, KHÔNG update
+  //    task nào. ──
+  const importCandidates = groupPaginate
+    ? allTasks.filter((t) => {
+        const x = t as { import_batch_id?: string | null; parent_task_id?: string | null }
+        return !!x.import_batch_id && !t.broadcast_id && !x.parent_task_id
+      })
+    : []
+  let importMembers: ImportBatchMember[] | null = []
+  if (importCandidates.length > 0) {
+    const batchIds = [...new Set(importCandidates.map((t) => (t as { import_batch_id?: string }).import_batch_id!))]
+    let mq = supabase
+      .from('tasks')
+      .select('import_batch_id, status')
+      .in('import_batch_id', batchIds)
+      .is('archived_at', null)
+    if (params.priority) mq = mq.eq('priority', params.priority)
+    if (params.store_id) mq = mq.eq('store_id', params.store_id)
+    if (params.category) mq = mq.eq('category', params.category)
+    if (params.department_id) mq = mq.eq('department_id', params.department_id)
+    const { data: memberRows, error: memberErr } = await mq
+    if (memberErr) {
+      // r1 (audit P1#2): KHÔNG suy đoán tiến độ — members=null → group hiện
+      // "—/—" + "Không tải được tiến độ" (badge sai còn tệ hơn không có badge).
+      console.error('[tasks] import-batch members query failed:', memberErr.message)
+      importMembers = null
+    } else {
+      importMembers = (memberRows ?? []) as ImportBatchMember[]
+    }
+  }
+  const importGroups = buildImportBatchGroups(
+    importCandidates.map((t) => ({
+      id: t.id,
+      import_batch_id: (t as { import_batch_id?: string }).import_batch_id!,
+      title: t.title,
+      category: t.category ?? null,
+      status: t.status,
+      created_at: t.created_at,
+      deadline: (t.deadline as string | null) ?? null,
+      overdue_at: (t as { overdue_at?: string | null }).overdue_at ?? null,
+      completed_at: (t as { completed_at?: string | null }).completed_at ?? null,
+      storeName: (t.stores as unknown as { name: string } | null)?.name ?? null,
+      department: ((t as unknown as { department?: { name: string; color: string | null } | null }).department ?? null),
+      creator: (t.creator as unknown as { full_name: string } | null) ?? null,
+    })),
+    importMembers,
+  )
+  const importGroupedTaskIds = new Set(importCandidates.map((t) => t.id))
+
   // Pre-pass for staff_all groups: map each staff_all parent to its children, in
   // case pagination/ordering interleaves the parent and child rows. The parent is
   // created slightly before its children so it can appear later in created_at-desc.
@@ -438,6 +510,9 @@ export default async function TasksPage({
     view === 'done' ? kids.filter((k) => k.status === 'done') : kids.filter((k) => k.status !== 'done')
 
   for (const task of allTasks) {
+    // Slice A: task thuộc import batch đã gộp → đại diện bằng ImportBatchGroup
+    // (push sau vòng lặp), không render dòng phẳng.
+    if (importGroupedTaskIds.has(task.id)) continue
     const parentTaskId = (task as { parent_task_id?: string | null }).parent_task_id ?? null
 
     // staff_all parent → admin: fold into the broadcast tree row; others: one
@@ -662,6 +737,10 @@ export default async function TasksPage({
     }
   }
 
+  // Slice A: các nhóm import batch vào chung danh sách — re-sort created_at
+  // desc phía dưới đặt đúng vị trí; slice theo nhóm giữ 1 batch = 1 đơn vị trang.
+  grouped.push(...importGroups)
+
   // Inside each broadcast tree, list stores alphabetically — page order is
   // insertion order from the query, which is meaningless to the admin.
   for (const item of grouped) {
@@ -715,12 +794,12 @@ export default async function TasksPage({
   // broadcast's stores stay whole on one page (fixes the original row-window
   // straddle bug). Other views keep server-side row pagination (pageItems ===
   // orderedVisibleItems).
-  const groupTotalPages = Math.max(1, Math.ceil(orderedVisibleItems.length / GROUPS_PER_PAGE))
-  const clampedPage = groupPaginate ? Math.min(page, groupTotalPages) : page
-  const pageItems = groupPaginate
-    ? orderedVisibleItems.slice((clampedPage - 1) * GROUPS_PER_PAGE, clampedPage * GROUPS_PER_PAGE)
-    : orderedVisibleItems
-  const effectiveTotalPages = groupPaginate ? groupTotalPages : totalPages
+  // r1.1: slice qua contract sliceGroupPage (có test) — mỗi group đúng 1 lần
+  // trên đúng 1 trang, dataset đã gộp toàn bộ trước khi cắt.
+  const sliced = sliceGroupPage(orderedVisibleItems, page, GROUPS_PER_PAGE)
+  const clampedPage = groupPaginate ? sliced.clampedPage : page
+  const pageItems = groupPaginate ? sliced.pageItems : orderedVisibleItems
+  const effectiveTotalPages = groupPaginate ? sliced.totalPages : totalPages
 
   // Drives the empty-state copy: are filters narrowing the (empty) result?
   const hasActiveFilters = !isStaff && !!(params.status || params.priority || params.store_id || params.category || params.department_id || params.assignee)
