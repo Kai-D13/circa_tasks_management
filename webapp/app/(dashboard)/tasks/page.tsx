@@ -198,7 +198,8 @@ export default async function TasksPage({
   // migration 031), so without exclusion the page would be bare pharmacist children —
   // 106 flat rows for one broadcast, with count/pagination driven by children. Page
   // by TOP-LEVEL done tasks instead, and assemble the broadcast trees from a separate
-  // children fetch (page 1 only) — exactly the in_progress/overdue tree pattern.
+  // children fetch (r1.1: fetched ONCE for every page — group slicing needs the
+  // same dataset on all pages) — exactly the in_progress/overdue tree pattern.
   const adminDoneTree = isAdminRole && view === 'done' && !showArchived && !userFilter
   if (topLevelOnly || adminTreeFilter || adminDoneTree) query = query.is('parent_task_id', null)
 
@@ -333,11 +334,13 @@ export default async function TasksPage({
   // even when some stores have zero submissions (those stores simply have no
   // tree row — there is nothing to list for them).
   //
-  // ACCEPTED BOUNDS (revisit with an RPC that paginates by group unit when the
-  // history grows): trees render on page 1 only, from the 500 most recently
-  // submitted children — at the current scale (1-2 broadcasts/day × ~106 staff)
-  // that covers the several most recent broadcasts, which is what admins review.
-  // Older broadcasts are reachable via their store rows / the task detail pages.
+  // DEBT (audit r1.1 P2 — ticket mở, nâng P1 nếu QA Done thiếu dữ liệu thật):
+  // done children cap 500 CHƯA có exact-count guard như nhánh in_progress/
+  // overdue — lịch sử tăng có thể ẩn broadcast cũ khỏi cây (500 dòng mới nhất
+  // theo created_at desc; scale hiện tại 1-2 broadcast/ngày × ~106 staff phủ
+  // đủ các broadcast gần đây admin đang review). Hướng xử lý: exact count +
+  // fail-visible, hoặc RPC phân trang theo group unit. Broadcast cũ vẫn xem
+  // được qua store rows / task detail.
   const doneStatsByParent    = new Map<string, { total: number; done: number }>()
   const doneStatsByBroadcast = new Map<string, { total: number; done: number; parents: Set<string> }>()
   // Group-paginated: fetch the done children once (we slice groups, not rows), so
@@ -403,10 +406,11 @@ export default async function TasksPage({
 
   const allTasks = [...pageTasks, ...extraChildren]
 
-  // ── Slice A (audit 24/07): task import Excel (import_batch_id set, broadcast_id
-  //    NULL — mig 034) gộp MỘT dòng/batch trong admin group views (mirror điều
-  //    kiện broadcast: groupPaginate — assignee filter/status hẹp/archived → flat
-  //    như cũ; staff/QLCH/SM giữ nguyên vì query của họ vốn scope store).
+  // ── Slice A (audit 24/07, r1): task import Excel (import_batch_id set,
+  //    broadcast_id NULL — mig 034) gộp MỘT dòng/batch trong admin group views
+  //    (groupModeActive: admin + không archive + không assignee — GOM Ở MỌI
+  //    status sub-filter; chỉ assignee/archive/non-admin mới flat;
+  //    staff/QLCH/SM giữ nguyên vì query của họ vốn scope store).
   //    Badge done/total lấy từ query bổ sung TOÀN batch (mirror các filter
   //    store/category/dept/priority của query chính → không filter = toàn batch,
   //    filter store = subset đúng contract). KHÔNG broadcastId giả, KHÔNG update
