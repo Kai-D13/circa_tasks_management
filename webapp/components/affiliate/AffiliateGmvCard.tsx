@@ -32,6 +32,19 @@ export function AffiliateGmvCard({ monthLabel, gmv, orders, syncedAt, error = fa
 
         {error ? (
           <p className="text-sm text-muted-foreground">Không tải được dữ liệu Affiliate. Vui lòng thử lại sau hoặc báo Admin.</p>
+        ) : sourceWarning ? (
+          // r1.1 HEALTH FAIL-CLOSED: nguồn chưa READY → KHÔNG hiện số (0 giả
+          // trên màn hình tiền) — chỉ '—' + lý do + lần sync thành công gần nhất.
+          <>
+            <div className="flex items-baseline gap-3 flex-wrap">
+              <p className="text-2xl font-bold tabular-nums leading-none">—</p>
+              <p className="text-sm text-muted-foreground">số liệu tạm ẩn</p>
+            </div>
+            <p className="text-[11px] text-status-warning">Nguồn dữ liệu chưa sẵn sàng: {sourceWarning}</p>
+            <p className="text-[11px] text-muted-foreground">
+              {syncedAt ? `Sync thành công gần nhất ${formatDateTime(syncedAt)}` : 'Chưa có lần sync thành công nào'}
+            </p>
+          </>
         ) : (
           <>
             <div className="flex items-baseline gap-3 flex-wrap">
@@ -42,9 +55,6 @@ export function AffiliateGmvCard({ monthLabel, gmv, orders, syncedAt, error = fa
               Chỉ tính đơn giao thành công (DELIVERED) · ghi nhận theo mã đối tác của cửa hàng
               {syncedAt ? ` · đồng bộ ${formatDateTime(syncedAt)}` : ' · chưa đồng bộ'}
             </p>
-            {sourceWarning && (
-              <p className="text-[11px] text-status-warning">Nguồn dữ liệu: {sourceWarning}</p>
-            )}
           </>
         )}
       </CardContent>

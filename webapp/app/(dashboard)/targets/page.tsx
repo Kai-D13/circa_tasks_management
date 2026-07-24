@@ -329,24 +329,27 @@ export default async function TargetsPage({
     if (!canShowOwnOsGmv(gmvStoreRow as { store_type: string; is_active: boolean } | null)) {
       showAffiliateGmv = false
     } else {
-      const range = vnDayRange(gmvMonth.from, gmvMonth.to)
-      // r1 (audit P2#5): dùng ĐẦY ĐỦ getAffiliateSyncHealth cho store đang xem
-      // — lỗi lookup không còn giả dạng "chưa đồng bộ", reason nổi lên card.
-      const [aggRes, health] = await Promise.all([
-        supabaseAdmin.rpc('rpc_aggregate_affiliate_gmv', { p_store_ids: [resolvedStoreId], p_from: range.from, p_to: range.to }),
-        getAffiliateSyncHealth(supabaseAffiliateHealthDb(supabaseAdmin), [resolvedStoreId]),
-      ])
-      if (aggRes.error) {
-        // Gồm cả fail-closed (đơn DELIVERED thiếu completed_time) — card hiện lỗi gọn.
-        console.error('[targets] affiliate gmv query failed:', aggRes.error.message)
-        affiliateGmvError = true
-      } else {
-        const r = reduceAffiliateAgg((aggRes.data ?? []) as AffiliateAggInput[])
-        const a = r.byStore.get(resolvedStoreId)
-        affiliateGmv = { gmv: a?.gmv ?? 0, orders: a?.orders ?? 0 }
-      }
+      // r1.1 (audit HEALTH FAIL-CLOSED): health TRƯỚC (đầy đủ — r1 P2#5), CHỈ
+      // gọi RPC khi nguồn READY; !ready → không aggregate, card hiện '—' +
+      // lý do cụ thể + lần sync thành công gần nhất — không bao giờ 0 giả.
+      const health = await getAffiliateSyncHealth(supabaseAffiliateHealthDb(supabaseAdmin), [resolvedStoreId])
       affiliateGmvSyncedAt = health.lastSuccessAt
-      affiliateGmvWarning = health.ready ? null : health.reason
+      if (!health.ready) {
+        affiliateGmvWarning = health.reason
+      } else {
+        const range = vnDayRange(gmvMonth.from, gmvMonth.to)
+        const { data: aggData, error: aggErr } = await supabaseAdmin
+          .rpc('rpc_aggregate_affiliate_gmv', { p_store_ids: [resolvedStoreId], p_from: range.from, p_to: range.to })
+        if (aggErr) {
+          // Gồm cả fail-closed (đơn DELIVERED thiếu completed_time) — card hiện lỗi gọn.
+          console.error('[targets] affiliate gmv query failed:', aggErr.message)
+          affiliateGmvError = true
+        } else {
+          const r = reduceAffiliateAgg((aggData ?? []) as AffiliateAggInput[])
+          const a = r.byStore.get(resolvedStoreId)
+          affiliateGmv = { gmv: a?.gmv ?? 0, orders: a?.orders ?? 0 }
+        }
+      }
     }
   }
   let affiliateQr: AffiliateQrRow | null = null

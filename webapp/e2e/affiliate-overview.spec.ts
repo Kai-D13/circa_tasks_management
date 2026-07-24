@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import {
   reduceAffiliateAgg, currentVnMonthISO, overviewVisibleFor,
-  canShowOwnOsGmv, isRealISODate, parseOverviewRange,
+  canShowOwnOsGmv, isRealISODate, parseOverviewRange, overviewDataState,
   type AffiliateAggInput,
 } from '../lib/affiliate/overview'
 
@@ -35,6 +35,27 @@ test.describe('affiliate overview contract @desktop', () => {
     expect(currentVnMonthISO('2028-02-10')).toEqual({ from: '2028-02-01', to: '2028-02-29' }) // 2028 nhuận
     expect(currentVnMonthISO('2026-02-01')).toEqual({ from: '2026-02-01', to: '2026-02-28' })
     expect(currentVnMonthISO('2026-12-31')).toEqual({ from: '2026-12-01', to: '2026-12-31' })
+  })
+
+  test('r1.1 HEALTH FAIL-CLOSED overviewDataState: !ready → source-not-ready (KHÔNG aggregate, không số 0 giả); ready+lỗi → aggregate-error; ready+sạch → ok', () => {
+    // Health !ready bao trùm MỌI trạng thái chặn (run running/failed · stale
+    // >180' · rejected>0 · unmatched/unknown · note · canary completed_time ·
+    // lỗi lookup) — evaluate từng trạng thái đã khóa ở affiliate-health.spec
+    // (25 test); contract này khóa MAPPING sang hiển thị: page chỉ được
+    // aggregate khi 'ok'-đường-dẫn, mọi state khác → '—' + lý do.
+    expect(overviewDataState(false, false)).toBe('source-not-ready')
+    expect(overviewDataState(false, true)).toBe('source-not-ready')  // nguồn thắng
+    expect(overviewDataState(true, true)).toBe('aggregate-error')
+    expect(overviewDataState(true, false)).toBe('ok')
+  })
+
+  test('rule số âm ĐÃ CHỐT 24/07: đơn DELIVERED total_price < 0 GIẢM GMV nhưng VẪN tính vào số đơn', () => {
+    const r = reduceAffiliateAgg([
+      { store_id: 's-n', vn_date: '2026-07-01', gmv: 300_000, order_count: 2 },
+      { store_id: 's-n', vn_date: '2026-07-02', gmv: -120_000, order_count: 1 }, // đơn âm
+    ])
+    expect(r.byStore.get('s-n')).toEqual({ gmv: 180_000, orders: 3, lastDate: '2026-07-02' })
+    expect(r.totals).toEqual({ gmv: 180_000, orders: 3, storesWithSales: 1 })
   })
 
   test('r1 P1#1 canShowOwnOsGmv: CHỈ os + active — FS QLCH/SM gán nhầm FS bị chặn trước RPC service-role', () => {

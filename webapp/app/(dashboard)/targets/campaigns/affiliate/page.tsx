@@ -6,7 +6,7 @@ import { isSuperAdminEmail } from '@/lib/authz'
 import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import { getAffiliateSyncHealth, supabaseAffiliateHealthDb } from '@/lib/affiliate/health'
 import { vnDayRange } from '@/lib/kpi/engine'
-import { reduceAffiliateAgg, parseOverviewRange, type AffiliateAggInput } from '@/lib/affiliate/overview'
+import { reduceAffiliateAgg, parseOverviewRange, overviewDataState, type AffiliateAggInput } from '@/lib/affiliate/overview'
 import { CampaignsTabs } from '@/components/kpi/CampaignsTabs'
 import { StatCard } from '@/components/ds/StatCard'
 import { DataTableShell } from '@/components/ds/DataTableShell'
@@ -138,26 +138,32 @@ export default async function AffiliateOverviewPage({ searchParams }: {
     )
   }
 
-  // Aggregate qua RPC (DB-side). FAIL-CLOSED RAISE (đơn DELIVERED thiếu
-  // completed_time) → hiển thị cảnh báo nguồn, không render số thiếu.
-  const range = vnDayRange(from, to)
-  // r1 (audit P2#4): health theo ĐÚNG danh sách store đang hiển thị (OS + FS,
-  // dedupe) — lỗi completed_time ở FS cũng phản ánh vào thẻ "Nguồn dữ liệu".
-  const [aggRes, health] = await Promise.all([
-    supabaseAdmin.rpc('rpc_aggregate_affiliate_gmv', { p_store_ids: storeIds, p_from: range.from, p_to: range.to }),
-    getAffiliateSyncHealth(supabaseAffiliateHealthDb(supabaseAdmin), storeIds),
-  ])
+  // r1.1 (audit): HEALTH TRƯỚC — số tài chính CHỈ hiển thị khi nguồn READY.
+  // Health theo ĐÚNG danh sách store đang hiển thị (OS + FS, dedupe — r1 P2#4).
+  // !ready (run running/failed · stale >180' · rejected>0 · unmatched/unknown ·
+  // note · canary completed_time · lỗi lookup) → KHÔNG gọi aggregate, không
+  // render 0 giả — summary/bảng dùng '—' + lý do + lần sync thành công gần nhất.
+  const health = await getAffiliateSyncHealth(supabaseAffiliateHealthDb(supabaseAdmin), storeIds)
   let aggErrorMsg: string | null = null
   let byStore = new Map<string, { gmv: number; orders: number; lastDate: string | null }>()
   let totals = { gmv: 0, orders: 0, storesWithSales: 0 }
-  if (aggRes.error) {
-    console.error('[affiliate-overview] aggregate failed:', aggRes.error.message)
-    aggErrorMsg = aggRes.error.message
-  } else {
-    const r = reduceAffiliateAgg((aggRes.data ?? []) as AffiliateAggInput[])
-    byStore = r.byStore
-    totals = r.totals
+  if (health.ready) {
+    // Aggregate qua RPC (DB-side). FAIL-CLOSED RAISE (đơn DELIVERED thiếu
+    // completed_time lọt giữa health-check và aggregate) vẫn chặn số thiếu.
+    const range = vnDayRange(from, to)
+    const { data: aggData, error: aggErr } = await supabaseAdmin
+      .rpc('rpc_aggregate_affiliate_gmv', { p_store_ids: storeIds, p_from: range.from, p_to: range.to })
+    if (aggErr) {
+      console.error('[affiliate-overview] aggregate failed:', aggErr.message)
+      aggErrorMsg = aggErr.message
+    } else {
+      const r = reduceAffiliateAgg((aggData ?? []) as AffiliateAggInput[])
+      byStore = r.byStore
+      totals = r.totals
+    }
   }
+  const dataState = overviewDataState(health.ready, aggErrorMsg !== null)
+  const blocked = dataState !== 'ok'
 
   const rows = filtered
     .map((m) => ({ ...m, agg: byStore.get(m.store_id) ?? { gmv: 0, orders: 0, lastDate: null } }))
@@ -172,15 +178,22 @@ export default async function AffiliateOverviewPage({ searchParams }: {
         </p>
       )}
 
-      {aggErrorMsg && (
-        <ErrorState message="Nguồn Affiliate chưa sẵn sàng để tổng hợp" hint={aggErrorMsg} />
+      {/* r1.1: fail-closed theo trạng thái nguồn — không bao giờ render 0 giả */}
+      {dataState === 'source-not-ready' && (
+        <ErrorState
+          message="Nguồn Affiliate chưa sẵn sàng — số liệu tạm ẩn để tránh hiển thị sai"
+          hint={`${health.reason ?? 'Không rõ lý do'}${health.lastSuccessAt ? ` · Sync thành công gần nhất: ${formatDateTime(health.lastSuccessAt)}` : ' · Chưa có lần sync thành công nào'}`}
+        />
+      )}
+      {dataState === 'aggregate-error' && (
+        <ErrorState message="Không tổng hợp được doanh số Affiliate" hint={aggErrorMsg ?? undefined} />
       )}
 
       {/* Summary — khoảng thời gian đang xem */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
-        <StatCard label={`GMV Affiliate (${formatDate(from)} – ${formatDate(to)})`} value={aggErrorMsg ? '—' : vnd(totals.gmv)} icon={TrendingUp} tone={!aggErrorMsg && totals.gmv > 0 ? 'success' : 'default'} />
-        <StatCard label="Đơn giao thành công" value={aggErrorMsg ? '—' : totals.orders} icon={Package} />
-        <StatCard label="Store có doanh số" value={aggErrorMsg ? '—' : `${totals.storesWithSales}/${storeIds.length}`} icon={StoreIcon} />
+        <StatCard label={`GMV Affiliate (${formatDate(from)} – ${formatDate(to)})`} value={blocked ? '—' : vnd(totals.gmv)} icon={TrendingUp} tone={!blocked && totals.gmv > 0 ? 'success' : 'default'} />
+        <StatCard label="Đơn giao thành công" value={blocked ? '—' : totals.orders} icon={Package} />
+        <StatCard label="Store có doanh số" value={blocked ? '—' : `${totals.storesWithSales}/${storeIds.length}`} icon={StoreIcon} />
         <StatCard
           label="Nguồn dữ liệu"
           value={health.ready ? 'Sẵn sàng' : 'Cảnh báo'}
@@ -191,10 +204,6 @@ export default async function AffiliateOverviewPage({ searchParams }: {
             : (health.reason ?? undefined)}
         />
       </div>
-
-      {!health.ready && health.reason && (
-        <p className="text-xs text-status-warning">Cảnh báo nguồn: {health.reason}</p>
-      )}
 
       <DataTableShell>
         <Table>
@@ -221,13 +230,13 @@ export default async function AffiliateOverviewPage({ searchParams }: {
                   </TableCell>
                   <TableCell className="font-mono text-xs">{r.partner_code}</TableCell>
                   <TableCell className={cn('text-right tabular-nums', !has && 'text-muted-foreground')}>
-                    {aggErrorMsg ? '—' : r.agg.orders}
+                    {blocked ? '—' : r.agg.orders}
                   </TableCell>
                   <TableCell className={cn('text-right tabular-nums font-medium', !has && 'text-muted-foreground font-normal')}>
-                    {aggErrorMsg ? '—' : has || r.agg.gmv !== 0 ? vnd(r.agg.gmv) : '—'}
+                    {blocked ? '—' : has || r.agg.gmv !== 0 ? vnd(r.agg.gmv) : '—'}
                   </TableCell>
                   <TableCell className="text-right pr-4 text-muted-foreground">
-                    {aggErrorMsg ? '—' : r.agg.lastDate ? formatDate(r.agg.lastDate) : '—'}
+                    {blocked ? '—' : r.agg.lastDate ? formatDate(r.agg.lastDate) : '—'}
                   </TableCell>
                 </TableRow>
               )

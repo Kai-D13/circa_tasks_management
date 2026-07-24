@@ -13,7 +13,9 @@ export interface AffiliateAggInput {
 export interface StoreAffiliateAgg { gmv: number; orders: number; lastDate: string | null }
 
 // Reduce rows (store × ngày) của RPC → per-store + totals. Giá trị ÂM giữ
-// nguyên trong SUM (rule engine hiện hành — chờ stakeholder xác nhận riêng).
+// nguyên trong SUM (rule ĐÃ CHỐT 24/07: GMV = SUM(total_price) DELIVERED +
+// source_active, BAO GỒM total_price < 0 — đơn âm làm giảm GMV nhưng vẫn
+// tính vào số đơn delivered).
 export function reduceAffiliateAgg(rows: AffiliateAggInput[]): {
   byStore: Map<string, StoreAffiliateAgg>
   totals: { gmv: number; orders: number; storesWithSales: number }
@@ -83,6 +85,19 @@ export function parseOverviewRange(
     clamped = true
   }
   return { from, to, clamped }
+}
+
+// r1.1 (audit): HEALTH FAIL-CLOSED — số tài chính CHỈ hiển thị khi nguồn sync
+// READY (run success + không rejected/unmatched/unknown/note + không stale
+// >180' + canary completed_time sạch + lookup không lỗi — evaluate đầy đủ ở
+// lib/affiliate/health.ts). Page gọi health TRƯỚC; !ready → KHÔNG gọi
+// aggregate, summary/bảng/card hiện '—' + lý do cụ thể + lần sync thành công
+// gần nhất (nếu có). Aggregate lỗi (kể cả RAISE fail-closed) → 'aggregate-error'.
+export type OverviewDataState = 'ok' | 'source-not-ready' | 'aggregate-error'
+export function overviewDataState(healthReady: boolean, aggregateError: boolean): OverviewDataState {
+  if (!healthReady) return 'source-not-ready'
+  if (aggregateError) return 'aggregate-error'
+  return 'ok'
 }
 
 // Ai thấy gì (quyết định user 24/07):
