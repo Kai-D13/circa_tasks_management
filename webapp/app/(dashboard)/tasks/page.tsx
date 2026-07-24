@@ -9,7 +9,7 @@ import { EmptyState } from '@/components/ds/EmptyState'
 import { ErrorState } from '@/components/ds/ErrorState'
 import { TaskFilters } from '@/components/tasks/TaskFilters'
 import { TaskList, TaskListItem, BroadcastGroup, StaffGroup, StaffBroadcastGroup, StaffBroadcastStore, TaskRow, ChildTask } from '@/components/tasks/TaskList'
-import { buildImportBatchGroups, type ImportBatchMember } from '@/lib/tasks/importBatchGroups'
+import { buildImportBatchGroups, groupModeActive, type ImportBatchMember } from '@/lib/tasks/importBatchGroups'
 import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { ExportButton } from '@/components/common/ExportButton'
 import { Pagination } from '@/components/common/Pagination'
@@ -75,8 +75,13 @@ export default async function TasksPage({
   // folding paths → the main query returns a flat, correctly-paginated list.
   const userFilter = !isStaff && !!params.assignee
   const isAdminRole = profile?.role === 'admin'
-  const groupPaginate = isAdminRole && !showArchived && !userFilter
-    && ((view === 'pending' && !params.status) || view === 'done')
+  // r1 (audit P1#1): group mode admin mở cho CẢ status sub-filter (todo/
+  // in_progress/overdue) lẫn pending mặc định + done — trước đây status hẹp
+  // rơi về row-pagination nên import batch vẫn 25 dòng ở màn "Chờ thực hiện".
+  // Điều kiện = contract groupModeActive (lib/tasks/importBatchGroups, có
+  // test): admin + không archive + không assignee filter. Phân trang theo
+  // GROUP unit (fetch-all rồi slice) → 1 batch/broadcast không lặp qua trang.
+  const groupPaginate = groupModeActive({ isAdmin: isAdminRole, showArchived, userFilter })
   const GROUPS_PER_PAGE = 15
 
   // Narrow select — excludes description/input_data/required_outputs which grow
@@ -405,7 +410,7 @@ export default async function TasksPage({
         return !!x.import_batch_id && !t.broadcast_id && !x.parent_task_id
       })
     : []
-  let importMembers: ImportBatchMember[] = []
+  let importMembers: ImportBatchMember[] | null = []
   if (importCandidates.length > 0) {
     const batchIds = [...new Set(importCandidates.map((t) => (t as { import_batch_id?: string }).import_batch_id!))]
     let mq = supabase
@@ -418,9 +423,14 @@ export default async function TasksPage({
     if (params.category) mq = mq.eq('category', params.category)
     if (params.department_id) mq = mq.eq('department_id', params.department_id)
     const { data: memberRows, error: memberErr } = await mq
-    // Lỗi → fallback fail-visible trong helper (badge theo subset đang thấy).
-    if (memberErr) console.error('[tasks] import-batch members query failed:', memberErr.message)
-    importMembers = (memberRows ?? []) as ImportBatchMember[]
+    if (memberErr) {
+      // r1 (audit P1#2): KHÔNG suy đoán tiến độ — members=null → group hiện
+      // "—/—" + "Không tải được tiến độ" (badge sai còn tệ hơn không có badge).
+      console.error('[tasks] import-batch members query failed:', memberErr.message)
+      importMembers = null
+    } else {
+      importMembers = (memberRows ?? []) as ImportBatchMember[]
+    }
   }
   const importGroups = buildImportBatchGroups(
     importCandidates.map((t) => ({

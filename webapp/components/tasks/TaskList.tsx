@@ -124,8 +124,10 @@ export type ImportBatchGroup = {
   category:   string | null
   department?: DeptTag
   creator?:   { full_name: string } | null
-  total:      number
-  done:       number
+  // r1 (audit P1#2): null = không tải được tiến độ batch (members query lỗi)
+  // → hiện "—/—" + chú thích, KHÔNG suy đoán từ subset đang thấy.
+  total:      number | null
+  done:       number | null
   createdAt:  string
   taskIds:    string[]
   childTasks: ChildTask[]
@@ -432,17 +434,21 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                           </span>
                         )}
                         <span className="text-xs text-muted-foreground font-normal ml-1">
-                          {item.total} cửa hàng
+                          {item.total ?? item.childTasks.length} cửa hàng
                         </span>
                       </div>
                       <p className="text-xs text-muted-foreground font-normal ml-6 mt-0.5">Tạo bởi {item.creator?.full_name ?? '—'}</p>
+                      {item.total === null && (
+                        <p className="text-xs text-status-warning font-normal ml-6 mt-0.5">Không tải được tiến độ — thử tải lại trang.</p>
+                      )}
                     </TableCell>
                     <TableCell className="text-sm whitespace-nowrap" onClick={() => toggleExpand(gid)}>
                       <span className={cn(
                         'font-medium',
-                        item.done === item.total ? 'text-status-success' : 'text-status-warning'
+                        item.total === null ? 'text-muted-foreground'
+                          : item.done === item.total ? 'text-status-success' : 'text-status-warning'
                       )}>
-                        {item.done}/{item.total}
+                        {item.done ?? '—'}/{item.total ?? '—'}
                       </span>
                       <span className="text-muted-foreground"> hoàn thành</span>
                     </TableCell>
@@ -946,7 +952,9 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
             const id        = item.type === 'broadcast' ? item.broadcastId
               : item.type === 'import_batch' ? item.batchId : item.parentId
             const isExpanded = expanded.has(id)
-            const allDone   = item.total > 0 && item.done === item.total
+            // import_batch: total/done có thể null (không tải được tiến độ — r1 P1#2)
+            const allDone   = item.total !== null && item.done !== null
+              && item.total > 0 && item.done === item.total
             const Icon      = item.type === 'broadcast' ? Radio
               : item.type === 'import_batch' ? FileSpreadsheet : Users
             return (
@@ -963,9 +971,13 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                   <span className="font-medium flex-1 min-w-0">
                     <span className="block truncate">{item.title}</span>
                     <span className="block text-xs text-muted-foreground font-normal">Tạo bởi {item.creator?.full_name ?? '—'}</span>
+                    {item.type === 'import_batch' && item.total === null && (
+                      <span className="block text-xs text-status-warning font-normal">Không tải được tiến độ</span>
+                    )}
                   </span>
-                  <span className={cn('text-sm font-medium whitespace-nowrap', allDone ? 'text-status-success' : 'text-status-warning')}>
-                    {item.done}/{item.total}
+                  <span className={cn('text-sm font-medium whitespace-nowrap',
+                    item.total === null ? 'text-muted-foreground' : allDone ? 'text-status-success' : 'text-status-warning')}>
+                    {item.done ?? '—'}/{item.total ?? '—'}
                   </span>
                 </button>
                 {isExpanded && (

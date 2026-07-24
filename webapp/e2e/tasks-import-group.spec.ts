@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { buildImportBatchGroups, type ImportBatchViewRow, type ImportBatchMember } from '../lib/tasks/importBatchGroups'
+import { buildImportBatchGroups, groupModeActive, type ImportBatchViewRow, type ImportBatchMember } from '../lib/tasks/importBatchGroups'
 
 // Slice A unit gate (audit 24/07) — khóa contract gộp task import Excel theo
 // import_batch_id: badge toàn batch, children theo view, taskIds = subset đang
@@ -53,13 +53,28 @@ test.describe('tasks import-batch group contract @desktop', () => {
     expect(g.childTasks).toHaveLength(1)
   })
 
-  test('members lỗi/rỗng → fallback fail-visible: badge đếm theo subset đang thấy', () => {
-    const [g] = buildImportBatchGroups(
-      [row('a', 'todo', 'S1'), row('b', 'done', 'S2')],
-      [],
-    )
-    expect(g.total).toBe(2)
-    expect(g.done).toBe(1)
+  test('r1 P1#1 groupModeActive: admin GOM ở MỌI status sub-filter (todo/in_progress/overdue) + pending mặc định + done; flat khi assignee/archive/non-admin', () => {
+    // Hàm KHÔNG nhận status/view — todo/in_progress/overdue không thể tắt group
+    // (chính là bug 25 dòng ở màn "Chờ thực hiện"); page dùng CHÍNH hàm này.
+    expect(groupModeActive({ isAdmin: true, showArchived: false, userFilter: false })).toBe(true)
+    expect(groupModeActive({ isAdmin: true, showArchived: false, userFilter: true })).toBe(false)  // assignee → flat
+    expect(groupModeActive({ isAdmin: true, showArchived: true, userFilter: false })).toBe(false)  // archive → flat
+    expect(groupModeActive({ isAdmin: false, showArchived: false, userFilter: false })).toBe(false) // non-admin → flat
+  })
+
+  test('r1 P1#2 members query LỖI (null) → total/done = null ("—/—"), KHÔNG suy đoán từ subset đang thấy', () => {
+    // Batch thật 1 done/25 nhưng màn Pending chỉ thấy 24 dòng — suy đoán sẽ ra
+    // "0/24" (tín hiệu nghiệp vụ SAI). Contract: null → UI "—/—" + chú thích.
+    const viewRows = [row('a', 'todo', 'S1'), row('b', 'todo', 'S2')]
+    const [gErr] = buildImportBatchGroups(viewRows, null)
+    expect(gErr.total).toBeNull()
+    expect(gErr.done).toBeNull()
+    expect(gErr.childTasks).toHaveLength(2)  // children vẫn hiển thị + link được
+    expect(gErr.taskIds).toHaveLength(2)
+    // members non-null nhưng THIẾU batch (kết quả không nhất quán) → cũng null
+    const [gMiss] = buildImportBatchGroups(viewRows, [{ import_batch_id: 'batch-khac', status: 'todo' }])
+    expect(gMiss.total).toBeNull()
+    expect(gMiss.done).toBeNull()
   })
 
   test('2 batch khác nhau → 2 group riêng; batch không có viewRow → không render', () => {
