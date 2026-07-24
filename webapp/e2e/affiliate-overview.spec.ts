@@ -2,6 +2,7 @@ import { test, expect } from '@playwright/test'
 import {
   reduceAffiliateAgg, currentVnMonthISO, overviewVisibleFor,
   canShowOwnOsGmv, isRealISODate, parseOverviewRange, overviewDataState,
+  overviewPageScope,
   type AffiliateAggInput,
 } from '../lib/affiliate/overview'
 
@@ -94,6 +95,21 @@ test.describe('affiliate overview contract @desktop', () => {
     expect(r.to).toBe('2026-07-24')
     expect(r.clamped).toBe(true)
     expect(r.from).toBe('2025-07-24') // đúng 366 ngày
+  })
+
+  test('P3-I.2 overviewPageScope: super os-fs · admin phòng cấp quyền os-all · sm os-assigned · qlch os-own · staff/admin thường denied · flag off denied TẤT CẢ', () => {
+    const base = { flagEnabled: true, isSuper: false, isAffiliateDeptAdmin: false }
+    expect(overviewPageScope({ ...base, isSuper: true, role: 'admin' })).toBe('os-fs')
+    expect(overviewPageScope({ ...base, isAffiliateDeptAdmin: true, role: 'admin' })).toBe('os-all')
+    expect(overviewPageScope({ ...base, role: 'sm' })).toBe('os-assigned')
+    expect(overviewPageScope({ ...base, role: 'store_manager' })).toBe('os-own')
+    expect(overviewPageScope({ ...base, role: 'staff' })).toBe('denied')          // Staff GIỮ ngoài (user 24/07)
+    expect(overviewPageScope({ ...base, role: 'admin' })).toBe('denied')          // admin thường
+    // dept-admin flag không cứu role khác admin (membership chỉ có nghĩa với admin)
+    expect(overviewPageScope({ ...base, isAffiliateDeptAdmin: true, role: 'staff' })).toBe('denied')
+    // FLAG OFF → denied tất cả
+    expect(overviewPageScope({ flagEnabled: false, isSuper: true, isAffiliateDeptAdmin: true, role: 'admin' })).toBe('denied')
+    expect(overviewPageScope({ flagEnabled: false, isSuper: false, isAffiliateDeptAdmin: false, role: 'sm' })).toBe('denied')
   })
 
   test('overviewVisibleFor: super full · sm/store_manager own-os · staff/admin thường none · flag off none', () => {

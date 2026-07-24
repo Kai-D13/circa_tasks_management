@@ -6,7 +6,8 @@ import { isSuperAdminEmail } from '@/lib/authz'
 import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import { getAffiliateSyncHealth, supabaseAffiliateHealthDb } from '@/lib/affiliate/health'
 import { vnDayRange } from '@/lib/kpi/engine'
-import { reduceAffiliateAgg, parseOverviewRange, overviewDataState, type AffiliateAggInput } from '@/lib/affiliate/overview'
+import { reduceAffiliateAgg, parseOverviewRange, overviewDataState, overviewPageScope, type AffiliateAggInput } from '@/lib/affiliate/overview'
+import Link from 'next/link'
 import { CampaignsTabs } from '@/components/kpi/CampaignsTabs'
 import { StatCard } from '@/components/ds/StatCard'
 import { DataTableShell } from '@/components/ds/DataTableShell'
@@ -18,12 +19,15 @@ import { formatDate, formatDateTime } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
 import { Link2, TrendingUp, Package, Store as StoreIcon, Activity } from 'lucide-react'
 
-// P3-I r1 — Affiliate Overview (super admin, KHÔNG phụ thuộc campaign): đọc
-// doanh số Affiliate đã sync trong Supabase qua rpc_aggregate_affiliate_gmv
-// (DELIVERED + source_active, ngày VN theo completed_time). Phạm vi user chốt
-// 24/07: OS + FS (external = backlog). KHÔNG nút đồng bộ — mọi sync chạy qua
-// cron/runbook, UI chỉ hiển thị. KHÔNG PII, không target/%/tier/commission.
-// RPC grant service_role → gọi qua supabaseAdmin sau hard-gate super.
+// P3-I r1.2 — Affiliate Overview (KHÔNG phụ thuộc campaign): đọc doanh số
+// Affiliate đã sync trong Supabase qua rpc_aggregate_affiliate_gmv (DELIVERED
+// + source_active, ngày VN theo completed_time). Role (user chốt 24/07):
+// super = OS+FS · admin phòng cấp quyền (096) = toàn bộ OS · SM = store OS
+// phân công · QLCH = store mình · Staff/admin thường = notFound. DATA SCOPING
+// = RLS: mappings đọc bằng session client (apm_select_super / dept_admin /
+// store_qr) → storeIds cho RPC service-role derive TỪ rows RLS cho thấy.
+// KHÔNG nút đồng bộ — mọi sync qua cron/runbook. KHÔNG PII, không target/%/
+// tier/commission. External = backlog.
 // r1 (audit): mapping lỗi → FAIL-CLOSED (chỉ ErrorState, không số 0 giả);
 // range ngày lịch thật + clamp ≤366 ngày; health theo ĐÚNG danh sách store
 // đang hiển thị (OS + FS). Mapping 1 store : 1 partner đã preflight (0 rows
@@ -38,14 +42,17 @@ interface MappingRow {
   stores: { name: string; code: string | null } | null
 }
 
-function PageShell({ children }: { children: React.ReactNode }) {
+// P3-I.2: nav theo role — super: tab Chiến dịch↔Affiliate; SM/QLCH: back-link
+// về Doanh số (họ đến từ card GMV trên /targets); admin phòng OPS: không nav
+// phụ (vào từ sidebar).
+function PageShell({ nav, children }: { nav?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="p-4 md:p-6 max-w-5xl space-y-4">
       <div className="flex items-center gap-2">
         <Link2 className="h-5 w-5 text-primary" />
         <h1 className="text-xl font-semibold">Doanh số Affiliate — Circa Online</h1>
       </div>
-      <CampaignsTabs active="affiliate" affiliateEnabled />
+      {nav}
       {children}
     </div>
   )
@@ -56,8 +63,33 @@ export default async function AffiliateOverviewPage({ searchParams }: {
 }) {
   const { user, profile } = await getSessionProfile()
   if (!user) notFound()
-  if (!(profile?.role === 'admin' && isSuperAdminEmail(user.email)
-        && isKpiCampaignEnabled() && isKpiAffiliateEnabled())) notFound()
+  if (!(isKpiCampaignEnabled() && isKpiAffiliateEnabled())) notFound()
+
+  // P3-I.2 (user chốt 24/07): super (OS+FS) · admin phòng được cấp quyền
+  // affiliate (toàn bộ OS — grant 096) · SM (store phân công) · QLCH (store
+  // mình). Staff + admin thường → notFound. Membership phòng đọc qua admin
+  // client (RLS bảng affiliate_department_access là super-only) — dữ liệu
+  // server tin cậy, mirror semantics is_affiliate_dept_admin().
+  const isSuper = profile?.role === 'admin' && isSuperAdminEmail(user.email)
+  const isAffiliateDeptAdmin = !isSuper && profile?.role === 'admin' && profile?.department_id
+    ? !!(await supabaseAdmin
+        .from('affiliate_department_access')
+        .select('department_id')
+        .eq('department_id', profile.department_id)
+        .maybeSingle()).data
+    : false
+  const scope = overviewPageScope({
+    flagEnabled: isKpiAffiliateEnabled(),
+    isSuper,
+    isAffiliateDeptAdmin,
+    role: profile?.role,
+  })
+  if (scope === 'denied') notFound()
+  const shellNav = scope === 'os-fs'
+    ? <CampaignsTabs active="affiliate" affiliateEnabled />
+    : (scope === 'os-assigned' || scope === 'os-own')
+      ? <Link href="/targets" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0">← Doanh số</Link>
+      : null
 
   const params = await searchParams
   const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
@@ -65,8 +97,10 @@ export default async function AffiliateOverviewPage({ searchParams }: {
   // ngược, clamp ≤366 ngày — URL sai không đổ 500, không phá range.
   const { from, to, clamped } = parseOverviewRange(params.from, params.to, vnTodayISO)
 
-  // Mappings OS + FS (session client — RLS apm_select_super). External (store
-  // NULL) ngoài phạm vi v1. 1 FK duy nhất mappings→stores → bare embed an toàn.
+  // Mappings qua SESSION client — RLS scope theo role: super = os+fs (filter
+  // dưới), admin phòng OPS = os active (apm_select_dept_admin, 096), SM =
+  // store phân công, QLCH = store mình (apm_select_store_qr, 095). External
+  // (store NULL) ngoài phạm vi v1. 1 FK duy nhất mappings→stores → bare embed.
   const supabase = await createClient()
   const { data: mapRows, error: mapErr } = await supabase
     .from('affiliate_partner_mappings')
@@ -82,7 +116,7 @@ export default async function AffiliateOverviewPage({ searchParams }: {
   if (mapErr) {
     console.error('[affiliate-overview] mapping query failed:', mapErr.message)
     return (
-      <PageShell>
+      <PageShell nav={shellNav}>
         <ErrorState
           message="Không tải được danh sách mapping affiliate — không thể tổng hợp doanh số"
           hint={`${mapErr.message} — kiểm tra migration 090/095 và RLS, rồi tải lại.`}
@@ -131,7 +165,7 @@ export default async function AffiliateOverviewPage({ searchParams }: {
 
   if (storeIds.length === 0) {
     return (
-      <PageShell>
+      <PageShell nav={shellNav}>
         {filterForm}
         <EmptyState className="py-12" icon={Link2} title="Không có mapping affiliate nào khớp bộ lọc." />
       </PageShell>
@@ -170,7 +204,7 @@ export default async function AffiliateOverviewPage({ searchParams }: {
     .sort((a, b) => b.agg.gmv - a.agg.gmv)
 
   return (
-    <PageShell>
+    <PageShell nav={shellNav}>
       {filterForm}
       {clamped && (
         <p className="text-xs text-muted-foreground">

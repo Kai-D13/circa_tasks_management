@@ -445,6 +445,7 @@ export default async function TargetsPage({
             syncedAt={affiliateGmvSyncedAt}
             error={affiliateGmvError}
             sourceWarning={affiliateGmvWarning}
+            detailHref="/targets/campaigns/affiliate"
           />
         )}
       </div>
@@ -495,6 +496,7 @@ export default async function TargetsPage({
             syncedAt={affiliateGmvSyncedAt}
             error={affiliateGmvError}
             sourceWarning={affiliateGmvWarning}
+            detailHref="/targets/campaigns/affiliate"
           />
         )}
       </div>

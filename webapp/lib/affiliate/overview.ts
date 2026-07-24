@@ -100,8 +100,32 @@ export function overviewDataState(healthReady: boolean, aggregateError: boolean)
   return 'ok'
 }
 
-// Ai thấy gì (quyết định user 24/07):
-//   super            → 'full'   (tab Affiliate /targets/campaigns: OS + FS)
+// P3-I.2 — quyền vào MÀN TỔNG HỢP /targets/campaigns/affiliate (user chốt
+// 24/07, đảo chiếu RLS 090/096):
+//   super                       → 'os-fs'       (toàn bộ OS + FS)
+//   admin phòng được cấp quyền  → 'os-all'      (toàn bộ OS — FS/external chỉ super)
+//   sm                          → 'os-assigned' (store OS được phân công)
+//   store_manager               → 'os-own'      (store mình)
+//   staff / admin thường / khác → 'denied' · flag tắt → 'denied' TẤT CẢ.
+// Data scoping thực thi = RLS (mappings đọc qua session client) — hàm này chỉ
+// quyết định gate route + biến thể UI; storeIds cho RPC derive từ rows RLS trả.
+export type OverviewPageScope = 'os-fs' | 'os-all' | 'os-assigned' | 'os-own' | 'denied'
+export function overviewPageScope(p: {
+  flagEnabled: boolean
+  isSuper: boolean
+  isAffiliateDeptAdmin: boolean
+  role: string | null | undefined
+}): OverviewPageScope {
+  if (!p.flagEnabled) return 'denied'
+  if (p.isSuper) return 'os-fs'
+  if (p.role === 'admin' && p.isAffiliateDeptAdmin) return 'os-all'
+  if (p.role === 'sm') return 'os-assigned'
+  if (p.role === 'store_manager') return 'os-own'
+  return 'denied'
+}
+
+// Ai thấy gì trên LANDING /targets (card GMV — quyết định user 24/07):
+//   super            → 'full'   (dùng màn tổng hợp, không card)
 //   sm/store_manager → 'own-os' (card GMV tháng trên landing /targets, store scope mình)
 //   staff / admin thường / role khác → 'none'
 //   flag KPI_AFFILIATE_ENABLED tắt → 'none' cho TẤT CẢ.

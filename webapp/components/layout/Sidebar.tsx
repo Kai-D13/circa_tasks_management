@@ -25,6 +25,7 @@ import {
   Package,
   PackageSearch,
   ChevronRight,
+  Link2,
   LogOut,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -50,7 +51,7 @@ const ROLE_LABELS: Record<string, string> = {
   sm:            'SM',
 }
 
-export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, referralEnabled = false, isFsStore = false }: { announcementsUnread?: number; kpiCampaignEnabled?: boolean; referralEnabled?: boolean; isFsStore?: boolean }) {
+export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, referralEnabled = false, isFsStore = false, affiliateOverviewNav = false }: { announcementsUnread?: number; kpiCampaignEnabled?: boolean; referralEnabled?: boolean; isFsStore?: boolean; affiliateOverviewNav?: boolean }) {
   const pathname = usePathname()
   const router   = useRouter()
   const profile  = useUserStore((s) => s.profile)
@@ -194,6 +195,25 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
           >
             <Megaphone className="h-4 w-4 shrink-0" />
             <span className="flex-1">Chiến dịch KPI</span>
+          </Link>
+        )}
+
+        {/* P3-I.2: Affiliate overview — admin phòng được cấp quyền (layout tính
+            server-side từ affiliate_department_access + flag; route tự re-verify).
+            Super không cần item này (đi qua Chiến dịch KPI → tab Affiliate). */}
+        {affiliateOverviewNav && !isFsStore && (
+          <Link
+            href="/targets/campaigns/affiliate"
+            prefetch={false}
+            className={cn(
+              'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
+              pathname.startsWith('/targets/campaigns/affiliate')
+                ? 'bg-sidebar-accent text-primary font-medium'
+                : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-primary/80',
+            )}
+          >
+            <Link2 className="h-4 w-4 shrink-0" />
+            <span className="flex-1">Affiliate</span>
           </Link>
         )}
 
