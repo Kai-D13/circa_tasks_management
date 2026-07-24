@@ -16,7 +16,7 @@ import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import { isReferralEnabled } from '@/lib/affiliate/flags'
 import { AffiliateQrCard } from '@/components/affiliate/AffiliateQrCard'
 import { AffiliateGmvCard } from '@/components/affiliate/AffiliateGmvCard'
-import { AFFILIATE_QR_FILTER, qrCardVisible, qrCardKey } from '@/lib/affiliate/qrDisplay'
+import { AFFILIATE_QR_FILTER, qrCardVisible, qrCardKey, qrEligibleRole } from '@/lib/affiliate/qrDisplay'
 import { reduceAffiliateAgg, currentVnMonthISO, overviewVisibleFor, canShowOwnOsGmv, type AffiliateAggInput } from '@/lib/affiliate/overview'
 import { vnDayRange } from '@/lib/kpi/engine'
 import { supabaseAdmin } from '@/lib/supabase/admin'
@@ -297,9 +297,12 @@ export default async function TargetsPage({
   //    campaign active (giới thiệu khách không phụ thuộc vòng đời campaign). ──
   type AffiliateQrRow = { partner_code: string; qr_image_url: string | null; qr_destination_url: string | null }
   // Contract query/render/trạng thái = lib/affiliate/qrDisplay (thuần, có test).
+  // Slice C (audit 24/07): SM KHÔNG thấy QR — qrEligibleRole chỉ nhận staff/
+  // store_manager (app không query; RLS 097 chặn tầng DB). SM giữ card GMV +
+  // link Overview phía dưới.
   const showAffiliateQr = qrCardVisible({
     flagEnabled: isKpiAffiliateEnabled(),
-    eligibleRole: isStaff || isStoreMgr || isSm,
+    eligibleRole: qrEligibleRole(profile?.role),
     storeResolved: !!resolvedStoreId,
     inCampaignDetail: !!params.campaign,
   })

@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { AFFILIATE_QR_FILTER, qrCardVisible, qrCardState, urlStateActive, qrCardKey } from '../lib/affiliate/qrDisplay'
+import { AFFILIATE_QR_FILTER, qrCardVisible, qrCardState, urlStateActive, qrCardKey, qrEligibleRole } from '../lib/affiliate/qrDisplay'
 import { decideUpload } from '../scripts/qr-upload-decision.mjs'
 
 // P3-H r1 unit gate (audit 24/07) — khóa contract hiển thị QR + quyết định
@@ -13,6 +13,15 @@ const VIS = (over: Partial<Parameters<typeof qrCardVisible>[0]> = {}) => ({
 test.describe('affiliate qr display + upload contract @desktop', () => {
   test('FLAG OFF → không query/render (mọi tổ hợp khác giữ nguyên)', () => {
     expect(qrCardVisible(VIS({ flagEnabled: false }))).toBe(false)
+  })
+
+  test('Slice C qrEligibleRole: CHỈ staff + store_manager thấy QR — SM BỊ LOẠI (double-enforce với RLS 097)', () => {
+    expect(qrEligibleRole('staff')).toBe(true)
+    expect(qrEligibleRole('store_manager')).toBe(true)
+    expect(qrEligibleRole('sm')).toBe(false)      // SM: không query/render QR, vẫn giữ Overview
+    expect(qrEligibleRole('admin')).toBe(false)
+    expect(qrEligibleRole(null)).toBe(false)
+    expect(qrEligibleRole(undefined)).toBe(false)
   })
 
   test('DETAIL ?campaign= → không render; LANDING (kể cả không campaign) → render', () => {

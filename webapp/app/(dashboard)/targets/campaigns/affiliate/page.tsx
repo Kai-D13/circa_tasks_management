@@ -103,6 +103,10 @@ export default async function AffiliateOverviewPage({ searchParams }: {
       .eq('id', profile?.store_id ?? '').maybeSingle()
     if (!canShowOwnOsGmv(ownStore as { store_type: string; is_active: boolean } | null)) notFound()
   }
+  // Slice C: nhánh SM cần DANH SÁCH ĐẦY ĐỦ store OS active được phân công —
+  // vừa là boundary (r1.2b), vừa là tập id DUY NHẤT cho query mapping qua
+  // service role phía dưới (sau 097 SM không còn nhánh RLS đọc mapping).
+  let smActiveOsIds: string[] = []
   if (scope === 'os-assigned') {
     const smIds = await getSmStoreIds(supabase, user.id)
     let activeOsCount: number | null = null
@@ -110,22 +114,35 @@ export default async function AffiliateOverviewPage({ searchParams }: {
       const { data: osStores, error: osErr } = await supabase
         .from('stores').select('id')
         .in('id', smIds).eq('store_type', 'os').eq('is_active', true)
-        .limit(1)
       activeOsCount = osErr ? null : (osStores?.length ?? 0)
+      smActiveOsIds = ((osStores ?? []) as { id: string }[]).map((s) => s.id)
     }
     if (!smOverviewAllowed(smIds.length, activeOsCount)) notFound()
   }
 
-  // Mappings qua SESSION client — RLS scope theo role: super = os+fs (filter
-  // dưới), admin phòng OPS = os active (apm_select_dept_admin, 096), SM =
-  // store phân công, QLCH = store mình. External (store NULL) ngoài phạm vi.
-  const { data: mapRows, error: mapErr } = await supabase
-    .from('affiliate_partner_mappings')
-    .select('partner_code, partner_type, store_id, stores(name, code)')
-    .in('partner_type', ['os', 'fs'])
-    .eq('is_active', true)
-    .not('store_id', 'is', null)
-    .order('partner_code')
+  // Mappings: super/OPS/QLCH qua SESSION client (RLS scope theo role —
+  // apm_select_super / dept_admin / store_qr). Slice C: nhánh SM đọc bằng
+  // SERVICE ROLE (sau 097 SM hết nhánh RLS) — scope CỨNG theo smActiveOsIds đã
+  // validate (không mở rộng ngoài assignment; query param không tham gia) và
+  // CHỈ select cột non-QR (partner_code/partner_type/store_id/stores name+code
+  // — TUYỆT ĐỐI không qr_image_url/qr_destination_url). External ngoài phạm vi.
+  const mapRes = scope === 'os-assigned'
+    ? await supabaseAdmin
+        .from('affiliate_partner_mappings')
+        .select('partner_code, partner_type, store_id, stores(name, code)')
+        .in('store_id', smActiveOsIds)
+        .eq('partner_type', 'os')
+        .eq('is_active', true)
+        .order('partner_code')
+    : await supabase
+        .from('affiliate_partner_mappings')
+        .select('partner_code, partner_type, store_id, stores(name, code)')
+        .in('partner_type', ['os', 'fs'])
+        .eq('is_active', true)
+        .not('store_id', 'is', null)
+        .order('partner_code')
+  const mapRows = mapRes.data
+  const mapErr = mapRes.error
 
   // r1 P1#2: mapping lỗi → FAIL-CLOSED — chỉ ErrorState, không số 0 giả.
   if (mapErr) {

@@ -6,8 +6,15 @@
 // chỉ os). Page dùng .match(AFFILIATE_QR_FILTER) — test khóa cả 2 điều kiện.
 export const AFFILIATE_QR_FILTER = { partner_type: 'os', is_active: true } as const
 
-// Có query + render card hay không: flag bật + role hợp lệ (staff/
-// store_manager/sm) + đã resolve store + KHÔNG ở campaign detail (?campaign=).
+// Slice C (audit 24/07): role được thấy QR = CHỈ staff + store_manager (own
+// OS store). SM BỊ LOẠI — app không query/render (double-enforce với RLS 097
+// bỏ nhánh sm khỏi apm_select_store_qr); SM vẫn giữ Affiliate Overview.
+export function qrEligibleRole(role: string | null | undefined): boolean {
+  return role === 'staff' || role === 'store_manager'
+}
+
+// Có query + render card hay không: flag bật + role hợp lệ (qrEligibleRole)
+// + đã resolve store + KHÔNG ở campaign detail (?campaign=).
 export function qrCardVisible(p: {
   flagEnabled: boolean
   eligibleRole: boolean
