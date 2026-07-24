@@ -9,6 +9,7 @@ import { EmptyState } from '@/components/ds/EmptyState'
 import { ErrorState } from '@/components/ds/ErrorState'
 import { TaskFilters } from '@/components/tasks/TaskFilters'
 import { TaskList, TaskListItem, BroadcastGroup, StaffGroup, StaffBroadcastGroup, StaffBroadcastStore, TaskRow, ChildTask } from '@/components/tasks/TaskList'
+import { buildImportBatchGroups, type ImportBatchMember } from '@/lib/tasks/importBatchGroups'
 import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { ExportButton } from '@/components/common/ExportButton'
 import { Pagination } from '@/components/common/Pagination'
@@ -96,8 +97,8 @@ export default async function TasksPage({
     )
   }
   let query = needsCompleted
-    ? supabase.from('tasks').select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, completed_by, completed_at, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), completed_by_user:users!completed_by(full_name), creator:users!created_by(full_name), department:departments(name, color)', countOpt)
-    : supabase.from('tasks').select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), creator:users!created_by(full_name), department:departments(name, color)', countOpt)
+    ? supabase.from('tasks').select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, import_batch_id, completed_by, completed_at, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), completed_by_user:users!completed_by(full_name), creator:users!created_by(full_name), department:departments(name, color)', countOpt)
+    : supabase.from('tasks').select('id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, import_batch_id, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), creator:users!created_by(full_name), department:departments(name, color)', countOpt)
 
   // Inventory→TRF tasks are surfaced only under /inventory/trf — never in the
   // normal task list (any role, any view). source_type is NOT NULL DEFAULT 'task'.
@@ -243,7 +244,7 @@ export default async function TasksPage({
   // Fetch children for staff_all parents on this page (excluded from paginated query).
   let extraChildren: NonNullable<typeof tasks> = []
   let childrenError: { message: string } | null = null
-  const CHILD_COLS = 'id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), department:departments(name, color)'
+  const CHILD_COLS = 'id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, import_batch_id, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), department:departments(name, color)'
   if (topLevelOnly) {
     const parentIds = (tasks ?? [])
       .filter(t => (t as { assignment_mode?: string }).assignment_mode === 'staff_all')
@@ -390,6 +391,56 @@ export default async function TasksPage({
 
   const allTasks = [...pageTasks, ...extraChildren]
 
+  // ── Slice A (audit 24/07): task import Excel (import_batch_id set, broadcast_id
+  //    NULL — mig 034) gộp MỘT dòng/batch trong admin group views (mirror điều
+  //    kiện broadcast: groupPaginate — assignee filter/status hẹp/archived → flat
+  //    như cũ; staff/QLCH/SM giữ nguyên vì query của họ vốn scope store).
+  //    Badge done/total lấy từ query bổ sung TOÀN batch (mirror các filter
+  //    store/category/dept/priority của query chính → không filter = toàn batch,
+  //    filter store = subset đúng contract). KHÔNG broadcastId giả, KHÔNG update
+  //    task nào. ──
+  const importCandidates = groupPaginate
+    ? allTasks.filter((t) => {
+        const x = t as { import_batch_id?: string | null; parent_task_id?: string | null }
+        return !!x.import_batch_id && !t.broadcast_id && !x.parent_task_id
+      })
+    : []
+  let importMembers: ImportBatchMember[] = []
+  if (importCandidates.length > 0) {
+    const batchIds = [...new Set(importCandidates.map((t) => (t as { import_batch_id?: string }).import_batch_id!))]
+    let mq = supabase
+      .from('tasks')
+      .select('import_batch_id, status')
+      .in('import_batch_id', batchIds)
+      .is('archived_at', null)
+    if (params.priority) mq = mq.eq('priority', params.priority)
+    if (params.store_id) mq = mq.eq('store_id', params.store_id)
+    if (params.category) mq = mq.eq('category', params.category)
+    if (params.department_id) mq = mq.eq('department_id', params.department_id)
+    const { data: memberRows, error: memberErr } = await mq
+    // Lỗi → fallback fail-visible trong helper (badge theo subset đang thấy).
+    if (memberErr) console.error('[tasks] import-batch members query failed:', memberErr.message)
+    importMembers = (memberRows ?? []) as ImportBatchMember[]
+  }
+  const importGroups = buildImportBatchGroups(
+    importCandidates.map((t) => ({
+      id: t.id,
+      import_batch_id: (t as { import_batch_id?: string }).import_batch_id!,
+      title: t.title,
+      category: t.category ?? null,
+      status: t.status,
+      created_at: t.created_at,
+      deadline: (t.deadline as string | null) ?? null,
+      overdue_at: (t as { overdue_at?: string | null }).overdue_at ?? null,
+      completed_at: (t as { completed_at?: string | null }).completed_at ?? null,
+      storeName: (t.stores as unknown as { name: string } | null)?.name ?? null,
+      department: ((t as unknown as { department?: { name: string; color: string | null } | null }).department ?? null),
+      creator: (t.creator as unknown as { full_name: string } | null) ?? null,
+    })),
+    importMembers,
+  )
+  const importGroupedTaskIds = new Set(importCandidates.map((t) => t.id))
+
   // Pre-pass for staff_all groups: map each staff_all parent to its children, in
   // case pagination/ordering interleaves the parent and child rows. The parent is
   // created slightly before its children so it can appear later in created_at-desc.
@@ -438,6 +489,9 @@ export default async function TasksPage({
     view === 'done' ? kids.filter((k) => k.status === 'done') : kids.filter((k) => k.status !== 'done')
 
   for (const task of allTasks) {
+    // Slice A: task thuộc import batch đã gộp → đại diện bằng ImportBatchGroup
+    // (push sau vòng lặp), không render dòng phẳng.
+    if (importGroupedTaskIds.has(task.id)) continue
     const parentTaskId = (task as { parent_task_id?: string | null }).parent_task_id ?? null
 
     // staff_all parent → admin: fold into the broadcast tree row; others: one
@@ -661,6 +715,10 @@ export default async function TasksPage({
       }
     }
   }
+
+  // Slice A: các nhóm import batch vào chung danh sách — re-sort created_at
+  // desc phía dưới đặt đúng vị trí; slice theo nhóm giữ 1 batch = 1 đơn vị trang.
+  grouped.push(...importGroups)
 
   // Inside each broadcast tree, list stores alphabetically — page order is
   // insertion order from the query, which is meaningless to the admin.

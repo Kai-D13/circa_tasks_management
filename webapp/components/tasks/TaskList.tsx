@@ -16,7 +16,7 @@ import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
 import { TaskPriorityBadge } from '@/components/tasks/TaskPriorityBadge'
 import { formatDate, formatShiftTime, getEffectiveStatus } from '@/lib/dateUtils'
 import { deptBadgeClass } from '@/lib/departments'
-import { Radio, Archive, ArchiveRestore, ChevronRight, ChevronDown, Users, ExternalLink } from 'lucide-react'
+import { Radio, Archive, ArchiveRestore, ChevronRight, ChevronDown, Users, ExternalLink, FileSpreadsheet } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Task, TaskCategory } from '@/types'
 
@@ -111,6 +111,26 @@ export type StaffBroadcastGroup = {
   doneStaff:   number
 }
 
+// Slice A (audit 24/07): nhóm task import Excel — group key = import_batch_id
+// (mig 034; KHÔNG phải broadcast — 2 loại batch khác nghiệp vụ/action, không
+// gán broadcastId giả). Cấu trúc mirror BroadcastGroup để tái dùng nguyên
+// renderer: header tên task + N cửa hàng + badge done/total; expand = task
+// store-level từng store, link /tasks/[id]. total/done = tiến độ TOÀN batch
+// (query bổ sung ở page); childTasks/taskIds = subset theo view/filter hiện tại.
+export type ImportBatchGroup = {
+  type:       'import_batch'
+  batchId:    string
+  title:      string
+  category:   string | null
+  department?: DeptTag
+  creator?:   { full_name: string } | null
+  total:      number
+  done:       number
+  createdAt:  string
+  taskIds:    string[]
+  childTasks: ChildTask[]
+}
+
 export type TaskRow = {
   type: 'task'
   task: {
@@ -135,7 +155,7 @@ export type TaskRow = {
   }
 }
 
-export type TaskListItem = BroadcastGroup | StaffGroup | StaffBroadcastGroup | TaskRow
+export type TaskListItem = BroadcastGroup | StaffGroup | StaffBroadcastGroup | ImportBatchGroup | TaskRow
 
 interface Props {
   items:           TaskListItem[]
@@ -363,14 +383,18 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
         </TableHeader>
         <TableBody>
           {items.map((item) => {
-            if (item.type === 'broadcast') {
-              const isExpanded    = expanded.has(item.broadcastId)
+            if (item.type === 'broadcast' || item.type === 'import_batch') {
+              // Slice A: nhóm import Excel dùng CHUNG renderer với broadcast —
+              // khác group id + icon; children đều là task store-level.
+              const gid = item.type === 'broadcast' ? item.broadcastId : item.batchId
+              const GroupIcon = item.type === 'broadcast' ? Radio : FileSpreadsheet
+              const isExpanded    = expanded.has(gid)
               const allInSelected = item.taskIds.length > 0 && item.taskIds.every((id) => selected.has(id))
               const someInSelected = item.taskIds.some((id) => selected.has(id))
 
               return (
-                <React.Fragment key={`bc-${item.broadcastId}`}>
-                  {/* Broadcast group header row */}
+                <React.Fragment key={`bc-${item.type}-${gid}`}>
+                  {/* Group header row (broadcast / import batch) */}
                   <TableRow
                     className="bg-primary/5 hover:bg-primary/10 cursor-pointer"
                   >
@@ -381,21 +405,21 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                           checked={allInSelected}
                           ref={(el) => { if (el) el.indeterminate = !allInSelected && someInSelected }}
                           onChange={() => toggleGroup(item.taskIds)}
-                          aria-label="Chọn broadcast group"
+                          aria-label="Chọn nhóm task"
                           className="h-4 w-4 cursor-pointer accent-primary"
                         />
                       </TableCell>
                     )}
                     <TableCell
                       colSpan={4}
-                      onClick={() => toggleExpand(item.broadcastId)}
+                      onClick={() => toggleExpand(gid)}
                     >
                       <div className="flex items-center gap-2 font-medium">
                         {isExpanded
                           ? <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
                           : <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
                         }
-                        <Radio className="h-4 w-4 text-primary shrink-0" />
+                        <GroupIcon className="h-4 w-4 text-primary shrink-0" />
                         <span>{item.title}</span>
                         {item.category && item.category !== 'other' && (
                           <TagBadge hue={CATEGORY_HUE[item.category as TaskCategory] ?? 'gray'}>
@@ -413,7 +437,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                       </div>
                       <p className="text-xs text-muted-foreground font-normal ml-6 mt-0.5">Tạo bởi {item.creator?.full_name ?? '—'}</p>
                     </TableCell>
-                    <TableCell className="text-sm whitespace-nowrap" onClick={() => toggleExpand(item.broadcastId)}>
+                    <TableCell className="text-sm whitespace-nowrap" onClick={() => toggleExpand(gid)}>
                       <span className={cn(
                         'font-medium',
                         item.done === item.total ? 'text-status-success' : 'text-status-warning'
@@ -422,8 +446,8 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                       </span>
                       <span className="text-muted-foreground"> hoàn thành</span>
                     </TableCell>
-                    <TableCell onClick={() => toggleExpand(item.broadcastId)} />
-                    <TableCell className="text-sm text-muted-foreground" onClick={() => toggleExpand(item.broadcastId)}>
+                    <TableCell onClick={() => toggleExpand(gid)} />
+                    <TableCell className="text-sm text-muted-foreground" onClick={() => toggleExpand(gid)}>
                       {formatDate(item.createdAt)}
                     </TableCell>
                   </TableRow>
@@ -918,11 +942,13 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
             )
           }
 
-          if (item.type === 'broadcast' || item.type === 'staff') {
-            const id        = item.type === 'broadcast' ? item.broadcastId : item.parentId
+          if (item.type === 'broadcast' || item.type === 'staff' || item.type === 'import_batch') {
+            const id        = item.type === 'broadcast' ? item.broadcastId
+              : item.type === 'import_batch' ? item.batchId : item.parentId
             const isExpanded = expanded.has(id)
             const allDone   = item.total > 0 && item.done === item.total
-            const Icon      = item.type === 'broadcast' ? Radio : Users
+            const Icon      = item.type === 'broadcast' ? Radio
+              : item.type === 'import_batch' ? FileSpreadsheet : Users
             return (
               <div key={`m-${item.type}-${id}`} className="rounded-lg border bg-primary/5">
                 <button
@@ -952,9 +978,9 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                         className="flex items-center justify-between gap-2 min-h-[44px] p-2 pl-9 text-sm active:bg-muted/50"
                       >
                         <span className="truncate">
-                          {item.type === 'broadcast'
-                            ? (child.stores?.name ?? 'Không rõ cửa hàng')
-                            : (child.assignee?.full_name ?? 'Chưa phân công')}
+                          {item.type === 'staff'
+                            ? (child.assignee?.full_name ?? 'Chưa phân công')
+                            : (child.stores?.name ?? 'Không rõ cửa hàng')}
                         </span>
                         <TaskStatusBadge
                           status={getEffectiveStatus(child.deadline, child.status) as Task['status']}
