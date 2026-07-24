@@ -301,11 +301,8 @@ export default async function AffiliateOverviewPage({ searchParams }: {
         </Table>
       </DataTableShell>
 
-      <p className="text-[11px] text-muted-foreground">
-        Nguồn: Circa Online (đồng bộ định kỳ vào hệ thống) · chỉ tính đơn giao thành công (DELIVERED),
-        ghi nhận theo mã đối tác · ngày theo giờ Việt Nam của thời điểm giao thành công. Không bao gồm
-        đối tác ngoài hệ thống.
-      </p>
+      {/* r1 P2#4: footer 1 câu — chi tiết nguồn nằm ở source contract docs */}
+      <p className="text-[11px] text-muted-foreground">Nguồn: Circa Online · Chỉ tính đơn DELIVERED.</p>
     </PageShell>
   )
 }
