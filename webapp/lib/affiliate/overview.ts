@@ -45,6 +45,46 @@ export function currentVnMonthISO(todayISO: string): { from: string; to: string 
   return { from: `${todayISO.slice(0, 7)}-01`, to: `${todayISO.slice(0, 7)}-${String(lastDay).padStart(2, '0')}` }
 }
 
+// r1 (audit P1 #1): SM/Store Manager CHỈ xem GMV Affiliate của store OS active.
+// RPC aggregate chạy service-role (RLS không cứu được lớp này) → caller BẮT
+// BUỘC verify store trước khi gọi; FS store / store ngưng hoạt động → false.
+export function canShowOwnOsGmv(
+  store: { store_type: string; is_active: boolean } | null | undefined,
+): boolean {
+  return !!store && store.store_type === 'os' && store.is_active === true
+}
+
+// r1 (audit P2 #3): ngày phải là NGÀY LỊCH THẬT — '2026-02-31'/'2026-99-99'
+// round-trip qua Date sẽ lệch/NaN → loại.
+export function isRealISODate(s: string | undefined): s is string {
+  if (!s || !/^\d{4}-\d{2}-\d{2}$/.test(s)) return false
+  const d = new Date(`${s}T00:00:00Z`)
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === s
+}
+
+export const OVERVIEW_MAX_RANGE_DAYS = 366
+
+// Parse range từ URL: sai/thiếu → tháng VN hiện tại; from > to → hoán vị;
+// cửa sổ > 366 ngày → clamp from = to − 365 (chống query URL phá range).
+export function parseOverviewRange(
+  fromParam: string | undefined,
+  toParam: string | undefined,
+  todayISO: string,
+): { from: string; to: string; clamped: boolean } {
+  const month = currentVnMonthISO(todayISO)
+  let from = isRealISODate(fromParam) ? fromParam : month.from
+  let to = isRealISODate(toParam) ? toParam : month.to
+  if (from > to) [from, to] = [to, from]
+  const toMs = Date.parse(`${to}T00:00:00Z`)
+  const days = Math.floor((toMs - Date.parse(`${from}T00:00:00Z`)) / 86400_000) + 1
+  let clamped = false
+  if (days > OVERVIEW_MAX_RANGE_DAYS) {
+    from = new Date(toMs - (OVERVIEW_MAX_RANGE_DAYS - 1) * 86400_000).toISOString().slice(0, 10)
+    clamped = true
+  }
+  return { from, to, clamped }
+}
+
 // Ai thấy gì (quyết định user 24/07):
 //   super            → 'full'   (tab Affiliate /targets/campaigns: OS + FS)
 //   sm/store_manager → 'own-os' (card GMV tháng trên landing /targets, store scope mình)

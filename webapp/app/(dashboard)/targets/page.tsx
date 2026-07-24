@@ -17,10 +17,10 @@ import { isReferralEnabled } from '@/lib/affiliate/flags'
 import { AffiliateQrCard } from '@/components/affiliate/AffiliateQrCard'
 import { AffiliateGmvCard } from '@/components/affiliate/AffiliateGmvCard'
 import { AFFILIATE_QR_FILTER, qrCardVisible, qrCardKey } from '@/lib/affiliate/qrDisplay'
-import { reduceAffiliateAgg, currentVnMonthISO, overviewVisibleFor, type AffiliateAggInput } from '@/lib/affiliate/overview'
+import { reduceAffiliateAgg, currentVnMonthISO, overviewVisibleFor, canShowOwnOsGmv, type AffiliateAggInput } from '@/lib/affiliate/overview'
 import { vnDayRange } from '@/lib/kpi/engine'
 import { supabaseAdmin } from '@/lib/supabase/admin'
-import { supabaseAffiliateHealthDb } from '@/lib/affiliate/health'
+import { getAffiliateSyncHealth, supabaseAffiliateHealthDb } from '@/lib/affiliate/health'
 import { ReferralCard, type ReferralItem } from '@/components/referral/ReferralCard'
 import { formatDateTime, currentWeekStart } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
@@ -313,28 +313,41 @@ export default async function TargetsPage({
     role: profile?.role,
     flagEnabled: isKpiAffiliateEnabled(),
   })
-  const showAffiliateGmv = gmvAccess === 'own-os' && !!resolvedStoreId && !params.campaign
+  let showAffiliateGmv = gmvAccess === 'own-os' && !!resolvedStoreId && !params.campaign
   const gmvMonth = currentVnMonthISO(vnTodayISO)
   const gmvMonthLabel = `Tháng ${gmvMonth.from.slice(5, 7)}/${gmvMonth.from.slice(0, 4)}`
   let affiliateGmv = { gmv: 0, orders: 0 }
   let affiliateGmvError = false
   let affiliateGmvSyncedAt: string | null = null
+  let affiliateGmvWarning: string | null = null
   if (showAffiliateGmv && resolvedStoreId) {
-    const range = vnDayRange(gmvMonth.from, gmvMonth.to)
-    const [aggRes, lastRes] = await Promise.all([
-      supabaseAdmin.rpc('rpc_aggregate_affiliate_gmv', { p_store_ids: [resolvedStoreId], p_from: range.from, p_to: range.to }),
-      supabaseAffiliateHealthDb(supabaseAdmin).lastSuccessFinishedAt(),
-    ])
-    if (aggRes.error) {
-      // Gồm cả fail-closed (đơn DELIVERED thiếu completed_time) — card hiện lỗi gọn.
-      console.error('[targets] affiliate gmv query failed:', aggRes.error.message)
-      affiliateGmvError = true
+    // r1 (audit P1#1): RPC chạy service-role — RLS không cứu được lớp này nên
+    // BẮT BUỘC verify store là OS + active TRƯỚC khi gọi (canShowOwnOsGmv, có
+    // test). FS Store Manager / SM gán nhầm FS → ẩn card, 0 call RPC.
+    const { data: gmvStoreRow } = await supabase
+      .from('stores').select('store_type, is_active').eq('id', resolvedStoreId).maybeSingle()
+    if (!canShowOwnOsGmv(gmvStoreRow as { store_type: string; is_active: boolean } | null)) {
+      showAffiliateGmv = false
     } else {
-      const r = reduceAffiliateAgg((aggRes.data ?? []) as AffiliateAggInput[])
-      const a = r.byStore.get(resolvedStoreId)
-      affiliateGmv = { gmv: a?.gmv ?? 0, orders: a?.orders ?? 0 }
+      const range = vnDayRange(gmvMonth.from, gmvMonth.to)
+      // r1 (audit P2#5): dùng ĐẦY ĐỦ getAffiliateSyncHealth cho store đang xem
+      // — lỗi lookup không còn giả dạng "chưa đồng bộ", reason nổi lên card.
+      const [aggRes, health] = await Promise.all([
+        supabaseAdmin.rpc('rpc_aggregate_affiliate_gmv', { p_store_ids: [resolvedStoreId], p_from: range.from, p_to: range.to }),
+        getAffiliateSyncHealth(supabaseAffiliateHealthDb(supabaseAdmin), [resolvedStoreId]),
+      ])
+      if (aggRes.error) {
+        // Gồm cả fail-closed (đơn DELIVERED thiếu completed_time) — card hiện lỗi gọn.
+        console.error('[targets] affiliate gmv query failed:', aggRes.error.message)
+        affiliateGmvError = true
+      } else {
+        const r = reduceAffiliateAgg((aggRes.data ?? []) as AffiliateAggInput[])
+        const a = r.byStore.get(resolvedStoreId)
+        affiliateGmv = { gmv: a?.gmv ?? 0, orders: a?.orders ?? 0 }
+      }
+      affiliateGmvSyncedAt = health.lastSuccessAt
+      affiliateGmvWarning = health.ready ? null : health.reason
     }
-    affiliateGmvSyncedAt = (lastRes?.data?.finished_at as string | null) ?? null
   }
   let affiliateQr: AffiliateQrRow | null = null
   let affiliateQrError = false
@@ -428,6 +441,7 @@ export default async function TargetsPage({
             orders={affiliateGmv.orders}
             syncedAt={affiliateGmvSyncedAt}
             error={affiliateGmvError}
+            sourceWarning={affiliateGmvWarning}
           />
         )}
       </div>
@@ -477,6 +491,7 @@ export default async function TargetsPage({
             orders={affiliateGmv.orders}
             syncedAt={affiliateGmvSyncedAt}
             error={affiliateGmvError}
+            sourceWarning={affiliateGmvWarning}
           />
         )}
       </div>

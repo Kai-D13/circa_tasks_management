@@ -9,12 +9,13 @@ import { Link2 } from 'lucide-react'
 
 const vnd = (n: number) => `${new Intl.NumberFormat('vi-VN').format(Math.round(n))}₫`
 
-export function AffiliateGmvCard({ monthLabel, gmv, orders, syncedAt, error = false }: {
+export function AffiliateGmvCard({ monthLabel, gmv, orders, syncedAt, error = false, sourceWarning = null }: {
   monthLabel: string          // vd "Tháng 07/2026"
   gmv: number
   orders: number
   syncedAt: string | null     // health lastSuccessAt — null = chưa có sync thành công
   error?: boolean             // RPC lỗi (kể cả fail-closed thiếu completed_time)
+  sourceWarning?: string | null // r1 P2#5: health không READY → reason nổi lên card
 }) {
   return (
     <Card className="rounded-lg">
@@ -41,6 +42,9 @@ export function AffiliateGmvCard({ monthLabel, gmv, orders, syncedAt, error = fa
               Chỉ tính đơn giao thành công (DELIVERED) · ghi nhận theo mã đối tác của cửa hàng
               {syncedAt ? ` · đồng bộ ${formatDateTime(syncedAt)}` : ' · chưa đồng bộ'}
             </p>
+            {sourceWarning && (
+              <p className="text-[11px] text-status-warning">Nguồn dữ liệu: {sourceWarning}</p>
+            )}
           </>
         )}
       </CardContent>

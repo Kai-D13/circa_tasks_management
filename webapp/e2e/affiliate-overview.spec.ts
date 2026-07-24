@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test'
 import {
   reduceAffiliateAgg, currentVnMonthISO, overviewVisibleFor,
+  canShowOwnOsGmv, isRealISODate, parseOverviewRange,
   type AffiliateAggInput,
 } from '../lib/affiliate/overview'
 
@@ -34,6 +35,44 @@ test.describe('affiliate overview contract @desktop', () => {
     expect(currentVnMonthISO('2028-02-10')).toEqual({ from: '2028-02-01', to: '2028-02-29' }) // 2028 nhuận
     expect(currentVnMonthISO('2026-02-01')).toEqual({ from: '2026-02-01', to: '2026-02-28' })
     expect(currentVnMonthISO('2026-12-31')).toEqual({ from: '2026-12-01', to: '2026-12-31' })
+  })
+
+  test('r1 P1#1 canShowOwnOsGmv: CHỈ os + active — FS QLCH/SM gán nhầm FS bị chặn trước RPC service-role', () => {
+    expect(canShowOwnOsGmv({ store_type: 'os', is_active: true })).toBe(true)
+    expect(canShowOwnOsGmv({ store_type: 'fs', is_active: true })).toBe(false)   // FS → chặn
+    expect(canShowOwnOsGmv({ store_type: 'os', is_active: false })).toBe(false)  // ngưng hoạt động → chặn
+    expect(canShowOwnOsGmv({ store_type: 'external' as string, is_active: true })).toBe(false)
+    expect(canShowOwnOsGmv(null)).toBe(false)      // store không tồn tại / query miss
+    expect(canShowOwnOsGmv(undefined)).toBe(false)
+  })
+
+  test('r1 P2#3 isRealISODate: loại ngày không có thật trên lịch', () => {
+    expect(isRealISODate('2026-07-24')).toBe(true)
+    expect(isRealISODate('2026-02-31')).toBe(false) // format đúng, lịch sai
+    expect(isRealISODate('2026-99-99')).toBe(false)
+    expect(isRealISODate('2028-02-29')).toBe(true)  // nhuận
+    expect(isRealISODate('2026-02-29')).toBe(false) // không nhuận
+    expect(isRealISODate('abc')).toBe(false)
+    expect(isRealISODate(undefined)).toBe(false)
+  })
+
+  test('r1 P2#3 parseOverviewRange: sai → default tháng; ngược → hoán vị; >366 ngày → clamp; URL rác không phá range', () => {
+    // sai/thiếu → default tháng hiện tại
+    expect(parseOverviewRange(undefined, undefined, '2026-07-24'))
+      .toEqual({ from: '2026-07-01', to: '2026-07-31', clamped: false })
+    expect(parseOverviewRange('2026-02-31', '2026-99-99', '2026-07-24'))
+      .toEqual({ from: '2026-07-01', to: '2026-07-31', clamped: false })
+    // from > to → hoán vị
+    expect(parseOverviewRange('2026-07-20', '2026-07-05', '2026-07-24'))
+      .toEqual({ from: '2026-07-05', to: '2026-07-20', clamped: false })
+    // range hợp lệ giữ nguyên
+    expect(parseOverviewRange('2026-06-01', '2026-07-24', '2026-07-24'))
+      .toEqual({ from: '2026-06-01', to: '2026-07-24', clamped: false })
+    // > 366 ngày → clamp from = to − 365, có cờ clamped
+    const r = parseOverviewRange('2020-01-01', '2026-07-24', '2026-07-24')
+    expect(r.to).toBe('2026-07-24')
+    expect(r.clamped).toBe(true)
+    expect(r.from).toBe('2025-07-24') // đúng 366 ngày
   })
 
   test('overviewVisibleFor: super full · sm/store_manager own-os · staff/admin thường none · flag off none', () => {

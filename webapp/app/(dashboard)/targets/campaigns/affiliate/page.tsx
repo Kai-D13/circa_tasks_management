@@ -6,7 +6,7 @@ import { isSuperAdminEmail } from '@/lib/authz'
 import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import { getAffiliateSyncHealth, supabaseAffiliateHealthDb } from '@/lib/affiliate/health'
 import { vnDayRange } from '@/lib/kpi/engine'
-import { reduceAffiliateAgg, currentVnMonthISO, type AffiliateAggInput } from '@/lib/affiliate/overview'
+import { reduceAffiliateAgg, parseOverviewRange, type AffiliateAggInput } from '@/lib/affiliate/overview'
 import { CampaignsTabs } from '@/components/kpi/CampaignsTabs'
 import { StatCard } from '@/components/ds/StatCard'
 import { DataTableShell } from '@/components/ds/DataTableShell'
@@ -18,21 +18,37 @@ import { formatDate, formatDateTime } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
 import { Link2, TrendingUp, Package, Store as StoreIcon, Activity } from 'lucide-react'
 
-// P3-I — Affiliate Overview (super admin, KHÔNG phụ thuộc campaign): đọc
+// P3-I r1 — Affiliate Overview (super admin, KHÔNG phụ thuộc campaign): đọc
 // doanh số Affiliate đã sync trong Supabase qua rpc_aggregate_affiliate_gmv
 // (DELIVERED + source_active, ngày VN theo completed_time). Phạm vi user chốt
 // 24/07: OS + FS (external = backlog). KHÔNG nút đồng bộ — mọi sync chạy qua
 // cron/runbook, UI chỉ hiển thị. KHÔNG PII, không target/%/tier/commission.
 // RPC grant service_role → gọi qua supabaseAdmin sau hard-gate super.
+// r1 (audit): mapping lỗi → FAIL-CLOSED (chỉ ErrorState, không số 0 giả);
+// range ngày lịch thật + clamp ≤366 ngày; health theo ĐÚNG danh sách store
+// đang hiển thị (OS + FS). Mapping 1 store : 1 partner đã preflight (0 rows
+// trùng — user 24/07).
 
 const vnd = (n: number) => `${new Intl.NumberFormat('vi-VN').format(Math.round(n))}₫`
-const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
 interface MappingRow {
   partner_code: string
   partner_type: string
   store_id: string
   stores: { name: string; code: string | null } | null
+}
+
+function PageShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="p-4 md:p-6 max-w-5xl space-y-4">
+      <div className="flex items-center gap-2">
+        <Link2 className="h-5 w-5 text-primary" />
+        <h1 className="text-xl font-semibold">Doanh số Affiliate — Circa Online</h1>
+      </div>
+      <CampaignsTabs active="affiliate" affiliateEnabled />
+      {children}
+    </div>
+  )
 }
 
 export default async function AffiliateOverviewPage({ searchParams }: {
@@ -45,10 +61,9 @@ export default async function AffiliateOverviewPage({ searchParams }: {
 
   const params = await searchParams
   const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
-  const month = currentVnMonthISO(vnTodayISO)
-  let from = ISO_DATE.test(params.from ?? '') ? params.from! : month.from
-  let to = ISO_DATE.test(params.to ?? '') ? params.to! : month.to
-  if (from > to) [from, to] = [to, from]
+  // r1 (audit P2#3): ngày lịch THẬT (loại 2026-02-31/2026-99-99), hoán vị khi
+  // ngược, clamp ≤366 ngày — URL sai không đổ 500, không phá range.
+  const { from, to, clamped } = parseOverviewRange(params.from, params.to, vnTodayISO)
 
   // Mappings OS + FS (session client — RLS apm_select_super). External (store
   // NULL) ngoài phạm vi v1. 1 FK duy nhất mappings→stores → bare embed an toàn.
@@ -60,108 +75,112 @@ export default async function AffiliateOverviewPage({ searchParams }: {
     .eq('is_active', true)
     .not('store_id', 'is', null)
     .order('partner_code')
-  const mappings = ((mapRows ?? []) as unknown as MappingRow[])
 
-  // Filter store / partner (GET param) — áp trên danh sách mapping.
+  // r1 (audit P1#2): mapping lỗi → FAIL-CLOSED — chỉ ErrorState. Không
+  // aggregate, không summary 0 giả, không empty state (0 trên màn hình tiền
+  // phải là 0 THẬT).
+  if (mapErr) {
+    console.error('[affiliate-overview] mapping query failed:', mapErr.message)
+    return (
+      <PageShell>
+        <ErrorState
+          message="Không tải được danh sách mapping affiliate — không thể tổng hợp doanh số"
+          hint={`${mapErr.message} — kiểm tra migration 090/095 và RLS, rồi tải lại.`}
+        />
+      </PageShell>
+    )
+  }
+
+  const mappings = ((mapRows ?? []) as unknown as MappingRow[])
   const filtered = mappings.filter((m) =>
     (!params.store || m.store_id === params.store)
     && (!params.partner || m.partner_code === params.partner))
-  const storeIds = filtered.map((m) => m.store_id)
-  const osStoreIds = mappings.filter((m) => m.partner_type === 'os').map((m) => m.store_id)
+  const storeIds = [...new Set(filtered.map((m) => m.store_id))]
+
+  const filterForm = (
+    <form method="GET" className="flex flex-wrap items-end gap-2 text-sm">
+      <label className="grid gap-1">
+        <span className="text-xs text-muted-foreground">Từ ngày</span>
+        <input type="date" name="from" defaultValue={from} className="h-9 rounded-lg border bg-card px-2.5 text-sm" />
+      </label>
+      <label className="grid gap-1">
+        <span className="text-xs text-muted-foreground">Đến ngày</span>
+        <input type="date" name="to" defaultValue={to} className="h-9 rounded-lg border bg-card px-2.5 text-sm" />
+      </label>
+      <label className="grid gap-1">
+        <span className="text-xs text-muted-foreground">Cửa hàng</span>
+        <select name="store" defaultValue={params.store ?? ''} className="h-9 rounded-lg border bg-card px-2 text-sm max-w-[220px]">
+          <option value="">Tất cả</option>
+          {mappings.map((m) => (
+            <option key={m.store_id} value={m.store_id}>{m.stores?.name ?? m.partner_code}</option>
+          ))}
+        </select>
+      </label>
+      <label className="grid gap-1">
+        <span className="text-xs text-muted-foreground">Partner code</span>
+        <select name="partner" defaultValue={params.partner ?? ''} className="h-9 rounded-lg border bg-card px-2 text-sm max-w-[220px]">
+          <option value="">Tất cả</option>
+          {mappings.map((m) => (
+            <option key={m.partner_code} value={m.partner_code}>{m.partner_code}</option>
+          ))}
+        </select>
+      </label>
+      <button type="submit" className={cn(buttonVariants({ size: 'sm' }), 'min-h-[36px]')}>Áp dụng</button>
+    </form>
+  )
+
+  if (storeIds.length === 0) {
+    return (
+      <PageShell>
+        {filterForm}
+        <EmptyState className="py-12" icon={Link2} title="Không có mapping affiliate nào khớp bộ lọc." />
+      </PageShell>
+    )
+  }
 
   // Aggregate qua RPC (DB-side). FAIL-CLOSED RAISE (đơn DELIVERED thiếu
   // completed_time) → hiển thị cảnh báo nguồn, không render số thiếu.
+  const range = vnDayRange(from, to)
+  // r1 (audit P2#4): health theo ĐÚNG danh sách store đang hiển thị (OS + FS,
+  // dedupe) — lỗi completed_time ở FS cũng phản ánh vào thẻ "Nguồn dữ liệu".
+  const [aggRes, health] = await Promise.all([
+    supabaseAdmin.rpc('rpc_aggregate_affiliate_gmv', { p_store_ids: storeIds, p_from: range.from, p_to: range.to }),
+    getAffiliateSyncHealth(supabaseAffiliateHealthDb(supabaseAdmin), storeIds),
+  ])
   let aggErrorMsg: string | null = null
   let byStore = new Map<string, { gmv: number; orders: number; lastDate: string | null }>()
   let totals = { gmv: 0, orders: 0, storesWithSales: 0 }
-  if (storeIds.length > 0) {
-    const range = vnDayRange(from, to)
-    const { data: aggRows, error: aggErr } = await supabaseAdmin
-      .rpc('rpc_aggregate_affiliate_gmv', { p_store_ids: storeIds, p_from: range.from, p_to: range.to })
-    if (aggErr) {
-      console.error('[affiliate-overview] aggregate failed:', aggErr.message)
-      aggErrorMsg = aggErr.message
-    } else {
-      const r = reduceAffiliateAgg((aggRows ?? []) as AffiliateAggInput[])
-      byStore = r.byStore
-      totals = r.totals
-    }
+  if (aggRes.error) {
+    console.error('[affiliate-overview] aggregate failed:', aggRes.error.message)
+    aggErrorMsg = aggRes.error.message
+  } else {
+    const r = reduceAffiliateAgg((aggRes.data ?? []) as AffiliateAggInput[])
+    byStore = r.byStore
+    totals = r.totals
   }
-
-  // Trạng thái nguồn — cùng semantics health gate của engine (canary theo OS).
-  const health = await getAffiliateSyncHealth(supabaseAffiliateHealthDb(supabaseAdmin), osStoreIds)
 
   const rows = filtered
     .map((m) => ({ ...m, agg: byStore.get(m.store_id) ?? { gmv: 0, orders: 0, lastDate: null } }))
     .sort((a, b) => b.agg.gmv - a.agg.gmv)
 
-  const filterHref = (over: { store?: string; partner?: string }) => {
-    const q = new URLSearchParams()
-    if (params.from) q.set('from', from)
-    if (params.to) q.set('to', to)
-    const store = over.store ?? params.store
-    const partner = over.partner ?? params.partner
-    if (store) q.set('store', store)
-    if (partner) q.set('partner', partner)
-    const s = q.toString()
-    return `/targets/campaigns/affiliate${s ? `?${s}` : ''}`
-  }
-
   return (
-    <div className="p-4 md:p-6 max-w-5xl space-y-4">
-      <div className="flex items-center gap-2">
-        <Link2 className="h-5 w-5 text-primary" />
-        <h1 className="text-xl font-semibold">Doanh số Affiliate — Circa Online</h1>
-      </div>
-
-      <CampaignsTabs active="affiliate" affiliateEnabled />
-
-      {/* Bộ lọc GET server-render — không client JS, không nút đồng bộ */}
-      <form method="GET" className="flex flex-wrap items-end gap-2 text-sm">
-        <label className="grid gap-1">
-          <span className="text-xs text-muted-foreground">Từ ngày</span>
-          <input type="date" name="from" defaultValue={from} className="h-9 rounded-lg border bg-card px-2.5 text-sm" />
-        </label>
-        <label className="grid gap-1">
-          <span className="text-xs text-muted-foreground">Đến ngày</span>
-          <input type="date" name="to" defaultValue={to} className="h-9 rounded-lg border bg-card px-2.5 text-sm" />
-        </label>
-        <label className="grid gap-1">
-          <span className="text-xs text-muted-foreground">Cửa hàng</span>
-          <select name="store" defaultValue={params.store ?? ''} className="h-9 rounded-lg border bg-card px-2 text-sm max-w-[220px]">
-            <option value="">Tất cả</option>
-            {mappings.map((m) => (
-              <option key={m.store_id} value={m.store_id}>{m.stores?.name ?? m.partner_code}</option>
-            ))}
-          </select>
-        </label>
-        <label className="grid gap-1">
-          <span className="text-xs text-muted-foreground">Partner code</span>
-          <select name="partner" defaultValue={params.partner ?? ''} className="h-9 rounded-lg border bg-card px-2 text-sm max-w-[220px]">
-            <option value="">Tất cả</option>
-            {mappings.map((m) => (
-              <option key={m.partner_code} value={m.partner_code}>{m.partner_code}</option>
-            ))}
-          </select>
-        </label>
-        <button type="submit" className={cn(buttonVariants({ size: 'sm' }), 'min-h-[36px]')}>Áp dụng</button>
-      </form>
-
-      {mapErr && (
-        <ErrorState message="Không tải được danh sách mapping affiliate" hint={mapErr.message} />
+    <PageShell>
+      {filterForm}
+      {clamped && (
+        <p className="text-xs text-muted-foreground">
+          Khoảng ngày vượt giới hạn 366 ngày — đã thu hẹp còn {formatDate(from)} – {formatDate(to)}.
+        </p>
       )}
+
       {aggErrorMsg && (
-        <ErrorState
-          message="Nguồn Affiliate chưa sẵn sàng để tổng hợp"
-          hint={aggErrorMsg}
-        />
+        <ErrorState message="Nguồn Affiliate chưa sẵn sàng để tổng hợp" hint={aggErrorMsg} />
       )}
 
       {/* Summary — khoảng thời gian đang xem */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
-        <StatCard label={`GMV Affiliate (${formatDate(from)} – ${formatDate(to)})`} value={aggErrorMsg ? '—' : vnd(totals.gmv)} icon={TrendingUp} tone={totals.gmv > 0 ? 'success' : 'default'} />
+        <StatCard label={`GMV Affiliate (${formatDate(from)} – ${formatDate(to)})`} value={aggErrorMsg ? '—' : vnd(totals.gmv)} icon={TrendingUp} tone={!aggErrorMsg && totals.gmv > 0 ? 'success' : 'default'} />
         <StatCard label="Đơn giao thành công" value={aggErrorMsg ? '—' : totals.orders} icon={Package} />
-        <StatCard label="Store có doanh số" value={aggErrorMsg ? '—' : `${totals.storesWithSales}/${filtered.length}`} icon={StoreIcon} />
+        <StatCard label="Store có doanh số" value={aggErrorMsg ? '—' : `${totals.storesWithSales}/${storeIds.length}`} icon={StoreIcon} />
         <StatCard
           label="Nguồn dữ liệu"
           value={health.ready ? 'Sẵn sàng' : 'Cảnh báo'}
@@ -177,55 +196,51 @@ export default async function AffiliateOverviewPage({ searchParams }: {
         <p className="text-xs text-status-warning">Cảnh báo nguồn: {health.reason}</p>
       )}
 
-      {rows.length === 0 ? (
-        <EmptyState className="py-12" icon={Link2} title="Không có mapping affiliate nào khớp bộ lọc." />
-      ) : (
-        <DataTableShell>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="pl-4">Cửa hàng</TableHead>
-                <TableHead>Partner code</TableHead>
-                <TableHead className="text-right">Đơn giao thành công</TableHead>
-                <TableHead className="text-right">GMV Affiliate</TableHead>
-                <TableHead className="text-right pr-4">Đơn gần nhất</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((r) => {
-                const has = r.agg.orders > 0
-                return (
-                  <TableRow key={r.partner_code}>
-                    <TableCell className="pl-4">
-                      <span className="font-medium">{r.stores?.name ?? '—'}</span>
-                      <span className="text-xs text-muted-foreground"> · {r.stores?.code ?? '—'}</span>
-                      {r.partner_type === 'fs' && (
-                        <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground align-middle">FS</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">{r.partner_code}</TableCell>
-                    <TableCell className={cn('text-right tabular-nums', !has && 'text-muted-foreground')}>
-                      {aggErrorMsg ? '—' : r.agg.orders}
-                    </TableCell>
-                    <TableCell className={cn('text-right tabular-nums font-medium', !has && 'text-muted-foreground font-normal')}>
-                      {aggErrorMsg ? '—' : has || r.agg.gmv !== 0 ? vnd(r.agg.gmv) : '—'}
-                    </TableCell>
-                    <TableCell className="text-right pr-4 text-muted-foreground">
-                      {aggErrorMsg ? '—' : r.agg.lastDate ? formatDate(r.agg.lastDate) : '—'}
-                    </TableCell>
-                  </TableRow>
-                )
-              })}
-            </TableBody>
-          </Table>
-        </DataTableShell>
-      )}
+      <DataTableShell>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead className="pl-4">Cửa hàng</TableHead>
+              <TableHead>Partner code</TableHead>
+              <TableHead className="text-right">Đơn giao thành công</TableHead>
+              <TableHead className="text-right">GMV Affiliate</TableHead>
+              <TableHead className="text-right pr-4">Đơn gần nhất</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((r) => {
+              const has = r.agg.orders > 0
+              return (
+                <TableRow key={r.partner_code}>
+                  <TableCell className="pl-4">
+                    <span className="font-medium">{r.stores?.name ?? '—'}</span>
+                    <span className="text-xs text-muted-foreground"> · {r.stores?.code ?? '—'}</span>
+                    {r.partner_type === 'fs' && (
+                      <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground align-middle">FS</span>
+                    )}
+                  </TableCell>
+                  <TableCell className="font-mono text-xs">{r.partner_code}</TableCell>
+                  <TableCell className={cn('text-right tabular-nums', !has && 'text-muted-foreground')}>
+                    {aggErrorMsg ? '—' : r.agg.orders}
+                  </TableCell>
+                  <TableCell className={cn('text-right tabular-nums font-medium', !has && 'text-muted-foreground font-normal')}>
+                    {aggErrorMsg ? '—' : has || r.agg.gmv !== 0 ? vnd(r.agg.gmv) : '—'}
+                  </TableCell>
+                  <TableCell className="text-right pr-4 text-muted-foreground">
+                    {aggErrorMsg ? '—' : r.agg.lastDate ? formatDate(r.agg.lastDate) : '—'}
+                  </TableCell>
+                </TableRow>
+              )
+            })}
+          </TableBody>
+        </Table>
+      </DataTableShell>
 
       <p className="text-[11px] text-muted-foreground">
         Nguồn: Circa Online (đồng bộ định kỳ vào hệ thống) · chỉ tính đơn giao thành công (DELIVERED),
         ghi nhận theo mã đối tác · ngày theo giờ Việt Nam của thời điểm giao thành công. Không bao gồm
         đối tác ngoài hệ thống.
       </p>
-    </div>
+    </PageShell>
   )
 }

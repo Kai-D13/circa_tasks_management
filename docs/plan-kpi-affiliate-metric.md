@@ -108,3 +108,12 @@ MongoDB ─(cron 2h, phút 05)─> affiliate_orders┘        │
 ---
 
 **Trạng thái duyệt:** contract mục 1 + kiến trúc + schema + rollout = đã chốt theo audit 22/07. Còn lại duy nhất **mục 2 (field ngày ghi nhận)** chờ stakeholder — sẽ trình kèm bằng chứng field list từ phiên VPN dry-run.
+
+---
+
+## Source contract — cập nhật 24/07/2026 (P3-I)
+
+1. **Double-count hybrid: ĐÓNG.** BI xác nhận (24/07, qua stakeholder audit): feed offline `tech__circa_os_gmv_kpi.gmv` **KHÔNG chứa** GMV online/Affiliate → công thức hybrid `Actual = GMV Offline (BigQuery) + GMV Affiliate (affiliate_orders)` không double-count. Đây là điều kiện nguồn — nếu BI đổi định nghĩa cột `gmv` sau này thì phải re-review trước.
+2. **Mapping 1 store : 1 partner active: ĐÃ CHỨNG MINH.** Preflight SQL (user chạy 24/07): `GROUP BY store_id HAVING count(*) > 1` trên mapping active os/fs → **0 rows**. Semantics bảng Affiliate Overview (1 dòng/store) đứng vững; unique index `uq_apm_qr_one_per_store` (095) giữ bất biến này cho QR.
+3. **Ngày ghi nhận:** `completed_time` theo giờ VN (chốt từ 092) — DELIVERED thiếu `completed_time` → fail-closed toàn tuyến (RPC RAISE → engine giữ snapshot, overview hiện cảnh báo nguồn).
+4. **CÒN MỞ (chặn BẬT `KPI_AFFILIATE_ENABLED` prod, không chặn merge flag-off):** báo cáo Circa Online chính thức có tính `total_price < 0` của đơn DELIVERED vào GMV không? Engine + overview hiện **GIỮ số âm trong SUM**; nếu stakeholder chốt ngược lại → đổi rule ở `rpc_aggregate_affiliate_gmv` (1 chỗ) + đối soát lại.
