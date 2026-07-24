@@ -6,7 +6,7 @@ import { isSuperAdminEmail } from '@/lib/authz'
 import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import { getAffiliateSyncHealth, supabaseAffiliateHealthDb } from '@/lib/affiliate/health'
 import { vnDayRange } from '@/lib/kpi/engine'
-import { reduceAffiliateAgg, parseOverviewRange, overviewDataState, overviewPageScope, canShowOwnOsGmv, type AffiliateAggInput } from '@/lib/affiliate/overview'
+import { reduceAffiliateAgg, parseOverviewRange, overviewDataState, overviewPageScope, canShowOwnOsGmv, smOverviewAllowed, type AffiliateAggInput } from '@/lib/affiliate/overview'
 import { getSmStoreIds } from '@/lib/authz'
 import Link from 'next/link'
 import { CampaignsTabs } from '@/components/kpi/CampaignsTabs'
@@ -111,8 +111,19 @@ export default async function AffiliateOverviewPage({ searchParams }: {
     if (!canShowOwnOsGmv(ownStore as { store_type: string; is_active: boolean } | null)) notFound()
   }
   if (scope === 'os-assigned') {
+    // r1.2b (audit P2): phải có ÍT NHẤT MỘT store OS ACTIVE trong assignment —
+    // toàn FS/inactive cũng notFound; query stores lỗi → fail-closed
+    // (smOverviewAllowed, có test).
     const smIds = await getSmStoreIds(supabase, user.id)
-    if (smIds.length === 0) notFound()
+    let activeOsCount: number | null = null
+    if (smIds.length > 0) {
+      const { data: osStores, error: osErr } = await supabase
+        .from('stores').select('id')
+        .in('id', smIds).eq('store_type', 'os').eq('is_active', true)
+        .limit(1)
+      activeOsCount = osErr ? null : (osStores?.length ?? 0)
+    }
+    if (!smOverviewAllowed(smIds.length, activeOsCount)) notFound()
   }
 
   // Mappings qua SESSION client — RLS scope theo role: super = os+fs (filter

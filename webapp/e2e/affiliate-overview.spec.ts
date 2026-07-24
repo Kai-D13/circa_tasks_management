@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import {
   reduceAffiliateAgg, currentVnMonthISO, overviewVisibleFor,
   canShowOwnOsGmv, isRealISODate, parseOverviewRange, overviewDataState,
-  overviewPageScope, opsSidebarVisible,
+  overviewPageScope, opsSidebarVisible, smOverviewAllowed,
   type AffiliateAggInput,
 } from '../lib/affiliate/overview'
 
@@ -110,6 +110,15 @@ test.describe('affiliate overview contract @desktop', () => {
     // FLAG OFF → denied tất cả
     expect(overviewPageScope({ flagEnabled: false, isSuper: true, isAffiliateDeptAdmin: true, role: 'admin' })).toBe('denied')
     expect(overviewPageScope({ flagEnabled: false, isSuper: false, isAffiliateDeptAdmin: false, role: 'sm' })).toBe('denied')
+  })
+
+  test('r1.2b P2 smOverviewAllowed: cần ≥1 store OS ACTIVE trong assignment — 0 assignment / toàn FS / toàn OS inactive / query lỗi đều chặn', () => {
+    expect(smOverviewAllowed(0, 0)).toBe(false)     // không assignment
+    expect(smOverviewAllowed(0, null)).toBe(false)
+    expect(smOverviewAllowed(2, 0)).toBe(false)     // assignment toàn FS hoặc OS inactive
+    expect(smOverviewAllowed(2, null)).toBe(false)  // query stores LỖI → fail-closed
+    expect(smOverviewAllowed(2, 1)).toBe(true)      // ≥1 OS active → vào
+    expect(smOverviewAllowed(1, 1)).toBe(true)
   })
 
   test('r1.2a P2#1 opsSidebarVisible: CHỈ admin phòng cấp quyền KHÔNG PHẢI super; super/role khác/flag off → ẩn', () => {

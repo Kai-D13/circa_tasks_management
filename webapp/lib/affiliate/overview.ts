@@ -109,6 +109,14 @@ export function overviewDataState(healthReady: boolean, aggregateError: boolean)
 //   staff / admin thường / khác → 'denied' · flag tắt → 'denied' TẤT CẢ.
 // Data scoping thực thi = RLS (mappings đọc qua session client) — hàm này chỉ
 // quyết định gate route + biến thể UI; storeIds cho RPC derive từ rows RLS trả.
+// r1.2b (audit P2): SM chỉ được vào overview khi có ÍT NHẤT MỘT store OS
+// ACTIVE trong danh sách phân công — assignment toàn FS/inactive cũng chặn
+// (đúng contract "không có store OS active → notFound", không mở route rồi
+// rơi empty state). activeOsCount = null nghĩa là query stores LỖI → fail-closed.
+export function smOverviewAllowed(assignedCount: number, activeOsCount: number | null): boolean {
+  return assignedCount > 0 && activeOsCount !== null && activeOsCount > 0
+}
+
 // r1.2a (audit P2#1): item sidebar "Affiliate" CHỈ cho admin phòng được cấp
 // quyền KHÔNG PHẢI super (super đi qua Chiến dịch KPI → tab — không nhân đôi nav).
 export function opsSidebarVisible(p: {

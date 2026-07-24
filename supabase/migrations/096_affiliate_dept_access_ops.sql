@@ -29,9 +29,40 @@
 --      rpc_aggregate_affiliate_gmv GIỮ service_role-only (092) — page gọi
 --      sau gate với storeIds từ RLS.
 --
--- Idempotent: re-run = no-op. ROLLBACK: DELETE FROM affiliate_department_access
--- WHERE department_id='1b362298-…'; DROP POLICY apm_select_dept_admin;
--- DELETE app_migrations '096'.
+-- Idempotent: re-run = no-op.
+--
+-- ROLLBACK (r1.2b — tái tạo ĐÚNG trạng thái trước 096, đủ 4 bước):
+--   1. DELETE FROM public.affiliate_department_access
+--        WHERE department_id = '1b362298-7121-4604-9192-4a9ca2bb545f';
+--   2. DROP POLICY IF EXISTS apm_select_dept_admin
+--        ON public.affiliate_partner_mappings;
+--   3. Khôi phục aff_orders_select NGUYÊN VĂN theo 090 (4 nhánh — GỒM nhánh
+--      admin-department mà mục D đã bỏ):
+--        DROP POLICY IF EXISTS aff_orders_select ON public.affiliate_orders;
+--        CREATE POLICY aff_orders_select ON public.affiliate_orders
+--          FOR SELECT TO authenticated
+--          USING (
+--            (SELECT public.is_super_admin())
+--            OR (
+--              (SELECT public.get_user_role()) = 'admin'
+--              AND (SELECT public.is_affiliate_dept_admin())
+--              AND store_id IS NOT NULL
+--              AND public.is_os_store(store_id)
+--            )
+--            OR (
+--              (SELECT public.get_user_role()) = 'sm'
+--              AND public.is_sm_for_store(store_id)
+--              AND public.is_os_store(store_id)
+--            )
+--            OR (
+--              (SELECT public.get_user_role()) IN ('staff','store_manager')
+--              AND store_id = (SELECT public.get_user_store_id())
+--              AND public.is_os_store(store_id)
+--            )
+--          );
+--      (Nhánh dept khôi phục lại là INERT chừng nào bảng access rỗng — bước 1
+--       đã xóa row OPS nên không mở PII.)
+--   4. DELETE FROM public.app_migrations WHERE version = '096';
 -- ============================================================================
 
 BEGIN;
