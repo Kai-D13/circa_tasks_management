@@ -15,7 +15,12 @@ import { CampaignResultSummary } from '@/components/kpi/CampaignResultSummary'
 import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import { isReferralEnabled } from '@/lib/affiliate/flags'
 import { AffiliateQrCard } from '@/components/affiliate/AffiliateQrCard'
+import { AffiliateGmvCard } from '@/components/affiliate/AffiliateGmvCard'
 import { AFFILIATE_QR_FILTER, qrCardVisible, qrCardKey } from '@/lib/affiliate/qrDisplay'
+import { reduceAffiliateAgg, currentVnMonthISO, overviewVisibleFor, type AffiliateAggInput } from '@/lib/affiliate/overview'
+import { vnDayRange } from '@/lib/kpi/engine'
+import { supabaseAdmin } from '@/lib/supabase/admin'
+import { supabaseAffiliateHealthDb } from '@/lib/affiliate/health'
 import { ReferralCard, type ReferralItem } from '@/components/referral/ReferralCard'
 import { formatDateTime, currentWeekStart } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
@@ -298,6 +303,39 @@ export default async function TargetsPage({
     storeResolved: !!resolvedStoreId,
     inCampaignDetail: !!params.campaign,
   })
+
+  // ── P3-I: GMV Affiliate tháng hiện tại cho SM/QLCH (own OS store) — CHỈ ĐỌC
+  //    snapshot Supabase (RPC service_role qua admin; authz app-layer:
+  //    resolvedStoreId đã derive server-side từ profile/sm assignments). Staff
+  //    KHÔNG thấy (overviewVisibleFor='none'). KHÔNG nút đồng bộ. ──
+  const gmvAccess = overviewVisibleFor({
+    isSuper: false, // các nhánh landing dưới đây chỉ dành cho staff/sm/store_manager
+    role: profile?.role,
+    flagEnabled: isKpiAffiliateEnabled(),
+  })
+  const showAffiliateGmv = gmvAccess === 'own-os' && !!resolvedStoreId && !params.campaign
+  const gmvMonth = currentVnMonthISO(vnTodayISO)
+  const gmvMonthLabel = `Tháng ${gmvMonth.from.slice(5, 7)}/${gmvMonth.from.slice(0, 4)}`
+  let affiliateGmv = { gmv: 0, orders: 0 }
+  let affiliateGmvError = false
+  let affiliateGmvSyncedAt: string | null = null
+  if (showAffiliateGmv && resolvedStoreId) {
+    const range = vnDayRange(gmvMonth.from, gmvMonth.to)
+    const [aggRes, lastRes] = await Promise.all([
+      supabaseAdmin.rpc('rpc_aggregate_affiliate_gmv', { p_store_ids: [resolvedStoreId], p_from: range.from, p_to: range.to }),
+      supabaseAffiliateHealthDb(supabaseAdmin).lastSuccessFinishedAt(),
+    ])
+    if (aggRes.error) {
+      // Gồm cả fail-closed (đơn DELIVERED thiếu completed_time) — card hiện lỗi gọn.
+      console.error('[targets] affiliate gmv query failed:', aggRes.error.message)
+      affiliateGmvError = true
+    } else {
+      const r = reduceAffiliateAgg((aggRes.data ?? []) as AffiliateAggInput[])
+      const a = r.byStore.get(resolvedStoreId)
+      affiliateGmv = { gmv: a?.gmv ?? 0, orders: a?.orders ?? 0 }
+    }
+    affiliateGmvSyncedAt = (lastRes?.data?.finished_at as string | null) ?? null
+  }
   let affiliateQr: AffiliateQrRow | null = null
   let affiliateQrError = false
   if (showAffiliateQr && resolvedStoreId) {
@@ -382,6 +420,16 @@ export default async function TargetsPage({
             queryError={affiliateQrError}
           />
         )}
+        {/* P3-I: GMV Affiliate tháng hiện tại của store đang chọn (chỉ đọc) */}
+        {showAffiliateGmv && (
+          <AffiliateGmvCard
+            monthLabel={gmvMonthLabel}
+            gmv={affiliateGmv.gmv}
+            orders={affiliateGmv.orders}
+            syncedAt={affiliateGmvSyncedAt}
+            error={affiliateGmvError}
+          />
+        )}
       </div>
     )
   }
@@ -419,6 +467,16 @@ export default async function TargetsPage({
             imageUrl={affiliateQr?.qr_image_url ?? null}
             destinationUrl={affiliateQr?.qr_destination_url ?? null}
             queryError={affiliateQrError}
+          />
+        )}
+        {/* P3-I: GMV Affiliate tháng hiện tại của store mình (chỉ đọc) */}
+        {showAffiliateGmv && (
+          <AffiliateGmvCard
+            monthLabel={gmvMonthLabel}
+            gmv={affiliateGmv.gmv}
+            orders={affiliateGmv.orders}
+            syncedAt={affiliateGmvSyncedAt}
+            error={affiliateGmvError}
           />
         )}
       </div>
