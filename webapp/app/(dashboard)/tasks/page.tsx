@@ -9,7 +9,7 @@ import { EmptyState } from '@/components/ds/EmptyState'
 import { ErrorState } from '@/components/ds/ErrorState'
 import { TaskFilters } from '@/components/tasks/TaskFilters'
 import { TaskList, TaskListItem, BroadcastGroup, StaffGroup, StaffBroadcastGroup, StaffBroadcastStore, TaskRow, ChildTask } from '@/components/tasks/TaskList'
-import { buildImportBatchGroups, groupModeActive, type ImportBatchMember } from '@/lib/tasks/importBatchGroups'
+import { buildImportBatchGroups, groupModeActive, sliceGroupPage, type ImportBatchMember } from '@/lib/tasks/importBatchGroups'
 import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { ExportButton } from '@/components/common/ExportButton'
 import { Pagination } from '@/components/common/Pagination'
@@ -64,10 +64,10 @@ export default async function TasksPage({
 
   const nowIso = new Date().toISOString()
 
-  // Admin folding views (pending without a status sub-filter, and done) collapse
-  // many staff_all store-parents into ONE broadcast row. Paginate by GROUP unit
-  // (slice after grouping) instead of a row window, so a broadcast's stores never
-  // split across pages. Fetch all top-level parents (bounded) for these views.
+  // Admin folding views (r1.1: pending — KỂ CẢ status sub-filter — và done)
+  // collapse many staff_all store-parents into ONE broadcast row. Paginate by
+  // GROUP unit (slice after grouping) instead of a row window, so a broadcast's
+  // stores never split across pages. Fetch all top-level parents (bounded).
   // A "Người thực hiện" (assignee) filter targets ONE person's tasks — a flat
   // list is exactly that. Folding a broadcast is meaningless here (a staff_all
   // parent has assigned_to=null so it can't match), and would hide the matching
@@ -187,10 +187,10 @@ export default async function TasksPage({
   const topLevelOnly = (profile?.role === 'admin' || profile?.role === 'store_manager' || isSm)
     && view === 'pending' && !params.status && !userFilter
 
-  // Admin/PIC with a status sub-filter: ALSO exclude children from pagination.
-  // Otherwise a 26-store/106-staff broadcast floods the 30-row page under 'todo'
-  // (parents + children all match) — partial trees, broadcast repeating across
-  // pages, inflated count. Matching children are re-fetched per page below.
+  // Admin/PIC with a status sub-filter: ALSO exclude children from the main
+  // query — otherwise a 26-store/106-staff broadcast floods the page under
+  // 'todo' (parents + children all match). Matching children are fetched ONCE
+  // below (r1.1: same dataset for EVERY page — group slicing happens after).
   const adminTreeFilter = isAdminRole && view === 'pending' && !showArchived && !userFilter
     && (params.status === 'todo' || params.status === 'in_progress' || params.status === 'overdue')
 
@@ -276,15 +276,15 @@ export default async function TasksPage({
     // broadcast tree shows exactly the pharmacists the filter is about.
     //
     //   todo        → parents match the filter themselves (their status is the
-    //                 constant 'todo'), so scope children to the parents on this
-    //                 page — trees stay complete and never duplicate across pages.
+    //                 constant 'todo'), so scope children to the fetched parents
+    //                 (r1.1: fetch-all parents → trees complete on every page).
     //   overdue /   → parents can never match (overdue excludes staff_all parents
     //   in_progress   by design; parents are never 'in_progress'), so pull ALL
-    //                 matching children (bounded) and let the orphan grouping
-    //                 assemble the per-broadcast trees. Page 1 only — the trees
-    //                 ride alongside the top-level pagination, and repeating them
-    //                 on every page would be worse than the rare long list.
-    let childQ = supabase.from('tasks').select(CHILD_COLS).is('archived_at', null)
+    //                 matching children (bounded + exact count) and let the
+    //                 orphan grouping assemble the per-broadcast trees.
+    //   r1.1 (audit P1#1): fetch ở MỌI page — group slicing cần dataset GIỐNG
+    //   NHAU cho mọi request; gate page===1 cũ làm trang 2 rỗng cây/sai số trang.
+    let childQ = supabase.from('tasks').select(CHILD_COLS, { count: 'exact' }).is('archived_at', null)
     let run = false
     if (params.status === 'todo') {
       const parentIds = (tasks ?? [])
@@ -298,7 +298,7 @@ export default async function TasksPage({
           .order('created_at', { ascending: true })
         run = true
       }
-    } else if (page === 1) {
+    } else {
       childQ = childQ.not('parent_task_id', 'is', null)
       childQ = params.status === 'overdue'
         ? childQ.or(`status.eq.overdue,and(deadline.lt.${nowIso},status.neq.done)`)
@@ -312,19 +312,26 @@ export default async function TasksPage({
       if (params.category) childQ = childQ.eq('category', params.category)
       if (params.department_id) childQ = childQ.eq('department_id', params.department_id)
       if (!showOld) childQ = childQ.gte('created_at', ageCutoffIso)
-      const { data: childData, error: childErr } = await childQ
+      const { data: childData, error: childErr, count: childCount } = await childQ
       if (childErr) childrenError = childErr
       extraChildren = (childData ?? []) as unknown as NonNullable<typeof tasks>
+      // r1.1 (audit): kết quả bị CAP cắt → fail-visible (tree thiếu con = badge
+      // sai), yêu cầu thu hẹp bộ lọc — không âm thầm bỏ phần còn lại.
+      if (!childErr && childCount !== null && childCount > extraChildren.length) {
+        childrenError = childrenError ?? {
+          message: `Bộ lọc khớp ${childCount} mục con — vượt giới hạn hiển thị (${extraChildren.length}). Thu hẹp bộ lọc (cửa hàng/bộ phận/loại) rồi thử lại.`,
+        }
+      }
     }
   }
 
-  // Done view (admin/PIC): children are excluded from pagination above; on page 1
-  // fetch ALL done children (bounded 500, most recently submitted first) and let the
-  // orphan grouping assemble the Task → Store → Dược sĩ trees. A lightweight stats
-  // query then provides the TRUE per-broadcast totals so the badge reads "61/106 đã
-  // nộp" even when some stores have zero submissions (those stores simply have no
-  // tree row — there is nothing to list for them). Page 1 only — same accepted
-  // trade-off as the in_progress/overdue trees.
+  // Done view (admin/PIC): children are excluded from pagination above; fetch
+  // ALL done children ONCE (bounded 500, most recently submitted first — r1.1:
+  // no per-page gate, same dataset for every page) and let the orphan grouping
+  // assemble the Task → Store → Dược sĩ trees. A lightweight stats query then
+  // provides the TRUE per-broadcast totals so the badge reads "61/106 đã nộp"
+  // even when some stores have zero submissions (those stores simply have no
+  // tree row — there is nothing to list for them).
   //
   // ACCEPTED BOUNDS (revisit with an RPC that paginates by group unit when the
   // history grows): trees render on page 1 only, from the 500 most recently
@@ -783,12 +790,12 @@ export default async function TasksPage({
   // broadcast's stores stay whole on one page (fixes the original row-window
   // straddle bug). Other views keep server-side row pagination (pageItems ===
   // orderedVisibleItems).
-  const groupTotalPages = Math.max(1, Math.ceil(orderedVisibleItems.length / GROUPS_PER_PAGE))
-  const clampedPage = groupPaginate ? Math.min(page, groupTotalPages) : page
-  const pageItems = groupPaginate
-    ? orderedVisibleItems.slice((clampedPage - 1) * GROUPS_PER_PAGE, clampedPage * GROUPS_PER_PAGE)
-    : orderedVisibleItems
-  const effectiveTotalPages = groupPaginate ? groupTotalPages : totalPages
+  // r1.1: slice qua contract sliceGroupPage (có test) — mỗi group đúng 1 lần
+  // trên đúng 1 trang, dataset đã gộp toàn bộ trước khi cắt.
+  const sliced = sliceGroupPage(orderedVisibleItems, page, GROUPS_PER_PAGE)
+  const clampedPage = groupPaginate ? sliced.clampedPage : page
+  const pageItems = groupPaginate ? sliced.pageItems : orderedVisibleItems
+  const effectiveTotalPages = groupPaginate ? sliced.totalPages : totalPages
 
   // Drives the empty-state copy: are filters narrowing the (empty) result?
   const hasActiveFilters = !isStaff && !!(params.status || params.priority || params.store_id || params.category || params.department_id || params.assignee)

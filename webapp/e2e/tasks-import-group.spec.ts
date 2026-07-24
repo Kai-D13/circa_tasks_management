@@ -1,5 +1,8 @@
 import { test, expect } from '@playwright/test'
-import { buildImportBatchGroups, groupModeActive, type ImportBatchViewRow, type ImportBatchMember } from '../lib/tasks/importBatchGroups'
+import {
+  buildImportBatchGroups, groupModeActive, sliceGroupPage, groupStoreCountLabel,
+  type ImportBatchViewRow, type ImportBatchMember,
+} from '../lib/tasks/importBatchGroups'
 
 // Slice A unit gate (audit 24/07) — khóa contract gộp task import Excel theo
 // import_batch_id: badge toàn batch, children theo view, taskIds = subset đang
@@ -75,6 +78,28 @@ test.describe('tasks import-batch group contract @desktop', () => {
     const [gMiss] = buildImportBatchGroups(viewRows, [{ import_batch_id: 'batch-khac', status: 'todo' }])
     expect(gMiss.total).toBeNull()
     expect(gMiss.done).toBeNull()
+  })
+
+  test('r1.1 P1#1 sliceGroupPage: >15 group → trang 2 CÓ dữ liệu; mỗi group đúng 1 lần trên đúng 1 trang; page vượt biên → clamp', () => {
+    // Mô phỏng in_progress/overdue có 20 group (dataset ĐÃ GỘP TOÀN BỘ trước
+    // khi cắt — page dùng chính hàm này nên gate page===1 cũ không thể tái diễn).
+    const groups = Array.from({ length: 20 }, (_, i) => ({ batchId: `g-${i}` }))
+    const p1 = sliceGroupPage(groups, 1, 15)
+    const p2 = sliceGroupPage(groups, 2, 15)
+    expect(p1.pageItems).toHaveLength(15)
+    expect(p2.pageItems).toHaveLength(5)                 // trang 2 KHÔNG rỗng
+    expect(p1.totalPages).toBe(2)
+    const ids = [...p1.pageItems, ...p2.pageItems].map((g) => g.batchId)
+    expect(new Set(ids).size).toBe(20)                   // không lặp, không mất
+    expect(sliceGroupPage(groups, 99, 15).clampedPage).toBe(2)  // clamp biên
+    expect(sliceGroupPage(groups, 0, 15).clampedPage).toBe(1)
+    expect(sliceGroupPage([], 1, 15)).toEqual({ pageItems: [], totalPages: 1, clampedPage: 1 })
+  })
+
+  test('r1.1 P1#2 groupStoreCountLabel: total null → "đang hiển thị", KHÔNG suy đoán tổng cửa hàng', () => {
+    expect(groupStoreCountLabel(25, 24)).toBe('25 cửa hàng')
+    expect(groupStoreCountLabel(null, 24)).toBe('24 cửa hàng đang hiển thị')
+    expect(groupStoreCountLabel(null, 24)).not.toContain('25')
   })
 
   test('2 batch khác nhau → 2 group riêng; batch không có viewRow → không render', () => {

@@ -31,6 +31,29 @@ export function groupModeActive(p: {
   return p.isAdmin && !p.showArchived && !p.userFilter
 }
 
+// r1.1 (audit P1#1/P2#3): slice theo GROUP unit — page dùng CHÍNH hàm này sau
+// khi đã gộp TOÀN BỘ dataset (dataset phải giống nhau ở mọi request page; mọi
+// group xuất hiện đúng MỘT lần trên đúng MỘT trang; page vượt biên → clamp).
+export function sliceGroupPage<T>(items: T[], page: number, perPage: number): {
+  pageItems: T[]
+  totalPages: number
+  clampedPage: number
+} {
+  const totalPages = Math.max(1, Math.ceil(items.length / perPage))
+  const clampedPage = Math.min(Math.max(1, page), totalPages)
+  return {
+    pageItems: items.slice((clampedPage - 1) * perPage, clampedPage * perPage),
+    totalPages,
+    clampedPage,
+  }
+}
+
+// r1.1 (audit P1#2): KHÔNG suy đoán "tổng cửa hàng" khi tiến độ lỗi — total
+// null → nhãn nói rõ là số ĐANG HIỂN THỊ, không phải tổng batch.
+export function groupStoreCountLabel(total: number | null, visibleCount: number): string {
+  return total !== null ? `${total} cửa hàng` : `${visibleCount} cửa hàng đang hiển thị`
+}
+
 export interface ImportBatchViewRow {
   id: string
   import_batch_id: string

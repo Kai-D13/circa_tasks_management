@@ -16,6 +16,7 @@ import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
 import { TaskPriorityBadge } from '@/components/tasks/TaskPriorityBadge'
 import { formatDate, formatShiftTime, getEffectiveStatus } from '@/lib/dateUtils'
 import { deptBadgeClass } from '@/lib/departments'
+import { groupStoreCountLabel } from '@/lib/tasks/importBatchGroups'
 import { Radio, Archive, ArchiveRestore, ChevronRight, ChevronDown, Users, ExternalLink, FileSpreadsheet } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Task, TaskCategory } from '@/types'
@@ -434,7 +435,8 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                           </span>
                         )}
                         <span className="text-xs text-muted-foreground font-normal ml-1">
-                          {item.total ?? item.childTasks.length} cửa hàng
+                          {/* r1.1 P1#2: total null → nói rõ "đang hiển thị", không suy đoán tổng */}
+                          {groupStoreCountLabel(item.total, item.childTasks.length)}
                         </span>
                       </div>
                       <p className="text-xs text-muted-foreground font-normal ml-6 mt-0.5">Tạo bởi {item.creator?.full_name ?? '—'}</p>
