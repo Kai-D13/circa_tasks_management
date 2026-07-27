@@ -10,6 +10,7 @@ import { ErrorState } from '@/components/ds/ErrorState'
 import { TaskFilters } from '@/components/tasks/TaskFilters'
 import { TaskList, TaskListItem, BroadcastGroup, StaffGroup, StaffBroadcastGroup, StaffBroadcastStore, TaskRow, ChildTask } from '@/components/tasks/TaskList'
 import { buildImportBatchGroups, groupModeActive, sliceGroupPage, type ImportBatchMember } from '@/lib/tasks/importBatchGroups'
+import { effectiveDone } from '@/lib/tasks/effectiveGroupStatus'
 import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { ExportButton } from '@/components/common/ExportButton'
 import { Pagination } from '@/components/common/Pagination'
@@ -81,7 +82,9 @@ export default async function TasksPage({
   // Điều kiện = contract groupModeActive (lib/tasks/importBatchGroups, có
   // test): admin + không archive + không assignee filter. Phân trang theo
   // GROUP unit (fetch-all rồi slice) → 1 batch/broadcast không lặp qua trang.
-  const groupPaginate = groupModeActive({ isAdmin: isAdminRole, showArchived, userFilter })
+  // Hotfix P1 (27/07): sm + store_manager cũng GOM (group-unit pagination) —
+  // điều kiện tiên quyết để phân loại tab theo effective status của group.
+  const groupPaginate = groupModeActive({ role: profile?.role, showArchived, userFilter })
   const GROUPS_PER_PAGE = 15
 
   // Narrow select — excludes description/input_data/required_outputs which grow
@@ -194,14 +197,17 @@ export default async function TasksPage({
   const adminTreeFilter = isAdminRole && view === 'pending' && !showArchived && !userFilter
     && (params.status === 'todo' || params.status === 'in_progress' || params.status === 'overdue')
 
-  // Admin/PIC done view: staff_all parents never reach status='done' (overview-only,
+  // Done view: staff_all parents never reach status='done' (overview-only,
   // migration 031), so without exclusion the page would be bare pharmacist children —
   // 106 flat rows for one broadcast, with count/pagination driven by children. Page
-  // by TOP-LEVEL done tasks instead, and assemble the broadcast trees from a separate
+  // by TOP-LEVEL done tasks instead, and assemble the trees from a separate
   // children fetch (r1.1: fetched ONCE for every page — group slicing needs the
   // same dataset on all pages) — exactly the in_progress/overdue tree pattern.
-  const adminDoneTree = isAdminRole && view === 'done' && !showArchived && !userFilter
-  if (topLevelOnly || adminTreeFilter || adminDoneTree) query = query.is('parent_task_id', null)
+  // Hotfix P1 (27/07): MỞ RỘNG sm + store_manager — trước đây done view của họ
+  // hiển thị children RỜI RẠC (finding #3); giờ dựng lại StaffGroup per-store.
+  const doneTree = (isAdminRole || isSm || profile?.role === 'store_manager')
+    && view === 'done' && !showArchived && !userFilter
+  if (topLevelOnly || adminTreeFilter || doneTree) query = query.is('parent_task_id', null)
 
   // Staff have no store filter (storesForFilter is [] for them), so skip the query
   // entirely instead of fetching and discarding it. (isStaff computed above.)
@@ -344,14 +350,18 @@ export default async function TasksPage({
   const doneStatsByParent    = new Map<string, { total: number; done: number }>()
   const doneStatsByBroadcast = new Map<string, { total: number; done: number; parents: Set<string> }>()
   // Group-paginated: fetch the done children once (we slice groups, not rows), so
-  // no per-page gate. (adminDoneTree ⊂ groupPaginate.)
-  if (adminDoneTree) {
+  // no per-page gate. (doneTree ⊂ groupPaginate.)
+  if (doneTree) {
     let doneChildQ = supabase
       .from('tasks')
       .select(`${CHILD_COLS}, completed_at`)
       .not('parent_task_id', 'is', null)
       .eq('status', 'done')
       .is('archived_at', null)
+    // Hotfix P1: mirror scope của query chính cho sm/store_manager (RLS đã
+    // chặn tầng DB — đây là app-layer filter đồng bộ, tránh lệch dataset).
+    if (isSm) doneChildQ = doneChildQ.in('store_id', smStoreIds)
+    if (profile?.role === 'store_manager' && profile?.store_id) doneChildQ = doneChildQ.eq('store_id', profile.store_id)
       // created_at desc to match the done view's ordering axis (and the top-level
       // done parents fetched above) — the 500-cap then covers the same recent
       // broadcasts the admin is reviewing.
@@ -366,20 +376,28 @@ export default async function TasksPage({
     if (doneKidsErr) childrenError = childrenError ?? doneKidsErr
     extraChildren = (doneKids ?? []) as unknown as NonNullable<typeof tasks>
 
-    const broadcastIds = [...new Set(
-      extraChildren.map((t) => t.broadcast_id).filter((b): b is string => !!b)
+    // Hotfix P1 (27/07): stats key theo PARENT thay vì broadcast — staff_all
+    // KHÔNG có broadcast_id (giao 1 store) trước đây không bao giờ có stats →
+    // fail-closed kẹt ngoài tab Hoàn thành. Parent-based phủ CẢ hai loại;
+    // byBroadcast vẫn build được từ broadcast_id trên row trả về.
+    const doneParentIds = [...new Set(
+      extraChildren
+        .map((t) => (t as { parent_task_id?: string | null }).parent_task_id)
+        .filter((p): p is string => !!p)
     )]
-    if (broadcastIds.length > 0) {
+    if (doneParentIds.length > 0) {
       // Mirror the children filters so the X/Y badge describes the SAME subset
       // the tree shows (pending view behaves this way too): filtering one store
       // must yield that store's 4/6, not the whole broadcast's 61/106.
       let statQ = supabase
         .from('tasks')
         .select('broadcast_id, parent_task_id, status')
-        .in('broadcast_id', broadcastIds)
-        .not('parent_task_id', 'is', null)
+        .in('parent_task_id', doneParentIds)
         .is('archived_at', null)
         .limit(2000)
+      // Hotfix P1: mirror scope sm/store_manager (đồng bộ với doneChildQ).
+      if (isSm) statQ = statQ.in('store_id', smStoreIds)
+      if (profile?.role === 'store_manager' && profile?.store_id) statQ = statQ.eq('store_id', profile.store_id)
       if (params.priority) statQ = statQ.eq('priority', params.priority)
       if (params.store_id) statQ = statQ.eq('store_id', params.store_id)
       if (params.category) statQ = statQ.eq('category', params.category)
@@ -387,18 +405,20 @@ export default async function TasksPage({
       if (!showOld) statQ = statQ.gte('created_at', ageCutoffIso)
       const { data: statRows, error: statErr } = await statQ
       if (statErr) childrenError = childrenError ?? statErr
-      for (const r of (statRows ?? []) as { broadcast_id: string; parent_task_id: string; status: string }[]) {
+      for (const r of (statRows ?? []) as { broadcast_id: string | null; parent_task_id: string; status: string }[]) {
         const p = doneStatsByParent.get(r.parent_task_id) ?? { total: 0, done: 0 }
         p.total++
         if (r.status === 'done') p.done++
         doneStatsByParent.set(r.parent_task_id, p)
 
-        const b = doneStatsByBroadcast.get(r.broadcast_id)
-          ?? { total: 0, done: 0, parents: new Set<string>() }
-        b.total++
-        if (r.status === 'done') b.done++
-        b.parents.add(r.parent_task_id)
-        doneStatsByBroadcast.set(r.broadcast_id, b)
+        if (r.broadcast_id) {
+          const b = doneStatsByBroadcast.get(r.broadcast_id)
+            ?? { total: 0, done: 0, parents: new Set<string>() }
+          b.total++
+          if (r.status === 'done') b.done++
+          b.parents.add(r.parent_task_id)
+          doneStatsByBroadcast.set(r.broadcast_id, b)
+        }
       }
     }
   }
@@ -496,6 +516,9 @@ export default async function TasksPage({
   const grouped: TaskListItem[] = []
   const seenBroadcast = new Map<string, number>()
   const seenStaffBroadcast = new Map<string, number>()
+  // Hotfix P1: done view sm/store_manager — dựng StaffGroup per-parent từ done
+  // children (orphan; parent không bao giờ 'done' nên không có trong kết quả).
+  const seenStaffParent = new Map<string, number>()
 
   // Department tag stamped on the task at insert (migration 050) — embedded as
   // department:departments(name, color) on both selects above.
@@ -584,7 +607,7 @@ export default async function TasksPage({
       // EXCEPT under the "Người thực hiện" filter: that view is deliberately flat
       // (one person's tasks), so a matching child renders standalone, not folded
       // into a broadcast tree it would otherwise misrepresent as "1/1 store".
-      if (!userFilter && isAdminRole && (view === 'pending' || adminDoneTree) && task.broadcast_id) {
+      if (!userFilter && isAdminRole && (view === 'pending' || doneTree) && task.broadcast_id) {
         const child: ChildTask = {
           id:           task.id,
           status:       task.status,
@@ -637,6 +660,50 @@ export default async function TasksPage({
             totalStores: 1,
             totalStaff:  1,
             doneStaff:   isDone ? 1 : 0,
+          })
+        }
+        continue
+      }
+
+      // Hotfix P1 (27/07, finding #3): done view — dựng lại StaffGroup PER-PARENT
+      // từ done children thay vì dòng rời rạc: sm/store_manager (mọi staff_all)
+      // + admin với staff_all KHÔNG broadcast (giao 1 store — nhánh broadcast ở
+      // trên không bắt). Giữ đúng cấu trúc group của tab Chờ thực hiện. Counts
+      // tạm từ done children, OVERWRITE bằng stats authoritative + lọc
+      // effective_done phía dưới.
+      if (!userFilter && doneTree) {
+        const child: ChildTask = {
+          id:           task.id,
+          status:       task.status,
+          stores:       (task.stores as unknown as { name: string } | null),
+          assignee:     (task.assignee as unknown as { full_name: string } | null),
+          deadline:     task.deadline ?? null,
+          overdue_at:   (task as { overdue_at?: string | null }).overdue_at ?? null,
+          completed_at: (task as { completed_at?: string | null }).completed_at ?? null,
+        }
+        const isDone = task.status === 'done'
+        const existingIdx = seenStaffParent.get(parentTaskId)
+        if (existingIdx !== undefined) {
+          const row = grouped[existingIdx] as StaffGroup
+          row.childTasks.push(child)
+          row.total++
+          if (isDone) row.done++
+          row.taskIds.push(task.id)
+        } else {
+          seenStaffParent.set(parentTaskId, grouped.length)
+          grouped.push({
+            type:       'staff',
+            parentId:   parentTaskId,
+            title:      task.title,
+            category:   task.category ?? null,
+            department: deptOf(task),
+            creator:    (task.creator as unknown as { full_name: string } | null) ?? null,
+            storeName:  (task.stores as unknown as { name: string } | null)?.name ?? null,
+            total:      1,
+            done:       isDone ? 1 : 0,
+            createdAt:  task.created_at,
+            taskIds:    [task.id],
+            childTasks: [child],
           })
         }
         continue
@@ -753,29 +820,69 @@ export default async function TasksPage({
   // counts say "61/61". Overwrite with the real totals from the stats query —
   // per-broadcast for the header badge (counts stores/staff with ZERO
   // submissions too, which have no tree row) and per-parent for each store row.
-  if (adminDoneTree && doneStatsByBroadcast.size > 0) {
+  if (doneTree) {
     for (const item of grouped) {
-      if (item.type !== 'staff_broadcast') continue
-      for (const store of item.stores) {
-        const s = doneStatsByParent.get(store.parentId)
-        if (s) { store.total = s.total; store.done = s.done }
+      if (item.type === 'staff_broadcast') {
+        for (const store of item.stores) {
+          const s = doneStatsByParent.get(store.parentId)
+          if (s) { store.total = s.total; store.done = s.done }
+        }
+        const b = doneStatsByBroadcast.get(item.broadcastId)
+        if (b) {
+          item.totalStaff  = b.total
+          item.doneStaff   = b.done
+          item.totalStores = b.parents.size
+        }
       }
-      const b = doneStatsByBroadcast.get(item.broadcastId)
-      if (b) {
-        item.totalStaff  = b.total
-        item.doneStaff   = b.done
-        item.totalStores = b.parents.size
+      // Hotfix P1: StaffGroup (sm/store_manager) — overwrite bằng stats
+      // authoritative per-parent (đếm CẢ pharmacist chưa nộp).
+      if (item.type === 'staff') {
+        const s = doneStatsByParent.get(item.parentId)
+        if (s) { item.total = s.total; item.done = s.done }
       }
     }
+  }
+
+  // ── Hotfix P1 (stakeholder 27/07): PHÂN LOẠI TAB THEO EFFECTIVE STATUS của
+  //    group staff_all — một group xuất hiện ở ĐÚNG MỘT tab; status vật lý của
+  //    parent trong DB GIỮ NGUYÊN (contract effectiveDone, fail-closed:
+  //    stats thiếu/lỗi → KHÔNG suy luận là hoàn thành).
+  //    · Pending (mặc định): group đã done TOÀN BỘ children → thuộc tab Hoàn
+  //      thành, loại khỏi đây. Counts pending = full children fetch (childQ
+  //      không lọc status); childrenError → listError thay cả list.
+  //    · Done: CHỈ giữ group effective_done — loaded = CÓ row stats
+  //      authoritative (statQ; thiếu/cap/lỗi → fail-closed không nhận).
+  //    Broadcast store-mode + import batch giữ contract riêng (status vật lý
+  //    từng task — không đổi trong hotfix này).
+  let classified = grouped
+  if (view === 'pending' && !params.status && !showArchived && !userFilter) {
+    const statsLoaded = childrenError === null
+    classified = grouped.filter((g) => {
+      if (g.type === 'staff') return !effectiveDone({ loaded: statsLoaded, total: g.total, done: g.done })
+      if (g.type === 'staff_broadcast') return !effectiveDone({ loaded: statsLoaded, total: g.totalStaff, done: g.doneStaff })
+      return true
+    })
+  } else if (doneTree) {
+    classified = grouped.filter((g) => {
+      if (g.type === 'staff') {
+        const s = doneStatsByParent.get(g.parentId)
+        return effectiveDone({ loaded: !!s, total: s?.total ?? 0, done: s?.done ?? 0 })
+      }
+      if (g.type === 'staff_broadcast') {
+        const b = doneStatsByBroadcast.get(g.broadcastId)
+        return effectiveDone({ loaded: !!b, total: b?.total ?? 0, done: b?.done ?? 0 })
+      }
+      return true
+    })
   }
 
   // Under a status sub-filter, a staff_all group whose children all missed the
   // filter (e.g. parent is 'todo' but every pharmacist is in_progress/done) has
   // nothing actionable — drop the empty shell instead of rendering "0 dược sĩ".
   const visibleItems = adminTreeFilter
-    ? grouped.filter((g) =>
+    ? classified.filter((g) =>
         (g.type !== 'staff_broadcast' || g.totalStaff > 0) && (g.type !== 'staff' || g.total > 0))
-    : grouped
+    : classified
 
   // Restore created_at-desc order at the GROUP level. Grouping builds items in
   // iteration order of [pageTasks, ...extraChildren]; in the done view the

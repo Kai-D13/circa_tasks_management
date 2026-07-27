@@ -23,12 +23,16 @@
 // overdue VẪN GOM — đây chính là bug 25 dòng ở màn "Chờ thực hiện") lẫn view
 // (pending/done đều gom). Page dùng CHÍNH hàm này cho groupPaginate → test
 // khóa được điều kiện tích hợp.
+// Hotfix P1 (27/07): MỞ RỘNG sm + store_manager — phân loại tab theo effective
+// status (lib/tasks/effectiveGroupStatus) đòi hỏi phân trang theo GROUP unit
+// (fetch-all rồi slice) ở mọi role có group; staff giữ flat (mobile, own tasks).
 export function groupModeActive(p: {
-  isAdmin: boolean
+  role: string | null | undefined
   showArchived: boolean
   userFilter: boolean
 }): boolean {
-  return p.isAdmin && !p.showArchived && !p.userFilter
+  return (p.role === 'admin' || p.role === 'sm' || p.role === 'store_manager')
+    && !p.showArchived && !p.userFilter
 }
 
 // r1.1 (audit P1#1/P2#3): slice theo GROUP unit — page dùng CHÍNH hàm này sau
