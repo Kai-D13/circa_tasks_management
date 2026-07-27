@@ -10,11 +10,12 @@ import { CampaignImport } from '@/components/kpi/CampaignImport'
 import { CampaignMetricEditor } from '@/components/kpi/CampaignMetricEditor'
 import { SyncActualsButton } from '@/components/kpi/SyncActualsButton'
 import { CampaignExportButton } from '@/components/kpi/CampaignExportButton'
+import { CampaignResultDashboard } from '@/components/kpi/CampaignResultDashboard'
+import { buildCampaignResultModel, type ResultActualRow, type ResultCampaign, type ResultTargetRow } from '@/lib/kpi/resultModel'
 import { STATUS_META } from '@/lib/kpi/status'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
-import { ChevronLeft, Target, TrendingUp, Percent, Wallet, Award, CalendarDays, Gauge, SlidersHorizontal, BarChart3, Store as StoreIcon, Link2 as LinkIcon, type LucideIcon } from 'lucide-react'
-import { campaignPerformance, performanceTone } from '@/lib/kpi/performance'
+import { ChevronLeft, SlidersHorizontal, BarChart3, type LucideIcon } from 'lucide-react'
 
 // Campaign detail — ONE url, TWO tabs (?tab=):
 //   config → campaign info + import + the IMPORTED configuration only
@@ -102,28 +103,16 @@ export default async function CampaignDetailPage({
   const s = STATUS_META[c.status] ?? STATUS_META.draft
   const canImport = c.status === 'draft' || c.status === 'paused'
 
-  // Thời hạn (result summary): paused → Tạm dừng; past end/ended → Đã kết thúc;
-  // else "Còn N ngày" (today counts).
+  // SM Dashboard r1 (27/07): TOÀN BỘ công thức Kết quả chuyển vào
+  // lib/kpi/resultModel (dùng chung Super ↔ SM — một nguồn số duy nhất, test
+  // khóa cùng-input-cùng-output); markup summary + bảng → CampaignResultDashboard.
   const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
-  const daysLeft = Math.floor((Date.parse(c.end_date) - Date.parse(vnTodayISO)) / 86400_000) + 1
-  const deadlineLabel = c.status === 'paused'
-    ? 'Tạm dừng'
-    : (c.status === 'ended' || daysLeft <= 0) ? 'Đã kết thúc' : `Còn ${daysLeft} ngày`
-
-  // Result summary aggregates.
-  const totalTarget = targets.reduce((sum, t) => sum + (Number(t.kpi_target) || 0), 0)
-  const totalActual = actuals.reduce((sum, a) => sum + (Number(a.actual_value) || 0), 0)
-  // P3-E: breakdown 2 nguồn — CHỈ render khi campaign bật cả 2 chỉ số.
-  const showBreakdown = c.metric_offline === true && c.metric_affiliate === true
-  const totalOffline = actuals.reduce((sum, a) => sum + (Number(a.actual_offline) || 0), 0)
-  const totalAffiliate = actuals.reduce((sum, a) => sum + (Number(a.actual_affiliate) || 0), 0)
-  const totalPct = totalTarget > 0 ? (totalActual / totalTarget) * 100 : 0
-  const totalPool = actuals.reduce((sum, a) => sum + (Number(a.store_commission_pool) || 0), 0)
-  const reachedCount = actuals.filter((a) => a.achieved_tier_order !== null).length
-  // Campaign pace: whole-campaign actual/target normalized by elapsed vs total days.
-  const totalPerformance = lastSynced
-    ? campaignPerformance(totalTarget, totalActual, c.start_date, c.end_date, vnTodayISO)
-    : null
+  const resultModel = buildCampaignResultModel(
+    c as ResultCampaign,
+    targets as unknown as ResultTargetRow[],
+    actuals as ResultActualRow[],
+    vnTodayISO,
+  )
 
   // Branded segmented control (review r2): active = Circa coral, inactive =
   // coral text on the tinted track; ~36px touch target.
@@ -157,7 +146,7 @@ export default async function CampaignDetailPage({
           <CampaignStatusButton id={c.id} status={c.status} />
         </div>
         <p className="text-sm text-muted-foreground mt-0.5">
-          {formatDate(c.start_date)} – {formatDate(c.end_date)} · {targets.length} cửa hàng · {deadlineLabel}
+          {formatDate(c.start_date)} – {formatDate(c.end_date)} · {targets.length} cửa hàng · {resultModel.deadlineLabel}
         </p>
         {queryError && (
           <p className="text-sm text-destructive mt-1">
@@ -254,129 +243,12 @@ export default async function CampaignDetailPage({
             </div>
           </div>
 
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-            {([
-              { label: 'Tổng KPI target', value: vnd(totalTarget), icon: Target, tile: 'bg-primary/10 text-primary' },
-              { label: 'Tổng actual GMV', value: lastSynced ? vnd(totalActual) : '—', icon: TrendingUp,
-                tile: lastSynced && totalActual > 0 ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground' },
-              // P3-E: breakdown tổng 2 nguồn (chỉ khi campaign bật cả 2)
-              ...(showBreakdown ? [
-                { label: 'GMV Offline', value: lastSynced ? vnd(totalOffline) : '—', icon: StoreIcon,
-                  tile: 'bg-primary/10 text-primary' },
-                { label: 'GMV Affiliate', value: lastSynced ? vnd(totalAffiliate) : '—', icon: LinkIcon,
-                  tile: 'bg-muted text-muted-foreground' },
-              ] : []),
-              { label: 'Hoàn thành', value: lastSynced ? `${totalPct.toFixed(1)}%` : '—', icon: Percent,
-                tile: 'bg-primary/10 text-primary', bar: true,
-                valueCls: !lastSynced ? undefined : totalPct >= 100 ? 'text-green-600' : 'text-primary' },
-              { label: 'Tổng commission đạt', value: lastSynced ? vnd(totalPool) : '—', icon: Wallet,
-                tile: lastSynced && totalPool > 0 ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground',
-                valueCls: lastSynced && totalPool > 0 ? 'text-green-600' : undefined },
-              { label: 'Store đạt bậc', value: lastSynced ? `${reachedCount}/${targets.length}` : '—', icon: Award, tile: 'bg-primary/10 text-primary' },
-              { label: 'Nhịp độ (Performance)', value: totalPerformance != null ? `${totalPerformance.toFixed(1)}%` : '—', icon: Gauge,
-                tile: 'bg-primary/10 text-primary',
-                valueCls: totalPerformance != null ? performanceTone(totalPerformance) : undefined },
-              { label: 'Thời hạn', value: deadlineLabel, icon: CalendarDays, tile: 'bg-muted text-muted-foreground' },
-            ] as { label: string; value: string; icon: LucideIcon; tile: string; valueCls?: string; bar?: boolean }[]).map((card) => (
-              <Card key={card.label}>
-                <CardContent className="p-3">
-                  <div className="flex items-start gap-2.5">
-                    <span className={cn('h-8 w-8 rounded-full flex items-center justify-center shrink-0', card.tile)}>
-                      <card.icon className="h-4 w-4" />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[11px] text-muted-foreground uppercase truncate">{card.label}</p>
-                      <p className={cn('text-lg font-bold mt-0.5 leading-tight', card.valueCls)}>{card.value}</p>
-                      {card.bar && lastSynced && (
-                        <div className="mt-1.5 h-1.5 rounded-full bg-muted overflow-hidden">
-                          <div
-                            className={cn('h-full rounded-full', totalPct >= 100 ? 'bg-green-500' : 'bg-primary')}
-                            style={{ width: `${Math.min(100, Math.max(0, totalPct))}%` }}
-                          />
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-
-          {targets.length > 0 ? (
-            <Card>
-              <CardContent className="p-0 overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b bg-muted/40 text-xs text-muted-foreground">
-                      <th className="text-left px-4 py-2.5">Cửa hàng</th>
-                      <th className="text-left px-4 py-2.5">Phân loại</th>
-                      <th className="text-right px-4 py-2.5">KPI target</th>
-                      <th className="text-right px-4 py-2.5">Actual GMV</th>
-                      {showBreakdown && <th className="text-right px-4 py-2.5">GMV Offline</th>}
-                      {showBreakdown && <th className="text-right px-4 py-2.5">GMV Affiliate</th>}
-                      <th className="text-right px-4 py-2.5">%</th>
-                      <th className="text-right px-4 py-2.5">Nhịp độ</th>
-                      <th className="text-right px-4 py-2.5">Còn thiếu</th>
-                      <th className="text-left px-4 py-2.5">Bậc đạt · Commission</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {targets.map((t) => {
-                      const a = actualByStore.get(t.store_id)
-                      const remaining = a?.remaining_target ?? null
-                      const perf = campaignPerformance(t.kpi_target, a?.actual_value ?? null, c.start_date, c.end_date, vnTodayISO)
-                      return (
-                        <tr key={t.id} className="hover:bg-muted/30">
-                          <td className="px-4 py-2.5 font-medium">{t.stores?.name ?? '—'}{t.pos_code ? ` · ${t.pos_code}` : ''}</td>
-                          <td className="px-4 py-2.5 text-xs">{t.store_kpi_group ?? '—'}</td>
-                          <td className="px-4 py-2.5 text-right">{vnd(t.kpi_target)}</td>
-                          <td className="px-4 py-2.5 text-right">{a ? vnd(a.actual_value) : '—'}</td>
-                          {showBreakdown && <td className="px-4 py-2.5 text-right text-muted-foreground">{a?.actual_offline != null ? vnd(a.actual_offline) : '—'}</td>}
-                          {showBreakdown && <td className="px-4 py-2.5 text-right text-muted-foreground">{a?.actual_affiliate != null ? vnd(a.actual_affiliate) : '—'}</td>}
-                          <td className="px-4 py-2.5">
-                            {a?.run_rate != null ? (
-                              <div className="flex items-center justify-end gap-2">
-                                <div className="h-1.5 w-14 rounded-full bg-muted overflow-hidden shrink-0">
-                                  <div
-                                    className={cn('h-full rounded-full', a.run_rate >= 100 ? 'bg-green-500' : 'bg-primary')}
-                                    style={{ width: `${Math.min(100, Math.max(0, a.run_rate))}%` }}
-                                  />
-                                </div>
-                                <span className={cn('text-xs font-semibold', a.run_rate >= 100 ? 'text-green-600' : 'text-primary')}>
-                                  {a.run_rate.toFixed(1)}%
-                                </span>
-                              </div>
-                            ) : <span className="block text-right">—</span>}
-                          </td>
-                          <td className="px-4 py-2.5 text-right">
-                            {perf != null
-                              ? <span className={cn('text-xs font-semibold', performanceTone(perf))}>{perf.toFixed(1)}%</span>
-                              : '—'}
-                          </td>
-                          <td className="px-4 py-2.5 text-right">{remaining != null ? vnd(remaining) : '—'}</td>
-                          <td className="px-4 py-2.5">
-                            {a?.achieved_tier_order != null
-                              ? (
-                                <span className="inline-flex items-center whitespace-nowrap rounded-full bg-green-100 text-green-700 px-2 py-0.5 text-[11px] font-medium">
-                                  Bậc {a.achieved_tier_order} · {vnd(a.store_commission_pool ?? 0)}
-                                </span>
-                              )
-                              : a ? (
-                                <span className="inline-flex items-center whitespace-nowrap rounded-full bg-muted text-muted-foreground px-2 py-0.5 text-[11px]">
-                                  Chưa đạt bậc
-                                </span>
-                              ) : '—'}
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </CardContent>
-            </Card>
-          ) : (
-            <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">Chưa có target — nạp file ở tab Cấu hình trước.</CardContent></Card>
-          )}
+          {/* SM Dashboard r1: summary + bảng chuyển vào CampaignResultDashboard
+              (dùng chung SM — model lib/kpi/resultModel, một nguồn số duy nhất) */}
+          <CampaignResultDashboard
+            model={resultModel}
+            emptyHint="Chưa có target — nạp file ở tab Cấu hình trước."
+          />
         </>
       )}
     </div>
