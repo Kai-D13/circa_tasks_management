@@ -10,7 +10,8 @@ import { ErrorState } from '@/components/ds/ErrorState'
 import { TaskFilters } from '@/components/tasks/TaskFilters'
 import { TaskList, TaskListItem, BroadcastGroup, StaffGroup, StaffBroadcastGroup, StaffBroadcastStore, TaskRow, ChildTask } from '@/components/tasks/TaskList'
 import { buildImportBatchGroups, groupModeActive, sliceGroupPage, type ImportBatchMember } from '@/lib/tasks/importBatchGroups'
-import { effectiveDone, fetchedComplete } from '@/lib/tasks/effectiveGroupStatus'
+import { effectiveDone } from '@/lib/tasks/effectiveGroupStatus'
+import { fetchAllVerified, fetchAllByIdChunks } from '@/lib/tasks/fetchAll'
 import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { ExportButton } from '@/components/common/ExportButton'
 import { Pagination } from '@/components/common/Pagination'
@@ -261,34 +262,12 @@ export default async function TasksPage({
   let childrenError: { message: string } | null = null
   const CHILD_COLS = 'id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, import_batch_id, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), department:departments(name, color)'
 
-  // r1 (audit P1#1): MỌI fetch nuôi phân loại/badge phải ĐẦY ĐỦ — kéo theo
-  // chunk 1000 (né PostgREST max-rows) + verify exact count == tổng row nhận
-  // (contract fetchedComplete, fail-closed). Thiếu/cắt → childrenError →
-  // ErrorState thay cả list — KHÔNG BAO GIỜ phân loại từ subset bị cap âm
-  // thầm. (Đường bền vững khi dữ liệu tăng: RPC set-based per-parent — backlog.)
-  const FETCH_CHUNK = 1000
-  const FETCH_CAP = 10000
-  async function fetchAllVerified<T>(
-    build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null; count: number | null }>,
-  ): Promise<{ rows: T[]; error: { message: string } | null }> {
-    const rows: T[] = []
-    let expected: number | null = null
-    for (let from = 0; from < FETCH_CAP; from += FETCH_CHUNK) {
-      const { data, error, count } = await build(from, from + FETCH_CHUNK - 1)
-      if (error) return { rows, error }
-      if (expected === null) expected = count ?? null
-      rows.push(...(data ?? []))
-      if (expected !== null && rows.length >= expected) break
-      if ((data ?? []).length < FETCH_CHUNK) break
-    }
-    if (!fetchedComplete(expected, rows.length)) {
-      return {
-        rows,
-        error: { message: `Dữ liệu nhóm chưa tải đủ (${rows.length}/${expected ?? '?'} dòng) — thu hẹp bộ lọc (cửa hàng/bộ phận/thời gian) rồi thử lại. Không phân loại từ dữ liệu thiếu.` },
-      }
-    }
-    return { rows, error: null }
-  }
+  // r1/r1.1 (audit P1): MỌI fetch nuôi phân loại/badge đi qua tầng
+  // lib/tasks/fetchAll (fetchAllVerified/fetchAllByIdChunks — chunk row 1000 +
+  // chunk UUID ≤100/request chống URI-too-long + dedup id + verify exact count
+  // + phát hiện count đổi giữa trang; có test orchestration). Thiếu/cắt →
+  // childrenError → ErrorState — KHÔNG phân loại từ subset. Mọi query phân
+  // trang có SECONDARY ORDER `id` (created_at trùng trong cùng transaction).
 
   if (topLevelOnly) {
     const parentIds = (tasks ?? [])
@@ -297,12 +276,13 @@ export default async function TasksPage({
     if (parentIds.length > 0) {
       // staff_all children only ever appear in the pending view, so the base
       // (no completion columns) select matches; cast unifies it with `tasks`.
-      const { rows: childRows, error: childErr } = await fetchAllVerified((from, to) => {
+      const { rows: childRows, error: childErr } = await fetchAllByIdChunks(parentIds, (idChunk) => (from, to) => {
         let q = supabase
           .from('tasks')
           .select(CHILD_COLS, { count: 'exact' })
-          .in('parent_task_id', parentIds)
+          .in('parent_task_id', idChunk)
           .order('created_at', { ascending: true })
+          .order('id', { ascending: true })
           .range(from, to)
         if (isSm) q = q.in('store_id', smStoreIds)
         if (showArchived) q = q.not('archived_at', 'is', null)
@@ -339,27 +319,38 @@ export default async function TasksPage({
       run = true
     }
     if (run) {
-      const { rows: childRows, error: childErr } = await fetchAllVerified((from, to) => {
-        let q = supabase.from('tasks').select(CHILD_COLS, { count: 'exact' }).is('archived_at', null).range(from, to)
+      // r1.1: todo → chunk theo parentIds (UUID ≤100/request); in_progress/
+      // overdue → không id-list, một fetchAllVerified. Cả hai: order id phụ.
+      // (builder gõ `any` có chủ đích — generic PostgrestFilterBuilder đổi type
+      // sau mỗi .or/.eq, không đáng phức tạp hóa cho một closure cục bộ.)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const buildStatusFilters = (q: any) => {
         if (params.status === 'todo') {
-          q = q
-            .in('parent_task_id', todoParentIds)
-            .eq('status', 'todo')
-            .or(`deadline.is.null,deadline.gte.${nowIso}`)
+          q = q.eq('status', 'todo').or(`deadline.is.null,deadline.gte.${nowIso}`)
         } else {
           q = q.not('parent_task_id', 'is', null)
           q = params.status === 'overdue'
             ? q.or(`status.eq.overdue,and(deadline.lt.${nowIso},status.neq.done)`)
             : q.eq('status', 'in_progress').or(`deadline.is.null,deadline.gte.${nowIso}`)
         }
-        q = q.order('created_at', { ascending: true })
+        q = q.order('created_at', { ascending: true }).order('id', { ascending: true })
         if (params.priority) q = q.eq('priority', params.priority)
         if (params.store_id) q = q.eq('store_id', params.store_id)
         if (params.category) q = q.eq('category', params.category)
         if (params.department_id) q = q.eq('department_id', params.department_id)
         if (!showOld) q = q.gte('created_at', ageCutoffIso)
         return q
-      })
+      }
+      const { rows: childRows, error: childErr } = params.status === 'todo'
+        ? await fetchAllByIdChunks(todoParentIds, (idChunk) => (from, to) =>
+            buildStatusFilters(
+              supabase.from('tasks').select(CHILD_COLS, { count: 'exact' })
+                .is('archived_at', null).in('parent_task_id', idChunk),
+            ).range(from, to))
+        : await fetchAllVerified((from, to) =>
+            buildStatusFilters(
+              supabase.from('tasks').select(CHILD_COLS, { count: 'exact' }).is('archived_at', null),
+            ).range(from, to))
       if (childErr) childrenError = childErr
       extraChildren = childRows as unknown as NonNullable<typeof tasks>
     }
@@ -385,6 +376,7 @@ export default async function TasksPage({
         .eq('status', 'done')
         .is('archived_at', null)
         .order('created_at', { ascending: false })
+        .order('id', { ascending: true })
         .range(from, to)
       // Hotfix P1: mirror scope của query chính cho sm/store_manager (RLS đã
       // chặn tầng DB — đây là app-layer filter đồng bộ, tránh lệch dataset).
@@ -413,24 +405,30 @@ export default async function TasksPage({
       // Mirror the children filters so the X/Y badge describes the SAME subset
       // the tree shows (pending view behaves this way too): filtering one store
       // must yield that store's 4/6, not the whole broadcast's 61/106.
-      const { rows: statRows, error: statErr } = await fetchAllVerified<{ broadcast_id: string | null; parent_task_id: string; status: string }>((from, to) => {
-        let q = supabase
-          .from('tasks')
-          .select('broadcast_id, parent_task_id, status', { count: 'exact' })
-          .in('parent_task_id', doneParentIds)
-          .is('archived_at', null)
-          .order('parent_task_id')
-          .range(from, to)
-        // Hotfix P1: mirror scope sm/store_manager (đồng bộ với doneChildQ).
-        if (isSm) q = q.in('store_id', smStoreIds)
-        if (profile?.role === 'store_manager' && profile?.store_id) q = q.eq('store_id', profile.store_id)
-        if (params.priority) q = q.eq('priority', params.priority)
-        if (params.store_id) q = q.eq('store_id', params.store_id)
-        if (params.category) q = q.eq('category', params.category)
-        if (params.department_id) q = q.eq('department_id', params.department_id)
-        if (!showOld) q = q.gte('created_at', ageCutoffIso)
-        return q
-      })
+      // r1.1: chunk doneParentIds ≤100/request (URI too long) + select `id` để
+      // khóa ordering duy nhất (parent_task_id trùng giữa các child cùng store).
+      const { rows: statRows, error: statErr } = await fetchAllByIdChunks<{ id: string; broadcast_id: string | null; parent_task_id: string; status: string }>(
+        doneParentIds,
+        (idChunk) => (from, to) => {
+          let q = supabase
+            .from('tasks')
+            .select('id, broadcast_id, parent_task_id, status', { count: 'exact' })
+            .in('parent_task_id', idChunk)
+            .is('archived_at', null)
+            .order('parent_task_id')
+            .order('id', { ascending: true })
+            .range(from, to)
+          // Hotfix P1: mirror scope sm/store_manager (đồng bộ với doneChildQ).
+          if (isSm) q = q.in('store_id', smStoreIds)
+          if (profile?.role === 'store_manager' && profile?.store_id) q = q.eq('store_id', profile.store_id)
+          if (params.priority) q = q.eq('priority', params.priority)
+          if (params.store_id) q = q.eq('store_id', params.store_id)
+          if (params.category) q = q.eq('category', params.category)
+          if (params.department_id) q = q.eq('department_id', params.department_id)
+          if (!showOld) q = q.gte('created_at', ageCutoffIso)
+          return q
+        },
+      )
       if (statErr) childrenError = childrenError ?? statErr
       for (const r of statRows) {
         const p = doneStatsByParent.get(r.parent_task_id) ?? { total: 0, done: 0 }
@@ -698,13 +696,19 @@ export default async function TasksPage({
         continue
       }
 
-      // Hotfix P1 (27/07, finding #3): done view — dựng lại StaffGroup PER-PARENT
-      // từ done children thay vì dòng rời rạc: sm/store_manager (mọi staff_all)
-      // + admin với staff_all KHÔNG broadcast (giao 1 store — nhánh broadcast ở
-      // trên không bắt). Giữ đúng cấu trúc group của tab Chờ thực hiện. Counts
-      // tạm từ done children, OVERWRITE bằng stats authoritative + lọc
-      // effective_done phía dưới.
-      if (!userFilter && doneTree) {
+      // Hotfix P1 (27/07, finding #3) + r1.1 P2#3 (user chốt 28/07: SM/QLCH giữ
+      // GROUP giống admin): dựng lại StaffGroup PER-PARENT từ orphan children
+      // thay vì dòng rời rạc, cho:
+      //   · done view — sm/store_manager (mọi staff_all) + admin với staff_all
+      //     KHÔNG broadcast (nhánh broadcast ở trên không bắt);
+      //   · pending sub-filter (in_progress/overdue) của sm/store_manager —
+      //     parent không nằm trong query (bị filter loại) nhưng UI vẫn phải giữ
+      //     một group/store với children bên trong, counts = subset khớp filter
+      //     (mirror contract sub-filter của admin).
+      // Counts done view tạm từ done children, OVERWRITE bằng stats
+      // authoritative + lọc effective_done phía dưới.
+      if (!userFilter && (doneTree
+        || (!isAdminRole && view === 'pending' && !!params.status && groupPaginate))) {
         const child: ChildTask = {
           id:           task.id,
           status:       task.status,
