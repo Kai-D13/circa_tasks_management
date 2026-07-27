@@ -36,14 +36,9 @@ export function campaignFootnote(v: { metric_offline: boolean; metric_affiliate:
   return 'Nguồn: Circa Online · chỉ tính đơn giao thành công (DELIVERED)'
 }
 
-// H1.2 (27/07): store selector của SM trên /targets phải hiện Ở MỌI trạng thái
-// landing (kể cả store đang chọn 0 campaign — bug cũ: selector gắn với
-// showCampaignList nên SM kẹt ở store rỗng, không đổi store được); chỉ ẩn
-// trong campaign detail (?campaign=) vì store đã cố định, và khi SM chỉ có
-// 1 store (không có gì để chọn).
-export function smSelectorVisible(storeCount: number, inCampaignDetail: boolean): boolean {
-  return storeCount > 1 && !inCampaignDetail
-}
+// (H1.2 smSelectorVisible đã GỠ 27/07: SM Dashboard r2 thay store-selector-
+// navigation bằng regional list + filter store trong dashboard — xem
+// lib/kpi/resultModel smScopeState.)
 
 // r1 P2#1: flag tắt + campaign có affiliate → khóa TOÀN BỘ editor (cả checkbox
 // Offline lẫn nút lưu) — không để user sửa được UI rồi server mới từ chối.
