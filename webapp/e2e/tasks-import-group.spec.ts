@@ -56,13 +56,15 @@ test.describe('tasks import-batch group contract @desktop', () => {
     expect(g.childTasks).toHaveLength(1)
   })
 
-  test('r1 P1#1 groupModeActive: admin GOM ở MỌI status sub-filter (todo/in_progress/overdue) + pending mặc định + done; flat khi assignee/archive/non-admin', () => {
+  test('r1 P1#1 (+P1 27/07) groupModeActive: role folding GOM ở MỌI status sub-filter + pending mặc định + done; flat khi assignee/archive/staff', () => {
     // Hàm KHÔNG nhận status/view — todo/in_progress/overdue không thể tắt group
     // (chính là bug 25 dòng ở màn "Chờ thực hiện"); page dùng CHÍNH hàm này.
-    expect(groupModeActive({ isAdmin: true, showArchived: false, userFilter: false })).toBe(true)
-    expect(groupModeActive({ isAdmin: true, showArchived: false, userFilter: true })).toBe(false)  // assignee → flat
-    expect(groupModeActive({ isAdmin: true, showArchived: true, userFilter: false })).toBe(false)  // archive → flat
-    expect(groupModeActive({ isAdmin: false, showArchived: false, userFilter: false })).toBe(false) // non-admin → flat
+    // Hotfix P1 27/07: mở rộng sm/store_manager (matrix đầy đủ ở
+    // tasks-effective-status.spec).
+    expect(groupModeActive({ role: 'admin', showArchived: false, userFilter: false })).toBe(true)
+    expect(groupModeActive({ role: 'admin', showArchived: false, userFilter: true })).toBe(false)  // assignee → flat
+    expect(groupModeActive({ role: 'admin', showArchived: true, userFilter: false })).toBe(false)  // archive → flat
+    expect(groupModeActive({ role: 'staff', showArchived: false, userFilter: false })).toBe(false) // staff → flat
   })
 
   test('r1 P1#2 members query LỖI (null) → total/done = null ("—/—"), KHÔNG suy đoán từ subset đang thấy', () => {
