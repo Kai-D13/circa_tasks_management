@@ -19,3 +19,12 @@ export interface GroupChildStats {
 export function effectiveDone(stats: GroupChildStats | null | undefined): boolean {
   return !!stats && stats.loaded && stats.total > 0 && stats.done === stats.total
 }
+
+// r1 (audit P1#1): nguồn quyết định trạng thái KHÔNG BAO GIỜ được là subset bị
+// cap âm thầm — mọi fetch nuôi phân loại phải verify exact count == số row đã
+// nhận. count null (không yêu cầu exact) cũng FAIL-CLOSED. Thiếu → page hiển
+// thị ErrorState, không phân loại giả. (Đường bền vững khi dữ liệu tăng: RPC
+// set-based tổng hợp per-parent trong DB — backlog, cần migration + audit.)
+export function fetchedComplete(count: number | null | undefined, rowsLoaded: number): boolean {
+  return count !== null && count !== undefined && count === rowsLoaded
+}

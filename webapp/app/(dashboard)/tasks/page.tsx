@@ -10,7 +10,7 @@ import { ErrorState } from '@/components/ds/ErrorState'
 import { TaskFilters } from '@/components/tasks/TaskFilters'
 import { TaskList, TaskListItem, BroadcastGroup, StaffGroup, StaffBroadcastGroup, StaffBroadcastStore, TaskRow, ChildTask } from '@/components/tasks/TaskList'
 import { buildImportBatchGroups, groupModeActive, sliceGroupPage, type ImportBatchMember } from '@/lib/tasks/importBatchGroups'
-import { effectiveDone } from '@/lib/tasks/effectiveGroupStatus'
+import { effectiveDone, fetchedComplete } from '@/lib/tasks/effectiveGroupStatus'
 import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { ExportButton } from '@/components/common/ExportButton'
 import { Pagination } from '@/components/common/Pagination'
@@ -237,10 +237,13 @@ export default async function TasksPage({
   const totalRows  = count ?? 0
   const totalPages = Math.max(1, Math.ceil(totalRows / pageSize))
   // Group pagination fetches top-level parents with a hard cap of 1000 (range 0–999).
-  // Beyond that, later broadcasts would silently vanish — log it so the tactical fix
-  // is visibly outgrown and we move to an RPC that paginates by broadcast_id.
+  // r1 (audit P1#1 27/07): vượt cap → FAIL-VISIBLE (ErrorState qua parentsCapError,
+  // gộp vào listError phía dưới) — không render danh sách thiếu group âm thầm.
+  // Đường bền vững khi chạm ngưỡng thật: RPC phân trang theo group unit trong DB.
+  let parentsCapError: { message: string } | null = null
   if (groupPaginate && totalRows > 1000) {
-    console.warn(`[tasks] group pagination hit the 1000-parent fetch cap (${totalRows} top-level parents exist); some groups are not shown. Replace range(0,999) with a broadcast_id-grouped RPC.`)
+    console.warn(`[tasks] group pagination hit the 1000-parent fetch cap (${totalRows} top-level parents exist).`)
+    parentsCapError = { message: `Quá nhiều task khớp bộ lọc (${totalRows} > 1000) — thu hẹp bộ lọc (cửa hàng/bộ phận/thời gian) rồi thử lại.` }
   }
   // Staff: no exact count — the (pageSize + 1)th row, if present, signals a next page.
   const pageTasks    = isStaff ? (tasks ?? []).slice(0, pageSize) : (tasks ?? [])
@@ -257,6 +260,36 @@ export default async function TasksPage({
   let extraChildren: NonNullable<typeof tasks> = []
   let childrenError: { message: string } | null = null
   const CHILD_COLS = 'id, title, status, priority, category, broadcast_id, source_schedule_id, parent_task_id, assignment_mode, assigned_to, import_batch_id, deadline, created_at, overdue_at, store_id, stores(name), assignee:users!assigned_to(full_name), department:departments(name, color)'
+
+  // r1 (audit P1#1): MỌI fetch nuôi phân loại/badge phải ĐẦY ĐỦ — kéo theo
+  // chunk 1000 (né PostgREST max-rows) + verify exact count == tổng row nhận
+  // (contract fetchedComplete, fail-closed). Thiếu/cắt → childrenError →
+  // ErrorState thay cả list — KHÔNG BAO GIỜ phân loại từ subset bị cap âm
+  // thầm. (Đường bền vững khi dữ liệu tăng: RPC set-based per-parent — backlog.)
+  const FETCH_CHUNK = 1000
+  const FETCH_CAP = 10000
+  async function fetchAllVerified<T>(
+    build: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null; count: number | null }>,
+  ): Promise<{ rows: T[]; error: { message: string } | null }> {
+    const rows: T[] = []
+    let expected: number | null = null
+    for (let from = 0; from < FETCH_CAP; from += FETCH_CHUNK) {
+      const { data, error, count } = await build(from, from + FETCH_CHUNK - 1)
+      if (error) return { rows, error }
+      if (expected === null) expected = count ?? null
+      rows.push(...(data ?? []))
+      if (expected !== null && rows.length >= expected) break
+      if ((data ?? []).length < FETCH_CHUNK) break
+    }
+    if (!fetchedComplete(expected, rows.length)) {
+      return {
+        rows,
+        error: { message: `Dữ liệu nhóm chưa tải đủ (${rows.length}/${expected ?? '?'} dòng) — thu hẹp bộ lọc (cửa hàng/bộ phận/thời gian) rồi thử lại. Không phân loại từ dữ liệu thiếu.` },
+      }
+    }
+    return { rows, error: null }
+  }
+
   if (topLevelOnly) {
     const parentIds = (tasks ?? [])
       .filter(t => (t as { assignment_mode?: string }).assignment_mode === 'staff_all')
@@ -264,19 +297,22 @@ export default async function TasksPage({
     if (parentIds.length > 0) {
       // staff_all children only ever appear in the pending view, so the base
       // (no completion columns) select matches; cast unifies it with `tasks`.
-      let childQ = supabase
-        .from('tasks')
-        .select(CHILD_COLS)
-        .in('parent_task_id', parentIds)
-        .order('created_at', { ascending: true })
-      if (isSm) childQ = childQ.in('store_id', smStoreIds)
-      if (showArchived) childQ = childQ.not('archived_at', 'is', null)
-      else              childQ = childQ.is('archived_at', null)
-      const { data: childData, error: childErr } = await childQ
-      // A failed children fetch must surface as an error, not render every
-      // broadcast tree as a misleading "0/0 đã nộp".
+      const { rows: childRows, error: childErr } = await fetchAllVerified((from, to) => {
+        let q = supabase
+          .from('tasks')
+          .select(CHILD_COLS, { count: 'exact' })
+          .in('parent_task_id', parentIds)
+          .order('created_at', { ascending: true })
+          .range(from, to)
+        if (isSm) q = q.in('store_id', smStoreIds)
+        if (showArchived) q = q.not('archived_at', 'is', null)
+        else              q = q.is('archived_at', null)
+        return q
+      })
+      // A failed/incomplete children fetch must surface as an error, not render
+      // every broadcast tree as a misleading "0/0 đã nộp".
       if (childErr) childrenError = childErr
-      extraChildren = (childData ?? []) as unknown as NonNullable<typeof tasks>
+      extraChildren = childRows as unknown as NonNullable<typeof tasks>
     }
   } else if (adminTreeFilter) {
     // Status-filtered admin view: fetch the children MATCHING the filter so the
@@ -290,91 +326,79 @@ export default async function TasksPage({
     //                 matching children (bounded + exact count) and let the
     //                 orphan grouping assemble the per-broadcast trees.
     //   r1.1 (audit P1#1): fetch ở MỌI page — group slicing cần dataset GIỐNG
-    //   NHAU cho mọi request; gate page===1 cũ làm trang 2 rỗng cây/sai số trang.
-    let childQ = supabase.from('tasks').select(CHILD_COLS, { count: 'exact' }).is('archived_at', null)
+    //   NHAU cho mọi request. r1 (audit P1#1 27/07): fetchAllVerified — kéo đủ
+    //   theo chunk + verify exact count, bỏ hẳn limit 300 cũ.
     let run = false
+    let todoParentIds: string[] = []
     if (params.status === 'todo') {
-      const parentIds = (tasks ?? [])
+      todoParentIds = (tasks ?? [])
         .filter(t => (t as { assignment_mode?: string }).assignment_mode === 'staff_all')
         .map(t => t.id)
-      if (parentIds.length > 0) {
-        childQ = childQ
-          .in('parent_task_id', parentIds)
-          .eq('status', 'todo')
-          .or(`deadline.is.null,deadline.gte.${nowIso}`)
-          .order('created_at', { ascending: true })
-        run = true
-      }
+      run = todoParentIds.length > 0
     } else {
-      childQ = childQ.not('parent_task_id', 'is', null)
-      childQ = params.status === 'overdue'
-        ? childQ.or(`status.eq.overdue,and(deadline.lt.${nowIso},status.neq.done)`)
-        : childQ.eq('status', 'in_progress').or(`deadline.is.null,deadline.gte.${nowIso}`)
-      childQ = childQ.order('created_at', { ascending: true }).limit(300)
       run = true
     }
     if (run) {
-      if (params.priority) childQ = childQ.eq('priority', params.priority)
-      if (params.store_id) childQ = childQ.eq('store_id', params.store_id)
-      if (params.category) childQ = childQ.eq('category', params.category)
-      if (params.department_id) childQ = childQ.eq('department_id', params.department_id)
-      if (!showOld) childQ = childQ.gte('created_at', ageCutoffIso)
-      const { data: childData, error: childErr, count: childCount } = await childQ
-      if (childErr) childrenError = childErr
-      extraChildren = (childData ?? []) as unknown as NonNullable<typeof tasks>
-      // r1.1 (audit): kết quả bị CAP cắt → fail-visible (tree thiếu con = badge
-      // sai), yêu cầu thu hẹp bộ lọc — không âm thầm bỏ phần còn lại.
-      if (!childErr && childCount !== null && childCount > extraChildren.length) {
-        childrenError = childrenError ?? {
-          message: `Bộ lọc khớp ${childCount} mục con — vượt giới hạn hiển thị (${extraChildren.length}). Thu hẹp bộ lọc (cửa hàng/bộ phận/loại) rồi thử lại.`,
+      const { rows: childRows, error: childErr } = await fetchAllVerified((from, to) => {
+        let q = supabase.from('tasks').select(CHILD_COLS, { count: 'exact' }).is('archived_at', null).range(from, to)
+        if (params.status === 'todo') {
+          q = q
+            .in('parent_task_id', todoParentIds)
+            .eq('status', 'todo')
+            .or(`deadline.is.null,deadline.gte.${nowIso}`)
+        } else {
+          q = q.not('parent_task_id', 'is', null)
+          q = params.status === 'overdue'
+            ? q.or(`status.eq.overdue,and(deadline.lt.${nowIso},status.neq.done)`)
+            : q.eq('status', 'in_progress').or(`deadline.is.null,deadline.gte.${nowIso}`)
         }
-      }
+        q = q.order('created_at', { ascending: true })
+        if (params.priority) q = q.eq('priority', params.priority)
+        if (params.store_id) q = q.eq('store_id', params.store_id)
+        if (params.category) q = q.eq('category', params.category)
+        if (params.department_id) q = q.eq('department_id', params.department_id)
+        if (!showOld) q = q.gte('created_at', ageCutoffIso)
+        return q
+      })
+      if (childErr) childrenError = childErr
+      extraChildren = childRows as unknown as NonNullable<typeof tasks>
     }
   }
 
-  // Done view (admin/PIC): children are excluded from pagination above; fetch
-  // ALL done children ONCE (bounded 500, most recently submitted first — r1.1:
-  // no per-page gate, same dataset for every page) and let the orphan grouping
-  // assemble the Task → Store → Dược sĩ trees. A lightweight stats query then
-  // provides the TRUE per-broadcast totals so the badge reads "61/106 đã nộp"
-  // even when some stores have zero submissions (those stores simply have no
-  // tree row — there is nothing to list for them).
-  //
-  // DEBT (audit r1.1 P2 — ticket mở, nâng P1 nếu QA Done thiếu dữ liệu thật):
-  // done children cap 500 CHƯA có exact-count guard như nhánh in_progress/
-  // overdue — lịch sử tăng có thể ẩn broadcast cũ khỏi cây (500 dòng mới nhất
-  // theo created_at desc; scale hiện tại 1-2 broadcast/ngày × ~106 staff phủ
-  // đủ các broadcast gần đây admin đang review). Hướng xử lý: exact count +
-  // fail-visible, hoặc RPC phân trang theo group unit. Broadcast cũ vẫn xem
-  // được qua store rows / task detail.
+  // Done view: children are excluded from pagination above; fetch ALL done
+  // children ONCE (r1.1: no per-page gate, same dataset for every page) and let
+  // the orphan grouping assemble the Task → Store → Dược sĩ trees. A stats
+  // query then provides the TRUE per-parent totals so the badge reads "61/106
+  // đã nộp" even when some stores have zero submissions.
+  // r1 (audit P1#1 27/07): BỎ cap 500/2000 — cả hai fetch qua fetchAllVerified
+  // (chunk + verify exact count; thiếu → ErrorState, không phân loại giả).
   const doneStatsByParent    = new Map<string, { total: number; done: number }>()
   const doneStatsByBroadcast = new Map<string, { total: number; done: number; parents: Set<string> }>()
   // Group-paginated: fetch the done children once (we slice groups, not rows), so
   // no per-page gate. (doneTree ⊂ groupPaginate.)
   if (doneTree) {
-    let doneChildQ = supabase
-      .from('tasks')
-      .select(`${CHILD_COLS}, completed_at`)
-      .not('parent_task_id', 'is', null)
-      .eq('status', 'done')
-      .is('archived_at', null)
-    // Hotfix P1: mirror scope của query chính cho sm/store_manager (RLS đã
-    // chặn tầng DB — đây là app-layer filter đồng bộ, tránh lệch dataset).
-    if (isSm) doneChildQ = doneChildQ.in('store_id', smStoreIds)
-    if (profile?.role === 'store_manager' && profile?.store_id) doneChildQ = doneChildQ.eq('store_id', profile.store_id)
-      // created_at desc to match the done view's ordering axis (and the top-level
-      // done parents fetched above) — the 500-cap then covers the same recent
-      // broadcasts the admin is reviewing.
-      .order('created_at', { ascending: false })
-      .limit(500)
-    if (params.priority) doneChildQ = doneChildQ.eq('priority', params.priority)
-    if (params.store_id) doneChildQ = doneChildQ.eq('store_id', params.store_id)
-    if (params.category) doneChildQ = doneChildQ.eq('category', params.category)
-    if (params.department_id) doneChildQ = doneChildQ.eq('department_id', params.department_id)
-    if (!showOld) doneChildQ = doneChildQ.gte('created_at', ageCutoffIso)
-    const { data: doneKids, error: doneKidsErr } = await doneChildQ
+    const { rows: doneKids, error: doneKidsErr } = await fetchAllVerified((from, to) => {
+      let q = supabase
+        .from('tasks')
+        .select(`${CHILD_COLS}, completed_at`, { count: 'exact' })
+        .not('parent_task_id', 'is', null)
+        .eq('status', 'done')
+        .is('archived_at', null)
+        .order('created_at', { ascending: false })
+        .range(from, to)
+      // Hotfix P1: mirror scope của query chính cho sm/store_manager (RLS đã
+      // chặn tầng DB — đây là app-layer filter đồng bộ, tránh lệch dataset).
+      if (isSm) q = q.in('store_id', smStoreIds)
+      if (profile?.role === 'store_manager' && profile?.store_id) q = q.eq('store_id', profile.store_id)
+      if (params.priority) q = q.eq('priority', params.priority)
+      if (params.store_id) q = q.eq('store_id', params.store_id)
+      if (params.category) q = q.eq('category', params.category)
+      if (params.department_id) q = q.eq('department_id', params.department_id)
+      if (!showOld) q = q.gte('created_at', ageCutoffIso)
+      return q
+    })
     if (doneKidsErr) childrenError = childrenError ?? doneKidsErr
-    extraChildren = (doneKids ?? []) as unknown as NonNullable<typeof tasks>
+    extraChildren = doneKids as unknown as NonNullable<typeof tasks>
 
     // Hotfix P1 (27/07): stats key theo PARENT thay vì broadcast — staff_all
     // KHÔNG có broadcast_id (giao 1 store) trước đây không bao giờ có stats →
@@ -389,23 +413,26 @@ export default async function TasksPage({
       // Mirror the children filters so the X/Y badge describes the SAME subset
       // the tree shows (pending view behaves this way too): filtering one store
       // must yield that store's 4/6, not the whole broadcast's 61/106.
-      let statQ = supabase
-        .from('tasks')
-        .select('broadcast_id, parent_task_id, status')
-        .in('parent_task_id', doneParentIds)
-        .is('archived_at', null)
-        .limit(2000)
-      // Hotfix P1: mirror scope sm/store_manager (đồng bộ với doneChildQ).
-      if (isSm) statQ = statQ.in('store_id', smStoreIds)
-      if (profile?.role === 'store_manager' && profile?.store_id) statQ = statQ.eq('store_id', profile.store_id)
-      if (params.priority) statQ = statQ.eq('priority', params.priority)
-      if (params.store_id) statQ = statQ.eq('store_id', params.store_id)
-      if (params.category) statQ = statQ.eq('category', params.category)
-      if (params.department_id) statQ = statQ.eq('department_id', params.department_id)
-      if (!showOld) statQ = statQ.gte('created_at', ageCutoffIso)
-      const { data: statRows, error: statErr } = await statQ
+      const { rows: statRows, error: statErr } = await fetchAllVerified<{ broadcast_id: string | null; parent_task_id: string; status: string }>((from, to) => {
+        let q = supabase
+          .from('tasks')
+          .select('broadcast_id, parent_task_id, status', { count: 'exact' })
+          .in('parent_task_id', doneParentIds)
+          .is('archived_at', null)
+          .order('parent_task_id')
+          .range(from, to)
+        // Hotfix P1: mirror scope sm/store_manager (đồng bộ với doneChildQ).
+        if (isSm) q = q.in('store_id', smStoreIds)
+        if (profile?.role === 'store_manager' && profile?.store_id) q = q.eq('store_id', profile.store_id)
+        if (params.priority) q = q.eq('priority', params.priority)
+        if (params.store_id) q = q.eq('store_id', params.store_id)
+        if (params.category) q = q.eq('category', params.category)
+        if (params.department_id) q = q.eq('department_id', params.department_id)
+        if (!showOld) q = q.gte('created_at', ageCutoffIso)
+        return q
+      })
       if (statErr) childrenError = childrenError ?? statErr
-      for (const r of (statRows ?? []) as { broadcast_id: string | null; parent_task_id: string; status: string }[]) {
+      for (const r of statRows) {
         const p = doneStatsByParent.get(r.parent_task_id) ?? { total: 0, done: 0 }
         p.total++
         if (r.status === 'done') p.done++
@@ -422,7 +449,7 @@ export default async function TasksPage({
       }
     }
   }
-  const listError = tasksError ?? childrenError
+  const listError = tasksError ?? childrenError ?? parentsCapError
 
   const allTasks = [...pageTasks, ...extraChildren]
 
@@ -632,6 +659,10 @@ export default async function TasksPage({
             }
             row.stores.push(store)
             row.totalStores++
+            // r1 (audit P1#3): taskIds PHẢI gồm parent — archiveTasks chỉ
+            // cascade xuống children khi input chứa parent; thiếu parent →
+            // archive group để lại parent 'todo' ma quay về Pending "0/0".
+            row.taskIds.push(parentTaskId)
           }
           store.childTasks.push(child)
           store.total++
@@ -649,7 +680,9 @@ export default async function TasksPage({
             department:  deptOf(task),
             creator:     (task.creator as unknown as { full_name: string } | null) ?? null,
             createdAt:   task.created_at,
-            taskIds:     [task.id],
+            // r1 (audit P1#3): taskIds gồm CẢ parent — archive cascade cần parent
+            // trong input (thiếu → chỉ archive children, parent 'todo' thành ma).
+            taskIds:     [parentTaskId, task.id],
             stores:      [{
               parentId:   parentTaskId,
               storeName:  (task.stores as unknown as { name: string } | null)?.name ?? null,
@@ -702,7 +735,10 @@ export default async function TasksPage({
             total:      1,
             done:       isDone ? 1 : 0,
             createdAt:  task.created_at,
-            taskIds:    [task.id],
+            // r1 (audit P1#3): gồm CẢ parent — archive/restore cascade cần parent
+            // trong input; resubmit/export tự lọc parent server-side (preflight
+            // loại staff_all parent; export .neq assignment_mode staff_all).
+            taskIds:    [parentTaskId, task.id],
             childTasks: [child],
           })
         }
@@ -877,9 +913,14 @@ export default async function TasksPage({
   }
 
   // Under a status sub-filter, a staff_all group whose children all missed the
-  // filter (e.g. parent is 'todo' but every pharmacist is in_progress/done) has
-  // nothing actionable — drop the empty shell instead of rendering "0 dược sĩ".
-  const visibleItems = adminTreeFilter
+  // filter (e.g. parent is 'todo' but every pharmacist is done) has nothing
+  // actionable — drop the empty shell instead of rendering "0 dược sĩ".
+  // r1 (audit P1#2): áp cho MỌI role folding (trước đây chỉ adminTreeFilter —
+  // SM/QLCH mở ?status=todo vẫn thấy group ĐÃ HOÀN THÀNH hiện lại dạng "0/0"
+  // trong Chờ thực hiện vì parent vật lý vẫn 'todo'). Group chỉ hiện dưới
+  // status=X khi có ≥1 child khớp X → group hoàn tất không quay lại Pending.
+  const pendingSubFilter = view === 'pending' && !!params.status && groupPaginate
+  const visibleItems = (adminTreeFilter || pendingSubFilter)
     ? classified.filter((g) =>
         (g.type !== 'staff_broadcast' || g.totalStaff > 0) && (g.type !== 'staff' || g.total > 0))
     : classified

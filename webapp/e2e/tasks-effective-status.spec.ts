@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { effectiveDone } from '../lib/tasks/effectiveGroupStatus'
+import { effectiveDone, fetchedComplete } from '../lib/tasks/effectiveGroupStatus'
 import { groupModeActive } from '../lib/tasks/importBatchGroups'
 
 // Hotfix Tasks P1 (stakeholder 27/07) — unit gate contract EFFECTIVE STATUS:
@@ -24,6 +24,15 @@ test.describe('tasks effective group status @desktop', () => {
     expect(effectiveDone({ loaded: true, total: 0, done: 0 })).toBe(false)  // không xác định đủ tổng
     expect(effectiveDone(null)).toBe(false)
     expect(effectiveDone(undefined)).toBe(false)
+  })
+
+  test('r1 P1#1 fetchedComplete: nguồn phân loại KHÔNG được là subset bị cap — count phải khớp rows; count null (không exact) cũng fail-closed', () => {
+    expect(fetchedComplete(106, 106)).toBe(true)
+    expect(fetchedComplete(0, 0)).toBe(true)
+    expect(fetchedComplete(500, 499)).toBe(false)   // bị cap cắt → ErrorState, không phân loại
+    expect(fetchedComplete(2500, 2000)).toBe(false) // vượt cap cũ 2000 → phải fail-visible
+    expect(fetchedComplete(null, 100)).toBe(false)  // không yêu cầu exact count → fail-closed
+    expect(fetchedComplete(undefined, 100)).toBe(false)
   })
 
   test('groupModeActive (mở rộng P1): admin/sm/store_manager GOM; staff/không-role flat; archive/assignee flat', () => {
