@@ -19,7 +19,7 @@ import { AffiliateGmvCard } from '@/components/affiliate/AffiliateGmvCard'
 import { AFFILIATE_QR_FILTER, qrCardVisible, qrCardKey, qrEligibleRole } from '@/lib/affiliate/qrDisplay'
 import { CampaignResultDashboard } from '@/components/kpi/CampaignResultDashboard'
 import { buildCampaignResultModel, smScopeState, type ResultActualRow, type ResultCampaign, type ResultTargetRow } from '@/lib/kpi/resultModel'
-import { reduceAffiliateAgg, currentVnMonthISO, overviewVisibleFor, canShowOwnOsGmv, type AffiliateAggInput } from '@/lib/affiliate/overview'
+import { reduceAffiliateAgg, currentVnMonthISO, overviewVisibleFor, canShowOwnOsGmv, smRegionalGmvVisible, type AffiliateAggInput } from '@/lib/affiliate/overview'
 import { vnDayRange } from '@/lib/kpi/engine'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAffiliateSyncHealth, supabaseAffiliateHealthDb } from '@/lib/affiliate/health'
@@ -518,6 +518,41 @@ export default async function TargetsPage({
     const smCampaigns = [...byCampaign.values()]
       .map((e) => ({ id: e.campaign.id, model: buildCampaignResultModel(e.campaign, e.targets, e.actuals, vnTodayISO) }))
       .sort((x, y) => x.model.campaign.end_date.localeCompare(y.model.campaign.end_date))
+
+    // ── SM r5 (handoff 27/07): GMV Affiliate REGIONAL — health TRƯỚC (fail-
+    //    closed r1.1), CHỈ khi READY mới MỘT call aggregate cho TOÀN BỘ store
+    //    phân công (không N+1); ids từ smStores đã validate server-side
+    //    (active OS — không nhận từ query string). Card hiện cả khi 0
+    //    campaign; flag off → không query không render (contract có test). ──
+    const smGmvVisible = smRegionalGmvVisible({
+      flagEnabled: isKpiAffiliateEnabled(),
+      storeCount: smStores.length,
+      inCampaignDetail: !!params.campaign,
+    })
+    let smGmv = { gmv: 0, orders: 0 }
+    let smGmvError = false
+    let smGmvWarning: string | null = null
+    let smGmvSyncedAt: string | null = null
+    if (smGmvVisible) {
+      const smIds = smStores.map((s) => s.id)
+      const health = await getAffiliateSyncHealth(supabaseAffiliateHealthDb(supabaseAdmin), smIds)
+      smGmvSyncedAt = health.lastSuccessAt
+      if (!health.ready) {
+        smGmvWarning = health.reason
+      } else {
+        const range = vnDayRange(gmvMonth.from, gmvMonth.to)
+        const { data: aggData, error: aggErr } = await supabaseAdmin
+          .rpc('rpc_aggregate_affiliate_gmv', { p_store_ids: smIds, p_from: range.from, p_to: range.to })
+        if (aggErr) {
+          console.error('[targets] sm regional gmv failed:', aggErr.message)
+          smGmvError = true
+        } else {
+          const r = reduceAffiliateAgg((aggData ?? []) as AffiliateAggInput[])
+          smGmv = { gmv: r.totals.gmv, orders: r.totals.orders }
+        }
+      }
+    }
+
     return (
       <div className="p-4 md:p-6 space-y-4 max-w-5xl">
         <PageHeader
@@ -525,6 +560,10 @@ export default async function TargetsPage({
           icon={TrendingUp}
           subtitle={`Phạm vi: ${smStores.length} cửa hàng bạn quản lý`}
         />
+        {/* r5: md+ = grid 2 cột (list campaign trái, GMV regional phải — mirror
+            pattern H2); mobile 1 cột. */}
+        <div className={cn('grid grid-cols-1 gap-4 items-start', smGmvVisible && 'md:grid-cols-[minmax(0,1fr)_340px]')}>
+          <div className="min-w-0">
         {smCampaigns.length === 0 ? (
           <EmptyState className="py-12" icon={TrendingUp} title="Chưa có chiến dịch nào áp dụng cho các cửa hàng bạn quản lý." />
         ) : (
@@ -566,18 +605,24 @@ export default async function TargetsPage({
             })}
           </div>
         )}
-        {/* SM regional không còn card GMV per-store — Affiliate xem tại màn tổng
-            hợp (scope các store phân công); giữ đường vào. */}
-        {isKpiAffiliateEnabled() && (
-          <Card>
-            <CardContent className="p-4 flex items-center justify-between gap-2 flex-wrap">
-              <p className="text-sm font-medium">Doanh số Affiliate — Circa Online</p>
-              <Link href="/targets/campaigns/affiliate" className="text-xs font-medium text-primary hover:underline inline-flex items-center min-h-[44px] md:min-h-0">
-                Xem chi tiết Affiliate →
-              </Link>
-            </CardContent>
-          </Card>
-        )}
+          </div>
+          {/* r5: GMV Affiliate REGIONAL — AffiliateGmvCard tái dùng (READY → số,
+              0đ hợp lệ; !READY → '—' + lý do ngắn + sync cuối; lỗi → thông báo).
+              KHÔNG QR, KHÔNG nút sync. */}
+          {smGmvVisible && (
+            <div className="min-w-0">
+              <AffiliateGmvCard
+                monthLabel={gmvMonthLabel}
+                gmv={smGmv.gmv}
+                orders={smGmv.orders}
+                syncedAt={smGmvSyncedAt}
+                error={smGmvError}
+                sourceWarning={smGmvWarning}
+                detailHref="/targets/campaigns/affiliate"
+              />
+            </div>
+          )}
+        </div>
       </div>
     )
   }

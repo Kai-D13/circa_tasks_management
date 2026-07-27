@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import {
   reduceAffiliateAgg, currentVnMonthISO, overviewVisibleFor,
   canShowOwnOsGmv, isRealISODate, parseOverviewRange, overviewDataState,
-  overviewPageScope, opsSidebarVisible, smOverviewAllowed,
+  overviewPageScope, opsSidebarVisible, smOverviewAllowed, smRegionalGmvVisible,
   type AffiliateAggInput,
 } from '../lib/affiliate/overview'
 
@@ -119,6 +119,14 @@ test.describe('affiliate overview contract @desktop', () => {
     expect(smOverviewAllowed(2, null)).toBe(false)  // query stores LỖI → fail-closed
     expect(smOverviewAllowed(2, 1)).toBe(true)      // ≥1 OS active → vào
     expect(smOverviewAllowed(1, 1)).toBe(true)
+  })
+
+  test('SM r5 smRegionalGmvVisible: flag on + ≥1 store + landing → hiện (KỂ CẢ 0 campaign); flag off/0 store/detail → không query không render', () => {
+    expect(smRegionalGmvVisible({ flagEnabled: true, storeCount: 4, inCampaignDetail: false })).toBe(true)
+    expect(smRegionalGmvVisible({ flagEnabled: true, storeCount: 1, inCampaignDetail: false })).toBe(true)
+    expect(smRegionalGmvVisible({ flagEnabled: false, storeCount: 4, inCampaignDetail: false })).toBe(false) // flag off
+    expect(smRegionalGmvVisible({ flagEnabled: true, storeCount: 0, inCampaignDetail: false })).toBe(false)  // không store active-OS
+    expect(smRegionalGmvVisible({ flagEnabled: true, storeCount: 4, inCampaignDetail: true })).toBe(false)   // ẩn trong ?campaign=
   })
 
   test('r1.2a P2#1 opsSidebarVisible: CHỈ admin phòng cấp quyền KHÔNG PHẢI super; super/role khác/flag off → ẩn', () => {
