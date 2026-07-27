@@ -10,7 +10,7 @@ import { Link2 } from 'lucide-react'
 
 const vnd = (n: number) => `${new Intl.NumberFormat('vi-VN').format(Math.round(n))}₫`
 
-export function AffiliateGmvCard({ monthLabel, gmv, orders, syncedAt, error = false, sourceWarning = null, detailHref = null }: {
+export function AffiliateGmvCard({ monthLabel, gmv, orders, syncedAt, error = false, sourceWarning = null, detailHref = null, regional = false }: {
   monthLabel: string          // vd "Tháng 07/2026"
   gmv: number
   orders: number
@@ -18,6 +18,7 @@ export function AffiliateGmvCard({ monthLabel, gmv, orders, syncedAt, error = fa
   error?: boolean             // RPC lỗi (kể cả fail-closed thiếu completed_time)
   sourceWarning?: string | null // r1.1: health không READY → chặn số, reason nổi lên card
   detailHref?: string | null  // P3-I.2: link màn tổng hợp (SM/QLCH — user chốt 24/07)
+  regional?: boolean          // SM r5 (audit 27/07): copy đa cửa hàng cho tổng vùng
 }) {
   return (
     <Card className="rounded-lg">
@@ -54,7 +55,11 @@ export function AffiliateGmvCard({ monthLabel, gmv, orders, syncedAt, error = fa
               <p className="text-sm text-muted-foreground">{orders} đơn giao thành công</p>
             </div>
             <p className="text-[11px] text-muted-foreground">
-              Chỉ tính đơn giao thành công (DELIVERED) · ghi nhận theo mã đối tác của cửa hàng
+              {/* SM r5 (audit 27/07): copy regional — tổng NHIỀU cửa hàng, không
+                  phải "mã đối tác của cửa hàng" số ít */}
+              {regional
+                ? 'Chỉ tính đơn giao thành công (DELIVERED) · tổng các cửa hàng bạn quản lý, ghi nhận theo mã đối tác từng cửa hàng'
+                : 'Chỉ tính đơn giao thành công (DELIVERED) · ghi nhận theo mã đối tác của cửa hàng'}
               {syncedAt ? ` · đồng bộ ${formatDateTime(syncedAt)}` : ' · chưa đồng bộ'}
             </p>
           </>

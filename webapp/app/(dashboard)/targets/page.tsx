@@ -591,6 +591,7 @@ export default async function TargetsPage({
                 error={smGmvError}
                 sourceWarning={smGmvWarning}
                 detailHref="/targets/campaigns/affiliate"
+                regional
               />
             </div>
           )}
