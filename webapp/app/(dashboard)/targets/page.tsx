@@ -441,32 +441,29 @@ export default async function TargetsPage({
     }
     for (const a of smActualRows) byCampaign.get(a.campaign_id)?.actuals.push(a)
 
-    // ── Detail (?campaign=) — dashboard read-only + filter store ──
+    // ── Detail (?campaign=) — dashboard read-only, LUÔN tổng hợp toàn phạm vi ──
     if (params.campaign) {
+      // r6 (handoff 27/07): BỎ filter ?store= — URL cũ mang store= redirect
+      // canonicalize về chỉ còn campaign= (chọn phương án redirect rõ ràng).
+      if (params.store) redirect(`/targets?campaign=${params.campaign}`)
       const entry = byCampaign.get(params.campaign)
-      const storeParam = params.store
-      const storeParamInScope = !!storeParam && smStores.some((s) => s.id === storeParam)
-      const scope = smScopeState(!!entry, storeParam, storeParamInScope)
+      const scope = smScopeState(!!entry)
       if (scope !== 'ok' || !entry) {
-        // r3: campaign/store ngoài scope → forbidden, KHÔNG fallback dữ liệu khác.
+        // r3: campaign ngoài scope → forbidden, KHÔNG fallback dữ liệu khác.
         return (
           <div className="p-4 md:p-6 space-y-4 max-w-5xl">
             <PageHeader title="Doanh số chiến dịch" icon={TrendingUp} />
             <Link href="/targets" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0">← Danh sách chiến dịch</Link>
             <ErrorState
-              message={scope === 'store-out-of-scope'
-                ? 'Cửa hàng không thuộc phạm vi quản lý của bạn'
-                : 'Chiến dịch không thuộc phạm vi quản lý của bạn'}
+              message="Chiến dịch không thuộc phạm vi quản lý của bạn"
               hint="Kiểm tra lại đường dẫn hoặc quay về danh sách chiến dịch."
             />
           </div>
         )
       }
-      // Filter store — mặc định TẤT CẢ cửa hàng được phân công trong campaign.
-      const fTargets = storeParam ? entry.targets.filter((t) => t.store_id === storeParam) : entry.targets
-      const fActuals = storeParam ? entry.actuals.filter((a) => a.store_id === storeParam) : entry.actuals
-      const model = buildCampaignResultModel(entry.campaign, fTargets, fActuals, vnTodayISO)
-      const scopeStores = smStores.filter((s) => entry.targets.some((t) => t.store_id === s.id))
+      // r6: model LUÔN trên toàn bộ store thuộc campaign ∩ phạm vi SM — bảng
+      // trong dashboard vẫn hiển thị từng store.
+      const model = buildCampaignResultModel(entry.campaign, entry.targets, entry.actuals, vnTodayISO)
       return (
         <div className="p-4 md:p-6 space-y-4 max-w-5xl">
           <PageHeader title="Doanh số chiến dịch" icon={TrendingUp} />
@@ -480,33 +477,8 @@ export default async function TargetsPage({
               {formatDate(entry.campaign.start_date)} – {formatDate(entry.campaign.end_date)} · {entry.targets.length} cửa hàng thuộc phạm vi bạn quản lý
             </p>
           </div>
-          {scopeStores.length > 1 && (
-            <div className="flex gap-2 overflow-x-auto pb-1 -mb-1">
-              <Link
-                href={`/targets?campaign=${entry.campaign.id}`}
-                className={cn(
-                  'shrink-0 whitespace-nowrap text-xs px-3 inline-flex items-center min-h-[44px] md:min-h-0 md:py-1.5 rounded-full border font-medium transition-colors',
-                  !storeParam ? 'border-primary bg-primary text-primary-foreground shadow-sm'
-                              : 'border-border text-muted-foreground hover:text-primary hover:bg-primary/5',
-                )}
-              >
-                Tất cả cửa hàng
-              </Link>
-              {scopeStores.map((s) => (
-                <Link
-                  key={s.id}
-                  href={`/targets?campaign=${entry.campaign.id}&store=${s.id}`}
-                  className={cn(
-                    'shrink-0 whitespace-nowrap text-xs px-3 inline-flex items-center min-h-[44px] md:min-h-0 md:py-1.5 rounded-full border font-medium transition-colors',
-                    storeParam === s.id ? 'border-primary bg-primary text-primary-foreground shadow-sm'
-                                        : 'border-border text-muted-foreground hover:text-primary hover:bg-primary/5',
-                  )}
-                >
-                  {s.name}
-                </Link>
-              ))}
-            </div>
-          )}
+          {/* r6: KHÔNG còn store chips/filter — dashboard tổng hợp toàn phạm vi,
+              bảng dưới hiển thị từng store. */}
           <CampaignResultDashboard model={model} emptyHint="Chưa có dữ liệu kết quả trong phạm vi của bạn." />
           <p className="text-[11px] text-muted-foreground">Chế độ xem Quản lý vùng — chỉ đọc · số liệu giới hạn trong các cửa hàng bạn quản lý.</p>
         </div>

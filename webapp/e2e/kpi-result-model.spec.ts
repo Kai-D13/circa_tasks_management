@@ -83,11 +83,8 @@ test.describe('kpi result model @desktop', () => {
     expect(buildCampaignResultModel(CAMP({ metric_affiliate: false }), [], [], TODAY).showBreakdown).toBe(false)
   })
 
-  test('r3 smScopeState: campaign/store ngoài scope → forbidden, KHÔNG fallback', () => {
-    expect(smScopeState(true, undefined, false)).toBe('ok')          // không filter store
-    expect(smScopeState(true, 'store-b', true)).toBe('ok')
-    expect(smScopeState(false, undefined, false)).toBe('campaign-out-of-scope')
-    expect(smScopeState(false, 'store-b', true)).toBe('campaign-out-of-scope') // campaign thắng
-    expect(smScopeState(true, 'store-x', false)).toBe('store-out-of-scope')
+  test('r3+r6 smScopeState: campaign ngoài scope → forbidden KHÔNG fallback; hết contract ?store= (r6 bỏ filter — URL cũ được page redirect canonicalize)', () => {
+    expect(smScopeState(true)).toBe('ok')
+    expect(smScopeState(false)).toBe('campaign-out-of-scope')
   })
 })

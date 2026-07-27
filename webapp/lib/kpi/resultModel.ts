@@ -127,16 +127,12 @@ export function buildCampaignResultModel(
   }
 }
 
-// r3 (error boundary): trạng thái scope của SM khi vào dashboard qua URL —
-// campaign ngoài phạm vi HOẶC ?store= ngoài assignment active-OS → forbidden
-// state, TUYỆT ĐỐI không fallback sang campaign/store khác ngoài scope.
-export type SmScopeState = 'ok' | 'campaign-out-of-scope' | 'store-out-of-scope'
-export function smScopeState(
-  campaignInScope: boolean,
-  storeParam: string | undefined,
-  storeParamInScope: boolean,
-): SmScopeState {
-  if (!campaignInScope) return 'campaign-out-of-scope'
-  if (storeParam && !storeParamInScope) return 'store-out-of-scope'
-  return 'ok'
+// r3 (error boundary) + r6 (handoff 27/07 — BỎ filter ?store=): trạng thái
+// scope của SM khi vào dashboard qua URL — campaign ngoài phạm vi → forbidden,
+// TUYỆT ĐỐI không fallback sang campaign khác. Dashboard LUÔN tổng hợp toàn bộ
+// store thuộc campaign ∩ phạm vi SM (URL cũ mang ?store= được page redirect
+// canonicalize về chỉ còn ?campaign=).
+export type SmScopeState = 'ok' | 'campaign-out-of-scope'
+export function smScopeState(campaignInScope: boolean): SmScopeState {
+  return campaignInScope ? 'ok' : 'campaign-out-of-scope'
 }
