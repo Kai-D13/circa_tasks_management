@@ -387,8 +387,23 @@ export default async function TargetsPage({
   // ── SM render branch: store selector + the store's campaign view ────────────
   if (isSm) {
     const selStore = smStores.find((s) => s.id === smSelectedStoreId)
+    // H2 (stakeholder 27/07): desktop dùng shell chuẩn admin (max-w-5xl, KHÔNG
+    // còn cột hẹp mobile giữa trang trống); landing md+ = grid 2 cột (nội dung
+    // campaign + cột phụ GMV Affiliate); mobile giữ nguyên 1 cột thứ tự cũ.
+    // QR block bỏ khỏi nhánh SM: sau 097 qrEligibleRole(sm)=false — dead code.
+    const smSideCards = showAffiliateGmv ? (
+      <AffiliateGmvCard
+        monthLabel={gmvMonthLabel}
+        gmv={affiliateGmv.gmv}
+        orders={affiliateGmv.orders}
+        syncedAt={affiliateGmvSyncedAt}
+        error={affiliateGmvError}
+        sourceWarning={affiliateGmvWarning}
+        detailHref="/targets/campaigns/affiliate"
+      />
+    ) : null
     return (
-      <div className="p-4 space-y-4 max-w-xl mx-auto">
+      <div className="p-4 md:p-6 space-y-4 max-w-5xl">
         <PageHeader title="Doanh số chiến dịch" icon={TrendingUp} />
 
         {/* Store selector — SM manages several stores. H1.2: LUÔN hiện trên
@@ -419,78 +434,42 @@ export default async function TargetsPage({
           <p className="text-sm"><span className="text-muted-foreground">Cửa hàng:</span> <span className="font-medium">{selStore.name}</span></p>
         )}
 
-        {campaignViews.length === 0 ? (
-          <EmptyState
-            className="py-12"
-            icon={TrendingUp}
-            title={selStore ? `Cửa hàng ${selStore.name} hiện chưa có chiến dịch đang áp dụng.` : 'Chưa có chiến dịch.'}
-          />
-        ) : showCampaignList ? (
-          <CampaignCardList items={campaignViews} hrefFor={campaignHref} />
-        ) : (
-          <>
-            <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0 -my-2.5 md:my-0">← Danh sách chiến dịch</Link>
-            <CampaignResultSummary
-              campaign={campaignViews.find((c) => c.id === selectedCampaignId) ?? campaignViews[0]}
-              todayISO={vnTodayISO}
-            />
-            <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily}
-              dailyError={campaignDailyError} roleLabel="Quản lý vùng" todayISO={vnTodayISO}
-              storeName={selStore?.name ?? 'Cửa hàng'} />
-          </>
-        )}
-        {/* P3-H: QR dưới danh sách campaign, theo store đang chọn — ẩn trong detail */}
-        {showAffiliateQr && (
-          <AffiliateQrCard
-            key={qrCardKey(resolvedStoreId ?? null, affiliateQr?.qr_image_url ?? null)}
-            storeName={selStore?.name ?? 'Cửa hàng'}
-            partnerCode={affiliateQr?.partner_code ?? null}
-            imageUrl={affiliateQr?.qr_image_url ?? null}
-            destinationUrl={affiliateQr?.qr_destination_url ?? null}
-            queryError={affiliateQrError}
-          />
-        )}
-        {/* P3-I: GMV Affiliate tháng hiện tại của store đang chọn (chỉ đọc) */}
-        {showAffiliateGmv && (
-          <AffiliateGmvCard
-            monthLabel={gmvMonthLabel}
-            gmv={affiliateGmv.gmv}
-            orders={affiliateGmv.orders}
-            syncedAt={affiliateGmvSyncedAt}
-            error={affiliateGmvError}
-            sourceWarning={affiliateGmvWarning}
-            detailHref="/targets/campaigns/affiliate"
-          />
-        )}
+        <div className={cn('grid grid-cols-1 gap-4 items-start', smSideCards && 'md:grid-cols-[minmax(0,1fr)_340px]')}>
+          <div className="space-y-4 min-w-0">
+            {campaignViews.length === 0 ? (
+              <EmptyState
+                className="py-12"
+                icon={TrendingUp}
+                title={selStore ? `Cửa hàng ${selStore.name} hiện chưa có chiến dịch đang áp dụng.` : 'Chưa có chiến dịch.'}
+              />
+            ) : showCampaignList ? (
+              <CampaignCardList items={campaignViews} hrefFor={campaignHref} />
+            ) : (
+              <>
+                <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0 -my-2.5 md:my-0">← Danh sách chiến dịch</Link>
+                <CampaignResultSummary
+                  campaign={campaignViews.find((c) => c.id === selectedCampaignId) ?? campaignViews[0]}
+                  todayISO={vnTodayISO}
+                />
+                <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily}
+                  dailyError={campaignDailyError} roleLabel="Quản lý vùng" todayISO={vnTodayISO}
+                  storeName={selStore?.name ?? 'Cửa hàng'} />
+              </>
+            )}
+          </div>
+          {smSideCards && <div className="space-y-4 min-w-0">{smSideCards}</div>}
+        </div>
       </div>
     )
   }
 
   if (isStoreMgr) {
     const storeName = (profile?.stores as unknown as { name: string } | null)?.name ?? 'Cửa hàng của bạn'
-    return (
-      <div className="p-4 space-y-4 max-w-xl mx-auto">
-        <PageHeader
-          title="Doanh số chiến dịch"
-          icon={TrendingUp}
-          /* Campaign view carries its own store pill (r3) — avoid duplicating */
-          actions={campaignViews.length === 0 ? <span className="text-sm text-muted-foreground">{storeName}</span> : undefined}
-        />
-        {campaignViews.length === 0 ? (
-          <EmptyState className="py-12" icon={TrendingUp} title="Hiện chưa có chiến dịch doanh số đang áp dụng." />
-        ) : showCampaignList ? (
-          <CampaignCardList items={campaignViews} hrefFor={campaignHref} />
-        ) : (
-          <>
-            <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0 -my-2.5 md:my-0">← Danh sách chiến dịch</Link>
-            <CampaignResultSummary
-              campaign={campaignViews.find((c) => c.id === selectedCampaignId) ?? campaignViews[0]}
-              todayISO={vnTodayISO}
-            />
-            <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Quản lý" todayISO={vnTodayISO} storeName={storeName} />
-          </>
-        )}
-        {/* P3-H: QR dưới danh sách campaign (hiện cả khi chưa có campaign) — ẩn trong detail */}
+    // H2 (stakeholder 27/07): desktop shell chuẩn admin (max-w-5xl); landing
+    // md+ = grid 2 cột (nội dung campaign + cột phụ QR/GMV); mobile giữ 1 cột
+    // đúng thứ tự cũ (content → QR → GMV).
+    const mgrSideCards = (showAffiliateQr || showAffiliateGmv) ? (
+      <>
         {showAffiliateQr && (
           <AffiliateQrCard
             key={qrCardKey(resolvedStoreId ?? null, affiliateQr?.qr_image_url ?? null)}
@@ -501,7 +480,6 @@ export default async function TargetsPage({
             queryError={affiliateQrError}
           />
         )}
-        {/* P3-I: GMV Affiliate tháng hiện tại của store mình (chỉ đọc) */}
         {showAffiliateGmv && (
           <AffiliateGmvCard
             monthLabel={gmvMonthLabel}
@@ -513,6 +491,35 @@ export default async function TargetsPage({
             detailHref="/targets/campaigns/affiliate"
           />
         )}
+      </>
+    ) : null
+    return (
+      <div className="p-4 md:p-6 space-y-4 max-w-5xl">
+        <PageHeader
+          title="Doanh số chiến dịch"
+          icon={TrendingUp}
+          /* Campaign view carries its own store pill (r3) — avoid duplicating */
+          actions={campaignViews.length === 0 ? <span className="text-sm text-muted-foreground">{storeName}</span> : undefined}
+        />
+        <div className={cn('grid grid-cols-1 gap-4 items-start', mgrSideCards && 'md:grid-cols-[minmax(0,1fr)_340px]')}>
+          <div className="space-y-4 min-w-0">
+            {campaignViews.length === 0 ? (
+              <EmptyState className="py-12" icon={TrendingUp} title="Hiện chưa có chiến dịch doanh số đang áp dụng." />
+            ) : showCampaignList ? (
+              <CampaignCardList items={campaignViews} hrefFor={campaignHref} />
+            ) : (
+              <>
+                <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0 -my-2.5 md:my-0">← Danh sách chiến dịch</Link>
+                <CampaignResultSummary
+                  campaign={campaignViews.find((c) => c.id === selectedCampaignId) ?? campaignViews[0]}
+                  todayISO={vnTodayISO}
+                />
+                <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Quản lý" todayISO={vnTodayISO} storeName={storeName} />
+              </>
+            )}
+          </div>
+          {mgrSideCards && <div className="space-y-4 min-w-0">{mgrSideCards}</div>}
+        </div>
       </div>
     )
   }
