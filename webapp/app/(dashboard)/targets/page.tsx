@@ -17,6 +17,7 @@ import { isReferralEnabled } from '@/lib/affiliate/flags'
 import { AffiliateQrCard } from '@/components/affiliate/AffiliateQrCard'
 import { AffiliateGmvCard } from '@/components/affiliate/AffiliateGmvCard'
 import { AFFILIATE_QR_FILTER, qrCardVisible, qrCardKey, qrEligibleRole } from '@/lib/affiliate/qrDisplay'
+import { smSelectorVisible } from '@/lib/kpi/campaignDisplay'
 import { reduceAffiliateAgg, currentVnMonthISO, overviewVisibleFor, canShowOwnOsGmv, type AffiliateAggInput } from '@/lib/affiliate/overview'
 import { vnDayRange } from '@/lib/kpi/engine'
 import { supabaseAdmin } from '@/lib/supabase/admin'
@@ -144,13 +145,21 @@ function parsePeriod(v: string | undefined): TargetPeriod {
 
 // SM's assigned stores (id + name) for the store selector. getSmStoreIds reads
 // sm_store_assignments (RLS ssa_select_sm) → then resolve names.
+// H1.2 (27/07): CHỈ store OS đang ACTIVE — store soft-deactivate (mig 074, vd
+// Belvita) lọt vào sẽ đứng đầu theo sort tên → thành store mặc định rỗng
+// khiến SM kẹt; khớp luôn boundary os+active của Affiliate Overview (r1.2b).
 async function fetchSmStores(
   supabase: Awaited<ReturnType<typeof createClient>>,
   smUserId: string,
 ): Promise<{ id: string; name: string }[]> {
   const ids = await getSmStoreIds(supabase, smUserId)
   if (ids.length === 0) return []
-  const { data } = await supabase.from('stores').select('id, name').in('id', ids).order('name')
+  const { data } = await supabase
+    .from('stores').select('id, name')
+    .in('id', ids)
+    .eq('is_active', true)
+    .eq('store_type', 'os')
+    .order('name')
   return (data ?? []) as { id: string; name: string }[]
 }
 
@@ -382,9 +391,11 @@ export default async function TargetsPage({
       <div className="p-4 space-y-4 max-w-xl mx-auto">
         <PageHeader title="Doanh số chiến dịch" icon={TrendingUp} />
 
-        {/* Store selector — SM manages several stores. LIST mode only; in a
-            campaign detail the store is fixed, so show a static label instead. */}
-        {smStores.length > 1 && showCampaignList && (
+        {/* Store selector — SM manages several stores. H1.2: LUÔN hiện trên
+            landing (kể cả store 0 campaign — bug cũ gắn với showCampaignList
+            khiến SM kẹt ở store rỗng); chỉ ẩn trong ?campaign= (store cố định).
+            Contract smSelectorVisible có test. */}
+        {smSelectorVisible(smStores.length, !!params.campaign) && (
           <div className="flex gap-2 overflow-x-auto pb-1 -mb-1">
             {smStores.map((s) => {
               const active = s.id === smSelectedStoreId

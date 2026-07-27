@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { breakdownModel, campaignFootnote, metricEditorState } from '../lib/kpi/campaignDisplay'
+import { breakdownModel, campaignFootnote, metricEditorState, smSelectorVisible } from '../lib/kpi/campaignDisplay'
 import { affiliateDataStatus, buildCampaignExportRows, type ExportActual } from '../lib/kpi/exportRows'
 
 // P3-E/F r1 unit gate (audit P2#3) — khóa contract render breakdown, footnote,
@@ -71,6 +71,14 @@ test.describe('kpi display contract @desktop', () => {
     expect(r['GMV Affiliate']).toBe(200)
     expect(r['Affiliate Data Status']).toBe('Đã đồng bộ')
     expect(r['Offline Synced At']).toBe('2026-07-23T09:58:00Z')
+  })
+
+  test('H1.2 smSelectorVisible: LUÔN hiện trên landing kể cả 0 campaign (SM không bao giờ kẹt ở store rỗng); ẩn trong ?campaign= và khi chỉ 1 store', () => {
+    expect(smSelectorVisible(4, false)).toBe(true)   // landing, nhiều store — KỂ CẢ store đang chọn 0 campaign
+    expect(smSelectorVisible(2, false)).toBe(true)
+    expect(smSelectorVisible(4, true)).toBe(false)   // campaign detail — store cố định
+    expect(smSelectorVisible(1, false)).toBe(false)  // 1 store — không có gì để chọn
+    expect(smSelectorVisible(0, false)).toBe(false)
   })
 
   test('affiliateDataStatus: Không áp dụng / Chưa đồng bộ / Đã đồng bộ', () => {
