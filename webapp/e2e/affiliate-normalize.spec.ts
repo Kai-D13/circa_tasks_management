@@ -39,11 +39,13 @@ test.describe('affiliate normalize @desktop', () => {
     expect(r.row.first_product_name).toContain('Kẹo the Play')
   })
 
-  test('normalize status: known-set 7 giá trị + lạ → other', () => {
+  test('normalize status: known-set 8 giá trị + lạ → other', () => {
     expect(normalizeStatus('DELIVERED')).toBe('delivered')
     expect(normalizeStatus('DELIVERING')).toBe('delivering')
     expect(normalizeStatus('WAIT_FOR_PAYMENT')).toBe('waiting')
     expect(normalizeStatus('WAIT_FOR_PURCHASE')).toBe('waiting')
+    // H1.1 (27/07): status mới xuất hiện trong nguồn — chờ giao, không tính GMV
+    expect(normalizeStatus('WAIT_TO_DELIVER')).toBe('waiting')
     expect(normalizeStatus('PROCESSING')).toBe('processing')
     expect(normalizeStatus('FAIL_TO_DELIVER')).toBe('fail_to_deliver')
     expect(normalizeStatus('CANCELED')).toBe('canceled')
@@ -57,6 +59,7 @@ test.describe('affiliate normalize @desktop', () => {
     expect(isKpiAffiliateCountedStatus('DELIVERING')).toBe(false)
     expect(isKpiAffiliateCountedStatus('PROCESSING')).toBe(false)
     expect(isKpiAffiliateCountedStatus('WAIT_FOR_PAYMENT')).toBe(false)
+    expect(isKpiAffiliateCountedStatus('WAIT_TO_DELIVER')).toBe(false) // H1.1
     expect(isKpiAffiliateCountedStatus('SOME_NEW_STATUS')).toBe(false)
   })
 
