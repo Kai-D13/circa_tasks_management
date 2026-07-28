@@ -11,6 +11,8 @@ import {
   reduceAffiliateAgg, parseOverviewRange, overviewDataState, overviewPageScope,
   canShowOwnOsGmv, smOverviewAllowed, type AffiliateAggInput,
 } from '@/lib/affiliate/overview'
+import { drilldownEnabled } from '@/lib/affiliate/orders'
+import { AffiliateStoreOrdersRow } from '@/components/affiliate/AffiliateStoreOrdersRow'
 import { CampaignsTabs } from '@/components/kpi/CampaignsTabs'
 import { PageHeader } from '@/components/ds/PageHeader'
 import { DataToolbar } from '@/components/ds/DataToolbar'
@@ -265,7 +267,9 @@ export default async function AffiliateOverviewPage({ searchParams }: {
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead className="pl-4">Cửa hàng</TableHead>
+              {/* Drill-down (28/07): cột chevron — mở danh sách đơn DELIVERED */}
+              <TableHead className="w-10 pl-1 pr-0" />
+              <TableHead>Cửa hàng</TableHead>
               <TableHead className="text-right">Đơn thành công</TableHead>
               <TableHead className="text-right">GMV Affiliate</TableHead>
               <TableHead className="text-right pr-4">Đơn gần nhất</TableHead>
@@ -274,27 +278,41 @@ export default async function AffiliateOverviewPage({ searchParams }: {
           <TableBody>
             {rows.map((r) => {
               const has = r.agg.orders > 0
+              // Drill-down: client row — lazy-load qua RPC 099 (session, authz
+              // trong DB); chevron CHỈ khi số parent thật (!blocked) + có đơn;
+              // key gồm from/to → đổi filter hủy state cũ.
               return (
-                <TableRow key={r.partner_code}>
-                  <TableCell className="pl-4">
-                    <span className="font-medium">{r.stores?.name ?? '—'}</span>
-                    <span className="text-xs text-muted-foreground"> · {r.stores?.code ?? '—'}</span>
-                    {r.partner_type === 'fs' && (
-                      <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground align-middle">FS</span>
-                    )}
-                    {/* r1.3: partner_code = metadata nhỏ phục vụ đối soát */}
-                    <span className="block font-mono text-[11px] text-muted-foreground">{r.partner_code}</span>
-                  </TableCell>
-                  <TableCell className={cn('text-right tabular-nums', !has && 'text-muted-foreground')}>
-                    {blocked ? '—' : r.agg.orders}
-                  </TableCell>
-                  <TableCell className={cn('text-right tabular-nums font-medium', !has && 'text-muted-foreground font-normal')}>
-                    {blocked ? '—' : has || r.agg.gmv !== 0 ? vnd(r.agg.gmv) : '—'}
-                  </TableCell>
-                  <TableCell className="text-right pr-4 text-muted-foreground">
-                    {blocked ? '—' : r.agg.lastDate ? formatDate(r.agg.lastDate) : '—'}
-                  </TableCell>
-                </TableRow>
+                <AffiliateStoreOrdersRow
+                  key={`${r.partner_code}-${from}-${to}`}
+                  storeId={r.store_id}
+                  from={from}
+                  to={to}
+                  canDrill={drilldownEnabled({ blocked, orders: r.agg.orders })}
+                  expectedOrders={r.agg.orders}
+                  expectedGmv={r.agg.gmv}
+                  parentCells={
+                    <>
+                      <TableCell>
+                        <span className="font-medium">{r.stores?.name ?? '—'}</span>
+                        <span className="text-xs text-muted-foreground"> · {r.stores?.code ?? '—'}</span>
+                        {r.partner_type === 'fs' && (
+                          <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground align-middle">FS</span>
+                        )}
+                        {/* r1.3: partner_code = metadata nhỏ phục vụ đối soát */}
+                        <span className="block font-mono text-[11px] text-muted-foreground">{r.partner_code}</span>
+                      </TableCell>
+                      <TableCell className={cn('text-right tabular-nums', !has && 'text-muted-foreground')}>
+                        {blocked ? '—' : r.agg.orders}
+                      </TableCell>
+                      <TableCell className={cn('text-right tabular-nums font-medium', !has && 'text-muted-foreground font-normal')}>
+                        {blocked ? '—' : has || r.agg.gmv !== 0 ? vnd(r.agg.gmv) : '—'}
+                      </TableCell>
+                      <TableCell className="text-right pr-4 text-muted-foreground">
+                        {blocked ? '—' : r.agg.lastDate ? formatDate(r.agg.lastDate) : '—'}
+                      </TableCell>
+                    </>
+                  }
+                />
               )
             })}
           </TableBody>
