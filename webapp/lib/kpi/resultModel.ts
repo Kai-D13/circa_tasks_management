@@ -45,6 +45,49 @@ export interface ResultCampaign {
   metric_affiliate: boolean
 }
 
+// ── Tier Progress (contract 28/07 — desktop ≥1024px) ────────────────────────
+// Tiến độ THEO TỪNG BẬC của một store, render động theo N tier của file import
+// (KHÔNG hardcode 3 bậc). Công thức chốt:
+//   target_amount = ceil(kpi_target × threshold_pct / 100)
+//   remaining     = max(target_amount − actual_value, 0)
+// reached lấy từ BACKEND (achieved_tier_order do sync engine ghi) — backend
+// xác nhận đã đạt thì ÉP remaining = 0 (tránh lệch do làm tròn run_rate).
+// Chưa sync (actual null) → remaining_amount = null — UI hiện '—', KHÔNG
+// bao giờ coi là 0 (màn tiền không suy diễn từ dữ liệu thiếu).
+export interface TierProgress {
+  tier_order: number
+  threshold_pct: number
+  commission_amount: number
+  target_amount: number
+  reached: boolean
+  remaining_amount: number | null   // null = chưa đồng bộ
+}
+
+export function buildTierProgress(
+  kpiTarget: number,
+  actual: { actual_value: number; achieved_tier_order: number | null } | null,
+  tiers: ResultTierRow[],
+): TierProgress[] {
+  return [...tiers]
+    .sort((a, b) => a.tier_order - b.tier_order)
+    .map((t) => {
+      const target_amount = Math.ceil(((Number(kpiTarget) || 0) * (Number(t.threshold_pct) || 0)) / 100)
+      const base = {
+        tier_order: t.tier_order,
+        threshold_pct: Number(t.threshold_pct) || 0,
+        commission_amount: Number(t.commission_amount) || 0,
+        target_amount,
+      }
+      if (!actual) return { ...base, reached: false, remaining_amount: null }
+      const reached = actual.achieved_tier_order !== null && t.tier_order <= actual.achieved_tier_order
+      return {
+        ...base,
+        reached,
+        remaining_amount: reached ? 0 : Math.max(target_amount - (Number(actual.actual_value) || 0), 0),
+      }
+    })
+}
+
 export interface StoreResultRow {
   targetId: string
   storeId: string
@@ -54,6 +97,9 @@ export interface StoreResultRow {
   kpiTarget: number
   actual: ResultActualRow | null
   performance: number | null
+  // Tier progress (28/07): tiers ĐÃ SORT theo tier_order kèm target/remaining/
+  // reached — nguồn duy nhất cho cột động desktop (Super ↔ SM cùng công thức).
+  tierProgress: TierProgress[]
 }
 
 export interface CampaignResultModel {
@@ -71,6 +117,7 @@ export interface CampaignResultModel {
   performance: number | null      // nhịp độ toàn phạm vi; null khi chưa sync
   deadlineLabel: string           // Tạm dừng / Đã kết thúc / Còn N ngày
   rows: StoreResultRow[]
+  maxTierCount: number            // số cột Bậc động trên desktop (max theo store)
 }
 
 export function buildCampaignResultModel(
@@ -113,6 +160,11 @@ export function buildCampaignResultModel(
       actual: a,
       performance: campaignPerformance(
         t.kpi_target, a?.actual_value ?? null, campaign.start_date, campaign.end_date, todayISO),
+      tierProgress: buildTierProgress(
+        Number(t.kpi_target) || 0,
+        a ? { actual_value: Number(a.actual_value) || 0, achieved_tier_order: a.achieved_tier_order } : null,
+        t.kpi_campaign_store_tiers ?? [],
+      ),
     }
   })
 
@@ -124,6 +176,7 @@ export function buildCampaignResultModel(
     totalTarget, totalActual, totalOffline, totalAffiliate,
     completionPct, totalCommission, reachedStoreCount, performance, deadlineLabel,
     rows,
+    maxTierCount: rows.reduce((max, r) => Math.max(max, r.tierProgress.length), 0),
   }
 }
 

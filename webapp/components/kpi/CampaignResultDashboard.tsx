@@ -89,7 +89,16 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                   <th className="text-right px-4 py-2.5">%</th>
                   <th className="text-right px-4 py-2.5">Nhịp độ</th>
                   <th className="text-right px-4 py-2.5">Còn thiếu</th>
-                  <th className="text-left px-4 py-2.5">Bậc đạt · Commission</th>
+                  {/* Tier progress (28/07): mobile giữ cột gộp cũ; desktop
+                      ≥1024px thay bằng N cột Bậc động (không hardcode 3 bậc —
+                      threshold/commission nằm trong từng cell vì có thể khác
+                      nhau giữa các store). Bảng đã overflow-x-auto. */}
+                  <th className="text-left px-4 py-2.5 lg:hidden">Bậc đạt · Commission</th>
+                  {Array.from({ length: m.maxTierCount }, (_, i) => (
+                    <th key={`tier-h-${i}`} className="hidden lg:table-cell text-left px-4 py-2.5 whitespace-nowrap">
+                      Bậc {i + 1}
+                    </th>
+                  ))}
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -125,7 +134,8 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                           : '—'}
                       </td>
                       <td className="px-4 py-2.5 text-right">{remaining != null ? vnd(remaining) : '—'}</td>
-                      <td className="px-4 py-2.5">
+                      {/* Mobile: cột gộp cũ giữ nguyên */}
+                      <td className="px-4 py-2.5 lg:hidden">
                         {a?.achieved_tier_order != null
                           ? (
                             <span className="inline-flex items-center whitespace-nowrap rounded-full bg-green-100 text-green-700 px-2 py-0.5 text-[11px] font-medium">
@@ -138,6 +148,29 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                             </span>
                           ) : '—'}
                       </td>
+                      {/* Desktop ≥1024px: tiến độ từng bậc (model tierProgress —
+                          Super ↔ SM cùng công thức; chưa sync → '—' không phải 0) */}
+                      {Array.from({ length: m.maxTierCount }, (_, i) => {
+                        const tp = r.tierProgress[i]
+                        return (
+                          <td key={`tier-${r.targetId}-${i}`} className="hidden lg:table-cell px-4 py-2.5 align-top">
+                            {!tp ? (
+                              <span className="text-muted-foreground">—</span>
+                            ) : (
+                              <div className="text-xs whitespace-nowrap">
+                                <p className="text-muted-foreground">{tp.threshold_pct}% · {vnd(tp.commission_amount)}</p>
+                                {tp.remaining_amount === null ? (
+                                  <p className="text-muted-foreground mt-0.5">—</p>
+                                ) : tp.reached ? (
+                                  <p className="font-medium text-green-600 mt-0.5">Đã đạt</p>
+                                ) : (
+                                  <p className="font-medium text-primary mt-0.5">Còn thiếu {vnd(tp.remaining_amount)}</p>
+                                )}
+                              </div>
+                            )}
+                          </td>
+                        )
+                      })}
                     </tr>
                   )
                 })}

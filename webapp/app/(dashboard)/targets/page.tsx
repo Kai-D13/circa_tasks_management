@@ -658,7 +658,9 @@ export default async function TargetsPage({
                   campaign={campaignViews.find((c) => c.id === selectedCampaignId) ?? campaignViews[0]}
                   todayISO={vnTodayISO}
                 />
-                <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Quản lý" todayISO={vnTodayISO} storeName={storeName} />
+                {/* Tier progress (28/07): QLCH desktop thấy "Còn thiếu" từng
+                    mốc thưởng; Staff dùng chung component nhưng prop tắt. */}
+                <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Quản lý" todayISO={vnTodayISO} storeName={storeName} showTierRemaining />
               </>
             )}
           </div>

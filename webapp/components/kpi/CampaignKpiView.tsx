@@ -1,5 +1,6 @@
 import { Card, CardContent } from '@/components/ui/card'
 import { breakdownModel, campaignFootnote } from '@/lib/kpi/campaignDisplay'
+import { buildTierProgress, type TierProgress } from '@/lib/kpi/resultModel'
 import { CampaignDailyChart } from '@/components/kpi/CampaignDailyChart'
 import { CampaignPicker } from '@/components/kpi/CampaignPicker'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
@@ -98,6 +99,7 @@ function markerFraction(pct: number, thresholds: number[], positions: number[]):
 
 export function CampaignKpiView({
   items, selectedId, daily, dailyError = false, roleLabel, todayISO, storeName,
+  showTierRemaining = false,
 }: {
   items: CampaignView[]
   selectedId?: string
@@ -106,6 +108,10 @@ export function CampaignKpiView({
   roleLabel: string
   todayISO: string
   storeName: string
+  // Tier progress (28/07): QLCH desktop ≥1024px thêm "Còn thiếu" vào từng ô
+  // Mốc thưởng; Staff dùng chung component nhưng prop TẮT → UI Staff không
+  // đổi; mobile mọi role giữ nguyên (dòng bổ sung hidden dưới lg).
+  showTierRemaining?: boolean
 }) {
   const sel = items.find((i) => i.id === selectedId) ?? items[0]
   const target = sel.kpi_target
@@ -138,6 +144,37 @@ export function CampaignKpiView({
   const reachedTier = tiers.find((t) => t.tier_order === reachedOrder) ?? null
   const expectedPool = sel.store_commission_pool ?? reachedTier?.commission_amount ?? 0
   const nextTier = tiers.find((t) => t.threshold_pct > pct) ?? null
+
+  // Tier progress (28/07): CÙNG công thức với bảng Super/SM (buildTierProgress
+  // — resultModel): target bậc = ceil(kpi_target × pct/100); backend đã xác
+  // nhận đạt → remaining ép 0; CHƯA SYNC → null (hiện '—', không phải 0).
+  const tierProgressByOrder = new Map<number, TierProgress>(
+    showTierRemaining
+      ? buildTierProgress(
+          target,
+          sel.actual_value === null
+            ? null
+            : { actual_value: sel.actual_value, achieved_tier_order: sel.achieved_tier_order },
+          tiers,
+        ).map((tp) => [tp.tier_order, tp])
+      : [],
+  )
+  const tierRemainingLine = (order: number) => {
+    if (!showTierRemaining) return null
+    const tp = tierProgressByOrder.get(order)
+    if (!tp) return null
+    return (
+      <p className="hidden lg:block text-[10px] mt-0.5">
+        {tp.remaining_amount === null ? (
+          <span className="text-muted-foreground">Còn thiếu: —</span>
+        ) : tp.reached ? (
+          <span className="font-semibold text-status-success">Đã đạt</span>
+        ) : (
+          <span className="text-muted-foreground">Còn thiếu: <span className="font-semibold text-primary">{vnd(tp.remaining_amount)}</span></span>
+        )}
+      </p>
+    )
+  }
 
   return (
     <div className="space-y-4">
@@ -363,6 +400,7 @@ export function CampaignKpiView({
                     >
                       <p className={cn('text-base font-bold', reached ? 'text-status-success' : isNext ? 'text-primary' : '')}>{t.threshold_pct}%</p>
                       <p className="text-[10px] text-muted-foreground">Thưởng: <span className={cn('font-semibold', isNext ? 'text-primary' : 'text-foreground')}>{vnd(t.commission_amount)}</span></p>
+                      {tierRemainingLine(t.tier_order)}
                     </div>
                   )
                 })}
@@ -381,7 +419,10 @@ export function CampaignKpiView({
                       )}
                     >
                       <p className={cn('text-sm font-bold', reached ? 'text-status-success' : isNext ? 'text-primary' : '')}>{t.threshold_pct}%</p>
-                      <p className="text-xs text-muted-foreground">Thưởng: <span className={cn('font-semibold', isNext ? 'text-primary' : 'text-foreground')}>{vnd(t.commission_amount)}</span></p>
+                      <div className="text-right">
+                        <p className="text-xs text-muted-foreground">Thưởng: <span className={cn('font-semibold', isNext ? 'text-primary' : 'text-foreground')}>{vnd(t.commission_amount)}</span></p>
+                        {tierRemainingLine(t.tier_order)}
+                      </div>
                     </div>
                   )
                 })}
