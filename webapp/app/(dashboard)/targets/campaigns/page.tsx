@@ -34,6 +34,7 @@ export default async function CampaignsPage() {
   ] = await Promise.all([
     supabase.from('kpi_campaigns')
       .select('id, name, start_date, end_date, status, is_test, updated_at')
+      .is('archived_at', null) // Archive (098): campaign lưu trữ biến mất khỏi list
       .order('created_at', { ascending: false }),
     supabase.from('kpi_campaign_store_targets').select('campaign_id, kpi_target'),
     supabase.from('kpi_campaign_store_actuals').select('campaign_id, actual_value, synced_at'),
@@ -176,7 +177,7 @@ export default async function CampaignsPage() {
                     <div className="hidden md:block w-40 shrink-0">{progress}</div>
 
                     <div className="flex items-center gap-1.5 shrink-0">
-                      <CampaignStatusButton id={c.id} status={c.status} />
+                      <CampaignStatusButton id={c.id} status={c.status} name={c.name} />
                       <Link href={`/targets/campaigns/${c.id}`} aria-label={`Xem ${c.name}`} className="text-muted-foreground hover:text-primary">
                         <ChevronRight className="h-4 w-4" />
                       </Link>

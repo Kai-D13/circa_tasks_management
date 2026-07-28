@@ -34,12 +34,14 @@ export async function GET(request: NextRequest) {
       .select('id')
     if (endErr) console.error('[sync-kpi-campaign] auto-end failed:', sanitizeOpsText(endErr.message))
 
-    // Active + recently-ended (≤3 days) campaigns to sync.
+    // Active + recently-ended (≤3 days) campaigns to sync. Archive (098):
+    // ended-đã-lưu-trữ trong cửa sổ 3 ngày cũng bị loại — archived đóng băng.
     const cutoff = new Date(Date.parse(vnTodayISO) - 3 * 86400_000).toISOString().slice(0, 10)
     const { data: campaigns, error: cErr } = await supabaseAdmin
       .from('kpi_campaigns')
       .select('id, name')
       .or(`status.eq.active,and(status.eq.ended,end_date.gte.${cutoff})`)
+      .is('archived_at', null)
     if (cErr) return NextResponse.json({ error: sanitizeOpsText(cErr.message) }, { status: 500 })
 
     // P3-C: toàn bộ contract batch (200/207/500 + body + log lines) nằm trong

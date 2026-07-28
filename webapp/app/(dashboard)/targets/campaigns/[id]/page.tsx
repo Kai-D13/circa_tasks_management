@@ -66,8 +66,10 @@ export default async function CampaignDetailPage({
 
   const supabase = await createClient()
   const { data: c } = await supabase
-    .from('kpi_campaigns').select('id, name, start_date, end_date, status, is_test, updated_at, metric_offline, metric_affiliate').eq('id', id).single()
+    .from('kpi_campaigns').select('id, name, start_date, end_date, status, is_test, updated_at, archived_at, metric_offline, metric_affiliate').eq('id', id).single()
   if (!c) notFound()
+  // Archive (098): URL campaign đã lưu trữ → 404 (biến mất khỏi mọi UI).
+  if (c.archived_at !== null) notFound()
 
   const tab: 'config' | 'result' = sp.tab === 'config' || sp.tab === 'result'
     ? sp.tab
@@ -143,7 +145,7 @@ export default async function CampaignDetailPage({
             <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', s.cls)}>{s.label}</span>
             {c.is_test && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700">TEST</span>}
           </div>
-          <CampaignStatusButton id={c.id} status={c.status} />
+          <CampaignStatusButton id={c.id} status={c.status} name={c.name} />
         </div>
         <p className="text-sm text-muted-foreground mt-0.5">
           {formatDate(c.start_date)} – {formatDate(c.end_date)} · {targets.length} cửa hàng · {resultModel.deadlineLabel}

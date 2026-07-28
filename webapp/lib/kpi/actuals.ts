@@ -19,10 +19,14 @@ export type { SyncCampaignResult }
 function realDeps(): SyncCampaignDeps {
   return {
     loadCampaign: async (id) => {
+      // Archive (098): campaign đã lưu trữ đóng băng — filter tại nguồn nên cả
+      // cron lẫn "Đồng bộ ngay" đều fail sạch ('Campaign không tồn tại'),
+      // không recompute số liệu cho campaign archived.
       const { data, error } = await supabaseAdmin
         .from('kpi_campaigns')
         .select('id, start_date, end_date, metric_offline, metric_affiliate')
         .eq('id', id)
+        .is('archived_at', null)
         .maybeSingle()
       return { data, error }
     },
