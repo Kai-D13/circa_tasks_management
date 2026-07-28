@@ -36,6 +36,10 @@ export function campaignFootnote(v: { metric_offline: boolean; metric_affiliate:
   return 'Nguồn: Circa Online · chỉ tính đơn giao thành công (DELIVERED)'
 }
 
+// (H1.2 smSelectorVisible đã GỠ 27/07: SM Dashboard r2 thay store-selector-
+// navigation bằng regional list + filter store trong dashboard — xem
+// lib/kpi/resultModel smScopeState.)
+
 // r1 P2#1: flag tắt + campaign có affiliate → khóa TOÀN BỘ editor (cả checkbox
 // Offline lẫn nút lưu) — không để user sửa được UI rồi server mới từ chối.
 export interface MetricEditorState {

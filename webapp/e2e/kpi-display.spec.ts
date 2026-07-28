@@ -73,6 +73,9 @@ test.describe('kpi display contract @desktop', () => {
     expect(r['Offline Synced At']).toBe('2026-07-23T09:58:00Z')
   })
 
+  // (test smSelectorVisible đã gỡ 27/07 cùng contract — SM Dashboard r2 dùng
+  // smScopeState trong kpi-result-model.spec thay thế.)
+
   test('affiliateDataStatus: Không áp dụng / Chưa đồng bộ / Đã đồng bộ', () => {
     expect(affiliateDataStatus(false, undefined)).toBe('Không áp dụng')
     expect(affiliateDataStatus(true, undefined)).toBe('Chưa đồng bộ')

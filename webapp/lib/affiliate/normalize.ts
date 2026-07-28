@@ -3,13 +3,17 @@
 // phải hợp lệ; row thiếu/sai field bắt buộc bị REJECT và đếm vào `rejected`,
 // không bao giờ ghi doanh số 0 âm thầm (total_price NOT NULL không default).
 
-// Known-set 7 giá trị đo thật 21-22/07 (D0 + fixture 148 đơn). Giá trị mới
-// chưa biết → 'other': cron vẫn chạy, UI badge neutral, sync run ghi cảnh báo.
+// Known-set 7 giá trị đo thật 21-22/07 (D0 + fixture 148 đơn) + WAIT_TO_DELIVER
+// (xuất hiện trong nguồn 27/07 — run success_with_notes; phân loại 'waiting'
+// = đơn CHỜ GIAO, không tính GMV, không đổi rule DELIVERED-only). Giá trị mới
+// chưa biết → 'other': cron vẫn chạy, UI badge neutral, sync run ghi cảnh báo
+// + health gate chặn READY tới khi được phân loại (fail-closed đúng thiết kế).
 const STATUS_NORM: Record<string, string> = {
   DELIVERED:        'delivered',
   DELIVERING:       'delivering',
   WAIT_FOR_PAYMENT: 'waiting',
   WAIT_FOR_PURCHASE:'waiting',
+  WAIT_TO_DELIVER:  'waiting',
   PROCESSING:       'processing',
   FAIL_TO_DELIVER:  'fail_to_deliver',
   CANCELED:         'canceled',

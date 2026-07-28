@@ -109,6 +109,19 @@ export function overviewDataState(healthReady: boolean, aggregateError: boolean)
 //   staff / admin thường / khác → 'denied' · flag tắt → 'denied' TẤT CẢ.
 // Data scoping thực thi = RLS (mappings đọc qua session client) — hàm này chỉ
 // quyết định gate route + biến thể UI; storeIds cho RPC derive từ rows RLS trả.
+// SM r5 (handoff 27/07): card GMV Affiliate REGIONAL trên landing /targets của
+// SM — flag bật + có ≥1 store active-OS được phân công (đã validate server-side
+// từ sm_store_assignments, KHÔNG nhận store từ query string) + KHÔNG ở campaign
+// detail. Hiện CẢ khi store không có campaign active. Flag off → false (không
+// query, không render). Health-first + 1 aggregate call toàn vùng do page lo.
+export function smRegionalGmvVisible(p: {
+  flagEnabled: boolean
+  storeCount: number
+  inCampaignDetail: boolean
+}): boolean {
+  return p.flagEnabled && p.storeCount > 0 && !p.inCampaignDetail
+}
+
 // r1.2b (audit P2): SM chỉ được vào overview khi có ÍT NHẤT MỘT store OS
 // ACTIVE trong danh sách phân công — assignment toàn FS/inactive cũng chặn
 // (đúng contract "không có store OS active → notFound", không mở route rồi
