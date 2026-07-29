@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test'
 import {
   ORDERS_PAGE_SIZE, nextCursorFrom, drilldownEnabled, reconcileState,
+  validOrdersRange, groupMappingsByStore,
 } from '../lib/affiliate/orders'
 
 // Drill-down đơn Affiliate (contract 28/07) — unit gate cho contract thuần:
@@ -43,5 +44,36 @@ test.describe('affiliate orders drill-down contract @desktop', () => {
       .toBe('mismatch')
     expect(reconcileState({ loadedAll: true, loadedCount: 3, loadedSum: 700_000, expectedOrders: 3, expectedGmv: 750_000 }))
       .toBe('mismatch')
+  })
+
+  test('r1 P2#3 validOrdersRange: ngày LỊCH thật (2026-02-31 fail dù đúng regex) · from>to fail · >366 ngày fail · hợp lệ ok', () => {
+    expect(validOrdersRange('2026-02-31', '2026-03-01').ok).toBe(false)  // ngày không tồn tại
+    expect(validOrdersRange('2026-13-01', '2026-12-31').ok).toBe(false)  // tháng không tồn tại
+    expect(validOrdersRange('26-07-01', '2026-07-28').ok).toBe(false)    // sai format
+    expect(validOrdersRange('2026-07-28', '2026-07-01').ok).toBe(false)  // đảo ngược
+    expect(validOrdersRange('2025-01-01', '2026-07-28').ok).toBe(false)  // >366 ngày
+    expect(validOrdersRange('2026-07-01', '2026-07-28')).toEqual({ ok: true })
+    expect(validOrdersRange('2026-07-28', '2026-07-28')).toEqual({ ok: true }) // 1 ngày
+    expect(validOrdersRange('2025-07-28', '2026-07-28')).toEqual({ ok: true }) // đúng biên 366
+  })
+
+  test('r1 P2#4 groupMappingsByStore: 1 store 2 partner code → 1 DÒNG mang đủ codes (hết lặp store/số/key); store khác giữ riêng; FS flag đúng', () => {
+    const g = groupMappingsByStore([
+      { partner_code: 'CIRCA-A1', partner_type: 'os', store_id: 's1', stores: { name: 'Store 1', code: 'POS0001' } },
+      { partner_code: 'CIRCA-A2', partner_type: 'os', store_id: 's1', stores: { name: 'Store 1', code: 'POS0001' } },
+      { partner_code: 'CIRCA-B', partner_type: 'fs', store_id: 's2', stores: { name: 'Store FS', code: 'POS0090' } },
+    ])
+    expect(g).toHaveLength(2)
+    const s1 = g.find((x) => x.store_id === 's1')!
+    expect(s1.partnerCodes).toEqual(['CIRCA-A1', 'CIRCA-A2'])
+    expect(s1.name).toBe('Store 1')
+    expect(s1.hasFs).toBe(false)
+    expect(g.find((x) => x.store_id === 's2')!.hasFs).toBe(true)
+    // Mapping trùng hệt (duplicate row) không nhân đôi code
+    const dup = groupMappingsByStore([
+      { partner_code: 'CIRCA-A1', partner_type: 'os', store_id: 's1', stores: { name: 'Store 1', code: null } },
+      { partner_code: 'CIRCA-A1', partner_type: 'os', store_id: 's1', stores: { name: 'Store 1', code: null } },
+    ])
+    expect(dup[0].partnerCodes).toEqual(['CIRCA-A1'])
   })
 })

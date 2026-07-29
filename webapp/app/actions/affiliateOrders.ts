@@ -5,7 +5,8 @@ import { isKpiAffiliateEnabled, isKpiCampaignEnabled } from '@/lib/kpi/flags'
 import { vnDayRange } from '@/lib/kpi/engine'
 import { sanitizeOpsText } from '@/lib/ops/sanitize'
 import {
-  ORDERS_PAGE_SIZE, nextCursorFrom, type AffiliateOrderRow, type OrdersCursor,
+  ORDERS_PAGE_SIZE, nextCursorFrom, validOrdersRange,
+  type AffiliateOrderRow, type OrdersCursor,
 } from '@/lib/affiliate/orders'
 
 // Drill-down đơn Affiliate (contract 28/07): đọc qua SESSION client →
@@ -31,6 +32,10 @@ export async function listAffiliateOrders(input: {
   if (!DATE_RE.test(input.from ?? '') || !DATE_RE.test(input.to ?? '')) {
     return { error: 'Khoảng ngày không hợp lệ' }
   }
+  // r1 (audit P2#3): ngày LỊCH thật + from ≤ to + span ≤366 ngày — regex không
+  // đủ (2026-02-31 lọt); RPC 099 có guard tương đương trong DB (2 lớp).
+  const range0 = validOrdersRange(input.from, input.to)
+  if (!range0.ok) return { error: range0.reason }
   const cursor = input.cursor ?? null
   if (cursor && !UUID_RE.test(cursor.id)) return { error: 'Cursor không hợp lệ' }
 

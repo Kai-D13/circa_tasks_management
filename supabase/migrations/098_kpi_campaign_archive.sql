@@ -21,6 +21,14 @@
 --      guard cũ 'draft/paused' một mình KHÔNG chặn được case này).
 --   D. REDEFINE rpc_activate_kpi_campaign: body 093 NGUYÊN VĂN + đúng MỘT
 --      guard archived (paused-đã-lưu-trữ không được kích hoạt lại).
+--   E. (r1 — audit P1#1) REDEFINE rpc_replace_campaign_actuals: body 092
+--      NGUYÊN VĂN + FOR UPDATE + guard archived khi đọc campaign. Đóng race
+--      "sync đang chạy ↔ admin archive": sync ghi actuals SAU khi campaign đã
+--      archive sẽ RAISE (archive commit trước → sync thấy archived_at khi lấy
+--      lock); sync lấy lock trước → archive CHỜ tới khi sync commit rồi mới
+--      archive (số liệu ghi trước thời điểm archive là hợp lệ, đóng băng từ
+--      đó). Race import-target ↔ sync cũng serialize qua cùng row lock
+--      (rpc_replace_campaign_targets đã FOR UPDATE từ 093).
 --
 -- RESTORE (SQL tay khi stakeholder cần khôi phục 1 campaign đã lưu trữ —
 -- chưa có màn "Đã lưu trữ" theo chốt hiện tại):
@@ -29,15 +37,17 @@
 --       updated_at = now()
 --   WHERE id = '<campaign-id>';
 --
--- ROLLBACK (đầy đủ, tái tạo đúng trạng thái 093):
+-- ROLLBACK (đầy đủ, tái tạo đúng trạng thái 092/093):
 --   1. DROP FUNCTION IF EXISTS public.rpc_archive_kpi_campaign(uuid, uuid, text);
 --   2. Tái tạo rpc_replace_campaign_targets + rpc_activate_kpi_campaign
 --      NGUYÊN VĂN theo migration 093 (bỏ guard archived).
---   3. ALTER TABLE public.kpi_campaigns
+--   3. Tái tạo rpc_replace_campaign_actuals NGUYÊN VĂN theo migration 092
+--      (bỏ FOR UPDATE + guard archived).
+--   4. ALTER TABLE public.kpi_campaigns
 --        DROP COLUMN IF EXISTS archived_reason,
 --        DROP COLUMN IF EXISTS archived_by,
 --        DROP COLUMN IF EXISTS archived_at;
---   4. DELETE FROM public.app_migrations WHERE version = '098';
+--   5. DELETE FROM public.app_migrations WHERE version = '098';
 -- ============================================================================
 
 BEGIN;
@@ -268,9 +278,187 @@ REVOKE ALL ON FUNCTION public.rpc_activate_kpi_campaign(uuid, timestamptz, uuid)
 GRANT EXECUTE ON FUNCTION public.rpc_activate_kpi_campaign(uuid, timestamptz, uuid)
   TO service_role;
 
+-- ── E. (r1 — audit P1#1) rpc_replace_campaign_actuals: body 092 NGUYÊN VĂN
+--    + FOR UPDATE + guard archived ───────────────────────────────────────────
+-- Thay đổi DUY NHẤT so với 092 (2 dòng cùng một chỗ): dòng đọc campaign lấy
+-- thêm archived_at + FOR UPDATE (serialize với rpc_archive_kpi_campaign —
+-- cùng lock row) và RAISE khi đã lưu trữ TRƯỚC mọi DELETE/INSERT. Toàn bộ
+-- validation (a)-(e) + per-row + replace-all + grants GIỮ NGUYÊN từng dòng.
+CREATE OR REPLACE FUNCTION public.rpc_replace_campaign_actuals(
+  p_campaign_id uuid,
+  p_daily   jsonb,  -- [{store_id, date, gmv, gmv_affiliate?, synced_at}]
+  p_actuals jsonb   -- [{store_id, actual_value, actual_offline?, actual_affiliate?,
+                    --   run_rate, remaining_target, achieved_tier_order,
+                    --   store_commission_pool, raw_row_count,
+                    --   offline_synced_at?, affiliate_synced_at?, synced_at}]
+                    -- (key có ? = caller cũ không gửi → fallback legacy)
+) RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_row         jsonb;
+  v_count       integer := 0;
+  v_m_offline   boolean;
+  v_m_affiliate boolean;
+  v_archived    timestamptz;
+  v_store       uuid;
+  v_value       numeric;
+  v_offline     numeric;
+  v_affiliate   numeric;
+  v_daily_off   numeric;
+  v_daily_aff   numeric;
+BEGIN
+  -- ── VALIDATE (trước mọi thao tác ghi) ──
+  -- 098: FOR UPDATE + archived (thay đổi duy nhất so với 092) — sync ghi số
+  -- liệu serialize với archive; campaign đã lưu trữ → RAISE, không ghi gì.
+  SELECT metric_offline, metric_affiliate, archived_at
+  INTO v_m_offline, v_m_affiliate, v_archived
+  FROM public.kpi_campaigns WHERE id = p_campaign_id FOR UPDATE;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'rpc_replace_campaign_actuals: campaign % không tồn tại', p_campaign_id;
+  END IF;
+  IF v_archived IS NOT NULL THEN
+    RAISE EXCEPTION 'rpc_replace_campaign_actuals: campaign % đã lưu trữ — không ghi số liệu', p_campaign_id;
+  END IF;
+
+  -- r2 (audit P1 tập payload): replace-all xóa snapshot cũ nên payload phải là
+  -- BỨC TRANH ĐẦY ĐỦ — thiếu/vượt/trùng đều từ chối trước khi xóa.
+  -- (a) Không duplicate store trong p_actuals.
+  IF (SELECT count(*) FROM jsonb_array_elements(coalesce(p_actuals, '[]'::jsonb)) e)
+     <> (SELECT count(DISTINCT e->>'store_id') FROM jsonb_array_elements(coalesce(p_actuals, '[]'::jsonb)) e) THEN
+    RAISE EXCEPTION 'rpc_replace_campaign_actuals: p_actuals có store trùng lặp';
+  END IF;
+  -- (b) Không duplicate (store_id, date) trong p_daily.
+  IF (SELECT count(*) FROM jsonb_array_elements(coalesce(p_daily, '[]'::jsonb)) e)
+     <> (SELECT count(DISTINCT (e->>'store_id') || '|' || (e->>'date')) FROM jsonb_array_elements(coalesce(p_daily, '[]'::jsonb)) e) THEN
+    RAISE EXCEPTION 'rpc_replace_campaign_actuals: p_daily có (store_id, date) trùng lặp';
+  END IF;
+  -- (c) MỖI target của campaign phải có ĐÚNG MỘT aggregate (targets ⊆ actuals;
+  --     chiều ngược actuals ⊆ targets check per-row bên dưới).
+  IF EXISTS (
+    SELECT 1 FROM public.kpi_campaign_store_targets t
+    WHERE t.campaign_id = p_campaign_id
+      AND NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements(coalesce(p_actuals, '[]'::jsonb)) e
+        WHERE (e->>'store_id')::uuid = t.store_id)
+  ) THEN
+    RAISE EXCEPTION 'rpc_replace_campaign_actuals: p_actuals THIẾU aggregate cho ít nhất 1 store trong targets của campaign % — payload phải đủ toàn bộ targets (replace-all)', p_campaign_id;
+  END IF;
+  -- (d) Store trong p_daily phải có aggregate trong p_actuals (daily ⊆ actuals).
+  IF EXISTS (
+    SELECT 1 FROM jsonb_array_elements(coalesce(p_daily, '[]'::jsonb)) e
+    WHERE NOT EXISTS (
+      SELECT 1 FROM jsonb_array_elements(coalesce(p_actuals, '[]'::jsonb)) a
+      WHERE a->>'store_id' = e->>'store_id')
+  ) THEN
+    RAISE EXCEPTION 'rpc_replace_campaign_actuals: p_daily chứa store không có aggregate trong p_actuals';
+  END IF;
+  -- (e) Store trong p_daily phải thuộc targets của campaign.
+  IF EXISTS (
+    SELECT 1 FROM jsonb_array_elements(coalesce(p_daily, '[]'::jsonb)) e
+    WHERE NOT EXISTS (
+      SELECT 1 FROM public.kpi_campaign_store_targets t
+      WHERE t.campaign_id = p_campaign_id AND t.store_id = (e->>'store_id')::uuid)
+  ) THEN
+    RAISE EXCEPTION 'rpc_replace_campaign_actuals: p_daily chứa store ngoài targets của campaign %', p_campaign_id;
+  END IF;
+
+  FOR v_row IN SELECT * FROM jsonb_array_elements(coalesce(p_actuals, '[]'::jsonb))
+  LOOP
+    v_store     := (v_row->>'store_id')::uuid;
+    v_value     := coalesce((v_row->>'actual_value')::numeric, 0);
+    v_offline   := coalesce((v_row->>'actual_offline')::numeric, (v_row->>'actual_value')::numeric, 0);
+    v_affiliate := coalesce((v_row->>'actual_affiliate')::numeric, 0);
+
+    IF NOT EXISTS (SELECT 1 FROM public.kpi_campaign_store_targets t
+                   WHERE t.campaign_id = p_campaign_id AND t.store_id = v_store) THEN
+      RAISE EXCEPTION 'rpc_replace_campaign_actuals: store % không thuộc targets của campaign %', v_store, p_campaign_id;
+    END IF;
+    IF abs(v_value - (v_offline + v_affiliate)) > 0.01 THEN
+      RAISE EXCEPTION 'rpc_replace_campaign_actuals: store % actual_value(%) <> actual_offline(%) + actual_affiliate(%)',
+        v_store, v_value, v_offline, v_affiliate;
+    END IF;
+    IF NOT v_m_offline AND v_offline <> 0 THEN
+      RAISE EXCEPTION 'rpc_replace_campaign_actuals: campaign tắt metric_offline nhưng store % có actual_offline=%', v_store, v_offline;
+    END IF;
+    IF NOT v_m_affiliate AND v_affiliate <> 0 THEN
+      RAISE EXCEPTION 'rpc_replace_campaign_actuals: campaign tắt metric_affiliate nhưng store % có actual_affiliate=%', v_store, v_affiliate;
+    END IF;
+
+    SELECT coalesce(sum((e->>'gmv')::numeric), 0),
+           coalesce(sum(coalesce((e->>'gmv_affiliate')::numeric, 0)), 0)
+    INTO v_daily_off, v_daily_aff
+    FROM jsonb_array_elements(coalesce(p_daily, '[]'::jsonb)) e
+    WHERE (e->>'store_id')::uuid = v_store;
+    IF abs(v_daily_off - v_offline) > 0.01 OR abs(v_daily_aff - v_affiliate) > 0.01 THEN
+      RAISE EXCEPTION 'rpc_replace_campaign_actuals: store % SUM(daily) off=%/aff=% không khớp aggregate off=%/aff=%',
+        v_store, v_daily_off, v_daily_aff, v_offline, v_affiliate;
+    END IF;
+  END LOOP;
+
+  -- ── REPLACE-ALL (nguyên logic 072; WHERE'd delete — pg_safeupdate-safe;
+  --    dọn ghost khi re-import bớt store; 1 transaction: không bao giờ chart
+  --    mới cạnh tổng cũ trên màn commission) ──
+  DELETE FROM public.kpi_campaign_store_daily_actuals WHERE campaign_id = p_campaign_id;
+  DELETE FROM public.kpi_campaign_store_actuals       WHERE campaign_id = p_campaign_id;
+
+  INSERT INTO public.kpi_campaign_store_daily_actuals
+    (campaign_id, store_id, date, gmv, gmv_affiliate, synced_at)
+  SELECT p_campaign_id,
+         (e->>'store_id')::uuid,
+         (e->>'date')::date,
+         coalesce((e->>'gmv')::numeric, 0),
+         coalesce((e->>'gmv_affiliate')::numeric, 0),
+         coalesce((e->>'synced_at')::timestamptz, now())
+  FROM jsonb_array_elements(coalesce(p_daily, '[]'::jsonb)) e;
+
+  FOR v_row IN SELECT * FROM jsonb_array_elements(coalesce(p_actuals, '[]'::jsonb))
+  LOOP
+    INSERT INTO public.kpi_campaign_store_actuals
+      (campaign_id, store_id, actual_value, actual_offline, actual_affiliate,
+       run_rate, remaining_target, achieved_tier_order, store_commission_pool,
+       raw_row_count, offline_synced_at, affiliate_synced_at, synced_at)
+    VALUES (
+      p_campaign_id,
+      (v_row->>'store_id')::uuid,
+      coalesce((v_row->>'actual_value')::numeric, 0),
+      -- fallback legacy: thiếu key mới → toàn bộ actual_value là offline
+      coalesce((v_row->>'actual_offline')::numeric, (v_row->>'actual_value')::numeric, 0),
+      coalesce((v_row->>'actual_affiliate')::numeric, 0),
+      (v_row->>'run_rate')::numeric,
+      (v_row->>'remaining_target')::numeric,
+      (v_row->>'achieved_tier_order')::integer,
+      (v_row->>'store_commission_pool')::numeric,
+      coalesce((v_row->>'raw_row_count')::integer, 0),
+      coalesce((v_row->>'offline_synced_at')::timestamptz, (v_row->>'synced_at')::timestamptz),
+      (v_row->>'affiliate_synced_at')::timestamptz,
+      coalesce((v_row->>'synced_at')::timestamptz, now())
+    )
+    ON CONFLICT (campaign_id, store_id) DO UPDATE SET
+      actual_value          = EXCLUDED.actual_value,
+      actual_offline        = EXCLUDED.actual_offline,
+      actual_affiliate      = EXCLUDED.actual_affiliate,
+      run_rate              = EXCLUDED.run_rate,
+      remaining_target      = EXCLUDED.remaining_target,
+      achieved_tier_order   = EXCLUDED.achieved_tier_order,
+      store_commission_pool = EXCLUDED.store_commission_pool,
+      raw_row_count         = EXCLUDED.raw_row_count,
+      offline_synced_at     = EXCLUDED.offline_synced_at,
+      affiliate_synced_at   = EXCLUDED.affiliate_synced_at,
+      synced_at             = EXCLUDED.synced_at;
+    v_count := v_count + 1;
+  END LOOP;
+
+  RETURN v_count;
+END $$;
+
+-- Re-assert grants dù signature không đổi (bài học 091 — không tin default).
+REVOKE ALL ON FUNCTION public.rpc_replace_campaign_actuals(uuid, jsonb, jsonb)
+  FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.rpc_replace_campaign_actuals(uuid, jsonb, jsonb)
+  TO service_role;
+
 INSERT INTO public.app_migrations (version, name, notes)
 VALUES ('098', 'kpi_campaign_archive',
-        'Soft archive campaign paused/ended (contract 28/07): cột archived_at/by/reason; RPC rpc_archive_kpi_campaign (lock row, chỉ paused/ended chưa archive, active phải pause trước, draft đi đường delete, KHÔNG xóa bảng con — service_role only); REDEFINE rpc_replace_campaign_targets + rpc_activate_kpi_campaign = body 093 nguyên văn + đúng 1 guard archived mỗi RPC (paused-đã-archive không import/activate được). Restore = SQL tay trong header. CHẠY TRƯỚC khi deploy code batch archive.')
+        'Soft archive campaign paused/ended (contract 28/07): cột archived_at/by/reason; RPC rpc_archive_kpi_campaign (lock row, chỉ paused/ended chưa archive, active phải pause trước, draft đi đường delete, KHÔNG xóa bảng con — service_role only); REDEFINE rpc_replace_campaign_targets + rpc_activate_kpi_campaign = body 093 nguyên văn + đúng 1 guard archived mỗi RPC; r1 (audit P1#1) REDEFINE rpc_replace_campaign_actuals = body 092 nguyên văn + FOR UPDATE + guard archived (đóng race sync-đang-chạy ↔ archive: sync không bao giờ ghi actuals/daily sau khi campaign đã lưu trữ). Restore = SQL tay trong header. CHẠY TRƯỚC khi deploy code batch archive.')
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;
@@ -281,10 +469,20 @@ COMMIT;
 --    SELECT column_name FROM information_schema.columns
 --    WHERE table_name='kpi_campaigns' AND column_name LIKE 'archived%';  -- 3 rows
 -- 2) SELECT proname, prosecdef FROM pg_proc WHERE proname IN
---    ('rpc_archive_kpi_campaign','rpc_replace_campaign_targets','rpc_activate_kpi_campaign');
---    -- 3 rows, prosecdef = t
--- 3) Grant matrix (cả 3 function): has_function_privilege anon/authenticated
+--    ('rpc_archive_kpi_campaign','rpc_replace_campaign_targets',
+--     'rpc_activate_kpi_campaign','rpc_replace_campaign_actuals');
+--    -- 4 rows, prosecdef = t
+-- 3) Grant matrix (cả 4 function): has_function_privilege anon/authenticated
 --    = false, service_role = true.
+-- 3b) (r1) rpc_replace_campaign_actuals giữ nguyên 092 + thêm lock/guard
+--    (cả 4 vế phải TRUE):
+--    with f as (select lower(pg_get_functiondef(
+--      'public.rpc_replace_campaign_actuals(uuid,jsonb,jsonb)'::regprocedure)) as body)
+--    select position('for update' in body) > 0                             as has_row_lock,
+--           position('đã lưu trữ' in body) > 0                             as has_archived_guard,
+--           position('p_actuals có store trùng lặp' in body) > 0           as keeps_validation,
+--           position('on conflict (campaign_id, store_id)' in body) > 0    as keeps_upsert
+--    from f;
 -- 4) Guard giữ nguyên 093 + thêm archived (cả 3 vế phải TRUE):
 --    with f as (select lower(pg_get_functiondef(
 --      'public.rpc_replace_campaign_targets(uuid,jsonb,text,uuid)'::regprocedure)) as body)
@@ -299,5 +497,14 @@ COMMIT;
 --      KHÔNG đổi so với trước archive.
 --    · rpc_activate trên campaign vừa archive → RAISE 'đã lưu trữ'.
 --    · rpc_replace_campaign_targets trên campaign vừa archive → RAISE 'đã lưu trữ'.
+--    · rpc_replace_campaign_actuals trên campaign vừa archive → RAISE 'đã lưu
+--      trữ — không ghi số liệu'; đếm actuals/daily KHÔNG đổi.
+-- 5b) (r1) RACE sync ↔ archive (2 session psql trên campaign is_test paused):
+--    · Session A: BEGIN; gọi rpc_replace_campaign_actuals(...) — GIỮ tx mở.
+--    · Session B: gọi rpc_archive_kpi_campaign → PHẢI CHỜ (row lock).
+--    · A COMMIT → B hoàn tất archive; actuals của A là snapshot cuối hợp lệ.
+--    · Đảo chiều: B archive commit trước → A gọi actuals → RAISE 'đã lưu trữ'.
+--    RACE import ↔ sync: A giữ tx rpc_replace_campaign_targets → B gọi
+--    rpc_replace_campaign_actuals PHẢI CHỜ (cùng row lock FOR UPDATE).
 -- 6) app_migrations '098' = 1 row.
 -- ============================================================================

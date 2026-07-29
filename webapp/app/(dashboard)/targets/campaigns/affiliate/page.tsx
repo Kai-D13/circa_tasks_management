@@ -11,7 +11,7 @@ import {
   reduceAffiliateAgg, parseOverviewRange, overviewDataState, overviewPageScope,
   canShowOwnOsGmv, smOverviewAllowed, type AffiliateAggInput,
 } from '@/lib/affiliate/overview'
-import { drilldownEnabled } from '@/lib/affiliate/orders'
+import { drilldownEnabled, groupMappingsByStore } from '@/lib/affiliate/orders'
 import { AffiliateStoreOrdersRow } from '@/components/affiliate/AffiliateStoreOrdersRow'
 import { CampaignsTabs } from '@/components/kpi/CampaignsTabs'
 import { PageHeader } from '@/components/ds/PageHeader'
@@ -160,10 +160,14 @@ export default async function AffiliateOverviewPage({ searchParams }: {
   }
 
   const mappings = ((mapRows ?? []) as unknown as MappingRow[])
-  // r1.3: chỉ còn filter store (partner filter đã bỏ — partner_code là
-  // metadata nhỏ dưới tên store trong bảng).
-  const filtered = mappings.filter((m) => !params.store || m.store_id === params.store)
-  const storeIds = [...new Set(filtered.map((m) => m.store_id))]
+  // r1 P2#4 (audit 28/07): GROUP THEO STORE — schema cho phép 1 store nhiều
+  // partner code (unique partner_code, không unique store_id); không group →
+  // store lặp dòng + số lặp trực quan + trùng key + mở lại cùng tập đơn.
+  // Partner codes thành metadata danh sách dưới tên store.
+  const storeGroups = groupMappingsByStore(mappings)
+  // r1.3: chỉ còn filter store (partner filter đã bỏ).
+  const filtered = storeGroups.filter((s) => !params.store || s.store_id === params.store)
+  const storeIds = filtered.map((s) => s.store_id)
 
   const filterForm = (
     <DataToolbar
@@ -181,8 +185,10 @@ export default async function AffiliateOverviewPage({ searchParams }: {
             <span className="text-xs text-muted-foreground">Cửa hàng</span>
             <select name="store" defaultValue={params.store ?? ''} className="h-9 rounded-lg border bg-card px-2 text-sm max-w-[220px]">
               <option value="">Tất cả</option>
-              {mappings.map((m) => (
-                <option key={m.store_id} value={m.store_id}>{m.stores?.name ?? m.partner_code}</option>
+              {/* r1 P2#4: option theo STORE đã dedupe — hết trùng key khi 1
+                  store có nhiều partner code */}
+              {storeGroups.map((s) => (
+                <option key={s.store_id} value={s.store_id}>{s.name ?? s.partnerCodes[0]}</option>
               ))}
             </select>
           </label>
@@ -228,8 +234,9 @@ export default async function AffiliateOverviewPage({ searchParams }: {
   const dataState = overviewDataState(health.ready, aggErrorMsg !== null)
   const blocked = dataState !== 'ok'
 
+  // r1 P2#4: 1 dòng / STORE (agg vốn đã theo store) — không còn lặp theo mapping.
   const rows = filtered
-    .map((m) => ({ ...m, agg: byStore.get(m.store_id) ?? { gmv: 0, orders: 0, lastDate: null } }))
+    .map((s) => ({ ...s, agg: byStore.get(s.store_id) ?? { gmv: 0, orders: 0, lastDate: null } }))
     .sort((a, b) => b.agg.gmv - a.agg.gmv)
 
   return (
@@ -283,7 +290,7 @@ export default async function AffiliateOverviewPage({ searchParams }: {
               // key gồm from/to → đổi filter hủy state cũ.
               return (
                 <AffiliateStoreOrdersRow
-                  key={`${r.partner_code}-${from}-${to}`}
+                  key={`${r.store_id}-${from}-${to}`}
                   storeId={r.store_id}
                   from={from}
                   to={to}
@@ -293,13 +300,14 @@ export default async function AffiliateOverviewPage({ searchParams }: {
                   parentCells={
                     <>
                       <TableCell>
-                        <span className="font-medium">{r.stores?.name ?? '—'}</span>
-                        <span className="text-xs text-muted-foreground"> · {r.stores?.code ?? '—'}</span>
-                        {r.partner_type === 'fs' && (
+                        <span className="font-medium">{r.name ?? '—'}</span>
+                        <span className="text-xs text-muted-foreground"> · {r.code ?? '—'}</span>
+                        {r.hasFs && (
                           <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground align-middle">FS</span>
                         )}
-                        {/* r1.3: partner_code = metadata nhỏ phục vụ đối soát */}
-                        <span className="block font-mono text-[11px] text-muted-foreground">{r.partner_code}</span>
+                        {/* r1.3 + r1 P2#4: partner codes = metadata đối soát —
+                            store nhiều mapping hiện đủ danh sách trên 1 dòng */}
+                        <span className="block font-mono text-[11px] text-muted-foreground">{r.partnerCodes.join(' · ')}</span>
                       </TableCell>
                       <TableCell className={cn('text-right tabular-nums', !has && 'text-muted-foreground')}>
                         {blocked ? '—' : r.agg.orders}
