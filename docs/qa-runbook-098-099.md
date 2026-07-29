@@ -70,16 +70,27 @@ SELECT
 
 ## 3. QA 098 functional — script (fixture is_test tự tạo + tự cleanup)
 
+**TRƯỚC khi run (r1.3):** tạm dừng Coolify cron `sync-kpi-campaign-actuals`
+(hoặc chạy lệch phút `:20` chẵn giờ) — fixture có giai đoạn ACTIVE ngắn; script
+BẮT BUỘC xác nhận qua env, thiếu là abort.
+
 ```powershell
 cd C:\webapp_management\webapp
 node scripts/qa-kpi-archive-098.mjs verify
-node scripts/qa-kpi-archive-098.mjs run
+$env:QA_KPI_CRON_PAUSED='YES'; node scripts/qa-kpi-archive-098.mjs run
 # KỲ VỌNG: "PASS TOÀN BỘ 10 bước" (draft/active chặn · paused OK · lần 2 chặn ·
-# bảng con NGUYÊN VẸN NỘI DUNG — deep-compare snapshot 5 nhóm, không chỉ đếm
-# row (r1.2) · import/activate/ghi-actuals trên archived đều RAISE · cleanup
-# cascade theo marker, chạy trong finally kể cả khi lỗi giữa chừng).
-# Fixture tên unique mỗi run + marker .qa-archive-098.json; nếu còn sót:
-# node scripts/qa-kpi-archive-098.mjs cleanup
+# bảng con NGUYÊN VẸN NỘI DUNG — deep-compare select(*) canonical-sort 5 nhóm ·
+# import/activate/ghi-actuals trên archived đều RAISE · cleanup 3-ĐIỀU-KIỆN:
+# delete OK + verify OK + count=0 → mới gỡ marker; DB chưa sạch → marker GIỮ
+# NGUYÊN + exit ≠ 0, không bao giờ 'PASS TOÀN BỘ' giả).
+# Flow run KHÔNG process.exit giữa chừng (throw) → cleanup finally luôn chạy.
+
+# NEGATIVE QA (r1.3 điểm 11 — chạy 1 lần để chứng minh cleanup):
+$env:QA_KPI_CRON_PAUSED='YES'; $env:QA_BREAK_STEP='yes'; node scripts/qa-kpi-archive-098.mjs run
+# KỲ VỌNG: FAIL 'QA_BREAK_STEP' NHƯNG cleanup vẫn chạy đủ 3 điều kiện, marker
+# được gỡ (DB sạch), exit code = 1. Sau đó bỏ env: Remove-Item Env:QA_BREAK_STEP
+
+# Fixture sót (nếu run đứt kiểu mất mạng): node scripts/qa-kpi-archive-098.mjs cleanup
 ```
 
 Sau đó QA UI nhanh (localhost hoặc chờ deploy): campaign archived biến mất
@@ -131,20 +142,23 @@ SELECT indexname FROM pg_indexes WHERE tablename = 'affiliate_orders' ORDER BY 1
 
 ## 7. QA 099 role matrix + đối soát — script
 
-**TRƯỚC fixture-up (r1.2):** tạm dừng Coolify Scheduled Task
-`pull-affiliate-orders` (Disable) — full-snapshot reconciliation sẽ đánh dấu
-`source_active=false` các đơn fixture không có trong nguồn Mongo. Bật lại
-NGAY sau `fixture-down`.
+**TRƯỚC fixture-up:** tạm dừng Coolify Scheduled Task `pull-affiliate-orders`
+(Disable) — full-snapshot reconciliation sẽ đánh dấu `source_active=false`
+các đơn fixture không có trong nguồn Mongo. Bật lại NGAY sau `fixture-down`.
+r1.3: script ENFORCE bằng env `QA_AFFILIATE_CRON_PAUSED=YES` + kiểm
+`affiliate_sync_runs` không có run 'running' — thiếu là abort trước insert.
 
 Cơ chế an toàn của script (tự động, abort nếu vi phạm): id động mỗi run +
-marker `.qa-drill-fixture.json` ghi TRƯỚC insert; preflight dải id trống +
-baseline 0 đơn delivered-active của POS0059 trong cửa sổ RETRO 02/2024;
-verify đủ 55 id sau insert; `fixture-down` CHỈ xóa id trong marker.
+marker `.qa-drill-fixture.json` (kind/schemaVersion, VALIDATE đủ trước khi
+dùng: UUID store, đúng 55 id, safe-integer, nằm trong vùng ID QA) ghi TRƯỚC
+insert; preflight dải id trống + baseline 0 đơn delivered-active của POS0059
+trong cửa sổ RETRO 02/2024; verify đủ 55 id sau insert; `fixture-down` contract
+3 điều kiện (delete OK + verify OK + count=0) mới gỡ marker.
 
 ```powershell
 cd C:\webapp_management\webapp
 node scripts/qa-affiliate-orders-099.mjs verify
-node scripts/qa-affiliate-orders-099.mjs fixture-up     # preflight + 55 đơn QA (54 dương + 1 ÂM)
+$env:QA_AFFILIATE_CRON_PAUSED='YES'; node scripts/qa-affiliate-orders-099.mjs fixture-up   # preflight + 55 đơn QA (54 dương + 1 ÂM)
 
 # Chạy CHECK cho TỪNG account (Super lấy từ session RPC is_super_admin();
 # role bị từ chối phải đúng message 'Không có quyền'; có thêm check FS scope):

@@ -41,6 +41,11 @@ const anonKey = env.NEXT_PUBLIC_SUPABASE_ANON_KEY
 const QA_STORE_CODE = 'POS0059'
 const N = 55
 const MARKER = '.qa-drill-fixture.json'
+const MARKER_KIND = 'qa-drill-fixture'
+// Vùng ID QA: mọi id fixture phải nằm trong dải này — validate trước khi delete.
+const QA_ID_MIN = 9_900_000_000_000
+const QA_ID_MAX = 9_901_000_001_000
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 // Cửa sổ RETRO 02/2024 — trước khi Affiliate tồn tại (chương trình bắt đầu
 // 07/2026) → baseline production = 0 đơn; preflight vẫn XÁC NHẬN lại số 0 đó.
 const FROM_D = '2024-02-01'
@@ -63,9 +68,22 @@ function assertDenied(res, label) {
   assert(!!res.error && res.error.message.includes('Không có quyền'), label,
     res.error ? `(error khác kỳ vọng: ${res.error.message})` : '→ GỌI ĐƯỢC!')
 }
+// r1.3 (P2#4): marker là input KHÔNG TIN CẬY với service-role — validate đủ
+// (kind/schemaVersion/UUID store/đúng 55 id/safe integer/nằm trong vùng QA)
+// trước khi cho bất kỳ thao tác nào, đặc biệt là delete.
 function loadMarker() {
-  if (!fs.existsSync(MARKER)) { console.error('FAIL: chưa có marker', MARKER, '— chạy fixture-up trước.'); process.exit(1) }
-  return JSON.parse(fs.readFileSync(MARKER, 'utf8'))
+  if (!fs.existsSync(MARKER)) { console.error('FAIL: chưa có marker', MARKER, '— chạy fixture-up trước (không tự đoán id).'); process.exit(1) }
+  const m = JSON.parse(fs.readFileSync(MARKER, 'utf8'))
+  const bad =
+    m.kind !== MARKER_KIND ? 'kind sai'
+    : m.schemaVersion !== 1 ? 'schemaVersion sai'
+    : !UUID_RE.test(m.storeId ?? '') ? 'storeId không phải UUID'
+    : !Array.isArray(m.ids) || m.ids.length !== N ? `ids phải đúng ${N} phần tử`
+    : !m.ids.every((x) => Number.isSafeInteger(x)) ? 'ids chứa giá trị không phải safe integer'
+    : !m.ids.every((x) => x >= QA_ID_MIN && x <= QA_ID_MAX) ? `ids ngoài vùng QA [${QA_ID_MIN}, ${QA_ID_MAX}]`
+    : null
+  if (bad) { console.error(`FAIL: marker hỏng/bị sửa (${bad}) — KHÔNG thao tác gì; kiểm tra tay rồi xóa marker thủ công.`); process.exit(1) }
+  return m
 }
 
 async function qaStoreId() {
@@ -93,6 +111,14 @@ async function fixtureUp() {
     console.error('FAIL: marker', MARKER, 'đang tồn tại — fixture trước chưa dọn (fixture-down trước).')
     process.exit(1)
   }
+  // r1.3 (P2#5): ENFORCE cron pause — không chỉ nhắc. Thiếu xác nhận → abort
+  // TRƯỚC khi insert; đồng thời kiểm không có sync đang chạy.
+  if (process.env.QA_AFFILIATE_CRON_PAUSED !== 'YES') {
+    console.error("FAIL: thiếu xác nhận QA_AFFILIATE_CRON_PAUSED=YES — tạm dừng Coolify cron pull-affiliate-orders rồi chạy: $env:QA_AFFILIATE_CRON_PAUSED='YES'; node scripts/qa-affiliate-orders-099.mjs fixture-up")
+    process.exit(1)
+  }
+  const running = must(await svc.from('affiliate_sync_runs').select('*', { count: 'exact', head: true }).eq('status', 'running'), 'đếm sync đang chạy')
+  if (running.count !== 0) { console.error(`FAIL: có ${running.count} affiliate sync đang 'running' — chờ xong/xử lý rồi mới tạo fixture.`); process.exit(1) }
   const sid = await qaStoreId()
   // ID động mỗi run — base ngẫu nhiên vùng 9.9e12 (bigint, ngoài mọi order_id thật).
   const base = 9_900_000_000_000 + Math.floor(Math.random() * 1_000_000_000)
@@ -110,7 +136,10 @@ async function fixtureUp() {
     process.exit(1)
   }
   // Marker ghi TRƯỚC khi insert (audit r1.2 điểm 1) — cleanup luôn biết đúng dải.
-  fs.writeFileSync(MARKER, JSON.stringify({ ids, storeId: sid, storeCode: QA_STORE_CODE, from: FROM_D, to: TO_D, range: RANGE, at: new Date().toISOString() }))
+  fs.writeFileSync(MARKER, JSON.stringify({
+    kind: MARKER_KIND, schemaVersion: 1, createdAt: new Date().toISOString(),
+    ids, storeId: sid, storeCode: QA_STORE_CODE, from: FROM_D, to: TO_D, range: RANGE,
+  }))
 
   const rows = ids.map((oid, i) => ({
     order_id: oid,
@@ -230,14 +259,18 @@ async function check() {
 }
 
 async function fixtureDown() {
-  // r1.2: CHỈ xóa đúng ids trong marker — không marker, không xóa gì.
+  // r1.3: marker được VALIDATE trong loadMarker; contract 3 điều kiện — delete
+  // không lỗi + verify không lỗi + count 0 → mới gỡ marker; lỗi nào cũng GIỮ
+  // marker + exit ≠ 0 (không bao giờ mất dấu fixture khi DB chưa sạch).
   const mk = loadMarker()
-  const del = must(await svc.from('affiliate_orders').delete().in('order_id', mk.ids).select('order_id'), 'xóa fixture theo marker')
-  const left = must(await svc.from('affiliate_orders').select('*', { count: 'exact', head: true }).in('order_id', mk.ids), 'verify sạch')
-  if (left.count !== 0) { console.error(`FAIL: còn ${left.count} row trong dải marker sau khi xóa`); process.exit(1) }
+  const del = await svc.from('affiliate_orders').delete().in('order_id', mk.ids).select('order_id')
+  if (del.error) { console.error('FAIL: delete lỗi —', del.error.message, '→ marker GIỮ NGUYÊN'); process.exit(1) }
+  const left = await svc.from('affiliate_orders').select('*', { count: 'exact', head: true }).in('order_id', mk.ids)
+  if (left.error) { console.error('FAIL: verify lỗi —', left.error.message, '→ marker GIỮ NGUYÊN'); process.exit(1) }
+  if (left.count !== 0) { console.error(`FAIL: còn ${left.count} row trong dải marker → marker GIỮ NGUYÊN`); process.exit(1) }
   fs.unlinkSync(MARKER)
-  console.log(`OK: đã xóa ${del.data.length} đơn QA (exact ids từ marker) · verify 0 row còn lại · marker đã gỡ`)
-  console.log('NHẮC: bật lại Coolify cron pull-affiliate-orders nếu đã tạm dừng.')
+  console.log(`OK: đã xóa ${del.data.length} đơn QA (exact ids từ marker đã validate) · verify 0 row · marker đã gỡ`)
+  console.log('NHẮC: bật lại Coolify cron pull-affiliate-orders.')
 }
 
 const cmds = { verify, 'fixture-up': fixtureUp, check, 'fixture-down': fixtureDown }
