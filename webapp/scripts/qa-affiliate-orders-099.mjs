@@ -68,19 +68,25 @@ function assertDenied(res, label) {
   assert(!!res.error && res.error.message.includes('Không có quyền'), label,
     res.error ? `(error khác kỳ vọng: ${res.error.message})` : '→ GỌI ĐƯỢC!')
 }
-// r1.3 (P2#4): marker là input KHÔNG TIN CẬY với service-role — validate đủ
-// (kind/schemaVersion/UUID store/đúng 55 id/safe integer/nằm trong vùng QA)
-// trước khi cho bất kỳ thao tác nào, đặc biệt là delete.
+// r1.3/r1.4 (P2#4): marker là input KHÔNG TIN CẬY với service-role — validate
+// TOÀN BỘ (kind/schemaVersion/UUID store/đúng 55 id DUY NHẤT/safe integer/
+// vùng QA/store code/cửa sổ fixture/đúng Supabase project) trước khi cho bất
+// kỳ thao tác nào, đặc biệt là delete.
 function loadMarker() {
   if (!fs.existsSync(MARKER)) { console.error('FAIL: chưa có marker', MARKER, '— chạy fixture-up trước (không tự đoán id).'); process.exit(1) }
   const m = JSON.parse(fs.readFileSync(MARKER, 'utf8'))
   const bad =
     m.kind !== MARKER_KIND ? 'kind sai'
     : m.schemaVersion !== 1 ? 'schemaVersion sai'
+    : m.projectUrl !== URL ? 'marker thuộc Supabase project KHÁC (.env.local hiện tại không khớp)'
     : !UUID_RE.test(m.storeId ?? '') ? 'storeId không phải UUID'
+    : m.storeCode !== QA_STORE_CODE ? `storeCode phải là ${QA_STORE_CODE}`
     : !Array.isArray(m.ids) || m.ids.length !== N ? `ids phải đúng ${N} phần tử`
+    : new Set(m.ids).size !== N ? `ids phải DUY NHẤT đủ ${N} giá trị`
     : !m.ids.every((x) => Number.isSafeInteger(x)) ? 'ids chứa giá trị không phải safe integer'
     : !m.ids.every((x) => x >= QA_ID_MIN && x <= QA_ID_MAX) ? `ids ngoài vùng QA [${QA_ID_MIN}, ${QA_ID_MAX}]`
+    : m.from !== FROM_D || m.to !== TO_D ? `cửa sổ ngày phải đúng ${FROM_D}..${TO_D}`
+    : m.range?.from !== RANGE.from || m.range?.to !== RANGE.to ? 'range timestamptz không khớp cửa sổ fixture'
     : null
   if (bad) { console.error(`FAIL: marker hỏng/bị sửa (${bad}) — KHÔNG thao tác gì; kiểm tra tay rồi xóa marker thủ công.`); process.exit(1) }
   return m
@@ -135,9 +141,10 @@ async function fixtureUp() {
     console.error(`FAIL: baseline cửa sổ ${FROM_D}..${TO_D} của ${QA_STORE_CODE} = ${base0.count} đơn (kỳ vọng 0) — chọn cửa sổ khác, ABORT.`)
     process.exit(1)
   }
-  // Marker ghi TRƯỚC khi insert (audit r1.2 điểm 1) — cleanup luôn biết đúng dải.
+  // Marker ghi TRƯỚC khi insert (audit r1.2 điểm 1) — cleanup luôn biết đúng
+  // dải; r1.4: kèm projectUrl để marker không dùng nhầm sang project khác.
   fs.writeFileSync(MARKER, JSON.stringify({
-    kind: MARKER_KIND, schemaVersion: 1, createdAt: new Date().toISOString(),
+    kind: MARKER_KIND, schemaVersion: 1, createdAt: new Date().toISOString(), projectUrl: URL,
     ids, storeId: sid, storeCode: QA_STORE_CODE, from: FROM_D, to: TO_D, range: RANGE,
   }))
 

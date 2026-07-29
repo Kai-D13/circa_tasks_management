@@ -37,7 +37,8 @@ for (const line of fs.readFileSync('.env.local', 'utf8').split(/\r?\n/)) {
 for (const k of ['NEXT_PUBLIC_SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY']) {
   if (!env[k]) { console.error('FAIL: thiếu', k, 'trong .env.local'); process.exitCode = 1; process.exit() }
 }
-const svc = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } })
+const URL = env.NEXT_PUBLIC_SUPABASE_URL
+const svc = createClient(URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } })
 
 const MARKER = '.qa-archive-098.json'
 const MARKER_KIND = 'qa-archive-098'
@@ -108,8 +109,9 @@ function removeMarkerIfClean(clean) {
 function loadMarker() {
   if (!fs.existsSync(MARKER)) throw new Error(`không có marker ${MARKER} — không có fixture nào cần dọn (không tự đoán).`)
   const m = JSON.parse(fs.readFileSync(MARKER, 'utf8'))
-  if (m.kind !== MARKER_KIND || m.schemaVersion !== 1 || !UUID_RE.test(m.campaignId ?? '')) {
-    throw new Error(`marker hỏng/sai schema (${JSON.stringify({ kind: m.kind, schemaVersion: m.schemaVersion })}) — KHÔNG xóa gì; kiểm tra tay.`)
+  // r1.4: kèm check projectUrl — marker của project khác không được dùng ở đây.
+  if (m.kind !== MARKER_KIND || m.schemaVersion !== 1 || !UUID_RE.test(m.campaignId ?? '') || m.projectUrl !== URL) {
+    throw new Error(`marker hỏng/sai schema/khác Supabase project (${JSON.stringify({ kind: m.kind, schemaVersion: m.schemaVersion, projectMatch: m.projectUrl === URL })}) — KHÔNG xóa gì; kiểm tra tay.`)
   }
   return m
 }
@@ -125,10 +127,11 @@ async function verify() {
 
 async function run() {
   if (fs.existsSync(MARKER)) { fail(`marker ${MARKER} đang tồn tại — run trước chưa dọn; chạy \`cleanup\` trước.`); return }
-  // r1.3 (P2#5/điểm 10): fixture có giai đoạn ACTIVE ngắn — bắt xác nhận cron
-  // sync KPI đã tạm dừng/lệch phút, tránh cron nhặt campaign test.
+  // r1.3/r1.4 (P2#5/điểm 10): fixture có giai đoạn ACTIVE ngắn — bắt xác nhận
+  // đã DISABLE THẬT Coolify task sync-kpi-campaign-actuals (audit: không dùng
+  // cách "chạy lệch phút"); env chỉ là lời xác nhận của người chạy.
   if (process.env.QA_KPI_CRON_PAUSED !== 'YES') {
-    fail('thiếu xác nhận QA_KPI_CRON_PAUSED=YES — tạm dừng (hoặc chạy lệch phút :20 chẵn giờ của) cron sync-kpi-campaign-actuals rồi set env này.')
+    fail('thiếu xác nhận QA_KPI_CRON_PAUSED=YES — DISABLE Coolify task sync-kpi-campaign-actuals trước, rồi set env này.')
     return
   }
   const QA_NAME = `QA-ARCHIVE-098-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e6).toString(36)}`
@@ -141,7 +144,7 @@ async function run() {
       metric_offline: true, metric_affiliate: false, status: 'draft', is_test: true,
     }).select('id').single(), 'tạo campaign fixture')
     id = camp.data.id
-    fs.writeFileSync(MARKER, JSON.stringify({ kind: MARKER_KIND, schemaVersion: 1, campaignId: id, name: QA_NAME, createdAt: new Date().toISOString() }))
+    fs.writeFileSync(MARKER, JSON.stringify({ kind: MARKER_KIND, schemaVersion: 1, campaignId: id, name: QA_NAME, createdAt: new Date().toISOString(), projectUrl: URL }))
     console.log('fixture campaign:', id, `(${QA_NAME}, is_test, draft) — marker đã ghi`)
 
     expectRaise(await svc.rpc('rpc_archive_kpi_campaign', { p_campaign_id: id, p_actor: null }), '1. archive DRAFT', 'Chỉ lưu trữ')

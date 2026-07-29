@@ -1,15 +1,21 @@
 # QA Runbook — Migration 098 (Campaign Archive) + 099 (Affiliate Orders Drill-down)
 
-> Batch `feat/kpi-archive-orders-tiers` (r1.2 @ audit 28/07). Thứ tự BẮT BUỘC:
+> Batch `feat/kpi-archive-orders-tiers` (r1.4 @ audit 28/07). Thứ tự BẮT BUỘC:
 > **preflight → 098 → verify 098 → QA 098 → gửi output audit → 099 → verify 099
 > → QA 099 → QA browser → gates → merge → deploy code**. KHÔNG chạy 099 cùng
 > lúc với 098 (khoanh vùng lỗi). Script chạy từ thư mục `webapp/`.
 >
 > **XÁC NHẬN MÔI TRƯỜNG (câu hỏi audit r1.1):** `.env.local` của 2 QA script
 > trỏ vào **Supabase PRODUCTION** (project không có Supabase QA riêng — QA
-> từ trước đến nay đều trên prod DB bằng fixture/is_test). Vì vậy r1.2 đã
-> cứng hóa cô lập: fixture id ĐỘNG + marker-first + preflight baseline-0 +
-> cleanup chỉ-theo-marker + cửa sổ RETRO 02/2024 + yêu cầu tạm dừng cron.
+> từ trước đến nay đều trên prod DB bằng fixture/is_test). Cứng hóa r1.2→r1.4:
+> fixture id ĐỘNG + marker-first (validate đủ: kind/schemaVersion/unique 55
+> id/vùng ID QA/store code/cửa sổ/ĐÚNG Supabase project) + preflight
+> baseline-0 + cleanup contract 3 điều kiện + ENFORCE tắt cron qua env.
+>
+> **Cron gate (audit r1.3):** env `QA_*_CRON_PAUSED=YES` chỉ là XÁC NHẬN của
+> người chạy — trước fixture QA phải **Disable THẬT** 2 Coolify Scheduled
+> Task: `sync-kpi-campaign-actuals` (trước mục 3) và `pull-affiliate-orders`
+> (trước mục 7). Không dùng cách "chạy lệch phút". Bật lại ngay sau QA.
 
 ## 0. Preflight
 
@@ -70,9 +76,10 @@ SELECT
 
 ## 3. QA 098 functional — script (fixture is_test tự tạo + tự cleanup)
 
-**TRƯỚC khi run (r1.3):** tạm dừng Coolify cron `sync-kpi-campaign-actuals`
-(hoặc chạy lệch phút `:20` chẵn giờ) — fixture có giai đoạn ACTIVE ngắn; script
-BẮT BUỘC xác nhận qua env, thiếu là abort.
+**TRƯỚC khi run (r1.3/r1.4):** **Disable THẬT** Coolify task
+`sync-kpi-campaign-actuals` (không dùng cách chạy lệch phút) — fixture có giai
+đoạn ACTIVE ngắn; script BẮT BUỘC xác nhận qua env, thiếu là abort. Bật lại
+sau khi `run` xong.
 
 ```powershell
 cd C:\webapp_management\webapp
