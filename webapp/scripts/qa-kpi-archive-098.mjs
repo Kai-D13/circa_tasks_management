@@ -12,9 +12,10 @@
 //   · Snapshot bảng con = select('*') TOÀN BỘ CỘT + canonical-sort theo
 //     primary/unique key rồi deep-compare.
 //   · Marker có kind/schemaVersion/createdAt — validate trước khi dùng.
-//   · fixture có giai đoạn ACTIVE ngắn → yêu cầu QA_KPI_CRON_PAUSED=YES
-//     (xác nhận cron sync-kpi-campaign-actuals đã tạm dừng hoặc chạy lệch
-//     phút cron `20 */2`) trước khi tạo fixture.
+//   · fixture có giai đoạn ACTIVE ngắn → yêu cầu QA_KPI_CRON_PAUSED=YES:
+//     lời XÁC NHẬN đã DISABLE THẬT Coolify task sync-kpi-campaign-actuals
+//     (r1.4 audit: không dùng cách chạy lệch phút) — giữ Disabled XUYÊN SUỐT
+//     normal run + negative run + cleanup + SQL xác nhận sạch.
 //   · Negative QA: QA_BREAK_STEP=yes → cố ý throw sau bước 6 để chứng minh
 //     cleanup vẫn chạy và marker chỉ mất khi DB sạch.
 //
@@ -89,7 +90,15 @@ async function childSnapshot(id) {
 
 // r1.3 (P1#1+#2): cleanup contract 3 điều kiện — trả true CHỈ khi DB chắc chắn
 // sạch; mọi nhánh lỗi → failed=true + false (caller GIỮ marker).
+// r1.5 (audit r1.4 P2-low): TRƯỚC delete đối chiếu row là fixture QA thật —
+// name prefix QA-ARCHIVE-098-* + is_test=true; không khớp → KHÔNG xóa.
 async function cleanupFixture(campaignId) {
+  const row = await svc.from('kpi_campaigns').select('id, name, is_test').eq('id', campaignId).maybeSingle()
+  if (row.error) { fail('cleanup: đọc row lỗi', row.error.message); return false }
+  if (row.data && (!String(row.data.name ?? '').startsWith('QA-ARCHIVE-098-') || row.data.is_test !== true)) {
+    fail('cleanup: row KHÔNG phải fixture QA (name/is_test không khớp) — KHÔNG xóa', JSON.stringify({ name: row.data.name, is_test: row.data.is_test }))
+    return false
+  }
   const del = await svc.from('kpi_campaigns').delete().eq('id', campaignId).eq('is_test', true).select('id')
   if (del.error) { fail('cleanup: delete lỗi', del.error.message); return false }
   const left = await svc.from('kpi_campaigns').select('*', { count: 'exact', head: true }).eq('id', campaignId)

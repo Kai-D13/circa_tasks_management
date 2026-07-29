@@ -103,7 +103,23 @@ $env:QA_KPI_CRON_PAUSED='YES'; $env:QA_BREAK_STEP='yes'; node scripts/qa-kpi-arc
 Sau đó QA UI nhanh (localhost hoặc chờ deploy): campaign archived biến mất
 khỏi list `/targets/campaigns` + detail 404 + export 404.
 
-## 4. QA 098 race 2-session (nếu có thể — cần psql, SQL editor không giữ được tx)
+## 4. QA 098 race 2-connection (GATE concurrency — chọn 1 trong 2 cách)
+
+**Cách A — script tự động (khuyến nghị, r1.5):** mở 2 connection Postgres thật
+bằng driver `pg`; cần connection string DB (lấy từ Coolify, không commit/print):
+
+```powershell
+cd C:\webapp_management\webapp
+$env:QA_DB_URL='postgres://...'   # Supabase self-hosted Postgres
+node scripts/qa-race-098.mjs
+Remove-Item Env:QA_DB_URL
+# KỲ VỌNG: "RACE GATE 098 PASS (3/3)" — (1) archive BỊ CHẶN khi phiên sync giữ
+# row lock ≥1.5s · (2) archive hoàn tất ngay sau sync COMMIT · (3) ghi actuals
+# SAU archive → RAISE 'đã lưu trữ'. Fixture paused is_test riêng, cleanup
+# exact-id trong finally; crash → qa-kpi-archive-098.mjs cleanup dọn được.
+```
+
+**Cách B — psql 2 session tay (nếu có psql):**
 
 ```text
 Session A (psql):                       Session B (psql):
