@@ -2,8 +2,16 @@
 -- 099_affiliate_orders_drilldown.sql
 -- ⚠ DRAFT — CHƯA CHẠY cho tới khi stakeholder audit pass. Khi được duyệt:
 --   PHẢI chạy TRƯỚC khi deploy code drill-down (UI gọi RPC — thiếu function
---   là expand lỗi). Function-only, KHÔNG đổi schema/data — idempotent,
---   pg_safeupdate-safe.
+--   là expand lỗi). KHÔNG đổi data; migration gồm 3 nhóm thay đổi (r1 P3 —
+--   header cũ ghi "function-only" là SAI, sửa để handoff/rollback không
+--   hiểu nhầm):
+--     1. FUNCTION MỚI rpc_list_affiliate_orders (whitelist + keyset).
+--     2. RLS: REDEFINE aff_orders_select (super-only direct select).
+--     3. INDEX: thêm idx_affiliate_orders_store_completed_id + DROP index 092
+--        bị phủ prefix (CREATE INDEX thường trong transaction — bảng hiện
+--        230 rows/336kB, preflight 28/07 PASS; nếu sau này bảng lớn phải tách
+--        CREATE INDEX CONCURRENTLY ngoài transaction + chạy lúc ít traffic).
+--   Idempotent, pg_safeupdate-safe.
 --
 -- Contract cuối (stakeholder 28/07) — Affiliate Order drill-down:
 --   · Raw order detail cho Super Admin + Admin OPS + SM + Store Manager.
