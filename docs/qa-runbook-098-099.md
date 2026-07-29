@@ -1,9 +1,15 @@
 # QA Runbook — Migration 098 (Campaign Archive) + 099 (Affiliate Orders Drill-down)
 
-> Batch `feat/kpi-archive-orders-tiers` (r1 @ audit 28/07). Thứ tự BẮT BUỘC:
+> Batch `feat/kpi-archive-orders-tiers` (r1.2 @ audit 28/07). Thứ tự BẮT BUỘC:
 > **preflight → 098 → verify 098 → QA 098 → gửi output audit → 099 → verify 099
 > → QA 099 → QA browser → gates → merge → deploy code**. KHÔNG chạy 099 cùng
 > lúc với 098 (khoanh vùng lỗi). Script chạy từ thư mục `webapp/`.
+>
+> **XÁC NHẬN MÔI TRƯỜNG (câu hỏi audit r1.1):** `.env.local` của 2 QA script
+> trỏ vào **Supabase PRODUCTION** (project không có Supabase QA riêng — QA
+> từ trước đến nay đều trên prod DB bằng fixture/is_test). Vì vậy r1.2 đã
+> cứng hóa cô lập: fixture id ĐỘNG + marker-first + preflight baseline-0 +
+> cleanup chỉ-theo-marker + cửa sổ RETRO 02/2024 + yêu cầu tạm dừng cron.
 
 ## 0. Preflight
 
@@ -69,8 +75,11 @@ cd C:\webapp_management\webapp
 node scripts/qa-kpi-archive-098.mjs verify
 node scripts/qa-kpi-archive-098.mjs run
 # KỲ VỌNG: "PASS TOÀN BỘ 10 bước" (draft/active chặn · paused OK · lần 2 chặn ·
-# bảng con nguyên vẹn · import/activate/ghi-actuals trên archived đều RAISE ·
-# cleanup cascade sạch). Nếu run đứt giữa chừng: node scripts/qa-kpi-archive-098.mjs cleanup
+# bảng con NGUYÊN VẸN NỘI DUNG — deep-compare snapshot 5 nhóm, không chỉ đếm
+# row (r1.2) · import/activate/ghi-actuals trên archived đều RAISE · cleanup
+# cascade theo marker, chạy trong finally kể cả khi lỗi giữa chừng).
+# Fixture tên unique mỗi run + marker .qa-archive-098.json; nếu còn sót:
+# node scripts/qa-kpi-archive-098.mjs cleanup
 ```
 
 Sau đó QA UI nhanh (localhost hoặc chờ deploy): campaign archived biến mất
@@ -122,12 +131,23 @@ SELECT indexname FROM pg_indexes WHERE tablename = 'affiliate_orders' ORDER BY 1
 
 ## 7. QA 099 role matrix + đối soát — script
 
+**TRƯỚC fixture-up (r1.2):** tạm dừng Coolify Scheduled Task
+`pull-affiliate-orders` (Disable) — full-snapshot reconciliation sẽ đánh dấu
+`source_active=false` các đơn fixture không có trong nguồn Mongo. Bật lại
+NGAY sau `fixture-down`.
+
+Cơ chế an toàn của script (tự động, abort nếu vi phạm): id động mỗi run +
+marker `.qa-drill-fixture.json` ghi TRƯỚC insert; preflight dải id trống +
+baseline 0 đơn delivered-active của POS0059 trong cửa sổ RETRO 02/2024;
+verify đủ 55 id sau insert; `fixture-down` CHỈ xóa id trong marker.
+
 ```powershell
 cd C:\webapp_management\webapp
 node scripts/qa-affiliate-orders-099.mjs verify
-node scripts/qa-affiliate-orders-099.mjs fixture-up     # 55 đơn QA (54 dương + 1 ÂM) vào POS0059
+node scripts/qa-affiliate-orders-099.mjs fixture-up     # preflight + 55 đơn QA (54 dương + 1 ÂM)
 
-# Chạy CHECK cho TỪNG account (script tự tính kỳ vọng theo role và assert):
+# Chạy CHECK cho TỪNG account (Super lấy từ session RPC is_super_admin();
+# role bị từ chối phải đúng message 'Không có quyền'; có thêm check FS scope):
 $env:QA_PASSWORD='...'; node scripts/qa-affiliate-orders-099.mjs check <email-super>
 $env:QA_PASSWORD='...'; node scripts/qa-affiliate-orders-099.mjs check <email-admin-OPS>
 $env:QA_PASSWORD='...'; node scripts/qa-affiliate-orders-099.mjs check <email-SM-có-POS0059>
@@ -136,7 +156,8 @@ $env:QA_PASSWORD='...'; node scripts/qa-affiliate-orders-099.mjs check <email-QL
 $env:QA_PASSWORD='...'; node scripts/qa-affiliate-orders-099.mjs check <email-QLCH-store-khác>
 $env:QA_PASSWORD='...'; node scripts/qa-affiliate-orders-099.mjs check <email-staff>
 
-node scripts/qa-affiliate-orders-099.mjs fixture-down   # BẮT BUỘC sau khi xong
+node scripts/qa-affiliate-orders-099.mjs fixture-down   # BẮT BUỘC sau khi xong (chỉ xóa id trong marker)
+# → Bật lại cron pull-affiliate-orders trên Coolify.
 ```
 
 Mỗi lần `check` phủ: (a) direct PII = 0 row trừ super · (b) RPC đúng scope ·

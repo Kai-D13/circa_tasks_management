@@ -18,8 +18,9 @@
 --     Staff + admin phòng khác: TỪ CHỐI.
 --   · KHÔNG mở raw-table RLS cho OPS (mig 096 cố ý bảo vệ PII qua PostgREST
 --     generic select) — thay bằng RPC WHITELIST cột cố định: OPS/SM/QLCH đọc
---     đơn qua RPC này, vẫn KHÔNG select trực tiếp affiliate_orders được
---     (aff_orders_select giữ nguyên 096).
+--     đơn qua RPC này, KHÔNG select trực tiếp affiliate_orders được
+--     (r1: aff_orders_select được REDEFINE trong migration này về SUPER-ONLY
+--      — xem mục "r1 P1#2" bên dưới; header cũ ghi "giữ nguyên 096" là SAI).
 --   · Filter CỐ ĐỊNH trong RPC: store yêu cầu + source_active + status_norm
 --     'delivered' + completed_time ∈ [p_from, p_to) — child luôn đối soát
 --     được với rpc_aggregate_affiliate_gmv (cùng điều kiện, cùng date basis).
