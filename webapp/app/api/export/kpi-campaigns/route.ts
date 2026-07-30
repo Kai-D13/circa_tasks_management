@@ -31,8 +31,10 @@ export async function GET(request: NextRequest) {
   if (!campaignId) return NextResponse.json({ error: 'Thiếu campaign_id' }, { status: 400 })
 
   const { data: c } = await supabase
-    .from('kpi_campaigns').select('id, name, start_date, end_date, metric_offline, metric_affiliate').eq('id', campaignId).single()
+    .from('kpi_campaigns').select('id, name, start_date, end_date, archived_at, metric_offline, metric_affiliate').eq('id', campaignId).single()
   if (!c) return NextResponse.json({ error: 'Không tìm thấy chiến dịch' }, { status: 404 })
+  // Archive (098): export archived không hoạt động qua UI/route.
+  if (c.archived_at !== null) return NextResponse.json({ error: 'Chiến dịch đã lưu trữ' }, { status: 404 })
 
   const [{ data: targetsRaw, error: tErr }, { data: actualsRaw, error: aErr }] = await Promise.all([
     supabase.from('kpi_campaign_store_targets')

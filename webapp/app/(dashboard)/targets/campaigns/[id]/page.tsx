@@ -66,8 +66,10 @@ export default async function CampaignDetailPage({
 
   const supabase = await createClient()
   const { data: c } = await supabase
-    .from('kpi_campaigns').select('id, name, start_date, end_date, status, is_test, updated_at, metric_offline, metric_affiliate').eq('id', id).single()
+    .from('kpi_campaigns').select('id, name, start_date, end_date, status, is_test, updated_at, archived_at, metric_offline, metric_affiliate').eq('id', id).single()
   if (!c) notFound()
+  // Archive (098): URL campaign đã lưu trữ → 404 (biến mất khỏi mọi UI).
+  if (c.archived_at !== null) notFound()
 
   const tab: 'config' | 'result' = sp.tab === 'config' || sp.tab === 'result'
     ? sp.tab
@@ -132,7 +134,10 @@ export default async function CampaignDetailPage({
   )
 
   return (
-    <div className="p-4 md:p-6 max-w-5xl space-y-4">
+    // r1.6 (P1 UI 29/07): tab Kết quả dùng TOÀN BỘ chiều rộng main content
+    // (bảng N cột Bậc động cần chỗ; scroll ngang còn lại nằm TRONG bảng —
+    // body không bao giờ scroll ngang); tab Cấu hình giữ shell max-w-5xl cũ.
+    <div className={cn('p-4 md:p-6 space-y-4', tab === 'result' ? 'max-w-none' : 'max-w-5xl')}>
       <div>
         <Link href="/targets/campaigns" className="text-xs text-muted-foreground hover:text-primary inline-flex items-center gap-1">
           <ChevronLeft className="h-3.5 w-3.5" /> Chiến dịch KPI
@@ -143,7 +148,7 @@ export default async function CampaignDetailPage({
             <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', s.cls)}>{s.label}</span>
             {c.is_test && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700">TEST</span>}
           </div>
-          <CampaignStatusButton id={c.id} status={c.status} />
+          <CampaignStatusButton id={c.id} status={c.status} name={c.name} />
         </div>
         <p className="text-sm text-muted-foreground mt-0.5">
           {formatDate(c.start_date)} – {formatDate(c.end_date)} · {targets.length} cửa hàng · {resultModel.deadlineLabel}

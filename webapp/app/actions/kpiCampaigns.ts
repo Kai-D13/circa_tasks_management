@@ -7,6 +7,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { isKpiAffiliateEnabled, isKpiCampaignEnabled, isKpiCampaignTestMode } from '@/lib/kpi/flags'
 import { resolveMetricInput, type MetricInput } from '@/lib/kpi/campaignConfig'
+import { campaignArchivable, campaignDeletable } from '@/lib/kpi/archive'
 import { evaluateActivation, type ActivationCampaign } from '@/lib/kpi/activation'
 import { getAffiliateSyncHealth, supabaseAffiliateHealthDb } from '@/lib/affiliate/health'
 import { sanitizeOpsText } from '@/lib/ops/sanitize'
@@ -70,8 +71,9 @@ export async function updateCampaign(
   const auth = await requireSuper()
   if ('error' in auth) return { error: auth.error }
   const { data: campaign } = await auth.supabase
-    .from('kpi_campaigns').select('status, updated_at, metric_offline, metric_affiliate').eq('id', id).single()
+    .from('kpi_campaigns').select('status, archived_at, updated_at, metric_offline, metric_affiliate').eq('id', id).single()
   if (!campaign) return { error: 'Không tìm thấy chiến dịch' }
+  if (campaign.archived_at !== null) return { error: 'Chiến dịch đã lưu trữ — không sửa được' }
   if (campaign.status === 'active') return { error: 'Chiến dịch đang chạy — tạm dừng trước khi sửa' }
   if (campaign.status === 'ended') return { error: 'Chiến dịch đã kết thúc' }
 
@@ -116,8 +118,11 @@ export async function toggleCampaign(id: string) {
   const auth = await requireSuper()
   if ('error' in auth) return { error: auth.error }
   const { data: c } = await auth.supabase
-    .from('kpi_campaigns').select('status, start_date, end_date, metric_affiliate').eq('id', id).single()
+    .from('kpi_campaigns').select('status, archived_at, start_date, end_date, metric_affiliate').eq('id', id).single()
   if (!c) return { error: 'Không tìm thấy chiến dịch' }
+  // Archive (098): campaign đã lưu trữ đóng băng hoàn toàn — không pause/
+  // activate (RPC 098 cũng chặn tầng DB; đây là lớp app cho message sạch).
+  if (c.archived_at !== null) return { error: 'Chiến dịch đã lưu trữ — không thao tác được' }
 
   if (c.status === 'active') {
     // Race guard: chỉ pause khi VẪN đang active (audit P3-D2).
@@ -192,12 +197,38 @@ export async function syncCampaignActuals(id: string) {
 export async function deleteCampaign(id: string) {
   const auth = await requireSuper()
   if ('error' in auth) return { error: auth.error }
-  const { data: c } = await auth.supabase.from('kpi_campaigns').select('status').eq('id', id).single()
+  const { data: c } = await auth.supabase.from('kpi_campaigns').select('status, archived_at').eq('id', id).single()
   if (!c) return { error: 'Không tìm thấy chiến dịch' }
-  if (c.status !== 'draft') return { error: 'Chỉ xoá được chiến dịch nháp' }
-  const { error } = await auth.supabase.from('kpi_campaigns').delete().eq('id', id)
+  const gate = campaignDeletable(c.status, c.archived_at)
+  if (!gate.ok) return { error: gate.reason }
+  // Race guard: xoá CÓ ĐIỀU KIỆN — vẫn phải là draft chưa archive tại thời
+  // điểm xoá (kích hoạt song song → 0 row, không xoá nhầm campaign đã chạy).
+  const { data: deleted, error } = await auth.supabase.from('kpi_campaigns')
+    .delete().eq('id', id).eq('status', 'draft').is('archived_at', null).select('id')
   if (error) return { error: error.message }
+  if ((deleted ?? []).length === 0) return { error: 'Trạng thái chiến dịch vừa thay đổi — tải lại trang' }
   revalidatePath('/targets/campaigns')
+  return { success: true }
+}
+
+// Soft archive (contract 28/07): paused/ended biến mất khỏi UI, GIỮ toàn bộ
+// target/actual/tier/commission/lịch sử import. Atomic trong RPC 098 (lock
+// row + guard trạng thái tại thời điểm archive — chống race với toggle).
+export async function archiveCampaign(id: string) {
+  const auth = await requireSuper()
+  if ('error' in auth) return { error: auth.error }
+  const { data: c } = await auth.supabase.from('kpi_campaigns').select('status, archived_at').eq('id', id).single()
+  if (!c) return { error: 'Không tìm thấy chiến dịch' }
+  const gate = campaignArchivable(c.status, c.archived_at)
+  if (!gate.ok) return { error: gate.reason }
+  const { error } = await supabaseAdmin.rpc('rpc_archive_kpi_campaign', {
+    p_campaign_id: id,
+    p_actor: auth.user.id,
+  })
+  if (error) return { error: sanitizeOpsText(error.message) }
+  console.info(`[kpi-campaign] archived ${id} by ${auth.user.id}`)
+  revalidatePath('/targets/campaigns')
+  revalidatePath(`/targets/campaigns/${id}`)
   return { success: true }
 }
 
@@ -243,8 +274,9 @@ export async function previewCampaignImport(formData: FormData) {
 export async function commitCampaignImport(campaignId: string, formData: FormData) {
   const auth = await requireSuper()
   if ('error' in auth) return { error: auth.error }
-  const { data: c } = await auth.supabase.from('kpi_campaigns').select('status').eq('id', campaignId).single()
+  const { data: c } = await auth.supabase.from('kpi_campaigns').select('status, archived_at').eq('id', campaignId).single()
   if (!c) return { error: 'Không tìm thấy chiến dịch' }
+  if (c.archived_at !== null) return { error: 'Chiến dịch đã lưu trữ — không nạp target' }
   if (c.status === 'active') return { error: 'Chiến dịch đang chạy — tạm dừng trước khi nạp lại file' }
   if (c.status === 'ended') return { error: 'Chiến dịch đã kết thúc' }
 

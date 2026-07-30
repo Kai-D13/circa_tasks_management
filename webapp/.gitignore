@@ -54,3 +54,6 @@ next-env.d.ts
 
 # QA affiliate role-matrix — pre-state marker (scripts/qa-affiliate-rls.mjs)
 .qa-ops-grant.json
+# QA 098/099 — fixture markers (scripts/qa-kpi-archive-098.mjs, qa-affiliate-orders-099.mjs)
+.qa-archive-098.json
+.qa-drill-fixture.json

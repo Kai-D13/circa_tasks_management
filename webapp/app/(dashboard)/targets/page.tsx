@@ -177,7 +177,10 @@ async function fetchCampaignViews(
     supabase
       .from('kpi_campaign_store_targets')
       .select('kpi_target, store_kpi_group, campaign:kpi_campaigns!inner(id, name, start_date, end_date, metric_offline, metric_affiliate), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
-      .eq('store_id', storeId),
+      .eq('store_id', storeId)
+      // Archive (098): phòng thủ kép — RLS vốn chỉ cho thấy campaign active
+      // (không archive được), filter tường minh theo yêu cầu audit.
+      .is('campaign.archived_at', null),
     supabase
       .from('kpi_campaign_store_actuals')
       .select('campaign_id, actual_value, actual_offline, actual_affiliate, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
@@ -411,7 +414,11 @@ export default async function TargetsPage({
     const [tRes, aRes] = await Promise.all([
       supabase
         .from('kpi_campaign_store_targets')
-        .select('id, campaign_id, store_id, pos_code, kpi_target, store_kpi_group, stores(name), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount), kpi_campaigns(id, name, start_date, end_date, status, metric_offline, metric_affiliate)')
+        .select('id, campaign_id, store_id, pos_code, kpi_target, store_kpi_group, stores(name), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount), kpi_campaigns!inner(id, name, start_date, end_date, status, metric_offline, metric_affiliate)')
+        // Archive (098): phòng thủ kép như fetchCampaignViews — !inner + filter
+        // (row campaign bị RLS ẩn trước đây trả null và bị skip app-side; nay
+        // drop tại DB, hành vi hiển thị không đổi).
+        .is('kpi_campaigns.archived_at', null)
         .order('pos_code'),
       supabase
         .from('kpi_campaign_store_actuals')
@@ -465,7 +472,9 @@ export default async function TargetsPage({
       // trong dashboard vẫn hiển thị từng store.
       const model = buildCampaignResultModel(entry.campaign, entry.targets, entry.actuals, vnTodayISO)
       return (
-        <div className="p-4 md:p-6 space-y-4 max-w-5xl">
+        // r1.6 (P1 UI 29/07): SM detail full-width như Super Result view —
+        // bảng N cột Bậc động; landing/list SM giữ max-w-5xl cũ.
+        <div className="p-4 md:p-6 space-y-4 max-w-none">
           <PageHeader title="Doanh số chiến dịch" icon={TrendingUp} />
           <div>
             <Link href="/targets" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0">← Danh sách chiến dịch</Link>
@@ -651,7 +660,9 @@ export default async function TargetsPage({
                   campaign={campaignViews.find((c) => c.id === selectedCampaignId) ?? campaignViews[0]}
                   todayISO={vnTodayISO}
                 />
-                <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Quản lý" todayISO={vnTodayISO} storeName={storeName} />
+                {/* Tier progress (28/07): QLCH desktop thấy "Còn thiếu" từng
+                    mốc thưởng; Staff dùng chung component nhưng prop tắt. */}
+                <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Quản lý" todayISO={vnTodayISO} storeName={storeName} showTierRemaining />
               </>
             )}
           </div>
