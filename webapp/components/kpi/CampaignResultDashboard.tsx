@@ -95,9 +95,12 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                   {resultTableColumns(m.maxTierCount, m.showBreakdown).map((col) => (
                     <th
                       key={col.key}
-                      style={{ minWidth: col.minPx }}
+                      // r1.6.1 (audit P2): min-width qua CSS var + lg:min-w —
+                      // width contract CHỈ hiệu lực từ desktop; mobile giữ
+                      // nguyên 100% hành vi cột cũ (browser tự tính).
+                      style={{ '--col-w': `${col.minPx}px` } as React.CSSProperties}
                       className={cn(
-                        'px-4 py-2.5',
+                        'px-4 py-2.5 lg:min-w-[var(--col-w)]',
                         col.align === 'right' ? 'text-right' : 'text-left',
                         col.scope === 'mobile' && 'lg:hidden',
                         col.scope === 'desktop' && 'hidden lg:table-cell whitespace-nowrap',
