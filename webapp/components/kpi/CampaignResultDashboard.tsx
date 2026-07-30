@@ -1,6 +1,7 @@
 import { Card, CardContent } from '@/components/ui/card'
 import { performanceTone } from '@/lib/kpi/performance'
 import type { CampaignResultModel } from '@/lib/kpi/resultModel'
+import { resultTableColumns } from '@/lib/kpi/resultTableLayout'
 import { cn } from '@/lib/utils'
 import {
   Target, TrendingUp, Percent, Wallet, Award, CalendarDays, Gauge,
@@ -73,30 +74,38 @@ export function CampaignResultDashboard({ model, emptyHint }: {
         ))}
       </div>
 
-      {/* Bảng kết quả từng store — cột giữ nguyên tab Kết quả super */}
+      {/* Bảng kết quả từng store — cột giữ nguyên tab Kết quả super.
+          r1.6 (P1 UI 29/07): MỘT scroll owner duy nhất (ngang + dọc, max-h
+          theo viewport từ lg — scrollbar ngang nằm trong vùng bảng, không phải
+          cuộn hết 25 store mới thấy); header sticky top + cột Cửa hàng sticky
+          left (chỉ lg — mobile giữ UI cũ: overflow-x như trước, không max-h);
+          width contract từ lib/kpi/resultTableLayout (min-width px literal —
+          layout không đổi theo dữ liệu); body KHÔNG bao giờ scroll ngang. */}
       {m.rows.length > 0 ? (
         <Card>
-          <CardContent className="p-0 overflow-x-auto">
+          <CardContent className="p-0">
+            <div className="overflow-x-auto lg:overflow-auto lg:max-h-[70vh]">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/40 text-xs text-muted-foreground">
-                  <th className="text-left px-4 py-2.5">Cửa hàng</th>
-                  <th className="text-left px-4 py-2.5">Phân loại</th>
-                  <th className="text-right px-4 py-2.5">KPI target</th>
-                  <th className="text-right px-4 py-2.5">Actual GMV</th>
-                  {m.showBreakdown && <th className="text-right px-4 py-2.5">GMV Offline</th>}
-                  {m.showBreakdown && <th className="text-right px-4 py-2.5">GMV Affiliate</th>}
-                  <th className="text-right px-4 py-2.5">%</th>
-                  <th className="text-right px-4 py-2.5">Nhịp độ</th>
-                  <th className="text-right px-4 py-2.5">Còn thiếu</th>
-                  {/* Tier progress (28/07): mobile giữ cột gộp cũ; desktop
-                      ≥1024px thay bằng N cột Bậc động (không hardcode 3 bậc —
-                      threshold/commission nằm trong từng cell vì có thể khác
-                      nhau giữa các store). Bảng đã overflow-x-auto. */}
-                  <th className="text-left px-4 py-2.5 lg:hidden">Bậc đạt · Commission</th>
-                  {Array.from({ length: m.maxTierCount }, (_, i) => (
-                    <th key={`tier-h-${i}`} className="hidden lg:table-cell text-left px-4 py-2.5 whitespace-nowrap">
-                      Bậc {i + 1}
+                  {/* Tier progress (28/07): mobile giữ cột gộp cũ (scope
+                      'mobile'); desktop ≥1024px = N cột Bậc động theo
+                      maxTierCount (không hardcode 3). Thứ tự cột trong
+                      resultTableColumns PHẢI khớp thứ tự cell ở tbody. */}
+                  {resultTableColumns(m.maxTierCount, m.showBreakdown).map((col) => (
+                    <th
+                      key={col.key}
+                      style={{ minWidth: col.minPx }}
+                      className={cn(
+                        'px-4 py-2.5',
+                        col.align === 'right' ? 'text-right' : 'text-left',
+                        col.scope === 'mobile' && 'lg:hidden',
+                        col.scope === 'desktop' && 'hidden lg:table-cell whitespace-nowrap',
+                        'lg:sticky lg:top-0 lg:z-20 lg:bg-muted',
+                        col.key === 'store' && 'lg:left-0 lg:z-30',
+                      )}
+                    >
+                      {col.label}
                     </th>
                   ))}
                 </tr>
@@ -107,12 +116,14 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                   const remaining = a?.remaining_target ?? null
                   return (
                     <tr key={r.targetId} className="hover:bg-muted/30">
-                      <td className="px-4 py-2.5 font-medium">{r.storeName ?? '—'}{r.posCode ? ` · ${r.posCode}` : ''}</td>
+                      {/* r1.6: sticky left CHỈ lg (mobile giữ UI cũ) — bg-card
+                          opaque để nội dung cuộn khuất phía dưới cell */}
+                      <td className="px-4 py-2.5 font-medium lg:sticky lg:left-0 lg:z-10 lg:bg-card">{r.storeName ?? '—'}{r.posCode ? ` · ${r.posCode}` : ''}</td>
                       <td className="px-4 py-2.5 text-xs">{r.group ?? '—'}</td>
-                      <td className="px-4 py-2.5 text-right">{vnd(r.kpiTarget)}</td>
-                      <td className="px-4 py-2.5 text-right">{a ? vnd(a.actual_value) : '—'}</td>
-                      {m.showBreakdown && <td className="px-4 py-2.5 text-right text-muted-foreground">{a?.actual_offline != null ? vnd(a.actual_offline) : '—'}</td>}
-                      {m.showBreakdown && <td className="px-4 py-2.5 text-right text-muted-foreground">{a?.actual_affiliate != null ? vnd(a.actual_affiliate) : '—'}</td>}
+                      <td className="px-4 py-2.5 text-right whitespace-nowrap">{vnd(r.kpiTarget)}</td>
+                      <td className="px-4 py-2.5 text-right whitespace-nowrap">{a ? vnd(a.actual_value) : '—'}</td>
+                      {m.showBreakdown && <td className="px-4 py-2.5 text-right text-muted-foreground whitespace-nowrap">{a?.actual_offline != null ? vnd(a.actual_offline) : '—'}</td>}
+                      {m.showBreakdown && <td className="px-4 py-2.5 text-right text-muted-foreground whitespace-nowrap">{a?.actual_affiliate != null ? vnd(a.actual_affiliate) : '—'}</td>}
                       <td className="px-4 py-2.5">
                         {a?.run_rate != null ? (
                           <div className="flex items-center justify-end gap-2">
@@ -133,7 +144,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                           ? <span className={cn('text-xs font-semibold', performanceTone(r.performance))}>{r.performance.toFixed(1)}%</span>
                           : '—'}
                       </td>
-                      <td className="px-4 py-2.5 text-right">{remaining != null ? vnd(remaining) : '—'}</td>
+                      <td className="px-4 py-2.5 text-right whitespace-nowrap">{remaining != null ? vnd(remaining) : '—'}</td>
                       {/* Mobile: cột gộp cũ giữ nguyên */}
                       <td className="px-4 py-2.5 lg:hidden">
                         {a?.achieved_tier_order != null
@@ -176,6 +187,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                 })}
               </tbody>
             </table>
+            </div>
           </CardContent>
         </Card>
       ) : (

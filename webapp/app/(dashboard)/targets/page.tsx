@@ -472,7 +472,9 @@ export default async function TargetsPage({
       // trong dashboard vẫn hiển thị từng store.
       const model = buildCampaignResultModel(entry.campaign, entry.targets, entry.actuals, vnTodayISO)
       return (
-        <div className="p-4 md:p-6 space-y-4 max-w-5xl">
+        // r1.6 (P1 UI 29/07): SM detail full-width như Super Result view —
+        // bảng N cột Bậc động; landing/list SM giữ max-w-5xl cũ.
+        <div className="p-4 md:p-6 space-y-4 max-w-none">
           <PageHeader title="Doanh số chiến dịch" icon={TrendingUp} />
           <div>
             <Link href="/targets" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0">← Danh sách chiến dịch</Link>
