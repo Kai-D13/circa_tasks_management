@@ -19,7 +19,9 @@ export interface SnapshotInput {
   targets: TargetRow[]
   metricOffline: boolean
   metricAffiliate: boolean
-  offlineByPos: Map<string, Map<string, number>>     // pos_code → date VN → gmv (BQ)
+  // ⚠ Contract 30/07: "gmv" offline = Net Revenue (alias giữ nguyên từ
+  // campaignDailyQuery — SUM(net_revenue)); công thức/payload không đổi.
+  offlineByPos: Map<string, Map<string, number>>     // pos_code → date VN → offline actual (BQ net_revenue)
   affiliateByStore: Map<string, Map<string, number>> // store_id → date VN → gmv (rpc_aggregate)
   snapshotTs: string                                  // thời điểm GHI snapshot
   offlineSyncedAt: string | null                      // thời điểm pull BQ (null nếu metric tắt)

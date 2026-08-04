@@ -57,6 +57,10 @@ function realDeps(): SyncCampaignDeps {
       return { data, error }
     },
     loadBqServiceAccount: () => loadServiceAccount(),
+    // ⚠ Contract 30/07: campaignDailyQuery SUM net_revenue nhưng alias giữ
+    // `gmv` — mọi field "gmv"/"offline" trong pipeline campaign từ đây là
+    // Net Revenue Offline (KHÔNG phải gross GMV). Landing day/week/month
+    // (KPI_AGGREGATE_QUERY) không đổi, vẫn gmv.
     runBqChunk: (sa, chunkStart, chunkEnd) =>
       runBigQuery(sa as Parameters<typeof runBigQuery>[0], campaignDailyQuery(chunkStart, chunkEnd)),
     replaceActuals: async (campaignId, daily, actuals) => {
