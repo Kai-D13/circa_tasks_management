@@ -37,8 +37,9 @@ test.describe('kpi net_revenue source contract @desktop', () => {
     expect(dailyFn).toContain('SUM(COALESCE(net_revenue, 0)) AS gmv')
   })
 
-  test('2. KHÔNG còn SUM(COALESCE(gmv, 0)) ở bất kỳ đâu trong file — không sót query campaign nào', () => {
-    expect(src).not.toContain('SUM(COALESCE(gmv, 0))')
+  test('2. KHÔNG còn SUM(COALESCE(gmv, 0)) trong 2 hàm campaign (audit P2: scope hẹp — landing sau này dùng lại pattern này vẫn hợp lệ, không fail oan)', () => {
+    expect(rangeFn).not.toContain('SUM(COALESCE(gmv, 0))')
+    expect(dailyFn).not.toContain('SUM(COALESCE(gmv, 0))')
   })
 
   test('3. KPI_AGGREGATE_QUERY (landing ngày/tuần/tháng) VẪN dùng gmv — không bị đổi theo', () => {
