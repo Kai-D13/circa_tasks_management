@@ -51,6 +51,8 @@ export const DEFAULT_QUERY = `
 //    scans a slice, not the whole table. The −7 day tail covers a current week
 //    that leads in from the prior month (a month starting mid-week); the table's
 //    future-dated rows up to month-end keep week/month targets whole.
+// ⚠ Landing day/week/month GIỮ NGUYÊN nguồn `gmv` — contract 30/07 CHỈ chuyển
+//   CAMPAIGN (2 hàm campaign*Query bên dưới) sang net_revenue; query này KHÔNG đổi.
 export const KPI_AGGREGATE_QUERY = `
   WITH today AS (SELECT CURRENT_DATE("Asia/Ho_Chi_Minh") AS d),
   base AS (
@@ -92,11 +94,16 @@ export function loadServiceAccount(): ServiceAccount | null {
   return loadSA('BQ_SERVICE_ACCOUNT_KEY')
 }
 
-// KPI Campaign actual GMV over an arbitrary date range (campaign start→end).
+// KPI Campaign OFFLINE actual over an arbitrary date range (campaign start→end).
+// ⚠ NGUỒN = NET_REVENUE (contract stakeholder 30/07 — chuyển toàn cục từ gmv;
+// không có campaign active lúc chuyển; campaign ended/archived giữ snapshot cũ).
+// Alias GIỮ NGUYÊN `actual_gmv` để downstream (engine/DB payload/UI/export)
+// không đổi — từ đây "gmv" trong pipeline campaign NGHĨA LÀ Net Revenue Offline.
 // runBigQuery has no query-parameter support, so the dates are interpolated —
 // both values come from DB `date` columns; the regex guard makes injection
-// impossible even if a caller passes something else. Future days have gmv NULL
-// → COALESCE 0, so a running campaign naturally sums only realized sales.
+// impossible even if a caller passes something else. Future days have
+// net_revenue NULL → COALESCE 0, so a running campaign naturally sums only
+// realized sales; giá trị ÂM giữ nguyên, cộng bình thường.
 // ~26 stores → one row per pos_code, far under the 1000-row cap.
 export function campaignRangeQuery(startDate: string, endDate: string): string {
   const ISO = /^\d{4}-\d{2}-\d{2}$/
@@ -104,7 +111,7 @@ export function campaignRangeQuery(startDate: string, endDate: string): string {
     throw new Error(`campaignRangeQuery: ngày không hợp lệ (${startDate} – ${endDate})`)
   }
   return `
-    SELECT pos_code, SUM(COALESCE(gmv, 0)) AS actual_gmv, COUNT(*) AS row_count
+    SELECT pos_code, SUM(COALESCE(net_revenue, 0)) AS actual_gmv, COUNT(*) AS row_count
     FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`
     WHERE pos_code NOT IN ("POS0001")
       AND \`date\` BETWEEN '${startDate}' AND '${endDate}'
@@ -113,8 +120,11 @@ export function campaignRangeQuery(startDate: string, endDate: string): string {
   `
 }
 
-// Per-DAY GMV per store over a range — drives the staff "Tiến độ theo ngày"
-// chart AND the aggregate snapshot (summed app-side so they always agree).
+// Per-DAY OFFLINE actual per store over a range — drives the staff "Tiến độ
+// theo ngày" chart AND the aggregate snapshot (summed app-side so they always
+// agree). ⚠ NGUỒN = NET_REVENUE (contract 30/07); alias GIỮ NGUYÊN `gmv` để
+// downstream không đổi — cột `gmv` của kpi_campaign_store_daily_actuals từ
+// đây chứa Net Revenue Offline.
 // Caller must chunk long ranges by month: 26 stores × 31 days ≈ 806 rows per
 // chunk, under the 1000-row cap; a 2-month range in one call would exceed it.
 export function campaignDailyQuery(startDate: string, endDate: string): string {
@@ -123,7 +133,7 @@ export function campaignDailyQuery(startDate: string, endDate: string): string {
     throw new Error(`campaignDailyQuery: ngày không hợp lệ (${startDate} – ${endDate})`)
   }
   return `
-    SELECT pos_code, \`date\`, SUM(COALESCE(gmv, 0)) AS gmv
+    SELECT pos_code, \`date\`, SUM(COALESCE(net_revenue, 0)) AS gmv
     FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`
     WHERE pos_code NOT IN ("POS0001")
       AND \`date\` BETWEEN '${startDate}' AND '${endDate}'

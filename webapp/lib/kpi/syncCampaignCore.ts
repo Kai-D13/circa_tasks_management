@@ -153,6 +153,8 @@ export async function syncCampaignWithDeps(
           const date = String(r.date ?? '').slice(0, 10)
           if (!pos || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue
           if (!offlineByPos.has(pos)) offlineByPos.set(pos, new Map())
+          // ⚠ Contract 30/07: field `gmv` từ campaignDailyQuery là alias của
+          // SUM(net_revenue) — giá trị Offline của campaign = Net Revenue.
           offlineByPos.get(pos)!.set(date, Number(r.gmv ?? 0) || 0)
         }
       }
