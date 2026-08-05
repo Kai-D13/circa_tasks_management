@@ -44,29 +44,34 @@ export const DEFAULT_QUERY = `
 //     rồi bổ sung nhánh UNION 'week'. Tab Tuần tạm hiện "Chưa có dữ liệu" cho
 //     kỳ mới (row tuần cũ trong store_kpi_targets giữ nguyên lịch sử).
 // Rows ~52 (26 store × 2 grain), far under the 1000-row maxResults cap.
+// r1 (audit P2#3): GROUP BY + COUNT(*) THẬT — nguồn kỳ vọng 1 row/(date_type,
+// start_date, pos); nếu BI vô tình có 2 dòng, raw_row_count > 1 và
+// aggregateAndUpsertKpi TỪ CHỐI row đó (fail-closed), không ghi đè theo thứ tự.
 export const KPI_AGGREGATE_QUERY = `
   WITH today AS (SELECT CURRENT_DATE("Asia/Ho_Chi_Minh") AS d)
   SELECT 'day' AS period_type, start_date AS period_start, start_date AS period_end,
-         pos_code, pos_name,
-         CAST(COALESCE(net_revenue, 0) AS NUMERIC) AS actual,
-         CAST(COALESCE(TARGET, 0) AS NUMERIC) AS target,
-         1 AS raw_row_count
+         pos_code, MAX(pos_name) AS pos_name,
+         CAST(SUM(COALESCE(net_revenue, 0)) AS NUMERIC) AS actual,
+         CAST(SUM(COALESCE(TARGET, 0)) AS NUMERIC) AS target,
+         COUNT(*) AS raw_row_count
   FROM \`lakehouse-prod-394907.gold_buymed_vn2.circa_os_gmv_kpi\`, today
   WHERE date_type = 'DAY'
     AND pos_code IS NOT NULL AND start_date IS NOT NULL
     AND pos_code NOT IN ("POS0001")
     AND start_date = today.d
+  GROUP BY start_date, pos_code
   UNION ALL
   SELECT 'month' AS period_type, start_date AS period_start, LAST_DAY(start_date) AS period_end,
-         pos_code, pos_name,
-         CAST(COALESCE(net_revenue, 0) AS NUMERIC) AS actual,
-         CAST(COALESCE(TARGET, 0) AS NUMERIC) AS target,
-         1 AS raw_row_count
+         pos_code, MAX(pos_name) AS pos_name,
+         CAST(SUM(COALESCE(net_revenue, 0)) AS NUMERIC) AS actual,
+         CAST(SUM(COALESCE(TARGET, 0)) AS NUMERIC) AS target,
+         COUNT(*) AS raw_row_count
   FROM \`lakehouse-prod-394907.gold_buymed_vn2.circa_os_gmv_kpi\`, today
   WHERE date_type = 'MONTH'
     AND pos_code IS NOT NULL AND start_date IS NOT NULL
     AND pos_code NOT IN ("POS0001")
     AND start_date = DATE_TRUNC(today.d, MONTH)
+  GROUP BY start_date, pos_code
   ORDER BY period_type, pos_code
 `
 

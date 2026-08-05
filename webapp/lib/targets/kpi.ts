@@ -3,10 +3,14 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { normalizeStoreName } from './parse'
 import { POS_CODE_BY_NAME } from './posMap'
 
-// KPI v2 ingest. The BigQuery side (KPI_AGGREGATE_QUERY) already aggregates the
-// three current periods per store, so each raw row is ONE (store, grain) record
-// — no grouping here. We coerce the (string) BQ values, apply the business rule,
-// match pos_code → store, and upsert store_kpi_targets (migration 067).
+// KPI v2 ingest. The BigQuery side (KPI_AGGREGATE_QUERY) returns ONE row per
+// (store, grain) for the CURRENT periods — BQ-V2 (05/08): nguồn
+// gold_buymed_vn2.circa_os_gmv_kpi pre-aggregated, actual = net_revenue,
+// target = cột TARGET; grain 'week' CHƯA có dữ liệu từ BI (chờ bật lại).
+// We coerce the (string) BQ values, apply the business rule, match
+// pos_code → store, and upsert store_kpi_targets (migration 067).
+// r1 (audit P2#3): raw_row_count từ COUNT(*) thật — != 1 nghĩa nguồn có dòng
+// trùng cho cùng kỳ/POS → TỪ CHỐI row đó (rowErrors, không ghi).
 // Service-role writes — the table has no write RLS by design. Caller (cron)
 // handles auth.
 //
@@ -93,6 +97,13 @@ export async function aggregateAndUpsertKpi(
       ?? byCode.get(POS_CODE_BY_NAME[key] ?? '')
     if (!storeId) {
       unmatched.add(posCode ? `${label} (${posCode})` : label)
+      continue
+    }
+
+    // r1 (audit P2#3): fail-closed dòng nguồn trùng — không ghi đè theo thứ tự.
+    const rawRowCount = Math.round(num(raw.raw_row_count))
+    if (rawRowCount !== 1) {
+      rowErrors.push(`${periodType} ${periodStart} ${label}: nguồn có ${rawRowCount} dòng cho cùng kỳ/POS (kỳ vọng 1) — bỏ qua, không ghi`)
       continue
     }
 

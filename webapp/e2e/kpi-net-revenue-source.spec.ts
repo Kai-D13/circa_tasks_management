@@ -59,9 +59,12 @@ test.describe('kpi net_revenue source contract @desktop', () => {
     expect(aggQuery).not.toContain('tech__circa_os_gmv_kpi')
     expect(aggQuery).toContain("date_type = 'DAY'")
     expect(aggQuery).toContain("date_type = 'MONTH'")
-    expect(aggQuery).not.toContain("'week'") // chưa bật — thiếu rule period_end tuần từ BI
-    expect(aggQuery).toContain('CAST(COALESCE(net_revenue, 0) AS NUMERIC) AS actual')
-    expect(aggQuery).toContain('CAST(COALESCE(TARGET, 0) AS NUMERIC) AS target')
+    expect(aggQuery).not.toContain("'week'") // chưa bật — BI chưa có dữ liệu WEEK
+    // r1 (audit P2#3): GROUP BY + COUNT thật — dòng nguồn trùng bị kpi.ts từ chối
+    expect(aggQuery).toContain('CAST(SUM(COALESCE(net_revenue, 0)) AS NUMERIC) AS actual')
+    expect(aggQuery).toContain('CAST(SUM(COALESCE(TARGET, 0)) AS NUMERIC) AS target')
+    expect(aggQuery).toContain('COUNT(*) AS raw_row_count')
+    expect(aggQuery).toContain('GROUP BY start_date, pos_code')
     expect(aggQuery).toContain('LAST_DAY(start_date) AS period_end')
     // DEFAULT_QUERY (weekly legacy — pipeline store_weekly_targets riêng) không đụng
     expect(section('export const DEFAULT_QUERY', 'export const KPI_AGGREGATE_QUERY')).not.toContain('net_revenue')
