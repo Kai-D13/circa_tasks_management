@@ -77,3 +77,44 @@ test.describe('affiliate orders drill-down contract @desktop', () => {
     expect(dup[0].partnerCodes).toEqual(['CIRCA-A1'])
   })
 })
+
+// ── FS-expansion (06/08): row model 2 entity + filter Loại ──────────────────
+import { buildOverviewEntities, filterEntitiesByType, type OverviewMappingRow } from '../lib/affiliate/orders'
+
+const M = (code: string, type: string, storeId: string | null, name = '', display: string | null = null): OverviewMappingRow => ({
+  partner_code: code, partner_type: type, store_id: storeId,
+  display_name: display,
+  stores: storeId ? { name: name || `Store ${storeId}`, code: `POS-${storeId}` } : null,
+})
+
+test.describe('affiliate overview entities (FS-expansion) @desktop', () => {
+  test('buildOverviewEntities: OS/FS-có-store group theo STORE; fs store_id NULL → 1 row/partner; display_name trống → fallback partner_code', () => {
+    const es = buildOverviewEntities([
+      M('CIRCA-A1', 'os', 's1'), M('CIRCA-A2', 'os', 's1'),   // 1 store 2 code
+      M('CIRCA-FS', 'fs', 's2'),                               // fs CÓ store
+      M('NT-YEN-HUONG', 'fs', null, '', 'Nhà thuốc Yến Hường'),
+      M('NT-MOI', 'fs', null, '', ''),                         // display trống
+    ])
+    expect(es).toHaveLength(4)
+    const s1 = es.find((e) => e.kind === 'store' && e.store_id === 's1')
+    expect(s1 && s1.kind === 'store' && s1.partnerCodes).toEqual(['CIRCA-A1', 'CIRCA-A2'])
+    const p1 = es.find((e) => e.kind === 'partner' && e.partner_code === 'NT-YEN-HUONG')
+    expect(p1 && p1.kind === 'partner' && p1.display_name).toBe('Nhà thuốc Yến Hường')
+    const p2 = es.find((e) => e.kind === 'partner' && e.partner_code === 'NT-MOI')
+    expect(p2 && p2.kind === 'partner' && p2.display_name).toBe('NT-MOI') // fallback chốt 06/08
+  })
+
+  test('filterEntitiesByType: os → store thuần OS; fs → partner + store có mapping fs; all → tất cả', () => {
+    const es = buildOverviewEntities([
+      M('CIRCA-OS', 'os', 's1'),
+      M('CIRCA-FS', 'fs', 's2'),
+      M('NT-P', 'fs', null),
+    ])
+    expect(filterEntitiesByType(es, 'all')).toHaveLength(3)
+    const os = filterEntitiesByType(es, 'os')
+    expect(os).toHaveLength(1)
+    expect(os[0].kind === 'store' && os[0].store_id).toBe('s1')
+    const fs = filterEntitiesByType(es, 'fs')
+    expect(fs.map((e) => (e.kind === 'store' ? e.store_id : e.partner_code)).sort()).toEqual(['NT-P', 's2'])
+  })
+})

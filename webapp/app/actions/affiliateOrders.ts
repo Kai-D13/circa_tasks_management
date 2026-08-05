@@ -58,3 +58,43 @@ export async function listAffiliateOrders(input: {
   const rows = (data ?? []) as AffiliateOrderRow[]
   return { rows, nextCursor: nextCursorFrom(rows, ORDERS_PAGE_SIZE) }
 }
+
+// FS-expansion (contract 06/08): drill-down theo PARTNER_CODE cho mapping FS
+// không có store (mig 102). SESSION client → rpc_list_affiliate_partner_orders
+// — authz TRONG DB: CHỈ Super Admin (OPS/SM/QLCH/Staff bị RAISE 'Không có
+// quyền'); giữ nguyên rule DELIVERED-only + keyset ≤50 + range guard.
+const PARTNER_CODE_RE = /^[A-Za-z0-9_-]{1,64}$/
+
+export async function listAffiliatePartnerOrders(input: {
+  partnerCode: string
+  from: string
+  to: string
+  cursor?: OrdersCursor | null
+}): Promise<{ rows: AffiliateOrderRow[]; nextCursor: OrdersCursor | null } | { error: string }> {
+  if (!(isKpiCampaignEnabled() && isKpiAffiliateEnabled())) {
+    return { error: 'Tính năng Affiliate chưa được bật' }
+  }
+  if (!PARTNER_CODE_RE.test(input.partnerCode ?? '')) return { error: 'Mã đối tác không hợp lệ' }
+  if (!DATE_RE.test(input.from ?? '') || !DATE_RE.test(input.to ?? '')) {
+    return { error: 'Khoảng ngày không hợp lệ' }
+  }
+  const cursor = input.cursor ?? null
+  if (cursor && !UUID_RE.test(cursor.id)) return { error: 'Cursor không hợp lệ' }
+
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Chưa đăng nhập' }
+
+  const range = vnDayRange(input.from, input.to)
+  const { data, error } = await supabase.rpc('rpc_list_affiliate_partner_orders', {
+    p_partner_code: input.partnerCode,
+    p_from: range.from,
+    p_to: range.to,
+    p_limit: ORDERS_PAGE_SIZE,
+    p_cursor_completed_time: cursor?.completedTime ?? null,
+    p_cursor_id: cursor?.id ?? null,
+  })
+  if (error) return { error: sanitizeOpsText(error.message) }
+  const rows = (data ?? []) as AffiliateOrderRow[]
+  return { rows, nextCursor: nextCursorFrom(rows, ORDERS_PAGE_SIZE) }
+}

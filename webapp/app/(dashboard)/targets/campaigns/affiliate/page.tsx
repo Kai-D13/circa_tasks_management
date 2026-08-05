@@ -8,10 +8,13 @@ import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import { getAffiliateSyncHealth, supabaseAffiliateHealthDb } from '@/lib/affiliate/health'
 import { vnDayRange } from '@/lib/kpi/engine'
 import {
-  reduceAffiliateAgg, parseOverviewRange, overviewDataState, overviewPageScope,
-  canShowOwnOsGmv, smOverviewAllowed, type AffiliateAggInput,
+  reduceAffiliateAgg, reduceAffiliatePartnerAgg, parseOverviewRange, parseOverviewType,
+  salesPointsLabel, overviewDataState, overviewPageScope,
+  canShowOwnOsGmv, smOverviewAllowed, type AffiliateAggInput, type PartnerAggInput,
 } from '@/lib/affiliate/overview'
-import { drilldownEnabled, groupMappingsByStore } from '@/lib/affiliate/orders'
+import {
+  drilldownEnabled, buildOverviewEntities, filterEntitiesByType, type OverviewMappingRow,
+} from '@/lib/affiliate/orders'
 import { AffiliateStoreOrdersRow } from '@/components/affiliate/AffiliateStoreOrdersRow'
 import { CampaignsTabs } from '@/components/kpi/CampaignsTabs'
 import { PageHeader } from '@/components/ds/PageHeader'
@@ -41,13 +44,6 @@ import { Link2, TrendingUp, Package, Store as StoreIcon } from 'lucide-react'
 
 const vnd = (n: number) => `${new Intl.NumberFormat('vi-VN').format(Math.round(n))}₫`
 
-interface MappingRow {
-  partner_code: string
-  partner_type: string
-  store_id: string
-  stores: { name: string; code: string | null } | null
-}
-
 function PageShell({ nav, children }: { nav?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="p-4 md:p-6 max-w-5xl space-y-4">
@@ -59,7 +55,7 @@ function PageShell({ nav, children }: { nav?: React.ReactNode; children: React.R
 }
 
 export default async function AffiliateOverviewPage({ searchParams }: {
-  searchParams: Promise<{ from?: string; to?: string; store?: string }>
+  searchParams: Promise<{ from?: string; to?: string; type?: string; store?: string }>
 }) {
   const { user, profile } = await getSessionProfile()
   if (!user) notFound()
@@ -128,21 +124,30 @@ export default async function AffiliateOverviewPage({ searchParams }: {
   // validate (không mở rộng ngoài assignment; query param không tham gia) và
   // CHỈ select cột non-QR (partner_code/partner_type/store_id/stores name+code
   // — TUYỆT ĐỐI không qr_image_url/qr_destination_url). External ngoài phạm vi.
+  // FS-expansion (06/08): SUPER đọc CẢ mapping fs store_id NULL (FS partner
+  // rows); OPS/QLCH giữ nguyên guard not-null (RLS của họ vốn chỉ lộ os).
   const mapRes = scope === 'os-assigned'
     ? await supabaseAdmin
         .from('affiliate_partner_mappings')
-        .select('partner_code, partner_type, store_id, stores(name, code)')
+        .select('partner_code, partner_type, store_id, display_name, stores(name, code)')
         .in('store_id', smActiveOsIds)
         .eq('partner_type', 'os')
         .eq('is_active', true)
         .order('partner_code')
-    : await supabase
-        .from('affiliate_partner_mappings')
-        .select('partner_code, partner_type, store_id, stores(name, code)')
-        .in('partner_type', ['os', 'fs'])
-        .eq('is_active', true)
-        .not('store_id', 'is', null)
-        .order('partner_code')
+    : scope === 'os-fs'
+      ? await supabase
+          .from('affiliate_partner_mappings')
+          .select('partner_code, partner_type, store_id, display_name, stores(name, code)')
+          .in('partner_type', ['os', 'fs'])
+          .eq('is_active', true)
+          .order('partner_code')
+      : await supabase
+          .from('affiliate_partner_mappings')
+          .select('partner_code, partner_type, store_id, display_name, stores(name, code)')
+          .in('partner_type', ['os', 'fs'])
+          .eq('is_active', true)
+          .not('store_id', 'is', null)
+          .order('partner_code')
   const mapRows = mapRes.data
   const mapErr = mapRes.error
 
@@ -159,15 +164,23 @@ export default async function AffiliateOverviewPage({ searchParams }: {
     )
   }
 
-  const mappings = ((mapRows ?? []) as unknown as MappingRow[])
-  // r1 P2#4 (audit 28/07): GROUP THEO STORE — schema cho phép 1 store nhiều
-  // partner code (unique partner_code, không unique store_id); không group →
-  // store lặp dòng + số lặp trực quan + trùng key + mở lại cùng tập đơn.
-  // Partner codes thành metadata danh sách dưới tên store.
-  const storeGroups = groupMappingsByStore(mappings)
-  // r1.3: chỉ còn filter store (partner filter đã bỏ).
-  const filtered = storeGroups.filter((s) => !params.store || s.store_id === params.store)
-  const storeIds = filtered.map((s) => s.store_id)
+  const mappings = ((mapRows ?? []) as unknown as OverviewMappingRow[])
+  // FS-expansion (06/08): ROW MODEL 2 entity — OS/FS-có-store group theo
+  // STORE (r1 P2#4 giữ nguyên: 1 store nhiều partner code = 1 dòng); FS
+  // KHÔNG store (mapping fs + store_id NULL) = 1 dòng / partner_code.
+  const entities = buildOverviewEntities(mappings)
+  // Filter Loại: chỉ super chọn được; scope khác ÉP 'os' (query-string không
+  // vượt RBAC — parseOverviewType có test khóa).
+  const typeFilter = parseOverviewType(params.type, scope)
+  const typed = filterEntitiesByType(entities, typeFilter)
+  // Filter Cửa hàng/đối tác: value = store_id | partner_code; đổi Loại làm
+  // param cũ không còn trong options → BỎ QUA (reset server-side, không giữ
+  // UUID/code cũ — audit UI).
+  const entityKey = (e: (typeof entities)[number]) => (e.kind === 'store' ? e.store_id : e.partner_code)
+  const storeParam = params.store && typed.some((e) => entityKey(e) === params.store) ? params.store : undefined
+  const filtered = typed.filter((e) => !storeParam || entityKey(e) === storeParam)
+  const storeIds = filtered.flatMap((e) => (e.kind === 'store' ? [e.store_id] : []))
+  const partnerCodes = filtered.flatMap((e) => (e.kind === 'partner' ? [e.partner_code] : []))
 
   const filterForm = (
     <DataToolbar
@@ -181,14 +194,27 @@ export default async function AffiliateOverviewPage({ searchParams }: {
             <span className="text-xs text-muted-foreground">Đến ngày</span>
             <input type="date" name="to" defaultValue={to} className="h-9 rounded-lg border bg-card px-2.5 text-sm" />
           </label>
+          {/* FS-expansion: filter Loại GIỮA thời gian và Cửa hàng — CHỈ super */}
+          {scope === 'os-fs' && (
+            <label className="grid gap-1">
+              <span className="text-xs text-muted-foreground">Loại</span>
+              <select name="type" defaultValue={typeFilter === 'all' ? '' : typeFilter} className="h-9 rounded-lg border bg-card px-2 text-sm">
+                <option value="">Tất cả</option>
+                <option value="os">OS</option>
+                <option value="fs">FS</option>
+              </select>
+            </label>
+          )}
           <label className="grid gap-1">
             <span className="text-xs text-muted-foreground">Cửa hàng</span>
-            <select name="store" defaultValue={params.store ?? ''} className="h-9 rounded-lg border bg-card px-2 text-sm max-w-[220px]">
+            <select name="store" defaultValue={storeParam ?? ''} className="h-9 rounded-lg border bg-card px-2 text-sm max-w-[220px]">
               <option value="">Tất cả</option>
-              {/* r1 P2#4: option theo STORE đã dedupe — hết trùng key khi 1
-                  store có nhiều partner code */}
-              {storeGroups.map((s) => (
-                <option key={s.store_id} value={s.store_id}>{s.name ?? s.partnerCodes[0]}</option>
+              {/* Option theo entity của Loại đang chọn (store đã dedupe;
+                  partner theo display_name) */}
+              {typed.map((e) => (
+                <option key={entityKey(e)} value={entityKey(e)}>
+                  {e.kind === 'store' ? (e.name ?? e.partnerCodes[0]) : e.display_name}
+                </option>
               ))}
             </select>
           </label>
@@ -198,7 +224,7 @@ export default async function AffiliateOverviewPage({ searchParams }: {
     />
   )
 
-  if (storeIds.length === 0) {
+  if (storeIds.length === 0 && partnerCodes.length === 0) {
     return (
       <PageShell nav={shellNav}>
         {filterForm}
@@ -207,24 +233,46 @@ export default async function AffiliateOverviewPage({ searchParams }: {
     )
   }
 
-  // r1.1 HEALTH FAIL-CLOSED: health TRƯỚC (theo ĐÚNG danh sách store hiển thị,
-  // OS + FS dedupe — r1 P2#4); CHỈ ready mới aggregate; !ready → không gọi RPC,
-  // số hiện '—'.
-  const health = await getAffiliateSyncHealth(supabaseAffiliateHealthDb(supabaseAdmin), storeIds)
+  // r1.1 HEALTH FAIL-CLOSED: health TRƯỚC theo ĐÚNG scope hiển thị (store +
+  // partner — FS-expansion: partnerCodes cho view FS-only, canary partner nằm
+  // trong RPC aggregate partner); CHỈ ready mới aggregate; !ready → '—'.
+  const health = await getAffiliateSyncHealth(
+    supabaseAffiliateHealthDb(supabaseAdmin), storeIds, Date.now(), partnerCodes)
   let aggErrorMsg: string | null = null
   let byStore = new Map<string, { gmv: number; orders: number; lastDate: string | null }>()
-  let totals = { gmv: 0, orders: 0, storesWithSales: 0 }
+  let byPartner = new Map<string, { gmv: number; orders: number; lastDate: string | null }>()
+  let totals = { gmv: 0, orders: 0, points: 0 }
   if (health.ready) {
     const range = vnDayRange(from, to)
-    const { data: aggData, error: aggErr } = await supabaseAdmin
-      .rpc('rpc_aggregate_affiliate_gmv', { p_store_ids: storeIds, p_from: range.from, p_to: range.to })
-    if (aggErr) {
-      console.error('[affiliate-overview] aggregate failed:', aggErr.message)
-      aggErrorMsg = aggErr.message
-    } else {
-      const r = reduceAffiliateAgg((aggData ?? []) as AffiliateAggInput[])
-      byStore = r.byStore
-      totals = r.totals
+    if (storeIds.length > 0) {
+      const { data: aggData, error: aggErr } = await supabaseAdmin
+        .rpc('rpc_aggregate_affiliate_gmv', { p_store_ids: storeIds, p_from: range.from, p_to: range.to })
+      if (aggErr) {
+        console.error('[affiliate-overview] aggregate (store) failed:', aggErr.message)
+        aggErrorMsg = aggErr.message
+      } else {
+        const r = reduceAffiliateAgg((aggData ?? []) as AffiliateAggInput[])
+        byStore = r.byStore
+        totals = { gmv: r.totals.gmv, orders: r.totals.orders, points: r.totals.storesWithSales }
+      }
+    }
+    // FS partner (store_id NULL): aggregate theo partner_code — RPC 102, cùng
+    // fail-closed completed_time như 092.
+    if (partnerCodes.length > 0 && aggErrorMsg === null) {
+      const { data: pData, error: pErr } = await supabaseAdmin
+        .rpc('rpc_aggregate_affiliate_partner_gmv', { p_codes: partnerCodes, p_from: range.from, p_to: range.to })
+      if (pErr) {
+        console.error('[affiliate-overview] aggregate (partner) failed:', pErr.message)
+        aggErrorMsg = pErr.message
+      } else {
+        const r = reduceAffiliatePartnerAgg((pData ?? []) as PartnerAggInput[])
+        byPartner = r.byPartner
+        totals = {
+          gmv: totals.gmv + r.totals.gmv,
+          orders: totals.orders + r.totals.orders,
+          points: totals.points + r.totals.pointsWithSales,
+        }
+      }
     }
   } else {
     // r1.3: reason kỹ thuật vào LOG (+ tooltip super dưới) — UI chính chỉ
@@ -234,9 +282,13 @@ export default async function AffiliateOverviewPage({ searchParams }: {
   const dataState = overviewDataState(health.ready, aggErrorMsg !== null)
   const blocked = dataState !== 'ok'
 
-  // r1 P2#4: 1 dòng / STORE (agg vốn đã theo store) — không còn lặp theo mapping.
+  // 1 dòng / entity: store (agg theo store) hoặc FS partner (agg theo code).
   const rows = filtered
-    .map((s) => ({ ...s, agg: byStore.get(s.store_id) ?? { gmv: 0, orders: 0, lastDate: null } }))
+    .map((e) => ({
+      entity: e,
+      agg: (e.kind === 'store' ? byStore.get(e.store_id) : byPartner.get(e.partner_code))
+        ?? { gmv: 0, orders: 0, lastDate: null },
+    }))
     .sort((a, b) => b.agg.gmv - a.agg.gmv)
 
   return (
@@ -263,11 +315,12 @@ export default async function AffiliateOverviewPage({ searchParams }: {
         <ErrorState message="Không tổng hợp được doanh số Affiliate" hint={aggErrorMsg ?? undefined} />
       )}
 
-      {/* r1.3: đúng 3 KPI card cho khoảng thời gian đang xem */}
+      {/* r1.3: đúng 3 KPI card cho khoảng thời gian đang xem — FS-expansion:
+          card 3 đếm ĐIỂM (store + đối tác) khi view có FS */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
         <StatCard label={`GMV Affiliate (${formatDate(from)} – ${formatDate(to)})`} value={blocked ? '—' : vnd(totals.gmv)} icon={TrendingUp} tone={!blocked && totals.gmv > 0 ? 'success' : 'default'} />
         <StatCard label="Đơn giao thành công" value={blocked ? '—' : totals.orders} icon={Package} />
-        <StatCard label="Store có doanh số" value={blocked ? '—' : `${totals.storesWithSales}/${storeIds.length}`} icon={StoreIcon} />
+        <StatCard label={salesPointsLabel(typeFilter)} value={blocked ? '—' : `${totals.points}/${filtered.length}`} icon={StoreIcon} />
       </div>
 
       <DataTableShell>
@@ -283,41 +336,70 @@ export default async function AffiliateOverviewPage({ searchParams }: {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rows.map((r) => {
-              const has = r.agg.orders > 0
-              // Drill-down: client row — lazy-load qua RPC 099 (session, authz
-              // trong DB); chevron CHỈ khi số parent thật (!blocked) + có đơn;
-              // key gồm from/to → đổi filter hủy state cũ.
+            {rows.map(({ entity: e, agg }) => {
+              const has = agg.orders > 0
+              const numberCells = (
+                <>
+                  <TableCell className={cn('text-right tabular-nums', !has && 'text-muted-foreground')}>
+                    {blocked ? '—' : agg.orders}
+                  </TableCell>
+                  <TableCell className={cn('text-right tabular-nums font-medium', !has && 'text-muted-foreground font-normal')}>
+                    {blocked ? '—' : has || agg.gmv !== 0 ? vnd(agg.gmv) : '—'}
+                  </TableCell>
+                  <TableCell className="text-right pr-4 text-muted-foreground">
+                    {blocked ? '—' : agg.lastDate ? formatDate(agg.lastDate) : '—'}
+                  </TableCell>
+                </>
+              )
+              // Drill-down: client row lazy-load — store qua RPC 099 (mọi scope
+              // hợp lệ), FS partner qua RPC 102 (CHỈ super — chevron cũng chỉ
+              // render ở scope os-fs); chevron CHỈ khi số parent thật
+              // (!blocked) + có đơn; key gồm from/to → đổi filter hủy state.
+              if (e.kind === 'store') {
+                return (
+                  <AffiliateStoreOrdersRow
+                    key={`s-${e.store_id}-${from}-${to}`}
+                    storeId={e.store_id}
+                    from={from}
+                    to={to}
+                    canDrill={drilldownEnabled({ blocked, orders: agg.orders })}
+                    expectedOrders={agg.orders}
+                    expectedGmv={agg.gmv}
+                    parentCells={
+                      <>
+                        <TableCell>
+                          <span className="font-medium">{e.name ?? '—'}</span>
+                          <span className="text-xs text-muted-foreground"> · {e.code ?? '—'}</span>
+                          {e.isFs && (
+                            <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground align-middle">FS</span>
+                          )}
+                          {/* r1.3 + r1 P2#4: partner codes = metadata đối soát */}
+                          <span className="block font-mono text-[11px] text-muted-foreground">{e.partnerCodes.join(' · ')}</span>
+                        </TableCell>
+                        {numberCells}
+                      </>
+                    }
+                  />
+                )
+              }
+              // FS partner (không store): KHÔNG QR, KHÔNG liên quan FS Products.
               return (
                 <AffiliateStoreOrdersRow
-                  key={`${r.store_id}-${from}-${to}`}
-                  storeId={r.store_id}
+                  key={`p-${e.partner_code}-${from}-${to}`}
+                  partnerCode={e.partner_code}
                   from={from}
                   to={to}
-                  canDrill={drilldownEnabled({ blocked, orders: r.agg.orders })}
-                  expectedOrders={r.agg.orders}
-                  expectedGmv={r.agg.gmv}
+                  canDrill={scope === 'os-fs' && drilldownEnabled({ blocked, orders: agg.orders })}
+                  expectedOrders={agg.orders}
+                  expectedGmv={agg.gmv}
                   parentCells={
                     <>
                       <TableCell>
-                        <span className="font-medium">{r.name ?? '—'}</span>
-                        <span className="text-xs text-muted-foreground"> · {r.code ?? '—'}</span>
-                        {r.hasFs && (
-                          <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground align-middle">FS</span>
-                        )}
-                        {/* r1.3 + r1 P2#4: partner codes = metadata đối soát —
-                            store nhiều mapping hiện đủ danh sách trên 1 dòng */}
-                        <span className="block font-mono text-[11px] text-muted-foreground">{r.partnerCodes.join(' · ')}</span>
+                        <span className="font-medium">{e.display_name}</span>
+                        <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground align-middle">FS</span>
+                        <span className="block font-mono text-[11px] text-muted-foreground">{e.partner_code}</span>
                       </TableCell>
-                      <TableCell className={cn('text-right tabular-nums', !has && 'text-muted-foreground')}>
-                        {blocked ? '—' : r.agg.orders}
-                      </TableCell>
-                      <TableCell className={cn('text-right tabular-nums font-medium', !has && 'text-muted-foreground font-normal')}>
-                        {blocked ? '—' : has || r.agg.gmv !== 0 ? vnd(r.agg.gmv) : '—'}
-                      </TableCell>
-                      <TableCell className="text-right pr-4 text-muted-foreground">
-                        {blocked ? '—' : r.agg.lastDate ? formatDate(r.agg.lastDate) : '—'}
-                      </TableCell>
+                      {numberCells}
                     </>
                   }
                 />

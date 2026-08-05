@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useTransition } from 'react'
-import { listAffiliateOrders } from '@/app/actions/affiliateOrders'
+import { listAffiliateOrders, listAffiliatePartnerOrders } from '@/app/actions/affiliateOrders'
 import {
   reconcileState, type AffiliateOrderRow, type OrdersCursor,
 } from '@/lib/affiliate/orders'
@@ -23,10 +23,14 @@ import { ChevronDown, Loader2 } from 'lucide-react'
 
 const vnd = (n: number) => `${new Intl.NumberFormat('vi-VN').format(Math.round(n))}₫`
 
+// FS-expansion (06/08): component dùng chung cho CẢ 2 entity — store (OS/FS
+// có store, RPC 099) và FS-partner không store (partnerCode, RPC 102 —
+// super-only, authz trong DB). Truyền ĐÚNG MỘT trong storeId/partnerCode.
 export function AffiliateStoreOrdersRow({
-  storeId, from, to, canDrill, expectedOrders, expectedGmv, parentCells,
+  storeId, partnerCode, from, to, canDrill, expectedOrders, expectedGmv, parentCells,
 }: {
-  storeId: string
+  storeId?: string
+  partnerCode?: string
   from: string
   to: string
   canDrill: boolean
@@ -43,7 +47,9 @@ export function AffiliateStoreOrdersRow({
 
   function loadPage(nextCursor: OrdersCursor | null) {
     startTransition(async () => {
-      const r = await listAffiliateOrders({ storeId, from, to, cursor: nextCursor })
+      const r = partnerCode
+        ? await listAffiliatePartnerOrders({ partnerCode, from, to, cursor: nextCursor })
+        : await listAffiliateOrders({ storeId: storeId ?? '', from, to, cursor: nextCursor })
       if ('error' in r) { setError(r.error); return }
       setError(null)
       setRows((prev) => (nextCursor ? [...prev, ...r.rows] : r.rows))
