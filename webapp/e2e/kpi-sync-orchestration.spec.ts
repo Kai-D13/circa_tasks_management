@@ -313,4 +313,35 @@ test.describe('kpi sync orchestration @desktop', () => {
     expect(a.actual_affiliate).toBe(200)
     expect(a.actual_value).toBe(500)
   })
+
+  // ── BQ-V2 (05/08): nguồn gold_buymed_vn2 pre-aggregated 1 row/store/ngày —
+  //    orchestrator guard fail-closed khi nguồn trả dạng khác kỳ vọng. ──
+  test('BQ-V2 GUARD: source_row_count != 1 → preserved, KHÔNG replace (nguồn pre-aggregated sai)', async () => {
+    const { deps, calls } = mkDeps(CFG(), {
+      bq: async () => [{ pos_code: 'POS0001', date: '2026-07-02', gmv: 300, source_row_count: 2 }],
+    })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    if (r.status === 'snapshot_preserved') expect(r.reason).toContain('source_row_count=2')
+    expect(calls.replace).toBe(0)
+  })
+
+  test('BQ-V2 GUARD: trùng key (pos, ngày) trong cùng lần pull → preserved, KHÔNG replace', async () => {
+    const { deps, calls } = mkDeps(CFG(), {
+      bq: async () => [
+        { pos_code: 'POS0001', date: '2026-07-02', gmv: 300, source_row_count: 1 },
+        { pos_code: 'POS0001', date: '2026-07-02', gmv: 999, source_row_count: 1 },
+      ],
+    })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    if (r.status === 'snapshot_preserved') expect(r.reason).toContain('trùng key POS0001/2026-07-02')
+    expect(calls.replace).toBe(0)
+  })
+
+  test('BQ-V2 GUARD: row KHÔNG có source_row_count (fixture cũ/nguồn không trả) → mặc định 1, sync bình thường', async () => {
+    const { deps } = mkDeps(CFG())
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('success')
+  })
 })

@@ -152,6 +152,16 @@ export async function syncCampaignWithDeps(
           const pos = String(r.pos_code ?? '').trim().toUpperCase()
           const date = String(r.date ?? '').slice(0, 10)
           if (!pos || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue
+          // ⚠ BQ-V2 (05/08): nguồn gold_buymed_vn2 pre-aggregated 1 row/store/
+          // ngày — source_row_count != 1 hoặc key (pos, ngày) lặp lại nghĩa là
+          // NGUỒN SAI → preserve snapshot (fail-closed, không ghi số khả nghi).
+          const srcCount = Number(r.source_row_count ?? 1)
+          if (!Number.isFinite(srcCount) || srcCount !== 1) {
+            return preserved(`Nguồn BQ bất thường: ${pos}/${date} có source_row_count=${String(r.source_row_count)} (kỳ vọng 1 row/store/ngày — bảng pre-aggregated); giữ snapshot cũ`)
+          }
+          if (offlineByPos.get(pos)?.has(date)) {
+            return preserved(`Nguồn BQ trùng key ${pos}/${date} trong cùng lần pull — giữ snapshot cũ`)
+          }
           if (!offlineByPos.has(pos)) offlineByPos.set(pos, new Map())
           // ⚠ Contract 30/07: field `gmv` từ campaignDailyQuery là alias của
           // SUM(net_revenue) — giá trị Offline của campaign = Net Revenue.

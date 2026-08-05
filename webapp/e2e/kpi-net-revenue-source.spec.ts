@@ -33,8 +33,20 @@ test.describe('kpi net_revenue source contract @desktop', () => {
   const aggQuery = section('export const KPI_AGGREGATE_QUERY', 'export function loadServiceAccount')
 
   test('1. campaignRangeQuery + campaignDailyQuery SUM NET_REVENUE, alias GIỮ NGUYÊN (downstream không đổi)', () => {
-    expect(rangeFn).toContain('SUM(COALESCE(net_revenue, 0)) AS actual_gmv')
-    expect(dailyFn).toContain('SUM(COALESCE(net_revenue, 0)) AS gmv')
+    expect(rangeFn).toContain('SUM(CAST(COALESCE(net_revenue, 0) AS NUMERIC)) AS actual_gmv')
+    expect(dailyFn).toContain('SUM(CAST(COALESCE(net_revenue, 0) AS NUMERIC)) AS gmv')
+  })
+
+  test('5. BQ-V2 (05/08): 2 hàm campaign đọc bảng MỚI gold_buymed_vn2 + CHỈ date_type DAY + loại NULL keys; KHÔNG còn bảng cũ; daily mang source_row_count cho guard', () => {
+    for (const fn of [rangeFn, dailyFn]) {
+      expect(fn).toContain('gold_buymed_vn2.circa_os_gmv_kpi')
+      expect(fn).not.toContain('tech__circa_os_gmv_kpi')
+      expect(fn).toContain("date_type = 'DAY'")
+      expect(fn).toContain('pos_code IS NOT NULL AND start_date IS NOT NULL')
+      expect(fn).toContain('start_date BETWEEN')
+    }
+    expect(dailyFn).toContain('COUNT(*) AS source_row_count')
+    expect(dailyFn).toContain('start_date AS')
   })
 
   test('2. KHÔNG còn SUM(COALESCE(gmv, 0)) trong 2 hàm campaign (audit P2: scope hẹp — landing sau này dùng lại pattern này vẫn hợp lệ, không fail oan)', () => {
