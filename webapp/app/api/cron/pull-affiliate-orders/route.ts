@@ -85,12 +85,33 @@ export async function GET(request: NextRequest) {
       else rejected.push({ order_id: r.orderId, reason: r.reason })
     }
     guard('đọc mappings')
-    const { data: mappings, error: mapErr } = await supabaseAdmin
-      .from('affiliate_partner_mappings')
-      .select('partner_code, store_id, partner_type, is_active')
-      .abortSignal(sig())
-    if (mapErr) throw new Error(`Đọc mappings: ${mapErr.message}`)
-    const { resolved, report } = resolveStores(valid, (mappings ?? []) as PartnerMappingRow[])
+    const loadMappings = async (): Promise<PartnerMappingRow[]> => {
+      const { data, error } = await supabaseAdmin
+        .from('affiliate_partner_mappings')
+        .select('partner_code, store_id, partner_type, is_active')
+        .abortSignal(sig())
+      if (error) throw new Error(`Đọc mappings: ${error.message}`)
+      return (data ?? []) as PartnerMappingRow[]
+    }
+    let mappings = await loadMappings()
+    // FS-expansion (contract 06/08 + mig 102): mã MỚI chưa có mapping → TỰ TẠO
+    // fs/store_id NULL/active qua RPC (service_role, insert-if-absent — tuyệt
+    // đối không đụng mapping hiện hữu, kể cả inactive), rồi ĐỌC LẠI mappings
+    // từ DB trước khi resolve (audit: không merge in-memory). DRY-RUN không
+    // ghi — chỉ báo would_create_fs (mã vẫn nằm unmatched trong report dry).
+    const known = new Set(mappings.map((m) => m.partner_code))
+    const candidateCodes = [...new Set(valid.map((r) => r.partner_code))].filter((c) => !known.has(c))
+    let newFsCodes: string[] = []
+    if (candidateCodes.length > 0 && !isDry) {
+      guard('ensure fs mappings')
+      const { data: created, error: ensureErr } = await supabaseAdmin
+        .rpc('rpc_ensure_fs_partner_mappings', { p_codes: candidateCodes })
+        .abortSignal(sig())
+      if (ensureErr) throw new Error(`Tạo mapping FS cho mã mới: ${ensureErr.message}`)
+      newFsCodes = (created ?? []) as string[]
+      mappings = await loadMappings()
+    }
+    const { resolved, report } = resolveStores(valid, mappings)
     const unknownStatuses = [...new Set(valid.filter((r) => r.status_norm === 'other').map((r) => r.raw_status))]
     // Canary KPI (audit r2.1 P1): DELIVERED thiếu completed_time sẽ bị
     // aggregation fail-closed (rpc_aggregate_affiliate_gmv RAISE) — báo sớm ở
@@ -98,6 +119,8 @@ export async function GET(request: NextRequest) {
     const deliveredMissingCompleted = valid.filter((r) => r.status_norm === 'delivered' && r.completed_time === null)
     return {
       rawFetched: rawDocs.length, duplicates, unique, resolved, rejected, report, unknownStatuses,
+      newFsCodes,
+      wouldCreateFs: isDry ? candidateCodes : [],
       deliveredMissingCompletedCount: deliveredMissingCompleted.length,
       deliveredMissingCompletedSample: deliveredMissingCompleted.slice(0, 10).map((r) => r.order_id),
     }
@@ -117,6 +140,9 @@ export async function GET(request: NextRequest) {
         pulled: d.unique.length,
         would_upsert: d.resolved.length, would_reject: d.rejected.length,
         rejected_reasons: d.rejected.slice(0, 20),
+        // FS-expansion: dry-run KHÔNG tạo mapping — mã mới liệt kê ở đây
+        // (và vẫn nằm unmatched trong mapping_report của dry).
+        would_create_fs: d.wouldCreateFs,
         mapping_report: d.report,
         unknown_statuses: d.unknownStatuses,
         delivered_missing_completed_time_count: d.deliveredMissingCompletedCount,
@@ -161,6 +187,7 @@ export async function GET(request: NextRequest) {
   let rejectedReasons: { order_id: unknown; reason: string }[] = []
   let report: ReturnType<typeof resolveStores>['report'] | null = null
   let unknownStatuses: string[] = []
+  let newFsCodes: string[] = []
   let deliveredMissingCompletedCount = 0
   let deliveredMissingCompletedSample: number[] = []
 
@@ -169,6 +196,7 @@ export async function GET(request: NextRequest) {
     rejectedReasons = d.rejected
     report = d.report
     unknownStatuses = d.unknownStatuses
+    newFsCodes = d.newFsCodes
     deliveredMissingCompletedCount = d.deliveredMissingCompletedCount
     deliveredMissingCompletedSample = d.deliveredMissingCompletedSample
 
@@ -234,8 +262,13 @@ export async function GET(request: NextRequest) {
     console.warn(`[affiliate-sync] ${rejectedReasons.length} row REJECTED (không upsert):`,
       JSON.stringify(rejectedReasons.slice(0, 10)))
   }
+  if (newFsCodes.length > 0) {
+    // FS-expansion: mã mới đã TỰ TẠO mapping fs — lần sync kế phải rỗng
+    // (idempotent); log để vận hành biết có đối tác mới xuất hiện.
+    console.warn('[affiliate-sync] new_fs_codes — đã tự tạo mapping FS:', newFsCodes.join(', '))
+  }
   if (report && report.unmatched_codes.length > 0) {
-    console.warn('[affiliate-sync] partner_code chưa map (store NULL, chỉ super thấy):', report.unmatched_codes.join(', '))
+    console.warn('[affiliate-sync] partner_code chưa map/mapping sai cấu hình (store NULL):', report.unmatched_codes.join(', '))
   }
   if (report && report.inactive_codes.length > 0) {
     console.warn('[affiliate-sync] mapping INACTIVE (store NULL):', report.inactive_codes.join(', '))
@@ -253,7 +286,8 @@ export async function GET(request: NextRequest) {
       deliveredMissingCompletedSample.join(', '))
   }
 
-  const hasNotes = (report?.unmatched_codes.length ?? 0) > 0 || (report?.inactive_codes.length ?? 0) > 0 || unknownStatuses.length > 0
+  const hasNotes = (report?.unmatched_codes.length ?? 0) > 0 || (report?.inactive_codes.length ?? 0) > 0
+    || unknownStatuses.length > 0 || newFsCodes.length > 0
   return NextResponse.json({
     ok: true,
     status: rejectedReasons.length > 0 || deliveredMissingCompletedCount > 0 ? 'warning' : hasNotes ? 'success_with_notes' : 'success',
@@ -266,7 +300,7 @@ export async function GET(request: NextRequest) {
     rejected_reasons: rejectedReasons.slice(0, 20),
     deactivated: finishResult?.deactivated ?? 0,
     finish_note: finishResult?.note ?? null,
-    mapping_report: report,
+    mapping_report: { ...report, new_fs_codes: newFsCodes },
     unknown_statuses: unknownStatuses,
     delivered_missing_completed_time_count: deliveredMissingCompletedCount,
     delivered_missing_completed_time_sample: deliveredMissingCompletedSample,
