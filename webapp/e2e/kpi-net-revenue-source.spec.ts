@@ -33,8 +33,20 @@ test.describe('kpi net_revenue source contract @desktop', () => {
   const aggQuery = section('export const KPI_AGGREGATE_QUERY', 'export function loadServiceAccount')
 
   test('1. campaignRangeQuery + campaignDailyQuery SUM NET_REVENUE, alias GIỮ NGUYÊN (downstream không đổi)', () => {
-    expect(rangeFn).toContain('SUM(COALESCE(net_revenue, 0)) AS actual_gmv')
-    expect(dailyFn).toContain('SUM(COALESCE(net_revenue, 0)) AS gmv')
+    expect(rangeFn).toContain('SUM(CAST(COALESCE(net_revenue, 0) AS NUMERIC)) AS actual_gmv')
+    expect(dailyFn).toContain('SUM(CAST(COALESCE(net_revenue, 0) AS NUMERIC)) AS gmv')
+  })
+
+  test('5. BQ-V2 (05/08): 2 hàm campaign đọc bảng MỚI gold_buymed_vn2 + CHỈ date_type DAY + loại NULL keys; KHÔNG còn bảng cũ; daily mang source_row_count cho guard', () => {
+    for (const fn of [rangeFn, dailyFn]) {
+      expect(fn).toContain('gold_buymed_vn2.circa_os_gmv_kpi')
+      expect(fn).not.toContain('tech__circa_os_gmv_kpi')
+      expect(fn).toContain("date_type = 'DAY'")
+      expect(fn).toContain('pos_code IS NOT NULL AND start_date IS NOT NULL')
+      expect(fn).toContain('start_date BETWEEN')
+    }
+    expect(dailyFn).toContain('COUNT(*) AS source_row_count')
+    expect(dailyFn).toContain('start_date AS')
   })
 
   test('2. KHÔNG còn SUM(COALESCE(gmv, 0)) trong 2 hàm campaign (audit P2: scope hẹp — landing sau này dùng lại pattern này vẫn hợp lệ, không fail oan)', () => {
@@ -42,10 +54,19 @@ test.describe('kpi net_revenue source contract @desktop', () => {
     expect(dailyFn).not.toContain('SUM(COALESCE(gmv, 0))')
   })
 
-  test('3. KPI_AGGREGATE_QUERY (landing ngày/tuần/tháng) VẪN dùng gmv — không bị đổi theo', () => {
-    expect(aggQuery).toContain('SUM(gmv) AS actual')
-    expect(aggQuery).not.toContain('net_revenue')
-    // DEFAULT_QUERY (weekly legacy) cũng không đụng
+  test('3. Landing KPI_AGGREGATE_QUERY (BQ-V2 1b): bảng mới, DAY/MONTH đọc trực tiếp net_revenue/TARGET; WEEK CHƯA bật (chờ BI input #2); DEFAULT_QUERY legacy không đụng', () => {
+    expect(aggQuery).toContain('gold_buymed_vn2.circa_os_gmv_kpi')
+    expect(aggQuery).not.toContain('tech__circa_os_gmv_kpi')
+    expect(aggQuery).toContain("date_type = 'DAY'")
+    expect(aggQuery).toContain("date_type = 'MONTH'")
+    expect(aggQuery).not.toContain("'week'") // chưa bật — BI chưa có dữ liệu WEEK
+    // r1 (audit P2#3): GROUP BY + COUNT thật — dòng nguồn trùng bị kpi.ts từ chối
+    expect(aggQuery).toContain('CAST(SUM(COALESCE(net_revenue, 0)) AS NUMERIC) AS actual')
+    expect(aggQuery).toContain('CAST(SUM(COALESCE(TARGET, 0)) AS NUMERIC) AS target')
+    expect(aggQuery).toContain('COUNT(*) AS raw_row_count')
+    expect(aggQuery).toContain('GROUP BY start_date, pos_code')
+    expect(aggQuery).toContain('LAST_DAY(start_date) AS period_end')
+    // DEFAULT_QUERY (weekly legacy — pipeline store_weekly_targets riêng) không đụng
     expect(section('export const DEFAULT_QUERY', 'export const KPI_AGGREGATE_QUERY')).not.toContain('net_revenue')
   })
 

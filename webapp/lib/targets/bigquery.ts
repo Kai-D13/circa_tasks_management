@@ -29,63 +29,49 @@ export const DEFAULT_QUERY = `
   ORDER BY monday_of_week DESC
 `
 
-// KPI v2 — aggregate the THREE current periods (day/week/month) per store IN
-// BigQuery so the cron pulls ~78 rows (26 stores × 3 grains), well under the
-// 1000-row maxResults cap (runBigQuery has no page-token handling). Used by
-// /api/cron/pull-kpi-targets → store_kpi_targets (migration 067).
+// KPI v2 landing — the CURRENT periods per store for /targets day/week/month.
+// Used by /api/cron/pull-kpi-targets → store_kpi_targets (migration 067);
+// aggregateAndUpsertKpi (lib/targets/kpi.ts) reads the aliases as-is.
 //
-// Source: lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi (DAILY).
-//   month/week/date DATE, pos_code/pos_name STRING, gmv/final_target FLOAT.
-//
-// Why this shape (verified from the BI sample 2026-06-26):
-//  * The `week` column ALREADY encodes the business-week incl. the month-end
-//    merge (22/06–30/06 all map to week 2026-06-22) — group by it, don't
-//    recompute. current_week = MAX(week) among rows with date <= today, which is
-//    robust to today's row not having landed yet (a recent past day still
-//    carries the current week's value).
-//  * The table holds FUTURE-dated rows with final_target pre-set, so summing by
-//    week/month naturally gives the WHOLE-period target; period_end = MAX(date).
-//  * `date`/`month`/`week` are backticked (column names that collide with BQ
-//    date keywords).
-//  * base is windowed to [current-month-start − 7 days, current-month-end] so BQ
-//    scans a slice, not the whole table. The −7 day tail covers a current week
-//    that leads in from the prior month (a month starting mid-week); the table's
-//    future-dated rows up to month-end keep week/month targets whole.
-// ⚠ Landing day/week/month GIỮ NGUYÊN nguồn `gmv` — contract 30/07 CHỈ chuyển
-//   CAMPAIGN (2 hàm campaign*Query bên dưới) sang net_revenue; query này KHÔNG đổi.
+// ⚠ BQ-V2 (contract 05/08 — BI cutover CẢ dataset/table): nguồn =
+// `gold_buymed_vn2.circa_os_gmv_kpi`, ĐÃ pre-aggregated theo kỳ (1 row /
+// date_type / start_date / pos): actual = net_revenue (bảng mới KHÔNG còn cột
+// gmv), target = cột TARGET — không còn SUM/GROUP tự tính tuần app-side.
+//   · day:   date_type='DAY',   start_date = hôm nay VN; period_end = start.
+//   · month: date_type='MONTH', start_date = đầu tháng VN; period_end = LAST_DAY.
+//   · week:  ⛔ CHƯA BẬT — schema mới không có period_end và DAY rows không
+//     link tuần; chờ BI xác nhận quy tắc tuần (REQUIRED INPUT #2, plan 05/08)
+//     rồi bổ sung nhánh UNION 'week'. Tab Tuần tạm hiện "Chưa có dữ liệu" cho
+//     kỳ mới (row tuần cũ trong store_kpi_targets giữ nguyên lịch sử).
+// Rows ~52 (26 store × 2 grain), far under the 1000-row maxResults cap.
+// r1 (audit P2#3): GROUP BY + COUNT(*) THẬT — nguồn kỳ vọng 1 row/(date_type,
+// start_date, pos); nếu BI vô tình có 2 dòng, raw_row_count > 1 và
+// aggregateAndUpsertKpi TỪ CHỐI row đó (fail-closed), không ghi đè theo thứ tự.
 export const KPI_AGGREGATE_QUERY = `
-  WITH today AS (SELECT CURRENT_DATE("Asia/Ho_Chi_Minh") AS d),
-  base AS (
-    SELECT \`month\`, \`week\`, \`date\`, pos_code, pos_name, gmv, final_target
-    FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`, today
-    WHERE pos_code NOT IN ("POS0001")
-      AND \`date\` BETWEEN DATE_SUB(DATE_TRUNC(today.d, MONTH), INTERVAL 7 DAY)
-                     AND LAST_DAY(today.d)
-  ),
-  current_week AS (
-    SELECT MAX(\`week\`) AS week_start FROM base, today WHERE \`date\` <= today.d
-  ),
-  current_month AS (SELECT DATE_TRUNC(d, MONTH) AS month_start FROM today)
-  SELECT 'day' AS period_type, \`date\` AS period_start, \`date\` AS period_end,
-         pos_code, pos_name, SUM(gmv) AS actual, SUM(final_target) AS target,
+  WITH today AS (SELECT CURRENT_DATE("Asia/Ho_Chi_Minh") AS d)
+  SELECT 'day' AS period_type, start_date AS period_start, start_date AS period_end,
+         pos_code, MAX(pos_name) AS pos_name,
+         CAST(SUM(COALESCE(net_revenue, 0)) AS NUMERIC) AS actual,
+         CAST(SUM(COALESCE(TARGET, 0)) AS NUMERIC) AS target,
          COUNT(*) AS raw_row_count
-  FROM base, today
-  WHERE \`date\` = today.d
-  GROUP BY \`date\`, pos_code, pos_name
+  FROM \`lakehouse-prod-394907.gold_buymed_vn2.circa_os_gmv_kpi\`, today
+  WHERE date_type = 'DAY'
+    AND pos_code IS NOT NULL AND start_date IS NOT NULL
+    AND pos_code NOT IN ("POS0001")
+    AND start_date = today.d
+  GROUP BY start_date, pos_code
   UNION ALL
-  SELECT 'week' AS period_type, \`week\` AS period_start, MAX(\`date\`) AS period_end,
-         pos_code, pos_name, SUM(gmv) AS actual, SUM(final_target) AS target,
+  SELECT 'month' AS period_type, start_date AS period_start, LAST_DAY(start_date) AS period_end,
+         pos_code, MAX(pos_name) AS pos_name,
+         CAST(SUM(COALESCE(net_revenue, 0)) AS NUMERIC) AS actual,
+         CAST(SUM(COALESCE(TARGET, 0)) AS NUMERIC) AS target,
          COUNT(*) AS raw_row_count
-  FROM base
-  WHERE \`week\` = (SELECT week_start FROM current_week)
-  GROUP BY \`week\`, pos_code, pos_name
-  UNION ALL
-  SELECT 'month' AS period_type, \`month\` AS period_start, MAX(\`date\`) AS period_end,
-         pos_code, pos_name, SUM(gmv) AS actual, SUM(final_target) AS target,
-         COUNT(*) AS raw_row_count
-  FROM base
-  WHERE \`month\` = (SELECT month_start FROM current_month)
-  GROUP BY \`month\`, pos_code, pos_name
+  FROM \`lakehouse-prod-394907.gold_buymed_vn2.circa_os_gmv_kpi\`, today
+  WHERE date_type = 'MONTH'
+    AND pos_code IS NOT NULL AND start_date IS NOT NULL
+    AND pos_code NOT IN ("POS0001")
+    AND start_date = DATE_TRUNC(today.d, MONTH)
+  GROUP BY start_date, pos_code
   ORDER BY period_type, pos_code
 `
 
@@ -95,15 +81,18 @@ export function loadServiceAccount(): ServiceAccount | null {
 }
 
 // KPI Campaign OFFLINE actual over an arbitrary date range (campaign start→end).
-// ⚠ NGUỒN = NET_REVENUE (contract stakeholder 30/07 — chuyển toàn cục từ gmv;
-// không có campaign active lúc chuyển; campaign ended/archived giữ snapshot cũ).
+// ⚠ BQ-V2 (contract 05/08 — BI cutover CẢ dataset/table): nguồn =
+// `gold_buymed_vn2.circa_os_gmv_kpi`, pre-aggregated theo kỳ — campaign CHỈ
+// đọc `date_type='DAY'` + `net_revenue` (DAY-authoritative; MONTH/WEEK/TARGET/
+// net_sale/return_amount KHÔNG tham gia). Table HARD-CODE trong Git (quyết
+// định 30/07: không ENV — số commission phải có commit audit).
 // Alias GIỮ NGUYÊN `actual_gmv` để downstream (engine/DB payload/UI/export)
-// không đổi — từ đây "gmv" trong pipeline campaign NGHĨA LÀ Net Revenue Offline.
+// không đổi — "gmv" trong pipeline campaign = Net Revenue Offline.
 // runBigQuery has no query-parameter support, so the dates are interpolated —
 // both values come from DB `date` columns; the regex guard makes injection
-// impossible even if a caller passes something else. Future days have
-// net_revenue NULL → COALESCE 0, so a running campaign naturally sums only
-// realized sales; giá trị ÂM giữ nguyên, cộng bình thường.
+// impossible even if a caller passes something else. Schema mới NULLABLE →
+// loại row pos_code/start_date NULL ngay trong WHERE; future days have
+// net_revenue NULL → COALESCE 0; giá trị ÂM giữ nguyên, cộng bình thường.
 // ~26 stores → one row per pos_code, far under the 1000-row cap.
 export function campaignRangeQuery(startDate: string, endDate: string): string {
   const ISO = /^\d{4}-\d{2}-\d{2}$/
@@ -111,10 +100,12 @@ export function campaignRangeQuery(startDate: string, endDate: string): string {
     throw new Error(`campaignRangeQuery: ngày không hợp lệ (${startDate} – ${endDate})`)
   }
   return `
-    SELECT pos_code, SUM(COALESCE(net_revenue, 0)) AS actual_gmv, COUNT(*) AS row_count
-    FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`
-    WHERE pos_code NOT IN ("POS0001")
-      AND \`date\` BETWEEN '${startDate}' AND '${endDate}'
+    SELECT pos_code, SUM(CAST(COALESCE(net_revenue, 0) AS NUMERIC)) AS actual_gmv, COUNT(*) AS row_count
+    FROM \`lakehouse-prod-394907.gold_buymed_vn2.circa_os_gmv_kpi\`
+    WHERE date_type = 'DAY'
+      AND pos_code IS NOT NULL AND start_date IS NOT NULL
+      AND pos_code NOT IN ("POS0001")
+      AND start_date BETWEEN '${startDate}' AND '${endDate}'
     GROUP BY pos_code
     ORDER BY pos_code
   `
@@ -122,9 +113,11 @@ export function campaignRangeQuery(startDate: string, endDate: string): string {
 
 // Per-DAY OFFLINE actual per store over a range — drives the staff "Tiến độ
 // theo ngày" chart AND the aggregate snapshot (summed app-side so they always
-// agree). ⚠ NGUỒN = NET_REVENUE (contract 30/07); alias GIỮ NGUYÊN `gmv` để
-// downstream không đổi — cột `gmv` của kpi_campaign_store_daily_actuals từ
-// đây chứa Net Revenue Offline.
+// agree). ⚠ BQ-V2 (05/08): nguồn `gold_buymed_vn2.circa_os_gmv_kpi`,
+// `date_type='DAY'` + `net_revenue` (xem chú thích campaignRangeQuery); alias
+// GIỮ NGUYÊN `gmv` — cột `gmv` của kpi_campaign_store_daily_actuals = Net
+// Revenue Offline. `source_row_count` đi kèm để orchestrator guard: bảng mới
+// pre-aggregated 1 row/store/ngày — >1 nghĩa nguồn sai → preserve snapshot.
 // Caller must chunk long ranges by month: 26 stores × 31 days ≈ 806 rows per
 // chunk, under the 1000-row cap; a 2-month range in one call would exceed it.
 export function campaignDailyQuery(startDate: string, endDate: string): string {
@@ -133,12 +126,16 @@ export function campaignDailyQuery(startDate: string, endDate: string): string {
     throw new Error(`campaignDailyQuery: ngày không hợp lệ (${startDate} – ${endDate})`)
   }
   return `
-    SELECT pos_code, \`date\`, SUM(COALESCE(net_revenue, 0)) AS gmv
-    FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`
-    WHERE pos_code NOT IN ("POS0001")
-      AND \`date\` BETWEEN '${startDate}' AND '${endDate}'
-    GROUP BY pos_code, \`date\`
-    ORDER BY pos_code, \`date\`
+    SELECT pos_code, start_date AS \`date\`,
+           SUM(CAST(COALESCE(net_revenue, 0) AS NUMERIC)) AS gmv,
+           COUNT(*) AS source_row_count
+    FROM \`lakehouse-prod-394907.gold_buymed_vn2.circa_os_gmv_kpi\`
+    WHERE date_type = 'DAY'
+      AND pos_code IS NOT NULL AND start_date IS NOT NULL
+      AND pos_code NOT IN ("POS0001")
+      AND start_date BETWEEN '${startDate}' AND '${endDate}'
+    GROUP BY pos_code, start_date
+    ORDER BY pos_code, start_date
   `
 }
 
