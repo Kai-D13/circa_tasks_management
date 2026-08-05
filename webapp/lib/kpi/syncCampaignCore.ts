@@ -6,7 +6,7 @@
 
 import type { AffiliateSyncHealth } from '@/lib/affiliate/health'
 import {
-  buildCampaignSnapshot, effectiveEndISO, monthChunks, vnDayRange, vnTodayISO,
+  buildCampaignSnapshot, effectiveEndISO, monthChunks, nextDayISO, vnDayRange, vnTodayISO,
   type ActualRowPayload, type DailyRowPayload, type TargetRow,
 } from '@/lib/kpi/engine'
 
@@ -167,6 +167,28 @@ export async function syncCampaignWithDeps(
           // SUM(net_revenue) — giá trị Offline của campaign = Net Revenue.
           offlineByPos.get(pos)!.set(date, Number(r.gmv ?? 0) || 0)
         }
+      }
+
+      // ⚠ BQ-V2 r1 (audit P1#2): EXPECTED COVERAGE — bảng mới có row cho MỌI
+      // ngày trong kỳ (kể cả tương lai, net_revenue NULL → 0). Vì vậy mỗi
+      // (target POS × ngày) từ start_date → effectiveEnd PHẢI có row; thiếu ô
+      // nào (kể cả 1 ngày giữa kỳ) = nguồn lỗi → PRESERVE, tuyệt đối không ghi
+      // snapshot thấp hơn thực tế (KPI/commission). Phân biệt rõ: row tồn tại
+      // với net_revenue NULL là HỢP LỆ (=0); row KHÔNG tồn tại là LỖI NGUỒN.
+      const targetPos = [...new Set(
+        targets.map((t) => String(t.pos_code ?? '').trim().toUpperCase()).filter(Boolean),
+      )]
+      const missing: string[] = []
+      for (const pos of targetPos) {
+        const byDate = offlineByPos.get(pos)
+        for (let d = c.start_date; d <= effEnd; d = nextDayISO(d)) {
+          if (!byDate?.has(d)) missing.push(`${pos}/${d}`)
+        }
+      }
+      if (missing.length > 0) {
+        const sample = missing.slice(0, 5).join(', ')
+        return preserved(
+          `Nguồn BQ THIẾU ${missing.length} ô dữ liệu (POS×ngày) trong kỳ — vd: ${sample}${missing.length > 5 ? ', …' : ''}; giữ snapshot cũ`)
       }
     }
     offlineSyncedAt = new Date(deps.nowMs()).toISOString()

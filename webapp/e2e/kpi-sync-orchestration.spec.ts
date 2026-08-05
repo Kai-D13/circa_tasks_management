@@ -26,6 +26,24 @@ const READY: AffiliateSyncHealth = {
 const NOT_READY = (reason: string): AffiliateSyncHealth =>
   ({ ready: false, reason, runId: 'run-A', lastSuccessAt: null, ageMinutes: null })
 
+// BQ-V2 r1 (audit P1#2): core giờ đòi EXPECTED COVERAGE — mọi (target POS ×
+// ngày start→effEnd) phải có row (bảng mới có row cả tương lai, null → 0).
+// Fixture BQ mặc định vì vậy là FULL COVERAGE: mọi POS mọi ngày gmv 0, riêng
+// POS0001/2026-07-02 = 300 (giữ nguyên các assertion giá trị cũ).
+const DAY_MS = 86400_000
+function fullCoverage(override: Record<string, number | null> = {}): Record<string, unknown>[] {
+  const rows: Record<string, unknown>[] = []
+  for (const pos of ['POS0001', 'POS0002']) {
+    for (let t = Date.parse('2026-07-01T00:00:00Z'); t <= Date.parse('2026-07-23T00:00:00Z'); t += DAY_MS) {
+      const date = new Date(t).toISOString().slice(0, 10)
+      const key = `${pos}/${date}`
+      const gmv = key in override ? override[key] : (key === 'POS0001/2026-07-02' ? 300 : 0)
+      rows.push({ pos_code: pos, date, gmv, source_row_count: 1 })
+    }
+  }
+  return rows
+}
+
 // Behavior = HÀM TRẢ KẾT QUẢ (không phải dep) — wrapper luôn đếm rồi mới ủy
 // quyền cho behavior; override vì thế không thể bỏ qua counter (audit r1.1 P2).
 interface Behavior {
@@ -63,7 +81,7 @@ function mkDeps(cfg: CampaignConfig, behavior: Behavior = {}) {
     loadBqServiceAccount: () => { calls.sa++; seq.push('sa'); return behavior.sa ? behavior.sa() : { key: 'fake' } },
     runBqChunk: async () => {
       calls.bq++; seq.push('bq')
-      return behavior.bq ? behavior.bq() : [{ pos_code: 'POS0001', date: '2026-07-02', gmv: 300 }]
+      return behavior.bq ? behavior.bq() : fullCoverage()
     },
     replaceActuals: async (id, daily, actuals) => {
       calls.replace++; seq.push('replace')
@@ -340,7 +358,45 @@ test.describe('kpi sync orchestration @desktop', () => {
   })
 
   test('BQ-V2 GUARD: row KHÔNG có source_row_count (fixture cũ/nguồn không trả) → mặc định 1, sync bình thường', async () => {
-    const { deps } = mkDeps(CFG())
+    const { deps } = mkDeps(CFG(), {
+      bq: async () => fullCoverage().map(({ source_row_count: _s, ...r }) => r),
+    })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('success')
+  })
+
+  // ── BQ-V2 r1 (audit P1#2): EXPECTED COVERAGE — thiếu Ô NÀO cũng preserve ──
+  test('COVERAGE: thiếu ĐÚNG 1 ngày giữa kỳ của 1 POS → preserved nêu rõ ô thiếu, KHÔNG replace (không ghi snapshot thấp hơn thực tế)', async () => {
+    const { deps, calls } = mkDeps(CFG(), {
+      bq: async () => fullCoverage().filter((r) => !(r.pos_code === 'POS0002' && r.date === '2026-07-15')),
+    })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    if (r.status === 'snapshot_preserved') {
+      expect(r.reason).toContain('THIẾU 1 ô')
+      expect(r.reason).toContain('POS0002/2026-07-15')
+    }
+    expect(calls.replace).toBe(0)
+  })
+
+  test('COVERAGE: 1 POS target hoàn toàn KHÔNG có dữ liệu → preserved (sample giới hạn, có đếm tổng), KHÔNG replace', async () => {
+    const { deps, calls } = mkDeps(CFG(), {
+      bq: async () => fullCoverage().filter((r) => r.pos_code !== 'POS0002'),
+    })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    if (r.status === 'snapshot_preserved') {
+      expect(r.reason).toContain('THIẾU 23 ô')   // 01→23/07 inclusive
+      expect(r.reason).toContain('POS0002/2026-07-01')
+      expect(r.reason).toContain('…')            // sample bị cắt, không dàn trải
+    }
+    expect(calls.replace).toBe(0)
+  })
+
+  test('COVERAGE: row TỒN TẠI với net_revenue NULL là HỢP LỆ (=0đ) — sync success, không nhầm với thiếu row', async () => {
+    const { deps } = mkDeps(CFG(), {
+      bq: async () => fullCoverage({ 'POS0002/2026-07-10': null }),
+    })
     const r = await syncCampaignWithDeps('camp-1', deps)
     expect(r.status).toBe('success')
   })
