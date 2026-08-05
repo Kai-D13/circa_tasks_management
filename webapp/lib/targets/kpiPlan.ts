@@ -1,7 +1,7 @@
 // BQ-V2 r2 (audit P1#1+#2) — ATOMIC LANDING GATE cho cron pull-kpi-targets,
 // tách THUẦN để test được (kpi.ts giữ server-only IO mỏng).
 //
-// Contract: nguồn gold_buymed_vn2 pre-aggregated → kỳ vọng MỖI active OS
+// Contract: nguồn schema V2 — bảng buymed_tech pre-aggregated → kỳ vọng MỖI active OS
 // store có ĐÚNG 1 row DAY + 1 row MONTH (WEEK chưa bật — vắng KHÔNG phải
 // lỗi). Bất kỳ sai lệch nào — thiếu store×grain (missing), nguồn trùng dòng
 // (duplicates), row không match store nào (unmatched), row hỏng (rowErrors)

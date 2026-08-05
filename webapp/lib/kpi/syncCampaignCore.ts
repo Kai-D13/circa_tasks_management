@@ -152,7 +152,7 @@ export async function syncCampaignWithDeps(
           const pos = String(r.pos_code ?? '').trim().toUpperCase()
           const date = String(r.date ?? '').slice(0, 10)
           if (!pos || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue
-          // ⚠ BQ-V2 (05/08): nguồn gold_buymed_vn2 pre-aggregated 1 row/store/
+          // ⚠ BQ-V2 (05/08): nguồn schema V2 — bảng buymed_tech pre-aggregated 1 row/store/
           // ngày — source_row_count != 1 hoặc key (pos, ngày) lặp lại nghĩa là
           // NGUỒN SAI → preserve snapshot (fail-closed, không ghi số khả nghi).
           const srcCount = Number(r.source_row_count ?? 1)
