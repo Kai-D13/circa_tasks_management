@@ -332,7 +332,7 @@ test.describe('kpi sync orchestration @desktop', () => {
     expect(a.actual_value).toBe(500)
   })
 
-  // ── BQ-V2 (05/08): nguồn gold_buymed_vn2 pre-aggregated 1 row/store/ngày —
+  // ── BQ-V2 (05/08): nguồn schema V2 — bảng buymed_tech pre-aggregated 1 row/store/ngày —
   //    orchestrator guard fail-closed khi nguồn trả dạng khác kỳ vọng. ──
   test('BQ-V2 GUARD: source_row_count != 1 → preserved, KHÔNG replace (nguồn pre-aggregated sai)', async () => {
     const { deps, calls } = mkDeps(CFG(), {

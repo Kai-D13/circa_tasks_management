@@ -33,10 +33,13 @@ export const DEFAULT_QUERY = `
 // Used by /api/cron/pull-kpi-targets → store_kpi_targets (migration 067);
 // aggregateAndUpsertKpi (lib/targets/kpi.ts) reads the aliases as-is.
 //
-// ⚠ BQ-V2 (contract 05/08 — BI cutover CẢ dataset/table): nguồn =
-// `gold_buymed_vn2.circa_os_gmv_kpi`, ĐÃ pre-aggregated theo kỳ (1 row /
-// date_type / start_date / pos): actual = net_revenue (bảng mới KHÔNG còn cột
-// gmv), target = cột TARGET — không còn SUM/GROUP tự tính tuần app-side.
+// ⚠ BQ-V2 r3 (06/08): nguồn = `buymed_tech.tech__circa_os_gmv_kpi` — BẢNG
+// PRODUCTION đã mang SCHEMA V2 (BI đồng bộ 1-1 với mirror
+// `gold_buymed_vn2.circa_os_gmv_kpi`; service account CHỈ có quyền dataset
+// buymed_tech → trỏ gold_* là 403 → cron 502/207. KHÔNG đổi lại path nếu chưa
+// đổi quyền SA). Pre-aggregated theo kỳ (1 row / date_type / start_date /
+// pos): actual = net_revenue (schema V2 KHÔNG còn cột gmv), target = cột
+// TARGET — không còn SUM/GROUP tự tính tuần app-side.
 //   · day:   date_type='DAY',   start_date = hôm nay VN; period_end = start.
 //   · month: date_type='MONTH', start_date = đầu tháng VN; period_end = LAST_DAY.
 //   · week:  ⛔ CHƯA BẬT — schema mới không có period_end và DAY rows không
@@ -54,7 +57,7 @@ export const KPI_AGGREGATE_QUERY = `
          CAST(SUM(COALESCE(net_revenue, 0)) AS NUMERIC) AS actual,
          CAST(SUM(COALESCE(TARGET, 0)) AS NUMERIC) AS target,
          COUNT(*) AS raw_row_count
-  FROM \`lakehouse-prod-394907.gold_buymed_vn2.circa_os_gmv_kpi\`, today
+  FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`, today
   WHERE date_type = 'DAY'
     AND pos_code IS NOT NULL AND start_date IS NOT NULL
     AND pos_code NOT IN ("POS0001")
@@ -66,7 +69,7 @@ export const KPI_AGGREGATE_QUERY = `
          CAST(SUM(COALESCE(net_revenue, 0)) AS NUMERIC) AS actual,
          CAST(SUM(COALESCE(TARGET, 0)) AS NUMERIC) AS target,
          COUNT(*) AS raw_row_count
-  FROM \`lakehouse-prod-394907.gold_buymed_vn2.circa_os_gmv_kpi\`, today
+  FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`, today
   WHERE date_type = 'MONTH'
     AND pos_code IS NOT NULL AND start_date IS NOT NULL
     AND pos_code NOT IN ("POS0001")
@@ -81,8 +84,9 @@ export function loadServiceAccount(): ServiceAccount | null {
 }
 
 // KPI Campaign OFFLINE actual over an arbitrary date range (campaign start→end).
-// ⚠ BQ-V2 (contract 05/08 — BI cutover CẢ dataset/table): nguồn =
-// `gold_buymed_vn2.circa_os_gmv_kpi`, pre-aggregated theo kỳ — campaign CHỈ
+// ⚠ BQ-V2 r3 (06/08): nguồn = `buymed_tech.tech__circa_os_gmv_kpi` — bảng
+// PRODUCTION schema V2 (SA chỉ có quyền dataset buymed_tech; mirror
+// gold_buymed_vn2 đồng bộ 1-1 nhưng KHÔNG được cấp quyền → 403). Campaign CHỈ
 // đọc `date_type='DAY'` + `net_revenue` (DAY-authoritative; MONTH/WEEK/TARGET/
 // net_sale/return_amount KHÔNG tham gia). Table HARD-CODE trong Git (quyết
 // định 30/07: không ENV — số commission phải có commit audit).
@@ -101,7 +105,7 @@ export function campaignRangeQuery(startDate: string, endDate: string): string {
   }
   return `
     SELECT pos_code, SUM(CAST(COALESCE(net_revenue, 0) AS NUMERIC)) AS actual_gmv, COUNT(*) AS row_count
-    FROM \`lakehouse-prod-394907.gold_buymed_vn2.circa_os_gmv_kpi\`
+    FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`
     WHERE date_type = 'DAY'
       AND pos_code IS NOT NULL AND start_date IS NOT NULL
       AND pos_code NOT IN ("POS0001")
@@ -113,7 +117,7 @@ export function campaignRangeQuery(startDate: string, endDate: string): string {
 
 // Per-DAY OFFLINE actual per store over a range — drives the staff "Tiến độ
 // theo ngày" chart AND the aggregate snapshot (summed app-side so they always
-// agree). ⚠ BQ-V2 (05/08): nguồn `gold_buymed_vn2.circa_os_gmv_kpi`,
+// agree). ⚠ BQ-V2 (05/08): nguồn `buymed_tech.tech__circa_os_gmv_kpi`,
 // `date_type='DAY'` + `net_revenue` (xem chú thích campaignRangeQuery); alias
 // GIỮ NGUYÊN `gmv` — cột `gmv` của kpi_campaign_store_daily_actuals = Net
 // Revenue Offline. `source_row_count` đi kèm để orchestrator guard: bảng mới
@@ -129,7 +133,7 @@ export function campaignDailyQuery(startDate: string, endDate: string): string {
     SELECT pos_code, start_date AS \`date\`,
            SUM(CAST(COALESCE(net_revenue, 0) AS NUMERIC)) AS gmv,
            COUNT(*) AS source_row_count
-    FROM \`lakehouse-prod-394907.gold_buymed_vn2.circa_os_gmv_kpi\`
+    FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`
     WHERE date_type = 'DAY'
       AND pos_code IS NOT NULL AND start_date IS NOT NULL
       AND pos_code NOT IN ("POS0001")

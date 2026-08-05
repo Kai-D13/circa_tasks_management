@@ -3,7 +3,7 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { buildKpiUpsertPlan, type KpiGrain, type KpiUpsertPlan } from './kpiPlan'
 
 // KPI v2 ingest — BQ-V2 r2 (audit P1#1+#2): IO MỎNG quanh planner THUẦN
-// (lib/targets/kpiPlan — có test khóa). Nguồn gold_buymed_vn2 pre-aggregated
+// (lib/targets/kpiPlan — có test khóa). Nguồn schema V2 — bảng buymed_tech pre-aggregated
 // (actual = net_revenue, target = cột TARGET; WEEK chưa bật).
 //
 // ATOMIC GATE: plan.ok=false (thiếu store×grain / nguồn trùng dòng / unmatched

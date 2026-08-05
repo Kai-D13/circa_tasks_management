@@ -37,10 +37,10 @@ test.describe('kpi net_revenue source contract @desktop', () => {
     expect(dailyFn).toContain('SUM(CAST(COALESCE(net_revenue, 0) AS NUMERIC)) AS gmv')
   })
 
-  test('5. BQ-V2 (05/08): 2 hàm campaign đọc bảng MỚI gold_buymed_vn2 + CHỈ date_type DAY + loại NULL keys; KHÔNG còn bảng cũ; daily mang source_row_count cho guard', () => {
+  test('5. BQ-V2 r3: 2 hàm campaign đọc bảng PRODUCTION buymed_tech (schema V2, SA có quyền — KHÔNG gold_buymed_vn2) + CHỈ date_type DAY + loại NULL keys + source_row_count', () => {
     for (const fn of [rangeFn, dailyFn]) {
-      expect(fn).toContain('gold_buymed_vn2.circa_os_gmv_kpi')
-      expect(fn).not.toContain('tech__circa_os_gmv_kpi')
+      expect(fn).toContain('buymed_tech.tech__circa_os_gmv_kpi')
+      expect(fn).not.toContain('gold_buymed_vn2') // r3: SA không có quyền dataset mirror
       expect(fn).toContain("date_type = 'DAY'")
       expect(fn).toContain('pos_code IS NOT NULL AND start_date IS NOT NULL')
       expect(fn).toContain('start_date BETWEEN')
@@ -55,8 +55,8 @@ test.describe('kpi net_revenue source contract @desktop', () => {
   })
 
   test('3. Landing KPI_AGGREGATE_QUERY (BQ-V2 1b): bảng mới, DAY/MONTH đọc trực tiếp net_revenue/TARGET; WEEK CHƯA bật (chờ BI input #2); DEFAULT_QUERY legacy không đụng', () => {
-    expect(aggQuery).toContain('gold_buymed_vn2.circa_os_gmv_kpi')
-    expect(aggQuery).not.toContain('tech__circa_os_gmv_kpi')
+    expect(aggQuery).toContain('buymed_tech.tech__circa_os_gmv_kpi')
+    expect(aggQuery).not.toContain('gold_buymed_vn2') // r3: SA không có quyền dataset mirror
     expect(aggQuery).toContain("date_type = 'DAY'")
     expect(aggQuery).toContain("date_type = 'MONTH'")
     expect(aggQuery).not.toContain("'week'") // chưa bật — BI chưa có dữ liệu WEEK

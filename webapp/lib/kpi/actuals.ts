@@ -58,7 +58,7 @@ function realDeps(): SyncCampaignDeps {
     },
     loadBqServiceAccount: () => loadServiceAccount(),
     // ⚠ Contract 30/07 + BQ-V2 05/08: campaignDailyQuery đọc bảng
-    // gold_buymed_vn2 (date_type='DAY', SUM net_revenue) nhưng alias giữ
+    // schema V2 — bảng buymed_tech (date_type='DAY', SUM net_revenue) nhưng alias giữ
     // `gmv` — mọi field "gmv"/"offline" trong pipeline campaign là Net
     // Revenue Offline (KHÔNG phải gross GMV). Landing day/month cũng đã sang
     // bảng mới (1b); WEEK chờ BI có dữ liệu.
