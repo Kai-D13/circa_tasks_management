@@ -36,11 +36,14 @@ test.describe('kpi landing week containment @desktop', () => {
     expect(currentWeekStart(['', ''], '2026-08-04')).toBeUndefined()
   })
 
-  test('P2#3 (source-text): kpi.ts TỪ CHỐI row có raw_row_count != 1 — nguồn trùng dòng không được ghi đè', () => {
-    // lib/targets/kpi.ts import 'server-only' → không import runtime trong test;
-    // khóa guard bằng source-text như kpi-net-revenue-source.spec.
+  test('r2 (source-text): kpi.ts ATOMIC GATE — plan.ok=false → upserted 0, không ghi row nào; coverage = ACTIVE OS stores', () => {
+    // lib/targets/kpi.ts import 'server-only' → không import runtime trong
+    // test; logic phân loại đã tách THUẦN sang kpiPlan (runtime test ở
+    // kpi-landing-plan.spec) — đây khóa phần IO: gate + tập coverage.
     const src = fs.readFileSync(path.join(__dirname, '..', 'lib', 'targets', 'kpi.ts'), 'utf8')
-    expect(src).toContain('rawRowCount !== 1')
-    expect(src).toContain('bỏ qua, không ghi')
+    expect(src).toContain('buildKpiUpsertPlan')
+    expect(src).toContain('if (!plan.ok)')
+    expect(src).toContain('upserted: 0')
+    expect(src).toContain(".eq('store_type', 'os').eq('is_active', true)")
   })
 })

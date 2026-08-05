@@ -3,19 +3,19 @@ import { revalidatePath } from 'next/cache'
 import { KPI_AGGREGATE_QUERY, loadServiceAccount, runBigQuery } from '@/lib/targets/bigquery'
 import { aggregateAndUpsertKpi } from '@/lib/targets/kpi'
 
-// GET /api/cron/pull-kpi-targets — KPI v2. Pulls the three current periods
-// (day/week/month) per store, pre-aggregated IN BigQuery
-// (buymed_tech.tech__circa_os_gmv_kpi), and upserts store_kpi_targets
-// (migration 067). The new daily source replaced the weekly table.
+// GET /api/cron/pull-kpi-targets — KPI v2 landing (day/month; week chờ BI).
+// BQ-V2 (05/08): nguồn gold_buymed_vn2.circa_os_gmv_kpi pre-aggregated —
+// actual = net_revenue, target = cột TARGET; upsert store_kpi_targets (067).
 //
-// ⚠ OPERATIONAL: this is a NEW route, run side-by-side with /api/cron/pull-targets
-// (the old weekly feed → store_weekly_targets). Add a NEW Coolify Scheduled Task
-// "Pull KPI targets (BigQuery)" hitting THIS route (e.g. `0 */2 * * *`) with the
-// Bearer CRON_SECRET. Keep the OLD task + table running until KPI v2 is signed
-// off (rollback path), then retire it.
+// r2 (audit P1#1+#2) — ATOMIC GATE: aggregateAndUpsertKpi chỉ ghi khi ĐỦ
+// coverage (mỗi active OS store đúng 1 row DAY + 1 row MONTH) và KHÔNG có
+// duplicate/unmatched/rowError. Bất kỳ sai lệch nào → 0 write + HTTP 422 với
+// chi tiết {missing, duplicates, unmatched, rowErrors} — Coolify đỏ thay vì
+// "cron xanh một phần". WEEK vắng dữ liệu KHÔNG phải lỗi (grain chưa bật).
 //
-// The aggregate query returns ~78 rows (26 stores × 3 grains) — well under the
-// 1000-row maxResults cap, so no pagination concern.
+// r2 (audit P2#4): BỎ override env BQ_KPI_QUERY — query là contract
+// version-control bằng Git (nhất quán quyết định 30/07); env cũ nếu còn trên
+// Coolify sẽ bị bỏ qua.
 
 export async function GET(request: NextRequest) {
   const secret = request.headers.get('authorization')?.replace('Bearer ', '')
@@ -32,22 +32,39 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const rawRows = await runBigQuery(sa, process.env.BQ_KPI_QUERY || KPI_AGGREGATE_QUERY)
+    const rawRows = await runBigQuery(sa, KPI_AGGREGATE_QUERY)
     if (rawRows.length === 0) {
       return NextResponse.json({ error: 'Query returned 0 rows' }, { status: 422 })
     }
-    // ~78 expected; a flood means the query lost its grain — surface it.
+    // ~52 expected (26 store × 2 grain); a flood means the query lost its grain.
     if (rawRows.length >= 1000) {
       console.warn(`[pull-kpi-targets] unexpected ${rawRows.length} rows (>=1000) — check query grain / maxResults cap`)
     }
 
-    const { upserted, periods, unmatched, rowErrors } = await aggregateAndUpsertKpi(rawRows)
-    if (upserted === 0) {
-      return NextResponse.json({ error: 'No valid rows after aggregate', unmatched, rowErrors }, { status: 422 })
+    const result = await aggregateAndUpsertKpi(rawRows)
+    if (!result.ok) {
+      // Fail-closed toàn phần — không có row nào được ghi.
+      return NextResponse.json(
+        {
+          error: 'Nguồn KPI không đủ/không sạch — KHÔNG ghi row nào (atomic gate)',
+          missing: result.missing,
+          duplicates: result.duplicates,
+          unmatched: result.unmatched,
+          rowErrors: result.rowErrors,
+        },
+        { status: 422 },
+      )
     }
 
     revalidatePath('/targets')
-    return NextResponse.json({ ok: true, pulled: rawRows.length, upserted, periods, unmatched, rowErrors })
+    return NextResponse.json({
+      ok: true,
+      pulled: rawRows.length,
+      upserted: result.upserted,
+      periods: result.periods,
+      unmatched: result.unmatched,
+      rowErrors: result.rowErrors,
+    })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     // BQ query/token errors surface as 502; everything else 500.
