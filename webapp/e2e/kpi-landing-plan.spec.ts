@@ -79,6 +79,28 @@ test.describe('kpi landing atomic plan @desktop', () => {
     expect(p.unmatched).toEqual(['STORE LẠ (POS9999)'])
   })
 
+  test('r2.1: actual/target NULL → 0đ HỢP LỆ; non-null KHÔNG parse được → rowErrors + ok=false (không âm thầm thành 0đ)', () => {
+    const okNull = buildKpiUpsertPlan(fullRows().map((r) => ({ ...r, actual: null, target: null })), STORES, NOW)
+    expect(okNull.ok).toBe(true)
+    expect(okNull.payload[0].actual).toBe(0)
+    expect(okNull.payload[0].status).toBeNull() // target 0 → Chưa có mục tiêu
+    const badActual = buildKpiUpsertPlan([...fullRows().slice(1), row('day', 'POS0009', { actual: 'abc' })], STORES, NOW)
+    expect(badActual.ok).toBe(false)
+    expect(badActual.rowErrors.some((e) => e.includes('actual không parse được'))).toBe(true)
+    const badTarget = buildKpiUpsertPlan([...fullRows().slice(1), row('day', 'POS0009', { target: '12,5' })], STORES, NOW)
+    expect(badTarget.ok).toBe(false)
+    expect(badTarget.rowErrors.some((e) => e.includes('target không parse được'))).toBe(true)
+  })
+
+  test('r2.1: period_end NULL → fallback period_start hợp lệ; non-null SAI FORMAT → rowErrors + ok=false', () => {
+    const nullEnd = buildKpiUpsertPlan(fullRows().map((r) => ({ ...r, period_end: null })), STORES, NOW)
+    expect(nullEnd.ok).toBe(true)
+    expect(nullEnd.payload[0].period_end).toBe(nullEnd.payload[0].period_start)
+    const badEnd = buildKpiUpsertPlan([...fullRows().slice(1), row('day', 'POS0009', { period_end: '31/08/2026' })], STORES, NOW)
+    expect(badEnd.ok).toBe(false)
+    expect(badEnd.rowErrors.some((e) => e.includes('period_end không hợp lệ'))).toBe(true)
+  })
+
   test('row HỎNG (period_start sai) → rowErrors + ok=false; target=0 hợp lệ → status null "Chưa có mục tiêu"', () => {
     const bad = buildKpiUpsertPlan([...fullRows(), row('day', 'POS0009', { period_start: 'not-a-date' })], STORES, NOW)
     expect(bad.ok).toBe(false)

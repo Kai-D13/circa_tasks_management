@@ -50,6 +50,20 @@ function num(v: unknown): number {
   }
   return 0
 }
+// r2.1 (audit P2): phân biệt NULL (hợp lệ → 0đ) với NON-NULL không parse được
+// (rác từ nguồn → rowErrors → atomic 422) — không âm thầm biến rác thành 0đ
+// trên màn tiền. Trả null = INVALID.
+function coerceNum(v: unknown): number | null {
+  if (v === null || v === undefined) return 0
+  if (typeof v === 'number') return Number.isFinite(v) ? v : null
+  if (typeof v === 'string') {
+    const t = v.trim()
+    if (t === '') return null
+    const n = Number(t)
+    return Number.isFinite(n) ? n : null
+  }
+  return null
+}
 const dateStr = (v: unknown): string | null => {
   const s = typeof v === 'string' ? v.trim() : ''
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null
@@ -87,7 +101,15 @@ export function buildKpiUpsertPlan(
       rowErrors.push(`${periodType}: period_start không hợp lệ`)
       continue
     }
-    const periodEnd = dateStr(raw.period_end) ?? periodStart
+    // r2.1 (audit P2): period_end NULL → fallback period_start (hợp lệ);
+    // NON-NULL nhưng sai format → lỗi nguồn, không âm thầm fallback.
+    const periodEnd = raw.period_end === null || raw.period_end === undefined
+      ? periodStart
+      : dateStr(raw.period_end)
+    if (!periodEnd) {
+      rowErrors.push(`${periodType} ${periodStart}: period_end không hợp lệ: ${String(raw.period_end)}`)
+      continue
+    }
 
     const posName = str(raw.pos_name)
     const posCode = str(raw.pos_code)?.toUpperCase() ?? null
@@ -120,8 +142,18 @@ export function buildKpiUpsertPlan(
       continue
     }
 
-    const actual = num(raw.actual)
-    const target = num(raw.target)
+    // r2.1 (audit P2): actual/target NULL → 0 hợp lệ; non-null không parse
+    // được → rowErrors (atomic gate chặn toàn bộ).
+    const actual = coerceNum(raw.actual)
+    if (actual === null) {
+      rowErrors.push(`${periodType} ${periodStart} ${label}: actual không parse được: ${String(raw.actual)}`)
+      continue
+    }
+    const target = coerceNum(raw.target)
+    if (target === null) {
+      rowErrors.push(`${periodType} ${periodStart} ${label}: target không parse được: ${String(raw.target)}`)
+      continue
+    }
     const hasGoal = target > 0
     byUpsertKey.set(upsertKey, {
       store_id: storeId,
