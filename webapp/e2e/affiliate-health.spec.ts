@@ -174,10 +174,27 @@ const fakeDb = (over: Partial<AffiliateHealthDb> = {}, dirtyStores: string[] = [
 // r2.1: wrapper LUÔN nhận NOW inject — fixture minAgo() neo vào NOW nên kết quả
 // bất biến theo thời điểm chạy (audit: test từng lúc pass lúc fail theo clock).
 test.describe('affiliate sync health — wrapper scoped @desktop', () => {
-  test('danh sách target rỗng → not ready (r1 — không kiểm canary được)', async () => {
+  test('scope RỖNG (không store, không partner) → not ready (FS-expansion 06/08)', async () => {
     const h = await getAffiliateSyncHealth(fakeDb(), [], NOW)
     expect(h.ready).toBe(false)
-    expect(h.reason).toContain('target rỗng')
+    expect(h.reason).toContain('scope rỗng')
+  })
+
+  test('FS-expansion: store rỗng NHƯNG có partnerCodes (view FS-only) → wrapper CHẠY TIẾP, run sạch → READY, canary store bỏ qua', async () => {
+    let canaryCalls = 0
+    const h = await getAffiliateSyncHealth(
+      fakeDb({ countDeliveredMissingCompleted: async () => { canaryCalls++; return { count: 0, error: null } } }),
+      [], NOW, ['NT-YEN-HUONG'])
+    expect(h.ready).toBe(true)
+    expect(canaryCalls).toBe(0) // canary theo store KHÔNG chạy khi store rỗng —
+    // canary phía partner nằm trong rpc_aggregate_affiliate_partner_gmv (RAISE)
+  })
+
+  test('FS-expansion: có partnerCodes nhưng RUN LỖI vẫn chặn (điều kiện run-level giữ nguyên)', async () => {
+    const h = await getAffiliateSyncHealth(
+      fakeDb({ latestRun: async () => ({ data: run({ status: 'failed', error: 'x' }), error: null }) }),
+      [], NOW, ['NT-YEN-HUONG'])
+    expect(h.ready).toBe(false)
   })
 
   test('đơn FS/external hỏng NHƯNG target OS sạch → READY (r1 P1#2)', async () => {

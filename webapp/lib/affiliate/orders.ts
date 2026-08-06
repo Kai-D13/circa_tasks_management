@@ -61,6 +61,57 @@ export function groupMappingsByStore(mappings: {
   return [...byStore.values()]
 }
 
+// ── FS-expansion (contract 06/08) — ROW MODEL 2 ENTITY của overview ─────────
+// OS / FS-có-store: group theo STORE (như cũ); FS KHÔNG store (đối tác, mapping
+// fs + store_id NULL): mỗi partner_code là MỘT row riêng — không tạo store giả.
+export type OverviewEntity =
+  | { kind: 'store'; store_id: string; name: string | null; code: string | null; partnerCodes: string[]; isFs: boolean }
+  | { kind: 'partner'; partner_code: string; display_name: string }
+
+export interface OverviewMappingRow {
+  partner_code: string
+  partner_type: string
+  store_id: string | null
+  display_name: string | null
+  stores: { name: string; code: string | null } | null
+}
+
+export function buildOverviewEntities(mappings: OverviewMappingRow[]): OverviewEntity[] {
+  const storeRows = mappings.filter((m): m is OverviewMappingRow & { store_id: string } => m.store_id !== null)
+  const stores: OverviewEntity[] = groupMappingsByStore(storeRows).map((g) => ({
+    kind: 'store', store_id: g.store_id, name: g.name, code: g.code,
+    partnerCodes: g.partnerCodes, isFs: g.hasFs,
+  }))
+  // FS partner (store_id NULL): 1 row / partner_code; display_name trống →
+  // fallback chính partner_code (chốt stakeholder 06/08).
+  const partners: OverviewEntity[] = mappings
+    .filter((m) => m.store_id === null && m.partner_type === 'fs')
+    .map((m) => ({
+      kind: 'partner',
+      partner_code: m.partner_code,
+      display_name: (m.display_name ?? '').trim() || m.partner_code,
+    }))
+  return [...stores, ...partners]
+}
+
+// r1 (audit P2#7): value filter "Cửa hàng" phải PHÂN NAMESPACE — store dùng
+// uuid, partner dùng code TỰ DO (space/Unicode) nên raw value về lý thuyết có
+// thể đụng nhau; key 'store:<uuid>' | 'partner:<code>' loại trừ collision.
+export function overviewEntityKey(e: OverviewEntity): string {
+  return e.kind === 'store' ? `store:${e.store_id}` : `partner:${e.partner_code}`
+}
+
+// Filter Loại (Tất cả/OS/FS): store thuần OS → 'os'; store có mapping fs HOẶC
+// partner-row → 'fs'.
+export type OverviewTypeFilter = 'all' | 'os' | 'fs'
+export function filterEntitiesByType(entities: OverviewEntity[], type: OverviewTypeFilter): OverviewEntity[] {
+  if (type === 'all') return entities
+  return entities.filter((e) =>
+    type === 'fs'
+      ? (e.kind === 'partner' || e.isFs)
+      : (e.kind === 'store' && !e.isFs))
+}
+
 export interface AffiliateOrderRow {
   id: string
   pos_order_code: string | null

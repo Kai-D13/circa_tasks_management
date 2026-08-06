@@ -166,6 +166,23 @@ export function validateSourceOrder(doc: SourceOrderDoc): NormalizeResult {
   }
 }
 
+// ── Contract partner_code THỐNG NHẤT (FS-expansion r1, audit 06/08 P1#1) ────
+// Dùng chung: cron auto-create (lọc candidate trước khi gọi RPC ensure) +
+// server action drill-down partner. Production CÓ mã chứa khoảng trắng và
+// Unicode ('NT THIÊN') — TUYỆT ĐỐI không giới hạn ASCII. Luật: string đã
+// trim, không rỗng, ≤64 ký tự, không control character (newline/tab/…). Mọi
+// đường SQL đều parameterized (RPC args) — không cần regex ASCII để chống
+// injection. DB mirror cùng luật trong rpc_ensure_fs_partner_mappings (102).
+export const PARTNER_CODE_MAX_LEN = 64
+export function isValidPartnerCode(code: unknown): code is string {
+  return typeof code === 'string'
+    && code.length > 0
+    && code === code.trim()
+    && code.length <= PARTNER_CODE_MAX_LEN
+    // eslint-disable-next-line no-control-regex
+    && !/[\u0000-\u001F\u007F]/.test(code)
+}
+
 // ── Resolver mapping DÙNG CHUNG cho dry-run và real run (audit F2 r1 P1 —
 // hai luồng không được lệch logic). Pure: mappings do caller đọc từ DB. ──────
 export interface PartnerMappingRow {
@@ -175,13 +192,16 @@ export interface PartnerMappingRow {
   is_active: boolean
 }
 
+// FS-expansion (contract 05-06/08, mig 102): hết khái niệm external trên
+// luồng vận hành — mọi mã ngoài whitelist OS là FS (được phép store_id NULL,
+// group theo partner_code trên overview, chỉ super drill-down).
 export interface ResolveReport {
-  matched_os: number          // đơn map store OS
-  matched_fs: number          // đơn map store FS (chỉ super thấy)
-  external: number            // đơn thuộc mapping external (store_id NULL chủ đích)
-  unmatched_codes: string[]   // code KHÔNG có trong mapping → store_id NULL + canary
+  matched_os: number          // đơn map store OS (mapping os + store_id)
+  matched_fs: number          // đơn map mapping FS (CÓ hoặc KHÔNG store_id)
+  unmatched_codes: string[]   // code KHÔNG có mapping HOẶC mapping sai cấu hình
+                              // (type lạ/os thiếu store) → store_id NULL + health chặn
   inactive_codes: string[]    // code có mapping nhưng is_active=false → store_id NULL
-  null_store_orders: number   // tổng đơn sẽ nằm store_id NULL (external+unmatched+inactive)
+  null_store_orders: number   // tổng đơn nằm store_id NULL (fs-partner+unmatched+inactive)
   negative_price_count: number
   negative_price_sample: number[] // tối đa 10 order_id
 }
@@ -202,7 +222,7 @@ export function resolveStores(
   const unmatched = new Set<string>()
   const inactive = new Set<string>()
   const report: ResolveReport = {
-    matched_os: 0, matched_fs: 0, external: 0,
+    matched_os: 0, matched_fs: 0,
     unmatched_codes: [], inactive_codes: [], null_store_orders: 0,
     negative_price_count: 0, negative_price_sample: [],
   }
@@ -213,12 +233,16 @@ export function resolveStores(
       unmatched.add(r.partner_code)
     } else if (!m.is_active) {
       inactive.add(r.partner_code)
-    } else if (m.store_id && m.partner_type === 'os') {
+    } else if (m.partner_type === 'os' && m.store_id) {
       storeId = m.store_id; report.matched_os++
-    } else if (m.store_id && m.partner_type === 'fs') {
-      storeId = m.store_id; report.matched_fs++
+    } else if (m.partner_type === 'fs') {
+      // FS được phép store_id NULL (đối tác không phải cửa hàng thật) —
+      // đơn giữ store_id NULL, aggregate/drill-down đi theo partner_code.
+      storeId = m.store_id ?? null; report.matched_fs++
     } else {
-      report.external++ // mapping external chủ đích — KHÔNG fallback vào store
+      // Mapping sai cấu hình (type 'external' còn sót sau 102 / os thiếu
+      // store_id) → coi như unmatched: fail-visible qua health, không đoán.
+      unmatched.add(r.partner_code)
     }
     if (storeId === null) report.null_store_orders++
     if (r.total_price < 0) {

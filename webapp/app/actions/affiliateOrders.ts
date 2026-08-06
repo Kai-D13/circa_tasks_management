@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { isKpiAffiliateEnabled, isKpiCampaignEnabled } from '@/lib/kpi/flags'
 import { vnDayRange } from '@/lib/kpi/engine'
 import { sanitizeOpsText } from '@/lib/ops/sanitize'
+import { isValidPartnerCode } from '@/lib/affiliate/normalize'
 import {
   ORDERS_PAGE_SIZE, nextCursorFrom, validOrdersRange,
   type AffiliateOrderRow, type OrdersCursor,
@@ -48,6 +49,52 @@ export async function listAffiliateOrders(input: {
   const range = vnDayRange(input.from, input.to)
   const { data, error } = await supabase.rpc('rpc_list_affiliate_orders', {
     p_store_id: input.storeId,
+    p_from: range.from,
+    p_to: range.to,
+    p_limit: ORDERS_PAGE_SIZE,
+    p_cursor_completed_time: cursor?.completedTime ?? null,
+    p_cursor_id: cursor?.id ?? null,
+  })
+  if (error) return { error: sanitizeOpsText(error.message) }
+  const rows = (data ?? []) as AffiliateOrderRow[]
+  return { rows, nextCursor: nextCursorFrom(rows, ORDERS_PAGE_SIZE) }
+}
+
+// FS-expansion (contract 06/08): drill-down theo PARTNER_CODE cho mapping FS
+// không có store (mig 102). SESSION client → rpc_list_affiliate_partner_orders
+// — authz TRONG DB: CHỈ Super Admin (OPS/SM/QLCH/Staff bị RAISE 'Không có
+// quyền'); giữ nguyên rule DELIVERED-only + keyset ≤50 + range guard.
+// r1 (audit P1#1): validate bằng CONTRACT CHUNG isValidPartnerCode — production
+// có mã khoảng trắng/Unicode ('NT THIÊN'), regex ASCII cũ loại nhầm dữ liệu
+// thật; RPC arg parameterized nên không cần ASCII để chống injection.
+export async function listAffiliatePartnerOrders(input: {
+  partnerCode: string
+  from: string
+  to: string
+  cursor?: OrdersCursor | null
+}): Promise<{ rows: AffiliateOrderRow[]; nextCursor: OrdersCursor | null } | { error: string }> {
+  if (!(isKpiCampaignEnabled() && isKpiAffiliateEnabled())) {
+    return { error: 'Tính năng Affiliate chưa được bật' }
+  }
+  if (!isValidPartnerCode(input.partnerCode)) return { error: 'Mã đối tác không hợp lệ' }
+  if (!DATE_RE.test(input.from ?? '') || !DATE_RE.test(input.to ?? '')) {
+    return { error: 'Khoảng ngày không hợp lệ' }
+  }
+  // r1 (audit P2#4): cùng luật range với store action — ngày lịch thật +
+  // from ≤ to + span ≤366 ngày Ở APP (lỗi sớm, đồng nhất UX); RPC 102 có
+  // guard tương đương trong DB (2 lớp).
+  const range0 = validOrdersRange(input.from, input.to)
+  if (!range0.ok) return { error: range0.reason }
+  const cursor = input.cursor ?? null
+  if (cursor && !UUID_RE.test(cursor.id)) return { error: 'Cursor không hợp lệ' }
+
+  const supabase = await createClient()
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return { error: 'Chưa đăng nhập' }
+
+  const range = vnDayRange(input.from, input.to)
+  const { data, error } = await supabase.rpc('rpc_list_affiliate_partner_orders', {
+    p_partner_code: input.partnerCode,
     p_from: range.from,
     p_to: range.to,
     p_limit: ORDERS_PAGE_SIZE,

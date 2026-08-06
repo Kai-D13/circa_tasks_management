@@ -172,3 +172,43 @@ export function overviewVisibleFor(p: {
   if (p.role === 'sm' || p.role === 'store_manager') return 'own-os'
   return 'none'
 }
+
+// ── FS-expansion (contract 06/08) ───────────────────────────────────────────
+// Filter Loại của overview: CHỈ super ('os-fs') được chọn; mọi scope khác ÉP
+// 'os' — query-string không vượt được RBAC (OPS/SM/QLCH giữ OS-scope).
+export function parseOverviewType(
+  raw: string | undefined,
+  scope: OverviewPageScope,
+): 'all' | 'os' | 'fs' {
+  if (scope !== 'os-fs') return 'os'
+  return raw === 'os' || raw === 'fs' ? raw : 'all'
+}
+
+// Label card thứ 3: đếm ĐIỂM ghi nhận (store + đối tác FS) khi view có FS;
+// giữ chữ "Store" khi chỉ xem OS.
+export function salesPointsLabel(type: 'all' | 'os' | 'fs'): string {
+  return type === 'os' ? 'Store có doanh số' : 'Điểm có doanh số'
+}
+
+// Reduce aggregate theo PARTNER_CODE (rpc_aggregate_affiliate_partner_gmv) —
+// mirror reduceAffiliateAgg: giữ giá trị ÂM, lastDate = max vn_date.
+export interface PartnerAggInput { partner_code: string; vn_date: string; gmv: number; order_count: number }
+export function reduceAffiliatePartnerAgg(rows: PartnerAggInput[]): {
+  byPartner: Map<string, StoreAffiliateAgg>
+  totals: { gmv: number; orders: number; pointsWithSales: number }
+} {
+  const byPartner = new Map<string, StoreAffiliateAgg>()
+  for (const r of rows) {
+    const cur = byPartner.get(r.partner_code) ?? { gmv: 0, orders: 0, lastDate: null }
+    cur.gmv += Number(r.gmv) || 0
+    cur.orders += Number(r.order_count) || 0
+    if (!cur.lastDate || r.vn_date > cur.lastDate) cur.lastDate = r.vn_date
+    byPartner.set(r.partner_code, cur)
+  }
+  let gmv = 0; let orders = 0; let pointsWithSales = 0
+  for (const v of byPartner.values()) {
+    gmv += v.gmv; orders += v.orders
+    if (v.orders > 0) pointsWithSales++
+  }
+  return { byPartner, totals: { gmv, orders, pointsWithSales } }
+}

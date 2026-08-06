@@ -8,7 +8,7 @@ import path from 'node:path'
 // trong test) → khóa contract bằng SOURCE-TEXT assertion trên chính file:
 //   1. 2 query campaign SUM net_revenue (alias actual_gmv/gmv GIỮ NGUYÊN)
 //   2. KHÔNG còn SUM(COALESCE(gmv, 0)) trong file (chứng minh không sót)
-//   3. KPI_AGGREGATE_QUERY (landing day/week/month) VẪN dùng gmv — không đổi
+//   3. KPI_AGGREGATE_QUERY (landing) — bảng V2: DAY/MONTH đọc net_revenue/TARGET
 //   4. Guard ISO date (chống injection) còn nguyên ở cả 2 hàm campaign
 // Test số học #5-8 của contract (offline-only / hybrid identity / null→0 /
 // âm không clamp / tier-commission theo actual_value) đã được khóa sẵn bởi

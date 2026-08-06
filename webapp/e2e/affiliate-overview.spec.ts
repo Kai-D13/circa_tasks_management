@@ -149,3 +149,36 @@ test.describe('affiliate overview contract @desktop', () => {
     expect(overviewVisibleFor({ isSuper: false, role: 'sm', flagEnabled: false })).toBe('none')
   })
 })
+
+// ── FS-expansion (06/08): filter Loại + label điểm + reduce theo partner ────
+import { parseOverviewType, salesPointsLabel, reduceAffiliatePartnerAgg } from '../lib/affiliate/overview'
+
+test.describe('affiliate overview FS-expansion @desktop', () => {
+  test('parseOverviewType: CHỈ super (os-fs) chọn được; scope khác ÉP os — query-string không vượt RBAC', () => {
+    expect(parseOverviewType('fs', 'os-fs')).toBe('fs')
+    expect(parseOverviewType('os', 'os-fs')).toBe('os')
+    expect(parseOverviewType(undefined, 'os-fs')).toBe('all')
+    expect(parseOverviewType('rác', 'os-fs')).toBe('all')
+    for (const scope of ['os-all', 'os-assigned', 'os-own'] as const) {
+      expect(parseOverviewType('fs', scope)).toBe('os')  // ép os, không lộ FS
+      expect(parseOverviewType('all', scope)).toBe('os')
+    }
+  })
+
+  test('salesPointsLabel: os → "Store có doanh số"; all/fs → "Điểm có doanh số"', () => {
+    expect(salesPointsLabel('os')).toBe('Store có doanh số')
+    expect(salesPointsLabel('all')).toBe('Điểm có doanh số')
+    expect(salesPointsLabel('fs')).toBe('Điểm có doanh số')
+  })
+
+  test('reduceAffiliatePartnerAgg: cộng dồn theo partner (giữ đơn ÂM), lastDate = max, pointsWithSales chỉ đếm partner có đơn', () => {
+    const r = reduceAffiliatePartnerAgg([
+      { partner_code: 'NT-A', vn_date: '2026-08-01', gmv: 500_000, order_count: 2 },
+      { partner_code: 'NT-A', vn_date: '2026-08-03', gmv: -50_000, order_count: 1 },
+      { partner_code: 'NT-B', vn_date: '2026-08-02', gmv: 200_000, order_count: 1 },
+    ])
+    expect(r.byPartner.get('NT-A')).toEqual({ gmv: 450_000, orders: 3, lastDate: '2026-08-03' })
+    expect(r.totals).toEqual({ gmv: 650_000, orders: 4, pointsWithSales: 2 })
+    expect(reduceAffiliatePartnerAgg([]).totals).toEqual({ gmv: 0, orders: 0, pointsWithSales: 0 })
+  })
+})

@@ -130,10 +130,13 @@ test.describe('affiliate normalize @desktop', () => {
     expect(r4.ok).toBe(false)
   })
 
-  test('resolveStores (r1): phân loại os/fs/external/unmatched/inactive + giá âm', () => {
+  test('resolveStores (FS-expansion 06/08): os/fs-store/fs-partner(NULL)/unmatched/inactive + type sót → unmatched + giá âm', () => {
     const mappings: PartnerMappingRow[] = [
       { partner_code: 'CODE-OS', store_id: 'uuid-os', partner_type: 'os', is_active: true },
       { partner_code: 'CODE-FS', store_id: 'uuid-fs', partner_type: 'fs', is_active: true },
+      // FS-partner: mapping fs KHÔNG có store (đối tác ngoài hệ thống store)
+      { partner_code: 'CODE-FSP', store_id: null, partner_type: 'fs', is_active: true },
+      // external còn SÓT sau 102 = sai cấu hình → unmatched (fail-visible)
       { partner_code: 'CODE-EXT', store_id: null, partner_type: 'external', is_active: true },
       { partner_code: 'CODE-OFF', store_id: 'uuid-off', partner_type: 'os', is_active: false },
     ]
@@ -145,21 +148,22 @@ test.describe('affiliate normalize @desktop', () => {
     const rows = [
       mk(1, 'CODE-OS'), mk(2, 'CODE-FS'), mk(3, 'CODE-EXT'),
       mk(4, 'CODE-OFF'), mk(5, 'CODE-MOI'), mk(6, 'CODE-OS', -500),
+      mk(7, 'CODE-FSP'),
     ]
     const { resolved, report } = resolveStores(rows, mappings)
     expect(report.matched_os).toBe(2)            // #1 + #6
-    expect(report.matched_fs).toBe(1)            // #2
-    expect(report.external).toBe(1)              // #3
-    expect(report.unmatched_codes).toEqual(['CODE-MOI'])
+    expect(report.matched_fs).toBe(2)            // #2 (có store) + #7 (fs-partner NULL)
+    expect(report.unmatched_codes.sort()).toEqual(['CODE-EXT', 'CODE-MOI']) // type sót + chưa map
     expect(report.inactive_codes).toEqual(['CODE-OFF'])
-    expect(report.null_store_orders).toBe(3)     // ext + inactive + unmatched
+    expect(report.null_store_orders).toBe(4)     // fs-partner + ext-sót + inactive + unmatched
     expect(report.negative_price_count).toBe(1)
     expect(report.negative_price_sample).toEqual([6])
     expect(resolved.find((r) => r.order_id === 1)?.store_id).toBe('uuid-os')
-    expect(resolved.find((r) => r.order_id === 4)?.store_id).toBeNull() // inactive KHÔNG map
-    expect(resolved.find((r) => r.order_id === 3)?.store_id).toBeNull() // external giữ external
-    // P3-A r2: F2 lưu unmatched + inactive HỢP NHẤT vào sync_runs.unmatched_codes
-    expect(sourceIssueCodes(report)).toEqual(['CODE-MOI', 'CODE-OFF'])
+    expect(resolved.find((r) => r.order_id === 2)?.store_id).toBe('uuid-fs')  // fs có store giữ store
+    expect(resolved.find((r) => r.order_id === 7)?.store_id).toBeNull()       // fs-partner giữ NULL
+    expect(resolved.find((r) => r.order_id === 4)?.store_id).toBeNull()       // inactive KHÔNG map
+    // P3-A r2: unmatched + inactive HỢP NHẤT vào sync_runs.unmatched_codes → health chặn
+    expect(sourceIssueCodes(report).sort()).toEqual(['CODE-EXT', 'CODE-MOI', 'CODE-OFF'])
   })
 
   test('dedupe canonical hóa key (r1.1): Long/number cùng giá trị chung 1 key', () => {

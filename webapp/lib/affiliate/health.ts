@@ -120,16 +120,21 @@ export interface AffiliateHealthDb {
   countDeliveredMissingCompleted(storeIds: string[]): Promise<{ count: number | null; error: { message: string } | null }>
 }
 
-// targetStoreIds = danh sách store trong kpi_campaign_store_targets của
-// campaign (P3-B validate toàn bộ là OS trước khi gọi). Rỗng → fail-closed.
+// targetStoreIds = danh sách store trong scope (campaign targets / overview).
+// FS-expansion (06/08): thêm targetPartnerCodes cho scope FS-partner (mapping
+// fs, store_id NULL) — fail-closed #0 chỉ khi CẢ store lẫn partner đều rỗng;
+// canary theo store chạy khi có storeIds (canary phía partner nằm trong chính
+// rpc_aggregate_affiliate_partner_gmv — RAISE khi DELIVERED thiếu
+// completed_time, cùng pattern 092).
 // nowMs inject được (r2.1 — test determinism); production không truyền.
 export async function getAffiliateSyncHealth(
   db: AffiliateHealthDb,
   targetStoreIds: string[],
   nowMs: number = Date.now(),
+  targetPartnerCodes: string[] = [],
 ): Promise<AffiliateSyncHealth> {
-  if (targetStoreIds.length === 0) {
-    return { ready: false, reason: 'danh sách store target rỗng — campaign chưa có target để kiểm canary', runId: null, lastSuccessAt: null, ageMinutes: null }
+  if (targetStoreIds.length === 0 && targetPartnerCodes.length === 0) {
+    return { ready: false, reason: 'scope rỗng (không store, không partner) — không có gì để kiểm', runId: null, lastSuccessAt: null, ageMinutes: null }
   }
 
   const { data: latestRun, error: runErr } = await db.latestRun()
@@ -145,29 +150,33 @@ export async function getAffiliateSyncHealth(
     else lastSuccessAt = s?.finished_at ?? null
   }
 
-  const { count, error: cErr } = await db.countDeliveredMissingCompleted(targetStoreIds)
-  if (cErr) {
-    return {
-      ready: false,
-      reason: `không đọc được canary affiliate_orders: ${cErr.message}`,
-      runId: latestRun?.id ?? null, lastSuccessAt, ageMinutes: null,
+  let deliveredMissingCompleted = 0
+  if (targetStoreIds.length > 0) {
+    const { count, error: cErr } = await db.countDeliveredMissingCompleted(targetStoreIds)
+    if (cErr) {
+      return {
+        ready: false,
+        reason: `không đọc được canary affiliate_orders: ${cErr.message}`,
+        runId: latestRun?.id ?? null, lastSuccessAt, ageMinutes: null,
+      }
     }
-  }
-  // r2 P1#2: count=null (PostgREST không trả count dù không error) = KHÔNG RÕ
-  // — fail-closed, không được coi là 0/sạch.
-  if (count === null || count === undefined) {
-    return {
-      ready: false,
-      reason: 'canary không trả count (null) — không xác nhận được dữ liệu sạch',
-      runId: latestRun?.id ?? null, lastSuccessAt, ageMinutes: null,
+    // r2 P1#2: count=null (PostgREST không trả count dù không error) = KHÔNG RÕ
+    // — fail-closed, không được coi là 0/sạch.
+    if (count === null || count === undefined) {
+      return {
+        ready: false,
+        reason: 'canary không trả count (null) — không xác nhận được dữ liệu sạch',
+        runId: latestRun?.id ?? null, lastSuccessAt, ageMinutes: null,
+      }
     }
+    deliveredMissingCompleted = count
   }
 
   return evaluateAffiliateSyncHealth({
     latestRun,
     lastSuccessAt,
     lastSuccessLookupError,
-    deliveredMissingCompleted: count,
+    deliveredMissingCompleted,
     nowMs,
   })
 }

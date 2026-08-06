@@ -46,7 +46,7 @@ export const DEFAULT_QUERY = `
 //     link tuần; chờ BI xác nhận quy tắc tuần (REQUIRED INPUT #2, plan 05/08)
 //     rồi bổ sung nhánh UNION 'week'. Tab Tuần tạm hiện "Chưa có dữ liệu" cho
 //     kỳ mới (row tuần cũ trong store_kpi_targets giữ nguyên lịch sử).
-// Rows ~52 (26 store × 2 grain), far under the 1000-row maxResults cap.
+// Rows ~50 (25 active OS store × 2 grain), far under the 1000-row maxResults cap.
 // r1 (audit P2#3): GROUP BY + COUNT(*) THẬT — nguồn kỳ vọng 1 row/(date_type,
 // start_date, pos); nếu BI vô tình có 2 dòng, raw_row_count > 1 và
 // aggregateAndUpsertKpi TỪ CHỐI row đó (fail-closed), không ghi đè theo thứ tự.
@@ -97,7 +97,7 @@ export function loadServiceAccount(): ServiceAccount | null {
 // impossible even if a caller passes something else. Schema mới NULLABLE →
 // loại row pos_code/start_date NULL ngay trong WHERE; future days have
 // net_revenue NULL → COALESCE 0; giá trị ÂM giữ nguyên, cộng bình thường.
-// ~26 stores → one row per pos_code, far under the 1000-row cap.
+// ~25 active OS stores → one row per pos_code, far under the 1000-row cap.
 export function campaignRangeQuery(startDate: string, endDate: string): string {
   const ISO = /^\d{4}-\d{2}-\d{2}$/
   if (!ISO.test(startDate) || !ISO.test(endDate)) {
@@ -122,7 +122,7 @@ export function campaignRangeQuery(startDate: string, endDate: string): string {
 // GIỮ NGUYÊN `gmv` — cột `gmv` của kpi_campaign_store_daily_actuals = Net
 // Revenue Offline. `source_row_count` đi kèm để orchestrator guard: bảng mới
 // pre-aggregated 1 row/store/ngày — >1 nghĩa nguồn sai → preserve snapshot.
-// Caller must chunk long ranges by month: 26 stores × 31 days ≈ 806 rows per
+// Caller must chunk long ranges by month: 25 stores × 31 days ≈ 775 rows per
 // chunk, under the 1000-row cap; a 2-month range in one call would exceed it.
 export function campaignDailyQuery(startDate: string, endDate: string): string {
   const ISO = /^\d{4}-\d{2}-\d{2}$/
