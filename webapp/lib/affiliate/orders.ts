@@ -94,6 +94,13 @@ export function buildOverviewEntities(mappings: OverviewMappingRow[]): OverviewE
   return [...stores, ...partners]
 }
 
+// r1 (audit P2#7): value filter "Cửa hàng" phải PHÂN NAMESPACE — store dùng
+// uuid, partner dùng code TỰ DO (space/Unicode) nên raw value về lý thuyết có
+// thể đụng nhau; key 'store:<uuid>' | 'partner:<code>' loại trừ collision.
+export function overviewEntityKey(e: OverviewEntity): string {
+  return e.kind === 'store' ? `store:${e.store_id}` : `partner:${e.partner_code}`
+}
+
 // Filter Loại (Tất cả/OS/FS): store thuần OS → 'os'; store có mapping fs HOẶC
 // partner-row → 'fs'.
 export type OverviewTypeFilter = 'all' | 'os' | 'fs'

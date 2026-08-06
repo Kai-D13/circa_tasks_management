@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { isKpiAffiliateEnabled, isKpiCampaignEnabled } from '@/lib/kpi/flags'
 import { vnDayRange } from '@/lib/kpi/engine'
 import { sanitizeOpsText } from '@/lib/ops/sanitize'
+import { isValidPartnerCode } from '@/lib/affiliate/normalize'
 import {
   ORDERS_PAGE_SIZE, nextCursorFrom, validOrdersRange,
   type AffiliateOrderRow, type OrdersCursor,
@@ -63,8 +64,9 @@ export async function listAffiliateOrders(input: {
 // không có store (mig 102). SESSION client → rpc_list_affiliate_partner_orders
 // — authz TRONG DB: CHỈ Super Admin (OPS/SM/QLCH/Staff bị RAISE 'Không có
 // quyền'); giữ nguyên rule DELIVERED-only + keyset ≤50 + range guard.
-const PARTNER_CODE_RE = /^[A-Za-z0-9_-]{1,64}$/
-
+// r1 (audit P1#1): validate bằng CONTRACT CHUNG isValidPartnerCode — production
+// có mã khoảng trắng/Unicode ('NT THIÊN'), regex ASCII cũ loại nhầm dữ liệu
+// thật; RPC arg parameterized nên không cần ASCII để chống injection.
 export async function listAffiliatePartnerOrders(input: {
   partnerCode: string
   from: string
@@ -74,10 +76,15 @@ export async function listAffiliatePartnerOrders(input: {
   if (!(isKpiCampaignEnabled() && isKpiAffiliateEnabled())) {
     return { error: 'Tính năng Affiliate chưa được bật' }
   }
-  if (!PARTNER_CODE_RE.test(input.partnerCode ?? '')) return { error: 'Mã đối tác không hợp lệ' }
+  if (!isValidPartnerCode(input.partnerCode)) return { error: 'Mã đối tác không hợp lệ' }
   if (!DATE_RE.test(input.from ?? '') || !DATE_RE.test(input.to ?? '')) {
     return { error: 'Khoảng ngày không hợp lệ' }
   }
+  // r1 (audit P2#4): cùng luật range với store action — ngày lịch thật +
+  // from ≤ to + span ≤366 ngày Ở APP (lỗi sớm, đồng nhất UX); RPC 102 có
+  // guard tương đương trong DB (2 lớp).
+  const range0 = validOrdersRange(input.from, input.to)
+  if (!range0.ok) return { error: range0.reason }
   const cursor = input.cursor ?? null
   if (cursor && !UUID_RE.test(cursor.id)) return { error: 'Cursor không hợp lệ' }
 

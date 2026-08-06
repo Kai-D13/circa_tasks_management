@@ -166,6 +166,23 @@ export function validateSourceOrder(doc: SourceOrderDoc): NormalizeResult {
   }
 }
 
+// ── Contract partner_code THỐNG NHẤT (FS-expansion r1, audit 06/08 P1#1) ────
+// Dùng chung: cron auto-create (lọc candidate trước khi gọi RPC ensure) +
+// server action drill-down partner. Production CÓ mã chứa khoảng trắng và
+// Unicode ('NT THIÊN') — TUYỆT ĐỐI không giới hạn ASCII. Luật: string đã
+// trim, không rỗng, ≤64 ký tự, không control character (newline/tab/…). Mọi
+// đường SQL đều parameterized (RPC args) — không cần regex ASCII để chống
+// injection. DB mirror cùng luật trong rpc_ensure_fs_partner_mappings (102).
+export const PARTNER_CODE_MAX_LEN = 64
+export function isValidPartnerCode(code: unknown): code is string {
+  return typeof code === 'string'
+    && code.length > 0
+    && code === code.trim()
+    && code.length <= PARTNER_CODE_MAX_LEN
+    // eslint-disable-next-line no-control-regex
+    && !/[\u0000-\u001F\u007F]/.test(code)
+}
+
 // ── Resolver mapping DÙNG CHUNG cho dry-run và real run (audit F2 r1 P1 —
 // hai luồng không được lệch logic). Pure: mappings do caller đọc từ DB. ──────
 export interface PartnerMappingRow {

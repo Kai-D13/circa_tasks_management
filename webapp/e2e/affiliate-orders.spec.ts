@@ -118,3 +118,23 @@ test.describe('affiliate overview entities (FS-expansion) @desktop', () => {
     expect(fs.map((e) => (e.kind === 'store' ? e.store_id : e.partner_code)).sort()).toEqual(['NT-P', 's2'])
   })
 })
+
+// ── FS-expansion r1 (audit P2#7): key filter Cửa hàng phân namespace ────────
+import { overviewEntityKey } from '../lib/affiliate/orders'
+
+test.describe('overviewEntityKey namespace (FS-expansion r1) @desktop', () => {
+  test('store → store:<uuid>; partner → partner:<code>; cùng raw value KHÔNG đụng nhau', () => {
+    const es = buildOverviewEntities([
+      M('SAME-VALUE', 'os', 'abc-123'),
+      M('abc-123', 'fs', null),   // partner_code TRÙNG store_id ở trên
+    ])
+    const keys = es.map(overviewEntityKey).sort()
+    expect(keys).toEqual(['partner:abc-123', 'store:abc-123'])
+    expect(new Set(keys).size).toBe(2) // namespace loại trừ collision
+  })
+
+  test('partner code space/Unicode giữ nguyên trong key (URL encode do form GET lo)', () => {
+    const es = buildOverviewEntities([M('NT THIÊN', 'fs', null)])
+    expect(overviewEntityKey(es[0])).toBe('partner:NT THIÊN')
+  })
+})

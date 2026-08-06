@@ -13,7 +13,8 @@ import {
   canShowOwnOsGmv, smOverviewAllowed, type AffiliateAggInput, type PartnerAggInput,
 } from '@/lib/affiliate/overview'
 import {
-  drilldownEnabled, buildOverviewEntities, filterEntitiesByType, type OverviewMappingRow,
+  drilldownEnabled, buildOverviewEntities, filterEntitiesByType, overviewEntityKey,
+  type OverviewMappingRow,
 } from '@/lib/affiliate/orders'
 import { AffiliateStoreOrdersRow } from '@/components/affiliate/AffiliateStoreOrdersRow'
 import { CampaignsTabs } from '@/components/kpi/CampaignsTabs'
@@ -173,10 +174,11 @@ export default async function AffiliateOverviewPage({ searchParams }: {
   // vượt RBAC — parseOverviewType có test khóa).
   const typeFilter = parseOverviewType(params.type, scope)
   const typed = filterEntitiesByType(entities, typeFilter)
-  // Filter Cửa hàng/đối tác: value = store_id | partner_code; đổi Loại làm
-  // param cũ không còn trong options → BỎ QUA (reset server-side, không giữ
-  // UUID/code cũ — audit UI).
-  const entityKey = (e: (typeof entities)[number]) => (e.kind === 'store' ? e.store_id : e.partner_code)
+  // Filter Cửa hàng/đối tác: value = key PHÂN NAMESPACE 'store:<uuid>' |
+  // 'partner:<code>' (r1 audit P2#7 — partner_code tự do, raw value có thể
+  // đụng uuid); đổi Loại làm param cũ không còn trong options → BỎ QUA (reset
+  // server-side, không giữ key cũ — audit UI).
+  const entityKey = overviewEntityKey
   const storeParam = params.store && typed.some((e) => entityKey(e) === params.store) ? params.store : undefined
   const filtered = typed.filter((e) => !storeParam || entityKey(e) === storeParam)
   const storeIds = filtered.flatMap((e) => (e.kind === 'store' ? [e.store_id] : []))
