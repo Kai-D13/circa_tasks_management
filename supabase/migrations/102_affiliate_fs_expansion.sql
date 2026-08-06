@@ -50,10 +50,13 @@
 
 BEGIN;
 
--- ── A. Preflight (one-shot + CẤU TRÚC) + chuyển external → fs ───────────────
+-- ── A. Preflight (one-shot + CẤU TRÚC + BIJECTION) + chuyển external → fs ───
 DO $$
 DECLARE
-  v_os int; v_os_ok int; v_fs int; v_fs_ok int; v_ext int; v_ext_null int;
+  v_os int; v_os_ok int; v_os_distinct int;
+  v_fs int; v_fs_ok int; v_fs_distinct int;
+  v_ext int; v_ext_ok int;
+  v_bad_os text; v_dup_os text; v_missing_stores text; v_bad_fs text; v_bad_ext text;
   v_codes text;
 BEGIN
   -- r1 P2#6: ONE-SHOT guard — đã có marker 102 = đã chạy; re-run fail-fast
@@ -67,32 +70,92 @@ BEGIN
     RAISE EXCEPTION '102: thiếu migration nền — cần đủ 090..101 đã chạy';
   END IF;
 
-  -- r1 P1#2: preflight CẤU TRÚC, không chỉ đếm — 25/2/8 count-only vẫn pass
-  -- khi OS trỏ nhầm store FS/inactive/NULL, external có store, FS trỏ sai
-  -- loại store. Kỳ vọng đã verify 05/08:
-  --   25 OS       → store_id NON-NULL → stores.store_type='os' → is_active
-  --    2 FS-store → store_id NON-NULL → stores.store_type='fs' → is_active
-  --    8 external → store_id NULL
+  -- r1.1 (audit P1): preflight phải CHỨNG MINH trọn bộ mapping authoritative,
+  -- gồm cả m.is_active + phân biệt store + phủ đủ manifest — không chỉ cấu
+  -- trúc store. Manifest authoritative của OS = tập public.stores
+  -- (store_type='os' AND is_active) — ĐÚNG tập mà resolver/campaign/coverage
+  -- BQ-V2 dùng; đối chiếu BIJECTION 2 chiều thay vì hardcode danh sách. Kỳ
+  -- vọng đã verify 05/08:
+  --   25 OS       → m.is_active + store non-null + store_type='os' + store
+  --                 active + 25 store PHÂN BIỆT + không store OS active nào
+  --                 thiếu mapping (bijection với manifest).
+  --    2 FS-store → m.is_active + store non-null + store_type='fs' + store
+  --                 active + 2 store PHÂN BIỆT.
+  --    8 external → store_id NULL + m.is_active (inactive chuyển sang fs sẽ
+  --                 vẫn inactive → resolver báo inactive → health fail-closed
+  --                 ẨN TOÀN BỘ số — phải xử lý tay TRƯỚC khi chạy).
   SELECT count(*) FILTER (WHERE m.partner_type = 'os'),
-         count(*) FILTER (WHERE m.partner_type = 'os'
+         count(*) FILTER (WHERE m.partner_type = 'os' AND m.is_active
                             AND s.id IS NOT NULL AND s.store_type = 'os' AND s.is_active),
+         count(DISTINCT m.store_id) FILTER (WHERE m.partner_type = 'os'),
          count(*) FILTER (WHERE m.partner_type = 'fs'),
-         count(*) FILTER (WHERE m.partner_type = 'fs'
+         count(*) FILTER (WHERE m.partner_type = 'fs' AND m.is_active
                             AND s.id IS NOT NULL AND s.store_type = 'fs' AND s.is_active),
+         count(DISTINCT m.store_id) FILTER (WHERE m.partner_type = 'fs'),
          count(*) FILTER (WHERE m.partner_type = 'external'),
-         count(*) FILTER (WHERE m.partner_type = 'external' AND m.store_id IS NULL)
-  INTO v_os, v_os_ok, v_fs, v_fs_ok, v_ext, v_ext_null
+         count(*) FILTER (WHERE m.partner_type = 'external' AND m.store_id IS NULL AND m.is_active)
+  INTO v_os, v_os_ok, v_os_distinct, v_fs, v_fs_ok, v_fs_distinct, v_ext, v_ext_ok
   FROM public.affiliate_partner_mappings m
   LEFT JOIN public.stores s ON s.id = m.store_id;
 
+  -- r1.1 #6: danh sách vi phạm ĐÍCH DANH để vận hành xử lý ngay, không phải dò.
+  SELECT string_agg(m.partner_code || ' → ' || COALESCE(s.code, 'store NULL')
+                    || CASE WHEN NOT m.is_active THEN ' [mapping INACTIVE]' ELSE '' END
+                    || CASE WHEN s.id IS NOT NULL AND s.store_type <> 'os' THEN ' [store_type=' || s.store_type || ']' ELSE '' END
+                    || CASE WHEN s.id IS NOT NULL AND NOT s.is_active THEN ' [store INACTIVE]' ELSE '' END,
+                    ', ' ORDER BY m.partner_code)
+  INTO v_bad_os
+  FROM public.affiliate_partner_mappings m
+  LEFT JOIN public.stores s ON s.id = m.store_id
+  WHERE m.partner_type = 'os'
+    AND NOT (m.is_active AND s.id IS NOT NULL AND s.store_type = 'os' AND s.is_active);
+
+  SELECT string_agg(dup.label, ', ') INTO v_dup_os
+  FROM (SELECT COALESCE(s.code, m.store_id::text) || ' ×' || count(*)
+               || ' (' || string_agg(m.partner_code, '+' ORDER BY m.partner_code) || ')' AS label
+        FROM public.affiliate_partner_mappings m
+        LEFT JOIN public.stores s ON s.id = m.store_id
+        WHERE m.partner_type = 'os' AND m.store_id IS NOT NULL
+        GROUP BY m.store_id, s.code
+        HAVING count(*) > 1) dup;
+
+  SELECT string_agg(s.code, ', ' ORDER BY s.code) INTO v_missing_stores
+  FROM public.stores s
+  WHERE s.store_type = 'os' AND s.is_active
+    AND NOT EXISTS (SELECT 1 FROM public.affiliate_partner_mappings m
+                    WHERE m.partner_type = 'os' AND m.store_id = s.id);
+
+  SELECT string_agg(m.partner_code || ' → ' || COALESCE(s.code, 'store NULL')
+                    || CASE WHEN NOT m.is_active THEN ' [mapping INACTIVE]' ELSE '' END,
+                    ', ' ORDER BY m.partner_code)
+  INTO v_bad_fs
+  FROM public.affiliate_partner_mappings m
+  LEFT JOIN public.stores s ON s.id = m.store_id
+  WHERE m.partner_type = 'fs'
+    AND NOT (m.is_active AND s.id IS NOT NULL AND s.store_type = 'fs' AND s.is_active);
+
+  SELECT string_agg(m.partner_code
+                    || CASE WHEN m.store_id IS NOT NULL THEN ' [có store_id]' ELSE '' END
+                    || CASE WHEN NOT m.is_active THEN ' [mapping INACTIVE]' ELSE '' END,
+                    ', ' ORDER BY m.partner_code)
+  INTO v_bad_ext
+  FROM public.affiliate_partner_mappings m
+  WHERE m.partner_type = 'external' AND NOT (m.store_id IS NULL AND m.is_active);
+
   IF v_os <> 25 OR v_os_ok <> 25 THEN
-    RAISE EXCEPTION '102: OS mapping % total / % đạt cấu trúc (store non-null + store_type=os + active) — kỳ vọng 25/25, DỪNG (kiểm tra tay)', v_os, v_os_ok;
+    RAISE EXCEPTION '102: OS mapping % total / % đạt chuẩn (mapping active + store non-null + store_type=os + store active) — kỳ vọng 25/25. Vi phạm: [%]. DỪNG, xử lý tay trước.', v_os, v_os_ok, COALESCE(v_bad_os, 'không rõ');
   END IF;
-  IF v_fs <> 2 OR v_fs_ok <> 2 THEN
-    RAISE EXCEPTION '102: FS mapping % total / % đạt cấu trúc (store non-null + store_type=fs + active) — kỳ vọng 2/2, DỪNG (kiểm tra tay)', v_fs, v_fs_ok;
+  IF v_os_distinct <> 25 OR v_dup_os IS NOT NULL THEN
+    RAISE EXCEPTION '102: 25 OS mapping chỉ trỏ % store PHÂN BIỆT — store bị TRÙNG mapping: [%]. DỪNG, xử lý tay trước.', v_os_distinct, COALESCE(v_dup_os, 'không rõ');
   END IF;
-  IF v_ext <> 8 OR v_ext_null <> 8 THEN
-    RAISE EXCEPTION '102: external mapping % total / % có store_id NULL — kỳ vọng 8/8, DỪNG (kiểm tra tay)', v_ext, v_ext_null;
+  IF v_missing_stores IS NOT NULL THEN
+    RAISE EXCEPTION '102: store OS active THIẾU mapping (bijection với manifest public.stores thất bại): [%]. DỪNG, xử lý tay trước.', v_missing_stores;
+  END IF;
+  IF v_fs <> 2 OR v_fs_ok <> 2 OR v_fs_distinct <> 2 THEN
+    RAISE EXCEPTION '102: FS mapping % total / % đạt chuẩn / % store phân biệt — kỳ vọng 2/2/2. Vi phạm: [%]. DỪNG, xử lý tay trước.', v_fs, v_fs_ok, v_fs_distinct, COALESCE(v_bad_fs, 'không rõ');
+  END IF;
+  IF v_ext <> 8 OR v_ext_ok <> 8 THEN
+    RAISE EXCEPTION '102: external mapping % total / % đạt chuẩn (store_id NULL + mapping ACTIVE) — kỳ vọng 8/8. Vi phạm: [%]. DỪNG, xử lý tay trước (external inactive chuyển fs sẽ bị health fail-closed ẩn số).', v_ext, v_ext_ok, COALESCE(v_bad_ext, 'không rõ');
   END IF;
 
   SELECT string_agg(partner_code, ', ' ORDER BY partner_code) INTO v_codes
@@ -287,11 +350,24 @@ COMMIT;
 --    KHÔNG dùng số cố định, data sống): chạy lại chính SQL snapshot ở header
 --    (đổi WHERE thành partner_type='fs' AND store_id IS NULL) — từng mã phải
 --    KHỚP TUYỆT ĐỐI delivered/gmv với snapshot (migration không đụng orders).
--- 9) Verify CẤU TRÚC sau chạy (mirror preflight):
---    SELECT count(*) FILTER (WHERE m.partner_type='os'  AND s.store_type='os' AND s.is_active) AS os_ok,   -- 25
---           count(*) FILTER (WHERE m.partner_type='fs'  AND m.store_id IS NOT NULL
---                              AND s.store_type='fs' AND s.is_active)                          AS fs_store, -- 2
---           count(*) FILTER (WHERE m.partner_type='fs'  AND m.store_id IS NULL)                AS fs_null,  -- 8
---           count(*) FILTER (WHERE m.partner_type='external')                                  AS ext       -- 0
+-- 9) Verify CẤU TRÚC + BIJECTION sau chạy (r1.1 — mirror preflight, thêm
+--    is_active/distinct; migration KHÔNG đụng OS nên bijection phải giữ nguyên):
+--    SELECT count(*)                FILTER (WHERE m.partner_type='os') AS os_total,          -- 25
+--           count(*)                FILTER (WHERE m.partner_type='os' AND m.is_active
+--                                             AND s.store_type='os' AND s.is_active) AS os_ok, -- 25
+--           count(DISTINCT m.store_id) FILTER (WHERE m.partner_type='os') AS os_distinct,   -- 25
+--           count(*)                FILTER (WHERE m.partner_type='fs' AND m.store_id IS NOT NULL
+--                                             AND m.is_active
+--                                             AND s.store_type='fs' AND s.is_active) AS fs_store, -- 2
+--           count(DISTINCT m.store_id) FILTER (WHERE m.partner_type='fs'
+--                                                AND m.store_id IS NOT NULL) AS fs_distinct, -- 2
+--           count(*)                FILTER (WHERE m.partner_type='fs' AND m.store_id IS NULL
+--                                             AND m.is_active) AS fs_null_active,           -- 8
+--           count(*)                FILTER (WHERE m.partner_type='external') AS ext          -- 0
 --    FROM public.affiliate_partner_mappings m LEFT JOIN public.stores s ON s.id = m.store_id;
+--    -- và store OS active THIẾU mapping phải RỖNG:
+--    SELECT s.code FROM public.stores s
+--    WHERE s.store_type='os' AND s.is_active
+--      AND NOT EXISTS (SELECT 1 FROM public.affiliate_partner_mappings m
+--                      WHERE m.partner_type='os' AND m.store_id = s.id);      -- 0 rows
 -- ============================================================================
