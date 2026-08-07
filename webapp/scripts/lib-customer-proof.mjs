@@ -98,3 +98,81 @@ export function crossStoreCases(orders) {
   }
   return cases
 }
+
+// ── r1.3.2 (audit 07/08 tối) ────────────────────────────────────────────────
+
+// Tập điểm TRONG SCOPE quyết định: OS active → áp posFilter → UNIQUE theo
+// store_id (2 partner code cùng store = 1 điểm — P2#3 metadata).
+/** @param {Map<string, ReturnType<typeof pointFromMapping>>} pointByCode
+ *  @param {Set<string> | null} [posFilter] */
+export function scopePoints(pointByCode, posFilter = null) {
+  const seen = new Map()
+  for (const pt of pointByCode.values()) {
+    if (!pt.isOsActive) continue
+    if (posFilter && !posFilter.has(pt.posCode)) continue
+    if (!seen.has(pt.storeId)) seen.set(pt.storeId, pt)
+  }
+  return [...seen.values()]
+}
+
+// PHÂN LOẠI đơn DELIVERED thiếu account_id — bucket RỜI NHAU, precedence:
+//   non_os_point → os_inactive_point → os_outside_pos_filter (r1.3.2 P1#1 —
+//   OS active nhưng NGOÀI subset: KHÔNG được block release scoped)
+//   → disqualified_price_or_time → os_range_unknown/os_in_range/os_out_of_range.
+// Bucket quyết định bước kế (backfill/mig 104) = os_in_range_qualifying —
+// CHỈ điểm OS active TRONG posFilter, trong exact range, giá dương, có
+// completed_time.
+/** @typedef {{order_id: number | string, partner_code: string, point: string, completed_time: string | null, total_price: number | null}} MissEntry */
+/** @param {Array<{orderId: number | string, price: number | null, completedTimeMs: number | null, partnerCode: string}>} rows
+ *  @param {Map<string, ReturnType<typeof pointFromMapping>>} pointByCode
+ *  @param {{from: number, to: number} | null} [rangeMs]
+ *  @param {Set<string> | null} [posFilter]
+ *  @returns {Record<'os_in_range_qualifying' | 'os_out_of_range' | 'os_range_unknown' | 'os_outside_pos_filter' | 'os_inactive_point' | 'non_os_point' | 'disqualified_price_or_time', MissEntry[]>} */
+export function classifyMissingAccount(rows, pointByCode, rangeMs = null, posFilter = null) {
+  const buckets = {
+    os_in_range_qualifying: [], os_out_of_range: [], os_range_unknown: [],
+    os_outside_pos_filter: [], os_inactive_point: [], non_os_point: [],
+    disqualified_price_or_time: [],
+  }
+  for (const r of rows) {
+    const point = pointByCode.get(r.partnerCode)
+    const entry = {
+      order_id: r.orderId,
+      partner_code: r.partnerCode,
+      point: point ? point.label : `unmapped:${r.partnerCode}`,
+      completed_time: r.completedTimeMs !== null ? new Date(r.completedTimeMs).toISOString() : null,
+      total_price: r.price,
+    }
+    if (!point || !point.isOs) buckets.non_os_point.push(entry)
+    else if (!point.isOsActive) buckets.os_inactive_point.push(entry)
+    else if (posFilter && !posFilter.has(point.posCode)) buckets.os_outside_pos_filter.push(entry)
+    else if (r.price === null || r.price <= 0 || r.completedTimeMs === null) buckets.disqualified_price_or_time.push(entry)
+    else if (!rangeMs) buckets.os_range_unknown.push(entry)
+    else if (r.completedTimeMs >= rangeMs.from && r.completedTimeMs < rangeMs.to) buckets.os_in_range_qualifying.push(entry)
+    else buckets.os_out_of_range.push(entry)
+  }
+  return buckets
+}
+
+// GATE REPORT tách 2 tầng (r1.3.2 P1#2):
+//   release_decision — SCOPED (exact range + OS active + posFilter): quyết
+//   exit code + bước kế tiếp (backfill account_id / mig 104).
+//   diagnostic — TOÀN LỊCH SỬ: chỉ CẢNH BÁO, không đổi quyết định scoped.
+/** @param {{rangeProvided: boolean, eligibleMissingAccount: number,
+ *   eligibleMissingCustomer: number, eligibleCrossStore: number,
+ *   globalMissingAccount: number, globalMissingCustomer: number,
+ *   globalCrossStore: number}} p */
+export function buildGateReport(p) {
+  const release = [
+    ['exact_range_provided (QA_CUSTOMER_FROM/TO)', p.rangeProvided],
+    ['eligible_missing_account_id = 0', p.eligibleMissingAccount === 0],
+    ['eligible_missing_customer = 0', p.eligibleMissingCustomer === 0],
+    ['eligible_cross_store_accounts = 0', p.eligibleCrossStore === 0],
+  ]
+  const diagnostic = [
+    ['missing_account_id (toàn lịch sử) = 0', p.globalMissingAccount === 0],
+    ['missing_customer (toàn lịch sử) = 0', p.globalMissingCustomer === 0],
+    ['cross_store_accounts (toàn lịch sử) = 0', p.globalCrossStore === 0],
+  ]
+  return { release, diagnostic, exitCode: release.every(([, ok]) => ok) ? 0 : 1 }
+}

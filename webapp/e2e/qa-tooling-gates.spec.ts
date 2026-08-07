@@ -3,7 +3,10 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import fs from 'node:fs'
 // r1.3.1: lõi thuần của proof script — test SYNTHETIC thay vì chỉ source-text.
-import { buildPointByCode, qualifyOrders, dedupWinners, crossStoreCases } from '../scripts/lib-customer-proof.mjs'
+import {
+  buildPointByCode, qualifyOrders, dedupWinners, crossStoreCases,
+  scopePoints, classifyMissingAccount, buildGateReport,
+} from '../scripts/lib-customer-proof.mjs'
 
 // Mig 103 r1.1 (audit P1 tooling) — gate an toàn của 2 script QA/proof phải
 // FAIL-FAST trước mọi kết nối/ghi. Test bằng cách SPAWN node thật: các exit
@@ -178,5 +181,71 @@ test.describe('lib-customer-proof synthetic (mig 103 r1.3.1) @desktop', () => {
     const cases = crossStoreCases(osActive)
     expect(cases).toHaveLength(1) // label-based sẽ ra 0 — khóa P2#3
     expect(new Set(cases[0].orders.map((o) => o.pointKey)).size).toBe(2)
+  })
+})
+
+// ── r1.3.2: SYNTHETIC tests — subset/missing-account/scoped-vs-global gates ──
+test.describe('lib-customer-proof r1.3.2 (scoped release gates) @desktop', () => {
+  const points = buildPointByCode([
+    M('OS-A', 's1'), M('OS-A2', 's1'),            // 2 code CÙNG store — dedupe metadata
+    M('OS-B', 's2'),
+    M('FS-STORE', 's3', { type: 'fs' }),
+    M('OS-DEAD', 's4', { storeActive: false }),
+  ])
+  const RANGE = { from: 1000, to: 2000 }
+  const MISS = (orderId: number, partnerCode: string, t: number | null, price: number | null = 100) =>
+    ({ orderId, price, completedTimeMs: t, partnerCode })
+
+  test('classifyMissingAccount: OS active trong range → os_in_range_qualifying; NGOÀI posFilter → os_outside_pos_filter (không block scoped)', () => {
+    const noFilter = classifyMissingAccount([MISS(1, 'OS-B', 1500)], points, RANGE, null)
+    expect(noFilter.os_in_range_qualifying).toHaveLength(1)
+
+    // cùng đơn đó, filter chỉ POS-s1 → rơi os_outside_pos_filter, KHÔNG vào bucket quyết định
+    const filtered = classifyMissingAccount(
+      [MISS(1, 'OS-B', 1500), MISS(2, 'OS-A', 1500)], points, RANGE, new Set(['POS-s1']))
+    expect(filtered.os_in_range_qualifying.map((e) => e.order_id)).toEqual([2])
+    expect(filtered.os_outside_pos_filter.map((e) => e.order_id)).toEqual([1])
+    // các bucket khác vẫn đúng precedence
+    const other = classifyMissingAccount([
+      MISS(3, 'FS-STORE', 1500), MISS(4, 'OS-DEAD', 1500),
+      MISS(5, 'OS-A', 1500, -1), MISS(6, 'OS-A', null), MISS(7, 'OS-A', 5000),
+    ], points, RANGE, null)
+    expect(other.non_os_point).toHaveLength(1)
+    expect(other.os_inactive_point).toHaveLength(1)
+    expect(other.disqualified_price_or_time).toHaveLength(2)
+    expect(other.os_out_of_range).toHaveLength(1)
+  })
+
+  test('scopePoints: unique theo store_id (2 partner code cùng store = 1 điểm) + áp posFilter', () => {
+    const all = scopePoints(points)
+    expect(all.map((pt) => pt.storeId).sort()).toEqual(['s1', 's2']) // FS + inactive loại; s1 KHÔNG lặp
+    const sub = scopePoints(points, new Set(['POS-s2']))
+    expect(sub.map((pt) => pt.storeId)).toEqual(['s2'])
+  })
+
+  test('buildGateReport: global FAIL nhưng scoped SẠCH → exit 0; thiếu range → exit 1; scoped fail → exit 1', () => {
+    const base = {
+      rangeProvided: true,
+      eligibleMissingAccount: 0, eligibleMissingCustomer: 0, eligibleCrossStore: 0,
+      globalMissingAccount: 12, globalMissingCustomer: 3, globalCrossStore: 5,
+    }
+    const ok = buildGateReport(base)
+    expect(ok.exitCode).toBe(0)                                  // global chỉ diagnostic
+    expect(ok.diagnostic.every(([, pass]) => pass === false)).toBe(true)
+
+    expect(buildGateReport({ ...base, rangeProvided: false }).exitCode).toBe(1)
+    expect(buildGateReport({ ...base, eligibleMissingAccount: 1 }).exitCode).toBe(1)
+    expect(buildGateReport({ ...base, eligibleCrossStore: 2 }).exitCode).toBe(1)
+  })
+
+  test('SOURCE-TEXT: exit gate tách RELEASE/DIAGNOSTIC, không còn tham chiếu migration 103', () => {
+    const proof = fs.readFileSync('scripts/proof-affiliate-account-id.mjs', 'utf8')
+    expect(proof).toContain('RELEASE DECISION GATES')
+    expect(proof).toContain('DIAGNOSTIC GATES')
+    expect(proof).toContain('os_outside_pos_filter')
+    expect(proof).toContain('release_decision_gates')
+    // thông báo cũ sai giai đoạn (103 đã chạy) phải biến mất
+    expect(proof).not.toContain('điều kiện chạy migration 103')
+    expect(proof).not.toContain('tiến hành migration 103')
   })
 })

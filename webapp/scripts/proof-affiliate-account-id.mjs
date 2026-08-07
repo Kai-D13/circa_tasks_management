@@ -1,14 +1,15 @@
-// PHASE 0 — DATA PROOF cho Affiliate Customer Campaign (handoff 06/08).
-// READ-ONLY tuyệt đối: KHÔNG ghi Mongo, KHÔNG ghi Supabase. Chạy TRƯỚC khi
-// audit/chạy migration 103:
+// DATA PROOF cho Affiliate Customer Campaign (handoff 06/08; r1.3.2 07/08).
+// READ-ONLY tuyệt đối: KHÔNG ghi Mongo, KHÔNG ghi Supabase.
 //   cd webapp && node scripts/proof-affiliate-account-id.mjs     (cần VPN netbird)
 //
 // Chứng minh identity `order.account_id ↔ customer.account_id` trên dữ liệu
-// THẬT + đo coverage. GATE (handoff — lệch 0 là DỪNG, trả stakeholder):
-//   missing_account_id  = 0   (đơn DELIVERED thiếu/hỏng account_id)
-//   missing_customer    = 0   (account có đơn DELIVERED nhưng không có trong customer)
-//   cross_store_accounts = 0  (account xuất hiện dưới >1 điểm attribution)
-// Exit code ≠ 0 khi bất kỳ gate nào fail (hoặc lỗi kết nối).
+// THẬT + đo coverage. r1.3.2 (audit P1#2) — GATE tách 2 tầng:
+//   RELEASE DECISION (SCOPED: exact range + OS active + POS filter) — quyết
+//   exit code + bước kế tiếp (backfill account_id / migration 104):
+//     exact_range_provided · eligible_missing_account_id = 0 ·
+//     eligible_missing_customer = 0 · eligible_cross_store_accounts = 0
+//   DIAGNOSTIC (toàn lịch sử) — chỉ CẢNH BÁO, không đổi quyết định scoped.
+// Exit code ≠ 0 khi release gate fail (hoặc lỗi kết nối).
 //
 // Nguồn: Mongo order (AFFILIATE_MONGO_DB/COLLECTION — mặc định như cron) +
 // Mongo customer (cùng URI — user xác nhận 06/08 reader đọc được
@@ -19,7 +20,10 @@ import fs from 'node:fs'
 import { MongoClient } from 'mongodb'
 import { createClient } from '@supabase/supabase-js'
 // r1.3.1: lõi thuần tách ra module để Playwright test synthetic (8 case).
-import { buildPointByCode, qualifyOrders, dedupWinners, crossStoreCases } from './lib-customer-proof.mjs'
+import {
+  buildPointByCode, qualifyOrders, dedupWinners, crossStoreCases,
+  scopePoints, classifyMissingAccount, buildGateReport,
+} from './lib-customer-proof.mjs'
 
 const env = {}
 for (const line of fs.readFileSync('.env.local', 'utf8').split(/\r?\n/)) {
@@ -219,38 +223,17 @@ try {
     byMonthOrders.get(vnMonth).push(q)
   }
 
-  // ── 8. R1.3/R1.3.1 DIAGNOSTIC (dữ kiện quyết định mig 104) ──
-  // 8a. PHÂN LOẠI missing_account_id. Precedence tường minh (bucket rời nhau):
-  //   non_os_point (FS-store/partner/unmapped — ngoài scope campaign OS)
-  //   → os_inactive_point (điểm OS nhưng mapping/store INACTIVE — không thể
-  //     là target campaign, r1.3.1 P1#2)
-  //   → disqualified_price_or_time (giá ≤0/thiếu completed_time — RPC vốn loại)
-  //   → os_in_range_qualifying / os_out_of_range (theo exact range).
-  // Bucket QUYẾT ĐỊNH 104 = os_in_range_qualifying (điểm OS ACTIVE): =0 →
-  // guard scope theo range/OS-active/price; >0 → Circa Online backfill nguồn.
-  const missCls = {
-    os_in_range_qualifying: [], os_out_of_range: [], os_range_unknown: [],
-    os_inactive_point: [], non_os_point: [], disqualified_price_or_time: [],
-  }
-  for (const o of missingAccount) {
-    const point = pointByCode.get(o.affiliate_partner_code)
-    const price = toNum(o.total_price)
-    const hasTime = o.completed_time instanceof Date
-    const entry = {
-      order_id: toSafeInt(o.order_id) ?? String(o.order_id),
-      partner_code: o.affiliate_partner_code,
-      point: point ? point.label : `unmapped:${o.affiliate_partner_code}`,
-      completed_time: hasTime ? o.completed_time.toISOString() : null,
-      total_price: price,
-    }
-    if (!point || !point.isOs) missCls.non_os_point.push(entry)
-    else if (!point.isOsActive) missCls.os_inactive_point.push(entry)
-    else if (price === null || price <= 0 || !hasTime) missCls.disqualified_price_or_time.push(entry)
-    else if (!rangeMs) missCls.os_range_unknown.push(entry)
-    else if (o.completed_time.getTime() >= rangeMs.from && o.completed_time.getTime() < rangeMs.to) {
-      missCls.os_in_range_qualifying.push(entry)
-    } else missCls.os_out_of_range.push(entry)
-  }
+  // ── 8. DIAGNOSTIC + RELEASE SCOPE (r1.3.2: logic nằm trong LIB thuần) ──
+  // 8a. PHÂN LOẠI missing_account_id qua classifyMissingAccount — bucket
+  // os_outside_pos_filter (P1#1): OS active NGOÀI subset không được block
+  // release scoped. Bucket quyết định = os_in_range_qualifying.
+  const normMissing = missingAccount.map((o) => ({
+    orderId: toSafeInt(o.order_id) ?? String(o.order_id),
+    price: toNum(o.total_price),
+    completedTimeMs: o.completed_time instanceof Date ? o.completed_time.getTime() : null,
+    partnerCode: o.affiliate_partner_code,
+  }))
+  const missCls = classifyMissingAccount(normMissing, pointByCode, rangeMs, posFilter)
 
   // 8b. CROSS-STORE trong exact range — CHỈ tập OS ACTIVE (r1.3.1 P1#1),
   // identity theo pointKey store:<uuid> (P2#3 — label/POS chỉ hiển thị),
@@ -278,6 +261,25 @@ try {
     exactBaseline = { total_customers: best.size, per_store: perStore }
   }
 
+  // 8d. RELEASE SCOPE (r1.3.2): tập điểm trong scope (OS active → posFilter →
+  // unique store_id — P2#3) + missing_customer SCOPED (account của đơn
+  // qualifying TRONG range không tồn tại trong customer collection).
+  const scopedPoints = scopePoints(pointByCode, posFilter)
+  const inRangeOsOrders = rangeMs
+    ? qualifyingOsActive.filter((q) => q.t >= rangeMs.from && q.t < rangeMs.to)
+    : []
+  const eligibleMissingCustomerAccs =
+    [...new Set(inRangeOsOrders.map((q) => q.acc))].filter((a) => !foundAccounts.has(a))
+  const gateReport = buildGateReport({
+    rangeProvided: !!rangeMs,
+    eligibleMissingAccount: missCls.os_in_range_qualifying.length,
+    eligibleMissingCustomer: eligibleMissingCustomerAccs.length,
+    eligibleCrossStore: crossInRange.length,
+    globalMissingAccount: missingAccount.length,
+    globalMissingCustomer: missingCustomer.length,
+    globalCrossStore: crossStore.length,
+  })
+
   // ── Report ──────────────────────────────────────────────────────────────────
   console.log('\n=== PHASE 0 — Affiliate Customer identity proof ===')
   console.log(`Nguồn: ${ORDER_DB}.${ORDER_COLL} + ${CUSTOMER_DB}.${CUSTOMER_COLL}\n`)
@@ -296,7 +298,8 @@ try {
   console.log('\nMETRIC BASELINE (mirror RPC: delivered · price>0 · có completed_time · điểm OS ACTIVE'
     + (posFilter ? ` · SUBSET ${[...posFilter].sort().join(',')}` : '') + '):')
   console.log('  loại khỏi baseline (KHÔNG tính vào gate identity):', JSON.stringify(baselineExcluded))
-  console.log(`  tập điểm đủ điều kiện: ${eligiblePoints.length} OS store active`)
+  console.log(`  tập điểm trong scope: ${scopedPoints.length} OS store active (unique store)`
+    + (posFilter ? ' — SUBSET theo QA_CUSTOMER_POS_CODES' : ''))
   if (rangeMs) {
     // r1.1 P2: EXACT RANGE — dedup trên TOÀN range như RPC nhận p_from/p_to.
     const detail = Object.entries(exactBaseline.per_store).sort()
@@ -328,7 +331,7 @@ try {
     for (const [acc, points] of crossStore.slice(0, 10)) console.log(`  account ${acc}: ${[...points].join(' · ')}`)
   }
   console.log('\n=== R1.3 DIAGNOSTIC — PHÂN LOẠI missing_account_id (quyết định mig 104) ===')
-  console.log('  precedence: non_os_point → disqualified(giá/completed_time) → theo range')
+  console.log('  precedence: non_os_point → os_inactive_point → os_outside_pos_filter → disqualified(giá/completed_time) → theo range')
   for (const [k, arr] of Object.entries(missCls)) {
     console.log(`  ${k}: ${arr.length}`)
     for (const e of arr.slice(0, 10)) {
@@ -356,8 +359,9 @@ try {
     // r1.3.1 #7: scope tường minh — baseline/cross/104 CHỈ trên OS active.
     scope: posFilter ? 'os_active_subset' : 'os_active_only',
     pos_filter: posFilter ? [...posFilter].sort() : null,
-    eligible_store_ids: eligiblePoints.map((pt) => pt.storeId).sort(),
-    eligible_pos_codes: eligiblePoints.map((pt) => pt.posCode).sort(),
+    // r1.3.2 P2#3: metadata theo ĐÚNG scope (posFilter áp dụng, unique store).
+    eligible_store_ids: scopedPoints.map((pt) => pt.storeId).sort(),
+    eligible_pos_codes: scopedPoints.map((pt) => pt.posCode).sort(),
     excluded_fs_count: baselineExcluded.fs_or_non_os,
     excluded_inactive_count: baselineExcluded.os_inactive,
     totals: {
@@ -371,10 +375,19 @@ try {
       cross_store_accounts_in_range: rangeMs ? crossInRange.length : null,
       non_positive_orders: nonPositive.length,
     },
-    gates: {
-      missing_account_id: missingAccount.length === 0,
-      missing_customer: missingCustomer.length === 0,
-      cross_store_accounts: crossStore.length === 0,
+    // r1.3.2 P1#2: 2 tầng gate — release_decision (scoped) quyết exit code;
+    // diagnostic (toàn lịch sử) chỉ cảnh báo.
+    release_decision_gates: {
+      exact_range_provided: !!rangeMs,
+      eligible_missing_account_id: missCls.os_in_range_qualifying.length,
+      eligible_missing_customer: eligibleMissingCustomerAccs.length,
+      eligible_cross_store_accounts: crossInRange.length,
+      pass: gateReport.exitCode === 0,
+    },
+    diagnostic_gates: {
+      missing_account_id: missingAccount.length,
+      missing_customer: missingCustomer.length,
+      cross_store_accounts_all_history: crossStore.length,
     },
     missing_account_classification: Object.fromEntries(
       Object.entries(missCls).map(([k, arr]) => [k, { count: arr.length, sample: arr.slice(0, 10) }])),
@@ -385,26 +398,26 @@ try {
   console.log('\n=== JSON SUMMARY ===')
   console.log(JSON.stringify(summary, null, 2))
 
-  const gates = [
-    ['missing_account_id = 0', missingAccount.length === 0],
-    ['missing_customer = 0', missingCustomer.length === 0],
-    ['cross_store_accounts = 0', crossStore.length === 0],
-  ]
-  console.log('\n=== GATES ===')
-  let failed = 0
-  for (const [label, ok] of gates) {
+  // r1.3.2 P1#2: exit code CHỈ theo release gates (scoped); global = cảnh báo.
+  console.log('\n=== RELEASE DECISION GATES (scoped: exact range · OS active · POS filter) ===')
+  let failedRelease = 0
+  for (const [label, ok] of gateReport.release) {
     console.log((ok ? 'PASS' : 'FAIL').padEnd(5), label)
-    if (!ok) failed++
+    if (!ok) failedRelease++
   }
-  if (failed > 0) {
-    console.log(`\n${failed} gate FAIL — DỪNG: chưa đủ điều kiện chạy migration 103, gửi output này cho stakeholder duyệt rule.`)
-    // r1.2: KHÔNG process.exit trong try — exit bỏ qua finally, Mongo client
-    // không close → libuv assertion crash lúc teardown (Windows) + exit code
-    // sai. Set code, close sạch ở finally rồi mới exit.
-    exitCode = 1
+  console.log('=== DIAGNOSTIC GATES (toàn lịch sử — CẢNH BÁO, không quyết exit code) ===')
+  for (const [label, ok] of gateReport.diagnostic) {
+    console.log((ok ? 'PASS' : 'WARN').padEnd(5), label)
+  }
+  if (failedRelease > 0) {
+    console.log(`\n${failedRelease} release gate FAIL — DỪNG: chưa đủ điều kiện bước BACKFILL/MIGRATION KẾ TIẾP (104) trong scope đã chọn; gửi output (kèm JSON SUMMARY) cho stakeholder duyệt rule.`)
   } else {
-    console.log('\nALL GATES PASS — đủ điều kiện tiến hành migration 103 (DRAFT chờ audit).')
+    console.log('\nALL RELEASE GATES PASS — đủ điều kiện bước backfill/migration kế tiếp (104) trong scope đã chọn.')
   }
+  // r1.2: KHÔNG process.exit trong try — exit bỏ qua finally, Mongo client
+  // không close → libuv assertion crash teardown (Windows). Set code, close
+  // sạch ở finally rồi mới exit.
+  exitCode = gateReport.exitCode
 } finally {
   await client.close()
 }
