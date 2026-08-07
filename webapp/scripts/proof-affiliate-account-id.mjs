@@ -3,13 +3,20 @@
 //   cd webapp && node scripts/proof-affiliate-account-id.mjs     (cần VPN netbird)
 //
 // Chứng minh identity `order.account_id ↔ customer.account_id` trên dữ liệu
-// THẬT + đo coverage. r1.3.2 (audit P1#2) — GATE tách 2 tầng:
-//   RELEASE DECISION (SCOPED: exact range + OS active + POS filter) — quyết
-//   exit code + bước kế tiếp (backfill account_id / migration 104):
+// THẬT + đo coverage. r1.3.2 + r1.3.3 — GATE tách 3 tầng:
+//   RUNTIME READINESS (mirror canary RPC 103: TOÀN LỊCH SỬ DELIVERED trên
+//     scoped OS stores, KHÔNG lọc range/giá): runtime_missing_account_id = 0
+//     · runtime_missing_completed_time = 0 — metric scoped có sạch mấy mà
+//     tầng này fail thì activation/sync production vẫn fail-closed.
+//   RELEASE DECISION (SCOPED: exact range + OS active + POS filter):
 //     exact_range_provided · eligible_missing_account_id = 0 ·
 //     eligible_missing_customer = 0 · eligible_cross_store_accounts = 0
-//   DIAGNOSTIC (toàn lịch sử) — chỉ CẢNH BÁO, không đổi quyết định scoped.
-// Exit code ≠ 0 khi release gate fail (hoặc lỗi kết nối).
+//   DIAGNOSTIC (toàn hệ thống) — chỉ CẢNH BÁO.
+// Exit code = 0 CHỈ khi runtime + release ĐỀU pass (hoặc ≠0 khi lỗi kết nối).
+// ⚠ P2#3: proof đọc MONGO NGUỒN — runtime đọc Supabase snapshot. Sau deploy
+// + full sync PHẢI verify TRỰC TIẾP Supabase (SQL in ở cuối output) trước
+// khi bật KPI_AFFILIATE_CUSTOMER_ENABLED; proof này là PREDICTOR, không thay
+// được gate Supabase đó.
 //
 // Nguồn: Mongo order (AFFILIATE_MONGO_DB/COLLECTION — mặc định như cron) +
 // Mongo customer (cùng URI — user xác nhận 06/08 reader đọc được
@@ -22,7 +29,7 @@ import { createClient } from '@supabase/supabase-js'
 // r1.3.1: lõi thuần tách ra module để Playwright test synthetic (8 case).
 import {
   buildPointByCode, qualifyOrders, dedupWinners, crossStoreCases,
-  scopePoints, classifyMissingAccount, buildGateReport,
+  scopePoints, classifyMissingAccount, buildGateReport, runtimeReadiness,
 } from './lib-customer-proof.mjs'
 
 const env = {}
@@ -270,11 +277,29 @@ try {
     : []
   const eligibleMissingCustomerAccs =
     [...new Set(inRangeOsOrders.map((q) => q.acc))].filter((a) => !foundAccounts.has(a))
+
+  // 8e. RUNTIME READINESS (r1.3.3 P1#1/#2) — mirror canary RPC 103: TOÀN BỘ
+  // đơn DELIVERED (Mongo full snapshot = source hiện hành) trên scoped OS
+  // stores, KHÔNG lọc range/total_price. Đơn cũ ngoài tháng campaign thiếu
+  // account_id/completed_time VẪN chặn activation/sync → phải là gate cứng.
+  const runtimeRows = delivered.map((o) => {
+    const a = toSafeInt(o.account_id)
+    return {
+      orderId: toSafeInt(o.order_id) ?? String(o.order_id),
+      partnerCode: o.affiliate_partner_code,
+      hasAccount: a !== null && a > 0,
+      hasCompleted: o.completed_time instanceof Date,
+    }
+  })
+  const runtime = runtimeReadiness(runtimeRows, pointByCode, posFilter)
+
   const gateReport = buildGateReport({
     rangeProvided: !!rangeMs,
     eligibleMissingAccount: missCls.os_in_range_qualifying.length,
     eligibleMissingCustomer: eligibleMissingCustomerAccs.length,
     eligibleCrossStore: crossInRange.length,
+    runtimeMissingAccount: runtime.missingAccount.length,
+    runtimeMissingCompleted: runtime.missingCompleted.length,
     globalMissingAccount: missingAccount.length,
     globalMissingCustomer: missingCustomer.length,
     globalCrossStore: crossStore.length,
@@ -375,15 +400,22 @@ try {
       cross_store_accounts_in_range: rangeMs ? crossInRange.length : null,
       non_positive_orders: nonPositive.length,
     },
-    // r1.3.2 P1#2: 2 tầng gate — release_decision (scoped) quyết exit code;
-    // diagnostic (toàn lịch sử) chỉ cảnh báo.
+    // r1.3.3: 3 tầng gate — exit = runtime AND release; diagnostic chỉ cảnh báo.
+    runtime_readiness_gates: {
+      missing_account_id: runtime.missingAccount.length,
+      missing_completed_time: runtime.missingCompleted.length,
+      missing_account_sample: runtime.missingAccount.slice(0, 10),
+      missing_completed_sample: runtime.missingCompleted.slice(0, 10),
+      pass: gateReport.runtime.every(([, ok]) => ok),
+    },
     release_decision_gates: {
       exact_range_provided: !!rangeMs,
       eligible_missing_account_id: missCls.os_in_range_qualifying.length,
       eligible_missing_customer: eligibleMissingCustomerAccs.length,
       eligible_cross_store_accounts: crossInRange.length,
-      pass: gateReport.exitCode === 0,
+      pass: gateReport.release.every(([, ok]) => ok),
     },
+    overall_pass: gateReport.exitCode === 0,
     diagnostic_gates: {
       missing_account_id: missingAccount.length,
       missing_customer: missingCustomer.length,
@@ -398,21 +430,37 @@ try {
   console.log('\n=== JSON SUMMARY ===')
   console.log(JSON.stringify(summary, null, 2))
 
-  // r1.3.2 P1#2: exit code CHỈ theo release gates (scoped); global = cảnh báo.
-  console.log('\n=== RELEASE DECISION GATES (scoped: exact range · OS active · POS filter) ===')
-  let failedRelease = 0
+  // r1.3.3: exit = runtime AND release; global = cảnh báo.
+  console.log('\n=== RUNTIME READINESS GATES (mirror canary RPC 103 — toàn lịch sử DELIVERED trên scoped OS stores, KHÔNG lọc range/giá) ===')
+  for (const [label, ok] of gateReport.runtime) {
+    console.log((ok ? 'PASS' : 'FAIL').padEnd(5), label)
+  }
+  for (const [name, arr] of [['thiếu account_id', runtime.missingAccount], ['thiếu completed_time', runtime.missingCompleted]]) {
+    if (arr.length > 0) {
+      console.log(`  sample ${name} (≤10):`)
+      for (const e of arr.slice(0, 10)) console.log(`    ${e.order_id} · ${e.partner_code} · ${e.point}`)
+    }
+  }
+  console.log('=== RELEASE DECISION GATES (scoped: exact range · OS active · POS filter) ===')
   for (const [label, ok] of gateReport.release) {
     console.log((ok ? 'PASS' : 'FAIL').padEnd(5), label)
-    if (!ok) failedRelease++
   }
   console.log('=== DIAGNOSTIC GATES (toàn lịch sử — CẢNH BÁO, không quyết exit code) ===')
   for (const [label, ok] of gateReport.diagnostic) {
     console.log((ok ? 'PASS' : 'WARN').padEnd(5), label)
   }
-  if (failedRelease > 0) {
-    console.log(`\n${failedRelease} release gate FAIL — DỪNG: chưa đủ điều kiện bước BACKFILL/MIGRATION KẾ TIẾP (104) trong scope đã chọn; gửi output (kèm JSON SUMMARY) cho stakeholder duyệt rule.`)
+  const failedHard = [...gateReport.runtime, ...gateReport.release].filter(([, ok]) => !ok).length
+  if (failedHard > 0) {
+    console.log(`\n${failedHard} gate (runtime readiness / release) FAIL — DỪNG: chưa đủ điều kiện bước BACKFILL/MIGRATION KẾ TIẾP (104) trong scope đã chọn; gửi output (kèm JSON SUMMARY) cho stakeholder duyệt rule.`)
   } else {
-    console.log('\nALL RELEASE GATES PASS — đủ điều kiện bước backfill/migration kế tiếp (104) trong scope đã chọn.')
+    console.log('\nALL RUNTIME + RELEASE GATES PASS — đủ điều kiện bước backfill/migration kế tiếp (104) trong scope đã chọn.')
+    console.log('⚠ P2#3: đây là proof trên MONGO NGUỒN. Sau deploy + full sync, verify TRỰC TIẾP Supabase trước khi bật flag:')
+    console.log("    SELECT count(*) FILTER (WHERE account_id IS NULL)      AS missing_account_id,")
+    console.log("           count(*) FILTER (WHERE completed_time IS NULL)  AS missing_completed_time")
+    console.log("    FROM public.affiliate_orders o")
+    console.log("    WHERE o.source_active AND o.status_norm = 'delivered'")
+    console.log("      AND o.store_id IN (SELECT id FROM public.stores WHERE store_type='os' AND is_active);")
+    console.log('    -- kỳ vọng 0 / 0 trên TOÀN BỘ target OS stores rồi mới mở QA UI/flag.')
   }
   // r1.2: KHÔNG process.exit trong try — exit bỏ qua finally, Mongo client
   // không close → libuv assertion crash teardown (Windows). Set code, close

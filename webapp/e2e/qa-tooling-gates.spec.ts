@@ -5,7 +5,7 @@ import fs from 'node:fs'
 // r1.3.1: lõi thuần của proof script — test SYNTHETIC thay vì chỉ source-text.
 import {
   buildPointByCode, qualifyOrders, dedupWinners, crossStoreCases,
-  scopePoints, classifyMissingAccount, buildGateReport,
+  scopePoints, classifyMissingAccount, buildGateReport, runtimeReadiness,
 } from '../scripts/lib-customer-proof.mjs'
 
 // Mig 103 r1.1 (audit P1 tooling) — gate an toàn của 2 script QA/proof phải
@@ -227,6 +227,7 @@ test.describe('lib-customer-proof r1.3.2 (scoped release gates) @desktop', () =>
     const base = {
       rangeProvided: true,
       eligibleMissingAccount: 0, eligibleMissingCustomer: 0, eligibleCrossStore: 0,
+      runtimeMissingAccount: 0, runtimeMissingCompleted: 0,
       globalMissingAccount: 12, globalMissingCustomer: 3, globalCrossStore: 5,
     }
     const ok = buildGateReport(base)
@@ -236,6 +237,9 @@ test.describe('lib-customer-proof r1.3.2 (scoped release gates) @desktop', () =>
     expect(buildGateReport({ ...base, rangeProvided: false }).exitCode).toBe(1)
     expect(buildGateReport({ ...base, eligibleMissingAccount: 1 }).exitCode).toBe(1)
     expect(buildGateReport({ ...base, eligibleCrossStore: 2 }).exitCode).toBe(1)
+    // r1.3.3: metric scoped PASS nhưng runtime readiness FAIL → exit ≠ 0
+    expect(buildGateReport({ ...base, runtimeMissingAccount: 1 }).exitCode).toBe(1)
+    expect(buildGateReport({ ...base, runtimeMissingCompleted: 1 }).exitCode).toBe(1)
   })
 
   test('SOURCE-TEXT: exit gate tách RELEASE/DIAGNOSTIC, không còn tham chiếu migration 103', () => {
@@ -247,5 +251,50 @@ test.describe('lib-customer-proof r1.3.2 (scoped release gates) @desktop', () =>
     // thông báo cũ sai giai đoạn (103 đã chạy) phải biến mất
     expect(proof).not.toContain('điều kiện chạy migration 103')
     expect(proof).not.toContain('tiến hành migration 103')
+  })
+})
+
+// ── r1.3.3: RUNTIME READINESS — mirror canary RPC 103 (không range/giá) ─────
+test.describe('lib-customer-proof r1.3.3 (runtime readiness) @desktop', () => {
+  const points = buildPointByCode([
+    M('OS-A', 's1'), M('OS-B', 's2'),
+    M('FS-STORE', 's3', { type: 'fs' }),
+    M('OS-DEAD', 's4', { storeActive: false }),
+  ])
+  const R = (orderId: number, partnerCode: string, hasAccount: boolean, hasCompleted: boolean) =>
+    ({ orderId, partnerCode, hasAccount, hasCompleted })
+
+  test('đơn thiếu account_id NGOÀI mọi range vẫn bị đếm (không có khái niệm range); thiếu completed_time cũng vậy — kể cả đơn có account', () => {
+    const r = runtimeReadiness([
+      R(1, 'OS-A', false, true),   // thiếu account — runtime canary bắt
+      R(2, 'OS-A', true, false),   // CÓ account nhưng thiếu completed_time
+      R(3, 'OS-B', true, true),    // sạch
+      R(4, 'OS-A', false, false),  // thiếu CẢ HAI → vào cả 2 danh sách
+    ], points)
+    expect(r.missingAccount.map((e) => e.order_id)).toEqual([1, 4])
+    expect(r.missingCompleted.map((e) => e.order_id)).toEqual([2, 4])
+  })
+
+  test('scoped đúng: FS-store/OS-inactive KHÔNG tính; posFilter loại store ngoài subset', () => {
+    const rows = [
+      R(1, 'FS-STORE', false, false),  // ngoài scope OS active
+      R(2, 'OS-DEAD', false, false),   // store inactive — RPC không target được
+      R(3, 'OS-B', false, true),
+    ]
+    const all = runtimeReadiness(rows, points)
+    expect(all.missingAccount.map((e) => e.order_id)).toEqual([3])
+    const sub = runtimeReadiness(rows, points, new Set(['POS-s1']))
+    expect(sub.missingAccount).toEqual([])   // OS-B ngoài subset
+    expect(sub.missingCompleted).toEqual([])
+  })
+
+  test('SOURCE-TEXT: proof có tầng RUNTIME READINESS + summary 3 khối + nhắc verify Supabase sau full-sync', () => {
+    const proof = fs.readFileSync('scripts/proof-affiliate-account-id.mjs', 'utf8')
+    expect(proof).toContain('RUNTIME READINESS GATES')
+    expect(proof).toContain('runtime_readiness_gates')
+    expect(proof).toContain('overall_pass')
+    // P2#3: proof = predictor trên Mongo; gate Supabase sau deploy+full-sync
+    expect(proof).toContain('verify TRỰC TIẾP Supabase')
+    expect(proof).toContain("status_norm = 'delivered'")
   })
 })

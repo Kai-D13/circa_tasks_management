@@ -154,15 +154,24 @@ export function classifyMissingAccount(rows, pointByCode, rangeMs = null, posFil
   return buckets
 }
 
-// GATE REPORT tách 2 tầng (r1.3.2 P1#2):
-//   release_decision — SCOPED (exact range + OS active + posFilter): quyết
-//   exit code + bước kế tiếp (backfill account_id / mig 104).
-//   diagnostic — TOÀN LỊCH SỬ: chỉ CẢNH BÁO, không đổi quyết định scoped.
+// GATE REPORT tách 3 tầng (r1.3.2 P1#2 + r1.3.3 P1#1/#2):
+//   runtime_readiness — mirror canary RPC 103 (TOÀN LỊCH SỬ DELIVERED trên
+//     scoped OS stores, KHÔNG lọc range/giá): metric scoped có sạch mấy mà
+//     tầng này fail thì activation/sync production vẫn fail-closed.
+//   release_decision — SCOPED (exact range + OS active + posFilter): metric
+//     đúng campaign range.
+//   diagnostic — TOÀN HỆ THỐNG: chỉ CẢNH BÁO, không đổi exit code.
+// Exit code = 0 CHỈ khi runtime_readiness PASS **VÀ** release_decision PASS.
 /** @param {{rangeProvided: boolean, eligibleMissingAccount: number,
  *   eligibleMissingCustomer: number, eligibleCrossStore: number,
+ *   runtimeMissingAccount: number, runtimeMissingCompleted: number,
  *   globalMissingAccount: number, globalMissingCustomer: number,
  *   globalCrossStore: number}} p */
 export function buildGateReport(p) {
+  const runtime = [
+    ['runtime_missing_account_id (toàn lịch sử, scoped OS stores) = 0', p.runtimeMissingAccount === 0],
+    ['runtime_missing_completed_time (toàn lịch sử, scoped OS stores) = 0', p.runtimeMissingCompleted === 0],
+  ]
   const release = [
     ['exact_range_provided (QA_CUSTOMER_FROM/TO)', p.rangeProvided],
     ['eligible_missing_account_id = 0', p.eligibleMissingAccount === 0],
@@ -174,5 +183,33 @@ export function buildGateReport(p) {
     ['missing_customer (toàn lịch sử) = 0', p.globalMissingCustomer === 0],
     ['cross_store_accounts (toàn lịch sử) = 0', p.globalCrossStore === 0],
   ]
-  return { release, diagnostic, exitCode: release.every(([, ok]) => ok) ? 0 : 1 }
+  const pass = runtime.every(([, ok]) => ok) && release.every(([, ok]) => ok)
+  return { runtime, release, diagnostic, exitCode: pass ? 0 : 1 }
+}
+
+// ── r1.3.3 (audit 07/08 khuya) ──────────────────────────────────────────────
+
+// RUNTIME READINESS — mirror ĐÚNG canary của RPC 103 (rpc_aggregate_affiliate_
+// customers + activation identity-gate): quét TOÀN LỊCH SỬ đơn DELIVERED
+// (source hiện hành) trên các store TRONG SCOPE (OS active + posFilter),
+// KHÔNG lọc date range, KHÔNG lọc total_price — RPC fail-closed khi bất kỳ
+// đơn nào thiếu account_id hoặc completed_time, nên proof PASS metric scoped
+// mà bỏ 2 canary này vẫn có thể activation/sync fail (r1.3.3 P1#1/#2).
+// rows: TOÀN BỘ đơn DELIVERED đã normalize {orderId, partnerCode, hasAccount,
+// hasCompleted} (không cần price/acc).
+/** @param {Array<{orderId: number | string, partnerCode: string, hasAccount: boolean, hasCompleted: boolean}>} rows
+ *  @param {Map<string, ReturnType<typeof pointFromMapping>>} pointByCode
+ *  @param {Set<string> | null} [posFilter] */
+export function runtimeReadiness(rows, pointByCode, posFilter = null) {
+  const missingAccount = []
+  const missingCompleted = []
+  for (const r of rows) {
+    const point = pointByCode.get(r.partnerCode)
+    if (!point || !point.isOsActive) continue
+    if (posFilter && !posFilter.has(point.posCode)) continue
+    const entry = { order_id: r.orderId, partner_code: r.partnerCode, point: point.label }
+    if (!r.hasAccount) missingAccount.push(entry)
+    if (!r.hasCompleted) missingCompleted.push(entry)
+  }
+  return { missingAccount, missingCompleted }
 }
