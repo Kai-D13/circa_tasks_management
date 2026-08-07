@@ -93,6 +93,7 @@ const bsonType = (v) => {
   return typeof v
 }
 
+let exitCode = 0
 const client = new MongoClient(env.MONGODB_AFFILIATE_URI, {
   maxPoolSize: 2, serverSelectionTimeoutMS: 15_000, connectTimeoutMS: 15_000,
   socketTimeoutMS: 120_000, promoteLongs: false,
@@ -275,9 +276,14 @@ try {
   }
   if (failed > 0) {
     console.log(`\n${failed} gate FAIL — DỪNG: chưa đủ điều kiện chạy migration 103, gửi output này cho stakeholder duyệt rule.`)
-    process.exit(1)
+    // r1.2: KHÔNG process.exit trong try — exit bỏ qua finally, Mongo client
+    // không close → libuv assertion crash lúc teardown (Windows) + exit code
+    // sai. Set code, close sạch ở finally rồi mới exit.
+    exitCode = 1
+  } else {
+    console.log('\nALL GATES PASS — đủ điều kiện tiến hành migration 103 (DRAFT chờ audit).')
   }
-  console.log('\nALL GATES PASS — đủ điều kiện tiến hành migration 103 (DRAFT chờ audit).')
 } finally {
   await client.close()
 }
+process.exit(exitCode)
