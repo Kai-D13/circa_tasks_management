@@ -39,6 +39,11 @@ const PROJECTION = {
   order_id: 1,
   order_code: 1,
   pos_order_code: 1,
+  // Identity khách cho metric affiliate_customer_count (handoff 06/08 — join
+  // đã chứng minh order.account_id ↔ customer.account_id). CHỈ lấy account_id
+  // từ Order; KHÔNG pull collection customer trong cron (customer chỉ phục vụ
+  // preflight/audit — proof-affiliate-account-id.mjs).
+  account_id: 1,
   affiliate_partner_code: 1,
   status: 1,
   sale_order_status: 1,

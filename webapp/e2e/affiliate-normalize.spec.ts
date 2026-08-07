@@ -10,6 +10,7 @@ const base = {
   order_id: 23261,
   order_code: 'DH023261',
   pos_order_code: 'DHC01023742',
+  account_id: 1185465, // identity khách (mig 103 — join proof 06/08)
   affiliate_partner_code: 'CIRCA-TAMVIET',
   status: 'DELIVERED',
   sale_order_status: 'PROCESSING',
@@ -37,6 +38,35 @@ test.describe('affiliate normalize @desktop', () => {
     expect(r.row.confirmed_time).toBe('2026-07-21T07:35:04.448Z')
     expect(r.row.completed_time).toBe('2026-07-21T08:40:35.909Z')
     expect(r.row.first_product_name).toContain('Kẹo the Play')
+    expect(r.row.account_id).toBe(1185465)
+  })
+
+  // Mig 103 (metric Số khách): account_id NULLABLE — thiếu/hỏng KHÔNG reject
+  // (mirror completed_time); fail-closed ở RPC aggregate customers + canary
+  // report cron, KHÔNG ở validate ingestion.
+  test('account_id (mig 103): Long duck-type OK; thiếu/unsafe/không dương → null KHÔNG reject', () => {
+    const longLike = { toNumber: () => 1185465, toString: () => '1185465', _bsontype: 'Long' }
+    const r1 = validateSourceOrder({ ...base, account_id: longLike })
+    expect(r1.ok).toBe(true)
+    if (r1.ok) expect(r1.row.account_id).toBe(1185465)
+
+    for (const [label, v] of [
+      ['thiếu', undefined],
+      ['null', null],
+      ['unsafe Long', { toNumber: () => 2 ** 53 + 2, toString: () => 'x', _bsontype: 'Long' }],
+      ['chuỗi', 'abc'],
+      ['số 0', 0],
+      ['số âm', -5],
+      ['thập phân', 1.5],
+    ] as const) {
+      const r = validateSourceOrder({ ...base, account_id: v })
+      expect(r.ok, `account_id ${label} phải vẫn ok`).toBe(true)
+      if (r.ok) expect(r.row.account_id, `account_id ${label} → null`).toBeNull()
+    }
+    // DELIVERED thiếu account_id: vẫn ingest (canary cron cảnh báo, RPC chặn)
+    const rd = validateSourceOrder({ ...base, status: 'DELIVERED', account_id: undefined })
+    expect(rd.ok).toBe(true)
+    if (rd.ok) expect(rd.row.status_norm).toBe('delivered')
   })
 
   test('normalize status: known-set 8 giá trị + lạ → other', () => {

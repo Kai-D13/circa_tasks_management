@@ -37,6 +37,7 @@ export interface SourceOrderDoc {
   order_id?: unknown
   order_code?: unknown
   pos_order_code?: unknown
+  account_id?: unknown
   affiliate_partner_code?: unknown
   status?: unknown
   sale_order_status?: unknown
@@ -55,6 +56,10 @@ export interface AffiliateOrderRow {
   order_id: number
   order_code: string | null
   pos_order_code: string | null
+  // Identity khách (metric affiliate_customer_count, mig 103). NULLABLE —
+  // thiếu/hỏng KHÔNG reject row (mirror completed_time): ingest vẫn lưu đủ,
+  // fail-closed nằm ở rpc_aggregate_affiliate_customers + canary report cron.
+  account_id: number | null
   partner_code: string
   raw_status: string
   status_norm: string
@@ -142,6 +147,10 @@ export function validateSourceOrder(doc: SourceOrderDoc): NormalizeResult {
   }
 
   const totalItem = toSafeInt(doc.total_item)
+  // account_id: BSON Long qua toSafeInt (vượt safe-int/hỏng → null, KHÔNG
+  // biến thành 0); phải DƯƠNG — id ≤ 0 coi như thiếu.
+  const accountIdRaw = toSafeInt(doc.account_id)
+  const accountId = accountIdRaw !== null && accountIdRaw > 0 ? accountIdRaw : null
 
   return {
     ok: true,
@@ -149,6 +158,7 @@ export function validateSourceOrder(doc: SourceOrderDoc): NormalizeResult {
       order_id: orderId,
       order_code: str(doc.order_code),
       pos_order_code: str(doc.pos_order_code),
+      account_id: accountId,
       partner_code: partnerCode,
       raw_status: rawStatus,
       status_norm: normalizeStatus(rawStatus),
