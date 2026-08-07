@@ -63,3 +63,41 @@ export function buildCampaignExportRows(
     }
   })
 }
+
+// ── Mig 103: builder RIÊNG cho campaign "Số khách Affiliate" ────────────────
+// KHÔNG đụng buildCampaignExportRows (cột 'Actual GMV' CẤM đổi — Power Query/
+// đối soát phụ thuộc); campaign khách có bộ cột đơn vị KHÁCH riêng, cột tiền
+// chỉ còn Commission pool. Route branch theo metric_type.
+export interface ExportCustomerActual extends ExportActual { actual_customer_count?: number | null }
+
+export function buildCustomerCampaignExportRows(
+  c: ExportCampaign,
+  targets: ExportTarget[],
+  actuals: ExportCustomerActual[],
+  vnTodayISO: string,
+  fmt: (iso: string) => string,
+): Record<string, string | number>[] {
+  const actualByStore = new Map(actuals.map((a) => [a.store_id, a]))
+  return targets.map((t) => {
+    const a = actualByStore.get(t.store_id)
+    const perf = campaignPerformance(t.kpi_target, a?.actual_value ?? null, c.start_date, c.end_date, vnTodayISO)
+    return {
+      'Chiến dịch':   c.name,
+      'Loại chỉ số':  'Số khách Affiliate',
+      'Từ ngày':      c.start_date,
+      'Đến ngày':     c.end_date,
+      'POS':          t.pos_code ?? '',
+      'Cửa hàng':     t.stores?.name ?? '',
+      'Phân loại':    t.store_kpi_group ?? '',
+      'KPI target (khách)': Number(t.kpi_target) || 0,
+      'Số khách Affiliate': a?.actual_customer_count != null ? Number(a.actual_customer_count) || 0 : '',
+      'Run rate %':   a?.run_rate != null ? Number(a.run_rate.toFixed(1)) : '',
+      'Performance %': perf != null ? Number(perf.toFixed(1)) : '',
+      'Còn thiếu (khách)': a?.remaining_target != null ? Number(a.remaining_target) || 0 : '',
+      'Bậc đạt':      a?.achieved_tier_order ?? '',
+      'Commission pool': a?.store_commission_pool != null ? Number(a.store_commission_pool) || 0 : '',
+      'Affiliate Synced At': a?.affiliate_synced_at ? fmt(a.affiliate_synced_at) : '',
+      'Đồng bộ lúc':  a ? fmt(a.synced_at) : '',
+    }
+  })
+}

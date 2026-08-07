@@ -11,6 +11,7 @@ import { CampaignMetricEditor } from '@/components/kpi/CampaignMetricEditor'
 import { SyncActualsButton } from '@/components/kpi/SyncActualsButton'
 import { CampaignExportButton } from '@/components/kpi/CampaignExportButton'
 import { CampaignResultDashboard } from '@/components/kpi/CampaignResultDashboard'
+import { metricPresentation } from '@/lib/kpi/campaignDisplay'
 import { buildCampaignResultModel, type ResultActualRow, type ResultCampaign, type ResultTargetRow } from '@/lib/kpi/resultModel'
 import { STATUS_META } from '@/lib/kpi/status'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
@@ -66,7 +67,7 @@ export default async function CampaignDetailPage({
 
   const supabase = await createClient()
   const { data: c } = await supabase
-    .from('kpi_campaigns').select('id, name, start_date, end_date, status, is_test, updated_at, archived_at, metric_offline, metric_affiliate').eq('id', id).single()
+    .from('kpi_campaigns').select('id, name, start_date, end_date, status, is_test, updated_at, archived_at, metric_type, metric_offline, metric_affiliate').eq('id', id).single()
   if (!c) notFound()
   // Archive (098): URL campaign đã lưu trữ → 404 (biến mất khỏi mọi UI).
   if (c.archived_at !== null) notFound()
@@ -91,7 +92,7 @@ export default async function CampaignDetailPage({
       .eq('campaign_id', id).order('created_at', { ascending: false }).limit(5),
     supabase
       .from('kpi_campaign_store_actuals')
-      .select('store_id, actual_value, actual_offline, actual_affiliate, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
+      .select('store_id, actual_value, actual_offline, actual_affiliate, actual_customer_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
       .eq('campaign_id', id),
   ])
   const queryError = targetsErr?.message ?? runsErr?.message ?? actualsErr?.message ?? null
@@ -104,6 +105,9 @@ export default async function CampaignDetailPage({
 
   const s = STATUS_META[c.status] ?? STATUS_META.draft
   const canImport = c.status === 'draft' || c.status === 'paused'
+  // Mig 103: KPI target theo đơn vị metric (khách/₫); TierChips (commission)
+  // vẫn dùng vnd tiền module-level.
+  const targetFmt = (n: number) => metricPresentation(c.metric_type as string | undefined).value(n)
 
   // SM Dashboard r1 (27/07): TOÀN BỘ công thức Kết quả chuyển vào
   // lib/kpi/resultModel (dùng chung Super ↔ SM — một nguồn số duy nhất, test
@@ -179,6 +183,7 @@ export default async function CampaignDetailPage({
                 metricOffline={c.metric_offline === true}
                 metricAffiliate={c.metric_affiliate === true}
                 affiliateEnabled={isKpiAffiliateEnabled()}
+                metricType={c.metric_type as string | undefined}
               />
             </CardContent>
           </Card>
@@ -209,7 +214,7 @@ export default async function CampaignDetailPage({
                       <tr key={t.id} className="hover:bg-muted/30">
                         <td className="px-4 py-2.5 font-medium">{t.stores?.name ?? '—'}{t.pos_code ? ` · ${t.pos_code}` : ''}</td>
                         <td className="px-4 py-2.5 text-xs">{t.store_kpi_group ?? '—'}</td>
-                        <td className="px-4 py-2.5 text-right">{vnd(t.kpi_target)}</td>
+                        <td className="px-4 py-2.5 text-right">{targetFmt(t.kpi_target)}</td>
                         <td className="px-4 py-2.5"><TierChips tiers={t.kpi_campaign_store_tiers} /></td>
                       </tr>
                     ))}

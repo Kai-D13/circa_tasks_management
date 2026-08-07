@@ -1,6 +1,7 @@
 import { Card, CardContent } from '@/components/ui/card'
 import { performanceTone } from '@/lib/kpi/performance'
 import type { CampaignResultModel } from '@/lib/kpi/resultModel'
+import { metricPresentation } from '@/lib/kpi/campaignDisplay'
 import { resultTableColumns } from '@/lib/kpi/resultTableLayout'
 import { cn } from '@/lib/utils'
 import {
@@ -16,13 +17,17 @@ import {
 // Markup summary cards + bảng store CHUYỂN NGUYÊN VĂN từ tab Kết quả của
 // super (refactor giữ nguyên hành vi — không đổi label/màu/công thức).
 
-const vnd = (n: number) => `${new Intl.NumberFormat('vi-VN').format(Math.round(n))}₫`
-
 export function CampaignResultDashboard({ model, emptyHint }: {
   model: CampaignResultModel
   emptyHint?: string
 }) {
   const m = model
+  // Mig 103: giá trị METRIC (target/actual/còn thiếu — khách hoặc ₫) qua
+  // presentation; commission LUÔN tiền. gmv → byte-equal formatter cũ.
+  const pres = metricPresentation(m.campaign.metric_type)
+  const vnd = (n: number) => pres.value(n)
+  const money = (n: number) => metricPresentation('gmv').value(n)
+  const isCustomer = pres.kind === 'affiliate_customer_count'
   const synced = m.lastSyncedAt !== null
   return (
     <>
@@ -30,7 +35,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         {([
           { label: 'Tổng KPI target', value: vnd(m.totalTarget), icon: Target, tile: 'bg-primary/10 text-primary' },
-          { label: 'Tổng actual GMV', value: synced ? vnd(m.totalActual) : '—', icon: TrendingUp,
+          { label: isCustomer ? 'Tổng số khách' : 'Tổng actual GMV', value: synced ? vnd(m.totalActual) : '—', icon: TrendingUp,
             tile: synced && m.totalActual > 0 ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground' },
           ...(m.showBreakdown ? [
             { label: 'GMV Offline', value: synced ? vnd(m.totalOffline) : '—', icon: StoreIcon,
@@ -41,7 +46,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
           { label: 'Hoàn thành', value: synced ? `${m.completionPct.toFixed(1)}%` : '—', icon: Percent,
             tile: 'bg-primary/10 text-primary', bar: true,
             valueCls: !synced ? undefined : m.completionPct >= 100 ? 'text-green-600' : 'text-primary' },
-          { label: 'Tổng commission đạt', value: synced ? vnd(m.totalCommission) : '—', icon: Wallet,
+          { label: 'Tổng commission đạt', value: synced ? money(m.totalCommission) : '—', icon: Wallet,
             tile: synced && m.totalCommission > 0 ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground',
             valueCls: synced && m.totalCommission > 0 ? 'text-green-600' : undefined },
           { label: 'Store đạt bậc', value: synced ? `${m.reachedStoreCount}/${m.storeCount}` : '—', icon: Award, tile: 'bg-primary/10 text-primary' },
@@ -92,7 +97,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                       'mobile'); desktop ≥1024px = N cột Bậc động theo
                       maxTierCount (không hardcode 3). Thứ tự cột trong
                       resultTableColumns PHẢI khớp thứ tự cell ở tbody. */}
-                  {resultTableColumns(m.maxTierCount, m.showBreakdown).map((col) => (
+                  {resultTableColumns(m.maxTierCount, m.showBreakdown, m.campaign.metric_type).map((col) => (
                     <th
                       key={col.key}
                       // r1.6.1 (audit P2): min-width qua CSS var + lg:min-w —
@@ -153,7 +158,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                         {a?.achieved_tier_order != null
                           ? (
                             <span className="inline-flex items-center whitespace-nowrap rounded-full bg-green-100 text-green-700 px-2 py-0.5 text-[11px] font-medium">
-                              Bậc {a.achieved_tier_order} · {vnd(a.store_commission_pool ?? 0)}
+                              Bậc {a.achieved_tier_order} · {money(a.store_commission_pool ?? 0)}
                             </span>
                           )
                           : a ? (
@@ -172,7 +177,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                               <span className="text-muted-foreground">—</span>
                             ) : (
                               <div className="text-xs whitespace-nowrap">
-                                <p className="text-muted-foreground">{tp.threshold_pct}% · {vnd(tp.commission_amount)}</p>
+                                <p className="text-muted-foreground">{tp.threshold_pct}% · {money(tp.commission_amount)}</p>
                                 {tp.remaining_amount === null ? (
                                   <p className="text-muted-foreground mt-0.5">—</p>
                                 ) : tp.reached ? (

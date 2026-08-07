@@ -13,13 +13,15 @@ import { Button } from '@/components/ui/button'
 // (flag tắt → reject kể cả client cố gửi). Campaign affiliate sẵn có + flag
 // tắt → hiển thị read-only, không cho sửa metric (fail-closed như action).
 export function CampaignMetricEditor({
-  campaignId, status, metricOffline, metricAffiliate, affiliateEnabled,
+  campaignId, status, metricOffline, metricAffiliate, affiliateEnabled, metricType,
 }: {
   campaignId: string
   status: string
   metricOffline: boolean
   metricAffiliate: boolean
   affiliateEnabled: boolean
+  // Mig 103: campaign Số khách — loại bất biến sau tạo → editor read-only hẳn.
+  metricType?: string
 }) {
   const router = useRouter()
   const [pending, startTransition] = useTransition()
@@ -29,7 +31,20 @@ export function CampaignMetricEditor({
   // r1 P2#1: trạng thái editor từ metricEditorState (contract THUẦN có test) —
   // flag tắt + campaign affiliate → khóa CẢ HAI checkbox lẫn nút lưu (server
   // sẽ reject anyway; UI không được tạo kỳ vọng sửa được).
-  const st = metricEditorState({ status, affiliateEnabled, metricAffiliate })
+  const st = metricEditorState({ status, affiliateEnabled, metricAffiliate, metricType })
+
+  // Mig 103: campaign Số khách — hiển thị read-only, không render checkbox
+  // (server action cũng từ chối mọi chỉnh metric cho loại này).
+  if (metricType === 'affiliate_customer_count') {
+    return (
+      <div className="space-y-1">
+        <p className="text-sm font-medium">Số khách Affiliate</p>
+        <p className="text-xs text-muted-foreground">
+          Đếm khách duy nhất có đơn Affiliate giao thành công trong kỳ — loại chiến dịch cố định sau khi tạo, không đổi được chỉ số.
+        </p>
+      </div>
+    )
+  }
   const changed = offline !== metricOffline || affiliate !== metricAffiliate
 
   function save() {

@@ -7,21 +7,17 @@
 
 // P3-E: gmv = Offline, gmv_affiliate = Affiliate. Cột hiển thị TỔNG; tooltip
 // (<title>) breakdown 2 nguồn khi campaign có affiliate.
-interface DailyPoint { date: string; gmv: number; gmv_affiliate: number }
+// Mig 103: campaign Số khách — cột = affiliate_customer_count, format 'N khách'
+// qua metricPresentation (GMV path dùng cùng module, format byte-equal cũ).
+import { metricPresentation } from '@/lib/kpi/campaignDisplay'
+
+interface DailyPoint { date: string; gmv: number; gmv_affiliate: number; affiliate_customer_count?: number }
 
 const W = 360
 const H = 170
 const PAD_L = 34
 const PAD_B = 18
 const PAD_T = 16 // room for the value callout above today's bar
-
-const compactVnd = (v: number) =>
-  v >= 1_000_000_000 ? `${(v / 1_000_000_000).toFixed(1)}tỷ`
-  : v >= 1_000_000 ? `${Math.round(v / 1_000_000)}tr`
-  : v >= 1_000 ? `${Math.round(v / 1_000)}k`
-  : `${Math.round(v)}`
-
-const fullVnd = (v: number) => `${new Intl.NumberFormat('vi-VN').format(Math.round(v))}₫`
 
 // Round up to a "nice" axis max (1/2/5 × 10^n).
 function niceMax(v: number): number {
@@ -32,15 +28,21 @@ function niceMax(v: number): number {
 }
 
 export function CampaignDailyChart({
-  start, end, daily, todayISO, breakdown = false,
+  start, end, daily, todayISO, breakdown = false, metricType,
 }: {
   start: string; end: string; daily: DailyPoint[]; todayISO: string
   breakdown?: boolean // campaign có CẢ 2 chỉ số → tooltip tách Offline/Affiliate
+  metricType?: string // mig 103: 'affiliate_customer_count' → trục/tooltip 'N khách'
 }) {
+  const pres = metricPresentation(metricType)
+  const isCustomer = pres.kind === 'affiliate_customer_count'
+  const pointValue = (d: DailyPoint) => isCustomer ? (d.affiliate_customer_count ?? 0) : d.gmv + d.gmv_affiliate
+  const compactVnd = pres.compact
+  const fullVnd = pres.value
   // Full day axis across the campaign range (future days render empty).
   // Giá trị cột = TỔNG 2 nguồn; point gốc giữ lại cho tooltip breakdown.
   const pointByDate = new Map(daily.map((d) => [d.date, d]))
-  const gmvByDate = new Map(daily.map((d) => [d.date, d.gmv + d.gmv_affiliate]))
+  const gmvByDate = new Map(daily.map((d) => [d.date, pointValue(d)]))
   const days: string[] = []
   const DAY = 86400_000
   const endMs = Date.parse(`${end}T00:00:00Z`)
@@ -49,7 +51,7 @@ export function CampaignDailyChart({
   }
   if (days.length === 0) return null
 
-  const max = niceMax(Math.max(0, ...daily.map((d) => d.gmv + d.gmv_affiliate)))
+  const max = niceMax(Math.max(0, ...daily.map((d) => pointValue(d))))
   const plotW = W - PAD_L - 4
   const plotH = H - PAD_T - PAD_B
   const slot = plotW / days.length
@@ -61,7 +63,7 @@ export function CampaignDailyChart({
   const gridVals = [max / 2, max]
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img" aria-label="Biểu đồ GMV theo ngày">
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img" aria-label={pres.chartAriaLabel}>
       {/* Recessive grid + y labels (text tokens, never series color) */}
       {gridVals.map((v) => (
         <g key={v}>

@@ -66,4 +66,22 @@ test.describe('kpi result table layout contract @desktop', () => {
     // (acceptance: cột cuối truy cập được bằng table scroll, store luôn thấy)
     expect(resultTableDesktopMinPx(3, false)).toBeGreaterThan(1366 - 313) // 313px = sidebar
   })
+
+  // ── Mig 103 ──
+  test('GMV label BẤT BIẾN (không truyền metricType / truyền gmv): mảng label y hệt trước 103', () => {
+    for (const cols of [resultTableColumns(2, true), resultTableColumns(2, true, 'gmv')]) {
+      expect(cols.map((c) => c.label)).toEqual([
+        'Cửa hàng', 'Phân loại', 'KPI target', 'Actual GMV', 'GMV Offline', 'GMV Affiliate',
+        '%', 'Nhịp độ', 'Còn thiếu', 'Bậc đạt · Commission', 'Bậc 1', 'Bậc 2',
+      ])
+    }
+  })
+
+  test('customer: DUY NHẤT label actual đổi thành "Số khách"; width contract giữ nguyên', () => {
+    const gmv = resultTableColumns(2, false)
+    const cust = resultTableColumns(2, false, 'affiliate_customer_count')
+    expect(cust.map((c) => c.label)).toEqual(gmv.map((c) => c.label === 'Actual GMV' ? 'Số khách' : c.label))
+    expect(cust.map((c) => c.minPx)).toEqual(gmv.map((c) => c.minPx))
+    expect(cust.map((c) => c.key)).toEqual(gmv.map((c) => c.key))
+  })
 })

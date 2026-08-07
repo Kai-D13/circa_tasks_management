@@ -9,6 +9,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { buttonVariants } from '@/components/ui/button'
 import { CampaignStatusButton } from '@/components/kpi/CampaignStatusButton'
 import { STATUS_META } from '@/lib/kpi/status'
+import { metricPresentation } from '@/lib/kpi/campaignDisplay'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
 import { Plus, Megaphone, ChevronRight } from 'lucide-react'
@@ -18,7 +19,8 @@ import { Plus, Megaphone, ChevronRight } from 'lucide-react'
 // / % + progress bar / store count / last sync. Aggregates are computed
 // app-side from two light queries (few campaigns × ≤26 stores).
 
-const vnd = (n: number) => `${new Intl.NumberFormat('vi-VN').format(Math.round(n))}₫`
+// Mig 103: 'Mục tiêu/Đã đạt' theo đơn vị metric của TỪNG campaign (khách/₫)
+// qua metricPresentation — gmv byte-equal formatter cũ.
 const drange = (s: string, e: string) => `${formatDate(s)} – ${formatDate(e)}`
 
 export default async function CampaignsPage() {
@@ -33,7 +35,7 @@ export default async function CampaignsPage() {
     { data: actuals, error: actualsErr },
   ] = await Promise.all([
     supabase.from('kpi_campaigns')
-      .select('id, name, start_date, end_date, status, is_test, updated_at')
+      .select('id, name, start_date, end_date, status, is_test, updated_at, metric_type')
       .is('archived_at', null) // Archive (098): campaign lưu trữ biến mất khỏi list
       .order('created_at', { ascending: false }),
     supabase.from('kpi_campaign_store_targets').select('campaign_id, kpi_target'),
@@ -58,7 +60,7 @@ export default async function CampaignsPage() {
     agg.set(r.campaign_id as string, a)
   }
 
-  const list = (campaigns ?? []) as { id: string; name: string; start_date: string; end_date: string; status: string; is_test: boolean; updated_at: string }[]
+  const list = (campaigns ?? []) as { id: string; name: string; start_date: string; end_date: string; status: string; is_test: boolean; updated_at: string; metric_type?: string }[]
   const counts = {
     total: list.length,
     active: list.filter((c) => c.status === 'active').length,
@@ -117,6 +119,7 @@ export default async function CampaignsPage() {
             {list.map((c) => {
               const s = STATUS_META[c.status] ?? STATUS_META.draft
               const a = agg.get(c.id) ?? { stores: 0, target: 0, actual: 0, lastSync: null }
+              const vnd = metricPresentation(c.metric_type).value
               const synced = a.lastSync !== null
               const pct = a.target > 0 ? (a.actual / a.target) * 100 : 0
               // Money-screen color rule: grey until synced (0% must not read as a

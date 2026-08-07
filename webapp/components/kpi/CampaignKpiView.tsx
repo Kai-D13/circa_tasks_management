@@ -1,5 +1,5 @@
 import { Card, CardContent } from '@/components/ui/card'
-import { breakdownModel, campaignFootnote } from '@/lib/kpi/campaignDisplay'
+import { breakdownModel, campaignFootnote, metricPresentation } from '@/lib/kpi/campaignDisplay'
 import { buildTierProgress, type TierProgress } from '@/lib/kpi/resultModel'
 import { CampaignDailyChart } from '@/components/kpi/CampaignDailyChart'
 import { CampaignPicker } from '@/components/kpi/CampaignPicker'
@@ -38,13 +38,13 @@ export interface CampaignView {
   actual_affiliate: number | null
   offline_synced_at: string | null
   affiliate_synced_at: string | null
+  // Mig 103: 'affiliate_customer_count' → label/đơn vị KHÁCH qua
+  // metricPresentation; thiếu (caller cũ) = gmv, hiển thị y nguyên.
+  metric_type?: string
 }
 // gmv = Offline, gmv_affiliate = Affiliate — chart hiển thị TỔNG, giữ riêng
 // 2 nguồn cho tooltip breakdown + stacked chart sau này.
-export interface DailyPoint { date: string; gmv: number; gmv_affiliate: number }
-
-const vnd = (n: number | null | undefined) =>
-  n === null || n === undefined ? '—' : `${new Intl.NumberFormat('vi-VN').format(Math.round(n))}₫`
+export interface DailyPoint { date: string; gmv: number; gmv_affiliate: number; affiliate_customer_count?: number }
 
 // Short dd/MM for the campaign-chip date range.
 const dm = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`
@@ -114,6 +114,12 @@ export function CampaignKpiView({
   showTierRemaining?: boolean
 }) {
   const sel = items.find((i) => i.id === selectedId) ?? items[0]
+  // Mig 103: format/label tập trung — gmv cho output BYTE-EQUAL vnd cũ.
+  const pres = metricPresentation(sel.metric_type)
+  const vnd = pres.value
+  // Commission LUÔN là tiền (kể cả campaign Số khách — tier thưởng bằng VNĐ).
+  const money = metricPresentation('gmv').value
+  const isCustomer = pres.kind === 'affiliate_customer_count'
   const target = sel.kpi_target
   const actual = sel.actual_value ?? 0
   const pct = sel.run_rate ?? (target > 0 ? (actual / target) * 100 : 0)
@@ -126,7 +132,9 @@ export function CampaignKpiView({
   const needPerDay = campaignOver || achieved ? 0 : remaining / Math.max(daysLeft, 1)
   // P3-E: "GMV hôm nay" = TỔNG 2 nguồn của ngày hôm nay.
   const todayPoint = daily.find((d) => d.date === todayISO)
-  const todayGmv = todayPoint ? todayPoint.gmv + todayPoint.gmv_affiliate : null
+  const todayGmv = todayPoint
+    ? (isCustomer ? (todayPoint.affiliate_customer_count ?? 0) : todayPoint.gmv + todayPoint.gmv_affiliate)
+    : null
 
   // P3-E r1: contract breakdown/footnote nằm trong lib/kpi/campaignDisplay
   // (THUẦN, có test khóa) — 1 chỉ số → layout hiện tại giữ nguyên tuyệt đối.
@@ -212,7 +220,7 @@ export function CampaignKpiView({
         <CardContent className="p-4 space-y-3">
           <div className="flex items-start justify-between gap-3">
             <div className="min-w-0 flex-1">
-              <p className="text-xs text-muted-foreground">Mục tiêu GMV</p>
+              <p className="text-xs text-muted-foreground">{pres.targetLabel}</p>
               <p className="text-2xl font-bold text-primary leading-tight">{vnd(target)}</p>
               <p className="text-xs text-muted-foreground mt-2">Đã đạt</p>
               <p className="text-2xl font-bold text-status-success leading-tight">
@@ -230,7 +238,7 @@ export function CampaignKpiView({
           <p className="flex items-center gap-1.5 text-sm border-t pt-3">
             <Target className="h-4 w-4 text-primary shrink-0" />
             <span className="text-muted-foreground">Còn thiếu:</span>
-            <span className="font-bold text-primary">{achieved ? '0₫' : vnd(remaining)}</span>
+            <span className="font-bold text-primary">{achieved ? pres.zero : vnd(remaining)}</span>
           </p>
         </CardContent>
       </Card>
@@ -293,7 +301,7 @@ export function CampaignKpiView({
               <TrendingUp className="h-4 w-4" />
             </span>
             <p className="text-[11px] text-muted-foreground mt-1.5">Trung bình/ngày cần đạt</p>
-            <p className="text-sm font-bold mt-0.5 text-primary">{achieved ? '0₫' : campaignOver ? '—' : vnd(needPerDay)}</p>
+            <p className="text-sm font-bold mt-0.5 text-primary">{achieved ? pres.zero : campaignOver ? '—' : vnd(needPerDay)}</p>
           </CardContent>
         </Card>
         <Card className="rounded-lg">
@@ -301,7 +309,7 @@ export function CampaignKpiView({
             <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-status-success-bg text-status-success">
               <Wallet className="h-4 w-4" />
             </span>
-            <p className="text-[11px] text-muted-foreground mt-1.5">GMV hôm nay</p>
+            <p className="text-[11px] text-muted-foreground mt-1.5">{pres.todayLabel}</p>
             <p className={cn('text-sm font-bold mt-0.5', todayGmv !== null && todayGmv > 0 && 'text-status-success')}>
               {todayGmv !== null ? vnd(todayGmv) : '—'}
             </p>
@@ -314,7 +322,7 @@ export function CampaignKpiView({
         <CardContent className="p-4">
           <p className="font-semibold text-sm mb-2">Tiến độ theo ngày</p>
           {daily.length > 0 ? (
-            <CampaignDailyChart start={sel.start_date} end={sel.end_date} daily={daily} todayISO={todayISO} breakdown={showBreakdown} />
+            <CampaignDailyChart start={sel.start_date} end={sel.end_date} daily={daily} todayISO={todayISO} breakdown={showBreakdown} metricType={sel.metric_type} />
           ) : (
             <p className="text-sm text-muted-foreground py-6 text-center">
               {dailyError
@@ -351,7 +359,7 @@ export function CampaignKpiView({
               <p className="text-sm">
                 <span className="text-muted-foreground">Commission Store dự kiến: </span>
                 <span className={cn('font-bold', expectedPool > 0 ? 'text-status-success' : 'text-muted-foreground')}>
-                  {vnd(expectedPool)}
+                  {money(expectedPool)}
                 </span>
               </p>
             </div>
@@ -399,7 +407,7 @@ export function CampaignKpiView({
                       )}
                     >
                       <p className={cn('text-base font-bold', reached ? 'text-status-success' : isNext ? 'text-primary' : '')}>{t.threshold_pct}%</p>
-                      <p className="text-[10px] text-muted-foreground">Thưởng: <span className={cn('font-semibold', isNext ? 'text-primary' : 'text-foreground')}>{vnd(t.commission_amount)}</span></p>
+                      <p className="text-[10px] text-muted-foreground">Thưởng: <span className={cn('font-semibold', isNext ? 'text-primary' : 'text-foreground')}>{money(t.commission_amount)}</span></p>
                       {tierRemainingLine(t.tier_order)}
                     </div>
                   )
@@ -420,7 +428,7 @@ export function CampaignKpiView({
                     >
                       <p className={cn('text-sm font-bold', reached ? 'text-status-success' : isNext ? 'text-primary' : '')}>{t.threshold_pct}%</p>
                       <div className="text-right">
-                        <p className="text-xs text-muted-foreground">Thưởng: <span className={cn('font-semibold', isNext ? 'text-primary' : 'text-foreground')}>{vnd(t.commission_amount)}</span></p>
+                        <p className="text-xs text-muted-foreground">Thưởng: <span className={cn('font-semibold', isNext ? 'text-primary' : 'text-foreground')}>{money(t.commission_amount)}</span></p>
                         {tierRemainingLine(t.tier_order)}
                       </div>
                     </div>
