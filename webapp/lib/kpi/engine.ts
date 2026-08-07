@@ -31,6 +31,9 @@ export interface SnapshotInput {
 export interface DailyRowPayload {
   campaign_id: string; store_id: string; date: string
   gmv: number; gmv_affiliate: number; synced_at: string
+  // Mig 103 (metric Số khách) — OPTIONAL: path GMV KHÔNG set key này (payload
+  // GMV giữ nguyên từng byte; RPC coalesce 0). Chỉ buildCustomerSnapshot set.
+  affiliate_customer_count?: number
 }
 export interface ActualRowPayload {
   campaign_id: string; store_id: string
@@ -42,6 +45,8 @@ export interface ActualRowPayload {
   // còn là số row BigQuery thuần. Export/UI phải diễn giải theo nghĩa này.
   raw_row_count: number
   offline_synced_at: string | null; affiliate_synced_at: string | null; synced_at: string
+  // Mig 103 — OPTIONAL như trên: chỉ campaign customer set.
+  actual_customer_count?: number
 }
 
 const DAY = 86400_000
@@ -76,6 +81,28 @@ export function monthChunks(startISO: string, endISO: string): [string, string][
     cursor = chunkEnd + DAY
   }
   return chunks
+}
+
+// Số học thưởng DÙNG CHUNG cho mọi metric (GMV lẫn Số khách) — trích từ
+// buildCampaignSnapshot (refactor thuần, hành vi khóa bởi kpi-engine.spec):
+// run_rate làm tròn 2 chữ số; bậc = tier CAO NHẤT có threshold ≤ run_rate;
+// remaining = max(target − actual, 0); pool = commission bậc đạt (null nếu chưa).
+export function computeTierAchievement(target: number, actualValue: number, tiers: TierRow[]): {
+  runRate: number | null
+  remainingTarget: number
+  achievedTierOrder: number | null
+  commissionPool: number | null
+} {
+  const runRate = target > 0 ? Math.round((actualValue / target) * 100 * 100) / 100 : null
+  const achieved = [...tiers]
+    .filter((x) => runRate !== null && Number(x.threshold_pct) <= runRate)
+    .sort((a, b) => b.tier_order - a.tier_order)[0] ?? null
+  return {
+    runRate,
+    remainingTarget: Math.max(target - actualValue, 0),
+    achievedTierOrder: achieved?.tier_order ?? null,
+    commissionPool: achieved ? Number(achieved.commission_amount) : null,
+  }
 }
 
 export function buildCampaignSnapshot(input: SnapshotInput): {
@@ -116,10 +143,7 @@ export function buildCampaignSnapshot(input: SnapshotInput): {
 
     const actualValue = actualOffline + actualAffiliate
     const target = Number(t.kpi_target) || 0
-    const runRate = target > 0 ? Math.round((actualValue / target) * 100 * 100) / 100 : null
-    const achieved = [...t.tiers]
-      .filter((x) => runRate !== null && Number(x.threshold_pct) <= runRate)
-      .sort((a, b) => b.tier_order - a.tier_order)[0] ?? null
+    const ach = computeTierAchievement(target, actualValue, t.tiers)
 
     actuals.push({
       campaign_id: campaignId,
@@ -127,10 +151,10 @@ export function buildCampaignSnapshot(input: SnapshotInput): {
       actual_value: actualValue,
       actual_offline: actualOffline,
       actual_affiliate: actualAffiliate,
-      run_rate: runRate,
-      remaining_target: Math.max(target - actualValue, 0),
-      achieved_tier_order: achieved?.tier_order ?? null,
-      store_commission_pool: achieved ? Number(achieved.commission_amount) : null,
+      run_rate: ach.runRate,
+      remaining_target: ach.remainingTarget,
+      achieved_tier_order: ach.achievedTierOrder,
+      store_commission_pool: ach.commissionPool,
       raw_row_count: rowCount,
       offline_synced_at: metricOffline ? offlineSyncedAt : null,
       affiliate_synced_at: metricAffiliate ? affiliateSyncedAt : null,
@@ -139,4 +163,64 @@ export function buildCampaignSnapshot(input: SnapshotInput): {
   }
 
   return { daily, actuals, unmatchedPos }
+}
+
+// ── Metric "Số khách Affiliate" (mig 103) — snapshot builder RIÊNG ──────────
+// KHÔNG đụng buildCampaignSnapshot (GMV path zero-touch). Nguồn duy nhất =
+// rpc_aggregate_affiliate_customers (đã dedup toàn scope trong DB: 1 account
+// = 1 khách tại (store, ngày VN) của đơn DELIVERED sớm nhất) → ở đây CHỈ số
+// học: actual_value = actual_customer_count = Σ daily count; offline/affiliate
+// = 0 (contract 103 — RPC replace validate); tier math dùng chung
+// computeTierAchievement (tier % trên SỐ KHÁCH, commission vẫn tiền cố định).
+export interface CustomerSnapshotInput {
+  campaignId: string
+  targets: TargetRow[]
+  customerByStore: Map<string, Map<string, number>> // store_id → vn_date → customer_count
+  snapshotTs: string
+  affiliateSyncedAt: string | null                  // health.lastSuccessAt
+}
+
+export function buildCustomerSnapshot(input: CustomerSnapshotInput): {
+  daily: DailyRowPayload[]
+  actuals: ActualRowPayload[]
+} {
+  const { campaignId, targets, customerByStore, snapshotTs, affiliateSyncedAt } = input
+  const daily: DailyRowPayload[] = []
+  const actuals: ActualRowPayload[] = []
+
+  for (const t of targets) {
+    const days = customerByStore.get(t.store_id)
+    let total = 0
+    let rowCount = 0
+    for (const date of [...(days?.keys() ?? [])].sort()) {
+      const count = days?.get(date) ?? 0
+      total += count
+      rowCount++
+      daily.push({
+        campaign_id: campaignId, store_id: t.store_id, date,
+        gmv: 0, gmv_affiliate: 0, affiliate_customer_count: count, synced_at: snapshotTs,
+      })
+    }
+
+    const target = Number(t.kpi_target) || 0
+    const ach = computeTierAchievement(target, total, t.tiers)
+    actuals.push({
+      campaign_id: campaignId,
+      store_id: t.store_id,
+      actual_value: total,
+      actual_offline: 0,
+      actual_affiliate: 0,
+      actual_customer_count: total,
+      run_rate: ach.runRate,
+      remaining_target: ach.remainingTarget,
+      achieved_tier_order: ach.achievedTierOrder,
+      store_commission_pool: ach.commissionPool,
+      raw_row_count: rowCount,
+      offline_synced_at: null,
+      affiliate_synced_at: affiliateSyncedAt,
+      synced_at: snapshotTs,
+    })
+  }
+
+  return { daily, actuals }
 }
