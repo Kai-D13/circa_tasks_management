@@ -18,6 +18,8 @@
 import fs from 'node:fs'
 import { MongoClient } from 'mongodb'
 import { createClient } from '@supabase/supabase-js'
+// r1.3.1: lõi thuần tách ra module để Playwright test synthetic (8 case).
+import { buildPointByCode, qualifyOrders, dedupWinners, crossStoreCases } from './lib-customer-proof.mjs'
 
 const env = {}
 for (const line of fs.readFileSync('.env.local', 'utf8').split(/\r?\n/)) {
@@ -59,6 +61,19 @@ if (RANGE_FROM !== null || RANGE_TO !== null) {
     from: Date.parse(RANGE_FROM + 'T00:00:00+07:00'),
     to: Date.parse(RANGE_TO + 'T00:00:00+07:00') + DAY,
   }
+}
+
+// r1.3.1 #8: đối soát campaign SUBSET — CSV mã POS (OS active). Không truyền
+// → toàn bộ OS active. Membership check sau khi load mappings.
+const POS_FILTER_RAW = process.env.QA_CUSTOMER_POS_CODES ?? null
+let posFilter = null
+if (POS_FILTER_RAW !== null) {
+  const codes = POS_FILTER_RAW.split(',').map((c) => c.trim().toUpperCase()).filter(Boolean)
+  if (codes.length === 0) {
+    console.error('QA_CUSTOMER_POS_CODES rỗng/sai định dạng (CSV mã POS, vd POS0059,POS0009)')
+    process.exit(1)
+  }
+  posFilter = new Set(codes)
 }
 
 const ORDER_DB = env.AFFILIATE_MONGO_DB || 'circa-online_prd_order'
@@ -150,15 +165,19 @@ try {
   // KPI); mapping fs store NULL → điểm = 'partner:<code>' (khớp model overview).
   const { data: mapRows, error: mapErr } = await svc
     .from('affiliate_partner_mappings')
-    .select('partner_code, store_id, stores(code, store_type)')
+    .select('partner_code, store_id, is_active, stores(code, store_type, is_active)')
   if (mapErr) throw new Error(`Đọc mappings Supabase: ${mapErr.message}`)
-  const pointByCode = new Map(mapRows.map((m) => [m.partner_code, {
-    key: m.store_id ? `store:${m.store_id}` : `partner:${m.partner_code}`,
-    label: m.store_id ? (m.stores?.code ?? m.store_id) : `partner:${m.partner_code}`,
-    isStore: !!m.store_id,
-    // r1.3: phân biệt OS/FS-store cho classification (quyết định mig 104).
-    isOs: !!m.store_id && m.stores?.store_type === 'os',
-  }]))
+  // r1.3.1 P1: eligibility qua LIB thuần — mapping active + store os + store
+  // active (đúng tập activation/runtime cho phép); FS/inactive đếm riêng.
+  const pointByCode = buildPointByCode(mapRows)
+  const eligiblePoints = [...pointByCode.values()].filter((pt) => pt.isOsActive)
+  const eligiblePos = new Set(eligiblePoints.map((pt) => pt.posCode))
+  if (posFilter) {
+    const unknown = [...posFilter].filter((c) => !eligiblePos.has(c))
+    if (unknown.length > 0) {
+      throw new Error('QA_CUSTOMER_POS_CODES có mã KHÔNG thuộc tập OS active: ' + unknown.join(', '))
+    }
+  }
 
   const pointsByAccount = new Map()
   for (const o of withAccount) {
@@ -181,46 +200,37 @@ try {
   // TỪNG THÁNG VN (mirror chạy RPC từng tháng): 1 account = 1 khách tại điểm
   // của đơn DELIVERED sớm nhất trong tháng, tie-break order_id — output theo
   // store/tháng để đối soát TRỰC TIẾP với RPC sau migration.
-  const baselineExcluded = { non_positive: 0, no_completed_time: 0, non_store_point: 0 }
-  const qualifying = []
-  for (const o of withAccount) {
-    const price = toNum(o.total_price)
-    if (price === null || price <= 0) { baselineExcluded.non_positive++; continue }
-    if (!(o.completed_time instanceof Date)) { baselineExcluded.no_completed_time++; continue }
-    const point = pointByCode.get(o.affiliate_partner_code)
-    if (!point || !point.isStore) { baselineExcluded.non_store_point++; continue }
-    qualifying.push({
-      acc: o.acc, orderId: toSafeInt(o.order_id) ?? Number.MAX_SAFE_INTEGER,
-      t: o.completed_time.getTime(), label: point.label,
-      partnerCode: o.affiliate_partner_code,
-    })
-  }
+  // r1.3.1: normalize BSON 1 lần rồi qua LIB — 2 tập tách bạch: osActive
+  // (baseline/cross/104 — CHỈ OS active, tôn trọng posFilter) vs allStorePoints
+  // (diagnostic — mọi điểm có store kể cả FS/inactive).
+  const normRows = withAccount.map((o) => ({
+    acc: o.acc,
+    orderId: toSafeInt(o.order_id) ?? Number.MAX_SAFE_INTEGER,
+    price: toNum(o.total_price),
+    completedTimeMs: o.completed_time instanceof Date ? o.completed_time.getTime() : null,
+    partnerCode: o.affiliate_partner_code,
+  }))
+  const { osActive: qualifyingOsActive, allStorePoints: qualifyingAllPoints, excluded: baselineExcluded } =
+    qualifyOrders(normRows, pointByCode, posFilter)
   const byMonthOrders = new Map()
-  for (const q of qualifying) {
+  for (const q of qualifyingAllPoints) {
     const vnMonth = new Date(q.t + 7 * 3600_000).toISOString().slice(0, 7)
     if (!byMonthOrders.has(vnMonth)) byMonthOrders.set(vnMonth, [])
     byMonthOrders.get(vnMonth).push(q)
   }
-  // Dedup dùng chung: 1 account = 1 khách tại điểm của đơn sớm nhất (tie-break order_id).
-  const dedupWinners = (orders) => {
-    const best = new Map()
-    for (const o of orders) {
-      const cur = best.get(o.acc)
-      if (!cur || o.t < cur.t || (o.t === cur.t && o.orderId < cur.orderId)) best.set(o.acc, o)
-    }
-    return best
-  }
 
-  // ── 8. R1.3 DIAGNOSTIC (plan auditor 07/08 — dữ kiện quyết định mig 104) ──
+  // ── 8. R1.3/R1.3.1 DIAGNOSTIC (dữ kiện quyết định mig 104) ──
   // 8a. PHÂN LOẠI missing_account_id. Precedence tường minh (bucket rời nhau):
-  //   non_os_point (điểm FS-store/partner/unmapped — ngoài scope campaign OS)
+  //   non_os_point (FS-store/partner/unmapped — ngoài scope campaign OS)
+  //   → os_inactive_point (điểm OS nhưng mapping/store INACTIVE — không thể
+  //     là target campaign, r1.3.1 P1#2)
   //   → disqualified_price_or_time (giá ≤0/thiếu completed_time — RPC vốn loại)
   //   → os_in_range_qualifying / os_out_of_range (theo exact range).
-  // Bucket QUYẾT ĐỊNH 104 = os_in_range_qualifying: =0 → guard scope theo
-  // range/OS/price; >0 → Circa Online backfill nguồn (không âm thầm bỏ khách).
+  // Bucket QUYẾT ĐỊNH 104 = os_in_range_qualifying (điểm OS ACTIVE): =0 →
+  // guard scope theo range/OS-active/price; >0 → Circa Online backfill nguồn.
   const missCls = {
     os_in_range_qualifying: [], os_out_of_range: [], os_range_unknown: [],
-    non_os_point: [], disqualified_price_or_time: [],
+    os_inactive_point: [], non_os_point: [], disqualified_price_or_time: [],
   }
   for (const o of missingAccount) {
     const point = pointByCode.get(o.affiliate_partner_code)
@@ -234,6 +244,7 @@ try {
       total_price: price,
     }
     if (!point || !point.isOs) missCls.non_os_point.push(entry)
+    else if (!point.isOsActive) missCls.os_inactive_point.push(entry)
     else if (price === null || price <= 0 || !hasTime) missCls.disqualified_price_or_time.push(entry)
     else if (!rangeMs) missCls.os_range_unknown.push(entry)
     else if (o.completed_time.getTime() >= rangeMs.from && o.completed_time.getTime() < rangeMs.to) {
@@ -241,38 +252,29 @@ try {
     } else missCls.os_out_of_range.push(entry)
   }
 
-  // 8b. CROSS-STORE trong exact range — CHỈ đơn qualifying (price>0 + có
-  // completed_time + điểm store), kèm winner theo earliest-order rule để
-  // stakeholder thấy rule dedup xử lý từng ca thế nào.
-  const crossInRange = []
-  if (rangeMs) {
-    const byAcc = new Map()
-    for (const q of qualifying) {
-      if (q.t < rangeMs.from || q.t >= rangeMs.to) continue
-      if (!byAcc.has(q.acc)) byAcc.set(q.acc, [])
-      byAcc.get(q.acc).push(q)
-    }
-    for (const [acc, os] of byAcc) {
-      const labels = new Set(os.map((x) => x.label))
-      if (labels.size > 1) {
-        const winner = [...dedupWinners(os).values()][0]
-        crossInRange.push({
-          account: acc,
-          orders: [...os].sort((a, b) => a.t - b.t || a.orderId - b.orderId)
-            .map((x) => ({ order_id: x.orderId, partner_code: x.partnerCode, point: x.label, completed_time: new Date(x.t).toISOString() })),
-          winner: { order_id: winner.orderId, point: winner.label },
-        })
-      }
-    }
-  }
+  // 8b. CROSS-STORE trong exact range — CHỈ tập OS ACTIVE (r1.3.1 P1#1),
+  // identity theo pointKey store:<uuid> (P2#3 — label/POS chỉ hiển thị),
+  // kèm winner theo earliest-order rule (tie-break order_id nhỏ).
+  const crossInRange = rangeMs
+    ? crossStoreCases(qualifyingOsActive.filter((q) => q.t >= rangeMs.from && q.t < rangeMs.to))
+        .map((c) => ({
+          account: c.account,
+          orders: c.orders.map((x) => ({
+            order_id: x.orderId, partner_code: x.partnerCode, point: x.posCode,
+            point_key: x.pointKey, completed_time: new Date(x.t).toISOString(),
+          })),
+          winner: { order_id: c.winner.orderId, point: c.winner.posCode, point_key: c.winner.pointKey },
+        }))
+    : []
 
-  // 8c. EXACT-RANGE baseline (hoisted — dùng chung cho print + JSON summary).
+  // 8c. EXACT-RANGE baseline (hoisted) — CHỈ qualifyingOsActive; per_store
+  // key hiển thị = POS code, dedup/winner theo pointKey trong lib.
   let exactBaseline = null
   if (rangeMs) {
-    const inRange = qualifying.filter((q) => q.t >= rangeMs.from && q.t < rangeMs.to)
+    const inRange = qualifyingOsActive.filter((q) => q.t >= rangeMs.from && q.t < rangeMs.to)
     const best = dedupWinners(inRange)
     const perStore = {}
-    for (const w of best.values()) perStore[w.label] = (perStore[w.label] ?? 0) + 1
+    for (const w of best.values()) perStore[w.posCode] = (perStore[w.posCode] ?? 0) + 1
     exactBaseline = { total_customers: best.size, per_store: perStore }
   }
 
@@ -291,8 +293,10 @@ try {
     non_positive_orders: nonPositive.length,
   })
   console.log('BSON type của account_id (DELIVERED):', JSON.stringify(typeDist))
-  console.log('\nMETRIC BASELINE (mirror RPC: delivered · price>0 · có completed_time · store-mapped):')
+  console.log('\nMETRIC BASELINE (mirror RPC: delivered · price>0 · có completed_time · điểm OS ACTIVE'
+    + (posFilter ? ` · SUBSET ${[...posFilter].sort().join(',')}` : '') + '):')
   console.log('  loại khỏi baseline (KHÔNG tính vào gate identity):', JSON.stringify(baselineExcluded))
+  console.log(`  tập điểm đủ điều kiện: ${eligiblePoints.length} OS store active`)
   if (rangeMs) {
     // r1.1 P2: EXACT RANGE — dedup trên TOÀN range như RPC nhận p_from/p_to.
     const detail = Object.entries(exactBaseline.per_store).sort()
@@ -303,11 +307,11 @@ try {
   } else {
     console.log('  (không đặt QA_CUSTOMER_FROM/TO → bỏ qua exact-range; đặt cặp biến để đối soát đúng range campaign)')
   }
-  console.log('  DIAGNOSTIC theo tháng VN (dedup RIÊNG từng tháng — chỉ tham khảo xu hướng):')
+  console.log('  DIAGNOSTIC theo tháng VN (MỌI điểm store kể cả FS/inactive, dedup RIÊNG từng tháng — chỉ tham khảo):')
   for (const [m, orders] of [...byMonthOrders.entries()].sort()) {
     const best = dedupWinners(orders)
     const perStore = new Map()
-    for (const w of best.values()) perStore.set(w.label, (perStore.get(w.label) ?? 0) + 1)
+    for (const w of best.values()) perStore.set(w.posCode, (perStore.get(w.posCode) ?? 0) + 1)
     const detail = [...perStore.entries()].sort().map(([k, v]) => `${k}=${v}`).join(' · ')
     console.log(`  ${m}: ${best.size} khách — ${detail}`)
   }
@@ -333,12 +337,12 @@ try {
   }
 
   console.log('\n=== R1.3 DIAGNOSTIC — CROSS-STORE ===')
-  console.log(`  toàn lịch sử (mọi điểm, kể cả partner/unmapped): ${crossStore.length} account`)
-  console.log('  trong exact range (chỉ đơn qualifying store-point): '
+  console.log(`  toàn lịch sử (mọi điểm, kể cả partner/unmapped — identity pointKey): ${crossStore.length} account`)
+  console.log('  trong exact range (CHỈ tập OS active, identity pointKey): '
     + (rangeMs ? `${crossInRange.length} account` : 'KHÔNG XÁC ĐỊNH — thiếu QA_CUSTOMER_FROM/TO'))
   for (const c of crossInRange.slice(0, 10)) {
-    console.log(`  account ${c.account} — WINNER: đơn ${c.winner.order_id} @ ${c.winner.point} (earliest-order rule)`)
-    for (const o of c.orders) console.log(`    ${o.order_id} · ${o.partner_code} · ${o.point} · ${o.completed_time}`)
+    console.log(`  account ${c.account} — WINNER: đơn ${c.winner.order_id} @ ${c.winner.point} [${c.winner.point_key}] (earliest-order rule)`)
+    for (const o of c.orders) console.log(`    ${o.order_id} · ${o.partner_code} · ${o.point} [${o.point_key}] · ${o.completed_time}`)
   }
 
   console.log('\n20 account mẫu đối soát tay (account_id · order_id · partner_code):')
@@ -349,6 +353,13 @@ try {
   // r1.3: JSON summary — đối soát TỰ ĐỘNG (parser tìm marker '=== JSON SUMMARY ===').
   const summary = {
     generated_range: rangeMs ? { from: RANGE_FROM, to: RANGE_TO } : null,
+    // r1.3.1 #7: scope tường minh — baseline/cross/104 CHỈ trên OS active.
+    scope: posFilter ? 'os_active_subset' : 'os_active_only',
+    pos_filter: posFilter ? [...posFilter].sort() : null,
+    eligible_store_ids: eligiblePoints.map((pt) => pt.storeId).sort(),
+    eligible_pos_codes: eligiblePoints.map((pt) => pt.posCode).sort(),
+    excluded_fs_count: baselineExcluded.fs_or_non_os,
+    excluded_inactive_count: baselineExcluded.os_inactive,
     totals: {
       total_affiliate_orders: orders.length,
       total_delivered: delivered.length,

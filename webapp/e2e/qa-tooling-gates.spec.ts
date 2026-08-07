@@ -2,6 +2,8 @@ import { test, expect } from '@playwright/test'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import fs from 'node:fs'
+// r1.3.1: lõi thuần của proof script — test SYNTHETIC thay vì chỉ source-text.
+import { buildPointByCode, qualifyOrders, dedupWinners, crossStoreCases } from '../scripts/lib-customer-proof.mjs'
 
 // Mig 103 r1.1 (audit P1 tooling) — gate an toàn của 2 script QA/proof phải
 // FAIL-FAST trước mọi kết nối/ghi. Test bằng cách SPAWN node thật: các exit
@@ -87,5 +89,94 @@ test.describe('qa tooling safety gates (mig 103 r1.1) @desktop', () => {
     expect(proof).toContain('os_in_range_qualifying')
     expect(proof).toContain('R1.3 DIAGNOSTIC')
     expect(proof).toContain('=== JSON SUMMARY ===')
+  })
+})
+
+// ── r1.3.1: SYNTHETIC tests cho lõi proof (8 case auditor + label-collision) ─
+type MapOver = { mapActive?: boolean; type?: string; storeActive?: boolean; code?: string | null }
+const M = (partner: string, storeId: string | null, over: MapOver = {}) => ({
+  partner_code: partner,
+  store_id: storeId,
+  is_active: over.mapActive ?? true,
+  stores: storeId
+    ? { code: over.code === undefined ? `POS-${storeId}` : over.code, store_type: over.type ?? 'os', is_active: over.storeActive ?? true }
+    : null,
+})
+const O = (acc: number, orderId: number, partnerCode: string, t: number, price = 100_000) =>
+  ({ acc, orderId, price, completedTimeMs: t, partnerCode })
+
+test.describe('lib-customer-proof synthetic (mig 103 r1.3.1) @desktop', () => {
+  const points = buildPointByCode([
+    M('OS-A', 's1'),                              // OS active
+    M('OS-B', 's2'),                              // OS active thứ hai
+    M('FS-STORE', 's3', { type: 'fs' }),          // FS CÓ store — phải bị loại
+    M('OS-DEAD', 's4', { storeActive: false }),   // OS nhưng store inactive
+    M('OS-MAPOFF', 's5', { mapActive: false }),   // OS nhưng MAPPING inactive
+    M('PARTNER', null),                            // fs partner không store
+  ])
+
+  test('eligibility: OS active vào baseline; FS-store/OS-inactive/mapping-inactive bị LOẠI nhưng đếm riêng', () => {
+    const { osActive, allStorePoints, excluded } = qualifyOrders([
+      O(1, 1, 'OS-A', 1000),
+      O(2, 2, 'FS-STORE', 1000),   // fs_or_non_os
+      O(3, 3, 'OS-DEAD', 1000),    // os_inactive (store inactive)
+      O(4, 4, 'OS-MAPOFF', 1000),  // os_inactive (mapping inactive)
+      O(5, 5, 'PARTNER', 1000),    // non_store_point
+      O(6, 6, 'OS-A', 1000, -50),  // non_positive
+      O(7, 7, 'OS-A', null as unknown as number, 100), // thiếu completed → no_completed_time
+    ], points)
+    expect(osActive.map((q) => q.acc)).toEqual([1])
+    // allStorePoints = mọi điểm có store (kể cả FS + OS inactive) đã qua giá/completed
+    expect(allStorePoints.map((q) => q.acc).sort()).toEqual([1, 2, 3, 4])
+    expect(excluded).toEqual({
+      non_positive: 1, no_completed_time: 1, non_store_point: 1,
+      fs_or_non_os: 1, os_inactive: 2, pos_filtered: 0,
+    })
+  })
+
+  test('posFilter subset: đơn ngoài tập POS bị loại + đếm pos_filtered', () => {
+    const { osActive, excluded } = qualifyOrders(
+      [O(1, 1, 'OS-A', 1000), O(2, 2, 'OS-B', 1000)],
+      points, new Set(['POS-s1']))
+    expect(osActive.map((q) => q.acc)).toEqual([1])
+    expect(excluded.pos_filtered).toBe(1)
+  })
+
+  test('dedup: 1 account nhiều đơn cùng OS → 1 khách, WINNER đơn sớm nhất', () => {
+    const best = dedupWinners(qualifyOrders(
+      [O(9, 11, 'OS-A', 3000), O(9, 12, 'OS-A', 1000), O(9, 13, 'OS-A', 2000)],
+      points).osActive)
+    expect(best.size).toBe(1)
+    expect(best.get(9)!.orderId).toBe(12) // t=1000 sớm nhất thắng
+  })
+
+  test('dedup tie-break: cùng completed_time → order_id NHỎ hơn thắng', () => {
+    const best = dedupWinners(qualifyOrders(
+      [O(9, 22, 'OS-B', 1000), O(9, 21, 'OS-A', 1000)],
+      points).osActive)
+    expect(best.get(9)!.orderId).toBe(21)
+  })
+
+  test('cross-store: 1 account tại 2 OS khác nhau → 1 case, winner theo earliest; cùng 1 OS → không case', () => {
+    const { osActive } = qualifyOrders([
+      O(1, 1, 'OS-A', 2000), O(1, 2, 'OS-B', 1000),  // cross → winner OS-B
+      O(2, 3, 'OS-A', 1000), O(2, 4, 'OS-A', 2000),  // cùng điểm → không cross
+    ], points)
+    const cases = crossStoreCases(osActive)
+    expect(cases).toHaveLength(1)
+    expect(cases[0].account).toBe(1)
+    expect(cases[0].winner.orderId).toBe(2)
+    expect(cases[0].winner.pointKey).toBe('store:s2')
+  })
+
+  test('identity = pointKey, KHÔNG phải label: 2 store KHÁC nhau trùng tên POS vẫn là cross-store', () => {
+    const twin = buildPointByCode([
+      M('T-A', 'sx', { code: 'POS-TRUNG' }),
+      M('T-B', 'sy', { code: 'POS-TRUNG' }), // label giống hệt, store khác
+    ])
+    const { osActive } = qualifyOrders([O(1, 1, 'T-A', 1000), O(1, 2, 'T-B', 2000)], twin)
+    const cases = crossStoreCases(osActive)
+    expect(cases).toHaveLength(1) // label-based sẽ ra 0 — khóa P2#3
+    expect(new Set(cases[0].orders.map((o) => o.pointKey)).size).toBe(2)
   })
 })
