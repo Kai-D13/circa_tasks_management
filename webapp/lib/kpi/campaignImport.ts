@@ -1,8 +1,8 @@
-import 'server-only'
-
 // KPI Campaign XLSX parser/validator (dynamic tiers). Kept SEPARATE from the
 // weekly-targets normalizeRow (different shape) so a future template change only
 // touches this module. Pure: takes raw rows + a pos_code→store_id map.
+// Mig 103: BỎ 'server-only' để unit-test được (pattern engine/syncCampaignCore
+// — module THUẦN không secret/IO; caller duy nhất vẫn là server action).
 //
 // v3 policy-model columns (canonicalized): pos_code, kpi_target, store_kpi_group
 // (REQUIRED — the store's policy classification label, free text), optional
@@ -45,10 +45,19 @@ function str(v: unknown): string | null {
   return s === '' ? null : s
 }
 
+// Mig 103: parser nhận metricType (đọc từ DB — caller không tin client).
+//   · gmv (default): hành vi CŨ NGUYÊN VẸN — kể cả rule ranh giới tiền.
+//   · affiliate_customer_count: kpi_target = SỐ KHÁCH → bắt buộc SỐ NGUYÊN
+//     dương; BỎ rule GROUP_BOUNDARIES (ranh giới VNĐ vô nghĩa với đơn vị
+//     khách); store_kpi_group VẪN bắt buộc nhưng chỉ là NHÃN import (chốt
+//     stakeholder 06/08 — không áp monetary boundary). Tier %/commission tiền
+//     giữ nguyên cả hai loại.
 export function parseCampaignRows(
   rawRows: Record<string, unknown>[],
   byCode: Map<string, string>,
+  opts: { metricType?: string } = {},
 ): CampaignImportResult | { error: string } {
+  const isCustomer = opts.metricType === 'affiliate_customer_count'
   if (rawRows.length === 0) return { error: 'File không có dòng dữ liệu nào' }
   const headerKeys = new Set(Object.keys(rawRows[0]).map(canon))
   if (!headerKeys.has('poscode')) return { error: 'Thiếu cột pos_code' }
@@ -77,7 +86,11 @@ export function parseCampaignRows(
     if (!storeId) { unmatched.add(posCode); invalid.push({ row: rowNo, pos_code: posCode, error: 'pos_code không có trong hệ thống' }); return }
 
     if (kpiTargetRaw === null || kpiTargetRaw <= 0) { invalid.push({ row: rowNo, pos_code: posCode, error: 'kpi_target phải > 0' }); return }
-    if (GROUP_BOUNDARIES.includes(kpiTargetRaw)) {
+    if (isCustomer && !Number.isInteger(kpiTargetRaw)) {
+      invalid.push({ row: rowNo, pos_code: posCode, error: `kpi_target phải là số nguyên dương (số khách) — nhận ${kpiTargetRaw}` })
+      return
+    }
+    if (!isCustomer && GROUP_BOUNDARIES.includes(kpiTargetRaw)) {
       invalid.push({ row: rowNo, pos_code: posCode, error: `kpi_target = ${kpiTargetRaw.toLocaleString('vi-VN')} trùng ranh giới nhóm KPI — chỉnh lại theo policy (nhóm bị chồng biên)` })
       return
     }

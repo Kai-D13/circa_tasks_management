@@ -30,6 +30,41 @@ export function resolveMetricInput(
   return { ok: true, metric_offline: metricOffline, metric_affiliate: metricAffiliate }
 }
 
+// ── Mig 103: resolve LOẠI CHIẾN DỊCH khi tạo (metric_type discriminator) ────
+// gmv (default) → đi tiếp resolveMetricInput cũ NGUYÊN VẸN (hành vi campaign
+// GMV không đổi 1 bit); affiliate_customer_count → contract cột CỐ ĐỊNH
+// (offline=false + affiliate=true + order_type='online' — CHECK trong DB) và
+// gate DUY NHẤT = KPI_AFFILIATE_CUSTOMER_ENABLED (KHÔNG cần KPI_AFFILIATE_
+// ENABLED — 2 flag độc lập, test khóa 2 chiều).
+export type CampaignTypeResolution =
+  | ({ ok: true; metric_type: 'gmv' | 'affiliate_customer_count'; order_type: 'all' | 'online' } & MetricFlags)
+  | { ok: false; error: string }
+
+export function resolveCampaignType(
+  flags: { affiliate: boolean; customer: boolean },
+  input: MetricInput & { metric_type?: string },
+): CampaignTypeResolution {
+  const metricType = input.metric_type ?? 'gmv'
+  if (metricType === 'affiliate_customer_count') {
+    if (!flags.customer) {
+      return { ok: false, error: 'Chiến dịch Số khách Affiliate chưa được bật trên hệ thống (KPI_AFFILIATE_CUSTOMER_ENABLED)' }
+    }
+    return {
+      ok: true, metric_type: 'affiliate_customer_count', order_type: 'online',
+      metric_offline: false, metric_affiliate: true,
+    }
+  }
+  if (metricType !== 'gmv') {
+    return { ok: false, error: `Loại chiến dịch không hợp lệ: ${metricType}` }
+  }
+  const m = resolveMetricInput(flags.affiliate, input)
+  if (!m.ok) return m
+  return {
+    ok: true, metric_type: 'gmv', order_type: 'all',
+    metric_offline: m.metric_offline, metric_affiliate: m.metric_affiliate,
+  }
+}
+
 // Lý do CHẶN activation (null = được kích hoạt). Offline-only KHÔNG phụ thuộc
 // health/store-type (health truyền null). Affiliate campaign: mọi target phải
 // là OS store active + nguồn affiliate READY — lý do cụ thể trả về UI.

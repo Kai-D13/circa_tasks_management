@@ -74,7 +74,7 @@ export function CampaignImport({
     if (!file) { toast.error('Chưa chọn file'); return }
     const fd = new FormData(); fd.append('file', file)
     startTransition(async () => {
-      const r = await previewCampaignImport(fd)
+      const r = await previewCampaignImport(campaignId, fd)
       if ('error' in r && r.error) { toast.error(r.error); setPreview(null); return }
       setPreview(r as unknown as Preview)
     })
