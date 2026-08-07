@@ -176,7 +176,7 @@ export default async function CampaignDetailPage({
               read-only khi active/ended; server action là boundary cuối. */}
           <Card>
             <CardContent className="p-4">
-              <p className="text-sm font-medium mb-2">Chỉ số doanh số</p>
+              <p className="text-sm font-medium mb-2">{c.metric_type === 'affiliate_customer_count' ? 'Loại chỉ số' : 'Chỉ số doanh số'}</p>
               <CampaignMetricEditor
                 campaignId={c.id}
                 status={c.status}
@@ -192,7 +192,7 @@ export default async function CampaignDetailPage({
             <Card>
               <CardContent className="p-4">
                 <p className="text-sm font-medium mb-2">Nạp / cập nhật target (thay toàn bộ)</p>
-                <CampaignImport campaignId={c.id} guideDefaultOpen={targets.length === 0} />
+                <CampaignImport campaignId={c.id} guideDefaultOpen={targets.length === 0} metricType={c.metric_type as string | undefined} />
               </CardContent>
             </Card>
           )}
@@ -249,7 +249,7 @@ export default async function CampaignDetailPage({
             </span>
             <div className="flex items-center gap-2">
               <CampaignExportButton campaignId={c.id} />
-              <SyncActualsButton campaignId={c.id} />
+              <SyncActualsButton campaignId={c.id} metricType={c.metric_type as string | undefined} />
             </div>
           </div>
 

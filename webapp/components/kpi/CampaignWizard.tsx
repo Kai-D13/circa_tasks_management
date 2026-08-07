@@ -154,7 +154,7 @@ export function CampaignWizard({ affiliateEnabled = false, customerEnabled = fal
         <Card>
           <CardContent className="p-4">
             <p className="text-sm font-medium mb-3">Nạp file target + bậc commission</p>
-            <CampaignImport campaignId={campaignId} redirectTo={`/targets/campaigns/${campaignId}`} />
+            <CampaignImport campaignId={campaignId} redirectTo={`/targets/campaigns/${campaignId}`} metricType={isCustomer ? 'affiliate_customer_count' : 'gmv'} />
           </CardContent>
         </Card>
       )}

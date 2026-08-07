@@ -169,6 +169,16 @@ DECLARE
   v_missing_acct integer;
   v_result       jsonb;
 BEGIN
+  -- r1 (audit P2 hardening): RPC tài chính tự bảo vệ contract — không tin
+  -- caller dù hiện chỉ service_role gọi đúng. Mảng RỖNG hợp lệ (trả 0);
+  -- NULL và range đảo/thiếu → RAISE.
+  IF p_store_ids IS NULL THEN
+    RAISE EXCEPTION 'rpc_aggregate_affiliate_customers: p_store_ids NULL — contract nhận mảng store (rỗng được, NULL không)';
+  END IF;
+  IF p_from IS NULL OR p_to IS NULL OR p_from >= p_to THEN
+    RAISE EXCEPTION 'rpc_aggregate_affiliate_customers: khoảng thời gian không hợp lệ (from phải TRƯỚC to, không NULL)';
+  END IF;
+
   SELECT count(*) INTO v_missing_ct
   FROM public.affiliate_orders o
   WHERE o.source_active AND o.status_norm = 'delivered'
@@ -685,6 +695,12 @@ COMMIT;
 -- 6) Smoke aggregate (mảng rỗng — không RAISE, trả 0):
 --    SELECT public.rpc_aggregate_affiliate_customers('{}'::uuid[], now() - interval '1 day', now());
 --    -- {"rows": [], "total_customers": 0, "cross_store_account_count": 0, "cross_store_sample": []}
+--    r1 hardening — 2 case PHẢI RAISE:
+--    SELECT public.rpc_aggregate_affiliate_customers(NULL, now() - interval '1 day', now());       -- p_store_ids NULL
+--    SELECT public.rpc_aggregate_affiliate_customers('{}'::uuid[], now(), now() - interval '1 day'); -- from >= to
+--    Index bổ sung cho aggregation: CHƯA thêm — sau backfill chạy
+--    EXPLAIN (ANALYZE, BUFFERS) trên range 31 ngày × 25 store rồi quyết định
+--    (idx_affiliate_orders_store_completed_id của 099 dự kiến đủ ở quy mô hiện tại).
 -- 7) SELECT version, name FROM public.app_migrations WHERE version='103';  -- 1 row
 -- 8) Campaign GMV không đổi hành vi: chạy webapp/scripts/qa-kpi-customer-103.mjs
 --    (fixture is_test, cleanup finally) — legacy-payload GMV pass, payload

@@ -7,8 +7,11 @@ import { syncCampaignActuals } from '@/app/actions/kpiCampaigns'
 import { Button } from '@/components/ui/button'
 import { RefreshCw } from 'lucide-react'
 
-// Manual actual-GMV sync (super admin) — same lib the 2h cron uses.
-export function SyncActualsButton({ campaignId }: { campaignId: string }) {
+// Manual actual sync (super admin) — same lib the 2h cron uses.
+// Mig 103 r1 (audit P2 copy): label theo loại chiến dịch — campaign Số khách
+// hiện "Đồng bộ số khách" (nguồn Supabase, không BigQuery).
+export function SyncActualsButton({ campaignId, metricType }: { campaignId: string; metricType?: string }) {
+  const label = metricType === 'affiliate_customer_count' ? 'Đồng bộ số khách' : 'Đồng bộ doanh số'
   const router = useRouter()
   const [pending, startTransition] = useTransition()
 
@@ -41,7 +44,7 @@ export function SyncActualsButton({ campaignId }: { campaignId: string }) {
   return (
     <Button size="sm" variant="outline" onClick={handleSync} disabled={pending} className="gap-1.5">
       <RefreshCw className={pending ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
-      {pending ? 'Đang đồng bộ…' : 'Đồng bộ doanh số'}
+      {pending ? 'Đang đồng bộ…' : label}
     </Button>
   )
 }

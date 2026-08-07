@@ -327,7 +327,7 @@ export function CampaignKpiView({
             <p className="text-sm text-muted-foreground py-6 text-center">
               {dailyError
                 ? 'Chưa tải được tiến độ theo ngày, vui lòng thử lại sau.'
-                : 'Chưa có dữ liệu doanh số theo ngày.'}
+                : isCustomer ? 'Chưa có dữ liệu số khách theo ngày.' : 'Chưa có dữ liệu doanh số theo ngày.'}
             </p>
           )}
         </CardContent>

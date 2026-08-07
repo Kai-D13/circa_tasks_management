@@ -8,40 +8,11 @@ import { Button, buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { Download, FileUp, X } from 'lucide-react'
 
-// Column guide (business language) + a downloadable sample so ops fills the file
-// without asking dev. Keep in sync with the parser (lib/kpi/campaignImport.ts).
-const COLUMN_GUIDE: { col: string; meaning: string; example: string; optional?: boolean }[] = [
-  { col: 'pos_code', meaning: 'Mã cửa hàng', example: 'POS0059' },
-  { col: 'kpi_target', meaning: 'KPI doanh số của Store trong kỳ chiến dịch', example: '450000000' },
-  { col: 'store_kpi_group', meaning: 'Phân loại Store theo KPI (nhãn hiển thị)', example: 'Nhỏ hơn 500 triệu' },
-  { col: 'tier_1_threshold_pct', meaning: 'Mốc đạt KPI bậc 1 (%)', example: '90' },
-  { col: 'tier_1_commission_amount', meaning: 'Commission Store bậc 1 (số tiền)', example: '15000000' },
-  { col: 'tier_2_threshold_pct', meaning: 'Mốc đạt KPI bậc 2 (%)', example: '100' },
-  { col: 'tier_2_commission_amount', meaning: 'Commission Store bậc 2 (số tiền)', example: '20800000' },
-  { col: 'tier_3_threshold_pct', meaning: 'Mốc đạt KPI bậc 3 (%)', example: '105' },
-  { col: 'tier_3_commission_amount', meaning: 'Commission Store bậc 3 (số tiền)', example: '26300000' },
-  { col: 'pos_name', meaning: 'Tên cửa hàng', example: 'CIRCA TAM VIET', optional: true },
-  { col: 'note', meaning: 'Ghi chú', example: 'Demo', optional: true },
-]
-
-const SAMPLE_CSV = [
-  'pos_code,kpi_target,store_kpi_group,tier_1_threshold_pct,tier_1_commission_amount,tier_2_threshold_pct,tier_2_commission_amount,tier_3_threshold_pct,tier_3_commission_amount,pos_name,note',
-  'POS0059,450000000,Nhỏ hơn 500 triệu,90,15000000,100,20800000,105,26300000,CIRCA TAM VIET,Demo',
-  'POS0009,250000000,Nhỏ hơn 300 triệu,90,10600000,100,14700000,105,18500000,CIRCA CENTRAL,Demo',
-].join('\n')
-
-function downloadTemplate() {
-  // BOM so Excel opens the UTF-8 CSV correctly.
-  const blob = new Blob(['﻿' + SAMPLE_CSV], { type: 'text/csv;charset=utf-8;' })
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = 'mau-chien-dich-kpi.csv'
-  document.body.appendChild(a)
-  a.click()
-  a.remove()
-  URL.revokeObjectURL(url)
-}
+// Mig 103 r1 (audit P1): guide/template/format theo LOẠI chiến dịch từ
+// lib/kpi/campaignImportGuide (thuần, spec khóa — GMV byte-equal cũ; customer
+// target SỐ KHÁCH, không rule biên tiền). metricType do page/wizard truyền
+// (server-trusted); parser + RPC vẫn là boundary cuối.
+import { campaignImportGuide } from '@/lib/kpi/campaignImportGuide'
 
 interface Preview {
   validCount: number
@@ -50,20 +21,36 @@ interface Preview {
   preview: { pos_code: string; kpi_target: number; store_kpi_group: string; tiers: { threshold_pct: number; commission_amount: number }[] }[]
 }
 
-const vnd = (n: number) => new Intl.NumberFormat('vi-VN').format(Math.round(n))
+// Commission LUÔN VNĐ (mọi loại campaign).
+const vndMoney = (n: number) => new Intl.NumberFormat('vi-VN').format(Math.round(n))
 
 // Reusable XLSX import (upload → preview → confirm). Used by the create wizard
 // and the campaign detail re-import. Holds the File client-side so both the
 // preview and the confirm re-send it (commit re-parses server-side).
 export function CampaignImport({
-  campaignId, redirectTo, guideDefaultOpen = true,
+  campaignId, redirectTo, guideDefaultOpen = true, metricType,
 }: {
   campaignId: string
   redirectTo?: string
   /** Pass false when the campaign already has targets — the format guide then
       starts collapsed instead of dominating the config tab. */
   guideDefaultOpen?: boolean
+  /** Mig 103: 'affiliate_customer_count' → guide/template/preview đơn vị KHÁCH. */
+  metricType?: string
 }) {
+  const guide = campaignImportGuide(metricType)
+  function downloadTemplate() {
+    // BOM so Excel opens the UTF-8 CSV correctly.
+    const blob = new Blob(['﻿' + guide.sampleCsv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = guide.sampleFileName
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  }
   const router = useRouter()
   const [file, setFile] = useState<File | null>(null)
   const [preview, setPreview] = useState<Preview | null>(null)
@@ -88,10 +75,7 @@ export function CampaignImport({
       if ('error' in r && r.error) { toast.error(r.error); return }
       // Import clears previous actuals server-side (stale vs new targets) — tell
       // the admin the next step explicitly.
-      toast.success(
-        `Đã nạp ${(r as { upserted?: number }).upserted ?? ''} cửa hàng — kết quả cũ đã được xoá, bấm "Đồng bộ doanh số" ở tab Kết quả để cập nhật`,
-        { duration: 8000 },
-      )
+      toast.success(guide.commitToast((r as { upserted?: number }).upserted ?? ''), { duration: 8000 })
       if (redirectTo) router.push(redirectTo)
       else { setFile(null); setPreview(null); router.refresh() }
     })
@@ -122,7 +106,7 @@ export function CampaignImport({
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {COLUMN_GUIDE.map((r) => (
+                {guide.columns.map((r) => (
                   <tr key={r.col}>
                     <td className="py-1 pr-3 whitespace-nowrap"><code>{r.col}</code>{r.optional && <span className="text-muted-foreground"> (tuỳ chọn)</span>}</td>
                     <td className="py-1 pr-3">{r.meaning}</td>
@@ -133,7 +117,7 @@ export function CampaignImport({
             </table>
           </div>
           <p className="text-muted-foreground">Thêm cặp cột <code>tier_4_threshold_pct</code> / <code>tier_4_commission_amount</code>… nếu cần tăng bậc.</p>
-          <p className="text-muted-foreground">Lưu ý: <code>kpi_target</code> không được trùng đúng ranh giới nhóm (200/300/500/800 triệu, 1 tỷ).</p>
+          {guide.boundaryWarning && <p className="text-muted-foreground">{guide.boundaryWarning}</p>}
         </div>
       </details>
 
@@ -205,7 +189,7 @@ export function CampaignImport({
                   <tr>
                     <th className="text-left px-3 py-2">POS</th>
                     <th className="text-left px-3 py-2">Phân loại</th>
-                    <th className="text-right px-3 py-2">KPI target</th>
+                    <th className="text-right px-3 py-2">{guide.targetHeaderLabel}</th>
                     <th className="text-left px-3 py-2">Bậc (mốc % → Commission)</th>
                   </tr>
                 </thead>
@@ -214,12 +198,12 @@ export function CampaignImport({
                     <tr key={r.pos_code}>
                       <td className="px-3 py-1.5 font-medium">{r.pos_code}</td>
                       <td className="px-3 py-1.5">{r.store_kpi_group}</td>
-                      <td className="px-3 py-1.5 text-right">{vnd(r.kpi_target)}</td>
+                      <td className="px-3 py-1.5 text-right">{guide.formatTarget(r.kpi_target)}</td>
                       <td className="px-3 py-1.5">
                         <div className="flex flex-wrap gap-1">
                           {r.tiers.map((t) => (
                             <span key={t.threshold_pct} className="inline-flex whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-[11px]">
-                              {t.threshold_pct}% → {vnd(t.commission_amount)}
+                              {t.threshold_pct}% → {vndMoney(t.commission_amount)}
                             </span>
                           ))}
                         </div>

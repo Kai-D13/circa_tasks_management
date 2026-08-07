@@ -4,11 +4,22 @@
 // không tính ALL PASS; pattern r1.1 của 093). Các khối RPC-branch/targets/
 // overlap/grants chạy được ngay sau migration.
 //   cd webapp && node scripts/qa-kpi-customer-103.mjs
+//
+// ── SAFETY GATES (audit r1 P0/P1 — script GHI vào bảng production) ──
+// Bắt buộc trong .env.local, thiếu → exit 2 TRƯỚC mọi thao tác ghi:
+//   QA_KPI_CUSTOMER_FIXTURE_ALLOWED=YES  — opt-in tường minh cho phép ghi fixture
+//   QA_AFFILIATE_CRON_PAUSED=YES         — khai báo ĐÃ DISABLE Coolify task
+//     "Pull Affiliate Orders" (full-snapshot chạy giữa chừng lật fixture
+//     source_active=false → test sai); script còn tự check 0 run RUNNING
+//   QA_EXPECTED_SUPABASE_URL=<url>       — phải TRÙNG NEXT_PUBLIC_SUPABASE_URL
+//     (xác nhận đúng project trước khi ghi)
 // Tùy chọn authenticated-deny: QA_AUTH_EMAIL + QA_PASSWORD trong .env.local.
-// Fixture: campaign is_test=true + đơn order_id vùng 999810001+ partner
-// 'QA-103-FIXTURE', cửa sổ 01/2025 (trước mọi data thật ~06/2026 → assert số
-// TUYỆT ĐỐI). KHÔNG process.exit trong try — throw để FINALLY luôn dọn;
-// cleanup lỗi hoặc fixture sót → suite FAIL.
+// Fixture: campaign is_test=true + đơn order_id vùng RIÊNG 999810001-999810099
+// partner 'QA-103-FIXTURE', cửa sổ 01/2025 (trước mọi data thật ~06/2026 →
+// assert số TUYỆT ĐỐI). An toàn chống xóa nhầm (r1 P0): preflight cả VÙNG ID
+// phải trống; ID chỉ vào cleanup SAU khi insert THÀNH CÔNG; mọi DELETE kèm
+// partner_code fixture — không bao giờ xóa chỉ theo ID. KHÔNG process.exit
+// trong try — throw để FINALLY luôn dọn; cleanup lỗi/fixture sót → FAIL.
 import fs from 'node:fs'
 import { createClient } from '@supabase/supabase-js'
 
@@ -17,6 +28,17 @@ for (const line of fs.readFileSync('.env.local', 'utf8').split(/\r?\n/)) {
   const m = line.match(/^([A-Z_]+)=(.*)$/)
   if (m) env[m[1]] = m[2]
 }
+// ── SAFETY GATES (r1 P0/P1) — fail-fast TRƯỚC khi tạo client/ghi bất kỳ gì ──
+const safetyGate = (ok, msg) => {
+  if (!ok) { console.error('SAFETY GATE FAIL:', msg); process.exit(2) }
+}
+safetyGate(env.QA_KPI_CUSTOMER_FIXTURE_ALLOWED === 'YES',
+  'thiếu QA_KPI_CUSTOMER_FIXTURE_ALLOWED=YES trong .env.local — opt-in tường minh trước khi script được ghi fixture')
+safetyGate(env.QA_AFFILIATE_CRON_PAUSED === 'YES',
+  'thiếu QA_AFFILIATE_CRON_PAUSED=YES — DISABLE Coolify task "Pull Affiliate Orders" rồi khai báo biến này (chống race full-snapshot)')
+safetyGate(!!env.QA_EXPECTED_SUPABASE_URL && env.QA_EXPECTED_SUPABASE_URL === env.NEXT_PUBLIC_SUPABASE_URL,
+  'QA_EXPECTED_SUPABASE_URL (' + (env.QA_EXPECTED_SUPABASE_URL ?? 'THIẾU') + ') phải TRÙNG NEXT_PUBLIC_SUPABASE_URL (' + env.NEXT_PUBLIC_SUPABASE_URL + ') — xác nhận đúng project trước mọi thao tác ghi')
+
 const svc = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } })
 const anon = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.NEXT_PUBLIC_SUPABASE_ANON_KEY, { auth: { persistSession: false } })
 
@@ -39,14 +61,30 @@ const abort = (msg) => { throw new Error(`ABORT: ${msg}`) }
 const P_FROM = '2025-01-01T00:00:00+07:00'
 const P_TO = '2025-02-01T00:00:00+07:00'
 const PARTNER = 'QA-103-FIXTURE' // KHÔNG tạo mapping — RPC aggregate không cần mapping (đi theo store_id)
-let nextId = 999810001
-const FX_IDS = []
+const FX_MIN = 999810001
+const FX_MAX = 999810099
+let nextId = FX_MIN
+const FX_IDS = [] // r1 P0: CHỈ chứa ID đã insert THÀNH CÔNG
 const campaignIds = []
 
 try {
   // ── Preflight ─────────────────────────────────────────────────────────────
   const mig = await svc.from('app_migrations').select('version').eq('version', '103').maybeSingle()
   if (!mig.data) abort('migration 103 chưa chạy (app_migrations không có 103)')
+  // r1 P1: chống race — không có affiliate sync run nào đang RUNNING.
+  const { count: runningCount, error: runErr } = await svc.from('affiliate_sync_runs')
+    .select('id', { count: 'exact', head: true }).eq('status', 'running')
+  if (runErr) abort('không đọc được affiliate_sync_runs: ' + runErr.message)
+  if ((runningCount ?? 1) !== 0) abort('còn ' + runningCount + ' affiliate sync run RUNNING — chờ xong (lease 15 phút thu hồi) rồi chạy lại')
+  // r1 P0: TOÀN VÙNG ID QA phải trống trước khi ghi — có row là DỪNG, không
+  // ghi đè, không xóa (row đó có thể là dữ liệu thật/fixture sót — xác minh tay).
+  const { data: preexisting, error: preErr } = await svc.from('affiliate_orders')
+    .select('order_id, partner_code').gte('order_id', FX_MIN).lte('order_id', FX_MAX)
+  if (preErr) abort('không kiểm tra được vùng ID QA: ' + preErr.message)
+  if ((preexisting ?? []).length > 0) {
+    abort('vùng order_id QA ' + FX_MIN + '-' + FX_MAX + ' đã có ' + preexisting.length + ' row ('
+      + preexisting.slice(0, 5).map((r) => r.order_id).join(', ') + '…) — xác minh + dọn tay rồi chạy lại; script KHÔNG tự xóa')
+  }
   for (const [table, col] of [
     ['affiliate_orders', 'account_id'],
     ['kpi_campaign_store_actuals', 'actual_customer_count'],
@@ -95,7 +133,7 @@ try {
   }
   const mkOrder = async (over) => {
     const id = nextId++
-    FX_IDS.push(id)
+    if (id > FX_MAX) abort('vượt vùng ID QA (' + FX_MAX + ')')
     const { error } = await svc.from('affiliate_orders').insert({
       order_id: id, partner_code: PARTNER, raw_status: 'DELIVERED', status_norm: 'delivered',
       total_price: 100000, created_time: '2025-01-02T03:00:00Z',
@@ -103,6 +141,7 @@ try {
       source_active: true, account_id: 900001, ...over,
     })
     if (error) abort(`fixture order ${id}: ${error.message}`)
+    FX_IDS.push(id) // r1 P0: CHỈ sau insert thành công — collision không lọt cleanup
     return id
   }
   const agg = () => svc.rpc('rpc_aggregate_affiliate_customers',
@@ -241,10 +280,10 @@ try {
     // Fail-closed: delivered thiếu account_id / thiếu completed_time trong scope
     const badAcct = await mkOrder({ account_id: null, store_id: sA.id })
     await expectRaise('aggregate: delivered thiếu account_id → RAISE fail-closed', agg(), 'thiếu account_id')
-    await svc.from('affiliate_orders').delete().eq('order_id', badAcct)
+    await svc.from('affiliate_orders').delete().eq('order_id', badAcct).eq('partner_code', PARTNER)
     const badCt = await mkOrder({ account_id: 900009, store_id: sA.id, completed_time: null })
     await expectRaise('aggregate: delivered thiếu completed_time → RAISE fail-closed', agg(), 'thiếu completed_time')
-    await svc.from('affiliate_orders').delete().eq('order_id', badCt)
+    await svc.from('affiliate_orders').delete().eq('order_id', badCt).eq('partner_code', PARTNER)
   }
 
   // ── 5) Activation: overlap customer + EXCLUDE backstop + GMV không dính ───
@@ -305,6 +344,13 @@ try {
   } else {
     skip('grants: authenticated deny', 'thiếu QA_AUTH_EMAIL/QA_PASSWORD')
   }
+  // r1 hardening: RPC tự bảo vệ contract (param sai → RAISE trước mọi đọc)
+  await expectRaise('hardening: p_store_ids NULL → RAISE',
+    svc.rpc('rpc_aggregate_affiliate_customers', { p_store_ids: null, p_from: P_FROM, p_to: P_TO }),
+    'p_store_ids NULL')
+  await expectRaise('hardening: p_from >= p_to → RAISE',
+    svc.rpc('rpc_aggregate_affiliate_customers', { p_store_ids: [], p_from: P_TO, p_to: P_FROM }),
+    'không hợp lệ')
   // Smoke: mảng rỗng → 0, không RAISE
   {
     const { data, error } = await svc.rpc('rpc_aggregate_affiliate_customers',
@@ -318,13 +364,14 @@ try {
 } finally {
   // ── CLEANUP exact-ID (fixture sót → FAIL) ─────────────────────────────────
   try {
-    if (FX_IDS.length > 0) await svc.from('affiliate_orders').delete().in('order_id', FX_IDS)
+    // r1 P0: DELETE luôn kèm partner_code fixture — không bao giờ xóa chỉ theo ID.
+    if (FX_IDS.length > 0) await svc.from('affiliate_orders').delete().in('order_id', FX_IDS).eq('partner_code', PARTNER)
     if (campaignIds.length > 0) {
       // FK cascade dọn targets/tiers/actuals/daily/import_runs
       await svc.from('kpi_campaigns').delete().in('id', campaignIds)
     }
     const left1 = FX_IDS.length > 0
-      ? await svc.from('affiliate_orders').select('order_id', { count: 'exact', head: true }).in('order_id', FX_IDS)
+      ? await svc.from('affiliate_orders').select('order_id', { count: 'exact', head: true }).in('order_id', FX_IDS).eq('partner_code', PARTNER)
       : { count: 0 }
     const left2 = campaignIds.length > 0
       ? await svc.from('kpi_campaigns').select('id', { count: 'exact', head: true }).in('id', campaignIds)

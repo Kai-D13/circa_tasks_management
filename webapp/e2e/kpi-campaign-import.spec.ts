@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { parseCampaignRows } from '../lib/kpi/campaignImport'
+import { campaignImportGuide } from '../lib/kpi/campaignImportGuide'
 
 // Mig 103 — unit gate ĐẦU TIÊN cho parser import campaign (trước nay chưa có
 // test). Hai mục tiêu: (1) KHÓA REGRESSION file GMV — cùng input phải ra cùng
@@ -119,5 +120,41 @@ test.describe('kpi campaign import parser @desktop', () => {
       [row({ kpi_target: 100, tier_1_commission_amount: -1 })], BY_CODE, CUSTOMER)
     if ('error' in badTier) return
     expect(badTier.invalid[0].error).toContain('≥ 0')
+  })
+})
+
+// ── r1 (audit P1#2): guide/template import theo LOẠI chiến dịch ─────────────
+test.describe('kpi campaign import guide (mig 103 r1) @desktop', () => {
+  test('GMV guide BYTE-INVARIANT: sample CSV + header + boundary warning y hệt production cũ (Power Query/ops)', () => {
+    for (const g of [campaignImportGuide(), campaignImportGuide('gmv'), campaignImportGuide('bogus')]) {
+      expect(g.sampleCsv).toBe([
+        'pos_code,kpi_target,store_kpi_group,tier_1_threshold_pct,tier_1_commission_amount,tier_2_threshold_pct,tier_2_commission_amount,tier_3_threshold_pct,tier_3_commission_amount,pos_name,note',
+        'POS0059,450000000,Nhỏ hơn 500 triệu,90,15000000,100,20800000,105,26300000,CIRCA TAM VIET,Demo',
+        'POS0009,250000000,Nhỏ hơn 300 triệu,90,10600000,100,14700000,105,18500000,CIRCA CENTRAL,Demo',
+      ].join(String.fromCharCode(10)))
+      expect(g.sampleFileName).toBe('mau-chien-dich-kpi.csv')
+      expect(g.boundaryWarning).toContain('200/300/500/800 triệu')
+      expect(g.targetHeaderLabel).toBe('KPI target')
+      expect(g.formatTarget(450000000)).toBe('450.000.000') // preview cũ KHÔNG có ₫
+      expect(g.commitToast(25)).toContain('Đồng bộ doanh số')
+    }
+  })
+
+  test('CUSTOMER guide: KHÔNG chứa target tiền — sample là SỐ KHÁCH; không boundary warning; đơn vị khách', () => {
+    const g = campaignImportGuide('affiliate_customer_count')
+    expect(g.sampleCsv).not.toContain('450000000')
+    expect(g.sampleCsv).not.toContain('250000000')
+    expect(g.sampleCsv).toContain('POS0059,100,')
+    expect(g.sampleCsv).toContain('POS0009,50,')
+    expect(g.boundaryWarning).toBeNull()
+    expect(g.targetHeaderLabel).toBe('KPI target (khách)')
+    expect(g.formatTarget(100)).toBe('100 khách')
+    expect(g.sampleFileName).toBe('mau-chien-dich-so-khach.csv')
+    expect(g.commitToast(25)).toContain('Đồng bộ số khách')
+    // Cột target ghi rõ SỐ NGUYÊN đơn vị khách; commission vẫn VNĐ
+    const target = g.columns.find((c) => c.col === 'kpi_target')!
+    expect(target.meaning).toContain('SỐ NGUYÊN')
+    expect(target.example).toBe('100')
+    expect(g.columns.find((c) => c.col === 'tier_1_commission_amount')!.meaning).toContain('VNĐ')
   })
 })

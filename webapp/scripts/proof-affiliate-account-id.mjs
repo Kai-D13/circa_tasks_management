@@ -117,13 +117,17 @@ try {
   // KPI); mapping fs store NULL → điểm = 'partner:<code>' (khớp model overview).
   const { data: mapRows, error: mapErr } = await svc
     .from('affiliate_partner_mappings')
-    .select('partner_code, store_id')
+    .select('partner_code, store_id, stores(code)')
   if (mapErr) throw new Error(`Đọc mappings Supabase: ${mapErr.message}`)
-  const pointByCode = new Map(mapRows.map((m) => [m.partner_code, m.store_id ? `store:${m.store_id}` : `partner:${m.partner_code}`]))
+  const pointByCode = new Map(mapRows.map((m) => [m.partner_code, {
+    key: m.store_id ? `store:${m.store_id}` : `partner:${m.partner_code}`,
+    label: m.store_id ? (m.stores?.code ?? m.store_id) : `partner:${m.partner_code}`,
+    isStore: !!m.store_id,
+  }]))
 
   const pointsByAccount = new Map()
   for (const o of withAccount) {
-    const point = pointByCode.get(o.affiliate_partner_code) ?? `unmapped:${o.affiliate_partner_code}`
+    const point = pointByCode.get(o.affiliate_partner_code)?.key ?? `unmapped:${o.affiliate_partner_code}`
     if (!pointsByAccount.has(o.acc)) pointsByAccount.set(o.acc, new Set())
     pointsByAccount.get(o.acc).add(point)
   }
@@ -135,14 +139,27 @@ try {
     return p === null || p <= 0
   })
 
-  // ── 7. Baseline đối soát: khách distinct theo THÁNG VN (completed_time+7h) —
-  // dùng đối chiếu với rpc_aggregate_affiliate_customers sau migration.
-  const byMonth = new Map()
+  // ── 7. METRIC BASELINE (r1 P2#4 — TÁCH khỏi identity coverage, CÙNG contract
+  // với rpc_aggregate_affiliate_customers): delivered + account hợp lệ +
+  // total_price > 0 + CÓ completed_time + điểm attribution là STORE (mapping
+  // store_id — partner:/unmapped nằm ngoài p_store_ids của RPC). Dedup THEO
+  // TỪNG THÁNG VN (mirror chạy RPC từng tháng): 1 account = 1 khách tại điểm
+  // của đơn DELIVERED sớm nhất trong tháng, tie-break order_id — output theo
+  // store/tháng để đối soát TRỰC TIẾP với RPC sau migration.
+  const baselineExcluded = { non_positive: 0, no_completed_time: 0, non_store_point: 0 }
+  const byMonthOrders = new Map()
   for (const o of withAccount) {
-    if (!(o.completed_time instanceof Date)) continue
+    const price = toNum(o.total_price)
+    if (price === null || price <= 0) { baselineExcluded.non_positive++; continue }
+    if (!(o.completed_time instanceof Date)) { baselineExcluded.no_completed_time++; continue }
+    const point = pointByCode.get(o.affiliate_partner_code)
+    if (!point || !point.isStore) { baselineExcluded.non_store_point++; continue }
     const vnMonth = new Date(o.completed_time.getTime() + 7 * 3600_000).toISOString().slice(0, 7)
-    if (!byMonth.has(vnMonth)) byMonth.set(vnMonth, new Set())
-    byMonth.get(vnMonth).add(o.acc)
+    if (!byMonthOrders.has(vnMonth)) byMonthOrders.set(vnMonth, [])
+    byMonthOrders.get(vnMonth).push({
+      acc: o.acc, orderId: toSafeInt(o.order_id) ?? Number.MAX_SAFE_INTEGER,
+      t: o.completed_time.getTime(), label: point.label,
+    })
   }
 
   // ── Report ──────────────────────────────────────────────────────────────────
@@ -160,8 +177,19 @@ try {
     non_positive_orders: nonPositive.length,
   })
   console.log('BSON type của account_id (DELIVERED):', JSON.stringify(typeDist))
-  console.log('Khách distinct theo tháng VN (baseline đối soát):')
-  for (const [m, s] of [...byMonth.entries()].sort()) console.log(`  ${m}: ${s.size} khách`)
+  console.log('\nMETRIC BASELINE (mirror RPC: delivered · price>0 · có completed_time · store-mapped · dedup/tháng VN):')
+  console.log('  loại khỏi baseline (KHÔNG tính vào gate identity):', JSON.stringify(baselineExcluded))
+  for (const [m, orders] of [...byMonthOrders.entries()].sort()) {
+    const best = new Map()
+    for (const o of orders) {
+      const cur = best.get(o.acc)
+      if (!cur || o.t < cur.t || (o.t === cur.t && o.orderId < cur.orderId)) best.set(o.acc, o)
+    }
+    const perStore = new Map()
+    for (const w of best.values()) perStore.set(w.label, (perStore.get(w.label) ?? 0) + 1)
+    const detail = [...perStore.entries()].sort().map(([k, v]) => `${k}=${v}`).join(' · ')
+    console.log(`  ${m}: ${best.size} khách — ${detail}`)
+  }
 
   if (missingAccount.length > 0) {
     console.log('\nSample DELIVERED thiếu account_id (≤10):',
