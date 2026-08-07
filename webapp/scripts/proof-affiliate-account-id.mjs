@@ -29,6 +29,38 @@ if (!env.NEXT_PUBLIC_SUPABASE_URL || !env.SUPABASE_SERVICE_ROLE_KEY) {
   console.error('Thiếu NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY trong .env.local'); process.exit(1)
 }
 
+// ── r1.1 P2: EXACT-RANGE baseline (tùy chọn) — mirror ĐÚNG range campaign.
+// Truyền qua PROCESS ENV (tham số từng lần chạy):
+//   $env:QA_CUSTOMER_FROM='2026-08-01'; $env:QA_CUSTOMER_TO='2026-08-10'
+// Ngày VN (YYYY-MM-DD, inclusive như start/end campaign) → nội bộ convert
+// half-open [from 00:00 VN, ngày-sau-to 00:00 VN) — mirror vnDayRange + RPC.
+// Validate FAIL-FAST trước khi kết nối bất kỳ nguồn nào.
+const RANGE_FROM = process.env.QA_CUSTOMER_FROM ?? null
+const RANGE_TO = process.env.QA_CUSTOMER_TO ?? null
+const isCalDate = (x) => /^\d{4}-\d{2}-\d{2}$/.test(x)
+  && !Number.isNaN(Date.parse(x + 'T00:00:00Z'))
+  && new Date(Date.parse(x + 'T00:00:00Z')).toISOString().slice(0, 10) === x
+let rangeMs = null
+if (RANGE_FROM !== null || RANGE_TO !== null) {
+  if (RANGE_FROM === null || RANGE_TO === null) {
+    console.error('QA_CUSTOMER_FROM/QA_CUSTOMER_TO phải đi CẶP (YYYY-MM-DD, ngày VN — như start/end campaign)')
+    process.exit(1)
+  }
+  if (!isCalDate(RANGE_FROM) || !isCalDate(RANGE_TO)) {
+    console.error('QA_CUSTOMER_FROM/QA_CUSTOMER_TO sai định dạng/ngày lịch không tồn tại (YYYY-MM-DD): ' + RANGE_FROM + ' / ' + RANGE_TO)
+    process.exit(1)
+  }
+  if (RANGE_FROM > RANGE_TO) {
+    console.error('QA_CUSTOMER_FROM (' + RANGE_FROM + ') phải <= QA_CUSTOMER_TO (' + RANGE_TO + ')')
+    process.exit(1)
+  }
+  const DAY = 86400_000
+  rangeMs = {
+    from: Date.parse(RANGE_FROM + 'T00:00:00+07:00'),
+    to: Date.parse(RANGE_TO + 'T00:00:00+07:00') + DAY,
+  }
+}
+
 const ORDER_DB = env.AFFILIATE_MONGO_DB || 'circa-online_prd_order'
 const ORDER_COLL = env.AFFILIATE_MONGO_COLLECTION || 'order'
 const CUSTOMER_DB = env.AFFILIATE_MONGO_CUSTOMER_DB || 'circa-online_prd_consumer'
@@ -147,19 +179,32 @@ try {
   // của đơn DELIVERED sớm nhất trong tháng, tie-break order_id — output theo
   // store/tháng để đối soát TRỰC TIẾP với RPC sau migration.
   const baselineExcluded = { non_positive: 0, no_completed_time: 0, non_store_point: 0 }
-  const byMonthOrders = new Map()
+  const qualifying = []
   for (const o of withAccount) {
     const price = toNum(o.total_price)
     if (price === null || price <= 0) { baselineExcluded.non_positive++; continue }
     if (!(o.completed_time instanceof Date)) { baselineExcluded.no_completed_time++; continue }
     const point = pointByCode.get(o.affiliate_partner_code)
     if (!point || !point.isStore) { baselineExcluded.non_store_point++; continue }
-    const vnMonth = new Date(o.completed_time.getTime() + 7 * 3600_000).toISOString().slice(0, 7)
-    if (!byMonthOrders.has(vnMonth)) byMonthOrders.set(vnMonth, [])
-    byMonthOrders.get(vnMonth).push({
+    qualifying.push({
       acc: o.acc, orderId: toSafeInt(o.order_id) ?? Number.MAX_SAFE_INTEGER,
       t: o.completed_time.getTime(), label: point.label,
     })
+  }
+  const byMonthOrders = new Map()
+  for (const q of qualifying) {
+    const vnMonth = new Date(q.t + 7 * 3600_000).toISOString().slice(0, 7)
+    if (!byMonthOrders.has(vnMonth)) byMonthOrders.set(vnMonth, [])
+    byMonthOrders.get(vnMonth).push(q)
+  }
+  // Dedup dùng chung: 1 account = 1 khách tại điểm của đơn sớm nhất (tie-break order_id).
+  const dedupWinners = (orders) => {
+    const best = new Map()
+    for (const o of orders) {
+      const cur = best.get(o.acc)
+      if (!cur || o.t < cur.t || (o.t === cur.t && o.orderId < cur.orderId)) best.set(o.acc, o)
+    }
+    return best
   }
 
   // ── Report ──────────────────────────────────────────────────────────────────
@@ -177,14 +222,24 @@ try {
     non_positive_orders: nonPositive.length,
   })
   console.log('BSON type của account_id (DELIVERED):', JSON.stringify(typeDist))
-  console.log('\nMETRIC BASELINE (mirror RPC: delivered · price>0 · có completed_time · store-mapped · dedup/tháng VN):')
+  console.log('\nMETRIC BASELINE (mirror RPC: delivered · price>0 · có completed_time · store-mapped):')
   console.log('  loại khỏi baseline (KHÔNG tính vào gate identity):', JSON.stringify(baselineExcluded))
+  if (rangeMs) {
+    // r1.1 P2: EXACT RANGE — dedup trên TOÀN range như RPC nhận p_from/p_to.
+    const inRange = qualifying.filter((q) => q.t >= rangeMs.from && q.t < rangeMs.to)
+    const best = dedupWinners(inRange)
+    const perStore = new Map()
+    for (const w of best.values()) perStore.set(w.label, (perStore.get(w.label) ?? 0) + 1)
+    const detail = [...perStore.entries()].sort().map(([k, v]) => `${k}=${v}`).join(' · ') || '(không có khách)'
+    console.log(`  EXACT RANGE ${RANGE_FROM} → ${RANGE_TO} (half-open VN [${RANGE_FROM} 00:00, ngày-sau-${RANGE_TO} 00:00)):`)
+    console.log(`    ${best.size} khách — ${detail}`)
+    console.log('    → đối soát TRỰC TIẾP với rpc_aggregate_affiliate_customers cùng range sau migration.')
+  } else {
+    console.log('  (không đặt QA_CUSTOMER_FROM/TO → bỏ qua exact-range; đặt cặp biến để đối soát đúng range campaign)')
+  }
+  console.log('  DIAGNOSTIC theo tháng VN (dedup RIÊNG từng tháng — chỉ tham khảo xu hướng):')
   for (const [m, orders] of [...byMonthOrders.entries()].sort()) {
-    const best = new Map()
-    for (const o of orders) {
-      const cur = best.get(o.acc)
-      if (!cur || o.t < cur.t || (o.t === cur.t && o.orderId < cur.orderId)) best.set(o.acc, o)
-    }
+    const best = dedupWinners(orders)
     const perStore = new Map()
     for (const w of best.values()) perStore.set(w.label, (perStore.get(w.label) ?? 0) + 1)
     const detail = [...perStore.entries()].sort().map(([k, v]) => `${k}=${v}`).join(' · ')

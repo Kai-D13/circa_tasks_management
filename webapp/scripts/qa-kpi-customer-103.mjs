@@ -5,14 +5,16 @@
 // overlap/grants chạy được ngay sau migration.
 //   cd webapp && node scripts/qa-kpi-customer-103.mjs
 //
-// ── SAFETY GATES (audit r1 P0/P1 — script GHI vào bảng production) ──
-// Bắt buộc trong .env.local, thiếu → exit 2 TRƯỚC mọi thao tác ghi:
-//   QA_KPI_CUSTOMER_FIXTURE_ALLOWED=YES  — opt-in tường minh cho phép ghi fixture
-//   QA_AFFILIATE_CRON_PAUSED=YES         — khai báo ĐÃ DISABLE Coolify task
-//     "Pull Affiliate Orders" (full-snapshot chạy giữa chừng lật fixture
-//     source_active=false → test sai); script còn tự check 0 run RUNNING
-//   QA_EXPECTED_SUPABASE_URL=<url>       — phải TRÙNG NEXT_PUBLIC_SUPABASE_URL
-//     (xác nhận đúng project trước khi ghi)
+// ── SAFETY GATES (audit r1 P0/P1 + r1.1) — script GHI vào bảng production ──
+// 3 biến an toàn CHỈ đọc từ PROCESS ENV (r1.1 P1#1 — KHÔNG đọc .env.local:
+// biến nằm lại trong file sau lần QA đầu sẽ vô hiệu cơ chế opt-in TỪNG LẦN
+// chạy; .env.local chỉ giữ URL/key kết nối). Thiếu → exit 2 TRƯỚC mọi thao
+// tác ghi. Chạy bằng biến tạm PowerShell rồi XÓA ngay sau QA:
+//   $env:QA_KPI_CUSTOMER_FIXTURE_ALLOWED='YES'
+//   $env:QA_AFFILIATE_CRON_PAUSED='YES'          # đã DISABLE task Pull Affiliate Orders
+//   $env:QA_EXPECTED_SUPABASE_URL='<url>'        # phải TRÙNG NEXT_PUBLIC_SUPABASE_URL
+//   node scripts/qa-kpi-customer-103.mjs
+//   Remove-Item Env:QA_KPI_CUSTOMER_FIXTURE_ALLOWED, Env:QA_AFFILIATE_CRON_PAUSED, Env:QA_EXPECTED_SUPABASE_URL
 // Tùy chọn authenticated-deny: QA_AUTH_EMAIL + QA_PASSWORD trong .env.local.
 // Fixture: campaign is_test=true + đơn order_id vùng RIÊNG 999810001-999810099
 // partner 'QA-103-FIXTURE', cửa sổ 01/2025 (trước mọi data thật ~06/2026 →
@@ -32,12 +34,13 @@ for (const line of fs.readFileSync('.env.local', 'utf8').split(/\r?\n/)) {
 const safetyGate = (ok, msg) => {
   if (!ok) { console.error('SAFETY GATE FAIL:', msg); process.exit(2) }
 }
-safetyGate(env.QA_KPI_CUSTOMER_FIXTURE_ALLOWED === 'YES',
-  'thiếu QA_KPI_CUSTOMER_FIXTURE_ALLOWED=YES trong .env.local — opt-in tường minh trước khi script được ghi fixture')
-safetyGate(env.QA_AFFILIATE_CRON_PAUSED === 'YES',
-  'thiếu QA_AFFILIATE_CRON_PAUSED=YES — DISABLE Coolify task "Pull Affiliate Orders" rồi khai báo biến này (chống race full-snapshot)')
-safetyGate(!!env.QA_EXPECTED_SUPABASE_URL && env.QA_EXPECTED_SUPABASE_URL === env.NEXT_PUBLIC_SUPABASE_URL,
-  'QA_EXPECTED_SUPABASE_URL (' + (env.QA_EXPECTED_SUPABASE_URL ?? 'THIẾU') + ') phải TRÙNG NEXT_PUBLIC_SUPABASE_URL (' + env.NEXT_PUBLIC_SUPABASE_URL + ') — xác nhận đúng project trước mọi thao tác ghi')
+// r1.1 P1#1: CHỈ process.env — biến tạm từng lần chạy, không nằm lại file.
+safetyGate(process.env.QA_KPI_CUSTOMER_FIXTURE_ALLOWED === 'YES',
+  'thiếu $env:QA_KPI_CUSTOMER_FIXTURE_ALLOWED=YES (biến PROCESS tạm, KHÔNG đặt vào .env.local) — opt-in tường minh từng lần chạy')
+safetyGate(process.env.QA_AFFILIATE_CRON_PAUSED === 'YES',
+  'thiếu $env:QA_AFFILIATE_CRON_PAUSED=YES (biến PROCESS tạm) — DISABLE Coolify task "Pull Affiliate Orders" rồi khai báo (chống race full-snapshot)')
+safetyGate(!!process.env.QA_EXPECTED_SUPABASE_URL && process.env.QA_EXPECTED_SUPABASE_URL === env.NEXT_PUBLIC_SUPABASE_URL,
+  'QA_EXPECTED_SUPABASE_URL (' + (process.env.QA_EXPECTED_SUPABASE_URL ?? 'THIẾU') + ') phải TRÙNG NEXT_PUBLIC_SUPABASE_URL (' + env.NEXT_PUBLIC_SUPABASE_URL + ') — biến PROCESS tạm, xác nhận đúng project trước mọi thao tác ghi')
 
 const svc = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } })
 const anon = createClient(env.NEXT_PUBLIC_SUPABASE_URL, env.NEXT_PUBLIC_SUPABASE_ANON_KEY, { auth: { persistSession: false } })
@@ -85,17 +88,21 @@ try {
     abort('vùng order_id QA ' + FX_MIN + '-' + FX_MAX + ' đã có ' + preexisting.length + ' row ('
       + preexisting.slice(0, 5).map((r) => r.order_id).join(', ') + '…) — xác minh + dọn tay rồi chạy lại; script KHÔNG tự xóa')
   }
+  // r1.1 P1#2: schema preflight FAIL = ABORT trước dòng ghi đầu tiên —
+  // không bao giờ tạo fixture trên schema thiếu cột.
   for (const [table, col] of [
     ['affiliate_orders', 'account_id'],
     ['kpi_campaign_store_actuals', 'actual_customer_count'],
     ['kpi_campaign_store_daily_actuals', 'affiliate_customer_count'],
   ]) {
     const r = await svc.from(table).select(col).limit(1)
-    out(`preflight: cột ${table}.${col} tồn tại`, !r.error, r.error?.message ?? '')
+    if (r.error) abort('preflight schema: cột ' + table + '.' + col + ' không đọc được (103 chưa apply đủ?): ' + r.error.message)
+    out(`preflight: cột ${table}.${col} tồn tại`, true, '')
   }
-  const { count: missingAcct } = await svc.from('affiliate_orders')
+  const { count: missingAcct, error: missErr } = await svc.from('affiliate_orders')
     .select('order_id', { count: 'exact', head: true })
     .eq('status_norm', 'delivered').eq('source_active', true).is('account_id', null)
+  if (missErr) abort('preflight: không đếm được delivered thiếu account_id: ' + missErr.message)
   const backfillDone = (missingAcct ?? 1) === 0
   console.log(`backfill account_id: delivered active thiếu account_id = ${missingAcct} → ${backfillDone ? 'ĐÃ xong' : 'CHƯA xong (khối aggregate sẽ PENDING)'}`)
 
