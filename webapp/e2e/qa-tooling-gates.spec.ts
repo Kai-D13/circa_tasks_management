@@ -83,5 +83,9 @@ test.describe('qa tooling safety gates (mig 103 r1.1) @desktop', () => {
     // exact-range dedup toàn range (mirror RPC) + monthly chỉ là diagnostic
     expect(proof).toContain('EXACT RANGE')
     expect(proof).toContain('DIAGNOSTIC theo tháng VN')
+    // r1.3: phân loại missing_account + cross-store in-range + JSON summary
+    expect(proof).toContain('os_in_range_qualifying')
+    expect(proof).toContain('R1.3 DIAGNOSTIC')
+    expect(proof).toContain('=== JSON SUMMARY ===')
   })
 })
