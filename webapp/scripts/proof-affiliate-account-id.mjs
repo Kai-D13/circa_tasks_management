@@ -459,8 +459,11 @@ try {
     console.log("           count(*) FILTER (WHERE completed_time IS NULL)  AS missing_completed_time")
     console.log("    FROM public.affiliate_orders o")
     console.log("    WHERE o.source_active AND o.status_norm = 'delivered'")
-    console.log("      AND o.store_id IN (SELECT id FROM public.stores WHERE store_type='os' AND is_active);")
-    console.log('    -- kỳ vọng 0 / 0 trên TOÀN BỘ target OS stores rồi mới mở QA UI/flag.')
+    // r1.3.4 (audit P2): SQL theo ĐÚNG scope proof (scopedPoints đã áp
+    // posFilter) — chạy subset không bị báo fail oan bởi store ngoài phạm vi.
+    console.log('      AND o.store_id IN (' + scopedPoints.map((pt) => "'" + pt.storeId + "'").join(', ') + ');')
+    console.log('    -- scope: ' + scopedPoints.length + ' OS store active'
+      + (posFilter ? ' (SUBSET QA_CUSTOMER_POS_CODES)' : '') + ' — kỳ vọng 0 / 0 rồi mới mở QA UI/flag.')
   }
   // r1.2: KHÔNG process.exit trong try — exit bỏ qua finally, Mongo client
   // không close → libuv assertion crash teardown (Windows). Set code, close
@@ -469,4 +472,9 @@ try {
 } finally {
   await client.close()
 }
-process.exit(exitCode)
+// r1.3.4: run thật 07-08/08 cho thấy process.exit() NGAY SAU client.close()
+// vẫn abort 0xC0000409 (libuv assertion — race teardown uv_async của Mongo
+// driver trên Windows) → PROOF_EXIT rác. Fix: set exitCode cho loop drain tự
+// nhiên; fallback force-exit 3s (unref — timer không tự giữ loop).
+process.exitCode = exitCode
+setTimeout(() => process.exit(exitCode), 3000).unref()

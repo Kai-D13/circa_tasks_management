@@ -296,5 +296,10 @@ test.describe('lib-customer-proof r1.3.3 (runtime readiness) @desktop', () => {
     // P2#3: proof = predictor trên Mongo; gate Supabase sau deploy+full-sync
     expect(proof).toContain('verify TRỰC TIẾP Supabase')
     expect(proof).toContain("status_norm = 'delivered'")
+    // r1.3.4: SQL verify theo ĐÚNG scope proof (scopedPoints, không phải toàn
+    // bộ OS khi có subset) + exit không dùng process.exit ngay sau close
+    // (abort 0xC0000409 teardown Mongo driver trên Windows → exit code rác)
+    expect(proof).toContain("scopedPoints.map((pt) => \"'\" + pt.storeId + \"'\")")
+    expect(proof).toContain('process.exitCode = exitCode')
   })
 })
