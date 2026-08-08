@@ -6,7 +6,7 @@
 // Contract eligibility (r1.3.1 P1#1/#2): điểm ĐỦ ĐIỀU KIỆN campaign khách =
 //   mapping ACTIVE + store_id non-null + store_type='os' + store ACTIVE
 // — đúng tập targets mà activation/runtime cho phép (FS-store, OS inactive,
-// mapping inactive đều bị LOẠI khỏi baseline/cross-store/quyết định 104,
+// mapping inactive đều bị LOẠI khỏi baseline/cross-store/quyết định remediation,
 // nhưng được ĐẾM riêng để không mất dấu).
 // Identity cross-store = pointKey 'store:<uuid>' (P2#3) — label/POS chỉ để
 // hiển thị báo cáo; hai store trùng tên POS vẫn là hai điểm khác nhau.
@@ -33,7 +33,7 @@ export function buildPointByCode(mapRows) {
 // rows đã normalize BSON: { acc, orderId, price, completedTimeMs|null, partnerCode }.
 // posFilter: Set<posCode>|null — đối soát campaign SUBSET (QA_CUSTOMER_POS_CODES).
 // Trả 2 tập tách bạch (r1.3.1 #3):
-//   osActive       → exact baseline + cross-store in-range + quyết định 104
+//   osActive       → exact baseline + cross-store in-range + quyết định remediation
 //   allStorePoints → diagnostic toàn lịch sử (mọi điểm có store, kể cả FS/inactive)
 /**
  * @param {Array<{acc: number, orderId: number, price: number | null, completedTimeMs: number | null, partnerCode: string}>} rows
@@ -119,7 +119,7 @@ export function scopePoints(pointByCode, posFilter = null) {
 //   non_os_point → os_inactive_point → os_outside_pos_filter (r1.3.2 P1#1 —
 //   OS active nhưng NGOÀI subset: KHÔNG được block release scoped)
 //   → disqualified_price_or_time → os_range_unknown/os_in_range/os_out_of_range.
-// Bucket quyết định bước kế (backfill/mig 104) = os_in_range_qualifying —
+// Bucket quyết định bước kế (source remediation/backfill nguồn) = os_in_range_qualifying —
 // CHỈ điểm OS active TRONG posFilter, trong exact range, giá dương, có
 // completed_time.
 /** @typedef {{order_id: number | string, partner_code: string, point: string, completed_time: string | null, total_price: number | null}} MissEntry */

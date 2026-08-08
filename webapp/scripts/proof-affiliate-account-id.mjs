@@ -212,7 +212,7 @@ try {
   // của đơn DELIVERED sớm nhất trong tháng, tie-break order_id — output theo
   // store/tháng để đối soát TRỰC TIẾP với RPC sau migration.
   // r1.3.1: normalize BSON 1 lần rồi qua LIB — 2 tập tách bạch: osActive
-  // (baseline/cross/104 — CHỈ OS active, tôn trọng posFilter) vs allStorePoints
+  // (baseline/cross/remediation — CHỈ OS active, tôn trọng posFilter) vs allStorePoints
   // (diagnostic — mọi điểm có store kể cả FS/inactive).
   const normRows = withAccount.map((o) => ({
     acc: o.acc,
@@ -355,7 +355,7 @@ try {
     console.log('Sample cross-store (≤10):')
     for (const [acc, points] of crossStore.slice(0, 10)) console.log(`  account ${acc}: ${[...points].join(' · ')}`)
   }
-  console.log('\n=== R1.3 DIAGNOSTIC — PHÂN LOẠI missing_account_id (quyết định mig 104) ===')
+  console.log('\n=== R1.3 DIAGNOSTIC — PHÂN LOẠI missing_account_id (quyết định source remediation) ===')
   console.log('  precedence: non_os_point → os_inactive_point → os_outside_pos_filter → disqualified(giá/completed_time) → theo range')
   for (const [k, arr] of Object.entries(missCls)) {
     console.log(`  ${k}: ${arr.length}`)
@@ -394,7 +394,7 @@ try {
       return max === null ? null : new Date(max).toISOString()
     })(),
     generated_range: rangeMs ? { from: RANGE_FROM, to: RANGE_TO } : null,
-    // r1.3.1 #7: scope tường minh — baseline/cross/104 CHỈ trên OS active.
+    // r1.3.1 #7: scope tường minh — baseline/cross/remediation CHỈ trên OS active.
     scope: posFilter ? 'os_active_subset' : 'os_active_only',
     pos_filter: posFilter ? [...posFilter].sort() : null,
     // r1.3.2 P2#3: metadata theo ĐÚNG scope (posFilter áp dụng, unique store).
@@ -464,9 +464,9 @@ try {
   }
   const failedHard = [...gateReport.runtime, ...gateReport.release].filter(([, ok]) => !ok).length
   if (failedHard > 0) {
-    console.log(`\n${failedHard} gate (runtime readiness / release) FAIL — DỪNG: chưa đủ điều kiện bước BACKFILL/MIGRATION KẾ TIẾP (104) trong scope đã chọn; gửi output (kèm JSON SUMMARY) cho stakeholder duyệt rule.`)
+    console.log(`\n${failedHard} gate (runtime readiness / release) FAIL — DỪNG: chưa đủ điều kiện bước SOURCE REMEDIATION/BACKFILL nguồn trong scope đã chọn; gửi output (kèm JSON SUMMARY) cho stakeholder duyệt rule.`)
   } else {
-    console.log('\nALL RUNTIME + RELEASE GATES PASS — đủ điều kiện bước backfill/migration kế tiếp (104) trong scope đã chọn.')
+    console.log('\nALL RUNTIME + RELEASE GATES PASS — đủ điều kiện bước source remediation/backfill nguồn trong scope đã chọn.')
     console.log('⚠ P2#3: đây là proof trên MONGO NGUỒN. Sau deploy + full sync, verify TRỰC TIẾP Supabase trước khi bật flag:')
     console.log("    SELECT count(*) FILTER (WHERE account_id IS NULL)      AS missing_account_id,")
     console.log("           count(*) FILTER (WHERE completed_time IS NULL)  AS missing_completed_time")
