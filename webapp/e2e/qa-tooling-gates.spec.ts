@@ -301,5 +301,8 @@ test.describe('lib-customer-proof r1.3.3 (runtime readiness) @desktop', () => {
     // (abort 0xC0000409 teardown Mongo driver trên Windows → exit code rác)
     expect(proof).toContain("scopedPoints.map((pt) => \"'\" + pt.storeId + \"'\")")
     expect(proof).toContain('process.exitCode = exitCode')
+    // r1.3.5 (audit P2): timestamp evidence trong JSON summary
+    expect(proof).toContain('generated_at')
+    expect(proof).toContain('max_order_updated_at')
   })
 })

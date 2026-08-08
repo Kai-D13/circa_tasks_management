@@ -133,7 +133,7 @@ try {
   const orders = await client.db(ORDER_DB).collection(ORDER_COLL)
     .find(
       { affiliate_partner_code: { $exists: true, $nin: [null, ''] } },
-      { projection: { _id: 0, order_id: 1, account_id: 1, affiliate_partner_code: 1, status: 1, total_price: 1, completed_time: 1 }, maxTimeMS: 60_000 },
+      { projection: { _id: 0, order_id: 1, account_id: 1, affiliate_partner_code: 1, status: 1, total_price: 1, completed_time: 1, last_updated_time: 1 }, maxTimeMS: 60_000 },
     )
     .toArray()
 
@@ -380,6 +380,19 @@ try {
 
   // r1.3: JSON summary — đối soát TỰ ĐỘNG (parser tìm marker '=== JSON SUMMARY ===').
   const summary = {
+    // r1.3.5 (audit P2): timestamp evidence — số khách là dữ liệu SỐNG, hai
+    // lần chạy có thể lệch; generated_at + mốc update mới nhất của nguồn cho
+    // phép đối chiếu baseline nào là bản chốt.
+    generated_at: new Date().toISOString(),
+    max_order_updated_at: (() => {
+      let max = null
+      for (const o of orders) {
+        if (o.last_updated_time instanceof Date && (max === null || o.last_updated_time.getTime() > max)) {
+          max = o.last_updated_time.getTime()
+        }
+      }
+      return max === null ? null : new Date(max).toISOString()
+    })(),
     generated_range: rangeMs ? { from: RANGE_FROM, to: RANGE_TO } : null,
     // r1.3.1 #7: scope tường minh — baseline/cross/104 CHỈ trên OS active.
     scope: posFilter ? 'os_active_subset' : 'os_active_only',
