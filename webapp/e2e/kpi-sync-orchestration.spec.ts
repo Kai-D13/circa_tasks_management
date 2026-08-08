@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import {
   syncCampaignWithDeps,
-  type CampaignConfig, type StoreRow, type SyncCampaignDeps,
+  type CampaignConfig, type CustomerAggResult, type StoreRow, type SyncCampaignDeps,
 } from '../lib/kpi/syncCampaignCore'
 import type { TargetRow } from '../lib/kpi/engine'
 import type { AffiliateSyncHealth } from '../lib/affiliate/health'
@@ -13,7 +13,11 @@ import type { AffiliateSyncHealth } from '../lib/affiliate/health'
 const NOW = Date.parse('2026-07-23T10:00:00Z')
 const CFG = (over: Partial<CampaignConfig> = {}): CampaignConfig => ({
   id: 'camp-1', start_date: '2026-07-01', end_date: '2026-07-31',
-  metric_offline: true, metric_affiliate: false, ...over,
+  metric_type: 'gmv', metric_offline: true, metric_affiliate: false, ...over,
+})
+// Mig 103: contract cột campaign Số khách.
+const CUST_CFG = (over: Partial<CampaignConfig> = {}): CampaignConfig => CFG({
+  metric_type: 'affiliate_customer_count', metric_offline: false, metric_affiliate: true, ...over,
 })
 const TARGETS: TargetRow[] = [
   { store_id: 'store-a', pos_code: 'POS0001', kpi_target: 1000, tiers: [] },
@@ -56,10 +60,13 @@ interface Behavior {
   bq?: () => Promise<Record<string, unknown>[]>
   replace?: SyncCampaignDeps['replaceActuals']
   flag?: boolean                                            // KPI_AFFILIATE_ENABLED (default true)
+  // Mig 103:
+  aggCust?: () => Promise<{ data: CustomerAggResult | null; error: { message: string } | null }>
+  customerFlag?: boolean                                    // KPI_AFFILIATE_CUSTOMER_ENABLED (default true)
 }
 
 function mkDeps(cfg: CampaignConfig, behavior: Behavior = {}) {
-  const calls = { campaign: 0, targets: 0, stores: 0, health: 0, agg: 0, sa: 0, bq: 0, replace: 0 }
+  const calls = { campaign: 0, targets: 0, stores: 0, health: 0, agg: 0, aggCust: 0, sa: 0, bq: 0, replace: 0 }
   const seq: string[] = []
   const deps: SyncCampaignDeps = {
     loadCampaign: async () => { calls.campaign++; seq.push('campaign'); return behavior.campaign ? behavior.campaign() : { data: cfg, error: null } },
@@ -87,8 +94,22 @@ function mkDeps(cfg: CampaignConfig, behavior: Behavior = {}) {
       calls.replace++; seq.push('replace')
       return behavior.replace ? behavior.replace(id, daily, actuals) : { data: actuals.length, error: null }
     },
+    aggregateAffiliateCustomers: async () => {
+      calls.aggCust++; seq.push('aggCust')
+      return behavior.aggCust ? behavior.aggCust() : {
+        data: {
+          rows: [
+            { store_id: 'store-a', vn_date: '2026-07-05', customer_count: 3 },
+            { store_id: 'store-b', vn_date: '2026-07-06', customer_count: 1 },
+          ],
+          total_customers: 4, cross_store_account_count: 0, cross_store_sample: [],
+        },
+        error: null,
+      }
+    },
     nowMs: () => NOW,
     isAffiliateFeatureEnabled: () => behavior.flag ?? true,
+    isAffiliateCustomerFeatureEnabled: () => behavior.customerFlag ?? true,
   }
   return { deps, calls, seq }
 }
@@ -98,14 +119,14 @@ test.describe('kpi sync orchestration @desktop', () => {
     const { deps, calls } = mkDeps(CFG())
     const r = await syncCampaignWithDeps('camp-1', deps)
     expect(r.status).toBe('success')
-    expect(calls).toEqual({ campaign: 1, targets: 1, stores: 0, health: 0, agg: 0, sa: 1, bq: 1, replace: 1 })
+    expect(calls).toEqual({ campaign: 1, targets: 1, stores: 0, health: 0, agg: 0, aggCust: 0, sa: 1, bq: 1, replace: 1 })
   })
 
   test('AFFILIATE-ONLY: BQ credential + BQ 0 lần; health ĐÚNG 2 LẦN (double-check); agg/replace 1', async () => {
     const { deps, calls } = mkDeps(CFG({ metric_offline: false, metric_affiliate: true }))
     const r = await syncCampaignWithDeps('camp-1', deps)
     expect(r.status).toBe('success')
-    expect(calls).toEqual({ campaign: 1, targets: 1, stores: 1, health: 2, agg: 1, sa: 0, bq: 0, replace: 1 })
+    expect(calls).toEqual({ campaign: 1, targets: 1, stores: 1, health: 2, agg: 1, aggCust: 0, sa: 0, bq: 0, replace: 1 })
     if (r.status === 'success') expect(r.unmatched).toEqual([])
   })
 
@@ -180,7 +201,7 @@ test.describe('kpi sync orchestration @desktop', () => {
     const r = await syncCampaignWithDeps('camp-1', deps)
     expect(r.status).toBe('snapshot_preserved')
     if (r.status === 'snapshot_preserved') expect(r.reason).toContain('KPI_AFFILIATE_ENABLED')
-    expect(calls).toEqual({ campaign: 1, targets: 0, stores: 0, health: 0, agg: 0, sa: 0, bq: 0, replace: 0 })
+    expect(calls).toEqual({ campaign: 1, targets: 0, stores: 0, health: 0, agg: 0, aggCust: 0, sa: 0, bq: 0, replace: 0 })
   })
 
   test('r1.2 FLAG OFF + HYBRID: preserve TOÀN BỘ — không ghi partial offline', async () => {
@@ -212,7 +233,7 @@ test.describe('kpi sync orchestration @desktop', () => {
       const r = await syncCampaignWithDeps('camp-1', deps)
       expect(r.status).toBe('snapshot_preserved')
       if (r.status === 'snapshot_preserved') expect(r.reason).toContain('chưa đến kỳ')
-      expect(calls).toEqual({ campaign: 1, targets: 0, stores: 0, health: 0, agg: 0, sa: 0, bq: 0, replace: 0 })
+      expect(calls).toEqual({ campaign: 1, targets: 0, stores: 0, health: 0, agg: 0, aggCust: 0, sa: 0, bq: 0, replace: 0 })
     }
   })
 
@@ -229,7 +250,7 @@ test.describe('kpi sync orchestration @desktop', () => {
     const r = await syncCampaignWithDeps('camp-1', deps)
     expect(r.status).toBe('failed')
     if (r.status === 'failed') expect(r.error).toContain('không bật chỉ số')
-    expect(calls).toEqual({ campaign: 1, targets: 0, stores: 0, health: 0, agg: 0, sa: 0, bq: 0, replace: 0 })
+    expect(calls).toEqual({ campaign: 1, targets: 0, stores: 0, health: 0, agg: 0, aggCust: 0, sa: 0, bq: 0, replace: 0 })
   })
 
   test('target FS/inactive/missing: preserved; KHÔNG health/nguồn/replace (3 biến thể)', async () => {
@@ -399,5 +420,158 @@ test.describe('kpi sync orchestration @desktop', () => {
     })
     const r = await syncCampaignWithDeps('camp-1', deps)
     expect(r.status).toBe('success')
+  })
+})
+
+// ── Mig 103: campaign "Số khách Affiliate" — flow riêng, GMV path zero-touch ─
+test.describe('kpi sync orchestration — customer campaign (mig 103) @desktop', () => {
+  test('CUSTOMER happy path: KHÔNG đụng BQ (sa/bq = 0); health double-check 2 lần; aggCust + replace 1; payload đúng shape customer', async () => {
+    let captured: { daily: unknown[]; actuals: unknown[] } | null = null
+    const { deps, calls } = mkDeps(CUST_CFG(), {
+      replace: async (_id, daily, actuals) => { captured = { daily, actuals }; return { data: actuals.length, error: null } },
+    })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('success')
+    expect(calls).toEqual({ campaign: 1, targets: 1, stores: 1, health: 2, agg: 0, aggCust: 1, sa: 0, bq: 0, replace: 1 })
+    const actuals = captured!.actuals as {
+      store_id: string; actual_value: number; actual_offline: number
+      actual_affiliate: number; actual_customer_count?: number
+    }[]
+    const a = actuals.find((x) => x.store_id === 'store-a')!
+    expect(a.actual_value).toBe(3)
+    expect(a.actual_customer_count).toBe(3)
+    expect(a.actual_offline).toBe(0)
+    expect(a.actual_affiliate).toBe(0)
+    const daily = captured!.daily as { gmv: number; gmv_affiliate: number; affiliate_customer_count?: number }[]
+    expect(daily.every((d) => d.gmv === 0 && d.gmv_affiliate === 0 && (d.affiliate_customer_count ?? 0) > 0)).toBe(true)
+  })
+
+  test('FLAG customer TẮT → preserved, 0 call nguồn nào (kể cả targets)', async () => {
+    const { deps, calls } = mkDeps(CUST_CFG(), { customerFlag: false })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    if (r.status === 'snapshot_preserved') expect(r.reason).toContain('KPI_AFFILIATE_CUSTOMER_ENABLED')
+    expect(calls).toEqual({ campaign: 1, targets: 0, stores: 0, health: 0, agg: 0, aggCust: 0, sa: 0, bq: 0, replace: 0 })
+  })
+
+  test('FLAG interplay 2 chiều: KPI_AFFILIATE_ENABLED tắt KHÔNG chặn customer; customer flag tắt KHÔNG chặn GMV-affiliate', async () => {
+    const a = await syncCampaignWithDeps('camp-1', mkDeps(CUST_CFG(), { flag: false }).deps)
+    expect(a.status).toBe('success')
+    const b = await syncCampaignWithDeps('camp-1',
+      mkDeps(CFG({ metric_affiliate: true }), { customerFlag: false }).deps)
+    expect(b.status).toBe('success')
+  })
+
+  test('metric_type LẠ → failed fail-closed, không gọi nguồn', async () => {
+    const { deps, calls } = mkDeps(CFG({ metric_type: 'bogus' }))
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('failed')
+    if (r.status === 'failed') expect(r.error).toContain('metric_type không hỗ trợ')
+    expect(calls.replace).toBe(0)
+    expect(calls.targets).toBe(0)
+  })
+
+  test('CUSTOMER contract cột lệch (metric_offline=true) → failed', async () => {
+    const r = await syncCampaignWithDeps('camp-1',
+      mkDeps(CUST_CFG({ metric_offline: true })).deps)
+    expect(r.status).toBe('failed')
+    if (r.status === 'failed') expect(r.error).toContain('contract cột')
+  })
+
+  test('CUSTOMER: health-after runId ĐỔI → preserved, replace 0 (race với affiliate sync)', async () => {
+    const { deps, calls } = mkDeps(CUST_CFG(), {
+      health: async (call) => call === 1 ? READY : { ...READY, runId: 'run-B' },
+    })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    if (r.status === 'snapshot_preserved') expect(r.reason).toContain('runId')
+    expect(calls.replace).toBe(0)
+  })
+
+  test('CUSTOMER: aggregate lỗi (fail-closed RPC — thiếu account_id) → preserved, replace 0', async () => {
+    const { deps, calls } = mkDeps(CUST_CFG(), {
+      aggCust: async () => ({ data: null, error: { message: 'thiếu account_id (identity khách)' } }),
+    })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    if (r.status === 'snapshot_preserved') expect(r.reason).toContain('account_id')
+    expect(calls.replace).toBe(0)
+  })
+
+  test('CUSTOMER: SUM(daily) khác total_customers (nguồn tự mâu thuẫn) → preserved', async () => {
+    const { deps } = mkDeps(CUST_CFG(), {
+      aggCust: async () => ({
+        data: {
+          rows: [{ store_id: 'store-a', vn_date: '2026-07-05', customer_count: 3 }],
+          total_customers: 5, cross_store_account_count: 0, cross_store_sample: [],
+        },
+        error: null,
+      }),
+    })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    if (r.status === 'snapshot_preserved') expect(r.reason).toContain('tự mâu thuẫn')
+  })
+
+  test('CUSTOMER: cross-store > 0 → success + warnings (không chặn ghi — RPC đã dedup)', async () => {
+    const { deps } = mkDeps(CUST_CFG(), {
+      aggCust: async () => ({
+        data: {
+          rows: [{ store_id: 'store-a', vn_date: '2026-07-05', customer_count: 2 }],
+          total_customers: 2, cross_store_account_count: 1, cross_store_sample: [900001],
+        },
+        error: null,
+      }),
+    })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('success')
+    if (r.status === 'success') {
+      expect(r.warnings?.[0]).toContain('cross_store_customer_count=1')
+      expect(r.warnings?.[0]).toContain('900001')
+    }
+  })
+
+  test('CUSTOMER: target không phải OS active → preserved (mirror guard GMV-affiliate)', async () => {
+    const { deps } = mkDeps(CUST_CFG(), {
+      stores: async (ids) => ({
+        data: ids.map((id) => ({ id, code: id.toUpperCase(), store_type: id === 'store-b' ? 'fs' : 'os', is_active: true })),
+        error: null,
+      }),
+    })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    if (r.status === 'snapshot_preserved') expect(r.reason).toContain('OS store active')
+  })
+
+  test('CUSTOMER: tier grade trên SỐ KHÁCH — run_rate/bậc/pool/remaining theo khách', async () => {
+    let captured: unknown[] = []
+    const targets: TargetRow[] = [{
+      store_id: 'store-a', pos_code: 'POS0001', kpi_target: 4,
+      tiers: [
+        { tier_order: 1, threshold_pct: 50, commission_amount: 500000 },
+        { tier_order: 2, threshold_pct: 100, commission_amount: 2000000 },
+      ],
+    }]
+    const { deps } = mkDeps(CUST_CFG(), {
+      targets: async () => ({ data: targets, error: null }),
+      aggCust: async () => ({
+        data: {
+          rows: [{ store_id: 'store-a', vn_date: '2026-07-05', customer_count: 3 }],
+          total_customers: 3, cross_store_account_count: 0, cross_store_sample: [],
+        },
+        error: null,
+      }),
+      replace: async (_id, _daily, actuals) => { captured = actuals; return { data: actuals.length, error: null } },
+    })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('success')
+    const a = captured[0] as {
+      run_rate: number | null; achieved_tier_order: number | null
+      store_commission_pool: number | null; remaining_target: number
+    }
+    expect(a.run_rate).toBe(75)               // 3/4 khách
+    expect(a.achieved_tier_order).toBe(1)     // ≥50%, chưa tới 100%
+    expect(a.store_commission_pool).toBe(500000)
+    expect(a.remaining_target).toBe(1)        // còn thiếu 1 khách
   })
 })

@@ -3,7 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { isKpiCampaignEnabled } from '@/lib/kpi/flags'
 import { xlsxResponse, stampVN, fmtVN } from '@/lib/export/xlsx'
-import { buildCampaignExportRows } from '@/lib/kpi/exportRows'
+import { buildCampaignExportRows, buildCustomerCampaignExportRows } from '@/lib/kpi/exportRows'
 
 // GET /api/export/kpi-campaigns?campaign_id=... — Excel of a campaign's per-store
 // result (super admin only; mirrors the /targets/campaigns/[id] Result tab).
@@ -17,6 +17,7 @@ interface ActualRow {
   achieved_tier_order: number | null; store_commission_pool: number | null; synced_at: string
   actual_offline: number | null; actual_affiliate: number | null
   offline_synced_at: string | null; affiliate_synced_at: string | null
+  actual_customer_count: number | null
 }
 
 export async function GET(request: NextRequest) {
@@ -31,7 +32,7 @@ export async function GET(request: NextRequest) {
   if (!campaignId) return NextResponse.json({ error: 'Thiếu campaign_id' }, { status: 400 })
 
   const { data: c } = await supabase
-    .from('kpi_campaigns').select('id, name, start_date, end_date, archived_at, metric_offline, metric_affiliate').eq('id', campaignId).single()
+    .from('kpi_campaigns').select('id, name, start_date, end_date, archived_at, metric_type, metric_offline, metric_affiliate').eq('id', campaignId).single()
   if (!c) return NextResponse.json({ error: 'Không tìm thấy chiến dịch' }, { status: 404 })
   // Archive (098): export archived không hoạt động qua UI/route.
   if (c.archived_at !== null) return NextResponse.json({ error: 'Chiến dịch đã lưu trữ' }, { status: 404 })
@@ -41,7 +42,7 @@ export async function GET(request: NextRequest) {
       .select('store_id, pos_code, kpi_target, store_kpi_group, stores(name)')
       .eq('campaign_id', campaignId).order('pos_code'),
     supabase.from('kpi_campaign_store_actuals')
-      .select('store_id, actual_value, actual_offline, actual_affiliate, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
+      .select('store_id, actual_value, actual_offline, actual_affiliate, actual_customer_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
       .eq('campaign_id', campaignId),
   ])
   if (tErr || aErr) return NextResponse.json({ error: (tErr ?? aErr)!.message }, { status: 500 })
@@ -50,16 +51,16 @@ export async function GET(request: NextRequest) {
   const actuals = (actualsRaw ?? []) as ActualRow[]
   const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
 
-  // P3-F r1: contract cột nằm trong buildCampaignExportRows THUẦN (có test
-  // khóa) — GIỮ tên cột cũ 'Actual GMV', cột mới bổ sung; status nguồn
-  // Affiliate: Không áp dụng / Chưa đồng bộ / Đã đồng bộ.
-  const rows = buildCampaignExportRows(
-    {
-      name: c.name as string, start_date: c.start_date as string, end_date: c.end_date as string,
-      metric_offline: c.metric_offline === true, metric_affiliate: c.metric_affiliate === true,
-    },
-    targets, actuals, vnTodayISO, fmtVN,
-  )
+  // P3-F r1: contract cột nằm trong builder THUẦN (có test khóa) — campaign
+  // GMV GIỮ tên cột cũ 'Actual GMV' (Power Query); mig 103: campaign Số khách
+  // dùng builder RIÊNG (cột đơn vị khách), branch theo metric_type từ DB.
+  const exportCampaign = {
+    name: c.name as string, start_date: c.start_date as string, end_date: c.end_date as string,
+    metric_offline: c.metric_offline === true, metric_affiliate: c.metric_affiliate === true,
+  }
+  const rows = c.metric_type === 'affiliate_customer_count'
+    ? buildCustomerCampaignExportRows(exportCampaign, targets, actuals, vnTodayISO, fmtVN)
+    : buildCampaignExportRows(exportCampaign, targets, actuals, vnTodayISO, fmtVN)
 
   return xlsxResponse(rows, 'Kết quả chiến dịch', `campaign_${(c.name as string).slice(0, 20)}_${stampVN()}`)
 }

@@ -140,7 +140,7 @@ test.describe('resolveMappingsWithAutoCreate — core cron auto-create @desktop'
     // mã mới đã ensure thành matched_fs.
     const { report } = resolveStores(
       rows('NT THIÊN', 'bad\u0001code', long).map((x) => ({
-        ...x, order_id: 1, order_code: null, pos_order_code: null, raw_status: 'DELIVERED',
+        ...x, order_id: 1, order_code: null, pos_order_code: null, account_id: null, raw_status: 'DELIVERED',
         status_norm: 'delivered', sale_order_status: null, total_price: 1000, total_item: null,
         first_product_name: null, customer_name: null, customer_phone: null,
         created_time: '2026-08-01T00:00:00.000Z', confirmed_time: null,

@@ -63,6 +63,11 @@ export async function runSyncBatch(
       anySuccess = true
       upserted += r.upserted
       unmatched.push(...r.unmatched)
+      // Mig 103: warnings của success (vd cross-store account campaign khách)
+      // — KHÔNG đổi HTTP contract (vẫn 200), chỉ nổi lên log để vận hành thấy.
+      for (const w of r.warnings ?? []) {
+        logLines.push(`[sync-kpi-campaign] warning campaign=${c.id} (${label}): ${sanitizeOpsText(w)}`)
+      }
     }
   }
 

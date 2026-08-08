@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { activationBlockReason, resolveMetricInput } from '../lib/kpi/campaignConfig'
+import { activationBlockReason, resolveCampaignType, resolveMetricInput } from '../lib/kpi/campaignConfig'
 import type { AffiliateSyncHealth } from '../lib/affiliate/health'
 
 // P3-D unit gate — metric contract + activation gate (audit 23/07).
@@ -30,6 +30,48 @@ test.describe('kpi campaign metric contract @desktop', () => {
     const r = resolveMetricInput(true, { metric_offline: false, metric_affiliate: false })
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error).toContain('ít nhất một chỉ số')
+  })
+
+  // ── Mig 103: resolveCampaignType — loại chiến dịch khi tạo ────────────────
+  test('resolveCampaignType: default/gmv → đi ĐÚNG đường resolveMetricInput cũ (order_type=all)', () => {
+    expect(resolveCampaignType({ affiliate: false, customer: false }, {})).toEqual({
+      ok: true, metric_type: 'gmv', order_type: 'all', metric_offline: true, metric_affiliate: false,
+    })
+    expect(resolveCampaignType({ affiliate: true, customer: false }, { metric_type: 'gmv', metric_affiliate: true })).toEqual({
+      ok: true, metric_type: 'gmv', order_type: 'all', metric_offline: true, metric_affiliate: true,
+    })
+    // flag affiliate tắt + tick affiliate → vẫn bị resolveMetricInput chặn
+    const r = resolveCampaignType({ affiliate: false, customer: true }, { metric_affiliate: true })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('KPI_AFFILIATE_ENABLED')
+  })
+
+  test('resolveCampaignType: customer → contract cột CỐ ĐỊNH (offline=false/affiliate=true/order_type=online)', () => {
+    expect(resolveCampaignType({ affiliate: false, customer: true }, { metric_type: 'affiliate_customer_count' })).toEqual({
+      ok: true, metric_type: 'affiliate_customer_count', order_type: 'online',
+      metric_offline: false, metric_affiliate: true,
+    })
+    // input metric flags bị BỎ QUA — contract cố định, client không đổi được
+    expect(resolveCampaignType({ affiliate: true, customer: true },
+      { metric_type: 'affiliate_customer_count', metric_offline: true, metric_affiliate: false })).toEqual({
+      ok: true, metric_type: 'affiliate_customer_count', order_type: 'online',
+      metric_offline: false, metric_affiliate: true,
+    })
+  })
+
+  test('resolveCampaignType: FLAG interplay 2 chiều — customer KHÔNG cần KPI_AFFILIATE_ENABLED; customer flag tắt → từ chối', () => {
+    // affiliate flag TẮT vẫn tạo được customer (2 flag độc lập)
+    expect(resolveCampaignType({ affiliate: false, customer: true },
+      { metric_type: 'affiliate_customer_count' }).ok).toBe(true)
+    const r = resolveCampaignType({ affiliate: true, customer: false }, { metric_type: 'affiliate_customer_count' })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('KPI_AFFILIATE_CUSTOMER_ENABLED')
+  })
+
+  test('resolveCampaignType: metric_type lạ → từ chối', () => {
+    const r = resolveCampaignType({ affiliate: true, customer: true }, { metric_type: 'bogus' })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('không hợp lệ')
   })
 
   test('update merge với current: field không gửi giữ giá trị cũ', () => {

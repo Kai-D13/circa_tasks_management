@@ -30,12 +30,16 @@ export const RESULT_COL_PX = {
   tier: 176,
 } as const
 
-export function resultTableColumns(maxTierCount: number, showBreakdown: boolean): ResultTableColumn[] {
+// Mig 103: metricType đổi DUY NHẤT label cột actual ('Actual GMV' → 'Số
+// khách'); campaign GMV giữ mảng label BẤT BIẾN (test khóa); width contract
+// không đổi (số khách ngắn hơn tiền — min-width cũ vẫn đúng).
+export function resultTableColumns(maxTierCount: number, showBreakdown: boolean, metricType?: string): ResultTableColumn[] {
+  const actualLabel = metricType === 'affiliate_customer_count' ? 'Số khách' : 'Actual GMV'
   return [
     { key: 'store', label: 'Cửa hàng', minPx: RESULT_COL_PX.store, align: 'left', scope: 'all' },
     { key: 'group', label: 'Phân loại', minPx: RESULT_COL_PX.group, align: 'left', scope: 'all' },
     { key: 'kpiTarget', label: 'KPI target', minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' },
-    { key: 'actual', label: 'Actual GMV', minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' },
+    { key: 'actual', label: actualLabel, minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' },
     ...(showBreakdown ? [
       { key: 'offline', label: 'GMV Offline', minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' } as const,
       { key: 'affiliate', label: 'GMV Affiliate', minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' } as const,

@@ -6,12 +6,15 @@
 
 import type { AffiliateSyncHealth } from '@/lib/affiliate/health'
 import {
-  buildCampaignSnapshot, effectiveEndISO, monthChunks, nextDayISO, vnDayRange, vnTodayISO,
+  buildCampaignSnapshot, buildCustomerSnapshot, effectiveEndISO, monthChunks, nextDayISO,
+  vnDayRange, vnTodayISO,
   type ActualRowPayload, type DailyRowPayload, type TargetRow,
 } from '@/lib/kpi/engine'
 
 export type SyncCampaignResult =
-  | { status: 'success'; campaignId: string; upserted: number; dailyRows: number; unmatched: string[] }
+  // warnings (mig 103): bất thường KHÔNG chặn ghi (vd cross-store account) —
+  // syncBatch nối vào logLines; manual sync bỏ qua.
+  | { status: 'success'; campaignId: string; upserted: number; dailyRows: number; unmatched: string[]; warnings?: string[] }
   | { status: 'snapshot_preserved'; campaignId: string; reason: string }
   | { status: 'failed'; campaignId: string; error: string }
 
@@ -19,12 +22,24 @@ export interface CampaignConfig {
   id: string
   start_date: string
   end_date: string
+  // Mig 103: DISCRIMINATOR — branch TRƯỚC khi nhìn 2 boolean (customer
+  // campaign có metric_affiliate=true theo contract cột, không được để nhánh
+  // GMV-affiliate vận hành nhầm). Giá trị lạ → failed (fail-closed, không đoán).
+  metric_type: string
   metric_offline: boolean
   metric_affiliate: boolean
 }
 
 export interface StoreRow { id: string; code: string | null; store_type: string; is_active: boolean }
 export interface AffiliateAggRow { store_id: string; vn_date: string; gmv: number }
+// Kết quả rpc_aggregate_affiliate_customers (jsonb — mig 103): daily rows +
+// tổng đối chiếu + diagnostics cross-store trong CÙNG MVCC snapshot.
+export interface CustomerAggResult {
+  rows: { store_id: string; vn_date: string; customer_count: number }[]
+  total_customers: number
+  cross_store_account_count: number
+  cross_store_sample: number[]
+}
 type DbResult<T> = { data: T | null; error: { message: string } | null }
 
 export interface SyncCampaignDeps {
@@ -33,6 +48,9 @@ export interface SyncCampaignDeps {
   loadStores(storeIds: string[]): Promise<DbResult<StoreRow[]>>
   getAffiliateHealth(storeIds: string[]): Promise<AffiliateSyncHealth>
   aggregateAffiliate(storeIds: string[], from: string, to: string): Promise<DbResult<AffiliateAggRow[]>>
+  // Mig 103: aggregate SỐ KHÁCH — campaign customer KHÔNG đụng BQ deps
+  // (test đếm 0 call).
+  aggregateAffiliateCustomers(storeIds: string[], from: string, to: string): Promise<DbResult<CustomerAggResult>>
   loadBqServiceAccount(): unknown | null
   runBqChunk(sa: unknown, chunkStart: string, chunkEnd: string): Promise<Record<string, unknown>[]>
   replaceActuals(campaignId: string, daily: DailyRowPayload[], actuals: ActualRowPayload[]): Promise<DbResult<number>>
@@ -40,6 +58,9 @@ export interface SyncCampaignDeps {
   // r1.2 (audit P1 flag boundary): trạng thái KPI_AFFILIATE_ENABLED — campaign
   // có metric_affiliate khi flag TẮT không được vận hành (kể cả hybrid).
   isAffiliateFeatureEnabled(): boolean
+  // Mig 103: KPI_AFFILIATE_CUSTOMER_ENABLED — gate DUY NHẤT của campaign
+  // customer, ĐỘC LẬP với isAffiliateFeatureEnabled (test khóa 2 chiều).
+  isAffiliateCustomerFeatureEnabled(): boolean
 }
 
 export async function syncCampaignWithDeps(
@@ -53,6 +74,18 @@ export async function syncCampaignWithDeps(
   const { data: c, error: cErr } = await deps.loadCampaign(campaignId)
   if (cErr) return failed(`Không đọc được campaign: ${cErr.message}`)
   if (!c) return failed('Campaign không tồn tại')
+
+  // ── Mig 103: DISCRIMINATOR metric_type — branch TRƯỚC mọi check boolean.
+  // Giá trị lạ → failed (engine version cũ hơn DB / data hỏng — không đoán);
+  // customer → flow riêng, KHÔNG chạm một dòng nào của flow GMV bên dưới.
+  if (c.metric_type !== 'gmv' && c.metric_type !== 'affiliate_customer_count') {
+    return failed(`metric_type không hỗ trợ: ${c.metric_type} — engine từ chối vận hành (fail-closed)`)
+  }
+  if (c.metric_type === 'affiliate_customer_count') {
+    return syncCustomerCampaign(campaignId, c, deps, failed, preserved)
+  }
+
+  // ── Từ đây: metric_type='gmv' — flow production GIỮ NGUYÊN TỪNG DÒNG ──
   const metricOffline = c.metric_offline === true
   const metricAffiliate = c.metric_affiliate === true
   // r1.1 (audit P2): DB đã CHECK ≥1 metric nhưng orchestrator vẫn fail-closed —
@@ -217,5 +250,111 @@ export async function syncCampaignWithDeps(
     upserted: count ?? actuals.length,
     dailyRows: daily.length,
     unmatched: unmatchedPos,
+  }
+}
+
+// ── Mig 103: flow campaign "Số khách Affiliate" — TÁCH RIÊNG hoàn toàn ──────
+// Mirror đúng bộ guard của flow GMV (flag → chưa-đến-kỳ → targets → OS-active
+// → health before → aggregate → health after + runId) nhưng nguồn DUY NHẤT =
+// rpc_aggregate_affiliate_customers; TUYỆT ĐỐI không đụng BQ deps (test đếm
+// 0 call). Nguồn stale/identity thiếu/aggregate lỗi → snapshot_preserved.
+async function syncCustomerCampaign(
+  campaignId: string,
+  c: CampaignConfig,
+  deps: SyncCampaignDeps,
+  failed: (error: string) => SyncCampaignResult,
+  preserved: (reason: string) => SyncCampaignResult,
+): Promise<SyncCampaignResult> {
+  // Gate DUY NHẤT = KPI_AFFILIATE_CUSTOMER_ENABLED (KHÔNG đi qua
+  // isAffiliateFeatureEnabled — flag đó gate chỉ số GMV Affiliate; độc lập).
+  if (!deps.isAffiliateCustomerFeatureEnabled()) {
+    return preserved('KPI_AFFILIATE_CUSTOMER_ENABLED đang tắt — campaign Số khách không vận hành, giữ snapshot cũ')
+  }
+  // Contract cột (CHECK chk_kpi_campaigns_customer_contract trong DB — engine
+  // vẫn fail-closed, không dựng payload ở trạng thái lệch).
+  if (c.metric_offline !== false || c.metric_affiliate !== true) {
+    return failed('Campaign Số khách sai contract cột (cần metric_offline=false + metric_affiliate=true) — kiểm tra dữ liệu')
+  }
+
+  const todayVn = vnTodayISO(deps.nowMs())
+  if (c.start_date > todayVn) {
+    return preserved(`campaign chưa đến kỳ (bắt đầu ${c.start_date}, hôm nay ${todayVn}) — không gọi nguồn dữ liệu, giữ snapshot`)
+  }
+
+  const { data: targets, error: tErr } = await deps.loadTargets(campaignId)
+  if (tErr) return failed(`Không đọc được targets: ${tErr.message}`)
+  if (!targets || targets.length === 0) {
+    return preserved('campaign chưa có target — không ghi dữ liệu')
+  }
+  const storeIds = targets.map((t) => t.store_id)
+
+  const { data: stores, error: sErr } = await deps.loadStores(storeIds)
+  if (sErr) return failed(`Không đọc được stores để validate targets: ${sErr.message}`)
+  const byId = new Map((stores ?? []).map((s) => [s.id, s]))
+  const badTargets = targets.filter((t) => {
+    const s = byId.get(t.store_id)
+    return !s || s.store_type !== 'os' || s.is_active !== true
+  })
+  if (badTargets.length > 0) {
+    return preserved(`target không phải OS store active: ${badTargets.map((t) => t.pos_code ?? t.store_id).join(', ')} — không aggregate số khách`)
+  }
+
+  // DOUBLE-CHECK health (mirror r1.1 flow GMV): before READY (runId=A) →
+  // aggregate → after READY & runId==A; lệch → giữ snapshot, không ghi.
+  const healthBefore = await deps.getAffiliateHealth(storeIds)
+  if (!healthBefore.ready) return preserved(`nguồn affiliate chưa sẵn sàng: ${healthBefore.reason}`)
+  const affiliateSyncedAt = healthBefore.lastSuccessAt
+
+  const effEnd = effectiveEndISO(c.end_date, todayVn)
+  const rangeValid = c.start_date <= effEnd
+  const customerByStore = new Map<string, Map<string, number>>()
+  const warnings: string[] = []
+  if (rangeValid) {
+    const range = vnDayRange(c.start_date, effEnd)
+    const { data: agg, error: aggErr } = await deps.aggregateAffiliateCustomers(storeIds, range.from, range.to)
+    if (aggErr) return preserved(`rpc_aggregate_affiliate_customers lỗi: ${aggErr.message}`)
+    if (!agg) return preserved('rpc_aggregate_affiliate_customers trả rỗng — giữ snapshot cũ')
+
+    // Đối chiếu nội bộ CÙNG snapshot: SUM(daily) phải = total (RPC dedup
+    // DISTINCT ON đảm bảo bằng nhau — lệch nghĩa là nguồn/RPC tự mâu thuẫn).
+    let sum = 0
+    for (const r of agg.rows) {
+      sum += r.customer_count
+      if (!customerByStore.has(r.store_id)) customerByStore.set(r.store_id, new Map())
+      customerByStore.get(r.store_id)!.set(r.vn_date, r.customer_count)
+    }
+    if (sum !== agg.total_customers) {
+      return preserved(`aggregate số khách tự mâu thuẫn: SUM(daily)=${sum} <> total_customers=${agg.total_customers} — giữ snapshot cũ`)
+    }
+    if (agg.cross_store_account_count > 0) {
+      // Bất thường dữ liệu (binding lẽ ra không đổi store) — KHÔNG chặn ghi:
+      // RPC đã dedup 1 account = 1 khách tại đơn sớm nhất; chỉ cảnh báo.
+      warnings.push(`cross_store_customer_count=${agg.cross_store_account_count} (account xuất hiện dưới >1 store — đã dedup theo đơn DELIVERED sớm nhất; sample: ${agg.cross_store_sample.join(', ')})`)
+    }
+
+    const healthAfter = await deps.getAffiliateHealth(storeIds)
+    if (!healthAfter.ready) {
+      return preserved(`nguồn affiliate đổi trạng thái trong lúc aggregate: ${healthAfter.reason}`)
+    }
+    if (healthAfter.runId !== healthBefore.runId) {
+      return preserved(`sync affiliate mới bắt đầu trong lúc aggregate (runId ${healthBefore.runId} → ${healthAfter.runId}) — dữ liệu vừa đọc có thể trộn 2 phiên, thử lại lượt sau`)
+    }
+  }
+
+  const snapshotTs = new Date(deps.nowMs()).toISOString()
+  const { daily, actuals } = buildCustomerSnapshot({
+    campaignId, targets, customerByStore, snapshotTs, affiliateSyncedAt,
+  })
+
+  const { data: count, error: rpcErr } = await deps.replaceActuals(campaignId, daily, actuals)
+  if (rpcErr) return failed(`Ghi actuals lỗi: ${rpcErr.message}`)
+
+  return {
+    status: 'success',
+    campaignId,
+    upserted: count ?? actuals.length,
+    dailyRows: daily.length,
+    unmatched: [],
+    ...(warnings.length > 0 ? { warnings } : {}),
   }
 }

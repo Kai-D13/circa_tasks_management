@@ -43,6 +43,9 @@ export interface ResultCampaign {
   status: string
   metric_offline: boolean
   metric_affiliate: boolean
+  // Mig 103: pass-through cho UI/export chọn presentation (số học model KHÔNG
+  // phụ thuộc — thuần số); thiếu (caller cũ) = gmv.
+  metric_type?: string
 }
 
 // ── Tier Progress (contract 28/07 — desktop ≥1024px) ────────────────────────

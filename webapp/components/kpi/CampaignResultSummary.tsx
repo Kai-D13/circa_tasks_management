@@ -2,6 +2,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import type { CampaignView } from '@/components/kpi/CampaignKpiView'
 import { cn } from '@/lib/utils'
 import { campaignPerformance, performanceTone } from '@/lib/kpi/performance'
+import { metricPresentation } from '@/lib/kpi/campaignDisplay'
 import { Target, TrendingUp, Percent, Wallet, Award, CalendarDays, Gauge, ClipboardCheck, Store as StoreIcon, Link2 as LinkIcon, type LucideIcon } from 'lucide-react'
 
 // Store Manager "Kết quả" management block (r3): the same 6-card summary idiom
@@ -9,9 +10,12 @@ import { Target, TrendingUp, Percent, Wallet, Award, CalendarDays, Gauge, Clipbo
 // store (one actual row). Read-only — SM has no config access. Reuses the
 // already-fetched selected CampaignView, so no extra query.
 
-const vnd = (n: number) => `${new Intl.NumberFormat('vi-VN').format(Math.round(n))}₫`
-
 export function CampaignResultSummary({ campaign, todayISO }: { campaign: CampaignView; todayISO: string }) {
+  // Mig 103: format/label qua metricPresentation — gmv BYTE-EQUAL vnd cũ.
+  const pres = metricPresentation(campaign.metric_type)
+  const vnd = (n: number) => pres.value(n)
+  // Commission LUÔN tiền (kể cả campaign Số khách).
+  const money = (n: number) => metricPresentation('gmv').value(n)
   const target = campaign.kpi_target
   const synced = campaign.actual_value !== null
   const actual = campaign.actual_value ?? 0
@@ -26,7 +30,7 @@ export function CampaignResultSummary({ campaign, todayISO }: { campaign: Campai
 
   const cards: { label: string; value: string; icon: LucideIcon; tile: string; valueCls?: string; bar?: boolean }[] = [
     { label: 'KPI target', value: vnd(target), icon: Target, tile: 'bg-primary/10 text-primary' },
-    { label: 'Actual GMV', value: synced ? vnd(actual) : '—', icon: TrendingUp,
+    { label: pres.actualColumnLabel, value: synced ? vnd(actual) : '—', icon: TrendingUp,
       tile: synced && actual > 0 ? 'bg-status-success-bg text-status-success' : 'bg-muted text-muted-foreground' },
     // P3-E: breakdown 2 nguồn — CHỈ khi campaign bật cả 2 chỉ số (1 metric giữ
     // layout cũ nguyên vẹn).
@@ -39,7 +43,7 @@ export function CampaignResultSummary({ campaign, todayISO }: { campaign: Campai
     { label: 'Hoàn thành', value: synced ? `${pct.toFixed(1)}%` : '—', icon: Percent,
       tile: 'bg-primary/10 text-primary', bar: true,
       valueCls: !synced ? undefined : pct >= 100 ? 'text-status-success' : 'text-primary' },
-    { label: 'Commission Store dự kiến', value: synced ? vnd(pool) : '—', icon: Wallet,
+    { label: 'Commission Store dự kiến', value: synced ? money(pool) : '—', icon: Wallet,
       tile: synced && pool > 0 ? 'bg-status-success-bg text-status-success' : 'bg-muted text-muted-foreground',
       valueCls: synced && pool > 0 ? 'text-status-success' : undefined },
     { label: 'Bậc đạt', value: reached != null ? `Bậc ${reached}/${tierCount}` : (synced ? 'Chưa đạt' : '—'), icon: Award,

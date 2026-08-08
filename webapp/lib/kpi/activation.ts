@@ -12,6 +12,11 @@ export interface ActivationCampaign {
   id: string
   status: string
   updated_at: string
+  // Mig 103: discriminator — campaign Số khách gate bằng flag customer RIÊNG;
+  // các check OS-active + health dùng chung nhánh metric_affiliate (contract
+  // cột customer ép metric_affiliate=true). Overlap check nằm trong RPC 103
+  // (+ EXCLUDE constraint backstop) — app không lặp lại.
+  metric_type: string
   metric_affiliate: boolean
 }
 export interface ActivationTarget { store_id: string; pos_code: string | null }
@@ -32,7 +37,7 @@ export type ActivationEvaluation =
 export async function evaluateActivation(
   deps: ActivationDeps,
   campaignId: string,
-  affiliateFlagEnabled: boolean,
+  flags: { affiliate: boolean; customer: boolean },
 ): Promise<ActivationEvaluation> {
   const fail = (error: string): ActivationEvaluation => ({ ok: false, error })
 
@@ -41,11 +46,20 @@ export async function evaluateActivation(
   if (!c) return fail('Không tìm thấy chiến dịch')
   if (c.status === 'active') return fail('Chiến dịch đang chạy')
   if (c.status !== 'draft' && c.status !== 'paused') return fail('Chiến dịch đã kết thúc')
+  // Mig 103: campaign Số khách — gate flag customer, dừng sớm như nhánh dưới;
+  // metric_type lạ → fail-closed (app cũ hơn DB, không đoán).
+  if (c.metric_type !== 'gmv' && c.metric_type !== 'affiliate_customer_count') {
+    return fail(`Loại chiến dịch không hỗ trợ: ${c.metric_type}`)
+  }
+  if (c.metric_type === 'affiliate_customer_count' && !flags.customer) {
+    return fail('Chiến dịch Số khách Affiliate đang tắt trên hệ thống (KPI_AFFILIATE_CUSTOMER_ENABLED) — không thể kích hoạt')
+  }
   // r1.2 (audit P1 flag boundary): flag tắt → KHÔNG kích hoạt campaign
   // affiliate — dừng ngay sau load campaign, không load targets/stores/health.
   // (Pause campaign affiliate đang active KHÔNG đi qua hàm này — vẫn pause
-  // được để xử lý sự cố.)
-  if (c.metric_affiliate && !affiliateFlagEnabled) {
+  // được để xử lý sự cố.) Mig 103: CHỈ áp cho campaign GMV — customer có
+  // metric_affiliate=true theo contract cột nhưng gate bằng flag riêng ở trên.
+  if (c.metric_type === 'gmv' && c.metric_affiliate && !flags.affiliate) {
     return fail('Chỉ số GMV Affiliate đang tắt trên hệ thống (KPI_AFFILIATE_ENABLED) — không thể kích hoạt chiến dịch affiliate')
   }
 

@@ -183,4 +183,19 @@ test.describe('kpi sync batch contract @desktop', () => {
     const okPlan = await safeManualSync(async () => ok('c-1', 4), 'c-1')
     expect(okPlan.kind).toBe('success')
   })
+
+  // Mig 103: warnings của success (cross-store campaign khách) — HTTP contract
+  // KHÔNG đổi (vẫn 200), chỉ nổi lên logLines đã sanitize.
+  test('success có warnings → vẫn HTTP 200, warning vào logLines (không vào preserved/errors)', async () => {
+    const out = await runSyncBatch([{ id: 'c-1', name: 'Khách T8' }], async (id) => ({
+      ...ok(id), warnings: ['cross_store_customer_count=1 (sample: 900001)'],
+    }))
+    expect(out.httpStatus).toBe(200)
+    expect(out.body.ok).toBe(true)
+    expect(out.body.preserved).toEqual([])
+    expect(out.body.errors).toEqual([])
+    const line = out.logLines.find((l) => l.includes('warning'))
+    expect(line).toContain('cross_store_customer_count=1')
+    expect(line).toContain('c-1')
+  })
 })

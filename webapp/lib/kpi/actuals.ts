@@ -2,10 +2,10 @@ import 'server-only'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { campaignDailyQuery, loadServiceAccount, runBigQuery } from '@/lib/targets/bigquery'
 import { getAffiliateSyncHealth, supabaseAffiliateHealthDb } from '@/lib/affiliate/health'
-import { isKpiAffiliateEnabled } from '@/lib/kpi/flags'
+import { isKpiAffiliateEnabled, isKpiAffiliateCustomerEnabled } from '@/lib/kpi/flags'
 import {
   syncCampaignWithDeps,
-  type SyncCampaignDeps, type SyncCampaignResult,
+  type CustomerAggResult, type SyncCampaignDeps, type SyncCampaignResult,
 } from '@/lib/kpi/syncCampaignCore'
 import type { TargetRow } from '@/lib/kpi/engine'
 
@@ -24,7 +24,9 @@ function realDeps(): SyncCampaignDeps {
       // không recompute số liệu cho campaign archived.
       const { data, error } = await supabaseAdmin
         .from('kpi_campaigns')
-        .select('id, start_date, end_date, metric_offline, metric_affiliate')
+        // Mig 103: metric_type = discriminator — orchestrator branch trên nó
+        // TRƯỚC 2 boolean.
+        .select('id, start_date, end_date, metric_type, metric_offline, metric_affiliate')
         .eq('id', id)
         .is('archived_at', null)
         .maybeSingle()
@@ -56,6 +58,14 @@ function realDeps(): SyncCampaignDeps {
         .rpc('rpc_aggregate_affiliate_gmv', { p_store_ids: storeIds, p_from: from, p_to: to })
       return { data, error }
     },
+    // Mig 103: RPC trả jsonb (rows + total + cross-store diagnostics cùng 1
+    // MVCC snapshot); fail-closed (thiếu completed_time/account_id) → error →
+    // orchestrator preserve.
+    aggregateAffiliateCustomers: async (storeIds, from, to) => {
+      const { data, error } = await supabaseAdmin
+        .rpc('rpc_aggregate_affiliate_customers', { p_store_ids: storeIds, p_from: from, p_to: to })
+      return { data: data as CustomerAggResult | null, error }
+    },
     loadBqServiceAccount: () => loadServiceAccount(),
     // ⚠ Contract 30/07 + BQ-V2 05/08: campaignDailyQuery đọc bảng
     // schema V2 — bảng buymed_tech (date_type='DAY', SUM net_revenue) nhưng alias giữ
@@ -74,6 +84,7 @@ function realDeps(): SyncCampaignDeps {
     },
     nowMs: () => Date.now(),
     isAffiliateFeatureEnabled: () => isKpiAffiliateEnabled(),
+    isAffiliateCustomerFeatureEnabled: () => isKpiAffiliateCustomerEnabled(),
   }
 }
 

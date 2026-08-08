@@ -20,3 +20,13 @@ export function isKpiCampaignTestMode(): boolean {
 export function isKpiAffiliateEnabled(): boolean {
   return process.env.KPI_AFFILIATE_ENABLED === 'true'
 }
+
+// Metric "Số khách Affiliate" (metric_type='affiliate_customer_count', mig
+// 103 — handoff 06/08). OFF = option ẩn khỏi wizard + engine preserve + tạo
+// campaign customer bị từ chối → deploy schema/code TRƯỚC, bật SAU khi
+// backfill account_id + đối soát pass. GATE DUY NHẤT của campaign customer —
+// ĐỘC LẬP với KPI_AFFILIATE_ENABLED (flag đó chỉ gate chỉ số GMV Affiliate
+// trong campaign GMV; test khóa 2 chiều). Server-only, truyền prop như trên.
+export function isKpiAffiliateCustomerEnabled(): boolean {
+  return process.env.KPI_AFFILIATE_CUSTOMER_ENABLED === 'true'
+}

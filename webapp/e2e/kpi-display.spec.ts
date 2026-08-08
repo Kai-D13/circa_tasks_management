@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
-import { breakdownModel, campaignFootnote, metricEditorState } from '../lib/kpi/campaignDisplay'
-import { affiliateDataStatus, buildCampaignExportRows, type ExportActual } from '../lib/kpi/exportRows'
+import { breakdownModel, campaignFootnote, metricEditorState, metricPresentation } from '../lib/kpi/campaignDisplay'
+import { affiliateDataStatus, buildCampaignExportRows, buildCustomerCampaignExportRows, type ExportActual } from '../lib/kpi/exportRows'
 
 // P3-E/F r1 unit gate (audit P2#3) — khóa contract render breakdown, footnote,
 // trạng thái metric editor và cột export.
@@ -96,5 +96,92 @@ test.describe('kpi display contract @desktop', () => {
     expect(rows[0]['Actual GMV']).toBe(400)
     expect(rows[0]['Affiliate Data Status']).toBe('Không áp dụng')
     expect(rows[0]['Affiliate Synced At']).toBe('')
+  })
+})
+
+// ── Mig 103: presentation + footnote + editor + export customer ─────────────
+test.describe('kpi display customer metric (mig 103) @desktop', () => {
+  test('metricPresentation(gmv): value BYTE-EQUAL vnd cũ; compact BYTE-EQUAL compactVnd cũ (kể cả .0 giữ nguyên)', () => {
+    const p = metricPresentation('gmv')
+    const oldVnd = (n: number) => `${new Intl.NumberFormat('vi-VN').format(Math.round(n))}₫`
+    const oldCompact = (v: number) =>
+      v >= 1_000_000_000 ? `${(v / 1_000_000_000).toFixed(1)}tỷ`
+      : v >= 1_000_000 ? `${Math.round(v / 1_000_000)}tr`
+      : v >= 1_000 ? `${Math.round(v / 1_000)}k`
+      : `${Math.round(v)}`
+    for (const n of [0, 1, 999, 1_000, 126_000.5, 5_500_000, 450_000_000, 1_000_000_000, 1_250_000_000]) {
+      expect(p.value(n)).toBe(oldVnd(n))
+      expect(p.compact(n)).toBe(oldCompact(n))
+    }
+    expect(p.value(null)).toBe('—')
+    expect(p.value(undefined)).toBe('—')
+    expect(p.zero).toBe('0₫')
+    expect(p.actualColumnLabel).toBe('Actual GMV')
+  })
+
+  test('metricPresentation(customer): đơn vị khách; default gmv cho giá trị lạ/thiếu (an toàn hiển thị)', () => {
+    const p = metricPresentation('affiliate_customer_count')
+    expect(p.value(1234)).toBe('1.234 khách')
+    expect(p.value(0)).toBe('0 khách')
+    expect(p.value(null)).toBe('—')
+    expect(p.zero).toBe('0 khách')
+    expect(p.targetLabel).toBe('Mục tiêu số khách')
+    expect(p.todayLabel).toBe('Khách hôm nay')
+    expect(p.actualColumnLabel).toBe('Số khách')
+    expect(metricPresentation(undefined).kind).toBe('gmv')
+    expect(metricPresentation('bogus').kind).toBe('gmv')
+  })
+
+  test('footnote customer: câu riêng mỗi-khách-1-lần; caller cũ (không metric_type) giữ câu cũ', () => {
+    expect(campaignFootnote({ metric_offline: false, metric_affiliate: true, metric_type: 'affiliate_customer_count' }))
+      .toContain('mỗi khách tính 1 lần')
+    expect(campaignFootnote({ metric_offline: true, metric_affiliate: false }))
+      .toBe('Nguồn: báo cáo BI · * Không bao gồm đơn online')
+  })
+
+  test('metricEditorState customer: khóa hẳn editor bất kể status/flag', () => {
+    for (const status of ['draft', 'paused', 'active', 'ended']) {
+      const st = metricEditorState({ status, affiliateEnabled: true, metricAffiliate: true, metricType: 'affiliate_customer_count' })
+      expect(st.editable).toBe(false)
+      expect(st.showAffiliateControl).toBe(false)
+    }
+    // gmv không đổi hành vi khi truyền metricType='gmv'
+    expect(metricEditorState({ status: 'draft', affiliateEnabled: true, metricAffiliate: false, metricType: 'gmv' }).editable).toBe(true)
+  })
+
+  test('EXPORT REGRESSION: mảng key GMV builder BẤT BIẾN (có Actual GMV — Power Query)', () => {
+    const rows = buildCampaignExportRows(
+      { name: 'C', start_date: '2026-08-01', end_date: '2026-08-31', metric_offline: true, metric_affiliate: false },
+      [{ store_id: 's-1', pos_code: 'POS0001', kpi_target: 1000, store_kpi_group: 'G', stores: { name: 'S1' } }],
+      [], '2026-08-06', (iso) => iso,
+    )
+    expect(Object.keys(rows[0])).toEqual([
+      'Chiến dịch', 'Từ ngày', 'Đến ngày', 'POS', 'Cửa hàng', 'Phân loại', 'KPI target',
+      'Actual GMV', 'GMV Offline', 'GMV Affiliate', 'Run rate %', 'Performance %',
+      'Còn thiếu', 'Bậc đạt', 'Commission pool', 'Offline Synced At', 'Affiliate Synced At',
+      'Affiliate Data Status', 'Đồng bộ lúc',
+    ])
+  })
+
+  test('EXPORT customer: builder riêng — cột đơn vị khách, giá trị đúng', () => {
+    const rows = buildCustomerCampaignExportRows(
+      { name: 'Khách T8', start_date: '2026-08-01', end_date: '2026-08-31', metric_offline: false, metric_affiliate: true },
+      [{ store_id: 's-1', pos_code: 'POS0001', kpi_target: 100, store_kpi_group: 'G', stores: { name: 'S1' } }],
+      [{
+        store_id: 's-1', actual_value: 37, run_rate: 37, remaining_target: 63,
+        achieved_tier_order: null, store_commission_pool: null, synced_at: '2026-08-06T10:00:00Z',
+        actual_offline: 0, actual_affiliate: 0, offline_synced_at: null,
+        affiliate_synced_at: '2026-08-06T09:00:00Z', actual_customer_count: 37,
+      }], '2026-08-06', (iso) => iso,
+    )
+    expect(Object.keys(rows[0])).toEqual([
+      'Chiến dịch', 'Loại chỉ số', 'Từ ngày', 'Đến ngày', 'POS', 'Cửa hàng', 'Phân loại',
+      'KPI target (khách)', 'Số khách Affiliate', 'Run rate %', 'Performance %',
+      'Còn thiếu (khách)', 'Bậc đạt', 'Commission pool', 'Affiliate Synced At', 'Đồng bộ lúc',
+    ])
+    expect(rows[0]['KPI target (khách)']).toBe(100)
+    expect(rows[0]['Số khách Affiliate']).toBe(37)
+    expect(rows[0]['Còn thiếu (khách)']).toBe(63)
+    expect(rows[0]['Loại chỉ số']).toBe('Số khách Affiliate')
   })
 })

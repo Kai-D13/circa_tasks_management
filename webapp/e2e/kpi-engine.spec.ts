@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test'
 import {
-  buildCampaignSnapshot, effectiveEndISO, monthChunks, nextDayISO, vnDayRange, vnTodayISO,
+  buildCampaignSnapshot, buildCustomerSnapshot, computeTierAchievement,
+  effectiveEndISO, monthChunks, nextDayISO, vnDayRange, vnTodayISO,
   type SnapshotInput, type TargetRow,
 } from '../lib/kpi/engine'
 
@@ -147,5 +148,69 @@ test.describe('kpi engine hai nguồn @desktop', () => {
     for (const a of actuals) {
       expect(a.actual_value).toBeCloseTo(a.actual_offline + a.actual_affiliate, 9)
     }
+  })
+
+  // ── REGRESSION VÀNG mig 103: payload GMV KHÔNG chứa key customer — từng
+  // byte giữ nguyên (RPC coalesce 0; engine cũ/mới cùng shape với DB).
+  test('REGRESSION 103: buildCampaignSnapshot (GMV) KHÔNG set actual_customer_count/affiliate_customer_count', () => {
+    const { daily, actuals } = buildCampaignSnapshot(base({
+      offlineByPos: new Map([['POS0001', m([['2026-07-01', 100]])]]),
+    }))
+    for (const d of daily) expect('affiliate_customer_count' in d).toBe(false)
+    for (const a of actuals) expect('actual_customer_count' in a).toBe(false)
+  })
+})
+
+// ── Mig 103: metric "Số khách Affiliate" — builder riêng + tier math chung ──
+test.describe('kpi engine customer snapshot (mig 103) @desktop', () => {
+  test('computeTierAchievement: trích thuần từ buildCampaignSnapshot — cùng số học (khóa refactor)', () => {
+    const tiers = T().tiers
+    expect(computeTierAchievement(1000, 200, tiers)).toEqual({
+      runRate: 20, remainingTarget: 800, achievedTierOrder: 1, commissionPool: 111,
+    })
+    expect(computeTierAchievement(1000, 501, tiers).achievedTierOrder).toBe(2)
+    expect(computeTierAchievement(0, 100, tiers)).toEqual({
+      runRate: null, remainingTarget: 0, achievedTierOrder: null, commissionPool: null,
+    })
+    expect(computeTierAchievement(1000, 0, tiers).achievedTierOrder).toBeNull()
+  })
+
+  test('buildCustomerSnapshot: value=count=Σdaily; offline/affiliate=0; daily gmv=0; tier trên SỐ KHÁCH', () => {
+    const { daily, actuals } = buildCustomerSnapshot({
+      campaignId: 'camp-1',
+      targets: [T({ kpi_target: 10 })],
+      customerByStore: new Map([['store-a', m([['2026-07-05', 3], ['2026-07-06', 1]])]]),
+      snapshotTs: '2026-07-23T10:00:00.000Z',
+      affiliateSyncedAt: '2026-07-23T09:00:00.000Z',
+    })
+    expect(daily).toEqual([
+      { campaign_id: 'camp-1', store_id: 'store-a', date: '2026-07-05', gmv: 0, gmv_affiliate: 0, affiliate_customer_count: 3, synced_at: '2026-07-23T10:00:00.000Z' },
+      { campaign_id: 'camp-1', store_id: 'store-a', date: '2026-07-06', gmv: 0, gmv_affiliate: 0, affiliate_customer_count: 1, synced_at: '2026-07-23T10:00:00.000Z' },
+    ])
+    expect(actuals).toHaveLength(1)
+    const a = actuals[0]
+    expect(a.actual_value).toBe(4)
+    expect(a.actual_customer_count).toBe(4)
+    expect(a.actual_offline).toBe(0)
+    expect(a.actual_affiliate).toBe(0)
+    expect(a.run_rate).toBe(40)              // 4/10 khách
+    expect(a.remaining_target).toBe(6)       // còn thiếu 6 khách
+    expect(a.achieved_tier_order).toBe(1)    // ≥20%
+    expect(a.store_commission_pool).toBe(111)
+    expect(a.raw_row_count).toBe(2)
+    expect(a.offline_synced_at).toBeNull()
+    expect(a.affiliate_synced_at).toBe('2026-07-23T09:00:00.000Z')
+  })
+
+  test('buildCustomerSnapshot: store không có khách → row aggregate 0, không daily, tier null', () => {
+    const { daily, actuals } = buildCustomerSnapshot({
+      campaignId: 'camp-1', targets: [T({ kpi_target: 10 })],
+      customerByStore: new Map(), snapshotTs: '2026-07-23T10:00:00.000Z', affiliateSyncedAt: null,
+    })
+    expect(daily).toEqual([])
+    expect(actuals[0].actual_value).toBe(0)
+    expect(actuals[0].actual_customer_count).toBe(0)
+    expect(actuals[0].achieved_tier_order).toBeNull()
+    expect(actuals[0].remaining_target).toBe(10)
   })
 })

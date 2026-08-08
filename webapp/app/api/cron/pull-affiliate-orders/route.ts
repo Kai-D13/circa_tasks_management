@@ -119,6 +119,20 @@ export async function GET(request: NextRequest) {
     // aggregation fail-closed (rpc_aggregate_affiliate_gmv RAISE) — báo sớm ở
     // đây để vận hành thấy TRƯỚC khi KPI đứng snapshot. Ingest vẫn lưu đủ.
     const deliveredMissingCompleted = valid.filter((r) => r.status_norm === 'delivered' && r.completed_time === null)
+    // Canary identity (mig 103 — metric affiliate_customer_count): DELIVERED
+    // thiếu account_id sẽ làm rpc_aggregate_affiliate_customers fail-closed
+    // (campaign KHÁCH giữ snapshot cũ) — báo sớm như completed_time. KHÔNG
+    // vào health gate chung (không đóng băng oan campaign GMV/overview).
+    // r1.3.5 (audit P2 vận hành): TÁCH 2 TẦNG — campaign khách chỉ target OS
+    // store, nên CHỈ đơn thuộc mapping OS active là BLOCKING (status warning);
+    // đơn FS/partner/unmatched thiếu account = DIAGNOSTIC thuần (field + log
+    // info, KHÔNG đổi status — 22 đơn partner lịch sử không tạo cảnh báo sai).
+    const deliveredMissingAccount = valid.filter((r) => r.status_norm === 'delivered' && r.account_id === null)
+    const osCodes = new Set(ensured.mappings
+      .filter((m) => m.partner_type === 'os' && m.is_active && m.store_id)
+      .map((m) => m.partner_code))
+    const missingAccountOs = deliveredMissingAccount.filter((r) => osCodes.has(r.partner_code))
+    const missingAccountNonOs = deliveredMissingAccount.filter((r) => !osCodes.has(r.partner_code))
     return {
       rawFetched: rawDocs.length, duplicates, unique, resolved, rejected, report, unknownStatuses,
       newFsCodes,
@@ -126,6 +140,10 @@ export async function GET(request: NextRequest) {
       invalidNewCodes: ensured.invalidNewCodes,
       deliveredMissingCompletedCount: deliveredMissingCompleted.length,
       deliveredMissingCompletedSample: deliveredMissingCompleted.slice(0, 10).map((r) => r.order_id),
+      deliveredMissingAccountCount: missingAccountOs.length,
+      deliveredMissingAccountSample: missingAccountOs.slice(0, 10).map((r) => r.order_id),
+      deliveredMissingAccountNonOsCount: missingAccountNonOs.length,
+      deliveredMissingAccountNonOsSample: missingAccountNonOs.slice(0, 10).map((r) => r.order_id),
     }
   }
 
@@ -152,6 +170,10 @@ export async function GET(request: NextRequest) {
         unknown_statuses: d.unknownStatuses,
         delivered_missing_completed_time_count: d.deliveredMissingCompletedCount,
         delivered_missing_completed_time_sample: d.deliveredMissingCompletedSample,
+        delivered_missing_account_id_count: d.deliveredMissingAccountCount,
+        delivered_missing_account_id_sample: d.deliveredMissingAccountSample,
+        delivered_missing_account_id_non_os_count: d.deliveredMissingAccountNonOsCount,
+        delivered_missing_account_id_non_os_sample: d.deliveredMissingAccountNonOsSample,
         status_distribution: statusCount,
         partner_code_distribution: codeCount,
       })
@@ -196,6 +218,10 @@ export async function GET(request: NextRequest) {
   let invalidNewCodes: string[] = []
   let deliveredMissingCompletedCount = 0
   let deliveredMissingCompletedSample: number[] = []
+  let deliveredMissingAccountCount = 0
+  let deliveredMissingAccountSample: number[] = []
+  let deliveredMissingAccountNonOsCount = 0
+  let deliveredMissingAccountNonOsSample: number[] = []
 
   try {
     const d = await readAndClassify()
@@ -206,6 +232,10 @@ export async function GET(request: NextRequest) {
     invalidNewCodes = d.invalidNewCodes
     deliveredMissingCompletedCount = d.deliveredMissingCompletedCount
     deliveredMissingCompletedSample = d.deliveredMissingCompletedSample
+    deliveredMissingAccountCount = d.deliveredMissingAccountCount
+    deliveredMissingAccountSample = d.deliveredMissingAccountSample
+    deliveredMissingAccountNonOsCount = d.deliveredMissingAccountNonOsCount
+    deliveredMissingAccountNonOsSample = d.deliveredMissingAccountNonOsSample
 
     // 2) Upsert batch — mỗi row set last_seen_run_id + source_active + synced_at.
     const nowIso = new Date().toISOString()
@@ -298,12 +328,23 @@ export async function GET(request: NextRequest) {
     console.warn(`[affiliate-sync] ${deliveredMissingCompletedCount} đơn DELIVERED thiếu completed_time (KPI aggregate sẽ fail-closed):`,
       deliveredMissingCompletedSample.join(', '))
   }
+  if (deliveredMissingAccountCount > 0) {
+    // OS BLOCKING: aggregate SỐ KHÁCH của campaign OS sẽ fail-closed.
+    console.warn(`[affiliate-sync] ${deliveredMissingAccountCount} đơn DELIVERED (OS) thiếu account_id (aggregate SỐ KHÁCH sẽ fail-closed):`,
+      deliveredMissingAccountSample.join(', '))
+  }
+  if (deliveredMissingAccountNonOsCount > 0) {
+    // NON-OS DIAGNOSTIC (r1.3.5): ngoài scope campaign khách — chỉ ghi nhận.
+    console.info(`[affiliate-sync] ${deliveredMissingAccountNonOsCount} đơn DELIVERED (FS/partner) thiếu account_id — diagnostic, không ảnh hưởng campaign khách OS:`,
+      deliveredMissingAccountNonOsSample.join(', '))
+  }
 
   const hasNotes = (report?.unmatched_codes.length ?? 0) > 0 || (report?.inactive_codes.length ?? 0) > 0
     || unknownStatuses.length > 0 || newFsCodes.length > 0 || invalidNewCodes.length > 0
   return NextResponse.json({
     ok: true,
-    status: rejectedReasons.length > 0 || deliveredMissingCompletedCount > 0 ? 'warning' : hasNotes ? 'success_with_notes' : 'success',
+    status: rejectedReasons.length > 0 || deliveredMissingCompletedCount > 0 || deliveredMissingAccountCount > 0
+      ? 'warning' : hasNotes ? 'success_with_notes' : 'success',
     run_id: runId,
     raw_fetched: counts!.rawFetched,
     duplicates: counts!.duplicates,
@@ -317,6 +358,10 @@ export async function GET(request: NextRequest) {
     unknown_statuses: unknownStatuses,
     delivered_missing_completed_time_count: deliveredMissingCompletedCount,
     delivered_missing_completed_time_sample: deliveredMissingCompletedSample,
+    delivered_missing_account_id_count: deliveredMissingAccountCount,
+    delivered_missing_account_id_sample: deliveredMissingAccountSample,
+    delivered_missing_account_id_non_os_count: deliveredMissingAccountNonOsCount,
+    delivered_missing_account_id_non_os_sample: deliveredMissingAccountNonOsSample,
     post_finish_notes: postFinishNotes,
   })
 }
