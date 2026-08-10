@@ -1,8 +1,10 @@
-// QA THỰC THI cho migration 103 (Affiliate Customer Campaign). Chạy SAU khi
-// 103 apply. Khối AGGREGATE + ACTIVATION identity-gate yêu cầu backfill
-// account_id đã xong (sau deploy + full sync) — chưa xong → PENDING (exit ≠0,
-// không tính ALL PASS; pattern r1.1 của 093). Các khối RPC-branch/targets/
-// overlap/grants chạy được ngay sau migration.
+// QA THỰC THI cho migration 103 + 104 (Affiliate Customer Campaign).
+// ⚠ IDENTITY (contract 09/08, mig 104) = customer_phone_norm (buyer phone
+// chuẩn hóa), KHÔNG phải account_id. Chạy SAU khi 103+104 apply. Khối
+// AGGREGATE + ACTIVATION identity-gate yêu cầu backfill customer_phone_norm
+// đã xong (sau deploy + full sync) — chưa xong → PENDING (exit ≠0, không tính
+// ALL PASS; pattern r1.1 của 093). Các khối RPC-branch/targets/overlap/grants
+// chạy được ngay sau migration.
 //   cd webapp && node scripts/qa-kpi-customer-103.mjs
 //
 // ── SAFETY GATES (audit r1 P0/P1 + r1.1) — script GHI vào bảng production ──
@@ -92,6 +94,7 @@ try {
   // không bao giờ tạo fixture trên schema thiếu cột.
   for (const [table, col] of [
     ['affiliate_orders', 'account_id'],
+    ['affiliate_orders', 'customer_phone_norm'],
     ['kpi_campaign_store_actuals', 'actual_customer_count'],
     ['kpi_campaign_store_daily_actuals', 'affiliate_customer_count'],
   ]) {
@@ -99,12 +102,17 @@ try {
     if (r.error) abort('preflight schema: cột ' + table + '.' + col + ' không đọc được (103 chưa apply đủ?): ' + r.error.message)
     out(`preflight: cột ${table}.${col} tồn tại`, true, '')
   }
-  const { count: missingAcct, error: missErr } = await svc.from('affiliate_orders')
+  // mig 104: identity = phone. Đơn ĐỦ ĐIỀU KIỆN đếm (delivered + active +
+  // giá > 0 + có completed_time) mà thiếu customer_phone_norm sẽ làm RPC
+  // fail-closed → khối aggregate PENDING tới khi backfill xong.
+  const { count: missingPhone, error: missErr } = await svc.from('affiliate_orders')
     .select('order_id', { count: 'exact', head: true })
-    .eq('status_norm', 'delivered').eq('source_active', true).is('account_id', null)
-  if (missErr) abort('preflight: không đếm được delivered thiếu account_id: ' + missErr.message)
-  const backfillDone = (missingAcct ?? 1) === 0
-  console.log(`backfill account_id: delivered active thiếu account_id = ${missingAcct} → ${backfillDone ? 'ĐÃ xong' : 'CHƯA xong (khối aggregate sẽ PENDING)'}`)
+    .eq('status_norm', 'delivered').eq('source_active', true)
+    .gt('total_price', 0).not('completed_time', 'is', null)
+    .is('customer_phone_norm', null)
+  if (missErr) abort('preflight: không đếm được delivered thiếu customer_phone_norm: ' + missErr.message)
+  const backfillDone = (missingPhone ?? 1) === 0
+  console.log(`backfill identity (mig 104): đơn đủ điều kiện thiếu customer_phone_norm = ${missingPhone} → ${backfillDone ? 'ĐÃ xong' : 'CHƯA xong (khối aggregate sẽ PENDING)'}`)
 
   // ── Fixture stores + campaigns ────────────────────────────────────────────
   const { data: stores } = await svc.from('stores').select('id, code')
@@ -145,7 +153,7 @@ try {
       order_id: id, partner_code: PARTNER, raw_status: 'DELIVERED', status_norm: 'delivered',
       total_price: 100000, created_time: '2025-01-02T03:00:00Z',
       completed_time: '2025-01-05T03:00:00Z', // 10:00 VN 05/01
-      source_active: true, account_id: 900001, ...over,
+      source_active: true, customer_phone_norm: '0900000001', customer_phone_norm: '0900000001', ...over,
     })
     if (error) abort(`fixture order ${id}: ${error.message}`)
     FX_IDS.push(id) // r1 P0: CHỈ sau insert thành công — collision không lọt cleanup
@@ -241,28 +249,28 @@ try {
 
   // ── 4) rpc_aggregate_affiliate_customers (cần backfill xong) ──────────────
   if (!backfillDone) {
-    pendingSkip('aggregate: toàn khối dedup/tie-break/biên ngày/fail-closed', 'backfill account_id chưa xong — chạy lại script SAU deploy + full sync')
+    pendingSkip('aggregate: toàn khối dedup/tie-break/biên ngày/fail-closed', 'backfill customer_phone_norm chưa xong — chạy lại script SAU deploy + full sync')
   } else {
     // Fixture: acc 900001 — 3 đơn delivered (2 sA sớm, 1 sB muộn) → 1 khách tại sA, cross-store
-    await mkOrder({ account_id: 900001, store_id: sA.id, completed_time: '2025-01-05T03:00:00Z' })
-    await mkOrder({ account_id: 900001, store_id: sA.id, completed_time: '2025-01-06T03:00:00Z' })
-    await mkOrder({ account_id: 900001, store_id: sB.id, completed_time: '2025-01-07T03:00:00Z' })
+    await mkOrder({ customer_phone_norm: '0900000001', store_id: sA.id, completed_time: '2025-01-05T03:00:00Z' })
+    await mkOrder({ customer_phone_norm: '0900000001', store_id: sA.id, completed_time: '2025-01-06T03:00:00Z' })
+    await mkOrder({ customer_phone_norm: '0900000001', store_id: sB.id, completed_time: '2025-01-07T03:00:00Z' })
     // acc 900002 — 1 đơn sB
-    await mkOrder({ account_id: 900002, store_id: sB.id, completed_time: '2025-01-10T03:00:00Z' })
+    await mkOrder({ customer_phone_norm: '0900000002', store_id: sB.id, completed_time: '2025-01-10T03:00:00Z' })
     // acc 900003 — chỉ CANCELED → không tính
-    await mkOrder({ account_id: 900003, store_id: sA.id, raw_status: 'CANCELED', status_norm: 'canceled' })
+    await mkOrder({ customer_phone_norm: '0900000003', store_id: sA.id, raw_status: 'CANCELED', status_norm: 'canceled' })
     // acc 900004 — delivered nhưng total_price ≤ 0 → loại êm
-    await mkOrder({ account_id: 900004, store_id: sA.id, total_price: 0 })
-    await mkOrder({ account_id: 900004, store_id: sA.id, total_price: -5000 })
+    await mkOrder({ customer_phone_norm: '0900000004', store_id: sA.id, total_price: 0 })
+    await mkOrder({ customer_phone_norm: '0900000004', store_id: sA.id, total_price: -5000 })
     // acc 900005 — ngoài range (12/2024)
-    await mkOrder({ account_id: 900005, store_id: sA.id, completed_time: '2024-12-20T03:00:00Z' })
+    await mkOrder({ customer_phone_norm: '0900000005', store_id: sA.id, completed_time: '2024-12-20T03:00:00Z' })
     // acc 900006 — biên TRONG: 23:59:59 VN 31/01 = 16:59:59Z
-    await mkOrder({ account_id: 900006, store_id: sA.id, completed_time: '2025-01-31T16:59:59Z' })
+    await mkOrder({ customer_phone_norm: '0900000006', store_id: sA.id, completed_time: '2025-01-31T16:59:59Z' })
     // acc 900007 — biên NGOÀI: 00:00:00 VN 01/02 = 17:00:00Z 31/01
-    await mkOrder({ account_id: 900007, store_id: sA.id, completed_time: '2025-01-31T17:00:00Z' })
+    await mkOrder({ customer_phone_norm: '0900000007', store_id: sA.id, completed_time: '2025-01-31T17:00:00Z' })
     // acc 900008 — tie-break: 2 đơn CÙNG completed_time, order_id nhỏ ở sB thắng
-    const tieB = await mkOrder({ account_id: 900008, store_id: sB.id, completed_time: '2025-01-15T03:00:00Z' })
-    await mkOrder({ account_id: 900008, store_id: sA.id, completed_time: '2025-01-15T03:00:00Z' })
+    const tieB = await mkOrder({ customer_phone_norm: '0900000008', store_id: sB.id, completed_time: '2025-01-15T03:00:00Z' })
+    await mkOrder({ customer_phone_norm: '0900000008', store_id: sA.id, completed_time: '2025-01-15T03:00:00Z' })
 
     const { data: r, error: aggErr } = await agg()
     out('aggregate: chạy OK', !aggErr, aggErr?.message ?? '')
@@ -284,11 +292,13 @@ try {
           && (r.cross_store_sample ?? []).includes(900001) && (r.cross_store_sample ?? []).includes(900008),
         JSON.stringify({ n: r.cross_store_account_count, sample: r.cross_store_sample }))
     }
-    // Fail-closed: delivered thiếu account_id / thiếu completed_time trong scope
-    const badAcct = await mkOrder({ account_id: null, store_id: sA.id })
-    await expectRaise('aggregate: delivered thiếu account_id → RAISE fail-closed', agg(), 'thiếu account_id')
+    // Fail-closed (mig 104): thiếu customer_phone_norm (đơn đủ điều kiện) /
+    // thiếu completed_time trong scope
+    const badAcct = await mkOrder({ customer_phone_norm: null, store_id: sA.id })
+    await expectRaise('aggregate: đơn đủ điều kiện thiếu SĐT khách → RAISE fail-closed (mig 104)',
+      agg(), 'thiếu số điện thoại khách')
     await svc.from('affiliate_orders').delete().eq('order_id', badAcct).eq('partner_code', PARTNER)
-    const badCt = await mkOrder({ account_id: 900009, store_id: sA.id, completed_time: null })
+    const badCt = await mkOrder({ customer_phone_norm: '0900000009', store_id: sA.id, completed_time: null })
     await expectRaise('aggregate: delivered thiếu completed_time → RAISE fail-closed', agg(), 'thiếu completed_time')
     await svc.from('affiliate_orders').delete().eq('order_id', badCt).eq('partner_code', PARTNER)
   }

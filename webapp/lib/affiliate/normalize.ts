@@ -1,3 +1,5 @@
+import { normalizeVnPhone } from './phone'
+
 // Pure normalization/validation cho đơn affiliate từ Mongo — KHÔNG gọi DB
 // (stakeholder F2 plan #2). Contract F1 (RPC finish enforce): mọi row upsert
 // phải hợp lệ; row thiếu/sai field bắt buộc bị REJECT và đếm vào `rejected`,
@@ -60,6 +62,11 @@ export interface AffiliateOrderRow {
   // thiếu/hỏng KHÔNG reject row (mirror completed_time): ingest vẫn lưu đủ,
   // fail-closed nằm ở rpc_aggregate_affiliate_customers + canary report cron.
   account_id: number | null
+  // Identity khách CHÍNH THỨC (contract 09/08, mig 104) — buyer phone đã
+  // chuẩn hóa; null = không có identity hợp lệ (KHÔNG reject row: fail-closed
+  // ở rpc_aggregate_affiliate_customers + canary cron). account_id giữ lại
+  // chỉ để diagnostic chất lượng nguồn.
+  customer_phone_norm: string | null
   partner_code: string
   raw_status: string
   status_norm: string
@@ -168,6 +175,8 @@ export function validateSourceOrder(doc: SourceOrderDoc): NormalizeResult {
       first_product_name: str(doc.first_item?.product_name),
       customer_name: str(doc.customer_name),
       customer_phone: str(doc.customer_phone),
+      // mig 104: identity = buyer phone chuẩn hóa (KHÔNG phải receiver phone).
+      customer_phone_norm: normalizeVnPhone(doc.customer_phone),
       created_time: createdTime,
       confirmed_time: isoOrNull(doc.confirmed_time),
       completed_time: isoOrNull(doc.completed_time),

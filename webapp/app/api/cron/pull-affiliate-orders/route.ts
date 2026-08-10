@@ -119,18 +119,23 @@ export async function GET(request: NextRequest) {
     // aggregation fail-closed (rpc_aggregate_affiliate_gmv RAISE) — báo sớm ở
     // đây để vận hành thấy TRƯỚC khi KPI đứng snapshot. Ingest vẫn lưu đủ.
     const deliveredMissingCompleted = valid.filter((r) => r.status_norm === 'delivered' && r.completed_time === null)
-    // Canary identity (mig 103 — metric affiliate_customer_count): DELIVERED
-    // thiếu account_id sẽ làm rpc_aggregate_affiliate_customers fail-closed
-    // (campaign KHÁCH giữ snapshot cũ) — báo sớm như completed_time. KHÔNG
-    // vào health gate chung (không đóng băng oan campaign GMV/overview).
-    // r1.3.5 (audit P2 vận hành): TÁCH 2 TẦNG — campaign khách chỉ target OS
-    // store, nên CHỈ đơn thuộc mapping OS active là BLOCKING (status warning);
-    // đơn FS/partner/unmatched thiếu account = DIAGNOSTIC thuần (field + log
-    // info, KHÔNG đổi status — 22 đơn partner lịch sử không tạo cảnh báo sai).
-    const deliveredMissingAccount = valid.filter((r) => r.status_norm === 'delivered' && r.account_id === null)
+    // Canary IDENTITY (mig 104 — contract 09/08): identity khách =
+    // customer_phone_norm (buyer phone chuẩn hóa), KHÔNG còn account_id.
+    //   · missing_customer_phone (BLOCKING): đơn ĐỦ ĐIỀU KIỆN đếm — delivered
+    //     + total_price>0 + CÓ completed_time + thuộc mapping OS ACTIVE —
+    //     thiếu phone hợp lệ ⇒ rpc_aggregate_affiliate_customers fail-closed
+    //     ⇒ status 'warning' để vận hành xử lý nguồn TRƯỚC khi KPI đứng.
+    //     Đơn ngoài scope đếm (FS/partner, giá ≤0, chưa completed) KHÔNG chặn.
+    //   · missing_account_id (DIAGNOSTIC thuần — 104 hạ cấp từ blocking):
+    //     account_id không còn tham gia identity; giữ đếm để theo dõi chất
+    //     lượng nguồn, KHÔNG đổi status run.
     const osCodes = new Set(ensured.mappings
       .filter((m) => m.partner_type === 'os' && m.is_active && m.store_id)
       .map((m) => m.partner_code))
+    const missingPhoneEligible = valid.filter((r) =>
+      r.status_norm === 'delivered' && r.total_price > 0 && r.completed_time !== null
+      && osCodes.has(r.partner_code) && r.customer_phone_norm === null)
+    const deliveredMissingAccount = valid.filter((r) => r.status_norm === 'delivered' && r.account_id === null)
     const missingAccountOs = deliveredMissingAccount.filter((r) => osCodes.has(r.partner_code))
     const missingAccountNonOs = deliveredMissingAccount.filter((r) => !osCodes.has(r.partner_code))
     return {
@@ -142,6 +147,8 @@ export async function GET(request: NextRequest) {
       deliveredMissingCompletedSample: deliveredMissingCompleted.slice(0, 10).map((r) => r.order_id),
       deliveredMissingAccountCount: missingAccountOs.length,
       deliveredMissingAccountSample: missingAccountOs.slice(0, 10).map((r) => r.order_id),
+      missingPhoneEligibleCount: missingPhoneEligible.length,
+      missingPhoneEligibleSample: missingPhoneEligible.slice(0, 10).map((r) => r.order_id),
       deliveredMissingAccountNonOsCount: missingAccountNonOs.length,
       deliveredMissingAccountNonOsSample: missingAccountNonOs.slice(0, 10).map((r) => r.order_id),
     }
@@ -170,6 +177,9 @@ export async function GET(request: NextRequest) {
         unknown_statuses: d.unknownStatuses,
         delivered_missing_completed_time_count: d.deliveredMissingCompletedCount,
         delivered_missing_completed_time_sample: d.deliveredMissingCompletedSample,
+        // mig 104: identity = phone (BLOCKING); account_id chỉ diagnostic.
+        missing_customer_phone_count: d.missingPhoneEligibleCount,
+        missing_customer_phone_sample: d.missingPhoneEligibleSample,
         delivered_missing_account_id_count: d.deliveredMissingAccountCount,
         delivered_missing_account_id_sample: d.deliveredMissingAccountSample,
         delivered_missing_account_id_non_os_count: d.deliveredMissingAccountNonOsCount,
@@ -222,6 +232,8 @@ export async function GET(request: NextRequest) {
   let deliveredMissingAccountSample: number[] = []
   let deliveredMissingAccountNonOsCount = 0
   let deliveredMissingAccountNonOsSample: number[] = []
+  let missingPhoneEligibleCount = 0
+  let missingPhoneEligibleSample: number[] = []
 
   try {
     const d = await readAndClassify()
@@ -236,6 +248,8 @@ export async function GET(request: NextRequest) {
     deliveredMissingAccountSample = d.deliveredMissingAccountSample
     deliveredMissingAccountNonOsCount = d.deliveredMissingAccountNonOsCount
     deliveredMissingAccountNonOsSample = d.deliveredMissingAccountNonOsSample
+    missingPhoneEligibleCount = d.missingPhoneEligibleCount
+    missingPhoneEligibleSample = d.missingPhoneEligibleSample
 
     // 2) Upsert batch — mỗi row set last_seen_run_id + source_active + synced_at.
     const nowIso = new Date().toISOString()
@@ -328,9 +342,15 @@ export async function GET(request: NextRequest) {
     console.warn(`[affiliate-sync] ${deliveredMissingCompletedCount} đơn DELIVERED thiếu completed_time (KPI aggregate sẽ fail-closed):`,
       deliveredMissingCompletedSample.join(', '))
   }
+  if (missingPhoneEligibleCount > 0) {
+    // mig 104 BLOCKING: đơn đủ điều kiện đếm nhưng thiếu identity phone →
+    // rpc_aggregate_affiliate_customers RAISE, campaign KHÁCH giữ snapshot cũ.
+    console.warn(`[affiliate-sync] ${missingPhoneEligibleCount} đơn DELIVERED (OS, đủ điều kiện đếm) thiếu SĐT khách hợp lệ — aggregate SỐ KHÁCH sẽ fail-closed:`,
+      missingPhoneEligibleSample.join(', '))
+  }
   if (deliveredMissingAccountCount > 0) {
-    // OS BLOCKING: aggregate SỐ KHÁCH của campaign OS sẽ fail-closed.
-    console.warn(`[affiliate-sync] ${deliveredMissingAccountCount} đơn DELIVERED (OS) thiếu account_id (aggregate SỐ KHÁCH sẽ fail-closed):`,
+    // 104: account_id KHÔNG còn là identity → diagnostic thuần (info).
+    console.info(`[affiliate-sync] ${deliveredMissingAccountCount} đơn DELIVERED (OS) thiếu account_id — diagnostic chất lượng nguồn, KHÔNG chặn campaign khách (identity đã chuyển sang SĐT):`,
       deliveredMissingAccountSample.join(', '))
   }
   if (deliveredMissingAccountNonOsCount > 0) {
@@ -343,7 +363,7 @@ export async function GET(request: NextRequest) {
     || unknownStatuses.length > 0 || newFsCodes.length > 0 || invalidNewCodes.length > 0
   return NextResponse.json({
     ok: true,
-    status: rejectedReasons.length > 0 || deliveredMissingCompletedCount > 0 || deliveredMissingAccountCount > 0
+    status: rejectedReasons.length > 0 || deliveredMissingCompletedCount > 0 || missingPhoneEligibleCount > 0
       ? 'warning' : hasNotes ? 'success_with_notes' : 'success',
     run_id: runId,
     raw_fetched: counts!.rawFetched,
@@ -358,6 +378,9 @@ export async function GET(request: NextRequest) {
     unknown_statuses: unknownStatuses,
     delivered_missing_completed_time_count: deliveredMissingCompletedCount,
     delivered_missing_completed_time_sample: deliveredMissingCompletedSample,
+    // mig 104: BLOCKING = phone (identity); account_id = diagnostic.
+    missing_customer_phone_count: missingPhoneEligibleCount,
+    missing_customer_phone_sample: missingPhoneEligibleSample,
     delivered_missing_account_id_count: deliveredMissingAccountCount,
     delivered_missing_account_id_sample: deliveredMissingAccountSample,
     delivered_missing_account_id_non_os_count: deliveredMissingAccountNonOsCount,
