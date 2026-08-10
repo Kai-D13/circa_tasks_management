@@ -41,3 +41,30 @@ export function performanceTone(pct: number): string {
   if (pct >= 80) return 'text-status-warning'
   return 'text-status-danger'
 }
+
+// ── "Trung bình/ngày cần đạt" (request stakeholder 10/08) ───────────────────
+// Công thức LẤY NGUYÊN của màn Staff (CampaignKpiView) để Super/SM và Staff
+// không bao giờ lệch số:
+//   daysLeft  = số ngày từ hôm nay đến end_date, TÍNH CẢ HÔM NAY
+//   remaining = max(kpi_target - actual, 0)
+//   perDay    = remaining / max(daysLeft, 1)
+// Trả null = KHÔNG XÁC ĐỊNH (chưa đồng bộ actual / campaign đã hết ngày /
+// không có target). Hai surface render null KHÁC nhau — có chủ đích:
+//   · bảng kết quả (Super/SM): null → '—'
+//   · card Staff: `?? 0` để GIỮ NGUYÊN output hiện tại (campaign hết hạn vẫn
+//     hiển thị 0₫ như trước — không đổi UI đã được stakeholder duyệt).
+// Đã đạt target → 0 (không phải null): "cần đạt thêm 0/ngày" là số thật.
+export function requiredPerDay(p: {
+  kpiTarget: number
+  actual: number | null | undefined
+  endISO: string
+  todayISO: string
+}): number | null {
+  if (p.actual === null || p.actual === undefined) return null
+  const target = Number(p.kpiTarget) || 0
+  if (target <= 0) return null
+  const daysLeft = Math.floor((Date.parse(p.endISO) - Date.parse(p.todayISO)) / DAY) + 1
+  if (daysLeft <= 0) return null                    // campaign đã hết ngày
+  const remaining = Math.max(target - (Number(p.actual) || 0), 0)
+  return remaining / Math.max(daysLeft, 1)
+}

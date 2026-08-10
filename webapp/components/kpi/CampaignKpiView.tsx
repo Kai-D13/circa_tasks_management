@@ -3,6 +3,7 @@ import { breakdownModel, campaignFootnote, metricPresentation } from '@/lib/kpi/
 import { buildTierProgress, type TierProgress } from '@/lib/kpi/resultModel'
 import { CampaignDailyChart } from '@/components/kpi/CampaignDailyChart'
 import { CampaignPicker } from '@/components/kpi/CampaignPicker'
+import { requiredPerDay } from '@/lib/kpi/performance'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
 import { Target, CalendarDays, TrendingUp, Wallet, Info, Gift, Store, Link2 as LinkIcon } from 'lucide-react'
@@ -129,7 +130,12 @@ export function CampaignKpiView({
   // Metric cards.
   const daysLeft = Math.floor((Date.parse(sel.end_date) - Date.parse(todayISO)) / 86400_000) + 1
   const campaignOver = daysLeft <= 0
-  const needPerDay = campaignOver || achieved ? 0 : remaining / Math.max(daysLeft, 1)
+  // 10/08: công thức chuyển vào lib/kpi/performance (dùng chung với bảng kết
+  // quả Super/SM). `?? 0` giữ output Staff BẤT BIẾN: campaign hết hạn/chưa
+  // sync vẫn hiển thị 0 như trước, không phải '—'.
+  const needPerDay = achieved ? 0 : (requiredPerDay({
+    kpiTarget: target, actual: sel.actual_value ?? 0, endISO: sel.end_date, todayISO,
+  }) ?? 0)
   // P3-E: "GMV hôm nay" = TỔNG 2 nguồn của ngày hôm nay.
   const todayPoint = daily.find((d) => d.date === todayISO)
   const todayGmv = todayPoint

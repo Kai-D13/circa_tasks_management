@@ -121,7 +121,6 @@ export function CampaignResultDashboard({ model, emptyHint }: {
               <tbody className="divide-y">
                 {m.rows.map((r) => {
                   const a = r.actual
-                  const remaining = a?.remaining_target ?? null
                   return (
                     <tr key={r.targetId} className="hover:bg-muted/30">
                       {/* r1.6: sticky left CHỈ lg (mobile giữ UI cũ) — bg-card
@@ -152,7 +151,10 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                           ? <span className={cn('text-xs font-semibold', performanceTone(r.performance))}>{r.performance.toFixed(1)}%</span>
                           : '—'}
                       </td>
-                      <td className="px-4 py-2.5 text-right whitespace-nowrap">{remaining != null ? vnd(remaining) : '—'}</td>
+                      {/* 10/08: 'Trung bình/ngày' thay 'Còn thiếu' — cùng
+                          công thức card Staff (requiredPerDay); đơn vị theo
+                          metric (VNĐ / khách) qua metricPresentation. */}
+                      <td className="px-4 py-2.5 text-right whitespace-nowrap">{r.requiredPerDay != null ? vnd(r.requiredPerDay) : '—'}</td>
                       {/* Mobile: cột gộp cũ giữ nguyên */}
                       <td className="px-4 py-2.5 lg:hidden">
                         {a?.achieved_tier_order != null

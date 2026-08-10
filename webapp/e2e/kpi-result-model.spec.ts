@@ -88,3 +88,62 @@ test.describe('kpi result model @desktop', () => {
     expect(smScopeState(false)).toBe('campaign-out-of-scope')
   })
 })
+
+// ── 10/08 (stakeholder): cột 'Còn thiếu' → 'Trung bình/ngày cần đạt' ────────
+// Công thức DÙNG CHUNG với card Staff (lib/kpi/performance.requiredPerDay):
+//   remaining / max(daysLeft, 1), daysLeft tính CẢ hôm nay.
+test.describe('kpi requiredPerDay (bảng kết quả Super/SM) @desktop', () => {
+  const rowOf = (m: ReturnType<typeof buildCampaignResultModel>, store: string) =>
+    m.rows.find((r) => r.storeId === store)!
+
+  test('đang chạy: remaining / số ngày còn lại (tính cả hôm nay)', () => {
+    // 27/07 → 31/07 = 5 ngày; target 1000, actual 300 → 700/5 = 140
+    const m = buildCampaignResultModel(CAMP(), [T('a', 1000)], [A('a', 300, 300, 0)], TODAY)
+    expect(rowOf(m, 'a').requiredPerDay).toBeCloseTo(140, 6)
+  })
+
+  test('còn ĐÚNG một ngày (hôm nay = end_date) → chia 1', () => {
+    const m = buildCampaignResultModel(CAMP(), [T('a', 1000)], [A('a', 400, 400, 0)], '2026-07-31')
+    expect(rowOf(m, 'a').requiredPerDay).toBeCloseTo(600, 6)
+  })
+
+  test('đã đạt/vượt target → 0 (KHÔNG phải null)', () => {
+    const m = buildCampaignResultModel(CAMP(), [T('a', 1000)], [A('a', 1200, 1200, 0)], TODAY)
+    expect(rowOf(m, 'a').requiredPerDay).toBe(0)
+  })
+
+  test('chưa đồng bộ actual → null (UI hiện "—", không ra số giả)', () => {
+    const m = buildCampaignResultModel(CAMP(), [T('a', 1000)], [], TODAY)
+    expect(rowOf(m, 'a').actual).toBeNull()
+    expect(rowOf(m, 'a').requiredPerDay).toBeNull()
+  })
+
+  test('campaign đã hết ngày (today > end_date) → null; target ≤ 0 → null', () => {
+    const ended = buildCampaignResultModel(CAMP(), [T('a', 1000)], [A('a', 300, 300, 0)], '2026-08-05')
+    expect(rowOf(ended, 'a').requiredPerDay).toBeNull()
+    const noTarget = buildCampaignResultModel(CAMP(), [T('a', 0)], [A('a', 300, 300, 0)], TODAY)
+    expect(rowOf(noTarget, 'a').requiredPerDay).toBeNull()
+  })
+
+  test('customer campaign: cùng công thức, đơn vị KHÁCH (không đổi phép tính)', () => {
+    const camp = CAMP({ metric_offline: false, metric_affiliate: true })
+    // target 100 khách, actual 40 → 60/5 = 12 khách/ngày
+    const m = buildCampaignResultModel(camp, [T('a', 100)], [A('a', 40, 0, 40)], TODAY)
+    expect(rowOf(m, 'a').requiredPerDay).toBeCloseTo(12, 6)
+  })
+
+  test('Super ↔ SM: cùng row input → cùng requiredPerDay (subset RLS không đổi số)', () => {
+    const tAll = [T('a', 1000), T('b', 500)]
+    const aAll = [A('a', 300, 300, 0), A('b', 100, 100, 0)]
+    const sup = buildCampaignResultModel(CAMP(), tAll, aAll, TODAY)
+    const sm = buildCampaignResultModel(CAMP(), tAll.slice(1), aAll.slice(1), TODAY)
+    expect(rowOf(sm, 'b').requiredPerDay).toBe(rowOf(sup, 'b').requiredPerDay)
+    expect(rowOf(sm, 'b').requiredPerDay).toBeCloseTo(80, 6)   // (500-100)/5
+  })
+
+  test('remaining_target VẪN còn trong model (engine/export/tier dùng) — chỉ bỏ CỘT UI', () => {
+    const m = buildCampaignResultModel(
+      CAMP(), [T('a', 1000)], [A('a', 300, 300, 0, { remaining_target: 700 })], TODAY)
+    expect(rowOf(m, 'a').actual!.remaining_target).toBe(700)
+  })
+})

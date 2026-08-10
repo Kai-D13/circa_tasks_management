@@ -7,7 +7,7 @@
 // Cùng input → cùng output ở mọi role; SM đưa vào tập rows RLS-scoped (chỉ
 // store được phân công) → totals tự là tổng đúng phạm vi SM.
 
-import { campaignPerformance } from '@/lib/kpi/performance'
+import { campaignPerformance, requiredPerDay } from '@/lib/kpi/performance'
 
 export interface ResultTierRow { tier_order: number; threshold_pct: number; commission_amount: number }
 
@@ -100,6 +100,9 @@ export interface StoreResultRow {
   kpiTarget: number
   actual: ResultActualRow | null
   performance: number | null
+  // 10/08: "Trung bình/ngày cần đạt" — CÙNG công thức card Staff (lib/kpi/
+  // performance.requiredPerDay). null = chưa sync / campaign hết ngày → '—'.
+  requiredPerDay: number | null
   // Tier progress (28/07): tiers ĐÃ SORT theo tier_order kèm target/remaining/
   // reached — nguồn duy nhất cho cột động desktop (Super ↔ SM cùng công thức).
   tierProgress: TierProgress[]
@@ -163,6 +166,12 @@ export function buildCampaignResultModel(
       actual: a,
       performance: campaignPerformance(
         t.kpi_target, a?.actual_value ?? null, campaign.start_date, campaign.end_date, todayISO),
+      requiredPerDay: requiredPerDay({
+        kpiTarget: Number(t.kpi_target) || 0,
+        actual: a?.actual_value ?? null,
+        endISO: campaign.end_date,
+        todayISO,
+      }),
       tierProgress: buildTierProgress(
         Number(t.kpi_target) || 0,
         a ? { actual_value: Number(a.actual_value) || 0, achieved_tier_order: a.achieved_tier_order } : null,

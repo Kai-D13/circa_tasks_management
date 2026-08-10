@@ -18,14 +18,14 @@ export interface ResultTableColumn {
 }
 
 // Khoảng px theo audit 29/07: Cửa hàng 160–180 · Phân loại 90–110 ·
-// KPI/GMV 130–150 · %/Nhịp độ 100–120 · Còn thiếu 140 · mỗi Bậc 170–190.
+// KPI/GMV 130–150 · %/Nhịp độ 100–120 · Trung bình/ngày 140 · mỗi Bậc 170–190.
 export const RESULT_COL_PX = {
   store: 180,
   group: 100,
   money: 140,
   pct: 110,
   pace: 100,
-  remaining: 140,
+  perDay: 140,   // 10/08: thay cột 'Còn thiếu' (đã bỏ) — 'Trung bình/ngày'
   combined: 170, // cột gộp "Bậc đạt · Commission" (mobile giữ UI cũ)
   tier: 176,
 } as const
@@ -46,7 +46,11 @@ export function resultTableColumns(maxTierCount: number, showBreakdown: boolean,
     ] : []),
     { key: 'pct', label: '%', minPx: RESULT_COL_PX.pct, align: 'right', scope: 'all' },
     { key: 'pace', label: 'Nhịp độ', minPx: RESULT_COL_PX.pace, align: 'right', scope: 'all' },
-    { key: 'remaining', label: 'Còn thiếu', minPx: RESULT_COL_PX.remaining, align: 'right', scope: 'all' },
+    // 10/08 (stakeholder): BỎ cột 'Còn thiếu' ở bảng tổng — thay bằng
+    // 'Trung bình/ngày' (CÙNG công thức card Staff). remaining_target VẪN giữ
+    // trong model/DB/export + các dòng 'Còn thiếu' trong từng cột Bậc (khoảng
+    // cách tới threshold — nghĩa khác, không trùng cột bị bỏ).
+    { key: 'perDay', label: 'Trung bình/ngày', minPx: RESULT_COL_PX.perDay, align: 'right', scope: 'all' },
     { key: 'tierCombined', label: 'Bậc đạt · Commission', minPx: RESULT_COL_PX.combined, align: 'left', scope: 'mobile' },
     ...Array.from({ length: Math.max(0, maxTierCount) }, (_, i) => ({
       key: `tier-${i + 1}`,

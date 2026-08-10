@@ -47,7 +47,7 @@ test.describe('kpi result table layout contract @desktop', () => {
     expect(RESULT_COL_PX.pct).toBeLessThanOrEqual(120)
     expect(RESULT_COL_PX.pace).toBeGreaterThanOrEqual(100)
     expect(RESULT_COL_PX.pace).toBeLessThanOrEqual(120)
-    expect(RESULT_COL_PX.remaining).toBe(140)
+    expect(RESULT_COL_PX.perDay).toBe(140)   // 10/08: 'Trung bình/ngày' thay 'Còn thiếu'
     expect(RESULT_COL_PX.tier).toBeGreaterThanOrEqual(170)
     expect(RESULT_COL_PX.tier).toBeLessThanOrEqual(190)
     // Mọi cột đều có min-width dương (browser không còn tự co theo dữ liệu)
@@ -56,9 +56,9 @@ test.describe('kpi result table layout contract @desktop', () => {
 
   test('desktopMinPx = tổng đúng công thức cột; mỗi bậc thêm +176px — 1366@100% dùng scroll TRONG bảng (sticky store), không cắt dữ liệu', () => {
     // Công thức: store + group + 2×money (KPI/Actual) + (breakdown? 2×money)
-    // + pct + pace + remaining + n×tier
+    // + pct + pace + perDay + n×tier
     const fixed = RESULT_COL_PX.store + RESULT_COL_PX.group + 2 * RESULT_COL_PX.money
-      + RESULT_COL_PX.pct + RESULT_COL_PX.pace + RESULT_COL_PX.remaining
+      + RESULT_COL_PX.pct + RESULT_COL_PX.pace + RESULT_COL_PX.perDay
     expect(resultTableDesktopMinPx(3, false)).toBe(fixed + 3 * RESULT_COL_PX.tier)   // 1438
     expect(resultTableDesktopMinPx(5, true)).toBe(fixed + 2 * RESULT_COL_PX.money + 5 * RESULT_COL_PX.tier)
     expect(resultTableDesktopMinPx(4, false) - resultTableDesktopMinPx(3, false)).toBe(RESULT_COL_PX.tier)
@@ -72,7 +72,7 @@ test.describe('kpi result table layout contract @desktop', () => {
     for (const cols of [resultTableColumns(2, true), resultTableColumns(2, true, 'gmv')]) {
       expect(cols.map((c) => c.label)).toEqual([
         'Cửa hàng', 'Phân loại', 'KPI target', 'Actual GMV', 'GMV Offline', 'GMV Affiliate',
-        '%', 'Nhịp độ', 'Còn thiếu', 'Bậc đạt · Commission', 'Bậc 1', 'Bậc 2',
+        '%', 'Nhịp độ', 'Trung bình/ngày', 'Bậc đạt · Commission', 'Bậc 1', 'Bậc 2',
       ])
     }
   })
