@@ -96,7 +96,7 @@ test.describe('qa tooling safety gates (mig 103 r1.1) @desktop', () => {
     expect(proof).toContain('DIAGNOSTIC theo tháng VN')
     // r1.3: phân loại missing identity + cross-store in-range + JSON summary
     expect(proof).toContain('os_in_range_qualifying')
-    expect(proof).toContain('R1.3 DIAGNOSTIC')
+    expect(proof).toContain('DIAGNOSTIC — CROSS-STORE')
     expect(proof).toContain('=== JSON SUMMARY ===')
   })
 })
@@ -363,6 +363,10 @@ test.describe('lib-customer-proof r1.3.3 (runtime readiness) @desktop', () => {
     expect(proof).toContain('KHÔNG kỳ vọng 0')
     expect(proof).not.toContain('account_id IS NULL) AS missing_account_id,')
     expect(proof).not.toContain('RPC 103')
+    // r1.2 (audit P2): header mô tả ĐÚNG gate 104 + đơn vị cross-store là khách/SĐT
+    expect(proof).toContain('runtime_missing_customer_phone = 0')
+    expect(proof).not.toContain('runtime_missing_account_id = 0')
+    expect(proof).toContain('khách (SĐT)')
     // r1 P1#5: preflight identity scope theo fixture store + cửa sổ QA
     expect(qaDb).toContain('identityScopeCheck')
     expect(qaDb).toContain("gte('completed_time', P_FROM)")

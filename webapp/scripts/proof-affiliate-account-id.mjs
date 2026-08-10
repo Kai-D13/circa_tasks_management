@@ -6,11 +6,12 @@
 // customer_phone) — người MUA. KHÔNG dùng receiver_phone_number, KHÔNG dùng
 // account_id (account/customer collection XUỐNG diagnostic chất lượng nguồn).
 // Chứng minh coverage identity trên dữ liệu THẬT. r1.3.2 + r1.3.3 — GATE tách 3 tầng:
-//   RUNTIME READINESS (mirror canary RPC 104: phone = đơn đủ điều kiện TRONG
-//     range; completed_time = TOÀN LỊCH SỬ DELIVERED trên
-//     scoped OS stores, KHÔNG lọc range/giá): runtime_missing_account_id = 0
-//     · runtime_missing_completed_time = 0 — metric scoped có sạch mấy mà
-//     tầng này fail thì activation/sync production vẫn fail-closed.
+//   RUNTIME READINESS (mirror canary RPC 104, trên scoped OS stores):
+//     runtime_missing_customer_phone = 0 (đơn ĐỦ ĐIỀU KIỆN ĐẾM — price>0 +
+//     có completed_time — TRONG đúng campaign range) ·
+//     runtime_missing_completed_time = 0 (TOÀN LỊCH SỬ) — metric scoped có
+//     sạch mấy mà tầng này fail thì activation/sync production vẫn
+//     fail-closed. account_id KHÔNG còn là gate (chỉ diagnostic).
 //   RELEASE DECISION (SCOPED: exact range + OS active + POS filter):
 //     exact_range_provided · eligible_missing_customer_phone = 0
 //   DIAGNOSTIC (chỉ CẢNH BÁO — KHÔNG đổi exit): cross-store trong/ngoài range
@@ -395,9 +396,9 @@ try {
   }
 
   console.log('\n=== R1.3 DIAGNOSTIC — CROSS-STORE ===')
-  console.log(`  toàn lịch sử (khách theo SĐT, điểm theo pointKey — kể cả partner/unmapped): ${crossStore.length} account`)
+  console.log(`  toàn lịch sử (khách theo SĐT, điểm theo pointKey — kể cả partner/unmapped): ${crossStore.length} khách (SĐT)`)
   console.log('  trong exact range (CHỈ tập OS active, identity pointKey): '
-    + (rangeMs ? `${crossInRange.length} account` : 'KHÔNG XÁC ĐỊNH — thiếu QA_CUSTOMER_FROM/TO'))
+    + (rangeMs ? `${crossInRange.length} khách (SĐT)` : 'KHÔNG XÁC ĐỊNH — thiếu QA_CUSTOMER_FROM/TO'))
   for (const c of crossInRange.slice(0, 10)) {
     console.log(`  khách ${mask(String(c.account))} — WINNER: đơn ${c.winner.order_id} @ ${c.winner.point} [${c.winner.point_key}] (earliest-order rule, trong range + tập store target)`)
     for (const o of c.orders) console.log(`    ${o.order_id} · ${o.partner_code} · ${o.point} [${o.point_key}] · ${o.completed_time}`)
