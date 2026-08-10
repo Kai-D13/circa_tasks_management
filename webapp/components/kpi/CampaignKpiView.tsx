@@ -131,10 +131,13 @@ export function CampaignKpiView({
   const daysLeft = Math.floor((Date.parse(sel.end_date) - Date.parse(todayISO)) / 86400_000) + 1
   const campaignOver = daysLeft <= 0
   // 10/08: công thức chuyển vào lib/kpi/performance (dùng chung với bảng kết
-  // quả Super/SM). `?? 0` giữ output Staff BẤT BIẾN: campaign hết hạn/chưa
-  // sync vẫn hiển thị 0 như trước, không phải '—'.
+  // quả Super/SM) — truyền ĐÚNG `remaining` mà hero đang hiển thị
+  // (remaining_target backend ưu tiên) để 2 khối trên cùng màn không lệch.
+  // `?? 0` giữ giá trị số BẤT BIẾN như trước; JSX vẫn tự render 'Đã kết thúc'
+  // → '—' khi campaignOver và pres.zero khi đã đạt (không đổi).
   const needPerDay = achieved ? 0 : (requiredPerDay({
-    kpiTarget: target, actual: sel.actual_value ?? 0, endISO: sel.end_date, todayISO,
+    kpiTarget: target, actual: sel.actual_value ?? 0,
+    remainingTarget: sel.remaining_target, endISO: sel.end_date, todayISO,
   }) ?? 0)
   // P3-E: "GMV hôm nay" = TỔNG 2 nguồn của ngày hôm nay.
   const todayPoint = daily.find((d) => d.date === todayISO)

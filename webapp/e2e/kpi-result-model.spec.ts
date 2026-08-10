@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test'
+import { metricPresentation } from '../lib/kpi/campaignDisplay'
 import {
   buildCampaignResultModel, smScopeState,
   type ResultActualRow, type ResultCampaign, type ResultTargetRow,
@@ -96,6 +97,15 @@ test.describe('kpi requiredPerDay (bảng kết quả Super/SM) @desktop', () =>
   const rowOf = (m: ReturnType<typeof buildCampaignResultModel>, store: string) =>
     m.rows.find((r) => r.storeId === store)!
 
+  test('r1.1 (P1): remaining_target của ENGINE được ƯU TIÊN — không tự tính lại target-actual', () => {
+    // target 1000, actual 300 (tự tính ra 700/5 = 140) NHƯNG engine ghi
+    // remaining_target = 650 → phải ra 650/5 = 130. Khóa việc UI luôn dùng
+    // cùng nguồn với hero Staff.
+    const m = buildCampaignResultModel(
+      CAMP(), [T('a', 1000)], [A('a', 300, 300, 0, { remaining_target: 650 })], TODAY)
+    expect(rowOf(m, 'a').requiredPerDay).toBeCloseTo(130, 6)
+  })
+
   test('đang chạy: remaining / số ngày còn lại (tính cả hôm nay)', () => {
     // 27/07 → 31/07 = 5 ngày; target 1000, actual 300 → 700/5 = 140
     const m = buildCampaignResultModel(CAMP(), [T('a', 1000)], [A('a', 300, 300, 0)], TODAY)
@@ -125,11 +135,19 @@ test.describe('kpi requiredPerDay (bảng kết quả Super/SM) @desktop', () =>
     expect(rowOf(noTarget, 'a').requiredPerDay).toBeNull()
   })
 
-  test('customer campaign: cùng công thức, đơn vị KHÁCH (không đổi phép tính)', () => {
-    const camp = CAMP({ metric_offline: false, metric_affiliate: true })
+  test('customer campaign: cùng công thức + presentation ra "N khách"', () => {
+    const camp = CAMP({
+      metric_offline: false, metric_affiliate: true,
+      metric_type: 'affiliate_customer_count',
+    })
     // target 100 khách, actual 40 → 60/5 = 12 khách/ngày
     const m = buildCampaignResultModel(camp, [T('a', 100)], [A('a', 40, 0, 40)], TODAY)
-    expect(rowOf(m, 'a').requiredPerDay).toBeCloseTo(12, 6)
+    const perDay = rowOf(m, 'a').requiredPerDay
+    expect(perDay).toBeCloseTo(12, 6)
+    // Bảng render qua metricPresentation của ĐÚNG metric_type campaign.
+    const pres = metricPresentation(m.campaign.metric_type)
+    expect(pres.value(perDay!)).toBe('12 khách')
+    expect(metricPresentation('gmv').value(perDay!)).toContain('₫')   // GMV vẫn tiền
   })
 
   test('Super ↔ SM: cùng row input → cùng requiredPerDay (subset RLS không đổi số)', () => {

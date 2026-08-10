@@ -46,8 +46,11 @@ export function performanceTone(pct: number): string {
 // Công thức LẤY NGUYÊN của màn Staff (CampaignKpiView) để Super/SM và Staff
 // không bao giờ lệch số:
 //   daysLeft  = số ngày từ hôm nay đến end_date, TÍNH CẢ HÔM NAY
-//   remaining = max(kpi_target - actual, 0)
+//   remaining = remaining_target (BACKEND) ?? max(kpi_target - actual, 0)
 //   perDay    = remaining / max(daysLeft, 1)
+// ⚠ r1.1 (audit P1): PHẢI ưu tiên remaining_target do engine ghi — hero Staff
+// đang dùng chính giá trị đó; nếu helper tự tính lại thì cùng một màn có thể
+// lệch số khi backend rounding/legacy khác (màn KPI = tiền thưởng).
 // Trả null = KHÔNG XÁC ĐỊNH (chưa đồng bộ actual / campaign đã hết ngày /
 // không có target). Hai surface render null KHÁC nhau — có chủ đích:
 //   · bảng kết quả (Super/SM): null → '—'
@@ -57,6 +60,8 @@ export function performanceTone(pct: number): string {
 export function requiredPerDay(p: {
   kpiTarget: number
   actual: number | null | undefined
+  /** remaining_target từ engine — NGUỒN ƯU TIÊN (null/undefined → tự tính). */
+  remainingTarget?: number | null
   endISO: string
   todayISO: string
 }): number | null {
@@ -65,6 +70,8 @@ export function requiredPerDay(p: {
   if (target <= 0) return null
   const daysLeft = Math.floor((Date.parse(p.endISO) - Date.parse(p.todayISO)) / DAY) + 1
   if (daysLeft <= 0) return null                    // campaign đã hết ngày
-  const remaining = Math.max(target - (Number(p.actual) || 0), 0)
+  const remaining = p.remainingTarget !== null && p.remainingTarget !== undefined
+    ? Math.max(Number(p.remainingTarget) || 0, 0)
+    : Math.max(target - (Number(p.actual) || 0), 0)
   return remaining / Math.max(daysLeft, 1)
 }

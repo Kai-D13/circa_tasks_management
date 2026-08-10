@@ -169,6 +169,9 @@ export function buildCampaignResultModel(
       requiredPerDay: requiredPerDay({
         kpiTarget: Number(t.kpi_target) || 0,
         actual: a?.actual_value ?? null,
+        // r1.1 (audit P1): ưu tiên remaining_target của engine — cùng nguồn
+        // với hero Staff, tránh lệch số trên màn tiền.
+        remainingTarget: a?.remaining_target ?? null,
         endISO: campaign.end_date,
         todayISO,
       }),
