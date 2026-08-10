@@ -11,9 +11,10 @@
 //     · runtime_missing_completed_time = 0 — metric scoped có sạch mấy mà
 //     tầng này fail thì activation/sync production vẫn fail-closed.
 //   RELEASE DECISION (SCOPED: exact range + OS active + POS filter):
-//     exact_range_provided · eligible_missing_account_id = 0 ·
-//     eligible_missing_customer = 0 · eligible_cross_store_accounts = 0
-//   DIAGNOSTIC (toàn hệ thống) — chỉ CẢNH BÁO.
+//     exact_range_provided · eligible_missing_customer_phone = 0
+//   DIAGNOSTIC (chỉ CẢNH BÁO — KHÔNG đổi exit): cross-store trong/ngoài range
+//     (stakeholder đã chốt rule earliest-order), phone thiếu NGOÀI range,
+//     account_id, customer collection.
 // Exit code = 0 CHỈ khi runtime + release ĐỀU pass (hoặc ≠0 khi lỗi kết nối).
 // ⚠ P2#3: proof đọc MONGO NGUỒN — runtime đọc Supabase snapshot. Sau deploy
 // + full sync PHẢI verify TRỰC TIẾP Supabase (SQL in ở cuối output) trước
@@ -307,10 +308,11 @@ try {
       hasPhone: normalizeVnPhone(typeof o.customer_phone === 'string' ? o.customer_phone : null) !== null,
       hasAccount: a !== null && a > 0,
       hasCompleted: o.completed_time instanceof Date,
+      completedTimeMs: o.completed_time instanceof Date ? o.completed_time.getTime() : null,
       price: toNum(o.total_price),
     }
   })
-  const runtime = runtimeReadiness(runtimeRows, pointByCode, posFilter)
+  const runtime = runtimeReadiness(runtimeRows, pointByCode, posFilter, rangeMs)
 
   const gateReport = buildGateReport({
     rangeProvided: !!rangeMs,
@@ -318,6 +320,7 @@ try {
     eligibleCrossStore: crossInRange.length,
     runtimeMissingPhone: runtime.missingPhone.length,
     runtimeMissingCompleted: runtime.missingCompleted.length,
+    runtimeMissingPhoneOutOfRange: runtime.missingPhoneOutOfRange.length,
     globalMissingPhone: missingPhone.length,
     globalMissingAccount: missingAccount.length,
     globalMissingCustomer: missingCustomer.length,
@@ -444,10 +447,11 @@ try {
     },
     // r1.3.3: 3 tầng gate — exit = runtime AND release; diagnostic chỉ cảnh báo.
     runtime_readiness_gates: {
-      missing_customer_phone: runtime.missingPhone.length,
+      missing_customer_phone_in_range: runtime.missingPhone.length,
       missing_completed_time: runtime.missingCompleted.length,
       missing_customer_phone_sample: runtime.missingPhone.slice(0, 10),
       missing_completed_sample: runtime.missingCompleted.slice(0, 10),
+      missing_customer_phone_out_of_range_diagnostic: runtime.missingPhoneOutOfRange.length,
       missing_account_id_diagnostic: runtime.missingAccountDiagnostic.length,
       pass: gateReport.runtime.every(([, ok]) => ok),
     },
@@ -479,7 +483,12 @@ try {
   for (const [label, ok] of gateReport.runtime) {
     console.log((ok ? 'PASS' : 'FAIL').padEnd(5), label)
   }
-  for (const [name, arr] of [['thiếu account_id', runtime.missingAccount], ['thiếu completed_time', runtime.missingCompleted]]) {
+  for (const [name, arr] of [
+    ['thiếu SĐT khách (TRONG range — BLOCKING)', runtime.missingPhone],
+    ['thiếu completed_time (toàn lịch sử — BLOCKING)', runtime.missingCompleted],
+    ['thiếu SĐT khách NGOÀI range (diagnostic)', runtime.missingPhoneOutOfRange],
+    ['thiếu account_id (diagnostic — không còn là identity)', runtime.missingAccountDiagnostic],
+  ]) {
     if (arr.length > 0) {
       console.log(`  sample ${name} (≤10):`)
       for (const e of arr.slice(0, 10)) console.log(`    ${e.order_id} · ${e.partner_code} · ${e.point}`)

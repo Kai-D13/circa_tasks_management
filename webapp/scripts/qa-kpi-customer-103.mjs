@@ -102,23 +102,31 @@ try {
     if (r.error) abort('preflight schema: cột ' + table + '.' + col + ' không đọc được (103 chưa apply đủ?): ' + r.error.message)
     out(`preflight: cột ${table}.${col} tồn tại`, true, '')
   }
-  // mig 104: identity = phone. Đơn ĐỦ ĐIỀU KIỆN đếm (delivered + active +
-  // giá > 0 + có completed_time) mà thiếu customer_phone_norm sẽ làm RPC
-  // fail-closed → khối aggregate PENDING tới khi backfill xong.
-  const { count: missingPhone, error: missErr } = await svc.from('affiliate_orders')
-    .select('order_id', { count: 'exact', head: true })
-    .eq('status_norm', 'delivered').eq('source_active', true)
-    .gt('total_price', 0).not('completed_time', 'is', null)
-    .is('customer_phone_norm', null)
-  if (missErr) abort('preflight: không đếm được delivered thiếu customer_phone_norm: ' + missErr.message)
-  const backfillDone = (missingPhone ?? 1) === 0
-  console.log(`backfill identity (mig 104): đơn đủ điều kiện thiếu customer_phone_norm = ${missingPhone} → ${backfillDone ? 'ĐÃ xong' : 'CHƯA xong (khối aggregate sẽ PENDING)'}`)
+  // r1 (audit P1#5): preflight identity phải SCOPE ĐÚNG như RPC sẽ chạy trong
+  // test — 2 fixture store + cửa sổ QA [P_FROM, P_TO). Đếm toàn bảng khiến
+  // MỘT đơn thật không liên quan (đơn cũ ngoài kỳ) cũng skip cả khối
+  // aggregate thành PENDING. Đo scope sau khi có sA/sB (bên dưới).
+  const identityScopeCheck = async (storeIds) => {
+    const { count, error } = await svc.from('affiliate_orders')
+      .select('order_id', { count: 'exact', head: true })
+      .eq('status_norm', 'delivered').eq('source_active', true)
+      .gt('total_price', 0).not('completed_time', 'is', null)
+      .in('store_id', storeIds)
+      .gte('completed_time', P_FROM).lt('completed_time', P_TO)
+      .is('customer_phone_norm', null)
+    if (error) abort('preflight: không đếm được đơn thiếu customer_phone_norm trong scope QA: ' + error.message)
+    return count ?? 1
+  }
 
   // ── Fixture stores + campaigns ────────────────────────────────────────────
   const { data: stores } = await svc.from('stores').select('id, code')
     .eq('store_type', 'os').eq('is_active', true).order('code').limit(2)
   if (!stores || stores.length < 2) abort('không đủ 2 store os active')
   const [sA, sB] = stores
+  // r1 P1#5: identity readiness ĐÚNG SCOPE test (2 store fixture × cửa sổ QA).
+  const missingPhoneScoped = await identityScopeCheck([sA.id, sB.id])
+  const backfillDone = missingPhoneScoped === 0
+  console.log(`backfill identity (mig 104) trong SCOPE QA (${sA.code}/${sB.code} × ${P_FROM}→${P_TO}): đơn đủ điều kiện thiếu customer_phone_norm = ${missingPhoneScoped} → ${backfillDone ? 'ĐÃ xong' : 'CHƯA xong (khối aggregate sẽ PENDING)'}`)
 
   const mkCampaign = async (name, over = {}) => {
     const { data, error } = await svc.from('kpi_campaigns').insert({
@@ -153,7 +161,7 @@ try {
       order_id: id, partner_code: PARTNER, raw_status: 'DELIVERED', status_norm: 'delivered',
       total_price: 100000, created_time: '2025-01-02T03:00:00Z',
       completed_time: '2025-01-05T03:00:00Z', // 10:00 VN 05/01
-      source_active: true, customer_phone_norm: '0900000001', customer_phone_norm: '0900000001', ...over,
+      source_active: true, account_id: 900001, customer_phone_norm: '0900000001', ...over,
     })
     if (error) abort(`fixture order ${id}: ${error.message}`)
     FX_IDS.push(id) // r1 P0: CHỈ sau insert thành công — collision không lọt cleanup
@@ -288,9 +296,9 @@ try {
       out('aggregate: tie-break order_id nhỏ thắng (900008 tại sB 15/01)',
         (byKey.get(`${sB.id}|2025-01-15`) ?? 0) === 1, `tie winner order=${tieB}`)
       out('aggregate: cross_store đếm 900001 + 900008',
-        r.cross_store_account_count === 2
+        r.cross_store_customer_count === 2
           && (r.cross_store_sample ?? []).includes(900001) && (r.cross_store_sample ?? []).includes(900008),
-        JSON.stringify({ n: r.cross_store_account_count, sample: r.cross_store_sample }))
+        JSON.stringify({ n: r.cross_store_customer_count, sample: r.cross_store_sample }))
     }
     // Fail-closed (mig 104): thiếu customer_phone_norm (đơn đủ điều kiện) /
     // thiếu completed_time trong scope

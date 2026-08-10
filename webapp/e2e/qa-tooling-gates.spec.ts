@@ -86,7 +86,7 @@ test.describe('qa tooling safety gates (mig 103 r1.1) @desktop', () => {
     }
     expect(qa).toContain("abort('preflight schema:")
     // mig 104: preflight đếm thiếu IDENTITY = customer_phone_norm
-    expect(qa).toContain('không đếm được delivered thiếu customer_phone_norm')
+    expect(qa).toContain('không đếm được đơn thiếu customer_phone_norm trong scope QA')
 
     const proof = fs.readFileSync('scripts/proof-affiliate-account-id.mjs', 'utf8')
     expect(proof).toContain('process.env.QA_CUSTOMER_FROM')
@@ -244,7 +244,13 @@ test.describe('lib-customer-proof r1.3.2 (scoped release gates) @desktop', () =>
 
     expect(buildGateReport({ ...base, rangeProvided: false }).exitCode).toBe(1)
     expect(buildGateReport({ ...base, eligibleMissingPhone: 1 }).exitCode).toBe(1)
-    expect(buildGateReport({ ...base, eligibleCrossStore: 2 }).exitCode).toBe(1)
+    // r1 P1#3: cross-store KHÔNG còn chặn release — engine chỉ warning và vẫn
+    // ghi số theo earliest-order (stakeholder đã chốt) → tooling không được
+    // chặt hơn contract.
+    const cross = buildGateReport({ ...base, eligibleCrossStore: 3 })
+    expect(cross.exitCode).toBe(0)
+    expect(cross.diagnostic.some(([label, ok]) => String(label).includes('cross_store') && ok === false)).toBe(true)
+    expect(cross.release.every(([, ok]) => ok)).toBe(true)
     // metric scoped PASS nhưng runtime readiness FAIL → exit ≠ 0
     expect(buildGateReport({ ...base, runtimeMissingPhone: 1 }).exitCode).toBe(1)
     expect(buildGateReport({ ...base, runtimeMissingCompleted: 1 }).exitCode).toBe(1)
@@ -269,21 +275,27 @@ test.describe('lib-customer-proof r1.3.3 (runtime readiness) @desktop', () => {
     M('FS-STORE', 's3', { type: 'fs' }),
     M('OS-DEAD', 's4', { storeActive: false }),
   ])
-  const R = (orderId: number, partnerCode: string, over: Partial<{ hasPhone: boolean; hasAccount: boolean; hasCompleted: boolean; price: number | null }> = {}) =>
-    ({ orderId, partnerCode, hasPhone: true, hasAccount: true, hasCompleted: true, price: 100_000, ...over })
+  const R = (orderId: number, partnerCode: string, over: Partial<{ hasPhone: boolean; hasAccount: boolean; hasCompleted: boolean; price: number | null; completedTimeMs: number | null }> = {}) =>
+    ({ orderId, partnerCode, hasPhone: true, hasAccount: true, hasCompleted: true, price: 100_000, completedTimeMs: 1500, ...over })
 
-  test('mig 104: canary PHONE trên đơn đủ điều kiện (NGOÀI mọi range vẫn tính); completed_time canary MỌI đơn; account chỉ diagnostic', () => {
+  test('mig 104 r1: canary PHONE hard-gate CHỈ trong range (mirror RPC); NGOÀI range = diagnostic; completed_time toàn lịch sử; account diagnostic', () => {
+    const RANGE = { from: 1000, to: 2000 }
     const r = runtimeReadiness([
-      R(1, 'OS-A', { hasPhone: false }),                    // thiếu phone → BLOCKING
-      R(2, 'OS-A', { hasCompleted: false }),                // thiếu completed_time
-      R(3, 'OS-B'),                                         // sạch
-      R(4, 'OS-A', { hasAccount: false }),                  // chỉ diagnostic
-      R(5, 'OS-A', { hasPhone: false, price: 0 }),          // giá ≤0 → không tham gia đếm
-      R(6, 'OS-A', { hasPhone: false, hasCompleted: false }), // chưa completed → chưa tính phone
-    ], points)
+      R(1, 'OS-A', { hasPhone: false, completedTimeMs: 1500 }),  // trong range → BLOCKING
+      R(2, 'OS-A', { hasCompleted: false, completedTimeMs: null }), // thiếu completed_time
+      R(3, 'OS-B', { completedTimeMs: 1500 }),                   // sạch
+      R(4, 'OS-A', { hasAccount: false, completedTimeMs: 1500 }), // chỉ diagnostic
+      R(5, 'OS-A', { hasPhone: false, price: 0, completedTimeMs: 1500 }), // giá ≤0 → không đếm
+      R(6, 'OS-A', { hasPhone: false, completedTimeMs: 9000 }),  // NGOÀI range → diagnostic
+    ], points, null, RANGE)
     expect(r.missingPhone.map((e) => e.order_id)).toEqual([1])
-    expect(r.missingCompleted.map((e) => e.order_id)).toEqual([2, 6])
+    expect(r.missingPhoneOutOfRange.map((e) => e.order_id)).toEqual([6])
+    expect(r.missingCompleted.map((e) => e.order_id)).toEqual([2])
     expect(r.missingAccountDiagnostic.map((e) => e.order_id)).toEqual([4])
+    // Không truyền range → KHÔNG có hard gate phone (release gate đòi range riêng)
+    const noRange = runtimeReadiness([R(1, 'OS-A', { hasPhone: false, completedTimeMs: 1500 })], points)
+    expect(noRange.missingPhone).toEqual([])
+    expect(noRange.missingPhoneOutOfRange).toHaveLength(1)
   })
 
   test('scoped đúng: FS-store/OS-inactive KHÔNG tính; posFilter loại store ngoài subset', () => {
@@ -292,9 +304,10 @@ test.describe('lib-customer-proof r1.3.3 (runtime readiness) @desktop', () => {
       R(2, 'OS-DEAD', { hasPhone: false }),   // store inactive — RPC không target được
       R(3, 'OS-B', { hasPhone: false }),
     ]
-    const all = runtimeReadiness(rows, points)
+    const RANGE = { from: 1000, to: 2000 }
+    const all = runtimeReadiness(rows, points, null, RANGE)
     expect(all.missingPhone.map((e) => e.order_id)).toEqual([3])
-    const sub = runtimeReadiness(rows, points, new Set(['POS-s1']))
+    const sub = runtimeReadiness(rows, points, new Set(['POS-s1']), RANGE)
     expect(sub.missingPhone).toEqual([])   // OS-B ngoài subset
     expect(sub.missingCompleted).toEqual([])
   })
@@ -324,6 +337,24 @@ test.describe('lib-customer-proof r1.3.3 (runtime readiness) @desktop', () => {
     expect(proofCode).not.toContain('receiver_phone_number')
     expect(proof).toContain('missing_customer_phone')
     expect(proof).toContain('missing_account_id_diagnostic')
+    // r1 P1#1 (crash sau JSON summary): mọi truy cập runtime.<field> phải
+    // thuộc contract của runtimeReadiness — chặn tái diễn lỗi runtime chỉ lộ
+    // khi chạy thật với Mongo.
+    const runtimeFields = new Set([...proof.matchAll(/runtime\.(\w+)/g)].map((m) => m[1]))
+    runtimeFields.delete('every')
+    expect([...runtimeFields].sort()).toEqual(
+      ['missingAccountDiagnostic', 'missingCompleted', 'missingPhone', 'missingPhoneOutOfRange'])
+    // r1 P1#4a: hard gate phone phải được truyền range (mirror RPC 104)
+    expect(proof).toContain('runtimeReadiness(runtimeRows, pointByCode, posFilter, rangeMs)')
+
+    const qaDb = fs.readFileSync('scripts/qa-kpi-customer-103.mjs', 'utf8')
+    // r1 P1#2: QA database assert ĐÚNG contract response mig 104
+    expect(qaDb).toContain('cross_store_customer_count')
+    expect(qaDb).not.toContain('cross_store_account_count')
+    // r1 P1#5: preflight identity scope theo fixture store + cửa sổ QA
+    expect(qaDb).toContain('identityScopeCheck')
+    expect(qaDb).toContain("gte('completed_time', P_FROM)")
+    expect(qaDb).toContain("lt('completed_time', P_TO)")
   })
 })
 
@@ -460,6 +491,11 @@ test.describe('mig 104 source contract @desktop', () => {
     // giữ nguyên các guard 103 khác
     expect(code).toContain('daterange(c2.start_date, c2.end_date')
     expect(code).toContain('p_expected_run_id')
+  })
+
+  test('r1 P2#6: preflight ABORT khi còn Customer Campaign ACTIVE (cutover semantics khi cột chưa backfill)', () => {
+    expect(sql).toContain("metric_type = 'affiliate_customer_count' AND status = 'active'")
+    expect(sql).toContain('còn Customer Campaign ĐANG ACTIVE')
   })
 
   test('Cột + CHECK định dạng di động VN; GMV zero-touch (không đụng bảng/RPC GMV)', () => {

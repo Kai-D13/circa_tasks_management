@@ -36,9 +36,22 @@ BEGIN;
 
 -- ── A. Cột identity + CHECK định dạng ───────────────────────────────────────
 DO $$
+DECLARE v_active text;
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM public.app_migrations WHERE version = '103') THEN
     RAISE EXCEPTION '104: thiếu migration nền 103 (schema customer campaign)';
+  END IF;
+
+  -- r1 (audit P2#6): migration ĐỔI SEMANTICS identity của RPC ngay lập tức
+  -- (account → phone) trong khi cột customer_phone_norm còn TOÀN NULL (chưa
+  -- backfill). Nếu đang có Customer Campaign ACTIVE, lượt sync kế sẽ RAISE
+  -- fail-closed hàng loạt. Cutover PHẢI diễn ra khi không campaign khách nào
+  -- active (hiện prod: flag=false, chỉ có campaign QA paused/is_test).
+  SELECT string_agg(name || ' (' || status || ')', ', ' ORDER BY name) INTO v_active
+  FROM public.kpi_campaigns
+  WHERE metric_type = 'affiliate_customer_count' AND status = 'active' AND archived_at IS NULL;
+  IF v_active IS NOT NULL THEN
+    RAISE EXCEPTION '104: còn Customer Campaign ĐANG ACTIVE [%] — pause/archive trước khi cutover identity (cột customer_phone_norm chưa backfill, sync sẽ fail-closed)', v_active;
   END IF;
 END $$;
 

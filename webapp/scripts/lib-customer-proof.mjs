@@ -185,26 +185,30 @@ export function classifyMissingIdentity(rows, pointByCode, rangeMs = null, posFi
 //     đúng campaign range.
 //   diagnostic — TOÀN HỆ THỐNG: chỉ CẢNH BÁO, không đổi exit code.
 // Exit code = 0 CHỈ khi runtime_readiness PASS **VÀ** release_decision PASS.
-// mig 104: gate CỨNG chỉ còn PHONE + completed_time. account_id và customer
-// collection XUỐNG diagnostic (contract 09/08 — 14 đơn thiếu account hết là
-// blocker). Cross-store trong range vẫn là gate cứng (rule earliest-order chỉ
-// an toàn khi số lượng kiểm soát được → giữ để stakeholder thấy trước).
+// mig 104 r1: gate CỨNG chỉ còn PHONE (trong range) + completed_time.
+//   · account_id / customer collection: DIAGNOSTIC (contract 09/08).
+//   · CROSS-STORE: DIAGNOSTIC (audit r1 P1#3) — stakeholder ĐÃ CHỐT rule
+//     earliest-order trong range; engine chính (syncCampaignCore) chỉ warning
+//     và vẫn ghi số, nên proof KHÔNG được exit 1 vì cross-store, nếu không
+//     tooling chặt hơn contract → chặn release oan.
+//   · missing phone NGOÀI range: diagnostic (RPC không chặn).
 /** @param {{rangeProvided: boolean, eligibleMissingPhone: number,
  *   eligibleCrossStore: number, runtimeMissingPhone: number,
- *   runtimeMissingCompleted: number, globalMissingPhone: number,
- *   globalMissingAccount: number, globalMissingCustomer: number,
- *   globalCrossStore: number}} p */
+ *   runtimeMissingCompleted: number, runtimeMissingPhoneOutOfRange?: number,
+ *   globalMissingPhone: number, globalMissingAccount: number,
+ *   globalMissingCustomer: number, globalCrossStore: number}} p */
 export function buildGateReport(p) {
   const runtime = [
-    ['runtime_missing_customer_phone (đơn đủ điều kiện, scoped OS stores) = 0', p.runtimeMissingPhone === 0],
+    ['runtime_missing_customer_phone (đơn đủ điều kiện TRONG range, scoped OS stores) = 0', p.runtimeMissingPhone === 0],
     ['runtime_missing_completed_time (toàn lịch sử, scoped OS stores) = 0', p.runtimeMissingCompleted === 0],
   ]
   const release = [
     ['exact_range_provided (QA_CUSTOMER_FROM/TO)', p.rangeProvided],
     ['eligible_missing_customer_phone = 0', p.eligibleMissingPhone === 0],
-    ['eligible_cross_store_customers = 0', p.eligibleCrossStore === 0],
   ]
   const diagnostic = [
+    ['cross_store_customers TRONG range = 0 (rule earliest-order đã xử lý — KHÔNG chặn release)', p.eligibleCrossStore === 0],
+    ['missing_customer_phone NGOÀI range = 0 (RPC không chặn)', (p.runtimeMissingPhoneOutOfRange ?? 0) === 0],
     ['missing_customer_phone (toàn lịch sử) = 0', p.globalMissingPhone === 0],
     ['missing_account_id (toàn lịch sử — KHÔNG còn là identity) = 0', p.globalMissingAccount === 0],
     ['missing_customer trong collection (đối chiếu account) = 0', p.globalMissingCustomer === 0],
@@ -223,16 +227,23 @@ export function buildGateReport(p) {
 // đơn nào thiếu account_id hoặc completed_time, nên proof PASS metric scoped
 // mà bỏ 2 canary này vẫn có thể activation/sync fail (r1.3.3 P1#1/#2).
 // rows: TOÀN BỘ đơn DELIVERED đã normalize {orderId, partnerCode, hasPhone,
-// hasAccount, hasCompleted, price}.
-// mig 104: canary PHONE mirror RPC — chỉ soi đơn ĐỦ ĐIỀU KIỆN ĐẾM (price > 0);
-// completed_time giữ fail-closed TOÀN BỘ đơn DELIVERED (không lọc giá — mirror
-// canary 103/104 vẫn quét mọi đơn trong scope stores);
-// account = DIAGNOSTIC (đếm riêng, KHÔNG vào gate cứng).
-/** @param {Array<{orderId: number | string, partnerCode: string, hasPhone: boolean, hasAccount: boolean, hasCompleted: boolean, price: number | null}>} rows
+// hasAccount, hasCompleted, price, completedTimeMs}.
+// mig 104 r1 (audit P1#4): MIRROR CHÍNH XÁC phạm vi canary của RPC 104 —
+//   · missingPhone (HARD GATE): CHỈ đơn ĐỦ ĐIỀU KIỆN ĐẾM trong ĐÚNG campaign
+//     range (price > 0 + có completed_time + completedTime ∈ [from, to)) trên
+//     scoped OS stores. Đơn cũ NGOÀI range thiếu phone KHÔNG block (RPC cũng
+//     không chặn) → hết fail oan; rangeMs = null → không có range thì KHÔNG
+//     có hard gate phone (release gate riêng đã đòi exact_range_provided).
+//   · missingCompleted (HARD GATE): giữ TOÀN LỊCH SỬ trong scope stores —
+//     RPC 104 vẫn fail-closed toàn thời gian với completed_time.
+//   · missingAccountDiagnostic + missingPhoneOutOfRange: DIAGNOSTIC thuần.
+/** @param {Array<{orderId: number | string, partnerCode: string, hasPhone: boolean, hasAccount: boolean, hasCompleted: boolean, price: number | null, completedTimeMs?: number | null}>} rows
  *  @param {Map<string, ReturnType<typeof pointFromMapping>>} pointByCode
- *  @param {Set<string> | null} [posFilter] */
-export function runtimeReadiness(rows, pointByCode, posFilter = null) {
+ *  @param {Set<string> | null} [posFilter]
+ *  @param {{from: number, to: number} | null} [rangeMs] */
+export function runtimeReadiness(rows, pointByCode, posFilter = null, rangeMs = null) {
   const missingPhone = []
+  const missingPhoneOutOfRange = []
   const missingCompleted = []
   const missingAccountDiagnostic = []
   for (const r of rows) {
@@ -242,8 +253,12 @@ export function runtimeReadiness(rows, pointByCode, posFilter = null) {
     const entry = { order_id: r.orderId, partner_code: r.partnerCode, point: point.label }
     if (!r.hasCompleted) missingCompleted.push(entry)
     if (!r.hasAccount) missingAccountDiagnostic.push(entry)
-    // Đơn đủ điều kiện đếm mới cần identity: price > 0 + có completed_time.
-    if (r.price !== null && r.price > 0 && r.hasCompleted && !r.hasPhone) missingPhone.push(entry)
+    if (r.price !== null && r.price > 0 && r.hasCompleted && !r.hasPhone) {
+      const t = r.completedTimeMs ?? null
+      const inRange = rangeMs !== null && t !== null && t >= rangeMs.from && t < rangeMs.to
+      if (inRange) missingPhone.push(entry)
+      else missingPhoneOutOfRange.push(entry)
+    }
   }
-  return { missingPhone, missingCompleted, missingAccountDiagnostic }
+  return { missingPhone, missingPhoneOutOfRange, missingCompleted, missingAccountDiagnostic }
 }

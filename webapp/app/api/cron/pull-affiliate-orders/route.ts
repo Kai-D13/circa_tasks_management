@@ -121,11 +121,14 @@ export async function GET(request: NextRequest) {
     const deliveredMissingCompleted = valid.filter((r) => r.status_norm === 'delivered' && r.completed_time === null)
     // Canary IDENTITY (mig 104 — contract 09/08): identity khách =
     // customer_phone_norm (buyer phone chuẩn hóa), KHÔNG còn account_id.
-    //   · missing_customer_phone (BLOCKING): đơn ĐỦ ĐIỀU KIỆN đếm — delivered
-    //     + total_price>0 + CÓ completed_time + thuộc mapping OS ACTIVE —
-    //     thiếu phone hợp lệ ⇒ rpc_aggregate_affiliate_customers fail-closed
-    //     ⇒ status 'warning' để vận hành xử lý nguồn TRƯỚC khi KPI đứng.
-    //     Đơn ngoài scope đếm (FS/partner, giá ≤0, chưa completed) KHÔNG chặn.
+    //   · missing_customer_phone (DIAGNOSTIC — r1 audit P1#4): đơn ĐỦ ĐIỀU
+    //     KIỆN đếm (delivered + total_price>0 + CÓ completed_time + mapping OS
+    //     ACTIVE) thiếu phone hợp lệ. Cron KHÔNG biết campaign nào đang chạy
+    //     và canary này quét TOÀN NGUỒN (mọi thời điểm) — đơn cũ ngoài kỳ
+    //     campaign không được làm run 'warning'. Fail-closed THẬT nằm ở
+    //     rpc_aggregate_affiliate_customers + activation gate (scope đúng
+    //     campaign range ∩ target stores). Ở đây chỉ đếm + log để vận hành
+    //     thấy sớm chất lượng nguồn.
     //   · missing_account_id (DIAGNOSTIC thuần — 104 hạ cấp từ blocking):
     //     account_id không còn tham gia identity; giữ đếm để theo dõi chất
     //     lượng nguồn, KHÔNG đổi status run.
@@ -343,9 +346,9 @@ export async function GET(request: NextRequest) {
       deliveredMissingCompletedSample.join(', '))
   }
   if (missingPhoneEligibleCount > 0) {
-    // mig 104 BLOCKING: đơn đủ điều kiện đếm nhưng thiếu identity phone →
-    // rpc_aggregate_affiliate_customers RAISE, campaign KHÁCH giữ snapshot cũ.
-    console.warn(`[affiliate-sync] ${missingPhoneEligibleCount} đơn DELIVERED (OS, đủ điều kiện đếm) thiếu SĐT khách hợp lệ — aggregate SỐ KHÁCH sẽ fail-closed:`,
+    // DIAGNOSTIC (r1 P1#4): KHÔNG đổi status run — campaign khách có bị chặn
+    // hay không do RPC quyết theo ĐÚNG range của campaign đó.
+    console.warn(`[affiliate-sync] ${missingPhoneEligibleCount} đơn DELIVERED (OS, đủ điều kiện đếm) thiếu SĐT khách hợp lệ — diagnostic; aggregate SỐ KHÁCH chỉ fail-closed nếu đơn nằm TRONG kỳ campaign:`,
       missingPhoneEligibleSample.join(', '))
   }
   if (deliveredMissingAccountCount > 0) {
@@ -363,7 +366,7 @@ export async function GET(request: NextRequest) {
     || unknownStatuses.length > 0 || newFsCodes.length > 0 || invalidNewCodes.length > 0
   return NextResponse.json({
     ok: true,
-    status: rejectedReasons.length > 0 || deliveredMissingCompletedCount > 0 || missingPhoneEligibleCount > 0
+    status: rejectedReasons.length > 0 || deliveredMissingCompletedCount > 0
       ? 'warning' : hasNotes ? 'success_with_notes' : 'success',
     run_id: runId,
     raw_fetched: counts!.rawFetched,
@@ -378,7 +381,8 @@ export async function GET(request: NextRequest) {
     unknown_statuses: unknownStatuses,
     delivered_missing_completed_time_count: deliveredMissingCompletedCount,
     delivered_missing_completed_time_sample: deliveredMissingCompletedSample,
-    // mig 104: BLOCKING = phone (identity); account_id = diagnostic.
+    // mig 104 r1: phone + account_id đều DIAGNOSTIC ở tầng cron (fail-closed
+    // thật nằm ở RPC aggregate/activation theo đúng campaign range).
     missing_customer_phone_count: missingPhoneEligibleCount,
     missing_customer_phone_sample: missingPhoneEligibleSample,
     delivered_missing_account_id_count: deliveredMissingAccountCount,
