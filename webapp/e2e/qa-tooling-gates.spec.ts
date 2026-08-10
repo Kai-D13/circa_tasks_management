@@ -351,6 +351,18 @@ test.describe('lib-customer-proof r1.3.3 (runtime readiness) @desktop', () => {
     // r1 P1#2: QA database assert ĐÚNG contract response mig 104
     expect(qaDb).toContain('cross_store_customer_count')
     expect(qaDb).not.toContain('cross_store_account_count')
+    // r1.1 P1#1: sample cross-store là SĐT ĐÃ MASK (chuỗi), KHÔNG phải account số
+    expect(qaDb).toContain("'0900***001'")
+    expect(qaDb).toContain("'0900***008'")
+    expect(qaDb).not.toContain('includes(900001)')
+    expect(qaDb).not.toContain('includes(900008)')
+    // r1.1 P1#2: SQL hướng dẫn cuối proof theo contract 104 — hard gate là
+    // PHONE trong range + completed_time; account chỉ diagnostic (KHÔNG kỳ vọng 0)
+    expect(proof).toContain('missing_customer_phone_in_range')
+    expect(proof).toContain('missing_account_id_diagnostic')
+    expect(proof).toContain('KHÔNG kỳ vọng 0')
+    expect(proof).not.toContain('account_id IS NULL) AS missing_account_id,')
+    expect(proof).not.toContain('RPC 103')
     // r1 P1#5: preflight identity scope theo fixture store + cửa sổ QA
     expect(qaDb).toContain('identityScopeCheck')
     expect(qaDb).toContain("gte('completed_time', P_FROM)")
@@ -493,9 +505,22 @@ test.describe('mig 104 source contract @desktop', () => {
     expect(code).toContain('p_expected_run_id')
   })
 
-  test('r1 P2#6: preflight ABORT khi còn Customer Campaign ACTIVE (cutover semantics khi cột chưa backfill)', () => {
+  test('r1 P2#6 + r1.1 P2#4: preflight ABORT khi còn Customer Campaign ACTIVE, NHƯNG chỉ ở lần cutover đầu (re-run idempotent)', () => {
     expect(sql).toContain("metric_type = 'affiliate_customer_count' AND status = 'active'")
     expect(sql).toContain('còn Customer Campaign ĐANG ACTIVE')
+    // guard nằm TRONG nhánh "chưa có marker 104" → re-run sau cutover không bị chặn
+    const guardStart = sql.indexOf("IF NOT EXISTS (SELECT 1 FROM public.app_migrations WHERE version = '104')")
+    const guard = sql.slice(guardStart, sql.indexOf('END $$;', guardStart))
+    expect(guard).toContain('còn Customer Campaign ĐANG ACTIVE')
+  })
+
+  test('r1.1 P2#3: cron đưa missing phone vào hasNotes → success_with_notes (KHÔNG phải warning)', () => {
+    const route = fs.readFileSync('app/api/cron/pull-affiliate-orders/route.ts', 'utf8')
+    expect(route).toContain('const hasNotes = missingPhoneEligibleCount > 0')
+    const statusIdx = route.indexOf('status: rejectedReasons.length > 0')
+    const statusLine = route.slice(statusIdx, route.indexOf('run_id: runId', statusIdx))
+    expect(statusLine).not.toContain('missingPhoneEligibleCount')   // không đẩy lên 'warning'
+    expect(statusLine).toContain("'success_with_notes'")
   })
 
   test('Cột + CHECK định dạng di động VN; GMV zero-touch (không đụng bảng/RPC GMV)', () => {

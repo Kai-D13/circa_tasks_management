@@ -47,11 +47,17 @@ BEGIN
   -- backfill). Nếu đang có Customer Campaign ACTIVE, lượt sync kế sẽ RAISE
   -- fail-closed hàng loạt. Cutover PHẢI diễn ra khi không campaign khách nào
   -- active (hiện prod: flag=false, chỉ có campaign QA paused/is_test).
-  SELECT string_agg(name || ' (' || status || ')', ', ' ORDER BY name) INTO v_active
-  FROM public.kpi_campaigns
-  WHERE metric_type = 'affiliate_customer_count' AND status = 'active' AND archived_at IS NULL;
-  IF v_active IS NOT NULL THEN
-    RAISE EXCEPTION '104: còn Customer Campaign ĐANG ACTIVE [%] — pause/archive trước khi cutover identity (cột customer_phone_norm chưa backfill, sync sẽ fail-closed)', v_active;
+  -- r1.1 (audit P2#4): guard CHỈ áp cho lần CUTOVER ĐẦU — sau khi marker
+  -- '104' đã ghi, file phải IDEMPOTENT đúng như header cam kết (re-run chỉ
+  -- CREATE OR REPLACE lại RPC; cột đã backfill nên campaign active không còn
+  -- rủi ro fail-closed hàng loạt).
+  IF NOT EXISTS (SELECT 1 FROM public.app_migrations WHERE version = '104') THEN
+    SELECT string_agg(name || ' (' || status || ')', ', ' ORDER BY name) INTO v_active
+    FROM public.kpi_campaigns
+    WHERE metric_type = 'affiliate_customer_count' AND status = 'active' AND archived_at IS NULL;
+    IF v_active IS NOT NULL THEN
+      RAISE EXCEPTION '104: còn Customer Campaign ĐANG ACTIVE [%] — pause/archive trước khi cutover identity (cột customer_phone_norm chưa backfill, sync sẽ fail-closed)', v_active;
+    END IF;
   END IF;
 END $$;
 

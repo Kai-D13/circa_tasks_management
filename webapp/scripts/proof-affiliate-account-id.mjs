@@ -6,7 +6,8 @@
 // customer_phone) — người MUA. KHÔNG dùng receiver_phone_number, KHÔNG dùng
 // account_id (account/customer collection XUỐNG diagnostic chất lượng nguồn).
 // Chứng minh coverage identity trên dữ liệu THẬT. r1.3.2 + r1.3.3 — GATE tách 3 tầng:
-//   RUNTIME READINESS (mirror canary RPC 103: TOÀN LỊCH SỬ DELIVERED trên
+//   RUNTIME READINESS (mirror canary RPC 104: phone = đơn đủ điều kiện TRONG
+//     range; completed_time = TOÀN LỊCH SỬ DELIVERED trên
 //     scoped OS stores, KHÔNG lọc range/giá): runtime_missing_account_id = 0
 //     · runtime_missing_completed_time = 0 — metric scoped có sạch mấy mà
 //     tầng này fail thì activation/sync production vẫn fail-closed.
@@ -296,7 +297,7 @@ try {
     .map((q) => toSafeInt(q.rawAccountId))
     .filter((a) => a !== null && a > 0))].filter((a) => !foundAccounts.has(a))
 
-  // 8e. RUNTIME READINESS (r1.3.3 P1#1/#2) — mirror canary RPC 103: TOÀN BỘ
+  // 8e. RUNTIME READINESS (r1.3.3 + 104 r1) — mirror canary RPC 104: TOÀN BỘ
   // đơn DELIVERED (Mongo full snapshot = source hiện hành) trên scoped OS
   // stores, KHÔNG lọc range/total_price. Đơn cũ ngoài tháng campaign thiếu
   // account_id/completed_time VẪN chặn activation/sync → phải là gate cứng.
@@ -394,7 +395,7 @@ try {
   }
 
   console.log('\n=== R1.3 DIAGNOSTIC — CROSS-STORE ===')
-  console.log(`  toàn lịch sử (mọi điểm, kể cả partner/unmapped — identity pointKey): ${crossStore.length} account`)
+  console.log(`  toàn lịch sử (khách theo SĐT, điểm theo pointKey — kể cả partner/unmapped): ${crossStore.length} account`)
   console.log('  trong exact range (CHỈ tập OS active, identity pointKey): '
     + (rangeMs ? `${crossInRange.length} account` : 'KHÔNG XÁC ĐỊNH — thiếu QA_CUSTOMER_FROM/TO'))
   for (const c of crossInRange.slice(0, 10)) {
@@ -479,7 +480,7 @@ try {
   console.log(JSON.stringify(summary, null, 2))
 
   // r1.3.3: exit = runtime AND release; global = cảnh báo.
-  console.log('\n=== RUNTIME READINESS GATES (mirror canary RPC 103 — toàn lịch sử DELIVERED trên scoped OS stores, KHÔNG lọc range/giá) ===')
+  console.log('\n=== RUNTIME READINESS GATES (mirror canary RPC 104 — phone: đơn đủ điều kiện TRONG range; completed_time: toàn lịch sử; scoped OS stores) ===')
   for (const [label, ok] of gateReport.runtime) {
     console.log((ok ? 'PASS' : 'FAIL').padEnd(5), label)
   }
@@ -507,16 +508,36 @@ try {
     console.log(`\n${failedHard} gate (runtime readiness / release) FAIL — DỪNG: chưa đủ điều kiện bước SOURCE REMEDIATION/BACKFILL nguồn trong scope đã chọn; gửi output (kèm JSON SUMMARY) cho stakeholder duyệt rule.`)
   } else {
     console.log('\nALL RUNTIME + RELEASE GATES PASS — đủ điều kiện bước source remediation/backfill nguồn trong scope đã chọn.')
-    console.log('⚠ P2#3: đây là proof trên MONGO NGUỒN. Sau deploy + full sync, verify TRỰC TIẾP Supabase trước khi bật flag:')
-    console.log("    SELECT count(*) FILTER (WHERE account_id IS NULL)      AS missing_account_id,")
-    console.log("           count(*) FILTER (WHERE completed_time IS NULL)  AS missing_completed_time")
-    console.log("    FROM public.affiliate_orders o")
-    console.log("    WHERE o.source_active AND o.status_norm = 'delivered'")
-    // r1.3.4 (audit P2): SQL theo ĐÚNG scope proof (scopedPoints đã áp
-    // posFilter) — chạy subset không bị báo fail oan bởi store ngoài phạm vi.
-    console.log('      AND o.store_id IN (' + scopedPoints.map((pt) => "'" + pt.storeId + "'").join(', ') + ');')
-    console.log('    -- scope: ' + scopedPoints.length + ' OS store active'
-      + (posFilter ? ' (SUBSET QA_CUSTOMER_POS_CODES)' : '') + ' — kỳ vọng 0 / 0 rồi mới mở QA UI/flag.')
+    console.log('⚠ đây là proof trên MONGO NGUỒN. Sau deploy + full sync, verify TRỰC TIẾP Supabase trước khi bật flag:')
+    const scopeIds = scopedPoints.map((pt) => "'" + pt.storeId + "'").join(', ')
+    console.log('  [1] HARD GATE identity — đơn ĐỦ ĐIỀU KIỆN ĐẾM trong ĐÚNG kỳ campaign (kỳ vọng 0):')
+    console.log('      SELECT count(*) AS missing_customer_phone_in_range')
+    console.log('      FROM public.affiliate_orders o')
+    console.log("      WHERE o.source_active AND o.status_norm = 'delivered'")
+    console.log('        AND o.total_price > 0 AND o.completed_time IS NOT NULL')
+    console.log('        AND o.customer_phone_norm IS NULL')
+    console.log('        AND o.store_id IN (' + scopeIds + ')')
+    if (rangeMs) {
+      console.log("        AND o.completed_time >= '" + RANGE_FROM + " 00:00:00+07'")
+      console.log("        AND o.completed_time <  ('" + RANGE_TO + " 00:00:00+07'::timestamptz + interval '1 day');")
+    } else {
+      console.log('        AND o.completed_time >= <campaign start 00:00+07>')
+      console.log('        AND o.completed_time <  <campaign end + 1 ngày 00:00+07>;   -- half-open')
+    }
+    console.log('  [2] HARD GATE completed_time — TOÀN LỊCH SỬ trên target stores (kỳ vọng 0):')
+    console.log('      SELECT count(*) AS missing_completed_time')
+    console.log('      FROM public.affiliate_orders o')
+    console.log("      WHERE o.source_active AND o.status_norm = 'delivered'")
+    console.log('        AND o.completed_time IS NULL')
+    console.log('        AND o.store_id IN (' + scopeIds + ');')
+    console.log('  [3] DIAGNOSTIC — account_id (mig 104: KHÔNG còn là identity, KHÔNG kỳ vọng 0, KHÔNG chặn release):')
+    console.log('      SELECT count(*) AS missing_account_id_diagnostic')
+    console.log('      FROM public.affiliate_orders o')
+    console.log("      WHERE o.source_active AND o.status_norm = 'delivered'")
+    console.log('        AND o.account_id IS NULL')
+    console.log('        AND o.store_id IN (' + scopeIds + ');')
+    console.log('  -- scope: ' + scopedPoints.length + ' OS store active'
+      + (posFilter ? ' (SUBSET QA_CUSTOMER_POS_CODES)' : '') + ' — CHỈ [1] và [2] phải = 0 rồi mới mở QA UI/flag.')
   }
   // r1.2: KHÔNG process.exit trong try — exit bỏ qua finally, Mongo client
   // không close → libuv assertion crash teardown (Windows). Set code, close

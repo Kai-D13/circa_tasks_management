@@ -362,7 +362,11 @@ export async function GET(request: NextRequest) {
       deliveredMissingAccountNonOsSample.join(', '))
   }
 
-  const hasNotes = (report?.unmatched_codes.length ?? 0) > 0 || (report?.inactive_codes.length ?? 0) > 0
+  // r1.1 (audit P2#3): thiếu identity phone là DIAGNOSTIC nhưng phải NỔI LÊN
+  // response — 'success_with_notes' (KHÔNG phải 'warning': cron không biết
+  // campaign nào active; fail-closed thật ở RPC/activation theo range).
+  const hasNotes = missingPhoneEligibleCount > 0
+    || (report?.unmatched_codes.length ?? 0) > 0 || (report?.inactive_codes.length ?? 0) > 0
     || unknownStatuses.length > 0 || newFsCodes.length > 0 || invalidNewCodes.length > 0
   return NextResponse.json({
     ok: true,

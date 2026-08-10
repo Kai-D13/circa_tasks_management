@@ -295,10 +295,15 @@ try {
         (byKey.get(`${sA.id}|2025-01-31`) ?? 0) === 1, '')
       out('aggregate: tie-break order_id nhỏ thắng (900008 tại sB 15/01)',
         (byKey.get(`${sB.id}|2025-01-15`) ?? 0) === 1, `tie winner order=${tieB}`)
-      out('aggregate: cross_store đếm 900001 + 900008',
+      // mig 104: sample là SĐT ĐÃ MASK dạng CHUỖI (0900***001), không phải
+      // account số — RPC mask trong DB để PII không vào log/response.
+      const xs = r.cross_store_sample ?? []
+      out('aggregate: cross_store đếm 2 khách + sample là SĐT MASK (chuỗi)',
         r.cross_store_customer_count === 2
-          && (r.cross_store_sample ?? []).includes(900001) && (r.cross_store_sample ?? []).includes(900008),
-        JSON.stringify({ n: r.cross_store_customer_count, sample: r.cross_store_sample }))
+          && xs.length === 2 && xs.every((x) => typeof x === 'string')
+          && xs.includes('0900***001') && xs.includes('0900***008')
+          && !xs.some((x) => /^0\d{9}$/.test(String(x))),
+        JSON.stringify({ n: r.cross_store_customer_count, sample: xs }))
     }
     // Fail-closed (mig 104): thiếu customer_phone_norm (đơn đủ điều kiện) /
     // thiếu completed_time trong scope
