@@ -102,7 +102,7 @@ function mkDeps(cfg: CampaignConfig, behavior: Behavior = {}) {
             { store_id: 'store-a', vn_date: '2026-07-05', customer_count: 3 },
             { store_id: 'store-b', vn_date: '2026-07-06', customer_count: 1 },
           ],
-          total_customers: 4, cross_store_account_count: 0, cross_store_sample: [],
+          total_customers: 4, cross_store_customer_count: 0, cross_store_sample: [],
         },
         error: null,
       }
@@ -503,7 +503,7 @@ test.describe('kpi sync orchestration — customer campaign (mig 103) @desktop',
       aggCust: async () => ({
         data: {
           rows: [{ store_id: 'store-a', vn_date: '2026-07-05', customer_count: 3 }],
-          total_customers: 5, cross_store_account_count: 0, cross_store_sample: [],
+          total_customers: 5, cross_store_customer_count: 0, cross_store_sample: [],
         },
         error: null,
       }),
@@ -518,7 +518,7 @@ test.describe('kpi sync orchestration — customer campaign (mig 103) @desktop',
       aggCust: async () => ({
         data: {
           rows: [{ store_id: 'store-a', vn_date: '2026-07-05', customer_count: 2 }],
-          total_customers: 2, cross_store_account_count: 1, cross_store_sample: [900001],
+          total_customers: 2, cross_store_customer_count: 1, cross_store_sample: ['0905***560'],
         },
         error: null,
       }),
@@ -527,7 +527,9 @@ test.describe('kpi sync orchestration — customer campaign (mig 103) @desktop',
     expect(r.status).toBe('success')
     if (r.status === 'success') {
       expect(r.warnings?.[0]).toContain('cross_store_customer_count=1')
-      expect(r.warnings?.[0]).toContain('900001')
+      // mig 104: sample là SĐT ĐÃ MASK từ DB — warning không chứa PII đầy đủ
+      expect(r.warnings?.[0]).toContain('0905***560')
+      expect(r.warnings?.[0]).not.toMatch(/0\d{9}/)
     }
   })
 
@@ -557,7 +559,7 @@ test.describe('kpi sync orchestration — customer campaign (mig 103) @desktop',
       aggCust: async () => ({
         data: {
           rows: [{ store_id: 'store-a', vn_date: '2026-07-05', customer_count: 3 }],
-          total_customers: 3, cross_store_account_count: 0, cross_store_sample: [],
+          total_customers: 3, cross_store_customer_count: 0, cross_store_sample: [],
         },
         error: null,
       }),

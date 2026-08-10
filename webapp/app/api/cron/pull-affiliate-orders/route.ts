@@ -119,18 +119,26 @@ export async function GET(request: NextRequest) {
     // aggregation fail-closed (rpc_aggregate_affiliate_gmv RAISE) — báo sớm ở
     // đây để vận hành thấy TRƯỚC khi KPI đứng snapshot. Ingest vẫn lưu đủ.
     const deliveredMissingCompleted = valid.filter((r) => r.status_norm === 'delivered' && r.completed_time === null)
-    // Canary identity (mig 103 — metric affiliate_customer_count): DELIVERED
-    // thiếu account_id sẽ làm rpc_aggregate_affiliate_customers fail-closed
-    // (campaign KHÁCH giữ snapshot cũ) — báo sớm như completed_time. KHÔNG
-    // vào health gate chung (không đóng băng oan campaign GMV/overview).
-    // r1.3.5 (audit P2 vận hành): TÁCH 2 TẦNG — campaign khách chỉ target OS
-    // store, nên CHỈ đơn thuộc mapping OS active là BLOCKING (status warning);
-    // đơn FS/partner/unmatched thiếu account = DIAGNOSTIC thuần (field + log
-    // info, KHÔNG đổi status — 22 đơn partner lịch sử không tạo cảnh báo sai).
-    const deliveredMissingAccount = valid.filter((r) => r.status_norm === 'delivered' && r.account_id === null)
+    // Canary IDENTITY (mig 104 — contract 09/08): identity khách =
+    // customer_phone_norm (buyer phone chuẩn hóa), KHÔNG còn account_id.
+    //   · missing_customer_phone (DIAGNOSTIC — r1 audit P1#4): đơn ĐỦ ĐIỀU
+    //     KIỆN đếm (delivered + total_price>0 + CÓ completed_time + mapping OS
+    //     ACTIVE) thiếu phone hợp lệ. Cron KHÔNG biết campaign nào đang chạy
+    //     và canary này quét TOÀN NGUỒN (mọi thời điểm) — đơn cũ ngoài kỳ
+    //     campaign không được làm run 'warning'. Fail-closed THẬT nằm ở
+    //     rpc_aggregate_affiliate_customers + activation gate (scope đúng
+    //     campaign range ∩ target stores). Ở đây chỉ đếm + log để vận hành
+    //     thấy sớm chất lượng nguồn.
+    //   · missing_account_id (DIAGNOSTIC thuần — 104 hạ cấp từ blocking):
+    //     account_id không còn tham gia identity; giữ đếm để theo dõi chất
+    //     lượng nguồn, KHÔNG đổi status run.
     const osCodes = new Set(ensured.mappings
       .filter((m) => m.partner_type === 'os' && m.is_active && m.store_id)
       .map((m) => m.partner_code))
+    const missingPhoneEligible = valid.filter((r) =>
+      r.status_norm === 'delivered' && r.total_price > 0 && r.completed_time !== null
+      && osCodes.has(r.partner_code) && r.customer_phone_norm === null)
+    const deliveredMissingAccount = valid.filter((r) => r.status_norm === 'delivered' && r.account_id === null)
     const missingAccountOs = deliveredMissingAccount.filter((r) => osCodes.has(r.partner_code))
     const missingAccountNonOs = deliveredMissingAccount.filter((r) => !osCodes.has(r.partner_code))
     return {
@@ -142,6 +150,8 @@ export async function GET(request: NextRequest) {
       deliveredMissingCompletedSample: deliveredMissingCompleted.slice(0, 10).map((r) => r.order_id),
       deliveredMissingAccountCount: missingAccountOs.length,
       deliveredMissingAccountSample: missingAccountOs.slice(0, 10).map((r) => r.order_id),
+      missingPhoneEligibleCount: missingPhoneEligible.length,
+      missingPhoneEligibleSample: missingPhoneEligible.slice(0, 10).map((r) => r.order_id),
       deliveredMissingAccountNonOsCount: missingAccountNonOs.length,
       deliveredMissingAccountNonOsSample: missingAccountNonOs.slice(0, 10).map((r) => r.order_id),
     }
@@ -170,6 +180,9 @@ export async function GET(request: NextRequest) {
         unknown_statuses: d.unknownStatuses,
         delivered_missing_completed_time_count: d.deliveredMissingCompletedCount,
         delivered_missing_completed_time_sample: d.deliveredMissingCompletedSample,
+        // mig 104: identity = phone (BLOCKING); account_id chỉ diagnostic.
+        missing_customer_phone_count: d.missingPhoneEligibleCount,
+        missing_customer_phone_sample: d.missingPhoneEligibleSample,
         delivered_missing_account_id_count: d.deliveredMissingAccountCount,
         delivered_missing_account_id_sample: d.deliveredMissingAccountSample,
         delivered_missing_account_id_non_os_count: d.deliveredMissingAccountNonOsCount,
@@ -222,6 +235,8 @@ export async function GET(request: NextRequest) {
   let deliveredMissingAccountSample: number[] = []
   let deliveredMissingAccountNonOsCount = 0
   let deliveredMissingAccountNonOsSample: number[] = []
+  let missingPhoneEligibleCount = 0
+  let missingPhoneEligibleSample: number[] = []
 
   try {
     const d = await readAndClassify()
@@ -236,6 +251,8 @@ export async function GET(request: NextRequest) {
     deliveredMissingAccountSample = d.deliveredMissingAccountSample
     deliveredMissingAccountNonOsCount = d.deliveredMissingAccountNonOsCount
     deliveredMissingAccountNonOsSample = d.deliveredMissingAccountNonOsSample
+    missingPhoneEligibleCount = d.missingPhoneEligibleCount
+    missingPhoneEligibleSample = d.missingPhoneEligibleSample
 
     // 2) Upsert batch — mỗi row set last_seen_run_id + source_active + synced_at.
     const nowIso = new Date().toISOString()
@@ -328,9 +345,15 @@ export async function GET(request: NextRequest) {
     console.warn(`[affiliate-sync] ${deliveredMissingCompletedCount} đơn DELIVERED thiếu completed_time (KPI aggregate sẽ fail-closed):`,
       deliveredMissingCompletedSample.join(', '))
   }
+  if (missingPhoneEligibleCount > 0) {
+    // DIAGNOSTIC (r1 P1#4): KHÔNG đổi status run — campaign khách có bị chặn
+    // hay không do RPC quyết theo ĐÚNG range của campaign đó.
+    console.warn(`[affiliate-sync] ${missingPhoneEligibleCount} đơn DELIVERED (OS, đủ điều kiện đếm) thiếu SĐT khách hợp lệ — diagnostic; aggregate SỐ KHÁCH chỉ fail-closed nếu đơn nằm TRONG kỳ campaign:`,
+      missingPhoneEligibleSample.join(', '))
+  }
   if (deliveredMissingAccountCount > 0) {
-    // OS BLOCKING: aggregate SỐ KHÁCH của campaign OS sẽ fail-closed.
-    console.warn(`[affiliate-sync] ${deliveredMissingAccountCount} đơn DELIVERED (OS) thiếu account_id (aggregate SỐ KHÁCH sẽ fail-closed):`,
+    // 104: account_id KHÔNG còn là identity → diagnostic thuần (info).
+    console.info(`[affiliate-sync] ${deliveredMissingAccountCount} đơn DELIVERED (OS) thiếu account_id — diagnostic chất lượng nguồn, KHÔNG chặn campaign khách (identity đã chuyển sang SĐT):`,
       deliveredMissingAccountSample.join(', '))
   }
   if (deliveredMissingAccountNonOsCount > 0) {
@@ -339,11 +362,15 @@ export async function GET(request: NextRequest) {
       deliveredMissingAccountNonOsSample.join(', '))
   }
 
-  const hasNotes = (report?.unmatched_codes.length ?? 0) > 0 || (report?.inactive_codes.length ?? 0) > 0
+  // r1.1 (audit P2#3): thiếu identity phone là DIAGNOSTIC nhưng phải NỔI LÊN
+  // response — 'success_with_notes' (KHÔNG phải 'warning': cron không biết
+  // campaign nào active; fail-closed thật ở RPC/activation theo range).
+  const hasNotes = missingPhoneEligibleCount > 0
+    || (report?.unmatched_codes.length ?? 0) > 0 || (report?.inactive_codes.length ?? 0) > 0
     || unknownStatuses.length > 0 || newFsCodes.length > 0 || invalidNewCodes.length > 0
   return NextResponse.json({
     ok: true,
-    status: rejectedReasons.length > 0 || deliveredMissingCompletedCount > 0 || deliveredMissingAccountCount > 0
+    status: rejectedReasons.length > 0 || deliveredMissingCompletedCount > 0
       ? 'warning' : hasNotes ? 'success_with_notes' : 'success',
     run_id: runId,
     raw_fetched: counts!.rawFetched,
@@ -358,6 +385,10 @@ export async function GET(request: NextRequest) {
     unknown_statuses: unknownStatuses,
     delivered_missing_completed_time_count: deliveredMissingCompletedCount,
     delivered_missing_completed_time_sample: deliveredMissingCompletedSample,
+    // mig 104 r1: phone + account_id đều DIAGNOSTIC ở tầng cron (fail-closed
+    // thật nằm ở RPC aggregate/activation theo đúng campaign range).
+    missing_customer_phone_count: missingPhoneEligibleCount,
+    missing_customer_phone_sample: missingPhoneEligibleSample,
     delivered_missing_account_id_count: deliveredMissingAccountCount,
     delivered_missing_account_id_sample: deliveredMissingAccountSample,
     delivered_missing_account_id_non_os_count: deliveredMissingAccountNonOsCount,

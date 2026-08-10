@@ -2,16 +2,21 @@
 // READ-ONLY tuyệt đối: KHÔNG ghi Mongo, KHÔNG ghi Supabase.
 //   cd webapp && node scripts/proof-affiliate-account-id.mjs     (cần VPN netbird)
 //
-// Chứng minh identity `order.account_id ↔ customer.account_id` trên dữ liệu
-// THẬT + đo coverage. r1.3.2 + r1.3.3 — GATE tách 3 tầng:
-//   RUNTIME READINESS (mirror canary RPC 103: TOÀN LỊCH SỬ DELIVERED trên
-//     scoped OS stores, KHÔNG lọc range/giá): runtime_missing_account_id = 0
-//     · runtime_missing_completed_time = 0 — metric scoped có sạch mấy mà
-//     tầng này fail thì activation/sync production vẫn fail-closed.
+// ⚠ IDENTITY (contract 09/08, mig 104): khách = normalizeVnPhone(order.
+// customer_phone) — người MUA. KHÔNG dùng receiver_phone_number, KHÔNG dùng
+// account_id (account/customer collection XUỐNG diagnostic chất lượng nguồn).
+// Chứng minh coverage identity trên dữ liệu THẬT. r1.3.2 + r1.3.3 — GATE tách 3 tầng:
+//   RUNTIME READINESS (mirror canary RPC 104, trên scoped OS stores):
+//     runtime_missing_customer_phone = 0 (đơn ĐỦ ĐIỀU KIỆN ĐẾM — price>0 +
+//     có completed_time — TRONG đúng campaign range) ·
+//     runtime_missing_completed_time = 0 (TOÀN LỊCH SỬ) — metric scoped có
+//     sạch mấy mà tầng này fail thì activation/sync production vẫn
+//     fail-closed. account_id KHÔNG còn là gate (chỉ diagnostic).
 //   RELEASE DECISION (SCOPED: exact range + OS active + POS filter):
-//     exact_range_provided · eligible_missing_account_id = 0 ·
-//     eligible_missing_customer = 0 · eligible_cross_store_accounts = 0
-//   DIAGNOSTIC (toàn hệ thống) — chỉ CẢNH BÁO.
+//     exact_range_provided · eligible_missing_customer_phone = 0
+//   DIAGNOSTIC (chỉ CẢNH BÁO — KHÔNG đổi exit): cross-store trong/ngoài range
+//     (stakeholder đã chốt rule earliest-order), phone thiếu NGOÀI range,
+//     account_id, customer collection.
 // Exit code = 0 CHỈ khi runtime + release ĐỀU pass (hoặc ≠0 khi lỗi kết nối).
 // ⚠ P2#3: proof đọc MONGO NGUỒN — runtime đọc Supabase snapshot. Sau deploy
 // + full sync PHẢI verify TRỰC TIẾP Supabase (SQL in ở cuối output) trước
@@ -28,8 +33,8 @@ import { MongoClient } from 'mongodb'
 import { createClient } from '@supabase/supabase-js'
 // r1.3.1: lõi thuần tách ra module để Playwright test synthetic (8 case).
 import {
-  buildPointByCode, qualifyOrders, dedupWinners, crossStoreCases,
-  scopePoints, classifyMissingAccount, buildGateReport, runtimeReadiness,
+  buildPointByCode, qualifyOrders, dedupWinners, crossStoreCases, normalizeVnPhone,
+  scopePoints, classifyMissingIdentity, buildGateReport, runtimeReadiness,
 } from './lib-customer-proof.mjs'
 
 const env = {}
@@ -111,6 +116,9 @@ const toNum = (v) => {
   }
   return null
 }
+// Che PII trong mọi output (mirror mask của RPC 104): 0905***560.
+const mask = (phone) => (typeof phone === 'string' && phone.length === 10
+  ? `${phone.slice(0, 4)}***${phone.slice(7)}` : '***')
 const bsonType = (v) => {
   if (v === undefined) return 'missing'
   if (v === null) return 'null'
@@ -133,7 +141,7 @@ try {
   const orders = await client.db(ORDER_DB).collection(ORDER_COLL)
     .find(
       { affiliate_partner_code: { $exists: true, $nin: [null, ''] } },
-      { projection: { _id: 0, order_id: 1, account_id: 1, affiliate_partner_code: 1, status: 1, total_price: 1, completed_time: 1, last_updated_time: 1 }, maxTimeMS: 60_000 },
+      { projection: { _id: 0, order_id: 1, account_id: 1, customer_phone: 1, affiliate_partner_code: 1, status: 1, total_price: 1, completed_time: 1, last_updated_time: 1 }, maxTimeMS: 60_000 },
     )
     .toArray()
 
@@ -146,17 +154,26 @@ try {
     typeDist[t] = (typeDist[t] ?? 0) + 1
   }
 
-  // ── 3. Gate 1: DELIVERED thiếu/hỏng account_id
-  const withAccount = []
-  const missingAccount = []
+  // ── 3. IDENTITY = buyer phone chuẩn hóa (mig 104). `acc` giữ TÊN BIẾN cho
+  // lõi dùng chung (dedup/cross-store theo key) nhưng GIÁ TRỊ là phone string.
+  const withIdentity = []
+  const missingPhone = []
   for (const o of delivered) {
-    const acc = toSafeInt(o.account_id)
-    if (acc !== null && acc > 0) withAccount.push({ ...o, acc })
-    else missingAccount.push(o)
+    const phone = normalizeVnPhone(typeof o.customer_phone === 'string' ? o.customer_phone : null)
+    if (phone !== null) withIdentity.push({ ...o, acc: phone })
+    else missingPhone.push(o)
   }
+  // DIAGNOSTIC (không còn identity): đơn thiếu account_id.
+  const missingAccount = delivered.filter((o) => {
+    const a = toSafeInt(o.account_id)
+    return a === null || a <= 0
+  })
 
-  // ── 4. Gate 2: account có đơn DELIVERED nhưng KHÔNG tồn tại trong customer
-  const distinctAccounts = [...new Set(withAccount.map((o) => o.acc))]
+  // ── 4. DIAGNOSTIC: account có đơn DELIVERED nhưng KHÔNG có trong customer
+  // (mig 104: chỉ theo dõi chất lượng nguồn — KHÔNG còn là gate release).
+  const distinctAccounts = [...new Set(delivered
+    .map((o) => toSafeInt(o.account_id))
+    .filter((a) => a !== null && a > 0))]
   const foundAccounts = new Set()
   const CHUNK = 500
   for (let i = 0; i < distinctAccounts.length; i += CHUNK) {
@@ -191,7 +208,7 @@ try {
   }
 
   const pointsByAccount = new Map()
-  for (const o of withAccount) {
+  for (const o of withIdentity) {
     const point = pointByCode.get(o.affiliate_partner_code)?.key ?? `unmapped:${o.affiliate_partner_code}`
     if (!pointsByAccount.has(o.acc)) pointsByAccount.set(o.acc, new Set())
     pointsByAccount.get(o.acc).add(point)
@@ -214,8 +231,9 @@ try {
   // r1.3.1: normalize BSON 1 lần rồi qua LIB — 2 tập tách bạch: osActive
   // (baseline/cross/remediation — CHỈ OS active, tôn trọng posFilter) vs allStorePoints
   // (diagnostic — mọi điểm có store kể cả FS/inactive).
-  const normRows = withAccount.map((o) => ({
+  const normRows = withIdentity.map((o) => ({
     acc: o.acc,
+    rawAccountId: o.account_id,
     orderId: toSafeInt(o.order_id) ?? Number.MAX_SAFE_INTEGER,
     price: toNum(o.total_price),
     completedTimeMs: o.completed_time instanceof Date ? o.completed_time.getTime() : null,
@@ -234,13 +252,13 @@ try {
   // 8a. PHÂN LOẠI missing_account_id qua classifyMissingAccount — bucket
   // os_outside_pos_filter (P1#1): OS active NGOÀI subset không được block
   // release scoped. Bucket quyết định = os_in_range_qualifying.
-  const normMissing = missingAccount.map((o) => ({
+  const normMissing = missingPhone.map((o) => ({
     orderId: toSafeInt(o.order_id) ?? String(o.order_id),
     price: toNum(o.total_price),
     completedTimeMs: o.completed_time instanceof Date ? o.completed_time.getTime() : null,
     partnerCode: o.affiliate_partner_code,
   }))
-  const missCls = classifyMissingAccount(normMissing, pointByCode, rangeMs, posFilter)
+  const missCls = classifyMissingIdentity(normMissing, pointByCode, rangeMs, posFilter)
 
   // 8b. CROSS-STORE trong exact range — CHỈ tập OS ACTIVE (r1.3.1 P1#1),
   // identity theo pointKey store:<uuid> (P2#3 — label/POS chỉ hiển thị),
@@ -275,10 +293,12 @@ try {
   const inRangeOsOrders = rangeMs
     ? qualifyingOsActive.filter((q) => q.t >= rangeMs.from && q.t < rangeMs.to)
     : []
-  const eligibleMissingCustomerAccs =
-    [...new Set(inRangeOsOrders.map((q) => q.acc))].filter((a) => !foundAccounts.has(a))
+  // (diagnostic) account của đơn qualifying in-range không có trong customer.
+  const eligibleMissingCustomerAccs = [...new Set(inRangeOsOrders
+    .map((q) => toSafeInt(q.rawAccountId))
+    .filter((a) => a !== null && a > 0))].filter((a) => !foundAccounts.has(a))
 
-  // 8e. RUNTIME READINESS (r1.3.3 P1#1/#2) — mirror canary RPC 103: TOÀN BỘ
+  // 8e. RUNTIME READINESS (r1.3.3 + 104 r1) — mirror canary RPC 104: TOÀN BỘ
   // đơn DELIVERED (Mongo full snapshot = source hiện hành) trên scoped OS
   // stores, KHÔNG lọc range/total_price. Đơn cũ ngoài tháng campaign thiếu
   // account_id/completed_time VẪN chặn activation/sync → phải là gate cứng.
@@ -287,19 +307,23 @@ try {
     return {
       orderId: toSafeInt(o.order_id) ?? String(o.order_id),
       partnerCode: o.affiliate_partner_code,
+      hasPhone: normalizeVnPhone(typeof o.customer_phone === 'string' ? o.customer_phone : null) !== null,
       hasAccount: a !== null && a > 0,
       hasCompleted: o.completed_time instanceof Date,
+      completedTimeMs: o.completed_time instanceof Date ? o.completed_time.getTime() : null,
+      price: toNum(o.total_price),
     }
   })
-  const runtime = runtimeReadiness(runtimeRows, pointByCode, posFilter)
+  const runtime = runtimeReadiness(runtimeRows, pointByCode, posFilter, rangeMs)
 
   const gateReport = buildGateReport({
     rangeProvided: !!rangeMs,
-    eligibleMissingAccount: missCls.os_in_range_qualifying.length,
-    eligibleMissingCustomer: eligibleMissingCustomerAccs.length,
+    eligibleMissingPhone: missCls.os_in_range_qualifying.length,
     eligibleCrossStore: crossInRange.length,
-    runtimeMissingAccount: runtime.missingAccount.length,
+    runtimeMissingPhone: runtime.missingPhone.length,
     runtimeMissingCompleted: runtime.missingCompleted.length,
+    runtimeMissingPhoneOutOfRange: runtime.missingPhoneOutOfRange.length,
+    globalMissingPhone: missingPhone.length,
     globalMissingAccount: missingAccount.length,
     globalMissingCustomer: missingCustomer.length,
     globalCrossStore: crossStore.length,
@@ -311,15 +335,16 @@ try {
   console.table({
     total_affiliate_orders: orders.length,
     total_delivered: delivered.length,
-    with_account_id: withAccount.length,
-    missing_account_id: missingAccount.length,
-    distinct_accounts: distinctAccounts.length,
-    matched_customer: distinctAccounts.length - missingCustomer.length,
-    missing_customer: missingCustomer.length,
-    cross_store_accounts: crossStore.length,
+    with_customer_phone: withIdentity.length,
+    missing_customer_phone: missingPhone.length,
+    distinct_customers_phone: new Set(withIdentity.map((o) => o.acc)).size,
+    missing_account_id_diagnostic: missingAccount.length,
+    distinct_accounts_diagnostic: distinctAccounts.length,
+    missing_customer_diagnostic: missingCustomer.length,
+    cross_store_customers: crossStore.length,
     non_positive_orders: nonPositive.length,
   })
-  console.log('BSON type của account_id (DELIVERED):', JSON.stringify(typeDist))
+  console.log('BSON type của account_id (DELIVERED, diagnostic):', JSON.stringify(typeDist))
   console.log('\nMETRIC BASELINE (mirror RPC: delivered · price>0 · có completed_time · điểm OS ACTIVE'
     + (posFilter ? ` · SUBSET ${[...posFilter].sort().join(',')}` : '') + '):')
   console.log('  loại khỏi baseline (KHÔNG tính vào gate identity):', JSON.stringify(baselineExcluded))
@@ -344,18 +369,24 @@ try {
     console.log(`  ${m}: ${best.size} khách — ${detail}`)
   }
 
+  if (missingPhone.length > 0) {
+    console.log('\nSample DELIVERED thiếu SĐT khách hợp lệ (≤10):',
+      missingPhone.slice(0, 10).map((o) => toSafeInt(o.order_id) ?? String(o.order_id)).join(', '))
+  }
   if (missingAccount.length > 0) {
-    console.log('\nSample DELIVERED thiếu account_id (≤10):',
+    console.log('(diagnostic) Sample DELIVERED thiếu account_id (≤10):',
       missingAccount.slice(0, 10).map((o) => toSafeInt(o.order_id) ?? String(o.order_id)).join(', '))
   }
   if (missingCustomer.length > 0) {
-    console.log('Sample account KHÔNG có trong customer (≤10):', missingCustomer.slice(0, 10).join(', '))
+    console.log('(diagnostic) Sample account KHÔNG có trong customer (≤10):', missingCustomer.slice(0, 10).join(', '))
   }
   if (crossStore.length > 0) {
-    console.log('Sample cross-store (≤10):')
-    for (const [acc, points] of crossStore.slice(0, 10)) console.log(`  account ${acc}: ${[...points].join(' · ')}`)
+    console.log('Sample cross-store toàn lịch sử (≤10, SĐT ĐÃ MASK):')
+    for (const [phone, points] of crossStore.slice(0, 10)) {
+      console.log(`  khách ${mask(phone)}: ${[...points].join(' · ')}`)
+    }
   }
-  console.log('\n=== R1.3 DIAGNOSTIC — PHÂN LOẠI missing_account_id (quyết định source remediation) ===')
+  console.log('\n=== DIAGNOSTIC — PHÂN LOẠI đơn thiếu SĐT khách (quyết định source remediation) ===')
   console.log('  precedence: non_os_point → os_inactive_point → os_outside_pos_filter → disqualified(giá/completed_time) → theo range')
   for (const [k, arr] of Object.entries(missCls)) {
     console.log(`  ${k}: ${arr.length}`)
@@ -365,17 +396,18 @@ try {
   }
 
   console.log('\n=== R1.3 DIAGNOSTIC — CROSS-STORE ===')
-  console.log(`  toàn lịch sử (mọi điểm, kể cả partner/unmapped — identity pointKey): ${crossStore.length} account`)
+  console.log(`  toàn lịch sử (khách theo SĐT, điểm theo pointKey — kể cả partner/unmapped): ${crossStore.length} khách (SĐT)`)
   console.log('  trong exact range (CHỈ tập OS active, identity pointKey): '
-    + (rangeMs ? `${crossInRange.length} account` : 'KHÔNG XÁC ĐỊNH — thiếu QA_CUSTOMER_FROM/TO'))
+    + (rangeMs ? `${crossInRange.length} khách (SĐT)` : 'KHÔNG XÁC ĐỊNH — thiếu QA_CUSTOMER_FROM/TO'))
   for (const c of crossInRange.slice(0, 10)) {
-    console.log(`  account ${c.account} — WINNER: đơn ${c.winner.order_id} @ ${c.winner.point} [${c.winner.point_key}] (earliest-order rule)`)
+    console.log(`  khách ${mask(String(c.account))} — WINNER: đơn ${c.winner.order_id} @ ${c.winner.point} [${c.winner.point_key}] (earliest-order rule, trong range + tập store target)`)
     for (const o of c.orders) console.log(`    ${o.order_id} · ${o.partner_code} · ${o.point} [${o.point_key}] · ${o.completed_time}`)
   }
 
-  console.log('\n20 account mẫu đối soát tay (account_id · order_id · partner_code):')
-  for (const o of withAccount.slice(0, 20)) {
-    console.log(`  ${o.acc} · ${toSafeInt(o.order_id) ?? '?'} · ${o.affiliate_partner_code}`)
+  const sampleN = Math.min(20, withIdentity.length)
+  console.log(`\nMẫu đối soát tay — in ${sampleN}/${withIdentity.length} đơn có identity (SĐT MASK · order_id · partner_code):`)
+  for (const o of withIdentity.slice(0, sampleN)) {
+    console.log(`  ${mask(o.acc)} · ${toSafeInt(o.order_id) ?? '?'} · ${o.affiliate_partner_code}`)
   }
 
   // r1.3: JSON summary — đối soát TỰ ĐỘNG (parser tìm marker '=== JSON SUMMARY ===').
@@ -405,36 +437,41 @@ try {
     totals: {
       total_affiliate_orders: orders.length,
       total_delivered: delivered.length,
-      with_account_id: withAccount.length,
-      missing_account_id: missingAccount.length,
-      distinct_accounts: distinctAccounts.length,
-      missing_customer: missingCustomer.length,
-      cross_store_accounts_all_history: crossStore.length,
-      cross_store_accounts_in_range: rangeMs ? crossInRange.length : null,
+      with_customer_phone: withIdentity.length,
+      missing_customer_phone: missingPhone.length,
+      distinct_customers_phone: new Set(withIdentity.map((o) => o.acc)).size,
+      missing_account_id_diagnostic: missingAccount.length,
+      distinct_accounts_diagnostic: distinctAccounts.length,
+      missing_customer_diagnostic: missingCustomer.length,
+      cross_store_customers_all_history: crossStore.length,
+      cross_store_customers_in_range: rangeMs ? crossInRange.length : null,
       non_positive_orders: nonPositive.length,
     },
     // r1.3.3: 3 tầng gate — exit = runtime AND release; diagnostic chỉ cảnh báo.
     runtime_readiness_gates: {
-      missing_account_id: runtime.missingAccount.length,
+      missing_customer_phone_in_range: runtime.missingPhone.length,
       missing_completed_time: runtime.missingCompleted.length,
-      missing_account_sample: runtime.missingAccount.slice(0, 10),
+      missing_customer_phone_sample: runtime.missingPhone.slice(0, 10),
       missing_completed_sample: runtime.missingCompleted.slice(0, 10),
+      missing_customer_phone_out_of_range_diagnostic: runtime.missingPhoneOutOfRange.length,
+      missing_account_id_diagnostic: runtime.missingAccountDiagnostic.length,
       pass: gateReport.runtime.every(([, ok]) => ok),
     },
     release_decision_gates: {
       exact_range_provided: !!rangeMs,
-      eligible_missing_account_id: missCls.os_in_range_qualifying.length,
-      eligible_missing_customer: eligibleMissingCustomerAccs.length,
-      eligible_cross_store_accounts: crossInRange.length,
+      eligible_missing_customer_phone: missCls.os_in_range_qualifying.length,
+      eligible_cross_store_customers: crossInRange.length,
+      eligible_missing_customer_diagnostic: eligibleMissingCustomerAccs.length,
       pass: gateReport.release.every(([, ok]) => ok),
     },
     overall_pass: gateReport.exitCode === 0,
     diagnostic_gates: {
+      missing_customer_phone_all_history: missingPhone.length,
       missing_account_id: missingAccount.length,
       missing_customer: missingCustomer.length,
-      cross_store_accounts_all_history: crossStore.length,
+      cross_store_customers_all_history: crossStore.length,
     },
-    missing_account_classification: Object.fromEntries(
+    missing_phone_classification: Object.fromEntries(
       Object.entries(missCls).map(([k, arr]) => [k, { count: arr.length, sample: arr.slice(0, 10) }])),
     cross_store_in_range_samples: crossInRange.slice(0, 10),
     exact_range_baseline: exactBaseline,
@@ -444,11 +481,16 @@ try {
   console.log(JSON.stringify(summary, null, 2))
 
   // r1.3.3: exit = runtime AND release; global = cảnh báo.
-  console.log('\n=== RUNTIME READINESS GATES (mirror canary RPC 103 — toàn lịch sử DELIVERED trên scoped OS stores, KHÔNG lọc range/giá) ===')
+  console.log('\n=== RUNTIME READINESS GATES (mirror canary RPC 104 — phone: đơn đủ điều kiện TRONG range; completed_time: toàn lịch sử; scoped OS stores) ===')
   for (const [label, ok] of gateReport.runtime) {
     console.log((ok ? 'PASS' : 'FAIL').padEnd(5), label)
   }
-  for (const [name, arr] of [['thiếu account_id', runtime.missingAccount], ['thiếu completed_time', runtime.missingCompleted]]) {
+  for (const [name, arr] of [
+    ['thiếu SĐT khách (TRONG range — BLOCKING)', runtime.missingPhone],
+    ['thiếu completed_time (toàn lịch sử — BLOCKING)', runtime.missingCompleted],
+    ['thiếu SĐT khách NGOÀI range (diagnostic)', runtime.missingPhoneOutOfRange],
+    ['thiếu account_id (diagnostic — không còn là identity)', runtime.missingAccountDiagnostic],
+  ]) {
     if (arr.length > 0) {
       console.log(`  sample ${name} (≤10):`)
       for (const e of arr.slice(0, 10)) console.log(`    ${e.order_id} · ${e.partner_code} · ${e.point}`)
@@ -467,16 +509,36 @@ try {
     console.log(`\n${failedHard} gate (runtime readiness / release) FAIL — DỪNG: chưa đủ điều kiện bước SOURCE REMEDIATION/BACKFILL nguồn trong scope đã chọn; gửi output (kèm JSON SUMMARY) cho stakeholder duyệt rule.`)
   } else {
     console.log('\nALL RUNTIME + RELEASE GATES PASS — đủ điều kiện bước source remediation/backfill nguồn trong scope đã chọn.')
-    console.log('⚠ P2#3: đây là proof trên MONGO NGUỒN. Sau deploy + full sync, verify TRỰC TIẾP Supabase trước khi bật flag:')
-    console.log("    SELECT count(*) FILTER (WHERE account_id IS NULL)      AS missing_account_id,")
-    console.log("           count(*) FILTER (WHERE completed_time IS NULL)  AS missing_completed_time")
-    console.log("    FROM public.affiliate_orders o")
-    console.log("    WHERE o.source_active AND o.status_norm = 'delivered'")
-    // r1.3.4 (audit P2): SQL theo ĐÚNG scope proof (scopedPoints đã áp
-    // posFilter) — chạy subset không bị báo fail oan bởi store ngoài phạm vi.
-    console.log('      AND o.store_id IN (' + scopedPoints.map((pt) => "'" + pt.storeId + "'").join(', ') + ');')
-    console.log('    -- scope: ' + scopedPoints.length + ' OS store active'
-      + (posFilter ? ' (SUBSET QA_CUSTOMER_POS_CODES)' : '') + ' — kỳ vọng 0 / 0 rồi mới mở QA UI/flag.')
+    console.log('⚠ đây là proof trên MONGO NGUỒN. Sau deploy + full sync, verify TRỰC TIẾP Supabase trước khi bật flag:')
+    const scopeIds = scopedPoints.map((pt) => "'" + pt.storeId + "'").join(', ')
+    console.log('  [1] HARD GATE identity — đơn ĐỦ ĐIỀU KIỆN ĐẾM trong ĐÚNG kỳ campaign (kỳ vọng 0):')
+    console.log('      SELECT count(*) AS missing_customer_phone_in_range')
+    console.log('      FROM public.affiliate_orders o')
+    console.log("      WHERE o.source_active AND o.status_norm = 'delivered'")
+    console.log('        AND o.total_price > 0 AND o.completed_time IS NOT NULL')
+    console.log('        AND o.customer_phone_norm IS NULL')
+    console.log('        AND o.store_id IN (' + scopeIds + ')')
+    if (rangeMs) {
+      console.log("        AND o.completed_time >= '" + RANGE_FROM + " 00:00:00+07'")
+      console.log("        AND o.completed_time <  ('" + RANGE_TO + " 00:00:00+07'::timestamptz + interval '1 day');")
+    } else {
+      console.log('        AND o.completed_time >= <campaign start 00:00+07>')
+      console.log('        AND o.completed_time <  <campaign end + 1 ngày 00:00+07>;   -- half-open')
+    }
+    console.log('  [2] HARD GATE completed_time — TOÀN LỊCH SỬ trên target stores (kỳ vọng 0):')
+    console.log('      SELECT count(*) AS missing_completed_time')
+    console.log('      FROM public.affiliate_orders o')
+    console.log("      WHERE o.source_active AND o.status_norm = 'delivered'")
+    console.log('        AND o.completed_time IS NULL')
+    console.log('        AND o.store_id IN (' + scopeIds + ');')
+    console.log('  [3] DIAGNOSTIC — account_id (mig 104: KHÔNG còn là identity, KHÔNG kỳ vọng 0, KHÔNG chặn release):')
+    console.log('      SELECT count(*) AS missing_account_id_diagnostic')
+    console.log('      FROM public.affiliate_orders o')
+    console.log("      WHERE o.source_active AND o.status_norm = 'delivered'")
+    console.log('        AND o.account_id IS NULL')
+    console.log('        AND o.store_id IN (' + scopeIds + ');')
+    console.log('  -- scope: ' + scopedPoints.length + ' OS store active'
+      + (posFilter ? ' (SUBSET QA_CUSTOMER_POS_CODES)' : '') + ' — CHỈ [1] và [2] phải = 0 rồi mới mở QA UI/flag.')
   }
   // r1.2: KHÔNG process.exit trong try — exit bỏ qua finally, Mongo client
   // không close → libuv assertion crash teardown (Windows). Set code, close

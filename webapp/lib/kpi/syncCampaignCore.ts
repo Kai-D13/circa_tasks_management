@@ -37,8 +37,10 @@ export interface AffiliateAggRow { store_id: string; vn_date: string; gmv: numbe
 export interface CustomerAggResult {
   rows: { store_id: string; vn_date: string; customer_count: number }[]
   total_customers: number
-  cross_store_account_count: number
-  cross_store_sample: number[]
+  // mig 104: identity = phone → đổi tên field cho đúng ngữ nghĩa; sample là
+  // phone ĐÃ MASK trong DB (0905***560) — không log PII đầy đủ.
+  cross_store_customer_count: number
+  cross_store_sample: string[]
 }
 type DbResult<T> = { data: T | null; error: { message: string } | null }
 
@@ -326,10 +328,10 @@ async function syncCustomerCampaign(
     if (sum !== agg.total_customers) {
       return preserved(`aggregate số khách tự mâu thuẫn: SUM(daily)=${sum} <> total_customers=${agg.total_customers} — giữ snapshot cũ`)
     }
-    if (agg.cross_store_account_count > 0) {
-      // Bất thường dữ liệu (binding lẽ ra không đổi store) — KHÔNG chặn ghi:
-      // RPC đã dedup 1 account = 1 khách tại đơn sớm nhất; chỉ cảnh báo.
-      warnings.push(`cross_store_customer_count=${agg.cross_store_account_count} (account xuất hiện dưới >1 store — đã dedup theo đơn DELIVERED sớm nhất; sample: ${agg.cross_store_sample.join(', ')})`)
+    if (agg.cross_store_customer_count > 0) {
+      // Bất thường dữ liệu (khách mua ở >1 store trong kỳ) — KHÔNG chặn ghi:
+      // RPC đã dedup 1 SĐT = 1 khách tại đơn DELIVERED sớm nhất; chỉ cảnh báo.
+      warnings.push(`cross_store_customer_count=${agg.cross_store_customer_count} (SĐT khách xuất hiện dưới >1 store — đã dedup theo đơn DELIVERED sớm nhất; sample: ${agg.cross_store_sample.join(', ')})`)
     }
 
     const healthAfter = await deps.getAffiliateHealth(storeIds)

@@ -59,7 +59,8 @@ function realDeps(): SyncCampaignDeps {
       return { data, error }
     },
     // Mig 103: RPC trả jsonb (rows + total + cross-store diagnostics cùng 1
-    // MVCC snapshot); fail-closed (thiếu completed_time/account_id) → error →
+    // MVCC snapshot); fail-closed (thiếu completed_time / SĐT khách — mig 104)
+    // → error →
     // orchestrator preserve.
     aggregateAffiliateCustomers: async (storeIds, from, to) => {
       const { data, error } = await supabaseAdmin
