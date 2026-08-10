@@ -36,7 +36,7 @@ test.describe('kpi result table layout contract @desktop', () => {
     expect(withBd[idx + 2].key).toBe('affiliate')
   })
 
-  test('width contract trong KHOẢNG audit: store 160–180 · group 90–110 · money 130–150 · %/nhịp độ 100–120 · còn thiếu 140 · bậc 170–190', () => {
+  test('width contract trong KHOẢNG audit: store 160–180 · group 90–110 · money 130–150 · %/nhịp độ 100–120 · trung bình/ngày 140 · bậc 170–190', () => {
     expect(RESULT_COL_PX.store).toBeGreaterThanOrEqual(160)
     expect(RESULT_COL_PX.store).toBeLessThanOrEqual(180)
     expect(RESULT_COL_PX.group).toBeGreaterThanOrEqual(90)
