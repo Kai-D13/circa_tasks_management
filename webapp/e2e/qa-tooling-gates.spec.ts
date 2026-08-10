@@ -78,7 +78,7 @@ test.describe('qa tooling safety gates (mig 103 r1.1) @desktop', () => {
   })
 
   test('SOURCE-TEXT lock: safety flags đọc từ PROCESS ENV; schema preflight ABORT (không out-rồi-chạy-tiếp)', () => {
-    const qa = fs.readFileSync('scripts/qa-kpi-customer-103.mjs', 'utf8')
+    const qa = fs.readFileSync('scripts/qa-kpi-customer-103.mjs', 'utf8').replace(/\r\n/g, '\n')
     for (const flag of ['QA_KPI_CUSTOMER_FIXTURE_ALLOWED', 'QA_AFFILIATE_CRON_PAUSED', 'QA_EXPECTED_SUPABASE_URL']) {
       expect(qa).toContain(`process.env.${flag}`)
       // không còn đọc từ env-file object (env.QA_* mà không có tiền tố process.)
@@ -88,7 +88,7 @@ test.describe('qa tooling safety gates (mig 103 r1.1) @desktop', () => {
     // mig 104: preflight đếm thiếu IDENTITY = customer_phone_norm
     expect(qa).toContain('không đếm được đơn thiếu customer_phone_norm trong scope QA')
 
-    const proof = fs.readFileSync('scripts/proof-affiliate-account-id.mjs', 'utf8')
+    const proof = fs.readFileSync('scripts/proof-affiliate-account-id.mjs', 'utf8').replace(/\r\n/g, '\n')
     expect(proof).toContain('process.env.QA_CUSTOMER_FROM')
     expect(proof).toContain('process.env.QA_CUSTOMER_TO')
     // exact-range dedup toàn range (mirror RPC) + monthly chỉ là diagnostic
@@ -257,7 +257,7 @@ test.describe('lib-customer-proof r1.3.2 (scoped release gates) @desktop', () =>
   })
 
   test('SOURCE-TEXT: exit gate tách RELEASE/DIAGNOSTIC, không còn tham chiếu migration 103', () => {
-    const proof = fs.readFileSync('scripts/proof-affiliate-account-id.mjs', 'utf8')
+    const proof = fs.readFileSync('scripts/proof-affiliate-account-id.mjs', 'utf8').replace(/\r\n/g, '\n')
     expect(proof).toContain('RELEASE DECISION GATES')
     expect(proof).toContain('DIAGNOSTIC GATES')
     expect(proof).toContain('os_outside_pos_filter')
@@ -313,7 +313,7 @@ test.describe('lib-customer-proof r1.3.3 (runtime readiness) @desktop', () => {
   })
 
   test('SOURCE-TEXT: proof có tầng RUNTIME READINESS + summary 3 khối + nhắc verify Supabase sau full-sync', () => {
-    const proof = fs.readFileSync('scripts/proof-affiliate-account-id.mjs', 'utf8')
+    const proof = fs.readFileSync('scripts/proof-affiliate-account-id.mjs', 'utf8').replace(/\r\n/g, '\n')
     expect(proof).toContain('RUNTIME READINESS GATES')
     expect(proof).toContain('runtime_readiness_gates')
     expect(proof).toContain('overall_pass')
@@ -347,7 +347,7 @@ test.describe('lib-customer-proof r1.3.3 (runtime readiness) @desktop', () => {
     // r1 P1#4a: hard gate phone phải được truyền range (mirror RPC 104)
     expect(proof).toContain('runtimeReadiness(runtimeRows, pointByCode, posFilter, rangeMs)')
 
-    const qaDb = fs.readFileSync('scripts/qa-kpi-customer-103.mjs', 'utf8')
+    const qaDb = fs.readFileSync('scripts/qa-kpi-customer-103.mjs', 'utf8').replace(/\r\n/g, '\n')
     // r1 P1#2: QA database assert ĐÚNG contract response mig 104
     expect(qaDb).toContain('cross_store_customer_count')
     expect(qaDb).not.toContain('cross_store_account_count')
@@ -478,7 +478,9 @@ test.describe('customer identity = normalized phone (mig 104) @desktop', () => {
 
 // ── SOURCE-TEXT: contract identity trong migration 104 + ingestion ──────────
 test.describe('mig 104 source contract @desktop', () => {
-  const sql = fs.readFileSync('../supabase/migrations/104_kpi_customer_phone_identity.sql', 'utf8')
+  // CRLF-safe: worktree/clone khác có thể checkout CRLF (core.autocrlf) —
+  // assertion multi-line phải so trên nội dung đã normalize.
+  const sql = fs.readFileSync('../supabase/migrations/104_kpi_customer_phone_identity.sql', 'utf8').replace(/\r\n/g, '\n')
 
   test('RPC aggregate: dedup theo customer_phone_norm, canary phone CHỈ trong range, KHÔNG còn account_id, sample MASK', () => {
     const agg = sql.slice(sql.indexOf('CREATE OR REPLACE FUNCTION public.rpc_aggregate_affiliate_customers'),
@@ -519,7 +521,7 @@ test.describe('mig 104 source contract @desktop', () => {
   })
 
   test('r1.1 P2#3: cron đưa missing phone vào hasNotes → success_with_notes (KHÔNG phải warning)', () => {
-    const route = fs.readFileSync('app/api/cron/pull-affiliate-orders/route.ts', 'utf8')
+    const route = fs.readFileSync('app/api/cron/pull-affiliate-orders/route.ts', 'utf8').replace(/\r\n/g, '\n')
     expect(route).toContain('const hasNotes = missingPhoneEligibleCount > 0')
     const statusIdx = route.indexOf('status: rejectedReasons.length > 0')
     const statusLine = route.slice(statusIdx, route.indexOf('run_id: runId', statusIdx))
