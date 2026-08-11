@@ -183,7 +183,7 @@ async function fetchCampaignViews(
       .is('campaign.archived_at', null),
     supabase
       .from('kpi_campaign_store_actuals')
-      .select('campaign_id, actual_value, actual_offline, actual_affiliate, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
+      .select('campaign_id, actual_value, actual_offline, actual_affiliate, offline_order_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
       .eq('store_id', storeId),
   ])
   if (tErr || aErr) {
@@ -193,7 +193,7 @@ async function fetchCampaignViews(
     return []
   }
   const actualByCampaign = new Map(
-    ((actuals ?? []) as { campaign_id: string; actual_value: number; actual_offline: number | null; actual_affiliate: number | null; run_rate: number | null; remaining_target: number | null; achieved_tier_order: number | null; store_commission_pool: number | null; offline_synced_at: string | null; affiliate_synced_at: string | null; synced_at: string }[])
+    ((actuals ?? []) as { campaign_id: string; actual_value: number; actual_offline: number | null; actual_affiliate: number | null; offline_order_count: number | null; run_rate: number | null; remaining_target: number | null; achieved_tier_order: number | null; store_commission_pool: number | null; offline_synced_at: string | null; affiliate_synced_at: string | null; synced_at: string }[])
       .map((a) => [a.campaign_id, a]),
   )
   return ((targets ?? []) as unknown as {
@@ -223,6 +223,9 @@ async function fetchCampaignViews(
         metric_affiliate: t.campaign.metric_affiliate === true,
         actual_offline: a?.actual_offline !== null && a?.actual_offline !== undefined ? Number(a.actual_offline) : null,
         actual_affiliate: a?.actual_affiliate !== null && a?.actual_affiliate !== undefined ? Number(a.actual_affiliate) : null,
+        // 105: số đơn Offline cho khối "Kết quả" QLCH (card Staff không dùng).
+        offline_order_count: a?.offline_order_count !== null && a?.offline_order_count !== undefined
+          ? Number(a.offline_order_count) : null,
         offline_synced_at: a?.offline_synced_at ?? null,
         affiliate_synced_at: a?.affiliate_synced_at ?? null,
       }
@@ -423,7 +426,7 @@ export default async function TargetsPage({
         .order('pos_code'),
       supabase
         .from('kpi_campaign_store_actuals')
-        .select('campaign_id, store_id, actual_value, actual_offline, actual_affiliate, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at'),
+        .select('campaign_id, store_id, actual_value, actual_offline, actual_affiliate, offline_order_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at'),
     ])
     // r3: lỗi DB/RLS → ErrorState — KHÔNG render "chưa có chiến dịch" giả.
     if (tRes.error || aRes.error) {

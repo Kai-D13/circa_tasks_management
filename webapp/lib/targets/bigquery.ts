@@ -115,6 +115,10 @@ export function campaignRangeQuery(startDate: string, endDate: string): string {
   `
 }
 
+// 105 (11/08): trả thêm `order_count` = SUM(no_order) + 3 cột canary null/âm.
+// AOV KHÔNG lấy từ cột `aov` của BI (giá trị dẫn xuất) — app luôn tính
+// SUM(net_revenue)/SUM(no_order) (weighted; đo thật 08/2026 lệch 1.445đ so
+// với AVG(aov)).
 // Per-DAY OFFLINE actual per store over a range — drives the staff "Tiến độ
 // theo ngày" chart AND the aggregate snapshot (summed app-side so they always
 // agree). ⚠ BQ-V2 (05/08): nguồn `buymed_tech.tech__circa_os_gmv_kpi`,
@@ -132,6 +136,14 @@ export function campaignDailyQuery(startDate: string, endDate: string): string {
   return `
     SELECT pos_code, start_date AS \`date\`,
            SUM(CAST(COALESCE(net_revenue, 0) AS NUMERIC)) AS gmv,
+           -- 105: số đơn Offline (BI thêm 11/08). CHỦ Ý dùng
+           -- COUNTIF(... IS NOT NULL) thay COALESCE: NULL_MISMATCH cho biết
+           -- row có doanh thu nhưng THIẾU số đơn (hoặc ngược lại) → engine
+           -- fail-closed, KHÔNG âm thầm coi là 0 đơn (AOV sẽ sai).
+           SUM(CAST(COALESCE(no_order, 0) AS INT64))                       AS order_count,
+           COUNTIF(no_order IS NULL AND net_revenue IS NOT NULL)           AS rev_without_order,
+           COUNTIF(no_order IS NOT NULL AND net_revenue IS NULL)           AS order_without_rev,
+           COUNTIF(no_order < 0)                                           AS negative_order,
            COUNT(*) AS source_row_count
     FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`
     WHERE date_type = 'DAY'

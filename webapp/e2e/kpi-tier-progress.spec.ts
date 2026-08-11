@@ -83,7 +83,8 @@ test.describe('kpi tier progress @desktop', () => {
     const a: ResultActualRow = {
       store_id: 'a', actual_value: 950, run_rate: 95, remaining_target: 50,
       achieved_tier_order: 1, store_commission_pool: 5, synced_at: '2026-07-28T02:00:00Z',
-      actual_offline: 950, actual_affiliate: 0, offline_synced_at: null, affiliate_synced_at: null,
+      actual_offline: 950, actual_affiliate: 0, offline_order_count: null,
+      offline_synced_at: null, affiliate_synced_at: null,
     }
     const m = buildCampaignResultModel(camp, [t('a', TIERS), t('b', [TIERS[1]])], [a], '2026-07-28')
     expect(m.maxTierCount).toBe(3)

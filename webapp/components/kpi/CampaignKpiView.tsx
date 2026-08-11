@@ -37,6 +37,9 @@ export interface CampaignView {
   metric_affiliate: boolean
   actual_offline: number | null
   actual_affiliate: number | null
+  // 105: số đơn Offline (BQ no_order) — NULL = chưa có số đơn (KHÁC 0).
+  // CHỈ dùng cho khối "Kết quả" của QLCH; card Staff KHÔNG đổi.
+  offline_order_count?: number | null
   offline_synced_at: string | null
   affiliate_synced_at: string | null
   // Mig 103: 'affiliate_customer_count' → label/đơn vị KHÁCH qua

@@ -64,7 +64,11 @@ test.describe('kpi display contract @desktop', () => {
     expect(cols).toContain('Actual GMV')          // tên cột CŨ giữ nguyên
     expect(cols).not.toContain('GMV Total')       // KHÔNG đổi tên (breaking change)
     expect(cols).toEqual(expect.arrayContaining([
-      'GMV Offline', 'GMV Affiliate', 'Offline Synced At', 'Affiliate Synced At', 'Affiliate Data Status',
+      'GMV Offline',
+      // 105 (11/08): 2 cột MỚI ngay sau GMV Offline — contract export đổi CÓ
+      // CHỦ Ý (stakeholder request); các cột còn lại giữ nguyên thứ tự.
+      'Số đơn Offline', 'AOV Offline',
+      'GMV Affiliate', 'Offline Synced At', 'Affiliate Synced At', 'Affiliate Data Status',
     ]))
     expect(r['Actual GMV']).toBe(500)             // ngữ nghĩa cũ = tổng
     expect(r['GMV Offline']).toBe(300)
@@ -157,7 +161,11 @@ test.describe('kpi display customer metric (mig 103) @desktop', () => {
     )
     expect(Object.keys(rows[0])).toEqual([
       'Chiến dịch', 'Từ ngày', 'Đến ngày', 'POS', 'Cửa hàng', 'Phân loại', 'KPI target',
-      'Actual GMV', 'GMV Offline', 'GMV Affiliate', 'Run rate %', 'Performance %',
+      'Actual GMV', 'GMV Offline',
+      // 105 (11/08): 2 cột MỚI ngay sau 'GMV Offline' — contract export đổi CÓ
+      // CHỦ Ý (stakeholder request); mọi cột cũ giữ nguyên tên + thứ tự tương đối.
+      'Số đơn Offline', 'AOV Offline',
+      'GMV Affiliate', 'Run rate %', 'Performance %',
       'Còn thiếu', 'Bậc đạt', 'Commission pool', 'Offline Synced At', 'Affiliate Synced At',
       'Affiliate Data Status', 'Đồng bộ lúc',
     ])

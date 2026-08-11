@@ -22,6 +22,10 @@ export interface SnapshotInput {
   // ⚠ Contract 30/07: "gmv" offline = Net Revenue (alias giữ nguyên từ
   // campaignDailyQuery — SUM(net_revenue)); công thức/payload không đổi.
   offlineByPos: Map<string, Map<string, number>>     // pos_code → date VN → offline actual (BQ net_revenue)
+  // 105: pos_code → date VN → SỐ ĐƠN Offline (BQ no_order). Optional để caller
+  // cũ/test không phải đổi; thiếu map ⇒ payload KHÔNG mang order count (RPC 105
+  // hiểu là "nguồn chưa có số đơn", giữ NULL — KHÁC 0).
+  offlineOrdersByPos?: Map<string, Map<string, number>>
   affiliateByStore: Map<string, Map<string, number>> // store_id → date VN → gmv (rpc_aggregate)
   snapshotTs: string                                  // thời điểm GHI snapshot
   offlineSyncedAt: string | null                      // thời điểm pull BQ (null nếu metric tắt)
@@ -31,6 +35,8 @@ export interface SnapshotInput {
 export interface DailyRowPayload {
   campaign_id: string; store_id: string; date: string
   gmv: number; gmv_affiliate: number; synced_at: string
+  // 105 — OPTIONAL: chỉ set khi nguồn BQ có no_order (campaign GMV offline).
+  offline_order_count?: number
   // Mig 103 (metric Số khách) — OPTIONAL: path GMV KHÔNG set key này (payload
   // GMV giữ nguyên từng byte; RPC coalesce 0). Chỉ buildCustomerSnapshot set.
   affiliate_customer_count?: number
@@ -44,6 +50,8 @@ export interface ActualRowPayload {
   // MERGE (union ngày của 2 nguồn) — tức "số ngày có dữ liệu" của store, KHÔNG
   // còn là số row BigQuery thuần. Export/UI phải diễn giải theo nghĩa này.
   raw_row_count: number
+  // 105 — OPTIONAL: tổng số đơn Offline trong kỳ; KHÔNG set ⇒ RPC giữ NULL.
+  offline_order_count?: number
   offline_synced_at: string | null; affiliate_synced_at: string | null; synced_at: string
   // Mig 103 — OPTIONAL như trên: chỉ campaign customer set.
   actual_customer_count?: number
@@ -112,7 +120,7 @@ export function buildCampaignSnapshot(input: SnapshotInput): {
 } {
   const {
     campaignId, targets, metricOffline, metricAffiliate,
-    offlineByPos, affiliateByStore, snapshotTs, offlineSyncedAt, affiliateSyncedAt,
+    offlineByPos, offlineOrdersByPos, affiliateByStore, snapshotTs, offlineSyncedAt, affiliateSyncedAt,
   } = input
 
   const daily: DailyRowPayload[] = []
@@ -126,19 +134,33 @@ export function buildCampaignSnapshot(input: SnapshotInput): {
     const offDays = metricOffline && pos ? offlineByPos.get(pos) : undefined
     if (metricOffline && pos && !offDays) unmatchedPos.push(pos)
     const affDays = metricAffiliate ? affiliateByStore.get(t.store_id) : undefined
+    // 105: số đơn Offline — CHỈ khi metric Offline bật VÀ nguồn có map cho pos
+    // này (không có ⇒ không phát key, RPC giữ NULL).
+    const ordDays = metricOffline && pos ? offlineOrdersByPos?.get(pos) : undefined
 
     // Merge theo khóa store_id + date (union 2 nguồn) — audit P3-B #10.
     const dates = new Set<string>([...(offDays?.keys() ?? []), ...(affDays?.keys() ?? [])])
     let actualOffline = 0
     let actualAffiliate = 0
     let rowCount = 0
+    let orderCount: number | null = ordDays ? 0 : null
     for (const date of [...dates].sort()) {
       const off = offDays?.get(date) ?? 0
       const aff = affDays?.get(date) ?? 0
       actualOffline += off
       actualAffiliate += aff
       rowCount++
-      daily.push({ campaign_id: campaignId, store_id: t.store_id, date, gmv: off, gmv_affiliate: aff, synced_at: snapshotTs })
+      const row: DailyRowPayload = {
+        campaign_id: campaignId, store_id: t.store_id, date, gmv: off, gmv_affiliate: aff, synced_at: snapshotTs,
+      }
+      if (ordDays) {
+        // Ngày có trong dates nhưng nguồn Offline không có (chỉ affiliate) → 0
+        // đơn; RPC 105 đòi MỌI dòng daily của store phải mang count.
+        const ord = ordDays.get(date) ?? 0
+        row.offline_order_count = ord
+        orderCount = (orderCount ?? 0) + ord
+      }
+      daily.push(row)
     }
 
     const actualValue = actualOffline + actualAffiliate
@@ -156,6 +178,7 @@ export function buildCampaignSnapshot(input: SnapshotInput): {
       achieved_tier_order: ach.achievedTierOrder,
       store_commission_pool: ach.commissionPool,
       raw_row_count: rowCount,
+      ...(orderCount !== null ? { offline_order_count: orderCount } : {}),
       offline_synced_at: metricOffline ? offlineSyncedAt : null,
       affiliate_synced_at: metricAffiliate ? affiliateSyncedAt : null,
       synced_at: snapshotTs,

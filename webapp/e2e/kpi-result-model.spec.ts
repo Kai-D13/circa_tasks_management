@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { metricPresentation } from '../lib/kpi/campaignDisplay'
+import { metricPresentation, offlineOrderLine } from '../lib/kpi/campaignDisplay'
 import {
   buildCampaignResultModel, smScopeState,
   type ResultActualRow, type ResultCampaign, type ResultTargetRow,
@@ -22,6 +22,7 @@ const A = (store: string, value: number, off: number, aff: number, over: Partial
   store_id: store, actual_value: value, run_rate: 50, remaining_target: null,
   achieved_tier_order: null, store_commission_pool: null,
   synced_at: '2026-07-27T10:00:00Z', actual_offline: off, actual_affiliate: aff,
+  offline_order_count: null,
   offline_synced_at: null, affiliate_synced_at: null, ...over,
 })
 const TODAY = '2026-07-27'
@@ -163,5 +164,65 @@ test.describe('kpi requiredPerDay (bảng kết quả Super/SM) @desktop', () =>
     const m = buildCampaignResultModel(
       CAMP(), [T('a', 1000)], [A('a', 300, 300, 0, { remaining_target: 700 })], TODAY)
     expect(rowOf(m, 'a').actual!.remaining_target).toBe(700)
+  })
+})
+
+// ── 105 (11/08): Số đơn Offline + AOV ───────────────────────────────────────
+// Contract: AOV = SUM(net_revenue)/SUM(no_order) WEIGHTED (đo thật 08/2026:
+// weighted 130.501,53 vs AVG(aov) 131.946,34 — lệch 1.445đ). NULL count =
+// 'nguồn chưa có số đơn' ≠ 0 đơn.
+test.describe('kpi offline order count + AOV (105) @desktop', () => {
+  const rowOf = (m: ReturnType<typeof buildCampaignResultModel>, store: string) =>
+    m.rows.find((r) => r.storeId === store)!
+  const withOrders = (store: string, value: number, off: number, orders: number | null) =>
+    A(store, value, off, 0, { offline_order_count: orders })
+
+  test('per-store: AOV = actual_offline / offline_order_count (làm tròn ở UI, model giữ số thực)', () => {
+    const m = buildCampaignResultModel(
+      CAMP(), [T('a', 1000)], [withOrders('a', 54140774, 54140774, 343)], TODAY)
+    expect(rowOf(m, 'a').offlineOrderCount).toBe(343)
+    // POS0068 thật 08/2026: 54.140.774 / 343 = 157.844,82
+    expect(rowOf(m, 'a').offlineAov).toBeCloseTo(157844.82, 2)
+  })
+
+  test('count NULL (snapshot cũ) → count + AOV đều null (UI "—", KHÔNG hiện 0 đơn)', () => {
+    const m = buildCampaignResultModel(CAMP(), [T('a', 1000)], [withOrders('a', 500, 500, null)], TODAY)
+    expect(rowOf(m, 'a').offlineOrderCount).toBeNull()
+    expect(rowOf(m, 'a').offlineAov).toBeNull()
+  })
+
+  test('count = 0 → giữ 0 đơn nhưng AOV null (không chia 0)', () => {
+    const m = buildCampaignResultModel(CAMP(), [T('a', 1000)], [withOrders('a', 0, 0, 0)], TODAY)
+    expect(rowOf(m, 'a').offlineOrderCount).toBe(0)
+    expect(rowOf(m, 'a').offlineAov).toBeNull()
+  })
+
+  test('TỔNG: AOV toàn phạm vi là WEIGHTED, KHÁC trung bình AOV từng store', () => {
+    // 2 store: (1.000.000 / 10 = 100.000đ) và (200.000 / 4 = 50.000đ)
+    // weighted = 1.200.000 / 14 = 85.714,29 ; average(100k, 50k) = 75.000 → khác
+    const m = buildCampaignResultModel(
+      CAMP(), [T('a', 1000), T('b', 500)],
+      [withOrders('a', 1_000_000, 1_000_000, 10), withOrders('b', 200_000, 200_000, 4)], TODAY)
+    expect(m.totalOfflineOrders).toBe(14)
+    expect(m.totalOfflineAov).toBeCloseTo(85714.2857, 3)
+    const avgOfStores = (rowOf(m, 'a').offlineAov! + rowOf(m, 'b').offlineAov!) / 2
+    expect(m.totalOfflineAov).not.toBeCloseTo(avgOfStores, 0)
+  })
+
+  test('CHỈ MỘT store thiếu count → tổng đơn + AOV tổng = null (fail-visible, không sai mẫu số)', () => {
+    const m = buildCampaignResultModel(
+      CAMP(), [T('a', 1000), T('b', 500)],
+      [withOrders('a', 1_000_000, 1_000_000, 10), withOrders('b', 200_000, 200_000, null)], TODAY)
+    expect(m.totalOfflineOrders).toBeNull()
+    expect(m.totalOfflineAov).toBeNull()
+    // per-store vẫn hiện được cho store có dữ liệu
+    expect(rowOf(m, 'a').offlineAov).toBeCloseTo(100000, 6)
+  })
+
+  test('formatter offlineOrderLine: có count → "N đơn · AOV X₫"; null → null; 0 → AOV —', () => {
+    expect(offlineOrderLine(54140774, 343)).toBe('343 đơn · AOV 157.845₫')
+    expect(offlineOrderLine(500, null)).toBeNull()
+    expect(offlineOrderLine(0, 0)).toBe('0 đơn · AOV —')
+    expect(offlineOrderLine(2_907_965_577, 22_283)).toBe('22.283 đơn · AOV 130.502₫')  // tổng thật 08/2026
   })
 })

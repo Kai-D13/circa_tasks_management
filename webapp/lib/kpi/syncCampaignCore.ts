@@ -170,6 +170,8 @@ export async function syncCampaignWithDeps(
   // ── Nhánh Offline: BigQuery — CHỈ khi metric bật (affiliate-only tuyệt đối
   //    không đụng credential, audit #5) ──
   const offlineByPos = new Map<string, Map<string, number>>()
+  // 105: số đơn Offline theo (pos, ngày) — CHỈ campaign GMV có metric_offline.
+  const offlineOrdersByPos = new Map<string, Map<string, number>>()
   let offlineSyncedAt: string | null = null
   if (metricOffline) {
     const sa = deps.loadBqServiceAccount()
@@ -201,6 +203,25 @@ export async function syncCampaignWithDeps(
           // ⚠ Contract 30/07: field `gmv` từ campaignDailyQuery là alias của
           // SUM(net_revenue) — giá trị Offline của campaign = Net Revenue.
           offlineByPos.get(pos)!.set(date, Number(r.gmv ?? 0) || 0)
+          // ── 105: SỐ ĐƠN OFFLINE — fail-closed từng lớp ──
+          // (a) nguồn lệch NULL: có doanh thu mà thiếu số đơn (hoặc ngược
+          //     lại) ⇒ AOV sẽ sai → PRESERVE, không đoán 0.
+          const revNoOrder = Number(r.rev_without_order ?? 0)
+          const orderNoRev = Number(r.order_without_rev ?? 0)
+          const negOrder = Number(r.negative_order ?? 0)
+          if (revNoOrder > 0 || orderNoRev > 0) {
+            return preserved(`Nguồn BQ lệch NULL tại ${pos}/${date}: ${revNoOrder} row có doanh thu thiếu no_order, ${orderNoRev} row có no_order thiếu doanh thu — giữ snapshot cũ`)
+          }
+          if (negOrder > 0) {
+            return preserved(`Nguồn BQ có no_order ÂM tại ${pos}/${date} — giữ snapshot cũ`)
+          }
+          // (b) số đơn phải là số nguyên không âm.
+          const ordRaw = Number(r.order_count ?? 0)
+          if (!Number.isFinite(ordRaw) || !Number.isInteger(ordRaw) || ordRaw < 0) {
+            return preserved(`Nguồn BQ có số đơn không hợp lệ tại ${pos}/${date}: ${String(r.order_count)} — giữ snapshot cũ`)
+          }
+          if (!offlineOrdersByPos.has(pos)) offlineOrdersByPos.set(pos, new Map())
+          offlineOrdersByPos.get(pos)!.set(date, ordRaw)
         }
       }
 
@@ -237,6 +258,7 @@ export async function syncCampaignWithDeps(
     metricOffline,
     metricAffiliate,
     offlineByPos,
+    offlineOrdersByPos,
     affiliateByStore,
     snapshotTs,
     offlineSyncedAt,

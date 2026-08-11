@@ -42,7 +42,7 @@ export async function GET(request: NextRequest) {
       .select('store_id, pos_code, kpi_target, store_kpi_group, stores(name)')
       .eq('campaign_id', campaignId).order('pos_code'),
     supabase.from('kpi_campaign_store_actuals')
-      .select('store_id, actual_value, actual_offline, actual_affiliate, actual_customer_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
+      .select('store_id, actual_value, actual_offline, actual_affiliate, offline_order_count, actual_customer_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
       .eq('campaign_id', campaignId),
   ])
   if (tErr || aErr) return NextResponse.json({ error: (tErr ?? aErr)!.message }, { status: 500 })

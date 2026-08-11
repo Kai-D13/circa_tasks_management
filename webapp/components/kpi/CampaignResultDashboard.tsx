@@ -1,7 +1,7 @@
 import { Card, CardContent } from '@/components/ui/card'
 import { performanceTone } from '@/lib/kpi/performance'
 import type { CampaignResultModel } from '@/lib/kpi/resultModel'
-import { metricPresentation } from '@/lib/kpi/campaignDisplay'
+import { metricPresentation, offlineOrderLine } from '@/lib/kpi/campaignDisplay'
 import { resultTableColumns } from '@/lib/kpi/resultTableLayout'
 import { cn } from '@/lib/utils'
 import {
@@ -36,9 +36,16 @@ export function CampaignResultDashboard({ model, emptyHint }: {
         {([
           { label: 'Tổng KPI target', value: vnd(m.totalTarget), icon: Target, tile: 'bg-primary/10 text-primary' },
           { label: isCustomer ? 'Tổng số khách' : 'Tổng actual GMV', value: synced ? vnd(m.totalActual) : '—', icon: TrendingUp,
+            // 105: campaign offline-only (không breakdown) → dòng phụ đặt ở
+            // card này; hybrid có card GMV Offline riêng bên dưới.
+            sub: !m.showBreakdown && !isCustomer && synced
+              ? offlineOrderLine(m.totalOffline, m.totalOfflineOrders) : null,
             tile: synced && m.totalActual > 0 ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground' },
           ...(m.showBreakdown ? [
             { label: 'GMV Offline', value: synced ? vnd(m.totalOffline) : '—', icon: StoreIcon,
+              // 105: dòng phụ tổng — AOV WEIGHTED (totalOffline/totalOrders),
+              // '—' khi bất kỳ store nào thiếu count (model đã trả null).
+              sub: synced ? offlineOrderLine(m.totalOffline, m.totalOfflineOrders) : null,
               tile: 'bg-primary/10 text-primary' },
             { label: 'GMV Affiliate', value: synced ? vnd(m.totalAffiliate) : '—', icon: LinkIcon,
               tile: 'bg-muted text-muted-foreground' },
@@ -54,7 +61,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
             tile: 'bg-primary/10 text-primary',
             valueCls: m.performance != null ? performanceTone(m.performance) : undefined },
           { label: 'Thời hạn', value: m.deadlineLabel, icon: CalendarDays, tile: 'bg-muted text-muted-foreground' },
-        ] as { label: string; value: string; icon: LucideIcon; tile: string; valueCls?: string; bar?: boolean }[]).map((card) => (
+        ] as { label: string; value: string; icon: LucideIcon; tile: string; valueCls?: string; bar?: boolean; sub?: string | null }[]).map((card) => (
           <Card key={card.label}>
             <CardContent className="p-3">
               <div className="flex items-start gap-2.5">
@@ -64,6 +71,9 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                 <div className="min-w-0 flex-1">
                   <p className="text-[11px] text-muted-foreground uppercase truncate">{card.label}</p>
                   <p className={cn('text-lg font-bold mt-0.5 leading-tight', card.valueCls)}>{card.value}</p>
+                  {/* 105: dòng phụ số đơn · AOV (chỉ card GMV Offline / Actual
+                      GMV của campaign offline-only) */}
+                  {card.sub && <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{card.sub}</p>}
                   {card.bar && synced && (
                     <div className="mt-1.5 h-1.5 rounded-full bg-muted overflow-hidden">
                       <div
@@ -120,6 +130,9 @@ export function CampaignResultDashboard({ model, emptyHint }: {
               </thead>
               <tbody className="divide-y">
                 {m.rows.map((r) => {
+                  // 105: dòng phụ theo store — null ⇒ không render (snapshot
+                  // cũ/campaign khách/affiliate-only).
+                  const orderLine = () => isCustomer ? null : offlineOrderLine(r.actual?.actual_offline ?? 0, r.offlineOrderCount)
                   const a = r.actual
                   return (
                     <tr key={r.targetId} className="hover:bg-muted/30">
@@ -128,8 +141,21 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                       <td className="px-4 py-2.5 font-medium lg:sticky lg:left-0 lg:z-10 lg:bg-card">{r.storeName ?? '—'}{r.posCode ? ` · ${r.posCode}` : ''}</td>
                       <td className="px-4 py-2.5 text-xs">{r.group ?? '—'}</td>
                       <td className="px-4 py-2.5 text-right whitespace-nowrap">{vnd(r.kpiTarget)}</td>
-                      <td className="px-4 py-2.5 text-right whitespace-nowrap">{a ? vnd(a.actual_value) : '—'}</td>
-                      {m.showBreakdown && <td className="px-4 py-2.5 text-right text-muted-foreground whitespace-nowrap">{a?.actual_offline != null ? vnd(a.actual_offline) : '—'}</td>}
+                      <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                        {a ? vnd(a.actual_value) : '—'}
+                        {/* 105: offline-only → dòng phụ nằm ngay dưới Actual GMV
+                            (hybrid đã có cột GMV Offline riêng) */}
+                        {!m.showBreakdown && orderLine() && (
+                          <span className="block text-[11px] text-muted-foreground/80">{orderLine()}</span>
+                        )}
+                      </td>
+                      {m.showBreakdown && (
+                        <td className="px-4 py-2.5 text-right text-muted-foreground whitespace-nowrap">
+                          {a?.actual_offline != null ? vnd(a.actual_offline) : '—'}
+                          {/* 105: dòng phụ số đơn · AOV — KHÔNG thêm cột mới */}
+                          {orderLine() && <span className="block text-[11px] text-muted-foreground/80">{orderLine()}</span>}
+                        </td>
+                      )}
                       {m.showBreakdown && <td className="px-4 py-2.5 text-right text-muted-foreground whitespace-nowrap">{a?.actual_affiliate != null ? vnd(a.actual_affiliate) : '—'}</td>}
                       <td className="px-4 py-2.5">
                         {a?.run_rate != null ? (

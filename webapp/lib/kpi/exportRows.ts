@@ -18,6 +18,7 @@ export interface ExportActual {
   store_id: string; actual_value: number; run_rate: number | null; remaining_target: number | null
   achieved_tier_order: number | null; store_commission_pool: number | null; synced_at: string
   actual_offline: number | null; actual_affiliate: number | null
+  offline_order_count?: number | null   // 105 (optional: caller cũ/test không đổi)
   offline_synced_at: string | null; affiliate_synced_at: string | null
 }
 
@@ -50,6 +51,11 @@ export function buildCampaignExportRows(
       'Actual GMV':   a ? Number(a.actual_value) || 0 : '',
       // Cột MỚI bổ sung (P3-F)
       'GMV Offline':  a?.actual_offline != null ? Number(a.actual_offline) || 0 : '',
+      // 105: số đơn + AOV Offline NGAY SAU 'GMV Offline' (plan 11/08). Trống
+      // khi campaign không áp dụng hoặc snapshot cũ chưa có count (KHÔNG 0).
+      'Số đơn Offline': a?.offline_order_count != null ? Number(a.offline_order_count) : '',
+      'AOV Offline': a?.offline_order_count != null && a.offline_order_count > 0
+        ? Math.round((Number(a.actual_offline) || 0) / a.offline_order_count) : '',
       'GMV Affiliate': a?.actual_affiliate != null ? Number(a.actual_affiliate) || 0 : '',
       'Run rate %':   a?.run_rate != null ? Number(a.run_rate.toFixed(1)) : '',
       'Performance %': perf != null ? Number(perf.toFixed(1)) : '',

@@ -214,3 +214,53 @@ test.describe('kpi engine customer snapshot (mig 103) @desktop', () => {
     expect(actuals[0].remaining_target).toBe(10)
   })
 })
+
+// ── 105: payload số đơn Offline ─────────────────────────────────────────────
+test.describe('kpi snapshot offline order count (105) @desktop', () => {
+  const T105 = [{ id: 't1', store_id: 's1', pos_code: 'POS1', kpi_target: 1000, tiers: [] }]
+  const base = {
+    campaignId: 'c1', targets: T105, metricOffline: true, metricAffiliate: false,
+    affiliateByStore: new Map<string, Map<string, number>>(),
+    snapshotTs: '2026-08-11T03:00:00Z', offlineSyncedAt: '2026-08-11T03:00:00Z',
+    affiliateSyncedAt: null,
+  }
+  const offline = new Map([['POS1', new Map([['2026-08-01', 100], ['2026-08-02', 200]])]])
+
+  test('có nguồn số đơn → daily MỖI ngày mang count + aggregate = tổng', () => {
+    const out = buildCampaignSnapshot({
+      ...base, offlineByPos: offline,
+      offlineOrdersByPos: new Map([['POS1', new Map([['2026-08-01', 3], ['2026-08-02', 5]])]]),
+    })
+    expect(out.daily.map((d) => d.offline_order_count)).toEqual([3, 5])
+    expect(out.actuals[0].offline_order_count).toBe(8)
+  })
+
+  test('KHÔNG có nguồn số đơn → payload TUYỆT ĐỐI không có key (RPC giữ NULL, không thành 0)', () => {
+    const out = buildCampaignSnapshot({ ...base, offlineByPos: offline })
+    expect(out.daily.every((d) => !('offline_order_count' in d))).toBe(true)
+    expect('offline_order_count' in out.actuals[0]).toBe(false)
+  })
+
+  test('ngày chỉ có affiliate (không có row Offline) vẫn mang count = 0 — RPC đòi đủ mọi dòng', () => {
+    const out = buildCampaignSnapshot({
+      ...base, metricAffiliate: true,
+      offlineByPos: new Map([['POS1', new Map([['2026-08-01', 100]])]]),
+      offlineOrdersByPos: new Map([['POS1', new Map([['2026-08-01', 3]])]]),
+      affiliateByStore: new Map([['s1', new Map([['2026-08-02', 50]])]]),
+    })
+    expect(out.daily.map((d) => [d.date, d.offline_order_count])).toEqual([
+      ['2026-08-01', 3], ['2026-08-02', 0],
+    ])
+    expect(out.actuals[0].offline_order_count).toBe(3)
+  })
+
+  test('campaign affiliate-only: KHÔNG phát order count dù nguồn có map', () => {
+    const out = buildCampaignSnapshot({
+      ...base, metricOffline: false, metricAffiliate: true,
+      offlineByPos: new Map(), offlineOrdersByPos: offline as unknown as Map<string, Map<string, number>>,
+      affiliateByStore: new Map([['s1', new Map([['2026-08-01', 50]])]]),
+    })
+    expect(out.daily.every((d) => !('offline_order_count' in d))).toBe(true)
+    expect('offline_order_count' in out.actuals[0]).toBe(false)
+  })
+})

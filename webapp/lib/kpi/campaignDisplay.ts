@@ -130,3 +130,20 @@ export function metricEditorState(p: {
     showAffiliateControl: p.affiliateEnabled || p.metricAffiliate,
   }
 }
+
+// ── 105 (11/08): dòng phụ "Số đơn · AOV" cho GMV Offline ────────────────────
+// KHÔNG thêm cột bảng (yêu cầu stakeholder: không rối mắt, hạn chế scroll
+// ngang) — chuỗi này nằm dưới ô/card GMV Offline (hybrid) hoặc Actual GMV
+// (offline-only). Trả null ⇒ KHÔNG render dòng nào:
+//   · count == null → nguồn/snapshot chưa có số đơn (KHÁC 0 đơn) — không bịa
+//   · campaign khách / affiliate-only → caller không gọi
+// AOV = offline / count (weighted per store), làm tròn tới VNĐ; count = 0 →
+// hiện "0 đơn" (số thật) nhưng AOV '—' (không chia 0).
+export function offlineOrderLine(offline: number | null, count: number | null): string | null {
+  if (count === null || count === undefined) return null
+  const nf = new Intl.NumberFormat('vi-VN')
+  const orders = `${nf.format(count)} đơn`
+  if (count <= 0) return `${orders} · AOV —`
+  const aov = Math.round((Number(offline) || 0) / count)
+  return `${orders} · AOV ${nf.format(aov)}₫`
+}

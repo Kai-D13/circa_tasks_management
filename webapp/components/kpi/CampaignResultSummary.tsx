@@ -2,7 +2,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import type { CampaignView } from '@/components/kpi/CampaignKpiView'
 import { cn } from '@/lib/utils'
 import { campaignPerformance, performanceTone } from '@/lib/kpi/performance'
-import { metricPresentation } from '@/lib/kpi/campaignDisplay'
+import { metricPresentation, offlineOrderLine } from '@/lib/kpi/campaignDisplay'
 import { Target, TrendingUp, Percent, Wallet, Award, CalendarDays, Gauge, ClipboardCheck, Store as StoreIcon, Link2 as LinkIcon, type LucideIcon } from 'lucide-react'
 
 // Store Manager "Kết quả" management block (r3): the same 6-card summary idiom
@@ -28,14 +28,20 @@ export function CampaignResultSummary({ campaign, todayISO }: { campaign: Campai
   const deadlineLabel = daysLeft <= 0 ? 'Đã kết thúc' : `Còn ${daysLeft} ngày`
   const perf = campaignPerformance(target, campaign.actual_value, campaign.start_date, campaign.end_date, todayISO)
 
-  const cards: { label: string; value: string; icon: LucideIcon; tile: string; valueCls?: string; bar?: boolean }[] = [
+  const cards: { label: string; value: string; icon: LucideIcon; tile: string; valueCls?: string; bar?: boolean; sub?: string | null }[] = [
     { label: 'KPI target', value: vnd(target), icon: Target, tile: 'bg-primary/10 text-primary' },
     { label: pres.actualColumnLabel, value: synced ? vnd(actual) : '—', icon: TrendingUp,
+      // 105: campaign offline-only → dòng phụ số đơn · AOV ở card này (hybrid
+      // có card GMV Offline riêng bên dưới); campaign khách KHÔNG hiện.
+      sub: synced && campaign.metric_offline && !campaign.metric_affiliate
+        ? offlineOrderLine(campaign.actual_offline ?? actual, campaign.offline_order_count ?? null) : null,
       tile: synced && actual > 0 ? 'bg-status-success-bg text-status-success' : 'bg-muted text-muted-foreground' },
     // P3-E: breakdown 2 nguồn — CHỈ khi campaign bật cả 2 chỉ số (1 metric giữ
     // layout cũ nguyên vẹn).
     ...(campaign.metric_offline && campaign.metric_affiliate ? [
       { label: 'GMV Offline', value: synced ? vnd(campaign.actual_offline ?? 0) : '—', icon: StoreIcon as LucideIcon,
+        // 105: dòng phụ số đơn · AOV cho QLCH (cùng formatter Super/SM).
+        sub: synced ? offlineOrderLine(campaign.actual_offline ?? 0, campaign.offline_order_count ?? null) : null,
         tile: 'bg-primary/10 text-primary' },
       { label: 'GMV Affiliate', value: synced ? vnd(campaign.actual_affiliate ?? 0) : '—', icon: LinkIcon as LucideIcon,
         tile: 'bg-muted text-muted-foreground' },
@@ -69,6 +75,8 @@ export function CampaignResultSummary({ campaign, todayISO }: { campaign: Campai
                 <div className="min-w-0 flex-1">
                   <p className="text-[10px] text-muted-foreground uppercase leading-tight truncate">{card.label}</p>
                   <p className={cn('text-sm font-bold mt-0.5 leading-tight', card.valueCls)}>{card.value}</p>
+                  {/* 105: dòng phụ số đơn · AOV Offline */}
+                  {card.sub && <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{card.sub}</p>}
                   {card.bar && synced && (
                     <div className="mt-1 h-1 rounded-full bg-muted overflow-hidden">
                       <div

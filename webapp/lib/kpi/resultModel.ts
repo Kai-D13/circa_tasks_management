@@ -31,6 +31,9 @@ export interface ResultActualRow {
   synced_at: string
   actual_offline: number | null
   actual_affiliate: number | null
+  // 105: số đơn Offline (BQ no_order). NULL = nguồn/snapshot chưa có số đơn —
+  // KHÁC 0; UI phải hiện '—', KHÔNG hiện "0 đơn".
+  offline_order_count: number | null
   offline_synced_at: string | null
   affiliate_synced_at: string | null
 }
@@ -103,6 +106,10 @@ export interface StoreResultRow {
   // 10/08: "Trung bình/ngày cần đạt" — CÙNG công thức card Staff (lib/kpi/
   // performance.requiredPerDay). null = chưa sync / campaign hết ngày → '—'.
   requiredPerDay: number | null
+  // 105: số đơn Offline + AOV (= actual_offline / offline_order_count).
+  // null khi chưa có count hoặc count = 0 (chia 0) → UI '—'.
+  offlineOrderCount: number | null
+  offlineAov: number | null
   // Tier progress (28/07): tiers ĐÃ SORT theo tier_order kèm target/remaining/
   // reached — nguồn duy nhất cho cột động desktop (Super ↔ SM cùng công thức).
   tierProgress: TierProgress[]
@@ -117,6 +124,12 @@ export interface CampaignResultModel {
   totalActual: number
   totalOffline: number
   totalAffiliate: number
+  // 105: tổng số đơn Offline + AOV WEIGHTED toàn phạm vi (totalOffline /
+  // totalOfflineOrders — TUYỆT ĐỐI không average AOV từng store: đo thật
+  // 08/2026 lệch 1.445đ). null khi CHỈ CẦN MỘT store thiếu count (tử số đủ /
+  // mẫu số thiếu ⇒ AOV tổng sai có hệ thống) → fail-visible '—'.
+  totalOfflineOrders: number | null
+  totalOfflineAov: number | null
   completionPct: number           // totalActual/totalTarget×100 (target 0 → 0)
   totalCommission: number
   reachedStoreCount: number
@@ -147,6 +160,14 @@ export function buildCampaignResultModel(
   const totalActual = actuals.reduce((sum, a) => sum + (Number(a.actual_value) || 0), 0)
   const totalOffline = actuals.reduce((sum, a) => sum + (Number(a.actual_offline) || 0), 0)
   const totalAffiliate = actuals.reduce((sum, a) => sum + (Number(a.actual_affiliate) || 0), 0)
+  // 105: chỉ tổng hợp khi MỌI store trong phạm vi đều có count.
+  const allHaveOrderCount = actuals.length > 0 && actuals.every((a) => a.offline_order_count != null)
+  const totalOfflineOrders = allHaveOrderCount
+    ? actuals.reduce((sum, a) => sum + (Number(a.offline_order_count) || 0), 0)
+    : null
+  const totalOfflineAov = totalOfflineOrders !== null && totalOfflineOrders > 0
+    ? totalOffline / totalOfflineOrders
+    : null
   const completionPct = totalTarget > 0 ? (totalActual / totalTarget) * 100 : 0
   const totalCommission = actuals.reduce((sum, a) => sum + (Number(a.store_commission_pool) || 0), 0)
   const reachedStoreCount = actuals.filter((a) => a.achieved_tier_order !== null).length
@@ -166,6 +187,10 @@ export function buildCampaignResultModel(
       actual: a,
       performance: campaignPerformance(
         t.kpi_target, a?.actual_value ?? null, campaign.start_date, campaign.end_date, todayISO),
+      offlineOrderCount: a?.offline_order_count ?? null,
+      offlineAov: a?.offline_order_count != null && a.offline_order_count > 0
+        ? (Number(a.actual_offline) || 0) / a.offline_order_count
+        : null,
       requiredPerDay: requiredPerDay({
         kpiTarget: Number(t.kpi_target) || 0,
         actual: a?.actual_value ?? null,
@@ -189,6 +214,7 @@ export function buildCampaignResultModel(
     lastSyncedAt,
     storeCount: targets.length,
     totalTarget, totalActual, totalOffline, totalAffiliate,
+    totalOfflineOrders, totalOfflineAov,
     completionPct, totalCommission, reachedStoreCount, performance, deadlineLabel,
     rows,
     maxTierCount: rows.reduce((max, r) => Math.max(max, r.tierProgress.length), 0),
