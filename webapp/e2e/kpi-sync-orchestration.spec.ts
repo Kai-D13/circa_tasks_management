@@ -42,7 +42,13 @@ function fullCoverage(override: Record<string, number | null> = {}): Record<stri
       const date = new Date(t).toISOString().slice(0, 10)
       const key = `${pos}/${date}`
       const gmv = key in override ? override[key] : (key === 'POS0001/2026-07-02' ? 300 : 0)
-      rows.push({ pos_code: pos, date, gmv, source_row_count: 1 })
+      // 105: nguồn SẠCH mặc định — order_count + 4 canary. Engine fail-closed
+      // nếu thiếu field (schema/query drift) nên fixture phải phản ánh query.
+      rows.push({
+        pos_code: pos, date, gmv, source_row_count: 1,
+        order_count: gmv === 300 ? 3 : 0,
+        rev_without_order: 0, order_without_rev: 0, negative_order: 0, non_integer_order: 0,
+      })
     }
   }
   return rows
@@ -67,6 +73,7 @@ interface Behavior {
 
 function mkDeps(cfg: CampaignConfig, behavior: Behavior = {}) {
   const calls = { campaign: 0, targets: 0, stores: 0, health: 0, agg: 0, aggCust: 0, sa: 0, bq: 0, replace: 0 }
+  const payloads: { daily?: unknown[]; actuals?: unknown[] } = {}
   const seq: string[] = []
   const deps: SyncCampaignDeps = {
     loadCampaign: async () => { calls.campaign++; seq.push('campaign'); return behavior.campaign ? behavior.campaign() : { data: cfg, error: null } },
@@ -92,6 +99,8 @@ function mkDeps(cfg: CampaignConfig, behavior: Behavior = {}) {
     },
     replaceActuals: async (id, daily, actuals) => {
       calls.replace++; seq.push('replace')
+      // 105: giữ payload cuối để test kiểm tra nội dung THỰC SỰ ghi.
+      payloads.daily = daily; payloads.actuals = actuals
       return behavior.replace ? behavior.replace(id, daily, actuals) : { data: actuals.length, error: null }
     },
     aggregateAffiliateCustomers: async () => {
@@ -111,7 +120,7 @@ function mkDeps(cfg: CampaignConfig, behavior: Behavior = {}) {
     isAffiliateFeatureEnabled: () => behavior.flag ?? true,
     isAffiliateCustomerFeatureEnabled: () => behavior.customerFlag ?? true,
   }
-  return { deps, calls, seq }
+  return { deps, calls, seq, payloads }
 }
 
 test.describe('kpi sync orchestration @desktop', () => {
@@ -368,8 +377,8 @@ test.describe('kpi sync orchestration @desktop', () => {
   test('BQ-V2 GUARD: trùng key (pos, ngày) trong cùng lần pull → preserved, KHÔNG replace', async () => {
     const { deps, calls } = mkDeps(CFG(), {
       bq: async () => [
-        { pos_code: 'POS0001', date: '2026-07-02', gmv: 300, source_row_count: 1 },
-        { pos_code: 'POS0001', date: '2026-07-02', gmv: 999, source_row_count: 1 },
+        { pos_code: 'POS0001', date: '2026-07-02', gmv: 300, source_row_count: 1, order_count: 0, rev_without_order: 0, order_without_rev: 0, negative_order: 0, non_integer_order: 0 },
+        { pos_code: 'POS0001', date: '2026-07-02', gmv: 999, source_row_count: 1, order_count: 0, rev_without_order: 0, order_without_rev: 0, negative_order: 0, non_integer_order: 0 },
       ],
     })
     const r = await syncCampaignWithDeps('camp-1', deps)
@@ -575,5 +584,64 @@ test.describe('kpi sync orchestration — customer campaign (mig 103) @desktop',
     expect(a.achieved_tier_order).toBe(1)     // ≥50%, chưa tới 100%
     expect(a.store_commission_pool).toBe(500000)
     expect(a.remaining_target).toBe(1)        // còn thiếu 1 khách
+  })
+})
+
+// ── 105 (11/08): nguồn số đơn Offline — 5 ca fail-closed + happy path ───────
+test.describe('kpi sync — số đơn Offline fail-closed (105) @desktop', () => {
+  const dropField = (key: string) => async () => fullCoverage().map((r) => {
+    const copy = { ...(r as Record<string, unknown>) }
+    delete copy[key]
+    return copy
+  })
+  const poison = (patch: Record<string, unknown>) => async () =>
+    fullCoverage().map((r, i) => (i === 0 ? { ...r, ...patch } : r))
+
+  test('thiếu alias order_count (query/schema drift) → PRESERVE, KHÔNG ghi 0 đơn', async () => {
+    const { deps, calls } = mkDeps(CFG(), { bq: dropField('order_count') })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    if (r.status === 'snapshot_preserved') expect(r.reason).toContain('thiếu/sai field số đơn')
+    expect(calls.replace).toBe(0)
+  })
+
+  test('thiếu canary non_integer_order → PRESERVE', async () => {
+    const { deps, calls } = mkDeps(CFG(), { bq: dropField('non_integer_order') })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    expect(calls.replace).toBe(0)
+  })
+
+  test('no_order LẺ ở nguồn → PRESERVE (không để BQ làm tròn âm thầm)', async () => {
+    const { deps } = mkDeps(CFG(), { bq: poison({ non_integer_order: 1 }) })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    if (r.status === 'snapshot_preserved') expect(r.reason).toContain('KHÔNG NGUYÊN')
+  })
+
+  test('lệch NULL (có doanh thu, thiếu no_order) → PRESERVE', async () => {
+    const { deps } = mkDeps(CFG(), { bq: poison({ rev_without_order: 2 }) })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    if (r.status === 'snapshot_preserved') expect(r.reason).toContain('lệch NULL')
+  })
+
+  test('no_order ÂM → PRESERVE', async () => {
+    const { deps } = mkDeps(CFG(), { bq: poison({ negative_order: 1 }) })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    if (r.status === 'snapshot_preserved') expect(r.reason).toContain('ÂM')
+  })
+
+  test('nguồn SẠCH → success + payload mang order count (daily đủ mọi ngày, aggregate = tổng)', async () => {
+    const { deps, payloads } = mkDeps(CFG())
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('success')
+    const daily = (payloads.daily ?? []) as { offline_order_count?: number }[]
+    const actuals = (payloads.actuals ?? []) as { offline_order_count?: number }[]
+    expect(daily.length).toBeGreaterThan(0)
+    expect(daily.every((x) => typeof x.offline_order_count === 'number')).toBe(true)
+    // fullCoverage: đúng 1 ngày có gmv 300 → 3 đơn; store còn lại 0 đơn.
+    expect(actuals.map((a) => a.offline_order_count).sort()).toEqual([0, 3])
   })
 })

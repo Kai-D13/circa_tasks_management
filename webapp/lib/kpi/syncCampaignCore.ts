@@ -206,18 +206,37 @@ export async function syncCampaignWithDeps(
           // ── 105: SỐ ĐƠN OFFLINE — fail-closed từng lớp ──
           // (a) nguồn lệch NULL: có doanh thu mà thiếu số đơn (hoặc ngược
           //     lại) ⇒ AOV sẽ sai → PRESERVE, không đoán 0.
-          const revNoOrder = Number(r.rev_without_order ?? 0)
-          const orderNoRev = Number(r.order_without_rev ?? 0)
-          const negOrder = Number(r.negative_order ?? 0)
+          // r1 (audit P1#2): KHÔNG mặc định 0 khi field vắng — query/schema
+          // drift sẽ âm thầm ghi "0 đơn" thay vì preserve. Field phải TỒN TẠI
+          // và parse được, nếu không → giữ snapshot cũ.
+          const numOrFail = (key: string): number | null => {
+            const raw = (r as Record<string, unknown>)[key]
+            if (raw === undefined || raw === null) return null
+            const n = Number(raw)
+            return Number.isFinite(n) ? n : null
+          }
+          const revNoOrder = numOrFail('rev_without_order')
+          const orderNoRev = numOrFail('order_without_rev')
+          const negOrder = numOrFail('negative_order')
+          const nonIntOrder = numOrFail('non_integer_order')
+          const ordNum = numOrFail('order_count')
+          if (revNoOrder === null || orderNoRev === null || negOrder === null
+              || nonIntOrder === null || ordNum === null) {
+            return preserved(`Nguồn BQ thiếu/sai field số đơn tại ${pos}/${date} (order_count/canary) — query hoặc schema đã đổi; giữ snapshot cũ`)
+          }
+          // r1 (audit P1#1): số đơn LẺ bị bắt ở nguồn (trước mọi làm tròn).
+          if (nonIntOrder > 0) {
+            return preserved(`Nguồn BQ có no_order KHÔNG NGUYÊN tại ${pos}/${date} (${nonIntOrder} row) — giữ snapshot cũ`)
+          }
           if (revNoOrder > 0 || orderNoRev > 0) {
             return preserved(`Nguồn BQ lệch NULL tại ${pos}/${date}: ${revNoOrder} row có doanh thu thiếu no_order, ${orderNoRev} row có no_order thiếu doanh thu — giữ snapshot cũ`)
           }
           if (negOrder > 0) {
             return preserved(`Nguồn BQ có no_order ÂM tại ${pos}/${date} — giữ snapshot cũ`)
           }
-          // (b) số đơn phải là số nguyên không âm.
-          const ordRaw = Number(r.order_count ?? 0)
-          if (!Number.isFinite(ordRaw) || !Number.isInteger(ordRaw) || ordRaw < 0) {
+          // (b) tổng số đơn phải là số nguyên không âm (lớp 2 sau canary nguồn).
+          const ordRaw = ordNum
+          if (!Number.isInteger(ordRaw) || ordRaw < 0) {
             return preserved(`Nguồn BQ có số đơn không hợp lệ tại ${pos}/${date}: ${String(r.order_count)} — giữ snapshot cũ`)
           }
           if (!offlineOrdersByPos.has(pos)) offlineOrdersByPos.set(pos, new Map())

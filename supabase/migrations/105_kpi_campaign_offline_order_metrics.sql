@@ -317,6 +317,7 @@ END $$;
 REVOKE ALL ON FUNCTION public.rpc_replace_campaign_actuals(uuid, jsonb, jsonb)
   FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.rpc_replace_campaign_actuals(uuid, jsonb, jsonb)
+  TO service_role;
 
 INSERT INTO public.app_migrations (version, name, notes)
 VALUES ('105', 'kpi_campaign_offline_order_metrics',

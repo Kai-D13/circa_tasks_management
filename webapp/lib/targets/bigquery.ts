@@ -140,10 +140,14 @@ export function campaignDailyQuery(startDate: string, endDate: string): string {
            -- COUNTIF(... IS NOT NULL) thay COALESCE: NULL_MISMATCH cho biết
            -- row có doanh thu nhưng THIẾU số đơn (hoặc ngược lại) → engine
            -- fail-closed, KHÔNG âm thầm coi là 0 đơn (AOV sẽ sai).
-           SUM(CAST(COALESCE(no_order, 0) AS INT64))                       AS order_count,
+           -- r1 (audit P1): SUM ở dạng NUMERIC — CAST INT64 sẽ LÀM TRÒN số lẻ
+           -- ngay trong BQ khiến guard Number.isInteger() phía app không bao
+           -- giờ thấy dữ liệu sai. Số lẻ được bắt riêng bằng non_integer_order.
+           SUM(CAST(COALESCE(no_order, 0) AS NUMERIC))                     AS order_count,
            COUNTIF(no_order IS NULL AND net_revenue IS NOT NULL)           AS rev_without_order,
            COUNTIF(no_order IS NOT NULL AND net_revenue IS NULL)           AS order_without_rev,
            COUNTIF(no_order < 0)                                           AS negative_order,
+           COUNTIF(no_order IS NOT NULL AND no_order != TRUNC(no_order))   AS non_integer_order,
            COUNT(*) AS source_row_count
     FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`
     WHERE date_type = 'DAY'
