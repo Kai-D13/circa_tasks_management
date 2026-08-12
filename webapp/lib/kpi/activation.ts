@@ -37,7 +37,7 @@ export type ActivationEvaluation =
 export async function evaluateActivation(
   deps: ActivationDeps,
   campaignId: string,
-  flags: { affiliate: boolean; customer: boolean },
+  flags: { affiliate: boolean; customer: boolean; orderAov: boolean },
 ): Promise<ActivationEvaluation> {
   const fail = (error: string): ActivationEvaluation => ({ ok: false, error })
 
@@ -48,11 +48,16 @@ export async function evaluateActivation(
   if (c.status !== 'draft' && c.status !== 'paused') return fail('Chiến dịch đã kết thúc')
   // Mig 103: campaign Số khách — gate flag customer, dừng sớm như nhánh dưới;
   // metric_type lạ → fail-closed (app cũ hơn DB, không đoán).
-  if (c.metric_type !== 'gmv' && c.metric_type !== 'affiliate_customer_count') {
+  if (c.metric_type !== 'gmv' && c.metric_type !== 'affiliate_customer_count'
+      && c.metric_type !== 'offline_order_aov') {
     return fail(`Loại chiến dịch không hỗ trợ: ${c.metric_type}`)
   }
   if (c.metric_type === 'affiliate_customer_count' && !flags.customer) {
     return fail('Chiến dịch Số khách Affiliate đang tắt trên hệ thống (KPI_AFFILIATE_CUSTOMER_ENABLED) — không thể kích hoạt')
+  }
+  // Mig 106: gate riêng của Chất lượng bán hàng (độc lập 2 flag affiliate).
+  if (c.metric_type === 'offline_order_aov' && !flags.orderAov) {
+    return fail('Chiến dịch Chất lượng bán hàng đang tắt trên hệ thống (KPI_ORDER_AOV_CAMPAIGN_ENABLED) — không thể kích hoạt')
   }
   // r1.2 (audit P1 flag boundary): flag tắt → KHÔNG kích hoạt campaign
   // affiliate — dừng ngay sau load campaign, không load targets/stores/health.

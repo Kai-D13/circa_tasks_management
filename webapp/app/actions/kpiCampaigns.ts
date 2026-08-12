@@ -5,7 +5,7 @@ import * as XLSX from 'xlsx'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { isSuperAdminEmail } from '@/lib/authz'
-import { isKpiAffiliateCustomerEnabled, isKpiAffiliateEnabled, isKpiCampaignEnabled, isKpiCampaignTestMode } from '@/lib/kpi/flags'
+import { isKpiAffiliateCustomerEnabled, isKpiAffiliateEnabled, isKpiCampaignEnabled, isKpiCampaignTestMode, isKpiOrderAovEnabled } from '@/lib/kpi/flags'
 import { resolveCampaignType, resolveMetricInput, type MetricInput } from '@/lib/kpi/campaignConfig'
 import { campaignArchivable, campaignDeletable } from '@/lib/kpi/archive'
 import { evaluateActivation, type ActivationCampaign } from '@/lib/kpi/activation'
@@ -170,7 +170,11 @@ export async function toggleCampaign(id: string) {
         return { data, error }
       },
       getHealth: (storeIds) => getAffiliateSyncHealth(supabaseAffiliateHealthDb(auth.supabase), storeIds),
-    }, id, { affiliate: isKpiAffiliateEnabled(), customer: isKpiAffiliateCustomerEnabled() })
+    }, id, {
+      affiliate: isKpiAffiliateEnabled(),
+      customer: isKpiAffiliateCustomerEnabled(),
+      orderAov: isKpiOrderAovEnabled(),
+    })
     if (!ev.ok) return { error: ev.error }
 
     const { error: actErr } = await supabaseAdmin.rpc('rpc_activate_kpi_campaign', {

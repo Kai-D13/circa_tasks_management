@@ -7,8 +7,8 @@ import type { AffiliateSyncHealth } from '../lib/affiliate/health'
 // nằm TRONG wrapper đã instrument (pattern r1.1 của orchestration).
 
 // Mig 103: flags dạng object — BOTH_ON giữ semantics 'true' cũ, AFF_OFF giữ 'false'.
-const BOTH_ON = { affiliate: true, customer: true }
-const AFF_OFF = { affiliate: false, customer: true }
+const BOTH_ON = { affiliate: true, customer: true, orderAov: true }
+const AFF_OFF = { affiliate: false, customer: true, orderAov: true }
 const READY: AffiliateSyncHealth = {
   ready: true, reason: null, runId: 'run-A',
   lastSuccessAt: '2026-07-23T09:00:00.000Z', ageMinutes: 30,
@@ -140,7 +140,7 @@ test.describe('kpi activation wiring @desktop', () => {
   // ── Mig 103: campaign "Số khách Affiliate" ────────────────────────────────
   test('CUSTOMER + flag customer TẮT → lỗi NGAY sau load campaign, 0 call còn lại', async () => {
     const { deps, calls } = mkDeps(CAMP({ metric_type: 'affiliate_customer_count', metric_affiliate: true }))
-    const r = await evaluateActivation(deps, 'camp-1', { affiliate: true, customer: false })
+    const r = await evaluateActivation(deps, 'camp-1', { affiliate: true, customer: false, orderAov: true })
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error).toContain('KPI_AFFILIATE_CUSTOMER_ENABLED')
     expect(calls).toEqual({ campaign: 1, targets: 0, stores: 0, health: 0 })
@@ -148,7 +148,7 @@ test.describe('kpi activation wiring @desktop', () => {
 
   test('CUSTOMER + flag customer BẬT (affiliate flag TẮT — độc lập): chạy đủ OS-active + health, expectedRunId từ health', async () => {
     const { deps, calls } = mkDeps(CAMP({ metric_type: 'affiliate_customer_count', metric_affiliate: true }))
-    const r = await evaluateActivation(deps, 'camp-1', { affiliate: false, customer: true })
+    const r = await evaluateActivation(deps, 'camp-1', { affiliate: false, customer: true, orderAov: true })
     expect(r).toEqual({ ok: true, expectedUpdatedAt: '2026-07-23T08:00:00.000Z', expectedRunId: 'run-A' })
     expect(calls).toEqual({ campaign: 1, targets: 1, stores: 1, health: 1 })
   })
