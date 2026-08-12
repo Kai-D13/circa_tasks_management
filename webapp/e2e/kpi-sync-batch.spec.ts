@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { manualSyncPlan, runSyncBatch, safeManualSync, shouldRevalidateAfterBatch } from '../lib/kpi/syncBatch'
+import { WARNING_LIMIT, manualSyncPlan, runSyncBatch, safeManualSync, shouldRevalidateAfterBatch } from '../lib/kpi/syncBatch'
 import { sanitizeOpsText } from '../lib/ops/sanitize'
 import type { SyncCampaignResult } from '../lib/kpi/syncCampaignCore'
 
@@ -256,5 +256,25 @@ test.describe('kpi sync batch — warnings degrade trong body (105 r1.3.1) @desk
     }
     const clean = manualSyncPlan(ok('c-1'))
     if (clean.kind === 'success') expect(clean.warnings).toEqual([])
+  })
+
+  test('r1.2: cắt ở WARNING_LIMIT nhưng KHÔNG im lặng — warningCount + warningsTruncated', async () => {
+    const many = Array.from({ length: WARNING_LIMIT + 7 }, (_, i) => `POS${1000 + i}: nguồn số đơn hỏng`)
+    const out = await runSyncBatch([CAMPS[0]], async (id) => ok(id, 1, [], many))
+    expect(out.body.warnings.length).toBe(WARNING_LIMIT)
+    expect(out.body.warningCount).toBe(WARNING_LIMIT + 7)   // tổng THẬT sau dedupe
+    expect(out.body.warningsTruncated).toBe(true)
+    expect(out.httpStatus).toBe(200)
+    // log KHÔNG bị cắt — vận hành vẫn tra được đủ POS
+    expect(out.logLines.filter((l) => l.includes('warning campaign=')).length).toBe(WARNING_LIMIT + 7)
+  })
+
+  test('r1.2: dưới trần → warningsTruncated=false, warningCount khớp độ dài mảng', async () => {
+    const out = await runSyncBatch([CAMPS[0]], async (id) => ok(id, 1, [], ['POS0009: hỏng']))
+    expect(out.body.warningCount).toBe(1)
+    expect(out.body.warningsTruncated).toBe(false)
+    const clean = await runSyncBatch(CAMPS, async (id) => ok(id))
+    expect(clean.body.warningCount).toBe(0)
+    expect(clean.body.warningsTruncated).toBe(false)
   })
 })

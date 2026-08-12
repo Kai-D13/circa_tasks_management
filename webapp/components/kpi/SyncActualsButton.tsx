@@ -4,6 +4,7 @@ import { useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { syncCampaignActuals } from '@/app/actions/kpiCampaigns'
+import { syncedSubjectLabel } from '@/lib/kpi/campaignDisplay'
 import { Button } from '@/components/ui/button'
 import { RefreshCw } from 'lucide-react'
 
@@ -31,8 +32,9 @@ export function SyncActualsButton({ campaignId, metricType }: { campaignId: stri
       // của một số POS bị ẩn. Toast riêng, giữ đủ lâu để đọc được POS + lý do.
       const warnings = ok.warnings ?? []
       if (warnings.length > 0) {
+        // r1.1 (audit P2): nhãn theo LOẠI chiến dịch — không hard-code "GMV".
         toast.warning(
-          `GMV đã đồng bộ. ${warnings[0]}${warnings.length > 1 ? ` (+${warnings.length - 1} cảnh báo khác)` : ''}`,
+          `${syncedSubjectLabel(metricType)}. ${warnings[0]}${warnings.length > 1 ? ` (+${warnings.length - 1} cảnh báo khác)` : ''}`,
           { duration: 10000 },
         )
       }

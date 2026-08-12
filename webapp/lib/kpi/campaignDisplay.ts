@@ -147,3 +147,12 @@ export function offlineOrderLine(offline: number | null, count: number | null): 
   const aov = Math.round((Number(offline) || 0) / count)
   return `${orders} · AOV ${nf.format(aov)}₫`
 }
+
+// ── 106 r1.1 (audit P2#5): nhãn "đã đồng bộ" theo LOẠI chiến dịch ───────────
+// Toast/cảnh báo trước đây hard-code "GMV đã đồng bộ" ⇒ campaign Số khách hiện
+// nhãn sai. Default vẫn là doanh số (caller cũ / giá trị lạ).
+export function syncedSubjectLabel(metricType?: string | null): string {
+  if (metricType === 'affiliate_customer_count') return 'Số khách đã đồng bộ'
+  if (metricType === 'offline_order_aov') return 'Chất lượng bán hàng đã đồng bộ'
+  return 'Doanh số đã đồng bộ'
+}

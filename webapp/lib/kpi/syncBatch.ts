@@ -18,6 +18,10 @@ import { sanitizeOpsText } from '@/lib/ops/sanitize'
 
 export interface BatchCampaignRef { id: string; name: string | null }
 
+// r1.2 (audit P2): trần số warning đưa vào response body. Log KHÔNG bị cắt —
+// chỉ body (thứ Coolify hiển thị) mới cần gọn.
+export const WARNING_LIMIT = 50
+
 export interface BatchOutcome {
   httpStatus: 200 | 207 | 500
   anySuccess: boolean
@@ -30,7 +34,12 @@ export interface BatchOutcome {
     // 105 r1.3.1: cảnh báo của campaign ĐÃ ghi thành công (degrade chỉ số phụ).
     // Đã sanitize + dedupe theo (campaign, warning) — cron chạy 2h/lần nên
     // cùng một POS hỏng sẽ lặp lại, không được phình body.
+    // r1.2 (audit P2): CẮT ở WARNING_LIMIT — nguồn hỏng diện rộng (25 POS ×
+    // nhiều campaign) không được biến response cron thành payload khổng lồ.
+    // warningCount = TỔNG thật (sau dedupe) để không "im lặng cắt bớt".
     warnings: { campaign: string; warning: string }[]
+    warningCount: number
+    warningsTruncated: boolean
     errors: string[]
   }
   logLines: string[]
@@ -99,7 +108,9 @@ export async function runSyncBatch(
       upserted,
       unmatched: [...new Set(unmatched)],
       preserved,
-      warnings,
+      warnings: warnings.slice(0, WARNING_LIMIT),
+      warningCount: warnings.length,
+      warningsTruncated: warnings.length > WARNING_LIMIT,
       errors,
     },
     logLines,

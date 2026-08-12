@@ -175,4 +175,46 @@ test.describe('kpi order/aov core (106) @desktop', () => {
     expect(aovFromSnapshot(500, null)).toBeNull()
     expect(aovFromSnapshot(null, 10)).toBe(0)
   })
+
+  // ── r1.1 (audit P1#4): FIXTURE FINANCE — khóa bằng số THẬT của file cấu hình.
+  // Chỉ SIGNATURE có đủ 4 chỉ số đầu vào trong handoff; MIZUKI (120.2463%) và
+  // SYMPHONY (120.3300%) mới chỉ có KẾT QUẢ kỳ vọng, chưa có input ⇒ chưa dựng
+  // được test (không bịa số cho màn tiền).
+  test('FIXTURE Finance POS0018 CIRCA SIGNATURE → target_score = 116.1975%', () => {
+    const SIGNATURE = { orderFloor: 888, aovFloor: 190_540, orderTarget: 1046, aovTarget: 194_046 }
+    expect(round4(targetScore(SIGNATURE) * 100)).toBe(116.1975)
+    // đúng mục tiêu số đơn + AOV → completion đúng 100%
+    const atTarget = computeOrderAovResult({
+      ...SIGNATURE, actualOrder: 1046, actualNet: 1046 * 194_046, tiers: [],
+    })
+    expect(atTarget.completionPct).toBe(100)
+    expect(atTarget.floorPass).toBe(true)
+    // net_revenue của file Finance CHỈ để tham khảo: AOV làm tròn VNĐ nên
+    // net != order_target × aov_target (SIGNATURE lệch +67.308đ) — KHÔNG dùng
+    // net làm chỉ số thứ 5 và không assert đẳng thức đó.
+  })
+
+  test('r1.1: Net Revenue ÂM hợp lệ (hoàn/điều chỉnh) — AOV âm, thủng sàn, không tier', () => {
+    const r = run(120, -5_000_000)
+    expect(r.actualAov).toBe(-5_000_000 / 120)
+    expect(r.aovFloorPass).toBe(false)
+    expect(r.orderFloorPass).toBe(true)
+    expect(r.status).toBe('below_aov_floor')
+    expect(r.achievedTierOrder).toBeNull()
+    expect(r.completionPct).toBeLessThan(100)
+  })
+
+  test('r1.1 guard đầu vào: cấu hình/thực tế sai kiểu → THROW (không trả số như thật)', () => {
+    const bad = (patch: Record<string, number>) => () => computeOrderAovResult({
+      ...T, actualOrder: 100, actualNet: 10_000_000, ...patch,
+    })
+    expect(bad({ aovFloor: 100_000.5 })).toThrow(/VNĐ nguyên/)
+    expect(bad({ orderFloor: 100.5 })).toThrow(/số nguyên/)
+    expect(bad({ orderTarget: 90 })).toThrow(/order_target phải >= order_floor/)
+    expect(bad({ aovTarget: 90_000 })).toThrow(/aov_target phải >= aov_floor/)
+    expect(bad({ actualOrder: 10.5 })).toThrow(/actual_order/)
+    expect(bad({ actualOrder: -1 })).toThrow(/actual_order/)
+    expect(bad({ actualNet: Number.NaN })).toThrow(/actual_net/)
+    expect(bad({ aovFloor: Number.POSITIVE_INFINITY })).toThrow(/hữu hạn/)
+  })
 })

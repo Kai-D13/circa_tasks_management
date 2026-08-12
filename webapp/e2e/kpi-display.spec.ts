@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { breakdownModel, campaignFootnote, metricEditorState, metricPresentation } from '../lib/kpi/campaignDisplay'
+import { breakdownModel, campaignFootnote, metricEditorState, metricPresentation, syncedSubjectLabel } from '../lib/kpi/campaignDisplay'
 import { affiliateDataStatus, buildCampaignExportRows, buildCustomerCampaignExportRows, type ExportActual } from '../lib/kpi/exportRows'
 
 // P3-E/F r1 unit gate (audit P2#3) — khóa contract render breakdown, footnote,
@@ -191,5 +191,15 @@ test.describe('kpi display customer metric (mig 103) @desktop', () => {
     expect(rows[0]['Số khách Affiliate']).toBe(37)
     expect(rows[0]['Còn thiếu (khách)']).toBe(63)
     expect(rows[0]['Loại chỉ số']).toBe('Số khách Affiliate')
+  })
+
+  // 106 r1.1 (audit P2): toast "đã đồng bộ" phải nói ĐÚNG loại chiến dịch —
+  // trước đây hard-code "GMV đã đồng bộ" cho cả campaign Số khách.
+  test('syncedSubjectLabel theo metric_type; loại lạ/thiếu → doanh số (an toàn)', () => {
+    expect(syncedSubjectLabel('gmv')).toBe('Doanh số đã đồng bộ')
+    expect(syncedSubjectLabel('affiliate_customer_count')).toBe('Số khách đã đồng bộ')
+    expect(syncedSubjectLabel('offline_order_aov')).toBe('Chất lượng bán hàng đã đồng bộ')
+    expect(syncedSubjectLabel(undefined)).toBe('Doanh số đã đồng bộ')
+    expect(syncedSubjectLabel('loai_la')).toBe('Doanh số đã đồng bộ')
   })
 })

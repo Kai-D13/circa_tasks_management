@@ -68,10 +68,29 @@ export function round4(n: number): number {
 
 // target_score tách riêng: đây là con số Finance đối soát trực tiếp từ file
 // cấu hình (không phụ thuộc kết quả thực tế).
-export function targetScore(t: OrderAovTargets): number {
-  if (!(t.orderFloor > 0) || !(t.aovFloor > 0)) {
-    throw new Error('orderAov: order_floor và aov_floor phải > 0')
+// r1.1 (audit P2): validate ĐẦY ĐỦ cấu hình — module tiền không được nhận
+// NaN/Infinity/số lẻ rồi trả kết quả trông-như-thật.
+function assertTargets(t: OrderAovTargets): void {
+  // CHỈ soi 4 khóa cấu hình — hàm cũng nhận object có thêm actual*/tiers.
+  for (const k of ['orderFloor', 'aovFloor', 'orderTarget', 'aovTarget'] as const) {
+    if (!Number.isFinite(t[k])) throw new Error(`orderAov: ${k} phải là số hữu hạn`)
   }
+  if (!(t.orderFloor > 0)) throw new Error('orderAov: order_floor phải > 0')
+  if (!(t.aovFloor > 0)) throw new Error('orderAov: aov_floor phải > 0')
+  if (!(t.orderTarget > 0)) throw new Error('orderAov: order_target phải > 0')
+  if (!(t.aovTarget > 0)) throw new Error('orderAov: aov_target phải > 0')
+  if (!Number.isInteger(t.orderFloor) || !Number.isInteger(t.orderTarget)) {
+    throw new Error('orderAov: order_floor/order_target phải là số nguyên')
+  }
+  if (!Number.isInteger(t.aovFloor) || !Number.isInteger(t.aovTarget)) {
+    throw new Error('orderAov: aov_floor/aov_target phải là VNĐ nguyên')
+  }
+  if (t.orderTarget < t.orderFloor) throw new Error('orderAov: order_target phải >= order_floor')
+  if (t.aovTarget < t.aovFloor) throw new Error('orderAov: aov_target phải >= aov_floor')
+}
+
+export function targetScore(t: OrderAovTargets): number {
+  assertTargets(t)
   return ORDER_WEIGHT * (t.orderTarget / t.orderFloor) + AOV_WEIGHT * (t.aovTarget / t.aovFloor)
 }
 
@@ -81,6 +100,12 @@ export function computeOrderAovResult(input: OrderAovTargets & {
   tiers?: OrderAovTierRow[]
 }): OrderAovResult {
   const { orderFloor, aovFloor, actualOrder, actualNet } = input
+  // Số đơn: nguyên, không âm. Net Revenue: hữu hạn, ĐƯỢC PHÉP ÂM (hoàn/điều
+  // chỉnh) — AOV âm là số thật, sẽ thủng sàn AOV chứ không bị clamp.
+  if (!Number.isInteger(actualOrder) || actualOrder < 0) {
+    throw new Error('orderAov: actual_order phải là số nguyên >= 0')
+  }
+  if (!Number.isFinite(actualNet)) throw new Error('orderAov: actual_net phải là số hữu hạn')
   const ts = targetScore(input)
   if (!(ts > 0)) throw new Error('orderAov: target_score phải > 0 — cấu hình target sai')
 

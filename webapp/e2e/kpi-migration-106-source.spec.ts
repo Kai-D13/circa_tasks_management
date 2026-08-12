@@ -170,4 +170,18 @@ test.describe('mig 106 source contract @desktop', () => {
     expect(ACTIVATE).toContain('target không phải OS store active')
     expect(ACTIVATE).toContain('Thiếu run id nguồn affiliate')
   })
+
+  test('r1.1: Net âm HỢP LỆ · actual_offline/daily null bị chặn · AOV VNĐ nguyên khóa ở DB', () => {
+    // P1#1 — guard chặn Net Revenue âm đã BỎ (hoàn/điều chỉnh là hợp lệ)
+    expect(ACTUALS).not.toContain('có Net Revenue âm')
+    expect(ACTUALS).toContain('Net Revenue ÂM là HỢP LỆ')
+    // P1#2 — thiếu key HOẶC null đều bị từ chối (chỉ check key thì null → 0)
+    expect(ACTUALS).toContain("NOT (v_row ? 'actual_offline') OR v_row->>'actual_offline' IS NULL")
+    expect(ACTUALS).toContain("count(*) FILTER (WHERE e->>'gmv' IS NULL OR e->>'offline_order_count' IS NULL)")
+    expect(ACTUALS).toContain('dòng daily thiếu gmv hoặc offline_order_count (null)')
+    // P1#3 — AOV nguyên VNĐ khóa ở BẢNG, không chỉ ở RPC import
+    expect(sql).toContain('chk_kcst_aov_vnd_integer')
+    expect(sql).toContain('aov_floor  = trunc(aov_floor)')
+    expect(sql).toContain('aov_target = trunc(aov_target)')
+  })
 })
