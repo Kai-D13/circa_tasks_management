@@ -1,7 +1,7 @@
 import Link from 'next/link'
 import { Card, CardContent } from '@/components/ui/card'
 import { formatDate } from '@/lib/dateUtils'
-import { formatCompletionPct } from '@/lib/kpi/orderAov'
+import { campaignCardProgress } from '@/lib/kpi/campaignDisplay'
 import { CalendarDays, ChevronRight, TrendingUp } from 'lucide-react'
 
 interface CampaignCard {
@@ -19,13 +19,9 @@ export function CampaignCardList({ items, hrefFor }: { items: CampaignCard[]; hr
   return (
     <div className="space-y-2">
       {items.map((c) => {
-        const target = Number(c.kpi_target) || 0
-        const actual = Number(c.actual_value) || 0
-        const isOrderAov = c.metric_type === 'offline_order_aov'
-        // order_aov: actual_value CHÍNH LÀ điểm hoàn thành (kpi_target = 100).
-        const rawPct = isOrderAov ? actual : (target > 0 ? (actual / target) * 100 : 0)
-        const pct = Math.round(rawPct)
-        const pctText = isOrderAov ? formatCompletionPct(rawPct) : `${pct}%`
+        // r1.2.1 (audit P1): quyết định hiển thị nằm ở contract THUẦN
+        // (campaignCardProgress) — chưa đồng bộ KHÔNG vẽ tiến độ 0%.
+        const { synced, pct, text: pctText } = campaignCardProgress(c)
         return (
           <Link key={c.id} href={hrefFor(c.id)} prefetch={false} className="block">
             {/* rounded-lg — DS surfaces cap at 8px; row is well past the 44px
@@ -42,7 +38,8 @@ export function CampaignCardList({ items, hrefFor }: { items: CampaignCard[]; hr
                   </div>
                   <div className="mt-1.5 flex items-center gap-2">
                     <div className="h-1.5 flex-1 rounded-full bg-muted overflow-hidden">
-                      <div className="h-full bg-primary" style={{ width: `${Math.min(pct, 100)}%` }} />
+                      {/* chưa đồng bộ → KHÔNG vẽ tiến độ (0% đọc như đã có kết quả) */}
+                      {synced && <div className="h-full bg-primary" style={{ width: `${Math.min(pct, 100)}%` }} />}
                     </div>
                     <span className="text-xs text-muted-foreground tabular-nums shrink-0">{pctText}</span>
                   </div>

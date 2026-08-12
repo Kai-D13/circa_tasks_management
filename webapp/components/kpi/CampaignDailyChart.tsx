@@ -9,7 +9,7 @@
 // (<title>) breakdown 2 nguồn khi campaign có affiliate.
 // Mig 103: campaign Số khách — cột = affiliate_customer_count, format 'N khách'
 // qua metricPresentation (GMV path dùng cùng module, format byte-equal cũ).
-import { metricPresentation } from '@/lib/kpi/campaignDisplay'
+import { metricPresentation, orderAxisTicks } from '@/lib/kpi/campaignDisplay'
 
 interface DailyPoint {
   date: string
@@ -99,7 +99,9 @@ export function CampaignDailyChart({
 
   // Sparse day ticks: ~6 evenly spaced, always first + last.
   const tickEvery = Math.max(1, Math.ceil(days.length / 6))
-  const gridVals = [max / 2, max]
+  // r1.2.1 (audit P2): chuỗi SỐ ĐƠN là số nguyên — max/2 = 2,5 mà nhãn làm
+  // tròn thành '3' sẽ đặt sai vị trí lưới. Dùng tick nguyên + khử trùng.
+  const gridVals = isOrderAov && series === 'orders' ? orderAxisTicks(max) : [max / 2, max]
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img" aria-label={ariaLabel}>

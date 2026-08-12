@@ -4,7 +4,7 @@
 // r2 (audit P3): structural type CỤC BỘ — tầng lib không import type từ
 // component UI (tránh đảo chiều phụ thuộc); CampaignView khớp structurally.
 
-import { aovFromSnapshot, formatCompletionPct } from '@/lib/kpi/orderAov'
+import { aovFromSnapshot, formatCompletionPct, formatRemainingPct } from '@/lib/kpi/orderAov'
 
 export interface BreakdownInput {
   metric_offline: boolean
@@ -198,4 +198,49 @@ export function syncedSubjectLabel(metricType?: string | null): string {
   if (metricType === 'affiliate_customer_count') return 'Số khách đã đồng bộ'
   if (metricType === 'offline_order_aov') return 'Chất lượng bán hàng đã đồng bộ'
   return 'Doanh số đã đồng bộ'
+}
+
+// ── r1.2.1 (audit P1): 3 QUYẾT ĐỊNH HIỂN THỊ tách thuần để test khóa ───────
+
+// Hero "Còn thiếu" — BA trạng thái tách bạch. Trước đây null actual vẫn ra
+// "Còn thiếu 100%" (mâu thuẫn với "Chưa đồng bộ" ngay bên trên), và ca
+// completion 99,9999% ra "0%" (mâu thuẫn với badge "Chưa đạt").
+export function heroRemainingText(p: {
+  actualValue: number | null | undefined
+  achieved: boolean
+  remaining: number
+  metricType?: string | null
+}): string {
+  if (p.actualValue === null || p.actualValue === undefined) return '—'
+  const pres = metricPresentation(p.metricType)
+  if (pres.kind === 'offline_order_aov') return formatRemainingPct(p.achieved ? 0 : p.remaining)
+  return p.achieved ? pres.zero : pres.value(p.remaining)
+}
+
+// Card campaign ở màn danh sách Staff/QLCH: chưa đồng bộ KHÔNG được vẽ tiến độ
+// 0% (đọc như đã có kết quả); actual = 0 THẬT thì vẫn hiện 0%.
+export function campaignCardProgress(c: {
+  kpi_target: number | null
+  actual_value: number | null | undefined
+  metric_type?: string
+}): { synced: boolean; pct: number; text: string } {
+  const synced = c.actual_value !== null && c.actual_value !== undefined
+  const target = Number(c.kpi_target) || 0
+  const actual = Number(c.actual_value) || 0
+  const isOrderAov = c.metric_type === 'offline_order_aov'
+  // order_aov: actual_value CHÍNH LÀ điểm hoàn thành (kpi_target chuẩn hóa 100).
+  const rawPct = isOrderAov ? actual : (target > 0 ? (actual / target) * 100 : 0)
+  if (!synced) return { synced, pct: 0, text: 'Chưa đồng bộ' }
+  return {
+    synced,
+    pct: Math.round(rawPct),
+    text: isOrderAov ? formatCompletionPct(rawPct) : `${Math.round(rawPct)}%`,
+  }
+}
+
+// Lưới trục cho chuỗi SỐ ĐƠN: giá trị nguyên + khử trùng (max=5 ⇒ [3,5], không
+// phải [2.5,5] rồi nhãn làm tròn thành '3' đặt sai chỗ).
+export function orderAxisTicks(max: number): number[] {
+  const top = Math.max(1, Math.ceil(max))
+  return [...new Set([Math.ceil(top / 2), top])]
 }

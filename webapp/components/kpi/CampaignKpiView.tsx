@@ -1,6 +1,8 @@
 import Link from 'next/link'
 import { Card, CardContent } from '@/components/ui/card'
-import { breakdownModel, campaignFootnote, metricPresentation, orderAovMetricLines } from '@/lib/kpi/campaignDisplay'
+import {
+  breakdownModel, campaignFootnote, heroRemainingText, metricPresentation, orderAovMetricLines,
+} from '@/lib/kpi/campaignDisplay'
 import {
   ORDER_AOV_STATUS_LABEL, aovFromSnapshot, formatCompletionPct, formatRemainingPct,
   orderAovStatus, qualityKpiPass,
@@ -239,6 +241,11 @@ export function CampaignKpiView({
   // r1.2 (audit P1): phần CÒN THIẾU của campaign điểm % dùng formatter riêng —
   // 0,0001 điểm % không được làm tròn thành "0%" (mâu thuẫn "chưa đạt").
   const remainingText = (n: number) => isOrderAovCampaign ? formatRemainingPct(n) : vnd(n)
+  // Hero "Còn thiếu": chưa đồng bộ → '—' · đã đạt → 0 · còn lại → formatter
+  // theo loại. (Trước r1.2.1: null actual vẫn ra "Còn thiếu 100%".)
+  const remainingHeroText = heroRemainingText({
+    actualValue: sel.actual_value, achieved, remaining, metricType: sel.metric_type,
+  })
   const tierRemainingLine = (order: number) => {
     if (!showTierRemaining) return null
     const tp = tierProgressByOrder.get(order)
@@ -318,14 +325,16 @@ export function CampaignKpiView({
           <p className="flex items-center gap-1.5 text-sm border-t pt-3">
             <Target className="h-4 w-4 text-primary shrink-0" />
             <span className="text-muted-foreground">Còn thiếu:</span>
-            <span className="font-bold text-primary">{achieved ? pres.zero : vnd(remaining)}</span>
+            {/* r1.2.1 (audit P1): BA trạng thái tách bạch — chưa đồng bộ KHÔNG
+                được hiện "Còn thiếu 100%", và ca 99,9999% không được ra "0%". */}
+            <span className="font-bold text-primary">{remainingHeroText}</span>
           </p>
         </CardContent>
       </Card>
 
-      {/* ── Mig 106: Chất lượng bán hàng — 2 chỉ số với SÀN bắt buộc.
-             Hero phía trên đã là ĐIỂM hoàn thành (%); khối này cho biết vì sao:
-             số đơn/AOV thực tế so với mục tiêu và SÀN + trạng thái. ── */}
+      {/* ── Mig 106: Chất lượng bán hàng — 2 chỉ số, mỗi chỉ số có MỤC TIÊU.
+             Hero phía trên là ĐIỂM hoàn thành (chỉ số YẾU HƠN); khối này cho
+             biết vì sao: số đơn/AOV thực tế so với mục tiêu + trạng thái. ── */}
       {qualityLines && (
         <Card className="rounded-lg">
           <CardContent className="p-4 space-y-2.5">

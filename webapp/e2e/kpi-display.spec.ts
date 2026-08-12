@@ -1,5 +1,8 @@
 import { test, expect } from '@playwright/test'
-import { breakdownModel, campaignFootnote, metricEditorState, metricPresentation, syncedSubjectLabel } from '../lib/kpi/campaignDisplay'
+import {
+  breakdownModel, campaignCardProgress, campaignFootnote, heroRemainingText, metricEditorState,
+  metricPresentation, orderAxisTicks, syncedSubjectLabel,
+} from '../lib/kpi/campaignDisplay'
 import { affiliateDataStatus, buildCampaignExportRows, buildCustomerCampaignExportRows, buildOrderAovCampaignExportRows, type ExportActual } from '../lib/kpi/exportRows'
 
 // P3-E/F r1 unit gate (audit P2#3) — khóa contract render breakdown, footnote,
@@ -259,5 +262,51 @@ test.describe('kpi display customer metric (mig 103) @desktop', () => {
     // cấu hình vẫn hiện đủ để đối soát trước khi sync
     expect(notSynced[0]['Mục tiêu số đơn']).toBe(1046)
     expect(notSynced[0]['Mục tiêu AOV']).toBe(194_046)
+  })
+
+  // ── r1.2.1 (audit P1/P2): 3 contract hiển thị của Chất lượng bán hàng ─────
+  const AOV_T = 'offline_order_aov'
+
+  test('hero "Còn thiếu": chưa đồng bộ → —, đã đạt → 0%, hụt tí xíu → <0,1%', () => {
+    // chưa đồng bộ: KHÔNG được ra "Còn thiếu 100%" khi hero ghi "Chưa đồng bộ"
+    expect(heroRemainingText({ actualValue: null, achieved: false, remaining: 100, metricType: AOV_T })).toBe('—')
+    expect(heroRemainingText({ actualValue: undefined, achieved: false, remaining: 100, metricType: AOV_T })).toBe('—')
+    // đạt → 0%
+    expect(heroRemainingText({ actualValue: 100, achieved: true, remaining: 0, metricType: AOV_T })).toBe('0%')
+    expect(heroRemainingText({ actualValue: 115, achieved: true, remaining: 0, metricType: AOV_T })).toBe('0%')
+    // ca 99,9999% → "<0,1%", TUYỆT ĐỐI không "0%"
+    expect(heroRemainingText({ actualValue: 99.9999, achieved: false, remaining: 0.0001, metricType: AOV_T })).toBe('<0,1%')
+    expect(heroRemainingText({ actualValue: 66.92, achieved: false, remaining: 33.08, metricType: AOV_T })).toBe('33,1%')
+    // GMV/khách giữ NGUYÊN hành vi tiền/khách
+    expect(heroRemainingText({ actualValue: 500, achieved: false, remaining: 1_500, metricType: 'gmv' })).toBe('1.500₫')
+    expect(heroRemainingText({ actualValue: 5, achieved: true, remaining: 0, metricType: 'affiliate_customer_count' })).toBe('0 khách')
+    expect(heroRemainingText({ actualValue: null, achieved: false, remaining: 1_500, metricType: 'gmv' })).toBe('—')
+  })
+
+  test('card danh sách: null = Chưa đồng bộ (không vẽ tiến độ); 0 THẬT = 0%', () => {
+    const notSynced = campaignCardProgress({ kpi_target: 100, actual_value: null, metric_type: AOV_T })
+    expect(notSynced).toEqual({ synced: false, pct: 0, text: 'Chưa đồng bộ' })
+    const zero = campaignCardProgress({ kpi_target: 100, actual_value: 0, metric_type: AOV_T })
+    expect(zero).toEqual({ synced: true, pct: 0, text: '0%' })
+    // 99,9999% chưa đạt → '<100%' (đồng bộ với badge + commission rỗng)
+    expect(campaignCardProgress({ kpi_target: 100, actual_value: 99.9999, metric_type: AOV_T }).text).toBe('<100%')
+    expect(campaignCardProgress({ kpi_target: 100, actual_value: 100, metric_type: AOV_T }).text).toBe('100%')
+    // GMV: % = actual/target như cũ; null vẫn là Chưa đồng bộ
+    expect(campaignCardProgress({ kpi_target: 1_000, actual_value: 250 }).text).toBe('25%')
+    expect(campaignCardProgress({ kpi_target: 1_000, actual_value: null }).synced).toBe(false)
+    expect(campaignCardProgress({ kpi_target: 0, actual_value: 0 }).text).toBe('0%')
+  })
+
+  test('trục chart số đơn: tick NGUYÊN, không trùng, tối thiểu 1', () => {
+    expect(orderAxisTicks(5)).toEqual([3, 5])      // không phải [2.5, 5]
+    expect(orderAxisTicks(3)).toEqual([2, 3])
+    expect(orderAxisTicks(1)).toEqual([1])         // khử trùng (ceil(0.5)=1)
+    expect(orderAxisTicks(0)).toEqual([1])         // mọi ngày 0 đơn → thang 1
+    expect(orderAxisTicks(10)).toEqual([5, 10])
+    for (const m of [0, 1, 2, 3, 5, 7, 10, 343]) {
+      const ticks = orderAxisTicks(m)
+      expect(ticks.every((t) => Number.isInteger(t) && t > 0), `max=${m}`).toBe(true)
+      expect(new Set(ticks).size, `max=${m}`).toBe(ticks.length)
+    }
   })
 })
