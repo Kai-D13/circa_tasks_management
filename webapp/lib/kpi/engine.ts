@@ -268,7 +268,7 @@ export function buildCustomerSnapshot(input: CustomerSnapshotInput): {
 }
 
 // ── Mig 106: snapshot THÔ cho campaign Chất lượng bán hàng ──────────────────
-// KHÔNG tính điểm/floor/tier ở đây (RPC làm) — chỉ gộp theo store và kiểm tra
+// KHÔNG tính điểm/tier ở đây (RPC làm) — chỉ gộp theo store và kiểm tra
 // tính đủ của nguồn. Thiếu bất kỳ mảnh nào → trả lỗi để orchestrator preserve
 // (số đơn/AOV LÀ KPI của loại này, không có chuyện degrade).
 export interface OrderAovSnapshotInput {

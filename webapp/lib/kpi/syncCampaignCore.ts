@@ -359,7 +359,7 @@ async function syncCustomerCampaign(
 //     lẻ/âm, lệch NULL, có doanh thu mà 0 đơn) đều PRESERVE toàn snapshot;
 //     tuyệt đối không degrade như campaign GMV.
 //   · Payload gửi RPC chỉ có SỐ THÔ (Net Revenue + số đơn, theo ngày và theo
-//     kỳ). Điểm/floor/bậc/commission do RPC 106 tự tính — app không gửi.
+//     kỳ). Điểm/bậc/commission do RPC 106 tự tính — app không gửi.
 async function syncOrderAovCampaign(
   campaignId: string,
   c: CampaignConfig,

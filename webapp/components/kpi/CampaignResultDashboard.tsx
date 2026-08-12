@@ -39,7 +39,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
       {/* Summary cards — thứ tự/label/màu giữ nguyên tab Kết quả super */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         {((isOrderAov ? [
-          // "X/Y cửa hàng đạt" theo KPI PASS (floor + >=100%), KHÔNG theo bậc.
+          // "X/Y cửa hàng đạt" theo KPI PASS (completion >= 100%), KHÔNG theo bậc.
           { label: 'Cửa hàng đạt KPI', value: synced ? `${m.qualityPassCount}/${m.storeCount}` : '—', icon: Award,
             tile: synced && m.qualityPassCount > 0 ? 'bg-green-100 text-green-600' : 'bg-primary/10 text-primary',
             valueCls: synced && m.qualityPassCount > 0 ? 'text-green-600' : undefined },
