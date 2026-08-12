@@ -115,8 +115,8 @@ export function campaignRangeQuery(startDate: string, endDate: string): string {
   `
 }
 
-// 105 (11/08): trả thêm `order_count` = SUM(no_order) + 4 cột canary
-// (null-mismatch 2 chiều · âm · không nguyên).
+// 105 (11/08): trả thêm `order_count` = SUM(no_order) + 5 cột canary
+// (null-mismatch 2 chiều · âm · không nguyên · doanh thu mà 0 đơn).
 // AOV KHÔNG lấy từ cột `aov` của BI (giá trị dẫn xuất) — app luôn tính
 // SUM(net_revenue)/SUM(no_order) (weighted; đo thật 08/2026 lệch 1.445đ so
 // với AVG(aov)).
@@ -149,6 +149,11 @@ export function campaignDailyQuery(startDate: string, endDate: string): string {
            COUNTIF(no_order IS NOT NULL AND net_revenue IS NULL)           AS order_without_rev,
            COUNTIF(no_order < 0)                                           AS negative_order,
            COUNTIF(no_order IS NOT NULL AND no_order != TRUNC(no_order))   AS non_integer_order,
+           -- r1.2 (audit): có doanh thu nhưng KHÔNG đơn nào ⇒ AOV không xác
+           -- định mà vẫn có tiền → fail-closed. (Ngược lại: order > 0 với
+           -- net = 0 VẪN hợp lệ; net ÂM không tự reject — BI cho phép hoàn/
+           -- điều chỉnh.)
+           COUNTIF(no_order = 0 AND COALESCE(net_revenue, 0) != 0)          AS revenue_with_zero_order,
            COUNT(*) AS source_row_count
     FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`
     WHERE date_type = 'DAY'

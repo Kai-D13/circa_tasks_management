@@ -78,7 +78,8 @@ test.describe('mig 105 source contract @desktop', () => {
     expect(bq).toContain('SUM(CAST(COALESCE(no_order, 0) AS NUMERIC))')
     expect(bq).not.toContain('SUM(CAST(COALESCE(no_order, 0) AS INT64))')
     expect(bq).toContain('COUNTIF(no_order IS NOT NULL AND no_order != TRUNC(no_order))')
-    for (const canary of ['rev_without_order', 'order_without_rev', 'negative_order', 'non_integer_order']) {
+    for (const canary of ['rev_without_order', 'order_without_rev', 'negative_order',
+      'non_integer_order', 'revenue_with_zero_order']) {
       expect(bq).toContain(canary)
     }
     // KHÔNG bao giờ tổng hợp trực tiếp cột aov của BI (weighted-only). Soi

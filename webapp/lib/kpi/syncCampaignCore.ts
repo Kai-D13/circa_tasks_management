@@ -219,14 +219,19 @@ export async function syncCampaignWithDeps(
           const orderNoRev = numOrFail('order_without_rev')
           const negOrder = numOrFail('negative_order')
           const nonIntOrder = numOrFail('non_integer_order')
+          const revZeroOrder = numOrFail('revenue_with_zero_order')
           const ordNum = numOrFail('order_count')
           if (revNoOrder === null || orderNoRev === null || negOrder === null
-              || nonIntOrder === null || ordNum === null) {
+              || nonIntOrder === null || revZeroOrder === null || ordNum === null) {
             return preserved(`Nguồn BQ thiếu/sai field số đơn tại ${pos}/${date} (order_count/canary) — query hoặc schema đã đổi; giữ snapshot cũ`)
           }
           // r1 (audit P1#1): số đơn LẺ bị bắt ở nguồn (trước mọi làm tròn).
           if (nonIntOrder > 0) {
             return preserved(`Nguồn BQ có no_order KHÔNG NGUYÊN tại ${pos}/${date} (${nonIntOrder} row) — giữ snapshot cũ`)
+          }
+          // r1.2: có doanh thu mà 0 đơn ⇒ AOV vô định nhưng vẫn có tiền.
+          if (revZeroOrder > 0) {
+            return preserved(`Nguồn BQ có doanh thu nhưng KHÔNG đơn nào tại ${pos}/${date} (${revZeroOrder} row no_order=0, net_revenue≠0) — AOV không xác định; giữ snapshot cũ`)
           }
           if (revNoOrder > 0 || orderNoRev > 0) {
             return preserved(`Nguồn BQ lệch NULL tại ${pos}/${date}: ${revNoOrder} row có doanh thu thiếu no_order, ${orderNoRev} row có no_order thiếu doanh thu — giữ snapshot cũ`)

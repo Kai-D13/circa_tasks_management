@@ -48,6 +48,7 @@ function fullCoverage(override: Record<string, number | null> = {}): Record<stri
         pos_code: pos, date, gmv, source_row_count: 1,
         order_count: gmv === 300 ? 3 : 0,
         rev_without_order: 0, order_without_rev: 0, negative_order: 0, non_integer_order: 0,
+        revenue_with_zero_order: 0,
       })
     }
   }
@@ -377,8 +378,8 @@ test.describe('kpi sync orchestration @desktop', () => {
   test('BQ-V2 GUARD: trùng key (pos, ngày) trong cùng lần pull → preserved, KHÔNG replace', async () => {
     const { deps, calls } = mkDeps(CFG(), {
       bq: async () => [
-        { pos_code: 'POS0001', date: '2026-07-02', gmv: 300, source_row_count: 1, order_count: 0, rev_without_order: 0, order_without_rev: 0, negative_order: 0, non_integer_order: 0 },
-        { pos_code: 'POS0001', date: '2026-07-02', gmv: 999, source_row_count: 1, order_count: 0, rev_without_order: 0, order_without_rev: 0, negative_order: 0, non_integer_order: 0 },
+        { pos_code: 'POS0001', date: '2026-07-02', gmv: 300, source_row_count: 1, order_count: 0, rev_without_order: 0, order_without_rev: 0, negative_order: 0, non_integer_order: 0, revenue_with_zero_order: 0 },
+        { pos_code: 'POS0001', date: '2026-07-02', gmv: 999, source_row_count: 1, order_count: 0, rev_without_order: 0, order_without_rev: 0, negative_order: 0, non_integer_order: 0, revenue_with_zero_order: 0 },
       ],
     })
     const r = await syncCampaignWithDeps('camp-1', deps)
@@ -624,6 +625,20 @@ test.describe('kpi sync — số đơn Offline fail-closed (105) @desktop', () =
     const r = await syncCampaignWithDeps('camp-1', deps)
     expect(r.status).toBe('snapshot_preserved')
     if (r.status === 'snapshot_preserved') expect(r.reason).toContain('lệch NULL')
+  })
+
+  test('r1.2: có doanh thu mà 0 đơn (no_order=0, net≠0) → PRESERVE (AOV vô định)', async () => {
+    const { deps, calls } = mkDeps(CFG(), { bq: poison({ revenue_with_zero_order: 1 }) })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    if (r.status === 'snapshot_preserved') expect(r.reason).toContain('KHÔNG đơn nào')
+    expect(calls.replace).toBe(0)
+  })
+
+  test('r1.2: thiếu canary revenue_with_zero_order → PRESERVE', async () => {
+    const { deps } = mkDeps(CFG(), { bq: dropField('revenue_with_zero_order') })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
   })
 
   test('no_order ÂM → PRESERVE', async () => {
