@@ -2,67 +2,42 @@
 -- 106_kpi_campaign_order_aov.sql
 -- ⚠ DRAFT — CHƯA CHẠY cho tới khi stakeholder audit pass. Chạy SAU 105.
 --
--- REQUEST 11/08 (handoff stakeholder): loại chiến dịch MỚI
--- "Chất lượng bán hàng" (metric_type = 'offline_order_aov') — đo ĐỒNG THỜI
--- Số đơn Offline (trọng số 90%) và AOV Offline (10%), mỗi chỉ số có FLOOR
--- bắt buộc. Net Revenue chỉ là số tham khảo (dùng để tính AOV).
---
--- CONTRACT (khóa — mọi con số do RPC TỰ TÍNH, app KHÔNG được gửi điểm):
---   actual_order  = SUM(no_order)      ← BigQuery DAY rows trong [start, end]
---   actual_net    = SUM(net_revenue)
---   actual_aov    = actual_net / actual_order      (NULL khi 0 đơn)
---   actual_score  = 0.90×(actual_order/order_floor) + 0.10×(actual_aov/aov_floor)
---   target_score  = 0.90×(order_target/order_floor) + 0.10×(aov_target/aov_floor)
---   completion_pct = actual_score / target_score × 100   (KHÔNG cap thành phần)
---   floor_pass    = actual_order >= order_floor AND actual_aov >= aov_floor
---                   (>= : BẰNG floor là PASS)
---   kpi_pass      = floor_pass AND completion_pct >= 100   (dẫn xuất ở tầng đọc)
---   tier          = threshold cao nhất <= completion_pct, CHỈ xét khi floor_pass
---   actual_order = 0 → completion 0%, AOV '—', không tier ("Chưa phát sinh đơn")
---   Net Revenue ÂM là HỢP LỆ (hoàn/điều chỉnh): AOV tính thật, KHÔNG clamp ⇒
---   thủng sàn AOV ⇒ không tier/commission. Ngược lại, actual_offline null hoặc
---   daily thiếu gmv/số đơn là LỖI (fail-closed) — số đơn/AOV LÀ KPI của loại này.
+-- Loại chiến dịch MỚI "Chất lượng bán hàng" (metric_type='offline_order_aov').
+-- ⚠ CONTRACT CHỐT 12/08 — THAY THẾ HOÀN TOÀN thiết kế 90/10 + floor:
+--   actual_aov  = actual_order > 0 ? actual_net / actual_order : null
+--   order_ratio = actual_order / order_target
+--   aov_ratio   = actual_aov   / aov_target
+--   completion  = round(min(order_ratio, aov_ratio) × 100, 4)   ← CHỈ SỐ YẾU HƠN
+--   kpi_pass    = actual_order >= order_target AND actual_aov >= aov_target
+--                 (⟺ completion >= 100)
+--   · KHÔNG cap completion ở 100% · KHÔNG floor · KHÔNG trọng số · KHÔNG bù trừ.
+--   · 0 đơn → AOV '—', completion 0%; 0 đơn mà Net ≠ 0 = nguồn hỏng → RAISE.
+--   · Net Revenue ÂM giữ nguyên, không clamp.
+--   · Commission CHỈ khi completion >= 100; policy hiện tại: ĐÚNG 1 bậc mốc 100.
 --
 -- ÁNH XẠ CỘT (tái dùng bảng sẵn có, KHÔNG đẻ bảng mới):
---   kpi_target            = 100          (điểm chuẩn hóa — RPC ÉP, không nhận
---                                         từ file import; UI KHÔNG hiện như tiền)
---   actual_value          = completion_pct
---   run_rate              = completion_pct   (hero Staff đọc thẳng cột này)
---   remaining_target      = max(100 - completion_pct, 0)   (đơn vị: điểm %)
---   actual_offline        = Net Revenue kỳ
---   offline_order_count   = số đơn kỳ (cột của 105 — tái dùng)
---   quality_floor_pass    = floor_pass   (cột MỚI, NULL cho 2 loại cũ)
+--   kpi_target          = 100 (điểm chuẩn hóa — RPC ÉP, không nhận từ file)
+--   actual_value        = run_rate = completion
+--   remaining_target    = max(100 - completion, 0)   (đơn vị: điểm %)
+--   actual_offline      = Net Revenue kỳ
+--   offline_order_count = số đơn kỳ (cột của 105 — tái dùng)
 --   actual_affiliate / actual_customer_count = 0
---   AOV KHÔNG LƯU — luôn tính lại actual_offline / offline_order_count.
+--   AOV và kpi_pass KHÔNG LƯU — luôn suy lúc đọc (không thể lệch).
 --
--- Nội dung:
---   A. CHECK metric_type += 'offline_order_aov' + CHECK contract cột
---      (offline=true, affiliate=false, order_type='all').
---   B. kpi_campaign_store_targets += order_floor/aov_floor/order_target/
---      aov_target (+ CHECK dương · đủ-4-hoặc-không-cột-nào · target >= floor).
---   C. kpi_campaign_store_actuals += quality_floor_pass boolean.
---   D. rpc_replace_campaign_targets = body 103 NGUYÊN VĂN + nhánh order_aov
---      (ép kpi_target=100 · validate 4 chỉ số · reverse guard cho 2 loại cũ).
---   E. rpc_replace_campaign_actuals = body 105 NGUYÊN VĂN + nhánh order_aov —
---      RPC LÀ AUTHORITY: nhận RAW (net + số đơn), tự tính AOV/điểm/floor/bậc/
---      commission; TỪ CHỐI payload mang số dẫn xuất; 3 nhánh metric_type tường
---      minh + ELSE reject loại lạ.
---   F. rpc_activate_kpi_campaign = body 104 NGUYÊN VĂN + nhánh order_aov —
---      pg_advisory_xact_lock + overlap PER-STORE chỉ với campaign ACTIVE cùng
---      loại (khác tập store ⇒ chạy song song).
--- Idempotent (DDL additive + CREATE OR REPLACE, KHÔNG đổi dữ liệu hiện có).
--- GMV + Số khách Affiliate ZERO-TOUCH (nhánh cũ nguyên văn; payload 2 loại này
--- được ghi lại từng byte — v_calc rỗng).
+-- Nội dung: (A) CHECK metric_type += loại mới + CHECK contract cột ·
+-- (B) kpi_campaign_store_targets += order_target/aov_target + CHECK ·
+-- (C) rpc_replace_campaign_targets = body 103 NGUYÊN VĂN + nhánh mới ·
+-- (D) rpc_replace_campaign_actuals = body 105 NGUYÊN VĂN + nhánh mới (RPC LÀ
+--     AUTHORITY, 3 nhánh metric_type tường minh + reject loại lạ) ·
+-- (E) rpc_activate_kpi_campaign = body 104 NGUYÊN VĂN + advisory lock +
+--     overlap PER-STORE (chỉ campaign ACTIVE cùng loại) + validate policy tier.
+-- Idempotent. GMV + Số khách Affiliate ZERO-TOUCH (payload 2 loại này được ghi
+-- lại từng byte — v_calc rỗng).
 --
 -- ROLLBACK:
 --   CREATE OR REPLACE 3 RPC từ 105 (actuals), 103 (targets), 104 (activate);
---   ALTER TABLE public.kpi_campaign_store_actuals
---     DROP COLUMN IF EXISTS quality_floor_pass;
 --   ALTER TABLE public.kpi_campaign_store_targets
---     DROP CONSTRAINT IF EXISTS chk_kcst_order_aov_positive,
---     DROP CONSTRAINT IF EXISTS chk_kcst_order_aov_all_or_none,
---     DROP CONSTRAINT IF EXISTS chk_kcst_order_aov_target_ge_floor,
---     DROP COLUMN IF EXISTS order_floor, DROP COLUMN IF EXISTS aov_floor,
+--     DROP CONSTRAINT IF EXISTS chk_kcst_order_aov_targets,
 --     DROP COLUMN IF EXISTS order_target, DROP COLUMN IF EXISTS aov_target;
 --   ALTER TABLE public.kpi_campaigns
 --     DROP CONSTRAINT IF EXISTS chk_kpi_campaigns_order_aov_contract,
@@ -83,15 +58,14 @@ BEGIN
 END $$;
 
 -- ── A. metric_type: mở rộng whitelist + contract cột của loại mới ───────────
--- 103 đã đặt TÊN cho CHECK metric_type ⇒ drop theo tên (không cần discovery).
 DO $$
 BEGIN
   ALTER TABLE public.kpi_campaigns DROP CONSTRAINT IF EXISTS chk_kpi_campaigns_metric_type;
   ALTER TABLE public.kpi_campaigns ADD CONSTRAINT chk_kpi_campaigns_metric_type
     CHECK (metric_type IN ('gmv', 'affiliate_customer_count', 'offline_order_aov'));
 
-  -- Contract ENFORCE Ở DB (không tin app): Chất lượng bán hàng đọc BigQuery
-  -- Offline toàn bộ đơn ⇒ offline=true, affiliate=false, order_type='all'.
+  -- Contract ENFORCE Ở DB (không tin app): loại này đọc BigQuery Offline toàn
+  -- bộ đơn ⇒ offline=true, affiliate=false, order_type='all'.
   IF NOT EXISTS (SELECT 1 FROM pg_constraint
                  WHERE conname = 'chk_kpi_campaigns_order_aov_contract'
                    AND conrelid = 'public.kpi_campaigns'::regclass) THEN
@@ -101,73 +75,32 @@ BEGIN
   END IF;
 END $$;
 
--- ── B. Target: 4 chỉ số Order/AOV (NULL cho 2 loại cũ) ──────────────────────
+-- ── B. Target: 2 mục tiêu (NULL với 2 loại cũ) ──────────────────────────────
 ALTER TABLE public.kpi_campaign_store_targets
-  ADD COLUMN IF NOT EXISTS order_floor  bigint,
-  ADD COLUMN IF NOT EXISTS aov_floor    numeric,
   ADD COLUMN IF NOT EXISTS order_target bigint,
   ADD COLUMN IF NOT EXISTS aov_target   numeric;
 
 DO $$
 BEGIN
+  -- Một CHECK duy nhất: cùng NULL hoặc cùng có giá trị; dương; AOV nguyên VNĐ
+  -- (order_target đã nguyên nhờ kiểu bigint).
   IF NOT EXISTS (SELECT 1 FROM pg_constraint
                  WHERE conrelid = 'public.kpi_campaign_store_targets'::regclass
-                   AND conname = 'chk_kcst_order_aov_positive') THEN
+                   AND conname = 'chk_kcst_order_aov_targets') THEN
     ALTER TABLE public.kpi_campaign_store_targets
-      ADD CONSTRAINT chk_kcst_order_aov_positive CHECK (
-        (order_floor  IS NULL OR order_floor  > 0) AND
-        (aov_floor    IS NULL OR aov_floor    > 0) AND
-        (order_target IS NULL OR order_target > 0) AND
-        (aov_target   IS NULL OR aov_target   > 0));
-  END IF;
-  -- Đủ 4 hoặc không cột nào: chặn target nửa cấu hình (engine sẽ chia cho NULL).
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                 WHERE conrelid = 'public.kpi_campaign_store_targets'::regclass
-                   AND conname = 'chk_kcst_order_aov_all_or_none') THEN
-    ALTER TABLE public.kpi_campaign_store_targets
-      ADD CONSTRAINT chk_kcst_order_aov_all_or_none
-      CHECK (num_nonnulls(order_floor, aov_floor, order_target, aov_target) IN (0, 4));
-  END IF;
-  -- r1.1 (audit P1#3): AOV là VNĐ NGUYÊN — khóa ở DB, không chỉ ở RPC import
-  -- (đường ghi khác/SQL tay không được len số lẻ vào cấu hình tiền thưởng).
-  -- order_floor/order_target đã nguyên nhờ kiểu bigint.
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                 WHERE conrelid = 'public.kpi_campaign_store_targets'::regclass
-                   AND conname = 'chk_kcst_aov_vnd_integer') THEN
-    ALTER TABLE public.kpi_campaign_store_targets
-      ADD CONSTRAINT chk_kcst_aov_vnd_integer CHECK (
-        (aov_floor  IS NULL OR aov_floor  = trunc(aov_floor)) AND
-        (aov_target IS NULL OR aov_target = trunc(aov_target)));
-  END IF;
-  IF NOT EXISTS (SELECT 1 FROM pg_constraint
-                 WHERE conrelid = 'public.kpi_campaign_store_targets'::regclass
-                   AND conname = 'chk_kcst_order_aov_target_ge_floor') THEN
-    ALTER TABLE public.kpi_campaign_store_targets
-      ADD CONSTRAINT chk_kcst_order_aov_target_ge_floor CHECK (
-        (order_target IS NULL OR order_floor IS NULL OR order_target >= order_floor) AND
-        (aov_target   IS NULL OR aov_floor   IS NULL OR aov_target   >= aov_floor));
+      ADD CONSTRAINT chk_kcst_order_aov_targets CHECK (
+        num_nonnulls(order_target, aov_target) IN (0, 2)
+        AND (order_target IS NULL OR order_target > 0)
+        AND (aov_target   IS NULL OR (aov_target > 0 AND aov_target = trunc(aov_target))));
   END IF;
 END $$;
 
-COMMENT ON COLUMN public.kpi_campaign_store_targets.order_floor IS
-  'Chất lượng bán hàng (106): sàn số đơn BẮT BUỘC của kỳ. NULL với campaign GMV/Số khách.';
-COMMENT ON COLUMN public.kpi_campaign_store_targets.aov_floor IS
-  'Chất lượng bán hàng (106): sàn AOV (VNĐ) BẮT BUỘC của kỳ. NULL với campaign GMV/Số khách.';
 COMMENT ON COLUMN public.kpi_campaign_store_targets.order_target IS
-  'Chất lượng bán hàng (106): số đơn mục tiêu (>= order_floor). Dùng cho target_score.';
+  'Chất lượng bán hàng (106): số đơn mục tiêu của kỳ. NULL với campaign GMV/Số khách.';
 COMMENT ON COLUMN public.kpi_campaign_store_targets.aov_target IS
-  'Chất lượng bán hàng (106): AOV mục tiêu VNĐ (>= aov_floor). Dùng cho target_score.';
+  'Chất lượng bán hàng (106): AOV mục tiêu (VNĐ nguyên). completion = min(đơn/mục tiêu, AOV/mục tiêu).';
 
--- ── C. Actual: kết quả 2 sàn (RPC ghi, KHÔNG nhận từ app) ───────────────────
-ALTER TABLE public.kpi_campaign_store_actuals
-  ADD COLUMN IF NOT EXISTS quality_floor_pass boolean;
-
-COMMENT ON COLUMN public.kpi_campaign_store_actuals.quality_floor_pass IS
-  'Chất lượng bán hàng (106): actual_order >= order_floor AND actual_aov >= aov_floor. '
-  'RPC tự tính (payload KHÔNG được gửi). NULL = campaign loại khác. '
-  'KPI pass = quality_floor_pass AND actual_value >= 100 — TUYỆT ĐỐI không suy từ achieved_tier_order.';
-
--- ── D. rpc_replace_campaign_targets: BODY 103 NGUYÊN VĂN + delta 106 ───────
+-- ── C. rpc_replace_campaign_targets: BODY 103 NGUYÊN VĂN + delta 106 ──────
 CREATE OR REPLACE FUNCTION public.rpc_replace_campaign_targets(
   p_campaign_id uuid,
   p_rows        jsonb,
@@ -188,9 +121,7 @@ DECLARE
   v_th          numeric;
   v_cm          numeric;
   v_prev_th     numeric;
-  -- 106: 4 chi so cua campaign "Chat luong ban hang" (offline_order_aov).
-  v_of          numeric;   -- order_floor
-  v_af          numeric;   -- aov_floor
+  -- 106: 2 mục tiêu của campaign "Chất lượng bán hàng".
   v_ot          numeric;   -- order_target
   v_at          numeric;   -- aov_target
   v_is_aov      boolean;
@@ -204,8 +135,7 @@ BEGIN
   IF v_status NOT IN ('draft', 'paused') THEN
     RAISE EXCEPTION 'Chỉ nạp target khi chiến dịch draft/paused (hiện: %)', v_status;
   END IF;
-  -- 106: whitelist metric_type TƯỜNG MINH — loại lạ (code cũ/mới lệch nhau)
-  -- không được nạp target rồi chạy bằng nhánh mặc định.
+  -- 106: whitelist metric_type TƯỜNG MINH — loại lạ không được nạp target.
   IF v_metric_type NOT IN ('gmv', 'affiliate_customer_count', 'offline_order_aov') THEN
     RAISE EXCEPTION 'rpc_replace_campaign_targets: metric_type % không được hỗ trợ', v_metric_type;
   END IF;
@@ -215,8 +145,8 @@ BEGIN
 
   FOR v_row IN SELECT * FROM jsonb_array_elements(p_rows)
   LOOP
-    -- 106: campaign Chất lượng bán hàng — kpi_target là ĐIỂM CHUẨN HÓA 100%,
-    -- KHÔNG phải tiền/khách. RPC TỰ ÉP = 100; file import chỉ có 4 chỉ số.
+    -- 106: Chất lượng bán hàng — kpi_target là ĐIỂM CHUẨN HÓA 100, RPC TỰ ÉP;
+    -- file import KHÔNG có cột này.
     IF v_is_aov THEN
       IF NULLIF(v_row->>'kpi_target', '') IS NOT NULL
          AND (v_row->>'kpi_target')::numeric <> 100 THEN
@@ -232,40 +162,32 @@ BEGIN
       END IF;
     END IF;
 
-    -- 106: 4 chỉ số Order/AOV — BẮT BUỘC ĐỦ với offline_order_aov và BẮT BUỘC
-    -- VẮNG với 2 loại cũ (reverse guard: cột lạ không được lọt vào campaign tiền).
-    v_of := NULLIF(v_row->>'order_floor',  '')::numeric;
-    v_af := NULLIF(v_row->>'aov_floor',    '')::numeric;
+    -- 106: 2 mục tiêu — BẮT BUỘC ĐỦ với offline_order_aov, BẮT BUỘC VẮNG với 2
+    -- loại cũ (reverse guard: cột lạ không lọt vào campaign tiền/khách).
     v_ot := NULLIF(v_row->>'order_target', '')::numeric;
     v_at := NULLIF(v_row->>'aov_target',   '')::numeric;
     IF v_is_aov THEN
-      IF v_of IS NULL OR v_af IS NULL OR v_ot IS NULL OR v_at IS NULL THEN
-        RAISE EXCEPTION 'campaign Chất lượng bán hàng: store % thiếu chỉ số — order_floor/aov_floor/order_target/aov_target đều bắt buộc', v_row->>'pos_code';
+      IF v_ot IS NULL OR v_at IS NULL THEN
+        RAISE EXCEPTION 'campaign Chất lượng bán hàng: store % thiếu chỉ số — order_target và aov_target đều bắt buộc', v_row->>'pos_code';
       END IF;
-      IF v_of <= 0 OR v_af <= 0 OR v_ot <= 0 OR v_at <= 0 THEN
-        RAISE EXCEPTION 'campaign Chất lượng bán hàng: store % có chỉ số <= 0 (order_floor=%, aov_floor=%, order_target=%, aov_target=%)', v_row->>'pos_code', v_of, v_af, v_ot, v_at;
+      IF v_ot <= 0 OR v_at <= 0 THEN
+        RAISE EXCEPTION 'campaign Chất lượng bán hàng: store % có chỉ số <= 0 (order_target=%, aov_target=%)', v_row->>'pos_code', v_ot, v_at;
       END IF;
-      IF v_of <> floor(v_of) OR v_ot <> floor(v_ot) THEN
-        RAISE EXCEPTION 'campaign Chất lượng bán hàng: store % có số đơn KHÔNG NGUYÊN (order_floor=%, order_target=%)', v_row->>'pos_code', v_of, v_ot;
+      IF v_ot <> floor(v_ot) THEN
+        RAISE EXCEPTION 'campaign Chất lượng bán hàng: store % có order_target KHÔNG NGUYÊN (%)', v_row->>'pos_code', v_ot;
       END IF;
-      IF v_af <> floor(v_af) OR v_at <> floor(v_at) THEN
-        RAISE EXCEPTION 'campaign Chất lượng bán hàng: store % có AOV không nguyên VNĐ (aov_floor=%, aov_target=%)', v_row->>'pos_code', v_af, v_at;
+      IF v_at <> floor(v_at) THEN
+        RAISE EXCEPTION 'campaign Chất lượng bán hàng: store % có aov_target không nguyên VNĐ (%)', v_row->>'pos_code', v_at;
       END IF;
-      IF v_ot < v_of THEN
-        RAISE EXCEPTION 'campaign Chất lượng bán hàng: store % có order_target (%) < order_floor (%)', v_row->>'pos_code', v_ot, v_of;
-      END IF;
-      IF v_at < v_af THEN
-        RAISE EXCEPTION 'campaign Chất lượng bán hàng: store % có aov_target (%) < aov_floor (%)', v_row->>'pos_code', v_at, v_af;
-      END IF;
-    ELSIF v_of IS NOT NULL OR v_af IS NOT NULL OR v_ot IS NOT NULL OR v_at IS NOT NULL THEN
-      RAISE EXCEPTION 'campaign % nhưng store % mang chỉ số Order/AOV — 4 cột này CHỈ dành cho Chất lượng bán hàng', v_metric_type, v_row->>'pos_code';
+    ELSIF v_ot IS NOT NULL OR v_at IS NOT NULL THEN
+      RAISE EXCEPTION 'campaign % nhưng store % mang order_target/aov_target — 2 cột này CHỈ dành cho Chất lượng bán hàng', v_metric_type, v_row->>'pos_code';
     END IF;
     v_group := NULLIF(trim(coalesce(v_row->>'store_kpi_group', '')), '');
     IF v_group IS NULL THEN RAISE EXCEPTION 'store_kpi_group là bắt buộc'; END IF;
 
     INSERT INTO public.kpi_campaign_store_targets
       (campaign_id, store_id, pos_code, kpi_target, store_kpi_group, import_row, note,
-       order_floor, aov_floor, order_target, aov_target)
+       order_target, aov_target)
     VALUES (
       p_campaign_id,
       (v_row->>'store_id')::uuid,
@@ -274,7 +196,7 @@ BEGIN
       v_group,
       NULLIF(v_row->>'import_row', '')::integer,
       NULLIF(v_row->>'note', ''),
-      v_of::bigint, v_af, v_ot::bigint, v_at   -- 106: NULL cho gmv/customer
+      v_ot::bigint, v_at   -- 106: NULL cho gmv/customer
     )
     RETURNING id INTO v_target_id;
 
@@ -296,6 +218,16 @@ BEGIN
       v_tiers := v_tiers + 1;
     END LOOP;
     IF v_tiers = 0 THEN RAISE EXCEPTION 'Mỗi target cần ít nhất 1 bậc'; END IF;
+    -- 106 policy: Chất lượng bán hàng dùng ĐÚNG 1 bậc với mốc = 100%
+    -- (commission chỉ khi đạt CẢ HAI mục tiêu).
+    IF v_is_aov THEN
+      IF v_tiers <> 1 THEN
+        RAISE EXCEPTION 'campaign Chất lượng bán hàng: store % phải có ĐÚNG 1 bậc (mốc 100%%) — nhận % bậc', v_row->>'pos_code', v_tiers;
+      END IF;
+      IF v_prev_th IS DISTINCT FROM 100 THEN
+        RAISE EXCEPTION 'campaign Chất lượng bán hàng: store % có mốc bậc = %%%, phải đúng 100%%', v_row->>'pos_code', v_prev_th;
+      END IF;
+    END IF;
 
     v_count := v_count + 1;
   END LOOP;
@@ -316,7 +248,7 @@ REVOKE ALL ON FUNCTION public.rpc_replace_campaign_targets(uuid, jsonb, text, uu
 GRANT EXECUTE ON FUNCTION public.rpc_replace_campaign_targets(uuid, jsonb, text, uuid)
   TO service_role;
 
--- ── E. rpc_replace_campaign_actuals: BODY 105 NGUYÊN VĂN + delta 106 ───────
+-- ── D. rpc_replace_campaign_actuals: BODY 105 NGUYÊN VĂN + delta 106 ──────
 CREATE OR REPLACE FUNCTION public.rpc_replace_campaign_actuals(
   p_campaign_id uuid,
   p_daily   jsonb,  -- [{store_id, date, gmv, gmv_affiliate?, affiliate_customer_count?,
@@ -348,17 +280,16 @@ DECLARE
   v_ord         bigint;
   v_daily_ord   bigint;
   v_daily_ord_n integer;
-  -- 106: campaign Chất lượng bán hàng — RPC LÀ AUTHORITY: nhận số liệu THÔ
-  -- (Net Revenue + số đơn) rồi tự tính AOV/điểm/floor/bậc/commission từ target
-  -- trong DB. App KHÔNG được "gửi điểm" (mọi số dẫn xuất bị từ chối).
+  -- 106: campaign Chất lượng bán hàng — RPC LÀ AUTHORITY: nhận số THÔ (Net
+  -- Revenue + số đơn), tự tính AOV/tỉ lệ/điểm/bậc/commission từ target trong DB.
   v_out         jsonb := '[]'::jsonb;   -- payload GHI (gốc + số RPC tự tính)
   v_calc        jsonb;
   v_t           record;
   v_aov         numeric;
-  v_actual_sc   numeric;
-  v_target_sc   numeric;
+  v_o_ratio     numeric;
+  v_a_ratio     numeric;
   v_completion  numeric;
-  v_floor_pass  boolean;
+  v_kpi_pass    boolean;
   v_tier_ord    integer;
   v_pool        numeric;
   v_daily_n     integer;
@@ -462,56 +393,41 @@ BEGIN
       IF v_ord IS NOT NULL OR v_daily_ord_n > 0 THEN
         RAISE EXCEPTION 'rpc_replace_campaign_actuals: campaign customer-count nhưng store % có offline_order_count=% / % dòng daily có count (phải KHÔNG gửi)', v_store, coalesce(v_ord::text, 'NULL'), v_daily_ord_n;
       END IF;
-      -- 106 reverse guard: cột của Chất lượng bán hàng không được lọt sang.
-      IF v_row ? 'quality_floor_pass' THEN
-        RAISE EXCEPTION 'rpc_replace_campaign_actuals: campaign customer-count nhưng store % có quality_floor_pass (chỉ dành cho Chất lượng bán hàng)', v_store;
-      END IF;
 
     ELSIF v_metric_type = 'offline_order_aov' THEN
       -- ── 106: CHẤT LƯỢNG BÁN HÀNG — RPC TỰ TÍNH, KHÔNG TIN PAYLOAD ──
+      -- completion = min(actual_order/order_target, actual_aov/aov_target)×100.
       -- Payload CHỈ được mang: actual_offline = Net Revenue kỳ ·
       -- offline_order_count = số đơn kỳ · daily {gmv, offline_order_count}.
       IF v_row ?| array['actual_value', 'run_rate', 'remaining_target',
-                        'achieved_tier_order', 'store_commission_pool',
-                        'quality_floor_pass'] THEN
-        RAISE EXCEPTION 'rpc_replace_campaign_actuals: campaign Chất lượng bán hàng — store % gửi số liệu DẪN XUẤT (actual_value/run_rate/remaining_target/achieved_tier_order/store_commission_pool/quality_floor_pass); RPC tự tính, payload chỉ được gửi actual_offline + offline_order_count', v_store;
+                        'achieved_tier_order', 'store_commission_pool'] THEN
+        RAISE EXCEPTION 'rpc_replace_campaign_actuals: campaign Chất lượng bán hàng — store % gửi số liệu DẪN XUẤT (actual_value/run_rate/remaining_target/achieved_tier_order/store_commission_pool); RPC tự tính, payload chỉ được gửi actual_offline + offline_order_count', v_store;
       END IF;
-      -- r1.1 (audit P1#2): thiếu key HOẶC gửi null đều bị từ chối — chỉ kiểm
-      -- tra key tồn tại thì null sẽ coalesce thành 0 và ghi "0đ doanh thu" âm
-      -- thầm cho store có nguồn hỏng.
       IF NOT (v_row ? 'actual_offline') OR v_row->>'actual_offline' IS NULL THEN
-        RAISE EXCEPTION 'rpc_replace_campaign_actuals: campaign Chất lượng bán hàng — store % thiếu actual_offline (Net Revenue kỳ) hoặc gửi null', v_store;
+        RAISE EXCEPTION 'rpc_replace_campaign_actuals: campaign Chất lượng bán hàng — store % thiếu actual_offline (Net Revenue kỳ)', v_store;
       END IF;
       IF v_affiliate <> 0 OR v_cust <> 0 OR v_daily_aff <> 0 OR v_daily_cust <> 0 THEN
         RAISE EXCEPTION 'rpc_replace_campaign_actuals: campaign Chất lượng bán hàng nhưng store % có số liệu affiliate/khách (aff=%, cust=%, daily aff=%, daily cust=%) — phải 0', v_store, v_affiliate, v_cust, v_daily_aff, v_daily_cust;
       END IF;
-      -- r1.1 (audit P1#1): Net Revenue ÂM là HỢP LỆ (hoàn/điều chỉnh) — nguồn
-      -- BQ cho phép. Không chặn, không clamp: AOV âm tính thật ⇒ thủng sàn AOV
-      -- ⇒ không tier/commission. Chặn ở đây sẽ đóng băng sync oan.
-      -- Số đơn LÀ KPI của loại này ⇒ thiếu = fail-closed (khác campaign GMV,
-      -- nơi số đơn chỉ là chỉ số phụ và được phép degrade).
+      -- Net Revenue ÂM là HỢP LỆ (hoàn/điều chỉnh) — KHÔNG clamp.
       IF v_ord IS NULL THEN
         RAISE EXCEPTION 'rpc_replace_campaign_actuals: campaign Chất lượng bán hàng — store % thiếu offline_order_count (số đơn LÀ KPI, không được để trống)', v_store;
       END IF;
       IF v_ord < 0 THEN
         RAISE EXCEPTION 'rpc_replace_campaign_actuals: store % offline_order_count âm (%)', v_store, v_ord;
       END IF;
-      -- r1.2 (audit P1): 0 ĐƠN mà CÓ doanh thu là nguồn MÂU THUẪN (canary 105
-      -- revenue_with_zero_order bắt ở orchestrator; đây là lớp phòng thủ DB).
-      -- Quy tắc "0 đơn → 0%" CHỈ hợp lệ khi Net Revenue cũng = 0.
+      -- 0 đơn mà CÓ doanh thu = nguồn MÂU THUẪN (canary 105 bắt ở orchestrator;
+      -- đây là lớp phòng thủ DB). '0 đơn → 0%' chỉ đúng khi Net Revenue = 0.
       IF v_ord = 0 AND v_offline <> 0 THEN
-        RAISE EXCEPTION 'rpc_replace_campaign_actuals: store % có 0 đơn nhưng Net Revenue = % — nguồn mâu thuẫn, không ghi (0 đơn chỉ hợp lệ khi doanh thu = 0)', v_store, v_offline;
+        RAISE EXCEPTION 'rpc_replace_campaign_actuals: store % có 0 đơn nhưng Net Revenue = % — nguồn mâu thuẫn, không ghi', v_store, v_offline;
       END IF;
-      -- r1.1 (audit P1#2): daily của loại này phải là SỐ THẬT mọi ngày —
-      -- gmv/offline_order_count null sẽ bị coalesce thành 0 lúc INSERT và làm
-      -- lệch cả AOV lẫn điểm.
-      SELECT count(*),
-             count(*) FILTER (WHERE e->>'gmv' IS NULL OR e->>'offline_order_count' IS NULL)
+      -- Mọi dòng daily phải ĐỦ gmv + số đơn (không null nửa vời) và tổng khớp.
+      SELECT count(*), count(*) FILTER (WHERE e->>'gmv' IS NULL)
       INTO v_daily_n, v_daily_null
       FROM jsonb_array_elements(coalesce(p_daily, '[]'::jsonb)) e
       WHERE (e->>'store_id')::uuid = v_store;
       IF v_daily_null > 0 THEN
-        RAISE EXCEPTION 'rpc_replace_campaign_actuals: campaign Chất lượng bán hàng — store % có % dòng daily thiếu gmv hoặc offline_order_count (null)', v_store, v_daily_null;
+        RAISE EXCEPTION 'rpc_replace_campaign_actuals: store % có % dòng daily thiếu gmv (Net Revenue ngày)', v_store, v_daily_null;
       END IF;
       IF v_daily_ord_n <> v_daily_n THEN
         RAISE EXCEPTION 'rpc_replace_campaign_actuals: store % chỉ %/% dòng daily mang offline_order_count (phải đủ mọi ngày)', v_store, v_daily_ord_n, v_daily_n;
@@ -523,54 +439,52 @@ BEGIN
         RAISE EXCEPTION 'rpc_replace_campaign_actuals: store % SUM(daily.gmv)=% không khớp actual_offline (Net Revenue)=%', v_store, v_daily_off, v_offline;
       END IF;
 
-      SELECT t.id, t.kpi_target, t.order_floor, t.aov_floor, t.order_target, t.aov_target
-      INTO v_t
+      SELECT t.id, t.kpi_target, t.order_target, t.aov_target INTO v_t
       FROM public.kpi_campaign_store_targets t
       WHERE t.campaign_id = p_campaign_id AND t.store_id = v_store;
-      IF v_t.order_floor IS NULL OR v_t.aov_floor IS NULL
-         OR v_t.order_target IS NULL OR v_t.aov_target IS NULL THEN
-        RAISE EXCEPTION 'rpc_replace_campaign_actuals: store % chưa cấu hình đủ 4 chỉ số Order/AOV — nạp lại file target trước khi đồng bộ', v_store;
+      IF v_t.order_target IS NULL OR v_t.aov_target IS NULL THEN
+        RAISE EXCEPTION 'rpc_replace_campaign_actuals: store % chưa cấu hình đủ order_target/aov_target — nạp lại file target trước khi đồng bộ', v_store;
       END IF;
       IF v_t.kpi_target <> 100 THEN
         RAISE EXCEPTION 'rpc_replace_campaign_actuals: store % có kpi_target=% (Chất lượng bán hàng phải = 100 — điểm chuẩn hóa)', v_store, v_t.kpi_target;
       END IF;
 
-      -- CÔNG THỨC CHỐT (stakeholder 11/08) — trọng số 90% số đơn + 10% AOV,
-      -- đều so với FLOOR; completion = actual_score / target_score × 100.
-      -- KHÔNG cap từng thành phần (cho phép bù trừ), nhưng floor là ĐIỀU KIỆN
-      -- CẦN để xét bậc: vượt điểm mà thủng floor thì KHÔNG có commission.
-      v_aov := CASE WHEN v_ord > 0 THEN v_offline / v_ord END;
-      v_actual_sc := 0.90 * (v_ord::numeric / v_t.order_floor)
-                   + 0.10 * (coalesce(v_aov, 0) / v_t.aov_floor);
-      v_target_sc := 0.90 * (v_t.order_target::numeric / v_t.order_floor)
-                   + 0.10 * (v_t.aov_target / v_t.aov_floor);
-      IF v_target_sc <= 0 THEN
-        RAISE EXCEPTION 'rpc_replace_campaign_actuals: store % có target_score <= 0 — cấu hình target sai', v_store;
+      -- CÔNG THỨC CHỐT 12/08 — điểm = CHỈ SỐ YẾU HƠN, không bù trừ, không cap.
+      v_aov     := CASE WHEN v_ord > 0 THEN v_offline / v_ord END;
+      v_o_ratio := v_ord::numeric / v_t.order_target;
+      v_a_ratio := CASE WHEN v_aov IS NOT NULL THEN v_aov / v_t.aov_target END;
+      v_kpi_pass := (v_ord >= v_t.order_target
+                     AND v_aov IS NOT NULL AND v_aov >= v_t.aov_target);
+      v_completion := CASE
+        WHEN v_aov IS NULL THEN 0                       -- 0 đơn → 0%
+        ELSE round(least(v_o_ratio, v_a_ratio) * 100, 4)
+      END;
+      -- ⚠ INVARIANT TIỀN: completion >= 100 ⟺ đạt CẢ HAI mục tiêu. Làm tròn 4
+      -- chữ số có thể đẩy ca hụt cực nhỏ (AOV thiếu 0,001đ) thành đúng 100 →
+      -- mở khoá commission oan. kpi_pass suy LÚC ĐỌC từ completion nên sai lệch
+      -- này lan ra cả UI/export ⇒ chặn tại đây.
+      IF NOT v_kpi_pass AND v_completion >= 100 THEN
+        v_completion := 99.9999;
       END IF;
-      -- 0 đơn → 0% (UI hiện nhãn "Chưa phát sinh đơn", AOV '—').
-      v_completion := CASE WHEN v_ord = 0 THEN 0
-                           ELSE round(v_actual_sc / v_target_sc * 100, 4) END;
-      v_floor_pass := (v_ord >= v_t.order_floor
-                       AND v_aov IS NOT NULL AND v_aov >= v_t.aov_floor);
 
+      -- Commission CHỈ khi đạt KPI. Vẫn dùng bảng tier ĐỘNG (policy "đúng 1
+      -- bậc 100" nằm ở rpc_replace_campaign_targets) — mở nhiều bậc sau này
+      -- không phải đổi nhánh này.
       v_tier_ord := NULL;
       v_pool     := NULL;
-      IF v_floor_pass THEN
+      IF v_kpi_pass THEN
         SELECT ti.tier_order, ti.commission_amount INTO v_tier_ord, v_pool
         FROM public.kpi_campaign_store_tiers ti
         WHERE ti.target_id = v_t.id AND ti.threshold_pct <= v_completion
         ORDER BY ti.tier_order DESC LIMIT 1;
       END IF;
 
-      -- actual_value = run_rate = completion (đơn vị %); remaining = số điểm %
-      -- còn thiếu để chạm 100 — cùng nguồn với hero Staff.
       v_calc := jsonb_build_object(
         'actual_value',          v_completion,
         'run_rate',              v_completion,
         'remaining_target',      greatest(100 - v_completion, 0),
         'achieved_tier_order',   v_tier_ord,
-        'store_commission_pool', v_pool,
-        'quality_floor_pass',    v_floor_pass
+        'store_commission_pool', v_pool
       );
 
     ELSIF v_metric_type = 'gmv' THEN
@@ -614,17 +528,13 @@ BEGIN
       ELSIF v_daily_ord_n > 0 THEN
         RAISE EXCEPTION 'rpc_replace_campaign_actuals: store % có % dòng daily mang offline_order_count nhưng aggregate KHÔNG có (payload nửa vời)', v_store, v_daily_ord_n;
       END IF;
-      -- 106 reverse guard.
-      IF v_row ? 'quality_floor_pass' THEN
-        RAISE EXCEPTION 'rpc_replace_campaign_actuals: campaign GMV nhưng store % có quality_floor_pass (chỉ dành cho Chất lượng bán hàng)', v_store;
-      END IF;
 
     ELSE
       -- 106: FAIL-CLOSED — loại campaign lạ không được ghi bằng nhánh mặc định.
       RAISE EXCEPTION 'rpc_replace_campaign_actuals: metric_type % không được hỗ trợ — không ghi số liệu', v_metric_type;
     END IF;
 
-    -- 106: payload GHI = payload gốc + số liệu RPC tự tính (rỗng với gmv/customer
+    -- 106: payload GHI = payload gốc + số RPC tự tính (rỗng với gmv/customer
     -- ⇒ 2 loại cũ giữ NGUYÊN từng byte).
     v_out := v_out || jsonb_build_array(v_row || v_calc);
   END LOOP;
@@ -652,7 +562,7 @@ BEGIN
       (campaign_id, store_id, actual_value, actual_offline, actual_affiliate,
        actual_customer_count, run_rate, remaining_target, achieved_tier_order,
        store_commission_pool, raw_row_count, offline_order_count,
-       quality_floor_pass, offline_synced_at, affiliate_synced_at, synced_at)
+       offline_synced_at, affiliate_synced_at, synced_at)
     VALUES (
       p_campaign_id,
       (v_row->>'store_id')::uuid,
@@ -667,7 +577,6 @@ BEGIN
       (v_row->>'store_commission_pool')::numeric,
       coalesce((v_row->>'raw_row_count')::integer, 0),
       (v_row->>'offline_order_count')::bigint,   -- 105: NULL-preserving
-      (v_row->>'quality_floor_pass')::boolean,   -- 106: NULL cho gmv/customer
       coalesce((v_row->>'offline_synced_at')::timestamptz, (v_row->>'synced_at')::timestamptz),
       (v_row->>'affiliate_synced_at')::timestamptz,
       coalesce((v_row->>'synced_at')::timestamptz, now())
@@ -683,7 +592,6 @@ BEGIN
       store_commission_pool = EXCLUDED.store_commission_pool,
       raw_row_count         = EXCLUDED.raw_row_count,
       offline_order_count   = EXCLUDED.offline_order_count,
-      quality_floor_pass    = EXCLUDED.quality_floor_pass,
       offline_synced_at     = EXCLUDED.offline_synced_at,
       affiliate_synced_at   = EXCLUDED.affiliate_synced_at,
       synced_at             = EXCLUDED.synced_at;
@@ -698,7 +606,7 @@ REVOKE ALL ON FUNCTION public.rpc_replace_campaign_actuals(uuid, jsonb, jsonb)
 GRANT EXECUTE ON FUNCTION public.rpc_replace_campaign_actuals(uuid, jsonb, jsonb)
   TO service_role;
 
--- ── F. rpc_activate_kpi_campaign: BODY 104 NGUYÊN VĂN + delta 106 ─────────
+-- ── E. rpc_activate_kpi_campaign: BODY 104 NGUYÊN VĂN + delta 106 ─────────
 CREATE OR REPLACE FUNCTION public.rpc_activate_kpi_campaign(
   p_campaign_id        uuid,
   p_expected_updated_at timestamptz,
@@ -771,28 +679,31 @@ BEGIN
 
   -- 106: nhánh Chất lượng bán hàng (offline_order_aov).
   IF v_c.metric_type = 'offline_order_aov' THEN
-    -- Overlap của loại này là PER-STORE (chỉ cấm khi CHUNG ≥1 cửa hàng) nên
+    -- Overlap của loại này là PER-STORE (chỉ cấm khi CHUNG >= 1 cửa hàng) nên
     -- KHÔNG biểu diễn được bằng EXCLUDE constraint như 103 → serialize bằng
-    -- advisory lock cấp TRANSACTION. Dùng MỘT khoá cho cả loại (thay vì khoá
-    -- theo từng store đã sort): activation là thao tác hiếm của super admin,
-    -- khoá tổng vừa đủ chặt vừa KHÔNG THỂ deadlock. Khoá đặt NGAY TRƯỚC
-    -- pre-check để 2 session không cùng đọc "chưa ai trùng".
+    -- advisory lock cấp TRANSACTION. Dùng MỘT khoá cho cả loại: activation là
+    -- thao tác hiếm của super admin, khoá tổng vừa đủ chặt vừa KHÔNG THỂ
+    -- deadlock. Đặt NGAY TRƯỚC pre-check để 2 session không cùng đọc "sạch".
     PERFORM pg_advisory_xact_lock(hashtext('kpi_order_aov_activate'));
 
-    -- Fail-closed cấu hình: mọi target phải đủ 4 chỉ số + kpi_target chuẩn hóa.
+    -- Fail-closed cấu hình: mọi target đủ 2 mục tiêu + kpi_target chuẩn hóa +
+    -- ĐÚNG 1 bậc mốc 100 (policy hiện tại).
     SELECT count(*) INTO v_bad
     FROM public.kpi_campaign_store_targets t
     WHERE t.campaign_id = p_campaign_id
-      AND (t.order_floor IS NULL OR t.aov_floor IS NULL
-           OR t.order_target IS NULL OR t.aov_target IS NULL
-           OR t.kpi_target IS DISTINCT FROM 100);
+      AND (t.order_target IS NULL OR t.aov_target IS NULL
+           OR t.kpi_target IS DISTINCT FROM 100
+           OR (SELECT count(*) FROM public.kpi_campaign_store_tiers ti
+               WHERE ti.target_id = t.id) <> 1
+           OR NOT EXISTS (SELECT 1 FROM public.kpi_campaign_store_tiers ti
+                          WHERE ti.target_id = t.id AND ti.threshold_pct = 100));
     IF v_bad > 0 THEN
-      RAISE EXCEPTION '% target chưa đủ chỉ số Order/AOV (hoặc kpi_target <> 100) — nạp lại file target', v_bad;
+      RAISE EXCEPTION '% target chưa hợp lệ (thiếu order_target/aov_target, kpi_target <> 100, hoặc không phải ĐÚNG 1 bậc mốc 100%%) — nạp lại file target', v_bad;
     END IF;
 
-    -- Overlap: CHỈ so với campaign cùng loại đang ACTIVE và CHUNG cửa hàng.
-    -- (paused = đã dừng ghi số ⇒ được phép chuẩn bị chiến dịch kế tiếp; khác
-    -- tập store ⇒ chạy song song bình thường.)
+    -- Overlap: CHỈ so với campaign cùng loại đang ACTIVE và CHUNG cửa hàng
+    -- (paused = đã dừng ghi số ⇒ được chuẩn bị chiến dịch kế tiếp; khác tập
+    -- store ⇒ chạy song song bình thường).
     SELECT c2.name AS name,
            string_agg(DISTINCT t2.pos_code, ', ') AS pos
     INTO v_overlap
@@ -848,48 +759,44 @@ GRANT EXECUTE ON FUNCTION public.rpc_activate_kpi_campaign(uuid, timestamptz, uu
 
 INSERT INTO public.app_migrations (version, name, notes)
 VALUES ('106', 'kpi_campaign_order_aov',
-        'Loại chiến dịch "Chất lượng bán hàng" (metric_type=offline_order_aov, request 11/08):'
-        || ' Số đơn Offline 90% + AOV Offline 10%, mỗi chỉ số có floor bắt buộc.'
-        || ' kpi_campaign_store_targets += order_floor/aov_floor/order_target/aov_target'
-        || ' (+3 CHECK: dương, đủ-4-hoặc-không, target >= floor);'
-        || ' kpi_campaign_store_actuals += quality_floor_pass.'
-        || ' rpc_replace_campaign_targets: ÉP kpi_target=100 (không nhận từ file) + validate 4'
-        || ' chỉ số nguyên/thứ tự + reverse guard cho gmv/customer.'
-        || ' rpc_replace_campaign_actuals: RPC LÀ AUTHORITY — nhận RAW net+số đơn, tự tính AOV/'
-        || 'completion/floor_pass/tier/commission, TỪ CHỐI payload mang số dẫn xuất; 3 nhánh'
-        || ' metric_type tường minh + reject loại lạ.'
-        || ' rpc_activate_kpi_campaign: pg_advisory_xact_lock + overlap PER-STORE chỉ với campaign'
-        || ' ACTIVE cùng loại (khác tập store vẫn chạy song song) + chặn target thiếu chỉ số.'
-        || ' AOV KHÔNG lưu (luôn tính actual_offline/offline_order_count). GMV + Số khách'
-        || ' zero-touch. Flag app KPI_ORDER_AOV_CAMPAIGN_ENABLED=false tới khi smoke prod xong.')
+        'Loại chiến dịch "Chất lượng bán hàng" (metric_type=offline_order_aov, contract chốt 12/08):'
+        || ' completion = min(actual_order/order_target, actual_aov/aov_target) x 100 — CHỈ SỐ YẾU'
+        || ' HƠN, không floor/trọng số/bù trừ, không cap 100%. kpi_pass = đạt CẢ HAI mục tiêu'
+        || ' (tương đương completion >= 100). kpi_campaign_store_targets += order_target/aov_target'
+        || ' (+CHECK cùng null hoặc cùng có, dương, AOV nguyên VNĐ).'
+        || ' rpc_replace_campaign_targets: ÉP kpi_target=100, validate 2 mục tiêu, reverse guard 2'
+        || ' loại cũ, policy ĐÚNG 1 bậc mốc 100.'
+        || ' rpc_replace_campaign_actuals: RPC LÀ AUTHORITY — nhận RAW net+số đơn, tự tính AOV/tỉ lệ/'
+        || 'completion/bậc/commission, từ chối payload mang số dẫn xuất; commission chỉ khi đạt KPI;'
+        || ' invariant completion chạm 100 CHỈ khi đạt cả 2 mục tiêu; 0 đơn + net<>0 fail-closed;'
+        || ' 3 nhánh metric_type tường minh + reject loại lạ.'
+        || ' rpc_activate_kpi_campaign: advisory lock + overlap PER-STORE chỉ với campaign ACTIVE'
+        || ' cùng loại + validate target/policy tier. AOV và kpi_pass KHÔNG lưu (suy lúc đọc).'
+        || ' GMV + Số khách zero-touch. Flag app KPI_ORDER_AOV_CAMPAIGN_ENABLED=false tới khi smoke prod xong.')
 ON CONFLICT (version) DO NOTHING;
 
 COMMIT;
 
 -- ============================================================================
 -- VERIFY (chạy tay sau migration):
--- 1) CHECK metric_type + contract:
+-- 1) CHECK metric_type (đủ 3 giá trị) + contract cột:
 --    SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint
 --    WHERE conrelid = 'public.kpi_campaigns'::regclass
 --      AND conname IN ('chk_kpi_campaigns_metric_type','chk_kpi_campaigns_order_aov_contract');
---    -- metric_type phải liệt kê ĐỦ 3 giá trị
--- 2) 4 cột target + 3 CHECK + cột actual:
+-- 2) 2 cột target + CHECK:
 --    SELECT column_name, data_type, is_nullable FROM information_schema.columns
 --    WHERE table_name='kpi_campaign_store_targets'
---      AND column_name IN ('order_floor','aov_floor','order_target','aov_target');   -- 4 rows, YES
---    SELECT conname FROM pg_constraint
+--      AND column_name IN ('order_target','aov_target');            -- 2 rows, YES
+--    SELECT pg_get_constraintdef(oid) FROM pg_constraint
 --    WHERE conrelid='public.kpi_campaign_store_targets'::regclass
---      AND conname LIKE 'chk_kcst_%';           -- 4 rows (3 order_aov + aov_vnd_integer)
---    -- AOV lẻ phải BỊ CHẶN (chạy rồi ROLLBACK — kỳ vọng LỖI):
---    BEGIN; UPDATE public.kpi_campaign_store_targets
---      SET order_floor=100, aov_floor=100000.5, order_target=120, aov_target=110000
---      WHERE ctid = (SELECT ctid FROM public.kpi_campaign_store_targets LIMIT 1); ROLLBACK;
---    SELECT column_name, data_type FROM information_schema.columns
---    WHERE table_name='kpi_campaign_store_actuals' AND column_name='quality_floor_pass';
+--      AND conname='chk_kcst_order_aov_targets';
+--    -- KHÔNG còn cột floor/quality_floor_pass:
+--    SELECT count(*) AS should_be_0 FROM information_schema.columns
+--    WHERE column_name IN ('order_floor','aov_floor','quality_floor_pass');
 -- 3) CHECK thực sự chặn (phải LỖI — chạy rồi ROLLBACK):
---    BEGIN; UPDATE public.kpi_campaign_store_targets SET order_floor = 10
+--    BEGIN; UPDATE public.kpi_campaign_store_targets SET order_target = 10
 --    WHERE ctid = (SELECT ctid FROM public.kpi_campaign_store_targets LIMIT 1); ROLLBACK;
---    -- vi phạm all_or_none (mới 1/4 cột) → LỖI là ĐÚNG
+--    -- vi phạm "cùng null hoặc cùng có" (mới 1/2 cột) → LỖI là ĐÚNG
 -- 4) 3 RPC vẫn SECDEF + grant đúng (anon=f, authenticated=f, service_role=t):
 --    SELECT p.proname, p.prosecdef,
 --           has_function_privilege('anon', p.oid, 'EXECUTE')          AS anon,
@@ -898,49 +805,52 @@ COMMIT;
 --    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
 --    WHERE n.nspname='public' AND p.proname IN ('rpc_replace_campaign_targets',
 --          'rpc_replace_campaign_actuals','rpc_activate_kpi_campaign');
--- 5) Source-text: 3 RPC đã mang delta 106 + GIỮ guard cũ:
+-- 5) Source-text: 3 RPC mang delta 106 + GIỮ guard cũ:
 --    SELECT proname,
 --           prosrc LIKE '%offline_order_aov%'        AS has_106,
 --           prosrc LIKE '%pg_advisory_xact_lock%'    AS has_lock,
 --           prosrc LIKE '%affiliate_customer_count%' AS keeps_103
 --    FROM pg_proc WHERE proname IN ('rpc_replace_campaign_targets',
 --         'rpc_replace_campaign_actuals','rpc_activate_kpi_campaign');
---    -- actuals/targets/activate: has_106 = true; activate: has_lock = true;
---    -- cả 3: keeps_103 = true (không rơi nhánh customer khi copy)
--- 6) Dữ liệu cũ KHÔNG bị đụng (2 loại campaign hiện hữu):
---    SELECT count(*) FILTER (WHERE order_floor IS NOT NULL) AS should_be_0
---    FROM public.kpi_campaign_store_targets;                                          -- 0
---    SELECT count(*) FILTER (WHERE quality_floor_pass IS NOT NULL) AS should_be_0
---    FROM public.kpi_campaign_store_actuals;                                          -- 0
+-- 6) Dữ liệu cũ KHÔNG bị đụng:
+--    SELECT count(*) FILTER (WHERE order_target IS NOT NULL) AS should_be_0
+--    FROM public.kpi_campaign_store_targets;                          -- 0
 -- 7) Marker: SELECT version, name FROM public.app_migrations WHERE version='106';
 -- 8) SAU khi bật flag + tạo campaign QA (is_test) + sync 2 lần:
---    -- (a) completion do RPC tính khớp công thức tay:
---    SELECT a.store_id, t.order_floor, t.aov_floor, t.order_target, t.aov_target,
+--    -- (a) completion khớp công thức tay (min của 2 tỉ lệ):
+--    SELECT a.store_id, t.order_target, t.aov_target,
 --           a.offline_order_count AS actual_order, a.actual_offline AS actual_net,
 --           round(a.actual_offline / nullif(a.offline_order_count,0)) AS actual_aov,
---           a.actual_value AS completion_pct, a.quality_floor_pass, a.achieved_tier_order,
---           round(( 0.90*(a.offline_order_count::numeric/t.order_floor)
---                 + 0.10*((a.actual_offline/nullif(a.offline_order_count,0))/t.aov_floor))
---               / ( 0.90*(t.order_target::numeric/t.order_floor)
---                 + 0.10*(t.aov_target/t.aov_floor)) * 100, 4) AS completion_kiem_tra
+--           a.actual_value AS completion_pct, a.achieved_tier_order,
+--           round(least(a.offline_order_count::numeric / t.order_target,
+--                       (a.actual_offline / nullif(a.offline_order_count,0)) / t.aov_target)
+--                 * 100, 4) AS completion_kiem_tra
 --    FROM public.kpi_campaign_store_actuals a
 --    JOIN public.kpi_campaign_store_targets t
 --      ON t.campaign_id = a.campaign_id AND t.store_id = a.store_id
 --    WHERE a.campaign_id = '<campaign_id>';
---    -- completion_pct PHẢI bằng completion_kiem_tra ở mọi dòng
---    -- (b) thủng floor mà điểm >= 100 → KHÔNG có bậc:
+--    -- khớp mọi dòng (trừ ca invariant 99.9999 — xem (b))
+--    -- (b) chưa đạt CẢ HAI mục tiêu mà completion >= 100 → PHẢI 0 dòng:
+--    SELECT count(*) AS vi_pham
+--    FROM public.kpi_campaign_store_actuals a
+--    JOIN public.kpi_campaign_store_targets t
+--      ON t.campaign_id = a.campaign_id AND t.store_id = a.store_id
+--    WHERE a.campaign_id = '<campaign_id>' AND a.actual_value >= 100
+--      AND NOT (a.offline_order_count >= t.order_target
+--               AND (a.actual_offline / nullif(a.offline_order_count,0)) >= t.aov_target);
+--    -- (c) có commission mà chưa đạt KPI → PHẢI 0 dòng:
 --    SELECT count(*) AS vi_pham FROM public.kpi_campaign_store_actuals
 --    WHERE campaign_id = '<campaign_id>'
---      AND quality_floor_pass IS FALSE AND achieved_tier_order IS NOT NULL;            -- 0
---    -- (c) SUM(daily) = aggregate (tiền lẫn số đơn):
+--      AND achieved_tier_order IS NOT NULL AND actual_value < 100;
+--    -- (d) SUM(daily) = aggregate (tiền lẫn số đơn):
 --    SELECT a.store_id, a.actual_offline, a.offline_order_count,
 --           (SELECT sum(d.gmv) FROM public.kpi_campaign_store_daily_actuals d
 --            WHERE d.campaign_id=a.campaign_id AND d.store_id=a.store_id) AS daily_net,
 --           (SELECT sum(d.offline_order_count) FROM public.kpi_campaign_store_daily_actuals d
 --            WHERE d.campaign_id=a.campaign_id AND d.store_id=a.store_id) AS daily_ord
 --    FROM public.kpi_campaign_store_actuals a WHERE a.campaign_id = '<campaign_id>';
--- 9) Overlap per-store (2 session activate song song — QA script Node):
+-- 9) Overlap per-store (QA script Node, 2 session song song):
 --    2 campaign order_aov CHUNG >= 1 store + trùng ngày → đúng 1 bên RAISE;
---    2 campaign order_aov KHÁC tập store → cả 2 active được;
---    campaign GMV/Số khách trùng ngày → KHÔNG bị chặn (không đụng nhánh cũ).
+--    KHÁC tập store → cả 2 active được;
+--    campaign GMV/Số khách trùng ngày → KHÔNG bị chặn.
 -- ============================================================================

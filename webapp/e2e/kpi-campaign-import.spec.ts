@@ -11,6 +11,7 @@ import { campaignImportGuide } from '../lib/kpi/campaignImportGuide'
 const BY_CODE = new Map([
   ['POS0001', 'store-a'],
   ['POS0002', 'store-b'],
+  ['POS0018', 'store-signature'],   // mig 106: fixture Finance SIGNATURE
 ])
 const row = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
   pos_code: 'POS0001', kpi_target: 450_000_000, store_kpi_group: 'Nhỏ hơn 500 triệu',
@@ -158,36 +159,43 @@ test.describe('kpi campaign import guide (mig 103 r1) @desktop', () => {
     expect(g.columns.find((c) => c.col === 'tier_1_commission_amount')!.meaning).toContain('VNĐ')
   })
 
-  // ── Mig 106: file "Chất lượng bán hàng" — 4 chỉ số, KHÔNG kpi_target/net ───
+  // ── Mig 106 (contract 12/08): file CHỈ có order_target + aov_target ───────
   const AOV = { metricType: 'offline_order_aov' }
   const aovRow = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
-    pos_code: 'POS0001', order_floor: 888, aov_floor: 190_540,
-    order_target: 1046, aov_target: 194_046, store_kpi_group: 'Nhóm A',
-    tier_1_threshold_pct: 90, tier_1_commission_amount: 15_000_000,
-    tier_2_threshold_pct: 100, tier_2_commission_amount: 20_800_000,
+    pos_code: 'POS0018', order_target: 1046, aov_target: 194_046,
+    store_kpi_group: 'Nhóm A',
+    tier_1_threshold_pct: 100, tier_1_commission_amount: 20_800_000,
     pos_name: 'CIRCA SIGNATURE', note: null,
     ...over,
   })
 
-  test('AOV: file hợp lệ (fixture Finance SIGNATURE) → 4 chỉ số + kpi_target ÉP = 100', () => {
+  test('AOV: file hợp lệ (fixture Finance SIGNATURE) → 2 mục tiêu + kpi_target ÉP = 100', () => {
     const r = parseCampaignRows([aovRow()], BY_CODE, AOV)
     expect('error' in r).toBe(false)
     if ('error' in r) return
     expect(r.invalid).toEqual([])
     expect(r.valid).toEqual([{
-      store_id: 'store-a', pos_code: 'POS0001',
+      store_id: 'store-signature', pos_code: 'POS0018',
       kpi_target: 100,                       // hệ thống chuẩn hóa, không lấy từ file
       store_kpi_group: 'Nhóm A', import_row: 2, note: null,
-      tiers: [
-        { tier_order: 1, threshold_pct: 90, commission_amount: 15_000_000 },
-        { tier_order: 2, threshold_pct: 100, commission_amount: 20_800_000 },
-      ],
-      order_floor: 888, aov_floor: 190_540, order_target: 1046, aov_target: 194_046,
+      tiers: [{ tier_order: 1, threshold_pct: 100, commission_amount: 20_800_000 }],
+      order_target: 1046, aov_target: 194_046,
     }])
   })
 
-  test('AOV: thiếu bất kỳ cột nào trong 4 chỉ số → lỗi FILE (không phải lỗi dòng)', () => {
-    for (const col of ['order_floor', 'aov_floor', 'order_target', 'aov_target']) {
+  test('AOV: từ chối TEMPLATE CŨ (order_floor/aov_floor) với thông báo rõ', () => {
+    for (const col of ['order_floor', 'aov_floor']) {
+      const r = parseCampaignRows([aovRow({ [col]: 888 })], BY_CODE, AOV)
+      expect('error' in r, col).toBe(true)
+      if ('error' in r) {
+        expect(r.error).toContain('template CŨ')
+        expect(r.error).toContain(col)
+      }
+    }
+  })
+
+  test('AOV: thiếu order_target hoặc aov_target → lỗi FILE (không phải lỗi dòng)', () => {
+    for (const col of ['order_target', 'aov_target']) {
       const { [col]: _drop, ...rest } = aovRow()
       const r = parseCampaignRows([rest], BY_CODE, AOV)
       expect('error' in r, `thiếu ${col} phải là lỗi file`).toBe(true)
@@ -195,7 +203,7 @@ test.describe('kpi campaign import guide (mig 103 r1) @desktop', () => {
     }
   })
 
-  test('AOV: file mang kpi_target hoặc net_revenue → CHẶN NGAY (nhầm lẫn cấu hình)', () => {
+  test('AOV: file mang kpi_target hoặc net_revenue → CHẶN NGAY (nhầm cấu hình)', () => {
     const withTarget = parseCampaignRows([aovRow({ kpi_target: 500_000_000 })], BY_CODE, AOV)
     expect('error' in withTarget).toBe(true)
     if ('error' in withTarget) expect(withTarget.error).toContain('kpi_target')
@@ -204,14 +212,12 @@ test.describe('kpi campaign import guide (mig 103 r1) @desktop', () => {
     if ('error' in withNet) expect(withNet.error).toContain('net_revenue')
   })
 
-  test('AOV: validate từng dòng — dương, nguyên, target >= floor', () => {
+  test('AOV: validate từng dòng — dương và nguyên', () => {
     const cases: [Record<string, unknown>, string][] = [
-      [{ order_floor: 0 }, 'order_floor phải > 0'],
-      [{ aov_floor: -1 }, 'aov_floor phải > 0'],
-      [{ order_floor: 888.5 }, 'order_floor phải là số nguyên (số đơn)'],
+      [{ order_target: 0 }, 'order_target phải > 0'],
+      [{ aov_target: -1 }, 'aov_target phải > 0'],
+      [{ order_target: 1046.5 }, 'order_target phải là số nguyên (số đơn)'],
       [{ aov_target: 194_046.5 }, 'aov_target phải là số nguyên (VNĐ)'],
-      [{ order_target: 800 }, 'order_target phải >= order_floor'],
-      [{ aov_target: 190_000 }, 'aov_target phải >= aov_floor'],
     ]
     for (const [patch, msg] of cases) {
       const r = parseCampaignRows([aovRow(patch)], BY_CODE, AOV)
@@ -222,9 +228,21 @@ test.describe('kpi campaign import guide (mig 103 r1) @desktop', () => {
     }
   })
 
-  test('AOV: KHÔNG áp rule ranh giới tiền của GMV (190.540/194.046 không bị chặn oan)', () => {
-    // 200.000.000 là ranh giới nhóm của campaign GMV — với loại này vô nghĩa.
-    const r = parseCampaignRows([aovRow({ aov_floor: 200_000_000, aov_target: 200_000_000 })], BY_CODE, AOV)
+  test('AOV policy tier: ĐÚNG 1 bậc mốc 100 — nhiều bậc / mốc khác đều bị từ chối', () => {
+    const twoTiers = parseCampaignRows([aovRow({
+      tier_2_threshold_pct: 105, tier_2_commission_amount: 26_300_000,
+    })], BY_CODE, AOV)
+    if ('error' in twoTiers) throw new Error('phải là lỗi DÒNG, không phải lỗi file')
+    expect(twoTiers.valid).toEqual([])
+    expect(twoTiers.invalid[0].error).toContain('ĐÚNG 1 bậc')
+
+    const wrongPct = parseCampaignRows([aovRow({ tier_1_threshold_pct: 90 })], BY_CODE, AOV)
+    if ('error' in wrongPct) throw new Error('phải là lỗi DÒNG')
+    expect(wrongPct.invalid[0].error).toContain('100%')
+  })
+
+  test('AOV: KHÔNG áp rule ranh giới tiền của GMV (giá trị AOV lớn không bị chặn oan)', () => {
+    const r = parseCampaignRows([aovRow({ aov_target: 200_000_000 })], BY_CODE, AOV)
     expect('error' in r).toBe(false)
     if ('error' in r) return
     expect(r.invalid).toEqual([])
@@ -241,26 +259,23 @@ test.describe('kpi campaign import guide (mig 103 r1) @desktop', () => {
     expect(unknown.unmatched).toEqual(['POS9999'])
   })
 
-  test('AOV: file GMV/khách KHÔNG được sinh 4 cột (reverse guard trước cả RPC)', () => {
+  test('AOV: file GMV/khách KHÔNG được sinh 2 cột mục tiêu (reverse guard trước RPC)', () => {
     const gmv = parseCampaignRows([row()], BY_CODE)
     if ('error' in gmv) throw new Error('file GMV hợp lệ')
-    for (const k of ['order_floor', 'aov_floor', 'order_target', 'aov_target']) {
-      expect(k in gmv.valid[0]).toBe(false)
-    }
+    for (const k of ['order_target', 'aov_target']) expect(k in gmv.valid[0]).toBe(false)
     const cust = parseCampaignRows([row({ kpi_target: 120 })], BY_CODE, CUSTOMER)
     if ('error' in cust) throw new Error('file khách hợp lệ')
-    expect('order_floor' in cust.valid[0]).toBe(false)
+    expect('order_target' in cust.valid[0]).toBe(false)
   })
 
-  test('GUIDE Chất lượng bán hàng: 4 chỉ số, KHÔNG kpi_target/net_revenue, sample 3 store Finance', () => {
+  test('GUIDE Chất lượng bán hàng: 2 mục tiêu, KHÔNG kpi_target/net/floor; sample tự parse được', () => {
     const g = campaignImportGuide('offline_order_aov')
     const cols = g.columns.map((c) => c.col)
-    expect(cols).toContain('order_floor')
-    expect(cols).toContain('aov_floor')
     expect(cols).toContain('order_target')
     expect(cols).toContain('aov_target')
-    expect(cols).not.toContain('kpi_target')
-    expect(cols).not.toContain('net_revenue')
+    for (const dead of ['kpi_target', 'net_revenue', 'order_floor', 'aov_floor']) {
+      expect(cols).not.toContain(dead)
+    }
     expect(g.sampleFileName).toBe('mau-chien-dich-chat-luong-ban-hang.csv')
     // Sample phải PARSE ĐƯỢC bằng chính parser (guide và parser không lệch nhau).
     const [header, ...lines] = g.sampleCsv.split('\n')
@@ -268,12 +283,14 @@ test.describe('kpi campaign import guide (mig 103 r1) @desktop', () => {
     const rows = lines.map((ln) => Object.fromEntries(ln.split(',').map((v, i) => [keys[i], v])))
     const parsed = parseCampaignRows(rows, new Map([
       ['POS0018', 'store-a'], ['POS0013', 'store-b'], ['POS0065', 'store-c'],
-    ]), { metricType: 'offline_order_aov' })
+    ]), AOV)
     expect('error' in parsed).toBe(false)
     if ('error' in parsed) return
     expect(parsed.invalid).toEqual([])
-    expect(parsed.valid.map((v) => v.order_floor)).toEqual([888, 971, 479])
+    expect(parsed.valid.map((v) => v.order_target)).toEqual([1046, 1187, 586])
+    expect(parsed.valid.map((v) => v.aov_target)).toEqual([194_046, 126_644, 226_762])
     expect(parsed.valid.every((v) => v.kpi_target === 100)).toBe(true)
+    expect(parsed.valid.every((v) => v.tiers.length === 1 && v.tiers[0].threshold_pct === 100)).toBe(true)
     expect(g.commitToast(3)).toContain('Đồng bộ chất lượng bán hàng')
   })
 })

@@ -32,7 +32,6 @@ interface TargetRow {
   stores: { name: string } | null
   kpi_campaign_store_tiers: TierRow[]
   // Mig 106 — chỉ campaign Chất lượng bán hàng (NULL với 2 loại cũ).
-  order_floor: number | null; aov_floor: number | null
   order_target: number | null; aov_target: number | null
 }
 interface ActualRow {
@@ -41,7 +40,6 @@ interface ActualRow {
   store_commission_pool: number | null; synced_at: string
   actual_offline: number | null; actual_affiliate: number | null
   offline_order_count: number | null
-  quality_floor_pass: boolean | null   // 106: RPC tự tính
   offline_synced_at: string | null; affiliate_synced_at: string | null
 }
 
@@ -88,7 +86,7 @@ export default async function CampaignDetailPage({
   ] = await Promise.all([
     supabase
       .from('kpi_campaign_store_targets')
-      .select('id, store_id, pos_code, kpi_target, store_kpi_group, order_floor, aov_floor, order_target, aov_target, stores(name), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
+      .select('id, store_id, pos_code, kpi_target, store_kpi_group, order_target, aov_target, stores(name), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
       .eq('campaign_id', id)
       .order('pos_code'),
     supabase
@@ -97,7 +95,7 @@ export default async function CampaignDetailPage({
       .eq('campaign_id', id).order('created_at', { ascending: false }).limit(5),
     supabase
       .from('kpi_campaign_store_actuals')
-      .select('store_id, actual_value, actual_offline, actual_affiliate, offline_order_count, actual_customer_count, quality_floor_pass, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
+      .select('store_id, actual_value, actual_offline, actual_affiliate, offline_order_count, actual_customer_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
       .eq('campaign_id', id),
   ])
   const queryError = targetsErr?.message ?? runsErr?.message ?? actualsErr?.message ?? null

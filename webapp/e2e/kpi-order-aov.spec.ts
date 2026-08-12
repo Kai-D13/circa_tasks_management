@@ -1,175 +1,231 @@
 import { test, expect } from '@playwright/test'
 import {
   ORDER_AOV_STATUS_LABEL, aovFromSnapshot, computeOrderAovResult, countQualityKpiPass,
-  qualityKpiPass, round4, targetScore,
+  exactlyOneTierAt100, orderAovStatus, qualityKpiPass, round4,
 } from '../lib/kpi/orderAov'
 
-// Mig 106 — ma trận công thức "Chất lượng bán hàng" (90% số đơn + 10% AOV).
-// Module TS là bản soi gương của RPC (nguồn sự thật); test này khóa công thức
-// để đổi một phía mà quên phía kia là ĐỎ ngay.
+// Mig 106 — ma trận công thức "Chất lượng bán hàng" theo CONTRACT CHỐT 12/08:
+//   completion = min(order/order_target, aov/aov_target) × 100  (CHỈ SỐ YẾU HƠN)
+//   kpi_pass   = order >= order_target AND aov >= aov_target
+// KHÔNG floor, KHÔNG trọng số 90/10, KHÔNG bù trừ, KHÔNG cap 100%.
+// Module TS là bản soi gương của RPC (nguồn sự thật) — đổi một phía mà quên
+// phía kia là ĐỎ ngay.
 
-// Cấu hình mẫu dễ tính tay: sàn 100 đơn / AOV 100.000đ, mục tiêu 120 đơn /
-// 110.000đ ⇒ target_score = 0.9×1.2 + 0.1×1.1 = 1.19.
-const T = { orderFloor: 100, aovFloor: 100_000, orderTarget: 120, aovTarget: 110_000 }
-const TIERS = [
-  { tier_order: 1, threshold_pct: 90, commission_amount: 1_000_000 },
-  { tier_order: 2, threshold_pct: 100, commission_amount: 2_000_000 },
-  { tier_order: 3, threshold_pct: 105, commission_amount: 3_000_000 },
-]
-const run = (actualOrder: number, actualNet: number, tiers = TIERS) =>
+// Cấu hình mẫu dễ tính tay: mục tiêu 1.000 đơn × AOV 200.000đ.
+const T = { orderTarget: 1000, aovTarget: 200_000 }
+const TIER100 = [{ tier_order: 1, threshold_pct: 100, commission_amount: 20_800_000 }]
+const run = (actualOrder: number, actualNet: number, tiers = TIER100) =>
   computeOrderAovResult({ ...T, actualOrder, actualNet, tiers })
 
-test.describe('kpi order/aov core (106) @desktop', () => {
-  test('target_score = 0.9×(order_target/floor) + 0.1×(aov_target/floor)', () => {
-    expect(targetScore(T)).toBeCloseTo(1.19, 10)
-    // đổi trọng số là đổi tiền thưởng — khóa cứng tỉ lệ 90/10
-    expect(targetScore({ orderFloor: 100, aovFloor: 100, orderTarget: 200, aovTarget: 100 }))
-      .toBeCloseTo(0.9 * 2 + 0.1 * 1, 10)
-  })
+// 3 fixture Finance (12/08) — order_target/aov_target thật + net_revenue tham
+// chiếu. net ≠ order_target × aov_target vì AOV đã làm tròn VNĐ ⇒ KHÔNG dùng
+// net làm "target thứ 5", chỉ dùng để dựng số thực tế.
+const FINANCE = [
+  { store: 'SIGNATURE', pos: 'POS0018', orderTarget: 1046, aovTarget: 194_046, net: 203_039_424 },
+  { store: 'MIZUKI', pos: 'POS0013', orderTarget: 1187, aovTarget: 126_644, net: 150_321_724 },
+  { store: 'SYMPHONY', pos: 'POS0065', orderTarget: 586, aovTarget: 226_762, net: 132_777_603 },
+]
 
-  test('đúng mục tiêu cả 2 chỉ số → completion = 100% + đạt bậc 2', () => {
-    // 120 đơn × 110.000đ = 13.200.000đ ⇒ AOV đúng 110.000
-    const r = run(120, 13_200_000)
-    expect(r.actualAov).toBe(110_000)
+test.describe('kpi order/aov core (106) @desktop', () => {
+  test('ĐẠT ĐÚNG cả 2 mục tiêu → completion = 100%, đạt bậc 100, KPI pass', () => {
+    const r = run(1000, 1000 * 200_000)
+    expect(r.actualAov).toBe(200_000)
+    expect(r.orderRatio).toBe(1)
+    expect(r.aovRatio).toBe(1)
     expect(r.completionPct).toBe(100)
-    expect(r.floorPass).toBe(true)
     expect(r.kpiPass).toBe(true)
     expect(r.status).toBe('achieved')
-    expect(r.achievedTierOrder).toBe(2)
-    expect(r.commissionPool).toBe(2_000_000)
+    expect(r.achievedTierOrder).toBe(1)
+    expect(r.commissionPool).toBe(20_800_000)
     expect(r.remainingPct).toBe(0)
   })
 
-  test('BẰNG floor là PASS (>=) — không phải "phải vượt"', () => {
-    // đúng 100 đơn, AOV đúng 100.000 ⇒ actual_score = 1.0 → 84,03%
-    const r = run(100, 10_000_000)
-    expect(r.orderFloorPass).toBe(true)
-    expect(r.aovFloorPass).toBe(true)
-    expect(r.floorPass).toBe(true)
-    expect(r.completionPct).toBe(round4((1 / 1.19) * 100))
-    expect(r.completionPct).toBeCloseTo(84.0336, 4)
-    expect(r.kpiPass).toBe(false)          // qua sàn nhưng chưa tới 100%
-    expect(r.status).toBe('in_progress')
-    expect(r.achievedTierOrder).toBeNull() // dưới bậc 1 (90%)
-  })
-
-  test('dưới sàn 1 ĐƠN → thủng sàn số đơn, KHÔNG tier dù điểm rất cao', () => {
-    // 99 đơn nhưng AOV cực cao ⇒ điểm vượt 100% nhờ bù trừ
-    const r = run(99, 99 * 400_000)
-    expect(r.completionPct).toBeGreaterThan(100)
-    expect(r.orderFloorPass).toBe(false)
-    expect(r.floorPass).toBe(false)
+  test('completion = CHỈ SỐ YẾU HƠN (min), KHÔNG bù trừ', () => {
+    // đơn 120% mục tiêu nhưng AOV chỉ 80% ⇒ điểm = 80%, KHÔNG phải 100%
+    const r = run(1200, 1200 * 160_000)
+    expect(r.orderRatio).toBeCloseTo(1.2, 10)
+    expect(r.aovRatio).toBeCloseTo(0.8, 10)
+    expect(r.completionPct).toBe(80)
     expect(r.kpiPass).toBe(false)
-    expect(r.status).toBe('below_order_floor')
-    expect(r.achievedTierOrder).toBeNull()   // ĐIỀU KIỆN CẦN: qua CẢ 2 sàn
+    expect(r.status).toBe('below_aov_target')
+    expect(r.achievedTierOrder).toBeNull()      // commission chỉ khi >= 100
     expect(r.commissionPool).toBeNull()
+    expect(r.remainingPct).toBe(20)
   })
 
-  test('dưới sàn AOV 1 ĐỒNG → thủng sàn AOV, KHÔNG tier dù nhiều đơn', () => {
-    // 200 đơn, AOV 99.999,995 (< 100.000) ⇒ điểm cao nhưng thủng sàn AOV
-    const r = run(200, 200 * 100_000 - 1)
-    expect(r.actualAov!).toBeLessThan(100_000)
-    expect(r.completionPct).toBeGreaterThan(100)
-    expect(r.aovFloorPass).toBe(false)
-    expect(r.status).toBe('below_aov_floor')
-    expect(r.achievedTierOrder).toBeNull()
+  test('CHỈ đạt số đơn → chưa đạt; CHỈ đạt AOV → chưa đạt', () => {
+    const onlyOrder = run(1100, 1100 * 180_000)   // order 110%, aov 90%
+    expect(onlyOrder.orderPass).toBe(true)
+    expect(onlyOrder.aovPass).toBe(false)
+    expect(onlyOrder.kpiPass).toBe(false)
+    expect(onlyOrder.completionPct).toBe(90)
+    expect(onlyOrder.status).toBe('below_aov_target')
+
+    const onlyAov = run(900, 900 * 220_000)       // order 90%, aov 110%
+    expect(onlyAov.orderPass).toBe(false)
+    expect(onlyAov.aovPass).toBe(true)
+    expect(onlyAov.kpiPass).toBe(false)
+    expect(onlyAov.completionPct).toBe(90)
+    expect(onlyAov.status).toBe('below_order_target')
   })
 
-  test('thủng CẢ 2 sàn → below_both_floors', () => {
-    const r = run(50, 50 * 90_000)
-    expect(r.orderFloorPass).toBe(false)
-    expect(r.aovFloorPass).toBe(false)
-    expect(r.status).toBe('below_both_floors')
-    expect(r.kpiPass).toBe(false)
-  })
-
-  test('BÙ TRỪ sau khi qua sàn: thiếu đơn nhưng AOV cao vẫn đạt KPI', () => {
-    // 110 đơn (>= sàn 100), AOV 200.000 (>= sàn 100.000)
-    // score = 0.9×1.1 + 0.1×2 = 1.19 = target ⇒ đúng 100%
-    const r = run(110, 110 * 200_000)
-    expect(r.completionPct).toBe(100)
-    expect(r.floorPass).toBe(true)
+  test('vượt CẢ HAI → completion > 100% (KHÔNG cap)', () => {
+    const r = run(1150, 1150 * 240_000)           // order 115%, aov 120%
+    expect(r.completionPct).toBe(115)             // min = 115
     expect(r.kpiPass).toBe(true)
-    expect(r.achievedTierOrder).toBe(2)
+    expect(r.status).toBe('achieved')
+    expect(r.achievedTierOrder).toBe(1)
   })
 
-  test('0 đơn → completion 0%, AOV null, no_orders, không tier (chốt 11/08)', () => {
+  test('BẰNG mục tiêu là ĐẠT (>=), thiếu 1 đơn / 1 đồng là CHƯA', () => {
+    expect(run(1000, 1000 * 200_000).kpiPass).toBe(true)
+    expect(run(999, 999 * 200_000).kpiPass).toBe(false)
+    // INVARIANT TIỀN: hụt 1 đồng ⇒ round4 sẽ ra đúng 100, nhưng completion
+    // KHÔNG được chạm 100 khi chưa đạt (nếu không commission mở khoá oan).
+    const oneDong = run(1000, 1000 * 200_000 - 1)
+    expect(oneDong.aovPass).toBe(false)
+    expect(oneDong.completionPct).toBe(99.9999)
+    expect(oneDong.completionPct).toBeLessThan(100)
+    expect(oneDong.commissionPool).toBeNull()
+    expect(qualityKpiPass(oneDong.completionPct)).toBe(false)   // suy lúc đọc cũng đúng
+  })
+
+  test('thiếu cả 2 mục tiêu → below_both_targets', () => {
+    const r = run(500, 500 * 150_000)
+    expect(r.status).toBe('below_both_targets')
+    expect(ORDER_AOV_STATUS_LABEL[r.status]).toBe('Chưa đạt cả 2 mục tiêu')
+    expect(r.completionPct).toBe(50)              // min(0.5, 0.75)
+  })
+
+  test('0 đơn + 0 doanh thu → 0%, AOV null, "Chưa phát sinh đơn", không tier', () => {
     const r = run(0, 0)
     expect(r.actualAov).toBeNull()
+    expect(r.aovRatio).toBeNull()
     expect(r.completionPct).toBe(0)
-    expect(r.floorPass).toBe(false)
+    expect(r.kpiPass).toBe(false)
     expect(r.status).toBe('no_orders')
     expect(ORDER_AOV_STATUS_LABEL[r.status]).toBe('Chưa phát sinh đơn')
     expect(r.achievedTierOrder).toBeNull()
     expect(r.remainingPct).toBe(100)
   })
 
-  // r1.2 (audit P1): ĐỔI CÓ CHỦ Ý — trước đây trả 0%; canary 105 đã xác định
-  // "0 đơn mà có doanh thu" là NGUỒN HỎNG ⇒ phải fail-closed cùng contract với
-  // RPC (0 đơn → 0% chỉ hợp lệ khi doanh thu cũng = 0).
-  test('0 đơn mà nguồn vẫn có doanh thu → THROW (nguồn mâu thuẫn), không âm thầm 0%', () => {
+  test('0 đơn mà CÓ doanh thu → THROW (nguồn mâu thuẫn, fail-closed cùng RPC)', () => {
     expect(() => run(0, 5_000_000)).toThrow(/0 đơn nhưng actual_net khác 0/)
     expect(() => run(0, -1)).toThrow(/nguồn mâu thuẫn/)
-    // 0 đơn + 0 doanh thu VẪN hợp lệ
-    expect(run(0, 0).completionPct).toBe(0)
   })
 
-  test('tier: lấy bậc CAO NHẤT đạt được, không cộng dồn', () => {
-    // completion ~107% ⇒ bậc 3
-    const r = run(130, 130 * 115_000)
-    expect(r.completionPct).toBeGreaterThan(105)
-    expect(r.achievedTierOrder).toBe(3)
-    expect(r.commissionPool).toBe(3_000_000)
-    // 95% ⇒ chỉ bậc 1
-    const r2 = run(114, 114 * 104_500)
-    expect(r2.completionPct).toBeGreaterThanOrEqual(90)
-    expect(r2.completionPct).toBeLessThan(100)
-    expect(r2.achievedTierOrder).toBe(1)
-    expect(r2.commissionPool).toBe(1_000_000)
-    // đạt bậc 1 KHÔNG có nghĩa là đạt KPI
-    expect(r2.kpiPass).toBe(false)
+  test('Net Revenue ÂM giữ nguyên, KHÔNG clamp — AOV âm ⇒ không đạt', () => {
+    const r = run(100, -20_000_000)
+    expect(r.actualAov).toBe(-200_000)
+    expect(r.aovPass).toBe(false)
+    expect(r.completionPct).toBeLessThan(0)       // min = tỉ lệ AOV âm
+    expect(r.kpiPass).toBe(false)
+    expect(r.remainingPct).toBe(200)              // 100 − (−100), không bao giờ âm
   })
 
-  test('không có bậc nào → tier null, commission null (không suy ra 0đ)', () => {
-    const r = run(120, 13_200_000, [])
+  test('commission CHỈ khi completion >= 100 (99,99% vẫn = 0)', () => {
+    const almost = run(1000, 1000 * 200_000 - 1000)   // AOV 199.999 ⇒ 99,9995%
+    expect(almost.completionPct).toBeLessThan(100)
+    expect(almost.commissionPool).toBeNull()
+    expect(run(1000, 1000 * 200_000).commissionPool).toBe(20_800_000)
+  })
+
+  test('campaign không có bậc → vẫn đạt KPI nhưng commission null', () => {
+    const r = run(1000, 1000 * 200_000, [])
+    expect(r.kpiPass).toBe(true)
     expect(r.achievedTierOrder).toBeNull()
     expect(r.commissionPool).toBeNull()
-    expect(r.kpiPass).toBe(true)           // vẫn đạt KPI dù campaign không có bậc
   })
 
-  test('remaining = số điểm % còn thiếu để chạm 100 (không âm)', () => {
-    expect(run(100, 10_000_000).remainingPct).toBeCloseTo(15.9664, 4)
-    expect(run(130, 130 * 115_000).remainingPct).toBe(0)
+  // Chính xác điều audit cảnh báo: net_revenue của Finance KHÔNG bằng
+  // order_target × aov_target (AOV đã làm tròn VNĐ) ⇒ đủ số đơn mục tiêu mà
+  // dùng net tham chiếu thì 2/3 store VẪN chưa đạt AOV. net chỉ để tham khảo.
+  test('FIXTURE FINANCE: đủ số đơn mục tiêu + net tham chiếu → chỉ SIGNATURE đạt', () => {
+    const expected: Record<string, { completion: number; pass: boolean; status: string }> = {
+      SIGNATURE: { completion: 100, pass: true, status: 'achieved' },
+      MIZUKI: { completion: 99.9969, pass: false, status: 'below_aov_target' },
+      SYMPHONY: { completion: 99.9210, pass: false, status: 'below_aov_target' },
+    }
+    for (const f of FINANCE) {
+      const r = computeOrderAovResult({
+        orderTarget: f.orderTarget, aovTarget: f.aovTarget,
+        actualOrder: f.orderTarget, actualNet: f.net, tiers: TIER100,
+      })
+      const e = expected[f.store]
+      expect(r.orderRatio, f.store).toBe(1)
+      expect(r.completionPct, f.store).toBe(e.completion)
+      expect(r.kpiPass, f.store).toBe(e.pass)
+      expect(r.status, f.store).toBe(e.status)
+      expect(r.achievedTierOrder, f.store).toBe(e.pass ? 1 : null)
+    }
   })
 
-  test('làm tròn: completion giữ 4 chữ số (khớp round(x,4) của Postgres)', () => {
-    const r = run(107, 107 * 103_333)
+  test('FIXTURE FINANCE: thiếu 1 đơn → completion theo tỉ lệ đơn, KHÔNG đạt', () => {
+    const f = FINANCE[0]   // SIGNATURE 1046 đơn
+    const r = computeOrderAovResult({
+      orderTarget: f.orderTarget, aovTarget: f.aovTarget,
+      actualOrder: f.orderTarget - 1, actualNet: f.net, tiers: TIER100,
+    })
+    expect(r.orderPass).toBe(false)
+    expect(r.completionPct).toBe(round4(((f.orderTarget - 1) / f.orderTarget) * 100))
+    expect(r.completionPct).toBeCloseTo(99.9044, 4)
+    expect(r.kpiPass).toBe(false)
+    expect(r.status).toBe('below_order_target')
+  })
+
+  test('làm tròn 4 chữ số khớp round(x,4) Postgres — kể cả số ÂM (away-from-zero)', () => {
+    expect(round4(1.23455)).toBe(1.2346)
+    expect(round4(-1.23455)).toBe(-1.2346)
+    expect(round4(-0)).toBe(0)
+    const r = run(1007, 1007 * 203_333)
     expect(r.completionPct).toBe(round4(r.completionPct))
-    expect(String(r.completionPct).split('.')[1]?.length ?? 0).toBeLessThanOrEqual(4)
   })
 
-  test('cấu hình sai (floor = 0) → THROW, không trả NaN/Infinity ra màn tiền', () => {
-    expect(() => computeOrderAovResult({
-      ...T, orderFloor: 0, actualOrder: 10, actualNet: 1_000_000,
-    })).toThrow(/order_floor/)
-    expect(() => computeOrderAovResult({
-      ...T, aovFloor: 0, actualOrder: 10, actualNet: 1_000_000,
-    })).toThrow(/aov_floor/)
+  test('cấu hình sai → THROW, không trả NaN/Infinity ra màn tiền', () => {
+    const base = { actualOrder: 10, actualNet: 1_000_000 }
+    expect(() => computeOrderAovResult({ ...T, orderTarget: 0, ...base })).toThrow(/order_target/)
+    expect(() => computeOrderAovResult({ ...T, aovTarget: 0, ...base })).toThrow(/aov_target/)
+    expect(() => computeOrderAovResult({ ...T, orderTarget: 10.5, ...base })).toThrow(/số nguyên/)
+    expect(() => computeOrderAovResult({ ...T, actualOrder: 10.5, actualNet: 1 })).toThrow(/actual_order/)
+    expect(() => computeOrderAovResult({ ...T, actualOrder: 10, actualNet: Number.NaN })).toThrow(/actual_net/)
   })
 
-  test('kpi_pass suy lúc ĐỌC: floor_pass AND completion >= 100 — KHÔNG suy từ tier', () => {
-    expect(qualityKpiPass(true, 100)).toBe(true)
-    expect(qualityKpiPass(true, 99.9999)).toBe(false)
-    expect(qualityKpiPass(false, 150)).toBe(false)   // thủng sàn dù điểm cao
-    expect(qualityKpiPass(null, 150)).toBe(false)    // campaign loại khác → false
-    expect(qualityKpiPass(true, null)).toBe(false)   // chưa sync → false
-    // "X/Y cửa hàng đạt" của màn danh sách
+  test('policy tier: ĐÚNG 1 bậc mốc 100 — nhiều bậc / mốc khác đều bị từ chối', () => {
+    expect(exactlyOneTierAt100([{ threshold_pct: 100, commission_amount: 20_800_000 }])).toEqual({ ok: true })
+    const none = exactlyOneTierAt100([])
+    expect(none.ok).toBe(false)
+    const two = exactlyOneTierAt100([
+      { threshold_pct: 100, commission_amount: 1 }, { threshold_pct: 105, commission_amount: 2 },
+    ])
+    expect(two.ok).toBe(false)
+    if (!two.ok) expect(two.error).toContain('ĐÚNG 1 bậc')
+    const wrong = exactlyOneTierAt100([{ threshold_pct: 90, commission_amount: 1 }])
+    expect(wrong.ok).toBe(false)
+    if (!wrong.ok) expect(wrong.error).toContain('100%')
+  })
+
+  test('kpi_pass suy lúc ĐỌC = completion >= 100 (KHÔNG suy từ tier)', () => {
+    expect(qualityKpiPass(100)).toBe(true)
+    expect(qualityKpiPass(115)).toBe(true)
+    expect(qualityKpiPass(99.9999)).toBe(false)
+    expect(qualityKpiPass(null)).toBe(false)      // chưa sync
+    expect(qualityKpiPass(undefined)).toBe(false)
     expect(countQualityKpiPass([
-      { quality_floor_pass: true, actual_value: 120 },     // đạt
-      { quality_floor_pass: true, actual_value: 95 },      // qua sàn, chưa 100
-      { quality_floor_pass: false, actual_value: 130 },    // thủng sàn
-      { quality_floor_pass: null, actual_value: 130 },     // chưa có dữ liệu
-    ])).toBe(1)
+      { actual_value: 120 }, { actual_value: 100 }, { actual_value: 99.9 }, { actual_value: null },
+    ])).toBe(2)
+  })
+
+  test('orderAovStatus thuần: mọi tổ hợp đều có nhãn tiếng Việt rõ nghĩa', () => {
+    const combos: [{ actualOrder: number; orderPass: boolean; aovPass: boolean }, string][] = [
+      [{ actualOrder: 0, orderPass: false, aovPass: false }, 'Chưa phát sinh đơn'],
+      [{ actualOrder: 5, orderPass: false, aovPass: false }, 'Chưa đạt cả 2 mục tiêu'],
+      [{ actualOrder: 5, orderPass: false, aovPass: true }, 'Chưa đạt mục tiêu số đơn'],
+      [{ actualOrder: 5, orderPass: true, aovPass: false }, 'Chưa đạt mục tiêu AOV'],
+      [{ actualOrder: 5, orderPass: true, aovPass: true }, 'Đạt KPI'],
+    ]
+    for (const [x, label] of combos) {
+      expect(ORDER_AOV_STATUS_LABEL[orderAovStatus(x)]).toBe(label)
+    }
   })
 
   test('AOV đọc từ snapshot: weighted per store; 0/null đơn → null', () => {
@@ -177,65 +233,5 @@ test.describe('kpi order/aov core (106) @desktop', () => {
     expect(aovFromSnapshot(500, 0)).toBeNull()
     expect(aovFromSnapshot(500, null)).toBeNull()
     expect(aovFromSnapshot(null, 10)).toBe(0)
-  })
-
-  // ── r1.1 (audit P1#4): FIXTURE FINANCE — khóa bằng số THẬT của file cấu hình.
-  // Chỉ SIGNATURE có đủ 4 chỉ số đầu vào trong handoff; MIZUKI (120.2463%) và
-  // SYMPHONY (120.3300%) mới chỉ có KẾT QUẢ kỳ vọng, chưa có input ⇒ chưa dựng
-  // được test (không bịa số cho màn tiền).
-  // r1.2 (audit P1#2): khóa ĐỦ 3 fixture Finance bằng số THẬT của file cấu hình.
-  // net_revenue trong file Finance CHỈ để tham khảo — AOV đã làm tròn VNĐ nên
-  // net ≠ order_target × aov_target (lệch +67.308 / -4.704 / -104.929đ);
-  // TUYỆT ĐỐI không dùng net làm chỉ số thứ 5 hay assert đẳng thức đó.
-  const FINANCE = [
-    { pos: 'POS0018', store: 'SIGNATURE', t: { orderFloor: 888, aovFloor: 190_540, orderTarget: 1046, aovTarget: 194_046 }, expected: 116.1975 },
-    { pos: 'POS0013', store: 'MIZUKI',    t: { orderFloor: 971, aovFloor: 123_849, orderTarget: 1187, aovTarget: 126_644 }, expected: 120.2463 },
-    { pos: 'POS0065', store: 'SYMPHONY',  t: { orderFloor: 479, aovFloor: 221_758, orderTarget: 586,  aovTarget: 226_762 }, expected: 120.3300 },
-  ]
-  for (const f of FINANCE) {
-    test(`FIXTURE Finance ${f.pos} CIRCA ${f.store} → target_score = ${f.expected}%`, () => {
-      expect(round4(targetScore(f.t) * 100)).toBe(f.expected)
-      // đúng mục tiêu số đơn + AOV → completion đúng 100% và qua cả 2 sàn
-      const atTarget = computeOrderAovResult({
-        ...f.t, actualOrder: f.t.orderTarget, actualNet: f.t.orderTarget * f.t.aovTarget, tiers: [],
-      })
-      expect(atTarget.completionPct).toBe(100)
-      expect(atTarget.floorPass).toBe(true)
-      expect(atTarget.kpiPass).toBe(true)
-    })
-  }
-
-  test('r1.2: round4 HALF-UP ĐỐI XỨNG như PG numeric (số ÂM không lệch 1 đơn vị cuối)', () => {
-    expect(round4(-1.23455)).toBe(-1.2346)   // Math.round cũ ra -1.2345
-    expect(round4(1.23455)).toBe(1.2346)
-    expect(round4(-0.00005)).toBe(-0.0001)
-    expect(round4(0.00005)).toBe(0.0001)
-    expect(round4(-1.23454)).toBe(-1.2345)
-    expect(Object.is(round4(-0.000001), 0)).toBe(true)   // -0 chuẩn hóa thành 0
-    expect(round4(120.246272)).toBe(120.2463)
-  })
-
-  test('r1.1: Net Revenue ÂM hợp lệ (hoàn/điều chỉnh) — AOV âm, thủng sàn, không tier', () => {
-    const r = run(120, -5_000_000)
-    expect(r.actualAov).toBe(-5_000_000 / 120)
-    expect(r.aovFloorPass).toBe(false)
-    expect(r.orderFloorPass).toBe(true)
-    expect(r.status).toBe('below_aov_floor')
-    expect(r.achievedTierOrder).toBeNull()
-    expect(r.completionPct).toBeLessThan(100)
-  })
-
-  test('r1.1 guard đầu vào: cấu hình/thực tế sai kiểu → THROW (không trả số như thật)', () => {
-    const bad = (patch: Record<string, number>) => () => computeOrderAovResult({
-      ...T, actualOrder: 100, actualNet: 10_000_000, ...patch,
-    })
-    expect(bad({ aovFloor: 100_000.5 })).toThrow(/VNĐ nguyên/)
-    expect(bad({ orderFloor: 100.5 })).toThrow(/số nguyên/)
-    expect(bad({ orderTarget: 90 })).toThrow(/order_target phải >= order_floor/)
-    expect(bad({ aovTarget: 90_000 })).toThrow(/aov_target phải >= aov_floor/)
-    expect(bad({ actualOrder: 10.5 })).toThrow(/actual_order/)
-    expect(bad({ actualOrder: -1 })).toThrow(/actual_order/)
-    expect(bad({ actualNet: Number.NaN })).toThrow(/actual_net/)
-    expect(bad({ aovFloor: Number.POSITIVE_INFINITY })).toThrow(/hữu hạn/)
   })
 })

@@ -40,8 +40,7 @@ export default async function CampaignsPage() {
       .is('archived_at', null) // Archive (098): campaign lưu trữ biến mất khỏi list
       .order('created_at', { ascending: false }),
     supabase.from('kpi_campaign_store_targets').select('campaign_id, kpi_target'),
-    // 106: + quality_floor_pass để đếm 'X/Y cửa hàng đạt' (KPI pass, không phải bậc).
-    supabase.from('kpi_campaign_store_actuals').select('campaign_id, actual_value, quality_floor_pass, synced_at'),
+    supabase.from('kpi_campaign_store_actuals').select('campaign_id, actual_value, synced_at'),
   ])
   // A failed side-query must NOT render as "0đ / chưa đồng bộ" — that reads as
   // real data on a money screen. Surface it like the detail page does.
@@ -59,8 +58,8 @@ export default async function CampaignsPage() {
   for (const r of (actuals ?? [])) {
     const a = agg.get(r.campaign_id as string) ?? blank()
     a.actual += Number(r.actual_value) || 0
-    // 106: đạt KPI = qua CẢ 2 sàn VÀ điểm >= 100 (KHÔNG suy từ bậc).
-    if (qualityKpiPass(r.quality_floor_pass as boolean | null, r.actual_value as number | null)) a.pass += 1
+    // 106: đạt KPI = completion >= 100 ⟺ đạt CẢ HAI mục tiêu (KHÔNG suy từ bậc).
+    if (qualityKpiPass(r.actual_value as number | null)) a.pass += 1
     if (!a.lastSync || (r.synced_at as string) > a.lastSync) a.lastSync = r.synced_at as string
     agg.set(r.campaign_id as string, a)
   }

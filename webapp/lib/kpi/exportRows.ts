@@ -15,7 +15,6 @@ export interface ExportTarget {
   store_id: string; pos_code: string | null; kpi_target: number; store_kpi_group: string | null
   stores: { name: string } | null
   // Mig 106 — chỉ campaign Chất lượng bán hàng (NULL với 2 loại cũ).
-  order_floor?: number | null; aov_floor?: number | null
   order_target?: number | null; aov_target?: number | null
 }
 export interface ExportActual {
@@ -113,11 +112,11 @@ export function buildCustomerCampaignExportRows(
 }
 
 // ── Mig 106: export campaign "Chất lượng bán hàng" — builder RIÊNG ──────────
-// Đủ CẤU HÌNH (2 sàn + 2 mục tiêu) và ACTUAL (số đơn, AOV weighted, Net
-// Revenue tham khảo) + điểm hoàn thành, trạng thái sàn, bậc, commission.
+// Đủ CẤU HÌNH (2 mục tiêu) và ACTUAL (số đơn, AOV weighted, tỉ lệ từng chỉ
+// số, Net Revenue tham khảo) + điểm hoàn thành, đạt KPI, bậc, commission.
 // KHÔNG có cột "KPI target"/"Actual GMV": kpi_target của loại này là điểm
 // chuẩn hóa 100, hiện dưới dạng % chứ không phải tiền.
-export interface ExportOrderAovActual extends ExportActual { quality_floor_pass?: boolean | null }
+export type ExportOrderAovActual = ExportActual
 
 export function buildOrderAovCampaignExportRows(
   c: ExportCampaign,
@@ -128,12 +127,14 @@ export function buildOrderAovCampaignExportRows(
 ): Record<string, string | number>[] {
   void vnTodayISO   // nhịp độ không áp dụng cho điểm chuẩn hóa 100%
   const actualByStore = new Map(actuals.map((a) => [a.store_id, a]))
+  const pct2 = (n: number) => Number((n * 100).toFixed(2))
   return targets.map((t) => {
     const a = actualByStore.get(t.store_id)
     const orders = a?.offline_order_count
     const net = a?.actual_offline
     const aov = aovFromSnapshot(net, orders)
     const completion = a?.actual_value
+    const pass = qualityKpiPass(completion)
     return {
       'Chiến dịch':   c.name,
       'Loại chỉ số':  'Chất lượng bán hàng',
@@ -142,16 +143,16 @@ export function buildOrderAovCampaignExportRows(
       'POS':          t.pos_code ?? '',
       'Cửa hàng':     t.stores?.name ?? '',
       'Phân loại':    t.store_kpi_group ?? '',
-      'Sàn số đơn':   t.order_floor != null ? Number(t.order_floor) : '',
       'Mục tiêu số đơn': t.order_target != null ? Number(t.order_target) : '',
       'Số đơn thực tế':  orders != null ? Number(orders) : '',
-      'Sàn AOV':      t.aov_floor != null ? Number(t.aov_floor) : '',
+      'Tỉ lệ số đơn %':  orders != null && t.order_target ? pct2(Number(orders) / Number(t.order_target)) : '',
       'Mục tiêu AOV': t.aov_target != null ? Number(t.aov_target) : '',
       'AOV thực tế':  aov != null ? Math.round(aov) : '',
+      'Tỉ lệ AOV %':  aov != null && t.aov_target ? pct2(aov / Number(t.aov_target)) : '',
       'Net Revenue (tham khảo)': net != null ? Number(net) : '',
-      'Hoàn thành %': completion != null ? Number(Number(completion).toFixed(2)) : '',
-      'Đạt 2 sàn':    a?.quality_floor_pass == null ? '' : (a.quality_floor_pass ? 'Đạt' : 'Chưa đạt'),
-      'Đạt KPI':      a == null ? '' : (qualityKpiPass(a.quality_floor_pass, completion) ? 'Đạt' : 'Chưa đạt'),
+      // Điểm = chỉ số YẾU HƠN trong 2 tỉ lệ trên (RPC tính, không tính lại ở đây).
+      'Hoàn thành %': completion != null ? Number(Number(completion).toFixed(4)) : '',
+      'Đạt KPI':      a == null ? '' : (pass ? 'Đạt' : 'Chưa đạt'),
       'Bậc đạt':      a?.achieved_tier_order ?? '',
       'Commission pool': a?.store_commission_pool != null ? Number(a.store_commission_pool) || 0 : '',
       'Đồng bộ lúc':  a ? fmt(a.synced_at) : '',

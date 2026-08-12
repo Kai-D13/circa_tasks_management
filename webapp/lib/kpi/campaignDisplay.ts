@@ -120,25 +120,24 @@ export function metricPresentation(metricType?: string | null): MetricPresentati
   return GMV_PRESENTATION
 }
 
-// ── Mig 106: dòng phụ "Số đơn · AOV" so với SÀN / MỤC TIÊU ──────────────────
+// ── Mig 106: dòng phụ "thực tế / mục tiêu" cho Số đơn và AOV ────────────────
 // Desktop gộp Order + AOV vào CÙNG MỘT nhóm 2 dòng (yêu cầu stakeholder: không
-// đẻ thêm cột ngang). null = chưa sync → caller hiện '—'.
+// đẻ thêm cột ngang). Contract 12/08: chỉ còn MỤC TIÊU, không có sàn.
+// null = campaign loại khác / chưa cấu hình → caller hiện '—'.
 export function orderAovMetricLines(p: {
   actualOrder: number | null | undefined
   actualNet: number | null | undefined
-  orderFloor: number | null | undefined
   orderTarget: number | null | undefined
-  aovFloor: number | null | undefined
   aovTarget: number | null | undefined
 }): { order: string; aov: string } | null {
-  if (p.orderFloor == null || p.orderTarget == null || p.aovFloor == null || p.aovTarget == null) return null
+  if (p.orderTarget == null || p.aovTarget == null) return null
   const fmt = (n: number) => nfVi.format(Math.round(n))
   const orderActual = p.actualOrder == null ? '—' : fmt(p.actualOrder)
   const aovVal = aovFromSnapshot(p.actualNet, p.actualOrder)
   const aovActual = aovVal == null ? '—' : `${fmt(aovVal)}₫`
   return {
-    order: `${orderActual} / ${fmt(p.orderTarget)} đơn · sàn ${fmt(p.orderFloor)}`,
-    aov: `${aovActual} / ${fmt(p.aovTarget)}₫ · sàn ${fmt(p.aovFloor)}₫`,
+    order: `${orderActual} / ${fmt(p.orderTarget)} đơn`,
+    aov: `${aovActual} / ${fmt(p.aovTarget)}₫`,
   }
 }
 

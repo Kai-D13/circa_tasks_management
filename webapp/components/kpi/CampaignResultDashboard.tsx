@@ -170,7 +170,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                           <span className="block text-[11px] text-muted-foreground/80">{orderLine()}</span>
                         )}
                       </td>
-                      {/* 106: Order + AOV GỘP 1 cột 2 dòng + cột trạng thái 2 sàn */}
+                      {/* 106: Order + AOV GỘP 1 cột 2 dòng + cột trạng thái đạt KPI */}
                       {isOrderAov && (
                         <td className="px-4 py-2.5 text-xs text-muted-foreground">
                           {r.orderAovLines ? (
@@ -186,9 +186,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                           {r.qualityStatusLabel ? (
                             <span className={cn(
                               'inline-block px-2 py-0.5 rounded-full font-medium',
-                              r.qualityKpiPass ? 'bg-green-100 text-green-700'
-                                : r.qualityFloorPass ? 'bg-primary/10 text-primary'
-                                : 'bg-amber-100 text-amber-700',
+                              r.qualityKpiPass ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700',
                             )}>
                               {r.qualityStatusLabel}
                             </span>

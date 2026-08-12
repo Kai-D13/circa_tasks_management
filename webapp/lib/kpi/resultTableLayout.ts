@@ -27,7 +27,7 @@ export const RESULT_COL_PX = {
   pace: 100,
   perDay: 140,   // 10/08: thay cột 'Còn thiếu' (đã bỏ) — 'Trung bình/ngày'
   orderAov: 230, // 106: cột GỘP 2 dòng "Số đơn · AOV" (thay vì 2 cột ngang)
-  quality: 150,  // 106: trạng thái 2 sàn
+  quality: 150,  // 106: trạng thái đạt/chưa đạt 2 mục tiêu
   combined: 170, // cột gộp "Bậc đạt · Commission" (mobile giữ UI cũ)
   tier: 176,
 } as const
@@ -47,7 +47,7 @@ export function resultTableColumns(maxTierCount: number, showBreakdown: boolean,
     { key: 'kpiTarget', label: 'KPI target', minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' },
     { key: 'actual', label: actualLabel, minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' },
     ...(isOrderAov ? [
-      { key: 'orderAov', label: 'Số đơn · AOV (thực tế / mục tiêu · sàn)', minPx: RESULT_COL_PX.orderAov, align: 'left', scope: 'all' } as const,
+      { key: 'orderAov', label: 'Số đơn · AOV (thực tế / mục tiêu)', minPx: RESULT_COL_PX.orderAov, align: 'left', scope: 'all' } as const,
       { key: 'quality', label: 'Trạng thái', minPx: RESULT_COL_PX.quality, align: 'left', scope: 'all' } as const,
     ] : []),
     ...(showBreakdown ? [
