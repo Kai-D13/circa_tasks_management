@@ -12,7 +12,9 @@ import { RefreshCw } from 'lucide-react'
 // Mig 103 r1 (audit P2 copy): label theo loại chiến dịch — campaign Số khách
 // hiện "Đồng bộ số khách" (nguồn Supabase, không BigQuery).
 export function SyncActualsButton({ campaignId, metricType }: { campaignId: string; metricType?: string }) {
-  const label = metricType === 'affiliate_customer_count' ? 'Đồng bộ số khách' : 'Đồng bộ doanh số'
+  const label = metricType === 'affiliate_customer_count' ? 'Đồng bộ số khách'
+    : metricType === 'offline_order_aov' ? 'Đồng bộ chất lượng bán hàng'
+    : 'Đồng bộ doanh số'
   const router = useRouter()
   const [pending, startTransition] = useTransition()
 

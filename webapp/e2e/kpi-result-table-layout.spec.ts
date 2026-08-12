@@ -84,4 +84,29 @@ test.describe('kpi result table layout contract @desktop', () => {
     expect(cust.map((c) => c.minPx)).toEqual(gmv.map((c) => c.minPx))
     expect(cust.map((c) => c.key)).toEqual(gmv.map((c) => c.key))
   })
+
+  // ── Mig 106: Chất lượng bán hàng — Order/AOV GỘP 1 cột, không đẻ cột ngang ─
+  test('order_aov: thêm ĐÚNG 2 cột (gộp Order·AOV + Trạng thái), label actual = Hoàn thành', () => {
+    const gmv = resultTableColumns(3, false, 'gmv').map((c) => c.key)
+    const aov = resultTableColumns(3, false, 'offline_order_aov')
+    expect(aov.map((c) => c.key)).toEqual([
+      ...gmv.slice(0, 4), 'orderAov', 'quality', ...gmv.slice(4),
+    ])
+    expect(aov.find((c) => c.key === 'actual')!.label).toBe('Hoàn thành')
+    expect(aov.find((c) => c.key === 'orderAov')!.scope).toBe('all')
+    // KHÔNG có cột GMV Offline/Affiliate (loại này không bật affiliate)
+    expect(aov.map((c) => c.key)).not.toContain('affiliate')
+  })
+
+  test('order_aov: label mảng GMV vẫn BẤT BIẾN (zero-touch)', () => {
+    expect(resultTableColumns(2, false, 'gmv').map((c) => c.label))
+      .toEqual(resultTableColumns(2, false).map((c) => c.label))
+  })
+
+  test('desktopMinPx PHẢI theo metricType (thiếu tham số sẽ tính thiếu 2 cột mới)', () => {
+    const withType = resultTableDesktopMinPx(3, false, 'offline_order_aov')
+    const withoutType = resultTableDesktopMinPx(3, false)
+    expect(withType).toBeGreaterThan(withoutType)
+    expect(withType - withoutType).toBe(RESULT_COL_PX.orderAov + RESULT_COL_PX.quality)
+  })
 })

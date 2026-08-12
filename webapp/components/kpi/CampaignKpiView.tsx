@@ -1,5 +1,6 @@
 import { Card, CardContent } from '@/components/ui/card'
-import { breakdownModel, campaignFootnote, metricPresentation } from '@/lib/kpi/campaignDisplay'
+import { breakdownModel, campaignFootnote, metricPresentation, orderAovMetricLines } from '@/lib/kpi/campaignDisplay'
+import { ORDER_AOV_STATUS_LABEL, orderAovStatus, qualityKpiPass } from '@/lib/kpi/orderAov'
 import { buildTierProgress, type TierProgress } from '@/lib/kpi/resultModel'
 import { CampaignDailyChart } from '@/components/kpi/CampaignDailyChart'
 import { CampaignPicker } from '@/components/kpi/CampaignPicker'
@@ -45,6 +46,12 @@ export interface CampaignView {
   // Mig 103: 'affiliate_customer_count' → label/đơn vị KHÁCH qua
   // metricPresentation; thiếu (caller cũ) = gmv, hiển thị y nguyên.
   metric_type?: string
+  // Mig 106 (Chất lượng bán hàng): 2 sàn + 2 mục tiêu + kết quả 2 sàn.
+  order_floor?: number | null
+  aov_floor?: number | null
+  order_target?: number | null
+  aov_target?: number | null
+  quality_floor_pass?: boolean | null
 }
 // gmv = Offline, gmv_affiliate = Affiliate — chart hiển thị TỔNG, giữ riêng
 // 2 nguồn cho tooltip breakdown + stacked chart sau này.
@@ -120,6 +127,25 @@ export function CampaignKpiView({
   const sel = items.find((i) => i.id === selectedId) ?? items[0]
   // Mig 103: format/label tập trung — gmv cho output BYTE-EQUAL vnd cũ.
   const pres = metricPresentation(sel.metric_type)
+  // Mig 106: dòng "thực tế / mục tiêu · sàn" + trạng thái — dùng CHUNG helper
+  // với bảng desktop để Staff và Super không bao giờ đọc ra 2 con số khác nhau.
+  const qualityLines = orderAovMetricLines({
+    actualOrder: sel.offline_order_count ?? null,
+    actualNet: sel.actual_offline,
+    orderFloor: sel.order_floor, orderTarget: sel.order_target,
+    aovFloor: sel.aov_floor, aovTarget: sel.aov_target,
+  })
+  const qualityPass = qualityKpiPass(sel.quality_floor_pass, sel.actual_value)
+  const qualityStatus = qualityLines && sel.actual_value !== null && sel.offline_order_count != null
+    ? orderAovStatus({
+      actualOrder: sel.offline_order_count,
+      orderFloorPass: sel.offline_order_count >= Number(sel.order_floor),
+      aovFloorPass: sel.offline_order_count > 0
+        && (Number(sel.actual_offline) || 0) / sel.offline_order_count >= Number(sel.aov_floor),
+      completionPct: Number(sel.actual_value) || 0,
+    })
+    : null
+  const qualityLabel = qualityStatus ? ORDER_AOV_STATUS_LABEL[qualityStatus] : null
   const vnd = pres.value
   // Commission LUÔN là tiền (kể cả campaign Số khách — tier thưởng bằng VNĐ).
   const money = metricPresentation('gmv').value
@@ -254,6 +280,40 @@ export function CampaignKpiView({
           </p>
         </CardContent>
       </Card>
+
+      {/* ── Mig 106: Chất lượng bán hàng — 2 chỉ số với SÀN bắt buộc.
+             Hero phía trên đã là ĐIỂM hoàn thành (%); khối này cho biết vì sao:
+             số đơn/AOV thực tế so với mục tiêu và SÀN + trạng thái. ── */}
+      {qualityLines && (
+        <Card className="rounded-lg">
+          <CardContent className="p-4 space-y-2.5">
+            <p className="text-sm font-semibold">Chất lượng bán hàng</p>
+            <div className="space-y-1.5 text-sm">
+              <div className="flex items-start justify-between gap-3">
+                <span className="text-muted-foreground shrink-0">Số đơn</span>
+                <span className="text-right font-medium">{qualityLines.order}</span>
+              </div>
+              <div className="flex items-start justify-between gap-3">
+                <span className="text-muted-foreground shrink-0">AOV</span>
+                <span className="text-right font-medium">{qualityLines.aov}</span>
+              </div>
+            </div>
+            {qualityLabel && (
+              <p className="text-xs">
+                <span className={cn(
+                  'inline-block px-2 py-0.5 rounded-full font-medium',
+                  qualityPass ? 'bg-green-100 text-green-700'
+                    : sel.quality_floor_pass ? 'bg-primary/10 text-primary'
+                    : 'bg-amber-100 text-amber-700',
+                )}>{qualityLabel}</span>
+              </p>
+            )}
+            <p className="text-[11px] text-muted-foreground">
+              Điểm hoàn thành = 90% số đơn + 10% AOV (so với sàn). Phải đạt CẢ HAI sàn mới được xét bậc thưởng.
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       {/* ── P3-E: Phân loại theo chỉ số (CHỈ khi campaign bật cả 2 nguồn) —
              mỗi nguồn: giá trị · % trên CÙNG kpi_target · mốc đồng bộ riêng.

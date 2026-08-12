@@ -4,6 +4,8 @@
 // r2 (audit P3): structural type CỤC BỘ — tầng lib không import type từ
 // component UI (tránh đảo chiều phụ thuộc); CampaignView khớp structurally.
 
+import { aovFromSnapshot } from '@/lib/kpi/orderAov'
+
 export interface BreakdownInput {
   metric_offline: boolean
   metric_affiliate: boolean
@@ -46,7 +48,7 @@ export function campaignFootnote(v: { metric_offline: boolean; metric_affiliate:
 // lặp ở component (KpiView/ResultSummary/ResultDashboard/DailyChart/[id]/list).
 // gmv: format BYTE-EQUAL formatter cũ (Intl vi-VN + '₫', null → '—'; compact
 // tỷ/tr/k như CampaignDailyChart) — test khóa; customer: 'N khách'.
-export type CampaignMetricType = 'gmv' | 'affiliate_customer_count'
+export type CampaignMetricType = 'gmv' | 'affiliate_customer_count' | 'offline_order_aov'
 
 export interface MetricPresentation {
   kind: CampaignMetricType
@@ -93,10 +95,51 @@ const CUSTOMER_PRESENTATION: MetricPresentation = {
   zero: '0 khách',
 }
 
+// Mig 106 — Chất lượng bán hàng: đơn vị hiển thị là ĐIỂM %, KHÔNG phải tiền.
+// ⚠ Nếu quên nhánh này, metricPresentation default 'gmv' sẽ render 116,1975
+// thành "116₫" — sai im lặng trên màn tiền (hero Staff đọc thẳng run_rate).
+const ORDER_AOV_PRESENTATION: MetricPresentation = {
+  kind: 'offline_order_aov',
+  targetLabel: 'Mục tiêu chất lượng',
+  actualHeroLabel: 'Điểm hoàn thành',
+  todayLabel: 'Số đơn hôm nay',
+  perDayLabel: 'Trung bình/ngày cần đạt',
+  actualColumnLabel: 'Hoàn thành',
+  chartAriaLabel: 'Biểu đồ số đơn theo ngày',
+  // 1 chữ số thập phân: 116.1975 → '116,2%' (số đầy đủ nằm ở export).
+  value: (n) => (n === null || n === undefined ? '—' : `${nfVi.format(Math.round(n * 10) / 10)}%`),
+  compact: (n) => nfVi.format(Math.round(n)),
+  zero: '0%',
+}
+
 // Default 'gmv' cho MỌI giá trị lạ/thiếu (caller cũ chưa truyền metric_type
 // giữ nguyên hiển thị tiền — an toàn hiển thị; số liệu đã bị DB/engine chặn).
 export function metricPresentation(metricType?: string | null): MetricPresentation {
-  return metricType === 'affiliate_customer_count' ? CUSTOMER_PRESENTATION : GMV_PRESENTATION
+  if (metricType === 'affiliate_customer_count') return CUSTOMER_PRESENTATION
+  if (metricType === 'offline_order_aov') return ORDER_AOV_PRESENTATION
+  return GMV_PRESENTATION
+}
+
+// ── Mig 106: dòng phụ "Số đơn · AOV" so với SÀN / MỤC TIÊU ──────────────────
+// Desktop gộp Order + AOV vào CÙNG MỘT nhóm 2 dòng (yêu cầu stakeholder: không
+// đẻ thêm cột ngang). null = chưa sync → caller hiện '—'.
+export function orderAovMetricLines(p: {
+  actualOrder: number | null | undefined
+  actualNet: number | null | undefined
+  orderFloor: number | null | undefined
+  orderTarget: number | null | undefined
+  aovFloor: number | null | undefined
+  aovTarget: number | null | undefined
+}): { order: string; aov: string } | null {
+  if (p.orderFloor == null || p.orderTarget == null || p.aovFloor == null || p.aovTarget == null) return null
+  const fmt = (n: number) => nfVi.format(Math.round(n))
+  const orderActual = p.actualOrder == null ? '—' : fmt(p.actualOrder)
+  const aovVal = aovFromSnapshot(p.actualNet, p.actualOrder)
+  const aovActual = aovVal == null ? '—' : `${fmt(aovVal)}₫`
+  return {
+    order: `${orderActual} / ${fmt(p.orderTarget)} đơn · sàn ${fmt(p.orderFloor)}`,
+    aov: `${aovActual} / ${fmt(p.aovTarget)}₫ · sàn ${fmt(p.aovFloor)}₫`,
+  }
 }
 
 // (H1.2 smSelectorVisible đã GỠ 27/07: SM Dashboard r2 thay store-selector-

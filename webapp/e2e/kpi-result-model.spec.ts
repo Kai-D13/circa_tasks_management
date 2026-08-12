@@ -26,6 +26,7 @@ const A = (store: string, value: number, off: number, aff: number, over: Partial
   offline_synced_at: null, affiliate_synced_at: null, ...over,
 })
 const TODAY = '2026-07-27'
+const TODAY_TS = '2026-07-27T10:00:00Z'
 
 test.describe('kpi result model @desktop', () => {
   test('cùng input → cùng output (deterministic) + totals đúng công thức super', () => {
@@ -243,5 +244,76 @@ test.describe('kpi offline order count + AOV (105) @desktop', () => {
     expect(offlineOrderLine(500, null)).toBeNull()
     expect(offlineOrderLine(0, 0)).toBe('0 đơn · AOV —')
     expect(offlineOrderLine(2_907_965_577, 22_283)).toBe('22.283 đơn · AOV 130.502₫')  // tổng thật 08/2026
+  })
+})
+
+// ── Mig 106: Chất lượng bán hàng trong result model ────────────────────────
+test.describe('kpi result model — Chất lượng bán hàng (106) @desktop', () => {
+  const QT = (over: Record<string, unknown> = {}) => ({
+    id: 't-1', store_id: 'a', pos_code: 'POS0018', kpi_target: 100,
+    store_kpi_group: 'Nhóm A', stores: { name: 'CIRCA SIGNATURE' },
+    kpi_campaign_store_tiers: [],
+    order_floor: 888, aov_floor: 190_540, order_target: 1046, aov_target: 194_046,
+    ...over,
+  })
+  const QA = (over: Record<string, unknown> = {}) => ({
+    store_id: 'a', actual_value: 116.1975, run_rate: 116.1975, remaining_target: 0,
+    achieved_tier_order: null, store_commission_pool: null, synced_at: TODAY_TS,
+    actual_offline: 203_039_424, actual_affiliate: 0, offline_order_count: 1046,
+    quality_floor_pass: true, offline_synced_at: TODAY_TS, affiliate_synced_at: null,
+    ...over,
+  })
+  const CAMP_Q = () => ({ ...CAMP(), metric_type: 'offline_order_aov' })
+
+  test('2 dòng metric gộp 1 nhóm: actual / mục tiêu · sàn (không đẻ cột ngang)', () => {
+    const m = buildCampaignResultModel(CAMP_Q(), [QT()], [QA()], TODAY)
+    const r = m.rows[0]
+    expect(r.orderAovLines).toEqual({
+      order: '1.046 / 1.046 đơn · sàn 888',
+      aov: '194.110₫ / 194.046₫ · sàn 190.540₫',
+    })
+    expect(r.qualityFloorPass).toBe(true)
+    expect(r.qualityKpiPass).toBe(true)
+    expect(r.qualityStatusLabel).toBe('Đạt KPI')
+    expect(m.qualityPassCount).toBe(1)
+  })
+
+  test('thủng sàn dù điểm > 100 → KHÔNG tính là đạt (không suy từ tier)', () => {
+    const m = buildCampaignResultModel(
+      CAMP_Q(),
+      [QT()],
+      [QA({ actual_value: 130, offline_order_count: 700, actual_offline: 200_000_000,
+        quality_floor_pass: false, achieved_tier_order: 3, store_commission_pool: 26_300_000 })],
+      TODAY,
+    )
+    expect(m.rows[0].qualityKpiPass).toBe(false)
+    expect(m.rows[0].qualityStatusLabel).toBe('Chưa đạt sàn số đơn')
+    expect(m.qualityPassCount).toBe(0)     // dù achieved_tier_order = 3
+  })
+
+  test('chưa phát sinh đơn → nhãn riêng; chưa sync → mọi field chất lượng null', () => {
+    const zero = buildCampaignResultModel(
+      CAMP_Q(), [QT()],
+      [QA({ actual_value: 0, offline_order_count: 0, actual_offline: 0, quality_floor_pass: false })],
+      TODAY,
+    )
+    expect(zero.rows[0].qualityStatusLabel).toBe('Chưa phát sinh đơn')
+    expect(zero.rows[0].orderAovLines?.aov).toContain('—')     // AOV vô định
+
+    const notSynced = buildCampaignResultModel(CAMP_Q(), [QT()], [], TODAY)
+    expect(notSynced.rows[0].qualityFloorPass).toBeNull()
+    expect(notSynced.rows[0].qualityKpiPass).toBe(false)
+    expect(notSynced.rows[0].qualityStatusLabel).toBeNull()
+    // cấu hình vẫn hiện để đối soát trước khi sync
+    expect(notSynced.rows[0].orderAovLines?.order).toBe('— / 1.046 đơn · sàn 888')
+  })
+
+  test('campaign GMV/khách: mọi field Chất lượng bán hàng = null/false (zero-touch)', () => {
+    const m = buildCampaignResultModel(CAMP(), [T('a', 1000)], [A('a', 500, 500, 0)], TODAY)
+    expect(m.rows[0].orderAovLines).toBeNull()
+    expect(m.rows[0].qualityFloorPass).toBeNull()
+    expect(m.rows[0].qualityKpiPass).toBe(false)
+    expect(m.rows[0].qualityStatusLabel).toBeNull()
+    expect(m.qualityPassCount).toBe(0)
   })
 })

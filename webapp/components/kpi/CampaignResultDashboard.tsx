@@ -28,17 +28,37 @@ export function CampaignResultDashboard({ model, emptyHint }: {
   const vnd = (n: number) => pres.value(n)
   const money = (n: number) => metricPresentation('gmv').value(n)
   const isCustomer = pres.kind === 'affiliate_customer_count'
+  // Mig 106: Chất lượng bán hàng — bộ card RIÊNG (KPI target 100% không có
+  // nghĩa khi cộng dồn) + 2 cell gộp Order/AOV trong bảng.
+  const isOrderAov = pres.kind === 'offline_order_aov'
+  const nfInt = (n: number) => new Intl.NumberFormat('vi-VN').format(Math.round(n))
   const synced = m.lastSyncedAt !== null
   return (
     <>
       {/* Summary cards — thứ tự/label/màu giữ nguyên tab Kết quả super */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        {([
+        {((isOrderAov ? [
+          // "X/Y cửa hàng đạt" theo KPI PASS (floor + >=100%), KHÔNG theo bậc.
+          { label: 'Cửa hàng đạt KPI', value: synced ? `${m.qualityPassCount}/${m.storeCount}` : '—', icon: Award,
+            tile: synced && m.qualityPassCount > 0 ? 'bg-green-100 text-green-600' : 'bg-primary/10 text-primary',
+            valueCls: synced && m.qualityPassCount > 0 ? 'text-green-600' : undefined },
+          { label: 'Tổng số đơn', value: synced && m.totalOfflineOrders != null ? `${nfInt(m.totalOfflineOrders)} đơn` : '—',
+            icon: TrendingUp, tile: 'bg-primary/10 text-primary' },
+          { label: 'AOV bình quân', value: synced && m.totalOfflineAov != null ? money(m.totalOfflineAov) : '—',
+            icon: StoreIcon, tile: 'bg-primary/10 text-primary' },
+          { label: 'Net Revenue (tham khảo)', value: synced ? money(m.totalOffline) : '—', icon: Wallet,
+            tile: 'bg-muted text-muted-foreground' },
+          { label: 'Tổng commission đạt', value: synced ? money(m.totalCommission) : '—', icon: Wallet,
+            tile: synced && m.totalCommission > 0 ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground',
+            valueCls: synced && m.totalCommission > 0 ? 'text-green-600' : undefined },
+          { label: 'Store đạt bậc', value: synced ? `${m.reachedStoreCount}/${m.storeCount}` : '—', icon: Award, tile: 'bg-primary/10 text-primary' },
+          { label: 'Thời hạn', value: m.deadlineLabel, icon: CalendarDays, tile: 'bg-muted text-muted-foreground' },
+        ] : [
           { label: 'Tổng KPI target', value: vnd(m.totalTarget), icon: Target, tile: 'bg-primary/10 text-primary' },
           { label: isCustomer ? 'Tổng số khách' : 'Tổng actual GMV', value: synced ? vnd(m.totalActual) : '—', icon: TrendingUp,
             // 105: campaign offline-only (không breakdown) → dòng phụ đặt ở
             // card này; hybrid có card GMV Offline riêng bên dưới.
-            sub: !m.showBreakdown && !isCustomer && synced
+            sub: !m.showBreakdown && !isCustomer && !isOrderAov && synced
               ? offlineOrderLine(m.totalOffline, m.totalOfflineOrders) : null,
             tile: synced && m.totalActual > 0 ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground' },
           ...(m.showBreakdown ? [
@@ -61,7 +81,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
             tile: 'bg-primary/10 text-primary',
             valueCls: m.performance != null ? performanceTone(m.performance) : undefined },
           { label: 'Thời hạn', value: m.deadlineLabel, icon: CalendarDays, tile: 'bg-muted text-muted-foreground' },
-        ] as { label: string; value: string; icon: LucideIcon; tile: string; valueCls?: string; bar?: boolean; sub?: string | null }[]).map((card) => (
+        ]) as { label: string; value: string; icon: LucideIcon; tile: string; valueCls?: string; bar?: boolean; sub?: string | null }[]).map((card) => (
           <Card key={card.label}>
             <CardContent className="p-3">
               <div className="flex items-start gap-2.5">
@@ -132,7 +152,8 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                 {m.rows.map((r) => {
                   // 105: dòng phụ theo store — null ⇒ không render (snapshot
                   // cũ/campaign khách/affiliate-only).
-                  const orderLine = () => isCustomer ? null : offlineOrderLine(r.actual?.actual_offline ?? 0, r.offlineOrderCount)
+                  const orderLine = () => (isCustomer || isOrderAov)
+                    ? null : offlineOrderLine(r.actual?.actual_offline ?? 0, r.offlineOrderCount)
                   const a = r.actual
                   return (
                     <tr key={r.targetId} className="hover:bg-muted/30">
@@ -149,6 +170,31 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                           <span className="block text-[11px] text-muted-foreground/80">{orderLine()}</span>
                         )}
                       </td>
+                      {/* 106: Order + AOV GỘP 1 cột 2 dòng + cột trạng thái 2 sàn */}
+                      {isOrderAov && (
+                        <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                          {r.orderAovLines ? (
+                            <>
+                              <span className="block whitespace-nowrap">{r.orderAovLines.order}</span>
+                              <span className="block whitespace-nowrap">{r.orderAovLines.aov}</span>
+                            </>
+                          ) : '—'}
+                        </td>
+                      )}
+                      {isOrderAov && (
+                        <td className="px-4 py-2.5 text-xs">
+                          {r.qualityStatusLabel ? (
+                            <span className={cn(
+                              'inline-block px-2 py-0.5 rounded-full font-medium',
+                              r.qualityKpiPass ? 'bg-green-100 text-green-700'
+                                : r.qualityFloorPass ? 'bg-primary/10 text-primary'
+                                : 'bg-amber-100 text-amber-700',
+                            )}>
+                              {r.qualityStatusLabel}
+                            </span>
+                          ) : <span className="text-muted-foreground">—</span>}
+                        </td>
+                      )}
                       {m.showBreakdown && (
                         <td className="px-4 py-2.5 text-right text-muted-foreground whitespace-nowrap">
                           {a?.actual_offline != null ? vnd(a.actual_offline) : '—'}

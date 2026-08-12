@@ -9,6 +9,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { buttonVariants } from '@/components/ui/button'
 import { CampaignStatusButton } from '@/components/kpi/CampaignStatusButton'
 import { STATUS_META } from '@/lib/kpi/status'
+import { qualityKpiPass } from '@/lib/kpi/orderAov'
 import { metricPresentation } from '@/lib/kpi/campaignDisplay'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
@@ -39,23 +40,27 @@ export default async function CampaignsPage() {
       .is('archived_at', null) // Archive (098): campaign lưu trữ biến mất khỏi list
       .order('created_at', { ascending: false }),
     supabase.from('kpi_campaign_store_targets').select('campaign_id, kpi_target'),
-    supabase.from('kpi_campaign_store_actuals').select('campaign_id, actual_value, synced_at'),
+    // 106: + quality_floor_pass để đếm 'X/Y cửa hàng đạt' (KPI pass, không phải bậc).
+    supabase.from('kpi_campaign_store_actuals').select('campaign_id, actual_value, quality_floor_pass, synced_at'),
   ])
   // A failed side-query must NOT render as "0đ / chưa đồng bộ" — that reads as
   // real data on a money screen. Surface it like the detail page does.
   const queryError = campaignsErr?.message ?? targetsErr?.message ?? actualsErr?.message ?? null
   if (queryError) console.error('[campaigns-list] query failed:', queryError)
 
-  const agg = new Map<string, { stores: number; target: number; actual: number; lastSync: string | null }>()
+  const agg = new Map<string, { stores: number; target: number; actual: number; pass: number; lastSync: string | null }>()
+  const blank = () => ({ stores: 0, target: 0, actual: 0, pass: 0, lastSync: null as string | null })
   for (const t of (targets ?? [])) {
-    const a = agg.get(t.campaign_id as string) ?? { stores: 0, target: 0, actual: 0, lastSync: null }
+    const a = agg.get(t.campaign_id as string) ?? blank()
     a.stores += 1
     a.target += Number(t.kpi_target) || 0
     agg.set(t.campaign_id as string, a)
   }
   for (const r of (actuals ?? [])) {
-    const a = agg.get(r.campaign_id as string) ?? { stores: 0, target: 0, actual: 0, lastSync: null }
+    const a = agg.get(r.campaign_id as string) ?? blank()
     a.actual += Number(r.actual_value) || 0
+    // 106: đạt KPI = qua CẢ 2 sàn VÀ điểm >= 100 (KHÔNG suy từ bậc).
+    if (qualityKpiPass(r.quality_floor_pass as boolean | null, r.actual_value as number | null)) a.pass += 1
     if (!a.lastSync || (r.synced_at as string) > a.lastSync) a.lastSync = r.synced_at as string
     agg.set(r.campaign_id as string, a)
   }
@@ -118,10 +123,15 @@ export default async function CampaignsPage() {
           <CardContent className="p-0">
             {list.map((c) => {
               const s = STATUS_META[c.status] ?? STATUS_META.draft
-              const a = agg.get(c.id) ?? { stores: 0, target: 0, actual: 0, lastSync: null }
+              const a = agg.get(c.id) ?? blank()
               const vnd = metricPresentation(c.metric_type).value
               const synced = a.lastSync !== null
-              const pct = a.target > 0 ? (a.actual / a.target) * 100 : 0
+              // 106: campaign Chất lượng bán hàng — "Mục tiêu/Đã đạt" bằng tiền
+              // vô nghĩa (kpi_target là điểm 100); dùng số cửa hàng ĐẠT KPI.
+              const isOrderAov = c.metric_type === 'offline_order_aov'
+              const pct = isOrderAov
+                ? (a.stores > 0 ? (a.pass / a.stores) * 100 : 0)
+                : (a.target > 0 ? (a.actual / a.target) * 100 : 0)
               // Money-screen color rule: grey until synced (0% must not read as a
               // real result), brand orange while running, green only at ≥100%
               // (brand guide: green stays a small accent).
@@ -163,8 +173,17 @@ export default async function CampaignsPage() {
                       {/* Mobile: money + progress stay visible — this is a money screen */}
                       <div className="mt-2 md:hidden space-y-1.5">
                         <p className="text-sm">
-                          <span className="text-muted-foreground">Mục tiêu </span><span className="font-semibold">{vnd(a.target)}</span>
-                          <span className="text-muted-foreground"> · Đã đạt </span><span className="font-semibold">{synced ? vnd(a.actual) : '—'}</span>
+                          {isOrderAov ? (
+                            <>
+                              <span className="text-muted-foreground">Đạt KPI </span>
+                              <span className="font-semibold">{synced ? `${a.pass}/${a.stores} cửa hàng` : '—'}</span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="text-muted-foreground">Mục tiêu </span><span className="font-semibold">{vnd(a.target)}</span>
+                              <span className="text-muted-foreground"> · Đã đạt </span><span className="font-semibold">{synced ? vnd(a.actual) : '—'}</span>
+                            </>
+                          )}
                         </p>
                         {progress}
                       </div>
@@ -172,8 +191,17 @@ export default async function CampaignsPage() {
 
                     {/* Targets + actual (desktop) */}
                     <div className="hidden md:block flex-1 text-sm">
-                      <p><span className="text-muted-foreground">Mục tiêu: </span><span className="font-semibold">{vnd(a.target)}</span></p>
-                      <p><span className="text-muted-foreground">Đã đạt: </span><span className="font-semibold">{synced ? vnd(a.actual) : '—'}</span></p>
+                      {isOrderAov ? (
+                        <>
+                          <p><span className="text-muted-foreground">Chỉ số: </span><span className="font-semibold">Chất lượng bán hàng</span></p>
+                          <p><span className="text-muted-foreground">Đạt KPI: </span><span className="font-semibold">{synced ? `${a.pass}/${a.stores} cửa hàng` : '—'}</span></p>
+                        </>
+                      ) : (
+                        <>
+                          <p><span className="text-muted-foreground">Mục tiêu: </span><span className="font-semibold">{vnd(a.target)}</span></p>
+                          <p><span className="text-muted-foreground">Đã đạt: </span><span className="font-semibold">{synced ? vnd(a.actual) : '—'}</span></p>
+                        </>
+                      )}
                     </div>
 
                     {/* Progress (desktop) */}
