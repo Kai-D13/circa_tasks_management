@@ -75,7 +75,39 @@ const CUSTOMER_GUIDE: ImportGuideModel = {
     `Đã nạp ${upserted} cửa hàng — kết quả cũ đã được xoá, bấm "Đồng bộ số khách" ở tab Kết quả để cập nhật`,
 }
 
+// Mig 106 - Chất lượng bán hàng (contract 12/08): file CHỈ có 2 mục tiêu.
+// KHÔNG kpi_target (hệ thống chuẩn hóa = 100%), KHÔNG net_revenue (số tham
+// khảo của Finance — AOV đã làm tròn VNĐ nên net khác order_target × aov_target),
+// KHÔNG order_floor/aov_floor (contract cũ đã bỏ). Tier: ĐÚNG 1 bậc mốc 100%.
+const ORDER_AOV_GUIDE: ImportGuideModel = {
+  columns: [
+    { col: 'pos_code', meaning: 'Mã cửa hàng', example: 'POS0018' },
+    { col: 'order_target', meaning: 'Số đơn mục tiêu trong kỳ (số nguyên)', example: '1046' },
+    { col: 'aov_target', meaning: 'AOV mục tiêu — giá trị đơn trung bình (VNĐ nguyên)', example: '194046' },
+    { col: 'store_kpi_group', meaning: 'Phân loại Store (nhãn hiển thị theo file)', example: 'Nhóm A' },
+    { col: 'tier_1_threshold_pct', meaning: 'Mốc thưởng — phải đúng 100', example: '100' },
+    { col: 'tier_1_commission_amount', meaning: 'Commission Store khi đạt KPI (VNĐ)', example: '20800000' },
+    { col: 'pos_name', meaning: 'Tên cửa hàng', example: 'CIRCA SIGNATURE', optional: true },
+    { col: 'note', meaning: 'Ghi chú', example: 'Demo', optional: true },
+  ],
+  sampleCsv: [
+    'pos_code,order_target,aov_target,store_kpi_group,tier_1_threshold_pct,tier_1_commission_amount,pos_name,note',
+    'POS0018,1046,194046,Nhóm A,100,20800000,CIRCA SIGNATURE,Demo',
+    'POS0013,1187,126644,Nhóm A,100,20800000,CIRCA MIZUKI,Demo',
+    'POS0065,586,226762,Nhóm A,100,20800000,CIRCA SYMPHONY,Demo',
+  ].join('\n'),
+  sampleFileName: 'mau-chien-dich-chat-luong-ban-hang.csv',
+  boundaryWarning: 'Điểm hoàn thành lấy theo CHỈ SỐ THẤP HƠN giữa (số đơn / mục tiêu) và (AOV / mục tiêu). Chỉ đạt KPI khi CẢ HAI đều đạt. File KHÔNG có cột kpi_target và net_revenue.',
+  targetHeaderLabel: 'Mục tiêu (đơn · AOV)',
+  // Cột target ở preview hiển thị điểm chuẩn hóa — số đơn/AOV có cột riêng.
+  formatTarget: () => '100%',
+  commitToast: (upserted) =>
+    `Đã nạp ${upserted} cửa hàng — kết quả cũ đã được xoá, bấm "Đồng bộ chất lượng bán hàng" ở tab Kết quả để cập nhật`,
+}
+
 // Default 'gmv' cho giá trị lạ/thiếu (caller cũ) — nhất quán metricPresentation.
 export function campaignImportGuide(metricType?: string | null): ImportGuideModel {
-  return metricType === 'affiliate_customer_count' ? CUSTOMER_GUIDE : GMV_GUIDE
+  if (metricType === 'affiliate_customer_count') return CUSTOMER_GUIDE
+  if (metricType === 'offline_order_aov') return ORDER_AOV_GUIDE
+  return GMV_GUIDE
 }

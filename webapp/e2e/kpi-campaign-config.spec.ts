@@ -34,25 +34,25 @@ test.describe('kpi campaign metric contract @desktop', () => {
 
   // ── Mig 103: resolveCampaignType — loại chiến dịch khi tạo ────────────────
   test('resolveCampaignType: default/gmv → đi ĐÚNG đường resolveMetricInput cũ (order_type=all)', () => {
-    expect(resolveCampaignType({ affiliate: false, customer: false }, {})).toEqual({
+    expect(resolveCampaignType({ affiliate: false, customer: false, orderAov: false }, {})).toEqual({
       ok: true, metric_type: 'gmv', order_type: 'all', metric_offline: true, metric_affiliate: false,
     })
-    expect(resolveCampaignType({ affiliate: true, customer: false }, { metric_type: 'gmv', metric_affiliate: true })).toEqual({
+    expect(resolveCampaignType({ affiliate: true, customer: false, orderAov: false }, { metric_type: 'gmv', metric_affiliate: true })).toEqual({
       ok: true, metric_type: 'gmv', order_type: 'all', metric_offline: true, metric_affiliate: true,
     })
     // flag affiliate tắt + tick affiliate → vẫn bị resolveMetricInput chặn
-    const r = resolveCampaignType({ affiliate: false, customer: true }, { metric_affiliate: true })
+    const r = resolveCampaignType({ affiliate: false, customer: true, orderAov: false }, { metric_affiliate: true })
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error).toContain('KPI_AFFILIATE_ENABLED')
   })
 
   test('resolveCampaignType: customer → contract cột CỐ ĐỊNH (offline=false/affiliate=true/order_type=online)', () => {
-    expect(resolveCampaignType({ affiliate: false, customer: true }, { metric_type: 'affiliate_customer_count' })).toEqual({
+    expect(resolveCampaignType({ affiliate: false, customer: true, orderAov: false }, { metric_type: 'affiliate_customer_count' })).toEqual({
       ok: true, metric_type: 'affiliate_customer_count', order_type: 'online',
       metric_offline: false, metric_affiliate: true,
     })
     // input metric flags bị BỎ QUA — contract cố định, client không đổi được
-    expect(resolveCampaignType({ affiliate: true, customer: true },
+    expect(resolveCampaignType({ affiliate: true, customer: true, orderAov: false },
       { metric_type: 'affiliate_customer_count', metric_offline: true, metric_affiliate: false })).toEqual({
       ok: true, metric_type: 'affiliate_customer_count', order_type: 'online',
       metric_offline: false, metric_affiliate: true,
@@ -61,15 +61,15 @@ test.describe('kpi campaign metric contract @desktop', () => {
 
   test('resolveCampaignType: FLAG interplay 2 chiều — customer KHÔNG cần KPI_AFFILIATE_ENABLED; customer flag tắt → từ chối', () => {
     // affiliate flag TẮT vẫn tạo được customer (2 flag độc lập)
-    expect(resolveCampaignType({ affiliate: false, customer: true },
+    expect(resolveCampaignType({ affiliate: false, customer: true, orderAov: false },
       { metric_type: 'affiliate_customer_count' }).ok).toBe(true)
-    const r = resolveCampaignType({ affiliate: true, customer: false }, { metric_type: 'affiliate_customer_count' })
+    const r = resolveCampaignType({ affiliate: true, customer: false, orderAov: false }, { metric_type: 'affiliate_customer_count' })
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error).toContain('KPI_AFFILIATE_CUSTOMER_ENABLED')
   })
 
   test('resolveCampaignType: metric_type lạ → từ chối', () => {
-    const r = resolveCampaignType({ affiliate: true, customer: true }, { metric_type: 'bogus' })
+    const r = resolveCampaignType({ affiliate: true, customer: true, orderAov: false }, { metric_type: 'bogus' })
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.error).toContain('không hợp lệ')
   })
@@ -119,5 +119,37 @@ test.describe('kpi campaign activation gate @desktop', () => {
   test('affiliate: đủ điều kiện (targets OS-active + health READY) → null', () => {
     expect(activationBlockReason({ metricAffiliate: true, targetCount: 5, invalidStores: [], health: READY }))
       .toBeNull()
+  })
+
+  // ── Mig 106: loại "Chất lượng bán hàng" — fail-closed điểm 3/3 ────────────
+  test('ORDER_AOV: flag tắt → server TỪ CHỐI dù client gửi metric_type', () => {
+    const r = resolveCampaignType(
+      { affiliate: true, customer: true, orderAov: false },
+      { metric_type: 'offline_order_aov' },
+    )
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('KPI_ORDER_AOV_CAMPAIGN_ENABLED')
+  })
+
+  test('ORDER_AOV: flag bật → contract cột CỐ ĐỊNH, bỏ qua metric client gửi', () => {
+    const r = resolveCampaignType(
+      { affiliate: false, customer: false, orderAov: true },
+      { metric_type: 'offline_order_aov', metric_offline: false, metric_affiliate: true },
+    )
+    expect(r).toEqual({
+      ok: true, metric_type: 'offline_order_aov', order_type: 'all',
+      metric_offline: true, metric_affiliate: false,
+    })
+  })
+
+  test('ORDER_AOV: 3 flag ĐỘC LẬP — bật order_aov không mở campaign khách và ngược lại', () => {
+    const cust = resolveCampaignType(
+      { affiliate: false, customer: false, orderAov: true },
+      { metric_type: 'affiliate_customer_count' },
+    )
+    expect(cust.ok).toBe(false)
+    const gmv = resolveCampaignType({ affiliate: false, customer: false, orderAov: true }, {})
+    expect(gmv.ok).toBe(true)
+    if (gmv.ok) expect(gmv.metric_type).toBe('gmv')
   })
 })

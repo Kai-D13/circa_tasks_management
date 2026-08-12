@@ -2,7 +2,7 @@ import 'server-only'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { campaignDailyQuery, loadServiceAccount, runBigQuery } from '@/lib/targets/bigquery'
 import { getAffiliateSyncHealth, supabaseAffiliateHealthDb } from '@/lib/affiliate/health'
-import { isKpiAffiliateEnabled, isKpiAffiliateCustomerEnabled } from '@/lib/kpi/flags'
+import { isKpiAffiliateEnabled, isKpiAffiliateCustomerEnabled, isKpiOrderAovEnabled } from '@/lib/kpi/flags'
 import {
   syncCampaignWithDeps,
   type CustomerAggResult, type SyncCampaignDeps, type SyncCampaignResult,
@@ -86,6 +86,7 @@ function realDeps(): SyncCampaignDeps {
     nowMs: () => Date.now(),
     isAffiliateFeatureEnabled: () => isKpiAffiliateEnabled(),
     isAffiliateCustomerFeatureEnabled: () => isKpiAffiliateCustomerEnabled(),
+    isOrderAovFeatureEnabled: () => isKpiOrderAovEnabled(),
   }
 }
 

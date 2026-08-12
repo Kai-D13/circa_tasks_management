@@ -18,9 +18,11 @@ import { cn } from '@/lib/utils'
 // render khi customerEnabled (KPI_AFFILIATE_CUSTOMER_ENABLED — prop server);
 // flag tắt → UI y hệt cũ. Chọn Số khách → ẩn 2 checkbox (contract cột cố
 // định server-side), gửi metric_type cho createCampaign.
-export function CampaignWizard({ affiliateEnabled = false, customerEnabled = false }: {
+export function CampaignWizard({ affiliateEnabled = false, customerEnabled = false, orderAovEnabled = false }: {
   affiliateEnabled?: boolean
   customerEnabled?: boolean
+  // Mig 106: KPI_ORDER_AOV_CAMPAIGN_ENABLED (prop server — KHÔNG NEXT_PUBLIC).
+  orderAovEnabled?: boolean
 }) {
   const [step, setStep] = useState<1 | 2>(1)
   const [campaignId, setCampaignId] = useState<string | null>(null)
@@ -29,18 +31,30 @@ export function CampaignWizard({ affiliateEnabled = false, customerEnabled = fal
   const [end, setEnd] = useState('')
   const [metricOffline, setMetricOffline] = useState(true)
   const [metricAffiliate, setMetricAffiliate] = useState(false)
-  const [campaignType, setCampaignType] = useState<'gmv' | 'affiliate_customer_count'>('gmv')
+  const [campaignType, setCampaignType] =
+    useState<'gmv' | 'affiliate_customer_count' | 'offline_order_aov'>('gmv')
   const isCustomer = customerEnabled && campaignType === 'affiliate_customer_count'
+  const isOrderAov = orderAovEnabled && campaignType === 'offline_order_aov'
+  // Chỉ hiện segmented khi có ÍT NHẤT 1 loại ngoài GMV được bật.
+  const showTypePicker = customerEnabled || orderAovEnabled
+  const typeOptions: [string, string][] = [
+    ['gmv', 'Doanh số'],
+    ...(customerEnabled ? [['affiliate_customer_count', 'Số khách Affiliate'] as [string, string]] : []),
+    ...(orderAovEnabled ? [['offline_order_aov', 'Chất lượng bán hàng'] as [string, string]] : []),
+  ]
   const [pending, startTransition] = useTransition()
 
   function submitInfo() {
     if (!name.trim()) { toast.error('Nhập tên chiến dịch'); return }
     if (!start || !end) { toast.error('Chọn thời gian áp dụng'); return }
     if (end < start) { toast.error('Ngày kết thúc phải sau ngày bắt đầu'); return }
-    if (!isCustomer && !metricOffline && !metricAffiliate) { toast.error('Chọn ít nhất một chỉ số doanh số'); return }
+    if (!isCustomer && !isOrderAov && !metricOffline && !metricAffiliate) { toast.error('Chọn ít nhất một chỉ số doanh số'); return }
     startTransition(async () => {
       const r = await createCampaign(isCustomer
         ? { name: name.trim(), start_date: start, end_date: end, metric_type: 'affiliate_customer_count' }
+        : isOrderAov
+        // Chỉ số do LOẠI quy định (offline=true/affiliate=false) — server ép lại.
+        ? { name: name.trim(), start_date: start, end_date: end, metric_type: 'offline_order_aov' }
         : {
             name: name.trim(), start_date: start, end_date: end,
             metric_offline: metricOffline,
@@ -82,15 +96,15 @@ export function CampaignWizard({ affiliateEnabled = false, customerEnabled = fal
                 <input type="date" aria-label="Đến ngày" value={end} onChange={(e) => setEnd(e.target.value)} className="w-full h-9 px-3 rounded-md border bg-background text-sm" />
               </div>
             </div>
-            {customerEnabled && (
+            {showTypePicker && (
               <div className="space-y-1">
                 <label className="text-xs text-muted-foreground">Loại chiến dịch</label>
-                <div className="flex gap-2">
-                  {([['gmv', 'Doanh số'], ['affiliate_customer_count', 'Số khách Affiliate']] as const).map(([v, label]) => (
+                <div className="flex flex-wrap gap-2">
+                  {typeOptions.map(([v, label]) => (
                     <button
                       key={v}
                       type="button"
-                      onClick={() => setCampaignType(v)}
+                      onClick={() => setCampaignType(v as typeof campaignType)}
                       className={cn(
                         'text-xs px-3 rounded-md border font-medium min-h-[44px] md:min-h-0 md:py-1.5',
                         campaignType === v
@@ -105,6 +119,11 @@ export function CampaignWizard({ affiliateEnabled = false, customerEnabled = fal
                 {isCustomer && (
                   <p className="text-xs text-muted-foreground">
                     Đếm khách duy nhất có đơn Affiliate giao thành công trong kỳ — mỗi khách tính 1 lần, target nhập theo SỐ KHÁCH.
+                  </p>
+                )}
+                {isOrderAov && (
+                  <p className="text-xs text-muted-foreground">
+                    Đánh giá đồng thời số đơn (90%) và giá trị đơn trung bình (10%), mỗi chỉ số có SÀN bắt buộc — file target gồm 4 chỉ số, hệ thống chuẩn hóa mục tiêu = 100%.
                   </p>
                 )}
               </div>
@@ -154,7 +173,7 @@ export function CampaignWizard({ affiliateEnabled = false, customerEnabled = fal
         <Card>
           <CardContent className="p-4">
             <p className="text-sm font-medium mb-3">Nạp file target + bậc commission</p>
-            <CampaignImport campaignId={campaignId} redirectTo={`/targets/campaigns/${campaignId}`} metricType={isCustomer ? 'affiliate_customer_count' : 'gmv'} />
+            <CampaignImport campaignId={campaignId} redirectTo={`/targets/campaigns/${campaignId}`} metricType={isCustomer ? 'affiliate_customer_count' : isOrderAov ? 'offline_order_aov' : 'gmv'} />
           </CardContent>
         </Card>
       )}

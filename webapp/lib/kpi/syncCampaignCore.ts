@@ -5,10 +5,12 @@
 // Return contract: success | snapshot_preserved (giữ số cũ + lý do) | failed.
 
 import type { AffiliateSyncHealth } from '@/lib/affiliate/health'
+import { readOfflineSource } from '@/lib/kpi/offlineSource'
 import {
-  buildCampaignSnapshot, buildCustomerSnapshot, effectiveEndISO, monthChunks, nextDayISO,
+  buildCampaignSnapshot, buildCustomerSnapshot, buildOrderAovSnapshot, effectiveEndISO,
   vnDayRange, vnTodayISO,
-  type ActualRowPayload, type DailyRowPayload, type TargetRow,
+  type ActualRowPayload, type DailyRowPayload, type OrderAovActualPayload,
+  type OrderAovDailyPayload, type TargetRow,
 } from '@/lib/kpi/engine'
 
 export type SyncCampaignResult =
@@ -55,7 +57,13 @@ export interface SyncCampaignDeps {
   aggregateAffiliateCustomers(storeIds: string[], from: string, to: string): Promise<DbResult<CustomerAggResult>>
   loadBqServiceAccount(): unknown | null
   runBqChunk(sa: unknown, chunkStart: string, chunkEnd: string): Promise<Record<string, unknown>[]>
-  replaceActuals(campaignId: string, daily: DailyRowPayload[], actuals: ActualRowPayload[]): Promise<DbResult<number>>
+  // Mig 106: payload campaign Chất lượng bán hàng có SHAPE RIÊNG (chỉ số thô —
+  // RPC tự tính phần còn lại) nên dep nhận union, không ép về ActualRowPayload.
+  replaceActuals(
+    campaignId: string,
+    daily: (DailyRowPayload | OrderAovDailyPayload)[],
+    actuals: (ActualRowPayload | OrderAovActualPayload)[],
+  ): Promise<DbResult<number>>
   nowMs(): number
   // r1.2 (audit P1 flag boundary): trạng thái KPI_AFFILIATE_ENABLED — campaign
   // có metric_affiliate khi flag TẮT không được vận hành (kể cả hybrid).
@@ -63,6 +71,9 @@ export interface SyncCampaignDeps {
   // Mig 103: KPI_AFFILIATE_CUSTOMER_ENABLED — gate DUY NHẤT của campaign
   // customer, ĐỘC LẬP với isAffiliateFeatureEnabled (test khóa 2 chiều).
   isAffiliateCustomerFeatureEnabled(): boolean
+  // Mig 106: KPI_ORDER_AOV_CAMPAIGN_ENABLED — gate DUY NHẤT của campaign
+  // Chất lượng bán hàng, độc lập 2 flag affiliate ở trên.
+  isOrderAovFeatureEnabled(): boolean
 }
 
 export async function syncCampaignWithDeps(
@@ -80,11 +91,16 @@ export async function syncCampaignWithDeps(
   // ── Mig 103: DISCRIMINATOR metric_type — branch TRƯỚC mọi check boolean.
   // Giá trị lạ → failed (engine version cũ hơn DB / data hỏng — không đoán);
   // customer → flow riêng, KHÔNG chạm một dòng nào của flow GMV bên dưới.
-  if (c.metric_type !== 'gmv' && c.metric_type !== 'affiliate_customer_count') {
+  if (c.metric_type !== 'gmv' && c.metric_type !== 'affiliate_customer_count'
+      && c.metric_type !== 'offline_order_aov') {
     return failed(`metric_type không hỗ trợ: ${c.metric_type} — engine từ chối vận hành (fail-closed)`)
   }
   if (c.metric_type === 'affiliate_customer_count') {
     return syncCustomerCampaign(campaignId, c, deps, failed, preserved)
+  }
+  // Mig 106: Chất lượng bán hàng — flow BQ-only, KHÔNG chạm nguồn affiliate.
+  if (c.metric_type === 'offline_order_aov') {
+    return syncOrderAovCampaign(campaignId, c, deps, failed, preserved)
   }
 
   // ── Từ đây: metric_type='gmv' — flow production GIỮ NGUYÊN TỪNG DÒNG ──
@@ -169,62 +185,33 @@ export async function syncCampaignWithDeps(
 
   // ── Nhánh Offline: BigQuery — CHỈ khi metric bật (affiliate-only tuyệt đối
   //    không đụng credential, audit #5) ──
-  const offlineByPos = new Map<string, Map<string, number>>()
+  // Nguồn Offline (BigQuery) — CHỈ khi metric bật (affiliate-only tuyệt đối
+  // không đụng credential, audit #5). Toàn bộ guard + canary nằm trong
+  // readOfflineSource (dùng chung với campaign Chất lượng bán hàng, khác nhau
+  // đúng tham số `strict`).
+  let offlineByPos = new Map<string, Map<string, number>>()
+  // 105: số đơn Offline theo (pos, ngày) — chỉ số PHỤ của campaign GMV.
+  let offlineOrdersByPos = new Map<string, Map<string, number>>()
+  // Cảnh báo KHÔNG chặn ghi tiền (mirror warnings nhánh customer).
+  const offlineWarnings: string[] = []
   let offlineSyncedAt: string | null = null
   if (metricOffline) {
     const sa = deps.loadBqServiceAccount()
     if (!sa) return failed('Chưa cấu hình BigQuery key cho môi trường này. Kiểm tra BQ_SERVICE_ACCOUNT_KEY rồi thử lại.')
     if (rangeValid) {
-      for (const [chunkStart, chunkEnd] of monthChunks(c.start_date, effEnd)) {
-        let rows: Record<string, unknown>[]
-        try {
-          rows = await deps.runBqChunk(sa, chunkStart, chunkEnd)
-        } catch (err) {
-          // Nguồn BQ trục trặc → giữ snapshot cũ, không partial (QA gate).
-          return preserved(`BigQuery lỗi: ${err instanceof Error ? err.message : String(err)}`)
-        }
-        for (const r of rows) {
-          const pos = String(r.pos_code ?? '').trim().toUpperCase()
-          const date = String(r.date ?? '').slice(0, 10)
-          if (!pos || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue
-          // ⚠ BQ-V2 (05/08): nguồn schema V2 — bảng buymed_tech pre-aggregated 1 row/store/
-          // ngày — source_row_count != 1 hoặc key (pos, ngày) lặp lại nghĩa là
-          // NGUỒN SAI → preserve snapshot (fail-closed, không ghi số khả nghi).
-          const srcCount = Number(r.source_row_count ?? 1)
-          if (!Number.isFinite(srcCount) || srcCount !== 1) {
-            return preserved(`Nguồn BQ bất thường: ${pos}/${date} có source_row_count=${String(r.source_row_count)} (kỳ vọng 1 row/store/ngày — bảng pre-aggregated); giữ snapshot cũ`)
-          }
-          if (offlineByPos.get(pos)?.has(date)) {
-            return preserved(`Nguồn BQ trùng key ${pos}/${date} trong cùng lần pull — giữ snapshot cũ`)
-          }
-          if (!offlineByPos.has(pos)) offlineByPos.set(pos, new Map())
-          // ⚠ Contract 30/07: field `gmv` từ campaignDailyQuery là alias của
-          // SUM(net_revenue) — giá trị Offline của campaign = Net Revenue.
-          offlineByPos.get(pos)!.set(date, Number(r.gmv ?? 0) || 0)
-        }
-      }
-
-      // ⚠ BQ-V2 r1 (audit P1#2): EXPECTED COVERAGE — bảng mới có row cho MỌI
-      // ngày trong kỳ (kể cả tương lai, net_revenue NULL → 0). Vì vậy mỗi
-      // (target POS × ngày) từ start_date → effectiveEnd PHẢI có row; thiếu ô
-      // nào (kể cả 1 ngày giữa kỳ) = nguồn lỗi → PRESERVE, tuyệt đối không ghi
-      // snapshot thấp hơn thực tế (KPI/commission). Phân biệt rõ: row tồn tại
-      // với net_revenue NULL là HỢP LỆ (=0); row KHÔNG tồn tại là LỖI NGUỒN.
-      const targetPos = [...new Set(
-        targets.map((t) => String(t.pos_code ?? '').trim().toUpperCase()).filter(Boolean),
-      )]
-      const missing: string[] = []
-      for (const pos of targetPos) {
-        const byDate = offlineByPos.get(pos)
-        for (let d = c.start_date; d <= effEnd; d = nextDayISO(d)) {
-          if (!byDate?.has(d)) missing.push(`${pos}/${d}`)
-        }
-      }
-      if (missing.length > 0) {
-        const sample = missing.slice(0, 5).join(', ')
-        return preserved(
-          `Nguồn BQ THIẾU ${missing.length} ô dữ liệu (POS×ngày) trong kỳ — vd: ${sample}${missing.length > 5 ? ', …' : ''}; giữ snapshot cũ`)
-      }
+      const src = await readOfflineSource({
+        sa,
+        startISO: c.start_date,
+        effEndISO: effEnd,
+        targetPosCodes: targets.map((t) => t.pos_code),
+        // GMV: số đơn/AOV là chỉ số PHỤ → DEGRADE POS lỗi, KHÔNG đóng băng tiền.
+        strict: false,
+        runBqChunk: deps.runBqChunk,
+      })
+      if (!src.ok) return preserved(src.reason)
+      offlineByPos = src.offlineByPos
+      offlineOrdersByPos = src.ordersByPos
+      offlineWarnings.push(...src.warnings)
     }
     offlineSyncedAt = new Date(deps.nowMs()).toISOString()
   }
@@ -237,6 +224,7 @@ export async function syncCampaignWithDeps(
     metricOffline,
     metricAffiliate,
     offlineByPos,
+    offlineOrdersByPos,
     affiliateByStore,
     snapshotTs,
     offlineSyncedAt,
@@ -252,6 +240,8 @@ export async function syncCampaignWithDeps(
     upserted: count ?? actuals.length,
     dailyRows: daily.length,
     unmatched: unmatchedPos,
+    // r1.3: nguồn số đơn hỏng ở vài pos → cảnh báo (KHÔNG chặn ghi tiền).
+    ...(offlineWarnings.length > 0 ? { warnings: offlineWarnings } : {}),
   }
 }
 
@@ -358,5 +348,87 @@ async function syncCustomerCampaign(
     dailyRows: daily.length,
     unmatched: [],
     ...(warnings.length > 0 ? { warnings } : {}),
+  }
+}
+
+// ── Mig 106: flow campaign "Chất lượng bán hàng" (offline_order_aov) ────────
+// KHÁC BIỆT CỐT LÕI với campaign GMV:
+//   · Nguồn DUY NHẤT = BigQuery Offline. KHÔNG gọi affiliate health/aggregate
+//     (test đếm 0 call) — loại này không có chỉ số affiliate.
+//   · STRICT: số đơn + AOV CHÍNH LÀ KPI ⇒ mọi canary lỗi (thiếu alias, số đơn
+//     lẻ/âm, lệch NULL, có doanh thu mà 0 đơn) đều PRESERVE toàn snapshot;
+//     tuyệt đối không degrade như campaign GMV.
+//   · Payload gửi RPC chỉ có SỐ THÔ (Net Revenue + số đơn, theo ngày và theo
+//     kỳ). Điểm/bậc/commission do RPC 106 tự tính — app không gửi.
+async function syncOrderAovCampaign(
+  campaignId: string,
+  c: CampaignConfig,
+  deps: SyncCampaignDeps,
+  failed: (error: string) => SyncCampaignResult,
+  preserved: (reason: string) => SyncCampaignResult,
+): Promise<SyncCampaignResult> {
+  // Gate DUY NHẤT của loại này (độc lập 2 flag affiliate).
+  if (!deps.isOrderAovFeatureEnabled()) {
+    return preserved('KPI_ORDER_AOV_CAMPAIGN_ENABLED đang tắt — campaign Chất lượng bán hàng không vận hành, giữ snapshot cũ')
+  }
+  // Contract cột (CHECK chk_kpi_campaigns_order_aov_contract trong DB — engine
+  // vẫn fail-closed, không dựng payload ở trạng thái lệch).
+  if (c.metric_offline !== true || c.metric_affiliate !== false) {
+    return failed('Campaign Chất lượng bán hàng sai contract cột (cần metric_offline=true + metric_affiliate=false) — kiểm tra dữ liệu')
+  }
+
+  const todayVn = vnTodayISO(deps.nowMs())
+  if (c.start_date > todayVn) {
+    return preserved(`campaign chưa đến kỳ (bắt đầu ${c.start_date}, hôm nay ${todayVn}) — không gọi nguồn dữ liệu, giữ snapshot`)
+  }
+
+  const { data: targets, error: tErr } = await deps.loadTargets(campaignId)
+  if (tErr) return failed(`Không đọc được targets: ${tErr.message}`)
+  if (!targets || targets.length === 0) {
+    return preserved('campaign chưa có target — không ghi dữ liệu')
+  }
+
+  const sa = deps.loadBqServiceAccount()
+  if (!sa) return failed('Chưa cấu hình BigQuery key cho môi trường này. Kiểm tra BQ_SERVICE_ACCOUNT_KEY rồi thử lại.')
+
+  const effEnd = effectiveEndISO(c.end_date, todayVn)
+  if (c.start_date > effEnd) {
+    // Kỳ chưa có ngày nào hợp lệ → không ghi (giữ snapshot, không tạo 0 đơn giả).
+    return preserved(`kỳ chưa có ngày dữ liệu hợp lệ (${c.start_date} → ${effEnd}) — giữ snapshot cũ`)
+  }
+
+  const src = await readOfflineSource({
+    sa,
+    startISO: c.start_date,
+    effEndISO: effEnd,
+    targetPosCodes: targets.map((t) => t.pos_code),
+    // STRICT: số đơn LÀ KPI — canary lỗi = preserve, không degrade.
+    strict: true,
+    runBqChunk: deps.runBqChunk,
+  })
+  if (!src.ok) return preserved(src.reason)
+
+  const snapshotTs = new Date(deps.nowMs()).toISOString()
+  const built = buildOrderAovSnapshot({
+    campaignId,
+    targets,
+    offlineByPos: src.offlineByPos,
+    ordersByPos: src.ordersByPos,
+    snapshotTs,
+    offlineSyncedAt: snapshotTs,
+  })
+  if (!built.ok) return preserved(built.reason)
+
+  const { data: count, error: rpcErr } = await deps.replaceActuals(campaignId, built.daily, built.actuals)
+  if (rpcErr) return failed(`Ghi actuals lỗi: ${rpcErr.message}`)
+
+  return {
+    status: 'success',
+    campaignId,
+    upserted: count ?? built.actuals.length,
+    dailyRows: built.daily.length,
+    // unmatched chỉ có nghĩa với campaign GMV (POS có target mà BQ không có
+    // row); ở đây thiếu row đã là PRESERVE nên luôn rỗng.
+    unmatched: [],
   }
 }

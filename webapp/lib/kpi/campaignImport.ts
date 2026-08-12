@@ -11,6 +11,8 @@
 // tier). Transition aliases still read: final_target, tier_N_commission,
 // tier_N_commission_pct — but the UI/template only advertise the new format.
 
+import { exactlyOneTierAt100 } from '@/lib/kpi/orderAov'
+
 export interface CampaignTierInput { tier_order: number; threshold_pct: number; commission_amount: number }
 export interface CampaignTargetInput {
   store_id: string
@@ -20,6 +22,10 @@ export interface CampaignTargetInput {
   import_row: number
   note: string | null
   tiers: CampaignTierInput[]
+  // Mig 106 — CHỈ campaign "Chất lượng bán hàng": 2 mục tiêu.
+  // Campaign GMV/Số khách KHÔNG set (RPC 106 reverse-guard sẽ RAISE nếu có).
+  order_target?: number
+  aov_target?: number
 }
 
 // The policy email defines groups with OVERLAPPING boundaries (200tr sits in both
@@ -33,6 +39,16 @@ export interface CampaignImportResult {
 }
 
 const MAX_TIERS = 20
+// r1.1: còn ô tier nào có dữ liệu từ chỉ số n trở đi? (quét hết dải cột)
+function hasTierDataAfter(lo: Record<string, unknown>, from: number): boolean {
+  for (let n = from; n <= MAX_TIERS; n++) {
+    if (num(lo[`tier${n}thresholdpct`]) !== null) return true
+    if (num(lo[`tier${n}commissionamount`]) !== null) return true
+    if (num(lo[`tier${n}commission`]) !== null) return true
+    if (num(lo[`tier${n}commissionpct`]) !== null) return true
+  }
+  return false
+}
 const canon = (k: string) => k.trim().toLowerCase().replace(/[^a-z0-9]/g, '')
 function num(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null
@@ -52,16 +68,53 @@ function str(v: unknown): string | null {
 //     khách); store_kpi_group VẪN bắt buộc nhưng chỉ là NHÃN import (chốt
 //     stakeholder 06/08 — không áp monetary boundary). Tier %/commission tiền
 //     giữ nguyên cả hai loại.
+// Mig 106: + offline_order_aov ("Chất lượng bán hàng") — contract 12/08: file
+// CHỈ có order_target + aov_target (KHÔNG kpi_target: hệ thống chuẩn hóa = 100;
+// KHÔNG net_revenue: số tham khảo của Finance, không phải cấu hình; KHÔNG còn
+// order_floor/aov_floor). Cũng BỎ rule GROUP_BOUNDARIES (ranh giới VNĐ của GMV
+// vô nghĩa ở đây và có thể trúng oan giá trị AOV như 194.046).
+// Tier: ĐÚNG 1 bậc mốc 100 — policy exactlyOneTierAt100 (mở nhiều bậc sau này
+// chỉ đổi policy đó + UI, không đụng schema).
+const AOV_COLUMNS: [key: string, label: string][] = [
+  ['ordertarget', 'order_target'],
+  ['aovtarget', 'aov_target'],
+]
+// Template CŨ (contract 90/10 đã bị thay thế) — từ chối RÕ RÀNG để admin không
+// nạp nhầm file cấu hình lỗi thời.
+const DEAD_AOV_COLUMNS: [key: string, label: string][] = [
+  ['orderfloor', 'order_floor'],
+  ['aovfloor', 'aov_floor'],
+]
+
 export function parseCampaignRows(
   rawRows: Record<string, unknown>[],
   byCode: Map<string, string>,
   opts: { metricType?: string } = {},
 ): CampaignImportResult | { error: string } {
   const isCustomer = opts.metricType === 'affiliate_customer_count'
+  const isAov = opts.metricType === 'offline_order_aov'
   if (rawRows.length === 0) return { error: 'File không có dòng dữ liệu nào' }
   const headerKeys = new Set(Object.keys(rawRows[0]).map(canon))
   if (!headerKeys.has('poscode')) return { error: 'Thiếu cột pos_code' }
-  if (!headerKeys.has('kpitarget') && !headerKeys.has('finaltarget')) return { error: 'Thiếu cột kpi_target' }
+  if (isAov) {
+    for (const [key, label] of DEAD_AOV_COLUMNS) {
+      if (headerKeys.has(key)) {
+        return { error: `File dùng template CŨ (có cột ${label}). Chất lượng bán hàng nay chỉ cần order_target + aov_target — điểm hoàn thành lấy theo chỉ số thấp hơn.` }
+      }
+    }
+    for (const [key, label] of AOV_COLUMNS) {
+      if (!headerKeys.has(key)) return { error: `Thiếu cột ${label} (chiến dịch Chất lượng bán hàng cần cả order_target và aov_target)` }
+    }
+    // Chặn NHẦM LẪN ngay ở tầng file: 2 cột này không phải cấu hình của loại này.
+    if (headerKeys.has('kpitarget') || headerKeys.has('finaltarget')) {
+      return { error: 'File Chất lượng bán hàng KHÔNG được có cột kpi_target — hệ thống tự chuẩn hóa = 100%' }
+    }
+    if (headerKeys.has('netrevenue')) {
+      return { error: 'File Chất lượng bán hàng KHÔNG được có cột net_revenue — đây là số tham khảo, không phải cấu hình (AOV đã làm tròn VNĐ nên net ≠ order_target × aov_target)' }
+    }
+  } else if (!headerKeys.has('kpitarget') && !headerKeys.has('finaltarget')) {
+    return { error: 'Thiếu cột kpi_target' }
+  }
   if (!headerKeys.has('storekpigroup')) return { error: 'Thiếu cột store_kpi_group (phân loại Store theo KPI)' }
 
   const valid: CampaignTargetInput[] = []
@@ -75,8 +128,11 @@ export function parseCampaignRows(
     for (const [k, v] of Object.entries(raw)) lo[canon(k)] = v
 
     const posCode = str(lo['poscode'])?.toUpperCase() ?? null
-    const kpiTargetRaw = num(lo['kpitarget']) ?? num(lo['finaltarget']) // alias: v2 files
-    if (!posCode && kpiTargetRaw === null) return // fully-empty row → skip
+    // Chất lượng bán hàng: kpi_target là ĐIỂM CHUẨN HÓA do hệ thống ép = 100
+    // (RPC 106 cũng ép lại — file không quyết định).
+    const kpiTargetRaw = isAov ? 100 : (num(lo['kpitarget']) ?? num(lo['finaltarget'])) // alias: v2 files
+    const aovCells = AOV_COLUMNS.map(([k]) => num(lo[k]))
+    if (!posCode && kpiTargetRaw === null && aovCells.every((v) => v === null)) return // dòng trống → bỏ qua
 
     if (!posCode) { invalid.push({ row: rowNo, pos_code: null, error: 'Thiếu pos_code' }); return }
     if (seen.has(posCode)) { invalid.push({ row: rowNo, pos_code: posCode, error: 'pos_code trùng trong file' }); return }
@@ -90,13 +146,39 @@ export function parseCampaignRows(
       invalid.push({ row: rowNo, pos_code: posCode, error: `kpi_target phải là số nguyên dương (số khách) — nhận ${kpiTargetRaw}` })
       return
     }
-    if (!isCustomer && GROUP_BOUNDARIES.includes(kpiTargetRaw)) {
+    // r1 (audit): rule ranh giới TIỀN chỉ áp cho campaign GMV — campaign khách
+    // (đơn vị khách) và Chất lượng bán hàng (điểm 100) đều KHÔNG áp.
+    if (!isCustomer && !isAov && GROUP_BOUNDARIES.includes(kpiTargetRaw)) {
       invalid.push({ row: rowNo, pos_code: posCode, error: `kpi_target = ${kpiTargetRaw.toLocaleString('vi-VN')} trùng ranh giới nhóm KPI — chỉnh lại theo policy (nhóm bị chồng biên)` })
       return
     }
 
     const storeKpiGroup = str(lo['storekpigroup'])
     if (!storeKpiGroup) { invalid.push({ row: rowNo, pos_code: posCode, error: 'Thiếu store_kpi_group (phân loại Store)' }); return }
+
+    // ── Mig 106: 4 chỉ số Order/AOV (mirror validate của RPC — chặn sớm ở UI) ──
+    let aovFields: Pick<CampaignTargetInput, 'order_target' | 'aov_target'> = {}
+    if (isAov) {
+      const [orderTarget, aovTarget] = aovCells
+      const missing = AOV_COLUMNS.filter((_, k) => aovCells[k] === null).map(([, label]) => label)
+      if (missing.length > 0) {
+        invalid.push({ row: rowNo, pos_code: posCode, error: `Thiếu ${missing.join(', ')}` }); return
+      }
+      const vals: [number, string][] = [
+        [orderTarget as number, 'order_target'], [aovTarget as number, 'aov_target'],
+      ]
+      for (const [v, label] of vals) {
+        if (v <= 0) { invalid.push({ row: rowNo, pos_code: posCode, error: `${label} phải > 0` }); return }
+        if (!Number.isInteger(v)) {
+          invalid.push({
+            row: rowNo, pos_code: posCode,
+            error: label.startsWith('order') ? `${label} phải là số nguyên (số đơn)` : `${label} phải là số nguyên (VNĐ)`,
+          })
+          return
+        }
+      }
+      aovFields = { order_target: orderTarget as number, aov_target: aovTarget as number }
+    }
 
     // Dynamic tiers: read pairs until both empty. Commission = fixed POOL amount
     // (tier_N_commission_amount); v2/v1 aliases accepted.
@@ -105,7 +187,15 @@ export function parseCampaignRows(
     for (let n = 1; n <= MAX_TIERS; n++) {
       const th = num(lo[`tier${n}thresholdpct`])
       const cm = num(lo[`tier${n}commissionamount`]) ?? num(lo[`tier${n}commission`]) ?? num(lo[`tier${n}commissionpct`])
-      if (th === null && cm === null) break
+      if (th === null && cm === null) {
+        // r1.1 (audit P1#4): campaign Chất lượng bán hàng phải quét HẾT cột —
+        // file có tier_1 hợp lệ, tier_2 TRỐNG nhưng tier_3 có dữ liệu sẽ lọt
+        // policy "đúng 1 bậc" nếu dừng ở ô trống đầu tiên.
+        if (isAov && hasTierDataAfter(lo, n)) {
+          tierErr = `Bậc ${n} trống nhưng còn dữ liệu bậc sau — Chất lượng bán hàng chỉ nhận ĐÚNG 1 bậc (mốc 100%)`
+        }
+        break
+      }
       if (th === null || cm === null) { tierErr = `Bậc ${n}: thiếu mốc % hoặc tiền thưởng`; break }
       if (th <= 0) { tierErr = `Bậc ${n}: mốc % phải > 0`; break }
       if (cm < 0) { tierErr = `Bậc ${n}: tiền thưởng phải ≥ 0`; break }
@@ -113,6 +203,13 @@ export function parseCampaignRows(
     }
     if (tierErr) { invalid.push({ row: rowNo, pos_code: posCode, error: tierErr }); return }
     if (tiers.length === 0) { invalid.push({ row: rowNo, pos_code: posCode, error: 'Cần ít nhất 1 bậc target' }); return }
+    // 106 policy: Chất lượng bán hàng dùng ĐÚNG 1 bậc mốc 100 (commission chỉ
+    // khi đạt CẢ HAI mục tiêu). Policy tách riêng để sau này mở nhiều bậc
+    // không phải sửa parser.
+    if (isAov) {
+      const policy = exactlyOneTierAt100(tiers)
+      if (!policy.ok) { invalid.push({ row: rowNo, pos_code: posCode, error: policy.error }); return }
+    }
     for (let k = 1; k < tiers.length; k++) {
       if (tiers[k].threshold_pct <= tiers[k - 1].threshold_pct) {
         invalid.push({ row: rowNo, pos_code: posCode, error: 'Threshold các bậc phải tăng dần' })
@@ -120,7 +217,11 @@ export function parseCampaignRows(
       }
     }
 
-    valid.push({ store_id: storeId, pos_code: posCode, kpi_target: kpiTargetRaw, store_kpi_group: storeKpiGroup, import_row: rowNo, note: str(lo['note']), tiers })
+    valid.push({
+      store_id: storeId, pos_code: posCode, kpi_target: kpiTargetRaw,
+      store_kpi_group: storeKpiGroup, import_row: rowNo, note: str(lo['note']), tiers,
+      ...aovFields,
+    })
   })
 
   return { valid, invalid, unmatched: [...unmatched] }

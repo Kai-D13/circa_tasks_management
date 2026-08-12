@@ -10,7 +10,10 @@ import { EmptyState } from '@/components/ds/EmptyState'
 import { ErrorState } from '@/components/ds/ErrorState'
 import { PeriodTabs, type TargetPeriod } from '@/components/targets/PeriodTabs'
 import { CampaignCardList } from '@/components/kpi/CampaignCardList'
-import { CampaignKpiView, type CampaignView } from '@/components/kpi/CampaignKpiView'
+import {
+  CampaignKpiView, parseDailySeries, type CampaignView, type DailyPoint,
+} from '@/components/kpi/CampaignKpiView'
+import { normalizeDailyPoint, type DailyRawRow } from '@/lib/kpi/dailyPoint'
 import { CampaignResultSummary } from '@/components/kpi/CampaignResultSummary'
 import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import { isReferralEnabled } from '@/lib/affiliate/flags'
@@ -176,14 +179,14 @@ async function fetchCampaignViews(
   const [{ data: targets, error: tErr }, { data: actuals, error: aErr }] = await Promise.all([
     supabase
       .from('kpi_campaign_store_targets')
-      .select('kpi_target, store_kpi_group, campaign:kpi_campaigns!inner(id, name, start_date, end_date, metric_type, metric_offline, metric_affiliate), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
+      .select('kpi_target, store_kpi_group, order_target, aov_target, campaign:kpi_campaigns!inner(id, name, start_date, end_date, metric_type, metric_offline, metric_affiliate), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
       .eq('store_id', storeId)
       // Archive (098): phòng thủ kép — RLS vốn chỉ cho thấy campaign active
       // (không archive được), filter tường minh theo yêu cầu audit.
       .is('campaign.archived_at', null),
     supabase
       .from('kpi_campaign_store_actuals')
-      .select('campaign_id, actual_value, actual_offline, actual_affiliate, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
+      .select('campaign_id, actual_value, actual_offline, actual_affiliate, offline_order_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
       .eq('store_id', storeId),
   ])
   if (tErr || aErr) {
@@ -193,12 +196,13 @@ async function fetchCampaignViews(
     return []
   }
   const actualByCampaign = new Map(
-    ((actuals ?? []) as { campaign_id: string; actual_value: number; actual_offline: number | null; actual_affiliate: number | null; run_rate: number | null; remaining_target: number | null; achieved_tier_order: number | null; store_commission_pool: number | null; offline_synced_at: string | null; affiliate_synced_at: string | null; synced_at: string }[])
+    ((actuals ?? []) as { campaign_id: string; actual_value: number; actual_offline: number | null; actual_affiliate: number | null; offline_order_count: number | null; run_rate: number | null; remaining_target: number | null; achieved_tier_order: number | null; store_commission_pool: number | null; offline_synced_at: string | null; affiliate_synced_at: string | null; synced_at: string }[])
       .map((a) => [a.campaign_id, a]),
   )
   return ((targets ?? []) as unknown as {
     kpi_target: number
     store_kpi_group: string | null
+    order_target: number | null; aov_target: number | null
     campaign: { id: string; name: string; start_date: string; end_date: string; metric_type?: string; metric_offline: boolean; metric_affiliate: boolean }
     kpi_campaign_store_tiers: { tier_order: number; threshold_pct: number; commission_amount: number }[]
   }[])
@@ -223,8 +227,13 @@ async function fetchCampaignViews(
         metric_affiliate: t.campaign.metric_affiliate === true,
         actual_offline: a?.actual_offline !== null && a?.actual_offline !== undefined ? Number(a.actual_offline) : null,
         actual_affiliate: a?.actual_affiliate !== null && a?.actual_affiliate !== undefined ? Number(a.actual_affiliate) : null,
+        // 105: số đơn Offline cho khối "Kết quả" QLCH (card Staff không dùng).
+        offline_order_count: a?.offline_order_count !== null && a?.offline_order_count !== undefined
+          ? Number(a.offline_order_count) : null,
         offline_synced_at: a?.offline_synced_at ?? null,
         affiliate_synced_at: a?.affiliate_synced_at ?? null,
+        // Mig 106: 2 mục tiêu (NULL với 2 loại cũ).
+        order_target: t.order_target, aov_target: t.aov_target,
       }
     })
     .sort((a, b) => a.end_date.localeCompare(b.end_date)) // nearest deadline first
@@ -233,10 +242,16 @@ async function fetchCampaignViews(
 export default async function TargetsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ period?: string; campaign?: string; store?: string }>
+  // Mig 106: series = chuỗi chart của campaign Chất lượng bán hàng (?series=).
+  searchParams: Promise<{ period?: string; campaign?: string; store?: string; series?: string }>
 }) {
   const params = await searchParams
   const period = parsePeriod(params.period)
+  // Mig 106: chuỗi chart (Số đơn | AOV) giữ trong URL — CampaignKpiView là
+  // SERVER component nên segmented dùng <Link>, không cần client JS.
+  const chartSeries = parseDailySeries(params.series)
+  const seriesHrefBase = `/targets${params.campaign ? `?campaign=${params.campaign}` : ''}${
+    params.store ? `${params.campaign ? '&' : '?'}store=${params.store}` : ''}`
 
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -290,13 +305,13 @@ export default async function TargetsPage({
   // Daily GMV series for the SELECTED campaign (drives the chart + "GMV hôm nay").
   // Selection resolved here so the fetch matches what the component will render.
   let selectedCampaignId: string | undefined
-  let campaignDaily: { date: string; gmv: number; gmv_affiliate: number; affiliate_customer_count: number }[] = []
+  let campaignDaily: DailyPoint[] = []
   let campaignDailyError = false
   if (campaignViews.length > 0 && resolvedStoreId && !showCampaignList) {
     selectedCampaignId = (campaignViews.find((c) => c.id === params.campaign) ?? campaignViews[0]).id
     const { data: dailyRows, error: dErr } = await supabase
       .from('kpi_campaign_store_daily_actuals')
-      .select('date, gmv, gmv_affiliate, affiliate_customer_count')
+      .select('date, gmv, gmv_affiliate, affiliate_customer_count, offline_order_count')
       .eq('campaign_id', selectedCampaignId)
       .eq('store_id', resolvedStoreId)
       .order('date')
@@ -305,8 +320,10 @@ export default async function TargetsPage({
       console.error('[targets] daily query failed:', dErr.message)
       campaignDailyError = true
     }
-    campaignDaily = ((dailyRows ?? []) as { date: string; gmv: number; gmv_affiliate: number | null; affiliate_customer_count: number | null }[])
-      .map((r) => ({ date: r.date, gmv: Number(r.gmv) || 0, gmv_affiliate: Number(r.gmv_affiliate) || 0, affiliate_customer_count: Number(r.affiliate_customer_count) || 0 }))
+    // r1.2 (audit P0): mapping PHẢI mang offline_order_count — trước đây query
+    // có lấy nhưng .map() bỏ quên nên DB có dữ liệu mà UI hiểu là thiếu (card
+    // "Số đơn hôm nay" hiện '—', chart Số đơn/AOV trống trơn).
+    campaignDaily = ((dailyRows ?? []) as DailyRawRow[]).map(normalizeDailyPoint)
   }
 
   // ── P3-H: QR Affiliate của store — CHỈ landing (không hiện trong ?campaign=),
@@ -415,7 +432,7 @@ export default async function TargetsPage({
     const [tRes, aRes] = await Promise.all([
       supabase
         .from('kpi_campaign_store_targets')
-        .select('id, campaign_id, store_id, pos_code, kpi_target, store_kpi_group, stores(name), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount), kpi_campaigns!inner(id, name, start_date, end_date, status, metric_type, metric_offline, metric_affiliate)')
+        .select('id, campaign_id, store_id, pos_code, kpi_target, store_kpi_group, order_target, aov_target, stores(name), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount), kpi_campaigns!inner(id, name, start_date, end_date, status, metric_type, metric_offline, metric_affiliate)')
         // Archive (098): phòng thủ kép như fetchCampaignViews — !inner + filter
         // (row campaign bị RLS ẩn trước đây trả null và bị skip app-side; nay
         // drop tại DB, hành vi hiển thị không đổi).
@@ -423,7 +440,7 @@ export default async function TargetsPage({
         .order('pos_code'),
       supabase
         .from('kpi_campaign_store_actuals')
-        .select('campaign_id, store_id, actual_value, actual_offline, actual_affiliate, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at'),
+        .select('campaign_id, store_id, actual_value, actual_offline, actual_affiliate, offline_order_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at'),
     ])
     // r3: lỗi DB/RLS → ErrorState — KHÔNG render "chưa có chiến dịch" giả.
     if (tRes.error || aRes.error) {
@@ -663,7 +680,12 @@ export default async function TargetsPage({
                 />
                 {/* Tier progress (28/07): QLCH desktop thấy "Còn thiếu" từng
                     mốc thưởng; Staff dùng chung component nhưng prop tắt. */}
-                <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Quản lý" todayISO={vnTodayISO} storeName={storeName} showTierRemaining />
+                <CampaignKpiView
+                  items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily}
+                  dailyError={campaignDailyError} roleLabel="Quản lý" todayISO={vnTodayISO}
+                  storeName={storeName} showTierRemaining
+                  series={chartSeries} seriesHrefBase={seriesHrefBase}
+                />
               </>
             )}
           </div>
@@ -746,7 +768,12 @@ export default async function TargetsPage({
           ) : (
             <>
               <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0 -my-2.5 md:my-0">← Danh sách chiến dịch</Link>
-              <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Dược sĩ" todayISO={vnTodayISO} storeName={storeName} />
+              <CampaignKpiView
+                items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily}
+                dailyError={campaignDailyError} roleLabel="Dược sĩ" todayISO={vnTodayISO}
+                storeName={storeName}
+                series={chartSeries} seriesHrefBase={seriesHrefBase}
+              />
             </>
           )}
           {/* "Giới thiệu bạn bè" belongs on the /targets landing (list / single-

@@ -1,11 +1,15 @@
 import Link from 'next/link'
 import { Card, CardContent } from '@/components/ui/card'
 import { formatDate } from '@/lib/dateUtils'
+import { campaignCardProgress } from '@/lib/kpi/campaignDisplay'
 import { CalendarDays, ChevronRight, TrendingUp } from 'lucide-react'
 
 interface CampaignCard {
   id: string; name: string; start_date: string; end_date: string
   kpi_target: number | null; actual_value: number | null
+  // Mig 106 r1.2: Chất lượng bán hàng — % là ĐIỂM hoàn thành do RPC tính, và
+  // 99,9999% KHÔNG được làm tròn thành 100% (chưa đạt, chưa có commission).
+  metric_type?: string
 }
 
 // The active campaigns of a store as tappable cards (staff/SM landing) → click
@@ -15,9 +19,9 @@ export function CampaignCardList({ items, hrefFor }: { items: CampaignCard[]; hr
   return (
     <div className="space-y-2">
       {items.map((c) => {
-        const target = Number(c.kpi_target) || 0
-        const actual = Number(c.actual_value) || 0
-        const pct = target > 0 ? Math.round((actual / target) * 100) : 0
+        // r1.2.1 (audit P1): quyết định hiển thị nằm ở contract THUẦN
+        // (campaignCardProgress) — chưa đồng bộ KHÔNG vẽ tiến độ 0%.
+        const { synced, pct, text: pctText } = campaignCardProgress(c)
         return (
           <Link key={c.id} href={hrefFor(c.id)} prefetch={false} className="block">
             {/* rounded-lg — DS surfaces cap at 8px; row is well past the 44px
@@ -34,9 +38,10 @@ export function CampaignCardList({ items, hrefFor }: { items: CampaignCard[]; hr
                   </div>
                   <div className="mt-1.5 flex items-center gap-2">
                     <div className="h-1.5 flex-1 rounded-full bg-muted overflow-hidden">
-                      <div className="h-full bg-primary" style={{ width: `${Math.min(pct, 100)}%` }} />
+                      {/* chưa đồng bộ → KHÔNG vẽ tiến độ (0% đọc như đã có kết quả) */}
+                      {synced && <div className="h-full bg-primary" style={{ width: `${Math.min(pct, 100)}%` }} />}
                     </div>
-                    <span className="text-xs text-muted-foreground tabular-nums shrink-0">{pct}%</span>
+                    <span className="text-xs text-muted-foreground tabular-nums shrink-0">{pctText}</span>
                   </div>
                 </div>
                 <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />

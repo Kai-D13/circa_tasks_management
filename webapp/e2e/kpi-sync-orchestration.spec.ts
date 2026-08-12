@@ -42,7 +42,14 @@ function fullCoverage(override: Record<string, number | null> = {}): Record<stri
       const date = new Date(t).toISOString().slice(0, 10)
       const key = `${pos}/${date}`
       const gmv = key in override ? override[key] : (key === 'POS0001/2026-07-02' ? 300 : 0)
-      rows.push({ pos_code: pos, date, gmv, source_row_count: 1 })
+      // 105: nguồn SẠCH mặc định — order_count + 4 canary. Engine fail-closed
+      // nếu thiếu field (schema/query drift) nên fixture phải phản ánh query.
+      rows.push({
+        pos_code: pos, date, gmv, source_row_count: 1,
+        order_count: gmv === 300 ? 3 : 0,
+        rev_without_order: 0, order_without_rev: 0, negative_order: 0, non_integer_order: 0,
+        revenue_with_zero_order: 0,
+      })
     }
   }
   return rows
@@ -63,10 +70,13 @@ interface Behavior {
   // Mig 103:
   aggCust?: () => Promise<{ data: CustomerAggResult | null; error: { message: string } | null }>
   customerFlag?: boolean                                    // KPI_AFFILIATE_CUSTOMER_ENABLED (default true)
+  // Mig 106:
+  orderAovFlag?: boolean                                    // KPI_ORDER_AOV_CAMPAIGN_ENABLED (default true)
 }
 
 function mkDeps(cfg: CampaignConfig, behavior: Behavior = {}) {
   const calls = { campaign: 0, targets: 0, stores: 0, health: 0, agg: 0, aggCust: 0, sa: 0, bq: 0, replace: 0 }
+  const payloads: { daily?: unknown[]; actuals?: unknown[] } = {}
   const seq: string[] = []
   const deps: SyncCampaignDeps = {
     loadCampaign: async () => { calls.campaign++; seq.push('campaign'); return behavior.campaign ? behavior.campaign() : { data: cfg, error: null } },
@@ -92,6 +102,8 @@ function mkDeps(cfg: CampaignConfig, behavior: Behavior = {}) {
     },
     replaceActuals: async (id, daily, actuals) => {
       calls.replace++; seq.push('replace')
+      // 105: giữ payload cuối để test kiểm tra nội dung THỰC SỰ ghi.
+      payloads.daily = daily; payloads.actuals = actuals
       return behavior.replace ? behavior.replace(id, daily, actuals) : { data: actuals.length, error: null }
     },
     aggregateAffiliateCustomers: async () => {
@@ -110,8 +122,9 @@ function mkDeps(cfg: CampaignConfig, behavior: Behavior = {}) {
     nowMs: () => NOW,
     isAffiliateFeatureEnabled: () => behavior.flag ?? true,
     isAffiliateCustomerFeatureEnabled: () => behavior.customerFlag ?? true,
+    isOrderAovFeatureEnabled: () => behavior.orderAovFlag ?? true,
   }
-  return { deps, calls, seq }
+  return { deps, calls, seq, payloads }
 }
 
 test.describe('kpi sync orchestration @desktop', () => {
@@ -368,8 +381,8 @@ test.describe('kpi sync orchestration @desktop', () => {
   test('BQ-V2 GUARD: trùng key (pos, ngày) trong cùng lần pull → preserved, KHÔNG replace', async () => {
     const { deps, calls } = mkDeps(CFG(), {
       bq: async () => [
-        { pos_code: 'POS0001', date: '2026-07-02', gmv: 300, source_row_count: 1 },
-        { pos_code: 'POS0001', date: '2026-07-02', gmv: 999, source_row_count: 1 },
+        { pos_code: 'POS0001', date: '2026-07-02', gmv: 300, source_row_count: 1, order_count: 0, rev_without_order: 0, order_without_rev: 0, negative_order: 0, non_integer_order: 0, revenue_with_zero_order: 0 },
+        { pos_code: 'POS0001', date: '2026-07-02', gmv: 999, source_row_count: 1, order_count: 0, rev_without_order: 0, order_without_rev: 0, negative_order: 0, non_integer_order: 0, revenue_with_zero_order: 0 },
       ],
     })
     const r = await syncCampaignWithDeps('camp-1', deps)
@@ -378,12 +391,29 @@ test.describe('kpi sync orchestration @desktop', () => {
     expect(calls.replace).toBe(0)
   })
 
-  test('BQ-V2 GUARD: row KHÔNG có source_row_count (fixture cũ/nguồn không trả) → mặc định 1, sync bình thường', async () => {
-    const { deps } = mkDeps(CFG(), {
-      bq: async () => fullCoverage().map(({ source_row_count: _s, ...r }) => r),
-    })
-    const r = await syncCampaignWithDeps('camp-1', deps)
-    expect(r.status).toBe('success')
+  // r1.3 (audit P1#1) — ĐỔI CÓ CHỦ Ý: trước đây thiếu alias source_row_count
+  // được mặc định 1 ⇒ query/schema drift vẫn sync. Guard của TIỀN phải
+  // fail-closed: thiếu/null/không nguyên/khác 1 đều PRESERVE.
+  test('BQ-V2 GUARD r1.3: source_row_count thiếu/null/lẻ/khác 1 → PRESERVE (không còn mặc định 1)', async () => {
+    const cases: [string, Record<string, unknown> | 'drop'][] = [
+      ['thiếu alias', 'drop'],
+      ['null', { source_row_count: null }],
+      ['số lẻ', { source_row_count: 1.5 }],
+      ['chuỗi rác', { source_row_count: 'x' }],
+      ['bằng 2', { source_row_count: 2 }],
+    ]
+    for (const [label, patch] of cases) {
+      const { deps, calls } = mkDeps(CFG(), {
+        bq: async () => fullCoverage().map((r) => {
+          if (patch === 'drop') { const { source_row_count: _s, ...rest } = r; return rest }
+          return { ...r, ...patch }
+        }),
+      })
+      const res = await syncCampaignWithDeps('camp-1', deps)
+      expect(res.status, `source_row_count ${label} phải PRESERVE`).toBe('snapshot_preserved')
+      if (res.status === 'snapshot_preserved') expect(res.reason).toContain('source_row_count')
+      expect(calls.replace, `source_row_count ${label} không được ghi`).toBe(0)
+    }
   })
 
   // ── BQ-V2 r1 (audit P1#2): EXPECTED COVERAGE — thiếu Ô NÀO cũng preserve ──
@@ -414,12 +444,71 @@ test.describe('kpi sync orchestration @desktop', () => {
     expect(calls.replace).toBe(0)
   })
 
-  test('COVERAGE: row TỒN TẠI với net_revenue NULL là HỢP LỆ (=0đ) — sync success, không nhầm với thiếu row', async () => {
-    const { deps } = mkDeps(CFG(), {
-      bq: async () => fullCoverage({ 'POS0002/2026-07-10': null }),
-    })
+  // Ngày KHÔNG có doanh thu vẫn HỢP LỆ (0đ) — query dùng
+  // SUM(COALESCE(net_revenue,0)) nên nó về dạng SỐ 0, không phải null.
+  test('COVERAGE: row tồn tại với doanh thu 0đ là HỢP LỆ — sync success, không nhầm với thiếu row', async () => {
+    const { deps } = mkDeps(CFG(), { bq: async () => fullCoverage({ 'POS0002/2026-07-10': 0 }) })
     const r = await syncCampaignWithDeps('camp-1', deps)
     expect(r.status).toBe('success')
+  })
+
+  // r1.3 (audit P1#2) — ĐỔI CÓ CHỦ Ý: `Number(x) || 0` biến chuỗi rác/NaN/null
+  // thành 0đ và vẫn sync. Alias gmv là SUM(COALESCE(net_revenue,0)) nên khi row
+  // tồn tại nó LUÔN là số; thiếu/sai kiểu = drift ⇒ PRESERVE.
+  test('r1.3 GUARD TIỀN: gmv thiếu/null/NaN/chuỗi rác/Infinity → PRESERVE (0đ và ÂM vẫn hợp lệ)', async () => {
+    const bad: [string, Record<string, unknown> | 'drop'][] = [
+      ['thiếu alias', 'drop'],
+      ['null', { gmv: null }],
+      ['chuỗi rác', { gmv: 'abc' }],
+      ['NaN', { gmv: Number.NaN }],
+      ['Infinity', { gmv: Number.POSITIVE_INFINITY }],
+    ]
+    for (const [label, patch] of bad) {
+      const { deps, calls } = mkDeps(CFG(), {
+        bq: async () => fullCoverage().map((r) => {
+          if (r.pos_code !== 'POS0002' || r.date !== '2026-07-10') return r
+          if (patch === 'drop') { const { gmv: _g, ...rest } = r; return rest }
+          return { ...r, ...patch }
+        }),
+      })
+      const res = await syncCampaignWithDeps('camp-1', deps)
+      expect(res.status, `gmv ${label} phải PRESERVE`).toBe('snapshot_preserved')
+      if (res.status === 'snapshot_preserved') expect(res.reason).toContain('doanh thu')
+      expect(calls.replace).toBe(0)
+    }
+    // Doanh thu ÂM (hoàn/điều chỉnh) là HỢP LỆ — không được chặn oan.
+    const okNeg = mkDeps(CFG(), { bq: async () => fullCoverage({ 'POS0002/2026-07-10': -500_000 }) })
+    expect((await syncCampaignWithDeps('camp-1', okNeg.deps)).status).toBe('success')
+  })
+
+  test('r1.3 GUARD KHÓA: row sai pos_code/date → PRESERVE, KHÔNG bỏ qua im lặng', async () => {
+    // '2026-13-99' đúng ĐỊNH DẠNG nhưng KHÔNG phải ngày có thật → cũng phải chặn.
+    for (const patch of [{ pos_code: '' }, { pos_code: null }, { pos_code: '   ' },
+      { date: '2026-13-99' }, { date: '2026-02-30' }, { date: null }, { date: 'hôm nay' }]) {
+      const { deps, calls } = mkDeps(CFG(), {
+        bq: async () => fullCoverage().map((r, i) => (i === 0 ? { ...r, ...patch } : r)),
+      })
+      const res = await syncCampaignWithDeps('camp-1', deps)
+      expect(res.status).toBe('snapshot_preserved')
+      if (res.status === 'snapshot_preserved') expect(res.reason).toContain('sai khóa')
+      expect(calls.replace).toBe(0)
+    }
+  })
+
+  test('r1.3: canary ÂM hoặc LẺ → degrade (GMV) với lý do "COUNTIF phải là số nguyên >= 0"', async () => {
+    for (const patch of [{ negative_order: -1 }, { rev_without_order: 0.5 }]) {
+      const { deps, calls, payloads } = mkDeps(CFG(), {
+        bq: async () => fullCoverage().map((r) => (r.pos_code === 'POS0001' ? { ...r, ...patch } : r)),
+      })
+      const res = await syncCampaignWithDeps('camp-1', deps)
+      expect(res.status).toBe('success')          // tiền vẫn ghi
+      expect(calls.replace).toBe(1)
+      if (res.status === 'success') {
+        expect((res.warnings ?? []).join(' ')).toContain('COUNTIF phải là số nguyên >= 0')
+      }
+      const actuals = (payloads.actuals ?? []) as Record<string, unknown>[]
+      expect('offline_order_count' in actuals.find((a) => a.store_id === 'store-a')!).toBe(false)
+    }
   })
 })
 
@@ -575,5 +664,231 @@ test.describe('kpi sync orchestration — customer campaign (mig 103) @desktop',
     expect(a.achieved_tier_order).toBe(1)     // ≥50%, chưa tới 100%
     expect(a.store_commission_pool).toBe(500000)
     expect(a.remaining_target).toBe(1)        // còn thiếu 1 khách
+  })
+})
+
+// ── 105 r1.3: nguồn số đơn Offline — POLICY DEGRADE cho campaign GMV ───────
+// Order/AOV là chỉ số PHỤ của campaign GMV ⇒ nguồn số đơn hỏng KHÔNG được
+// đóng băng KPI tiền: vẫn replace GMV, chỉ bỏ số đơn của pos lỗi (RPC giữ
+// NULL → UI '—') + warning. Loại campaign lấy số đơn LÀM KPI
+// (offline_order_aov, mig 106) chạy nhánh riêng với strict = preserve.
+test.describe('kpi sync — số đơn Offline degrade (105 r1.3) @desktop', () => {
+  const dropField = (key: string) => async () => fullCoverage().map((r) => {
+    const copy = { ...(r as Record<string, unknown>) }
+    delete copy[key]
+    return copy
+  })
+  // Chỉ đầu độc các row của POS0001 để chứng minh: pos lỗi mất số đơn, pos
+  // còn lại GIỮ NGUYÊN số đơn.
+  const poisonPos1 = (patch: Record<string, unknown>) => async () =>
+    fullCoverage().map((r) => (r.pos_code === 'POS0001' ? { ...r, ...patch } : r))
+
+  const expectDegraded = async (behavior: Record<string, unknown>, reasonPart: string) => {
+    const { deps, calls, payloads } = mkDeps(CFG(), behavior)
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('success')                       // TIỀN vẫn được ghi
+    expect(calls.replace).toBe(1)
+    if (r.status === 'success') {
+      expect((r.warnings ?? []).join(' ')).toContain(reasonPart)
+      expect((r.warnings ?? []).join(' ')).toContain('GMV/commission KHÔNG bị ảnh hưởng')
+    }
+    const daily = (payloads.daily ?? []) as { store_id: string; gmv: number; offline_order_count?: number }[]
+    const actuals = (payloads.actuals ?? []) as { store_id: string; actual_offline: number; offline_order_count?: number }[]
+    // store của POS0001 (store-a): KHÔNG có key số đơn ⇒ RPC giữ NULL ⇒ UI '—'
+    const badAgg = actuals.find((a) => a.store_id === 'store-a')!
+    expect('offline_order_count' in badAgg).toBe(false)
+    expect(badAgg.actual_offline).toBeGreaterThan(0)        // tiền vẫn nguyên
+    expect(daily.filter((d) => d.store_id === 'store-a').every((d) => !('offline_order_count' in d))).toBe(true)
+    // store lành (store-b / POS0002) vẫn mang số đơn đầy đủ
+    const okAgg = actuals.find((a) => a.store_id === 'store-b')!
+    expect(typeof okAgg.offline_order_count).toBe('number')
+    return r
+  }
+
+  test('thiếu alias order_count → DEGRADE (GMV vẫn ghi, số đơn ẩn)', async () => {
+    const { deps, calls } = mkDeps(CFG(), { bq: dropField('order_count') })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('success')
+    expect(calls.replace).toBe(1)
+    if (r.status === 'success') expect((r.warnings ?? []).join(' ')).toContain('thiếu/sai field số đơn')
+  })
+
+  // audit r1.3 P2: thiếu TOÀN BỘ order_count không thay thế được case thiếu
+  // RIÊNG một alias canary — schema/query drift thường rụng đúng 1 cột.
+  test('thiếu RIÊNG canary revenue_with_zero_order → DEGRADE (GMV ghi, count không gửi)', async () => {
+    const { deps, calls, payloads } = mkDeps(CFG(), { bq: dropField('revenue_with_zero_order') })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('success')
+    expect(calls.replace).toBe(1)
+    if (r.status === 'success') expect((r.warnings ?? []).join(' ')).toContain('thiếu/sai field số đơn')
+    const daily = (payloads.daily ?? []) as Record<string, unknown>[]
+    const actuals = (payloads.actuals ?? []) as Record<string, unknown>[]
+    expect(actuals.every((a) => !('offline_order_count' in a))).toBe(true)
+    expect(daily.every((d) => !('offline_order_count' in d))).toBe(true)
+  })
+
+  test('thiếu RIÊNG canary non_integer_order → DEGRADE (không im lặng ghi 0 đơn)', async () => {
+    const { deps, calls, payloads } = mkDeps(CFG(), { bq: dropField('non_integer_order') })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('success')
+    expect(calls.replace).toBe(1)
+    if (r.status === 'success') expect((r.warnings ?? []).join(' ')).toContain('thiếu/sai field số đơn')
+    expect(((payloads.actuals ?? []) as Record<string, unknown>[])
+      .every((a) => !('offline_order_count' in a))).toBe(true)
+  })
+
+  test('no_order LẺ ở POS0001 → chỉ pos đó mất số đơn, pos khác giữ nguyên', async () => {
+    await expectDegraded({ bq: poisonPos1({ non_integer_order: 1 }) }, 'KHÔNG NGUYÊN')
+  })
+
+  test('có doanh thu mà 0 đơn (no_order=0, net≠0) → DEGRADE pos đó', async () => {
+    await expectDegraded({ bq: poisonPos1({ revenue_with_zero_order: 1 }) }, 'KHÔNG đơn nào')
+  })
+
+  test('lệch NULL (có doanh thu, thiếu no_order) → DEGRADE pos đó', async () => {
+    await expectDegraded({ bq: poisonPos1({ rev_without_order: 2 }) }, 'lệch NULL')
+  })
+
+  test('no_order ÂM → DEGRADE pos đó', async () => {
+    await expectDegraded({ bq: poisonPos1({ negative_order: 1 }) }, 'ÂM')
+  })
+
+  test('GUARD TIỀN giữ nguyên preserve: source_row_count / trùng key / thiếu ô coverage', async () => {
+    const { deps, calls } = mkDeps(CFG(), {
+      bq: async () => fullCoverage().map((r, i) => (i === 0 ? { ...r, source_row_count: 2 } : r)),
+    })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    expect(calls.replace).toBe(0)
+  })
+
+  test('nguồn SẠCH → success, KHÔNG warning, payload mang order count đầy đủ', async () => {
+    const { deps, payloads } = mkDeps(CFG())
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('success')
+    if (r.status === 'success') expect(r.warnings ?? []).toEqual([])
+    const daily = (payloads.daily ?? []) as { offline_order_count?: number }[]
+    const actuals = (payloads.actuals ?? []) as { offline_order_count?: number }[]
+    expect(daily.every((x) => typeof x.offline_order_count === 'number')).toBe(true)
+    expect(actuals.map((a) => a.offline_order_count).sort()).toEqual([0, 3])
+  })
+})
+
+// ── Mig 106 bước D: campaign "Chất lượng bán hàng" — BQ-only + STRICT ───────
+// Khác campaign GMV ở đúng 2 điểm: (1) không chạm nguồn affiliate; (2) canary
+// số đơn lỗi = PRESERVE toàn snapshot (số đơn/AOV LÀ KPI, không degrade).
+test.describe('kpi sync — campaign Chất lượng bán hàng (106) @desktop', () => {
+  const AOV_CFG = (over: Partial<CampaignConfig> = {}): CampaignConfig => CFG({
+    metric_type: 'offline_order_aov', metric_offline: true, metric_affiliate: false, ...over,
+  })
+
+  test('nguồn sạch → success; payload CHỈ số THÔ (không actual_value/run_rate/tier)', async () => {
+    const { deps, calls, payloads } = mkDeps(AOV_CFG())
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('success')
+    expect(calls.replace).toBe(1)
+    // BQ-only: KHÔNG gọi health/aggregate affiliate
+    expect(calls.health).toBe(0)
+    expect(calls.agg).toBe(0)
+    expect(calls.aggCust).toBe(0)
+    expect(calls.bq).toBeGreaterThan(0)
+
+    const actuals = (payloads.actuals ?? []) as Record<string, unknown>[]
+    const daily = (payloads.daily ?? []) as Record<string, unknown>[]
+    expect(actuals.length).toBe(2)
+    for (const a of actuals) {
+      // RPC 106 TỪ CHỐI mọi key dẫn xuất — payload không được mang chúng
+      for (const k of ['actual_value', 'run_rate', 'remaining_target',
+        'achieved_tier_order', 'store_commission_pool', 'quality_floor_pass',
+        'actual_affiliate', 'actual_customer_count']) {
+        expect(k in a, `payload không được có ${k}`).toBe(false)
+      }
+      expect(typeof a.actual_offline).toBe('number')
+      expect(typeof a.offline_order_count).toBe('number')
+    }
+    // store-a: POS0001 có 300đ ngày 02/07 và tổng 3 đơn (fixture)
+    const a1 = actuals.find((a) => a.store_id === 'store-a')!
+    expect(a1.actual_offline).toBe(300)
+    expect(a1.offline_order_count).toBe(3)
+    expect(daily.every((d) => typeof d.offline_order_count === 'number')).toBe(true)
+    expect(daily.every((d) => !('gmv_affiliate' in d))).toBe(true)
+  })
+
+  test('flag KPI_ORDER_AOV_CAMPAIGN_ENABLED tắt → preserved, KHÔNG chạm nguồn nào', async () => {
+    const { deps, calls } = mkDeps(AOV_CFG(), { orderAovFlag: false })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    if (r.status === 'snapshot_preserved') expect(r.reason).toContain('KPI_ORDER_AOV_CAMPAIGN_ENABLED')
+    expect(calls).toMatchObject({ targets: 0, sa: 0, bq: 0, replace: 0, health: 0 })
+  })
+
+  test('sai contract cột (bật affiliate) → failed, không ghi', async () => {
+    const { deps, calls } = mkDeps(AOV_CFG({ metric_affiliate: true }))
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('failed')
+    expect(calls.replace).toBe(0)
+  })
+
+  test('STRICT: từng canary lỗi → PRESERVE toàn snapshot (replace = 0)', async () => {
+    const cases: [string, Behavior][] = [
+      ['thiếu alias order_count', { bq: async () => fullCoverage().map(({ order_count: _o, ...r }) => r) }],
+      ['thiếu canary revenue_with_zero_order', { bq: async () => fullCoverage().map(({ revenue_with_zero_order: _c, ...r }) => r) }],
+      ['no_order LẺ', { bq: async () => fullCoverage().map((r) => (r.pos_code === 'POS0001' ? { ...r, non_integer_order: 1 } : r)) }],
+      ['có doanh thu mà 0 đơn', { bq: async () => fullCoverage().map((r) => (r.pos_code === 'POS0001' ? { ...r, revenue_with_zero_order: 1 } : r)) }],
+      ['lệch NULL', { bq: async () => fullCoverage().map((r) => (r.pos_code === 'POS0001' ? { ...r, rev_without_order: 2 } : r)) }],
+      ['no_order ÂM', { bq: async () => fullCoverage().map((r) => (r.pos_code === 'POS0001' ? { ...r, negative_order: 1 } : r)) }],
+    ]
+    for (const [label, behavior] of cases) {
+      const { deps, calls } = mkDeps(AOV_CFG(), behavior)
+      const r = await syncCampaignWithDeps('camp-1', deps)
+      expect(r.status, `${label} phải PRESERVE`).toBe('snapshot_preserved')
+      expect(calls.replace, `${label} không được ghi`).toBe(0)
+    }
+  })
+
+  test('STRICT: guard TIỀN (source_row_count / thiếu ô coverage) vẫn preserve', async () => {
+    const dup = mkDeps(AOV_CFG(), {
+      bq: async () => fullCoverage().map((r, i) => (i === 0 ? { ...r, source_row_count: 2 } : r)),
+    })
+    const r1 = await syncCampaignWithDeps('camp-1', dup.deps)
+    expect(r1.status).toBe('snapshot_preserved')
+    expect(dup.calls.replace).toBe(0)
+
+    const gap = mkDeps(AOV_CFG(), {
+      bq: async () => fullCoverage().filter((r) => !(r.pos_code === 'POS0002' && r.date === '2026-07-15')),
+    })
+    const r2 = await syncCampaignWithDeps('camp-1', gap.deps)
+    expect(r2.status).toBe('snapshot_preserved')
+    expect(gap.calls.replace).toBe(0)
+  })
+
+  test('campaign chưa đến kỳ → preserved, KHÔNG gọi BigQuery', async () => {
+    const { deps, calls } = mkDeps(AOV_CFG({ start_date: '2027-01-01', end_date: '2027-01-31' }))
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    expect(calls).toMatchObject({ sa: 0, bq: 0, replace: 0 })
+  })
+
+  test('thiếu BQ service account → failed (không ghi)', async () => {
+    const { deps, calls } = mkDeps(AOV_CFG(), { sa: () => null })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('failed')
+    expect(calls).toMatchObject({ bq: 0, replace: 0 })
+  })
+
+  test('chưa có target → preserved (không xóa snapshot bằng payload rỗng)', async () => {
+    const { deps, calls } = mkDeps(AOV_CFG(), { targets: async () => ({ data: [], error: null }) })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    expect(calls).toMatchObject({ sa: 0, bq: 0, replace: 0 })
+  })
+
+  test('replace lỗi → failed (RPC 106 từ chối payload sai là fail, không nuốt)', async () => {
+    const { deps, calls } = mkDeps(AOV_CFG(), {
+      replace: async () => ({ data: null, error: { message: 'campaign Chất lượng bán hàng — store x gửi số liệu DẪN XUẤT' } }),
+    })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('failed')
+    expect(calls.replace).toBe(1)
   })
 })

@@ -18,14 +18,16 @@ export interface ResultTableColumn {
 }
 
 // Khoảng px theo audit 29/07: Cửa hàng 160–180 · Phân loại 90–110 ·
-// KPI/GMV 130–150 · %/Nhịp độ 100–120 · Còn thiếu 140 · mỗi Bậc 170–190.
+// KPI/GMV 130–150 · %/Nhịp độ 100–120 · Trung bình/ngày 140 · mỗi Bậc 170–190.
 export const RESULT_COL_PX = {
   store: 180,
   group: 100,
   money: 140,
   pct: 110,
   pace: 100,
-  remaining: 140,
+  perDay: 140,   // 10/08: thay cột 'Còn thiếu' (đã bỏ) — 'Trung bình/ngày'
+  orderAov: 230, // 106: cột GỘP 2 dòng "Số đơn · AOV" (thay vì 2 cột ngang)
+  quality: 150,  // 106: trạng thái đạt/chưa đạt 2 mục tiêu
   combined: 170, // cột gộp "Bậc đạt · Commission" (mobile giữ UI cũ)
   tier: 176,
 } as const
@@ -34,19 +36,41 @@ export const RESULT_COL_PX = {
 // khách'); campaign GMV giữ mảng label BẤT BIẾN (test khóa); width contract
 // không đổi (số khách ngắn hơn tiền — min-width cũ vẫn đúng).
 export function resultTableColumns(maxTierCount: number, showBreakdown: boolean, metricType?: string): ResultTableColumn[] {
-  const actualLabel = metricType === 'affiliate_customer_count' ? 'Số khách' : 'Actual GMV'
+  // Mig 106: Chất lượng bán hàng — cột actual là ĐIỂM %, và Order/AOV gộp vào
+  // MỘT cột 2 dòng (yêu cầu stakeholder: không tăng cột ngang).
+  const isOrderAov = metricType === 'offline_order_aov'
+  const actualLabel = metricType === 'affiliate_customer_count' ? 'Số khách'
+    : isOrderAov ? 'Hoàn thành' : 'Actual GMV'
   return [
     { key: 'store', label: 'Cửa hàng', minPx: RESULT_COL_PX.store, align: 'left', scope: 'all' },
     { key: 'group', label: 'Phân loại', minPx: RESULT_COL_PX.group, align: 'left', scope: 'all' },
-    { key: 'kpiTarget', label: 'KPI target', minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' },
+    // r1.1 (audit P2): Chất lượng bán hàng BỎ cột 'KPI target' (luôn 100% —
+    // không mang thông tin) và gộp '%' vào chính cột Hoàn thành.
+    ...(isOrderAov ? [] : [
+      { key: 'kpiTarget', label: 'KPI target', minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' } as const,
+    ]),
     { key: 'actual', label: actualLabel, minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' },
+    ...(isOrderAov ? [
+      { key: 'orderAov', label: 'Số đơn · AOV (thực tế / mục tiêu)', minPx: RESULT_COL_PX.orderAov, align: 'left', scope: 'all' } as const,
+      { key: 'quality', label: 'Trạng thái', minPx: RESULT_COL_PX.quality, align: 'left', scope: 'all' } as const,
+    ] : []),
     ...(showBreakdown ? [
       { key: 'offline', label: 'GMV Offline', minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' } as const,
       { key: 'affiliate', label: 'GMV Affiliate', minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' } as const,
     ] : []),
-    { key: 'pct', label: '%', minPx: RESULT_COL_PX.pct, align: 'right', scope: 'all' },
+    ...(isOrderAov ? [] : [
+      { key: 'pct', label: '%', minPx: RESULT_COL_PX.pct, align: 'right', scope: 'all' } as const,
+    ]),
     { key: 'pace', label: 'Nhịp độ', minPx: RESULT_COL_PX.pace, align: 'right', scope: 'all' },
-    { key: 'remaining', label: 'Còn thiếu', minPx: RESULT_COL_PX.remaining, align: 'right', scope: 'all' },
+    // 10/08 (stakeholder): BỎ cột 'Còn thiếu' ở bảng tổng — thay bằng
+    // 'Trung bình/ngày' (CÙNG công thức card Staff). remaining_target VẪN giữ
+    // trong model/DB/export + các dòng 'Còn thiếu' trong từng cột Bậc (khoảng
+    // cách tới threshold — nghĩa khác, không trùng cột bị bỏ).
+    // r1.1: ẩn với Chất lượng bán hàng — "điểm %/ngày" không tương đương số
+    // đơn/ngày hay AOV/ngày (khuyến nghị audit, stakeholder có thể bật lại).
+    ...(isOrderAov ? [] : [
+      { key: 'perDay', label: 'Trung bình/ngày', minPx: RESULT_COL_PX.perDay, align: 'right', scope: 'all' } as const,
+    ]),
     { key: 'tierCombined', label: 'Bậc đạt · Commission', minPx: RESULT_COL_PX.combined, align: 'left', scope: 'mobile' },
     ...Array.from({ length: Math.max(0, maxTierCount) }, (_, i) => ({
       key: `tier-${i + 1}`,
@@ -60,8 +84,10 @@ export function resultTableColumns(maxTierCount: number, showBreakdown: boolean,
 
 // Tổng min-width vùng desktop (mọi cột trừ mobile-only) — tài liệu/QA: cho
 // biết bảng cần bao nhiêu px trước khi scroll ngang nội bộ kích hoạt.
-export function resultTableDesktopMinPx(maxTierCount: number, showBreakdown: boolean): number {
-  return resultTableColumns(maxTierCount, showBreakdown)
+export function resultTableDesktopMinPx(maxTierCount: number, showBreakdown: boolean, metricType?: string): number {
+  // r1 (audit): PHẢI truyền metricType — thiếu sẽ tính sai tổng width khi loại
+  // campaign có cột riêng (106 thêm 2 cột).
+  return resultTableColumns(maxTierCount, showBreakdown, metricType)
     .filter((c) => c.scope !== 'mobile')
     .reduce((sum, c) => sum + c.minPx, 0)
 }

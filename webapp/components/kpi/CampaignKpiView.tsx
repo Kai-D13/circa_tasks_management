@@ -1,8 +1,16 @@
+import Link from 'next/link'
 import { Card, CardContent } from '@/components/ui/card'
-import { breakdownModel, campaignFootnote, metricPresentation } from '@/lib/kpi/campaignDisplay'
+import {
+  breakdownModel, campaignFootnote, heroRemainingText, metricPresentation, orderAovMetricLines,
+} from '@/lib/kpi/campaignDisplay'
+import {
+  ORDER_AOV_STATUS_LABEL, aovFromSnapshot, formatCompletionPct, formatRemainingPct,
+  orderAovStatus, qualityKpiPass,
+} from '@/lib/kpi/orderAov'
 import { buildTierProgress, type TierProgress } from '@/lib/kpi/resultModel'
 import { CampaignDailyChart } from '@/components/kpi/CampaignDailyChart'
 import { CampaignPicker } from '@/components/kpi/CampaignPicker'
+import { requiredPerDay } from '@/lib/kpi/performance'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
 import { Target, CalendarDays, TrendingUp, Wallet, Info, Gift, Store, Link2 as LinkIcon } from 'lucide-react'
@@ -36,15 +44,34 @@ export interface CampaignView {
   metric_affiliate: boolean
   actual_offline: number | null
   actual_affiliate: number | null
+  // 105: số đơn Offline (BQ no_order) — NULL = chưa có số đơn (KHÁC 0).
+  // CHỈ dùng cho khối "Kết quả" của QLCH; card Staff KHÔNG đổi.
+  offline_order_count?: number | null
   offline_synced_at: string | null
   affiliate_synced_at: string | null
   // Mig 103: 'affiliate_customer_count' → label/đơn vị KHÁCH qua
   // metricPresentation; thiếu (caller cũ) = gmv, hiển thị y nguyên.
   metric_type?: string
+  // Mig 106 (Chất lượng bán hàng): 2 mục tiêu (số đơn + AOV).
+  order_target?: number | null
+  aov_target?: number | null
 }
 // gmv = Offline, gmv_affiliate = Affiliate — chart hiển thị TỔNG, giữ riêng
 // 2 nguồn cho tooltip breakdown + stacked chart sau này.
-export interface DailyPoint { date: string; gmv: number; gmv_affiliate: number; affiliate_customer_count?: number }
+export interface DailyPoint {
+  date: string
+  gmv: number
+  gmv_affiliate: number
+  affiliate_customer_count?: number
+  // Mig 106: số đơn Offline của NGÀY. null = nguồn chưa có số đơn (KHÁC 0) —
+  // giữ null để chart vẽ GAP thay vì cột 0.
+  offline_order_count?: number | null
+}
+// Mig 106: chart campaign Chất lượng bán hàng có 2 chuỗi; URL giữ trạng thái
+// (CampaignKpiView là SERVER component — điều hướng bằng <Link>, không client JS).
+export type DailySeries = 'orders' | 'aov'
+export const parseDailySeries = (raw?: string | null): DailySeries =>
+  raw === 'aov' ? 'aov' : 'orders'
 
 // Short dd/MM for the campaign-chip date range.
 const dm = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`
@@ -52,7 +79,13 @@ const dm = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`
 // % completion ring (server-rendered SVG, theme-aware via stroke tokens).
 // Green is reserved for a REACHED commission tier (or >=100%) — on a
 // commission screen, a green 8% would read as "already achieved".
-function Ring({ pct, tierReached }: { pct: number; tierReached: boolean }) {
+function Ring({ pct, tierReached, format }: {
+  pct: number
+  tierReached: boolean
+  // r1.2 (audit P1): loại Chất lượng bán hàng truyền formatCompletionPct để
+  // 99,9999% KHÔNG hiện thành 100% khi badge ghi "Chưa đạt".
+  format?: (n: number) => string
+}) {
   const r = 34
   const c = 2 * Math.PI * r
   const clamped = Math.max(0, Math.min(100, pct))
@@ -68,7 +101,7 @@ function Ring({ pct, tierReached }: { pct: number; tierReached: boolean }) {
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
         <span className={cn('text-lg font-bold leading-none', tierReached ? 'text-status-success' : clamped > 0 && 'text-primary')}>
-          {Math.round(pct)}%
+          {format ? format(pct) : `${Math.round(pct)}%`}
         </span>
         <span className="text-[9px] text-muted-foreground mt-0.5">hoàn thành</span>
       </div>
@@ -99,12 +132,16 @@ function markerFraction(pct: number, thresholds: number[], positions: number[]):
 
 export function CampaignKpiView({
   items, selectedId, daily, dailyError = false, roleLabel, todayISO, storeName,
-  showTierRemaining = false,
+  showTierRemaining = false, series = 'orders', seriesHrefBase,
 }: {
   items: CampaignView[]
   selectedId?: string
   daily: DailyPoint[]
   dailyError?: boolean
+  // Mig 106: chuỗi đang xem của chart Chất lượng bán hàng (URL ?series=).
+  series?: DailySeries
+  // Base href để dựng link segmented (giữ nguyên các param khác của trang).
+  seriesHrefBase?: string
   roleLabel: string
   todayISO: string
   storeName: string
@@ -116,10 +153,28 @@ export function CampaignKpiView({
   const sel = items.find((i) => i.id === selectedId) ?? items[0]
   // Mig 103: format/label tập trung — gmv cho output BYTE-EQUAL vnd cũ.
   const pres = metricPresentation(sel.metric_type)
+  // Mig 106: dòng "thực tế / mục tiêu" + trạng thái — dùng CHUNG helper
+  // với bảng desktop để Staff và Super không bao giờ đọc ra 2 con số khác nhau.
+  const qualityLines = orderAovMetricLines({
+    actualOrder: sel.offline_order_count ?? null,
+    actualNet: sel.actual_offline,
+    orderTarget: sel.order_target, aovTarget: sel.aov_target,
+  })
+  const qualityPass = qualityKpiPass(sel.actual_value)
+  const qualityAov = aovFromSnapshot(sel.actual_offline, sel.offline_order_count)
+  const qualityStatus = qualityLines && sel.actual_value !== null && sel.offline_order_count != null
+    ? orderAovStatus({
+      actualOrder: sel.offline_order_count,
+      orderPass: sel.offline_order_count >= Number(sel.order_target),
+      aovPass: qualityAov !== null && qualityAov >= Number(sel.aov_target),
+    })
+    : null
+  const qualityLabel = qualityStatus ? ORDER_AOV_STATUS_LABEL[qualityStatus] : null
   const vnd = pres.value
   // Commission LUÔN là tiền (kể cả campaign Số khách — tier thưởng bằng VNĐ).
   const money = metricPresentation('gmv').value
   const isCustomer = pres.kind === 'affiliate_customer_count'
+  const isOrderAovCampaign = pres.kind === 'offline_order_aov'
   const target = sel.kpi_target
   const actual = sel.actual_value ?? 0
   const pct = sel.run_rate ?? (target > 0 ? (actual / target) * 100 : 0)
@@ -129,12 +184,28 @@ export function CampaignKpiView({
   // Metric cards.
   const daysLeft = Math.floor((Date.parse(sel.end_date) - Date.parse(todayISO)) / 86400_000) + 1
   const campaignOver = daysLeft <= 0
-  const needPerDay = campaignOver || achieved ? 0 : remaining / Math.max(daysLeft, 1)
+  // 10/08: công thức chuyển vào lib/kpi/performance (dùng chung với bảng kết
+  // quả Super/SM) — truyền ĐÚNG `remaining` mà hero đang hiển thị
+  // (remaining_target backend ưu tiên) để 2 khối trên cùng màn không lệch.
+  // `?? 0` giữ giá trị số BẤT BIẾN như trước; JSX vẫn tự render 'Đã kết thúc'
+  // → '—' khi campaignOver và pres.zero khi đã đạt (không đổi).
+  const needPerDay = achieved ? 0 : (requiredPerDay({
+    kpiTarget: target, actual: sel.actual_value ?? 0,
+    remainingTarget: sel.remaining_target, endISO: sel.end_date, todayISO,
+  }) ?? 0)
   // P3-E: "GMV hôm nay" = TỔNG 2 nguồn của ngày hôm nay.
+  // r1.1 (audit P1#1): campaign Chất lượng bán hàng đọc ĐÚNG offline_order_count
+  // — trước đây lấy gmv + gmv_affiliate rồi format thành "N đơn" (sai hoàn toàn).
   const todayPoint = daily.find((d) => d.date === todayISO)
-  const todayGmv = todayPoint
-    ? (isCustomer ? (todayPoint.affiliate_customer_count ?? 0) : todayPoint.gmv + todayPoint.gmv_affiliate)
-    : null
+  const todayGmv = !todayPoint ? null
+    : isOrderAovCampaign ? (todayPoint.offline_order_count ?? null)
+    : isCustomer ? (todayPoint.affiliate_customer_count ?? 0)
+    : todayPoint.gmv + todayPoint.gmv_affiliate
+  // Số đơn là ĐẾM, không phải điểm % ⇒ không dùng pres.value (sẽ ra '343%').
+  const nfInt = new Intl.NumberFormat('vi-VN')
+  const todayText = todayGmv === null ? '—'
+    : isOrderAovCampaign ? `${nfInt.format(todayGmv)} đơn`
+    : vnd(todayGmv)
 
   // P3-E r1: contract breakdown/footnote nằm trong lib/kpi/campaignDisplay
   // (THUẦN, có test khóa) — 1 chỉ số → layout hiện tại giữ nguyên tuyệt đối.
@@ -167,6 +238,14 @@ export function CampaignKpiView({
         ).map((tp) => [tp.tier_order, tp])
       : [],
   )
+  // r1.2 (audit P1): phần CÒN THIẾU của campaign điểm % dùng formatter riêng —
+  // 0,0001 điểm % không được làm tròn thành "0%" (mâu thuẫn "chưa đạt").
+  const remainingText = (n: number) => isOrderAovCampaign ? formatRemainingPct(n) : vnd(n)
+  // Hero "Còn thiếu": chưa đồng bộ → '—' · đã đạt → 0 · còn lại → formatter
+  // theo loại. (Trước r1.2.1: null actual vẫn ra "Còn thiếu 100%".)
+  const remainingHeroText = heroRemainingText({
+    actualValue: sel.actual_value, achieved, remaining, metricType: sel.metric_type,
+  })
   const tierRemainingLine = (order: number) => {
     if (!showTierRemaining) return null
     const tp = tierProgressByOrder.get(order)
@@ -178,7 +257,7 @@ export function CampaignKpiView({
         ) : tp.reached ? (
           <span className="font-semibold text-status-success">Đã đạt</span>
         ) : (
-          <span className="text-muted-foreground">Còn thiếu: <span className="font-semibold text-primary">{vnd(tp.remaining_amount)}</span></span>
+          <span className="text-muted-foreground">Còn thiếu: <span className="font-semibold text-primary">{remainingText(tp.remaining_amount)}</span></span>
         )}
       </p>
     )
@@ -227,21 +306,63 @@ export function CampaignKpiView({
                 {sel.actual_value === null ? 'Chưa đồng bộ' : vnd(actual)}
               </p>
             </div>
-            <Ring pct={pct} tierReached={reachedOrder !== null || pct >= 100} />
+            <Ring
+            pct={pct}
+            tierReached={reachedOrder !== null || pct >= 100}
+            format={isOrderAovCampaign ? formatCompletionPct : undefined}
+          />
           </div>
           <div className="flex items-center gap-2">
             <div className="h-2.5 flex-1 rounded-full bg-muted overflow-hidden">
               <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
             </div>
-            <span className="text-xs font-semibold">{pct.toFixed(0)}%</span>
+            {/* r1.1 (audit P1#3): KHÔNG làm tròn ca 99.9999 thành 100% khi
+                badge ghi "Chưa đạt" — formatter dùng chung mọi surface. */}
+            <span className="text-xs font-semibold">
+              {isOrderAovCampaign ? formatCompletionPct(pct) : `${pct.toFixed(0)}%`}
+            </span>
           </div>
           <p className="flex items-center gap-1.5 text-sm border-t pt-3">
             <Target className="h-4 w-4 text-primary shrink-0" />
             <span className="text-muted-foreground">Còn thiếu:</span>
-            <span className="font-bold text-primary">{achieved ? pres.zero : vnd(remaining)}</span>
+            {/* r1.2.1 (audit P1): BA trạng thái tách bạch — chưa đồng bộ KHÔNG
+                được hiện "Còn thiếu 100%", và ca 99,9999% không được ra "0%". */}
+            <span className="font-bold text-primary">{remainingHeroText}</span>
           </p>
         </CardContent>
       </Card>
+
+      {/* ── Mig 106: Chất lượng bán hàng — 2 chỉ số, mỗi chỉ số có MỤC TIÊU.
+             Hero phía trên là ĐIỂM hoàn thành (chỉ số YẾU HƠN); khối này cho
+             biết vì sao: số đơn/AOV thực tế so với mục tiêu + trạng thái. ── */}
+      {qualityLines && (
+        <Card className="rounded-lg">
+          <CardContent className="p-4 space-y-2.5">
+            <p className="text-sm font-semibold">Chất lượng bán hàng</p>
+            <div className="space-y-1.5 text-sm">
+              <div className="flex items-start justify-between gap-3">
+                <span className="text-muted-foreground shrink-0">Số đơn</span>
+                <span className="text-right font-medium">{qualityLines.order}</span>
+              </div>
+              <div className="flex items-start justify-between gap-3">
+                <span className="text-muted-foreground shrink-0">AOV</span>
+                <span className="text-right font-medium">{qualityLines.aov}</span>
+              </div>
+            </div>
+            {qualityLabel && (
+              <p className="text-xs">
+                <span className={cn(
+                  'inline-block px-2 py-0.5 rounded-full font-medium',
+                  qualityPass ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700',
+                )}>{qualityLabel}</span>
+              </p>
+            )}
+            <p className="text-[11px] text-muted-foreground">
+              Điểm hoàn thành lấy theo chỉ số THẤP hơn giữa số đơn và AOV. Phải đạt CẢ HAI mục tiêu mới được thưởng.
+            </p>
+          </CardContent>
+        </Card>
+      )}
 
       {/* ── P3-E: Phân loại theo chỉ số (CHỈ khi campaign bật cả 2 nguồn) —
              mỗi nguồn: giá trị · % trên CÙNG kpi_target · mốc đồng bộ riêng.
@@ -283,7 +404,7 @@ export function CampaignKpiView({
 
       {/* ── 3 metric cards — solid colored icon circles per template
              (brand triad: blue-grey / coral / green) ── */}
-      <div className="grid grid-cols-3 gap-2">
+      <div className={cn('grid gap-2', isOrderAovCampaign ? 'grid-cols-2' : 'grid-cols-3')}>
         <Card className="rounded-lg">
           <CardContent className="p-3 text-center">
             <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-muted text-muted-foreground">
@@ -295,15 +416,19 @@ export function CampaignKpiView({
             <p className="text-sm font-bold mt-0.5">{campaignOver ? 'Đã kết thúc' : `${daysLeft} ngày`}</p>
           </CardContent>
         </Card>
-        <Card className="rounded-lg">
-          <CardContent className="p-3 text-center">
-            <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground">
-              <TrendingUp className="h-4 w-4" />
-            </span>
-            <p className="text-[11px] text-muted-foreground mt-1.5">Trung bình/ngày cần đạt</p>
-            <p className="text-sm font-bold mt-0.5 text-primary">{achieved ? pres.zero : campaignOver ? '—' : vnd(needPerDay)}</p>
-          </CardContent>
-        </Card>
+        {/* r1.1 (audit khuyến nghị): ẩn với Chất lượng bán hàng — "điểm %/ngày"
+            KHÔNG tương đương số đơn/ngày hay AOV/ngày, dễ hiểu sai nghiệp vụ. */}
+        {!isOrderAovCampaign && (
+          <Card className="rounded-lg">
+            <CardContent className="p-3 text-center">
+              <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                <TrendingUp className="h-4 w-4" />
+              </span>
+              <p className="text-[11px] text-muted-foreground mt-1.5">Trung bình/ngày cần đạt</p>
+              <p className="text-sm font-bold mt-0.5 text-primary">{achieved ? pres.zero : campaignOver ? '—' : vnd(needPerDay)}</p>
+            </CardContent>
+          </Card>
+        )}
         <Card className="rounded-lg">
           <CardContent className="p-3 text-center">
             <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-status-success-bg text-status-success">
@@ -311,7 +436,7 @@ export function CampaignKpiView({
             </span>
             <p className="text-[11px] text-muted-foreground mt-1.5">{pres.todayLabel}</p>
             <p className={cn('text-sm font-bold mt-0.5', todayGmv !== null && todayGmv > 0 && 'text-status-success')}>
-              {todayGmv !== null ? vnd(todayGmv) : '—'}
+              {todayText}
             </p>
           </CardContent>
         </Card>
@@ -322,12 +447,40 @@ export function CampaignKpiView({
         <CardContent className="p-4">
           <p className="font-semibold text-sm mb-2">Tiến độ theo ngày</p>
           {daily.length > 0 ? (
-            <CampaignDailyChart start={sel.start_date} end={sel.end_date} daily={daily} todayISO={todayISO} breakdown={showBreakdown} metricType={sel.metric_type} />
+            <>
+            {isOrderAovCampaign && seriesHrefBase && (
+              /* Segmented Số đơn | AOV — idiom PeriodTabs: <Link> giữ URL ổn
+                 định (?series=), KHÔNG biến màn Staff thành client component. */
+              <div className="flex gap-1 mb-2" role="tablist" aria-label="Chuỗi biểu đồ">
+                {([['orders', 'Số đơn'], ['aov', 'AOV']] as const).map(([key, label]) => (
+                  <Link
+                    key={key}
+                    href={`${seriesHrefBase}${seriesHrefBase.includes('?') ? '&' : '?'}series=${key}`}
+                    role="tab"
+                    aria-selected={series === key}
+                    className={cn(
+                      // touch target >= 44px trên mobile (guardrail circa-ui)
+                      'text-xs px-4 rounded-full border font-medium inline-flex items-center',
+                      'min-h-[44px] md:min-h-0 md:py-1.5',
+                      series === key
+                        ? 'border-primary bg-primary/10 text-primary'
+                        : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    {label}
+                  </Link>
+                ))}
+              </div>
+            )}
+            <CampaignDailyChart start={sel.start_date} end={sel.end_date} daily={daily} todayISO={todayISO} breakdown={showBreakdown} metricType={sel.metric_type} series={series} />
+            </>
           ) : (
             <p className="text-sm text-muted-foreground py-6 text-center">
               {dailyError
                 ? 'Chưa tải được tiến độ theo ngày, vui lòng thử lại sau.'
-                : isCustomer ? 'Chưa có dữ liệu số khách theo ngày.' : 'Chưa có dữ liệu doanh số theo ngày.'}
+                : isCustomer ? 'Chưa có dữ liệu số khách theo ngày.'
+                : isOrderAovCampaign ? 'Chưa có dữ liệu số đơn theo ngày.'
+                : 'Chưa có dữ liệu doanh số theo ngày.'}
             </p>
           )}
         </CardContent>

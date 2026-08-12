@@ -1,7 +1,8 @@
 import { Card, CardContent } from '@/components/ui/card'
 import { performanceTone } from '@/lib/kpi/performance'
 import type { CampaignResultModel } from '@/lib/kpi/resultModel'
-import { metricPresentation } from '@/lib/kpi/campaignDisplay'
+import { metricPresentation, offlineOrderLine } from '@/lib/kpi/campaignDisplay'
+import { formatRemainingPct } from '@/lib/kpi/orderAov'
 import { resultTableColumns } from '@/lib/kpi/resultTableLayout'
 import { cn } from '@/lib/utils'
 import {
@@ -28,17 +29,45 @@ export function CampaignResultDashboard({ model, emptyHint }: {
   const vnd = (n: number) => pres.value(n)
   const money = (n: number) => metricPresentation('gmv').value(n)
   const isCustomer = pres.kind === 'affiliate_customer_count'
+  // Mig 106: Chất lượng bán hàng — bộ card RIÊNG (KPI target 100% không có
+  // nghĩa khi cộng dồn) + 2 cell gộp Order/AOV trong bảng.
+  const isOrderAov = pres.kind === 'offline_order_aov'
+  const nfInt = (n: number) => new Intl.NumberFormat('vi-VN').format(Math.round(n))
   const synced = m.lastSyncedAt !== null
   return (
     <>
       {/* Summary cards — thứ tự/label/màu giữ nguyên tab Kết quả super */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
-        {([
+        {((isOrderAov ? [
+          // "X/Y cửa hàng đạt" theo KPI PASS (completion >= 100%), KHÔNG theo bậc.
+          { label: 'Cửa hàng đạt KPI', value: synced ? `${m.qualityPassCount}/${m.storeCount}` : '—', icon: Award,
+            tile: synced && m.qualityPassCount > 0 ? 'bg-green-100 text-green-600' : 'bg-primary/10 text-primary',
+            valueCls: synced && m.qualityPassCount > 0 ? 'text-green-600' : undefined },
+          { label: 'Tổng số đơn', value: synced && m.totalOfflineOrders != null ? `${nfInt(m.totalOfflineOrders)} đơn` : '—',
+            icon: TrendingUp, tile: 'bg-primary/10 text-primary' },
+          { label: 'AOV bình quân', value: synced && m.totalOfflineAov != null ? money(m.totalOfflineAov) : '—',
+            icon: StoreIcon, tile: 'bg-primary/10 text-primary' },
+          { label: 'Net Revenue (tham khảo)', value: synced ? money(m.totalOffline) : '—', icon: Wallet,
+            tile: 'bg-muted text-muted-foreground' },
+          { label: 'Tổng commission đạt', value: synced ? money(m.totalCommission) : '—', icon: Wallet,
+            tile: synced && m.totalCommission > 0 ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground',
+            valueCls: synced && m.totalCommission > 0 ? 'text-green-600' : undefined },
+          // r1.1 (audit P2): BỎ 'Store đạt bậc' — với policy đúng 1 bậc mốc 100
+          // nó trùng nghĩa 'Cửa hàng đạt KPI' ở trên.
+          { label: 'Thời hạn', value: m.deadlineLabel, icon: CalendarDays, tile: 'bg-muted text-muted-foreground' },
+        ] : [
           { label: 'Tổng KPI target', value: vnd(m.totalTarget), icon: Target, tile: 'bg-primary/10 text-primary' },
           { label: isCustomer ? 'Tổng số khách' : 'Tổng actual GMV', value: synced ? vnd(m.totalActual) : '—', icon: TrendingUp,
+            // 105: campaign offline-only (không breakdown) → dòng phụ đặt ở
+            // card này; hybrid có card GMV Offline riêng bên dưới.
+            sub: !m.showBreakdown && !isCustomer && !isOrderAov && synced
+              ? offlineOrderLine(m.totalOffline, m.totalOfflineOrders) : null,
             tile: synced && m.totalActual > 0 ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground' },
           ...(m.showBreakdown ? [
             { label: 'GMV Offline', value: synced ? vnd(m.totalOffline) : '—', icon: StoreIcon,
+              // 105: dòng phụ tổng — AOV WEIGHTED (totalOffline/totalOrders),
+              // '—' khi bất kỳ store nào thiếu count (model đã trả null).
+              sub: synced ? offlineOrderLine(m.totalOffline, m.totalOfflineOrders) : null,
               tile: 'bg-primary/10 text-primary' },
             { label: 'GMV Affiliate', value: synced ? vnd(m.totalAffiliate) : '—', icon: LinkIcon,
               tile: 'bg-muted text-muted-foreground' },
@@ -54,7 +83,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
             tile: 'bg-primary/10 text-primary',
             valueCls: m.performance != null ? performanceTone(m.performance) : undefined },
           { label: 'Thời hạn', value: m.deadlineLabel, icon: CalendarDays, tile: 'bg-muted text-muted-foreground' },
-        ] as { label: string; value: string; icon: LucideIcon; tile: string; valueCls?: string; bar?: boolean }[]).map((card) => (
+        ]) as { label: string; value: string; icon: LucideIcon; tile: string; valueCls?: string; bar?: boolean; sub?: string | null }[]).map((card) => (
           <Card key={card.label}>
             <CardContent className="p-3">
               <div className="flex items-start gap-2.5">
@@ -64,6 +93,9 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                 <div className="min-w-0 flex-1">
                   <p className="text-[11px] text-muted-foreground uppercase truncate">{card.label}</p>
                   <p className={cn('text-lg font-bold mt-0.5 leading-tight', card.valueCls)}>{card.value}</p>
+                  {/* 105: dòng phụ số đơn · AOV (chỉ card GMV Offline / Actual
+                      GMV của campaign offline-only) */}
+                  {card.sub && <p className="text-[11px] text-muted-foreground mt-0.5 truncate">{card.sub}</p>}
                   {card.bar && synced && (
                     <div className="mt-1.5 h-1.5 rounded-full bg-muted overflow-hidden">
                       <div
@@ -120,18 +152,74 @@ export function CampaignResultDashboard({ model, emptyHint }: {
               </thead>
               <tbody className="divide-y">
                 {m.rows.map((r) => {
+                  // 105: dòng phụ theo store — null ⇒ không render (snapshot
+                  // cũ/campaign khách/affiliate-only).
+                  const orderLine = () => (isCustomer || isOrderAov)
+                    ? null : offlineOrderLine(r.actual?.actual_offline ?? 0, r.offlineOrderCount)
                   const a = r.actual
-                  const remaining = a?.remaining_target ?? null
                   return (
                     <tr key={r.targetId} className="hover:bg-muted/30">
                       {/* r1.6: sticky left CHỈ lg (mobile giữ UI cũ) — bg-card
                           opaque để nội dung cuộn khuất phía dưới cell */}
                       <td className="px-4 py-2.5 font-medium lg:sticky lg:left-0 lg:z-10 lg:bg-card">{r.storeName ?? '—'}{r.posCode ? ` · ${r.posCode}` : ''}</td>
                       <td className="px-4 py-2.5 text-xs">{r.group ?? '—'}</td>
-                      <td className="px-4 py-2.5 text-right whitespace-nowrap">{vnd(r.kpiTarget)}</td>
-                      <td className="px-4 py-2.5 text-right whitespace-nowrap">{a ? vnd(a.actual_value) : '—'}</td>
-                      {m.showBreakdown && <td className="px-4 py-2.5 text-right text-muted-foreground whitespace-nowrap">{a?.actual_offline != null ? vnd(a.actual_offline) : '—'}</td>}
+                      {!isOrderAov && (
+                        <td className="px-4 py-2.5 text-right whitespace-nowrap">{vnd(r.kpiTarget)}</td>
+                      )}
+                      <td className="px-4 py-2.5 text-right whitespace-nowrap">
+                        {/* r1.1: order_aov gộp % vào chính cột này (bỏ cột '%'
+                            trùng số) — thanh tiến độ + điểm hoàn thành. */}
+                        {isOrderAov && a ? (
+                          <span className="inline-flex items-center justify-end gap-2">
+                            <span className="h-1.5 w-14 rounded-full bg-muted overflow-hidden shrink-0 inline-block align-middle">
+                              <span
+                                className={cn('block h-full rounded-full', r.qualityKpiPass ? 'bg-green-500' : 'bg-primary')}
+                                style={{ width: `${Math.min(100, Math.max(0, Number(a.actual_value) || 0))}%` }}
+                              />
+                            </span>
+                            <span className={cn('text-xs font-semibold', r.qualityKpiPass ? 'text-green-600' : 'text-primary')}>
+                              {vnd(a.actual_value)}
+                            </span>
+                          </span>
+                        ) : a ? vnd(a.actual_value) : '—'}
+                        {/* 105: offline-only → dòng phụ nằm ngay dưới Actual GMV
+                            (hybrid đã có cột GMV Offline riêng) */}
+                        {!m.showBreakdown && orderLine() && (
+                          <span className="block text-[11px] text-muted-foreground/80">{orderLine()}</span>
+                        )}
+                      </td>
+                      {/* 106: Order + AOV GỘP 1 cột 2 dòng + cột trạng thái đạt KPI */}
+                      {isOrderAov && (
+                        <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                          {r.orderAovLines ? (
+                            <>
+                              <span className="block whitespace-nowrap">{r.orderAovLines.order}</span>
+                              <span className="block whitespace-nowrap">{r.orderAovLines.aov}</span>
+                            </>
+                          ) : '—'}
+                        </td>
+                      )}
+                      {isOrderAov && (
+                        <td className="px-4 py-2.5 text-xs">
+                          {r.qualityStatusLabel ? (
+                            <span className={cn(
+                              'inline-block px-2 py-0.5 rounded-full font-medium',
+                              r.qualityKpiPass ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700',
+                            )}>
+                              {r.qualityStatusLabel}
+                            </span>
+                          ) : <span className="text-muted-foreground">—</span>}
+                        </td>
+                      )}
+                      {m.showBreakdown && (
+                        <td className="px-4 py-2.5 text-right text-muted-foreground whitespace-nowrap">
+                          {a?.actual_offline != null ? vnd(a.actual_offline) : '—'}
+                          {/* 105: dòng phụ số đơn · AOV — KHÔNG thêm cột mới */}
+                          {orderLine() && <span className="block text-[11px] text-muted-foreground/80">{orderLine()}</span>}
+                        </td>
+                      )}
                       {m.showBreakdown && <td className="px-4 py-2.5 text-right text-muted-foreground whitespace-nowrap">{a?.actual_affiliate != null ? vnd(a.actual_affiliate) : '—'}</td>}
+                      {!isOrderAov && (
                       <td className="px-4 py-2.5">
                         {a?.run_rate != null ? (
                           <div className="flex items-center justify-end gap-2">
@@ -147,12 +235,20 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                           </div>
                         ) : <span className="block text-right">—</span>}
                       </td>
+                      )}
                       <td className="px-4 py-2.5 text-right">
                         {r.performance != null
                           ? <span className={cn('text-xs font-semibold', performanceTone(r.performance))}>{r.performance.toFixed(1)}%</span>
                           : '—'}
                       </td>
-                      <td className="px-4 py-2.5 text-right whitespace-nowrap">{remaining != null ? vnd(remaining) : '—'}</td>
+                      {/* 10/08: 'Trung bình/ngày' thay 'Còn thiếu' — cùng
+                          công thức card Staff (requiredPerDay); đơn vị theo
+                          metric (VNĐ / khách) qua metricPresentation. */}
+                      {/* r1.1: Chất lượng bán hàng ẩn cột này (điểm %/ngày
+                          không tương đương số đơn/ngày hay AOV/ngày). */}
+                      {!isOrderAov && (
+                        <td className="px-4 py-2.5 text-right whitespace-nowrap">{r.requiredPerDay != null ? vnd(r.requiredPerDay) : '—'}</td>
+                      )}
                       {/* Mobile: cột gộp cũ giữ nguyên */}
                       <td className="px-4 py-2.5 lg:hidden">
                         {a?.achieved_tier_order != null
@@ -183,7 +279,11 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                                 ) : tp.reached ? (
                                   <p className="font-medium text-green-600 mt-0.5">Đã đạt</p>
                                 ) : (
-                                  <p className="font-medium text-primary mt-0.5">Còn thiếu {vnd(tp.remaining_amount)}</p>
+                                  // r1.2: campaign điểm % dùng formatter CÒN THIẾU
+                                  // riêng — 0,0001 không được thành "0%".
+                                  <p className="font-medium text-primary mt-0.5">
+                                    Còn thiếu {isOrderAov ? formatRemainingPct(tp.remaining_amount) : vnd(tp.remaining_amount)}
+                                  </p>
                                 )}
                               </div>
                             )}

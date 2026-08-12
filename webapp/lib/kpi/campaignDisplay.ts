@@ -4,6 +4,8 @@
 // r2 (audit P3): structural type CỤC BỘ — tầng lib không import type từ
 // component UI (tránh đảo chiều phụ thuộc); CampaignView khớp structurally.
 
+import { aovFromSnapshot, formatCompletionPct, formatRemainingPct } from '@/lib/kpi/orderAov'
+
 export interface BreakdownInput {
   metric_offline: boolean
   metric_affiliate: boolean
@@ -46,7 +48,7 @@ export function campaignFootnote(v: { metric_offline: boolean; metric_affiliate:
 // lặp ở component (KpiView/ResultSummary/ResultDashboard/DailyChart/[id]/list).
 // gmv: format BYTE-EQUAL formatter cũ (Intl vi-VN + '₫', null → '—'; compact
 // tỷ/tr/k như CampaignDailyChart) — test khóa; customer: 'N khách'.
-export type CampaignMetricType = 'gmv' | 'affiliate_customer_count'
+export type CampaignMetricType = 'gmv' | 'affiliate_customer_count' | 'offline_order_aov'
 
 export interface MetricPresentation {
   kind: CampaignMetricType
@@ -93,10 +95,51 @@ const CUSTOMER_PRESENTATION: MetricPresentation = {
   zero: '0 khách',
 }
 
+// Mig 106 — Chất lượng bán hàng: đơn vị hiển thị là ĐIỂM %, KHÔNG phải tiền.
+// ⚠ Nếu quên nhánh này, metricPresentation default 'gmv' sẽ render 116,1975
+// thành "116₫" — sai im lặng trên màn tiền (hero Staff đọc thẳng run_rate).
+const ORDER_AOV_PRESENTATION: MetricPresentation = {
+  kind: 'offline_order_aov',
+  targetLabel: 'Mục tiêu chất lượng',
+  actualHeroLabel: 'Điểm hoàn thành',
+  todayLabel: 'Số đơn hôm nay',
+  perDayLabel: 'Trung bình/ngày cần đạt',
+  actualColumnLabel: 'Hoàn thành',
+  chartAriaLabel: 'Biểu đồ số đơn theo ngày',
+  // 1 chữ số thập phân, NHƯNG chưa đạt thì không bao giờ ra '100%'
+  // (formatCompletionPct — dùng chung mọi surface).
+  value: (n) => formatCompletionPct(n),
+  compact: (n) => nfVi.format(Math.round(n)),
+  zero: '0%',
+}
+
 // Default 'gmv' cho MỌI giá trị lạ/thiếu (caller cũ chưa truyền metric_type
 // giữ nguyên hiển thị tiền — an toàn hiển thị; số liệu đã bị DB/engine chặn).
 export function metricPresentation(metricType?: string | null): MetricPresentation {
-  return metricType === 'affiliate_customer_count' ? CUSTOMER_PRESENTATION : GMV_PRESENTATION
+  if (metricType === 'affiliate_customer_count') return CUSTOMER_PRESENTATION
+  if (metricType === 'offline_order_aov') return ORDER_AOV_PRESENTATION
+  return GMV_PRESENTATION
+}
+
+// ── Mig 106: dòng phụ "thực tế / mục tiêu" cho Số đơn và AOV ────────────────
+// Desktop gộp Order + AOV vào CÙNG MỘT nhóm 2 dòng (yêu cầu stakeholder: không
+// đẻ thêm cột ngang). Contract 12/08: chỉ còn MỤC TIÊU, không có sàn.
+// null = campaign loại khác / chưa cấu hình → caller hiện '—'.
+export function orderAovMetricLines(p: {
+  actualOrder: number | null | undefined
+  actualNet: number | null | undefined
+  orderTarget: number | null | undefined
+  aovTarget: number | null | undefined
+}): { order: string; aov: string } | null {
+  if (p.orderTarget == null || p.aovTarget == null) return null
+  const fmt = (n: number) => nfVi.format(Math.round(n))
+  const orderActual = p.actualOrder == null ? '—' : fmt(p.actualOrder)
+  const aovVal = aovFromSnapshot(p.actualNet, p.actualOrder)
+  const aovActual = aovVal == null ? '—' : `${fmt(aovVal)}₫`
+  return {
+    order: `${orderActual} / ${fmt(p.orderTarget)} đơn`,
+    aov: `${aovActual} / ${fmt(p.aovTarget)}₫`,
+  }
 }
 
 // (H1.2 smSelectorVisible đã GỠ 27/07: SM Dashboard r2 thay store-selector-
@@ -129,4 +172,75 @@ export function metricEditorState(p: {
     metricsLocked,
     showAffiliateControl: p.affiliateEnabled || p.metricAffiliate,
   }
+}
+
+// ── 105 (11/08): dòng phụ "Số đơn · AOV" cho GMV Offline ────────────────────
+// KHÔNG thêm cột bảng (yêu cầu stakeholder: không rối mắt, hạn chế scroll
+// ngang) — chuỗi này nằm dưới ô/card GMV Offline (hybrid) hoặc Actual GMV
+// (offline-only). Trả null ⇒ KHÔNG render dòng nào:
+//   · count == null → nguồn/snapshot chưa có số đơn (KHÁC 0 đơn) — không bịa
+//   · campaign khách / affiliate-only → caller không gọi
+// AOV = offline / count (weighted per store), làm tròn tới VNĐ; count = 0 →
+// hiện "0 đơn" (số thật) nhưng AOV '—' (không chia 0).
+export function offlineOrderLine(offline: number | null, count: number | null): string | null {
+  if (count === null || count === undefined) return null
+  const nf = new Intl.NumberFormat('vi-VN')
+  const orders = `${nf.format(count)} đơn`
+  if (count <= 0) return `${orders} · AOV —`
+  const aov = Math.round((Number(offline) || 0) / count)
+  return `${orders} · AOV ${nf.format(aov)}₫`
+}
+
+// ── 106 r1.1 (audit P2#5): nhãn "đã đồng bộ" theo LOẠI chiến dịch ───────────
+// Toast/cảnh báo trước đây hard-code "GMV đã đồng bộ" ⇒ campaign Số khách hiện
+// nhãn sai. Default vẫn là doanh số (caller cũ / giá trị lạ).
+export function syncedSubjectLabel(metricType?: string | null): string {
+  if (metricType === 'affiliate_customer_count') return 'Số khách đã đồng bộ'
+  if (metricType === 'offline_order_aov') return 'Chất lượng bán hàng đã đồng bộ'
+  return 'Doanh số đã đồng bộ'
+}
+
+// ── r1.2.1 (audit P1): 3 QUYẾT ĐỊNH HIỂN THỊ tách thuần để test khóa ───────
+
+// Hero "Còn thiếu" — BA trạng thái tách bạch. Trước đây null actual vẫn ra
+// "Còn thiếu 100%" (mâu thuẫn với "Chưa đồng bộ" ngay bên trên), và ca
+// completion 99,9999% ra "0%" (mâu thuẫn với badge "Chưa đạt").
+export function heroRemainingText(p: {
+  actualValue: number | null | undefined
+  achieved: boolean
+  remaining: number
+  metricType?: string | null
+}): string {
+  if (p.actualValue === null || p.actualValue === undefined) return '—'
+  const pres = metricPresentation(p.metricType)
+  if (pres.kind === 'offline_order_aov') return formatRemainingPct(p.achieved ? 0 : p.remaining)
+  return p.achieved ? pres.zero : pres.value(p.remaining)
+}
+
+// Card campaign ở màn danh sách Staff/QLCH: chưa đồng bộ KHÔNG được vẽ tiến độ
+// 0% (đọc như đã có kết quả); actual = 0 THẬT thì vẫn hiện 0%.
+export function campaignCardProgress(c: {
+  kpi_target: number | null
+  actual_value: number | null | undefined
+  metric_type?: string
+}): { synced: boolean; pct: number; text: string } {
+  const synced = c.actual_value !== null && c.actual_value !== undefined
+  const target = Number(c.kpi_target) || 0
+  const actual = Number(c.actual_value) || 0
+  const isOrderAov = c.metric_type === 'offline_order_aov'
+  // order_aov: actual_value CHÍNH LÀ điểm hoàn thành (kpi_target chuẩn hóa 100).
+  const rawPct = isOrderAov ? actual : (target > 0 ? (actual / target) * 100 : 0)
+  if (!synced) return { synced, pct: 0, text: 'Chưa đồng bộ' }
+  return {
+    synced,
+    pct: Math.round(rawPct),
+    text: isOrderAov ? formatCompletionPct(rawPct) : `${Math.round(rawPct)}%`,
+  }
+}
+
+// Lưới trục cho chuỗi SỐ ĐƠN: giá trị nguyên + khử trùng (max=5 ⇒ [3,5], không
+// phải [2.5,5] rồi nhãn làm tròn thành '3' đặt sai chỗ).
+export function orderAxisTicks(max: number): number[] {
+  const top = Math.max(1, Math.ceil(max))
+  return [...new Set([Math.ceil(top / 2), top])]
 }

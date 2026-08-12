@@ -31,3 +31,12 @@ export function isKpiAffiliateEnabled(): boolean {
 export function isKpiAffiliateCustomerEnabled(): boolean {
   return process.env.KPI_AFFILIATE_CUSTOMER_ENABLED === 'true'
 }
+
+// Mig 106 — campaign "Chất lượng bán hàng" (Số đơn 90% + AOV 10%). GATE DUY
+// NHẤT của loại này, ĐỘC LẬP 2 flag affiliate ở trên. OFF = ẩn khỏi wizard +
+// engine preserve + activation từ chối ⇒ deploy schema/code TRƯỚC, bật SAU khi
+// chạy migration 106 + đối soát 3 sample Finance trên prod.
+// Server-only (KHÔNG NEXT_PUBLIC) — truyền xuống client bằng prop.
+export function isKpiOrderAovEnabled(): boolean {
+  return process.env.KPI_ORDER_AOV_CAMPAIGN_ENABLED === 'true'
+}

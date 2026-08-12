@@ -31,12 +31,15 @@ interface TargetRow {
   store_kpi_group: string | null
   stores: { name: string } | null
   kpi_campaign_store_tiers: TierRow[]
+  // Mig 106 — chỉ campaign Chất lượng bán hàng (NULL với 2 loại cũ).
+  order_target: number | null; aov_target: number | null
 }
 interface ActualRow {
   store_id: string; actual_value: number; run_rate: number | null
   remaining_target: number | null; achieved_tier_order: number | null
   store_commission_pool: number | null; synced_at: string
   actual_offline: number | null; actual_affiliate: number | null
+  offline_order_count: number | null
   offline_synced_at: string | null; affiliate_synced_at: string | null
 }
 
@@ -83,7 +86,7 @@ export default async function CampaignDetailPage({
   ] = await Promise.all([
     supabase
       .from('kpi_campaign_store_targets')
-      .select('id, store_id, pos_code, kpi_target, store_kpi_group, stores(name), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
+      .select('id, store_id, pos_code, kpi_target, store_kpi_group, order_target, aov_target, stores(name), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
       .eq('campaign_id', id)
       .order('pos_code'),
     supabase
@@ -92,7 +95,7 @@ export default async function CampaignDetailPage({
       .eq('campaign_id', id).order('created_at', { ascending: false }).limit(5),
     supabase
       .from('kpi_campaign_store_actuals')
-      .select('store_id, actual_value, actual_offline, actual_affiliate, actual_customer_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
+      .select('store_id, actual_value, actual_offline, actual_affiliate, offline_order_count, actual_customer_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
       .eq('campaign_id', id),
   ])
   const queryError = targetsErr?.message ?? runsErr?.message ?? actualsErr?.message ?? null

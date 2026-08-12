@@ -1,13 +1,14 @@
 import { test, expect } from '@playwright/test'
-import { manualSyncPlan, runSyncBatch, safeManualSync, shouldRevalidateAfterBatch } from '../lib/kpi/syncBatch'
+import { WARNING_LIMIT, manualSyncPlan, runSyncBatch, safeManualSync, shouldRevalidateAfterBatch } from '../lib/kpi/syncBatch'
 import { sanitizeOpsText } from '../lib/ops/sanitize'
 import type { SyncCampaignResult } from '../lib/kpi/syncCampaignCore'
 
 // P3-C unit gate — caller contract (audit 23/07): 200/207/500 mapping, loop
 // độc lập từng campaign, log không secret, manual plan revalidate/toast.
 
-const ok = (id: string, upserted = 2, unmatched: string[] = []): SyncCampaignResult =>
-  ({ status: 'success', campaignId: id, upserted, dailyRows: 10, unmatched })
+const ok = (id: string, upserted = 2, unmatched: string[] = [], warnings?: string[]): SyncCampaignResult =>
+  ({ status: 'success', campaignId: id, upserted, dailyRows: 10, unmatched,
+     ...(warnings ? { warnings } : {}) })
 const preserved = (id: string, reason: string): SyncCampaignResult =>
   ({ status: 'snapshot_preserved', campaignId: id, reason })
 const failed = (id: string, error: string): SyncCampaignResult =>
@@ -97,7 +98,9 @@ test.describe('kpi sync batch contract @desktop', () => {
 
   test('manualSyncPlan: success → revalidate=true + số liệu; preserved/failed → revalidate=false', () => {
     const s = manualSyncPlan(ok('c-1', 7, ['POS0002']))
-    expect(s).toEqual({ kind: 'success', revalidate: true, upserted: 7, unmatched: ['POS0002'] })
+    // 105 r1.3.1: shape success THÊM warnings (mặc định []) — đổi contract có
+    // chủ ý để toast/Coolify đọc được cảnh báo degrade.
+    expect(s).toEqual({ kind: 'success', revalidate: true, upserted: 7, unmatched: ['POS0002'], warnings: [] })
 
     const p = manualSyncPlan(preserved('c-1', 'nguồn affiliate chưa sẵn sàng'))
     expect(p).toEqual({ kind: 'preserved', revalidate: false, reason: 'nguồn affiliate chưa sẵn sàng' })
@@ -197,5 +200,81 @@ test.describe('kpi sync batch contract @desktop', () => {
     const line = out.logLines.find((l) => l.includes('warning'))
     expect(line).toContain('cross_store_customer_count=1')
     expect(line).toContain('c-1')
+  })
+})
+
+// ── 105 r1.3.1 (audit P1): warnings của success phải NỔI LÊN RESPONSE ────────
+// Trước r1.3.1 warning degrade chỉ nằm trong application log ⇒ Coolify nhận
+// 200 với body sạch, người vận hành không biết POS nào mất Order/AOV.
+test.describe('kpi sync batch — warnings degrade trong body (105 r1.3.1) @desktop', () => {
+  const W1 = 'Số đơn/AOV Offline tạm ẩn cho POS0009 — nguồn BQ no_order KHÔNG NGUYÊN. GMV/commission KHÔNG bị ảnh hưởng.'
+  const W2 = 'Số đơn/AOV Offline tạm ẩn cho POS0011 — nguồn BQ lệch NULL. GMV/commission KHÔNG bị ảnh hưởng.'
+
+  test('success + warnings → VẪN 200/ok=true nhưng body.warnings có campaign + lý do', async () => {
+    const out = await runSyncBatch(CAMPS, async (id) => (id === 'c-1' ? ok(id, 2, [], [W1, W2]) : ok(id)))
+    expect(out.httpStatus).toBe(200)         // tiền đã ghi đúng — KHÔNG hạ xuống 207
+    expect(out.body.ok).toBe(true)
+    expect(out.body.upserted).toBe(6)
+    expect(out.body.warnings).toEqual([
+      { campaign: 'Tháng 7 OS', warning: W1 },
+      { campaign: 'Tháng 7 OS', warning: W2 },
+    ])
+    // đồng thời vẫn có log line (không thay thế log bằng body)
+    expect(out.logLines.filter((l) => l.includes('warning campaign=c-1')).length).toBe(2)
+  })
+
+  test('warning trùng lặp trong cùng campaign → dedupe (cron 2h/lần không phình body)', async () => {
+    const out = await runSyncBatch([CAMPS[0]], async (id) => ok(id, 1, [], [W1, W1, W2]))
+    expect(out.body.warnings).toEqual([
+      { campaign: 'Tháng 7 OS', warning: W1 },
+      { campaign: 'Tháng 7 OS', warning: W2 },
+    ])
+  })
+
+  test('warning được SANITIZE trước khi vào body (secret + log-injection)', async () => {
+    // secret GIẢ — không bao giờ dùng credential thật trong test.
+    const raw = ['nguon hong CRON_SECRET=fake-abc123', 'FAKE LOG LINE'].join('\n')
+    const out = await runSyncBatch([CAMPS[0]], async (id) => ok(id, 1, [], [raw]))
+    const w = out.body.warnings[0].warning
+    expect(w).toBe(sanitizeOpsText(raw))
+    expect(w).not.toContain('fake-abc123')
+    expect(w).not.toContain('\n')
+  })
+
+  test('không có warning → body.warnings = [] (contract ổn định cho Coolify)', async () => {
+    const out = await runSyncBatch(CAMPS, async (id) => ok(id))
+    expect(out.body.warnings).toEqual([])
+  })
+
+  test('manualSyncPlan: success mang warnings (dedupe + sanitize) để toast nói đúng sự thật', () => {
+    const plan = manualSyncPlan(ok('c-1', 3, ['POS0002'], [W1, W1]))
+    expect(plan.kind).toBe('success')
+    if (plan.kind === 'success') {
+      expect(plan.revalidate).toBe(true)     // GMV đã ghi ⇒ vẫn refresh màn hình
+      expect(plan.upserted).toBe(3)
+      expect(plan.warnings).toEqual([W1])
+    }
+    const clean = manualSyncPlan(ok('c-1'))
+    if (clean.kind === 'success') expect(clean.warnings).toEqual([])
+  })
+
+  test('r1.2: cắt ở WARNING_LIMIT nhưng KHÔNG im lặng — warningCount + warningsTruncated', async () => {
+    const many = Array.from({ length: WARNING_LIMIT + 7 }, (_, i) => `POS${1000 + i}: nguồn số đơn hỏng`)
+    const out = await runSyncBatch([CAMPS[0]], async (id) => ok(id, 1, [], many))
+    expect(out.body.warnings.length).toBe(WARNING_LIMIT)
+    expect(out.body.warningCount).toBe(WARNING_LIMIT + 7)   // tổng THẬT sau dedupe
+    expect(out.body.warningsTruncated).toBe(true)
+    expect(out.httpStatus).toBe(200)
+    // log KHÔNG bị cắt — vận hành vẫn tra được đủ POS
+    expect(out.logLines.filter((l) => l.includes('warning campaign=')).length).toBe(WARNING_LIMIT + 7)
+  })
+
+  test('r1.2: dưới trần → warningsTruncated=false, warningCount khớp độ dài mảng', async () => {
+    const out = await runSyncBatch([CAMPS[0]], async (id) => ok(id, 1, [], ['POS0009: hỏng']))
+    expect(out.body.warningCount).toBe(1)
+    expect(out.body.warningsTruncated).toBe(false)
+    const clean = await runSyncBatch(CAMPS, async (id) => ok(id))
+    expect(clean.body.warningCount).toBe(0)
+    expect(clean.body.warningsTruncated).toBe(false)
   })
 })

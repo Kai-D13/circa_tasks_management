@@ -7,7 +7,46 @@
 // Cùng input → cùng output ở mọi role; SM đưa vào tập rows RLS-scoped (chỉ
 // store được phân công) → totals tự là tổng đúng phạm vi SM.
 
-import { campaignPerformance } from '@/lib/kpi/performance'
+import { campaignPerformance, requiredPerDay } from '@/lib/kpi/performance'
+import { orderAovMetricLines } from '@/lib/kpi/campaignDisplay'
+import {
+  ORDER_AOV_STATUS_LABEL, aovFromSnapshot, orderAovStatus,
+  qualityKpiPass as isQualityKpiPass, type OrderAovStatus,
+} from '@/lib/kpi/orderAov'
+
+// Mig 106: gom phần Chất lượng bán hàng của 1 dòng store. Campaign loại khác →
+// mọi field null/false (UI không đổi 1 bit).
+function buildQualityFields(t: ResultTargetRow, a: ResultActualRow | null): {
+  orderAovLines: { order: string; aov: string } | null
+  qualityKpiPass: boolean
+  qualityStatus: OrderAovStatus | null
+  qualityStatusLabel: string | null
+} {
+  const lines = orderAovMetricLines({
+    actualOrder: a?.offline_order_count ?? null,
+    actualNet: a?.actual_offline ?? null,
+    orderTarget: t.order_target, aovTarget: t.aov_target,
+  })
+  if (!lines) {
+    return { orderAovLines: null, qualityKpiPass: false, qualityStatus: null, qualityStatusLabel: null }
+  }
+  const orders = a?.offline_order_count ?? null
+  const aov = aovFromSnapshot(a?.actual_offline, orders)
+  // Chưa sync (không có actual) → KHÔNG suy trạng thái, UI hiện '—'.
+  const status = a == null || orders == null ? null : orderAovStatus({
+    actualOrder: orders,
+    orderPass: orders >= Number(t.order_target),
+    aovPass: aov !== null && aov >= Number(t.aov_target),
+  })
+  return {
+    orderAovLines: lines,
+    // completion >= 100 ⟺ đạt CẢ HAI mục tiêu (min của 2 tỉ lệ) — RPC giữ
+    // invariant này nên đọc từ actual_value là đủ và không thể lệch.
+    qualityKpiPass: isQualityKpiPass(a?.actual_value),
+    qualityStatus: status,
+    qualityStatusLabel: status ? ORDER_AOV_STATUS_LABEL[status] : null,
+  }
+}
 
 export interface ResultTierRow { tier_order: number; threshold_pct: number; commission_amount: number }
 
@@ -19,6 +58,9 @@ export interface ResultTargetRow {
   store_kpi_group: string | null
   stores: { name: string } | null
   kpi_campaign_store_tiers: ResultTierRow[]
+  // Mig 106 — chỉ campaign Chất lượng bán hàng (NULL với 2 loại cũ).
+  order_target?: number | null
+  aov_target?: number | null
 }
 
 export interface ResultActualRow {
@@ -31,6 +73,9 @@ export interface ResultActualRow {
   synced_at: string
   actual_offline: number | null
   actual_affiliate: number | null
+  // 105: số đơn Offline (BQ no_order). NULL = nguồn/snapshot chưa có số đơn —
+  // KHÁC 0; UI phải hiện '—', KHÔNG hiện "0 đơn".
+  offline_order_count: number | null
   offline_synced_at: string | null
   affiliate_synced_at: string | null
 }
@@ -100,6 +145,19 @@ export interface StoreResultRow {
   kpiTarget: number
   actual: ResultActualRow | null
   performance: number | null
+  // 10/08: "Trung bình/ngày cần đạt" — CÙNG công thức card Staff (lib/kpi/
+  // performance.requiredPerDay). null = chưa sync / campaign hết ngày → '—'.
+  requiredPerDay: number | null
+  // 105: số đơn Offline + AOV (= actual_offline / offline_order_count).
+  // null khi chưa có count hoặc count = 0 (chia 0) → UI '—'.
+  offlineOrderCount: number | null
+  offlineAov: number | null
+  // ── Mig 106 (chỉ campaign Chất lượng bán hàng; null với 2 loại cũ) ──
+  // 2 dòng gộp CÙNG một nhóm cột (không đẻ cột ngang mới).
+  orderAovLines: { order: string; aov: string } | null
+  qualityKpiPass: boolean          // completion >= 100 (KHÔNG suy từ tier)
+  qualityStatus: OrderAovStatus | null
+  qualityStatusLabel: string | null
   // Tier progress (28/07): tiers ĐÃ SORT theo tier_order kèm target/remaining/
   // reached — nguồn duy nhất cho cột động desktop (Super ↔ SM cùng công thức).
   tierProgress: TierProgress[]
@@ -114,6 +172,15 @@ export interface CampaignResultModel {
   totalActual: number
   totalOffline: number
   totalAffiliate: number
+  // 105: tổng số đơn Offline + AOV WEIGHTED toàn phạm vi (totalOffline /
+  // totalOfflineOrders — TUYỆT ĐỐI không average AOV từng store: đo thật
+  // 08/2026 lệch 1.445đ). null khi CHỈ CẦN MỘT store thiếu count (tử số đủ /
+  // mẫu số thiếu ⇒ AOV tổng sai có hệ thống) → fail-visible '—'.
+  totalOfflineOrders: number | null
+  totalOfflineAov: number | null
+  // Mig 106: "X/Y cửa hàng đạt" — Y = storeCount. Đếm theo KPI pass, TUYỆT ĐỐI
+  // không theo achieved_tier_order (bậc 1 có thể ở 90% ⇒ đạt bậc ≠ đạt KPI).
+  qualityPassCount: number
   completionPct: number           // totalActual/totalTarget×100 (target 0 → 0)
   totalCommission: number
   reachedStoreCount: number
@@ -144,6 +211,25 @@ export function buildCampaignResultModel(
   const totalActual = actuals.reduce((sum, a) => sum + (Number(a.actual_value) || 0), 0)
   const totalOffline = actuals.reduce((sum, a) => sum + (Number(a.actual_offline) || 0), 0)
   const totalAffiliate = actuals.reduce((sum, a) => sum + (Number(a.actual_affiliate) || 0), 0)
+  // 105 r1.1 (audit P2): completeness tính theo TẬP TARGET, KHÔNG theo
+  // actuals.length — 2 target mà chỉ 1 có actual thì `actuals.every(...)` vẫn
+  // true và dashboard hiện tổng đơn/AOV của riêng store đó như thể toàn
+  // campaign đã đủ dữ liệu. Tổng cũng reduce qua targets → actualByStore để
+  // đúng phạm vi hiển thị (bỏ qua actual lạc ngoài targets nếu có).
+  const allHaveOrderCount = targets.length > 0
+    && targets.every((t) => actualByStore.get(t.store_id)?.offline_order_count != null)
+  const totalOfflineOrders = allHaveOrderCount
+    ? targets.reduce((sum, t) => sum + (Number(actualByStore.get(t.store_id)?.offline_order_count) || 0), 0)
+    : null
+  // AOV phải lấy TỬ SỐ cùng phạm vi với mẫu số (targets) — dùng totalOffline
+  // toàn cục trong khi số đơn chỉ tính targets sẽ cho AOV cao giả nếu tồn tại
+  // actual lạc ngoài targets. `totalOffline` (card GMV Offline) giữ NGUYÊN
+  // định nghĩa cũ để không đổi số đang chạy.
+  const offlineInTargets = targets.reduce(
+    (sum, t) => sum + (Number(actualByStore.get(t.store_id)?.actual_offline) || 0), 0)
+  const totalOfflineAov = totalOfflineOrders !== null && totalOfflineOrders > 0
+    ? offlineInTargets / totalOfflineOrders
+    : null
   const completionPct = totalTarget > 0 ? (totalActual / totalTarget) * 100 : 0
   const totalCommission = actuals.reduce((sum, a) => sum + (Number(a.store_commission_pool) || 0), 0)
   const reachedStoreCount = actuals.filter((a) => a.achieved_tier_order !== null).length
@@ -163,6 +249,20 @@ export function buildCampaignResultModel(
       actual: a,
       performance: campaignPerformance(
         t.kpi_target, a?.actual_value ?? null, campaign.start_date, campaign.end_date, todayISO),
+      offlineOrderCount: a?.offline_order_count ?? null,
+      ...buildQualityFields(t, a),
+      offlineAov: a?.offline_order_count != null && a.offline_order_count > 0
+        ? (Number(a.actual_offline) || 0) / a.offline_order_count
+        : null,
+      requiredPerDay: requiredPerDay({
+        kpiTarget: Number(t.kpi_target) || 0,
+        actual: a?.actual_value ?? null,
+        // r1.1 (audit P1): ưu tiên remaining_target của engine — cùng nguồn
+        // với hero Staff, tránh lệch số trên màn tiền.
+        remainingTarget: a?.remaining_target ?? null,
+        endISO: campaign.end_date,
+        todayISO,
+      }),
       tierProgress: buildTierProgress(
         Number(t.kpi_target) || 0,
         a ? { actual_value: Number(a.actual_value) || 0, achieved_tier_order: a.achieved_tier_order } : null,
@@ -177,6 +277,8 @@ export function buildCampaignResultModel(
     lastSyncedAt,
     storeCount: targets.length,
     totalTarget, totalActual, totalOffline, totalAffiliate,
+    totalOfflineOrders, totalOfflineAov,
+    qualityPassCount: rows.filter((r) => r.qualityKpiPass).length,
     completionPct, totalCommission, reachedStoreCount, performance, deadlineLabel,
     rows,
     maxTierCount: rows.reduce((max, r) => Math.max(max, r.tierProgress.length), 0),
