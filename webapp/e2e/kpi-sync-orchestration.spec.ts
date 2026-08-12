@@ -634,6 +634,30 @@ test.describe('kpi sync — số đơn Offline degrade (105 r1.3) @desktop', () 
     if (r.status === 'success') expect((r.warnings ?? []).join(' ')).toContain('thiếu/sai field số đơn')
   })
 
+  // audit r1.3 P2: thiếu TOÀN BỘ order_count không thay thế được case thiếu
+  // RIÊNG một alias canary — schema/query drift thường rụng đúng 1 cột.
+  test('thiếu RIÊNG canary revenue_with_zero_order → DEGRADE (GMV ghi, count không gửi)', async () => {
+    const { deps, calls, payloads } = mkDeps(CFG(), { bq: dropField('revenue_with_zero_order') })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('success')
+    expect(calls.replace).toBe(1)
+    if (r.status === 'success') expect((r.warnings ?? []).join(' ')).toContain('thiếu/sai field số đơn')
+    const daily = (payloads.daily ?? []) as Record<string, unknown>[]
+    const actuals = (payloads.actuals ?? []) as Record<string, unknown>[]
+    expect(actuals.every((a) => !('offline_order_count' in a))).toBe(true)
+    expect(daily.every((d) => !('offline_order_count' in d))).toBe(true)
+  })
+
+  test('thiếu RIÊNG canary non_integer_order → DEGRADE (không im lặng ghi 0 đơn)', async () => {
+    const { deps, calls, payloads } = mkDeps(CFG(), { bq: dropField('non_integer_order') })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('success')
+    expect(calls.replace).toBe(1)
+    if (r.status === 'success') expect((r.warnings ?? []).join(' ')).toContain('thiếu/sai field số đơn')
+    expect(((payloads.actuals ?? []) as Record<string, unknown>[])
+      .every((a) => !('offline_order_count' in a))).toBe(true)
+  })
+
   test('no_order LẺ ở POS0001 → chỉ pos đó mất số đơn, pos khác giữ nguyên', async () => {
     await expectDegraded({ bq: poisonPos1({ non_integer_order: 1 }) }, 'KHÔNG NGUYÊN')
   })

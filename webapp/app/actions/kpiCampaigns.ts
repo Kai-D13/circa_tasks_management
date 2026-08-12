@@ -204,7 +204,9 @@ export async function syncCampaignActuals(id: string) {
   }
   revalidatePath(`/targets/campaigns/${id}`)
   revalidatePath('/targets')
-  return { success: true, upserted: plan.upserted, unmatched: plan.unmatched }
+  // 105 r1.3.1 (audit P1): success có thể kèm cảnh báo degrade (Order/AOV tạm
+  // ẩn cho POS có nguồn BQ hỏng) — trả về để toast nói đúng sự thật.
+  return { success: true, upserted: plan.upserted, unmatched: plan.unmatched, warnings: plan.warnings }
 }
 
 export async function deleteCampaign(id: string) {

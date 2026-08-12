@@ -9,6 +9,9 @@
 //   • một campaign preserve/failed KHÔNG chặn campaign kế tiếp (loop độc lập —
 //     offline-only vẫn sync khi nguồn affiliate stale)
 //   • log có campaignId + name + reason; KHÔNG log secret/URI
+//   • 105 r1.3.1 (audit P1): warnings của success (vd Order/AOV Offline bị ẩn
+//     do nguồn BQ hỏng) phải NỔI LÊN RESPONSE, không chỉ nằm trong log — Coolify
+//     và nút "Đồng bộ ngay" chỉ nhìn thấy body. HTTP vẫn 200 (tiền đã ghi đúng).
 
 import type { SyncCampaignResult } from '@/lib/kpi/syncCampaignCore'
 import { sanitizeOpsText } from '@/lib/ops/sanitize'
@@ -24,6 +27,10 @@ export interface BatchOutcome {
     upserted: number
     unmatched: string[]
     preserved: { campaign: string; reason: string }[]
+    // 105 r1.3.1: cảnh báo của campaign ĐÃ ghi thành công (degrade chỉ số phụ).
+    // Đã sanitize + dedupe theo (campaign, warning) — cron chạy 2h/lần nên
+    // cùng một POS hỏng sẽ lặp lại, không được phình body.
+    warnings: { campaign: string; warning: string }[]
     errors: string[]
   }
   logLines: string[]
@@ -36,6 +43,8 @@ export async function runSyncBatch(
   let upserted = 0
   const unmatched: string[] = []
   const preserved: { campaign: string; reason: string }[] = []
+  const warnings: { campaign: string; warning: string }[] = []
+  const seenWarning = new Set<string>()
   const errors: string[] = []
   const logLines: string[] = []
   let anySuccess = false
@@ -63,10 +72,17 @@ export async function runSyncBatch(
       anySuccess = true
       upserted += r.upserted
       unmatched.push(...r.unmatched)
-      // Mig 103: warnings của success (vd cross-store account campaign khách)
-      // — KHÔNG đổi HTTP contract (vẫn 200), chỉ nổi lên log để vận hành thấy.
+      // Mig 103: warnings của success (vd cross-store account campaign khách).
+      // 105 r1.3.1 (audit P1): vào CẢ log lẫn response body — KHÔNG đổi HTTP
+      // contract (vẫn 200 vì tiền đã ghi đúng), nhưng Coolify/người vận hành
+      // phải đọc được POS nào đang bị ẩn Order/AOV thay vì body sạch trơn.
       for (const w of r.warnings ?? []) {
-        logLines.push(`[sync-kpi-campaign] warning campaign=${c.id} (${label}): ${sanitizeOpsText(w)}`)
+        const warning = sanitizeOpsText(w)
+        logLines.push(`[sync-kpi-campaign] warning campaign=${c.id} (${label}): ${warning}`)
+        const key = `${c.id}|${warning}`
+        if (seenWarning.has(key)) continue
+        seenWarning.add(key)
+        warnings.push({ campaign: label, warning })
       }
     }
   }
@@ -83,6 +99,7 @@ export async function runSyncBatch(
       upserted,
       unmatched: [...new Set(unmatched)],
       preserved,
+      warnings,
       errors,
     },
     logLines,
@@ -93,15 +110,20 @@ export async function runSyncBatch(
 //   success   → revalidate + toast thành công
 //   preserved → KHÔNG revalidate (số cũ giữ nguyên) + toast info kèm lý do
 //   failed    → KHÔNG revalidate + toast lỗi
+// 105 r1.3.1: success VẪN có thể kèm warnings (degrade chỉ số phụ) — toast phải
+// nói rõ "GMV đã đồng bộ nhưng Order/AOV tạm ẩn", không báo thành công trơn.
 export type ManualSyncPlan =
-  | { kind: 'success'; revalidate: true; upserted: number; unmatched: string[] }
+  | { kind: 'success'; revalidate: true; upserted: number; unmatched: string[]; warnings: string[] }
   | { kind: 'preserved'; revalidate: false; reason: string }
   | { kind: 'failed'; revalidate: false; error: string }
 
 export function manualSyncPlan(r: SyncCampaignResult): ManualSyncPlan {
   if (r.status === 'failed') return { kind: 'failed', revalidate: false, error: sanitizeOpsText(r.error) }
   if (r.status === 'snapshot_preserved') return { kind: 'preserved', revalidate: false, reason: sanitizeOpsText(r.reason) }
-  return { kind: 'success', revalidate: true, upserted: r.upserted, unmatched: r.unmatched }
+  return {
+    kind: 'success', revalidate: true, upserted: r.upserted, unmatched: r.unmatched,
+    warnings: [...new Set((r.warnings ?? []).map(sanitizeOpsText))],
+  }
 }
 
 // r1 (audit P1#1): nút manual cũng không được để server action throw ra UI —
