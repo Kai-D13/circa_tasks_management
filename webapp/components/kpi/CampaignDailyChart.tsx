@@ -64,6 +64,8 @@ export function CampaignDailyChart({
   const compactVnd = isOrderAov && series === 'orders'
     ? (n: number) => nfInt.format(Math.round(n))
     : isOrderAov ? metricPresentation('gmv').compact : pres.compact
+  const ariaLabel = !isOrderAov ? pres.chartAriaLabel
+    : series === 'aov' ? 'Biểu đồ AOV theo ngày' : 'Biểu đồ số đơn theo ngày'
   const fullVnd = isOrderAov && series === 'orders'
     ? (n: number) => `${nfInt.format(Math.round(n))} đơn`
     : isOrderAov ? metricPresentation('gmv').value : pres.value
@@ -83,7 +85,12 @@ export function CampaignDailyChart({
   }
   if (days.length === 0) return null
 
-  const max = niceMax(Math.max(0, ...[...gmvByDate.values()]))
+  // r1.2 (audit P2): mọi ngày = 0 đơn thì trục KHÔNG được nhảy lên thang tiền
+  // mặc định (1.000.000) — số đơn là ĐẾM, thang tối thiểu là 1.
+  const rawMax = Math.max(0, ...[...gmvByDate.values()])
+  const max = isOrderAov && series === 'orders'
+    ? Math.max(1, Math.ceil(rawMax))
+    : niceMax(rawMax)
   const plotW = W - PAD_L - 4
   const plotH = H - PAD_T - PAD_B
   const slot = plotW / days.length
@@ -95,7 +102,7 @@ export function CampaignDailyChart({
   const gridVals = [max / 2, max]
 
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img" aria-label={pres.chartAriaLabel}>
+    <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img" aria-label={ariaLabel}>
       {/* Recessive grid + y labels (text tokens, never series color) */}
       {gridVals.map((v) => (
         <g key={v}>

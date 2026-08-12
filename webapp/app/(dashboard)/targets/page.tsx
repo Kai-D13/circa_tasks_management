@@ -10,7 +10,10 @@ import { EmptyState } from '@/components/ds/EmptyState'
 import { ErrorState } from '@/components/ds/ErrorState'
 import { PeriodTabs, type TargetPeriod } from '@/components/targets/PeriodTabs'
 import { CampaignCardList } from '@/components/kpi/CampaignCardList'
-import { CampaignKpiView, parseDailySeries, type CampaignView } from '@/components/kpi/CampaignKpiView'
+import {
+  CampaignKpiView, parseDailySeries, type CampaignView, type DailyPoint,
+} from '@/components/kpi/CampaignKpiView'
+import { normalizeDailyPoint, type DailyRawRow } from '@/lib/kpi/dailyPoint'
 import { CampaignResultSummary } from '@/components/kpi/CampaignResultSummary'
 import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import { isReferralEnabled } from '@/lib/affiliate/flags'
@@ -302,7 +305,7 @@ export default async function TargetsPage({
   // Daily GMV series for the SELECTED campaign (drives the chart + "GMV hôm nay").
   // Selection resolved here so the fetch matches what the component will render.
   let selectedCampaignId: string | undefined
-  let campaignDaily: { date: string; gmv: number; gmv_affiliate: number; affiliate_customer_count: number }[] = []
+  let campaignDaily: DailyPoint[] = []
   let campaignDailyError = false
   if (campaignViews.length > 0 && resolvedStoreId && !showCampaignList) {
     selectedCampaignId = (campaignViews.find((c) => c.id === params.campaign) ?? campaignViews[0]).id
@@ -317,8 +320,10 @@ export default async function TargetsPage({
       console.error('[targets] daily query failed:', dErr.message)
       campaignDailyError = true
     }
-    campaignDaily = ((dailyRows ?? []) as { date: string; gmv: number; gmv_affiliate: number | null; affiliate_customer_count: number | null }[])
-      .map((r) => ({ date: r.date, gmv: Number(r.gmv) || 0, gmv_affiliate: Number(r.gmv_affiliate) || 0, affiliate_customer_count: Number(r.affiliate_customer_count) || 0 }))
+    // r1.2 (audit P0): mapping PHẢI mang offline_order_count — trước đây query
+    // có lấy nhưng .map() bỏ quên nên DB có dữ liệu mà UI hiểu là thiếu (card
+    // "Số đơn hôm nay" hiện '—', chart Số đơn/AOV trống trơn).
+    campaignDaily = ((dailyRows ?? []) as DailyRawRow[]).map(normalizeDailyPoint)
   }
 
   // ── P3-H: QR Affiliate của store — CHỈ landing (không hiện trong ?campaign=),

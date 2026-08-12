@@ -1,8 +1,10 @@
 import { test, expect } from '@playwright/test'
 import {
   ORDER_AOV_STATUS_LABEL, aovFromSnapshot, computeOrderAovResult, countQualityKpiPass,
-  exactlyOneTierAt100, formatCompletionPct, orderAovStatus, qualityKpiPass, round4,
+  exactlyOneTierAt100, formatCompletionPct, formatRemainingPct, normalizeOptionalCount,
+  orderAovStatus, qualityKpiPass, round4,
 } from '../lib/kpi/orderAov'
+import { normalizeDailyPoint } from '../lib/kpi/dailyPoint'
 
 // Mig 106 — ma trận công thức "Chất lượng bán hàng" theo CONTRACT CHỐT 12/08:
 //   completion = min(order/order_target, aov/aov_target) × 100  (CHỈ SỐ YẾU HƠN)
@@ -250,5 +252,51 @@ test.describe('kpi order/aov core (106) @desktop', () => {
     const almost = run(1000, 1000 * 200_000 - 1)
     expect(qualityKpiPass(almost.completionPct)).toBe(false)
     expect(formatCompletionPct(almost.completionPct)).toBe('<100%')
+  })
+
+  // ── r1.2 (audit P0): pipeline raw Supabase row → DailyPoint ───────────────
+  // Bug đã xảy ra: query lấy offline_order_count nhưng .map() bỏ quên ⇒ DB có
+  // dữ liệu mà UI hiểu là thiếu (card '—', chart trống). Khóa cả ma trận kiểu.
+  test('normalizeDailyPoint: 12 / "12" / 0 / "0" / null / thiếu field / rác', () => {
+    const base = { date: '2026-08-12', gmv: 1_000_000, gmv_affiliate: 0, affiliate_customer_count: 0 }
+    expect(normalizeDailyPoint({ ...base, offline_order_count: 12 }).offline_order_count).toBe(12)
+    expect(normalizeDailyPoint({ ...base, offline_order_count: '12' }).offline_order_count).toBe(12)
+    // 0 là DỮ LIỆU HỢP LỆ (ngày không có đơn) — không được biến thành null
+    expect(normalizeDailyPoint({ ...base, offline_order_count: 0 }).offline_order_count).toBe(0)
+    expect(normalizeDailyPoint({ ...base, offline_order_count: '0' }).offline_order_count).toBe(0)
+    // null/thiếu = nguồn CHƯA có số đơn — không được biến thành 0
+    expect(normalizeDailyPoint({ ...base, offline_order_count: null }).offline_order_count).toBeNull()
+    expect(normalizeDailyPoint(base).offline_order_count).toBeNull()
+    expect(normalizeDailyPoint({ ...base, offline_order_count: '' }).offline_order_count).toBeNull()
+    expect(normalizeDailyPoint({ ...base, offline_order_count: 'abc' }).offline_order_count).toBeNull()
+    // tiền vẫn giữ hành vi cũ (numeric string của Supabase)
+    expect(normalizeDailyPoint({ ...base, gmv: '2500000' }).gmv).toBe(2_500_000)
+    expect(normalizeDailyPoint({ ...base, gmv: null }).gmv).toBe(0)
+  })
+
+  test('normalizeOptionalCount: phân biệt 0 với "chưa có dữ liệu"', () => {
+    expect(normalizeOptionalCount(0)).toBe(0)
+    expect(normalizeOptionalCount('0')).toBe(0)
+    expect(normalizeOptionalCount(343)).toBe(343)
+    expect(normalizeOptionalCount(null)).toBeNull()
+    expect(normalizeOptionalCount(undefined)).toBeNull()
+    expect(normalizeOptionalCount('')).toBeNull()
+    expect(normalizeOptionalCount('x')).toBeNull()
+    expect(normalizeOptionalCount(Number.NaN)).toBeNull()
+  })
+
+  // ── r1.2 (audit P1): phần CÒN THIẾU có formatter RIÊNG ────────────────────
+  test('formatRemainingPct: 0 là 0%, hụt tí xíu là <0,1% (không bao giờ "0%")', () => {
+    expect(formatRemainingPct(0)).toBe('0%')
+    expect(formatRemainingPct(-5)).toBe('0%')          // vượt mục tiêu
+    expect(formatRemainingPct(0.0001)).toBe('<0,1%')   // ca 99,9999%
+    expect(formatRemainingPct(0.09)).toBe('<0,1%')
+    expect(formatRemainingPct(0.1)).toBe('0,1%')
+    expect(formatRemainingPct(33.0784)).toBe('33,1%')
+    expect(formatRemainingPct(null)).toBe('—')
+    // đồng bộ: completion 99,9999 ⇒ remaining 0,0001 ⇒ '<0,1%', KHÔNG '0%'
+    const almost = run(1000, 1000 * 200_000 - 1)
+    expect(formatCompletionPct(almost.completionPct)).toBe('<100%')
+    expect(formatRemainingPct(almost.remainingPct)).toBe('<0,1%')
   })
 })

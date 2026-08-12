@@ -2,6 +2,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { performanceTone } from '@/lib/kpi/performance'
 import type { CampaignResultModel } from '@/lib/kpi/resultModel'
 import { metricPresentation, offlineOrderLine } from '@/lib/kpi/campaignDisplay'
+import { formatRemainingPct } from '@/lib/kpi/orderAov'
 import { resultTableColumns } from '@/lib/kpi/resultTableLayout'
 import { cn } from '@/lib/utils'
 import {
@@ -278,7 +279,11 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                                 ) : tp.reached ? (
                                   <p className="font-medium text-green-600 mt-0.5">Đã đạt</p>
                                 ) : (
-                                  <p className="font-medium text-primary mt-0.5">Còn thiếu {vnd(tp.remaining_amount)}</p>
+                                  // r1.2: campaign điểm % dùng formatter CÒN THIẾU
+                                  // riêng — 0,0001 không được thành "0%".
+                                  <p className="font-medium text-primary mt-0.5">
+                                    Còn thiếu {isOrderAov ? formatRemainingPct(tp.remaining_amount) : vnd(tp.remaining_amount)}
+                                  </p>
                                 )}
                               </div>
                             )}

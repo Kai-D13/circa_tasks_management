@@ -199,6 +199,31 @@ export function formatCompletionPct(completionPct: number | null | undefined): s
   return `${new Intl.NumberFormat('vi-VN').format(rounded)}%`
 }
 
+// r1.2 (audit P1): PHẦN CÒN THIẾU dùng formatter RIÊNG — KHÔNG tái dùng
+// formatCompletionPct. Với completion 99,9999% thì delta = 0,0001 và làm tròn
+// 1 chữ số sẽ ra "Còn thiếu 0%", mâu thuẫn với trạng thái chưa đạt.
+export function formatRemainingPct(remainingPct: number | null | undefined): string {
+  if (remainingPct == null) return '—'
+  const n = Number(remainingPct)
+  if (!Number.isFinite(n)) return '—'
+  if (n <= 0) return '0%'                       // đã đạt/vượt — 0 thật
+  if (n < 0.1) return '<0,1%'                   // còn thiếu tí xíu, KHÔNG phải 0
+  return `${new Intl.NumberFormat('vi-VN').format(Math.round(n * 10) / 10)}%`
+}
+
+// ── Normalizer daily row (r1.2 audit P0) ────────────────────────────────────
+// Supabase trả numeric dạng string; `Number(x) || 0` biến null thành 0 còn
+// `?? null` sau Number() lại biến 0 thành null. Cả hai đều SAI trên màn tiền:
+//   null/undefined/'' → null (nguồn CHƯA có số đơn — chart vẽ gap)
+//   0 hoặc '0'        → 0    (ngày KHÔNG có đơn — dữ liệu hợp lệ)
+//   số/chuỗi số hợp lệ→ Number
+//   chuỗi rác/NaN     → null (không bịa 0)
+export function normalizeOptionalCount(raw: unknown): number | null {
+  if (raw === null || raw === undefined || raw === '') return null
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : null
+}
+
 // AOV đọc từ snapshot: weighted per store (net/số đơn) — mirror mig 105, KHÔNG
 // bao giờ trung bình các AOV.
 export function aovFromSnapshot(

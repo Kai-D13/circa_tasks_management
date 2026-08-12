@@ -2,7 +2,8 @@ import Link from 'next/link'
 import { Card, CardContent } from '@/components/ui/card'
 import { breakdownModel, campaignFootnote, metricPresentation, orderAovMetricLines } from '@/lib/kpi/campaignDisplay'
 import {
-  ORDER_AOV_STATUS_LABEL, aovFromSnapshot, formatCompletionPct, orderAovStatus, qualityKpiPass,
+  ORDER_AOV_STATUS_LABEL, aovFromSnapshot, formatCompletionPct, formatRemainingPct,
+  orderAovStatus, qualityKpiPass,
 } from '@/lib/kpi/orderAov'
 import { buildTierProgress, type TierProgress } from '@/lib/kpi/resultModel'
 import { CampaignDailyChart } from '@/components/kpi/CampaignDailyChart'
@@ -76,7 +77,13 @@ const dm = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`
 // % completion ring (server-rendered SVG, theme-aware via stroke tokens).
 // Green is reserved for a REACHED commission tier (or >=100%) — on a
 // commission screen, a green 8% would read as "already achieved".
-function Ring({ pct, tierReached }: { pct: number; tierReached: boolean }) {
+function Ring({ pct, tierReached, format }: {
+  pct: number
+  tierReached: boolean
+  // r1.2 (audit P1): loại Chất lượng bán hàng truyền formatCompletionPct để
+  // 99,9999% KHÔNG hiện thành 100% khi badge ghi "Chưa đạt".
+  format?: (n: number) => string
+}) {
   const r = 34
   const c = 2 * Math.PI * r
   const clamped = Math.max(0, Math.min(100, pct))
@@ -92,7 +99,7 @@ function Ring({ pct, tierReached }: { pct: number; tierReached: boolean }) {
       </svg>
       <div className="absolute inset-0 flex flex-col items-center justify-center">
         <span className={cn('text-lg font-bold leading-none', tierReached ? 'text-status-success' : clamped > 0 && 'text-primary')}>
-          {Math.round(pct)}%
+          {format ? format(pct) : `${Math.round(pct)}%`}
         </span>
         <span className="text-[9px] text-muted-foreground mt-0.5">hoàn thành</span>
       </div>
@@ -229,6 +236,9 @@ export function CampaignKpiView({
         ).map((tp) => [tp.tier_order, tp])
       : [],
   )
+  // r1.2 (audit P1): phần CÒN THIẾU của campaign điểm % dùng formatter riêng —
+  // 0,0001 điểm % không được làm tròn thành "0%" (mâu thuẫn "chưa đạt").
+  const remainingText = (n: number) => isOrderAovCampaign ? formatRemainingPct(n) : vnd(n)
   const tierRemainingLine = (order: number) => {
     if (!showTierRemaining) return null
     const tp = tierProgressByOrder.get(order)
@@ -240,7 +250,7 @@ export function CampaignKpiView({
         ) : tp.reached ? (
           <span className="font-semibold text-status-success">Đã đạt</span>
         ) : (
-          <span className="text-muted-foreground">Còn thiếu: <span className="font-semibold text-primary">{vnd(tp.remaining_amount)}</span></span>
+          <span className="text-muted-foreground">Còn thiếu: <span className="font-semibold text-primary">{remainingText(tp.remaining_amount)}</span></span>
         )}
       </p>
     )
@@ -289,7 +299,11 @@ export function CampaignKpiView({
                 {sel.actual_value === null ? 'Chưa đồng bộ' : vnd(actual)}
               </p>
             </div>
-            <Ring pct={pct} tierReached={reachedOrder !== null || pct >= 100} />
+            <Ring
+            pct={pct}
+            tierReached={reachedOrder !== null || pct >= 100}
+            format={isOrderAovCampaign ? formatCompletionPct : undefined}
+          />
           </div>
           <div className="flex items-center gap-2">
             <div className="h-2.5 flex-1 rounded-full bg-muted overflow-hidden">
@@ -436,7 +450,9 @@ export function CampaignKpiView({
                     role="tab"
                     aria-selected={series === key}
                     className={cn(
-                      'text-xs px-3 py-1.5 rounded-full border font-medium',
+                      // touch target >= 44px trên mobile (guardrail circa-ui)
+                      'text-xs px-4 rounded-full border font-medium inline-flex items-center',
+                      'min-h-[44px] md:min-h-0 md:py-1.5',
                       series === key
                         ? 'border-primary bg-primary/10 text-primary'
                         : 'text-muted-foreground hover:text-foreground',
@@ -453,7 +469,9 @@ export function CampaignKpiView({
             <p className="text-sm text-muted-foreground py-6 text-center">
               {dailyError
                 ? 'Chưa tải được tiến độ theo ngày, vui lòng thử lại sau.'
-                : isCustomer ? 'Chưa có dữ liệu số khách theo ngày.' : 'Chưa có dữ liệu doanh số theo ngày.'}
+                : isCustomer ? 'Chưa có dữ liệu số khách theo ngày.'
+                : isOrderAovCampaign ? 'Chưa có dữ liệu số đơn theo ngày.'
+                : 'Chưa có dữ liệu doanh số theo ngày.'}
             </p>
           )}
         </CardContent>
