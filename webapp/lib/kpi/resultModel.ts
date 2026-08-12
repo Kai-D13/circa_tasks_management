@@ -160,13 +160,24 @@ export function buildCampaignResultModel(
   const totalActual = actuals.reduce((sum, a) => sum + (Number(a.actual_value) || 0), 0)
   const totalOffline = actuals.reduce((sum, a) => sum + (Number(a.actual_offline) || 0), 0)
   const totalAffiliate = actuals.reduce((sum, a) => sum + (Number(a.actual_affiliate) || 0), 0)
-  // 105: chỉ tổng hợp khi MỌI store trong phạm vi đều có count.
-  const allHaveOrderCount = actuals.length > 0 && actuals.every((a) => a.offline_order_count != null)
+  // 105 r1.1 (audit P2): completeness tính theo TẬP TARGET, KHÔNG theo
+  // actuals.length — 2 target mà chỉ 1 có actual thì `actuals.every(...)` vẫn
+  // true và dashboard hiện tổng đơn/AOV của riêng store đó như thể toàn
+  // campaign đã đủ dữ liệu. Tổng cũng reduce qua targets → actualByStore để
+  // đúng phạm vi hiển thị (bỏ qua actual lạc ngoài targets nếu có).
+  const allHaveOrderCount = targets.length > 0
+    && targets.every((t) => actualByStore.get(t.store_id)?.offline_order_count != null)
   const totalOfflineOrders = allHaveOrderCount
-    ? actuals.reduce((sum, a) => sum + (Number(a.offline_order_count) || 0), 0)
+    ? targets.reduce((sum, t) => sum + (Number(actualByStore.get(t.store_id)?.offline_order_count) || 0), 0)
     : null
+  // AOV phải lấy TỬ SỐ cùng phạm vi với mẫu số (targets) — dùng totalOffline
+  // toàn cục trong khi số đơn chỉ tính targets sẽ cho AOV cao giả nếu tồn tại
+  // actual lạc ngoài targets. `totalOffline` (card GMV Offline) giữ NGUYÊN
+  // định nghĩa cũ để không đổi số đang chạy.
+  const offlineInTargets = targets.reduce(
+    (sum, t) => sum + (Number(actualByStore.get(t.store_id)?.actual_offline) || 0), 0)
   const totalOfflineAov = totalOfflineOrders !== null && totalOfflineOrders > 0
-    ? totalOffline / totalOfflineOrders
+    ? offlineInTargets / totalOfflineOrders
     : null
   const completionPct = totalTarget > 0 ? (totalActual / totalTarget) * 100 : 0
   const totalCommission = actuals.reduce((sum, a) => sum + (Number(a.store_commission_pool) || 0), 0)

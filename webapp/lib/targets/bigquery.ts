@@ -115,7 +115,8 @@ export function campaignRangeQuery(startDate: string, endDate: string): string {
   `
 }
 
-// 105 (11/08): trả thêm `order_count` = SUM(no_order) + 3 cột canary null/âm.
+// 105 (11/08): trả thêm `order_count` = SUM(no_order) + 4 cột canary
+// (null-mismatch 2 chiều · âm · không nguyên).
 // AOV KHÔNG lấy từ cột `aov` của BI (giá trị dẫn xuất) — app luôn tính
 // SUM(net_revenue)/SUM(no_order) (weighted; đo thật 08/2026 lệch 1.445đ so
 // với AVG(aov)).

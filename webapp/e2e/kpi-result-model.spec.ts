@@ -219,6 +219,25 @@ test.describe('kpi offline order count + AOV (105) @desktop', () => {
     expect(rowOf(m, 'a').offlineAov).toBeCloseTo(100000, 6)
   })
 
+  test('r1.1 (P2): 2 TARGET mà chỉ 1 có actual → tổng đơn/AOV = null (không coi là đủ dữ liệu)', () => {
+    // actuals.every() cũ trả true vì mảng chỉ có 1 phần tử → dashboard hiện
+    // tổng của riêng store A như thể cả campaign đã sync.
+    const m = buildCampaignResultModel(
+      CAMP(), [T('a', 1000), T('b', 500)], [withOrders('a', 1_000_000, 1_000_000, 10)], TODAY)
+    expect(m.rows).toHaveLength(2)
+    expect(m.totalOfflineOrders).toBeNull()
+    expect(m.totalOfflineAov).toBeNull()
+  })
+
+  test('r1.1 (P2): tổng chỉ tính TARGET — actual lạc ngoài targets KHÔNG được cộng vào', () => {
+    const m = buildCampaignResultModel(
+      CAMP(), [T('a', 1000), T('b', 500)],
+      [withOrders('a', 1_000_000, 1_000_000, 10), withOrders('b', 200_000, 200_000, 4),
+       withOrders('zz-ngoai-target', 9_000_000, 9_000_000, 999)], TODAY)
+    expect(m.totalOfflineOrders).toBe(14)               // 10 + 4, KHÔNG có 999
+    expect(m.totalOfflineAov).toBeCloseTo(85714.2857, 3)
+  })
+
   test('formatter offlineOrderLine: có count → "N đơn · AOV X₫"; null → null; 0 → AOV —', () => {
     expect(offlineOrderLine(54140774, 343)).toBe('343 đơn · AOV 157.845₫')
     expect(offlineOrderLine(500, null)).toBeNull()
