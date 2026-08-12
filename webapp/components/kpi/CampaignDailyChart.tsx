@@ -11,7 +11,16 @@
 // qua metricPresentation (GMV path dùng cùng module, format byte-equal cũ).
 import { metricPresentation } from '@/lib/kpi/campaignDisplay'
 
-interface DailyPoint { date: string; gmv: number; gmv_affiliate: number; affiliate_customer_count?: number }
+interface DailyPoint {
+  date: string
+  gmv: number
+  gmv_affiliate: number
+  affiliate_customer_count?: number
+  // Mig 106: số đơn Offline của NGÀY (null = nguồn chưa có số đơn ⇒ chart vẽ
+  // GAP, không phải cột 0). Khớp structurally với DailyPoint của CampaignKpiView.
+  offline_order_count?: number | null
+}
+type DailySeries = 'orders' | 'aov'
 
 const W = 360
 const H = 170
@@ -28,21 +37,44 @@ function niceMax(v: number): number {
 }
 
 export function CampaignDailyChart({
-  start, end, daily, todayISO, breakdown = false, metricType,
+  start, end, daily, todayISO, breakdown = false, metricType, series = 'orders',
 }: {
   start: string; end: string; daily: DailyPoint[]; todayISO: string
   breakdown?: boolean // campaign có CẢ 2 chỉ số → tooltip tách Offline/Affiliate
   metricType?: string // mig 103: 'affiliate_customer_count' → trục/tooltip 'N khách'
+  series?: DailySeries // mig 106: Chất lượng bán hàng — 'orders' | 'aov'
 }) {
   const pres = metricPresentation(metricType)
   const isCustomer = pres.kind === 'affiliate_customer_count'
-  const pointValue = (d: DailyPoint) => isCustomer ? (d.affiliate_customer_count ?? 0) : d.gmv + d.gmv_affiliate
-  const compactVnd = pres.compact
-  const fullVnd = pres.value
+  // Mig 106: campaign Chất lượng bán hàng KHÔNG vẽ tiền — cột là SỐ ĐƠN/ngày
+  // (mặc định) hoặc AOV/ngày = net ngày / số đơn ngày. Ngày không có đơn →
+  // null ⇒ KHÔNG vẽ cột (gap), tuyệt đối không quy về 0₫/0 đơn.
+  const isOrderAov = pres.kind === 'offline_order_aov'
+  const nfInt = new Intl.NumberFormat('vi-VN')
+  const pointValue = (d: DailyPoint): number | null => {
+    if (isOrderAov) {
+      const ord = d.offline_order_count
+      if (ord === null || ord === undefined) return null
+      if (series === 'orders') return ord
+      return ord > 0 ? d.gmv / ord : null            // AOV ngày (0 đơn → gap)
+    }
+    return isCustomer ? (d.affiliate_customer_count ?? 0) : d.gmv + d.gmv_affiliate
+  }
+  // Trục/nhãn: số đơn là ĐẾM (không phải tiền); AOV là tiền.
+  const compactVnd = isOrderAov && series === 'orders'
+    ? (n: number) => nfInt.format(Math.round(n))
+    : isOrderAov ? metricPresentation('gmv').compact : pres.compact
+  const fullVnd = isOrderAov && series === 'orders'
+    ? (n: number) => `${nfInt.format(Math.round(n))} đơn`
+    : isOrderAov ? metricPresentation('gmv').value : pres.value
   // Full day axis across the campaign range (future days render empty).
   // Giá trị cột = TỔNG 2 nguồn; point gốc giữ lại cho tooltip breakdown.
   const pointByDate = new Map(daily.map((d) => [d.date, d]))
-  const gmvByDate = new Map(daily.map((d) => [d.date, pointValue(d)]))
+  const gmvByDate = new Map<string, number>()
+  for (const d of daily) {
+    const v = pointValue(d)
+    if (v !== null) gmvByDate.set(d.date, v)          // null = gap, không set
+  }
   const days: string[] = []
   const DAY = 86400_000
   const endMs = Date.parse(`${end}T00:00:00Z`)
@@ -51,7 +83,7 @@ export function CampaignDailyChart({
   }
   if (days.length === 0) return null
 
-  const max = niceMax(Math.max(0, ...daily.map((d) => pointValue(d))))
+  const max = niceMax(Math.max(0, ...[...gmvByDate.values()]))
   const plotW = W - PAD_L - 4
   const plotH = H - PAD_T - PAD_B
   const slot = plotW / days.length
@@ -91,7 +123,16 @@ export function CampaignDailyChart({
                 rx={Math.min(2, barW / 2)}
                 className={d === todayISO ? 'fill-primary' : 'fill-primary/70'}
               >
-                <title>{breakdown && pointByDate.get(d)
+                <title>{isOrderAov && pointByDate.get(d)
+                  // Tooltip Chất lượng bán hàng: đủ 3 số để đối soát.
+                  ? (() => {
+                    const p = pointByDate.get(d)!
+                    const ord = p.offline_order_count ?? 0
+                    const aov = ord > 0 ? p.gmv / ord : null
+                    const money = metricPresentation('gmv').value
+                    return `${dayNo}/${d.slice(5, 7)}: ${nfInt.format(ord)} đơn · AOV ${aov === null ? '—' : money(aov)} · Net ${money(p.gmv)}`
+                  })()
+                  : breakdown && pointByDate.get(d)
                   ? `${dayNo}/${d.slice(5, 7)}: ${fullVnd(v)} (Offline ${fullVnd(pointByDate.get(d)!.gmv)} · Affiliate ${fullVnd(pointByDate.get(d)!.gmv_affiliate)})`
                   : `${dayNo}/${d.slice(5, 7)}: ${fullVnd(v)}`}</title>
               </rect>

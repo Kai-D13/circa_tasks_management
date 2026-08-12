@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import {
   ORDER_AOV_STATUS_LABEL, aovFromSnapshot, computeOrderAovResult, countQualityKpiPass,
-  exactlyOneTierAt100, orderAovStatus, qualityKpiPass, round4,
+  exactlyOneTierAt100, formatCompletionPct, orderAovStatus, qualityKpiPass, round4,
 } from '../lib/kpi/orderAov'
 
 // Mig 106 — ma trận công thức "Chất lượng bán hàng" theo CONTRACT CHỐT 12/08:
@@ -233,5 +233,22 @@ test.describe('kpi order/aov core (106) @desktop', () => {
     expect(aovFromSnapshot(500, 0)).toBeNull()
     expect(aovFromSnapshot(500, null)).toBeNull()
     expect(aovFromSnapshot(null, 10)).toBe(0)
+  })
+
+  // ── r1.1 (audit P1#3): hiển thị KHÔNG được mâu thuẫn với badge/commission ──
+  test('formatCompletionPct: chưa đạt thì KHÔNG BAO GIỜ render 100%', () => {
+    // engine ép ca hụt cực nhỏ về 99.9999 — làm tròn 1 chữ số sẽ ra '100,0%'
+    expect(formatCompletionPct(99.9999)).toBe('<100%')
+    expect(formatCompletionPct(99.96)).toBe('<100%')      // round → 100,0
+    expect(formatCompletionPct(99.94)).toBe('99,9%')
+    expect(formatCompletionPct(100)).toBe('100%')
+    expect(formatCompletionPct(115.26)).toBe('115,3%')
+    expect(formatCompletionPct(0)).toBe('0%')
+    expect(formatCompletionPct(null)).toBe('—')
+    expect(formatCompletionPct(undefined)).toBe('—')
+    // đồng bộ với badge: cùng một nguồn quyết định
+    const almost = run(1000, 1000 * 200_000 - 1)
+    expect(qualityKpiPass(almost.completionPct)).toBe(false)
+    expect(formatCompletionPct(almost.completionPct)).toBe('<100%')
   })
 })

@@ -10,7 +10,7 @@ import { EmptyState } from '@/components/ds/EmptyState'
 import { ErrorState } from '@/components/ds/ErrorState'
 import { PeriodTabs, type TargetPeriod } from '@/components/targets/PeriodTabs'
 import { CampaignCardList } from '@/components/kpi/CampaignCardList'
-import { CampaignKpiView, type CampaignView } from '@/components/kpi/CampaignKpiView'
+import { CampaignKpiView, parseDailySeries, type CampaignView } from '@/components/kpi/CampaignKpiView'
 import { CampaignResultSummary } from '@/components/kpi/CampaignResultSummary'
 import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import { isReferralEnabled } from '@/lib/affiliate/flags'
@@ -239,10 +239,16 @@ async function fetchCampaignViews(
 export default async function TargetsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ period?: string; campaign?: string; store?: string }>
+  // Mig 106: series = chuỗi chart của campaign Chất lượng bán hàng (?series=).
+  searchParams: Promise<{ period?: string; campaign?: string; store?: string; series?: string }>
 }) {
   const params = await searchParams
   const period = parsePeriod(params.period)
+  // Mig 106: chuỗi chart (Số đơn | AOV) giữ trong URL — CampaignKpiView là
+  // SERVER component nên segmented dùng <Link>, không cần client JS.
+  const chartSeries = parseDailySeries(params.series)
+  const seriesHrefBase = `/targets${params.campaign ? `?campaign=${params.campaign}` : ''}${
+    params.store ? `${params.campaign ? '&' : '?'}store=${params.store}` : ''}`
 
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
@@ -302,7 +308,7 @@ export default async function TargetsPage({
     selectedCampaignId = (campaignViews.find((c) => c.id === params.campaign) ?? campaignViews[0]).id
     const { data: dailyRows, error: dErr } = await supabase
       .from('kpi_campaign_store_daily_actuals')
-      .select('date, gmv, gmv_affiliate, affiliate_customer_count')
+      .select('date, gmv, gmv_affiliate, affiliate_customer_count, offline_order_count')
       .eq('campaign_id', selectedCampaignId)
       .eq('store_id', resolvedStoreId)
       .order('date')
@@ -421,7 +427,7 @@ export default async function TargetsPage({
     const [tRes, aRes] = await Promise.all([
       supabase
         .from('kpi_campaign_store_targets')
-        .select('id, campaign_id, store_id, pos_code, kpi_target, store_kpi_group, stores(name), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount), kpi_campaigns!inner(id, name, start_date, end_date, status, metric_type, metric_offline, metric_affiliate)')
+        .select('id, campaign_id, store_id, pos_code, kpi_target, store_kpi_group, order_target, aov_target, stores(name), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount), kpi_campaigns!inner(id, name, start_date, end_date, status, metric_type, metric_offline, metric_affiliate)')
         // Archive (098): phòng thủ kép như fetchCampaignViews — !inner + filter
         // (row campaign bị RLS ẩn trước đây trả null và bị skip app-side; nay
         // drop tại DB, hành vi hiển thị không đổi).
@@ -669,7 +675,12 @@ export default async function TargetsPage({
                 />
                 {/* Tier progress (28/07): QLCH desktop thấy "Còn thiếu" từng
                     mốc thưởng; Staff dùng chung component nhưng prop tắt. */}
-                <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Quản lý" todayISO={vnTodayISO} storeName={storeName} showTierRemaining />
+                <CampaignKpiView
+                  items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily}
+                  dailyError={campaignDailyError} roleLabel="Quản lý" todayISO={vnTodayISO}
+                  storeName={storeName} showTierRemaining
+                  series={chartSeries} seriesHrefBase={seriesHrefBase}
+                />
               </>
             )}
           </div>
@@ -752,7 +763,12 @@ export default async function TargetsPage({
           ) : (
             <>
               <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0 -my-2.5 md:my-0">← Danh sách chiến dịch</Link>
-              <CampaignKpiView items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily} dailyError={campaignDailyError} roleLabel="Dược sĩ" todayISO={vnTodayISO} storeName={storeName} />
+              <CampaignKpiView
+                items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily}
+                dailyError={campaignDailyError} roleLabel="Dược sĩ" todayISO={vnTodayISO}
+                storeName={storeName}
+                series={chartSeries} seriesHrefBase={seriesHrefBase}
+              />
             </>
           )}
           {/* "Giới thiệu bạn bè" belongs on the /targets landing (list / single-

@@ -324,4 +324,24 @@ test.describe('kpi result model — Chất lượng bán hàng (106) @desktop', 
     expect(m.rows[0].qualityStatusLabel).toBeNull()
     expect(m.qualityPassCount).toBe(0)
   })
+
+  test('r1.1 P1#2: Super và SM cùng input → CÙNG dòng metric + trạng thái + đếm đạt', () => {
+    // SM chỉ khác ở PHẠM VI store (RLS), model là một; nếu query SM quên
+    // order_target/aov_target thì orderAovLines = null và trạng thái mất.
+    const targets = [QT(), QT({ id: 't-2', store_id: 'b', pos_code: 'POS0013', stores: { name: 'MIZUKI' },
+      order_target: 1187, aov_target: 126_644 })]
+    const actuals = [QA(), QA({ store_id: 'b', actual_value: 99.9969, offline_order_count: 1187,
+      actual_offline: 150_321_724, achieved_tier_order: null, store_commission_pool: null })]
+    const superModel = buildCampaignResultModel(CAMP_Q(), targets, actuals, TODAY)
+    // SM: chỉ store 'b' trong phạm vi
+    const smModel = buildCampaignResultModel(CAMP_Q(), [targets[1]], [actuals[1]], TODAY)
+
+    const superRowB = superModel.rows.find((r) => r.storeId === 'b')!
+    const smRowB = smModel.rows[0]
+    expect(smRowB.orderAovLines).toEqual(superRowB.orderAovLines)
+    expect(smRowB.qualityStatusLabel).toBe(superRowB.qualityStatusLabel)
+    expect(smRowB.qualityKpiPass).toBe(superRowB.qualityKpiPass)
+    expect(superModel.qualityPassCount).toBe(1)   // chỉ SIGNATURE đạt
+    expect(smModel.qualityPassCount).toBe(0)
+  })
 })

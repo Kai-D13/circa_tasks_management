@@ -44,7 +44,11 @@ export function resultTableColumns(maxTierCount: number, showBreakdown: boolean,
   return [
     { key: 'store', label: 'Cửa hàng', minPx: RESULT_COL_PX.store, align: 'left', scope: 'all' },
     { key: 'group', label: 'Phân loại', minPx: RESULT_COL_PX.group, align: 'left', scope: 'all' },
-    { key: 'kpiTarget', label: 'KPI target', minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' },
+    // r1.1 (audit P2): Chất lượng bán hàng BỎ cột 'KPI target' (luôn 100% —
+    // không mang thông tin) và gộp '%' vào chính cột Hoàn thành.
+    ...(isOrderAov ? [] : [
+      { key: 'kpiTarget', label: 'KPI target', minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' } as const,
+    ]),
     { key: 'actual', label: actualLabel, minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' },
     ...(isOrderAov ? [
       { key: 'orderAov', label: 'Số đơn · AOV (thực tế / mục tiêu)', minPx: RESULT_COL_PX.orderAov, align: 'left', scope: 'all' } as const,
@@ -54,13 +58,19 @@ export function resultTableColumns(maxTierCount: number, showBreakdown: boolean,
       { key: 'offline', label: 'GMV Offline', minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' } as const,
       { key: 'affiliate', label: 'GMV Affiliate', minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' } as const,
     ] : []),
-    { key: 'pct', label: '%', minPx: RESULT_COL_PX.pct, align: 'right', scope: 'all' },
+    ...(isOrderAov ? [] : [
+      { key: 'pct', label: '%', minPx: RESULT_COL_PX.pct, align: 'right', scope: 'all' } as const,
+    ]),
     { key: 'pace', label: 'Nhịp độ', minPx: RESULT_COL_PX.pace, align: 'right', scope: 'all' },
     // 10/08 (stakeholder): BỎ cột 'Còn thiếu' ở bảng tổng — thay bằng
     // 'Trung bình/ngày' (CÙNG công thức card Staff). remaining_target VẪN giữ
     // trong model/DB/export + các dòng 'Còn thiếu' trong từng cột Bậc (khoảng
     // cách tới threshold — nghĩa khác, không trùng cột bị bỏ).
-    { key: 'perDay', label: 'Trung bình/ngày', minPx: RESULT_COL_PX.perDay, align: 'right', scope: 'all' },
+    // r1.1: ẩn với Chất lượng bán hàng — "điểm %/ngày" không tương đương số
+    // đơn/ngày hay AOV/ngày (khuyến nghị audit, stakeholder có thể bật lại).
+    ...(isOrderAov ? [] : [
+      { key: 'perDay', label: 'Trung bình/ngày', minPx: RESULT_COL_PX.perDay, align: 'right', scope: 'all' } as const,
+    ]),
     { key: 'tierCombined', label: 'Bậc đạt · Commission', minPx: RESULT_COL_PX.combined, align: 'left', scope: 'mobile' },
     ...Array.from({ length: Math.max(0, maxTierCount) }, (_, i) => ({
       key: `tier-${i + 1}`,

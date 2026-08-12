@@ -85,28 +85,40 @@ test.describe('kpi result table layout contract @desktop', () => {
     expect(cust.map((c) => c.key)).toEqual(gmv.map((c) => c.key))
   })
 
-  // ── Mig 106: Chất lượng bán hàng — Order/AOV GỘP 1 cột, không đẻ cột ngang ─
-  test('order_aov: thêm ĐÚNG 2 cột (gộp Order·AOV + Trạng thái), label actual = Hoàn thành', () => {
-    const gmv = resultTableColumns(3, false, 'gmv').map((c) => c.key)
-    const aov = resultTableColumns(3, false, 'offline_order_aov')
-    expect(aov.map((c) => c.key)).toEqual([
-      ...gmv.slice(0, 4), 'orderAov', 'quality', ...gmv.slice(4),
+  // ── Mig 106 r1.1: Chất lượng bán hàng — bảng GỌN, không cột trùng số ──────
+  test('order_aov: bỏ KPI target / % / Trung bình-ngày, thêm 2 cột Order·AOV + Trạng thái', () => {
+    const keys = resultTableColumns(3, false, 'offline_order_aov').map((c) => c.key)
+    expect(keys).toEqual([
+      'store', 'group', 'actual', 'orderAov', 'quality', 'pace',
+      'tierCombined', 'tier-1', 'tier-2', 'tier-3',
     ])
-    expect(aov.find((c) => c.key === 'actual')!.label).toBe('Hoàn thành')
-    expect(aov.find((c) => c.key === 'orderAov')!.scope).toBe('all')
+    const cols = resultTableColumns(3, false, 'offline_order_aov')
+    expect(cols.find((c) => c.key === 'actual')!.label).toBe('Hoàn thành')
+    expect(cols.find((c) => c.key === 'orderAov')!.scope).toBe('all')
     // KHÔNG có cột GMV Offline/Affiliate (loại này không bật affiliate)
-    expect(aov.map((c) => c.key)).not.toContain('affiliate')
+    expect(keys).not.toContain('affiliate')
+    // 'KPI target' luôn = 100% ⇒ bỏ; '%' trùng chính cột Hoàn thành ⇒ bỏ;
+    // 'Trung bình/ngày' (điểm %/ngày) không có nghĩa nghiệp vụ ⇒ bỏ.
+    for (const dead of ['kpiTarget', 'pct', 'perDay']) expect(keys).not.toContain(dead)
   })
 
-  test('order_aov: label mảng GMV vẫn BẤT BIẾN (zero-touch)', () => {
+  test('GMV/khách: mảng cột GIỮ NGUYÊN (zero-touch khi thêm loại mới)', () => {
     expect(resultTableColumns(2, false, 'gmv').map((c) => c.label))
       .toEqual(resultTableColumns(2, false).map((c) => c.label))
+    expect(resultTableColumns(2, false, 'gmv').map((c) => c.key)).toEqual([
+      'store', 'group', 'kpiTarget', 'actual', 'pct', 'pace', 'perDay',
+      'tierCombined', 'tier-1', 'tier-2',
+    ])
   })
 
-  test('desktopMinPx PHẢI theo metricType (thiếu tham số sẽ tính thiếu 2 cột mới)', () => {
-    const withType = resultTableDesktopMinPx(3, false, 'offline_order_aov')
-    const withoutType = resultTableDesktopMinPx(3, false)
-    expect(withType).toBeGreaterThan(withoutType)
-    expect(withType - withoutType).toBe(RESULT_COL_PX.orderAov + RESULT_COL_PX.quality)
+  test('desktopMinPx PHẢI theo metricType (bảng order_aov hẹp hơn nhờ bỏ 3 cột)', () => {
+    const aov = resultTableDesktopMinPx(3, false, 'offline_order_aov')
+    const gmv = resultTableDesktopMinPx(3, false)
+    // +orderAov +quality −kpiTarget −pct −perDay
+    expect(aov - gmv).toBe(
+      RESULT_COL_PX.orderAov + RESULT_COL_PX.quality
+      - RESULT_COL_PX.money - RESULT_COL_PX.pct - RESULT_COL_PX.perDay,
+    )
+    expect(aov).toBeLessThan(gmv)
   })
 })

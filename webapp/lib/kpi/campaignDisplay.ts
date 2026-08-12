@@ -4,7 +4,7 @@
 // r2 (audit P3): structural type CỤC BỘ — tầng lib không import type từ
 // component UI (tránh đảo chiều phụ thuộc); CampaignView khớp structurally.
 
-import { aovFromSnapshot } from '@/lib/kpi/orderAov'
+import { aovFromSnapshot, formatCompletionPct } from '@/lib/kpi/orderAov'
 
 export interface BreakdownInput {
   metric_offline: boolean
@@ -106,8 +106,9 @@ const ORDER_AOV_PRESENTATION: MetricPresentation = {
   perDayLabel: 'Trung bình/ngày cần đạt',
   actualColumnLabel: 'Hoàn thành',
   chartAriaLabel: 'Biểu đồ số đơn theo ngày',
-  // 1 chữ số thập phân: 116.1975 → '116,2%' (số đầy đủ nằm ở export).
-  value: (n) => (n === null || n === undefined ? '—' : `${nfVi.format(Math.round(n * 10) / 10)}%`),
+  // 1 chữ số thập phân, NHƯNG chưa đạt thì không bao giờ ra '100%'
+  // (formatCompletionPct — dùng chung mọi surface).
+  value: (n) => formatCompletionPct(n),
   compact: (n) => nfVi.format(Math.round(n)),
   zero: '0%',
 }

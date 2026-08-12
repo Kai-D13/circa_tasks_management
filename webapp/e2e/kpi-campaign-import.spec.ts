@@ -293,4 +293,26 @@ test.describe('kpi campaign import guide (mig 103 r1) @desktop', () => {
     expect(parsed.valid.every((v) => v.tiers.length === 1 && v.tiers[0].threshold_pct === 100)).toBe(true)
     expect(g.commitToast(3)).toContain('Đồng bộ chất lượng bán hàng')
   })
+
+  test('r1.1 P1#4: tier_2 TRỐNG nhưng tier_3 có dữ liệu → REJECT (không lọt policy 1 bậc)', () => {
+    const sneaky = parseCampaignRows([aovRow({
+      tier_3_threshold_pct: 120, tier_3_commission_amount: 30_000_000,
+    })], BY_CODE, AOV)
+    if ('error' in sneaky) throw new Error('phải là lỗi DÒNG, không phải lỗi file')
+    expect(sneaky.valid).toEqual([])
+    expect(sneaky.invalid[0].error).toContain('còn dữ liệu bậc sau')
+
+    // chỉ có commission ở bậc sau (thiếu threshold) cũng phải bị bắt
+    const onlyCm = parseCampaignRows([aovRow({ tier_4_commission_amount: 1 })], BY_CODE, AOV)
+    if ('error' in onlyCm) throw new Error('phải là lỗi DÒNG')
+    expect(onlyCm.valid).toEqual([])
+
+    // campaign GMV giữ NGUYÊN hành vi cũ (dừng ở ô trống đầu tiên)
+    const gmv = parseCampaignRows([row({
+      tier_3_threshold_pct: undefined, tier_5_threshold_pct: 120, tier_5_commission_amount: 1,
+    })], BY_CODE)
+    if ('error' in gmv) throw new Error('file GMV hợp lệ')
+    expect(gmv.valid).toHaveLength(1)
+    expect(gmv.valid[0].tiers).toHaveLength(2)
+  })
 })

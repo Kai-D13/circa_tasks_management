@@ -1,6 +1,9 @@
+import Link from 'next/link'
 import { Card, CardContent } from '@/components/ui/card'
 import { breakdownModel, campaignFootnote, metricPresentation, orderAovMetricLines } from '@/lib/kpi/campaignDisplay'
-import { ORDER_AOV_STATUS_LABEL, aovFromSnapshot, orderAovStatus, qualityKpiPass } from '@/lib/kpi/orderAov'
+import {
+  ORDER_AOV_STATUS_LABEL, aovFromSnapshot, formatCompletionPct, orderAovStatus, qualityKpiPass,
+} from '@/lib/kpi/orderAov'
 import { buildTierProgress, type TierProgress } from '@/lib/kpi/resultModel'
 import { CampaignDailyChart } from '@/components/kpi/CampaignDailyChart'
 import { CampaignPicker } from '@/components/kpi/CampaignPicker'
@@ -52,7 +55,20 @@ export interface CampaignView {
 }
 // gmv = Offline, gmv_affiliate = Affiliate — chart hiển thị TỔNG, giữ riêng
 // 2 nguồn cho tooltip breakdown + stacked chart sau này.
-export interface DailyPoint { date: string; gmv: number; gmv_affiliate: number; affiliate_customer_count?: number }
+export interface DailyPoint {
+  date: string
+  gmv: number
+  gmv_affiliate: number
+  affiliate_customer_count?: number
+  // Mig 106: số đơn Offline của NGÀY. null = nguồn chưa có số đơn (KHÁC 0) —
+  // giữ null để chart vẽ GAP thay vì cột 0.
+  offline_order_count?: number | null
+}
+// Mig 106: chart campaign Chất lượng bán hàng có 2 chuỗi; URL giữ trạng thái
+// (CampaignKpiView là SERVER component — điều hướng bằng <Link>, không client JS).
+export type DailySeries = 'orders' | 'aov'
+export const parseDailySeries = (raw?: string | null): DailySeries =>
+  raw === 'aov' ? 'aov' : 'orders'
 
 // Short dd/MM for the campaign-chip date range.
 const dm = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`
@@ -107,12 +123,16 @@ function markerFraction(pct: number, thresholds: number[], positions: number[]):
 
 export function CampaignKpiView({
   items, selectedId, daily, dailyError = false, roleLabel, todayISO, storeName,
-  showTierRemaining = false,
+  showTierRemaining = false, series = 'orders', seriesHrefBase,
 }: {
   items: CampaignView[]
   selectedId?: string
   daily: DailyPoint[]
   dailyError?: boolean
+  // Mig 106: chuỗi đang xem của chart Chất lượng bán hàng (URL ?series=).
+  series?: DailySeries
+  // Base href để dựng link segmented (giữ nguyên các param khác của trang).
+  seriesHrefBase?: string
   roleLabel: string
   todayISO: string
   storeName: string
@@ -145,6 +165,7 @@ export function CampaignKpiView({
   // Commission LUÔN là tiền (kể cả campaign Số khách — tier thưởng bằng VNĐ).
   const money = metricPresentation('gmv').value
   const isCustomer = pres.kind === 'affiliate_customer_count'
+  const isOrderAovCampaign = pres.kind === 'offline_order_aov'
   const target = sel.kpi_target
   const actual = sel.actual_value ?? 0
   const pct = sel.run_rate ?? (target > 0 ? (actual / target) * 100 : 0)
@@ -164,10 +185,18 @@ export function CampaignKpiView({
     remainingTarget: sel.remaining_target, endISO: sel.end_date, todayISO,
   }) ?? 0)
   // P3-E: "GMV hôm nay" = TỔNG 2 nguồn của ngày hôm nay.
+  // r1.1 (audit P1#1): campaign Chất lượng bán hàng đọc ĐÚNG offline_order_count
+  // — trước đây lấy gmv + gmv_affiliate rồi format thành "N đơn" (sai hoàn toàn).
   const todayPoint = daily.find((d) => d.date === todayISO)
-  const todayGmv = todayPoint
-    ? (isCustomer ? (todayPoint.affiliate_customer_count ?? 0) : todayPoint.gmv + todayPoint.gmv_affiliate)
-    : null
+  const todayGmv = !todayPoint ? null
+    : isOrderAovCampaign ? (todayPoint.offline_order_count ?? null)
+    : isCustomer ? (todayPoint.affiliate_customer_count ?? 0)
+    : todayPoint.gmv + todayPoint.gmv_affiliate
+  // Số đơn là ĐẾM, không phải điểm % ⇒ không dùng pres.value (sẽ ra '343%').
+  const nfInt = new Intl.NumberFormat('vi-VN')
+  const todayText = todayGmv === null ? '—'
+    : isOrderAovCampaign ? `${nfInt.format(todayGmv)} đơn`
+    : vnd(todayGmv)
 
   // P3-E r1: contract breakdown/footnote nằm trong lib/kpi/campaignDisplay
   // (THUẦN, có test khóa) — 1 chỉ số → layout hiện tại giữ nguyên tuyệt đối.
@@ -266,7 +295,11 @@ export function CampaignKpiView({
             <div className="h-2.5 flex-1 rounded-full bg-muted overflow-hidden">
               <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
             </div>
-            <span className="text-xs font-semibold">{pct.toFixed(0)}%</span>
+            {/* r1.1 (audit P1#3): KHÔNG làm tròn ca 99.9999 thành 100% khi
+                badge ghi "Chưa đạt" — formatter dùng chung mọi surface. */}
+            <span className="text-xs font-semibold">
+              {isOrderAovCampaign ? formatCompletionPct(pct) : `${pct.toFixed(0)}%`}
+            </span>
           </div>
           <p className="flex items-center gap-1.5 text-sm border-t pt-3">
             <Target className="h-4 w-4 text-primary shrink-0" />
@@ -348,7 +381,7 @@ export function CampaignKpiView({
 
       {/* ── 3 metric cards — solid colored icon circles per template
              (brand triad: blue-grey / coral / green) ── */}
-      <div className="grid grid-cols-3 gap-2">
+      <div className={cn('grid gap-2', isOrderAovCampaign ? 'grid-cols-2' : 'grid-cols-3')}>
         <Card className="rounded-lg">
           <CardContent className="p-3 text-center">
             <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-muted text-muted-foreground">
@@ -360,15 +393,19 @@ export function CampaignKpiView({
             <p className="text-sm font-bold mt-0.5">{campaignOver ? 'Đã kết thúc' : `${daysLeft} ngày`}</p>
           </CardContent>
         </Card>
-        <Card className="rounded-lg">
-          <CardContent className="p-3 text-center">
-            <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground">
-              <TrendingUp className="h-4 w-4" />
-            </span>
-            <p className="text-[11px] text-muted-foreground mt-1.5">Trung bình/ngày cần đạt</p>
-            <p className="text-sm font-bold mt-0.5 text-primary">{achieved ? pres.zero : campaignOver ? '—' : vnd(needPerDay)}</p>
-          </CardContent>
-        </Card>
+        {/* r1.1 (audit khuyến nghị): ẩn với Chất lượng bán hàng — "điểm %/ngày"
+            KHÔNG tương đương số đơn/ngày hay AOV/ngày, dễ hiểu sai nghiệp vụ. */}
+        {!isOrderAovCampaign && (
+          <Card className="rounded-lg">
+            <CardContent className="p-3 text-center">
+              <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground">
+                <TrendingUp className="h-4 w-4" />
+              </span>
+              <p className="text-[11px] text-muted-foreground mt-1.5">Trung bình/ngày cần đạt</p>
+              <p className="text-sm font-bold mt-0.5 text-primary">{achieved ? pres.zero : campaignOver ? '—' : vnd(needPerDay)}</p>
+            </CardContent>
+          </Card>
+        )}
         <Card className="rounded-lg">
           <CardContent className="p-3 text-center">
             <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-status-success-bg text-status-success">
@@ -376,7 +413,7 @@ export function CampaignKpiView({
             </span>
             <p className="text-[11px] text-muted-foreground mt-1.5">{pres.todayLabel}</p>
             <p className={cn('text-sm font-bold mt-0.5', todayGmv !== null && todayGmv > 0 && 'text-status-success')}>
-              {todayGmv !== null ? vnd(todayGmv) : '—'}
+              {todayText}
             </p>
           </CardContent>
         </Card>
@@ -387,7 +424,31 @@ export function CampaignKpiView({
         <CardContent className="p-4">
           <p className="font-semibold text-sm mb-2">Tiến độ theo ngày</p>
           {daily.length > 0 ? (
-            <CampaignDailyChart start={sel.start_date} end={sel.end_date} daily={daily} todayISO={todayISO} breakdown={showBreakdown} metricType={sel.metric_type} />
+            <>
+            {isOrderAovCampaign && seriesHrefBase && (
+              /* Segmented Số đơn | AOV — idiom PeriodTabs: <Link> giữ URL ổn
+                 định (?series=), KHÔNG biến màn Staff thành client component. */
+              <div className="flex gap-1 mb-2" role="tablist" aria-label="Chuỗi biểu đồ">
+                {([['orders', 'Số đơn'], ['aov', 'AOV']] as const).map(([key, label]) => (
+                  <Link
+                    key={key}
+                    href={`${seriesHrefBase}${seriesHrefBase.includes('?') ? '&' : '?'}series=${key}`}
+                    role="tab"
+                    aria-selected={series === key}
+                    className={cn(
+                      'text-xs px-3 py-1.5 rounded-full border font-medium',
+                      series === key
+                        ? 'border-primary bg-primary/10 text-primary'
+                        : 'text-muted-foreground hover:text-foreground',
+                    )}
+                  >
+                    {label}
+                  </Link>
+                ))}
+              </div>
+            )}
+            <CampaignDailyChart start={sel.start_date} end={sel.end_date} daily={daily} todayISO={todayISO} breakdown={showBreakdown} metricType={sel.metric_type} series={series} />
+            </>
           ) : (
             <p className="text-sm text-muted-foreground py-6 text-center">
               {dailyError

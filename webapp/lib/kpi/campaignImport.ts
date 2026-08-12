@@ -39,6 +39,16 @@ export interface CampaignImportResult {
 }
 
 const MAX_TIERS = 20
+// r1.1: còn ô tier nào có dữ liệu từ chỉ số n trở đi? (quét hết dải cột)
+function hasTierDataAfter(lo: Record<string, unknown>, from: number): boolean {
+  for (let n = from; n <= MAX_TIERS; n++) {
+    if (num(lo[`tier${n}thresholdpct`]) !== null) return true
+    if (num(lo[`tier${n}commissionamount`]) !== null) return true
+    if (num(lo[`tier${n}commission`]) !== null) return true
+    if (num(lo[`tier${n}commissionpct`]) !== null) return true
+  }
+  return false
+}
 const canon = (k: string) => k.trim().toLowerCase().replace(/[^a-z0-9]/g, '')
 function num(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null
@@ -177,7 +187,15 @@ export function parseCampaignRows(
     for (let n = 1; n <= MAX_TIERS; n++) {
       const th = num(lo[`tier${n}thresholdpct`])
       const cm = num(lo[`tier${n}commissionamount`]) ?? num(lo[`tier${n}commission`]) ?? num(lo[`tier${n}commissionpct`])
-      if (th === null && cm === null) break
+      if (th === null && cm === null) {
+        // r1.1 (audit P1#4): campaign Chất lượng bán hàng phải quét HẾT cột —
+        // file có tier_1 hợp lệ, tier_2 TRỐNG nhưng tier_3 có dữ liệu sẽ lọt
+        // policy "đúng 1 bậc" nếu dừng ở ô trống đầu tiên.
+        if (isAov && hasTierDataAfter(lo, n)) {
+          tierErr = `Bậc ${n} trống nhưng còn dữ liệu bậc sau — Chất lượng bán hàng chỉ nhận ĐÚNG 1 bậc (mốc 100%)`
+        }
+        break
+      }
       if (th === null || cm === null) { tierErr = `Bậc ${n}: thiếu mốc % hoặc tiền thưởng`; break }
       if (th <= 0) { tierErr = `Bậc ${n}: mốc % phải > 0`; break }
       if (cm < 0) { tierErr = `Bậc ${n}: tiền thưởng phải ≥ 0`; break }

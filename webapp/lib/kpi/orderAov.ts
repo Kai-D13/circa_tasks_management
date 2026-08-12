@@ -185,6 +185,20 @@ export function countQualityKpiPass(rows: { actual_value?: number | null }[]): n
   return rows.filter((r) => qualityKpiPass(r.actual_value)).length
 }
 
+// Hiển thị điểm hoàn thành — DÙNG CHUNG hero/ring/bảng/danh sách/export.
+// ⚠ Store CHƯA đạt KHÔNG BAO GIỜ được render thành '100%': engine ép ca hụt
+// cực nhỏ về 99.9999, làm tròn 1 chữ số sẽ ra '100,0%' trong khi badge ghi
+// "Chưa đạt" và không có commission — mâu thuẫn ngay trên màn tiền.
+export function formatCompletionPct(completionPct: number | null | undefined): string {
+  if (completionPct == null) return '—'
+  const n = Number(completionPct)
+  if (!Number.isFinite(n)) return '—'
+  const rounded = Math.round(n * 10) / 10
+  // hụt sát 100 → hiện '<100%' thay vì làm tròn lên
+  if (!qualityKpiPass(n) && rounded >= 100) return '<100%'
+  return `${new Intl.NumberFormat('vi-VN').format(rounded)}%`
+}
+
 // AOV đọc từ snapshot: weighted per store (net/số đơn) — mirror mig 105, KHÔNG
 // bao giờ trung bình các AOV.
 export function aovFromSnapshot(

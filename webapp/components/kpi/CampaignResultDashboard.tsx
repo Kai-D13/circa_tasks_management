@@ -51,7 +51,8 @@ export function CampaignResultDashboard({ model, emptyHint }: {
           { label: 'Tổng commission đạt', value: synced ? money(m.totalCommission) : '—', icon: Wallet,
             tile: synced && m.totalCommission > 0 ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground',
             valueCls: synced && m.totalCommission > 0 ? 'text-green-600' : undefined },
-          { label: 'Store đạt bậc', value: synced ? `${m.reachedStoreCount}/${m.storeCount}` : '—', icon: Award, tile: 'bg-primary/10 text-primary' },
+          // r1.1 (audit P2): BỎ 'Store đạt bậc' — với policy đúng 1 bậc mốc 100
+          // nó trùng nghĩa 'Cửa hàng đạt KPI' ở trên.
           { label: 'Thời hạn', value: m.deadlineLabel, icon: CalendarDays, tile: 'bg-muted text-muted-foreground' },
         ] : [
           { label: 'Tổng KPI target', value: vnd(m.totalTarget), icon: Target, tile: 'bg-primary/10 text-primary' },
@@ -161,9 +162,25 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                           opaque để nội dung cuộn khuất phía dưới cell */}
                       <td className="px-4 py-2.5 font-medium lg:sticky lg:left-0 lg:z-10 lg:bg-card">{r.storeName ?? '—'}{r.posCode ? ` · ${r.posCode}` : ''}</td>
                       <td className="px-4 py-2.5 text-xs">{r.group ?? '—'}</td>
-                      <td className="px-4 py-2.5 text-right whitespace-nowrap">{vnd(r.kpiTarget)}</td>
+                      {!isOrderAov && (
+                        <td className="px-4 py-2.5 text-right whitespace-nowrap">{vnd(r.kpiTarget)}</td>
+                      )}
                       <td className="px-4 py-2.5 text-right whitespace-nowrap">
-                        {a ? vnd(a.actual_value) : '—'}
+                        {/* r1.1: order_aov gộp % vào chính cột này (bỏ cột '%'
+                            trùng số) — thanh tiến độ + điểm hoàn thành. */}
+                        {isOrderAov && a ? (
+                          <span className="inline-flex items-center justify-end gap-2">
+                            <span className="h-1.5 w-14 rounded-full bg-muted overflow-hidden shrink-0 inline-block align-middle">
+                              <span
+                                className={cn('block h-full rounded-full', r.qualityKpiPass ? 'bg-green-500' : 'bg-primary')}
+                                style={{ width: `${Math.min(100, Math.max(0, Number(a.actual_value) || 0))}%` }}
+                              />
+                            </span>
+                            <span className={cn('text-xs font-semibold', r.qualityKpiPass ? 'text-green-600' : 'text-primary')}>
+                              {vnd(a.actual_value)}
+                            </span>
+                          </span>
+                        ) : a ? vnd(a.actual_value) : '—'}
                         {/* 105: offline-only → dòng phụ nằm ngay dưới Actual GMV
                             (hybrid đã có cột GMV Offline riêng) */}
                         {!m.showBreakdown && orderLine() && (
@@ -201,6 +218,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                         </td>
                       )}
                       {m.showBreakdown && <td className="px-4 py-2.5 text-right text-muted-foreground whitespace-nowrap">{a?.actual_affiliate != null ? vnd(a.actual_affiliate) : '—'}</td>}
+                      {!isOrderAov && (
                       <td className="px-4 py-2.5">
                         {a?.run_rate != null ? (
                           <div className="flex items-center justify-end gap-2">
@@ -216,6 +234,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                           </div>
                         ) : <span className="block text-right">—</span>}
                       </td>
+                      )}
                       <td className="px-4 py-2.5 text-right">
                         {r.performance != null
                           ? <span className={cn('text-xs font-semibold', performanceTone(r.performance))}>{r.performance.toFixed(1)}%</span>
@@ -224,7 +243,11 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                       {/* 10/08: 'Trung bình/ngày' thay 'Còn thiếu' — cùng
                           công thức card Staff (requiredPerDay); đơn vị theo
                           metric (VNĐ / khách) qua metricPresentation. */}
-                      <td className="px-4 py-2.5 text-right whitespace-nowrap">{r.requiredPerDay != null ? vnd(r.requiredPerDay) : '—'}</td>
+                      {/* r1.1: Chất lượng bán hàng ẩn cột này (điểm %/ngày
+                          không tương đương số đơn/ngày hay AOV/ngày). */}
+                      {!isOrderAov && (
+                        <td className="px-4 py-2.5 text-right whitespace-nowrap">{r.requiredPerDay != null ? vnd(r.requiredPerDay) : '—'}</td>
+                      )}
                       {/* Mobile: cột gộp cũ giữ nguyên */}
                       <td className="px-4 py-2.5 lg:hidden">
                         {a?.achieved_tier_order != null
