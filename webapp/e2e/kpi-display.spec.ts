@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 import { breakdownModel, campaignFootnote, metricEditorState, metricPresentation, syncedSubjectLabel } from '../lib/kpi/campaignDisplay'
-import { affiliateDataStatus, buildCampaignExportRows, buildCustomerCampaignExportRows, type ExportActual } from '../lib/kpi/exportRows'
+import { affiliateDataStatus, buildCampaignExportRows, buildCustomerCampaignExportRows, buildOrderAovCampaignExportRows, type ExportActual } from '../lib/kpi/exportRows'
 
 // P3-E/F r1 unit gate (audit P2#3) — khóa contract render breakdown, footnote,
 // trạng thái metric editor và cột export.
@@ -201,5 +201,67 @@ test.describe('kpi display customer metric (mig 103) @desktop', () => {
     expect(syncedSubjectLabel('offline_order_aov')).toBe('Chất lượng bán hàng đã đồng bộ')
     expect(syncedSubjectLabel(undefined)).toBe('Doanh số đã đồng bộ')
     expect(syncedSubjectLabel('loai_la')).toBe('Doanh số đã đồng bộ')
+  })
+
+  // ── Mig 106: export campaign Chất lượng bán hàng — builder RIÊNG ──────────
+  test('EXPORT order/aov: đủ cấu hình 2 sàn + 2 mục tiêu + actual, KHÔNG cột tiền KPI target', () => {
+    const rows = buildOrderAovCampaignExportRows(
+      { name: 'CLBH T8', start_date: '2026-08-01', end_date: '2026-08-31', metric_offline: true, metric_affiliate: false },
+      [{
+        store_id: 's-1', pos_code: 'POS0018', kpi_target: 100, store_kpi_group: 'Nhóm A',
+        stores: { name: 'CIRCA SIGNATURE' },
+        order_floor: 888, aov_floor: 190_540, order_target: 1046, aov_target: 194_046,
+      }],
+      [{
+        store_id: 's-1', actual_value: 116.1975, run_rate: 116.1975, remaining_target: 0,
+        achieved_tier_order: 2, store_commission_pool: 20_800_000, synced_at: '2026-08-12T10:00:00Z',
+        actual_offline: 203_039_424, actual_affiliate: 0, offline_order_count: 1046,
+        quality_floor_pass: true, offline_synced_at: '2026-08-12T10:00:00Z', affiliate_synced_at: null,
+      }], '2026-08-12', (iso) => iso,
+    )
+    expect(Object.keys(rows[0])).toEqual([
+      'Chiến dịch', 'Loại chỉ số', 'Từ ngày', 'Đến ngày', 'POS', 'Cửa hàng', 'Phân loại',
+      'Sàn số đơn', 'Mục tiêu số đơn', 'Số đơn thực tế',
+      'Sàn AOV', 'Mục tiêu AOV', 'AOV thực tế', 'Net Revenue (tham khảo)',
+      'Hoàn thành %', 'Đạt 2 sàn', 'Đạt KPI', 'Bậc đạt', 'Commission pool', 'Đồng bộ lúc',
+    ])
+    expect(rows[0]['Loại chỉ số']).toBe('Chất lượng bán hàng')
+    expect(rows[0]['Số đơn thực tế']).toBe(1046)
+    expect(rows[0]['AOV thực tế']).toBe(Math.round(203_039_424 / 1046))
+    expect(rows[0]['Hoàn thành %']).toBe(116.2)
+    expect(rows[0]['Đạt 2 sàn']).toBe('Đạt')
+    expect(rows[0]['Đạt KPI']).toBe('Đạt')
+    // KHÔNG có cột tiền của campaign GMV
+    expect(Object.keys(rows[0])).not.toContain('KPI target')
+    expect(Object.keys(rows[0])).not.toContain('Actual GMV')
+  })
+
+  test('EXPORT order/aov: thủng sàn dù điểm > 100 → "Đạt KPI" = Chưa đạt; chưa sync → ô rỗng', () => {
+    const base = {
+      name: 'CLBH', start_date: '2026-08-01', end_date: '2026-08-31',
+      metric_offline: true, metric_affiliate: false,
+    }
+    const target = {
+      store_id: 's-1', pos_code: 'POS0018', kpi_target: 100, store_kpi_group: 'A',
+      stores: { name: 'S1' }, order_floor: 888, aov_floor: 190_540,
+      order_target: 1046, aov_target: 194_046,
+    }
+    const broke = buildOrderAovCampaignExportRows(base, [target], [{
+      store_id: 's-1', actual_value: 130, run_rate: 130, remaining_target: 0,
+      achieved_tier_order: null, store_commission_pool: null, synced_at: '2026-08-12T10:00:00Z',
+      actual_offline: 100_000_000, actual_affiliate: 0, offline_order_count: 700,
+      quality_floor_pass: false, offline_synced_at: null, affiliate_synced_at: null,
+    }], '2026-08-12', (iso) => iso)
+    expect(broke[0]['Đạt 2 sàn']).toBe('Chưa đạt')
+    expect(broke[0]['Đạt KPI']).toBe('Chưa đạt')
+    expect(broke[0]['Bậc đạt']).toBe('')
+
+    const notSynced = buildOrderAovCampaignExportRows(base, [target], [], '2026-08-12', (iso) => iso)
+    expect(notSynced[0]['Số đơn thực tế']).toBe('')
+    expect(notSynced[0]['AOV thực tế']).toBe('')
+    expect(notSynced[0]['Hoàn thành %']).toBe('')
+    expect(notSynced[0]['Đạt KPI']).toBe('')
+    // cấu hình vẫn hiện đủ để đối soát trước khi sync
+    expect(notSynced[0]['Sàn số đơn']).toBe(888)
   })
 })

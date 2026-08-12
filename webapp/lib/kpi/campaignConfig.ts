@@ -36,15 +36,33 @@ export function resolveMetricInput(
 // (offline=false + affiliate=true + order_type='online' — CHECK trong DB) và
 // gate DUY NHẤT = KPI_AFFILIATE_CUSTOMER_ENABLED (KHÔNG cần KPI_AFFILIATE_
 // ENABLED — 2 flag độc lập, test khóa 2 chiều).
+// Mig 106: + offline_order_aov ("Chất lượng bán hàng") — contract cột CỐ ĐỊNH
+// offline=true + affiliate=false + order_type='all' (CHECK trong DB), gate
+// DUY NHẤT = KPI_ORDER_AOV_CAMPAIGN_ENABLED (điểm fail-closed 3/3).
 export type CampaignTypeResolution =
-  | ({ ok: true; metric_type: 'gmv' | 'affiliate_customer_count'; order_type: 'all' | 'online' } & MetricFlags)
+  | ({
+    ok: true
+    metric_type: 'gmv' | 'affiliate_customer_count' | 'offline_order_aov'
+    order_type: 'all' | 'online'
+  } & MetricFlags)
   | { ok: false; error: string }
 
 export function resolveCampaignType(
-  flags: { affiliate: boolean; customer: boolean },
+  flags: { affiliate: boolean; customer: boolean; orderAov: boolean },
   input: MetricInput & { metric_type?: string },
 ): CampaignTypeResolution {
   const metricType = input.metric_type ?? 'gmv'
+  if (metricType === 'offline_order_aov') {
+    if (!flags.orderAov) {
+      return { ok: false, error: 'Chiến dịch Chất lượng bán hàng chưa được bật trên hệ thống (KPI_ORDER_AOV_CAMPAIGN_ENABLED)' }
+    }
+    // Chỉ số do LOẠI quy định — client gửi metric_offline/metric_affiliate
+    // cũng bị bỏ qua (contract cột cố định, DB CHECK là chốt cuối).
+    return {
+      ok: true, metric_type: 'offline_order_aov', order_type: 'all',
+      metric_offline: true, metric_affiliate: false,
+    }
+  }
   if (metricType === 'affiliate_customer_count') {
     if (!flags.customer) {
       return { ok: false, error: 'Chiến dịch Số khách Affiliate chưa được bật trên hệ thống (KPI_AFFILIATE_CUSTOMER_ENABLED)' }

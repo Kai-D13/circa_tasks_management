@@ -3,7 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { isKpiCampaignEnabled } from '@/lib/kpi/flags'
 import { xlsxResponse, stampVN, fmtVN } from '@/lib/export/xlsx'
-import { buildCampaignExportRows, buildCustomerCampaignExportRows } from '@/lib/kpi/exportRows'
+import { buildCampaignExportRows, buildCustomerCampaignExportRows, buildOrderAovCampaignExportRows } from '@/lib/kpi/exportRows'
 
 // GET /api/export/kpi-campaigns?campaign_id=... — Excel of a campaign's per-store
 // result (super admin only; mirrors the /targets/campaigns/[id] Result tab).
@@ -39,10 +39,10 @@ export async function GET(request: NextRequest) {
 
   const [{ data: targetsRaw, error: tErr }, { data: actualsRaw, error: aErr }] = await Promise.all([
     supabase.from('kpi_campaign_store_targets')
-      .select('store_id, pos_code, kpi_target, store_kpi_group, stores(name)')
+      .select('store_id, pos_code, kpi_target, store_kpi_group, order_floor, aov_floor, order_target, aov_target, stores(name)')
       .eq('campaign_id', campaignId).order('pos_code'),
     supabase.from('kpi_campaign_store_actuals')
-      .select('store_id, actual_value, actual_offline, actual_affiliate, offline_order_count, actual_customer_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
+      .select('store_id, actual_value, actual_offline, actual_affiliate, offline_order_count, actual_customer_count, quality_floor_pass, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
       .eq('campaign_id', campaignId),
   ])
   if (tErr || aErr) return NextResponse.json({ error: (tErr ?? aErr)!.message }, { status: 500 })
@@ -60,7 +60,10 @@ export async function GET(request: NextRequest) {
   }
   const rows = c.metric_type === 'affiliate_customer_count'
     ? buildCustomerCampaignExportRows(exportCampaign, targets, actuals, vnTodayISO, fmtVN)
-    : buildCampaignExportRows(exportCampaign, targets, actuals, vnTodayISO, fmtVN)
+    : c.metric_type === 'offline_order_aov'
+      // Mig 106: builder riêng — cấu hình 2 sàn/2 mục tiêu + số đơn/AOV thực tế.
+      ? buildOrderAovCampaignExportRows(exportCampaign, targets, actuals, vnTodayISO, fmtVN)
+      : buildCampaignExportRows(exportCampaign, targets, actuals, vnTodayISO, fmtVN)
 
   return xlsxResponse(rows, 'Kết quả chiến dịch', `campaign_${(c.name as string).slice(0, 20)}_${stampVN()}`)
 }

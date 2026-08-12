@@ -44,7 +44,11 @@ export async function createCampaign(
   // (offline=false/affiliate=true/order_type='online', CHECK trong DB) + gate
   // KPI_AFFILIATE_CUSTOMER_ENABLED tại server, không chỉ ẩn UI.
   const resolved = resolveCampaignType(
-    { affiliate: isKpiAffiliateEnabled(), customer: isKpiAffiliateCustomerEnabled() },
+    {
+      affiliate: isKpiAffiliateEnabled(),
+      customer: isKpiAffiliateCustomerEnabled(),
+      orderAov: isKpiOrderAovEnabled(),
+    },
     input,
   )
   if (!resolved.ok) return { error: resolved.error }
