@@ -183,5 +183,9 @@ test.describe('mig 106 source contract @desktop', () => {
     expect(sql).toContain('chk_kcst_aov_vnd_integer')
     expect(sql).toContain('aov_floor  = trunc(aov_floor)')
     expect(sql).toContain('aov_target = trunc(aov_target)')
+    // r1.2 (audit P1) — 0 đơn + Net Revenue khác 0 là nguồn mâu thuẫn: RPC là
+    // lớp phòng thủ cuối, KHÔNG được ghi thành 0%.
+    expect(ACTUALS).toContain('IF v_ord = 0 AND v_offline <> 0 THEN')
+    expect(ACTUALS).toContain('0 đơn chỉ hợp lệ khi doanh thu = 0')
   })
 })

@@ -60,10 +60,18 @@ export interface OrderAovResult {
   remainingPct: number
 }
 
-// Khớp `round(x, 4)` của Postgres numeric (half-up). Giữ 4 chữ số vì bảng đối
-// soát Finance dùng 4 chữ số (vd 116.1975%).
+// Khớp `round(x, 4)` của Postgres numeric: HALF-UP ĐỐI XỨNG (away-from-zero) —
+// r1.2 (audit P2): Math.round là half-up "về phía +∞" nên số ÂM lệch một đơn vị
+// cuối (-1,23455 → -1,2345 thay vì -1,2346). Net Revenue âm đã được chấp nhận
+// nên sai lệch này có thể chạm màn tiền.
+// +1e-9 bù sai số nhị phân: 1,23455×1e4 trong float là 12345.499999999998 —
+// PG numeric là thập phân CHÍNH XÁC nên không có lỗi đó; nudge ở mức 1e-13 của
+// giá trị gốc, nhỏ hơn mọi con số nghiệp vụ.
 export function round4(n: number): number {
-  return Math.round((n + Number.EPSILON) * 1e4) / 1e4
+  if (!Number.isFinite(n)) return n
+  const rounded = Math.round(Math.abs(n) * 1e4 + 1e-9)
+  const out = (n < 0 ? -rounded : rounded) / 1e4
+  return out === 0 ? 0 : out            // chuẩn hóa -0 → 0
 }
 
 // target_score tách riêng: đây là con số Finance đối soát trực tiếp từ file
@@ -106,6 +114,11 @@ export function computeOrderAovResult(input: OrderAovTargets & {
     throw new Error('orderAov: actual_order phải là số nguyên >= 0')
   }
   if (!Number.isFinite(actualNet)) throw new Error('orderAov: actual_net phải là số hữu hạn')
+  // r1.2 (audit P1): 0 đơn mà có doanh thu = nguồn MÂU THUẪN (canary 105) —
+  // fail-closed cùng contract với RPC, không được lặng lẽ thành 0%.
+  if (actualOrder === 0 && actualNet !== 0) {
+    throw new Error('orderAov: 0 đơn nhưng actual_net khác 0 — nguồn mâu thuẫn (0 đơn chỉ hợp lệ khi doanh thu = 0)')
+  }
   const ts = targetScore(input)
   if (!(ts > 0)) throw new Error('orderAov: target_score phải > 0 — cấu hình target sai')
 

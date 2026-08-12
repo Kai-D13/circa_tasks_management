@@ -496,6 +496,12 @@ BEGIN
       IF v_ord < 0 THEN
         RAISE EXCEPTION 'rpc_replace_campaign_actuals: store % offline_order_count âm (%)', v_store, v_ord;
       END IF;
+      -- r1.2 (audit P1): 0 ĐƠN mà CÓ doanh thu là nguồn MÂU THUẪN (canary 105
+      -- revenue_with_zero_order bắt ở orchestrator; đây là lớp phòng thủ DB).
+      -- Quy tắc "0 đơn → 0%" CHỈ hợp lệ khi Net Revenue cũng = 0.
+      IF v_ord = 0 AND v_offline <> 0 THEN
+        RAISE EXCEPTION 'rpc_replace_campaign_actuals: store % có 0 đơn nhưng Net Revenue = % — nguồn mâu thuẫn, không ghi (0 đơn chỉ hợp lệ khi doanh thu = 0)', v_store, v_offline;
+      END IF;
       -- r1.1 (audit P1#2): daily của loại này phải là SỐ THẬT mọi ngày —
       -- gmv/offline_order_count null sẽ bị coalesce thành 0 lúc INSERT và làm
       -- lệch cả AOV lẫn điểm.

@@ -104,11 +104,14 @@ test.describe('kpi order/aov core (106) @desktop', () => {
     expect(r.remainingPct).toBe(100)
   })
 
-  test('0 đơn mà nguồn vẫn có doanh thu → VẪN 0% + AOV null (không chia 0)', () => {
-    const r = run(0, 5_000_000)
-    expect(r.completionPct).toBe(0)
-    expect(r.actualAov).toBeNull()
-    expect(Number.isFinite(r.actualScore)).toBe(true)
+  // r1.2 (audit P1): ĐỔI CÓ CHỦ Ý — trước đây trả 0%; canary 105 đã xác định
+  // "0 đơn mà có doanh thu" là NGUỒN HỎNG ⇒ phải fail-closed cùng contract với
+  // RPC (0 đơn → 0% chỉ hợp lệ khi doanh thu cũng = 0).
+  test('0 đơn mà nguồn vẫn có doanh thu → THROW (nguồn mâu thuẫn), không âm thầm 0%', () => {
+    expect(() => run(0, 5_000_000)).toThrow(/0 đơn nhưng actual_net khác 0/)
+    expect(() => run(0, -1)).toThrow(/nguồn mâu thuẫn/)
+    // 0 đơn + 0 doanh thu VẪN hợp lệ
+    expect(run(0, 0).completionPct).toBe(0)
   })
 
   test('tier: lấy bậc CAO NHẤT đạt được, không cộng dồn', () => {
@@ -180,18 +183,36 @@ test.describe('kpi order/aov core (106) @desktop', () => {
   // Chỉ SIGNATURE có đủ 4 chỉ số đầu vào trong handoff; MIZUKI (120.2463%) và
   // SYMPHONY (120.3300%) mới chỉ có KẾT QUẢ kỳ vọng, chưa có input ⇒ chưa dựng
   // được test (không bịa số cho màn tiền).
-  test('FIXTURE Finance POS0018 CIRCA SIGNATURE → target_score = 116.1975%', () => {
-    const SIGNATURE = { orderFloor: 888, aovFloor: 190_540, orderTarget: 1046, aovTarget: 194_046 }
-    expect(round4(targetScore(SIGNATURE) * 100)).toBe(116.1975)
-    // đúng mục tiêu số đơn + AOV → completion đúng 100%
-    const atTarget = computeOrderAovResult({
-      ...SIGNATURE, actualOrder: 1046, actualNet: 1046 * 194_046, tiers: [],
+  // r1.2 (audit P1#2): khóa ĐỦ 3 fixture Finance bằng số THẬT của file cấu hình.
+  // net_revenue trong file Finance CHỈ để tham khảo — AOV đã làm tròn VNĐ nên
+  // net ≠ order_target × aov_target (lệch +67.308 / -4.704 / -104.929đ);
+  // TUYỆT ĐỐI không dùng net làm chỉ số thứ 5 hay assert đẳng thức đó.
+  const FINANCE = [
+    { pos: 'POS0018', store: 'SIGNATURE', t: { orderFloor: 888, aovFloor: 190_540, orderTarget: 1046, aovTarget: 194_046 }, expected: 116.1975 },
+    { pos: 'POS0013', store: 'MIZUKI',    t: { orderFloor: 971, aovFloor: 123_849, orderTarget: 1187, aovTarget: 126_644 }, expected: 120.2463 },
+    { pos: 'POS0065', store: 'SYMPHONY',  t: { orderFloor: 479, aovFloor: 221_758, orderTarget: 586,  aovTarget: 226_762 }, expected: 120.3300 },
+  ]
+  for (const f of FINANCE) {
+    test(`FIXTURE Finance ${f.pos} CIRCA ${f.store} → target_score = ${f.expected}%`, () => {
+      expect(round4(targetScore(f.t) * 100)).toBe(f.expected)
+      // đúng mục tiêu số đơn + AOV → completion đúng 100% và qua cả 2 sàn
+      const atTarget = computeOrderAovResult({
+        ...f.t, actualOrder: f.t.orderTarget, actualNet: f.t.orderTarget * f.t.aovTarget, tiers: [],
+      })
+      expect(atTarget.completionPct).toBe(100)
+      expect(atTarget.floorPass).toBe(true)
+      expect(atTarget.kpiPass).toBe(true)
     })
-    expect(atTarget.completionPct).toBe(100)
-    expect(atTarget.floorPass).toBe(true)
-    // net_revenue của file Finance CHỈ để tham khảo: AOV làm tròn VNĐ nên
-    // net != order_target × aov_target (SIGNATURE lệch +67.308đ) — KHÔNG dùng
-    // net làm chỉ số thứ 5 và không assert đẳng thức đó.
+  }
+
+  test('r1.2: round4 HALF-UP ĐỐI XỨNG như PG numeric (số ÂM không lệch 1 đơn vị cuối)', () => {
+    expect(round4(-1.23455)).toBe(-1.2346)   // Math.round cũ ra -1.2345
+    expect(round4(1.23455)).toBe(1.2346)
+    expect(round4(-0.00005)).toBe(-0.0001)
+    expect(round4(0.00005)).toBe(0.0001)
+    expect(round4(-1.23454)).toBe(-1.2345)
+    expect(Object.is(round4(-0.000001), 0)).toBe(true)   // -0 chuẩn hóa thành 0
+    expect(round4(120.246272)).toBe(120.2463)
   })
 
   test('r1.1: Net Revenue ÂM hợp lệ (hoàn/điều chỉnh) — AOV âm, thủng sàn, không tier', () => {
