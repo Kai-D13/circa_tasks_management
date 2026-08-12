@@ -52,58 +52,91 @@ export async function readOfflineSource(input: OfflineSourceInput): Promise<Offl
       return { ok: false, reason: `BigQuery lỗi: ${err instanceof Error ? err.message : String(err)}` }
     }
     for (const r of rows) {
-      const pos = String(r.pos_code ?? '').trim().toUpperCase()
-      const date = String(r.date ?? '').slice(0, 10)
-      if (!pos || !/^\d{4}-\d{2}-\d{2}$/.test(date)) continue
-      // ⚠ BQ-V2 (05/08): nguồn pre-aggregated 1 row/store/ngày — source_row_count
-      // != 1 hoặc key (pos, ngày) lặp lại nghĩa là NGUỒN SAI → preserve
-      // (fail-closed, không ghi số khả nghi).
-      const srcCount = Number(r.source_row_count ?? 1)
-      if (!Number.isFinite(srcCount) || srcCount !== 1) {
-        return {
-          ok: false,
-          reason: `Nguồn BQ bất thường: ${pos}/${date} có source_row_count=${String(r.source_row_count)} (kỳ vọng 1 row/store/ngày — bảng pre-aggregated); giữ snapshot cũ`,
-        }
-      }
-      if (offlineByPos.get(pos)?.has(date)) {
-        return { ok: false, reason: `Nguồn BQ trùng key ${pos}/${date} trong cùng lần pull — giữ snapshot cũ` }
-      }
-      if (!offlineByPos.has(pos)) offlineByPos.set(pos, new Map())
-      // ⚠ Contract 30/07: field `gmv` từ campaignDailyQuery là alias của
-      // SUM(net_revenue) — giá trị Offline của campaign = Net Revenue.
-      offlineByPos.get(pos)!.set(date, Number(r.gmv ?? 0) || 0)
-
-      // ── 105: canary SỐ ĐƠN — bắt lỗi TẠI NGUỒN, trước mọi làm tròn ──
+      // r1.3 (audit P1): mọi field đọc từ BQ đều phải TỒN TẠI và ĐÚNG KIỂU.
+      // `?? 0` / `|| 0` là cách schema-drift biến thành số 0 âm thầm trên màn
+      // tiền — ở đây thiếu/sai kiểu luôn là LỖI NGUỒN.
       const numOrFail = (key: string): number | null => {
         const raw = r[key]
         if (raw === undefined || raw === null) return null
         const n = Number(raw)
         return Number.isFinite(n) ? n : null
       }
-      const revNoOrder = numOrFail('rev_without_order')
-      const orderNoRev = numOrFail('order_without_rev')
-      const negOrder = numOrFail('negative_order')
-      const nonIntOrder = numOrFail('non_integer_order')
-      const revZeroOrder = numOrFail('revenue_with_zero_order')
-      const ordNum = numOrFail('order_count')
 
+      const pos = String(r.pos_code ?? '').trim().toUpperCase()
+      const date = String(r.date ?? '').slice(0, 10)
+      // Ngày phải đúng ĐỊNH DẠNG và là ngày CÓ THẬT: '2026-13-99' khớp regex
+      // nhưng không tồn tại — round-trip qua Date để loại.
+      const dateTs = Date.parse(`${date}T00:00:00Z`)
+      const realDate = /^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(dateTs)
+        && new Date(dateTs).toISOString().slice(0, 10) === date
+      if (!pos || !realDate) {
+        // r1.3 (audit): KHÔNG `continue` im lặng — query đã lọc pos/date NOT
+        // NULL nên row hỏng khóa nghĩa là nguồn/schema đã đổi.
+        return {
+          ok: false,
+          reason: `Nguồn BQ có row sai khóa (pos_code=${String(r.pos_code)}, date=${String(r.date)}) — giữ snapshot cũ`,
+        }
+      }
+      // ⚠ BQ-V2 (05/08): nguồn pre-aggregated 1 row/store/ngày. r1.3: THIẾU
+      // alias source_row_count cũng là lỗi (trước đây mặc định 1 ⇒ drift vẫn
+      // sync). Chỉ chấp nhận đúng số nguyên 1.
+      const srcCount = numOrFail('source_row_count')
+      if (srcCount === null || !Number.isInteger(srcCount) || srcCount !== 1) {
+        return {
+          ok: false,
+          reason: `Nguồn BQ bất thường: ${pos}/${date} có source_row_count=${String(r.source_row_count)} (kỳ vọng đúng 1 row/store/ngày — bảng pre-aggregated); giữ snapshot cũ`,
+        }
+      }
+      if (offlineByPos.get(pos)?.has(date)) {
+        return { ok: false, reason: `Nguồn BQ trùng key ${pos}/${date} trong cùng lần pull — giữ snapshot cũ` }
+      }
+      // ⚠ Contract 30/07: field `gmv` từ campaignDailyQuery là alias của
+      // SUM(COALESCE(net_revenue,0)) — luôn có giá trị khi row tồn tại. r1.3:
+      // thiếu/NaN/chuỗi rác → LỖI NGUỒN (0đ và số ÂM vẫn hợp lệ: hoàn/điều chỉnh).
+      const gmv = numOrFail('gmv')
+      if (gmv === null) {
+        return {
+          ok: false,
+          reason: `Nguồn BQ thiếu/sai doanh thu tại ${pos}/${date}: gmv=${String(r.gmv)} (kỳ vọng số hữu hạn, 0 và âm đều hợp lệ); giữ snapshot cũ`,
+        }
+      }
+      if (!offlineByPos.has(pos)) offlineByPos.set(pos, new Map())
+      offlineByPos.get(pos)!.set(date, gmv)
+
+      // ── 105: canary SỐ ĐƠN — bắt lỗi TẠI NGUỒN, trước mọi làm tròn ──
+      // r1.3: canary là output COUNTIF ⇒ BẮT BUỘC nguyên >= 0; giá trị âm/lẻ
+      // nghĩa là query đã đổi, không được tin.
+      const canary: Record<string, number> = {}
       let orderIssue: string | null = null
-      if (revNoOrder === null || orderNoRev === null || negOrder === null
-          || nonIntOrder === null || revZeroOrder === null || ordNum === null) {
-        // KHÔNG mặc định 0 khi field vắng — query/schema drift sẽ âm thầm ghi
-        // "0 đơn".
-        orderIssue = 'thiếu/sai field số đơn (order_count/canary) — query hoặc schema đã đổi'
-      } else if (nonIntOrder > 0) {
-        orderIssue = `no_order KHÔNG NGUYÊN (${nonIntOrder} row)`
-      } else if (revZeroOrder > 0) {
-        // Có doanh thu mà 0 đơn ⇒ AOV vô định nhưng vẫn có tiền.
-        orderIssue = `có doanh thu nhưng KHÔNG đơn nào (${revZeroOrder} row no_order=0, net_revenue≠0)`
-      } else if (revNoOrder > 0 || orderNoRev > 0) {
-        orderIssue = `lệch NULL: ${revNoOrder} row có doanh thu thiếu no_order, ${orderNoRev} row có no_order thiếu doanh thu`
-      } else if (negOrder > 0) {
-        orderIssue = 'no_order ÂM'
-      } else if (!Number.isInteger(ordNum) || ordNum < 0) {
-        orderIssue = `tổng số đơn không hợp lệ: ${String(r.order_count)}`
+      for (const k of ['rev_without_order', 'order_without_rev', 'negative_order',
+        'non_integer_order', 'revenue_with_zero_order']) {
+        const v = numOrFail(k)
+        if (v === null) {
+          orderIssue = `thiếu/sai field số đơn (${k}) — query hoặc schema đã đổi`
+          break
+        }
+        if (!Number.isInteger(v) || v < 0) {
+          orderIssue = `canary ${k} không hợp lệ: ${String(r[k])} (COUNTIF phải là số nguyên >= 0)`
+          break
+        }
+        canary[k] = v
+      }
+      const ordNum = numOrFail('order_count')
+      if (orderIssue === null && ordNum === null) {
+        orderIssue = 'thiếu/sai field số đơn (order_count) — query hoặc schema đã đổi'
+      } else if (orderIssue === null) {
+        if (canary.non_integer_order > 0) {
+          orderIssue = `no_order KHÔNG NGUYÊN (${canary.non_integer_order} row)`
+        } else if (canary.revenue_with_zero_order > 0) {
+          // Có doanh thu mà 0 đơn ⇒ AOV vô định nhưng vẫn có tiền.
+          orderIssue = `có doanh thu nhưng KHÔNG đơn nào (${canary.revenue_with_zero_order} row no_order=0, net_revenue≠0)`
+        } else if (canary.rev_without_order > 0 || canary.order_without_rev > 0) {
+          orderIssue = `lệch NULL: ${canary.rev_without_order} row có doanh thu thiếu no_order, ${canary.order_without_rev} row có no_order thiếu doanh thu`
+        } else if (canary.negative_order > 0) {
+          orderIssue = 'no_order ÂM'
+        } else if (!Number.isInteger(ordNum as number) || (ordNum as number) < 0) {
+          orderIssue = `tổng số đơn không hợp lệ: ${String(r.order_count)}`
+        }
       }
 
       if (orderIssue !== null) {

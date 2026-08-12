@@ -391,12 +391,29 @@ test.describe('kpi sync orchestration @desktop', () => {
     expect(calls.replace).toBe(0)
   })
 
-  test('BQ-V2 GUARD: row KHÔNG có source_row_count (fixture cũ/nguồn không trả) → mặc định 1, sync bình thường', async () => {
-    const { deps } = mkDeps(CFG(), {
-      bq: async () => fullCoverage().map(({ source_row_count: _s, ...r }) => r),
-    })
-    const r = await syncCampaignWithDeps('camp-1', deps)
-    expect(r.status).toBe('success')
+  // r1.3 (audit P1#1) — ĐỔI CÓ CHỦ Ý: trước đây thiếu alias source_row_count
+  // được mặc định 1 ⇒ query/schema drift vẫn sync. Guard của TIỀN phải
+  // fail-closed: thiếu/null/không nguyên/khác 1 đều PRESERVE.
+  test('BQ-V2 GUARD r1.3: source_row_count thiếu/null/lẻ/khác 1 → PRESERVE (không còn mặc định 1)', async () => {
+    const cases: [string, Record<string, unknown> | 'drop'][] = [
+      ['thiếu alias', 'drop'],
+      ['null', { source_row_count: null }],
+      ['số lẻ', { source_row_count: 1.5 }],
+      ['chuỗi rác', { source_row_count: 'x' }],
+      ['bằng 2', { source_row_count: 2 }],
+    ]
+    for (const [label, patch] of cases) {
+      const { deps, calls } = mkDeps(CFG(), {
+        bq: async () => fullCoverage().map((r) => {
+          if (patch === 'drop') { const { source_row_count: _s, ...rest } = r; return rest }
+          return { ...r, ...patch }
+        }),
+      })
+      const res = await syncCampaignWithDeps('camp-1', deps)
+      expect(res.status, `source_row_count ${label} phải PRESERVE`).toBe('snapshot_preserved')
+      if (res.status === 'snapshot_preserved') expect(res.reason).toContain('source_row_count')
+      expect(calls.replace, `source_row_count ${label} không được ghi`).toBe(0)
+    }
   })
 
   // ── BQ-V2 r1 (audit P1#2): EXPECTED COVERAGE — thiếu Ô NÀO cũng preserve ──
@@ -427,12 +444,71 @@ test.describe('kpi sync orchestration @desktop', () => {
     expect(calls.replace).toBe(0)
   })
 
-  test('COVERAGE: row TỒN TẠI với net_revenue NULL là HỢP LỆ (=0đ) — sync success, không nhầm với thiếu row', async () => {
-    const { deps } = mkDeps(CFG(), {
-      bq: async () => fullCoverage({ 'POS0002/2026-07-10': null }),
-    })
+  // Ngày KHÔNG có doanh thu vẫn HỢP LỆ (0đ) — query dùng
+  // SUM(COALESCE(net_revenue,0)) nên nó về dạng SỐ 0, không phải null.
+  test('COVERAGE: row tồn tại với doanh thu 0đ là HỢP LỆ — sync success, không nhầm với thiếu row', async () => {
+    const { deps } = mkDeps(CFG(), { bq: async () => fullCoverage({ 'POS0002/2026-07-10': 0 }) })
     const r = await syncCampaignWithDeps('camp-1', deps)
     expect(r.status).toBe('success')
+  })
+
+  // r1.3 (audit P1#2) — ĐỔI CÓ CHỦ Ý: `Number(x) || 0` biến chuỗi rác/NaN/null
+  // thành 0đ và vẫn sync. Alias gmv là SUM(COALESCE(net_revenue,0)) nên khi row
+  // tồn tại nó LUÔN là số; thiếu/sai kiểu = drift ⇒ PRESERVE.
+  test('r1.3 GUARD TIỀN: gmv thiếu/null/NaN/chuỗi rác/Infinity → PRESERVE (0đ và ÂM vẫn hợp lệ)', async () => {
+    const bad: [string, Record<string, unknown> | 'drop'][] = [
+      ['thiếu alias', 'drop'],
+      ['null', { gmv: null }],
+      ['chuỗi rác', { gmv: 'abc' }],
+      ['NaN', { gmv: Number.NaN }],
+      ['Infinity', { gmv: Number.POSITIVE_INFINITY }],
+    ]
+    for (const [label, patch] of bad) {
+      const { deps, calls } = mkDeps(CFG(), {
+        bq: async () => fullCoverage().map((r) => {
+          if (r.pos_code !== 'POS0002' || r.date !== '2026-07-10') return r
+          if (patch === 'drop') { const { gmv: _g, ...rest } = r; return rest }
+          return { ...r, ...patch }
+        }),
+      })
+      const res = await syncCampaignWithDeps('camp-1', deps)
+      expect(res.status, `gmv ${label} phải PRESERVE`).toBe('snapshot_preserved')
+      if (res.status === 'snapshot_preserved') expect(res.reason).toContain('doanh thu')
+      expect(calls.replace).toBe(0)
+    }
+    // Doanh thu ÂM (hoàn/điều chỉnh) là HỢP LỆ — không được chặn oan.
+    const okNeg = mkDeps(CFG(), { bq: async () => fullCoverage({ 'POS0002/2026-07-10': -500_000 }) })
+    expect((await syncCampaignWithDeps('camp-1', okNeg.deps)).status).toBe('success')
+  })
+
+  test('r1.3 GUARD KHÓA: row sai pos_code/date → PRESERVE, KHÔNG bỏ qua im lặng', async () => {
+    // '2026-13-99' đúng ĐỊNH DẠNG nhưng KHÔNG phải ngày có thật → cũng phải chặn.
+    for (const patch of [{ pos_code: '' }, { pos_code: null }, { pos_code: '   ' },
+      { date: '2026-13-99' }, { date: '2026-02-30' }, { date: null }, { date: 'hôm nay' }]) {
+      const { deps, calls } = mkDeps(CFG(), {
+        bq: async () => fullCoverage().map((r, i) => (i === 0 ? { ...r, ...patch } : r)),
+      })
+      const res = await syncCampaignWithDeps('camp-1', deps)
+      expect(res.status).toBe('snapshot_preserved')
+      if (res.status === 'snapshot_preserved') expect(res.reason).toContain('sai khóa')
+      expect(calls.replace).toBe(0)
+    }
+  })
+
+  test('r1.3: canary ÂM hoặc LẺ → degrade (GMV) với lý do "COUNTIF phải là số nguyên >= 0"', async () => {
+    for (const patch of [{ negative_order: -1 }, { rev_without_order: 0.5 }]) {
+      const { deps, calls, payloads } = mkDeps(CFG(), {
+        bq: async () => fullCoverage().map((r) => (r.pos_code === 'POS0001' ? { ...r, ...patch } : r)),
+      })
+      const res = await syncCampaignWithDeps('camp-1', deps)
+      expect(res.status).toBe('success')          // tiền vẫn ghi
+      expect(calls.replace).toBe(1)
+      if (res.status === 'success') {
+        expect((res.warnings ?? []).join(' ')).toContain('COUNTIF phải là số nguyên >= 0')
+      }
+      const actuals = (payloads.actuals ?? []) as Record<string, unknown>[]
+      expect('offline_order_count' in actuals.find((a) => a.store_id === 'store-a')!).toBe(false)
+    }
   })
 })
 
