@@ -172,6 +172,13 @@ export async function syncCampaignWithDeps(
   const offlineByPos = new Map<string, Map<string, number>>()
   // 105: số đơn Offline theo (pos, ngày) — CHỈ campaign GMV có metric_offline.
   const offlineOrdersByPos = new Map<string, Map<string, number>>()
+  // r1.3: pos có nguồn số đơn hỏng (chỉ dùng khi KHÔNG strict — campaign GMV).
+  const orderIssuePos = new Map<string, string>()
+  // Cảnh báo KHÔNG chặn ghi của nhánh GMV (mirror warnings nhánh customer).
+  const offlineWarnings: string[] = []
+  // Campaign GMV: số đơn/AOV là chỉ số PHỤ → degrade. Loại lấy số đơn làm KPI
+  // (mig 106 offline_order_aov) sẽ chạy nhánh riêng với strict = true.
+  const strictOrderMetrics = false
   let offlineSyncedAt: string | null = null
   if (metricOffline) {
     const sa = deps.loadBqServiceAccount()
@@ -203,12 +210,19 @@ export async function syncCampaignWithDeps(
           // ⚠ Contract 30/07: field `gmv` từ campaignDailyQuery là alias của
           // SUM(net_revenue) — giá trị Offline của campaign = Net Revenue.
           offlineByPos.get(pos)!.set(date, Number(r.gmv ?? 0) || 0)
-          // ── 105: SỐ ĐƠN OFFLINE — fail-closed từng lớp ──
-          // (a) nguồn lệch NULL: có doanh thu mà thiếu số đơn (hoặc ngược
-          //     lại) ⇒ AOV sẽ sai → PRESERVE, không đoán 0.
-          // r1 (audit P1#2): KHÔNG mặc định 0 khi field vắng — query/schema
-          // drift sẽ âm thầm ghi "0 đơn" thay vì preserve. Field phải TỒN TẠI
-          // và parse được, nếu không → giữ snapshot cũ.
+          // ── 105 r1.3 (audit P1): SỐ ĐƠN OFFLINE — POLICY THEO METRIC ──
+          // Order/AOV là chỉ số PHỤ của campaign GMV: nguồn số đơn hỏng
+          // KHÔNG được đóng băng KPI tiền đang vận hành (net_revenue vẫn
+          // đúng). Vì vậy:
+          //   · campaign GMV  → DEGRADE: bỏ số đơn của ĐÚNG pos lỗi (bỏ CẢ
+          //     pos, không nửa vời — RPC 105 đòi mọi ngày của store phải có
+          //     count), tiền vẫn ghi; UI store đó hiện '—' và tổng campaign
+          //     cũng '—' vì completeness không đủ. Lý do vào warnings.
+          //   · campaign offline_order_aov (mig 106) → STRICT: gọi hàm này
+          //     với strictOrderMetrics=true, mọi lỗi trên là preserve toàn
+          //     snapshot (số đơn/AOV CHÍNH LÀ KPI của loại đó).
+          // Guard của TIỀN (source_row_count, trùng key, coverage) giữ
+          // nguyên hành vi preserve cho mọi loại.
           const numOrFail = (key: string): number | null => {
             const raw = (r as Record<string, unknown>)[key]
             if (raw === undefined || raw === null) return null
@@ -221,31 +235,36 @@ export async function syncCampaignWithDeps(
           const nonIntOrder = numOrFail('non_integer_order')
           const revZeroOrder = numOrFail('revenue_with_zero_order')
           const ordNum = numOrFail('order_count')
+
+          let orderIssue: string | null = null
           if (revNoOrder === null || orderNoRev === null || negOrder === null
               || nonIntOrder === null || revZeroOrder === null || ordNum === null) {
-            return preserved(`Nguồn BQ thiếu/sai field số đơn tại ${pos}/${date} (order_count/canary) — query hoặc schema đã đổi; giữ snapshot cũ`)
+            // r1 (audit P1#2): KHÔNG mặc định 0 khi field vắng — query/schema
+            // drift sẽ âm thầm ghi "0 đơn".
+            orderIssue = `thiếu/sai field số đơn (order_count/canary) — query hoặc schema đã đổi`
+          } else if (nonIntOrder > 0) {
+            // r1 (audit P1#1): số đơn LẺ bắt tại NGUỒN, trước mọi làm tròn.
+            orderIssue = `no_order KHÔNG NGUYÊN (${nonIntOrder} row)`
+          } else if (revZeroOrder > 0) {
+            // r1.2: có doanh thu mà 0 đơn ⇒ AOV vô định nhưng vẫn có tiền.
+            orderIssue = `có doanh thu nhưng KHÔNG đơn nào (${revZeroOrder} row no_order=0, net_revenue≠0)`
+          } else if (revNoOrder > 0 || orderNoRev > 0) {
+            orderIssue = `lệch NULL: ${revNoOrder} row có doanh thu thiếu no_order, ${orderNoRev} row có no_order thiếu doanh thu`
+          } else if (negOrder > 0) {
+            orderIssue = 'no_order ÂM'
+          } else if (!Number.isInteger(ordNum) || ordNum < 0) {
+            orderIssue = `tổng số đơn không hợp lệ: ${String(r.order_count)}`
           }
-          // r1 (audit P1#1): số đơn LẺ bị bắt ở nguồn (trước mọi làm tròn).
-          if (nonIntOrder > 0) {
-            return preserved(`Nguồn BQ có no_order KHÔNG NGUYÊN tại ${pos}/${date} (${nonIntOrder} row) — giữ snapshot cũ`)
+
+          if (orderIssue !== null) {
+            if (strictOrderMetrics) {
+              return preserved(`Nguồn BQ ${orderIssue} tại ${pos}/${date} — giữ snapshot cũ`)
+            }
+            orderIssuePos.set(pos, `${pos}/${date}: ${orderIssue}`)
+          } else {
+            if (!offlineOrdersByPos.has(pos)) offlineOrdersByPos.set(pos, new Map())
+            offlineOrdersByPos.get(pos)!.set(date, ordNum as number)
           }
-          // r1.2: có doanh thu mà 0 đơn ⇒ AOV vô định nhưng vẫn có tiền.
-          if (revZeroOrder > 0) {
-            return preserved(`Nguồn BQ có doanh thu nhưng KHÔNG đơn nào tại ${pos}/${date} (${revZeroOrder} row no_order=0, net_revenue≠0) — AOV không xác định; giữ snapshot cũ`)
-          }
-          if (revNoOrder > 0 || orderNoRev > 0) {
-            return preserved(`Nguồn BQ lệch NULL tại ${pos}/${date}: ${revNoOrder} row có doanh thu thiếu no_order, ${orderNoRev} row có no_order thiếu doanh thu — giữ snapshot cũ`)
-          }
-          if (negOrder > 0) {
-            return preserved(`Nguồn BQ có no_order ÂM tại ${pos}/${date} — giữ snapshot cũ`)
-          }
-          // (b) tổng số đơn phải là số nguyên không âm (lớp 2 sau canary nguồn).
-          const ordRaw = ordNum
-          if (!Number.isInteger(ordRaw) || ordRaw < 0) {
-            return preserved(`Nguồn BQ có số đơn không hợp lệ tại ${pos}/${date}: ${String(r.order_count)} — giữ snapshot cũ`)
-          }
-          if (!offlineOrdersByPos.has(pos)) offlineOrdersByPos.set(pos, new Map())
-          offlineOrdersByPos.get(pos)!.set(date, ordRaw)
         }
       }
 
@@ -269,6 +288,12 @@ export async function syncCampaignWithDeps(
         const sample = missing.slice(0, 5).join(', ')
         return preserved(
           `Nguồn BQ THIẾU ${missing.length} ô dữ liệu (POS×ngày) trong kỳ — vd: ${sample}${missing.length > 5 ? ', …' : ''}; giữ snapshot cũ`)
+      }
+      // r1.3: DEGRADE — bỏ số đơn của pos có nguồn hỏng (bỏ CẢ pos để không
+      // gửi payload nửa vời); tiền của pos đó VẪN được ghi bình thường.
+      for (const [pos, reason] of orderIssuePos) {
+        offlineOrdersByPos.delete(pos)
+        offlineWarnings.push(`Số đơn/AOV Offline tạm ẩn cho ${pos} — nguồn BQ ${reason}. GMV/commission KHÔNG bị ảnh hưởng.`)
       }
     }
     offlineSyncedAt = new Date(deps.nowMs()).toISOString()
@@ -298,6 +323,8 @@ export async function syncCampaignWithDeps(
     upserted: count ?? actuals.length,
     dailyRows: daily.length,
     unmatched: unmatchedPos,
+    // r1.3: nguồn số đơn hỏng ở vài pos → cảnh báo (KHÔNG chặn ghi tiền).
+    ...(offlineWarnings.length > 0 ? { warnings: offlineWarnings } : {}),
   }
 }
 
