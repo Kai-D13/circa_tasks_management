@@ -53,17 +53,23 @@ export function AffiliateGmvCard({
         <CardContent className="p-4 space-y-2">
           <div className="flex items-start gap-3 flex-wrap md:items-center">
             <p className="flex items-center gap-1.5 font-semibold text-sm shrink-0">
-              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#a3b2bf]/20 text-[#5b6b7a] dark:text-[#a3b2bf]">
+              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-muted text-muted-foreground">
                 <Link2 className="h-3.5 w-3.5" />
               </span>
               GMV Affiliate — Circa Online
             </p>
             <span className="text-xs text-muted-foreground shrink-0">{monthLabel}</span>
-            <div className="grid grid-cols-3 gap-4 md:gap-8 flex-1 min-w-[240px] md:justify-items-center">
+            {/* r2.6 (audit P2): chống số GMV dài đè cột. Cell đã có `min-w-0`
+                (không có nó thì ô grid lấy min-content = cả con số, đẩy tràn),
+                thêm `truncate` cho GIÁ TRỊ — nhãn vốn đã truncate. Dưới 640px
+                xếp DỌC 1 cột: 3 cột trong 240px chỉ còn ~70px/ô, con số hàng tỉ
+                sẽ cụt còn vài chữ số đầu, vô nghĩa. Từ sm trở lên vẫn 3 cột nên
+                hình dạng ở >=1024px (bố cục stakeholder đã duyệt) KHÔNG đổi. */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 md:gap-8 flex-1 min-w-[240px] md:justify-items-center">
               {stats.map((s) => (
                 <div key={s.label} className="min-w-0">
                   <p className="text-[11px] text-muted-foreground truncate">{s.label}</p>
-                  <p className="text-xl font-bold tabular-nums leading-none mt-1">{s.value}</p>
+                  <p className="text-xl font-bold tabular-nums leading-none mt-1 truncate">{s.value}</p>
                 </div>
               ))}
             </div>
@@ -99,7 +105,7 @@ export function AffiliateGmvCard({
       <CardContent className="p-4 space-y-2">
         <div className="flex items-center justify-between gap-2">
           <p className="flex items-center gap-1.5 font-semibold text-sm">
-            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#a3b2bf]/20 text-[#5b6b7a] dark:text-[#a3b2bf]">
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-muted text-muted-foreground">
               <Link2 className="h-3.5 w-3.5" />
             </span>
             GMV Affiliate — Circa Online

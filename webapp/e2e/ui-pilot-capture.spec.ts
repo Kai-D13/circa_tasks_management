@@ -16,7 +16,9 @@ import { expect, test, type Page } from '@playwright/test'
 // against a server built from the pre-migration commit:
 //   git checkout <main-commit> && npm run build && PORT=3011 npm start
 //   PILOT_CAPTURE_DIR=e2e/__screenshots__/pilot-before E2E_BASE_URL=http://localhost:3011 \
-//     npx playwright test e2e/ui-pilot-capture.spec.ts -g "capture pilot routes"
+//     npx playwright test e2e/ui-pilot-capture.spec.ts -g "pilot after-capture @desktop"
+// (lọc theo TÊN DESCRIBE, không theo tên test: từ r2.6 mỗi route là một test
+//  riêng nên không còn một tiêu đề test nào gom cả loạt.)
 // Only then are dimensions/hashes meaningful. A viewport shot vs an element
 // shot ALWAYS hash-differs and proves nothing.
 
@@ -44,10 +46,11 @@ const ROUTES: [string, string, string][] = [
 
 // /gioi-thieu KHÔNG nằm trong ROUTES mặc định (audit test-tooling, P1#1).
 // Chương trình referral đã ngưng: khi flag tắt, page.tsx `redirect('/targets')`
-// ngay từ server, nên vòng chờ heading "Giới thiệu bạn bè" chỉ có thể hết
-// 15s rồi ném lỗi — và vì cả loạt route chụp chung MỘT test, cú ném đó DỪNG
-// luôn suite giữa chừng (mọi route xếp sau không bao giờ được chụp). Tách ra
-// một test opt-in riêng bên dưới; timeout không phải cách xử lý một redirect.
+// ngay từ server, nên vòng chờ heading "Giới thiệu bạn bè" chỉ có thể hết 15s
+// rồi ném lỗi. Từ r2.6 mỗi route đã có test riêng nên cú ném đó không còn kéo
+// đổ route khác, NHƯNG nó vẫn là một test đỏ chắc chắn ở mọi lần chạy mặc định
+// — nên route này vẫn nằm ở test opt-in bên dưới, gác bằng flag chứ không phải
+// bằng timeout.
 const REFERRAL_ROUTE: [string, string, string] = ['/gioi-thieu', 'gioi-thieu', 'Giới thiệu bạn bè']
 
 // Các route CHUYỂN SANG FLUID trong batch 15/08 (C1-C3) — đây là tập cần bằng
@@ -112,14 +115,24 @@ async function captureRoute(
 
 test.describe('pilot after-capture @desktop', () => {
   test.skip(!SUPER.email || !SUPER.password, 'E2E_SUPER_* not set')
-  test('capture pilot routes light+dark', async ({ page }) => {
-    test.setTimeout(180_000)
-    await login(page)
-    for (const theme of THEMES) {
-      await page.evaluate((t) => localStorage.setItem('theme', t), theme)
-      for (const entry of ROUTES) await captureRoute(page, theme, entry)
-    }
-  })
+
+  // MỘT test cho MỖI route (audit r2.6, P2 tooling). Trước đây cả loạt ROUTES
+  // chụp chung một test: route nào ném lỗi (heading đổi, redirect, mạng chậm)
+  // là cắt ngang test đó, và MỌI route xếp sau không bao giờ được chụp — mất
+  // sạch bằng chứng chỉ vì một route hỏng. Tách ra thì thiệt hại đúng bằng một
+  // ảnh. Cái giá là mỗi test có page/context riêng nên phải login lại; đổi lại
+  // các route hoàn toàn độc lập (chạy song song được, retry được từng cái).
+  for (const entry of ROUTES) {
+    const [route] = entry
+    test(`capture ${route} light+dark`, async ({ page }) => {
+      test.setTimeout(90_000)
+      await login(page)
+      for (const theme of THEMES) {
+        await page.evaluate((t) => localStorage.setItem('theme', t), theme)
+        await captureRoute(page, theme, entry)
+      }
+    })
+  }
 
   // Long-text proof (review r1.4 P2): real data has no 120-char store name, so
   // simulate one via TEST-ONLY DOM mutation (server-rendered page — no React
@@ -189,13 +202,18 @@ test.describe('pilot after-capture /gioi-thieu (opt-in) @desktop', () => {
 // không được đánh đổi bằng overflow.
 test.describe('pilot after-capture wide viewport @desktop', () => {
   test.skip(!SUPER.email || !SUPER.password, 'E2E_SUPER_* not set')
-  test('capture fluid routes @1920 + @2560, no horizontal overflow', async ({ page }) => {
-    test.setTimeout(240_000)
-    await login(page)
-    await page.evaluate(() => localStorage.setItem('theme', 'light'))
-    for (const vp of WIDE_VIEWPORTS) {
-      await page.setViewportSize({ width: vp.width, height: vp.height })
-      for (const [route, name, heading] of ROUTES.filter(([r]) => FLUID_ROUTES.has(r))) {
+
+  // Cũng tách MỘT test / MỘT route (audit r2.6) vì đúng một lý do như nhóm
+  // trên: gộp 5 route × 2 viewport vào một test thì route đầu hỏng là mất cả 10
+  // ảnh. Hai viewport của CÙNG một route vẫn nằm chung một test — chúng đo cùng
+  // một trang và chỉ khác setViewportSize, tách nữa chỉ tốn thêm một lần login.
+  for (const [route, name, heading] of ROUTES.filter(([r]) => FLUID_ROUTES.has(r))) {
+    test(`capture ${route} @1920 + @2560, no horizontal overflow`, async ({ page }) => {
+      test.setTimeout(120_000)
+      await login(page)
+      await page.evaluate(() => localStorage.setItem('theme', 'light'))
+      for (const vp of WIDE_VIEWPORTS) {
+        await page.setViewportSize({ width: vp.width, height: vp.height })
         await page.goto(route)
         await page.waitForFunction(
           (t) => document.documentElement.classList.contains('dark') === (t === 'dark'),
@@ -213,8 +231,8 @@ test.describe('pilot after-capture wide viewport @desktop', () => {
         await unlockForCapture(page)
         await page.locator('main').screenshot({ path: `${OUT_DIR}/${name}-w${vp.width}.png` })
       }
-    }
-  })
+    })
+  }
 })
 
 // Pilot 2: staff on mobile is THE primary persona for /tasks. Captures the

@@ -36,8 +36,9 @@ const ROUTES: WidthRoute[] = [
 // /gioi-thieu KHÔNG nằm trong ROUTES mặc định (audit test-tooling, P1#1) — cùng
 // một cái bẫy như ở e2e/ui-pilot-capture.spec.ts: referral đã ngưng nên khi flag
 // tắt, page.tsx `redirect('/targets')` từ server và vòng chờ heading "giới thiệu
-// bạn bè" chỉ có thể hết 15s rồi ném lỗi, kéo đổ luôn cả test đo bề rộng (mọi
-// route xếp sau không bao giờ được đo). Đo nó ở test opt-in cuối file.
+// bạn bè" chỉ có thể hết 15s rồi ném lỗi. Từ r2.6 mỗi route đo trong một test
+// riêng nên nó không kéo đổ route khác nữa, nhưng vẫn là một test đỏ chắc chắn
+// ⇒ giữ ở test opt-in cuối file, gác bằng flag.
 const REFERRAL_ROUTE: WidthRoute = ['/gioi-thieu', 'giới thiệu bạn bè', 'fluid']
 
 // Zoom-out 75%/60% trên màn 1440 ⇒ viewport CSS ~1920/2400px. Đo ở đúng dải đó:
@@ -123,16 +124,25 @@ async function assertWidthContract(page: Page, vp: { width: number; height: numb
 test.describe('width contract @desktop', () => {
   test.skip(!SUPER.email || !SUPER.password, 'E2E_SUPER_* not set')
 
-  test('page-root fill/căn giữa đúng khai báo @1920 + @2560', async ({ page }) => {
-    test.setTimeout(240_000)
-    await login(page)
-    await page.evaluate(() => localStorage.setItem('theme', 'light'))
+  // MỘT test cho MỖI route (audit r2.6, P2 tooling) — trước đây 8 route × 2
+  // viewport nằm chung một test, nên route đầu tiên vi phạm contract là
+  // `expect` ném ngay và 7 route sau KHÔNG BAO GIỜ được đo: báo cáo chỉ thấy
+  // một lỗi trong khi có thể đang có năm. Tách ra thì mỗi lần chạy liệt kê
+  // ĐẦY ĐỦ các route lệch. Hai viewport giữ chung một test vì cùng một trang,
+  // chỉ khác setViewportSize.
+  for (const entry of ROUTES) {
+    const [route] = entry
+    test(`page-root ${route} đúng khai báo @1920 + @2560`, async ({ page }) => {
+      test.setTimeout(120_000)
+      await login(page)
+      await page.evaluate(() => localStorage.setItem('theme', 'light'))
 
-    for (const vp of WIDE_VIEWPORTS) {
-      await page.setViewportSize({ width: vp.width, height: vp.height })
-      for (const entry of ROUTES) await assertWidthContract(page, vp, entry)
-    }
-  })
+      for (const vp of WIDE_VIEWPORTS) {
+        await page.setViewportSize({ width: vp.width, height: vp.height })
+        await assertWidthContract(page, vp, entry)
+      }
+    })
+  }
 })
 
 // /gioi-thieu — OPT-IN, cần ĐỦ CẢ HAI điều kiện (giống ui-pilot-capture.spec.ts):

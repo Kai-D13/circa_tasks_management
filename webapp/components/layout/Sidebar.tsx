@@ -206,7 +206,7 @@ function SectionLabel({ label, collapsed, first }: { label: string; collapsed: b
     )
   }
   return (
-    <div className={cn('px-2.5 pb-1 text-[10px] font-bold uppercase tracking-wider text-sidebar-foreground/50', first ? 'pt-0.5' : 'pt-3.5')}>
+    <div className={cn('px-2.5 pb-1 text-[10px] font-bold uppercase text-sidebar-foreground/50', first ? 'pt-0.5' : 'pt-3.5')}>
       {label}
     </div>
   )
