@@ -14,15 +14,19 @@ import { isSuperAdmin } from '@/lib/authz'
 import { CYCLE_COUNT_DEPT_ID } from '@/lib/inventory/constants'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 
-interface NavItem { href: string; label: string; icon: LucideIcon; roles: string[] }
+// `center` = tab render kiểu nút tròn NỔI ở giữa pill (chỉ STAFF_NAV dùng).
+interface NavItem { href: string; label: string; icon: LucideIcon; roles: string[]; center?: boolean }
 
 // Staff get a FIXED 5-tab bar — their five core workflows, no "Thêm" drawer.
 // The old pipeline overflowed Tồn kho into a drawer holding a single item
 // (pure friction), and /inventory lit up "Thêm" instead of its own tab.
+// Thứ tự chốt với stakeholder 15/08: Tasks · Toa thuốc · [Doanh số] · Bảng tin ·
+// Tồn kho — Doanh số nằm CHÍNH GIỮA và là nút nổi (màn số liệu vào nhiều nhất),
+// 2 tab thường mỗi bên. Đổi thứ tự + đánh dấu `center`, href/icon/badge giữ nguyên.
 const STAFF_NAV: NavItem[] = [
   { href: '/tasks',         label: 'Tasks',     icon: CheckSquare, roles: [] },
-  { href: '/targets',       label: 'Doanh số',  icon: TrendingUp,  roles: [] },
   { href: '/prescriptions', label: 'Toa thuốc', icon: FileImage,   roles: [] },
+  { href: '/targets',       label: 'Doanh số',  icon: TrendingUp,  roles: [], center: true },
   { href: '/announcements', label: 'Bảng tin',  icon: Megaphone,   roles: [] },
   { href: '/inventory',     label: 'Tồn kho',   icon: Boxes,       roles: [] },
 ]
@@ -97,7 +101,9 @@ export function BottomNav({
         aria-label={item.label}
         aria-current={isActive ? 'page' : undefined}
         className={cn(
-          'relative flex flex-col items-center justify-center gap-0.5 flex-1 h-full transition-colors',
+          // min-h pixel-literal: pill cao 60px nên h-full đã >44px, khai báo
+          // tường minh để đổi --bottom-nav-h không vô tình tụt dưới ngưỡng chạm.
+          'relative flex flex-col items-center justify-center gap-0.5 flex-1 h-full min-h-[44px] transition-colors',
           isActive ? 'text-primary' : 'text-sidebar-foreground/60 active:text-sidebar-foreground',
         )}
       >
@@ -113,6 +119,55 @@ export function BottomNav({
             )}
           </span>
           <span className={cn('text-[10px] leading-none whitespace-nowrap', isActive ? 'font-semibold' : 'font-medium')}>{item.label}</span>
+        </span>
+      </Link>
+    )
+  }
+
+  // Tab GIỮA kiểu nút nổi (staff · Doanh số). Vòng tròn 56px được đặt `absolute`
+  // nên KHÔNG chiếm chỗ trong layout: pill vẫn cao đúng `--bottom-nav-h` và 5 ô
+  // vẫn chia đều — không phải đụng token nào.
+  //
+  // NGÂN SÁCH PHẦN NHÔ = 14px (`-top-[14px]`), KHÔNG được tăng:
+  // `--bottom-nav-clearance` = h + offset + **15px thở** (globals.css), tức phần
+  // tử cuối trang dừng đúng 15px trên mép pill. Nhô 14px ⇒ nút vẫn nằm TRÊN
+  // phần tử cuối 1px, giữ nguyên invariant "nội dung không bị nav che" mà
+  // e2e/ui-mobile-baseline + staff-mobile-nav đang khoá. Muốn nhô cao hơn thì
+  // phải nâng phần thở trong token trước.
+  //
+  // `ring-4 ring-background` = viền màu nền cắt quanh nút: phần nhô nằm đè lên
+  // nội dung đang cuộn nên cần một vành đai tách bạch, không thì icon chồng chữ.
+  function NavCenterBtn({ item }: { item: NavItem }) {
+    const Icon = item.icon
+    const isActive = pathname === item.href || pathname.startsWith(item.href + '/')
+    return (
+      <Link
+        href={item.href}
+        prefetch={false}
+        aria-label={item.label}
+        aria-current={isActive ? 'page' : undefined}
+        className="relative flex flex-col items-center justify-end flex-1 h-full min-h-[44px] pb-1 transition-colors"
+      >
+        <span
+          data-testid="bottom-nav-center"
+          className={cn(
+            'absolute -top-[14px] left-1/2 -translate-x-1/2 flex h-[56px] w-[56px] items-center justify-center rounded-full text-primary-foreground transition-all',
+            isActive
+              // Active: nền đậm hết cỡ + quầng coral bên ngoài vành nền (ring-offset
+              // giữ nguyên lớp tách nội dung, ring vẽ tiếp phía ngoài).
+              ? 'bg-primary ring-4 ring-primary/25 ring-offset-4 ring-offset-background shadow-[0_8px_24px_rgb(0_0_0/0.26)]'
+              : 'bg-primary/90 ring-4 ring-background shadow-[0_6px_18px_rgb(0_0_0/0.20)]',
+          )}
+        >
+          <Icon className="h-6 w-6" />
+        </span>
+        <span
+          className={cn(
+            'text-[10px] leading-none whitespace-nowrap',
+            isActive ? 'font-semibold text-primary' : 'font-medium text-sidebar-foreground/60',
+          )}
+        >
+          {item.label}
         </span>
       </Link>
     )
@@ -134,7 +189,9 @@ export function BottomNav({
         style={{ paddingBottom: 'calc(var(--bottom-nav-offset) + env(safe-area-inset-bottom))' }}
       >
         <div className="pointer-events-auto flex items-center justify-around h-[var(--bottom-nav-h)] rounded-3xl border border-border/60 bg-sidebar/95 backdrop-blur shadow-[0_8px_30px_rgb(0_0_0/0.12)]">
-          {primary.map((item) => <NavBtn key={item.href} item={item} />)}
+          {primary.map((item) => item.center
+            ? <NavCenterBtn key={item.href} item={item} />
+            : <NavBtn key={item.href} item={item} />)}
           {needsMore && (
             <button
               type="button"
