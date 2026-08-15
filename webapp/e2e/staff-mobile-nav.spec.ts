@@ -22,6 +22,8 @@ const TABS = [
 
 const CENTER = TABS[2]
 const CENTER_SELECTOR = '[data-testid="bottom-nav-center"]'
+// Hộp vô hình bao trọn vòng tròn + quầng ring (xem NavCenterBtn).
+const ZONE_SELECTOR = '[data-nav-center-zone]'
 
 // Vùng cuộn của app là <main> (overflow-y-auto trong khung h-[100dvh]), KHÔNG
 // phải window — cuộn window ở đây không nhúc nhích gì.
@@ -33,26 +35,32 @@ async function scrollMainToBottom(page: Page) {
   await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
 }
 
-// Nút giữa NHÔ lên khỏi pill ⇒ chính nó, chứ không phải mép trên pill, mới là
-// ranh giới che nội dung. Đo sau khi đã cuộn hết xuống (phần tử cuối lúc đó ở
-// vị trí thấp nhất): mép trên nút phải nằm DƯỚI đáy phần tử cuối.
+// M1.1 (audit P2#4): ranh giới che nội dung là VÙNG THỊ GIÁC của nút giữa —
+// vòng tròn 56px CỘNG quầng ring-4 + ring-offset-4 (8px mỗi bên khi active),
+// không phải cái hộp 56px. Đo bằng wrapper [data-nav-center-zone] (72×72) nên
+// không còn ca "test xanh mà mắt thấy quầng đè chữ".
+// Đo sau khi đã cuộn hết xuống — lúc đó phần tử cuối ở vị trí thấp nhất.
 async function centerGeometry(page: Page) {
-  return page.evaluate((sel) => {
+  return page.evaluate(([btnSel, zoneSel]) => {
     const main = document.querySelector('main')
-    const btn = document.querySelector(sel)
-    if (!main || !btn) return null
+    const btn = document.querySelector(btnSel)
+    const zone = document.querySelector(zoneSel)
+    if (!main || !btn || !zone) return null
     const last = [...main.children].filter((el) => el.getBoundingClientRect().height > 0).pop()
     if (!last) return null
     const b = btn.getBoundingClientRect()
+    const z = zone.getBoundingClientRect()
     const l = last.getBoundingClientRect()
     return {
       width: b.width,
       height: b.height,
-      top: b.top,
+      // mép trên VÙNG THỊ GIÁC (đã gồm quầng), dùng cho assert che nội dung
+      zoneTop: z.top,
+      zoneHeight: z.height,
       lastBottom: l.bottom,
       lastDesc: `${last.tagName.toLowerCase()}.${(last.className || '').toString().split(' ').slice(0, 3).join('.')}`,
     }
-  }, CENTER_SELECTOR)
+  }, [CENTER_SELECTOR, ZONE_SELECTOR] as const)
 }
 
 test.describe('staff bottom nav @mobile', () => {
@@ -99,10 +107,13 @@ test.describe('staff bottom nav @mobile', () => {
       expect(geom, `${tab.path}: không đo được nút giữa (thiếu <main> hoặc nút)`).not.toBeNull()
       expect(geom!.width, `${tab.path}: nút giữa rộng ${geom!.width}px`).toBeGreaterThanOrEqual(56)
       expect(geom!.height, `${tab.path}: nút giữa cao ${geom!.height}px`).toBeGreaterThanOrEqual(56)
+      // Vùng thị giác phải rộng hơn hộp đúng 2× halo (56 + 16 = 72) — nếu ai đó
+      // đổi ring mà quên token thì con số này lệch và test đỏ.
+      expect(geom!.zoneHeight, 'vùng thị giác nút giữa (vòng tròn + quầng)').toBeGreaterThanOrEqual(72)
       expect(
         geom!.lastBottom,
-        `${tab.path}: nút giữa (mép trên ${geom!.top}px) che phần tử cuối ${geom!.lastDesc} (đáy ${geom!.lastBottom}px)`,
-      ).toBeLessThanOrEqual(geom!.top)
+        `${tab.path}: VÙNG THỊ GIÁC nút giữa (mép trên ${geom!.zoneTop}px) che phần tử cuối ${geom!.lastDesc} (đáy ${geom!.lastBottom}px)`,
+      ).toBeLessThanOrEqual(geom!.zoneTop)
     }
   })
 })

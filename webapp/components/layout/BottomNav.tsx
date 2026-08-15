@@ -128,12 +128,15 @@ export function BottomNav({
   // nên KHÔNG chiếm chỗ trong layout: pill vẫn cao đúng `--bottom-nav-h` và 5 ô
   // vẫn chia đều — không phải đụng token nào.
   //
-  // NGÂN SÁCH PHẦN NHÔ = 14px (`-top-[14px]`), KHÔNG được tăng:
-  // `--bottom-nav-clearance` = h + offset + **15px thở** (globals.css), tức phần
-  // tử cuối trang dừng đúng 15px trên mép pill. Nhô 14px ⇒ nút vẫn nằm TRÊN
-  // phần tử cuối 1px, giữ nguyên invariant "nội dung không bị nav che" mà
-  // e2e/ui-mobile-baseline + staff-mobile-nav đang khoá. Muốn nhô cao hơn thì
-  // phải nâng phần thở trong token trước.
+  // M1.1 (audit P2#4): phần nhô + quầng ring lấy TỪ TOKEN, không hardcode:
+  // `--bottom-nav-center-overhang` (14px) và `--bottom-nav-center-halo` (8px =
+  // ring-4 + ring-offset-4 khi active). `--bottom-nav-clearance` đã cộng cả hai
+  // nên muốn nút nhô cao hơn chỉ cần sửa token — nội dung tự lùi theo, không
+  // phải cân tay như trước.
+  //
+  // `[data-nav-center-zone]` là hộp VÔ HÌNH bao trọn vòng tròn + quầng: test đo
+  // vùng thị giác thật (72×72) thay vì hộp 56×56, nên không còn ca "test xanh
+  // mà mắt thấy quầng đè chữ".
   //
   // `ring-4 ring-background` = viền màu nền cắt quanh nút: phần nhô nằm đè lên
   // nội dung đang cuộn nên cần một vành đai tách bạch, không thì icon chồng chữ.
@@ -148,10 +151,22 @@ export function BottomNav({
         aria-current={isActive ? 'page' : undefined}
         className="relative flex flex-col items-center justify-end flex-1 h-full min-h-[44px] pb-1 transition-colors"
       >
+        {/* Vùng thị giác (vòng tròn + quầng) — chỉ để đo, không vẽ gì. */}
+        <span
+          data-nav-center-zone=""
+          aria-hidden="true"
+          className="pointer-events-none absolute left-1/2 -translate-x-1/2 rounded-full"
+          style={{
+            top: 'calc(-1 * (var(--bottom-nav-center-overhang) + var(--bottom-nav-center-halo)))',
+            height: 'calc(56px + 2 * var(--bottom-nav-center-halo))',
+            width: 'calc(56px + 2 * var(--bottom-nav-center-halo))',
+          }}
+        />
         <span
           data-testid="bottom-nav-center"
+          style={{ top: 'calc(-1 * var(--bottom-nav-center-overhang))' }}
           className={cn(
-            'absolute -top-[14px] left-1/2 -translate-x-1/2 flex h-[56px] w-[56px] items-center justify-center rounded-full text-primary-foreground transition-all',
+            'absolute left-1/2 -translate-x-1/2 flex h-[56px] w-[56px] items-center justify-center rounded-full text-primary-foreground transition-all',
             isActive
               // Active: nền đậm hết cỡ + quầng coral bên ngoài vành nền (ring-offset
               // giữ nguyên lớp tách nội dung, ring vẽ tiếp phía ngoài).
