@@ -14,9 +14,14 @@ export default defineConfig({
     baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:3000',
   },
   projects: [
+    // Đăng nhập staff MỘT lần → e2e/.auth/staff.json (gitignored). Spec nào cần
+    // thì tự `test.use({ storageState: STAFF_STATE })`; project chỉ lo THỨ TỰ.
+    // Thiếu E2E_STAFF_* thì setup skip, các spec phụ thuộc cũng skip ⇒ suite
+    // vẫn xanh trên máy không có credential.
+    { name: 'setup', testMatch: /auth\.setup\.ts/ },
     { name: 'desktop-chromium', grep: /@desktop/, use: { ...devices['Desktop Chrome'], viewport: { width: 1366, height: 900 } } },
-    { name: 'mobile-390', grep: /@mobile/, use: { ...devices['Pixel 5'] } },
-    { name: 'mobile-360', grep: /@mobile/, use: { ...devices['Galaxy S9+'], viewport: { width: 360, height: 800 } } },
+    { name: 'mobile-390', grep: /@mobile/, dependencies: ['setup'], use: { ...devices['Pixel 5'] } },
+    { name: 'mobile-360', grep: /@mobile/, dependencies: ['setup'], use: { ...devices['Galaxy S9+'], viewport: { width: 360, height: 800 } } },
     // WebKit engine (closest to Safari) — OPT-IN (@webkit tag): authed flows
     // over http://localhost fail on WebKit because it refuses to SEND the
     // Secure Supabase auth cookie over http (Chromium trusts localhost).

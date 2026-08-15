@@ -1,5 +1,6 @@
 import path from 'node:path'
 import { test, expect, type Page } from '@playwright/test'
+import { STAFF_STATE } from './authState'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // BASELINE MOBILE STAFF (M0-a) — ảnh TRƯỚC/SAU của batch Mobile Staff
@@ -8,15 +9,20 @@ import { test, expect, type Page } from '@playwright/test'
 // viewport (360 · 390 · 430), mỗi màn hai tấm: đầu trang và CUỐI trang (đã cuộn
 // hết) để nhìn thấy bottom nav đè lên phần tử cuối.
 //
+// ── ĐĂNG NHẬP MỘT LẦN ───────────────────────────────────────────────────────
+// M1.2 (audit P2). 12 test × 2 project mà mỗi test tự login ⇒ auth bắt đầu
+// timeout ở /login. Giờ dùng `storageState` từ e2e/auth.setup.ts: vẫn MỘT
+// CONTEXT RIÊNG cho mỗi (màn × viewport) — chỉ bỏ phần login lặp.
+//
 // ── MỘT TEST = MỘT (MÀN × VIEWPORT) ─────────────────────────────────────────
 // M1.1 (audit P1#1). Bản trước gộp cả ba viewport vào một test và đổi
 // `setViewportSize` giữa chừng. Hai vấn đề:
 //   1. Đổi viewport SAU khi trang đã render là đổi layout trên một cây DOM đã
 //      dựng ở bề ngang khác — không giống máy staff mở app ở đúng bề ngang đó.
-//      Giờ viewport set từ lúc TẠO CONTEXT (`test.use`), trước cả login.
+//      Giờ viewport set từ lúc TẠO CONTEXT (`test.use`), trước mọi điều hướng.
 //   2. Một viewport hỏng là mất ảnh của các viewport sau trong cùng test.
-// Đổi lại: 12 test độc lập, mỗi test một context + một lần login. Chậm hơn,
-// nhưng ảnh của màn này không phụ thuộc màn kia.
+// Đổi lại: 12 test độc lập, mỗi test một context riêng (không login lặp — xem
+// khối trên). Chậm hơn một chút, nhưng ảnh của màn này không phụ thuộc màn kia.
 //
 // ── GATE TRƯỚC, CHỤP SAU ────────────────────────────────────────────────────
 // M1.1 (audit P1#1). Trước đây tấm "bottom" được chụp TRƯỚC khi assert clearance
@@ -76,15 +82,6 @@ const ROUTES = [
 // `[data-nav-center-zone]` là hộp vô hình bao trọn vùng đó (xem NavCenterBtn).
 const NAV = 'nav[aria-label="Điều hướng chính"]'
 const NAV_CENTER_ZONE = '[data-nav-center-zone]'
-
-// Login: nguyên pattern e2e/staff-mobile-nav.spec.ts (cùng tài khoản staff).
-async function login(page: Page) {
-  await page.goto('/login')
-  await page.fill('#email', EMAIL!)
-  await page.fill('#password', PASSWORD!)
-  await page.getByRole('button', { name: /sign in/i }).click()
-  await page.waitForURL(/\/(tasks|dashboard|targets)/, { timeout: 20_000 })
-}
 
 // Chụp đúng khung viewport (KHÔNG fullPage): cần thấy bottom nav nằm đâu so với
 // nội dung, ảnh fullPage duỗi thẳng cả trang thì mất chính thông tin đó.
@@ -168,15 +165,14 @@ async function expectLastElementNotUnderNav(page: Page, where: string) {
 
 for (const vp of VIEWPORTS) {
   test.describe(`baseline mobile staff ${vp.w} @mobile`, () => {
-    // Viewport set lúc tạo context ⇒ login + render đầu tiên đều ở đúng bề ngang.
-    test.use({ viewport: { width: vp.w, height: vp.h } })
+    // Viewport set lúc tạo context ⇒ render đầu tiên đã ở đúng bề ngang.
+    test.use({ viewport: { width: vp.w, height: vp.h }, storageState: STAFF_STATE })
 
     test.skip(!EMAIL || !PASSWORD, 'E2E_STAFF_EMAIL / E2E_STAFF_PASSWORD chưa set')
 
     test.beforeEach(async ({ page }, testInfo) => {
       test.skip(testInfo.project.name !== CAPTURE_PROJECT, `chỉ chụp dưới project ${CAPTURE_PROJECT}`)
       test.setTimeout(90_000)
-      await login(page)
     })
 
     for (const route of ROUTES) {
@@ -184,7 +180,7 @@ for (const vp of VIEWPORTS) {
         const where = `${route.path} @${vp.w}`
 
         await page.goto(route.path)
-        await expect(page, `${where}: bị redirect ⇒ tài khoản chụp không phải staff OS?`)
+        await expect(page, `${where}: bị redirect ⇒ storageState hết hạn (xoá e2e/.auth rồi chạy lại) hoặc tài khoản chụp không phải staff OS`)
           .toHaveURL(new RegExp(`${route.path.replace(/\//g, '\\/')}(\\?|$)`))
         await settle(page)
 

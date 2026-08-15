@@ -16,7 +16,12 @@ import { KeyRound } from 'lucide-react'
 // 'headless' = KHÔNG render trigger, mở sẵn ngay khi mount và gọi `onClose` khi
 //             đóng — xem chú thích cùng tên ở EditProfileDialog (account sheet
 //             của MobileHeader phải đóng trước rồi mới mount dialog này).
-export function ChangePasswordDialog({ variant = 'sidebar', onClose }: { variant?: 'sidebar' | 'mobile' | 'icon' | 'headless'; onClose?: () => void }) {
+// `finalFocus` — M1.2 (audit P2): xem chú thích cùng tên ở EditProfileDialog.
+export function ChangePasswordDialog({ variant = 'sidebar', onClose, finalFocus }: {
+  variant?: 'sidebar' | 'mobile' | 'icon' | 'headless'
+  onClose?: () => void
+  finalFocus?: React.RefObject<HTMLElement | null>
+}) {
   const [open, setOpen]           = useState(variant === 'headless')
   const [newPass, setNewPass]     = useState('')
   const [confirm, setConfirm]     = useState('')
@@ -87,7 +92,7 @@ export function ChangePasswordDialog({ variant = 'sidebar', onClose }: { variant
       {/* M1.1 (audit P2#3): primitive Dialog thay overlay tự dựng — xem chú
           thích cùng nội dung ở EditProfileDialog. Form giữ nguyên. */}
       <Dialog open={open} onOpenChange={(next) => { if (!next) handleClose() }}>
-        <DialogContent className="gap-3">
+        <DialogContent className="gap-3" finalFocus={finalFocus}>
           <DialogTitle>Đổi mật khẩu</DialogTitle>
           <form onSubmit={handleSubmit} className="space-y-3">
             <div className="space-y-1.5">

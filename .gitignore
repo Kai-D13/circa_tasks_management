@@ -25,6 +25,10 @@ docs/ui/review-r2/
 # do: dữ liệu thật (tên nhân viên, tên khách trên toa thuốc). KHÔNG commit.
 docs/ui/mobile-baseline/
 
+# storageState của Playwright (e2e/auth.setup.ts) — chứa cookie phiên Supabase
+# đang còn hiệu lực, tức là credential sống. KHÔNG BAO GIỜ commit.
+webapp/e2e/.auth/
+
 # Secrets — service-account keys / credential exports. NEVER commit.
 *-gcs.tar
 *-sa

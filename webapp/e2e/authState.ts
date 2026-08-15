@@ -1,0 +1,10 @@
+import path from 'node:path'
+
+// Đường dẫn storageState của phiên staff, do e2e/auth.setup.ts ghi ra.
+//
+// Nằm ở module RIÊNG (không phải .spec.ts, không phải .setup.ts) vì Playwright
+// CẤM một test file import test file khác: "test file X should not import test
+// file Y". Spec nào cần phiên đã đăng nhập thì import hằng số từ đây.
+//
+// e2e/.auth/ ĐÃ gitignore — file này chứa cookie phiên Supabase còn hiệu lực.
+export const STAFF_STATE = path.join(__dirname, '.auth', 'staff.json')

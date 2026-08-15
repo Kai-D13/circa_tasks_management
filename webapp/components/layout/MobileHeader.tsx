@@ -41,6 +41,11 @@ export function MobileHeader() {
   const [sheetOpen, setSheetOpen] = useState(false)
   const [child, setChild]         = useState<AccountDialog | null>(null)
   const pendingRef                = useRef<AccountDialog | null>(null)
+  // M1.2 (audit P2): điểm trả focus của CẢ sheet lẫn hai dialog con. Nút avatar
+  // không phải `Dialog.Trigger` (nó mở sheet bằng onClick thường), và trên
+  // mobile một cú chạm không nhất thiết focus vào button — nên mặc định "trả
+  // focus về trigger hoặc phần tử vừa focus" của base-ui dễ rơi về <body>.
+  const avatarRef                 = useRef<HTMLButtonElement>(null)
 
   const segments   = pathname.split('/').filter(Boolean)
   const section    = segments[0]
@@ -131,6 +136,7 @@ export function MobileHeader() {
               is dead weight for them — hide it. */}
           {role !== 'staff' && <NotificationBell />}
           <button
+            ref={avatarRef}
             type="button"
             onClick={() => setSheetOpen(true)}
             aria-label="Tài khoản"
@@ -152,6 +158,7 @@ export function MobileHeader() {
       >
         <DialogContent
           showCloseButton={false}
+          finalFocus={avatarRef}
           className="top-auto bottom-0 left-0 right-0 max-w-full translate-x-0 translate-y-0 rounded-b-none rounded-t-2xl pb-[calc(1rem_+_env(safe-area-inset-bottom))] md:hidden"
         >
           {/* Hàng tài khoản bên dưới đã là tiêu đề nhìn thấy được; title này chỉ
@@ -189,8 +196,10 @@ export function MobileHeader() {
         </DialogContent>
       </Dialog>
 
-      {child === 'profile'  && <EditProfileDialog    variant="headless" onClose={() => setChild(null)} />}
-      {child === 'password' && <ChangePasswordDialog variant="headless" onClose={() => setChild(null)} />}
+      {/* finalFocus: hai dialog này mount SAU khi sheet (và hàng bấm vào) đã
+          unmount, nên phải chỉ đích danh avatar — xem chú thích ở avatarRef. */}
+      {child === 'profile'  && <EditProfileDialog    variant="headless" finalFocus={avatarRef} onClose={() => setChild(null)} />}
+      {child === 'password' && <ChangePasswordDialog variant="headless" finalFocus={avatarRef} onClose={() => setChild(null)} />}
     </>
   )
 }

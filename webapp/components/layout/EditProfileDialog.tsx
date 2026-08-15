@@ -18,7 +18,16 @@ import { UserCog } from 'lucide-react'
 // đóng. Dùng khi nút bấm nằm trong một lớp nổi khác (account sheet của
 // MobileHeader): sheet phải đóng TRƯỚC rồi mới mount dialog này ở ngoài, nên
 // trigger không thể sống cùng chỗ với nội dung dialog.
-export function EditProfileDialog({ variant = 'sidebar', onClose }: { variant?: 'sidebar' | 'mobile' | 'icon' | 'headless'; onClose?: () => void }) {
+// `finalFocus` — M1.2 (audit P2): nơi trả focus về khi dialog đóng. Biến thể
+// 'headless' KHÔNG có trigger (nút bấm nằm trong account sheet và đã unmount
+// trước khi dialog này mount), nên mặc định "trả focus về trigger hoặc phần tử
+// vừa focus" của base-ui không có gì để bám — focus rơi về <body>. Caller phải
+// chỉ đích danh nút mở (avatar). Các biến thể có trigger để undefined là đúng.
+export function EditProfileDialog({ variant = 'sidebar', onClose, finalFocus }: {
+  variant?: 'sidebar' | 'mobile' | 'icon' | 'headless'
+  onClose?: () => void
+  finalFocus?: React.RefObject<HTMLElement | null>
+}) {
   const profile    = useUserStore((s) => s.profile)
   const setProfile = useUserStore((s) => s.setProfile)
   const [open, setOpen]           = useState(variant === 'headless')
@@ -97,7 +106,7 @@ export function EditProfileDialog({ variant = 'sidebar', onClose }: { variant?: 
           nên khi mở TỪ TRONG account sheet nó bị bám vào containing block của
           sheet. Nội dung form giữ nguyên từng dòng. */}
       <Dialog open={open} onOpenChange={(next) => { if (!next) handleClose() }}>
-        <DialogContent className="gap-3">
+        <DialogContent className="gap-3" finalFocus={finalFocus}>
           <DialogTitle>Sửa thông tin cá nhân</DialogTitle>
           <form onSubmit={handleSubmit} className="space-y-3">
             <div className="space-y-1.5">
