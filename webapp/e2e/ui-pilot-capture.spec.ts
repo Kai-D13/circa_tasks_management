@@ -25,10 +25,34 @@ const STAFF = { email: process.env.E2E_STAFF_EMAIL, password: process.env.E2E_ST
 const OUT_DIR = process.env.PILOT_CAPTURE_DIR ?? 'e2e/__screenshots__/pilot-after'
 const THEMES = ['light', 'dark'] as const
 // Pilot routes — extend per pilot/wave.
+// Batch fluid-width 15/08: thêm 8 route sẽ bị gỡ cap `max-w-*` ở page-root, để
+// chụp BEFORE trên build main@752ed0d rồi so với AFTER sau C1-C4.
+// Chuỗi heading là SUBSTRING (đã lowercase + NFC) nên cố tình chọn phần chung
+// cho mọi nhánh role/state của route: '/targets' đổi tiêu đề theo kỳ và theo
+// chế độ campaign, '/fs/products' và '/inventory/trf' đổi theo quyền.
 const ROUTES: [string, string, string][] = [
   ['/stores', 'stores', 'Danh sách cửa hàng'],
   ['/tasks', 'tasks', 'Danh sách Tasks'],
+  ['/users', 'users', 'Quản lý người dùng'],
+  ['/targets', 'targets', 'Doanh số'],
+  ['/targets/campaigns', 'targets-campaigns', 'Chiến dịch KPI'],
+  ['/fs/products', 'fs-products', 'Sản phẩm'],
+  ['/inventory/trf', 'inventory-trf', 'TRF'],
+  ['/announcements', 'announcements', 'Bảng tin'],
+  ['/gioi-thieu', 'gioi-thieu', 'Giới thiệu bạn bè'],
+  ['/tasks/schedules', 'tasks-schedules', 'Task định kỳ'],
 ]
+
+// Các route CHUYỂN SANG FLUID trong batch 15/08 (C1-C3) — đây là tập cần bằng
+// chứng ở viewport rộng, nơi dải trắng bên phải lộ rõ nhất.
+const FLUID_ROUTES = new Set(['/tasks', '/users', '/targets', '/targets/campaigns', '/fs/products'])
+// Zoom-out 75%/60% trên màn 1440 ⇒ viewport CSS ~1920/2400px. Đặt viewport rộng
+// là cách mô phỏng chính xác về layout (cùng CSS px mà trình duyệt thấy), không
+// phải đổi device scale factor.
+const WIDE_VIEWPORTS = [
+  { width: 1920, height: 900 },
+  { width: 2560, height: 1000 },
+] as const
 
 async function login(page: Page, who: { email?: string; password?: string } = SUPER) {
   await page.goto('/login')
@@ -116,6 +140,42 @@ test.describe('pilot after-capture @desktop', () => {
     expect(overflow.doc).toBeLessThanOrEqual(1)
     await unlockForCapture(page)
     await page.locator('main').screenshot({ path: `${OUT_DIR}/stores-longtext-light.png` })
+  })
+})
+
+// WIDE VIEWPORT (batch fluid-width 15/08) — bằng chứng cho khiếu nại "zoom-out
+// 75%/60% để dải trắng lớn bên phải". Zoom-out chỉ làm viewport CSS rộng ra, nên
+// mô phỏng bằng setViewportSize thay vì đổi zoom: cùng một layout mà stakeholder
+// nhìn thấy. Chụp light-only (dải trắng là vấn đề bố cục, không phải màu) và
+// khoá thêm điều kiện KHÔNG được scroll ngang toàn trang — cap `max-w-*` gỡ đi
+// không được đánh đổi bằng overflow.
+test.describe('pilot after-capture wide viewport @desktop', () => {
+  test.skip(!SUPER.email || !SUPER.password, 'E2E_SUPER_* not set')
+  test('capture fluid routes @1920 + @2560, no horizontal overflow', async ({ page }) => {
+    test.setTimeout(240_000)
+    await login(page)
+    await page.evaluate(() => localStorage.setItem('theme', 'light'))
+    for (const vp of WIDE_VIEWPORTS) {
+      await page.setViewportSize({ width: vp.width, height: vp.height })
+      for (const [route, name, heading] of ROUTES.filter(([r]) => FLUID_ROUTES.has(r))) {
+        await page.goto(route)
+        await page.waitForFunction(
+          (t) => document.documentElement.classList.contains('dark') === (t === 'dark'),
+          'light', { timeout: 10_000 },
+        )
+        await page.waitForFunction(
+          (h) => [...document.querySelectorAll('h1')].some((el) => (el.textContent ?? '').normalize('NFC').toLowerCase().includes(h)),
+          heading.normalize('NFC').toLowerCase(), { timeout: 15_000 },
+        )
+        // Scroll ngang còn lại được phép nằm TRONG bảng (DataTableShell), không
+        // bao giờ ở documentElement.
+        const overflow = await page.evaluate(() =>
+          document.documentElement.scrollWidth - document.documentElement.clientWidth)
+        expect(overflow, `${route} @${vp.width} bị scroll ngang toàn trang`).toBeLessThanOrEqual(1)
+        await unlockForCapture(page)
+        await page.locator('main').screenshot({ path: `${OUT_DIR}/${name}-w${vp.width}.png` })
+      }
+    }
   })
 })
 
