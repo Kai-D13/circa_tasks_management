@@ -145,7 +145,9 @@ const NESTED: NestedCase[] = [
   // rồi lấy cái đầu tiên thực sự có trong sidebar: contract "con thắng cha" vẫn
   // bị khoá chặt, mà test không vỡ chỉ vì role/flag đổi tập nav.
   { route: '/targets/campaigns/affiliate', expect: ['/targets/campaigns/affiliate', '/targets/campaigns'] },
-  { route: '/inventory/trf', expect: ['/inventory/trf'], parent: 'Inventory' },
+  // Nhãn cha đổi 'Inventory' → 'Tồn kho' ở sidebar r2 (chỉ NHÃN — href và gating
+  // y nguyên); test tìm nút accordion bằng textContent nên phải đi cùng.
+  { route: '/inventory/trf', expect: ['/inventory/trf'], parent: 'Tồn kho' },
   { route: '/fs/products',   expect: ['/fs/products'],   parent: 'Quản lý FS' },
 ]
 

@@ -10,9 +10,10 @@ import { UserCog, X } from 'lucide-react'
 
 // Lets a user edit their own full_name + phone_number (stakeholder 2026-06-15).
 // 'sidebar' (default) = full-width text row in the desktop Sidebar; 'mobile' =
-// icon-only trigger styled like the other MobileHeader action buttons. Mirrors
+// icon-only trigger styled like the other MobileHeader action buttons; 'icon' =
+// 36px outline slot for the Sidebar r2 footer action row. Mirrors
 // ChangePasswordDialog so the header controls stay consistent.
-export function EditProfileDialog({ variant = 'sidebar' }: { variant?: 'sidebar' | 'mobile' }) {
+export function EditProfileDialog({ variant = 'sidebar' }: { variant?: 'sidebar' | 'mobile' | 'icon' }) {
   const profile    = useUserStore((s) => s.profile)
   const setProfile = useUserStore((s) => s.setProfile)
   const [open, setOpen]           = useState(false)
@@ -61,6 +62,16 @@ export function EditProfileDialog({ variant = 'sidebar' }: { variant?: 'sidebar'
           onClick={handleOpen}
         >
           <UserCog className="h-4 w-4" />
+        </Button>
+      ) : variant === 'icon' ? (
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label="Sửa thông tin"
+          className="h-[36px] w-[36px] px-0"
+          onClick={handleOpen}
+        >
+          <UserCog className="h-3.5 w-3.5" />
         </Button>
       ) : (
         <button
