@@ -531,7 +531,9 @@ export default async function TargetsPage({
       storeCount: smStores.length,
       inCampaignDetail: !!params.campaign,
     })
-    let smGmv = { gmv: 0, orders: 0 }
+    // r2.4: strip cần thêm "Store có doanh số" — số này ĐÃ CÓ SẴN trong
+    // reduceAffiliateAgg().totals (trước đây bị bỏ đi), KHÔNG thêm query nào.
+    let smGmv = { gmv: 0, orders: 0, storesWithSales: 0 }
     let smGmvError = false
     let smGmvWarning: string | null = null
     let smGmvSyncedAt: string | null = null
@@ -550,7 +552,7 @@ export default async function TargetsPage({
           smGmvError = true
         } else {
           const r = reduceAffiliateAgg((aggData ?? []) as AffiliateAggInput[])
-          smGmv = { gmv: r.totals.gmv, orders: r.totals.orders }
+          smGmv = { gmv: r.totals.gmv, orders: r.totals.orders, storesWithSales: r.totals.storesWithSales }
         }
       }
     }
@@ -562,10 +564,41 @@ export default async function TargetsPage({
           icon={TrendingUp}
           subtitle={`Phạm vi: ${smStores.length} cửa hàng bạn quản lý`}
         />
-        {/* r5: md+ = grid 2 cột (list campaign trái, GMV regional phải — mirror
-            pattern H2); mobile 1 cột. */}
-        <div className={cn('grid grid-cols-1 gap-4 items-start', smGmvVisible && 'md:grid-cols-[minmax(0,1fr)_340px]')}>
-          <div className="min-w-0">
+        {/* r2.4 (audit P2#4): phạm vi quản lý ngay dưới header — chip TĨNH,
+            KHÔNG phải bộ lọc (SM r6 đã bỏ filter ?store=, dashboard luôn tổng
+            hợp toàn phạm vi). */}
+        {smStores.length > 0 && (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs text-muted-foreground shrink-0">Phạm vi quản lý:</span>
+            {smStores.map((s) => (
+              <span key={s.id} className="text-[11px] px-2 py-0.5 rounded bg-muted text-muted-foreground font-medium truncate max-w-[180px]">
+                {s.name}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* r2.4 (audit P2#4 — theo khuyến nghị auditor): GMV Affiliate REGIONAL
+            đổi từ CỘT PHẢI 340px sang DẢI NGANG trên danh sách campaign (2 cột
+            làm màn mất cân bằng: bảng campaign bị bóp, cột phải trống lửng).
+            Cùng data/props/fail-closed của AffiliateGmvCard, chỉ đổi layout qua
+            variant="strip"; QLCH vẫn dùng bản card. KHÔNG QR, KHÔNG nút sync. */}
+        {smGmvVisible && (
+          <AffiliateGmvCard
+            monthLabel={gmvMonthLabel}
+            gmv={smGmv.gmv}
+            orders={smGmv.orders}
+            storesWithSales={smGmv.storesWithSales}
+            storeCount={smStores.length}
+            syncedAt={smGmvSyncedAt}
+            error={smGmvError}
+            sourceWarning={smGmvWarning}
+            detailHref="/targets/campaigns/affiliate"
+            regional
+            variant="strip"
+          />
+        )}
+
         {smCampaigns.length === 0 ? (
           <EmptyState className="py-12" icon={TrendingUp} title="Chưa có chiến dịch nào áp dụng cho các cửa hàng bạn quản lý." />
         ) : (
@@ -573,27 +606,9 @@ export default async function TargetsPage({
           // nữa — trước đây gọi thẳng vnd() nên campaign Số khách hiện "Mục
           // tiêu 450đ / Đã đạt 3đ". Toàn bộ định dạng đi qua contract
           // campaignOverviewValue (type-aware theo metric_type).
+          // r2.4: full-width, không còn bị cột phải 340px bóp.
           <RegionalCampaignOverviewList items={smCampaigns} hrefFor={(cid) => `/targets?campaign=${cid}`} />
         )}
-          </div>
-          {/* r5: GMV Affiliate REGIONAL — AffiliateGmvCard tái dùng (READY → số,
-              0đ hợp lệ; !READY → '—' + lý do ngắn + sync cuối; lỗi → thông báo).
-              KHÔNG QR, KHÔNG nút sync. */}
-          {smGmvVisible && (
-            <div className="min-w-0">
-              <AffiliateGmvCard
-                monthLabel={gmvMonthLabel}
-                gmv={smGmv.gmv}
-                orders={smGmv.orders}
-                syncedAt={smGmvSyncedAt}
-                error={smGmvError}
-                sourceWarning={smGmvWarning}
-                detailHref="/targets/campaigns/affiliate"
-                regional
-              />
-            </div>
-          )}
-        </div>
       </div>
     )
   }
