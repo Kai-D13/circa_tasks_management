@@ -48,6 +48,44 @@ const W_EXPANDED = 232
 const W_COLLAPSED = 64
 const TOL = 1
 
+// ─── COPY NGUYÊN VĂN từ components/affiliate/AffiliateGmvCard.tsx ───────────
+// Không diễn giải lại, không viết tắt: nếu copy bên component đổi thì các assert
+// dưới phải ĐỎ (chuỗi không còn khớp), chứ không được âm thầm bỏ qua. Gom một
+// chỗ để lần sau sửa component là biết ngay phải sửa cái gì ở đây.
+const CARD_TITLE = 'GMV Affiliate — Circa Online'
+// Nhánh sourceWarning: `Nguồn dữ liệu chưa sẵn sàng: {reason} — số liệu tạm ẩn`
+// (bản strip) / `Nguồn dữ liệu chưa sẵn sàng: {reason}` (bản card). Lý do là
+// biến ⇒ chỉ khớp phần tĩnh đầu chuỗi.
+const MSG_SOURCE_NOT_READY = 'Nguồn dữ liệu chưa sẵn sàng:'
+// Nhánh error (RPC lỗi, kể cả fail-closed thiếu completed_time).
+const MSG_LOAD_ERROR = 'Không tải được dữ liệu Affiliate. Vui lòng thử lại sau hoặc báo Admin.'
+
+// Nhãn 3 ô của dải, đúng thứ tự render trong `stats` của AffiliateGmvCard. Map
+// giá trị ↔ regex BẰNG NHÃN chứ không bằng index: strip đổi thứ tự cột (chuyện
+// layout, xảy ra thật ở r2.4/r2.7) không được biến assert "tiền" thành assert
+// "số đơn" mà vẫn xanh.
+const STRIP_FIELDS = [
+  {
+    label: 'GMV Affiliate',
+    // Tiền VN: nhóm nghìn bằng dấu chấm + ₫ (Intl vi-VN), vd "10.218.500₫".
+    re: /^[\d.]+₫$/,
+    want: 'số tiền dạng "10.218.500₫"',
+  },
+  {
+    label: 'Đơn thành công',
+    // nf.format(orders) — số nguyên, có thể có dấu chấm ngăn nghìn.
+    re: /^[\d.]+$/,
+    want: 'một con số, vd "1.204"',
+  },
+  {
+    label: 'Store có doanh số',
+    // `${storesWithSales}/${storeCount}` — phải có MẪU SỐ: nhánh thiếu storeCount
+    // chỉ in tử số, khi đó ảnh review mất ngữ cảnh "bao nhiêu trên tổng bao nhiêu".
+    re: /^\d+\/\d+$/,
+    want: 'dạng "X/Y", vd "12/23"',
+  },
+] as const
+
 // Login lấy nguyên pattern của e2e/sidebar-r2.spec.ts: fill → verify → submit →
 // chờ redirect, bọc trong toPass, vì hydration dưới tải có thể reset input SAU
 // khi fill (nhìn như đã thành công rồi mới rơi).
@@ -138,31 +176,104 @@ async function shot(page: Page, name: string) {
 }
 
 // BẰNG CHỨNG "không có dấu …" mà auditor đòi (r2.7 P1): dải GMV Affiliate là
-// màn TIỀN, một chữ số mất là sai số liệu. Đo trực tiếp trên phần tử giá trị —
-// `scrollWidth > clientWidth` nghĩa là nội dung rộng hơn ô, tức đang bị cắt
-// (đúng phép thử mà e2e/ui-pilot-capture.spec.ts dùng để CHỨNG MINH truncate).
-// Cộng 1px dung sai cho làm tròn sub-pixel của layout engine.
+// màn TIỀN, một chữ số mất là sai số liệu.
+//
+// r2.8 (auditor P1) — TRƯỚC KHI ĐO KÍCH THƯỚC, PHẢI CÓ SỐ THẬT ĐỂ ĐO.
+// AffiliateGmvCard fail-closed: `blocked = error || sourceWarning !== null` ⇒ cả
+// ba ô in '—'. Phiên bản cũ chỉ đòi "có > 0 phần tử" rồi so scrollWidth, mà một
+// dấu '—' thì đời nào tràn ⇒ test XANH trong khi dải Affiliate không có lấy một
+// con số nào. Đó là false-pass đúng nghĩa: bộ ảnh review được đóng dấu "đã
+// chứng minh không cụt số" bằng một tấm ảnh toàn dấu gạch.
+//
+// Vì vậy test này CHỦ ĐÍCH ĐỎ khi nguồn Affiliate không READY. Nguồn READY là
+// ĐIỀU KIỆN TIÊN QUYẾT của cả bộ ảnh, không phải môi trường tuỳ hoàn cảnh: ảnh
+// strip toàn '—' vô giá trị với stakeholder — họ duyệt cách trình bày SỐ TIỀN,
+// không duyệt trạng thái rỗng. Đỏ ở đây = "đi sửa/đợi nguồn rồi chụp lại", chứ
+// không phải "nới assert".
 async function expectStripValuesNotClipped(page: Page, where: string) {
-  const values = await page.$$eval(
+  // (1) Không có thông báo fail-closed nào trên trang. `toHaveCount(0)` chặt hơn
+  // `not.toBeVisible()` (không dính strict-mode nếu lỡ render nhiều card) và
+  // cũng bắt luôn ca thông báo bị ẩn bằng CSS.
+  await expect(page.getByText(MSG_SOURCE_NOT_READY),
+    `${where}: card Affiliate đang báo "${MSG_SOURCE_NOT_READY} …" ⇒ health nguồn chưa READY, số liệu bị ẩn ('—'). Không chụp/duyệt được — chờ sync xong rồi chạy lại.`)
+    .toHaveCount(0)
+  await expect(page.getByText(MSG_LOAD_ERROR),
+    `${where}: card Affiliate đang báo lỗi tải dữ liệu ⇒ RPC hỏng, số liệu bị ẩn ('—').`)
+    .toHaveCount(0)
+
+  // (2) Đúng BA ô — không nhiều, không ít. Ít hơn = mất chỉ số; nhiều hơn =
+  // trang render hai card Affiliate và phép đo dưới đang trộn hai nguồn.
+  const valueLoc = page.locator('[data-affiliate-strip] [data-affiliate-stat-value]')
+  await expect(valueLoc,
+    `${where}: dải Affiliate phải có ĐÚNG 3 ô giá trị (GMV · Đơn thành công · Store có doanh số)`)
+    .toHaveCount(3)
+
+  // Lấy kèm NHÃN của từng ô (thẻ <p> anh em, không mang data-affiliate-stat-value)
+  // để map theo nhãn thay vì theo vị trí.
+  const cells = await page.$$eval(
     '[data-affiliate-strip] [data-affiliate-stat-value]',
     (els) => els.map((el) => ({
+      label: (el.parentElement?.querySelector('p:not([data-affiliate-stat-value])')?.textContent ?? '').trim(),
       text: (el.textContent ?? '').trim(),
       scrollWidth: el.scrollWidth,
       clientWidth: el.clientWidth,
     })),
   )
-  expect(values.length,
-    `${where}: không thấy phần tử giá trị nào của dải Affiliate ⇒ tài khoản E2E_SM_* không có GMV Affiliate (nguồn chưa READY / ngoài phạm vi OS)? Không có gì để chứng minh.`)
-    .toBeGreaterThan(0)
-  for (const v of values) {
-    expect(v.scrollWidth,
-      `${where}: giá trị "${v.text}" bị cắt (nội dung ${v.scrollWidth}px > ô ${v.clientWidth}px)`)
-      .toBeLessThanOrEqual(v.clientWidth + 1)
+
+  // (3) Từng ô: khác '—' và đúng ĐỊNH DẠNG của chính chỉ số đó.
+  for (const field of STRIP_FIELDS) {
+    const cell = cells.find((c) => c.label.normalize('NFC') === field.label.normalize('NFC'))
+    expect(cell,
+      `${where}: không thấy ô "${field.label}" trong dải Affiliate (nhãn đã đổi bên AffiliateGmvCard? nhãn đọc được: ${cells.map((c) => `"${c.label}"`).join(', ')})`)
+      .toBeTruthy()
+    expect(cell!.text,
+      `${where}: ô "${field.label}" đang là '—' ⇒ nguồn Affiliate fail-closed, chưa có số thật nào để duyệt.`)
+      .not.toBe('—')
+    expect(cell!.text,
+      `${where}: ô "${field.label}" = "${cell!.text}", mong đợi ${field.want}`)
+      .toMatch(field.re)
+  }
+
+  // (4) CHỈ KHI đã chắc là số thật mới đo cắt chữ — đo trên '—' thì phép đo vô
+  // nghĩa. `scrollWidth > clientWidth` = nội dung rộng hơn ô, tức đang bị cắt
+  // (đúng phép thử mà e2e/ui-pilot-capture.spec.ts dùng để CHỨNG MINH truncate).
+  // Cộng 1px dung sai cho làm tròn sub-pixel của layout engine.
+  for (const c of cells) {
+    expect(c.scrollWidth,
+      `${where}: giá trị "${c.text}" (${c.label}) bị cắt (nội dung ${c.scrollWidth}px > ô ${c.clientWidth}px)`)
+      .toBeLessThanOrEqual(c.clientWidth + 1)
   }
   const docOverflow = await page.evaluate(
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
   )
   expect(docOverflow, `${where}: document cuộn ngang`).toBeLessThanOrEqual(1)
+}
+
+// r2.8 (auditor P2) — CỔNG TRƯỚC MỖI TẤM ẢNH, cho MỌI role (Admin/SM/QLCH/Super),
+// không riêng SM. Một tấm ảnh chỉ dùng được để duyệt UI khi cái khung của nó
+// đúng: có sidebar, đúng MỘT mục nav sáng, và trang không cuộn ngang. Thiếu một
+// trong ba thì ảnh đang mô tả một màn hình khác với màn hình thật.
+async function expectShellReady(page: Page, where: string) {
+  await expect(aside(page), `${where}: không thấy sidebar trong khung ảnh`).toBeVisible()
+  // Contract Sidebar: `resolveActiveHref` chọn ĐÚNG MỘT href ⇒ đúng một
+  // aria-current="page". 0 = nav không nhận ra route (ảnh chụp trang "mồ côi"),
+  // >1 = hai hàng cùng sáng.
+  await expect(page.locator('aside a[aria-current="page"]'),
+    `${where}: sidebar phải có ĐÚNG 1 mục đang active (aria-current="page")`)
+    .toHaveCount(1)
+  const docOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  )
+  expect(docOverflow, `${where}: document cuộn ngang ${docOverflow}px ⇒ ảnh sẽ thiếu phần bên phải`)
+    .toBeLessThanOrEqual(1)
+}
+
+// SM/QLCH: đúng component cần duyệt PHẢI có mặt. Không có nó thì tấm ảnh vẫn là
+// một trang /targets hợp lệ — và hoàn toàn vô dụng với người duyệt dải Affiliate.
+async function expectAffiliateCardVisible(page: Page, where: string) {
+  await expect(page.getByText(CARD_TITLE).first(),
+    `${where}: không thấy card "${CARD_TITLE}" ⇒ tài khoản chụp ngoài phạm vi Affiliate hoặc card bị gate ẩn.`)
+    .toBeVisible()
 }
 
 test.describe('ảnh review r2 @desktop', () => {
@@ -175,6 +286,8 @@ test.describe('ảnh review r2 @desktop', () => {
     await setTheme(page, 'light')
     await gotoRoute(page, '/targets', 'doanh số')
     await ensureCollapsed(page, false)
+    await expectShellReady(page, 'SM /targets @1440 (sidebar mở)')
+    await expectAffiliateCardVisible(page, 'SM /targets @1440 (sidebar mở)')
     await shot(page, 'sm-targets-1440-expanded-light.png')
     // Chụp TRƯỚC, assert SAU: nếu dải Affiliate lệch thì vẫn còn tấm ảnh làm
     // bằng chứng thay vì mất cả hai.
@@ -190,6 +303,8 @@ test.describe('ảnh review r2 @desktop', () => {
     await setTheme(page, 'light')
     await gotoRoute(page, '/targets', 'doanh số')
     await ensureCollapsed(page, true)
+    await expectShellReady(page, 'SM /targets @1920 (sidebar thu gọn)')
+    await expectAffiliateCardVisible(page, 'SM /targets @1920 (sidebar thu gọn)')
     await shot(page, 'sm-targets-1920-collapsed-light.png')
     await expectStripValuesNotClipped(page, 'SM /targets @1920 (sidebar thu gọn)')
   })
@@ -202,6 +317,8 @@ test.describe('ảnh review r2 @desktop', () => {
     await login(page, QLCH)
     await setTheme(page, 'light')
     await gotoRoute(page, '/targets', 'doanh số')
+    await expectShellReady(page, 'QLCH /targets @1440 light')
+    await expectAffiliateCardVisible(page, 'QLCH /targets @1440 light')
     await shot(page, 'qlch-targets-1440-light.png')
   })
 
@@ -213,6 +330,8 @@ test.describe('ảnh review r2 @desktop', () => {
     await login(page, QLCH)
     await setTheme(page, 'dark')
     await gotoRoute(page, '/targets', 'doanh số')
+    await expectShellReady(page, 'QLCH /targets @1440 dark')
+    await expectAffiliateCardVisible(page, 'QLCH /targets @1440 dark')
     await shot(page, 'qlch-targets-1440-dark.png')
     // Trả theme về light: context bị huỷ sau test, nhưng nếu ai đó chạy spec
     // này với storageState dùng chung thì tấm dark sẽ rò sang test khác.
@@ -228,6 +347,8 @@ test.describe('ảnh review r2 @desktop', () => {
     await setTheme(page, 'light')
     await gotoRoute(page, '/tasks', 'danh sách tasks')
     await ensureCollapsed(page, false)
+    // Admin/tasks không có card Affiliate ⇒ chỉ cổng khung ảnh.
+    await expectShellReady(page, 'Admin /tasks @1366 (sidebar mở)')
     await shot(page, 'admin-tasks-1366x768-expanded.png')
   })
 
@@ -240,6 +361,10 @@ test.describe('ảnh review r2 @desktop', () => {
     await login(page, SUPER)
     await setTheme(page, 'light')
     await gotoRoute(page, '/targets/campaigns', 'chiến dịch kpi')
+    // Super không có card Affiliate trên màn này; cổng khung ảnh vẫn áp dụng —
+    // 2560 chính là dải viewport stakeholder khiếu nại nên "không cuộn ngang"
+    // phải được KHẲNG ĐỊNH, không suy ra từ mắt nhìn tấm ảnh.
+    await expectShellReady(page, 'Super /targets/campaigns @2560')
     await shot(page, 'super-campaigns-2560.png')
   })
 
