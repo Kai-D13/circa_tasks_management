@@ -24,7 +24,7 @@ export default async function InventoryPage() {
   if (!isSuper && !isCycleCount && !isOwnStoreViewer) redirect('/tasks')
 
   return (
-    <div className="p-4 md:p-6 space-y-4 max-w-3xl">
+    <div className="p-4 md:p-6 space-y-4 max-w-3xl mx-auto">
       <div className="flex items-center gap-2">
         <Boxes className="h-5 w-5 text-primary" />
         <h1 className="text-xl font-semibold">Tồn kho</h1>

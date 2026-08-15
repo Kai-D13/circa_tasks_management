@@ -27,7 +27,7 @@ export default async function AnnouncementDetailPage({ params }: { params: Promi
   ])
   if (annErr) {
     console.error('[announcements] detail query failed:', annErr.message)
-    return <div className="p-4 md:p-6 max-w-2xl"><p className="text-sm text-destructive">Không tải được thông báo. Vui lòng thử lại sau hoặc báo Admin.</p></div>
+    return <div className="p-4 md:p-6 max-w-2xl mx-auto"><p className="text-sm text-destructive">Không tải được thông báo. Vui lòng thử lại sau hoặc báo Admin.</p></div>
   }
   if (!ann) notFound()
 
@@ -93,7 +93,7 @@ export default async function AnnouncementDetailPage({ params }: { params: Promi
   const ROLE_VI: Record<string, string> = { admin: 'Admin', sm: 'SM', store_manager: 'Quản lý', staff: 'Nhân viên' }
 
   return (
-    <div className="p-4 md:p-6 max-w-2xl space-y-4">
+    <div className="p-4 md:p-6 max-w-2xl mx-auto space-y-4">
       {!isAdmin && <MarkAnnouncementRead announcementId={id} />}
 
       <div className="flex items-start justify-between gap-3">

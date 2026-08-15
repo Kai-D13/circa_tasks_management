@@ -17,6 +17,9 @@ export function DetailPageShell({
   // without it the markup is unchanged (existing callers/snapshots unaffected).
   actions?: React.ReactNode
   children: React.ReactNode
+  // Contract width (đổi 15/08): width là việc của CALLER, shell không tự cap.
+  // Detail mới mặc định FLUID theo width policy 15/08; caller nào cần hẹp thì
+  // tự truyền `max-w-* mx-auto` qua className (xem tasks/schedules/[id]).
   className?: string
 }) {
   const titleBlock = (
@@ -29,7 +32,7 @@ export function DetailPageShell({
     </div>
   )
   return (
-    <div className={cn('p-4 space-y-4 max-w-5xl', className)}>
+    <div className={cn('p-4 space-y-4', className)}>
       {/* min-h-[44px] PIXEL LITERAL hit area on mobile (root 15px → rem lies;
           P1 r1.1); negative margin keeps the text baseline in place. Desktop
           compact. */}

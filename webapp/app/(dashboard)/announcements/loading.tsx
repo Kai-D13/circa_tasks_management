@@ -3,7 +3,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 // Shown while /announcements fetches. Mirrors the feed shell (title + cards).
 export default function AnnouncementsLoading() {
   return (
-    <div className="p-4 md:p-6 space-y-4 max-w-3xl">
+    <div className="p-4 md:p-6 space-y-4 max-w-3xl mx-auto">
       <Skeleton className="h-7 w-32" />
 
       <div className="space-y-2">

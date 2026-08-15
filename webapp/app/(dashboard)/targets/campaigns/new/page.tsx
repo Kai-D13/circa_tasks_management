@@ -12,7 +12,7 @@ export default async function NewCampaignPage() {
   if (!(profile?.role === 'admin' && isSuperAdminEmail(user.email) && isKpiCampaignEnabled())) notFound()
 
   return (
-    <div className="p-4 md:p-6 max-w-3xl space-y-4">
+    <div className="p-4 md:p-6 max-w-3xl mx-auto space-y-4">
       <div>
         <Link href="/targets/campaigns" className="text-xs text-muted-foreground hover:text-primary inline-flex items-center gap-1">
           <ChevronLeft className="h-3.5 w-3.5" /> Chiến dịch KPI
