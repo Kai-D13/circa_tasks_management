@@ -9,6 +9,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
 import { TagBadge, type TagHue } from '@/components/ds/TagBadge'
+import { IconTooltip } from '@/components/ds/IconTooltip'
 import {
   LayoutDashboard,
   CheckSquare,
@@ -68,11 +69,35 @@ const ROLE_LABELS: Record<string, string> = {
 // Khi thu gọn, 'context' vẫn chỉ là tint icon (không nền) — cùng một class.
 type ItemState = 'active' | 'context' | 'idle'
 
+// Slot chuẩn của footer khi thu gọn — 36px PIXEL LITERAL (root 15px ⇒ `h-9`
+// thật ra là 33.75px, xem guardrail "rem lừa").
+const FOOTER_SLOT = 'h-[36px] w-[36px]'
+
+// Chỉ bọc IconTooltip khi THU GỌN — lúc mở rộng nhãn đã nằm ngay trên hàng,
+// thêm tooltip là nhiễu. Trả thẳng children để không sinh thêm thẻ bọc.
+// ⚠ Chỉ dùng cho control NGOÀI vùng cuộn (nút Thu gọn + footer): popup của
+// IconTooltip là `absolute` nên sẽ bị `<nav overflow-y-auto>` cắt — các hàng
+// điều hướng bên trong nav vì vậy vẫn giữ `title` + `aria-label`.
+function CollapsedTip({
+  label, collapsed, className, children,
+}: {
+  label: string
+  collapsed: boolean
+  className?: string
+  children: React.ReactNode
+}) {
+  if (!collapsed) return <>{children}</>
+  return <IconTooltip label={label} className={className}>{children}</IconTooltip>
+}
+
 // Pattern class dùng chung cho MỌI hàng của sidebar (link, nút accordion, nút
 // thu gọn) — trước đây lặp nguyên văn 6 lần trong file này.
 function itemCls(state: ItemState, collapsed: boolean) {
   return cn(
     'flex items-center gap-3 rounded-md py-2 text-sm transition-colors',
+    // <Link> thuần không mang focus ring của Button ⇒ khai báo tại đây, nếu
+    // không thì tab bằng bàn phím trong sidebar hoàn toàn không thấy con trỏ.
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring',
     collapsed ? 'justify-center px-0' : 'px-3',
     state === 'active' && 'bg-sidebar-accent text-primary font-medium',
     state === 'context' && 'text-primary hover:bg-sidebar-accent/60',
@@ -80,9 +105,11 @@ function itemCls(state: ItemState, collapsed: boolean) {
   )
 }
 
-// Một hàng điều hướng. Khi thu gọn: bỏ label, tooltip = `title` native (không
-// kéo thêm primitive Radix — sidebar là desktop-only), badge đếm thu về chấm
-// nhỏ ở góc icon.
+// Một hàng điều hướng. Khi thu gọn: bỏ label, badge đếm thu về chấm nhỏ ở góc
+// icon, và tooltip vẫn là `title` native — KHÔNG dùng IconTooltip ở đây vì hàng
+// nav nằm trong `<nav overflow-y-auto>`, mà popup `absolute` sẽ bị vùng cuộn
+// cắt (đo trên Chromium: popup 107px bị cắt ở mép 64px). Bù lại bằng
+// `aria-label` để người dùng screen reader vẫn nghe đúng tên mục.
 // `aria-current="page"` đi kèm ĐÚNG hàng active — screen reader phải nghe được
 // cùng một thông tin mà nền màu đang nói với người nhìn.
 function NavLink({
@@ -101,6 +128,10 @@ function NavLink({
       href={href}
       prefetch={prefetch}
       title={collapsed ? label : undefined}
+      // Thu gọn: icon không còn chữ nào ⇒ tên có thể đọc được phải do
+      // `aria-label` cấp; kèm số badge để screen reader không mất thông tin mà
+      // người nhìn vẫn thấy trên chấm đếm.
+      aria-label={collapsed ? (badge > 0 ? `${label} (${badge})` : label) : undefined}
       aria-current={active ? 'page' : undefined}
       className={cn(itemCls(active ? 'active' : 'idle', collapsed), collapsed && 'relative whitespace-nowrap')}
     >
@@ -197,6 +228,12 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
   // (localStorage buộc phải đọc trong useEffect → luôn flash 1 frame).
   const [collapsed, setCollapsed] = useState(defaultCollapsed)
 
+  // Nhãn nút toggle nói HÀNH ĐỘNG sắp xảy ra, không nói trạng thái hiện tại.
+  const toggleLabel  = collapsed ? 'Mở rộng thanh điều hướng' : 'Thu gọn thanh điều hướng'
+  // Tên + email hiển thị trên tooltip/aria của avatar khi thu gọn (khối tên
+  // email bị ẩn ở chế độ này).
+  const accountLabel = [profile?.full_name, profile?.email].filter(Boolean).join(' · ') || 'Tài khoản'
+
   function applyCollapsed(next: boolean) {
     setCollapsed(next)
     document.cookie = `sidebar_collapsed=${next ? '1' : '0'}; path=/; max-age=31536000; samesite=lax`
@@ -207,7 +244,9 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
       className={cn(
         // w-[56px]/w-[210px] px literal: root font-size 15px nên mọi thang rem
         // của Tailwind co 6.25% — bề rộng sidebar phải là con số thật.
-        'hidden md:flex h-full flex-col border-r bg-sidebar transition-[width] duration-200 ease-in-out',
+        // motion-reduce: người bật "giảm chuyển động" của OS không phải xem
+        // thanh nav trượt mỗi lần thu gọn/mở rộng.
+        'hidden md:flex h-full flex-col border-r bg-sidebar transition-[width] duration-200 ease-in-out motion-reduce:transition-none',
         collapsed ? 'w-[56px]' : 'w-[210px]',
       )}
     >
@@ -223,8 +262,8 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
         )}
       </div>
 
-      {/* Nav */}
-      <nav className="flex-1 overflow-y-auto p-2 space-y-0.5">
+      {/* Nav — id để nút Thu gọn/Mở rộng trỏ `aria-controls` vào đúng vùng này */}
+      <nav id="sidebar-nav" className="flex-1 overflow-y-auto p-2 space-y-0.5">
         {visibleItems.map(({ href, label, icon, prefetch }) => (
           <NavLink
             key={href}
@@ -249,6 +288,11 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
                 setInvOpen((o) => !o)
               }}
               title={collapsed ? 'Inventory' : undefined}
+              aria-label={collapsed ? 'Inventory' : undefined}
+              // Vùng con chỉ tồn tại trong DOM khi đang mở ⇒ `aria-controls`
+              // cũng chỉ trỏ khi đó (không để IDREF chết).
+              aria-expanded={!collapsed && invOpen}
+              aria-controls={!collapsed && invOpen ? 'sidebar-inventory-sub' : undefined}
               className={cn(itemCls(inInventorySection ? 'context' : 'idle', collapsed), 'w-full', collapsed && 'whitespace-nowrap')}
             >
               <Boxes className="h-4 w-4 shrink-0" />
@@ -260,7 +304,7 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
               )}
             </button>
             {!collapsed && invOpen && (
-              <div className="mt-0.5 space-y-0.5 pl-4">
+              <div id="sidebar-inventory-sub" className="mt-0.5 space-y-0.5 pl-4">
                 <NavLink
                   href="/inventory/trf"
                   label="TRF"
@@ -313,6 +357,9 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
                 setFsOpen((o) => !o)
               }}
               title={collapsed ? 'Quản lý FS' : undefined}
+              aria-label={collapsed ? 'Quản lý FS' : undefined}
+              aria-expanded={!collapsed && fsOpen}
+              aria-controls={!collapsed && fsOpen ? 'sidebar-fs-sub' : undefined}
               className={cn(itemCls(inFsSection ? 'context' : 'idle', collapsed), 'w-full', collapsed && 'whitespace-nowrap')}
             >
               <Package className="h-4 w-4 shrink-0" />
@@ -324,7 +371,7 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
               )}
             </button>
             {!collapsed && fsOpen && (
-              <div className="mt-0.5 space-y-0.5 pl-4">
+              <div id="sidebar-fs-sub" className="mt-0.5 space-y-0.5 pl-4">
                 <NavLink
                   href="/fs/products"
                   label="Sản phẩm"
@@ -339,51 +386,64 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
         )}
       </nav>
 
-      {/* Thu gọn / mở rộng — hàng riêng ngay trên khối tài khoản */}
+      {/* Thu gọn / mở rộng — hàng riêng ngay trên khối tài khoản.
+          Nhãn ĐỘNG: nút cũ luôn tự xưng "Thu gọn thanh điều hướng" kể cả khi
+          đang thu gọn, tức nói ngược hành động sắp xảy ra. */}
       <div className="px-2 pb-2 shrink-0">
-        <button
-          type="button"
-          onClick={() => applyCollapsed(!collapsed)}
-          aria-expanded={!collapsed}
-          aria-label="Thu gọn thanh điều hướng"
-          title={collapsed ? 'Mở rộng' : undefined}
-          className={cn(itemCls('idle', collapsed), 'w-full', collapsed && 'whitespace-nowrap')}
-        >
-          {collapsed ? (
-            <ChevronsRight className="h-4 w-4 shrink-0" />
-          ) : (
-            <>
-              <ChevronsLeft className="h-4 w-4 shrink-0" />
-              <span className="flex-1 text-left">Thu gọn</span>
-            </>
-          )}
-        </button>
+        <CollapsedTip label={toggleLabel} collapsed={collapsed} className="block">
+          <button
+            type="button"
+            onClick={() => applyCollapsed(!collapsed)}
+            aria-expanded={!collapsed}
+            aria-controls="sidebar-nav"
+            aria-label={toggleLabel}
+            className={cn(itemCls('idle', collapsed), 'w-full', collapsed && 'whitespace-nowrap')}
+          >
+            {collapsed ? (
+              <ChevronsRight className="h-4 w-4 shrink-0" />
+            ) : (
+              <>
+                <ChevronsLeft className="h-4 w-4 shrink-0" />
+                <span className="flex-1 text-left">Thu gọn</span>
+              </>
+            )}
+          </button>
+        </CollapsedTip>
       </div>
 
       {/* User info + controls — thu gọn: stack icon dọc; tên/email/role badge và
           Sửa hồ sơ / Đổi mật khẩu ẩn đi (mở rộng lại để dùng). */}
       {collapsed ? (
+        // Cột dọc: MỌI slot đúng 36px để 4 control thẳng một trục (audit P2#4 —
+        // trước đó Avatar 26px, Bell 32px, Theme/LogOut 34px lệch nhau).
+        // Dùng PIXEL LITERAL: root font-size 15px nên `h-9` chỉ ra 33.75px.
         <div className="border-t border-sidebar-border p-2 flex flex-col items-center gap-2 shrink-0">
-          <Avatar
-            className="h-7 w-7"
-            title={[profile?.full_name, profile?.email].filter(Boolean).join(' · ')}
-          >
-            <AvatarFallback className="text-xs bg-primary text-primary-foreground">
-              {profile?.full_name?.charAt(0)?.toUpperCase() ?? '?'}
-            </AvatarFallback>
-          </Avatar>
-          {role !== 'staff' && <NotificationBell />}
-          <ThemeToggle />
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-9 h-9 px-0"
-            onClick={handleLogout}
-            title="Đăng xuất"
-            aria-label="Đăng xuất"
-          >
-            <LogOut className="h-3.5 w-3.5" />
-          </Button>
+          <CollapsedTip label={accountLabel} collapsed className="flex">
+            <Avatar className={FOOTER_SLOT} aria-label={accountLabel}>
+              <AvatarFallback className="text-xs bg-primary text-primary-foreground">
+                {profile?.full_name?.charAt(0)?.toUpperCase() ?? '?'}
+              </AvatarFallback>
+            </Avatar>
+          </CollapsedTip>
+          {role !== 'staff' && (
+            <CollapsedTip label="Thông báo" collapsed className="flex">
+              <NotificationBell className={cn(FOOTER_SLOT, 'px-0')} />
+            </CollapsedTip>
+          )}
+          <CollapsedTip label="Đổi giao diện" collapsed className="flex">
+            <ThemeToggle className={cn(FOOTER_SLOT, 'px-0')} />
+          </CollapsedTip>
+          <CollapsedTip label="Đăng xuất" collapsed className="flex">
+            <Button
+              variant="outline"
+              size="sm"
+              className={cn(FOOTER_SLOT, 'px-0')}
+              onClick={handleLogout}
+              aria-label="Đăng xuất"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+            </Button>
+          </CollapsedTip>
         </div>
       ) : (
         <div className="border-t border-sidebar-border p-3 space-y-2.5">
