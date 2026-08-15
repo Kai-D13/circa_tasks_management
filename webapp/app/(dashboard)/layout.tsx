@@ -1,3 +1,4 @@
+import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { getUnreadAnnouncementCount } from '@/app/actions/announcements'
@@ -55,6 +56,11 @@ export default async function DashboardLayout({
   // nhân đôi nav; contract opsSidebarVisible có test). Route tự re-verify.
   const affiliateNavCandidate = isKpiAffiliateEnabled() && kpiCampaignEnabled
     && profile.role === 'admin' && !isSuperAdminEmail(user.email) && !!profile.department_id
+  // Sidebar thu gọn: đọc cookie ngay ở server (layout đã dynamic vì auth) rồi
+  // truyền xuống làm state khởi tạo — HTML đầu tiên render đúng bề rộng, không
+  // nháy layout và không hydration mismatch. Cookie chặn/thiếu → mặc định mở rộng.
+  const cookieStore = await cookies()
+  const sidebarCollapsed = cookieStore.get('sidebar_collapsed')?.value === '1'
   const affiliateOverviewNav = opsSidebarVisible({
     flagEnabled: isKpiAffiliateEnabled() && kpiCampaignEnabled,
     role: profile.role,
@@ -76,7 +82,7 @@ export default async function DashboardLayout({
           {/* Desktop sidebar — hidden on mobile; not rendered for staff */}
           {/* Staff get no desktop Sidebar. An FS store_manager DOES get one → pass
               isFsStore so it collapses to the single FS item (no OS links). */}
-          {!isStaff && <Sidebar announcementsUnread={announcementsUnread} kpiCampaignEnabled={kpiCampaignEnabled} referralEnabled={referralEnabled} isFsStore={isFsStore} affiliateOverviewNav={affiliateOverviewNav} />}
+          {!isStaff && <Sidebar announcementsUnread={announcementsUnread} kpiCampaignEnabled={kpiCampaignEnabled} referralEnabled={referralEnabled} isFsStore={isFsStore} affiliateOverviewNav={affiliateOverviewNav} defaultCollapsed={sidebarCollapsed} />}
 
           {/* Main content — full width on mobile */}
           {/* Mobile bottom padding clears the fixed BottomNav (h-16) + the iPhone

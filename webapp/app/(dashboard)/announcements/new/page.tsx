@@ -17,7 +17,7 @@ export default async function NewAnnouncementPage() {
   if (storesErr) console.error('[announcements] stores query failed:', storesErr.message)
 
   return (
-    <div className="p-4 md:p-6 max-w-2xl">
+    <div data-layout-width="centered" className="p-4 md:p-6 max-w-2xl mx-auto">
       <Link href="/announcements" className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'mb-2 -ml-2')}>
         <ArrowLeft className="h-4 w-4 mr-1" /> Bảng tin
       </Link>

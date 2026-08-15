@@ -16,6 +16,11 @@ webapp/.next/
 webapp/.env.local
 webapp/.env*.local
 
+# Ảnh review UI chụp bằng e2e/ui-review-shots.spec.ts — chụp màn hình THẬT nên
+# có tên/email người dùng (sidebar footer, cột người thực hiện). Bằng chứng gửi
+# stakeholder qua kênh nội bộ, KHÔNG BAO GIỜ commit.
+docs/ui/review-r2/
+
 # Secrets — service-account keys / credential exports. NEVER commit.
 *-gcs.tar
 *-sa

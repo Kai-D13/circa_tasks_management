@@ -973,7 +973,7 @@ export default async function TasksPage({
   }
 
   return (
-    <div className="p-4 md:p-6 space-y-4 max-w-[1400px]">
+    <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
       {!isStaff && <AutoRefresh intervalMs={45000} />}
       <PageHeader
         title="Danh sách Tasks"

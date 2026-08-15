@@ -8,9 +8,13 @@ import { Link2 } from 'lucide-react'
 // snapshot Supabase — KHÔNG nút đồng bộ (quyết định user 24/07). Staff không
 // thấy card này (overviewVisibleFor = 'none').
 
-const vnd = (n: number) => `${new Intl.NumberFormat('vi-VN').format(Math.round(n))}₫`
+const nf = new Intl.NumberFormat('vi-VN')
+const vnd = (n: number) => `${nf.format(Math.round(n))}₫`
 
-export function AffiliateGmvCard({ monthLabel, gmv, orders, syncedAt, error = false, sourceWarning = null, detailHref = null, regional = false }: {
+export function AffiliateGmvCard({
+  monthLabel, gmv, orders, syncedAt, error = false, sourceWarning = null, detailHref = null,
+  regional = false, variant = 'card', storesWithSales = null, storeCount = null,
+}: {
   monthLabel: string          // vd "Tháng 07/2026"
   gmv: number
   orders: number
@@ -19,13 +23,106 @@ export function AffiliateGmvCard({ monthLabel, gmv, orders, syncedAt, error = fa
   sourceWarning?: string | null // r1.1: health không READY → chặn số, reason nổi lên card
   detailHref?: string | null  // P3-I.2: link màn tổng hợp (SM/QLCH — user chốt 24/07)
   regional?: boolean          // SM r5 (audit 27/07): copy đa cửa hàng cho tổng vùng
+  // r2.4 (audit P2#4): SM landing đổi cột phải → DẢI NGANG trên danh sách
+  // campaign. Prop THÊM VÀO, default 'card' — QLCH/staff giữ nguyên từng pixel.
+  variant?: 'card' | 'strip'
+  storesWithSales?: number | null  // strip: reduceAffiliateAgg().totals.storesWithSales
+  storeCount?: number | null       // strip: mẫu số "X/Y" (số store trong phạm vi)
 }) {
+  // Fail-closed dùng CHUNG cho cả 2 biến thể: lỗi RPC hoặc nguồn chưa READY thì
+  // KHÔNG có con số nào được hiện (0 giả trên màn tiền).
+  const blocked = error || sourceWarning !== null
+  const syncLine = syncedAt
+    ? `Sync thành công gần nhất ${formatDateTime(syncedAt)}`
+    : 'Chưa có lần sync thành công nào'
+
+  if (variant === 'strip') {
+    const stats: { label: string; value: string }[] = [
+      { label: 'GMV Affiliate', value: blocked ? '—' : vnd(gmv) },
+      { label: 'Đơn thành công', value: blocked ? '—' : nf.format(orders) },
+      {
+        // Nhãn OS-only — SM/QLCH luôn ở phạm vi store OS (FS chỉ super, xem
+        // salesPointsLabel ở màn tổng hợp).
+        label: 'Store có doanh số',
+        value: blocked || storesWithSales === null ? '—'
+          : storeCount !== null ? `${storesWithSales}/${storeCount}` : `${storesWithSales}`,
+      },
+    ]
+    return (
+      <Card className="rounded-lg">
+        <CardContent className="p-4 space-y-2">
+          <div className="flex items-start gap-3 flex-wrap md:items-center">
+            <p className="flex items-center gap-1.5 font-semibold text-sm shrink-0">
+              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-muted text-muted-foreground">
+                <Link2 className="h-3.5 w-3.5" />
+              </span>
+              GMV Affiliate — Circa Online
+            </p>
+            <span className="text-xs text-muted-foreground shrink-0">{monthLabel}</span>
+            {/* r2.7 (audit P1): ĐẢO NGƯỢC cách chống tràn của r2.6. `truncate`
+                trên GIÁ TRỊ biến "10.218.500₫" thành "10.218…" — trên màn TIỀN
+                đó là MẤT THÔNG TIN, tệ hơn hẳn một chữ số lấn sang máng gap.
+                Ba việc phối hợp để số không bao giờ cụt:
+                (1) giá trị `whitespace-nowrap`, KHÔNG truncate (nhãn vẫn được
+                    truncate — nhãn là chuỗi tĩnh, cụt thì vẫn đoán ra);
+                (2) ô grid `min-w-fit` thay cho `min-w-0`: ô không co xuống dưới
+                    bề rộng con số, nên chữ số không bao giờ bị cắt. Ô rộng hơn
+                    track thì `md:justify-items-center` cho nó lấn ĐỀU sang hai
+                    máng `gap-8` (32px) — Card có `overflow-hidden` nhưng
+                    CardContent còn `px-4` đệm, con số cỡ thực tế (≤ ~1x0 triệu…
+                    vài trăm triệu ₫) nằm gọn;
+                (3) dưới xl cụm 3 chỉ số chiếm HÀNG RIÊNG (`basis-full`) thay vì
+                    chia hàng với tiêu đề + link: ở 768–1279px phần còn lại của
+                    hàng chỉ ~130px/ô, không đủ cho số hàng trăm triệu.
+                Từ xl (≥1280px) giữ NGUYÊN `flex: 1 1 0` như bố cục stakeholder
+                đã duyệt — viết bằng `xl:basis-0 xl:grow` (tương đương `flex-1`)
+                để không đụng độ property với `basis-full`. `data-affiliate-*`
+                là attribute TRƠ, chỉ để e2e/ui-review-shots.spec.ts bắt đúng
+                phần tử giá trị mà đo scrollWidth/clientWidth. */}
+            <div
+              data-affiliate-strip=""
+              className="grid grid-cols-1 sm:grid-cols-3 gap-4 md:gap-8 basis-full xl:basis-0 xl:grow min-w-[240px] md:justify-items-center"
+            >
+              {stats.map((s) => (
+                <div key={s.label} className="min-w-fit">
+                  <p className="text-[11px] text-muted-foreground truncate">{s.label}</p>
+                  <p data-affiliate-stat-value="" className="text-xl font-bold tabular-nums leading-none mt-1 whitespace-nowrap">{s.value}</p>
+                </div>
+              ))}
+            </div>
+            {detailHref && (
+              <Link
+                href={detailHref}
+                className="inline-flex items-center text-xs font-medium text-primary hover:underline min-h-[44px] md:min-h-0 shrink-0"
+              >
+                Xem chi tiết Affiliate →
+              </Link>
+            )}
+          </div>
+          {error ? (
+            <p className="text-[11px] text-muted-foreground">Không tải được dữ liệu Affiliate. Vui lòng thử lại sau hoặc báo Admin.</p>
+          ) : sourceWarning ? (
+            <>
+              <p className="text-[11px] text-status-warning">Nguồn dữ liệu chưa sẵn sàng: {sourceWarning} — số liệu tạm ẩn</p>
+              <p className="text-[11px] text-muted-foreground">{syncLine}</p>
+            </>
+          ) : (
+            <p className="text-[11px] text-muted-foreground">
+              Chỉ tính đơn giao thành công (DELIVERED) · tổng các cửa hàng bạn quản lý, ghi nhận theo mã đối tác từng cửa hàng
+              {syncedAt ? ` · đồng bộ ${formatDateTime(syncedAt)}` : ' · chưa đồng bộ'}
+            </p>
+          )}
+        </CardContent>
+      </Card>
+    )
+  }
+
   return (
     <Card className="rounded-lg">
       <CardContent className="p-4 space-y-2">
         <div className="flex items-center justify-between gap-2">
           <p className="flex items-center gap-1.5 font-semibold text-sm">
-            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-[#a3b2bf]/20 text-[#5b6b7a] dark:text-[#a3b2bf]">
+            <span className="flex h-7 w-7 items-center justify-center rounded-full bg-muted text-muted-foreground">
               <Link2 className="h-3.5 w-3.5" />
             </span>
             GMV Affiliate — Circa Online
@@ -44,9 +141,7 @@ export function AffiliateGmvCard({ monthLabel, gmv, orders, syncedAt, error = fa
               <p className="text-sm text-muted-foreground">số liệu tạm ẩn</p>
             </div>
             <p className="text-[11px] text-status-warning">Nguồn dữ liệu chưa sẵn sàng: {sourceWarning}</p>
-            <p className="text-[11px] text-muted-foreground">
-              {syncedAt ? `Sync thành công gần nhất ${formatDateTime(syncedAt)}` : 'Chưa có lần sync thành công nào'}
-            </p>
+            <p className="text-[11px] text-muted-foreground">{syncLine}</p>
           </>
         ) : (
           <>

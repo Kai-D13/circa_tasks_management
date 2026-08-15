@@ -8,7 +8,10 @@ import { cn } from '@/lib/utils'
 import { formatDate } from '@/lib/dateUtils'
 import Link from 'next/link'
 
-export function NotificationBell() {
+// `className` (thêm 15/08, audit P2#4): footer sidebar khi thu gọn xếp 4 control
+// thành một cột dọc và cần MỌI slot cùng 36px cho thẳng trục. Mặc định giữ
+// nguyên class cũ ⇒ MobileHeader và footer mở rộng không đổi một pixel nào.
+export function NotificationBell({ className }: { className?: string } = {}) {
   const { notifications, unread, markRead, soundEnabled, toggleSound } = useNotifications()
   const [open, setOpen]         = useState(false)
   const [popupPos, setPopupPos] = useState({ top: 0, left: 0 })
@@ -55,9 +58,10 @@ export function NotificationBell() {
         <Button
           variant="outline"
           size="sm"
-          className="w-8 px-0 relative"
+          className={cn('relative', className ?? 'w-8 px-0')}
           onClick={handleOpen}
           title="Thông báo"
+          aria-label="Thông báo"
         >
           <Bell className="h-3.5 w-3.5" />
           {unread > 0 && (

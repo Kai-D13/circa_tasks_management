@@ -41,5 +41,23 @@
    - **Gate**: chạy lại KHÔNG flag → no-diff toàn projects; + 1 lần NGÀY KẾ TIẾP để đo data-drift (mask chưa phủ chỗ nào thì bổ sung mask, không nới ratio).
 2. **Component baseline (commit được — regression dài hạn CHÍNH)** — catalog **`/ui-catalog`** (gate `UI_CATALOG=1` + super admin): fixtures mock cố định ("Nguyễn Văn A", `DHC_TEST_001`, `POS_TEST`) → deterministic 100%, không PII → snapshot ĐƯỢC commit tại `e2e/__screenshots__/ui-catalog.spec.ts/`. Spec unlock nested-scroll của dashboard shell CHỈ TRONG TEST để fullPage chụp trọn mọi section (r1.1). Card/row/badge/empty/error/loading regression sống ở đây, không phụ thuộc DB.
 
+### Sidebar r2 — bộ test hành vi/hình học (`webapp/e2e/sidebar-r2.spec.ts`)
+Tầng thứ 3, **KHÔNG snapshot ảnh**: đối chiếu thẩm mỹ với mockup vẫn là việc QA tay/stakeholder, spec này chỉ ĐO những con số đã chốt + kiểm hành vi nhị phân — thứ máy gác được và mắt hay bỏ sót. Bổ sung cho `e2e/sidebar-nav.spec.ts` (chỉ khoá contract *active-state*).
+
+| # | Test (`@desktop`, super admin, route `/tasks`) | Khoá điều gì |
+|---|---|---|
+| 1 | kích thước: aside 232 ⇄ 64, header 56 ở cả hai trạng thái | bề rộng mockup + header KHÔNG đổi chiều cao (nav không nhảy) |
+| 2 | persistence: trạng thái thu gọn sống qua reload | cookie `sidebar_collapsed` ghi đúng 1/0 **và đọc SERVER-SIDE** — đo ngay lúc `domcontentloaded`, HTML đầu tiên phải đã đúng bề rộng (không nháy 1 frame) |
+| 3 | viewport thấp 1366×768: footer luôn thấy được, nav tự cuộn | footer nằm trọn trong viewport, `#sidebar-nav` bottom ≤ footer top (không đè), nav `overflow-y:auto` và cuộn được thật |
+| 4 | thu gọn: tooltip nhãn bung khi hover VÀ khi tab bàn phím | IconTooltip portal (`[role="tooltip"]` ngoài `<aside>`); Tab THẬT chứ không `focus()` vì base-ui chỉ mở khi `:focus-visible` |
+| 5 | thu gọn: nhãn nhóm mất chữ, badge Bảng tin thu về chấm | SectionLabel đổi hẳn sang gạch `aria-hidden`; badge = `aside span.absolute` (đúng selector mà `ui-baseline` mask) |
+| 6 | dark mode: token nền/chữ của sidebar đổi, nền không còn trắng | token light ≠ dark + độ sáng RGB thật (nền tối, chữ tương phản) |
+| 7 | không sinh scroll ngang @1366×900 ở cả hai trạng thái | thu gọn/mở rộng không đẩy document ra ngoài viewport |
+
+- **Env**: `E2E_SUPER_EMAIL` + `E2E_SUPER_PASSWORD` + một server đang chạy (`E2E_BASE_URL`, mặc định `http://localhost:3000`). Thiếu env → **skip** (không fail), cùng cơ chế mọi spec browser khác.
+- Chạy: `E2E_SUPER_EMAIL=… E2E_SUPER_PASSWORD=… npx playwright test e2e/sidebar-r2.spec.ts`
+- **Dark mode dùng `localStorage.theme`, KHÔNG dùng `emulateMedia({ colorScheme })`**: ThemeProvider là next-themes `attribute="class"` + `enableSystem={false}` ⇒ app không đọc `prefers-color-scheme`, emulateMedia sẽ "pass" trên một trang vẫn đang sáng.
+- **Chống flaky**: `transition-[width] duration-200` ⇒ mọi phép đo bề rộng đi qua `expect(...).toPass()` với 2 mẫu cách nhau 1 rAF **trong trang**, chỉ chấp nhận khi hai mẫu bằng nhau — không `waitForTimeout` cứng. Tolerance ±1px. Badge Bảng tin là dữ liệu sống (role admin luôn = 0) nên spec đọc trạng thái thật ở chế độ mở rộng rồi mới ràng buộc chế độ thu gọn phải nhất quán, không hardcode số.
+
 - **WebKit (đã cài) = OPT-IN `@webkit`, KHÔNG nằm trong gate mặc định** (P1 finding, evidence 2026-07-15): WebKit từ chối GỬI Secure cookie qua `http://localhost` (cookie Supabase secure=true vì API là https) → mọi flow authed bounce về /login; Chromium thì trust localhost. Không phải bug app (prod = https). Không được "fix" bằng cách đổi cookie flags (guardrails cấm đụng auth). Bật lại khi có https staging target.
 - iPhone thật (Safari thật, https prod) = coverage Safari chính: regression zoom input (16px) + spot-check mỗi wave.

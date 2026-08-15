@@ -107,7 +107,7 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
   // query/RLS failure — the latter must surface as an error, not "not found".
   if (schedError && schedError.code !== 'PGRST116') {
     return (
-      <DetailPageShell backHref="/tasks/schedules" backLabel="Định kỳ" title="Chi tiết lịch">
+      <DetailPageShell layoutWidth="centered" className="max-w-4xl mx-auto" backHref="/tasks/schedules" backLabel="Định kỳ" title="Chi tiết lịch">
         <ErrorState message="Không thể tải lịch định kỳ" hint={schedError.message} />
       </DetailPageShell>
     )
@@ -177,7 +177,8 @@ export default async function ScheduleDetailPage({ params }: { params: Promise<{
 
   return (
     <DetailPageShell
-      className="max-w-4xl md:p-6 space-y-5"
+      layoutWidth="centered"
+      className="max-w-4xl mx-auto md:p-6 space-y-5"
       backHref="/tasks/schedules"
       backLabel="Định kỳ"
       title={template?.title ?? '—'}

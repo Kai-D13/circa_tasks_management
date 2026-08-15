@@ -17,7 +17,8 @@ description: Circa Tasks design system — load BEFORE writing/altering any UI (
 6. **Toolbar**: search icon-prefix + filters trái, actions DỒN PHẢI (primary coral filled, phụ outline/ghost). Tab đếm số dùng `FilterTabs` (server Link).
 7. **Dark mode**: dùng semantic token (`--status-*`, `bg-card`, `text-muted-foreground`…); cấm hardcode màu chỉ-light.
 8. **Long text**: `truncate`/`line-clamp-2` + nơi xem đầy đủ (pattern FS-UI-3). Không tooltip trên mobile.
-9. Component mới thuộc bộ khung (header/stat/badge/tabs/toolbar/table/pagination/empty/error/loading/detail) → dùng/mở rộng `components/ds/`, KHÔNG tự chế tại route.
+9. **Width page-root**: FLUID (không `max-w-*`) là mặc định; muốn hẹp thì CHỈ `max-w-2xl|3xl|4xl` và BẮT BUỘC kèm `mx-auto`. Cấm `max-w-5xl|6xl|7xl|[Npx]` ở page-root (grep gate trong UI_CHANGE_GUARDRAILS § Width policy); `DetailPageShell` không có cap mặc định — caller tự khai.
+10. Component mới thuộc bộ khung (header/stat/badge/tabs/toolbar/table/pagination/empty/error/loading/detail) → dùng/mở rộng `components/ds/`, KHÔNG tự chế tại route.
 
 ## Khi migrate 1 route
 Chỉ đổi className/JSX → ds/. Sau đó: tsc + build + `git diff --check`; grep guardrail (xem UI_CHANGE_GUARDRAILS §sau-migrate) phải sạch cho route đó; check 8 viewport × light/dark + loading/empty/error/long-text; số query không tăng. 1 route = 1 commit trên branch UI, không merge main tới khi được duyệt.

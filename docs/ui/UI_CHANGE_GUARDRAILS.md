@@ -20,6 +20,13 @@
   `grep -rn "bg-\(green\|red\|amber\|sky\|rose\|emerald\)-100 text-" webapp/app webapp/components --include=*.tsx | grep -v components/ds/` → PHẢI rỗng cho route đã migrate (Phase 6: rỗng toàn repo).
 - Badge/stat-card mới bắt buộc dùng ds/ (review chặn nếu không).
 
+## WIDTH POLICY (chốt 15/08/2026 — batch fluid)
+Page-root (div ngoài cùng của `page.tsx`/`loading.tsx`) chỉ được **FLUID** (không `max-w-*`) hoặc **CENTERED** (`max-w-2xl|3xl|4xl` **BẮT BUỘC kèm `mx-auto`**). **CẤM `max-w-5xl|6xl|7xl|[Npx]` ở page-root**; `max-w-*` thiếu `mx-auto` ở page-root = lỗi (ghim nội dung sang trái → dải trắng khi zoom-out). Cap mức cell/inner/notice không thuộc luật này. `DetailPageShell` không còn cap mặc định — caller tự khai.
+- Check:
+  `grep -rn "max-w-\(5xl\|6xl\|7xl\|\[1[0-9]\{3\}px\]\)" "webapp/app/(dashboard)" --include=*.tsx`
+  → chỉ được ra hit trong **comment** hoặc **`ui-catalog/page.tsx`** (ngoại lệ: đổi = phải regenerate snapshot committed). Bất kỳ hit nào khác = chặn review.
+- **Trang MỚI PHẢI khai `data-layout-width="fluid"|"centered"` ngay tại page-root** (`DetailPageShell` nhận qua prop `layoutWidth`) — attribute trơ, không đổi pixel. Gate là `webapp/e2e/ui-width-contract.spec.ts`: nó ĐO hình học ở 1920/2560 (fluid phải phủ kín `<main>`, centered phải cân 2 bên + cap thật sự bind), nên screenshot không còn là gate duy nhất của width policy.
+
 ## DỮ LIỆU PRODUCTION TRONG ARTIFACTS (r2A — sự cố đã xảy ra, không lặp lại)
 - **CẤM commit** screenshot/video/trace chứa dữ liệu production (PII: tên khách, SĐT, toa thuốc, email NV). `e2e/__screenshots__/`, `test-results/`, `playwright-report/` nằm trong `.gitignore` — không được gỡ.
 - Visual artifact ĐƯỢC commit duy nhất = component-catalog snapshots với fixtures mock ("Nguyễn Văn A", `DHC_TEST_001`, `POS_TEST`).

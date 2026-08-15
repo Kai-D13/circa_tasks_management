@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import {
-  breakdownModel, campaignCardProgress, campaignFootnote, heroRemainingText, metricEditorState,
-  metricPresentation, orderAxisTicks, syncedSubjectLabel,
+  breakdownModel, campaignCardProgress, campaignFootnote, campaignOverviewValue, heroRemainingText,
+  metricEditorState, metricPresentation, orderAxisTicks, syncedSubjectLabel,
 } from '../lib/kpi/campaignDisplay'
 import { affiliateDataStatus, buildCampaignExportRows, buildCustomerCampaignExportRows, buildOrderAovCampaignExportRows, type ExportActual } from '../lib/kpi/exportRows'
 
@@ -295,6 +295,76 @@ test.describe('kpi display customer metric (mig 103) @desktop', () => {
     expect(campaignCardProgress({ kpi_target: 1_000, actual_value: 250 }).text).toBe('25%')
     expect(campaignCardProgress({ kpi_target: 1_000, actual_value: null }).synced).toBe(false)
     expect(campaignCardProgress({ kpi_target: 0, actual_value: 0 }).text).toBe('0%')
+  })
+
+  // ── r2.3 (audit P1#1/#2): giá trị hiển thị campaign trên màn TỔNG HỢP ────
+  // Regression khóa cứng: SM landing từng gọi vnd() thẳng ⇒ campaign Số khách
+  // ra "Mục tiêu 450đ / Đã đạt 3đ" trên màn tiền.
+  test('overview khách: "3 / 450 khách" — TUYỆT ĐỐI không 450đ/₫', () => {
+    const v = campaignOverviewValue({
+      metricType: 'affiliate_customer_count', synced: true,
+      storeCount: 23, totalTarget: 450, totalActual: 3,
+    })
+    expect(v.kind).toBe('affiliate_customer_count')
+    expect(v.lines).toHaveLength(1)
+    const text = v.lines[0].value
+    expect(text).toBe('3 / 450 khách')
+    expect(text).toContain('khách')
+    expect(text).not.toContain('450đ')
+    expect(text).not.toContain('đ /')
+    expect(text).not.toContain('₫')
+    expect(v.pctText).toBe('1%')                       // 3/450 → 0,67% → 1%
+  })
+
+  test('overview gmv: cặp tiền hai đầu có ₫ (không đổi hành vi màn tiền)', () => {
+    const v = campaignOverviewValue({
+      metricType: 'gmv', synced: true,
+      storeCount: 5, totalTarget: 1_454_000_000, totalActual: 600_235_456,
+    })
+    expect(v.kind).toBe('gmv')
+    expect(v.lines[0].value).toBe('600.235.456₫ / 1.454.000.000₫')
+    expect(v.pctText).toBe('41%')
+    // metric_type thiếu/lạ → vẫn là tiền (an toàn hiển thị, giống metricPresentation)
+    expect(campaignOverviewValue({ synced: true, storeCount: 1, totalTarget: 100, totalActual: 50 }).kind).toBe('gmv')
+    expect(campaignOverviewValue({ metricType: 'bogus', synced: true, storeCount: 1, totalTarget: 100, totalActual: 50 }).lines[0].value)
+      .toBe('50₫ / 100₫')
+  })
+
+  test('overview chất lượng bán hàng: "X/Y cửa hàng" + dòng thực tế đơn·AOV', () => {
+    const v = campaignOverviewValue({
+      metricType: AOV_T, synced: true,
+      storeCount: 5, totalTarget: 500, totalActual: 334.6,
+      qualityPassCount: 2, totalOffline: 203_039_424, totalOfflineOrders: 1046,
+    })
+    expect(v.kind).toBe(AOV_T)
+    expect(v.lines[0]).toEqual({ label: 'Đạt KPI', value: '2/5 cửa hàng' })
+    // KHÔNG bao giờ quy điểm hoàn thành thành tiền
+    expect(v.lines[0].value).not.toContain('₫')
+    expect(v.lines[1].value).toBe('1.046 đơn · AOV 194.110₫')
+    expect(v.pctText).toBe('40%')                      // 2/5 cửa hàng đạt
+    // thiếu số đơn ở BẤT KỲ store nào → KHÔNG hiện dòng thực tế (tổng sai hệ thống)
+    const partial = campaignOverviewValue({
+      metricType: AOV_T, synced: true, storeCount: 5, totalTarget: 500, totalActual: 334.6,
+      qualityPassCount: 2, totalOffline: 203_039_424, totalOfflineOrders: null,
+    })
+    expect(partial.lines).toHaveLength(1)
+  })
+
+  test('overview CHƯA ĐỒNG BỘ (cả 3 loại): giá trị + % đều "—", không 0% giả', () => {
+    for (const metricType of ['gmv', 'affiliate_customer_count', AOV_T]) {
+      const v = campaignOverviewValue({
+        metricType, synced: false, storeCount: 5, totalTarget: 450, totalActual: 0,
+        qualityPassCount: 0, totalOffline: 0, totalOfflineOrders: 10,
+      })
+      expect(v.pct, metricType).toBe(0)
+      expect(v.pctText, metricType).toBe('—')
+      expect(v.lines[0].value, metricType).toContain('—')
+      expect(v.lines, metricType).toHaveLength(1)      // chưa sync: không có dòng thực tế
+    }
+    // 0 THẬT vẫn là 0 (khác chưa đồng bộ)
+    const zero = campaignOverviewValue({ metricType: 'affiliate_customer_count', synced: true, storeCount: 5, totalTarget: 450, totalActual: 0 })
+    expect(zero.lines[0].value).toBe('0 / 450 khách')
+    expect(zero.pctText).toBe('0%')
   })
 
   test('trục chart số đơn: tick NGUYÊN, không trùng, tối thiểu 1', () => {

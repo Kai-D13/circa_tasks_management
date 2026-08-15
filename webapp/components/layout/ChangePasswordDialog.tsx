@@ -8,8 +8,11 @@ import { Button } from '@/components/ui/button'
 import { KeyRound, X } from 'lucide-react'
 
 // 'sidebar' (default) = full-width text row used in the desktop Sidebar;
-// 'mobile' = icon-only trigger styled like the other MobileHeader action buttons.
-export function ChangePasswordDialog({ variant = 'sidebar' }: { variant?: 'sidebar' | 'mobile' }) {
+// 'mobile'  = icon-only trigger styled like the other MobileHeader action buttons;
+// 'icon'    = 36px outline slot for the Sidebar r2 footer action row — same
+//             geometry as NotificationBell/ThemeToggle/Đăng xuất, which is why
+//             it cannot reuse 'mobile' (that one is white-on-orange, 40px).
+export function ChangePasswordDialog({ variant = 'sidebar' }: { variant?: 'sidebar' | 'mobile' | 'icon' }) {
   const [open, setOpen]           = useState(false)
   const [newPass, setNewPass]     = useState('')
   const [confirm, setConfirm]     = useState('')
@@ -54,6 +57,16 @@ export function ChangePasswordDialog({ variant = 'sidebar' }: { variant?: 'sideb
           onClick={handleOpen}
         >
           <KeyRound className="h-4 w-4" />
+        </Button>
+      ) : variant === 'icon' ? (
+        <Button
+          variant="outline"
+          size="sm"
+          aria-label="Đổi mật khẩu"
+          className="h-[36px] w-[36px] px-0"
+          onClick={handleOpen}
+        >
+          <KeyRound className="h-3.5 w-3.5" />
         </Button>
       ) : (
         <button

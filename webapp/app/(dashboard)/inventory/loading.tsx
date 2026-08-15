@@ -3,7 +3,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 // Shown while the /inventory hub (or a submodule) fetches.
 export default function InventoryLoading() {
   return (
-    <div className="p-4 md:p-6 space-y-4 max-w-3xl">
+    <div className="p-4 md:p-6 space-y-4 max-w-3xl mx-auto">
       <Skeleton className="h-7 w-28" />
 
       <div className="grid gap-3 sm:grid-cols-2">

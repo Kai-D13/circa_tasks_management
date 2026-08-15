@@ -112,7 +112,7 @@ export default async function FsProductsPage() {
   ]
 
   return (
-    <div className="p-4 space-y-4 max-w-5xl">
+    <div data-layout-width="fluid" className="p-4 space-y-4">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <Boxes className="h-5 w-5 text-primary" />

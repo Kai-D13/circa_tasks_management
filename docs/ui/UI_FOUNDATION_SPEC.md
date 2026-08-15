@@ -42,7 +42,24 @@ Mapping ngữ nghĩa (chốt Decision Record):
 5. **Chip status** (StatusBadge): pastel bg + text đậm cùng hue, `rounded` nhỏ, `text-[11px] px-2 py-0.5`, không icon mặc định.
 6. **Heading**: PageHeader nhỏ gọn — title `text-xl font-semibold` + subtitle `text-sm text-muted-foreground`; không hero to.
 7. **Pagination**: phải-dưới `1–10 / 3189 ‹ ›` (+ page-size chỉ khi có nhu cầu thật); staff mobile giữ Prev/Next không exact-count (perf).
-8. **KHÔNG**: floating nav mới, animation trang trí, sidebar collapse/desktop header mới (batch sau), đổi bottom-nav structure.
+8. **KHÔNG**: floating nav mới, animation trang trí, desktop header cam mới (batch sau), đổi bottom-nav structure.
+   - ⚠ Cập nhật 15/08/2026: **sidebar collapse ĐÃ RA khỏi danh sách "batch sau"** — đã triển khai (210px ⇄ 56px, trạng thái nhớ bằng cookie `sidebar_collapsed` đọc server-side trong `app/(dashboard)/layout.tsx`). Desktop app-bar cam vẫn thuộc batch sau.
 
-## 4. Accessibility & mobile bắt buộc
+## 4. Width policy (15/08/2026 — batch fluid)
+Shell `<main>` trong `app/(dashboard)/layout.tsx` đã fluid (`flex-1 min-w-0`); dải trắng bên phải khi zoom-out 75%/60% là do **page-root tự khóa `max-w-*` mà không `mx-auto`** (ghim trái). Luật chốt cho **page-root** (div ngoài cùng của `page.tsx` / `loading.tsx`):
+
+| | Được dùng | Ghi chú |
+|---|---|---|
+| **FLUID (mặc định)** | không có `max-w-*` | Chọn mặc định. Bảng / dashboard / danh sách nhiều cột BẮT BUỘC fluid. |
+| **CENTERED** | `max-w-2xl` · `max-w-3xl` · `max-w-4xl` — **luôn kèm `mx-auto`** | Chỉ cho trang đọc/soạn nội dung 1 cột (form, bài đăng, hub card). |
+| **CẤM** | `max-w-5xl` · `6xl` · `7xl` · `max-w-[Npx]` | Không có ngoại lệ ở page-root. |
+
+- `max-w-*` KHÔNG kèm `mx-auto` ở page-root = **lỗi** (nội dung ghim trái, đúng bug stakeholder báo).
+- Root font-size 15px co mọi thang rem 6.25% (`max-w-5xl` = 960px thật, không phải 1024px) — thêm một lý do bỏ hẳn các cap to.
+- `components/ds/DetailPageShell` KHÔNG còn cap mặc định: **width là việc của caller** — mỗi caller tự khai `max-w-{2xl|3xl|4xl} mx-auto` nếu muốn centered.
+- Cap mức **cell/inner/notice** (vd `max-w-md mx-auto` cho khối thông báo, `max-w-xs` cho 1 cột bảng) KHÔNG thuộc luật này — vẫn dùng thoải mái.
+- Ngoại lệ đã ghi nhận: `ui-catalog/page.tsx` giữ `max-w-5xl` (đổi = phải regenerate snapshot committed).
+- Lệnh kiểm: xem `UI_CHANGE_GUARDRAILS.md` § Width policy.
+
+## 5. Accessibility & mobile bắt buộc
 Touch target ≥44px THẬT = **pixel literal `min-h-[44px]`/`h-[44px]`** (root font-size 15px nên `h-11` = 2.75rem chỉ ra 41.25px — guardrail test đo computed height sẽ fail); focus ring `--ring` rõ; contrast text-trên-pastel ≥4.5:1 (dark dùng token riêng mục 2); mobile input 16px thật (`text-[16px] md:text-sm`); bảng rộng cuộn trong container, body không cuộn ngang.

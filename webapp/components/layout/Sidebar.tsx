@@ -7,8 +7,8 @@ import { createClient } from '@/lib/supabase/client'
 import { useUserStore } from '@/store/userStore'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
-import { Separator } from '@/components/ui/separator'
+import { TagBadge, type TagHue } from '@/components/ds/TagBadge'
+import { IconTooltip } from '@/components/ds/IconTooltip'
 import {
   LayoutDashboard,
   CheckSquare,
@@ -25,10 +25,14 @@ import {
   Package,
   PackageSearch,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   Link2,
   LogOut,
+  type LucideIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { resolveActiveHref } from '@/lib/layout/sidebarNav'
 import { isSuperAdmin } from '@/lib/authz'
 import { CYCLE_COUNT_DEPT_ID } from '@/lib/inventory/constants'
 import { POLICY_DEPT_ID } from '@/lib/fs/constants'
@@ -37,11 +41,14 @@ import { ChangePasswordDialog } from '@/components/layout/ChangePasswordDialog'
 import { EditProfileDialog } from '@/components/layout/EditProfileDialog'
 import { ThemeToggle } from '@/components/layout/ThemeToggle'
 
-const ROLE_COLORS: Record<string, string> = {
-  admin:         'bg-orange-100 text-orange-700',
-  store_manager: 'bg-blue-100 text-blue-700',
-  staff:         'bg-green-100 text-green-700',
-  sm:            'bg-purple-100 text-purple-700',
+// Hue categorical của ds/TagBadge (có sẵn cặp light + dark) thay cho bảng màu
+// raw chỉ-light cũ. TagBadge không có orange/purple nên lấy hue gần nhất:
+// admin orange→amber, sm purple→indigo.
+const ROLE_HUES: Record<string, TagHue> = {
+  admin:         'amber',
+  store_manager: 'blue',
+  staff:         'green',
+  sm:            'indigo',
 }
 
 const ROLE_LABELS: Record<string, string> = {
@@ -51,7 +58,161 @@ const ROLE_LABELS: Record<string, string> = {
   sm:            'SM',
 }
 
-export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, referralEnabled = false, isFsStore = false, affiliateOverviewNav = false }: { announcementsUnread?: number; kpiCampaignEnabled?: boolean; referralEnabled?: boolean; isFsStore?: boolean; affiliateOverviewNav?: boolean }) {
+// 3 TRẠNG THÁI HIỂN THỊ của một hàng sidebar (contract active, audit P1#1):
+//  - 'active'  : ĐÚNG MỘT phần tử trong cả sidebar — nền `bg-sidebar-accent`.
+//  - 'context' : mục CHA accordion đang chứa trang hiện tại. Chỉ đổi MÀU CHỮ +
+//                icon, TUYỆT ĐỐI KHÔNG nền — nếu cha cũng có nền thì tại
+//                /inventory/trf và /fs/products cha lẫn con cùng sáng, người
+//                dùng không biết đâu là trang mình đang đứng.
+//  - 'idle'    : còn lại.
+// Khi thu gọn, 'context' vẫn chỉ là tint icon (không nền) — cùng một class.
+type ItemState = 'active' | 'context' | 'idle'
+
+// PHÂN NHÓM = LỚP TRÌNH BÀY, đặt SAU role gating (mockup r2). Nhóm KHÔNG cấp
+// quyền cho ai cả: mọi mục vẫn đi qua đúng `visibleItems`/`showInventory`/
+// `showKpi`/`showFs`/`affiliateOverviewNav` như cũ, ở đây chỉ quyết định nó
+// nằm dưới cái nhãn nào. MỘT sidebar dùng chung mọi role — nhóm nào không còn
+// mục nào sau gating thì biến mất luôn cả nhãn.
+type NavGroup = 'ops' | 'manage' | 'data'
+
+const NAV_SECTIONS: { key: NavGroup; label: string }[] = [
+  { key: 'ops',    label: 'Vận hành' },
+  { key: 'manage', label: 'Quản lý' },
+  { key: 'data',   label: 'Dữ liệu & KPI' },
+]
+
+// Slot chuẩn của footer khi thu gọn — 36px PIXEL LITERAL (root 15px ⇒ `h-9`
+// thật ra là 33.75px, xem guardrail "rem lừa").
+const FOOTER_SLOT = 'h-[36px] w-[36px]'
+// ThemeToggle mặc định là Button `ghost` (không viền) trong khi Bell/Đăng xuất
+// là `outline`; mockup vẽ hàng action viền ĐỀU nhau nên trả viền lại cho nó
+// bằng class (không phải đổi API ThemeToggle). Dùng CHUNG cho cả hai trạng
+// thái để đúng MỘT nút không đổi hình dạng khi thu gọn/mở rộng.
+const FOOTER_SLOT_THEME = cn(FOOTER_SLOT, 'px-0 border-border bg-background hover:bg-muted')
+
+// Vùng con của accordion: thụt theo MỘT trục thẳng hàng tâm icon cha
+// (px-2.5 = 9.4px + nửa icon 9px ≈ 19px) và có guide line dọc để mắt bám được
+// nhánh — `pl-4` cũ chỉ đẩy sang phải, không nói con thuộc về ai.
+const SUB_LIST = 'relative mt-0.5 ml-[19px] space-y-0.5 pl-3 before:absolute before:left-0 before:top-1 before:bottom-1 before:w-px before:bg-sidebar-border'
+
+// Chỉ bọc IconTooltip khi THU GỌN — lúc mở rộng nhãn đã nằm ngay trên hàng,
+// thêm tooltip là nhiễu. Trả thẳng children để không sinh thêm thẻ bọc.
+// Dùng được cho MỌI control của sidebar, kể cả hàng nav bên trong
+// `<nav overflow-y-auto>`: IconTooltip đã chuyển sang base-ui Tooltip có
+// `Portal`, popup treo vào <body> nên vùng cuộn không cắt được nữa.
+function CollapsedTip({
+  label, collapsed, className, children,
+}: {
+  label: string
+  collapsed: boolean
+  className?: string
+  children: React.ReactNode
+}) {
+  if (!collapsed) return <>{children}</>
+  return <IconTooltip label={label} className={className}>{children}</IconTooltip>
+}
+
+// Pattern class dùng chung cho MỌI hàng của sidebar (link, nút accordion) —
+// trước đây lặp nguyên văn 6 lần trong file này.
+// Hình học r2 (mockup đã duyệt): hàng 42px, con accordion 38px, radius `rounded-md`
+// — root font-size 15px nên `--radius` 0.5rem = 7.5px ⇒ `--radius-md` = 6px CHẴN,
+// đúng con số mockup, không phải 5.6px như thang rem 16px.
+function itemCls(state: ItemState, collapsed: boolean, sub = false) {
+  return cn(
+    // `relative`: thanh chỉ báo trái của hàng active là pseudo `before:` neo vào
+    // chính hàng — KHÔNG dùng <span class="absolute"> vì e2e/ui-baseline.spec.ts
+    // mask nguyên selector `aside span.absolute` (badge đếm) và sẽ nuốt luôn nó.
+    'relative flex items-center gap-3 rounded-md text-sm transition-colors',
+    sub ? 'h-[38px]' : 'h-[42px]',
+    // <Link> thuần không mang focus ring của Button ⇒ khai báo tại đây, nếu
+    // không thì tab bằng bàn phím trong sidebar hoàn toàn không thấy con trỏ.
+    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sidebar-ring',
+    collapsed ? 'justify-center px-0' : 'px-2.5',
+    state === 'active' && cn(
+      'bg-sidebar-accent text-primary font-semibold',
+      'before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[3px] before:rounded-full before:bg-primary',
+    ),
+    // Hover NHẠT HƠN nền active (/50) — nếu bằng nhau thì rê chuột qua hàng nào
+    // hàng đó trông như đang active.
+    state === 'context' && 'text-primary hover:bg-sidebar-accent/50',
+    state === 'idle' && 'text-sidebar-foreground hover:bg-sidebar-accent/50',
+  )
+}
+
+// Icon 18px; khi hàng idle icon nhạt hơn chữ (mockup: chữ = ink, icon = muted).
+// active/context KHÔNG khai màu riêng ⇒ icon thừa hưởng `text-primary` của hàng.
+function iconCls(state: ItemState) {
+  return cn('h-[18px] w-[18px] shrink-0', state === 'idle' && 'text-sidebar-foreground/60')
+}
+
+// Một hàng điều hướng. Khi thu gọn: bỏ label, badge đếm thu về chấm nhỏ ở góc
+// icon, và nhãn hiện qua IconTooltip (portal) chứ KHÔNG còn `title` native —
+// `title` không bao giờ bung ra khi tab bằng bàn phím. `aria-label` vẫn giữ vì
+// tooltip base-ui không đặt tên cho phần tử; và dùng CHUNG một chuỗi với
+// tooltip để tai nghe được đúng cái mắt đọc được (kể cả số badge).
+// `aria-current="page"` đi kèm ĐÚNG hàng active — screen reader phải nghe được
+// cùng một thông tin mà nền màu đang nói với người nhìn.
+function NavLink({
+  href, label, icon: Icon, active, collapsed, prefetch, badge = 0, sub = false,
+}: {
+  href: string
+  label: string
+  icon: LucideIcon
+  active: boolean
+  collapsed: boolean
+  prefetch?: boolean
+  badge?: number
+  sub?: boolean
+}) {
+  const collapsedLabel = badge > 0 ? `${label} (${badge})` : label
+  const state: ItemState = active ? 'active' : 'idle'
+  return (
+    <CollapsedTip label={collapsedLabel} collapsed={collapsed}>
+      <Link
+        href={href}
+        prefetch={prefetch}
+        aria-label={collapsed ? collapsedLabel : undefined}
+        aria-current={active ? 'page' : undefined}
+        className={cn(itemCls(state, collapsed, sub), collapsed && 'whitespace-nowrap')}
+      >
+        <Icon className={iconCls(state)} />
+        {!collapsed && <span className="flex-1">{label}</span>}
+        {badge > 0 && (collapsed ? (
+          // Rail 64px: hàng rộng ~49px, icon nằm GIỮA ⇒ neo chấm đếm sát mép
+          // phải icon (mockup), không phải góc hàng — góc hàng cách icon 15px.
+          <span className="absolute top-1.5 right-[13px] min-w-4 h-4 px-0.5 rounded-full bg-primary text-white text-[9px] flex items-center justify-center">
+            {badge > 99 ? '99+' : badge}
+          </span>
+        ) : (
+          <span className="ml-auto min-w-5 h-5 px-1 rounded-full bg-primary text-white text-[10px] font-semibold flex items-center justify-center">
+            {badge > 99 ? '99+' : badge}
+          </span>
+        ))}
+      </Link>
+    </CollapsedTip>
+  )
+}
+
+// Tiêu đề nhóm. Khi THU GỌN không còn chỗ cho chữ ⇒ đổi thành gạch phân cách
+// 22px căn giữa (mockup): vẫn giữ được nhịp ngắt nhóm mà không bóp chữ. Gạch là
+// đồ trang trí thuần ⇒ aria-hidden, screen reader không đọc "———".
+// KHÔNG dùng class `absolute` ở đây: e2e/ui-baseline mask `aside span.absolute`.
+function SectionLabel({ label, collapsed, first }: { label: string; collapsed: boolean; first: boolean }) {
+  if (collapsed) {
+    return (
+      <div className={cn('flex justify-center pb-1', first ? 'pt-0.5' : 'pt-2.5')} aria-hidden="true">
+        <span className="h-px w-[22px] bg-sidebar-border" />
+      </div>
+    )
+  }
+  return (
+    <div className={cn('px-2.5 pb-1 text-[10px] font-bold uppercase text-sidebar-foreground/50', first ? 'pt-0.5' : 'pt-3.5')}>
+      {label}
+    </div>
+  )
+}
+
+export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, referralEnabled = false, isFsStore = false, affiliateOverviewNav = false, defaultCollapsed = false }: { announcementsUnread?: number; kpiCampaignEnabled?: boolean; referralEnabled?: boolean; isFsStore?: boolean; affiliateOverviewNav?: boolean; defaultCollapsed?: boolean }) {
   const pathname = usePathname()
   const router   = useRouter()
   const profile  = useUserStore((s) => s.profile)
@@ -67,17 +228,19 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
   // prefetch=false on data-heavy routes so hovering the sidebar doesn't silently
   // fetch large RSC payloads in the background. First-click latency is negligible
   // since these are server-rendered with a fast DB query.
+  // `group` = nhãn trình bày (xem NAV_SECTIONS). Thứ tự mảng và `roles` giữ
+  // NGUYÊN — chỉ thêm một field, không sắp xếp lại, không đổi href.
   const navItems = [
-    { href: '/dashboard',        label: 'Tổng quan',   icon: LayoutDashboard, roles: ['admin', 'store_manager', 'sm'],        prefetch: false },
-    { href: '/tasks',            label: 'Tasks',        icon: CheckSquare,     roles: ['admin', 'store_manager', 'staff', 'sm'], prefetch: false },
-    { href: '/targets',          label: 'Doanh số',     icon: TrendingUp,      roles: ['staff', 'store_manager', 'sm'],          prefetch: false },
-    { href: '/tasks/schedules',  label: 'Định kỳ',     icon: CalendarClock,   roles: ['admin'],                                 prefetch: false },
-    { href: '/users',            label: 'Người dùng',   icon: Users,           roles: ['admin', 'sm'],                           prefetch: false },
-    { href: '/stores',           label: 'Cửa hàng',     icon: Store,           roles: ['admin', 'store_manager', 'sm'],          prefetch: false },
-    { href: '/prescriptions',    label: 'Toa thuốc',    icon: FileImage,       roles: ['admin', 'store_manager', 'staff'],       prefetch: false },
-    { href: '/announcements',    label: 'Bảng tin',     icon: Megaphone,       roles: ['admin', 'store_manager', 'staff', 'sm'], prefetch: false },
-    { href: '/gioi-thieu',       label: 'Giới thiệu',   icon: Gift,            roles: ['admin'],                                 prefetch: false, superAdmin: true },
-    { href: '/logs',             label: 'Nhật ký',      icon: ScrollText,      roles: ['admin', 'store_manager', 'sm'], prefetch: false },
+    { href: '/dashboard',        label: 'Tổng quan',   icon: LayoutDashboard, roles: ['admin', 'store_manager', 'sm'],        prefetch: false, group: 'ops' },
+    { href: '/tasks',            label: 'Tasks',        icon: CheckSquare,     roles: ['admin', 'store_manager', 'staff', 'sm'], prefetch: false, group: 'ops' },
+    { href: '/targets',          label: 'Doanh số',     icon: TrendingUp,      roles: ['staff', 'store_manager', 'sm'],          prefetch: false, group: 'ops' },
+    { href: '/tasks/schedules',  label: 'Định kỳ',     icon: CalendarClock,   roles: ['admin'],                                 prefetch: false, group: 'ops' },
+    { href: '/users',            label: 'Người dùng',   icon: Users,           roles: ['admin', 'sm'],                           prefetch: false, group: 'manage' },
+    { href: '/stores',           label: 'Cửa hàng',     icon: Store,           roles: ['admin', 'store_manager', 'sm'],          prefetch: false, group: 'manage' },
+    { href: '/prescriptions',    label: 'Toa thuốc',    icon: FileImage,       roles: ['admin', 'store_manager', 'staff'],       prefetch: false, group: 'manage' },
+    { href: '/announcements',    label: 'Bảng tin',     icon: Megaphone,       roles: ['admin', 'store_manager', 'staff', 'sm'], prefetch: false, group: 'manage' },
+    { href: '/gioi-thieu',       label: 'Giới thiệu',   icon: Gift,            roles: ['admin'],                                 prefetch: false, superAdmin: true, group: 'data' },
+    { href: '/logs',             label: 'Nhật ký',      icon: ScrollText,      roles: ['admin', 'store_manager', 'sm'], prefetch: false, group: 'manage' },
   ]
 
   const isSuper = isSuperAdmin(profile?.email, role)
@@ -101,195 +264,321 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
   // link now that the old all-stores Doanh số (/targets) is hidden from super admin.
   const showKpi = isSuper && kpiCampaignEnabled
 
+  // Affiliate overview: đúng predicate cũ, chỉ đặt tên để dùng lại ở 3 chỗ
+  // (tập href của resolveActiveHref, render mục, và phép lọc nhóm rỗng).
+  const showAffiliate = affiliateOverviewNav && !isFsStore
+
   // Quản lý FS (→ Sản phẩm): super admin, an admin of dept Policy, OR an FS
   // store_manager (their ONLY nav item — everything else is hidden above).
   const showFs = isFsStore || isSuper || (role === 'admin' && profile?.department_id === POLICY_DEPT_ID)
   const [fsOpen, setFsOpen] = useState(() => pathname.startsWith('/fs') || isFsStore)
 
+  // Active = LONGEST-MATCH ĐƠN NHẤT (hàm thuần `resolveActiveHref`, khoá bằng
+  // e2e/sidebar-nav.spec.ts). Gom mọi href đang hiển thị (item theo role + 2
+  // link con của accordion + link gated KPI/Affiliate) rồi để hàm chọn ĐÚNG 1.
+  const activeHref = resolveActiveHref(pathname, [
+    ...visibleItems.map((item) => item.href),
+    ...(showInventory ? ['/inventory/trf'] : []),
+    ...(showKpi ? ['/targets/campaigns'] : []),
+    ...(showAffiliate ? ['/targets/campaigns/affiliate'] : []),
+    ...(showFs ? ['/fs/products'] : []),
+  ])
+
+  // "Context" của nút CHA accordion: đang đứng trong section nào. Giữ nguyên
+  // predicate section-prefix cũ (kể cả /inventory hub — trang không có mục nav
+  // riêng) NHƯNG hiển thị bằng màu chữ, KHÔNG bằng nền: nền active là tài sản
+  // độc quyền của `activeHref`.
+  const inInventorySection = pathname === '/inventory' || pathname.startsWith('/inventory/')
+  const inFsSection        = pathname === '/fs' || pathname.startsWith('/fs/')
+
+  // Trình bày: những nhóm THỰC SỰ có mục sau gating. Nhóm rỗng không được để
+  // lại nhãn/gạch mồ côi (một admin phòng khác super chẳng hạn chỉ còn 2 nhóm).
+  // Mục gated của nhóm 'data' nằm NGOÀI navItems (accordion + link theo flag).
+  const hasGatedData  = showInventory || showKpi || showAffiliate || showFs
+  const sections = NAV_SECTIONS.filter(({ key }) =>
+    visibleItems.some((item) => item.group === key) || (key === 'data' && hasGatedData),
+  )
+
+  // Thu gọn sidebar — khởi tạo từ COOKIE đọc server-side (prop defaultCollapsed):
+  // HTML đầu tiên đã đúng bề rộng ⇒ không hydration mismatch, không nháy layout
+  // (localStorage buộc phải đọc trong useEffect → luôn flash 1 frame).
+  const [collapsed, setCollapsed] = useState(defaultCollapsed)
+
+  // Nhãn nút toggle nói HÀNH ĐỘNG sắp xảy ra, không nói trạng thái hiện tại.
+  const toggleLabel  = collapsed ? 'Mở rộng thanh điều hướng' : 'Thu gọn thanh điều hướng'
+  // Tên + email hiển thị trên tooltip/aria của avatar khi thu gọn (khối tên
+  // email bị ẩn ở chế độ này).
+  const accountLabel = [profile?.full_name, profile?.email].filter(Boolean).join(' · ') || 'Tài khoản'
+
+  function applyCollapsed(next: boolean) {
+    setCollapsed(next)
+    document.cookie = `sidebar_collapsed=${next ? '1' : '0'}; path=/; max-age=31536000; samesite=lax`
+  }
+
   return (
-    <aside className="hidden md:flex h-screen w-[210px] flex-col border-r bg-sidebar">
-      {/* Logo / Brand — orange header bar */}
-      <div className="flex h-[46px] items-center gap-2 px-4 bg-primary shrink-0">
-        <div className="h-6 w-6 rounded-full bg-white/20 flex items-center justify-center shrink-0">
-          <span className="text-[10px] font-bold text-white">C</span>
-        </div>
-        <span className="font-semibold text-sm tracking-tight text-white">
-          Circa Tasks
-        </span>
+    <aside
+      className={cn(
+        // w-[64px]/w-[232px] px literal: root font-size 15px nên mọi thang rem
+        // của Tailwind co 6.25% — bề rộng sidebar phải là con số thật.
+        // motion-reduce: người bật "giảm chuyển động" của OS không phải xem
+        // thanh nav trượt mỗi lần thu gọn/mở rộng.
+        'hidden md:flex h-full flex-col border-r bg-sidebar transition-[width] duration-200 ease-in-out motion-reduce:transition-none',
+        collapsed ? 'w-[64px]' : 'w-[232px]',
+      )}
+    >
+      {/* Header 56px — CAO CỐ ĐỊNH cả 2 trạng thái để hàng nav đầu tiên không
+          nhảy khi thu gọn. Giữ nền cam brand.
+          Mở rộng : logo "C" + "Circa Tasks" + nút thu gọn ở MÉP PHẢI.
+          Thu gọn : CHỈ nút mở rộng, căn giữa (logo ẩn — theo mockup đã duyệt);
+                    hàng "Thu gọn" dưới đáy nav đã bỏ, nút toggle sống ở đây. */}
+      <div className={cn('flex h-[56px] items-center bg-primary shrink-0', collapsed ? 'justify-center px-0' : 'gap-2.5 pl-3.5 pr-2.5')}>
+        {!collapsed && (
+          <>
+            <div className="h-[28px] w-[28px] rounded-lg bg-white/20 flex items-center justify-center shrink-0">
+              <span className="text-[13px] font-bold text-white">C</span>
+            </div>
+            <span className="flex-1 truncate text-[14px] font-semibold tracking-tight text-white">
+              Circa Tasks
+            </span>
+          </>
+        )}
+        {/* Nhãn ĐỘNG: nói HÀNH ĐỘNG sắp xảy ra, không nói trạng thái hiện tại. */}
+        <CollapsedTip label={toggleLabel} collapsed={collapsed} className="flex">
+          <button
+            type="button"
+            onClick={() => applyCollapsed(!collapsed)}
+            aria-expanded={!collapsed}
+            aria-controls="sidebar-nav"
+            aria-label={toggleLabel}
+            className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-md bg-white/16 text-white transition-colors hover:bg-white/28 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/70"
+          >
+            {collapsed
+              ? <ChevronsRight className="h-4 w-4" />
+              : <ChevronsLeft className="h-4 w-4" />}
+          </button>
+        </CollapsedTip>
       </div>
 
-      {/* Nav */}
-      <nav className="flex-1 overflow-y-auto p-2 space-y-0.5">
-        {visibleItems.map(({ href, label, icon: Icon, prefetch }) => (
-          <Link
-            key={href}
-            href={href}
-            prefetch={prefetch}
-            className={cn(
-              'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
-              pathname === href || (href !== '/dashboard' && pathname.startsWith(href))
-                ? 'bg-sidebar-accent text-primary font-medium'
-                : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-primary/80'
-            )}
-          >
-            <Icon className="h-4 w-4 shrink-0" />
-            <span className="flex-1">{label}</span>
-            {href === '/announcements' && announcementsUnread > 0 && (
-              <span className="ml-auto min-w-5 h-5 px-1 rounded-full bg-primary text-white text-[10px] font-semibold flex items-center justify-center">
-                {announcementsUnread > 99 ? '99+' : announcementsUnread}
-              </span>
-            )}
-          </Link>
+      {/* Nav — id để nút Thu gọn/Mở rộng trỏ `aria-controls` vào đúng vùng này.
+          Render THEO NHÓM. `sections` đã được lọc trên tập ĐÃ gating nên vòng
+          lặp này thuần trình bày: không mục nào xuất hiện/biến mất vì phân nhóm,
+          và một sidebar này dùng chung cho MỌI role. */}
+      <nav id="sidebar-nav" className="flex-1 overflow-y-auto p-2">
+        {sections.map(({ key, label: sectionLabel }, i) => (
+          <div key={key}>
+            <SectionLabel label={sectionLabel} collapsed={collapsed} first={i === 0} />
+            <div className="space-y-0.5">
+              {/* Nhóm 'Dữ liệu & KPI' gom cả các mục GATED nằm ngoài navItems
+                  (2 accordion + 2 link theo flag); chúng đứng trước, "Giới
+                  thiệu" của navItems khép nhóm — đúng thứ tự mockup đã duyệt. */}
+              {key === 'data' && (
+                <>
+                  {/* Tồn kho — collapsible parent → submodules (TRF) */}
+                  {showInventory && (
+                    <div>
+                      <CollapsedTip label="Tồn kho" collapsed={collapsed}>
+                        <button
+                          type="button"
+                          // Thu gọn: nút cha KHÔNG điều hướng — mở rộng sidebar rồi bung accordion.
+                          onClick={() => {
+                            if (collapsed) { applyCollapsed(false); setInvOpen(true); return }
+                            setInvOpen((o) => !o)
+                          }}
+                          aria-label={collapsed ? 'Tồn kho' : undefined}
+                          // Vùng con chỉ tồn tại trong DOM khi đang mở ⇒ `aria-controls`
+                          // cũng chỉ trỏ khi đó (không để IDREF chết).
+                          aria-expanded={!collapsed && invOpen}
+                          aria-controls={!collapsed && invOpen ? 'sidebar-inventory-sub' : undefined}
+                          className={cn(itemCls(inInventorySection ? 'context' : 'idle', collapsed), 'w-full font-medium', collapsed && 'whitespace-nowrap')}
+                        >
+                          <Boxes className={iconCls(inInventorySection ? 'context' : 'idle')} />
+                          {!collapsed && (
+                            <>
+                              <span className="flex-1 text-left">Tồn kho</span>
+                              <ChevronRight className={cn('h-[14px] w-[14px] shrink-0 text-sidebar-foreground/60 transition-transform', invOpen && 'rotate-90')} />
+                            </>
+                          )}
+                        </button>
+                      </CollapsedTip>
+                      {!collapsed && invOpen && (
+                        <div id="sidebar-inventory-sub" className={SUB_LIST}>
+                          <NavLink
+                            href="/inventory/trf"
+                            label="TRF"
+                            icon={ClipboardCheck}
+                            prefetch={false}
+                            collapsed={false}
+                            sub
+                            active={activeHref === '/inventory/trf'}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* KPI — super admin only (flag on). The old all-stores "Doanh số"
+                      (/targets) is hidden now that campaigns own KPI; this is a single
+                      flat link straight to campaign management (accordion no longer needed). */}
+                  {showKpi && (
+                    <NavLink
+                      href="/targets/campaigns"
+                      label="Chiến dịch KPI"
+                      icon={Megaphone}
+                      prefetch={false}
+                      collapsed={collapsed}
+                      active={activeHref === '/targets/campaigns'}
+                    />
+                  )}
+
+                  {/* P3-I.2: Affiliate overview — admin phòng được cấp quyền (layout tính
+                      server-side từ affiliate_department_access + flag; route tự re-verify).
+                      Super không cần item này (đi qua Chiến dịch KPI → tab Affiliate). */}
+                  {showAffiliate && (
+                    <NavLink
+                      href="/targets/campaigns/affiliate"
+                      label="Affiliate"
+                      icon={Link2}
+                      prefetch={false}
+                      collapsed={collapsed}
+                      active={activeHref === '/targets/campaigns/affiliate'}
+                    />
+                  )}
+
+                  {/* Quản lý FS — collapsible parent → submodules (Sản phẩm) */}
+                  {showFs && (
+                    <div>
+                      <CollapsedTip label="Quản lý FS" collapsed={collapsed}>
+                        <button
+                          type="button"
+                          // Thu gọn: nút cha KHÔNG điều hướng — mở rộng sidebar rồi bung accordion.
+                          onClick={() => {
+                            if (collapsed) { applyCollapsed(false); setFsOpen(true); return }
+                            setFsOpen((o) => !o)
+                          }}
+                          aria-label={collapsed ? 'Quản lý FS' : undefined}
+                          aria-expanded={!collapsed && fsOpen}
+                          aria-controls={!collapsed && fsOpen ? 'sidebar-fs-sub' : undefined}
+                          className={cn(itemCls(inFsSection ? 'context' : 'idle', collapsed), 'w-full font-medium', collapsed && 'whitespace-nowrap')}
+                        >
+                          <Package className={iconCls(inFsSection ? 'context' : 'idle')} />
+                          {!collapsed && (
+                            <>
+                              <span className="flex-1 text-left">Quản lý FS</span>
+                              <ChevronRight className={cn('h-[14px] w-[14px] shrink-0 text-sidebar-foreground/60 transition-transform', fsOpen && 'rotate-90')} />
+                            </>
+                          )}
+                        </button>
+                      </CollapsedTip>
+                      {!collapsed && fsOpen && (
+                        <div id="sidebar-fs-sub" className={SUB_LIST}>
+                          <NavLink
+                            href="/fs/products"
+                            label="Sản phẩm"
+                            icon={PackageSearch}
+                            prefetch={false}
+                            collapsed={false}
+                            sub
+                            active={activeHref === '/fs/products'}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {visibleItems.filter((item) => item.group === key).map(({ href, label, icon, prefetch }) => (
+                <NavLink
+                  key={href}
+                  href={href}
+                  label={label}
+                  icon={icon}
+                  prefetch={prefetch}
+                  collapsed={collapsed}
+                  active={href === activeHref}
+                  badge={href === '/announcements' ? announcementsUnread : 0}
+                />
+              ))}
+            </div>
+          </div>
         ))}
-
-        {/* Inventory — collapsible parent → submodules (TRF) */}
-        {showInventory && (
-          <div>
-            <button
-              type="button"
-              onClick={() => setInvOpen((o) => !o)}
-              className={cn(
-                'w-full flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
-                pathname.startsWith('/inventory')
-                  ? 'bg-sidebar-accent text-primary font-medium'
-                  : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-primary/80',
-              )}
-            >
-              <Boxes className="h-4 w-4 shrink-0" />
-              <span className="flex-1 text-left">Inventory</span>
-              <ChevronRight className={cn('h-4 w-4 transition-transform', invOpen && 'rotate-90')} />
-            </button>
-            {invOpen && (
-              <div className="mt-0.5 space-y-0.5 pl-4">
-                <Link
-                  href="/inventory/trf"
-                  prefetch={false}
-                  className={cn(
-                    'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
-                    pathname.startsWith('/inventory/trf')
-                      ? 'bg-sidebar-accent text-primary font-medium'
-                      : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-primary/80',
-                  )}
-                >
-                  <ClipboardCheck className="h-4 w-4 shrink-0" />
-                  <span className="flex-1">TRF</span>
-                </Link>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* KPI — super admin only (flag on). The old all-stores "Doanh số"
-            (/targets) is hidden now that campaigns own KPI; this is a single
-            flat link straight to campaign management (accordion no longer needed). */}
-        {showKpi && (
-          <Link
-            href="/targets/campaigns"
-            prefetch={false}
-            className={cn(
-              'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
-              pathname.startsWith('/targets/campaigns')
-                ? 'bg-sidebar-accent text-primary font-medium'
-                : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-primary/80',
-            )}
-          >
-            <Megaphone className="h-4 w-4 shrink-0" />
-            <span className="flex-1">Chiến dịch KPI</span>
-          </Link>
-        )}
-
-        {/* P3-I.2: Affiliate overview — admin phòng được cấp quyền (layout tính
-            server-side từ affiliate_department_access + flag; route tự re-verify).
-            Super không cần item này (đi qua Chiến dịch KPI → tab Affiliate). */}
-        {affiliateOverviewNav && !isFsStore && (
-          <Link
-            href="/targets/campaigns/affiliate"
-            prefetch={false}
-            className={cn(
-              'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
-              pathname.startsWith('/targets/campaigns/affiliate')
-                ? 'bg-sidebar-accent text-primary font-medium'
-                : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-primary/80',
-            )}
-          >
-            <Link2 className="h-4 w-4 shrink-0" />
-            <span className="flex-1">Affiliate</span>
-          </Link>
-        )}
-
-        {/* Quản lý FS — collapsible parent → submodules (Sản phẩm) */}
-        {showFs && (
-          <div>
-            <button
-              type="button"
-              onClick={() => setFsOpen((o) => !o)}
-              className={cn(
-                'w-full flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
-                pathname.startsWith('/fs')
-                  ? 'bg-sidebar-accent text-primary font-medium'
-                  : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-primary/80',
-              )}
-            >
-              <Package className="h-4 w-4 shrink-0" />
-              <span className="flex-1 text-left">Quản lý FS</span>
-              <ChevronRight className={cn('h-4 w-4 transition-transform', fsOpen && 'rotate-90')} />
-            </button>
-            {fsOpen && (
-              <div className="mt-0.5 space-y-0.5 pl-4">
-                <Link
-                  href="/fs/products"
-                  prefetch={false}
-                  className={cn(
-                    'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
-                    pathname.startsWith('/fs/products')
-                      ? 'bg-sidebar-accent text-primary font-medium'
-                      : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-primary/80',
-                  )}
-                >
-                  <PackageSearch className="h-4 w-4 shrink-0" />
-                  <span className="flex-1">Sản phẩm</span>
-                </Link>
-              </div>
-            )}
-          </div>
-        )}
       </nav>
 
-      {/* User info + controls */}
-      <div className="border-t border-sidebar-border p-3 space-y-2.5">
-        <Separator className="bg-sidebar-border" />
-        <div className="flex items-center gap-2 px-1">
-          <Avatar className="h-7 w-7">
-            <AvatarFallback className="text-xs bg-primary text-primary-foreground">
-              {profile?.full_name?.charAt(0)?.toUpperCase() ?? '?'}
-            </AvatarFallback>
-          </Avatar>
-          <div className="flex-1 overflow-hidden">
-            <p className="text-xs font-medium truncate text-sidebar-foreground">{profile?.full_name}</p>
-            <p className="text-xs truncate text-sidebar-foreground/50">{profile?.email}</p>
+      {/* User info + controls — thu gọn: stack icon dọc; tên/email/role badge và
+          Sửa hồ sơ / Đổi mật khẩu ẩn đi (mở rộng lại để dùng). */}
+      {collapsed ? (
+        // Cột dọc: MỌI slot đúng 36px để 4 control thẳng một trục (audit P2#4 —
+        // trước đó Avatar 26px, Bell 32px, Theme/LogOut 34px lệch nhau).
+        // Dùng PIXEL LITERAL: root font-size 15px nên `h-9` chỉ ra 33.75px.
+        <div className="border-t border-sidebar-border p-2 flex flex-col items-center gap-2 shrink-0">
+          <CollapsedTip label={accountLabel} collapsed className="flex">
+            <Avatar className={FOOTER_SLOT} aria-label={accountLabel}>
+              <AvatarFallback className="text-xs bg-primary text-primary-foreground">
+                {profile?.full_name?.charAt(0)?.toUpperCase() ?? '?'}
+              </AvatarFallback>
+            </Avatar>
+          </CollapsedTip>
+          {role !== 'staff' && (
+            <CollapsedTip label="Thông báo" collapsed className="flex">
+              <NotificationBell className={cn(FOOTER_SLOT, 'px-0')} />
+            </CollapsedTip>
+          )}
+          <CollapsedTip label="Đổi giao diện" collapsed className="flex">
+            <ThemeToggle className={FOOTER_SLOT_THEME} />
+          </CollapsedTip>
+          <CollapsedTip label="Đăng xuất" collapsed className="flex">
+            <Button
+              variant="outline"
+              size="sm"
+              className={cn(FOOTER_SLOT, 'px-0')}
+              onClick={handleLogout}
+              aria-label="Đăng xuất"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+            </Button>
+          </CollapsedTip>
+        </div>
+      ) : (
+        // Mở rộng: MỘT hàng account (avatar + tên/email + badge role nhỏ INLINE
+        // — badge cũ `w-full justify-center` kéo kín ngang, trông như một nút)
+        // rồi MỘT hàng icon action, mọi slot 36px như bản thu gọn.
+        // `shrink-0`: footer không được co lại; nav ở trên đã `flex-1
+        // overflow-y-auto` nên viewport thấp thì NAV cuộn, footer vẫn nguyên chỗ.
+        <div className="border-t border-sidebar-border p-2.5 shrink-0">
+          <div className="flex items-center gap-2 px-1 pb-2.5">
+            {/* PIXEL LITERAL: `h-8` = 2rem = 30px ở root 15px, mockup chốt 32px. */}
+            <Avatar className="h-[32px] w-[32px] shrink-0">
+              <AvatarFallback className="text-xs bg-primary text-primary-foreground">
+                {profile?.full_name?.charAt(0)?.toUpperCase() ?? '?'}
+              </AvatarFallback>
+            </Avatar>
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-[12.5px] font-semibold text-sidebar-foreground">{profile?.full_name}</p>
+              <p className="truncate text-[11px] text-sidebar-foreground/60">{profile?.email}</p>
+            </div>
+            {role && (
+              <TagBadge hue={ROLE_HUES[role] ?? 'slate'} className="shrink-0 px-2 py-0.5 text-[10px]">
+                {ROLE_LABELS[role] ?? role}
+              </TagBadge>
+            )}
+          </div>
+          <div className="flex gap-1.5">
+            <ChangePasswordDialog variant="icon" />
+            {role === 'staff' && <EditProfileDialog variant="icon" />}
+            {role !== 'staff' && <NotificationBell className={cn(FOOTER_SLOT, 'px-0')} />}
+            <ThemeToggle className={FOOTER_SLOT_THEME} />
+            <Button
+              variant="outline"
+              size="sm"
+              className={cn(FOOTER_SLOT, 'px-0')}
+              onClick={handleLogout}
+              aria-label="Đăng xuất"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+            </Button>
           </div>
         </div>
-        {role && (
-          <Badge className={cn('text-xs w-full justify-center', ROLE_COLORS[role])}>
-            {ROLE_LABELS[role] ?? role}
-          </Badge>
-        )}
-        {role === 'staff' && <EditProfileDialog />}
-        <ChangePasswordDialog />
-        <div className="flex gap-1.5">
-          <Button
-            variant="outline"
-            size="sm"
-            className="flex-1 justify-start gap-2 text-xs"
-            onClick={handleLogout}
-          >
-            <LogOut className="h-3.5 w-3.5" />
-            Đăng xuất
-          </Button>
-          {role !== 'staff' && <NotificationBell />}
-          <ThemeToggle />
-        </div>
-      </div>
+      )}
     </aside>
   )
 }

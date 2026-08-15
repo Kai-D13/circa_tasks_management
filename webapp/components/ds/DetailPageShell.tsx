@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 // content. Replaces the hand-rolled headers on tasks/[id], fs/[id],
 // prescriptions/[id] (migrated per-route in their waves).
 export function DetailPageShell({
-  backHref, backLabel, title, badges, meta, actions, children, className,
+  backHref, backLabel, title, badges, meta, actions, children, className, layoutWidth,
 }: {
   backHref: string
   backLabel: string
@@ -17,7 +17,14 @@ export function DetailPageShell({
   // without it the markup is unchanged (existing callers/snapshots unaffected).
   actions?: React.ReactNode
   children: React.ReactNode
+  // Contract width (đổi 15/08): width là việc của CALLER, shell không tự cap.
+  // Detail mới mặc định FLUID theo width policy 15/08; caller nào cần hẹp thì
+  // tự truyền `max-w-* mx-auto` qua className (xem tasks/schedules/[id]).
   className?: string
+  // Khai báo bề rộng để spec e2e/ui-width-contract đo được (shell không spread
+  // props nên data-attr phải đi qua prop). TRƠ về mặt hiển thị — chỉ render ra
+  // `data-layout-width`, không sinh một class nào.
+  layoutWidth?: 'fluid' | 'centered'
 }) {
   const titleBlock = (
     <div className="min-w-0">
@@ -29,7 +36,7 @@ export function DetailPageShell({
     </div>
   )
   return (
-    <div className={cn('p-4 space-y-4 max-w-5xl', className)}>
+    <div data-layout-width={layoutWidth} className={cn('p-4 space-y-4', className)}>
       {/* min-h-[44px] PIXEL LITERAL hit area on mobile (root 15px → rem lies;
           P1 r1.1); negative margin keeps the text baseline in place. Desktop
           compact. */}

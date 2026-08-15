@@ -16,7 +16,9 @@ import { expect, test, type Page } from '@playwright/test'
 // against a server built from the pre-migration commit:
 //   git checkout <main-commit> && npm run build && PORT=3011 npm start
 //   PILOT_CAPTURE_DIR=e2e/__screenshots__/pilot-before E2E_BASE_URL=http://localhost:3011 \
-//     npx playwright test e2e/ui-pilot-capture.spec.ts -g "capture pilot routes"
+//     npx playwright test e2e/ui-pilot-capture.spec.ts -g "pilot after-capture @desktop"
+// (lọc theo TÊN DESCRIBE, không theo tên test: từ r2.6 mỗi route là một test
+//  riêng nên không còn một tiêu đề test nào gom cả loạt.)
 // Only then are dimensions/hashes meaningful. A viewport shot vs an element
 // shot ALWAYS hash-differs and proves nothing.
 
@@ -25,10 +27,42 @@ const STAFF = { email: process.env.E2E_STAFF_EMAIL, password: process.env.E2E_ST
 const OUT_DIR = process.env.PILOT_CAPTURE_DIR ?? 'e2e/__screenshots__/pilot-after'
 const THEMES = ['light', 'dark'] as const
 // Pilot routes — extend per pilot/wave.
+// Batch fluid-width 15/08: thêm 8 route sẽ bị gỡ cap `max-w-*` ở page-root, để
+// chụp BEFORE trên build main@752ed0d rồi so với AFTER sau C1-C4.
+// Chuỗi heading là SUBSTRING (đã lowercase + NFC) nên cố tình chọn phần chung
+// cho mọi nhánh role/state của route: '/targets' đổi tiêu đề theo kỳ và theo
+// chế độ campaign, '/fs/products' và '/inventory/trf' đổi theo quyền.
 const ROUTES: [string, string, string][] = [
   ['/stores', 'stores', 'Danh sách cửa hàng'],
   ['/tasks', 'tasks', 'Danh sách Tasks'],
+  ['/users', 'users', 'Quản lý người dùng'],
+  ['/targets', 'targets', 'Doanh số'],
+  ['/targets/campaigns', 'targets-campaigns', 'Chiến dịch KPI'],
+  ['/fs/products', 'fs-products', 'Sản phẩm'],
+  ['/inventory/trf', 'inventory-trf', 'TRF'],
+  ['/announcements', 'announcements', 'Bảng tin'],
+  ['/tasks/schedules', 'tasks-schedules', 'Task định kỳ'],
 ]
+
+// /gioi-thieu KHÔNG nằm trong ROUTES mặc định (audit test-tooling, P1#1).
+// Chương trình referral đã ngưng: khi flag tắt, page.tsx `redirect('/targets')`
+// ngay từ server, nên vòng chờ heading "Giới thiệu bạn bè" chỉ có thể hết 15s
+// rồi ném lỗi. Từ r2.6 mỗi route đã có test riêng nên cú ném đó không còn kéo
+// đổ route khác, NHƯNG nó vẫn là một test đỏ chắc chắn ở mọi lần chạy mặc định
+// — nên route này vẫn nằm ở test opt-in bên dưới, gác bằng flag chứ không phải
+// bằng timeout.
+const REFERRAL_ROUTE: [string, string, string] = ['/gioi-thieu', 'gioi-thieu', 'Giới thiệu bạn bè']
+
+// Các route CHUYỂN SANG FLUID trong batch 15/08 (C1-C3) — đây là tập cần bằng
+// chứng ở viewport rộng, nơi dải trắng bên phải lộ rõ nhất.
+const FLUID_ROUTES = new Set(['/tasks', '/users', '/targets', '/targets/campaigns', '/fs/products'])
+// Zoom-out 75%/60% trên màn 1440 ⇒ viewport CSS ~1920/2400px. Đặt viewport rộng
+// là cách mô phỏng chính xác về layout (cùng CSS px mà trình duyệt thấy), không
+// phải đổi device scale factor.
+const WIDE_VIEWPORTS = [
+  { width: 1920, height: 900 },
+  { width: 2560, height: 1000 },
+] as const
 
 async function login(page: Page, who: { email?: string; password?: string } = SUPER) {
   await page.goto('/login')
@@ -57,29 +91,48 @@ async function unlockForCapture(page: Page, { hideBottomNav = false } = {}) {
   await page.waitForTimeout(250)
 }
 
+// Một lượt chụp <main> của một route ở một theme — dùng chung cho danh sách
+// ROUTES mặc định và cho test opt-in /gioi-thieu (cùng crop, cùng điều kiện
+// chờ, nên ảnh giữa hai nhóm vẫn so sánh được với nhau).
+async function captureRoute(
+  page: Page,
+  theme: (typeof THEMES)[number],
+  [route, name, heading]: [string, string, string],
+) {
+  await page.goto(route)
+  await page.waitForFunction(
+    (t) => document.documentElement.classList.contains('dark') === (t === 'dark'),
+    theme, { timeout: 10_000 },
+  )
+  await page.waitForFunction(
+    (h) => [...document.querySelectorAll('h1')].some((el) => (el.textContent ?? '').normalize('NFC').toLowerCase().includes(h)),
+    heading.normalize('NFC').toLowerCase(), { timeout: 15_000 },
+  )
+  // Shoot <main> only (excludes sidebar profile).
+  await unlockForCapture(page)
+  await page.locator('main').screenshot({ path: `${OUT_DIR}/${name}-${theme}.png` })
+}
+
 test.describe('pilot after-capture @desktop', () => {
   test.skip(!SUPER.email || !SUPER.password, 'E2E_SUPER_* not set')
-  test('capture pilot routes light+dark', async ({ page }) => {
-    test.setTimeout(180_000)
-    await login(page)
-    for (const theme of THEMES) {
-      await page.evaluate((t) => localStorage.setItem('theme', t), theme)
-      for (const [route, name, heading] of ROUTES) {
-        await page.goto(route)
-        await page.waitForFunction(
-          (t) => document.documentElement.classList.contains('dark') === (t === 'dark'),
-          theme, { timeout: 10_000 },
-        )
-        await page.waitForFunction(
-          (h) => [...document.querySelectorAll('h1')].some((el) => (el.textContent ?? '').normalize('NFC').toLowerCase().includes(h)),
-          heading.normalize('NFC').toLowerCase(), { timeout: 15_000 },
-        )
-        // Shoot <main> only (excludes sidebar profile).
-        await unlockForCapture(page)
-        await page.locator('main').screenshot({ path: `${OUT_DIR}/${name}-${theme}.png` })
+
+  // MỘT test cho MỖI route (audit r2.6, P2 tooling). Trước đây cả loạt ROUTES
+  // chụp chung một test: route nào ném lỗi (heading đổi, redirect, mạng chậm)
+  // là cắt ngang test đó, và MỌI route xếp sau không bao giờ được chụp — mất
+  // sạch bằng chứng chỉ vì một route hỏng. Tách ra thì thiệt hại đúng bằng một
+  // ảnh. Cái giá là mỗi test có page/context riêng nên phải login lại; đổi lại
+  // các route hoàn toàn độc lập (chạy song song được, retry được từng cái).
+  for (const entry of ROUTES) {
+    const [route] = entry
+    test(`capture ${route} light+dark`, async ({ page }) => {
+      test.setTimeout(90_000)
+      await login(page)
+      for (const theme of THEMES) {
+        await page.evaluate((t) => localStorage.setItem('theme', t), theme)
+        await captureRoute(page, theme, entry)
       }
-    }
-  })
+    })
+  }
 
   // Long-text proof (review r1.4 P2): real data has no 120-char store name, so
   // simulate one via TEST-ONLY DOM mutation (server-rendered page — no React
@@ -117,6 +170,69 @@ test.describe('pilot after-capture @desktop', () => {
     await unlockForCapture(page)
     await page.locator('main').screenshot({ path: `${OUT_DIR}/stores-longtext-light.png` })
   })
+})
+
+// /gioi-thieu — OPT-IN, cần ĐỦ CẢ HAI điều kiện (audit test-tooling, P1#1):
+//   1. SERVER đang chạy phải bật REFERRAL_ENABLED=true — flag đọc server-side
+//      trong app/(dashboard)/gioi-thieu/page.tsx; tắt thì redirect '/targets'
+//      trước khi render, không heading nào xuất hiện.
+//   2. TIẾN TRÌNH playwright cũng phải có REFERRAL_ENABLED=true — đây là điều
+//      kiện của test.skip bên dưới. Biến môi trường của runner KHÔNG tự truyền
+//      sang server, nên phải đặt ở cả hai chỗ; đặt mỗi bên một nơi thì hoặc là
+//      test skip oan, hoặc là test chạy rồi chết vì redirect.
+//   REFERRAL_ENABLED=true npx playwright test e2e/ui-pilot-capture.spec.ts
+test.describe('pilot after-capture /gioi-thieu (opt-in) @desktop', () => {
+  test.skip(!SUPER.email || !SUPER.password, 'E2E_SUPER_* not set')
+  test.skip(process.env.REFERRAL_ENABLED !== 'true', 'REFERRAL_ENABLED tắt — /gioi-thieu redirect về /targets')
+  test('capture /gioi-thieu light+dark', async ({ page }) => {
+    test.setTimeout(120_000)
+    await login(page)
+    for (const theme of THEMES) {
+      await page.evaluate((t) => localStorage.setItem('theme', t), theme)
+      await captureRoute(page, theme, REFERRAL_ROUTE)
+    }
+  })
+})
+
+// WIDE VIEWPORT (batch fluid-width 15/08) — bằng chứng cho khiếu nại "zoom-out
+// 75%/60% để dải trắng lớn bên phải". Zoom-out chỉ làm viewport CSS rộng ra, nên
+// mô phỏng bằng setViewportSize thay vì đổi zoom: cùng một layout mà stakeholder
+// nhìn thấy. Chụp light-only (dải trắng là vấn đề bố cục, không phải màu) và
+// khoá thêm điều kiện KHÔNG được scroll ngang toàn trang — cap `max-w-*` gỡ đi
+// không được đánh đổi bằng overflow.
+test.describe('pilot after-capture wide viewport @desktop', () => {
+  test.skip(!SUPER.email || !SUPER.password, 'E2E_SUPER_* not set')
+
+  // Cũng tách MỘT test / MỘT route (audit r2.6) vì đúng một lý do như nhóm
+  // trên: gộp 5 route × 2 viewport vào một test thì route đầu hỏng là mất cả 10
+  // ảnh. Hai viewport của CÙNG một route vẫn nằm chung một test — chúng đo cùng
+  // một trang và chỉ khác setViewportSize, tách nữa chỉ tốn thêm một lần login.
+  for (const [route, name, heading] of ROUTES.filter(([r]) => FLUID_ROUTES.has(r))) {
+    test(`capture ${route} @1920 + @2560, no horizontal overflow`, async ({ page }) => {
+      test.setTimeout(120_000)
+      await login(page)
+      await page.evaluate(() => localStorage.setItem('theme', 'light'))
+      for (const vp of WIDE_VIEWPORTS) {
+        await page.setViewportSize({ width: vp.width, height: vp.height })
+        await page.goto(route)
+        await page.waitForFunction(
+          (t) => document.documentElement.classList.contains('dark') === (t === 'dark'),
+          'light', { timeout: 10_000 },
+        )
+        await page.waitForFunction(
+          (h) => [...document.querySelectorAll('h1')].some((el) => (el.textContent ?? '').normalize('NFC').toLowerCase().includes(h)),
+          heading.normalize('NFC').toLowerCase(), { timeout: 15_000 },
+        )
+        // Scroll ngang còn lại được phép nằm TRONG bảng (DataTableShell), không
+        // bao giờ ở documentElement.
+        const overflow = await page.evaluate(() =>
+          document.documentElement.scrollWidth - document.documentElement.clientWidth)
+        expect(overflow, `${route} @${vp.width} bị scroll ngang toàn trang`).toBeLessThanOrEqual(1)
+        await unlockForCapture(page)
+        await page.locator('main').screenshot({ path: `${OUT_DIR}/${name}-w${vp.width}.png` })
+      }
+    })
+  }
 })
 
 // Pilot 2: staff on mobile is THE primary persona for /tasks. Captures the

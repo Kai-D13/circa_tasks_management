@@ -21,6 +21,7 @@ import { AffiliateQrCard } from '@/components/affiliate/AffiliateQrCard'
 import { AffiliateGmvCard } from '@/components/affiliate/AffiliateGmvCard'
 import { AFFILIATE_QR_FILTER, qrCardVisible, qrCardKey, qrEligibleRole } from '@/lib/affiliate/qrDisplay'
 import { CampaignResultDashboard } from '@/components/kpi/CampaignResultDashboard'
+import { RegionalCampaignOverviewList } from '@/components/kpi/RegionalCampaignOverviewList'
 import { buildCampaignResultModel, smScopeState, type ResultActualRow, type ResultCampaign, type ResultTargetRow } from '@/lib/kpi/resultModel'
 import { reduceAffiliateAgg, currentVnMonthISO, overviewVisibleFor, canShowOwnOsGmv, smRegionalGmvVisible, type AffiliateAggInput } from '@/lib/affiliate/overview'
 import { vnDayRange } from '@/lib/kpi/engine'
@@ -420,7 +421,7 @@ export default async function TargetsPage({
     // r3: lỗi query store → ErrorState, không redirect che sự cố.
     if (smStoresRes.error) {
       return (
-        <div className="p-4 md:p-6 space-y-4 max-w-5xl">
+        <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
           <PageHeader title="Doanh số chiến dịch" icon={TrendingUp} />
           <ErrorState message="Không tải được danh sách cửa hàng được phân công" hint={`${smStoresRes.error} — thử tải lại hoặc báo Admin.`} />
         </div>
@@ -447,7 +448,7 @@ export default async function TargetsPage({
       const msg = (tRes.error ?? aRes.error)!.message
       console.error('[targets] sm dashboard query failed:', msg)
       return (
-        <div className="p-4 md:p-6 space-y-4 max-w-5xl">
+        <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
           <PageHeader title="Doanh số chiến dịch" icon={TrendingUp} />
           <ErrorState message="Không tải được dữ liệu chiến dịch" hint={`${msg} — thử tải lại hoặc báo Admin.`} />
         </div>
@@ -476,7 +477,7 @@ export default async function TargetsPage({
       if (scope !== 'ok' || !entry) {
         // r3: campaign ngoài scope → forbidden, KHÔNG fallback dữ liệu khác.
         return (
-          <div className="p-4 md:p-6 space-y-4 max-w-5xl">
+          <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
             <PageHeader title="Doanh số chiến dịch" icon={TrendingUp} />
             <Link href="/targets" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0">← Danh sách chiến dịch</Link>
             <ErrorState
@@ -491,7 +492,9 @@ export default async function TargetsPage({
       const model = buildCampaignResultModel(entry.campaign, entry.targets, entry.actuals, vnTodayISO)
       return (
         // r1.6 (P1 UI 29/07): SM detail full-width như Super Result view —
-        // bảng N cột Bậc động; landing/list SM giữ max-w-5xl cũ.
+        // bảng N cột Bậc động. Batch UI 15/08: landing/list SM cũng đã bỏ cap
+        // max-w-5xl nên toàn trang /targets giờ fluid; max-w-none giữ lại vì
+        // vô hại và ghi rõ chủ đích của nhánh này.
         <div className="p-4 md:p-6 space-y-4 max-w-none">
           <PageHeader title="Doanh số chiến dịch" icon={TrendingUp} />
           <div>
@@ -528,7 +531,9 @@ export default async function TargetsPage({
       storeCount: smStores.length,
       inCampaignDetail: !!params.campaign,
     })
-    let smGmv = { gmv: 0, orders: 0 }
+    // r2.4: strip cần thêm "Store có doanh số" — số này ĐÃ CÓ SẴN trong
+    // reduceAffiliateAgg().totals (trước đây bị bỏ đi), KHÔNG thêm query nào.
+    let smGmv = { gmv: 0, orders: 0, storesWithSales: 0 }
     let smGmvError = false
     let smGmvWarning: string | null = null
     let smGmvSyncedAt: string | null = null
@@ -547,91 +552,73 @@ export default async function TargetsPage({
           smGmvError = true
         } else {
           const r = reduceAffiliateAgg((aggData ?? []) as AffiliateAggInput[])
-          smGmv = { gmv: r.totals.gmv, orders: r.totals.orders }
+          smGmv = { gmv: r.totals.gmv, orders: r.totals.orders, storesWithSales: r.totals.storesWithSales }
         }
       }
     }
 
     return (
-      <div className="p-4 md:p-6 space-y-4 max-w-5xl">
+      <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
         <PageHeader
           title="Doanh số chiến dịch"
           icon={TrendingUp}
           subtitle={`Phạm vi: ${smStores.length} cửa hàng bạn quản lý`}
         />
-        {/* r5: md+ = grid 2 cột (list campaign trái, GMV regional phải — mirror
-            pattern H2); mobile 1 cột. */}
-        <div className={cn('grid grid-cols-1 gap-4 items-start', smGmvVisible && 'md:grid-cols-[minmax(0,1fr)_340px]')}>
-          <div className="min-w-0">
+        {/* r2.4 (audit P2#4): phạm vi quản lý ngay dưới header — chip TĨNH,
+            KHÔNG phải bộ lọc (SM r6 đã bỏ filter ?store=, dashboard luôn tổng
+            hợp toàn phạm vi). */}
+        {smStores.length > 0 && (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs text-muted-foreground shrink-0">Phạm vi quản lý:</span>
+            {smStores.map((s) => (
+              <span key={s.id} className="text-[11px] px-2 py-0.5 rounded bg-muted text-muted-foreground font-medium truncate max-w-[180px]">
+                {s.name}
+              </span>
+            ))}
+          </div>
+        )}
+
+        {/* r2.4 (audit P2#4 — theo khuyến nghị auditor): GMV Affiliate REGIONAL
+            đổi từ CỘT PHẢI 340px sang DẢI NGANG trên danh sách campaign (2 cột
+            làm màn mất cân bằng: bảng campaign bị bóp, cột phải trống lửng).
+            Cùng data/props/fail-closed của AffiliateGmvCard, chỉ đổi layout qua
+            variant="strip"; QLCH vẫn dùng bản card. KHÔNG QR, KHÔNG nút sync. */}
+        {smGmvVisible && (
+          <AffiliateGmvCard
+            monthLabel={gmvMonthLabel}
+            gmv={smGmv.gmv}
+            orders={smGmv.orders}
+            storesWithSales={smGmv.storesWithSales}
+            storeCount={smStores.length}
+            syncedAt={smGmvSyncedAt}
+            error={smGmvError}
+            sourceWarning={smGmvWarning}
+            detailHref="/targets/campaigns/affiliate"
+            regional
+            variant="strip"
+          />
+        )}
+
         {smCampaigns.length === 0 ? (
           <EmptyState className="py-12" icon={TrendingUp} title="Chưa có chiến dịch nào áp dụng cho các cửa hàng bạn quản lý." />
         ) : (
-          <div className="space-y-3">
-            {smCampaigns.map(({ id: cid, model }) => {
-              const synced = model.lastSyncedAt !== null
-              const pct = model.completionPct
-              return (
-                <Link key={cid} href={`/targets?campaign=${cid}`} className="block">
-                  <Card className="hover:border-primary/40 transition-colors">
-                    <CardContent className="p-4 space-y-2">
-                      <div className="flex items-center justify-between gap-2 flex-wrap">
-                        <p className="font-semibold">{model.campaign.name}</p>
-                        <span className="text-xs text-muted-foreground">{model.deadlineLabel}</span>
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        {formatDate(model.campaign.start_date)} – {formatDate(model.campaign.end_date)} · {model.storeCount} cửa hàng
-                      </p>
-                      <p className="text-sm">
-                        <span className="text-muted-foreground">Mục tiêu </span><span className="font-semibold">{vnd(model.totalTarget)}</span>
-                        <span className="text-muted-foreground"> · Đã đạt </span><span className="font-semibold">{synced ? vnd(model.totalActual) : '—'}</span>
-                      </p>
-                      {/* Money-screen rule: xám tới khi sync (0% không được đọc như kết quả thật) */}
-                      <div className="flex items-center gap-2">
-                        <div className="h-2 flex-1 rounded-full bg-muted overflow-hidden">
-                          <div
-                            className={cn('h-full rounded-full', !synced ? 'bg-muted-foreground/30' : pct >= 100 ? 'bg-green-500' : 'bg-primary')}
-                            style={{ width: `${Math.max(0, Math.min(100, pct))}%` }}
-                          />
-                        </div>
-                        <span className={cn('text-xs font-semibold w-11 text-right', !synced ? 'text-muted-foreground' : pct >= 100 ? 'text-green-600' : 'text-primary')}>
-                          {synced ? `${pct.toFixed(1)}%` : '—'}
-                        </span>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </Link>
-              )
-            })}
-          </div>
+          // r2.3 (audit P1#1/#2): trang KHÔNG tự dựng card + KHÔNG tự format
+          // nữa — trước đây gọi thẳng vnd() nên campaign Số khách hiện "Mục
+          // tiêu 450đ / Đã đạt 3đ". Toàn bộ định dạng đi qua contract
+          // campaignOverviewValue (type-aware theo metric_type).
+          // r2.4: full-width, không còn bị cột phải 340px bóp.
+          <RegionalCampaignOverviewList items={smCampaigns} hrefFor={(cid) => `/targets?campaign=${cid}`} />
         )}
-          </div>
-          {/* r5: GMV Affiliate REGIONAL — AffiliateGmvCard tái dùng (READY → số,
-              0đ hợp lệ; !READY → '—' + lý do ngắn + sync cuối; lỗi → thông báo).
-              KHÔNG QR, KHÔNG nút sync. */}
-          {smGmvVisible && (
-            <div className="min-w-0">
-              <AffiliateGmvCard
-                monthLabel={gmvMonthLabel}
-                gmv={smGmv.gmv}
-                orders={smGmv.orders}
-                syncedAt={smGmvSyncedAt}
-                error={smGmvError}
-                sourceWarning={smGmvWarning}
-                detailHref="/targets/campaigns/affiliate"
-                regional
-              />
-            </div>
-          )}
-        </div>
       </div>
     )
   }
 
   if (isStoreMgr) {
     const storeName = (profile?.stores as unknown as { name: string } | null)?.name ?? 'Cửa hàng của bạn'
-    // H2 (stakeholder 27/07): desktop shell chuẩn admin (max-w-5xl); landing
-    // md+ = grid 2 cột (nội dung campaign + cột phụ QR/GMV); mobile giữ 1 cột
-    // đúng thứ tự cũ (content → QR → GMV).
+    // H2 (stakeholder 27/07): desktop shell chuẩn admin — batch UI 15/08 bỏ cap
+    // max-w-5xl, shell giờ fluid theo <main>; landing md+ = grid 2 cột (nội dung
+    // campaign + cột phụ QR/GMV); mobile giữ 1 cột đúng thứ tự cũ
+    // (content → QR → GMV).
     const mgrSideCards = (showAffiliateQr || showAffiliateGmv) ? (
       <>
         {showAffiliateQr && (
@@ -658,7 +645,7 @@ export default async function TargetsPage({
       </>
     ) : null
     return (
-      <div className="p-4 md:p-6 space-y-4 max-w-5xl">
+      <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
         <PageHeader
           title="Doanh số chiến dịch"
           icon={TrendingUp}
@@ -903,7 +890,7 @@ export default async function TargetsPage({
     .sort((a, b) => (a.stores?.name ?? '').localeCompare(b.stores?.name ?? '', 'vi'))
 
   return (
-    <div className="p-4 md:p-6 space-y-4 max-w-5xl">
+    <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
       <PageHeader
         title={`${TITLE[period]} theo cửa hàng`}
         icon={TrendingUp}
