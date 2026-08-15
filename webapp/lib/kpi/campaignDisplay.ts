@@ -238,6 +238,81 @@ export function campaignCardProgress(c: {
   }
 }
 
+// ── r2.3 (audit P1#1 + P1#2): GIÁ TRỊ HIỂN THỊ campaign trên màn TỔNG HỢP ───
+// Màn danh sách của SM (và mọi màn "nhiều cửa hàng × nhiều campaign") trước đây
+// tự gọi vnd() nên campaign Số khách ra "Mục tiêu 450đ · Đã đạt 3đ". Quyết định
+// hiển thị theo metric_type nằm Ở ĐÂY (thuần, test khóa) — component chỉ tiêu
+// thụ, KHÔNG được tự format lại.
+//
+// Quy ước cặp số "thực tế / mục tiêu":
+//   · tiền  → ₫ dính vào TỪNG số (giữ nguyên chuẩn màn tiền đang chạy)
+//     '600.235.456₫ / 1.454.000.000₫'
+//   · đếm   → đơn vị đứng MỘT lần ở cuối: '3 / 450 khách'
+//
+// Chất lượng bán hàng (offline_order_aov): ở mức TỔNG VÙNG không tồn tại "mục
+// tiêu" cộng dồn được (kpi_target là ĐIỂM 100 chuẩn hóa; aov_target là bình
+// quân — cộng lại vô nghĩa, và model tổng hợp không mang order_target/aov_target
+// dạng tổng) ⇒ dùng ĐÚNG chỉ số của màn danh sách super: số cửa hàng ĐẠT KPI /
+// tổng, kèm dòng THỰC TẾ số đơn · AOV khi đủ dữ liệu (offlineOrderLine).
+export interface CampaignOverviewInput {
+  metricType?: string | null
+  synced: boolean                     // đã có ít nhất 1 snapshot (lastSyncedAt)
+  storeCount: number
+  totalTarget: number
+  totalActual: number
+  // Chỉ dùng cho offline_order_aov:
+  qualityPassCount?: number
+  totalOffline?: number
+  totalOfflineOrders?: number | null  // null = có store thiếu số đơn → KHÔNG hiện dòng thực tế
+}
+
+export interface CampaignOverviewLine { label: string; value: string }
+
+export interface CampaignOverviewValue {
+  kind: CampaignMetricType
+  synced: boolean
+  lines: CampaignOverviewLine[]
+  pct: number                         // 0 khi chưa đồng bộ → KHÔNG vẽ thanh tiến độ
+  pctText: string                     // '—' khi chưa đồng bộ (không có "0%" giả)
+}
+
+export function campaignOverviewValue(v: CampaignOverviewInput): CampaignOverviewValue {
+  const pres = metricPresentation(v.metricType)
+  const synced = v.synced
+
+  if (pres.kind === 'offline_order_aov') {
+    const stores = Number(v.storeCount) || 0
+    const pass = Number(v.qualityPassCount) || 0
+    const pct = stores > 0 ? (pass / stores) * 100 : 0
+    const lines: CampaignOverviewLine[] = [
+      { label: 'Đạt KPI', value: synced ? `${pass}/${stores} cửa hàng` : '—' },
+    ]
+    // Thực tế toàn vùng (không có mục tiêu tổng): "1.046 đơn · AOV 194.046₫".
+    // Thiếu số đơn ở BẤT KỲ store nào ⇒ offlineOrderLine không được gọi (tổng
+    // sai có hệ thống) — caller truyền null, dòng này biến mất.
+    const actualLine = synced ? offlineOrderLine(v.totalOffline ?? 0, v.totalOfflineOrders ?? null) : null
+    if (actualLine) lines.push({ label: 'Thực tế', value: actualLine })
+    return { kind: pres.kind, synced, lines, pct: synced ? pct : 0, pctText: synced ? `${Math.round(pct)}%` : '—' }
+  }
+
+  // gmv / affiliate_customer_count — % và luật "chưa đồng bộ" dùng chung
+  // campaignCardProgress (một luật làm tròn duy nhất với card Staff/QLCH).
+  const prog = campaignCardProgress({
+    kpi_target: v.totalTarget,
+    actual_value: synced ? v.totalActual : null,
+    metric_type: pres.kind,
+  })
+  const actual = !synced ? '—'
+    : pres.kind === 'gmv' ? pres.value(v.totalActual) : nfVi.format(Math.round(v.totalActual))
+  return {
+    kind: pres.kind,
+    synced,
+    lines: [{ label: 'Đã đạt / Mục tiêu', value: `${actual} / ${pres.value(v.totalTarget)}` }],
+    pct: prog.pct,
+    pctText: synced ? prog.text : '—',
+  }
+}
+
 // Lưới trục cho chuỗi SỐ ĐƠN: giá trị nguyên + khử trùng (max=5 ⇒ [3,5], không
 // phải [2.5,5] rồi nhãn làm tròn thành '3' đặt sai chỗ).
 export function orderAxisTicks(max: number): number[] {

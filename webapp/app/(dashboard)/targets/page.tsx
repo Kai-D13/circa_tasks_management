@@ -21,6 +21,7 @@ import { AffiliateQrCard } from '@/components/affiliate/AffiliateQrCard'
 import { AffiliateGmvCard } from '@/components/affiliate/AffiliateGmvCard'
 import { AFFILIATE_QR_FILTER, qrCardVisible, qrCardKey, qrEligibleRole } from '@/lib/affiliate/qrDisplay'
 import { CampaignResultDashboard } from '@/components/kpi/CampaignResultDashboard'
+import { RegionalCampaignOverviewList } from '@/components/kpi/RegionalCampaignOverviewList'
 import { buildCampaignResultModel, smScopeState, type ResultActualRow, type ResultCampaign, type ResultTargetRow } from '@/lib/kpi/resultModel'
 import { reduceAffiliateAgg, currentVnMonthISO, overviewVisibleFor, canShowOwnOsGmv, smRegionalGmvVisible, type AffiliateAggInput } from '@/lib/affiliate/overview'
 import { vnDayRange } from '@/lib/kpi/engine'
@@ -568,43 +569,11 @@ export default async function TargetsPage({
         {smCampaigns.length === 0 ? (
           <EmptyState className="py-12" icon={TrendingUp} title="Chưa có chiến dịch nào áp dụng cho các cửa hàng bạn quản lý." />
         ) : (
-          <div className="space-y-3">
-            {smCampaigns.map(({ id: cid, model }) => {
-              const synced = model.lastSyncedAt !== null
-              const pct = model.completionPct
-              return (
-                <Link key={cid} href={`/targets?campaign=${cid}`} className="block">
-                  <Card className="hover:border-primary/40 transition-colors">
-                    <CardContent className="p-4 space-y-2">
-                      <div className="flex items-center justify-between gap-2 flex-wrap">
-                        <p className="font-semibold">{model.campaign.name}</p>
-                        <span className="text-xs text-muted-foreground">{model.deadlineLabel}</span>
-                      </div>
-                      <p className="text-xs text-muted-foreground">
-                        {formatDate(model.campaign.start_date)} – {formatDate(model.campaign.end_date)} · {model.storeCount} cửa hàng
-                      </p>
-                      <p className="text-sm">
-                        <span className="text-muted-foreground">Mục tiêu </span><span className="font-semibold">{vnd(model.totalTarget)}</span>
-                        <span className="text-muted-foreground"> · Đã đạt </span><span className="font-semibold">{synced ? vnd(model.totalActual) : '—'}</span>
-                      </p>
-                      {/* Money-screen rule: xám tới khi sync (0% không được đọc như kết quả thật) */}
-                      <div className="flex items-center gap-2">
-                        <div className="h-2 flex-1 rounded-full bg-muted overflow-hidden">
-                          <div
-                            className={cn('h-full rounded-full', !synced ? 'bg-muted-foreground/30' : pct >= 100 ? 'bg-green-500' : 'bg-primary')}
-                            style={{ width: `${Math.max(0, Math.min(100, pct))}%` }}
-                          />
-                        </div>
-                        <span className={cn('text-xs font-semibold w-11 text-right', !synced ? 'text-muted-foreground' : pct >= 100 ? 'text-green-600' : 'text-primary')}>
-                          {synced ? `${pct.toFixed(1)}%` : '—'}
-                        </span>
-                      </div>
-                    </CardContent>
-                  </Card>
-                </Link>
-              )
-            })}
-          </div>
+          // r2.3 (audit P1#1/#2): trang KHÔNG tự dựng card + KHÔNG tự format
+          // nữa — trước đây gọi thẳng vnd() nên campaign Số khách hiện "Mục
+          // tiêu 450đ / Đã đạt 3đ". Toàn bộ định dạng đi qua contract
+          // campaignOverviewValue (type-aware theo metric_type).
+          <RegionalCampaignOverviewList items={smCampaigns} hrefFor={(cid) => `/targets?campaign=${cid}`} />
         )}
           </div>
           {/* r5: GMV Affiliate REGIONAL — AffiliateGmvCard tái dùng (READY → số,
