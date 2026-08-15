@@ -59,17 +59,34 @@ export function AffiliateGmvCard({
               GMV Affiliate — Circa Online
             </p>
             <span className="text-xs text-muted-foreground shrink-0">{monthLabel}</span>
-            {/* r2.6 (audit P2): chống số GMV dài đè cột. Cell đã có `min-w-0`
-                (không có nó thì ô grid lấy min-content = cả con số, đẩy tràn),
-                thêm `truncate` cho GIÁ TRỊ — nhãn vốn đã truncate. Dưới 640px
-                xếp DỌC 1 cột: 3 cột trong 240px chỉ còn ~70px/ô, con số hàng tỉ
-                sẽ cụt còn vài chữ số đầu, vô nghĩa. Từ sm trở lên vẫn 3 cột nên
-                hình dạng ở >=1024px (bố cục stakeholder đã duyệt) KHÔNG đổi. */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 md:gap-8 flex-1 min-w-[240px] md:justify-items-center">
+            {/* r2.7 (audit P1): ĐẢO NGƯỢC cách chống tràn của r2.6. `truncate`
+                trên GIÁ TRỊ biến "10.218.500₫" thành "10.218…" — trên màn TIỀN
+                đó là MẤT THÔNG TIN, tệ hơn hẳn một chữ số lấn sang máng gap.
+                Ba việc phối hợp để số không bao giờ cụt:
+                (1) giá trị `whitespace-nowrap`, KHÔNG truncate (nhãn vẫn được
+                    truncate — nhãn là chuỗi tĩnh, cụt thì vẫn đoán ra);
+                (2) ô grid `min-w-fit` thay cho `min-w-0`: ô không co xuống dưới
+                    bề rộng con số, nên chữ số không bao giờ bị cắt. Ô rộng hơn
+                    track thì `md:justify-items-center` cho nó lấn ĐỀU sang hai
+                    máng `gap-8` (32px) — Card có `overflow-hidden` nhưng
+                    CardContent còn `px-4` đệm, con số cỡ thực tế (≤ ~1x0 triệu…
+                    vài trăm triệu ₫) nằm gọn;
+                (3) dưới xl cụm 3 chỉ số chiếm HÀNG RIÊNG (`basis-full`) thay vì
+                    chia hàng với tiêu đề + link: ở 768–1279px phần còn lại của
+                    hàng chỉ ~130px/ô, không đủ cho số hàng trăm triệu.
+                Từ xl (≥1280px) giữ NGUYÊN `flex: 1 1 0` như bố cục stakeholder
+                đã duyệt — viết bằng `xl:basis-0 xl:grow` (tương đương `flex-1`)
+                để không đụng độ property với `basis-full`. `data-affiliate-*`
+                là attribute TRƠ, chỉ để e2e/ui-review-shots.spec.ts bắt đúng
+                phần tử giá trị mà đo scrollWidth/clientWidth. */}
+            <div
+              data-affiliate-strip=""
+              className="grid grid-cols-1 sm:grid-cols-3 gap-4 md:gap-8 basis-full xl:basis-0 xl:grow min-w-[240px] md:justify-items-center"
+            >
               {stats.map((s) => (
-                <div key={s.label} className="min-w-0">
+                <div key={s.label} className="min-w-fit">
                   <p className="text-[11px] text-muted-foreground truncate">{s.label}</p>
-                  <p className="text-xl font-bold tabular-nums leading-none mt-1 truncate">{s.value}</p>
+                  <p data-affiliate-stat-value="" className="text-xl font-bold tabular-nums leading-none mt-1 whitespace-nowrap">{s.value}</p>
                 </div>
               ))}
             </div>
