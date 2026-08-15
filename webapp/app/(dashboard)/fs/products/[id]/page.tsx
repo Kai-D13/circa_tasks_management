@@ -51,7 +51,7 @@ export default async function FsSessionDetailPage({
   if (!session) {
     if (!sErr) notFound() // RLS-scoped: a non-authorized/absent session → 404
     return (
-      <div className="p-4 space-y-4 max-w-5xl">
+      <div className="p-4 space-y-4">
         <Link href="/fs/products" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
           <ChevronLeft className="h-4 w-4" /> Danh sách phiên
         </Link>
@@ -133,7 +133,7 @@ export default async function FsSessionDetailPage({
       active ? 'bg-background text-primary shadow-sm' : 'text-muted-foreground hover:text-foreground')
 
   return (
-    <div className="p-4 space-y-4 max-w-5xl">
+    <div className="p-4 space-y-4">
       <Link href="/fs/products" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
         <ChevronLeft className="h-4 w-4" /> Danh sách phiên
       </Link>

@@ -52,7 +52,7 @@ export default async function InventoryTrfPage() {
   if (error) {
     console.error('[inventory/trf] query failed:', error.message)
     return (
-      <div className="p-4 md:p-6 max-w-4xl space-y-4">
+      <div className="p-4 md:p-6 space-y-4">
         {header}
         <p className="text-sm text-destructive">Không tải được dữ liệu TRF. Thử lại sau hoặc báo Admin.</p>
       </div>
@@ -74,7 +74,7 @@ export default async function InventoryTrfPage() {
   }))
 
   return (
-    <div className="p-4 md:p-6 max-w-4xl space-y-4">
+    <div className="p-4 md:p-6 space-y-4">
       {header}
       {rows.length === 0 ? (
         <Card>
