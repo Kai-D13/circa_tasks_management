@@ -461,7 +461,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           Mobile: flex-col. order-2 on left, order-1 on right → right panel (status +
           submit CTA) appears first on mobile. Using order-* avoids the DOM/focus
           mismatch that flex-col-reverse causes for keyboard navigation. */}
-      <div className="flex flex-col lg:flex-row lg:flex-1 lg:min-h-0 w-full max-w-[1400px]">
+      <div className="flex flex-col lg:flex-row lg:flex-1 lg:min-h-0 w-full">
 
         {/* ── Left — task content (order-2 mobile → below, order-first desktop → left) ── */}
         <div className="order-2 lg:order-first flex-[2] min-w-0 px-4 py-3 lg:border-r lg:overflow-y-auto">

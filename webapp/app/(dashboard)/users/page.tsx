@@ -179,7 +179,7 @@ export default async function UsersPage({
   }))
 
   return (
-    <div className="p-4 md:p-6 space-y-4 max-w-7xl">
+    <div className="p-4 md:p-6 space-y-4">
       <PageHeader
         title={isSm ? 'Nhân viên cửa hàng' : 'Quản lý người dùng'}
         icon={UsersIcon}
