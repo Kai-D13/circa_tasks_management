@@ -122,13 +122,18 @@ export function BottomNav({
     <>
       {/* Floating rounded nav — detached from the screen edges (mx/mb margins),
           soft shadow, no hard top border. Reads far more premium than a
-          full-width bar. Main content padding (layout.tsx) clears its height. */}
+          full-width bar.
+          Hình học lấy từ token globals.css (`--bottom-nav-h` = chiều cao pill,
+          `--bottom-nav-offset` = hở dưới): <main> trong layout.tsx chừa chỗ bằng
+          `--bottom-nav-clearance` DẪN XUẤT từ đúng hai token này, nên đổi chiều
+          cao nav ở một chỗ là hai bên tự khớp. Trước đây hai giá trị khai báo
+          rời (h-16 ↔ pb-[5.5rem]) — sửa một bên là lệch. */}
       <nav
         aria-label="Điều hướng chính"
         className="fixed bottom-0 left-0 right-0 z-40 px-3 pointer-events-none md:hidden"
-        style={{ paddingBottom: 'calc(0.5rem + env(safe-area-inset-bottom))' }}
+        style={{ paddingBottom: 'calc(var(--bottom-nav-offset) + env(safe-area-inset-bottom))' }}
       >
-        <div className="pointer-events-auto flex items-center justify-around h-16 rounded-3xl border border-border/60 bg-sidebar/95 backdrop-blur shadow-[0_8px_30px_rgb(0_0_0/0.12)]">
+        <div className="pointer-events-auto flex items-center justify-around h-[var(--bottom-nav-h)] rounded-3xl border border-border/60 bg-sidebar/95 backdrop-blur shadow-[0_8px_30px_rgb(0_0_0/0.12)]">
           {primary.map((item) => <NavBtn key={item.href} item={item} />)}
           {needsMore && (
             <button

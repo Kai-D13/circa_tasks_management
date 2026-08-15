@@ -86,6 +86,17 @@
   --chart-4: oklch(0.37 0 0);
   --chart-5: oklch(0.27 0 0);
   --radius: 0.5rem;
+  /* Bottom nav (mobile) — NGUỒN DUY NHẤT cho chiều cao thanh điều hướng dưới và
+     khoảng chừa nội dung. INVARIANT: đổi `--bottom-nav-h` là BottomNav (pill) và
+     <main> (padding-bottom) tự khớp, không nơi nào phải sửa tay — chuẩn bị cho
+     nút giữa nổi (M1) làm thanh nav cao lên.
+     PIXEL LITERAL vì root font-size = 15px, rem lừa: h-16 = 4rem = 60px THẬT
+     (không phải 64px), 0.5rem = 7.5px, 1rem = 15px.
+     Giữ nguyên hiện trạng: 60 + 7.5 + 15 = 82.5px = 5.5rem — đúng giá trị
+     pb-[calc(5.5rem + safe-area)] mà <main> đang dùng ⇒ zero-visual-change. */
+  --bottom-nav-h: 60px;                    /* chiều cao pill (đang là h-16) */
+  --bottom-nav-offset: 7.5px;              /* hở giữa pill và mép dưới màn hình */
+  --bottom-nav-clearance: calc(var(--bottom-nav-h) + var(--bottom-nav-offset) + 15px + env(safe-area-inset-bottom)); /* +15px thở giữa nội dung và pill */
   /* Status tones (P1.1) — MEASURED WCAG pairs, all ≥6.48:1 on their bg
      (docs/ui/UI_FOUNDATION_SPEC §2 — copy-only values, never re-tune here). */
   --status-success:    oklch(0.44 0.11 150);
