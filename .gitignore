@@ -21,6 +21,10 @@ webapp/.env*.local
 # stakeholder qua kênh nội bộ, KHÔNG BAO GIỜ commit.
 docs/ui/review-r2/
 
+# Ảnh baseline mobile staff chụp bằng e2e/ui-mobile-baseline.spec.ts — cùng lý
+# do: dữ liệu thật (tên nhân viên, tên khách trên toa thuốc). KHÔNG commit.
+docs/ui/mobile-baseline/
+
 # Secrets — service-account keys / credential exports. NEVER commit.
 *-gcs.tar
 *-sa
