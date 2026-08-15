@@ -160,6 +160,24 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
   const showFs = isFsStore || isSuper || (role === 'admin' && profile?.department_id === POLICY_DEPT_ID)
   const [fsOpen, setFsOpen] = useState(() => pathname.startsWith('/fs') || isFsStore)
 
+  // Active = LONGEST-MATCH ĐƠN NHẤT. Gom mọi href đang hiển thị (item theo role
+  // + 2 link con của accordion + link gated KPI/Affiliate), giữ những href là
+  // tiền tố của URL hiện tại THEO RANH GIỚI '/' (cùng predicate với BottomNav),
+  // rồi cho href DÀI NHẤT thắng — mỗi lúc chỉ đúng 1 item sáng.
+  // Rule cũ so khớp từng item bằng `startsWith(href)` nên ở /tasks/schedules cả
+  // "Tasks" lẫn "Định kỳ" cùng sáng (và /tasks-bất-kỳ-chuỗi cũng khớp "Tasks").
+  // Tint của NÚT CHA accordion vẫn theo section-prefix như cũ (/inventory, /fs)
+  // để khi accordion đóng vẫn thấy mình đang ở trong nhóm nào.
+  const activeHref = [
+    ...visibleItems.map((item) => item.href),
+    ...(showInventory ? ['/inventory/trf'] : []),
+    ...(showKpi ? ['/targets/campaigns'] : []),
+    ...(affiliateOverviewNav && !isFsStore ? ['/targets/campaigns/affiliate'] : []),
+    ...(showFs ? ['/fs/products'] : []),
+  ]
+    .filter((href) => pathname === href || pathname.startsWith(href + '/'))
+    .sort((a, b) => b.length - a.length)[0]
+
   // Thu gọn sidebar — khởi tạo từ COOKIE đọc server-side (prop defaultCollapsed):
   // HTML đầu tiên đã đúng bề rộng ⇒ không hydration mismatch, không nháy layout
   // (localStorage buộc phải đọc trong useEffect → luôn flash 1 frame).
@@ -201,7 +219,7 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
             icon={icon}
             prefetch={prefetch}
             collapsed={collapsed}
-            active={pathname === href || (href !== '/dashboard' && pathname.startsWith(href))}
+            active={href === activeHref}
             badge={href === '/announcements' ? announcementsUnread : 0}
           />
         ))}
@@ -235,7 +253,7 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
                   icon={ClipboardCheck}
                   prefetch={false}
                   collapsed={false}
-                  active={pathname.startsWith('/inventory/trf')}
+                  active={activeHref === '/inventory/trf'}
                 />
               </div>
             )}
@@ -252,7 +270,7 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
             icon={Megaphone}
             prefetch={false}
             collapsed={collapsed}
-            active={pathname.startsWith('/targets/campaigns')}
+            active={activeHref === '/targets/campaigns'}
           />
         )}
 
@@ -266,7 +284,7 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
             icon={Link2}
             prefetch={false}
             collapsed={collapsed}
-            active={pathname.startsWith('/targets/campaigns/affiliate')}
+            active={activeHref === '/targets/campaigns/affiliate'}
           />
         )}
 
@@ -299,7 +317,7 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
                   icon={PackageSearch}
                   prefetch={false}
                   collapsed={false}
-                  active={pathname.startsWith('/fs/products')}
+                  active={activeHref === '/fs/products'}
                 />
               </div>
             )}
