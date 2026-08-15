@@ -143,8 +143,10 @@ export default async function CampaignDetailPage({
   return (
     // r1.6 (P1 UI 29/07): tab Kết quả dùng TOÀN BỘ chiều rộng main content
     // (bảng N cột Bậc động cần chỗ; scroll ngang còn lại nằm TRONG bảng —
-    // body không bao giờ scroll ngang); tab Cấu hình giữ shell max-w-5xl cũ.
-    <div className={cn('p-4 md:p-6 space-y-4', tab === 'result' ? 'max-w-none' : 'max-w-5xl')}>
+    // body không bao giờ scroll ngang).
+    // Batch UI 15/08: bỏ ternary — TOÀN TRANG fluid, tab Cấu hình cũng vậy vì
+    // trung tâm của nó là bảng nhiều cột; hết dải trắng phải khi zoom-out.
+    <div className="p-4 md:p-6 space-y-4">
       <div>
         <Link href="/targets/campaigns" className="text-xs text-muted-foreground hover:text-primary inline-flex items-center gap-1">
           <ChevronLeft className="h-3.5 w-3.5" /> Chiến dịch KPI
