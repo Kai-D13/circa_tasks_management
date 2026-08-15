@@ -39,9 +39,16 @@ const ROUTES: [string, string, string][] = [
   ['/fs/products', 'fs-products', 'Sản phẩm'],
   ['/inventory/trf', 'inventory-trf', 'TRF'],
   ['/announcements', 'announcements', 'Bảng tin'],
-  ['/gioi-thieu', 'gioi-thieu', 'Giới thiệu bạn bè'],
   ['/tasks/schedules', 'tasks-schedules', 'Task định kỳ'],
 ]
+
+// /gioi-thieu KHÔNG nằm trong ROUTES mặc định (audit test-tooling, P1#1).
+// Chương trình referral đã ngưng: khi flag tắt, page.tsx `redirect('/targets')`
+// ngay từ server, nên vòng chờ heading "Giới thiệu bạn bè" chỉ có thể hết
+// 15s rồi ném lỗi — và vì cả loạt route chụp chung MỘT test, cú ném đó DỪNG
+// luôn suite giữa chừng (mọi route xếp sau không bao giờ được chụp). Tách ra
+// một test opt-in riêng bên dưới; timeout không phải cách xử lý một redirect.
+const REFERRAL_ROUTE: [string, string, string] = ['/gioi-thieu', 'gioi-thieu', 'Giới thiệu bạn bè']
 
 // Các route CHUYỂN SANG FLUID trong batch 15/08 (C1-C3) — đây là tập cần bằng
 // chứng ở viewport rộng, nơi dải trắng bên phải lộ rõ nhất.
@@ -81,6 +88,28 @@ async function unlockForCapture(page: Page, { hideBottomNav = false } = {}) {
   await page.waitForTimeout(250)
 }
 
+// Một lượt chụp <main> của một route ở một theme — dùng chung cho danh sách
+// ROUTES mặc định và cho test opt-in /gioi-thieu (cùng crop, cùng điều kiện
+// chờ, nên ảnh giữa hai nhóm vẫn so sánh được với nhau).
+async function captureRoute(
+  page: Page,
+  theme: (typeof THEMES)[number],
+  [route, name, heading]: [string, string, string],
+) {
+  await page.goto(route)
+  await page.waitForFunction(
+    (t) => document.documentElement.classList.contains('dark') === (t === 'dark'),
+    theme, { timeout: 10_000 },
+  )
+  await page.waitForFunction(
+    (h) => [...document.querySelectorAll('h1')].some((el) => (el.textContent ?? '').normalize('NFC').toLowerCase().includes(h)),
+    heading.normalize('NFC').toLowerCase(), { timeout: 15_000 },
+  )
+  // Shoot <main> only (excludes sidebar profile).
+  await unlockForCapture(page)
+  await page.locator('main').screenshot({ path: `${OUT_DIR}/${name}-${theme}.png` })
+}
+
 test.describe('pilot after-capture @desktop', () => {
   test.skip(!SUPER.email || !SUPER.password, 'E2E_SUPER_* not set')
   test('capture pilot routes light+dark', async ({ page }) => {
@@ -88,20 +117,7 @@ test.describe('pilot after-capture @desktop', () => {
     await login(page)
     for (const theme of THEMES) {
       await page.evaluate((t) => localStorage.setItem('theme', t), theme)
-      for (const [route, name, heading] of ROUTES) {
-        await page.goto(route)
-        await page.waitForFunction(
-          (t) => document.documentElement.classList.contains('dark') === (t === 'dark'),
-          theme, { timeout: 10_000 },
-        )
-        await page.waitForFunction(
-          (h) => [...document.querySelectorAll('h1')].some((el) => (el.textContent ?? '').normalize('NFC').toLowerCase().includes(h)),
-          heading.normalize('NFC').toLowerCase(), { timeout: 15_000 },
-        )
-        // Shoot <main> only (excludes sidebar profile).
-        await unlockForCapture(page)
-        await page.locator('main').screenshot({ path: `${OUT_DIR}/${name}-${theme}.png` })
-      }
+      for (const entry of ROUTES) await captureRoute(page, theme, entry)
     }
   })
 
@@ -140,6 +156,28 @@ test.describe('pilot after-capture @desktop', () => {
     expect(overflow.doc).toBeLessThanOrEqual(1)
     await unlockForCapture(page)
     await page.locator('main').screenshot({ path: `${OUT_DIR}/stores-longtext-light.png` })
+  })
+})
+
+// /gioi-thieu — OPT-IN, cần ĐỦ CẢ HAI điều kiện (audit test-tooling, P1#1):
+//   1. SERVER đang chạy phải bật REFERRAL_ENABLED=true — flag đọc server-side
+//      trong app/(dashboard)/gioi-thieu/page.tsx; tắt thì redirect '/targets'
+//      trước khi render, không heading nào xuất hiện.
+//   2. TIẾN TRÌNH playwright cũng phải có REFERRAL_ENABLED=true — đây là điều
+//      kiện của test.skip bên dưới. Biến môi trường của runner KHÔNG tự truyền
+//      sang server, nên phải đặt ở cả hai chỗ; đặt mỗi bên một nơi thì hoặc là
+//      test skip oan, hoặc là test chạy rồi chết vì redirect.
+//   REFERRAL_ENABLED=true npx playwright test e2e/ui-pilot-capture.spec.ts
+test.describe('pilot after-capture /gioi-thieu (opt-in) @desktop', () => {
+  test.skip(!SUPER.email || !SUPER.password, 'E2E_SUPER_* not set')
+  test.skip(process.env.REFERRAL_ENABLED !== 'true', 'REFERRAL_ENABLED tắt — /gioi-thieu redirect về /targets')
+  test('capture /gioi-thieu light+dark', async ({ page }) => {
+    test.setTimeout(120_000)
+    await login(page)
+    for (const theme of THEMES) {
+      await page.evaluate((t) => localStorage.setItem('theme', t), theme)
+      await captureRoute(page, theme, REFERRAL_ROUTE)
+    }
   })
 })
 
