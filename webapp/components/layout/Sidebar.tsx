@@ -32,6 +32,7 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { resolveActiveHref } from '@/lib/layout/sidebarNav'
 import { isSuperAdmin } from '@/lib/authz'
 import { CYCLE_COUNT_DEPT_ID } from '@/lib/inventory/constants'
 import { POLICY_DEPT_ID } from '@/lib/fs/constants'
@@ -57,21 +58,33 @@ const ROLE_LABELS: Record<string, string> = {
   sm:            'SM',
 }
 
+// 3 TRẠNG THÁI HIỂN THỊ của một hàng sidebar (contract active, audit P1#1):
+//  - 'active'  : ĐÚNG MỘT phần tử trong cả sidebar — nền `bg-sidebar-accent`.
+//  - 'context' : mục CHA accordion đang chứa trang hiện tại. Chỉ đổi MÀU CHỮ +
+//                icon, TUYỆT ĐỐI KHÔNG nền — nếu cha cũng có nền thì tại
+//                /inventory/trf và /fs/products cha lẫn con cùng sáng, người
+//                dùng không biết đâu là trang mình đang đứng.
+//  - 'idle'    : còn lại.
+// Khi thu gọn, 'context' vẫn chỉ là tint icon (không nền) — cùng một class.
+type ItemState = 'active' | 'context' | 'idle'
+
 // Pattern class dùng chung cho MỌI hàng của sidebar (link, nút accordion, nút
 // thu gọn) — trước đây lặp nguyên văn 6 lần trong file này.
-function itemCls(active: boolean, collapsed: boolean) {
+function itemCls(state: ItemState, collapsed: boolean) {
   return cn(
     'flex items-center gap-3 rounded-md py-2 text-sm transition-colors',
     collapsed ? 'justify-center px-0' : 'px-3',
-    active
-      ? 'bg-sidebar-accent text-primary font-medium'
-      : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-primary/80',
+    state === 'active' && 'bg-sidebar-accent text-primary font-medium',
+    state === 'context' && 'text-primary hover:bg-sidebar-accent/60',
+    state === 'idle' && 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-primary/80',
   )
 }
 
 // Một hàng điều hướng. Khi thu gọn: bỏ label, tooltip = `title` native (không
 // kéo thêm primitive Radix — sidebar là desktop-only), badge đếm thu về chấm
 // nhỏ ở góc icon.
+// `aria-current="page"` đi kèm ĐÚNG hàng active — screen reader phải nghe được
+// cùng một thông tin mà nền màu đang nói với người nhìn.
 function NavLink({
   href, label, icon: Icon, active, collapsed, prefetch, badge = 0,
 }: {
@@ -88,7 +101,8 @@ function NavLink({
       href={href}
       prefetch={prefetch}
       title={collapsed ? label : undefined}
-      className={cn(itemCls(active, collapsed), collapsed && 'relative whitespace-nowrap')}
+      aria-current={active ? 'page' : undefined}
+      className={cn(itemCls(active ? 'active' : 'idle', collapsed), collapsed && 'relative whitespace-nowrap')}
     >
       <Icon className="h-4 w-4 shrink-0" />
       {!collapsed && <span className="flex-1">{label}</span>}
@@ -160,23 +174,23 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
   const showFs = isFsStore || isSuper || (role === 'admin' && profile?.department_id === POLICY_DEPT_ID)
   const [fsOpen, setFsOpen] = useState(() => pathname.startsWith('/fs') || isFsStore)
 
-  // Active = LONGEST-MATCH ĐƠN NHẤT. Gom mọi href đang hiển thị (item theo role
-  // + 2 link con của accordion + link gated KPI/Affiliate), giữ những href là
-  // tiền tố của URL hiện tại THEO RANH GIỚI '/' (cùng predicate với BottomNav),
-  // rồi cho href DÀI NHẤT thắng — mỗi lúc chỉ đúng 1 item sáng.
-  // Rule cũ so khớp từng item bằng `startsWith(href)` nên ở /tasks/schedules cả
-  // "Tasks" lẫn "Định kỳ" cùng sáng (và /tasks-bất-kỳ-chuỗi cũng khớp "Tasks").
-  // Tint của NÚT CHA accordion vẫn theo section-prefix như cũ (/inventory, /fs)
-  // để khi accordion đóng vẫn thấy mình đang ở trong nhóm nào.
-  const activeHref = [
+  // Active = LONGEST-MATCH ĐƠN NHẤT (hàm thuần `resolveActiveHref`, khoá bằng
+  // e2e/sidebar-nav.spec.ts). Gom mọi href đang hiển thị (item theo role + 2
+  // link con của accordion + link gated KPI/Affiliate) rồi để hàm chọn ĐÚNG 1.
+  const activeHref = resolveActiveHref(pathname, [
     ...visibleItems.map((item) => item.href),
     ...(showInventory ? ['/inventory/trf'] : []),
     ...(showKpi ? ['/targets/campaigns'] : []),
     ...(affiliateOverviewNav && !isFsStore ? ['/targets/campaigns/affiliate'] : []),
     ...(showFs ? ['/fs/products'] : []),
-  ]
-    .filter((href) => pathname === href || pathname.startsWith(href + '/'))
-    .sort((a, b) => b.length - a.length)[0]
+  ])
+
+  // "Context" của nút CHA accordion: đang đứng trong section nào. Giữ nguyên
+  // predicate section-prefix cũ (kể cả /inventory hub — trang không có mục nav
+  // riêng) NHƯNG hiển thị bằng màu chữ, KHÔNG bằng nền: nền active là tài sản
+  // độc quyền của `activeHref`.
+  const inInventorySection = pathname === '/inventory' || pathname.startsWith('/inventory/')
+  const inFsSection        = pathname === '/fs' || pathname.startsWith('/fs/')
 
   // Thu gọn sidebar — khởi tạo từ COOKIE đọc server-side (prop defaultCollapsed):
   // HTML đầu tiên đã đúng bề rộng ⇒ không hydration mismatch, không nháy layout
@@ -235,7 +249,7 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
                 setInvOpen((o) => !o)
               }}
               title={collapsed ? 'Inventory' : undefined}
-              className={cn(itemCls(pathname.startsWith('/inventory'), collapsed), 'w-full', collapsed && 'whitespace-nowrap')}
+              className={cn(itemCls(inInventorySection ? 'context' : 'idle', collapsed), 'w-full', collapsed && 'whitespace-nowrap')}
             >
               <Boxes className="h-4 w-4 shrink-0" />
               {!collapsed && (
@@ -299,7 +313,7 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
                 setFsOpen((o) => !o)
               }}
               title={collapsed ? 'Quản lý FS' : undefined}
-              className={cn(itemCls(pathname.startsWith('/fs'), collapsed), 'w-full', collapsed && 'whitespace-nowrap')}
+              className={cn(itemCls(inFsSection ? 'context' : 'idle', collapsed), 'w-full', collapsed && 'whitespace-nowrap')}
             >
               <Package className="h-4 w-4 shrink-0" />
               {!collapsed && (
@@ -333,7 +347,7 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
           aria-expanded={!collapsed}
           aria-label="Thu gọn thanh điều hướng"
           title={collapsed ? 'Mở rộng' : undefined}
-          className={cn(itemCls(false, collapsed), 'w-full', collapsed && 'whitespace-nowrap')}
+          className={cn(itemCls('idle', collapsed), 'w-full', collapsed && 'whitespace-nowrap')}
         >
           {collapsed ? (
             <ChevronsRight className="h-4 w-4 shrink-0" />
