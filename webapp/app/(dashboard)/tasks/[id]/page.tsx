@@ -340,7 +340,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
     // lg:h-full constrains the two-column body to viewport height on desktop so
     // each column gets independent overflow-y-auto scroll. On mobile no height
     // constraint — <main> (overflow-y-auto) handles natural page scroll.
-    <div className="flex flex-col lg:h-full">
+    <div data-layout-width="fluid" className="flex flex-col lg:h-full">
       {userRole !== 'staff' && <AutoRefresh intervalMs={30000} />}
 
       {/* ── Page header (full width) ── */}

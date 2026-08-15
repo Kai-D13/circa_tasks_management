@@ -30,7 +30,7 @@ export default async function AnnouncementsPage() {
     // Surface (don't read a broken migration/RLS as "no announcements").
     console.error('[announcements] list query failed:', annErr.message)
     return (
-      <div className="p-4 md:p-6 max-w-3xl mx-auto">
+      <div data-layout-width="centered" className="p-4 md:p-6 max-w-3xl mx-auto">
         <p className="text-sm text-destructive">Không tải được bảng tin. Vui lòng thử lại sau hoặc báo Admin.</p>
       </div>
     )
@@ -71,7 +71,7 @@ export default async function AnnouncementsPage() {
   }
 
   return (
-    <div className="p-4 md:p-6 space-y-4 max-w-3xl mx-auto">
+    <div data-layout-width="centered" className="p-4 md:p-6 space-y-4 max-w-3xl mx-auto">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Megaphone className="h-5 w-5 text-primary" />

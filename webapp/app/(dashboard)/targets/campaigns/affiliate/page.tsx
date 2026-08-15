@@ -47,7 +47,7 @@ const vnd = (n: number) => `${new Intl.NumberFormat('vi-VN').format(Math.round(n
 
 function PageShell({ nav, children }: { nav?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="p-4 md:p-6 space-y-4">
+    <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
       <PageHeader title="Doanh số Affiliate — Circa Online" icon={Link2} />
       {nav}
       {children}

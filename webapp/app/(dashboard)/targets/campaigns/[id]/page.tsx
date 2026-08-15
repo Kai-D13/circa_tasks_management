@@ -146,7 +146,7 @@ export default async function CampaignDetailPage({
     // body không bao giờ scroll ngang).
     // Batch UI 15/08: bỏ ternary — TOÀN TRANG fluid, tab Cấu hình cũng vậy vì
     // trung tâm của nó là bảng nhiều cột; hết dải trắng phải khi zoom-out.
-    <div className="p-4 md:p-6 space-y-4">
+    <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
       <div>
         <Link href="/targets/campaigns" className="text-xs text-muted-foreground hover:text-primary inline-flex items-center gap-1">
           <ChevronLeft className="h-3.5 w-3.5" /> Chiến dịch KPI

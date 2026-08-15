@@ -420,7 +420,7 @@ export default async function TargetsPage({
     // r3: lỗi query store → ErrorState, không redirect che sự cố.
     if (smStoresRes.error) {
       return (
-        <div className="p-4 md:p-6 space-y-4">
+        <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
           <PageHeader title="Doanh số chiến dịch" icon={TrendingUp} />
           <ErrorState message="Không tải được danh sách cửa hàng được phân công" hint={`${smStoresRes.error} — thử tải lại hoặc báo Admin.`} />
         </div>
@@ -447,7 +447,7 @@ export default async function TargetsPage({
       const msg = (tRes.error ?? aRes.error)!.message
       console.error('[targets] sm dashboard query failed:', msg)
       return (
-        <div className="p-4 md:p-6 space-y-4">
+        <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
           <PageHeader title="Doanh số chiến dịch" icon={TrendingUp} />
           <ErrorState message="Không tải được dữ liệu chiến dịch" hint={`${msg} — thử tải lại hoặc báo Admin.`} />
         </div>
@@ -476,7 +476,7 @@ export default async function TargetsPage({
       if (scope !== 'ok' || !entry) {
         // r3: campaign ngoài scope → forbidden, KHÔNG fallback dữ liệu khác.
         return (
-          <div className="p-4 md:p-6 space-y-4">
+          <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
             <PageHeader title="Doanh số chiến dịch" icon={TrendingUp} />
             <Link href="/targets" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0">← Danh sách chiến dịch</Link>
             <ErrorState
@@ -555,7 +555,7 @@ export default async function TargetsPage({
     }
 
     return (
-      <div className="p-4 md:p-6 space-y-4">
+      <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
         <PageHeader
           title="Doanh số chiến dịch"
           icon={TrendingUp}
@@ -661,7 +661,7 @@ export default async function TargetsPage({
       </>
     ) : null
     return (
-      <div className="p-4 md:p-6 space-y-4">
+      <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
         <PageHeader
           title="Doanh số chiến dịch"
           icon={TrendingUp}
@@ -906,7 +906,7 @@ export default async function TargetsPage({
     .sort((a, b) => (a.stores?.name ?? '').localeCompare(b.stores?.name ?? '', 'vi'))
 
   return (
-    <div className="p-4 md:p-6 space-y-4">
+    <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
       <PageHeader
         title={`${TITLE[period]} theo cửa hàng`}
         icon={TrendingUp}

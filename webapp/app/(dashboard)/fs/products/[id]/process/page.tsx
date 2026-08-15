@@ -69,7 +69,7 @@ export default async function FsProcessPage({ params }: { params: Promise<{ id: 
   // Trên mobile mx-auto là no-op (viewport < cap nên cap không bind) — màn
   // staff giữ nguyên pixel.
   return (
-    <div className="p-4 space-y-4 max-w-4xl mx-auto">
+    <div data-layout-width="centered" className="p-4 space-y-4 max-w-4xl mx-auto">
       <Link href="/fs/products" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
         <ChevronLeft className="h-4 w-4" /> Danh sách sản phẩm bổ sung thông tin
       </Link>
