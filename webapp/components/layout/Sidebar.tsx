@@ -75,9 +75,9 @@ const FOOTER_SLOT = 'h-[36px] w-[36px]'
 
 // Chỉ bọc IconTooltip khi THU GỌN — lúc mở rộng nhãn đã nằm ngay trên hàng,
 // thêm tooltip là nhiễu. Trả thẳng children để không sinh thêm thẻ bọc.
-// ⚠ Chỉ dùng cho control NGOÀI vùng cuộn (nút Thu gọn + footer): popup của
-// IconTooltip là `absolute` nên sẽ bị `<nav overflow-y-auto>` cắt — các hàng
-// điều hướng bên trong nav vì vậy vẫn giữ `title` + `aria-label`.
+// Dùng được cho MỌI control của sidebar, kể cả hàng nav bên trong
+// `<nav overflow-y-auto>`: IconTooltip đã chuyển sang base-ui Tooltip có
+// `Portal`, popup treo vào <body> nên vùng cuộn không cắt được nữa.
 function CollapsedTip({
   label, collapsed, className, children,
 }: {
@@ -106,10 +106,10 @@ function itemCls(state: ItemState, collapsed: boolean) {
 }
 
 // Một hàng điều hướng. Khi thu gọn: bỏ label, badge đếm thu về chấm nhỏ ở góc
-// icon, và tooltip vẫn là `title` native — KHÔNG dùng IconTooltip ở đây vì hàng
-// nav nằm trong `<nav overflow-y-auto>`, mà popup `absolute` sẽ bị vùng cuộn
-// cắt (đo trên Chromium: popup 107px bị cắt ở mép 64px). Bù lại bằng
-// `aria-label` để người dùng screen reader vẫn nghe đúng tên mục.
+// icon, và nhãn hiện qua IconTooltip (portal) chứ KHÔNG còn `title` native —
+// `title` không bao giờ bung ra khi tab bằng bàn phím. `aria-label` vẫn giữ vì
+// tooltip base-ui không đặt tên cho phần tử; và dùng CHUNG một chuỗi với
+// tooltip để tai nghe được đúng cái mắt đọc được (kể cả số badge).
 // `aria-current="page"` đi kèm ĐÚNG hàng active — screen reader phải nghe được
 // cùng một thông tin mà nền màu đang nói với người nhìn.
 function NavLink({
@@ -123,30 +123,29 @@ function NavLink({
   prefetch?: boolean
   badge?: number
 }) {
+  const collapsedLabel = badge > 0 ? `${label} (${badge})` : label
   return (
-    <Link
-      href={href}
-      prefetch={prefetch}
-      title={collapsed ? label : undefined}
-      // Thu gọn: icon không còn chữ nào ⇒ tên có thể đọc được phải do
-      // `aria-label` cấp; kèm số badge để screen reader không mất thông tin mà
-      // người nhìn vẫn thấy trên chấm đếm.
-      aria-label={collapsed ? (badge > 0 ? `${label} (${badge})` : label) : undefined}
-      aria-current={active ? 'page' : undefined}
-      className={cn(itemCls(active ? 'active' : 'idle', collapsed), collapsed && 'relative whitespace-nowrap')}
-    >
-      <Icon className="h-4 w-4 shrink-0" />
-      {!collapsed && <span className="flex-1">{label}</span>}
-      {badge > 0 && (collapsed ? (
-        <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-0.5 rounded-full bg-primary text-white text-[9px] flex items-center justify-center">
-          {badge > 99 ? '99+' : badge}
-        </span>
-      ) : (
-        <span className="ml-auto min-w-5 h-5 px-1 rounded-full bg-primary text-white text-[10px] font-semibold flex items-center justify-center">
-          {badge > 99 ? '99+' : badge}
-        </span>
-      ))}
-    </Link>
+    <CollapsedTip label={collapsedLabel} collapsed={collapsed}>
+      <Link
+        href={href}
+        prefetch={prefetch}
+        aria-label={collapsed ? collapsedLabel : undefined}
+        aria-current={active ? 'page' : undefined}
+        className={cn(itemCls(active ? 'active' : 'idle', collapsed), collapsed && 'relative whitespace-nowrap')}
+      >
+        <Icon className="h-4 w-4 shrink-0" />
+        {!collapsed && <span className="flex-1">{label}</span>}
+        {badge > 0 && (collapsed ? (
+          <span className="absolute -top-0.5 -right-0.5 min-w-4 h-4 px-0.5 rounded-full bg-primary text-white text-[9px] flex items-center justify-center">
+            {badge > 99 ? '99+' : badge}
+          </span>
+        ) : (
+          <span className="ml-auto min-w-5 h-5 px-1 rounded-full bg-primary text-white text-[10px] font-semibold flex items-center justify-center">
+            {badge > 99 ? '99+' : badge}
+          </span>
+        ))}
+      </Link>
+    </CollapsedTip>
   )
 }
 
@@ -280,29 +279,30 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
         {/* Inventory — collapsible parent → submodules (TRF) */}
         {showInventory && (
           <div>
-            <button
-              type="button"
-              // Thu gọn: nút cha KHÔNG điều hướng — mở rộng sidebar rồi bung accordion.
-              onClick={() => {
-                if (collapsed) { applyCollapsed(false); setInvOpen(true); return }
-                setInvOpen((o) => !o)
-              }}
-              title={collapsed ? 'Inventory' : undefined}
-              aria-label={collapsed ? 'Inventory' : undefined}
-              // Vùng con chỉ tồn tại trong DOM khi đang mở ⇒ `aria-controls`
-              // cũng chỉ trỏ khi đó (không để IDREF chết).
-              aria-expanded={!collapsed && invOpen}
-              aria-controls={!collapsed && invOpen ? 'sidebar-inventory-sub' : undefined}
-              className={cn(itemCls(inInventorySection ? 'context' : 'idle', collapsed), 'w-full', collapsed && 'whitespace-nowrap')}
-            >
-              <Boxes className="h-4 w-4 shrink-0" />
-              {!collapsed && (
-                <>
-                  <span className="flex-1 text-left">Inventory</span>
-                  <ChevronRight className={cn('h-4 w-4 transition-transform', invOpen && 'rotate-90')} />
-                </>
-              )}
-            </button>
+            <CollapsedTip label="Inventory" collapsed={collapsed}>
+              <button
+                type="button"
+                // Thu gọn: nút cha KHÔNG điều hướng — mở rộng sidebar rồi bung accordion.
+                onClick={() => {
+                  if (collapsed) { applyCollapsed(false); setInvOpen(true); return }
+                  setInvOpen((o) => !o)
+                }}
+                aria-label={collapsed ? 'Inventory' : undefined}
+                // Vùng con chỉ tồn tại trong DOM khi đang mở ⇒ `aria-controls`
+                // cũng chỉ trỏ khi đó (không để IDREF chết).
+                aria-expanded={!collapsed && invOpen}
+                aria-controls={!collapsed && invOpen ? 'sidebar-inventory-sub' : undefined}
+                className={cn(itemCls(inInventorySection ? 'context' : 'idle', collapsed), 'w-full', collapsed && 'whitespace-nowrap')}
+              >
+                <Boxes className="h-4 w-4 shrink-0" />
+                {!collapsed && (
+                  <>
+                    <span className="flex-1 text-left">Inventory</span>
+                    <ChevronRight className={cn('h-4 w-4 transition-transform', invOpen && 'rotate-90')} />
+                  </>
+                )}
+              </button>
+            </CollapsedTip>
             {!collapsed && invOpen && (
               <div id="sidebar-inventory-sub" className="mt-0.5 space-y-0.5 pl-4">
                 <NavLink
@@ -349,27 +349,28 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
         {/* Quản lý FS — collapsible parent → submodules (Sản phẩm) */}
         {showFs && (
           <div>
-            <button
-              type="button"
-              // Thu gọn: nút cha KHÔNG điều hướng — mở rộng sidebar rồi bung accordion.
-              onClick={() => {
-                if (collapsed) { applyCollapsed(false); setFsOpen(true); return }
-                setFsOpen((o) => !o)
-              }}
-              title={collapsed ? 'Quản lý FS' : undefined}
-              aria-label={collapsed ? 'Quản lý FS' : undefined}
-              aria-expanded={!collapsed && fsOpen}
-              aria-controls={!collapsed && fsOpen ? 'sidebar-fs-sub' : undefined}
-              className={cn(itemCls(inFsSection ? 'context' : 'idle', collapsed), 'w-full', collapsed && 'whitespace-nowrap')}
-            >
-              <Package className="h-4 w-4 shrink-0" />
-              {!collapsed && (
-                <>
-                  <span className="flex-1 text-left">Quản lý FS</span>
-                  <ChevronRight className={cn('h-4 w-4 transition-transform', fsOpen && 'rotate-90')} />
-                </>
-              )}
-            </button>
+            <CollapsedTip label="Quản lý FS" collapsed={collapsed}>
+              <button
+                type="button"
+                // Thu gọn: nút cha KHÔNG điều hướng — mở rộng sidebar rồi bung accordion.
+                onClick={() => {
+                  if (collapsed) { applyCollapsed(false); setFsOpen(true); return }
+                  setFsOpen((o) => !o)
+                }}
+                aria-label={collapsed ? 'Quản lý FS' : undefined}
+                aria-expanded={!collapsed && fsOpen}
+                aria-controls={!collapsed && fsOpen ? 'sidebar-fs-sub' : undefined}
+                className={cn(itemCls(inFsSection ? 'context' : 'idle', collapsed), 'w-full', collapsed && 'whitespace-nowrap')}
+              >
+                <Package className="h-4 w-4 shrink-0" />
+                {!collapsed && (
+                  <>
+                    <span className="flex-1 text-left">Quản lý FS</span>
+                    <ChevronRight className={cn('h-4 w-4 transition-transform', fsOpen && 'rotate-90')} />
+                  </>
+                )}
+              </button>
+            </CollapsedTip>
             {!collapsed && fsOpen && (
               <div id="sidebar-fs-sub" className="mt-0.5 space-y-0.5 pl-4">
                 <NavLink
