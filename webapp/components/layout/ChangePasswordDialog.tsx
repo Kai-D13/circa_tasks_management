@@ -12,8 +12,11 @@ import { KeyRound, X } from 'lucide-react'
 // 'icon'    = 36px outline slot for the Sidebar r2 footer action row — same
 //             geometry as NotificationBell/ThemeToggle/Đăng xuất, which is why
 //             it cannot reuse 'mobile' (that one is white-on-orange, 40px).
-export function ChangePasswordDialog({ variant = 'sidebar' }: { variant?: 'sidebar' | 'mobile' | 'icon' }) {
-  const [open, setOpen]           = useState(false)
+// 'headless' = KHÔNG render trigger, mở sẵn ngay khi mount và gọi `onClose` khi
+//             đóng — xem chú thích cùng tên ở EditProfileDialog (account sheet
+//             của MobileHeader phải đóng trước rồi mới mount dialog này).
+export function ChangePasswordDialog({ variant = 'sidebar', onClose }: { variant?: 'sidebar' | 'mobile' | 'icon' | 'headless'; onClose?: () => void }) {
+  const [open, setOpen]           = useState(variant === 'headless')
   const [newPass, setNewPass]     = useState('')
   const [confirm, setConfirm]     = useState('')
   const [clientErr, setClientErr] = useState('')
@@ -28,6 +31,7 @@ export function ChangePasswordDialog({ variant = 'sidebar' }: { variant?: 'sideb
 
   function handleClose() {
     setOpen(false)
+    onClose?.()
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -48,7 +52,7 @@ export function ChangePasswordDialog({ variant = 'sidebar' }: { variant?: 'sideb
 
   return (
     <>
-      {variant === 'mobile' ? (
+      {variant === 'headless' ? null : variant === 'mobile' ? (
         <Button
           variant="ghost"
           size="sm"

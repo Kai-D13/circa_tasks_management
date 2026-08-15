@@ -13,12 +13,17 @@ import { UserCog, X } from 'lucide-react'
 // icon-only trigger styled like the other MobileHeader action buttons; 'icon' =
 // 36px outline slot for the Sidebar r2 footer action row. Mirrors
 // ChangePasswordDialog so the header controls stay consistent.
-export function EditProfileDialog({ variant = 'sidebar' }: { variant?: 'sidebar' | 'mobile' | 'icon' }) {
+// 'headless' = KHÔNG render trigger, mở sẵn ngay khi mount và gọi `onClose` khi
+// đóng. Dùng khi nút bấm nằm trong một lớp nổi khác (account sheet của
+// MobileHeader): sheet phải đóng TRƯỚC rồi mới mount dialog này ở ngoài, nên
+// trigger không thể sống cùng chỗ với nội dung dialog.
+export function EditProfileDialog({ variant = 'sidebar', onClose }: { variant?: 'sidebar' | 'mobile' | 'icon' | 'headless'; onClose?: () => void }) {
   const profile    = useUserStore((s) => s.profile)
   const setProfile = useUserStore((s) => s.setProfile)
-  const [open, setOpen]           = useState(false)
-  const [fullName, setFullName]   = useState('')
-  const [phone, setPhone]         = useState('')
+  const [open, setOpen]           = useState(variant === 'headless')
+  // 'headless' mở ngay lúc mount nên không đi qua handleOpen — seed từ profile.
+  const [fullName, setFullName]   = useState(profile?.full_name ?? '')
+  const [phone, setPhone]         = useState(profile?.phone_number ?? '')
   const [clientErr, setClientErr] = useState('')
   const [pending, startTransition] = useTransition()
 
@@ -31,6 +36,7 @@ export function EditProfileDialog({ variant = 'sidebar' }: { variant?: 'sidebar'
 
   function handleClose() {
     setOpen(false)
+    onClose?.()
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -53,7 +59,7 @@ export function EditProfileDialog({ variant = 'sidebar' }: { variant?: 'sidebar'
 
   return (
     <>
-      {variant === 'mobile' ? (
+      {variant === 'headless' ? null : variant === 'mobile' ? (
         <Button
           variant="ghost"
           size="sm"
