@@ -7,8 +7,8 @@ import { createClient } from '@/lib/supabase/client'
 import { useUserStore } from '@/store/userStore'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
+import { TagBadge, type TagHue } from '@/components/ds/TagBadge'
 import {
   LayoutDashboard,
   CheckSquare,
@@ -40,11 +40,14 @@ import { ChangePasswordDialog } from '@/components/layout/ChangePasswordDialog'
 import { EditProfileDialog } from '@/components/layout/EditProfileDialog'
 import { ThemeToggle } from '@/components/layout/ThemeToggle'
 
-const ROLE_COLORS: Record<string, string> = {
-  admin:         'bg-orange-100 text-orange-700',
-  store_manager: 'bg-blue-100 text-blue-700',
-  staff:         'bg-green-100 text-green-700',
-  sm:            'bg-purple-100 text-purple-700',
+// Hue categorical của ds/TagBadge (có sẵn cặp light + dark) thay cho bảng màu
+// raw chỉ-light cũ. TagBadge không có orange/purple nên lấy hue gần nhất:
+// admin orange→amber, sm purple→indigo.
+const ROLE_HUES: Record<string, TagHue> = {
+  admin:         'amber',
+  store_manager: 'blue',
+  staff:         'green',
+  sm:            'indigo',
 }
 
 const ROLE_LABELS: Record<string, string> = {
@@ -365,9 +368,9 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
             </div>
           </div>
           {role && (
-            <Badge className={cn('text-xs w-full justify-center', ROLE_COLORS[role])}>
+            <TagBadge hue={ROLE_HUES[role] ?? 'slate'} className="w-full justify-center">
               {ROLE_LABELS[role] ?? role}
-            </Badge>
+            </TagBadge>
           )}
           {role === 'staff' && <EditProfileDialog />}
           <ChangePasswordDialog />
