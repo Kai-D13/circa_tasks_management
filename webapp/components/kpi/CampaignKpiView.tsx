@@ -488,7 +488,7 @@ export function CampaignKpiView({
               Dùng aspect-ratio chứ KHÔNG phải min-height px: chiều cao svg là
               hàm của bề ngang, một con số px chỉ đúng ở đúng một viewport và
               sai ở mọi viewport còn lại. */}
-          <div className="aspect-[360/170] w-full">
+          <div data-chart-frame="" className="aspect-[360/170] w-full">
             {daily.length > 0 ? (
               <CampaignDailyChart start={sel.start_date} end={sel.end_date} daily={daily} todayISO={todayISO} breakdown={showBreakdown} metricType={sel.metric_type} series={series} />
             ) : (
