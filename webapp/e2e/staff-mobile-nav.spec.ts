@@ -12,12 +12,19 @@ const PASSWORD = process.env.E2E_STAFF_PASSWORD
 // THỨ TỰ là hợp đồng, không phải danh sách: chốt với stakeholder 15/08 —
 // Doanh số nằm CHÍNH GIỮA (2 tab thường mỗi bên) vì nó render thành nút tròn
 // nổi. Đổi thứ tự ở BottomNav mà quên chỗ này thì assert hrefs dưới đây đỏ.
+// `icon` = class lucide render ra. M1.3 chốt ChartNoAxesCombined cho Doanh số
+// (biểu đồ trung tính — mũi tên TrendingUp đọc như khẳng định "đang tăng"
+// trong khi số có thể đang giảm) và Newspaper cho Bảng tin (bản tin để ĐỌC,
+// không phải loa đẩy). Khoá cả 5 như đã khoá thứ tự: đổi icon phải là cố ý.
+// ⚠ Tên class KHÔNG suy ra được từ tên import — CheckSquare render ra
+// `lucide-square-check-big` (alias trong lucide v1). Các giá trị dưới đây đọc
+// từ render thật, đừng đoán khi thêm tab mới.
 const TABS = [
-  { label: 'Tasks', path: '/tasks' },
-  { label: 'Toa thuốc', path: '/prescriptions' },
-  { label: 'Doanh số', path: '/targets' }, // ← nút giữa nổi
-  { label: 'Bảng tin', path: '/announcements' },
-  { label: 'Tồn kho', path: '/inventory' },
+  { label: 'Tasks', path: '/tasks', icon: 'lucide-square-check-big' },
+  { label: 'Toa thuốc', path: '/prescriptions', icon: 'lucide-file-image' },
+  { label: 'Doanh số', path: '/targets', icon: 'lucide-chart-no-axes-combined' }, // ← nút giữa nổi
+  { label: 'Bảng tin', path: '/announcements', icon: 'lucide-newspaper' },
+  { label: 'Tồn kho', path: '/inventory', icon: 'lucide-boxes' },
 ]
 
 const CENTER = TABS[2]
@@ -82,6 +89,15 @@ test.describe('staff bottom nav @mobile', () => {
     // nên so text sẽ giòn; href thì không).
     const hrefs = await nav.getByRole('link').evaluateAll((els) => els.map((el) => el.getAttribute('href')))
     expect(hrefs).toEqual(TABS.map((t) => t.path))
+
+    // Icon từng tab (M1.3) — cả 5 render một lượt nên kiểm ở đây, không cần
+    // điều hướng qua từng route mới đo được.
+    for (const tab of TABS) {
+      await expect(
+        nav.getByRole('link', { name: tab.label }).locator(`svg.${tab.icon}`),
+        `${tab.path}: sai icon (chờ .${tab.icon})`,
+      ).toHaveCount(1)
+    }
 
     // Nút giữa: đúng là link /targets và thật sự render dạng nút tròn.
     const centerLink = nav.getByRole('link', { name: CENTER.label })

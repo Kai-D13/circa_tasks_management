@@ -127,13 +127,14 @@ async function expectMobileHeader(page: Page, where: string) {
     `${where}: mất nút mở account sheet (avatar)`,
   ).toBeVisible()
 
-  // Tiêu đề = tên người dùng, hoặc fallback 'Circa Tasks' khi profile chưa có
-  // full_name. Rỗng ⇒ profile chưa nạp ⇒ ảnh không dùng được.
-  // CHỈ <p> — chữ "C" trong ô avatar là <span>, luôn khác rỗng nên đo nó thì
-  // assert này không bao giờ đỏ (các route ở đây đều là trang top-level, tiêu
-  // đề nằm trong <p>; nhánh sub-page dùng <span> không thuộc bộ ảnh này).
+  // M1.3: header top-level là NHẬN DIỆN, không phải danh tính — đúng chuỗi
+  // 'Circa Tasks', không còn `profile.full_name`. Khoá bằng toBe (không phải
+  // toContain) nên tên người dùng quay lại là đỏ ngay, không cần biết tên đó
+  // là gì. CHỈ <p>: chữ "C" trong ô avatar là <span>, luôn khác rỗng nên đo
+  // span thì assert không bao giờ bắt được gì.
   const title = (await header.locator('p').first().textContent())?.trim() ?? ''
-  expect(title.length, `${where}: tiêu đề header trống — profile chưa nạp?`).toBeGreaterThan(0)
+  expect(title, `${where}: tiêu đề header phải là "Circa Tasks" (M1.3 bỏ tên người dùng khỏi header)`)
+    .toBe('Circa Tasks')
 }
 
 // Phần tử cuối cùng của <main> KHÔNG được nằm dưới vùng thị giác của nút giữa —

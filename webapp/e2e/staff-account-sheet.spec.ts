@@ -112,6 +112,13 @@ test.describe('account sheet (MobileHeader) @mobile', () => {
     await expectSingleLayer(page, 'sheet vừa mở')
 
     const rows = sheet(page)
+
+    // M1.3: header đã bỏ `profile.full_name`, nên sheet là NƠI DUY NHẤT còn
+    // hiện danh tính. Mất chỗ này thì người dùng không còn cách nào xác nhận
+    // đang đăng nhập bằng tài khoản nào.
+    await expect(rows.locator('p').first(), 'sheet không hiện tên người dùng').not.toBeEmpty()
+    await expect(rows, 'sheet không hiện email đang đăng nhập').toContainText(EMAIL!)
+
     await expect(
       rows.getByRole('button', { name: 'Sửa hồ sơ' }),
       'thiếu hàng "Sửa hồ sơ" — tài khoản chạy test không phải staff?',
