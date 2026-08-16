@@ -616,10 +616,21 @@ test.describe('kpi campaign list row (Step 5.1) @desktop', () => {
   })
 
   test('STATUS_META + TEST badge: dùng token, KHÔNG còn màu chỉ-sáng', () => {
+    // Ranh giới bằng khoảng trắng/đầu-cuối chuỗi, KHÔNG dùng \b: bản trước viết
+    // regex qua một lớp escape và \b biến thành ký tự BACKSPACE (0x08) — pattern
+    // khi đó đi tìm ký tự điều khiển nên không bao giờ khớp, và guard này xanh
+    // GIẢ suốt. Canary ngay dưới tồn tại để đúng ca đó không lặp lại.
+    const RAW_COLOR = /(?:^|\s)(?:bg|text)-(?:gray|green|amber|red|purple|blue|yellow)-\d{2,3}(?:\/\d+)?(?=\s|$)/
+
+    // CANARY: pattern phải THẬT SỰ bắt được màu hardcode. Ai làm hỏng regex thì
+    // dòng này đỏ TRƯỚC, thay vì cả guard im lặng ngừng bảo vệ.
+    expect('bg-purple-100 text-purple-700', 'regex guard không còn bắt được màu hardcode').toMatch(RAW_COLOR)
+    expect('bg-status-info-bg text-status-info').not.toMatch(RAW_COLOR)
+
     const all = [...Object.values(STATUS_META).map((m) => m.cls), TEST_BADGE_CLS]
     for (const cls of all) {
       // gray/green/amber/purple-100… là cặp chỉ-sáng, dark mode đọc sai.
-      expect(cls, cls).not.toMatch(/(bg|text)-(gray|green|amber|red|purple|blue|yellow)-\d{2,3}/)
+      expect(cls, cls).not.toMatch(RAW_COLOR)
       expect(cls, cls).toMatch(/status-/)
     }
     // nhãn giữ nguyên — đây là commit đổi màu, không đổi chữ
