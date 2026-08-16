@@ -407,6 +407,21 @@ test.describe('kpi card value — 1 cửa hàng (batch /targets) @desktop', () =
     expect(campaignCardValue({ ...CUS, actualValue: null }).lines[0].value).toBe('—')
   })
 
+  // CANARY: snapshot partial/stale — actual_value đã null nhưng số phụ của kỳ
+  // trước còn nguyên. Card TUYỆT ĐỐI không được hiện "Chưa đồng bộ" cạnh số cũ.
+  test('CANARY chất lượng: chưa đồng bộ mà còn actual phụ cũ → vẫn "—", không rò số cũ', () => {
+    const v = campaignCardValue({ ...QUA, actualValue: null })
+    expect(v.synced).toBe(false)
+    expect(v.pct).toBe(0)
+    expect(v.tone).toBe('neutral')
+    expect(v.pctText).toBe('Chưa đồng bộ')
+    // Mục tiêu là CẤU HÌNH nên vẫn hiện; phần thực tế phải là '—'.
+    expect(v.lines[0].value).toBe('— / 900 đơn')
+    expect(v.lines[1].value).toBe('— / 190.540₫')
+    expect(v.lines.some((l) => l.value.includes('1.046'))).toBe(false)
+    expect(v.lines.some((l) => l.value.includes('194.025'))).toBe(false)
+  })
+
   test('ACTUAL 0 THẬT: vẫn là đã đồng bộ, hiện 0 — KHÁC hẳn chưa đồng bộ', () => {
     const g = campaignCardValue({ ...GMV, actualValue: 0 })
     expect(g.synced).toBe(true)

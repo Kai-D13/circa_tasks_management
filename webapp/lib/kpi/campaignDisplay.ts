@@ -360,9 +360,15 @@ export function campaignCardValue(v: CampaignCardInput): CampaignCardValue {
   const synced = prog.synced
 
   if (pres.kind === 'offline_order_aov') {
+    // Trạng thái "đã đồng bộ" lấy DUY NHẤT từ actual_value (điểm hoàn thành do
+    // RPC ghi). Snapshot partial/stale có thể còn offline_order_count và
+    // actual_offline cũ trong khi actual_value đã null — nếu format thẳng, card
+    // hiện "Chưa đồng bộ" ngay cạnh "1.046 / 900 đơn" của kỳ trước.
+    // Ép null theo `synced`: MỤC TIÊU vẫn hiện (nó là cấu hình, không phải kết
+    // quả), phần thực tế thành '—'.
     const q = orderAovMetricLines({
-      actualOrder: v.offlineOrderCount,
-      actualNet: v.actualOffline,
+      actualOrder: synced ? v.offlineOrderCount : null,
+      actualNet: synced ? v.actualOffline : null,
       orderTarget: v.orderTarget,
       aovTarget: v.aovTarget,
     })
