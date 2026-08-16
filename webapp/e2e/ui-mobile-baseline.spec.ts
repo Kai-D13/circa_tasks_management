@@ -38,15 +38,31 @@ import { STAFF_STATE } from './authState'
 // ảnh y hệt ⇒ giữ tag @mobile (context điện thoại thật: isMobile/hasTouch)
 // nhưng CHỈ chụp dưới `mobile-390`, project kia skip tường minh.
 //
-// ── CHẠY ────────────────────────────────────────────────────────────────────
-// 1) Dựng server từ chính branch đang review:
-//      cd webapp && npm run build && PORT=3010 npm start
+// ── CHẠY (PowerShell — shell của máy dev này) ───────────────────────────────
+// KHÔNG dùng cú pháp Bash `PORT=3010 npm start`: PowerShell không có tiền tố
+// biến môi trường trước lệnh, và `&&` cũng không tồn tại trong Windows
+// PowerShell 5.1.
+//
+// 1) Dựng server PRODUCTION từ chính branch đang review:
+//      cd C:\webapp_management\webapp
+//      npm run build
+//      $env:PORT='3010'; npm start
+//    `output: 'standalone'` trong next.config.ts KHÔNG cản `next start` —
+//    standalone chỉ là artifact THÊM cho Docker (đã verify: CSS trả 200).
+//    ĐỪNG đổi sang `npm run dev`: dev-overlay, double-render của StrictMode và
+//    CSS chưa tối ưu làm ảnh lệch khỏi thứ stakeholder thật sự nhìn thấy — mà
+//    đây chính là bộ ảnh để họ duyệt.
+//
 // 2) Terminal khác:
-//      E2E_BASE_URL=http://localhost:3010 \
-//      E2E_STAFF_EMAIL=… E2E_STAFF_PASSWORD=… \
+//      cd C:\webapp_management\webapp
+//      $env:E2E_BASE_URL='http://localhost:3010'
+//      $env:E2E_STAFF_EMAIL='…'; $env:E2E_STAFF_PASSWORD='…'
 //      npx playwright test e2e/ui-mobile-baseline.spec.ts --project=mobile-390 --workers=1
+//
+// Dùng localhost, KHÔNG phải 127.0.0.1 — cookie Supabase đặt cờ Secure và chỉ
+// localhost mới được coi là secure context (auth.setup.ts fail sớm nếu sai).
 // playwright.config.ts KHÔNG nạp .env.local (không dotenv, không globalSetup) ⇒
-// phải export biến ở shell. Thiếu credential thì skip, không đỏ.
+// phải set biến ở shell. Thiếu credential thì skip, không đỏ.
 //
 // ── ẢNH RA ĐÂU ──────────────────────────────────────────────────────────────
 // docs/ui/mobile-baseline/ — ĐÃ CHO VÀO .gitignore (root). Ảnh chụp dữ liệu

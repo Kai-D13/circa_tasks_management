@@ -15,7 +15,8 @@ import { test, expect, type Page } from '@playwright/test'
 //   table-header) — mask không chống được LAYOUT SHIFT khi số row đổi (drift
 //   gate bắt được: dải đỏ mép dưới tbody + badge sidebar). Pagination frame
 //   giao cho CATALOG snapshot (regression chính, fixtures cố định).
-// Tạo baseline: npm run build && npm start, rồi chạy với --update-snapshots;
+// Tạo baseline: `npm run build; npm start` (PowerShell — `&&` không tồn tại
+// trong Windows PowerShell 5.1), rồi chạy với --update-snapshots;
 // gate Phase 0 = chạy lần 2 KHÔNG flag → no-diff toàn bộ projects.
 // Env: E2E_STAFF_EMAIL/PASSWORD + E2E_SUPER_EMAIL/PASSWORD (thiếu → skip).
 
