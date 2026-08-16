@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import {
   breakdownModel, campaignCardProgress, campaignCardValue, campaignFootnote, campaignOverviewValue,
-  heroRemainingText, metricEditorState, metricPresentation, orderAxisTicks, syncedSubjectLabel,
+  heroRemainingText, metricEditorState, metricPresentation, orderAxisTicks, perDayVisible, syncedSubjectLabel,
 } from '../lib/kpi/campaignDisplay'
 import { affiliateDataStatus, buildCampaignExportRows, buildCustomerCampaignExportRows, buildOrderAovCampaignExportRows, type ExportActual } from '../lib/kpi/exportRows'
 
@@ -493,5 +493,75 @@ test.describe('kpi card value — 1 cửa hàng (batch /targets) @desktop', () =
       expect(card.pct, base.metricType).toBe(prog.pct)
       expect(card.pctText, base.metricType).toBe(prog.text)
     }
+  })
+})
+
+// ── Step 4: contract HERO của campaign detail (khoá TRƯỚC khi đổi layout) ───
+// Ba metric × bốn trạng thái. Rebuild mobile chỉ được đổi cách BÀY, không được
+// đổi con số hay chữ hiện ra — suite này là mốc so trước/sau.
+test.describe('kpi campaign detail hero contract (Step 4) @desktop', () => {
+  // [metricType, nhãn, target, actual khi "đang chạy", chuỗi kỳ vọng "còn thiếu"]
+  const CASES = [
+    { metric: 'gmv', target: 1_000_000, partial: 400_000, remaining: 600_000, expectPartial: '600.000₫', expectAchieved: '0₫' },
+    { metric: 'affiliate_customer_count', target: 450, partial: 3, remaining: 447, expectPartial: '447 khách', expectAchieved: '0 khách' },
+    // order_aov: "còn thiếu" là ĐIỂM %, dùng formatter riêng.
+    { metric: 'offline_order_aov', target: 100, partial: 62.5, remaining: 37.5, expectPartial: '37,5%', expectAchieved: '0%' },
+  ] as const
+
+  test('CHƯA ĐỒNG BỘ: cả 3 metric đều "—", không phải "còn thiếu 100%"', () => {
+    for (const c of CASES) {
+      expect(
+        heroRemainingText({ actualValue: null, achieved: false, remaining: c.target, metricType: c.metric }),
+        c.metric,
+      ).toBe('—')
+    }
+  })
+
+  test('ĐANG CHẠY: còn thiếu đúng đơn vị từng metric', () => {
+    for (const c of CASES) {
+      expect(
+        heroRemainingText({ actualValue: c.partial, achieved: false, remaining: c.remaining, metricType: c.metric }),
+        c.metric,
+      ).toBe(c.expectPartial)
+    }
+  })
+
+  test('ĐÃ ĐẠT: còn thiếu về 0 theo đúng đơn vị', () => {
+    for (const c of CASES) {
+      expect(
+        heroRemainingText({ actualValue: c.target, achieved: true, remaining: 0, metricType: c.metric }),
+        c.metric,
+      ).toBe(c.expectAchieved)
+    }
+  })
+
+  test('ZERO THẬT: actual 0 vẫn là đã đồng bộ, còn thiếu = trọn mục tiêu', () => {
+    expect(heroRemainingText({ actualValue: 0, achieved: false, remaining: 1_000_000, metricType: 'gmv' }))
+      .toBe('1.000.000₫')
+    expect(heroRemainingText({ actualValue: 0, achieved: false, remaining: 450, metricType: 'affiliate_customer_count' }))
+      .toBe('450 khách')
+    expect(heroRemainingText({ actualValue: 0, achieved: false, remaining: 100, metricType: 'offline_order_aov' }))
+      .toBe('100%')
+  })
+
+  test('99,9999%: chưa đạt ⇒ còn thiếu KHÔNG được làm tròn thành 0%', () => {
+    const v = heroRemainingText({ actualValue: 99.9999, achieved: false, remaining: 0.0001, metricType: 'offline_order_aov' })
+    expect(v).toBe('<0,1%')
+    expect(v).not.toBe('0%')
+  })
+
+  test('hero actual dùng đúng formatter của từng metric', () => {
+    expect(metricPresentation('gmv').value(400_000)).toBe('400.000₫')
+    expect(metricPresentation('affiliate_customer_count').value(3)).toBe('3 khách')
+    // KHÔNG được ra "62₫" — đây là điểm hoàn thành, không phải tiền.
+    expect(metricPresentation('offline_order_aov').value(62.5)).toBe('62,5%')
+  })
+
+  test('perDayVisible: ẩn ô "Trung bình/ngày" với Chất lượng bán hàng', () => {
+    expect(perDayVisible('gmv')).toBe(true)
+    expect(perDayVisible('affiliate_customer_count')).toBe(true)
+    // điểm %/ngày không tương đương số đơn/ngày hay AOV/ngày ⇒ không hiện
+    expect(perDayVisible('offline_order_aov')).toBe(false)
+    expect(perDayVisible(undefined)).toBe(true)
   })
 })

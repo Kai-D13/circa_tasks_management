@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { Card, CardContent } from '@/components/ui/card'
 import {
   breakdownModel, campaignFootnote, heroRemainingText, metricPresentation, orderAovMetricLines,
+  perDayVisible,
 } from '@/lib/kpi/campaignDisplay'
 import {
   ORDER_AOV_STATUS_LABEL, aovFromSnapshot, formatCompletionPct, formatRemainingPct,
@@ -418,7 +419,7 @@ export function CampaignKpiView({
         </Card>
         {/* r1.1 (audit khuyến nghị): ẩn với Chất lượng bán hàng — "điểm %/ngày"
             KHÔNG tương đương số đơn/ngày hay AOV/ngày, dễ hiểu sai nghiệp vụ. */}
-        {!isOrderAovCampaign && (
+        {perDayVisible(sel.metric_type) && (
           <Card className="rounded-lg">
             <CardContent className="p-3 text-center">
               <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground">

@@ -414,6 +414,18 @@ export function campaignCardValue(v: CampaignCardInput): CampaignCardValue {
   }
 }
 
+// Ô "Trung bình/ngày cần đạt" — Chất lượng bán hàng KHÔNG có ô này.
+// `requiredPerDay` chia phần còn thiếu cho số ngày còn lại; với gmv/khách thì
+// ra "tiền/ngày" và "khách/ngày" đều có nghĩa. Với offline_order_aov, phần còn
+// thiếu là ĐIỂM hoàn thành ⇒ ra "điểm %/ngày", không tương đương số đơn/ngày
+// hay AOV/ngày và rất dễ bị đọc thành mục tiêu vận hành.
+//
+// Quyết định này vốn nằm inline trong CampaignKpiView (`!isOrderAovCampaign`);
+// đưa ra đây để rebuild mobile không vô tình làm mất nó — component chỉ tiêu thụ.
+export function perDayVisible(metricType?: string | null): boolean {
+  return metricPresentation(metricType).kind !== 'offline_order_aov'
+}
+
 // Lưới trục cho chuỗi SỐ ĐƠN: giá trị nguyên + khử trùng (max=5 ⇒ [3,5], không
 // phải [2.5,5] rồi nhãn làm tròn thành '3' đặt sai chỗ).
 export function orderAxisTicks(max: number): number[] {
