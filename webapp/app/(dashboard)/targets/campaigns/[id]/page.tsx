@@ -13,7 +13,7 @@ import { CampaignExportButton } from '@/components/kpi/CampaignExportButton'
 import { CampaignResultDashboard } from '@/components/kpi/CampaignResultDashboard'
 import { metricPresentation } from '@/lib/kpi/campaignDisplay'
 import { buildCampaignResultModel, type ResultActualRow, type ResultCampaign, type ResultTargetRow } from '@/lib/kpi/resultModel'
-import { STATUS_META } from '@/lib/kpi/status'
+import { STATUS_META, TEST_BADGE_CLS } from '@/lib/kpi/status'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
 import { ChevronLeft, SlidersHorizontal, BarChart3, type LucideIcon } from 'lucide-react'
@@ -155,7 +155,7 @@ export default async function CampaignDetailPage({
           <div className="flex items-center gap-2 flex-wrap">
             <h1 className="text-xl font-semibold">{c.name}</h1>
             <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', s.cls)}>{s.label}</span>
-            {c.is_test && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700">TEST</span>}
+            {c.is_test && <span className={cn('text-[10px] px-1.5 py-0.5 rounded-full', TEST_BADGE_CLS)}>TEST</span>}
           </div>
           <CampaignStatusButton id={c.id} status={c.status} name={c.name} />
         </div>
@@ -249,7 +249,7 @@ export default async function CampaignDetailPage({
           {/* ── Kết quả ── */}
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <span className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground">
-              <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', lastSynced ? 'bg-green-500' : 'bg-amber-500')} />
+              <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', lastSynced ? 'bg-status-success' : 'bg-status-warning')} />
               {lastSynced ? `Doanh số đồng bộ ${formatDateTime(lastSynced)}` : 'Chưa đồng bộ doanh số'}
             </span>
             <div className="flex items-center gap-2">

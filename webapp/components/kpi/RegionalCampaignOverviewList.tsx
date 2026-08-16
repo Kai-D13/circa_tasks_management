@@ -28,7 +28,7 @@ export interface RegionalCampaignItem {
 function progressCls(synced: boolean, pct: number): { bar: string; text: string } {
   if (!synced) return { bar: 'bg-muted-foreground/30', text: 'text-muted-foreground' }
   return pct >= 100
-    ? { bar: 'bg-green-500', text: 'text-green-600' }
+    ? { bar: 'bg-status-success', text: 'text-status-success' }
     : { bar: 'bg-primary', text: 'text-primary' }
 }
 

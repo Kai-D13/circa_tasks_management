@@ -8,9 +8,9 @@ import { CampaignsTabs } from '@/components/kpi/CampaignsTabs'
 import { Card, CardContent } from '@/components/ui/card'
 import { buttonVariants } from '@/components/ui/button'
 import { CampaignStatusButton } from '@/components/kpi/CampaignStatusButton'
-import { STATUS_META } from '@/lib/kpi/status'
+import { STATUS_META, TEST_BADGE_CLS } from '@/lib/kpi/status'
 import { qualityKpiPass } from '@/lib/kpi/orderAov'
-import { metricPresentation } from '@/lib/kpi/campaignDisplay'
+import { campaignOverviewValue } from '@/lib/kpi/campaignDisplay'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
 import { Plus, Megaphone, ChevronRight } from 'lucide-react'
@@ -98,8 +98,8 @@ export default async function CampaignsPage() {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           {[
             { label: 'Tổng chiến dịch', value: counts.total, dot: 'bg-primary' },
-            { label: 'Đang chạy', value: counts.active, dot: 'bg-green-500' },
-            { label: 'Tạm dừng', value: counts.paused, dot: 'bg-amber-500' },
+            { label: 'Đang chạy', value: counts.active, dot: 'bg-status-success' },
+            { label: 'Tạm dừng', value: counts.paused, dot: 'bg-status-warning' },
             { label: 'Nháp', value: counts.draft, dot: 'bg-muted-foreground/40' },
           ].map((s) => (
             <Card key={s.label}>
@@ -123,26 +123,47 @@ export default async function CampaignsPage() {
             {list.map((c) => {
               const s = STATUS_META[c.status] ?? STATUS_META.draft
               const a = agg.get(c.id) ?? blank()
-              const vnd = metricPresentation(c.metric_type).value
               const synced = a.lastSync !== null
-              // 106: campaign Chất lượng bán hàng — "Mục tiêu/Đã đạt" bằng tiền
-              // vô nghĩa (kpi_target là điểm 100); dùng số cửa hàng ĐẠT KPI.
-              const isOrderAov = c.metric_type === 'offline_order_aov'
-              const pct = isOrderAov
-                ? (a.stores > 0 ? (a.pass / a.stores) * 100 : 0)
-                : (a.target > 0 ? (a.actual / a.target) * 100 : 0)
-              // Money-screen color rule: grey until synced (0% must not read as a
-              // real result), brand orange while running, green only at ≥100%
-              // (brand guide: green stays a small accent).
-              const barCls = !synced ? 'bg-muted-foreground/30' : pct >= 100 ? 'bg-green-500' : 'bg-primary'
-              const pctCls = !synced ? 'text-muted-foreground' : pct >= 100 ? 'text-green-600' : 'text-primary'
+              // Step 5.1: dòng giá trị + % lấy TỪ CONTRACT dùng chung
+              // (campaignOverviewValue) thay vì tự dựng tại chỗ. Chính hàm này
+              // đang phục vụ màn tổng hợp của SM, nên Super và SM không thể đọc
+              // ra hai con số khác nhau cho cùng một chiến dịch. Nó cũng tự lo
+              // ca 106: "Mục tiêu/Đã đạt" bằng tiền là vô nghĩa với Chất lượng
+              // bán hàng (kpi_target là điểm 100 chuẩn hoá) ⇒ đổi sang số cửa
+              // hàng ĐẠT KPI.
+              const ov = campaignOverviewValue({
+                metricType: c.metric_type,
+                synced,
+                storeCount: a.stores,
+                totalTarget: a.target,
+                totalActual: a.actual,
+                qualityPassCount: a.pass,
+              })
+              const pct = ov.pct
+              // Luật màu màn tiền: xám khi chưa đồng bộ (0% không được đọc như
+              // kết quả thật), cam thương hiệu khi đang chạy, xanh chỉ khi ≥100%
+              // (brand guide: xanh giữ vai trò điểm nhấn nhỏ).
+              const barCls = !synced ? 'bg-muted-foreground/30' : pct >= 100 ? 'bg-status-success' : 'bg-primary'
+              const pctCls = !synced ? 'text-muted-foreground' : pct >= 100 ? 'text-status-success' : 'text-primary'
               const progress = (
                 <div className="flex items-center gap-2">
                   <div className="h-2 flex-1 rounded-full bg-muted overflow-hidden">
                     <div className={cn('h-full rounded-full', barCls)} style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
                   </div>
-                  <span className={cn('text-xs font-semibold w-11 text-right', pctCls)}>{synced ? `${pct.toFixed(1)}%` : '—'}</span>
+                  <span className={cn('text-xs font-semibold w-11 text-right', pctCls)}>{ov.pctText}</span>
                 </div>
+              )
+              // Một nguồn cho cả hai bố cục — mobile và desktop KHÔNG được tự
+              // format lại rồi lệch nhau.
+              const valueLines = (
+                <>
+                  {ov.lines.map((l) => (
+                    <p key={l.label}>
+                      <span className="text-muted-foreground">{l.label}: </span>
+                      <span className="font-semibold">{l.value}</span>
+                    </p>
+                  ))}
+                </>
               )
               return (
                 <div key={c.id} className="px-4 py-3.5 border-t first:border-t-0 hover:bg-muted/30 transition-colors">
@@ -163,7 +184,7 @@ export default async function CampaignsPage() {
                           {c.name}
                         </Link>
                         <span className={cn('text-[11px] px-2 py-0.5 rounded-full font-medium shrink-0', s.cls)}>{s.label}</span>
-                        {c.is_test && <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-700 shrink-0">TEST</span>}
+                        {c.is_test && <span className={cn('text-[10px] px-1.5 py-0.5 rounded-full shrink-0', TEST_BADGE_CLS)}>TEST</span>}
                       </div>
                       <p className="text-xs text-muted-foreground mt-0.5">
                         {drange(c.start_date, c.end_date)} · {a.stores} cửa hàng
@@ -171,36 +192,14 @@ export default async function CampaignsPage() {
                       </p>
                       {/* Mobile: money + progress stay visible — this is a money screen */}
                       <div className="mt-2 md:hidden space-y-1.5">
-                        <p className="text-sm">
-                          {isOrderAov ? (
-                            <>
-                              <span className="text-muted-foreground">Đạt KPI </span>
-                              <span className="font-semibold">{synced ? `${a.pass}/${a.stores} cửa hàng` : '—'}</span>
-                            </>
-                          ) : (
-                            <>
-                              <span className="text-muted-foreground">Mục tiêu </span><span className="font-semibold">{vnd(a.target)}</span>
-                              <span className="text-muted-foreground"> · Đã đạt </span><span className="font-semibold">{synced ? vnd(a.actual) : '—'}</span>
-                            </>
-                          )}
-                        </p>
+                        <div className="text-sm space-y-0.5">{valueLines}</div>
                         {progress}
                       </div>
                     </div>
 
                     {/* Targets + actual (desktop) */}
                     <div className="hidden md:block flex-1 text-sm">
-                      {isOrderAov ? (
-                        <>
-                          <p><span className="text-muted-foreground">Chỉ số: </span><span className="font-semibold">Chất lượng bán hàng</span></p>
-                          <p><span className="text-muted-foreground">Đạt KPI: </span><span className="font-semibold">{synced ? `${a.pass}/${a.stores} cửa hàng` : '—'}</span></p>
-                        </>
-                      ) : (
-                        <>
-                          <p><span className="text-muted-foreground">Mục tiêu: </span><span className="font-semibold">{vnd(a.target)}</span></p>
-                          <p><span className="text-muted-foreground">Đã đạt: </span><span className="font-semibold">{synced ? vnd(a.actual) : '—'}</span></p>
-                        </>
-                      )}
+                      {valueLines}
                     </div>
 
                     {/* Progress (desktop) */}

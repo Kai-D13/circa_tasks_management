@@ -6,7 +6,8 @@ import { expect, test, type Page } from '@playwright/test'
 // evidence (--update-snapshots only rewrites FAILING snapshots; a sub-1% diff
 // silently kept the old file → before/after hashes were identical).
 // Run against a DEDICATED fresh server to guarantee the commit being captured:
-//   npm run build && ($env:PORT='3010'; $env:UI_CATALOG='1'; npm start)
+//   npm run build
+//   ($env:PORT='3010'; $env:UI_CATALOG='1'; npm start)
 //   $env:E2E_BASE_URL='http://localhost:3010'; npx playwright test e2e/ui-pilot-capture.spec.ts
 // Output: e2e/__screenshots__/pilot-after/<route>-<theme>.png (gitignored,
 // local evidence).
@@ -14,9 +15,11 @@ import { expect, test, type Page } from '@playwright/test'
 // COMPARABLE before/after (Pilot-1 review r1.4 P1): the BEFORE set must be
 // produced by THIS SAME spec (same <main> element crop, same themes, same DB)
 // against a server built from the pre-migration commit:
-//   git checkout <main-commit> && npm run build && PORT=3011 npm start
-//   PILOT_CAPTURE_DIR=e2e/__screenshots__/pilot-before E2E_BASE_URL=http://localhost:3011 \
-//     npx playwright test e2e/ui-pilot-capture.spec.ts -g "pilot after-capture @desktop"
+//   git checkout <main-commit>; npm run build
+//   ($env:PORT='3011'; npm start)
+//   $env:PILOT_CAPTURE_DIR='e2e/__screenshots__/pilot-before'
+//   $env:E2E_BASE_URL='http://localhost:3011'
+//   npx playwright test e2e/ui-pilot-capture.spec.ts -g "pilot after-capture @desktop"
 // (lọc theo TÊN DESCRIBE, không theo tên test: từ r2.6 mỗi route là một test
 //  riêng nên không còn một tiêu đề test nào gom cả loạt.)
 // Only then are dimensions/hashes meaningful. A viewport shot vs an element

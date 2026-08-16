@@ -1,8 +1,9 @@
 import { test, expect } from '@playwright/test'
 import {
-  breakdownModel, campaignCardProgress, campaignFootnote, campaignOverviewValue, heroRemainingText,
-  metricEditorState, metricPresentation, orderAxisTicks, syncedSubjectLabel,
+  breakdownModel, campaignCardProgress, campaignCardValue, campaignFootnote, campaignOverviewValue,
+  heroRemainingText, metricEditorState, metricPresentation, orderAxisTicks, perDayVisible, syncedSubjectLabel,
 } from '../lib/kpi/campaignDisplay'
+import { STATUS_META, TEST_BADGE_CLS } from '../lib/kpi/status'
 import { affiliateDataStatus, buildCampaignExportRows, buildCustomerCampaignExportRows, buildOrderAovCampaignExportRows, type ExportActual } from '../lib/kpi/exportRows'
 
 // P3-E/F r1 unit gate (audit P2#3) — khóa contract render breakdown, footnote,
@@ -378,5 +379,262 @@ test.describe('kpi display customer metric (mig 103) @desktop', () => {
       expect(ticks.every((t) => Number.isInteger(t) && t > 0), `max=${m}`).toBe(true)
       expect(new Set(ticks).size, `max=${m}`).toBe(ticks.length)
     }
+  })
+})
+
+// ── Batch /targets mobile: card MỘT CỬA HÀNG ────────────────────────────────
+// Ma trận 3 metric × 6 trạng thái. Đây là ba chỗ từng sai IM LẶNG trên màn
+// tiền, nên khóa cả ba: metricPresentation default 'gmv' (loại lạ ra "116₫"),
+// làm tròn 99,9999% thành 100%, và "0 thật" bị lẫn với "chưa đồng bộ".
+test.describe('kpi card value — 1 cửa hàng (batch /targets) @desktop', () => {
+  const GMV = { metricType: 'gmv', kpiTarget: 1_000_000, actualValue: 400_000 }
+  const CUS = { metricType: 'affiliate_customer_count', kpiTarget: 450, actualValue: 3 }
+  const QUA = {
+    metricType: 'offline_order_aov', kpiTarget: 100, actualValue: 116.1975,
+    actualOffline: 202_950_000, offlineOrderCount: 1_046,
+    orderTarget: 900, aovTarget: 190_540,
+  }
+
+  test('CHƯA ĐỒNG BỘ (cả 3 loại): không % giả, tone neutral, không vẽ tiến độ', () => {
+    for (const base of [GMV, CUS, QUA]) {
+      const v = campaignCardValue({ ...base, actualValue: null })
+      expect(v.synced, base.metricType).toBe(false)
+      expect(v.pct, base.metricType).toBe(0)
+      expect(v.pctText, base.metricType).toBe('Chưa đồng bộ')
+      expect(v.tone, base.metricType).toBe('neutral')
+    }
+    // Cặp số cũng không được bịa khi chưa có snapshot.
+    expect(campaignCardValue({ ...GMV, actualValue: null }).lines[0].value).toBe('—')
+    expect(campaignCardValue({ ...CUS, actualValue: null }).lines[0].value).toBe('—')
+  })
+
+  // CANARY: snapshot partial/stale — actual_value đã null nhưng số phụ của kỳ
+  // trước còn nguyên. Card TUYỆT ĐỐI không được hiện "Chưa đồng bộ" cạnh số cũ.
+  test('CANARY chất lượng: chưa đồng bộ mà còn actual phụ cũ → vẫn "—", không rò số cũ', () => {
+    const v = campaignCardValue({ ...QUA, actualValue: null })
+    expect(v.synced).toBe(false)
+    expect(v.pct).toBe(0)
+    expect(v.tone).toBe('neutral')
+    expect(v.pctText).toBe('Chưa đồng bộ')
+    // Mục tiêu là CẤU HÌNH nên vẫn hiện; phần thực tế phải là '—'.
+    expect(v.lines[0].value).toBe('— / 900 đơn')
+    expect(v.lines[1].value).toBe('— / 190.540₫')
+    expect(v.lines.some((l) => l.value.includes('1.046'))).toBe(false)
+    expect(v.lines.some((l) => l.value.includes('194.025'))).toBe(false)
+  })
+
+  test('ACTUAL 0 THẬT: vẫn là đã đồng bộ, hiện 0 — KHÁC hẳn chưa đồng bộ', () => {
+    const g = campaignCardValue({ ...GMV, actualValue: 0 })
+    expect(g.synced).toBe(true)
+    expect(g.pctText).toBe('0%')
+    expect(g.lines[0].value).toBe('0₫ / 1.000.000₫')
+    expect(g.tone).toBe('warning')
+
+    const c = campaignCardValue({ ...CUS, actualValue: 0 })
+    expect(c.lines[0].value).toBe('0 / 450 khách')
+  })
+
+  test('GMV: cặp tiền có ₫ hai đầu; đạt target → tone success', () => {
+    expect(campaignCardValue(GMV).lines[0].value).toBe('400.000₫ / 1.000.000₫')
+    expect(campaignCardValue(GMV).tone).toBe('warning')
+    expect(campaignCardValue({ ...GMV, actualValue: 1_000_000 }).tone).toBe('success')
+    expect(campaignCardValue({ ...GMV, actualValue: 1_000_000 }).pctText).toBe('100%')
+  })
+
+  test('KHÁCH: đơn vị đứng MỘT lần ở cuối — tuyệt đối không "450₫"', () => {
+    const v = campaignCardValue(CUS)
+    expect(v.lines[0].value).toBe('3 / 450 khách')
+    expect(v.lines[0].value).not.toContain('₫')
+    expect(v.pctText).toBe('1%')
+  })
+
+  test('CHẤT LƯỢNG BÁN HÀNG: HAI dòng Số đơn + AOV, không gộp', () => {
+    const v = campaignCardValue(QUA)
+    expect(v.lines.map((l) => l.label)).toEqual(['Số đơn', 'AOV'])
+    expect(v.lines[0].value).toBe('1.046 / 900 đơn')
+    expect(v.lines[1].value).toBe('194.025₫ / 190.540₫')
+    expect(v.pctText).toBe('116,2%')
+    expect(v.tone).toBe('success')
+  })
+
+  test('CHẤT LƯỢNG: 99,9999% là CHƯA đạt — không làm tròn lên 100%, tone warning', () => {
+    const v = campaignCardValue({ ...QUA, actualValue: 99.9999 })
+    expect(v.pctText).toBe('<100%')
+    expect(v.tone).toBe('warning')
+    // đúng 100 mới là đạt
+    expect(campaignCardValue({ ...QUA, actualValue: 100 }).tone).toBe('success')
+  })
+
+  test('CHẤT LƯỢNG thiếu cấu hình mục tiêu → không bịa dòng nào', () => {
+    const v = campaignCardValue({ ...QUA, orderTarget: null, aovTarget: null })
+    expect(v.lines).toEqual([])
+    expect(v.synced).toBe(true)
+  })
+
+  test('typeLabel: nhãn NGẮN của loại chiến dịch cho chip trên card', () => {
+    expect(campaignCardValue(GMV).typeLabel).toBe('Doanh số')
+    expect(campaignCardValue(CUS).typeLabel).toBe('Số khách')
+    expect(campaignCardValue(QUA).typeLabel).toBe('Chất lượng bán hàng')
+    // loại lạ đi theo nhánh gmv nên nhãn cũng là 'Doanh số'
+    expect(campaignCardValue({ metricType: 'x', kpiTarget: 1, actualValue: 1 }).typeLabel).toBe('Doanh số')
+  })
+
+  test('metric_type LẠ → rơi về gmv (an toàn hiển thị), không crash', () => {
+    const v = campaignCardValue({ metricType: 'khong_ton_tai', kpiTarget: 1000, actualValue: 500 })
+    expect(v.kind).toBe('gmv')
+    expect(v.lines[0].value).toBe('500₫ / 1.000₫')
+  })
+
+  test('CÙNG LUẬT làm tròn với campaignCardProgress (không hai nguồn sự thật)', () => {
+    for (const base of [GMV, CUS, QUA]) {
+      const prog = campaignCardProgress({
+        kpi_target: base.kpiTarget, actual_value: base.actualValue, metric_type: base.metricType,
+      })
+      const card = campaignCardValue(base)
+      expect(card.pct, base.metricType).toBe(prog.pct)
+      expect(card.pctText, base.metricType).toBe(prog.text)
+    }
+  })
+})
+
+// ── Step 4: contract HERO của campaign detail (khoá TRƯỚC khi đổi layout) ───
+// Ba metric × bốn trạng thái. Rebuild mobile chỉ được đổi cách BÀY, không được
+// đổi con số hay chữ hiện ra — suite này là mốc so trước/sau.
+test.describe('kpi campaign detail hero contract (Step 4) @desktop', () => {
+  // [metricType, nhãn, target, actual khi "đang chạy", chuỗi kỳ vọng "còn thiếu"]
+  const CASES = [
+    { metric: 'gmv', target: 1_000_000, partial: 400_000, remaining: 600_000, expectPartial: '600.000₫', expectAchieved: '0₫' },
+    { metric: 'affiliate_customer_count', target: 450, partial: 3, remaining: 447, expectPartial: '447 khách', expectAchieved: '0 khách' },
+    // order_aov: "còn thiếu" là ĐIỂM %, dùng formatter riêng.
+    { metric: 'offline_order_aov', target: 100, partial: 62.5, remaining: 37.5, expectPartial: '37,5%', expectAchieved: '0%' },
+  ] as const
+
+  test('CHƯA ĐỒNG BỘ: cả 3 metric đều "—", không phải "còn thiếu 100%"', () => {
+    for (const c of CASES) {
+      expect(
+        heroRemainingText({ actualValue: null, achieved: false, remaining: c.target, metricType: c.metric }),
+        c.metric,
+      ).toBe('—')
+    }
+  })
+
+  test('ĐANG CHẠY: còn thiếu đúng đơn vị từng metric', () => {
+    for (const c of CASES) {
+      expect(
+        heroRemainingText({ actualValue: c.partial, achieved: false, remaining: c.remaining, metricType: c.metric }),
+        c.metric,
+      ).toBe(c.expectPartial)
+    }
+  })
+
+  test('ĐÃ ĐẠT: còn thiếu về 0 theo đúng đơn vị', () => {
+    for (const c of CASES) {
+      expect(
+        heroRemainingText({ actualValue: c.target, achieved: true, remaining: 0, metricType: c.metric }),
+        c.metric,
+      ).toBe(c.expectAchieved)
+    }
+  })
+
+  test('ZERO THẬT: actual 0 vẫn là đã đồng bộ, còn thiếu = trọn mục tiêu', () => {
+    expect(heroRemainingText({ actualValue: 0, achieved: false, remaining: 1_000_000, metricType: 'gmv' }))
+      .toBe('1.000.000₫')
+    expect(heroRemainingText({ actualValue: 0, achieved: false, remaining: 450, metricType: 'affiliate_customer_count' }))
+      .toBe('450 khách')
+    expect(heroRemainingText({ actualValue: 0, achieved: false, remaining: 100, metricType: 'offline_order_aov' }))
+      .toBe('100%')
+  })
+
+  test('99,9999%: chưa đạt ⇒ còn thiếu KHÔNG được làm tròn thành 0%', () => {
+    const v = heroRemainingText({ actualValue: 99.9999, achieved: false, remaining: 0.0001, metricType: 'offline_order_aov' })
+    expect(v).toBe('<0,1%')
+    expect(v).not.toBe('0%')
+  })
+
+  test('hero actual dùng đúng formatter của từng metric', () => {
+    expect(metricPresentation('gmv').value(400_000)).toBe('400.000₫')
+    expect(metricPresentation('affiliate_customer_count').value(3)).toBe('3 khách')
+    // KHÔNG được ra "62₫" — đây là điểm hoàn thành, không phải tiền.
+    expect(metricPresentation('offline_order_aov').value(62.5)).toBe('62,5%')
+  })
+
+  test('perDayVisible: ẩn ô "Trung bình/ngày" với Chất lượng bán hàng', () => {
+    expect(perDayVisible('gmv')).toBe(true)
+    expect(perDayVisible('affiliate_customer_count')).toBe(true)
+    // điểm %/ngày không tương đương số đơn/ngày hay AOV/ngày ⇒ không hiện
+    expect(perDayVisible('offline_order_aov')).toBe(false)
+    expect(perDayVisible(undefined)).toBe(true)
+  })
+})
+
+// ── Step 5.1: màn danh sách campaign (Super Admin) ──────────────────────────
+// Row của /targets/campaigns giờ tiêu thụ campaignOverviewValue — CÙNG hàm mà
+// màn tổng hợp SM đang dùng, nên Super và SM không thể đọc ra hai con số khác
+// nhau cho cùng một chiến dịch. Test dưới đây khoá đúng các lỗi từng gặp.
+test.describe('kpi campaign list row (Step 5.1) @desktop', () => {
+  test('KHÁCH: đơn vị "khách", tuyệt đối không ra tiền', () => {
+    const v = campaignOverviewValue({
+      metricType: 'affiliate_customer_count', synced: true,
+      storeCount: 5, totalTarget: 450, totalActual: 3,
+    })
+    expect(v.lines[0].value).toBe('3 / 450 khách')
+    expect(v.lines[0].value).not.toContain('₫')
+  })
+
+  test('CHƯA ĐỒNG BỘ: không rò actual, % là "—" chứ không phải 0%', () => {
+    for (const metricType of ['gmv', 'affiliate_customer_count', 'offline_order_aov']) {
+      const v = campaignOverviewValue({
+        metricType, synced: false,
+        storeCount: 5, totalTarget: 1_000_000, totalActual: 999_999,
+        qualityPassCount: 4,
+      })
+      expect(v.pctText, metricType).toBe('—')
+      expect(v.pct, metricType).toBe(0)   // pct 0 ⇒ KHÔNG vẽ thanh tiến độ
+      // giá trị cũ (999.999) không được lọt ra bất kỳ dòng nào
+      expect(v.lines.some((l) => l.value.includes('999')), metricType).toBe(false)
+    }
+  })
+
+  test('CHẤT LƯỢNG: dùng số cửa hàng ĐẠT KPI, không phải tiền', () => {
+    const v = campaignOverviewValue({
+      metricType: 'offline_order_aov', synced: true,
+      storeCount: 8, totalTarget: 100, totalActual: 116, qualityPassCount: 3,
+    })
+    expect(v.lines[0]).toEqual({ label: 'Đạt KPI', value: '3/8 cửa hàng' })
+    // kpi_target là ĐIỂM 100 chuẩn hoá — không được render thành "100₫"
+    expect(v.lines.some((l) => l.value.includes('₫'))).toBe(false)
+    expect(v.pctText).toBe('38%')   // 3/8
+  })
+
+  test('GMV: cặp tiền hai đầu đều có ₫', () => {
+    const v = campaignOverviewValue({
+      metricType: 'gmv', synced: true,
+      storeCount: 3, totalTarget: 1_000_000, totalActual: 400_000,
+    })
+    expect(v.lines[0].value).toBe('400.000₫ / 1.000.000₫')
+    expect(v.pctText).toBe('40%')
+  })
+
+  test('STATUS_META + TEST badge: dùng token, KHÔNG còn màu chỉ-sáng', () => {
+    // Ranh giới bằng khoảng trắng/đầu-cuối chuỗi, KHÔNG dùng \b: bản trước viết
+    // regex qua một lớp escape và \b biến thành ký tự BACKSPACE (0x08) — pattern
+    // khi đó đi tìm ký tự điều khiển nên không bao giờ khớp, và guard này xanh
+    // GIẢ suốt. Canary ngay dưới tồn tại để đúng ca đó không lặp lại.
+    const RAW_COLOR = /(?:^|\s)(?:bg|text)-(?:gray|green|amber|red|purple|blue|yellow)-\d{2,3}(?:\/\d+)?(?=\s|$)/
+
+    // CANARY: pattern phải THẬT SỰ bắt được màu hardcode. Ai làm hỏng regex thì
+    // dòng này đỏ TRƯỚC, thay vì cả guard im lặng ngừng bảo vệ.
+    expect('bg-purple-100 text-purple-700', 'regex guard không còn bắt được màu hardcode').toMatch(RAW_COLOR)
+    expect('bg-status-info-bg text-status-info').not.toMatch(RAW_COLOR)
+
+    const all = [...Object.values(STATUS_META).map((m) => m.cls), TEST_BADGE_CLS]
+    for (const cls of all) {
+      // gray/green/amber/purple-100… là cặp chỉ-sáng, dark mode đọc sai.
+      expect(cls, cls).not.toMatch(RAW_COLOR)
+      expect(cls, cls).toMatch(/status-/)
+    }
+    // nhãn giữ nguyên — đây là commit đổi màu, không đổi chữ
+    expect(STATUS_META.active.label).toBe('Đang chạy')
+    expect(STATUS_META.draft.label).toBe('Nháp')
   })
 })

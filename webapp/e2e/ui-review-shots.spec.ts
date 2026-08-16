@@ -10,15 +10,18 @@ import { expect, test, type Page } from '@playwright/test'
 // e2e/ui-pilot-capture.spec.ts). Chụp VIEWPORT (không `fullPage`): người duyệt
 // cần thấy sidebar + nội dung đúng khung màn hình, không phải một dải dọc dài.
 //
-// ── CHẠY ────────────────────────────────────────────────────────────────────
+// ── CHẠY (PowerShell — xem chú thích cùng khối ở ui-mobile-baseline.spec.ts) ─
 // 1) Dựng server TỪ CHÍNH BRANCH đang review (đừng chụp trên server cũ):
-//      cd webapp && npm run build && PORT=3010 npm start
+//      cd C:\webapp_management\webapp
+//      npm run build
+//      $env:PORT='3010'; npm start
 // 2) Chạy spec ở terminal KHÁC:
-//      E2E_BASE_URL=http://localhost:3010 \
-//      E2E_SM_EMAIL=… E2E_SM_PASSWORD=… \
-//      E2E_QLCH_EMAIL=… E2E_QLCH_PASSWORD=… \
-//      E2E_ADMIN_EMAIL=… E2E_ADMIN_PASSWORD=… \
-//      E2E_SUPER_EMAIL=… E2E_SUPER_PASSWORD=… \
+//      cd C:\webapp_management\webapp
+//      $env:E2E_BASE_URL='http://localhost:3010'
+//      $env:E2E_SM_EMAIL='…';    $env:E2E_SM_PASSWORD='…'
+//      $env:E2E_QLCH_EMAIL='…';  $env:E2E_QLCH_PASSWORD='…'
+//      $env:E2E_ADMIN_EMAIL='…'; $env:E2E_ADMIN_PASSWORD='…'
+//      $env:E2E_SUPER_EMAIL='…'; $env:E2E_SUPER_PASSWORD='…'
 //      npx playwright test e2e/ui-review-shots.spec.ts
 //
 // QUAN TRỌNG — playwright.config.ts KHÔNG tự nạp .env.local: config không

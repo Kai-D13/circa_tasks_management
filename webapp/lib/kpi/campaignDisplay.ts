@@ -4,7 +4,7 @@
 // r2 (audit P3): structural type CỤC BỘ — tầng lib không import type từ
 // component UI (tránh đảo chiều phụ thuộc); CampaignView khớp structurally.
 
-import { aovFromSnapshot, formatCompletionPct, formatRemainingPct } from '@/lib/kpi/orderAov'
+import { aovFromSnapshot, formatCompletionPct, formatRemainingPct, qualityKpiPass } from '@/lib/kpi/orderAov'
 
 export interface BreakdownInput {
   metric_offline: boolean
@@ -311,6 +311,119 @@ export function campaignOverviewValue(v: CampaignOverviewInput): CampaignOvervie
     pct: prog.pct,
     pctText: synced ? prog.text : '—',
   }
+}
+
+// ── Batch /targets mobile: GIÁ TRỊ HIỂN THỊ trên card MỘT CỬA HÀNG ──────────
+// Card ở màn danh sách của Staff/QLCH trước đây chỉ hiện phần trăm. Stakeholder
+// muốn thấy cả cặp "thực tế / mục tiêu" đúng đơn vị từng loại chiến dịch.
+//
+// ⚠ KHÔNG dùng lại `campaignOverviewValue` cho việc này: hàm đó là khung TỔNG
+// HỢP NHIỀU CỬA HÀNG — với offline_order_aov nó trả "Đạt KPI 3/8 cửa hàng",
+// vô nghĩa trên card của một dược sĩ đang xem chính cửa hàng mình.
+//
+// Quy ước đơn vị GIỮ NGUYÊN như màn tổng hợp (một luật cho cả hệ):
+//   · tiền → ₫ dính vào TỪNG số      '600.235.456₫ / 1.454.000.000₫'
+//   · đếm  → đơn vị đứng MỘT lần cuối '3 / 450 khách'
+//   · chất lượng bán hàng → HAI dòng (Số đơn, AOV) vì đây là 2 chỉ số độc lập,
+//     và hero % là chỉ số YẾU HƠN trong hai cái — gộp một dòng sẽ giấu mất
+//     chỉ số đang kéo điểm xuống.
+export interface CampaignCardInput {
+  metricType?: string | null
+  kpiTarget: number | null
+  actualValue: number | null | undefined
+  // chỉ offline_order_aov:
+  actualOffline?: number | null
+  offlineOrderCount?: number | null
+  orderTarget?: number | null
+  aovTarget?: number | null
+}
+
+export interface CampaignCardValue {
+  kind: CampaignMetricType
+  // Nhãn NGẮN của loại chiến dịch cho chip trên card. Khác `targetLabel`
+  // ('Mục tiêu GMV') vì ở đây đang gọi tên LOẠI, không phải gọi tên con số.
+  typeLabel: string
+  synced: boolean
+  lines: CampaignOverviewLine[]
+  pct: number                    // 0 khi chưa đồng bộ ⇒ KHÔNG vẽ thanh tiến độ
+  pctText: string                // 'Chưa đồng bộ' khi chưa có snapshot
+  // Tông trạng thái cho chip/thanh — component KHÔNG tự suy ra từ pct, vì
+  // chất lượng bán hàng "đạt" KHÔNG phải pct >= 100 làm tròn mà là
+  // qualityKpiPass (99,9999% vẫn là chưa đạt, chưa có commission).
+  tone: 'success' | 'warning' | 'neutral'
+}
+
+const CARD_TYPE_LABEL: Record<CampaignMetricType, string> = {
+  gmv: 'Doanh số',
+  affiliate_customer_count: 'Số khách',
+  offline_order_aov: 'Chất lượng bán hàng',
+}
+
+export function campaignCardValue(v: CampaignCardInput): CampaignCardValue {
+  const pres = metricPresentation(v.metricType)
+  const typeLabel = CARD_TYPE_LABEL[pres.kind]
+  const prog = campaignCardProgress({
+    kpi_target: v.kpiTarget,
+    actual_value: v.actualValue,
+    metric_type: pres.kind,
+  })
+  const synced = prog.synced
+
+  if (pres.kind === 'offline_order_aov') {
+    // Trạng thái "đã đồng bộ" lấy DUY NHẤT từ actual_value (điểm hoàn thành do
+    // RPC ghi). Snapshot partial/stale có thể còn offline_order_count và
+    // actual_offline cũ trong khi actual_value đã null — nếu format thẳng, card
+    // hiện "Chưa đồng bộ" ngay cạnh "1.046 / 900 đơn" của kỳ trước.
+    // Ép null theo `synced`: MỤC TIÊU vẫn hiện (nó là cấu hình, không phải kết
+    // quả), phần thực tế thành '—'.
+    const q = orderAovMetricLines({
+      actualOrder: synced ? v.offlineOrderCount : null,
+      actualNet: synced ? v.actualOffline : null,
+      orderTarget: v.orderTarget,
+      aovTarget: v.aovTarget,
+    })
+    // q === null ⇒ campaign chưa cấu hình đủ 2 mục tiêu: không bịa dòng nào.
+    const lines: CampaignOverviewLine[] = q
+      ? [{ label: 'Số đơn', value: q.order }, { label: 'AOV', value: q.aov }]
+      : []
+    const pass = qualityKpiPass(v.actualValue)
+    return {
+      kind: pres.kind, typeLabel, synced, lines,
+      pct: prog.pct,
+      pctText: prog.text,
+      tone: !synced ? 'neutral' : pass ? 'success' : 'warning',
+    }
+  }
+
+  // gmv / affiliate_customer_count — một dòng "thực tế / mục tiêu".
+  const target = Number(v.kpiTarget) || 0
+  const actual = Number(v.actualValue) || 0
+  const value = !synced
+    ? '—'
+    : pres.kind === 'gmv'
+      ? `${pres.value(actual)} / ${pres.value(target)}`
+      : `${nfVi.format(Math.round(actual))} / ${pres.value(target)}`
+  return {
+    kind: pres.kind,
+    typeLabel,
+    synced,
+    lines: [{ label: 'Đã đạt / Mục tiêu', value }],
+    pct: prog.pct,
+    pctText: prog.text,
+    tone: !synced ? 'neutral' : target > 0 && actual >= target ? 'success' : 'warning',
+  }
+}
+
+// Ô "Trung bình/ngày cần đạt" — Chất lượng bán hàng KHÔNG có ô này.
+// `requiredPerDay` chia phần còn thiếu cho số ngày còn lại; với gmv/khách thì
+// ra "tiền/ngày" và "khách/ngày" đều có nghĩa. Với offline_order_aov, phần còn
+// thiếu là ĐIỂM hoàn thành ⇒ ra "điểm %/ngày", không tương đương số đơn/ngày
+// hay AOV/ngày và rất dễ bị đọc thành mục tiêu vận hành.
+//
+// Quyết định này vốn nằm inline trong CampaignKpiView (`!isOrderAovCampaign`);
+// đưa ra đây để rebuild mobile không vô tình làm mất nó — component chỉ tiêu thụ.
+export function perDayVisible(metricType?: string | null): boolean {
+  return metricPresentation(metricType).kind !== 'offline_order_aov'
 }
 
 // Lưới trục cho chuỗi SỐ ĐƠN: giá trị nguyên + khử trùng (max=5 ⇒ [3,5], không

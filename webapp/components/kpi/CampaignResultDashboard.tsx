@@ -41,8 +41,8 @@ export function CampaignResultDashboard({ model, emptyHint }: {
         {((isOrderAov ? [
           // "X/Y cửa hàng đạt" theo KPI PASS (completion >= 100%), KHÔNG theo bậc.
           { label: 'Cửa hàng đạt KPI', value: synced ? `${m.qualityPassCount}/${m.storeCount}` : '—', icon: Award,
-            tile: synced && m.qualityPassCount > 0 ? 'bg-green-100 text-green-600' : 'bg-primary/10 text-primary',
-            valueCls: synced && m.qualityPassCount > 0 ? 'text-green-600' : undefined },
+            tile: synced && m.qualityPassCount > 0 ? 'bg-status-success-bg text-status-success' : 'bg-primary/10 text-primary',
+            valueCls: synced && m.qualityPassCount > 0 ? 'text-status-success' : undefined },
           { label: 'Tổng số đơn', value: synced && m.totalOfflineOrders != null ? `${nfInt(m.totalOfflineOrders)} đơn` : '—',
             icon: TrendingUp, tile: 'bg-primary/10 text-primary' },
           { label: 'AOV bình quân', value: synced && m.totalOfflineAov != null ? money(m.totalOfflineAov) : '—',
@@ -50,8 +50,8 @@ export function CampaignResultDashboard({ model, emptyHint }: {
           { label: 'Net Revenue (tham khảo)', value: synced ? money(m.totalOffline) : '—', icon: Wallet,
             tile: 'bg-muted text-muted-foreground' },
           { label: 'Tổng commission đạt', value: synced ? money(m.totalCommission) : '—', icon: Wallet,
-            tile: synced && m.totalCommission > 0 ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground',
-            valueCls: synced && m.totalCommission > 0 ? 'text-green-600' : undefined },
+            tile: synced && m.totalCommission > 0 ? 'bg-status-success-bg text-status-success' : 'bg-muted text-muted-foreground',
+            valueCls: synced && m.totalCommission > 0 ? 'text-status-success' : undefined },
           // r1.1 (audit P2): BỎ 'Store đạt bậc' — với policy đúng 1 bậc mốc 100
           // nó trùng nghĩa 'Cửa hàng đạt KPI' ở trên.
           { label: 'Thời hạn', value: m.deadlineLabel, icon: CalendarDays, tile: 'bg-muted text-muted-foreground' },
@@ -62,7 +62,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
             // card này; hybrid có card GMV Offline riêng bên dưới.
             sub: !m.showBreakdown && !isCustomer && !isOrderAov && synced
               ? offlineOrderLine(m.totalOffline, m.totalOfflineOrders) : null,
-            tile: synced && m.totalActual > 0 ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground' },
+            tile: synced && m.totalActual > 0 ? 'bg-status-success-bg text-status-success' : 'bg-muted text-muted-foreground' },
           ...(m.showBreakdown ? [
             { label: 'GMV Offline', value: synced ? vnd(m.totalOffline) : '—', icon: StoreIcon,
               // 105: dòng phụ tổng — AOV WEIGHTED (totalOffline/totalOrders),
@@ -74,10 +74,10 @@ export function CampaignResultDashboard({ model, emptyHint }: {
           ] : []),
           { label: 'Hoàn thành', value: synced ? `${m.completionPct.toFixed(1)}%` : '—', icon: Percent,
             tile: 'bg-primary/10 text-primary', bar: true,
-            valueCls: !synced ? undefined : m.completionPct >= 100 ? 'text-green-600' : 'text-primary' },
+            valueCls: !synced ? undefined : m.completionPct >= 100 ? 'text-status-success' : 'text-primary' },
           { label: 'Tổng commission đạt', value: synced ? money(m.totalCommission) : '—', icon: Wallet,
-            tile: synced && m.totalCommission > 0 ? 'bg-green-100 text-green-600' : 'bg-muted text-muted-foreground',
-            valueCls: synced && m.totalCommission > 0 ? 'text-green-600' : undefined },
+            tile: synced && m.totalCommission > 0 ? 'bg-status-success-bg text-status-success' : 'bg-muted text-muted-foreground',
+            valueCls: synced && m.totalCommission > 0 ? 'text-status-success' : undefined },
           { label: 'Store đạt bậc', value: synced ? `${m.reachedStoreCount}/${m.storeCount}` : '—', icon: Award, tile: 'bg-primary/10 text-primary' },
           { label: 'Nhịp độ (Performance)', value: m.performance != null ? `${m.performance.toFixed(1)}%` : '—', icon: Gauge,
             tile: 'bg-primary/10 text-primary',
@@ -99,7 +99,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                   {card.bar && synced && (
                     <div className="mt-1.5 h-1.5 rounded-full bg-muted overflow-hidden">
                       <div
-                        className={cn('h-full rounded-full', m.completionPct >= 100 ? 'bg-green-500' : 'bg-primary')}
+                        className={cn('h-full rounded-full', m.completionPct >= 100 ? 'bg-status-success' : 'bg-primary')}
                         style={{ width: `${Math.min(100, Math.max(0, m.completionPct))}%` }}
                       />
                     </div>
@@ -173,11 +173,11 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                           <span className="inline-flex items-center justify-end gap-2">
                             <span className="h-1.5 w-14 rounded-full bg-muted overflow-hidden shrink-0 inline-block align-middle">
                               <span
-                                className={cn('block h-full rounded-full', r.qualityKpiPass ? 'bg-green-500' : 'bg-primary')}
+                                className={cn('block h-full rounded-full', r.qualityKpiPass ? 'bg-status-success' : 'bg-primary')}
                                 style={{ width: `${Math.min(100, Math.max(0, Number(a.actual_value) || 0))}%` }}
                               />
                             </span>
-                            <span className={cn('text-xs font-semibold', r.qualityKpiPass ? 'text-green-600' : 'text-primary')}>
+                            <span className={cn('text-xs font-semibold', r.qualityKpiPass ? 'text-status-success' : 'text-primary')}>
                               {vnd(a.actual_value)}
                             </span>
                           </span>
@@ -204,7 +204,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                           {r.qualityStatusLabel ? (
                             <span className={cn(
                               'inline-block px-2 py-0.5 rounded-full font-medium',
-                              r.qualityKpiPass ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700',
+                              r.qualityKpiPass ? 'bg-status-success-bg text-status-success' : 'bg-status-warning-bg text-status-warning',
                             )}>
                               {r.qualityStatusLabel}
                             </span>
@@ -225,11 +225,11 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                           <div className="flex items-center justify-end gap-2">
                             <div className="h-1.5 w-14 rounded-full bg-muted overflow-hidden shrink-0">
                               <div
-                                className={cn('h-full rounded-full', a.run_rate >= 100 ? 'bg-green-500' : 'bg-primary')}
+                                className={cn('h-full rounded-full', a.run_rate >= 100 ? 'bg-status-success' : 'bg-primary')}
                                 style={{ width: `${Math.min(100, Math.max(0, a.run_rate))}%` }}
                               />
                             </div>
-                            <span className={cn('text-xs font-semibold', a.run_rate >= 100 ? 'text-green-600' : 'text-primary')}>
+                            <span className={cn('text-xs font-semibold', a.run_rate >= 100 ? 'text-status-success' : 'text-primary')}>
                               {a.run_rate.toFixed(1)}%
                             </span>
                           </div>
@@ -253,7 +253,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                       <td className="px-4 py-2.5 lg:hidden">
                         {a?.achieved_tier_order != null
                           ? (
-                            <span className="inline-flex items-center whitespace-nowrap rounded-full bg-green-100 text-green-700 px-2 py-0.5 text-[11px] font-medium">
+                            <span className="inline-flex items-center whitespace-nowrap rounded-full bg-status-success-bg text-status-success px-2 py-0.5 text-[11px] font-medium">
                               Bậc {a.achieved_tier_order} · {money(a.store_commission_pool ?? 0)}
                             </span>
                           )
@@ -277,7 +277,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                                 {tp.remaining_amount === null ? (
                                   <p className="text-muted-foreground mt-0.5">—</p>
                                 ) : tp.reached ? (
-                                  <p className="font-medium text-green-600 mt-0.5">Đã đạt</p>
+                                  <p className="font-medium text-status-success mt-0.5">Đã đạt</p>
                                 ) : (
                                   // r1.2: campaign điểm % dùng formatter CÒN THIẾU
                                   // riêng — 0,0001 không được thành "0%".

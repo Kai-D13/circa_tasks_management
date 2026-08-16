@@ -166,15 +166,15 @@ export function CampaignImport({
       {preview && (
         <div className="space-y-2 text-sm">
           <div className="flex flex-wrap gap-2">
-            <span className="text-xs px-2 py-0.5 rounded font-medium bg-green-100 text-green-700">Hợp lệ {preview.validCount}</span>
-            {preview.invalid.length > 0 && <span className="text-xs px-2 py-0.5 rounded font-medium bg-red-100 text-red-700">Lỗi {preview.invalid.length}</span>}
-            {preview.unmatched.length > 0 && <span className="text-xs px-2 py-0.5 rounded font-medium bg-amber-100 text-amber-700">POS không khớp {preview.unmatched.length}</span>}
+            <span className="text-xs px-2 py-0.5 rounded font-medium bg-status-success-bg text-status-success">Hợp lệ {preview.validCount}</span>
+            {preview.invalid.length > 0 && <span className="text-xs px-2 py-0.5 rounded font-medium bg-status-danger-bg text-status-danger">Lỗi {preview.invalid.length}</span>}
+            {preview.unmatched.length > 0 && <span className="text-xs px-2 py-0.5 rounded font-medium bg-status-warning-bg text-status-warning">POS không khớp {preview.unmatched.length}</span>}
           </div>
 
           {preview.invalid.length > 0 && (
-            <div className="rounded border border-red-200 bg-red-50 p-2 max-h-48 overflow-y-auto">
-              <p className="text-xs font-medium text-red-700 mb-1">Sửa hết các dòng lỗi rồi nạp lại (không ghi từng phần):</p>
-              <ul className="text-xs text-red-700 space-y-0.5">
+            <div className="rounded border border-status-danger/25 bg-status-danger-bg p-2 max-h-48 overflow-y-auto">
+              <p className="text-xs font-medium text-status-danger mb-1">Sửa hết các dòng lỗi rồi nạp lại (không ghi từng phần):</p>
+              <ul className="text-xs text-status-danger space-y-0.5">
                 {preview.invalid.slice(0, 50).map((e, i) => (
                   <li key={i}>Dòng {e.row}{e.pos_code ? ` (${e.pos_code})` : ''}: {e.error}</li>
                 ))}

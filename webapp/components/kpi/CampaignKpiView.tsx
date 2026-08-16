@@ -2,6 +2,7 @@ import Link from 'next/link'
 import { Card, CardContent } from '@/components/ui/card'
 import {
   breakdownModel, campaignFootnote, heroRemainingText, metricPresentation, orderAovMetricLines,
+  perDayVisible,
 } from '@/lib/kpi/campaignDisplay'
 import {
   ORDER_AOV_STATUS_LABEL, aovFromSnapshot, formatCompletionPct, formatRemainingPct,
@@ -306,19 +307,30 @@ export function CampaignKpiView({
                 {sel.actual_value === null ? 'Chưa đồng bộ' : vnd(actual)}
               </p>
             </div>
-            <Ring
-            pct={pct}
-            tierReached={reachedOrder !== null || pct >= 100}
-            format={isOrderAovCampaign ? formatCompletionPct : undefined}
-          />
+            {/* Step 4: ẩn ring DƯỚI md. Hero mobile trước đây vẽ ring VÀ thanh
+                tiến độ VÀ số phần trăm — ba lần cùng một tỉ lệ, ăn ~92px bề
+                ngang quý giá ở 360px. Desktop giữ nguyên ring đã duyệt. */}
+            <div className="hidden md:block">
+              <Ring
+                pct={pct}
+                tierReached={reachedOrder !== null || pct >= 100}
+                format={isOrderAovCampaign ? formatCompletionPct : undefined}
+              />
+            </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div data-hero-progress="" className="flex items-center gap-2">
             <div className="h-2.5 flex-1 rounded-full bg-muted overflow-hidden">
               <div className="h-full rounded-full bg-primary" style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
             </div>
             {/* r1.1 (audit P1#3): KHÔNG làm tròn ca 99.9999 thành 100% khi
                 badge ghi "Chưa đạt" — formatter dùng chung mọi surface. */}
-            <span className="text-xs font-semibold">
+            {/* Dưới md đây là con số phần trăm DUY NHẤT (ring đã ẩn) nên nó
+                phải đọc được ngay: to hơn một bậc và mang màu trạng thái. Từ md
+                trở lên giữ đúng cỡ/màu cũ vì ring vẫn gánh vai trò đó. */}
+            <span className={cn(
+              'shrink-0 text-sm font-bold tabular-nums md:text-xs md:font-semibold',
+              (reachedOrder !== null || pct >= 100) ? 'text-status-success md:text-inherit' : 'md:text-inherit',
+            )}>
               {isOrderAovCampaign ? formatCompletionPct(pct) : `${pct.toFixed(0)}%`}
             </span>
           </div>
@@ -353,7 +365,7 @@ export function CampaignKpiView({
               <p className="text-xs">
                 <span className={cn(
                   'inline-block px-2 py-0.5 rounded-full font-medium',
-                  qualityPass ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700',
+                  qualityPass ? 'bg-status-success-bg text-status-success' : 'bg-status-warning-bg text-status-warning',
                 )}>{qualityLabel}</span>
               </p>
             )}
@@ -418,7 +430,7 @@ export function CampaignKpiView({
         </Card>
         {/* r1.1 (audit khuyến nghị): ẩn với Chất lượng bán hàng — "điểm %/ngày"
             KHÔNG tương đương số đơn/ngày hay AOV/ngày, dễ hiểu sai nghiệp vụ. */}
-        {!isOrderAovCampaign && (
+        {perDayVisible(sel.metric_type) && (
           <Card className="rounded-lg">
             <CardContent className="p-3 text-center">
               <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground">
@@ -446,9 +458,7 @@ export function CampaignKpiView({
       <Card className="rounded-lg">
         <CardContent className="p-4">
           <p className="font-semibold text-sm mb-2">Tiến độ theo ngày</p>
-          {daily.length > 0 ? (
-            <>
-            {isOrderAovCampaign && seriesHrefBase && (
+          {isOrderAovCampaign && seriesHrefBase && daily.length > 0 && (
               /* Segmented Số đơn | AOV — idiom PeriodTabs: <Link> giữ URL ổn
                  định (?series=), KHÔNG biến màn Staff thành client component. */
               <div className="flex gap-1 mb-2" role="tablist" aria-label="Chuỗi biểu đồ">
@@ -471,18 +481,26 @@ export function CampaignKpiView({
                   </Link>
                 ))}
               </div>
-            )}
-            <CampaignDailyChart start={sel.start_date} end={sel.end_date} daily={daily} todayISO={todayISO} breakdown={showBreakdown} metricType={sel.metric_type} series={series} />
-            </>
-          ) : (
-            <p className="text-sm text-muted-foreground py-6 text-center">
-              {dailyError
-                ? 'Chưa tải được tiến độ theo ngày, vui lòng thử lại sau.'
-                : isCustomer ? 'Chưa có dữ liệu số khách theo ngày.'
-                : isOrderAovCampaign ? 'Chưa có dữ liệu số đơn theo ngày.'
-                : 'Chưa có dữ liệu doanh số theo ngày.'}
-            </p>
           )}
+          {/* Step 4 — KHUNG TỈ LỆ CỐ ĐỊNH: chart (svg viewBox 360×170, w-full
+              h-auto) và thông báo rỗng/lỗi chiếm CÙNG một chiều cao, nên đổi
+              chuỗi hay mất dữ liệu không làm phần dưới nhảy.
+              Dùng aspect-ratio chứ KHÔNG phải min-height px: chiều cao svg là
+              hàm của bề ngang, một con số px chỉ đúng ở đúng một viewport và
+              sai ở mọi viewport còn lại. */}
+          <div data-chart-frame="" className="aspect-[360/170] w-full">
+            {daily.length > 0 ? (
+              <CampaignDailyChart start={sel.start_date} end={sel.end_date} daily={daily} todayISO={todayISO} breakdown={showBreakdown} metricType={sel.metric_type} series={series} />
+            ) : (
+              <p className="flex h-full items-center justify-center text-center text-sm text-muted-foreground">
+                {dailyError
+                  ? 'Chưa tải được tiến độ theo ngày, vui lòng thử lại sau.'
+                  : isCustomer ? 'Chưa có dữ liệu số khách theo ngày.'
+                  : isOrderAovCampaign ? 'Chưa có dữ liệu số đơn theo ngày.'
+                  : 'Chưa có dữ liệu doanh số theo ngày.'}
+              </p>
+            )}
+          </div>
         </CardContent>
       </Card>
 

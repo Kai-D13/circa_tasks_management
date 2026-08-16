@@ -30,7 +30,7 @@ import { getAffiliateSyncHealth, supabaseAffiliateHealthDb } from '@/lib/affilia
 import { ReferralCard, type ReferralItem } from '@/components/referral/ReferralCard'
 import { formatDate, formatDateTime, currentWeekStart } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
-import { Target, TrendingUp } from 'lucide-react'
+import { ChartNoAxesCombined, Target, TrendingUp } from 'lucide-react'
 
 // KPI v2 (migration 067): Day / Week / Month sales targets from the daily
 // BigQuery feed (store_kpi_targets, fed by /api/cron/pull-kpi-targets).
@@ -648,14 +648,14 @@ export default async function TargetsPage({
       <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
         <PageHeader
           title="Doanh số chiến dịch"
-          icon={TrendingUp}
+          icon={ChartNoAxesCombined}
           /* Campaign view carries its own store pill (r3) — avoid duplicating */
           actions={campaignViews.length === 0 ? <span className="text-sm text-muted-foreground">{storeName}</span> : undefined}
         />
         <div className={cn('grid grid-cols-1 gap-4 items-start', mgrSideCards && 'md:grid-cols-[minmax(0,1fr)_340px]')}>
           <div className="space-y-4 min-w-0">
             {campaignViews.length === 0 ? (
-              <EmptyState className="py-12" icon={TrendingUp} title="Hiện chưa có chiến dịch doanh số đang áp dụng." />
+              <EmptyState className="py-12" icon={ChartNoAxesCombined} title="Hiện chưa có chiến dịch doanh số đang áp dụng." />
             ) : showCampaignList ? (
               <CampaignCardList items={campaignViews} hrefFor={campaignHref} />
             ) : (
@@ -688,7 +688,7 @@ export default async function TargetsPage({
     if (!profile?.store_id) {
       return (
         <div className="p-4 space-y-4">
-          <PageHeader title="Doanh số" icon={TrendingUp} />
+          <PageHeader title="Doanh số" icon={ChartNoAxesCombined} />
           <EmptyState title="Tài khoản chưa được gán cửa hàng" hint="Vui lòng liên hệ Admin." />
         </div>
       )
@@ -704,7 +704,7 @@ export default async function TargetsPage({
       console.error('[targets] staff query failed:', rowsError.message)
       return (
         <div className="p-4 space-y-4">
-          <PageHeader title="Doanh số" icon={TrendingUp} />
+          <PageHeader title="Doanh số" icon={ChartNoAxesCombined} />
           <ErrorState message="Không tải được dữ liệu doanh số" hint="Vui lòng thử lại sau hoặc báo Admin." />
         </div>
       )
@@ -748,7 +748,7 @@ export default async function TargetsPage({
     if (campaignViews.length > 0) {
       return (
         <div className="p-4 space-y-4 max-w-xl mx-auto">
-          <PageHeader title="Doanh số chiến dịch" icon={TrendingUp} />
+          <PageHeader title="Doanh số chiến dịch" icon={ChartNoAxesCombined} />
           {/* Card list to pick a campaign (stakeholder); a picked/single one → detail */}
           {showCampaignList ? (
             <CampaignCardList items={campaignViews} hrefFor={campaignHref} />
@@ -812,14 +812,14 @@ export default async function TargetsPage({
       <div className="p-4 space-y-4 max-w-xl mx-auto">
         <PageHeader
           title={TITLE[period]}
-          icon={TrendingUp}
+          icon={ChartNoAxesCombined}
           actions={<span className="text-sm text-muted-foreground">{storeName}</span>}
         />
 
         <PeriodTabs period={period} />
 
         {!current ? (
-          <EmptyState className="py-12" icon={TrendingUp} title={emptyMsg} />
+          <EmptyState className="py-12" icon={ChartNoAxesCombined} title={emptyMsg} />
         ) : (
           <>
             {/* KPI summary card — identical for day / week / month */}
@@ -893,7 +893,7 @@ export default async function TargetsPage({
     <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
       <PageHeader
         title={`${TITLE[period]} theo cửa hàng`}
-        icon={TrendingUp}
+        icon={ChartNoAxesCombined}
         subtitle={periodRows.length > 0 && currentStart
           ? `${currentLabel(period, currentStart, periodRows[0]?.period_end ?? currentStart)} · ${periodRows.length} cửa hàng · cập nhật ${formatDateTime(periodRows[0]?.refreshed_at ?? '')}`
           : 'Chưa có dữ liệu cho kỳ này — kiểm tra cron /api/cron/pull-kpi-targets đã chạy chưa.'}

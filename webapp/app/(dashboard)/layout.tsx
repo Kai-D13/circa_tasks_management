@@ -85,10 +85,14 @@ export default async function DashboardLayout({
           {!isStaff && <Sidebar announcementsUnread={announcementsUnread} kpiCampaignEnabled={kpiCampaignEnabled} referralEnabled={referralEnabled} isFsStore={isFsStore} affiliateOverviewNav={affiliateOverviewNav} defaultCollapsed={sidebarCollapsed} />}
 
           {/* Main content — full width on mobile */}
-          {/* Mobile bottom padding clears the fixed BottomNav (h-16) + the iPhone
+          {/* Mobile bottom padding clears the fixed BottomNav + the iPhone
               home-indicator safe area + a little breathing room, so the last card /
-              Staff pager is never hidden behind the nav. Desktop has no bottom nav. */}
-          <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden bg-muted/20 pb-[calc(5.5rem_+_env(safe-area-inset-bottom))] md:pb-0">
+              Staff pager is never hidden behind the nav. Desktop has no bottom nav.
+              `--bottom-nav-clearance` (globals.css) DẪN XUẤT từ `--bottom-nav-h`
+              — cùng token mà BottomNav dùng cho chiều cao pill — nên đổi chiều
+              cao nav là chỗ này tự khớp. Giá trị hiện tại bằng đúng pb cũ
+              (5.5rem + safe-area = 82.5px + safe-area @ root 15px). */}
+          <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden bg-muted/20 pb-[var(--bottom-nav-clearance)] md:pb-0">
             {/* Mobile top header */}
             <MobileHeader />
             {children}

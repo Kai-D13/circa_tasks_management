@@ -86,6 +86,27 @@
   --chart-4: oklch(0.37 0 0);
   --chart-5: oklch(0.27 0 0);
   --radius: 0.5rem;
+  /* Bottom nav (mobile) — NGUỒN DUY NHẤT cho chiều cao thanh điều hướng dưới và
+     khoảng chừa nội dung. INVARIANT: đổi `--bottom-nav-h` là BottomNav (pill) và
+     <main> (padding-bottom) tự khớp, không nơi nào phải sửa tay — chuẩn bị cho
+     nút giữa nổi (M1) làm thanh nav cao lên.
+     PIXEL LITERAL vì root font-size = 15px, rem lừa: h-16 = 4rem = 60px THẬT
+     (không phải 64px), 0.5rem = 7.5px, 1rem = 15px.
+     Giữ nguyên hiện trạng: 60 + 7.5 + 15 = 82.5px = 5.5rem — đúng giá trị
+     pb-[calc(5.5rem + safe-area)] mà <main> đang dùng ⇒ zero-visual-change.
+     M1.1 (audit P2#4): clearance phải tính CẢ vùng THỊ GIÁC của nút giữa nổi,
+     không chỉ hộp 56px — khi active nút có ring-4 + ring-offset-4 nở thêm 8px
+     ra ngoài hộp. Trước đó clearance chỉ chừa 15px thở nên quầng sáng đè lên
+     phần tử cuối trang ~7px dù test đo hộp vẫn "pass". */
+  --bottom-nav-h: 60px;                    /* chiều cao pill (đang là h-16) */
+  --bottom-nav-offset: 7.5px;              /* hở giữa pill và mép dưới màn hình */
+  --bottom-nav-center-overhang: 14px;      /* phần nút giữa nhô lên trên mép pill */
+  --bottom-nav-center-halo: 8px;           /* ring-4 (4px) + ring-offset-4 (4px) khi active */
+  --bottom-nav-content-gap: 8px;           /* thở giữa nội dung và điểm cao nhất của nav */
+  /* Chiều cao vùng thị giác của nút giữa tính từ mép dưới màn hình — test đo
+     bằng wrapper [data-nav-center-zone] có đúng chiều cao này. */
+  --bottom-nav-center-visual: calc(var(--bottom-nav-h) + var(--bottom-nav-offset) + var(--bottom-nav-center-overhang) + var(--bottom-nav-center-halo));
+  --bottom-nav-clearance: calc(var(--bottom-nav-center-visual) + var(--bottom-nav-content-gap) + env(safe-area-inset-bottom));
   /* Status tones (P1.1) — MEASURED WCAG pairs, all ≥6.48:1 on their bg
      (docs/ui/UI_FOUNDATION_SPEC §2 — copy-only values, never re-tune here). */
   --status-success:    oklch(0.44 0.11 150);
