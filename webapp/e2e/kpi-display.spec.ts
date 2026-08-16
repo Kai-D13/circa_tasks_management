@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import {
-  breakdownModel, campaignCardProgress, campaignFootnote, campaignOverviewValue, heroRemainingText,
-  metricEditorState, metricPresentation, orderAxisTicks, syncedSubjectLabel,
+  breakdownModel, campaignCardProgress, campaignCardValue, campaignFootnote, campaignOverviewValue,
+  heroRemainingText, metricEditorState, metricPresentation, orderAxisTicks, syncedSubjectLabel,
 } from '../lib/kpi/campaignDisplay'
 import { affiliateDataStatus, buildCampaignExportRows, buildCustomerCampaignExportRows, buildOrderAovCampaignExportRows, type ExportActual } from '../lib/kpi/exportRows'
 
@@ -377,6 +377,98 @@ test.describe('kpi display customer metric (mig 103) @desktop', () => {
       const ticks = orderAxisTicks(m)
       expect(ticks.every((t) => Number.isInteger(t) && t > 0), `max=${m}`).toBe(true)
       expect(new Set(ticks).size, `max=${m}`).toBe(ticks.length)
+    }
+  })
+})
+
+// ── Batch /targets mobile: card MỘT CỬA HÀNG ────────────────────────────────
+// Ma trận 3 metric × 6 trạng thái. Đây là ba chỗ từng sai IM LẶNG trên màn
+// tiền, nên khóa cả ba: metricPresentation default 'gmv' (loại lạ ra "116₫"),
+// làm tròn 99,9999% thành 100%, và "0 thật" bị lẫn với "chưa đồng bộ".
+test.describe('kpi card value — 1 cửa hàng (batch /targets) @desktop', () => {
+  const GMV = { metricType: 'gmv', kpiTarget: 1_000_000, actualValue: 400_000 }
+  const CUS = { metricType: 'affiliate_customer_count', kpiTarget: 450, actualValue: 3 }
+  const QUA = {
+    metricType: 'offline_order_aov', kpiTarget: 100, actualValue: 116.1975,
+    actualOffline: 202_950_000, offlineOrderCount: 1_046,
+    orderTarget: 900, aovTarget: 190_540,
+  }
+
+  test('CHƯA ĐỒNG BỘ (cả 3 loại): không % giả, tone neutral, không vẽ tiến độ', () => {
+    for (const base of [GMV, CUS, QUA]) {
+      const v = campaignCardValue({ ...base, actualValue: null })
+      expect(v.synced, base.metricType).toBe(false)
+      expect(v.pct, base.metricType).toBe(0)
+      expect(v.pctText, base.metricType).toBe('Chưa đồng bộ')
+      expect(v.tone, base.metricType).toBe('neutral')
+    }
+    // Cặp số cũng không được bịa khi chưa có snapshot.
+    expect(campaignCardValue({ ...GMV, actualValue: null }).lines[0].value).toBe('—')
+    expect(campaignCardValue({ ...CUS, actualValue: null }).lines[0].value).toBe('—')
+  })
+
+  test('ACTUAL 0 THẬT: vẫn là đã đồng bộ, hiện 0 — KHÁC hẳn chưa đồng bộ', () => {
+    const g = campaignCardValue({ ...GMV, actualValue: 0 })
+    expect(g.synced).toBe(true)
+    expect(g.pctText).toBe('0%')
+    expect(g.lines[0].value).toBe('0₫ / 1.000.000₫')
+    expect(g.tone).toBe('warning')
+
+    const c = campaignCardValue({ ...CUS, actualValue: 0 })
+    expect(c.lines[0].value).toBe('0 / 450 khách')
+  })
+
+  test('GMV: cặp tiền có ₫ hai đầu; đạt target → tone success', () => {
+    expect(campaignCardValue(GMV).lines[0].value).toBe('400.000₫ / 1.000.000₫')
+    expect(campaignCardValue(GMV).tone).toBe('warning')
+    expect(campaignCardValue({ ...GMV, actualValue: 1_000_000 }).tone).toBe('success')
+    expect(campaignCardValue({ ...GMV, actualValue: 1_000_000 }).pctText).toBe('100%')
+  })
+
+  test('KHÁCH: đơn vị đứng MỘT lần ở cuối — tuyệt đối không "450₫"', () => {
+    const v = campaignCardValue(CUS)
+    expect(v.lines[0].value).toBe('3 / 450 khách')
+    expect(v.lines[0].value).not.toContain('₫')
+    expect(v.pctText).toBe('1%')
+  })
+
+  test('CHẤT LƯỢNG BÁN HÀNG: HAI dòng Số đơn + AOV, không gộp', () => {
+    const v = campaignCardValue(QUA)
+    expect(v.lines.map((l) => l.label)).toEqual(['Số đơn', 'AOV'])
+    expect(v.lines[0].value).toBe('1.046 / 900 đơn')
+    expect(v.lines[1].value).toBe('194.025₫ / 190.540₫')
+    expect(v.pctText).toBe('116,2%')
+    expect(v.tone).toBe('success')
+  })
+
+  test('CHẤT LƯỢNG: 99,9999% là CHƯA đạt — không làm tròn lên 100%, tone warning', () => {
+    const v = campaignCardValue({ ...QUA, actualValue: 99.9999 })
+    expect(v.pctText).toBe('<100%')
+    expect(v.tone).toBe('warning')
+    // đúng 100 mới là đạt
+    expect(campaignCardValue({ ...QUA, actualValue: 100 }).tone).toBe('success')
+  })
+
+  test('CHẤT LƯỢNG thiếu cấu hình mục tiêu → không bịa dòng nào', () => {
+    const v = campaignCardValue({ ...QUA, orderTarget: null, aovTarget: null })
+    expect(v.lines).toEqual([])
+    expect(v.synced).toBe(true)
+  })
+
+  test('metric_type LẠ → rơi về gmv (an toàn hiển thị), không crash', () => {
+    const v = campaignCardValue({ metricType: 'khong_ton_tai', kpiTarget: 1000, actualValue: 500 })
+    expect(v.kind).toBe('gmv')
+    expect(v.lines[0].value).toBe('500₫ / 1.000₫')
+  })
+
+  test('CÙNG LUẬT làm tròn với campaignCardProgress (không hai nguồn sự thật)', () => {
+    for (const base of [GMV, CUS, QUA]) {
+      const prog = campaignCardProgress({
+        kpi_target: base.kpiTarget, actual_value: base.actualValue, metric_type: base.metricType,
+      })
+      const card = campaignCardValue(base)
+      expect(card.pct, base.metricType).toBe(prog.pct)
+      expect(card.pctText, base.metricType).toBe(prog.text)
     }
   })
 })
