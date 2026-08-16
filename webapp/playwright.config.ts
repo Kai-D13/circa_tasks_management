@@ -19,7 +19,10 @@ export default defineConfig({
     // Thiếu E2E_STAFF_* thì setup skip, các spec phụ thuộc cũng skip ⇒ suite
     // vẫn xanh trên máy không có credential.
     { name: 'setup', testMatch: /auth\.setup\.ts/ },
-    { name: 'desktop-chromium', grep: /@desktop/, use: { ...devices['Desktop Chrome'], viewport: { width: 1366, height: 900 } } },
+    // dependencies: setup — spec @desktop nào dùng storageState (vd acceptance
+    // campaign detail) sẽ đỏ trên máy sạch nếu project này không chờ setup.
+    // Setup tự bỏ qua khi state còn hiệu lực nên phụ thuộc này gần như miễn phí.
+    { name: 'desktop-chromium', grep: /@desktop/, dependencies: ['setup'], use: { ...devices['Desktop Chrome'], viewport: { width: 1366, height: 900 } } },
     { name: 'mobile-390', grep: /@mobile/, dependencies: ['setup'], use: { ...devices['Pixel 5'] } },
     { name: 'mobile-360', grep: /@mobile/, dependencies: ['setup'], use: { ...devices['Galaxy S9+'], viewport: { width: 360, height: 800 } } },
     // WebKit engine (closest to Safari) — OPT-IN (@webkit tag): authed flows

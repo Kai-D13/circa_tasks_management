@@ -13,3 +13,7 @@ export const STAFF_STATE = path.join(__dirname, '.auth', 'staff.json')
 // nhưng DÙNG CHUNG CampaignCardList + AffiliateQrCard với Staff, nên phải có
 // coverage riêng: sửa component là đụng cả hai vai trò.
 export const MANAGER_STATE = path.join(__dirname, '.auth', 'manager.json')
+
+// Super Admin — /targets/campaigns là màn CHỈ super (không phải admin thường),
+// nên acceptance của nó không dùng lại được state nào ở trên.
+export const SUPER_STATE = path.join(__dirname, '.auth', 'super.json')

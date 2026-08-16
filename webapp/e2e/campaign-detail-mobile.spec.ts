@@ -50,18 +50,48 @@ async function gotoTargets(page: Page) {
     .toHaveURL(/\/targets(\?|$)/)
 }
 
-// Mở chiến dịch đầu tiên. false = store không có chiến dịch nào (caller skip).
+// ĐẾN được trang chi tiết — dùng cho các test KHÔNG nhằm kiểm cú bấm.
+// Đi thẳng bằng goto thay vì click: card nằm trong vùng cuộn, bottom nav nổi
+// che mép dưới, và layout còn xê dịch sau khi cuộn ⇒ cú click trong phần SETUP
+// từng đỏ ngẫu nhiên ở một viewport khác nhau mỗi lượt. Href vẫn được đọc từ
+// DOM thật nên vẫn khoá được "card trỏ đúng ?campaign=".
+// false = store không có chiến dịch nào (caller skip).
 async function openFirstCampaign(page: Page): Promise<boolean> {
   await gotoTargets(page)
   if (/[?&]campaign=/.test(page.url())) return true   // store chỉ có 1 chiến dịch
   const first = page.locator('main a[href*="campaign="]').first()
   if (await first.count() === 0) return false
-  // Card có thể nằm dưới fold ở 360px, và điều hướng là server-render nên chậm
-  // hơn ngưỡng mặc định 5s khi chạy tuần tự nhiều vai trò.
-  await first.scrollIntoViewIfNeeded()
-  await expect(first).toBeVisible()
-  await first.click()
+  const href = await first.getAttribute('href')
+  expect(href, 'card chiến dịch thiếu href').toBeTruthy()
+  await page.goto(href!)
   await expect(page).toHaveURL(/[?&]campaign=/, { timeout: 20_000 })
+  return true
+}
+
+// BẤM THẬT vào card — chỉ dùng cho test hành trình list → detail. Cuộn vào GIỮA
+// màn (scrollIntoViewIfNeeded đưa phần tử vào ở mức tối thiểu, tức sát mép dưới
+// đúng chỗ bottom nav nổi chiếm) rồi đợi layout đứng yên trước khi bấm.
+async function clickFirstCampaign(page: Page): Promise<boolean> {
+  await gotoTargets(page)
+  // Store chỉ có MỘT chiến dịch thì /targets render thẳng trang chi tiết (có
+  // link "← Danh sách chiến dịch"), KHÔNG có danh sách để bấm — hành trình
+  // list → detail đơn giản là không tồn tại, phải skip chứ không phải cố bấm.
+  // Bản trước không kiểm điều này nên vớ phải link trong CampaignPicker và đỏ
+  // ngẫu nhiên; triệu chứng "URL không đổi" hoàn toàn đánh lạc hướng.
+  if (await page.getByRole('link', { name: /Danh sách chiến dịch/ }).count() > 0) return false
+  const first = page.locator('main a[href*="campaign="]').first()
+  if (await first.count() === 0) return false
+  // Cả cụm cuộn → bấm → điều hướng được RETRY như một khối (idiom sẵn có ở
+  // ui-catalog.spec cho login): cú bấm đầu thỉnh thoảng rơi vào lúc layout còn
+  // xê dịch nên không điều hướng. Bấm lại là xong; điều đang kiểm là "card dẫn
+  // sang detail được", không phải "trúng ngay phát đầu".
+  await expect(async () => {
+    await first.evaluate((el) => el.scrollIntoView({ block: 'center' }))
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
+    await expect(first).toBeVisible()
+    await first.click()
+    await expect(page).toHaveURL(/[?&]campaign=/, { timeout: 10_000 })
+  }).toPass({ timeout: 45_000, intervals: [1_000, 2_000, 3_000] })
   return true
 }
 
@@ -137,8 +167,9 @@ function mobileSuite(label: string, state: string, creds: { email?: string; pass
         }
       })
 
-      test(`back về danh sách chiến dịch @${vp.w}`, async ({ page }) => {
-        test.skip(!(await openFirstCampaign(page)), 'store chưa có chiến dịch nào')
+      // Hành trình THẬT: bấm card ở danh sách → detail → back về danh sách.
+      test(`list → detail → back @${vp.w}`, async ({ page }) => {
+        test.skip(!(await clickFirstCampaign(page)), 'store không có DANH SÁCH chiến dịch để bấm (0 hoặc chỉ 1 chiến dịch)')
         await page.getByRole('link', { name: /Danh sách chiến dịch/ }).click()
         // Cùng lý do với openFirstCampaign: điều hướng là server-render, chạy
         // tuần tự 2 vai trò × 3 viewport thì vượt ngưỡng mặc định 5s. Đã đỏ một
