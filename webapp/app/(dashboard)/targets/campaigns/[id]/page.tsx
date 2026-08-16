@@ -249,7 +249,7 @@ export default async function CampaignDetailPage({
           {/* ── Kết quả ── */}
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <span className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground">
-              <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', lastSynced ? 'bg-green-500' : 'bg-amber-500')} />
+              <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', lastSynced ? 'bg-status-success' : 'bg-status-warning')} />
               {lastSynced ? `Doanh số đồng bộ ${formatDateTime(lastSynced)}` : 'Chưa đồng bộ doanh số'}
             </span>
             <div className="flex items-center gap-2">

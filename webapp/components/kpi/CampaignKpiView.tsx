@@ -353,7 +353,7 @@ export function CampaignKpiView({
               <p className="text-xs">
                 <span className={cn(
                   'inline-block px-2 py-0.5 rounded-full font-medium',
-                  qualityPass ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700',
+                  qualityPass ? 'bg-status-success-bg text-status-success' : 'bg-status-warning-bg text-status-warning',
                 )}>{qualityLabel}</span>
               </p>
             )}

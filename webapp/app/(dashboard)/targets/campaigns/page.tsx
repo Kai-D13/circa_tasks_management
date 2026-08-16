@@ -98,8 +98,8 @@ export default async function CampaignsPage() {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           {[
             { label: 'Tổng chiến dịch', value: counts.total, dot: 'bg-primary' },
-            { label: 'Đang chạy', value: counts.active, dot: 'bg-green-500' },
-            { label: 'Tạm dừng', value: counts.paused, dot: 'bg-amber-500' },
+            { label: 'Đang chạy', value: counts.active, dot: 'bg-status-success' },
+            { label: 'Tạm dừng', value: counts.paused, dot: 'bg-status-warning' },
             { label: 'Nháp', value: counts.draft, dot: 'bg-muted-foreground/40' },
           ].map((s) => (
             <Card key={s.label}>
@@ -134,8 +134,8 @@ export default async function CampaignsPage() {
               // Money-screen color rule: grey until synced (0% must not read as a
               // real result), brand orange while running, green only at ≥100%
               // (brand guide: green stays a small accent).
-              const barCls = !synced ? 'bg-muted-foreground/30' : pct >= 100 ? 'bg-green-500' : 'bg-primary'
-              const pctCls = !synced ? 'text-muted-foreground' : pct >= 100 ? 'text-green-600' : 'text-primary'
+              const barCls = !synced ? 'bg-muted-foreground/30' : pct >= 100 ? 'bg-status-success' : 'bg-primary'
+              const pctCls = !synced ? 'text-muted-foreground' : pct >= 100 ? 'text-status-success' : 'text-primary'
               const progress = (
                 <div className="flex items-center gap-2">
                   <div className="h-2 flex-1 rounded-full bg-muted overflow-hidden">
