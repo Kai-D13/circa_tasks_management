@@ -115,13 +115,17 @@ export function MobileHeader() {
             <p className="text-sm font-semibold text-white leading-tight truncate min-w-0">Quản lý sản phẩm</p>
           </div>
         ) : (
-          /* Top-level: logo + name (role label dropped for a cleaner compact header) */
+          /* Top-level: NHẬN DIỆN, không phải danh tính người dùng.
+             M1.3: bỏ `profile.full_name` khỏi header. Tên đã hiện ở avatar (chữ
+             cái đầu) và đầy đủ trong account sheet cùng email — in thêm ở đây
+             là lặp, mà lại chiếm gần hết bề ngang 360px vì tên tiếng Việt dài.
+             Danh tính chỉ sống trong account sheet. */
           <div className="flex items-center gap-2 flex-1 min-w-0">
             <div className="h-8 w-8 rounded-full bg-white/20 flex items-center justify-center shrink-0">
               <span className="text-xs font-bold text-white">C</span>
             </div>
             <p className="text-sm font-semibold text-white leading-tight truncate min-w-0">
-              {profile?.full_name ?? 'Circa Tasks'}
+              Circa Tasks
             </p>
           </div>
         )}
