@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { AFFILIATE_QR_FILTER, qrCardVisible, qrCardState, urlStateActive, qrCardKey, qrEligibleRole } from '../lib/affiliate/qrDisplay'
+import { AFFILIATE_QR_FILTER, qrCardVisible, qrCardState, qrImageMounted, qrToggleState, urlStateActive, qrCardKey, qrEligibleRole } from '../lib/affiliate/qrDisplay'
 import { decideUpload } from '../scripts/qr-upload-decision.mjs'
 
 // P3-H r1 unit gate (audit 24/07) — khóa contract hiển thị QR + quyết định
@@ -79,5 +79,24 @@ test.describe('affiliate qr display + upload contract @desktop', () => {
     // Không đọc được SHA remote (object tồn tại nhưng fetch lỗi) → fail-closed,
     // KHÔNG ghi đè.
     expect(decideUpload({ exists: true, localSha: 'abc' })).toBe('FAIL_DIFFERENT')
+  })
+})
+
+// ── Step 3.1: disclosure compact dưới md ────────────────────────────────────
+test.describe('qr disclosure contract @desktop', () => {
+  test('qrImageMounted: desktop luôn mount; mobile chỉ khi đã mở', () => {
+    // Desktop giữ nguyên hình thức đã duyệt — không phụ thuộc expanded.
+    expect(qrImageMounted({ isDesktop: true, expanded: false })).toBe(true)
+    expect(qrImageMounted({ isDesktop: true, expanded: true })).toBe(true)
+    // Mobile: đóng thì KHÔNG mount (không chỉ ẩn bằng CSS).
+    expect(qrImageMounted({ isDesktop: false, expanded: false })).toBe(false)
+    expect(qrImageMounted({ isDesktop: false, expanded: true })).toBe(true)
+  })
+
+  test('qrToggleState: thu gọn kéo theo đóng modal; mở thì không đụng modal', () => {
+    // đang mở → thu gọn: phải đóng modal cùng lúc
+    expect(qrToggleState({ expanded: true })).toEqual({ expanded: false, closeModal: true })
+    // đang đóng → mở: không có modal nào để đóng
+    expect(qrToggleState({ expanded: false })).toEqual({ expanded: true, closeModal: false })
   })
 })

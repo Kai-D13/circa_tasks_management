@@ -42,6 +42,30 @@ export function qrCardKey(storeId: string | null, imageUrl: string | null): stri
   return `${storeId ?? 'none'}|${imageUrl ?? 'none'}`
 }
 
+// ── Step 3.1: disclosure compact trên mobile ────────────────────────────────
+// Ảnh QR 220–240px chiếm gần trọn first viewport ở 360px, đẩy danh sách chiến
+// dịch xuống dưới màn. Dưới `md` chỉ hiện một hàng compact; ảnh CHỈ mount sau
+// khi người dùng mở. Từ `md` trở lên giữ nguyên hình thức đã duyệt.
+//
+// Vì sao là quyết định THẬT chứ không phải `hidden md:block`: ẩn bằng CSS vẫn
+// để <img> trong DOM, trình duyệt vẫn có thể tải ảnh và mục tiêu "không chiếm
+// first viewport" chỉ đúng một nửa. Hàm này là chỗ duy nhất quyết định.
+export function qrImageMounted(p: { isDesktop: boolean; expanded: boolean }): boolean {
+  return p.isDesktop || p.expanded
+}
+
+// Bấm nút thu gọn/mở: thu gọn PHẢI đóng luôn modal đang mở, nếu không ảnh
+// phóng to vẫn đè màn hình trong khi hàng compact đã báo "đã đóng".
+//
+// Vì sao là hàm thuần chứ không test qua UI: khi modal mở, backdrop (và lớp
+// inert) của base-ui nuốt mọi pointer event ở dưới — kể cả force-click của
+// Playwright cũng không tới được nút thu gọn. Nhánh này KHÔNG chạm tới được
+// bằng chuột thật, nên chỗ duy nhất khoá được nó là ở đây.
+export function qrToggleState(p: { expanded: boolean }): { expanded: boolean; closeModal: boolean } {
+  const expanded = !p.expanded
+  return { expanded, closeModal: !expanded }
+}
+
 // Trạng thái card (audit P2 #3): lỗi query ≠ chưa cấu hình — lỗi DB/RLS/
 // migration phải hiện "Không tải được", không được giả dạng "chưa cấu hình".
 export type QrCardState = 'qr' | 'missing' | 'error'
