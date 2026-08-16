@@ -3,6 +3,7 @@ import {
   breakdownModel, campaignCardProgress, campaignCardValue, campaignFootnote, campaignOverviewValue,
   heroRemainingText, metricEditorState, metricPresentation, orderAxisTicks, perDayVisible, syncedSubjectLabel,
 } from '../lib/kpi/campaignDisplay'
+import { STATUS_META, TEST_BADGE_CLS } from '../lib/kpi/status'
 import { affiliateDataStatus, buildCampaignExportRows, buildCustomerCampaignExportRows, buildOrderAovCampaignExportRows, type ExportActual } from '../lib/kpi/exportRows'
 
 // P3-E/F r1 unit gate (audit P2#3) — khóa contract render breakdown, footnote,
@@ -563,5 +564,66 @@ test.describe('kpi campaign detail hero contract (Step 4) @desktop', () => {
     // điểm %/ngày không tương đương số đơn/ngày hay AOV/ngày ⇒ không hiện
     expect(perDayVisible('offline_order_aov')).toBe(false)
     expect(perDayVisible(undefined)).toBe(true)
+  })
+})
+
+// ── Step 5.1: màn danh sách campaign (Super Admin) ──────────────────────────
+// Row của /targets/campaigns giờ tiêu thụ campaignOverviewValue — CÙNG hàm mà
+// màn tổng hợp SM đang dùng, nên Super và SM không thể đọc ra hai con số khác
+// nhau cho cùng một chiến dịch. Test dưới đây khoá đúng các lỗi từng gặp.
+test.describe('kpi campaign list row (Step 5.1) @desktop', () => {
+  test('KHÁCH: đơn vị "khách", tuyệt đối không ra tiền', () => {
+    const v = campaignOverviewValue({
+      metricType: 'affiliate_customer_count', synced: true,
+      storeCount: 5, totalTarget: 450, totalActual: 3,
+    })
+    expect(v.lines[0].value).toBe('3 / 450 khách')
+    expect(v.lines[0].value).not.toContain('₫')
+  })
+
+  test('CHƯA ĐỒNG BỘ: không rò actual, % là "—" chứ không phải 0%', () => {
+    for (const metricType of ['gmv', 'affiliate_customer_count', 'offline_order_aov']) {
+      const v = campaignOverviewValue({
+        metricType, synced: false,
+        storeCount: 5, totalTarget: 1_000_000, totalActual: 999_999,
+        qualityPassCount: 4,
+      })
+      expect(v.pctText, metricType).toBe('—')
+      expect(v.pct, metricType).toBe(0)   // pct 0 ⇒ KHÔNG vẽ thanh tiến độ
+      // giá trị cũ (999.999) không được lọt ra bất kỳ dòng nào
+      expect(v.lines.some((l) => l.value.includes('999')), metricType).toBe(false)
+    }
+  })
+
+  test('CHẤT LƯỢNG: dùng số cửa hàng ĐẠT KPI, không phải tiền', () => {
+    const v = campaignOverviewValue({
+      metricType: 'offline_order_aov', synced: true,
+      storeCount: 8, totalTarget: 100, totalActual: 116, qualityPassCount: 3,
+    })
+    expect(v.lines[0]).toEqual({ label: 'Đạt KPI', value: '3/8 cửa hàng' })
+    // kpi_target là ĐIỂM 100 chuẩn hoá — không được render thành "100₫"
+    expect(v.lines.some((l) => l.value.includes('₫'))).toBe(false)
+    expect(v.pctText).toBe('38%')   // 3/8
+  })
+
+  test('GMV: cặp tiền hai đầu đều có ₫', () => {
+    const v = campaignOverviewValue({
+      metricType: 'gmv', synced: true,
+      storeCount: 3, totalTarget: 1_000_000, totalActual: 400_000,
+    })
+    expect(v.lines[0].value).toBe('400.000₫ / 1.000.000₫')
+    expect(v.pctText).toBe('40%')
+  })
+
+  test('STATUS_META + TEST badge: dùng token, KHÔNG còn màu chỉ-sáng', () => {
+    const all = [...Object.values(STATUS_META).map((m) => m.cls), TEST_BADGE_CLS]
+    for (const cls of all) {
+      // gray/green/amber/purple-100… là cặp chỉ-sáng, dark mode đọc sai.
+      expect(cls, cls).not.toMatch(/(bg|text)-(gray|green|amber|red|purple|blue|yellow)-\d{2,3}/)
+      expect(cls, cls).toMatch(/status-/)
+    }
+    // nhãn giữ nguyên — đây là commit đổi màu, không đổi chữ
+    expect(STATUS_META.active.label).toBe('Đang chạy')
+    expect(STATUS_META.draft.label).toBe('Nháp')
   })
 })
