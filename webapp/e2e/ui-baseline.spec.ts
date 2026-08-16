@@ -64,7 +64,7 @@ const DATA_MASKS = [
   'main tbody', 'main .divide-y',            // bảng + list rows
   'main [class*="md:hidden"]',               // mobile data card lists (prescriptions…)
   'main div.grid',                           // strip/summary grids (counts = data sống)
-  'header p',                                // tên user (PII)
+  'header p',                                // tiêu đề header (M1.3: hằng số 'Circa Tasks', không còn PII — giữ mask để snapshot không phụ thuộc branding)
   'nav span.absolute', 'aside span.absolute' // badge đếm (bottom-nav + sidebar)
 ]
 
@@ -81,12 +81,16 @@ async function snap(page: Page, route: string, heading: string, name: string, th
     heading.normalize('NFC').toLowerCase(),
     { timeout: 15_000 },
   )
-  // Hydration settle (webkit race, gate 2 caught it): header title flips from the
-  // SSR fallback 'Circa Tasks' to the user's name only after the client store
-  // hydrates — wait for that signal (or no header <p> at all), then fonts.
+  // Hydration settle (webkit race, gate 2 caught it).
+  // Tín hiệu CŨ là "header <p> đổi từ fallback 'Circa Tasks' sang tên user".
+  // M1.3 bỏ tên khỏi header ⇒ 'Circa Tasks' thành giá trị VĨNH VIỄN, điều kiện
+  // đó không bao giờ đúng nữa: mỗi route treo hết 10s rồi vỡ luôn test timeout
+  // 240s. Tín hiệu MỚI: bottom nav chỉ render tab sau khi `role` có từ client
+  // store (trước hydrate `visible = []` nên nav rỗng, thẻ <nav> vẫn có mặt).
+  // Nhánh `!nav` giữ đúng hình dạng no-op của điều kiện cũ.
   await page.waitForFunction(() => {
-    const el = document.querySelector('header p')
-    return !el || (!!el.textContent && el.textContent !== 'Circa Tasks')
+    const nav = document.querySelector('nav[aria-label="Điều hướng chính"]')
+    return !nav || nav.querySelectorAll('a').length > 0
   }, { timeout: 10_000 })
   await page.evaluate(() => document.fonts.ready)
   await page.waitForTimeout(250) // paint settle AFTER all conditions (secondary only)
