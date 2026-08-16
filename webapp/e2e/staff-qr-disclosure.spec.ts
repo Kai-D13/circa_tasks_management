@@ -1,5 +1,5 @@
 import { test, expect, type Page } from '@playwright/test'
-import { STAFF_STATE } from './authState'
+import { MANAGER_STATE, STAFF_STATE } from './authState'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // QR AFFILIATE — DISCLOSURE COMPACT (Step 3.1), hợp đồng RUNTIME
@@ -18,10 +18,24 @@ import { STAFF_STATE } from './authState'
 
 const EMAIL = process.env.E2E_STAFF_EMAIL
 const PASSWORD = process.env.E2E_STAFF_PASSWORD
+const QLCH_EMAIL = process.env.E2E_QLCH_EMAIL
+const QLCH_PASSWORD = process.env.E2E_QLCH_PASSWORD
 
 const CARD = 'text=Mã QR Circa Online'
 const QR_IMG = 'img[alt^="Mã QR Affiliate"]'
-const TOGGLE = 'button[aria-controls][aria-expanded]'
+
+// Locator PHẢI bọc trong card QR, không quét cả trang: nhánh QLCH có những
+// control aria-expanded khác trên cùng landing, `.first()` toàn trang bắt nhầm
+// nút rồi test đỏ ở chỗ chẳng liên quan (đã dính đúng bẫy này).
+function qrCard(page: Page) {
+  return page.locator('[data-slot="card"]').filter({ hasText: 'Mã QR Circa Online' }).first()
+}
+function qrToggle(page: Page) {
+  return qrCard(page).locator('button[aria-controls][aria-expanded]')
+}
+function qrImg(page: Page) {
+  return qrCard(page).locator(QR_IMG)
+}
 
 async function gotoTargets(page: Page) {
   await page.goto('/targets')
@@ -38,6 +52,38 @@ async function qrCardMode(page: Page): Promise<'qr' | 'missing' | 'absent'> {
   return 'qr'
 }
 
+// Mốc so sánh thứ tự: đáy của card chiến dịch CUỐI CÙNG. Không có chiến dịch
+// nào thì lấy đáy empty-state, cuối cùng mới tới <h1> — luôn có một mốc thật
+// để so, thay vì tụt xuống một phép so vô nghĩa với 0.
+// Cùng một frame nên cả hai rect chịu cùng lượng cuộn ⇒ so trực tiếp là đúng.
+async function measureOrder(page: Page) {
+  return page.evaluate(() => {
+    const main = document.querySelector('main')
+    if (!main) return null
+    const qrTitle = [...main.querySelectorAll('p')].find((el) => el.textContent?.trim() === 'Mã QR Circa Online')
+    const qrCard = qrTitle?.closest('[data-slot="card"]') ?? qrTitle
+    if (!qrCard) return null
+
+    const links = [...main.querySelectorAll('a[href*="campaign="]')]
+    if (links.length > 0) {
+      return {
+        qrTop: qrCard.getBoundingClientRect().top,
+        refBottom: Math.max(...links.map((a) => a.getBoundingClientRect().bottom)),
+        refName: `card chiến dịch cuối (${links.length} card)`,
+      }
+    }
+    const empty = [...main.querySelectorAll('*')].find((el) => /chưa có chiến dịch/i.test(el.textContent ?? '')
+      && el.children.length === 0)
+    const ref = empty ?? main.querySelector('h1')
+    if (!ref) return null
+    return {
+      qrTop: qrCard.getBoundingClientRect().top,
+      refBottom: ref.getBoundingClientRect().bottom,
+      refName: empty ? 'empty-state chiến dịch' : 'tiêu đề trang',
+    }
+  })
+}
+
 test.describe('qr disclosure @mobile', () => {
   test.use({ storageState: STAFF_STATE, viewport: { width: 360, height: 800 } })
   test.skip(!EMAIL || !PASSWORD, 'E2E_STAFF_EMAIL / E2E_STAFF_PASSWORD chưa set')
@@ -49,14 +95,14 @@ test.describe('qr disclosure @mobile', () => {
 
     if (mode === 'missing') {
       // Yêu cầu: trạng thái lỗi/chưa cấu hình hiện NGAY, không giấu sau disclosure.
-      await expect(page.locator(TOGGLE), 'missing/error không được có disclosure').toHaveCount(0)
-      await expect(page.locator(QR_IMG)).toHaveCount(0)
+      await expect(qrToggle(page), 'missing/error không được có disclosure').toHaveCount(0)
+      await expect(qrImg(page)).toHaveCount(0)
       return
     }
 
     // Chốt chính: count === 0 ⇒ không có <img> nào, khác hẳn "có nhưng display:none".
-    await expect(page.locator(QR_IMG), 'ảnh QR vẫn nằm trong DOM khi đóng').toHaveCount(0)
-    const toggle = page.locator(TOGGLE).first()
+    await expect(qrImg(page), 'ảnh QR vẫn nằm trong DOM khi đóng').toHaveCount(0)
+    const toggle = qrToggle(page)
     await expect(toggle).toBeVisible()
     await expect(toggle).toHaveAttribute('aria-expanded', 'false')
 
@@ -69,13 +115,13 @@ test.describe('qr disclosure @mobile', () => {
     await gotoTargets(page)
     test.skip(await qrCardMode(page) !== 'qr', 'store chưa cấu hình QR')
 
-    const toggle = page.locator(TOGGLE).first()
+    const toggle = qrToggle(page)
     await toggle.click()
-    await expect(page.locator(QR_IMG).first(), 'mở rồi mà ảnh không xuất hiện').toBeVisible()
+    await expect(qrImg(page).first(), 'mở rồi mà ảnh không xuất hiện').toBeVisible()
     await expect(toggle).toHaveAttribute('aria-expanded', 'true')
 
     await toggle.click()
-    await expect(page.locator(QR_IMG), 'đóng rồi mà ảnh vẫn còn trong DOM').toHaveCount(0)
+    await expect(qrImg(page), 'đóng rồi mà ảnh vẫn còn trong DOM').toHaveCount(0)
     await expect(toggle).toHaveAttribute('aria-expanded', 'false')
   })
 
@@ -83,10 +129,10 @@ test.describe('qr disclosure @mobile', () => {
     await gotoTargets(page)
     test.skip(await qrCardMode(page) !== 'qr', 'store chưa cấu hình QR')
 
-    const toggle = page.locator(TOGGLE).first()
+    const toggle = qrToggle(page)
     await toggle.focus()
     await page.keyboard.press('Enter')
-    await expect(page.locator(QR_IMG).first()).toBeVisible()
+    await expect(qrImg(page).first()).toBeVisible()
     await expect(toggle).toHaveAttribute('aria-expanded', 'true')
   })
 
@@ -97,7 +143,7 @@ test.describe('qr disclosure @mobile', () => {
     await gotoTargets(page)
     test.skip(await qrCardMode(page) !== 'qr', 'store chưa cấu hình QR')
 
-    const toggle = page.locator(TOGGLE).first()
+    const toggle = qrToggle(page)
     await toggle.click()
     await page.getByRole('button', { name: 'Phóng to mã QR' }).click()
     await expect(page.getByRole('dialog')).toBeVisible()
@@ -106,7 +152,7 @@ test.describe('qr disclosure @mobile', () => {
     await expect(page.locator('[data-slot="dialog-content"]')).toHaveCount(0)
 
     await toggle.click()
-    await expect(page.locator(QR_IMG), 'thu gọn rồi mà ảnh vẫn còn').toHaveCount(0)
+    await expect(qrImg(page), 'thu gọn rồi mà ảnh vẫn còn').toHaveCount(0)
     await expect(page.locator('[data-slot="dialog-content"]')).toHaveCount(0)
   })
 
@@ -120,19 +166,18 @@ test.describe('qr disclosure @mobile', () => {
   // Ghi lại vì nó đã bắt bug thật: bản đầu gọi setOpenUrl BÊN TRONG updater của
   // setExpanded — updater phải thuần nên modal không đóng theo.
 
-  test('không đẩy nội dung: card QR nằm SAU danh sách chiến dịch', async ({ page }) => {
+  test('thứ tự: card QR nằm SAU danh sách chiến dịch', async ({ page }) => {
     await gotoTargets(page)
     test.skip(await qrCardMode(page) === 'absent', 'không render QR card')
 
-    const y = await page.evaluate((sel) => {
-      const main = document.querySelector('main')
-      if (!main) return null
-      const card = [...main.querySelectorAll('*')].find((el) => el.textContent?.trim() === 'Mã QR Circa Online')
-      return card ? card.getBoundingClientRect().top : null
-    }, CARD)
-    // Mục tiêu của Step 3.1: QR không chiếm first viewport (360×800).
-    expect(y, 'không tìm được tiêu đề card QR').not.toBeNull()
-    expect(y!, `card QR bắt đầu ở ${y}px — vẫn nằm trong first viewport`).toBeGreaterThan(0)
+    const geom = await measureOrder(page)
+    expect(geom, 'không đo được (thiếu card QR hoặc mốc so sánh)').not.toBeNull()
+    // So MỐC THẬT chứ không phải `> 0`: `toBeGreaterThan(0)` vẫn xanh kể cả khi
+    // QR nằm ngay đầu trang ở y=1, tức không khoá được thứ tự nào cả.
+    expect(
+      geom!.qrTop,
+      `card QR (top ${geom!.qrTop}px) nằm TRƯỚC ${geom!.refName} (đáy ${geom!.refBottom}px)`,
+    ).toBeGreaterThanOrEqual(geom!.refBottom)
   })
 })
 
@@ -146,9 +191,52 @@ test.describe('qr desktop giữ nguyên @desktop', () => {
 
     // Hình thức desktop đã được stakeholder duyệt — disclosure không được
     // chạm tới nó. Ảnh phải có mặt mà không thao tác gì.
-    await expect(page.locator(QR_IMG).first()).toBeVisible()
+    await expect(qrImg(page).first()).toBeVisible()
     // Hàng compact vẫn nằm trong DOM (md:hidden) nhưng KHÔNG được nhìn thấy.
-    const toggle = page.locator(TOGGLE).first()
+    const toggle = qrToggle(page)
     if (await toggle.count() > 0) await expect(toggle).toBeHidden()
+  })
+})
+
+// ── QLCH (store_manager) ────────────────────────────────────────────────────
+// Nhánh render RIÊNG (targets/page.tsx:616) nhưng DÙNG CHUNG CampaignCardList
+// và AffiliateQrCard với Staff. Suite Staff ở trên không chạm tới nhánh này,
+// nên sửa component mà chỉ chạy Staff là kiểm được đúng một nửa.
+test.describe('qr disclosure QLCH @mobile', () => {
+  test.use({ storageState: MANAGER_STATE, viewport: { width: 390, height: 844 } })
+  test.skip(!QLCH_EMAIL || !QLCH_PASSWORD, 'E2E_QLCH_EMAIL / E2E_QLCH_PASSWORD chưa set')
+
+  test('QLCH mobile: QR compact sau danh sách, mở thì ảnh xuất hiện', async ({ page }) => {
+    await gotoTargets(page)
+    const mode = await qrCardMode(page)
+    test.skip(mode === 'absent', 'QLCH không render QR card (flag/role/store)')
+
+    // Thứ tự phải đúng ở CẢ nhánh QLCH, không riêng Staff.
+    const geom = await measureOrder(page)
+    expect(geom, 'không đo được thứ tự trên nhánh QLCH').not.toBeNull()
+    expect(
+      geom!.qrTop,
+      `QLCH: card QR (top ${geom!.qrTop}px) nằm TRƯỚC ${geom!.refName} (đáy ${geom!.refBottom}px)`,
+    ).toBeGreaterThanOrEqual(geom!.refBottom)
+
+    if (mode === 'missing') {
+      await expect(qrToggle(page), 'missing/error không được có disclosure').toHaveCount(0)
+      return
+    }
+    await expect(qrImg(page), 'QLCH: ảnh QR vẫn trong DOM khi đóng').toHaveCount(0)
+    const toggle = qrToggle(page)
+    await toggle.click()
+    await expect(qrImg(page).first()).toBeVisible()
+  })
+})
+
+test.describe('qr desktop QLCH giữ nguyên @desktop', () => {
+  test.use({ storageState: MANAGER_STATE })
+  test.skip(!QLCH_EMAIL || !QLCH_PASSWORD, 'E2E_QLCH_EMAIL / E2E_QLCH_PASSWORD chưa set')
+
+  test('QLCH desktop: ảnh hiện ngay, không cần mở disclosure', async ({ page }) => {
+    await gotoTargets(page)
+    test.skip(await qrCardMode(page) !== 'qr', 'QLCH store chưa cấu hình QR')
+    await expect(qrImg(page).first()).toBeVisible()
   })
 })
