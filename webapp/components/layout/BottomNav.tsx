@@ -7,6 +7,7 @@ import { useUserStore } from '@/store/userStore'
 import {
   LayoutDashboard, CheckSquare, Users, Store, FileImage, ScrollText,
   TrendingUp, Megaphone, Boxes, MoreHorizontal, Package,
+  ChartNoAxesCombined, Newspaper,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -22,13 +23,19 @@ interface NavItem { href: string; label: string; icon: LucideIcon; roles: string
 // (pure friction), and /inventory lit up "Thêm" instead of its own tab.
 // Thứ tự chốt với stakeholder 15/08: Tasks · Toa thuốc · [Doanh số] · Bảng tin ·
 // Tồn kho — Doanh số nằm CHÍNH GIỮA và là nút nổi (màn số liệu vào nhiều nhất),
-// 2 tab thường mỗi bên. Đổi thứ tự + đánh dấu `center`, href/icon/badge giữ nguyên.
+// 2 tab thường mỗi bên. Đổi thứ tự + đánh dấu `center`, href/badge giữ nguyên.
+//
+// M1.3: đổi icon RIÊNG cho staff — Doanh số dùng ChartNoAxesCombined (biểu đồ
+// cột: màn số liệu, không phải "đang tăng"; mũi tên TrendingUp đọc như một
+// khẳng định về kết quả), Bảng tin dùng Newspaper (bản tin để ĐỌC, không phải
+// loa thông báo đẩy). CHỈ trong STAFF_NAV — NAV_ITEMS (store_manager/sm) và
+// Sidebar desktop giữ nguyên TrendingUp/Megaphone, nên hai icon cũ vẫn import.
 const STAFF_NAV: NavItem[] = [
-  { href: '/tasks',         label: 'Tasks',     icon: CheckSquare, roles: [] },
-  { href: '/prescriptions', label: 'Toa thuốc', icon: FileImage,   roles: [] },
-  { href: '/targets',       label: 'Doanh số',  icon: TrendingUp,  roles: [], center: true },
-  { href: '/announcements', label: 'Bảng tin',  icon: Megaphone,   roles: [] },
-  { href: '/inventory',     label: 'Tồn kho',   icon: Boxes,       roles: [] },
+  { href: '/tasks',         label: 'Tasks',     icon: CheckSquare,          roles: [] },
+  { href: '/prescriptions', label: 'Toa thuốc', icon: FileImage,            roles: [] },
+  { href: '/targets',       label: 'Doanh số',  icon: ChartNoAxesCombined,  roles: [], center: true },
+  { href: '/announcements', label: 'Bảng tin',  icon: Newspaper,            roles: [] },
+  { href: '/inventory',     label: 'Tồn kho',   icon: Boxes,                roles: [] },
 ]
 
 // Non-staff roles keep the role-filter + overflow-drawer pipeline. SM (area
