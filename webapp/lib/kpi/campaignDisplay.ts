@@ -340,6 +340,9 @@ export interface CampaignCardInput {
 
 export interface CampaignCardValue {
   kind: CampaignMetricType
+  // Nhãn NGẮN của loại chiến dịch cho chip trên card. Khác `targetLabel`
+  // ('Mục tiêu GMV') vì ở đây đang gọi tên LOẠI, không phải gọi tên con số.
+  typeLabel: string
   synced: boolean
   lines: CampaignOverviewLine[]
   pct: number                    // 0 khi chưa đồng bộ ⇒ KHÔNG vẽ thanh tiến độ
@@ -350,8 +353,15 @@ export interface CampaignCardValue {
   tone: 'success' | 'warning' | 'neutral'
 }
 
+const CARD_TYPE_LABEL: Record<CampaignMetricType, string> = {
+  gmv: 'Doanh số',
+  affiliate_customer_count: 'Số khách',
+  offline_order_aov: 'Chất lượng bán hàng',
+}
+
 export function campaignCardValue(v: CampaignCardInput): CampaignCardValue {
   const pres = metricPresentation(v.metricType)
+  const typeLabel = CARD_TYPE_LABEL[pres.kind]
   const prog = campaignCardProgress({
     kpi_target: v.kpiTarget,
     actual_value: v.actualValue,
@@ -378,7 +388,7 @@ export function campaignCardValue(v: CampaignCardInput): CampaignCardValue {
       : []
     const pass = qualityKpiPass(v.actualValue)
     return {
-      kind: pres.kind, synced, lines,
+      kind: pres.kind, typeLabel, synced, lines,
       pct: prog.pct,
       pctText: prog.text,
       tone: !synced ? 'neutral' : pass ? 'success' : 'warning',
@@ -395,6 +405,7 @@ export function campaignCardValue(v: CampaignCardInput): CampaignCardValue {
       : `${nfVi.format(Math.round(actual))} / ${pres.value(target)}`
   return {
     kind: pres.kind,
+    typeLabel,
     synced,
     lines: [{ label: 'Đã đạt / Mục tiêu', value }],
     pct: prog.pct,

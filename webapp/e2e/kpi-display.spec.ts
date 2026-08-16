@@ -470,6 +470,14 @@ test.describe('kpi card value — 1 cửa hàng (batch /targets) @desktop', () =
     expect(v.synced).toBe(true)
   })
 
+  test('typeLabel: nhãn NGẮN của loại chiến dịch cho chip trên card', () => {
+    expect(campaignCardValue(GMV).typeLabel).toBe('Doanh số')
+    expect(campaignCardValue(CUS).typeLabel).toBe('Số khách')
+    expect(campaignCardValue(QUA).typeLabel).toBe('Chất lượng bán hàng')
+    // loại lạ đi theo nhánh gmv nên nhãn cũng là 'Doanh số'
+    expect(campaignCardValue({ metricType: 'x', kpiTarget: 1, actualValue: 1 }).typeLabel).toBe('Doanh số')
+  })
+
   test('metric_type LẠ → rơi về gmv (an toàn hiển thị), không crash', () => {
     const v = campaignCardValue({ metricType: 'khong_ton_tai', kpiTarget: 1000, actualValue: 500 })
     expect(v.kind).toBe('gmv')
