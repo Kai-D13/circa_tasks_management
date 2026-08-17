@@ -1,3 +1,5 @@
+import fs from 'node:fs'
+import path from 'node:path'
 import { test, expect } from '@playwright/test'
 import {
   CAMPAIGN_RANGE_ERROR_TEXT, parseCampaignRange, rangeAggregationMode, withRangeParams,
@@ -112,5 +114,51 @@ test.describe('campaign date range contract @desktop', () => {
     expect(cleared).not.toContain('to=')
 
     expect(withRangeParams({}, {})).toBe('')
+  })
+})
+
+// ── CANARY nguồn: contract 90/10 + "sàn" KHÔNG được quay lại ────────────────
+// Contract "Chất lượng bán hàng" đổi 12/08: hai mục tiêu ĐỘC LẬP, đạt khi CẢ
+// HAI cùng chạm — bỏ hẳn tỷ trọng 90/10 và bỏ sàn. Nhưng mô tả cũ đã sống sót
+// ở nhiều chỗ rất lâu sau đó (wizard, .env.example, flags.ts) vì chúng là
+// COMMENT/copy, không có test nào chạm tới. Canary này quét thẳng file nguồn.
+//
+// Không quét SQL migration: 106 là lịch sử đã chạy trên prod, sửa file đó là
+// viết lại quá khứ. Chỉ quét thứ người dùng/dev đọc hôm nay.
+test.describe('canary: contract 90/10 đã bị gỡ @desktop', () => {
+  const ROOT = path.join(__dirname, '..')
+  const FILES = [
+    'lib/kpi/flags.ts',
+    'lib/kpi/campaignDisplay.ts',
+    'lib/kpi/campaignDateRange.ts',
+    'components/kpi/CampaignWizard.tsx',
+    'components/kpi/CampaignKpiView.tsx',
+    '.env.example',
+  ]
+
+  test('không còn tỷ trọng 90/10 hay "sàn" trong mô tả Chất lượng bán hàng', () => {
+    // Chỉ bắt khi 90 và 10 đứng CÙNG một dòng dạng phần trăm — tránh false
+    // positive với các con số 10/90 vô hại khác trong file.
+    const WEIGHTING = /90\s*%[^\n]{0,40}10\s*%|10\s*%[^\n]{0,40}90\s*%/
+    const FLOOR = /sàn bắt buộc/i
+
+    for (const rel of FILES) {
+      const abs = path.join(ROOT, rel)
+      if (!fs.existsSync(abs)) continue
+      const src = fs.readFileSync(abs, 'utf8')
+      expect(src, `${rel}: còn mô tả tỷ trọng 90/10`).not.toMatch(WEIGHTING)
+      expect(src, `${rel}: còn khẳng định "sàn bắt buộc" (contract 12/08 đã bỏ sàn)`).not.toMatch(FLOOR)
+    }
+  })
+
+  test('CANARY tự kiểm: hai pattern thật sự bắt được văn bản cũ', () => {
+    const WEIGHTING = /90\s*%[^\n]{0,40}10\s*%|10\s*%[^\n]{0,40}90\s*%/
+    const FLOOR = /sàn bắt buộc/i
+    expect('Số đơn Offline 90% + AOV 10%').toMatch(WEIGHTING)
+    expect('số đơn (90%) và giá trị đơn trung bình (10%)').toMatch(WEIGHTING)
+    expect('mỗi chỉ số có SÀN bắt buộc').toMatch(FLOOR)
+    // và không bắt nhầm văn bản hợp lệ
+    expect('Đạt KPI khi CẢ số đơn và AOV cùng chạm mục tiêu').not.toMatch(WEIGHTING)
+    expect('Đạt KPI khi CẢ số đơn và AOV cùng chạm mục tiêu').not.toMatch(FLOOR)
   })
 })

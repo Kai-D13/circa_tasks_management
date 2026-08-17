@@ -12,11 +12,21 @@ const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 //
 // · 'daily'        — gmv và offline_order_aov: cộng dồn kpi_campaign_store_daily_actuals
 //                    dưới RLS sẵn có (session client, không mở bề mặt authz mới).
-// · 'customer-rpc' — affiliate_customer_count: KHÔNG cộng dồn được. Số khách
-//                    dedup theo account trên toàn phạm vi (một khách nhiều đơn
-//                    vẫn là một khách), nên cộng `affiliate_customer_count`
-//                    theo ngày sẽ đếm trùng. Phải đếm distinct LẠI trong đúng
-//                    range bằng rpc_aggregate_affiliate_customers.
+// · 'customer-rpc' — affiliate_customer_count: KHÔNG cộng dồn được. Một khách
+//                    nhiều đơn vẫn là MỘT khách, nên cộng
+//                    `affiliate_customer_count` theo ngày sẽ đếm trùng. Phải
+//                    đếm distinct LẠI trong đúng range bằng
+//                    rpc_aggregate_affiliate_customers.
+//
+//   Identity là `customer_phone_norm` — SĐT người MUA đã chuẩn hoá (mig 104
+//   THAY identity account_id của mig 103; account_id KHÔNG còn tham gia, và
+//   receiver_phone_number cũng không — đặt hộ sẽ gộp/tách sai người).
+//   Đơn đủ điều kiện: `source_active AND status_norm='delivered' AND
+//   total_price > 0`; dedup `DISTINCT ON (phone)` với đơn DELIVERED SỚM NHẤT
+//   trong range thắng, tie-break `order_id`.
+//   ⚠ Vì "đơn sớm nhất trong range thắng", đổi range là đổi luôn store được
+//   ghi nhận cho một khách cross-store — đây là lý do KHÔNG được cộng daily
+//   rồi coi là xong.
 //
 // Chi phí của nhánh RPC được giới hạn bằng chính luật "trọn kỳ = không lọc"
 // bên dưới: mặc định trang KHÔNG gọi RPC, chỉ khi người dùng chủ động chọn một
