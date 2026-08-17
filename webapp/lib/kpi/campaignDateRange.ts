@@ -39,6 +39,21 @@ export function rangeAggregationMode(metricType?: string | null): RangeAggregati
     : 'daily'
 }
 
+// AI được thấy bộ lọc (chốt stakeholder 17/08): Super Admin · SM · QLCH.
+//
+// Admin THƯỜNG KHÔNG — và đây là giữ nguyên access hiện hành, không phải bỏ
+// sót: /targets/campaigns đã gate super-only, còn /targets thì redirect admin
+// thường đi. Mở filter cho họ sẽ phải mở luôn quyền xem campaign, tức đổi
+// authz chứ không còn là việc UI — ngoài phạm vi batch này.
+//
+// Staff KHÔNG, kể cả khi mở bằng desktop: đây là công cụ đối soát của quản lý.
+// (Ràng buộc "chỉ từ md trở lên" là việc của CSS component, không phải hàm này
+// — hàm này trả lời "vai trò có quyền không", một câu hỏi khác.)
+export function rangeFilterVisibleForRole(p: { role?: string | null; isSuperAdmin?: boolean }): boolean {
+  if (p.role === 'admin') return p.isSuperAdmin === true
+  return p.role === 'sm' || p.role === 'store_manager'
+}
+
 export type CampaignRangeError =
   | 'incomplete'      // chỉ có một đầu ngày
   | 'malformed'       // không phải YYYY-MM-DD hoặc không phải ngày thật
