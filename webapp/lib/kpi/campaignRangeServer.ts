@@ -29,6 +29,12 @@ export interface CustomerRangeRows {
   total_customers: number
 }
 
+export interface RangeHealth {
+  ready: boolean
+  reason?: string
+  runId?: string | null
+}
+
 export interface RangeReadDeps {
   // Dưới RLS của người đang đăng nhập — đây là chỗ quyết định phạm vi dữ liệu.
   loadTargetStoreIds: (campaignId: string) => Promise<DbResult<string[]>>
@@ -39,6 +45,10 @@ export interface RangeReadDeps {
   aggregateCustomers: (
     storeIds: string[], fromTs: string, toTs: string,
   ) => Promise<DbResult<CustomerRangeRows>>
+  // Sức khoẻ nguồn Affiliate — MIRROR đúng flow của syncCampaignCore: đọc
+  // TRƯỚC và SAU aggregate, runId đổi giữa hai lần nghĩa là một phiên sync mới
+  // đã chen vào và số vừa đọc có thể trộn hai phiên.
+  getAffiliateHealth: (storeIds: string[]) => Promise<RangeHealth>
 }
 
 export type RangeReadResult =
@@ -64,36 +74,72 @@ export async function loadCampaignRangeActuals(
   }
 
   if (rangeAggregationMode(p.metricType) === 'customer-rpc') {
+    // ── HEALTH GATE TRƯỚC (mirror syncCampaignCore) ───────────────────────
+    // Nguồn đang sync dở hoặc stale mà vẫn đọc thì ra một con số trông hợp lệ
+    // nhưng thuộc về trạng thái nguồn khác. Màn này để đối soát hoa hồng.
+    const before = await deps.getAffiliateHealth(storeIds)
+    if (!before.ready) {
+      return { ok: false, error: `Nguồn Affiliate chưa sẵn sàng: ${before.reason ?? 'không rõ lý do'}` }
+    }
+
     // Cửa sổ giờ VN half-open: [from 00:00+07, ngày SAU to 00:00+07).
     // Dùng lại vnDayRange của engine — cùng một hàm mà cron đang dùng, nên số
     // trên UI và số đã sync không thể lệch nhau vì lệch định nghĩa biên ngày.
     const { from, to } = vnDayRange(p.range.from, p.range.to)
     const agg = await deps.aggregateCustomers(storeIds, from, to)
     if (agg.error) return { ok: false, error: `Không tính được số khách trong khoảng: ${agg.error.message}` }
+    // data null mà không có error là payload BẤT THƯỜNG — trước đây `?? []`
+    // biến nó thành "0 khách" cho mọi store, tức fail-OPEN trên màn tiền.
+    if (!agg.data) return { ok: false, error: 'Nguồn Affiliate trả dữ liệu rỗng bất thường — chưa thể hiện số theo khoảng.' }
 
-    // RPC chỉ trả (store, ngày) CÓ khách ⇒ phải map vào ĐỦ tập target, store
-    // không có dòng nào là 0 khách. Nếu không, store 0 khách biến mất khỏi bảng
-    // và mẫu số "X/Y cửa hàng" sai.
+    // RPC chỉ trả (store, ngày) CÓ khách ⇒ map vào ĐỦ tập target, store không
+    // có dòng nào là 0 khách. Nếu không, store 0 khách biến mất khỏi bảng và
+    // mẫu số "X/Y cửa hàng" sai.
     const byStore = new Map<string, number>(storeIds.map((id) => [id, 0]))
-    for (const r of agg.data?.rows ?? []) {
-      if (!byStore.has(r.store_id)) continue          // ngoài scope → bỏ
-      // Cộng qua ngày là ĐÚNG ở đây: RPC đã DISTINCT ON (phone) trước khi group
-      // theo (store, ngày), nên mỗi khách chỉ nằm trong đúng một ô.
-      byStore.set(r.store_id, (byStore.get(r.store_id) ?? 0) + (Number(r.customer_count) || 0))
+    let sum = 0
+    for (const r of agg.data.rows ?? []) {
+      // RPC nhận ĐÚNG storeIds này, nên row lạ = RPC/nguồn tự mâu thuẫn, KHÔNG
+      // phải dữ liệu hợp lệ để bỏ qua âm thầm.
+      if (!byStore.has(r.store_id)) {
+        return { ok: false, error: `Nguồn Affiliate trả cửa hàng ngoài phạm vi (${r.store_id}) — số liệu không đáng tin.` }
+      }
+      const n = Number(r.customer_count)
+      if (!Number.isInteger(n) || n < 0) {
+        return { ok: false, error: `Số khách không hợp lệ từ nguồn (${String(r.customer_count)}) — chưa thể hiện số theo khoảng.` }
+      }
+      sum += n
+      byStore.set(r.store_id, (byStore.get(r.store_id) ?? 0) + n)
     }
+    // Cùng kỷ luật đối soát của sync: RPC dedup DISTINCT ON nên SUM(rows) buộc
+    // phải bằng total_customers; lệch là nguồn tự mâu thuẫn.
+    if (Number.isFinite(agg.data.total_customers) && sum !== Number(agg.data.total_customers)) {
+      return {
+        ok: false,
+        error: `Số khách tự mâu thuẫn: tổng theo cửa hàng ${sum} ≠ tổng nguồn ${agg.data.total_customers}.`,
+      }
+    }
+
+    // ── HEALTH GATE SAU: runId đổi = một phiên sync chen vào giữa chừng ───
+    const after = await deps.getAffiliateHealth(storeIds)
+    if (!after.ready) {
+      return { ok: false, error: `Nguồn Affiliate đổi trạng thái trong lúc tính: ${after.reason ?? 'không rõ lý do'}` }
+    }
+    if (after.runId !== before.runId) {
+      return {
+        ok: false,
+        error: 'Nguồn Affiliate vừa đồng bộ lại trong lúc tính — số có thể trộn hai phiên. Vui lòng thử lại.',
+      }
+    }
+
     const stores = [...byStore.entries()].map(([store_id, customers]) => ({ store_id, customers }))
-    return {
-      ok: true,
-      mode: 'customer',
-      stores,
-      totalCustomers: stores.reduce((s, x) => s + x.customers, 0),
-      storeCount: storeIds.length,
-    }
+    return { ok: true, mode: 'customer', stores, totalCustomers: sum, storeCount: storeIds.length }
   }
 
   const daily = await deps.loadDaily(p.campaignId, storeIds, p.range.from, p.range.to)
   if (daily.error) return { ok: false, error: `Không đọc được số liệu theo ngày: ${daily.error.message}` }
+  // Cùng lý do với nhánh khách: null ≠ "không có dòng nào".
+  if (!daily.data) return { ok: false, error: 'Không đọc được số liệu theo ngày — nguồn trả rỗng bất thường.' }
 
-  const stores = buildRangeStoreActuals(daily.data ?? [], storeIds)
+  const stores = buildRangeStoreActuals(daily.data, storeIds)
   return { ok: true, mode: 'daily', stores, totals: buildRangeTotals(stores) }
 }

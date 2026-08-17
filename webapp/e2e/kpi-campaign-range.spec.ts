@@ -358,7 +358,7 @@ test.describe('campaign range server read @desktop', () => {
   // Deps giả + ghi lại lời gọi để assert "KHÔNG gọi RPC" — thứ không thể kiểm
   // bằng cách nhìn kết quả.
   function deps(over: Partial<RangeReadDeps> = {}) {
-    const calls = { targets: 0, daily: 0, rpc: 0, rpcArgs: [] as unknown[][] }
+    const calls = { targets: 0, daily: 0, rpc: 0, health: 0, rpcArgs: [] as unknown[][] }
     const base: RangeReadDeps = {
       loadTargetStoreIds: async () => { calls.targets++; return { data: ['s1', 's2'], error: null } },
       loadDaily: async () => { calls.daily++; return { data: [], error: null } },
@@ -366,6 +366,7 @@ test.describe('campaign range server read @desktop', () => {
         calls.rpc++; calls.rpcArgs.push([ids, from, to])
         return { data: { rows: [], total_customers: 0 }, error: null }
       },
+      getAffiliateHealth: async () => { calls.health++; return { ready: true, runId: 'run-1' } },
     }
     return { d: { ...base, ...over }, calls }
   }
@@ -442,7 +443,9 @@ test.describe('campaign range server read @desktop', () => {
     expect(r.totalCustomers).toBe(5)
   })
 
-  test('Khách: row NGOÀI tập target bị bỏ, không cộng vào tổng', async () => {
+  // RPC nhận ĐÚNG tập storeIds, nên row lạ = contract violation, KHÔNG phải
+  // dữ liệu hợp lệ để lặng lẽ bỏ qua.
+  test('Khách: row NGOÀI tập target → FAIL-VISIBLE, không bỏ qua âm thầm', async () => {
     const { d } = deps({
       aggregateCustomers: async () => ({
         data: {
@@ -456,9 +459,9 @@ test.describe('campaign range server read @desktop', () => {
       }),
     })
     const r = await loadCampaignRangeActuals(d, { campaignId: 'c1', range: RANGE, metricType: 'affiliate_customer_count' })
-    if (!r.ok || r.mode !== 'customer') throw new Error('sai nhánh')
-    expect(r.totalCustomers).toBe(4)
-    expect(r.stores.some((x) => x.store_id === 'store-la')).toBe(false)
+    expect(r.ok).toBe(false)
+    if (r.ok) throw new Error('phải lỗi')
+    expect(r.error).toContain('ngoài phạm vi')
   })
 
   test('LỖI phải fail-visible, TUYỆT ĐỐI không rơi âm thầm về toàn kỳ', async () => {
@@ -488,6 +491,141 @@ test.describe('campaign range server read @desktop', () => {
     const r = await loadCampaignRangeActuals(d, { campaignId: 'c1', range: RANGE, metricType: 'gmv' })
     expect(r.ok).toBe(false)
     expect(calls.daily).toBe(0)
+    expect(calls.rpc).toBe(0)
+  })
+})
+
+// ── Commit 4a.1: health gate + payload cứng cho nhánh khách ────────────────
+test.describe('campaign range customer hardening @desktop', () => {
+  const RANGE = { active: true, from: '2026-08-01', to: '2026-08-05', days: 5, error: null } as const
+
+  function deps(over: Partial<RangeReadDeps> = {}) {
+    const calls = { rpc: 0, health: 0 }
+    const base: RangeReadDeps = {
+      loadTargetStoreIds: async () => ({ data: ['s1', 's2'], error: null }),
+      loadDaily: async () => ({ data: [], error: null }),
+      aggregateCustomers: async () => {
+        calls.rpc++
+        return { data: { rows: [{ store_id: 's1', vn_date: '2026-08-01', customer_count: 2 }], total_customers: 2 }, error: null }
+      },
+      getAffiliateHealth: async () => { calls.health++; return { ready: true, runId: 'run-1' } },
+    }
+    return { d: { ...base, ...over }, calls }
+  }
+
+  const readCustomer = (d: RangeReadDeps) =>
+    loadCampaignRangeActuals(d, { campaignId: 'c1', range: RANGE, metricType: 'affiliate_customer_count' })
+
+  test('health CHƯA READY → KHÔNG gọi RPC, báo lý do', async () => {
+    const { d, calls } = deps({
+      getAffiliateHealth: async () => ({ ready: false, reason: 'snapshot stale 900 phút' }),
+    })
+    const r = await readCustomer(d)
+    expect(r.ok).toBe(false)
+    if (r.ok) throw new Error('phải lỗi')
+    expect(r.error).toContain('stale')
+    expect(calls.rpc, 'không được gọi RPC khi nguồn chưa sẵn sàng').toBe(0)
+  })
+
+  test('runId ĐỔI giữa chừng → không trả kết quả (số có thể trộn 2 phiên)', async () => {
+    let n = 0
+    const { d } = deps({
+      getAffiliateHealth: async () => {
+        n += 1
+        return { ready: true, runId: n === 1 ? 'run-1' : 'run-2' }
+      },
+    })
+    const r = await readCustomer(d)
+    expect(r.ok).toBe(false)
+    if (r.ok) throw new Error('phải lỗi')
+    expect(r.error).toContain('trộn hai phiên')
+  })
+
+  test('health đọc HAI lần: trước và sau aggregate', async () => {
+    const { d, calls } = deps()
+    const r = await readCustomer(d)
+    expect(r.ok).toBe(true)
+    expect(calls.health).toBe(2)
+  })
+
+  test('health đổi sang NOT READY sau aggregate → fail-visible', async () => {
+    let n = 0
+    const { d } = deps({
+      getAffiliateHealth: async () => {
+        n += 1
+        return n === 1 ? { ready: true, runId: 'run-1' } : { ready: false, reason: 'sync đang chạy' }
+      },
+    })
+    const r = await readCustomer(d)
+    expect(r.ok).toBe(false)
+  })
+
+  test('data null mà không error → LỖI, tuyệt đối không thành "0 khách"', async () => {
+    const { d } = deps({ aggregateCustomers: async () => ({ data: null, error: null }) })
+    const r = await readCustomer(d)
+    expect(r.ok).toBe(false)
+    if (r.ok) throw new Error('phải lỗi')
+    expect(r.error).toContain('rỗng bất thường')
+  })
+
+  test('customer_count hỏng (NaN / chuỗi / âm / số lẻ) → fail-visible', async () => {
+    for (const bad of [Number.NaN, 'abc' as unknown as number, -1, 2.5]) {
+      const { d } = deps({
+        aggregateCustomers: async () => ({
+          data: { rows: [{ store_id: 's1', vn_date: '2026-08-01', customer_count: bad }], total_customers: 0 },
+          error: null,
+        }),
+      })
+      const r = await readCustomer(d)
+      expect(r.ok, `giá trị ${String(bad)} phải bị từ chối`).toBe(false)
+    }
+  })
+
+  test('SUM(rows) ≠ total_customers → nguồn tự mâu thuẫn, fail-visible', async () => {
+    const { d } = deps({
+      aggregateCustomers: async () => ({
+        data: { rows: [{ store_id: 's1', vn_date: '2026-08-01', customer_count: 2 }], total_customers: 99 },
+        error: null,
+      }),
+    })
+    const r = await readCustomer(d)
+    expect(r.ok).toBe(false)
+    if (r.ok) throw new Error('phải lỗi')
+    expect(r.error).toContain('tự mâu thuẫn')
+  })
+
+  test('sparse HỢP LỆ vẫn qua: store không có dòng = 0 khách', async () => {
+    const { d } = deps({
+      loadTargetStoreIds: async () => ({ data: ['s1', 's2', 's3'], error: null }),
+      aggregateCustomers: async () => ({
+        data: {
+          rows: [
+            { store_id: 's1', vn_date: '2026-08-01', customer_count: 2 },
+            { store_id: 's3', vn_date: '2026-08-02', customer_count: 1 },
+          ],
+          total_customers: 3,
+        },
+        error: null,
+      }),
+    })
+    const r = await readCustomer(d)
+    expect(r.ok).toBe(true)
+    if (!r.ok || r.mode !== 'customer') throw new Error('sai nhánh')
+    expect(r.stores).toHaveLength(3)
+    expect(r.stores.find((x) => x.store_id === 's2')!.customers).toBe(0)
+    expect(r.totalCustomers).toBe(3)
+  })
+
+  test('nhánh DAILY: data null cũng phải lỗi, không coi là danh sách rỗng', async () => {
+    const { d } = deps({ loadDaily: async () => ({ data: null, error: null }) })
+    const r = await loadCampaignRangeActuals(d, { campaignId: 'c1', range: RANGE, metricType: 'gmv' })
+    expect(r.ok).toBe(false)
+  })
+
+  test('nhánh DAILY không đụng health gate (số đơn/tiền không phải nguồn Affiliate)', async () => {
+    const { d, calls } = deps()
+    await loadCampaignRangeActuals(d, { campaignId: 'c1', range: RANGE, metricType: 'gmv' })
+    expect(calls.health).toBe(0)
     expect(calls.rpc).toBe(0)
   })
 })
