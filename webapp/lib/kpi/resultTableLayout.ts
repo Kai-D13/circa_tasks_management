@@ -58,7 +58,7 @@ export function resultTableColumns(maxTierCount: number, showBreakdown: boolean,
       { key: 'quality', label: 'Trạng thái', minPx: RESULT_COL_PX.quality, align: 'left', scope: 'all' } as const,
     ] : []),
     ...(showBreakdown ? [
-      { key: 'offline', label: REVENUE_LABELS.offlineShort, minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' } as const,
+      { key: 'offline', label: REVENUE_LABELS.offline, minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' } as const,
       { key: 'affiliate', label: REVENUE_LABELS.affiliate, minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' } as const,
     ] : []),
     ...(isOrderAov ? [] : [

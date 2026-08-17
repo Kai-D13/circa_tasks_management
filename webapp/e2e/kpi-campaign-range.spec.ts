@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test'
 import {
-  CAMPAIGN_RANGE_ERROR_TEXT, parseCampaignRange, rangeFilterSupported, withRangeParams,
+  CAMPAIGN_RANGE_ERROR_TEXT, parseCampaignRange, rangeAggregationMode, withRangeParams,
 } from '../lib/kpi/campaignDateRange'
 
 // Contract bộ lọc khoảng ngày (17/08) — khoá TRƯỚC khi đụng UI.
@@ -59,24 +59,36 @@ test.describe('campaign date range contract @desktop', () => {
     expect(parseCampaignRange({ ...CAMPAIGN, from: '2026-08-25', to: '2026-09-05' }).error).toBe('outside')
   })
 
-  test('campaign Số khách Affiliate: KHÔNG hỗ trợ lọc', () => {
-    expect(rangeFilterSupported('affiliate_customer_count')).toBe(false)
-    expect(rangeFilterSupported('gmv')).toBe(true)
-    expect(rangeFilterSupported('offline_order_aov')).toBe(true)
-    expect(rangeFilterSupported(undefined)).toBe(true)
+  test('CẢ BA loại đều lọc được; đường tính khác nhau', () => {
+    // Số khách KHÔNG cộng dồn daily được (dedup theo account toàn phạm vi) ⇒
+    // phải đếm distinct lại trong range bằng RPC.
+    expect(rangeAggregationMode('affiliate_customer_count')).toBe('customer-rpc')
+    expect(rangeAggregationMode('gmv')).toBe('daily')
+    expect(rangeAggregationMode('offline_order_aov')).toBe('daily')
+    expect(rangeAggregationMode(undefined)).toBe('daily')
 
+    // Campaign khách vẫn parse range bình thường — không còn bị chặn.
     const r = parseCampaignRange({
       ...CAMPAIGN, from: '2026-08-01', to: '2026-08-05',
       metricType: 'affiliate_customer_count',
     })
+    expect(r.active).toBe(true)
+    expect(r.days).toBe(5)
+    expect(r.error).toBeNull()
+  })
+
+  test('TRỌN KỲ với campaign khách cũng là "không lọc" ⇒ KHÔNG gọi RPC', () => {
+    // Đây là thứ giữ chi phí nhánh RPC trong tầm kiểm soát: mặc định trang
+    // không lọc nên không bao giờ chạm RPC; chỉ khi chủ động chọn khoảng con.
+    const r = parseCampaignRange({
+      ...CAMPAIGN, from: '2026-08-01', to: '2026-08-31',
+      metricType: 'affiliate_customer_count',
+    })
     expect(r.active).toBe(false)
-    expect(r.error).toBe('unsupported')
-    // lý do phải giải thích được cho người dùng, không phải mã lỗi trống
-    expect(CAMPAIGN_RANGE_ERROR_TEXT.unsupported).toContain('mỗi khách chỉ tính một lần')
   })
 
   test('mọi mã lỗi đều có câu tiếng Việt đọc được', () => {
-    for (const key of ['incomplete', 'malformed', 'reversed', 'outside', 'unsupported'] as const) {
+    for (const key of ['incomplete', 'malformed', 'reversed', 'outside'] as const) {
       expect(CAMPAIGN_RANGE_ERROR_TEXT[key].length, key).toBeGreaterThan(10)
     }
   })

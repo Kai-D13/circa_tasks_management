@@ -39,7 +39,7 @@ export function CampaignResultSummary({ campaign, todayISO }: { campaign: Campai
     // P3-E: breakdown 2 nguồn — CHỈ khi campaign bật cả 2 chỉ số (1 metric giữ
     // layout cũ nguyên vẹn).
     ...(campaign.metric_offline && campaign.metric_affiliate ? [
-      { label: REVENUE_LABELS.offlineShort, value: synced ? vnd(campaign.actual_offline ?? 0) : '—', icon: StoreIcon as LucideIcon,
+      { label: REVENUE_LABELS.offline, value: synced ? vnd(campaign.actual_offline ?? 0) : '—', icon: StoreIcon as LucideIcon,
         // 105: dòng phụ số đơn · AOV cho QLCH (cùng formatter Super/SM).
         sub: synced ? offlineOrderLine(campaign.actual_offline ?? 0, campaign.offline_order_count ?? null) : null,
         tile: 'bg-primary/10 text-primary' },

@@ -34,13 +34,23 @@ export function breakdownModel(v: BreakdownInput): BreakdownModel {
 // cũ (regression); có affiliate → nêu rõ rule DELIVERED-only.
 // Mig 103: nhận metric_type optional — campaign Số khách có câu riêng (mỗi
 // khách tính 1 lần); thiếu metric_type (caller cũ) = gmv, hành vi y nguyên.
+// 17/08: chú thích nguồn phải nói RÕ Offline là Net Revenue. Đây là chú thích
+// DUY NHẤT — không tách thành helper riêng rồi quên gọi ở component.
 export function campaignFootnote(v: { metric_offline: boolean; metric_affiliate: boolean; metric_type?: string }): string {
   if (v.metric_type === 'affiliate_customer_count') {
     return 'Nguồn: Circa Online · đếm khách có đơn giao thành công (DELIVERED) — mỗi khách tính 1 lần trong chiến dịch'
   }
-  if (!v.metric_affiliate) return 'Nguồn: báo cáo BI · * Không bao gồm đơn online'
-  if (v.metric_offline) return 'Nguồn: báo cáo BI + Circa Online · Doanh thu Affiliate chỉ tính đơn giao thành công'
-  return 'Nguồn: Circa Online · chỉ tính đơn giao thành công (DELIVERED)'
+  // Chất lượng bán hàng: cùng nguồn BI nhưng luật đạt KHÁC hẳn ⇒ chú thích riêng.
+  if (v.metric_type === 'offline_order_aov') {
+    return 'Nguồn: báo cáo BI · Doanh thu thuần tại cửa hàng (Net Revenue) · Đạt KPI khi CẢ số đơn và AOV cùng chạm mục tiêu'
+  }
+  if (!v.metric_affiliate) {
+    return 'Nguồn: báo cáo BI · Doanh thu thuần tại cửa hàng (Net Revenue) — không bao gồm đơn online'
+  }
+  if (v.metric_offline) {
+    return 'Nguồn: báo cáo BI + Circa Online · Tổng gồm Doanh thu thuần tại cửa hàng (Net Revenue) và Doanh thu Affiliate (đơn giao thành công)'
+  }
+  return 'Nguồn: Circa Online · Doanh thu Affiliate, chỉ tính đơn giao thành công (DELIVERED)'
 }
 
 // ── Mig 103: PRESENTATION tập trung theo metric_type ────────────────────────
@@ -59,17 +69,15 @@ export type CampaignMetricType = 'gmv' | 'affiliate_customer_count' | 'offline_o
 // qua chỗ này, nên đổi ở đây không chạm export).
 export const REVENUE_LABELS = {
   // Nói rõ "thuần tại cửa hàng": số này là Net Revenue từ BI, đã trừ trả hàng.
+  // 17/08 (audit P2): KHÔNG có biến thể ngắn bỏ chữ "thuần". Bản trước tách
+  // `offlineShort` = 'Doanh thu tại cửa hàng' cho bảng/card, hoá ra đúng ba màn
+  // hay được đọc nhất lại mất mất chữ quan trọng nhất. Nhãn dài hơn thì để nó
+  // xuống dòng, đừng đánh đổi bằng nghĩa.
   offline: 'Doanh thu thuần tại cửa hàng',
   // KHÔNG gọi là "thuần" — nguồn Circa Online không qua cùng phép trừ đó.
   affiliate: 'Doanh thu Affiliate',
-  offlineShort: 'Doanh thu tại cửa hàng',
   total: 'Tổng doanh thu thực tế',
 } as const
-
-// Chú thích nguồn dùng chung cho mọi màn campaign có doanh thu.
-export function campaignSourceNote(): string {
-  return 'Doanh thu tại cửa hàng sử dụng Net Revenue từ BI. Doanh thu Affiliate ghi nhận đơn Circa Online giao thành công theo mã đối tác.'
-}
 
 export interface MetricPresentation {
   kind: CampaignMetricType

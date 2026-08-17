@@ -8,14 +8,25 @@ import { metricPresentation } from '@/lib/kpi/campaignDisplay'
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
-// Campaign "Số khách Affiliate" KHÔNG hỗ trợ lọc khoảng.
-// Số khách dedup theo account trên TOÀN chiến dịch (một khách nhiều đơn vẫn là
-// một khách), nên cộng dồn `affiliate_customer_count` theo ngày sẽ đếm trùng.
-// Lọc đúng nghĩa buộc phải gọi lại rpc_aggregate_affiliate_customers — RPC
-// service-role mà cron dùng, quét lại đơn Affiliate trong range — quá đắt để
-// chạy mỗi lần render. Chốt 17/08: ẩn filter cho loại này.
-export function rangeFilterSupported(metricType?: string | null): boolean {
-  return metricPresentation(metricType).kind !== 'affiliate_customer_count'
+// CẢ BA loại campaign đều lọc được, nhưng ĐƯỜNG TÍNH khác nhau:
+//
+// · 'daily'        — gmv và offline_order_aov: cộng dồn kpi_campaign_store_daily_actuals
+//                    dưới RLS sẵn có (session client, không mở bề mặt authz mới).
+// · 'customer-rpc' — affiliate_customer_count: KHÔNG cộng dồn được. Số khách
+//                    dedup theo account trên toàn phạm vi (một khách nhiều đơn
+//                    vẫn là một khách), nên cộng `affiliate_customer_count`
+//                    theo ngày sẽ đếm trùng. Phải đếm distinct LẠI trong đúng
+//                    range bằng rpc_aggregate_affiliate_customers.
+//
+// Chi phí của nhánh RPC được giới hạn bằng chính luật "trọn kỳ = không lọc"
+// bên dưới: mặc định trang KHÔNG gọi RPC, chỉ khi người dùng chủ động chọn một
+// khoảng con mới chạy.
+export type RangeAggregationMode = 'daily' | 'customer-rpc'
+
+export function rangeAggregationMode(metricType?: string | null): RangeAggregationMode {
+  return metricPresentation(metricType).kind === 'affiliate_customer_count'
+    ? 'customer-rpc'
+    : 'daily'
 }
 
 export type CampaignRangeError =
@@ -23,7 +34,6 @@ export type CampaignRangeError =
   | 'malformed'       // không phải YYYY-MM-DD hoặc không phải ngày thật
   | 'reversed'        // from > to
   | 'outside'         // vượt ra ngoài kỳ campaign
-  | 'unsupported'     // loại campaign không hỗ trợ lọc
 
 export interface CampaignRange {
   active: boolean               // false ⇒ dùng snapshot toàn kỳ như cũ
@@ -59,7 +69,6 @@ export function parseCampaignRange(p: {
   const to = p.to?.trim() || null
 
   if (!from && !to) return NO_RANGE
-  if (!rangeFilterSupported(p.metricType)) return { ...NO_RANGE, error: 'unsupported' }
   // Một đầu thiếu là lỗi NHÌN THẤY ĐƯỢC, không tự suy đầu còn lại: đoán hộ ở
   // màn tiền dễ cho ra một khoảng người dùng không hề chọn.
   if (!from || !to) return { ...NO_RANGE, from, to, error: 'incomplete' }
@@ -83,7 +92,6 @@ export const CAMPAIGN_RANGE_ERROR_TEXT: Record<CampaignRangeError, string> = {
   malformed: 'Ngày không hợp lệ.',
   reversed: 'Từ ngày phải trước hoặc bằng Đến ngày.',
   outside: 'Khoảng ngày phải nằm trong thời gian chiến dịch.',
-  unsupported: 'Chiến dịch Số khách Affiliate không lọc theo khoảng ngày (mỗi khách chỉ tính một lần cho cả kỳ).',
 }
 
 // Giữ nguyên các query param hiện có khi dựng URL filter — `campaign`,

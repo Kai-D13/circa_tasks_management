@@ -64,7 +64,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
               ? offlineOrderLine(m.totalOffline, m.totalOfflineOrders) : null,
             tile: synced && m.totalActual > 0 ? 'bg-status-success-bg text-status-success' : 'bg-muted text-muted-foreground' },
           ...(m.showBreakdown ? [
-            { label: REVENUE_LABELS.offlineShort, value: synced ? vnd(m.totalOffline) : '—', icon: StoreIcon,
+            { label: REVENUE_LABELS.offline, value: synced ? vnd(m.totalOffline) : '—', icon: StoreIcon,
               // 105: dòng phụ tổng — AOV WEIGHTED (totalOffline/totalOrders),
               // '—' khi bất kỳ store nào thiếu count (model đã trả null).
               sub: synced ? offlineOrderLine(m.totalOffline, m.totalOfflineOrders) : null,

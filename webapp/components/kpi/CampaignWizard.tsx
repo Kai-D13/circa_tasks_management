@@ -124,7 +124,7 @@ export function CampaignWizard({ affiliateEnabled = false, customerEnabled = fal
                 )}
                 {isOrderAov && (
                   <p className="text-xs text-muted-foreground">
-                    Đánh giá đồng thời số đơn (90%) và giá trị đơn trung bình (10%), mỗi chỉ số có SÀN bắt buộc — file target gồm 4 chỉ số, hệ thống chuẩn hóa mục tiêu = 100%.
+                    Đánh giá đồng thời SỐ ĐƠN và AOV, mỗi chỉ số có mục tiêu riêng. Đạt KPI khi CẢ HAI cùng chạm mục tiêu — không có tỷ trọng, không có sàn.
                   </p>
                 )}
               </div>

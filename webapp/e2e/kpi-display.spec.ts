@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import {
   breakdownModel, campaignCardProgress, campaignCardValue, campaignFootnote, campaignOverviewValue,
-  campaignSourceNote, heroRemainingText, metricEditorState, metricPresentation, orderAxisTicks, perDayVisible,
+  heroRemainingText, metricEditorState, metricPresentation, orderAxisTicks, perDayVisible,
   REVENUE_LABELS, syncedSubjectLabel,
 } from '../lib/kpi/campaignDisplay'
 import { STATUS_META, TEST_BADGE_CLS } from '../lib/kpi/status'
@@ -19,13 +19,13 @@ test.describe('kpi display contract @desktop', () => {
   test('OFFLINE-ONLY: KHÔNG breakdown; footnote giữ nguyên câu production cũ', () => {
     expect(breakdownModel(VIEW()).show).toBe(false)
     expect(campaignFootnote({ metric_offline: true, metric_affiliate: false }))
-      .toBe('Nguồn: báo cáo BI · * Không bao gồm đơn online')
+      .toBe('Nguồn: báo cáo BI · Doanh thu thuần tại cửa hàng (Net Revenue) — không bao gồm đơn online')
   })
 
   test('AFFILIATE-ONLY: KHÔNG breakdown 2 nguồn; footnote DELIVERED-only', () => {
     expect(breakdownModel(VIEW({ metric_offline: false, metric_affiliate: true })).show).toBe(false)
     expect(campaignFootnote({ metric_offline: false, metric_affiliate: true }))
-      .toContain('Circa Online · chỉ tính đơn giao thành công')
+      .toContain('Doanh thu Affiliate, chỉ tính đơn giao thành công')
   })
 
   test('BOTH: breakdown hiện, offline có %; affiliate KHÔNG có % (stakeholder 24/07); target=0 → null', () => {
@@ -148,7 +148,7 @@ test.describe('kpi display customer metric (mig 103) @desktop', () => {
     expect(campaignFootnote({ metric_offline: false, metric_affiliate: true, metric_type: 'affiliate_customer_count' }))
       .toContain('mỗi khách tính 1 lần')
     expect(campaignFootnote({ metric_offline: true, metric_affiliate: false }))
-      .toBe('Nguồn: báo cáo BI · * Không bao gồm đơn online')
+      .toBe('Nguồn: báo cáo BI · Doanh thu thuần tại cửa hàng (Net Revenue) — không bao gồm đơn online')
   })
 
   test('metricEditorState customer: khóa hẳn editor bất kể status/flag', () => {
@@ -651,8 +651,11 @@ test.describe('kpi revenue terminology (17/08) @desktop', () => {
     const p = metricPresentation('gmv')
     const uiLabels = [
       p.targetLabel, p.todayLabel, p.actualColumnLabel, p.chartAriaLabel, p.perDayLabel,
-      REVENUE_LABELS.offline, REVENUE_LABELS.affiliate, REVENUE_LABELS.offlineShort,
-      REVENUE_LABELS.total, campaignSourceNote(),
+      REVENUE_LABELS.offline, REVENUE_LABELS.affiliate, REVENUE_LABELS.total,
+      // chú thích nguồn là hàm PRODUCTION component đang gọi, không phải helper rời
+      campaignFootnote({ metric_offline: true, metric_affiliate: false }),
+      campaignFootnote({ metric_offline: true, metric_affiliate: true }),
+      campaignFootnote({ metric_offline: false, metric_affiliate: true }),
     ]
     for (const label of uiLabels) {
       expect(label, label).not.toContain('GMV')
@@ -673,11 +676,30 @@ test.describe('kpi revenue terminology (17/08) @desktop', () => {
     expect(REVENUE_LABELS.total).toBe('Tổng doanh thu thực tế')
   })
 
-  test('chú thích nguồn nêu đủ hai nguồn và rule DELIVERED', () => {
-    const note = campaignSourceNote()
-    expect(note).toContain('Net Revenue')
-    expect(note).toContain('Circa Online')
-    expect(note).toContain('giao thành công')
+  // 17/08 (audit P1#2): test HÀM PRODUCTION mà component thật sự gọi
+  // (CampaignKpiView dùng campaignFootnote), không test một helper rời chưa
+  // được nối vào đâu — helper đó xanh mà người dùng vẫn không thấy chú thích.
+  test('chú thích nguồn: Offline nói RÕ Net Revenue ở mọi cấu hình', () => {
+    const offlineOnly = campaignFootnote({ metric_offline: true, metric_affiliate: false })
+    expect(offlineOnly).toContain('Net Revenue')
+    expect(offlineOnly).toContain('thuần tại cửa hàng')
+
+    const hybrid = campaignFootnote({ metric_offline: true, metric_affiliate: true })
+    expect(hybrid).toContain('Net Revenue')
+    expect(hybrid).toContain('Doanh thu Affiliate')
+    expect(hybrid).toContain('giao thành công')
+
+    const affOnly = campaignFootnote({ metric_offline: false, metric_affiliate: true })
+    expect(affOnly).toContain('Doanh thu Affiliate')
+    expect(affOnly).toContain('DELIVERED')
+
+    // Chất lượng bán hàng: chú thích RIÊNG, nêu luật đạt cả hai
+    const quality = campaignFootnote({ metric_offline: true, metric_affiliate: false, metric_type: 'offline_order_aov' })
+    expect(quality).toContain('Net Revenue')
+    expect(quality).toContain('CẢ số đơn và AOV')
+    // và KHÔNG còn dấu vết contract cũ 90/10 hay sàn
+    expect(quality).not.toContain('90')
+    expect(quality).not.toContain('sàn')
   })
 
   test('CANARY: đổi nhãn KHÔNG được chạm tên cột Excel', () => {

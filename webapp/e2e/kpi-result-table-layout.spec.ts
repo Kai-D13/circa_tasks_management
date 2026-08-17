@@ -75,7 +75,7 @@ test.describe('kpi result table layout contract @desktop', () => {
     for (const cols of [resultTableColumns(2, true), resultTableColumns(2, true, 'gmv')]) {
       expect(cols.map((c) => c.label)).toEqual([
         'Cửa hàng', 'Phân loại', 'KPI target', 'Doanh thu thực tế',
-        'Doanh thu tại cửa hàng', 'Doanh thu Affiliate',
+        'Doanh thu thuần tại cửa hàng', 'Doanh thu Affiliate',
         '%', 'Nhịp độ', 'Trung bình/ngày', 'Bậc đạt · Commission', 'Bậc 1', 'Bậc 2',
       ])
       // không còn chữ GMV trên header bảng
