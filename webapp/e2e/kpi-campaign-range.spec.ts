@@ -667,6 +667,32 @@ test.describe('campaign range customer hardening @desktop', () => {
     expect(empty.error).not.toBe(nullPayload.error)
   })
 
+  test('Khách: reader trả DAILY đã validate để chart dùng chung nguồn với hero', async () => {
+    const { d } = deps({
+      loadTargetStoreIds: async () => ({ data: ['s1', 's2'], error: null }),
+      aggregateCustomers: async () => ({
+        data: {
+          rows: [
+            { store_id: 's1', vn_date: '2026-08-01', customer_count: 2 },
+            { store_id: 's2', vn_date: '2026-08-03', customer_count: 1 },
+          ],
+          total_customers: 3,
+        },
+        error: null,
+      }),
+    })
+    const r = await readCustomer(d)
+    if (!r.ok || r.mode !== 'customer') throw new Error('sai nhánh')
+    // Chart phải dựng từ ĐÂY, không cắt snapshot toàn kỳ: khách cross-store có
+    // thể được gán ngày/store khác giữa hai cách tính ⇒ hero và chart lệch.
+    expect(r.daily).toEqual([
+      { store_id: 's1', date: '2026-08-01', customers: 2 },
+      { store_id: 's2', date: '2026-08-03', customers: 1 },
+    ])
+    // và tổng của daily khớp hero
+    expect(r.daily.reduce((a, x) => a + x.customers, 0)).toBe(r.totalCustomers)
+  })
+
   test('nhánh DAILY: data null cũng phải lỗi, không coi là danh sách rỗng', async () => {
     const { d } = deps({ loadDaily: async () => ({ data: null, error: null }) })
     const r = await loadCampaignRangeActuals(d, { campaignId: 'c1', range: RANGE, metricType: 'gmv' })

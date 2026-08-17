@@ -17,3 +17,9 @@ export const MANAGER_STATE = path.join(__dirname, '.auth', 'manager.json')
 // Super Admin — /targets/campaigns là màn CHỈ super (không phải admin thường),
 // nên acceptance của nó không dùng lại được state nào ở trên.
 export const SUPER_STATE = path.join(__dirname, '.auth', 'super.json')
+
+// SM (Quản lý vùng) — nhánh /targets RIÊNG BIỆT: dựng model từ sm_store_assignments
+// chứ không phải campaignViews của Staff/QLCH. 4b wire filter cho Staff/QLCH/Super
+// và tuyên bố hoàn tất trong khi nhánh này chưa hề được chạm; không state SM thì
+// không có cách nào bắt được lỗi đó bằng test.
+export const SM_STATE = path.join(__dirname, '.auth', 'sm.json')

@@ -53,7 +53,18 @@ export interface RangeReadDeps {
 
 export type RangeReadResult =
   | { ok: true; mode: 'daily'; stores: RangeStoreActual[]; totals: RangeTotals }
-  | { ok: true; mode: 'customer'; stores: RangeCustomerActual[]; totalCustomers: number; storeCount: number }
+  | {
+      ok: true; mode: 'customer'
+      stores: RangeCustomerActual[]
+      totalCustomers: number
+      storeCount: number
+      // Daily ĐÃ VALIDATE, lấy thẳng từ RPC của CHÍNH range này. Chart phải
+      // dùng nguồn này chứ không cắt snapshot toàn kỳ: với khách cross-store,
+      // "đơn sớm nhất TRONG RANGE" có thể khác "đơn sớm nhất toàn kỳ", nên
+      // hero (RPC range) và chart (snapshot cắt) sẽ mâu thuẫn — hero 1 khách
+      // mà chart 0, hoặc ghi cho store khác.
+      daily: { store_id: string; date: string; customers: number }[]
+    }
   | { ok: false; error: string }
 
 export async function loadCampaignRangeActuals(
@@ -146,7 +157,12 @@ export async function loadCampaignRangeActuals(
     }
 
     const stores = [...byStore.entries()].map(([store_id, customers]) => ({ store_id, customers }))
-    return { ok: true, mode: 'customer', stores, totalCustomers: sum, storeCount: storeIds.length }
+    const daily = agg.data.rows.map((r) => ({
+      store_id: r.store_id,
+      date: String(r.vn_date),
+      customers: Number(r.customer_count),
+    }))
+    return { ok: true, mode: 'customer', stores, totalCustomers: sum, storeCount: storeIds.length, daily }
   }
 
   const daily = await deps.loadDaily(p.campaignId, storeIds, p.range.from, p.range.to)

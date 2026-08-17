@@ -71,9 +71,16 @@ export function CampaignDateRangeFilter({
 
         {/* Trạng thái phải nói RÕ đang xem gì. Khoảng sai mà im lặng hiện số
             toàn kỳ là để người dùng đọc nhầm con số của một kỳ khác. */}
+        {/* MỘT trạng thái duy nhất tại một thời điểm. Bản trước hiện đồng thời
+            "Đang xem 01/08–05/08" rồi mới cảnh báo bên dưới — người dùng đọc
+            dòng đầu là tin số đang lọc, trong khi thực tế là số toàn kỳ. */}
         {range.error ? (
           <p className="mt-2 text-xs text-status-danger">
             {CAMPAIGN_RANGE_ERROR_TEXT[range.error]} Đang hiển thị số liệu TOÀN KỲ.
+          </p>
+        ) : note ? (
+          <p className="mt-2 text-xs text-status-danger">
+            Không áp dụng được khoảng đã chọn. Đang hiển thị số liệu TOÀN KỲ. ({note})
           </p>
         ) : range.active ? (
           <p className="mt-2 text-xs text-muted-foreground">
@@ -81,8 +88,6 @@ export function CampaignDateRangeFilter({
             {' · '}Mục tiêu, bậc thưởng và commission vẫn tính theo TOÀN KỲ.
           </p>
         ) : null}
-
-        {note && <p className="mt-2 text-xs text-status-warning">{note}</p>}
       </CardContent>
     </Card>
   )
