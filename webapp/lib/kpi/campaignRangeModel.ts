@@ -15,15 +15,20 @@ export interface CampaignDailyRow {
   offline_order_count: number | null
 }
 
+// Mức phủ của SỐ ĐƠN trong khoảng — quyết định có được tính AOV hay không.
+//   full    — mọi dòng daily của store đều có count ⇒ mẫu số đáng tin
+//   none    — không dòng nào có count (kể cả store không có dòng nào)
+//   partial — có dòng có, có dòng không ⇒ mẫu số KHÔNG phủ hết tử số
+export type OrderCoverage = 'full' | 'none' | 'partial'
+
 export interface RangeStoreActual {
   store_id: string
   offline: number
   affiliate: number
   actual: number                      // offline + affiliate
-  // null = nguồn CHƯA có số đơn cho khoảng này (khác hẳn 0 đơn thật).
-  orders: number | null
-  // AOV weighted = tổng net / tổng đơn. null khi chưa có số đơn hoặc 0 đơn.
+  orders: number | null               // null khi coverage ≠ 'full'
   aov: number | null
+  ordersCoverage: OrderCoverage
   dayCount: number                    // số ngày CÓ dòng dữ liệu trong range
 }
 
@@ -33,7 +38,8 @@ export interface RangeTotals {
   actual: number
   orders: number | null
   aov: number | null
-  storeCount: number
+  ordersCoverage: OrderCoverage
+  storeCount: number                  // = số store ĐƯỢC TARGET, không phải số store có dữ liệu
 }
 
 const num = (v: number | null | undefined): number => {
@@ -41,34 +47,60 @@ const num = (v: number | null | undefined): number => {
   return Number.isFinite(n) ? n : 0
 }
 
-// Gộp theo store. KHÔNG lọc ngày ở đây — caller đã query đúng range; lọc lại
-// bằng string compare sẽ âm thầm khác đi nếu ai đó đổi định dạng date.
-export function buildRangeStoreActuals(rows: CampaignDailyRow[]): RangeStoreActual[] {
-  const byStore = new Map<string, { offline: number; affiliate: number; orders: number | null; days: number }>()
+/**
+ * Gộp theo store.
+ *
+ * `targetStoreIds` là danh sách store CỦA CAMPAIGN đã được RLS scope — BẮT
+ * BUỘC truyền. Nếu chỉ dựng store từ rows nguồn thì store không phát sinh giao
+ * dịch sẽ BIẾN MẤT khỏi bảng kết quả, và `storeCount` biến thành "số store có
+ * dữ liệu" thay vì "số store được giao chỉ tiêu" — sai cả bảng lẫn mẫu số
+ * "X/Y cửa hàng đạt". Nhánh customer-rpc càng dễ dính vì RPC chỉ trả store/ngày
+ * CÓ khách.
+ */
+export function buildRangeStoreActuals(
+  rows: CampaignDailyRow[],
+  targetStoreIds: string[],
+): RangeStoreActual[] {
+  type Acc = { offline: number; affiliate: number; orders: number; withCount: number; days: number }
+  const seed = (): Acc => ({ offline: 0, affiliate: 0, orders: 0, withCount: 0, days: 0 })
+
+  const byStore = new Map<string, Acc>()
+  for (const id of targetStoreIds) byStore.set(id, seed())
 
   for (const r of rows) {
-    const cur = byStore.get(r.store_id) ?? { offline: 0, affiliate: 0, orders: null, days: 0 }
+    // Rows ngoài tập target bị bỏ qua: scope là việc của tầng query, model
+    // không được âm thầm mở rộng phạm vi dữ liệu người dùng đang xem.
+    const cur = byStore.get(r.store_id)
+    if (!cur) continue
     cur.offline += num(r.gmv)
     cur.affiliate += num(r.gmv_affiliate)
     cur.days += 1
-    // Số đơn: chỉ cộng khi nguồn THẬT SỰ có giá trị. Nếu mọi ngày đều null thì
-    // giữ null — "chưa có dữ liệu" và "0 đơn" là hai chuyện khác nhau trên màn
-    // hoa hồng, gộp lại là bịa ra một sự thật.
     if (r.offline_order_count !== null && r.offline_order_count !== undefined) {
-      cur.orders = (cur.orders ?? 0) + num(r.offline_order_count)
+      cur.orders += num(r.offline_order_count)
+      cur.withCount += 1
     }
-    byStore.set(r.store_id, cur)
   }
 
-  return [...byStore.entries()].map(([store_id, v]) => ({
-    store_id,
-    offline: v.offline,
-    affiliate: v.affiliate,
-    actual: v.offline + v.affiliate,
-    orders: v.orders,
-    aov: weightedAov(v.offline, v.orders),
-    dayCount: v.days,
-  }))
+  return [...byStore.entries()].map(([store_id, v]) => {
+    const coverage: OrderCoverage =
+      v.days > 0 && v.withCount === v.days ? 'full'
+      : v.withCount === 0 ? 'none'
+      : 'partial'
+    // CHỈ 'full' mới được ra số. 'partial' là ca nguy hiểm nhất: tử số (net) lấy
+    // TRỌN khoảng còn mẫu số (đơn) chỉ phủ một phần ⇒ AOV trông hợp lệ mà sai.
+    // Mig 105 đã cấm payload nửa vời ở tầng ghi; tầng đọc phải giữ cùng kỷ luật.
+    const orders = coverage === 'full' ? v.orders : null
+    return {
+      store_id,
+      offline: v.offline,
+      affiliate: v.affiliate,
+      actual: v.offline + v.affiliate,
+      orders,
+      aov: weightedAov(v.offline, orders),
+      ordersCoverage: coverage,
+      dayCount: v.days,
+    }
+  })
 }
 
 // AOV luôn WEIGHTED: tổng net chia tổng đơn.
@@ -83,28 +115,48 @@ export function weightedAov(net: number, orders: number | null): number | null {
 export function buildRangeTotals(stores: RangeStoreActual[]): RangeTotals {
   let offline = 0
   let affiliate = 0
-  let orders: number | null = null
+  let orders = 0
+  let fullCount = 0
 
   for (const s of stores) {
     offline += s.offline
     affiliate += s.affiliate
-    if (s.orders !== null) orders = (orders ?? 0) + s.orders
+    if (s.ordersCoverage === 'full') {
+      orders += s.orders ?? 0
+      fullCount += 1
+    }
   }
+
+  // Tổng vùng chỉ có nghĩa khi MỌI store đều đủ số đơn. Thiếu một store là
+  // thiếu một phần mẫu số, trong khi tử số vẫn cộng đủ ⇒ AOV toàn vùng sẽ cao
+  // giả. Thà hiện '—' kèm lý do còn hơn một con số sai trên màn hoa hồng.
+  const coverage: OrderCoverage =
+    stores.length > 0 && fullCount === stores.length ? 'full'
+    : fullCount === 0 ? 'none'
+    : 'partial'
+  const totalOrders = coverage === 'full' ? orders : null
 
   return {
     offline,
     affiliate,
     actual: offline + affiliate,
-    orders,
-    aov: weightedAov(offline, orders),
+    orders: totalOrders,
+    aov: weightedAov(offline, totalOrders),
+    ordersCoverage: coverage,
     storeCount: stores.length,
   }
 }
 
-// Trung bình/ngày TRONG KHOẢNG — thay cho "Trung bình/ngày cần đạt" của chế độ
-// toàn kỳ. Chia cho số ngày CỦA KHOẢNG (range.days), không phải số ngày có dữ
-// liệu: ngày không phát sinh doanh thu vẫn là một ngày bán.
-export function rangeAveragePerDay(actual: number, rangeDays: number): number | null {
+// Trung bình THỰC TẾ mỗi ngày trong khoảng đang xem.
+// ⚠ KHÁC HẲN "Trung bình/ngày cần đạt" của chế độ toàn kỳ (phần CÒN THIẾU chia
+// số ngày CÒN LẠI). Đây là số đã đạt chia số ngày đã chọn — nối giá trị này vào
+// nhãn cũ là đổi nghĩa mà không đổi chữ. Chốt stakeholder 17/08: khi filter
+// active, nhãn là "Trung bình thực tế/ngày".
+export const RANGE_AVERAGE_LABEL = 'Trung bình thực tế/ngày'
+
+export function rangeActualAveragePerDay(actual: number, rangeDays: number): number | null {
+  // Chia theo số ngày CỦA KHOẢNG, không phải số ngày có dữ liệu: ngày không
+  // phát sinh doanh thu vẫn là một ngày bán trong kỳ.
   if (rangeDays <= 0) return null
   return actual / rangeDays
 }

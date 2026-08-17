@@ -6,7 +6,7 @@ import {
   rangeFilterVisibleForRole, withRangeParams,
 } from '../lib/kpi/campaignDateRange'
 import {
-  buildRangeStoreActuals, buildRangeTotals, rangeAveragePerDay, weightedAov,
+  buildRangeStoreActuals, buildRangeTotals, rangeActualAveragePerDay, RANGE_AVERAGE_LABEL, weightedAov,
   type CampaignDailyRow,
 } from '../lib/kpi/campaignRangeModel'
 
@@ -199,8 +199,8 @@ test.describe('campaign range aggregation @desktop', () => {
       row({ store_id: 's1', date: '2026-08-01', gmv: 100, gmv_affiliate: 10 }),
       row({ store_id: 's1', date: '2026-08-02', gmv: 200, gmv_affiliate: 20 }),
       row({ store_id: 's2', date: '2026-08-01', gmv: 50, gmv_affiliate: 0 }),
-    ])
-    const s1 = out.find((s) => s.store_id === 's1')!
+    ], ['s1', 's2'])
+    const s1 = out.find((x) => x.store_id === 's1')!
     expect(s1.offline).toBe(300)
     expect(s1.affiliate).toBe(30)
     expect(s1.actual).toBe(330)
@@ -211,96 +211,140 @@ test.describe('campaign range aggregation @desktop', () => {
   test('NET REVENUE ÂM (trả hàng) phải được giữ, không clamp về 0', () => {
     const out = buildRangeStoreActuals([
       row({ store_id: 's1', date: '2026-08-01', gmv: 500 }),
-      row({ store_id: 's1', date: '2026-08-02', gmv: -120 }),   // ngày trả hàng nhiều
-    ])
+      row({ store_id: 's1', date: '2026-08-02', gmv: -120 }),
+    ], ['s1'])
     expect(out[0].offline).toBe(380)
     expect(out[0].actual).toBe(380)
   })
 
   test('AOV luôn WEIGHTED = tổng net / tổng đơn, KHÔNG phải trung bình AOV ngày', () => {
     const out = buildRangeStoreActuals([
-      // ngày 1: 1 đơn × 1.000.000 ⇒ AOV ngày = 1.000.000
       row({ store_id: 's1', date: '2026-08-01', gmv: 1_000_000, offline_order_count: 1 }),
-      // ngày 2: 99 đơn × ~10.101 ⇒ AOV ngày ≈ 10.101
       row({ store_id: 's1', date: '2026-08-02', gmv: 1_000_000, offline_order_count: 99 }),
-    ])
+    ], ['s1'])
     const s1 = out[0]
+    expect(s1.ordersCoverage).toBe('full')
     expect(s1.orders).toBe(100)
-    expect(s1.aov).toBe(20_000)                    // 2.000.000 / 100
-    // trung bình của hai AOV ngày là ~505.050 — con số KHÔNG tồn tại thực tế
+    expect(s1.aov).toBe(20_000)
     expect(s1.aov).not.toBeCloseTo((1_000_000 + 1_000_000 / 99) / 2, 0)
   })
 
   test('0 đơn → AOV null (không chia 0); orders vẫn là 0 THẬT', () => {
     const out = buildRangeStoreActuals([
       row({ store_id: 's1', date: '2026-08-01', gmv: 0, offline_order_count: 0 }),
-    ])
+    ], ['s1'])
+    expect(out[0].ordersCoverage).toBe('full')
     expect(out[0].orders).toBe(0)
     expect(out[0].aov).toBeNull()
   })
 
-  test('nguồn CHƯA có số đơn → orders null, KHÁC hẳn 0 đơn', () => {
+  test('nguồn CHƯA có số đơn ngày nào → coverage none, orders null', () => {
     const out = buildRangeStoreActuals([
-      row({ store_id: 's1', date: '2026-08-01', gmv: 900_000 }),   // offline_order_count null
+      row({ store_id: 's1', date: '2026-08-01', gmv: 900_000 }),
       row({ store_id: 's1', date: '2026-08-02', gmv: 100_000 }),
-    ])
+    ], ['s1'])
+    expect(out[0].ordersCoverage).toBe('none')
     expect(out[0].orders).toBeNull()
     expect(out[0].aov).toBeNull()
     expect(out[0].offline).toBe(1_000_000)        // tiền vẫn cộng bình thường
   })
 
-  test('một phần ngày có số đơn → cộng ĐÚNG phần có, không coi null là 0', () => {
+  // ⚠ Ca nguy hiểm nhất — bản trước KHOÁ NHẦM hành vi sai: cộng đơn của phần có
+  // rồi chia net của TRỌN khoảng, ra một AOV trông hợp lệ mà sai (500/3).
+  // Mig 105 đã cấm payload nửa vời ở tầng ghi; tầng đọc giữ cùng kỷ luật.
+  test('PARTIAL: có ngày thiếu số đơn → orders/aov NULL, không ra số nửa vời', () => {
     const out = buildRangeStoreActuals([
       row({ store_id: 's1', date: '2026-08-01', gmv: 300, offline_order_count: 3 }),
       row({ store_id: 's1', date: '2026-08-02', gmv: 200 }),        // thiếu số đơn
-    ])
-    expect(out[0].orders).toBe(3)
-    expect(out[0].aov).toBe(500 / 3)              // net vẫn là tổng cả 2 ngày
+    ], ['s1'])
+    expect(out[0].ordersCoverage).toBe('partial')
+    expect(out[0].orders).toBeNull()
+    expect(out[0].aov).toBeNull()
+    // tuyệt đối không còn 500/3
+    expect(out[0].aov).not.toBe(500 / 3)
+    // nhưng TIỀN vẫn hiển thị được, độc lập với số đơn
+    expect(out[0].offline).toBe(500)
+  })
+
+  test('store CÓ TARGET nhưng KHÔNG có dòng nào → vẫn xuất hiện, tiền 0', () => {
+    const out = buildRangeStoreActuals([
+      row({ store_id: 's1', date: '2026-08-01', gmv: 100, offline_order_count: 1 }),
+    ], ['s1', 's2', 's3'])
+    expect(out).toHaveLength(3)
+    const s2 = out.find((x) => x.store_id === 's2')!
+    expect(s2.actual).toBe(0)
+    expect(s2.dayCount).toBe(0)
+    expect(s2.ordersCoverage).toBe('none')
+    expect(s2.orders).toBeNull()
+  })
+
+  test('rows NGOÀI tập target bị bỏ qua (model không tự mở rộng phạm vi)', () => {
+    const out = buildRangeStoreActuals([
+      row({ store_id: 's1', date: '2026-08-01', gmv: 100 }),
+      row({ store_id: 'ngoai-scope', date: '2026-08-01', gmv: 999_999 }),
+    ], ['s1'])
+    expect(out).toHaveLength(1)
+    expect(out[0].offline).toBe(100)
   })
 
   test('weightedAov: biên', () => {
     expect(weightedAov(1000, 4)).toBe(250)
     expect(weightedAov(1000, 0)).toBeNull()
     expect(weightedAov(1000, null)).toBeNull()
-    expect(weightedAov(-500, 5)).toBe(-100)       // net âm vẫn ra AOV âm, không nuốt
+    expect(weightedAov(-500, 5)).toBe(-100)
   })
 
   test('totals: gộp nhiều store, AOV weighted TOÀN VÙNG', () => {
     const stores = buildRangeStoreActuals([
       row({ store_id: 's1', date: '2026-08-01', gmv: 1_000_000, gmv_affiliate: 100, offline_order_count: 10 }),
       row({ store_id: 's2', date: '2026-08-01', gmv: 3_000_000, gmv_affiliate: 200, offline_order_count: 30 }),
-    ])
+    ], ['s1', 's2'])
     const t = buildRangeTotals(stores)
+    expect(t.ordersCoverage).toBe('full')
     expect(t.offline).toBe(4_000_000)
     expect(t.affiliate).toBe(300)
     expect(t.actual).toBe(4_000_300)
     expect(t.orders).toBe(40)
-    expect(t.aov).toBe(100_000)                   // 4.000.000 / 40
+    expect(t.aov).toBe(100_000)
     expect(t.storeCount).toBe(2)
   })
 
-  test('totals: chỉ MỘT store thiếu số đơn thì tổng đơn vẫn tính phần có', () => {
+  // Tử số cộng đủ mọi store còn mẫu số thiếu một store ⇒ AOV vùng cao GIẢ.
+  test('totals: MỘT store thiếu số đơn → tổng orders/aov NULL', () => {
     const stores = buildRangeStoreActuals([
       row({ store_id: 's1', date: '2026-08-01', gmv: 100, offline_order_count: 2 }),
       row({ store_id: 's2', date: '2026-08-01', gmv: 900 }),
-    ])
+    ], ['s1', 's2'])
     const t = buildRangeTotals(stores)
-    expect(t.orders).toBe(2)
-    // net là tổng cả hai store ⇒ AOV toàn vùng lệch cao; đó là lý do UI phải
-    // nêu rõ khi thiếu nguồn, nhưng model KHÔNG được tự bịa 0 đơn cho s2.
-    expect(t.aov).toBe(500)
+    expect(t.ordersCoverage).toBe('partial')
+    expect(t.orders).toBeNull()
+    expect(t.aov).toBeNull()
+    expect(t.aov).not.toBe(500)      // con số sai của bản trước
+    expect(t.offline).toBe(1000)     // tiền vẫn đúng và vẫn hiện được
+  })
+
+  test('totals: storeCount = số store ĐƯỢC TARGET, không phải store có dữ liệu', () => {
+    const stores = buildRangeStoreActuals([
+      row({ store_id: 's1', date: '2026-08-01', gmv: 100, offline_order_count: 1 }),
+    ], ['s1', 's2', 's3'])
+    expect(buildRangeTotals(stores).storeCount).toBe(3)
   })
 
   test('totals rỗng: 0 store, không crash, AOV null', () => {
     const t = buildRangeTotals([])
-    expect(t).toEqual({ offline: 0, affiliate: 0, actual: 0, orders: null, aov: null, storeCount: 0 })
+    expect(t).toEqual({
+      offline: 0, affiliate: 0, actual: 0, orders: null, aov: null,
+      ordersCoverage: 'none', storeCount: 0,
+    })
   })
 
-  test('trung bình/ngày chia theo SỐ NGÀY CỦA KHOẢNG, không phải ngày có dữ liệu', () => {
-    // 5 ngày khoảng, chỉ 2 ngày phát sinh ⇒ vẫn chia 5: ngày không bán vẫn là
-    // một ngày bán trong kỳ.
-    expect(rangeAveragePerDay(1_000_000, 5)).toBe(200_000)
-    expect(rangeAveragePerDay(0, 5)).toBe(0)
-    expect(rangeAveragePerDay(100, 0)).toBeNull()
+  test('trung bình THỰC TẾ/ngày: chia theo SỐ NGÀY CỦA KHOẢNG + nhãn riêng', () => {
+    expect(rangeActualAveragePerDay(1_000_000, 5)).toBe(200_000)
+    expect(rangeActualAveragePerDay(0, 5)).toBe(0)
+    expect(rangeActualAveragePerDay(100, 0)).toBeNull()
+    // Nhãn PHẢI khác "Trung bình/ngày cần đạt" của toàn kỳ — đây là số ĐÃ ĐẠT
+    // chia số ngày đã chọn, không phải phần còn thiếu chia số ngày còn lại.
+    expect(RANGE_AVERAGE_LABEL).toBe('Trung bình thực tế/ngày')
+    expect(RANGE_AVERAGE_LABEL).not.toContain('cần đạt')
   })
 })
