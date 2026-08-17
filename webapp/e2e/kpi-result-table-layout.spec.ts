@@ -91,21 +91,26 @@ test.describe('kpi result table layout contract @desktop', () => {
     expect(cust.map((c) => c.key)).toEqual(gmv.map((c) => c.key))
   })
 
-  // ── Mig 106 r1.1: Chất lượng bán hàng — bảng GỌN, không cột trùng số ──────
-  test('order_aov: bỏ KPI target / % / Trung bình-ngày, thêm 2 cột Order·AOV + Trạng thái', () => {
+  // ── Commit 5 (17/08): Chất lượng bán hàng — HAI chỉ số độc lập ────────────
+  test('order_aov: bỏ điểm gộp + Nhịp độ, thay bằng 2 cột Số đơn / AOV', () => {
     const keys = resultTableColumns(3, false, 'offline_order_aov').map((c) => c.key)
     expect(keys).toEqual([
-      'store', 'group', 'actual', 'orderAov', 'quality', 'pace',
+      'store', 'group', 'order', 'aov', 'quality',
       'tierCombined', 'tier-1', 'tier-2', 'tier-3',
     ])
     const cols = resultTableColumns(3, false, 'offline_order_aov')
-    expect(cols.find((c) => c.key === 'actual')!.label).toBe('Hoàn thành')
-    expect(cols.find((c) => c.key === 'orderAov')!.scope).toBe('all')
+    expect(cols.find((c) => c.key === 'order')!.label).toBe('Số đơn (thực tế / mục tiêu)')
+    expect(cols.find((c) => c.key === 'aov')!.label).toBe('AOV (thực tế / mục tiêu)')
+    expect(cols.find((c) => c.key === 'order')!.scope).toBe('all')
+    expect(cols.find((c) => c.key === 'aov')!.scope).toBe('all')
     // KHÔNG có cột GMV Offline/Affiliate (loại này không bật affiliate)
     expect(keys).not.toContain('affiliate')
-    // 'KPI target' luôn = 100% ⇒ bỏ; '%' trùng chính cột Hoàn thành ⇒ bỏ;
-    // 'Trung bình/ngày' (điểm %/ngày) không có nghĩa nghiệp vụ ⇒ bỏ.
-    for (const dead of ['kpiTarget', 'pct', 'perDay']) expect(keys).not.toContain(dead)
+    // Điểm gộp min(order%, aov%) BIẾN MẤT khỏi bảng (vẫn còn trong DB/export):
+    // 'actual' = cột điểm, 'orderAov' = cột gộp cũ, 'pace' = run_rate của điểm.
+    // 'kpiTarget' luôn 100 ⇒ bỏ; 'pct' trùng điểm ⇒ bỏ; 'perDay' = điểm %/ngày.
+    for (const dead of ['actual', 'orderAov', 'pace', 'kpiTarget', 'pct', 'perDay']) {
+      expect(keys, `cột '${dead}' phải biến mất khỏi Chất lượng bán hàng`).not.toContain(dead)
+    }
   })
 
   test('GMV/khách: mảng cột GIỮ NGUYÊN (zero-touch khi thêm loại mới)', () => {
@@ -120,10 +125,10 @@ test.describe('kpi result table layout contract @desktop', () => {
   test('desktopMinPx PHẢI theo metricType (bảng order_aov hẹp hơn nhờ bỏ 3 cột)', () => {
     const aov = resultTableDesktopMinPx(3, false, 'offline_order_aov')
     const gmv = resultTableDesktopMinPx(3, false)
-    // +orderAov +quality −kpiTarget −pct −perDay
+    // +order +aov +quality −kpiTarget −actual −pct −pace −perDay
     expect(aov - gmv).toBe(
-      RESULT_COL_PX.orderAov + RESULT_COL_PX.quality
-      - RESULT_COL_PX.money - RESULT_COL_PX.pct - RESULT_COL_PX.perDay,
+      2 * RESULT_COL_PX.metricPair + RESULT_COL_PX.quality
+      - 2 * RESULT_COL_PX.money - RESULT_COL_PX.pct - RESULT_COL_PX.pace - RESULT_COL_PX.perDay,
     )
     expect(aov).toBeLessThan(gmv)
   })

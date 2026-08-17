@@ -1,8 +1,9 @@
 import { test, expect } from '@playwright/test'
 import {
-  ORDER_AOV_STATUS_LABEL, aovFromSnapshot, computeOrderAovResult, countQualityKpiPass,
-  exactlyOneTierAt100, formatCompletionPct, formatRemainingPct, normalizeOptionalCount,
-  orderAovStatus, qualityKpiPass, round4,
+  ORDER_AOV_STATUS_LABEL, ORDER_AOV_VERDICT, aovFromSnapshot, computeOrderAovResult,
+  countQualityKpiPass, exactlyOneTierAt100, formatCompletionPct, formatRemainingPct,
+  normalizeOptionalCount, orderAovDualView, orderAovStatus, orderAovVerdict,
+  qualityKpiPass, round4,
 } from '../lib/kpi/orderAov'
 import { normalizeDailyPoint } from '../lib/kpi/dailyPoint'
 
@@ -298,5 +299,100 @@ test.describe('kpi order/aov core (106) @desktop', () => {
     const almost = run(1000, 1000 * 200_000 - 1)
     expect(formatCompletionPct(almost.completionPct)).toBe('<100%')
     expect(formatRemainingPct(almost.remainingPct)).toBe('<0,1%')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Commit 5 — HAI CHỈ SỐ ĐỘC LẬP (bỏ điểm gộp khỏi UI)
+// ─────────────────────────────────────────────────────────────────────────────
+test.describe('order/aov — hai chỉ số độc lập @desktop', () => {
+  const T = { orderTarget: 900, aovTarget: 200_000 }
+  const view = (orders: number | null, net: number | null, synced = true) =>
+    orderAovDualView({ actualOrder: orders, actualNet: net, ...T, synced })
+
+  test('mỗi chỉ số có % RIÊNG, không cap 100', () => {
+    // 1.080 đơn / 900 = 120% · AOV 250.000 / 200.000 = 125%
+    const v = view(1080, 1080 * 250_000)!
+    expect(v.order.pctRaw).toBeCloseTo(120, 6)
+    expect(v.aov.pctRaw).toBeCloseTo(125, 6)
+    expect(v.order.pctText).toBe('120%')
+    expect(v.aov.pctText).toBe('125%')
+    // Không có chỗ nào ép về 100 — đây chính là điều stakeholder yêu cầu.
+    expect(v.order.pctRaw!).toBeGreaterThan(100)
+  })
+
+  test('ĐẠT chỉ khi CẢ HAI đạt — vượt một chỉ số không bù cho chỉ số kia', () => {
+    expect(view(1080, 1080 * 250_000)!.overallPass).toBe(true)   // cả hai vượt
+    expect(view(1080, 1080 * 150_000)!.overallPass).toBe(false)  // đơn vượt, AOV hụt
+    expect(view(500, 500 * 250_000)!.overallPass).toBe(false)    // AOV vượt, đơn hụt
+    expect(view(900, 900 * 200_000)!.overallPass).toBe(true)     // bằng đúng mục tiêu = ĐẠT
+  })
+
+  test('đạt/chưa đạt của UI PHẢI trùng điều kiện trả thưởng (completion >= 100)', () => {
+    // Đây là bất biến chống lệch giữa màn hình và tiền: badge "Đạt KPI" mà
+    // không có commission (hoặc ngược lại) là lỗi nghiêm trọng nhất của module.
+    const cases: [number, number][] = [
+      [900, 900 * 200_000],          // bằng đúng cả hai
+      [899, 899 * 200_000],          // hụt 1 đơn
+      [900, 900 * 199_999],          // hụt 1đ AOV
+      [1080, 1080 * 250_000],        // vượt cả hai
+      [1080, 1080 * 150_000],        // vượt đơn, hụt AOV
+      [500, 500 * 250_000],          // hụt đơn, vượt AOV
+      [900, 900 * 200_000 - 1],      // hụt CỰC NHỎ — ca làm tròn nguy hiểm nhất
+      [1, 200_000],                  // 1 đơn đúng AOV, đơn hụt nặng
+    ]
+    for (const [orders, net] of cases) {
+      const dual = view(orders, net)!
+      const engine = computeOrderAovResult({ ...T, actualOrder: orders, actualNet: net })
+      expect(dual.overallPass, `orders=${orders} net=${net}`).toBe(qualityKpiPass(engine.completionPct))
+    }
+  })
+
+  test('0 đơn: AOV null → "—", KHÔNG chia 0, và chưa đạt', () => {
+    const v = view(0, 0)!
+    expect(v.order.actual).toBe(0)
+    expect(v.order.pctText).toBe('0%')
+    expect(v.aov.actual).toBeNull()
+    expect(v.aov.pctText).toBe('—')
+    expect(v.aov.valueText).toBe('— / 200.000₫')
+    expect(v.overallPass).toBe(false)
+  })
+
+  test('chưa đồng bộ: MỤC TIÊU vẫn hiện, thực tế là "—", không bịa 0%', () => {
+    // Snapshot partial còn số đơn kỳ trước mà điểm đã null — format thẳng sẽ
+    // hiện "1.046 / 900 đơn" ngay cạnh chữ "Chưa đồng bộ".
+    const v = view(1046, 1046 * 250_000, false)!
+    expect(v.synced).toBe(false)
+    expect(v.order.actual).toBeNull()
+    expect(v.order.valueText).toBe('— / 900 đơn')
+    expect(v.aov.valueText).toBe('— / 200.000₫')
+    expect(v.order.pctText).toBe('—')
+    expect(orderAovVerdict(v)).toBe(ORDER_AOV_VERDICT.unsynced)
+  })
+
+  test('hụt sát 100 hiện "<100%" ở CHÍNH dòng bị hụt, không làm tròn lên', () => {
+    const v = view(900, 900 * 200_000 - 1)!
+    expect(v.order.pctText).toBe('100%')     // số đơn đạt đủ
+    expect(v.aov.pctText).toBe('<100%')      // AOV hụt 1đ ⇒ không được ra '100%'
+    expect(v.overallPass).toBe(false)
+    expect(orderAovVerdict(v)).toBe(ORDER_AOV_VERDICT.fail)
+  })
+
+  test('chưa cấu hình đủ hai mục tiêu → null (không dựng dòng rỗng)', () => {
+    expect(orderAovDualView({ actualOrder: 10, actualNet: 1000, orderTarget: null, aovTarget: 200_000, synced: true })).toBeNull()
+    expect(orderAovDualView({ actualOrder: 10, actualNet: 1000, orderTarget: 900, aovTarget: null, synced: true })).toBeNull()
+  })
+
+  test('verdict: đạt → "Đạt KPI"', () => {
+    expect(orderAovVerdict(view(900, 900 * 200_000))).toBe(ORDER_AOV_VERDICT.pass)
+    expect(orderAovVerdict(null)).toBe(ORDER_AOV_VERDICT.unsynced)
+  })
+
+  test('canary: UI KHÔNG được suy "đạt" từ điểm gộp đã làm tròn', () => {
+    // completion 99,9999 làm tròn 1 chữ số ra 100,0 — nếu UI đọc số đã làm
+    // tròn thì badge sẽ ghi "Đạt". overallPass đi từ tỉ lệ round4 nên không dính.
+    const engine = computeOrderAovResult({ ...T, actualOrder: 900, actualNet: 900 * 200_000 - 1 })
+    expect(Math.round(engine.completionPct * 10) / 10).toBe(100)
+    expect(view(900, 900 * 200_000 - 1)!.overallPass).toBe(false)
   })
 })

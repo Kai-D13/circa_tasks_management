@@ -452,20 +452,46 @@ test.describe('kpi card value — 1 cửa hàng (batch /targets) @desktop', () =
     expect(v.pctText).toBe('1%')
   })
 
-  test('CHẤT LƯỢNG BÁN HÀNG: HAI dòng Số đơn + AOV, không gộp', () => {
+  // ── Commit 5 (17/08): card KHÔNG còn % tổng cho Chất lượng bán hàng ───────
+  test('CHẤT LƯỢNG BÁN HÀNG: HAI dòng, MỖI dòng % riêng, KHÔNG có % tổng', () => {
     const v = campaignCardValue(QUA)
     expect(v.lines.map((l) => l.label)).toEqual(['Số đơn', 'AOV'])
     expect(v.lines[0].value).toBe('1.046 / 900 đơn')
     expect(v.lines[1].value).toBe('194.025₫ / 190.540₫')
-    expect(v.pctText).toBe('116,2%')
+    // % RIÊNG từng chỉ số — đây là thứ cửa hàng đọc được, khác hẳn min() gộp.
+    expect(v.lines[0].pctText).toBe('116,2%')   // 1.046/900
+    expect(v.lines[1].pctText).toBe('101,8%')   // 194.025/190.540
+    expect(v.lines[0].pass).toBe(true)
+    expect(v.lines[1].pass).toBe(true)
+    // Điểm gộp BIẾN MẤT: chỗ % tổng giờ là verdict.
+    expect(v.showAggregate).toBe(false)
+    expect(v.pct).toBe(0)
+    expect(v.pctText).toBe('Đạt KPI')
     expect(v.tone).toBe('success')
   })
 
-  test('CHẤT LƯỢNG: 99,9999% là CHƯA đạt — không làm tròn lên 100%, tone warning', () => {
-    const v = campaignCardValue({ ...QUA, actualValue: 99.9999 })
-    expect(v.pctText).toBe('<100%')
+  test('CHẤT LƯỢNG: % của từng chỉ số KHÔNG cap 100', () => {
+    const v = campaignCardValue({ ...QUA, offlineOrderCount: 1800, actualOffline: 1800 * 400_000 })
+    expect(v.lines[0].pct!).toBeGreaterThan(100)
+    expect(v.lines[0].pctText).toBe('200%')     // 1.800/900
+    expect(v.lines[1].pctText).toBe('209,9%')   // 400.000/190.540
+  })
+
+  test('CHẤT LƯỢNG: chỉ MỘT chỉ số đạt ⇒ CHƯA đạt (không bù trừ)', () => {
+    // Số đơn vượt xa nhưng AOV hụt → verdict phải là "Chưa đạt".
+    const v = campaignCardValue({ ...QUA, offlineOrderCount: 1800, actualOffline: 1800 * 100_000, actualValue: 52.5 })
+    expect(v.lines[0].pass).toBe(true)
+    expect(v.lines[1].pass).toBe(false)
+    expect(v.pctText).toBe('Chưa đạt')
     expect(v.tone).toBe('warning')
-    // đúng 100 mới là đạt
+  })
+
+  test('CHẤT LƯỢNG: điểm gộp nói CHƯA đạt thì card KHÔNG được ghi "Đạt KPI"', () => {
+    // Snapshot trộn kỳ: số đơn/AOV thô đủ đạt nhưng actual_value (số TRẢ THƯỞNG)
+    // là 99,9999. Chọn phía dè dặt — không hứa đạt khi tiền nói chưa.
+    const v = campaignCardValue({ ...QUA, actualValue: 99.9999 })
+    expect(v.pctText).toBe('Chưa đạt')
+    expect(v.tone).toBe('warning')
     expect(campaignCardValue({ ...QUA, actualValue: 100 }).tone).toBe('success')
   })
 
@@ -490,14 +516,20 @@ test.describe('kpi card value — 1 cửa hàng (batch /targets) @desktop', () =
   })
 
   test('CÙNG LUẬT làm tròn với campaignCardProgress (không hai nguồn sự thật)', () => {
-    for (const base of [GMV, CUS, QUA]) {
+    // QUA không còn % tổng nên không tham gia — kiểm riêng ngay dưới.
+    for (const base of [GMV, CUS]) {
       const prog = campaignCardProgress({
         kpi_target: base.kpiTarget, actual_value: base.actualValue, metric_type: base.metricType,
       })
       const card = campaignCardValue(base)
       expect(card.pct, base.metricType).toBe(prog.pct)
       expect(card.pctText, base.metricType).toBe(prog.text)
+      expect(card.showAggregate, base.metricType).toBe(true)
     }
+    // Chất lượng bán hàng: KHÔNG được lộ % tổng ra card dưới bất kỳ dạng nào.
+    const qua = campaignCardValue(QUA)
+    expect(qua.showAggregate).toBe(false)
+    expect(qua.pctText).not.toMatch(/%/)
   })
 })
 

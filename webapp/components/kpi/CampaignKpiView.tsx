@@ -1,12 +1,12 @@
 import Link from 'next/link'
 import { Card, CardContent } from '@/components/ui/card'
 import {
-  breakdownModel, campaignFootnote, heroRemainingText, metricPresentation, orderAovMetricLines,
+  breakdownModel, campaignFootnote, heroRemainingText, metricPresentation,
   perDayVisible, REVENUE_LABELS,
 } from '@/lib/kpi/campaignDisplay'
 import {
-  ORDER_AOV_STATUS_LABEL, aovFromSnapshot, formatCompletionPct, formatRemainingPct,
-  orderAovStatus, qualityKpiPass,
+  ORDER_AOV_STATUS_LABEL, aovFromSnapshot, orderAovDualView, orderAovStatus,
+  qualityKpiPass,
 } from '@/lib/kpi/orderAov'
 import { buildTierProgress, type TierProgress } from '@/lib/kpi/resultModel'
 import { CampaignDailyChart } from '@/components/kpi/CampaignDailyChart'
@@ -154,16 +154,21 @@ export function CampaignKpiView({
   const sel = items.find((i) => i.id === selectedId) ?? items[0]
   // Mig 103: format/label tập trung — gmv cho output BYTE-EQUAL vnd cũ.
   const pres = metricPresentation(sel.metric_type)
-  // Mig 106: dòng "thực tế / mục tiêu" + trạng thái — dùng CHUNG helper
-  // với bảng desktop để Staff và Super không bao giờ đọc ra 2 con số khác nhau.
-  const qualityLines = orderAovMetricLines({
+  // Mig 106 + commit 5: dùng CHUNG contract với bảng desktop để Staff và Super
+  // không bao giờ đọc ra hai con số khác nhau.
+  // Commit 5 (17/08): HAI chỉ số độc lập — nguồn cho khối hero mới.
+  const qualityDual = orderAovDualView({
     actualOrder: sel.offline_order_count ?? null,
     actualNet: sel.actual_offline,
     orderTarget: sel.order_target, aovTarget: sel.aov_target,
+    synced: sel.actual_value !== null,
   })
+  // Đạt = cả hai chỉ số đạt VÀ điểm gộp (số trả thưởng) cũng đạt — snapshot
+  // trộn kỳ thì chọn phía dè dặt, y như card (lib/kpi/campaignDisplay).
   const qualityPass = qualityKpiPass(sel.actual_value)
+    && (qualityDual === null || qualityDual.overallPass)
   const qualityAov = aovFromSnapshot(sel.actual_offline, sel.offline_order_count)
-  const qualityStatus = qualityLines && sel.actual_value !== null && sel.offline_order_count != null
+  const qualityStatus = qualityDual && sel.actual_value !== null && sel.offline_order_count != null
     ? orderAovStatus({
       actualOrder: sel.offline_order_count,
       orderPass: sel.offline_order_count >= Number(sel.order_target),
@@ -239,9 +244,9 @@ export function CampaignKpiView({
         ).map((tp) => [tp.tier_order, tp])
       : [],
   )
-  // r1.2 (audit P1): phần CÒN THIẾU của campaign điểm % dùng formatter riêng —
-  // 0,0001 điểm % không được làm tròn thành "0%" (mâu thuẫn "chưa đạt").
-  const remainingText = (n: number) => isOrderAovCampaign ? formatRemainingPct(n) : vnd(n)
+  // Commit 5: tierRemainingLine đã bỏ hẳn với order_aov, nên nhánh này chỉ còn
+  // gmv/khách — giữ formatter tiền/đếm của chính loại đó.
+  const remainingText = (n: number) => vnd(n)
   // Hero "Còn thiếu": chưa đồng bộ → '—' · đã đạt → 0 · còn lại → formatter
   // theo loại. (Trước r1.2.1: null actual vẫn ra "Còn thiếu 100%".)
   const remainingHeroText = heroRemainingText({
@@ -249,6 +254,10 @@ export function CampaignKpiView({
   })
   const tierRemainingLine = (order: number) => {
     if (!showTierRemaining) return null
+    // Commit 5: với Chất lượng bán hàng, "còn thiếu tới bậc" CHÍNH LÀ khoảng
+    // cách điểm gộp tới 100 — tức là con số vừa bị bỏ khỏi UI, chỉ đổi tên.
+    // Ô bậc vẫn hiện MỨC THƯỞNG; phần trăm thì đọc ở hai chỉ số phía trên.
+    if (isOrderAovCampaign) return null
     const tp = tierProgressByOrder.get(order)
     if (!tp) return null
     return (
@@ -295,7 +304,14 @@ export function CampaignKpiView({
 
       {/* ── Hero: mục tiêu / đã đạt / progress / ring / còn thiếu ──
           Brand-tinted flat background (template hero is a warm cream card;
-          guide says no heavy gradients) */}
+          guide says no heavy gradients)
+
+          Commit 5 (stakeholder 17/08): Chất lượng bán hàng KHÔNG dùng hero này.
+          Mọi thứ trong đây (Đã đạt, ring, thanh, "Còn thiếu") đều là ĐIỂM GỘP
+          min(số đơn%, AOV%) — con số cửa hàng không giải thích được và nó che
+          mất chỉ số đang kéo điểm xuống. Loại đó dùng khối hai chỉ số bên dưới.
+          actual_value vẫn nguyên trong DB/engine/export để xét thưởng. */}
+      {!isOrderAovCampaign && (
       <Card className="rounded-lg border-primary/20 bg-secondary">
         <CardContent className="p-4 space-y-3">
           <div className="flex items-start justify-between gap-3">
@@ -314,7 +330,7 @@ export function CampaignKpiView({
               <Ring
                 pct={pct}
                 tierReached={reachedOrder !== null || pct >= 100}
-                format={isOrderAovCampaign ? formatCompletionPct : undefined}
+                /* hero này không bao giờ render cho order_aov (commit 5) */
               />
             </div>
           </div>
@@ -331,7 +347,7 @@ export function CampaignKpiView({
               'shrink-0 text-sm font-bold tabular-nums md:text-xs md:font-semibold',
               (reachedOrder !== null || pct >= 100) ? 'text-status-success md:text-inherit' : 'md:text-inherit',
             )}>
-              {isOrderAovCampaign ? formatCompletionPct(pct) : `${pct.toFixed(0)}%`}
+              {`${pct.toFixed(0)}%`}
             </span>
           </div>
           <p className="flex items-center gap-1.5 text-sm border-t pt-3">
@@ -343,23 +359,42 @@ export function CampaignKpiView({
           </p>
         </CardContent>
       </Card>
+      )}
 
       {/* ── Mig 106: Chất lượng bán hàng — 2 chỉ số, mỗi chỉ số có MỤC TIÊU.
              Hero phía trên là ĐIỂM hoàn thành (chỉ số YẾU HƠN); khối này cho
              biết vì sao: số đơn/AOV thực tế so với mục tiêu + trạng thái. ── */}
-      {qualityLines && (
-        <Card className="rounded-lg">
-          <CardContent className="p-4 space-y-2.5">
+      {qualityDual && (
+        <Card className="rounded-lg border-primary/20 bg-secondary">
+          <CardContent className="p-4 space-y-3">
             <p className="text-sm font-semibold">Chất lượng bán hàng</p>
-            <div className="space-y-1.5 text-sm">
-              <div className="flex items-start justify-between gap-3">
-                <span className="text-muted-foreground shrink-0">Số đơn</span>
-                <span className="text-right font-medium">{qualityLines.order}</span>
-              </div>
-              <div className="flex items-start justify-between gap-3">
-                <span className="text-muted-foreground shrink-0">AOV</span>
-                <span className="text-right font-medium">{qualityLines.aov}</span>
-              </div>
+            {/* HAI chỉ số ĐỘC LẬP, mỗi cái mục tiêu + tiến độ + % riêng.
+                % KHÔNG cap 100 (vượt mục tiêu thì hiện đúng mức vượt); thanh
+                thì clamp vì thanh không vẽ được quá khung. */}
+            <div className="space-y-3">
+              {([
+                { label: 'Số đơn', mv: qualityDual.order },
+                { label: 'AOV', mv: qualityDual.aov },
+              ] as const).map(({ label, mv }) => (
+                <div key={label} className="space-y-1">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="text-sm text-muted-foreground shrink-0">{label}</span>
+                    <span className="text-right text-base font-bold tabular-nums">{mv.valueText}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-muted">
+                      <div
+                        className={cn('h-full rounded-full', mv.pass ? 'bg-status-success' : 'bg-primary')}
+                        style={{ width: `${Math.min(100, Math.max(0, mv.pctRaw ?? 0))}%` }}
+                      />
+                    </div>
+                    <span className={cn(
+                      'shrink-0 text-sm font-bold tabular-nums',
+                      mv.pass ? 'text-status-success' : 'text-primary',
+                    )}>{mv.pctText}</span>
+                  </div>
+                </div>
+              ))}
             </div>
             {qualityLabel && (
               <p className="text-xs">

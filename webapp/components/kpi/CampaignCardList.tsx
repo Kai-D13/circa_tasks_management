@@ -84,25 +84,51 @@ export function CampaignCardList({ items, hrefFor }: { items: CampaignCard[]; hr
                     hàng (Số đơn + AOV là hai chỉ số độc lập — gộp lại sẽ giấu
                     mất chỉ số đang kéo điểm xuống). */}
                 {v.lines.length > 0 && (
-                  <div className="space-y-0.5">
+                  <div className="space-y-1">
                     {v.lines.map((l) => (
-                      <div key={l.label} className="flex items-baseline justify-between gap-3 text-xs">
-                        <span className="shrink-0 text-muted-foreground">{l.label}</span>
-                        <span className="text-right font-medium tabular-nums">{l.value}</span>
+                      <div key={l.label} className="space-y-0.5">
+                        <div className="flex items-baseline justify-between gap-3 text-xs">
+                          <span className="shrink-0 text-muted-foreground">{l.label}</span>
+                          <span className="text-right font-medium tabular-nums">{l.value}</span>
+                        </div>
+                        {/* Commit 5: dòng nào mang % riêng thì có THANH riêng —
+                            Số đơn và AOV mỗi cái một tiến độ, không gộp. */}
+                        {l.pctText !== undefined && (
+                          <div className="flex items-center gap-2">
+                            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                              {v.synced && l.pct != null && (
+                                <div
+                                  className={cn('h-full', l.pass ? BAR_CLS.success : BAR_CLS.warning)}
+                                  style={{ width: `${Math.min(Math.max(l.pct, 0), 100)}%` }}
+                                />
+                              )}
+                            </div>
+                            <span className={cn('shrink-0 text-xs tabular-nums', l.pass ? PCT_CLS.success : PCT_CLS.warning)}>
+                              {l.pctText}
+                            </span>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>
                 )}
 
-                <div className="flex items-center gap-2">
-                  <div className="h-1.5 flex-1 rounded-full bg-muted overflow-hidden">
-                    {/* chưa đồng bộ → KHÔNG vẽ tiến độ (0% đọc như đã có kết quả) */}
-                    {v.synced && (
-                      <div className={cn('h-full', BAR_CLS[v.tone])} style={{ width: `${Math.min(v.pct, 100)}%` }} />
-                    )}
+                {v.showAggregate ? (
+                  <div className="flex items-center gap-2">
+                    <div className="h-1.5 flex-1 rounded-full bg-muted overflow-hidden">
+                      {/* chưa đồng bộ → KHÔNG vẽ tiến độ (0% đọc như đã có kết quả) */}
+                      {v.synced && (
+                        <div className={cn('h-full', BAR_CLS[v.tone])} style={{ width: `${Math.min(v.pct, 100)}%` }} />
+                      )}
+                    </div>
+                    <span className={cn('shrink-0 text-xs tabular-nums', PCT_CLS[v.tone])}>{v.pctText}</span>
                   </div>
-                  <span className={cn('shrink-0 text-xs tabular-nums', PCT_CLS[v.tone])}>{v.pctText}</span>
-                </div>
+                ) : (
+                  // Không có % tổng ⇒ chỗ này là VERDICT ('Đạt KPI'/'Chưa đạt').
+                  <div className="flex justify-end">
+                    <span className={cn('text-xs font-medium', PCT_CLS[v.tone])}>{v.pctText}</span>
+                  </div>
+                )}
               </CardContent>
             </Card>
           </Link>

@@ -2,7 +2,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { performanceTone } from '@/lib/kpi/performance'
 import type { CampaignResultModel } from '@/lib/kpi/resultModel'
 import { metricPresentation, offlineOrderLine, REVENUE_LABELS } from '@/lib/kpi/campaignDisplay'
-import { formatRemainingPct } from '@/lib/kpi/orderAov'
+import type { OrderAovMetricView } from '@/lib/kpi/orderAov'
 import { resultTableColumns } from '@/lib/kpi/resultTableLayout'
 import { cn } from '@/lib/utils'
 import {
@@ -17,6 +17,30 @@ import {
 //   SM: actions = undefined (read-only), rows = RLS-scoped store phân công.
 // Markup summary cards + bảng store CHUYỂN NGUYÊN VĂN từ tab Kết quả của
 // super (refactor giữ nguyên hành vi — không đổi label/màu/công thức).
+
+// Commit 5 — ô bảng của MỘT chỉ số Chất lượng bán hàng (Số đơn hoặc AOV).
+// Dòng trên: 'thực tế / mục tiêu'. Dòng dưới: thanh + % RIÊNG của chỉ số đó,
+// không cap 100 ở phần chữ (thanh thì clamp vì thanh không vẽ quá khung).
+// Mọi định dạng/đạt-chưa đến từ contract orderAovDualView — ô này không tự tính.
+function MetricCell({ mv }: { mv: OrderAovMetricView | null }) {
+  if (!mv) return <td className="px-4 py-2.5 text-xs text-muted-foreground">—</td>
+  return (
+    <td className="px-4 py-2.5 text-xs">
+      <span className="block whitespace-nowrap font-medium tabular-nums">{mv.valueText}</span>
+      <span className="mt-1 flex items-center gap-2">
+        <span className="h-1.5 w-14 shrink-0 overflow-hidden rounded-full bg-muted">
+          <span
+            className={cn('block h-full rounded-full', mv.pass ? 'bg-status-success' : 'bg-primary')}
+            style={{ width: `${Math.min(100, Math.max(0, mv.pctRaw ?? 0))}%` }}
+          />
+        </span>
+        <span className={cn('font-semibold tabular-nums', mv.pass ? 'text-status-success' : 'text-primary')}>
+          {mv.pctText}
+        </span>
+      </span>
+    </td>
+  )
+}
 
 export function CampaignResultDashboard({ model, emptyHint }: {
   model: CampaignResultModel
@@ -166,39 +190,22 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                       {!isOrderAov && (
                         <td className="px-4 py-2.5 text-right whitespace-nowrap">{vnd(r.kpiTarget)}</td>
                       )}
+                      {/* Commit 5: Chất lượng bán hàng KHÔNG còn cột điểm gộp. */}
+                      {!isOrderAov && (
                       <td className="px-4 py-2.5 text-right whitespace-nowrap">
-                        {/* r1.1: order_aov gộp % vào chính cột này (bỏ cột '%'
-                            trùng số) — thanh tiến độ + điểm hoàn thành. */}
-                        {isOrderAov && a ? (
-                          <span className="inline-flex items-center justify-end gap-2">
-                            <span className="h-1.5 w-14 rounded-full bg-muted overflow-hidden shrink-0 inline-block align-middle">
-                              <span
-                                className={cn('block h-full rounded-full', r.qualityKpiPass ? 'bg-status-success' : 'bg-primary')}
-                                style={{ width: `${Math.min(100, Math.max(0, Number(a.actual_value) || 0))}%` }}
-                              />
-                            </span>
-                            <span className={cn('text-xs font-semibold', r.qualityKpiPass ? 'text-status-success' : 'text-primary')}>
-                              {vnd(a.actual_value)}
-                            </span>
-                          </span>
-                        ) : a ? vnd(a.actual_value) : '—'}
+                        {a ? vnd(a.actual_value) : '—'}
                         {/* 105: offline-only → dòng phụ nằm ngay dưới Actual GMV
                             (hybrid đã có cột GMV Offline riêng) */}
                         {!m.showBreakdown && orderLine() && (
                           <span className="block text-[11px] text-muted-foreground/80">{orderLine()}</span>
                         )}
                       </td>
-                      {/* 106: Order + AOV GỘP 1 cột 2 dòng + cột trạng thái đạt KPI */}
-                      {isOrderAov && (
-                        <td className="px-4 py-2.5 text-xs text-muted-foreground">
-                          {r.orderAovLines ? (
-                            <>
-                              <span className="block whitespace-nowrap">{r.orderAovLines.order}</span>
-                              <span className="block whitespace-nowrap">{r.orderAovLines.aov}</span>
-                            </>
-                          ) : '—'}
-                        </td>
                       )}
+                      {/* Commit 5: HAI cột độc lập — mỗi chỉ số có % RIÊNG,
+                          không cap 100. Cột nào chưa đạt thì tự nó nói ra, thay
+                          vì bị min() nuốt vào một con số duy nhất. */}
+                      {isOrderAov && <MetricCell mv={r.orderAovView?.order ?? null} />}
+                      {isOrderAov && <MetricCell mv={r.orderAovView?.aov ?? null} />}
                       {isOrderAov && (
                         <td className="px-4 py-2.5 text-xs">
                           {r.qualityStatusLabel ? (
@@ -236,11 +243,17 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                         ) : <span className="block text-right">—</span>}
                       </td>
                       )}
+                      {/* Commit 5: 'Nhịp độ' là run_rate của ĐIỂM GỘP ⇒ bỏ
+                          cùng lúc với điểm gộp. Cell phải mất theo HEADER —
+                          giữ lại là lệch một cột và mọi giá trị bên phải bị
+                          đọc dưới tên cột khác. */}
+                      {!isOrderAov && (
                       <td className="px-4 py-2.5 text-right">
                         {r.performance != null
                           ? <span className={cn('text-xs font-semibold', performanceTone(r.performance))}>{r.performance.toFixed(1)}%</span>
                           : '—'}
                       </td>
+                      )}
                       {/* 10/08: 'Trung bình/ngày' thay 'Còn thiếu' — cùng
                           công thức card Staff (requiredPerDay); đơn vị theo
                           metric (VNĐ / khách) qua metricPresentation. */}
@@ -278,11 +291,12 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                                   <p className="text-muted-foreground mt-0.5">—</p>
                                 ) : tp.reached ? (
                                   <p className="font-medium text-status-success mt-0.5">Đã đạt</p>
-                                ) : (
-                                  // r1.2: campaign điểm % dùng formatter CÒN THIẾU
-                                  // riêng — 0,0001 không được thành "0%".
+                                ) : isOrderAov ? null : (
+                                  // Commit 5: order_aov KHÔNG hiện dòng này —
+                                  // "còn thiếu tới bậc" là khoảng cách điểm gộp
+                                  // tới 100, tức con số vừa bỏ khỏi UI đổi tên.
                                   <p className="font-medium text-primary mt-0.5">
-                                    Còn thiếu {isOrderAov ? formatRemainingPct(tp.remaining_amount) : vnd(tp.remaining_amount)}
+                                    Còn thiếu {vnd(tp.remaining_amount)}
                                   </p>
                                 )}
                               </div>

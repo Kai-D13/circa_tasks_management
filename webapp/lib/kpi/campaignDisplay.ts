@@ -4,7 +4,10 @@
 // r2 (audit P3): structural type CỤC BỘ — tầng lib không import type từ
 // component UI (tránh đảo chiều phụ thuộc); CampaignView khớp structurally.
 
-import { aovFromSnapshot, formatCompletionPct, formatRemainingPct, qualityKpiPass } from '@/lib/kpi/orderAov'
+import {
+  ORDER_AOV_VERDICT, aovFromSnapshot, formatCompletionPct, formatRemainingPct,
+  orderAovDualView, qualityKpiPass,
+} from '@/lib/kpi/orderAov'
 
 export interface BreakdownInput {
   metric_offline: boolean
@@ -152,27 +155,6 @@ export function metricPresentation(metricType?: string | null): MetricPresentati
   return GMV_PRESENTATION
 }
 
-// ── Mig 106: dòng phụ "thực tế / mục tiêu" cho Số đơn và AOV ────────────────
-// Desktop gộp Order + AOV vào CÙNG MỘT nhóm 2 dòng (yêu cầu stakeholder: không
-// đẻ thêm cột ngang). Contract 12/08: chỉ còn MỤC TIÊU, không có sàn.
-// null = campaign loại khác / chưa cấu hình → caller hiện '—'.
-export function orderAovMetricLines(p: {
-  actualOrder: number | null | undefined
-  actualNet: number | null | undefined
-  orderTarget: number | null | undefined
-  aovTarget: number | null | undefined
-}): { order: string; aov: string } | null {
-  if (p.orderTarget == null || p.aovTarget == null) return null
-  const fmt = (n: number) => nfVi.format(Math.round(n))
-  const orderActual = p.actualOrder == null ? '—' : fmt(p.actualOrder)
-  const aovVal = aovFromSnapshot(p.actualNet, p.actualOrder)
-  const aovActual = aovVal == null ? '—' : `${fmt(aovVal)}₫`
-  return {
-    order: `${orderActual} / ${fmt(p.orderTarget)} đơn`,
-    aov: `${aovActual} / ${fmt(p.aovTarget)}₫`,
-  }
-}
-
 // (H1.2 smSelectorVisible đã GỠ 27/07: SM Dashboard r2 thay store-selector-
 // navigation bằng regional list + filter store trong dashboard — xem
 // lib/kpi/resultModel smScopeState.)
@@ -297,7 +279,15 @@ export interface CampaignOverviewInput {
   totalOfflineOrders?: number | null  // null = có store thiếu số đơn → KHÔNG hiện dòng thực tế
 }
 
-export interface CampaignOverviewLine { label: string; value: string }
+export interface CampaignOverviewLine {
+  label: string
+  value: string
+  // Commit 5: mỗi dòng có thể mang % RIÊNG (Chất lượng bán hàng: Số đơn và AOV
+  // là hai chỉ số độc lập). null ⇒ dòng không có %, component không vẽ thanh.
+  pct?: number | null            // KHÔNG cap 100 (thanh tự clamp khi vẽ)
+  pctText?: string
+  pass?: boolean
+}
 
 export interface CampaignOverviewValue {
   kind: CampaignMetricType
@@ -376,6 +366,10 @@ export interface CampaignCardValue {
   typeLabel: string
   synced: boolean
   lines: CampaignOverviewLine[]
+  // Commit 5: false ⇒ KHÔNG có % tổng cho loại này (Chất lượng bán hàng bỏ
+  // điểm gộp khỏi UI) — component vẽ thanh THEO TỪNG DÒNG và dùng `pctText`
+  // như nhãn TRẠNG THÁI ('Đạt KPI'/'Chưa đạt'), không phải một con số.
+  showAggregate: boolean
   pct: number                    // 0 khi chưa đồng bộ ⇒ KHÔNG vẽ thanh tiến độ
   pctText: string                // 'Chưa đồng bộ' khi chưa có snapshot
   // Tông trạng thái cho chip/thanh — component KHÔNG tự suy ra từ pct, vì
@@ -407,21 +401,31 @@ export function campaignCardValue(v: CampaignCardInput): CampaignCardValue {
     // hiện "Chưa đồng bộ" ngay cạnh "1.046 / 900 đơn" của kỳ trước.
     // Ép null theo `synced`: MỤC TIÊU vẫn hiện (nó là cấu hình, không phải kết
     // quả), phần thực tế thành '—'.
-    const q = orderAovMetricLines({
-      actualOrder: synced ? v.offlineOrderCount : null,
-      actualNet: synced ? v.actualOffline : null,
+    const dual = orderAovDualView({
+      actualOrder: v.offlineOrderCount,
+      actualNet: v.actualOffline,
       orderTarget: v.orderTarget,
       aovTarget: v.aovTarget,
+      synced,
     })
-    // q === null ⇒ campaign chưa cấu hình đủ 2 mục tiêu: không bịa dòng nào.
-    const lines: CampaignOverviewLine[] = q
-      ? [{ label: 'Số đơn', value: q.order }, { label: 'AOV', value: q.aov }]
-      : []
-    const pass = qualityKpiPass(v.actualValue)
+    // dual === null ⇒ campaign chưa cấu hình đủ 2 mục tiêu: không bịa dòng nào.
+    const lines: CampaignOverviewLine[] = dual ? [
+      { label: 'Số đơn', value: dual.order.valueText, pct: dual.order.pctRaw, pctText: dual.order.pctText, pass: dual.order.pass },
+      { label: 'AOV', value: dual.aov.valueText, pct: dual.aov.pctRaw, pctText: dual.aov.pctText, pass: dual.aov.pass },
+    ] : []
+    // ĐẠT = cả hai chỉ số đạt VÀ điểm gộp (số quyết định commission) cũng đạt.
+    // Với snapshot nhất quán, hai vế LUÔN trùng (bất biến có test). Chúng chỉ
+    // lệch khi snapshot bị trộn kỳ — lúc đó chọn phía DÈ DẶT: màn lương không
+    // được hứa "Đạt KPI" trong khi con số trả thưởng nói chưa.
+    const pass = dual
+      ? dual.overallPass && qualityKpiPass(v.actualValue)
+      : qualityKpiPass(v.actualValue)
     return {
       kind: pres.kind, typeLabel, synced, lines,
-      pct: prog.pct,
-      pctText: prog.text,
+      // KHÔNG có % tổng: chỗ đó giờ là VERDICT.
+      showAggregate: false,
+      pct: 0,
+      pctText: !synced ? ORDER_AOV_VERDICT.unsynced : pass ? ORDER_AOV_VERDICT.pass : ORDER_AOV_VERDICT.fail,
       tone: !synced ? 'neutral' : pass ? 'success' : 'warning',
     }
   }
@@ -439,6 +443,7 @@ export function campaignCardValue(v: CampaignCardInput): CampaignCardValue {
     typeLabel,
     synced,
     lines: [{ label: 'Đã đạt / Mục tiêu', value }],
+    showAggregate: true,
     pct: prog.pct,
     pctText: prog.text,
     tone: !synced ? 'neutral' : target > 0 && actual >= target ? 'success' : 'warning',

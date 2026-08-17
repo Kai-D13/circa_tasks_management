@@ -28,7 +28,7 @@ export const RESULT_COL_PX = {
   pct: 110,
   pace: 100,
   perDay: 140,   // 10/08: thay cột 'Còn thiếu' (đã bỏ) — 'Trung bình/ngày'
-  orderAov: 230, // 106: cột GỘP 2 dòng "Số đơn · AOV" (thay vì 2 cột ngang)
+  metricPair: 190, // commit 5: MỖI chỉ số (Số đơn, AOV) một cột: 'x / y' + % riêng
   quality: 150,  // 106: trạng thái đạt/chưa đạt 2 mục tiêu
   combined: 170, // cột gộp "Bậc đạt · Commission" (mobile giữ UI cũ)
   tier: 176,
@@ -43,7 +43,7 @@ export function resultTableColumns(maxTierCount: number, showBreakdown: boolean,
   const isOrderAov = metricType === 'offline_order_aov'
   // 17/08: lấy nhãn TỪ presentation thay vì chép lại chuỗi ở đây — bản cũ
   // hardcode 'Actual GMV' nên đổi thuật ngữ ở contract mà bảng vẫn hiện chữ cũ.
-  const actualLabel = isOrderAov ? 'Hoàn thành' : metricPresentation(metricType).actualColumnLabel
+  const actualLabel = metricPresentation(metricType).actualColumnLabel
   return [
     { key: 'store', label: 'Cửa hàng', minPx: RESULT_COL_PX.store, align: 'left', scope: 'all' },
     { key: 'group', label: 'Phân loại', minPx: RESULT_COL_PX.group, align: 'left', scope: 'all' },
@@ -52,9 +52,17 @@ export function resultTableColumns(maxTierCount: number, showBreakdown: boolean,
     ...(isOrderAov ? [] : [
       { key: 'kpiTarget', label: 'KPI target', minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' } as const,
     ]),
-    { key: 'actual', label: actualLabel, minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' },
+    // Commit 5 (stakeholder 17/08): Chất lượng bán hàng KHÔNG còn cột điểm gộp.
+    // "Hoàn thành = min(số đơn%, AOV%)" là con số cửa hàng không giải thích
+    // được, và nó GIẤU mất chỉ số đang kéo điểm xuống. Thay bằng HAI cột độc
+    // lập, mỗi cột có % riêng (không cap 100), rồi tới cột Trạng thái nói đạt
+    // hay chưa. actual_value vẫn chạy trong DB/engine/export để xét thưởng.
+    ...(isOrderAov ? [] : [
+      { key: 'actual', label: actualLabel, minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' } as const,
+    ]),
     ...(isOrderAov ? [
-      { key: 'orderAov', label: 'Số đơn · AOV (thực tế / mục tiêu)', minPx: RESULT_COL_PX.orderAov, align: 'left', scope: 'all' } as const,
+      { key: 'order', label: 'Số đơn (thực tế / mục tiêu)', minPx: RESULT_COL_PX.metricPair, align: 'left', scope: 'all' } as const,
+      { key: 'aov', label: 'AOV (thực tế / mục tiêu)', minPx: RESULT_COL_PX.metricPair, align: 'left', scope: 'all' } as const,
       { key: 'quality', label: 'Trạng thái', minPx: RESULT_COL_PX.quality, align: 'left', scope: 'all' } as const,
     ] : []),
     ...(showBreakdown ? [
@@ -64,7 +72,11 @@ export function resultTableColumns(maxTierCount: number, showBreakdown: boolean,
     ...(isOrderAov ? [] : [
       { key: 'pct', label: '%', minPx: RESULT_COL_PX.pct, align: 'right', scope: 'all' } as const,
     ]),
-    { key: 'pace', label: 'Nhịp độ', minPx: RESULT_COL_PX.pace, align: 'right', scope: 'all' },
+    // 'Nhịp độ' = run_rate suy từ điểm gộp ⇒ cùng lý do, bỏ khỏi Chất lượng
+    // bán hàng (hai loại còn lại giữ nguyên).
+    ...(isOrderAov ? [] : [
+      { key: 'pace', label: 'Nhịp độ', minPx: RESULT_COL_PX.pace, align: 'right', scope: 'all' } as const,
+    ]),
     // 10/08 (stakeholder): BỎ cột 'Còn thiếu' ở bảng tổng — thay bằng
     // 'Trung bình/ngày' (CÙNG công thức card Staff). remaining_target VẪN giữ
     // trong model/DB/export + các dòng 'Còn thiếu' trong từng cột Bậc (khoảng

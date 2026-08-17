@@ -266,13 +266,14 @@ test.describe('kpi result model — Chất lượng bán hàng (106) @desktop', 
   })
   const CAMP_Q = () => ({ ...CAMP(), metric_type: 'offline_order_aov' })
 
-  test('2 dòng metric gộp 1 nhóm: "thực tế / mục tiêu" (không còn sàn, không cột ngang mới)', () => {
+  test('commit 5: HAI chỉ số độc lập, mỗi chỉ số "thực tế / mục tiêu" + % riêng', () => {
     const m = buildCampaignResultModel(CAMP_Q(), [QT()], [QA()], TODAY)
     const r = m.rows[0]
-    expect(r.orderAovLines).toEqual({
-      order: '1.046 / 1.046 đơn',
-      aov: '194.110₫ / 194.046₫',
-    })
+    expect(r.orderAovView!.order.valueText).toBe('1.046 / 1.046 đơn')
+    expect(r.orderAovView!.aov.valueText).toBe('194.110₫ / 194.046₫')
+    expect(r.orderAovView!.order.pctText).toBe('100%')
+    expect(r.orderAovView!.aov.pctText).toBe('100%')
+    expect(r.orderAovView!.overallPass).toBe(true)
     expect(r.qualityKpiPass).toBe(true)
     expect(r.qualityStatusLabel).toBe('Đạt KPI')
     expect(m.qualityPassCount).toBe(1)
@@ -309,17 +310,19 @@ test.describe('kpi result model — Chất lượng bán hàng (106) @desktop', 
       TODAY,
     )
     expect(zero.rows[0].qualityStatusLabel).toBe('Chưa phát sinh đơn')
-    expect(zero.rows[0].orderAovLines?.aov).toContain('—')     // AOV vô định
+    expect(zero.rows[0].orderAovView!.aov.valueText).toContain('—')   // AOV vô định
+    expect(zero.rows[0].orderAovView!.aov.pctText).toBe('—')
 
     const notSynced = buildCampaignResultModel(CAMP_Q(), [QT()], [], TODAY)
     expect(notSynced.rows[0].qualityKpiPass).toBe(false)
     expect(notSynced.rows[0].qualityStatusLabel).toBeNull()
-    expect(notSynced.rows[0].orderAovLines?.order).toBe('— / 1.046 đơn')
+    expect(notSynced.rows[0].orderAovView!.order.valueText).toBe('— / 1.046 đơn')
+    expect(notSynced.rows[0].orderAovView!.synced).toBe(false)
   })
 
   test('campaign GMV/khách: mọi field Chất lượng bán hàng = null/false (zero-touch)', () => {
     const m = buildCampaignResultModel(CAMP(), [T('a', 1000)], [A('a', 500, 500, 0)], TODAY)
-    expect(m.rows[0].orderAovLines).toBeNull()
+    expect(m.rows[0].orderAovView).toBeNull()
     expect(m.rows[0].qualityKpiPass).toBe(false)
     expect(m.rows[0].qualityStatusLabel).toBeNull()
     expect(m.qualityPassCount).toBe(0)
@@ -327,7 +330,7 @@ test.describe('kpi result model — Chất lượng bán hàng (106) @desktop', 
 
   test('r1.1 P1#2: Super và SM cùng input → CÙNG dòng metric + trạng thái + đếm đạt', () => {
     // SM chỉ khác ở PHẠM VI store (RLS), model là một; nếu query SM quên
-    // order_target/aov_target thì orderAovLines = null và trạng thái mất.
+    // order_target/aov_target thì orderAovView = null và trạng thái mất.
     const targets = [QT(), QT({ id: 't-2', store_id: 'b', pos_code: 'POS0013', stores: { name: 'MIZUKI' },
       order_target: 1187, aov_target: 126_644 })]
     const actuals = [QA(), QA({ store_id: 'b', actual_value: 99.9969, offline_order_count: 1187,
@@ -338,7 +341,7 @@ test.describe('kpi result model — Chất lượng bán hàng (106) @desktop', 
 
     const superRowB = superModel.rows.find((r) => r.storeId === 'b')!
     const smRowB = smModel.rows[0]
-    expect(smRowB.orderAovLines).toEqual(superRowB.orderAovLines)
+    expect(smRowB.orderAovView).toEqual(superRowB.orderAovView)
     expect(smRowB.qualityStatusLabel).toBe(superRowB.qualityStatusLabel)
     expect(smRowB.qualityKpiPass).toBe(superRowB.qualityKpiPass)
     expect(superModel.qualityPassCount).toBe(1)   // chỉ SIGNATURE đạt
