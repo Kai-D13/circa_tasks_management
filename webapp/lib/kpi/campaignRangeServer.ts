@@ -68,7 +68,12 @@ export async function loadCampaignRangeActuals(
 
   const targets = await deps.loadTargetStoreIds(p.campaignId)
   if (targets.error) return { ok: false, error: `Không đọc được danh sách cửa hàng: ${targets.error.message}` }
-  const storeIds = targets.data ?? []
+  // null ≠ [] — payload bất thường và "không có target nào trong phạm vi" là
+  // hai sự việc khác nhau, gộp lại thì lỗi nguồn bị báo thành lỗi cấu hình.
+  if (!Array.isArray(targets.data)) {
+    return { ok: false, error: 'Không đọc được danh sách cửa hàng — nguồn trả dữ liệu bất thường.' }
+  }
+  const storeIds = targets.data
   if (storeIds.length === 0) {
     return { ok: false, error: 'Chiến dịch chưa có cửa hàng nào trong phạm vi bạn xem được.' }
   }
@@ -95,9 +100,21 @@ export async function loadCampaignRangeActuals(
     // RPC chỉ trả (store, ngày) CÓ khách ⇒ map vào ĐỦ tập target, store không
     // có dòng nào là 0 khách. Nếu không, store 0 khách biến mất khỏi bảng và
     // mẫu số "X/Y cửa hàng" sai.
+    // rows thiếu/null KHÔNG phải "không có khách" — cùng bẫy fail-open với
+    // `data ?? []`: payload hỏng sẽ hiện 0 khách cho mọi store.
+    if (!Array.isArray(agg.data.rows)) {
+      return { ok: false, error: 'Nguồn Affiliate trả payload sai định dạng — chưa thể hiện số theo khoảng.' }
+    }
+    // Kiểm total TRƯỚC khi dùng: `Number.isFinite(...) && sum !== total` cho
+    // NaN/chuỗi đi lọt vì mệnh đề đầu false ⇒ bỏ qua luôn phép đối soát.
+    const total = Number(agg.data.total_customers)
+    if (!Number.isInteger(total) || total < 0) {
+      return { ok: false, error: `Tổng số khách từ nguồn không hợp lệ (${String(agg.data.total_customers)}).` }
+    }
+
     const byStore = new Map<string, number>(storeIds.map((id) => [id, 0]))
     let sum = 0
-    for (const r of agg.data.rows ?? []) {
+    for (const r of agg.data.rows) {
       // RPC nhận ĐÚNG storeIds này, nên row lạ = RPC/nguồn tự mâu thuẫn, KHÔNG
       // phải dữ liệu hợp lệ để bỏ qua âm thầm.
       if (!byStore.has(r.store_id)) {
@@ -112,11 +129,8 @@ export async function loadCampaignRangeActuals(
     }
     // Cùng kỷ luật đối soát của sync: RPC dedup DISTINCT ON nên SUM(rows) buộc
     // phải bằng total_customers; lệch là nguồn tự mâu thuẫn.
-    if (Number.isFinite(agg.data.total_customers) && sum !== Number(agg.data.total_customers)) {
-      return {
-        ok: false,
-        error: `Số khách tự mâu thuẫn: tổng theo cửa hàng ${sum} ≠ tổng nguồn ${agg.data.total_customers}.`,
-      }
+    if (sum !== total) {
+      return { ok: false, error: `Số khách tự mâu thuẫn: tổng theo cửa hàng ${sum} ≠ tổng nguồn ${total}.` }
     }
 
     // ── HEALTH GATE SAU: runId đổi = một phiên sync chen vào giữa chừng ───

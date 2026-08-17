@@ -616,6 +616,57 @@ test.describe('campaign range customer hardening @desktop', () => {
     expect(r.totalCustomers).toBe(3)
   })
 
+  test('rows null/không phải array → LỖI, không thành "0 khách"', async () => {
+    for (const badRows of [null, undefined, 'x' as unknown, {} as unknown]) {
+      const { d } = deps({
+        aggregateCustomers: async () => ({
+          data: { rows: badRows as never, total_customers: 0 },
+          error: null,
+        }),
+      })
+      const r = await readCustomer(d)
+      expect(r.ok, `rows=${String(badRows)} phải bị từ chối`).toBe(false)
+    }
+  })
+
+  test('total_customers hỏng (NaN / chuỗi / âm / lẻ) → LỖI trước khi đối soát', async () => {
+    // Bẫy cũ: `Number.isFinite(total) && sum !== total` — NaN làm mệnh đề đầu
+    // false nên BỎ QUA luôn phép đối soát và kết quả vẫn PASS.
+    for (const bad of [Number.NaN, 'abc' as unknown as number, -1, 1.5]) {
+      const { d } = deps({
+        aggregateCustomers: async () => ({
+          data: {
+            rows: [{ store_id: 's1', vn_date: '2026-08-01', customer_count: 2 }],
+            total_customers: bad,
+          },
+          error: null,
+        }),
+      })
+      const r = await readCustomer(d)
+      expect(r.ok, `total=${String(bad)} phải bị từ chối`).toBe(false)
+    }
+  })
+
+  test('targets: null (payload hỏng) KHÁC [] (không có target)', async () => {
+    const nullPayload = await loadCampaignRangeActuals(
+      deps({ loadTargetStoreIds: async () => ({ data: null, error: null }) }).d,
+      { campaignId: 'c1', range: RANGE, metricType: 'gmv' },
+    )
+    expect(nullPayload.ok).toBe(false)
+    if (nullPayload.ok) throw new Error('phải lỗi')
+    expect(nullPayload.error).toContain('bất thường')
+
+    const empty = await loadCampaignRangeActuals(
+      deps({ loadTargetStoreIds: async () => ({ data: [], error: null }) }).d,
+      { campaignId: 'c1', range: RANGE, metricType: 'gmv' },
+    )
+    expect(empty.ok).toBe(false)
+    if (empty.ok) throw new Error('phải lỗi')
+    expect(empty.error).toContain('chưa có cửa hàng')
+    // hai tình huống khác nhau phải nói khác nhau
+    expect(empty.error).not.toBe(nullPayload.error)
+  })
+
   test('nhánh DAILY: data null cũng phải lỗi, không coi là danh sách rỗng', async () => {
     const { d } = deps({ loadDaily: async () => ({ data: null, error: null }) })
     const r = await loadCampaignRangeActuals(d, { campaignId: 'c1', range: RANGE, metricType: 'gmv' })
