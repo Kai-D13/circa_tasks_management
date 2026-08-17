@@ -8,6 +8,8 @@
 // lừa); bảng scroll NGANG + DỌC trong MỘT container riêng (không bao giờ để
 // body scroll ngang — guardrail circa-ui); N cột Bậc render động theo
 // maxTierCount (không hardcode 3).
+import { metricPresentation, REVENUE_LABELS } from '@/lib/kpi/campaignDisplay'
+
 export interface ResultTableColumn {
   key: string
   label: string
@@ -39,8 +41,9 @@ export function resultTableColumns(maxTierCount: number, showBreakdown: boolean,
   // Mig 106: Chất lượng bán hàng — cột actual là ĐIỂM %, và Order/AOV gộp vào
   // MỘT cột 2 dòng (yêu cầu stakeholder: không tăng cột ngang).
   const isOrderAov = metricType === 'offline_order_aov'
-  const actualLabel = metricType === 'affiliate_customer_count' ? 'Số khách'
-    : isOrderAov ? 'Hoàn thành' : 'Actual GMV'
+  // 17/08: lấy nhãn TỪ presentation thay vì chép lại chuỗi ở đây — bản cũ
+  // hardcode 'Actual GMV' nên đổi thuật ngữ ở contract mà bảng vẫn hiện chữ cũ.
+  const actualLabel = isOrderAov ? 'Hoàn thành' : metricPresentation(metricType).actualColumnLabel
   return [
     { key: 'store', label: 'Cửa hàng', minPx: RESULT_COL_PX.store, align: 'left', scope: 'all' },
     { key: 'group', label: 'Phân loại', minPx: RESULT_COL_PX.group, align: 'left', scope: 'all' },
@@ -55,8 +58,8 @@ export function resultTableColumns(maxTierCount: number, showBreakdown: boolean,
       { key: 'quality', label: 'Trạng thái', minPx: RESULT_COL_PX.quality, align: 'left', scope: 'all' } as const,
     ] : []),
     ...(showBreakdown ? [
-      { key: 'offline', label: 'GMV Offline', minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' } as const,
-      { key: 'affiliate', label: 'GMV Affiliate', minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' } as const,
+      { key: 'offline', label: REVENUE_LABELS.offlineShort, minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' } as const,
+      { key: 'affiliate', label: REVENUE_LABELS.affiliate, minPx: RESULT_COL_PX.money, align: 'right', scope: 'all' } as const,
     ] : []),
     ...(isOrderAov ? [] : [
       { key: 'pct', label: '%', minPx: RESULT_COL_PX.pct, align: 'right', scope: 'all' } as const,

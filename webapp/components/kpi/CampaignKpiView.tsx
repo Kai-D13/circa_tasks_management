@@ -2,7 +2,7 @@ import Link from 'next/link'
 import { Card, CardContent } from '@/components/ui/card'
 import {
   breakdownModel, campaignFootnote, heroRemainingText, metricPresentation, orderAovMetricLines,
-  perDayVisible,
+  perDayVisible, REVENUE_LABELS,
 } from '@/lib/kpi/campaignDisplay'
 import {
   ORDER_AOV_STATUS_LABEL, aovFromSnapshot, formatCompletionPct, formatRemainingPct,
@@ -388,7 +388,7 @@ export function CampaignKpiView({
                 <Store className="h-4 w-4" />
               </span>
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium leading-tight">GMV Offline</p>
+                <p className="text-sm font-medium leading-tight">{REVENUE_LABELS.offline}</p>
                 <p className="text-xs text-muted-foreground">Doanh số bán tại cửa hàng{sel.offline_synced_at ? ` · đồng bộ ${formatDateTime(sel.offline_synced_at)}` : ''}</p>
               </div>
               <div className="text-right shrink-0">
@@ -401,7 +401,7 @@ export function CampaignKpiView({
                 <LinkIcon className="h-4 w-4" />
               </span>
               <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium leading-tight">GMV Affiliate</p>
+                <p className="text-sm font-medium leading-tight">{REVENUE_LABELS.affiliate}</p>
                 <p className="text-xs text-muted-foreground">Doanh số từ Circa Online (theo mã đối tác){sel.affiliate_synced_at ? ` · đồng bộ ${formatDateTime(sel.affiliate_synced_at)}` : ''}</p>
               </div>
               {/* Stakeholder 24/07: dòng Affiliate KHÔNG hiện "% / target"

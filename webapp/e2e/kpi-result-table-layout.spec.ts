@@ -67,20 +67,26 @@ test.describe('kpi result table layout contract @desktop', () => {
     expect(resultTableDesktopMinPx(3, false)).toBeGreaterThan(1366 - 313) // 313px = sidebar
   })
 
-  // ── Mig 103 ──
-  test('GMV label BẤT BIẾN (không truyền metricType / truyền gmv): mảng label y hệt trước 103', () => {
+  // ── Mig 103 · nhãn cập nhật 17/08 ──
+  // Thuật ngữ đổi GMV → Doanh thu (chốt stakeholder): "GMV" là từ nội bộ của
+  // BI. Cấu trúc cột (key/thứ tự/width) KHÔNG đổi — chỉ chữ hiển thị. Tên cột
+  // EXCEL vẫn giữ 'Actual GMV' (literal trong exportRows, Power Query bám vào).
+  test('nhãn doanh thu (không truyền metricType / truyền gmv): mảng label khớp contract', () => {
     for (const cols of [resultTableColumns(2, true), resultTableColumns(2, true, 'gmv')]) {
       expect(cols.map((c) => c.label)).toEqual([
-        'Cửa hàng', 'Phân loại', 'KPI target', 'Actual GMV', 'GMV Offline', 'GMV Affiliate',
+        'Cửa hàng', 'Phân loại', 'KPI target', 'Doanh thu thực tế',
+        'Doanh thu tại cửa hàng', 'Doanh thu Affiliate',
         '%', 'Nhịp độ', 'Trung bình/ngày', 'Bậc đạt · Commission', 'Bậc 1', 'Bậc 2',
       ])
+      // không còn chữ GMV trên header bảng
+      for (const c of cols) expect(c.label, c.key).not.toContain('GMV')
     }
   })
 
   test('customer: DUY NHẤT label actual đổi thành "Số khách"; width contract giữ nguyên', () => {
     const gmv = resultTableColumns(2, false)
     const cust = resultTableColumns(2, false, 'affiliate_customer_count')
-    expect(cust.map((c) => c.label)).toEqual(gmv.map((c) => c.label === 'Actual GMV' ? 'Số khách' : c.label))
+    expect(cust.map((c) => c.label)).toEqual(gmv.map((c) => c.label === 'Doanh thu thực tế' ? 'Số khách' : c.label))
     expect(cust.map((c) => c.minPx)).toEqual(gmv.map((c) => c.minPx))
     expect(cust.map((c) => c.key)).toEqual(gmv.map((c) => c.key))
   })

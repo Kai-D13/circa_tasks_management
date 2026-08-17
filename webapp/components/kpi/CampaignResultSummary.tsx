@@ -2,7 +2,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import type { CampaignView } from '@/components/kpi/CampaignKpiView'
 import { cn } from '@/lib/utils'
 import { campaignPerformance, performanceTone } from '@/lib/kpi/performance'
-import { metricPresentation, offlineOrderLine } from '@/lib/kpi/campaignDisplay'
+import { metricPresentation, offlineOrderLine, REVENUE_LABELS } from '@/lib/kpi/campaignDisplay'
 import { Target, TrendingUp, Percent, Wallet, Award, CalendarDays, Gauge, ClipboardCheck, Store as StoreIcon, Link2 as LinkIcon, type LucideIcon } from 'lucide-react'
 
 // Store Manager "Kết quả" management block (r3): the same 6-card summary idiom
@@ -39,11 +39,11 @@ export function CampaignResultSummary({ campaign, todayISO }: { campaign: Campai
     // P3-E: breakdown 2 nguồn — CHỈ khi campaign bật cả 2 chỉ số (1 metric giữ
     // layout cũ nguyên vẹn).
     ...(campaign.metric_offline && campaign.metric_affiliate ? [
-      { label: 'GMV Offline', value: synced ? vnd(campaign.actual_offline ?? 0) : '—', icon: StoreIcon as LucideIcon,
+      { label: REVENUE_LABELS.offlineShort, value: synced ? vnd(campaign.actual_offline ?? 0) : '—', icon: StoreIcon as LucideIcon,
         // 105: dòng phụ số đơn · AOV cho QLCH (cùng formatter Super/SM).
         sub: synced ? offlineOrderLine(campaign.actual_offline ?? 0, campaign.offline_order_count ?? null) : null,
         tile: 'bg-primary/10 text-primary' },
-      { label: 'GMV Affiliate', value: synced ? vnd(campaign.actual_affiliate ?? 0) : '—', icon: LinkIcon as LucideIcon,
+      { label: REVENUE_LABELS.affiliate, value: synced ? vnd(campaign.actual_affiliate ?? 0) : '—', icon: LinkIcon as LucideIcon,
         tile: 'bg-muted text-muted-foreground' },
     ] : []),
     { label: 'Hoàn thành', value: synced ? `${pct.toFixed(1)}%` : '—', icon: Percent,

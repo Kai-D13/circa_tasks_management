@@ -4,7 +4,7 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { updateCampaign } from '@/app/actions/kpiCampaigns'
-import { metricEditorState } from '@/lib/kpi/campaignDisplay'
+import { metricEditorState, REVENUE_LABELS } from '@/lib/kpi/campaignDisplay'
 import { Button } from '@/components/ui/button'
 
 // P3-E3 — Metric editor tab Cấu hình (audit): sửa CHỈ khi draft/paused;
@@ -74,9 +74,9 @@ export function CampaignMetricEditor({
   return (
     <div className="space-y-1.5">
       <div className="flex flex-col gap-0.5">
-        {row(offline, setOffline, !st.editable || pending, 'GMV Offline', '— doanh số bán tại cửa hàng (BI)')}
+        {row(offline, setOffline, !st.editable || pending, REVENUE_LABELS.offline, '— Net Revenue từ báo cáo BI')}
         {st.showAffiliateControl &&
-          row(affiliate, setAffiliate, !st.editable || pending, 'GMV Affiliate', '— doanh số Circa Online ghi nhận theo mã đối tác của cửa hàng')}
+          row(affiliate, setAffiliate, !st.editable || pending, REVENUE_LABELS.affiliate, '— đơn Circa Online giao thành công theo mã đối tác của cửa hàng')}
       </div>
       {st.metricsLocked ? (
         <p className="text-xs text-muted-foreground">KPI_AFFILIATE_ENABLED đang tắt — chỉ số của chiến dịch affiliate ở chế độ chỉ đọc.</p>

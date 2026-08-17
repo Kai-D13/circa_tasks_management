@@ -39,7 +39,7 @@ export function campaignFootnote(v: { metric_offline: boolean; metric_affiliate:
     return 'Nguồn: Circa Online · đếm khách có đơn giao thành công (DELIVERED) — mỗi khách tính 1 lần trong chiến dịch'
   }
   if (!v.metric_affiliate) return 'Nguồn: báo cáo BI · * Không bao gồm đơn online'
-  if (v.metric_offline) return 'Nguồn: báo cáo BI + Circa Online · GMV Affiliate chỉ tính đơn giao thành công'
+  if (v.metric_offline) return 'Nguồn: báo cáo BI + Circa Online · Doanh thu Affiliate chỉ tính đơn giao thành công'
   return 'Nguồn: Circa Online · chỉ tính đơn giao thành công (DELIVERED)'
 }
 

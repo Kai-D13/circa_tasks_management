@@ -1,7 +1,7 @@
 import { Card, CardContent } from '@/components/ui/card'
 import { performanceTone } from '@/lib/kpi/performance'
 import type { CampaignResultModel } from '@/lib/kpi/resultModel'
-import { metricPresentation, offlineOrderLine } from '@/lib/kpi/campaignDisplay'
+import { metricPresentation, offlineOrderLine, REVENUE_LABELS } from '@/lib/kpi/campaignDisplay'
 import { formatRemainingPct } from '@/lib/kpi/orderAov'
 import { resultTableColumns } from '@/lib/kpi/resultTableLayout'
 import { cn } from '@/lib/utils'
@@ -57,19 +57,19 @@ export function CampaignResultDashboard({ model, emptyHint }: {
           { label: 'Thời hạn', value: m.deadlineLabel, icon: CalendarDays, tile: 'bg-muted text-muted-foreground' },
         ] : [
           { label: 'Tổng KPI target', value: vnd(m.totalTarget), icon: Target, tile: 'bg-primary/10 text-primary' },
-          { label: isCustomer ? 'Tổng số khách' : 'Tổng actual GMV', value: synced ? vnd(m.totalActual) : '—', icon: TrendingUp,
+          { label: isCustomer ? 'Tổng số khách' : REVENUE_LABELS.total, value: synced ? vnd(m.totalActual) : '—', icon: TrendingUp,
             // 105: campaign offline-only (không breakdown) → dòng phụ đặt ở
             // card này; hybrid có card GMV Offline riêng bên dưới.
             sub: !m.showBreakdown && !isCustomer && !isOrderAov && synced
               ? offlineOrderLine(m.totalOffline, m.totalOfflineOrders) : null,
             tile: synced && m.totalActual > 0 ? 'bg-status-success-bg text-status-success' : 'bg-muted text-muted-foreground' },
           ...(m.showBreakdown ? [
-            { label: 'GMV Offline', value: synced ? vnd(m.totalOffline) : '—', icon: StoreIcon,
+            { label: REVENUE_LABELS.offlineShort, value: synced ? vnd(m.totalOffline) : '—', icon: StoreIcon,
               // 105: dòng phụ tổng — AOV WEIGHTED (totalOffline/totalOrders),
               // '—' khi bất kỳ store nào thiếu count (model đã trả null).
               sub: synced ? offlineOrderLine(m.totalOffline, m.totalOfflineOrders) : null,
               tile: 'bg-primary/10 text-primary' },
-            { label: 'GMV Affiliate', value: synced ? vnd(m.totalAffiliate) : '—', icon: LinkIcon,
+            { label: REVENUE_LABELS.affiliate, value: synced ? vnd(m.totalAffiliate) : '—', icon: LinkIcon,
               tile: 'bg-muted text-muted-foreground' },
           ] : []),
           { label: 'Hoàn thành', value: synced ? `${m.completionPct.toFixed(1)}%` : '—', icon: Percent,

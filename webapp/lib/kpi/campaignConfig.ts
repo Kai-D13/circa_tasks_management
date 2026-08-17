@@ -22,7 +22,7 @@ export function resolveMetricInput(
   const metricAffiliate = input.metric_affiliate ?? current?.metric_affiliate ?? false
   if (metricAffiliate && !affiliateFlagEnabled) {
     // Audit P3-D: server LUÔN từ chối khi flag tắt — kể cả client cố gửi.
-    return { ok: false, error: 'Chỉ số GMV Affiliate chưa được bật trên hệ thống (KPI_AFFILIATE_ENABLED)' }
+    return { ok: false, error: 'Chỉ số Doanh thu Affiliate chưa được bật trên hệ thống (KPI_AFFILIATE_ENABLED)' }
   }
   if (!metricOffline && !metricAffiliate) {
     return { ok: false, error: 'Chiến dịch phải bật ít nhất một chỉ số doanh số' }
