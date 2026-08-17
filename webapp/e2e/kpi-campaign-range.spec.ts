@@ -9,6 +9,7 @@ import {
   buildRangeStoreActuals, buildRangeTotals, rangeActualAveragePerDay, RANGE_AVERAGE_LABEL, weightedAov,
   type CampaignDailyRow,
 } from '../lib/kpi/campaignRangeModel'
+import { loadCampaignRangeActuals, type RangeReadDeps } from '../lib/kpi/campaignRangeServer'
 
 // Contract bộ lọc khoảng ngày (17/08) — khoá TRƯỚC khi đụng UI.
 // Lọc là CHẾ ĐỘ XEM: không ghi DB, không suy lại tier/commission.
@@ -346,5 +347,147 @@ test.describe('campaign range aggregation @desktop', () => {
     // chia số ngày đã chọn, không phải phần còn thiếu chia số ngày còn lại.
     expect(RANGE_AVERAGE_LABEL).toBe('Trung bình thực tế/ngày')
     expect(RANGE_AVERAGE_LABEL).not.toContain('cần đạt')
+  })
+})
+
+// ── Commit 4: tầng đọc server ──────────────────────────────────────────────
+test.describe('campaign range server read @desktop', () => {
+  const RANGE = { active: true, from: '2026-08-01', to: '2026-08-05', days: 5, error: null } as const
+  const FULL = { active: false, from: null, to: null, days: 0, error: null } as const
+
+  // Deps giả + ghi lại lời gọi để assert "KHÔNG gọi RPC" — thứ không thể kiểm
+  // bằng cách nhìn kết quả.
+  function deps(over: Partial<RangeReadDeps> = {}) {
+    const calls = { targets: 0, daily: 0, rpc: 0, rpcArgs: [] as unknown[][] }
+    const base: RangeReadDeps = {
+      loadTargetStoreIds: async () => { calls.targets++; return { data: ['s1', 's2'], error: null } },
+      loadDaily: async () => { calls.daily++; return { data: [], error: null } },
+      aggregateCustomers: async (ids, from, to) => {
+        calls.rpc++; calls.rpcArgs.push([ids, from, to])
+        return { data: { rows: [], total_customers: 0 }, error: null }
+      },
+    }
+    return { d: { ...base, ...over }, calls }
+  }
+
+  test('range KHÔNG active → không truy vấn gì cả (chốt cứng chống bug caller)', async () => {
+    const { d, calls } = deps()
+    const r = await loadCampaignRangeActuals(d, { campaignId: 'c1', range: FULL, metricType: 'gmv' })
+    expect(r.ok).toBe(false)
+    expect(calls.targets).toBe(0)
+    expect(calls.daily).toBe(0)
+    expect(calls.rpc).toBe(0)
+  })
+
+  test('GMV: đi nhánh daily, KHÔNG đụng RPC khách', async () => {
+    const { d, calls } = deps({
+      loadDaily: async () => ({
+        data: [
+          { store_id: 's1', date: '2026-08-01', gmv: 100, gmv_affiliate: 10, offline_order_count: 2 },
+          { store_id: 's2', date: '2026-08-01', gmv: 300, gmv_affiliate: 0, offline_order_count: 3 },
+        ],
+        error: null,
+      }),
+    })
+    const r = await loadCampaignRangeActuals(d, { campaignId: 'c1', range: RANGE, metricType: 'gmv' })
+    expect(r.ok).toBe(true)
+    if (!r.ok || r.mode !== 'daily') throw new Error('sai nhánh')
+    expect(r.totals.actual).toBe(410)
+    expect(r.totals.orders).toBe(5)
+    expect(calls.rpc).toBe(0)
+  })
+
+  test('Order/AOV cũng đi nhánh daily, KHÔNG đụng RPC', async () => {
+    const { d, calls } = deps()
+    const r = await loadCampaignRangeActuals(d, { campaignId: 'c1', range: RANGE, metricType: 'offline_order_aov' })
+    expect(r.ok).toBe(true)
+    expect(calls.daily).toBe(1)
+    expect(calls.rpc).toBe(0)
+  })
+
+  test('Khách: gọi RPC với cửa sổ VN HALF-OPEN [from 00:00+07, ngày SAU to 00:00+07)', async () => {
+    const { d, calls } = deps()
+    await loadCampaignRangeActuals(d, { campaignId: 'c1', range: RANGE, metricType: 'affiliate_customer_count' })
+    expect(calls.rpc).toBe(1)
+    const [ids, from, to] = calls.rpcArgs[0] as [string[], string, string]
+    expect(ids).toEqual(['s1', 's2'])              // derive server-side, không từ URL
+    expect(from).toBe('2026-08-01T00:00:00+07:00')
+    // to = 06/08 chứ KHÔNG phải 05/08: biên phải EXCLUSIVE đầu ngày kế tiếp,
+    // nếu không đơn ngày 05 sẽ bị rụng.
+    expect(to).toBe('2026-08-06T00:00:00+07:00')
+    expect(calls.daily).toBe(0)
+  })
+
+  test('Khách: sparse RPC rows vẫn giữ ĐỦ store; store không có dòng = 0 khách', async () => {
+    const { d } = deps({
+      loadTargetStoreIds: async () => ({ data: ['s1', 's2', 's3'], error: null }),
+      aggregateCustomers: async () => ({
+        data: {
+          rows: [
+            { store_id: 's1', vn_date: '2026-08-01', customer_count: 2 },
+            { store_id: 's1', vn_date: '2026-08-02', customer_count: 3 },
+          ],
+          total_customers: 5,
+        },
+        error: null,
+      }),
+    })
+    const r = await loadCampaignRangeActuals(d, { campaignId: 'c1', range: RANGE, metricType: 'affiliate_customer_count' })
+    if (!r.ok || r.mode !== 'customer') throw new Error('sai nhánh')
+    expect(r.stores).toHaveLength(3)
+    // cộng qua ngày ĐÚNG vì RPC đã DISTINCT ON (phone) trước khi group
+    expect(r.stores.find((x) => x.store_id === 's1')!.customers).toBe(5)
+    expect(r.stores.find((x) => x.store_id === 's3')!.customers).toBe(0)
+    expect(r.storeCount).toBe(3)
+    expect(r.totalCustomers).toBe(5)
+  })
+
+  test('Khách: row NGOÀI tập target bị bỏ, không cộng vào tổng', async () => {
+    const { d } = deps({
+      aggregateCustomers: async () => ({
+        data: {
+          rows: [
+            { store_id: 's1', vn_date: '2026-08-01', customer_count: 4 },
+            { store_id: 'store-la', vn_date: '2026-08-01', customer_count: 100 },
+          ],
+          total_customers: 104,
+        },
+        error: null,
+      }),
+    })
+    const r = await loadCampaignRangeActuals(d, { campaignId: 'c1', range: RANGE, metricType: 'affiliate_customer_count' })
+    if (!r.ok || r.mode !== 'customer') throw new Error('sai nhánh')
+    expect(r.totalCustomers).toBe(4)
+    expect(r.stores.some((x) => x.store_id === 'store-la')).toBe(false)
+  })
+
+  test('LỖI phải fail-visible, TUYỆT ĐỐI không rơi âm thầm về toàn kỳ', async () => {
+    const dailyErr = await loadCampaignRangeActuals(
+      deps({ loadDaily: async () => ({ data: null, error: { message: 'timeout' } }) }).d,
+      { campaignId: 'c1', range: RANGE, metricType: 'gmv' },
+    )
+    expect(dailyErr.ok).toBe(false)
+    if (dailyErr.ok) throw new Error('phải lỗi')
+    expect(dailyErr.error).toContain('timeout')
+
+    const rpcErr = await loadCampaignRangeActuals(
+      deps({ aggregateCustomers: async () => ({ data: null, error: { message: 'RAISE fail-closed' } }) }).d,
+      { campaignId: 'c1', range: RANGE, metricType: 'affiliate_customer_count' },
+    )
+    expect(rpcErr.ok).toBe(false)
+
+    const targetErr = await loadCampaignRangeActuals(
+      deps({ loadTargetStoreIds: async () => ({ data: null, error: { message: 'RLS' } }) }).d,
+      { campaignId: 'c1', range: RANGE, metricType: 'gmv' },
+    )
+    expect(targetErr.ok).toBe(false)
+  })
+
+  test('không có store nào trong phạm vi → báo rõ, không gọi tiếp', async () => {
+    const { d, calls } = deps({ loadTargetStoreIds: async () => ({ data: [], error: null }) })
+    const r = await loadCampaignRangeActuals(d, { campaignId: 'c1', range: RANGE, metricType: 'gmv' })
+    expect(r.ok).toBe(false)
+    expect(calls.daily).toBe(0)
+    expect(calls.rpc).toBe(0)
   })
 })
