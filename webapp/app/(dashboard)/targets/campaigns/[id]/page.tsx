@@ -11,6 +11,10 @@ import { CampaignMetricEditor } from '@/components/kpi/CampaignMetricEditor'
 import { SyncActualsButton } from '@/components/kpi/SyncActualsButton'
 import { CampaignExportButton } from '@/components/kpi/CampaignExportButton'
 import { CampaignResultDashboard } from '@/components/kpi/CampaignResultDashboard'
+import { CampaignDateRangeFilter } from '@/components/kpi/CampaignDateRangeFilter'
+import { parseCampaignRange, rangeFilterVisibleForRole } from '@/lib/kpi/campaignDateRange'
+import { createRangeReadDeps } from '@/lib/kpi/campaignRangeDeps'
+import { loadCampaignRangeActuals } from '@/lib/kpi/campaignRangeServer'
 import { metricPresentation } from '@/lib/kpi/campaignDisplay'
 import { buildCampaignResultModel, type ResultActualRow, type ResultCampaign, type ResultTargetRow } from '@/lib/kpi/resultModel'
 import { STATUS_META, TEST_BADGE_CLS } from '@/lib/kpi/status'
@@ -60,7 +64,7 @@ export default async function CampaignDetailPage({
   params, searchParams,
 }: {
   params: Promise<{ id: string }>
-  searchParams: Promise<{ tab?: string }>
+  searchParams: Promise<{ tab?: string; from?: string; to?: string }>
 }) {
   const { id } = await params
   const sp = await searchParams
@@ -116,10 +120,67 @@ export default async function CampaignDetailPage({
   // lib/kpi/resultModel (dùng chung Super ↔ SM — một nguồn số duy nhất, test
   // khóa cùng-input-cùng-output); markup summary + bảng → CampaignResultDashboard.
   const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
+
+  // ── Lọc theo khoảng (17/08) — CHỈ ĐỂ XEM ──────────────────────────────────
+  // Trang này vốn đã super-only, nhưng vẫn hỏi contract vai trò thay vì suy từ
+  // "đã vào được đây": quyền hiển thị filter là một quyết định riêng, có test.
+  const canFilter = rangeFilterVisibleForRole({ role: profile?.role, isSuperAdmin: true })
+  const range = parseCampaignRange({
+    from: canFilter ? sp.from : undefined,
+    to: canFilter ? sp.to : undefined,
+    campaignStart: c.start_date as string,
+    campaignEnd: c.end_date as string,
+    metricType: c.metric_type as string | undefined,
+  })
+
+  // actuals dùng để HIỂN THỊ. Mặc định = snapshot toàn kỳ (đường production cũ,
+  // zero-touch). Chỉ khi range active mới thay phần THỰC ĐẠT.
+  let viewActuals = actuals
+  let rangeError: string | null = null
+  if (range.active) {
+    const read = await loadCampaignRangeActuals(createRangeReadDeps(supabase), {
+      campaignId: id,
+      range,
+      metricType: c.metric_type as string | undefined,
+    })
+    if (!read.ok) {
+      // FAIL-VISIBLE: giữ số toàn kỳ nhưng NÓI RÕ là chưa lọc được, không im
+      // lặng để người dùng tưởng đang xem khoảng mình chọn.
+      rangeError = read.error
+    } else {
+      const snapshotByStore = actualByStore
+      viewActuals = (read.mode === 'daily' ? read.stores : read.stores).map((st) => {
+        const snap = snapshotByStore.get(st.store_id)
+        const isDaily = read.mode === 'daily'
+        const actualValue = isDaily
+          ? (st as { actual: number }).actual
+          : (st as { customers: number }).customers
+        return {
+          store_id: st.store_id,
+          actual_value: actualValue,
+          // run_rate / remaining_target để NULL ⇒ model tự tính lại theo target
+          // TOÀN KỲ. Đúng contract: completion = actual khoảng / target toàn kỳ.
+          run_rate: null,
+          remaining_target: null,
+          // Bậc thưởng + commission LUÔN là của toàn kỳ, lấy nguyên từ snapshot.
+          // Tuyệt đối không suy lại từ số khoảng.
+          achieved_tier_order: snap?.achieved_tier_order ?? null,
+          store_commission_pool: snap?.store_commission_pool ?? null,
+          synced_at: snap?.synced_at ?? '',
+          actual_offline: isDaily ? (st as { offline: number }).offline : null,
+          actual_affiliate: isDaily ? (st as { affiliate: number }).affiliate : null,
+          offline_order_count: isDaily ? (st as { orders: number | null }).orders : null,
+          offline_synced_at: snap?.offline_synced_at ?? null,
+          affiliate_synced_at: snap?.affiliate_synced_at ?? null,
+        } satisfies ActualRow
+      })
+    }
+  }
+
   const resultModel = buildCampaignResultModel(
     c as ResultCampaign,
     targets as unknown as ResultTargetRow[],
-    actuals as ResultActualRow[],
+    viewActuals as ResultActualRow[],
     vnTodayISO,
   )
 
@@ -260,6 +321,16 @@ export default async function CampaignDetailPage({
 
           {/* SM Dashboard r1: summary + bảng chuyển vào CampaignResultDashboard
               (dùng chung SM — model lib/kpi/resultModel, một nguồn số duy nhất) */}
+          {canFilter && (
+            <CampaignDateRangeFilter
+              action={`/targets/campaigns/${c.id}`}
+              campaignStart={c.start_date as string}
+              campaignEnd={c.end_date as string}
+              range={range}
+              keepParams={{ tab: 'result' }}
+              note={rangeError}
+            />
+          )}
           <CampaignResultDashboard
             model={resultModel}
             emptyHint="Chưa có target — nạp file ở tab Cấu hình trước."
