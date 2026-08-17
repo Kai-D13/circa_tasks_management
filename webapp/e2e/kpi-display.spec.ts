@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test'
 import {
   breakdownModel, campaignCardProgress, campaignCardValue, campaignFootnote, campaignOverviewValue,
-  heroRemainingText, metricEditorState, metricPresentation, orderAxisTicks, perDayVisible, syncedSubjectLabel,
+  campaignSourceNote, heroRemainingText, metricEditorState, metricPresentation, orderAxisTicks, perDayVisible,
+  REVENUE_LABELS, syncedSubjectLabel,
 } from '../lib/kpi/campaignDisplay'
 import { STATUS_META, TEST_BADGE_CLS } from '../lib/kpi/status'
 import { affiliateDataStatus, buildCampaignExportRows, buildCustomerCampaignExportRows, buildOrderAovCampaignExportRows, type ExportActual } from '../lib/kpi/exportRows'
@@ -124,7 +125,10 @@ test.describe('kpi display customer metric (mig 103) @desktop', () => {
     expect(p.value(null)).toBe('—')
     expect(p.value(undefined)).toBe('—')
     expect(p.zero).toBe('0₫')
-    expect(p.actualColumnLabel).toBe('Actual GMV')
+    // 17/08 — ĐỔI CONTRACT CÓ CHỦ Ý: nhãn CỘT BẢNG đổi 'Actual GMV' →
+    // 'Doanh thu thực tế'. Cột EXCEL vẫn là 'Actual GMV' (literal trong
+    // exportRows, Power Query của Finance bám vào) — xem test EXPORT REGRESSION.
+    expect(p.actualColumnLabel).toBe('Doanh thu thực tế')
   })
 
   test('metricPresentation(customer): đơn vị khách; default gmv cho giá trị lạ/thiếu (an toàn hiển thị)', () => {
@@ -636,5 +640,62 @@ test.describe('kpi campaign list row (Step 5.1) @desktop', () => {
     // nhãn giữ nguyên — đây là commit đổi màu, không đổi chữ
     expect(STATUS_META.active.label).toBe('Đang chạy')
     expect(STATUS_META.draft.label).toBe('Nháp')
+  })
+})
+
+// ── 17/08: thuật ngữ "Doanh thu" thay "GMV" trên UI ─────────────────────────
+// "GMV" là từ nội bộ của BI, người dùng cửa hàng không đọc ra. Suite này khoá
+// hai chiều: nhãn UI KHÔNG được chứa "GMV", và tên cột Excel PHẢI vẫn chứa.
+test.describe('kpi revenue terminology (17/08) @desktop', () => {
+  test('nhãn UI của campaign doanh thu KHÔNG còn chữ "GMV"', () => {
+    const p = metricPresentation('gmv')
+    const uiLabels = [
+      p.targetLabel, p.todayLabel, p.actualColumnLabel, p.chartAriaLabel, p.perDayLabel,
+      REVENUE_LABELS.offline, REVENUE_LABELS.affiliate, REVENUE_LABELS.offlineShort,
+      REVENUE_LABELS.total, campaignSourceNote(),
+    ]
+    for (const label of uiLabels) {
+      expect(label, label).not.toContain('GMV')
+      expect(label, label).not.toMatch(/\bgmv\b/i)
+    }
+  })
+
+  test('nhãn cụ thể đúng contract stakeholder', () => {
+    const p = metricPresentation('gmv')
+    expect(p.targetLabel).toBe('Mục tiêu doanh thu')
+    expect(p.todayLabel).toBe('Doanh thu hôm nay')
+    expect(p.actualColumnLabel).toBe('Doanh thu thực tế')
+    expect(p.chartAriaLabel).toBe('Biểu đồ doanh thu theo ngày')
+    // Offline nói RÕ "thuần tại cửa hàng"; Affiliate KHÔNG được gọi là thuần.
+    expect(REVENUE_LABELS.offline).toBe('Doanh thu thuần tại cửa hàng')
+    expect(REVENUE_LABELS.affiliate).toBe('Doanh thu Affiliate')
+    expect(REVENUE_LABELS.affiliate).not.toContain('thuần')
+    expect(REVENUE_LABELS.total).toBe('Tổng doanh thu thực tế')
+  })
+
+  test('chú thích nguồn nêu đủ hai nguồn và rule DELIVERED', () => {
+    const note = campaignSourceNote()
+    expect(note).toContain('Net Revenue')
+    expect(note).toContain('Circa Online')
+    expect(note).toContain('giao thành công')
+  })
+
+  test('CANARY: đổi nhãn KHÔNG được chạm tên cột Excel', () => {
+    // Cột export là literal trong exportRows.ts, không đi qua presentation.
+    // Nếu ai đó "dọn nốt" GMV sang cả export thì Power Query của Finance gãy.
+    const rows = buildCampaignExportRows(
+      { name: 'C', start_date: '2026-08-01', end_date: '2026-08-31', metric_offline: true, metric_affiliate: true },
+      [{ store_id: 's-1', pos_code: 'POS0001', kpi_target: 1000, store_kpi_group: 'G', stores: { name: 'S' } }],
+      [{
+        store_id: 's-1', actual_value: 500, run_rate: 50, remaining_target: 500,
+        achieved_tier_order: null, store_commission_pool: null, synced_at: '2026-08-10T10:00:00Z',
+        actual_offline: 300, actual_affiliate: 200,
+        offline_synced_at: null, affiliate_synced_at: null,
+      }], '2026-08-10', (iso) => iso,
+    )
+    const cols = Object.keys(rows[0])
+    expect(cols).toContain('Actual GMV')
+    expect(cols).toContain('GMV Offline')
+    expect(cols).toContain('GMV Affiliate')
   })
 })

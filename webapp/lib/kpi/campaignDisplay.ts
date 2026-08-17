@@ -50,13 +50,34 @@ export function campaignFootnote(v: { metric_offline: boolean; metric_affiliate:
 // tỷ/tr/k như CampaignDailyChart) — test khóa; customer: 'N khách'.
 export type CampaignMetricType = 'gmv' | 'affiliate_customer_count' | 'offline_order_aov'
 
+// ── 17/08: THUẬT NGỮ "DOANH THU", không còn "GMV" trên UI ───────────────────
+// "GMV" là từ nội bộ của BI; dược sĩ và quản lý cửa hàng không đọc ra nó. Toàn
+// bộ nhãn hiển thị chuyển sang "Doanh thu".
+// ⚠ CHỈ đổi NHÃN. Tên nội bộ `metric_type='gmv'`, cột `gmv`/`actual_gmv`/
+// `actual_value` và TÊN CỘT EXCEL giữ nguyên từng byte — đó là contract DB/API
+// và Power Query của Finance đang bám vào (exportRows dùng literal, không đi
+// qua chỗ này, nên đổi ở đây không chạm export).
+export const REVENUE_LABELS = {
+  // Nói rõ "thuần tại cửa hàng": số này là Net Revenue từ BI, đã trừ trả hàng.
+  offline: 'Doanh thu thuần tại cửa hàng',
+  // KHÔNG gọi là "thuần" — nguồn Circa Online không qua cùng phép trừ đó.
+  affiliate: 'Doanh thu Affiliate',
+  offlineShort: 'Doanh thu tại cửa hàng',
+  total: 'Tổng doanh thu thực tế',
+} as const
+
+// Chú thích nguồn dùng chung cho mọi màn campaign có doanh thu.
+export function campaignSourceNote(): string {
+  return 'Doanh thu tại cửa hàng sử dụng Net Revenue từ BI. Doanh thu Affiliate ghi nhận đơn Circa Online giao thành công theo mã đối tác.'
+}
+
 export interface MetricPresentation {
   kind: CampaignMetricType
-  targetLabel: string            // 'Mục tiêu GMV' | 'Mục tiêu số khách'
+  targetLabel: string            // 'Mục tiêu doanh thu' | 'Mục tiêu số khách'
   actualHeroLabel: string        // hero "Đã đạt" giữ chung
-  todayLabel: string             // 'GMV hôm nay' | 'Khách hôm nay'
+  todayLabel: string             // 'Doanh thu hôm nay' | 'Khách hôm nay'
   perDayLabel: string            // 'Trung bình/ngày cần đạt' (chung)
-  actualColumnLabel: string      // cột bảng: 'Actual GMV' | 'Số khách'
+  actualColumnLabel: string      // cột bảng: 'Doanh thu thực tế' | 'Số khách'
   chartAriaLabel: string
   value(n: number | null | undefined): string
   compact(n: number): string
@@ -66,12 +87,14 @@ export interface MetricPresentation {
 const nfVi = new Intl.NumberFormat('vi-VN')
 const GMV_PRESENTATION: MetricPresentation = {
   kind: 'gmv',
-  targetLabel: 'Mục tiêu GMV',
+  targetLabel: 'Mục tiêu doanh thu',
   actualHeroLabel: 'Đã đạt',
-  todayLabel: 'GMV hôm nay',
+  todayLabel: 'Doanh thu hôm nay',
   perDayLabel: 'Trung bình/ngày cần đạt',
-  actualColumnLabel: 'Actual GMV',
-  chartAriaLabel: 'Biểu đồ GMV theo ngày',
+  // ⚠ Đây là nhãn CỘT BẢNG, không phải key export. Cột Excel 'Actual GMV' là
+  // literal trong exportRows.ts và PHẢI giữ nguyên (Power Query của Finance).
+  actualColumnLabel: 'Doanh thu thực tế',
+  chartAriaLabel: 'Biểu đồ doanh thu theo ngày',
   value: (n) => (n === null || n === undefined ? '—' : `${nfVi.format(Math.round(n))}₫`),
   // BYTE-EQUAL compactVnd cũ của CampaignDailyChart (tỷ/tr/k, không space,
   // toFixed(1) GIỮ '.0') — test khóa từng case.
