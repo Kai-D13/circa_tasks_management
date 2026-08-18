@@ -1,8 +1,8 @@
 import Link from 'next/link'
 import { Card, CardContent } from '@/components/ui/card'
 import {
-  breakdownModel, campaignFootnote, heroRemainingText, metricPresentation,
-  perDayVisible, REVENUE_LABELS,
+  breakdownModel, campaignFootnote, campaignPickerMetricLabel, heroRemainingText,
+  metricPresentation, perDayVisible, REVENUE_LABELS,
 } from '@/lib/kpi/campaignDisplay'
 import {
   ORDER_AOV_STATUS_LABEL, aovFromSnapshot, orderAovDualView, orderAovStatus,
@@ -290,7 +290,15 @@ export function CampaignKpiView({
                 name: i.name,
                 rangeLabel: `${dm(i.start_date)} – ${dm(i.end_date)}`,
                 statusLabel: dl <= 0 ? 'Đã kết thúc' : `Còn ${dl} ngày`,
-                pctLabel: i.run_rate !== null ? `${Math.round(i.run_rate)}%` : null,
+                metricLabel: campaignPickerMetricLabel({
+                  metricType: i.metric_type,
+                  runRate: i.run_rate,
+                  actualValue: i.actual_value,
+                  actualOffline: i.actual_offline,
+                  offlineOrderCount: i.offline_order_count,
+                  orderTarget: i.order_target,
+                  aovTarget: i.aov_target,
+                }),
               }
             })}
             selectedId={sel.id}
@@ -405,7 +413,7 @@ export function CampaignKpiView({
               </p>
             )}
             <p className="text-[11px] text-muted-foreground">
-              Điểm hoàn thành lấy theo chỉ số THẤP hơn giữa số đơn và AOV. Phải đạt CẢ HAI mục tiêu mới được thưởng.
+              Phải đạt CẢ HAI mục tiêu Số đơn và AOV mới đạt KPI và được thưởng.
             </p>
           </CardContent>
         </Card>

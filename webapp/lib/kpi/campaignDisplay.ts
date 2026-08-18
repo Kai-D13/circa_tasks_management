@@ -155,6 +155,42 @@ export function metricPresentation(metricType?: string | null): MetricPresentati
   return GMV_PRESENTATION
 }
 
+// ── Commit 5.1 (18/08): nhãn chỉ số trong BỘ CHỌN chiến dịch ────────────────
+// Picker (Staff/QLCH có từ 2 chiến dịch trở lên) trước đây in thẳng
+// `Hoàn thành ${Math.round(run_rate)}%` cho MỌI loại — nghĩa là Chất lượng bán
+// hàng vẫn lộ điểm gộp ở đây dù đã bỏ khỏi hero/bảng/card. Hai lỗi trong một:
+//   · điểm gộp min(số đơn%, AOV%) không được xuất hiện nữa;
+//   · Math.round() biến 99,9999 thành "100%" trong khi cửa hàng CHƯA đạt —
+//     đúng ca mà formatCompletionPct sinh ra để chặn.
+// Quyết định hiển thị nằm ở đây (thuần, có test), component chỉ render chuỗi.
+export function campaignPickerMetricLabel(v: {
+  metricType?: string | null
+  runRate: number | null | undefined
+  // chỉ offline_order_aov:
+  actualValue?: number | null
+  actualOffline?: number | null
+  offlineOrderCount?: number | null
+  orderTarget?: number | null
+  aovTarget?: number | null
+}): string {
+  const pres = metricPresentation(v.metricType)
+  if (pres.kind === 'offline_order_aov') {
+    const dual = orderAovDualView({
+      actualOrder: v.offlineOrderCount,
+      actualNet: v.actualOffline,
+      orderTarget: v.orderTarget,
+      aovTarget: v.aovTarget,
+      synced: v.actualValue != null,
+    })
+    if (!dual) return 'Chưa có mục tiêu'
+    if (!dual.synced) return 'Chưa đồng bộ'
+    // HAI chỉ số, đúng như mọi surface khác của loại này.
+    return `Số đơn ${dual.order.pctText} · AOV ${dual.aov.pctText}`
+  }
+  // gmv / khách: GIỮ NGUYÊN chuỗi đang chạy (không đụng hai loại kia).
+  return v.runRate == null ? 'Chưa đồng bộ' : `Hoàn thành ${Math.round(v.runRate)}%`
+}
+
 // (H1.2 smSelectorVisible đã GỠ 27/07: SM Dashboard r2 thay store-selector-
 // navigation bằng regional list + filter store trong dashboard — xem
 // lib/kpi/resultModel smScopeState.)

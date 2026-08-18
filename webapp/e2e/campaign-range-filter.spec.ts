@@ -52,9 +52,12 @@ async function expectRangeRoundTrip(page: Page, url: string) {
 // trên môi trường không có dữ liệu.
 async function campaignDetailUrl(page: Page): Promise<string | null> {
   await page.goto('/targets')
+  // count() KHÔNG chờ: một nhịp render chậm là ra 0 và test tự skip — mất
+  // coverage trong khi báo cáo vẫn xanh. Chờ tường minh rồi mới kết luận.
   const link = page.locator('main a[href*="campaign="]').first()
-  if (await link.count() === 0) return null
-  return link.getAttribute('href')
+  const found = await link.waitFor({ state: 'attached', timeout: 15_000 })
+    .then(() => true).catch(() => false)
+  return found ? link.getAttribute('href') : null
 }
 
 test.describe('range filter — Super @desktop', () => {
@@ -65,6 +68,10 @@ test.describe('range filter — Super @desktop', () => {
   // nhầm nút Tạo thì test đi lạc sang wizard và đỏ vì lý do vô nghĩa.
   async function firstCampaign(page: Page): Promise<string | null> {
     await page.goto('/targets/campaigns')
+    // evaluateAll trên locator rỗng trả [] mà không chờ — xem ghi chú ở
+    // campaign-order-aov-ui.spec.ts (đã gây skip ngẫu nhiên ở đó).
+    await page.locator('main a[href^="/targets/campaigns/"]').first()
+      .waitFor({ state: 'attached', timeout: 15_000 })
     const hrefs = await page.locator('main a[href^="/targets/campaigns/"]').evaluateAll(
       (as) => as.map((a) => a.getAttribute('href') ?? ''),
     )

@@ -1,8 +1,8 @@
 import { test, expect } from '@playwright/test'
 import {
-  breakdownModel, campaignCardProgress, campaignCardValue, campaignFootnote, campaignOverviewValue,
-  heroRemainingText, metricEditorState, metricPresentation, orderAxisTicks, perDayVisible,
-  REVENUE_LABELS, syncedSubjectLabel,
+  breakdownModel, campaignCardProgress, campaignCardValue, campaignFootnote,
+  campaignOverviewValue, campaignPickerMetricLabel, heroRemainingText, metricEditorState,
+  metricPresentation, orderAxisTicks, perDayVisible, REVENUE_LABELS, syncedSubjectLabel,
 } from '../lib/kpi/campaignDisplay'
 import { STATUS_META, TEST_BADGE_CLS } from '../lib/kpi/status'
 import { affiliateDataStatus, buildCampaignExportRows, buildCustomerCampaignExportRows, buildOrderAovCampaignExportRows, type ExportActual } from '../lib/kpi/exportRows'
@@ -751,5 +751,43 @@ test.describe('kpi revenue terminology (17/08) @desktop', () => {
     expect(cols).toContain('Actual GMV')
     expect(cols).toContain('GMV Offline')
     expect(cols).toContain('GMV Affiliate')
+  })
+})
+
+// ── Commit 5.1: nhãn trong BỘ CHỌN chiến dịch (Staff/QLCH ≥2 chiến dịch) ────
+test.describe('campaign picker metric label @desktop', () => {
+  const OA = {
+    metricType: 'offline_order_aov', runRate: 116.1975, actualValue: 116.1975,
+    actualOffline: 1046 * 194_025, offlineOrderCount: 1046,
+    orderTarget: 900, aovTarget: 190_540,
+  }
+
+  test('GMV/khách GIỮ NGUYÊN chuỗi đang chạy (zero-touch)', () => {
+    expect(campaignPickerMetricLabel({ metricType: 'gmv', runRate: 8.4 })).toBe('Hoàn thành 8%')
+    expect(campaignPickerMetricLabel({ metricType: 'affiliate_customer_count', runRate: 51 })).toBe('Hoàn thành 51%')
+    expect(campaignPickerMetricLabel({ metricType: 'gmv', runRate: null })).toBe('Chưa đồng bộ')
+    // loại lạ đi theo nhánh gmv
+    expect(campaignPickerMetricLabel({ metricType: 'la_hoac', runRate: 12 })).toBe('Hoàn thành 12%')
+  })
+
+  test('Chất lượng bán hàng: HAI chỉ số, KHÔNG có điểm gộp', () => {
+    const label = campaignPickerMetricLabel(OA)
+    expect(label).toBe('Số đơn 116,2% · AOV 101,8%')
+    expect(label, 'điểm gộp không được xuất hiện ở picker').not.toContain('Hoàn thành')
+  })
+
+  test('picker KHÔNG được làm tròn 99,9999 thành 100% (ca mở khoá commission sai)', () => {
+    // Bản cũ in Math.round(run_rate) ⇒ "Hoàn thành 100%" cho store CHƯA đạt.
+    const label = campaignPickerMetricLabel({
+      ...OA, runRate: 99.9999, actualValue: 99.9999,
+      actualOffline: 900 * 190_540 - 1, offlineOrderCount: 900,
+    })
+    expect(label).toContain('<100%')
+    expect(label).not.toMatch(/100%/)
+  })
+
+  test('chưa đồng bộ / chưa có mục tiêu → nói đúng tình trạng, không bịa số', () => {
+    expect(campaignPickerMetricLabel({ ...OA, actualValue: null })).toBe('Chưa đồng bộ')
+    expect(campaignPickerMetricLabel({ ...OA, orderTarget: null })).toBe('Chưa có mục tiêu')
   })
 })
