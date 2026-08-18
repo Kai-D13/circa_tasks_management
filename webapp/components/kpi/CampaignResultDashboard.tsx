@@ -153,7 +153,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                       'mobile'); desktop ≥1024px = N cột Bậc động theo
                       maxTierCount (không hardcode 3). Thứ tự cột trong
                       resultTableColumns PHẢI khớp thứ tự cell ở tbody. */}
-                  {resultTableColumns(m.maxTierCount, m.showBreakdown, m.campaign.metric_type).map((col) => (
+                  {resultTableColumns(m.maxTierCount, m.showBreakdown, m.campaign.metric_type, m.showGroup).map((col) => (
                     <th
                       key={col.key}
                       // r1.6.1 (audit P2): min-width qua CSS var + lg:min-w —
@@ -186,7 +186,10 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                       {/* r1.6: sticky left CHỈ lg (mobile giữ UI cũ) — bg-card
                           opaque để nội dung cuộn khuất phía dưới cell */}
                       <td className="px-4 py-2.5 font-medium lg:sticky lg:left-0 lg:z-10 lg:bg-card">{r.storeName ?? '—'}{r.posCode ? ` · ${r.posCode}` : ''}</td>
-                      <td className="px-4 py-2.5 text-xs">{r.group ?? '—'}</td>
+                      {/* 107: cùng cờ m.showGroup với header — MỘT nguồn, không
+                          bao giờ lệch cột. Dữ liệu hỗn hợp thì giữ cột và hiện
+                          '—' cho store chưa phân loại. */}
+                      {m.showGroup && <td className="px-4 py-2.5 text-xs">{r.group ?? '—'}</td>}
                       {!isOrderAov && (
                         <td className="px-4 py-2.5 text-right whitespace-nowrap">{vnd(r.kpiTarget)}</td>
                       )}

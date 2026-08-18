@@ -133,3 +133,33 @@ test.describe('kpi result table layout contract @desktop', () => {
     expect(aov).toBeLessThan(gmv)
   })
 })
+
+// ── 107: cột 'Phân loại' tùy chọn ───────────────────────────────────────────
+test.describe('kpi result table — showGroup (107) @desktop', () => {
+  test('mặc định GIỮ cột (mọi caller cũ zero-touch)', () => {
+    expect(resultTableColumns(2, false).map((c) => c.key)).toContain('group')
+    expect(resultTableColumns(2, false, 'gmv', true).map((c) => c.key)).toContain('group')
+  })
+
+  test('showGroup=false → cột biến mất khỏi MỌI loại chiến dịch', () => {
+    for (const metric of [undefined, 'gmv', 'affiliate_customer_count', 'offline_order_aov']) {
+      const keys = resultTableColumns(2, false, metric, false).map((c) => c.key)
+      expect(keys, `metric=${metric}`).not.toContain('group')
+      // và không kéo theo cột nào khác biến mất
+      expect(keys).toContain('store')
+    }
+  })
+
+  test('ẩn cột giảm ĐÚNG 100px bề rộng desktop, không hơn không kém', () => {
+    const withGroup = resultTableDesktopMinPx(3, false, 'gmv', true)
+    const without = resultTableDesktopMinPx(3, false, 'gmv', false)
+    expect(withGroup - without).toBe(RESULT_COL_PX.group)
+    expect(RESULT_COL_PX.group).toBe(100)
+  })
+
+  test('thứ tự cột còn lại KHÔNG đổi khi ẩn (chỉ mất đúng một phần tử)', () => {
+    const a = resultTableColumns(2, false, 'gmv', true).map((c) => c.key).filter((k) => k !== 'group')
+    const b = resultTableColumns(2, false, 'gmv', false).map((c) => c.key)
+    expect(b).toEqual(a)
+  })
+})

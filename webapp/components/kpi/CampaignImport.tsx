@@ -18,7 +18,7 @@ interface Preview {
   validCount: number
   invalid: { row: number; pos_code: string | null; error: string }[]
   unmatched: string[]
-  preview: { pos_code: string; kpi_target: number; store_kpi_group: string; tiers: { threshold_pct: number; commission_amount: number }[] }[]
+  preview: { pos_code: string; kpi_target: number; store_kpi_group: string | null; tiers: { threshold_pct: number; commission_amount: number }[] }[]
 }
 
 // Commission LUÔN VNĐ (mọi loại campaign).
@@ -182,13 +182,17 @@ export function CampaignImport({
             </div>
           )}
 
-          {preview.preview.length > 0 && (
+          {preview.preview.length > 0 && (() => {
+          // 107: preview phản chiếu đúng thứ người dùng sẽ thấy sau khi lưu —
+          // toàn bộ ô Phân loại để trống thì cột biến mất ngay ở bước xem trước.
+          const showGroupCol = preview.preview.some((r) => (r.store_kpi_group ?? '').trim().length > 0)
+          return (
             <div className="rounded border overflow-x-auto max-h-72">
               <table className="w-full text-xs">
                 <thead className="bg-muted/40">
                   <tr>
                     <th className="text-left px-3 py-2">POS</th>
-                    <th className="text-left px-3 py-2">Phân loại</th>
+                    {showGroupCol && <th className="text-left px-3 py-2">Phân loại</th>}
                     <th className="text-right px-3 py-2">{guide.targetHeaderLabel}</th>
                     <th className="text-left px-3 py-2">Bậc (mốc % → Commission)</th>
                   </tr>
@@ -197,7 +201,7 @@ export function CampaignImport({
                   {preview.preview.map((r) => (
                     <tr key={r.pos_code}>
                       <td className="px-3 py-1.5 font-medium">{r.pos_code}</td>
-                      <td className="px-3 py-1.5">{r.store_kpi_group}</td>
+                      {showGroupCol && <td className="px-3 py-1.5">{r.store_kpi_group ?? '—'}</td>}
                       <td className="px-3 py-1.5 text-right">{guide.formatTarget(r.kpi_target)}</td>
                       <td className="px-3 py-1.5">
                         <div className="flex flex-wrap gap-1">
@@ -213,7 +217,8 @@ export function CampaignImport({
                 </tbody>
               </table>
             </div>
-          )}
+          )
+          })()}
           {preview.validCount > preview.preview.length && (
             <p className={cn('text-xs text-muted-foreground')}>… và {preview.validCount - preview.preview.length} dòng hợp lệ khác.</p>
           )}

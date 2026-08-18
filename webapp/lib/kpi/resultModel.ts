@@ -169,6 +169,11 @@ export interface StoreResultRow {
 export interface CampaignResultModel {
   campaign: ResultCampaign
   showBreakdown: boolean          // CHỈ khi campaign bật CẢ 2 chỉ số (P3-E)
+  // 107: "Phân loại" là TÙY CHỌN. Nếu MỌI store của campaign đều trống thì cột
+  // biến mất hoàn toàn (cả <th> lẫn <td>). Quyết định nằm Ở ĐÂY, một nguồn duy
+  // nhất cho header và body — tách hai nơi là lệch cột ngay lần đầu ai đó sửa
+  // một phía (đúng lỗi đã xảy ra khi bỏ cột 'Nhịp độ' ở commit 5).
+  showGroup: boolean
   lastSyncedAt: string | null     // null = chưa đồng bộ → mọi số tiền hiện '—'
   storeCount: number
   totalTarget: number
@@ -277,6 +282,7 @@ export function buildCampaignResultModel(
   return {
     campaign,
     showBreakdown: campaign.metric_offline === true && campaign.metric_affiliate === true,
+    showGroup: rows.some((r) => (r.group ?? '').trim().length > 0),
     lastSyncedAt,
     storeCount: targets.length,
     totalTarget, totalActual, totalOffline, totalAffiliate,

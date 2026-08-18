@@ -106,6 +106,9 @@ export default async function CampaignDetailPage({
   if (queryError) console.error('[campaign-detail] query failed:', queryError)
 
   const targets = (targetsRaw ?? []) as unknown as TargetRow[]
+  // 107: 'Phân loại' là TÙY CHỌN. Mọi store đều trống ⇒ bỏ hẳn cột; dữ liệu
+  // hỗn hợp thì giữ cột và hiện '—' cho store chưa phân loại.
+  const showGroupCol = targets.some((t) => (t.store_kpi_group ?? '').trim().length > 0)
   const actuals = (actualsRaw ?? []) as ActualRow[]
   const actualByStore = new Map(actuals.map((a) => [a.store_id, a]))
   const lastSynced = actuals.reduce<string | null>((max, a) => (!max || a.synced_at > max ? a.synced_at : max), null)
@@ -270,7 +273,8 @@ export default async function CampaignDetailPage({
                   <thead>
                     <tr className="border-b bg-muted/40 text-xs text-muted-foreground">
                       <th className="text-left px-4 py-2.5">Cửa hàng</th>
-                      <th className="text-left px-4 py-2.5">Phân loại</th>
+                      {/* 107: cùng cờ với body ngay dưới — bỏ cột thì bỏ cả hai phía. */}
+                      {showGroupCol && <th className="text-left px-4 py-2.5">Phân loại</th>}
                       <th className="text-right px-4 py-2.5">KPI target</th>
                       <th className="text-left px-4 py-2.5">Bậc (mốc % → Commission)</th>
                     </tr>
@@ -279,7 +283,7 @@ export default async function CampaignDetailPage({
                     {targets.map((t) => (
                       <tr key={t.id} className="hover:bg-muted/30">
                         <td className="px-4 py-2.5 font-medium">{t.stores?.name ?? '—'}{t.pos_code ? ` · ${t.pos_code}` : ''}</td>
-                        <td className="px-4 py-2.5 text-xs">{t.store_kpi_group ?? '—'}</td>
+                        {showGroupCol && <td className="px-4 py-2.5 text-xs">{t.store_kpi_group ?? '—'}</td>}
                         <td className="px-4 py-2.5 text-right">{targetFmt(t.kpi_target)}</td>
                         <td className="px-4 py-2.5"><TierChips tiers={t.kpi_campaign_store_tiers} /></td>
                       </tr>
