@@ -1,6 +1,7 @@
 -- ============================================================================
 -- 107_kpi_campaign_optional_store_group.sql
--- ⚠ DRAFT — chạy SAU 106, TRƯỚC khi deploy code batch này.
+-- Chạy SAU 106, và TRƯỚC khi deploy code batch này (backward-compatible nên
+-- chạy sớm an toàn: app đang chạy luôn gửi store_kpi_group non-empty).
 --
 -- store_kpi_group ("Phân loại Store") thành TÙY CHỌN.
 --

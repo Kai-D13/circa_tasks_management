@@ -346,3 +346,50 @@ test.describe('campaign import — store_kpi_group tùy chọn (107) @desktop', 
     expect(cus.valid[0].store_kpi_group).toBeNull()
   })
 })
+
+// ── 107.4: UI KHÔNG được giới thiệu lại "điểm gộp" ──────────────────────────
+// Commit 5 bỏ điểm hoàn thành gộp khỏi màn hình, nhưng hai chuỗi ở luồng IMPORT
+// vẫn dạy Super Admin đúng khái niệm đó. Canary này quét MỌI chuỗi người dùng
+// đọc được trong guide + thông báo lỗi parser, không chỉ hai chỗ đã biết.
+test.describe('không tái xuất khái niệm điểm gộp (107.4) @desktop', () => {
+  const FORBIDDEN = ['điểm hoàn thành', 'chỉ số thấp hơn', 'chỉ số yếu hơn', 'min(']
+
+  const scan = (label: string, text: string) => {
+    for (const bad of FORBIDDEN) {
+      expect(text.toLowerCase(), `${label} nhắc lại điểm gộp: "${bad}" trong «${text}»`)
+        .not.toContain(bad)
+    }
+  }
+
+  test('guide của CẢ BA loại: mọi chuỗi hiển thị đều sạch', () => {
+    for (const metric of [undefined, 'gmv', 'affiliate_customer_count', 'offline_order_aov']) {
+      const g = campaignImportGuide(metric)
+      // Gom mọi chuỗi người dùng đọc được trong guide.
+      const texts = [
+        g.boundaryWarning ?? '',
+        g.targetHeaderLabel ?? '',
+        ...g.columns.map((c) => `${c.col} ${c.meaning} ${c.example}`),
+      ]
+      for (const t of texts) scan(`guide(${metric})`, t)
+    }
+  })
+
+  test('guide order_aov nói ĐIỀU KIỆN ĐẠT, không nói cách tính', () => {
+    const g = campaignImportGuide('offline_order_aov')
+    expect(g.boundaryWarning).toContain('Phải đạt CẢ HAI mục tiêu Số đơn và AOV mới đạt KPI')
+    // vẫn giữ thông tin hữu ích về template
+    expect(g.boundaryWarning).toContain('kpi_target')
+  })
+
+  test('thông báo lỗi template CŨ cũng sạch', () => {
+    for (const dead of ['order_floor', 'aov_floor']) {
+      const r = parseCampaignRows(
+        [{ pos_code: 'POS0001', order_target: 1, aov_target: 1, store_kpi_group: 'x', [dead]: 1 }],
+        BY_CODE, { metricType: 'offline_order_aov' },
+      )
+      if (!('error' in r)) throw new Error(`phải báo lỗi template cũ cho ${dead}`)
+      scan(`error(${dead})`, r.error)
+      expect(r.error).toContain('phải đạt CẢ HAI mục tiêu mới đạt KPI')
+    }
+  })
+})
