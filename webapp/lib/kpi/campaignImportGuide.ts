@@ -97,7 +97,9 @@ const ORDER_AOV_GUIDE: ImportGuideModel = {
     'POS0065,586,226762,Nhóm A,100,20800000,CIRCA SYMPHONY,Demo',
   ].join('\n'),
   sampleFileName: 'mau-chien-dich-chat-luong-ban-hang.csv',
-  boundaryWarning: 'Điểm hoàn thành lấy theo CHỈ SỐ THẤP HƠN giữa (số đơn / mục tiêu) và (AOV / mục tiêu). Chỉ đạt KPI khi CẢ HAI đều đạt. File KHÔNG có cột kpi_target và net_revenue.',
+  // Commit 5 bỏ điểm gộp khỏi UI; câu này vẫn giới thiệu lại đúng khái niệm đó
+  // cho Super Admin ngay ở màn import. Chỉ nói ĐIỀU KIỆN ĐẠT, không nói cách tính.
+  boundaryWarning: 'Phải đạt CẢ HAI mục tiêu Số đơn và AOV mới đạt KPI. File KHÔNG có cột kpi_target và net_revenue.',
   targetHeaderLabel: 'Mục tiêu (đơn · AOV)',
   // Cột target ở preview hiển thị điểm chuẩn hóa — số đơn/AOV có cột riêng.
   formatTarget: () => '100%',

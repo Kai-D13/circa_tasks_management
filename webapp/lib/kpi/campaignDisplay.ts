@@ -135,7 +135,10 @@ const CUSTOMER_PRESENTATION: MetricPresentation = {
 const ORDER_AOV_PRESENTATION: MetricPresentation = {
   kind: 'offline_order_aov',
   targetLabel: 'Mục tiêu chất lượng',
-  actualHeroLabel: 'Điểm hoàn thành',
+  // Commit 5 bỏ hero điểm gộp cho loại này (hero giờ là HAI chỉ số độc lập).
+  // Hiện KHÔNG surface nào render actualHeroLabel, nhưng để nguyên chuỗi cũ là
+  // mời khái niệm đã bỏ quay lại nếu sau này có ai đọc field này.
+  actualHeroLabel: 'Số đơn · AOV',
   todayLabel: 'Số đơn hôm nay',
   perDayLabel: 'Trung bình/ngày cần đạt',
   actualColumnLabel: 'Hoàn thành',

@@ -101,7 +101,7 @@ export function parseCampaignRows(
   if (isAov) {
     for (const [key, label] of DEAD_AOV_COLUMNS) {
       if (headerKeys.has(key)) {
-        return { error: `File dùng template CŨ (có cột ${label}). Chất lượng bán hàng nay chỉ cần order_target + aov_target — điểm hoàn thành lấy theo chỉ số thấp hơn.` }
+        return { error: `File dùng template CŨ (có cột ${label}). Chất lượng bán hàng nay chỉ cần order_target + aov_target — phải đạt CẢ HAI mục tiêu mới đạt KPI.` }
       }
     }
     for (const [key, label] of AOV_COLUMNS) {
