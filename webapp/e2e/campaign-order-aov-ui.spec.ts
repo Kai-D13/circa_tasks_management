@@ -169,3 +169,62 @@ test.describe('bộ chọn chiến dịch — Staff @desktop', () => {
       `không dòng nào giữ dạng "Hoàn thành X%": ${JSON.stringify(rows)}`).toBe(true)
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// CỜ BÁO CÁO: hero + picker Chất lượng bán hàng phía STAFF (commit 6)
+//
+// Các test phía trên có thể xanh mà KHÔNG hề chạm loại campaign này: bảng là
+// màn Super, còn picker của Staff chỉ chứa GMV/Số khách. "629 pass" vì thế
+// KHÔNG phải bằng chứng runtime cho Order/AOV phía Staff.
+//
+// Test này luôn chạy và IN RA cờ:
+//   ORDER_AOV_RUNTIME_VERIFIED=true   → đã kiểm hero thật
+//   ORDER_AOV_RUNTIME_VERIFIED=false  → skip CÓ LÝ DO, đừng đọc là đã kiểm
+// Điều kiện để true: tồn tại campaign metric_type='offline_order_aov' ở trạng
+// thái active + is_test=false phủ cửa hàng của tài khoản Staff (RLS
+// can_read_kpi_campaign). Hiện DB chỉ có "Test AOV order" đang paused+test.
+// ─────────────────────────────────────────────────────────────────────────────
+test.describe('hero Chất lượng bán hàng — Staff @desktop', () => {
+  test.use({ storageState: STAFF_STATE })
+  test.skip(!STAFF.email || !STAFF.password, 'E2E_STAFF_* chưa set')
+
+  test('hero hai chỉ số + KHÔNG còn điểm gộp (cờ runtime)', async ({ page }) => {
+    await page.goto('/targets')
+    const first = page.locator('main a[href*="campaign="]').first()
+    const any = await first.waitFor({ state: 'attached', timeout: 15_000 })
+      .then(() => true).catch(() => false)
+
+    let target: string | null = null
+    if (any) {
+      const hrefs = await page.locator('main a[href*="campaign="]').evaluateAll(
+        (as) => as.map((a) => a.getAttribute('href') ?? ''))
+      for (const h of hrefs) {
+        await page.goto(h)
+        await page.locator('main').waitFor({ state: 'attached' })
+        if ((await page.locator('main').innerText()).includes('Chất lượng bán hàng')) { target = h; break }
+      }
+    }
+
+    if (target === null) {
+      // eslint-disable-next-line no-console
+      console.log('ORDER_AOV_RUNTIME_VERIFIED=false — Staff không thấy campaign offline_order_aov nào (cần active + is_test=false)')
+      test.info().annotations.push({
+        type: 'runtime-unverified',
+        description: 'ORDER_AOV_RUNTIME_VERIFIED=false — hero Staff CHƯA có bằng chứng runtime',
+      })
+      test.skip(true, 'ORDER_AOV_RUNTIME_VERIFIED=false — không có campaign Chất lượng bán hàng nào Staff thấy được')
+      return
+    }
+
+    const body = await page.locator('main').innerText()
+    // Hai chỉ số độc lập, mỗi cái mục tiêu riêng.
+    expect(body).toContain('Số đơn')
+    expect(body).toContain('AOV')
+    // Điểm gộp và mọi thứ suy từ nó KHÔNG được xuất hiện.
+    expect(body, 'hero vẫn còn điểm hoàn thành gộp').not.toContain('Điểm hoàn thành')
+    expect(body).not.toContain('Còn thiếu')
+    expect(body).toContain('Phải đạt CẢ HAI mục tiêu')
+    // eslint-disable-next-line no-console
+    console.log('ORDER_AOV_RUNTIME_VERIFIED=true')
+  })
+})

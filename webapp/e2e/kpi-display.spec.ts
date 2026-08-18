@@ -783,7 +783,10 @@ test.describe('campaign picker metric label @desktop', () => {
       actualOffline: 900 * 190_540 - 1, offlineOrderCount: 900,
     })
     expect(label).toContain('<100%')
-    expect(label).not.toMatch(/100%/)
+    // KHÔNG dùng word-boundary: ký tự escape đó đã hai lần bị tầng script nuốt thành
+    // BACKSPACE 0x08 khiến canary xanh giả. So chuỗi CHÍNH XÁC — mạnh hơn
+    // regex và không có gì để escape sai.
+    expect(label).toBe('Số đơn 100% · AOV <100%')
   })
 
   test('chưa đồng bộ / chưa có mục tiêu → nói đúng tình trạng, không bịa số', () => {

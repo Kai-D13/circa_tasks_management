@@ -536,3 +536,51 @@ test.describe('mig 104 source contract @desktop', () => {
     expect(sql).not.toContain('kpi_campaign_store_daily_actuals')
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// GATE: KHÔNG ký tự điều khiển trong source (commit 6)
+//
+// Đã HAI lần một regex `\b` bị tầng script (heredoc → Python → file) nuốt thành
+// BACKSPACE 0x08, biến canary thành xanh giả:
+//   · kpi-display.spec.ts   — `/<0x08>100%/` không bao giờ khớp
+//   · kpi-sync-orchestration — `/<0x08>0\d{9}<0x08>/` cũng vậy (canary PII!)
+// Đọc mắt thường không thấy: 0x08 vô hình trong editor và trong diff review.
+// Gate này là cách duy nhất để nó không quay lại lần thứ ba.
+//
+// Cho phép: TAB (0x09), LF (0x0A), CR (0x0D). Cấm mọi ký tự < 0x20 còn lại.
+// ─────────────────────────────────────────────────────────────────────────────
+test.describe('source hygiene @desktop', () => {
+  test('KHÔNG ký tự điều khiển vô hình trong e2e/lib/components/app/scripts', () => {
+    const path = require('node:path') as typeof import('node:path')
+    const ROOTS = ['e2e', 'lib', 'components', 'app', 'scripts']
+    const EXT = ['.ts', '.tsx', '.js', '.mjs', '.cjs']
+    const ALLOWED = new Set([9, 10, 13])
+    const hits: string[] = []
+
+    const walk = (dir: string) => {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const full = path.join(dir, entry.name)
+        if (entry.isDirectory()) {
+          if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue
+          walk(full)
+          continue
+        }
+        if (!EXT.includes(path.extname(entry.name))) continue
+        const lines = fs.readFileSync(full, 'utf8').split('\n')
+        lines.forEach((line, i) => {
+          for (let c = 0; c < line.length; c++) {
+            const code = line.charCodeAt(c)
+            if (code < 32 && !ALLOWED.has(code)) {
+              hits.push(`${full}:${i + 1} có 0x${code.toString(16).padStart(2, '0')}`)
+              return
+            }
+          }
+        })
+      }
+    }
+    for (const r of ROOTS) if (fs.existsSync(r)) walk(r)
+
+    expect(hits, `Ký tự điều khiển vô hình (thường là escape word-boundary bị nuốt thành 0x08):\n${hits.join('\n')}`)
+      .toEqual([])
+  })
+})

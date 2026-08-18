@@ -618,7 +618,11 @@ test.describe('kpi sync orchestration — customer campaign (mig 103) @desktop',
       expect(r.warnings?.[0]).toContain('cross_store_customer_count=1')
       // mig 104: sample là SĐT ĐÃ MASK từ DB — warning không chứa PII đầy đủ
       expect(r.warnings?.[0]).toContain('0905***560')
-      expect(r.warnings?.[0]).not.toMatch(/0\d{9}/)
+      // Ý ĐỊNH: warning KHÔNG được chứa số điện thoại thô. Bản cũ dùng word-boundary và
+      // bị nuốt thành 0x08 ⇒ luôn PASS. Kiểm bằng chuỗi chữ số liên tiếp —
+      // không escape, không word-boundary.
+      const digits = (r.warnings?.[0] ?? '').replace(/[^0-9]/g, '')
+      expect(digits.length, `warning lộ số điện thoại thô: ${r.warnings?.[0]}`).toBeLessThan(10)
     }
   })
 
