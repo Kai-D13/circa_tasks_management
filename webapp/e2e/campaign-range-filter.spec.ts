@@ -24,12 +24,36 @@ const FILTER_INPUT = 'form input[name="from"]'
 // toàn kỳ. Đây là bất biến không phụ thuộc dữ liệu (khác với "số phải đổi" —
 // một range phủ hết dữ liệu hiện có thì số KHÔNG đổi mới là đúng), nên nó bắt
 // được cả rò rỉ trạng thái lẫn việc bỏ lọc mà vẫn giữ số đã lọc.
+// `page.goto` chỉ chờ sự kiện load — Next vẫn có thể đang chuyển route, và
+// `main.innerText()` lúc đó trả CHUỖI RỖNG. Bản trước so snapshot với chuỗi
+// rỗng đó rồi đỏ, trong khi ảnh chụp lỗi lại hiện đúng nội dung mong đợi: lỗi
+// TIMING của test, không phải lỗi UI. Mọi lần đọc `main` ở đây đều phải đi sau
+// một NEO NGỮ NGHĨA — thứ chỉ tồn tại khi nội dung thật đã render.
+async function mainTextWhenReady(page: Page, opts: { ranged: boolean }): Promise<string> {
+  // Neo = CHÍNH NỘI DUNG đã render, không phải một element cụ thể. Thử neo vào
+  // ô lọc thì đỏ kiểu khác: element đã có trong DOM nhưng lớp `hidden md:block`
+  // chưa áp xong nên Playwright thấy "hidden". Đo độ dài text của `main` là
+  // điều kiện đúng với thứ ta sắp đọc, và đúng cho MỌI vai trò/breakpoint.
+  await expect.poll(
+    async () => (await page.locator('main').innerText()).trim().length,
+    { message: 'main vẫn rỗng — trang chưa render xong' },
+  ).toBeGreaterThan(50)
+  if (opts.ranged) {
+    await expect(page.getByText('Đang xem', { exact: false }).first()).toBeVisible()
+  } else {
+    // Toàn kỳ: đợi dòng trạng thái khoảng BIẾN MẤT hẳn rồi mới chụp.
+    await expect(page.getByText('Đang xem', { exact: false })).toHaveCount(0)
+  }
+  return page.locator('main').innerText()
+}
+
 async function expectRangeRoundTrip(page: Page, url: string) {
   await page.goto(url)
   const from = await page.locator('input[name="from"]').getAttribute('min')
   const to = await page.locator('input[name="to"]').getAttribute('max')
   expect(from, 'input from phải có min = ngày bắt đầu campaign').toBeTruthy()
-  const full = await page.locator('main').innerText()
+  const full = await mainTextWhenReady(page, { ranged: false })
+  expect(full.trim().length, 'đọc được main rỗng ⇒ neo chờ chưa đủ').toBeGreaterThan(0)
 
   const d0 = Date.parse(`${from}T00:00:00Z`)
   const mid = new Date(d0 + Math.floor((Date.parse(`${to}T00:00:00Z`) - d0) / 2))
@@ -37,13 +61,12 @@ async function expectRangeRoundTrip(page: Page, url: string) {
   const sep = url.includes('?') ? '&' : '?'
   await page.goto(`${url}${sep}from=${from}&to=${mid}`)
 
-  const ranged = await page.locator('main').innerText()
-  expect(ranged, 'phải nói rõ đang xem khoảng nào').toContain('Đang xem')
+  const ranged = await mainTextWhenReady(page, { ranged: true })
   // Câu này là CAM KẾT với người xem: lọc không được đụng tới thưởng.
   expect(ranged).toContain('Mục tiêu, bậc thưởng và commission vẫn tính theo TOÀN KỲ')
 
   await page.goto(url)
-  expect(await page.locator('main').innerText(),
+  expect(await mainTextWhenReady(page, { ranged: false }),
     'bỏ lọc phải trả về đúng snapshot toàn kỳ').toBe(full)
 }
 
@@ -94,6 +117,11 @@ test.describe('range filter — Super @desktop', () => {
     test.skip(href === null, 'chưa có chiến dịch nào')
     await page.goto(`${href}?tab=result&from=2000-01-01&to=2000-01-05`)
 
+    // Cùng bẫy timing: đọc `main` ngay sau goto có thể ra chuỗi rỗng.
+    await expect.poll(
+      async () => (await page.locator('main').innerText()).trim().length,
+      { message: 'main vẫn rỗng — trang chưa render xong' },
+    ).toBeGreaterThan(50)
     const body = await page.locator('main').innerText()
     expect(body).toContain('TOÀN KỲ')
     // Một trạng thái duy nhất: không được vừa báo lỗi vừa "Đang xem <khoảng>".
@@ -158,11 +186,15 @@ test.describe('range filter — Staff KHÔNG có @desktop', () => {
 
     await page.goto(href!)
     await expect(page.locator(FILTER_FORM), 'staff không được thấy bộ lọc').toHaveCount(0)
+    await expect.poll(async () => (await page.locator('main').innerText()).trim().length)
+      .toBeGreaterThan(50)
     const before = await page.locator('main').innerText()
 
     const sep = href!.includes('?') ? '&' : '?'
     await page.goto(`${href}${sep}from=2026-08-01&to=2026-08-02`)
     await expect(page.locator(FILTER_FORM)).toHaveCount(0)
+    await expect.poll(async () => (await page.locator('main').innerText()).trim().length)
+      .toBeGreaterThan(50)
     const after = await page.locator('main').innerText()
     expect(after, 'staff gắn from/to mà số liệu đổi ⇒ gate bị lách').toBe(before)
   })

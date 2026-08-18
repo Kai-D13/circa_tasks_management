@@ -794,3 +794,26 @@ test.describe('campaign picker metric label @desktop', () => {
     expect(campaignPickerMetricLabel({ ...OA, orderTarget: null })).toBe('Chưa có mục tiêu')
   })
 })
+
+// ── 107: export GIỮ cột 'Phân loại' (contract Finance) ──────────────────────
+test.describe('export giữ cột Phân loại khi group null (107) @desktop', () => {
+  const TARGET = (group: string | null) => ({
+    store_id: 's-1', pos_code: 'POS0001', kpi_target: 1000,
+    store_kpi_group: group, stores: { name: 'Store 1' },
+  })
+  const CAMP = { name: 'C', start_date: '2026-08-01', end_date: '2026-08-31', metric_offline: true, metric_affiliate: false }
+
+  test('group null → cột VẪN có, giá trị rỗng (KHÔNG bỏ cột như UI)', () => {
+    const rows = buildCampaignExportRows(CAMP, [TARGET(null)], [], '2026-08-18', (iso) => iso)
+    const cols = Object.keys(rows[0])
+    // UI ẩn cột, nhưng Power Query của Finance khớp theo TÊN CỘT — bỏ cột ở
+    // export là breaking change im lặng phía họ.
+    expect(cols, 'export phải giữ cột Phân loại').toContain('Phân loại')
+    expect(rows[0]['Phân loại']).toBe('')
+  })
+
+  test('group có dữ liệu → giữ nguyên giá trị', () => {
+    const rows = buildCampaignExportRows(CAMP, [TARGET('Nhóm A')], [], '2026-08-18', (iso) => iso)
+    expect(rows[0]['Phân loại']).toBe('Nhóm A')
+  })
+})
