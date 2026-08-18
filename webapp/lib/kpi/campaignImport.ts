@@ -5,7 +5,7 @@
 // — module THUẦN không secret/IO; caller duy nhất vẫn là server action).
 //
 // v3 policy-model columns (canonicalized): pos_code, kpi_target, store_kpi_group
-// (REQUIRED — the store's policy classification label, free text), optional
+// (cột BẮT BUỘC có trong template, GIÁ TRỊ tùy chọn — 107), optional
 // pos_name/note, and dynamic tier pairs tier_N_threshold_pct /
 // tier_N_commission_amount (fixed amount = the STORE's commission POOL at that
 // tier). Transition aliases still read: final_target, tier_N_commission,
@@ -18,7 +18,9 @@ export interface CampaignTargetInput {
   store_id: string
   pos_code: string
   kpi_target: number
-  store_kpi_group: string
+  // 107: rỗng/toàn khoảng trắng → null (không phải chuỗi rỗng). UI ẩn hẳn cột
+  // 'Phân loại' khi MỌI store của campaign đều null.
+  store_kpi_group: string | null
   import_row: number
   note: string | null
   tiers: CampaignTierInput[]
@@ -65,7 +67,7 @@ function str(v: unknown): string | null {
 //   · gmv (default): hành vi CŨ NGUYÊN VẸN — kể cả rule ranh giới tiền.
 //   · affiliate_customer_count: kpi_target = SỐ KHÁCH → bắt buộc SỐ NGUYÊN
 //     dương; BỎ rule GROUP_BOUNDARIES (ranh giới VNĐ vô nghĩa với đơn vị
-//     khách); store_kpi_group VẪN bắt buộc nhưng chỉ là NHÃN import (chốt
+//     khách); store_kpi_group chỉ là NHÃN import (chốt
 //     stakeholder 06/08 — không áp monetary boundary). Tier %/commission tiền
 //     giữ nguyên cả hai loại.
 // Mig 106: + offline_order_aov ("Chất lượng bán hàng") — contract 12/08: file
@@ -153,8 +155,10 @@ export function parseCampaignRows(
       return
     }
 
-    const storeKpiGroup = str(lo['storekpigroup'])
-    if (!storeKpiGroup) { invalid.push({ row: rowNo, pos_code: posCode, error: 'Thiếu store_kpi_group (phân loại Store)' }); return }
+    // 107: GIÁ TRỊ tùy chọn. Cột vẫn bắt buộc có trong file (check header ở
+    // trên) để người nhập thấy nó tồn tại; ô để trống thì lưu NULL. `str()` đã
+    // trim, nên chuỗi rỗng ⇔ ô trống ⇔ toàn khoảng trắng.
+    const storeKpiGroup = str(lo['storekpigroup']) || null
 
     // ── Mig 106: 4 chỉ số Order/AOV (mirror validate của RPC — chặn sớm ở UI) ──
     let aovFields: Pick<CampaignTargetInput, 'order_target' | 'aov_target'> = {}

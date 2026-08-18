@@ -112,11 +112,7 @@ test.describe('kpi campaign import parser @desktop', () => {
     expect(r.invalid).toEqual([])
   })
 
-  test('CUSTOMER: store_kpi_group VẪN bắt buộc (nhãn import thuần); tier %/commission tiền giữ nguyên luật', () => {
-    const noGroup = parseCampaignRows([row({ kpi_target: 100, store_kpi_group: '' })], BY_CODE, CUSTOMER)
-    if ('error' in noGroup) return
-    expect(noGroup.invalid[0].error).toContain('store_kpi_group')
-
+  test('CUSTOMER: tier %/commission tiền giữ nguyên luật', () => {
     const badTier = parseCampaignRows(
       [row({ kpi_target: 100, tier_1_commission_amount: -1 })], BY_CODE, CUSTOMER)
     if ('error' in badTier) return
@@ -249,10 +245,11 @@ test.describe('kpi campaign import guide (mig 103 r1) @desktop', () => {
     expect(r.valid.length).toBe(1)
   })
 
-  test('AOV: store_kpi_group vẫn bắt buộc; pos_code lạ vẫn vào unmatched', () => {
+  test('AOV: store_kpi_group TÙY CHỌN (107); pos_code lạ vẫn vào unmatched', () => {
     const noGroup = parseCampaignRows([aovRow({ store_kpi_group: '' })], BY_CODE, AOV)
     if ('error' in noGroup) throw new Error('không được là lỗi file')
-    expect(noGroup.invalid[0].error).toContain('store_kpi_group')
+    expect(noGroup.invalid).toEqual([])
+    expect(noGroup.valid[0].store_kpi_group).toBeNull()
 
     const unknown = parseCampaignRows([aovRow({ pos_code: 'POS9999' })], BY_CODE, AOV)
     if ('error' in unknown) throw new Error('không được là lỗi file')
@@ -314,5 +311,38 @@ test.describe('kpi campaign import guide (mig 103 r1) @desktop', () => {
     if ('error' in gmv) throw new Error('file GMV hợp lệ')
     expect(gmv.valid).toHaveLength(1)
     expect(gmv.valid[0].tiers).toHaveLength(2)
+  })
+})
+
+// ── 107: store_kpi_group TÙY CHỌN ───────────────────────────────────────────
+test.describe('campaign import — store_kpi_group tùy chọn (107) @desktop', () => {
+  test('ô TRỐNG hợp lệ và cho ra null (không phải chuỗi rỗng)', () => {
+    for (const blank of ['', '   ', '	 ']) {
+      const r = parseCampaignRows([row({ store_kpi_group: blank })], BY_CODE)
+      if ('error' in r) throw new Error('không được coi là lỗi file')
+      expect(r.invalid, `blank=${JSON.stringify(blank)}`).toEqual([])
+      expect(r.valid).toHaveLength(1)
+      // null, KHÔNG phải '' — DB phân biệt hai thứ này và UI dựa vào null để
+      // quyết định ẩn cột.
+      expect(r.valid[0].store_kpi_group).toBeNull()
+    }
+  })
+
+  test('thiếu HEADER vẫn là lỗi file (cột phải tồn tại trong template)', () => {
+    expect(parseCampaignRows([{ pos_code: 'POS0001', kpi_target: 1 }], BY_CODE))
+      .toEqual({ error: 'Thiếu cột store_kpi_group (phân loại Store theo KPI)' })
+  })
+
+  test('có giá trị → giữ nguyên, trim hai đầu', () => {
+    const r = parseCampaignRows([row({ store_kpi_group: '  Nhóm A  ' })], BY_CODE)
+    if ('error' in r) throw new Error('không được lỗi')
+    expect(r.valid[0].store_kpi_group).toBe('Nhóm A')
+  })
+
+  test('cả 3 loại chiến dịch đều chấp nhận ô trống', () => {
+    const cus = parseCampaignRows([row({ kpi_target: 100, store_kpi_group: '' })], BY_CODE, CUSTOMER)
+    if ('error' in cus) throw new Error('customer: không được lỗi file')
+    expect(cus.invalid).toEqual([])
+    expect(cus.valid[0].store_kpi_group).toBeNull()
   })
 })
