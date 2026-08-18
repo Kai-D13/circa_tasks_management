@@ -2,7 +2,8 @@ import { Card, CardContent } from '@/components/ui/card'
 import type { CampaignView } from '@/components/kpi/CampaignKpiView'
 import { cn } from '@/lib/utils'
 import { campaignPerformance, performanceTone } from '@/lib/kpi/performance'
-import { metricPresentation, offlineOrderLine } from '@/lib/kpi/campaignDisplay'
+import { metricPresentation, offlineOrderLine, REVENUE_LABELS } from '@/lib/kpi/campaignDisplay'
+import { ORDER_AOV_VERDICT, orderAovDualView, qualityKpiPass } from '@/lib/kpi/orderAov'
 import { Target, TrendingUp, Percent, Wallet, Award, CalendarDays, Gauge, ClipboardCheck, Store as StoreIcon, Link2 as LinkIcon, type LucideIcon } from 'lucide-react'
 
 // Store Manager "Kết quả" management block (r3): the same 6-card summary idiom
@@ -28,7 +29,38 @@ export function CampaignResultSummary({ campaign, todayISO }: { campaign: Campai
   const deadlineLabel = daysLeft <= 0 ? 'Đã kết thúc' : `Còn ${daysLeft} ngày`
   const perf = campaignPerformance(target, campaign.actual_value, campaign.start_date, campaign.end_date, todayISO)
 
-  const cards: { label: string; value: string; icon: LucideIcon; tile: string; valueCls?: string; bar?: boolean; sub?: string | null }[] = [
+  // Commit 5 (17/08): Chất lượng bán hàng bỏ MỌI ô suy từ điểm gộp —
+  // 'KPI target' (luôn 100%), 'Hoàn thành' (chính là điểm gộp) và 'Nhịp độ'
+  // (run_rate của điểm gộp). Thay bằng hai ô Số đơn / AOV có % riêng.
+  const dual = orderAovDualView({
+    actualOrder: campaign.offline_order_count ?? null,
+    actualNet: campaign.actual_offline,
+    orderTarget: campaign.order_target, aovTarget: campaign.aov_target,
+    synced,
+  })
+  const dualPass = qualityKpiPass(campaign.actual_value) && (dual === null || dual.overallPass)
+
+  const cards: { label: string; value: string; icon: LucideIcon; tile: string; valueCls?: string; bar?: boolean; sub?: string | null }[] = dual ? [
+    { label: 'Số đơn', value: dual.order.valueText, icon: TrendingUp,
+      sub: `Đạt ${dual.order.pctText} mục tiêu`,
+      tile: dual.order.pass ? 'bg-status-success-bg text-status-success' : 'bg-primary/10 text-primary',
+      valueCls: dual.order.pass ? 'text-status-success' : undefined },
+    { label: 'AOV', value: dual.aov.valueText, icon: StoreIcon,
+      sub: `Đạt ${dual.aov.pctText} mục tiêu`,
+      tile: dual.aov.pass ? 'bg-status-success-bg text-status-success' : 'bg-primary/10 text-primary',
+      valueCls: dual.aov.pass ? 'text-status-success' : undefined },
+    { label: 'Trạng thái',
+      value: !synced ? ORDER_AOV_VERDICT.unsynced : dualPass ? ORDER_AOV_VERDICT.pass : ORDER_AOV_VERDICT.fail,
+      icon: ClipboardCheck,
+      tile: dualPass ? 'bg-status-success-bg text-status-success' : 'bg-muted text-muted-foreground',
+      valueCls: dualPass ? 'text-status-success' : undefined },
+    { label: 'Net Revenue (tham khảo)', value: synced ? money(campaign.actual_offline ?? 0) : '—', icon: Wallet,
+      tile: 'bg-muted text-muted-foreground' },
+    { label: 'Commission Store dự kiến', value: synced ? money(pool) : '—', icon: Wallet,
+      tile: synced && pool > 0 ? 'bg-status-success-bg text-status-success' : 'bg-muted text-muted-foreground',
+      valueCls: synced && pool > 0 ? 'text-status-success' : undefined },
+    { label: 'Thời hạn', value: deadlineLabel, icon: CalendarDays, tile: 'bg-muted text-muted-foreground' },
+  ] : [
     { label: 'KPI target', value: vnd(target), icon: Target, tile: 'bg-primary/10 text-primary' },
     { label: pres.actualColumnLabel, value: synced ? vnd(actual) : '—', icon: TrendingUp,
       // 105: campaign offline-only → dòng phụ số đơn · AOV ở card này (hybrid
@@ -39,11 +71,11 @@ export function CampaignResultSummary({ campaign, todayISO }: { campaign: Campai
     // P3-E: breakdown 2 nguồn — CHỈ khi campaign bật cả 2 chỉ số (1 metric giữ
     // layout cũ nguyên vẹn).
     ...(campaign.metric_offline && campaign.metric_affiliate ? [
-      { label: 'GMV Offline', value: synced ? vnd(campaign.actual_offline ?? 0) : '—', icon: StoreIcon as LucideIcon,
+      { label: REVENUE_LABELS.offline, value: synced ? vnd(campaign.actual_offline ?? 0) : '—', icon: StoreIcon as LucideIcon,
         // 105: dòng phụ số đơn · AOV cho QLCH (cùng formatter Super/SM).
         sub: synced ? offlineOrderLine(campaign.actual_offline ?? 0, campaign.offline_order_count ?? null) : null,
         tile: 'bg-primary/10 text-primary' },
-      { label: 'GMV Affiliate', value: synced ? vnd(campaign.actual_affiliate ?? 0) : '—', icon: LinkIcon as LucideIcon,
+      { label: REVENUE_LABELS.affiliate, value: synced ? vnd(campaign.actual_affiliate ?? 0) : '—', icon: LinkIcon as LucideIcon,
         tile: 'bg-muted text-muted-foreground' },
     ] : []),
     { label: 'Hoàn thành', value: synced ? `${pct.toFixed(1)}%` : '—', icon: Percent,

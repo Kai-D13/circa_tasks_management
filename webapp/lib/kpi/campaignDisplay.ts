@@ -4,7 +4,10 @@
 // r2 (audit P3): structural type CỤC BỘ — tầng lib không import type từ
 // component UI (tránh đảo chiều phụ thuộc); CampaignView khớp structurally.
 
-import { aovFromSnapshot, formatCompletionPct, formatRemainingPct, qualityKpiPass } from '@/lib/kpi/orderAov'
+import {
+  ORDER_AOV_VERDICT, aovFromSnapshot, formatCompletionPct, formatRemainingPct,
+  orderAovDualView, qualityKpiPass,
+} from '@/lib/kpi/orderAov'
 
 export interface BreakdownInput {
   metric_offline: boolean
@@ -34,13 +37,23 @@ export function breakdownModel(v: BreakdownInput): BreakdownModel {
 // cũ (regression); có affiliate → nêu rõ rule DELIVERED-only.
 // Mig 103: nhận metric_type optional — campaign Số khách có câu riêng (mỗi
 // khách tính 1 lần); thiếu metric_type (caller cũ) = gmv, hành vi y nguyên.
+// 17/08: chú thích nguồn phải nói RÕ Offline là Net Revenue. Đây là chú thích
+// DUY NHẤT — không tách thành helper riêng rồi quên gọi ở component.
 export function campaignFootnote(v: { metric_offline: boolean; metric_affiliate: boolean; metric_type?: string }): string {
   if (v.metric_type === 'affiliate_customer_count') {
     return 'Nguồn: Circa Online · đếm khách có đơn giao thành công (DELIVERED) — mỗi khách tính 1 lần trong chiến dịch'
   }
-  if (!v.metric_affiliate) return 'Nguồn: báo cáo BI · * Không bao gồm đơn online'
-  if (v.metric_offline) return 'Nguồn: báo cáo BI + Circa Online · GMV Affiliate chỉ tính đơn giao thành công'
-  return 'Nguồn: Circa Online · chỉ tính đơn giao thành công (DELIVERED)'
+  // Chất lượng bán hàng: cùng nguồn BI nhưng luật đạt KHÁC hẳn ⇒ chú thích riêng.
+  if (v.metric_type === 'offline_order_aov') {
+    return 'Nguồn: báo cáo BI · Doanh thu thuần tại cửa hàng (Net Revenue) · Đạt KPI khi CẢ số đơn và AOV cùng chạm mục tiêu'
+  }
+  if (!v.metric_affiliate) {
+    return 'Nguồn: báo cáo BI · Doanh thu thuần tại cửa hàng (Net Revenue) — không bao gồm đơn online'
+  }
+  if (v.metric_offline) {
+    return 'Nguồn: báo cáo BI + Circa Online · Tổng gồm Doanh thu thuần tại cửa hàng (Net Revenue) và Doanh thu Affiliate (đơn giao thành công)'
+  }
+  return 'Nguồn: Circa Online · Doanh thu Affiliate, chỉ tính đơn giao thành công (DELIVERED)'
 }
 
 // ── Mig 103: PRESENTATION tập trung theo metric_type ────────────────────────
@@ -50,13 +63,32 @@ export function campaignFootnote(v: { metric_offline: boolean; metric_affiliate:
 // tỷ/tr/k như CampaignDailyChart) — test khóa; customer: 'N khách'.
 export type CampaignMetricType = 'gmv' | 'affiliate_customer_count' | 'offline_order_aov'
 
+// ── 17/08: THUẬT NGỮ "DOANH THU", không còn "GMV" trên UI ───────────────────
+// "GMV" là từ nội bộ của BI; dược sĩ và quản lý cửa hàng không đọc ra nó. Toàn
+// bộ nhãn hiển thị chuyển sang "Doanh thu".
+// ⚠ CHỈ đổi NHÃN. Tên nội bộ `metric_type='gmv'`, cột `gmv`/`actual_gmv`/
+// `actual_value` và TÊN CỘT EXCEL giữ nguyên từng byte — đó là contract DB/API
+// và Power Query của Finance đang bám vào (exportRows dùng literal, không đi
+// qua chỗ này, nên đổi ở đây không chạm export).
+export const REVENUE_LABELS = {
+  // Nói rõ "thuần tại cửa hàng": số này là Net Revenue từ BI, đã trừ trả hàng.
+  // 17/08 (audit P2): KHÔNG có biến thể ngắn bỏ chữ "thuần". Bản trước tách
+  // `offlineShort` = 'Doanh thu tại cửa hàng' cho bảng/card, hoá ra đúng ba màn
+  // hay được đọc nhất lại mất mất chữ quan trọng nhất. Nhãn dài hơn thì để nó
+  // xuống dòng, đừng đánh đổi bằng nghĩa.
+  offline: 'Doanh thu thuần tại cửa hàng',
+  // KHÔNG gọi là "thuần" — nguồn Circa Online không qua cùng phép trừ đó.
+  affiliate: 'Doanh thu Affiliate',
+  total: 'Tổng doanh thu thực tế',
+} as const
+
 export interface MetricPresentation {
   kind: CampaignMetricType
-  targetLabel: string            // 'Mục tiêu GMV' | 'Mục tiêu số khách'
+  targetLabel: string            // 'Mục tiêu doanh thu' | 'Mục tiêu số khách'
   actualHeroLabel: string        // hero "Đã đạt" giữ chung
-  todayLabel: string             // 'GMV hôm nay' | 'Khách hôm nay'
+  todayLabel: string             // 'Doanh thu hôm nay' | 'Khách hôm nay'
   perDayLabel: string            // 'Trung bình/ngày cần đạt' (chung)
-  actualColumnLabel: string      // cột bảng: 'Actual GMV' | 'Số khách'
+  actualColumnLabel: string      // cột bảng: 'Doanh thu thực tế' | 'Số khách'
   chartAriaLabel: string
   value(n: number | null | undefined): string
   compact(n: number): string
@@ -66,12 +98,14 @@ export interface MetricPresentation {
 const nfVi = new Intl.NumberFormat('vi-VN')
 const GMV_PRESENTATION: MetricPresentation = {
   kind: 'gmv',
-  targetLabel: 'Mục tiêu GMV',
+  targetLabel: 'Mục tiêu doanh thu',
   actualHeroLabel: 'Đã đạt',
-  todayLabel: 'GMV hôm nay',
+  todayLabel: 'Doanh thu hôm nay',
   perDayLabel: 'Trung bình/ngày cần đạt',
-  actualColumnLabel: 'Actual GMV',
-  chartAriaLabel: 'Biểu đồ GMV theo ngày',
+  // ⚠ Đây là nhãn CỘT BẢNG, không phải key export. Cột Excel 'Actual GMV' là
+  // literal trong exportRows.ts và PHẢI giữ nguyên (Power Query của Finance).
+  actualColumnLabel: 'Doanh thu thực tế',
+  chartAriaLabel: 'Biểu đồ doanh thu theo ngày',
   value: (n) => (n === null || n === undefined ? '—' : `${nfVi.format(Math.round(n))}₫`),
   // BYTE-EQUAL compactVnd cũ của CampaignDailyChart (tỷ/tr/k, không space,
   // toFixed(1) GIỮ '.0') — test khóa từng case.
@@ -121,25 +155,40 @@ export function metricPresentation(metricType?: string | null): MetricPresentati
   return GMV_PRESENTATION
 }
 
-// ── Mig 106: dòng phụ "thực tế / mục tiêu" cho Số đơn và AOV ────────────────
-// Desktop gộp Order + AOV vào CÙNG MỘT nhóm 2 dòng (yêu cầu stakeholder: không
-// đẻ thêm cột ngang). Contract 12/08: chỉ còn MỤC TIÊU, không có sàn.
-// null = campaign loại khác / chưa cấu hình → caller hiện '—'.
-export function orderAovMetricLines(p: {
-  actualOrder: number | null | undefined
-  actualNet: number | null | undefined
-  orderTarget: number | null | undefined
-  aovTarget: number | null | undefined
-}): { order: string; aov: string } | null {
-  if (p.orderTarget == null || p.aovTarget == null) return null
-  const fmt = (n: number) => nfVi.format(Math.round(n))
-  const orderActual = p.actualOrder == null ? '—' : fmt(p.actualOrder)
-  const aovVal = aovFromSnapshot(p.actualNet, p.actualOrder)
-  const aovActual = aovVal == null ? '—' : `${fmt(aovVal)}₫`
-  return {
-    order: `${orderActual} / ${fmt(p.orderTarget)} đơn`,
-    aov: `${aovActual} / ${fmt(p.aovTarget)}₫`,
+// ── Commit 5.1 (18/08): nhãn chỉ số trong BỘ CHỌN chiến dịch ────────────────
+// Picker (Staff/QLCH có từ 2 chiến dịch trở lên) trước đây in thẳng
+// `Hoàn thành ${Math.round(run_rate)}%` cho MỌI loại — nghĩa là Chất lượng bán
+// hàng vẫn lộ điểm gộp ở đây dù đã bỏ khỏi hero/bảng/card. Hai lỗi trong một:
+//   · điểm gộp min(số đơn%, AOV%) không được xuất hiện nữa;
+//   · Math.round() biến 99,9999 thành "100%" trong khi cửa hàng CHƯA đạt —
+//     đúng ca mà formatCompletionPct sinh ra để chặn.
+// Quyết định hiển thị nằm ở đây (thuần, có test), component chỉ render chuỗi.
+export function campaignPickerMetricLabel(v: {
+  metricType?: string | null
+  runRate: number | null | undefined
+  // chỉ offline_order_aov:
+  actualValue?: number | null
+  actualOffline?: number | null
+  offlineOrderCount?: number | null
+  orderTarget?: number | null
+  aovTarget?: number | null
+}): string {
+  const pres = metricPresentation(v.metricType)
+  if (pres.kind === 'offline_order_aov') {
+    const dual = orderAovDualView({
+      actualOrder: v.offlineOrderCount,
+      actualNet: v.actualOffline,
+      orderTarget: v.orderTarget,
+      aovTarget: v.aovTarget,
+      synced: v.actualValue != null,
+    })
+    if (!dual) return 'Chưa có mục tiêu'
+    if (!dual.synced) return 'Chưa đồng bộ'
+    // HAI chỉ số, đúng như mọi surface khác của loại này.
+    return `Số đơn ${dual.order.pctText} · AOV ${dual.aov.pctText}`
   }
+  // gmv / khách: GIỮ NGUYÊN chuỗi đang chạy (không đụng hai loại kia).
+  return v.runRate == null ? 'Chưa đồng bộ' : `Hoàn thành ${Math.round(v.runRate)}%`
 }
 
 // (H1.2 smSelectorVisible đã GỠ 27/07: SM Dashboard r2 thay store-selector-
@@ -266,7 +315,15 @@ export interface CampaignOverviewInput {
   totalOfflineOrders?: number | null  // null = có store thiếu số đơn → KHÔNG hiện dòng thực tế
 }
 
-export interface CampaignOverviewLine { label: string; value: string }
+export interface CampaignOverviewLine {
+  label: string
+  value: string
+  // Commit 5: mỗi dòng có thể mang % RIÊNG (Chất lượng bán hàng: Số đơn và AOV
+  // là hai chỉ số độc lập). null ⇒ dòng không có %, component không vẽ thanh.
+  pct?: number | null            // KHÔNG cap 100 (thanh tự clamp khi vẽ)
+  pctText?: string
+  pass?: boolean
+}
 
 export interface CampaignOverviewValue {
   kind: CampaignMetricType
@@ -345,6 +402,10 @@ export interface CampaignCardValue {
   typeLabel: string
   synced: boolean
   lines: CampaignOverviewLine[]
+  // Commit 5: false ⇒ KHÔNG có % tổng cho loại này (Chất lượng bán hàng bỏ
+  // điểm gộp khỏi UI) — component vẽ thanh THEO TỪNG DÒNG và dùng `pctText`
+  // như nhãn TRẠNG THÁI ('Đạt KPI'/'Chưa đạt'), không phải một con số.
+  showAggregate: boolean
   pct: number                    // 0 khi chưa đồng bộ ⇒ KHÔNG vẽ thanh tiến độ
   pctText: string                // 'Chưa đồng bộ' khi chưa có snapshot
   // Tông trạng thái cho chip/thanh — component KHÔNG tự suy ra từ pct, vì
@@ -376,21 +437,31 @@ export function campaignCardValue(v: CampaignCardInput): CampaignCardValue {
     // hiện "Chưa đồng bộ" ngay cạnh "1.046 / 900 đơn" của kỳ trước.
     // Ép null theo `synced`: MỤC TIÊU vẫn hiện (nó là cấu hình, không phải kết
     // quả), phần thực tế thành '—'.
-    const q = orderAovMetricLines({
-      actualOrder: synced ? v.offlineOrderCount : null,
-      actualNet: synced ? v.actualOffline : null,
+    const dual = orderAovDualView({
+      actualOrder: v.offlineOrderCount,
+      actualNet: v.actualOffline,
       orderTarget: v.orderTarget,
       aovTarget: v.aovTarget,
+      synced,
     })
-    // q === null ⇒ campaign chưa cấu hình đủ 2 mục tiêu: không bịa dòng nào.
-    const lines: CampaignOverviewLine[] = q
-      ? [{ label: 'Số đơn', value: q.order }, { label: 'AOV', value: q.aov }]
-      : []
-    const pass = qualityKpiPass(v.actualValue)
+    // dual === null ⇒ campaign chưa cấu hình đủ 2 mục tiêu: không bịa dòng nào.
+    const lines: CampaignOverviewLine[] = dual ? [
+      { label: 'Số đơn', value: dual.order.valueText, pct: dual.order.pctRaw, pctText: dual.order.pctText, pass: dual.order.pass },
+      { label: 'AOV', value: dual.aov.valueText, pct: dual.aov.pctRaw, pctText: dual.aov.pctText, pass: dual.aov.pass },
+    ] : []
+    // ĐẠT = cả hai chỉ số đạt VÀ điểm gộp (số quyết định commission) cũng đạt.
+    // Với snapshot nhất quán, hai vế LUÔN trùng (bất biến có test). Chúng chỉ
+    // lệch khi snapshot bị trộn kỳ — lúc đó chọn phía DÈ DẶT: màn lương không
+    // được hứa "Đạt KPI" trong khi con số trả thưởng nói chưa.
+    const pass = dual
+      ? dual.overallPass && qualityKpiPass(v.actualValue)
+      : qualityKpiPass(v.actualValue)
     return {
       kind: pres.kind, typeLabel, synced, lines,
-      pct: prog.pct,
-      pctText: prog.text,
+      // KHÔNG có % tổng: chỗ đó giờ là VERDICT.
+      showAggregate: false,
+      pct: 0,
+      pctText: !synced ? ORDER_AOV_VERDICT.unsynced : pass ? ORDER_AOV_VERDICT.pass : ORDER_AOV_VERDICT.fail,
       tone: !synced ? 'neutral' : pass ? 'success' : 'warning',
     }
   }
@@ -408,6 +479,7 @@ export function campaignCardValue(v: CampaignCardInput): CampaignCardValue {
     typeLabel,
     synced,
     lines: [{ label: 'Đã đạt / Mục tiêu', value }],
+    showAggregate: true,
     pct: prog.pct,
     pctText: prog.text,
     tone: !synced ? 'neutral' : target > 0 && actual >= target ? 'success' : 'warning',

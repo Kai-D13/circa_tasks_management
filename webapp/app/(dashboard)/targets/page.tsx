@@ -10,6 +10,10 @@ import { EmptyState } from '@/components/ds/EmptyState'
 import { ErrorState } from '@/components/ds/ErrorState'
 import { PeriodTabs, type TargetPeriod } from '@/components/targets/PeriodTabs'
 import { CampaignCardList } from '@/components/kpi/CampaignCardList'
+import { CampaignDateRangeFilter } from '@/components/kpi/CampaignDateRangeFilter'
+import { parseCampaignRange, rangeFilterVisibleForRole } from '@/lib/kpi/campaignDateRange'
+import { createRangeReadDeps } from '@/lib/kpi/campaignRangeDeps'
+import { loadCampaignRangeActuals } from '@/lib/kpi/campaignRangeServer'
 import {
   CampaignKpiView, parseDailySeries, type CampaignView, type DailyPoint,
 } from '@/components/kpi/CampaignKpiView'
@@ -244,7 +248,7 @@ export default async function TargetsPage({
   searchParams,
 }: {
   // Mig 106: series = chuỗi chart của campaign Chất lượng bán hàng (?series=).
-  searchParams: Promise<{ period?: string; campaign?: string; store?: string; series?: string }>
+  searchParams: Promise<{ period?: string; campaign?: string; store?: string; series?: string; from?: string; to?: string }>
 }) {
   const params = await searchParams
   const period = parsePeriod(params.period)
@@ -293,7 +297,7 @@ export default async function TargetsPage({
   // ── Campaign mode (Staff + Store Manager): active campaigns REPLACE the
   //    Ngày/Tuần/Tháng tabs; no campaign → staff falls back to the period view,
   //    manager gets an empty state. (SM dùng regional dashboard riêng.) ───────
-  const campaignViews = campaignEnabled && (isStaff || isStoreMgr) && resolvedStoreId
+  let campaignViews = campaignEnabled && (isStaff || isStoreMgr) && resolvedStoreId
     ? await fetchCampaignViews(supabase, resolvedStoreId)
     : []
 
@@ -325,6 +329,78 @@ export default async function TargetsPage({
     // có lấy nhưng .map() bỏ quên nên DB có dữ liệu mà UI hiểu là thiếu (card
     // "Số đơn hôm nay" hiện '—', chart Số đơn/AOV trống trơn).
     campaignDaily = ((dailyRows ?? []) as DailyRawRow[]).map(normalizeDailyPoint)
+  }
+
+  // ── Lọc theo khoảng (17/08) — CHỈ ĐỂ XEM, chỉ Super/SM/QLCH ───────────────
+  // Staff KHÔNG được lọc: dù có tự gắn ?from=&to= vào URL thì `canRangeFilter`
+  // là false ⇒ range không active ⇒ KHÔNG chạm target/daily/health/RPC, và màn
+  // hình đi nguyên đường snapshot toàn kỳ như hiện tại.
+  const canRangeFilter = rangeFilterVisibleForRole({
+    role: profile?.role,
+    isSuperAdmin: isSuper,
+  })
+  const selectedView = campaignViews.find((v) => v.id === selectedCampaignId) ?? null
+  const campaignRange = parseCampaignRange({
+    from: canRangeFilter ? params.from : undefined,
+    to: canRangeFilter ? params.to : undefined,
+    campaignStart: selectedView?.start_date ?? '',
+    campaignEnd: selectedView?.end_date ?? '',
+    metricType: selectedView?.metric_type,
+  })
+  let campaignRangeError: string | null = null
+
+  if (campaignRange.active && selectedView && resolvedStoreId) {
+    const read = await loadCampaignRangeActuals(createRangeReadDeps(supabase), {
+      campaignId: selectedView.id,
+      range: campaignRange,
+      metricType: selectedView.metric_type,
+    })
+    if (!read.ok) {
+      // FAIL-VISIBLE: giữ số toàn kỳ nhưng nói rõ chưa lọc được.
+      campaignRangeError = read.error
+    } else {
+      const mine = read.mode === 'daily'
+        ? read.stores.find((x) => x.store_id === resolvedStoreId)
+        : read.stores.find((x) => x.store_id === resolvedStoreId)
+      if (mine) {
+        const isDaily = read.mode === 'daily'
+        const actualValue = isDaily
+          ? (mine as { actual: number }).actual
+          : (mine as { customers: number }).customers
+        // Thay TẠI CHỖ view của campaign đang chọn. Mục tiêu, bậc thưởng và
+        // commission giữ nguyên của TOÀN KỲ; run_rate/remaining để null cho
+        // component tự tính lại theo target toàn kỳ.
+        campaignViews = campaignViews.map((v) => v.id !== selectedView.id ? v : {
+          ...v,
+          actual_value: actualValue,
+          run_rate: null,
+          remaining_target: null,
+          actual_offline: isDaily ? (mine as { offline: number }).offline : v.actual_offline,
+          actual_affiliate: isDaily ? (mine as { affiliate: number }).affiliate : v.actual_affiliate,
+          offline_order_count: isDaily ? (mine as { orders: number | null }).orders : v.offline_order_count,
+        })
+      }
+      // Chart cũng phải theo khoảng — nếu không, hero hiện số khoảng còn biểu
+      // đồ vẫn vẽ trọn kỳ, hai thứ mâu thuẫn ngay trên cùng một màn.
+      if (read.mode === 'customer') {
+        // KHÔNG cắt snapshot toàn kỳ cho campaign khách: với khách cross-store,
+        // "đơn sớm nhất TRONG RANGE" có thể khác "đơn sớm nhất toàn kỳ", nên
+        // snapshot cắt ra sẽ gán khách cho ngày/store khác với hero. Dựng thẳng
+        // từ daily ĐÃ VALIDATE của chính lượt RPC này — một nguồn duy nhất.
+        const mineDaily = read.daily.filter((d) => d.store_id === resolvedStoreId)
+        campaignDaily = mineDaily.map((d) => ({
+          date: d.date,
+          gmv: 0,
+          gmv_affiliate: 0,
+          affiliate_customer_count: d.customers,
+          offline_order_count: null,
+        }))
+      } else {
+        campaignDaily = campaignDaily.filter(
+          (d) => d.date >= campaignRange.from! && d.date <= campaignRange.to!,
+        )
+      }
+    }
   }
 
   // ── P3-H: QR Affiliate của store — CHỈ landing (không hiện trong ?campaign=),
@@ -489,7 +565,55 @@ export default async function TargetsPage({
       }
       // r6: model LUÔN trên toàn bộ store thuộc campaign ∩ phạm vi SM — bảng
       // trong dashboard vẫn hiển thị từng store.
-      const model = buildCampaignResultModel(entry.campaign, entry.targets, entry.actuals, vnTodayISO)
+      // ── Lọc theo khoảng cho SM (4b.1) ──────────────────────────────────
+      // Nhánh SM dựng model từ `entry` chứ không dùng `campaignViews` (chỉ nạp
+      // cho Staff/QLCH), nên wiring ở trên KHÔNG chạm tới đây — SM bị bỏ sót
+      // trọn vẹn ở 4b. Phạm vi store lấy từ chính `entry.targets`, tức đã qua
+      // RLS của SM, không nhận từ URL.
+      const smCanFilter = rangeFilterVisibleForRole({ role: profile?.role, isSuperAdmin: isSuper })
+      const smRange = parseCampaignRange({
+        from: smCanFilter ? params.from : undefined,
+        to: smCanFilter ? params.to : undefined,
+        campaignStart: entry.campaign.start_date,
+        campaignEnd: entry.campaign.end_date,
+        metricType: (entry.campaign as { metric_type?: string }).metric_type,
+      })
+      let smActualsForView = entry.actuals
+      let smRangeError: string | null = null
+      if (smRange.active) {
+        const read = await loadCampaignRangeActuals(createRangeReadDeps(supabase), {
+          campaignId: entry.campaign.id,
+          range: smRange,
+          metricType: (entry.campaign as { metric_type?: string }).metric_type,
+        })
+        if (!read.ok) {
+          smRangeError = read.error
+        } else {
+          const snapById = new Map(entry.actuals.map((a) => [a.store_id, a]))
+          const isDaily = read.mode === 'daily'
+          smActualsForView = read.stores.map((st) => {
+            const snap = snapById.get(st.store_id)
+            const actualValue = isDaily
+              ? (st as { actual: number }).actual
+              : (st as { customers: number }).customers
+            return {
+              ...(snap ?? ({} as typeof entry.actuals[number])),
+              store_id: st.store_id,
+              actual_value: actualValue,
+              // Bậc thưởng + commission LUÔN toàn kỳ; run_rate/remaining null
+              // để model tự tính lại theo target toàn kỳ.
+              run_rate: null,
+              remaining_target: null,
+              achieved_tier_order: snap?.achieved_tier_order ?? null,
+              store_commission_pool: snap?.store_commission_pool ?? null,
+              actual_offline: isDaily ? (st as { offline: number }).offline : (snap?.actual_offline ?? null),
+              actual_affiliate: isDaily ? (st as { affiliate: number }).affiliate : (snap?.actual_affiliate ?? null),
+              offline_order_count: isDaily ? (st as { orders: number | null }).orders : (snap?.offline_order_count ?? null),
+            }
+          })
+        }
+      }
+      const model = buildCampaignResultModel(entry.campaign, entry.targets, smActualsForView, vnTodayISO)
       return (
         // r1.6 (P1 UI 29/07): SM detail full-width như Super Result view —
         // bảng N cột Bậc động. Batch UI 15/08: landing/list SM cũng đã bỏ cap
@@ -509,6 +633,16 @@ export default async function TargetsPage({
           </div>
           {/* r6: KHÔNG còn store chips/filter — dashboard tổng hợp toàn phạm vi,
               bảng dưới hiển thị từng store. */}
+          {smCanFilter && (
+            <CampaignDateRangeFilter
+              action="/targets"
+              campaignStart={entry.campaign.start_date}
+              campaignEnd={entry.campaign.end_date}
+              range={smRange}
+              keepParams={{ campaign: params.campaign }}
+              note={smRangeError}
+            />
+          )}
           <CampaignResultDashboard model={model} emptyHint="Chưa có dữ liệu kết quả trong phạm vi của bạn." />
           <p className="text-[11px] text-muted-foreground">Chế độ xem Quản lý vùng — chỉ đọc · số liệu giới hạn trong các cửa hàng bạn quản lý.</p>
         </div>
@@ -667,7 +801,17 @@ export default async function TargetsPage({
                 />
                 {/* Tier progress (28/07): QLCH desktop thấy "Còn thiếu" từng
                     mốc thưởng; Staff dùng chung component nhưng prop tắt. */}
-                <CampaignKpiView
+                {canRangeFilter && selectedView && (
+                  <CampaignDateRangeFilter
+                    action="/targets"
+                    campaignStart={selectedView.start_date}
+                    campaignEnd={selectedView.end_date}
+                    range={campaignRange}
+                    keepParams={{ campaign: params.campaign, store: params.store, series: params.series }}
+                    note={campaignRangeError}
+                  />
+                )}
+              <CampaignKpiView
                   items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily}
                   dailyError={campaignDailyError} roleLabel="Quản lý" todayISO={vnTodayISO}
                   storeName={storeName} showTierRemaining

@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { test as setup, expect, type Page } from '@playwright/test'
-import { MANAGER_STATE, STAFF_STATE, SUPER_STATE } from './authState'
+import { MANAGER_STATE, SM_STATE, STAFF_STATE, SUPER_STATE } from './authState'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // AUTH SETUP — đăng nhập MỘT lần, dùng lại cho mọi spec cần tài khoản.
@@ -27,6 +27,7 @@ import { MANAGER_STATE, STAFF_STATE, SUPER_STATE } from './authState'
 const STAFF = { email: process.env.E2E_STAFF_EMAIL, password: process.env.E2E_STAFF_PASSWORD }
 const QLCH = { email: process.env.E2E_QLCH_EMAIL, password: process.env.E2E_QLCH_PASSWORD }
 const SUPER = { email: process.env.E2E_SUPER_EMAIL, password: process.env.E2E_SUPER_PASSWORD }
+const SM = { email: process.env.E2E_SM_EMAIL, password: process.env.E2E_SM_PASSWORD }
 
 // Còn ít nhất 5 phút thì coi là dùng được — đủ để chạy hết một suite mà không
 // rơi vào ca "hết hạn giữa chừng".
@@ -92,4 +93,11 @@ setup('đăng nhập Super Admin một lần', async ({ page, baseURL }) => {
   setup.skip(stateIsFresh(SUPER_STATE), 'storageState super còn hiệu lực — không login lại')
   assertLocalhost(baseURL)
   await login(page, SUPER.email!, SUPER.password!, SUPER_STATE)
+})
+
+setup('đăng nhập SM một lần', async ({ page, baseURL }) => {
+  setup.skip(!SM.email || !SM.password, 'E2E_SM_EMAIL / E2E_SM_PASSWORD chưa set')
+  setup.skip(stateIsFresh(SM_STATE), 'storageState SM còn hiệu lực — không login lại')
+  assertLocalhost(baseURL)
+  await login(page, SM.email!, SM.password!, SM_STATE)
 })

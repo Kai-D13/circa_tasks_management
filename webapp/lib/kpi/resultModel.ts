@@ -8,27 +8,30 @@
 // store được phân công) → totals tự là tổng đúng phạm vi SM.
 
 import { campaignPerformance, requiredPerDay } from '@/lib/kpi/performance'
-import { orderAovMetricLines } from '@/lib/kpi/campaignDisplay'
 import {
-  ORDER_AOV_STATUS_LABEL, aovFromSnapshot, orderAovStatus,
-  qualityKpiPass as isQualityKpiPass, type OrderAovStatus,
+  ORDER_AOV_STATUS_LABEL, aovFromSnapshot, orderAovDualView, orderAovStatus,
+  qualityKpiPass as isQualityKpiPass, type OrderAovDualView, type OrderAovStatus,
 } from '@/lib/kpi/orderAov'
 
 // Mig 106: gom phần Chất lượng bán hàng của 1 dòng store. Campaign loại khác →
 // mọi field null/false (UI không đổi 1 bit).
 function buildQualityFields(t: ResultTargetRow, a: ResultActualRow | null): {
-  orderAovLines: { order: string; aov: string } | null
+  orderAovView: OrderAovDualView | null
   qualityKpiPass: boolean
   qualityStatus: OrderAovStatus | null
   qualityStatusLabel: string | null
 } {
-  const lines = orderAovMetricLines({
+  // Commit 5: HAI chỉ số độc lập, mỗi cái % riêng — nguồn DUY NHẤT cho bảng và
+  // card sau khi bỏ điểm gộp khỏi UI. `synced` bám actual_value (điểm do RPC
+  // ghi) chứ không bám số đơn: snapshot partial còn số đơn của kỳ trước.
+  const view = orderAovDualView({
     actualOrder: a?.offline_order_count ?? null,
     actualNet: a?.actual_offline ?? null,
     orderTarget: t.order_target, aovTarget: t.aov_target,
+    synced: a?.actual_value != null,
   })
-  if (!lines) {
-    return { orderAovLines: null, qualityKpiPass: false, qualityStatus: null, qualityStatusLabel: null }
+  if (!view) {
+    return { orderAovView: null, qualityKpiPass: false, qualityStatus: null, qualityStatusLabel: null }
   }
   const orders = a?.offline_order_count ?? null
   const aov = aovFromSnapshot(a?.actual_offline, orders)
@@ -39,7 +42,7 @@ function buildQualityFields(t: ResultTargetRow, a: ResultActualRow | null): {
     aovPass: aov !== null && aov >= Number(t.aov_target),
   })
   return {
-    orderAovLines: lines,
+    orderAovView: view,
     // completion >= 100 ⟺ đạt CẢ HAI mục tiêu (min của 2 tỉ lệ) — RPC giữ
     // invariant này nên đọc từ actual_value là đủ và không thể lệch.
     qualityKpiPass: isQualityKpiPass(a?.actual_value),
@@ -154,7 +157,7 @@ export interface StoreResultRow {
   offlineAov: number | null
   // ── Mig 106 (chỉ campaign Chất lượng bán hàng; null với 2 loại cũ) ──
   // 2 dòng gộp CÙNG một nhóm cột (không đẻ cột ngang mới).
-  orderAovLines: { order: string; aov: string } | null
+  orderAovView: OrderAovDualView | null   // commit 5: Số đơn và AOV tách rời
   qualityKpiPass: boolean          // completion >= 100 (KHÔNG suy từ tier)
   qualityStatus: OrderAovStatus | null
   qualityStatusLabel: string | null

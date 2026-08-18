@@ -7,6 +7,7 @@ import { CampaignImport } from '@/components/kpi/CampaignImport'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
+import { REVENUE_LABELS } from '@/lib/kpi/campaignDisplay'
 
 // Create wizard: Step 1 campaign info → creates a DRAFT campaign → Step 2 import
 // targets (reusable CampaignImport) → redirect to detail. Store scope only (Staff
@@ -123,7 +124,7 @@ export function CampaignWizard({ affiliateEnabled = false, customerEnabled = fal
                 )}
                 {isOrderAov && (
                   <p className="text-xs text-muted-foreground">
-                    Đánh giá đồng thời số đơn (90%) và giá trị đơn trung bình (10%), mỗi chỉ số có SÀN bắt buộc — file target gồm 4 chỉ số, hệ thống chuẩn hóa mục tiêu = 100%.
+                    Đánh giá đồng thời SỐ ĐƠN và AOV, mỗi chỉ số có mục tiêu riêng. Đạt KPI khi CẢ HAI cùng chạm mục tiêu — không có tỷ trọng, không có sàn.
                   </p>
                 )}
               </div>
@@ -139,7 +140,7 @@ export function CampaignWizard({ affiliateEnabled = false, customerEnabled = fal
                     onChange={(e) => setMetricOffline(e.target.checked)}
                     className="h-4 w-4 accent-primary"
                   />
-                  <span className="font-medium">GMV Offline</span>
+                  <span className="font-medium">{REVENUE_LABELS.offline}</span>
                   <span className="text-xs text-muted-foreground">— doanh số bán tại cửa hàng (BI)</span>
                 </label>
                 {affiliateEnabled && (
@@ -150,7 +151,7 @@ export function CampaignWizard({ affiliateEnabled = false, customerEnabled = fal
                       onChange={(e) => setMetricAffiliate(e.target.checked)}
                       className="h-4 w-4 accent-primary"
                     />
-                    <span className="font-medium">GMV Affiliate</span>
+                    <span className="font-medium">{REVENUE_LABELS.affiliate}</span>
                     <span className="text-xs text-muted-foreground">— doanh số Circa Online ghi nhận theo mã đối tác của cửa hàng</span>
                   </label>
                 )}

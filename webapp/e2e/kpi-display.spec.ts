@@ -1,7 +1,8 @@
 import { test, expect } from '@playwright/test'
 import {
-  breakdownModel, campaignCardProgress, campaignCardValue, campaignFootnote, campaignOverviewValue,
-  heroRemainingText, metricEditorState, metricPresentation, orderAxisTicks, perDayVisible, syncedSubjectLabel,
+  breakdownModel, campaignCardProgress, campaignCardValue, campaignFootnote,
+  campaignOverviewValue, campaignPickerMetricLabel, heroRemainingText, metricEditorState,
+  metricPresentation, orderAxisTicks, perDayVisible, REVENUE_LABELS, syncedSubjectLabel,
 } from '../lib/kpi/campaignDisplay'
 import { STATUS_META, TEST_BADGE_CLS } from '../lib/kpi/status'
 import { affiliateDataStatus, buildCampaignExportRows, buildCustomerCampaignExportRows, buildOrderAovCampaignExportRows, type ExportActual } from '../lib/kpi/exportRows'
@@ -18,13 +19,13 @@ test.describe('kpi display contract @desktop', () => {
   test('OFFLINE-ONLY: KHÔNG breakdown; footnote giữ nguyên câu production cũ', () => {
     expect(breakdownModel(VIEW()).show).toBe(false)
     expect(campaignFootnote({ metric_offline: true, metric_affiliate: false }))
-      .toBe('Nguồn: báo cáo BI · * Không bao gồm đơn online')
+      .toBe('Nguồn: báo cáo BI · Doanh thu thuần tại cửa hàng (Net Revenue) — không bao gồm đơn online')
   })
 
   test('AFFILIATE-ONLY: KHÔNG breakdown 2 nguồn; footnote DELIVERED-only', () => {
     expect(breakdownModel(VIEW({ metric_offline: false, metric_affiliate: true })).show).toBe(false)
     expect(campaignFootnote({ metric_offline: false, metric_affiliate: true }))
-      .toContain('Circa Online · chỉ tính đơn giao thành công')
+      .toContain('Doanh thu Affiliate, chỉ tính đơn giao thành công')
   })
 
   test('BOTH: breakdown hiện, offline có %; affiliate KHÔNG có % (stakeholder 24/07); target=0 → null', () => {
@@ -124,7 +125,10 @@ test.describe('kpi display customer metric (mig 103) @desktop', () => {
     expect(p.value(null)).toBe('—')
     expect(p.value(undefined)).toBe('—')
     expect(p.zero).toBe('0₫')
-    expect(p.actualColumnLabel).toBe('Actual GMV')
+    // 17/08 — ĐỔI CONTRACT CÓ CHỦ Ý: nhãn CỘT BẢNG đổi 'Actual GMV' →
+    // 'Doanh thu thực tế'. Cột EXCEL vẫn là 'Actual GMV' (literal trong
+    // exportRows, Power Query của Finance bám vào) — xem test EXPORT REGRESSION.
+    expect(p.actualColumnLabel).toBe('Doanh thu thực tế')
   })
 
   test('metricPresentation(customer): đơn vị khách; default gmv cho giá trị lạ/thiếu (an toàn hiển thị)', () => {
@@ -144,7 +148,7 @@ test.describe('kpi display customer metric (mig 103) @desktop', () => {
     expect(campaignFootnote({ metric_offline: false, metric_affiliate: true, metric_type: 'affiliate_customer_count' }))
       .toContain('mỗi khách tính 1 lần')
     expect(campaignFootnote({ metric_offline: true, metric_affiliate: false }))
-      .toBe('Nguồn: báo cáo BI · * Không bao gồm đơn online')
+      .toBe('Nguồn: báo cáo BI · Doanh thu thuần tại cửa hàng (Net Revenue) — không bao gồm đơn online')
   })
 
   test('metricEditorState customer: khóa hẳn editor bất kể status/flag', () => {
@@ -448,20 +452,46 @@ test.describe('kpi card value — 1 cửa hàng (batch /targets) @desktop', () =
     expect(v.pctText).toBe('1%')
   })
 
-  test('CHẤT LƯỢNG BÁN HÀNG: HAI dòng Số đơn + AOV, không gộp', () => {
+  // ── Commit 5 (17/08): card KHÔNG còn % tổng cho Chất lượng bán hàng ───────
+  test('CHẤT LƯỢNG BÁN HÀNG: HAI dòng, MỖI dòng % riêng, KHÔNG có % tổng', () => {
     const v = campaignCardValue(QUA)
     expect(v.lines.map((l) => l.label)).toEqual(['Số đơn', 'AOV'])
     expect(v.lines[0].value).toBe('1.046 / 900 đơn')
     expect(v.lines[1].value).toBe('194.025₫ / 190.540₫')
-    expect(v.pctText).toBe('116,2%')
+    // % RIÊNG từng chỉ số — đây là thứ cửa hàng đọc được, khác hẳn min() gộp.
+    expect(v.lines[0].pctText).toBe('116,2%')   // 1.046/900
+    expect(v.lines[1].pctText).toBe('101,8%')   // 194.025/190.540
+    expect(v.lines[0].pass).toBe(true)
+    expect(v.lines[1].pass).toBe(true)
+    // Điểm gộp BIẾN MẤT: chỗ % tổng giờ là verdict.
+    expect(v.showAggregate).toBe(false)
+    expect(v.pct).toBe(0)
+    expect(v.pctText).toBe('Đạt KPI')
     expect(v.tone).toBe('success')
   })
 
-  test('CHẤT LƯỢNG: 99,9999% là CHƯA đạt — không làm tròn lên 100%, tone warning', () => {
-    const v = campaignCardValue({ ...QUA, actualValue: 99.9999 })
-    expect(v.pctText).toBe('<100%')
+  test('CHẤT LƯỢNG: % của từng chỉ số KHÔNG cap 100', () => {
+    const v = campaignCardValue({ ...QUA, offlineOrderCount: 1800, actualOffline: 1800 * 400_000 })
+    expect(v.lines[0].pct!).toBeGreaterThan(100)
+    expect(v.lines[0].pctText).toBe('200%')     // 1.800/900
+    expect(v.lines[1].pctText).toBe('209,9%')   // 400.000/190.540
+  })
+
+  test('CHẤT LƯỢNG: chỉ MỘT chỉ số đạt ⇒ CHƯA đạt (không bù trừ)', () => {
+    // Số đơn vượt xa nhưng AOV hụt → verdict phải là "Chưa đạt".
+    const v = campaignCardValue({ ...QUA, offlineOrderCount: 1800, actualOffline: 1800 * 100_000, actualValue: 52.5 })
+    expect(v.lines[0].pass).toBe(true)
+    expect(v.lines[1].pass).toBe(false)
+    expect(v.pctText).toBe('Chưa đạt')
     expect(v.tone).toBe('warning')
-    // đúng 100 mới là đạt
+  })
+
+  test('CHẤT LƯỢNG: điểm gộp nói CHƯA đạt thì card KHÔNG được ghi "Đạt KPI"', () => {
+    // Snapshot trộn kỳ: số đơn/AOV thô đủ đạt nhưng actual_value (số TRẢ THƯỞNG)
+    // là 99,9999. Chọn phía dè dặt — không hứa đạt khi tiền nói chưa.
+    const v = campaignCardValue({ ...QUA, actualValue: 99.9999 })
+    expect(v.pctText).toBe('Chưa đạt')
+    expect(v.tone).toBe('warning')
     expect(campaignCardValue({ ...QUA, actualValue: 100 }).tone).toBe('success')
   })
 
@@ -486,14 +516,20 @@ test.describe('kpi card value — 1 cửa hàng (batch /targets) @desktop', () =
   })
 
   test('CÙNG LUẬT làm tròn với campaignCardProgress (không hai nguồn sự thật)', () => {
-    for (const base of [GMV, CUS, QUA]) {
+    // QUA không còn % tổng nên không tham gia — kiểm riêng ngay dưới.
+    for (const base of [GMV, CUS]) {
       const prog = campaignCardProgress({
         kpi_target: base.kpiTarget, actual_value: base.actualValue, metric_type: base.metricType,
       })
       const card = campaignCardValue(base)
       expect(card.pct, base.metricType).toBe(prog.pct)
       expect(card.pctText, base.metricType).toBe(prog.text)
+      expect(card.showAggregate, base.metricType).toBe(true)
     }
+    // Chất lượng bán hàng: KHÔNG được lộ % tổng ra card dưới bất kỳ dạng nào.
+    const qua = campaignCardValue(QUA)
+    expect(qua.showAggregate).toBe(false)
+    expect(qua.pctText).not.toMatch(/%/)
   })
 })
 
@@ -636,5 +672,125 @@ test.describe('kpi campaign list row (Step 5.1) @desktop', () => {
     // nhãn giữ nguyên — đây là commit đổi màu, không đổi chữ
     expect(STATUS_META.active.label).toBe('Đang chạy')
     expect(STATUS_META.draft.label).toBe('Nháp')
+  })
+})
+
+// ── 17/08: thuật ngữ "Doanh thu" thay "GMV" trên UI ─────────────────────────
+// "GMV" là từ nội bộ của BI, người dùng cửa hàng không đọc ra. Suite này khoá
+// hai chiều: nhãn UI KHÔNG được chứa "GMV", và tên cột Excel PHẢI vẫn chứa.
+test.describe('kpi revenue terminology (17/08) @desktop', () => {
+  test('nhãn UI của campaign doanh thu KHÔNG còn chữ "GMV"', () => {
+    const p = metricPresentation('gmv')
+    const uiLabels = [
+      p.targetLabel, p.todayLabel, p.actualColumnLabel, p.chartAriaLabel, p.perDayLabel,
+      REVENUE_LABELS.offline, REVENUE_LABELS.affiliate, REVENUE_LABELS.total,
+      // chú thích nguồn là hàm PRODUCTION component đang gọi, không phải helper rời
+      campaignFootnote({ metric_offline: true, metric_affiliate: false }),
+      campaignFootnote({ metric_offline: true, metric_affiliate: true }),
+      campaignFootnote({ metric_offline: false, metric_affiliate: true }),
+    ]
+    for (const label of uiLabels) {
+      expect(label, label).not.toContain('GMV')
+      expect(label, label).not.toMatch(/\bgmv\b/i)
+    }
+  })
+
+  test('nhãn cụ thể đúng contract stakeholder', () => {
+    const p = metricPresentation('gmv')
+    expect(p.targetLabel).toBe('Mục tiêu doanh thu')
+    expect(p.todayLabel).toBe('Doanh thu hôm nay')
+    expect(p.actualColumnLabel).toBe('Doanh thu thực tế')
+    expect(p.chartAriaLabel).toBe('Biểu đồ doanh thu theo ngày')
+    // Offline nói RÕ "thuần tại cửa hàng"; Affiliate KHÔNG được gọi là thuần.
+    expect(REVENUE_LABELS.offline).toBe('Doanh thu thuần tại cửa hàng')
+    expect(REVENUE_LABELS.affiliate).toBe('Doanh thu Affiliate')
+    expect(REVENUE_LABELS.affiliate).not.toContain('thuần')
+    expect(REVENUE_LABELS.total).toBe('Tổng doanh thu thực tế')
+  })
+
+  // 17/08 (audit P1#2): test HÀM PRODUCTION mà component thật sự gọi
+  // (CampaignKpiView dùng campaignFootnote), không test một helper rời chưa
+  // được nối vào đâu — helper đó xanh mà người dùng vẫn không thấy chú thích.
+  test('chú thích nguồn: Offline nói RÕ Net Revenue ở mọi cấu hình', () => {
+    const offlineOnly = campaignFootnote({ metric_offline: true, metric_affiliate: false })
+    expect(offlineOnly).toContain('Net Revenue')
+    expect(offlineOnly).toContain('thuần tại cửa hàng')
+
+    const hybrid = campaignFootnote({ metric_offline: true, metric_affiliate: true })
+    expect(hybrid).toContain('Net Revenue')
+    expect(hybrid).toContain('Doanh thu Affiliate')
+    expect(hybrid).toContain('giao thành công')
+
+    const affOnly = campaignFootnote({ metric_offline: false, metric_affiliate: true })
+    expect(affOnly).toContain('Doanh thu Affiliate')
+    expect(affOnly).toContain('DELIVERED')
+
+    // Chất lượng bán hàng: chú thích RIÊNG, nêu luật đạt cả hai
+    const quality = campaignFootnote({ metric_offline: true, metric_affiliate: false, metric_type: 'offline_order_aov' })
+    expect(quality).toContain('Net Revenue')
+    expect(quality).toContain('CẢ số đơn và AOV')
+    // và KHÔNG còn dấu vết contract cũ 90/10 hay sàn
+    expect(quality).not.toContain('90')
+    expect(quality).not.toContain('sàn')
+  })
+
+  test('CANARY: đổi nhãn KHÔNG được chạm tên cột Excel', () => {
+    // Cột export là literal trong exportRows.ts, không đi qua presentation.
+    // Nếu ai đó "dọn nốt" GMV sang cả export thì Power Query của Finance gãy.
+    const rows = buildCampaignExportRows(
+      { name: 'C', start_date: '2026-08-01', end_date: '2026-08-31', metric_offline: true, metric_affiliate: true },
+      [{ store_id: 's-1', pos_code: 'POS0001', kpi_target: 1000, store_kpi_group: 'G', stores: { name: 'S' } }],
+      [{
+        store_id: 's-1', actual_value: 500, run_rate: 50, remaining_target: 500,
+        achieved_tier_order: null, store_commission_pool: null, synced_at: '2026-08-10T10:00:00Z',
+        actual_offline: 300, actual_affiliate: 200,
+        offline_synced_at: null, affiliate_synced_at: null,
+      }], '2026-08-10', (iso) => iso,
+    )
+    const cols = Object.keys(rows[0])
+    expect(cols).toContain('Actual GMV')
+    expect(cols).toContain('GMV Offline')
+    expect(cols).toContain('GMV Affiliate')
+  })
+})
+
+// ── Commit 5.1: nhãn trong BỘ CHỌN chiến dịch (Staff/QLCH ≥2 chiến dịch) ────
+test.describe('campaign picker metric label @desktop', () => {
+  const OA = {
+    metricType: 'offline_order_aov', runRate: 116.1975, actualValue: 116.1975,
+    actualOffline: 1046 * 194_025, offlineOrderCount: 1046,
+    orderTarget: 900, aovTarget: 190_540,
+  }
+
+  test('GMV/khách GIỮ NGUYÊN chuỗi đang chạy (zero-touch)', () => {
+    expect(campaignPickerMetricLabel({ metricType: 'gmv', runRate: 8.4 })).toBe('Hoàn thành 8%')
+    expect(campaignPickerMetricLabel({ metricType: 'affiliate_customer_count', runRate: 51 })).toBe('Hoàn thành 51%')
+    expect(campaignPickerMetricLabel({ metricType: 'gmv', runRate: null })).toBe('Chưa đồng bộ')
+    // loại lạ đi theo nhánh gmv
+    expect(campaignPickerMetricLabel({ metricType: 'la_hoac', runRate: 12 })).toBe('Hoàn thành 12%')
+  })
+
+  test('Chất lượng bán hàng: HAI chỉ số, KHÔNG có điểm gộp', () => {
+    const label = campaignPickerMetricLabel(OA)
+    expect(label).toBe('Số đơn 116,2% · AOV 101,8%')
+    expect(label, 'điểm gộp không được xuất hiện ở picker').not.toContain('Hoàn thành')
+  })
+
+  test('picker KHÔNG được làm tròn 99,9999 thành 100% (ca mở khoá commission sai)', () => {
+    // Bản cũ in Math.round(run_rate) ⇒ "Hoàn thành 100%" cho store CHƯA đạt.
+    const label = campaignPickerMetricLabel({
+      ...OA, runRate: 99.9999, actualValue: 99.9999,
+      actualOffline: 900 * 190_540 - 1, offlineOrderCount: 900,
+    })
+    expect(label).toContain('<100%')
+    // KHÔNG dùng word-boundary: ký tự escape đó đã hai lần bị tầng script nuốt thành
+    // BACKSPACE 0x08 khiến canary xanh giả. So chuỗi CHÍNH XÁC — mạnh hơn
+    // regex và không có gì để escape sai.
+    expect(label).toBe('Số đơn 100% · AOV <100%')
+  })
+
+  test('chưa đồng bộ / chưa có mục tiêu → nói đúng tình trạng, không bịa số', () => {
+    expect(campaignPickerMetricLabel({ ...OA, actualValue: null })).toBe('Chưa đồng bộ')
+    expect(campaignPickerMetricLabel({ ...OA, orderTarget: null })).toBe('Chưa có mục tiêu')
   })
 })

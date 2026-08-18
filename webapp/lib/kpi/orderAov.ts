@@ -211,6 +211,94 @@ export function formatRemainingPct(remainingPct: number | null | undefined): str
   return `${new Intl.NumberFormat('vi-VN').format(Math.round(n * 10) / 10)}%`
 }
 
+// ── Commit 5 (17/08): HAI CHỈ SỐ ĐỘC LẬP cho UI ─────────────────────────────
+// Stakeholder: bỏ "điểm hoàn thành" gộp khỏi màn hình. Cửa hàng không giải
+// thích được min(order_ratio, aov_ratio) — họ hỏi "số đơn của tôi bao nhiêu
+// phần trăm" và "AOV của tôi bao nhiêu phần trăm". Mỗi chỉ số có % RIÊNG,
+// KHÔNG cap 100, và chỉ ĐẠT khi CẢ HAI cùng đạt.
+//
+// ⚠ actual_value (= completion) VẪN chạy nguyên vẹn trong DB/engine/export để
+// xét thưởng và audit — commit này chỉ ẨN nó khỏi UI, không đổi công thức.
+//
+// NHẤT QUÁN VỚI TIỀN: pass của từng chỉ số là so sánh THÔ `actual >= target`,
+// đúng nguyên văn orderPass/aovPass của computeOrderAovResult. KHÔNG so trên
+// tỉ lệ đã làm tròn: engine CỐ Ý ép ca hụt cực nhỏ (AOV thiếu 0,001đ ⇒
+// 99,999999%) xuống 99.9999 để không mở khoá commission, nên so trên số đã
+// round4 sẽ cho "đạt" trong khi tiền nói "chưa" — đúng loại mâu thuẫn màn
+// lương không được phép có. Test khóa: overallPass ⟺ qualityKpiPass(completion).
+export interface OrderAovMetricView {
+  actual: number | null          // null = chưa đồng bộ (hoặc 0 đơn ⇒ AOV null)
+  target: number
+  pctRaw: number | null          // KHÔNG cap; null khi chưa có actual
+  pctText: string                // '—' khi null; chưa đạt không bao giờ ra '100%'
+  valueText: string              // 'thực tế / mục tiêu' kèm đơn vị
+  pass: boolean
+}
+
+export interface OrderAovDualView {
+  order: OrderAovMetricView
+  aov: OrderAovMetricView
+  overallPass: boolean
+  synced: boolean
+}
+
+const nfViOA = new Intl.NumberFormat('vi-VN')
+
+function metricView(
+  actual: number | null, target: number, unit: 'order' | 'money',
+): OrderAovMetricView {
+  const fmt = (n: number) => (unit === 'money' ? `${nfViOA.format(Math.round(n))}₫` : nfViOA.format(Math.round(n)))
+  const targetText = unit === 'money' ? fmt(target) : `${fmt(target)} đơn`
+  if (actual === null) {
+    return { actual: null, target, pctRaw: null, pctText: '—', valueText: `— / ${targetText}`, pass: false }
+  }
+  const pctRaw = target > 0 ? (actual / target) * 100 : 0
+  return {
+    actual, target, pctRaw,
+    pctText: formatCompletionPct(pctRaw),
+    valueText: `${fmt(actual)} / ${targetText}`,
+    // So sánh THÔ — mirror orderPass/aovPass của engine (xem lập luận ở trên).
+    pass: actual >= target,
+  }
+}
+
+// Trả null ⇒ campaign chưa cấu hình đủ hai mục tiêu: KHÔNG bịa dòng nào.
+// `synced` do caller quyết (actual_value != null) — snapshot partial có thể còn
+// số đơn cũ trong khi điểm đã null; format thẳng sẽ hiện số của kỳ trước.
+export function orderAovDualView(p: {
+  actualOrder: number | null | undefined
+  actualNet: number | null | undefined
+  orderTarget: number | null | undefined
+  aovTarget: number | null | undefined
+  synced: boolean
+}): OrderAovDualView | null {
+  if (p.orderTarget == null || p.aovTarget == null) return null
+  const orders = p.synced && p.actualOrder != null ? Number(p.actualOrder) : null
+  const aov = p.synced ? aovFromSnapshot(p.actualNet, p.actualOrder) : null
+  const order = metricView(orders, Number(p.orderTarget), 'order')
+  const aovView = metricView(aov, Number(p.aovTarget), 'money')
+  return {
+    order,
+    aov: aovView,
+    // Đạt CHỈ khi cả hai đạt — đúng contract 12/08 và đúng điều kiện commission.
+    overallPass: order.pass && aovView.pass,
+    synced: p.synced,
+  }
+}
+
+export const ORDER_AOV_VERDICT = {
+  pass: 'Đạt KPI',
+  fail: 'Chưa đạt',
+  unsynced: 'Chưa đồng bộ',
+} as const
+
+// Nhãn trạng thái gọn cho card/bảng. Lý do CHƯA đạt nằm ở ORDER_AOV_STATUS_LABEL
+// (orderAovStatus) — ở đây chỉ là verdict một từ.
+export function orderAovVerdict(v: OrderAovDualView | null): string {
+  if (!v || !v.synced) return ORDER_AOV_VERDICT.unsynced
+  return v.overallPass ? ORDER_AOV_VERDICT.pass : ORDER_AOV_VERDICT.fail
+}
+
 // ── Normalizer daily row (r1.2 audit P0) ────────────────────────────────────
 // Supabase trả numeric dạng string; `Number(x) || 0` biến null thành 0 còn
 // `?? null` sau Number() lại biến 0 thành null. Cả hai đều SAI trên màn tiền:

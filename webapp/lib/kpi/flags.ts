@@ -32,7 +32,9 @@ export function isKpiAffiliateCustomerEnabled(): boolean {
   return process.env.KPI_AFFILIATE_CUSTOMER_ENABLED === 'true'
 }
 
-// Mig 106 — campaign "Chất lượng bán hàng" (Số đơn 90% + AOV 10%). GATE DUY
+// Mig 106 — campaign "Chất lượng bán hàng": đánh giá đồng thời Số đơn Offline
+// và AOV, mỗi chỉ số một mục tiêu RIÊNG; ĐẠT khi CẢ HAI cùng chạm mục tiêu
+// (contract 12/08 — KHÔNG còn tỷ trọng 90/10 và KHÔNG còn sàn). GATE DUY
 // NHẤT của loại này, ĐỘC LẬP 2 flag affiliate ở trên. OFF = ẩn khỏi wizard +
 // engine preserve + activation từ chối ⇒ deploy schema/code TRƯỚC, bật SAU khi
 // chạy migration 106 + đối soát 3 sample Finance trên prod.

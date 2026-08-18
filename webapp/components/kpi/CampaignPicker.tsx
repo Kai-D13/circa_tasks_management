@@ -18,7 +18,11 @@ export interface CampaignPickerItem {
   name: string
   rangeLabel: string        // "01/07 – 31/07"
   statusLabel: string       // "Còn 27 ngày" | "Đã kết thúc"
-  pctLabel: string | null   // "8%" | null = chưa đồng bộ
+  // Commit 5.1: chuỗi ĐÃ quyết định theo loại chiến dịch
+  // (campaignPickerMetricLabel). Trước đây là "8%" và component tự ghép
+  // "Hoàn thành ..." cho MỌI loại — Chất lượng bán hàng vì thế vẫn lộ điểm gộp
+  // ở đúng chỗ này dù đã bỏ khỏi hero/bảng/card.
+  metricLabel: string       // "Hoàn thành 8%" | "Số đơn 116,2% · AOV 101,8%" | "Chưa đồng bộ"
 }
 
 const pillCls =
@@ -70,8 +74,7 @@ export function CampaignPicker({ items, selectedId }: { items: CampaignPickerIte
                   {active && <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />}
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {i.rangeLabel} · {i.statusLabel}
-                  {i.pctLabel !== null ? ` · Hoàn thành ${i.pctLabel}` : ' · Chưa đồng bộ'}
+                  {i.rangeLabel} · {i.statusLabel} · {i.metricLabel}
                 </p>
               </button>
             )

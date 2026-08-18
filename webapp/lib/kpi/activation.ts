@@ -65,7 +65,7 @@ export async function evaluateActivation(
   // được để xử lý sự cố.) Mig 103: CHỈ áp cho campaign GMV — customer có
   // metric_affiliate=true theo contract cột nhưng gate bằng flag riêng ở trên.
   if (c.metric_type === 'gmv' && c.metric_affiliate && !flags.affiliate) {
-    return fail('Chỉ số GMV Affiliate đang tắt trên hệ thống (KPI_AFFILIATE_ENABLED) — không thể kích hoạt chiến dịch affiliate')
+    return fail('Chỉ số Doanh thu Affiliate đang tắt trên hệ thống (KPI_AFFILIATE_ENABLED) — không thể kích hoạt chiến dịch affiliate')
   }
 
   const { data: targets, error: tErr } = await deps.loadTargets(campaignId)
