@@ -348,3 +348,36 @@ test.describe('kpi result model — Chất lượng bán hàng (106) @desktop', 
     expect(smModel.qualityPassCount).toBe(0)
   })
 })
+
+// ── 107: model quyết định ẩn/hiện cột 'Phân loại' (MỘT nguồn cho header+body) ─
+test.describe('kpi result model — showGroup (107) @desktop', () => {
+  const T = (id: string, group: string | null) => ({
+    id: `t-${id}`, store_id: id, pos_code: `POS${id}`, kpi_target: 1000,
+    store_kpi_group: group, stores: { name: `Store ${id}` }, kpi_campaign_store_tiers: [],
+  })
+  const CAMP107 = () => ({
+    id: 'c1', name: 'C', start_date: '2026-08-01', end_date: '2026-08-31',
+    status: 'active', metric_type: 'gmv', metric_offline: true, metric_affiliate: false,
+  })
+
+  test('MỌI store trống → showGroup=false (kể cả khoảng trắng)', () => {
+    const m = buildCampaignResultModel(CAMP107(), [T('a', null), T('b', '  '), T('c', '')], [], '2026-08-18')
+    expect(m.showGroup).toBe(false)
+  })
+
+  test('hỗn hợp → showGroup=true (giữ cột, row null hiện "—" ở component)', () => {
+    const m = buildCampaignResultModel(CAMP107(), [T('a', null), T('b', 'Nhóm A')], [], '2026-08-18')
+    expect(m.showGroup).toBe(true)
+    expect(m.rows.find((r) => r.storeId === 'a')!.group).toBeNull()
+    expect(m.rows.find((r) => r.storeId === 'b')!.group).toBe('Nhóm A')
+  })
+
+  test('có dữ liệu → showGroup=true (hành vi hiện tại không đổi)', () => {
+    const m = buildCampaignResultModel(CAMP107(), [T('a', 'Nhóm A'), T('b', 'Nhóm B')], [], '2026-08-18')
+    expect(m.showGroup).toBe(true)
+  })
+
+  test('campaign KHÔNG có store nào → showGroup=false (không dựng cột rỗng)', () => {
+    expect(buildCampaignResultModel(CAMP107(), [], [], '2026-08-18').showGroup).toBe(false)
+  })
+})

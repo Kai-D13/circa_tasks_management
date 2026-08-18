@@ -26,7 +26,7 @@ const GMV_GUIDE: ImportGuideModel = {
   columns: [
     { col: 'pos_code', meaning: 'Mã cửa hàng', example: 'POS0059' },
     { col: 'kpi_target', meaning: 'KPI doanh số của Store trong kỳ chiến dịch', example: '450000000' },
-    { col: 'store_kpi_group', meaning: 'Phân loại Store theo KPI (nhãn hiển thị)', example: 'Nhỏ hơn 500 triệu' },
+    { col: 'store_kpi_group', meaning: 'Phân loại Store (TÙY CHỌN — để trống thì cột này ẩn khỏi báo cáo)', example: 'Nhỏ hơn 500 triệu' },
     { col: 'tier_1_threshold_pct', meaning: 'Mốc đạt KPI bậc 1 (%)', example: '90' },
     { col: 'tier_1_commission_amount', meaning: 'Commission Store bậc 1 (số tiền)', example: '15000000' },
     { col: 'tier_2_threshold_pct', meaning: 'Mốc đạt KPI bậc 2 (%)', example: '100' },
@@ -54,7 +54,7 @@ const CUSTOMER_GUIDE: ImportGuideModel = {
   columns: [
     { col: 'pos_code', meaning: 'Mã cửa hàng', example: 'POS0059' },
     { col: 'kpi_target', meaning: 'Số khách mục tiêu trong kỳ (SỐ NGUYÊN — đơn vị khách)', example: '100' },
-    { col: 'store_kpi_group', meaning: 'Phân loại Store (nhãn hiển thị theo file)', example: 'Nhóm A' },
+    { col: 'store_kpi_group', meaning: 'Phân loại Store (TÙY CHỌN — để trống thì cột này ẩn khỏi báo cáo)', example: 'Nhóm A' },
     { col: 'tier_1_threshold_pct', meaning: 'Mốc đạt KPI bậc 1 (% số khách mục tiêu)', example: '90' },
     { col: 'tier_1_commission_amount', meaning: 'Commission Store bậc 1 (số tiền VNĐ)', example: '15000000' },
     { col: 'tier_2_threshold_pct', meaning: 'Mốc đạt KPI bậc 2 (%)', example: '100' },
@@ -84,7 +84,7 @@ const ORDER_AOV_GUIDE: ImportGuideModel = {
     { col: 'pos_code', meaning: 'Mã cửa hàng', example: 'POS0018' },
     { col: 'order_target', meaning: 'Số đơn mục tiêu trong kỳ (số nguyên)', example: '1046' },
     { col: 'aov_target', meaning: 'AOV mục tiêu — giá trị đơn trung bình (VNĐ nguyên)', example: '194046' },
-    { col: 'store_kpi_group', meaning: 'Phân loại Store (nhãn hiển thị theo file)', example: 'Nhóm A' },
+    { col: 'store_kpi_group', meaning: 'Phân loại Store (TÙY CHỌN — để trống thì cột này ẩn khỏi báo cáo)', example: 'Nhóm A' },
     { col: 'tier_1_threshold_pct', meaning: 'Mốc thưởng — phải đúng 100', example: '100' },
     { col: 'tier_1_commission_amount', meaning: 'Commission Store khi đạt KPI (VNĐ)', example: '20800000' },
     { col: 'pos_name', meaning: 'Tên cửa hàng', example: 'CIRCA SIGNATURE', optional: true },

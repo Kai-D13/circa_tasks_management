@@ -37,7 +37,12 @@ export const RESULT_COL_PX = {
 // Mig 103: metricType đổi DUY NHẤT label cột actual ('Actual GMV' → 'Số
 // khách'); campaign GMV giữ mảng label BẤT BIẾN (test khóa); width contract
 // không đổi (số khách ngắn hơn tiền — min-width cũ vẫn đúng).
-export function resultTableColumns(maxTierCount: number, showBreakdown: boolean, metricType?: string): ResultTableColumn[] {
+// 107: `showGroup=false` ⇒ cột 'Phân loại' biến mất hoàn toàn. Mặc định TRUE để
+// mọi caller cũ giữ nguyên hành vi (và để việc bỏ cột luôn là quyết định TƯỜNG
+// MINH của caller, không phải tác dụng phụ).
+export function resultTableColumns(
+  maxTierCount: number, showBreakdown: boolean, metricType?: string, showGroup = true,
+): ResultTableColumn[] {
   // Mig 106: Chất lượng bán hàng — cột actual là ĐIỂM %, và Order/AOV gộp vào
   // MỘT cột 2 dòng (yêu cầu stakeholder: không tăng cột ngang).
   const isOrderAov = metricType === 'offline_order_aov'
@@ -46,7 +51,9 @@ export function resultTableColumns(maxTierCount: number, showBreakdown: boolean,
   const actualLabel = metricPresentation(metricType).actualColumnLabel
   return [
     { key: 'store', label: 'Cửa hàng', minPx: RESULT_COL_PX.store, align: 'left', scope: 'all' },
-    { key: 'group', label: 'Phân loại', minPx: RESULT_COL_PX.group, align: 'left', scope: 'all' },
+    ...(showGroup ? [
+      { key: 'group', label: 'Phân loại', minPx: RESULT_COL_PX.group, align: 'left', scope: 'all' } as const,
+    ] : []),
     // r1.1 (audit P2): Chất lượng bán hàng BỎ cột 'KPI target' (luôn 100% —
     // không mang thông tin) và gộp '%' vào chính cột Hoàn thành.
     ...(isOrderAov ? [] : [
@@ -99,10 +106,12 @@ export function resultTableColumns(maxTierCount: number, showBreakdown: boolean,
 
 // Tổng min-width vùng desktop (mọi cột trừ mobile-only) — tài liệu/QA: cho
 // biết bảng cần bao nhiêu px trước khi scroll ngang nội bộ kích hoạt.
-export function resultTableDesktopMinPx(maxTierCount: number, showBreakdown: boolean, metricType?: string): number {
+export function resultTableDesktopMinPx(
+  maxTierCount: number, showBreakdown: boolean, metricType?: string, showGroup = true,
+): number {
   // r1 (audit): PHẢI truyền metricType — thiếu sẽ tính sai tổng width khi loại
   // campaign có cột riêng (106 thêm 2 cột).
-  return resultTableColumns(maxTierCount, showBreakdown, metricType)
+  return resultTableColumns(maxTierCount, showBreakdown, metricType, showGroup)
     .filter((c) => c.scope !== 'mobile')
     .reduce((sum, c) => sum + c.minPx, 0)
 }

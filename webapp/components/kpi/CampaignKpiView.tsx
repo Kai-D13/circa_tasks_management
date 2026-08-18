@@ -555,7 +555,11 @@ export function CampaignKpiView({
           </p>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 text-sm">
             <p className="py-1"><span className="text-muted-foreground">Chiến dịch: </span><span className="font-medium text-primary">{sel.name}</span></p>
-            <p className="py-1"><span className="text-muted-foreground">Phân loại store: </span><span className="font-medium">{sel.store_kpi_group ?? '—'}</span></p>
+            {/* 107: chưa phân loại thì BỎ HẲN dòng — một dòng '—' trong khối
+                "Thông tin áp dụng" chỉ tạo cảm giác thiếu dữ liệu. */}
+            {sel.store_kpi_group?.trim() && (
+              <p className="py-1"><span className="text-muted-foreground">Phân loại store: </span><span className="font-medium">{sel.store_kpi_group}</span></p>
+            )}
             <p className="py-1"><span className="text-muted-foreground">Thời gian áp dụng: </span><span className="font-medium text-primary">{formatDate(sel.start_date)} – {formatDate(sel.end_date)}</span></p>
             <p className="py-1"><span className="text-muted-foreground">Vị trí của bạn: </span><span className="font-medium">{roleLabel}</span></p>
           </div>
