@@ -7,6 +7,7 @@ import { createResumableUploadSession, publicUrlForKey, isGcsEnabled } from '@/l
 import { safeStorageName } from '@/lib/storage'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { FS_PHOTO_BOXES } from '@/lib/fs/constants'
+import { canCreateTask } from '@/lib/tasks/smScope'
 
 // Authorized upload-URL minting for direct-to-GCS uploads. THIS IS THE SECURITY
 // BOUNDARY that replaces Supabase Storage RLS for GCS uploads — it must mirror
@@ -87,8 +88,12 @@ export async function createUploadUrl(input: CreateUploadUrlInput): Promise<Resu
     key = `tasks/${input.taskId}/${outputType}/${uniq}_${safe}`
 
   } else if (input.purpose === 'task_input') {
+    // Mig 108: SM cũng tạo được task phát sinh nên phải đính kèm được tệp
+    // hướng dẫn. Không nới thêm gì khác — vẫn cùng validate tên/MIME/kích
+    // thước/đường dẫn, và tệp chỉ có ý nghĩa khi được gắn vào một broadcast đã
+    // qua validate phạm vi ở createBroadcastTask.
     const { data: me } = await supabase.from('users').select('role').eq('id', user.id).single()
-    if (me?.role !== 'admin') return { error: 'Chỉ admin được tải tệp hướng dẫn' }
+    if (!canCreateTask(me?.role)) return { error: 'Bạn không có quyền tải tệp hướng dẫn' }
     // uploadId is a per-form uuid OR 'import/<tmpId>' (Excel) — reject anything
     // else (no traversal, no empty, no stray slashes).
     if (!input.uploadId || !/^(import\/)?[A-Za-z0-9_-]{1,100}$/.test(input.uploadId)) {

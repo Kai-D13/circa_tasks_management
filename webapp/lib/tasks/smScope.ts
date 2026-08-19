@@ -76,3 +76,12 @@ export function canCreateRecurring(role: string | null | undefined): boolean {
 export function canImportExcel(role: string | null | undefined): boolean {
   return role === 'admin'
 }
+
+// SM KHÔNG được đặt visibility = 'public'. Form chỉ gửi 'store'/'private', nên
+// luật này chỉ kích hoạt khi payload bị sửa — và nếu bỏ qua thì một SM có thể
+// phát một task mà TOÀN BỘ nhân viên công ty đọc được: policy tasks_select_staff
+// cho 'public' không kèm bất kỳ điều kiện cửa hàng nào. Từ chối thay vì âm thầm
+// hạ xuống 'store' — ép ngầm sẽ giấu mất dấu vết payload bị can thiệp.
+export function smVisibilityAllowed(visibility: string | null | undefined): boolean {
+  return visibility === 'store' || visibility === 'private'
+}

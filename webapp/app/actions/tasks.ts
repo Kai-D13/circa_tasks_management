@@ -12,6 +12,9 @@ import { CYCLE_COUNT_DEPT_ID } from '@/lib/inventory/constants'
 import { publicStorageUrl } from '@/lib/storage/publicUrl'
 import { sanitizeRichText } from '@/lib/richtext/sanitize'
 import { assertOsStoreIds } from '@/lib/stores/assertOsStore'
+import {
+  canCreateTask, smVisibilityAllowed, validateSmStaffSelection, validateSmStoreScope,
+} from '@/lib/tasks/smScope'
 
 // True when the given admin is an 'editor' collaborator on the task.
 // Used by addReviewNote + requestResubmit to accept collaborator editors.
@@ -135,10 +138,34 @@ export async function createTask(formData: FormData) {
   // Task creation is admin-only (own-scope: created_by = caller). Store managers
   // are executors, not task admins.
   const { data: creatorProfile } = await supabase.from('users').select('role').eq('id', user.id).single()
-  if (creatorProfile?.role !== 'admin') return { error: 'Chỉ admin mới được tạo task' }
+  if (!canCreateTask(creatorProfile?.role)) return { error: 'Bạn không có quyền tạo task' }
 
   const storeIdVal = formData.get('store_id') as string | null
   if (!storeIdVal) return { error: 'Vui lòng chọn cửa hàng nhận task' }
+
+  // ── Mig 108: SM chỉ tạo task cho cửa hàng MÌNH ĐANG phụ trách ──────────────
+  // Nhánh này là scope "Một cửa hàng"; broadcast đi qua createBroadcastTask.
+  // Task ở đây insert bằng session client nên policy tasks_insert_sm còn là
+  // lớp thứ hai — validate ở đây để báo lỗi tiếng Việt rõ ràng thay vì để RLS
+  // trả một thông báo Postgres khó hiểu.
+  if (creatorProfile?.role === 'sm') {
+    const assigned = await getSmStoreIds(supabase, user.id)
+    const scope = validateSmStoreScope(assigned, [storeIdVal])
+    if (!scope.ok) return { error: scope.error }
+    if (!smVisibilityAllowed(formData.get('visibility') as string | null)) {
+      return { error: 'Phạm vi hiển thị không hợp lệ cho Quản lý vùng' }
+    }
+    // Người được giao phải là dược sĩ CỦA CHÍNH cửa hàng đó. Không có bước này,
+    // payload sửa tay có thể giao task cho một nhân viên ngoài vùng.
+    const assignee = formData.get('assigned_to') as string | null
+    if (assignee) {
+      const { data: au } = await supabaseAdmin
+        .from('users').select('store_id, role').eq('id', assignee).single()
+      if (!au || au.store_id !== storeIdVal || au.role !== 'staff') {
+        return { error: 'Người thực hiện không thuộc cửa hàng đã chọn' }
+      }
+    }
+  }
 
   // FS/OS isolation (mig 076): reject an FS store_id before any write — covers
   // both the single-store and staff_all branches below.
@@ -918,9 +945,31 @@ export async function createBroadcastTask(params: {
   if (!user) return { error: 'Not authenticated' }
 
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
-  if (profile?.role !== 'admin') return { error: 'Chỉ admin mới được tạo task broadcast' }
+  if (!canCreateTask(profile?.role)) return { error: 'Bạn không có quyền tạo task broadcast' }
 
   if (!params.storeIds.length) return { error: 'Vui lòng chọn ít nhất một cửa hàng' }
+
+  // ── Mig 108: SM chỉ được phát task cho cửa hàng MÌNH ĐANG phụ trách ────────
+  // Phạm vi nạp lại TẠI ĐÂY, không tin `storeIds` từ client và cũng không tin
+  // phạm vi lúc form được mở: SM có thể vừa bị gỡ phân công trong lúc soạn.
+  //
+  // ⚠ Đây là chốt chặn DUY NHẤT cho chế độ "Từng dược sĩ nộp": nhánh đó ghi
+  // `tasks` bằng service role nên policy tasks_insert_sm (108) KHÔNG áp.
+  if (profile?.role === 'sm') {
+    const assigned = await getSmStoreIds(supabase, user.id)
+    const scope = validateSmStoreScope(assigned, params.storeIds)
+    if (!scope.ok) return { error: scope.error }
+    const staffScope = validateSmStaffSelection(params.selectedStaffByStore, scope.storeIds)
+    if (!staffScope.ok) return { error: staffScope.error }
+    // Form chỉ gửi store/private; 'public' chỉ tới từ payload bị sửa và sẽ cho
+    // TOÀN BỘ nhân viên công ty đọc task (tasks_select_staff không kèm điều
+    // kiện cửa hàng cho 'public').
+    if (!smVisibilityAllowed(params.visibility)) {
+      return { error: 'Phạm vi hiển thị không hợp lệ cho Quản lý vùng' }
+    }
+    // Dùng danh sách ĐÃ validate + dedupe cho toàn bộ phần còn lại.
+    params = { ...params, storeIds: scope.storeIds }
+  }
   if (!params.requiredOutputs?.length) return { error: 'Vui lòng chọn ít nhất một loại kết quả cần nộp' }
 
   // FS/OS isolation (mig 076): no OS broadcast task may target an FS store.

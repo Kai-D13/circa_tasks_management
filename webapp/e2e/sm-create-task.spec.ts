@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
-  canCreateRecurring, canCreateTask, canImportExcel,
+  canCreateRecurring, canCreateTask, canImportExcel, smVisibilityAllowed,
   validateSmStaffSelection, validateSmStoreScope,
 } from '../lib/tasks/smScope'
 
@@ -58,6 +58,16 @@ test.describe('SM scope contract @desktop', () => {
     if (!bad.ok) expect(bad.error).toContain('ngoài phạm vi')
     // giá trị không phải mảng → lỗi sạch, không 500
     expect(validateSmStaffSelection({ [A]: 'u1' as unknown as string[] }, [A]).ok).toBe(false)
+  })
+
+  test("SM KHÔNG được đặt visibility 'public' (task lọt ra toàn công ty)", () => {
+    // tasks_select_staff cho 'public' KHÔNG kèm điều kiện cửa hàng ⇒ mọi staff
+    // đọc được. Form chỉ gửi store/private nên luật này chỉ chạm payload giả.
+    expect(smVisibilityAllowed('store')).toBe(true)
+    expect(smVisibilityAllowed('private')).toBe(true)
+    expect(smVisibilityAllowed('public')).toBe(false)
+    expect(smVisibilityAllowed(undefined)).toBe(false)
+    expect(smVisibilityAllowed('bogus')).toBe(false)
   })
 
   test('ai được tạo gì: SM chỉ phát sinh; định kỳ + Excel vẫn admin-only', () => {
