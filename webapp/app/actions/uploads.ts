@@ -94,6 +94,12 @@ export async function createUploadUrl(input: CreateUploadUrlInput): Promise<Resu
     // qua validate phạm vi ở createBroadcastTask.
     const { data: me } = await supabase.from('users').select('role').eq('id', user.id).single()
     if (!canCreateTask(me?.role)) return { error: 'Bạn không có quyền tải tệp hướng dẫn' }
+    // 'import/<tmpId>' là vùng file Excel của luồng chia task hàng loạt — luồng
+    // đó vẫn admin-only. UI đã ẩn với SM, nhưng UI ẩn KHÔNG phải ràng buộc:
+    // chặn ở đây, và storage policy (108) chặn thêm một lớp ở tầng DB.
+    if (me?.role !== 'admin' && input.uploadId?.startsWith('import/')) {
+      return { error: 'Chỉ admin được tải tệp import' }
+    }
     // uploadId is a per-form uuid OR 'import/<tmpId>' (Excel) — reject anything
     // else (no traversal, no empty, no stray slashes).
     if (!input.uploadId || !/^(import\/)?[A-Za-z0-9_-]{1,100}$/.test(input.uploadId)) {

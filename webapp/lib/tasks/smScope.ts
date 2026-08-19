@@ -60,8 +60,13 @@ export function validateSmStaffSelection(
   return { ok: true }
 }
 
-// Ai được tạo task. Tách khỏi `isAdmin` rải rác trong UI để nút / route / action
-// dùng CHUNG một luật (trước đây mỗi nơi tự so `role === 'admin'`).
+// Ai được tạo task (BROADCAST). Tách khỏi `isAdmin` rải rác trong UI để nút /
+// route / form dùng CHUNG một luật.
+//
+// ⚠ KHÔNG dùng cho createTask() — tạo task ĐƠN LẺ vẫn admin-only: request đã
+// chốt là broadcast, và đường đơn lẻ còn nhận `assigned_to` tự do nên bề mặt
+// kiểm rộng hơn hẳn. SM muốn giao một cửa hàng thì tick đúng một ô trong
+// "Nhiều CH".
 export function canCreateTask(role: string | null | undefined): boolean {
   return role === 'admin' || role === 'sm'
 }

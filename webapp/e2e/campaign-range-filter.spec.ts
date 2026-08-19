@@ -208,7 +208,12 @@ test.describe('range filter ẨN trên mobile @mobile', () => {
     const href = await campaignDetailUrl(page)
     test.skip(href === null, 'store chưa có chiến dịch')
     await page.goto(href!)
+    // Tách ĐẾM khỏi ẨN. `toBeHidden()` trên locator khớp 2 phần tử ném lỗi
+    // strict-mode NGAY, không retry — nên một lượt double-render thoáng qua
+    // giữa hai segment khi điều hướng cũng làm đỏ với thông báo sai bản chất.
+    // `toHaveCount` có retry: duplicate THẬT vẫn đỏ, thoáng qua thì tự ổn định.
+    await expect(page.locator(FILTER_INPUT), 'bộ lọc bị render trùng').toHaveCount(1)
     // `hidden md:block` ⇒ node vẫn trong DOM, nhưng phải KHÔNG hiển thị.
-    await expect(page.locator(FILTER_INPUT)).toBeHidden()
+    await expect(page.locator(FILTER_INPUT).first()).toBeHidden()
   })
 })

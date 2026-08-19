@@ -121,7 +121,12 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   const [customDeadline, setCustomDeadline] = useState(false)
 
   // Recurring has no single-store scope (mirrors handleSetTaskType).
-  const [scope, setScope]                       = useState<Scope>(!task && initialTaskType === 'recurring' ? 'multi' : 'single')
+  // 108.5: SM không có scope 'single' (tạo task đơn lẻ vẫn admin-only ở
+  // server) ⇒ mặc định 'multi', nếu không form sẽ mở ở một chế độ mà chính
+  // họ không bấm sang được và submit sẽ bị server từ chối.
+  const smOnlyBroadcast = currentUserRole === 'sm'
+  const [scope, setScope]                       = useState<Scope>(
+    !task && (initialTaskType === 'recurring' || currentUserRole === 'sm') ? 'multi' : 'single')
   const [selectedStoreIds, setSelectedStoreIds] = useState<string[]>([])
 
   // Excel split (broadcast + store-mode only): null = no file / plain broadcast.
@@ -230,7 +235,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
       setPriority(d.priority ?? 'normal')
       setStoreId(d.storeId ?? '')
       setAssignedTo(d.assignedTo ?? '')
-      setScope(d.scope ?? 'single')
+      setScope(smOnlyBroadcast ? (d.scope === 'single' ? 'multi' : d.scope ?? 'multi') : d.scope ?? 'single')
       setSelectedStoreIds(d.selectedStoreIds ?? [])
       setStaffMode(d.staffMode ?? false)
       setOutputs(d.outputs ?? [])
@@ -359,7 +364,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   }
 
   function handleScopeChange(scopeVal: Scope) {
-    setScope(scopeVal)
+    setScope(smOnlyBroadcast && scopeVal === 'single' ? 'multi' : scopeVal)
     setSelectedStoreIds([])
     // staffMode intentionally preserved — staff_all works for all scopes
   }
@@ -695,12 +700,15 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
             </div>
           )}
 
-          {/* Row 1: Scope pills — admin + new only; recurring hides "Một CH" */}
+          {/* Row 1: Scope pills — người tạo task + tạo mới; recurring ẩn "Một CH".
+              108.5: SM cũng KHÔNG có "Một CH" — request đã chốt là BROADCAST,
+              và tạo task đơn lẻ (createTask) vẫn admin-only ở server. Muốn giao
+              một cửa hàng thì SM tick đúng một ô trong "Nhiều CH". */}
           {canCreate && !isEditMode && (
             <div className="border-b px-5 py-2.5 flex items-center gap-2 flex-wrap">
               <span className="text-xs text-muted-foreground shrink-0">Giao đến:</span>
               {(['single', 'multi', 'all'] as Scope[]).map((s) => {
-                if (s === 'single' && isRecurring) return null
+                if (s === 'single' && (isRecurring || !isAdmin)) return null
                 const label = s === 'single' ? 'Một CH' : s === 'multi' ? 'Nhiều CH' : `Tất cả (${visibleStores.length})`
                 return (
                   <button

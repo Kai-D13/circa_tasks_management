@@ -138,34 +138,13 @@ export async function createTask(formData: FormData) {
   // Task creation is admin-only (own-scope: created_by = caller). Store managers
   // are executors, not task admins.
   const { data: creatorProfile } = await supabase.from('users').select('role').eq('id', user.id).single()
-  if (!canCreateTask(creatorProfile?.role)) return { error: 'Bạn không có quyền tạo task' }
+  // Tạo task ĐƠN LẺ vẫn ADMIN-ONLY. Request của stakeholder là SM tạo task
+  // BROADCAST; mở luôn createTask là cấp quyền rộng hơn thứ được duyệt, và
+  // đường này còn nhận `assigned_to` tự do nên bề mặt kiểm cũng lớn hơn.
+  if (creatorProfile?.role !== 'admin') return { error: 'Chỉ admin mới được tạo task' }
 
   const storeIdVal = formData.get('store_id') as string | null
   if (!storeIdVal) return { error: 'Vui lòng chọn cửa hàng nhận task' }
-
-  // ── Mig 108: SM chỉ tạo task cho cửa hàng MÌNH ĐANG phụ trách ──────────────
-  // Nhánh này là scope "Một cửa hàng"; broadcast đi qua createBroadcastTask.
-  // Task ở đây insert bằng session client nên policy tasks_insert_sm còn là
-  // lớp thứ hai — validate ở đây để báo lỗi tiếng Việt rõ ràng thay vì để RLS
-  // trả một thông báo Postgres khó hiểu.
-  if (creatorProfile?.role === 'sm') {
-    const assigned = await getSmStoreIds(supabase, user.id)
-    const scope = validateSmStoreScope(assigned, [storeIdVal])
-    if (!scope.ok) return { error: scope.error }
-    if (!smVisibilityAllowed(formData.get('visibility') as string | null)) {
-      return { error: 'Phạm vi hiển thị không hợp lệ cho Quản lý vùng' }
-    }
-    // Người được giao phải là dược sĩ CỦA CHÍNH cửa hàng đó. Không có bước này,
-    // payload sửa tay có thể giao task cho một nhân viên ngoài vùng.
-    const assignee = formData.get('assigned_to') as string | null
-    if (assignee) {
-      const { data: au } = await supabaseAdmin
-        .from('users').select('store_id, role').eq('id', assignee).single()
-      if (!au || au.store_id !== storeIdVal || au.role !== 'staff') {
-        return { error: 'Người thực hiện không thuộc cửa hàng đã chọn' }
-      }
-    }
-  }
 
   // FS/OS isolation (mig 076): reject an FS store_id before any write — covers
   // both the single-store and staff_all branches below.
@@ -1168,7 +1147,12 @@ export async function createBroadcastTask(params: {
 
   const { data: created, error } = await supabase
     .from('tasks').insert(tasksToInsert).select('id, title, store_id')
-  if (error) return { error: error.message }
+  if (error) {
+    // Broadcast đã được ghi TRƯỚC tasks. Không dọn thì để lại một nhóm rỗng
+    // treo trong DB — nhánh staff_all vốn đã rollback, nhánh này thì quên.
+    await supabaseAdmin.from('task_broadcasts').delete().eq('id', broadcast.id)
+    return { error: error.message }
+  }
 
   const logs = (created ?? []).map((t) => ({
     task_id:  t.id,

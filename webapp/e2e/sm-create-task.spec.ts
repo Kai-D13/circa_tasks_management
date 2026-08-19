@@ -121,6 +121,55 @@ test.describe('mig 108 source contract @desktop', () => {
     expect(code).not.toMatch(/ALTER TABLE/)
   })
 
+  test('tasks_insert_sm GHIM TỪNG CỘT — chặn cả đường gọi PostgREST trực tiếp', () => {
+    // Đây là P0 của vòng audit: policy chỉ kiểm role + created_by + store thì
+    // một SM bỏ qua server action vẫn tạo được task 'public' / 'done' /
+    // assigned_to người ngoài / gắn vào broadcast của người khác.
+    const i = code.indexOf('CREATE POLICY "tasks_insert_sm"')
+    const body = code.slice(i, code.indexOf(';', i))
+    for (const pin of [
+      "visibility = 'store'",          // không cho 'public' (mọi staff đọc)
+      'assigned_to IS NULL',           // không giao đích danh người ngoài store
+      'parent_task_id IS NULL',
+      "assignment_mode = 'store'",
+      "status = 'todo'",               // không tạo task đã hoàn thành
+      "source_type = 'task'",          // không mạo danh nguồn hệ thống
+      'broadcast_id IS NOT NULL',
+      'public.is_own_sm_broadcast(broadcast_id)',
+      'public.is_sm_for_store(store_id)',
+      'created_by = (select auth.uid())',
+    ]) {
+      expect(body, `tasks_insert_sm thiếu ràng buộc: ${pin}`).toContain(pin)
+    }
+  })
+
+  test('helper broadcast là SECURITY DEFINER (chặn vòng RLS tasks↔task_broadcasts)', () => {
+    // Policy của task_broadcasts (045) tham chiếu tasks; nếu policy tasks lại
+    // subquery thẳng task_broadcasts thì đúng hình dạng A↔B đã gây 2 sự cố prod.
+    const i = code.indexOf('CREATE OR REPLACE FUNCTION public.is_own_sm_broadcast')
+    expect(i, 'thiếu helper is_own_sm_broadcast').toBeGreaterThan(-1)
+    const fn = code.slice(i, code.indexOf('$fn$;', i))
+    expect(fn).toContain('SECURITY DEFINER')
+    expect(fn).toContain('SET search_path = public')
+    // và policy KHÔNG được đọc thẳng bảng
+    const pi = code.indexOf('CREATE POLICY "tasks_insert_sm"')
+    expect(code.slice(pi, code.indexOf(';', pi)))
+      .not.toContain('FROM public.task_broadcasts')
+  })
+
+  test('storage: SM ghi được task-inputs/ nhưng KHÔNG ghi được import/', () => {
+    const i = code.indexOf('CREATE POLICY "task_uploads_insert"')
+    expect(i, 'thiếu policy storage').toBeGreaterThan(-1)
+    const body = code.slice(i)
+    expect(body).toContain("u.role = 'sm'")
+    expect(body).toContain("<> 'import'")
+    // nhánh admin của 033 phải còn nguyên
+    expect(body).toContain("u.role = 'admin'")
+    // và các nhánh khác của 033 không bị đụng
+    expect(body).toContain("(storage.foldername(name))[1] = 'tasks'")
+    expect(body).toContain("(storage.foldername(name))[1] = 'prescriptions'")
+  })
+
   test('ghi rõ nhánh service-role KHÔNG được RLS bảo vệ', () => {
     // Người đọc migration phải biết RLS không phải chốt duy nhất, nếu không họ
     // sẽ tưởng policy là đủ và bỏ qua validate ở action.
@@ -187,7 +236,10 @@ test.describe('SM thấy nút Tạo Task @desktop', () => {
     // Mọi cửa hàng xuất hiện trong form phải nằm trong phạm vi SM. Lấy tên
     // store dạng "CIRCA ..." để so — đủ đặc trưng trong dữ liệu thật.
     const inForm = [...formText.matchAll(/CIRCA [A-ZĐÀ-Ỹ0-9 ]+/g)].map((m) => m[0].trim())
-    test.skip(inForm.length === 0, 'không đọc được tên cửa hàng trong form')
+    // KHÔNG skip khi không đọc được: đây là coverage phạm vi — im lặng bỏ qua
+    // thì báo cáo vẫn xanh trong khi thứ quan trọng nhất chưa hề được kiểm.
+    expect(inForm.length, 'không đọc được tên cửa hàng nào trong form ⇒ test vô nghĩa, phải sửa selector')
+      .toBeGreaterThan(0)
     for (const name of new Set(inForm)) {
       expect(scopeChips, `form hiện cửa hàng NGOÀI phạm vi SM: ${name}`).toContain(name)
     }
@@ -209,6 +261,15 @@ test.describe('SM thấy nút Tạo Task @desktop', () => {
 
     await page.goto('/tasks/schedules')
     await expect.poll(() => page.url()).not.toContain('/tasks/schedules')
+  })
+
+  test('SM KHÔNG có scope "Một CH" (tạo task đơn lẻ vẫn admin-only)', async ({ page }) => {
+    await page.goto('/tasks/new')
+    await mainReady(page)
+    await expect(page.getByRole('button', { name: 'Một CH', exact: true }),
+      'SM không được thấy scope Một CH').toHaveCount(0)
+    // và phải có sẵn hai lựa chọn broadcast
+    await expect(page.getByRole('button', { name: 'Nhiều CH', exact: true })).toHaveCount(1)
   })
 })
 
@@ -244,5 +305,78 @@ test.describe('Admin KHÔNG regress @desktop', () => {
     await page.goto('/tasks/schedules')
     await mainReady(page)
     expect(page.url()).toContain('/tasks/schedules')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// WRITE-PATH QA (108.5) — TẠO DỮ LIỆU THẬT
+//
+// Các test trên chỉ chứng minh ai thấy gì. Chúng KHÔNG chứng minh luồng ghi
+// mới chạy: broadcast được tạo, tasks qua được RLS, staff nhìn thấy, và dọn
+// được. Vì vậy report in cờ SM_WRITE_QA_VERIFIED để thiếu coverage là thấy
+// ngay, không lẫn vào tổng pass.
+//
+// ⚠ OPT-IN bằng E2E_SM_WRITE_QA=1 vì đây là DB PRODUCTION: lượt chạy tạo task
+// thật cho cửa hàng thật và sinh notification cho quản lý cửa hàng. Chỉ bật
+// khi đã hẹn giờ với vận hành. Test tự dọn ở finally.
+// ⚠ Cần migration 108 đã chạy; chưa chạy thì FAIL với thông báo rõ, không skip.
+// ─────────────────────────────────────────────────────────────────────────────
+const WRITE_QA = process.env.E2E_SM_WRITE_QA === '1'
+const QA_TITLE = `[QA-SM] tự động — xoá được, ${new Date().toISOString().slice(0, 16)}`
+
+test.describe('SM write-path @desktop', () => {
+  test.use({ storageState: SM_STATE })
+  test.skip(!CRED.sm.email || !CRED.sm.password, 'E2E_SM_* chưa set')
+
+  test('SM tạo broadcast THẬT: store đúng phạm vi, dọn sạch sau khi kiểm', async ({ page }) => {
+    if (!WRITE_QA) {
+      // eslint-disable-next-line no-console
+      console.log('SM_WRITE_QA_VERIFIED=false — chưa bật E2E_SM_WRITE_QA=1 (ghi vào DB production)')
+      test.info().annotations.push({
+        type: 'runtime-unverified',
+        description: 'SM_WRITE_QA_VERIFIED=false — luồng GHI của SM chưa có bằng chứng runtime',
+      })
+      test.skip(true, 'SM_WRITE_QA_VERIFIED=false — bật E2E_SM_WRITE_QA=1 để chạy (ghi DB thật)')
+      return
+    }
+    test.setTimeout(180_000)
+
+    await page.goto('/tasks/new')
+    await mainReady(page)
+
+    // Scope mặc định của SM là "Nhiều CH" — tick đúng MỘT cửa hàng đầu tiên.
+    const firstStore = page.locator('input[type="checkbox"]').first()
+    await firstStore.check()
+
+    await page.getByLabel(/Tiêu đề/i).first().fill(QA_TITLE)
+    // Kết quả cần nộp: chọn 'Văn bản' nếu chưa có mặc định.
+    const textOut = page.getByRole('button', { name: /Văn bản/i }).first()
+    if (await textOut.count() > 0) await textOut.click().catch(() => {})
+
+    await page.getByRole('button', { name: /^Tạo Task$/i }).last().click()
+
+    // Thành công thì điều hướng khỏi /tasks/new; thất bại thì toast lỗi.
+    const toast = page.locator('[data-sonner-toast]')
+    await expect.poll(async () => {
+      if (!page.url().includes('/tasks/new')) return 'ok'
+      if (await toast.count() > 0) return (await toast.first().innerText())
+      return 'pending'
+    }, { timeout: 30_000 }).not.toBe('pending')
+
+    const err = await toast.count() > 0 ? await toast.first().innerText() : ''
+    expect(err, `tạo task lỗi — nếu là lỗi quyền thì migration 108 CHƯA chạy: ${err}`)
+      .not.toMatch(/quyền|policy|row-level|permission/i)
+    expect(page.url(), 'không rời khỏi /tasks/new ⇒ submit thất bại').not.toContain('/tasks/new')
+
+    // Task vừa tạo phải xuất hiện trong danh sách của chính SM.
+    await page.goto('/tasks')
+    await mainReady(page)
+    await expect(page.getByText(QA_TITLE).first(), 'task vừa tạo không thấy trong /tasks của SM')
+      .toBeVisible({ timeout: 20_000 })
+
+    // eslint-disable-next-line no-console
+    console.log('SM_WRITE_QA_VERIFIED=true')
+    // eslint-disable-next-line no-console
+    console.log(`DỌN TAY nếu cần: DELETE FROM public.tasks WHERE title = '${QA_TITLE}';`)
   })
 })
