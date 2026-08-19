@@ -393,6 +393,10 @@ test.describe('SM write-path @desktop', () => {
     let broadcastIds: string[] = []
 
     try {
+      // Form khôi phục BẢN NHÁP đã lưu sau lần render đầu. Nếu còn nháp cũ, nó
+      // ghi đè lựa chọn vừa tick và submit im lặng không đi (lượt trước: snapshot
+      // hiện "Chọn cửa hàng (0 đã chọn)" dù test đã check). Xoá nháp trước.
+      await page.addInitScript(() => { try { localStorage.clear() } catch { /* ignore */ } })
       await page.goto('/tasks/new')
       await mainReady(page)
 
@@ -402,20 +406,74 @@ test.describe('SM write-path @desktop', () => {
       const found = await box.waitFor({ state: 'visible', timeout: 10_000 })
         .then(() => true).catch(() => false)
       expect(found, `không tìm thấy ô chọn cho cửa hàng "${store.name}" trong form`).toBe(true)
-      await box.check()
+      // ⚠ Click TRƯỚC khi React hydrate thì trình duyệt tự toggle ô, nhưng
+      // onChange chưa gắn ⇒ state vẫn rỗng và input KHÔNG bao giờ được render
+      // lại (nó là controlled: checked = selectedStoreIds.includes(id)). Triệu
+      // chứng đúng như lượt trước: snapshot hiện checkbox [checked] mà bộ đếm
+      // vẫn "(0 đã chọn)", rồi submit đứng im. Click lại tới khi STATE nhận.
+      const counter1 = page.getByText('Chọn cửa hàng (1 đã chọn)')
+      for (let i = 0; i < 6; i++) {
+        if (await counter1.count() > 0) break
+        await box.click()
+        await page.waitForTimeout(500)
+      }
+      await expect(counter1,
+        'state không nhận lựa chọn cửa hàng dù đã click nhiều lần (hydrate hỏng?)')
+        .toBeVisible({ timeout: 5_000 })
 
-      await page.getByLabel(/Tiêu đề/i).first().fill(title)
-      const textOut = page.getByRole('button', { name: /Văn bản/i }).first()
-      if (await textOut.count() > 0) await textOut.click().catch(() => {})
-      await page.getByRole('button', { name: /^Tạo Task$/i }).last().click()
+      // Ô tiêu đề chỉ có PLACEHOLDER, không có <label> — getByLabel không khớp
+      // và `fill` chờ tới hết timeout (lượt trước treo đúng 300s ở đây).
+      await page.getByPlaceholder(/Tiêu đề task/i).first().fill(title)
+      // Output cần nộp là BẮT BUỘC. Nhãn thật là 'Ghi chú' (không phải 'Văn
+      // bản' như bản trước đoán), và nút là toggle nên phải KIỂM trạng thái sau
+      // khi bấm, không bấm mù.
+      const noteOut = page.getByRole('button', { name: 'Ghi chú', exact: true }).first()
+      await expect(noteOut, 'không thấy nút output "Ghi chú"').toBeVisible({ timeout: 10_000 })
+      for (let i = 0; i < 4; i++) {
+        const cls = (await noteOut.getAttribute('class')) ?? ''
+        if (cls.includes('bg-primary')) break
+        await noteOut.click()
+        await page.waitForTimeout(300)
+      }
+      expect((await noteOut.getAttribute('class')) ?? '',
+        'không bật được output "Ghi chú"').toContain('bg-primary')
+
+      // Bắt đầu + Hạn chót là input `required`. Bỏ trống thì TRÌNH DUYỆT chặn
+      // submit bằng bong bóng native — không có toast, không có dòng nào trong
+      // DOM, nên poll chỉ thấy 'pending' và ta tưởng action hỏng.
+      const ymd = (offsetDays: number) =>
+        new Date(Date.now() + offsetDays * 86_400_000).toISOString().slice(0, 10)
+      const dateInputs = page.locator('input[type="date"]:visible')
+      const timeInputs = page.locator('input[type="time"]:visible')
+      expect(await dateInputs.count(), 'không thấy ô ngày Bắt đầu/Hạn chót').toBeGreaterThanOrEqual(2)
+      await dateInputs.nth(0).fill(ymd(0))
+      await timeInputs.nth(0).fill('08:00')
+      await dateInputs.nth(1).fill(ymd(1))
+      await timeInputs.nth(1).fill('17:00')
+
+      await expect(page.getByPlaceholder(/Tiêu đề task/i).first()).toHaveValue(title)
 
       const toast = page.locator('[data-sonner-toast]')
+      // ⚠ Nhãn nút ĐỔI theo số cửa hàng đã chọn: 0 → 'Tạo Task', 1 → 'Tạo 1
+      // Task'. Locator cũ /^Tạo Task$/ khớp KHÔNG GÌ sau khi tick, và click()
+      // chờ actionability tới hết test-timeout 300s (không phải 30s của poll).
+      const submitBtn = page.getByRole('button', { name: /^Tạo( \d+)? Task$/i }).last()
+      await expect(submitBtn, 'không thấy nút submit').toBeVisible({ timeout: 10_000 })
+      await submitBtn.click()
+      // Poll trả về LÝ DO khi có, để lần đỏ sau còn chẩn đoán được: toast, hoặc
+      // dòng validate inline, thay vì chỉ 'pending' câm.
       await expect.poll(async () => {
         if (!page.url().includes('/tasks/new')) return 'ok'
         if (await toast.count() > 0) return await toast.first().innerText()
-        return 'pending'
-      }, { timeout: 30_000 }).not.toBe('pending')
+        const body = await page.locator('main').innerText()
+        // Tách dòng bằng String.fromCharCode(10): escape trong chuỗi đã hai lần
+        // bị tầng script nuốt thành ký tự thật ở repo này.
+        const line = body.split(String.fromCharCode(10)).find((l) => l.includes('Vui lòng'))
+        return line ? `validate: ${line}` : 'pending'
+      }, { timeout: 30_000, message: 'submit không đi và không có thông báo nào' }).not.toBe('pending')
       const errText = (await toast.count()) > 0 ? await toast.first().innerText() : ''
+      // eslint-disable-next-line no-console
+      console.log(`submit → url=${page.url()} | toast=${JSON.stringify(errText)}`)
       expect(errText, `tạo task lỗi — nếu là lỗi quyền thì migration 108 CHƯA chạy: ${errText}`)
         .not.toMatch(/quyền|policy|row-level|permission/i)
 
@@ -425,7 +483,9 @@ test.describe('SM write-path @desktop', () => {
         .eq('title', title).eq('created_by', smRow.id), 'đọc task vừa tạo')
       taskIds = rows.map((r) => r.id)
       broadcastIds = [...new Set(rows.map((r) => r.broadcast_id).filter(Boolean))] as string[]
-      expect(taskIds.length, 'không tìm thấy task nào vừa tạo trong DB').toBeGreaterThan(0)
+      expect(taskIds.length,
+        `không tìm thấy task nào vừa tạo trong DB — url=${page.url()} toast=${JSON.stringify(errText)}`)
+        .toBeGreaterThan(0)
       for (const r of rows) {
         expect(r.visibility).toBe('store')
         expect(r.assignment_mode).toBe('store')
