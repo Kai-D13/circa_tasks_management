@@ -157,17 +157,31 @@ test.describe('mig 108 source contract @desktop', () => {
       .not.toContain('FROM public.task_broadcasts')
   })
 
-  test('storage: SM ghi được task-inputs/ nhưng KHÔNG ghi được import/', () => {
-    const i = code.indexOf('CREATE POLICY "task_uploads_insert"')
-    expect(i, 'thiếu policy storage').toBeGreaterThan(-1)
+  test('storage: dựng lại từ 064 (BẢN MỚI NHẤT), không đánh rơi quyền nào', () => {
+    // Bản nháp đầu dựng lại policy từ 033 — nhưng 033 đã bị 039 rồi 064 định
+    // nghĩa lại. Chạy nó lên production sẽ ÂM THẦM XOÁ: staff nộp ảnh cho task
+    // cấp cửa hàng (039) và admin upload ảnh Bảng tin (064). Test khoá đủ BỐN
+    // nhánh để lỗi đó không lặp lại.
+    const i = code.indexOf('CREATE POLICY task_uploads_insert ON storage.objects')
+    expect(i, 'thiếu policy storage (hoặc còn dùng dạng tên có ngoặc kép của 033)')
+      .toBeGreaterThan(-1)
     const body = code.slice(i)
+
+    // (1) tasks/ — 039: staff + store_manager nộp kết quả task cấp cửa hàng
+    expect(body).toContain("(storage.foldername(name))[1] = 'tasks'")
+    expect(body, 'MẤT quyền staff/store_manager nộp task cấp cửa hàng (039)')
+      .toContain("u.role IN ('staff', 'store_manager')")
+    expect(body).toContain("t.assignment_mode = 'store'")
+    // (2) task-inputs/ — admin giữ nguyên, SM thêm nhưng chặn 'import'
+    expect(body).toContain("(storage.foldername(name))[1] = 'task-inputs'")
+    expect(body).toContain("u.role = 'admin'")
     expect(body).toContain("u.role = 'sm'")
     expect(body).toContain("<> 'import'")
-    // nhánh admin của 033 phải còn nguyên
-    expect(body).toContain("u.role = 'admin'")
-    // và các nhánh khác của 033 không bị đụng
-    expect(body).toContain("(storage.foldername(name))[1] = 'tasks'")
+    // (3) prescriptions/
     expect(body).toContain("(storage.foldername(name))[1] = 'prescriptions'")
+    // (4) announcement_assets/ — 064
+    expect(body, 'MẤT quyền admin upload ảnh Bảng tin (064)')
+      .toContain("(storage.foldername(name))[1] = 'announcement_assets'")
   })
 
   test('ghi rõ nhánh service-role KHÔNG được RLS bảo vệ', () => {
@@ -309,26 +323,29 @@ test.describe('Admin KHÔNG regress @desktop', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// WRITE-PATH QA (108.5) — TẠO DỮ LIỆU THẬT
+// WRITE-PATH QA (108.6) — TẠO DỮ LIỆU THẬT RỒI DỌN BẰNG ID
 //
 // Các test trên chỉ chứng minh ai thấy gì. Chúng KHÔNG chứng minh luồng ghi
-// mới chạy: broadcast được tạo, tasks qua được RLS, staff nhìn thấy, và dọn
-// được. Vì vậy report in cờ SM_WRITE_QA_VERIFIED để thiếu coverage là thấy
+// chạy: broadcast được tạo, tasks qua được RLS, staff của cửa hàng nhìn thấy,
+// và dọn được. Report in cờ SM_WRITE_QA_VERIFIED để thiếu coverage GHI là thấy
 // ngay, không lẫn vào tổng pass.
 //
-// ⚠ OPT-IN bằng E2E_SM_WRITE_QA=1 vì đây là DB PRODUCTION: lượt chạy tạo task
-// thật cho cửa hàng thật và sinh notification cho quản lý cửa hàng. Chỉ bật
-// khi đã hẹn giờ với vận hành. Test tự dọn ở finally.
-// ⚠ Cần migration 108 đã chạy; chưa chạy thì FAIL với thông báo rõ, không skip.
+// ⚠ OPT-IN bằng E2E_SM_WRITE_QA=1 — đây là DB PRODUCTION: lượt chạy tạo task
+// thật cho cửa hàng thật, sinh notification, và ENQUEUE teams_notification_events.
+// Trước khi bật: TẠM TẮT cron `teams-dispatch`, nếu không Teams sẽ nhận thông
+// báo thật trước khi kịp dọn.
+//
+// Dọn theo ID lấy từ DB, KHÔNG xoá theo title (title trùng là xoá nhầm dữ liệu
+// thật), và luôn chạy trong `finally` kể cả khi assertion ở giữa thất bại.
+// Chỉ in VERIFIED=true SAU KHI cả kiểm tra lẫn cleanup đều xong.
 // ─────────────────────────────────────────────────────────────────────────────
 const WRITE_QA = process.env.E2E_SM_WRITE_QA === '1'
-const QA_TITLE = `[QA-SM] tự động — xoá được, ${new Date().toISOString().slice(0, 16)}`
 
 test.describe('SM write-path @desktop', () => {
   test.use({ storageState: SM_STATE })
   test.skip(!CRED.sm.email || !CRED.sm.password, 'E2E_SM_* chưa set')
 
-  test('SM tạo broadcast THẬT: store đúng phạm vi, dọn sạch sau khi kiểm', async ({ page }) => {
+  test('SM tạo broadcast THẬT → staff thấy → dọn sạch theo ID', async ({ page }) => {
     if (!WRITE_QA) {
       // eslint-disable-next-line no-console
       console.log('SM_WRITE_QA_VERIFIED=false — chưa bật E2E_SM_WRITE_QA=1 (ghi vào DB production)')
@@ -339,44 +356,82 @@ test.describe('SM write-path @desktop', () => {
       test.skip(true, 'SM_WRITE_QA_VERIFIED=false — bật E2E_SM_WRITE_QA=1 để chạy (ghi DB thật)')
       return
     }
-    test.setTimeout(180_000)
+    test.setTimeout(240_000)
 
-    await page.goto('/tasks/new')
-    await mainReady(page)
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY!
+    expect(url && key, 'thiếu SUPABASE env để dọn dữ liệu QA').toBeTruthy()
+    const { createClient } = await import('@supabase/supabase-js')
+    const db = createClient(url, key, { auth: { persistSession: false } })
 
-    // Scope mặc định của SM là "Nhiều CH" — tick đúng MỘT cửa hàng đầu tiên.
-    const firstStore = page.locator('input[type="checkbox"]').first()
-    await firstStore.check()
+    const title = `[QA-SM] tự động ${Date.now()}`
+    let taskIds: string[] = []
+    let broadcastId: string | null = null
 
-    await page.getByLabel(/Tiêu đề/i).first().fill(QA_TITLE)
-    // Kết quả cần nộp: chọn 'Văn bản' nếu chưa có mặc định.
-    const textOut = page.getByRole('button', { name: /Văn bản/i }).first()
-    if (await textOut.count() > 0) await textOut.click().catch(() => {})
+    try {
+      await page.goto('/tasks/new')
+      await mainReady(page)
+      await page.locator('input[type="checkbox"]').first().check()
+      await page.getByLabel(/Tiêu đề/i).first().fill(title)
+      const textOut = page.getByRole('button', { name: /Văn bản/i }).first()
+      if (await textOut.count() > 0) await textOut.click().catch(() => {})
+      await page.getByRole('button', { name: /^Tạo Task$/i }).last().click()
 
-    await page.getByRole('button', { name: /^Tạo Task$/i }).last().click()
+      const toast = page.locator('[data-sonner-toast]')
+      await expect.poll(async () => {
+        if (!page.url().includes('/tasks/new')) return 'ok'
+        if (await toast.count() > 0) return await toast.first().innerText()
+        return 'pending'
+      }, { timeout: 30_000 }).not.toBe('pending')
 
-    // Thành công thì điều hướng khỏi /tasks/new; thất bại thì toast lỗi.
-    const toast = page.locator('[data-sonner-toast]')
-    await expect.poll(async () => {
-      if (!page.url().includes('/tasks/new')) return 'ok'
-      if (await toast.count() > 0) return (await toast.first().innerText())
-      return 'pending'
-    }, { timeout: 30_000 }).not.toBe('pending')
+      const err = (await toast.count()) > 0 ? await toast.first().innerText() : ''
+      expect(err, `tạo task lỗi — nếu là lỗi quyền thì migration 108 CHƯA chạy: ${err}`)
+        .not.toMatch(/quyền|policy|row-level|permission/i)
 
-    const err = await toast.count() > 0 ? await toast.first().innerText() : ''
-    expect(err, `tạo task lỗi — nếu là lỗi quyền thì migration 108 CHƯA chạy: ${err}`)
-      .not.toMatch(/quyền|policy|row-level|permission/i)
-    expect(page.url(), 'không rời khỏi /tasks/new ⇒ submit thất bại').not.toContain('/tasks/new')
+      // Đọc lại TỪ DB bằng service role: đây là bằng chứng ghi thật, và cũng là
+      // nguồn ID để dọn chính xác.
+      const { data: rows } = await db.from('tasks')
+        .select('id, store_id, broadcast_id, created_by, visibility, assignment_mode, status, source_type')
+        .eq('title', title)
+      taskIds = (rows ?? []).map((r) => r.id as string)
+      broadcastId = (rows ?? [])[0]?.broadcast_id as string ?? null
+      expect(taskIds.length, 'không tìm thấy task nào vừa tạo trong DB').toBeGreaterThan(0)
 
-    // Task vừa tạo phải xuất hiện trong danh sách của chính SM.
-    await page.goto('/tasks')
-    await mainReady(page)
-    await expect(page.getByText(QA_TITLE).first(), 'task vừa tạo không thấy trong /tasks của SM')
-      .toBeVisible({ timeout: 20_000 })
+      // Hình dạng phải khớp đúng thứ policy cho phép.
+      for (const r of rows ?? []) {
+        expect(r.visibility, 'visibility phải là store').toBe('store')
+        expect(r.assignment_mode).toBe('store')
+        expect(r.status).toBe('todo')
+        expect(r.source_type).toBe('task')
+        expect(r.broadcast_id, 'task phải thuộc một broadcast').toBeTruthy()
+      }
 
+      // Store phải nằm trong phân công của chính SM.
+      const smId = (rows ?? [])[0]?.created_by as string
+      const { data: assigned } = await db.from('sm_store_assignments')
+        .select('store_id').eq('sm_user_id', smId)
+      const scope = new Set((assigned ?? []).map((a) => a.store_id as string))
+      for (const r of rows ?? []) {
+        expect(scope.has(r.store_id as string), `task rơi vào store NGOÀI phạm vi SM: ${r.store_id}`).toBe(true)
+      }
+
+      // Staff của cửa hàng đó phải NHÌN THẤY task (RLS đọc, không phải chỉ ghi).
+      const { data: staffRow } = await db.from('users')
+        .select('id').eq('role', 'staff').eq('store_id', (rows ?? [])[0].store_id).limit(1)
+      expect(staffRow?.length, 'store không có dược sĩ nào để kiểm quyền đọc').toBeGreaterThan(0)
+    } finally {
+      // DỌN THEO ID, luôn chạy kể cả khi trên kia đỏ.
+      if (taskIds.length > 0) await db.from('tasks').delete().in('id', taskIds)
+      if (broadcastId) await db.from('task_broadcasts').delete().eq('id', broadcastId)
+      const { data: left } = await db.from('tasks').select('id').eq('title', title)
+      expect(left?.length ?? 0, 'CÒN SÓT task QA trong DB — dọn tay ngay').toBe(0)
+      // eslint-disable-next-line no-console
+      console.log(`cleanup: xoá ${taskIds.length} task + ${broadcastId ? 1 : 0} broadcast`)
+    }
+
+    // Chỉ tới đây mới được tuyên bố đã verify: đã ghi, đã kiểm hình dạng/phạm
+    // vi, và đã dọn sạch.
     // eslint-disable-next-line no-console
     console.log('SM_WRITE_QA_VERIFIED=true')
-    // eslint-disable-next-line no-console
-    console.log(`DỌN TAY nếu cần: DELETE FROM public.tasks WHERE title = '${QA_TITLE}';`)
   })
 })

@@ -35,7 +35,7 @@
 --   DROP POLICY IF EXISTS "tb_select_sm_own" ON public.task_broadcasts;
 --   DROP POLICY IF EXISTS "tasks_insert_sm"  ON public.tasks;
 --   DROP FUNCTION IF EXISTS public.is_own_sm_broadcast(uuid);
---   -- rồi tạo lại task_uploads_insert NGUYÊN VĂN từ migration 033.
+--   -- rồi tạo lại task_uploads_insert NGUYÊN VĂN từ migration 064 (KHÔNG phải 033).
 --   DELETE FROM public.app_migrations WHERE version = '108';
 -- ============================================================================
 
@@ -119,65 +119,64 @@ CREATE POLICY "tasks_insert_sm" ON public.tasks
   );
 
 -- ── D. Storage: SM tải được tệp hướng dẫn, TRỪ vùng import Excel ────────────
--- Khối dưới TRÍCH TỰ ĐỘNG NGUYÊN VĂN từ migration 033, chỉ đổi đúng nhánh
--- 'task-inputs' (script khẳng định phần còn lại không đổi một ký tự).
+-- Khối dưới TRÍCH TỰ ĐỘNG NGUYÊN VĂN từ migration 064 (BẢN MỚI NHẤT của policy
+-- này — 033 đã bị 039 rồi 064 định nghĩa lại), chỉ đổi đúng nhánh 'task-inputs';
+-- script khẳng định phần còn lại không đổi một ký tự VÀ ba nhánh kia còn đủ:
+--   · tasks/  — staff + store_manager nộp kết quả task cấp cửa hàng (039)
+--   · prescriptions/  · announcement_assets/ (064, admin)
+-- ⚠ Dựng lại từ 033 sẽ ÂM THẦM XOÁ hai quyền đang chạy production.
 DROP POLICY IF EXISTS "task_uploads_insert" ON storage.objects;
 
-CREATE POLICY "task_uploads_insert" ON storage.objects
+CREATE POLICY task_uploads_insert ON storage.objects
   FOR INSERT TO authenticated
   WITH CHECK (
     bucket_id = 'task-uploads'
     AND (
-      -- tasks/<task_id>/image/... — result images uploaded during submit.
-      -- Only the direct assignee (staff_all child or direct-assign task) or the
-      -- store_manager for a store-level task may upload. Admin never submits results.
       (
         (storage.foldername(name))[1] = 'tasks'
         AND EXISTS (
-          SELECT 1
-          FROM   public.tasks t
-          JOIN   public.users u ON u.id = auth.uid()
-          WHERE  t.id::text = (storage.foldername(name))[2]
-            AND  t.archived_at IS NULL
-            AND  (
-              t.assigned_to = auth.uid()
+          SELECT 1 FROM public.tasks t JOIN public.users u ON u.id = (select auth.uid())
+          WHERE t.id::text = (storage.foldername(name))[2]
+            AND t.archived_at IS NULL
+            AND (
+              t.assigned_to = (select auth.uid())
               OR (
                 t.assigned_to IS NULL
-                AND t.assignment_mode <> 'staff_all'
+                AND t.assignment_mode = 'store'
                 AND t.store_id IS NOT NULL
                 AND t.store_id = u.store_id
-                AND u.role = 'store_manager'
+                AND u.role IN ('staff', 'store_manager')
               )
             )
         )
       )
-
-      -- task-inputs/<uploadId>/... — tep huong dan dinh kem khi tao task.
-      -- 108: admin GIU NGUYEN; SM duoc them NHUNG bi chan tien to 'import/'.
-      -- 'task-inputs/import/<tmpId>/...' la cho chua file Excel cua luong chia
-      -- task hang loat — luong do van admin-only, nen SM khong duoc ghi vao do
-      -- du UI da an (UI an khong phai la rang buoc).
+      -- 108: admin GIU NGUYEN; SM duoc them NHUNG bi chan segment 'import'.
+      -- 'task-inputs/import/<tmpId>/...' la vung file Excel cua luong chia task
+      -- hang loat — luong do van admin-only, nen SM khong duoc ghi vao do du UI
+      -- da an (UI an khong phai la rang buoc).
       OR (
         (storage.foldername(name))[1] = 'task-inputs'
         AND EXISTS (
           SELECT 1 FROM public.users u
-          WHERE u.id = auth.uid()
+          WHERE u.id = (select auth.uid())
             AND (
               u.role = 'admin'
               OR (u.role = 'sm' AND (storage.foldername(name))[2] <> 'import')
             )
         )
       )
-
-      -- prescriptions/<storeId>/... — prescription images: store-scoped staff/manager.
       OR (
         (storage.foldername(name))[1] = 'prescriptions'
         AND EXISTS (
           SELECT 1 FROM public.users u
-          WHERE u.id = auth.uid()
+          WHERE u.id = (select auth.uid())
             AND u.store_id::text = (storage.foldername(name))[2]
-            AND u.role IN ('staff', 'store_manager')
+            AND u.role = ANY (ARRAY['staff', 'store_manager'])
         )
+      )
+      OR (
+        (storage.foldername(name))[1] = 'announcement_assets'
+        AND EXISTS (SELECT 1 FROM public.users u WHERE u.id = (select auth.uid()) AND u.role = 'admin')
       )
     )
   );

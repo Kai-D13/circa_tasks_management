@@ -27,23 +27,32 @@ export default async function NewTaskPage({
   // Danh sách derive Ở SERVER từ sm_store_assignments, không nhận từ client.
   // (Server action vẫn nạp lại phạm vi lúc submit; đây là lớp hiển thị.)
   const smStoreIds = isSm ? await getSmStoreIds(supabase, user.id) : []
-  if (isSm && smStoreIds.length === 0) {
-    return (
-      <div className="p-4 md:p-6">
-        <EmptyState
-          icon={ClipboardList}
-          title="Bạn chưa được phân công cửa hàng nào"
-          hint="Liên hệ Admin để được phân công trước khi tạo task."
-        />
-      </div>
-    )
-  }
 
   // Only ACTIVE OS stores are assignable — deactivated (mig 074) and franchise
   // (mig 076) stores must not receive OS tasks.
   const storeQuery = supabase.from('stores')
     .select('id, name, code').eq('is_active', true).eq('store_type', 'os').order('name')
   const { data: stores } = await (isSm ? storeQuery.in('id', smStoreIds) : storeQuery)
+
+  // 108.6: chặn theo DANH SÁCH SAU LỌC, không theo số phân công. SM có thể
+  // được phân công cửa hàng đã ngừng hoạt động (mig 074) hoặc cửa hàng FS
+  // (mig 076) — lúc đó smStoreIds > 0 nhưng danh sách chọn được lại rỗng, và
+  // form sẽ render một biểu mẫu không thể submit.
+  if (isSm && (stores ?? []).length === 0) {
+    return (
+      <div className="p-4 md:p-6">
+        <EmptyState
+          icon={ClipboardList}
+          title={smStoreIds.length === 0
+            ? 'Bạn chưa được phân công cửa hàng nào'
+            : 'Cửa hàng bạn phụ trách hiện không nhận task'}
+          hint={smStoreIds.length === 0
+            ? 'Liên hệ Admin để được phân công trước khi tạo task.'
+            : 'Các cửa hàng được phân công đang ngừng hoạt động hoặc không thuộc hệ OS. Liên hệ Admin.'}
+        />
+      </div>
+    )
+  }
 
   // Chỉ trả về nhân viên thuộc các cửa hàng SM được phép giao việc — form
   // không nên cầm danh sách toàn công ty rồi tự lọc ở client.
