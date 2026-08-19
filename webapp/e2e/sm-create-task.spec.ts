@@ -323,29 +323,39 @@ test.describe('Admin KHÔNG regress @desktop', () => {
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
-// WRITE-PATH QA (108.6) — TẠO DỮ LIỆU THẬT RỒI DỌN BẰNG ID
+// WRITE-PATH QA (108.7) — GHI THẬT, STAFF ĐỌC THẬT, DỌN CÓ BẰNG CHỨNG
 //
-// Các test trên chỉ chứng minh ai thấy gì. Chúng KHÔNG chứng minh luồng ghi
-// chạy: broadcast được tạo, tasks qua được RLS, staff của cửa hàng nhìn thấy,
-// và dọn được. Report in cờ SM_WRITE_QA_VERIFIED để thiếu coverage GHI là thấy
-// ngay, không lẫn vào tổng pass.
+// ⚠ OPT-IN E2E_SM_WRITE_QA=1 — DB PRODUCTION. Trước khi bật phải TẠM TẮT cron
+// `teams-dispatch`: action enqueue teams_notification_events, cron chạy kịp là
+// Teams bắn thông báo thật trước khi kịp dọn.
 //
-// ⚠ OPT-IN bằng E2E_SM_WRITE_QA=1 — đây là DB PRODUCTION: lượt chạy tạo task
-// thật cho cửa hàng thật, sinh notification, và ENQUEUE teams_notification_events.
-// Trước khi bật: TẠM TẮT cron `teams-dispatch`, nếu không Teams sẽ nhận thông
-// báo thật trước khi kịp dọn.
-//
-// Dọn theo ID lấy từ DB, KHÔNG xoá theo title (title trùng là xoá nhầm dữ liệu
-// thật), và luôn chạy trong `finally` kể cả khi assertion ở giữa thất bại.
-// Chỉ in VERIFIED=true SAU KHI cả kiểm tra lẫn cleanup đều xong.
+// Ba thứ bản trước làm sai, nay sửa:
+//  1. "Staff thấy task" chỉ kiểm bằng SERVICE ROLE — mà service role BYPASS
+//     RLS, nên nó không chứng minh gì về quyền đọc. Nay mở context Staff thật.
+//  2. Mọi lệnh Supabase đều bỏ qua `error`. Đọc ID lỗi ⇒ taskIds rỗng ⇒
+//     `finally` không xoá gì mà vẫn báo sạch; `left` null bị đọc thành 0 ⇒ in
+//     VERIFIED=true trong khi dữ liệu QA còn nằm trong production.
+//  3. Không kiểm broadcast và Teams outbox sau khi dọn.
 // ─────────────────────────────────────────────────────────────────────────────
 const WRITE_QA = process.env.E2E_SM_WRITE_QA === '1'
+
+// Mọi truy vấn phải NỔ khi lỗi — im lặng ở đây nghĩa là dữ liệu thật bị bỏ lại.
+function must<T>(res: { data: unknown; error: { message?: string } | null }, what: string): T {
+  if (res.error) throw new Error(`${what} lỗi: ${res.error.message ?? JSON.stringify(res.error)}`)
+  if (res.data === null || res.data === undefined) throw new Error(`${what}: không có dữ liệu trả về`)
+  return res.data as T
+}
+
+type TaskRowQA = {
+  id: string; store_id: string; broadcast_id: string | null; created_by: string
+  visibility: string; assignment_mode: string; status: string; source_type: string
+}
 
 test.describe('SM write-path @desktop', () => {
   test.use({ storageState: SM_STATE })
   test.skip(!CRED.sm.email || !CRED.sm.password, 'E2E_SM_* chưa set')
 
-  test('SM tạo broadcast THẬT → staff thấy → dọn sạch theo ID', async ({ page }) => {
+  test('SM tạo broadcast THẬT → Staff đọc được → dọn sạch có bằng chứng', async ({ page, browser }) => {
     if (!WRITE_QA) {
       // eslint-disable-next-line no-console
       console.log('SM_WRITE_QA_VERIFIED=false — chưa bật E2E_SM_WRITE_QA=1 (ghi vào DB production)')
@@ -356,22 +366,44 @@ test.describe('SM write-path @desktop', () => {
       test.skip(true, 'SM_WRITE_QA_VERIFIED=false — bật E2E_SM_WRITE_QA=1 để chạy (ghi DB thật)')
       return
     }
-    test.setTimeout(240_000)
+    test.setTimeout(300_000)
 
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL!
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY!
-    expect(url && key, 'thiếu SUPABASE env để dọn dữ liệu QA').toBeTruthy()
+    const supaUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+    const supaKey = process.env.SUPABASE_SERVICE_ROLE_KEY
+    expect(Boolean(supaUrl && supaKey), 'thiếu SUPABASE env để dọn dữ liệu QA').toBe(true)
     const { createClient } = await import('@supabase/supabase-js')
-    const db = createClient(url, key, { auth: { persistSession: false } })
+    const db = createClient(supaUrl as string, supaKey as string, { auth: { persistSession: false } })
+
+    // ── Cửa hàng phải GIAO NHAU giữa phạm vi SM và store của tài khoản Staff,
+    //    nếu không thì "Staff đọc được" là câu hỏi không thể trả lời.
+    const smRow = must<{ id: string }>(await db.from('users').select('id').eq('email', CRED.sm.email as string).single(), 'đọc SM')
+    const staffRow = must<{ id: string; store_id: string }>(await db.from('users').select('id, store_id').eq('email', CRED.staff.email as string).single(), 'đọc Staff')
+    const assigned = must<{ store_id: string }[]>(await db.from('sm_store_assignments').select('store_id').eq('sm_user_id', smRow.id), 'đọc phân công SM')
+    const scope = new Set(assigned.map((a) => a.store_id))
+    expect(scope.has(staffRow.store_id),
+      `cửa hàng của Staff QA (${staffRow.store_id}) KHÔNG nằm trong phạm vi SM ⇒ không kiểm được quyền đọc. Đổi tài khoản QA hoặc phân công lại.`)
+      .toBe(true)
+    const store = must<{ id: string; name: string; is_active: boolean; store_type: string }>(await db.from('stores')
+      .select('id, name, is_active, store_type').eq('id', staffRow.store_id).single(), 'đọc cửa hàng')
+    expect(store.is_active === true && store.store_type === 'os',
+      'cửa hàng QA phải là OS đang hoạt động thì form mới liệt kê').toBe(true)
 
     const title = `[QA-SM] tự động ${Date.now()}`
     let taskIds: string[] = []
-    let broadcastId: string | null = null
+    let broadcastIds: string[] = []
 
     try {
       await page.goto('/tasks/new')
       await mainReady(page)
-      await page.locator('input[type="checkbox"]').first().check()
+
+      // Tick ĐÚNG cửa hàng giao nhau, không phải "ô đầu tiên".
+      const box = page.locator('label', { hasText: store.name as string })
+        .locator('input[type="checkbox"]').first()
+      const found = await box.waitFor({ state: 'visible', timeout: 10_000 })
+        .then(() => true).catch(() => false)
+      expect(found, `không tìm thấy ô chọn cho cửa hàng "${store.name}" trong form`).toBe(true)
+      await box.check()
+
       await page.getByLabel(/Tiêu đề/i).first().fill(title)
       const textOut = page.getByRole('button', { name: /Văn bản/i }).first()
       if (await textOut.count() > 0) await textOut.click().catch(() => {})
@@ -383,54 +415,75 @@ test.describe('SM write-path @desktop', () => {
         if (await toast.count() > 0) return await toast.first().innerText()
         return 'pending'
       }, { timeout: 30_000 }).not.toBe('pending')
-
-      const err = (await toast.count()) > 0 ? await toast.first().innerText() : ''
-      expect(err, `tạo task lỗi — nếu là lỗi quyền thì migration 108 CHƯA chạy: ${err}`)
+      const errText = (await toast.count()) > 0 ? await toast.first().innerText() : ''
+      expect(errText, `tạo task lỗi — nếu là lỗi quyền thì migration 108 CHƯA chạy: ${errText}`)
         .not.toMatch(/quyền|policy|row-level|permission/i)
 
-      // Đọc lại TỪ DB bằng service role: đây là bằng chứng ghi thật, và cũng là
-      // nguồn ID để dọn chính xác.
-      const { data: rows } = await db.from('tasks')
+      // ── Bằng chứng GHI ───────────────────────────────────────────────────
+      const rows = must<TaskRowQA[]>(await db.from('tasks')
         .select('id, store_id, broadcast_id, created_by, visibility, assignment_mode, status, source_type')
-        .eq('title', title)
-      taskIds = (rows ?? []).map((r) => r.id as string)
-      broadcastId = (rows ?? [])[0]?.broadcast_id as string ?? null
+        .eq('title', title).eq('created_by', smRow.id), 'đọc task vừa tạo')
+      taskIds = rows.map((r) => r.id)
+      broadcastIds = [...new Set(rows.map((r) => r.broadcast_id).filter(Boolean))] as string[]
       expect(taskIds.length, 'không tìm thấy task nào vừa tạo trong DB').toBeGreaterThan(0)
-
-      // Hình dạng phải khớp đúng thứ policy cho phép.
-      for (const r of rows ?? []) {
-        expect(r.visibility, 'visibility phải là store').toBe('store')
+      for (const r of rows) {
+        expect(r.visibility).toBe('store')
         expect(r.assignment_mode).toBe('store')
         expect(r.status).toBe('todo')
         expect(r.source_type).toBe('task')
         expect(r.broadcast_id, 'task phải thuộc một broadcast').toBeTruthy()
+        expect(scope.has(r.store_id), `task rơi vào store NGOÀI phạm vi SM: ${r.store_id}`).toBe(true)
       }
 
-      // Store phải nằm trong phân công của chính SM.
-      const smId = (rows ?? [])[0]?.created_by as string
-      const { data: assigned } = await db.from('sm_store_assignments')
-        .select('store_id').eq('sm_user_id', smId)
-      const scope = new Set((assigned ?? []).map((a) => a.store_id as string))
-      for (const r of rows ?? []) {
-        expect(scope.has(r.store_id as string), `task rơi vào store NGOÀI phạm vi SM: ${r.store_id}`).toBe(true)
+      // ── Bằng chứng ĐỌC: context Staff THẬT, đi qua RLS ───────────────────
+      const staffCtx = await browser.newContext({ storageState: STAFF_STATE })
+      try {
+        const sp = await staffCtx.newPage()
+        await sp.goto(`${process.env.E2E_BASE_URL ?? 'http://localhost:3010'}/tasks`)
+        await expect(sp.getByText(title).first(),
+          'Staff của chính cửa hàng đó KHÔNG đọc được task ⇒ RLS chặn nhầm')
+          .toBeVisible({ timeout: 30_000 })
+      } finally {
+        await staffCtx.close()
       }
-
-      // Staff của cửa hàng đó phải NHÌN THẤY task (RLS đọc, không phải chỉ ghi).
-      const { data: staffRow } = await db.from('users')
-        .select('id').eq('role', 'staff').eq('store_id', (rows ?? [])[0].store_id).limit(1)
-      expect(staffRow?.length, 'store không có dược sĩ nào để kiểm quyền đọc').toBeGreaterThan(0)
     } finally {
-      // DỌN THEO ID, luôn chạy kể cả khi trên kia đỏ.
-      if (taskIds.length > 0) await db.from('tasks').delete().in('id', taskIds)
-      if (broadcastId) await db.from('task_broadcasts').delete().eq('id', broadcastId)
-      const { data: left } = await db.from('tasks').select('id').eq('title', title)
-      expect(left?.length ?? 0, 'CÒN SÓT task QA trong DB — dọn tay ngay').toBe(0)
+      // ── DỌN: phục hồi ID cả khi bước đọc phía trên đã đỏ ─────────────────
+      if (taskIds.length === 0) {
+        const rec = await db.from('tasks').select('id, broadcast_id')
+          .eq('title', title).eq('created_by', smRow.id)
+        if (rec.error) throw new Error(`không phục hồi được ID để dọn: ${rec.error.message}`)
+        taskIds = (rec.data ?? []).map((r: { id: string }) => r.id)
+        broadcastIds = [...new Set((rec.data ?? []).map((r: { broadcast_id: string | null }) => r.broadcast_id).filter(Boolean))] as string[]
+      }
+      if (taskIds.length > 0) {
+        const d = await db.from('tasks').delete().in('id', taskIds)
+        if (d.error) throw new Error(`xoá task QA lỗi: ${d.error.message}`)
+      }
+      if (broadcastIds.length > 0) {
+        const d = await db.from('task_broadcasts').delete().in('id', broadcastIds)
+        if (d.error) throw new Error(`xoá broadcast QA lỗi: ${d.error.message}`)
+      }
+      // Bằng chứng SẠCH — bốn bảng, error kiểm tường minh.
+      const leftTasks = must<{ id: string }[]>(await db.from('tasks').select('id').eq('title', title), 'kiểm task còn sót')
+      expect(leftTasks.length, 'CÒN SÓT task QA trong production').toBe(0)
+      if (broadcastIds.length > 0) {
+        const leftB = must<{ id: string }[]>(await db.from('task_broadcasts').select('id').in('id', broadcastIds), 'kiểm broadcast còn sót')
+        expect(leftB.length, 'CÒN SÓT broadcast QA trong production').toBe(0)
+      }
+      if (taskIds.length > 0) {
+        // task_id có ON DELETE CASCADE — nhưng KIỂM chứ không tin.
+        const leftT = must<{ id: string }[]>(await db.from('teams_notification_events').select('id').in('task_id', taskIds),
+          'kiểm Teams outbox còn sót')
+        expect(leftT.length, 'CÒN SÓT bản ghi Teams outbox — Teams có thể bắn thông báo QA').toBe(0)
+        const leftN = must<{ id: string }[]>(await db.from('notifications').select('id').in('task_id', taskIds),
+          'kiểm notifications còn sót')
+        expect(leftN.length, 'CÒN SÓT notification QA').toBe(0)
+      }
       // eslint-disable-next-line no-console
-      console.log(`cleanup: xoá ${taskIds.length} task + ${broadcastId ? 1 : 0} broadcast`)
+      console.log(`cleanup OK: xoá ${taskIds.length} task, ${broadcastIds.length} broadcast; outbox + notifications = 0`)
     }
 
-    // Chỉ tới đây mới được tuyên bố đã verify: đã ghi, đã kiểm hình dạng/phạm
-    // vi, và đã dọn sạch.
+    // Chỉ tới đây: đã ghi, hình dạng đúng, Staff ĐỌC được, và dọn có bằng chứng.
     // eslint-disable-next-line no-console
     console.log('SM_WRITE_QA_VERIFIED=true')
   })
