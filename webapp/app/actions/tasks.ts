@@ -12,6 +12,9 @@ import { CYCLE_COUNT_DEPT_ID } from '@/lib/inventory/constants'
 import { publicStorageUrl } from '@/lib/storage/publicUrl'
 import { sanitizeRichText } from '@/lib/richtext/sanitize'
 import { assertOsStoreIds } from '@/lib/stores/assertOsStore'
+import {
+  canCreateTask, smVisibilityAllowed, validateSmStaffSelection, validateSmStoreScope,
+} from '@/lib/tasks/smScope'
 
 // True when the given admin is an 'editor' collaborator on the task.
 // Used by addReviewNote + requestResubmit to accept collaborator editors.
@@ -135,6 +138,9 @@ export async function createTask(formData: FormData) {
   // Task creation is admin-only (own-scope: created_by = caller). Store managers
   // are executors, not task admins.
   const { data: creatorProfile } = await supabase.from('users').select('role').eq('id', user.id).single()
+  // Tạo task ĐƠN LẺ vẫn ADMIN-ONLY. Request của stakeholder là SM tạo task
+  // BROADCAST; mở luôn createTask là cấp quyền rộng hơn thứ được duyệt, và
+  // đường này còn nhận `assigned_to` tự do nên bề mặt kiểm cũng lớn hơn.
   if (creatorProfile?.role !== 'admin') return { error: 'Chỉ admin mới được tạo task' }
 
   const storeIdVal = formData.get('store_id') as string | null
@@ -918,9 +924,31 @@ export async function createBroadcastTask(params: {
   if (!user) return { error: 'Not authenticated' }
 
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
-  if (profile?.role !== 'admin') return { error: 'Chỉ admin mới được tạo task broadcast' }
+  if (!canCreateTask(profile?.role)) return { error: 'Bạn không có quyền tạo task broadcast' }
 
   if (!params.storeIds.length) return { error: 'Vui lòng chọn ít nhất một cửa hàng' }
+
+  // ── Mig 108: SM chỉ được phát task cho cửa hàng MÌNH ĐANG phụ trách ────────
+  // Phạm vi nạp lại TẠI ĐÂY, không tin `storeIds` từ client và cũng không tin
+  // phạm vi lúc form được mở: SM có thể vừa bị gỡ phân công trong lúc soạn.
+  //
+  // ⚠ Đây là chốt chặn DUY NHẤT cho chế độ "Từng dược sĩ nộp": nhánh đó ghi
+  // `tasks` bằng service role nên policy tasks_insert_sm (108) KHÔNG áp.
+  if (profile?.role === 'sm') {
+    const assigned = await getSmStoreIds(supabase, user.id)
+    const scope = validateSmStoreScope(assigned, params.storeIds)
+    if (!scope.ok) return { error: scope.error }
+    const staffScope = validateSmStaffSelection(params.selectedStaffByStore, scope.storeIds)
+    if (!staffScope.ok) return { error: staffScope.error }
+    // Form chỉ gửi store/private; 'public' chỉ tới từ payload bị sửa và sẽ cho
+    // TOÀN BỘ nhân viên công ty đọc task (tasks_select_staff không kèm điều
+    // kiện cửa hàng cho 'public').
+    if (!smVisibilityAllowed(params.visibility)) {
+      return { error: 'Phạm vi hiển thị không hợp lệ cho Quản lý vùng' }
+    }
+    // Dùng danh sách ĐÃ validate + dedupe cho toàn bộ phần còn lại.
+    params = { ...params, storeIds: scope.storeIds }
+  }
   if (!params.requiredOutputs?.length) return { error: 'Vui lòng chọn ít nhất một loại kết quả cần nộp' }
 
   // FS/OS isolation (mig 076): no OS broadcast task may target an FS store.
@@ -1119,7 +1147,12 @@ export async function createBroadcastTask(params: {
 
   const { data: created, error } = await supabase
     .from('tasks').insert(tasksToInsert).select('id, title, store_id')
-  if (error) return { error: error.message }
+  if (error) {
+    // Broadcast đã được ghi TRƯỚC tasks. Không dọn thì để lại một nhóm rỗng
+    // treo trong DB — nhánh staff_all vốn đã rollback, nhánh này thì quên.
+    await supabaseAdmin.from('task_broadcasts').delete().eq('id', broadcast.id)
+    return { error: error.message }
+  }
 
   const logs = (created ?? []).map((t) => ({
     task_id:  t.id,

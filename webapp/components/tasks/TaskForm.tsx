@@ -20,6 +20,7 @@ import {
   Task, Store, UserProfile, RequiredOutput, UserRole,
   TaskPriority, TaskVisibility, TaskCategory, TaskAttachment,
 } from '@/types'
+import { canCreateRecurring, canCreateTask, canImportExcel } from '@/lib/tasks/smScope'
 
 const OUTPUT_OPTIONS: { value: RequiredOutput; label: string }[] = [
   { value: 'text',  label: 'Ghi chú' },
@@ -120,7 +121,12 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   const [customDeadline, setCustomDeadline] = useState(false)
 
   // Recurring has no single-store scope (mirrors handleSetTaskType).
-  const [scope, setScope]                       = useState<Scope>(!task && initialTaskType === 'recurring' ? 'multi' : 'single')
+  // 108.5: SM không có scope 'single' (tạo task đơn lẻ vẫn admin-only ở
+  // server) ⇒ mặc định 'multi', nếu không form sẽ mở ở một chế độ mà chính
+  // họ không bấm sang được và submit sẽ bị server từ chối.
+  const smOnlyBroadcast = currentUserRole === 'sm'
+  const [scope, setScope]                       = useState<Scope>(
+    !task && (initialTaskType === 'recurring' || currentUserRole === 'sm') ? 'multi' : 'single')
   const [selectedStoreIds, setSelectedStoreIds] = useState<string[]>([])
 
   // Excel split (broadcast + store-mode only): null = no file / plain broadcast.
@@ -229,7 +235,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
       setPriority(d.priority ?? 'normal')
       setStoreId(d.storeId ?? '')
       setAssignedTo(d.assignedTo ?? '')
-      setScope(d.scope ?? 'single')
+      setScope(smOnlyBroadcast ? (d.scope === 'single' ? 'multi' : d.scope ?? 'multi') : d.scope ?? 'single')
       setSelectedStoreIds(d.selectedStoreIds ?? [])
       setStaffMode(d.staffMode ?? false)
       setOutputs(d.outputs ?? [])
@@ -278,11 +284,19 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   }
 
   const isAdmin     = currentUserRole === 'admin'
-  const isBroadcast = isAdmin && !task && scope !== 'single'
+  // Mig 108: SM tạo được task PHÁT SINH cho cửa hàng mình phụ trách.
+  // `isAdmin` giữ nguyên nghĩa cũ (dùng cho những thứ SM KHÔNG có: định kỳ,
+  // import Excel); `canCreate` là quyền tạo task nói chung. Tách hai khái niệm
+  // ra thay vì nới `isAdmin` — nới sẽ mở luôn cả định kỳ lẫn Excel cho SM.
+  const canCreate   = canCreateTask(currentUserRole)
+  const canRecurring = canCreateRecurring(currentUserRole)
+  const canExcel     = canImportExcel(currentUserRole)
+  const isBroadcast = canCreate && !task && scope !== 'single'
   const isEditMode  = !!task
   const isRecurring = taskType === 'recurring' && !isEditMode
 
-  const visibleStores  = isAdmin ? stores : stores.filter((s) => s.id === currentUserStoreId)
+  // SM: `stores` đã được route lọc theo phân công nên hiện TẤT CẢ là đúng.
+  const visibleStores  = canCreate ? stores : stores.filter((s) => s.id === currentUserStoreId)
   const storeUsers     = storeId ? users.filter((u) => u.store_id === storeId) : users
   const broadcastCount    = scope === 'all' ? visibleStores.length : selectedStoreIds.length
   const showMultiStore    = isBroadcast || isRecurring
@@ -290,7 +304,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   // staff_all: admin + new task. Works for all scopes (single/multi/all) AND for
   // recurring schedules (migration 062). For recurring it's dynamic — every
   // current pharmacist of each store at each run, so no per-store subset picker.
-  const canStaffMode       = isAdmin && !isEditMode
+  const canStaffMode       = canCreate && !isEditMode
   const effectiveStaffMode = staffMode && canStaffMode
   // Single-store pharmacist list + selected count (selected = not unchecked).
   const singleStoreStaff   = storeId
@@ -324,7 +338,9 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   const storesClearedBySelection = perStoreStaffInfo.filter(s => s.count > 0 && s.selectedCount === 0)
 
   // Excel split: adhoc + broadcast (multi/all) + store-mode (not per-pharmacist).
-  const showExcelSplit  = isBroadcast && !isRecurring && !effectiveStaffMode
+  // Excel split: admin-only (sinh task hàng loạt từ file, phạm vi không kiểm
+  // lại được như luồng phát sinh).
+  const showExcelSplit  = canExcel && isBroadcast && !isRecurring && !effectiveStaffMode
   const allowedStoreIds = scope === 'all' ? visibleStores.map((s) => s.id) : selectedStoreIds
   // Drop any staged import when the conditions stop applying (scope→single, staff
   // mode, recurring) so a hidden file can never leak into a different submit path.
@@ -348,7 +364,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
   }
 
   function handleScopeChange(scopeVal: Scope) {
-    setScope(scopeVal)
+    setScope(smOnlyBroadcast && scopeVal === 'single' ? 'multi' : scopeVal)
     setSelectedStoreIds([])
     // staffMode intentionally preserved — staff_all works for all scopes
   }
@@ -684,12 +700,15 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
             </div>
           )}
 
-          {/* Row 1: Scope pills — admin + new only; recurring hides "Một CH" */}
-          {isAdmin && !isEditMode && (
+          {/* Row 1: Scope pills — người tạo task + tạo mới; recurring ẩn "Một CH".
+              108.5: SM cũng KHÔNG có "Một CH" — request đã chốt là BROADCAST,
+              và tạo task đơn lẻ (createTask) vẫn admin-only ở server. Muốn giao
+              một cửa hàng thì SM tick đúng một ô trong "Nhiều CH". */}
+          {canCreate && !isEditMode && (
             <div className="border-b px-5 py-2.5 flex items-center gap-2 flex-wrap">
               <span className="text-xs text-muted-foreground shrink-0">Giao đến:</span>
               {(['single', 'multi', 'all'] as Scope[]).map((s) => {
-                if (s === 'single' && isRecurring) return null
+                if (s === 'single' && (isRecurring || !isAdmin)) return null
                 const label = s === 'single' ? 'Một CH' : s === 'multi' ? 'Nhiều CH' : `Tất cả (${visibleStores.length})`
                 return (
                   <button
@@ -1016,7 +1035,8 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
           <div className="flex-1 overflow-y-auto">
 
             {/* Loại task — admin + new only */}
-            {isAdmin && !isEditMode && (
+            {/* Loại task: SM KHÔNG có 'Định kỳ' — cả khối ẩn khi chỉ còn một lựa chọn. */}
+            {canRecurring && !isEditMode && (
               <div className="px-5 py-3 border-b">
                 <span className={sectionLabel}>Loại task</span>
                 <div className="flex rounded-[4px] border overflow-hidden">

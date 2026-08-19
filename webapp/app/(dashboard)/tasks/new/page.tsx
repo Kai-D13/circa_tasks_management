@@ -1,6 +1,10 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { TaskForm } from '@/components/tasks/TaskForm'
+import { EmptyState } from '@/components/ds/EmptyState'
+import { getSmStoreIds } from '@/lib/authz'
+import { canCreateTask } from '@/lib/tasks/smScope'
+import { ClipboardList } from 'lucide-react'
 
 export default async function NewTaskPage({
   searchParams,
@@ -15,15 +19,47 @@ export default async function NewTaskPage({
   const { data: profile } = await supabase
     .from('users').select('role, store_id').eq('id', user.id).single()
 
-  // Task creation is admin-only — store managers/staff are executors.
-  if (profile?.role !== 'admin') redirect('/tasks')
+  // Mig 108: Admin + SM tạo được task; store manager/staff là người thực hiện.
+  if (!canCreateTask(profile?.role)) redirect('/tasks')
+  const isSm = profile?.role === 'sm'
 
-  const [{ data: stores }, { data: users }] = await Promise.all([
-    // Only ACTIVE OS stores are assignable — deactivated (mig 074) and franchise
-    // (mig 076) stores must not receive OS tasks.
-    supabase.from('stores').select('id, name, code').eq('is_active', true).eq('store_type', 'os').order('name'),
-    supabase.from('users').select('id, full_name, email, store_id, role').order('full_name'),
-  ])
+  // SM chỉ được thấy — và vì thế chỉ chọn được — cửa hàng mình phụ trách.
+  // Danh sách derive Ở SERVER từ sm_store_assignments, không nhận từ client.
+  // (Server action vẫn nạp lại phạm vi lúc submit; đây là lớp hiển thị.)
+  const smStoreIds = isSm ? await getSmStoreIds(supabase, user.id) : []
+
+  // Only ACTIVE OS stores are assignable — deactivated (mig 074) and franchise
+  // (mig 076) stores must not receive OS tasks.
+  const storeQuery = supabase.from('stores')
+    .select('id, name, code').eq('is_active', true).eq('store_type', 'os').order('name')
+  const { data: stores } = await (isSm ? storeQuery.in('id', smStoreIds) : storeQuery)
+
+  // 108.6: chặn theo DANH SÁCH SAU LỌC, không theo số phân công. SM có thể
+  // được phân công cửa hàng đã ngừng hoạt động (mig 074) hoặc cửa hàng FS
+  // (mig 076) — lúc đó smStoreIds > 0 nhưng danh sách chọn được lại rỗng, và
+  // form sẽ render một biểu mẫu không thể submit.
+  if (isSm && (stores ?? []).length === 0) {
+    return (
+      <div className="p-4 md:p-6">
+        <EmptyState
+          icon={ClipboardList}
+          title={smStoreIds.length === 0
+            ? 'Bạn chưa được phân công cửa hàng nào'
+            : 'Cửa hàng bạn phụ trách hiện không nhận task'}
+          hint={smStoreIds.length === 0
+            ? 'Liên hệ Admin để được phân công trước khi tạo task.'
+            : 'Các cửa hàng được phân công đang ngừng hoạt động hoặc không thuộc hệ OS. Liên hệ Admin.'}
+        />
+      </div>
+    )
+  }
+
+  // Chỉ trả về nhân viên thuộc các cửa hàng SM được phép giao việc — form
+  // không nên cầm danh sách toàn công ty rồi tự lọc ở client.
+  const allowedStoreIds = (stores ?? []).map((s) => s.id)
+  const userQuery = supabase.from('users')
+    .select('id, full_name, email, store_id, role').order('full_name')
+  const { data: users } = await (isSm ? userQuery.in('store_id', allowedStoreIds) : userQuery)
 
   return (
     <div className="flex flex-col h-full">
@@ -32,7 +68,7 @@ export default async function NewTaskPage({
         users={users ?? []}
         currentUserRole={profile?.role ?? 'staff'}
         currentUserStoreId={profile?.store_id ?? null}
-        initialTaskType={mode === 'recurring' ? 'recurring' : undefined}
+        initialTaskType={mode === 'recurring' && !isSm ? 'recurring' : undefined}
       />
     </div>
   )

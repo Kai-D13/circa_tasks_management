@@ -389,7 +389,7 @@ export function CampaignKpiView({
                     <span className="text-sm text-muted-foreground shrink-0">{label}</span>
                     <span className="text-right text-base font-bold tabular-nums">{mv.valueText}</span>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div data-metric-progress="" className="flex items-center gap-2">
                     <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-muted">
                       <div
                         className={cn('h-full rounded-full', mv.pass ? 'bg-status-success' : 'bg-primary')}
