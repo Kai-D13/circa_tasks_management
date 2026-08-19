@@ -128,3 +128,121 @@ test.describe('mig 108 source contract @desktop', () => {
     expect(sql.toLowerCase()).toContain('server action')
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACCEPTANCE RUNTIME (108.4)
+//
+// Contract thuần ở trên không chứng minh được UI đã nối. Bài học 4b: 493 test
+// xanh vẫn lọt một nhánh vai trò chưa hề được wire. Ở đây kiểm màn hình thật:
+// ai thấy nút, SM thấy đúng những cửa hàng nào, và SM KHÔNG thấy gì.
+// ─────────────────────────────────────────────────────────────────────────────
+import { MANAGER_STATE, SM_STATE, STAFF_STATE, SUPER_STATE } from './authState'
+
+const CRED = {
+  sm: { email: process.env.E2E_SM_EMAIL, password: process.env.E2E_SM_PASSWORD },
+  staff: { email: process.env.E2E_STAFF_EMAIL, password: process.env.E2E_STAFF_PASSWORD },
+  qlch: { email: process.env.E2E_QLCH_EMAIL, password: process.env.E2E_QLCH_PASSWORD },
+  super: { email: process.env.E2E_SUPER_EMAIL, password: process.env.E2E_SUPER_PASSWORD },
+}
+
+// Đọc `main` chỉ sau khi nội dung đã render (bẫy timing đã trị ở 107.3).
+async function mainReady(page: import('@playwright/test').Page) {
+  // 20s: /tasks/new của admin nạp TOÀN BỘ user công ty nên render chậm hơn hẳn
+  // các màn khác; mặc định 5s của expect.poll đủ cho SM nhưng không đủ cho admin.
+  await expect.poll(
+    async () => (await page.locator('main').innerText()).trim().length,
+    { timeout: 20_000, message: 'main vẫn rỗng — trang chưa render xong' },
+  ).toBeGreaterThan(50)
+  return page.locator('main').innerText()
+}
+
+test.describe('SM thấy nút Tạo Task @desktop', () => {
+  test.use({ storageState: SM_STATE })
+  test.skip(!CRED.sm.email || !CRED.sm.password, 'E2E_SM_* chưa set')
+
+  test('nút "Tạo Task" hiện trên /tasks', async ({ page }) => {
+    await page.goto('/tasks')
+    await mainReady(page)
+    await expect(page.getByRole('link', { name: /Tạo Task/i }).first()).toBeVisible()
+  })
+
+  test('/tasks/new mở được; CHỈ hiện cửa hàng được phân công', async ({ page }) => {
+    await page.goto('/tasks/new')
+    await mainReady(page)
+    // Không bị đẩy về /tasks
+    expect(page.url()).toContain('/tasks/new')
+
+    // Phạm vi quản lý của SM đọc từ chính màn /targets (nguồn độc lập với form).
+    await page.goto('/targets')
+    await mainReady(page)
+    const scopeChips = await page.locator('main').innerText()
+
+    await page.goto('/tasks/new')
+    await mainReady(page)
+    // Mở phạm vi "Nhiều cửa hàng" để lộ danh sách checkbox store.
+    const multi = page.getByText('Nhiều cửa hàng', { exact: false }).first()
+    if (await multi.count() > 0) await multi.click().catch(() => {})
+    const formText = await page.locator('main').innerText()
+
+    // Mọi cửa hàng xuất hiện trong form phải nằm trong phạm vi SM. Lấy tên
+    // store dạng "CIRCA ..." để so — đủ đặc trưng trong dữ liệu thật.
+    const inForm = [...formText.matchAll(/CIRCA [A-ZĐÀ-Ỹ0-9 ]+/g)].map((m) => m[0].trim())
+    test.skip(inForm.length === 0, 'không đọc được tên cửa hàng trong form')
+    for (const name of new Set(inForm)) {
+      expect(scopeChips, `form hiện cửa hàng NGOÀI phạm vi SM: ${name}`).toContain(name)
+    }
+  })
+
+  test('SM KHÔNG có Định kỳ, KHÔNG có import Excel, KHÔNG vào /tasks/schedules', async ({ page }) => {
+    await page.goto('/tasks/new')
+    const body = await mainReady(page)
+    expect(body, 'SM không được thấy loại task Định kỳ').not.toContain('Định kỳ')
+    // Nhắm ĐÚNG panel Excel-split. Không dùng chuỗi 'excel' trần: help-text của
+    // ô đính kèm có nhắc "file excel, pdf..." một cách hợp lệ.
+    expect(body, 'SM không được thấy panel chia file Excel')
+      .not.toContain('Chia file Excel theo cửa hàng')
+
+    // Ép ?mode=recurring cũng không mở được luồng định kỳ.
+    await page.goto('/tasks/new?mode=recurring')
+    const forced = await mainReady(page)
+    expect(forced).not.toContain('Định kỳ')
+
+    await page.goto('/tasks/schedules')
+    await expect.poll(() => page.url()).not.toContain('/tasks/schedules')
+  })
+})
+
+for (const [label, state, cred] of [
+  ['Staff', STAFF_STATE, CRED.staff],
+  ['QLCH', MANAGER_STATE, CRED.qlch],
+] as const) {
+  test.describe(`${label} KHÔNG được tạo task @desktop`, () => {
+    test.use({ storageState: state })
+    test.skip(!cred.email || !cred.password, 'credential chưa set')
+
+    test('không thấy nút và bị đẩy khỏi /tasks/new', async ({ page }) => {
+      await page.goto('/tasks')
+      await mainReady(page)
+      await expect(page.getByRole('link', { name: /Tạo Task/i })).toHaveCount(0)
+
+      await page.goto('/tasks/new')
+      await expect.poll(() => page.url(), { message: 'phải bị redirect khỏi /tasks/new' })
+        .not.toContain('/tasks/new')
+    })
+  })
+}
+
+test.describe('Admin KHÔNG regress @desktop', () => {
+  test.use({ storageState: SUPER_STATE })
+  test.skip(!CRED.super.email || !CRED.super.password, 'E2E_SUPER_* chưa set')
+
+  test('admin vẫn có Định kỳ + Excel + /tasks/schedules', async ({ page }) => {
+    await page.goto('/tasks/new')
+    const body = await mainReady(page)
+    expect(body, 'admin phải vẫn thấy loại Định kỳ').toContain('Định kỳ')
+
+    await page.goto('/tasks/schedules')
+    await mainReady(page)
+    expect(page.url()).toContain('/tasks/schedules')
+  })
+})

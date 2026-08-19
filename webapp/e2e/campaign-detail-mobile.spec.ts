@@ -29,6 +29,13 @@ const QLCH = { email: process.env.E2E_QLCH_EMAIL, password: process.env.E2E_QLCH
 
 const RING = 'svg circle[stroke-dasharray]'   // vòng tròn tiến độ của hero
 const HERO_BAR = '[data-hero-progress]'
+// Commit 5: Chất lượng bán hàng KHÔNG dùng hero điểm gộp nữa — thay bằng HAI
+// chỉ số độc lập, mỗi cái một thanh riêng. Test hero vì thế phải hỏi LOẠI
+// chiến dịch trước khi đếm thanh; hỏi bằng nhãn loại trên chính trang.
+const METRIC_BAR = '[data-metric-progress]'
+async function isOrderAovDetail(page: Page): Promise<boolean> {
+  return (await page.locator('main').innerText()).includes('Chất lượng bán hàng')
+}
 const CHART_FRAME = '[data-chart-frame]'
 
 // Ba bề ngang thật của máy staff (cùng bộ với ui-mobile-baseline).
@@ -60,7 +67,9 @@ async function openFirstCampaign(page: Page): Promise<boolean> {
   await gotoTargets(page)
   if (/[?&]campaign=/.test(page.url())) return true   // store chỉ có 1 chiến dịch
   const first = page.locator('main a[href*="campaign="]').first()
-  if (await first.count() === 0) return false
+  const found = await first.waitFor({ state: 'attached', timeout: 15_000 })
+    .then(() => true).catch(() => false)
+  if (!found) return false
   const href = await first.getAttribute('href')
   expect(href, 'card chiến dịch thiếu href').toBeTruthy()
   await page.goto(href!)
@@ -138,7 +147,13 @@ function mobileSuite(label: string, state: string, creds: { email?: string; pass
         const ring = page.locator(RING).first()
         if (await ring.count() > 0) await expect(ring, `@${vp.w}: ring vẫn hiện trên mobile`).toBeHidden()
 
-        await expect(page.locator(HERO_BAR), 'phải có ĐÚNG một thanh tiến độ ở hero').toHaveCount(1)
+        if (await isOrderAovDetail(page)) {
+          // Loại này KHÔNG có hero điểm gộp: đúng hai thanh, mỗi chỉ số một cái.
+          await expect(page.locator(HERO_BAR), 'Chất lượng bán hàng không được có hero điểm gộp').toHaveCount(0)
+          await expect(page.locator(METRIC_BAR), 'phải có ĐÚNG hai thanh: Số đơn và AOV').toHaveCount(2)
+        } else {
+          await expect(page.locator(HERO_BAR), 'phải có ĐÚNG một thanh tiến độ ở hero').toHaveCount(1)
+        }
         await noHorizontalOverflow(page, `hero @${vp.w}`)
       })
 
@@ -191,7 +206,10 @@ function mobileSuite(label: string, state: string, creds: { email?: string; pass
         const before = await page.locator(CHART_FRAME).first().boundingBox()
 
         await page.getByRole('tab', { name: 'AOV' }).click()
-        await expect(page).toHaveURL(/series=aov/)
+        // Điều hướng này render phía server + đọc DB thật; 5s mặc định đủ ở
+        // 360/390 nhưng đã rớt ở 430 dưới tải — dùng cùng mốc 20s như
+        // openFirstCampaign thay vì để đỏ ngẫu nhiên theo viewport.
+        await expect(page).toHaveURL(/series=aov/, { timeout: 20_000 })
         expect(
           new URL(page.url()).searchParams.get('campaign'),
           'đổi series làm MẤT campaign khỏi URL',
@@ -218,8 +236,14 @@ test.describe('campaign detail desktop giữ nguyên @desktop', () => {
   test.use({ storageState: STAFF_STATE })
   test.skip(!STAFF.email || !STAFF.password, 'E2E_STAFF_* chưa set')
 
-  test('desktop: ring VẪN hiện (hình thức đã duyệt không đổi)', async ({ page }) => {
+  test('desktop: ring VẪN hiện cho Doanh số/Số khách (hình thức đã duyệt không đổi)', async ({ page }) => {
     test.skip(!(await openFirstCampaign(page)), 'store chưa có chiến dịch nào')
+    if (await isOrderAovDetail(page)) {
+      // Chất lượng bán hàng bỏ hero (commit 5) nên không có ring — kiểm đúng
+      // cái THAY THẾ nó thay vì bỏ qua lượt kiểm.
+      await expect(page.locator(METRIC_BAR), 'phải có hai thanh chỉ số thay cho ring').toHaveCount(2)
+      return
+    }
     await expect(
       page.locator(RING).first(),
       'ring biến mất trên desktop — đã đổi hình thức đã duyệt',
