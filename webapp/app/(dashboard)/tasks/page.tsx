@@ -16,6 +16,7 @@ import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { ExportButton } from '@/components/common/ExportButton'
 import { Pagination } from '@/components/common/Pagination'
 import { Plus, ChevronLeft, ChevronRight, ClipboardList } from 'lucide-react'
+import { canCreateTask } from '@/lib/tasks/smScope'
 import { cn } from '@/lib/utils'
 
 const PAGE_SIZE = 30
@@ -251,7 +252,10 @@ export default async function TasksPage({
   const hasNextStaff = isStaff && (tasks ?? []).length > pageSize
 
   const storesForFilter = isStaff ? [] : (stores ?? [])
-  const canCreate  = profile?.role === 'admin'
+  // Mig 108: SM tạo được task phát sinh ⇒ nút "Tạo Task" hiện cho cả SM.
+  // Dùng CHUNG contract với route và server action (lib/tasks/smScope) thay vì
+  // mỗi nơi tự so role — ba chỗ lệch nhau là kiểu lỗi khó thấy nhất.
+  const canCreate  = canCreateTask(profile?.role)
   const canArchive = !showArchived && (profile?.role === 'admin' || isSm)
   const canRestore = showArchived  && (profile?.role === 'admin' || isSm)
   // Bulk "yêu cầu làm lại" — admin/SM in the Done view (tasks there have results).
@@ -980,7 +984,8 @@ export default async function TasksPage({
         icon={ClipboardList}
         actions={
           <>
-            {(canCreate || isSm) && <ExportButton endpoint="/api/export/tasks" className="h-[44px] md:h-8" />}
+            {/* canCreate nay đã gồm SM (108) — `|| isSm` cũ trở thành thừa. */}
+            {canCreate && <ExportButton endpoint="/api/export/tasks" className="h-[44px] md:h-8" />}
             {canCreate && (
               <Link href="/tasks/new" className={cn(buttonVariants({ size: 'sm' }), 'h-[44px] md:h-8')}>
                 <Plus className="h-4 w-4 mr-1" />
