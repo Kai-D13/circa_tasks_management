@@ -11,6 +11,7 @@ export const SUPER_ADMIN_EMAILS = [
   'lan.pham@buymed.com',
   'vu@buymed.com',
   'anh.nguyenvan1@buymed.com', // mig 100 (2026-08-04) — DB mirror đã sync
+  'phuc.nguyen@buymed.com',   // mig 109 (2026-08-18) — DB mirror cùng batch
 ]
 
 export function isSuperAdminEmail(email: string | null | undefined): boolean {
