@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
-import { isSuperAdminEmail } from '@/lib/authz'
+import { canViewCampaignDashboard } from '@/lib/kpi/campaignAccess'
 import { isKpiCampaignEnabled } from '@/lib/kpi/flags'
 import { xlsxResponse, stampVN, fmtVN } from '@/lib/export/xlsx'
 import { buildCampaignExportRows, buildCustomerCampaignExportRows, buildOrderAovCampaignExportRows } from '@/lib/kpi/exportRows'
@@ -25,7 +25,11 @@ export async function GET(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
-  if (!(profile?.role === 'admin' && isSuperAdminEmail(user.email) && isKpiCampaignEnabled()))
+  // 111: SM tải được Excel (chốt 30/08). An toàn vì mọi truy vấn dưới đây dùng
+  // SESSION client — RLS tự giới hạn campaign lẫn dòng target/actual về đúng
+  // cửa hàng SM quản lý. KHÔNG cần lọc thêm ở đây, và cũng không được đổi sang
+  // supabaseAdmin: làm vậy là xuất toàn hệ thống cho một SM.
+  if (!(isKpiCampaignEnabled() && canViewCampaignDashboard(profile?.role, user.email)))
     return NextResponse.json({ error: 'Không có quyền xuất dữ liệu' }, { status: 403 })
 
   const campaignId = request.nextUrl.searchParams.get('campaign_id')

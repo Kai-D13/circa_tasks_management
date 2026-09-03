@@ -1,5 +1,6 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
+import { buttonVariants } from '@/components/ui/button'
 import { createClient } from '@/lib/supabase/server'
 import { redirectIfFsStaff } from '@/lib/fs/isolation'
 import { isSuperAdminEmail, getSmStoreIds } from '@/lib/authz'
@@ -34,7 +35,7 @@ import { getAffiliateSyncHealth, supabaseAffiliateHealthDb } from '@/lib/affilia
 import { ReferralCard, type ReferralItem } from '@/components/referral/ReferralCard'
 import { formatDate, formatDateTime, currentWeekStart } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
-import { ChartNoAxesCombined, Target, TrendingUp } from 'lucide-react'
+import { ChartNoAxesCombined, History, Target, TrendingUp } from 'lucide-react'
 
 // KPI v2 (migration 067): Day / Week / Month sales targets from the daily
 // BigQuery feed (store_kpi_targets, fed by /api/cron/pull-kpi-targets).
@@ -697,6 +698,17 @@ export default async function TargetsPage({
           title="Doanh số chiến dịch"
           icon={TrendingUp}
           subtitle={`Phạm vi: ${smStores.length} cửa hàng bạn quản lý`}
+          /* 111: lối vào lịch sử chiến dịch. Đặt ở đây thay vì thêm mục sidebar
+             mới — sidebar đã có "Doanh số" trỏ về chính trang này, thêm mục thứ
+             hai cùng chủ đề chỉ làm người dùng phải đoán cái nào là cái nào. */
+          actions={
+            <Link
+              href="/targets/campaigns?status=ended"
+              className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'h-[44px] md:h-8')}
+            >
+              <History className="h-4 w-4 mr-1.5" /> Lịch sử chiến dịch
+            </Link>
+          }
         />
         {/* r2.4 (audit P2#4): phạm vi quản lý ngay dưới header — chip TĨNH,
             KHÔNG phải bộ lọc (SM r6 đã bỏ filter ?store=, dashboard luôn tổng
