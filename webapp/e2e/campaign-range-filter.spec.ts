@@ -44,7 +44,14 @@ async function mainTextWhenReady(page: Page, opts: { ranged: boolean }): Promise
     // Toàn kỳ: đợi dòng trạng thái khoảng BIẾN MẤT hẳn rồi mới chụp.
     await expect(page.getByText('Đang xem', { exact: false })).toHaveCount(0)
   }
-  return page.locator('main').innerText()
+  // Chuẩn hoá phần BIẾN THIÊN THEO THỜI GIAN trước khi so: text có mốc "Đồng bộ
+  // 09:45 03/09/2026" do cron KPI ghi. Suite chạy ~2 phút nên một tick cron có
+  // thể rơi vào giữa hai lần đọc và làm round-trip đỏ vì lý do không liên quan
+  // (chạy lẻ luôn xanh, chỉ full-suite mới dính).
+  const raw = await page.locator('main').innerText()
+  return raw
+    .replace(/\d{2}:\d{2} \d{2}\/\d{2}\/\d{4}/g, '<TS>')
+    .replace(/\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}/g, '<TS>')
 }
 
 async function expectRangeRoundTrip(page: Page, url: string) {

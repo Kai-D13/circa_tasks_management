@@ -30,15 +30,30 @@ test.describe('campaign access contract @desktop', () => {
     expect(canManageCampaign('staff', SUPER)).toBe(false)
   })
 
-  test('parse status: allowlist, giá trị lạ → all (không throw)', () => {
+  test('parse status (super): allowlist đủ 4, giá trị lạ → all (không throw)', () => {
     for (const v of ['active', 'paused', 'draft', 'ended']) {
-      expect(parseCampaignStatus(v)).toBe(v)
+      expect(parseCampaignStatus(v, true)).toBe(v)
     }
-    expect(parseCampaignStatus('ENDED')).toBe('ended')      // hoa/thường
-    expect(parseCampaignStatus('  ended ')).toBe('ended')   // khoảng trắng
+    expect(parseCampaignStatus('ENDED', true)).toBe('ended')      // hoa/thường
+    expect(parseCampaignStatus('  ended ', true)).toBe('ended')   // khoảng trắng
     for (const v of ['all', '', '  ', undefined, null, 'archived', 'xxx', 'ended;drop']) {
-      expect(parseCampaignStatus(v as string | undefined), `raw=${JSON.stringify(v)}`).toBe('all')
+      expect(parseCampaignStatus(v as string | undefined, true), `raw=${JSON.stringify(v)}`).toBe('all')
     }
+  })
+
+  test('parse status (SM): draft/paused KHÔNG phải giá trị hợp lệ → all', () => {
+    // RLS không cho SM đọc draft/paused ⇒ nhận nguyên giá trị đó chỉ tạo ra một
+    // danh sách rỗng mà KHÔNG tab nào sáng: người dùng không biết mình ở đâu.
+    for (const v of ['draft', 'paused', 'DRAFT', ' paused ', 'xxx', '']) {
+      expect(parseCampaignStatus(v, false), `SM raw=${JSON.stringify(v)}`).toBe('all')
+    }
+    // Hai trạng thái SM đọc được thì vẫn giữ.
+    expect(parseCampaignStatus('active', false)).toBe('active')
+    expect(parseCampaignStatus('ended', false)).toBe('ended')
+  })
+
+  test('mặc định canManage=true — caller cũ không đổi hành vi', () => {
+    expect(parseCampaignStatus('draft')).toBe('draft')
   })
 
   test('tab: super 5, SM 3 — SM KHÔNG có Nháp/Tạm dừng (RLS không cho đọc)', () => {

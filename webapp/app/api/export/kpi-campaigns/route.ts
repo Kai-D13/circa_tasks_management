@@ -6,7 +6,11 @@ import { xlsxResponse, stampVN, fmtVN } from '@/lib/export/xlsx'
 import { buildCampaignExportRows, buildCustomerCampaignExportRows, buildOrderAovCampaignExportRows } from '@/lib/kpi/exportRows'
 
 // GET /api/export/kpi-campaigns?campaign_id=... — Excel of a campaign's per-store
-// result (super admin only; mirrors the /targets/campaigns/[id] Result tab).
+// result (mirrors the /targets/campaigns/[id] Result tab).
+//
+// 111: super admin VÀ SM (SM chỉ-đọc, chốt 30/08). Phạm vi dữ liệu do RLS quyết
+// định vì mọi truy vấn dưới đây dùng SESSION client — SM chỉ nhận campaign
+// active/ended của vùng mình và chỉ những dòng store mình quản lý.
 
 interface TargetRow {
   store_id: string; pos_code: string | null; kpi_target: number; store_kpi_group: string | null

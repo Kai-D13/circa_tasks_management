@@ -43,7 +43,9 @@ export default async function CampaignsPage({
   // mình, không thấy draft/paused/test/archived.
   if (!(isKpiCampaignEnabled() && canViewCampaignDashboard(profile?.role, user.email))) notFound()
   const canManage = canManageCampaign(profile?.role, user.email)
-  const statusFilter = parseCampaignStatus(statusParam)
+  // Chuẩn hoá theo QUYỀN: SM gõ ?status=draft/paused sẽ về 'all' (RLS không
+  // cho họ đọc hai trạng thái đó ⇒ tab tương ứng cũng không tồn tại).
+  const statusFilter = parseCampaignStatus(statusParam, canManage)
 
   const supabase = await createClient()
   const [

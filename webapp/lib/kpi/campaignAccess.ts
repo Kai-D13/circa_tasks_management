@@ -30,9 +30,20 @@ export function canManageCampaign(
 
 // Giá trị lạ / thiếu → 'all'. KHÔNG throw: đây là query string, người dùng sửa
 // tay được, và một filter hỏng không được làm sập cả trang.
-export function parseCampaignStatus(raw: string | undefined | null): CampaignStatusFilter {
+//
+// `canManage=false` (SM) thì 'draft'/'paused' cũng về 'all': RLS không cho SM
+// đọc hai trạng thái đó, nên `?status=paused` chỉ tạo ra một danh sách rỗng mà
+// KHÔNG tab nào sáng — người dùng không hiểu mình đang ở đâu. Chuẩn hoá theo
+// QUYỀN, không chỉ theo cú pháp.
+export function parseCampaignStatus(
+  raw: string | undefined | null,
+  canManage = true,
+): CampaignStatusFilter {
   const v = (raw ?? '').trim().toLowerCase()
-  return v === 'active' || v === 'paused' || v === 'draft' || v === 'ended' ? v : 'all'
+  const allowed: string[] = canManage
+    ? ['active', 'paused', 'draft', 'ended']
+    : ['active', 'ended']
+  return allowed.includes(v) ? (v as CampaignStatusFilter) : 'all'
 }
 
 export interface CampaignStatusTab { key: CampaignStatusFilter; label: string }
