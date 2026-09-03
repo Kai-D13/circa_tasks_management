@@ -21,6 +21,15 @@ const CRED = {
 }
 const EXPORT = (id: string) => `/api/export/kpi-campaigns?campaign_id=${id}`
 
+// Phiên hết hạn thì middleware chuyển hướng sang /login, và `page.request` TỰ
+// ĐỘNG đi theo redirect ⇒ kết quả là trang HTML 200. Ca âm sẽ đỏ với thông
+// điệp "SM tải được campaign" — nghe như lỗ hổng bảo mật trong khi thật ra chỉ
+// là storageState cũ. Tách hẳn hai chuyện đó ra.
+function assertNotLoginRedirect(res: { status: () => number; url: () => string }, role: string) {
+  expect(res.url().includes('/login'), `phiên ${role} đã hết hạn (bị đẩy về /login) — xoá e2e/.auth rồi chạy lại; đây KHÔNG phải kết quả phân quyền`)
+    .toBe(false)
+}
+
 interface TargetRow { campaign_id: string; store_id: string; pos_code: string | null }
 
 // Phạm vi SM đọc thẳng từ DB (service role) — nguồn sự thật ĐỘC LẬP với app.
@@ -127,6 +136,7 @@ test.describe('export campaign — SM @desktop', () => {
     test.skip(blocked.length === 0, 'DB không có campaign draft/paused/test để thử')
 
     const res = await page.request.get(EXPORT(blocked[0].id))
+    assertNotLoginRedirect(res, 'SM')
     expect([403, 404], `SM tải được campaign sai trạng thái (status ${res.status()})`)
       .toContain(res.status())
   })
@@ -165,6 +175,7 @@ test.describe('export campaign — SM @desktop', () => {
     }
 
     const res = await page.request.get(EXPORT(outOfScope.id))
+    assertNotLoginRedirect(res, 'SM')
     expect([403, 404],
       `SM tải được campaign NGOÀI VÙNG "${outOfScope.name}" (${outOfScope.status}) — status ${res.status()}`)
       .toContain(res.status())
@@ -185,6 +196,7 @@ for (const [label, state, cred] of [
         'đọc campaign bất kỳ') as { id: string }[]
       test.skip(any.length === 0, 'DB chưa có campaign nào')
       const res = await page.request.get(EXPORT(any[0].id))
+      assertNotLoginRedirect(res, label)
       expect(res.status(), `${label} tải được file export`).toBe(403)
     })
   })

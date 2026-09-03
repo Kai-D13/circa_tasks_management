@@ -32,9 +32,13 @@ test.describe('kpi net_revenue source contract @desktop', () => {
   const dailyFn = section('export function campaignDailyQuery', 'export async function runBigQuery')
   const aggQuery = section('export const KPI_AGGREGATE_QUERY', 'export function loadServiceAccount')
 
-  test('1. campaignRangeQuery + campaignDailyQuery SUM NET_REVENUE, alias GIỮ NGUYÊN (downstream không đổi)', () => {
-    expect(rangeFn).toContain('SUM(CAST(COALESCE(net_revenue, 0) AS NUMERIC)) AS actual_gmv')
-    expect(dailyFn).toContain('SUM(CAST(COALESCE(net_revenue, 0) AS NUMERIC)) AS gmv')
+  test('1. campaignRangeQuery + campaignDailyQuery đọc OFFLINE_NET_REVENUE, alias GIỮ NGUYÊN (downstream không đổi)', () => {
+    // 112 (04/09): BI tách Offline/Affiliate — cột net_revenue đã bị xoá khỏi
+    // view. Alias actual_gmv/gmv GIỮ NGUYÊN nên engine/DB/UI/export không đổi.
+    expect(rangeFn).toContain('ROUND(SUM(CAST(offline_net_revenue AS NUMERIC))) AS actual_gmv')
+    expect(dailyFn).toContain('ROUND(SUM(CAST(offline_net_revenue AS NUMERIC))) AS gmv')
+    // KHÔNG COALESCE quanh doanh thu: NULL phải chảy xuống thành lỗi nguồn.
+    expect(dailyFn).not.toContain('COALESCE(offline_net_revenue, 0)) AS gmv')
   })
 
   test('5. BQ-V2 r3: 2 hàm campaign đọc bảng PRODUCTION buymed_tech (schema V2, SA có quyền — KHÔNG gold_buymed_vn2) + CHỈ date_type DAY + loại NULL keys + source_row_count', () => {
@@ -61,13 +65,48 @@ test.describe('kpi net_revenue source contract @desktop', () => {
     expect(aggQuery).toContain("date_type = 'MONTH'")
     expect(aggQuery).not.toContain("'week'") // chưa bật — BI chưa có dữ liệu WEEK
     // r1 (audit P2#3): GROUP BY + COUNT thật — dòng nguồn trùng bị kpi.ts từ chối
-    expect(aggQuery).toContain('CAST(SUM(COALESCE(net_revenue, 0)) AS NUMERIC) AS actual')
+    expect(aggQuery).toContain('CAST(ROUND(SUM(offline_net_revenue)) AS NUMERIC) AS actual')
+    // Fail-closed: row thiếu doanh thu bị LOẠI khỏi nguồn ⇒ guard "thiếu
+    // store×grain" của kpiPlan bắn 422 nguyên khối, thay vì ghi 0đ (coerceNum
+    // coi NULL là 0đ hợp lệ nên COALESCE ở đây sẽ giấu mất nguồn hỏng).
+    expect(aggQuery).toContain('offline_net_revenue IS NOT NULL')
+    // Landing CHỈ Offline — cộng Affiliate là đổi ý nghĩa màn này.
+    expect(aggQuery).not.toContain('affiliate_net_revenue')
     expect(aggQuery).toContain('CAST(SUM(COALESCE(TARGET, 0)) AS NUMERIC) AS target')
     expect(aggQuery).toContain('COUNT(*) AS raw_row_count')
     expect(aggQuery).toContain('GROUP BY start_date, pos_code')
     expect(aggQuery).toContain('LAST_DAY(start_date) AS period_end')
     // DEFAULT_QUERY (weekly legacy — pipeline store_weekly_targets riêng) không đụng
     expect(section('export const DEFAULT_QUERY', 'export const KPI_AGGREGATE_QUERY')).not.toContain('net_revenue')
+  })
+
+  // ── 112: canary identifier ĐÃ KHAI TỬ ──────────────────────────────────
+  // `offline_net_revenue` CHỨA `net_revenue` như chuỗi con, nên grep ngây thơ
+  // sẽ báo động giả. Loại hết TÊN MỚI trước rồi mới tìm tên cũ — dùng
+  // split/join, KHÔNG regex: escape trong tay tôi từng biến \b thành byte
+  // 0x08 và làm canary luôn xanh (sự cố 5.1/6).
+  const retiredTokens = (sql: string): string[] => {
+    const stripped = ['offline_net_revenue', 'affiliate_net_revenue',
+      'offline_no_order', 'affiliate_no_order']
+      .reduce((s, name) => s.split(name).join('#'), sql)
+    return ['net_revenue', 'no_order'].filter((t) => stripped.includes(t))
+  }
+
+  test('6. KHÔNG còn identifier đã khai tử (net_revenue / no_order) trong SQL', () => {
+    // Tự kiểm canary: nếu logic strip sai thì hai dòng này đã đỏ.
+    expect(retiredTokens('SELECT offline_net_revenue, offline_no_order')).toEqual([])
+    expect(retiredTokens('SELECT net_revenue')).toEqual(['net_revenue'])
+
+    for (const [name, fn] of [['range', rangeFn], ['daily', dailyFn], ['landing', aggQuery]] as const) {
+      expect(retiredTokens(fn), `${name} còn đọc cột BI đã xoá`).toEqual([])
+    }
+  })
+
+  test('7. Đếm NULL RIÊNG từng nguồn — SUM() của BigQuery bỏ qua NULL', () => {
+    expect(dailyFn).toContain('AS offline_revenue_null_count')
+    expect(dailyFn).toContain('AS offline_order_null_count')
+    // Affiliate: chỉ chẩn đoán (một field NULL trong khi field kia có giá trị).
+    expect(dailyFn).toContain('AS affiliate_pair_mismatch')
   })
 
   test('4. Guard ISO date (chống injection khi interpolate) còn nguyên ở CẢ 2 hàm campaign', () => {

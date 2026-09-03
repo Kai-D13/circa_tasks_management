@@ -49,6 +49,10 @@ function fullCoverage(override: Record<string, number | null> = {}): Record<stri
         order_count: gmv === 300 ? 3 : 0,
         rev_without_order: 0, order_without_rev: 0, negative_order: 0, non_integer_order: 0,
         revenue_with_zero_order: 0,
+        // 112 (04/09): counter NULL RIÊNG từng nguồn sau khi BI tách
+        // Offline/Affiliate. Cùng lý do như 4 canary trên — thiếu field nghĩa
+        // là query/schema đã đổi, engine fail-closed.
+        offline_revenue_null_count: 0, offline_order_null_count: 0, affiliate_pair_mismatch: 0,
       })
     }
   }
@@ -381,8 +385,8 @@ test.describe('kpi sync orchestration @desktop', () => {
   test('BQ-V2 GUARD: trùng key (pos, ngày) trong cùng lần pull → preserved, KHÔNG replace', async () => {
     const { deps, calls } = mkDeps(CFG(), {
       bq: async () => [
-        { pos_code: 'POS0001', date: '2026-07-02', gmv: 300, source_row_count: 1, order_count: 0, rev_without_order: 0, order_without_rev: 0, negative_order: 0, non_integer_order: 0, revenue_with_zero_order: 0 },
-        { pos_code: 'POS0001', date: '2026-07-02', gmv: 999, source_row_count: 1, order_count: 0, rev_without_order: 0, order_without_rev: 0, negative_order: 0, non_integer_order: 0, revenue_with_zero_order: 0 },
+        { pos_code: 'POS0001', date: '2026-07-02', gmv: 300, source_row_count: 1, order_count: 0, rev_without_order: 0, order_without_rev: 0, negative_order: 0, non_integer_order: 0, revenue_with_zero_order: 0 , offline_revenue_null_count: 0, offline_order_null_count: 0, affiliate_pair_mismatch: 0 },
+        { pos_code: 'POS0001', date: '2026-07-02', gmv: 999, source_row_count: 1, order_count: 0, rev_without_order: 0, order_without_rev: 0, negative_order: 0, non_integer_order: 0, revenue_with_zero_order: 0 , offline_revenue_null_count: 0, offline_order_null_count: 0, affiliate_pair_mismatch: 0 },
       ],
     })
     const r = await syncCampaignWithDeps('camp-1', deps)

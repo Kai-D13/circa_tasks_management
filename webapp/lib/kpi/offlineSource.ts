@@ -41,6 +41,10 @@ export async function readOfflineSource(input: OfflineSourceInput): Promise<Offl
   const ordersByPos = new Map<string, Map<string, number>>()
   // POS có nguồn số đơn hỏng (chỉ dùng khi KHÔNG strict).
   const orderIssuePos = new Map<string, string>()
+  // 112: chẩn đoán Affiliate — CHỈ quan sát, không vào payload (nguồn Affiliate
+  // của campaign vẫn là Mongo/Supabase cho tới khi Data Team xác nhận
+  // attribution theo partner_code).
+  const affiliateMismatchPos = new Map<string, number>()
   const warnings: string[] = []
 
   for (const [chunkStart, chunkEnd] of monthChunks(startISO, effEndISO)) {
@@ -93,6 +97,23 @@ export async function readOfflineSource(input: OfflineSourceInput): Promise<Offl
       // ⚠ Contract 30/07: field `gmv` từ campaignDailyQuery là alias của
       // SUM(COALESCE(net_revenue,0)) — luôn có giá trị khi row tồn tại. r1.3:
       // thiếu/NaN/chuỗi rác → LỖI NGUỒN (0đ và số ÂM vẫn hợp lệ: hoàn/điều chỉnh).
+      // ── 112 (04/09): NULL nguồn Offline = nguồn CHƯA HỢP LỆ ────────────
+      // Contract 04/09 điểm 6. Phải đếm RIÊNG vì SUM() của BigQuery bỏ qua
+      // NULL: hai canary lệch-cặp bên dưới không thấy ca CẢ HAI field cùng
+      // NULL, và tổng khi đó trông vẫn hợp lệ.
+      const revNull = numOrFail('offline_revenue_null_count')
+      if (revNull === null || !Number.isInteger(revNull) || revNull < 0) {
+        return {
+          ok: false,
+          reason: `Nguồn BQ thiếu/sai canary offline_revenue_null_count tại ${pos}/${date} (=${String(r.offline_revenue_null_count)}) — query hoặc schema đã đổi; giữ snapshot cũ`,
+        }
+      }
+      if (revNull > 0) {
+        return {
+          ok: false,
+          reason: `Nguồn BQ có ${revNull} ô doanh thu Offline NULL tại ${pos}/${date} — nguồn chưa hoàn tất, KHÔNG coi là 0đ; giữ snapshot cũ`,
+        }
+      }
       const gmv = numOrFail('gmv')
       if (gmv === null) {
         return {
@@ -109,7 +130,7 @@ export async function readOfflineSource(input: OfflineSourceInput): Promise<Offl
       const canary: Record<string, number> = {}
       let orderIssue: string | null = null
       for (const k of ['rev_without_order', 'order_without_rev', 'negative_order',
-        'non_integer_order', 'revenue_with_zero_order']) {
+        'non_integer_order', 'revenue_with_zero_order', 'offline_order_null_count']) {
         const v = numOrFail(k)
         if (v === null) {
           orderIssue = `thiếu/sai field số đơn (${k}) — query hoặc schema đã đổi`
@@ -125,15 +146,20 @@ export async function readOfflineSource(input: OfflineSourceInput): Promise<Offl
       if (orderIssue === null && ordNum === null) {
         orderIssue = 'thiếu/sai field số đơn (order_count) — query hoặc schema đã đổi'
       } else if (orderIssue === null) {
-        if (canary.non_integer_order > 0) {
-          orderIssue = `no_order KHÔNG NGUYÊN (${canary.non_integer_order} row)`
+        if (canary.offline_order_null_count > 0) {
+          // Số đơn thiếu ⇒ chỉ số ĐƠN/AOV không tin được. GMV (không strict)
+          // vẫn ghi tiền và degrade riêng POS này — doanh thu đã được canary
+          // offline_revenue_null_count ở trên bảo chứng là đầy đủ.
+          orderIssue = `số đơn Offline NULL (${canary.offline_order_null_count} row)`
+        } else if (canary.non_integer_order > 0) {
+          orderIssue = `offline_no_order KHÔNG NGUYÊN (${canary.non_integer_order} row)`
         } else if (canary.revenue_with_zero_order > 0) {
           // Có doanh thu mà 0 đơn ⇒ AOV vô định nhưng vẫn có tiền.
           orderIssue = `có doanh thu nhưng KHÔNG đơn nào (${canary.revenue_with_zero_order} row no_order=0, net_revenue≠0)`
         } else if (canary.rev_without_order > 0 || canary.order_without_rev > 0) {
           orderIssue = `lệch NULL: ${canary.rev_without_order} row có doanh thu thiếu no_order, ${canary.order_without_rev} row có no_order thiếu doanh thu`
         } else if (canary.negative_order > 0) {
-          orderIssue = 'no_order ÂM'
+          orderIssue = 'offline_no_order ÂM'
         } else if (!Number.isInteger(ordNum as number) || (ordNum as number) < 0) {
           orderIssue = `tổng số đơn không hợp lệ: ${String(r.order_count)}`
         }
@@ -147,6 +173,14 @@ export async function readOfflineSource(input: OfflineSourceInput): Promise<Offl
       } else {
         if (!ordersByPos.has(pos)) ordersByPos.set(pos, new Map())
         ordersByPos.get(pos)!.set(date, ordNum as number)
+      }
+
+      // Affiliate chỉ MỘT field NULL = mâu thuẫn nguồn (contract 04/09 điểm 5).
+      // Ghi cảnh báo chứ KHÔNG chặn: batch này không dùng số Affiliate của BQ,
+      // nên để nó chặn được đường tiền Offline là sai tỉ lệ rủi ro.
+      const affMismatch = numOrFail('affiliate_pair_mismatch')
+      if (affMismatch !== null && affMismatch > 0) {
+        affiliateMismatchPos.set(pos, (affiliateMismatchPos.get(pos) ?? 0) + affMismatch)
       }
     }
   }
@@ -180,6 +214,10 @@ export async function readOfflineSource(input: OfflineSourceInput): Promise<Offl
   for (const [pos, reason] of orderIssuePos) {
     ordersByPos.delete(pos)
     warnings.push(`Số đơn/AOV Offline tạm ẩn cho ${pos} — nguồn BQ ${reason}. GMV/commission KHÔNG bị ảnh hưởng.`)
+  }
+
+  for (const [pos, n] of affiliateMismatchPos) {
+    warnings.push(`Nguồn BQ: ${pos} có ${n} ô Affiliate chỉ một field NULL (doanh thu/số đơn lệch nhau) — chưa ảnh hưởng số liệu vì campaign vẫn lấy Affiliate từ Mongo/Supabase.`)
   }
 
   return { ok: true, offlineByPos, ordersByPos, warnings }
