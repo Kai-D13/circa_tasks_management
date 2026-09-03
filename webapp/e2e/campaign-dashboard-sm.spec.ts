@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test'
 import { MANAGER_STATE, SM_STATE, STAFF_STATE, SUPER_STATE } from './authState'
+import { must, serviceDb, sessionDb } from './dbFixtures'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // DASHBOARD CHIẾN DỊCH KPI — acceptance RUNTIME (batch 111)
@@ -31,6 +32,41 @@ async function mainReady(page: Page) {
 }
 
 const createBtn = (page: Page) => page.getByRole('link', { name: /Tạo chiến dịch/i })
+
+// ── Fixture "campaign ĐÃ KẾT THÚC có thật" ───────────────────────────────────
+// Ca âm/dương về `ended` phải trỏ vào ĐÍCH DANH một campaign ended thật, phủ
+// đúng cửa hàng của vai trò đang kiểm. Đọc bằng service role (chỉ để dựng
+// fixture), còn việc "ai đọc được" thì hỏi RLS bằng phiên của chính vai trò.
+async function endedCampaignForStores(storeIds: string[]): Promise<{ id: string; name: string } | null> {
+  if (storeIds.length === 0) return null
+  const sb = await serviceDb()
+  const ended = must<{ id: string; name: string }[]>(
+    await sb.from('kpi_campaigns').select('id, name')
+      .eq('status', 'ended').eq('is_test', false).is('archived_at', null),
+    'đọc campaign ended')
+  if (ended.length === 0) return null
+  const tg = must<{ campaign_id: string }[]>(
+    await sb.from('kpi_campaign_store_targets').select('campaign_id')
+      .in('campaign_id', ended.map((c) => c.id)).in('store_id', storeIds),
+    'đọc target của campaign ended')
+  return ended.find((c) => tg.some((t) => t.campaign_id === c.id)) ?? null
+}
+
+async function storeIdOf(email: string): Promise<string | null> {
+  const sb = await serviceDb()
+  return must<{ store_id: string | null }>(
+    await sb.from('users').select('store_id').eq('email', email).single(),
+    `đọc cửa hàng của ${email}`).store_id
+}
+
+async function smAssignedStoreIds(email: string): Promise<string[]> {
+  const sb = await serviceDb()
+  const u = must<{ id: string }>(
+    await sb.from('users').select('id').eq('email', email).single(), 'đọc user SM')
+  return must<{ store_id: string }[]>(
+    await sb.from('sm_store_assignments').select('store_id').eq('sm_user_id', u.id),
+    'đọc sm_store_assignments').map((r) => r.store_id)
+}
 
 test.describe('dashboard chiến dịch — Super @desktop', () => {
   test.use({ storageState: SUPER_STATE })
@@ -182,6 +218,50 @@ test.describe('dashboard chiến dịch — SM chỉ xem @desktop', () => {
     console.log(`SM_ENDED_VISIBLE=true — ${rows.length} campaign ended trong vùng SM`)
   })
 
+  // Cặp ĐỐI XỨNG với ca âm của Staff/QLCH bên dưới: cùng loại campaign ended,
+  // SM phải ĐỌC ĐƯỢC ở tầng RLS — và chỉ thấy dòng của vùng mình. Kiểm ở tầng
+  // dữ liệu chứ không qua UI: UI có thể trống/đầy vì nhiều lý do khác.
+  // Phụ thuộc migration 111 nên in CỜ thay vì assert cứng.
+  test('SM đọc được campaign ĐÃ KẾT THÚC qua RLS, chỉ trong vùng (cờ runtime)', async () => {
+    const scope = await smAssignedStoreIds(CRED.sm.email as string)
+    expect(scope.length, 'SM chưa được phân công cửa hàng nào').toBeGreaterThan(0)
+    const hit = await endedCampaignForStores(scope)
+    if (!hit) {
+      test.info().annotations.push({
+        type: 'fixture-missing',
+        description: 'DB chưa có campaign ended nào phủ vùng SM — không kiểm được quyền đọc ended',
+      })
+      test.skip(true, 'thiếu fixture campaign ended trong vùng SM')
+      return
+    }
+
+    const as = await sessionDb(CRED.sm.email as string, CRED.sm.password as string)
+    const rows = must<{ id: string }[]>(
+      await as.from('kpi_campaigns').select('id').eq('id', hit.id), 'SM đọc kpi_campaigns')
+    if (rows.length === 0) {
+      // eslint-disable-next-line no-console
+      console.log('SM_ENDED_RLS_VERIFIED=false — RLS chưa cho SM đọc campaign ended (migration 111 chưa apply)')
+      test.info().annotations.push({
+        type: 'runtime-unverified',
+        description: 'SM_ENDED_RLS_VERIFIED=false — quyền đọc ended của SM chưa có bằng chứng ở tầng RLS',
+      })
+      test.skip(true, 'SM_ENDED_RLS_VERIFIED=false — cần migration 111')
+      return
+    }
+
+    const tg = must<{ store_id: string }[]>(
+      await as.from('kpi_campaign_store_targets').select('store_id').eq('campaign_id', hit.id),
+      'SM đọc target campaign ended')
+    expect(tg.length,
+      'SM đọc được campaign ended nhưng KHÔNG thấy dòng target nào của vùng mình').toBeGreaterThan(0)
+    const outside = [...new Set(tg.map((t) => t.store_id))].filter((id) => !scope.includes(id))
+    expect(outside,
+      'SM đọc được target của cửa hàng NGOÀI vùng — 111 nới status mà mất ràng buộc is_sm_for_store')
+      .toEqual([])
+    // eslint-disable-next-line no-console
+    console.log(`SM_ENDED_RLS_VERIFIED=true — "${hit.name}": ${tg.length}/${scope.length} cửa hàng trong vùng`)
+  })
+
   test('lối vào: /targets có nút Lịch sử chiến dịch trỏ đúng ?status=ended', async ({ page }) => {
     await page.goto('/targets')
     await mainReady(page)
@@ -214,6 +294,44 @@ for (const [label, state, cred] of [
       await mainReady(page)
       expect(await page.locator('main').innerText(),
         `${label} nhìn thấy chiến dịch đã kết thúc trên /targets`).not.toContain('Đã kết thúc')
+    })
+
+    // Ca âm TRỰC TIẾP (audit 111.2 P1). Hai assert ở trên chỉ nói "không thấy
+    // dashboard" và "/targets không có chữ Đã kết thúc" — UI có thể trống vì
+    // lý do khác mà test vẫn xanh. Ở đây lấy ĐÍCH DANH một campaign ended phủ
+    // đúng cửa hàng của vai trò này rồi hỏi cả hai tầng: RLS (bằng chính phiên
+    // đăng nhập, không mượn service role) và UI (vào thẳng URL mang id đó).
+    // Assert CỨNG cả trước lẫn sau migration 111: 111 chỉ nới cho SM.
+    test('campaign ĐÃ KẾT THÚC của chính cửa hàng mình: RLS 0 dòng + UI không render', async ({ page }) => {
+      const storeId = await storeIdOf(cred.email as string)
+      expect(storeId, `${label} QA chưa được gán cửa hàng`).toBeTruthy()
+      const hit = await endedCampaignForStores([storeId as string])
+      if (!hit) {
+        test.info().annotations.push({
+          type: 'fixture-missing',
+          description: `DB chưa có campaign ended nào phủ cửa hàng của ${label} — ca âm chưa chạy được`,
+        })
+        test.skip(true, `thiếu fixture campaign ended cho cửa hàng ${label}`)
+        return
+      }
+
+      // Tầng 1 — RLS.
+      const as = await sessionDb(cred.email as string, cred.password as string)
+      const rows = must<{ id: string }[]>(
+        await as.from('kpi_campaigns').select('id').eq('id', hit.id), `${label} đọc kpi_campaigns`)
+      expect(rows.map((r) => r.id),
+        `${label} ĐỌC ĐƯỢC campaign ended "${hit.name}" — 111 đã nới nhầm cho vai trò này`)
+        .toEqual([])
+      const tg = must<{ store_id: string }[]>(
+        await as.from('kpi_campaign_store_targets').select('store_id').eq('campaign_id', hit.id),
+        `${label} đọc target campaign ended`)
+      expect(tg, `${label} đọc được target của campaign ended "${hit.name}"`).toEqual([])
+
+      // Tầng 2 — UI: vào thẳng URL mang id campaign ended.
+      await page.goto(`/targets?campaign=${hit.id}`)
+      await mainReady(page)
+      expect(await page.locator('main').innerText(),
+        `${label} nhìn thấy campaign ended "${hit.name}" khi mở thẳng URL`).not.toContain(hit.name)
     })
   })
 }

@@ -1,6 +1,7 @@
 import { test, expect, type Page } from '@playwright/test'
 import * as XLSX from 'xlsx'
 import { MANAGER_STATE, SM_STATE, STAFF_STATE } from './authState'
+import { must, serviceDb, type Sb } from './dbFixtures'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // XUẤT EXCEL CHO SM (chốt 30/08) — kiểm FILE, không kiểm cái nút
@@ -20,24 +21,6 @@ const CRED = {
 }
 const EXPORT = (id: string) => `/api/export/kpi-campaigns?campaign_id=${id}`
 
-async function db() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
-  expect(Boolean(url && key), 'thiếu SUPABASE env để đối soát phạm vi').toBe(true)
-  const { createClient } = await import('@supabase/supabase-js')
-  return createClient(url as string, key as string, { auth: { persistSession: false } })
-}
-
-// Mọi truy vấn đối soát phải NỔ khi lỗi. Bản trước dùng `.data ?? []`: query
-// hỏng → mảng rỗng → test hiểu nhầm thành "không có fixture" rồi tự skip, báo
-// cáo vẫn xanh. Đúng nhóm lỗi guard-tự-vô-hiệu-hoá đã gặp ở write QA 108.7.
-function must<T>(res: { data: T | null; error: { message?: string } | null }, what: string): T {
-  if (res.error) throw new Error(`${what} lỗi: ${res.error.message ?? JSON.stringify(res.error)}`)
-  if (res.data === null) throw new Error(`${what}: không có dữ liệu trả về`)
-  return res.data
-}
-
-type Sb = Awaited<ReturnType<typeof db>>
 interface TargetRow { campaign_id: string; store_id: string; pos_code: string | null }
 
 // Phạm vi SM đọc thẳng từ DB (service role) — nguồn sự thật ĐỘC LẬP với app.
@@ -103,7 +86,7 @@ test.describe('export campaign — SM @desktop', () => {
     // chiều "không rò" — một file mất nửa số dòng vẫn xanh.
     //   expected = target của campaign ∩ sm_store_assignments
     //   actual   = POS trong XLSX, mỗi dòng bắt buộc có POS
-    const sb = await db()
+    const sb = await serviceDb()
     const scope = await smStoreIds(sb, CRED.sm.email as string)
     expect(scope.size, 'SM chưa được phân công cửa hàng nào').toBeGreaterThan(0)
 
@@ -136,7 +119,7 @@ test.describe('export campaign — SM @desktop', () => {
   })
 
   test('campaign SAI TRẠNG THÁI (draft/paused/test) → SM không tải được', async ({ page }) => {
-    const sb = await db()
+    const sb = await serviceDb()
     // Chọn một campaign mà RLS chắc chắn chặn SM: draft/paused hoặc is_test.
     const blocked = must(await sb.from('kpi_campaigns').select('id, name, status, is_test')
       .or('status.eq.draft,status.eq.paused,is_test.eq.true').limit(1),
@@ -153,7 +136,7 @@ test.describe('export campaign — SM @desktop', () => {
   // ràng buộc is_sm_for_store thì ca draft/paused ở trên VẪN xanh, chỉ ca này
   // đỏ. Đây mới là ca chứng minh "SM không thấy campaign ngoài vùng".
   test('campaign HỢP LỆ nhưng NGOÀI VÙNG → SM không tải được', async ({ page }) => {
-    const sb = await db()
+    const sb = await serviceDb()
     const scope = await smStoreIds(sb, CRED.sm.email as string)
     const live = must(await sb.from('kpi_campaigns').select('id, name, status')
       .in('status', ['active', 'ended']).eq('is_test', false).is('archived_at', null),
@@ -197,7 +180,7 @@ for (const [label, state, cred] of [
     test.skip(!cred.email || !cred.password, 'credential chưa set')
 
     test('gọi thẳng API export → 403', async ({ page }) => {
-      const sb = await db()
+      const sb = await serviceDb()
       const any = must(await sb.from('kpi_campaigns').select('id').limit(1),
         'đọc campaign bất kỳ') as { id: string }[]
       test.skip(any.length === 0, 'DB chưa có campaign nào')
