@@ -52,7 +52,11 @@ test.describe('dashboard chiến dịch — Super @desktop', () => {
   // trúng trạng thái cũ. Neo vào chính thanh tab rồi mới khẳng định.
   async function activeTab(page: Page): Promise<string> {
     await expect(page.locator(TABS).first()).toBeVisible({ timeout: 15_000 })
-    return page.locator(`${TABS}[aria-current="page"]`).innerText()
+    // Giữa lúc Next chuyển route, thanh tab của trang CŨ và trang MỚI có thể
+    // cùng nằm trong DOM ⇒ 2 phần tử aria-current (strict mode nổ, và đọc lúc
+    // đó là đọc trạng thái nửa vời). Coi như CHƯA ổn định để poll thử lại.
+    const cur = await page.locator(`${TABS}[aria-current="page"]`).allInnerTexts()
+    return cur.length === 1 ? cur[0] : `chưa ổn định (${cur.length} tab active)`
   }
 
   test('?status=ended lọc đúng; giá trị lạ quay về Tất cả', async ({ page }) => {
