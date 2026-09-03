@@ -59,6 +59,26 @@ async function storeIdOf(email: string): Promise<string | null> {
     `đọc cửa hàng của ${email}`).store_id
 }
 
+// Marker migration — thứ biến CỜ thành GATE. Trước 111, không đọc được `ended`
+// là đúng nên cho skip; SAU 111 (marker có trong app_migrations) mà vẫn không
+// đọc được thì đó là REGRESSION và phải ĐỎ. Thiếu cái này thì suite trả exit 0
+// kể cả khi quyền chính hỏng, và việc phát hiện lại phụ thuộc người đọc log.
+async function migration111Applied(): Promise<boolean> {
+  const sb = await serviceDb()
+  return must<{ version: string }[]>(
+    await sb.from('app_migrations').select('version').eq('version', '111'),
+    'đọc marker migration 111').length > 0
+}
+
+// Tập cửa hàng ĐÚNG RA SM phải đọc được của một campaign (service role).
+async function expectedScopedStores(campaignId: string, scope: string[]): Promise<string[]> {
+  const sb = await serviceDb()
+  const rows = must<{ store_id: string }[]>(
+    await sb.from('kpi_campaign_store_targets').select('store_id').eq('campaign_id', campaignId),
+    `đọc target của campaign ${campaignId}`)
+  return [...new Set(rows.map((r) => r.store_id).filter((id) => scope.includes(id)))].sort()
+}
+
 async function smAssignedStoreIds(email: string): Promise<string[]> {
   const sb = await serviceDb()
   const u = must<{ id: string }>(
@@ -187,10 +207,13 @@ test.describe('dashboard chiến dịch — SM chỉ xem @desktop', () => {
     console.log('SM_CAMPAIGN_DETAIL_VERIFIED=true')
   })
 
-  // Chính REQUEST #1. Không assert cứng vì nó phụ thuộc migration 111 đã chạy
-  // chưa VÀ vùng SM có campaign ended nào không — in cờ để thiếu coverage là
-  // thấy ngay, không lẫn vào tổng pass.
-  test('SM thấy chiến dịch ĐÃ KẾT THÚC (cờ runtime)', async ({ page }) => {
+  // Chính REQUEST #1. GATE theo marker migration: chưa chạy 111 thì cho skip
+  // (branch phải xanh trước migration), CHẠY RỒI mà không thấy là ĐỎ.
+  test('SM thấy chiến dịch ĐÃ KẾT THÚC (gate theo marker 111)', async ({ page }) => {
+    const scope = await smAssignedStoreIds(CRED.sm.email as string)
+    const fixture = await endedCampaignForStores(scope)
+    const applied = await migration111Applied()
+
     await page.goto(`${LIST}?status=ended`)
     await mainReady(page)
     const rows = (await page.locator('main a[href^="/targets/campaigns/"]').evaluateAll(
@@ -198,13 +221,20 @@ test.describe('dashboard chiến dịch — SM chỉ xem @desktop', () => {
     )).filter((h) => /^\/targets\/campaigns\/[0-9a-f-]{36}$/.test(h))
 
     if (rows.length === 0) {
+      // Đủ điều kiện mà vẫn trống ⇒ REGRESSION, không phải "chưa kiểm được".
+      if (applied && fixture) {
+        expect(rows.length,
+          `REGRESSION: marker 111 ĐÃ có trong app_migrations và vùng SM có campaign ended ("${fixture.name}") — danh sách ?status=ended KHÔNG được trống`)
+          .toBeGreaterThan(0)
+      }
+      const why = !applied ? 'marker 111 chưa có trong app_migrations' : 'vùng SM chưa có campaign ended nào'
       // eslint-disable-next-line no-console
-      console.log('SM_ENDED_VISIBLE=false — SM chưa thấy campaign ended (migration 111 chưa chạy, hoặc vùng SM chưa có campaign nào kết thúc)')
+      console.log(`SM_ENDED_VISIBLE=false — ${why}`)
       test.info().annotations.push({
-        type: 'runtime-unverified',
-        description: 'SM_ENDED_VISIBLE=false — request #1 CHƯA có bằng chứng runtime',
+        type: !applied ? 'runtime-unverified' : 'fixture-missing',
+        description: `SM_ENDED_VISIBLE=false — ${why}`,
       })
-      test.skip(true, 'SM_ENDED_VISIBLE=false — cần migration 111 + có campaign ended trong vùng SM')
+      test.skip(true, `SM_ENDED_VISIBLE=false — ${why}`)
       return
     }
     // Có dòng thì mọi dòng phải đúng là ended, và mở được detail.
@@ -219,10 +249,10 @@ test.describe('dashboard chiến dịch — SM chỉ xem @desktop', () => {
   })
 
   // Cặp ĐỐI XỨNG với ca âm của Staff/QLCH bên dưới: cùng loại campaign ended,
-  // SM phải ĐỌC ĐƯỢC ở tầng RLS — và chỉ thấy dòng của vùng mình. Kiểm ở tầng
-  // dữ liệu chứ không qua UI: UI có thể trống/đầy vì nhiều lý do khác.
-  // Phụ thuộc migration 111 nên in CỜ thay vì assert cứng.
-  test('SM đọc được campaign ĐÃ KẾT THÚC qua RLS, chỉ trong vùng (cờ runtime)', async () => {
+  // SM phải ĐỌC ĐƯỢC ở tầng RLS — và thấy ĐÚNG BẰNG tập cửa hàng vùng mình.
+  // Kiểm ở tầng dữ liệu chứ không qua UI: UI có thể trống/đầy vì lý do khác.
+  // GATE theo marker 111 giống test trên.
+  test('SM đọc được campaign ĐÃ KẾT THÚC qua RLS, đúng tập cửa hàng (gate theo marker 111)', async () => {
     const scope = await smAssignedStoreIds(CRED.sm.email as string)
     expect(scope.length, 'SM chưa được phân công cửa hàng nào').toBeGreaterThan(0)
     const hit = await endedCampaignForStores(scope)
@@ -235,31 +265,41 @@ test.describe('dashboard chiến dịch — SM chỉ xem @desktop', () => {
       return
     }
 
+    const applied = await migration111Applied()
     const as = await sessionDb(CRED.sm.email as string, CRED.sm.password as string)
     const rows = must<{ id: string }[]>(
       await as.from('kpi_campaigns').select('id').eq('id', hit.id), 'SM đọc kpi_campaigns')
     if (rows.length === 0) {
+      expect(applied,
+        `REGRESSION: marker 111 ĐÃ có trong app_migrations nhưng RLS vẫn không cho SM đọc campaign ended "${hit.name}"`)
+        .toBe(false)
       // eslint-disable-next-line no-console
-      console.log('SM_ENDED_RLS_VERIFIED=false — RLS chưa cho SM đọc campaign ended (migration 111 chưa apply)')
+      console.log('SM_ENDED_RLS_VERIFIED=false — marker 111 chưa có trong app_migrations')
       test.info().annotations.push({
         type: 'runtime-unverified',
-        description: 'SM_ENDED_RLS_VERIFIED=false — quyền đọc ended của SM chưa có bằng chứng ở tầng RLS',
+        description: 'SM_ENDED_RLS_VERIFIED=false — chưa apply 111 nên quyền đọc ended của SM chưa kiểm được',
       })
       test.skip(true, 'SM_ENDED_RLS_VERIFIED=false — cần migration 111')
       return
     }
 
-    const tg = must<{ store_id: string }[]>(
+    // Đối soát HAI CHIỀU như export: không RÒ và không THIẾU. Chỉ kiểm "mọi
+    // dòng đều thuộc vùng" thì SM mất một nửa cửa hàng hợp lệ vẫn xanh.
+    const expected = await expectedScopedStores(hit.id, scope)
+    const actual = [...new Set(must<{ store_id: string }[]>(
       await as.from('kpi_campaign_store_targets').select('store_id').eq('campaign_id', hit.id),
-      'SM đọc target campaign ended')
-    expect(tg.length,
-      'SM đọc được campaign ended nhưng KHÔNG thấy dòng target nào của vùng mình').toBeGreaterThan(0)
-    const outside = [...new Set(tg.map((t) => t.store_id))].filter((id) => !scope.includes(id))
+      'SM đọc target campaign ended').map((t) => t.store_id))].sort()
+    expect(expected.length,
+      'fixture sai: campaign ended này không có cửa hàng nào thuộc vùng SM').toBeGreaterThan(0)
+    const outside = actual.filter((id) => !scope.includes(id))
     expect(outside,
       'SM đọc được target của cửa hàng NGOÀI vùng — 111 nới status mà mất ràng buộc is_sm_for_store')
       .toEqual([])
+    expect(actual,
+      'tập cửa hàng SM đọc được KHÔNG bằng đúng (target campaign ended ∩ sm_store_assignments)')
+      .toEqual(expected)
     // eslint-disable-next-line no-console
-    console.log(`SM_ENDED_RLS_VERIFIED=true — "${hit.name}": ${tg.length}/${scope.length} cửa hàng trong vùng`)
+    console.log(`SM_ENDED_RLS_VERIFIED=true — "${hit.name}": ${actual.length}/${scope.length} cửa hàng, khớp đúng tập kỳ vọng`)
   })
 
   test('lối vào: /targets có nút Lịch sử chiến dịch trỏ đúng ?status=ended', async ({ page }) => {
