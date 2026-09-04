@@ -1,15 +1,18 @@
 import { test, expect } from '@playwright/test'
 import {
   SOURCE_COLUMNS, RETIRED_SOURCE_COLUMNS,
-  parseSourceNumber, roundRevenue, affiliateDayState, offlineDayState,
+  parseSourceNumber, roundRevenue, allocateRoundedDaily,
 } from '@/lib/kpi/revenueSource'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// CONTRACT NGUỒN BQ TÁCH OFFLINE/AFFILIATE (112.1) — thuần, không chạm mạng.
+// CONTRACT NGUỒN BQ TÁCH OFFLINE/AFFILIATE (112.1, siết ở 112.3) — thuần.
 //
-// Điều đắt nhất phải khoá ở đây: null KHÔNG được biến thành 0. Cả sự cố
-// 05/08→04/09 (landing đứng im) lẫn rủi ro lớn nhất của lần cutover này đều
-// nằm ở chỗ một ô thiếu dữ liệu bị đọc thành "0đ" trên màn tiền.
+// Điều đắt nhất phải khoá: null KHÔNG được biến thành 0. Cả sự cố 05/08→04/09
+// (landing đứng im) lẫn rủi ro lớn nhất của lần cutover này đều nằm ở chỗ một
+// ô thiếu dữ liệu bị đọc thành "0đ" trên màn tiền.
+//
+// Mọi hàm ở đây đều CÓ caller production (offlineSource) — không giữ helper
+// chỉ để test gọi, vì đó là cách contract xanh trong khi production drift.
 // ─────────────────────────────────────────────────────────────────────────────
 
 test.describe('contract nguồn doanh thu BQ @desktop', () => {
@@ -35,7 +38,7 @@ test.describe('contract nguồn doanh thu BQ @desktop', () => {
   })
 
   test('làm tròn về đồng: nửa đơn vị ra XA số 0, khớp ROUND() của BigQuery', () => {
-    // Float artifact có thật trong nguồn: affiliate_net_revenue 260000.00000000003.
+    // Float artifact có thật trong nguồn: 260000.00000000003.
     expect(roundRevenue(260000.00000000003)).toBe(260000)
     expect(roundRevenue(2.5)).toBe(3)
     expect(roundRevenue(-2.5)).toBe(-3)   // BigQuery ROUND(-2.5) = -3, KHÔNG phải -2
@@ -43,48 +46,48 @@ test.describe('contract nguồn doanh thu BQ @desktop', () => {
     expect(roundRevenue(0)).toBe(0)
   })
 
-  test('Affiliate: cả hai NULL = KHÔNG PHÁT SINH (nghiệp vụ tính 0)', () => {
-    expect(affiliateDayState(null, null)).toEqual({ kind: 'none' })
+  // ── Làm tròn theo TOÀN KHOẢNG (contract 04/09 điểm 3) ─────────────────────
+  const sum = (m: Map<string, number>) => [...m.values()].reduce((a, b) => a + b, 0)
+
+  test('0,4 + 0,4: tổng phải là 1đ — làm tròn từng ngày rồi cộng sẽ ra 0đ', () => {
+    const out = allocateRoundedDaily(new Map([['2026-08-01', 0.4], ['2026-08-02', 0.4]]))
+    expect(sum(out), 'tổng phải bằng ROUND(SUM(cả khoảng))').toBe(1)
+    // Phần dư dồn vào NGÀY CUỐI — xác định, không rải ngẫu nhiên.
+    expect(out.get('2026-08-01')).toBe(0)
+    expect(out.get('2026-08-02')).toBe(1)
   })
 
-  test('Affiliate: chỉ MỘT field NULL = mâu thuẫn nguồn, fail-closed', () => {
-    const a = affiliateDayState('156600', null)
-    expect(a.kind, 'có tiền mà không có đơn phải là invalid').toBe('invalid')
-    const b = affiliateDayState(null, '2')
-    expect(b.kind, 'có đơn mà không có tiền phải là invalid').toBe('invalid')
+  test('số ÂM: cùng quy tắc, không FLOOR', () => {
+    const out = allocateRoundedDaily(new Map([['2026-08-01', -0.4], ['2026-08-02', -0.4]]))
+    expect(sum(out)).toBe(-1)
+    expect(out.get('2026-08-02')).toBe(-1)
   })
 
-  test('Affiliate: đủ hai field → dùng bình thường; số đơn phải nguyên >= 0', () => {
-    expect(affiliateDayState('408200', '2')).toEqual({ kind: 'value', revenue: 408200, orders: 2 })
-    expect(affiliateDayState('0', '0')).toEqual({ kind: 'value', revenue: 0, orders: 0 })
-    expect(affiliateDayState('100', '-1').kind).toBe('invalid')
-    expect(affiliateDayState('100', '1.5').kind).toBe('invalid')
+  test('mọi ngày đã nguyên → không đụng gì; tổng vẫn khớp', () => {
+    const raw = new Map([['2026-08-01', 13406148], ['2026-08-02', 0], ['2026-08-03', -250000]])
+    const out = allocateRoundedDaily(raw)
+    expect([...out.entries()]).toEqual([...raw.entries()])
+    expect(sum(out)).toBe(roundRevenue(13406148 + 0 - 250000))
   })
 
-  test('Offline: NULL là NGUỒN CHƯA HỢP LỆ — không phải 0', () => {
-    // Đây là khác biệt cốt lõi với Affiliate: cửa hàng luôn có doanh thu
-    // offline (kể cả 0đ), nên NULL = nguồn hỏng ⇒ giữ snapshot cũ.
-    const r = offlineDayState(null, '116')
-    expect(r.kind).toBe('invalid')
-    expect(r.kind === 'invalid' && r.detail).toContain('NULL')
-    expect(offlineDayState('13406148', null).kind).toBe('invalid')
+  test('nhiễu FLOAT64 nhiều ngày vẫn cho tổng đúng và daily nguyên', () => {
+    const raw = new Map([
+      ['2026-08-01', 260000.00000000003],
+      ['2026-08-02', 156599.99999999997],
+      ['2026-08-03', 0.5],
+    ])
+    const out = allocateRoundedDaily(raw)
+    for (const [d, v] of out) expect(Number.isInteger(v), `${d} phải là số nguyên`).toBe(true)
+    expect(sum(out)).toBe(roundRevenue(260000.00000000003 + 156599.99999999997 + 0.5))
   })
 
-  test('Offline: giá trị hợp lệ gồm cả 0đ và số ÂM; số đơn phải nguyên >= 0', () => {
-    expect(offlineDayState('13406148', '116')).toEqual({ kind: 'value', revenue: 13406148, orders: 116 })
-    expect(offlineDayState('0', '0')).toEqual({ kind: 'value', revenue: 0, orders: 0 })
-    expect(offlineDayState('-250000', '3')).toEqual({ kind: 'value', revenue: -250000, orders: 3 })
-    expect(offlineDayState('100', '2.5').kind).toBe('invalid')
-    expect(offlineDayState('100', '-2').kind).toBe('invalid')
+  test('ngày không sắp xếp sẵn: "ngày cuối" vẫn theo thứ tự ngày, không theo thứ tự insert', () => {
+    const out = allocateRoundedDaily(new Map([['2026-08-03', 0.4], ['2026-08-01', 0.4]]))
+    expect(out.get('2026-08-03'), 'phần dư phải rơi vào ngày lớn nhất').toBe(1)
+    expect(out.get('2026-08-01')).toBe(0)
   })
 
-  test('không nhánh nào biến thiếu dữ liệu thành 0', () => {
-    // Quét chéo: mọi input "trống/rác" đều KHÔNG được ra revenue = 0.
-    for (const bad of [null, undefined, '', 'abc']) {
-      const off = offlineDayState(bad, '1')
-      expect(off.kind, `offline ${String(bad)} phải invalid`).toBe('invalid')
-      const aff = affiliateDayState(bad, '1')
-      expect(aff.kind, `affiliate ${String(bad)} (lệch cặp) phải invalid`).toBe('invalid')
-    }
+  test('map rỗng → map rỗng (không tự sinh ngày)', () => {
+    expect(allocateRoundedDaily(new Map()).size).toBe(0)
   })
 })

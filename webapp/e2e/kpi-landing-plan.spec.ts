@@ -22,6 +22,9 @@ const row = (grain: string, pos: string, over: Record<string, unknown> = {}) => 
   actual: '1000000',
   target: '2000000',
   raw_row_count: '1',
+  // 112.3: counter NULL của nguồn Offline. Thiếu field = query/schema đã đổi
+  // ⇒ fixture phải phản ánh đúng query production.
+  offline_revenue_null_count: '0',
   ...over,
 })
 const fullRows = () => STORES.flatMap((s) => [row('day', s.code!), row('month', s.code!)])
@@ -54,6 +57,44 @@ test.describe('kpi landing atomic plan @desktop', () => {
     const missStore = buildKpiUpsertPlan(fullRows().filter((r) => r.pos_code !== 'POS0009'), STORES, NOW)
     expect(missStore.ok).toBe(false)
     expect(missStore.missing).toEqual(expect.arrayContaining(['POS0009/day', 'POS0009/month']))
+  })
+
+  // ── 112.3 (audit P1#2): NULL doanh thu Offline ─────────────────────────
+  // Không thể suy ra từ `actual`: SUM() của BigQuery bỏ qua NULL và coerceNum
+  // coi NULL là 0đ hợp lệ (r2.1) ⇒ thiếu dữ liệu sẽ lặng lẽ thành 0đ trên màn
+  // tiền. Counter là đường DUY NHẤT nhìn thấy.
+  test('112.3: chỉ có row NULL (actual NULL, counter=1) → ok=false, KHÔNG ghi 0đ', () => {
+    const rows = fullRows()
+    rows[0] = row('day', 'POS0009', { actual: null, offline_revenue_null_count: '1' })
+    const p = buildKpiUpsertPlan(rows, STORES, NOW)
+    expect(p.ok, 'nguồn thiếu doanh thu mà vẫn ok = ghi 0đ oan').toBe(false)
+    expect(p.rowErrors.join(' | ')).toContain('offline_revenue_null_count=1')
+    // Cổng atomic nằm ở tầng IO: ok=false ⇒ aggregateAndUpsertKpi KHÔNG upsert
+    // dòng nào. Ở đây chỉ cần chắc dòng hỏng không lọt vào payload dưới dạng 0đ.
+    expect(p.payload.some((r) => r.store_id === 's1' && r.period_type === 'day'),
+      'row NULL bị biến thành 0đ trong payload').toBe(false)
+  })
+
+  test('112.3: 1 row HỢP LỆ + 1 row NULL cùng khoá → ok=false (fail-open cũ: lọc NULL ở WHERE thì raw_row_count vẫn =1)', () => {
+    // Đây chính là đường fail-open mà bản 112.2 còn hở: nếu query lọc
+    // `offline_net_revenue IS NOT NULL` TRƯỚC GROUP BY thì row NULL biến mất,
+    // COUNT(*) ra 1 và dữ liệu lỗi trôi qua như sạch. Giữ row NULL đến
+    // aggregate ⇒ raw_row_count=2 VÀ counter=1, chặn ở cả hai lớp.
+    const rows = fullRows()
+    rows[0] = row('day', 'POS0009', { raw_row_count: '2', offline_revenue_null_count: '1' })
+    const p = buildKpiUpsertPlan(rows, STORES, NOW)
+    expect(p.ok).toBe(false)
+    expect(p.payload.some((r) => r.store_id === 's1' && r.period_type === 'day')).toBe(false)
+  })
+
+  test('112.3: thiếu HẲN counter (query/schema drift) → ok=false', () => {
+    const rows = fullRows()
+    const broken = row('day', 'POS0009') as Record<string, unknown>
+    delete broken.offline_revenue_null_count
+    rows[0] = broken as typeof rows[0]
+    const p = buildKpiUpsertPlan(rows, STORES, NOW)
+    expect(p.ok).toBe(false)
+    expect(p.rowErrors.join(' | ')).toContain('offline_revenue_null_count=undefined')
   })
 
   test('P1#1: nguồn TRÙNG dòng (raw_row_count=2) → ok=false, duplicates nêu rõ — không ghi đè theo thứ tự', () => {

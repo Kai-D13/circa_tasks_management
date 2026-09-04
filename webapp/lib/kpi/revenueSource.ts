@@ -44,53 +44,27 @@ export function roundRevenue(n: number): number {
   return Math.sign(n) * Math.round(Math.abs(n))
 }
 
-// ── Trạng thái Affiliate của một (POS × ngày) ────────────────────────────────
-// Contract 04/09 điểm 5. Đối soát 4 ngày với sổ Affiliate thật (04/09): tổng
-// SỐ ĐƠN của BQ khớp tuyệt đối Supabase, và view CHƯA BAO GIỜ phát ra 0 trong
-// 18 ngày ⇒ NULL là "không phát sinh", không phải "chưa nạp".
-// Chỉ MỘT trong hai field NULL là mâu thuẫn nội tại ⇒ fail-closed.
-export type AffiliateDayState =
-  | { kind: 'none' }
-  | { kind: 'value'; revenue: number; orders: number }
-  | { kind: 'invalid'; detail: string }
-
-export function affiliateDayState(rawRevenue: unknown, rawOrders: unknown): AffiliateDayState {
-  const revenue = parseSourceNumber(rawRevenue)
-  const orders = parseSourceNumber(rawOrders)
-  if (revenue === undefined || orders === undefined) {
-    return { kind: 'invalid', detail: `giá trị Affiliate không đọc được (revenue=${String(rawRevenue)}, orders=${String(rawOrders)})` }
+// ── Làm tròn theo TOÀN KHOẢNG, phân bổ phần dư ──────────────────────────────
+// Contract 04/09 điểm 3 nói ROUND(SUM(cả khoảng)), nhưng Supabase/UI phải lưu
+// số nguyên theo TỪNG NGÀY (chart + invariant SUM(daily) = tổng kỳ). Làm tròn
+// từng ngày rồi cộng lại KHÔNG bằng làm tròn tổng: hai ngày 0,4đ cho ra 0đ
+// trong khi contract đòi 1đ.
+// Cách duy nhất thoả cả hai: làm tròn tổng MỘT LẦN, làm tròn từng ngày, rồi
+// dồn phần chênh vào NGÀY CUỐI (xác định, không rải ngẫu nhiên).
+export function allocateRoundedDaily(rawByDate: Map<string, number>): Map<string, number> {
+  const dates = [...rawByDate.keys()].sort()
+  const out = new Map<string, number>()
+  if (dates.length === 0) return out
+  const total = roundRevenue([...rawByDate.values()].reduce((a, b) => a + b, 0))
+  let acc = 0
+  for (const d of dates) {
+    const v = roundRevenue(rawByDate.get(d) as number)
+    out.set(d, v)
+    acc += v
   }
-  if (revenue === null && orders === null) return { kind: 'none' }
-  if (revenue === null || orders === null) {
-    return {
-      kind: 'invalid',
-      detail: `Affiliate chỉ một field NULL (revenue=${String(rawRevenue)}, orders=${String(rawOrders)}) — nguồn mâu thuẫn`,
-    }
+  if (acc !== total) {
+    const last = dates[dates.length - 1]
+    out.set(last, (out.get(last) as number) + (total - acc))
   }
-  if (!Number.isInteger(orders) || orders < 0) {
-    return { kind: 'invalid', detail: `số đơn Affiliate không hợp lệ: ${String(rawOrders)}` }
-  }
-  return { kind: 'value', revenue, orders }
-}
-
-// ── Trạng thái Offline của một (POS × ngày) ──────────────────────────────────
-// Contract 04/09 điểm 6: Offline NULL = nguồn CHƯA HỢP LỆ → preserve snapshot.
-// Khác hẳn Affiliate: cửa hàng luôn có doanh thu offline (kể cả 0), nên NULL ở
-// đây là dấu hiệu nguồn hỏng chứ không phải "không phát sinh".
-// Doanh thu ÂM hợp lệ (hoàn/điều chỉnh). Số đơn phải nguyên >= 0.
-export type OfflineDayState =
-  | { kind: 'value'; revenue: number; orders: number }
-  | { kind: 'invalid'; detail: string }
-
-export function offlineDayState(rawRevenue: unknown, rawOrders: unknown): OfflineDayState {
-  const revenue = parseSourceNumber(rawRevenue)
-  const orders = parseSourceNumber(rawOrders)
-  if (revenue === undefined) return { kind: 'invalid', detail: `doanh thu Offline không đọc được: ${String(rawRevenue)}` }
-  if (revenue === null) return { kind: 'invalid', detail: 'doanh thu Offline NULL — nguồn chưa hoàn tất' }
-  if (orders === undefined) return { kind: 'invalid', detail: `số đơn Offline không đọc được: ${String(rawOrders)}` }
-  if (orders === null) return { kind: 'invalid', detail: 'số đơn Offline NULL — nguồn chưa hoàn tất' }
-  if (!Number.isInteger(orders) || orders < 0) {
-    return { kind: 'invalid', detail: `số đơn Offline không hợp lệ: ${String(rawOrders)}` }
-  }
-  return { kind: 'value', revenue, orders }
+  return out
 }

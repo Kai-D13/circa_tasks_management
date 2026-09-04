@@ -13,6 +13,7 @@
 // THUẦN: không import supabase/BQ client — nhận runBqChunk qua tham số.
 
 import { monthChunks, nextDayISO } from '@/lib/kpi/engine'
+import { allocateRoundedDaily, parseSourceNumber } from '@/lib/kpi/revenueSource'
 
 export interface OfflineSourceInput {
   sa: unknown
@@ -41,10 +42,6 @@ export async function readOfflineSource(input: OfflineSourceInput): Promise<Offl
   const ordersByPos = new Map<string, Map<string, number>>()
   // POS có nguồn số đơn hỏng (chỉ dùng khi KHÔNG strict).
   const orderIssuePos = new Map<string, string>()
-  // 112: chẩn đoán Affiliate — CHỈ quan sát, không vào payload (nguồn Affiliate
-  // của campaign vẫn là Mongo/Supabase cho tới khi Data Team xác nhận
-  // attribution theo partner_code).
-  const affiliateMismatchPos = new Map<string, number>()
   const warnings: string[] = []
 
   for (const [chunkStart, chunkEnd] of monthChunks(startISO, effEndISO)) {
@@ -59,11 +56,13 @@ export async function readOfflineSource(input: OfflineSourceInput): Promise<Offl
       // r1.3 (audit P1): mọi field đọc từ BQ đều phải TỒN TẠI và ĐÚNG KIỂU.
       // `?? 0` / `|| 0` là cách schema-drift biến thành số 0 âm thầm trên màn
       // tiền — ở đây thiếu/sai kiểu luôn là LỖI NGUỒN.
+      // 112.3: dùng CHUNG parser contract (lib/kpi/revenueSource) thay vì bản
+      // sao cục bộ — hai bản song song là cách contract test xanh trong khi
+      // production drift. Ở đây "ô trống" và "không đọc được" đều là lỗi nguồn
+      // nên gộp về null; chỗ cần phân biệt (counter NULL) đã tách riêng.
       const numOrFail = (key: string): number | null => {
-        const raw = r[key]
-        if (raw === undefined || raw === null) return null
-        const n = Number(raw)
-        return Number.isFinite(n) ? n : null
+        const v = parseSourceNumber(r[key])
+        return v === undefined || v === null ? null : v
       }
 
       const pos = String(r.pos_code ?? '').trim().toUpperCase()
@@ -174,14 +173,6 @@ export async function readOfflineSource(input: OfflineSourceInput): Promise<Offl
         if (!ordersByPos.has(pos)) ordersByPos.set(pos, new Map())
         ordersByPos.get(pos)!.set(date, ordNum as number)
       }
-
-      // Affiliate chỉ MỘT field NULL = mâu thuẫn nguồn (contract 04/09 điểm 5).
-      // Ghi cảnh báo chứ KHÔNG chặn: batch này không dùng số Affiliate của BQ,
-      // nên để nó chặn được đường tiền Offline là sai tỉ lệ rủi ro.
-      const affMismatch = numOrFail('affiliate_pair_mismatch')
-      if (affMismatch !== null && affMismatch > 0) {
-        affiliateMismatchPos.set(pos, (affiliateMismatchPos.get(pos) ?? 0) + affMismatch)
-      }
     }
   }
 
@@ -216,9 +207,13 @@ export async function readOfflineSource(input: OfflineSourceInput): Promise<Offl
     warnings.push(`Số đơn/AOV Offline tạm ẩn cho ${pos} — nguồn BQ ${reason}. GMV/commission KHÔNG bị ảnh hưởng.`)
   }
 
-  for (const [pos, n] of affiliateMismatchPos) {
-    warnings.push(`Nguồn BQ: ${pos} có ${n} ô Affiliate chỉ một field NULL (doanh thu/số đơn lệch nhau) — chưa ảnh hưởng số liệu vì campaign vẫn lấy Affiliate từ Mongo/Supabase.`)
-  }
+  // ── 112.3 (audit P1#1): làm tròn theo TOÀN KHOẢNG ────────────────────────
+  // Query trả giá trị THÔ. Contract 04/09 điểm 3 là ROUND(SUM(cả khoảng));
+  // làm tròn từng ngày rồi cộng lại ra số khác (hai ngày 0,4đ → 0đ thay vì
+  // 1đ). Làm tròn tổng một lần rồi dồn phần dư vào ngày cuối: daily vẫn là
+  // VND nguyên và SUM(daily) = tổng kỳ đúng contract.
+  const roundedByPos = new Map<string, Map<string, number>>()
+  for (const [pos, byDate] of offlineByPos) roundedByPos.set(pos, allocateRoundedDaily(byDate))
 
-  return { ok: true, offlineByPos, ordersByPos, warnings }
+  return { ok: true, offlineByPos: roundedByPos, ordersByPos, warnings }
 }

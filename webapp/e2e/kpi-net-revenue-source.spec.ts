@@ -36,7 +36,10 @@ test.describe('kpi net_revenue source contract @desktop', () => {
     // 112 (04/09): BI tách Offline/Affiliate — cột net_revenue đã bị xoá khỏi
     // view. Alias actual_gmv/gmv GIỮ NGUYÊN nên engine/DB/UI/export không đổi.
     expect(rangeFn).toContain('ROUND(SUM(CAST(offline_net_revenue AS NUMERIC))) AS actual_gmv')
-    expect(dailyFn).toContain('ROUND(SUM(CAST(offline_net_revenue AS NUMERIC))) AS gmv')
+    // 112.3: daily trả giá trị THÔ — làm tròn theo TOÀN KHOẢNG là việc của
+    // allocateRoundedDaily (ROUND từng ngày rồi cộng ra số khác contract).
+    expect(dailyFn).toContain('SUM(CAST(offline_net_revenue AS NUMERIC)) AS gmv')
+    expect(dailyFn).not.toContain('ROUND(SUM(CAST(offline_net_revenue AS NUMERIC))) AS gmv')
     // KHÔNG COALESCE quanh doanh thu: NULL phải chảy xuống thành lỗi nguồn.
     expect(dailyFn).not.toContain('COALESCE(offline_net_revenue, 0)) AS gmv')
   })
@@ -66,10 +69,11 @@ test.describe('kpi net_revenue source contract @desktop', () => {
     expect(aggQuery).not.toContain("'week'") // chưa bật — BI chưa có dữ liệu WEEK
     // r1 (audit P2#3): GROUP BY + COUNT thật — dòng nguồn trùng bị kpi.ts từ chối
     expect(aggQuery).toContain('CAST(ROUND(SUM(offline_net_revenue)) AS NUMERIC) AS actual')
-    // Fail-closed: row thiếu doanh thu bị LOẠI khỏi nguồn ⇒ guard "thiếu
-    // store×grain" của kpiPlan bắn 422 nguyên khối, thay vì ghi 0đ (coerceNum
-    // coi NULL là 0đ hợp lệ nên COALESCE ở đây sẽ giấu mất nguồn hỏng).
-    expect(aggQuery).toContain('offline_net_revenue IS NOT NULL')
+    // 112.3 (audit P1#2): KHÔNG lọc NULL trước GROUP BY — lọc thì một khoá có
+    // 1 row hợp lệ + 1 row NULL vẫn ra raw_row_count=1 và trôi qua như sạch.
+    // Giữ row NULL đến aggregate rồi để kpiPlan từ chối theo counter.
+    expect(aggQuery).not.toContain('offline_net_revenue IS NOT NULL')
+    expect(aggQuery).toContain('COUNTIF(offline_net_revenue IS NULL) AS offline_revenue_null_count')
     // Landing CHỈ Offline — cộng Affiliate là đổi ý nghĩa màn này.
     expect(aggQuery).not.toContain('affiliate_net_revenue')
     expect(aggQuery).toContain('CAST(SUM(COALESCE(TARGET, 0)) AS NUMERIC) AS target')
@@ -105,8 +109,10 @@ test.describe('kpi net_revenue source contract @desktop', () => {
   test('7. Đếm NULL RIÊNG từng nguồn — SUM() của BigQuery bỏ qua NULL', () => {
     expect(dailyFn).toContain('AS offline_revenue_null_count')
     expect(dailyFn).toContain('AS offline_order_null_count')
-    // Affiliate: chỉ chẩn đoán (một field NULL trong khi field kia có giá trị).
-    expect(dailyFn).toContain('AS affiliate_pair_mismatch')
+    // Range dùng cho đối soát tay cũng phải có counter (SUM bỏ qua NULL).
+    expect(rangeFn).toContain('AS offline_revenue_null_count')
+    // Landing: counter là đường DUY NHẤT thấy NULL (coerceNum coi NULL là 0đ).
+    expect(aggQuery).toContain('AS offline_revenue_null_count')
   })
 
   test('4. Guard ISO date (chống injection khi interpolate) còn nguyên ở CẢ 2 hàm campaign', () => {

@@ -135,6 +135,20 @@ export function buildKpiUpsertPlan(
       continue
     }
 
+    // 112.3 (audit P1#2): doanh thu Offline NULL = nguồn CHƯA HOÀN TẤT.
+    // Không thể suy ra từ `actual`: SUM() bỏ qua NULL và coerceNum coi NULL là
+    // 0đ hợp lệ (quyết định r2.1, vẫn đúng cho các field khác) ⇒ thiếu dữ liệu
+    // sẽ lặng lẽ thành 0đ trên màn tiền. Counter là đường DUY NHẤT nhìn thấy.
+    // Thiếu hẳn field = query/schema đã đổi, cũng là lỗi.
+    const nullCountRaw = raw.offline_revenue_null_count
+    const nullCount = coerceNum(nullCountRaw)
+    if (nullCountRaw === undefined || nullCount === null || nullCount > 0) {
+      rowErrors.push(
+        `${periodType} ${periodStart} ${label}: doanh thu Offline NULL/không đọc được (offline_revenue_null_count=${String(nullCountRaw)}) — nguồn chưa hoàn tất`,
+      )
+      continue
+    }
+
     const upsertKey = `${storeId}|${periodType}|${periodStart}`
     if (byUpsertKey.has(upsertKey)) {
       // 2 POS/pos_name khác nhau map về CÙNG store — cũng là nguồn trùng.
