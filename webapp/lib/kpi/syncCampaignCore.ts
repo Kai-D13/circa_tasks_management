@@ -204,6 +204,7 @@ export async function syncCampaignWithDeps(
         startISO: c.start_date,
         effEndISO: effEnd,
         targetPosCodes: targets.map((t) => t.pos_code),
+        todayVnISO: todayVn,
         // GMV: số đơn/AOV là chỉ số PHỤ → DEGRADE POS lỗi, KHÔNG đóng băng tiền.
         strict: false,
         runBqChunk: deps.runBqChunk,
@@ -402,6 +403,7 @@ async function syncOrderAovCampaign(
     startISO: c.start_date,
     effEndISO: effEnd,
     targetPosCodes: targets.map((t) => t.pos_code),
+    todayVnISO: todayVn,
     // STRICT: số đơn LÀ KPI — canary lỗi = preserve, không degrade.
     strict: true,
     runBqChunk: deps.runBqChunk,

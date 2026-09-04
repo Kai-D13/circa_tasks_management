@@ -448,8 +448,8 @@ test.describe('kpi sync orchestration @desktop', () => {
     expect(calls.replace).toBe(0)
   })
 
-  // Ngày KHÔNG có doanh thu vẫn HỢP LỆ (0đ) — query dùng
-  // SUM(COALESCE(net_revenue,0)) nên nó về dạng SỐ 0, không phải null.
+  // Ngày KHÔNG có doanh thu vẫn HỢP LỆ (0đ) — 0 là một GIÁ TRỊ, phải phân biệt
+  // với "thiếu row" (coverage) và với ô NULL (counter offline_revenue_null_count).
   test('COVERAGE: row tồn tại với doanh thu 0đ là HỢP LỆ — sync success, không nhầm với thiếu row', async () => {
     const { deps } = mkDeps(CFG(), { bq: async () => fullCoverage({ 'POS0002/2026-07-10': 0 }) })
     const r = await syncCampaignWithDeps('camp-1', deps)
@@ -457,8 +457,8 @@ test.describe('kpi sync orchestration @desktop', () => {
   })
 
   // r1.3 (audit P1#2) — ĐỔI CÓ CHỦ Ý: `Number(x) || 0` biến chuỗi rác/NaN/null
-  // thành 0đ và vẫn sync. Alias gmv là SUM(COALESCE(net_revenue,0)) nên khi row
-  // tồn tại nó LUÔN là số; thiếu/sai kiểu = drift ⇒ PRESERVE.
+  // thành 0đ và vẫn sync. Alias gmv là SUM(CAST(offline_net_revenue AS NUMERIC))
+  // — thiếu alias / sai kiểu = drift ⇒ PRESERVE (ô NULL đi đường counter riêng).
   test('r1.3 GUARD TIỀN: gmv thiếu/null/NaN/chuỗi rác/Infinity → PRESERVE (0đ và ÂM vẫn hợp lệ)', async () => {
     const bad: [string, Record<string, unknown> | 'drop'][] = [
       ['thiếu alias', 'drop'],
@@ -898,5 +898,147 @@ test.describe('kpi sync — campaign Chất lượng bán hàng (106) @desktop',
     const r = await syncCampaignWithDeps('camp-1', deps)
     expect(r.status).toBe('failed')
     expect(calls.replace).toBe(1)
+  })
+})
+
+// ── 112.4 — CONTRACT A+ : NGỮ NGHĨA CỦA NULL TRONG NGUỒN OFFLINE ───────────
+// Đo trên toàn view 04/09: view mã hoá "không phát sinh giao dịch" bằng NULL,
+// KHÔNG bằng số 0 (0/7.139 dòng DAY có giá trị 0). NULL cục bộ ở ngày quá khứ
+// là bình thường — Tết 16–20/02 có 6–8/27 POS NULL, 20/05 có 3/28, trong đó 9
+// POS vẫn đang hoạt động. Bản 112.3 chặn mọi NULL nên sẽ đóng băng vĩnh viễn
+// mọi campaign phủ Tết; A+ phân biệt bằng CẶP counter + phạm vi (cục bộ vs
+// toàn bộ POS) + ngày đã kết thúc hay chưa.
+test.describe('kpi sync — contract A+ NULL Offline (112.4) @desktop', () => {
+  const AOV_CFG = (): CampaignConfig => CFG({
+    metric_type: 'offline_order_aov', metric_offline: true, metric_affiliate: false,
+  })
+  // Ô "không phát sinh giao dịch": SUM() của toàn NULL trả NULL ở CẢ hai field.
+  const noTx = (r: Record<string, unknown>) => ({
+    ...r, gmv: null, order_count: null,
+    offline_revenue_null_count: 1, offline_order_null_count: 1,
+  })
+  const bqWith = (keys: string[], fn: (r: Record<string, unknown>) => Record<string, unknown>) =>
+    async () => fullCoverage().map((r) => (keys.includes(`${r.pos_code}/${r.date}`) ? fn(r) : r))
+
+  test('CỤC BỘ: 1 cửa hàng đóng cửa 1 ngày (CẢ HAI field NULL) → success, ghi 0đ + warning', async () => {
+    const { deps, calls, payloads } = mkDeps(CFG(), { bq: bqWith(['POS0001/2026-07-10'], noTx) })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status, 'cửa hàng nghỉ 1 ngày KHÔNG được đóng băng cả campaign').toBe('success')
+    if (r.status === 'success') {
+      const w = (r.warnings ?? []).join(' | ')
+      expect(w).toContain('KHÔNG phát sinh giao dịch')
+      expect(w).toContain('POS0001/2026-07-10')
+    }
+    expect(calls.replace).toBe(1)
+    const daily = (payloads.daily ?? []) as Record<string, unknown>[]
+    expect(daily.find((d) => d.store_id === 'store-a' && d.date === '2026-07-10')?.gmv).toBe(0)
+    // Tiền của chính POS đó KHÔNG bị mất: 300đ ngày 02/07 vẫn vào snapshot.
+    const a1 = ((payloads.actuals ?? []) as Record<string, unknown>[]).find((a) => a.store_id === 'store-a')
+    expect(a1?.actual_offline).toBe(300)
+  })
+
+  test('TOÀN BỘ POS cùng NULL ở ngày ĐÃ KẾT THÚC → preserved (chữ ký sự cố ETL)', async () => {
+    const { deps, calls } = mkDeps(CFG(), {
+      bq: bqWith(['POS0001/2026-07-10', 'POS0002/2026-07-10'], noTx),
+    })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    if (r.status === 'snapshot_preserved') {
+      expect(r.reason).toContain('TOÀN BỘ')
+      expect(r.reason).toContain('2026-07-10')
+    }
+    expect(calls.replace, 'nghi ETL hỏng thì KHÔNG được ghi 0đ hàng loạt').toBe(0)
+  })
+
+  test('TOÀN BỘ POS cùng NULL ở HÔM NAY → success (00:05 chưa bán gì là số ĐÚNG)', async () => {
+    // NOW = 23/07 ⇒ hôm nay VN = 2026-07-23 = đúng effEnd của fixture.
+    const { deps, calls } = mkDeps(CFG(), {
+      bq: bqWith(['POS0001/2026-07-23', 'POS0002/2026-07-23'], noTx),
+    })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status, 'ngày đang diễn ra trống KHÔNG phải sự cố').toBe('success')
+    expect(calls.replace).toBe(1)
+  })
+
+  test('LỆCH CẶP: doanh thu NULL mà số đơn KHÔNG NULL → preserved (có đơn mà thiếu tiền)', async () => {
+    const { deps, calls } = mkDeps(CFG(), {
+      bq: bqWith(['POS0001/2026-07-10'], (r) => ({
+        ...r, gmv: null, order_count: 5,
+        offline_revenue_null_count: 1, offline_order_null_count: 0,
+      })),
+    })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    if (r.status === 'snapshot_preserved') expect(r.reason).toContain('thiếu TIỀN')
+    expect(calls.replace).toBe(0)
+  })
+
+  test('LỆCH CẶP ngược: CÓ tiền mà số đơn NULL → GMV vẫn ghi tiền, chỉ degrade số đơn', async () => {
+    // Giữ policy 105 r1.3: số đơn là chỉ số PHỤ của campaign GMV. Fail-closed
+    // chiều này sẽ để một cửa hàng thiếu số đơn đóng băng tiền của TẤT CẢ.
+    const { deps, calls, payloads } = mkDeps(CFG(), {
+      bq: bqWith(['POS0001/2026-07-10'], (r) => ({
+        ...r, order_count: null, offline_order_null_count: 1,
+      })),
+    })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('success')
+    if (r.status === 'success') expect((r.warnings ?? []).join(' | ')).toContain('Số đơn/AOV Offline tạm ẩn cho POS0001')
+    expect(calls.replace).toBe(1)
+    const a1 = ((payloads.actuals ?? []) as Record<string, unknown>[]).find((a) => a.store_id === 'store-a')
+    expect(a1?.actual_offline, 'tiền KHÔNG được ảnh hưởng').toBe(300)
+  })
+
+  test('STRICT (Chất lượng bán hàng): CÓ tiền mà số đơn NULL → preserved (số đơn LÀ KPI)', async () => {
+    const { deps, calls } = mkDeps(AOV_CFG(), {
+      bq: bqWith(['POS0001/2026-07-10'], (r) => ({
+        ...r, order_count: null, offline_order_null_count: 1,
+      })),
+    })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    expect(calls.replace).toBe(0)
+  })
+
+  test('CẶP NULL nhưng nguồn tự mâu thuẫn (canary khác 0 / có giá trị) → preserved', async () => {
+    for (const [name, over] of [
+      ['canary khác 0', { negative_order: 1 }],
+      ['vẫn có gmv', { gmv: 500 }],
+      ['vẫn có order_count', { order_count: 2 }],
+    ] as const) {
+      const { deps, calls } = mkDeps(CFG(), {
+        bq: bqWith(['POS0001/2026-07-10'], (r) => ({ ...noTx(r), ...over })),
+      })
+      const r = await syncCampaignWithDeps('camp-1', deps)
+      expect(r.status, name).toBe('snapshot_preserved')
+      expect(calls.replace, name).toBe(0)
+    }
+  })
+
+  test('counter NULL thiếu/âm/lẻ/lớn hơn source_row_count → preserved (schema drift)', async () => {
+    for (const bad of [undefined, null, -1, 0.5, 2, 'abc']) {
+      for (const k of ['offline_revenue_null_count', 'offline_order_null_count']) {
+        const { deps, calls } = mkDeps(CFG(), {
+          bq: bqWith(['POS0001/2026-07-10'], (r) => {
+            const row = { ...r, [k]: bad }
+            if (bad === undefined) delete row[k]
+            return row
+          }),
+        })
+        const r = await syncCampaignWithDeps('camp-1', deps)
+        expect(r.status, `${k}=${String(bad)}`).toBe('snapshot_preserved')
+        expect(calls.replace, `${k}=${String(bad)}`).toBe(0)
+      }
+    }
+  })
+
+  test('THIẾU HẲN row (không phải NULL) vẫn là lỗi coverage → preserved', async () => {
+    const { deps, calls } = mkDeps(CFG(), {
+      bq: async () => fullCoverage().filter((r) => `${r.pos_code}/${r.date}` !== 'POS0001/2026-07-10'),
+    })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('snapshot_preserved')
+    if (r.status === 'snapshot_preserved') expect(r.reason).toContain('THIẾU')
+    expect(calls.replace).toBe(0)
   })
 })

@@ -19,10 +19,11 @@ export interface SnapshotInput {
   targets: TargetRow[]
   metricOffline: boolean
   metricAffiliate: boolean
-  // ⚠ Contract 30/07: "gmv" offline = Net Revenue (alias giữ nguyên từ
-  // campaignDailyQuery — SUM(net_revenue)); công thức/payload không đổi.
-  offlineByPos: Map<string, Map<string, number>>     // pos_code → date VN → offline actual (BQ net_revenue)
-  // 105: pos_code → date VN → SỐ ĐƠN Offline (BQ no_order). Optional để caller
+  // ⚠ Contract 30/07 + 112 (04/09): "gmv" offline = Net Revenue (alias giữ
+  // nguyên từ campaignDailyQuery — nay SUM(offline_net_revenue), cột
+  // net_revenue cũ đã bị BI xoá); công thức/payload không đổi.
+  offlineByPos: Map<string, Map<string, number>>     // pos_code → date VN → offline actual (BQ offline_net_revenue)
+  // 105: pos_code → date VN → SỐ ĐƠN Offline (BQ offline_no_order). Optional để caller
   // cũ/test không phải đổi; thiếu map ⇒ payload KHÔNG mang order count (RPC 105
   // hiểu là "nguồn chưa có số đơn", giữ NULL — KHÁC 0).
   offlineOrdersByPos?: Map<string, Map<string, number>>
@@ -35,7 +36,7 @@ export interface SnapshotInput {
 export interface DailyRowPayload {
   campaign_id: string; store_id: string; date: string
   gmv: number; gmv_affiliate: number; synced_at: string
-  // 105 — OPTIONAL: chỉ set khi nguồn BQ có no_order (campaign GMV offline).
+  // 105 — OPTIONAL: chỉ set khi nguồn BQ có offline_no_order (campaign GMV offline).
   offline_order_count?: number
   // Mig 103 (metric Số khách) — OPTIONAL: path GMV KHÔNG set key này (payload
   // GMV giữ nguyên từng byte; RPC coalesce 0). Chỉ buildCustomerSnapshot set.

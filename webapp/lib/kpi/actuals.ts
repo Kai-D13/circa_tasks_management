@@ -68,11 +68,11 @@ function realDeps(): SyncCampaignDeps {
       return { data: data as CustomerAggResult | null, error }
     },
     loadBqServiceAccount: () => loadServiceAccount(),
-    // ⚠ Contract 30/07 + BQ-V2 05/08: campaignDailyQuery đọc bảng
-    // schema V2 — bảng buymed_tech (date_type='DAY', SUM net_revenue) nhưng alias giữ
-    // `gmv` — mọi field "gmv"/"offline" trong pipeline campaign là Net
-    // Revenue Offline (KHÔNG phải gross GMV). Landing day/month cũng đã sang
-    // bảng mới (1b); WEEK chờ BI có dữ liệu.
+    // ⚠ Contract 30/07 + BQ-V2 05/08 + 112 (04/09): campaignDailyQuery đọc
+    // bảng buymed_tech (date_type='DAY', SUM offline_net_revenue — cột
+    // net_revenue cũ đã bị BI xoá) nhưng alias giữ `gmv` — mọi field
+    // "gmv"/"offline" trong pipeline campaign là Net Revenue Offline (KHÔNG
+    // phải gross GMV). Landing day/month cũng đọc cột mới; WEEK chờ BI.
     runBqChunk: (sa, chunkStart, chunkEnd) =>
       runBigQuery(sa as Parameters<typeof runBigQuery>[0], campaignDailyQuery(chunkStart, chunkEnd)),
     replaceActuals: async (campaignId, daily, actuals) => {

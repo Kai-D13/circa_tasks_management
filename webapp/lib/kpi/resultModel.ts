@@ -76,7 +76,7 @@ export interface ResultActualRow {
   synced_at: string
   actual_offline: number | null
   actual_affiliate: number | null
-  // 105: số đơn Offline (BQ no_order). NULL = nguồn/snapshot chưa có số đơn —
+  // 105: số đơn Offline (BQ offline_no_order). NULL = nguồn/snapshot chưa có số đơn —
   // KHÁC 0; UI phải hiện '—', KHÔNG hiện "0 đơn".
   offline_order_count: number | null
   offline_synced_at: string | null

@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test'
 import {
   SOURCE_COLUMNS, RETIRED_SOURCE_COLUMNS,
-  parseSourceNumber, roundRevenue, allocateRoundedDaily,
+  parseSourceNumber, roundRevenue, snapRevenue, REVENUE_SNAP_EPSILON,
 } from '@/lib/kpi/revenueSource'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -38,7 +38,6 @@ test.describe('contract nguồn doanh thu BQ @desktop', () => {
   })
 
   test('làm tròn về đồng: nửa đơn vị ra XA số 0, khớp ROUND() của BigQuery', () => {
-    // Float artifact có thật trong nguồn: 260000.00000000003.
     expect(roundRevenue(260000.00000000003)).toBe(260000)
     expect(roundRevenue(2.5)).toBe(3)
     expect(roundRevenue(-2.5)).toBe(-3)   // BigQuery ROUND(-2.5) = -3, KHÔNG phải -2
@@ -46,48 +45,51 @@ test.describe('contract nguồn doanh thu BQ @desktop', () => {
     expect(roundRevenue(0)).toBe(0)
   })
 
-  // ── Làm tròn theo TOÀN KHOẢNG (contract 04/09 điểm 3) ─────────────────────
-  const sum = (m: Map<string, number>) => [...m.values()].reduce((a, b) => a + b, 0)
-
-  test('0,4 + 0,4: tổng phải là 1đ — làm tròn từng ngày rồi cộng sẽ ra 0đ', () => {
-    const out = allocateRoundedDaily(new Map([['2026-08-01', 0.4], ['2026-08-02', 0.4]]))
-    expect(sum(out), 'tổng phải bằng ROUND(SUM(cả khoảng))').toBe(1)
-    // Phần dư dồn vào NGÀY CUỐI — xác định, không rải ngẫu nhiên.
-    expect(out.get('2026-08-01')).toBe(0)
-    expect(out.get('2026-08-02')).toBe(1)
+  // ── 112.4: SNAP thay cho phân bổ phần dư (audit P1#1) ─────────────────────
+  // Đo trên toàn bộ view 04/09: lệch tối đa 9,3e-10đ / 7.139 dòng DAY, grain
+  // MONTH+WEEK lệch đúng 0 ⇒ nguồn KHÔNG có phần lẻ VND thật.
+  test('nhiễu FLOAT64 → về đúng số nguyên (giá trị THẬT lấy từ view)', () => {
+    expect(snapRevenue(310999.99999999994)).toBe(311000)   // POS0069 01/09, quan sát thật
+    expect(snapRevenue(260000.00000000003)).toBe(260000)
+    expect(snapRevenue(156599.99999999997)).toBe(156600)
   })
 
-  test('số ÂM: cùng quy tắc, không FLOOR', () => {
-    const out = allocateRoundedDaily(new Map([['2026-08-01', -0.4], ['2026-08-02', -0.4]]))
-    expect(sum(out)).toBe(-1)
-    expect(out.get('2026-08-02')).toBe(-1)
+  test('giá trị đã nguyên → giữ nguyên; 0 và số ÂM đều hợp lệ', () => {
+    for (const v of [0, 13406148, -250000, 1]) expect(snapRevenue(v)).toBe(v)
   })
 
-  test('mọi ngày đã nguyên → không đụng gì; tổng vẫn khớp', () => {
-    const raw = new Map([['2026-08-01', 13406148], ['2026-08-02', 0], ['2026-08-03', -250000]])
-    const out = allocateRoundedDaily(raw)
-    expect([...out.entries()]).toEqual([...raw.entries()])
-    expect(sum(out)).toBe(roundRevenue(13406148 + 0 - 250000))
+  test('phần lẻ VND THẬT → undefined để caller fail-closed (KHÔNG tự làm tròn tiền)', () => {
+    // Chính ca 0,4 + 0,4 của audit: nguồn như vậy nghĩa là BI đã đổi contract.
+    for (const v of [0.4, -0.4, 2.5, 0.5, -250000.4, 1000.001]) {
+      expect(snapRevenue(v), `phải từ chối phần lẻ thật: ${v}`).toBeUndefined()
+    }
+    for (const v of [NaN, Infinity, -Infinity]) expect(snapRevenue(v)).toBeUndefined()
   })
 
-  test('nhiễu FLOAT64 nhiều ngày vẫn cho tổng đúng và daily nguyên', () => {
-    const raw = new Map([
-      ['2026-08-01', 260000.00000000003],
-      ['2026-08-02', 156599.99999999997],
-      ['2026-08-03', 0.5],
-    ])
-    const out = allocateRoundedDaily(raw)
-    for (const [d, v] of out) expect(Number.isInteger(v), `${d} phải là số nguyên`).toBe(true)
-    expect(sum(out)).toBe(roundRevenue(260000.00000000003 + 156599.99999999997 + 0.5))
+  test('tolerance: trong ngưỡng thì snap, ngoài ngưỡng thì từ chối', () => {
+    expect(REVENUE_SNAP_EPSILON).toBe(1e-6)
+    expect(snapRevenue(100000 + 5e-7)).toBe(100000)      // trong ngưỡng
+    expect(snapRevenue(100000 + 1e-5)).toBeUndefined()   // ngoài ngưỡng
   })
 
-  test('ngày không sắp xếp sẵn: "ngày cuối" vẫn theo thứ tự ngày, không theo thứ tự insert', () => {
-    const out = allocateRoundedDaily(new Map([['2026-08-03', 0.4], ['2026-08-01', 0.4]]))
-    expect(out.get('2026-08-03'), 'phần dư phải rơi vào ngày lớn nhất').toBe(1)
-    expect(out.get('2026-08-01')).toBe(0)
-  })
+  // ⚠ Đây là bài toán audit P1#1 nêu: bản 112.3 làm tròn TỔNG rồi dồn phần dư
+  // vào ngày cuối ⇒ tổng cả kỳ đúng nhưng MỌI khoảng con lệch. Snap từng ngày
+  // thì tổng của mọi khoảng con đều bằng ROUND(SUM(raw)) của chính khoảng đó.
+  test('BẤT BIẾN khoảng con: SUM(daily đã snap) == ROUND(SUM(raw)) cho MỌI [i..j]', () => {
+    const raw = [
+      13406148.000000002, 0, -250000, 260000.00000000003,
+      156599.99999999997, 311000, 847167, 29501209.999999996,
+    ]
+    const snapped = raw.map((v) => snapRevenue(v))
+    expect(snapped.every((v) => v !== undefined && Number.isInteger(v))).toBe(true)
+    const nums = snapped as number[]
 
-  test('map rỗng → map rỗng (không tự sinh ngày)', () => {
-    expect(allocateRoundedDaily(new Map()).size).toBe(0)
+    for (let i = 0; i < raw.length; i++) {
+      for (let j = i; j < raw.length; j++) {
+        const daily = nums.slice(i, j + 1).reduce((x, y) => x + y, 0)
+        const expected = roundRevenue(raw.slice(i, j + 1).reduce((a, b) => a + b, 0))
+        expect(daily, `khoảng con [${i}..${j}] phải khớp ROUND(SUM(raw))`).toBe(expected)
+      }
+    }
   })
 })

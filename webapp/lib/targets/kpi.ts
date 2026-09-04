@@ -3,8 +3,9 @@ import { supabaseAdmin } from '@/lib/supabase/admin'
 import { buildKpiUpsertPlan, type KpiGrain, type KpiUpsertPlan } from './kpiPlan'
 
 // KPI v2 ingest — BQ-V2 r2 (audit P1#1+#2): IO MỎNG quanh planner THUẦN
-// (lib/targets/kpiPlan — có test khóa). Nguồn schema V2 — bảng buymed_tech pre-aggregated
-// (actual = net_revenue, target = cột TARGET; WEEK chưa bật).
+// (lib/targets/kpiPlan — có test khóa). Nguồn schema V2 — bảng buymed_tech
+// pre-aggregated (112 04/09: actual = offline_net_revenue, cột net_revenue cũ
+// đã bị BI xoá; target = cột TARGET; WEEK chưa bật).
 //
 // ATOMIC GATE: plan.ok=false (thiếu store×grain / nguồn trùng dòng / unmatched
 // / row hỏng) → KHÔNG upsert BẤT KỲ row nào — không bao giờ đồng bộ một phần

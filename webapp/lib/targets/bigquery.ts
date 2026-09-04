@@ -42,12 +42,18 @@ export const DEFAULT_QUERY = `
 // cột `net_revenue` cũ đã BỊ XOÁ), target = cột TARGET.
 // ⚠ Landing CHỈ lấy Offline: cộng thêm Affiliate là đổi Ý NGHĨA của màn này,
 // stakeholder chưa yêu cầu (contract 04/09 điểm 1-2; WEEK vẫn KHÔNG bật).
-// FAIL-CLOSED bằng `offline_revenue_null_count`, KHÔNG bằng cách lọc NULL
-// trong WHERE (112.3, audit P1#2): lọc trước GROUP BY thì một khoá có 1 row
-// hợp lệ + 1 row NULL sẽ còn đúng raw_row_count=1 và trôi qua như dữ liệu
-// sạch. Giữ row NULL đến bước aggregate rồi để kpiPlan từ chối theo counter.
-// Cũng KHÔNG dùng COALESCE(...,0) — coerceNum coi NULL là 0đ hợp lệ (quyết
-// định r2.1) nên COALESCE sẽ ghi 0đ thay vì báo nguồn hỏng.
+// KHÔNG lọc NULL trong WHERE (112.3, audit P1#2): lọc trước GROUP BY thì một
+// khoá có 1 row hợp lệ + 1 row NULL vẫn ra raw_row_count=1 và trôi qua như dữ
+// liệu sạch. Giữ row NULL đến bước aggregate rồi để kpiPlan quyết theo counter.
+// Cũng KHÔNG dùng COALESCE(...,0) ở SQL — mất thông tin trước khi app kịp
+// phân biệt "không phát sinh giao dịch" với "nguồn hỏng".
+// ⚠ Contract A+ (112.4) cần ĐỦ CẶP counter: doanh thu và số đơn CÙNG NULL =
+// không phát sinh giao dịch (0đ); CHỈ MỘT field NULL = nguồn hỏng. Vì vậy
+// landing đếm cả `offline_no_order` dù không dùng số đơn — thiếu counter này
+// thì landing và campaign sẽ hiểu NULL theo hai nghĩa khác nhau.
+// Hai grain của landing LUÔN là kỳ ĐANG DIỄN RA (DAY = hôm nay, MONTH = tháng
+// hiện tại) nên gate "toàn bộ POS cùng NULL ở ngày ĐÃ KẾT THÚC" không áp ở đây;
+// 0đ lúc 00:05 là số ĐÚNG, không phải dữ liệu thiếu.
 //   · day:   date_type='DAY',   start_date = hôm nay VN; period_end = start.
 //   · month: date_type='MONTH', start_date = đầu tháng VN; period_end = LAST_DAY.
 //   · week:  ⛔ CHƯA BẬT — schema mới không có period_end và DAY rows không
@@ -65,6 +71,7 @@ export const KPI_AGGREGATE_QUERY = `
          CAST(ROUND(SUM(offline_net_revenue)) AS NUMERIC) AS actual,
          CAST(SUM(COALESCE(TARGET, 0)) AS NUMERIC) AS target,
          COUNTIF(offline_net_revenue IS NULL) AS offline_revenue_null_count,
+         COUNTIF(offline_no_order IS NULL)     AS offline_order_null_count,
          COUNT(*) AS raw_row_count
   FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`, today
   WHERE date_type = 'DAY'
@@ -78,6 +85,7 @@ export const KPI_AGGREGATE_QUERY = `
          CAST(ROUND(SUM(offline_net_revenue)) AS NUMERIC) AS actual,
          CAST(SUM(COALESCE(TARGET, 0)) AS NUMERIC) AS target,
          COUNTIF(offline_net_revenue IS NULL) AS offline_revenue_null_count,
+         COUNTIF(offline_no_order IS NULL)     AS offline_order_null_count,
          COUNT(*) AS raw_row_count
   FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`, today
   WHERE date_type = 'MONTH'
@@ -118,6 +126,7 @@ export function campaignRangeQuery(startDate: string, endDate: string): string {
   return `
     SELECT pos_code, ROUND(SUM(CAST(offline_net_revenue AS NUMERIC))) AS actual_gmv,
            COUNTIF(offline_net_revenue IS NULL) AS offline_revenue_null_count,
+           COUNTIF(offline_no_order IS NULL)    AS offline_order_null_count,
            COUNT(*) AS row_count
     FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`
     WHERE date_type = 'DAY'
@@ -151,12 +160,12 @@ export function campaignDailyQuery(startDate: string, endDate: string): string {
   }
   return `
     SELECT pos_code, start_date AS \`date\`,
-           -- 112.3: trả giá trị THÔ (KHÔNG làm tròn ở đây). Contract 04/09
-           -- điểm 3 là ROUND(SUM(cả khoảng)); làm tròn từng ngày rồi cộng lại
-           -- cho kết quả KHÁC (hai ngày 0,4đ → 0đ thay vì 1đ). App làm tròn
-           -- tổng một lần rồi dồn phần dư vào ngày cuối (allocateRoundedDaily).
-           -- KHÔNG COALESCE: offline NULL phải chảy xuống thành lỗi nguồn
-           -- (contract 04/09 điểm 6), không được hoá 0đ.
+           -- 112.3: trả giá trị THÔ (KHÔNG làm tròn ở đây) — app snap về đồng
+           -- nguyên khi đọc (snapRevenue, lib/kpi/revenueSource). Nguồn không
+           -- có phần lẻ VND thật (đo 04/09: lệch tối đa 9,3e-10đ / 7.139 dòng)
+           -- nên SUM của MỌI khoảng con đều bằng ROUND(SUM(raw)) của khoảng đó.
+           -- KHÔNG COALESCE: NULL phải chảy xuống nguyên trạng để app quyết
+           -- (counter offline_revenue_null_count), không được hoá 0đ ở SQL.
            SUM(CAST(offline_net_revenue AS NUMERIC)) AS gmv,
            -- 105: số đơn Offline (BI thêm 11/08). CHỦ Ý dùng
            -- COUNTIF(... IS NOT NULL) thay COALESCE: NULL_MISMATCH cho biết

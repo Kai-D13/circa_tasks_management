@@ -6,9 +6,9 @@ import path from 'node:path'
 // (toàn cục, không per-campaign; alias giữ nguyên nên downstream không đổi).
 // lib/targets/bigquery.ts import 'server-only' (không import runtime được
 // trong test) → khóa contract bằng SOURCE-TEXT assertion trên chính file:
-//   1. 2 query campaign SUM net_revenue (alias actual_gmv/gmv GIỮ NGUYÊN)
+//   1. 2 query campaign SUM offline_net_revenue (alias actual_gmv/gmv GIỮ NGUYÊN)
 //   2. KHÔNG còn SUM(COALESCE(gmv, 0)) trong file (chứng minh không sót)
-//   3. KPI_AGGREGATE_QUERY (landing) — bảng V2: DAY/MONTH đọc net_revenue/TARGET
+//   3. KPI_AGGREGATE_QUERY (landing) — bảng V2: DAY/MONTH đọc offline_net_revenue/TARGET
 //   4. Guard ISO date (chống injection) còn nguyên ở cả 2 hàm campaign
 // Test số học #5-8 của contract (offline-only / hybrid identity / null→0 /
 // âm không clamp / tier-commission theo actual_value) đã được khóa sẵn bởi
@@ -36,8 +36,9 @@ test.describe('kpi net_revenue source contract @desktop', () => {
     // 112 (04/09): BI tách Offline/Affiliate — cột net_revenue đã bị xoá khỏi
     // view. Alias actual_gmv/gmv GIỮ NGUYÊN nên engine/DB/UI/export không đổi.
     expect(rangeFn).toContain('ROUND(SUM(CAST(offline_net_revenue AS NUMERIC))) AS actual_gmv')
-    // 112.3: daily trả giá trị THÔ — làm tròn theo TOÀN KHOẢNG là việc của
-    // allocateRoundedDaily (ROUND từng ngày rồi cộng ra số khác contract).
+    // 112.3: daily trả giá trị THÔ — app snap về đồng nguyên khi đọc
+    // (snapRevenue); ROUND ngay trong SQL sẽ giấu mất phần lẻ VND thật nếu
+    // một ngày nào đó BI đổi contract.
     expect(dailyFn).toContain('SUM(CAST(offline_net_revenue AS NUMERIC)) AS gmv')
     expect(dailyFn).not.toContain('ROUND(SUM(CAST(offline_net_revenue AS NUMERIC))) AS gmv')
     // KHÔNG COALESCE quanh doanh thu: NULL phải chảy xuống thành lỗi nguồn.
@@ -107,12 +108,15 @@ test.describe('kpi net_revenue source contract @desktop', () => {
   })
 
   test('7. Đếm NULL RIÊNG từng nguồn — SUM() của BigQuery bỏ qua NULL', () => {
-    expect(dailyFn).toContain('AS offline_revenue_null_count')
-    expect(dailyFn).toContain('AS offline_order_null_count')
-    // Range dùng cho đối soát tay cũng phải có counter (SUM bỏ qua NULL).
-    expect(rangeFn).toContain('AS offline_revenue_null_count')
-    // Landing: counter là đường DUY NHẤT thấy NULL (coerceNum coi NULL là 0đ).
-    expect(aggQuery).toContain('AS offline_revenue_null_count')
+    // 112.4 contract A+: phải đủ CẶP counter ở MỌI query. Chỉ có counter doanh
+    // thu thì không phân biệt được "không phát sinh giao dịch" (cả hai NULL,
+    // hợp lệ, 0đ) với "có đơn mà thiếu tiền" (chỉ doanh thu NULL, fail-closed).
+    // Landing KHÔNG dùng số đơn nhưng VẪN phải đếm, nếu không landing và
+    // campaign sẽ hiểu NULL theo hai nghĩa khác nhau (audit P2#4).
+    for (const [name, fn] of [['daily', dailyFn], ['range', rangeFn], ['landing', aggQuery]] as const) {
+      expect(fn, `${name} thiếu counter doanh thu`).toContain('AS offline_revenue_null_count')
+      expect(fn, `${name} thiếu counter số đơn — không soi được CẶP NULL`).toContain('AS offline_order_null_count')
+    }
   })
 
   test('4. Guard ISO date (chống injection khi interpolate) còn nguyên ở CẢ 2 hàm campaign', () => {

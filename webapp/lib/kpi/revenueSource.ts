@@ -44,27 +44,26 @@ export function roundRevenue(n: number): number {
   return Math.sign(n) * Math.round(Math.abs(n))
 }
 
-// ── Làm tròn theo TOÀN KHOẢNG, phân bổ phần dư ──────────────────────────────
-// Contract 04/09 điểm 3 nói ROUND(SUM(cả khoảng)), nhưng Supabase/UI phải lưu
-// số nguyên theo TỪNG NGÀY (chart + invariant SUM(daily) = tổng kỳ). Làm tròn
-// từng ngày rồi cộng lại KHÔNG bằng làm tròn tổng: hai ngày 0,4đ cho ra 0đ
-// trong khi contract đòi 1đ.
-// Cách duy nhất thoả cả hai: làm tròn tổng MỘT LẦN, làm tròn từng ngày, rồi
-// dồn phần chênh vào NGÀY CUỐI (xác định, không rải ngẫu nhiên).
-export function allocateRoundedDaily(rawByDate: Map<string, number>): Map<string, number> {
-  const dates = [...rawByDate.keys()].sort()
-  const out = new Map<string, number>()
-  if (dates.length === 0) return out
-  const total = roundRevenue([...rawByDate.values()].reduce((a, b) => a + b, 0))
-  let acc = 0
-  for (const d of dates) {
-    const v = roundRevenue(rawByDate.get(d) as number)
-    out.set(d, v)
-    acc += v
-  }
-  if (acc !== total) {
-    const last = dates[dates.length - 1]
-    out.set(last, (out.get(last) as number) + (total - acc))
-  }
-  return out
+// ── 112.4: SNAP VỀ ĐỒNG NGUYÊN, KHÔNG phân bổ phần dư ───────────────────────
+// Đo trên TOÀN BỘ view (04/09, 7.139 dòng DAY): độ lệch lớn nhất giữa giá trị
+// nguồn và số nguyên gần nhất là 9,3e-10 đ (grain MONTH/WEEK lệch đúng 0).
+// Nguồn KHÔNG có phần lẻ VND thật — phần thập phân chỉ là nhiễu FLOAT64
+// (vd 310999.99999999994 = 311.000).
+//
+// Vì vậy KHÔNG cần phân bổ phần dư (bản 112.3 dồn chênh lệch vào ngày cuối).
+// Cách đó làm tổng CẢ KỲ đúng nhưng MỌI KHOẢNG CON sai — bộ lọc ngày cộng các
+// daily integer nên một ngày có thể hiện 1đ trong khi ROUND(SUM(raw)) là 0đ
+// (audit P1#1). Snap từng ngày về số nguyên thì mọi khoảng con đều đúng, vì
+// tổng của các số nguyên vốn đã là số nguyên.
+//
+// Ngoài tolerance ⇒ BI đã đổi contract (bắt đầu phát sinh phần lẻ VND thật):
+// trả undefined để caller FAIL-CLOSED, tuyệt đối không tự làm tròn tiền.
+// EPS = 1e-6 đ: gấp ~1.000 lần nhiễu đã đo, và nhỏ hơn 1 đồng 1 triệu lần nên
+// một phần lẻ THẬT (dù chỉ 0,001đ) vẫn bị bắt.
+export const REVENUE_SNAP_EPSILON = 1e-6
+
+export function snapRevenue(n: number): number | undefined {
+  if (!Number.isFinite(n)) return undefined
+  const r = roundRevenue(n)
+  return Math.abs(n - r) <= REVENUE_SNAP_EPSILON ? r : undefined
 }

@@ -4,8 +4,9 @@ import { KPI_AGGREGATE_QUERY, loadServiceAccount, runBigQuery } from '@/lib/targ
 import { aggregateAndUpsertKpi } from '@/lib/targets/kpi'
 
 // GET /api/cron/pull-kpi-targets — KPI v2 landing (day/month; week chờ BI).
-// BQ-V2 (05/08): nguồn buymed_tech.tech__circa_os_gmv_kpi pre-aggregated —
-// actual = net_revenue, target = cột TARGET; upsert store_kpi_targets (067).
+// BQ-V2 (05/08) + 112 (04/09): nguồn buymed_tech.tech__circa_os_gmv_kpi
+// pre-aggregated — actual = offline_net_revenue (cột net_revenue cũ đã bị BI
+// xoá), target = cột TARGET; upsert store_kpi_targets (067).
 //
 // r2 (audit P1#1+#2) — ATOMIC GATE: aggregateAndUpsertKpi chỉ ghi khi ĐỦ
 // coverage (mỗi active OS store đúng 1 row DAY + 1 row MONTH) và KHÔNG có
