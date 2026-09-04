@@ -2,7 +2,12 @@ import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { createClient } from '@/lib/supabase/server'
-import { isSuperAdminEmail } from '@/lib/authz'
+import {
+  campaignEmptyText, campaignStatusTabs, canManageCampaign, canViewCampaignDashboard,
+  parseCampaignStatus,
+} from '@/lib/kpi/campaignAccess'
+import { FilterTabs } from '@/components/ds/FilterTabs'
+
 import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import { CampaignsTabs } from '@/components/kpi/CampaignsTabs'
 import { Card, CardContent } from '@/components/ui/card'
@@ -24,10 +29,23 @@ import { Plus, Megaphone, ChevronRight } from 'lucide-react'
 // qua metricPresentation — gmv byte-equal formatter cũ.
 const drange = (s: string, e: string) => `${formatDate(s)} – ${formatDate(e)}`
 
-export default async function CampaignsPage() {
+export default async function CampaignsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ status?: string }>
+}) {
+  const { status: statusParam } = await searchParams
   const { user, profile } = await getSessionProfile()
   if (!user) notFound()
-  if (!(profile?.role === 'admin' && isSuperAdminEmail(user.email) && isKpiCampaignEnabled())) notFound()
+  // 111: SM xem được dashboard (chỉ đọc). Phạm vi dữ liệu KHÔNG do trang này
+  // quyết định — cả ba query dưới đây dùng SESSION client nên RLS (mig 075+111)
+  // đã thu hẹp sẵn: SM chỉ nhận campaign active/ended có target thuộc cửa hàng
+  // mình, không thấy draft/paused/test/archived.
+  if (!(isKpiCampaignEnabled() && canViewCampaignDashboard(profile?.role, user.email))) notFound()
+  const canManage = canManageCampaign(profile?.role, user.email)
+  // Chuẩn hoá theo QUYỀN: SM gõ ?status=draft/paused sẽ về 'all' (RLS không
+  // cho họ đọc hai trạng thái đó ⇒ tab tương ứng cũng không tồn tại).
+  const statusFilter = parseCampaignStatus(statusParam, canManage)
 
   const supabase = await createClient()
   const [
@@ -65,12 +83,17 @@ export default async function CampaignsPage() {
   }
 
   const list = (campaigns ?? []) as { id: string; name: string; start_date: string; end_date: string; status: string; is_test: boolean; updated_at: string; metric_type?: string }[]
+  // Thống kê tính trên TOÀN TẬP người xem được, KHÔNG theo tab đang chọn — nếu
+  // đếm theo tab thì mọi ô sẽ bằng nhau và cả dải mất hết ý nghĩa.
   const counts = {
     total: list.length,
     active: list.filter((c) => c.status === 'active').length,
     paused: list.filter((c) => c.status === 'paused').length,
     draft: list.filter((c) => c.status === 'draft').length,
+    ended: list.filter((c) => c.status === 'ended').length,
   }
+  const shown = statusFilter === 'all' ? list : list.filter((c) => c.status === statusFilter)
+  const tabHref = (k: string) => k === 'all' ? '/targets/campaigns' : `/targets/campaigns?status=${k}`
 
   return (
     <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
@@ -79,13 +102,31 @@ export default async function CampaignsPage() {
           <Megaphone className="h-5 w-5 text-primary" />
           <h1 className="text-xl font-semibold">Chiến dịch KPI</h1>
         </div>
-        <Link href="/targets/campaigns/new" className={cn(buttonVariants({ size: 'sm' }))}>
-          <Plus className="h-4 w-4 mr-1" /> Tạo chiến dịch
-        </Link>
+        {canManage && (
+          <Link href="/targets/campaigns/new" className={cn(buttonVariants({ size: 'sm' }))}>
+            <Plus className="h-4 w-4 mr-1" /> Tạo chiến dịch
+          </Link>
+        )}
       </div>
 
       {/* P3-I: tab Affiliate overview — chỉ render khi KPI_AFFILIATE_ENABLED */}
       <CampaignsTabs active="campaigns" affiliateEnabled={isKpiAffiliateEnabled()} />
+
+      {/* Lọc theo trạng thái — server <Link>, giữ trong URL nên reload/back/chia
+          sẻ link đều đúng. SM chỉ có 3 tab: 'Nháp'/'Tạm dừng' với họ luôn rỗng
+          (RLS 111 không cho đọc) nên hiện ra chỉ để bấm vào chỗ trống. */}
+      {list.length > 0 && (
+        <FilterTabs
+          ariaLabel="Lọc chiến dịch theo trạng thái"
+          activeKey={statusFilter}
+          tabs={campaignStatusTabs(canManage).map((t) => ({
+            key: t.key,
+            label: t.label,
+            count: t.key === 'all' ? counts.total : counts[t.key],
+            href: tabHref(t.key),
+          }))}
+        />
+      )}
 
       {queryError && (
         <p className="text-sm text-destructive">
@@ -95,12 +136,15 @@ export default async function CampaignsPage() {
 
       {/* Summary strip — dashboard feel: how many campaigns, in which states */}
       {list.length > 0 && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <div className={cn('grid grid-cols-2 gap-2', canManage ? 'sm:grid-cols-5' : 'sm:grid-cols-3')}>
           {[
             { label: 'Tổng chiến dịch', value: counts.total, dot: 'bg-primary' },
             { label: 'Đang chạy', value: counts.active, dot: 'bg-status-success' },
-            { label: 'Tạm dừng', value: counts.paused, dot: 'bg-status-warning' },
-            { label: 'Nháp', value: counts.draft, dot: 'bg-muted-foreground/40' },
+            ...(canManage ? [
+              { label: 'Tạm dừng', value: counts.paused, dot: 'bg-status-warning' },
+              { label: 'Nháp', value: counts.draft, dot: 'bg-muted-foreground/40' },
+            ] : []),
+            { label: 'Kết thúc', value: counts.ended, dot: 'bg-status-neutral' },
           ].map((s) => (
             <Card key={s.label}>
               <CardContent className="px-3 py-2.5 flex items-center gap-2.5">
@@ -115,12 +159,14 @@ export default async function CampaignsPage() {
         </div>
       )}
 
-      {list.length === 0 ? (
-        <Card><CardContent className="py-12 text-center text-sm text-muted-foreground">Chưa có chiến dịch nào. Bấm “Tạo chiến dịch” để bắt đầu.</CardContent></Card>
+      {shown.length === 0 ? (
+        <Card><CardContent className="py-12 text-center text-sm text-muted-foreground">
+          {campaignEmptyText(statusFilter, canManage, list.length > 0)}
+        </CardContent></Card>
       ) : (
         <Card>
           <CardContent className="p-0">
-            {list.map((c) => {
+            {shown.map((c) => {
               const s = STATUS_META[c.status] ?? STATUS_META.draft
               const a = agg.get(c.id) ?? blank()
               const synced = a.lastSync !== null
@@ -206,7 +252,8 @@ export default async function CampaignsPage() {
                     <div className="hidden md:block w-40 shrink-0">{progress}</div>
 
                     <div className="flex items-center gap-1.5 shrink-0">
-                      <CampaignStatusButton id={c.id} status={c.status} name={c.name} />
+                      {/* Đổi trạng thái là hành vi QUẢN TRỊ — SM chỉ xem. */}
+                      {canManage && <CampaignStatusButton id={c.id} status={c.status} name={c.name} />}
                       <Link href={`/targets/campaigns/${c.id}`} aria-label={`Xem ${c.name}`} className="text-muted-foreground hover:text-primary">
                         <ChevronRight className="h-4 w-4" />
                       </Link>

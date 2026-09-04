@@ -75,9 +75,13 @@ test.describe('mig 105 source contract @desktop', () => {
   test('BigQuery: SUM ở NUMERIC (không cast INT64 làm tròn) + canary non_integer_order', () => {
     const bq = fs.readFileSync(path.join(__dirname, '..', 'lib', 'targets', 'bigquery.ts'), 'utf8')
       .replace(/\r\n/g, '\n')
-    expect(bq).toContain('SUM(CAST(COALESCE(no_order, 0) AS NUMERIC))')
-    expect(bq).not.toContain('SUM(CAST(COALESCE(no_order, 0) AS INT64))')
-    expect(bq).toContain('COUNTIF(no_order IS NOT NULL AND no_order != TRUNC(no_order))')
+    // 112 (04/09): BI tách Offline/Affiliate — cột `no_order` đổi thành
+    // `offline_no_order`. Ý ĐỊNH của contract 105 giữ nguyên: SUM ở NUMERIC
+    // (cast INT64 sẽ làm tròn ngay trong BQ, guard Number.isInteger phía app
+    // không bao giờ thấy dữ liệu lẻ) + canary số lẻ vẫn còn.
+    expect(bq).toContain('SUM(CAST(offline_no_order AS NUMERIC))')
+    expect(bq).not.toContain('AS INT64))')
+    expect(bq).toContain('offline_no_order != TRUNC(offline_no_order)')
     for (const canary of ['rev_without_order', 'order_without_rev', 'negative_order',
       'non_integer_order', 'revenue_with_zero_order']) {
       expect(bq).toContain(canary)

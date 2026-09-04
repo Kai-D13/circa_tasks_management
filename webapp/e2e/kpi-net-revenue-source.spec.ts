@@ -6,9 +6,9 @@ import path from 'node:path'
 // (toàn cục, không per-campaign; alias giữ nguyên nên downstream không đổi).
 // lib/targets/bigquery.ts import 'server-only' (không import runtime được
 // trong test) → khóa contract bằng SOURCE-TEXT assertion trên chính file:
-//   1. 2 query campaign SUM net_revenue (alias actual_gmv/gmv GIỮ NGUYÊN)
+//   1. 2 query campaign SUM offline_net_revenue (alias actual_gmv/gmv GIỮ NGUYÊN)
 //   2. KHÔNG còn SUM(COALESCE(gmv, 0)) trong file (chứng minh không sót)
-//   3. KPI_AGGREGATE_QUERY (landing) — bảng V2: DAY/MONTH đọc net_revenue/TARGET
+//   3. KPI_AGGREGATE_QUERY (landing) — bảng V2: DAY/MONTH đọc offline_net_revenue/TARGET
 //   4. Guard ISO date (chống injection) còn nguyên ở cả 2 hàm campaign
 // Test số học #5-8 của contract (offline-only / hybrid identity / null→0 /
 // âm không clamp / tier-commission theo actual_value) đã được khóa sẵn bởi
@@ -32,9 +32,17 @@ test.describe('kpi net_revenue source contract @desktop', () => {
   const dailyFn = section('export function campaignDailyQuery', 'export async function runBigQuery')
   const aggQuery = section('export const KPI_AGGREGATE_QUERY', 'export function loadServiceAccount')
 
-  test('1. campaignRangeQuery + campaignDailyQuery SUM NET_REVENUE, alias GIỮ NGUYÊN (downstream không đổi)', () => {
-    expect(rangeFn).toContain('SUM(CAST(COALESCE(net_revenue, 0) AS NUMERIC)) AS actual_gmv')
-    expect(dailyFn).toContain('SUM(CAST(COALESCE(net_revenue, 0) AS NUMERIC)) AS gmv')
+  test('1. campaignRangeQuery + campaignDailyQuery đọc OFFLINE_NET_REVENUE, alias GIỮ NGUYÊN (downstream không đổi)', () => {
+    // 112 (04/09): BI tách Offline/Affiliate — cột net_revenue đã bị xoá khỏi
+    // view. Alias actual_gmv/gmv GIỮ NGUYÊN nên engine/DB/UI/export không đổi.
+    expect(rangeFn).toContain('ROUND(SUM(CAST(offline_net_revenue AS NUMERIC))) AS actual_gmv')
+    // 112.3: daily trả giá trị THÔ — app snap về đồng nguyên khi đọc
+    // (snapRevenue); ROUND ngay trong SQL sẽ giấu mất phần lẻ VND thật nếu
+    // một ngày nào đó BI đổi contract.
+    expect(dailyFn).toContain('SUM(CAST(offline_net_revenue AS NUMERIC)) AS gmv')
+    expect(dailyFn).not.toContain('ROUND(SUM(CAST(offline_net_revenue AS NUMERIC))) AS gmv')
+    // KHÔNG COALESCE quanh doanh thu: NULL phải chảy xuống thành lỗi nguồn.
+    expect(dailyFn).not.toContain('COALESCE(offline_net_revenue, 0)) AS gmv')
   })
 
   test('5. BQ-V2 r3: 2 hàm campaign đọc bảng PRODUCTION buymed_tech (schema V2, SA có quyền — KHÔNG gold_buymed_vn2) + CHỈ date_type DAY + loại NULL keys + source_row_count', () => {
@@ -61,13 +69,54 @@ test.describe('kpi net_revenue source contract @desktop', () => {
     expect(aggQuery).toContain("date_type = 'MONTH'")
     expect(aggQuery).not.toContain("'week'") // chưa bật — BI chưa có dữ liệu WEEK
     // r1 (audit P2#3): GROUP BY + COUNT thật — dòng nguồn trùng bị kpi.ts từ chối
-    expect(aggQuery).toContain('CAST(SUM(COALESCE(net_revenue, 0)) AS NUMERIC) AS actual')
+    expect(aggQuery).toContain('CAST(ROUND(SUM(offline_net_revenue)) AS NUMERIC) AS actual')
+    // 112.3 (audit P1#2): KHÔNG lọc NULL trước GROUP BY — lọc thì một khoá có
+    // 1 row hợp lệ + 1 row NULL vẫn ra raw_row_count=1 và trôi qua như sạch.
+    // Giữ row NULL đến aggregate rồi để kpiPlan từ chối theo counter.
+    expect(aggQuery).not.toContain('offline_net_revenue IS NOT NULL')
+    expect(aggQuery).toContain('COUNTIF(offline_net_revenue IS NULL) AS offline_revenue_null_count')
+    // Landing CHỈ Offline — cộng Affiliate là đổi ý nghĩa màn này.
+    expect(aggQuery).not.toContain('affiliate_net_revenue')
     expect(aggQuery).toContain('CAST(SUM(COALESCE(TARGET, 0)) AS NUMERIC) AS target')
     expect(aggQuery).toContain('COUNT(*) AS raw_row_count')
     expect(aggQuery).toContain('GROUP BY start_date, pos_code')
     expect(aggQuery).toContain('LAST_DAY(start_date) AS period_end')
     // DEFAULT_QUERY (weekly legacy — pipeline store_weekly_targets riêng) không đụng
     expect(section('export const DEFAULT_QUERY', 'export const KPI_AGGREGATE_QUERY')).not.toContain('net_revenue')
+  })
+
+  // ── 112: canary identifier ĐÃ KHAI TỬ ──────────────────────────────────
+  // `offline_net_revenue` CHỨA `net_revenue` như chuỗi con, nên grep ngây thơ
+  // sẽ báo động giả. Loại hết TÊN MỚI trước rồi mới tìm tên cũ — dùng
+  // split/join, KHÔNG regex: escape trong tay tôi từng biến \b thành byte
+  // 0x08 và làm canary luôn xanh (sự cố 5.1/6).
+  const retiredTokens = (sql: string): string[] => {
+    const stripped = ['offline_net_revenue', 'affiliate_net_revenue',
+      'offline_no_order', 'affiliate_no_order']
+      .reduce((s, name) => s.split(name).join('#'), sql)
+    return ['net_revenue', 'no_order'].filter((t) => stripped.includes(t))
+  }
+
+  test('6. KHÔNG còn identifier đã khai tử (net_revenue / no_order) trong SQL', () => {
+    // Tự kiểm canary: nếu logic strip sai thì hai dòng này đã đỏ.
+    expect(retiredTokens('SELECT offline_net_revenue, offline_no_order')).toEqual([])
+    expect(retiredTokens('SELECT net_revenue')).toEqual(['net_revenue'])
+
+    for (const [name, fn] of [['range', rangeFn], ['daily', dailyFn], ['landing', aggQuery]] as const) {
+      expect(retiredTokens(fn), `${name} còn đọc cột BI đã xoá`).toEqual([])
+    }
+  })
+
+  test('7. Đếm NULL RIÊNG từng nguồn — SUM() của BigQuery bỏ qua NULL', () => {
+    // 112.4 contract A+: phải đủ CẶP counter ở MỌI query. Chỉ có counter doanh
+    // thu thì không phân biệt được "không phát sinh giao dịch" (cả hai NULL,
+    // hợp lệ, 0đ) với "có đơn mà thiếu tiền" (chỉ doanh thu NULL, fail-closed).
+    // Landing KHÔNG dùng số đơn nhưng VẪN phải đếm, nếu không landing và
+    // campaign sẽ hiểu NULL theo hai nghĩa khác nhau (audit P2#4).
+    for (const [name, fn] of [['daily', dailyFn], ['range', rangeFn], ['landing', aggQuery]] as const) {
+      expect(fn, `${name} thiếu counter doanh thu`).toContain('AS offline_revenue_null_count')
+      expect(fn, `${name} thiếu counter số đơn — không soi được CẶP NULL`).toContain('AS offline_order_null_count')
+    }
   })
 
   test('4. Guard ISO date (chống injection khi interpolate) còn nguyên ở CẢ 2 hàm campaign', () => {

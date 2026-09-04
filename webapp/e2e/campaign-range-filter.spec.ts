@@ -44,16 +44,27 @@ async function mainTextWhenReady(page: Page, opts: { ranged: boolean }): Promise
     // Toàn kỳ: đợi dòng trạng thái khoảng BIẾN MẤT hẳn rồi mới chụp.
     await expect(page.getByText('Đang xem', { exact: false })).toHaveCount(0)
   }
-  return page.locator('main').innerText()
+  // Chuẩn hoá phần BIẾN THIÊN THEO THỜI GIAN trước khi so: text có mốc "Đồng bộ
+  // 09:45 03/09/2026" do cron KPI ghi. Suite chạy ~2 phút nên một tick cron có
+  // thể rơi vào giữa hai lần đọc và làm round-trip đỏ vì lý do không liên quan
+  // (chạy lẻ luôn xanh, chỉ full-suite mới dính).
+  const raw = await page.locator('main').innerText()
+  return raw
+    .replace(/\d{2}:\d{2} \d{2}\/\d{2}\/\d{4}/g, '<TS>')
+    .replace(/\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}/g, '<TS>')
 }
 
 async function expectRangeRoundTrip(page: Page, url: string) {
   await page.goto(url)
-  const from = await page.locator('input[name="from"]').getAttribute('min')
-  const to = await page.locator('input[name="to"]').getAttribute('max')
-  expect(from, 'input from phải có min = ngày bắt đầu campaign').toBeTruthy()
   const full = await mainTextWhenReady(page, { ranged: false })
   expect(full.trim().length, 'đọc được main rỗng ⇒ neo chờ chưa đủ').toBeGreaterThan(0)
+  // Đọc min/max SAU neo chờ: đọc ngay sau goto thì thanh lọc của trang CŨ và
+  // trang MỚI có thể cùng nằm trong DOM giữa lúc Next chuyển route → strict
+  // mode nổ (2 element trùng hệt nhau). Hai ô luôn mang cùng min/max nên
+  // .first() là đủ và không che giấu điều gì.
+  const from = await page.locator('input[name="from"]').first().getAttribute('min')
+  const to = await page.locator('input[name="to"]').first().getAttribute('max')
+  expect(from, 'input from phải có min = ngày bắt đầu campaign').toBeTruthy()
 
   const d0 = Date.parse(`${from}T00:00:00Z`)
   const mid = new Date(d0 + Math.floor((Date.parse(`${to}T00:00:00Z`) - d0) / 2))

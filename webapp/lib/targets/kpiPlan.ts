@@ -64,6 +64,19 @@ function coerceNum(v: unknown): number | null {
   }
   return null
 }
+// 112.4 (audit P1#2): COUNT(*)/COUNTIF của BigQuery LUÔN là số nguyên >= 0.
+// KHÔNG dùng coerceNum cho counter: coerceNum(null) = 0 (quyết định r2.1, vẫn
+// đúng cho actual/target) nên một counter null sẽ lọt qua như "0 ô NULL".
+// Cũng KHÔNG Math.round: 1.4 mà làm tròn thành 1 thì raw_row_count sai vẫn
+// được chấp nhận. Thiếu / null / âm / lẻ ⇒ query hoặc schema đã đổi.
+function sourceCounter(v: unknown): number | null {
+  if (v === null || v === undefined) return null
+  let n: number
+  if (typeof v === 'number') n = v
+  else if (typeof v === 'string' && v.trim() !== '') n = Number(v.trim())
+  else return null
+  return Number.isInteger(n) && n >= 0 ? n : null
+}
 const dateStr = (v: unknown): string | null => {
   const s = typeof v === 'string' ? v.trim() : ''
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : null
@@ -129,9 +142,55 @@ export function buildKpiUpsertPlan(
     }
 
     // r1 (P2#3): COUNT(*) thật từ query — nguồn trùng dòng cho cùng kỳ/POS.
-    const rawRowCount = Math.round(num(raw.raw_row_count))
+    // 112.4: giá trị KHÔNG phải số nguyên >= 0 là lỗi SCHEMA, không phải
+    // "nguồn trùng dòng" — tách hai bucket để thông báo không đánh lừa.
+    const rawRowCount = sourceCounter(raw.raw_row_count)
+    if (rawRowCount === null) {
+      rowErrors.push(
+        `${periodType} ${periodStart} ${label}: raw_row_count không hợp lệ (=${String(raw.raw_row_count)}) — COUNT(*) phải là số nguyên >= 0; query hoặc schema đã đổi`,
+      )
+      continue
+    }
     if (rawRowCount !== 1) {
       duplicates.add(`${periodType} ${periodStart} ${label}: ${rawRowCount} dòng nguồn`)
+      continue
+    }
+
+    // ── CONTRACT A+ (112.4, chốt 04/09 sau khi BI nạp tháng 9) ──────────────
+    // Counter NULL là đường DUY NHẤT nhìn thấy ô trống: SUM() của BigQuery bỏ
+    // qua NULL nên một khoá thiếu dữ liệu vẫn cho tổng trông hợp lệ.
+    // Ngữ nghĩa (đo trên toàn view 04/09): view mã hoá "không phát sinh giao
+    // dịch" bằng NULL chứ KHÔNG bằng số 0 — 0/7.139 dòng DAY có giá trị 0,
+    // trong khi Tết 16–20/02 có 6–8/27 POS NULL và tháng 9 chưa tới có 25/25.
+    //   · doanh thu + số đơn CÙNG NULL → không phát sinh giao dịch → 0đ HỢP LỆ
+    //     (SUM() trả NULL, coerceNum đưa về 0 — ở đây chỉ cần KHÔNG chặn).
+    //   · CHỈ MỘT field NULL → nguồn tự mâu thuẫn → fail-closed.
+    // Siết KIỂU trước: thiếu field / null / âm / số lẻ / lớn hơn số dòng nguồn
+    // đều là schema drift, KHÔNG được coerce về 0.
+    // ⚠ Landing KHÔNG có gate "toàn bộ POS cùng NULL ở ngày ĐÃ KẾT THÚC" (gate
+    // ETL nằm ở campaign daily — lib/kpi/offlineSource): hai grain của landing
+    // luôn là kỳ ĐANG DIỄN RA, nên 25/25 POS NULL lúc 00:05 là số ĐÚNG (chưa
+    // bán gì), không phải sự cố. Cũng vì thế không phát warning ở đây — sẽ là
+    // 25 dòng nhiễu mỗi đêm.
+    const revNullRaw = raw.offline_revenue_null_count
+    const ordNullRaw = raw.offline_order_null_count
+    const revNull = sourceCounter(revNullRaw)
+    const ordNull = sourceCounter(ordNullRaw)
+    if (revNull === null || ordNull === null || revNull > rawRowCount || ordNull > rawRowCount) {
+      rowErrors.push(
+        `${periodType} ${periodStart} ${label}: counter NULL không hợp lệ (offline_revenue_null_count=${String(revNullRaw)}, offline_order_null_count=${String(ordNullRaw)}, raw_row_count=${rawRowCount}) — COUNTIF phải là số nguyên trong [0, raw_row_count]; query hoặc schema đã đổi`,
+      )
+      continue
+    }
+    // Luật TIỀN, giống hệt campaign daily (lib/kpi/offlineSource):
+    //   revNull = 0                      → doanh thu ĐÃ BIẾT, dùng bình thường
+    //   revNull = ordNull = rawRowCount  → không phát sinh giao dịch → 0đ
+    //   revNull > 0 mà ordNull < revNull → CÓ ĐƠN nhưng THIẾU TIỀN → fail-closed
+    // Ca cuối là ca nguy hiểm duy nhất: ghi 0đ khi thực tế có giao dịch.
+    if (revNull > 0 && ordNull !== revNull) {
+      rowErrors.push(
+        `${periodType} ${periodStart} ${label}: doanh thu NULL (${revNull}/${rawRowCount} dòng) trong khi số đơn KHÔNG NULL (${ordNull}) — có giao dịch mà thiếu tiền, KHÔNG coi là 0đ`,
+      )
       continue
     }
 

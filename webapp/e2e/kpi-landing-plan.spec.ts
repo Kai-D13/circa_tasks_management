@@ -22,6 +22,10 @@ const row = (grain: string, pos: string, over: Record<string, unknown> = {}) => 
   actual: '1000000',
   target: '2000000',
   raw_row_count: '1',
+  // 112.3/112.4: CẶP counter NULL của nguồn Offline. Thiếu field = query/schema
+  // đã đổi ⇒ fixture phải phản ánh đúng query production.
+  offline_revenue_null_count: '0',
+  offline_order_null_count: '0',
   ...over,
 })
 const fullRows = () => STORES.flatMap((s) => [row('day', s.code!), row('month', s.code!)])
@@ -54,6 +58,128 @@ test.describe('kpi landing atomic plan @desktop', () => {
     const missStore = buildKpiUpsertPlan(fullRows().filter((r) => r.pos_code !== 'POS0009'), STORES, NOW)
     expect(missStore.ok).toBe(false)
     expect(missStore.missing).toEqual(expect.arrayContaining(['POS0009/day', 'POS0009/month']))
+  })
+
+  // ── 112.3/112.4 (audit P1#2): NULL doanh thu Offline ───────────────────
+  // Không thể suy ra từ `actual`: SUM() của BigQuery bỏ qua NULL và coerceNum
+  // coi NULL là 0đ hợp lệ (r2.1) ⇒ thiếu dữ liệu sẽ lặng lẽ thành 0đ trên màn
+  // tiền. Cặp counter là đường DUY NHẤT nhìn thấy.
+  // ⚠ 112.4 thay ca "counter=1 ⇒ luôn ok=false" của 112.3 bằng contract A+:
+  // NULL một mình không nói lên điều gì, phải soi CẶP (xem 2 test A+ bên dưới).
+  // Ca nguy hiểm "thiếu tiền" vẫn bị chặn — chỉ khác ở chỗ nhận diện bằng
+  // ordNull thay vì chặn mù mọi NULL (chặn mù = đóng băng landing mỗi đêm).
+  test('112.4: dòng NULL không lọt vào payload dưới dạng 0đ khi nguồn tự mâu thuẫn', () => {
+    const rows = fullRows()
+    rows[0] = row('day', 'POS0009', {
+      actual: null, offline_revenue_null_count: '1', offline_order_null_count: '0',
+    })
+    const p = buildKpiUpsertPlan(rows, STORES, NOW)
+    expect(p.ok, 'nguồn thiếu doanh thu mà vẫn ok = ghi 0đ oan').toBe(false)
+    // Cổng atomic nằm ở tầng IO: ok=false ⇒ aggregateAndUpsertKpi KHÔNG upsert
+    // dòng nào. Ở đây chỉ cần chắc dòng hỏng không lọt vào payload dưới dạng 0đ.
+    expect(p.payload.some((r) => r.store_id === 's1' && r.period_type === 'day'),
+      'row NULL bị biến thành 0đ trong payload').toBe(false)
+  })
+
+  test('112.3: 1 row HỢP LỆ + 1 row NULL cùng khoá → ok=false (fail-open cũ: lọc NULL ở WHERE thì raw_row_count vẫn =1)', () => {
+    // Đây chính là đường fail-open mà bản 112.2 còn hở: nếu query lọc
+    // `offline_net_revenue IS NOT NULL` TRƯỚC GROUP BY thì row NULL biến mất,
+    // COUNT(*) ra 1 và dữ liệu lỗi trôi qua như sạch. Giữ row NULL đến
+    // aggregate ⇒ raw_row_count=2 VÀ counter=1, chặn ở cả hai lớp.
+    const rows = fullRows()
+    rows[0] = row('day', 'POS0009', { raw_row_count: '2', offline_revenue_null_count: '1' })
+    const p = buildKpiUpsertPlan(rows, STORES, NOW)
+    expect(p.ok).toBe(false)
+    expect(p.payload.some((r) => r.store_id === 's1' && r.period_type === 'day')).toBe(false)
+  })
+
+  test('112.3: thiếu HẲN counter (query/schema drift) → ok=false', () => {
+    const rows = fullRows()
+    const broken = row('day', 'POS0009') as Record<string, unknown>
+    delete broken.offline_revenue_null_count
+    rows[0] = broken as typeof rows[0]
+    const p = buildKpiUpsertPlan(rows, STORES, NOW)
+    expect(p.ok).toBe(false)
+    expect(p.rowErrors.join(' | ')).toContain('offline_revenue_null_count=undefined')
+  })
+
+  // ── 112.4 (audit P1#2): counter phải là SỐ NGUYÊN KHÔNG ÂM ───────────────
+  // Đường fail-open còn lại của 112.3: counter đi qua coerceNum, mà
+  // coerceNum(null) = 0 (quyết định r2.1) ⇒ counter null lọt qua như "0 ô
+  // NULL". -1 và 0,5 cũng lọt vì chỉ có điều kiện "> 0".
+  test('112.4: counter null / âm / lẻ đều là schema drift → ok=false', () => {
+    for (const bad of [null, '-1', '0.5', -1, 0.5, '', 'abc', {}, true]) {
+      const rows = fullRows()
+      rows[0] = row('day', 'POS0009', { offline_revenue_null_count: bad })
+      const p = buildKpiUpsertPlan(rows, STORES, NOW)
+      expect(p.ok, `counter=${JSON.stringify(bad)} phải bị từ chối`).toBe(false)
+      expect(p.rowErrors.join(' | '), `counter=${JSON.stringify(bad)}`)
+        .toContain('counter NULL không hợp lệ')
+      expect(p.payload.some((r) => r.store_id === 's1' && r.period_type === 'day')).toBe(false)
+    }
+  })
+
+  test('112.4: counter LỚN HƠN raw_row_count là bất khả thi → ok=false', () => {
+    const rows = fullRows()
+    rows[0] = row('day', 'POS0009', { offline_revenue_null_count: '2' }) // raw_row_count = 1
+    const p = buildKpiUpsertPlan(rows, STORES, NOW)
+    expect(p.ok).toBe(false)
+    expect(p.rowErrors.join(' | ')).toContain('counter NULL không hợp lệ')
+  })
+
+  // ── CONTRACT A+ (112.4): ngữ nghĩa NULL, giống hệt campaign daily ─────────
+  test('A+: doanh thu + số đơn CÙNG NULL → 0đ HỢP LỆ (không phát sinh giao dịch)', () => {
+    // View mã hoá "không bán được gì" bằng NULL chứ không bằng số 0 (0/7.139
+    // dòng DAY có giá trị 0). Chặn ca này = đóng băng landing mỗi đêm lúc 00:05
+    // và mọi campaign phủ Tết (16–20/02 có 6–8/27 POS NULL).
+    const rows = fullRows()
+    rows[0] = row('day', 'POS0009', {
+      actual: null, offline_revenue_null_count: '1', offline_order_null_count: '1',
+    })
+    const p = buildKpiUpsertPlan(rows, STORES, NOW)
+    expect(p.ok, 'cả hai field NULL = không phát sinh giao dịch, phải hợp lệ').toBe(true)
+    const r = p.payload.find((x) => x.store_id === 's1' && x.period_type === 'day')
+    expect(r?.actual).toBe(0)
+  })
+
+  test('A+: doanh thu NULL mà số đơn KHÔNG NULL → CÓ ĐƠN mà THIẾU TIỀN → ok=false', () => {
+    const rows = fullRows()
+    rows[0] = row('day', 'POS0009', {
+      actual: null, offline_revenue_null_count: '1', offline_order_null_count: '0',
+    })
+    const p = buildKpiUpsertPlan(rows, STORES, NOW)
+    expect(p.ok, 'có giao dịch mà thiếu doanh thu — không được ghi 0đ').toBe(false)
+    expect(p.rowErrors.join(' | ')).toContain('có giao dịch mà thiếu tiền')
+    expect(p.payload.some((x) => x.store_id === 's1' && x.period_type === 'day')).toBe(false)
+  })
+
+  test('A+: CÓ tiền mà số đơn NULL → landing KHÔNG chặn (landing không dùng số đơn)', () => {
+    const rows = fullRows()
+    rows[0] = row('day', 'POS0009', { offline_order_null_count: '1' })
+    const p = buildKpiUpsertPlan(rows, STORES, NOW)
+    expect(p.ok, 'doanh thu đã biết thì landing phải ghi bình thường').toBe(true)
+    expect(p.payload.find((x) => x.store_id === 's1' && x.period_type === 'day')?.actual).toBe(1000000)
+  })
+
+  test('112.4: raw_row_count KHÔNG nguyên → rowErrors (KHÔNG Math.round thành 1)', () => {
+    // 112.3 làm Math.round(1.4) = 1 ⇒ nguồn sai vẫn được nhận như sạch.
+    const rows = fullRows()
+    rows[0] = row('day', 'POS0009', { raw_row_count: '1.4' })
+    const p = buildKpiUpsertPlan(rows, STORES, NOW)
+    expect(p.ok).toBe(false)
+    expect(p.rowErrors.join(' | ')).toContain('raw_row_count không hợp lệ')
+    expect(p.payload.some((r) => r.store_id === 's1' && r.period_type === 'day')).toBe(false)
+  })
+
+  test('112.4: raw_row_count thiếu/rác → rowErrors, KHÔNG rơi vào bucket "trùng dòng"', () => {
+    for (const bad of [null, 'abc', '-1']) {
+      const rows = fullRows()
+      rows[0] = row('day', 'POS0009', { raw_row_count: bad })
+      const p = buildKpiUpsertPlan(rows, STORES, NOW)
+      expect(p.ok, `raw_row_count=${JSON.stringify(bad)}`).toBe(false)
+      expect(p.rowErrors.join(' | ')).toContain('raw_row_count không hợp lệ')
+      expect(p.duplicates.join(' | '), 'sai kiểu KHÔNG phải "nguồn trùng dòng"').not.toContain('dòng nguồn')
+    }
   })
 
   test('P1#1: nguồn TRÙNG dòng (raw_row_count=2) → ok=false, duplicates nêu rõ — không ghi đè theo thứ tự', () => {

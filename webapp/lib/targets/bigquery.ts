@@ -38,8 +38,22 @@ export const DEFAULT_QUERY = `
 // `gold_buymed_vn2.circa_os_gmv_kpi`; service account CHỈ có quyền dataset
 // buymed_tech → trỏ gold_* là 403 → cron 502/207. KHÔNG đổi lại path nếu chưa
 // đổi quyền SA). Pre-aggregated theo kỳ (1 row / date_type / start_date /
-// pos): actual = net_revenue (schema V2 KHÔNG còn cột gmv), target = cột
-// TARGET — không còn SUM/GROUP tự tính tuần app-side.
+// pos): actual = offline_net_revenue (BI tách Offline/Affiliate 09/2026 —
+// cột `net_revenue` cũ đã BỊ XOÁ), target = cột TARGET.
+// ⚠ Landing CHỈ lấy Offline: cộng thêm Affiliate là đổi Ý NGHĨA của màn này,
+// stakeholder chưa yêu cầu (contract 04/09 điểm 1-2; WEEK vẫn KHÔNG bật).
+// KHÔNG lọc NULL trong WHERE (112.3, audit P1#2): lọc trước GROUP BY thì một
+// khoá có 1 row hợp lệ + 1 row NULL vẫn ra raw_row_count=1 và trôi qua như dữ
+// liệu sạch. Giữ row NULL đến bước aggregate rồi để kpiPlan quyết theo counter.
+// Cũng KHÔNG dùng COALESCE(...,0) ở SQL — mất thông tin trước khi app kịp
+// phân biệt "không phát sinh giao dịch" với "nguồn hỏng".
+// ⚠ Contract A+ (112.4) cần ĐỦ CẶP counter: doanh thu và số đơn CÙNG NULL =
+// không phát sinh giao dịch (0đ); CHỈ MỘT field NULL = nguồn hỏng. Vì vậy
+// landing đếm cả `offline_no_order` dù không dùng số đơn — thiếu counter này
+// thì landing và campaign sẽ hiểu NULL theo hai nghĩa khác nhau.
+// Hai grain của landing LUÔN là kỳ ĐANG DIỄN RA (DAY = hôm nay, MONTH = tháng
+// hiện tại) nên gate "toàn bộ POS cùng NULL ở ngày ĐÃ KẾT THÚC" không áp ở đây;
+// 0đ lúc 00:05 là số ĐÚNG, không phải dữ liệu thiếu.
 //   · day:   date_type='DAY',   start_date = hôm nay VN; period_end = start.
 //   · month: date_type='MONTH', start_date = đầu tháng VN; period_end = LAST_DAY.
 //   · week:  ⛔ CHƯA BẬT — schema mới không có period_end và DAY rows không
@@ -54,8 +68,10 @@ export const KPI_AGGREGATE_QUERY = `
   WITH today AS (SELECT CURRENT_DATE("Asia/Ho_Chi_Minh") AS d)
   SELECT 'day' AS period_type, start_date AS period_start, start_date AS period_end,
          pos_code, MAX(pos_name) AS pos_name,
-         CAST(SUM(COALESCE(net_revenue, 0)) AS NUMERIC) AS actual,
+         CAST(ROUND(SUM(offline_net_revenue)) AS NUMERIC) AS actual,
          CAST(SUM(COALESCE(TARGET, 0)) AS NUMERIC) AS target,
+         COUNTIF(offline_net_revenue IS NULL) AS offline_revenue_null_count,
+         COUNTIF(offline_no_order IS NULL)     AS offline_order_null_count,
          COUNT(*) AS raw_row_count
   FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`, today
   WHERE date_type = 'DAY'
@@ -66,8 +82,10 @@ export const KPI_AGGREGATE_QUERY = `
   UNION ALL
   SELECT 'month' AS period_type, start_date AS period_start, LAST_DAY(start_date) AS period_end,
          pos_code, MAX(pos_name) AS pos_name,
-         CAST(SUM(COALESCE(net_revenue, 0)) AS NUMERIC) AS actual,
+         CAST(ROUND(SUM(offline_net_revenue)) AS NUMERIC) AS actual,
          CAST(SUM(COALESCE(TARGET, 0)) AS NUMERIC) AS target,
+         COUNTIF(offline_net_revenue IS NULL) AS offline_revenue_null_count,
+         COUNTIF(offline_no_order IS NULL)     AS offline_order_null_count,
          COUNT(*) AS raw_row_count
   FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`, today
   WHERE date_type = 'MONTH'
@@ -87,16 +105,18 @@ export function loadServiceAccount(): ServiceAccount | null {
 // ⚠ BQ-V2 r3 (06/08): nguồn = `buymed_tech.tech__circa_os_gmv_kpi` — bảng
 // PRODUCTION schema V2 (SA chỉ có quyền dataset buymed_tech; mirror
 // gold_buymed_vn2 đồng bộ 1-1 nhưng KHÔNG được cấp quyền → 403). Campaign CHỈ
-// đọc `date_type='DAY'` + `net_revenue` (DAY-authoritative; MONTH/WEEK/TARGET/
-// net_sale/return_amount KHÔNG tham gia). Table HARD-CODE trong Git (quyết
+// đọc `date_type='DAY'` + `offline_net_revenue` (DAY-authoritative;
+// MONTH/WEEK/TARGET KHÔNG tham gia). Table HARD-CODE trong Git (quyết
 // định 30/07: không ENV — số commission phải có commit audit).
 // Alias GIỮ NGUYÊN `actual_gmv` để downstream (engine/DB payload/UI/export)
 // không đổi — "gmv" trong pipeline campaign = Net Revenue Offline.
 // runBigQuery has no query-parameter support, so the dates are interpolated —
 // both values come from DB `date` columns; the regex guard makes injection
 // impossible even if a caller passes something else. Schema mới NULLABLE →
-// loại row pos_code/start_date NULL ngay trong WHERE; future days have
-// net_revenue NULL → COALESCE 0; giá trị ÂM giữ nguyên, cộng bình thường.
+// loại row pos_code/start_date NULL ngay trong WHERE; doanh thu NULL KHÔNG bị
+// COALESCE mà được đếm riêng (fail-closed); giá trị ÂM giữ nguyên.
+// ⚠ Hàm này hiện KHÔNG có caller (campaign đọc daily rồi cộng app-side) —
+// giữ lại cho đối soát tay, nên vẫn phải đúng schema.
 // ~25 active OS stores → one row per pos_code, far under the 1000-row cap.
 export function campaignRangeQuery(startDate: string, endDate: string): string {
   const ISO = /^\d{4}-\d{2}-\d{2}$/
@@ -104,7 +124,10 @@ export function campaignRangeQuery(startDate: string, endDate: string): string {
     throw new Error(`campaignRangeQuery: ngày không hợp lệ (${startDate} – ${endDate})`)
   }
   return `
-    SELECT pos_code, SUM(CAST(COALESCE(net_revenue, 0) AS NUMERIC)) AS actual_gmv, COUNT(*) AS row_count
+    SELECT pos_code, ROUND(SUM(CAST(offline_net_revenue AS NUMERIC))) AS actual_gmv,
+           COUNTIF(offline_net_revenue IS NULL) AS offline_revenue_null_count,
+           COUNTIF(offline_no_order IS NULL)    AS offline_order_null_count,
+           COUNT(*) AS row_count
     FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`
     WHERE date_type = 'DAY'
       AND pos_code IS NOT NULL AND start_date IS NOT NULL
@@ -115,15 +138,16 @@ export function campaignRangeQuery(startDate: string, endDate: string): string {
   `
 }
 
-// 105 (11/08): trả thêm `order_count` = SUM(no_order) + 5 cột canary
-// (null-mismatch 2 chiều · âm · không nguyên · doanh thu mà 0 đơn).
-// AOV KHÔNG lấy từ cột `aov` của BI (giá trị dẫn xuất) — app luôn tính
-// SUM(net_revenue)/SUM(no_order) (weighted; đo thật 08/2026 lệch 1.445đ so
-// với AVG(aov)).
+// 105 (11/08): trả thêm `order_count` = SUM(offline_no_order) + canary
+// (null-mismatch 2 chiều · âm · không nguyên · doanh thu mà 0 đơn) và, từ
+// 112.3, đếm NULL riêng từng nguồn.
+// AOV KHÔNG lấy từ cột `offline_aov` của BI (giá trị dẫn xuất) — app luôn tính
+// SUM(offline_net_revenue)/SUM(offline_no_order) (weighted; đo thật 08/2026
+// lệch 1.445đ so với AVG(aov)).
 // Per-DAY OFFLINE actual per store over a range — drives the staff "Tiến độ
 // theo ngày" chart AND the aggregate snapshot (summed app-side so they always
 // agree). ⚠ BQ-V2 (05/08): nguồn `buymed_tech.tech__circa_os_gmv_kpi`,
-// `date_type='DAY'` + `net_revenue` (xem chú thích campaignRangeQuery); alias
+// `date_type='DAY'` + `offline_net_revenue` (xem campaignRangeQuery); alias
 // GIỮ NGUYÊN `gmv` — cột `gmv` của kpi_campaign_store_daily_actuals = Net
 // Revenue Offline. `source_row_count` đi kèm để orchestrator guard: bảng mới
 // pre-aggregated 1 row/store/ngày — >1 nghĩa nguồn sai → preserve snapshot.
@@ -136,7 +160,13 @@ export function campaignDailyQuery(startDate: string, endDate: string): string {
   }
   return `
     SELECT pos_code, start_date AS \`date\`,
-           SUM(CAST(COALESCE(net_revenue, 0) AS NUMERIC)) AS gmv,
+           -- 112.3: trả giá trị THÔ (KHÔNG làm tròn ở đây) — app snap về đồng
+           -- nguyên khi đọc (snapRevenue, lib/kpi/revenueSource). Nguồn không
+           -- có phần lẻ VND thật (đo 04/09: lệch tối đa 9,3e-10đ / 7.139 dòng)
+           -- nên SUM của MỌI khoảng con đều bằng ROUND(SUM(raw)) của khoảng đó.
+           -- KHÔNG COALESCE: NULL phải chảy xuống nguyên trạng để app quyết
+           -- (counter offline_revenue_null_count), không được hoá 0đ ở SQL.
+           SUM(CAST(offline_net_revenue AS NUMERIC)) AS gmv,
            -- 105: số đơn Offline (BI thêm 11/08). CHỦ Ý dùng
            -- COUNTIF(... IS NOT NULL) thay COALESCE: NULL_MISMATCH cho biết
            -- row có doanh thu nhưng THIẾU số đơn (hoặc ngược lại) → engine
@@ -144,16 +174,23 @@ export function campaignDailyQuery(startDate: string, endDate: string): string {
            -- r1 (audit P1): SUM ở dạng NUMERIC — CAST INT64 sẽ LÀM TRÒN số lẻ
            -- ngay trong BQ khiến guard Number.isInteger() phía app không bao
            -- giờ thấy dữ liệu sai. Số lẻ được bắt riêng bằng non_integer_order.
-           SUM(CAST(COALESCE(no_order, 0) AS NUMERIC))                     AS order_count,
-           COUNTIF(no_order IS NULL AND net_revenue IS NOT NULL)           AS rev_without_order,
-           COUNTIF(no_order IS NOT NULL AND net_revenue IS NULL)           AS order_without_rev,
-           COUNTIF(no_order < 0)                                           AS negative_order,
-           COUNTIF(no_order IS NOT NULL AND no_order != TRUNC(no_order))   AS non_integer_order,
+           SUM(CAST(offline_no_order AS NUMERIC))                          AS order_count,
+           COUNTIF(offline_no_order IS NULL AND offline_net_revenue IS NOT NULL) AS rev_without_order,
+           COUNTIF(offline_no_order IS NOT NULL AND offline_net_revenue IS NULL) AS order_without_rev,
+           COUNTIF(offline_no_order < 0)                                   AS negative_order,
+           COUNTIF(offline_no_order IS NOT NULL
+                   AND offline_no_order != TRUNC(offline_no_order))        AS non_integer_order,
            -- r1.2 (audit): có doanh thu nhưng KHÔNG đơn nào ⇒ AOV không xác
            -- định mà vẫn có tiền → fail-closed. (Ngược lại: order > 0 với
            -- net = 0 VẪN hợp lệ; net ÂM không tự reject — BI cho phép hoàn/
            -- điều chỉnh.)
-           COUNTIF(no_order = 0 AND COALESCE(net_revenue, 0) != 0)          AS revenue_with_zero_order,
+           COUNTIF(offline_no_order = 0
+                   AND COALESCE(offline_net_revenue, 0) != 0)              AS revenue_with_zero_order,
+           -- 112: đếm NULL RIÊNG từng nguồn. Hai canary lệch-cặp ở trên KHÔNG
+           -- bắt được ca CẢ HAI field cùng NULL, mà SUM() của BigQuery thì bỏ
+           -- qua NULL — dữ liệu thiếu có thể ra một tổng trông rất hợp lệ.
+           COUNTIF(offline_net_revenue IS NULL)                            AS offline_revenue_null_count,
+           COUNTIF(offline_no_order IS NULL)                               AS offline_order_null_count,
            COUNT(*) AS source_row_count
     FROM \`lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi\`
     WHERE date_type = 'DAY'

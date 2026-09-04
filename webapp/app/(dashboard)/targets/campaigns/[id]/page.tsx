@@ -2,7 +2,7 @@ import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { createClient } from '@/lib/supabase/server'
-import { isSuperAdminEmail } from '@/lib/authz'
+import { canManageCampaign, canViewCampaignDashboard } from '@/lib/kpi/campaignAccess'
 import { isKpiAffiliateEnabled, isKpiCampaignEnabled } from '@/lib/kpi/flags'
 import { Card, CardContent } from '@/components/ui/card'
 import { CampaignStatusButton } from '@/components/kpi/CampaignStatusButton'
@@ -70,7 +70,10 @@ export default async function CampaignDetailPage({
   const sp = await searchParams
   const { user, profile } = await getSessionProfile()
   if (!user) notFound()
-  if (!(profile?.role === 'admin' && isSuperAdminEmail(user.email) && isKpiCampaignEnabled())) notFound()
+  // 111: SM vào được, CHỈ ĐỌC. Campaign ngoài phạm vi/trạng thái cho phép sẽ
+  // không đọc nổi qua RLS ⇒ `!c` bên dưới trả 404 — không cần nhánh riêng.
+  if (!(isKpiCampaignEnabled() && canViewCampaignDashboard(profile?.role, user.email))) notFound()
+  const canManage = canManageCampaign(profile?.role, user.email)
 
   const supabase = await createClient()
   const { data: c } = await supabase
@@ -79,9 +82,13 @@ export default async function CampaignDetailPage({
   // Archive (098): URL campaign đã lưu trữ → 404 (biến mất khỏi mọi UI).
   if (c.archived_at !== null) notFound()
 
-  const tab: 'config' | 'result' = sp.tab === 'config' || sp.tab === 'result'
-    ? sp.tab
-    : (c.status === 'active' || c.status === 'ended') ? 'result' : 'config'
+  // SM bị ép sang 'result' kể cả khi tự gõ ?tab=config — tab Cấu hình là màn
+  // quản trị (import target, sửa chỉ số), không phải chỗ chỉ-xem.
+  const tab: 'config' | 'result' = !canManage
+    ? 'result'
+    : sp.tab === 'config' || sp.tab === 'result'
+      ? sp.tab
+      : (c.status === 'active' || c.status === 'ended') ? 'result' : 'config'
 
   const [
     { data: targetsRaw, error: targetsErr },
@@ -93,10 +100,15 @@ export default async function CampaignDetailPage({
       .select('id, store_id, pos_code, kpi_target, store_kpi_group, order_target, aov_target, stores(name), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
       .eq('campaign_id', id)
       .order('pos_code'),
-    supabase
-      .from('kpi_campaign_import_runs')
-      .select('file_name, row_count, success_count, created_at')
-      .eq('campaign_id', id).order('created_at', { ascending: false }).limit(5),
+    // kpi_campaign_import_runs là bảng super-only: với SM nó luôn trả rỗng kèm
+    // lỗi RLS, và lỗi đó sẽ nhuộm đỏ banner `queryError` của cả trang. Bỏ hẳn
+    // truy vấn thay vì nuốt lỗi.
+    canManage
+      ? supabase
+          .from('kpi_campaign_import_runs')
+          .select('file_name, row_count, success_count, created_at')
+          .eq('campaign_id', id).order('created_at', { ascending: false }).limit(5)
+      : Promise.resolve({ data: [], error: null }),
     supabase
       .from('kpi_campaign_store_actuals')
       .select('store_id, actual_value, actual_offline, actual_affiliate, offline_order_count, actual_customer_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
@@ -221,7 +233,7 @@ export default async function CampaignDetailPage({
             <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', s.cls)}>{s.label}</span>
             {c.is_test && <span className={cn('text-[10px] px-1.5 py-0.5 rounded-full', TEST_BADGE_CLS)}>TEST</span>}
           </div>
-          <CampaignStatusButton id={c.id} status={c.status} name={c.name} />
+          {canManage && <CampaignStatusButton id={c.id} status={c.status} name={c.name} />}
         </div>
         <p className="text-sm text-muted-foreground mt-0.5">
           {formatDate(c.start_date)} – {formatDate(c.end_date)} · {targets.length} cửa hàng · {resultModel.deadlineLabel}
@@ -233,11 +245,15 @@ export default async function CampaignDetailPage({
         )}
       </div>
 
-      {/* Tabs — one URL, two views */}
-      <div className="inline-flex rounded-lg border border-primary/20 bg-secondary p-0.5">
-        {tabLink('config', 'Cấu hình', SlidersHorizontal)}
-        {tabLink('result', 'Kết quả', BarChart3)}
-      </div>
+      {/* Tabs — one URL, two views. SM chỉ có Kết quả nên KHÔNG render thanh
+          tab: một thanh chỉ có đúng một lựa chọn là nhiễu, và để lộ 'Cấu hình'
+          rồi bấm vào không đổi gì thì còn tệ hơn. */}
+      {canManage && (
+        <div className="inline-flex rounded-lg border border-primary/20 bg-secondary p-0.5">
+          {tabLink('config', 'Cấu hình', SlidersHorizontal)}
+          {tabLink('result', 'Kết quả', BarChart3)}
+        </div>
+      )}
 
       {tab === 'config' ? (
         <>
@@ -318,8 +334,11 @@ export default async function CampaignDetailPage({
               {lastSynced ? `Doanh số đồng bộ ${formatDateTime(lastSynced)}` : 'Chưa đồng bộ doanh số'}
             </span>
             <div className="flex items-center gap-2">
+              {/* Xuất Excel: SM ĐƯỢC (chốt 30/08) — file tự giới hạn theo cửa
+                  hàng của họ vì route export dùng session client, RLS lọc sẵn.
+                  Đồng bộ thủ công là hành vi quản trị ⇒ super-only. */}
               <CampaignExportButton campaignId={c.id} />
-              <SyncActualsButton campaignId={c.id} metricType={c.metric_type as string | undefined} />
+              {canManage && <SyncActualsButton campaignId={c.id} metricType={c.metric_type as string | undefined} />}
             </div>
           </div>
 
