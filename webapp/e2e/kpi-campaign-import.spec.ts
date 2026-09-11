@@ -393,3 +393,130 @@ test.describe('không tái xuất khái niệm điểm gộp (107.4) @desktop', 
     }
   })
 })
+
+// ── Mig 112: thưởng thêm theo ngưỡng số đơn (campaign Doanh số) ────────────
+// 2 cột TUỲ CHỌN. Điều quan trọng nhất cần khoá: file KHÔNG có 2 cột phải ra
+// output y hệt trước 112 — key vắng mặt, không phải null.
+test.describe('kpi campaign import — thưởng thêm theo số đơn (112) @desktop', () => {
+  const bonus = { minimum_order_target: 710, order_bonus_per_staff: 200_000 }
+  const withBonus = (over: Record<string, unknown> = {}) => row({ ...bonus, ...over })
+
+  test('file KHÔNG có 2 cột: key mới VẮNG MẶT (không phải null) — payload cũ giữ nguyên từng byte', () => {
+    const r = parseCampaignRows([row(), row({ pos_code: 'POS0002', kpi_target: 250_000_000 })], BY_CODE)
+    if ('error' in r) throw new Error(r.error)
+    expect(r.invalid).toEqual([])
+    for (const v of r.valid) {
+      expect('minimum_order_target' in v).toBe(false)
+      expect('order_bonus_per_staff' in v).toBe(false)
+    }
+    // Cột có trong file nhưng MỌI ô trống ⇒ cũng như không có.
+    const blank = parseCampaignRows([row({ minimum_order_target: null, order_bonus_per_staff: '' })], BY_CODE)
+    if ('error' in blank) throw new Error(blank.error)
+    expect('minimum_order_target' in blank.valid[0]).toBe(false)
+  })
+
+  test('file W2 đủ 2 cột trên mọi dòng → giá trị có mặt, đúng kiểu số', () => {
+    const r = parseCampaignRows([withBonus(), withBonus({ pos_code: 'POS0002', minimum_order_target: 530 })], BY_CODE)
+    if ('error' in r) throw new Error(r.error)
+    expect(r.invalid).toEqual([])
+    expect(r.valid.map((v) => [v.pos_code, v.minimum_order_target, v.order_bonus_per_staff]))
+      .toEqual([['POS0001', 710, 200_000], ['POS0002', 530, 200_000]])
+  })
+
+  test('metricType gmv tường minh cũng nhận 2 cột', () => {
+    const r = parseCampaignRows([withBonus()], BY_CODE, { metricType: 'gmv' })
+    if ('error' in r) throw new Error(r.error)
+    expect(r.valid[0].minimum_order_target).toBe(710)
+  })
+
+  test('file LẪN LỘN (có dòng có, có dòng trống) → đánh dấu ĐÚNG dòng thiếu, không commit được', () => {
+    const r = parseCampaignRows(
+      [withBonus(), row({ pos_code: 'POS0002', kpi_target: 250_000_000 })], BY_CODE)
+    if ('error' in r) throw new Error(r.error)
+    expect(r.valid.map((v) => v.pos_code)).toEqual(['POS0001'])
+    expect(r.invalid).toHaveLength(1)
+    expect(r.invalid[0]).toMatchObject({ row: 3, pos_code: 'POS0002' })
+    expect(r.invalid[0].error).toContain('1/2 cửa hàng')
+  })
+
+  test('chỉ điền 1 trong 2 cột → lỗi dòng', () => {
+    for (const over of [{ order_bonus_per_staff: null }, { minimum_order_target: null }]) {
+      const r = parseCampaignRows([withBonus(over)], BY_CODE)
+      if ('error' in r) throw new Error(r.error)
+      expect(r.valid).toEqual([])
+      expect(r.invalid[0].error).toContain('Cần điền ĐỦ')
+    }
+  })
+
+  test('ngưỡng đơn lẻ / ≤ 0 → lỗi; "1.200" (dấu chấm) bị đọc thành 1,2 nên cũng bị chặn', () => {
+    for (const bad of [710.5, 0, -5, '1.200']) {
+      const r = parseCampaignRows([withBonus({ minimum_order_target: bad })], BY_CODE)
+      if ('error' in r) throw new Error(r.error)
+      expect(r.valid, `ngưỡng=${bad}`).toEqual([])
+      expect(r.invalid[0].error).toContain('minimum_order_target phải là số nguyên > 0')
+    }
+  })
+
+  test('tiền thưởng "200.000" (dấu chấm nghìn) bị đọc thành 200đ → CHẶN, không ghi sai tiền', () => {
+    for (const bad of ['200.000', 200, 999]) {
+      const r = parseCampaignRows([withBonus({ order_bonus_per_staff: bad })], BY_CODE)
+      if ('error' in r) throw new Error(r.error)
+      expect(r.valid, `thưởng=${bad}`).toEqual([])
+      expect(r.invalid[0].error).toContain('quá nhỏ')
+    }
+    // Đúng sàn 1.000đ và dạng có dấu phẩy nghìn thì hợp lệ.
+    for (const good of [1000, '200,000']) {
+      const r = parseCampaignRows([withBonus({ order_bonus_per_staff: good })], BY_CODE)
+      if ('error' in r) throw new Error(r.error)
+      expect(r.invalid, `thưởng=${good}`).toEqual([])
+    }
+  })
+
+  test('tiền thưởng lẻ / ≤ 0 → lỗi', () => {
+    for (const bad of [200_000.5, 0, -200_000]) {
+      const r = parseCampaignRows([withBonus({ order_bonus_per_staff: bad })], BY_CODE)
+      if ('error' in r) throw new Error(r.error)
+      expect(r.valid, `thưởng=${bad}`).toEqual([])
+      expect(r.invalid[0].error).toContain('order_bonus_per_staff phải là số nguyên VNĐ > 0')
+    }
+  })
+
+  test('campaign Số khách / Chất lượng bán hàng mang 2 cột → lỗi (chỉ dành cho Doanh số)', () => {
+    const cust = parseCampaignRows([row({ kpi_target: 120, ...bonus })], BY_CODE, CUSTOMER)
+    if ('error' in cust) throw new Error(cust.error)
+    expect(cust.valid).toEqual([])
+    expect(cust.invalid[0].error).toContain('chỉ dành cho campaign Doanh số')
+
+    const aov = parseCampaignRows([{
+      pos_code: 'POS0018', order_target: 1046, aov_target: 194_046, store_kpi_group: 'Nhóm A',
+      tier_1_threshold_pct: 100, tier_1_commission_amount: 20_800_000, note: null, ...bonus,
+    }], BY_CODE, { metricType: 'offline_order_aov' })
+    if ('error' in aov) throw new Error(aov.error)
+    expect(aov.valid).toEqual([])
+    expect(aov.invalid[0].error).toContain('chỉ dành cho campaign Doanh số')
+  })
+
+  test('dòng CHỈ có ô thưởng (không pos_code) KHÔNG bị bỏ qua như dòng trống', () => {
+    const r = parseCampaignRows([withBonus(), { ...bonus }], BY_CODE)
+    if ('error' in r) throw new Error(r.error)
+    expect(r.invalid.some((x) => x.error === 'Thiếu pos_code')).toBe(true)
+  })
+
+  test('file W2 thật (25 dòng, 1 bậc 100%) + 2 cột → đọc sạch toàn bộ', () => {
+    // Dựng theo đúng cấu trúc mau-chien-dich-kpi-week-02-09.csv (kpi_target lẻ
+    // tới đồng, 1 bậc mốc 100%) — không nhúng số liệu thật của cửa hàng.
+    const codes = Array.from({ length: 25 }, (_, i) => `POS9${String(i).padStart(3, '0')}`)
+    const map = new Map(codes.map((c, i) => [c, `store-${i}`]))
+    const rows = codes.map((c, i) => ({
+      pos_code: c, kpi_target: 59_348_098 + i * 1_234_567, store_kpi_group: 'Nhỏ hơn 500 triệu',
+      tier_1_threshold_pct: 100, tier_1_commission_amount: 2_500_000,
+      pos_name: `STORE ${i}`, note: 'KPI Tuần 2',
+      minimum_order_target: 300 + i * 17, order_bonus_per_staff: 200_000,
+    }))
+    const r = parseCampaignRows(rows, map)
+    if ('error' in r) throw new Error(r.error)
+    expect(r.invalid).toEqual([])
+    expect(r.valid).toHaveLength(25)
+    expect(r.valid.every((v) => v.order_bonus_per_staff === 200_000 && Number.isInteger(v.minimum_order_target))).toBe(true)
+  })
+})

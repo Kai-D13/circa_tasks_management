@@ -10,6 +10,8 @@
 // tier_N_commission_amount (fixed amount = the STORE's commission POOL at that
 // tier). Transition aliases still read: final_target, tier_N_commission,
 // tier_N_commission_pct — but the UI/template only advertise the new format.
+// Mig 112: + 2 cột TUỲ CHỌN chỉ cho Doanh số — minimum_order_target +
+// order_bonus_per_staff (thưởng thêm theo ngưỡng số đơn, đủ mọi dòng hoặc không).
 
 import { exactlyOneTierAt100 } from '@/lib/kpi/orderAov'
 
@@ -28,6 +30,11 @@ export interface CampaignTargetInput {
   // Campaign GMV/Số khách KHÔNG set (RPC 106 reverse-guard sẽ RAISE nếu có).
   order_target?: number
   aov_target?: number
+  // Mig 112 — CHỈ campaign Doanh số (gmv), TUỲ CHỌN: thưởng thêm theo ngưỡng
+  // số đơn. Ô trống ⇒ KHÔNG set key (không phải null) để payload file cũ giữ
+  // nguyên từng byte. Hoặc mọi dòng có đủ cả hai, hoặc không dòng nào.
+  minimum_order_target?: number
+  order_bonus_per_staff?: number
 }
 
 // The policy email defines groups with OVERLAPPING boundaries (200tr sits in both
@@ -87,6 +94,16 @@ const DEAD_AOV_COLUMNS: [key: string, label: string][] = [
   ['orderfloor', 'order_floor'],
   ['aovfloor', 'aov_floor'],
 ]
+// Mig 112: thưởng thêm theo ngưỡng số đơn — TUỲ CHỌN, CHỈ campaign Doanh số.
+// Tên riêng, KHÔNG dùng lại order_target (thuộc Chất lượng bán hàng).
+const BONUS_COLUMNS: [key: string, label: string][] = [
+  ['minimumordertarget', 'minimum_order_target'],
+  ['orderbonusperstaff', 'order_bonus_per_staff'],
+]
+// Sàn tiền thưởng: `num()` chỉ bỏ dấu phẩy/khoảng trắng, nên ô "200.000" (dấu
+// chấm phân cách nghìn kiểu VN) bị đọc thành 200. Không ai thưởng 200đ ⇒ dưới
+// sàn này gần như chắc chắn là lỗi định dạng số, chặn thay vì ghi sai tiền.
+export const MIN_ORDER_BONUS_PER_STAFF = 1000
 
 export function parseCampaignRows(
   rawRows: Record<string, unknown>[],
@@ -134,7 +151,9 @@ export function parseCampaignRows(
     // (RPC 106 cũng ép lại — file không quyết định).
     const kpiTargetRaw = isAov ? 100 : (num(lo['kpitarget']) ?? num(lo['finaltarget'])) // alias: v2 files
     const aovCells = AOV_COLUMNS.map(([k]) => num(lo[k]))
-    if (!posCode && kpiTargetRaw === null && aovCells.every((v) => v === null)) return // dòng trống → bỏ qua
+    const bonusCells = BONUS_COLUMNS.map(([k]) => num(lo[k]))
+    if (!posCode && kpiTargetRaw === null && aovCells.every((v) => v === null)
+        && bonusCells.every((v) => v === null)) return // dòng trống → bỏ qua
 
     if (!posCode) { invalid.push({ row: rowNo, pos_code: null, error: 'Thiếu pos_code' }); return }
     if (seen.has(posCode)) { invalid.push({ row: rowNo, pos_code: posCode, error: 'pos_code trùng trong file' }); return }
@@ -221,12 +240,63 @@ export function parseCampaignRows(
       }
     }
 
+    // ── Mig 112: thưởng thêm theo ngưỡng số đơn (mirror validate của RPC) ──
+    let bonusFields: Pick<CampaignTargetInput, 'minimum_order_target' | 'order_bonus_per_staff'> = {}
+    const [minOrders, bonusPerStaff] = bonusCells
+    if (minOrders !== null || bonusPerStaff !== null) {
+      if (isCustomer || isAov) {
+        invalid.push({ row: rowNo, pos_code: posCode, error: 'Thưởng thêm theo số đơn chỉ dành cho campaign Doanh số — xoá 2 cột minimum_order_target / order_bonus_per_staff' })
+        return
+      }
+      if (minOrders === null || bonusPerStaff === null) {
+        invalid.push({ row: rowNo, pos_code: posCode, error: 'Cần điền ĐỦ cả minimum_order_target và order_bonus_per_staff (hoặc để trống cả hai)' })
+        return
+      }
+      if (!Number.isInteger(minOrders) || minOrders <= 0) {
+        invalid.push({ row: rowNo, pos_code: posCode, error: `minimum_order_target phải là số nguyên > 0 (số đơn) — nhận ${minOrders}` })
+        return
+      }
+      if (!Number.isInteger(bonusPerStaff) || bonusPerStaff <= 0) {
+        invalid.push({ row: rowNo, pos_code: posCode, error: `order_bonus_per_staff phải là số nguyên VNĐ > 0 — nhận ${bonusPerStaff}` })
+        return
+      }
+      if (bonusPerStaff < MIN_ORDER_BONUS_PER_STAFF) {
+        invalid.push({
+          row: rowNo, pos_code: posCode,
+          error: `order_bonus_per_staff = ${bonusPerStaff}đ quá nhỏ — kiểm tra định dạng số: ô "200.000" (dấu chấm) bị đọc thành 200. Nhập 200000.`,
+        })
+        return
+      }
+      bonusFields = { minimum_order_target: minOrders, order_bonus_per_staff: bonusPerStaff }
+    }
+
     valid.push({
       store_id: storeId, pos_code: posCode, kpi_target: kpiTargetRaw,
       store_kpi_group: storeKpiGroup, import_row: rowNo, note: str(lo['note']), tiers,
       ...aovFields,
+      ...bonusFields,
     })
   })
+
+  // Mig 112 (chốt 11/09): thưởng thêm áp dụng cho MỌI cửa hàng hoặc KHÔNG cửa
+  // hàng nào. File lẫn lộn gần như luôn là quên một dòng ⇒ cửa hàng đó lặng lẽ
+  // mất thưởng. Đánh dấu ĐÚNG những dòng thiếu (chỉ thẳng chỗ cần sửa) thay vì
+  // một lỗi chung cho cả file. RPC 112 cũng chặn lại lần nữa ở tầng DB.
+  const withBonus = valid.filter((v) => v.minimum_order_target !== undefined).length
+  if (withBonus > 0 && withBonus < valid.length) {
+    for (const v of valid.filter((x) => x.minimum_order_target === undefined)) {
+      invalid.push({
+        row: v.import_row, pos_code: v.pos_code,
+        error: `Thiếu minimum_order_target / order_bonus_per_staff — file đang áp dụng thưởng thêm cho ${withBonus}/${valid.length} cửa hàng; điền đủ cho mọi cửa hàng hoặc để trống toàn bộ`,
+      })
+    }
+    invalid.sort((a, b) => a.row - b.row)
+    return {
+      valid: valid.filter((v) => v.minimum_order_target !== undefined),
+      invalid,
+      unmatched: [...unmatched],
+    }
+  }
 
   return { valid, invalid, unmatched: [...unmatched] }
 }

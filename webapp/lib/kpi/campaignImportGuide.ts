@@ -35,6 +35,10 @@ const GMV_GUIDE: ImportGuideModel = {
     { col: 'tier_3_commission_amount', meaning: 'Commission Store bậc 3 (số tiền)', example: '26300000' },
     { col: 'pos_name', meaning: 'Tên cửa hàng', example: 'CIRCA TAM VIET', optional: true },
     { col: 'note', meaning: 'Ghi chú', example: 'Demo', optional: true },
+    // Mig 112: thưởng thêm theo ngưỡng số đơn — chỉ liệt kê ở bảng hướng dẫn;
+    // sampleCsv GIỮ NGUYÊN (khoá byte-equal). Hai cột đi cùng nhau.
+    { col: 'minimum_order_target', meaning: 'Ngưỡng tổng số đơn tối thiểu của kỳ (Offline + Affiliate) để nhận thưởng thêm. Điền cho MỌI cửa hàng hoặc bỏ trống cả cột', example: '710', optional: true },
+    { col: 'order_bonus_per_staff', meaning: 'Thưởng thêm cho MỖI dược sĩ (số tiền, không dấu chấm) khi đạt CẢ KPI doanh số lẫn ngưỡng số đơn — tách riêng với Commission Store', example: '200000', optional: true },
   ],
   sampleCsv: [
     'pos_code,kpi_target,store_kpi_group,tier_1_threshold_pct,tier_1_commission_amount,tier_2_threshold_pct,tier_2_commission_amount,tier_3_threshold_pct,tier_3_commission_amount,pos_name,note',
