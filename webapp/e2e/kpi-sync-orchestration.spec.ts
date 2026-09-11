@@ -66,7 +66,7 @@ interface Behavior {
   targets?: () => Promise<{ data: TargetRow[] | null; error: { message: string } | null }>
   stores?: (ids: string[]) => Promise<{ data: StoreRow[] | null; error: { message: string } | null }>
   health?: (call: number) => Promise<AffiliateSyncHealth>   // call = lần gọi thứ mấy (1-based)
-  agg?: () => Promise<{ data: { store_id: string; vn_date: string; gmv: number }[] | null; error: { message: string } | null }>
+  agg?: () => Promise<{ data: { store_id: string; vn_date: string; gmv: number; order_count?: number | null }[] | null; error: { message: string } | null }>
   sa?: () => unknown | null
   bq?: () => Promise<Record<string, unknown>[]>
   replace?: SyncCampaignDeps['replaceActuals']
@@ -96,8 +96,10 @@ function mkDeps(cfg: CampaignConfig, behavior: Behavior = {}) {
     },
     aggregateAffiliate: async () => {
       calls.agg++; seq.push('agg')
+      // 112: RPC thật (092) LUÔN trả order_count — mock mặc định phải khớp
+      // contract, nếu không mọi test hybrid âm thầm đi nhánh "chưa biết số đơn".
       return behavior.agg ? behavior.agg()
-        : { data: [{ store_id: 'store-a', vn_date: '2026-07-05', gmv: 200 }], error: null }
+        : { data: [{ store_id: 'store-a', vn_date: '2026-07-05', gmv: 200, order_count: 1 }], error: null }
     },
     loadBqServiceAccount: () => { calls.sa++; seq.push('sa'); return behavior.sa ? behavior.sa() : { key: 'fake' } },
     runBqChunk: async () => {
@@ -1040,5 +1042,69 @@ test.describe('kpi sync — contract A+ NULL Offline (112.4) @desktop', () => {
     expect(r.status).toBe('snapshot_preserved')
     if (r.status === 'snapshot_preserved') expect(r.reason).toContain('THIẾU')
     expect(calls.replace).toBe(0)
+  })
+})
+
+// ── 112 — SỐ ĐƠN AFFILIATE cho thưởng thêm theo ngưỡng số đơn ─────────────
+// Nguồn = order_count của rpc_aggregate_affiliate_gmv (CÙNG sổ, CÙNG quy gán
+// partner_code với doanh thu Affiliate). KHÔNG dùng BigQuery affiliate_no_order.
+// Trạng thái thưởng do RPC 112 tự tính ⇒ payload KHÔNG BAO GIỜ mang 2 key đó.
+test.describe('kpi sync — số đơn Affiliate (112) @desktop', () => {
+  const HYBRID = () => CFG({ metric_offline: true, metric_affiliate: true })
+  const actualsOf = (p: { actuals?: unknown[] }) => (p.actuals ?? []) as Record<string, unknown>[]
+
+  test('hybrid: cộng order_count theo NGÀY → affiliate_order_count; store không có đơn = 0 (đã biết)', async () => {
+    const { deps, payloads } = mkDeps(HYBRID(), {
+      agg: async () => ({
+        data: [
+          { store_id: 'store-a', vn_date: '2026-07-05', gmv: 200, order_count: 2 },
+          { store_id: 'store-a', vn_date: '2026-07-09', gmv: 150, order_count: 3 },
+        ],
+        error: null,
+      }),
+    })
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('success')
+    const a = actualsOf(payloads)
+    expect(a.find((x) => x.store_id === 'store-a')?.affiliate_order_count).toBe(5)
+    expect(a.find((x) => x.store_id === 'store-b')?.affiliate_order_count, 'không có đơn = 0, KHÔNG phải vắng').toBe(0)
+    if (r.status === 'success') expect(r.warnings ?? []).toEqual([])
+  })
+
+  test('campaign CHỈ Offline: KHÔNG phát affiliate_order_count (RPC từ chối nếu có)', async () => {
+    const { deps, payloads, calls } = mkDeps(CFG({ metric_offline: true, metric_affiliate: false }))
+    const r = await syncCampaignWithDeps('camp-1', deps)
+    expect(r.status).toBe('success')
+    expect(calls.agg).toBe(0)
+    expect(actualsOf(payloads).every((x) => !('affiliate_order_count' in x))).toBe(true)
+  })
+
+  test('một dòng order_count hỏng → KHÔNG phát số đơn Affiliate cho store nào + cảnh báo; TIỀN vẫn ghi', async () => {
+    for (const bad of [undefined, null, -1, 1.5, 'x' as unknown as number]) {
+      const { deps, payloads } = mkDeps(HYBRID(), {
+        agg: async () => ({
+          data: [
+            { store_id: 'store-a', vn_date: '2026-07-05', gmv: 200, order_count: 2 },
+            { store_id: 'store-b', vn_date: '2026-07-06', gmv: 90, order_count: bad },
+          ],
+          error: null,
+        }),
+      })
+      const r = await syncCampaignWithDeps('camp-1', deps)
+      expect(r.status, `order_count=${String(bad)}`).toBe('success')
+      const a = actualsOf(payloads)
+      expect(a.every((x) => !('affiliate_order_count' in x)), `order_count=${String(bad)}: không được đoán 0`).toBe(true)
+      expect(a.find((x) => x.store_id === 'store-b')?.actual_affiliate, 'tiền Affiliate KHÔNG bị ảnh hưởng').toBe(90)
+      if (r.status === 'success') expect((r.warnings ?? []).join(' | ')).toContain('Số đơn Affiliate không đọc được')
+    }
+  })
+
+  test('payload KHÔNG BAO GIỜ mang bonus_order_count / order_bonus_achieved (RPC tự tính)', async () => {
+    const { deps, payloads } = mkDeps(HYBRID())
+    await syncCampaignWithDeps('camp-1', deps)
+    for (const x of actualsOf(payloads)) {
+      expect('bonus_order_count' in x).toBe(false)
+      expect('order_bonus_achieved' in x).toBe(false)
+    }
   })
 })

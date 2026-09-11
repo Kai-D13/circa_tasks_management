@@ -28,6 +28,10 @@ export interface SnapshotInput {
   // hiểu là "nguồn chưa có số đơn", giữ NULL — KHÁC 0).
   offlineOrdersByPos?: Map<string, Map<string, number>>
   affiliateByStore: Map<string, Map<string, number>> // store_id → date VN → gmv (rpc_aggregate)
+  // 112: store_id → date VN → SỐ ĐƠN Affiliate (order_count của cùng RPC —
+  // cùng sổ, cùng quy gán với doanh thu Affiliate). Thiếu map ⇒ payload KHÔNG
+  // mang affiliate_order_count (RPC giữ NULL = chưa biết, KHÁC 0).
+  affiliateOrdersByStore?: Map<string, Map<string, number>>
   snapshotTs: string                                  // thời điểm GHI snapshot
   offlineSyncedAt: string | null                      // thời điểm pull BQ (null nếu metric tắt)
   affiliateSyncedAt: string | null                    // health.lastSuccessAt (null nếu metric tắt)
@@ -53,6 +57,10 @@ export interface ActualRowPayload {
   raw_row_count: number
   // 105 — OPTIONAL: tổng số đơn Offline trong kỳ; KHÔNG set ⇒ RPC giữ NULL.
   offline_order_count?: number
+  // 112 — OPTIONAL: tổng số đơn Affiliate trong kỳ; CHỈ khi metric Affiliate
+  // bật VÀ số đơn đã biết. bonus_order_count / order_bonus_achieved KHÔNG có ở
+  // đây: RPC 112 tự tính và TỪ CHỐI nếu payload mang 2 key đó.
+  affiliate_order_count?: number
   offline_synced_at: string | null; affiliate_synced_at: string | null; synced_at: string
   // Mig 103 — OPTIONAL như trên: chỉ campaign customer set.
   actual_customer_count?: number
@@ -140,7 +148,8 @@ export function buildCampaignSnapshot(input: SnapshotInput): {
 } {
   const {
     campaignId, targets, metricOffline, metricAffiliate,
-    offlineByPos, offlineOrdersByPos, affiliateByStore, snapshotTs, offlineSyncedAt, affiliateSyncedAt,
+    offlineByPos, offlineOrdersByPos, affiliateByStore, affiliateOrdersByStore,
+    snapshotTs, offlineSyncedAt, affiliateSyncedAt,
   } = input
 
   const daily: DailyRowPayload[] = []
@@ -186,6 +195,11 @@ export function buildCampaignSnapshot(input: SnapshotInput): {
     const actualValue = actualOffline + actualAffiliate
     const target = Number(t.kpi_target) || 0
     const ach = computeTierAchievement(target, actualValue, t.tiers)
+    // 112: tổng số đơn Affiliate của store. Store không có dòng nào trong map
+    // = 0 đơn (đã biết); cả map vắng = chưa biết ⇒ không phát key.
+    const affOrderCount = metricAffiliate && affiliateOrdersByStore
+      ? [...(affiliateOrdersByStore.get(t.store_id)?.values() ?? [])].reduce((a, b) => a + b, 0)
+      : null
 
     actuals.push({
       campaign_id: campaignId,
@@ -199,6 +213,7 @@ export function buildCampaignSnapshot(input: SnapshotInput): {
       store_commission_pool: ach.commissionPool,
       raw_row_count: rowCount,
       ...(orderCount !== null ? { offline_order_count: orderCount } : {}),
+      ...(affOrderCount !== null ? { affiliate_order_count: affOrderCount } : {}),
       offline_synced_at: metricOffline ? offlineSyncedAt : null,
       affiliate_synced_at: metricAffiliate ? affiliateSyncedAt : null,
       synced_at: snapshotTs,
