@@ -229,6 +229,12 @@ test.describe('mig 112 source contract @desktop', () => {
     expect(exec112).toContain('CREATE OR REPLACE FUNCTION public.ensure_order_bonus_target_metrics()')
     expect(exec112).toContain('BEFORE INSERT OR UPDATE OF minimum_order_target, campaign_id ON public.kpi_campaign_store_targets')
     expect(exec112).toContain("IF v_type IS DISTINCT FROM 'gmv' OR NOT (coalesce(v_off, false) AND coalesce(v_aff, false)) THEN")
+    // 113.7 (audit P1): đọc cờ campaign PHẢI khoá dòng — không thì hai tx (ghi
+    // ngưỡng / tắt cờ) cùng commit và để lại trạng thái mâu thuẫn.
+    expect(exec112).toContain('FROM public.kpi_campaigns WHERE id = NEW.campaign_id FOR UPDATE;')
+    const fnStart = exec112.indexOf('CREATE OR REPLACE FUNCTION public.ensure_order_bonus_target_metrics()')
+    const fnEnd = exec112.indexOf('END $$;', fnStart)
+    expect(exec112.slice(fnStart, fnEnd)).toContain('FOR UPDATE')
     // Cả hai là SECURITY DEFINER (không phụ thuộc RLS người ghi) + DROP IF EXISTS trước CREATE (idempotent).
     for (const fn of ['ensure_campaign_metrics_for_order_bonus', 'ensure_order_bonus_target_metrics']) {
       const i = exec112.indexOf(`CREATE OR REPLACE FUNCTION public.${fn}()`)

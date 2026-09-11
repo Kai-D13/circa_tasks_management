@@ -121,6 +121,9 @@ COMMENT ON COLUMN public.kpi_campaign_store_actuals.order_bonus_achieved IS
 --     có 2 cột thưởng trước, rồi mới tắt metric);
 --   · ghi ngưỡng vào campaign không phải Doanh số / thiếu metric → RAISE
 --     (đóng luôn đường ghi thẳng của super admin, cùng lý do CHECK ở trên).
+-- Giao thức khoá (113.7): UPDATE cờ metric tự khoá dòng campaign; trigger
+-- targets khoá CÙNG dòng đó bằng FOR UPDATE trước khi đọc cờ ⇒ hai chiều
+-- serialize trên một khoá, bên sau luôn thấy commit của bên trước.
 -- SECURITY DEFINER như set_task_department (050): kiểm tra không được phụ
 -- thuộc RLS của người ghi. Hàm trigger không gọi trực tiếp được nhưng vẫn
 -- REVOKE đích danh cho đúng kỷ luật grants.
@@ -149,8 +152,14 @@ DECLARE
   v_aff  boolean;
 BEGIN
   IF NEW.minimum_order_target IS NULL THEN RETURN NEW; END IF;
+  -- 113.7 (audit P1): KHOÁ dòng campaign — serialize với UPDATE cờ metric.
+  -- Không khoá: tx A ghi ngưỡng sau khi đọc 2 cờ đang bật, tx B tắt một cờ khi
+  -- chưa thấy target chưa commit ⇒ cả hai commit, trạng thái mâu thuẫn lọt DB.
+  -- Có khoá: bên đến sau chờ bên trước commit rồi mới đọc ⇒ luôn thấy và RAISE.
+  -- rpc_replace_campaign_targets đã FOR UPDATE cùng dòng ở đầu ⇒ khoá lại
+  -- trong cùng tx là no-op, không deadlock.
   SELECT metric_type, metric_offline, metric_affiliate INTO v_type, v_off, v_aff
-  FROM public.kpi_campaigns WHERE id = NEW.campaign_id;
+  FROM public.kpi_campaigns WHERE id = NEW.campaign_id FOR UPDATE;
   IF v_type IS DISTINCT FROM 'gmv' OR NOT (coalesce(v_off, false) AND coalesce(v_aff, false)) THEN
     RAISE EXCEPTION 'Ngưỡng thưởng thêm theo số đơn chỉ hợp lệ với chiến dịch Doanh số bật CẢ Offline lẫn Affiliate (campaign %: type=%, offline=%, affiliate=%)', NEW.campaign_id, v_type, v_off, v_aff;
   END IF;
