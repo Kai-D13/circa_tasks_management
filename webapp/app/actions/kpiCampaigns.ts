@@ -258,7 +258,11 @@ export async function archiveCampaign(id: string) {
 // Parse a file's rows + resolve stores (no write). Reused by preview + commit.
 // Mig 103: metricType từ DB (KHÔNG tin client) — customer: kpi_target integer
 // + bỏ rule ranh giới tiền; gmv: hành vi cũ nguyên vẹn.
-async function parseFile(formData: FormData, metricType: string): Promise<CampaignImportResult | { error: string }> {
+// 113.5: + 2 cờ metric (cũng từ DB) — thưởng thêm theo số đơn đòi bật cả hai.
+async function parseFile(
+  formData: FormData,
+  campaign: { metricType: string; metricOffline: boolean; metricAffiliate: boolean },
+): Promise<CampaignImportResult | { error: string }> {
   const file = formData.get('file')
   if (!(file instanceof File)) return { error: 'Chưa chọn file' }
   if (file.size > MAX_FILE_BYTES) return { error: 'File quá lớn (tối đa 5MB)' }
@@ -276,7 +280,7 @@ async function parseFile(formData: FormData, metricType: string): Promise<Campai
   const { data: stores, error: storesErr } = await supabaseAdmin.from('stores').select('id, code').eq('store_type', 'os')
   if (storesErr) return { error: `Không đọc được danh sách cửa hàng: ${storesErr.message}` }
   const byCode = new Map((stores ?? []).filter((s) => s.code).map((s) => [String(s.code).trim().toUpperCase(), s.id]))
-  return parseCampaignRows(rawRows, byCode, { metricType })
+  return parseCampaignRows(rawRows, byCode, campaign)
 }
 
 // Preview only — no DB write. Mig 103: nhận campaignId để đọc metric_type từ
@@ -285,9 +289,11 @@ export async function previewCampaignImport(campaignId: string, formData: FormDa
   const auth = await requireSuper()
   if ('error' in auth) return { error: auth.error }
   const { data: c } = await auth.supabase
-    .from('kpi_campaigns').select('metric_type').eq('id', campaignId).single()
+    .from('kpi_campaigns').select('metric_type, metric_offline, metric_affiliate').eq('id', campaignId).single()
   if (!c) return { error: 'Không tìm thấy chiến dịch' }
-  const res = await parseFile(formData, c.metric_type as string)
+  const res = await parseFile(formData, {
+    metricType: c.metric_type as string, metricOffline: c.metric_offline === true, metricAffiliate: c.metric_affiliate === true,
+  })
   if ('error' in res) return { error: res.error }
   return {
     success: true,
@@ -303,13 +309,15 @@ export async function previewCampaignImport(campaignId: string, formData: FormDa
 export async function commitCampaignImport(campaignId: string, formData: FormData) {
   const auth = await requireSuper()
   if ('error' in auth) return { error: auth.error }
-  const { data: c } = await auth.supabase.from('kpi_campaigns').select('status, archived_at, metric_type').eq('id', campaignId).single()
+  const { data: c } = await auth.supabase.from('kpi_campaigns').select('status, archived_at, metric_type, metric_offline, metric_affiliate').eq('id', campaignId).single()
   if (!c) return { error: 'Không tìm thấy chiến dịch' }
   if (c.archived_at !== null) return { error: 'Chiến dịch đã lưu trữ — không nạp target' }
   if (c.status === 'active') return { error: 'Chiến dịch đang chạy — tạm dừng trước khi nạp lại file' }
   if (c.status === 'ended') return { error: 'Chiến dịch đã kết thúc' }
 
-  const res = await parseFile(formData, c.metric_type as string)
+  const res = await parseFile(formData, {
+    metricType: c.metric_type as string, metricOffline: c.metric_offline === true, metricAffiliate: c.metric_affiliate === true,
+  })
   if ('error' in res) return { error: res.error }
   if (res.invalid.length > 0) {
     return { error: `File còn ${res.invalid.length} dòng lỗi — sửa hết rồi nạp lại (không ghi từng phần)`, invalid: res.invalid }

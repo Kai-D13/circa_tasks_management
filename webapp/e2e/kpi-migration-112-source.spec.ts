@@ -73,8 +73,24 @@ test.describe('mig 112 source contract @desktop', () => {
       'thưởng thêm theo số đơn CHỈ dành cho campaign Doanh số',
       'phải có ĐỦ minimum_order_target và order_bonus_per_staff',
       'IF v_mot <= 0 OR v_mot <> floor(v_mot) THEN',
-      'IF v_bps <= 0 OR v_bps <> floor(v_bps) THEN',
     ]) expect(T112, `thiếu: ${s}`).toContain(s)
+  })
+
+  test('113.5 (P1#2): mức thưởng KHOÁ CỨNG 200000 — mọi giá trị khác bị RAISE', () => {
+    expect(T112).toContain('IF v_bps <> 200000 THEN')
+    expect(T112).toContain('cố định 200000')
+    // Không còn kiểm "nguyên > 0" lỏng lẻo cho tiền thưởng.
+    expect(T112).not.toContain('IF v_bps <= 0 OR v_bps <> floor(v_bps) THEN')
+  })
+
+  test('113.5 (P1#3): nạp ngưỡng đòi campaign bật CẢ Offline lẫn Affiliate; cờ đọc bằng SELECT riêng', () => {
+    expect(T112).toContain('SELECT metric_offline, metric_affiliate INTO v_m_offline, v_m_affiliate')
+    expect(T112).toContain('IF NOT (coalesce(v_m_offline, false) AND coalesce(v_m_affiliate, false)) THEN')
+    expect(T112).toContain('bật CẢ Doanh thu thuần tại cửa hàng lẫn Doanh thu Affiliate')
+    // Guard đứng TRONG khối "có ô thưởng" (sau check đủ cặp), TRƯỚC INSERT.
+    const g = T112.indexOf('IF NOT (coalesce(v_m_offline, false)')
+    expect(g).toBeGreaterThan(T112.indexOf('phải có ĐỦ minimum_order_target'))
+    expect(g).toBeLessThan(T112.indexOf('INSERT INTO public.kpi_campaign_store_targets'))
   })
 
   test('targets: file lẫn lộn (có dòng có, có dòng trống) → RAISE cả file', () => {
@@ -133,14 +149,17 @@ test.describe('mig 112 source contract @desktop', () => {
   })
 
   test('actuals: công thức thưởng = doanh thu >= target VÀ tổng đơn >= ngưỡng; thiếu dữ liệu → NULL', () => {
-    // Tổng đơn = phần của metric ĐANG BẬT (NULL lan truyền qua phép cộng).
-    expect(A112).toContain('v_bonus_cnt := CASE WHEN v_m_offline   THEN v_ord     ELSE 0 END')
-    expect(A112).toContain('+ CASE WHEN v_m_affiliate THEN v_aff_ord ELSE 0 END;')
+    // 113.5: cả hai metric BẮT BUỘC bật ⇒ tổng = Offline + Affiliate thẳng
+    // (NULL lan truyền qua phép cộng); thiếu metric → RAISE, không tính nửa số.
+    expect(A112).toContain('IF NOT (v_m_offline AND v_m_affiliate) THEN')
+    expect(A112).toContain('tổng đơn phải gồm CẢ Offline + Affiliate')
+    expect(A112).toContain('v_bonus_cnt := v_ord + v_aff_ord;')
+    expect(A112).not.toContain('CASE WHEN v_m_offline   THEN v_ord     ELSE 0 END')
     expect(A112).toContain("'order_bonus_achieved', CASE WHEN v_bonus_cnt IS NULL THEN NULL")
     expect(A112).toContain('ELSE (v_value >= v_bonus_t.kpi_target')
     expect(A112).toContain('AND v_bonus_cnt >= v_bonus_t.minimum_order_target) END')
     // Tính TRONG nhánh gmv — sau check tổng tiền của nhánh đó, trước nhánh fail-closed.
-    const calc = A112.indexOf('v_bonus_cnt := CASE')
+    const calc = A112.indexOf('v_bonus_cnt := v_ord + v_aff_ord;')
     expect(calc).toBeGreaterThan(A112.indexOf("ELSIF v_metric_type = 'gmv' THEN"))
     expect(calc).toBeLessThan(A112.indexOf('-- 106: FAIL-CLOSED'))
   })

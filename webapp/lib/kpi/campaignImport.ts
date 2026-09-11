@@ -100,15 +100,18 @@ const BONUS_COLUMNS: [key: string, label: string][] = [
   ['minimumordertarget', 'minimum_order_target'],
   ['orderbonusperstaff', 'order_bonus_per_staff'],
 ]
-// Sàn tiền thưởng: `num()` chỉ bỏ dấu phẩy/khoảng trắng, nên ô "200.000" (dấu
-// chấm phân cách nghìn kiểu VN) bị đọc thành 200. Không ai thưởng 200đ ⇒ dưới
-// sàn này gần như chắc chắn là lỗi định dạng số, chặn thay vì ghi sai tiền.
-export const MIN_ORDER_BONUS_PER_STAFF = 1000
+// 113.5 (audit P1#2): mức thưởng CỐ ĐỊNH theo contract W2 — mirror RPC 112.
+// Đổi mức = đổi hằng này + migration (có audit), không phải một ô trong file.
+// Cũng chặn luôn bẫy định dạng: `num()` chỉ bỏ dấu phẩy/khoảng trắng nên ô
+// "200.000" (dấu chấm nghìn kiểu VN) bị đọc thành 200 ⇒ khác 200000 ⇒ lỗi.
+export const ORDER_BONUS_PER_STAFF = 200_000
 
 export function parseCampaignRows(
   rawRows: Record<string, unknown>[],
   byCode: Map<string, string>,
-  opts: { metricType?: string } = {},
+  // 113.5: 2 cờ metric (đọc từ DB như metricType) — thưởng thêm theo số đơn đòi
+  // campaign bật CẢ Offline lẫn Affiliate; thiếu cờ = chưa chứng minh = từ chối.
+  opts: { metricType?: string; metricOffline?: boolean; metricAffiliate?: boolean } = {},
 ): CampaignImportResult | { error: string } {
   const isCustomer = opts.metricType === 'affiliate_customer_count'
   const isAov = opts.metricType === 'offline_order_aov'
@@ -256,14 +259,17 @@ export function parseCampaignRows(
         invalid.push({ row: rowNo, pos_code: posCode, error: `minimum_order_target phải là số nguyên > 0 (số đơn) — nhận ${minOrders}` })
         return
       }
-      if (!Number.isInteger(bonusPerStaff) || bonusPerStaff <= 0) {
-        invalid.push({ row: rowNo, pos_code: posCode, error: `order_bonus_per_staff phải là số nguyên VNĐ > 0 — nhận ${bonusPerStaff}` })
-        return
-      }
-      if (bonusPerStaff < MIN_ORDER_BONUS_PER_STAFF) {
+      if (opts.metricOffline !== true || opts.metricAffiliate !== true) {
         invalid.push({
           row: rowNo, pos_code: posCode,
-          error: `order_bonus_per_staff = ${bonusPerStaff}đ quá nhỏ — kiểm tra định dạng số: ô "200.000" (dấu chấm) bị đọc thành 200. Nhập 200000.`,
+          error: 'Thưởng thêm theo số đơn cần campaign bật CẢ Doanh thu thuần tại cửa hàng lẫn Doanh thu Affiliate (tổng đơn = Offline + Affiliate) — bật đủ ở cấu hình chiến dịch rồi nạp lại',
+        })
+        return
+      }
+      if (bonusPerStaff !== ORDER_BONUS_PER_STAFF) {
+        invalid.push({
+          row: rowNo, pos_code: posCode,
+          error: `order_bonus_per_staff = ${bonusPerStaff} — contract hiện tại cố định ${ORDER_BONUS_PER_STAFF} (200.000đ/dược sĩ). Lưu ý ô "200.000" (dấu chấm) bị đọc thành 200; nhập 200000.`,
         })
         return
       }

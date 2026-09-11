@@ -384,8 +384,9 @@ test.describe('kpi result model — showGroup (107) @desktop', () => {
 
 // ── Mig 112: thưởng thêm theo ngưỡng số đơn trong model Kết quả ─────────────
 test.describe('kpi result model — thưởng thêm theo số đơn (112) @desktop', () => {
-  const TB = (store: string, target: number, bonus = 200_000): ResultTargetRow => ({
-    ...T(store, target), minimum_order_target: 710, order_bonus_per_staff: bonus,
+  // 113.5: RPC khoá một mức 200000 cho mọi store — fixture không tham số mức.
+  const TB = (store: string, target: number): ResultTargetRow => ({
+    ...T(store, target), minimum_order_target: 710, order_bonus_per_staff: 200_000,
   })
 
   test('campaign KHÔNG áp dụng → showOrderBonus=false, mọi dòng orderBonus=null (UI không đổi 1 bit)', () => {
@@ -406,11 +407,6 @@ test.describe('kpi result model — thưởng thêm theo số đơn (112) @deskt
     expect(m.bonusAchievedCount).toBe(1)
     expect(m.bonusPerStaffLabel).toBe('200.000₫/dược sĩ')
     expect(m.rows.map((r) => r.orderBonus?.status)).toEqual(['achieved', 'not_achieved', 'unknown'])
-  })
-
-  test('mức thưởng khác nhau giữa cửa hàng → nhãn "Theo từng cửa hàng"', () => {
-    const m = buildCampaignResultModel(CAMP(), [TB('a', 1000, 200_000), TB('b', 1000, 300_000)], [], TODAY)
-    expect(m.bonusPerStaffLabel).toBe('Theo từng cửa hàng')
   })
 
   test('store chưa có snapshot → "Chưa đồng bộ", không phải "chưa đạt"', () => {

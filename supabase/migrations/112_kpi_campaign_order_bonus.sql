@@ -15,6 +15,11 @@
 --              KHÔNG dùng BigQuery affiliate_no_order vì quy gán cửa hàng khác)
 --   Đạt ⇔ actual_value >= kpi_target VÀ tổng đơn >= minimum_order_target
 --   Khoản thưởng thêm TÁCH HẲN khỏi store_commission_pool (không cộng vào).
+--   Mức thưởng CỐ ĐỊNH 200000 (200.000đ/dược sĩ) — RPC targets từ chối mọi giá
+--   trị khác (113.5, audit P1#2). Đổi mức = migration mới, không phải ô import.
+--   Campaign PHẢI bật CẢ metric Offline lẫn Affiliate mới được nạp ngưỡng
+--   (targets) và mới được ghi trạng thái thưởng (actuals) — bật một nguồn thì
+--   "tổng đơn" chỉ là nửa số (113.5, audit P1#3).
 --
 -- VÌ SAO LƯU SNAPSHOT (không tính ở UI): bộ lọc khoảng ngày ghi đè
 -- actual_value/offline_order_count bằng số của khoảng lọc. Tính "đạt" ở UI thì
@@ -132,6 +137,8 @@ DECLARE
   v_mot         numeric;   -- minimum_order_target
   v_bps         numeric;   -- order_bonus_per_staff
   v_bonus_rows  integer := 0;
+  v_m_offline   boolean;
+  v_m_affiliate boolean;
 BEGIN
   SELECT status, archived_at, metric_type INTO v_status, v_archived, v_metric_type
   FROM public.kpi_campaigns WHERE id = p_campaign_id FOR UPDATE;
@@ -147,6 +154,9 @@ BEGIN
     RAISE EXCEPTION 'rpc_replace_campaign_targets: metric_type % không được hỗ trợ', v_metric_type;
   END IF;
   v_is_aov := (v_metric_type = 'offline_order_aov');
+  -- 112: cờ metric cho guard thưởng thêm (đọc riêng, dòng đã khoá ở trên).
+  SELECT metric_offline, metric_affiliate INTO v_m_offline, v_m_affiliate
+  FROM public.kpi_campaigns WHERE id = p_campaign_id;
 
   DELETE FROM public.kpi_campaign_store_targets WHERE campaign_id = p_campaign_id;
 
@@ -201,11 +211,18 @@ BEGIN
       IF v_mot IS NULL OR v_bps IS NULL THEN
         RAISE EXCEPTION 'store % phải có ĐỦ minimum_order_target và order_bonus_per_staff (hoặc để trống cả hai)', v_row->>'pos_code';
       END IF;
+      -- 113.5 (audit P1#3): tổng đơn xét thưởng = Offline + Affiliate, nên
+      -- campaign PHẢI bật cả hai; bật một thì "tổng đơn" là nửa số — từ chối.
+      IF NOT (coalesce(v_m_offline, false) AND coalesce(v_m_affiliate, false)) THEN
+        RAISE EXCEPTION 'thưởng thêm theo số đơn cần campaign bật CẢ Doanh thu thuần tại cửa hàng lẫn Doanh thu Affiliate (hiện offline=%, affiliate=%) — bật đủ rồi nạp lại', v_m_offline, v_m_affiliate;
+      END IF;
       IF v_mot <= 0 OR v_mot <> floor(v_mot) THEN
         RAISE EXCEPTION 'store % có minimum_order_target không hợp lệ (%) — phải là số nguyên > 0', v_row->>'pos_code', v_mot;
       END IF;
-      IF v_bps <= 0 OR v_bps <> floor(v_bps) THEN
-        RAISE EXCEPTION 'store % có order_bonus_per_staff không hợp lệ (%) — phải là VNĐ nguyên > 0', v_row->>'pos_code', v_bps;
+      -- 113.5 (audit P1#2): mức thưởng CỐ ĐỊNH theo contract W2. Đổi mức = đổi
+      -- hằng này bằng migration có audit, không phải một ô trong file import.
+      IF v_bps <> 200000 THEN
+        RAISE EXCEPTION 'store % có order_bonus_per_staff = % — contract hiện tại cố định 200000 (200.000đ/dược sĩ); ô "200.000" (dấu chấm) bị đọc thành 200', v_row->>'pos_code', v_bps;
       END IF;
       v_bonus_rows := v_bonus_rows + 1;
     END IF;
@@ -597,8 +614,15 @@ BEGIN
       FROM public.kpi_campaign_store_targets t
       WHERE t.campaign_id = p_campaign_id AND t.store_id = v_store;
       IF v_bonus_t.minimum_order_target IS NOT NULL THEN
-        v_bonus_cnt := CASE WHEN v_m_offline   THEN v_ord     ELSE 0 END
-                     + CASE WHEN v_m_affiliate THEN v_aff_ord ELSE 0 END;
+        -- 113.5 (audit P1#3): rpc_replace_campaign_targets đã từ chối nạp ngưỡng
+        -- khi thiếu metric, nhưng cờ metric có thể bị sửa lúc paused SAU khi
+        -- nạp ⇒ kiểm lại ở đây; thiếu một nguồn thì tổng đơn là nửa số —
+        -- KHÔNG ghi (preserve), không lặng lẽ tính bằng một nửa.
+        IF NOT (v_m_offline AND v_m_affiliate) THEN
+          RAISE EXCEPTION 'rpc_replace_campaign_actuals: campaign có ngưỡng thưởng thêm nhưng tắt một trong hai metric (offline=%, affiliate=%) — tổng đơn phải gồm CẢ Offline + Affiliate; bật đủ metric hoặc nạp lại target không có ngưỡng', v_m_offline, v_m_affiliate;
+        END IF;
+        -- NULL lan truyền qua phép cộng: một nguồn chưa biết ⇒ tổng chưa biết.
+        v_bonus_cnt := v_ord + v_aff_ord;
         v_calc := jsonb_build_object(
           'bonus_order_count',    v_bonus_cnt,
           'order_bonus_achieved', CASE WHEN v_bonus_cnt IS NULL THEN NULL
@@ -700,6 +724,7 @@ VALUES ('112', 'kpi_campaign_order_bonus',
         || ' affiliate_orders, partner_code), bonus_order_count, order_bonus_achieved — 2 cột sau'
         || ' do RPC tự tính lúc ghi snapshot toàn kỳ, payload app không được mang. Đạt ⇔'
         || ' actual_value >= kpi_target VÀ tổng đơn >= ngưỡng. Tách hẳn khỏi store_commission_pool.'
+        || ' Mức thưởng cố định 200000; campaign phải bật cả Offline lẫn Affiliate (113.5).'
         || ' Thân 2 RPC trích nguyên văn 107/106 + chỉ chèn thêm. Backward-compatible.')
 ON CONFLICT (version) DO NOTHING;
 
@@ -740,12 +765,16 @@ COMMIT;
 --           prosrc LIKE '%minimum_order_target%'            AS co_nguong,
 --           prosrc LIKE '%MỌI cửa hàng trong file%'          AS co_all_or_none,
 --           prosrc LIKE '%RPC tự tính từ target%'            AS co_chan_key_dan_xuat,
+--           prosrc LIKE '%200000%'                           AS co_khoa_muc_thuong,
+--           prosrc LIKE '%CẢ Offline + Affiliate%' OR prosrc LIKE '%bật CẢ Doanh thu%' AS co_guard_2_metric,
 --           prosrc LIKE '%FOR UPDATE%'                       AS con_row_lock,
 --           prosrc LIKE '%Chiến dịch đã lưu trữ%' OR prosrc LIKE '%đã lưu trữ%' AS con_archive_guard
 --    FROM pg_proc
 --    WHERE proname IN ('rpc_replace_campaign_targets', 'rpc_replace_campaign_actuals');
---    Kỳ vọng: targets → co_nguong + co_all_or_none + con_row_lock + con_archive_guard = true;
---             actuals → co_nguong + co_chan_key_dan_xuat + con_row_lock + con_archive_guard = true.
+--    Kỳ vọng: targets → co_nguong + co_all_or_none + co_khoa_muc_thuong + co_guard_2_metric
+--                       + con_row_lock + con_archive_guard = true;
+--             actuals → co_nguong + co_chan_key_dan_xuat + co_guard_2_metric
+--                       + con_row_lock + con_archive_guard = true.
 --
 -- 6) Campaign hiện có KHÔNG bị ảnh hưởng (mọi cột mới NULL cho tới lần import/sync kế):
 --    SELECT count(*) FILTER (WHERE minimum_order_target IS NOT NULL) AS targets_co_nguong

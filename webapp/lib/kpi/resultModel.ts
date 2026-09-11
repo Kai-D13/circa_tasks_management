@@ -210,7 +210,7 @@ export interface CampaignResultModel {
   // Mig 112: 1 nguồn quyết định cho header + body (bài học cột lệch commit 5).
   showOrderBonus: boolean
   bonusAchievedCount: number      // "X/Y cửa hàng đạt thưởng thêm", Y = storeCount
-  // '200.000₫/dược sĩ' khi mọi store cùng mức; 'Theo từng cửa hàng' khi khác.
+  // '200.000₫/dược sĩ' — RPC 112 khoá MỘT mức cố định cho mọi store (113.5).
   bonusPerStaffLabel: string | null
 }
 
@@ -323,11 +323,12 @@ export function buildCampaignResultModel(
 function bonusSummary(rows: StoreResultRow[]): Pick<CampaignResultModel, 'showOrderBonus' | 'bonusAchievedCount' | 'bonusPerStaffLabel'> {
   const withBonus = rows.map((r) => r.orderBonus).filter((b): b is OrderBonusView => b !== null)
   if (withBonus.length === 0) return { showOrderBonus: false, bonusAchievedCount: 0, bonusPerStaffLabel: null }
-  const amounts = new Set(withBonus.map((b) => b.perStaff))
+  // 113.5: rpc_replace_campaign_targets từ chối mọi mức khác 200000 nên mọi
+  // store trong campaign cùng một mức — lấy từ dòng đầu là đủ, không cần gộp.
   return {
     showOrderBonus: true,
     bonusAchievedCount: withBonus.filter((b) => b.status === 'achieved').length,
-    bonusPerStaffLabel: amounts.size === 1 ? withBonus[0].perStaffLabel : 'Theo từng cửa hàng',
+    bonusPerStaffLabel: withBonus[0].perStaffLabel,
   }
 }
 
