@@ -15,6 +15,8 @@ import { buildCampaignExportRows, buildCustomerCampaignExportRows, buildOrderAov
 interface TargetRow {
   store_id: string; pos_code: string | null; kpi_target: number; store_kpi_group: string | null
   stores: { name: string } | null
+  // 112: thưởng thêm theo ngưỡng số đơn (NULL = không áp dụng).
+  minimum_order_target: number | null; order_bonus_per_staff: number | null
 }
 interface ActualRow {
   store_id: string; actual_value: number; run_rate: number | null; remaining_target: number | null
@@ -22,6 +24,9 @@ interface ActualRow {
   actual_offline: number | null; actual_affiliate: number | null
   offline_synced_at: string | null; affiliate_synced_at: string | null
   actual_customer_count: number | null
+  // 112: snapshot toàn kỳ do RPC tự tính (export không bao giờ áp bộ lọc khoảng).
+  affiliate_order_count: number | null; bonus_order_count: number | null
+  order_bonus_achieved: boolean | null
 }
 
 export async function GET(request: NextRequest) {
@@ -47,10 +52,10 @@ export async function GET(request: NextRequest) {
 
   const [{ data: targetsRaw, error: tErr }, { data: actualsRaw, error: aErr }] = await Promise.all([
     supabase.from('kpi_campaign_store_targets')
-      .select('store_id, pos_code, kpi_target, store_kpi_group, order_target, aov_target, stores(name)')
+      .select('store_id, pos_code, kpi_target, store_kpi_group, order_target, aov_target, minimum_order_target, order_bonus_per_staff, stores(name)')
       .eq('campaign_id', campaignId).order('pos_code'),
     supabase.from('kpi_campaign_store_actuals')
-      .select('store_id, actual_value, actual_offline, actual_affiliate, offline_order_count, actual_customer_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
+      .select('store_id, actual_value, actual_offline, actual_affiliate, offline_order_count, actual_customer_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at, affiliate_order_count, bonus_order_count, order_bonus_achieved')
       .eq('campaign_id', campaignId),
   ])
   if (tErr || aErr) return NextResponse.json({ error: (tErr ?? aErr)!.message }, { status: 500 })

@@ -264,3 +264,43 @@ test.describe('kpi snapshot offline order count (105) @desktop', () => {
     expect('offline_order_count' in out.actuals[0]).toBe(false)
   })
 })
+
+// ── 112: payload số đơn Affiliate ───────────────────────────────────────────
+test.describe('kpi snapshot affiliate order count (112) @desktop', () => {
+  const T112 = [
+    { id: 't1', store_id: 's1', pos_code: 'POS1', kpi_target: 1000, tiers: [] },
+    { id: 't2', store_id: 's2', pos_code: 'POS2', kpi_target: 1000, tiers: [] },
+  ]
+  const base = {
+    campaignId: 'c1', targets: T112, metricOffline: false, metricAffiliate: true,
+    offlineByPos: new Map<string, Map<string, number>>(),
+    affiliateByStore: new Map([['s1', new Map([['2026-09-10', 300], ['2026-09-11', 200]])]]),
+    snapshotTs: '2026-09-11T03:00:00Z', offlineSyncedAt: null,
+    affiliateSyncedAt: '2026-09-11T02:00:00Z',
+  }
+  const orders = new Map([['s1', new Map([['2026-09-10', 2], ['2026-09-11', 1]])]])
+
+  test('cộng số đơn các ngày; store không có dòng = 0 (đã biết)', () => {
+    const out = buildCampaignSnapshot({ ...base, affiliateOrdersByStore: orders })
+    expect(out.actuals.find((a) => a.store_id === 's1')?.affiliate_order_count).toBe(3)
+    expect(out.actuals.find((a) => a.store_id === 's2')?.affiliate_order_count).toBe(0)
+  })
+
+  test('KHÔNG có map số đơn → key vắng mặt (RPC giữ NULL = chưa biết, không thành 0)', () => {
+    const out = buildCampaignSnapshot(base)
+    expect(out.actuals.every((a) => !('affiliate_order_count' in a))).toBe(true)
+  })
+
+  test('có map nhưng campaign TẮT Affiliate → vẫn không phát (RPC 112 sẽ từ chối nếu có)', () => {
+    const out = buildCampaignSnapshot({ ...base, metricAffiliate: false, affiliateOrdersByStore: orders })
+    expect(out.actuals.every((a) => !('affiliate_order_count' in a))).toBe(true)
+  })
+
+  test('không bao giờ phát 2 số thưởng thêm — RPC tự tính', () => {
+    const out = buildCampaignSnapshot({ ...base, affiliateOrdersByStore: orders })
+    for (const a of out.actuals) {
+      expect('bonus_order_count' in a).toBe(false)
+      expect('order_bonus_achieved' in a).toBe(false)
+    }
+  })
+})

@@ -12,6 +12,7 @@ import {
   ORDER_AOV_STATUS_LABEL, aovFromSnapshot, orderAovDualView, orderAovStatus,
   qualityKpiPass as isQualityKpiPass, type OrderAovDualView, type OrderAovStatus,
 } from '@/lib/kpi/orderAov'
+import { orderBonusView, type OrderBonusView } from '@/lib/kpi/orderBonus'
 
 // Mig 106: gom phần Chất lượng bán hàng của 1 dòng store. Campaign loại khác →
 // mọi field null/false (UI không đổi 1 bit).
@@ -64,6 +65,9 @@ export interface ResultTargetRow {
   // Mig 106 — chỉ campaign Chất lượng bán hàng (NULL với 2 loại cũ).
   order_target?: number | null
   aov_target?: number | null
+  // Mig 112 — thưởng thêm theo ngưỡng số đơn (NULL = campaign không áp dụng).
+  minimum_order_target?: number | null
+  order_bonus_per_staff?: number | null
 }
 
 export interface ResultActualRow {
@@ -81,6 +85,11 @@ export interface ResultActualRow {
   offline_order_count: number | null
   offline_synced_at: string | null
   affiliate_synced_at: string | null
+  // Mig 112 — snapshot TOÀN KỲ do RPC tự tính. Code lọc khoảng ngày KHÔNG được
+  // ghi đè 3 field này (nhánh Super dựng object mới phải COPY từ snapshot).
+  affiliate_order_count?: number | null
+  bonus_order_count?: number | null
+  order_bonus_achieved?: boolean | null
 }
 
 export interface ResultCampaign {
@@ -164,6 +173,8 @@ export interface StoreResultRow {
   // Tier progress (28/07): tiers ĐÃ SORT theo tier_order kèm target/remaining/
   // reached — nguồn duy nhất cho cột động desktop (Super ↔ SM cùng công thức).
   tierProgress: TierProgress[]
+  // Mig 112: thưởng thêm theo số đơn — null khi campaign không áp dụng.
+  orderBonus: OrderBonusView | null
 }
 
 export interface CampaignResultModel {
@@ -196,6 +207,11 @@ export interface CampaignResultModel {
   deadlineLabel: string           // Tạm dừng / Đã kết thúc / Còn N ngày
   rows: StoreResultRow[]
   maxTierCount: number            // số cột Bậc động trên desktop (max theo store)
+  // Mig 112: 1 nguồn quyết định cho header + body (bài học cột lệch commit 5).
+  showOrderBonus: boolean
+  bonusAchievedCount: number      // "X/Y cửa hàng đạt thưởng thêm", Y = storeCount
+  // '200.000₫/dược sĩ' — RPC 112 khoá MỘT mức cố định cho mọi store (113.5).
+  bonusPerStaffLabel: string | null
 }
 
 export function buildCampaignResultModel(
@@ -276,6 +292,14 @@ export function buildCampaignResultModel(
         a ? { actual_value: Number(a.actual_value) || 0, achieved_tier_order: a.achieved_tier_order } : null,
         t.kpi_campaign_store_tiers ?? [],
       ),
+      // Mig 112: CHỈ field snapshot — không truyền actual_value (bị lọc khoảng ghi đè).
+      orderBonus: orderBonusView({
+        minimum_order_target: t.minimum_order_target,
+        order_bonus_per_staff: t.order_bonus_per_staff,
+        bonus_order_count: a?.bonus_order_count ?? null,
+        order_bonus_achieved: a?.order_bonus_achieved ?? null,
+        synced: a != null,
+      }),
     }
   })
 
@@ -291,6 +315,20 @@ export function buildCampaignResultModel(
     completionPct, totalCommission, reachedStoreCount, performance, deadlineLabel,
     rows,
     maxTierCount: rows.reduce((max, r) => Math.max(max, r.tierProgress.length), 0),
+    ...bonusSummary(rows),
+  }
+}
+
+// Mig 112: tổng hợp thưởng thêm cho card + quyết định có render 2 cột không.
+function bonusSummary(rows: StoreResultRow[]): Pick<CampaignResultModel, 'showOrderBonus' | 'bonusAchievedCount' | 'bonusPerStaffLabel'> {
+  const withBonus = rows.map((r) => r.orderBonus).filter((b): b is OrderBonusView => b !== null)
+  if (withBonus.length === 0) return { showOrderBonus: false, bonusAchievedCount: 0, bonusPerStaffLabel: null }
+  // 113.5: rpc_replace_campaign_targets từ chối mọi mức khác 200000 nên mọi
+  // store trong campaign cùng một mức — lấy từ dòng đầu là đủ, không cần gộp.
+  return {
+    showOrderBonus: true,
+    bonusAchievedCount: withBonus.filter((b) => b.status === 'achieved').length,
+    bonusPerStaffLabel: withBonus[0].perStaffLabel,
   }
 }
 

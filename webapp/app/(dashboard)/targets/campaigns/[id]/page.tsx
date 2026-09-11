@@ -37,6 +37,8 @@ interface TargetRow {
   kpi_campaign_store_tiers: TierRow[]
   // Mig 106 — chỉ campaign Chất lượng bán hàng (NULL với 2 loại cũ).
   order_target: number | null; aov_target: number | null
+  // Mig 112 — thưởng thêm theo ngưỡng số đơn (NULL = campaign không áp dụng).
+  minimum_order_target: number | null; order_bonus_per_staff: number | null
 }
 interface ActualRow {
   store_id: string; actual_value: number; run_rate: number | null
@@ -45,6 +47,10 @@ interface ActualRow {
   actual_offline: number | null; actual_affiliate: number | null
   offline_order_count: number | null
   offline_synced_at: string | null; affiliate_synced_at: string | null
+  // Mig 112 — snapshot toàn kỳ do RPC tự tính (bộ lọc khoảng KHÔNG ghi đè).
+  affiliate_order_count: number | null
+  bonus_order_count: number | null
+  order_bonus_achieved: boolean | null
 }
 
 function TierChips({ tiers }: { tiers: TierRow[] }) {
@@ -97,7 +103,7 @@ export default async function CampaignDetailPage({
   ] = await Promise.all([
     supabase
       .from('kpi_campaign_store_targets')
-      .select('id, store_id, pos_code, kpi_target, store_kpi_group, order_target, aov_target, stores(name), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
+      .select('id, store_id, pos_code, kpi_target, store_kpi_group, order_target, aov_target, minimum_order_target, order_bonus_per_staff, stores(name), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
       .eq('campaign_id', id)
       .order('pos_code'),
     // kpi_campaign_import_runs là bảng super-only: với SM nó luôn trả rỗng kèm
@@ -111,7 +117,7 @@ export default async function CampaignDetailPage({
       : Promise.resolve({ data: [], error: null }),
     supabase
       .from('kpi_campaign_store_actuals')
-      .select('store_id, actual_value, actual_offline, actual_affiliate, offline_order_count, actual_customer_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
+      .select('store_id, actual_value, actual_offline, actual_affiliate, offline_order_count, actual_customer_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at, affiliate_order_count, bonus_order_count, order_bonus_achieved')
       .eq('campaign_id', id),
   ])
   const queryError = targetsErr?.message ?? runsErr?.message ?? actualsErr?.message ?? null
@@ -121,6 +127,8 @@ export default async function CampaignDetailPage({
   // 107: 'Phân loại' là TÙY CHỌN. Mọi store đều trống ⇒ bỏ hẳn cột; dữ liệu
   // hỗn hợp thì giữ cột và hiện '—' cho store chưa phân loại.
   const showGroupCol = targets.some((t) => (t.store_kpi_group ?? '').trim().length > 0)
+  // 112: campaign không áp dụng thưởng thêm ⇒ 2 cột cấu hình không xuất hiện.
+  const showBonusCols = targets.some((t) => t.minimum_order_target != null)
   const actuals = (actualsRaw ?? []) as ActualRow[]
   const actualByStore = new Map(actuals.map((a) => [a.store_id, a]))
   const lastSynced = actuals.reduce<string | null>((max, a) => (!max || a.synced_at > max ? a.synced_at : max), null)
@@ -187,6 +195,11 @@ export default async function CampaignDetailPage({
           offline_order_count: isDaily ? (st as { orders: number | null }).orders : null,
           offline_synced_at: snap?.offline_synced_at ?? null,
           affiliate_synced_at: snap?.affiliate_synced_at ?? null,
+          // 112: object này dựng MỚI (không spread) — quên copy là khối thưởng
+          // thêm biến mất khi bật bộ lọc. Luôn toàn kỳ, nguyên từ snapshot.
+          affiliate_order_count: snap?.affiliate_order_count ?? null,
+          bonus_order_count: snap?.bonus_order_count ?? null,
+          order_bonus_achieved: snap?.order_bonus_achieved ?? null,
         } satisfies ActualRow
       })
     }
@@ -293,6 +306,9 @@ export default async function CampaignDetailPage({
                       {showGroupCol && <th className="text-left px-4 py-2.5">Phân loại</th>}
                       <th className="text-right px-4 py-2.5">KPI target</th>
                       <th className="text-left px-4 py-2.5">Bậc (mốc % → Commission)</th>
+                      {/* 112: cùng cờ với body — hai cột đi cùng nhau, riêng với Commission. */}
+                      {showBonusCols && <th className="text-right px-4 py-2.5 whitespace-nowrap">Ngưỡng đơn</th>}
+                      {showBonusCols && <th className="text-right px-4 py-2.5 whitespace-nowrap">Thưởng thêm/dược sĩ</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y">
@@ -302,6 +318,16 @@ export default async function CampaignDetailPage({
                         {showGroupCol && <td className="px-4 py-2.5 text-xs">{t.store_kpi_group ?? '—'}</td>}
                         <td className="px-4 py-2.5 text-right">{targetFmt(t.kpi_target)}</td>
                         <td className="px-4 py-2.5"><TierChips tiers={t.kpi_campaign_store_tiers} /></td>
+                        {showBonusCols && (
+                          <td className="px-4 py-2.5 text-right tabular-nums">
+                            {t.minimum_order_target != null ? `${new Intl.NumberFormat('vi-VN').format(t.minimum_order_target)} đơn` : '—'}
+                          </td>
+                        )}
+                        {showBonusCols && (
+                          <td className="px-4 py-2.5 text-right tabular-nums">
+                            {t.order_bonus_per_staff != null ? vnd(t.order_bonus_per_staff) : '—'}
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>

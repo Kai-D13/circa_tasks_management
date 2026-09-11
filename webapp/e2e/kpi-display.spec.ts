@@ -176,7 +176,50 @@ test.describe('kpi display customer metric (mig 103) @desktop', () => {
       'GMV Affiliate', 'Run rate %', 'Performance %',
       'Còn thiếu', 'Bậc đạt', 'Commission pool', 'Offline Synced At', 'Affiliate Synced At',
       'Affiliate Data Status', 'Đồng bộ lúc',
+      // 112 (11/09): 5 cột thưởng thêm theo số đơn — contract đổi CÓ CHỦ Ý và
+      // CHỈ NỐI VÀO CUỐI (21 cột trên giữ nguyên tên + vị trí tuyệt đối để
+      // Power Query của Finance không phải sửa). Luôn có mặt, trống khi không áp dụng.
+      'Ngưỡng đơn tối thiểu', 'Số đơn Affiliate', 'Tổng số đơn', 'Đạt thưởng thêm', 'Thưởng thêm/dược sĩ',
     ])
+  })
+
+  test('EXPORT 112: campaign KHÔNG áp dụng thưởng thêm → 5 cột mới TRỐNG (không 0, không "Chưa đạt")', () => {
+    const rows = buildCampaignExportRows(
+      { name: 'C', start_date: '2026-08-01', end_date: '2026-08-31', metric_offline: true, metric_affiliate: false },
+      [{ store_id: 's-1', pos_code: 'POS0001', kpi_target: 1000, store_kpi_group: 'G', stores: { name: 'S1' } }],
+      [{ store_id: 's-1', actual_value: 1200, run_rate: 120, remaining_target: 0, achieved_tier_order: 1,
+         store_commission_pool: 500, synced_at: '2026-08-06T00:00:00Z', actual_offline: 1200, actual_affiliate: 0,
+         offline_order_count: 30, offline_synced_at: null, affiliate_synced_at: null }],
+      '2026-08-06', (iso) => iso,
+    )
+    for (const k of ['Ngưỡng đơn tối thiểu', 'Số đơn Affiliate', 'Tổng số đơn', 'Đạt thưởng thêm', 'Thưởng thêm/dược sĩ']) {
+      expect(rows[0][k], k).toBe('')
+    }
+  })
+
+  test('EXPORT 112: đạt / chưa đạt / chưa đủ dữ liệu — tiền thưởng CHỈ ghi khi đạt (như Commission pool)', () => {
+    const t = (id: string) => ({ store_id: id, pos_code: id, kpi_target: 1000, store_kpi_group: null, stores: { name: id },
+      minimum_order_target: 710, order_bonus_per_staff: 200_000 })
+    const a = (id: string, cnt: number | null, ok: boolean | null) => ({
+      store_id: id, actual_value: 1000, run_rate: 100, remaining_target: 0, achieved_tier_order: 1,
+      store_commission_pool: 2_500_000, synced_at: '2026-09-11T00:00:00Z', actual_offline: 950, actual_affiliate: 50,
+      offline_order_count: cnt === null ? null : cnt - 4, offline_synced_at: null, affiliate_synced_at: null,
+      affiliate_order_count: 4, bonus_order_count: cnt, order_bonus_achieved: ok,
+    })
+    const rows = buildCampaignExportRows(
+      { name: 'W2', start_date: '2026-09-10', end_date: '2026-09-16', metric_offline: true, metric_affiliate: true },
+      [t('A'), t('B'), t('C')],
+      [a('A', 720, true), a('B', 680, false), a('C', null, null)],
+      '2026-09-11', (iso) => iso,
+    )
+    expect(rows.map((r) => [r['Ngưỡng đơn tối thiểu'], r['Số đơn Affiliate'], r['Tổng số đơn'], r['Đạt thưởng thêm'], r['Thưởng thêm/dược sĩ']]))
+      .toEqual([
+        [710, 4, 720, 'Đạt', 200_000],
+        [710, 4, 680, 'Chưa đạt', ''],
+        [710, 4, '', 'Chưa đủ dữ liệu', ''],
+      ])
+    // Commission Store KHÔNG bị cộng gộp với thưởng thêm.
+    expect(rows[0]['Commission pool']).toBe(2_500_000)
   })
 
   test('EXPORT customer: builder riêng — cột đơn vị khách, giá trị đúng', () => {

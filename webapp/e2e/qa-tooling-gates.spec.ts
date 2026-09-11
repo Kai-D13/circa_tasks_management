@@ -584,3 +584,304 @@ test.describe('source hygiene @desktop', () => {
       .toEqual([])
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 113.9 (audit): qa-race-112.mjs GHI fixture vào DB thật ⇒ cùng chuẩn an toàn
+// với qa-kpi-customer-103: fail-fast exit 2 TRƯỚC mọi connection, khoá đúng
+// host, timeout, và ALL PASS chỉ khi cleanup đã được hậu kiểm.
+import { finalVerdict, judgeCleanup, parseDbHost } from '../scripts/lib-race-112.mjs'
+
+test.describe('qa-race-112 safety gates (113.9) @desktop', () => {
+  // Mọi exit dưới đây xảy ra TRƯỚC `new pg.Client` ⇒ không network, không DB.
+  test('thiếu TỪNG safety flag (process env) → exit 2 fail-fast, thông điệp đúng biến', async () => {
+    const a = await runScript('scripts/qa-race-112.mjs')
+    expect(a.code).toBe(2)
+    expect(a.out).toContain('QA_RACE_112_ALLOWED')
+
+    const b = await runScript('scripts/qa-race-112.mjs', { QA_RACE_112_ALLOWED: 'YES' })
+    expect(b.code).toBe(2)
+    expect(b.out).toContain('QA_DB_URL')
+
+    const c = await runScript('scripts/qa-race-112.mjs', {
+      QA_RACE_112_ALLOWED: 'YES', QA_DB_URL: 'postgres://u:p@db.qa.internal:5432/postgres',
+    })
+    expect(c.code).toBe(2)
+    expect(c.out).toContain('QA_EXPECTED_DB_HOST')
+
+    // Sai DB: host khai báo không trùng host trong URL → từ chối TRƯỚC khi kết nối.
+    const d = await runScript('scripts/qa-race-112.mjs', {
+      QA_RACE_112_ALLOWED: 'YES', QA_DB_URL: 'postgres://u:p@db.qa.internal:5432/postgres',
+      QA_EXPECTED_DB_HOST: 'db.production.internal',
+    })
+    expect(d.code).toBe(2)
+    expect(d.out).toContain('phải TRÙNG host trong QA_DB_URL')
+    expect(d.out).not.toContain('fixture campaign')
+
+    const e = await runScript('scripts/qa-race-112.mjs', {
+      QA_RACE_112_ALLOWED: 'YES', QA_DB_URL: 'khong-phai-url', QA_EXPECTED_DB_HOST: 'x',
+    })
+    expect(e.code).toBe(2)
+    expect(e.out).toContain('không parse được')
+  })
+
+  test('lõi thuần: verdict cleanup — 0 dòng / lỗi / còn sót đều FAIL; chỉ 1 dòng + hậu kiểm 0/0 mới OK', () => {
+    expect(judgeCleanup({ deleted: 1, campaignsLeft: 0, targetsLeft: 0, error: null }).ok).toBe(true)
+    expect(judgeCleanup({ deleted: 0, campaignsLeft: 0, targetsLeft: 0, error: null }).ok).toBe(false)
+    expect(judgeCleanup({ deleted: 2, campaignsLeft: 0, targetsLeft: 0, error: null }).ok).toBe(false)
+    expect(judgeCleanup({ deleted: 1, campaignsLeft: 1, targetsLeft: 0, error: null }).ok).toBe(false)
+    expect(judgeCleanup({ deleted: 1, campaignsLeft: 0, targetsLeft: 3, error: null }).ok).toBe(false)
+    expect(judgeCleanup({ deleted: 1, campaignsLeft: 0, targetsLeft: 0, error: 'timeout' }).ok).toBe(false)
+    // ALL PASS chỉ khi CẢ test lẫn cleanup sạch — cleanup hỏng không được che.
+    expect(finalVerdict({ testsFailed: false, cleanupOk: true })).toBe('RACE 112: ALL PASS')
+    expect(finalVerdict({ testsFailed: false, cleanupOk: false })).toBe('RACE 112: FAIL')
+    expect(finalVerdict({ testsFailed: true, cleanupOk: true })).toBe('RACE 112: FAIL')
+    expect(parseDbHost('postgres://u:p@db.qa.internal:5432/postgres')).toBe('db.qa.internal')
+    expect(parseDbHost('khong-phai-url')).toBeNull()
+  })
+
+  test('source-contract: gate trước Client · timeout cả 2 connection · hậu kiểm sau DELETE · marker giữ khi cleanup hỏng', () => {
+    const src = fs.readFileSync('scripts/qa-race-112.mjs', 'utf8').replace(/\r\n/g, '\n')
+    // Mọi safetyGate đứng TRƯỚC khi tạo connection.
+    const firstClient = src.indexOf('new pg.Client(')
+    expect(firstClient).toBeGreaterThan(-1)
+    for (const g of ["process.env.QA_RACE_112_ALLOWED === 'YES'", 'process.env.QA_DB_URL', 'process.env.QA_EXPECTED_DB_HOST', 'fs.existsSync(MARKER)']) {
+      const i = src.indexOf(g)
+      expect(i, `thiếu gate ${g}`).toBeGreaterThan(-1)
+      expect(i, `gate ${g} phải đứng trước new pg.Client`).toBeLessThan(firstClient)
+    }
+    // Flag đọc từ process.env (biến tạm), không từ .env.local.
+    expect(src).toMatch(/process\.env\.QA_RACE_112_ALLOWED === 'YES'/)
+    expect(src).not.toMatch(/(?<!process\.)env\.QA_RACE_112_ALLOWED|env\[['"]QA_RACE_112_ALLOWED/)
+    // Timeout: option client + SET trên session + watchdog.
+    expect(src).toContain('statement_timeout: 20_000')
+    expect(src).toContain('connectionTimeoutMillis: 10_000')
+    expect((src.match(/SET statement_timeout = '20s'/g) ?? []).length).toBe(2)
+    expect(src).toMatch(/setTimeout\([\s\S]*watchdog[\s\S]*\.unref\(\)/)
+    // Cleanup: rollback tx mở → DELETE exact id (is_test + prefix) → hậu kiểm 2 bảng → judgeCleanup.
+    const rb = src.indexOf("A.query('ROLLBACK')")
+    const del = src.indexOf("DELETE FROM public.kpi_campaigns WHERE id = $1 AND is_test AND name LIKE 'QA-RACE-112-%' RETURNING id")
+    const post = src.indexOf('SELECT count(*)::int FROM public.kpi_campaigns WHERE id = $1')
+    const judge = src.indexOf('judgeCleanup({ deleted: del.rowCount')
+    expect(rb).toBeGreaterThan(-1)
+    expect(del).toBeGreaterThan(rb)
+    expect(post).toBeGreaterThan(del)
+    expect(src.slice(post, judge)).toContain('FROM public.kpi_campaign_store_targets WHERE campaign_id = $1')
+    expect(judge).toBeGreaterThan(post)
+    // Marker chỉ xoá khi cleanup.ok; verdict cuối qua finalVerdict (không có 'ALL PASS' literal nào khác).
+    expect(src).toContain('if (cleanup.ok) {')
+    expect(src.slice(src.indexOf('if (cleanup.ok) {'), src.indexOf('} else {', src.indexOf('if (cleanup.ok) {')))).toContain('fs.unlinkSync(MARKER)')
+    expect(src).toContain('GIỮ marker')
+    // Literal 'RACE 112: ALL PASS' xuất hiện đúng 1 lần — trong so sánh exit
+    // code; verdict in ra chỉ đi qua finalVerdict (comment không tính).
+    expect((src.match(/'RACE 112: ALL PASS'/g) ?? []).length).toBe(1)
+    expect(src).toContain("process.exit(verdict === 'RACE 112: ALL PASS' ? 0 : 1)")
+    // Không process.exit trong try — finally/cleanup luôn chạy.
+    const tryStart = src.indexOf('try {\n  await A.connect()')
+    const tryEnd = src.indexOf('} catch (e) {', tryStart)
+    expect(src.slice(tryStart, tryEnd)).not.toContain('process.exit')
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 113.11 (audit): acceptance thưởng thêm GHI fixture active vào DB production.
+// (1) cổng an toàn thuần: cron KPI đã tạm dừng · đúng project · không marker
+// sót · cờ không nằm trong .env.local; (2) diễn giải Offline từ dòng BigQuery
+// thô (đối soát ĐỘC LẬP với engine); (3) source-contract: gate + marker đứng
+// TRƯỚC thao tác ghi, marker chỉ xoá sau hậu kiểm, QLCH có trong kiểm RLS.
+import { ORDER_BONUS_MARKER, orderBonusWriteGate, urlHost } from './writeQaGates'
+import { daysInclusive, expectOffline, sameBqRows } from './offlineRecon'
+
+test.describe('write-QA gates + đối soát Offline độc lập (113.11) @desktop', () => {
+  const URL_OK = 'https://database.example.vn'
+  const good = {
+    env: { E2E_KPI_SYNC_CRON_PAUSED: 'YES', E2E_EXPECTED_SUPABASE_HOST: 'database.example.vn', NEXT_PUBLIC_SUPABASE_URL: URL_OK },
+    envFileText: 'NEXT_PUBLIC_SUPABASE_URL=https://database.example.vn\nE2E_STAFF_EMAIL=a@b.c\n',
+    markerExists: false,
+  }
+  const reasonOf = (r: ReturnType<typeof orderBonusWriteGate>) => (r.ok ? '' : r.reason)
+
+  test('gate: đủ điều kiện → ok + host; thiếu TỪNG điều kiện → từ chối, thông điệp đúng biến', () => {
+    expect(orderBonusWriteGate(good)).toEqual({ ok: true, host: 'database.example.vn' })
+
+    const noCron = orderBonusWriteGate({ ...good, env: { ...good.env, E2E_KPI_SYNC_CRON_PAUSED: undefined } })
+    expect(noCron.ok).toBe(false)
+    expect(reasonOf(noCron)).toContain('E2E_KPI_SYNC_CRON_PAUSED')
+    expect(reasonOf(orderBonusWriteGate({ ...good, env: { ...good.env, E2E_KPI_SYNC_CRON_PAUSED: 'yes' } }))).toContain('E2E_KPI_SYNC_CRON_PAUSED')
+
+    // Cờ xác nhận đặt vĩnh viễn trong .env.local ⇒ từ chối (phải là biến PROCESS tạm).
+    for (const k of ['E2E_ORDER_BONUS_QA', 'E2E_KPI_SYNC_CRON_PAUSED', 'E2E_EXPECTED_SUPABASE_HOST']) {
+      const r = orderBonusWriteGate({ ...good, envFileText: `${good.envFileText}${k}=YES\n` })
+      expect(r.ok, `${k} trong .env.local`).toBe(false)
+      expect(reasonOf(r)).toContain('.env.local')
+    }
+    // Chỉ khớp ĐẦU dòng — tên biến nằm trong comment/giá trị khác không tính.
+    expect(orderBonusWriteGate({ ...good, envFileText: '# nhớ E2E_KPI_SYNC_CRON_PAUSED=YES khi QA\n' }).ok).toBe(true)
+
+    const wrongHost = orderBonusWriteGate({ ...good, env: { ...good.env, E2E_EXPECTED_SUPABASE_HOST: 'db.khac.vn' } })
+    expect(reasonOf(wrongHost)).toContain('E2E_EXPECTED_SUPABASE_HOST')
+    expect(reasonOf(wrongHost)).toContain('database.example.vn')
+    expect(reasonOf(orderBonusWriteGate({ ...good, env: { ...good.env, E2E_EXPECTED_SUPABASE_HOST: undefined } }))).toContain('THIẾU')
+    expect(reasonOf(orderBonusWriteGate({ ...good, env: { ...good.env, NEXT_PUBLIC_SUPABASE_URL: 'khong-phai-url' } }))).toContain('không parse được')
+
+    const marker = orderBonusWriteGate({ ...good, markerExists: true })
+    expect(reasonOf(marker)).toContain(ORDER_BONUS_MARKER)
+    expect(urlHost('https://a.b.c/x')).toBe('a.b.c')
+    expect(urlHost(undefined)).toBeNull()
+  })
+
+  const row = (pos: string, d: string, ord: string | null, rev: string | null) =>
+    ({ pos_code: pos, d, offline_no_order: ord, offline_net_revenue: rev })
+
+  test('đối soát Offline: SUM số đơn + ROUND doanh thu từng ngày; ngày không giao dịch = 0/0', () => {
+    expect(daysInclusive('2026-09-10', '2026-09-12')).toEqual(['2026-09-10', '2026-09-11', '2026-09-12'])
+    const rows = [
+      row('POS1', '2026-09-10', '120', '1.5396715E7'),
+      row('POS1', '2026-09-11', '95', '12000000.0000000001'),
+      row('POS2', '2026-09-10', null, null),           // không phát sinh giao dịch
+      row('POS2', '2026-09-11', '7', '800000'),
+    ]
+    const w = expectOffline(rows, ['POS1', 'POS2'], '2026-09-10', '2026-09-11')
+    expect(w.get('POS1')).toMatchObject({ orders: 215, revenue: 27_396_715, degraded: null })
+    expect([...w.get('POS1')!.byDay.entries()]).toEqual([
+      ['2026-09-10', { revenue: 15_396_715, orders: 120 }],
+      ['2026-09-11', { revenue: 12_000_000, orders: 95 }],
+    ])
+    expect(w.get('POS2')).toMatchObject({ orders: 7, revenue: 800_000, degraded: null })
+    expect(w.get('POS2')!.byDay.get('2026-09-10')).toEqual({ revenue: 0, orders: 0 })
+  })
+
+  test('đối soát Offline: số đơn hỏng ⇒ số đơn CẢ KỲ của POS = NULL (degrade), doanh thu vẫn tính', () => {
+    for (const [ord, rev, why] of [
+      [null, '500000', 'thiếu số đơn'],
+      ['2.5', '500000', 'không nguyên'],
+      ['-1', '500000', 'âm'],
+      ['0', '500000', '0 đơn'],
+    ] as const) {
+      const w = expectOffline([row('P', '2026-09-10', '10', '100000'), row('P', '2026-09-11', ord, rev)], ['P'], '2026-09-10', '2026-09-11').get('P')!
+      expect(w.orders, why).toBeNull()
+      expect(w.degraded, why).toContain(why)
+      expect(w.revenue, why).toBe(600_000)
+      expect([...w.byDay.values()].every((v) => v.orders === null), `${why}: mọi ngày của POS degrade đều NULL`).toBe(true)
+    }
+    // 0 đơn + 0đ là ngày hợp lệ (không phải degrade).
+    expect(expectOffline([row('P', '2026-09-10', '0', '0')], ['P'], '2026-09-10', '2026-09-10').get('P')).toMatchObject({ orders: 0, degraded: null })
+  })
+
+  test('đối soát Offline: nguồn mà engine lẽ ra đã giữ snapshot cũ ⇒ THROW (không đối soát trên dữ liệu không thể có)', () => {
+    expect(() => expectOffline([row('P', '2026-09-10', '5', '1')], ['P'], '2026-09-10', '2026-09-11')).toThrow(/2026-09-11.*0 dòng/)
+    expect(() => expectOffline([row('P', '2026-09-10', '5', '1'), row('P', '2026-09-10', '5', '1')], ['P'], '2026-09-10', '2026-09-10')).toThrow(/2 dòng/)
+    expect(() => expectOffline([row('P', '2026-09-10', '5', null)], ['P'], '2026-09-10', '2026-09-10')).toThrow(/doanh thu NULL/)
+    expect(() => expectOffline([row('P', '2026-09-10', 'abc', '1')], ['P'], '2026-09-10', '2026-09-10')).toThrow(/không phải số/)
+  })
+
+  test('sameBqRows: không phụ thuộc thứ tự; một ô đổi (BI nạp thêm) ⇒ khác', () => {
+    const a = [row('P', '2026-09-10', '5', '1'), row('Q', '2026-09-10', '6', '2')]
+    expect(sameBqRows(a, [...a].reverse())).toBe(true)
+    expect(sameBqRows(a, [row('P', '2026-09-10', '5', '1'), row('Q', '2026-09-10', '7', '2')])).toBe(false)
+    expect(sameBqRows(a, a.slice(0, 1))).toBe(false)
+  })
+
+  test('source-contract acceptance: gate + marker TRƯỚC khi ghi · marker chỉ xoá sau hậu kiểm · BigQuery độc lập · QLCH trong RLS', () => {
+    const src = fs.readFileSync('e2e/kpi-order-bonus-acceptance.spec.ts', 'utf8').replace(/\r\n/g, '\n')
+    const gate = src.indexOf('orderBonusWriteGate({')
+    const throwGate = src.indexOf('if (!gate.ok) throw new Error(`SAFETY GATE')
+    const markerWrite = src.indexOf('fs.writeFileSync(ORDER_BONUS_MARKER')
+    const insert = src.indexOf(".from('kpi_campaigns').insert(")
+    for (const [k, i] of Object.entries({ gate, throwGate, markerWrite, insert })) expect(i, k).toBeGreaterThan(-1)
+    expect(throwGate).toBeGreaterThan(gate)
+    expect(markerWrite, 'marker phải ghi TRƯỚC khi insert fixture').toBeGreaterThan(throwGate)
+    expect(insert).toBeGreaterThan(markerWrite)
+    expect(src.slice(0, gate)).not.toMatch(/\.insert\(|\.update\(|\.delete\(|\.rpc\(/)
+    // Marker chỉ xoá sau khi hậu kiểm đủ 3 bảng và qua được nhánh throw.
+    const cleanupThrow = src.indexOf('throw new Error(`CLEANUP HỎNG')
+    const unlink = src.indexOf('fs.unlinkSync(ORDER_BONUS_MARKER)')
+    expect(cleanupThrow).toBeGreaterThan(src.indexOf("'hậu kiểm actuals'"))
+    expect(unlink).toBeGreaterThan(cleanupThrow)
+    expect(src).toContain('GIỮ marker')
+    // Đối soát Offline đọc BigQuery TRƯỚC và SAU nút Đồng bộ, qua client riêng.
+    const before = src.indexOf('bqBefore = await readBqOffline()')
+    const click = src.indexOf(".getByRole('button', { name: 'Đồng bộ doanh số' }).click()")
+    const after = src.indexOf('bqAfter = await readBqOffline()')
+    expect(before).toBeGreaterThan(-1)
+    expect(click).toBeGreaterThan(before)
+    expect(after).toBeGreaterThan(click)
+    expect(src).toContain("from './bigqueryDirect'")
+    expect(src).not.toMatch(/lib\/targets\/bigquery['"]|lib\/google\/auth['"]/)
+    expect(src).toContain('expectOffline(bqAfter')
+    expect(src).toContain(".from('kpi_campaign_store_daily_actuals')")
+    // RLS: đủ 3 vai trò, có tiền điều kiện phạm vi chạm cửa hàng fixture.
+    expect(src).toContain("[['staff', STAFF], ['qlch', QLCH], ['sm', SM]]")
+    expect(src).toContain('E2E_QLCH_EMAIL')
+    expect(src).toContain('phạm vi phải chạm cửa hàng fixture')
+    // Cron chen vào sau nút Đồng bộ ⇒ synced_at đổi ⇒ test cuối đỏ.
+    expect(src).toContain('postSyncStamp = new Map(')
+    expect(src).toContain('toEqual(postSyncStamp)')
+
+    const bq = fs.readFileSync('e2e/bigqueryDirect.ts', 'utf8')
+    expect(bq).toContain('auth/bigquery.readonly')
+    expect(bq).not.toMatch(/from ['"]@\/|from ['"]\.\.\/lib/)
+  })
+})
+
+test.describe('qa-race-112-pgmeta safety gates (113.11) @desktop', () => {
+  // Mọi exit dưới đây xảy ra TRƯỚC `fetch(` đầu tiên ⇒ không network, không DB.
+  test('thiếu cờ / sai host → exit 2 fail-fast, không tạo fixture', async () => {
+    const a = await runScript('scripts/qa-race-112-pgmeta.mjs')
+    expect(a.code).toBe(2)
+    expect(a.out).toContain('QA_RACE_112_ALLOWED')
+
+    test.skip(!HAS_ENV_LOCAL, 'cần .env.local (URL) — gate host đọc NEXT_PUBLIC_SUPABASE_URL từ file')
+    const b = await runScript('scripts/qa-race-112-pgmeta.mjs', { QA_RACE_112_ALLOWED: 'YES' })
+    expect(b.code).toBe(2)
+    expect(b.out).toContain('QA_EXPECTED_PROJECT_HOST')
+    expect(b.out).toContain('THIẾU')
+
+    const c = await runScript('scripts/qa-race-112-pgmeta.mjs', { QA_RACE_112_ALLOWED: 'YES', QA_EXPECTED_PROJECT_HOST: 'db.sai-project.example.com' })
+    expect(c.code).toBe(2)
+    expect(c.out).toContain('phải TRÙNG host của NEXT_PUBLIC_SUPABASE_URL')
+    expect(c.out).not.toContain('fixture campaign')
+  })
+
+  test('source-contract: gate trước fetch · SET LOCAL (không SET session, không BEGIN tường minh) · hậu kiểm sau DELETE · marker', () => {
+    const src = fs.readFileSync('scripts/qa-race-112-pgmeta.mjs', 'utf8').replace(/\r\n/g, '\n')
+    const firstFetch = src.indexOf('fetch(')
+    expect(firstFetch).toBeGreaterThan(-1)
+    for (const g of ["process.env.QA_RACE_112_ALLOWED === 'YES'", 'process.env.QA_EXPECTED_PROJECT_HOST === projectHost', 'fs.existsSync(MARKER)']) {
+      const i = src.indexOf(g)
+      expect(i, `thiếu gate ${g}`).toBeGreaterThan(-1)
+      expect(i, `gate ${g} phải đứng trước fetch`).toBeLessThan(firstFetch)
+    }
+    // Cờ là biến PROCESS tạm: không đọc từ object env của .env.local, và bị từ chối nếu nằm trong file.
+    expect(src).not.toMatch(/(?<!process\.)env\.QA_RACE_112_ALLOWED|env\[['"]QA_RACE_112_ALLOWED/)
+    expect(src).toContain('(QA_RACE_112_ALLOWED|QA_EXPECTED_PROJECT_HOST)\\s*=/m.test(envFile)')
+    // Kết nối pg-meta dùng chung với Studio: timeout CHỈ được đặt cấp transaction.
+    expect(src).toContain("SET LOCAL statement_timeout = '${stmtTimeout}'")
+    expect(src).not.toMatch(/SET\s+statement_timeout/)
+    expect(src).not.toMatch(/BEGIN;|COMMIT;/)
+    expect(src).toContain('AbortSignal.timeout(')
+    expect(src).toMatch(/setTimeout\([\s\S]*watchdog[\s\S]*\.unref\(\)/)
+    // Bằng chứng chờ khoá lấy từ pg_stat_activity, không suy từ thời gian.
+    expect((src.match(/wait_event_type === 'Lock'/g) ?? []).length).toBe(2)
+    // Marker dùng CHUNG với qa-race-112.mjs và ghi TRƯỚC khi tạo fixture.
+    expect(src).toContain("const MARKER = '.qa-race-112.json'")
+    expect(src.indexOf('fs.writeFileSync(MARKER')).toBeLessThan(src.indexOf('INSERT INTO public.kpi_campaigns'))
+    // Cleanup: DELETE theo tên duy nhất (+id) · is_test · prefix → hậu kiểm → judgeCleanup.
+    const del = src.indexOf("AND is_test AND name LIKE 'QA-RACE-112-%' RETURNING id")
+    const post = src.indexOf("'hậu kiểm')")
+    const judge = src.indexOf('judgeCleanup({ deleted: del.length')
+    expect(del).toBeGreaterThan(-1)
+    expect(post).toBeGreaterThan(del)
+    expect(judge).toBeGreaterThan(post)
+    expect(src.slice(src.indexOf('if (cleanup.ok) {'), src.indexOf('} else {', src.indexOf('if (cleanup.ok) {')))).toContain('fs.unlinkSync(MARKER)')
+    expect(src).toContain('GIỮ marker')
+    expect((src.match(/'RACE 112: ALL PASS'/g) ?? []).length).toBe(1)
+    expect(src).toContain("process.exit(verdict === 'RACE 112: ALL PASS' ? 0 : 1)")
+    // Không process.exit trong khối try chính — cleanup luôn chạy.
+    const tryStart = src.indexOf("try {\n  const mig = await must(")
+    const tryEnd = src.indexOf('} catch (e) {', tryStart)
+    expect(tryStart).toBeGreaterThan(-1)
+    expect(src.slice(tryStart, tryEnd)).not.toContain('process.exit')
+    // Mọi giá trị nội suy vào SQL đi qua lit() với regex định dạng.
+    expect(src).toContain('const lit = (v, re, what)')
+  })
+})

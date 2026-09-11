@@ -18,7 +18,12 @@ interface Preview {
   validCount: number
   invalid: { row: number; pos_code: string | null; error: string }[]
   unmatched: string[]
-  preview: { pos_code: string; kpi_target: number; store_kpi_group: string | null; tiers: { threshold_pct: number; commission_amount: number }[] }[]
+  preview: {
+    pos_code: string; kpi_target: number; store_kpi_group: string | null
+    tiers: { threshold_pct: number; commission_amount: number }[]
+    // Mig 112: chỉ có khi file áp dụng thưởng thêm theo số đơn.
+    minimum_order_target?: number; order_bonus_per_staff?: number
+  }[]
 }
 
 // Commission LUÔN VNĐ (mọi loại campaign).
@@ -186,6 +191,9 @@ export function CampaignImport({
           // 107: preview phản chiếu đúng thứ người dùng sẽ thấy sau khi lưu —
           // toàn bộ ô Phân loại để trống thì cột biến mất ngay ở bước xem trước.
           const showGroupCol = preview.preview.some((r) => (r.store_kpi_group ?? '').trim().length > 0)
+          // 112: cùng nguyên tắc — file không áp dụng thưởng thêm thì 2 cột
+          // này không xuất hiện (parser đã bảo đảm có thì có đủ mọi dòng).
+          const showBonusCols = preview.preview.some((r) => r.minimum_order_target != null)
           return (
             <div className="rounded border overflow-x-auto max-h-72">
               <table className="w-full text-xs">
@@ -195,6 +203,8 @@ export function CampaignImport({
                     {showGroupCol && <th className="text-left px-3 py-2">Phân loại</th>}
                     <th className="text-right px-3 py-2">{guide.targetHeaderLabel}</th>
                     <th className="text-left px-3 py-2">Bậc (mốc % → Commission)</th>
+                    {showBonusCols && <th className="text-right px-3 py-2 whitespace-nowrap">Ngưỡng đơn</th>}
+                    {showBonusCols && <th className="text-right px-3 py-2 whitespace-nowrap">Thưởng thêm/dược sĩ</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y">
@@ -212,6 +222,16 @@ export function CampaignImport({
                           ))}
                         </div>
                       </td>
+                      {showBonusCols && (
+                        <td className="px-3 py-1.5 text-right tabular-nums">
+                          {r.minimum_order_target != null ? `${vndMoney(r.minimum_order_target)} đơn` : '—'}
+                        </td>
+                      )}
+                      {showBonusCols && (
+                        <td className="px-3 py-1.5 text-right tabular-nums">
+                          {r.order_bonus_per_staff != null ? `${vndMoney(r.order_bonus_per_staff)}₫` : '—'}
+                        </td>
+                      )}
                     </tr>
                   ))}
                 </tbody>

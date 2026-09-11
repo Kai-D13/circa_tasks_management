@@ -381,3 +381,47 @@ test.describe('kpi result model — showGroup (107) @desktop', () => {
     expect(buildCampaignResultModel(CAMP107(), [], [], '2026-08-18').showGroup).toBe(false)
   })
 })
+
+// ── Mig 112: thưởng thêm theo ngưỡng số đơn trong model Kết quả ─────────────
+test.describe('kpi result model — thưởng thêm theo số đơn (112) @desktop', () => {
+  // 113.5: RPC khoá một mức 200000 cho mọi store — fixture không tham số mức.
+  const TB = (store: string, target: number): ResultTargetRow => ({
+    ...T(store, target), minimum_order_target: 710, order_bonus_per_staff: 200_000,
+  })
+
+  test('campaign KHÔNG áp dụng → showOrderBonus=false, mọi dòng orderBonus=null (UI không đổi 1 bit)', () => {
+    const m = buildCampaignResultModel(CAMP(), [T('a', 1000)], [A('a', 1200, 1200, 0)], TODAY)
+    expect(m.showOrderBonus).toBe(false)
+    expect(m.bonusAchievedCount).toBe(0)
+    expect(m.bonusPerStaffLabel).toBeNull()
+    expect(m.rows[0].orderBonus).toBeNull()
+  })
+
+  test('đếm "X/Y cửa hàng đạt" theo order_bonus_achieved của RPC; nhãn mức thưởng chung', () => {
+    const m = buildCampaignResultModel(CAMP(), [TB('a', 1000), TB('b', 1000), TB('c', 1000)], [
+      A('a', 1200, 1100, 100, { bonus_order_count: 720, order_bonus_achieved: true }),
+      A('b', 900, 900, 0, { bonus_order_count: 800, order_bonus_achieved: false }),
+      A('c', 1500, 1500, 0, { bonus_order_count: null, order_bonus_achieved: null }),
+    ], TODAY)
+    expect(m.showOrderBonus).toBe(true)
+    expect(m.bonusAchievedCount).toBe(1)
+    expect(m.bonusPerStaffLabel).toBe('200.000₫/dược sĩ')
+    expect(m.rows.map((r) => r.orderBonus?.status)).toEqual(['achieved', 'not_achieved', 'unknown'])
+  })
+
+  test('store chưa có snapshot → "Chưa đồng bộ", không phải "chưa đạt"', () => {
+    const m = buildCampaignResultModel(CAMP(), [TB('a', 1000)], [], TODAY)
+    expect(m.rows[0].orderBonus?.status).toBe('not_synced')
+  })
+
+  test('BỘ LỌC KHOẢNG ghi đè actual_value/offline_order_count → trạng thái thưởng KHÔNG đổi', () => {
+    // Snapshot toàn kỳ: ĐẠT.
+    const snap = A('a', 1200, 1100, 100, { offline_order_count: 716, bonus_order_count: 720, order_bonus_achieved: true })
+    // Đúng những gì 3 nhánh trang làm khi lọc 1 ngày: doanh thu + số đơn nhỏ.
+    const ranged = { ...snap, actual_value: 150, actual_offline: 150, offline_order_count: 90, run_rate: null }
+    const full = buildCampaignResultModel(CAMP(), [TB('a', 1000)], [snap], TODAY)
+    const range = buildCampaignResultModel(CAMP(), [TB('a', 1000)], [ranged], TODAY)
+    expect(range.rows[0].orderBonus).toEqual(full.rows[0].orderBonus)
+    expect(range.bonusAchievedCount).toBe(1)
+  })
+})

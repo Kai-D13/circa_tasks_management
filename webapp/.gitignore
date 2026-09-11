@@ -57,3 +57,6 @@ next-env.d.ts
 # QA 098/099 — fixture markers (scripts/qa-kpi-archive-098.mjs, qa-affiliate-orders-099.mjs)
 .qa-archive-098.json
 .qa-drill-fixture.json
+# QA 112 — fixture markers (scripts/qa-race-112*.mjs, e2e/kpi-order-bonus-acceptance)
+.qa-race-112.json
+.qa-order-bonus-112.json

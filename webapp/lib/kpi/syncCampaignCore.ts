@@ -33,7 +33,10 @@ export interface CampaignConfig {
 }
 
 export interface StoreRow { id: string; code: string | null; store_type: string; is_active: boolean }
-export interface AffiliateAggRow { store_id: string; vn_date: string; gmv: number }
+// Mig 112: rpc_aggregate_affiliate_gmv (092) vốn đã trả order_count =
+// count(*) đơn DELIVERED active theo (store, ngày VN); trước 112 app bỏ qua.
+// Optional ở type để caller/fixture cũ không phải đổi — thiếu ⇒ "chưa biết".
+export interface AffiliateAggRow { store_id: string; vn_date: string; gmv: number; order_count?: number | null }
 // Kết quả rpc_aggregate_affiliate_customers (jsonb — mig 103): daily rows +
 // tổng đối chiếu + diagnostics cross-store trong CÙNG MVCC snapshot.
 export interface CustomerAggResult {
@@ -142,6 +145,12 @@ export async function syncCampaignWithDeps(
   // ── Nhánh Affiliate: validate OS-active → HEALTH GATE (trước BQ, audit #6-7)
   //    → aggregate trong DB ──
   const affiliateByStore = new Map<string, Map<string, number>>()
+  // Mig 112: số đơn Affiliate theo (store, ngày) — CÙNG sổ với doanh thu
+  // Affiliate (quy gán partner_code). KHÔNG lấy BigQuery affiliate_no_order:
+  // BQ gán đơn cho cửa hàng khác (tháng 8: 21/25 store lệch) ⇒ trộn 2 nguồn sẽ
+  // cộng tiền cho store A mà cộng đơn cho store B. undefined = chưa biết.
+  let affiliateOrdersByStore: Map<string, Map<string, number>> | undefined
+  const affiliateWarnings: string[] = []
   let affiliateSyncedAt: string | null = null
   if (metricAffiliate) {
     const { data: stores, error: sErr } = await deps.loadStores(storeIds)
@@ -171,6 +180,27 @@ export async function syncCampaignWithDeps(
       for (const r of aggRows ?? []) {
         if (!affiliateByStore.has(r.store_id)) affiliateByStore.set(r.store_id, new Map())
         affiliateByStore.get(r.store_id)!.set(String(r.vn_date).slice(0, 10), Number(r.gmv) || 0)
+      }
+      // Mig 112: chỉ tin số đơn khi MỌI dòng đều mang count nguyên >= 0. Một
+      // dòng hỏng ⇒ không phát số đơn Affiliate (RPC ghi NULL ⇒ thưởng thêm
+      // "chưa đủ dữ liệu") + cảnh báo; tiền Affiliate vẫn ghi bình thường vì
+      // số đơn là chỉ số PHỤ (cùng policy degrade của 105 cho campaign GMV).
+      // 0 dòng = 0 đơn (đã biết), không phải "chưa biết".
+      const rows = aggRows ?? []
+      const badCount = rows.find((r) => {
+        const n = Number(r.order_count)
+        return r.order_count === undefined || r.order_count === null || !Number.isInteger(n) || n < 0
+      })
+      if (badCount) {
+        affiliateWarnings.push(
+          `Số đơn Affiliate không đọc được (order_count=${String(badCount.order_count)} tại ${badCount.store_id}/${String(badCount.vn_date).slice(0, 10)}) — thưởng thêm theo số đơn tạm "chưa đủ dữ liệu"; doanh thu Affiliate vẫn ghi`,
+        )
+      } else {
+        affiliateOrdersByStore = new Map()
+        for (const r of rows) {
+          if (!affiliateOrdersByStore.has(r.store_id)) affiliateOrdersByStore.set(r.store_id, new Map())
+          affiliateOrdersByStore.get(r.store_id)!.set(String(r.vn_date).slice(0, 10), Number(r.order_count))
+        }
       }
 
       const healthAfter = await deps.getAffiliateHealth(storeIds)
@@ -227,6 +257,7 @@ export async function syncCampaignWithDeps(
     offlineByPos,
     offlineOrdersByPos,
     affiliateByStore,
+    affiliateOrdersByStore,
     snapshotTs,
     offlineSyncedAt,
     affiliateSyncedAt,
@@ -242,7 +273,9 @@ export async function syncCampaignWithDeps(
     dailyRows: daily.length,
     unmatched: unmatchedPos,
     // r1.3: nguồn số đơn hỏng ở vài pos → cảnh báo (KHÔNG chặn ghi tiền).
-    ...(offlineWarnings.length > 0 ? { warnings: offlineWarnings } : {}),
+    // 112: + cảnh báo số đơn Affiliate không đọc được (cùng nguyên tắc).
+    ...(offlineWarnings.length + affiliateWarnings.length > 0
+      ? { warnings: [...offlineWarnings, ...affiliateWarnings] } : {}),
   }
 }
 

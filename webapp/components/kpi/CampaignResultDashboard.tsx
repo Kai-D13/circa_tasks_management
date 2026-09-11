@@ -7,8 +7,9 @@ import { resultTableColumns } from '@/lib/kpi/resultTableLayout'
 import { cn } from '@/lib/utils'
 import {
   Target, TrendingUp, Percent, Wallet, Award, CalendarDays, Gauge,
-  Store as StoreIcon, Link2 as LinkIcon, type LucideIcon,
+  Store as StoreIcon, Link2 as LinkIcon, Gift, type LucideIcon,
 } from 'lucide-react'
+import { StatusBadge } from '@/components/ds/StatusBadge'
 
 // SM Dashboard r1 — component KẾT QUẢ campaign dùng chung Super Admin ↔ SM.
 // PRESENTATIONAL THUẦN: chỉ render CampaignResultModel (lib/kpi/resultModel —
@@ -102,6 +103,13 @@ export function CampaignResultDashboard({ model, emptyHint }: {
           { label: 'Tổng commission đạt', value: synced ? money(m.totalCommission) : '—', icon: Wallet,
             tile: synced && m.totalCommission > 0 ? 'bg-status-success-bg text-status-success' : 'bg-muted text-muted-foreground',
             valueCls: synced && m.totalCommission > 0 ? 'text-status-success' : undefined },
+          // Mig 112: card RIÊNG ngay sau commission — không cộng gộp hai khoản.
+          ...(m.showOrderBonus ? [
+            { label: 'Đạt thưởng thêm', value: synced ? `${m.bonusAchievedCount}/${m.storeCount} cửa hàng` : '—', icon: Gift,
+              sub: m.bonusPerStaffLabel,
+              tile: synced && m.bonusAchievedCount > 0 ? 'bg-status-success-bg text-status-success' : 'bg-muted text-muted-foreground',
+              valueCls: synced && m.bonusAchievedCount > 0 ? 'text-status-success' : undefined },
+          ] : []),
           { label: 'Store đạt bậc', value: synced ? `${m.reachedStoreCount}/${m.storeCount}` : '—', icon: Award, tile: 'bg-primary/10 text-primary' },
           { label: 'Nhịp độ (Performance)', value: m.performance != null ? `${m.performance.toFixed(1)}%` : '—', icon: Gauge,
             tile: 'bg-primary/10 text-primary',
@@ -153,7 +161,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                       'mobile'); desktop ≥1024px = N cột Bậc động theo
                       maxTierCount (không hardcode 3). Thứ tự cột trong
                       resultTableColumns PHẢI khớp thứ tự cell ở tbody. */}
-                  {resultTableColumns(m.maxTierCount, m.showBreakdown, m.campaign.metric_type, m.showGroup).map((col) => (
+                  {resultTableColumns(m.maxTierCount, m.showBreakdown, m.campaign.metric_type, m.showGroup, m.showOrderBonus).map((col) => (
                     <th
                       key={col.key}
                       // r1.6.1 (audit P2): min-width qua CSS var + lg:min-w —
@@ -264,6 +272,38 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                           không tương đương số đơn/ngày hay AOV/ngày). */}
                       {!isOrderAov && (
                         <td className="px-4 py-2.5 text-right whitespace-nowrap">{r.requiredPerDay != null ? vnd(r.requiredPerDay) : '—'}</td>
+                      )}
+                      {/* Mig 112: thưởng thêm theo số đơn — CÙNG cờ m.showOrderBonus
+                          với header (một nguồn, không lệch cột). Thứ tự khớp
+                          resultTableColumns: bonusOrders · bonus (desktop) ·
+                          bonusCombined (mobile). Đọc r.orderBonus = snapshot toàn
+                          kỳ, không bao giờ từ actual_value (bị lọc khoảng ghi đè). */}
+                      {m.showOrderBonus && (
+                        <td className="hidden lg:table-cell px-4 py-2.5 text-right whitespace-nowrap tabular-nums">
+                          {r.orderBonus?.ordersLine ?? '—'}
+                          {r.orderBonus?.hint && r.orderBonus.status === 'not_achieved' && (
+                            <span className="block text-[11px] text-muted-foreground/80">{r.orderBonus.hint}</span>
+                          )}
+                        </td>
+                      )}
+                      {m.showOrderBonus && (
+                        <td className="hidden lg:table-cell px-4 py-2.5">
+                          {r.orderBonus
+                            ? <StatusBadge tone={r.orderBonus.tone}>{r.orderBonus.status === 'achieved' ? `Đạt · ${r.orderBonus.perStaffAmountLabel}` : r.orderBonus.statusLabel}</StatusBadge>
+                            : <span className="text-muted-foreground">—</span>}
+                        </td>
+                      )}
+                      {m.showOrderBonus && (
+                        <td className="px-4 py-2.5 lg:hidden">
+                          {r.orderBonus ? (
+                            <>
+                              <span className="block text-xs tabular-nums whitespace-nowrap">{r.orderBonus.ordersLine}</span>
+                              <StatusBadge tone={r.orderBonus.tone} className="mt-1">
+                                {r.orderBonus.status === 'achieved' ? `Đạt · ${r.orderBonus.perStaffAmountLabel}` : r.orderBonus.statusLabel}
+                              </StatusBadge>
+                            </>
+                          ) : '—'}
+                        </td>
                       )}
                       {/* Mobile: cột gộp cũ giữ nguyên */}
                       <td className="px-4 py-2.5 lg:hidden">
