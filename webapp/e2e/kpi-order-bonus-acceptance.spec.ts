@@ -1,35 +1,55 @@
 import { test, expect, type Page } from '@playwright/test'
+import fs from 'node:fs'
 import * as XLSX from 'xlsx'
 import { SUPER_STATE } from './authState'
 import { must, serviceDb, sessionDb, type Sb } from './dbFixtures'
+import { ORDER_BONUS_MARKER, ORDER_BONUS_NAME_PREFIX, orderBonusWriteGate } from './writeQaGates'
+import { bqQuery } from './bigqueryDirect'
+import { expectOffline, sameBqRows, type BqDayRow } from './offlineRecon'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // ACCEPTANCE RUNTIME — thưởng thêm theo ngưỡng số đơn (migration 112, batch 113)
 //
 // Chạy trên DB đã áp 112, QA server localhost:3010 (flags như ghi ở memory
 // feedback_qa_server_recipe). GHI FIXTURE is_test vào DB production ⇒ opt-in
-// tường minh: E2E_ORDER_BONUS_QA=1 (cùng chuẩn E2E_SM_WRITE_QA của 111).
+// tường minh + 113.11 safety gate (e2e/writeQaGates.ts), đều là biến PROCESS
+// tạm, KHÔNG đặt trong .env.local:
+//   1. DISABLE Coolify Scheduled Task "Sync KPI campaign actuals".
+//   2. $env:E2E_ORDER_BONUS_QA='1'
+//      $env:E2E_KPI_SYNC_CRON_PAUSED='YES'
+//      $env:E2E_EXPECTED_SUPABASE_HOST='<host của NEXT_PUBLIC_SUPABASE_URL>'
+//   3. npx playwright test e2e/kpi-order-bonus-acceptance.spec.ts --project=desktop-chromium --workers=1
+//   4. Remove-Item Env:E2E_ORDER_BONUS_QA, Env:E2E_KPI_SYNC_CRON_PAUSED, Env:E2E_EXPECTED_SUPABASE_HOST
+//      rồi ENABLE lại task cron.
+// Marker .qa-order-bonus-112.json ghi TRƯỚC khi tạo fixture, chỉ xoá sau khi
+// hậu kiểm 0 dòng ⇒ process chết giữa chừng thì lần chạy sau bị chặn tới khi
+// dọn tay (tên/id nằm trong marker).
 //
 // Đường đi là đường THẬT: target nạp qua rpc_replace_campaign_targets (RPC 112
 // tự validate), đồng bộ bằng nút "Đồng bộ doanh số" của Super trên UI (server
-// action → engine → rpc_replace_campaign_actuals tự tính trạng thái thưởng),
-// rồi đối soát kết quả bằng service role (nguồn sự thật độc lập với app).
+// action → engine → rpc_replace_campaign_actuals tự tính trạng thái thưởng).
+// Đối soát bằng NGUỒN ĐỘC LẬP với app: Offline đọc thẳng BigQuery bằng client
+// riêng (e2e/bigqueryDirect.ts), Affiliate đếm thẳng sổ affiliate_orders.
 //
 // Fixture is_test bị RLS giấu khỏi Staff/QLCH/SM (can_read_kpi_campaign) —
-// spec CHỨNG MINH điều đó (không rò ra dược sĩ thật). Vì vậy phần "3 vai trò
-// NHÌN THẤY thưởng thêm" chỉ chạy được trên campaign W2 thật sau deploy + nạp
-// lại file v2 — spec này KHÔNG giả vờ đã làm việc đó.
+// spec CHỨNG MINH điều đó với tài khoản CÓ phạm vi trên cửa hàng fixture. Phần
+// "3 vai trò NHÌN THẤY thưởng thêm" chỉ chạy được trên campaign W2 thật sau
+// deploy + nạp lại file v2 — spec này KHÔNG giả vờ đã làm việc đó.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const QA_ON = process.env.E2E_ORDER_BONUS_QA === '1'
 const SUPER = { email: process.env.E2E_SUPER_EMAIL, password: process.env.E2E_SUPER_PASSWORD }
 const STAFF = { email: process.env.E2E_STAFF_EMAIL, password: process.env.E2E_STAFF_PASSWORD }
+const QLCH = { email: process.env.E2E_QLCH_EMAIL, password: process.env.E2E_QLCH_PASSWORD }
 const SM = { email: process.env.E2E_SM_EMAIL, password: process.env.E2E_SM_PASSWORD }
 
 const EXPORT = (id: string) => `/api/export/kpi-campaigns?campaign_id=${id}`
 const BONUS_PER_STAFF = 200_000
 const START = '2026-09-10'
 const END = '2026-09-16'
+// Bảng Offline mà engine đọc (lib/targets/bigquery.ts). Spec khoá chuỗi này
+// với code engine để một lần đổi nguồn không làm đối soát so nhầm bảng.
+const BQ_OFFLINE_TABLE = 'lakehouse-prod-394907.buymed_tech.tech__circa_os_gmv_kpi'
 // 3 cửa hàng: POS0009 cấu hình target/ngưỡng THẤP để chắc chắn có ca ĐẠT;
 // hai POS còn lại dùng đúng target/ngưỡng W2 (không đạt trong vài ngày đầu).
 const FIXTURE = [
@@ -42,7 +62,7 @@ const vnTodayISO = () => new Date(Date.now() + 7 * 3600_000).toISOString().slice
 const nextDayISO = (d: string) => new Date(Date.parse(d + 'T00:00:00Z') + 86_400_000).toISOString().slice(0, 10)
 
 interface ActualRow {
-  store_id: string; actual_value: number; offline_order_count: number | null
+  store_id: string; actual_value: number; actual_offline: number; offline_order_count: number | null
   affiliate_order_count: number | null; bonus_order_count: number | null
   order_bonus_achieved: boolean | null; store_commission_pool: number | null; synced_at: string
 }
@@ -50,15 +70,33 @@ interface ActualRow {
 let sb: Sb
 let campaignId: string | null = null
 let campaignName = ''
+let markerWritten = false
+let effEnd = ''
 const storeByPos = new Map<string, string>()
 const posByStore = new Map<string, string>()
 let actuals: ActualRow[] = []
 let fullViewTexts: Record<string, string> = {}
+let bqBefore: BqDayRow[] = []
+let bqAfter: BqDayRow[] = []
+let postSyncStamp = new Map<string, string>()
 
 async function readActuals(): Promise<ActualRow[]> {
   return must<ActualRow[]>(await sb.from('kpi_campaign_store_actuals')
-    .select('store_id, actual_value, offline_order_count, affiliate_order_count, bonus_order_count, order_bonus_achieved, store_commission_pool, synced_at')
+    .select('store_id, actual_value, actual_offline, offline_order_count, affiliate_order_count, bonus_order_count, order_bonus_achieved, store_commission_pool, synced_at')
     .eq('campaign_id', campaignId as string), 'đọc actuals fixture')
+}
+
+// Dòng DAY THÔ của 3 POS trong [START, effEnd] — không SUM ở SQL, để phần diễn
+// giải (e2e/offlineRecon.ts) nằm trong code có unit test và đọc được từng ô.
+async function readBqOffline(): Promise<BqDayRow[]> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(effEnd)) throw new Error(`effEnd không hợp lệ: ${effEnd}`)
+  const pos = FIXTURE.map((f) => `'${f.pos}'`).join(', ')
+  return (await bqQuery(`
+    SELECT pos_code, CAST(start_date AS STRING) AS d, offline_no_order, offline_net_revenue
+    FROM \`${BQ_OFFLINE_TABLE}\`
+    WHERE date_type = 'DAY' AND pos_code IN (${pos})
+      AND start_date BETWEEN '${START}' AND '${effEnd}'
+    ORDER BY pos_code, d`)) as unknown as BqDayRow[]
 }
 
 async function bonusTexts(page: Page): Promise<Record<string, string>> {
@@ -81,6 +119,16 @@ test.describe('thưởng thêm theo số đơn — acceptance Super trên fixtur
   test.skip(!SUPER.email || !SUPER.password, 'E2E_SUPER_* chưa set')
 
   test.beforeAll(async () => {
+    // 113.11: cổng an toàn TRƯỚC mọi thao tác ghi — cron đã tạm dừng · đúng
+    // project · không có fixture lần trước còn sót.
+    const gate = orderBonusWriteGate({
+      env: process.env,
+      envFileText: fs.existsSync('.env.local') ? fs.readFileSync('.env.local', 'utf8') : null,
+      markerExists: fs.existsSync(ORDER_BONUS_MARKER),
+    })
+    if (!gate.ok) throw new Error(`SAFETY GATE: ${gate.reason}`)
+    effEnd = vnTodayISO() < END ? vnTodayISO() : END
+
     sb = await serviceDb()
     const mig = must<{ version: string }[]>(await sb.from('app_migrations').select('version').eq('version', '112'), 'đọc marker 112')
     expect(mig.length, 'migration 112 phải đã áp trên DB này').toBe(1)
@@ -91,12 +139,17 @@ test.describe('thưởng thêm theo số đơn — acceptance Super trên fixtur
     expect(stores.length, 'đủ 3 OS store active').toBe(3)
     for (const s of stores) { storeByPos.set(s.code, s.id); posByStore.set(s.id, s.code) }
 
-    campaignName = `QA-BONUS-112-${Date.now()}`
+    campaignName = `${ORDER_BONUS_NAME_PREFIX}${Date.now()}`
+    // Marker TRƯỚC khi insert: process chết ngay sau insert vẫn để lại tên duy nhất để dọn.
+    const stamp = { name: campaignName, host: gate.host, createdAt: new Date().toISOString() }
+    fs.writeFileSync(ORDER_BONUS_MARKER, JSON.stringify({ ...stamp, campaignId: null }))
+    markerWritten = true
     const ins = must<{ id: string }[]>(await sb.from('kpi_campaigns').insert({
       name: campaignName, start_date: START, end_date: END, scope_type: 'store', metric_type: 'gmv',
       order_type: 'all', metric_offline: true, metric_affiliate: true, status: 'draft', is_test: true,
     }).select('id'), 'tạo campaign fixture')
     campaignId = ins[0].id
+    fs.writeFileSync(ORDER_BONUS_MARKER, JSON.stringify({ ...stamp, campaignId }))
 
     // Nạp target qua ĐÚNG RPC 112 (validate ngưỡng/200000/2 metric ở DB).
     const rows = FIXTURE.map((f, i) => ({
@@ -109,21 +162,27 @@ test.describe('thưởng thêm theo số đơn — acceptance Super trên fixtur
       p_campaign_id: campaignId, p_rows: rows, p_file_name: 'acceptance-112.csv', p_uploaded_by: null,
     }), 'rpc_replace_campaign_targets')
     expect(n).toBe(3)
-    // Fixture is_test: bật thẳng để đồng bộ được (cron chỉ nhặt active — chấp
-    // nhận: is_test ẩn khỏi mọi vai trò thường và sẽ xoá ở afterAll).
+    // active để kiểm RLS có nghĩa (RLS còn lọc theo status). Cron nhặt cả is_test
+    // active ⇒ đó là lý do gate đòi cron tạm dừng; test cuối kiểm lại synced_at.
     must(await sb.from('kpi_campaigns').update({ status: 'active' }).eq('id', campaignId).select('id'), 'activate fixture')
   })
 
   test.afterAll(async () => {
-    if (!campaignId) return
-    const del = must<{ id: string }[]>(
-      await sb.from('kpi_campaigns').delete().eq('id', campaignId).eq('is_test', true).like('name', 'QA-BONUS-112-%').select('id'),
-      'xoá fixture')
-    const left = must<{ id: string }[]>(await sb.from('kpi_campaign_store_targets').select('id').eq('campaign_id', campaignId), 'hậu kiểm targets')
-    const leftC = must<{ id: string }[]>(await sb.from('kpi_campaigns').select('id').eq('id', campaignId), 'hậu kiểm campaign')
-    if (del.length !== 1 || left.length !== 0 || leftC.length !== 0) {
-      throw new Error(`CLEANUP HỎNG: deleted=${del.length} targets_left=${left.length} campaign_left=${leftC.length} — dọn tay ${campaignId}`)
+    if (!markerWritten) return
+    // Xoá theo TÊN duy nhất (+ id khi đã biết) — dọn được cả khi insert đã ghi mà response mất.
+    let del = sb.from('kpi_campaigns').delete().eq('name', campaignName).eq('is_test', true).like('name', `${ORDER_BONUS_NAME_PREFIX}%`)
+    if (campaignId) del = del.eq('id', campaignId)
+    const deleted = must<{ id: string }[]>(await del.select('id'), 'xoá fixture')
+    const leftC = must<{ id: string }[]>(await sb.from('kpi_campaigns').select('id').eq('name', campaignName), 'hậu kiểm campaign')
+    const leftT = campaignId
+      ? must<{ id: string }[]>(await sb.from('kpi_campaign_store_targets').select('id').eq('campaign_id', campaignId), 'hậu kiểm targets') : []
+    const leftA = campaignId
+      ? must<{ id: string }[]>(await sb.from('kpi_campaign_store_actuals').select('id').eq('campaign_id', campaignId), 'hậu kiểm actuals') : []
+    if ((campaignId && deleted.length !== 1) || leftC.length !== 0 || leftT.length !== 0 || leftA.length !== 0) {
+      throw new Error(`CLEANUP HỎNG: deleted=${deleted.length} campaign_left=${leftC.length} targets_left=${leftT.length} actuals_left=${leftA.length} — GIỮ marker ${ORDER_BONUS_MARKER}, dọn tay ${campaignName} ${campaignId ?? ''}`)
     }
+    fs.unlinkSync(ORDER_BONUS_MARKER)
+    console.log(`cleanup: fixture ${campaignName} đã xoá, hậu kiểm 0/0/0`)
   })
 
   test('RPC 112 đã lưu ngưỡng + 200.000đ; cột bonus của actuals còn trống trước khi đồng bộ', async () => {
@@ -132,27 +191,30 @@ test.describe('thưởng thêm theo số đơn — acceptance Super trên fixtur
       'đọc targets fixture')
     expect(t.map((x) => [x.pos_code, x.minimum_order_target, Number(x.order_bonus_per_staff)]).sort())
       .toEqual(FIXTURE.map((f) => [f.pos, f.threshold, BONUS_PER_STAFF]).sort())
-    expect((await readActuals()).length, 'chưa đồng bộ → chưa có actuals').toBe(0)
+    expect((await readActuals()).length, 'chưa đồng bộ → chưa có actuals (cron không được ghi trước nút Đồng bộ)').toBe(0)
   })
 
   test('Super bấm "Đồng bộ doanh số" → RPC tự tính bonus_order_count + order_bonus_achieved đúng công thức', async ({ page }) => {
-    test.setTimeout(180_000)
+    test.setTimeout(240_000)
+    // Đọc BigQuery TRƯỚC và SAU đồng bộ: hai lần phải trùng thì mới chắc nguồn
+    // đứng yên trong lúc engine đọc (ngày hôm nay còn được BI nạp thêm).
+    bqBefore = await readBqOffline()
     await page.goto(`/targets/campaigns/${campaignId}?tab=result`)
     await expect(page.getByRole('button', { name: 'Đồng bộ doanh số' })).toBeVisible()
     await page.getByRole('button', { name: 'Đồng bộ doanh số' }).click()
     // Chờ snapshot xuất hiện (BigQuery + Supabase; vài chục giây là bình thường).
     await expect.poll(async () => (await readActuals()).length, { timeout: 150_000, intervals: [2000] }).toBe(3)
     actuals = await readActuals()
+    bqAfter = await readBqOffline()
+    postSyncStamp = new Map(actuals.map((a) => [a.store_id, a.synced_at]))
 
     const targets = must<{ store_id: string; kpi_target: number; minimum_order_target: number }[]>(
       await sb.from('kpi_campaign_store_targets').select('store_id, kpi_target, minimum_order_target').eq('campaign_id', campaignId as string),
       'đọc targets')
     const tByStore = new Map(targets.map((t) => [t.store_id, t]))
-    const offline: Record<string, number | null> = {}
     for (const a of actuals) {
       const t = tByStore.get(a.store_id)!
       const pos = posByStore.get(a.store_id) as string
-      offline[pos] = a.offline_order_count
       // Campaign bật cả 2 metric ⇒ số đơn Affiliate PHẢI có (sổ Supabase luôn đọc được).
       expect(a.affiliate_order_count, `${pos}: affiliate_order_count`).not.toBeNull()
       if (a.offline_order_count === null) {
@@ -172,14 +234,45 @@ test.describe('thưởng thêm theo số đơn — acceptance Super trên fixtur
     // POS0009 cấu hình để chắc chắn ĐẠT (target 1tr, ngưỡng 50) — trừ khi nguồn Offline degrade.
     const a9 = actuals.find((a) => posByStore.get(a.store_id) === 'POS0009')!
     if (a9.offline_order_count !== null) expect(a9.order_bonus_achieved, 'POS0009 phải ĐẠT với target/ngưỡng thấp').toBe(true)
-    console.log(`BONUS_QA_OFFLINE=${JSON.stringify(offline)} effEnd=${vnTodayISO() < END ? vnTodayISO() : END}`)
+  })
+
+  test('đối soát Offline với BigQuery ĐỘC LẬP — doanh thu thuần + số đơn, từng ngày và cả kỳ, 3 POS', async () => {
+    expect(actuals.length).toBe(3)
+    expect(fs.readFileSync('lib/targets/bigquery.ts', 'utf8'), 'engine phải đọc cùng bảng BigQuery với đối soát này')
+      .toContain(BQ_OFFLINE_TABLE)
+    expect(sameBqRows(bqBefore, bqAfter), 'nguồn BigQuery đổi trong lúc đồng bộ (BI vừa nạp thêm) — chạy lại acceptance').toBe(true)
+    const want = expectOffline(bqAfter, FIXTURE.map((f) => f.pos), START, effEnd)
+    const daily = must<{ store_id: string; date: string; gmv: number; offline_order_count: number | null }[]>(
+      await sb.from('kpi_campaign_store_daily_actuals').select('store_id, date, gmv, offline_order_count').eq('campaign_id', campaignId as string),
+      'đọc daily fixture')
+    const evidence: Record<string, unknown> = {}
+    for (const a of actuals) {
+      const pos = posByStore.get(a.store_id) as string
+      const w = want.get(pos)!
+      expect(Number(a.actual_offline), `${pos}: doanh thu thuần Offline cả kỳ = tổng ROUND từng ngày BigQuery`).toBe(w.revenue)
+      expect(a.offline_order_count, `${pos}: số đơn Offline cả kỳ = SUM(offline_no_order) BigQuery [${START} → ${effEnd}]${w.degraded ? ` — degrade: ${w.degraded}` : ''}`)
+        .toBe(w.orders)
+      const mine = daily.filter((r) => r.store_id === a.store_id)
+      expect(mine.map((r) => String(r.date).slice(0, 10)).sort(), `${pos}: daily có đủ từng ngày trong kỳ`).toEqual([...w.byDay.keys()].sort())
+      for (const r of mine) {
+        const d = String(r.date).slice(0, 10)
+        const wd = w.byDay.get(d)!
+        expect(Number(r.gmv), `${pos}/${d}: doanh thu thuần ngày`).toBe(wd.revenue)
+        expect(r.offline_order_count, `${pos}/${d}: số đơn Offline ngày`).toBe(wd.orders)
+      }
+      evidence[pos] = {
+        days: w.byDay.size, bq_orders: w.orders, sb_orders: a.offline_order_count,
+        bq_revenue: w.revenue, sb_revenue: Number(a.actual_offline), degraded: w.degraded,
+      }
+    }
+    console.log(`BONUS_QA_BQ_RECON=${JSON.stringify(evidence)} range=${START}..${effEnd}`)
   })
 
   test('đối soát số đơn Affiliate với sổ affiliate_orders (DELIVERED, source_active, partner_code, ngày VN theo completed_time)', async () => {
     expect(actuals.length).toBe(3)
-    const effEnd = vnTodayISO() < END ? vnTodayISO() : END
     const from = `${START}T00:00:00+07:00`
     const to = `${nextDayISO(effEnd)}T00:00:00+07:00`
+    const evidence: Record<string, number> = {}
     for (const a of actuals) {
       const pos = posByStore.get(a.store_id) as string
       const { count, error } = await sb.from('affiliate_orders').select('id', { count: 'exact', head: true })
@@ -187,7 +280,9 @@ test.describe('thưởng thêm theo số đơn — acceptance Super trên fixtur
         .gte('completed_time', from).lt('completed_time', to)
       if (error) throw new Error(`đếm affiliate_orders ${pos}: ${error.message}`)
       expect(a.affiliate_order_count, `${pos}: affiliate_order_count = đếm sổ [${from} → ${to})`).toBe(count ?? 0)
+      evidence[pos] = count ?? 0
     }
+    console.log(`BONUS_QA_AFFILIATE=${JSON.stringify(evidence)}`)
   })
 
   test('Super thấy card "Đạt thưởng thêm X/3", 2 cột "Số đơn / Ngưỡng" + "Thưởng thêm/dược sĩ", badge đúng từng cửa hàng', async ({ page }) => {
@@ -234,15 +329,35 @@ test.describe('thưởng thêm theo số đơn — acceptance Super trên fixtur
     }
   })
 
-  test('Staff và SM KHÔNG thấy fixture is_test qua RLS — không rò ra dược sĩ thật', async () => {
-    test.skip(!STAFF.email || !STAFF.password || !SM.email || !SM.password, 'thiếu E2E_STAFF_* / E2E_SM_*')
-    for (const [role, cred] of [['staff', STAFF], ['sm', SM]] as const) {
+  test('Staff, QLCH và SM KHÔNG thấy fixture is_test qua RLS — tài khoản có phạm vi trên cửa hàng fixture', async () => {
+    test.skip(!STAFF.email || !STAFF.password || !QLCH.email || !QLCH.password || !SM.email || !SM.password,
+      'thiếu E2E_STAFF_* / E2E_QLCH_* / E2E_SM_*')
+    const fixtureStores = new Set(storeByPos.values())
+    for (const [role, cred] of [['staff', STAFF], ['qlch', QLCH], ['sm', SM]] as const) {
+      // Tiền điều kiện (service role): tài khoản PHẢI có phạm vi trên ≥1 cửa hàng
+      // fixture. Không có thì "không thấy" chỉ do khác cửa hàng — chứng minh rỗng.
+      const u = must<{ id: string; role: string; store_id: string | null }[]>(
+        await sb.from('users').select('id, role, store_id').eq('email', cred.email as string), `${role} hồ sơ`)
+      expect(u.length, `${role}: tài khoản phải tồn tại`).toBe(1)
+      const scope = u[0].role === 'sm'
+        ? must<{ store_id: string }[]>(await sb.from('sm_store_assignments').select('store_id').eq('sm_user_id', u[0].id), `${role} phân công`).map((r) => r.store_id)
+        : [u[0].store_id]
+      expect(scope.some((s) => s !== null && fixtureStores.has(s)), `${role}: phạm vi phải chạm cửa hàng fixture`).toBe(true)
+
       const db = await sessionDb(cred.email as string, cred.password as string)
       const t = must<{ id: string }[]>(await db.from('kpi_campaign_store_targets').select('id').eq('campaign_id', campaignId as string), `${role} đọc targets`)
       const c = must<{ id: string }[]>(await db.from('kpi_campaigns').select('id').eq('id', campaignId as string), `${role} đọc campaign`)
+      const a = must<{ id: string }[]>(await db.from('kpi_campaign_store_actuals').select('id').eq('campaign_id', campaignId as string), `${role} đọc actuals`)
       expect(t.length, `${role} không được thấy target của fixture is_test`).toBe(0)
       expect(c.length, `${role} không được thấy campaign fixture is_test`).toBe(0)
+      expect(a.length, `${role} không được thấy actuals của fixture is_test`).toBe(0)
       await db.auth.signOut()
     }
+  })
+
+  test('không có lượt đồng bộ thứ hai chen vào trong phiên QA — synced_at giữ nguyên từ lần bấm Đồng bộ', async () => {
+    expect(postSyncStamp.size).toBe(3)
+    const now = await readActuals()
+    expect(new Map(now.map((a) => [a.store_id, a.synced_at])), 'synced_at đổi ⇒ cron hoặc một lượt sync khác đã ghi đè giữa phiên').toEqual(postSyncStamp)
   })
 })
