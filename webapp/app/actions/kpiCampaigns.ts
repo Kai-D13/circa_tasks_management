@@ -106,6 +106,20 @@ export async function updateCampaign(
       metric_affiliate: campaign.metric_affiliate === true,
     })
     if (!metrics.ok) return { error: metrics.error }
+    // 113.6 (audit P1#2): campaign đang có ngưỡng thưởng thêm theo số đơn thì
+    // KHÔNG được tắt một trong hai nguồn — tổng đơn xét thưởng = Offline +
+    // Affiliate. Trigger 112 chặn ở DB; ở đây báo sớm bằng lời dễ hiểu.
+    if (!(metrics.metric_offline && metrics.metric_affiliate)) {
+      const { count, error: bonusErr } = await auth.supabase
+        .from('kpi_campaign_store_targets')
+        .select('id', { count: 'exact', head: true })
+        .eq('campaign_id', id)
+        .not('minimum_order_target', 'is', null)
+      if (bonusErr) return { error: `Không kiểm tra được ngưỡng thưởng thêm: ${bonusErr.message}` }
+      if ((count ?? 0) > 0) {
+        return { error: 'Chiến dịch đang có ngưỡng thưởng thêm theo số đơn (tổng đơn = Offline + Affiliate) — nạp lại file target KHÔNG có 2 cột thưởng trước, rồi mới tắt chỉ số' }
+      }
+    }
     patch.metric_offline = metrics.metric_offline
     patch.metric_affiliate = metrics.metric_affiliate
   }

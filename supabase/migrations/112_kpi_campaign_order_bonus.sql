@@ -36,7 +36,11 @@
 -- ROLLBACK:
 --   1. CREATE OR REPLACE rpc_replace_campaign_targets từ 107 (nguyên văn).
 --   2. CREATE OR REPLACE rpc_replace_campaign_actuals từ 106 (nguyên văn).
---   3. ALTER TABLE public.kpi_campaign_store_actuals
+--   3. DROP TRIGGER IF EXISTS trg_kpi_campaign_metrics_order_bonus ON public.kpi_campaigns;
+--      DROP TRIGGER IF EXISTS trg_kcst_order_bonus_metrics ON public.kpi_campaign_store_targets;
+--      DROP FUNCTION IF EXISTS public.ensure_campaign_metrics_for_order_bonus();
+--      DROP FUNCTION IF EXISTS public.ensure_order_bonus_target_metrics();
+--      ALTER TABLE public.kpi_campaign_store_actuals
 --        DROP CONSTRAINT IF EXISTS chk_kcsa_order_bonus,
 --        DROP COLUMN IF EXISTS affiliate_order_count,
 --        DROP COLUMN IF EXISTS bonus_order_count,
@@ -71,8 +75,9 @@ BEGIN
       ADD CONSTRAINT chk_kcst_order_bonus CHECK (
         num_nonnulls(minimum_order_target, order_bonus_per_staff) IN (0, 2)
         AND (minimum_order_target  IS NULL OR minimum_order_target > 0)
-        AND (order_bonus_per_staff IS NULL
-             OR (order_bonus_per_staff > 0 AND order_bonus_per_staff = trunc(order_bonus_per_staff))));
+        -- 113.6 (audit P1#1): khoá CỨNG mức thưởng ở tầng bảng — super admin có
+        -- policy ghi thẳng (069 kct_super_all) nên RPC/parser không phải chốt cuối.
+        AND (order_bonus_per_staff IS NULL OR order_bonus_per_staff = 200000));
   END IF;
 END $$;
 
@@ -107,6 +112,56 @@ COMMENT ON COLUMN public.kpi_campaign_store_actuals.bonus_order_count IS
   '112: tổng số đơn DÙNG ĐỂ XÉT thưởng thêm, RPC tự tính lúc ghi snapshot toàn kỳ. Bộ lọc khoảng ngày KHÔNG ghi đè cột này.';
 COMMENT ON COLUMN public.kpi_campaign_store_actuals.order_bonus_achieved IS
   '112: đạt thưởng thêm (RPC tự tính). NULL = không áp dụng HOẶC chưa đủ dữ liệu số đơn — phân biệt bằng target.minimum_order_target.';
+
+-- ── B2. Trigger: cờ metric ↔ ngưỡng thưởng thêm không được mâu thuẫn ───────
+-- (113.6, audit P1#2) RPC targets đã từ chối nạp ngưỡng khi thiếu metric, và
+-- RPC actuals từ chối ghi khi cờ bị tắt sau đó — nhưng snapshot thưởng CŨ vẫn
+-- hiển thị trong lúc sync bị chặn. Chặn ngay tại DB ở CẢ HAI chiều:
+--   · sửa cờ metric của campaign đang có ngưỡng → RAISE (nạp lại file không
+--     có 2 cột thưởng trước, rồi mới tắt metric);
+--   · ghi ngưỡng vào campaign không phải Doanh số / thiếu metric → RAISE
+--     (đóng luôn đường ghi thẳng của super admin, cùng lý do CHECK ở trên).
+-- SECURITY DEFINER như set_task_department (050): kiểm tra không được phụ
+-- thuộc RLS của người ghi. Hàm trigger không gọi trực tiếp được nhưng vẫn
+-- REVOKE đích danh cho đúng kỷ luật grants.
+CREATE OR REPLACE FUNCTION public.ensure_campaign_metrics_for_order_bonus()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF NOT (coalesce(NEW.metric_offline, false) AND coalesce(NEW.metric_affiliate, false))
+     AND EXISTS (SELECT 1 FROM public.kpi_campaign_store_targets t
+                 WHERE t.campaign_id = NEW.id AND t.minimum_order_target IS NOT NULL) THEN
+    RAISE EXCEPTION 'Chiến dịch đang có ngưỡng thưởng thêm theo số đơn — không tắt được Doanh thu thuần tại cửa hàng / Doanh thu Affiliate (offline=%, affiliate=%). Nạp lại file target KHÔNG có 2 cột thưởng trước, rồi mới đổi chỉ số.', NEW.metric_offline, NEW.metric_affiliate;
+  END IF;
+  RETURN NEW;
+END $$;
+REVOKE ALL ON FUNCTION public.ensure_campaign_metrics_for_order_bonus() FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS trg_kpi_campaign_metrics_order_bonus ON public.kpi_campaigns;
+CREATE TRIGGER trg_kpi_campaign_metrics_order_bonus
+  BEFORE UPDATE OF metric_offline, metric_affiliate ON public.kpi_campaigns
+  FOR EACH ROW EXECUTE FUNCTION public.ensure_campaign_metrics_for_order_bonus();
+
+CREATE OR REPLACE FUNCTION public.ensure_order_bonus_target_metrics()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_type text;
+  v_off  boolean;
+  v_aff  boolean;
+BEGIN
+  IF NEW.minimum_order_target IS NULL THEN RETURN NEW; END IF;
+  SELECT metric_type, metric_offline, metric_affiliate INTO v_type, v_off, v_aff
+  FROM public.kpi_campaigns WHERE id = NEW.campaign_id;
+  IF v_type IS DISTINCT FROM 'gmv' OR NOT (coalesce(v_off, false) AND coalesce(v_aff, false)) THEN
+    RAISE EXCEPTION 'Ngưỡng thưởng thêm theo số đơn chỉ hợp lệ với chiến dịch Doanh số bật CẢ Offline lẫn Affiliate (campaign %: type=%, offline=%, affiliate=%)', NEW.campaign_id, v_type, v_off, v_aff;
+  END IF;
+  RETURN NEW;
+END $$;
+REVOKE ALL ON FUNCTION public.ensure_order_bonus_target_metrics() FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS trg_kcst_order_bonus_metrics ON public.kpi_campaign_store_targets;
+CREATE TRIGGER trg_kcst_order_bonus_metrics
+  BEFORE INSERT OR UPDATE OF minimum_order_target, campaign_id ON public.kpi_campaign_store_targets
+  FOR EACH ROW EXECUTE FUNCTION public.ensure_order_bonus_target_metrics();
 
 -- ── C. rpc_replace_campaign_targets: BODY 107 NGUYÊN VĂN + delta 112 ──────
 CREATE OR REPLACE FUNCTION public.rpc_replace_campaign_targets(
@@ -725,6 +780,8 @@ VALUES ('112', 'kpi_campaign_order_bonus',
         || ' do RPC tự tính lúc ghi snapshot toàn kỳ, payload app không được mang. Đạt ⇔'
         || ' actual_value >= kpi_target VÀ tổng đơn >= ngưỡng. Tách hẳn khỏi store_commission_pool.'
         || ' Mức thưởng cố định 200000; campaign phải bật cả Offline lẫn Affiliate (113.5).'
+        || ' 113.6: CHECK bảng khoá 200000 + 2 trigger chặn tắt metric khi còn ngưỡng / ghi'
+        || ' ngưỡng vào campaign thiếu metric (đóng đường ghi thẳng của super admin).'
         || ' Thân 2 RPC trích nguyên văn 107/106 + chỉ chèn thêm. Backward-compatible.')
 ON CONFLICT (version) DO NOTHING;
 
@@ -739,10 +796,13 @@ COMMIT;
 --    ORDER BY table_name, column_name;
 --    Kỳ vọng 5 dòng: targets (integer, numeric) · actuals (integer, integer, boolean).
 --
--- 2) 2 CHECK:
---    SELECT conname FROM pg_constraint
+-- 2) 2 CHECK + CHECK khoá 200000 + 2 trigger:
+--    SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint
 --    WHERE conname IN ('chk_kcst_order_bonus', 'chk_kcsa_order_bonus');
---    Kỳ vọng 2 dòng.
+--    Kỳ vọng 2 dòng; chk_kcst_order_bonus chứa "order_bonus_per_staff = 200000".
+--    SELECT tgname, tgrelid::regclass FROM pg_trigger
+--    WHERE tgname IN ('trg_kpi_campaign_metrics_order_bonus', 'trg_kcst_order_bonus_metrics');
+--    Kỳ vọng 2 dòng (kpi_campaigns, kpi_campaign_store_targets).
 --
 -- 3) 2 RPC còn SECURITY DEFINER + search_path:
 --    SELECT p.proname, p.prosecdef, p.proconfig

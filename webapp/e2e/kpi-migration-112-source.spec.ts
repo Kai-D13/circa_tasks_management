@@ -48,6 +48,16 @@ function firstMissingInOrder(a: string[], b: string[]): string | null {
 }
 
 test.describe('mig 112 source contract @desktop', () => {
+  test('dollar-quote cân: mọi khối $$ đóng đúng — sinh file qua String.replace() từng ăn mất một $', () => {
+    // 3 DO block + 2 hàm trigger + 2 RPC = 7 khối; một khối hỏng là toàn bộ
+    // migration lỗi cú pháp (PGlite bắt được ở 113.6, giờ khoá ở đây luôn).
+    const opens = (exec112.match(/ AS \$\$$/gm) ?? []).length + (exec112.match(/^DO \$\$$/gm) ?? []).length
+    expect(opens).toBe(7)
+    expect((exec112.match(/^END \$\$;$/gm) ?? []).length).toBe(7)
+    expect(exec112).not.toMatch(/^END \$;$/m)
+    expect(exec112).not.toMatch(/ AS \$$/m)
+  })
+
   test('preflight đòi 111 + marker 112 + nằm trong transaction', () => {
     expect(exec112).toContain("WHERE version = '111'")
     expect(exec112).toMatch(/^BEGIN;/m)
@@ -182,6 +192,10 @@ test.describe('mig 112 source contract @desktop', () => {
     expect(exec112).toContain('ADD COLUMN IF NOT EXISTS order_bonus_achieved  boolean')
     expect(exec112).toContain("conname = 'chk_kcst_order_bonus'")
     expect(exec112).toContain('num_nonnulls(minimum_order_target, order_bonus_per_staff) IN (0, 2)')
+    // 113.6 (P1#1): CHECK khoá cứng 200000 — super admin có policy ghi thẳng
+    // (069 kct_super_all) nên RPC/parser không phải chốt cuối.
+    expect(exec112).toContain('AND (order_bonus_per_staff IS NULL OR order_bonus_per_staff = 200000))')
+    expect(exec112).not.toContain('order_bonus_per_staff = trunc(order_bonus_per_staff)')
     expect(exec112).toContain("conname = 'chk_kcsa_order_bonus'")
     expect(exec112).toContain('order_bonus_achieved IS NULL OR bonus_order_count IS NOT NULL')
     // Phần chạy KHÔNG xoá gì (rollback chỉ nằm trong comment đầu file).
@@ -197,10 +211,30 @@ test.describe('mig 112 source contract @desktop', () => {
       expect(exec112).toContain(`REVOKE ALL ON FUNCTION ${sig}`)
       expect(exec112).toContain(`GRANT EXECUTE ON FUNCTION ${sig}`)
     }
-    expect((exec112.match(/FROM PUBLIC, anon, authenticated;/g) ?? []).length).toBe(2)
+    // 2 RPC + 2 hàm trigger (113.6) đều REVOKE đích danh; chỉ 2 RPC có GRANT.
+    expect((exec112.match(/FROM PUBLIC, anon, authenticated;/g) ?? []).length).toBe(4)
     expect((exec112.match(/TO service_role;/g) ?? []).length).toBe(2)
     expect(T112).toContain('SECURITY DEFINER SET search_path = public')
     expect(A112).toContain('SECURITY DEFINER SET search_path = public')
-    expect((exec112.match(/CREATE OR REPLACE FUNCTION/g) ?? []).length).toBe(2)
+    expect((exec112.match(/CREATE OR REPLACE FUNCTION/g) ?? []).length).toBe(4)
+  })
+
+  test('113.6 (P1#2): 2 trigger chặn trạng thái mâu thuẫn cờ metric ↔ ngưỡng thưởng', () => {
+    // Chiều 1: campaign đang có ngưỡng → không tắt được một metric.
+    expect(exec112).toContain('CREATE OR REPLACE FUNCTION public.ensure_campaign_metrics_for_order_bonus()')
+    expect(exec112).toContain('BEFORE UPDATE OF metric_offline, metric_affiliate ON public.kpi_campaigns')
+    expect(exec112).toContain('WHERE t.campaign_id = NEW.id AND t.minimum_order_target IS NOT NULL')
+    expect(exec112).toContain('không tắt được Doanh thu thuần tại cửa hàng / Doanh thu Affiliate')
+    // Chiều 2: ngưỡng chỉ vào được campaign Doanh số bật cả hai (đóng đường ghi thẳng).
+    expect(exec112).toContain('CREATE OR REPLACE FUNCTION public.ensure_order_bonus_target_metrics()')
+    expect(exec112).toContain('BEFORE INSERT OR UPDATE OF minimum_order_target, campaign_id ON public.kpi_campaign_store_targets')
+    expect(exec112).toContain("IF v_type IS DISTINCT FROM 'gmv' OR NOT (coalesce(v_off, false) AND coalesce(v_aff, false)) THEN")
+    // Cả hai là SECURITY DEFINER (không phụ thuộc RLS người ghi) + DROP IF EXISTS trước CREATE (idempotent).
+    for (const fn of ['ensure_campaign_metrics_for_order_bonus', 'ensure_order_bonus_target_metrics']) {
+      const i = exec112.indexOf(`CREATE OR REPLACE FUNCTION public.${fn}()`)
+      expect(exec112.slice(i, i + 200)).toContain('SECURITY DEFINER SET search_path = public')
+    }
+    expect(exec112).toContain('DROP TRIGGER IF EXISTS trg_kpi_campaign_metrics_order_bonus ON public.kpi_campaigns;')
+    expect(exec112).toContain('DROP TRIGGER IF EXISTS trg_kcst_order_bonus_metrics ON public.kpi_campaign_store_targets;')
   })
 })
