@@ -47,6 +47,10 @@ interface ActualRow {
   actual_offline: number | null; actual_affiliate: number | null
   offline_order_count: number | null
   offline_synced_at: string | null; affiliate_synced_at: string | null
+  // Mig 112 — snapshot toàn kỳ do RPC tự tính (bộ lọc khoảng KHÔNG ghi đè).
+  affiliate_order_count: number | null
+  bonus_order_count: number | null
+  order_bonus_achieved: boolean | null
 }
 
 function TierChips({ tiers }: { tiers: TierRow[] }) {
@@ -113,7 +117,7 @@ export default async function CampaignDetailPage({
       : Promise.resolve({ data: [], error: null }),
     supabase
       .from('kpi_campaign_store_actuals')
-      .select('store_id, actual_value, actual_offline, actual_affiliate, offline_order_count, actual_customer_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
+      .select('store_id, actual_value, actual_offline, actual_affiliate, offline_order_count, actual_customer_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at, affiliate_order_count, bonus_order_count, order_bonus_achieved')
       .eq('campaign_id', id),
   ])
   const queryError = targetsErr?.message ?? runsErr?.message ?? actualsErr?.message ?? null
@@ -191,6 +195,11 @@ export default async function CampaignDetailPage({
           offline_order_count: isDaily ? (st as { orders: number | null }).orders : null,
           offline_synced_at: snap?.offline_synced_at ?? null,
           affiliate_synced_at: snap?.affiliate_synced_at ?? null,
+          // 112: object này dựng MỚI (không spread) — quên copy là khối thưởng
+          // thêm biến mất khi bật bộ lọc. Luôn toàn kỳ, nguyên từ snapshot.
+          affiliate_order_count: snap?.affiliate_order_count ?? null,
+          bonus_order_count: snap?.bonus_order_count ?? null,
+          order_bonus_achieved: snap?.order_bonus_achieved ?? null,
         } satisfies ActualRow
       })
     }

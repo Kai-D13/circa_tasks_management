@@ -9,6 +9,8 @@ import {
   qualityKpiPass,
 } from '@/lib/kpi/orderAov'
 import { buildTierProgress, type TierProgress } from '@/lib/kpi/resultModel'
+import type { OrderBonusView } from '@/lib/kpi/orderBonus'
+import { StatusBadge } from '@/components/ds/StatusBadge'
 import { CampaignDailyChart } from '@/components/kpi/CampaignDailyChart'
 import { CampaignPicker } from '@/components/kpi/CampaignPicker'
 import { requiredPerDay } from '@/lib/kpi/performance'
@@ -56,6 +58,10 @@ export interface CampaignView {
   // Mig 106 (Chất lượng bán hàng): 2 mục tiêu (số đơn + AOV).
   order_target?: number | null
   aov_target?: number | null
+  // Mig 112: thưởng thêm theo ngưỡng số đơn — ĐÃ TÍNH SẴN từ snapshot toàn kỳ
+  // (lib/kpi/orderBonus) trước mọi ghi đè của bộ lọc khoảng. null/vắng = campaign
+  // không áp dụng ⇒ card không render. KHÔNG tự tính lại từ actual_value ở đây.
+  order_bonus?: OrderBonusView | null
 }
 // gmv = Offline, gmv_affiliate = Affiliate — chart hiển thị TỔNG, giữ riêng
 // 2 nguồn cho tooltip breakdown + stacked chart sau này.
@@ -661,6 +667,45 @@ export function CampaignKpiView({
           </CardContent>
         </Card>
       )}
+
+      {/* Mig 112: THƯỞNG THÊM THEO SỐ ĐƠN — card RIÊNG, đặt SAU Mốc thưởng
+          (không lồng vào: card đó ẩn khi campaign không có bậc). Mọi số ở đây
+          đọc từ sel.order_bonus (snapshot toàn kỳ) — không bao giờ từ
+          actual_value, vốn bị bộ lọc khoảng ghi đè. */}
+      {sel.order_bonus && (() => {
+        const b = sel.order_bonus
+        const barPct = b.pct === null ? 0 : Math.min(b.pct, 100)
+        return (
+          <Card className="rounded-lg" data-order-bonus>
+            <CardContent className="p-4 space-y-3">
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <p className="flex items-center gap-1.5 font-semibold text-sm">
+                  <Gift className="h-4 w-4 text-primary" /> Thưởng thêm theo số đơn
+                </p>
+                <StatusBadge tone={b.tone}>{b.statusLabel}</StatusBadge>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-xs text-muted-foreground">Số đơn toàn kỳ</span>
+                  <span className="text-sm font-semibold tabular-nums" data-order-bonus-orders>{b.ordersLine}</span>
+                </div>
+                <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                  <div
+                    className={cn('h-full rounded-full', b.ordersMet ? 'bg-status-success' : 'bg-primary')}
+                    style={{ width: `${barPct}%` }}
+                  />
+                </div>
+                {b.hint && <p className="text-xs text-muted-foreground">{b.hint}</p>}
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                Mỗi dược sĩ nhận thêm <span className="font-medium text-foreground">{b.perStaffAmountLabel}</span> khi cửa hàng đạt <span className="font-medium">cả</span> KPI doanh thu lẫn ngưỡng số đơn (Offline + Affiliate). Khoản này <span className="font-medium">riêng</span>, không nằm trong Commission Store.
+              </p>
+            </CardContent>
+          </Card>
+        )
+      })()}
 
       {/* P3-E r1: chú thích nguồn từ campaignFootnote (contract có test) —
           offline-only giữ nguyên câu cũ; có affiliate → rule DELIVERED-only. */}

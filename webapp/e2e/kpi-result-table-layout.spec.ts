@@ -163,3 +163,28 @@ test.describe('kpi result table — showGroup (107) @desktop', () => {
     expect(b).toEqual(a)
   })
 })
+
+// ── Mig 112: 2 cột thưởng thêm theo số đơn (tuỳ chọn) ──────────────────────
+test.describe('kpi result table layout — thưởng thêm (112) @desktop', () => {
+  test('mặc định (không truyền) → KHÔNG có cột thưởng: mọi campaign cũ giữ nguyên bảng', () => {
+    const keys = resultTableColumns(2, true).map((c) => c.key)
+    expect(keys.some((k) => k.startsWith('bonus'))).toBe(false)
+    expect(resultTableDesktopMinPx(2, true)).toBe(resultTableDesktopMinPx(2, true, undefined, true, false))
+  })
+
+  test('showOrderBonus=true → 2 cột desktop SAU "Trung bình/ngày", TRƯỚC khu Bậc; 1 ô gộp mobile', () => {
+    const cols = resultTableColumns(2, true, undefined, true, true)
+    const keys = cols.map((c) => c.key)
+    const i = keys.indexOf('perDay')
+    expect(keys.slice(i + 1, i + 5)).toEqual(['bonusOrders', 'bonus', 'bonusCombined', 'tierCombined'])
+    expect(cols.find((c) => c.key === 'bonusOrders')).toMatchObject({ label: 'Số đơn / Ngưỡng', scope: 'desktop' })
+    expect(cols.find((c) => c.key === 'bonus')).toMatchObject({ label: 'Thưởng thêm/dược sĩ', scope: 'desktop' })
+    expect(cols.find((c) => c.key === 'bonusCombined')?.scope).toBe('mobile')
+  })
+
+  test('min width desktop cộng đúng 2 cột mới (ô mobile không tính)', () => {
+    const base = resultTableDesktopMinPx(2, true, undefined, true, false)
+    const withBonus = resultTableDesktopMinPx(2, true, undefined, true, true)
+    expect(withBonus - base).toBe(RESULT_COL_PX.bonusOrders + RESULT_COL_PX.bonus)
+  })
+})

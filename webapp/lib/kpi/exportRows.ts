@@ -6,6 +6,7 @@
 
 import { campaignPerformance } from '@/lib/kpi/performance'
 import { aovFromSnapshot, qualityKpiPass } from '@/lib/kpi/orderAov'
+import { orderBonusExportLabel, orderBonusView } from '@/lib/kpi/orderBonus'
 
 export interface ExportCampaign {
   name: string; start_date: string; end_date: string
@@ -16,6 +17,8 @@ export interface ExportTarget {
   stores: { name: string } | null
   // Mig 106 — chỉ campaign Chất lượng bán hàng (NULL với 2 loại cũ).
   order_target?: number | null; aov_target?: number | null
+  // Mig 112 — thưởng thêm theo ngưỡng số đơn (NULL = không áp dụng).
+  minimum_order_target?: number | null; order_bonus_per_staff?: number | null
 }
 export interface ExportActual {
   store_id: string; actual_value: number; run_rate: number | null; remaining_target: number | null
@@ -23,6 +26,10 @@ export interface ExportActual {
   actual_offline: number | null; actual_affiliate: number | null
   offline_order_count?: number | null   // 105 (optional: caller cũ/test không đổi)
   offline_synced_at: string | null; affiliate_synced_at: string | null
+  // Mig 112 — snapshot toàn kỳ (optional: caller cũ/test không đổi).
+  affiliate_order_count?: number | null
+  bonus_order_count?: number | null
+  order_bonus_achieved?: boolean | null
 }
 
 export function affiliateDataStatus(metricAffiliate: boolean, a: ExportActual | undefined): string {
@@ -69,8 +76,34 @@ export function buildCampaignExportRows(
       'Affiliate Synced At': a?.affiliate_synced_at ? fmt(a.affiliate_synced_at) : '',
       'Affiliate Data Status': affiliateDataStatus(c.metric_affiliate, a),
       'Đồng bộ lúc':  a ? fmt(a.synced_at) : '',
+      // ── Mig 112: NỐI VÀO CUỐI (21 cột cũ giữ nguyên tên + vị trí — Power
+      // Query của Finance). LUÔN có mặt, để trống khi campaign không áp dụng ⇒
+      // schema file ổn định giữa các campaign.
+      ...bonusExportCols(t, a),
     }
   })
+}
+
+function bonusExportCols(t: ExportTarget, a: ExportActual | undefined): Record<string, string | number> {
+  const v = orderBonusView({
+    minimum_order_target: t.minimum_order_target,
+    order_bonus_per_staff: t.order_bonus_per_staff,
+    bonus_order_count: a?.bonus_order_count ?? null,
+    order_bonus_achieved: a?.order_bonus_achieved ?? null,
+    synced: a !== undefined,
+  })
+  return {
+    'Ngưỡng đơn tối thiểu': v ? v.threshold : '',
+    // Số đơn Affiliate có nghĩa với MỌI campaign bật Affiliate (kể cả không
+    // áp dụng thưởng thêm) — ghi khi snapshot có, trống khi chưa có.
+    'Số đơn Affiliate': a?.affiliate_order_count != null ? Number(a.affiliate_order_count) : '',
+    // Tổng số đơn RPC ĐÃ DÙNG để xét thưởng (Offline + Affiliate toàn kỳ).
+    'Tổng số đơn': v?.orders != null ? v.orders : '',
+    'Đạt thưởng thêm': orderBonusExportLabel(v),
+    // Như 'Commission pool': chỉ ghi số tiền khi ĐẠT; chưa đạt / chưa đủ dữ
+    // liệu để trống — cột 'Đạt thưởng thêm' nói rõ lý do.
+    'Thưởng thêm/dược sĩ': v?.status === 'achieved' ? v.perStaff : '',
+  }
 }
 
 // ── Mig 103: builder RIÊNG cho campaign "Số khách Affiliate" ────────────────

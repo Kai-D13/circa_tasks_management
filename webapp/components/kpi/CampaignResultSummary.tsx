@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils'
 import { campaignPerformance, performanceTone } from '@/lib/kpi/performance'
 import { metricPresentation, offlineOrderLine, REVENUE_LABELS } from '@/lib/kpi/campaignDisplay'
 import { ORDER_AOV_VERDICT, orderAovDualView, qualityKpiPass } from '@/lib/kpi/orderAov'
-import { Target, TrendingUp, Percent, Wallet, Award, CalendarDays, Gauge, ClipboardCheck, Store as StoreIcon, Link2 as LinkIcon, type LucideIcon } from 'lucide-react'
+import { Target, TrendingUp, Percent, Wallet, Award, CalendarDays, Gauge, ClipboardCheck, Store as StoreIcon, Link2 as LinkIcon, Gift, type LucideIcon } from 'lucide-react'
 
 // Store Manager "Kết quả" management block (r3): the same 6-card summary idiom
 // as the super-admin campaign detail Result tab, but scoped to the manager's OWN
@@ -84,6 +84,18 @@ export function CampaignResultSummary({ campaign, todayISO }: { campaign: Campai
     { label: 'Commission Store dự kiến', value: synced ? money(pool) : '—', icon: Wallet,
       tile: synced && pool > 0 ? 'bg-status-success-bg text-status-success' : 'bg-muted text-muted-foreground',
       valueCls: synced && pool > 0 ? 'text-status-success' : undefined },
+    // Mig 112: ô RIÊNG ngay sau Commission Store — hai khoản không bao giờ gộp.
+    // Đọc campaign.order_bonus (snapshot toàn kỳ), không từ actual_value (bị
+    // bộ lọc khoảng ghi đè).
+    ...(campaign.order_bonus ? [{
+      label: 'Thưởng thêm/dược sĩ',
+      value: campaign.order_bonus.status === 'achieved' ? campaign.order_bonus.perStaffAmountLabel
+        : campaign.order_bonus.statusLabel,
+      icon: Gift as LucideIcon,
+      sub: `Số đơn ${campaign.order_bonus.ordersLine}`,
+      tile: campaign.order_bonus.status === 'achieved' ? 'bg-status-success-bg text-status-success' : 'bg-muted text-muted-foreground',
+      valueCls: campaign.order_bonus.status === 'achieved' ? 'text-status-success' : undefined,
+    }] : []),
     { label: 'Bậc đạt', value: reached != null ? `Bậc ${reached}/${tierCount}` : (synced ? 'Chưa đạt' : '—'), icon: Award,
       tile: reached != null ? 'bg-status-success-bg text-status-success' : 'bg-muted text-muted-foreground' },
     { label: 'Nhịp độ (Performance)', value: perf != null ? `${perf.toFixed(1)}%` : '—', icon: Gauge,

@@ -32,6 +32,8 @@ export const RESULT_COL_PX = {
   quality: 150,  // 106: trạng thái đạt/chưa đạt 2 mục tiêu
   combined: 170, // cột gộp "Bậc đạt · Commission" (mobile giữ UI cũ)
   tier: 176,
+  bonusOrders: 150, // 112: 'Số đơn / Ngưỡng' — '1.065 / 710 đơn'
+  bonus: 170,       // 112: 'Thưởng thêm/dược sĩ' — badge trạng thái + mức tiền
 } as const
 
 // Mig 103: metricType đổi DUY NHẤT label cột actual ('Actual GMV' → 'Số
@@ -40,8 +42,13 @@ export const RESULT_COL_PX = {
 // 107: `showGroup=false` ⇒ cột 'Phân loại' biến mất hoàn toàn. Mặc định TRUE để
 // mọi caller cũ giữ nguyên hành vi (và để việc bỏ cột luôn là quyết định TƯỜNG
 // MINH của caller, không phải tác dụng phụ).
+// 112: `showOrderBonus=true` ⇒ thêm 2 cột desktop 'Số đơn / Ngưỡng' +
+// 'Thưởng thêm/dược sĩ' ngay SAU 'Trung bình/ngày' (trước khu Bậc/Commission —
+// hai khoản tiền đứng cạnh nhau nhưng tách cột) và 1 ô gộp cho mobile. Mặc
+// định FALSE ⇒ mọi campaign không áp dụng giữ nguyên bảng từng cột.
 export function resultTableColumns(
   maxTierCount: number, showBreakdown: boolean, metricType?: string, showGroup = true,
+  showOrderBonus = false,
 ): ResultTableColumn[] {
   // Mig 106: Chất lượng bán hàng — cột actual là ĐIỂM %, và Order/AOV gộp vào
   // MỘT cột 2 dòng (yêu cầu stakeholder: không tăng cột ngang).
@@ -93,6 +100,11 @@ export function resultTableColumns(
     ...(isOrderAov ? [] : [
       { key: 'perDay', label: 'Trung bình/ngày', minPx: RESULT_COL_PX.perDay, align: 'right', scope: 'all' } as const,
     ]),
+    ...(showOrderBonus ? [
+      { key: 'bonusOrders', label: 'Số đơn / Ngưỡng', minPx: RESULT_COL_PX.bonusOrders, align: 'right', scope: 'desktop' } as const,
+      { key: 'bonus', label: 'Thưởng thêm/dược sĩ', minPx: RESULT_COL_PX.bonus, align: 'left', scope: 'desktop' } as const,
+      { key: 'bonusCombined', label: 'Số đơn · Thưởng thêm', minPx: RESULT_COL_PX.bonus, align: 'left', scope: 'mobile' } as const,
+    ] : []),
     { key: 'tierCombined', label: 'Bậc đạt · Commission', minPx: RESULT_COL_PX.combined, align: 'left', scope: 'mobile' },
     ...Array.from({ length: Math.max(0, maxTierCount) }, (_, i) => ({
       key: `tier-${i + 1}`,
@@ -108,10 +120,11 @@ export function resultTableColumns(
 // biết bảng cần bao nhiêu px trước khi scroll ngang nội bộ kích hoạt.
 export function resultTableDesktopMinPx(
   maxTierCount: number, showBreakdown: boolean, metricType?: string, showGroup = true,
+  showOrderBonus = false,
 ): number {
   // r1 (audit): PHẢI truyền metricType — thiếu sẽ tính sai tổng width khi loại
-  // campaign có cột riêng (106 thêm 2 cột).
-  return resultTableColumns(maxTierCount, showBreakdown, metricType, showGroup)
+  // campaign có cột riêng (106 thêm 2 cột). 112: cùng lý do với showOrderBonus.
+  return resultTableColumns(maxTierCount, showBreakdown, metricType, showGroup, showOrderBonus)
     .filter((c) => c.scope !== 'mobile')
     .reduce((sum, c) => sum + c.minPx, 0)
 }

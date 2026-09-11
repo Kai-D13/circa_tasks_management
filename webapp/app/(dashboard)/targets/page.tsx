@@ -19,6 +19,7 @@ import {
   CampaignKpiView, parseDailySeries, type CampaignView, type DailyPoint,
 } from '@/components/kpi/CampaignKpiView'
 import { normalizeDailyPoint, type DailyRawRow } from '@/lib/kpi/dailyPoint'
+import { orderBonusView } from '@/lib/kpi/orderBonus'
 import { CampaignResultSummary } from '@/components/kpi/CampaignResultSummary'
 import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import { isReferralEnabled } from '@/lib/affiliate/flags'
@@ -185,14 +186,14 @@ async function fetchCampaignViews(
   const [{ data: targets, error: tErr }, { data: actuals, error: aErr }] = await Promise.all([
     supabase
       .from('kpi_campaign_store_targets')
-      .select('kpi_target, store_kpi_group, order_target, aov_target, campaign:kpi_campaigns!inner(id, name, start_date, end_date, metric_type, metric_offline, metric_affiliate), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
+      .select('kpi_target, store_kpi_group, order_target, aov_target, minimum_order_target, order_bonus_per_staff, campaign:kpi_campaigns!inner(id, name, start_date, end_date, metric_type, metric_offline, metric_affiliate), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount)')
       .eq('store_id', storeId)
       // Archive (098): phòng thủ kép — RLS vốn chỉ cho thấy campaign active
       // (không archive được), filter tường minh theo yêu cầu audit.
       .is('campaign.archived_at', null),
     supabase
       .from('kpi_campaign_store_actuals')
-      .select('campaign_id, actual_value, actual_offline, actual_affiliate, offline_order_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at')
+      .select('campaign_id, actual_value, actual_offline, actual_affiliate, offline_order_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at, bonus_order_count, order_bonus_achieved')
       .eq('store_id', storeId),
   ])
   if (tErr || aErr) {
@@ -202,13 +203,14 @@ async function fetchCampaignViews(
     return []
   }
   const actualByCampaign = new Map(
-    ((actuals ?? []) as { campaign_id: string; actual_value: number; actual_offline: number | null; actual_affiliate: number | null; offline_order_count: number | null; run_rate: number | null; remaining_target: number | null; achieved_tier_order: number | null; store_commission_pool: number | null; offline_synced_at: string | null; affiliate_synced_at: string | null; synced_at: string }[])
+    ((actuals ?? []) as { campaign_id: string; actual_value: number; actual_offline: number | null; actual_affiliate: number | null; offline_order_count: number | null; run_rate: number | null; remaining_target: number | null; achieved_tier_order: number | null; store_commission_pool: number | null; offline_synced_at: string | null; affiliate_synced_at: string | null; synced_at: string; bonus_order_count: number | null; order_bonus_achieved: boolean | null }[])
       .map((a) => [a.campaign_id, a]),
   )
   return ((targets ?? []) as unknown as {
     kpi_target: number
     store_kpi_group: string | null
     order_target: number | null; aov_target: number | null
+    minimum_order_target: number | null; order_bonus_per_staff: number | null
     campaign: { id: string; name: string; start_date: string; end_date: string; metric_type?: string; metric_offline: boolean; metric_affiliate: boolean }
     kpi_campaign_store_tiers: { tier_order: number; threshold_pct: number; commission_amount: number }[]
   }[])
@@ -240,6 +242,15 @@ async function fetchCampaignViews(
         affiliate_synced_at: a?.affiliate_synced_at ?? null,
         // Mig 106: 2 mục tiêu (NULL với 2 loại cũ).
         order_target: t.order_target, aov_target: t.aov_target,
+        // Mig 112: tính TỪ SNAPSHOT ngay tại đây, TRƯỚC mọi ghi đè của bộ lọc
+        // khoảng ngày (nhánh QLCH spread `...v` nên mang theo nguyên vẹn).
+        order_bonus: orderBonusView({
+          minimum_order_target: t.minimum_order_target,
+          order_bonus_per_staff: t.order_bonus_per_staff,
+          bonus_order_count: a?.bonus_order_count ?? null,
+          order_bonus_achieved: a?.order_bonus_achieved ?? null,
+          synced: !!a,
+        }),
       }
     })
     .sort((a, b) => a.end_date.localeCompare(b.end_date)) // nearest deadline first
@@ -510,7 +521,7 @@ export default async function TargetsPage({
     const [tRes, aRes] = await Promise.all([
       supabase
         .from('kpi_campaign_store_targets')
-        .select('id, campaign_id, store_id, pos_code, kpi_target, store_kpi_group, order_target, aov_target, stores(name), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount), kpi_campaigns!inner(id, name, start_date, end_date, status, metric_type, metric_offline, metric_affiliate)')
+        .select('id, campaign_id, store_id, pos_code, kpi_target, store_kpi_group, order_target, aov_target, minimum_order_target, order_bonus_per_staff, stores(name), kpi_campaign_store_tiers(tier_order, threshold_pct, commission_amount), kpi_campaigns!inner(id, name, start_date, end_date, status, metric_type, metric_offline, metric_affiliate)')
         // Archive (098): phòng thủ kép như fetchCampaignViews — !inner + filter
         // (row campaign bị RLS ẩn trước đây trả null và bị skip app-side; nay
         // drop tại DB, hành vi hiển thị không đổi).
@@ -518,7 +529,7 @@ export default async function TargetsPage({
         .order('pos_code'),
       supabase
         .from('kpi_campaign_store_actuals')
-        .select('campaign_id, store_id, actual_value, actual_offline, actual_affiliate, offline_order_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at'),
+        .select('campaign_id, store_id, actual_value, actual_offline, actual_affiliate, offline_order_count, run_rate, remaining_target, achieved_tier_order, store_commission_pool, offline_synced_at, affiliate_synced_at, synced_at, affiliate_order_count, bonus_order_count, order_bonus_achieved'),
     ])
     // r3: lỗi DB/RLS → ErrorState — KHÔNG render "chưa có chiến dịch" giả.
     if (tRes.error || aRes.error) {
@@ -607,6 +618,11 @@ export default async function TargetsPage({
               remaining_target: null,
               achieved_tier_order: snap?.achieved_tier_order ?? null,
               store_commission_pool: snap?.store_commission_pool ?? null,
+              // 112: thưởng thêm theo số đơn LUÔN toàn kỳ (RPC tự tính) — giữ
+              // nguyên snapshot, TUYỆT ĐỐI không suy lại theo khoảng lọc.
+              affiliate_order_count: snap?.affiliate_order_count ?? null,
+              bonus_order_count: snap?.bonus_order_count ?? null,
+              order_bonus_achieved: snap?.order_bonus_achieved ?? null,
               actual_offline: isDaily ? (st as { offline: number }).offline : (snap?.actual_offline ?? null),
               actual_affiliate: isDaily ? (st as { affiliate: number }).affiliate : (snap?.actual_affiliate ?? null),
               offline_order_count: isDaily ? (st as { orders: number | null }).orders : (snap?.offline_order_count ?? null),
