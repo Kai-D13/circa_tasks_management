@@ -1,11 +1,16 @@
 // QA RACE 2-connection cho migration 112 (audit 113.7 P1 concurrency) — thay
 // thế psql khi không tiện mở 2 session tay. Chạy từ webapp/ SAU KHI đã áp 112.
-// Cần env QA_DB_URL = Postgres connection string của Supabase self-hosted (lấy
-// từ Coolify, KHÔNG commit/print). Dùng driver `pg` (devDependency) mở 2
-// CONNECTION THẬT — PGlite (scripts/qa-kpi-order-bonus-112.mjs) là một session
-// nên không tái lập được race này.
+// Dùng driver `pg` (devDependency) mở 2 CONNECTION THẬT — PGlite
+// (scripts/qa-kpi-order-bonus-112.mjs) là một session nên không tái lập được.
 //
-//   $env:QA_DB_URL='postgres://...'; node scripts/qa-race-112.mjs
+// SCRIPT NÀY GHI FIXTURE VÀO DB THẬT ⇒ safety gate như qa-kpi-customer-103
+// (fail-fast exit 2 TRƯỚC khi tạo connection), biến PROCESS tạm, KHÔNG đặt vào
+// .env.local:
+//   $env:QA_RACE_112_ALLOWED='YES'
+//   $env:QA_DB_URL='postgres://...'            # connection string Supabase self-hosted (Coolify), KHÔNG commit/print
+//   $env:QA_EXPECTED_DB_HOST='<host trong QA_DB_URL>'   # gõ lại host — xác nhận đúng DB trước mọi thao tác ghi
+//   node scripts/qa-race-112.mjs
+//   Remove-Item Env:QA_RACE_112_ALLOWED, Env:QA_DB_URL, Env:QA_EXPECTED_DB_HOST
 //
 // Invariant tài chính cần serialize: campaign có ngưỡng thưởng thêm ⇔ bật CẢ
 // metric Offline lẫn Affiliate. Hai chiều tấn công:
@@ -14,22 +19,35 @@
 //   2. A tắt Affiliate (giữ tx mở) · B ghi ngưỡng → trigger targets FOR UPDATE
 //      khiến B PHẢI CHỜ rồi RAISE 'chỉ hợp lệ với chiến dịch Doanh số bật CẢ'.
 // Fixture: campaign is_test PAUSED riêng (cron sync chỉ nhặt active) + 1 target
-// trên OS store active đầu tiên; cleanup exact id (verify name prefix + is_test)
-// trong finally + marker để dọn tay nếu crash.
+// trên OS store active đầu tiên. Cleanup exact id (verify name prefix + is_test)
+// + HẬU KIỂM campaign/target = 0 trong finally; cleanup lỗi/sót ⇒ exit 1 và
+// GIỮ marker để dọn tay. statement_timeout 20s + connect timeout 10s + watchdog
+// 90s: regression lock không bao giờ treo vô thời hạn.
 import fs from 'node:fs'
 import pg from 'pg'
+import { finalVerdict, judgeCleanup, parseDbHost } from './lib-race-112.mjs'
 
-const { Client } = pg
+// ── SAFETY GATES — fail-fast TRƯỚC khi tạo connection/ghi bất kỳ gì ──────────
+const safetyGate = (ok, msg) => {
+  if (!ok) { console.error('SAFETY GATE FAIL:', msg); process.exit(2) }
+}
+safetyGate(process.env.QA_RACE_112_ALLOWED === 'YES',
+  'thiếu $env:QA_RACE_112_ALLOWED=YES (biến PROCESS tạm, KHÔNG đặt vào .env.local) — opt-in tường minh từng lần chạy vì script GHI fixture vào DB thật')
 const DB_URL = process.env.QA_DB_URL
-if (!DB_URL) {
-  console.error("FAIL: thiếu env QA_DB_URL — lấy Postgres connection string của Supabase self-hosted từ Coolify rồi chạy: $env:QA_DB_URL='postgres://...'; node scripts/qa-race-112.mjs")
-  process.exit(1)
-}
+safetyGate(!!DB_URL,
+  'thiếu $env:QA_DB_URL — Postgres connection string của Supabase self-hosted (lấy từ Coolify, KHÔNG commit/print)')
+const dbHost = parseDbHost(DB_URL)
+safetyGate(!!dbHost, 'QA_DB_URL không parse được thành URL Postgres (postgres://user:pass@host:port/db)')
+const EXPECTED_HOST = process.env.QA_EXPECTED_DB_HOST
+safetyGate(!!EXPECTED_HOST && EXPECTED_HOST === dbHost,
+  'QA_EXPECTED_DB_HOST (' + (EXPECTED_HOST ?? 'THIẾU') + ') phải TRÙNG host trong QA_DB_URL (' + dbHost + ') — biến PROCESS tạm, xác nhận đúng DB trước mọi thao tác ghi')
+
 const MARKER = '.qa-race-112.json'
-if (fs.existsSync(MARKER)) {
-  console.error('FAIL: marker', MARKER, 'đang tồn tại — lần chạy trước crash; dọn campaign QA-RACE-112-* (is_test) rồi xoá marker')
-  process.exit(1)
-}
+safetyGate(!fs.existsSync(MARKER),
+  'marker ' + MARKER + ' đang tồn tại — lần chạy trước chưa dọn xong; xoá campaign QA-RACE-112-* (is_test) theo id trong marker rồi xoá marker')
+
+// Watchdog: connect treo / lock treo ngoài dự kiến ⇒ thoát ≠ 0 thay vì đứng mãi.
+setTimeout(() => { console.error('FAIL: watchdog 90s — script treo (lock/connect); kiểm marker ' + MARKER); process.exit(1) }, 90_000).unref()
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 let failed = false
@@ -42,19 +60,29 @@ function assert(ok, label, detail = '') {
 const settled = (p) => Promise.race([p.then(() => true, () => true), sleep(0).then(() => false)])
 const outcome = (p) => p.then(() => ({ ok: true, msg: '' }), (e) => ({ ok: false, msg: String(e.message) }))
 
-const A = new Client({ connectionString: DB_URL })
-const B = new Client({ connectionString: DB_URL })
+const clientOpts = {
+  connectionString: DB_URL,
+  connectionTimeoutMillis: 10_000,
+  statement_timeout: 20_000,
+  query_timeout: 25_000,
+}
+const A = new pg.Client(clientOpts)
+const B = new pg.Client(clientOpts)
 let campaignId = null
+let aInTx = false
 
 try {
   await A.connect()
   await B.connect()
+  // Belt-and-braces: đặt tường minh trên session (như qa-race-098).
+  await A.query("SET statement_timeout = '20s'")
+  await B.query("SET statement_timeout = '20s'")
 
   const mig = await A.query("SELECT 1 FROM public.app_migrations WHERE version = '112'")
-  if (mig.rowCount === 0) { console.error('FAIL: migration 112 chưa áp trên DB này'); process.exit(1) }
+  if (mig.rowCount === 0) throw new Error('migration 112 chưa áp trên DB này — áp 112 + VERIFY trước')
 
   const st = await A.query("SELECT id, code FROM public.stores WHERE store_type = 'os' AND is_active ORDER BY code LIMIT 1")
-  if (st.rowCount === 0) { console.error('FAIL: không có OS store active làm fixture'); process.exit(1) }
+  if (st.rowCount === 0) throw new Error('không có OS store active làm fixture')
   const storeId = st.rows[0].id
   const posCode = st.rows[0].code
 
@@ -66,7 +94,7 @@ try {
      VALUES ($1, '2026-09-10', '2026-09-16', 'store', 'gmv', 'all', true, true, 'paused', true)
      RETURNING id`, [name])
   campaignId = c.rows[0].id
-  fs.writeFileSync(MARKER, JSON.stringify({ campaignId, name, createdAt: new Date().toISOString() }))
+  fs.writeFileSync(MARKER, JSON.stringify({ campaignId, name, host: dbHost, createdAt: new Date().toISOString() }))
   console.log('fixture campaign:', campaignId, `(${name}, is_test, paused, offline+affiliate) — marker đã ghi`)
 
   const INSERT_THRESHOLD = `INSERT INTO public.kpi_campaign_store_targets
@@ -74,13 +102,13 @@ try {
      VALUES ($1, $2, $3, 1000, 10, 200000)`
 
   // ── Chiều 1: A ghi ngưỡng, B tắt Affiliate ─────────────────────────────
-  await A.query('BEGIN')
+  await A.query('BEGIN'); aInTx = true
   await A.query(INSERT_THRESHOLD, [campaignId, storeId, posCode])
   const t1 = Date.now()
   const pB1 = outcome(B.query('UPDATE public.kpi_campaigns SET metric_affiliate = false WHERE id = $1', [campaignId]))
   await sleep(1500)
   assert(!(await settled(pB1)), 'chiều 1: B (tắt Affiliate) BỊ CHẶN khi A còn giữ khoá dòng campaign ≥1.5s')
-  await A.query('COMMIT')
+  await A.query('COMMIT'); aInTx = false
   const r1 = await pB1
   assert(!r1.ok && /không tắt được/.test(r1.msg), 'chiều 1: sau A commit, B thấy ngưỡng vừa ghi → trigger RAISE', r1.msg)
   assert(Date.now() - t1 >= 1500, 'chiều 1: B đã chờ ≥1.5s (không chạy xuyên khoá)')
@@ -91,13 +119,13 @@ try {
   await A.query('DELETE FROM public.kpi_campaign_store_targets WHERE campaign_id = $1', [campaignId])
 
   // ── Chiều 2: A tắt Affiliate, B ghi ngưỡng ─────────────────────────────
-  await A.query('BEGIN')
+  await A.query('BEGIN'); aInTx = true
   await A.query('UPDATE public.kpi_campaigns SET metric_affiliate = false WHERE id = $1', [campaignId])
   const t2 = Date.now()
   const pB2 = outcome(B.query(INSERT_THRESHOLD, [campaignId, storeId, posCode]))
   await sleep(1500)
   assert(!(await settled(pB2)), 'chiều 2: B (ghi ngưỡng) BỊ CHẶN bởi FOR UPDATE trong trigger khi A còn giữ khoá ≥1.5s')
-  await A.query('COMMIT')
+  await A.query('COMMIT'); aInTx = false
   const r2 = await pB2
   assert(!r2.ok && /chỉ hợp lệ với chiến dịch Doanh số bật CẢ/.test(r2.msg), 'chiều 2: sau A commit, B đọc cờ đã tắt → trigger RAISE', r2.msg)
   assert(Date.now() - t2 >= 1500, 'chiều 2: B đã chờ ≥1.5s')
@@ -106,20 +134,32 @@ try {
 } catch (e) {
   console.error('FAIL (exception):', e.message)
   failed = true
-  try { await A.query('ROLLBACK') } catch { /* không trong tx */ }
-} finally {
-  try {
-    if (campaignId) {
-      const del = await A.query(
-        "DELETE FROM public.kpi_campaigns WHERE id = $1 AND is_test AND name LIKE 'QA-RACE-112-%' RETURNING id", [campaignId])
-      console.log(del.rowCount === 1 ? 'cleanup: đã xoá fixture (cascade targets)' : 'cleanup: KHÔNG xoá được fixture — dọn tay ' + campaignId)
-      if (del.rowCount === 1 && fs.existsSync(MARKER)) fs.unlinkSync(MARKER)
-    }
-  } catch (e) {
-    console.error('cleanup lỗi — dọn tay theo marker', MARKER, e.message)
-  }
-  await A.end().catch(() => {})
-  await B.end().catch(() => {})
 }
-console.log(failed ? 'RACE 112: FAIL' : 'RACE 112: ALL PASS')
-process.exit(failed ? 1 : 0)
+
+// ── CLEANUP + HẬU KIỂM — không bao giờ ALL PASS khi fixture còn trên DB ─────
+let cleanup = { ok: campaignId === null, reason: campaignId === null ? 'chưa tạo fixture' : 'chưa chạy' }
+try {
+  if (aInTx) { await A.query('ROLLBACK').catch(() => {}); aInTx = false }
+  if (campaignId) {
+    const del = await A.query(
+      "DELETE FROM public.kpi_campaigns WHERE id = $1 AND is_test AND name LIKE 'QA-RACE-112-%' RETURNING id", [campaignId])
+    const left = await A.query(
+      `SELECT (SELECT count(*)::int FROM public.kpi_campaigns WHERE id = $1) AS campaigns,
+              (SELECT count(*)::int FROM public.kpi_campaign_store_targets WHERE campaign_id = $1) AS targets`, [campaignId])
+    cleanup = judgeCleanup({ deleted: del.rowCount, campaignsLeft: left.rows[0].campaigns, targetsLeft: left.rows[0].targets, error: null })
+  }
+} catch (e) {
+  cleanup = judgeCleanup({ deleted: 0, campaignsLeft: -1, targetsLeft: -1, error: e.message })
+}
+if (cleanup.ok) {
+  console.log('cleanup:', cleanup.reason)
+  if (fs.existsSync(MARKER)) fs.unlinkSync(MARKER)
+} else {
+  console.error('FAIL cleanup:', cleanup.reason, '— GIỮ marker', MARKER, 'để dọn tay (campaign', campaignId, ')')
+}
+await A.end().catch(() => {})
+await B.end().catch(() => {})
+
+const verdict = finalVerdict({ testsFailed: failed, cleanupOk: cleanup.ok })
+console.log(verdict)
+process.exit(verdict === 'RACE 112: ALL PASS' ? 0 : 1)

@@ -584,3 +584,100 @@ test.describe('source hygiene @desktop', () => {
       .toEqual([])
   })
 })
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 113.9 (audit): qa-race-112.mjs GHI fixture vào DB thật ⇒ cùng chuẩn an toàn
+// với qa-kpi-customer-103: fail-fast exit 2 TRƯỚC mọi connection, khoá đúng
+// host, timeout, và ALL PASS chỉ khi cleanup đã được hậu kiểm.
+import { finalVerdict, judgeCleanup, parseDbHost } from '../scripts/lib-race-112.mjs'
+
+test.describe('qa-race-112 safety gates (113.9) @desktop', () => {
+  // Mọi exit dưới đây xảy ra TRƯỚC `new pg.Client` ⇒ không network, không DB.
+  test('thiếu TỪNG safety flag (process env) → exit 2 fail-fast, thông điệp đúng biến', async () => {
+    const a = await runScript('scripts/qa-race-112.mjs')
+    expect(a.code).toBe(2)
+    expect(a.out).toContain('QA_RACE_112_ALLOWED')
+
+    const b = await runScript('scripts/qa-race-112.mjs', { QA_RACE_112_ALLOWED: 'YES' })
+    expect(b.code).toBe(2)
+    expect(b.out).toContain('QA_DB_URL')
+
+    const c = await runScript('scripts/qa-race-112.mjs', {
+      QA_RACE_112_ALLOWED: 'YES', QA_DB_URL: 'postgres://u:p@db.qa.internal:5432/postgres',
+    })
+    expect(c.code).toBe(2)
+    expect(c.out).toContain('QA_EXPECTED_DB_HOST')
+
+    // Sai DB: host khai báo không trùng host trong URL → từ chối TRƯỚC khi kết nối.
+    const d = await runScript('scripts/qa-race-112.mjs', {
+      QA_RACE_112_ALLOWED: 'YES', QA_DB_URL: 'postgres://u:p@db.qa.internal:5432/postgres',
+      QA_EXPECTED_DB_HOST: 'db.production.internal',
+    })
+    expect(d.code).toBe(2)
+    expect(d.out).toContain('phải TRÙNG host trong QA_DB_URL')
+    expect(d.out).not.toContain('fixture campaign')
+
+    const e = await runScript('scripts/qa-race-112.mjs', {
+      QA_RACE_112_ALLOWED: 'YES', QA_DB_URL: 'khong-phai-url', QA_EXPECTED_DB_HOST: 'x',
+    })
+    expect(e.code).toBe(2)
+    expect(e.out).toContain('không parse được')
+  })
+
+  test('lõi thuần: verdict cleanup — 0 dòng / lỗi / còn sót đều FAIL; chỉ 1 dòng + hậu kiểm 0/0 mới OK', () => {
+    expect(judgeCleanup({ deleted: 1, campaignsLeft: 0, targetsLeft: 0, error: null }).ok).toBe(true)
+    expect(judgeCleanup({ deleted: 0, campaignsLeft: 0, targetsLeft: 0, error: null }).ok).toBe(false)
+    expect(judgeCleanup({ deleted: 2, campaignsLeft: 0, targetsLeft: 0, error: null }).ok).toBe(false)
+    expect(judgeCleanup({ deleted: 1, campaignsLeft: 1, targetsLeft: 0, error: null }).ok).toBe(false)
+    expect(judgeCleanup({ deleted: 1, campaignsLeft: 0, targetsLeft: 3, error: null }).ok).toBe(false)
+    expect(judgeCleanup({ deleted: 1, campaignsLeft: 0, targetsLeft: 0, error: 'timeout' }).ok).toBe(false)
+    // ALL PASS chỉ khi CẢ test lẫn cleanup sạch — cleanup hỏng không được che.
+    expect(finalVerdict({ testsFailed: false, cleanupOk: true })).toBe('RACE 112: ALL PASS')
+    expect(finalVerdict({ testsFailed: false, cleanupOk: false })).toBe('RACE 112: FAIL')
+    expect(finalVerdict({ testsFailed: true, cleanupOk: true })).toBe('RACE 112: FAIL')
+    expect(parseDbHost('postgres://u:p@db.qa.internal:5432/postgres')).toBe('db.qa.internal')
+    expect(parseDbHost('khong-phai-url')).toBeNull()
+  })
+
+  test('source-contract: gate trước Client · timeout cả 2 connection · hậu kiểm sau DELETE · marker giữ khi cleanup hỏng', () => {
+    const src = fs.readFileSync('scripts/qa-race-112.mjs', 'utf8').replace(/\r\n/g, '\n')
+    // Mọi safetyGate đứng TRƯỚC khi tạo connection.
+    const firstClient = src.indexOf('new pg.Client(')
+    expect(firstClient).toBeGreaterThan(-1)
+    for (const g of ["process.env.QA_RACE_112_ALLOWED === 'YES'", 'process.env.QA_DB_URL', 'process.env.QA_EXPECTED_DB_HOST', 'fs.existsSync(MARKER)']) {
+      const i = src.indexOf(g)
+      expect(i, `thiếu gate ${g}`).toBeGreaterThan(-1)
+      expect(i, `gate ${g} phải đứng trước new pg.Client`).toBeLessThan(firstClient)
+    }
+    // Flag đọc từ process.env (biến tạm), không từ .env.local.
+    expect(src).toMatch(/process\.env\.QA_RACE_112_ALLOWED === 'YES'/)
+    expect(src).not.toMatch(/(?<!process\.)env\.QA_RACE_112_ALLOWED|env\[['"]QA_RACE_112_ALLOWED/)
+    // Timeout: option client + SET trên session + watchdog.
+    expect(src).toContain('statement_timeout: 20_000')
+    expect(src).toContain('connectionTimeoutMillis: 10_000')
+    expect((src.match(/SET statement_timeout = '20s'/g) ?? []).length).toBe(2)
+    expect(src).toMatch(/setTimeout\([\s\S]*watchdog[\s\S]*\.unref\(\)/)
+    // Cleanup: rollback tx mở → DELETE exact id (is_test + prefix) → hậu kiểm 2 bảng → judgeCleanup.
+    const rb = src.indexOf("A.query('ROLLBACK')")
+    const del = src.indexOf("DELETE FROM public.kpi_campaigns WHERE id = $1 AND is_test AND name LIKE 'QA-RACE-112-%' RETURNING id")
+    const post = src.indexOf('SELECT count(*)::int FROM public.kpi_campaigns WHERE id = $1')
+    const judge = src.indexOf('judgeCleanup({ deleted: del.rowCount')
+    expect(rb).toBeGreaterThan(-1)
+    expect(del).toBeGreaterThan(rb)
+    expect(post).toBeGreaterThan(del)
+    expect(src.slice(post, judge)).toContain('FROM public.kpi_campaign_store_targets WHERE campaign_id = $1')
+    expect(judge).toBeGreaterThan(post)
+    // Marker chỉ xoá khi cleanup.ok; verdict cuối qua finalVerdict (không có 'ALL PASS' literal nào khác).
+    expect(src).toContain('if (cleanup.ok) {')
+    expect(src.slice(src.indexOf('if (cleanup.ok) {'), src.indexOf('} else {', src.indexOf('if (cleanup.ok) {')))).toContain('fs.unlinkSync(MARKER)')
+    expect(src).toContain('GIỮ marker')
+    // Literal 'RACE 112: ALL PASS' xuất hiện đúng 1 lần — trong so sánh exit
+    // code; verdict in ra chỉ đi qua finalVerdict (comment không tính).
+    expect((src.match(/'RACE 112: ALL PASS'/g) ?? []).length).toBe(1)
+    expect(src).toContain("process.exit(verdict === 'RACE 112: ALL PASS' ? 0 : 1)")
+    // Không process.exit trong try — finally/cleanup luôn chạy.
+    const tryStart = src.indexOf('try {\n  await A.connect()')
+    const tryEnd = src.indexOf('} catch (e) {', tryStart)
+    expect(src.slice(tryStart, tryEnd)).not.toContain('process.exit')
+  })
+})
