@@ -60,3 +60,7 @@ next-env.d.ts
 # QA 112 — fixture markers (scripts/qa-race-112*.mjs, e2e/kpi-order-bonus-acceptance)
 .qa-race-112.json
 .qa-order-bonus-112.json
+# QA CRM-CSKH — fixture marker (e2e/writeQaGates.ts careWriteGate, B1+)
+.qa-care.json
+# Log/trace QA cục bộ (có thể chứa URL/route prod) — không commit
+/qa-artifacts/
