@@ -181,8 +181,8 @@ test.describe('care B0 — cờ và cấu hình (mặc định OFF) @desktop', (
     expect(src).toContain('careFlagsFromEnv(process.env)')
   })
 
-  test('B0 baseline: chưa có nav/route/cron CRM nào ⇒ cờ OFF không đổi module live', () => {
-    // B3/B4/B5 thêm entry point thì THAY test này bằng test gate cờ tương ứng.
+  test('cờ OFF không đổi module live: nav/proxy/tasks chưa tham chiếu CRM; route/page CRM (B2) kiểm cờ trước tiên', () => {
+    // B3/B4 thêm nav/CTA ⇒ thay phần nav bằng test gate cờ tương ứng; B5 thêm cron ⇒ kiểm 503 khi CARE_SYNC_ENABLED OFF.
     const live = [
       'components/layout/BottomNav.tsx', 'components/layout/Sidebar.tsx', 'lib/layout/sidebarNav.ts',
       'proxy.ts', 'app/(dashboard)/layout.tsx', 'app/(dashboard)/tasks/page.tsx',
@@ -194,7 +194,12 @@ test.describe('care B0 — cờ và cấu hình (mặc định OFF) @desktop', (
     }
     expect(fs.existsSync(path.join(ROOT, 'app/api/cron/care-period-close'))).toBe(false)
     expect(fs.existsSync(path.join(ROOT, 'app/api/cron/care-orders-sync'))).toBe(false)
-    expect(fs.existsSync(path.join(ROOT, 'app/(dashboard)/care'))).toBe(false)
+    // B2: entry duy nhất là URL /care/assign + /api/care/import/* — page kiểm cờ ngay đầu,
+    // route đi qua handler mà bước đầu là `if (!deps.enabled) return 404` (care-import-core.spec).
+    expect(read('app/(dashboard)/care/assign/page.tsx')).toMatch(/export default async function[\s\S]*?\{\s*if \(!isCareEnabled\(\)\) notFound\(\)/)
+    expect(read('lib/care/import/handler.ts')).toMatch(/async function guard[\s\S]*?\{\s*if \(!deps\.enabled\) return/)
+    const careDirs = fs.readdirSync(path.join(ROOT, 'app/(dashboard)/care'))
+    expect(careDirs).toEqual(['assign'])
   })
 
   test('CARE_IMPORT_MAX_BYTES: mặc định 8MB, sai/ngoài khoảng ⇒ throw', () => {
