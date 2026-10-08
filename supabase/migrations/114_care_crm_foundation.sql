@@ -2,8 +2,9 @@
 -- 114_care_crm_foundation.sql — CRM-CSKH (Chăm sóc khách hàng) B1
 -- Chạy SAU 113.
 --
--- Contract: planning/SPEC.md §B1 (PM GO 07/10/2026) + §B3 r1.2 · CONTRACT v1.14+ ·
--- DECISIONS Q-03…Q-80 (Q-76/77: QLCH không tham gia CRM; Q-79: SM theo store snapshot) · data contract r3.2 · plan r1.3.1 §2/§4/§5.
+-- Contract: planning/SPEC.md §B1 (PM GO 07/10/2026) + §B3 r1.2 + §B4 (proof/ghi lượt) · CONTRACT v1.14+ ·
+-- DECISIONS Q-03…Q-85 (Q-76/77: QLCH không tham gia CRM; Q-79: SM theo store snapshot;
+-- Q-82: dược sĩ chỉ đọc/ghi task khi còn thuộc ĐÚNG store của task) · data contract r3.2 · plan r1.3.1 §2/§4/§5.
 -- Dựng nền dữ liệu CRM: 13 bảng `care_*`, RLS chỉ SELECT theo scope, mọi GHI
 -- đi qua RPC SECURITY DEFINER (authenticated cho lượt chăm sóc/chuyển giao,
 -- service_role cho import/đóng kỳ/stamp). KHÔNG có đồng bộ BigQuery (B5),
@@ -11,7 +12,9 @@
 --
 -- ── Đồ thị tham chiếu RLS (AGENTS.md §4.1 — không policy nào đọc thẳng bảng
 --    RLS khác; mọi tra cứu qua helper SECURITY DEFINER STABLE) ─────────────────
---   care_tasks            → cột + care_assignee_uid(), care_can_view_all(), care_scope_store_ids()
+--   care_tasks            → cột + care_assignee_uid(), care_staff_store_id(), care_can_view_all(), care_scope_store_ids()
+--   Q-82 (B4 r1.1): MỌI nhánh assignee của staff (policy, helper đọc, RPC ghi lượt, summary/report)
+--   so thêm store task = care_staff_store_id() ⇒ staff chuyển A→B mất quyền đọc/ghi task còn ở A.
 --   care_task_products    → care_can_read_task(task_id)
 --   Q-79 (08/10): SM đọc dữ liệu con theo STORE SNAPSHOT của từng dòng thuộc vùng
 --   (không suy từ task/khách hiện tại); staff giữ quyền theo task được giao + lịch sử khách.
@@ -32,9 +35,10 @@
 --     care_can_view_all/care_can_import → users, care_access, is_super_admin()
 --     care_scope_store_ids              → users, stores, sm_store_assignments
 --     care_assignee_uid                 → get_user_role() (users)
---     care_can_read_task                → care_tasks + care_assignee_uid + care_scope_store_ids
---     care_can_read_customer_history    → care_tasks + care_assignee_uid + care_scope_store_ids
---     care_staff_reads_task/customer    → care_tasks + care_assignee_uid (chỉ nhánh staff)
+--     care_staff_store_id               → users, stores
+--     care_can_read_task                → care_tasks + care_assignee_uid + care_staff_store_id + care_scope_store_ids
+--     care_can_read_customer_history    → care_tasks + care_assignee_uid + care_staff_store_id + care_scope_store_ids
+--     care_staff_reads_task/customer    → care_tasks + care_assignee_uid + care_staff_store_id (chỉ nhánh staff)
 --   Policy theo dòng có dạng (select care_can_view_all()) OR helper(cột) ⇒ nhánh
 --   admin/super tính một lần mỗi truy vấn (InitPlan).
 --   ⇒ không có chu trình policy→policy (bài học 047→048/049).
@@ -85,7 +89,7 @@
 --     public.care__uid_can(uuid, text), public.care_can_read_customer_history(uuid),
 --     public.care_staff_reads_task(uuid), public.care_staff_reads_customer(uuid),
 --     public.care_can_read_task(uuid), public.care_scope_store_ids(), public.care_assignee_uid(),
---     public.care_can_import(), public.care_can_view_all(),
+--     public.care_staff_store_id(), public.care_can_import(), public.care_can_view_all(),
 --     public.care_normalize_vn_phone(text), public.care_overdue_stamp(date, date, date),
 --     public.care_period_last_day(date), public.care_period_of(date), public.care_vn_today(), public.care_vn_date(timestamptz),
 --     public.care_outcome_records_refusal(text), public.care_outcome_requires_date(text),
@@ -496,17 +500,31 @@ RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT CASE WHEN public.get_user_role() = 'staff' THEN auth.uid() END
 $$;
 
+-- Q-82 (B4 r1.1): store của dược sĩ phiên hiện tại — users.store_id CHỈ khi role 'staff' VÀ
+-- store là OS đang hoạt động; ngược lại NULL (so sánh với NULL không bao giờ đúng ⇒
+-- fail-closed). Nhánh assignee của staff luôn đi kèm `t.store_id = care_staff_store_id()`:
+-- staff bị tháo store / chuyển sang store khác (kể cả OS khác) / store ngừng hoạt động mà task
+-- vẫn ở store cũ ⇒ mất quyền ĐỌC lẫn GHI task đó; SM/super chuyển giao thủ công (Q-80). Task
+-- hợp lệ luôn khớp store: finalize chỉ gán staff CÙNG store của dòng, transfer đặt store task =
+-- store của dược sĩ đích.
+CREATE OR REPLACE FUNCTION public.care_staff_store_id()
+RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT u.store_id FROM public.users u JOIN public.stores s ON s.id = u.store_id
+  WHERE u.id = auth.uid() AND u.role = 'staff' AND s.store_type = 'os' AND s.is_active
+$$;
+
 -- Hai helper theo DÒNG dưới đây chỉ xét assignee/scope store; nhánh care admin/
 -- super nằm ở policy dạng `(select public.care_can_view_all()) OR …` để chỉ tính
 -- MỘT lần mỗi truy vấn (db-reviewer B1 P2 hiệu năng).
--- Đọc một task: assignee hiện tại (gồm task kỳ cũ của chính mình) · scope store.
+-- Đọc một task: assignee hiện tại ở ĐÚNG store task (gồm task kỳ cũ của chính mình) · scope store.
 -- Sau chuyển giao A→B, task được chuyển có assignee = B ⇒ A mất quyền task đó.
 CREATE OR REPLACE FUNCTION public.care_can_read_task(p_task_id uuid)
 RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT EXISTS (
     SELECT 1 FROM public.care_tasks t
     WHERE t.id = p_task_id
-      AND (t.assignee_id = public.care_assignee_uid() OR t.store_id = ANY (public.care_scope_store_ids()))
+      AND ((t.assignee_id = public.care_assignee_uid() AND t.store_id = public.care_staff_store_id())
+           OR t.store_id = ANY (public.care_scope_store_ids()))
   )
 $$;
 
@@ -518,7 +536,8 @@ RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS
     SELECT 1 FROM public.care_tasks t
     WHERE t.customer_id = p_customer_id
       AND t.period_month = public.care_period_of(public.care_vn_today())
-      AND (t.assignee_id = public.care_assignee_uid() OR t.store_id = ANY (public.care_scope_store_ids()))
+      AND ((t.assignee_id = public.care_assignee_uid() AND t.store_id = public.care_staff_store_id())
+           OR t.store_id = ANY (public.care_scope_store_ids()))
   )
 $$;
 
@@ -526,13 +545,15 @@ $$;
 -- (lượt/ghi chú, event, DNC, attribution). Nhánh SM KHÔNG đi qua task/khách hiện tại mà xét
 -- store của TỪNG dòng ở policy — task chuyển X→Y không mở lượt X cho SM vùng Y.
 -- Staff: giữ đúng quyền đã chốt (assignee HIỆN TẠI của task — kể cả task kỳ cũ của mình chưa chuyển —
--- + lịch sử khách có task kỳ này giao cho mình). Ở policy, nhánh staff được chặn sớm bằng InitPlan
--- `(select care_assignee_uid()) IS NOT NULL` ⇒ SM/admin không phải gọi helper theo từng dòng.
+-- + lịch sử khách có task kỳ này giao cho mình), và (Q-82) task phải ở ĐÚNG store hiện tại của staff.
+-- Ở policy, nhánh staff được chặn sớm bằng InitPlan `(select care_assignee_uid()) IS NOT NULL` ⇒
+-- SM/admin không phải gọi helper theo từng dòng.
 CREATE OR REPLACE FUNCTION public.care_staff_reads_task(p_task_id uuid)
 RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT EXISTS (
     SELECT 1 FROM public.care_tasks t
     WHERE t.id = p_task_id AND t.assignee_id = public.care_assignee_uid()
+      AND t.store_id = public.care_staff_store_id()
   )
 $$;
 
@@ -543,6 +564,7 @@ RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS
     WHERE t.customer_id = p_customer_id
       AND t.period_month = public.care_period_of(public.care_vn_today())
       AND t.assignee_id = public.care_assignee_uid()
+      AND t.store_id = public.care_staff_store_id()
   )
 $$;
 
@@ -615,7 +637,8 @@ CREATE POLICY care_import_batches_select ON public.care_import_batches FOR SELEC
 
 DROP POLICY IF EXISTS care_tasks_select ON public.care_tasks;
 CREATE POLICY care_tasks_select ON public.care_tasks FOR SELECT TO authenticated
-  USING (assignee_id = (select public.care_assignee_uid())
+  -- Q-82: staff chỉ thấy task giao mình Ở ĐÚNG store hiện tại (cả hai vế là InitPlan).
+  USING ((assignee_id = (select public.care_assignee_uid()) AND store_id = (select public.care_staff_store_id()))
          OR (select public.care_can_view_all())
          -- ::uuid[] bắt buộc: `= ANY ((select …))` bị hiểu là dạng subquery (uuid = uuid[]).
          OR store_id = ANY ((select public.care_scope_store_ids())::uuid[]));
@@ -1045,6 +1068,7 @@ DECLARE
   v_first date;
   v_id    bigint;
   v_at    timestamptz;
+  v_proof_prefix text;
 BEGIN
   IF v_uid IS NULL THEN RAISE EXCEPTION 'care_record_interaction: chưa đăng nhập'; END IF;
   IF p_today IS NULL THEN RAISE EXCEPTION 'care_record_interaction: thiếu ngày'; END IF;
@@ -1053,6 +1077,12 @@ BEGIN
   -- Q-76/77: QLCH không tham gia CRM — chỉ dược sĩ (staff) đang được giao mới ghi lượt.
   IF t.assignee_id <> v_uid OR public.get_user_role() IS DISTINCT FROM 'staff' THEN
     RAISE EXCEPTION 'care_record_interaction: chỉ dược sĩ được giao task mới ghi nhận';
+  END IF;
+  -- Q-82 (B4 r1.1): dược sĩ phải còn thuộc ĐÚNG store của task và store đó là OS đang hoạt
+  -- động — bị tháo store / chuyển sang store khác (kể cả OS khác) / store ngừng ⇒ không ghi,
+  -- kể cả khi còn là assignee. SM/super chuyển giao thủ công (Q-80).
+  IF public.care_staff_store_id() IS DISTINCT FROM t.store_id THEN
+    RAISE EXCEPTION 'care_record_interaction: chỉ dược sĩ được giao task mới ghi nhận (không còn thuộc cửa hàng của task)';
   END IF;
   IF t.status <> 'open' THEN
     RAISE EXCEPTION 'care_record_interaction: task đã kết thúc (%), không ghi thêm lượt', t.status;
@@ -1076,17 +1106,35 @@ BEGIN
   ELSIF p_next_action_date IS NOT NULL THEN
     RAISE EXCEPTION 'care_record_interaction: kết quả % không nhận ngày hẹn', p_outcome;
   END IF;
-  -- Proof tùy chọn (Q-53), không quyết định trạng thái. Chỉ nhận {url} https, tối đa
-  -- 5 ảnh, tổng ≤ 4KB (chặn javascript:/http:, object rác). TODO(B4): ép host/prefix
-  -- GCS theo task khi có purpose upload care_proof.
+  -- Proof tùy chọn (Q-53), không quyết định trạng thái. Chỉ nhận {url}, tối đa 5 ảnh,
+  -- tổng ≤ 4KB. B4: URL PHẢI là object do app cấp qua createUploadUrl purpose `care_proof`
+  -- = <GCS public base>/care-proof/<task_id ĐÚNG task này>/<khoá opaque>.<ảnh> — gọi RPC
+  -- trực tiếp cũng không đính được link ngoài / link của task khác; URL trùng trong mảng bị
+  -- chặn (khớp TS). Base cố định theo GCS_PUBLIC_BASE_URL (.env.example = .env.local, 08/10;
+  -- tiền lệ mig 095 affiliate-qr); đổi bucket ⇒ migration mới CREATE OR REPLACE hàm này +
+  -- lib/care/my.ts (CARE_PROOF_PUBLIC_BASE, spec ép khớp).
+  v_proof_prefix := 'https://storage.googleapis.com/duocsi-circa-vn/care-proof/' || t.id::text || '/';
   IF jsonb_typeof(v_proof) <> 'array' OR jsonb_array_length(v_proof) > 5
-     OR pg_column_size(v_proof) > 4096 OR EXISTS (
+     OR pg_column_size(v_proof) > 4096
+     OR (SELECT count(DISTINCT e->>'url') FROM jsonb_array_elements(v_proof) e) <> jsonb_array_length(v_proof)
+     OR EXISTS (
        SELECT 1 FROM jsonb_array_elements(v_proof) e
        WHERE jsonb_typeof(e) <> 'object'
           OR (SELECT array_agg(k) FROM jsonb_object_keys(e) k) IS DISTINCT FROM ARRAY['url']
           OR jsonb_typeof(e->'url') IS DISTINCT FROM 'string'
-          OR char_length(e->>'url') > 1000 OR (e->>'url') !~ '^https://[^\s]+$') THEN
-    RAISE EXCEPTION 'care_record_interaction: proof phải là mảng ≤5 phần tử {url: https://…}';
+          OR char_length(e->>'url') > 1000
+          OR left(e->>'url', char_length(v_proof_prefix)) IS DISTINCT FROM v_proof_prefix
+          OR substr(e->>'url', char_length(v_proof_prefix) + 1) !~ '^[0-9]{13}_[0-9a-f]{8}[.](jpg|png|webp|heic|heif)$') THEN
+    RAISE EXCEPTION 'care_record_interaction: proof phải là mảng ≤5 ảnh do ứng dụng tải lên cho đúng task này';
+  END IF;
+  -- B4: chống ghi TRÙNG khi retry (mạng rớt sau khi server đã commit, 2 tab/2 máy): cùng
+  -- người ghi + task + kết quả + ghi chú + ngày hẹn trong 2 phút ⇒ từ chối. Lượt kết thúc
+  -- thứ hai vốn đã bị chặn bởi trạng thái task + unique one_terminal_per_task.
+  IF EXISTS (SELECT 1 FROM public.care_interactions i
+             WHERE i.task_id = t.id AND i.actor_id = v_uid AND i.outcome = p_outcome AND i.note = v_note
+               AND i.next_action_date IS NOT DISTINCT FROM p_next_action_date
+               AND i.created_at > now() - interval '2 minutes') THEN
+    RAISE EXCEPTION 'care_record_interaction: lượt trùng vừa được ghi';
   END IF;
 
   v_term  := public.care_is_terminal_outcome(p_outcome);
@@ -1176,6 +1224,8 @@ BEGIN
              AND (status <> 'open' OR period_month <> public.care_period_of(p_today))) THEN
     RAISE EXCEPTION 'care_transfer_tasks: chỉ chuyển task đang mở của kỳ hiện tại';
   END IF;
+  -- Q-86 (chốt 08/10): không chuyển task cho chính assignee hiện tại, kể cả khi họ đã sang store khác (task
+  -- còn ở store cũ — Q-82); SM phân công lại thủ công cho dược sĩ hợp lệ của store task, không tự động.
   IF EXISTS (SELECT 1 FROM public.care_tasks WHERE id = ANY (v_ids) AND assignee_id = p_to_user) THEN
     RAISE EXCEPTION 'care_transfer_tasks: có task đã thuộc dược sĩ đích';
   END IF;
@@ -1217,7 +1267,9 @@ RETURNS TABLE (
   converted_tasks integer, orders integer, net_revenue numeric)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   WITH me AS (
-    SELECT public.care_assignee_uid() AS uid, public.care_can_view_all() AS v_all, public.care_scope_store_ids() AS scope,
+    -- Q-82: nhánh staff = task/attribution của mình Ở ĐÚNG store hiện tại.
+    SELECT public.care_assignee_uid() AS uid, public.care_staff_store_id() AS staff_store,
+           public.care_can_view_all() AS v_all, public.care_scope_store_ids() AS scope,
            (COALESCE(p_include_test, false) AND public.is_super_admin()) AS v_test
   ), tk AS (
     SELECT t.store_id, t.assignee_id,
@@ -1229,7 +1281,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
            count(*) FILTER (WHERE t.status = 'closed_unfinished')::int AS unfinished
     FROM public.care_tasks t, me
     WHERE t.period_month = public.care_period_of(p_month) AND (me.v_test OR NOT t.is_test)
-      AND (me.v_all OR t.assignee_id = me.uid OR t.store_id = ANY (me.scope))
+      AND (me.v_all OR (t.assignee_id = me.uid AND t.store_id = me.staff_store) OR t.store_id = ANY (me.scope))
       AND (p_store_ids IS NULL OR t.store_id = ANY (p_store_ids))
     GROUP BY t.store_id, t.assignee_id
   ), at AS (
@@ -1237,7 +1289,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
            count(DISTINCT a.task_id)::int AS conv_tasks, count(*)::int AS orders, sum(a.net_amount) AS rev
     FROM public.care_order_attributions a, me
     WHERE a.period_month = public.care_period_of(p_month) AND (me.v_test OR NOT a.is_test)
-      AND (me.v_all OR a.assignee_id = me.uid OR a.store_id = ANY (me.scope))
+      AND (me.v_all OR (a.assignee_id = me.uid AND a.store_id = me.staff_store) OR a.store_id = ANY (me.scope))
       AND (p_store_ids IS NULL OR a.store_id = ANY (p_store_ids))
     GROUP BY a.store_id, a.assignee_id
   )
@@ -1249,11 +1301,12 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   ORDER BY 1, 2
 $$;
 
--- Thẻ "CSKH của tôi" (staff) — kỳ hiện tại, task đang giao cho chính mình.
+-- Thẻ "CSKH của tôi" (staff) — kỳ hiện tại, task đang giao cho chính mình Ở ĐÚNG store hiện
+-- tại (Q-82 — khớp danh sách/RLS: staff chuyển A→B không đếm task còn ở A).
 CREATE OR REPLACE FUNCTION public.care_my_summary()
 RETURNS TABLE (period_month date, assigned integer, not_cared integer, completed integer, overdue_live integer)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
-  WITH me AS (SELECT public.care_assignee_uid() AS uid, public.care_vn_today() AS today)
+  WITH me AS (SELECT public.care_assignee_uid() AS uid, public.care_staff_store_id() AS store_id, public.care_vn_today() AS today)
   SELECT public.care_period_of(me.today),
          count(t.id)::int,
          count(t.id) FILTER (WHERE t.status = 'open' AND t.last_interaction_at IS NULL)::int,
@@ -1261,7 +1314,8 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
          count(t.id) FILTER (WHERE t.status = 'open' AND t.next_action_date < me.today)::int
   FROM me
   -- Loại fixture QA (is_test) như care_report (audit PM B1 P1).
-  LEFT JOIN public.care_tasks t ON t.assignee_id = me.uid AND t.period_month = public.care_period_of(me.today)
+  LEFT JOIN public.care_tasks t ON t.assignee_id = me.uid AND t.store_id = me.store_id
+                                AND t.period_month = public.care_period_of(me.today)
                                 AND NOT t.is_test
   GROUP BY me.today
 $$;
@@ -1287,6 +1341,7 @@ REVOKE ALL ON FUNCTION
   public.care__forbid_mutation(),
   public.care__uid_can(uuid, text), public.care__uid_is_super(uuid),
   public.care_can_view_all(), public.care_can_import(), public.care_scope_store_ids(), public.care_assignee_uid(),
+  public.care_staff_store_id(),
   public.care_can_read_task(uuid), public.care_can_read_customer_history(uuid),
   public.care_staff_reads_task(uuid), public.care_staff_reads_customer(uuid),
   public.care__close_period_at(date), public.care__stamp_overdue_at(date),
@@ -1306,6 +1361,7 @@ GRANT EXECUTE ON FUNCTION
   public.care_vn_date(timestamptz), public.care_vn_today(), public.care_period_of(date), public.care_period_last_day(date),
   public.care_overdue_stamp(date, date, date), public.care_normalize_vn_phone(text),
   public.care_can_view_all(), public.care_can_import(), public.care_scope_store_ids(), public.care_assignee_uid(),
+  public.care_staff_store_id(),
   public.care_can_read_task(uuid), public.care_can_read_customer_history(uuid),
   public.care_staff_reads_task(uuid), public.care_staff_reads_customer(uuid)
   TO authenticated, service_role;
@@ -1379,8 +1435,24 @@ BEGIN
       RAISE EXCEPTION '114 hậu kiểm: hàm nội bộ % đang được cấp quyền', r.fn;
     END IF;
   END LOOP;
-  IF (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname LIKE 'care%') <> 35 THEN
-    RAISE EXCEPTION '114 hậu kiểm: số function care* phải là 35';
+  IF position('/care-proof/' in pg_get_functiondef('public.care__record_interaction_at(date,uuid,text,text,date,jsonb)'::regprocedure)) = 0
+     OR position('lượt trùng vừa được ghi' in pg_get_functiondef('public.care__record_interaction_at(date,uuid,text,text,date,jsonb)'::regprocedure)) = 0 THEN
+    RAISE EXCEPTION '114 hậu kiểm: care__record_interaction_at chưa phải bản B4 (proof/chống trùng)';
+  END IF;
+  -- B4 r1.1 (Q-82): ghi lượt + policy task + helper đọc staff đều so store task với care_staff_store_id().
+  IF position('care_staff_store_id' in pg_get_functiondef('public.care__record_interaction_at(date,uuid,text,text,date,jsonb)'::regprocedure)) = 0
+     OR position('care_staff_store_id' in pg_get_functiondef('public.care_staff_reads_task(uuid)'::regprocedure)) = 0
+     OR position('care_staff_store_id' in pg_get_functiondef('public.care_staff_reads_customer(uuid)'::regprocedure)) = 0
+     OR position('care_staff_store_id' in pg_get_functiondef('public.care_can_read_task(uuid)'::regprocedure)) = 0
+     OR position('care_staff_store_id' in pg_get_functiondef('public.care_can_read_customer_history(uuid)'::regprocedure)) = 0
+     OR position('care_staff_store_id' in pg_get_functiondef('public.care_my_summary()'::regprocedure)) = 0
+     OR position('care_staff_store_id' in pg_get_functiondef('public.care_report(date,uuid[],boolean)'::regprocedure)) = 0
+     OR NOT EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND policyname = 'care_tasks_select'
+                    AND qual ~ 'care_staff_store_id') THEN
+    RAISE EXCEPTION '114 hậu kiểm: chưa phải bản B4 r1.1 (Q-82 — staff phải thuộc đúng store của task)';
+  END IF;
+  IF (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname LIKE 'care%') <> 36 THEN
+    RAISE EXCEPTION '114 hậu kiểm: số function care* phải là 36';
   END IF;
   FOR r IN
     SELECT * FROM (VALUES
@@ -1394,6 +1466,7 @@ BEGIN
       ('public.care_stamp_overdue()',                               false, true),
       ('public.care_purge_stale_staging(interval)',                 false, true),
       ('public.care_assignee_uid()',                                true,  true),
+      ('public.care_staff_store_id()',                              true,  true),
       ('public.care_can_read_task(uuid)',                           true,  true),
       ('public.care_can_read_customer_history(uuid)',               true,  true),
       ('public.care_staff_reads_task(uuid)',                        true,  true),
@@ -1418,6 +1491,8 @@ VALUES ('114', 'care_crm_foundation',
         || ' Seed care_access Marketing. Chua co dong bo BigQuery N3 (B5), chua cron/route/UI.'
         || ' B3 r1.1 (Q-76/77): QLCH store_manager khong tham gia CRM (care_assignee_uid, scope chi SM).'
         || ' B3 r1.2 (Q-79): SM doc luot/event/DNC/attribution theo store snapshot cua dong thuoc vung.'
+        || ' B4: proof ep base GCS + care-proof/<task_id>/ + khoa app sinh; chong ghi trung 2 phut; staff phai o store OS hoat dong.'
+        || ' B4 r1.1 (Q-82): staff chi doc/ghi task o DUNG store hien tai (care_staff_store_id).'
         || ' Co CARE_ENABLED OFF.')
 ON CONFLICT (version) DO NOTHING;
 
@@ -1436,7 +1511,7 @@ COMMIT;
 --         OR (p.proname IN ('care_import_finalize', 'care_close_period', 'care_stamp_overdue', 'care_purge_stale_staging')
 --             AND has_function_privilege('authenticated', p.oid, 'EXECUTE'))
 --         OR (p.prosecdef AND NOT COALESCE(p.proconfig @> ARRAY['search_path=public'], false)) );
---    và: SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname LIKE 'care%';  -- 35
+--    và: SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname LIKE 'care%';  -- 36
 -- 4) Quyền bảng (kỳ vọng: authenticated SELECT trên 11 bảng + INSERT/UPDATE/DELETE trên care_access; anon 0 dòng):
 --    SELECT table_name, grantee, string_agg(privilege_type, ',' ORDER BY privilege_type)
 --    FROM information_schema.role_table_grants
@@ -1447,7 +1522,7 @@ COMMIT;
 --    FROM unnest(ARRAY[pg_get_serial_sequence('public.care_interactions', 'id'),
 --                      pg_get_serial_sequence('public.care_assignment_events', 'id')]) s;
 -- 6) Policy (kỳ vọng 14 và 0 policy có FROM):
---    SELECT count(*), count(*) FILTER (WHERE qual ~* '\mfrom\M' OR with_check ~* '\mfrom\M')
+--    SELECT count(*) AS n_policy, count(*) FILTER (WHERE qual ~* '\mfrom\M' OR with_check ~* '\mfrom\M') AS n_from
 --    FROM pg_policies WHERE schemaname = 'public' AND tablename LIKE 'care\_%';
 -- 7) Trigger append-only (kỳ vọng 4):
 --    SELECT tgrelid::regclass, tgname FROM pg_trigger WHERE tgname LIKE 'care\_%' AND NOT tgisinternal;
@@ -1464,10 +1539,10 @@ COMMIT;
 --    Giả lập một QLCH (thay <QLCH_UID>; lặp lại với QLCH có department_id Marketing nếu có):
 --    BEGIN READ ONLY; SET LOCAL ROLE authenticated;
 --    SELECT set_config('request.jwt.claim.sub', '<QLCH_UID>', true);
---    SELECT public.care_assignee_uid() IS NULL, cardinality(public.care_scope_store_ids()),
---           (SELECT count(*) FROM public.care_tasks), (SELECT count(*) FROM public.care_access),
---           (SELECT count(*) FROM public.care_report(public.care_period_of(public.care_vn_today()))),
---           public.care_my_access();      -- true, 0, 0, 0, 0, can_import/can_view_all=false
+--    SELECT public.care_assignee_uid() IS NULL AS not_assignee, cardinality(public.care_scope_store_ids()) AS n_scope,
+--           (SELECT count(*) FROM public.care_tasks) AS n_tasks, (SELECT count(*) FROM public.care_access) AS n_access,
+--           (SELECT count(*) FROM public.care_report(public.care_period_of(public.care_vn_today()))) AS n_report,
+--           public.care_my_access() AS my_access;      -- true, 0, 0, 0, 0, can_import/can_view_all=false
 --    COMMIT;
 -- 12) Helper nền: SELECT prosecdef FROM pg_proc WHERE oid = 'public.get_user_role()'::regprocedure;  -- true
 -- 13) Task mồ côi (assignee không còn là staff — sau khi có dữ liệu, kỳ vọng 0 dòng; xử lý bằng chuyển giao):
@@ -1483,7 +1558,7 @@ COMMIT;
 --    Helper mới: SELECT p.oid::regprocedure, p.prosecdef, p.provolatile, p.proconfig,
 --      has_function_privilege('anon', p.oid, 'EXECUTE') anon, has_function_privilege('authenticated', p.oid, 'EXECUTE') auth
 --    FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
---      AND p.proname IN ('care_staff_reads_task', 'care_staff_reads_customer', 'care_assignee_uid');
+--      AND p.proname IN ('care_staff_reads_task', 'care_staff_reads_customer', 'care_assignee_uid', 'care_staff_store_id');
 --    -- prosecdef=t, provolatile='s', proconfig={search_path=public}, anon=f, auth=t
 -- 15) Sau khi có dữ liệu — giả lập SM (thay <SM_UID>), kỳ vọng 0/0/0/0:
 --    BEGIN READ ONLY; SET LOCAL ROLE authenticated;
@@ -1494,3 +1569,29 @@ COMMIT;
 --           (SELECT count(*) FROM public.care_assignment_events
 --             WHERE NOT (ARRAY[from_store_id, to_store_id] && public.care_scope_store_ids())) e_out;
 --    COMMIT;
+-- 16) B4 — đúng bản (kỳ vọng t, t): hàm ghi lượt có ràng buộc proof care-proof + chống trùng:
+--    SELECT position('/care-proof/' in d) > 0 AS has_proof, position('lượt trùng vừa được ghi' in d) > 0 AS has_dedupe
+--    FROM (SELECT pg_get_functiondef('public.care__record_interaction_at(date,uuid,text,text,date,jsonb)'::regprocedure) d) x;
+--    Base GCS prod khớp hằng (tiền lệ 095, kỳ vọng ≥ 25):
+--    SELECT count(*) FROM public.affiliate_partner_mappings WHERE qr_image_url LIKE 'https://storage.googleapis.com/duocsi-circa-vn/%';
+--    Sau khi có dữ liệu — proof lệch dạng/lệch task (kỳ vọng 0):
+--    SELECT count(*) FROM public.care_interactions i CROSS JOIN LATERAL jsonb_array_elements(i.proof) e
+--    WHERE left(e->>'url', char_length('https://storage.googleapis.com/duocsi-circa-vn/care-proof/' || i.task_id::text || '/'))
+--            IS DISTINCT FROM ('https://storage.googleapis.com/duocsi-circa-vn/care-proof/' || i.task_id::text || '/')
+--       OR substr(e->>'url', char_length('https://storage.googleapis.com/duocsi-circa-vn/care-proof/' || i.task_id::text || '/') + 1)
+--            !~ '^[0-9]{13}_[0-9a-f]{8}[.](jpg|png|webp|heic|heif)$';
+-- 17) B4 r1.1 (Q-82) — đúng bản (kỳ vọng t, t, 36, f, t, t): ghi lượt + policy task so store với care_staff_store_id():
+--    SELECT position('care_staff_store_id' in pg_get_functiondef('public.care__record_interaction_at(date,uuid,text,text,date,jsonb)'::regprocedure)) > 0 AS rpc_q82,
+--           (SELECT qual ~ 'care_staff_store_id' FROM pg_policies WHERE schemaname = 'public' AND policyname = 'care_tasks_select') AS policy_q82,
+--           (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname LIKE 'care%') AS n_fn,
+--           has_function_privilege('anon', 'public.care_staff_store_id()', 'EXECUTE') AS anon_x,
+--           has_function_privilege('authenticated', 'public.care_staff_store_id()', 'EXECUTE') AS auth_x,
+--           has_function_privilege('service_role', 'public.care_staff_store_id()', 'EXECUTE') AS svc_x;
+--    Giám sát (B6, chạy cùng VERIFY 13 — 13 bắt assignee đổi role, 17 bắt assignee lệch store):
+--    Sau khi có dữ liệu — task mở có assignee KHÔNG còn ở đúng store task (staff chuyển/tháo store, store
+--    ngừng; dược sĩ mất quyền đọc/ghi ⇒ SM/super chuyển giao thủ công Q-80; kỳ vọng 0 dòng):
+--    SELECT t.store_id, t.assignee_id, u.store_id AS user_store, count(*) FROM public.care_tasks t
+--    JOIN public.users u ON u.id = t.assignee_id LEFT JOIN public.stores s ON s.id = t.store_id
+--    WHERE t.status = 'open' AND NOT t.is_test
+--      AND (u.store_id IS DISTINCT FROM t.store_id OR s.store_type IS DISTINCT FROM 'os' OR NOT COALESCE(s.is_active, false))
+--    GROUP BY 1, 2, 3;

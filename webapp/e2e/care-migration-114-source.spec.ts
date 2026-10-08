@@ -46,7 +46,7 @@ test.describe('mig 114 source contract @desktop', () => {
     // "name type [DEFAULT …]" ⇒ lấy type (token thứ 2) để dựng chữ ký như trong REVOKE.
     const sigs = [...CODE.matchAll(/CREATE OR REPLACE FUNCTION public\.(care\w+)\(([^)]*)\)/g)]
       .map((m) => `${m[1]}(${m[2].split(',').map((a) => a.trim()).filter(Boolean).map((a) => a.split(/\s+/)[1]).join(', ')})`)
-    expect(sigs.length).toBe(35) // + care_assignee_uid (r1.1, Q-76/77) + care_staff_reads_task/customer (r1.2, Q-79)
+    expect(sigs.length).toBe(36) // + care_assignee_uid (r1.1, Q-76/77) + care_staff_reads_task/customer (r1.2, Q-79) + care_staff_store_id (B4 r1.1, Q-82)
     const revoke = CODE.slice(CODE.indexOf('REVOKE ALL ON FUNCTION'), CODE.indexOf('FROM PUBLIC, anon, authenticated, service_role;'))
       .replace(/\s+/g, ' ')
     for (const s of sigs) expect(revoke, s).toContain(`public.${s}`)
@@ -72,7 +72,7 @@ test.describe('mig 114 source contract @desktop', () => {
       expect(text, name).not.toMatch(/\bFROM\b|\bJOIN\b|EXISTS\s*\(/)
     }
     // Helper dùng trong policy là SECURITY DEFINER STABLE với search_path cố định.
-    for (const h of ['care_can_view_all', 'care_can_import', 'care_scope_store_ids', 'care_assignee_uid', 'care_can_read_task', 'care_can_read_customer_history']) {
+    for (const h of ['care_can_view_all', 'care_can_import', 'care_scope_store_ids', 'care_assignee_uid', 'care_staff_store_id', 'care_can_read_task', 'care_can_read_customer_history']) {
       expect(fnBody(h), h).toMatch(/STABLE SECURITY DEFINER SET search_path = public/)
     }
     // Q-76/77: QLCH không có scope; nhánh "assignee" chỉ mở cho app role staff — mọi chỗ so assignee
@@ -81,7 +81,20 @@ test.describe('mig 114 source contract @desktop', () => {
     expect(fnBody('care_assignee_uid')).toMatch(/CASE WHEN public\.get_user_role\(\) = 'staff' THEN auth\.uid\(\) END/)
     expect(CODE).not.toMatch(/assignee_id\s*=\s*\(?\s*(select\s+)?auth\.uid\(\)/i)
     for (const f of ['care_can_read_task', 'care_can_read_customer_history', 'care_report', 'care_my_summary']) expect(fnBody(f), f).toContain('care_assignee_uid()')
-    expect(CODE).toMatch(/CREATE POLICY care_tasks_select[\s\S]*?assignee_id = \(select public\.care_assignee_uid\(\)\)/)
+    expect(CODE).toMatch(/CREATE POLICY care_tasks_select[\s\S]*?\(assignee_id = \(select public\.care_assignee_uid\(\)\) AND store_id = \(select public\.care_staff_store_id\(\)\)\)/)
+    // Q-82 (B4 r1.1): MỌI nhánh assignee của staff đi kèm store task = care_staff_store_id() (OS active).
+    expect(fnBody('care_staff_store_id')).toMatch(/u\.role = 'staff' AND s\.store_type = 'os' AND s\.is_active/)
+    expect(fnBody('care_can_read_task')).toContain('(t.assignee_id = public.care_assignee_uid() AND t.store_id = public.care_staff_store_id())')
+    expect(fnBody('care_can_read_customer_history')).toContain('(t.assignee_id = public.care_assignee_uid() AND t.store_id = public.care_staff_store_id())')
+    expect(fnBody('care_report')).toContain('(t.assignee_id = me.uid AND t.store_id = me.staff_store)')
+    expect(fnBody('care_report')).toContain('(a.assignee_id = me.uid AND a.store_id = me.staff_store)')
+    expect(fnBody('care_my_summary')).toContain('t.assignee_id = me.uid AND t.store_id = me.store_id')
+    expect(fnBody('care__record_interaction_at')).toContain('IF public.care_staff_store_id() IS DISTINCT FROM t.store_id THEN')
+    // Mọi function so assignee với care_assignee_uid() (trực tiếp hoặc qua me.uid) đều có điều kiện store.
+    const assigneeFns = [...CODE.matchAll(/CREATE OR REPLACE FUNCTION public\.(care\w+)\(/g)].map((m) => m[1])
+      .filter((f) => /assignee_id = (public\.care_assignee_uid\(\)|me\.uid)/.test(fnBody(f)))
+    expect(assigneeFns.sort()).toEqual(['care_can_read_customer_history', 'care_can_read_task', 'care_my_summary', 'care_report', 'care_staff_reads_customer', 'care_staff_reads_task'])
+    for (const f of assigneeFns) expect(fnBody(f), f).toContain('care_staff_store_id()')
     expect(CODE).toMatch(/CREATE POLICY care_access_select[\s\S]*?\(select public\.get_user_role\(\)\) = 'admin' AND department_id/)
     // Q-79: SM đọc dữ liệu con theo store SNAPSHOT của dòng; nhánh staff qua helper chỉ-assignee.
     const pol = (name: string) => new RegExp(`CREATE POLICY ${name}[\\s\\S]*?;`).exec(CODE)![0]
@@ -103,6 +116,7 @@ test.describe('mig 114 source contract @desktop', () => {
     for (const f of ['care_staff_reads_task', 'care_staff_reads_customer']) {
       expect(fnBody(f), f).toMatch(/STABLE SECURITY DEFINER SET search_path = public/)
       expect(fnBody(f), f).toContain('t.assignee_id = public.care_assignee_uid()')
+      expect(fnBody(f), f).toContain('t.store_id = public.care_staff_store_id()')
       expect(fnBody(f), f).not.toContain('care_scope_store_ids')
     }
     // Không policy nào mở cho staging / queue.

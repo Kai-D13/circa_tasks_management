@@ -70,7 +70,9 @@ section('QUYỀN')
       has_function_privilege('authenticated', p.oid, 'EXECUTE') AS auth,
       has_function_privilege('service_role', p.oid, 'EXECUTE') AS svc
     FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'care%'`)).rows
-  ok(fns.length === 35, '35 function care* (gồm care_assignee_uid — Q-76/77; care_staff_reads_task/customer — Q-79)', String(fns.length))
+  ok(fns.length === 36, '36 function care* (gồm care_assignee_uid — Q-76/77; care_staff_reads_task/customer — Q-79; care_staff_store_id — Q-82)', String(fns.length))
+  const sid = fns.find((f) => f.fn === 'care_staff_store_id()')
+  ok(sid && !sid.anon && sid.auth && sid.svc, 'care_staff_store_id(): authenticated + service_role, không anon (helper policy)', JSON.stringify(sid))
   ok(fns.every((f) => !f.anon), 'anon không EXECUTE function care* nào', fns.filter((f) => f.anon).map((f) => f.fn).join(', '))
   const internal = fns.filter((f) => f.fn.startsWith('care__'))
   ok(internal.length === 8 && internal.every((f) => !f.auth && !f.svc), 'care__* (8 hàm nội bộ) không cấp cho role nào', JSON.stringify(internal.filter((f) => f.auth || f.svc)))
@@ -285,7 +287,51 @@ ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'NO_NEED', 'x', null, { ur
 for (const [bad, why] of [[[{ url: 'javascript:alert(1)' }], 'javascript:'], [[{ url: 'http://x.invalid/a.jpg' }], 'http'], [[{ url: 'https://x.invalid/a.jpg', extra: 1 }], 'key lạ'], [Array(6).fill({ url: 'https://x.invalid/a.jpg' }), '6 ảnh'], [[{ url: 'https://x.invalid/' + 'a'.repeat(5000) }], 'quá dài']]) {
   ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'NO_NEED', 'x', null, bad), 'proof phải là mảng') === true, `proof ${why} ⇒ từ chối`)
 }
-r = await record(db, '2026-10-05', U.A, tA0.id, 'INTERESTED', 'QA quan tâm', null, [{ url: 'https://example.invalid/p.jpg' }])
+// B4: proof chỉ nhận object app cấp cho ĐÚNG task: <base>/care-proof/<task_id>/<khoá>.<ảnh>.
+const PB = 'https://storage.googleapis.com/duocsi-circa-vn/care-proof/'
+const tOther = await one(db, `SELECT id FROM public.care_tasks WHERE id <> $1 LIMIT 1`, [tA0.id])
+for (const [url, why] of [
+  ['https://example.invalid/p.jpg', 'host ngoài'],
+  [PB + tOther.id + '/1700000000000_abcd1234.jpg', 'prefix task khác'],
+  ['https://storage.googleapis.com/duocsi-circa-vn.evil.com/care-proof/' + tA0.id + '/1700000000000_abcd1234.jpg', 'host giả dạng'],
+  ['https://storage.googleapis.com/duocsi-circa-vn/tasks/' + tA0.id + '/1700000000000_abcd1234.jpg', 'vùng tasks'],
+  [PB + tA0.id + '/../x/1700000000000_abcd1234.jpg', 'traversal'],
+  [PB + tA0.id + '/1700000000000_abcd1234.svg', 'đuôi svg'],
+  [PB + tA0.id + '/ten-khach.jpg', 'khoá quá ngắn'],
+  // Biên (db-reviewer B4): xuống dòng, UUID hoa, query/fragment, percent-encoding, chữ số fullwidth, đuôi hoa.
+  [PB + tA0.id + '/1700000000000_abcd1234.jpg\n', 'xuống dòng cuối'],
+  [PB + tA0.id.toUpperCase() + '/1700000000000_abcd1234.jpg', 'UUID chữ hoa'],
+  [PB + tA0.id + '/1700000000000_abcd1234.jpg?x=1', 'query string'],
+  [PB + tA0.id + '/1700000000000_abcd1234.jpg#x', 'fragment'],
+  [PB + tA0.id + '/%2e%2e/1700000000000_abcd1234.jpg', 'percent-encoding'],
+  [PB + tA0.id + '/１700000000000_abcd1234.jpg', 'chữ số fullwidth'],
+  [PB + tA0.id + '/1700000000000_abcd1234.JPG', 'đuôi chữ hoa'],
+]) {
+  ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'NO_NEED', 'x', null, [{ url }]), 'proof phải là mảng') === true, `proof ${why} ⇒ từ chối (RPC trực tiếp)`)
+}
+ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'NO_NEED', 'x', null, [{ url: PB + tA0.id + '/1700000000000_abcd1234.jpg' }, { url: PB + tA0.id + '/1700000000000_abcd1234.jpg' }]), 'proof phải là mảng') === true, 'proof trùng URL trong mảng ⇒ từ chối (khớp TS)')
+// B4: chống ghi trùng khi retry — cùng người/task/kết quả/ghi chú/ngày hẹn trong 2 phút.
+{
+  const tD = await taskOf(db, (await one(db, `SELECT c.external_id FROM public.care_tasks t JOIN public.care_customers c ON c.id = t.customer_id WHERE t.assignee_id = $1 AND t.status = 'open' AND t.id <> $2 ORDER BY t.id LIMIT 1`, [U.A, tA0.id])).external_id, P10)
+  await record(db, '2026-10-05', U.A, tD.id, 'CALLBACK', 'QA retry', '2026-10-09')
+  ok(await raises(record(db, '2026-10-05', U.A, tD.id, 'CALLBACK', 'QA retry', '2026-10-09'), 'lượt trùng vừa được ghi') === true, 'retry cùng nội dung trong 2 phút ⇒ từ chối (không tạo lượt trùng)')
+  await record(db, '2026-10-05', U.A, tD.id, 'CALLBACK', 'QA gọi lần 2', '2026-10-09')
+  ok(await count(db, `SELECT count(*) FROM public.care_interactions WHERE task_id = $1`, [tD.id]) === 2, 'lượt khác nội dung vẫn ghi được')
+  // Q-82: dược sĩ bị tháo store / chuyển store khác (OS hoặc FS) / store ngừng ⇒ không ghi lượt dù còn là assignee.
+  const NOT_STORE = 'không còn thuộc cửa hàng của task'
+  await db.query(`UPDATE public.users SET store_id = NULL WHERE id = $1`, [U.A])
+  ok(await raises(record(db, '2026-10-05', U.A, tD.id, 'CALLBACK', 'QA sau tháo store', '2026-10-09'), NOT_STORE) === true, 'staff bị tháo store ⇒ không ghi lượt')
+  await db.query(`UPDATE public.users SET store_id = $1 WHERE id = $2`, [storeId(2), U.A])
+  ok(await raises(record(db, '2026-10-05', U.A, tD.id, 'CALLBACK', 'QA sau chuyển OS', '2026-10-09'), NOT_STORE) === true, 'staff chuyển sang store OS KHÁC (QAOS02, đang hoạt động) mà task còn ở QAOS01 ⇒ không ghi lượt')
+  await db.query(`UPDATE public.users SET store_id = $1 WHERE id = $2`, [S_FS, U.A])
+  ok(await raises(record(db, '2026-10-05', U.A, tD.id, 'CALLBACK', 'QA sau chuyển FS', '2026-10-09'), NOT_STORE) === true, 'staff chuyển sang store FS ⇒ không ghi lượt')
+  await db.query(`UPDATE public.users SET store_id = $1 WHERE id = $2`, [storeId(1), U.A])
+  await db.query(`UPDATE public.stores SET is_active = false WHERE id = $1`, [storeId(1)])
+  ok(await raises(record(db, '2026-10-05', U.A, tD.id, 'CALLBACK', 'QA store ngừng', '2026-10-09'), NOT_STORE) === true, 'store của staff (= store task) ngừng hoạt động ⇒ không ghi lượt')
+  await db.query(`UPDATE public.stores SET is_active = true WHERE id = $1`, [storeId(1)])
+  ok((await record(db, '2026-10-05', U.A, tD.id, 'CALLBACK', 'QA về lại QAOS01', '2026-10-09')).status === 'open', 'về lại đúng store task ⇒ ghi lượt được (đối chứng)')
+}
+r = await record(db, '2026-10-05', U.A, tA0.id, 'INTERESTED', 'QA quan tâm', null, [{ url: PB + tA0.id + '/1700000000000_abcd1234.jpg' }, { url: PB + tA0.id + '/1700000000001_ef567890.webp' }])
 let t = await one(db, `SELECT * FROM public.care_tasks WHERE id = $1`, [tA0.id])
 ok(r.status === 'completed' && t.status === 'completed' && t.last_outcome === 'INTERESTED' && t.completed_at, 'INTERESTED ⇒ Hoàn thành')
 const it = await one(db, `SELECT * FROM public.care_interactions WHERE task_id = $1`, [tA0.id])
@@ -584,6 +630,118 @@ section('BÁO CÁO = đếm qua session client; không nhân đôi; loại is_te
   ok(sum.assigned === 1 && sum.completed === 0 && sum.not_cared === 1, 'care_my_summary staff A chỉ đếm task thật — loại fixture is_test (audit PM B1 P1)', JSON.stringify(sum))
   ok(await as(db, U.A, () => count(db, `SELECT count(*) FROM public.care_tasks WHERE is_test AND period_month = $1`, [PC])) === 1, 'fixture is_test vẫn tồn tại (RLS) nhưng không vào thẻ')
   ok(await as(db, null, async () => (await db.query(`SELECT public.care_stamp_overdue() s, public.care_close_period() c`)).rows[0].c, 'service_role') === 0, 'service_role gọi được care_stamp_overdue/care_close_period (giờ VN thật)')
+}
+await db.close()
+
+// ════════════════════════════════════════════════════════════════════════════
+section('Q-82/Q-83 — STAFF ĐỔI STORE A→B MÀ TASK CÒN Ở A · GHI CHÚ CHUYỂN GIAO (kỳ hiện tại thật)')
+db = await freshDb()
+{
+  const PCx = (await one(db, `SELECT public.care_period_of(public.care_vn_today())::text p`)).p
+  const DUE = (await one(db, `SELECT public.care_period_last_day($1::date)::text d`, [PCx])).d
+  const bq = await stage(db, [row('QA-M1', 'QAOS01', EA, 'P1'), row('QA-M1', 'QAOS01', EA, 'P2'), row('QA-M2', 'QAOS01', EA, 'P1'), row('QA-M3', 'QAOS01', EB, 'P1')], { period: PCx })
+  r = await as(db, null, async () => (await db.query(`SELECT public.care_import_finalize($1, $2) r`, [bq, U.mkt])).rows[0].r, 'service_role')
+  ok(r.status === 'committed' && r.created === 3, 'fixture: M1 (2 sản phẩm), M2 giao A; M3 giao B — đều QAOS01', JSON.stringify(r))
+  const m1 = await taskOf(db, 'QA-M1', PCx), m2 = await taskOf(db, 'QA-M2', PCx), m3 = await taskOf(db, 'QA-M3', PCx)
+  const ids = [m1.id, m2.id, m3.id], custs = [m1.customer_id, m2.customer_id, m3.customer_id]
+  r = await as(db, U.A, async () => (await db.query(`SELECT public.care_record_interaction($1, 'CALLBACK', 'A gọi M1', $2::date, NULL) r`, [m1.id, DUE])).rows[0].r)
+  ok(r.status === 'open', 'A ghi lượt M1 khi còn ở QAOS01 (RPC public)')
+  const NOTE = 'QA ghi chú SM: khách hẹn gọi buổi chiều'
+  r = await as(db, U.sm, async () => (await db.query(`SELECT public.care_transfer_tasks($1::uuid[], $2, $3) r`, [[m3.id], U.A, NOTE])).rows[0].r)
+  ok(r.transferred === 1, 'SM chuyển M3 từ B sang A kèm ghi chú')
+
+  // Đọc trực tiếp các bảng dưới session (RLS) + helper/RPC đọc.
+  const view = (who) => as(db, who, async () => ({
+    tasks: await count(db, `SELECT count(*) FROM public.care_tasks WHERE id = ANY ($1::uuid[])`, [ids]),
+    inter: await count(db, `SELECT count(*) FROM public.care_interactions WHERE task_id = ANY ($1::uuid[])`, [ids]),
+    events: await count(db, `SELECT count(*) FROM public.care_assignment_events WHERE task_id = ANY ($1::uuid[])`, [ids]),
+    prods: await count(db, `SELECT count(*) FROM public.care_task_products WHERE task_id = ANY ($1::uuid[])`, [ids]),
+    cust: await count(db, `SELECT count(*) FROM public.care_customers WHERE id = ANY ($1::uuid[])`, [custs]),
+    notes: (await db.query(`SELECT note FROM public.care_assignment_events WHERE task_id = $1 AND kind = 'transferred' ORDER BY id`, [m3.id])).rows.map((x) => x.note),
+    sum: (await db.query(`SELECT * FROM public.care_my_summary()`)).rows[0].assigned,
+    rep: (await db.query(`SELECT COALESCE(sum(tasks_total), 0)::int n FROM public.care_report($1::date)`, [PCx])).rows[0].n,
+    canRead: (await db.query(`SELECT public.care_can_read_task($1) c`, [m1.id])).rows[0].c,
+  }))
+  let vA = await view(U.A)
+  ok(vA.tasks === 3 && vA.inter === 1 && vA.events === 4 && vA.prods === 4 && vA.cust === 3 && vA.sum === 3 && vA.rep === 3 && vA.canRead === true,
+     'đối chứng: A ở đúng store đọc đủ 3 task / lượt / event / sản phẩm / khách / summary / report', JSON.stringify(vA))
+  ok(JSON.stringify(vA.notes) === JSON.stringify([NOTE]), 'Q-83: staff ĐANG phụ trách (A) thấy ghi chú chuyển giao của SM', JSON.stringify(vA.notes))
+  const vB = await view(U.B)
+  ok(vB.notes.length === 0 && await as(db, U.B, () => count(db, `SELECT count(*) FROM public.care_tasks WHERE id = $1`, [m3.id])) === 0
+     && await as(db, U.B, () => count(db, `SELECT count(*) FROM public.care_assignment_events WHERE task_id = $1`, [m3.id])) === 0,
+     'Q-83: staff CŨ (B) sau chuyển giao không đọc được task M3 và ghi chú', JSON.stringify(vB))
+
+  // A chuyển sang QAOS02 (OS đang hoạt động) — task vẫn ở QAOS01.
+  await db.query(`UPDATE public.users SET store_id = $1 WHERE id = $2`, [storeId(2), U.A])
+  vA = await view(U.A)
+  ok(vA.tasks === 0 && vA.inter === 0 && vA.events === 0 && vA.prods === 0 && vA.cust === 0 && vA.notes.length === 0 && vA.sum === 0 && vA.rep === 0 && vA.canRead === false,
+     'Q-82: A sang QAOS02 ⇒ 0 dòng ở care_tasks / care_interactions / care_assignment_events / sản phẩm / khách; summary + report 0', JSON.stringify(vA))
+  ok(await raises(as(db, U.A, () => db.query(`SELECT public.care_record_interaction($1, 'CALLBACK', 'A sau chuyển', $2::date, NULL)`, [m1.id, DUE])), 'chỉ dược sĩ được giao') === true,
+     'Q-82: RPC public ghi lượt task còn ở QAOS01 ⇒ từ chối (NOT_ASSIGNEE)')
+  // GIỚI HẠN: createUploadUrl (server action Next + GCS) không chạy được ở đây — chỉ chứng minh truy vấn
+  // session nó dùng (SELECT care_tasks qua RLS) trả 0 dòng ⇒ gate careStaffTaskBlock = TASK_NOT_FOUND
+  // (unit + source ở e2e/care-my-core.spec.ts). Kiểm tay đầu-cuối ở B6.
+  ok(await as(db, U.A, () => count(db, `SELECT count(*) FROM public.care_tasks WHERE id = $1`, [m2.id])) === 0,
+     'Q-82: truy vấn session của createUploadUrl (care_proof) không thấy task cũ ⇒ gate từ chối (gián tiếp)')
+  const vSm = await view(U.sm), vSup = await view(U.super)
+  ok(vSm.tasks === 3 && vSm.inter === 1 && vSup.tasks === 3, 'SM/super không bị ảnh hưởng (vẫn thấy đủ để chuyển giao)', JSON.stringify({ vSm, vSup }))
+  // VERIFY 17 chạy NGUYÊN VĂN từ file 114 (bỏ tiền tố comment).
+  const MIG_LINES = MIGRATION.replace(/\r\n/g, '\n').split('\n')
+  const verbatim = (startsWith, endsWith) => {
+    const i = MIG_LINES.findIndex((l) => l.startsWith(startsWith))
+    const j = MIG_LINES.findIndex((l, k) => k >= i && l.includes(endsWith))
+    return i < 0 || j < 0 ? null : MIG_LINES.slice(i, j + 1).map((l) => l.replace(/^--\s{4}/, '')).join('\n')
+  }
+  const v17a = verbatim("--    SELECT position('care_staff_store_id'", 'AS svc_x;')
+  const v17b = verbatim('--    SELECT t.store_id, t.assignee_id, u.store_id AS user_store', 'GROUP BY 1, 2, 3;')
+  const a17 = v17a && (await db.query(v17a)).rows[0]
+  ok(a17 && a17.rpc_q82 === true && a17.policy_q82 === true && Number(a17.n_fn) === 36 && a17.anon_x === false && a17.auth_x === true && a17.svc_x === true,
+     'VERIFY 17 (nguyên văn): đúng bản r1.1 — t, t, 36, f, t, t', JSON.stringify(a17))
+  const b17 = v17b ? (await db.query(v17b)).rows : null
+  ok(b17 && b17.length === 1 && b17[0].assignee_id === U.A && b17[0].user_store === storeId(2) && Number(b17[0].count) === 3,
+     'VERIFY 17 giám sát (nguyên văn) bắt đúng 3 task mở của A lệch store', JSON.stringify(b17))
+  // Nhánh NULL / FS / store ngừng của care_staff_store_id() — fail-closed cả phía ĐỌC.
+  for (const [why, sql, params] of [
+    ['tháo store (store_id NULL)', `UPDATE public.users SET store_id = NULL WHERE id = $1`, [U.A]],
+    ['chuyển sang store FS', `UPDATE public.users SET store_id = $1 WHERE id = $2`, [S_FS, U.A]],
+  ]) {
+    await db.query(sql, params)
+    const v = await view(U.A)
+    ok(v.tasks === 0 && v.inter === 0 && v.events === 0 && v.cust === 0 && v.sum === 0 && v.rep === 0, `Q-82 đọc: A ${why} ⇒ 0 dòng / summary 0`, JSON.stringify(v))
+  }
+  await db.query(`UPDATE public.users SET store_id = $1 WHERE id = $2`, [storeId(1), U.A])
+  await db.query(`UPDATE public.stores SET is_active = false WHERE id = $1`, [storeId(1)])
+  const vOff = await view(U.A)
+  ok(vOff.tasks === 0 && vOff.inter === 0 && vOff.sum === 0, 'Q-82 đọc: store của A (= store task) ngừng hoạt động ⇒ A mất cả quyền đọc (PM xác nhận — báo cáo)', JSON.stringify(vOff))
+  await db.query(`UPDATE public.stores SET is_active = true WHERE id = $1`, [storeId(1)])
+
+  // Về lại đúng store ⇒ quyền theo store, không mất vĩnh viễn.
+  ok((await view(U.A)).tasks === 3, 'A về lại QAOS01 (store hoạt động lại) ⇒ đọc lại task của mình')
+  await db.query(`UPDATE public.users SET store_id = $1 WHERE id = $2`, [storeId(2), U.A])
+
+  // SM/super chuyển giao thủ công (Q-80) ⇒ quyền theo task mới.
+  r = await as(db, U.sm, async () => (await db.query(`SELECT public.care_transfer_tasks($1::uuid[], $2, 'QA chuyển M1 cho B') r`, [[m1.id], U.B])).rows[0].r)
+  ok(r.transferred === 1, 'SM chuyển M1 (QAOS01) sang B cùng store')
+  r = await as(db, U.super, async () => (await db.query(`SELECT public.care_transfer_tasks($1::uuid[], $2, 'QA chuyển M2 cho C') r`, [[m2.id], U.C])).rows[0].r)
+  ok(r.transferred === 1 && (await one(db, `SELECT store_id FROM public.care_tasks WHERE id = $1`, [m2.id])).store_id === storeId(2), 'super chuyển M2 sang C (QAOS02) ⇒ task đổi store')
+  // Q-86 (chốt 08/10): không chuyển task cho CHÍNH assignee hiện tại dù họ đã đổi store — SM phân công lại thủ công.
+  ok(await raises(as(db, U.super, () => db.query(`SELECT public.care_transfer_tasks($1::uuid[], $2, 'QA giữ A ở store mới')`, [[m3.id], U.A])), 'đã thuộc dược sĩ đích') === true,
+     'chuyển M3 cho chính A (đã sang QAOS02) ⇒ từ chối "đã thuộc dược sĩ đích" (Q-86)')
+  r = await as(db, U.super, async () => (await db.query(`SELECT public.care_transfer_tasks($1::uuid[], $2, 'QA chuyển M3 cho D') r`, [[m3.id], U.D])).rows[0].r)
+  ok(r.transferred === 1, 'super chuyển M3 sang D (QAOS02)')
+  const seeB = await as(db, U.B, async () => ({
+    t: await count(db, `SELECT count(*) FROM public.care_tasks WHERE id = $1`, [m1.id]),
+    i: (await db.query(`SELECT note FROM public.care_interactions WHERE task_id = $1`, [m1.id])).rows.map((x) => x.note),
+  }))
+  ok(seeB.t === 1 && JSON.stringify(seeB.i) === JSON.stringify(['A gọi M1']), 'B (assignee mới, đúng store) thấy M1 + lượt A đã ghi', JSON.stringify(seeB))
+  ok(await as(db, U.C, () => count(db, `SELECT count(*) FROM public.care_tasks WHERE id = $1`, [m2.id])) === 1, 'C (QAOS02) thấy M2 sau chuyển giao')
+  const dNotes = await as(db, U.D, async () => (await db.query(`SELECT note FROM public.care_assignment_events WHERE task_id = $1 AND kind = 'transferred' ORDER BY id`, [m3.id])).rows.map((x) => x.note))
+  ok(dNotes.includes(NOTE) && dNotes.includes('QA chuyển M3 cho D'), 'Q-83: D (đang phụ trách M3) thấy cả ghi chú chuyển giao trước đó', JSON.stringify(dNotes))
+  ok((await view(U.A)).tasks === 0, 'A (đã sang QAOS02) vẫn không thấy task nào trong 3 task (đều đã chuyển đi)')
+  r = await as(db, U.B, async () => (await db.query(`SELECT public.care_record_interaction($1, 'INTERESTED', 'B chốt M1', NULL, NULL) r`, [m1.id])).rows[0].r)
+  ok(r.status === 'completed', 'B ghi lượt M1 sau chuyển giao')
+  r = await as(db, U.C, async () => (await db.query(`SELECT public.care_record_interaction($1, 'CALLBACK', 'C gọi M2', $2::date, NULL) r`, [m2.id, DUE])).rows[0].r)
+  ok(r.status === 'open', 'C ghi lượt M2 ở store mới QAOS02')
 }
 await db.close()
 
