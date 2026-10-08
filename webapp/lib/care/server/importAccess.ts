@@ -12,7 +12,9 @@ export async function getCareImportAccess(): Promise<CareImportAccess> {
   if (!user) return { kind: 'anonymous' }
   const { data, error } = await supabase.rpc('care_my_access')
   if (error || !data || typeof data !== 'object') return { kind: 'unavailable' }
-  return (data as { can_import?: unknown }).can_import === true
+  const a = data as { can_import?: unknown; role?: unknown }
+  // Q-76/77: QLCH không tham gia CRM (SQL đã trả can_import=false; chặn thêm ở app).
+  return a.can_import === true && a.role !== 'store_manager'
     ? { kind: 'ok', actorId: user.id }
     : { kind: 'forbidden' }
 }

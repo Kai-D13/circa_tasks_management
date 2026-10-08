@@ -10,6 +10,8 @@ import { Sidebar } from '@/components/layout/Sidebar'
 import { MobileHeader } from '@/components/layout/MobileHeader'
 import { BottomNav } from '@/components/layout/BottomNav'
 import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
+import { careNavItems } from '@/lib/care/browse'
+import { getCareNavPermissions } from '@/lib/care/server/browse'
 import { isReferralEnabled } from '@/lib/affiliate/flags'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { opsSidebarVisible } from '@/lib/affiliate/overview'
@@ -59,6 +61,9 @@ export default async function DashboardLayout({
   // Sidebar thu gọn: đọc cookie ngay ở server (layout đã dynamic vì auth) rồi
   // truyền xuống làm state khởi tạo — HTML đầu tiên render đúng bề rộng, không
   // nháy layout và không hydration mismatch. Cookie chặn/thiếu → mặc định mở rộng.
+  // CRM-CSKH (B3): mục sidebar "Chăm sóc KH" — chỉ khi CARE_ENABLED và role có thể
+  // dùng browser; quyền thật từ care_my_access() (lỗi/DB chưa có 114 ⇒ ẩn, không vỡ layout).
+  const careNav = !isStaff && !isFsStore ? careNavItems(await getCareNavPermissions(profile.role)) : []
   const cookieStore = await cookies()
   const sidebarCollapsed = cookieStore.get('sidebar_collapsed')?.value === '1'
   const affiliateOverviewNav = opsSidebarVisible({
@@ -82,7 +87,7 @@ export default async function DashboardLayout({
           {/* Desktop sidebar — hidden on mobile; not rendered for staff */}
           {/* Staff get no desktop Sidebar. An FS store_manager DOES get one → pass
               isFsStore so it collapses to the single FS item (no OS links). */}
-          {!isStaff && <Sidebar announcementsUnread={announcementsUnread} kpiCampaignEnabled={kpiCampaignEnabled} referralEnabled={referralEnabled} isFsStore={isFsStore} affiliateOverviewNav={affiliateOverviewNav} defaultCollapsed={sidebarCollapsed} />}
+          {!isStaff && <Sidebar announcementsUnread={announcementsUnread} kpiCampaignEnabled={kpiCampaignEnabled} referralEnabled={referralEnabled} isFsStore={isFsStore} affiliateOverviewNav={affiliateOverviewNav} defaultCollapsed={sidebarCollapsed} careNav={careNav} />}
 
           {/* Main content — full width on mobile */}
           {/* Mobile bottom padding clears the fixed BottomNav + the iPhone

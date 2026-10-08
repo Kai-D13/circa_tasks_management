@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect, request as pwRequest, type Page, type Route } from '@playwright/test'
 import { SUPER_STATE } from './authState'
+import { saveLocatorShot } from './qaShot'
 import { handleCarePreview, type CareImportDeps } from '../lib/care/import/handler'
 import type { CareImportLookups } from '../lib/care/import/preview'
 import { buildCareImportXlsx, defaultFixtureStores } from './careImportFixture'
@@ -69,7 +70,7 @@ async function shot(page: Page, name: string) {
     if (outer instanceof HTMLElement) { outer.style.height = 'auto'; outer.style.overflow = 'visible' }
     if (main instanceof HTMLElement) { main.style.overflow = 'visible' }
   })
-  await page.getByTestId('care-import-wizard').screenshot({ path: path.join(SHOTS, `${name}.png`) })
+  await saveLocatorShot(page.getByTestId('care-import-wizard'), path.join(SHOTS, `${name}.png`))
 }
 const noPageOverflow = (page: Page) => page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)
 

@@ -181,11 +181,13 @@ test.describe('care B0 — cờ và cấu hình (mặc định OFF) @desktop', (
     expect(src).toContain('careFlagsFromEnv(process.env)')
   })
 
-  test('cờ OFF không đổi module live: nav/proxy/tasks chưa tham chiếu CRM; route/page CRM (B2) kiểm cờ trước tiên', () => {
-    // B3/B4 thêm nav/CTA ⇒ thay phần nav bằng test gate cờ tương ứng; B5 thêm cron ⇒ kiểm 503 khi CARE_SYNC_ENABLED OFF.
+  test('cờ OFF không đổi module live: nav/proxy/tasks chưa tham chiếu CRM; route/page CRM (B2/B3) kiểm cờ trước tiên', () => {
+    // B3: Sidebar + layout nối mục "Chăm sóc KH" — gate cờ kiểm ở care-browse-core.spec
+    // (getCareNavPermissions trả null khi CARE_ENABLED OFF ⇒ careNav rỗng ⇒ không render).
+    // B4 thêm CTA staff ⇒ thay BottomNav bằng test gate tương ứng; B5 thêm cron ⇒ kiểm 503 khi CARE_SYNC_ENABLED OFF.
     const live = [
-      'components/layout/BottomNav.tsx', 'components/layout/Sidebar.tsx', 'lib/layout/sidebarNav.ts',
-      'proxy.ts', 'app/(dashboard)/layout.tsx', 'app/(dashboard)/tasks/page.tsx',
+      'components/layout/BottomNav.tsx', 'lib/layout/sidebarNav.ts',
+      'proxy.ts', 'app/(dashboard)/tasks/page.tsx',
     ]
     for (const f of live) expect(fs.existsSync(path.join(ROOT, f)), f).toBe(true)
     for (const f of live) {
@@ -198,8 +200,13 @@ test.describe('care B0 — cờ và cấu hình (mặc định OFF) @desktop', (
     // route đi qua handler mà bước đầu là `if (!deps.enabled) return 404` (care-import-core.spec).
     expect(read('app/(dashboard)/care/assign/page.tsx')).toMatch(/export default async function[\s\S]*?\{\s*if \(!isCareEnabled\(\)\) notFound\(\)/)
     expect(read('lib/care/import/handler.ts')).toMatch(/async function guard[\s\S]*?\{\s*if \(!deps\.enabled\) return/)
-    const careDirs = fs.readdirSync(path.join(ROOT, 'app/(dashboard)/care'))
-    expect(careDirs).toEqual(['assign'])
+    // B3: /care + /care/tasks + /care/tasks/[id] — mọi page đi qua requireCareViewer (cờ trước tiên).
+    const careDirs = fs.readdirSync(path.join(ROOT, 'app/(dashboard)/care')).sort()
+    expect(careDirs).toEqual(['assign', 'page.tsx', 'tasks'])
+    for (const f of ['app/(dashboard)/care/page.tsx', 'app/(dashboard)/care/tasks/page.tsx', 'app/(dashboard)/care/tasks/[id]/page.tsx']) {
+      expect(read(f), f).toMatch(/export default async function[\s\S]*?\{\s*const g = await requireCareViewer\(\)/)
+    }
+    expect(read('lib/care/server/pageGuard.ts')).toMatch(/function requireCareViewer\(\)[\s\S]*?> \{\s*if \(!isCareEnabled\(\)\) notFound\(\)/)
   })
 
   test('CARE_IMPORT_MAX_BYTES: mặc định 8MB, sai/ngoài khoảng ⇒ throw', () => {
