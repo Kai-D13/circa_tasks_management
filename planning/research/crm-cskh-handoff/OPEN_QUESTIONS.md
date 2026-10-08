@@ -99,3 +99,11 @@
 | Q-70 | ✅ | Ngày hẹn lại có được ở quá khứ trong tháng task? | Ghi lượt/nhãn trễ | Từ hôm nay tới cuối kỳ | User chốt: Có quy định không ở quá khứ. |
 | Q-71 | ✅ | Staff nghỉ việc xử lý thế nào khi `users` chưa có cờ active? | Tránh import/chuyển giao vào account nghỉ | Inactive, chuyển task mở, khóa Auth, tháo store; giữ lịch sử | User đồng ý nguyên tắc inactive; PM diễn giải cách vận hành tối thiểu, Dev kiểm đường thao tác B2. |
 | Q-72 | ✅ | User đã có dữ liệu CRM có bị xoá ở Auth/public.users không? | FK/audit lịch sử | Inactive, không xoá | User chốt: tài khoản nghỉ thì inactive, không xây luồng xoá. |
+
+## Bổ sung sau audit B2 (08/10/2026)
+
+| Mã | Mức | Câu hỏi | Quyết định |
+|---|---|---|---|
+| Q-73 | ✅ | ID/SĐT trong Excel nhận kiểu ô nào? | PM chốt theo quyền stakeholder giao: `customer_external_id` và `product_id` phải là Text; SĐT Text hoặc số thiếu 0 đầu, ứng dụng chuẩn hóa. |
+| Q-74 | ✅ | Có xây riêng cơ chế xử lý file 10.000 dòng chạm timeout từ benchmark giả lập? | Không. Giữ trần 10.000; QA file vận hành thật trên DB thật trước rollout, chỉ sửa nếu lỗi xảy ra. |
+| Q-75 | ✅ | Qua tháng giữa preview và xác nhận xử lý ra sao? | Giữ `PERIOD_CHANGED` và preview lại; không thêm cơ chế phức tạp. |

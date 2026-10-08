@@ -262,7 +262,7 @@ care_orders, care_import_*, care_access, care_sync_state, care_reconcile_queue �
 |---|---|---|---|
 | B0 | Setup §8, `lib/bigquery/{query,client}.ts` (mock), `lib/care/{time,outcome,config,flags}.ts` | ✅ PM GO có điều kiện (audit `reviews/2026-10-07-crm-b0.md`); chưa commit | S |
 | B1 | Migration 114 (bảng, RLS, helper, RPC trừ sync) + PGlite QA + `db-reviewer`. Gồm biên `first_overdue_on` (§2.8), RLS sau chuyển giao (§5), `care_orders` theo r3.2 (§4) | ✅ r1.1 sửa P0/P1 audit PM (report `reports/2026-10-07-crm-b1.md`), chờ PM nghiệm thu; race test dời B6; migration chưa chạy prod | L |
-| B2 | Import 25 store + từ chối + diff + wizard + lịch sử. Test bằng **fixture giả** (cap byte, diff, atomicity) | PM duyệt SPEC B2. **Không** cần file thật/MB (Q-63) | L |
+| B2 | Import 25 store + từ chối + diff + wizard + lịch sử. Test bằng **fixture giả** (cap byte, diff, atomicity) | ✅ build 08/10 (report `reports/2026-10-08-crm-b2.md`), chờ PM audit; API thật cần DB có 114 (B6) | L |
 | B3 | Web Chăm sóc + Chuyển giao | PM duyệt SPEC B3 | L |
 | B4 | Mobile staff + nav + CTA `/tasks` (đo) + form + proof | PM duyệt SPEC B4 | M |
 | B5 | Đồng bộ đơn (2 luồng) + attribution + báo cáo + export | PM duyệt SPEC B5 + BI/operator xác nhận N3 r3.2 (checklist §11) | L |

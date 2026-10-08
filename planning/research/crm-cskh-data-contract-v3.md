@@ -9,18 +9,18 @@
 
 | Cột | Bắt buộc | Quy tắc import |
 |---|---|---|
-| `customer_external_id` | Có | ID BI ổn định toàn chuỗi; text, không dùng SĐT làm khóa join. |
+| `customer_external_id` | Có | ID BI ổn định toàn chuỗi; **ô Excel kiểu Text**, không dùng SĐT làm khóa join. Ô số bị từ chối để tránh mất ký tự/độ chính xác. |
 | `customer_name` | Có | Tên hiển thị; trim. |
-| `customer_phone` | Có | Text giữ số 0 đầu; chuẩn hóa bằng quy tắc số Việt Nam hiện có; lỗi nếu không hợp lệ. |
+| `customer_phone` | Có | Ô Text hoặc số, không bắt buộc số 0 đầu trong Excel; ứng dụng chuẩn hóa về số di động VN 10 chữ số. Lỗi nếu không hợp lệ. |
 | `target_store_code` | Có | Mã POS, map duy nhất tới `stores.code` với `store_type='os'`, `is_active=true`. |
 | `assignee_email` | Có | Lowercase/trim; map duy nhất tới `public.users` role `staff` thuộc store đích. |
 | `reason_type` | Có | Text không rỗng; ví dụ `chronic`, `promotion`. BI/Marketing gửi danh mục thực tế; app hiển thị `reason_text` làm nội dung chính. |
 | `reason_text` | Có | Lý do cụ thể gắn với dòng sản phẩm, không rỗng/chung chung. |
-| `product_id` | Có | ID sản phẩm, text; không dùng tên làm khóa. |
+| `product_id` | Có | ID sản phẩm, **ô Excel kiểu Text**; không dùng tên làm khóa. Ô số bị từ chối để không mất số 0 đầu. |
 | `product_name` | Có | Tên snapshot từ Marketing/BI. |
 | `product_url` | Không | URL ảnh HTTPS host `cdn-gcs.thuocsi.vn`; trống thì placeholder, host khác báo trong preview. |
 
-**Gom/validate:** các dòng cùng khách phải nhất quán `customer_name`, SĐT sau chuẩn hóa, `target_store_code`, `assignee_email`; xung đột báo kèm số dòng gốc. `(customer_external_id, product_id)` trùng trong một file báo lỗi để BI sửa/gộp lý do. `reason_type`/`reason_text` có thể khác theo sản phẩm. Không tạo task nếu bất kỳ khách nào chưa map được store/dược sĩ. Đếm dashboard theo khách/task unique, không theo dòng sản phẩm. Kỳ và hạn là **cuối tháng import theo `Asia/Ho_Chi_Minh`**, không có cột due date trong Excel.
+**Gom/validate:** các dòng cùng khách phải nhất quán `customer_name`, SĐT sau chuẩn hóa, `target_store_code`, `assignee_email`; xung đột báo kèm số dòng gốc. `(customer_external_id, product_id)` trùng trong một file báo lỗi để BI sửa/gộp lý do. `reason_type`/`reason_text` có thể khác theo sản phẩm. Không tạo task nếu bất kỳ khách nào chưa map được store/dược sĩ. Đếm dashboard theo khách/task unique, không theo dòng sản phẩm. Kỳ và hạn là **cuối tháng import theo `Asia/Ho_Chi_Minh`**, không có cột due date trong Excel. File tháng tối đa **10.000 dòng sản phẩm** theo Q-74.
 
 **Ảnh:** BI xuất `REPLACE(link, 'storage.googleapis.com', 'cdn-gcs.thuocsi.vn') AS product_url`. Query mẫu dùng `SELECT *` rồi alias `link` khiến output có `link` gốc và `link_1` CDN; app chỉ đọc `product_url`. UI mở tab Sản phẩm mới tải ảnh nhìn thấy, chạm để xem lớn. Không tải ảnh trên danh sách khách; không ép nén lại toàn bộ ảnh nếu làm tăng độ trễ. Ảnh mẫu stakeholder nêu ~62,8 KB **không** phải MB của file Excel.
 

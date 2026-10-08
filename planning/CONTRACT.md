@@ -67,6 +67,8 @@ Mỗi dược sĩ chịu trách nhiệm một danh sách khách được phân c
 - **Quyền thấy tiền đơn (Q-69):** dược sĩ được xem số tiền của đơn được gán cho task trong phạm vi của mình; không được đọc bảng đơn thô của toàn chuỗi hoặc đơn thuộc task người khác.
 - **Ngày hẹn (Q-70):** ngày xử lý tiếp không ở quá khứ khi ghi lượt và không vượt ngày cuối tháng task.
 - **Staff nghỉ việc (Q-71/72):** dùng quy ước inactive và chuyển giao task đang mở; giữ bản ghi user/auth và audit CRM, không xóa tài khoản có lịch sử. PM diễn giải thao tác tối thiểu: khóa đăng nhập, tháo gán store sau khi chuyển task; Dev kiểm cách vận hành hiện có ở B2, không thêm state CRM riêng trong B1.
+- **File Excel B2 (Q-73):** theo đúng 10 cột N1; `customer_external_id` và `product_id` xuất kiểu **Text** để giữ nguyên ID, parser từ chối ô kiểu số ở hai cột. SĐT trong file có thể thiếu số 0 đầu/ở ô số; hệ thống chuẩn hóa về số di động VN trước khi lưu và đối chiếu, không bỏ kiểm SĐT hợp lệ.
+- **Giới hạn import (Q-74/75):** stakeholder bảo đảm file tháng ≤10.000 dòng; giữ trần hiện tại, không xây cơ chế timeout/chia đợt mới cho ca giả định. QA file thật trên DB có 114 trước rollout phải xác nhận import hoàn tất; nếu lỗi thực tế mới sửa. Qua tháng giữa preview và commit thì báo kỳ đã đổi, yêu cầu preview lại; không thêm luồng đặc biệt.
 
 ## 5. Phụ thuộc còn lại theo batch
 
