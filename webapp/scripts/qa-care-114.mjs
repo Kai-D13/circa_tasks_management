@@ -70,7 +70,7 @@ section('QUYỀN')
       has_function_privilege('authenticated', p.oid, 'EXECUTE') AS auth,
       has_function_privilege('service_role', p.oid, 'EXECUTE') AS svc
     FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'care%'`)).rows
-  ok(fns.length === 32, '32 function care*', String(fns.length))
+  ok(fns.length === 35, '35 function care* (gồm care_assignee_uid — Q-76/77; care_staff_reads_task/customer — Q-79)', String(fns.length))
   ok(fns.every((f) => !f.anon), 'anon không EXECUTE function care* nào', fns.filter((f) => f.anon).map((f) => f.fn).join(', '))
   const internal = fns.filter((f) => f.fn.startsWith('care__'))
   ok(internal.length === 8 && internal.every((f) => !f.auth && !f.svc), 'care__* (8 hàm nội bộ) không cấp cho role nào', JSON.stringify(internal.filter((f) => f.auth || f.svc)))
@@ -273,7 +273,7 @@ const custA = [...new Set(fixtureRows.filter((x) => x.assignee_email === EA).map
 const custB = [...new Set(fixtureRows.filter((x) => x.assignee_email === EB).map((x) => x.customer_external_id))]
 const tA0 = await taskOf(db, custA[0], P10)
 ok(await raises(record(db, '2026-10-05', U.B, tA0.id, 'NO_NEED'), 'chỉ dược sĩ được giao') === true, 'staff khác ghi task không phải của mình ⇒ từ chối')
-ok(await raises(record(db, '2026-10-05', U.qlch1, tA0.id, 'NO_NEED'), 'chỉ dược sĩ được giao') === true, 'QLCH không ghi thay (TODO Q-33)')
+ok(await raises(record(db, '2026-10-05', U.qlch1, tA0.id, 'NO_NEED'), 'chỉ dược sĩ được giao') === true, 'QLCH không ghi lượt (Q-76/77)')
 ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'CALLBACK'), 'bắt buộc ngày hẹn') === true, 'CALLBACK thiếu ngày hẹn ⇒ từ chối')
 ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'UNREACHABLE', 'x', '2026-11-02'), 'tới hết tháng') === true, 'ngày hẹn sang tháng sau ⇒ từ chối (Q-48)')
 ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'CALLBACK', 'x', '2026-10-04'), 'tới hết tháng') === true, 'ngày hẹn trong quá khứ ⇒ từ chối')
@@ -467,8 +467,45 @@ const visibleExt = async (who) => {
   ok(histA.length === 1 && histA[0].note === 'lượt kỳ trước', 'staff A thấy lượt kỳ trước của khách H (H có task kỳ này giao A)')
   const histC = await as(db, U.C, () => count(db, `SELECT count(*) FROM public.care_interactions i JOIN public.care_customers c ON c.id = i.customer_id WHERE c.external_id = 'QA-H'`))
   ok(histC === 0, 'staff C (store khác) không thấy lịch sử khách H')
-  const sQ = await visibleExt(U.qlch1)
-  ok(sQ.every((x) => !x.startsWith('QA-C1') && !x.startsWith('QA-Z1')) && sQ.includes(`QA-B1@${cur}`) && sQ.includes(`QA-H@${prev}`), 'QLCH QAOS01: chỉ store mình (kể cả kỳ cũ)', sQ.join(','))
+  // Q-76/77 (08/10): QLCH `store_manager` (tài khoản dùng chung) KHÔNG tham gia CRM GĐ1 —
+  // 0 dòng ở MỌI bảng CRM đọc được, kể cả khi khách có task kỳ này ở store của QLCH,
+  // kể cả khi QLCH cùng department với care admin (Marketing).
+  const CRM_TABLES = ['care_access', 'care_import_batches', 'care_customers', 'care_tasks', 'care_task_products', 'care_interactions',
+    'care_assignment_events', 'care_store_refusals', 'care_orders', 'care_order_attributions', 'care_sync_state']
+  const zeroAll = async (who) => { const n = {}; for (const t of CRM_TABLES) n[t] = await as(db, who, () => count(db, `SELECT count(*) FROM public.${t}`)); return n }
+  const superN = await zeroAll(U.super)
+  ok(['care_tasks', 'care_task_products', 'care_interactions', 'care_assignment_events', 'care_customers'].every((t) => superN[t] > 0), 'fixture có dữ liệu ở các bảng chính (đối chứng)', JSON.stringify(superN))
+  ok(await as(db, null, () => count(db, `SELECT count(*) FROM public.care_tasks WHERE store_id = $1 AND period_month = $2`, [storeId(1), PC]), 'service_role') > 0, 'store của QLCH (QAOS01) có task kỳ hiện tại (đối chứng)')
+  for (const [name, who] of [['QLCH OS', U.qlch1], ['QLCH FS', U.qlchFs]]) {
+    const n = await zeroAll(who)
+    ok(Object.values(n).every((x) => x === 0), `${name}: 0 dòng ở cả ${CRM_TABLES.length} bảng CRM`, JSON.stringify(n))
+    const rep = await as(db, who, async () => (await db.query(`SELECT * FROM public.care_report($1::date)`, [PC])).rows)
+    const sm = await as(db, who, async () => (await db.query(`SELECT * FROM public.care_my_summary()`)).rows[0])
+    const acc = await as(db, who, async () => (await db.query(`SELECT public.care_my_access() a`)).rows[0].a)
+    ok(rep.length === 0 && sm.assigned === 0 && acc.scope_store_count === 0 && !acc.can_view_all && !acc.can_import, `${name}: care_report rỗng, care_my_summary 0, care_my_access không scope/quyền`, JSON.stringify({ rep: rep.length, sm, acc }))
+  }
+  await db.query(`UPDATE public.users SET department_id = $1 WHERE id = $2`, [MKT_DEPT, U.qlch1])
+  const nMkt = await zeroAll(U.qlch1)
+  const accMkt = await as(db, U.qlch1, async () => (await db.query(`SELECT public.care_my_access() a`)).rows[0].a)
+  ok(Object.values(nMkt).every((x) => x === 0) && !accMkt.can_view_all && !accMkt.can_import, 'QLCH cùng phòng Marketing (care admin) KHÔNG kế thừa quyền phòng — kể cả đọc care_access', JSON.stringify({ nMkt, accMkt }))
+  await db.query(`UPDATE public.users SET department_id = NULL WHERE id = $1`, [U.qlch1])
+  // Q-79: SM chỉ thấy dữ liệu con có store SNAPSHOT thuộc vùng (không suy từ task/khách hiện tại).
+  for (const [name, who] of [['SM', U.sm], ['SM2', U.sm2]]) {
+    const v = await as(db, who, async () => (await db.query(`SELECT
+        (SELECT count(*) FROM public.care_interactions WHERE NOT (store_id = ANY (public.care_scope_store_ids())))::int AS i_out,
+        (SELECT count(*) FROM public.care_assignment_events WHERE NOT (to_store_id = ANY (public.care_scope_store_ids()))
+                                                              AND NOT (COALESCE(from_store_id = ANY (public.care_scope_store_ids()), false)))::int AS e_out,
+        (SELECT count(*) FROM public.care_store_refusals WHERE NOT (store_id = ANY (public.care_scope_store_ids())))::int AS r_out,
+        (SELECT count(*) FROM public.care_order_attributions WHERE NOT (store_id = ANY (public.care_scope_store_ids())))::int AS a_out,
+        (SELECT count(*) FROM public.care_interactions)::int AS i_all`)).rows[0])
+    ok(v.i_out === 0 && v.e_out === 0 && v.r_out === 0 && v.a_out === 0 && v.i_all > 0, `${name}: lượt/event/DNC/attribution đều có store thuộc vùng (Q-79)`, JSON.stringify(v))
+  }
+  // Tài khoản đổi role staff → QLCH: nhánh assignee đóng (care_assignee_uid() = NULL).
+  const aBefore = (await visibleExt(U.A)).length
+  await db.query(`UPDATE public.users SET role = 'store_manager' WHERE id = $1`, [U.A])
+  const aAsQlch = await zeroAll(U.A)
+  await db.query(`UPDATE public.users SET role = 'staff' WHERE id = $1`, [U.A])
+  ok(aBefore > 0 && Object.values(aAsQlch).every((x) => x === 0) && (await visibleExt(U.A)).length === aBefore, 'staff A bị đổi sang QLCH ⇒ 0 dòng ở mọi bảng; đổi lại staff ⇒ thấy lại task của mình', JSON.stringify({ aBefore, aAsQlch }))
   ok((await visibleExt(U.qlchFs)).length === 0 && (await visibleExt(U.staffFs)).length === 0, 'tài khoản FS (QLCH/staff) không thấy CRM OS')
   const sSm = await visibleExt(U.sm), sSm2 = await visibleExt(U.sm2)
   ok(sSm.includes(`QA-C1@${cur}`) && sSm.includes(`QA-B1@${cur}`) && !sSm.includes(`QA-Z1@${cur}`), 'SM (QAOS01, QAOS02): đúng hai store')

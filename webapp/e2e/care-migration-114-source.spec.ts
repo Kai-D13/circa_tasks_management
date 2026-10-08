@@ -46,7 +46,7 @@ test.describe('mig 114 source contract @desktop', () => {
     // "name type [DEFAULT …]" ⇒ lấy type (token thứ 2) để dựng chữ ký như trong REVOKE.
     const sigs = [...CODE.matchAll(/CREATE OR REPLACE FUNCTION public\.(care\w+)\(([^)]*)\)/g)]
       .map((m) => `${m[1]}(${m[2].split(',').map((a) => a.trim()).filter(Boolean).map((a) => a.split(/\s+/)[1]).join(', ')})`)
-    expect(sigs.length).toBe(32)
+    expect(sigs.length).toBe(35) // + care_assignee_uid (r1.1, Q-76/77) + care_staff_reads_task/customer (r1.2, Q-79)
     const revoke = CODE.slice(CODE.indexOf('REVOKE ALL ON FUNCTION'), CODE.indexOf('FROM PUBLIC, anon, authenticated, service_role;'))
       .replace(/\s+/g, ' ')
     for (const s of sigs) expect(revoke, s).toContain(`public.${s}`)
@@ -72,8 +72,38 @@ test.describe('mig 114 source contract @desktop', () => {
       expect(text, name).not.toMatch(/\bFROM\b|\bJOIN\b|EXISTS\s*\(/)
     }
     // Helper dùng trong policy là SECURITY DEFINER STABLE với search_path cố định.
-    for (const h of ['care_can_view_all', 'care_can_import', 'care_scope_store_ids', 'care_can_read_task', 'care_can_read_customer_history']) {
+    for (const h of ['care_can_view_all', 'care_can_import', 'care_scope_store_ids', 'care_assignee_uid', 'care_can_read_task', 'care_can_read_customer_history']) {
       expect(fnBody(h), h).toMatch(/STABLE SECURITY DEFINER SET search_path = public/)
+    }
+    // Q-76/77: QLCH không có scope; nhánh "assignee" chỉ mở cho app role staff — mọi chỗ so assignee
+    // dùng care_assignee_uid(), không so thẳng auth.uid().
+    expect(fnBody('care_scope_store_ids')).not.toMatch(/store_manager/)
+    expect(fnBody('care_assignee_uid')).toMatch(/CASE WHEN public\.get_user_role\(\) = 'staff' THEN auth\.uid\(\) END/)
+    expect(CODE).not.toMatch(/assignee_id\s*=\s*\(?\s*(select\s+)?auth\.uid\(\)/i)
+    for (const f of ['care_can_read_task', 'care_can_read_customer_history', 'care_report', 'care_my_summary']) expect(fnBody(f), f).toContain('care_assignee_uid()')
+    expect(CODE).toMatch(/CREATE POLICY care_tasks_select[\s\S]*?assignee_id = \(select public\.care_assignee_uid\(\)\)/)
+    expect(CODE).toMatch(/CREATE POLICY care_access_select[\s\S]*?\(select public\.get_user_role\(\)\) = 'admin' AND department_id/)
+    // Q-79: SM đọc dữ liệu con theo store SNAPSHOT của dòng; nhánh staff qua helper chỉ-assignee.
+    const pol = (name: string) => new RegExp(`CREATE POLICY ${name}[\\s\\S]*?;`).exec(CODE)![0]
+    const SCOPE = 'ANY ((select public.care_scope_store_ids())::uuid[])'
+    expect(pol('care_interactions_select')).toContain(`store_id = ${SCOPE}`)
+    expect(pol('care_assignment_events_select')).toContain('ARRAY[from_store_id, to_store_id] && ((select public.care_scope_store_ids())::uuid[])')
+    // Nhánh staff chặn sớm bằng InitPlan (SM/admin không gọi helper theo dòng — db-reviewer r1.2 P2).
+    for (const p of ['care_interactions_select', 'care_assignment_events_select', 'care_store_refusals_select', 'care_order_attributions_select']) {
+      expect(pol(p), p).toMatch(/\(\(select public\.care_assignee_uid\(\)\) IS NOT NULL AND public\.care_staff_reads_(task|customer)\(/)
+    }
+    // Chuyển giao: kiểm scope nguồn TRƯỚC trạng thái/kỳ (không lộ trạng thái task ngoài vùng).
+    const tr = fnBody('care__transfer_tasks_at')
+    expect(tr.indexOf('SM không quản lý cửa hàng nguồn')).toBeLessThan(tr.indexOf('chỉ chuyển task đang mở của kỳ hiện tại'))
+    expect(pol('care_store_refusals_select')).toContain(`store_id = ${SCOPE}`)
+    expect(pol('care_order_attributions_select')).toContain(`store_id = ${SCOPE}`)
+    for (const p of ['care_interactions_select', 'care_assignment_events_select', 'care_store_refusals_select', 'care_order_attributions_select']) {
+      expect(pol(p), p).not.toMatch(/care_can_read_task|care_can_read_customer_history/)
+    }
+    for (const f of ['care_staff_reads_task', 'care_staff_reads_customer']) {
+      expect(fnBody(f), f).toMatch(/STABLE SECURITY DEFINER SET search_path = public/)
+      expect(fnBody(f), f).toContain('t.assignee_id = public.care_assignee_uid()')
+      expect(fnBody(f), f).not.toContain('care_scope_store_ids')
     }
     // Không policy nào mở cho staging / queue.
     expect(CODE).not.toMatch(/ON public\.care_import_staging FOR/)
