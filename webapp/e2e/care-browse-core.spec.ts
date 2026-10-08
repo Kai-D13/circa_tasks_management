@@ -57,14 +57,25 @@ test.describe('care B3 — logic thuần @desktop', () => {
     expect(CARE_INTERACTION_PAGE_SIZE).toBe(10)
     const mk = (id: number, task = 'T') => ({ id, outcome: 'CALLBACK', note: `n${id}`, next_action_date: null, created_at: `2026-10-${String(id).padStart(2, '0')}T00:00:00Z`, task_id: task, actor: null })
     const eleven = Array.from({ length: 11 }, (_, k) => mk(30 - k, k < 3 ? 'T' : 'OLD'))
-    const p = careInteractionPage(eleven, 'T')
+    const p = careInteractionPage(eleven, 'T', Date.parse('2026-10-31T00:00:00Z'))
     expect(p.rows).toHaveLength(10)
     expect(p.hasMore).toBe(true)
     expect(p.nextBefore).toBe(21)                                           // id nhỏ nhất của trang
     expect(p.rows.map((r) => r.isThisTask)).toEqual([true, true, true, false, false, false, false, false, false, false])
     expect('task_id' in p.rows[0]).toBe(false)
-    expect(careInteractionPage(eleven.slice(0, 10), 'T')).toMatchObject({ hasMore: false, nextBefore: null })
-    expect(careInteractionPage(null, 'T')).toEqual({ rows: [], hasMore: false, nextBefore: null })
+    // Q-85: cờ hết hạn ảnh tính theo nowMs do server truyền (lượt 10/2026: còn hạn 31/10, hết hạn 01/02/2027);
+    // chỉ lượt CÓ ảnh hợp lệ mới "hết hạn", và khi hết hạn URL bị bỏ khỏi dữ liệu gửi xuống client.
+    const url = 'https://storage.googleapis.com/duocsi-circa-vn/care-proof/00000000-0000-4000-8000-000000000700/1700000000001_abcd1201.jpg'
+    const withProof = eleven.map((r, k) => ({ ...r, proof: k % 2 ? [{ url }] : null }))
+    const fresh = careInteractionPage(withProof, 'T', Date.parse('2026-10-31T00:00:00Z'))
+    expect(fresh.rows.every((r) => r.proofExpired === false)).toBe(true)
+    expect(fresh.rows.filter((r) => r.proof?.[0]?.url === url)).toHaveLength(5)
+    const old = careInteractionPage(withProof, 'T', Date.parse('2027-02-01T00:00:00Z'))
+    expect(old.rows.map((r) => r.proofExpired)).toEqual(withProof.slice(0, 10).map((r) => r.proof !== null))
+    expect(JSON.stringify(old)).not.toContain('care-proof/')
+    expect(careInteractionPage([{ ...eleven[0], proof: [{ url: 'https://evil.example/x.jpg' }] }], 'T', Date.parse('2027-02-01T00:00:00Z')).rows[0].proofExpired).toBe(false)
+    expect(careInteractionPage(eleven.slice(0, 10), 'T', Date.parse('2026-10-31T00:00:00Z'))).toMatchObject({ hasMore: false, nextBefore: null })
+    expect(careInteractionPage(null, 'T', Date.now())).toEqual({ rows: [], hasMore: false, nextBefore: null })
   })
 
   test('nav: không nhóm rỗng; Phân công chỉ khi can_import; thứ tự Khách hàng → Phân công → Chăm sóc', () => {
@@ -277,7 +288,8 @@ test.describe('care B3 — source: cờ, session/RPC, không service role @deskt
     expect(sb).toContain('const showCare = careItems.length > 0')
     expect(sb).toMatch(/\{key === 'ops' && showCare && \(/)
     expect(sb).toContain('...careItems.map((c) => c.href)')
-    expect(read('components/layout/BottomNav.tsx')).not.toMatch(/\/care\b/)
+    // B4: BottomNav chỉ có /care/my (staff, khi careEnabled) — không link browser /care, /care/tasks.
+    expect(read('components/layout/BottomNav.tsx')).not.toMatch(/['"]\/care(\/tasks|\/assign)?['"]/)
   })
 
   test('catalog care-browse: UI_CATALOG + super; mỗi action giả tự kiểm cổng', () => {
@@ -459,7 +471,7 @@ test.describe('care B3 — parity browser ↔ migration 114 (PGlite) @desktop', 
           `SELECT id, outcome, note, next_action_date::text, created_at::text, task_id, NULL::jsonb AS actor FROM public.care_interactions
            WHERE customer_id = $1 AND ($2::bigint IS NULL OR id < $2) ORDER BY id DESC LIMIT $3`,
           [t.customer_id, before, CARE_INTERACTION_PAGE_SIZE + 1])).rows)
-        const page = careInteractionPage(fetched, taskId)
+        const page = careInteractionPage(fetched, taskId, Date.now())
         pages.push(page.rows.length)
         seenIds.push(...page.rows.map((r) => r.id))
         if (!page.hasMore) break

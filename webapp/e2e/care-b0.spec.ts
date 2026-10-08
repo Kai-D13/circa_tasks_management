@@ -184,11 +184,9 @@ test.describe('care B0 — cờ và cấu hình (mặc định OFF) @desktop', (
   test('cờ OFF không đổi module live: nav/proxy/tasks chưa tham chiếu CRM; route/page CRM (B2/B3) kiểm cờ trước tiên', () => {
     // B3: Sidebar + layout nối mục "Chăm sóc KH" — gate cờ kiểm ở care-browse-core.spec
     // (getCareNavPermissions trả null khi CARE_ENABLED OFF ⇒ careNav rỗng ⇒ không render).
-    // B4 thêm CTA staff ⇒ thay BottomNav bằng test gate tương ứng; B5 thêm cron ⇒ kiểm 503 khi CARE_SYNC_ENABLED OFF.
-    const live = [
-      'components/layout/BottomNav.tsx', 'lib/layout/sidebarNav.ts',
-      'proxy.ts', 'app/(dashboard)/tasks/page.tsx',
-    ]
+    // B4: BottomNav (tab CSKH) + CTA /tasks — gate cờ kiểm ở care-my-core.spec (careEnabled từ server;
+    // CTA chỉ khi isStaff && isCareEnabled()). B5 thêm cron ⇒ kiểm 503 khi CARE_SYNC_ENABLED OFF.
+    const live = ['lib/layout/sidebarNav.ts', 'proxy.ts']
     for (const f of live) expect(fs.existsSync(path.join(ROOT, f)), f).toBe(true)
     for (const f of live) {
       const src = read(f)
@@ -202,7 +200,12 @@ test.describe('care B0 — cờ và cấu hình (mặc định OFF) @desktop', (
     expect(read('lib/care/import/handler.ts')).toMatch(/async function guard[\s\S]*?\{\s*if \(!deps\.enabled\) return/)
     // B3: /care + /care/tasks + /care/tasks/[id] — mọi page đi qua requireCareViewer (cờ trước tiên).
     const careDirs = fs.readdirSync(path.join(ROOT, 'app/(dashboard)/care')).sort()
-    expect(careDirs).toEqual(['assign', 'page.tsx', 'tasks'])
+    expect(careDirs).toEqual(['assign', 'my', 'page.tsx', 'tasks'])
+    // B4: /care/my* — mọi page đi qua requireCareStaff (cờ trước tiên, chỉ dược sĩ OS).
+    for (const f of ['app/(dashboard)/care/my/page.tsx', 'app/(dashboard)/care/my/[id]/page.tsx', 'app/(dashboard)/care/my/[id]/update/page.tsx']) {
+      expect(read(f), f).toMatch(/export default async function[\s\S]*?\{\s*const me = await requireCareStaff\(\)/)
+    }
+    expect(read('lib/care/server/my.ts')).toMatch(/function requireCareStaff\(\)[\s\S]*?> \{\s*if \(!isCareEnabled\(\)\) notFound\(\)/)
     for (const f of ['app/(dashboard)/care/page.tsx', 'app/(dashboard)/care/tasks/page.tsx', 'app/(dashboard)/care/tasks/[id]/page.tsx']) {
       expect(read(f), f).toMatch(/export default async function[\s\S]*?\{\s*const g = await requireCareViewer\(\)/)
     }

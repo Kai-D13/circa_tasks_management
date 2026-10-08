@@ -1,5 +1,6 @@
 import { CARE_OUTCOMES, CARE_OUTCOME_META, type CareOutcome } from './outcome'
 import { isCarePeriod, periodLastDay } from './time'
+import { isCareProofDisplayUrl, isProofExpired } from './my'
 
 // CRM-CSKH B3 — logic THUẦN cho browser Khách hàng/Chăm sóc + chuyển giao (SPEC B3).
 // Không import Next/Supabase ⇒ test trực tiếp. Quyền thật vẫn ở RLS/RPC 114; ở đây
@@ -297,16 +298,29 @@ export interface CareInteractionRow {
   actor: { full_name: string } | null
   /** Lượt của chính task đang xem (ngược lại: kỳ trước / dược sĩ trước). */
   isThisTask: boolean
+  /** Ảnh minh chứng (B4) — UI chỉ hiển thị URL đúng kho care-proof. */
+  proof?: { url: string }[] | null
+  /**
+   * Q-85: lượt CÓ ảnh minh chứng hợp lệ nhưng đã quá 90 ngày (GCS lifecycle xoá) — tính ở server;
+   * khi true, `proof` bị bỏ (URL không còn đi qua app), UI chỉ báo hết thời hạn lưu.
+   */
+  proofExpired: boolean
 }
 export interface CareInteractionPage { rows: CareInteractionRow[]; hasMore: boolean; nextBefore: number | null }
 
-/** Cắt kết quả đã lấy dư 1 dòng (limit size+1, id ↓) thành một trang + con trỏ keyset. */
+/**
+ * Cắt kết quả đã lấy dư 1 dòng (limit size+1, id ↓) thành một trang + con trỏ keyset.
+ * `nowMs` (server) quyết ảnh minh chứng đã hết hạn lưu chưa (Q-85) — không tính lúc render client.
+ */
 export function careInteractionPage(
-  fetched: { id: number; outcome: string; note: string; next_action_date: string | null; created_at: string; task_id: string; actor: { full_name: string } | null }[] | null,
-  taskId: string, size = CARE_INTERACTION_PAGE_SIZE,
+  fetched: { id: number; outcome: string; note: string; next_action_date: string | null; created_at: string; task_id: string; actor: { full_name: string } | null; proof?: { url: string }[] | null }[] | null,
+  taskId: string, nowMs: number, size = CARE_INTERACTION_PAGE_SIZE,
 ): CareInteractionPage {
   const all = fetched ?? []
-  const rows = all.slice(0, size).map(({ task_id, ...r }) => ({ ...r, isThisTask: task_id === taskId }))
+  const rows = all.slice(0, size).map(({ task_id, ...r }) => {
+    const proofExpired = (r.proof ?? []).some((p) => isCareProofDisplayUrl(p?.url)) && isProofExpired(r.created_at, nowMs)
+    return { ...r, ...(proofExpired ? { proof: null } : {}), isThisTask: task_id === taskId, proofExpired }
+  })
   const hasMore = all.length > size
   return { rows, hasMore, nextBefore: hasMore && rows.length ? rows[rows.length - 1].id : null }
 }

@@ -1,13 +1,14 @@
 'use client'
 
 import { useRef, useState } from 'react'
-import { History, Loader2 } from 'lucide-react'
+import { History, ImageOff, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { StatusBadge } from '@/components/ds/StatusBadge'
 import { EmptyState } from '@/components/ds/EmptyState'
 import { CARE_OUTCOME_META, isCareOutcome } from '@/lib/care/outcome'
 import type { CareInteractionPage, CareInteractionRow } from '@/lib/care/browse'
 import { formatDateTime } from '@/lib/dateUtils'
+import { isCareProofDisplayUrl } from '@/lib/care/my'
 
 // Dòng thời gian lượt chăm sóc + chuyển giao (SPEC B3 §2, Q-78): lượt chăm sóc tải 10
 // lượt mới nhất mỗi lần, "Xem thêm" gọi action (kiểm lại cờ/quyền/RLS mỗi lần). Event
@@ -36,7 +37,51 @@ function InteractionItem({ i }: { i: CareInteractionRow }) {
       </div>
       <p className="whitespace-pre-line break-words text-sm">{i.note}</p>
       {i.next_action_date && <p className="text-xs text-muted-foreground">Hẹn chăm sóc lại: {dmy(i.next_action_date)}</p>}
+      <ProofThumbs proof={i.proof} expired={i.proofExpired} />
     </div>
+  )
+}
+
+/**
+ * Ảnh minh chứng (B4): chỉ URL đúng kho care-proof; lazy, mở tab mới để xem lớn, no-referrer.
+ * Q-85: lượt có ảnh đã quá 90 ngày (server tính và đã bỏ URL) ⇒ chỉ báo hết thời hạn lưu.
+ */
+function ProofThumbs({ proof, expired }: { proof?: { url: string }[] | null; expired?: boolean }) {
+  if (expired) {
+    return (
+      <p className="flex items-center gap-1.5 pt-1 text-xs text-muted-foreground" data-testid="care-proof-expired">
+        <ImageOff className="size-3.5 shrink-0" aria-hidden /> Ảnh minh chứng đã hết thời hạn lưu
+      </p>
+    )
+  }
+  const urls = (proof ?? []).map((p) => p?.url).filter((u): u is string => isCareProofDisplayUrl(u))
+  if (urls.length === 0) return null
+  return (
+    <div className="flex flex-wrap gap-2 pt-1" aria-label="Ảnh minh chứng">
+      {urls.map((u, k) => <ProofThumb key={u} url={u} n={k + 1} />)}
+    </div>
+  )
+}
+
+/** Một ảnh: lỗi tải (object đã xoá/mạng) ⇒ ô chữ nhẹ thay icon ảnh vỡ, không còn link. */
+function ProofThumb({ url, n }: { url: string; n: number }) {
+  const [failed, setFailed] = useState(false)
+  if (failed) {
+    return (
+      <span className="inline-flex h-14 min-h-[44px] items-center gap-1.5 rounded border bg-muted px-2 text-xs text-muted-foreground" data-testid="care-proof-failed">
+        <ImageOff className="size-3.5 shrink-0" aria-hidden /> Không tải được ảnh
+      </span>
+    )
+  }
+  return (
+    <a href={url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer"
+      className="block size-14 min-h-[44px] overflow-hidden rounded border bg-muted" aria-label={`Xem ảnh minh chứng ${n}`}>
+      {/* eslint-disable-next-line @next/next/no-img-element -- ảnh GCS ngoài next/image */}
+      <img src={url} alt="" loading="lazy" referrerPolicy="no-referrer" className="size-full object-cover"
+        onError={() => setFailed(true)}
+        // Ảnh SSR có thể lỗi trước khi hydrate (onError không bắn lại) ⇒ kiểm trạng thái khi gắn.
+        ref={(el) => { if (el && el.complete && el.naturalWidth === 0) setFailed(true) }} />
+    </a>
   )
 }
 

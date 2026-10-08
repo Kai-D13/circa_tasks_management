@@ -12,6 +12,7 @@ import { BottomNav } from '@/components/layout/BottomNav'
 import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import { careNavItems } from '@/lib/care/browse'
 import { getCareNavPermissions } from '@/lib/care/server/browse'
+import { isCareEnabled } from '@/lib/care/flags'
 import { isReferralEnabled } from '@/lib/affiliate/flags'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { opsSidebarVisible } from '@/lib/affiliate/overview'
@@ -105,7 +106,7 @@ export default async function DashboardLayout({
         </div>
 
         {/* Bottom navigation — mobile only */}
-        <BottomNav announcementsUnread={announcementsUnread} tasksPending={tasksPending} isFsStore={isFsStore} />
+        <BottomNav announcementsUnread={announcementsUnread} tasksPending={tasksPending} isFsStore={isFsStore} careEnabled={isStaff && !isFsStore && isCareEnabled()} />
         </NotificationProvider>
       </UserProvider>
     </ThemeProvider>

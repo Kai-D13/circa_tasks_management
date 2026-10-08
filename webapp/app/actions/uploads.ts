@@ -8,6 +8,10 @@ import { safeStorageName } from '@/lib/storage'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { FS_PHOTO_BOXES } from '@/lib/fs/constants'
 import { canCreateTask } from '@/lib/tasks/smScope'
+import { isCareEnabled } from '@/lib/care/flags'
+import { carePeriodOf } from '@/lib/care/time'
+import { CARE_PROOF_MAX_BYTES, CARE_PROOF_PUBLIC_BASE, careProofKey, careStaffTaskBlock, isCareProofMime } from '@/lib/care/my'
+import { getCareStaffAccess } from '@/lib/care/server/my'
 
 // Authorized upload-URL minting for direct-to-GCS uploads. THIS IS THE SECURITY
 // BOUNDARY that replaces Supabase Storage RLS for GCS uploads — it must mirror
@@ -24,14 +28,14 @@ const MAX_AUDIO = 15 * 1024 * 1024
 const MAX_VIDEO = 50 * 1024 * 1024  // matches the Supabase bucket cap (no video regression)
 const MAX_DOC   = 10 * 1024 * 1024
 
-type UploadPurpose = 'task_result' | 'task_input' | 'prescription' | 'prescription_care' | 'announcement_asset' | 'fs_product'
+type UploadPurpose = 'task_result' | 'task_input' | 'prescription' | 'prescription_care' | 'announcement_asset' | 'fs_product' | 'care_proof'
 
 export interface CreateUploadUrlInput {
   purpose:      UploadPurpose
   filename:     string
   contentType:  string
   size:         number
-  taskId?:      string  // task_result
+  taskId?:      string  // task_result · care_proof (care_tasks.id)
   outputType?:  string  // task_result: image | video | file
   uploadId?:    string  // task_input — the per-form upload id (e.g. 'import/<tmpId>' for Excel)
   storeId?:     string  // prescription
@@ -195,6 +199,30 @@ export async function createUploadUrl(input: CreateUploadUrlInput): Promise<Resu
     }
     const ext = EXT[ct] ?? 'jpg'
     key = `fs-products/${item.session_id}/${input.itemId}/${item.product_id}_${box.slug}_${uniq}.${ext}`
+
+  } else if (input.purpose === 'care_proof') {
+    // CRM-CSKH B4 — ảnh minh chứng lượt chăm sóc (TÙY CHỌN). Chỉ khi CARE_ENABLED, chỉ
+    // dược sĩ OS đang là assignee của task OPEN kỳ hiện tại (đọc task bằng SESSION — RLS
+    // 114). Key OPAQUE theo task, không có tên file gốc; RPC care_record_interaction kiểm
+    // lại đúng base + prefix task (không tin URL client gõ). Không dùng purpose task_result.
+    if (!isCareEnabled()) return { error: 'Chức năng chưa được bật' }
+    if (!isCareProofMime(ct)) return { error: 'Chỉ chấp nhận ảnh JPG/PNG/WebP/HEIC' }
+    if (size > CARE_PROOF_MAX_BYTES) return { error: 'Ảnh vượt giới hạn dung lượng' }
+    if (!input.taskId || !/^[0-9a-f-]{36}$/i.test(input.taskId)) return { error: 'taskId không hợp lệ' }
+    if ((process.env.GCS_PUBLIC_BASE_URL ?? '').replace(/\/+$/, '') !== CARE_PROOF_PUBLIC_BASE) {
+      return { error: 'Cấu hình kho ảnh khác với CRM — báo quản trị' }
+    }
+    const access = await getCareStaffAccess()
+    if (access.kind !== 'ok' || access.userId !== user.id) return { error: 'Chỉ dược sĩ được giao mới tải ảnh' }
+    const { data: ct0 } = await supabase.from('care_tasks')
+      .select('id, assignee_id, store_id, status, period_month').eq('id', input.taskId).maybeSingle()
+    // Q-82: assignee + còn ở ĐÚNG store của task (store OS đang hoạt động) — cùng điều kiện RPC 114.
+    const block = careStaffTaskBlock(ct0, access, carePeriodOf(new Date()))
+    if (block === 'TASK_NOT_FOUND' || block === 'NOT_ASSIGNEE') return { error: 'Khách này không được giao cho bạn' }
+    if (block) return { error: 'Khách đã hoàn thành hoặc đã qua kỳ' }
+    const k = careProofKey(input.taskId, ct, Date.now(), crypto.randomUUID().replace(/-/g, '').slice(0, 8))
+    if (!k) return { error: 'Không tạo được tên ảnh' }
+    key = k
 
   } else {
     return { error: 'purpose không hợp lệ' }

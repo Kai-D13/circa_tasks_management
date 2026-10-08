@@ -66,7 +66,7 @@ const FAKE_HISTORY = Array.from({ length: 23 }, (_, k) => {
   return { id, outcome: 'CALLBACK', note: `QA: lượt giả #${id}`, next_action_date: null, task_id: k < 2 ? ROWS[1].id : S(499),
     created_at: `${k < 8 ? '2026-10' : '2026-09'}-${day}T03:00:00Z`, actor: { full_name: k % 2 ? 'QA Dược sĩ 01b' : 'QA Dược sĩ 01a' } }
 })
-const fakePage = (before: number | null) => careInteractionPage(FAKE_HISTORY.filter((h) => before === null || h.id < before).slice(0, CARE_INTERACTION_PAGE_SIZE + 1), ROWS[1].id)
+const fakePage = (before: number | null) => careInteractionPage(FAKE_HISTORY.filter((h) => before === null || h.id < before).slice(0, CARE_INTERACTION_PAGE_SIZE + 1), ROWS[1].id, Date.parse('2026-10-10T05:00:00Z'))
 async function fakeLoadMore(input: { taskId: string; beforeId: number }) {
   'use server'
   if (!(await gate())) return { ok: false as const, message: 'Không khả dụng' }

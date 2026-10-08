@@ -200,12 +200,12 @@ export async function loadCareInteractionsPage(taskId: string, beforeId: number 
     task = data as { id: string; customer_id: string }
   }
   let q = supabase.from('care_interactions')
-    .select('id, outcome, note, next_action_date, created_at, task_id, actor:users!care_interactions_actor_id_fkey(full_name)')
+    .select('id, outcome, note, next_action_date, created_at, task_id, proof, actor:users!care_interactions_actor_id_fkey(full_name)')
     .eq('customer_id', task.customer_id)
   if (beforeId !== null) q = q.lt('id', beforeId)
   const { data, error } = await q.order('id', { ascending: false }).limit(CARE_INTERACTION_PAGE_SIZE + 1)
   if (error) throw new Error('care_interactions_failed')
-  return careInteractionPage(data as unknown as Parameters<typeof careInteractionPage>[0], task.id)
+  return careInteractionPage(data as unknown as Parameters<typeof careInteractionPage>[0], task.id, Date.now())
 }
 
 /** Dược sĩ đích cho chuyển giao: staff của store OS ĐANG HOẠT ĐỘNG trong phạm vi chuyển giao. */
