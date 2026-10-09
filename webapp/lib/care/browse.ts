@@ -51,6 +51,8 @@ export function careNavItems(p: CarePermissions | null): { href: string; label: 
     ...(p.canView ? [{ href: '/care', label: 'Khách hàng' }] : []),
     ...(p.canImport ? [{ href: '/care/assign', label: 'Phân công' }] : []),
     ...(p.canView ? [{ href: '/care/tasks', label: 'Chăm sóc' }] : []),
+    // B5a: route /care/reports có thật (SPEC B3 §1: chỉ thêm "Báo cáo" khi route tồn tại).
+    ...(p.canView ? [{ href: '/care/reports', label: 'Báo cáo' }] : []),
   ]
 }
 
@@ -173,9 +175,8 @@ export interface CareReportRow {
   open_in_progress: number
   overdue_in_period: number
   closed_unfinished: number
+  /** Số task Có đơn (DISTINCT task) — GĐ1 không số đơn/tiền (Q-91). */
   converted_tasks: number
-  orders: number
-  net_revenue: number | string
 }
 
 export interface CareTotals {

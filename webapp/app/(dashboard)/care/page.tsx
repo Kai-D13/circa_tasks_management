@@ -1,6 +1,7 @@
-import { HeartHandshake } from 'lucide-react'
+import { HeartHandshake, Store } from 'lucide-react'
 import { PageHeader } from '@/components/ds/PageHeader'
 import { ErrorState } from '@/components/ds/ErrorState'
+import { EmptyState } from '@/components/ds/EmptyState'
 import { CareFiltersBar } from '@/components/care/CareFiltersBar'
 import { CareDashboardView } from '@/components/care/CareDashboardView'
 import {
@@ -8,6 +9,10 @@ import {
 } from '@/lib/care/browse'
 import { carePeriodOf, vnDateISO } from '@/lib/care/time'
 import { loadCareDashboard, loadScopeStores } from '@/lib/care/server/browse'
+import { loadOrderDataState } from '@/lib/care/server/reports'
+import {
+  CARE_REPORT_STORE_OUT_OF_SCOPE, careReportConvertedTotal, careStoreFilterInScope, type CareOrderDataState,
+} from '@/lib/care/reports'
 import { requireCareViewer } from '@/lib/care/server/pageGuard'
 
 // /care — Khách hàng (SPEC B3 §2): tổng quan kỳ theo phạm vi người xem (RLS/care_report).
@@ -25,12 +30,16 @@ export default async function CarePage({ searchParams }: { searchParams: Promise
 
   let body: React.ReactNode
   let stores: Awaited<ReturnType<typeof loadScopeStores>> = []
-  try {
-    stores = await loadScopeStores(g.perms)
-    const scoped = f.storeId && !stores.some((s) => s.id === f.storeId) ? { ...f, storeId: null } : f
-    const d = await loadCareDashboard(scoped, today, !isPast)
+  let outOfScope = false
+  const dashboardBody = async () => {
+    // Trạng thái đơn lỗi ⇒ dashboard vẫn hiện số task, phần đơn về "Chưa có dữ liệu đơn" (không hiện số);
+    // trang /care/reports thì fail-closed.
+    const [d, orderState] = await Promise.all([
+      loadCareDashboard(f, today, !isPast),
+      loadOrderDataState().catch((): CareOrderDataState => ({ kind: 'none' })),
+    ])
     const byCode = new Map(stores.map((s) => [s.id, s]))
-    body = (
+    return (
       <CareDashboardView
         monthLabel={`${f.month.slice(5, 7)}/${f.month.slice(0, 4)}`}
         isPast={isPast}
@@ -40,8 +49,17 @@ export default async function CarePage({ searchParams }: { searchParams: Promise
           .map((s) => ({ code: byCode.get(s.storeId)?.code ?? '—', name: byCode.get(s.storeId)?.name ?? '', totals: s.totals }))
           .sort((a, b) => a.code.localeCompare(b.code))}
         outcomes={careOutcomeDistribution(d.outcomes)}
+        orders={{ state: orderState, convertedTasks: careReportConvertedTotal(d.rows) }}
       />
     )
+  }
+  try {
+    stores = await loadScopeStores(g.perms)
+    // Filter cửa hàng ngoài scope ⇒ báo rõ, KHÔNG âm thầm hiện toàn scope (SPEC §B5a r1.1).
+    outOfScope = !careStoreFilterInScope(f.storeId, stores)
+    body = outOfScope
+      ? <EmptyState icon={Store} title={CARE_REPORT_STORE_OUT_OF_SCOPE} hint="Chọn lại cửa hàng trong bộ lọc." />
+      : await dashboardBody()
   } catch {
     body = <ErrorState message="Không tải được số liệu chăm sóc." hint="Thử tải lại trang." />
   }
@@ -49,7 +67,7 @@ export default async function CarePage({ searchParams }: { searchParams: Promise
   return (
     <div data-layout-width="fluid" className="space-y-6 p-4 md:p-6">
       {header}
-      <CareFiltersBar path="/care" filters={f} months={recentCarePeriods(current)} stores={stores} />
+      <CareFiltersBar path="/care" filters={outOfScope ? { ...f, storeId: null } : f} months={recentCarePeriods(current)} stores={stores} />
       {body}
     </div>
   )

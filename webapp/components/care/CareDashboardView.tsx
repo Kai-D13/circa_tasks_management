@@ -1,8 +1,9 @@
-import { AlertTriangle, CheckCircle2, ClipboardList, Clock, Users, XCircle } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ClipboardList, Clock, TrendingUp, Users, XCircle } from 'lucide-react'
 import { StatCard } from '@/components/ds/StatCard'
 import { EmptyState } from '@/components/ds/EmptyState'
-import { StatusBadge } from '@/components/ds/StatusBadge'
 import type { CareTotals } from '@/lib/care/browse'
+import type { CareOrderDataState } from '@/lib/care/reports'
+import { CareOrderDataBanner } from './CareReportView'
 
 // Dashboard /care (SPEC B3 §2) — thuần trình bày, số liệu từ care_report (server).
 // Đơn vị = TASK (một khách/tháng), không phải dòng sản phẩm. "Quá hạn đang mở" (kỳ
@@ -22,7 +23,7 @@ const SEGMENTS = [
 ] as const
 
 export function CareDashboardView({
-  monthLabel, isPast, totals, overdueOpen, stores, outcomes,
+  monthLabel, isPast, totals, overdueOpen, stores, outcomes, orders,
 }: {
   monthLabel: string
   isPast: boolean
@@ -30,6 +31,8 @@ export function CareDashboardView({
   overdueOpen: number | null
   stores: CareDashboardStore[]
   outcomes: { key: string; label: string; count: number }[]
+  /** B5a r1.1: số task Có đơn — chỉ hiện SỐ khi đã đồng bộ đơn ít nhất một lần; không số đơn/tiền (Q-91). */
+  orders?: { state: CareOrderDataState; convertedTasks: number }
 }) {
   if (totals.tasks === 0) {
     return <EmptyState icon={ClipboardList} title={`Chưa có khách cần chăm sóc trong kỳ ${monthLabel}`} hint="Danh sách khách được tạo khi phòng phụ trách import file Excel của tháng." />
@@ -58,10 +61,13 @@ export function CareDashboardView({
         )}
       </div>
 
-      <div className="rounded-lg border bg-card p-3 text-sm">
-        <StatusBadge tone="neutral">Chuyển đổi &amp; doanh thu</StatusBadge>
-        <span className="ml-2 text-muted-foreground">Chưa có dữ liệu đơn — sẽ có khi đồng bộ đơn hàng được bật.</span>
-      </div>
+      {orders?.state.kind === 'synced' && (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4" data-testid="care-dashboard-orders">
+          <StatCard label="Khách có đơn" value={fmt(orders.convertedTasks)} icon={TrendingUp}
+            hint={`trên ${fmt(totals.completed)} task Hoàn thành`} />
+        </div>
+      )}
+      <CareOrderDataBanner state={orders?.state ?? { kind: 'none' }} hasNotSeen={totals.completed > (orders?.convertedTasks ?? 0)} />
 
       <section className="space-y-3" aria-labelledby="care-by-store">
         <h2 id="care-by-store" className="text-base font-semibold">Theo cửa hàng</h2>
