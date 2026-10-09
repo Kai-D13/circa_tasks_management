@@ -71,6 +71,8 @@ export interface BqQueryResult {
   totalRows: number
   jobId: string
   pages: number
+  /** Bytes BigQuery xử lý (đo phí) — có khi response trả `totalBytesProcessed`, không thì null. */
+  totalBytesProcessed: number | null
 }
 
 const DEFAULTS = {
@@ -124,6 +126,7 @@ interface QueryResponse {
   rows?: { f?: { v?: unknown }[] }[]
   totalRows?: string
   pageToken?: string
+  totalBytesProcessed?: string
 }
 
 export async function bqQueryAll(transport: BqTransport, opts: BqQueryOptions): Promise<BqQueryResult> {
@@ -210,6 +213,9 @@ export async function bqQueryAll(transport: BqTransport, opts: BqQueryOptions): 
   }
   if (totalRows > maxRows) throw new BigQueryError('row_limit', `kết quả ${totalRows} dòng vượt trần ${maxRows}`)
 
+  const bytes = Number(page.totalBytesProcessed)
+  const totalBytesProcessed = page.totalBytesProcessed !== undefined && Number.isSafeInteger(bytes) && bytes >= 0 ? bytes : null
+
   const rows: BqRow[] = []
   let pages = 0
   for (;;) {
@@ -223,7 +229,7 @@ export async function bqQueryAll(transport: BqTransport, opts: BqQueryOptions): 
   if (rows.length !== totalRows) {
     throw new BigQueryError('malformed', `thiếu dữ liệu: đọc ${rows.length}/${totalRows} dòng`)
   }
-  return { rows, fields, totalRows, jobId, pages }
+  return { rows, fields, totalRows, jobId, pages, totalBytesProcessed }
 }
 
 function toRow(fields: string[], r: { f?: { v?: unknown }[] }): BqRow {

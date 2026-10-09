@@ -46,8 +46,13 @@ export function careImportMaxBytes(env: Env): number {
 }
 
 // project.dataset.table — chỉ ký tự an toàn để nội suy vào FROM `...` (tên bảng
-// không truyền được bằng query parameter của BigQuery).
-const BQ_TABLE_RE = /^[a-z][a-z0-9-]{4,29}\.[A-Za-z0-9_]{1,1024}\.[A-Za-z0-9_$-]{1,1024}$/
+// không truyền được bằng query parameter của BigQuery). B5b: bỏ `$` (partition decorator).
+const BQ_TABLE_RE = /^[a-z][a-z0-9-]{4,29}\.[A-Za-z0-9_]{1,1024}\.[A-Za-z0-9_-]{1,1024}$/
+
+/** Kiểm lại tên object ngay trước khi nội suy vào SQL (lớp phòng thủ thứ hai sau careBqOrdersTable). */
+export function isSafeBqTableName(name: string): boolean {
+  return BQ_TABLE_RE.test(name)
+}
 
 /**
  * CARE_BQ_ORDERS_TABLE: bảng/view N3 (data contract r3.2). Trống ⇒ null (chưa
