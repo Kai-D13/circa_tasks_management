@@ -188,25 +188,32 @@ test.describe('care B0 — cờ và cấu hình (mặc định OFF) @desktop', (
     // CTA chỉ khi isStaff && isCareEnabled()). B5 thêm cron ⇒ kiểm 503 khi CARE_SYNC_ENABLED OFF.
     const live = ['lib/layout/sidebarNav.ts', 'proxy.ts']
     for (const f of live) expect(fs.existsSync(path.join(ROOT, f)), f).toBe(true)
+    // Ngoại lệ DUY NHẤT (B5b.1): proxy bỏ qua đăng nhập cho route QA đọc VIEW N3 — chỉ khi development,
+    // đúng một pathname; route tự kiểm UI_CATALOG + Bearer CRON_SECRET (care-b5b-source.spec).
+    const QA_BYPASS = "  // CRM B5b QA đọc VIEW N3 thật — CHỈ development, đúng một pathname; route tự kiểm UI_CATALOG + Bearer CRON_SECRET.\n"
+      + "  if (process.env.NODE_ENV === 'development' && pathname === '/api/qa/care-n3-view') return NextResponse.next()\n"
+    expect(read('proxy.ts')).toContain(QA_BYPASS)
     for (const f of live) {
-      const src = read(f)
+      const src = read(f).replace(QA_BYPASS, '')
       expect(src, f).not.toMatch(/lib\/care|CARE_ENABLED|\/care\b/)
     }
     expect(fs.existsSync(path.join(ROOT, 'app/api/cron/care-period-close'))).toBe(false)
-    expect(fs.existsSync(path.join(ROOT, 'app/api/cron/care-orders-sync'))).toBe(false)
+    // B5b.2: cron care-orders-sync có route nhưng chặn bằng CARE_ENABLED + CARE_SYNC_ENABLED (care-b5b-sync.spec).
+    expect(read('app/api/cron/care-orders-sync/route.ts')).toContain('if (!isCareEnabled() || !isCareSyncEnabled())')
     // B2: entry duy nhất là URL /care/assign + /api/care/import/* — page kiểm cờ ngay đầu,
     // route đi qua handler mà bước đầu là `if (!deps.enabled) return 404` (care-import-core.spec).
     expect(read('app/(dashboard)/care/assign/page.tsx')).toMatch(/export default async function[\s\S]*?\{\s*if \(!isCareEnabled\(\)\) notFound\(\)/)
     expect(read('lib/care/import/handler.ts')).toMatch(/async function guard[\s\S]*?\{\s*if \(!deps\.enabled\) return/)
     // B3: /care + /care/tasks + /care/tasks/[id] — mọi page đi qua requireCareViewer (cờ trước tiên).
     const careDirs = fs.readdirSync(path.join(ROOT, 'app/(dashboard)/care')).sort()
-    expect(careDirs).toEqual(['assign', 'my', 'page.tsx', 'tasks'])
+    expect(careDirs).toEqual(['assign', 'my', 'page.tsx', 'reports', 'tasks'])
     // B4: /care/my* — mọi page đi qua requireCareStaff (cờ trước tiên, chỉ dược sĩ OS).
     for (const f of ['app/(dashboard)/care/my/page.tsx', 'app/(dashboard)/care/my/[id]/page.tsx', 'app/(dashboard)/care/my/[id]/update/page.tsx']) {
       expect(read(f), f).toMatch(/export default async function[\s\S]*?\{\s*const me = await requireCareStaff\(\)/)
     }
     expect(read('lib/care/server/my.ts')).toMatch(/function requireCareStaff\(\)[\s\S]*?> \{\s*if \(!isCareEnabled\(\)\) notFound\(\)/)
-    for (const f of ['app/(dashboard)/care/page.tsx', 'app/(dashboard)/care/tasks/page.tsx', 'app/(dashboard)/care/tasks/[id]/page.tsx']) {
+    // B5a: /care/reports cùng cổng browser; export /api/export/care kiểm cờ trước tiên.
+    for (const f of ['app/(dashboard)/care/page.tsx', 'app/(dashboard)/care/tasks/page.tsx', 'app/(dashboard)/care/tasks/[id]/page.tsx', 'app/(dashboard)/care/reports/page.tsx']) {
       expect(read(f), f).toMatch(/export default async function[\s\S]*?\{\s*const g = await requireCareViewer\(\)/)
     }
     expect(read('lib/care/server/pageGuard.ts')).toMatch(/function requireCareViewer\(\)[\s\S]*?> \{\s*if \(!isCareEnabled\(\)\) notFound\(\)/)
@@ -226,7 +233,9 @@ test.describe('care B0 — cờ và cấu hình (mặc định OFF) @desktop', (
     expect(careBqOrdersTable({})).toBeNull()
     expect(careBqOrdersTable({ CARE_BQ_ORDERS_TABLE: ' lakehouse-prod-394907.buymed_tech.care_orders ' }))
       .toBe('lakehouse-prod-394907.buymed_tech.care_orders')
-    for (const bad of ['buymed_tech.care_orders', '`p.d.t`', 'p.d.t; DROP', 'lakehouse-prod-394907.d.t x']) {
+    expect(careBqOrdersTable({ CARE_BQ_ORDERS_TABLE: 'lakehouse-prod-394907.buymed_tech.tech__circa_completed_order' }))
+      .toBe('lakehouse-prod-394907.buymed_tech.tech__circa_completed_order') // VIEW Q-96
+    for (const bad of ['buymed_tech.care_orders', '`p.d.t`', 'p.d.t; DROP', 'lakehouse-prod-394907.d.t x', 'lakehouse-prod-394907.ds.orders$20261001']) {
       expect(() => careBqOrdersTable({ CARE_BQ_ORDERS_TABLE: bad }), bad).toThrow()
     }
   })
@@ -262,9 +271,9 @@ function mockBq(steps: Step[], opts: { realClock?: boolean } = {}) {
   return { transport, calls, sleeps, clock, remaining: () => queue.length }
 }
 
-const FIELDS = { fields: [{ name: 'customer_external_id' }, { name: 'order_key' }, { name: 'order_net_amount' }] }
+const FIELDS = { fields: [{ name: 'customer_external_id' }, { name: 'order_key' }, { name: 'opt_value' }] }
 const JOB = { projectId: 'p', jobId: 'job_1', location: 'asia-southeast1' }
-const row = (c: string, k: string, amt: string | null) => ({ f: [{ v: c }, { v: k }, { v: amt }] })
+const row = (c: string, k: string, v: string | null) => ({ f: [{ v: c }, { v: k }, { v }] })
 
 test.describe('care B0 — BigQuery client phân trang/poll/timeout (mock) @desktop', () => {
   test('đọc đủ 3 trang, tham số NAMED, giữ location + pageToken, khớp totalRows', async () => {
@@ -281,7 +290,7 @@ test.describe('care B0 — BigQuery client phân trang/poll/timeout (mock) @desk
       ],
     })
     expect(res.rows.map((r) => r.order_key)).toEqual(['O1', 'O2', 'O3', 'O4', 'O5'])
-    expect(res.rows[3].order_net_amount).toBeNull() // NULL giữ NULL, không hoá 0
+    expect(res.rows[3].opt_value).toBeNull() // NULL giữ NULL, không hoá 0
     expect(res.pages).toBe(3)
     expect(res.totalRows).toBe(5)
     expect(m.calls[0].method).toBe('POST')
@@ -382,6 +391,14 @@ test.describe('care B0 — BigQuery client phân trang/poll/timeout (mock) @desk
   test('vượt trần dòng ⇒ row_limit, không trả dữ liệu cắt cụt', async () => {
     const m = mockBq([{ body: { jobReference: JOB, jobComplete: true, schema: FIELDS, totalRows: '10', rows: [] } }])
     const err = (await bqQueryAll(m.transport, { projectId: 'p', sql: 'x', maxRows: 5 }).catch((e) => e)) as BigQueryError
+    expect(err.kind).toBe('row_limit')
+  })
+
+  test('maxRows = 0 (lô N3 sau khi đã gom đúng trần): 0 dòng ⇒ hợp lệ; 1 dòng ⇒ row_limit', async () => {
+    const empty = mockBq([{ body: { jobReference: JOB, jobComplete: true, schema: FIELDS, totalRows: '0' } }])
+    expect((await bqQueryAll(empty.transport, { projectId: 'p', sql: 'x', maxRows: 0 })).rows).toEqual([])
+    const one = mockBq([{ body: { jobReference: JOB, jobComplete: true, schema: FIELDS, totalRows: '1', rows: [] } }])
+    const err = (await bqQueryAll(one.transport, { projectId: 'p', sql: 'x', maxRows: 0 }).catch((e) => e)) as BigQueryError
     expect(err.kind).toBe('row_limit')
   })
 
