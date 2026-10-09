@@ -78,13 +78,13 @@ test.describe('care B3 — logic thuần @desktop', () => {
     expect(careInteractionPage(null, 'T', Date.now())).toEqual({ rows: [], hasMore: false, nextBefore: null })
   })
 
-  test('nav: không nhóm rỗng; Phân công chỉ khi can_import; thứ tự Khách hàng → Phân công → Chăm sóc', () => {
+  test('nav: không nhóm rỗng; Phân công chỉ khi can_import; thứ tự Khách hàng → Phân công → Chăm sóc → Báo cáo', () => {
     expect(careNavItems(null)).toEqual([])
     expect(careNavItems(carePermissions(acc({ role: 'admin' })))).toEqual([])
     expect(careNavItems(carePermissions(acc({ role: 'admin', can_import: true }))).map((x) => x.href)).toEqual(['/care/assign'])
-    expect(careNavItems(carePermissions(acc({ role: 'sm', scope_store_count: 1 }))).map((x) => x.href)).toEqual(['/care', '/care/tasks'])
+    expect(careNavItems(carePermissions(acc({ role: 'sm', scope_store_count: 1 }))).map((x) => x.href)).toEqual(['/care', '/care/tasks', '/care/reports'])
     expect(careNavItems(carePermissions(acc({ role: 'admin', is_super: true, can_import: true, can_view_all: true }))))
-      .toEqual([{ href: '/care', label: 'Khách hàng' }, { href: '/care/assign', label: 'Phân công' }, { href: '/care/tasks', label: 'Chăm sóc' }])
+      .toEqual([{ href: '/care', label: 'Khách hàng' }, { href: '/care/assign', label: 'Phân công' }, { href: '/care/tasks', label: 'Chăm sóc' }, { href: '/care/reports', label: 'Báo cáo' }])
   })
 
   test('filter URL: tháng tương lai/sai ⇒ kỳ hiện tại; UUID/enum/page sai ⇒ bỏ; href không mang từ khoá tìm', () => {
@@ -159,7 +159,7 @@ test.describe('care B3 — logic thuần @desktop', () => {
   test('số liệu: cộng mỗi dòng RPC đúng một lần; theo store; phân bố outcome có "Chưa cập nhật"', () => {
     const r = (store: number, who: number, o: Partial<CareReportRow>): CareReportRow => ({
       store_id: S(store), assignee_id: S(who), tasks_total: 0, completed: 0, open_not_cared: 0, open_in_progress: 0,
-      overdue_in_period: 0, closed_unfinished: 0, converted_tasks: 0, orders: 0, net_revenue: '0', ...o })
+      overdue_in_period: 0, closed_unfinished: 0, converted_tasks: 0, ...o })
     const rows = [
       r(1, 11, { tasks_total: 5, completed: 2, open_not_cared: 2, open_in_progress: 1, overdue_in_period: 1 }),
       r(1, 12, { tasks_total: 3, completed: 1, open_in_progress: 2 }),
@@ -433,8 +433,12 @@ test.describe('care B3 — parity browser ↔ migration 114 (PGlite) @desktop', 
 
     // QLCH (cùng phòng Marketing ở đây) đọc trực tiếp MỌI bảng CRM ⇒ 0 dòng, dù store của QLCH có task kỳ này; RPC rỗng.
     for (const t of ['care_access', 'care_import_batches', 'care_customers', 'care_tasks', 'care_task_products', 'care_interactions',
-      'care_assignment_events', 'care_store_refusals', 'care_orders', 'care_order_attributions', 'care_sync_state']) {
+      'care_assignment_events', 'care_store_refusals', 'care_sync_state']) {
       expect(await L.as(db, U.qlch1, () => L.count(db, `SELECT count(*) FROM public.${t}`)), t).toBe(0)
+    }
+    // Q-95/Q-101: attribution + đơn thô không còn SELECT cho authenticated ⇒ từ chối hẳn (không chỉ 0 dòng).
+    for (const t of ['care_order_attributions', 'care_orders']) {
+      expect(await L.raises(L.as(db, U.qlch1, () => db.query(`SELECT count(*) FROM public.${t}`)), 'permission denied'), t).toBe(true)
     }
     expect(await report(U.qlch1, P10)).toHaveLength(0)
     expect((await L.as(db, U.qlch1, async () => (await db.query(`SELECT * FROM public.care_my_summary()`)).rows[0])).assigned).toBe(0)
@@ -544,9 +548,9 @@ test.describe('care B3 — parity browser ↔ migration 114 (PGlite) @desktop', 
     const iX = await L.one(db, `SELECT id FROM public.care_interactions WHERE task_id = $1`, [c1.id])
     const cust = await L.one(db, `SELECT external_id FROM public.care_customers WHERE id = $1`, [c1.customer_id])
     await db.query(`INSERT INTO public.care_store_refusals (customer_id, store_id, interaction_id) VALUES ($1, $2, $3)`, [c1.customer_id, X, iX.id])
-    await db.query(`INSERT INTO public.care_orders (order_key, customer_external_id, ordered_at, source_updated_at, net_amount, pos_code) VALUES ('QA-O79', $1, now(), now(), 50000, 'QAOS02')`, [cust.external_id])
-    await db.query(`INSERT INTO public.care_order_attributions (order_key, interaction_id, task_id, customer_id, assignee_id, store_id, period_month, net_amount)
-      VALUES ('QA-O79', $1, $2, $3, $4, $5, $6, 50000)`, [iX.id, c1.id, c1.customer_id, U.C, X, P10])
+    await db.query(`INSERT INTO public.care_orders (order_key, customer_external_id, ordered_at) VALUES ('QA-O79', $1, now())`, [cust.external_id])
+    await db.query(`INSERT INTO public.care_order_attributions (order_key, interaction_id, task_id, customer_id, assignee_id, store_id, period_month)
+      VALUES ('QA-O79', $1, $2, $3, $4, $5, $6)`, [iX.id, c1.id, c1.customer_id, U.C, X, P10])
     expect((await L.transfer(db, '2026-10-20', U.super, [c1.id], U.A, 'QA chuyển X→Y')).transferred).toBe(1)
     await L.record(db, '2026-10-21', U.A, c1.id, 'CALLBACK', 'QA ghi chú tại Y', '2026-10-28')
     const see = async (who: string) => L.as(db, who, async () => ({
@@ -554,27 +558,32 @@ test.describe('care B3 — parity browser ↔ migration 114 (PGlite) @desktop', 
       notes: (await db.query(`SELECT note FROM public.care_interactions WHERE customer_id = $1 ORDER BY id`, [c1.customer_id])).rows.map((r: any) => r.note),
       events: (await db.query(`SELECT kind FROM public.care_assignment_events WHERE task_id = $1 ORDER BY id`, [c1.id])).rows.map((r: any) => r.kind),
       dnc: Number((await db.query(`SELECT count(*) n FROM public.care_store_refusals WHERE customer_id = $1`, [c1.customer_id])).rows[0].n),
-      attr: Number((await db.query(`SELECT count(*) n FROM public.care_order_attributions WHERE task_id = $1`, [c1.id])).rows[0].n),
     }))
+    // Q-95: không ai đọc thẳng attribution; phần "attribution X/Y" của Q-79 kiểm qua care_report (store snapshot).
+    const attrDenied = (who: string) => L.raises(L.as(db, who, () => db.query(`SELECT count(*) FROM public.care_order_attributions`)), 'permission denied')
     const NOTE_X = 'QA ghi chú tại X — sức khoẻ', NOTE_Y = 'QA ghi chú tại Y'
-    // SM vùng Y: task Y + lượt Y + event chuyển (đích Y); KHÔNG note X (cùng task), event 'assigned' tại X, DNC/attribution X.
-    expect(await see(U.sm2)).toEqual({ task: 1, notes: [NOTE_Y], events: ['transferred'], dnc: 0, attr: 0 })
+    // SM vùng Y: task Y + lượt Y + event chuyển (đích Y); KHÔNG note X (cùng task), event 'assigned' tại X, DNC X.
+    expect(await see(U.sm2)).toEqual({ task: 1, notes: [NOTE_Y], events: ['transferred'], dnc: 0 })
     // "Xem thêm" (cùng truy vấn với loadCareInteractionsPage) cũng chỉ trả lượt Y.
     const hSm2 = await historyPages(U.sm2, c1.id)
     expect(hSm2?.pages).toEqual([1])
-    // SM vùng X: không thấy task (đã sang Y) nhưng thấy dữ liệu gắn X (note X, event giao/chuyển chạm X, DNC/attribution X).
-    expect(await see(SM3)).toEqual({ task: 0, notes: [NOTE_X], events: ['assigned', 'transferred'], dnc: 1, attr: 1 })
+    // SM vùng X: không thấy task (đã sang Y) nhưng thấy dữ liệu gắn X (note X, event giao/chuyển chạm X, DNC X).
+    expect(await see(SM3)).toEqual({ task: 0, notes: [NOTE_X], events: ['assigned', 'transferred'], dnc: 1 })
     // SM quản lý cả X và Y: thấy đủ.
-    expect(await see(U.sm)).toEqual({ task: 1, notes: [NOTE_X, NOTE_Y], events: ['assigned', 'transferred'], dnc: 1, attr: 1 })
+    expect(await see(U.sm)).toEqual({ task: 1, notes: [NOTE_X, NOTE_Y], events: ['assigned', 'transferred'], dnc: 1 })
     // Staff mới phụ trách (A): giữ quyền lịch sử đã chốt — thấy cả note X. Staff cũ (C): mất task ⇒ không còn gì.
-    expect(await see(U.A)).toEqual({ task: 1, notes: [NOTE_X, NOTE_Y], events: ['assigned', 'transferred'], dnc: 1, attr: 1 })
-    expect(await see(U.C)).toEqual({ task: 0, notes: [], events: [], dnc: 0, attr: 0 })
+    expect(await see(U.A)).toEqual({ task: 1, notes: [NOTE_X, NOTE_Y], events: ['assigned', 'transferred'], dnc: 1 })
+    expect(await see(U.C)).toEqual({ task: 0, notes: [], events: [], dnc: 0 })
     // Super / care admin toàn chuỗi; QLCH vẫn 0.
-    for (const who of [U.super, U.mkt]) expect(await see(who)).toEqual({ task: 1, notes: [NOTE_X, NOTE_Y], events: ['assigned', 'transferred'], dnc: 1, attr: 1 })
-    expect(await see(U.qlch1)).toEqual({ task: 0, notes: [], events: [], dnc: 0, attr: 0 })
-    // care_report của SM vùng Y: attribution tại X không vào số liệu vùng Y.
-    expect((await report(U.sm2, P10)).reduce((n, r) => n + r.orders, 0)).toBe(0)
-    expect((await report(SM3, P10)).reduce((n, r) => n + r.orders, 0)).toBe(1)
+    for (const who of [U.super, U.mkt]) expect(await see(who)).toEqual({ task: 1, notes: [NOTE_X, NOTE_Y], events: ['assigned', 'transferred'], dnc: 1 })
+    expect(await see(U.qlch1)).toEqual({ task: 0, notes: [], events: [], dnc: 0 })
+    for (const who of [U.sm2, SM3, U.sm, U.A, U.C, U.super, U.mkt, U.qlch1]) expect(await attrDenied(who), who).toBe(true)
+    // care_report theo store snapshot (Q-79) — kênh DUY NHẤT xem Có đơn (Q-95): attribution tại X không vào vùng Y.
+    const conv = async (who: string) => (await report(who, P10)).reduce((n, r) => n + r.converted_tasks, 0)
+    expect(await conv(U.sm2)).toBe(0)
+    expect(await conv(SM3)).toBe(1)
+    expect(await conv(U.sm)).toBe(1)
+    expect(await conv(U.qlch1)).toBe(0)
 
     // Sang kỳ 11: kỳ 10 thành kỳ cũ — "Không hoàn thành" ≠ "Từng trễ hẹn"; không còn "quá hạn đang mở".
     await db.query(`SELECT public.care__close_period_at('2026-11-01')`)

@@ -2,13 +2,16 @@
 -- 114_care_crm_foundation.sql — CRM-CSKH (Chăm sóc khách hàng) B1
 -- Chạy SAU 113.
 --
--- Contract: planning/SPEC.md §B1 (PM GO 07/10/2026) + §B3 r1.2 + §B4 (proof/ghi lượt) · CONTRACT v1.14+ ·
--- DECISIONS Q-03…Q-85 (Q-76/77: QLCH không tham gia CRM; Q-79: SM theo store snapshot;
--- Q-82: dược sĩ chỉ đọc/ghi task khi còn thuộc ĐÚNG store của task) · data contract r3.2 · plan r1.3.1 §2/§4/§5.
+-- Contract: planning/SPEC.md §B1 (PM GO 07/10/2026) + §B3 r1.2 + §B4 (proof/ghi lượt) + §B5a r1.2 · CONTRACT v1.14+ ·
+-- DECISIONS Q-03…Q-105 (Q-76/77: QLCH không tham gia CRM; Q-79: SM theo store snapshot;
+-- Q-82: dược sĩ chỉ đọc/ghi task khi còn thuộc ĐÚNG store của task; Q-91/Q-93: N3 ba cột, chỉ Có đơn;
+-- Q-95/Q-101: authenticated không SELECT thẳng care_order_attributions / care_orders; Q-104: product_id ≠ 0;
+-- Q-105: authenticated chỉ SELECT care_customers(id, is_test, created_at) — external_id chỉ service_role)
+-- · N3 r3.4 · plan r1.3.1 §2/§4/§5.
 -- Dựng nền dữ liệu CRM: 13 bảng `care_*`, RLS chỉ SELECT theo scope, mọi GHI
 -- đi qua RPC SECURITY DEFINER (authenticated cho lượt chăm sóc/chuyển giao,
--- service_role cho import/đóng kỳ/stamp). KHÔNG có đồng bộ BigQuery (B5),
--- route/UI/cron (B2–B5). Cờ CARE_ENABLED vẫn OFF ⇒ app không gọi tới đây.
+-- service_role cho import/đóng kỳ/stamp/đồng bộ đơn). B5b.2: 3 RPC đồng bộ đơn N3 (9c) chỉ service_role cho
+-- cron care-orders-sync; migration KHÔNG tự đọc BigQuery. Cờ CARE_ENABLED/CARE_SYNC_ENABLED vẫn OFF.
 --
 -- ── Đồ thị tham chiếu RLS (AGENTS.md §4.1 — không policy nào đọc thẳng bảng
 --    RLS khác; mọi tra cứu qua helper SECURITY DEFINER STABLE) ─────────────────
@@ -19,13 +22,17 @@
 --   Q-79 (08/10): SM đọc dữ liệu con theo STORE SNAPSHOT của từng dòng thuộc vùng
 --   (không suy từ task/khách hiện tại); staff giữ quyền theo task được giao + lịch sử khách.
 --   care_assignment_events→ cột from/to_store_id ∈ care_scope_store_ids() OR care_staff_reads_task(task_id)
---   care_order_attributions → cột store_id ∈ care_scope_store_ids() OR care_staff_reads_task(task_id)
+--   care_order_attributions → Q-95 (B5a r1.2): KHÔNG GRANT SELECT cho authenticated, KHÔNG policy —
+--                           chỉ đọc qua care_report (DEFINER, scope theo store snapshot Q-79)
 --   care_interactions     → cột store_id ∈ care_scope_store_ids() OR care_staff_reads_task(task_id)
 --                           OR care_staff_reads_customer(customer_id)
---   care_customers        → care_can_read_customer_history(id)
+--   care_customers        → care_can_read_customer_history(id); Q-105: GRANT cột (id, is_test, created_at),
+--                           KHÔNG external_id
 --   care_store_refusals   → cột store_id ∈ care_scope_store_ids() OR care_staff_reads_customer(customer_id)
 --   care_import_batches   → care_can_import() OR care_can_view_all()
---   care_orders, care_sync_state → care_can_view_all()   (staff/SM: KHÔNG)
+--   care_sync_state       → care_can_view_all()   (staff/SM: KHÔNG; UI đọc qua care_order_sync_status DEFINER)
+--   care_orders           → Q-101: KHÔNG GRANT SELECT cho authenticated, KHÔNG policy (kể cả care admin/super) —
+--                           chỉ service_role (đồng bộ) + RPC DEFINER đọc
 --   care_access           → is_super_admin() OR (admin AND department_id = get_user_department_id()); ghi: chỉ super
 --   QLCH `store_manager` (tài khoản dùng chung) KHÔNG tham gia CRM GĐ1 (Q-76/77, 08/10):
 --   scope rỗng + không bao giờ là "assignee" (care_assignee_uid() chỉ trả uid khi
@@ -59,14 +66,25 @@
 -- xuất, chưa phải quyết định stakeholder. Đổi tập terminal phải đổi CẢ hai nơi;
 -- cột generated care_interactions.is_terminal không tự tính lại dòng cũ.
 --
--- ── Không thuộc 114 ─────────────────────────────────────────────────────────
--- care_upsert_orders / care_recompute_attribution / cursor N3 (B5). Bảng
--- care_orders đúng N3 r3.2: KHÔNG is_valid_order/is_deleted/order_status/
--- channel/store_code (Q-65…68).
+-- ── B5a r1.1 (09/10, SPEC §B5a r1.1 — Q-91/Q-93) ────────────────────────────────
+-- GĐ1 chỉ đo "sau lượt Hoàn thành có đơn COMPLETED hay không" (task Có đơn, boolean). N3 r3.4 ĐÚNG
+-- ba cột: customer_external_id, order_key, ordered_at (= completed_at UTC; BI chỉ xuất COMPLETED).
+-- KHÔNG tiền / số đơn / source_updated_at / pos_code / cursor. care_recompute_attribution
+-- (service_role) + care_order_sync_status (người xem báo cáo).
+-- ── B5b.2 (09/10, SPEC §B5b) ─────────────────────────────────────────────────
+-- care_order_sync_candidates / care_order_sync_apply / care_order_sync_fail (service_role) cho cron
+-- care-orders-sync (app đọc VIEW N3 Q-96 theo khoảng). Đồng bộ ghi công THẬT còn NO-GO tới khi BI sửa
+-- múi giờ VIEW (Q-100) — apply tự chặn đơn có mốc ở tương lai.
 --
 -- Idempotent: CREATE TABLE/INDEX IF NOT EXISTS, CREATE OR REPLACE FUNCTION,
 -- DROP POLICY/TRIGGER IF EXISTS + CREATE, seed ON CONFLICT DO NOTHING. Chạy lại
 -- nguyên file không đổi dữ liệu. pg_safeupdate: mọi UPDATE/DELETE có WHERE.
+-- Môi trường nháp/QA đã chạy một bản 114 TRƯỚC r1.1 (sáu cột/tiền): chạy khối ROLLBACK dưới đây trước —
+-- bản này fail-closed (đổi RETURNS care_report báo lỗi, hậu kiểm tập cột RAISE), không tự nâng cấp.
+-- Từ r1.1 lên r1.2 (Q-95) chạy lại tại chỗ sạch (thu hồi GRANT + DROP policy); riêng `notes` của dòng
+-- app_migrations đã có không cập nhật (ON CONFLICT DO NOTHING) — chỉ ảnh hưởng DB nháp, prod chưa có 114.
+-- DB nháp đã chạy bản TRƯỚC Q-104: CREATE TABLE IF NOT EXISTS không thêm CHECK product_id mới ⇒ hậu kiểm
+-- RAISE (fail-closed) ⇒ chạy khối ROLLBACK rồi chạy lại.
 --
 -- ROLLBACK (chỉ khi CHƯA có dữ liệu vận hành — xoá toàn bộ CRM):
 --   BEGIN;
@@ -81,6 +99,9 @@
 --     public.care_import_finalize(uuid, uuid), public.care_close_period(), public.care_purge_stale_staging(interval),
 --     public.care_stamp_overdue(), public.care_report(date, uuid[], boolean),
 --     public.care_my_summary(), public.care_my_access(),
+--     public.care_recompute_attribution(text[], text[]), public.care_order_sync_status(),
+--     public.care_order_sync_candidates(integer), public.care_order_sync_apply(jsonb, timestamptz),
+--     public.care_order_sync_fail(text, timestamptz),
 --     public.care__record_interaction_at(date, uuid, text, text, date, jsonb),
 --     public.care__transfer_tasks_at(date, uuid[], uuid, text),
 --     public.care__import_finalize_at(uuid, uuid, date),
@@ -289,7 +310,8 @@ CREATE TABLE IF NOT EXISTS public.care_task_products (
   id           uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   task_id      uuid NOT NULL REFERENCES public.care_tasks(id),
   batch_id     uuid NOT NULL REFERENCES public.care_import_batches(id),
-  product_id   text NOT NULL CHECK (char_length(product_id) BETWEEN 1 AND 100),
+  -- Q-104: product_id không bao giờ toàn số 0 ("0", "00"…) — chặn cả đường ghi khác ngoài finalize.
+  product_id   text NOT NULL CHECK (char_length(product_id) BETWEEN 1 AND 100 AND btrim(product_id) !~ '^0+$'),
   product_name text NOT NULL CHECK (char_length(product_name) BETWEEN 1 AND 300),
   image_url    text CHECK (image_url IS NULL OR (char_length(image_url) <= 1000 AND image_url ~ '^https://cdn-gcs\.thuocsi\.vn/')),
   reason_type  text NOT NULL CHECK (char_length(reason_type) BETWEEN 1 AND 50),
@@ -367,18 +389,19 @@ CREATE TABLE IF NOT EXISTS public.care_reconcile_queue (
 );
 CREATE INDEX IF NOT EXISTS care_reconcile_queue_from_idx ON public.care_reconcile_queue (from_ts);
 
--- N3 r3.2 — một dòng / đơn ĐÃ ĐẶT (kể cả huỷ/hoàn sau đó). Chỉ care admin/super đọc.
+-- N3 r3.4 (Q-91/Q-93) — một dòng / đơn COMPLETED (BI lọc status; CANCELED/khác không vào).
+-- ordered_at = order_order.completed_at UTC (Q-93: COMPLETED không đổi về CANCELED). Q-101: KHÔNG ai thuộc
+-- authenticated (kể cả care admin/super) SELECT thẳng — chỉ service_role ghi/đọc; người dùng xem qua care_report.
+-- synced_at: metadata nội bộ (lần ghi gần nhất — chẩn đoán đồng bộ), không thuộc interface N3.
 CREATE TABLE IF NOT EXISTS public.care_orders (
-  order_key            text PRIMARY KEY CHECK (char_length(order_key) BETWEEN 1 AND 200),
-  customer_external_id text NOT NULL CHECK (char_length(customer_external_id) BETWEEN 1 AND 100),
+  -- Khoá/ID khớp CHÍNH XÁC (không khoảng trắng đầu/cuối — như care_customers.external_id; parser B5a cũng chặn).
+  order_key            text PRIMARY KEY CHECK (char_length(order_key) BETWEEN 1 AND 200 AND order_key = btrim(order_key)),
+  customer_external_id text NOT NULL CHECK (char_length(customer_external_id) BETWEEN 1 AND 100
+                                            AND customer_external_id = btrim(customer_external_id)),
   ordered_at           timestamptz NOT NULL,
-  source_updated_at    timestamptz NOT NULL,
-  net_amount           numeric NOT NULL,
-  pos_code             text,
   synced_at            timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS care_orders_customer_time_idx ON public.care_orders (customer_external_id, ordered_at);
-CREATE INDEX IF NOT EXISTS care_orders_cursor_idx ON public.care_orders (source_updated_at, order_key);
 
 -- Attribution: snapshot chủ sở hữu tại lượt Hoàn thành; báo cáo CHỈ đọc bảng này.
 CREATE TABLE IF NOT EXISTS public.care_order_attributions (
@@ -389,21 +412,23 @@ CREATE TABLE IF NOT EXISTS public.care_order_attributions (
   assignee_id    uuid NOT NULL REFERENCES public.users(id),
   store_id       uuid NOT NULL REFERENCES public.stores(id),
   period_month   date NOT NULL,
-  net_amount     numeric NOT NULL,
   is_test        boolean NOT NULL DEFAULT false,
   computed_at    timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS care_attr_period_store_idx ON public.care_order_attributions (period_month, store_id);
 CREATE INDEX IF NOT EXISTS care_attr_period_assignee_idx ON public.care_order_attributions (period_month, assignee_id);
 CREATE INDEX IF NOT EXISTS care_attr_task_idx ON public.care_order_attributions (task_id);
+-- B5a: care_recompute_attribution tìm attribution đang gán cho khách (đơn đổi khách ⇒ tính lại phía cũ).
+CREATE INDEX IF NOT EXISTS care_attr_customer_idx ON public.care_order_attributions (customer_id);
 
+-- Trạng thái đồng bộ (B5a r1.1: không cursor/watermark). last_error = MÃ lỗi (vd. BQ_TIMEOUT) — CHECK chỉ
+-- nhận dạng mã ⇒ không thể ghi message BigQuery thô/PII (care admin SELECT được bảng; security-reviewer P1).
+-- B5b.2: updated_at = snapshot_at của KẾT QUẢ mới nhất đã ghi (care_order_sync_apply/_fail) — mốc so sánh
+-- để lượt chạy chồng/đến muộn không đè kết quả lượt mới hơn.
 CREATE TABLE IF NOT EXISTS public.care_sync_state (
   source              text PRIMARY KEY,
-  cursor_ts           timestamptz,
-  cursor_key          text,
   last_success_at     timestamptz,
-  bi_complete_through timestamptz,
-  last_error          text,
+  last_error          text CHECK (last_error ~ '^[A-Z][A-Z0-9_]{0,63}$'),
   updated_at          timestamptz NOT NULL DEFAULT now()
 );
 
@@ -542,7 +567,7 @@ RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS
 $$;
 
 -- Q-79: hai helper CHỈ nhánh staff (người được giao) cho dữ liệu con có store snapshot
--- (lượt/ghi chú, event, DNC, attribution). Nhánh SM KHÔNG đi qua task/khách hiện tại mà xét
+-- (lượt/ghi chú, event, DNC; attribution không còn policy — Q-95). Nhánh SM KHÔNG đi qua task/khách hiện tại mà xét
 -- store của TỪNG dòng ở policy — task chuyển X→Y không mở lượt X cho SM vùng Y.
 -- Staff: giữ đúng quyền đã chốt (assignee HIỆN TẠI của task — kể cả task kỳ cũ của mình chưa chuyển —
 -- + lịch sử khách có task kỳ này giao cho mình), và (Q-82) task phải ở ĐÚNG store hiện tại của staff.
@@ -599,11 +624,20 @@ GRANT ALL ON public.care_access, public.care_import_batches, public.care_import_
 -- TRUNCATE bỏ qua trigger append-only theo dòng ⇒ thu hồi cả với service_role.
 REVOKE TRUNCATE ON public.care_tasks, public.care_interactions, public.care_assignment_events,
   public.care_store_refusals FROM service_role;
-GRANT SELECT ON public.care_access, public.care_import_batches, public.care_customers,
+-- Q-95 (B5a r1.2) + Q-101: care_order_attributions và care_orders KHÔNG có trong danh sách — authenticated
+-- (kể cả super/care admin) không SELECT thẳng (không lộ DHC/ID khách/số đơn qua PostgREST); aggregate qua
+-- care_report, trạng thái qua care_order_sync_status. care_sync_state GIỮ (Q-101 không mở rộng sang bảng này).
+-- Q-105: care_customers KHÔNG có trong danh sách quyền TOÀN BẢNG — quyền bảng cộng dồn với quyền cột (REVOKE
+-- một cột khi còn GRANT bảng không ẩn được cột) ⇒ chỉ cấp 3 cột; external_id (ID khách thô của nguồn) chỉ
+-- service_role và hàm SECURITY DEFINER nội bộ (import/đồng bộ N3) dùng.
+GRANT SELECT ON public.care_access, public.care_import_batches,
   public.care_tasks, public.care_task_products, public.care_interactions,
-  public.care_assignment_events, public.care_store_refusals, public.care_orders,
-  public.care_order_attributions, public.care_sync_state
+  public.care_assignment_events, public.care_store_refusals,
+  public.care_sync_state
   TO authenticated;
+-- REVOKE ALL mức bảng ở trên đã gỡ cả quyền cột cũ; ghi rõ cho DB nháp từng thử grant cột external_id.
+REVOKE SELECT (external_id) ON public.care_customers FROM PUBLIC, anon, authenticated;
+GRANT SELECT (id, is_test, created_at) ON public.care_customers TO authenticated;
 -- care_access: super sửa trực tiếp (policy bên dưới chặn mọi người khác).
 GRANT INSERT, UPDATE, DELETE ON public.care_access TO authenticated;
 
@@ -669,20 +703,18 @@ CREATE POLICY care_store_refusals_select ON public.care_store_refusals FOR SELEC
          OR store_id = ANY ((select public.care_scope_store_ids())::uuid[])
          OR ((select public.care_assignee_uid()) IS NOT NULL AND public.care_staff_reads_customer(customer_id)));
 
+-- Q-95 (B5a r1.2): bỏ policy SELECT attribution (bảng vẫn bật RLS, không policy ⇒ chặn mọi role không
+-- phải owner/service_role). DROP để chạy lại trên DB nháp từng có bản trước r1.2 cũng sạch.
 DROP POLICY IF EXISTS care_order_attributions_select ON public.care_order_attributions;
-CREATE POLICY care_order_attributions_select ON public.care_order_attributions FOR SELECT TO authenticated
-  USING ((select public.care_can_view_all())
-         OR store_id = ANY ((select public.care_scope_store_ids())::uuid[])
-         OR ((select public.care_assignee_uid()) IS NOT NULL AND public.care_staff_reads_task(task_id)));
 
+-- Q-101: bỏ policy SELECT đơn thô (RLS vẫn bật, không policy, không GRANT) — DROP để DB nháp sạch.
 DROP POLICY IF EXISTS care_orders_select ON public.care_orders;
-CREATE POLICY care_orders_select ON public.care_orders FOR SELECT TO authenticated
-  USING ((select public.care_can_view_all()));
 
 DROP POLICY IF EXISTS care_sync_state_select ON public.care_sync_state;
 CREATE POLICY care_sync_state_select ON public.care_sync_state FOR SELECT TO authenticated
   USING ((select public.care_can_view_all()));
--- care_import_staging, care_reconcile_queue: KHÔNG policy ⇒ authenticated không thấy dòng nào.
+-- care_import_staging, care_reconcile_queue, care_order_attributions (Q-95), care_orders (Q-101): KHÔNG
+-- policy ⇒ authenticated không thấy dòng nào (và cũng không có GRANT SELECT).
 
 -- ════════════════════════════════════════════════════════════════════════════
 -- 5. Đóng kỳ + stamp trễ hẹn (service_role; B5 gắn cron Coolify)
@@ -888,6 +920,9 @@ BEGIN
        OR char_length(product_name) > 300 OR char_length(product_url) > 1000
     UNION ALL
     SELECT row_no, 'PHONE_INVALID' FROM care_rows WHERE phone_raw IS NOT NULL AND phone_norm IS NULL
+    UNION ALL
+    -- Q-104: ID sản phẩm toàn số 0 (Text "0"/"00", Number 0 đã thành "0") — mirror validate.ts.
+    SELECT row_no, 'PRODUCT_ID_INVALID' FROM care_rows WHERE product_id ~ '^0+$'
     UNION ALL
     SELECT row_no, 'IMAGE_URL_HOST' FROM care_rows
     WHERE product_url IS NOT NULL AND product_url !~ '^https://cdn-gcs\.thuocsi\.vn/'
@@ -1254,9 +1289,10 @@ $$;
 -- ════════════════════════════════════════════════════════════════════════════
 -- 9. Báo cáo / tóm tắt / quyền của tôi (DEFINER, scope tự lấy từ auth.uid())
 -- ════════════════════════════════════════════════════════════════════════════
--- Task theo owner HIỆN TẠI; đơn/doanh thu theo snapshot attribution + tháng của
--- lượt Hoàn thành (Q-59). Hai aggregate riêng rồi FULL JOIN ⇒ không nhân đôi khi
--- khách nhiều sản phẩm/lượt. KHÔNG đọc care_orders. is_test loại trừ, trừ super
+-- Task theo owner HIỆN TẠI; "Có đơn" = COUNT(DISTINCT task_id) theo snapshot attribution + tháng
+-- của lượt Hoàn thành (Q-59/Q-91) — nhiều đơn cùng task vẫn 1; KHÔNG số đơn/tiền (Q-91). Hai
+-- aggregate riêng rồi FULL JOIN ⇒ không nhân đôi khi khách nhiều sản phẩm/lượt. KHÔNG đọc
+-- care_orders. is_test loại trừ, trừ super
 -- chủ động bật p_include_test (QA B6). p_store_ids chỉ THU HẸP scope, không nới.
 -- p_month được chuẩn hoá về ngày 1 (truyền ngày giữa tháng không ra rỗng âm thầm).
 CREATE OR REPLACE FUNCTION public.care_report(p_month date, p_store_ids uuid[] DEFAULT NULL, p_include_test boolean DEFAULT false)
@@ -1264,7 +1300,7 @@ RETURNS TABLE (
   store_id uuid, assignee_id uuid,
   tasks_total integer, completed integer, open_not_cared integer, open_in_progress integer,
   overdue_in_period integer, closed_unfinished integer,
-  converted_tasks integer, orders integer, net_revenue numeric)
+  converted_tasks integer)
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   WITH me AS (
     -- Q-82: nhánh staff = task/attribution của mình Ở ĐÚNG store hiện tại.
@@ -1286,7 +1322,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
     GROUP BY t.store_id, t.assignee_id
   ), at AS (
     SELECT a.store_id, a.assignee_id,
-           count(DISTINCT a.task_id)::int AS conv_tasks, count(*)::int AS orders, sum(a.net_amount) AS rev
+           count(DISTINCT a.task_id)::int AS conv_tasks
     FROM public.care_order_attributions a, me
     WHERE a.period_month = public.care_period_of(p_month) AND (me.v_test OR NOT a.is_test)
       AND (me.v_all OR (a.assignee_id = me.uid AND a.store_id = me.staff_store) OR a.store_id = ANY (me.scope))
@@ -1296,7 +1332,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT COALESCE(tk.store_id, at.store_id), COALESCE(tk.assignee_id, at.assignee_id),
          COALESCE(tk.total, 0), COALESCE(tk.completed, 0), COALESCE(tk.not_cared, 0),
          COALESCE(tk.in_progress, 0), COALESCE(tk.overdue, 0), COALESCE(tk.unfinished, 0),
-         COALESCE(at.conv_tasks, 0), COALESCE(at.orders, 0), COALESCE(at.rev, 0)
+         COALESCE(at.conv_tasks, 0)
   FROM tk FULL OUTER JOIN at ON at.store_id = tk.store_id AND at.assignee_id = tk.assignee_id
   ORDER BY 1, 2
 $$;
@@ -1331,6 +1367,260 @@ RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $
 $$;
 
 -- ════════════════════════════════════════════════════════════════════════════
+-- 9b. B5a — tính lại attribution + trạng thái dữ liệu đơn (SPEC §B5a)
+-- ════════════════════════════════════════════════════════════════════════════
+-- Ghi công MỘT đơn N3 COMPLETED (care_orders) cho lượt Hoàn thành (is_terminal) GẦN NHẤT của cùng
+-- customer_external_id có created_at < ordered_at (STRICT — đơn completed_at bằng đúng giờ lượt KHÔNG
+-- tính; trùng giờ giữa các lượt ⇒ id lớn hơn). Người/store/tháng/task lấy từ snapshot LƯỢT — không từ
+-- owner task hiện tại (Q-59). Unique index care_interactions_one_terminal_per_task ⇒ mỗi task một lượt
+-- terminal ⇒ báo cáo đếm DISTINCT task không nhân đôi. Q-89 (đã chốt): REFUSED là terminal, VẪN ghi
+-- công. Q-93: đơn COMPLETED không về CANCELED ⇒ không có nhánh hủy/hoàn. Không có lượt hợp lệ ⇒ không
+-- attribution. Phạm vi = đơn của các khách/đơn truyền vào + đơn ĐANG gán cho các khách đó (đơn đổi khách/giờ được
+-- tính lại cả phía cũ). Đơn vắng khỏi một lần đồng bộ KHÔNG bị coi là xoá (Q-68); đơn bị xoá khỏi
+-- care_orders ⇒ attribution xoá theo FK CASCADE. MỘT câu lệnh CTE ghi dữ liệu ⇒ cùng snapshot,
+-- tất-cả-hoặc-không; khoá advisory tuần tự hoá mọi lần tính lại. Chạy lại cùng dữ liệu ⇒ 0 dòng
+-- thay đổi. service_role only (cron B5b / QA). Giới hạn 20.000 khách + 20.000 đơn/lần = trần một lô
+-- parser N3 (lib/care/orders/n3.ts CARE_N3_MAX_ROWS — spec ép khớp).
+-- TODO(Q-03): ghi công theo is_terminal (6 outcome, 4 kết thúc — mặc định Q-03). Đổi tập terminal ⇒
+--   đổi care_is_terminal_outcome + giá trị is_terminal đã ghi KHÔNG tự đổi ⇒ phải tính lại toàn bộ.
+-- Hợp đồng cho B5b (sink đồng bộ, một transaction): (1) lấy pg_advisory_xact_lock(hashtext(
+--   'care_recompute_attribution')) TRƯỚC khi upsert care_orders; (2) luôn truyền order_key của lô (đơn
+--   MỚI chỉ vào scope qua khoá); (3) care_reconcile_queue chỉ BỔ SUNG khách mới vào lô — tập cần đọc lại
+--   mỗi lần là MỌI task Hoàn thành chưa có attribution (drain queue không được làm quên task "Chưa thấy
+--   đơn"); (4) thành công ⇒ last_success_at = GREATEST(cũ, snapshot), last_error chỉ xoá khi snapshot
+--   ≥ updated_at; lỗi ⇒ giữ attribution cũ. Hiện thực: care_order_sync_apply / care_order_sync_fail (9c).
+CREATE OR REPLACE FUNCTION public.care_recompute_attribution(
+  p_customer_external_ids text[] DEFAULT NULL, p_order_keys text[] DEFAULT NULL)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_ext   text[] := ARRAY(SELECT DISTINCT x FROM unnest(COALESCE(p_customer_external_ids, '{}'::text[])) x
+                          WHERE x IS NOT NULL AND x <> '');
+  v_keys  text[] := ARRAY(SELECT DISTINCT x FROM unnest(COALESCE(p_order_keys, '{}'::text[])) x
+                          WHERE x IS NOT NULL AND x <> '');
+  v_scope integer;
+  v_up    integer;
+  v_del   integer;
+BEGIN
+  IF cardinality(v_ext) = 0 AND cardinality(v_keys) = 0 THEN
+    RAISE EXCEPTION 'care_recompute_attribution: cần ít nhất một khách hoặc một đơn';
+  END IF;
+  IF cardinality(v_ext) > 20000 OR cardinality(v_keys) > 20000 THEN
+    RAISE EXCEPTION 'care_recompute_attribution: vượt giới hạn một lần (20000 khách, 20000 đơn)';
+  END IF;
+  PERFORM pg_advisory_xact_lock(hashtext('care_recompute_attribution'));
+
+  -- Nhánh 2 tra attribution theo customer_id (index care_attr_customer_idx); attribution có order_key ∈
+  -- v_keys đã nằm trong nhánh 1 nhờ FK order_key → care_orders.
+  WITH scope AS (
+    SELECT o.order_key FROM public.care_orders o
+    WHERE o.customer_external_id = ANY (v_ext) OR o.order_key = ANY (v_keys)
+    UNION
+    SELECT a.order_key FROM public.care_order_attributions a
+    WHERE a.customer_id IN (SELECT c.id FROM public.care_customers c WHERE c.external_id = ANY (v_ext))
+  ), desired AS (
+    SELECT o.order_key, w.id AS interaction_id, w.task_id, w.customer_id, w.assignee_id, w.store_id,
+           w.period_month, w.is_test
+    FROM scope s
+    JOIN public.care_orders o ON o.order_key = s.order_key
+    JOIN public.care_customers c ON c.external_id = o.customer_external_id
+    CROSS JOIN LATERAL (
+      SELECT i.id, i.task_id, i.customer_id, i.assignee_id, i.store_id, i.period_month, i.is_test
+      FROM public.care_interactions i
+      WHERE i.customer_id = c.id AND i.is_terminal AND i.created_at < o.ordered_at
+      ORDER BY i.created_at DESC, i.id DESC
+      LIMIT 1
+    ) w
+  ), del AS (
+    DELETE FROM public.care_order_attributions a
+    USING scope s
+    WHERE a.order_key = s.order_key
+      AND NOT EXISTS (SELECT 1 FROM desired d WHERE d.order_key = a.order_key)
+    RETURNING a.order_key
+  ), up AS (
+    INSERT INTO public.care_order_attributions AS a
+      (order_key, interaction_id, task_id, customer_id, assignee_id, store_id, period_month, is_test, computed_at)
+    SELECT order_key, interaction_id, task_id, customer_id, assignee_id, store_id, period_month, is_test, now()
+    FROM desired
+    ON CONFLICT (order_key) DO UPDATE
+      SET interaction_id = EXCLUDED.interaction_id, task_id = EXCLUDED.task_id, customer_id = EXCLUDED.customer_id,
+          assignee_id = EXCLUDED.assignee_id, store_id = EXCLUDED.store_id, period_month = EXCLUDED.period_month,
+          is_test = EXCLUDED.is_test, computed_at = now()
+      WHERE (a.interaction_id, a.task_id, a.customer_id, a.assignee_id, a.store_id, a.period_month, a.is_test)
+            IS DISTINCT FROM (EXCLUDED.interaction_id, EXCLUDED.task_id, EXCLUDED.customer_id, EXCLUDED.assignee_id,
+                              EXCLUDED.store_id, EXCLUDED.period_month, EXCLUDED.is_test)
+    RETURNING a.order_key
+  )
+  SELECT (SELECT count(*) FROM scope), (SELECT count(*) FROM up), (SELECT count(*) FROM del)
+  INTO v_scope, v_up, v_del;
+
+  RETURN jsonb_build_object('scope', v_scope, 'upserted', v_up, 'deleted', v_del);
+END $$;
+
+-- Trạng thái dữ liệu đơn cho người xem BÁO CÁO (super / care admin / SM có scope): đọc care_sync_state
+-- qua DEFINER sau khi kiểm quyền — KHÔNG mở SELECT bảng cho SM/staff/QLCH, không trả last_error thô.
+-- Chưa có dòng / chưa lần thành công ⇒ has_synced=false ⇒ UI "Chưa có dữ liệu đơn" (không giả 0).
+-- Người không có quyền xem báo cáo ⇒ 0 dòng. Dòng source='n3_orders' do care_order_sync_apply (thành công:
+-- last_success_at + xoá last_error) / care_order_sync_fail (chỉ MÃ lỗi, CHECK) ghi — xem 9c.
+CREATE OR REPLACE FUNCTION public.care_order_sync_status()
+RETURNS TABLE (has_synced boolean, last_success_at timestamptz, last_failed boolean)
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT s.last_success_at IS NOT NULL, s.last_success_at, s.last_error IS NOT NULL
+  FROM (SELECT 1) AS one
+  LEFT JOIN public.care_sync_state s ON s.source = 'n3_orders'
+  WHERE public.care_can_view_all() OR cardinality(public.care_scope_store_ids()) > 0
+$$;
+
+-- ════════════════════════════════════════════════════════════════════════════
+-- 9c. B5b.2 — đồng bộ đơn N3 (service_role; cron care-orders-sync, SPEC §B5b)
+-- ════════════════════════════════════════════════════════════════════════════
+-- Một lượt cron: (1) care_order_sync_candidates chụp tập khoảng (snapshot_at = now() DB); (2) app đọc VIEW
+-- theo khoảng, kiểm TOÀN BỘ; (3) care_order_sync_apply ghi đơn + tính lại + dọn queue + đánh dấu thành công
+-- trong MỘT transaction; lỗi bất kỳ bước nào ⇒ care_order_sync_fail chỉ ghi MÃ lỗi, giữ dữ liệu cũ.
+-- care_sync_state.updated_at = snapshot_at của KẾT QUẢ mới nhất đã ghi (thành công hoặc lỗi) ⇒ lượt chạy
+-- chồng/đến muộn không đè kết quả của lượt mới hơn; last_success_at không bao giờ lùi.
+
+-- Ứng viên = MỌI lượt terminal mà task CHƯA có attribution ("Chưa thấy đơn"), kể cả lượt cũ (bắt đơn đến
+-- VIEW muộn). Khoảng (lo, hi]: lo = created_at của lượt; hi = created_at lượt terminal KẾ TIẾP cùng khách,
+-- tính LEAD trên TOÀN BỘ lượt terminal của khách TRƯỚC khi lọc (đơn sau hi thuộc lượt sau — không kéo lại).
+-- hi NULL ⇒ mở. Lượt cùng mốc ⇒ lượt id nhỏ có lo = hi (rỗng — app bỏ). Gồm is_test (fixture QA B6 đi được
+-- đường sync; báo cáo vẫn loại is_test). Trả MỘT jsonb (PostgREST cắt SETOF theo db-max-rows): tổng số
+-- khoảng + số khách duy nhất (Q-98 báo riêng) + tối đa p_cap+1 khoảng (app thấy > p_cap ⇒ fail-closed).
+CREATE OR REPLACE FUNCTION public.care_order_sync_candidates(p_cap integer DEFAULT 20000)
+RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  WITH term AS (
+    SELECT i.task_id, i.customer_id, i.created_at,
+           lead(i.created_at) OVER (PARTITION BY i.customer_id ORDER BY i.created_at, i.id) AS next_at
+    FROM public.care_interactions i
+    WHERE i.is_terminal
+  ), w AS (
+    SELECT c.external_id, t.created_at AS lo, t.next_at AS hi
+    FROM term t
+    JOIN public.care_customers c ON c.id = t.customer_id
+    WHERE NOT EXISTS (SELECT 1 FROM public.care_order_attributions a WHERE a.task_id = t.task_id)
+  ), lim AS (
+    SELECT * FROM w ORDER BY lo, external_id LIMIT GREATEST(LEAST(COALESCE(p_cap, 20000), 20000), 0) + 1
+  )
+  SELECT jsonb_build_object(
+    'snapshot_at', to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+    'windows', (SELECT count(*) FROM w),
+    'customers', (SELECT count(DISTINCT external_id) FROM w),
+    'items', COALESCE((SELECT jsonb_agg(jsonb_build_array(
+               external_id,
+               to_char(lo AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+               CASE WHEN hi IS NULL THEN NULL ELSE to_char(hi AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') END)
+             ORDER BY lo, external_id) FROM lim), '[]'::jsonb))
+$$;
+
+-- Ghi MỘT lượt đồng bộ, tất-cả-hoặc-không: kiểm TOÀN BỘ payload (mảng ≤ 20.000 phần tử, mỗi phần tử ĐÚNG 3
+-- key chuỗi, mốc hợp lệ và KHÔNG ở tương lai quá 5 phút — chặn VIEW sai múi giờ Q-100 ngay ở DB, trùng
+-- order_key giống hệt thì gộp, mâu thuẫn thì RAISE) rồi mới ghi: upsert care_orders (chỉ khi đổi) ⇒
+-- care_recompute_attribution(khách, khoá của lô) ⇒ xoá queue enqueued_at ≤ snapshot ⇒ đánh dấu thành công.
+-- Lô rỗng vẫn đánh dấu thành công (đã đọc đủ phạm vi). Khoá advisory chung với recompute ⇒ cron chồng
+-- tuần tự hoá; ghi lại cùng dữ liệu ⇒ 0 thay đổi. Lỗi ở bất kỳ bước nào ⇒ rollback cả lượt.
+CREATE OR REPLACE FUNCTION public.care_order_sync_apply(p_orders jsonb, p_snapshot_at timestamptz)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_n       integer;
+  v_written integer := 0;
+  v_queue   integer := 0;
+  v_attr    jsonb := jsonb_build_object('scope', 0, 'upserted', 0, 'deleted', 0);
+BEGIN
+  IF p_snapshot_at IS NULL OR p_snapshot_at > now() + interval '1 minute' OR p_snapshot_at < now() - interval '2 hours' THEN
+    RAISE EXCEPTION 'care_order_sync_apply: snapshot_at ngoài biên';
+  END IF;
+  IF p_orders IS NULL OR jsonb_typeof(p_orders) <> 'array' THEN
+    RAISE EXCEPTION 'care_order_sync_apply: p_orders phải là mảng';
+  END IF;
+  v_n := jsonb_array_length(p_orders);
+  IF v_n > 20000 THEN
+    RAISE EXCEPTION 'care_order_sync_apply: vượt 20000 đơn một lượt';
+  END IF;
+  -- Đúng 3 key chuỗi, kiểm theo TẬP (`?&` + đếm) — KHÔNG sắp xếp: prod datcollate en_US.UTF-8 xếp
+  -- 'ordered_at' trước 'order_key' (PGlite là C ⇒ QA không thấy). Giá trị khớp CHECK care_orders ngay tại
+  -- đây (RAISE chung, không để CHECK ghi giá trị thô vào log Postgres). ordered_at đúng dạng app chuẩn hoá
+  -- (ISO UTC, 6 chữ số giây lẻ, 'Z') ⇒ không nhận 'now'/'epoch'/'infinity' hay chuỗi không offset (Q-100).
+  IF EXISTS (SELECT 1 FROM jsonb_array_elements(p_orders) e
+             WHERE CASE WHEN jsonb_typeof(e) <> 'object' THEN true
+                        ELSE NOT (e ?& ARRAY['customer_external_id', 'order_key', 'ordered_at'])
+                          OR (SELECT count(*) FROM jsonb_object_keys(e)) <> 3
+                          OR jsonb_typeof(e -> 'customer_external_id') <> 'string'
+                          OR jsonb_typeof(e -> 'order_key') <> 'string'
+                          OR jsonb_typeof(e -> 'ordered_at') <> 'string'
+                          OR char_length(e ->> 'customer_external_id') NOT BETWEEN 1 AND 100
+                          OR e ->> 'customer_external_id' <> btrim(e ->> 'customer_external_id')
+                          OR char_length(e ->> 'order_key') NOT BETWEEN 1 AND 200
+                          OR e ->> 'order_key' <> btrim(e ->> 'order_key')
+                          OR e ->> 'ordered_at' !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{6}Z$' END) THEN
+    RAISE EXCEPTION 'care_order_sync_apply: phần tử đơn sai dạng';
+  END IF;
+  IF EXISTS (SELECT 1 FROM jsonb_array_elements(p_orders) e
+             WHERE (e ->> 'ordered_at')::timestamptz > now() + interval '5 minutes') THEN
+    RAISE EXCEPTION 'care_order_sync_apply: đơn có mốc hoàn tất ở tương lai (nguồn sai thời gian)';
+  END IF;
+  IF EXISTS (SELECT 1 FROM jsonb_array_elements(p_orders) e GROUP BY e ->> 'order_key'
+             HAVING count(DISTINCT (e ->> 'customer_external_id', (e ->> 'ordered_at')::timestamptz)) > 1) THEN
+    RAISE EXCEPTION 'care_order_sync_apply: trùng order_key mâu thuẫn';
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtext('care_recompute_attribution'));
+
+  WITH src AS (
+    SELECT DISTINCT e ->> 'order_key' AS order_key, e ->> 'customer_external_id' AS cust,
+           (e ->> 'ordered_at')::timestamptz AS at
+    FROM jsonb_array_elements(p_orders) e
+  ), up AS (
+    INSERT INTO public.care_orders AS o (order_key, customer_external_id, ordered_at, synced_at)
+    SELECT order_key, cust, at, now() FROM src
+    ON CONFLICT (order_key) DO UPDATE
+      SET customer_external_id = EXCLUDED.customer_external_id, ordered_at = EXCLUDED.ordered_at, synced_at = now()
+      WHERE (o.customer_external_id, o.ordered_at) IS DISTINCT FROM (EXCLUDED.customer_external_id, EXCLUDED.ordered_at)
+    RETURNING 1
+  )
+  SELECT count(*) INTO v_written FROM up;
+
+  IF v_n > 0 THEN
+    v_attr := public.care_recompute_attribution(
+      ARRAY(SELECT DISTINCT e ->> 'customer_external_id' FROM jsonb_array_elements(p_orders) e),
+      ARRAY(SELECT DISTINCT e ->> 'order_key' FROM jsonb_array_elements(p_orders) e));
+  END IF;
+
+  DELETE FROM public.care_reconcile_queue WHERE enqueued_at <= p_snapshot_at;
+  GET DIAGNOSTICS v_queue = ROW_COUNT;
+
+  INSERT INTO public.care_sync_state AS s (source, last_success_at, last_error, updated_at)
+  VALUES ('n3_orders', p_snapshot_at, NULL, p_snapshot_at)
+  ON CONFLICT (source) DO UPDATE SET
+    last_success_at = GREATEST(COALESCE(s.last_success_at, '-infinity'::timestamptz), EXCLUDED.last_success_at),
+    -- Chỉ xoá lỗi khi lượt này MỚI HƠN kết quả đã ghi (lượt cũ xong muộn không xoá lỗi của lượt mới).
+    last_error = CASE WHEN EXCLUDED.updated_at >= s.updated_at THEN NULL ELSE s.last_error END,
+    updated_at = GREATEST(s.updated_at, EXCLUDED.updated_at);
+
+  RETURN jsonb_build_object('orders', v_n, 'orders_written', v_written, 'attribution', v_attr, 'queue_drained', v_queue);
+END $$;
+
+-- Ghi MÃ lỗi của một lượt thất bại (CHECK last_error chỉ nhận mã) — chỉ khi lượt này MỚI HƠN kết quả đã ghi;
+-- không đụng last_success_at (UI giữ số cũ + mốc thành công cuối). Trả true nếu đã ghi.
+CREATE OR REPLACE FUNCTION public.care_order_sync_fail(p_code text, p_snapshot_at timestamptz)
+RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+DECLARE
+  v_rows integer;
+BEGIN
+  IF p_snapshot_at IS NULL OR p_snapshot_at > now() + interval '1 minute' OR p_snapshot_at < now() - interval '2 hours' THEN
+    RAISE EXCEPTION 'care_order_sync_fail: snapshot_at ngoài biên';
+  END IF;
+  -- CHECK cột cho qua NULL ⇒ fail(NULL) sẽ XOÁ lỗi đang có; chặn tại đây (cùng mẫu CHECK, không ghi giá trị).
+  IF p_code IS NULL OR p_code !~ '^[A-Z][A-Z0-9_]{0,63}$' THEN
+    RAISE EXCEPTION 'care_order_sync_fail: mã lỗi sai dạng';
+  END IF;
+  INSERT INTO public.care_sync_state AS s (source, last_success_at, last_error, updated_at)
+  VALUES ('n3_orders', NULL, p_code, p_snapshot_at)
+  ON CONFLICT (source) DO UPDATE SET last_error = EXCLUDED.last_error, updated_at = EXCLUDED.updated_at
+    WHERE EXCLUDED.updated_at > s.updated_at;
+  GET DIAGNOSTICS v_rows = ROW_COUNT;
+  RETURN v_rows > 0;
+END $$;
+
+-- ════════════════════════════════════════════════════════════════════════════
 -- 10. Quyền function — REVOKE đích danh rồi GRANT đúng role (AGENTS.md §4.2)
 -- ════════════════════════════════════════════════════════════════════════════
 REVOKE ALL ON FUNCTION
@@ -1351,7 +1641,10 @@ REVOKE ALL ON FUNCTION
   public.care_record_interaction(uuid, text, text, date, jsonb),
   public.care__transfer_tasks_at(date, uuid[], uuid, text),
   public.care_transfer_tasks(uuid[], uuid, text),
-  public.care_report(date, uuid[], boolean), public.care_my_summary(), public.care_my_access()
+  public.care_report(date, uuid[], boolean), public.care_my_summary(), public.care_my_access(),
+  public.care_recompute_attribution(text[], text[]), public.care_order_sync_status(),
+  public.care_order_sync_candidates(integer), public.care_order_sync_apply(jsonb, timestamptz),
+  public.care_order_sync_fail(text, timestamptz)
   FROM PUBLIC, anon, authenticated, service_role;
 
 -- Thuần + helper policy: authenticated (policy chạy với quyền người gọi) + service_role.
@@ -1369,12 +1662,15 @@ GRANT EXECUTE ON FUNCTION
 GRANT EXECUTE ON FUNCTION
   public.care_record_interaction(uuid, text, text, date, jsonb),
   public.care_transfer_tasks(uuid[], uuid, text),
-  public.care_report(date, uuid[], boolean), public.care_my_summary(), public.care_my_access()
+  public.care_report(date, uuid[], boolean), public.care_my_summary(), public.care_my_access(),
+  public.care_order_sync_status()
   TO authenticated;
 -- RPC hệ thống (route import B2, cron B5).
 GRANT EXECUTE ON FUNCTION
   public.care_import_finalize(uuid, uuid), public.care_close_period(), public.care_stamp_overdue(),
-  public.care_purge_stale_staging(interval)
+  public.care_purge_stale_staging(interval), public.care_recompute_attribution(text[], text[]),
+  public.care_order_sync_candidates(integer), public.care_order_sync_apply(jsonb, timestamptz),
+  public.care_order_sync_fail(text, timestamptz)
   TO service_role;
 -- care__* (bản nội bộ có p_today, kiểm uid bất kỳ, trigger): KHÔNG cấp cho role nào.
 
@@ -1397,9 +1693,10 @@ BEGIN
       IF has_table_privilege('anon', 'public.' || v_t, v_priv) THEN
         RAISE EXCEPTION '114 hậu kiểm: anon có % trên %', v_priv, v_t;
       END IF;
-      -- authenticated: chỉ SELECT (trừ staging/queue); ngoại lệ care_access có I/U/D (policy chỉ cho super).
+      -- authenticated: chỉ SELECT (trừ staging/queue/attribution Q-95/đơn thô Q-101); ngoại lệ care_access
+      -- có I/U/D (policy chỉ cho super).
       IF has_table_privilege('authenticated', 'public.' || v_t, v_priv)
-         AND NOT (v_priv = 'SELECT' AND v_t NOT IN ('care_import_staging', 'care_reconcile_queue'))
+         AND NOT (v_priv = 'SELECT' AND v_t NOT IN ('care_import_staging', 'care_reconcile_queue', 'care_order_attributions', 'care_orders'))
          AND NOT (v_t = 'care_access' AND v_priv IN ('INSERT', 'UPDATE', 'DELETE')) THEN
         RAISE EXCEPTION '114 hậu kiểm: authenticated có % trên %', v_priv, v_t;
       END IF;
@@ -1414,12 +1711,64 @@ BEGIN
      OR has_sequence_privilege('authenticated', pg_get_serial_sequence('public.care_assignment_events', 'id'), 'USAGE') THEN
     RAISE EXCEPTION '114 hậu kiểm: sequence identity còn cấp cho anon/authenticated';
   END IF;
-  IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'care_orders'
-             AND column_name IN ('is_valid_order', 'is_deleted', 'order_status', 'channel', 'store_code')) THEN
-    RAISE EXCEPTION '114 hậu kiểm: care_orders có cột ngoài N3 r3.2';
+  -- B5a r1.1 (Q-91/Q-93): tập cột CHÍNH XÁC — CREATE TABLE IF NOT EXISTS có thể bỏ qua lặng lẽ bảng dạng
+  -- sáu cột r3.2 cũ (tiền/cursor/pos_code) nếu môi trường từng chạy bản nháp. pg_attribute (không phụ
+  -- thuộc quyền cột như information_schema — db-reviewer P2).
+  IF (SELECT string_agg(a.attname::text, ',' ORDER BY a.attname::text COLLATE "C") FROM pg_attribute a
+      WHERE a.attrelid = 'public.care_orders'::regclass AND a.attnum > 0 AND NOT a.attisdropped)
+       IS DISTINCT FROM 'customer_external_id,order_key,ordered_at,synced_at'
+     OR (SELECT string_agg(a.attname::text, ',' ORDER BY a.attname::text COLLATE "C") FROM pg_attribute a
+         WHERE a.attrelid = 'public.care_order_attributions'::regclass AND a.attnum > 0 AND NOT a.attisdropped)
+       IS DISTINCT FROM 'assignee_id,computed_at,customer_id,interaction_id,is_test,order_key,period_month,store_id,task_id'
+     OR (SELECT string_agg(a.attname::text, ',' ORDER BY a.attname::text COLLATE "C") FROM pg_attribute a
+         WHERE a.attrelid = 'public.care_sync_state'::regclass AND a.attnum > 0 AND NOT a.attisdropped)
+       IS DISTINCT FROM 'last_error,last_success_at,source,updated_at'
+     OR to_regclass('public.care_orders_cursor_idx') IS NOT NULL THEN
+    RAISE EXCEPTION '114 hậu kiểm: care_orders/attributions/sync_state không đúng N3 r3.4 ba cột (Q-91 — không tiền/cursor/pos_code)';
   END IF;
-  IF (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename LIKE 'care\_%') <> 14 THEN
-    RAISE EXCEPTION '114 hậu kiểm: số policy care_* phải là 14';
+  IF (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename LIKE 'care\_%') <> 12 THEN
+    RAISE EXCEPTION '114 hậu kiểm: số policy care_* phải là 12';
+  END IF;
+  -- Q-95 (attribution) + Q-101 (đơn thô): không role người dùng nào đọc thẳng — kể cả quyền mức cột/policy.
+  FOREACH v_t IN ARRAY ARRAY['care_order_attributions', 'care_orders'] LOOP
+    IF has_table_privilege('authenticated', 'public.' || v_t, 'SELECT')
+       OR has_any_column_privilege('authenticated', 'public.' || v_t, 'SELECT')
+       OR has_table_privilege('anon', 'public.' || v_t, 'SELECT')
+       OR has_any_column_privilege('anon', 'public.' || v_t, 'SELECT')
+       OR EXISTS (SELECT 1 FROM pg_policies WHERE schemaname = 'public' AND tablename = v_t) THEN
+      RAISE EXCEPTION '114 hậu kiểm: % còn SELECT (bảng/cột)/policy cho người dùng (Q-95/Q-101)', v_t;
+    END IF;
+  END LOOP;
+  -- Q-105: care_customers — authenticated đọc ĐÚNG 3 cột (id, is_test, created_at) theo RLS; external_id chỉ
+  -- service_role. Không GRANT SELECT mức bảng cho authenticated/anon/PUBLIC (ACL), vì quyền bảng mở mọi cột.
+  -- Kiểm theo pg_attribute ⇒ cột thêm sau này mặc định phải KHÔNG đọc được.
+  IF has_table_privilege('authenticated', 'public.care_customers', 'SELECT')
+     OR has_any_column_privilege('anon', 'public.care_customers', 'SELECT')
+     OR NOT has_column_privilege('service_role', 'public.care_customers', 'external_id', 'SELECT')
+     OR EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = 'public.care_customers'::regclass
+                AND a.attnum > 0 AND NOT a.attisdropped
+                AND has_column_privilege('authenticated', a.attrelid, a.attnum, 'SELECT')
+                    IS DISTINCT FROM (a.attname IN ('id', 'is_test', 'created_at')))
+     OR EXISTS (SELECT 1 FROM pg_class c, aclexplode(c.relacl) x
+                WHERE c.oid = 'public.care_customers'::regclass AND x.privilege_type = 'SELECT'
+                  AND x.grantee IN (0::oid, 'authenticated'::regrole::oid, 'anon'::regrole::oid)) THEN
+    RAISE EXCEPTION '114 hậu kiểm: care_customers phải chỉ cho authenticated SELECT (id, is_test, created_at) — external_id chỉ service_role (Q-105)';
+  END IF;
+  -- Hàm DEFINER (care_report, care_recompute_attribution, care_order_sync_*) đọc bảng không policy
+  -- (attribution, đơn thô, queue) nhờ owner bỏ qua RLS. FORCE RLS hoặc owner lệch ⇒ số liệu 0 GIẢ không báo
+  -- lỗi (§4.7) ⇒ chặn ngay ở đây: MỌI hàm care* SECURITY DEFINER cùng owner với mọi bảng care_*.
+  IF EXISTS (SELECT 1 FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relname LIKE 'care\_%'
+             AND relkind = 'r' AND relforcerowsecurity)
+     OR EXISTS (SELECT 1 FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'care%'
+                AND p.prosecdef AND p.proowner IS DISTINCT FROM (SELECT c.relowner FROM pg_class c WHERE c.oid = 'public.care_orders'::regclass))
+     OR (SELECT count(DISTINCT relowner) FROM pg_class WHERE relnamespace = 'public'::regnamespace
+         AND relname LIKE 'care\_%' AND relkind = 'r') <> 1 THEN
+    RAISE EXCEPTION '114 hậu kiểm: bảng care_* bật FORCE RLS hoặc owner hàm DEFINER/bảng care_* không thống nhất';
+  END IF;
+  -- Q-104: CHECK chặn product_id toàn số 0 ở bảng sản phẩm (bảo vệ đường ghi ngoài finalize).
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE contype = 'c' AND conrelid = 'public.care_task_products'::regclass
+                 AND pg_get_constraintdef(oid) ~ 'product_id' AND pg_get_constraintdef(oid) ~ '\^0\+\$') THEN
+    RAISE EXCEPTION '114 hậu kiểm: care_task_products thiếu CHECK product_id toàn số 0 (Q-104)';
   END IF;
   -- Mọi function care*: anon không EXECUTE; SECURITY DEFINER phải cố định search_path; care__* không cấp ai.
   FOR r IN SELECT p.oid::regprocedure::text AS fn, p.prosecdef, p.proconfig, p.proname
@@ -1451,8 +1800,24 @@ BEGIN
                     AND qual ~ 'care_staff_store_id') THEN
     RAISE EXCEPTION '114 hậu kiểm: chưa phải bản B4 r1.1 (Q-82 — staff phải thuộc đúng store của task)';
   END IF;
-  IF (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname LIKE 'care%') <> 36 THEN
-    RAISE EXCEPTION '114 hậu kiểm: số function care* phải là 36';
+  -- B5a: index attribution theo khách (nhánh 2 của care_recompute_attribution) + CHECK btrim khoá/ID đơn.
+  IF to_regclass('public.care_attr_customer_idx') IS NULL
+     OR (SELECT count(*) FROM pg_constraint WHERE contype = 'c' AND conrelid = 'public.care_orders'::regclass
+           AND pg_get_constraintdef(oid) ~ 'btrim') <> 2 THEN
+    RAISE EXCEPTION '114 hậu kiểm: thiếu index care_attr_customer_idx hoặc CHECK btrim order_key/customer_external_id (B5a)';
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE contype = 'c' AND conrelid = 'public.care_sync_state'::regclass
+                 AND pg_get_constraintdef(oid) ~ 'last_error') THEN
+    RAISE EXCEPTION '114 hậu kiểm: care_sync_state.last_error thiếu CHECK dạng mã lỗi (không message thô)';
+  END IF;
+  -- care_report GĐ1 không trả số đơn/tiền (Q-91): chữ ký kết quả CHÍNH XÁC, cột cuối converted_tasks.
+  IF pg_get_function_result('public.care_report(date,uuid[],boolean)'::regprocedure) IS DISTINCT FROM
+     'TABLE(store_id uuid, assignee_id uuid, tasks_total integer, completed integer, open_not_cared integer, '
+     || 'open_in_progress integer, overdue_in_period integer, closed_unfinished integer, converted_tasks integer)' THEN
+    RAISE EXCEPTION '114 hậu kiểm: chữ ký care_report sai (Q-91 — chỉ task metrics + converted_tasks, không orders/net_revenue)';
+  END IF;
+  IF (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname LIKE 'care%') <> 41 THEN
+    RAISE EXCEPTION '114 hậu kiểm: số function care* phải là 41';
   END IF;
   FOR r IN
     SELECT * FROM (VALUES
@@ -1465,6 +1830,11 @@ BEGIN
       ('public.care_close_period()',                                false, true),
       ('public.care_stamp_overdue()',                               false, true),
       ('public.care_purge_stale_staging(interval)',                 false, true),
+      ('public.care_recompute_attribution(text[],text[])',          false, true),
+      ('public.care_order_sync_status()',                           true,  false),
+      ('public.care_order_sync_candidates(integer)',                false, true),
+      ('public.care_order_sync_apply(jsonb,timestamptz)',           false, true),
+      ('public.care_order_sync_fail(text,timestamptz)',             false, true),
       ('public.care_assignee_uid()',                                true,  true),
       ('public.care_staff_store_id()',                              true,  true),
       ('public.care_can_read_task(uuid)',                           true,  true),
@@ -1488,11 +1858,18 @@ INSERT INTO public.app_migrations (version, name, notes)
 VALUES ('114', 'care_crm_foundation',
         'CRM-CSKH B1: 13 bang care_* + RLS SELECT theo scope + RPC (finalize import,'
         || ' ghi luot, chuyen giao, dong ky, stamp tre hen, don staging ket, report).'
-        || ' Seed care_access Marketing. Chua co dong bo BigQuery N3 (B5), chua cron/route/UI.'
+        || ' Seed care_access Marketing. Migration khong doc BigQuery; dong bo N3 qua RPC B5b.2 (cron app).'
         || ' B3 r1.1 (Q-76/77): QLCH store_manager khong tham gia CRM (care_assignee_uid, scope chi SM).'
-        || ' B3 r1.2 (Q-79): SM doc luot/event/DNC/attribution theo store snapshot cua dong thuoc vung.'
+        || ' B3 r1.2 (Q-79): SM doc luot/event/DNC theo store snapshot cua dong thuoc vung.'
+        || ' B5a r1.2 (Q-95/Q-101): authenticated khong SELECT care_order_attributions/care_orders (chi RPC DEFINER).'
+        || ' Q-104: product_id toan so 0 bi chan (finalize PRODUCT_ID_INVALID + CHECK).'
+        || ' Q-105: authenticated chi SELECT care_customers(id, is_test, created_at); external_id chi service_role.'
         || ' B4: proof ep base GCS + care-proof/<task_id>/ + khoa app sinh; chong ghi trung 2 phut; staff phai o store OS hoat dong.'
         || ' B4 r1.1 (Q-82): staff chi doc/ghi task o DUNG store hien tai (care_staff_store_id).'
+        || ' B5a: care_recompute_attribution (service_role; luot Hoan thanh gan nhat truoc ordered_at, snapshot luot)'
+        || ' + care_order_sync_status (nguoi xem bao cao). B5a r1.1 (Q-91/Q-93): N3 ba cot (don COMPLETED,'
+        || ' ordered_at = completed_at); report chi converted_tasks, khong so don/tien/cursor.'
+        || ' B5b.2: care_order_sync_candidates/apply/fail (service_role) cho cron care-orders-sync (co CARE_SYNC_ENABLED OFF).'
         || ' Co CARE_ENABLED OFF.')
 ON CONFLICT (version) DO NOTHING;
 
@@ -1508,11 +1885,15 @@ COMMIT;
 --      AND ( has_function_privilege('anon', p.oid, 'EXECUTE')
 --         OR (p.proname LIKE 'care\_\_%' AND (has_function_privilege('authenticated', p.oid, 'EXECUTE')
 --                                             OR has_function_privilege('service_role', p.oid, 'EXECUTE')))
---         OR (p.proname IN ('care_import_finalize', 'care_close_period', 'care_stamp_overdue', 'care_purge_stale_staging')
+--         OR (p.proname IN ('care_import_finalize', 'care_close_period', 'care_stamp_overdue', 'care_purge_stale_staging',
+--                           'care_recompute_attribution', 'care_order_sync_candidates', 'care_order_sync_apply',
+--                           'care_order_sync_fail')
 --             AND has_function_privilege('authenticated', p.oid, 'EXECUTE'))
 --         OR (p.prosecdef AND NOT COALESCE(p.proconfig @> ARRAY['search_path=public'], false)) );
---    và: SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname LIKE 'care%';  -- 36
--- 4) Quyền bảng (kỳ vọng: authenticated SELECT trên 11 bảng + INSERT/UPDATE/DELETE trên care_access; anon 0 dòng):
+--    và: SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname LIKE 'care%';  -- 41
+-- 4) Quyền bảng (kỳ vọng: authenticated SELECT mức bảng trên 8 bảng — KHÔNG care_order_attributions (Q-95),
+--    care_orders (Q-101), care_customers (Q-105 — chỉ quyền cột, xem VERIFY 21), staging, queue — +
+--    INSERT/UPDATE/DELETE trên care_access; anon 0 dòng):
 --    SELECT table_name, grantee, string_agg(privilege_type, ',' ORDER BY privilege_type)
 --    FROM information_schema.role_table_grants
 --    WHERE table_schema = 'public' AND table_name LIKE 'care\_%' AND grantee IN ('anon', 'authenticated', 'PUBLIC')
@@ -1521,7 +1902,7 @@ COMMIT;
 --    SELECT s, has_sequence_privilege('anon', s, 'USAGE') a, has_sequence_privilege('authenticated', s, 'USAGE') u
 --    FROM unnest(ARRAY[pg_get_serial_sequence('public.care_interactions', 'id'),
 --                      pg_get_serial_sequence('public.care_assignment_events', 'id')]) s;
--- 6) Policy (kỳ vọng 14 và 0 policy có FROM):
+-- 6) Policy (kỳ vọng 12 và 0 policy có FROM; không policy nào trên care_order_attributions/care_orders — Q-95/Q-101):
 --    SELECT count(*) AS n_policy, count(*) FILTER (WHERE qual ~* '\mfrom\M' OR with_check ~* '\mfrom\M') AS n_from
 --    FROM pg_policies WHERE schemaname = 'public' AND tablename LIKE 'care\_%';
 -- 7) Trigger append-only (kỳ vọng 4):
@@ -1548,24 +1929,41 @@ COMMIT;
 -- 13) Task mồ côi (assignee không còn là staff — sau khi có dữ liệu, kỳ vọng 0 dòng; xử lý bằng chuyển giao):
 --    SELECT t.assignee_id, u.role, count(*) FROM public.care_tasks t JOIN public.users u ON u.id = t.assignee_id
 --    WHERE t.status = 'open' AND u.role IS DISTINCT FROM 'staff' GROUP BY 1, 2;
--- 14) Q-79 — cấu trúc policy (có nghĩa cả khi DB còn rỗng). Kỳ vọng: 4 policy Q-79 → t, t, f, f;
---     care_task_products_select / care_customers_select → f, f, t, f:
+-- 14) Q-79 — cấu trúc policy (có nghĩa cả khi DB còn rỗng). Kỳ vọng: 3 policy Q-79 → t, t, f, f;
+--     care_task_products_select / care_customers_select → f, f, t, f (attribution không còn policy — Q-95):
 --    SELECT policyname, qual ~ 'care_scope_store_ids' AS scope_snapshot, qual ~ 'care_staff_reads_(task|customer)' AS staff_helper,
 --           qual ~ 'care_can_read_(task|customer_history)' AS old_helper, qual ~* '\mfrom\M' AS has_from
 --    FROM pg_policies WHERE schemaname = 'public' AND policyname IN ('care_interactions_select', 'care_assignment_events_select',
---      'care_store_refusals_select', 'care_order_attributions_select', 'care_task_products_select', 'care_customers_select')
+--      'care_store_refusals_select', 'care_task_products_select', 'care_customers_select')
 --    ORDER BY 1;
+--    Q-95/Q-101 (kỳ vọng 2 dòng f, f, f, f, 0 — tính cả quyền mức cột):
+--    SELECT t, has_table_privilege('authenticated', 'public.' || t, 'SELECT'),
+--      has_any_column_privilege('authenticated', 'public.' || t, 'SELECT'),
+--      has_table_privilege('anon', 'public.' || t, 'SELECT'),
+--      has_any_column_privilege('anon', 'public.' || t, 'SELECT'),
+--      (SELECT count(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = t)
+--    FROM unnest(ARRAY['care_order_attributions', 'care_orders']) t;
+--    Đường DEFINER dựa vào owner bỏ qua RLS (kỳ vọng 0 dòng; same = t):
+--    SELECT relname FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relname LIKE 'care\_%'
+--      AND relkind = 'r' AND relforcerowsecurity;
+--    SELECT p.proowner::regrole fn_owner, c.relowner::regrole tbl_owner, p.proowner = c.relowner AS same
+--    FROM pg_proc p, pg_class c WHERE p.oid = 'public.care_report(date,uuid[],boolean)'::regprocedure
+--      AND c.oid = 'public.care_order_attributions'::regclass;
+--    Smoke DEFINER không cần uid (kỳ vọng 0 dòng, KHÔNG lỗi quyền); SELECT thẳng bảng ⇒ ERROR 42501:
+--    BEGIN READ ONLY; SET LOCAL ROLE authenticated;
+--    SELECT count(*) FROM public.care_report(public.care_period_of(public.care_vn_today()));
+--    COMMIT;
 --    Helper mới: SELECT p.oid::regprocedure, p.prosecdef, p.provolatile, p.proconfig,
 --      has_function_privilege('anon', p.oid, 'EXECUTE') anon, has_function_privilege('authenticated', p.oid, 'EXECUTE') auth
 --    FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
 --      AND p.proname IN ('care_staff_reads_task', 'care_staff_reads_customer', 'care_assignee_uid', 'care_staff_store_id');
 --    -- prosecdef=t, provolatile='s', proconfig={search_path=public}, anon=f, auth=t
--- 15) Sau khi có dữ liệu — giả lập SM (thay <SM_UID>), kỳ vọng 0/0/0/0:
+-- 15) Sau khi có dữ liệu — giả lập SM (thay <SM_UID>), kỳ vọng 0/0/0 (attribution: SELECT bị từ chối — Q-95;
+--     số Có đơn của SM chỉ qua care_report, đã lọc store snapshot):
 --    BEGIN READ ONLY; SET LOCAL ROLE authenticated;
 --    SELECT set_config('request.jwt.claim.sub', '<SM_UID>', true);
 --    SELECT (SELECT count(*) FROM public.care_interactions WHERE NOT (store_id = ANY (public.care_scope_store_ids()))) i_out,
 --           (SELECT count(*) FROM public.care_store_refusals WHERE NOT (store_id = ANY (public.care_scope_store_ids()))) r_out,
---           (SELECT count(*) FROM public.care_order_attributions WHERE NOT (store_id = ANY (public.care_scope_store_ids()))) a_out,
 --           (SELECT count(*) FROM public.care_assignment_events
 --             WHERE NOT (ARRAY[from_store_id, to_store_id] && public.care_scope_store_ids())) e_out;
 --    COMMIT;
@@ -1580,7 +1978,7 @@ COMMIT;
 --            IS DISTINCT FROM ('https://storage.googleapis.com/duocsi-circa-vn/care-proof/' || i.task_id::text || '/')
 --       OR substr(e->>'url', char_length('https://storage.googleapis.com/duocsi-circa-vn/care-proof/' || i.task_id::text || '/') + 1)
 --            !~ '^[0-9]{13}_[0-9a-f]{8}[.](jpg|png|webp|heic|heif)$';
--- 17) B4 r1.1 (Q-82) — đúng bản (kỳ vọng t, t, 36, f, t, t): ghi lượt + policy task so store với care_staff_store_id():
+-- 17) B4 r1.1 (Q-82) — đúng bản (kỳ vọng t, t, 41, f, t, t): ghi lượt + policy task so store với care_staff_store_id():
 --    SELECT position('care_staff_store_id' in pg_get_functiondef('public.care__record_interaction_at(date,uuid,text,text,date,jsonb)'::regprocedure)) > 0 AS rpc_q82,
 --           (SELECT qual ~ 'care_staff_store_id' FROM pg_policies WHERE schemaname = 'public' AND policyname = 'care_tasks_select') AS policy_q82,
 --           (SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace AND proname LIKE 'care%') AS n_fn,
@@ -1595,3 +1993,93 @@ COMMIT;
 --    WHERE t.status = 'open' AND NOT t.is_test
 --      AND (u.store_id IS DISTINCT FROM t.store_id OR s.store_type IS DISTINCT FROM 'os' OR NOT COALESCE(s.is_active, false))
 --    GROUP BY 1, 2, 3;
+-- 18) B5a — attribution + trạng thái đơn (kỳ vọng t, t, f, f, t, f, 0):
+--    SELECT to_regprocedure('public.care_recompute_attribution(text[],text[])') IS NOT NULL AS has_recompute,
+--           has_function_privilege('service_role', 'public.care_recompute_attribution(text[],text[])', 'EXECUTE') AS svc_x,
+--           has_function_privilege('authenticated', 'public.care_recompute_attribution(text[],text[])', 'EXECUTE') AS auth_x,
+--           has_function_privilege('anon', 'public.care_order_sync_status()', 'EXECUTE') AS anon_status_x,
+--           has_function_privilege('authenticated', 'public.care_order_sync_status()', 'EXECUTE') AS auth_status_x,
+--           has_table_privilege('authenticated', 'public.care_orders', 'INSERT') AS auth_orders_ins,
+--           (SELECT count(*) FROM public.care_order_attributions) AS n_attr;          -- 0 trước đồng bộ B5b
+--    Sau khi có đơn — attribution lệch quy tắc (kỳ vọng 0 dòng): lượt không terminal, lượt không trước
+--    ordered_at, khác khách, hoặc snapshot lệch lượt:
+--    SELECT count(*) FROM public.care_order_attributions a
+--    JOIN public.care_orders o ON o.order_key = a.order_key
+--    JOIN public.care_interactions i ON i.id = a.interaction_id
+--    JOIN public.care_customers c ON c.id = i.customer_id
+--    WHERE NOT i.is_terminal OR i.created_at >= o.ordered_at OR c.external_id <> o.customer_external_id
+--       OR a.task_id <> i.task_id OR a.assignee_id <> i.assignee_id OR a.store_id <> i.store_id
+--       OR a.period_month <> i.period_month;
+-- 18c) B5a r1.1 (Q-91) — schema N3 ba cột + index (kỳ vọng 3 dòng đúng như chú thích; t; f):
+--    SELECT c.relname, string_agg(a.attname::text, ',' ORDER BY a.attname::text COLLATE "C")
+--    FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
+--    WHERE c.relnamespace = 'public'::regnamespace AND c.relname IN ('care_orders', 'care_order_attributions', 'care_sync_state')
+--      AND a.attnum > 0 AND NOT a.attisdropped
+--    GROUP BY 1 ORDER BY 1;
+--    -- care_order_attributions: assignee_id,computed_at,customer_id,interaction_id,is_test,order_key,period_month,store_id,task_id
+--    -- care_orders:             customer_external_id,order_key,ordered_at,synced_at
+--    -- care_sync_state:         last_error,last_success_at,source,updated_at
+--    SELECT to_regclass('public.care_attr_customer_idx') IS NOT NULL AS has_customer_idx,
+--           pg_get_function_result('public.care_report(date,uuid[],boolean)'::regprocedure) ~ '(orders|net_revenue)' AS report_has_money;
+--    Sau B5b — last_error chỉ là MÃ lỗi (kỳ vọng 0 dòng; CHECK đã chặn, đây là kiểm chéo):
+--    SELECT source FROM public.care_sync_state WHERE last_error !~ '^[A-Z][A-Z0-9_]{0,63}$';
+-- 18d) Sau mỗi lần đồng bộ (B5b/B6) — attribution thực tế vs quy tắc (kỳ vọng 0, 0, 0):
+--    WITH desired AS (
+--      SELECT o.order_key, w.id AS interaction_id, w.task_id, w.customer_id, w.assignee_id, w.store_id,
+--             w.period_month, w.is_test
+--      FROM public.care_orders o
+--      JOIN public.care_customers c ON c.external_id = o.customer_external_id
+--      CROSS JOIN LATERAL (
+--        SELECT i.id, i.task_id, i.customer_id, i.assignee_id, i.store_id, i.period_month, i.is_test
+--        FROM public.care_interactions i
+--        WHERE i.customer_id = c.id AND i.is_terminal AND i.created_at < o.ordered_at
+--        ORDER BY i.created_at DESC, i.id DESC LIMIT 1) w
+--    )
+--    SELECT count(*) FILTER (WHERE a.order_key IS NULL) AS missing,
+--           count(*) FILTER (WHERE d.order_key IS NULL) AS extra,
+--           count(*) FILTER (WHERE a.order_key IS NOT NULL AND d.order_key IS NOT NULL
+--             AND (a.interaction_id, a.task_id, a.customer_id, a.assignee_id, a.store_id, a.period_month, a.is_test)
+--                 IS DISTINCT FROM (d.interaction_id, d.task_id, d.customer_id, d.assignee_id, d.store_id, d.period_month, d.is_test)) AS drift
+--    FROM desired d FULL JOIN public.care_order_attributions a ON a.order_key = d.order_key;
+-- 18e) Sau B5b — care_order_sync_apply xoá queue enqueued_at ≤ snapshot ⇒ queue tồn trước lần đồng bộ thành
+--     công cuối (kỳ vọng 0, hoặc vài dòng tạm thời: lượt Hoàn thành mở transaction trước snapshot nhưng commit
+--     sau DELETE — vô hại vì candidates không đọc queue; lần đồng bộ sau dọn):
+--    SELECT count(*) AS stale_queue FROM public.care_reconcile_queue q, public.care_sync_state s
+--    WHERE s.source = 'n3_orders' AND q.enqueued_at < s.last_success_at;
+-- 19) B5b.2 — RPC đồng bộ chỉ service_role (kỳ vọng 3 dòng: f, f, t, t):
+--    SELECT p.oid::regprocedure, has_function_privilege('anon', p.oid, 'EXECUTE') anon_x,
+--      has_function_privilege('authenticated', p.oid, 'EXECUTE') auth_x,
+--      has_function_privilege('service_role', p.oid, 'EXECUTE') svc_x, p.prosecdef
+--    FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace
+--      AND p.proname IN ('care_order_sync_candidates', 'care_order_sync_apply', 'care_order_sync_fail') ORDER BY 1;
+--    Ứng viên hiện tại (chỉ số đếm, không ID — chạy bằng service role/pg-meta):
+--    SELECT (r->>'windows')::int AS windows, (r->>'customers')::int AS customers, r->>'snapshot_at' AS snapshot_at,
+--           jsonb_array_length(r->'items') AS items_returned
+--    FROM (SELECT public.care_order_sync_candidates(20000) AS r) x;
+--    Trạng thái đồng bộ (không lỗi thô — chỉ mã): SELECT source, last_success_at, last_error, updated_at
+--    FROM public.care_sync_state;
+--    Giám sát Q-98: windows > 15000 ⇒ báo PM trước khi chạm trần 20000 (CANDIDATES_OVER_CAP dừng cả lượt).
+-- 20) Collation (db-reviewer P0 B5b.2): kiểm key của apply KHÔNG phụ thuộc thứ tự sắp xếp — prod en_US.UTF-8
+--     xếp 'ordered_at' trước 'order_key'. Kỳ vọng: would_reject = f; sorted_default chỉ để thấy khác biệt;
+--     has_set_check = t; has_sorted_check = f. Chạy bằng Studio/pg-meta — client JDBC (DBeaver…) có thể hiểu
+--     toán tử ?& là placeholder:
+--    SELECT NOT (j ?& ARRAY['customer_external_id', 'order_key', 'ordered_at'])
+--             OR (SELECT count(*) FROM jsonb_object_keys(j)) <> 3 AS would_reject,
+--           (SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(j) k) AS sorted_default,
+--           position('?& ARRAY[''customer_external_id'', ''order_key'', ''ordered_at'']' IN d) > 0 AS has_set_check,
+--           position('array_agg(k ORDER BY k)' IN d) > 0 AS has_sorted_check
+--    FROM (SELECT '{"order_key":"x","ordered_at":"y","customer_external_id":"z"}'::jsonb AS j,
+--                 pg_get_functiondef('public.care_order_sync_apply(jsonb,timestamptz)'::regprocedure) AS d) x;
+-- 21) Q-105 — quyền cột care_customers (kỳ vọng: authenticated chỉ t ở id/is_test/created_at; external_id f;
+--     anon f hết; service_role t hết; tbl_auth = f):
+--    SELECT a.attname, has_column_privilege('authenticated', a.attrelid, a.attnum, 'SELECT') auth,
+--           has_column_privilege('anon', a.attrelid, a.attnum, 'SELECT') anon,
+--           has_column_privilege('service_role', a.attrelid, a.attnum, 'SELECT') svc,
+--           has_table_privilege('authenticated', 'public.care_customers', 'SELECT') tbl_auth
+--    FROM pg_attribute a WHERE a.attrelid = 'public.care_customers'::regclass AND a.attnum > 0 AND NOT a.attisdropped
+--    ORDER BY a.attnum;
+--    ACL bảng (kỳ vọng 0 dòng): SELECT x.* FROM pg_class c, aclexplode(c.relacl) x
+--    WHERE c.oid = 'public.care_customers'::regclass AND x.privilege_type = 'SELECT'
+--      AND x.grantee IN (0::oid, 'authenticated'::regrole::oid, 'anon'::regrole::oid);
+--    Hành vi (kỳ vọng 42501 "permission denied" cho CẢ HAI): BEGIN; SET LOCAL ROLE authenticated;
+--      SELECT external_id FROM public.care_customers LIMIT 1;  -- rồi ROLLBACK; lặp lại với SELECT * ...

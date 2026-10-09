@@ -46,7 +46,7 @@ test.describe('mig 114 source contract @desktop', () => {
     // "name type [DEFAULT …]" ⇒ lấy type (token thứ 2) để dựng chữ ký như trong REVOKE.
     const sigs = [...CODE.matchAll(/CREATE OR REPLACE FUNCTION public\.(care\w+)\(([^)]*)\)/g)]
       .map((m) => `${m[1]}(${m[2].split(',').map((a) => a.trim()).filter(Boolean).map((a) => a.split(/\s+/)[1]).join(', ')})`)
-    expect(sigs.length).toBe(36) // + care_assignee_uid (r1.1, Q-76/77) + care_staff_reads_task/customer (r1.2, Q-79) + care_staff_store_id (B4 r1.1, Q-82)
+    expect(sigs.length).toBe(41) // + care_assignee_uid (r1.1, Q-76/77) + care_staff_reads_task/customer (r1.2, Q-79) + care_staff_store_id (B4 r1.1, Q-82) + care_recompute_attribution/care_order_sync_status (B5a) + care_order_sync_candidates/apply/fail (B5b.2)
     const revoke = CODE.slice(CODE.indexOf('REVOKE ALL ON FUNCTION'), CODE.indexOf('FROM PUBLIC, anon, authenticated, service_role;'))
       .replace(/\s+/g, ' ')
     for (const s of sigs) expect(revoke, s).toContain(`public.${s}`)
@@ -67,7 +67,9 @@ test.describe('mig 114 source contract @desktop', () => {
 
   test('policy không đọc thẳng bảng khác — chỉ cột + helper SECURITY DEFINER', () => {
     const policies = [...CODE.matchAll(/CREATE POLICY (\w+) ON public\.(\w+)[\s\S]*?;/g)]
-    expect(policies.length).toBe(14) // care_access ×4 + 10 bảng SELECT
+    expect(policies.length).toBe(12) // care_access ×4 + 8 bảng SELECT (attribution Q-95, đơn thô Q-101: không policy)
+    expect(policies.map((p) => p[2])).not.toContain('care_order_attributions')
+    expect(policies.map((p) => p[2])).not.toContain('care_orders')
     for (const [text, name] of policies) {
       expect(text, name).not.toMatch(/\bFROM\b|\bJOIN\b|EXISTS\s*\(/)
     }
@@ -102,15 +104,36 @@ test.describe('mig 114 source contract @desktop', () => {
     expect(pol('care_interactions_select')).toContain(`store_id = ${SCOPE}`)
     expect(pol('care_assignment_events_select')).toContain('ARRAY[from_store_id, to_store_id] && ((select public.care_scope_store_ids())::uuid[])')
     // Nhánh staff chặn sớm bằng InitPlan (SM/admin không gọi helper theo dòng — db-reviewer r1.2 P2).
-    for (const p of ['care_interactions_select', 'care_assignment_events_select', 'care_store_refusals_select', 'care_order_attributions_select']) {
+    for (const p of ['care_interactions_select', 'care_assignment_events_select', 'care_store_refusals_select']) {
       expect(pol(p), p).toMatch(/\(\(select public\.care_assignee_uid\(\)\) IS NOT NULL AND public\.care_staff_reads_(task|customer)\(/)
     }
     // Chuyển giao: kiểm scope nguồn TRƯỚC trạng thái/kỳ (không lộ trạng thái task ngoài vùng).
     const tr = fnBody('care__transfer_tasks_at')
     expect(tr.indexOf('SM không quản lý cửa hàng nguồn')).toBeLessThan(tr.indexOf('chỉ chuyển task đang mở của kỳ hiện tại'))
     expect(pol('care_store_refusals_select')).toContain(`store_id = ${SCOPE}`)
-    expect(pol('care_order_attributions_select')).toContain(`store_id = ${SCOPE}`)
-    for (const p of ['care_interactions_select', 'care_assignment_events_select', 'care_store_refusals_select', 'care_order_attributions_select']) {
+    // Q-95: attribution KHÔNG còn policy/GRANT SELECT cho authenticated — chỉ đọc qua care_report DEFINER.
+    expect(CODE).not.toMatch(/CREATE POLICY care_order_attributions_select/)
+    expect(CODE).toContain('DROP POLICY IF EXISTS care_order_attributions_select ON public.care_order_attributions;')
+    const grantSel = /GRANT SELECT ON ([\s\S]*?)\s+TO authenticated;/.exec(CODE)![1]
+    expect(grantSel).not.toContain('care_order_attributions')
+    expect(grantSel).not.toMatch(/care_orders\b/) // Q-101
+    expect(grantSel).toContain('care_sync_state') // Q-101 không mở rộng sang trạng thái đồng bộ
+    // Q-105: care_customers chỉ quyền CỘT (id, is_test, created_at) — mọi GRANT SELECT mức bảng cho
+    // authenticated (kể cả câu GRANT khác) đều không được nhắc bảng này; external_id không bao giờ được cấp.
+    for (const m of CODE.matchAll(/GRANT SELECT ON ([\s\S]*?)\s+TO ([\w, ]+);/g)) {
+      if (/authenticated|anon|PUBLIC/.test(m[2])) expect(m[1], m[0]).not.toContain('care_customers')
+    }
+    expect(CODE).toContain('GRANT SELECT (id, is_test, created_at) ON public.care_customers TO authenticated;')
+    expect(CODE).toContain('REVOKE SELECT (external_id) ON public.care_customers FROM PUBLIC, anon, authenticated;')
+    expect(CODE).not.toMatch(/GRANT SELECT \([^)]*external_id[^)]*\) ON public\.care_customers/)
+    expect(CODE).toContain("has_column_privilege('authenticated', a.attrelid, a.attnum, 'SELECT')\n                    IS DISTINCT FROM (a.attname IN ('id', 'is_test', 'created_at'))")
+    expect(CODE).not.toMatch(/CREATE POLICY care_orders_select/)
+    expect(CODE).toContain('DROP POLICY IF EXISTS care_orders_select ON public.care_orders;')
+    expect(CODE).toMatch(/CREATE POLICY care_sync_state_select/)
+    expect(CODE).toMatch(/v_t NOT IN \('care_import_staging', 'care_reconcile_queue', 'care_order_attributions', 'care_orders'\)/)
+    expect(CODE).toMatch(/tablename LIKE 'care\\_%'\) <> 12 THEN/)
+    expect(CODE).toContain("FOREACH v_t IN ARRAY ARRAY['care_order_attributions', 'care_orders'] LOOP")
+    for (const p of ['care_interactions_select', 'care_assignment_events_select', 'care_store_refusals_select']) {
       expect(pol(p), p).not.toMatch(/care_can_read_task|care_can_read_customer_history/)
     }
     for (const f of ['care_staff_reads_task', 'care_staff_reads_customer']) {
@@ -124,18 +147,78 @@ test.describe('mig 114 source contract @desktop', () => {
     expect(CODE).not.toMatch(/ON public\.care_reconcile_queue FOR/)
   })
 
-  test('care_orders đúng N3 r3.2; report không đọc care_orders', () => {
-    const orders = CODE.slice(CODE.indexOf('CREATE TABLE IF NOT EXISTS public.care_orders'), CODE.indexOf('CREATE INDEX IF NOT EXISTS care_orders_customer_time_idx'))
-    for (const c of ['order_key', 'customer_external_id', 'ordered_at', 'source_updated_at', 'net_amount', 'pos_code']) expect(orders).toContain(c)
-    // Chỉ quét ĐỊNH NGHĨA bảng (khối hậu kiểm nhắc tên các cột này để kiểm chúng vắng mặt).
-    expect(orders).not.toMatch(/is_valid_order|is_deleted|order_status|\bchannel\b|store_code/)
+  test('care_orders đúng N3 r3.4 ba cột (Q-91/Q-93); attribution/sync_state không tiền/cursor; report không đọc care_orders', () => {
+    const table = (name: string) => {
+      const at = CODE.indexOf(`CREATE TABLE IF NOT EXISTS public.${name} (`)
+      return CODE.slice(at, CODE.indexOf('\n);', at))
+    }
+    const cols = (body: string) => body.split('\n').slice(1).map((l) => /^\s+([a-z_]+)\s+/.exec(l)?.[1]).filter(Boolean)
+    expect(cols(table('care_orders'))).toEqual(['order_key', 'customer_external_id', 'ordered_at', 'synced_at'])
+    expect(table('care_orders')).toMatch(/ordered_at\s+timestamptz NOT NULL,/)                // completed_at không NULL (Q-93)
+    expect(cols(table('care_order_attributions'))).toEqual(['order_key', 'interaction_id', 'task_id', 'customer_id', 'assignee_id', 'store_id', 'period_month', 'is_test', 'computed_at'])
+    expect(cols(table('care_sync_state'))).toEqual(['source', 'last_success_at', 'last_error', 'updated_at'])
+    // last_error chỉ nhận MÃ lỗi (care admin SELECT được bảng) — không message BigQuery thô/PII.
+    expect(table('care_sync_state')).toContain("last_error          text CHECK (last_error ~ '^[A-Z][A-Z0-9_]{0,63}$')")
+    // Không còn tiền / mốc sửa nguồn / mã POS / cursor trong DDL + function (trước khối hậu kiểm — khối đó
+    // nhắc các tên này để kiểm chúng VẮNG mặt).
+    const ddl = CODE.slice(0, CODE.indexOf("RAISE EXCEPTION '114 hậu kiểm"))
+    expect(ddl.length).toBeGreaterThan(10_000)
+    expect(ddl).not.toMatch(/net_amount|source_updated_at|pos_code|net_revenue|cursor_ts|cursor_key|bi_complete_through/)
+    expect(CODE).not.toMatch(/CREATE INDEX IF NOT EXISTS care_orders_cursor_idx/)
+    expect(CODE).toContain('CREATE INDEX IF NOT EXISTS care_orders_customer_time_idx ON public.care_orders (customer_external_id, ordered_at)')
+    expect(table('care_orders')).not.toMatch(/is_valid_order|is_deleted|order_status|\bchannel\b|store_code|\bstatus\b/)
     expect(CODE).not.toMatch(/ALTER TABLE public\.care_orders\s+ADD/)
     expect(fnBody('care_report')).not.toMatch(/care_orders\b/)
+    // care_report GĐ1: chỉ converted_tasks = COUNT(DISTINCT task_id) — không số đơn/tiền (Q-91).
+    expect(CODE).toMatch(/overdue_in_period integer, closed_unfinished integer,\s+converted_tasks integer\)\s+LANGUAGE sql/)
+    expect(fnBody('care_report')).toContain('count(DISTINCT a.task_id)::int AS conv_tasks')
+    expect(fnBody('care_report')).not.toMatch(/count\(\*\)::int AS orders|sum\(/)
     // Audit PM B1 P1: thẻ dược sĩ loại fixture QA như báo cáo.
     expect(fnBody('care_my_summary')).toContain('AND NOT t.is_test')
     expect(fnBody('care_report')).toMatch(/NOT t\.is_test/)
-    // B5 chưa có mặt ở 114.
-    expect(CODE).not.toMatch(/care_upsert_orders|care_recompute_attribution/)
+    // B5b (đồng bộ nguồn) chưa có mặt ở 114; B5a chỉ có tính lại attribution + trạng thái đơn.
+    expect(CODE).not.toMatch(/care_upsert_orders/)
+    expect(table('care_orders')).toContain('order_key = btrim(order_key)')
+    expect(table('care_orders')).toContain('customer_external_id = btrim(customer_external_id)')
+    // Hậu kiểm: tập cột chính xác (bảng cũ sáu cột không lọt qua CREATE TABLE IF NOT EXISTS).
+    expect(CODE).toContain("IS DISTINCT FROM 'customer_external_id,order_key,ordered_at,synced_at'")
+    expect(CODE).toContain("IS DISTINCT FROM 'last_error,last_success_at,source,updated_at'")
+  })
+
+  test('B5a: care_recompute_attribution — lượt terminal gần nhất STRICT trước ordered_at, snapshot lượt, một câu lệnh, service_role only', () => {
+    const f = fnBody('care_recompute_attribution')
+    expect(f).toMatch(/LANGUAGE plpgsql SECURITY DEFINER SET search_path = public/)
+    expect(f).toContain('i.is_terminal AND i.created_at < o.ordered_at')                 // strict <
+    expect(f).toContain('ORDER BY i.created_at DESC, i.id DESC')                          // hoà ⇒ id lớn hơn
+    expect(f).toContain('LIMIT 1')
+    // Phạm vi: đơn theo khách/khoá + attribution đang gán cho khách (tra theo customer_id — dùng index).
+    expect(f).toContain('WHERE a.customer_id IN (SELECT c.id FROM public.care_customers c WHERE c.external_id = ANY (v_ext))')
+    expect(f).toContain('IF cardinality(v_ext) > 20000 OR cardinality(v_keys) > 20000 THEN')
+    expect(SQL).toContain('TODO(Q-03): ghi công theo is_terminal')
+    expect(SQL).not.toContain('TODO(Q-89)')                                                  // Q-89 đã chốt
+    expect(SQL).toContain('Q-89 (đã chốt): REFUSED là terminal, VẪN ghi')
+    expect(f).not.toMatch(/outcome/)                                                         // không loại outcome nào ngoài is_terminal
+    // Hợp đồng sink B5b đã hiện thực ở 9c (B5b.2): mốc thành công không lùi, lượt cũ không xoá lỗi lượt mới.
+    expect(SQL).not.toContain('TODO(B5b)')
+    expect(SQL).toContain('last_success_at = GREATEST(cũ, snapshot), last_error chỉ xoá khi snapshot')
+    // Hợp đồng B5b: queue chỉ bổ sung, không được quên task "Chưa thấy đơn".
+    expect(SQL).toContain('drain queue không được làm quên task "Chưa thấy')
+    // Snapshot người/store/tháng/task lấy từ LƯỢT (w.*), không từ care_tasks hiện tại.
+    expect(f).toContain('w.task_id, w.customer_id, w.assignee_id, w.store_id,')
+    expect(f).not.toMatch(/care_tasks|pos_code|net_amount/)
+    expect(f).toContain("pg_advisory_xact_lock(hashtext('care_recompute_attribution'))")
+    // Một câu lệnh WITH … del AS (DELETE …) , up AS (INSERT … ON CONFLICT) ⇒ tất cả-hoặc-không.
+    expect(f).toMatch(/WITH scope AS \([\s\S]*?\), desired AS \([\s\S]*?\), del AS \(\s*DELETE FROM public\.care_order_attributions a\s+USING scope s\s+WHERE/)
+    expect(f).toMatch(/ON CONFLICT \(order_key\) DO UPDATE[\s\S]*?IS DISTINCT FROM/)
+    const revoke = CODE.slice(CODE.indexOf('REVOKE ALL ON FUNCTION'), CODE.indexOf('FROM PUBLIC, anon, authenticated, service_role;'))
+    expect(revoke).toContain('public.care_recompute_attribution(text[], text[])')
+    const grants = [...CODE.matchAll(/GRANT EXECUTE ON FUNCTION([\s\S]*?)TO ([\w, ]+);/g)].map((m) => ({ fns: m[1], to: m[2].trim() }))
+    expect(grants.filter((g) => g.fns.includes('care_recompute_attribution')).map((g) => g.to)).toEqual(['service_role'])
+    expect(grants.filter((g) => g.fns.includes('care_order_sync_status')).map((g) => g.to)).toEqual(['authenticated'])
+    const st = fnBody('care_order_sync_status')
+    expect(st).toMatch(/STABLE SECURITY DEFINER SET search_path = public/)
+    expect(st).toContain('WHERE public.care_can_view_all() OR cardinality(public.care_scope_store_ids()) > 0')
+    expect(st).not.toMatch(/last_error\s*[,)]|s\.cursor/)                                    // không trả lỗi thô / cursor
   })
 
   test('outcome SQL ↔ lib/care/outcome.ts (6 mã, terminal, ngày hẹn, DNC)', () => {
@@ -172,6 +255,24 @@ test.describe('mig 114 source contract @desktop', () => {
     expect(fin).toContain('assignee_matches > 1')
     expect(fin).not.toMatch(/SET assignee_id = u\.id/)
     expect(fnBody('care__record_interaction_at')).toContain('FOR UPDATE')
+  })
+
+  test('collation (db-reviewer P0 B5b.2): không so thứ tự sắp xếp text với literal trừ khi COLLATE "C"; apply kiểm key theo TẬP', () => {
+    // Prod datcollate = en_US.UTF-8 (bỏ qua '_' ở mức đầu ⇒ 'ordered_at' < 'order_key'); PGlite = C ⇒ QA không
+    // thấy lỗi kiểu này. Mọi aggregate có ORDER BY trong code thật phải ghim COLLATE "C".
+    const ordered = [...CODE.matchAll(/(array_agg|string_agg)\(([^()]|\([^()]*\))*?ORDER BY ([^)]*)\)/g)]
+    expect(ordered.length).toBeGreaterThan(0)
+    for (const m of ordered) expect(m[3], m[0]).toContain('COLLATE "C"')
+    const apply = fnBody('care_order_sync_apply')
+    expect(apply).toContain("NOT (e ?& ARRAY['customer_external_id', 'order_key', 'ordered_at'])")
+    expect(apply).toContain('(SELECT count(*) FROM jsonb_object_keys(e)) <> 3')
+    expect(apply).not.toMatch(/array_agg\(k ORDER BY k\)/)
+    // Giá trị khớp CHECK care_orders được kiểm TRƯỚC khi ghi (không để CHECK ghi giá trị thô vào log Postgres).
+    expect(apply).toContain("e ->> 'order_key' <> btrim(e ->> 'order_key')")
+    expect(apply).toContain("e ->> 'customer_external_id' <> btrim(e ->> 'customer_external_id')")
+    expect(apply).toContain("e ->> 'ordered_at' !~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{6}Z$'")
+    expect(apply.indexOf('phần tử đơn sai dạng')).toBeLessThan(apply.indexOf('INSERT INTO public.care_orders'))
+    expect(fnBody('care_order_sync_fail')).toContain("IF p_code IS NULL OR p_code !~ '^[A-Z][A-Z0-9_]{0,63}$' THEN")
   })
 
   test('QA PGlite (scripts/qa-care-114.mjs): 0 lỗi', () => {
