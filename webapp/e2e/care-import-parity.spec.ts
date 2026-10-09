@@ -55,17 +55,24 @@ async function loadLookupsSql(db: Db, externalIds: string[], period: string, isT
   }
 }
 
-function xlsxOf(rows: Record<string, string>[]): Uint8Array {
+/** `numericPid(row, i)` trả format (vd. 'General', '0') ⇒ ô product_id dòng đó ghi dạng Number (Q-97). */
+type XlsxOpts = { numericPid?: (row: Record<string, string>, i: number) => string | false }
+function xlsxOf(rows: Record<string, string>[], opts: XlsxOpts = {}): Uint8Array {
   const ws = XLSX.utils.aoa_to_sheet([[...CARE_IMPORT_HEADERS], ...rows.map((r) => CARE_IMPORT_HEADERS.map((h) => r[h] ?? ''))])
   for (const k of Object.keys(ws)) if (!k.startsWith('!')) { (ws[k] as XLSX.CellObject).t = 's' }
+  const pid = CARE_IMPORT_HEADERS.indexOf('product_id')
+  rows.forEach((r, i) => {
+    const fmt = opts.numericPid?.(r, i)
+    if (fmt) ws[XLSX.utils.encode_cell({ r: i + 1, c: pid })] = { t: 'n', v: Number(r.product_id), z: fmt }
+  })
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, 'KhachHang')
   return new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer)
 }
 
 /** Chạy một file qua preview TS rồi qua finalize SQL; trả cả hai để so. */
-async function runBoth(db: Db, L: Lib, rows: Record<string, string>[], today: string, actor: string) {
-  const bytes = xlsxOf(rows)
+async function runBoth(db: Db, L: Lib, rows: Record<string, string>[], today: string, actor: string, opts: XlsxOpts = {}) {
+  const bytes = xlsxOf(rows, opts)
   const parsed = parseCareImportXlsx(bytes)
   if (!parsed.ok) throw new Error(parsed.fileError)
   const validated = validateCareRows(parsed.rows)
@@ -164,6 +171,41 @@ test.describe('care B2 — parity preview TS ↔ finalize SQL 114 (PGlite) @desk
     const nov2 = await runBoth(db, L, [row(custA[0], 'QAOS02', stores[1].assigneeEmails[0], 'P1'), row('QA-P-N2', 'QAOS01', EA, 'P1')], '2026-11-01', L.U.mkt)
     expectParity('T11 store khác + đóng kỳ', nov2)
     expect(nov2.result.closed_previous_period).toBeGreaterThan(0)
+    await db.close()
+  })
+
+  test('Q-97: product_id ô Number (General 4/7/12/15 chữ số, format "0") ⇒ preview = finalize, cùng chuỗi ID như Text', async () => {
+    test.setTimeout(240_000)
+    const { PGlite } = await import('@electric-sql/pglite')
+    const L: Lib = await import(pathToFileURL(path.join(ROOT, 'scripts', 'lib-care-pglite.mjs')).href)
+    const db = await L.freshDb(PGlite)
+    const EA = (L.STORES as { assigneeEmails: string[] }[])[0].assigneeEmails[0]
+    const rows = [
+      L.row('QA-N1', 'QAOS01', EA, '1234'), L.row('QA-N1', 'QAOS01', EA, '1234567'),
+      L.row('QA-N2', 'QAOS01', EA, '123456789012'), L.row('QA-N3', 'QAOS01', EA, '123456789012345'),
+    ] as Record<string, string>[]
+    // Lần 1: mọi product_id là ô Number (dòng cuối format "0", còn lại General ⇒ hiển thị dạng mũ từ 12 chữ số).
+    const num = await runBoth(db, L, rows, '2026-10-02', L.U.mkt, { numericPid: (_r, i) => (i === 3 ? '0' : 'General') })
+    expect(num.preview.errors).toEqual([])
+    expectParity('Number', num)
+    expect(num.result.created).toBe(3)
+    const ids = (await db.query(`SELECT p.product_id FROM public.care_task_products p WHERE p.is_current ORDER BY 1`)).rows.map((x: any) => x.product_id)
+    expect(ids).toEqual(['1234', '1234567', '123456789012', '123456789012345'])
+    // Lần 2: cùng nội dung nhưng ô Text ⇒ finalize thấy y hệt ⇒ không đổi gì (khác hash nên không phải duplicate).
+    const txt = await runBoth(db, L, rows, '2026-10-03', L.U.mkt)
+    expectParity('Text cùng ID', txt)
+    expect(txt.result).toMatchObject({ created: 0, updated: 0, unchanged: 3 })
+    // Text + Number cùng (khách, product_id) ⇒ DUPLICATE_PRODUCT ở cả preview lẫn finalize.
+    const dupRows = [L.row('QA-N9', 'QAOS01', EA, '7654321'), L.row('QA-N9', 'QAOS01', EA, '7654321', { reason_text: 'khác' })] as Record<string, string>[]
+    const dup = await runBoth(db, L, dupRows, '2026-10-04', L.U.mkt, { numericPid: (_r, i) => (i === 0 ? 'General' : false) })
+    expectParity('Text + Number trùng', dup)
+    expect(dup.preview.errors.map((e) => e.code)).toEqual(['DUPLICATE_PRODUCT', 'DUPLICATE_PRODUCT'])
+    // Q-104: Text "0"/"00" và Number 0 ⇒ PRODUCT_ID_INVALID ở CẢ preview lẫn finalize (cùng tập dòng/mã).
+    const zeroRows = [L.row('QA-Z1', 'QAOS01', EA, '0'), L.row('QA-Z2', 'QAOS01', EA, '00'), L.row('QA-Z3', 'QAOS01', EA, '0'),
+      L.row('QA-Z4', 'QAOS01', EA, '0042')] as Record<string, string>[]
+    const zero = await runBoth(db, L, zeroRows, '2026-10-05', L.U.mkt, { numericPid: (_r, i) => (i === 2 ? 'General' : false) })
+    expectParity('Q-104 product_id toàn số 0', zero)
+    expect(zero.preview.errors.map((e) => `${e.row}:${e.code}`)).toEqual(['2:PRODUCT_ID_INVALID', '3:PRODUCT_ID_INVALID', '4:PRODUCT_ID_INVALID'])
     await db.close()
   })
 })

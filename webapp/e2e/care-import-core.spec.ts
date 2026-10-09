@@ -4,7 +4,7 @@ import path from 'node:path'
 import { test, expect } from '@playwright/test'
 import * as XLSX from 'xlsx'
 import { CARE_IMPORT_HEADERS as CONTRACT_HEADERS, CARE_IMPORT_SHEET as CONTRACT_SHEET, type CareImportRow } from '../lib/care/import/contract'
-import { parseCareImportXlsx } from '../lib/care/import/parse'
+import { CARE_NUMERIC_PRODUCT_ID_MAX_DIGITS, numericProductId, parseCareImportXlsx } from '../lib/care/import/parse'
 import { validateCareRows } from '../lib/care/import/validate'
 import { buildCarePreview, type CareExistingTask, type CareImportLookups } from '../lib/care/import/preview'
 import {
@@ -99,7 +99,7 @@ test.describe('care B2 — contract & parser Excel @desktop', () => {
     expect(parseCareImportXlsx(xlsx(big))).toEqual({ ok: false, fileError: 'TOO_MANY_ROWS' })
   })
 
-  test('ô công thức, kiểu lạ ⇒ lỗi dòng; Q-73: ID dạng SỐ (kể cả số nguyên) ⇒ CELL_NOT_TEXT; SĐT dạng số vẫn nhận', () => {
+  test('ô công thức, kiểu lạ ⇒ lỗi dòng; customer_external_id dạng SỐ ⇒ CELL_NOT_TEXT (Q-73); product_id số nguyên ⇒ nhận (Q-97); SĐT dạng số vẫn nhận', () => {
     const p = parseCareImportXlsx(xlsx([
       H,
       r('A', 'QAOS01', EA, 'P1', { reason_text: { f: '"QA "&"lý do"' } }),
@@ -111,7 +111,8 @@ test.describe('care B2 — contract & parser Excel @desktop', () => {
     ]))
     expect(p.ok).toBe(true)
     if (!p.ok) return
-    expect(codes(p.errors)).toEqual(['2:FORMULA_NOT_ALLOWED', '3:CELL_NOT_TEXT', '4:CELL_NOT_TEXT', '5:CELL_NOT_TEXT', '6:CELL_NOT_TEXT'])
+    expect(codes(p.errors)).toEqual(['2:FORMULA_NOT_ALLOWED', '3:CELL_NOT_TEXT', '4:CELL_NOT_TEXT', '5:CELL_NOT_TEXT'])
+    expect(p.rows.find((x) => x.rowNo === 6)!.product_id).toBe('1001') // Q-97: ô Number General hợp lệ
     const f = p.rows.find((x) => x.rowNo === 7)!
     expect(f.customer_phone).toBe('901234567')
     expect(f.reason_type).toBe('2026') // cột không phải ID nhận số như chuỗi
@@ -119,6 +120,94 @@ test.describe('care B2 — contract & parser Excel @desktop', () => {
     // ID dạng text giữ nguyên số 0 đầu.
     const t = parseCareImportXlsx(xlsx([H, r('007', 'QAOS01', EA, '0042')]))
     expect(t.ok && t.errors.length === 0 && t.rows[0].customer_external_id === '007' && t.rows[0].product_id === '0042').toBe(true)
+  })
+
+  test('Q-97: product_id ô Number — General 4/7/12/15 chữ số (kể cả hiển thị dạng mũ), format "0"; từ chối đệm số 0/#,##0/phân số/âm/16 chữ số/unsafe; luôn String(v)', () => {
+    const PID = CONTRACT_HEADERS.indexOf('product_id')
+    type PidCell = string | { v: number; z?: string } | { f: string }
+    const cases: [PidCell, string | null][] = [
+      [{ v: 1234 }, '1234'],                                        // 2: không format ⇒ General
+      [{ v: 1234567, z: 'General' }, '1234567'],                    // 3
+      [{ v: 123456789012 }, '123456789012'],                        // 4: 12 chữ số — w = "1.23457E+11"
+      [{ v: 123456789012345 }, '123456789012345'],                  // 5: 15 chữ số — w = "1.23457E+14"
+      [{ v: 123456789012345, z: '0' }, '123456789012345'],          // 6: format "0" — w === String(v)
+      [{ v: 0 }, '0'],                                              // 7: biên dưới
+      [{ v: 1234567, z: '000000000' }, null],                       // 8: đệm số 0 ⇒ hiển thị "001234567"
+      [{ v: 1234567, z: '#,##0' }, null],                           // 9: dấu phân cách ⇒ "1,234,567"
+      [{ v: 12.5 }, null],                                          // 10: phân số
+      [{ v: -5 }, null],                                            // 11: âm
+      [{ v: 1234567890123456 }, null],                              // 12: 16 chữ số (vẫn safe)
+      [{ v: 2 ** 53 + 2 }, null],                                   // 13: không an toàn
+      [{ f: '1000+1' }, null],                                      // 14: công thức
+      ['0042', '0042'],                                             // 15: Text giữ nguyên số 0 đầu
+    ]
+    const ws = XLSX.utils.aoa_to_sheet([H, ...cases.map((_, i) => r(`Q97-${i}`, 'QAOS01', EA, 'X'))].map((row) => row.map((c) => (c !== null && typeof c === 'object' ? null : c))))
+    cases.forEach(([cell], i) => {
+      const ref = XLSX.utils.encode_cell({ r: i + 1, c: PID })
+      if (typeof cell === 'string') ws[ref] = { t: 's', v: cell }
+      else if ('f' in cell) ws[ref] = { t: 's', v: '', f: cell.f }
+      else ws[ref] = { t: 'n', v: cell.v, ...(cell.z ? { z: cell.z } : {}) }
+    })
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, CONTRACT_SHEET)
+    const p = parseCareImportXlsx(new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer))
+    expect(p.ok).toBe(true)
+    if (!p.ok) return
+    expect(codes(p.errors)).toEqual(['8:CELL_NOT_TEXT', '9:CELL_NOT_TEXT', '10:CELL_NOT_TEXT', '11:CELL_NOT_TEXT', '12:CELL_NOT_TEXT', '13:CELL_NOT_TEXT', '14:FORMULA_NOT_ALLOWED'])
+    cases.forEach(([, want], i) => { if (want !== null) expect(p.rows.find((x) => x.rowNo === i + 2)!.product_id, `dòng ${i + 2}`).toBe(want) })
+    // Hàm thuần: format khác General chỉ nhận khi w === String(v); không bao giờ lấy w làm giá trị.
+    expect(numericProductId({ v: 1234567, z: '@', w: '1234567' })).toBe('1234567')
+    expect(numericProductId({ v: 1234567, z: '0.00', w: '1234567.00' })).toBeNull()
+    expect(numericProductId({ v: 1234567, z: '"SP"0', w: 'SP1234567' })).toBeNull()
+    expect(numericProductId({ v: 123456789012345, z: 'General', w: '1.23457E+14' })).toBe('123456789012345')
+    expect(numericProductId({ v: -0 })).toBe('0')
+    expect(numericProductId({ v: '1234' as unknown as number })).toBeNull()
+    expect(CARE_NUMERIC_PRODUCT_ID_MAX_DIGITS).toBe(15)
+  })
+
+  test('Q-97: Text "7654321" và Number 7654321 cùng khách ⇒ cùng ID ⇒ DUPLICATE_PRODUCT; preview Number = preview Text', () => {
+    const PID = CONTRACT_HEADERS.indexOf('product_id')
+    const build = (numericRows: number[], rows: Cell[][]) => {
+      const ws = XLSX.utils.aoa_to_sheet([H, ...rows])
+      for (const i of numericRows) ws[XLSX.utils.encode_cell({ r: i + 1, c: PID })] = { t: 'n', v: Number(rows[i][PID]) }
+      const wb = XLSX.utils.book_new()
+      XLSX.utils.book_append_sheet(wb, ws, CONTRACT_SHEET)
+      return new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer)
+    }
+    const dup = previewOf(build([1], [r('D', 'QAOS01', EA, '7654321'), r('D', 'QAOS01', EA, '7654321', { reason_text: 'khác' })]))
+    expect(codes(dup.errors)).toEqual(['2:DUPLICATE_PRODUCT', '3:DUPLICATE_PRODUCT'])
+    const rows = [r('N', 'QAOS01', EA, '1234'), r('N', 'QAOS01', EA, '123456789012345'), r('M', 'QAOS01', EB, '1234567')]
+    const asText = previewOf(build([], rows))
+    const asNumber = previewOf(build([0, 1, 2], rows))
+    expect(asNumber.errors).toEqual([])
+    expect(JSON.stringify(asNumber.customers)).toBe(JSON.stringify(asText.customers))
+    expect(asNumber.counts).toEqual(asText.counts)
+    // Cùng chuỗi ID tới tận dữ liệu gom khách (thứ được stage cho finalize).
+    const parsedIds = (bytes: Uint8Array) => {
+      const p = parseCareImportXlsx(bytes)
+      if (!p.ok) throw new Error(p.fileError)
+      return validateCareRows(p.rows).customers.map((c) => [c.externalId, c.products.map((x) => x.product_id)])
+    }
+    expect(parsedIds(build([0, 1, 2], rows))).toEqual([['N', ['1234', '123456789012345']], ['M', ['1234567']]])
+    expect(parsedIds(build([0, 1, 2], rows))).toEqual(parsedIds(build([], rows)))
+  })
+
+  test('Q-104: product_id toàn số 0 (Number 0, Text "0"/"00") ⇒ PRODUCT_ID_INVALID; "0042"/"10" hợp lệ', () => {
+    const PID = CONTRACT_HEADERS.indexOf('product_id')
+    const rows = [r('Z1', 'QAOS01', EA, '0'), r('Z2', 'QAOS01', EA, '00'), r('Z3', 'QAOS01', EA, '0'), r('Z4', 'QAOS01', EA, '0042'), r('Z5', 'QAOS01', EA, '10')]
+    const ws = XLSX.utils.aoa_to_sheet([H, ...rows])
+    ws[XLSX.utils.encode_cell({ r: 3, c: PID })] = { t: 'n', v: 0 } // dòng 4 (Z3): ô Number 0
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, CONTRACT_SHEET)
+    const p = previewOf(new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer))
+    expect(codes(p.errors)).toEqual(['2:PRODUCT_ID_INVALID', '3:PRODUCT_ID_INVALID', '4:PRODUCT_ID_INVALID'])
+    // Hàm validate thuần: cùng luật cho mọi đường (không phụ thuộc parser).
+    const one: CareImportRow = {
+      rowNo: 9, customer_external_id: 'Z9', customer_name: 'KH Z9', customer_phone: '0390000999', target_store_code: 'QAOS01',
+      assignee_email: EA, reason_type: 'chronic', reason_text: 'QA', product_id: '000', product_name: 'SP', product_url: '',
+    }
+    expect(codes(validateCareRows([one]).errors)).toEqual(['9:PRODUCT_ID_INVALID'])
+    expect(validateCareRows([{ ...one, product_id: '100' }]).errors).toEqual([])
   })
 
   test('dòng trống xen giữa ⇒ BLANK_ROW; dòng trống cuối bỏ qua', () => {

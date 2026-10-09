@@ -367,8 +367,9 @@ export function CareImportWizard({ maxBytes, templateHref = '/api/care/import/te
               Nhiều dòng sản phẩm của cùng khách tạo <strong>một</strong> task. Kỳ và hạn (cuối tháng) do hệ thống tính theo giờ Việt Nam lúc xác nhận.
             </p>
             <p className="text-sm text-muted-foreground">
-              Cột <span className="font-mono">customer_external_id</span> và <span className="font-mono">product_id</span> phải định dạng
-              <strong> Text</strong> trong Excel (ô dạng số sẽ bị báo lỗi vì có thể đã mất số 0 đầu). SĐT thiếu số 0 đầu vẫn được nhận và tự chuẩn hoá.
+              Cột <span className="font-mono">customer_external_id</span> phải định dạng <strong>Text</strong> trong Excel (ô dạng số sẽ bị báo lỗi
+              vì có thể đã mất số 0 đầu). <span className="font-mono">product_id</span> nhận Text hoặc số nguyên tối đa 15 chữ số định dạng
+              General (không đệm số 0, không dấu phân cách). SĐT thiếu số 0 đầu vẫn được nhận và tự chuẩn hoá.
             </p>
             <a href={templateHref} className={cn(buttonVariants({ variant: 'outline' }), 'min-h-[44px] md:min-h-0')}>
               <Download className="size-4" /> Tải file mẫu

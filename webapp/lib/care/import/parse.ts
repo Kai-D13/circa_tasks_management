@@ -11,17 +11,39 @@ import {
 //     kiểm chữ ký trước khi đọc.
 //   · Đúng MỘT sheet tên KhachHang; dòng 1 đúng 10 header theo thứ tự, không cột dư.
 //   · KHÔNG đánh giá công thức: ô có công thức ⇒ FORMULA_NOT_ALLOWED.
-//   · Q-73 (PM chốt 08/10): `customer_external_id` và `product_id` phải là ô TEXT —
-//     ô SỐ ⇒ CELL_NOT_TEXT (Excel đã có thể làm mất số 0 đầu/độ chính xác, không
-//     phát hiện được sau khi đọc). SĐT dạng số vẫn nhận vì chuẩn hoá thêm lại số 0
-//     thành số di động VN 10 chữ số (normalizeVnPhone). Cột khác nhận số như chuỗi.
+//   · `customer_external_id` phải là ô TEXT (Q-73) — ô SỐ ⇒ CELL_NOT_TEXT (Excel có thể đã làm
+//     mất số 0 đầu/độ chính xác, không phát hiện được sau khi đọc).
+//   · Q-97 (09/10): `product_id` nhận Text HOẶC ô Number nguyên an toàn, ≥ 0, tối đa 15 chữ số, khi
+//     định dạng là General (SheetJS hiển thị dạng mũ từ 12 chữ số — `w`="1.23457E+14" — nhưng `v`
+//     vẫn đúng) hoặc chuỗi hiển thị `w` trùng `String(v)`. Định dạng khác làm hiển thị lệch (đệm số 0
+//     "000…", "#,##0", tiền tố…) ⇒ CELL_NOT_TEXT. Giá trị luôn là `String(v)`, KHÔNG BAO GIỜ lấy `w`.
+//     Chuẩn hoá ở đây ⇒ preview, staging và finalize thấy cùng một chuỗi ID.
+//   · SĐT dạng số vẫn nhận vì chuẩn hoá thêm lại số 0 thành số di động VN 10 chữ số
+//     (normalizeVnPhone). Cột khác nhận số như chuỗi.
 //   · Mọi ô đọc thành chuỗi đã trim.
 //   · Dòng trống ở CUỐI bỏ qua; dòng trống XEN GIỮA ⇒ BLANK_ROW (staging cần
 //     row_no liên tục — finalize 114 kiểm).
 //   · Đọc tối đa CARE_IMPORT_MAX_ROWS + 1 dòng (sheetRows) ⇒ file khổng lồ không
 //     bị parse hết vào bộ nhớ.
 
-const ID_FIELDS = new Set<CareImportField>(['customer_external_id', 'product_id'])
+/** Q-97: số chữ số tối đa của `product_id` nhập từ ô Number (nguồn bảo đảm không có số 0 đầu). */
+export const CARE_NUMERIC_PRODUCT_ID_MAX_DIGITS = 15
+
+/**
+ * Ô Number hợp lệ cho `product_id` (Q-97) ⇒ chuỗi ID; không hợp lệ ⇒ null. Number 0 ⇒ "0" có chủ đích:
+ * Q-104 chặn ID toàn số 0 bằng MỘT luật ở validator chung (PRODUCT_ID_INVALID) cho cả Text "0"/"00" lẫn
+ * Number 0 — cùng mã với finalize SQL, preview/finalize cùng kết luận.
+ */
+export function numericProductId(cell: Pick<XLSX.CellObject, 'v' | 'w' | 'z'>): string | null {
+  const v = cell.v
+  if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 0) return null
+  const id = String(v) // -0 ⇒ "0"
+  if (id.length > CARE_NUMERIC_PRODUCT_ID_MAX_DIGITS) return null
+  // Không có format ⇒ SheetJS coi là General. General không bao giờ đệm số 0/thêm ký tự ⇒ an toàn.
+  const fmt = typeof cell.z === 'string' ? cell.z : 'General'
+  if (fmt === 'General') return id
+  return cell.w === id ? id : null
+}
 
 export type CareParseResult =
   | { ok: true; rows: CareImportRow[]; errors: CareRowError[] }
@@ -69,7 +91,11 @@ function cellText(cell: XLSX.CellObject | undefined, field: CareImportField): { 
   if (!cell || cell.t === 'z' || cell.v === undefined || cell.v === null) return { value: '', bad: false }
   if (cell.t === 's') return { value: String(cell.v).trim(), bad: false }
   if (cell.t === 'n' && typeof cell.v === 'number' && Number.isFinite(cell.v)) {
-    if (ID_FIELDS.has(field)) return { value: '', bad: true } // Q-73: ID phải là ô Text
+    if (field === 'customer_external_id') return { value: '', bad: true } // Q-73: ID khách phải là ô Text
+    if (field === 'product_id') {
+      const id = numericProductId(cell)
+      return id === null ? { value: '', bad: true } : { value: id, bad: false }
+    }
     return { value: String(cell.v), bad: false }
   }
   // 'b' boolean, 'd' date, 'e' error, số vô hạn…
@@ -81,7 +107,8 @@ export function parseCareImportXlsx(buf: Uint8Array, maxRows = CARE_IMPORT_MAX_R
   let wb: XLSX.WorkBook
   try {
     wb = XLSX.read(buf, {
-      type: 'buffer', cellFormula: true, cellHTML: false, cellNF: false, cellStyles: false,
+      // cellNF: cần `z` (format) cho Q-97 — phân biệt General với format đệm số 0.
+      type: 'buffer', cellFormula: true, cellHTML: false, cellNF: true, cellStyles: false,
       cellDates: false, sheetRows: maxRows + 2, // header + maxRows + 1 dòng để phát hiện vượt
     })
   } catch {

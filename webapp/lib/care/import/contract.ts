@@ -40,13 +40,16 @@ export const CARE_FIELD_MAX_LENGTH: Record<CareImportField, number | null> = {
   product_url: 1000,
 }
 
+/** Q-104: product_id toàn số 0 ("0", "00"…, đã trim) không tồn tại — khớp PRODUCT_ID_INVALID + CHECK của 114. */
+export const CARE_PRODUCT_ID_ZERO_RE = /^0+$/
+
 /** Ảnh sản phẩm: trống được; có thì HTTPS host CDN (khớp IMAGE_URL_HOST của 114). */
 export const CARE_IMAGE_URL_RE = /^https:\/\/cdn-gcs\.thuocsi\.vn\//
 
 /** Mã lỗi theo dòng. Nhóm "SQL" trùng tên với finalize 114; nhóm "file" chỉ có ở parser. */
 export const CARE_ROW_ERROR_CODES = [
   // Trùng finalize 114:
-  'FIELD_REQUIRED', 'TOO_LONG', 'PHONE_INVALID', 'IMAGE_URL_HOST', 'STORE_INVALID',
+  'FIELD_REQUIRED', 'TOO_LONG', 'PHONE_INVALID', 'PRODUCT_ID_INVALID', 'IMAGE_URL_HOST', 'STORE_INVALID',
   'ASSIGNEE_INVALID', 'ASSIGNEE_AMBIGUOUS', 'DUPLICATE_PRODUCT', 'INCONSISTENT_CUSTOMER',
   'REFUSED_AT_STORE', 'TEST_FLAG_MISMATCH',
   // Chỉ parser (Excel):
@@ -70,6 +73,7 @@ export const CARE_ERROR_LABELS: Record<CareRowErrorCode | CareFileErrorCode, str
   FIELD_REQUIRED: 'Thiếu dữ liệu bắt buộc (mọi cột trừ product_url)',
   TOO_LONG: 'Dữ liệu vượt độ dài cho phép',
   PHONE_INVALID: 'SĐT không phải số di động Việt Nam hợp lệ',
+  PRODUCT_ID_INVALID: 'product_id không hợp lệ (không được bằng 0)',
   IMAGE_URL_HOST: 'Link ảnh phải là https://cdn-gcs.thuocsi.vn/…',
   STORE_INVALID: 'Mã cửa hàng không phải cửa hàng OS đang hoạt động',
   ASSIGNEE_INVALID: 'Email dược sĩ không khớp staff nào của cửa hàng đích',
@@ -79,7 +83,7 @@ export const CARE_ERROR_LABELS: Record<CareRowErrorCode | CareFileErrorCode, str
   REFUSED_AT_STORE: 'Khách đã từ chối chăm sóc tại cửa hàng này',
   TEST_FLAG_MISMATCH: 'Khách thuộc dữ liệu thử nghiệm (QA), không dùng chung với dữ liệu thật',
   FORMULA_NOT_ALLOWED: 'Ô chứa công thức — dán giá trị (Paste values)',
-  CELL_NOT_TEXT: 'Ô sai định dạng: customer_external_id/product_id phải là Text (không để dạng số); ô ngày/đúng-sai/lỗi không đọc được',
+  CELL_NOT_TEXT: 'Ô sai định dạng: customer_external_id phải là Text; product_id là Text hoặc số nguyên tối đa 15 chữ số (định dạng General, không đệm số 0/dấu phân cách); ô ngày/đúng-sai/lỗi không đọc được',
   BLANK_ROW: 'Dòng trống giữa dữ liệu — xoá dòng trống',
   WORKBOOK_INVALID: 'File không phải Excel .xlsx hợp lệ',
   SHEET_INVALID: `File phải có đúng một sheet tên "${'KhachHang'}"`,

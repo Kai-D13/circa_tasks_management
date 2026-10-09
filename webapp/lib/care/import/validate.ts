@@ -1,12 +1,12 @@
 import { normalizeVnPhone } from '@/lib/affiliate/phone'
 import {
-  CARE_FIELD_MAX_LENGTH, CARE_IMAGE_URL_RE, CARE_IMPORT_HEADERS,
+  CARE_FIELD_MAX_LENGTH, CARE_IMAGE_URL_RE, CARE_IMPORT_HEADERS, CARE_PRODUCT_ID_ZERO_RE,
   type CareImportRow, type CareRowError,
 } from './contract'
 
 // CRM-CSKH B2 — kiểm từng dòng + gom theo khách (SPEC B2 §1). THUẦN.
 // MIRROR các mã lỗi không cần DB của finalize 114: FIELD_REQUIRED, TOO_LONG,
-// PHONE_INVALID, IMAGE_URL_HOST, DUPLICATE_PRODUCT, INCONSISTENT_CUSTOMER — cùng
+// PHONE_INVALID, PRODUCT_ID_INVALID (Q-104), IMAGE_URL_HOST, DUPLICATE_PRODUCT, INCONSISTENT_CUSTOMER — cùng
 // điều kiện, cùng cách so (trim; email lowercase; SĐT so sau chuẩn hoá). Mã cần DB
 // (store/staff/DNC/is_test) nằm ở preview.ts. Spec parity chạy cả hai trên cùng dữ liệu.
 
@@ -50,6 +50,8 @@ export function validateCareRows(rows: CareImportRow[]): CareValidateResult {
       return max !== null && r[f].length > max
     })) errors.push({ row: r.rowNo, code: 'TOO_LONG' })
     if (r.customer_phone !== '' && phoneNorm(r) === null) errors.push({ row: r.rowNo, code: 'PHONE_INVALID' })
+    // Q-104: một luật cho Text "0"/"00" và Number 0 (parser đã đổi thành "0") — preview = finalize.
+    if (CARE_PRODUCT_ID_ZERO_RE.test(r.product_id)) errors.push({ row: r.rowNo, code: 'PRODUCT_ID_INVALID' })
     if (r.product_url !== '' && !CARE_IMAGE_URL_RE.test(r.product_url)) errors.push({ row: r.rowNo, code: 'IMAGE_URL_HOST' })
   }
 
