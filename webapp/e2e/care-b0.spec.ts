@@ -197,9 +197,12 @@ test.describe('care B0 — cờ và cấu hình (mặc định OFF) @desktop', (
       const src = read(f).replace(QA_BYPASS, '')
       expect(src, f).not.toMatch(/lib\/care|CARE_ENABLED|\/care\b/)
     }
-    expect(fs.existsSync(path.join(ROOT, 'app/api/cron/care-period-close'))).toBe(false)
-    // B5b.2: cron care-orders-sync có route nhưng chặn bằng CARE_ENABLED + CARE_SYNC_ENABLED (care-b5b-sync.spec).
-    expect(read('app/api/cron/care-orders-sync/route.ts')).toContain('if (!isCareEnabled() || !isCareSyncEnabled())')
+    // B5b.2 + B5c: hai cron CRM có route nhưng chặn bằng CARE_ENABLED + CARE_SYNC_ENABLED (care-b5b-sync,
+    // care-b5c-period-close spec — gồm HTTP thật 401/503). Không có cron CRM nào khác.
+    expect(fs.readdirSync(path.join(ROOT, 'app/api/cron')).filter((d) => d.startsWith('care')).sort()).toEqual(['care-orders-sync', 'care-period-close'])
+    for (const c of ['care-orders-sync', 'care-period-close']) {
+      expect(read(`app/api/cron/${c}/route.ts`), c).toContain('if (!isCareEnabled() || !isCareSyncEnabled())')
+    }
     // B2: entry duy nhất là URL /care/assign + /api/care/import/* — page kiểm cờ ngay đầu,
     // route đi qua handler mà bước đầu là `if (!deps.enabled) return 404` (care-import-core.spec).
     expect(read('app/(dashboard)/care/assign/page.tsx')).toMatch(/export default async function[\s\S]*?\{\s*if \(!isCareEnabled\(\)\) notFound\(\)/)
