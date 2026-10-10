@@ -9,6 +9,7 @@ import { CareTaskTransferButton } from '@/components/care/CareTaskTransferButton
 import { carePeriodOf, vnDateISO } from '@/lib/care/time'
 import { loadCareTaskDetail } from '@/lib/care/server/browse'
 import { requireCareViewer } from '@/lib/care/server/pageGuard'
+import { isCareQaActive } from '@/lib/care/server/qaUi'
 import { listCareTransferTargets, loadMoreCareInteractions, transferCareTasks } from '@/app/actions/care'
 import { cn } from '@/lib/utils'
 
@@ -42,6 +43,7 @@ export default async function CareTaskDetailPage({ params }: { params: Promise<{
         taskId={t.id}
         todayISO={vnDateISO(now)}
         loadMore={loadMoreCareInteractions}
+        contactLinks={!isCareQaActive()}
         data={{
           task: t,
           products: detail.products,

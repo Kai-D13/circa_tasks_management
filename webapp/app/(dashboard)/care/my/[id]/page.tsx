@@ -9,6 +9,7 @@ import { carePeriodOf, vnDateISO } from '@/lib/care/time'
 import { careStaffTaskBlock } from '@/lib/care/my'
 import { loadCareTaskDetail } from '@/lib/care/server/browse'
 import { requireCareStaff } from '@/lib/care/server/my'
+import { isCareQaActive } from '@/lib/care/server/qaUi'
 import { loadMoreMyCareInteractions } from '@/app/actions/careMy'
 import { cn } from '@/lib/utils'
 
@@ -41,6 +42,7 @@ export default async function CareMyTaskPage({ params }: { params: Promise<{ id:
         canRecord={canRecord}
         updateHref={`/care/my/${t.id}/update`}
         loadMore={loadMoreMyCareInteractions}
+        contactLinks={!isCareQaActive()}
         data={{ task: t, products: detail.products, interactions: detail.interactions, events: detail.events }}
       />
     </div>

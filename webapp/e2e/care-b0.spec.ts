@@ -209,7 +209,11 @@ test.describe('care B0 — cờ và cấu hình (mặc định OFF) @desktop', (
     expect(read('lib/care/import/handler.ts')).toMatch(/async function guard[\s\S]*?\{\s*if \(!deps\.enabled\) return/)
     // B3: /care + /care/tasks + /care/tasks/[id] — mọi page đi qua requireCareViewer (cờ trước tiên).
     const careDirs = fs.readdirSync(path.join(ROOT, 'app/(dashboard)/care')).sort()
-    expect(careDirs).toEqual(['assign', 'my', 'page.tsx', 'reports', 'tasks'])
+    expect(careDirs).toEqual(['assign', 'layout.tsx', 'my', 'page.tsx', 'reports', 'tasks'])
+    // B6-qa-ui: layout chỉ hiện dải "Chế độ QA" theo cổng QA (production: luôn 'off') — không đọc dữ liệu.
+    const careLayout = read('app/(dashboard)/care/layout.tsx')
+    expect(careLayout).toContain("{qa.kind === 'active' && (")
+    expect(careLayout).not.toMatch(/createClient|supabase|rpc\(|from\('/)
     // B4: /care/my* — mọi page đi qua requireCareStaff (cờ trước tiên, chỉ dược sĩ OS).
     for (const f of ['app/(dashboard)/care/my/page.tsx', 'app/(dashboard)/care/my/[id]/page.tsx', 'app/(dashboard)/care/my/[id]/update/page.tsx']) {
       expect(read(f), f).toMatch(/export default async function[\s\S]*?\{\s*const me = await requireCareStaff\(\)/)

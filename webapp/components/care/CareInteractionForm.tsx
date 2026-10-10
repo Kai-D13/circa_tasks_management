@@ -30,7 +30,7 @@ const defaultUploadProof: CareProofUploadFn = async (file, taskId) => {
 
 type Photo = { id: string; name: string; state: 'uploading' | 'done' | 'error'; url?: string; error?: string; preview: string }
 
-export function CareInteractionForm({ taskId, customerName, todayISO, dueDate, record, uploadProof = defaultUploadProof, doneHref }: {
+export function CareInteractionForm({ taskId, customerName, todayISO, dueDate, record, uploadProof = defaultUploadProof, doneHref, proofDisabled = false }: {
   taskId: string
   customerName: string
   todayISO: string
@@ -38,6 +38,8 @@ export function CareInteractionForm({ taskId, customerName, todayISO, dueDate, r
   record: CareRecordFn
   uploadProof?: CareProofUploadFn
   doneHref: string
+  /** B6-qa-ui: chế độ QA local không tải ảnh (server cũng chặn). */
+  proofDisabled?: boolean
 }) {
   const router = useRouter()
   const [outcome, setOutcome] = useState<CareOutcome | ''>('')
@@ -175,7 +177,12 @@ export function CareInteractionForm({ taskId, customerName, todayISO, dueDate, r
             ))}
           </ul>
         )}
-        {photos.length < CARE_PROOF_MAX && (
+        {proofDisabled && (
+          <p className="rounded-lg border border-status-warning/40 bg-status-warning-bg p-3 text-sm" role="note">
+            Chế độ QA: không tải ảnh minh chứng — lượt chăm sóc vẫn lưu bình thường.
+          </p>
+        )}
+        {!proofDisabled && photos.length < CARE_PROOF_MAX && (
           <>
             <input ref={fileRef} id="care-proof-input" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" multiple className="sr-only"
               onChange={(e) => void addFiles(e.target.files)} />

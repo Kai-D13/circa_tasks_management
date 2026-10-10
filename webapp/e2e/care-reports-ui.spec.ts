@@ -10,7 +10,8 @@ import { saveLocatorShot } from './qaShot'
 //   đơn…"; lỗi ⇒ giữ số cũ + "Chưa cập nhật"; rỗng; dashboard /care có Khách có đơn. Ảnh
 //   qa-artifacts/care-b5a-ui (gitignored).
 // • Smoke thật cờ OFF (server QA mặc định): /care/reports + /api/export/care 404, sidebar không "Báo cáo".
-// • Smoke thật cờ ON (E2E_CARE_ON_URL): super thấy "chưa sẵn sàng" (DB chưa có 114), export 503.
+// • Smoke thật cờ ON (E2E_CARE_ON_URL; prod ĐÃ có 114 từ 10/10/2026): super thấy báo cáo thật, kỳ 01/2026 rỗng
+//   (empty state), export 200 XLSX; QLCH/staff 403. Nhánh "chưa sẵn sàng" giữ bằng kiểm nguồn (không DB).
 
 const HAS_STATE = fs.existsSync(SUPER_STATE)
 const CARE_ON = process.env.E2E_CARE_ON_URL
@@ -137,29 +138,55 @@ test.describe('care B5a — page thật khi cờ CARE_ENABLED tắt @desktop', (
 test.describe('care B5a — page thật khi cờ CARE_ENABLED BẬT (server riêng E2E_CARE_ON_URL) @desktop', () => {
   test.skip(!CARE_ON || !HAS_STATE, 'cần E2E_CARE_ON_URL (server QA bật CARE_ENABLED) + storageState super')
 
-  test('super: /care/reports báo chưa sẵn sàng (DB chưa có 114), export 503 — không dựng bảng/số giả', async ({ browser }) => {
+  // Prod đã cài 114 (pha a, 10/10/2026). Kỳ 01/2026 trước khi có CRM ⇒ chắc chắn KHÔNG có task ⇒ empty state thật,
+  // tất định cả sau rollout (không phụ thuộc dữ liệu kỳ hiện tại).
+  test('super: /care/reports dựng báo cáo thật (114 đã có) — kỳ không dữ liệu ⇒ empty state, số 0 thật; export 200 XLSX', async ({ browser }) => {
     const ctx = await browser.newContext({ baseURL: CARE_ON, storageState: SUPER_STATE })
     const page = await ctx.newPage()
-    expect((await page.goto('/care/reports'))!.status()).toBe(200)
-    await expect(page.getByText('Hệ thống CRM chưa sẵn sàng.')).toBeVisible()
-    await expect(page.getByTestId('care-report')).toHaveCount(0)
+    expect((await page.goto('/care/reports?month=2026-01'))!.status()).toBe(200)
+    const report = page.getByTestId('care-report')
+    await expect(report).toBeVisible()
+    await expect(page.getByText('Hệ thống CRM chưa sẵn sàng.')).toHaveCount(0)
+    await expect(report.getByText('Không có dữ liệu chăm sóc theo bộ lọc này')).toBeVisible()
+    await expect(page.getByTestId('care-report-total')).toHaveCount(0)
+    await expect(report.getByText('kỳ 01/2026')).toBeVisible()
+    await expect(page.getByTestId('care-order-state')).toBeVisible()
     const api = await pwRequest.newContext({ baseURL: CARE_ON, storageState: SUPER_STATE })
-    const r = await api.get('/api/export/care?month=2026-10')
-    expect(r.status()).toBe(503)
-    expect(r.headers()['content-type'] ?? '').not.toContain('spreadsheetml')
+    const r = await api.get('/api/export/care?month=2026-01')
+    expect(r.status()).toBe(200)
+    expect(r.headers()['content-type'] ?? '').toContain('spreadsheetml')
+    expect((await r.body()).byteLength).toBeGreaterThan(0)
     await api.dispose()
     await ctx.close()
   })
 
-  test('QLCH / staff: không tải được Excel báo cáo', async () => {
+  test('QLCH / staff: không tải được Excel báo cáo (114 đã có ⇒ đúng 403 ở bước quyền)', async () => {
+    let checked = 0
     for (const st of [MANAGER_STATE, STAFF_STATE]) {
       if (!fs.existsSync(st)) continue
       const api = await pwRequest.newContext({ baseURL: CARE_ON, storageState: st })
-      const r = await api.get('/api/export/care?month=2026-10')
-      // DB chưa có 114 ⇒ care_my_access lỗi ⇒ 503 trước bước quyền; có 114 ⇒ 403 (PGlite/unit chứng minh nhánh quyền).
-      expect([403, 503], st).toContain(r.status())
+      const r = await api.get('/api/export/care?month=2026-01')
+      expect(r.status(), st).toBe(403)
       expect(r.headers()['content-type'] ?? '', st).not.toContain('spreadsheetml')
       await api.dispose()
+      checked++
     }
+    expect(checked).toBeGreaterThan(0)
+  })
+})
+
+// Nhánh "DB chưa có 114 / RPC lỗi" không còn tái hiện được trên prod ⇒ giữ bằng kiểm nguồn tất định (không DB).
+test.describe('care B5a — nhánh chưa sẵn sàng (nguồn, không DB) @desktop', () => {
+  const read = (f: string) => fs.readFileSync(path.resolve(__dirname, '..', f), 'utf8').replace(/\r\n/g, '\n')
+  test('page /care/reports: unavailable ⇒ CHỈ ErrorState, không dựng báo cáo; export unavailable ⇒ 503 không XLSX', () => {
+    const page = read('app/(dashboard)/care/reports/page.tsx')
+    const branch = /if \(g\.kind === 'unavailable'\) \{\n([\s\S]*?)\n  \}/.exec(page)![1]
+    expect(branch).toContain('<ErrorState message="Hệ thống CRM chưa sẵn sàng."')
+    expect(branch).not.toMatch(/CareReportView|loadCareReport/)
+    expect(page.indexOf("if (g.kind === 'unavailable')")).toBeLessThan(page.indexOf('loadCareReport('))
+    const route = read('app/api/export/care/route.ts')
+    expect(route).toContain("if (v.kind === 'unavailable') return NextResponse.json({ error: 'CRM chưa sẵn sàng' }, { status: 503 })")
+    expect(route.indexOf("v.kind === 'unavailable'")).toBeLessThan(route.indexOf('loadCareReport('))
+    expect(read('lib/care/server/browse.ts')).toMatch(/if \(error \|\| !data \|\| typeof data !== 'object'\) return \{ kind: 'unavailable' \}/)
   })
 })

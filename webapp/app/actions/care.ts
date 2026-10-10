@@ -9,7 +9,7 @@ import {
 } from '@/lib/care/browse'
 import { carePeriodOf, vnDateISO } from '@/lib/care/time'
 import {
-  getCareViewAccess, loadCareInteractionsPage, loadCareTaskPage, loadTransferTargets,
+  careQaTransferBlock, getCareViewAccess, loadCareInteractionsPage, loadCareTaskPage, loadTransferTargets,
   type CareStaffOption, type CareTaskRow,
 } from '@/lib/care/server/browse'
 
@@ -36,6 +36,13 @@ export async function transferCareTasks(input: { taskIds: string[]; toUserId: st
   if (!v.perms.canTransfer) return { ok: false, code: 'FORBIDDEN', message: CARE_TRANSFER_MESSAGES.FORBIDDEN }
   const valid = validateTransferInput(input)
   if (!valid.ok) return { ok: false, code: valid.code, message: CARE_TRANSFER_MESSAGES[valid.code] }
+
+  // B6-qa-ui (security P1-2): QA local chỉ chuyển task của batch QA, chỉ sang dược sĩ QA trong marker —
+  // RPC 114 kiểm vùng SM, không biết batch ⇒ chặn trước khi gọi. Production: luôn null.
+  const qaBlock = await careQaTransferBlock(valid.taskIds, valid.toUserId)
+  if (qaBlock) {
+    return { ok: false, code: qaBlock, message: qaBlock === 'TARGET_INVALID' ? 'Chế độ QA: chỉ chuyển cho dược sĩ QA của lượt test.' : CARE_TRANSFER_MESSAGES[qaBlock] }
+  }
 
   const supabase = await createClient()
   const { data, error } = await supabase.rpc('care_transfer_tasks', {

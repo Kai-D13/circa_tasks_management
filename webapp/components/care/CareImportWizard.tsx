@@ -15,6 +15,7 @@ import { StatCard } from '@/components/ds/StatCard'
 import { StatusBadge, type StatusTone } from '@/components/ds/StatusBadge'
 import { CARE_ERROR_LABELS, type CareRowError } from '@/lib/care/import/contract'
 import type { CareAssignmentGroup, CarePreview, CarePreviewCounts, CarePreviewCustomer } from '@/lib/care/import/preview'
+import { CARE_QA_ISSUE_LABELS } from '@/lib/care/qa/labels'
 import { cn } from '@/lib/utils'
 
 // Wizard Phân công CRM (SPEC B2 §3): Tải file → Kiểm tra → Phân công (chỉ xem)
@@ -24,6 +25,8 @@ import { cn } from '@/lib/utils'
 // import, không log/URL.
 
 type PreviewPayload = Omit<CarePreview, 'errors'> & { errorCount: number; errors: CareRowError[] }
+/** B6-qa-ui: chỉ có trên dev server QA local — server quyết file có được import (is_test) hay không. */
+type QaInfo = { commitAllowed: boolean; issues: string[] }
 type CommitResult =
   | { status: 'committed'; batch_id: string; idempotent?: boolean } & Partial<CarePreviewCounts>
   | { status: 'duplicate'; batch_id: string; duplicate_of: string }
@@ -53,7 +56,8 @@ const SERVER_MESSAGES: Record<string, string> = {
   FINALIZE_FAILED: 'Import thất bại — không có task nào được tạo. Thử lại hoặc báo quản trị.',
 }
 const messageFor = (code: string | undefined) =>
-  (code && (SERVER_MESSAGES[code] ?? (CARE_ERROR_LABELS as Record<string, string>)[code])) || 'Có lỗi không xác định — thử lại.'
+  (code && (SERVER_MESSAGES[code] ?? (CARE_ERROR_LABELS as Record<string, string>)[code] ?? (CARE_QA_ISSUE_LABELS as Record<string, string>)[code]))
+  || 'Có lỗi không xác định — thử lại.'
 
 const ACTION: Record<CarePreviewCustomer['action'], { tone: StatusTone; label: string }> = {
   create: { tone: 'success', label: 'Tạo mới' },
@@ -285,6 +289,7 @@ export function CareImportWizard({ maxBytes, templateHref = '/api/care/import/te
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [preview, setPreview] = useState<PreviewPayload | null>(null)
+  const [qa, setQa] = useState<QaInfo | null>(null)
   const [sha, setSha] = useState<string>('')
   const [result, setResult] = useState<CommitResult | null>(null)
   const [focusRow, setFocusRow] = useState<number | null>(null)
@@ -293,7 +298,7 @@ export function CareImportWizard({ maxBytes, templateHref = '/api/care/import/te
   const fileLimit = maxBytes - MULTIPART_RESERVE
 
   const reset = () => {
-    setStep(0); setFile(null); setPreview(null); setSha(''); setResult(null); setError(null); setFocusRow(null)
+    setStep(0); setFile(null); setPreview(null); setQa(null); setSha(''); setResult(null); setError(null); setFocusRow(null)
     if (inputRef.current) inputRef.current.value = ''
   }
 
@@ -307,7 +312,7 @@ export function CareImportWizard({ maxBytes, templateHref = '/api/care/import/te
       const res = await fetch('/api/care/import/preview', { method: 'POST', body: fd })
       const body = await res.json().catch(() => null)
       if (!res.ok || !body?.ok) { setError(messageFor(body?.code)); return }
-      setPreview(body.preview); setSha(body.sha256); setFocusRow(null); setStep(1)
+      setPreview(body.preview); setQa(body.qa ?? null); setSha(body.sha256); setFocusRow(null); setStep(1)
     } catch {
       setError('Không gửi được file — kiểm tra mạng rồi thử lại.')
     } finally {
@@ -316,7 +321,7 @@ export function CareImportWizard({ maxBytes, templateHref = '/api/care/import/te
   }
 
   async function runCommit() {
-    if (!file || !preview || committing.current || preview.errorCount > 0) return
+    if (!file || !preview || committing.current || preview.errorCount > 0 || (qa && !qa.commitAllowed)) return
     committing.current = true
     setBusy(true); setError(null)
     try {
@@ -344,6 +349,7 @@ export function CareImportWizard({ maxBytes, templateHref = '/api/care/import/te
   }
 
   const hasErrors = (preview?.errorCount ?? 0) > 0
+  const qaBlocked = qa !== null && !qa.commitAllowed
 
   return (
     <div className="space-y-4" data-testid="care-import-wizard">
@@ -409,6 +415,11 @@ export function CareImportWizard({ maxBytes, templateHref = '/api/care/import/te
             Kỳ dự kiến <strong>{monthLabel(preview.period)}</strong> · hạn chăm sóc <strong>{dateLabel(preview.dueDate)}</strong>.
             Số liệu dưới đây là dự kiến; kết quả cuối do hệ thống kiểm lại khi xác nhận.
           </p>
+          {qa && (
+            <p role="note" data-testid="care-import-qa" className="rounded-lg border border-status-warning/40 bg-status-warning-bg p-3 text-sm">
+              {qa.commitAllowed ? 'Chế độ QA: đúng bản QA đã chuẩn bị — import sẽ ghi dữ liệu thử nghiệm (is_test).' : messageFor(qa.issues[0])}
+            </p>
+          )}
           {preview.activeOsStoresMissing.length > 0 && (
             <div className="rounded-lg border bg-card p-3 text-sm">
               <StatusBadge tone="warning">{fmt(preview.activeOsStoresMissing.length)} cửa hàng OS không có khách trong file</StatusBadge>
@@ -448,7 +459,7 @@ export function CareImportWizard({ maxBytes, templateHref = '/api/care/import/te
             </p>
             <div className="flex flex-wrap justify-between gap-2">
               <Button variant="outline" className="min-h-[44px] md:min-h-0" disabled={busy} onClick={() => setStep(2)}>Quay lại</Button>
-              <Button className="min-h-[44px] md:min-h-0" disabled={busy || hasErrors} onClick={runCommit}>
+              <Button className="min-h-[44px] md:min-h-0" disabled={busy || hasErrors || qaBlocked} onClick={runCommit}>
                 {busy ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />} Xác nhận import
               </Button>
             </div>

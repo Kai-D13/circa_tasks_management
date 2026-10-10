@@ -194,7 +194,9 @@ test.describe('care B4 — chưa đăng nhập @desktop', () => {
 test.describe('care B4 — thật, cờ CARE_ENABLED BẬT (server riêng E2E_CARE_ON_URL) @mobile', () => {
   test.skip(!CARE_ON || !fs.existsSync(STAFF_STATE), 'cần E2E_CARE_ON_URL (server QA thứ hai bật CARE_ENABLED) + storageState staff')
 
-  test('staff: tab CSKH thay Tồn kho (active ở /care/my), CTA /tasks, /care/my báo chưa sẵn sàng khi DB chưa có 114', async ({ browser }) => {
+  // Prod đã cài 114 (pha a, 10/10/2026) ⇒ /care/my dựng màn thật. Tài khoản staff E2E (dược sĩ QA) không có task
+  // thật nào trong kỳ (QA is_test bị ẩn ở production) ⇒ thẻ tóm tắt 0 + empty state thật, không báo "chưa sẵn sàng".
+  test('staff: tab CSKH thay Tồn kho (active ở /care/my), CTA /tasks, /care/my dựng màn thật (114 đã có) — rỗng, số 0 thật', async ({ browser }) => {
     const ctx = await browser.newContext({ baseURL: CARE_ON, storageState: STAFF_STATE })
     const page = await ctx.newPage()
     await page.goto('/tasks')
@@ -208,7 +210,12 @@ test.describe('care B4 — thật, cờ CARE_ENABLED BẬT (server riêng E2E_CA
     await tab.click()
     await page.waitForURL(/\/care\/my$/)
     await expect(tab).toHaveAttribute('aria-current', 'page')
-    await expect(page.getByText('Hệ thống chăm sóc khách hàng chưa sẵn sàng.')).toBeVisible()
+    const home = page.getByTestId('care-my-home')
+    await expect(home).toBeVisible()
+    await expect(page.getByText('Hệ thống chăm sóc khách hàng chưa sẵn sàng.')).toHaveCount(0)
+    await expect(home.getByText('Chưa có khách nào được giao trong tháng')).toBeVisible()
+    await expect(home.getByRole('list', { name: 'Danh sách khách' })).toHaveCount(0)
+    expect(await noPageOverflow(page)).toBe(true)
     await ctx.close()
   })
 
@@ -220,5 +227,47 @@ test.describe('care B4 — thật, cờ CARE_ENABLED BẬT (server riêng E2E_CA
       expect((await page.goto('/care/my'))!.status(), st).toBe(404)
       await ctx.close()
     }
+  })
+})
+
+// Nhánh "DB chưa có 114 / RPC lỗi" không còn tái hiện được trên prod ⇒ giữ bằng kiểm nguồn tất định (không DB).
+test.describe('care B4 — nhánh chưa sẵn sàng (nguồn, không DB) @desktop', () => {
+  const read = (f: string) => fs.readFileSync(path.resolve(__dirname, '..', f), 'utf8').replace(/\r\n/g, '\n')
+  test('/care/my: loader lỗi (care_my_summary/RLS) ⇒ CareNotReadyError ⇒ CHỈ ErrorState "chưa sẵn sàng", không dựng danh sách', () => {
+    const page = read('app/(dashboard)/care/my/page.tsx')
+    const caught = /\} catch \{\n([\s\S]*?)\n  \}\n\}/.exec(page)![1]
+    expect(caught).toContain('<ErrorState message="Hệ thống chăm sóc khách hàng chưa sẵn sàng."')
+    expect(caught).not.toContain('CareMyHome')
+    const my = read('lib/care/server/my.ts')
+    expect(my).toMatch(/const \{ data, error \} = await supabase\.rpc\('care_my_summary'\)\n\s*if \(error\) throw new CareNotReadyError\(\)/)
+    expect(my).toMatch(/\} catch \{\n\s*throw new CareNotReadyError\(\)\n\s*\}/)
+  })
+})
+
+// B6-qa-ui (PM r1 P1): chế độ QA local hiện SĐT giả dạng chữ — KHÔNG có tel:/sms: (số giả có thể là số người thật);
+// production giữ nguyên liên kết. Kiểm trên desktop + mobile 390/360 bằng hai trang catalog (component dùng chung trang thật).
+test.describe('care B6-qa-ui — chế độ QA không có liên kết gọi/nhắn @desktop @mobile', () => {
+  test.skip(!HAS_SUPER, 'chưa có storageState super')
+  test.use({ storageState: SUPER_STATE })
+
+  test('màn dược sĩ + màn chi tiết admin: QA 0 tel:/sms:, hiện số dạng chữ; production vẫn có liên kết', async ({ page }) => {
+    await page.goto('/ui-catalog/care-my')
+    const prodMy = page.getByTestId('catalog-care-my-detail')
+    const qaMy = page.getByTestId('catalog-care-my-detail-qa')
+    await qaMy.waitFor({ timeout: 20_000 })
+    await expect(prodMy.locator('a[href^="tel:"]')).toHaveCount(1)
+    await expect(prodMy.locator('a[href^="sms:"]')).toHaveCount(1)
+    await expect(qaMy.locator('a[href^="tel:"], a[href^="sms:"]')).toHaveCount(0)
+    await expect(qaMy.getByTestId('care-contact-disabled')).toContainText('0390000015')
+    await expect(qaMy.getByTestId('care-contact-disabled')).toContainText('không gọi')
+    expect(await noPageOverflow(page)).toBe(true)
+
+    await page.goto('/ui-catalog/care-browse')
+    const prodDet = page.getByTestId('catalog-care-detail')
+    const qaDet = page.getByTestId('catalog-care-detail-qa')
+    await qaDet.waitFor({ timeout: 20_000 })
+    await expect(prodDet.locator('a[href^="tel:"]')).toHaveCount(1)
+    await expect(qaDet.locator('a[href^="tel:"], a[href^="sms:"]')).toHaveCount(0)
+    await expect(qaDet.getByTestId('care-contact-disabled')).toContainText('0390000002')
   })
 })

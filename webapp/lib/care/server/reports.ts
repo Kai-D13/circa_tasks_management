@@ -5,7 +5,8 @@ import {
   careOrderDataState, careReportLines, careReportSummary, careStoreFilterInScope,
   type CareOrderDataState, type CareReportLine, type CareReportTotals,
 } from '@/lib/care/reports'
-import { loadScopeStores, type CareStoreOption } from './browse'
+import { loadCareQaReportRows, loadScopeStores, type CareStoreOption } from './browse'
+import { careDataScope } from './qaUi'
 
 // CRM-CSKH B5a r1.1 — dữ liệu báo cáo /care/reports + export. Đọc bằng SESSION người xem:
 // care_report (DEFINER, scope theo auth.uid) + care_order_sync_status (DEFINER, chỉ người xem báo
@@ -42,8 +43,11 @@ export async function loadCareReport(perms: CarePermissions, f: Pick<CareFilters
     return { stores, staff: [], lines: [], totals: careReportSummary([]), orderState: { kind: 'none' }, storeId: null, storeOutOfScope: true }
   }
   const storeId = f.storeId
+  // QA local: care_report loại is_test với Marketing/SM ⇒ tính từ task qua RLS + batch QA (đường QA, không production).
+  const qa = careDataScope().kind === 'qa'
   const [rep, st] = await Promise.all([
-    supabase.rpc('care_report', { p_month: f.month, p_store_ids: storeId ? [storeId] : null, p_include_test: false }),
+    qa ? loadCareQaReportRows({ month: f.month, storeId }).then((data) => ({ data, error: null }), () => ({ data: null, error: true }))
+      : supabase.rpc('care_report', { p_month: f.month, p_store_ids: storeId ? [storeId] : null, p_include_test: false }),
     supabase.rpc('care_order_sync_status'),
   ])
   if (rep.error) throw new Error('care_report_failed')

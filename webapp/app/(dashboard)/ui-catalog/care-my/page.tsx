@@ -112,6 +112,16 @@ export default async function CareMyCatalogPage() {
             products: [], interactions: { rows: [], hasMore: false, nextBefore: null }, events: [],
           }} />
       </section>
+      {/* B6-qa-ui: chế độ QA local — SĐT giả hiện dạng chữ, KHÔNG có tel:/sms:. */}
+      <section className="space-y-3" data-testid="catalog-care-my-detail-qa">
+        <CareMyTaskDetail todayISO="2026-10-10" canRecord updateHref="#" contactLinks={false}
+          data={{
+            task: { id: S(706), customer_name: 'KH QA 001', phone_raw: PHONES[5], phone_norm: PHONES[5], period_month: '2026-10-01', due_date: '2026-10-31',
+              status: 'open', last_outcome: null, last_interaction_at: null, next_action_date: null,
+              store: { code: 'QAOS01', name: 'QA store 1' }, assignee: { full_name: 'QA Dược sĩ 01a' } },
+            products: [], interactions: { rows: [], hasMore: false, nextBefore: null }, events: [],
+          }} />
+      </section>
       <section className="space-y-3" data-testid="catalog-care-my-form" id="form">
         <CareInteractionForm taskId={TASK} customerName="KH QA 00701" todayISO="2026-10-10" dueDate="2026-10-31" record={fakeRecord} doneHref="/ui-catalog/care-my?saved=1" />
       </section>

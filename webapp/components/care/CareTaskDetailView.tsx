@@ -35,8 +35,10 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-export function CareTaskDetailView({ taskId, data, todayISO, actions, loadMore }: {
+export function CareTaskDetailView({ taskId, data, todayISO, actions, loadMore, contactLinks = true }: {
   taskId: string; data: CareDetailViewData; todayISO: string; actions?: React.ReactNode; loadMore?: CareLoadMoreInteractions
+  /** B6-qa-ui: chế độ QA local ⇒ false — SĐT giả có thể là số người thật, không render tel:. */
+  contactLinks?: boolean
 }) {
   const t = data.task
   const st = careTaskState(t, todayISO)
@@ -52,7 +54,11 @@ export function CareTaskDetailView({ taskId, data, todayISO, actions, loadMore }
           {actions && <div className="ml-auto">{actions}</div>}
         </div>
         <dl className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <Field label="Số điện thoại"><a href={`tel:${t.phone_norm}`} className="inline-flex min-h-[44px] items-center text-primary hover:underline md:min-h-0">{t.phone_raw}</a></Field>
+          <Field label="Số điện thoại">
+            {contactLinks
+              ? <a href={`tel:${t.phone_norm}`} className="inline-flex min-h-[44px] items-center text-primary hover:underline md:min-h-0">{t.phone_raw}</a>
+              : <span data-testid="care-contact-disabled">{t.phone_raw} <span className="block text-xs text-muted-foreground">Chế độ QA: số giả — không gọi</span></span>}
+          </Field>
           <Field label="Kỳ / hạn">{dmy(t.period_month).slice(3)} · hạn {dmy(t.due_date)}</Field>
           <Field label="Cửa hàng">{t.store ? `${t.store.code} · ${t.store.name}` : '—'}</Field>
           <Field label="Dược sĩ phụ trách">{t.assignee?.full_name ?? '—'}</Field>

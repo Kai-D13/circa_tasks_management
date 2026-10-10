@@ -1,6 +1,7 @@
 import { CARE_OUTCOMES, CARE_OUTCOME_META, type CareOutcome } from './outcome'
 import { isCarePeriod, periodLastDay } from './time'
 import { isCareProofDisplayUrl, isProofExpired } from './my'
+import { applyCareScope, CARE_PRODUCTION_SCOPE, type CareDataScope } from './scope'
 
 // CRM-CSKH B3 — logic THUẦN cho browser Khách hàng/Chăm sóc + chuyển giao (SPEC B3).
 // Không import Next/Supabase ⇒ test trực tiếp. Quyền thật vẫn ở RLS/RPC 114; ở đây
@@ -132,7 +133,8 @@ export function careTaskState(t: CareTaskStateInput, todayISO: string): CareTask
 
 /**
  * Áp filter lên query PostgREST (builder trừu tượng ⇒ test bằng builder giả).
- * Luôn: đúng kỳ + loại is_test. Store/dược sĩ/trạng thái chỉ THÊM điều kiện.
+ * Luôn: đúng kỳ + phạm vi dữ liệu (production: loại is_test · QA local: chỉ batch QA — lib/care/scope.ts).
+ * Store/dược sĩ/trạng thái chỉ THÊM điều kiện.
  */
 export interface CareQueryBuilder<Q> {
   eq(col: string, v: unknown): Q
@@ -140,8 +142,8 @@ export interface CareQueryBuilder<Q> {
   not(col: string, op: string, v: unknown): Q
   lt(col: string, v: string): Q
 }
-export function applyCareTaskFilters<Q extends CareQueryBuilder<Q>>(q: Q, f: Pick<CareFilters, 'month' | 'storeId' | 'assigneeId' | 'status'>, todayISO: string): Q {
-  let r = q.eq('period_month', f.month).eq('is_test', false)
+export function applyCareTaskFilters<Q extends CareQueryBuilder<Q>>(q: Q, f: Pick<CareFilters, 'month' | 'storeId' | 'assigneeId' | 'status'>, todayISO: string, scope: CareDataScope = CARE_PRODUCTION_SCOPE): Q {
+  let r = applyCareScope(q.eq('period_month', f.month), scope)
   if (f.storeId) r = r.eq('store_id', f.storeId)
   if (f.assigneeId) r = r.eq('assignee_id', f.assigneeId)
   switch (f.status) {

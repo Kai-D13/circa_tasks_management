@@ -45,12 +45,14 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-export function CareMyTaskDetail({ data, todayISO, canRecord, updateHref, loadMore }: {
+export function CareMyTaskDetail({ data, todayISO, canRecord, updateHref, loadMore, contactLinks = true }: {
   data: CareMyDetailData
   todayISO: string
   canRecord: boolean
   updateHref: string
   loadMore?: CareLoadMoreInteractions
+  /** B6-qa-ui: chế độ QA local ⇒ false — SĐT giả có thể là số người thật, không render tel:/sms:. */
+  contactLinks?: boolean
 }) {
   const [tab, setTab] = useState<TabKey>('overview')
   const t = data.task
@@ -76,10 +78,18 @@ export function CareMyTaskDetail({ data, todayISO, canRecord, updateHref, loadMo
 
       {tab === 'overview' && (
         <section role="tabpanel" id="care-panel-overview" aria-labelledby="care-tab-overview" className="space-y-4">
-          <div className="grid grid-cols-2 gap-2">
-            <a href={`tel:${t.phone_norm}`} className={cn(buttonVariants({ variant: 'outline' }), 'min-h-[44px]')}><Phone className="size-4" /> Gọi {t.phone_raw}</a>
-            <a href={`sms:${t.phone_norm}`} className={cn(buttonVariants({ variant: 'outline' }), 'min-h-[44px]')}><MessageSquare className="size-4" /> Nhắn tin</a>
-          </div>
+          {contactLinks ? (
+            <div className="grid grid-cols-2 gap-2">
+              <a href={`tel:${t.phone_norm}`} className={cn(buttonVariants({ variant: 'outline' }), 'min-h-[44px]')}><Phone className="size-4" /> Gọi {t.phone_raw}</a>
+              <a href={`sms:${t.phone_norm}`} className={cn(buttonVariants({ variant: 'outline' }), 'min-h-[44px]')}><MessageSquare className="size-4" /> Nhắn tin</a>
+            </div>
+          ) : (
+            <p role="note" data-testid="care-contact-disabled" className="flex flex-wrap items-center gap-2 rounded-lg border border-status-warning/40 bg-status-warning-bg p-3 text-sm">
+              <Phone className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+              <span className="font-medium">{t.phone_raw}</span>
+              <span className="text-muted-foreground">Chế độ QA: số giả — không gọi, không nhắn tin.</span>
+            </p>
+          )}
           <dl className="grid grid-cols-2 gap-3 rounded-lg border bg-card p-3">
             <Field label="Cửa hàng">{t.store ? `${t.store.code} · ${t.store.name}` : '—'}</Field>
             <Field label="Dược sĩ phụ trách">{t.assignee?.full_name ?? '—'}</Field>

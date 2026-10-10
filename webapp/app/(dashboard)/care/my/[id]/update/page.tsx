@@ -9,6 +9,8 @@ import { carePeriodOf, vnDateISO } from '@/lib/care/time'
 import { careStaffTaskBlock } from '@/lib/care/my'
 import { createClient } from '@/lib/supabase/server'
 import { requireCareStaff } from '@/lib/care/server/my'
+import { careDataScope } from '@/lib/care/server/qaUi'
+import { withCareScope } from '@/lib/care/scope'
 import { recordCareInteraction } from '@/app/actions/careMy'
 import { cn } from '@/lib/utils'
 
@@ -24,8 +26,9 @@ export default async function CareMyUpdatePage({ params }: { params: Promise<{ i
   const back = <Link href={`/care/my/${id}`} className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'min-h-[44px]')}><ChevronLeft className="size-4" /> Quay lại</Link>
   const header = <PageHeader title="Ghi nhận chăm sóc" icon={NotebookPen} actions={back} />
   const supabase = await createClient()
-  const { data: t, error } = await supabase.from('care_tasks')
-    .select('id, customer_name, assignee_id, store_id, status, period_month, due_date').eq('id', id).eq('is_test', false).maybeSingle()
+  const scope = careDataScope()
+  const { data: t, error } = await withCareScope(supabase.from('care_tasks')
+    .select('id, customer_name, assignee_id, store_id, status, period_month, due_date').eq('id', id), scope).maybeSingle()
   if (error) {
     return <div data-layout-width="fluid" className="space-y-4 p-4 md:p-6">{header}<ErrorState message="Hệ thống chăm sóc khách hàng chưa sẵn sàng." /></div>
   }
@@ -38,7 +41,7 @@ export default async function CareMyUpdatePage({ params }: { params: Promise<{ i
       {header}
       {open ? (
         <CareInteractionForm taskId={t.id} customerName={t.customer_name} todayISO={vnDateISO(now)} dueDate={t.due_date}
-          record={recordCareInteraction} doneHref={`/care/my/${t.id}`} />
+          record={recordCareInteraction} doneHref={`/care/my/${t.id}`} proofDisabled={scope.kind === 'qa'} />
       ) : (
         <ErrorState message="Khách này không còn mở để ghi nhận." hint="Đã hoàn thành, đã qua kỳ hoặc vừa được chuyển cho dược sĩ khác." />
       )}

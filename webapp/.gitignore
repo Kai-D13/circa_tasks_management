@@ -63,5 +63,7 @@ next-env.d.ts
 # QA CRM-CSKH — fixture marker (e2e/writeQaGates.ts careWriteGate, B1+)
 .qa-care.json
 .qa-care.json.tmp
+# B6-qa-ui — khoá import của dev server QA (lib/care/qa/uiMarkerIo.ts)
+.qa-care.json.lock
 # Log/trace QA cục bộ (có thể chứa URL/route prod) — không commit
 /qa-artifacts/

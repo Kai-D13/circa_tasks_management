@@ -184,7 +184,8 @@ test.describe('care B4 — source: cờ, dược sĩ OS, session/RPC, upload, na
     expect(src).toContain("if (profile.role !== 'staff' || !profile.store_id || store?.store_type !== 'os' || store?.is_active === false) return { kind: 'forbidden' }")
     // Danh sách không tải sản phẩm/ảnh/timeline.
     const sels = [...src.matchAll(/from\('care_tasks'\)\.select\('([^']+)'/g)].map((m) => m[1])
-    expect(sels).toEqual(['id, status, next_action_date', 'id, customer_name, phone_norm, status, last_outcome, last_interaction_at, next_action_date, due_date'])
+    // + B6-qa-ui: thẻ tóm tắt ở chế độ QA local đếm từ task của mình (lib/care/qa/mirror.ts) — vẫn không PII/sản phẩm.
+    expect(sels).toEqual(['status, last_interaction_at, next_action_date', 'id, status, next_action_date', 'id, customer_name, phone_norm, status, last_outcome, last_interaction_at, next_action_date, due_date'])
     for (const sel of sels) expect(sel).not.toMatch(/product|image|care_interactions|care_customers|proof/)
     expect(src).toContain('maskVnPhone(phone_norm)')
     // Q-84: khoá sort của TOÀN TẬP (fetchExact, có tìm kiếm) → pageMyTasks → đọc đúng trang theo id.
@@ -194,7 +195,8 @@ test.describe('care B4 — source: cờ, dược sĩ OS, session/RPC, upload, na
     expect(load).toContain(".in('id', pageIds)")
     expect(load).not.toMatch(/order\('next_action_date'|CARE_MY_PAGE_SIZE - 1/)
     // Q-82: danh sách luôn lọc đúng store hiện tại (me.storeId) như RLS/summary.
-    expect(src).toContain('applyMyTaskFilters(q as unknown as LooseBuilder, me.userId, me.storeId, period, filter, todayISO)')
+    // B6-qa-ui: + phạm vi dữ liệu (production = is_test false như cũ; QA local = batch QA).
+    expect(src).toContain('applyMyTaskFilters(q as unknown as LooseBuilder, me.userId, me.storeId, period, filter, todayISO, careDataScope())')
   })
 
   test('action: cờ → dược sĩ OS → validate → session rpc care_record_interaction; không ghi thẳng bảng', () => {

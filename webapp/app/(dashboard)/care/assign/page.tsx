@@ -8,6 +8,7 @@ import { CareImportHistory, type CareImportHistoryRow } from '@/components/care/
 import { careImportMaxBytes } from '@/lib/care/config'
 import { isCareEnabled } from '@/lib/care/flags'
 import { getCareImportAccess } from '@/lib/care/server/importAccess'
+import { careDataScope } from '@/lib/care/server/qaUi'
 import { createClient } from '@/lib/supabase/server'
 
 // /care/assign — Phân công CRM (SPEC B2 §3). Chỉ super / admin phòng có
@@ -33,10 +34,14 @@ export default async function CareAssignPage({ searchParams }: { searchParams: P
   const params = await searchParams
   const page = Math.max(1, Number.parseInt(params.page ?? '1', 10) || 1)
   const supabase = await createClient()
+  const scope = careDataScope()
   // Session client: RLS care_import_batches chỉ cho người có quyền import/xem CRM.
-  const { data, count, error } = await supabase
+  let historyQ = supabase
     .from('care_import_batches')
     .select('id, period_month, kind, status, row_count, customer_count, created_at, summary, users!care_import_batches_created_by_fkey(full_name)', { count: 'exact' })
+  // B6-qa-ui: QA local chỉ hiện batch QA của marker (production giữ nguyên).
+  if (scope.kind === 'qa') historyQ = historyQ.eq('id', scope.batchId).eq('is_test', true)
+  const { data, count, error } = await historyQ
     .order('created_at', { ascending: false })
     .order('id', { ascending: false })
     .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1)

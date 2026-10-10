@@ -11,6 +11,8 @@ import {
 } from '@/lib/care/my'
 import { loadCareInteractionsPage } from '@/lib/care/server/browse'
 import { getCareStaffAccess, loadMyTaskPage, type CareMyTaskRow } from '@/lib/care/server/my'
+import { careDataScope, isCareQaActive } from '@/lib/care/server/qaUi'
+import { withCareScope } from '@/lib/care/scope'
 
 // CRM-CSKH B4 — server actions màn dược sĩ. Mọi action: cờ CARE_ENABLED → dược sĩ OS
 // (session) → làm việc bằng SESSION client; RPC/RLS 114 là chốt cuối. Không service role.
@@ -36,9 +38,14 @@ export async function recordCareInteraction(input: {
   if (typeof input?.taskId !== 'string' || !UUID_RE.test(input.taskId)) {
     return { ok: false, code: 'TASK_NOT_FOUND', message: CARE_RECORD_MESSAGES.TASK_NOT_FOUND }
   }
+  // B6-qa-ui: QA local không nhận ảnh minh chứng (không tạo object GCS) — lượt ghi proof [].
+  if (isCareQaActive() && Array.isArray(input?.proofUrls) && input.proofUrls.length > 0) {
+    return { ok: false, code: 'PROOF_INVALID', message: 'Chế độ QA không nhận ảnh minh chứng — bỏ ảnh rồi lưu lại.' }
+  }
   const supabase = await createClient()
-  const { data: t, error: te } = await supabase.from('care_tasks')
-    .select('id, assignee_id, store_id, status, period_month, due_date').eq('id', input.taskId).maybeSingle()
+  // Phạm vi dữ liệu như màn danh sách/chi tiết: production chỉ task thật, QA local chỉ batch QA.
+  const { data: t, error: te } = await withCareScope(supabase.from('care_tasks')
+    .select('id, assignee_id, store_id, status, period_month, due_date').eq('id', input.taskId), careDataScope()).maybeSingle()
   if (te) return { ok: false, code: 'UNAVAILABLE', message: 'Hệ thống CRM chưa sẵn sàng.' }
   const now = new Date()
   // Q-82: assignee + ĐÚNG store của task (store OS đang hoạt động) + task mở kỳ hiện tại.

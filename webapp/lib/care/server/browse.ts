@@ -9,14 +9,38 @@ import {
   type CareInteractionPage,
   type CareAccess, type CareOutcomeKey, type CareQueryBuilder, type CareFilters, type CarePermissions, type CareReportRow,
 } from '@/lib/care/browse'
+import { applyCareScope } from '@/lib/care/scope'
+import { careQaReportRows, type CareQaTaskAgg } from '@/lib/care/qa/mirror'
+import { careDataScope, careQaStaffIds, careQaViewerAllowed } from './qaUi'
 
 // CRM-CSKH B3 — đọc dữ liệu browser bằng SESSION người xem (RLS 114 quyết phạm vi).
 // KHÔNG dùng service role: RLS là ranh giới quyền; filter URL chỉ thêm điều kiện.
+// B6-qa-ui: phạm vi dữ liệu (careDataScope) — production loại is_test; QA local chỉ batch QA.
 
 // Kiểu builder PostgREST lồng quá sâu cho generic ⇒ ép qua builder tối giản rồi trả lại đúng kiểu gốc.
 type LooseBuilder = CareQueryBuilder<LooseBuilder>
 function withCareFilters<T>(q: T, f: Parameters<typeof applyCareTaskFilters>[1], todayISO: string): T {
-  return applyCareTaskFilters(q as unknown as LooseBuilder, f, todayISO) as unknown as T
+  return applyCareTaskFilters(q as unknown as LooseBuilder, f, todayISO, careDataScope()) as unknown as T
+}
+function withScope<T>(q: T): T {
+  return applyCareScope(q as unknown as LooseBuilder, careDataScope()) as unknown as T
+}
+
+const NO_ACCESS: CareAccess = { role: null, is_super: false, can_import: false, can_view_all: false, scope_store_count: 0 }
+
+/**
+ * Chế độ QA local: số liệu tổng hợp tính từ task đọc được qua RLS (đã lọc batch QA) — care_report loại
+ * is_test với Marketing/SM. Production KHÔNG đi đường này (lib/care/qa/mirror.ts).
+ */
+export async function loadCareQaReportRows(f: Pick<CareFilters, 'month' | 'storeId'>): Promise<CareReportRow[]> {
+  const supabase = await createClient()
+  const tasks = await fetchExact<CareQaTaskAgg>((from, to) => {
+    let q = withScope(supabase.from('care_tasks').select('store_id, assignee_id, status, last_interaction_at, first_overdue_on', { count: 'exact' })
+      .eq('period_month', f.month))
+    if (f.storeId) q = q.eq('store_id', f.storeId)
+    return q.order('id').range(from, to)
+  })
+  return careQaReportRows(tasks)
 }
 
 export type CareViewAccess =
@@ -29,6 +53,8 @@ export const getCareViewAccess = cache(async (): Promise<CareViewAccess> => {
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { kind: 'anonymous' }
+  // QA local: chỉ tài khoản QA trong marker, request từ loopback (production luôn qua).
+  if (!(await careQaViewerAllowed(user.id))) return { kind: 'ok', userId: user.id, access: NO_ACCESS, perms: carePermissions(NO_ACCESS) }
   const { data, error } = await supabase.rpc('care_my_access')
   if (error || !data || typeof data !== 'object') return { kind: 'unavailable' }
   const a = data as Partial<CareAccess>
@@ -83,10 +109,16 @@ export interface CareDashboardData {
 /** Dashboard: care_report (DEFINER, scope theo auth.uid) + 2 truy vấn nhẹ qua RLS (không PII). */
 export async function loadCareDashboard(f: CareFilters, todayISO: string, isCurrent: boolean): Promise<CareDashboardData> {
   const supabase = await createClient()
-  const { data: rows, error } = await supabase.rpc('care_report', {
-    p_month: f.month, p_store_ids: f.storeId ? [f.storeId] : null, p_include_test: false,
-  })
-  if (error) throw new Error('care_report_failed')
+  let rows: CareReportRow[]
+  if (careDataScope().kind === 'qa') {
+    rows = await loadCareQaReportRows(f)
+  } else {
+    const { data, error } = await supabase.rpc('care_report', {
+      p_month: f.month, p_store_ids: f.storeId ? [f.storeId] : null, p_include_test: false,
+    })
+    if (error) throw new Error('care_report_failed')
+    rows = (data ?? []) as CareReportRow[]
+  }
   let overdueOpen: number | null = null
   if (isCurrent) {
     const { count, error: e2 } = await withCareFilters(
@@ -102,7 +134,7 @@ export async function loadCareDashboard(f: CareFilters, todayISO: string, isCurr
     if (e3 || count === null) throw new Error('care_outcomes_failed')
     return [k, count] as const
   }))) as Partial<Record<CareOutcomeKey, number>>
-  return { rows: (rows ?? []) as CareReportRow[], overdueOpen, outcomes }
+  return { rows, overdueOpen, outcomes }
 }
 
 export interface CareTaskBase {
@@ -160,9 +192,9 @@ export interface CareTaskDetail {
 /** Chi tiết theo RLS: không thấy task ⇒ null (404). Lịch sử khách theo helper B1. */
 export async function loadCareTaskDetail(id: string): Promise<CareTaskDetail | null> {
   const supabase = await createClient()
-  const { data: task, error } = await supabase.from('care_tasks')
+  const { data: task, error } = await withScope(supabase.from('care_tasks')
     .select(`${TASK_COLUMNS}, customer_id, phone_norm, phone_raw, first_overdue_on, completed_at, closed_at`)
-    .eq('id', id).eq('is_test', false).maybeSingle()
+    .eq('id', id)).maybeSingle()
   if (error) throw new Error('care_task_failed')
   if (!task) return null
   const t = task as unknown as CareTaskDetail['task']
@@ -194,7 +226,7 @@ export async function loadCareInteractionsPage(taskId: string, beforeId: number 
   const supabase = await createClient()
   let task = known ?? null
   if (!task) {
-    const { data, error } = await supabase.from('care_tasks').select('id, customer_id').eq('id', taskId).eq('is_test', false).maybeSingle()
+    const { data, error } = await withScope(supabase.from('care_tasks').select('id, customer_id').eq('id', taskId)).maybeSingle()
     if (error) throw new Error('care_task_failed')
     if (!data) return null
     task = data as { id: string; customer_id: string }
@@ -209,6 +241,19 @@ export async function loadCareInteractionsPage(taskId: string, beforeId: number 
 }
 
 /** Dược sĩ đích cho chuyển giao: staff của store OS ĐANG HOẠT ĐỘNG trong phạm vi chuyển giao. */
+/**
+ * B6-qa-ui (security P1-2): ở chế độ QA local, chuyển giao chỉ được cho task thuộc batch QA (đếm qua RLS + phạm
+ * vi QA phải đủ số id) và chỉ sang dược sĩ QA trong marker. Production: luôn null (không đọc gì).
+ */
+export async function careQaTransferBlock(taskIds: string[], toUserId: string): Promise<'TARGET_INVALID' | 'TASK_NOT_FOUND' | null> {
+  const scope = careDataScope()
+  if (scope.kind !== 'qa') return null
+  if (!(careQaStaffIds() ?? []).includes(toUserId)) return 'TARGET_INVALID'
+  const supabase = await createClient()
+  const { count, error } = await withScope(supabase.from('care_tasks').select('id', { count: 'exact', head: true }).in('id', taskIds))
+  return error || count !== taskIds.length ? 'TASK_NOT_FOUND' : null
+}
+
 export async function loadTransferTargets(perms: CarePermissions): Promise<CareStaffOption[]> {
   if (!perms.canTransfer) return []
   const supabase = await createClient()
@@ -227,7 +272,10 @@ export async function loadTransferTargets(perms: CarePermissions): Promise<CareS
   const staff = await fetchExact<{ id: string; full_name: string; store_id: string }>((from, to) =>
     supabase.from('users').select('id, full_name, store_id', { count: 'exact' })
       .eq('role', 'staff').in('store_id', [...byId.keys()]).order('id').range(from, to))
+  // B6-qa-ui: QA local chỉ cho chọn dược sĩ QA trong marker (action cũng chặn).
+  const qaStaff = careQaStaffIds()
   return staff
+    .filter((u) => qaStaff === null || qaStaff.includes(u.id))
     .map((u) => { const s = byId.get(u.store_id)!; return { id: u.id, fullName: u.full_name, storeId: s.id, storeCode: s.code, storeName: s.name } })
     .sort((a, b) => a.storeCode.localeCompare(b.storeCode) || a.fullName.localeCompare(b.fullName))
 }

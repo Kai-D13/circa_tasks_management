@@ -238,6 +238,9 @@ test.describe('care B3 — source: cờ, session/RPC, không service role @deskt
     expect(tr).toMatch(/if \(!v\.perms\.canTransfer\) return/)
     expect(tr).toMatch(/validateTransferInput\(input\)/)
     expect(tr).toMatch(/const supabase = await createClient\(\)\s*\n\s*const \{ data, error \} = await supabase\.rpc\('care_transfer_tasks', \{/)
+    // B6-qa-ui (security P1-2): chặn QA (chỉ task batch QA + đích dược sĩ QA; production null) SAU validate, TRƯỚC RPC.
+    expect(tr.indexOf('validateTransferInput(input)')).toBeLessThan(tr.indexOf('await careQaTransferBlock(valid.taskIds, valid.toUserId)'))
+    expect(tr.indexOf('await careQaTransferBlock(')).toBeLessThan(tr.indexOf("supabase.rpc('care_transfer_tasks'"))
     expect(tr).toMatch(/mapCareTransferError\(error\.message\)/)
     expect(tr).not.toMatch(/\.from\('care_tasks'\)|\.update\(|care_assignment_events/)
     expect(src).not.toMatch(/console\.(log|error|warn)/)

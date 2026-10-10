@@ -17,7 +17,7 @@ export default async function CareMyPage({ searchParams }: { searchParams: Promi
   const f = parseMyFilters(await searchParams)
   try {
     const [summary, list] = await Promise.all([
-      loadMySummary(),
+      loadMySummary(me),
       loadMyTaskPage(me, carePeriodOf(now), f.filter, f.page, today),
     ])
     return (

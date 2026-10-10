@@ -1,5 +1,6 @@
 import { CARE_OUTCOME_META, isCareOutcome, type CareOutcome } from './outcome'
 import type { CareQueryBuilder } from './browse'
+import { applyCareScope, CARE_PRODUCTION_SCOPE, type CareDataScope } from './scope'
 
 // CRM-CSKH B4 — logic THUẦN cho màn dược sĩ (mobile): "Khách hàng của tôi", form ghi
 // lượt, proof ảnh. Không import Next/Supabase ⇒ test trực tiếp. Quyền thật ở RLS/RPC 114.
@@ -91,12 +92,12 @@ export function myFilterHref(filter: CareMyFilter, page = 1): string {
 
 /**
  * Áp filter lên query task của CHÍNH dược sĩ (assignee + ĐÚNG store hiện tại — Q-82 + kỳ hiện
- * tại + loại is_test). RLS 114 cũng chặn store lệch; điều kiện ở đây giữ danh sách khớp
- * care_my_summary. "Quá hạn" = còn mở + ngày hẹn < hôm nay VN (task chưa gọi, chưa hẹn KHÔNG
- * tự quá hạn).
+ * tại + phạm vi dữ liệu: production loại is_test · QA local chỉ batch QA). RLS 114 cũng chặn store
+ * lệch; điều kiện ở đây giữ danh sách khớp care_my_summary. "Quá hạn" = còn mở + ngày hẹn < hôm nay
+ * VN (task chưa gọi, chưa hẹn KHÔNG tự quá hạn).
  */
-export function applyMyTaskFilters<Q extends CareQueryBuilder<Q>>(q: Q, userId: string, storeId: string, period: string, filter: CareMyFilter, todayISO: string): Q {
-  let r = q.eq('assignee_id', userId).eq('store_id', storeId).eq('period_month', period).eq('is_test', false)
+export function applyMyTaskFilters<Q extends CareQueryBuilder<Q>>(q: Q, userId: string, storeId: string, period: string, filter: CareMyFilter, todayISO: string, scope: CareDataScope = CARE_PRODUCTION_SCOPE): Q {
+  let r = applyCareScope(q.eq('assignee_id', userId).eq('store_id', storeId).eq('period_month', period), scope)
   switch (filter) {
     case 'not_cared': r = r.eq('status', 'open').is('last_interaction_at', null); break
     case 'overdue': r = r.eq('status', 'open').lt('next_action_date', todayISO); break
