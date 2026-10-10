@@ -1,10 +1,12 @@
-// CRM-CSKH B5b.1 — adapter nguồn N3 (THUẦN, IO tiêm qua `runQuery`) theo SPEC §B5b + Q-96/Q-98/Q-100.
+// CRM-CSKH B5b.1 + B5b.3 — adapter nguồn N3 (THUẦN, IO tiêm qua `runQuery`) theo SPEC §B5b/§B5b.3 + Q-96/Q-98/Q-100.
 // Nguồn: VIEW BI (`CARE_BQ_ORDERS_TABLE`, Q-96) bốn cột entity_id/order_code/completed_at/type — SELECT
 // đúng ba alias N3. Mỗi lượt terminal CHƯA Có đơn là một khoảng (lo, hi]: lo = lượt đó, hi = lượt terminal
 // kế tiếp cùng khách (không có ⇒ mốc mở). Đơn bằng `lo` không tính (strict `<` của attribution), bằng
 // `hi` vẫn thuộc lượt trước. Khoảng chỉ là bộ lọc lấy dữ liệu; DB `care_recompute_attribution` vẫn quyết
-// định ghi công. Q-100 (A): VIEW phải trả completed_at UTC đúng — adapter KHÔNG tự đổi múi giờ; preflight
-// chỉ chặn khi VIEW có mốc hoàn tất ở tương lai (> now + 5 phút).
+// định ghi công. Q-100 (quyết định mới, SPEC §B5b.3): VIEW giữ nguyên nhưng trả completed_at muộn hơn UTC
+// thật 7 giờ ⇒ MỘT phép trừ cố định trong CTE `src` (CARE_N3_COMPLETED_UTC); chiếu ordered_at, lọc
+// @min_care_at, khoảng (lo, hi], ORDER BY, mẫu QA và preflight đều chỉ dùng completed_utc — không chỗ nào so
+// v.completed_at thô với mốc care UTC. Preflight chặn khi còn mốc (đã trừ) ở tương lai (> now + 5 phút).
 //
 // Tất cả-hoặc-không: đọc + kiểm TOÀN BỘ các lô trước khi trả; bất kỳ lô nào lỗi/quá trần/sai schema/
 // parser lỗi ⇒ ném CareN3SourceError (mã an toàn, không giá trị) ⇒ caller không ghi gì.
@@ -24,9 +26,16 @@ export const CARE_N3_MAX_WINDOWS = CARE_N3_MAX_ROWS
 export const CARE_N3_WINDOWS_PER_QUERY = 10_000
 /**
  * Preflight: mốc hoàn tất muộn hơn hiện tại quá ngưỡng này ⇒ nguồn sai thời gian ⇒ dừng sync. Chỉ là điều kiện
- * CẦN (lúc ít đơn, lệch múi giờ vẫn có thể cho 0) — TODO(Q-100): xác nhận lại ngưỡng sau khi BI sửa VIEW.
+ * CẦN (lúc ít đơn, lệch múi giờ vẫn có thể cho 0) — gate cuối Q-100 là 2 DHC khớp UTC raw (SPEC §B5b.3).
  */
 export const CARE_N3_FUTURE_TOLERANCE_MINUTES = 5
+/**
+ * Q-100 (SPEC §B5b.3): VIEW `tech__circa_completed_order` gắn nhãn UTC cho giờ VN ⇒ muộn hơn UTC thật 7 giờ
+ * (2 DHC đối chiếu raw, lệch < 1 giây sau khi trừ). TRỪ, không cộng. Không env offset, không nhánh song song.
+ * BI đổi cách biểu diễn completed_at ⇒ tắt CARE_SYNC_ENABLED và bỏ phép trừ này trước lượt sync kế tiếp.
+ */
+export const CARE_N3_VIEW_LAG_HOURS = 7
+export const CARE_N3_COMPLETED_UTC = `TIMESTAMP_SUB(v.completed_at, INTERVAL ${CARE_N3_VIEW_LAG_HOURS} HOUR)`
 
 export type CareN3SourceCode =
   | 'table_missing' | 'table_invalid' | 'windows_invalid' | 'windows_over_cap'
@@ -67,9 +76,15 @@ const quoted = (table: string) => {
   if (!isSafeBqTableName(table)) throw new CareN3SourceError('table_invalid')
   return `\`${table}\``
 }
-const PROJECTION = `v.entity_id AS customer_external_id,
-       v.order_code AS order_key,
-       FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%E6SZ', v.completed_at, 'UTC') AS ordered_at`
+/** Nguồn đã chuẩn hoá: định nghĩa completed_utc MỘT lần; mọi phần sau chỉ đọc src. */
+const srcCte = (table: string) => `src AS (
+  SELECT v.entity_id, v.order_code, ${CARE_N3_COMPLETED_UTC} AS completed_utc
+  FROM ${quoted(table)} AS v
+  WHERE v.type IN ('ONLINE', 'OFFLINE')
+)`
+const PROJECTION = `s.entity_id AS customer_external_id,
+       s.order_code AS order_key,
+       FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%E6SZ', s.completed_utc, 'UTC') AS ordered_at`
 
 /** SQL production (SPEC §B5b): ba alias, khoảng (lo, hi] qua ba mảng named params cùng offset + EXISTS. */
 export function buildN3OrdersSql(table: string): string {
@@ -78,36 +93,36 @@ export function buildN3OrdersSql(table: string): string {
   FROM UNNEST(@customer_ids) AS id WITH OFFSET i
   JOIN UNNEST(@from_ts) AS lo WITH OFFSET j ON i = j
   JOIN UNNEST(@to_ts) AS hi WITH OFFSET k ON i = k
-)
+),
+${srcCte(table)}
 SELECT ${PROJECTION}
-FROM ${quoted(table)} AS v
-WHERE v.type IN ('ONLINE', 'OFFLINE')
-  AND v.completed_at > @min_care_at
+FROM src AS s
+WHERE s.completed_utc > @min_care_at
   AND EXISTS (
     SELECT 1 FROM windows AS w
-    WHERE w.id = v.entity_id
-      AND v.completed_at > w.lo
-      AND v.completed_at <= w.hi
+    WHERE w.id = s.entity_id
+      AND s.completed_utc > w.lo
+      AND s.completed_utc <= w.hi
   )
-ORDER BY v.completed_at, v.order_code`
+ORDER BY s.completed_utc, s.order_code`
 }
 
 /** Mẫu ≤ `limit` dòng, cùng phép chiếu (QA đọc VIEW thật — không dùng cho sync). */
 export function buildN3SampleSql(table: string, limit = 5): string {
   if (!Number.isInteger(limit) || limit < 1 || limit > 5) throw new CareN3SourceError('config')
-  return `SELECT ${PROJECTION}
-FROM ${quoted(table)} AS v
-WHERE v.type IN ('ONLINE', 'OFFLINE')
+  return `WITH ${srcCte(table)}
+SELECT ${PROJECTION}
+FROM src AS s
 LIMIT ${limit}`
 }
 
-/** Preflight (Q-100): số đơn có mốc hoàn tất ở tương lai + tuổi đơn mới nhất (chỉ là metric giám sát). */
+/** Preflight (Q-100): số đơn có mốc hoàn tất (ĐÃ chuẩn hoá) ở tương lai + tuổi đơn mới nhất (chỉ là metric). */
 export function buildN3PreflightSql(table: string): string {
-  return `SELECT
-  COUNTIF(v.completed_at > TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL ${CARE_N3_FUTURE_TOLERANCE_MINUTES} MINUTE)) AS future_count,
-  TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), MAX(v.completed_at), MINUTE) AS max_age_minutes
-FROM ${quoted(table)} AS v
-WHERE v.type IN ('ONLINE', 'OFFLINE')`
+  return `WITH ${srcCte(table)}
+SELECT
+  COUNTIF(s.completed_utc > TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL ${CARE_N3_FUTURE_TOLERANCE_MINUTES} MINUTE)) AS future_count,
+  TIMESTAMP_DIFF(CURRENT_TIMESTAMP(), MAX(s.completed_utc), MINUTE) AS max_age_minutes
+FROM src AS s`
 }
 
 export interface CareN3PreparedWindows {

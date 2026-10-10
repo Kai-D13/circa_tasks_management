@@ -2,7 +2,7 @@
 //   1. candidates (RPC service_role, một jsonb): chụp tập khoảng + snapshot_at của DB. Số khoảng > trần ⇒
 //      CANDIDATES_OVER_CAP (Q-98: báo riêng số khoảng / số khách).
 //   2. Không khoảng nào ⇒ bỏ qua BigQuery, apply lô rỗng (đã đọc đủ phạm vi ⇒ thành công).
-//   3. preflight VIEW: có mốc hoàn tất ở tương lai ⇒ SOURCE_TIME_FUTURE (Q-100; không tự đổi múi giờ).
+//   3. preflight VIEW: có mốc hoàn tất (đã chuẩn hoá −7 giờ, B5b.3) ở tương lai ⇒ SOURCE_TIME_FUTURE (Q-100).
 //   4. đọc + kiểm TOÀN BỘ các lô (collectN3Orders) ⇒ lỗi bất kỳ ⇒ SOURCE_<mã>, KHÔNG gọi apply.
 //   5. apply (RPC, một transaction): ghi đơn + tính lại + dọn queue + đánh dấu thành công; lỗi ⇒ DB_APPLY_FAILED.
 // Mọi thất bại ⇒ fail(mã, snapshot) chỉ ghi MÃ (CHECK DB), giữ dữ liệu cũ; lỗi khi ghi mã cũng không ném.

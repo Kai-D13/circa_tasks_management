@@ -6,8 +6,8 @@ import { syncCareOrders } from '@/lib/care/server/orderSync'
 // GET /api/cron/care-orders-sync — đồng bộ đơn N3 (SPEC §B5b.2). Bearer CRON_SECRET; CARE_ENABLED VÀ
 // CARE_SYNC_ENABLED phải bật (mặc định OFF ⇒ 503, không IO). Một lượt: ứng viên ⇒ preflight VIEW ⇒ đọc đủ
 // mọi lô ⇒ apply MỘT transaction; lỗi ⇒ chỉ ghi MÃ, giữ dữ liệu cũ. Response/log: số đếm + mã, không ID khách,
-// DHC, timestamp đơn hay lỗi thô. Coolify Scheduled Task 09:30/15:30/19:30 giờ VN (Q-99) — chỉ tạo ở B6
-// sau khi BI sửa VIEW (Q-100) và PM duyệt; cron schedule theo timezone server Coolify.
+// DHC, timestamp đơn hay lỗi thô. Coolify Scheduled Task `30 9,15,19 * * *` (giờ VN — scheduler đã xác nhận,
+// Q-99) — chỉ tạo ở B6 sau gate Q-100 (adapter trừ 7 giờ B5b.3 + 2 DHC khớp UTC raw) và PM duyệt.
 
 export const dynamic = 'force-dynamic'
 

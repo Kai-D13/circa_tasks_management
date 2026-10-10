@@ -29,7 +29,7 @@ export function careN3QaGate(env: Env, authorization: string | null): CareN3QaGa
 }
 
 export const CARE_N3_QA_READY_NOTE =
-  'readyForSync chỉ là kiểm tra TỰ ĐỘNG (đọc được nguồn + không có mốc hoàn tất ở tương lai); KHÔNG phải duyệt đồng bộ ghi công thật — cần BI/PM đối chiếu mốc UTC độc lập (Q-100) trước khi bật CARE_SYNC_ENABLED.' as const
+  'readyForSync chỉ là kiểm tra TỰ ĐỘNG (đọc được nguồn + không có mốc hoàn tất ở tương lai); KHÔNG phải duyệt đồng bộ ghi công thật — cần đối chiếu 2 DHC mẫu với mốc UTC gốc (< 1 giây, Q-100/SPEC §B5b.3) trước khi bật CARE_SYNC_ENABLED.' as const
 
 /** ID giả chắc chắn không phải khách thật — kiểm đường named params, kỳ vọng 0 dòng. */
 export const CARE_N3_QA_FAKE_ID = 'QA-NOT-A-CUSTOMER'
@@ -39,7 +39,7 @@ export interface CareN3QaReport {
   ok: boolean
   /**
    * ok && freshness.ok. Vẫn chỉ là điều kiện CẦN cho sync: futureCount = 0 lúc ít đơn không chứng minh múi
-   * giờ đúng (Q-100 — phải đối chiếu đơn mẫu với mốc UTC độc lập sau khi BI sửa VIEW).
+   * giờ đúng (Q-100 — sau chuẩn hoá B5b.3 vẫn phải đối chiếu 2 DHC mẫu với mốc UTC raw).
    */
   readyForSync: boolean
   /** Diễn giải cố định đi kèm response (PM audit Lô 3): readyForSync KHÔNG phải duyệt đồng bộ/rollout. */
@@ -51,7 +51,7 @@ export interface CareN3QaReport {
   elapsedMs: number
   bytesProcessed: number | null
   paramQuery: { ok: boolean; code?: CareN3SourceCode; rows: number; pages: number; elapsedMs: number }
-  /** Q-100: futureCount > 0 ⇒ VIEW còn mốc hoàn tất ở tương lai (chưa sửa múi giờ). maxAgeMinutes chỉ là metric. */
+  /** Q-100: futureCount > 0 ⇒ còn mốc hoàn tất (ĐÃ trừ 7 giờ — B5b.3) ở tương lai. maxAgeMinutes chỉ là metric. */
   freshness: { ok: boolean; code?: CareN3SourceCode; futureCount: number | null; maxAgeMinutes: number | null }
 }
 
@@ -96,7 +96,7 @@ export async function runCareN3Qa(table: string, runQuery: CareN3RunQuery, now: 
   } catch (err) {
     report.freshness = { ok: false, code: careN3ErrorCode(err), futureCount: null, maxAgeMinutes: null }
   }
-  // ok = đọc được mẫu có dữ liệu + đường tham số chạy. freshness báo riêng (P0 Q-100 chờ BI sửa VIEW).
+  // ok = đọc được mẫu có dữ liệu + đường tham số chạy. freshness báo riêng (gate Q-100 trên giờ đã chuẩn hoá).
   report.ok = report.code === undefined && report.sampleCount > 0 && report.paramQuery.ok
   report.readyForSync = report.ok && report.freshness.ok
   return report
