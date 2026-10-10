@@ -38,7 +38,9 @@ export function orderBonusWriteGate(input: {
     }
   }
   if (envFileText !== null) {
-    const leaked = ORDER_BONUS_PROCESS_FLAGS.filter((k) => new RegExp(`^\s*${k}\s*=`, 'm').test(envFileText))
+    // `\\s` (không phải `\s`: trong template literal `\s` thành chữ 's' ⇒ dòng thụt đầu / `KEY = …` lọt) + dạng
+    // `export KEY=…` (file .env.local có thể được source bằng shell).
+    const leaked = ORDER_BONUS_PROCESS_FLAGS.filter((k) => new RegExp(`^\\s*(?:export\\s+)?${k}\\s*=`, 'm').test(envFileText))
     if (leaked.length > 0) {
       return {
         ok: false,
