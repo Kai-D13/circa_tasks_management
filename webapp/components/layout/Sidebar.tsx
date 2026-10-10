@@ -30,6 +30,7 @@ import {
   Link2,
   LogOut,
   type LucideIcon,
+  HeartHandshake, UserCog, ClipboardPlus,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { resolveActiveHref } from '@/lib/layout/sidebarNav'
@@ -212,7 +213,7 @@ function SectionLabel({ label, collapsed, first }: { label: string; collapsed: b
   )
 }
 
-export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, referralEnabled = false, isFsStore = false, affiliateOverviewNav = false, defaultCollapsed = false }: { announcementsUnread?: number; kpiCampaignEnabled?: boolean; referralEnabled?: boolean; isFsStore?: boolean; affiliateOverviewNav?: boolean; defaultCollapsed?: boolean }) {
+export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, referralEnabled = false, isFsStore = false, affiliateOverviewNav = false, defaultCollapsed = false, careNav = [] }: { announcementsUnread?: number; kpiCampaignEnabled?: boolean; referralEnabled?: boolean; isFsStore?: boolean; affiliateOverviewNav?: boolean; defaultCollapsed?: boolean; careNav?: { href: string; label: string }[] }) {
   const pathname = usePathname()
   const router   = useRouter()
   const profile  = useUserStore((s) => s.profile)
@@ -273,6 +274,12 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
   const showFs = isFsStore || isSuper || (role === 'admin' && profile?.department_id === POLICY_DEPT_ID)
   const [fsOpen, setFsOpen] = useState(() => pathname.startsWith('/fs') || isFsStore)
 
+  // CRM-CSKH (B3): mục con do layout tính server-side (cờ CARE_ENABLED + care_my_access);
+  // rỗng ⇒ không render nhóm. Route tự kiểm lại quyền (đây chỉ là hiển thị).
+  const careItems = isFsStore ? [] : careNav
+  const showCare = careItems.length > 0
+  const [careOpen, setCareOpen] = useState(() => pathname === '/care' || pathname.startsWith('/care/'))
+
   // Active = LONGEST-MATCH ĐƠN NHẤT (hàm thuần `resolveActiveHref`, khoá bằng
   // e2e/sidebar-nav.spec.ts). Gom mọi href đang hiển thị (item theo role + 2
   // link con của accordion + link gated KPI/Affiliate) rồi để hàm chọn ĐÚNG 1.
@@ -282,6 +289,7 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
     ...(showKpi ? ['/targets/campaigns'] : []),
     ...(showAffiliate ? ['/targets/campaigns/affiliate'] : []),
     ...(showFs ? ['/fs/products'] : []),
+    ...careItems.map((c) => c.href),
   ])
 
   // "Context" của nút CHA accordion: đang đứng trong section nào. Giữ nguyên
@@ -290,13 +298,14 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
   // độc quyền của `activeHref`.
   const inInventorySection = pathname === '/inventory' || pathname.startsWith('/inventory/')
   const inFsSection        = pathname === '/fs' || pathname.startsWith('/fs/')
+  const inCareSection      = pathname === '/care' || pathname.startsWith('/care/')
 
   // Trình bày: những nhóm THỰC SỰ có mục sau gating. Nhóm rỗng không được để
   // lại nhãn/gạch mồ côi (một admin phòng khác super chẳng hạn chỉ còn 2 nhóm).
   // Mục gated của nhóm 'data' nằm NGOÀI navItems (accordion + link theo flag).
   const hasGatedData  = showInventory || showKpi || showAffiliate || showFs
   const sections = NAV_SECTIONS.filter(({ key }) =>
-    visibleItems.some((item) => item.group === key) || (key === 'data' && hasGatedData),
+    visibleItems.some((item) => item.group === key) || (key === 'data' && hasGatedData) || (key === 'ops' && showCare),
   )
 
   // Thu gọn sidebar — khởi tạo từ COOKIE đọc server-side (prop defaultCollapsed):
@@ -499,6 +508,49 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
                   badge={href === '/announcements' ? announcementsUnread : 0}
                 />
               ))}
+
+              {/* Chăm sóc KH (CRM-CSKH) — accordion cuối nhóm 'ops', chỉ khi có mục con. */}
+              {key === 'ops' && showCare && (
+                <div>
+                  <CollapsedTip label="Chăm sóc KH" collapsed={collapsed}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (collapsed) { applyCollapsed(false); setCareOpen(true); return }
+                        setCareOpen((o) => !o)
+                      }}
+                      aria-label={collapsed ? 'Chăm sóc KH' : undefined}
+                      aria-expanded={!collapsed && careOpen}
+                      aria-controls={!collapsed && careOpen ? 'sidebar-care-sub' : undefined}
+                      className={cn(itemCls(inCareSection ? 'context' : 'idle', collapsed), 'w-full font-medium', collapsed && 'whitespace-nowrap')}
+                    >
+                      <HeartHandshake className={iconCls(inCareSection ? 'context' : 'idle')} />
+                      {!collapsed && (
+                        <>
+                          <span className="flex-1 text-left">Chăm sóc KH</span>
+                          <ChevronRight className={cn('h-[14px] w-[14px] shrink-0 text-sidebar-foreground/60 transition-transform', careOpen && 'rotate-90')} />
+                        </>
+                      )}
+                    </button>
+                  </CollapsedTip>
+                  {!collapsed && careOpen && (
+                    <div id="sidebar-care-sub" className={SUB_LIST}>
+                      {careItems.map((c) => (
+                        <NavLink
+                          key={c.href}
+                          href={c.href}
+                          label={c.label}
+                          icon={c.href === '/care/assign' ? ClipboardPlus : c.href === '/care/tasks' ? UserCog : HeartHandshake}
+                          prefetch={false}
+                          collapsed={false}
+                          sub
+                          active={activeHref === c.href}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         ))}

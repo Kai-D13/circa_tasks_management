@@ -15,9 +15,10 @@ import { fetchAllVerified, fetchAllByIdChunks } from '@/lib/tasks/fetchAll'
 import { AutoRefresh } from '@/components/common/AutoRefresh'
 import { ExportButton } from '@/components/common/ExportButton'
 import { Pagination } from '@/components/common/Pagination'
-import { Plus, ChevronLeft, ChevronRight, ClipboardList } from 'lucide-react'
+import { Plus, ChevronLeft, ChevronRight, ClipboardList, HeartHandshake } from 'lucide-react'
 import { canCreateTask } from '@/lib/tasks/smScope'
 import { cn } from '@/lib/utils'
+import { isCareEnabled } from '@/lib/care/flags'
 
 const PAGE_SIZE = 30
 
@@ -995,6 +996,16 @@ export default async function TasksPage({
           </>
         }
       />
+
+      {/* CRM-CSKH B4: CTA TĨNH cho dược sĩ khi CARE_ENABLED — không query/count CRM trên
+          đường render nóng của /tasks (đo trước/sau trong report B4). */}
+      {isStaff && isCareEnabled() && (
+        <Link href="/care/my" prefetch={false} data-testid="care-cta"
+          className="flex min-h-[44px] items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm font-medium text-primary active:bg-muted/60">
+          <HeartHandshake className="size-4" aria-hidden />
+          <span className="flex-1">Chăm sóc khách hàng →</span>
+        </Link>
+      )}
 
       <TaskFilters
         stores={storesForFilter}

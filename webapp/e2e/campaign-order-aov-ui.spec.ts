@@ -1,5 +1,6 @@
 import { test, expect, type Page } from '@playwright/test'
 import { STAFF_STATE, SUPER_STATE } from './authState'
+import { must, serviceDb } from './dbFixtures'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // CHẤT LƯỢNG BÁN HÀNG — acceptance RUNTIME (commit 5)
@@ -29,6 +30,13 @@ const AOV_COL = 'AOV (thực tế / mục tiêu)'
 // xanh. Lần chạy tuần tự đầu tiên đã dính đúng ca này (chạy lẻ thì pass).
 // Chờ tường minh: bảng phải xuất hiện, rồi mới kết luận có/không có cột.
 async function findOrderAovCampaign(page: Page): Promise<string | null> {
+  // Ứng viên lấy từ fixture DB theo metric_type (service role CHỈ để định vị fixture — quyền/hiển thị vẫn
+  // kiểm qua UI super bên dưới). Không quét mọi chiến dịch: 09/10 prod có 34 chiến dịch, chiến dịch này ở vị
+  // trí 13 ⇒ mở tuần tự từng trang Kết quả (3,5–8 s/trang) mất ~66 s > trần 60 s ⇒ cả 3 test timeout.
+  const sb = await serviceDb()
+  const ids = new Set(must(await sb.from('kpi_campaigns').select('id').eq('metric_type', 'offline_order_aov'),
+    'kpi_campaigns offline_order_aov').map((r: { id: string }) => r.id))
+  if (ids.size === 0) return null
   await page.goto('/targets/campaigns')
   // evaluateAll trên locator RỖNG trả [] mà KHÔNG chờ — danh sách render chậm
   // một nhịp là ra 0 link ⇒ test tự skip tức thì. Đây chính là nguyên nhân ba
@@ -37,7 +45,7 @@ async function findOrderAovCampaign(page: Page): Promise<string | null> {
     .waitFor({ state: 'attached', timeout: 15_000 })
   const hrefs = (await page.locator('main a[href^="/targets/campaigns/"]').evaluateAll(
     (as) => as.map((a) => a.getAttribute('href') ?? ''),
-  )).filter((h) => /^\/targets\/campaigns\/[0-9a-f-]{36}$/.test(h))
+  )).filter((h) => /^\/targets\/campaigns\/[0-9a-f-]{36}$/.test(h) && ids.has(h.slice('/targets/campaigns/'.length)))
 
   for (const h of hrefs) {
     await page.goto(`${h}?tab=result`)

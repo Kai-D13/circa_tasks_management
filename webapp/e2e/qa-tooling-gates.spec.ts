@@ -714,8 +714,16 @@ test.describe('write-QA gates + đối soát Offline độc lập (113.11) @desk
       expect(r.ok, `${k} trong .env.local`).toBe(false)
       expect(reasonOf(r)).toContain('.env.local')
     }
+    // Mọi dạng khai báo trong .env.local đều bị bắt: sát lề, thụt đầu (space/tab), khoảng trắng quanh '=', `export`.
+    for (const line of ['E2E_ORDER_BONUS_QA=YES', '  E2E_ORDER_BONUS_QA=YES', '\tE2E_ORDER_BONUS_QA=YES', 'E2E_ORDER_BONUS_QA = YES',
+      'export E2E_ORDER_BONUS_QA=YES', '  export  E2E_ORDER_BONUS_QA=YES']) {
+      const r = orderBonusWriteGate({ ...good, envFileText: `${good.envFileText}${line}\n` })
+      expect(r.ok, JSON.stringify(line)).toBe(false)
+      expect(reasonOf(r), JSON.stringify(line)).toContain('E2E_ORDER_BONUS_QA')
+    }
     // Chỉ khớp ĐẦU dòng — tên biến nằm trong comment/giá trị khác không tính.
     expect(orderBonusWriteGate({ ...good, envFileText: '# nhớ E2E_KPI_SYNC_CRON_PAUSED=YES khi QA\n' }).ok).toBe(true)
+    expect(orderBonusWriteGate({ ...good, envFileText: 'MY_E2E_ORDER_BONUS_QA=YES\nX=E2E_ORDER_BONUS_QA=YES\n' }).ok).toBe(true)
 
     const wrongHost = orderBonusWriteGate({ ...good, env: { ...good.env, E2E_EXPECTED_SUPABASE_HOST: 'db.khac.vn' } })
     expect(reasonOf(wrongHost)).toContain('E2E_EXPECTED_SUPABASE_HOST')

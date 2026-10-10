@@ -38,7 +38,9 @@ export function orderBonusWriteGate(input: {
     }
   }
   if (envFileText !== null) {
-    const leaked = ORDER_BONUS_PROCESS_FLAGS.filter((k) => new RegExp(`^\s*${k}\s*=`, 'm').test(envFileText))
+    // `\\s` (không phải `\s`: trong template literal `\s` thành chữ 's' ⇒ dòng thụt đầu / `KEY = …` lọt) + dạng
+    // `export KEY=…` (file .env.local có thể được source bằng shell).
+    const leaked = ORDER_BONUS_PROCESS_FLAGS.filter((k) => new RegExp(`^\\s*(?:export\\s+)?${k}\\s*=`, 'm').test(envFileText))
     if (leaked.length > 0) {
       return {
         ok: false,
@@ -59,6 +61,43 @@ export function orderBonusWriteGate(input: {
       ok: false,
       reason: `marker ${ORDER_BONUS_MARKER} đang tồn tại — lần chạy trước chưa dọn xong. Xoá campaign ${ORDER_BONUS_NAME_PREFIX}* (is_test) theo tên/id trong marker, hậu kiểm 0 dòng, rồi xoá marker.`,
     }
+  }
+  return { ok: true, host }
+}
+
+// ─── CRM-CSKH (B0 setup, dùng từ B1/B2) ──────────────────────────────────────
+// Cổng cho mọi QA CRM GHI fixture is_test lên DB production (không có staging).
+// Cùng nguyên tắc với order bonus: cờ xác nhận là biến PROCESS tạm cho từng
+// lần chạy, gõ lại host Supabase để xác nhận đúng project, marker còn ⇒ lần
+// trước chưa dọn. Thêm điều kiện cron CRM tạm dừng khi B5 có cron ghi dữ liệu.
+export const CARE_QA_MARKER = '.qa-care.json'
+export const CARE_QA_PROCESS_FLAGS = ['E2E_CARE_WRITE_QA', 'E2E_EXPECTED_SUPABASE_HOST'] as const
+
+export function careWriteGate(input: {
+  env: Record<string, string | undefined>
+  /** Nội dung .env.local (null nếu không có file). */
+  envFileText: string | null
+  markerExists: boolean
+}): GateResult {
+  const { env, envFileText, markerExists } = input
+  if (env.E2E_CARE_WRITE_QA !== 'YES') {
+    return { ok: false, reason: 'thiếu E2E_CARE_WRITE_QA=YES — QA CRM ghi fixture is_test lên DB production, phải xác nhận bằng biến PROCESS tạm cho lần chạy này.' }
+  }
+  if (envFileText !== null) {
+    // `\\s` (không phải `\s`): trong template literal `\s` thành chữ 's' và regex mất nghĩa khoảng trắng.
+    // Bắt cả dạng `export KEY=…` (file .env.local có thể được source bằng shell).
+    const leaked = CARE_QA_PROCESS_FLAGS.filter((k) => new RegExp(`^\\s*(?:export\\s+)?${k}\\s*=`, 'm').test(envFileText))
+    if (leaked.length > 0) {
+      return { ok: false, reason: `${leaked.join(', ')} đang nằm trong .env.local — đây phải là biến PROCESS tạm cho từng lần chạy, xoá khỏi .env.local.` }
+    }
+  }
+  const host = urlHost(env.NEXT_PUBLIC_SUPABASE_URL)
+  if (!host) return { ok: false, reason: 'NEXT_PUBLIC_SUPABASE_URL thiếu hoặc không parse được thành URL.' }
+  if (env.E2E_EXPECTED_SUPABASE_HOST !== host) {
+    return { ok: false, reason: `E2E_EXPECTED_SUPABASE_HOST (${env.E2E_EXPECTED_SUPABASE_HOST ?? 'THIẾU'}) phải TRÙNG host của NEXT_PUBLIC_SUPABASE_URL (${host}).` }
+  }
+  if (markerExists) {
+    return { ok: false, reason: `marker ${CARE_QA_MARKER} đang tồn tại — lần chạy trước chưa dọn xong fixture CRM is_test. Dọn theo id trong marker, hậu kiểm 0 dòng, rồi xoá marker.` }
   }
   return { ok: true, host }
 }

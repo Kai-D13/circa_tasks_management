@@ -27,6 +27,8 @@ export async function proxy(request: NextRequest) {
   if (pathname.startsWith('/api/cron/')) return NextResponse.next()
   // BI targets feed — self-protected via TARGETS_INGEST_SECRET (same model as cron).
   if (pathname === '/api/targets/ingest') return NextResponse.next()
+  // CRM B5b QA đọc VIEW N3 thật — CHỈ development, đúng một pathname; route tự kiểm UI_CATALOG + Bearer CRON_SECRET.
+  if (process.env.NODE_ENV === 'development' && pathname === '/api/qa/care-n3-view') return NextResponse.next()
   if (pathname === '/sw.js')             return NextResponse.next()
   if (pathname === '/documents' || pathname === '/documents.html') return NextResponse.next()
 

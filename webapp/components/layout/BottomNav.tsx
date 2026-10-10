@@ -7,7 +7,7 @@ import { useUserStore } from '@/store/userStore'
 import {
   LayoutDashboard, CheckSquare, Users, Store, FileImage, ScrollText,
   TrendingUp, Megaphone, Boxes, MoreHorizontal, Package,
-  ChartNoAxesCombined, Newspaper,
+  ChartNoAxesCombined, Newspaper, HeartHandshake,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -38,6 +38,13 @@ const STAFF_NAV: NavItem[] = [
   { href: '/inventory',     label: 'Tồn kho',   icon: Boxes,                roles: [] },
 ]
 
+// CRM-CSKH B4: khi CARE_ENABLED (server truyền xuống), tab cuối Tồn kho → CSKH
+// (/care/my — "Khách hàng của tôi"). Vẫn 5 tab, Doanh số giữa; cờ OFF giữ STAFF_NAV cũ.
+const STAFF_NAV_CARE: NavItem[] = [
+  ...STAFF_NAV.slice(0, 4),
+  { href: '/care/my',       label: 'CSKH',      icon: HeartHandshake,       roles: [] },
+]
+
 // Non-staff roles keep the role-filter + overflow-drawer pipeline. SM (area
 // manager) previously had NO bottom nav at all (bug) — now added via 'sm' roles.
 // Order unchanged so store_manager's primary tabs don't shift; SM isn't in
@@ -65,10 +72,13 @@ export function BottomNav({
   announcementsUnread = 0,
   tasksPending = 0,
   isFsStore = false,
+  careEnabled = false,
 }: {
   announcementsUnread?: number
   tasksPending?: number
   isFsStore?: boolean
+  /** CARE_ENABLED (server) — chỉ có tác dụng với staff OS. */
+  careEnabled?: boolean
 }) {
   const pathname = usePathname()
   const profile  = useUserStore((s) => s.profile)
@@ -76,7 +86,7 @@ export function BottomNav({
   const [moreOpen, setMoreOpen] = useState(false)
 
   const isStaffNav = role === 'staff' && !isFsStore
-  const visible = isFsStore ? FS_NAV : isStaffNav ? STAFF_NAV : role ? NAV_ITEMS.filter((item) => item.roles.includes(role)) : []
+  const visible = isFsStore ? FS_NAV : isStaffNav ? (careEnabled ? STAFF_NAV_CARE : STAFF_NAV) : role ? NAV_ITEMS.filter((item) => item.roles.includes(role)) : []
 
   // Inventory (→ TRF) in the overflow for NON-staff: store_manager (own store) +
   // super / Cycle Count admin. Staff carry it as a primary tab. Not 'sm' (phase 1).
