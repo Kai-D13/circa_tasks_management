@@ -18,7 +18,7 @@ import { buildCareImportRows } from './careImportFixture'
 // Chưa phải QA DB thật — B6.
 
 const ROOT = path.resolve(__dirname, '..')
-const read = (f: string) => fs.readFileSync(path.join(ROOT, f), 'utf8')
+const read = (f: string) => fs.readFileSync(path.join(ROOT, f), 'utf8').replace(/\r\n/g, '\n') // chịu checkout CRLF (Windows)
 const HAS_PGLITE = fs.existsSync(path.join(ROOT, 'node_modules', '@electric-sql', 'pglite'))
 const S = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const T = S(700)
@@ -51,7 +51,7 @@ test.describe('care B4 — logic thuần (dược sĩ) @desktop', () => {
   })
 
   test('proof: base + đuôi khoá trong TS KHỚP điều kiện SQL của RPC 114', () => {
-    const sql = fs.readFileSync(path.join(ROOT, '..', 'supabase', 'migrations', '114_care_crm_foundation.sql'), 'utf8')
+    const sql = fs.readFileSync(path.join(ROOT, '..', 'supabase', 'migrations', '114_care_crm_foundation.sql'), 'utf8').replace(/\r\n/g, '\n')
     const body = /FUNCTION public\.care__record_interaction_at[\s\S]*?END \$\$;/.exec(sql)![0]
     expect(body).toContain(`'${CARE_PROOF_PUBLIC_BASE}/care-proof/' || t.id::text || '/'`)
     expect(body).toContain(`'^[0-9]{13}_[0-9a-f]{8}[.](jpg|png|webp|heic|heif)$'`)

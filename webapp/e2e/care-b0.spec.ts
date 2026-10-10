@@ -29,7 +29,7 @@ import { CARE_QA_MARKER, careWriteGate } from './writeQaGates'
 // · fixture Excel giả · loader credential · gate ghi QA.
 
 const ROOT = path.resolve(__dirname, '..')
-const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
+const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8').replace(/\r\n/g, '\n') // chịu checkout CRLF (Windows)
 
 test.describe('care B0 — kỳ theo giờ VN @desktop', () => {
   test('ranh giới 23:59:59 / 00:00 VN cuối tháng → đầu tháng', () => {
