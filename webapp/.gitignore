@@ -62,5 +62,6 @@ next-env.d.ts
 .qa-order-bonus-112.json
 # QA CRM-CSKH — fixture marker (e2e/writeQaGates.ts careWriteGate, B1+)
 .qa-care.json
+.qa-care.json.tmp
 # Log/trace QA cục bộ (có thể chứa URL/route prod) — không commit
 /qa-artifacts/

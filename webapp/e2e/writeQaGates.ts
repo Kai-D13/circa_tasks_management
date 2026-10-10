@@ -85,7 +85,8 @@ export function careWriteGate(input: {
   }
   if (envFileText !== null) {
     // `\\s` (không phải `\s`): trong template literal `\s` thành chữ 's' và regex mất nghĩa khoảng trắng.
-    const leaked = CARE_QA_PROCESS_FLAGS.filter((k) => new RegExp(`^\\s*${k}\\s*=`, 'm').test(envFileText))
+    // Bắt cả dạng `export KEY=…` (file .env.local có thể được source bằng shell).
+    const leaked = CARE_QA_PROCESS_FLAGS.filter((k) => new RegExp(`^\\s*(?:export\\s+)?${k}\\s*=`, 'm').test(envFileText))
     if (leaked.length > 0) {
       return { ok: false, reason: `${leaked.join(', ')} đang nằm trong .env.local — đây phải là biến PROCESS tạm cho từng lần chạy, xoá khỏi .env.local.` }
     }
