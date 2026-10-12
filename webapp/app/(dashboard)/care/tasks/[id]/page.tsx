@@ -43,7 +43,7 @@ export default async function CareTaskDetailPage({ params }: { params: Promise<{
         taskId={t.id}
         todayISO={vnDateISO(now)}
         loadMore={loadMoreCareInteractions}
-        contactLinks={!isCareQaActive()}
+        qa={isCareQaActive()}
         data={{
           task: t,
           products: detail.products,

@@ -2,21 +2,23 @@
 
 import { useRef, useState } from 'react'
 import Link from 'next/link'
-import { AlertTriangle, CheckCircle2, ChevronRight, ClipboardList, Loader2, Search, Users, X } from 'lucide-react'
+import { ChevronRight, ClipboardList, Loader2, Search, X } from 'lucide-react'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { StatCard } from '@/components/ds/StatCard'
 import { FilterTabs } from '@/components/ds/FilterTabs'
 import { StatusBadge } from '@/components/ds/StatusBadge'
 import { EmptyState } from '@/components/ds/EmptyState'
 import { ErrorState } from '@/components/ds/ErrorState'
 import { CARE_MY_FILTERS, CARE_MY_FILTER_LABELS, careMyBadge, myFilterHref, type CareMyFilter } from '@/lib/care/my'
 import { CARE_OUTCOME_META, isCareOutcome } from '@/lib/care/outcome'
+import { periodLastDay, periodOfDate, vnDateISO } from '@/lib/care/time'
 import { cn } from '@/lib/utils'
 
 // "Khách hàng của tôi" (SPEC B4 §2) — mobile-first. Thẻ = một khách/task kỳ hiện tại dù
 // nhiều sản phẩm; KHÔNG tải sản phẩm/ảnh/timeline ở đây. Bộ lọc + trang qua URL (không
 // PII); tìm tên/SĐT qua action POST. SĐT đã che từ server.
+// B7-ui (M03/M04): 4 thẻ số → 1 khối tiến độ + số đếm ngay trên chip lọc (khách đầu tiên
+// lên màn đầu); thẻ khách thêm "Lần cuối dd/mm". Số liệu vẫn từ care_my_summary, không đổi.
 
 export interface CareMyRow {
   id: string
@@ -32,25 +34,57 @@ export interface CareMySummaryView { assigned: number; notCared: number; complet
 type SearchFn = (input: { filter: CareMyFilter; q: string; page: number }) =>
   Promise<{ ok: true; rows: CareMyRow[]; total: number } | { ok: false; message: string }>
 
+const dm = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`
+
+// B7-ui r2 (artboard 08): thẻ gọn — tên + badge cùng hàng (xuống dòng khi hẹp), dòng phụ SĐT che ·
+// lần cuối (chưa chăm sóc: hạn kỳ) · kết quả gần nhất. Không nút gọi trên thẻ (Q-108: Gọi/Nhắn chỉ ở chi tiết).
 function TaskCard({ r, todayISO, basePath }: { r: CareMyRow; todayISO: string; basePath: string }) {
   const b = careMyBadge(r, todayISO)
   const outcome = isCareOutcome(r.last_outcome) ? CARE_OUTCOME_META[r.last_outcome].label : null
+  const last = r.last_interaction_at ? dm(vnDateISO(new Date(r.last_interaction_at))) : null
   return (
     <li>
       <Link href={`${basePath}/${r.id}`} prefetch={false}
-        className="flex min-h-[44px] items-center gap-3 rounded-lg border bg-card p-3 active:bg-muted/60">
+        className="flex min-h-[64px] items-center gap-3 rounded-care-card border border-care-line bg-card py-3 pr-3 pl-4 active:bg-muted/60">
         <div className="min-w-0 flex-1 space-y-1">
-          <p className="truncate font-medium" title={r.customer_name}>{r.customer_name}</p>
-          <p className="text-xs tabular-nums text-muted-foreground">{r.phone_masked}</p>
-          <div className="flex flex-wrap items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <p className="max-w-full truncate text-[16px] leading-tight font-semibold" title={r.customer_name}>{r.customer_name}</p>
             <StatusBadge tone={b.tone}>{b.label}</StatusBadge>
-            {outcome && !b.label.startsWith(outcome) && <span className="truncate text-xs text-muted-foreground">{outcome}</span>}
           </div>
+          <p className="line-clamp-2 text-[13px] tabular-nums text-muted-foreground">
+            {r.phone_masked}{last ? <> · Lần cuối {last}</> : <> · Hạn {dm(r.due_date)}</>}
+            {outcome && !b.label.startsWith(outcome) && <> · {outcome}</>}
+          </p>
         </div>
         <ChevronRight className="size-5 shrink-0 text-muted-foreground" aria-hidden />
       </Link>
     </li>
   )
+}
+
+/** Khối tiến độ kỳ: thay 4 thẻ số (M03). Các nhóm còn lại hiện thành số đếm trên chip lọc. */
+function ProgressSummary({ summary, todayISO }: { summary: CareMySummaryView; todayISO: string }) {
+  const period = periodOfDate(todayISO)
+  const pct = summary.assigned > 0 ? Math.round((summary.completed / summary.assigned) * 100) : 0
+  return (
+    <section aria-label="Tiến độ trong tháng" className="space-y-2.5 rounded-care-card border border-care-line bg-card px-4 py-3.5">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <p className="text-[15px] text-muted-foreground">
+          <span className="text-[22px] font-bold tabular-nums text-foreground">{summary.completed}</span>
+          <span className="tabular-nums">/{summary.assigned}</span> khách đã hoàn thành
+        </p>
+        <p className="text-[13px] text-muted-foreground">Tháng {period.slice(5, 7)} · hạn {dm(periodLastDay(period))}</p>
+      </div>
+      <div className="h-1.5 overflow-hidden rounded-full bg-muted" role="progressbar" aria-label="Tỉ lệ hoàn thành"
+        aria-valuemin={0} aria-valuemax={100} aria-valuenow={pct}>
+        <div className="h-full rounded-full bg-status-success" style={{ width: `${pct}%` }} />
+      </div>
+    </section>
+  )
+}
+
+function filterCount(s: CareMySummaryView, k: CareMyFilter): number {
+  return k === 'all' ? s.assigned : k === 'not_cared' ? s.notCared : k === 'overdue' ? s.overdueLive : s.completed
 }
 
 export function CareMyHome({
@@ -89,33 +123,34 @@ export function CareMyHome({
   }
 
   return (
-    <div className="space-y-4" data-testid="care-my-home">
-      {/* Các nhóm có thể giao nhau (một khách vừa Đang theo dõi vừa Quá hạn) — không cộng thành tổng. */}
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
-        <StatCard label="Được giao" value={summary.assigned} icon={Users} />
-        <StatCard label="Chưa chăm sóc" value={summary.notCared} icon={ClipboardList} />
-        <StatCard label="Hoàn thành" value={summary.completed} icon={CheckCircle2} tone="success" />
-        <StatCard label="Quá hạn đang mở" value={summary.overdueLive} icon={AlertTriangle} tone={summary.overdueLive > 0 ? 'danger' : 'default'} />
-      </div>
+    <div className="space-y-3" data-testid="care-my-home">
+      <ProgressSummary summary={summary} todayISO={todayISO} />
 
-      <FilterTabs ariaLabel="Lọc khách" activeKey={filter}
-        tabs={CARE_MY_FILTERS.map((k) => ({ key: k, label: CARE_MY_FILTER_LABELS[k], href: myFilterHref(k).replace('/care/my', basePath) }))} />
+      {/* Số trên chip là số đếm của cả kỳ (care_my_summary). Các nhóm có thể giao nhau (một khách
+          vừa Đang theo dõi vừa Quá hạn) — không cộng thành tổng. */}
+      <FilterTabs ariaLabel="Lọc khách" activeKey={filter} variant="chip" className="-mx-4 px-4 md:mx-0 md:px-0"
+        tabs={CARE_MY_FILTERS.map((k) => ({ key: k, label: CARE_MY_FILTER_LABELS[k], count: filterCount(summary, k), href: myFilterHref(k).replace('/care/my', basePath) }))} />
 
-      <form className="flex items-center gap-2" onSubmit={(e) => { e.preventDefault(); void runSearch(1) }}>
-        <div className="relative min-w-0 flex-1">
-          <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
-          <Input aria-label="Tìm tên hoặc SĐT khách" placeholder="Tìm tên hoặc SĐT…" value={q} autoComplete="off"
-            onChange={(e) => setQ(e.target.value)} className="h-[44px] pl-8 text-[16px] md:h-9 md:text-sm" />
+      {/* B7-ui r2 (artboard 08): MỘT ô tìm, gửi bằng phím Tìm/Enter của bàn phím (POST — SĐT không lên URL);
+          bên phải: vòng quay khi đang tìm, ✕ bỏ tìm khi đang xem kết quả. */}
+      <form role="search" onSubmit={(e) => { e.preventDefault(); void runSearch(1) }}
+        className="relative flex items-center">
+        <Search className="pointer-events-none absolute left-3.5 size-[18px] text-muted-foreground" aria-hidden />
+        <Input type="search" enterKeyHint="search" aria-label="Tìm tên hoặc SĐT khách" placeholder="Tìm tên hoặc SĐT" value={q} autoComplete="off"
+          onChange={(e) => setQ(e.target.value)}
+          className="h-[44px] rounded-care-field border-care-line-strong bg-card pr-12 pl-10 text-[16px] md:h-9 md:text-sm [&::-webkit-search-cancel-button]:appearance-none" />
+        <div className="absolute right-0 flex">
+          {busy ? (
+            <span className="flex size-[44px] items-center justify-center" role="status" aria-label="Đang tìm"><Loader2 className="size-4 animate-spin text-muted-foreground" /></span>
+          ) : result ? (
+            <Button type="button" variant="ghost" className="size-[44px] px-0" aria-label="Bỏ tìm" onClick={() => { setQ(''); setResult(null); setErr(null) }}>
+              <X className="size-4" />
+            </Button>
+          ) : null}
         </div>
-        <Button type="submit" variant="outline" className="min-h-[44px] md:min-h-0" disabled={busy}>
-          {busy ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}<span className="sr-only md:not-sr-only">Tìm</span>
-        </Button>
-        {result && (
-          <Button type="button" variant="ghost" className="min-h-[44px] md:min-h-0" aria-label="Bỏ tìm" onClick={() => { setQ(''); setResult(null); setErr(null) }}>
-            <X className="size-4" />
-          </Button>
-        )}
       </form>
+
+      <p className="px-0.5 text-[13px] text-muted-foreground" aria-live="polite">{total} khách{result ? ' khớp tìm kiếm' : ''}</p>
 
       {err && <ErrorState message={err} />}
       {rows.length === 0 ? (

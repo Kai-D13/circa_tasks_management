@@ -91,6 +91,66 @@ export function myFilterHref(filter: CareMyFilter, page = 1): string {
 }
 
 /**
+ * B7-ui (M01/M02): màn con của luồng CSKH dược sĩ — header mobile quay về màn CHA cố định
+ * (không `router.back()`: sau khi lưu lượt, lịch sử còn form cũ) và bottom nav ẩn để nút
+ * hành động chính dính đáy. `/care/my` là màn gốc của tab CSKH ⇒ null (không "Quay lại").
+ */
+export function careMyBackTarget(pathname: string): { href: string; label: string } | null {
+  const m = /^\/care\/my\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(\/update)?\/?$/i.exec(pathname)
+  if (!m) return null
+  return m[2] ? { href: `/care/my/${m[1]}`, label: 'Chi tiết khách' } : { href: '/care/my', label: 'Khách hàng của tôi' }
+}
+
+/** B7-ui r2: 3 màn dược sĩ CSKH có header riêng của trang (MobileHeader chung ẩn) — danh sách gốc + 2 màn con. */
+export function careMyScreen(pathname: string): 'list' | 'detail' | 'update' | null {
+  if (pathname === '/care/my' || pathname === '/care/my/') return 'list'
+  const b = careMyBackTarget(pathname)
+  return b ? (b.href === '/care/my' ? 'detail' : 'update') : null
+}
+
+/**
+ * B7-ui r2: nút quay lại/huỷ ở header màn con. Mục lịch sử ngay trước đúng là màn cha (cùng pathname,
+ * query tuỳ ý) ⇒ 'back' — giữ bộ lọc/trang/vị trí cuộn của danh sách; còn lại (mở link trực tiếp, vừa
+ * lưu form xong bằng replace…) ⇒ 'push' về màn cha cố định.
+ */
+export function careBackMode(prevUrl: string | null | undefined, targetHref: string, origin: string): 'back' | 'push' {
+  if (!prevUrl) return 'push'
+  try {
+    const prev = new URL(prevUrl, origin)
+    return prev.origin === origin && prev.pathname.replace(/\/$/, '') === targetHref.replace(/\/$/, '') ? 'back' : 'push'
+  } catch { return 'push' }
+}
+
+/** Chữ tắt avatar khách: chữ cái đầu của từ đầu + từ cuối có chữ (bỏ từ chỉ có số), tối đa 2 ký tự. */
+export function customerInitials(name: string): string {
+  const words = name.trim().split(/\s+/).filter((w) => /\p{L}/u.test(w))
+  if (words.length === 0) return '?'
+  const first = words[0].match(/\p{L}/u)![0]
+  const last = words.length > 1 ? words[words.length - 1].match(/\p{L}/u)![0] : ''
+  return (first + last).toLocaleUpperCase('vi')
+}
+
+const VN_WEEKDAYS = ['Chủ nhật', 'Thứ hai', 'Thứ ba', 'Thứ tư', 'Thứ năm', 'Thứ sáu', 'Thứ bảy']
+/** Ngày lịch "dd/mm/yyyy (Thứ …)" — tránh ô date native hiện mm/dd theo locale máy. */
+export function careDateLabel(iso: string): string {
+  return `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)} (${VN_WEEKDAYS[new Date(`${iso}T00:00:00Z`).getUTCDay()]})`
+}
+
+/**
+ * B7-ui (M05): nút chọn nhanh ngày hẹn — ngày lịch thuần (UTC 00:00, không lệch múi giờ);
+ * nút vượt hạn task (`dueISO`) bị tắt. Server/RPC vẫn validate [hôm nay, hạn] như cũ.
+ */
+export const CARE_NEXT_DATE_PRESETS = [{ label: 'Hôm nay', days: 0 }, { label: 'Ngày mai', days: 1 }, { label: '+3 ngày', days: 3 }, { label: '+7 ngày', days: 7 }] as const
+export function careNextDatePresets(todayISO: string, dueISO: string): { label: string; value: string; disabled: boolean }[] {
+  return CARE_NEXT_DATE_PRESETS.map((p) => {
+    const d = new Date(`${todayISO}T00:00:00Z`)
+    d.setUTCDate(d.getUTCDate() + p.days)
+    const value = d.toISOString().slice(0, 10)
+    return { label: p.label, value, disabled: value > dueISO }
+  })
+}
+
+/**
  * Áp filter lên query task của CHÍNH dược sĩ (assignee + ĐÚNG store hiện tại — Q-82 + kỳ hiện
  * tại + phạm vi dữ liệu: production loại is_test · QA local chỉ batch QA). RLS 114 cũng chặn store
  * lệch; điều kiện ở đây giữ danh sách khớp care_my_summary. "Quá hạn" = còn mở + ngày hẹn < hôm nay

@@ -593,6 +593,8 @@ async function downScoped(gw, m, markerPath) {
 /**
  * B6-qa-ui — lệnh khởi động dev server QA (không tự spawn trong hàm để test được): `next dev` bind 127.0.0.1, cờ CRM
  * CHỈ trong env process con, sync OFF. Server tự kiểm lại toàn bộ cổng (lib/care/qa/uiGate.ts) mỗi request.
+ * B7-ui r2: `clean` = cache dev (`.next/dev`) xoá TRƯỚC khi chạy — QA 11/10 thấy cache Turbopack giữ CSS cũ
+ * (thiếu luật mới của globals.css) dù mã nguồn đã đổi; lần đầu biên dịch chậm hơn nhưng UI đúng mã hiện tại.
  */
 export function cmdServe({ env, envFileText, markerPath, port = 3100, appDir = path.resolve(HERE, '..') }) {
   const g = careWriteGate({ env, envFileText, markerExists: false })
@@ -607,7 +609,7 @@ export function cmdServe({ env, envFileText, markerPath, port = 3100, appDir = p
   return {
     command: process.execPath,
     args: [path.join(appDir, 'node_modules', 'next', 'dist', 'bin', 'next'), 'dev', '-H', '127.0.0.1', '-p', String(port)],
-    cwd: appDir, env: childEnv, url: `http://localhost:${port}`,
+    cwd: appDir, env: childEnv, url: `http://localhost:${port}`, clean: path.join(appDir, '.next', 'dev'),
   }
 }
 
@@ -675,7 +677,14 @@ async function main() {
   if (cmd === 'serve') {
     let s
     try { s = cmdServe({ env: process.env, envFileText, markerPath: DEFAULT_MARKER_PATH, port: a1 ? Number(a1) : 3100 }) } catch (e) { fail(e) }
-    console.log(JSON.stringify({ ok: true, url: s.url, note: 'Ctrl+C để tắt; xong QA: tắt server rồi chạy down' }))
+    // Đổi tên TRƯỚC rồi mới xoá: thư mục đang bị next dev khác giữ (Windows: EBUSY/EPERM) ⇒ đổi tên lỗi nguyên
+    // khối, không xoá dở cache của server kia ⇒ dừng (không chạy 2 dev server chung .next/dev).
+    if (fs.existsSync(s.clean)) {
+      const stale = `${s.clean}-old-${Date.now()}`
+      try { fs.renameSync(s.clean, stale) } catch { fail(new FixtureError('DEV_CACHE_BUSY', 'không dọn được .next/dev — tắt MỌI next dev của webapp rồi chạy lại')) }
+      try { fs.rmSync(stale, { recursive: true, force: true }) } catch { /* bản cũ đã tách khỏi đường dùng — xoá sau cũng được */ }
+    }
+    console.log(JSON.stringify({ ok: true, url: s.url, note: 'Ctrl+C để tắt; xong QA: tắt server rồi chạy down. Lần đầu mở trang chậm hơn (đã dọn cache dev).' }))
     const { spawn } = await import('node:child_process')
     spawn(s.command, s.args, { cwd: s.cwd, env: s.env, stdio: 'inherit' }).on('exit', (code) => process.exit(code ?? 0))
     return

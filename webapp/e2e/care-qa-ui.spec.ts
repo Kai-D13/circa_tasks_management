@@ -175,21 +175,28 @@ test.describe('care B6-qa-ui — cổng chế độ QA (thuần) @desktop', () =
     expect(block).toContain("if (!(careQaStaffIds() ?? []).includes(toUserId)) return 'TARGET_INVALID'")
     expect(block).toContain("return error || count !== taskIds.length ? 'TASK_NOT_FOUND' : null")
     expect(read('lib/care/server/browse.ts')).toContain('.filter((u) => qaStaff === null || qaStaff.includes(u.id))')
-    // PM r1 P1: SĐT giả có thể là số người thật ⇒ ở QA hai màn chi tiết không render tel:/sms: (production giữ nguyên).
-    for (const f of ['app/(dashboard)/care/my/[id]/page.tsx', 'app/(dashboard)/care/tasks/[id]/page.tsx']) expect(read(f), f).toContain('contactLinks={!isCareQaActive()}')
-    // Mọi liên kết tel:/sms: nằm TRONG nhánh `contactLinks` đúng (nhánh còn lại chỉ hiện số dạng chữ).
-    const myDetail = read('components/care/CareMyTaskDetail.tsx')
-    expect(myDetail).toContain('contactLinks = true')
-    const myOn = /\{contactLinks \? \(([\s\S]*?)\) : \(([\s\S]*?)\)\}/.exec(myDetail)!
-    expect(myOn[1].match(/href=\{`(tel|sms):/g)).toHaveLength(2)
-    expect(myOn[2]).not.toMatch(/href=|tel:|sms:/)
-    expect(myDetail.match(/href=\{`(tel|sms):/g)).toHaveLength(2)
-    const adminDetail = read('components/care/CareTaskDetailView.tsx')
-    expect(adminDetail).toContain('contactLinks = true')
-    const adOn = /\{contactLinks\s*\?([\s\S]*?)\n\s*:([\s\S]*?)\}\n/.exec(adminDetail)!
-    expect(adOn[1].match(/href=\{`tel:/g)).toHaveLength(1)
-    expect(adOn[2]).not.toMatch(/href=|tel:/)
-    expect(adminDetail.match(/href=\{`(tel|sms):/g)).toHaveLength(1)
+    // Q-107 (B7-ui r1.1, thay PM r1 P1): QA cũng mở tel:/sms: — số là phone_norm của task đang xem; trang chi tiết
+    // chỉ đọc task qua loadCareTaskDetail (withScope ⇒ applyCareScope(careDataScope()): QA = is_test + batch marker)
+    // nên luôn là số bản sao QA.
+    // Hai trang chỉ truyền cờ hiển thị dòng nhận biết QA; không còn nhánh nào bỏ/giả liên kết.
+    for (const f of ['app/(dashboard)/care/my/[id]/page.tsx', 'app/(dashboard)/care/tasks/[id]/page.tsx']) {
+      expect(read(f), f).toContain('qa={isCareQaActive()}')
+      expect(read(f), f).toContain('detail = await loadCareTaskDetail(id)')
+      expect(read(f), f).not.toMatch(/contactLinks|phone_(raw|norm)/)
+    }
+    const browse = read('lib/care/server/browse.ts')
+    expect(browse).toContain('return applyCareScope(q as unknown as LooseBuilder, careDataScope()) as unknown as T')
+    expect(/export async function loadCareTaskDetail[\s\S]*?\n\}/.exec(browse)![0]).toMatch(/const \{ data: task, error \} = await withScope\(supabase\.from\('care_tasks'\)/)
+    // Đếm trên MÃ (bỏ comment): mọi tel:/sms: trong code đều là href từ phone_norm của task đang xem.
+    const code = (f: string) => read(f).replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\s\/\/ .*$/gm, '')
+    const myDetail = code('components/care/CareMyTaskDetail.tsx')
+    expect(myDetail).not.toMatch(/contactLinks|aria-disabled/)
+    expect(myDetail.match(/href=\{`(tel|sms):\$\{t\.phone_norm\}`\}/g)).toHaveLength(2) // đúng 2 link, đều từ phone_norm của task
+    expect(myDetail.match(/(tel|sms):/g)).toHaveLength(2)
+    const adminDetail = code('components/care/CareTaskDetailView.tsx')
+    expect(adminDetail).not.toMatch(/contactLinks/)
+    expect(adminDetail.match(/href=\{`tel:\$\{t\.phone_norm\}`\}/g)).toHaveLength(1)
+    expect(adminDetail.match(/(tel|sms):/g)).toHaveLength(1)
     expect(read('app/actions/uploads.ts')).toMatch(/if \(isCareQaActive\(\)\) return \{ error: 'Chế độ QA không nhận ảnh minh chứng' \}/)
     const handler = read('lib/care/import/handler.ts')
     expect(handler).not.toMatch(/form\.get\('(is_?test|isTest|qa|batch)/i)
@@ -460,6 +467,15 @@ test.describe('care B6-qa-ui — vòng đời prepare → import browser → 5 v
     expect({ super: await n(R.super, QA), marketing: await n(R.marketing, QA), sm: await n(R.sm, QA), duocsi2: await n(R.duocsi2, QA), duocsi3: await n(R.duocsi3, QA), qlch: await n(R.qlch, QA) })
       .toEqual({ super: 12, marketing: 12, sm: 12, duocsi2: 12, duocsi3: 0, qlch: 0 })
     expect(await n(R.super, CARE_PRODUCTION_SCOPE)).toBe(5) // màn production (Coolify) không bao giờ thấy QA
+    // Q-107: nút Gọi/Nhắn ở QA dùng phone_norm của task trong batch marker ⇒ 12 số bản sao QA (039001…); không số nào
+    // của file gốc (khách thật) hay task thật lọt vào phạm vi dược sĩ thấy.
+    const qaPhones: string[] = await L.as(db, R.duocsi2, async () => (await db.query(
+      `SELECT phone_norm FROM public.care_tasks WHERE is_test AND batch_id = $1`, [m.batchId])).rows.map((r: any) => r.phone_norm))
+    expect(qaPhones).toHaveLength(12)
+    expect(qaPhones.every((p) => /^039001\d{4}$/.test(p))).toBe(true)
+    const realPhones = new Set<string>([...orig.rows.map((r) => r.customer_phone),
+      ...(await db.query(`SELECT phone_norm FROM public.care_tasks WHERE NOT is_test`)).rows.map((r: any) => r.phone_norm)])
+    expect(qaPhones.filter((p) => realPhones.has(p))).toEqual([])
 
     // SM chuyển 4 task duocsi2 → duocsi3 (store khác trong vùng); duocsi2 ghi lượt hẹn lại / kết thúc / từ chối (proof null ⇒ []).
     const qaIds = (await rlsTasks(db, L, R.super, period, QA)).map((t: any) => t.id)
@@ -658,6 +674,8 @@ test.describe('care B6-qa-ui — vòng đời prepare → import browser → 5 v
     expect(s.args.slice(1)).toEqual(['dev', '-H', '127.0.0.1', '-p', '3100'])
     expect(s.env).toMatchObject({ CARE_ENABLED: 'true', CARE_SYNC_ENABLED: 'false', CARE_QA_UI: 'YES', CARE_QA_UI_BIND: '127.0.0.1' })
     expect(s.env.NODE_ENV).toBeUndefined()
+    // B7-ui r2: cache dev cũ từng giữ CSS cũ ⇒ serve dọn đúng .next/dev của app trước khi chạy.
+    expect(s.clean).toBe(path.join(dir, '.next', 'dev'))
     expect(() => F.cmdServe({ env: { ...env, E2E_CARE_WRITE_QA: undefined }, envFileText: '', markerPath })).toThrow()
     expect(() => F.cmdServe({ env, envFileText: 'E2E_EXPECTED_SUPABASE_HOST=x\n', markerPath })).toThrow()
     fs.writeFileSync(markerPath, JSON.stringify(sampleMarker({ phase: 'tearing_down' })))

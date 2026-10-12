@@ -48,6 +48,19 @@
   --color-status-neutral-bg: var(--status-neutral-bg);
   --color-status-info: var(--status-info);
   --color-status-info-bg: var(--status-info-bg);
+  /* B7-ui r2 — style CÓ SCOPE cho 3 màn dược sĩ CSKH (/care/my, chi tiết, ghi nhận) theo artboard
+     08/09/10 stakeholder duyệt. Ngoại lệ circa-ui có chủ đích (PM audit B7 r2): bo góc 14/12/10px
+     và CTA cam đậm — CHỈ dùng trong components/care màn dược sĩ, không dùng ở module khác. */
+  --color-care-surface: var(--care-surface);
+  --color-care-line: var(--care-line);
+  --color-care-line-strong: var(--care-line-strong);
+  --color-care-cta: var(--care-cta);
+  --color-care-cta-foreground: var(--care-cta-foreground);
+  --color-care-select: var(--care-select);
+  --color-care-select-line: var(--care-select-line);
+  --radius-care-card: 14px;
+  --radius-care-ctl: 12px;
+  --radius-care-field: 10px;
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -128,6 +141,15 @@
   --sidebar-accent-foreground: oklch(0.70 0.17 42);
   --sidebar-border: oklch(0.87 0 0);
   --sidebar-ring: oklch(0.70 0.17 42);
+  /* B7-ui r2 — màn dược sĩ CSKH (xem @theme). Giá trị lấy đúng artboard 08/09/10. CTA #C94A16 +
+     chữ trắng ≈5,5:1 (AA) — cam brand #FB743E + chữ trắng chỉ ≈2,6:1. */
+  --care-surface: #F7F6F4;
+  --care-line: #E7E5E4;
+  --care-line-strong: #D6D3D1;
+  --care-cta: #C94A16;
+  --care-cta-foreground: #FFFFFF;
+  --care-select: #FFF1EA;
+  --care-select-line: #F3C2A8;
 }
 
 /* ============================================================
@@ -177,6 +199,15 @@
   --sidebar-accent-foreground: oklch(0.82 0.14 44);
   --sidebar-border: oklch(0.24 0 0);
   --sidebar-ring: oklch(0.73 0.16 42);
+  /* B7-ui r2 — màn dược sĩ CSKH, dark: nền theo --background, đường kẻ ấm (palette dark artboard
+     desktop), CTA cam sáng + chữ tối. */
+  --care-surface: oklch(0.12 0.003 60);
+  --care-line: oklch(0.26 0.006 60);
+  --care-line-strong: oklch(0.33 0.008 60);
+  --care-cta: oklch(0.73 0.16 42);
+  --care-cta-foreground: oklch(0.16 0.01 50);
+  --care-select: oklch(0.23 0.04 44);
+  --care-select-line: oklch(0.45 0.09 44);
 }
 
 @layer base {
@@ -231,3 +262,26 @@
   }
 }
 
+
+/* B7-ui (CRM-CSKH M01): route mobile KHÔNG render bottom nav (chi tiết / ghi nhận CSKH của dược sĩ)
+   ⇒ <main> không chừa `--bottom-nav-clearance` nữa, chỉ giữ safe-area; thanh hành động dính đáy
+   (components/ds/StickyActionBar) nằm sát mép dưới. Ngoài @layer để thắng utility pb-[…] của <main>. */
+@media (max-width: 767.98px) {
+  body:not(:has([data-bottom-nav])) main {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  /* B7-ui r2: 3 màn dược sĩ CSKH (gốc trang có [data-care-screen]) dùng nền ấm của artboard — phủ cả
+     vùng padding đáy của <main> để không lộ dải màu khác khi nội dung ngắn. */
+  main:has([data-care-screen]) {
+    background-color: var(--care-surface);
+  }
+  /* Ô đang focus (vd ghi chú khi bàn phím bật) được cuộn lên TRÊN thanh hành động dính đáy. */
+  main:has([data-sticky-action]) {
+    scroll-padding-bottom: 120px;
+  }
+}
+
+/* B7-ui (đề xuất nhỏ toàn app, chờ PM duyệt): control native (select, ô ngày, file input) theo
+   đúng theme của app thay vì luôn sáng — theme bật bằng class .dark trên <html>. */
+:root { color-scheme: light; }
+:root.dark { color-scheme: dark; }

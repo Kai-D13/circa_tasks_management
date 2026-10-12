@@ -35,10 +35,10 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-export function CareTaskDetailView({ taskId, data, todayISO, actions, loadMore, contactLinks = true }: {
+export function CareTaskDetailView({ taskId, data, todayISO, actions, loadMore, qa = false }: {
   taskId: string; data: CareDetailViewData; todayISO: string; actions?: React.ReactNode; loadMore?: CareLoadMoreInteractions
-  /** B6-qa-ui: chế độ QA local ⇒ false — SĐT giả có thể là số người thật, không render tel:. */
-  contactLinks?: boolean
+  /** Q-107: chế độ QA local vẫn là link tel: (số task is_test của batch marker) — chỉ thêm dòng nhận biết số giả. */
+  qa?: boolean
 }) {
   const t = data.task
   const st = careTaskState(t, todayISO)
@@ -55,9 +55,8 @@ export function CareTaskDetailView({ taskId, data, todayISO, actions, loadMore, 
         </div>
         <dl className="grid grid-cols-2 gap-3 md:grid-cols-4">
           <Field label="Số điện thoại">
-            {contactLinks
-              ? <a href={`tel:${t.phone_norm}`} className="inline-flex min-h-[44px] items-center text-primary hover:underline md:min-h-0">{t.phone_raw}</a>
-              : <span data-testid="care-contact-disabled">{t.phone_raw} <span className="block text-xs text-muted-foreground">Chế độ QA: số giả — không gọi</span></span>}
+            <a href={`tel:${t.phone_norm}`} className="inline-flex min-h-[44px] items-center text-primary hover:underline md:min-h-0">{t.phone_raw}</a>
+            {qa && <span data-testid="care-contact-qa" className="block text-xs text-status-warning">Chế độ QA: số của khách QA giả</span>}
           </Field>
           <Field label="Kỳ / hạn">{dmy(t.period_month).slice(3)} · hạn {dmy(t.due_date)}</Field>
           <Field label="Cửa hàng">{t.store ? `${t.store.code} · ${t.store.name}` : '—'}</Field>
@@ -69,12 +68,15 @@ export function CareTaskDetailView({ taskId, data, todayISO, actions, loadMore, 
         </dl>
       </section>
 
-      <section className="space-y-3">
-        <h2 className="flex items-center gap-2 text-base font-semibold"><Package className="size-4" /> Sản phẩm cần chăm sóc ({data.products.length})</h2>
-        {data.products.length ? <CareProductGallery products={data.products} /> : <EmptyState title="Không có sản phẩm" />}
-      </section>
+      {/* B7-ui: desktop rộng — sản phẩm và lịch sử đặt cạnh nhau (trước đây thẻ sản phẩm chiếm nửa hàng, nửa còn lại trống). */}
+      <div className="grid gap-6 lg:grid-cols-2 lg:items-start">
+        <section className="space-y-3">
+          <h2 className="flex items-center gap-2 text-base font-semibold"><Package className="size-4" /> Sản phẩm cần chăm sóc ({data.products.length})</h2>
+          {data.products.length ? <CareProductGallery products={data.products} /> : <EmptyState title="Không có sản phẩm" />}
+        </section>
 
-      <CareTimeline taskId={taskId} initial={data.interactions} events={data.events} loadMore={loadMore} />
+        <CareTimeline taskId={taskId} initial={data.interactions} events={data.events} loadMore={loadMore} />
+      </div>
     </div>
   )
 }

@@ -99,8 +99,8 @@ export default async function DashboardLayout({
               cao nav là chỗ này tự khớp. Giá trị hiện tại bằng đúng pb cũ
               (5.5rem + safe-area = 82.5px + safe-area @ root 15px). */}
           <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden bg-muted/20 pb-[var(--bottom-nav-clearance)] md:pb-0">
-            {/* Mobile top header */}
-            <MobileHeader />
+            {/* Mobile top header — 3 màn dược sĩ CSKH tự dựng header riêng (B7-ui r2), cùng điều kiện tab CSKH */}
+            <MobileHeader careOwnHeader={isStaff && !isFsStore && isCareEnabled()} />
             {children}
           </main>
         </div>

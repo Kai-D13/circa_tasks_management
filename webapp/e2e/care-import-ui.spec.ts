@@ -105,6 +105,9 @@ test.describe('care B2 — wizard Phân công (API giả) @desktop', () => {
 
     await wiz.getByRole('button', { name: 'Tiếp: xem phân công' }).click()
     await expect(wiz.getByText('chỉ để xem lại')).toBeVisible()
+    // B7-ui: bước đã xong có dấu ✓ (nhãn "đã xong"), bước hiện tại aria-current="step".
+    await expect(wiz.getByRole('list', { name: 'Các bước import' }).getByLabel('đã xong')).toHaveCount(2)
+    await expect(wiz.locator('li[aria-current="step"]')).toContainText('Phân công')
     await expect(wiz.getByRole('button', { name: /Phân công theo cửa hàng|Chuyển giao/ })).toHaveCount(0)
     await expect(wiz.locator('tbody tr')).toHaveCount(50) // 25 store × 2 dược sĩ
     await shot(page, 'desktop-light-3-assign')

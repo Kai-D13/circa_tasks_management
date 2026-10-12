@@ -130,10 +130,10 @@ export default async function CareBrowseCatalogPage() {
             ],
           }} />
       </section>
-      {/* B6-qa-ui: chế độ QA local — SĐT giả hiện dạng chữ, KHÔNG có tel:. */}
+      {/* Q-107 (B7-ui r1.1): chế độ QA local — vẫn tel: với số của task QA, thêm dòng nhận biết số giả. */}
       <section className="space-y-3" data-testid="catalog-care-detail-qa">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Chi tiết — chế độ QA</h2>
-        <CareTaskDetailView taskId={ROWS[2].id} todayISO="2026-10-10" contactLinks={false}
+        <CareTaskDetailView taskId={ROWS[2].id} todayISO="2026-10-10" qa
           data={{
             // Cùng số đầy đủ với khối chi tiết ở trên (0390000002) — số của các hàng danh sách khác không được vào HTML.
             task: { ...ROWS[2], phone_norm: PHONES[1], phone_raw: PHONES[1], period_month: '2026-10-01', due_date: '2026-10-31', first_overdue_on: null, completed_at: null, closed_at: null },

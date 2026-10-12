@@ -66,6 +66,10 @@ test.describe('care B3 — browser (dữ liệu giả) @desktop', () => {
     await cur.getByText('Xem bảng số theo cửa hàng').click()
     await expect(cur.getByRole('cell', { name: 'QAOS02' }).first()).toBeVisible()
     await expect(cur.getByText('Chưa cập nhật')).toBeVisible()
+    // B7-ui (hintLines=2): mô tả dài của thẻ số hiện đủ (tối đa 2 dòng), không bị cắt một dòng.
+    const hint = cur.getByText(/^đã qua ngày hẹn chăm sóc lại · từng trễ trong kỳ: \d+$/)
+    await expect(hint).toBeVisible()
+    expect(await hint.evaluate((el) => el.scrollWidth <= el.clientWidth + 1 && el.scrollHeight <= el.clientHeight + 1)).toBe(true)
     const past = page.getByTestId('catalog-care-dashboard-past')
     for (const l of ['Từng trễ hẹn trong kỳ', 'Không hoàn thành trong kỳ']) await expect(past.getByText(l, { exact: true }).first()).toBeVisible()
     await expect(past.getByText('Quá hạn đang mở', { exact: true })).toHaveCount(0)
@@ -137,9 +141,12 @@ test.describe('care B3 — browser (dữ liệu giả) @desktop', () => {
     await expect(dlg.getByText('QAOS01 · QA Dược sĩ 01a (2)')).toBeVisible()
     const confirm = dlg.getByRole('button', { name: 'Xác nhận chuyển giao' })
     await expect(confirm).toBeDisabled()
+    // B7-ui: nút tắt luôn kèm lý do (không phải role=alert).
+    await expect(dlg.getByTestId('care-transfer-hint')).toHaveText('Chọn dược sĩ nhận và nhập ghi chú để xác nhận.')
     await pickTarget(page, 'QA Dược sĩ 02a')
     await expect(dlg.getByText('2 khách đổi sang cửa hàng QAOS02')).toBeVisible()
     await expect(confirm).toBeDisabled()                                     // chưa có ghi chú
+    await expect(dlg.getByTestId('care-transfer-hint')).toHaveText('Nhập ghi chú chuyển giao để xác nhận.')
     await dlg.getByRole('textbox', { name: 'Ghi chú chuyển giao (bắt buộc)' }).fill('   ')
     await expect(confirm).toBeDisabled()
     await dlg.getByRole('textbox', { name: 'Ghi chú chuyển giao (bắt buộc)' }).fill('QA: dược sĩ nghỉ phép')

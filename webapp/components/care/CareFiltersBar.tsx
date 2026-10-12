@@ -20,7 +20,8 @@ export function CareFiltersBar({
 }) {
   const router = useRouter()
   const go = (over: Partial<CareFilters>) => router.push(careFilterHref(path, filters, { ...over, page: 1 }))
-  const selectCls = 'h-10 min-h-[44px] rounded-md border bg-background px-2 text-[16px] md:min-h-0 md:text-sm'
+  // B7-ui: mọi control của thanh lọc cùng cao (mobile 44px, desktop 36px) và cùng bo góc với Input.
+  const selectCls = 'h-[44px] rounded-lg border bg-background px-2 text-[16px] md:h-[36px] md:text-sm'
   return (
     <div className="flex flex-wrap items-center gap-2" data-testid="care-filters">
       <select aria-label="Kỳ chăm sóc" className={selectCls} value={filters.month.slice(0, 7)}
@@ -33,7 +34,7 @@ export function CareFiltersBar({
         options={[{ value: '', label: 'Tất cả cửa hàng' }, ...stores.map((s) => ({ value: s.id, label: s.code, description: s.name, keywords: [s.name] }))]}
         placeholder="Cửa hàng"
         searchPlaceholder="Tìm mã/tên cửa hàng…"
-        triggerClassName="min-h-[44px] md:min-h-0 w-full md:w-56"
+        triggerClassName="min-h-[44px] md:min-h-0 md:h-[36px] w-full md:w-56"
         className="w-full md:w-auto"
       />
       {staff && (
@@ -45,7 +46,7 @@ export function CareFiltersBar({
             .map((s) => ({ value: s.id, label: s.fullName, description: s.storeCode }))]}
           placeholder="Dược sĩ"
           searchPlaceholder="Tìm dược sĩ…"
-          triggerClassName="min-h-[44px] md:min-h-0 w-full md:w-56"
+          triggerClassName="min-h-[44px] md:min-h-0 md:h-[36px] w-full md:w-56"
           className="w-full md:w-auto"
         />
       )}

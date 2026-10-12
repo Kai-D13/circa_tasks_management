@@ -53,6 +53,12 @@ export function CareTransferDialog({
   const sameOwner = target ? tasks.filter((t) => t.assigneeId === target.id).length : 0
   const noteOk = note.trim().length >= 1 && note.trim().length <= CARE_TRANSFER_NOTE_MAX
   const canSubmit = !!target && noteOk && !busy && sameOwner === 0 && tasks.length > 0
+  // B7-ui: nói rõ vì sao nút Xác nhận còn tắt (trước đây chỉ mờ đi, người dùng tưởng lỗi).
+  const blockHint = busy || tasks.length === 0 || canSubmit ? null
+    : sameOwner > 0 ? 'Chọn dược sĩ khác — có khách đã thuộc dược sĩ này.'
+    : !target && !noteOk ? 'Chọn dược sĩ nhận và nhập ghi chú để xác nhận.'
+    : !target ? 'Chọn dược sĩ nhận để xác nhận.'
+    : 'Nhập ghi chú chuyển giao để xác nhận.'
 
   async function submit() {
     if (!canSubmit || sending.current) return
@@ -113,11 +119,12 @@ export function CareTransferDialog({
           <div className="space-y-1">
             <label className="font-medium" htmlFor="care-transfer-note">Ghi chú chuyển giao (bắt buộc)</label>
             <Textarea id="care-transfer-note" value={note} maxLength={CARE_TRANSFER_NOTE_MAX} rows={3}
-              onChange={(e) => setNote(e.target.value)} className="text-[16px] md:text-sm"
+              onChange={(e) => setNote(e.target.value)} className="bg-background text-[16px] md:text-sm dark:bg-background"
               placeholder="Lý do chuyển giao, ví dụ: dược sĩ nghỉ phép, chuyển ca…" />
             <p className="text-right text-xs text-muted-foreground">{note.trim().length}/{CARE_TRANSFER_NOTE_MAX}</p>
           </div>
           {error && <p role="alert" className="text-status-danger">{error}</p>}
+          {blockHint && <p className="text-xs text-muted-foreground" data-testid="care-transfer-hint">{blockHint}</p>}
         </div>
         <DialogFooter>
           <Button variant="outline" className="min-h-[44px] md:min-h-0" disabled={busy} onClick={() => onOpenChange(false)}>Huỷ</Button>

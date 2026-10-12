@@ -96,18 +96,18 @@ export function CareTaskTable({
         <div className="relative w-full md:w-80">
           <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input aria-label="Tìm theo tên hoặc SĐT" placeholder="Tìm theo tên hoặc SĐT…" value={q}
-            onChange={(e) => setQ(e.target.value)} className="h-10 pl-8 text-[16px] md:text-sm" autoComplete="off" />
+            onChange={(e) => setQ(e.target.value)} className="h-[44px] pl-8 text-[16px] md:h-[36px] md:text-sm" autoComplete="off" />
         </div>
-        <Button type="submit" variant="outline" className="min-h-[44px] md:min-h-0" disabled={searching}>
+        <Button type="submit" variant="outline" className="min-h-[44px] md:h-[36px] md:min-h-0" disabled={searching}>
           {searching ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />} Tìm
         </Button>
         {result && (
-          <Button type="button" variant="ghost" className="min-h-[44px] md:min-h-0" onClick={() => { setQ(''); setResult(null); setSearchErr(null); setSelected(new Set()) }}>
+          <Button type="button" variant="ghost" className="min-h-[44px] md:h-[36px] md:min-h-0" onClick={() => { setQ(''); setResult(null); setSearchErr(null); setSelected(new Set()) }}>
             <X className="size-4" /> Bỏ tìm
           </Button>
         )}
         {canTransfer && isCurrentPeriod && (
-          <Button type="button" className="min-h-[44px] md:ml-auto md:min-h-0" disabled={selectedRows.length === 0} onClick={() => setDialog(true)}>
+          <Button type="button" className="min-h-[44px] md:ml-auto md:h-[36px] md:min-h-0" disabled={selectedRows.length === 0} title={selectedRows.length === 0 ? 'Tick chọn khách ở cột đầu để chuyển giao' : undefined} onClick={() => setDialog(true)}>
             <Shuffle className="size-4" /> Chuyển giao{selectedRows.length ? ` (${selectedRows.length})` : ''}
           </Button>
         )}

@@ -3,7 +3,7 @@
 import { useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import {
-  AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Download, FileSpreadsheet, Loader2, Store, Upload, Users,
+  AlertTriangle, Check, CheckCircle2, ChevronLeft, ChevronRight, Download, FileSpreadsheet, Loader2, Store, Upload, Users,
 } from 'lucide-react'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -162,9 +162,10 @@ function CustomerTable({ customers, focusRow, onClearFocus }: { customers: CareP
               key={t}
               type="button"
               onClick={() => { setFilter(t); setPage(1); onClearFocus() }}
+              aria-pressed={filter === t && focusRow === null}
               className={cn(
-                'min-h-[44px] rounded px-3 text-sm md:min-h-0 md:py-1.5',
-                filter === t && focusRow === null ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:text-foreground',
+                'min-h-[44px] rounded-full border px-3.5 text-sm font-medium transition-colors md:min-h-9',
+                filter === t && focusRow === null ? 'border-primary bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:text-foreground',
               )}
             >
               {t === 'all' ? 'Tất cả' : ACTION[t].label} ({fmt(n)})
@@ -353,12 +354,16 @@ export function CareImportWizard({ maxBytes, templateHref = '/api/care/import/te
 
   return (
     <div className="space-y-4" data-testid="care-import-wizard">
-      <ol className="flex flex-wrap gap-2" aria-label="Các bước import">
+      {/* B7-ui: bước đã xong có dấu ✓ + đường nối (trước đây "xong" và "chưa tới" gần như cùng màu). */}
+      <ol className="flex flex-wrap items-center gap-2" aria-label="Các bước import">
         {STEPS.map((s, i) => (
-          <li key={s} aria-current={i === step ? 'step' : undefined}
-            className={cn('flex items-center gap-2 rounded px-3 py-1.5 text-sm',
-              i === step ? 'bg-primary text-primary-foreground' : i < step ? 'bg-muted text-foreground' : 'bg-muted text-muted-foreground')}>
-            <span className="tabular-nums">{i + 1}</span>{s}
+          <li key={s} aria-current={i === step ? 'step' : undefined} className="flex items-center gap-2 text-sm">
+            {i > 0 && <span aria-hidden className={cn('h-px w-5 md:w-10', i <= step ? 'bg-primary' : 'bg-border')} />}
+            <span className={cn('flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold tabular-nums',
+              i === step ? 'bg-primary text-primary-foreground' : i < step ? 'bg-status-success-bg text-status-success' : 'border text-muted-foreground')}>
+              {i < step ? <Check className="size-3.5" aria-label="đã xong" /> : i + 1}
+            </span>
+            <span className={cn(i === step ? 'font-semibold text-foreground' : i < step ? 'text-foreground' : 'text-muted-foreground')}>{s}</span>
           </li>
         ))}
       </ol>
@@ -421,10 +426,14 @@ export function CareImportWizard({ maxBytes, templateHref = '/api/care/import/te
             </p>
           )}
           {preview.activeOsStoresMissing.length > 0 && (
-            <div className="rounded-lg border bg-card p-3 text-sm">
-              <StatusBadge tone="warning">{fmt(preview.activeOsStoresMissing.length)} cửa hàng OS không có khách trong file</StatusBadge>
-              <p className="mt-2 text-muted-foreground">{preview.activeOsStoresMissing.map((s) => s.code).join(', ')}</p>
-            </div>
+            // B7-ui: danh sách mã có thể dài (tới ~25) ⇒ thu gọn, mở xem khi cần.
+            <details className="rounded-lg border bg-card px-3 text-sm">
+              <summary className="flex min-h-[44px] cursor-pointer flex-wrap items-center gap-2 md:min-h-10">
+                <StatusBadge tone="warning">{fmt(preview.activeOsStoresMissing.length)} cửa hàng OS không có khách trong file</StatusBadge>
+                <span className="text-xs text-muted-foreground">Xem danh sách mã</span>
+              </summary>
+              <p className="max-h-32 overflow-y-auto pb-3 text-muted-foreground">{preview.activeOsStoresMissing.map((s) => s.code).join(', ')}</p>
+            </details>
           )}
           {hasErrors && <ErrorTable errors={preview.errors} total={preview.errorCount} onPick={setFocusRow} />}
           <CountsGrid counts={preview.counts} />
