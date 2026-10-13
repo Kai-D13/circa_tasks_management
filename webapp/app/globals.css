@@ -61,6 +61,8 @@
   --radius-care-card: 14px;
   --radius-care-ctl: 12px;
   --radius-care-field: 10px;
+  /* B8 (PM audit B8): card màn browser CRM (super/Marketing/SM) theo artboard 11–13 — chỉ trong components/care. */
+  --radius-care-panel: 12px;
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -279,6 +281,12 @@
   main:has([data-sticky-action]) {
     scroll-padding-bottom: 120px;
   }
+}
+
+/* B8: màn browser CRM (gốc trang có [data-care-browse]) dùng nền ấm --care-surface (sáng/tối) như
+   artboard 11–13 — chỉ vùng nội dung <main> của trang CRM, không đổi sidebar/header toàn app. */
+main:has([data-care-browse]) {
+  background-color: var(--care-surface);
 }
 
 /* B7-ui (đề xuất nhỏ toàn app, chờ PM duyệt): control native (select, ô ngày, file input) theo

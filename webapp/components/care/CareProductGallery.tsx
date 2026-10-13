@@ -10,11 +10,15 @@ import { careSafeImageUrl } from '@/lib/care/browse'
 // URL ngoài CDN đã chốt ⇒ coi như không có ảnh (chốt thứ hai sau CHECK 114); no-referrer.
 export interface CareProductView { id: string; product_id: string; product_name: string; image_url: string | null; reason_type: string; reason_text: string }
 
-export function CareProductGallery({ products }: { products: CareProductView[] }) {
+export function CareProductGallery({ products, columns = 'auto' }: {
+  products: CareProductView[]
+  /** B8.1: 'single' cho drawer hẹp — lưới theo viewport sẽ ép thẻ còn ~1/3 bề rộng drawer. */
+  columns?: 'auto' | 'single'
+}) {
   const [zoom, setZoom] = useState<CareProductView | null>(null)
   return (
     <>
-      <ul className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+      <ul className={columns === 'single' ? 'grid gap-3' : 'grid gap-3 sm:grid-cols-2 xl:grid-cols-3'}>
         {products.map((p) => { const src = careSafeImageUrl(p.image_url); return (
           <li key={p.id} className="flex gap-3 rounded-lg border bg-card p-3">
             {src ? (

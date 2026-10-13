@@ -5,8 +5,8 @@ import { isCareEnabled } from '@/lib/care/flags'
 import { fetchExact } from '@/lib/care/import/fetchExact'
 import { maskVnPhone } from '@/lib/affiliate/phone'
 import {
-  applyCareTaskFilters, careSearchTerm, carePermissions, careInteractionPage, CARE_OUTCOME_KEYS, CARE_INTERACTION_PAGE_SIZE,
-  type CareInteractionPage,
+  applyCareTaskFilters, careCurrentProductCount, careSearchTerm, carePermissions, careInteractionPage, careOpenLoadByAssignee, CARE_OUTCOME_KEYS, CARE_INTERACTION_PAGE_SIZE,
+  CARE_STATUS_FILTERS, type CareInteractionPage, type CareStatusCounts,
   type CareAccess, type CareOutcomeKey, type CareQueryBuilder, type CareFilters, type CarePermissions, type CareReportRow,
 } from '@/lib/care/browse'
 import { applyCareScope } from '@/lib/care/scope'
@@ -82,6 +82,8 @@ export async function getCareNavPermissions(role: string | null | undefined): Pr
 export interface CareStoreOption { id: string; code: string; name: string }
 // Không gửi email dược sĩ xuống client (security-reviewer B3 P2) — tên + mã/tên cửa hàng đủ để chọn.
 export interface CareStaffOption { id: string; fullName: string; storeId: string; storeCode: string; storeName: string }
+/** Đích chuyển giao kèm số task đang mở kỳ hiện tại trong phạm vi người xem (null = không đọc được). */
+export interface CareTransferTargetOption extends CareStaffOption { openCount: number | null }
 
 /** Store OS trong phạm vi đọc: toàn chuỗi (canViewAll) hoặc care_scope_store_ids(). */
 export async function loadScopeStores(perms: CarePermissions): Promise<CareStoreOption[]> {
@@ -151,17 +153,26 @@ export interface CareTaskBase {
   store: { code: string; name: string } | null
   assignee: { full_name: string } | null
 }
-/** Hàng danh sách: SĐT đã che Ở SERVER — số đầy đủ chỉ ở trang chi tiết (TODO(Q-30)). */
-export type CareTaskRow = CareTaskBase & { phone_masked: string }
+/**
+ * Hàng danh sách: SĐT đã che Ở SERVER — số đầy đủ chỉ ở trang/drawer chi tiết (Q-115).
+ * B8.1: `product_count` = số sản phẩm HIỆN HÀNH (is_current) — chỉ đếm, không tải tên/ảnh.
+ */
+export type CareTaskRow = CareTaskBase & { phone_masked: string; product_count: number }
 
 export const CARE_TASK_PAGE_SIZE = 30
 
 const TASK_COLUMNS = 'id, customer_name, period_month, due_date, status, last_outcome, last_interaction_at, next_action_date, store_id, assignee_id, store:stores!care_tasks_store_id_fkey(code, name), assignee:users!care_tasks_assignee_id_fkey(full_name)'
+/**
+ * B8.1: embed CHỈ cờ is_current của dòng sản phẩm (không tên/ảnh) để đếm sản phẩm HIỆN HÀNH trong
+ * cùng request — đếm ở app (careCurrentProductCount) thay vì lọc embed, không phụ thuộc ngữ nghĩa
+ * filter embed của PostgREST; dòng revision cũ (is_current=false) không được tính.
+ */
+const TASK_PRODUCT_FLAGS = 'care_task_products!care_task_products_task_id_fkey(is_current)'
 
 /** Một trang danh sách task (server pagination, thứ tự ổn định created_at ↓, id ↓). */
 export async function loadCareTaskPage(f: CareFilters, todayISO: string, q?: string): Promise<{ rows: CareTaskRow[]; total: number }> {
   const supabase = await createClient()
-  let query = withCareFilters(supabase.from('care_tasks').select(`${TASK_COLUMNS}, phone_norm`, { count: 'exact' }), f, todayISO)
+  let query = withCareFilters(supabase.from('care_tasks').select(`${TASK_COLUMNS}, phone_norm, ${TASK_PRODUCT_FLAGS}`, { count: 'exact' }), f, todayISO)
   const term = q ? careSearchTerm(q) : null
   if (q && !term) return { rows: [], total: 0 }
   if (term) {
@@ -174,9 +185,37 @@ export async function loadCareTaskPage(f: CareFilters, todayISO: string, q?: str
     .order('created_at', { ascending: false }).order('id', { ascending: false })
     .range(from, from + CARE_TASK_PAGE_SIZE - 1)
   if (error || count === null) throw new Error('care_tasks_failed')
-  const rows = ((data ?? []) as unknown as (CareTaskBase & { phone_norm: string })[])
-    .map(({ phone_norm, ...r }) => ({ ...r, phone_masked: maskVnPhone(phone_norm) }))
+  const rows = ((data ?? []) as unknown as (CareTaskBase & { phone_norm: string; care_task_products: { is_current: boolean }[] | null })[])
+    .map(({ phone_norm, care_task_products, ...r }) => ({ ...r, phone_masked: maskVnPhone(phone_norm), product_count: careCurrentProductCount(care_task_products) }))
   return { rows, total: count }
+}
+
+/**
+ * B8.1: số đếm cho chip trạng thái — `all` là count RIÊNG (không cộng chip vì overdue_open giao
+ * following). Cùng kỳ/store/dược sĩ + careDataScope + RLS session; KHÔNG áp từ khoá tìm. Chạy
+ * song song, head:true (không tải dòng). Lỗi ⇒ throw (trang ẩn số, không hiện 0 giả).
+ */
+export async function loadCareStatusCounts(f: CareFilters, todayISO: string): Promise<CareStatusCounts> {
+  const supabase = await createClient()
+  const keys = [null, ...CARE_STATUS_FILTERS] as const
+  const counts = await Promise.all(keys.map(async (status) => {
+    const { count, error } = await withCareFilters(supabase.from('care_tasks').select('id', { count: 'exact', head: true }), { ...f, status }, todayISO)
+    if (error || count === null) throw new Error('care_status_counts_failed')
+    return [status ?? 'all', count] as const
+  }))
+  return Object.fromEntries(counts) as CareStatusCounts
+}
+
+/**
+ * Dòng care_report của kỳ theo phạm vi người xem. QA local: tính từ task batch QA đọc qua RLS
+ * (care_report loại is_test với SM/Marketing — PM B8.1 P1-1); production: RPC DEFINER theo auth.uid.
+ */
+async function loadCareReportRowsScoped(month: string): Promise<CareReportRow[]> {
+  if (careDataScope().kind === 'qa') return loadCareQaReportRows({ month, storeId: null })
+  const supabase = await createClient()
+  const { data, error } = await supabase.rpc('care_report', { p_month: month, p_store_ids: null, p_include_test: false })
+  if (error) throw new Error('care_report_failed')
+  return (data ?? []) as CareReportRow[]
 }
 
 export interface CareTaskDetail {
@@ -254,8 +293,20 @@ export async function careQaTransferBlock(taskIds: string[], toUserId: string): 
   return error || count !== taskIds.length ? 'TASK_NOT_FOUND' : null
 }
 
-export async function loadTransferTargets(perms: CarePermissions): Promise<CareStaffOption[]> {
+/**
+ * Dược sĩ đích + tải hiện tại (B8.1): task đang mở kỳ hiện tại theo care_report trong phạm vi
+ * người xem — MỘT lần đọc, không N+1. Lỗi đọc tải ⇒ openCount null (dialog vẫn dùng được).
+ */
+export async function loadTransferTargets(perms: CarePermissions, currentMonth: string): Promise<CareTransferTargetOption[]> {
   if (!perms.canTransfer) return []
+  const [staff, load] = await Promise.all([
+    loadTransferStaff(perms),
+    loadCareReportRowsScoped(currentMonth).then(careOpenLoadByAssignee).catch(() => null),
+  ])
+  return staff.map((s) => ({ ...s, openCount: load ? (load.get(s.id) ?? 0) : null }))
+}
+
+async function loadTransferStaff(perms: CarePermissions): Promise<CareStaffOption[]> {
   const supabase = await createClient()
   let storeQ = supabase.from('stores').select('id, code, name').eq('store_type', 'os').eq('is_active', true)
   if (!perms.canViewAll) {
