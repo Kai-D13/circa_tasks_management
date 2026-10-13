@@ -59,14 +59,25 @@ export interface CareReportLine {
   closedUnfinished: number
   /** Số task Có đơn (DISTINCT task — nhiều đơn cùng task vẫn 1). */
   convertedTasks: number
+  /**
+   * B8.2 (Q-113): task có ≥1 lượt chăm sóc (`last_interaction_at` có giá trị), kể cả kỳ đã đóng =
+   * Hoàn thành + Đang theo dõi + Không hoàn thành ĐÃ TỪNG có lượt. Hoàn thành luôn có lượt (chỉ lượt
+   * kết thúc mới chuyển completed); phần "không hoàn thành có lượt" đọc riêng (careReportLines `touched`).
+   */
+  contacted: number
 }
 
 export type CareReportTotals = Omit<CareReportLine, 'storeId' | 'storeCode' | 'storeName' | 'assigneeId' | 'assigneeName'>
+
+/** Khoá dòng store × dược sĩ (dùng cho bảng phụ `touched`). */
+export const careReportKey = (storeId: string, assigneeId: string) => `${storeId}|${assigneeId}`
 
 /** Một dòng RPC (store × dược sĩ) ⇒ một dòng báo cáo; KHÔNG JOIN sản phẩm/lượt/đơn (không nhân task). */
 export function careReportLines(
   rows: readonly CareReportRow[],
   ctx: { stores: ReadonlyMap<string, { code: string; name: string }>; names: ReadonlyMap<string, string> },
+  /** Số task closed_unfinished CÓ lượt theo careReportKey (kỳ đang mở luôn rỗng). */
+  touched: ReadonlyMap<string, number> = new Map(),
 ): CareReportLine[] {
   return rows
     .map((r) => ({
@@ -82,6 +93,7 @@ export function careReportLines(
       overdueInPeriod: r.overdue_in_period,
       closedUnfinished: r.closed_unfinished,
       convertedTasks: r.converted_tasks,
+      contacted: r.completed + r.open_in_progress + Math.min(r.closed_unfinished, touched.get(careReportKey(r.store_id, r.assignee_id)) ?? 0),
     }))
     // Store không xác định ('—', vd. store đã xoá khỏi danh mục) xuống cuối.
     .sort((a, b) => Number(a.storeCode === '—') - Number(b.storeCode === '—') || a.storeCode.localeCompare(b.storeCode)
@@ -98,8 +110,51 @@ export function careReportSummary(lines: readonly CareReportLine[]): CareReportT
   return {
     tasks: n('tasks'), completed: n('completed'), notCared: n('notCared'), inProgress: n('inProgress'),
     overdueInPeriod: n('overdueInPeriod'), closedUnfinished: n('closedUnfinished'), convertedTasks: n('convertedTasks'),
+    contacted: n('contacted'),
   }
 }
+
+// ── B8.2: nhóm theo cửa hàng, nhịp kỳ, link danh sách ──────────────────────────
+/** Nhóm dòng theo cửa hàng (giữ thứ tự careReportLines); tổng phụ = cộng ĐÚNG các dòng của store trong scope. */
+export function careReportGroups(lines: readonly CareReportLine[]): { storeId: string; storeCode: string; storeName: string; totals: CareReportTotals; lines: CareReportLine[] }[] {
+  const out: { storeId: string; storeCode: string; storeName: string; lines: CareReportLine[] }[] = []
+  for (const l of lines) {
+    const g = out.find((x) => x.storeId === l.storeId)
+    if (g) g.lines.push(l); else out.push({ storeId: l.storeId, storeCode: l.storeCode, storeName: l.storeName, lines: [l] })
+  }
+  return out.map((g) => ({ ...g, totals: careReportSummary(g.lines) }))
+}
+
+const daysInMonth = (period: string) => new Date(Date.UTC(Number(period.slice(0, 4)), Number(period.slice(5, 7)), 0)).getUTCDate()
+/**
+ * Phần thời gian của kỳ đã qua theo NGÀY VN (Q-114 — chỉ hiển thị thanh, không cảnh báo). Kỳ cũ ⇒ 100%
+ * (`ended`); kỳ hiện tại ⇒ ngày hôm nay (tính cả hôm nay) / số ngày của tháng. Kỳ tương lai không xảy ra
+ * (parseCareFilters chặn) ⇒ 0.
+ */
+export function carePeriodElapsed(period: string, todayISO: string): { elapsedDays: number; totalDays: number; pct: number; ended: boolean } {
+  const totalDays = daysInMonth(period)
+  const cur = todayISO.slice(0, 7) + '-01'
+  if (period < cur) return { elapsedDays: totalDays, totalDays, pct: 100, ended: true }
+  if (period > cur) return { elapsedDays: 0, totalDays, pct: 0, ended: false }
+  const elapsedDays = Math.min(totalDays, Number(todayISO.slice(8, 10)))
+  return { elapsedDays, totalDays, pct: Math.round((elapsedDays / totalDays) * 100), ended: false }
+}
+
+export const carePct = (n: number, d: number) => (d > 0 ? Math.round((n / d) * 100) : 0)
+
+/** Khoá bộ lọc số liệu phụ /care/reports (kỳ/store/dược sĩ) — trang dùng làm `key` provider, provider chặn lúc render. */
+export const careReportExtrasKey = (p: { month: string; store: string | null; assignee: string | null }) => `${p.month}|${p.store ?? ''}|${p.assignee ?? ''}`
+
+/**
+ * Cột báo cáo được phép thành link sang /care/tasks — CHỈ khi filter danh sách trả ĐÚNG CÙNG TẬP task
+ * với số đếm care_report (theo store + owner hiện tại): tasks/completed/notCared/inProgress/closedUnfinished.
+ * KHÔNG link: overdueInPeriod (first_overdue_on gồm cả task đã kết thúc ≠ filter overdue_open), convertedTasks
+ * (snapshot lượt Hoàn thành), contacted (không có filter tương ứng) — PM audit B8 P1.
+ */
+export const CARE_REPORT_LINK_STATUS = {
+  tasks: null, completed: 'completed', notCared: 'not_cared', inProgress: 'following', closedUnfinished: 'closed_unfinished',
+} as const
+export type CareReportLinkKey = keyof typeof CARE_REPORT_LINK_STATUS
 
 // ── Export (cùng dòng/filter với màn hình) ──────────────────────────────────────
 /** Trần phòng thủ: dòng = store × dược sĩ (thực tế vài trăm). */

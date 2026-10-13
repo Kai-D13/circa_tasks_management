@@ -206,6 +206,48 @@ export async function loadCareStatusCounts(f: CareFilters, todayISO: string): Pr
   return Object.fromEntries(counts) as CareStatusCounts
 }
 
+type CareReportScopeFilter = Pick<CareFilters, 'month' | 'storeId' | 'assigneeId'>
+
+/**
+ * B8.2 (Q-113): KPI "Đã liên hệ" = task có `last_interaction_at`, KỂ CẢ kỳ đã đóng — count head:true qua
+ * session/RLS, cùng kỳ/store/dược sĩ + careDataScope (không suy từ completed + in_progress).
+ */
+export async function loadCareContactedCount(f: CareReportScopeFilter, todayISO: string): Promise<number> {
+  const supabase = await createClient()
+  const { count, error } = await withCareFilters(supabase.from('care_tasks').select('id', { count: 'exact', head: true }), { ...f, status: null }, todayISO)
+    .not('last_interaction_at', 'is', null)
+  if (error || count === null) throw new Error('care_contacted_failed')
+  return count
+}
+
+/**
+ * B8.2: số task closed_unfinished ĐÃ TỪNG có lượt theo store × dược sĩ (cột "Đã liên hệ" từng dòng báo cáo).
+ * Kỳ đang mở chưa có task đóng ⇒ 0 dòng. Chỉ đọc 2 cột id (không PII), phân trang an toàn.
+ */
+export async function loadCareClosedTouched(f: CareReportScopeFilter, todayISO: string): Promise<Map<string, number>> {
+  const supabase = await createClient()
+  const rows = await fetchExact<{ store_id: string; assignee_id: string }>((from, to) =>
+    withCareFilters(supabase.from('care_tasks').select('store_id, assignee_id', { count: 'exact' }), { ...f, status: 'closed_unfinished' }, todayISO)
+      .not('last_interaction_at', 'is', null).order('id').range(from, to))
+  const m = new Map<string, number>()
+  for (const r of rows) { const k = `${r.store_id}|${r.assignee_id}`; m.set(k, (m.get(k) ?? 0) + 1) }
+  return m
+}
+
+/**
+ * B8.2 (Q-117): "Kết quả liên hệ" — mỗi task đã có lượt tính MỘT lần theo `last_outcome`; task chưa liên hệ
+ * không vào mẫu. 6 count head:true song song (cùng kỳ/store/dược sĩ + scope).
+ */
+export async function loadCareReportOutcomes(f: CareReportScopeFilter, todayISO: string): Promise<Partial<Record<CareOutcomeKey, number>>> {
+  const supabase = await createClient()
+  return Object.fromEntries(await Promise.all(CARE_OUTCOME_KEYS.filter((k) => k !== 'none').map(async (k) => {
+    const { count, error } = await withCareFilters(supabase.from('care_tasks').select('id', { count: 'exact', head: true }), { ...f, status: null }, todayISO)
+      .eq('last_outcome', k)
+    if (error || count === null) throw new Error('care_report_outcomes_failed')
+    return [k, count] as const
+  }))) as Partial<Record<CareOutcomeKey, number>>
+}
+
 /**
  * Dòng care_report của kỳ theo phạm vi người xem. QA local: tính từ task batch QA đọc qua RLS
  * (care_report loại is_test với SM/Marketing — PM B8.1 P1-1); production: RPC DEFINER theo auth.uid.

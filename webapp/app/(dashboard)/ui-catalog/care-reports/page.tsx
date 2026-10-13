@@ -1,15 +1,23 @@
 import { notFound, redirect } from 'next/navigation'
+import Link from 'next/link'
 import { BarChart3 } from 'lucide-react'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { PageHeader } from '@/components/ds/PageHeader'
-import { CareReportView } from '@/components/care/CareReportView'
+import { CareReportExportLink, CareReportView, type CareReportLinkScope } from '@/components/care/CareReportView'
+import { CareReportOutcomesView } from '@/components/care/CareReportOutcomes'
+import { CareContactedKpiLive, CareContactedPaceLive, CareReportExtrasProvider, CareReportOutcomesLive } from '@/components/care/CareReportExtras'
 import { CareDashboardView } from '@/components/care/CareDashboardView'
-import type { CareReportRow } from '@/lib/care/browse'
-import { careReportConvertedTotal, careReportLines, careReportSummary, type CareOrderDataState } from '@/lib/care/reports'
+import { CareFiltersBar } from '@/components/care/CareFiltersBar'
+import { recentCarePeriods, type CareOutcomeKey, type CareReportRow } from '@/lib/care/browse'
+import {
+  careReportConvertedTotal, careReportExtrasKey, careReportKey, careReportLines, careReportSummary, carePeriodElapsed,
+  type CareOrderDataState, type CareReportLine,
+} from '@/lib/care/reports'
 
-// Dev-only bàn thử UI báo cáo CRM (B5a r1.1). 100% DỮ LIỆU GIẢ — DB chưa có 114, chưa đồng bộ N3.
-// Cùng cổng /ui-catalog: UI_CATALOG=1 (Coolify không đặt ⇒ prod 404) + super. Không có action.
+// Dev-only bàn thử UI báo cáo CRM (B5a r1.1; B8.2 theo artboard 13). 100% DỮ LIỆU GIẢ. Cùng cổng /ui-catalog:
+// UI_CATALOG=1 (Coolify không đặt ⇒ prod 404) + super. Một action giả (fakeExtras, B8.2) tự kiểm cổng.
+// B8.2: `?frame=report` dựng ĐÚNG bố cục trang /care/reports (header bộ lọc + Xuất Excel, KPI, tiến độ, kết quả, bảng).
 
 const S = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const STORES = new Map([[S(101), { code: 'QAOS01', name: 'QA store 1' }], [S(102), { code: 'QAOS02', name: 'QA store 2' }]])
@@ -23,42 +31,125 @@ const LINES = careReportLines(ROWS, { stores: STORES, names: NAMES })
 // Mọi task Hoàn thành đều đã có đơn ⇒ không hiện dòng "Chưa thấy đơn…".
 const ALL_CONVERTED = careReportLines([{ ...ROWS[2], completed: 9, converted_tasks: 9 }], { stores: STORES, names: NAMES })
 const TOTALS = careReportSummary(LINES)
+// Kỳ đã đóng: task đang mở đã thành "không hoàn thành"; một phần từng có lượt (touched) vẫn tính "Đã liên hệ".
+const PAST_ROWS: CareReportRow[] = [
+  { store_id: S(101), assignee_id: S(1002), tasks_total: 100, completed: 60, open_not_cared: 0, open_in_progress: 0, overdue_in_period: 7, closed_unfinished: 40, converted_tasks: 22 },
+]
+const PAST_LINES = careReportLines(PAST_ROWS, { stores: STORES, names: NAMES }, new Map([[careReportKey(S(101), S(1002)), 15]]))
+// Kết quả gần nhất mỗi task (Q-117): tổng = số khách đã liên hệ (95 + 75 + 40 = 210).
+const OUTCOMES: Partial<Record<CareOutcomeKey, number>> = { NO_NEED: 60, INTERESTED: 50, ORDERED: 40, REFUSED: 20, CALLBACK: 30, UNREACHABLE: 10 }
 const NONE: CareOrderDataState = { kind: 'none' }
 const SYNCED: CareOrderDataState = { kind: 'synced', lastSuccessAt: '2026-10-20T01:05:00Z', lastFailed: false }
 const STALE: CareOrderDataState = { kind: 'synced', lastSuccessAt: '2026-10-19T23:00:00Z', lastFailed: true }
 const EXPORT = '/api/export/care?month=2026-10'
+const TODAY = '2026-10-13'
+const SCOPE: CareReportLinkScope = { month: '2026-10-01', storeId: null, assigneeId: null }
 
 const catalogOn = () => process.env.UI_CATALOG === '1'
+/** Cổng cho action giả: cùng điều kiện page (UI_CATALOG + super) — endpoint action tồn tại trong build. */
+async function gate(): Promise<boolean> {
+  if (!catalogOn()) return false
+  const { user, profile } = await getSessionProfile()
+  return !!user && profile?.role === 'admin' && isSuperAdminEmail(user.email)
+}
+const EXTRAS_ERROR_ASSIGNEE = S(9999)
+/** B8.2: số liệu phụ giả (Đã liên hệ + Kết quả) — trễ để thấy trạng thái đang tải; assignee đặc biệt ⇒ lỗi. */
+async function fakeExtras(input: { month: string; store: string | null; assignee: string | null }) {
+  'use server'
+  if (!(await gate())) return { ok: false as const, message: 'Không khả dụng' }
+  // PM B8.2 r1: mỗi kỳ một số + độ trễ khác nhau (kỳ 09 CHẬM, kỳ 08 NHANH) ⇒ test đổi bộ lọc A→B→C với phản hồi đảo thứ tự.
+  const live = LIVE_MONTHS[input.month as keyof typeof LIVE_MONTHS] ?? LIVE_MONTHS['2026-10']
+  await new Promise((r) => setTimeout(r, live.delay))
+  if (input.assignee === EXTRAS_ERROR_ASSIGNEE) return { ok: false as const, message: 'Không tải được — thử tải lại trang.' }
+  return { ok: true as const, contacted: live.contacted, outcomes: live.contacted === TOTALS.contacted ? OUTCOMES : { NO_NEED: live.contacted } }
+}
+const LIVE_MONTHS = { '2026-10': { contacted: 210, delay: 800 }, '2026-09': { contacted: 75, delay: 1500 }, '2026-08': { contacted: 33, delay: 200 } } as const
 
-export default async function CareReportsCatalogPage() {
+function Report({ lines, state, month = '2026-10-01', outcomes = OUTCOMES }: {
+  lines: CareReportLine[]; state: CareOrderDataState; month?: string; outcomes?: Partial<Record<CareOutcomeKey, number>> | null
+}) {
+  const totals = careReportSummary(lines)
+  return (
+    <CareReportView monthLabel={`${month.slice(5, 7)}/${month.slice(0, 4)}`} lines={lines} totals={totals} contacted={{ count: totals.contacted }}
+      orderState={state} elapsed={carePeriodElapsed(month, TODAY)} dueLabel={month === '2026-10-01' ? '31/10/2026' : '30/09/2026'}
+      scope={{ ...SCOPE, month }} outcomes={<CareReportOutcomesView counts={outcomes} />} />
+  )
+}
+
+function Section({ id, title, children }: { id: string; title?: string; children: React.ReactNode }) {
+  return (
+    <section className="space-y-3" data-testid={id}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {title ? <h2 className="text-sm font-medium text-muted-foreground">{title}</h2> : <span />}
+        <CareReportExportLink href={EXPORT} />
+      </div>
+      {children}
+    </section>
+  )
+}
+
+export default async function CareReportsCatalogPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   if (!catalogOn()) notFound()
   const { user, profile } = await getSessionProfile()
   if (!user) redirect('/login')
   if (!(profile?.role === 'admin' && isSuperAdminEmail(user.email))) notFound()
+  const sp = await searchParams
   const dashTotals = { tasks: TOTALS.tasks, completed: TOTALS.completed, notCared: TOTALS.notCared, inProgress: TOTALS.inProgress, overdueInPeriod: TOTALS.overdueInPeriod, closedUnfinished: TOTALS.closedUnfinished }
 
+  // B8.2: khung có số liệu phụ tải SAU khi hiện (như trang thật) — kiểm "…" → số, và lỗi ⇒ "—" (không 0 giả).
+  if (sp.frame === 'report-live') {
+    const err = sp.extras === 'error'
+    const m = typeof sp.m === 'string' && sp.m in LIVE_MONTHS ? sp.m : '2026-10'
+    const params = { month: m, store: null, assignee: err ? EXTRAS_ERROR_ASSIGNEE : null }
+    return (
+      <div data-layout-width="fluid" data-care-browse className="space-y-4 p-4 md:p-6" data-testid="catalog-frame-report-live" data-month={m}>
+        <PageHeader title="Báo cáo chăm sóc khách hàng" subtitle="UI catalog — số liệu phụ tải sau" icon={BarChart3}
+          actions={(
+            // Đổi kỳ bằng điều hướng CLIENT (giữ cây React như trang thật đổi bộ lọc) — test r1 A→B→C.
+            <nav className="flex gap-2" aria-label="Kỳ thử">
+              {(['2026-10', '2026-09', '2026-08'] as const).map((k, i) => (
+                <Link key={k} href={`/ui-catalog/care-reports?frame=report-live&m=${k}`} className="underline">{`Kỳ ${'ABC'[i]}`}</Link>
+              ))}
+            </nav>
+          )} />
+        {/* Như trang thật: key theo bộ lọc ⇒ đổi bộ lọc là provider mới (không giữ số của bộ lọc cũ — PM B8.2 r1). */}
+        <CareReportExtrasProvider key={careReportExtrasKey(params)} load={fakeExtras} params={params}>
+          <CareReportView monthLabel={`${m.slice(5, 7)}/${m.slice(0, 4)}`} lines={LINES} totals={TOTALS} orderState={NONE} elapsed={carePeriodElapsed(`${m}-01`, TODAY)}
+            dueLabel="31/10/2026" scope={SCOPE} contacted={{ kpi: <CareContactedKpiLive tasks={TOTALS.tasks} />, pace: <CareContactedPaceLive tasks={TOTALS.tasks} /> }}
+            outcomes={<CareReportOutcomesLive />} />
+        </CareReportExtrasProvider>
+      </div>
+    )
+  }
+
+  if (sp.frame === 'report') {
+    const filters = { month: '2026-10-01', storeId: null, assigneeId: null, status: null, page: 1 }
+    return (
+      <div data-layout-width="fluid" data-care-browse className="space-y-4 p-4 md:p-6" data-testid="catalog-frame-report">
+        <PageHeader title="Báo cáo chăm sóc khách hàng" subtitle="Theo tháng chăm sóc — khách có đơn ghi vào tháng của lượt Hoàn thành" icon={BarChart3}
+          actions={(
+            <div className="flex flex-wrap items-center gap-2">
+              <CareFiltersBar path="/ui-catalog/care-reports" filters={filters} months={recentCarePeriods('2026-10-01')}
+                stores={[...STORES].map(([id, s]) => ({ id, ...s }))} staff={[...NAMES].map(([id, fullName]) => ({ id, fullName, storeCode: id === S(1004) ? 'QAOS02' : 'QAOS01' }))} />
+              <CareReportExportLink href={EXPORT} />
+            </div>
+          )} />
+        <Report lines={LINES} state={sp.orders === 'synced' ? SYNCED : NONE} />
+      </div>
+    )
+  }
+
   return (
-    <div data-layout-width="fluid" className="space-y-10 p-4 md:p-6">
+    <div data-layout-width="fluid" data-care-browse className="space-y-10 p-4 md:p-6">
       <PageHeader title="Báo cáo chăm sóc khách hàng" subtitle="UI catalog — dữ liệu giả" icon={BarChart3} />
-      <section className="space-y-3" data-testid="catalog-care-report-none">
-        <h2 className="text-sm font-medium text-muted-foreground">Trước lần đồng bộ đơn đầu tiên</h2>
-        <CareReportView monthLabel="10/2026" lines={LINES} totals={TOTALS} orderState={NONE} exportHref={EXPORT} />
-      </section>
-      <section className="space-y-3" data-testid="catalog-care-report-synced">
-        <h2 className="text-sm font-medium text-muted-foreground">Đã đồng bộ</h2>
-        <CareReportView monthLabel="10/2026" lines={LINES} totals={TOTALS} orderState={SYNCED} exportHref={EXPORT} />
-      </section>
-      <section className="space-y-3" data-testid="catalog-care-report-stale">
-        <h2 className="text-sm font-medium text-muted-foreground">Lần đồng bộ gần nhất lỗi (giữ số cũ)</h2>
-        <CareReportView monthLabel="10/2026" lines={LINES.slice(0, 1)} totals={careReportSummary(LINES.slice(0, 1))} orderState={STALE} exportHref={EXPORT} />
-      </section>
-      <section className="space-y-3" data-testid="catalog-care-report-all-converted">
-        <h2 className="text-sm font-medium text-muted-foreground">Mọi task Hoàn thành đã có đơn</h2>
-        <CareReportView monthLabel="10/2026" lines={ALL_CONVERTED} totals={careReportSummary(ALL_CONVERTED)} orderState={SYNCED} exportHref={EXPORT} />
-      </section>
-      <section className="space-y-3" data-testid="catalog-care-report-empty">
-        <CareReportView monthLabel="09/2026" lines={[]} totals={careReportSummary([])} orderState={SYNCED} exportHref={EXPORT} />
-      </section>
+      <Section id="catalog-care-report-none" title="Trước lần đồng bộ đơn đầu tiên"><Report lines={LINES} state={NONE} /></Section>
+      <Section id="catalog-care-report-synced" title="Đã đồng bộ"><Report lines={LINES} state={SYNCED} /></Section>
+      <Section id="catalog-care-report-stale" title="Lần đồng bộ gần nhất lỗi (giữ số cũ)"><Report lines={LINES.slice(0, 1)} state={STALE} outcomes={null} /></Section>
+      <Section id="catalog-care-report-all-converted" title="Mọi task Hoàn thành đã có đơn"><Report lines={ALL_CONVERTED} state={SYNCED} /></Section>
+      <Section id="catalog-care-report-past" title="Kỳ đã đóng (09/2026) — Đã liên hệ gồm task không hoàn thành từng có lượt">
+        <Report lines={PAST_LINES} state={SYNCED} month="2026-09-01" outcomes={{ NO_NEED: 30, INTERESTED: 20, ORDERED: 10, CALLBACK: 10, UNREACHABLE: 5 }} />
+      </Section>
+      <Section id="catalog-care-report-empty"><Report lines={[]} state={SYNCED} month="2026-09-01" /></Section>
       <section className="space-y-3" data-testid="catalog-care-dashboard-orders">
         <h2 className="text-sm font-medium text-muted-foreground">Dashboard /care khi đã có dữ liệu đơn</h2>
         <CareDashboardView monthLabel="10/2026" isPast={false} totals={dashTotals} overdueOpen={7} stores={[]} outcomes={[]}

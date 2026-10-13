@@ -11,6 +11,8 @@ import {
   careCurrentProductCount, CARE_STATUS_CHIP_LABELS,
   type CareAccess, type CareQueryBuilder, type CareReportRow, type CareTotals,
 } from '../lib/care/browse'
+import { careReportKey, careReportLines, careReportSummary } from '../lib/care/reports'
+import { CARE_OUTCOMES } from '../lib/care/outcome'
 import { buildCareImportRows } from './careImportFixture'
 
 // CRM-CSKH B3 — browser Khách hàng/Chăm sóc + chuyển giao.
@@ -704,8 +706,39 @@ test.describe('care B3 — parity browser ↔ migration 114 (PGlite) @desktop', 
     expect(await conv(U.sm)).toBe(1)
     expect(await conv(U.qlch1)).toBe(0)
 
+    // B8.2 (Q-113/Q-117): KPI "Đã liên hệ" = count last_interaction_at (session/RLS, cùng filter app) BẰNG tổng cột
+    // "Đã liên hệ" từng dòng báo cáo (completed + in_progress + closed_unfinished có lượt) và BẰNG tổng phân bố
+    // last_outcome (mỗi task một lần). Kiểm ở kỳ đang mở (đây) và kỳ đã đóng (sau close_period bên dưới).
+    const contactedParity = async (who: string, today: string) => {
+      const kpi = (await browse(who, { month: P10 }, today, 'AND last_interaction_at IS NOT NULL')).length
+      const touched = new Map<string, number>()
+      for (const r of await browse(who, { month: P10, status: 'closed_unfinished' }, today, 'AND last_interaction_at IS NOT NULL')) {
+        touched.set(careReportKey(r.store_id, r.assignee_id), (touched.get(careReportKey(r.store_id, r.assignee_id)) ?? 0) + 1)
+      }
+      const lines = careReportLines(await report(who, P10), { stores: new Map(), names: new Map() }, touched)
+      let outcomes = 0
+      for (const k of CARE_OUTCOMES) outcomes += (await browse(who, { month: P10 }, today, `AND last_outcome = '${k}'`)).length
+      return { kpi, lines: careReportSummary(lines).contacted, outcomes, touched: [...touched.values()].reduce((s, n) => s + n, 0) }
+    }
+    for (const who of [U.super, U.sm]) {
+      const p = await contactedParity(who, '2026-10-31')
+      expect(p.lines, who).toBe(p.kpi)
+      expect(p.outcomes, who).toBe(p.kpi)
+      expect(p.touched, who).toBe(0)                                       // kỳ đang mở: chưa task nào bị đóng
+    }
+    expect((await contactedParity(U.super, '2026-10-31')).kpi).toBeGreaterThan(0)
+
     // Sang kỳ 11: kỳ 10 thành kỳ cũ — "Không hoàn thành" ≠ "Từng trễ hẹn"; không còn "quá hạn đang mở".
     await db.query(`SELECT public.care__close_period_at('2026-11-01')`)
+    // Kỳ đã đóng: task đang theo dõi thành "không hoàn thành" nhưng VẪN là "Đã liên hệ" (Q-113).
+    for (const who of [U.super, U.sm]) {
+      const p = await contactedParity(who, '2026-11-01')
+      expect(p.lines, who).toBe(p.kpi)
+      expect(p.outcomes, who).toBe(p.kpi)
+    }
+    const closedP = await contactedParity(U.super, '2026-11-01')
+    expect(closedP.touched).toBeGreaterThan(0)
+    expect(closedP.kpi).toBe((await contactedParity(U.super, '2026-11-01')).lines)
     expect(await tErr(U.sm, [c1.id], U.D)).toBe('TASK_NOT_OPEN')
     const old = await browse(U.super, { month: P10 }, '2026-11-01')
     const tot = careReportTotals(await report(U.super, P10))

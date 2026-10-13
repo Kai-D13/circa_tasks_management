@@ -5,8 +5,9 @@ import {
   careOrderDataState, careReportLines, careReportSummary, careStoreFilterInScope,
   type CareOrderDataState, type CareReportLine, type CareReportTotals,
 } from '@/lib/care/reports'
-import { loadCareQaReportRows, loadScopeStores, type CareStoreOption } from './browse'
+import { loadCareClosedTouched, loadCareQaReportRows, loadScopeStores, type CareStoreOption } from './browse'
 import { careDataScope } from './qaUi'
+import { carePeriodOf, vnDateISO } from '@/lib/care/time'
 
 // CRM-CSKH B5a r1.1 — dữ liệu báo cáo /care/reports + export. Đọc bằng SESSION người xem:
 // care_report (DEFINER, scope theo auth.uid) + care_order_sync_status (DEFINER, chỉ người xem báo
@@ -36,7 +37,13 @@ export async function loadOrderDataState(): Promise<CareOrderDataState> {
   return careOrderDataState((Array.isArray(data) ? data[0] : data) as Record<string, unknown> | null)
 }
 
-export async function loadCareReport(perms: CarePermissions, f: Pick<CareFilters, 'month' | 'storeId' | 'assigneeId'>): Promise<CareReportData> {
+/**
+ * `withContacted` (mặc định true — trang /care/reports): đọc thêm phần "Đã liên hệ" cho từng dòng (task không hoàn
+ * thành có lượt — chỉ kỳ đã đóng). KPI "Đã liên hệ" count riêng, stream ở trang (loadCareContactedCountCached).
+ * Export truyền false: cột Excel không có chỉ số này (hợp đồng B5a) ⇒ không truy vấn thừa (security B8.2 P2).
+ */
+export async function loadCareReport(perms: CarePermissions, f: Pick<CareFilters, 'month' | 'storeId' | 'assigneeId'>, opts: { withContacted?: boolean } = {}): Promise<CareReportData> {
+  const withContacted = opts.withContacted !== false
   const supabase = await createClient()
   const stores = await loadScopeStores(perms)
   if (!careStoreFilterInScope(f.storeId, stores)) {
@@ -45,10 +52,15 @@ export async function loadCareReport(perms: CarePermissions, f: Pick<CareFilters
   const storeId = f.storeId
   // QA local: care_report loại is_test với Marketing/SM ⇒ tính từ task qua RLS + batch QA (đường QA, không production).
   const qa = careDataScope().kind === 'qa'
-  const [rep, st] = await Promise.all([
+  // B8.2: phần "Đã liên hệ" của từng dòng (task không hoàn thành có lượt) đọc song song care_report qua session/RLS.
+  const today = vnDateISO(new Date())
+  const rf = { month: f.month, storeId, assigneeId: null }
+  const [rep, st, touched] = await Promise.all([
     qa ? loadCareQaReportRows({ month: f.month, storeId }).then((data) => ({ data, error: null }), () => ({ data: null, error: true }))
       : supabase.rpc('care_report', { p_month: f.month, p_store_ids: storeId ? [storeId] : null, p_include_test: false }),
     supabase.rpc('care_order_sync_status'),
+    // Kỳ đang mở chưa thể có task đóng (care__close_period_at chỉ đóng kỳ TRƯỚC) ⇒ không đọc (PM-auditor B8.2 P2).
+    withContacted && f.month < carePeriodOf(new Date()) ? loadCareClosedTouched(rf, today) : Promise.resolve(new Map<string, number>()),
   ])
   if (rep.error) throw new Error('care_report_failed')
   if (st.error) throw new Error('care_sync_status_failed')
@@ -65,7 +77,7 @@ export async function loadCareReport(perms: CarePermissions, f: Pick<CareFilters
   const storeMap = new Map(((s2.data ?? []) as { id: string; code: string; name: string }[]).map((s) => [s.id, { code: s.code, name: s.name }]))
   const names = new Map(((u2.data ?? []) as { id: string; full_name: string }[]).map((u) => [u.id, u.full_name]))
 
-  const all = careReportLines(rows, { stores: storeMap, names })
+  const all = careReportLines(rows, { stores: storeMap, names }, touched)
   const lines = f.assigneeId ? all.filter((l) => l.assigneeId === f.assigneeId) : all
   const staff = [...new Map(all.map((l) => [l.assigneeId, { id: l.assigneeId, fullName: l.assigneeName, storeCode: l.storeCode }])).values()]
   const row = Array.isArray(st.data) ? st.data[0] : st.data
