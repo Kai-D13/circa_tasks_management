@@ -7,8 +7,12 @@ import {
   careOutcomeDistribution, carePermissions, careReportByStore, careReportTotals, careSearchTerm, careTaskState,
   isPastPeriod, mapCareTransferError, parseCareFilters, recentCarePeriods, validateTransferInput, careSafeImageUrl, CARE_OUTCOME_KEYS,
   careInteractionPage, CARE_INTERACTION_PAGE_SIZE, CARE_EXCLUDED_ROLES,
+  careStatusChipTabs, careApptHint, careShortDateTime, careTransferConflicts, careOpenLoadByAssignee, parseCareOpenParam,
+  careCurrentProductCount, CARE_STATUS_CHIP_LABELS, careTransferEvents,
   type CareAccess, type CareQueryBuilder, type CareReportRow, type CareTotals,
 } from '../lib/care/browse'
+import { CARE_DASHBOARD_LINK_STATUS, CARE_REPORT_LINK_STATUS, careReportKey, careReportLines, careReportSummary } from '../lib/care/reports'
+import { CARE_OUTCOMES } from '../lib/care/outcome'
 import { buildCareImportRows } from './careImportFixture'
 
 // CRM-CSKH B3 — browser Khách hàng/Chăm sóc + chuyển giao.
@@ -204,6 +208,53 @@ test.describe('care B3 — logic thuần @desktop', () => {
   })
 })
 
+test.describe('care B8.1 — logic thuần /care/tasks @desktop', () => {
+  const F = { month: '2026-10-01', storeId: S(101), assigneeId: S(901), status: 'following' as const, page: 3 }
+
+  test('chip trạng thái: Tất cả + 5 filter; href giữ kỳ/store/dược sĩ, bỏ trang; không có từ khoá; số đếm null ⇒ không hiện số', () => {
+    const tabs = careStatusChipTabs('/care/tasks', F, { all: 6, not_cared: 2, following: 2, overdue_open: 1, completed: 1, closed_unfinished: 1 })
+    expect(tabs.map((t) => t.key)).toEqual(['all', ...CARE_STATUS_FILTERS])
+    expect(tabs.map((t) => t.label)).toEqual(['Tất cả', ...CARE_STATUS_FILTERS.map((s) => CARE_STATUS_CHIP_LABELS[s])])
+    expect(tabs[0].href).toBe(`/care/tasks?month=2026-10&store=${S(101)}&assignee=${S(901)}`)
+    expect(tabs.find((t) => t.key === 'overdue_open')!.href).toBe(`/care/tasks?month=2026-10&store=${S(101)}&assignee=${S(901)}&status=overdue_open`)
+    for (const t of tabs) expect(t.href).not.toMatch(/page=|q=|open=/)
+    expect(tabs.map((t) => t.count)).toEqual([6, 2, 2, 1, 1, 1])
+    // Không cộng chip thành tổng: overdue_open giao following — "Tất cả" là count riêng.
+    expect(careStatusChipTabs('/care/tasks', F, null).every((t) => t.count === undefined)).toBe(true)
+  })
+
+  test('drawer ?open=: chỉ nhận uuid, chuẩn hoá chữ thường; sai ⇒ null', () => {
+    expect(parseCareOpenParam({ open: S(500).toUpperCase() })).toBe(S(500))
+    for (const v of ['0390000001', 'x', '', undefined, [S(500)]]) expect(parseCareOpenParam({ open: v as never })).toBeNull()
+  })
+
+  test('hẹn lại 2 dòng: hôm nay / còn n / quá n (chỉ task mở); lượt gần nhất giờ VN', () => {
+    expect(careApptHint('2026-10-15', '2026-10-13', true)).toEqual({ date: '15/10/2026', hint: 'còn 2 ngày', overdue: false })
+    expect(careApptHint('2026-10-13', '2026-10-13', true)).toEqual({ date: '13/10/2026', hint: 'hôm nay', overdue: false })
+    expect(careApptHint('2026-10-02', '2026-10-13', true)).toEqual({ date: '02/10/2026', hint: 'quá 11 ngày', overdue: true })
+    expect(careApptHint('2026-10-02', '2026-10-13', false)).toEqual({ date: '02/10/2026', hint: null, overdue: false })
+    expect(careApptHint('2026-11-01', '2026-10-31', true)!.hint).toBe('còn 1 ngày')                  // qua tháng
+    expect(careApptHint(null, '2026-10-13', true)).toBeNull()
+    expect(careShortDateTime('2026-10-13T03:55:00Z')).toBe('10:55 13/10')                          // UTC+7
+    expect(careShortDateTime('2026-10-12T17:30:00Z')).toBe('00:30 13/10')                          // qua ngày VN
+    expect(careShortDateTime(null)).toBeNull()
+  })
+
+  test('sản phẩm hiện hành: chỉ đếm is_current (bỏ dòng revision cũ)', () => {
+    expect(careCurrentProductCount([{ is_current: true }, { is_current: false }, { is_current: true }])).toBe(2)
+    expect(careCurrentProductCount(null)).toBe(0)
+  })
+
+  test('chuyển giao (PM B8.1 P1): khoá đích giữ BẤT KỲ task trong lô; tải = open_not_cared + open_in_progress theo dược sĩ', () => {
+    const c = careTransferConflicts([{ assigneeId: S(901) }, { assigneeId: S(903) }, { assigneeId: S(901) }])
+    expect(Object.fromEntries(c)).toEqual({ [S(901)]: 2, [S(903)]: 1 })
+    const row = (assignee: string, o: Partial<CareReportRow>): CareReportRow => ({ store_id: S(101), assignee_id: assignee, tasks_total: 99, completed: 50,
+      open_not_cared: 0, open_in_progress: 0, overdue_in_period: 7, closed_unfinished: 9, converted_tasks: 3, ...o })
+    const load = careOpenLoadByAssignee([row(S(901), { open_not_cared: 2, open_in_progress: 1 }), row(S(901), { store_id: S(102), open_not_cared: 1 }), row(S(903), {})])
+    expect(Object.fromEntries(load)).toEqual({ [S(901)]: 4, [S(903)]: 0 })                         // không dùng tasks_total
+  })
+})
+
 test.describe('care B3 — source: cờ, session/RPC, không service role @desktop', () => {
   const B3_FILES = [
     'app/actions/care.ts', 'lib/care/server/browse.ts', 'lib/care/server/pageGuard.ts',
@@ -211,6 +262,7 @@ test.describe('care B3 — source: cờ, session/RPC, không service role @deskt
     'components/care/CareDashboardView.tsx', 'components/care/CareFiltersBar.tsx', 'components/care/CareTaskTable.tsx',
     'components/care/CareTaskDetailView.tsx', 'components/care/CareTransferDialog.tsx', 'components/care/CareTaskTransferButton.tsx',
     'components/care/CareProductGallery.tsx', 'app/(dashboard)/ui-catalog/care-browse/page.tsx',
+    'components/care/CareTaskDrawer.tsx', 'components/care/CareStatusChips.tsx',
   ]
 
   test('không file B3 nào dùng service role / supabaseAdmin', () => {
@@ -224,7 +276,17 @@ test.describe('care B3 — source: cờ, session/RPC, không service role @deskt
     const src = read('app/actions/care.ts')
     expect(src).toMatch(/^'use server'/)
     const fns = [...src.matchAll(/export async function (\w+)\([\s\S]*?\{\n([\s\S]*?)\n\}/g)]
-    expect(fns.map((m) => m[1]).sort()).toEqual(['listCareTransferTargets', 'loadMoreCareInteractions', 'searchCareTasks', 'transferCareTasks'])
+    expect(fns.map((m) => m[1]).sort()).toEqual(['listCareTransferTargets', 'loadCareTaskPanel', 'loadMoreCareInteractions', 'searchCareTasks', 'transferCareTasks'])
+    // B8.1 drawer (Q-115): canView → uuid → đọc lại task qua SESSION/RLS mỗi lần mở; ngoài phạm vi ⇒ NOT_FOUND;
+    // không trả customer_id (chỉ trường hiển thị) — SĐT đủ chỉ của MỘT task vừa kiểm quyền.
+    const pn = fns.find((m) => m[1] === 'loadCareTaskPanel')![2]
+    expect(pn).toMatch(/if \(v\.kind !== 'ok' \|\| !v\.perms\.canView\) return/)
+    expect(pn).toMatch(/UUID_RE\.test\(input\.taskId\)/)
+    expect(pn.indexOf('UUID_RE.test(input.taskId)')).toBeLessThan(pn.indexOf('await loadCareTaskDetail(input.taskId)'))
+    expect(pn).toMatch(/if \(!d\) return \{ ok: false, code: 'NOT_FOUND'/)
+    expect(pn).not.toMatch(/customer_id|external_id|service_role/)
+    // Thiếu care_my_access (lỗi mạng/timeout) không giả làm "thiếu cấu hình" (PM B8 hợp đồng).
+    expect(pn).toMatch(/if \(v\.kind === 'unavailable'\) return \{ ok: false, code: 'FAILED', message: 'Tạm thời không đọc được dữ liệu — thử lại\.' \}/)
     // Xem thêm lịch sử (Q-78): kiểm canView, validate, rồi đọc lại task qua RLS (KHÔNG truyền `known`).
     const lm = fns.find((m) => m[1] === 'loadMoreCareInteractions')![2]
     expect(lm).toMatch(/if \(v\.kind !== 'ok' \|\| !v\.perms\.canView\) return/)
@@ -238,6 +300,9 @@ test.describe('care B3 — source: cờ, session/RPC, không service role @deskt
     expect(tr).toMatch(/if \(!v\.perms\.canTransfer\) return/)
     expect(tr).toMatch(/validateTransferInput\(input\)/)
     expect(tr).toMatch(/const supabase = await createClient\(\)\s*\n\s*const \{ data, error \} = await supabase\.rpc\('care_transfer_tasks', \{/)
+    // B6-qa-ui (security P1-2): chặn QA (chỉ task batch QA + đích dược sĩ QA; production null) SAU validate, TRƯỚC RPC.
+    expect(tr.indexOf('validateTransferInput(input)')).toBeLessThan(tr.indexOf('await careQaTransferBlock(valid.taskIds, valid.toUserId)'))
+    expect(tr.indexOf('await careQaTransferBlock(')).toBeLessThan(tr.indexOf("supabase.rpc('care_transfer_tasks'"))
     expect(tr).toMatch(/mapCareTransferError\(error\.message\)/)
     expect(tr).not.toMatch(/\.from\('care_tasks'\)|\.update\(|care_assignment_events/)
     expect(src).not.toMatch(/console\.(log|error|warn)/)
@@ -256,6 +321,26 @@ test.describe('care B3 — source: cờ, session/RPC, không service role @deskt
     expect(cols).not.toMatch(/image_url|product|care_customers|phone/)
     // Danh sách: SĐT che Ở SERVER (phone_norm không xuống client); không email dược sĩ.
     expect(src).toContain('phone_masked: maskVnPhone(phone_norm)')
+    // B8.1: số sản phẩm — embed CHỈ cờ is_current qua FK tường minh, đếm hiện hành ở app (không tên/ảnh, không N+1).
+    expect(src).toContain("const TASK_PRODUCT_FLAGS = 'care_task_products!care_task_products_task_id_fkey(is_current)'")
+    expect(src).toContain('product_count: careCurrentProductCount(care_task_products)')
+    // B8.1 chip: count head:true song song, cùng withCareFilters (kỳ/store/dược sĩ + careDataScope), "Tất cả" = count riêng.
+    expect(src).toMatch(/const keys = \[null, \.\.\.CARE_STATUS_FILTERS\] as const\s*const counts = await Promise\.all\(keys\.map\(async \(status\) => \{\s*const \{ count, error \} = await withCareFilters\(supabase\.from\('care_tasks'\)\.select\('id', \{ count: 'exact', head: true \}\), \{ \.\.\.f, status \}, todayISO\)/)
+    expect(src).toMatch(/if \(error \|\| count === null\) throw new Error\('care_status_counts_failed'\)/)
+    // B8.1 tải dược sĩ nhận (PM P1-1): QA local qua loadCareQaReportRows; production RPC care_report session; một lần đọc.
+    expect(src).toMatch(/async function loadCareReportRowsScoped\(month: string\)[^{]*\{\s*if \(careDataScope\(\)\.kind === 'qa'\) return loadCareQaReportRows\(\{ month, storeId: null \}\)/)
+    expect(src).toMatch(/loadCareReportRowsScoped\(currentMonth\)\.then\(careOpenLoadByAssignee\)\.catch\(\(\) => null\)/)
+    // Lỗi count ⇒ chip KHÔNG hiện số (không 0 giả): trang bắt lỗi thành null; careStatusChipTabs(null) ⇒ count undefined;
+    // FilterTabs chỉ in số khi là number. List vẫn hiển thị (count chạy song song, lỗi không làm hỏng trang).
+    // Đo 13/10: danh sách + 6 count cùng lúc tranh pool PostgREST (~800 ms vs ~230–300 ms) ⇒ chip stream SAU danh sách.
+    const tp = read('app/(dashboard)/care/tasks/page.tsx')
+    expect(tp).toMatch(/const \[stores, page\] = await Promise\.all\(\[loadScopeStores\(g\.perms\), loadCareTaskPage\(f, today\)\]\)/)
+    expect(tp).toMatch(/<Suspense fallback=\{<CareStatusChipsBare path="\/care\/tasks" filters=\{f\} \/>\}>\s*<CareStatusChips path="\/care\/tasks" filters=\{f\} todayISO=\{today\} \/>/)
+    expect(tp).not.toMatch(/loadCareStatusCounts/)
+    const chipsSrc = read('components/care/CareStatusChips.tsx')
+    expect(chipsSrc).toContain('const counts = await loadCareStatusCounts(filters, todayISO).catch(() => null)')
+    expect(chipsSrc).toContain('tabs={careStatusChipTabs(path, filters, null)}')               // fallback: không số
+    expect(read('components/ds/FilterTabs.tsx')).toContain("typeof t.count === 'number'")
     expect(src).not.toMatch(/select\('[^']*email/)
     // Phân bố outcome: đếm head:true ở DB, không tải dòng (SPEC B3 §2).
     expect(src).toMatch(/CARE_OUTCOME_KEYS\.map\(async \(k\) => \{\s*const base = withCareFilters\(supabase\.from\('care_tasks'\)\.select\('id', \{ count: 'exact', head: true \}\)/)
@@ -294,11 +379,11 @@ test.describe('care B3 — source: cờ, session/RPC, không service role @deskt
 
   test('catalog care-browse: UI_CATALOG + super; mỗi action giả tự kiểm cổng', () => {
     const src = read('app/(dashboard)/ui-catalog/care-browse/page.tsx')
-    expect(src).toMatch(/export default async function \w+\(\) \{\s*if \(!catalogOn\(\)\) notFound\(\)/)
+    expect(src).toMatch(/export default async function \w+\([^)]*\) \{\s*if \(!catalogOn\(\)\) notFound\(\)/)
     // Cổng action giả = cùng điều kiện page: UI_CATALOG + session super.
     expect(src).toMatch(/async function gate\(\): Promise<boolean> \{\s*if \(!catalogOn\(\)\) return false[\s\S]*?isSuperAdminEmail\(user\.email\)\s*\}/)
-    const fakes = [...src.matchAll(/async function (fake\w+)\([^)]*\) \{\s*'use server'\s*if \(!\(await gate\(\)\)\) return/g)]
-    expect(fakes.map((m) => m[1]).sort()).toEqual(['fakeLoadMore', 'fakeSearch', 'fakeTargets', 'fakeTransfer'])
+    const fakes = [...src.matchAll(/async function (fake\w+)\([^)]*\)(?:: [^{]+)? \{\s*'use server'\s*if \(!\(await gate\(\)\)\) return/g)]
+    expect(fakes.map((m) => m[1]).sort()).toEqual(['fakeLoadMore', 'fakePanel', 'fakeSearch', 'fakeTargets', 'fakeTransfer'])
     // Không có action giả nào khác ngoài danh sách đã kiểm cổng.
     expect([...src.matchAll(/async function (fake\w+)\(/g)].length).toBe(fakes.length)
     expect(src).toMatch(/example\.invalid/)
@@ -462,6 +547,42 @@ test.describe('care B3 — parity browser ↔ migration 114 (PGlite) @desktop', 
     // Bảng đếm task, không đếm dòng sản phẩm.
     expect(await L.count(db, `SELECT count(*) FROM public.care_task_products WHERE is_current`)).toBeGreaterThan(250)
 
+    // B8.1 chip: count theo đúng filter app (kỳ/store/dược sĩ + RLS) — 4 nhóm rời nhau cộng = "Tất cả";
+    // "Quá hạn" ⊂ "Đang theo dõi" (giao nhau ⇒ không cộng năm chip). Kiểm cả super lẫn SM (scope vùng).
+    for (const [name, who] of [['super', U.super], ['SM', U.sm]] as const) {
+      const ids = async (s: any) => (await browse(who, { month: P10, status: s }, '2026-10-31')).map((r: any) => r.id as string)
+      const allIds = await ids(null)
+      const parts = [...await ids('not_cared'), ...await ids('following'), ...await ids('completed'), ...await ids('closed_unfinished')]
+      expect(parts.length, name).toBe(allIds.length)
+      expect(new Set(parts).size, name).toBe(allIds.length)
+      const following = new Set(await ids('following'))
+      const overdueIds = await ids('overdue_open')
+      for (const id of overdueIds) expect(following.has(id), name).toBe(true)
+      if (name === 'super') expect(overdueIds.length).toBe(2)
+    }
+
+    // B8.1 tải dược sĩ nhận (PM P1-1 + security P2): care_report theo session SM chỉ chứa dược sĩ/task trong vùng SM;
+    // tải = số task ĐANG MỞ SM đọc được của từng dược sĩ (không phải tải toàn chuỗi).
+    const smOpen = await browse(U.sm, { month: P10 }, '2026-10-31', `AND status = 'open'`)
+    const smLoad = careOpenLoadByAssignee(await report(U.sm, P10))
+    const want = new Map<string, number>()
+    for (const r of smOpen) want.set(r.assignee_id, (want.get(r.assignee_id) ?? 0) + 1)
+    expect(Object.fromEntries([...smLoad].filter(([, n]) => n > 0))).toEqual(Object.fromEntries(want))
+    const superLoad = careOpenLoadByAssignee(await report(U.super, P10))
+    expect([...superLoad.values()].reduce((s, n) => s + n, 0)).toBeGreaterThan([...smLoad.values()].reduce((s, n) => s + n, 0))
+
+    // B8.1 "n sản phẩm": cùng dữ liệu embed (task_id, is_current) đọc bằng session SM — dòng revision cũ
+    // (is_current=false, chèn trực tiếp mô phỏng revision) KHÔNG được tính.
+    const smTask = (await browse(U.sm, { month: P10 }, '2026-10-31', 'ORDER BY id LIMIT 1'))[0]
+    await db.query(`INSERT INTO public.care_task_products (task_id, batch_id, product_id, product_name, reason_type, reason_text, is_current)
+      SELECT task_id, batch_id, product_id, product_name, reason_type, reason_text, false FROM public.care_task_products WHERE task_id = $1 AND is_current LIMIT 1`, [smTask.id])
+    const flags = await L.as(db, U.sm, async () => (await db.query(`SELECT is_current FROM public.care_task_products WHERE task_id = $1`, [smTask.id])).rows)
+    const currentN = await L.count(db, `SELECT count(*) FROM public.care_task_products WHERE task_id = '${smTask.id}' AND is_current`)
+    expect(flags.length).toBe(currentN + 1)
+    expect(careCurrentProductCount(flags)).toBe(currentN)
+    // FK embed của danh sách phải tồn tại đúng tên.
+    expect(fks).toContain('care_task_products_task_id_fkey')
+
     // Q-78: lịch sử 10 lượt/lần, keyset id ↓ — cùng truy vấn với loadCareInteractionsPage, chạy bằng session
     // người xem (RLS). Trang 1→3 = 10 + 10 + 3, không trùng/mất; DB giữ đủ 23 lượt.
     const historyPages = async (who: string, taskId: string) => {
@@ -577,6 +698,26 @@ test.describe('care B3 — parity browser ↔ migration 114 (PGlite) @desktop', 
     // Super / care admin toàn chuỗi; QLCH vẫn 0.
     for (const who of [U.super, U.mkt]) expect(await see(who)).toEqual({ task: 1, notes: [NOTE_X, NOTE_Y], events: ['assigned', 'transferred'], dnc: 1 })
     expect(await see(U.qlch1)).toEqual({ task: 0, notes: [], events: [], dnc: 0 })
+    // B8.5: khối "Lịch sử chuyển giao" = careTransferEvents trên CHÍNH các dòng care_assignment_events vai đó đọc
+    // được (RLS 114), và chỉ hiện khi vai đó MỞ ĐƯỢC chi tiết task (loader chi tiết đọc task trước, ngoài phạm vi ⇒ 404).
+    // ĐÍNH CHÍNH (PM B8.5 r1): SM chỉ quản lý store NGUỒN (SM3) đọc được dòng sự kiện theo RLS nhưng task đã chuyển ra
+    // ngoài vùng ⇒ không mở được chi tiết ⇒ KHÔNG thấy khối. Thấy khối: SM vùng đích (sm2), SM quản lý cả nguồn+đích
+    // (sm), super/Marketing, staff mới (A). Không thấy: staff cũ (C), QLCH, SM chỉ vùng nguồn (SM3).
+    const transfersOf = async (who: string) => careTransferEvents((await L.as(db, who, async () => (await db.query(
+      `SELECT id, kind, created_at::text AS created_at, note, actor_id FROM public.care_assignment_events WHERE task_id = $1`, [c1.id])).rows)) as
+      { id: number; kind: string; created_at: string; note: string | null; actor_id: string }[]).map((e) => `${e.note}|${e.actor_id === U.super ? 'super' : e.actor_id}`)
+    const opensDetail = async (who: string) => (await see(who)).task === 1   // cùng điều kiện loader chi tiết đọc được task
+    for (const who of [U.sm2, U.sm, U.A, U.super, U.mkt]) {
+      expect(await opensDetail(who), who).toBe(true)
+      expect(await transfersOf(who), who).toEqual(['QA chuyển X→Y|super'])
+    }
+    // SM3: RLS cho đọc dòng sự kiện (chạm store nguồn X) nhưng KHÔNG mở được task ⇒ khối không hiển thị cho SM3.
+    expect(await transfersOf(SM3)).toEqual(['QA chuyển X→Y|super'])
+    expect(await opensDetail(SM3)).toBe(false)
+    for (const who of [U.C, U.qlch1]) {
+      expect(await opensDetail(who), who).toBe(false)
+      expect(await transfersOf(who), who).toEqual([])
+    }
     for (const who of [U.sm2, SM3, U.sm, U.A, U.C, U.super, U.mkt, U.qlch1]) expect(await attrDenied(who), who).toBe(true)
     // care_report theo store snapshot (Q-79) — kênh DUY NHẤT xem Có đơn (Q-95): attribution tại X không vào vùng Y.
     const conv = async (who: string) => (await report(who, P10)).reduce((n, r) => n + r.converted_tasks, 0)
@@ -585,8 +726,39 @@ test.describe('care B3 — parity browser ↔ migration 114 (PGlite) @desktop', 
     expect(await conv(U.sm)).toBe(1)
     expect(await conv(U.qlch1)).toBe(0)
 
+    // B8.2 (Q-113/Q-117): KPI "Đã liên hệ" = count last_interaction_at (session/RLS, cùng filter app) BẰNG tổng cột
+    // "Đã liên hệ" từng dòng báo cáo (completed + in_progress + closed_unfinished có lượt) và BẰNG tổng phân bố
+    // last_outcome (mỗi task một lần). Kiểm ở kỳ đang mở (đây) và kỳ đã đóng (sau close_period bên dưới).
+    const contactedParity = async (who: string, today: string) => {
+      const kpi = (await browse(who, { month: P10 }, today, 'AND last_interaction_at IS NOT NULL')).length
+      const touched = new Map<string, number>()
+      for (const r of await browse(who, { month: P10, status: 'closed_unfinished' }, today, 'AND last_interaction_at IS NOT NULL')) {
+        touched.set(careReportKey(r.store_id, r.assignee_id), (touched.get(careReportKey(r.store_id, r.assignee_id)) ?? 0) + 1)
+      }
+      const lines = careReportLines(await report(who, P10), { stores: new Map(), names: new Map() }, touched)
+      let outcomes = 0
+      for (const k of CARE_OUTCOMES) outcomes += (await browse(who, { month: P10 }, today, `AND last_outcome = '${k}'`)).length
+      return { kpi, lines: careReportSummary(lines).contacted, outcomes, touched: [...touched.values()].reduce((s, n) => s + n, 0) }
+    }
+    for (const who of [U.super, U.sm]) {
+      const p = await contactedParity(who, '2026-10-31')
+      expect(p.lines, who).toBe(p.kpi)
+      expect(p.outcomes, who).toBe(p.kpi)
+      expect(p.touched, who).toBe(0)                                       // kỳ đang mở: chưa task nào bị đóng
+    }
+    expect((await contactedParity(U.super, '2026-10-31')).kpi).toBeGreaterThan(0)
+
     // Sang kỳ 11: kỳ 10 thành kỳ cũ — "Không hoàn thành" ≠ "Từng trễ hẹn"; không còn "quá hạn đang mở".
     await db.query(`SELECT public.care__close_period_at('2026-11-01')`)
+    // Kỳ đã đóng: task đang theo dõi thành "không hoàn thành" nhưng VẪN là "Đã liên hệ" (Q-113).
+    for (const who of [U.super, U.sm]) {
+      const p = await contactedParity(who, '2026-11-01')
+      expect(p.lines, who).toBe(p.kpi)
+      expect(p.outcomes, who).toBe(p.kpi)
+    }
+    const closedP = await contactedParity(U.super, '2026-11-01')
+    expect(closedP.touched).toBeGreaterThan(0)
+    expect(closedP.kpi).toBe((await contactedParity(U.super, '2026-11-01')).lines)
     expect(await tErr(U.sm, [c1.id], U.D)).toBe('TASK_NOT_OPEN')
     const old = await browse(U.super, { month: P10 }, '2026-11-01')
     const tot = careReportTotals(await report(U.super, P10))
@@ -597,5 +769,79 @@ test.describe('care B3 — parity browser ↔ migration 114 (PGlite) @desktop', 
     expect(tot.overdueInPeriod).toBeLessThan(tot.closedUnfinished)
     expect(await browse(U.super, { month: P10, status: 'overdue_open' }, '2026-11-01')).toHaveLength(0)
     expect(old.every((r: any) => careTaskState(r, '2026-11-01').overdueOpen === false)).toBe(true)
+  })
+})
+
+// ── B8.4 /care: ô KPI chỉ link khi cùng tập; thông báo lỗi RPC không khẳng định "thiếu cấu hình" ─────────────
+test.describe('care B8.4 — /care: link KPI cùng tập + thông báo lỗi kết nối @desktop', () => {
+  test('link KPI dashboard: đúng 5 khoá cùng tập (4 của báo cáo + Quá hạn đang mở); không Từng trễ hẹn / Có đơn; không mang dược sĩ', () => {
+    expect(CARE_DASHBOARD_LINK_STATUS).toEqual({ tasks: null, completed: 'completed', notCared: 'not_cared', closedUnfinished: 'closed_unfinished', overdueOpen: 'overdue_open' })
+    for (const k of ['tasks', 'completed', 'notCared', 'closedUnfinished'] as const) expect(CARE_DASHBOARD_LINK_STATUS[k]).toBe(CARE_REPORT_LINK_STATUS[k])
+    // "Quá hạn đang mở" của dashboard đếm bằng CHÍNH bộ lọc overdue_open mà danh sách /care/tasks dùng.
+    expect(read('lib/care/server/browse.ts')).toContain("{ ...f, assigneeId: null, status: 'overdue_open' }, todayISO)")
+    const dash = read('components/care/CareDashboardView.tsx')
+    expect(dash).toContain("careFilterHref('/care/tasks', { month: scope.month, storeId: scope.storeId, assigneeId: null, status: CARE_DASHBOARD_LINK_STATUS[k] as CareStatusFilter | null })")
+    // Hai chỉ số không có danh sách tương đương: không truyền href.
+    expect(dash).toMatch(/label="Từng trễ hẹn trong kỳ" value=\{fmt\(totals\.overdueInPeriod\)\} dot="bg-status-warning"\s*hint="đếm mỗi task một lần, kể cả đã hoàn thành sau đó" \/>/)
+    expect(dash).toMatch(/<CareOrdersTile label="Khách có đơn" state=\{state\} converted=\{orders\?\.convertedTasks \?\? 0\}\s*hasNotSeen=\{[^}]*\} \/>/)
+    // 5 ô KPI có link + 1 link "Xem khách chưa chăm sóc" ở khối kết quả trống (cũng not_cared).
+    expect((dash.match(/href=\{link\('/g) ?? []).length).toBe(6)
+    expect(dash).toContain("<Link href={link('notCared', totals.notCared)!}")
+    expect(dash).not.toMatch(/link\('overdueInPeriod'|link\('inProgress'/)
+    // PM B8.4 R1-01: kỳ 0 task KHÔNG trả sớm trước hàng ô — ô "Khách có đơn" vẫn dựng theo trạng thái N3.
+    const empty = /if \(totals\.tasks === 0\) \{([\s\S]*?)\n {2}\}/.exec(dash)![1]
+    expect(empty).toContain('{kpis}')
+    expect(dash.indexOf('const kpis = (')).toBeLessThan(dash.indexOf('if (totals.tasks === 0)'))
+    expect(dash.indexOf('<CareOrdersTile')).toBeLessThan(dash.indexOf('if (totals.tasks === 0)'))
+    // Trang thật truyền đúng bộ lọc đang xem (kỳ + cửa hàng) — dashboard không lọc dược sĩ.
+    const page = read('app/(dashboard)/care/page.tsx')
+    expect(page).toContain('scope={{ month: f.month, storeId: f.storeId }}')
+    expect(page).toMatch(/<PageHeader \{\.\.\.title\}\s*actions=\{<CareFiltersBar path="\/care"/)
+  })
+
+  test('unavailable: 5 trang browser CRM dùng CareUnavailableState (mất kết nối/chưa sẵn sàng), không còn "chưa có cấu hình CRM"', () => {
+    const c = read('components/care/CareUnavailableState.tsx')
+    const msg = /CARE_UNAVAILABLE_MESSAGE = '([^']+)'/.exec(c)![1]
+    const hint = /CARE_UNAVAILABLE_HINT = '([^']+)'/.exec(c)![1]
+    expect(`${msg} ${hint}`).not.toMatch(/cấu hình/)
+    expect(hint).toMatch(/mất kết nối/)
+    expect(hint).toMatch(/tải lại trang/)
+    for (const p of ['app/(dashboard)/care/page.tsx', 'app/(dashboard)/care/tasks/page.tsx', 'app/(dashboard)/care/tasks/[id]/page.tsx',
+      'app/(dashboard)/care/reports/page.tsx', 'app/(dashboard)/care/assign/page.tsx']) {
+      const s = read(p)
+      const branch = /kind === 'unavailable'\) \{\n([\s\S]*?)\n {2}\}/.exec(s)![1]
+      expect(branch, p).toContain('<CareUnavailableState />')
+      expect(s, p).not.toMatch(/chưa có cấu hình CRM|Hệ thống CRM chưa sẵn sàng/)
+    }
+  })
+})
+
+// ── B8.5: Lịch sử chuyển giao — logic thuần + nguồn (quyền: test PGlite Q-79 ở trên dùng chính hàm này) ──────
+test.describe('care B8.5 — Lịch sử chuyển giao (thuần + nguồn) @desktop', () => {
+  const ev = (id: number, kind: 'assigned' | 'transferred', at: string) => ({ id, kind, created_at: at })
+  test('chỉ `transferred` (import `assigned` không tính), mới nhất trước, cùng thời điểm ⇒ id lớn trước; 0/1/n', () => {
+    expect(careTransferEvents([])).toEqual([])
+    expect(careTransferEvents([ev(1, 'assigned', '2026-10-01T02:00:00Z')])).toEqual([])
+    expect(careTransferEvents([ev(1, 'assigned', '2026-10-01T02:00:00Z'), ev(2, 'transferred', '2026-10-03T04:00:00Z')]).map((e) => e.id)).toEqual([2])
+    const n = [ev(5, 'transferred', '2026-10-02T09:30:00Z'), ev(1, 'assigned', '2026-10-01T02:00:00Z'),
+      ev(7, 'transferred', '2026-10-04T03:00:00Z'), ev(6, 'transferred', '2026-10-04T03:00:00Z'), ev(3, 'transferred', '2026-10-03T00:00:00Z')]
+    expect(careTransferEvents(n).map((e) => e.id)).toEqual([7, 6, 3, 5])
+    expect(n.map((e) => e.id)).toEqual([5, 1, 7, 6, 3])                     // không đổi mảng gốc
+  })
+
+  test('nguồn: khối trên chi tiết browser dùng CHÍNH data.events (session/RLS) — không query/RPC mới; lịch sử chăm sóc browser bỏ `transferred`; mobile dược sĩ giữ nguyên', () => {
+    const view = read('components/care/CareTaskDetailView.tsx')
+    expect(view).toContain('<CareTransferHistory events={data.events} />')
+    expect(view).toContain("events={data.events.filter((e) => e.kind !== 'transferred')}")
+    // Khối nằm trong phần thông tin, sau <dl> (Dược sĩ phụ trách), trước sản phẩm/lịch sử.
+    expect(view.indexOf('label="Dược sĩ phụ trách"')).toBeLessThan(view.indexOf('<CareTransferHistory'))
+    expect(view.indexOf('<CareTransferHistory')).toBeLessThan(view.indexOf('Sản phẩm cần chăm sóc'))
+    const comp = read('components/care/CareTransferHistory.tsx')
+    expect(comp).toContain('const list = careTransferEvents(events)')
+    expect(comp).not.toMatch(/supabase|createClient|\.rpc\(|\.from\(|'use server'|fetch\(/)
+    // Mobile dược sĩ: không đổi (vẫn truyền đủ events, tiêu đề ẩn mặc định).
+    expect(read('components/care/CareMyTaskDetail.tsx')).toContain('events={data.events} loadMore={loadMore} showHeading={false} />')
+    // Loader chi tiết vẫn là nguồn duy nhất (đã có từ B3) — B8.5 không thêm đường đọc.
+    expect(read('lib/care/server/browse.ts').match(/from\('care_assignment_events'\)/g)?.length ?? 0).toBe(1)
   })
 })

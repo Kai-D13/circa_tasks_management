@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { test, expect } from '@playwright/test'
+import { pgliteGateway, type Filter } from './careQaPglite'
 
 // CRM-CSKH B6-qa — scripts/care-qa-fixture.mjs (up | verify | status | down) chạy trên PGlite với migration 114 THẬT
 // qua một gateway cùng giao diện với gateway Supabase của script. Không chạm DB/Supabase thật. Kiểm: vòng đời đầy đủ,
@@ -14,60 +15,6 @@ const HAS_PGLITE = fs.existsSync(path.join(ROOT, 'node_modules', '@electric-sql'
 const read = (f: string) => fs.readFileSync(path.join(ROOT, f), 'utf8').replace(/\r\n/g, '\n')
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-type Filter = [string, 'in' | 'eq' | 'lt', any]
-function where(filters: Filter[]) {
-  const parts: string[] = [], params: any[] = []
-  for (const [col, op, v] of filters) {
-    params.push(v)
-    parts.push(op === 'in' ? `${col}::text = ANY($${params.length}::text[])` : op === 'lt' ? `${col} < $${params.length}` : `${col} = $${params.length}`)
-  }
-  return { sql: parts.length ? `WHERE ${parts.join(' AND ')}` : '', params }
-}
-
-/** Gateway PGlite: `svc` = superuser (tương đương service_role, bỏ qua RLS); `as(vai)` = SET ROLE authenticated + claim. */
-function pgliteGateway(db: any, L: any, roles: Record<string, string | null>, opts: { failOn?: (op: string, name: string) => boolean; closed?: string[] } = {}) {
-  const fail = (op: string, name: string) => { if (opts.failOn?.(op, name)) { const e: any = new Error('giả lập process chết'); e.code = 'SIMULATED'; throw e } }
-  const SRF = new Set(['care_report'])
-  const rpcSql = (fn: string, args: Record<string, any>) => {
-    const keys = Object.keys(args)
-    const vals = keys.map((k) => (k === 'p_proof' ? JSON.stringify(args[k]) : args[k]))
-    const casts: Record<string, string> = { p_task_ids: '::uuid[]', p_store_ids: '::uuid[]', p_proof: '::jsonb' }
-    const call = `public.${fn}(${keys.map((k, i) => `${k} => $${i + 1}${casts[k] ?? ''}`).join(', ')})`
-    return { sql: SRF.has(fn) ? `SELECT * FROM ${call}` : `SELECT ${call} AS r`, vals }
-  }
-  const ops = (run: <T>(fn: () => Promise<T>) => Promise<T>) => ({
-    async select(table: string, cols: string, filters: Filter[]) { const w = where(filters); return run(async () => (await db.query(`SELECT ${cols} FROM public.${table} ${w.sql}`, w.params)).rows) },
-    async count(table: string, filters: Filter[]) { const w = where(filters); return run(async () => Number((await db.query(`SELECT count(*)::int n FROM public.${table} ${w.sql}`, w.params)).rows[0].n)) },
-    async rpc(fn: string, args: Record<string, any>) {
-      const q = rpcSql(fn, args)
-      return run(async () => { const r = await db.query(q.sql, q.vals); const v = SRF.has(fn) ? r.rows : r.rows[0].r; return v instanceof Date ? v.toISOString().slice(0, 10) : v })
-    },
-  })
-  const asSuper = <T>(fn: () => Promise<T>) => fn()
-  return {
-    svc: {
-      ...ops(asSuper),
-      async insert(table: string, rows: any[]) {
-        fail('insert', table)
-        const cols = Object.keys(rows[0])
-        for (const r of rows) {
-          await db.query(`INSERT INTO public.${table} (${cols.join(', ')}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(', ')})`,
-            cols.map((c) => (r[c] !== null && typeof r[c] === 'object' ? JSON.stringify(r[c]) : r[c])))
-        }
-      },
-      async del(table: string, filters: Filter[]) { fail('del', table); const w = where(filters); return (await db.query(`DELETE FROM public.${table} ${w.sql} RETURNING 1`, w.params)).rows.length },
-      async rpc(fn: string, args: Record<string, any>) { fail('rpc', fn); return ops(asSuper).rpc(fn, args) },
-    },
-    async userByEmail(email: string) { return email ? (await db.query(`SELECT id, role, store_id FROM public.users WHERE lower(email) = lower($1)`, [email])).rows[0] ?? null : null },
-    async smManagesStore(smId: string, storeId: string) { return (await db.query(`SELECT 1 FROM public.sm_store_assignments WHERE sm_user_id = $1 AND store_id = $2`, [smId, storeId])).rows.length > 0 },
-    async as(role: string) {
-      const uid = roles[role]
-      if (!uid) return null
-      return { ...ops(<T>(fn: () => Promise<T>) => L.as(db, uid, fn) as Promise<T>), userId: uid, close: async () => { opts.closed?.push(role) } }
-    },
-  }
-}
-
 const HOST = 'db.example.test'
 const ENV_BASE = { NEXT_PUBLIC_SUPABASE_URL: `https://${HOST}`, E2E_CARE_WRITE_QA: 'YES', E2E_EXPECTED_SUPABASE_HOST: HOST }
 

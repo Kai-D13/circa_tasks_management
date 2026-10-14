@@ -1,6 +1,6 @@
 import { normalizeVnPhone } from '@/lib/affiliate/phone'
 import {
-  CARE_FIELD_MAX_LENGTH, CARE_IMAGE_URL_RE, CARE_IMPORT_HEADERS, CARE_PRODUCT_ID_ZERO_RE,
+  CARE_FIELD_MAX_LENGTH, CARE_IMAGE_URL_RE, CARE_IMPORT_HEADERS, CARE_PRODUCT_ID_ZERO_RE, careOneField,
   type CareImportRow, type CareRowError,
 } from './contract'
 
@@ -43,18 +43,22 @@ export function validateCareRows(rows: CareImportRow[]): CareValidateResult {
   const email = (r: CareImportRow) => r.assignee_email.toLowerCase()
   const phoneNorm = (r: CareImportRow) => (r.customer_phone ? normalizeVnPhone(r.customer_phone) : null)
 
+  // Q-110: `field` chỉ khi đúng MỘT cột gây lỗi (thiếu/quá dài nhiều cột ⇒ không gán); ba mã cột cố định.
   for (const r of rows) {
-    if (REQUIRED.some((f) => r[f] === '')) errors.push({ row: r.rowNo, code: 'FIELD_REQUIRED' })
-    if (CARE_IMPORT_HEADERS.some((f) => {
+    const missing = REQUIRED.filter((f) => r[f] === '')
+    if (missing.length) errors.push({ row: r.rowNo, code: 'FIELD_REQUIRED', ...careOneField(missing) })
+    const long = CARE_IMPORT_HEADERS.filter((f) => {
       const max = CARE_FIELD_MAX_LENGTH[f]
       return max !== null && r[f].length > max
-    })) errors.push({ row: r.rowNo, code: 'TOO_LONG' })
-    if (r.customer_phone !== '' && phoneNorm(r) === null) errors.push({ row: r.rowNo, code: 'PHONE_INVALID' })
+    })
+    if (long.length) errors.push({ row: r.rowNo, code: 'TOO_LONG', ...careOneField(long) })
+    if (r.customer_phone !== '' && phoneNorm(r) === null) errors.push({ row: r.rowNo, code: 'PHONE_INVALID', field: 'customer_phone' })
     // Q-104: một luật cho Text "0"/"00" và Number 0 (parser đã đổi thành "0") — preview = finalize.
-    if (CARE_PRODUCT_ID_ZERO_RE.test(r.product_id)) errors.push({ row: r.rowNo, code: 'PRODUCT_ID_INVALID' })
-    if (r.product_url !== '' && !CARE_IMAGE_URL_RE.test(r.product_url)) errors.push({ row: r.rowNo, code: 'IMAGE_URL_HOST' })
+    if (CARE_PRODUCT_ID_ZERO_RE.test(r.product_id)) errors.push({ row: r.rowNo, code: 'PRODUCT_ID_INVALID', field: 'product_id' })
+    if (r.product_url !== '' && !CARE_IMAGE_URL_RE.test(r.product_url)) errors.push({ row: r.rowNo, code: 'IMAGE_URL_HOST', field: 'product_url' })
   }
 
+  // Trùng (khách, sản phẩm) và không nhất quán là lỗi QUAN HỆ giữa nhiều dòng/cột ⇒ không gán `field` (Q-110).
   // Trùng (khách, sản phẩm): mọi dòng của cặp trùng đều lỗi (như COUNT OVER PARTITION).
   const byPair = new Map<string, number[]>()
   for (const r of rows) {

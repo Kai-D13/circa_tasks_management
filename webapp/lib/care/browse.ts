@@ -1,6 +1,7 @@
 import { CARE_OUTCOMES, CARE_OUTCOME_META, type CareOutcome } from './outcome'
 import { isCarePeriod, periodLastDay } from './time'
 import { isCareProofDisplayUrl, isProofExpired } from './my'
+import { applyCareScope, CARE_PRODUCTION_SCOPE, type CareDataScope } from './scope'
 
 // CRM-CSKH B3 — logic THUẦN cho browser Khách hàng/Chăm sóc + chuyển giao (SPEC B3).
 // Không import Next/Supabase ⇒ test trực tiếp. Quyền thật vẫn ở RLS/RPC 114; ở đây
@@ -96,6 +97,12 @@ export function parseCareFilters(sp: Record<string, string | string[] | undefine
   return { month, storeId, assigneeId, status, page }
 }
 
+/** B8.1: `?open=<uuid>` của drawer chi tiết /care/tasks — chỉ khoá task (không PII); sai ⇒ null. */
+export function parseCareOpenParam(sp: Record<string, string | string[] | undefined>): string | null {
+  const v = sp.open
+  return typeof v === 'string' && UUID_RE.test(v.trim()) ? v.trim().toLowerCase() : null
+}
+
 export function careFilterHref(path: string, f: Partial<CareFilters>, over: Partial<CareFilters> = {}): string {
   const m = { ...f, ...over }
   const q = new URLSearchParams()
@@ -106,6 +113,60 @@ export function careFilterHref(path: string, f: Partial<CareFilters>, over: Part
   if (m.page && m.page > 1) q.set('page', String(m.page))
   const s = q.toString()
   return s ? `${path}?${s}` : path
+}
+
+// ── Chip trạng thái /care/tasks (B8.1) ─────────────────────────────────────
+/** Nhãn ngắn trên chip (filter giữ nguyên khoá URL CARE_STATUS_FILTERS). */
+export const CARE_STATUS_CHIP_LABELS: Record<CareStatusFilter, string> = {
+  not_cared: 'Chưa chăm sóc',
+  following: 'Đang theo dõi',
+  overdue_open: 'Quá hạn',
+  completed: 'Hoàn thành',
+  closed_unfinished: 'Không hoàn thành',
+}
+
+/**
+ * Số đếm cho chip: `all` là count RIÊNG theo kỳ/store/dược sĩ (không cộng các chip vì
+ * `overdue_open` giao với `following`). Không áp từ khoá tìm (tìm đi qua POST).
+ */
+export type CareStatusCounts = { all: number } & Record<CareStatusFilter, number>
+
+export function careStatusChipTabs(path: string, f: CareFilters, counts: CareStatusCounts | null): { key: string; label: string; count?: number; href: string }[] {
+  const base = { month: f.month, storeId: f.storeId, assigneeId: f.assigneeId }
+  return [
+    { key: 'all', label: 'Tất cả', count: counts?.all, href: careFilterHref(path, base) },
+    ...CARE_STATUS_FILTERS.map((s) => ({ key: s, label: CARE_STATUS_CHIP_LABELS[s], count: counts?.[s], href: careFilterHref(path, { ...base, status: s }) })),
+  ]
+}
+
+// ── Ô hiển thị 2 dòng /care/tasks (B8.1) ───────────────────────────────────
+/** Số sản phẩm HIỆN HÀNH của task từ embed cờ is_current (dòng revision cũ không tính). */
+export function careCurrentProductCount(products: { is_current: boolean }[] | null | undefined): number {
+  return (products ?? []).filter((p) => p.is_current === true).length
+}
+
+const VN_SHORT = new Intl.DateTimeFormat('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh', hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', hour12: false })
+/** "10:55 13/10" theo giờ VN (thời điểm lượt gần nhất). */
+export function careShortDateTime(iso: string | null): string | null {
+  if (!iso) return null
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return null
+  const p = Object.fromEntries(VN_SHORT.formatToParts(d).map((x) => [x.type, x.value]))
+  return `${p.hour}:${p.minute} ${p.day}/${p.month}`
+}
+
+const dayNumber = (iso: string) => Date.UTC(Number(iso.slice(0, 4)), Number(iso.slice(5, 7)) - 1, Number(iso.slice(8, 10))) / 86_400_000
+/**
+ * Hẹn chăm sóc lại: ngày đầy đủ + gợi ý so với hôm nay (ngày VN). Chỉ task đang mở mới có
+ * gợi ý/quá hạn (task đã kết thúc giữ ngày nếu còn, không tô quá hạn).
+ */
+export function careApptHint(nextISO: string | null, todayISO: string, open: boolean): { date: string; hint: string | null; overdue: boolean } | null {
+  if (!nextISO || !/^\d{4}-\d{2}-\d{2}/.test(nextISO)) return null
+  const date = `${nextISO.slice(8, 10)}/${nextISO.slice(5, 7)}/${nextISO.slice(0, 4)}`
+  if (!open) return { date, hint: null, overdue: false }
+  const diff = dayNumber(nextISO) - dayNumber(todayISO)
+  if (diff === 0) return { date, hint: 'hôm nay', overdue: false }
+  return diff > 0 ? { date, hint: `còn ${diff} ngày`, overdue: false } : { date, hint: `quá ${-diff} ngày`, overdue: true }
 }
 
 // ── Trạng thái hiển thị ─────────────────────────────────────────────────────
@@ -132,7 +193,8 @@ export function careTaskState(t: CareTaskStateInput, todayISO: string): CareTask
 
 /**
  * Áp filter lên query PostgREST (builder trừu tượng ⇒ test bằng builder giả).
- * Luôn: đúng kỳ + loại is_test. Store/dược sĩ/trạng thái chỉ THÊM điều kiện.
+ * Luôn: đúng kỳ + phạm vi dữ liệu (production: loại is_test · QA local: chỉ batch QA — lib/care/scope.ts).
+ * Store/dược sĩ/trạng thái chỉ THÊM điều kiện.
  */
 export interface CareQueryBuilder<Q> {
   eq(col: string, v: unknown): Q
@@ -140,8 +202,8 @@ export interface CareQueryBuilder<Q> {
   not(col: string, op: string, v: unknown): Q
   lt(col: string, v: string): Q
 }
-export function applyCareTaskFilters<Q extends CareQueryBuilder<Q>>(q: Q, f: Pick<CareFilters, 'month' | 'storeId' | 'assigneeId' | 'status'>, todayISO: string): Q {
-  let r = q.eq('period_month', f.month).eq('is_test', false)
+export function applyCareTaskFilters<Q extends CareQueryBuilder<Q>>(q: Q, f: Pick<CareFilters, 'month' | 'storeId' | 'assigneeId' | 'status'>, todayISO: string, scope: CareDataScope = CARE_PRODUCTION_SCOPE): Q {
+  let r = applyCareScope(q.eq('period_month', f.month), scope)
   if (f.storeId) r = r.eq('store_id', f.storeId)
   if (f.assigneeId) r = r.eq('assignee_id', f.assigneeId)
   switch (f.status) {
@@ -214,6 +276,16 @@ export type CareOutcomeKey = CareOutcome | 'none'
 export const CARE_OUTCOME_KEYS: readonly CareOutcomeKey[] = [...CARE_OUTCOMES, 'none']
 
 /**
+ * B8.5 — các lần SM/super chuyển giao (A → B) của một task: CHỈ `transferred` (sự kiện `assigned` khi import
+ * KHÔNG phải chuyển giao), mới nhất trước (cùng thời điểm ⇒ id lớn trước). Dữ liệu là `care_assignment_events`
+ * đã đọc qua session/RLS ở loader chi tiết — không truy vấn thêm.
+ */
+export function careTransferEvents<T extends { id: number; kind: string; created_at: string }>(events: readonly T[]): T[] {
+  return events.filter((e) => e.kind === 'transferred')
+    .sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : b.id - a.id))
+}
+
+/**
  * Phân bố kết quả theo task từ SỐ ĐẾM (server đếm head:true theo từng khoá —
  * SPEC B3 §2: aggregate ở server, không tải toàn bộ dòng chỉ để vẽ).
  */
@@ -275,6 +347,27 @@ export function mapCareTransferError(message: string | null | undefined): CareTr
   if (/đã thuộc dược sĩ đích/.test(m)) return 'SAME_OWNER'
   if (/từ chối chăm sóc tại cửa hàng đích/.test(m)) return 'REFUSED_AT_TARGET'
   return 'TRANSFER_FAILED'
+}
+
+/**
+ * B8.1 (PM P1-2): dược sĩ đích bị khoá nếu đang giữ BẤT KỲ task nào trong lô chọn — RPC 114
+ * (`assignee_id = p_to_user` trên cả mảng) từ chối nguyên lô. Trả số task xung đột theo dược sĩ.
+ */
+export function careTransferConflicts(tasks: { assigneeId: string }[]): Map<string, number> {
+  const m = new Map<string, number>()
+  for (const t of tasks) m.set(t.assigneeId, (m.get(t.assigneeId) ?? 0) + 1)
+  return m
+}
+
+/**
+ * B8.1 (PM P1-1): tải hiện tại của dược sĩ = task ĐANG MỞ kỳ hiện tại (open_not_cared +
+ * open_in_progress) cộng theo assignee qua các dòng store × dược sĩ của care_report — không
+ * dùng tasks_total. Phạm vi = phạm vi người xem (SM: các store trong vùng).
+ */
+export function careOpenLoadByAssignee(rows: CareReportRow[]): Map<string, number> {
+  const m = new Map<string, number>()
+  for (const r of rows) m.set(r.assignee_id, (m.get(r.assignee_id) ?? 0) + r.open_not_cared + r.open_in_progress)
+  return m
 }
 
 /** Kiểm đầu vào phía app (RPC kiểm lại). */

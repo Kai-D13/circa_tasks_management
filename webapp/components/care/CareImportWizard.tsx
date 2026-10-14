@@ -1,36 +1,41 @@
 'use client'
 
-import { useMemo, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import {
-  AlertTriangle, CheckCircle2, ChevronLeft, ChevronRight, Download, FileSpreadsheet, Loader2, Store, Upload, Users,
-} from 'lucide-react'
+import { AlertTriangle, ArrowRight, CheckCircle2, FileSpreadsheet, Info, Loader2, Upload, X } from 'lucide-react'
 import { Button, buttonVariants } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
-import { Input } from '@/components/ui/input'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { DataTableShell } from '@/components/ds/DataTableShell'
 import { ErrorState } from '@/components/ds/ErrorState'
-import { StatCard } from '@/components/ds/StatCard'
-import { StatusBadge, type StatusTone } from '@/components/ds/StatusBadge'
-import { CARE_ERROR_LABELS, type CareRowError } from '@/lib/care/import/contract'
-import type { CareAssignmentGroup, CarePreview, CarePreviewCounts, CarePreviewCustomer } from '@/lib/care/import/preview'
+import { StatusBadge } from '@/components/ds/StatusBadge'
+import { CareKpiTile } from '@/components/care/CareReportView'
+import {
+  CareImportAssign, CareImportChanges, CareImportCustomers, CareImportIssues, CareImportRequirements, CareImportStepper,
+  INSET, PANEL, dateLabel, fmt, monthLabel,
+} from '@/components/care/CareImportPanels'
+import { CARE_ERROR_LABELS, CARE_IMPORT_SHEET, type CareRowError, type CareRowErrorCode } from '@/lib/care/import/contract'
+import type { CarePreview, CarePreviewCounts } from '@/lib/care/import/preview'
+import { careAssignmentTable } from '@/lib/care/import/review'
+import { CARE_QA_ISSUE_LABELS } from '@/lib/care/qa/labels'
 import { cn } from '@/lib/utils'
 
-// Wizard Phân công CRM (SPEC B2 §3): Tải file → Kiểm tra → Phân công (chỉ xem)
-// → Xác nhận/kết quả. Preview CHỈ ĐỌC; commit gửi lại đúng file + sha256 + kỳ,
-// server tính lại và RPC finalize (114) quyết định kết quả. Không có nút chuyển
-// giao/phân công thủ công (B3). Tên/SĐT chỉ hiện trên màn hình người có quyền
-// import, không log/URL.
+// Wizard Phân công CRM (SPEC B2 §3; B8.3 theo artboard 11): Tải file → Kiểm tra → Phân công (chỉ xem) → Xác nhận.
+// Preview CHỈ ĐỌC; commit gửi lại đúng file + sha256 + kỳ, server tính lại và RPC finalize (114) quyết định kết
+// quả. Q-110: lỗi bất kỳ chặn CẢ file (không import phần hợp lệ), bảng lỗi có cột chỉ khi chắc chắn, không giá trị
+// ô. Không dò gần đúng dược sĩ, không ghi chú lần import. Tên/SĐT chỉ hiện trên màn hình người có quyền import.
 
-type PreviewPayload = Omit<CarePreview, 'errors'> & { errorCount: number; errors: CareRowError[] }
+type PreviewPayload = Omit<CarePreview, 'errors'> & {
+  errorCount: number
+  errors: CareRowError[]
+  /** Đếm theo mã trên TOÀN BỘ lỗi (server); danh sách chi tiết có thể bị cắt. */
+  errorCounts?: Partial<Record<CareRowErrorCode, number>>
+}
+/** B6-qa-ui: chỉ có trên dev server QA local — server quyết file có được import (is_test) hay không. */
+type QaInfo = { commitAllowed: boolean; issues: string[] }
 type CommitResult =
   | { status: 'committed'; batch_id: string; idempotent?: boolean } & Partial<CarePreviewCounts>
   | { status: 'duplicate'; batch_id: string; duplicate_of: string }
   | { status: 'rejected'; batch_id: string; error_count: number; errors: CareRowError[] }
 
-const STEPS = ['Tải file', 'Kiểm tra dữ liệu', 'Phân công', 'Xác nhận'] as const
-const PAGE = 50
 /** Chừa chỗ cho phần bao multipart khi so với trần byte của server. */
 const MULTIPART_RESERVE = 64 * 1024
 
@@ -53,270 +58,79 @@ const SERVER_MESSAGES: Record<string, string> = {
   FINALIZE_FAILED: 'Import thất bại — không có task nào được tạo. Thử lại hoặc báo quản trị.',
 }
 const messageFor = (code: string | undefined) =>
-  (code && (SERVER_MESSAGES[code] ?? (CARE_ERROR_LABELS as Record<string, string>)[code])) || 'Có lỗi không xác định — thử lại.'
+  (code && (SERVER_MESSAGES[code] ?? (CARE_ERROR_LABELS as Record<string, string>)[code] ?? (CARE_QA_ISSUE_LABELS as Record<string, string>)[code]))
+  || 'Có lỗi không xác định — thử lại.'
 
-const ACTION: Record<CarePreviewCustomer['action'], { tone: StatusTone; label: string }> = {
-  create: { tone: 'success', label: 'Tạo mới' },
-  update: { tone: 'info', label: 'Cập nhật' },
-  unchanged: { tone: 'neutral', label: 'Không đổi' },
-  skip_has_interaction: { tone: 'warning', label: 'Giữ nguyên (đã có lượt)' },
-  error: { tone: 'danger', label: 'Lỗi' },
-}
+const sizeLabel = (bytes: number) => (bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / 1048576).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} MB`)
+const timeLabel = (d: Date) => `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')} ${d.toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric' })}`
+const BTN = 'min-h-[44px] md:min-h-0'
 
-const fmt = (n: number) => n.toLocaleString('vi-VN')
-const monthLabel = (period: string) => `${period.slice(5, 7)}/${period.slice(0, 4)}`
-const dateLabel = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`
-
-function Pager({ page, total, onPage }: { page: number; total: number; onPage: (p: number) => void }) {
-  const pages = Math.max(1, Math.ceil(total / PAGE))
-  if (pages <= 1) return null
-  return (
-    <div className="flex items-center justify-end gap-2 text-sm text-muted-foreground">
-      <span>Trang {page}/{pages}</span>
-      <Button variant="outline" size="sm" className="min-h-[44px] md:min-h-0" aria-label="Trang trước" disabled={page <= 1} onClick={() => onPage(page - 1)}>
-        <ChevronLeft className="size-4" />
-      </Button>
-      <Button variant="outline" size="sm" className="min-h-[44px] md:min-h-0" aria-label="Trang sau" disabled={page >= pages} onClick={() => onPage(page + 1)}>
-        <ChevronRight className="size-4" />
-      </Button>
-    </div>
-  )
-}
-
-function ErrorTable({ errors, total, onPick }: { errors: CareRowError[]; total: number; onPick?: (row: number) => void }) {
-  const [code, setCode] = useState<string>('')
-  const [page, setPage] = useState(1)
-  const codes = useMemo(() => [...new Set(errors.map((e) => e.code))], [errors])
-  const list = code ? errors.filter((e) => e.code === code) : errors
-  const view = list.slice((page - 1) * PAGE, page * PAGE)
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <StatusBadge tone="danger">{fmt(total)} lỗi</StatusBadge>
-        {total > errors.length && <span className="text-xs text-muted-foreground">hiển thị {fmt(errors.length)} lỗi đầu</span>}
-        <select
-          aria-label="Lọc theo loại lỗi"
-          className="ml-auto h-10 min-h-[44px] rounded-md border bg-background px-2 text-[16px] md:min-h-0 md:text-sm"
-          value={code}
-          onChange={(e) => { setCode(e.target.value); setPage(1) }}
-        >
-          <option value="">Tất cả loại lỗi</option>
-          {codes.map((c) => <option key={c} value={c}>{c}</option>)}
-        </select>
-      </div>
-      <DataTableShell>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead className="w-20">Dòng</TableHead>
-              <TableHead>Mã lỗi</TableHead>
-              <TableHead>Nội dung</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {view.map((e) => (
-              <TableRow key={`${e.row}-${e.code}`}>
-                <TableCell>
-                  {onPick ? (
-                    <button type="button" className="min-h-[44px] font-medium text-primary underline-offset-2 hover:underline md:min-h-0" onClick={() => onPick(e.row)}>
-                      {e.row}
-                    </button>
-                  ) : e.row}
-                </TableCell>
-                <TableCell className="font-mono text-xs">{e.code}</TableCell>
-                <TableCell className="text-sm">{CARE_ERROR_LABELS[e.code]}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </DataTableShell>
-      <Pager page={page} total={list.length} onPage={setPage} />
-    </div>
-  )
-}
-
-function CustomerTable({ customers, focusRow, onClearFocus }: { customers: CarePreviewCustomer[]; focusRow: number | null; onClearFocus: () => void }) {
-  const [filter, setFilter] = useState<CarePreviewCustomer['action'] | 'all'>('all')
-  const [q, setQ] = useState('')
-  const [page, setPage] = useState(1)
-  const list = customers.filter((c) => {
-    if (focusRow !== null) return c.rows.includes(focusRow)
-    if (filter !== 'all' && c.action !== filter) return false
-    if (!q) return true
-    const s = q.toLowerCase()
-    return c.externalId.toLowerCase().includes(s) || c.name.toLowerCase().includes(s) || c.storeCode.toLowerCase().includes(s) || c.email.includes(s)
-  })
-  const view = list.slice((page - 1) * PAGE, page * PAGE)
-  const tabs: (CarePreviewCustomer['action'] | 'all')[] = ['all', 'create', 'update', 'unchanged', 'skip_has_interaction', 'error']
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        {tabs.map((t) => {
-          const n = t === 'all' ? customers.length : customers.filter((c) => c.action === t).length
-          return (
-            <button
-              key={t}
-              type="button"
-              onClick={() => { setFilter(t); setPage(1); onClearFocus() }}
-              className={cn(
-                'min-h-[44px] rounded px-3 text-sm md:min-h-0 md:py-1.5',
-                filter === t && focusRow === null ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:text-foreground',
-              )}
-            >
-              {t === 'all' ? 'Tất cả' : ACTION[t].label} ({fmt(n)})
-            </button>
-          )
-        })}
-        <Input
-          aria-label="Tìm khách"
-          placeholder="Tìm mã KH, tên, cửa hàng, email…"
-          className="ml-auto h-10 w-full text-[16px] md:w-64 md:text-sm"
-          value={q}
-          onChange={(e) => { setQ(e.target.value); setPage(1); onClearFocus() }}
-        />
-      </div>
-      {focusRow !== null && (
-        <div className="flex items-center gap-2 text-sm">
-          <StatusBadge tone="info">Đang xem khách chứa dòng {focusRow}</StatusBadge>
-          <Button variant="ghost" size="sm" className="min-h-[44px] md:min-h-0" onClick={onClearFocus}>Bỏ lọc</Button>
-        </div>
-      )}
-      <DataTableShell>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Dòng</TableHead>
-              <TableHead>Mã KH</TableHead>
-              <TableHead>Tên</TableHead>
-              <TableHead>SĐT</TableHead>
-              <TableHead>Cửa hàng</TableHead>
-              <TableHead>Dược sĩ (từ file)</TableHead>
-              <TableHead className="text-right">Sản phẩm</TableHead>
-              <TableHead>Kết quả dự kiến</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {view.map((c) => (
-              <TableRow key={c.externalId}>
-                <TableCell className="whitespace-nowrap text-muted-foreground">{c.rows.length > 1 ? `${c.rows[0]}–${c.rows[c.rows.length - 1]}` : c.rows[0]}</TableCell>
-                <TableCell className="max-w-[140px] truncate font-mono text-xs" title={c.externalId}>{c.externalId}</TableCell>
-                <TableCell className="max-w-[180px] truncate" title={c.name}>{c.name}</TableCell>
-                <TableCell className="whitespace-nowrap">{c.phoneRaw}</TableCell>
-                <TableCell className="max-w-[160px] truncate" title={c.storeName ?? c.storeCode}>{c.storeCode}</TableCell>
-                <TableCell className="max-w-[200px] truncate" title={c.email}>{c.assigneeName ?? c.email}</TableCell>
-                <TableCell className="text-right tabular-nums">{c.productCount}</TableCell>
-                <TableCell>
-                  <div className="flex flex-wrap gap-1">
-                    <StatusBadge tone={ACTION[c.action].tone}>{ACTION[c.action].label}</StatusBadge>
-                    {c.ownerIgnored && <StatusBadge tone="warning">Dược sĩ khác file — giữ người hiện tại</StatusBadge>}
-                  </div>
-                </TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      </DataTableShell>
-      <Pager page={page} total={list.length} onPage={setPage} />
-    </div>
-  )
-}
-
-function CountsGrid({ counts }: { counts: CarePreviewCounts }) {
-  const items: [string, number, StatusTone][] = [
-    ['Tạo task mới', counts.created, 'success'],
-    ['Cập nhật sản phẩm/lý do', counts.updated, 'info'],
-    ['Không đổi', counts.unchanged, 'neutral'],
-    ['Giữ nguyên vì đã có lượt chăm sóc', counts.skipped_has_interaction, 'warning'],
-    ['File đổi dược sĩ — không áp dụng', counts.owner_ignored, 'warning'],
-    ['Khách vắng file — giữ nguyên task', counts.absent_kept, 'neutral'],
-    ['Task kỳ trước sẽ đóng (Không hoàn thành)', counts.closed_previous_period, 'neutral'],
-  ]
-  return (
-    <ul className="grid gap-2 sm:grid-cols-2">
-      {items.map(([label, n, tone]) => (
-        <li key={label} className="flex items-center justify-between gap-3 rounded-lg border bg-card px-3 py-2 text-sm">
-          <span>{label}</span>
-          <StatusBadge tone={tone}>{fmt(n)}</StatusBadge>
-        </li>
-      ))}
-    </ul>
-  )
-}
-
-function AssignmentView({ groups }: { groups: CareAssignmentGroup[] }) {
-  return (
-    <div className="space-y-3">
-      <p className="text-sm text-muted-foreground">
-        Dược sĩ phụ trách lấy từ cột <span className="font-mono">assignee_email</span> trong file — màn này chỉ để xem lại.
-        Muốn đổi dược sĩ cho khách đã import, dùng chức năng Chuyển giao (SM/super) khi được mở.
-      </p>
-      <DataTableShell>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Cửa hàng</TableHead>
-              <TableHead>Dược sĩ</TableHead>
-              <TableHead className="text-right">Khách</TableHead>
-              <TableHead className="text-right">Dòng sản phẩm</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {groups.flatMap((g) => g.assignees.map((a, i) => (
-              <TableRow key={`${g.storeCode}-${a.email}`}>
-                <TableCell className="max-w-[220px] truncate" title={g.storeName}>
-                  {i === 0 ? <span><span className="font-medium">{g.storeCode}</span> · {g.storeName} <span className="text-muted-foreground">({fmt(g.customers)} khách)</span></span> : null}
-                </TableCell>
-                <TableCell className="max-w-[220px] truncate" title={a.email}>{a.name}</TableCell>
-                <TableCell className="text-right tabular-nums">{fmt(a.customers)}</TableCell>
-                <TableCell className="text-right tabular-nums">{fmt(a.products)}</TableCell>
-              </TableRow>
-            )))}
-          </TableBody>
-        </Table>
-      </DataTableShell>
-    </div>
-  )
-}
-
-export function CareImportWizard({ maxBytes, templateHref = '/api/care/import/template' }: { maxBytes: number; templateHref?: string }) {
+export function CareImportWizard({ maxBytes, period, tasksHref = null }: {
+  maxBytes: number
+  /** Kỳ hiện tại (YYYY-MM-01, giờ VN) để mô tả bước trước khi có preview; kỳ thật do server tính khi kiểm tra. */
+  period: string
+  /** Link danh sách chăm sóc sau khi import — chỉ khi người dùng có quyền xem (phòng chỉ-import thì null). */
+  tasksHref?: string | null
+}) {
   const router = useRouter()
   const [step, setStep] = useState(0)
   const [file, setFile] = useState<File | null>(null)
+  const [dragging, setDragging] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [preview, setPreview] = useState<PreviewPayload | null>(null)
+  const [checkedAt, setCheckedAt] = useState<Date | null>(null)
+  const [qa, setQa] = useState<QaInfo | null>(null)
   const [sha, setSha] = useState<string>('')
   const [result, setResult] = useState<CommitResult | null>(null)
   const [focusRow, setFocusRow] = useState<number | null>(null)
   const committing = useRef(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  // PM B8.3 R1-01: mỗi lần chọn/bỏ file hoặc gửi kiểm tra là một "thế hệ" mới. Phản hồi preview chỉ được áp dụng
+  // (preview/sha/QA/bước/lỗi/busy) khi vẫn đúng thế hệ đã gửi; request cũ bị huỷ và nếu về muộn thì bỏ qua.
+  const gen = useRef(0)
+  const inflight = useRef<AbortController | null>(null)
+  const invalidate = () => { gen.current++; inflight.current?.abort(); inflight.current = null }
   const fileLimit = maxBytes - MULTIPART_RESERVE
+  const limitLabel = `${(fileLimit / 1048576).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} MB`
 
   const reset = () => {
-    setStep(0); setFile(null); setPreview(null); setSha(''); setResult(null); setError(null); setFocusRow(null)
+    invalidate()
+    setStep(0); setFile(null); setPreview(null); setQa(null); setSha(''); setResult(null); setError(null); setFocusRow(null); setCheckedAt(null); setBusy(false)
     if (inputRef.current) inputRef.current.value = ''
+  }
+  const choose = (f: File | null) => {
+    invalidate()
+    setFile(f); setPreview(null); setResult(null); setFocusRow(null); setBusy(false)
+    setError(f && f.size > fileLimit ? `File ${sizeLabel(f.size)} vượt giới hạn ${limitLabel}.` : null)
   }
 
   async function runPreview() {
     if (!file) return
-    if (file.size > fileLimit) { setError(`File ${(file.size / 1048576).toFixed(1)} MB vượt giới hạn ${(fileLimit / 1048576).toFixed(1)} MB.`); return }
+    if (file.size > fileLimit) { setError(`File ${sizeLabel(file.size)} vượt giới hạn ${limitLabel}.`); return }
+    invalidate()
+    const my = gen.current
+    const ctl = new AbortController()
+    inflight.current = ctl
     setBusy(true); setError(null); setResult(null)
     try {
       const fd = new FormData()
       fd.append('file', file)
-      const res = await fetch('/api/care/import/preview', { method: 'POST', body: fd })
+      const res = await fetch('/api/care/import/preview', { method: 'POST', body: fd, signal: ctl.signal })
       const body = await res.json().catch(() => null)
+      if (my !== gen.current) return
       if (!res.ok || !body?.ok) { setError(messageFor(body?.code)); return }
-      setPreview(body.preview); setSha(body.sha256); setFocusRow(null); setStep(1)
+      setPreview(body.preview); setQa(body.qa ?? null); setSha(body.sha256); setFocusRow(null); setCheckedAt(new Date()); setStep(1)
     } catch {
+      if (my !== gen.current) return
       setError('Không gửi được file — kiểm tra mạng rồi thử lại.')
     } finally {
-      setBusy(false)
+      if (my === gen.current) { inflight.current = null; setBusy(false) }
     }
   }
 
   async function runCommit() {
-    if (!file || !preview || committing.current || preview.errorCount > 0) return
+    if (!file || !preview || committing.current || preview.errorCount > 0 || (qa && !qa.commitAllowed)) return
     committing.current = true
     setBusy(true); setError(null)
     try {
@@ -328,7 +142,7 @@ export function CareImportWizard({ maxBytes, templateHref = '/api/care/import/te
       const body = await res.json().catch(() => null)
       if (!res.ok || !body?.ok) {
         if (body?.code === 'HAS_ERRORS' && Array.isArray(body.errors)) {
-          setPreview({ ...preview, errorCount: body.errorCount ?? body.errors.length, errors: body.errors }); setStep(1)
+          setPreview({ ...preview, errorCount: body.errorCount ?? body.errors.length, errors: body.errors, errorCounts: body.errorCounts }); setStep(1)
         }
         setError(messageFor(body?.code))
         return
@@ -344,135 +158,192 @@ export function CareImportWizard({ maxBytes, templateHref = '/api/care/import/te
   }
 
   const hasErrors = (preview?.errorCount ?? 0) > 0
+  const qaBlocked = qa !== null && !qa.commitAllowed
+  const committed = result?.status === 'committed'
+  const assign = preview && step >= 2 ? careAssignmentTable(preview.customers) : null
+  const steps = [
+    { label: 'Tải file', desc: file ? file.name : 'Excel .xlsx theo mẫu' },
+    { label: 'Kiểm tra dữ liệu', desc: preview ? `${fmt(preview.customerCount)} khách · ${hasErrors ? `${fmt(preview.errorCount)} lỗi` : 'không lỗi'}` : 'Lỗi bất kỳ chặn cả file' },
+    { label: 'Phân công', desc: 'Dược sĩ theo email trong file' },
+    { label: 'Xác nhận', desc: `Tạo task kỳ ${monthLabel(preview?.period ?? period)}` },
+  ]
 
   return (
-    <div className="space-y-4" data-testid="care-import-wizard">
-      <ol className="flex flex-wrap gap-2" aria-label="Các bước import">
-        {STEPS.map((s, i) => (
-          <li key={s} aria-current={i === step ? 'step' : undefined}
-            className={cn('flex items-center gap-2 rounded px-3 py-1.5 text-sm',
-              i === step ? 'bg-primary text-primary-foreground' : i < step ? 'bg-muted text-foreground' : 'bg-muted text-muted-foreground')}>
-            <span className="tabular-nums">{i + 1}</span>{s}
-          </li>
-        ))}
-      </ol>
+    <section className={cn(PANEL, 'overflow-hidden')} data-testid="care-import-wizard">
+      <CareImportStepper steps={steps} step={step} allDone={committed} canGo={!busy && !result} onGo={(i) => { setStep(i); setError(null) }} />
 
-      {error && <ErrorState message={error} />}
+      <div className="space-y-4 p-4 md:p-5">
+        {error && <ErrorState message={error} />}
 
-      {step === 0 && (
-        <Card className="rounded-lg">
-          <CardContent className="space-y-4 p-4">
-            <p className="text-sm text-muted-foreground">
-              Một file cho cả tháng: một sheet <span className="font-mono">KhachHang</span>, đúng 10 cột theo mẫu.
-              Nhiều dòng sản phẩm của cùng khách tạo <strong>một</strong> task. Kỳ và hạn (cuối tháng) do hệ thống tính theo giờ Việt Nam lúc xác nhận.
-            </p>
-            <p className="text-sm text-muted-foreground">
-              Cột <span className="font-mono">customer_external_id</span> phải định dạng <strong>Text</strong> trong Excel (ô dạng số sẽ bị báo lỗi
-              vì có thể đã mất số 0 đầu). <span className="font-mono">product_id</span> nhận Text hoặc số nguyên tối đa 15 chữ số định dạng
-              General (không đệm số 0, không dấu phân cách). SĐT thiếu số 0 đầu vẫn được nhận và tự chuẩn hoá.
-            </p>
-            <a href={templateHref} className={cn(buttonVariants({ variant: 'outline' }), 'min-h-[44px] md:min-h-0')}>
-              <Download className="size-4" /> Tải file mẫu
-            </a>
-            <label className="block space-y-2">
-              <span className="text-sm font-medium">File Excel (.xlsx, tối đa {(fileLimit / 1048576).toFixed(1)} MB)</span>
-              <Input
+        {step === 0 && (
+          <div className="grid gap-5 lg:grid-cols-2">
+            <div className="flex flex-col gap-3">
+              <input
                 ref={inputRef}
                 type="file"
                 accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                className="h-auto min-h-[44px] text-[16px] md:text-sm"
-                onChange={(e) => { setFile(e.target.files?.[0] ?? null); setPreview(null); setError(null) }}
+                aria-label="Chọn file Excel"
+                className="sr-only"
+                tabIndex={-1}
+                onChange={(e) => choose(e.target.files?.[0] ?? null)}
               />
-            </label>
-            <div className="flex justify-end">
-              <Button className="min-h-[44px] md:min-h-0" disabled={!file || busy} onClick={runPreview}>
-                {busy ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />} Kiểm tra file
+              {!file ? (
+                <div
+                  data-testid="care-import-dropzone"
+                  data-dragging={dragging || undefined}
+                  onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
+                  onDragLeave={() => setDragging(false)}
+                  onDrop={(e) => { e.preventDefault(); setDragging(false); choose(e.dataTransfer.files?.[0] ?? null) }}
+                  className={cn('flex min-h-[220px] flex-col items-center justify-center gap-2.5 rounded-lg border-[1.5px] border-dashed p-6 text-center transition-colors',
+                    dragging ? 'border-primary bg-primary/5' : 'border-care-line-strong bg-care-surface')}
+                >
+                  <span className="flex size-11 items-center justify-center rounded-lg bg-primary/10 text-primary"><Upload className="size-5" aria-hidden /></span>
+                  <p className="text-[15px] font-semibold">Kéo thả file Excel vào đây</p>
+                  <p className="text-sm text-muted-foreground">.xlsx · tối đa {limitLabel} · 1 sheet <code className="font-mono text-xs">{CARE_IMPORT_SHEET}</code></p>
+                  <Button variant="outline" className={cn(BTN, 'mt-1')} onClick={() => inputRef.current?.click()}>Chọn file từ máy</Button>
+                </div>
+              ) : (
+                <div className={cn(INSET, 'flex items-center gap-3.5 p-4')} data-testid="care-import-file">
+                  <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-status-success-bg text-status-success"><FileSpreadsheet className="size-5" aria-hidden /></span>
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="truncate text-sm font-semibold" title={file.name}>{file.name}</span>
+                    <span className="text-xs text-muted-foreground">{sizeLabel(file.size)} · Excel</span>
+                  </span>
+                  <Button variant="ghost" size="icon" className="size-[44px] shrink-0" aria-label="Bỏ file" onClick={reset}><X className="size-4" /></Button>
+                </div>
+              )}
+              <div className="flex justify-end">
+                <Button className={BTN} disabled={!file || busy || file.size > fileLimit} onClick={runPreview}>
+                  {busy ? <Loader2 className="size-4 animate-spin" /> : null} Kiểm tra file {!busy && <ArrowRight className="size-4" />}
+                </Button>
+              </div>
+            </div>
+            <CareImportRequirements />
+          </div>
+        )}
+
+        {step === 1 && preview && (
+          <div className="space-y-4">
+            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+              <FileSpreadsheet className="size-4" aria-hidden />
+              {file && <span className="max-w-[260px] truncate font-medium text-foreground" title={file.name}>{file.name}</span>}
+              {checkedAt && <span>· kiểm tra lúc {timeLabel(checkedAt)}</span>}
+              <span>· kỳ dự kiến <strong className="text-foreground">{monthLabel(preview.period)}</strong>, hạn <strong className="text-foreground">{dateLabel(preview.dueDate)}</strong></span>
+            </p>
+            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+              <CareKpiTile label="Dòng trong file" value={fmt(preview.rowCount)} hint="dòng sản phẩm" />
+              <CareKpiTile label="Khách (task)" value={fmt(preview.customerCount)} hint="gộp theo mã khách" />
+              <CareKpiTile label="Cửa hàng trong file" value={`${fmt(preview.storeCodesInFile)}/${fmt(preview.activeOsStoreCount)}`}
+                hint="so với cửa hàng OS đang hoạt động" dot={preview.activeOsStoresMissing.length ? 'bg-status-warning' : undefined} />
+              <CareKpiTile label="Lỗi" value={fmt(preview.errorCount)} hint={hasErrors ? 'chặn cả file' : 'không có lỗi'}
+                dot={hasErrors ? 'bg-status-danger' : 'bg-status-success'} />
+            </div>
+            {qa && (
+              <p role="note" data-testid="care-import-qa" className="rounded-lg border border-status-warning/40 bg-status-warning-bg p-3 text-sm">
+                {qa.commitAllowed ? 'Chế độ QA: đúng bản QA đã chuẩn bị — import sẽ ghi dữ liệu thử nghiệm (is_test).' : messageFor(qa.issues[0])}
+              </p>
+            )}
+            {preview.activeOsStoresMissing.length > 0 && (
+              // B7-ui: danh sách mã có thể dài (tới ~25) ⇒ thu gọn, mở xem khi cần.
+              <details className="rounded-lg border border-care-line bg-card px-3 text-sm">
+                <summary className="flex min-h-[44px] cursor-pointer flex-wrap items-center gap-2 md:min-h-10">
+                  <StatusBadge tone="warning">{fmt(preview.activeOsStoresMissing.length)} cửa hàng OS không có khách trong file</StatusBadge>
+                  <span className="text-xs text-muted-foreground">Xem danh sách mã</span>
+                </summary>
+                <p className="max-h-32 overflow-y-auto pb-3 text-muted-foreground">{preview.activeOsStoresMissing.map((s) => s.code).join(', ')}</p>
+              </details>
+            )}
+            {hasErrors && (
+              <>
+                <div role="alert" data-testid="care-import-blocked" className="flex gap-2.5 rounded-lg border border-status-danger/40 bg-status-danger-bg p-3 text-sm">
+                  <AlertTriangle className="mt-0.5 size-4 shrink-0 text-status-danger" aria-hidden />
+                  <span>
+                    File còn <b>{fmt(preview.errorCount)} lỗi</b> — <b>không import được phần nào</b>, kể cả các dòng hợp lệ.
+                    Sửa file gốc theo bảng dưới rồi chọn lại file để kiểm tra.
+                  </span>
+                </div>
+                <CareImportIssues errors={preview.errors} total={preview.errorCount} counts={preview.errorCounts} onPick={setFocusRow} />
+              </>
+            )}
+            <CareImportCustomers customers={preview.customers} focusRow={focusRow} onClearFocus={() => setFocusRow(null)} />
+            <div className="flex flex-wrap justify-between gap-2">
+              <Button variant="outline" className={BTN} onClick={reset}>{hasErrors ? 'Chọn file đã sửa' : 'Chọn file khác'}</Button>
+              <Button className={BTN} disabled={hasErrors} onClick={() => setStep(2)}>
+                {hasErrors ? 'Sửa file rồi kiểm tra lại' : <>Tiếp: xem phân công <ArrowRight className="size-4" /></>}
               </Button>
             </div>
-          </CardContent>
-        </Card>
-      )}
+          </div>
+        )}
 
-      {step >= 1 && preview && !result && (
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <StatCard label="Dòng sản phẩm" value={fmt(preview.rowCount)} icon={FileSpreadsheet} />
-          <StatCard label="Khách (task)" value={fmt(preview.customerCount)} icon={Users} />
-          <StatCard label="Cửa hàng trong file" value={`${fmt(preview.storeCodesInFile)}/${fmt(preview.activeOsStoreCount)}`} icon={Store}
-            hint="so với cửa hàng OS đang hoạt động" tone={preview.activeOsStoresMissing.length ? 'warning' : 'default'} />
-          <StatCard label="Lỗi" value={fmt(preview.errorCount)} icon={hasErrors ? AlertTriangle : CheckCircle2} tone={hasErrors ? 'danger' : 'success'} />
-        </div>
-      )}
-
-      {step === 1 && preview && (
-        <div className="space-y-4">
-          <p className="text-sm">
-            Kỳ dự kiến <strong>{monthLabel(preview.period)}</strong> · hạn chăm sóc <strong>{dateLabel(preview.dueDate)}</strong>.
-            Số liệu dưới đây là dự kiến; kết quả cuối do hệ thống kiểm lại khi xác nhận.
-          </p>
-          {preview.activeOsStoresMissing.length > 0 && (
-            <div className="rounded-lg border bg-card p-3 text-sm">
-              <StatusBadge tone="warning">{fmt(preview.activeOsStoresMissing.length)} cửa hàng OS không có khách trong file</StatusBadge>
-              <p className="mt-2 text-muted-foreground">{preview.activeOsStoresMissing.map((s) => s.code).join(', ')}</p>
+        {step === 2 && preview && (
+          <div className="space-y-4">
+            <CareImportAssign customers={preview.customers} />
+            <div className="flex flex-wrap justify-between gap-2">
+              <Button variant="outline" className={BTN} onClick={() => setStep(1)}>Quay lại kiểm tra</Button>
+              <Button className={BTN} onClick={() => setStep(3)}>Tiếp: xác nhận <ArrowRight className="size-4" /></Button>
             </div>
-          )}
-          {hasErrors && <ErrorTable errors={preview.errors} total={preview.errorCount} onPick={setFocusRow} />}
-          <CountsGrid counts={preview.counts} />
-          <CustomerTable customers={preview.customers} focusRow={focusRow} onClearFocus={() => setFocusRow(null)} />
-          <div className="flex flex-wrap justify-between gap-2">
-            <Button variant="outline" className="min-h-[44px] md:min-h-0" onClick={reset}>Chọn file khác</Button>
-            <Button className="min-h-[44px] md:min-h-0" disabled={hasErrors} onClick={() => setStep(2)}>
-              {hasErrors ? 'Sửa file rồi kiểm tra lại' : 'Tiếp: xem phân công'}
-            </Button>
           </div>
-        </div>
-      )}
+        )}
 
-      {step === 2 && preview && (
-        <div className="space-y-4">
-          <AssignmentView groups={preview.assignments} />
-          <div className="flex flex-wrap justify-between gap-2">
-            <Button variant="outline" className="min-h-[44px] md:min-h-0" onClick={() => setStep(1)}>Quay lại</Button>
-            <Button className="min-h-[44px] md:min-h-0" onClick={() => setStep(3)}>Tiếp: xác nhận</Button>
-          </div>
-        </div>
-      )}
-
-      {step === 3 && preview && !result && (
-        <Card className="rounded-lg">
-          <CardContent className="space-y-4 p-4">
-            <p className="text-sm">
-              Import kỳ <strong>{monthLabel(preview.period)}</strong>, hạn <strong>{dateLabel(preview.dueDate)}</strong>:
-              tạo <strong>{fmt(preview.counts.created)}</strong> task, cập nhật <strong>{fmt(preview.counts.updated)}</strong>,
-              giữ nguyên <strong>{fmt(preview.counts.unchanged + preview.counts.skipped_has_interaction)}</strong>.
-              {preview.counts.closed_previous_period > 0 && <> Đóng <strong>{fmt(preview.counts.closed_previous_period)}</strong> task kỳ trước còn mở.</>}
+        {step === 3 && preview && !result && (
+          <div className="space-y-4">
+            <div className="grid gap-4 lg:grid-cols-2">
+              <section aria-label="Tóm tắt" className={cn(INSET, 'space-y-3 p-4')}>
+                <h3 className="text-sm font-semibold">Tóm tắt</h3>
+                <dl className="grid grid-cols-[minmax(0,8.5rem)_minmax(0,1fr)] gap-x-3 gap-y-2 text-sm">
+                  <dt className="text-muted-foreground">Kỳ</dt><dd className="font-medium">Tháng {monthLabel(preview.period)}</dd>
+                  <dt className="text-muted-foreground">Hạn chăm sóc</dt><dd className="font-medium">{dateLabel(preview.dueDate)} (cuối kỳ, giờ VN)</dd>
+                  <dt className="text-muted-foreground">Cửa hàng</dt>
+                  <dd className="font-medium">
+                    {fmt(preview.storeCodesInFile)} cửa hàng
+                    {preview.activeOsStoresMissing.length > 0 && <span className="font-normal text-muted-foreground"> · {fmt(preview.activeOsStoresMissing.length)} cửa hàng OS không có khách</span>}
+                  </dd>
+                  <dt className="text-muted-foreground">Dược sĩ nhận</dt><dd className="font-medium">{fmt(assign?.assignees ?? 0)} dược sĩ</dd>
+                  <dt className="text-muted-foreground">File</dt><dd className="font-medium">{fmt(preview.rowCount)} dòng · {fmt(preview.customerCount)} khách</dd>
+                </dl>
+              </section>
+              <CareImportChanges counts={preview.counts} />
+            </div>
+            <p className="flex gap-2.5 rounded-lg border border-status-info/30 bg-status-info-bg p-3 text-sm">
+              <Info className="mt-0.5 size-4 shrink-0 text-status-info" aria-hidden />
+              <span>
+                Sau khi xác nhận, dược sĩ thấy khách mới trong mục Chăm sóc khách hàng trên app. Khách đã có lượt chăm sóc trong kỳ được giữ nguyên.
+                Số liệu trên là dự kiến — hệ thống kiểm lại khi ghi; phát sinh lỗi thì không task nào được ghi.
+              </span>
             </p>
             <div className="flex flex-wrap justify-between gap-2">
-              <Button variant="outline" className="min-h-[44px] md:min-h-0" disabled={busy} onClick={() => setStep(2)}>Quay lại</Button>
-              <Button className="min-h-[44px] md:min-h-0" disabled={busy || hasErrors} onClick={runCommit}>
-                {busy ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />} Xác nhận import
+              <Button variant="outline" className={BTN} disabled={busy} onClick={() => setStep(2)}>Quay lại phân công</Button>
+              <Button className={BTN} disabled={busy || hasErrors || qaBlocked} onClick={runCommit}>
+                {busy ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />} Xác nhận import {fmt(preview.customerCount)} khách
               </Button>
             </div>
-          </CardContent>
-        </Card>
-      )}
+          </div>
+        )}
 
-      {result && (
-        <Card className="rounded-lg" data-testid="care-import-result">
-          <CardContent className="space-y-3 p-4">
+        {result && (
+          <div className="space-y-3" data-testid="care-import-result">
             {result.status === 'committed' && (
-              <>
-                <StatusBadge tone="success" size="md">{result.idempotent ? 'File này đã được import trước đó' : 'Đã import'}</StatusBadge>
-                <p className="text-sm">
-                  Tạo mới <strong>{fmt(result.created ?? 0)}</strong> · cập nhật <strong>{fmt(result.updated ?? 0)}</strong> ·
-                  không đổi <strong>{fmt(result.unchanged ?? 0)}</strong> · giữ nguyên vì đã có lượt <strong>{fmt(result.skipped_has_interaction ?? 0)}</strong> ·
-                  đóng task kỳ trước <strong>{fmt(result.closed_previous_period ?? 0)}</strong>.
+              <div className="flex flex-col items-center gap-2.5 py-6 text-center">
+                <span className="flex size-12 items-center justify-center rounded-full bg-status-success-bg text-status-success"><CheckCircle2 className="size-6" aria-hidden /></span>
+                <p className="text-lg font-bold">
+                  {result.idempotent ? 'File này đã được import trước đó' : <>Đã import file cho kỳ {preview ? monthLabel(preview.period) : ''}</>}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  Tạo mới <strong className="text-foreground">{fmt(result.created ?? 0)}</strong> · cập nhật <strong className="text-foreground">{fmt(result.updated ?? 0)}</strong> ·
+                  không đổi <strong className="text-foreground">{fmt(result.unchanged ?? 0)}</strong> · giữ nguyên vì đã có lượt <strong className="text-foreground">{fmt(result.skipped_has_interaction ?? 0)}</strong> ·
+                  đóng task kỳ trước <strong className="text-foreground">{fmt(result.closed_previous_period ?? 0)}</strong>
+                  {preview && <> · hạn {dateLabel(preview.dueDate)}</>}.
                 </p>
                 {preview && (result.created !== preview.counts.created || result.updated !== preview.counts.updated) && (
                   <p className="text-sm text-muted-foreground">
                     Kết quả thực tế khác bản kiểm tra vì dữ liệu đã thay đổi trong lúc chờ (vd. dược sĩ vừa ghi lượt chăm sóc).
                   </p>
                 )}
-              </>
+                <div className="mt-1 flex flex-wrap justify-center gap-2">
+                  {tasksHref && <Link href={tasksHref} className={cn(buttonVariants(), BTN)}>Xem danh sách chăm sóc</Link>}
+                  <Button variant="outline" className={BTN} onClick={reset}>Import file khác</Button>
+                </div>
+              </div>
             )}
             {result.status === 'duplicate' && (
               <>
@@ -484,15 +355,17 @@ export function CareImportWizard({ maxBytes, templateHref = '/api/care/import/te
               <>
                 <StatusBadge tone="danger" size="md">Bị từ chối — không có task nào được ghi</StatusBadge>
                 <p className="text-sm">Dữ liệu đã thay đổi sau khi kiểm tra (vd. khách vừa từ chối chăm sóc). Sửa file theo các lỗi dưới đây rồi import lại.</p>
-                <ErrorTable errors={result.errors} total={result.error_count} />
+                <CareImportIssues errors={result.errors} total={result.error_count} />
               </>
             )}
-            <div className="flex justify-end">
-              <Button variant="outline" className="min-h-[44px] md:min-h-0" onClick={reset}>Import file khác</Button>
-            </div>
-          </CardContent>
-        </Card>
-      )}
-    </div>
+            {result.status !== 'committed' && (
+              <div className="flex justify-end">
+                <Button variant="outline" className={BTN} onClick={reset}>Import file khác</Button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </section>
   )
 }

@@ -5,14 +5,19 @@ import { PageHeader } from '@/components/ds/PageHeader'
 import { ErrorState } from '@/components/ds/ErrorState'
 import { buttonVariants } from '@/components/ui/button'
 import { CareMyTaskDetail } from '@/components/care/CareMyTaskDetail'
+import { CareMyHeader } from '@/components/care/CareMyHeader'
+import { CareMyScreen } from '@/components/care/CareMyScreen'
 import { carePeriodOf, vnDateISO } from '@/lib/care/time'
-import { careStaffTaskBlock } from '@/lib/care/my'
+import { careMyBackTarget, careStaffTaskBlock } from '@/lib/care/my'
 import { loadCareTaskDetail } from '@/lib/care/server/browse'
 import { requireCareStaff } from '@/lib/care/server/my'
+import { isCareQaActive } from '@/lib/care/server/qaUi'
 import { loadMoreMyCareInteractions } from '@/app/actions/careMy'
 import { cn } from '@/lib/utils'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+// B7-ui r2 (artboard 09): gốc trang CareMyScreen (thanh "Ghi nhận chăm sóc" sát đáy kể cả khi nội dung
+// ngắn); header riêng CareMyHeader thay MobileHeader.
 
 // /care/my/[id] — chi tiết khách cho dược sĩ (SPEC B4 §2). RLS quyết thấy task không:
 // không thấy (không giao/đã chuyển đi) ⇒ 404. Chỉ assignee + task mở kỳ hiện tại mới có nút ghi.
@@ -20,13 +25,18 @@ export default async function CareMyTaskPage({ params }: { params: Promise<{ id:
   const me = await requireCareStaff()
   const { id } = await params
   if (!UUID_RE.test(id)) notFound()
-  const back = <Link href="/care/my" className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'min-h-[44px]')}><ChevronLeft className="size-4" /> Danh sách</Link>
-  const header = <PageHeader title="Chăm sóc khách" icon={HeartHandshake} actions={back} />
+  const back = <Link href="/care/my" className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'hidden min-h-[44px] md:inline-flex')}><ChevronLeft className="size-4" /> Danh sách</Link>
+  const header = (
+    <>
+      <CareMyHeader screen="detail" back={careMyBackTarget(`/care/my/${id}`) ?? undefined} qa={isCareQaActive()} />
+      <PageHeader title="Chăm sóc khách" icon={HeartHandshake} actions={back} className="hidden md:flex" />
+    </>
+  )
   let detail: Awaited<ReturnType<typeof loadCareTaskDetail>>
   try {
     detail = await loadCareTaskDetail(id)
   } catch {
-    return <div data-layout-width="fluid" className="space-y-4 p-4 md:p-6">{header}<ErrorState message="Không tải được thông tin khách." hint="Thử tải lại trang." /></div>
+    return <CareMyScreen screen="detail">{header}<div className="p-4 md:p-0"><ErrorState message="Không tải được thông tin khách." hint="Thử tải lại trang." /></div></CareMyScreen>
   }
   if (!detail) notFound()
   const now = new Date()
@@ -34,15 +44,16 @@ export default async function CareMyTaskPage({ params }: { params: Promise<{ id:
   // Q-82: cùng điều kiện với action/upload/RPC (assignee + đúng store task + mở + kỳ hiện tại).
   const canRecord = careStaffTaskBlock(t, me, carePeriodOf(now)) === null
   return (
-    <div data-layout-width="fluid" className="space-y-4 p-4 md:p-6">
+    <CareMyScreen screen="detail">
       {header}
       <CareMyTaskDetail
         todayISO={vnDateISO(now)}
         canRecord={canRecord}
         updateHref={`/care/my/${t.id}/update`}
         loadMore={loadMoreMyCareInteractions}
+        qa={isCareQaActive()}
         data={{ task: t, products: detail.products, interactions: detail.interactions, events: detail.events }}
       />
-    </div>
+    </CareMyScreen>
   )
 }

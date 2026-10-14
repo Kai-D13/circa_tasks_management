@@ -3,12 +3,14 @@ import { notFound } from 'next/navigation'
 import { ChevronLeft, ClipboardList } from 'lucide-react'
 import { PageHeader } from '@/components/ds/PageHeader'
 import { ErrorState } from '@/components/ds/ErrorState'
+import { CareUnavailableState } from '@/components/care/CareUnavailableState'
 import { buttonVariants } from '@/components/ui/button'
 import { CareTaskDetailView } from '@/components/care/CareTaskDetailView'
 import { CareTaskTransferButton } from '@/components/care/CareTaskTransferButton'
 import { carePeriodOf, vnDateISO } from '@/lib/care/time'
 import { loadCareTaskDetail } from '@/lib/care/server/browse'
 import { requireCareViewer } from '@/lib/care/server/pageGuard'
+import { isCareQaActive } from '@/lib/care/server/qaUi'
 import { listCareTransferTargets, loadMoreCareInteractions, transferCareTasks } from '@/app/actions/care'
 import { cn } from '@/lib/utils'
 
@@ -22,7 +24,7 @@ export default async function CareTaskDetailPage({ params }: { params: Promise<{
   const back = <Link href="/care/tasks" className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'min-h-[44px] md:min-h-0')}><ChevronLeft className="size-4" /> Danh sách</Link>
   const header = <PageHeader title="Chi tiết chăm sóc" icon={ClipboardList} actions={back} />
   if (g.kind === 'unavailable') {
-    return <div data-layout-width="fluid" className="space-y-4 p-4 md:p-6">{header}<ErrorState message="Hệ thống CRM chưa sẵn sàng." /></div>
+    return <div data-layout-width="fluid" className="space-y-4 p-4 md:p-6">{header}<CareUnavailableState /></div>
   }
   if (!UUID_RE.test(id)) notFound()
   let detail: Awaited<ReturnType<typeof loadCareTaskDetail>>
@@ -42,6 +44,7 @@ export default async function CareTaskDetailPage({ params }: { params: Promise<{
         taskId={t.id}
         todayISO={vnDateISO(now)}
         loadMore={loadMoreCareInteractions}
+        qa={isCareQaActive()}
         data={{
           task: t,
           products: detail.products,

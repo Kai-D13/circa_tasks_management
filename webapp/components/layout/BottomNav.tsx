@@ -13,6 +13,7 @@ import type { LucideIcon } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { isSuperAdmin } from '@/lib/authz'
 import { CYCLE_COUNT_DEPT_ID } from '@/lib/inventory/constants'
+import { careMyBackTarget } from '@/lib/care/my'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 
 // `center` = tab render kiểu nút tròn NỔI ở giữa pill (chỉ STAFF_NAV dùng).
@@ -205,6 +206,10 @@ export function BottomNav({
     )
   }
 
+  // B7-ui (M01): chi tiết/ghi nhận CSKH là luồng con có nút hành động dính đáy và header
+  // quay về màn cha ⇒ ẩn thanh tab (<main> tự bỏ phần chừa chỗ — globals.css :has).
+  if (careMyBackTarget(pathname)) return null
+
   return (
     <>
       {/* Floating rounded nav — detached from the screen edges (mx/mb margins),
@@ -217,6 +222,7 @@ export function BottomNav({
           rời (h-16 ↔ pb-[5.5rem]) — sửa một bên là lệch. */}
       <nav
         aria-label="Điều hướng chính"
+        data-bottom-nav
         className="fixed bottom-0 left-0 right-0 z-40 px-3 pointer-events-none md:hidden"
         style={{ paddingBottom: 'calc(var(--bottom-nav-offset) + env(safe-area-inset-bottom))' }}
       >

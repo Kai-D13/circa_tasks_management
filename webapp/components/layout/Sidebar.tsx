@@ -30,7 +30,7 @@ import {
   Link2,
   LogOut,
   type LucideIcon,
-  HeartHandshake, UserCog, ClipboardPlus,
+  HeartHandshake, UserCog, ClipboardPlus, ChartColumn,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { resolveActiveHref } from '@/lib/layout/sidebarNav'
@@ -540,7 +540,7 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
                           key={c.href}
                           href={c.href}
                           label={c.label}
-                          icon={c.href === '/care/assign' ? ClipboardPlus : c.href === '/care/tasks' ? UserCog : HeartHandshake}
+                          icon={c.href === '/care/assign' ? ClipboardPlus : c.href === '/care/tasks' ? UserCog : c.href === '/care/reports' ? ChartColumn : HeartHandshake}
                           prefetch={false}
                           collapsed={false}
                           sub

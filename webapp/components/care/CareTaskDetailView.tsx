@@ -5,10 +5,13 @@ import { careTaskState, CARE_STATUS_LABELS, type CareInteractionPage } from '@/l
 import { formatDateTime } from '@/lib/dateUtils'
 import { CareProductGallery, type CareProductView } from './CareProductGallery'
 import { CareTimeline, type CareLoadMoreInteractions, type CareTimelineEvent } from './CareTimeline'
+import { CareTransferHistory } from './CareTransferHistory'
 
 // Chi tiết task browser, CHỈ ĐỌC (SPEC B3 §2): snapshot khách/kỳ/hạn/owner/store/
 // trạng thái; sản phẩm của task từ file import hiện hành; dòng thời gian lượt chăm
-// sóc + chuyển giao theo RLS (lịch sử khách theo helper B1). Không phải lịch sử mua.
+// sóc theo RLS (lịch sử khách theo helper B1). Không phải lịch sử mua.
+// B8.5: "Lịch sử chuyển giao" (A → B) thành khối riêng ngay dưới "Dược sĩ phụ trách"; lịch sử chăm sóc browser không
+// lặp lại sự kiện chuyển giao (vẫn giữ "Phân công từ file"). Mobile dược sĩ (CareMyTaskDetail) không đổi.
 
 export interface CareDetailViewData {
   task: {
@@ -35,24 +38,32 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-export function CareTaskDetailView({ taskId, data, todayISO, actions, loadMore }: {
+export function CareTaskDetailView({ taskId, data, todayISO, actions, loadMore, qa = false, layout = 'page' }: {
   taskId: string; data: CareDetailViewData; todayISO: string; actions?: React.ReactNode; loadMore?: CareLoadMoreInteractions
+  /** Q-107: chế độ QA local vẫn là link tel: (số task is_test của batch marker) — chỉ thêm dòng nhận biết số giả. */
+  qa?: boolean
+  /** B8.1: 'panel' = drawer hẹp cạnh bảng /care/tasks — một cột, không chia đôi sản phẩm/lịch sử theo viewport. */
+  layout?: 'page' | 'panel'
 }) {
   const t = data.task
   const st = careTaskState(t, todayISO)
+  const panel = layout === 'panel'
   return (
-    <div className="space-y-6" data-testid="care-task-detail">
-      <section className="rounded-lg border bg-card p-4">
-        <div className="mb-3 flex flex-wrap items-center gap-2">
-          <User className="size-4 text-muted-foreground" />
-          <h2 className="text-base font-semibold">{t.customer_name}</h2>
+    <div className={panel ? 'space-y-5' : 'space-y-6'} data-testid="care-task-detail">
+      <section className={panel ? 'space-y-3' : 'rounded-lg border bg-card p-4'}>
+        <div className={panel ? 'flex flex-wrap items-center gap-2' : 'mb-3 flex flex-wrap items-center gap-2'}>
+          {!panel && <User className="size-4 text-muted-foreground" />}
+          <h2 className={panel ? 'text-lg font-semibold' : 'text-base font-semibold'}>{t.customer_name}</h2>
           <StatusBadge tone={STATE_TONE[st.key]}>{CARE_STATUS_LABELS[st.key]}</StatusBadge>
           {st.overdueOpen && <StatusBadge tone="danger">Quá hạn</StatusBadge>}
           {!st.overdueOpen && t.first_overdue_on && <StatusBadge tone="warning">Từng trễ hẹn ({dmy(t.first_overdue_on)})</StatusBadge>}
-          {actions && <div className="ml-auto">{actions}</div>}
+          {actions && <div className={panel ? 'flex w-full flex-wrap gap-2' : 'ml-auto'}>{actions}</div>}
         </div>
-        <dl className="grid grid-cols-2 gap-3 md:grid-cols-4">
-          <Field label="Số điện thoại"><a href={`tel:${t.phone_norm}`} className="inline-flex min-h-[44px] items-center text-primary hover:underline md:min-h-0">{t.phone_raw}</a></Field>
+        <dl className={panel ? 'grid grid-cols-2 gap-3' : 'grid grid-cols-2 gap-3 md:grid-cols-4'}>
+          <Field label="Số điện thoại">
+            <a href={`tel:${t.phone_norm}`} className="inline-flex min-h-[44px] items-center text-primary hover:underline md:min-h-0">{t.phone_raw}</a>
+            {qa && <span data-testid="care-contact-qa" className="block text-xs text-status-warning">Chế độ QA: số của khách QA giả</span>}
+          </Field>
           <Field label="Kỳ / hạn">{dmy(t.period_month).slice(3)} · hạn {dmy(t.due_date)}</Field>
           <Field label="Cửa hàng">{t.store ? `${t.store.code} · ${t.store.name}` : '—'}</Field>
           <Field label="Dược sĩ phụ trách">{t.assignee?.full_name ?? '—'}</Field>
@@ -61,14 +72,21 @@ export function CareTaskDetailView({ taskId, data, todayISO, actions, loadMore }
           {t.completed_at && <Field label="Hoàn thành lúc">{formatDateTime(t.completed_at)}</Field>}
           {t.closed_at && <Field label="Đóng kỳ lúc">{formatDateTime(t.closed_at)}</Field>}
         </dl>
+        <div className={panel ? 'pt-1' : 'mt-4 border-t pt-4'}>
+          <CareTransferHistory events={data.events} />
+        </div>
       </section>
 
-      <section className="space-y-3">
-        <h2 className="flex items-center gap-2 text-base font-semibold"><Package className="size-4" /> Sản phẩm cần chăm sóc ({data.products.length})</h2>
-        {data.products.length ? <CareProductGallery products={data.products} /> : <EmptyState title="Không có sản phẩm" />}
-      </section>
+      {/* B7-ui: desktop rộng — sản phẩm và lịch sử đặt cạnh nhau (trước đây thẻ sản phẩm chiếm nửa hàng, nửa còn lại trống). */}
+      <div className={panel ? 'space-y-5' : 'grid gap-6 lg:grid-cols-2 lg:items-start'}>
+        <section className="space-y-3">
+          <h2 className="flex items-center gap-2 text-base font-semibold"><Package className="size-4" /> Sản phẩm cần chăm sóc ({data.products.length})</h2>
+          {data.products.length ? <CareProductGallery products={data.products} columns={panel ? 'single' : 'auto'} /> : <EmptyState title="Không có sản phẩm" />}
+        </section>
 
-      <CareTimeline taskId={taskId} initial={data.interactions} events={data.events} loadMore={loadMore} />
+        <CareTimeline taskId={taskId} initial={data.interactions} events={data.events.filter((e) => e.kind !== 'transferred')} loadMore={loadMore}
+          title="Lịch sử chăm sóc" />
+      </div>
     </div>
   )
 }

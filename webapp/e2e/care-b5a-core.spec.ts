@@ -6,6 +6,7 @@ import { CARE_N3_COLUMNS, CARE_N3_MAX_ROWS, normalizeN3Timestamp, parseN3Rows, t
 import {
   CARE_ORDER_NO_DATA, CARE_ORDER_NOT_SEEN, CARE_REPORT_EXPORT_MAX_ROWS, careOrderDataState, careOrderNotSeenText,
   careReportConvertedTotal, careReportExportRows, careReportLines, careReportSummary, careStoreFilterInScope, vnDateTime,
+  careReportExtrasKey, careReportGroups, careReportKey, carePeriodElapsed, carePct, CARE_REPORT_LINK_STATUS,
 } from '../lib/care/reports'
 import { carePermissions, careNavItems, type CareAccess, type CareReportRow } from '../lib/care/browse'
 import { buildCareImportRows, defaultFixtureStores } from './careImportFixture'
@@ -156,7 +157,8 @@ test.describe('care B5a r1.1 — báo cáo + export thuần: chỉ Khách có đ
     expect(lines.map((l) => `${l.storeCode}|${l.assigneeName}`)).toEqual(['QAOS01|Bình', 'QAOS02|An', 'QAOS02|Bình', '—|—'])
     const t = careReportSummary(lines)
     expect([t.tasks, t.completed, t.convertedTasks]).toEqual([35, 24, 7])
-    expect(Object.keys(t).sort()).toEqual(['closedUnfinished', 'completed', 'convertedTasks', 'inProgress', 'notCared', 'overdueInPeriod', 'tasks'])
+    // B8.2: thêm `contacted` (Q-113 — Đã liên hệ); vẫn không có khoá tiền/số đơn.
+    expect(Object.keys(t).sort()).toEqual(['closedUnfinished', 'completed', 'contacted', 'convertedTasks', 'inProgress', 'notCared', 'overdueInPeriod', 'tasks'])
     expect(Object.keys(lines[0])).not.toEqual(expect.arrayContaining(['orders']))
     expect(careReportConvertedTotal([row(), row({ converted_tasks: 1 })])).toBe(4)
   })
@@ -198,6 +200,114 @@ test.describe('care B5a r1.1 — báo cáo + export thuần: chỉ Khách có đ
   })
 })
 
+test.describe('care B8.2 — báo cáo /care/reports: Đã liên hệ, nhóm store, nhịp kỳ, link đúng tập @desktop', () => {
+  const S = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+  const row = (store: number, a: number, o: Partial<CareReportRow>): CareReportRow => ({ store_id: S(store), assignee_id: S(a), tasks_total: 0, completed: 0,
+    open_not_cared: 0, open_in_progress: 0, overdue_in_period: 0, closed_unfinished: 0, converted_tasks: 0, ...o })
+  const ctx = { stores: new Map([[S(1), { code: 'QAOS01', name: 'A' }], [S(2), { code: 'QAOS02', name: 'B' }]]), names: new Map([[S(9), 'DS 9'], [S(8), 'DS 8'], [S(7), 'DS 7']]) }
+
+  test('Đã liên hệ (Q-113) = Hoàn thành + Đang theo dõi + Không hoàn thành CÓ lượt (kỳ cũ); không tính chưa chăm sóc', () => {
+    const cur = careReportLines([row(1, 9, { tasks_total: 10, completed: 3, open_in_progress: 2, open_not_cared: 5 })], ctx)
+    expect(cur[0].contacted).toBe(5)
+    const past = careReportLines([row(1, 9, { tasks_total: 10, completed: 3, closed_unfinished: 7 })], ctx, new Map([[careReportKey(S(1), S(9)), 4]]))
+    expect(past[0].contacted).toBe(7)
+    // Phòng thủ: touched không vượt closed_unfinished.
+    expect(careReportLines([row(1, 9, { tasks_total: 2, closed_unfinished: 1 })], ctx, new Map([[careReportKey(S(1), S(9)), 5]]))[0].contacted).toBe(1)
+    expect(careReportSummary([...cur, ...past]).contacted).toBe(12)
+  })
+
+  test('nhóm theo cửa hàng: tổng phụ = cộng đúng dòng của store; tổng chung = cộng mọi dòng (không cộng lại tổng phụ)', () => {
+    const lines = careReportLines([row(1, 9, { tasks_total: 4, completed: 1 }), row(2, 7, { tasks_total: 6, completed: 2 }), row(1, 8, { tasks_total: 5, completed: 3 })], ctx)
+    const g = careReportGroups(lines)
+    expect(g.map((x) => [x.storeCode, x.lines.length, x.totals.tasks, x.totals.completed])).toEqual([['QAOS01', 2, 9, 4], ['QAOS02', 1, 6, 2]])
+    expect(careReportSummary(lines).tasks).toBe(15)
+  })
+
+  test('nhịp kỳ (Q-114): ngày VN tính cả hôm nay; kỳ cũ = 100% "đã kết thúc"; tháng 2 và tháng 31 ngày', () => {
+    expect(carePeriodElapsed('2026-10-01', '2026-10-13')).toEqual({ elapsedDays: 13, totalDays: 31, pct: 42, ended: false })
+    expect(carePeriodElapsed('2026-10-01', '2026-10-31')).toEqual({ elapsedDays: 31, totalDays: 31, pct: 100, ended: false })
+    expect(carePeriodElapsed('2026-09-01', '2026-10-01')).toEqual({ elapsedDays: 30, totalDays: 30, pct: 100, ended: true })
+    expect(carePeriodElapsed('2027-02-01', '2027-02-14').totalDays).toBe(28)
+    expect(carePct(210, 285)).toBe(74)
+    expect(carePct(5, 0)).toBe(0)
+  })
+
+  test('link số liệu (PM B8 P1): chỉ cột có filter /care/tasks trả CÙNG tập; KHÔNG Từng trễ hẹn / Có đơn / Đã liên hệ', () => {
+    expect(CARE_REPORT_LINK_STATUS).toEqual({ tasks: null, completed: 'completed', notCared: 'not_cared', inProgress: 'following', closedUnfinished: 'closed_unfinished' })
+    for (const k of ['overdueInPeriod', 'convertedTasks', 'contacted']) expect(Object.keys(CARE_REPORT_LINK_STATUS)).not.toContain(k)
+  })
+
+  test('source: loader đọc Đã liên hệ + touched qua session/scope song song care_report; trang stream Kết quả; export KHÔNG thêm cột', () => {
+    const b = read('lib/care/server/browse.ts')
+    expect(b).toMatch(/export async function loadCareContactedCount[\s\S]*?withCareFilters\(supabase\.from\('care_tasks'\)\.select\('id', \{ count: 'exact', head: true \}\), \{ \.\.\.f, status: null \}, todayISO\)\s*\.not\('last_interaction_at', 'is', null\)/)
+    expect(b).toMatch(/export async function loadCareClosedTouched[\s\S]*?\{ \.\.\.f, status: 'closed_unfinished' \}, todayISO\)\s*\.not\('last_interaction_at', 'is', null\)/)
+    expect(b).toMatch(/export async function loadCareReportOutcomes[\s\S]*?CARE_OUTCOME_KEYS\.filter\(\(k\) => k !== 'none'\)[\s\S]*?\.eq\('last_outcome', k\)/)
+    const l = read('lib/care/server/reports.ts')
+    // Đường chính: care_report + sync_status + touched (chỉ kỳ đã đóng) — count KPI KHÔNG ở đây (stream ở trang).
+    expect(l).toMatch(/const \[rep, st, touched\] = await Promise\.all\(\[/)
+    expect(l).toContain('careReportLines(rows, { stores: storeMap, names }, touched)')
+    expect(l).not.toMatch(/loadCareContactedCount\(/)
+    expect(l.indexOf('if (!careStoreFilterInScope(f.storeId, stores))')).toBeLessThan(l.indexOf('loadCareClosedTouched(rf, today)'))
+    // Kỳ đang mở không đọc touched (chưa có task đóng); export không đọc phần Đã liên hệ (cột Excel không có).
+    expect(l).toContain('withContacted && f.month < carePeriodOf(new Date()) ? loadCareClosedTouched(rf, today) : Promise.resolve(new Map<string, number>())')
+    expect(l).toContain('const rf = { month: f.month, storeId, assigneeId: null }')
+    expect(read('app/api/export/care/route.ts')).toContain('loadCareReport(v.perms, f, { withContacted: false })')
+    expect(read('app/(dashboard)/care/reports/page.tsx')).toContain('const d = await loadCareReport(g.perms, f)')
+    const page = read('app/(dashboard)/care/reports/page.tsx')
+    // "Đã liên hệ" + "Kết quả" tải SAU khi trang hiện (đo 14/10: 7 count trong Suspense tranh pool với render khung
+    // ⇒ +100–130 ms) — MỘT server action qua provider; ô KPI/thanh nhịp/khối kết quả đọc chung.
+    // PM B8.2 r1: `key` theo bộ lọc (kỳ/store/dược sĩ) ⇒ đổi bộ lọc là provider mới, không mang số bộ lọc cũ.
+    expect(page).toContain('const extras = { month: f.month.slice(0, 7), store: scoped.storeId, assignee: scoped.assigneeId }')
+    expect(page).toContain('<CareReportExtrasProvider key={careReportExtrasKey(extras)} load={loadCareReportExtras} params={extras}>')
+    expect(careReportExtrasKey({ month: '2026-10', store: null, assignee: null })).toBe('2026-10||')
+    expect(new Set([
+      careReportExtrasKey({ month: '2026-10', store: 's1', assignee: null }), careReportExtrasKey({ month: '2026-10', store: null, assignee: 's1' }),
+      careReportExtrasKey({ month: '2026-09', store: 's1', assignee: null }), careReportExtrasKey({ month: '2026-10', store: 's1', assignee: 'u1' }),
+    ]).size).toBe(4)
+    expect(page).toContain('contacted={{ kpi: <CareContactedKpiLive tasks={d.totals.tasks} />, pace: <CareContactedPaceLive tasks={d.totals.tasks} /> }}')
+    expect(page).toContain('outcomes={<CareReportOutcomesLive />}')
+    expect(page).not.toMatch(/loadCareContactedCount|loadCareReportOutcomes|Suspense/)
+    expect(page).toContain("<CareReportExportLink href={careFilterHref('/api/export/care', scoped)} />")
+    // Action: cờ TRƯỚC TIÊN → session care_my_access → canView → parser URL chung (chỉ thu hẹp) → đọc session/RLS.
+    const act = read('app/actions/careReports.ts')
+    expect(act).toMatch(/^'use server'/)
+    const fn = /export async function loadCareReportExtras\([\s\S]*?\{\n([\s\S]*?)\n\}/.exec(act)![1]
+    expect(fn.trimStart()).toMatch(/^if \(!isCareEnabled\(\)\) return/)
+    expect(fn).toMatch(/const v = await getCareViewAccess\(\)\s*if \(v\.kind !== 'ok' \|\| !v\.perms\.canView\) return/)
+    expect(fn.indexOf('parseCareFilters(')).toBeLessThan(fn.indexOf('loadCareContactedCount(rf, today)'))
+    // Store ngoài phạm vi ⇒ lỗi (không trả 0), kiểm TRƯỚC khi đếm.
+    expect(fn).toContain('if (f.storeId && !careStoreFilterInScope(f.storeId, await loadScopeStores(v.perms))) return { ok: false, message: CARE_REPORT_STORE_OUT_OF_SCOPE }')
+    expect(fn.indexOf('careStoreFilterInScope(')).toBeLessThan(fn.indexOf('loadCareContactedCount(rf, today)'))
+    expect(fn).toContain('await Promise.all([loadCareContactedCount(rf, today), loadCareReportOutcomes(rf, today)])')
+    expect(act).not.toMatch(/supabaseAdmin|service_role|console\.(log|error|warn)|phone|customer_name/)
+    // Client: lỗi ⇒ "—"/"Không tải được"; đang tải ⇒ "…" (không 0 giả); phản hồi cũ không ghi đè (seq).
+    const ex = read('components/care/CareReportExtras.tsx')
+    expect(ex).toMatch(/^'use client'/)
+    expect(ex).toContain('if (s.kind === \'error\') return <CareKpiTile label={LABEL} value="—"')
+    expect(ex).toContain('if (s.kind === \'loading\') return <CareKpiTile label={LABEL} value="…"')
+    expect(ex).toContain('const done = (s: State) => { if (my === seq.current) setGot({ key, s }) }')
+    // Chặn lúc render (không chỉ dựa `key`): kết quả chỉ dùng khi khoá khớp bộ lọc HIỆN TẠI, lệch ⇒ "đang tải".
+    expect(ex).toContain("const state: State = got && got.key === key ? got.s : { kind: 'loading' }")
+    expect(ex).toContain('const key = careReportExtrasKey(params)')
+    expect(ex).not.toMatch(/setState\(|useState<State>/)
+    expect(read('components/care/CareReportOutcomes.tsx')).not.toMatch(/server|loadCare/)
+    // Catalog: action giả tự kiểm cổng (UI_CATALOG + super).
+    const cat = read('app/(dashboard)/ui-catalog/care-reports/page.tsx')
+    expect(cat).toContain('<CareReportExtrasProvider key={careReportExtrasKey(params)} load={fakeExtras} params={params}>')
+    expect(cat).toMatch(/async function fakeExtras\([^)]*\) \{\s*'use server'\s*if \(!\(await gate\(\)\)\) return/)
+    expect([...cat.matchAll(/async function (fake\w+)\(/g)].map((m) => m[1])).toEqual(['fakeExtras'])
+    // Export giữ hợp đồng cột B5a (không tự thêm KPI Đã liên hệ).
+    const exp = careReportExportRows(careReportLines([row(1, 9, { tasks_total: 3, completed: 1, open_in_progress: 1 })], ctx), careReportSummary([]), { kind: 'none' }, '10/2026')
+    expect(Object.keys(exp[0])).toEqual(['Kỳ chăm sóc', 'Cửa hàng', 'Tên cửa hàng', 'Dược sĩ', 'Khách (task)', 'Hoàn thành', 'Chưa chăm sóc', 'Đang theo dõi', 'Từng trễ hẹn', 'Không hoàn thành', 'Khách có đơn', 'Dữ liệu đơn cập nhật'])
+    // Link bảng: chỉ qua CARE_REPORT_LINK_STATUS (không tự dựng href cho cột khác).
+    const v = read('components/care/CareReportView.tsx')
+    expect(v).toContain("const status = CARE_REPORT_LINK_STATUS[link] as CareStatusFilter | null")
+    expect(v).toContain("{n('contacted')}")
+    expect(v).toContain("{n('overdueInPeriod')}")
+    expect(v).toContain("{orderCell(t.convertedTasks)}")
+  })
+})
+
 test.describe('care B5a r1.1 — source: cổng cờ/quyền, session-only, cùng mapper, không tiền @desktop', () => {
   test('page /care/reports + export: cờ trước tiên → quyền xem CRM → loadCareReport (session); không service role', () => {
     const page = read('app/(dashboard)/care/reports/page.tsx')
@@ -217,7 +327,7 @@ test.describe('care B5a r1.1 — source: cổng cờ/quyền, session-only, cùn
       expect(src, f).toContain('parseCareFilters(')
     }
     expect(page).toMatch(/d\.storeOutOfScope \? \(/)
-    for (const f of ['app/(dashboard)/care/reports/page.tsx', 'app/api/export/care/route.ts', 'lib/care/server/reports.ts', 'components/care/CareReportView.tsx', 'app/(dashboard)/ui-catalog/care-reports/page.tsx']) {
+    for (const f of ['app/(dashboard)/care/reports/page.tsx', 'app/api/export/care/route.ts', 'lib/care/server/reports.ts', 'components/care/CareReportView.tsx', 'components/care/CareReportOutcomes.tsx', 'components/care/CareReportExtras.tsx', 'app/actions/careReports.ts', 'app/(dashboard)/ui-catalog/care-reports/page.tsx']) {
       expect(read(f), f).not.toMatch(/supabaseAdmin|supabase\/admin|SERVICE_ROLE|service_role/)
     }
     const loader = read('lib/care/server/reports.ts')

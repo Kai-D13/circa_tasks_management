@@ -1,13 +1,20 @@
 import { notFound, redirect } from 'next/navigation'
-import { HeartHandshake } from 'lucide-react'
+import { ClipboardList, HeartHandshake } from 'lucide-react'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { PageHeader } from '@/components/ds/PageHeader'
+import { FilterTabs } from '@/components/ds/FilterTabs'
 import { CareDashboardView } from '@/components/care/CareDashboardView'
+import { CareUnavailableState } from '@/components/care/CareUnavailableState'
+import { CareFiltersBar } from '@/components/care/CareFiltersBar'
 import { CareTaskTable, type CareTaskListRow } from '@/components/care/CareTaskTable'
 import { CareTaskDetailView } from '@/components/care/CareTaskDetailView'
 import { CareTaskTransferButton } from '@/components/care/CareTaskTransferButton'
-import { CARE_INTERACTION_PAGE_SIZE, CARE_TRANSFER_MESSAGES, careInteractionPage, careOutcomeDistribution, type CareTotals } from '@/lib/care/browse'
+import type { CareTaskPanelResult } from '@/components/care/CareTaskDrawer'
+import {
+  CARE_INTERACTION_PAGE_SIZE, CARE_TRANSFER_MESSAGES, careInteractionPage, careOutcomeDistribution, careStatusChipTabs, parseCareOpenParam,
+  recentCarePeriods, type CareFilters, type CareStatusCounts, type CareTotals,
+} from '@/lib/care/browse'
 import { maskVnPhone } from '@/lib/affiliate/phone'
 
 // Dev-only bàn thử UI browser CRM (B3). 100% DỮ LIỆU GIẢ — DB chưa có migration 114
@@ -34,7 +41,14 @@ const ROWS: CareTaskListRow[] = Array.from({ length: 6 }, (_, i) => ({
   assignee_id: i < 3 ? S(901) : S(903),
   store: i < 3 ? { code: 'QAOS01', name: 'QA store 1' } : { code: 'QAOS02', name: 'QA store 2' },
   assignee: { full_name: i < 3 ? 'QA Dược sĩ 01a' : 'QA Dược sĩ 02a' },
+  product_count: i === 1 ? 2 : 1,
 }))
+// B8.1: số chip NHẤT QUÁN với ROWS (today 2026-10-10): 4 nhóm rời nhau 2+2+1+1 = 6; quá hạn (1) nằm trong đang theo dõi.
+const COUNTS: CareStatusCounts = { all: 6, not_cared: 2, following: 2, overdue_open: 1, completed: 1, closed_unfinished: 1 }
+const STORES = [{ id: S(101), code: 'QAOS01', name: 'QA store 1' }, { id: S(102), code: 'QAOS02', name: 'QA store 2' }]
+// Tải đang mở giả theo dược sĩ (null = không đọc được ⇒ không hiện số).
+const OPEN_LOAD: Record<string, number | null> = { [S(901)]: 3, [S(902)]: 0, [S(903)]: null }
+const NOT_FOUND_MSG = 'Không tìm thấy khách này trong phạm vi của bạn.'
 // Số giả NHẤT QUÁN: các đoạn của mỗi thanh cộng đúng bằng tasks (kỳ hiện tại chưa có 'không hoàn thành').
 const TOTALS: CareTotals = { tasks: 100, completed: 41, notCared: 30, inProgress: 29, overdueInPeriod: 9, closedUnfinished: 0 }
 const PAST: CareTotals = { tasks: 100, completed: 41, notCared: 0, inProgress: 0, overdueInPeriod: 9, closedUnfinished: 59 }
@@ -50,7 +64,7 @@ async function gate(): Promise<boolean> {
 async function fakeTargets() {
   'use server'
   if (!(await gate())) return { ok: false as const, message: 'Không khả dụng' }
-  return { ok: true as const, staff: STAFF }
+  return { ok: true as const, staff: STAFF.map(({ email: _e, ...s }) => ({ ...s, openCount: OPEN_LOAD[s.id] })) }
 }
 async function fakeTransfer(input: { taskIds: string[]; toUserId: string; note: string }) {
   'use server'
@@ -77,16 +91,85 @@ async function fakeSearch(input: { params: Record<string, string>; q: string; pa
   'use server'
   if (!(await gate())) return { ok: false as const, message: 'Không khả dụng' }
   const q = String(input.q).toLowerCase()
+  // B8.1: từ khoá chứa "00001" trả CHẬM hơn — test phản hồi cũ không ghi đè phản hồi mới.
+  await new Promise((r) => setTimeout(r, q.includes('00001') ? 1500 : 150))
   if (q === 'qa-loi') return { ok: false as const, message: 'Không tải được danh sách — thử lại.' }
   const rows = ROWS.filter((r, i) => r.customer_name.toLowerCase().includes(q) || PHONES[i].includes(q))
   return { ok: true as const, rows, total: rows.length }
 }
+/** B8.1 drawer giả: id ngoài ROWS ⇒ NOT_FOUND (mô phỏng task ngoài phạm vi RLS), không trả số nào. */
+async function fakePanel(input: { taskId: string }): Promise<CareTaskPanelResult> {
+  'use server'
+  if (!(await gate())) return { ok: false, code: 'FORBIDDEN', message: 'Không khả dụng' }
+  await new Promise((r) => setTimeout(r, 300))
+  const i = ROWS.findIndex((r) => r.id === input.taskId)
+  if (i < 0) return { ok: false, code: 'NOT_FOUND', message: NOT_FOUND_MSG }
+  const r = ROWS[i]
+  return {
+    ok: true, taskId: r.id, qa: false,
+    data: {
+      task: { ...r, phone_norm: PHONES[i], phone_raw: PHONES[i], period_month: '2026-10-01', due_date: '2026-10-31', first_overdue_on: i === 2 ? '2026-10-03' : null, completed_at: r.status === 'completed' ? '2026-10-07T03:00:00Z' : null, closed_at: null },
+      products: Array.from({ length: r.product_count }, (_, k) => ({ id: `p${i}${k}`, product_id: `QA-SKU-000${k + 1}`, product_name: `Sản phẩm QA 000${k + 1}`, image_url: null, reason_type: 'promotion', reason_text: 'QA: sản phẩm đang có chương trình tháng' })),
+      interactions: i === 1 ? fakePage(null) : { rows: [], hasMore: false, nextBefore: null },
+      events: [
+        { id: 10, kind: 'assigned', note: null, created_at: '2026-10-01T02:00:00Z', from_user: null, to_user: r.assignee, actor: { full_name: 'QA Marketing' }, from_store: null, to_store: r.store ? { code: r.store.code } : null },
+        // B8.5: khách thứ 2 có MỘT lần chuyển giao (drawer); các khách khác chỉ có sự kiện import ⇒ "Chưa có lần chuyển giao".
+        ...(i === 1 ? [{ id: 20, kind: 'transferred' as const, note: 'QA: chuyển để cân tải', created_at: '2026-10-03T04:15:00Z', from_user: { full_name: 'QA Dược sĩ 01b' }, to_user: r.assignee, actor: { full_name: 'QA SM' }, from_store: { code: 'QAOS01' }, to_store: r.store ? { code: r.store.code } : null }] : []),
+      ],
+    },
+    transfer: r.status === 'open' ? { id: r.id, customerName: r.customer_name, storeId: r.store_id, storeCode: r.store?.code ?? '—', assigneeId: r.assignee_id, assigneeName: r.assignee?.full_name ?? '—' } : null,
+  }
+}
 
-export default async function CareBrowseCatalogPage() {
+const FRAME_FILTERS: CareFilters = { month: '2026-10-01', storeId: null, assigneeId: null, status: null, page: 1 }
+
+export default async function CareBrowseCatalogPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   if (!catalogOn()) notFound()
   const { user, profile } = await getSessionProfile()
   if (!user) redirect('/login')
   if (!(profile?.role === 'admin' && isSuperAdminEmail(user.email))) notFound()
+  const sp = await searchParams
+
+  // B8.1: `?frame=tasks[&open=<uuid>]` dựng ĐÚNG bố cục trang /care/tasks (header + chip + bảng + drawer) để test/chụp.
+  if (sp.frame === 'tasks') {
+    return (
+      <div data-layout-width="fluid" data-care-browse className="space-y-4 p-4 md:p-6" data-testid="catalog-frame-tasks">
+        <PageHeader title="Chăm sóc khách hàng" subtitle="Danh sách khách cần chăm sóc theo kỳ · hạn 31/10/2026" icon={ClipboardList}
+          actions={<CareFiltersBar path="/ui-catalog/care-browse" filters={FRAME_FILTERS} months={recentCarePeriods('2026-10-01')} />} />
+        <FilterTabs variant="chip" ariaLabel="Lọc theo trạng thái" activeKey="all" tabs={careStatusChipTabs('/ui-catalog/care-browse', FRAME_FILTERS, COUNTS)} />
+        <CareTaskTable rows={ROWS} total={ROWS.length} pageSize={30} path="/ui-catalog/care-browse" todayISO="2026-10-10" filters={FRAME_FILTERS}
+          canTransfer isCurrentPeriod search={fakeSearch} loadTargets={fakeTargets} transfer={fakeTransfer} loadPanel={fakePanel} loadMore={fakeLoadMore}
+          initialOpenId={parseCareOpenParam(sp)}
+          toolbar={<CareFiltersBar path="/ui-catalog/care-browse" filters={FRAME_FILTERS} stores={STORES} staff={STAFF} clearable />} />
+      </div>
+    )
+  }
+
+  // B8.4: `?frame=dashboard[&past=1|&fresh=1|&empty=1|&synced=1|&store=1|&unavailable=1]` dựng ĐÚNG bố cục trang /care
+  // (header lọc + KPI link + 2 panel). `empty` = kỳ 0 task (PM B8.4 R1-01); `synced` = N3 đã đồng bộ (0 khách có đơn).
+  if (sp.frame === 'dashboard') {
+    const past = sp.past === '1'
+    const filters: CareFilters = { ...FRAME_FILTERS, month: past ? '2026-09-01' : '2026-10-01', storeId: sp.store === '1' ? STORES[0].id : null }
+    const fresh = sp.fresh === '1' // kỳ mới import, chưa có lượt nào (artboard 05)
+    const empty = sp.empty === '1'
+    const totals: CareTotals = empty ? { tasks: 0, completed: 0, notCared: 0, inProgress: 0, overdueInPeriod: 0, closedUnfinished: 0 }
+      : past ? PAST : fresh ? { tasks: 12, completed: 0, notCared: 12, inProgress: 0, overdueInPeriod: 0, closedUnfinished: 0 } : TOTALS
+    const orders = sp.synced === '1' ? { state: { kind: 'synced' as const, lastSuccessAt: '2026-10-20T01:05:00Z', lastFailed: false }, convertedTasks: 0 } : undefined
+    return (
+      <div data-layout-width="fluid" data-care-browse className="space-y-4 p-4 md:p-6" data-testid="catalog-frame-dashboard">
+        <PageHeader title="Chăm sóc khách hàng" subtitle="Tổng quan theo kỳ — mỗi khách một task trong tháng" icon={HeartHandshake}
+          actions={<CareFiltersBar path="/ui-catalog/care-browse" filters={filters} months={recentCarePeriods('2026-10-01')} stores={STORES} />} />
+        {sp.unavailable === '1' ? <CareUnavailableState /> : (
+          <CareDashboardView monthLabel={past ? '09/2026' : '10/2026'} isPast={past} totals={totals} overdueOpen={past ? null : fresh || empty ? 0 : 4}
+            stores={empty ? [] : fresh
+              ? [{ code: 'QAOS01', name: 'QA store 1', totals }]
+              : [{ code: 'QAOS01', name: 'QA store 1', totals: { tasks: 60, completed: 25, notCared: 18, inProgress: 17, overdueInPeriod: 6, closedUnfinished: 0 } }, { code: 'QAOS02', name: 'QA store 2', totals: { tasks: 40, completed: 16, notCared: 12, inProgress: 12, overdueInPeriod: 3, closedUnfinished: 0 } }]}
+            outcomes={careOutcomeDistribution(empty ? {} : fresh ? { none: 12 } : { none: 30, INTERESTED: 25, CALLBACK: 29, REFUSED: 16 })}
+            orders={orders} scope={{ month: filters.month, storeId: filters.storeId }} assignees={empty ? 0 : fresh ? 1 : 3} />
+        )}
+      </div>
+    )
+  }
 
   return (
     <div data-layout-width="fluid" className="space-y-8 p-4 md:p-6">
@@ -124,10 +207,22 @@ export default async function CareBrowseCatalogPage() {
               { id: 'p2', product_id: 'QA-SKU-0002', product_name: 'Sản phẩm QA 0002 có tên rất dài để kiểm tra cắt dòng hai dòng trên màn hình nhỏ', image_url: 'https://example.invalid/ngoai-cdn.png', reason_type: 'promotion', reason_text: 'QA: sản phẩm đang có chương trình tháng' },
             ],
             interactions: fakePage(null),
+            // B8.5: HAI lần chuyển giao (đặt lệch thứ tự để kiểm "mới nhất trước") + sự kiện import.
             events: [
-              { id: 11, kind: 'transferred', note: 'QA: dược sĩ nghỉ phép', created_at: '2026-10-04T03:00:00Z', from_user: { full_name: 'QA Dược sĩ 01b' }, to_user: { full_name: 'QA Dược sĩ 01a' }, actor: { full_name: 'QA SM' }, from_store: { code: 'QAOS01' }, to_store: { code: 'QAOS01' } },
-              { id: 10, kind: 'assigned', note: null, created_at: '2026-10-01T02:00:00Z', from_user: null, to_user: { full_name: 'QA Dược sĩ 01b' }, actor: { full_name: 'QA Marketing' }, from_store: null, to_store: { code: 'QAOS01' } },
+              { id: 9, kind: 'transferred', note: 'QA: tạm giao cửa hàng 2', created_at: '2026-10-02T09:30:00Z', from_user: { full_name: 'QA Dược sĩ 01a' }, to_user: { full_name: 'QA Dược sĩ 02a' }, actor: { full_name: 'QA Super' }, from_store: { code: 'QAOS01' }, to_store: { code: 'QAOS02' } },
+              { id: 11, kind: 'transferred', note: 'QA: dược sĩ nghỉ phép', created_at: '2026-10-04T03:00:00Z', from_user: { full_name: 'QA Dược sĩ 02a' }, to_user: { full_name: 'QA Dược sĩ 01a' }, actor: { full_name: 'QA SM' }, from_store: { code: 'QAOS02' }, to_store: { code: 'QAOS01' } },
+              { id: 10, kind: 'assigned', note: null, created_at: '2026-10-01T02:00:00Z', from_user: null, to_user: { full_name: 'QA Dược sĩ 01a' }, actor: { full_name: 'QA Marketing' }, from_store: null, to_store: { code: 'QAOS01' } },
             ],
+          }} />
+      </section>
+      {/* Q-107 (B7-ui r1.1): chế độ QA local — vẫn tel: với số của task QA, thêm dòng nhận biết số giả. */}
+      <section className="space-y-3" data-testid="catalog-care-detail-qa">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">Chi tiết — chế độ QA</h2>
+        <CareTaskDetailView taskId={ROWS[2].id} todayISO="2026-10-10" qa
+          data={{
+            // Cùng số đầy đủ với khối chi tiết ở trên (0390000002) — số của các hàng danh sách khác không được vào HTML.
+            task: { ...ROWS[2], phone_norm: PHONES[1], phone_raw: PHONES[1], period_month: '2026-10-01', due_date: '2026-10-31', first_overdue_on: null, completed_at: null, closed_at: null },
+            products: [], interactions: { rows: [], hasMore: false, nextBefore: null }, events: [],
           }} />
       </section>
     </div>

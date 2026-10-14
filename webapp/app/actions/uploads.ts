@@ -12,6 +12,7 @@ import { isCareEnabled } from '@/lib/care/flags'
 import { carePeriodOf } from '@/lib/care/time'
 import { CARE_PROOF_MAX_BYTES, CARE_PROOF_PUBLIC_BASE, careProofKey, careStaffTaskBlock, isCareProofMime } from '@/lib/care/my'
 import { getCareStaffAccess } from '@/lib/care/server/my'
+import { isCareQaActive } from '@/lib/care/server/qaUi'
 
 // Authorized upload-URL minting for direct-to-GCS uploads. THIS IS THE SECURITY
 // BOUNDARY that replaces Supabase Storage RLS for GCS uploads — it must mirror
@@ -206,6 +207,8 @@ export async function createUploadUrl(input: CreateUploadUrlInput): Promise<Resu
     // 114). Key OPAQUE theo task, không có tên file gốc; RPC care_record_interaction kiểm
     // lại đúng base + prefix task (không tin URL client gõ). Không dùng purpose task_result.
     if (!isCareEnabled()) return { error: 'Chức năng chưa được bật' }
+    // B6-qa-ui: QA local trỏ DB prod không tạo object GCS (lượt QA ghi proof []).
+    if (isCareQaActive()) return { error: 'Chế độ QA không nhận ảnh minh chứng' }
     if (!isCareProofMime(ct)) return { error: 'Chỉ chấp nhận ảnh JPG/PNG/WebP/HEIC' }
     if (size > CARE_PROOF_MAX_BYTES) return { error: 'Ảnh vượt giới hạn dung lượng' }
     if (!input.taskId || !/^[0-9a-f-]{36}$/i.test(input.taskId)) return { error: 'taskId không hợp lệ' }

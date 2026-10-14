@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx'
 import {
-  CARE_IMPORT_HEADERS, CARE_IMPORT_MAX_ROWS, CARE_IMPORT_SHEET,
+  CARE_IMPORT_HEADERS, CARE_IMPORT_MAX_ROWS, CARE_IMPORT_SHEET, careOneField,
   type CareFileErrorCode, type CareImportField, type CareImportRow, type CareRowError,
 } from './contract'
 
@@ -143,13 +143,14 @@ export function parseCareImportXlsx(buf: Uint8Array, maxRows = CARE_IMPORT_MAX_R
     const rowNo = r + 1
     const row = { rowNo } as CareImportRow
     let empty = true
-    let bad = false
-    let formula = false
+    // Cột có công thức / ô sai kiểu — đúng một cột thì báo `field` (Q-110).
+    const bad: CareImportField[] = []
+    const formula: CareImportField[] = []
     CARE_IMPORT_HEADERS.forEach((field, c) => {
       const cell = ws[XLSX.utils.encode_cell({ r, c })] as XLSX.CellObject | undefined
-      if (cell?.f) formula = true
+      if (cell?.f) formula.push(field)
       const { value, bad: b } = cellText(cell, field)
-      if (b) bad = true
+      if (b) bad.push(field)
       if (value !== '' || b || cell?.f) empty = false
       row[field] = value
     })
@@ -157,8 +158,8 @@ export function parseCareImportXlsx(buf: Uint8Array, maxRows = CARE_IMPORT_MAX_R
     // Dòng trống trước dòng có dữ liệu này ⇒ dòng trống xen giữa.
     for (const b of blankRows) errors.push({ row: b, code: 'BLANK_ROW' })
     blankRows.length = 0
-    if (formula) errors.push({ row: rowNo, code: 'FORMULA_NOT_ALLOWED' })
-    if (bad) errors.push({ row: rowNo, code: 'CELL_NOT_TEXT' })
+    if (formula.length) errors.push({ row: rowNo, code: 'FORMULA_NOT_ALLOWED', ...careOneField(formula) })
+    if (bad.length) errors.push({ row: rowNo, code: 'CELL_NOT_TEXT', ...careOneField(bad) })
     rows.push(row)
   }
   if (rows.length === 0) return { ok: false, fileError: 'NO_ROWS' }

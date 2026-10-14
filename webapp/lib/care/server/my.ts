@@ -7,12 +7,16 @@ import { maskVnPhone } from '@/lib/affiliate/phone'
 import { applyMyTaskFilters, pageMyTasks, type CareMyFilter, type CareMySortKey } from '@/lib/care/my'
 import { careSearchTerm, type CareQueryBuilder } from '@/lib/care/browse'
 import { fetchExact } from '@/lib/care/import/fetchExact'
+import { careQaMySummary, type CareQaMyAgg } from '@/lib/care/qa/mirror'
+import { carePeriodOf, vnDateISO } from '@/lib/care/time'
+import { careDataScope, careQaViewerAllowed } from './qaUi'
 
 // CRM-CSKH B4 — đọc dữ liệu màn dược sĩ bằng SESSION (RLS 114). Không service role.
+// B6-qa-ui: phạm vi dữ liệu (careDataScope) — production loại is_test; QA local chỉ batch QA.
 
 type LooseBuilder = CareQueryBuilder<LooseBuilder>
 function withMyFilters<T>(q: T, me: { userId: string; storeId: string }, period: string, filter: CareMyFilter, todayISO: string): T {
-  return applyMyTaskFilters(q as unknown as LooseBuilder, me.userId, me.storeId, period, filter, todayISO) as unknown as T
+  return applyMyTaskFilters(q as unknown as LooseBuilder, me.userId, me.storeId, period, filter, todayISO, careDataScope()) as unknown as T
 }
 
 export type CareStaffAccess =
@@ -29,6 +33,8 @@ export async function getCareStaffAccess(): Promise<CareStaffAccess> {
   const store = Array.isArray(embedded) ? embedded[0] : embedded
   // Store OS ĐANG HOẠT ĐỘNG (RPC 114 kiểm lại khi ghi lượt — dược sĩ bị tháo store/store ngừng ⇒ không ghi).
   if (profile.role !== 'staff' || !profile.store_id || store?.store_type !== 'os' || store?.is_active === false) return { kind: 'forbidden' }
+  // QA local: chỉ tài khoản QA trong marker, request từ loopback (production luôn qua).
+  if (!(await careQaViewerAllowed(user.id))) return { kind: 'forbidden' }
   return { kind: 'ok', userId: user.id, storeId: profile.store_id as string }
 }
 
@@ -48,9 +54,24 @@ export class CareNotReadyError extends Error { constructor() { super('care_not_r
 
 export interface CareMySummary { assigned: number; notCared: number; completed: number; overdueLive: number }
 
-/** care_my_summary() (114): đếm task kỳ hiện tại của mình, loại is_test. Lỗi ⇒ CareNotReadyError. */
-export async function loadMySummary(): Promise<CareMySummary> {
+/**
+ * care_my_summary() (114): đếm task kỳ hiện tại của mình, loại is_test. Lỗi ⇒ CareNotReadyError.
+ * QA local: RPC luôn loại is_test ⇒ đếm lại từ task của mình qua RLS + batch QA (lib/care/qa/mirror.ts).
+ */
+export async function loadMySummary(me?: { userId: string; storeId: string }): Promise<CareMySummary> {
   const supabase = await createClient()
+  if (careDataScope().kind === 'qa') {
+    if (!me) throw new CareNotReadyError()
+    const now = new Date()
+    try {
+      const rows = await fetchExact<CareQaMyAgg>((from, to) =>
+        withMyFilters(supabase.from('care_tasks').select('status, last_interaction_at, next_action_date', { count: 'exact' }),
+          me, carePeriodOf(now), 'all', vnDateISO(now)).order('id').range(from, to))
+      return careQaMySummary(rows, vnDateISO(now))
+    } catch {
+      throw new CareNotReadyError()
+    }
+  }
   const { data, error } = await supabase.rpc('care_my_summary')
   if (error) throw new CareNotReadyError()
   const r = (Array.isArray(data) ? data[0] : data) as { assigned?: number; not_cared?: number; completed?: number; overdue_live?: number } | null

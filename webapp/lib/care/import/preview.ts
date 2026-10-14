@@ -124,11 +124,17 @@ export function buildCarePreview(input: {
   }
   const out: CarePreviewCustomer[] = []
   const matchedTaskIds = new Set<string>()
+  // Dòng của khách không nhất quán: mã cửa hàng có thể khác nhau giữa các dòng ⇒ không khẳng định cột (Q-110).
+  const inconsistentRows = new Set(validated.errors.filter((e) => e.code === 'INCONSISTENT_CUSTOMER').map((e) => e.row))
 
   for (const c of validated.customers) {
-    const rowErr = (code: CareRowError['code']) => { for (const row of c.rows) errors.push({ row, code }) }
+    // Q-110: chỉ STORE_INVALID có cột chắc chắn. ASSIGNEE_* (email × cửa hàng), REFUSED_AT_STORE (khách ×
+    // cửa hàng), TEST_FLAG_MISMATCH (khách × lô) là lỗi quan hệ ⇒ không gán `field`.
+    const rowErr = (code: CareRowError['code'], field?: CareRowError['field']) => {
+      for (const row of c.rows) errors.push({ row, code, ...(field ? { field } : {}) })
+    }
     const store = c.storeCode ? lookups.storesByCode.get(c.storeCode) ?? null : null
-    if (c.storeCode && !store) rowErr('STORE_INVALID')
+    if (c.storeCode && !store) rowErr('STORE_INVALID', c.rows.some((r) => inconsistentRows.has(r)) ? undefined : 'target_store_code')
     let assignee: CareStaffRef | null = null
     if (store && c.email) {
       const candidates = (staffByStore.get(store.id) ?? []).filter((s) => s.email === c.email)

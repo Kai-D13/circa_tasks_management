@@ -4,6 +4,7 @@ import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { PageHeader } from '@/components/ds/PageHeader'
 import { CareImportWizard } from '@/components/care/CareImportWizard'
+import { CareImportPageActions } from '@/components/care/CareImportPanels'
 import { CareImportHistory, type CareImportHistoryRow } from '@/components/care/CareImportHistory'
 
 // Dev-only bàn thử UI cho wizard import CRM (B2). 100% DỮ LIỆU GIẢ: lịch sử là
@@ -41,9 +42,11 @@ export default async function CareImportCatalogPage() {
   if (!(profile?.role === 'admin' && isSuperAdminEmail(user.email))) notFound()
 
   return (
-    <div data-layout-width="fluid" className="space-y-6 p-4 md:p-6">
-      <PageHeader title="Phân công chăm sóc khách hàng" subtitle="UI catalog — dữ liệu giả, API được giả lập trong test" icon={ClipboardList} />
-      <CareImportWizard maxBytes={8 * 1024 * 1024} />
+    <div data-layout-width="fluid" data-care-browse className="space-y-6 p-4 md:p-6">
+      <PageHeader title="Phân công chăm sóc khách hàng" subtitle="UI catalog — dữ liệu giả, API được giả lập trong test" icon={ClipboardList}
+        actions={<CareImportPageActions period="2026-10-01" />} />
+      {/* Kỳ cố định 10/2026 khớp now() giả của test (handler thật dựng JSON). */}
+      <CareImportWizard maxBytes={8 * 1024 * 1024} period="2026-10-01" tasksHref="/care/tasks" />
       <section className="space-y-3">
         <h2 className="text-base font-semibold">Lịch sử import</h2>
         <CareImportHistory rows={FAKE_HISTORY} />

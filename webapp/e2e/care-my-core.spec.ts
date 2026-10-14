@@ -5,7 +5,7 @@ import { test, expect } from '@playwright/test'
 import {
   CARE_PROOF_MAX, CARE_PROOF_PUBLIC_BASE, CARE_PROOF_RETENTION_DAYS, CARE_RECORD_MESSAGES, applyMyTaskFilters, careMyBadge, careProofKey,
   careStaffTaskBlock, compareMyTasks, isCareProofDisplayUrl, isCareProofMime, isCareProofUrl, isProofExpired, mapCareRecordError, myFilterHref,
-  pageMyTasks, parseMyFilters, validateInteractionInput, CARE_MY_FILTERS, CARE_MY_PAGE_SIZE, type CareMyFilter, type CareMySortKey,
+  pageMyTasks, parseMyFilters, validateInteractionInput, CARE_MY_FILTERS, CARE_MY_PAGE_SIZE, careMyBackTarget, careNextDatePresets, careMyScreen, careBackMode, customerInitials, careDateLabel, type CareMyFilter, type CareMySortKey,
 } from '../lib/care/my'
 import { CARE_OUTCOMES, CARE_OUTCOME_META } from '../lib/care/outcome'
 import type { CareQueryBuilder } from '../lib/care/browse'
@@ -112,6 +112,54 @@ test.describe('care B4 — logic thuần (dược sĩ) @desktop', () => {
     expect(pageMyTasks(keys, 1, today).pageIds).toHaveLength(Math.min(CARE_MY_PAGE_SIZE, keys.length))
   })
 
+  test('B7-ui M01/M02: màn con CSKH quay về màn cha cố định; /care/my là màn gốc (null)', () => {
+    expect(careMyBackTarget('/care/my')).toBeNull()
+    expect(careMyBackTarget('/care/my/')).toBeNull()
+    expect(careMyBackTarget(`/care/my/${T}`)).toEqual({ href: '/care/my', label: 'Khách hàng của tôi' })
+    expect(careMyBackTarget(`/care/my/${T}/update`)).toEqual({ href: `/care/my/${T}`, label: 'Chi tiết khách' })
+    for (const p of ['/care', '/care/tasks', `/care/tasks/${T}`, '/tasks', '/ui-catalog/care-my', `/care/my/${T}/update/x`, '/care/my/khong-phai-uuid', '/care/my/khong-phai-uuid/update']) expect(careMyBackTarget(p), p).toBeNull()
+  })
+
+  test('B7-ui r2: 3 màn có header riêng (careMyScreen); quay lại = back() chỉ khi mục trước đúng màn cha', () => {
+    expect(careMyScreen('/care/my')).toBe('list')
+    expect(careMyScreen(`/care/my/${T}`)).toBe('detail')
+    expect(careMyScreen(`/care/my/${T}/update`)).toBe('update')
+    for (const p of ['/care', '/care/tasks', `/care/tasks/${T}`, '/tasks', '/ui-catalog/care-my', '/care/my/khong-phai-uuid']) expect(careMyScreen(p), p).toBeNull()
+    const O = 'http://localhost:3000'
+    // Danh sách đang lọc/trang 2 ngay trước chi tiết ⇒ back() giữ bộ lọc + vị trí cuộn.
+    expect(careBackMode(`${O}/care/my?filter=overdue&page=2`, '/care/my', O)).toBe('back')
+    expect(careBackMode(`${O}/care/my/${T}`, `/care/my/${T}`, O)).toBe('back')
+    // Mở link trực tiếp / vừa lưu form (replace) / trang khác / origin khác ⇒ push về cha cố định.
+    for (const prev of [null, undefined, '', `${O}/tasks`, `${O}/care/my/${T}`, 'https://evil.example/care/my', 'http://[không-hợp-lệ']) {
+      expect(careBackMode(prev, '/care/my', O), String(prev)).toBe('push')
+    }
+  })
+
+  test('B7-ui r2: chữ tắt avatar khách + nhãn ngày dd/mm/yyyy (Thứ …)', () => {
+    expect(customerInitials('Nguyễn Văn An')).toBe('NA')
+    expect(customerInitials('KH QA 010')).toBe('KQ')
+    expect(customerInitials('  đặng   thị  ánh ')).toBe('ĐÁ')
+    expect(customerInitials('Lan')).toBe('L')
+    expect(customerInitials('0390 000 010')).toBe('?')
+    expect(careDateLabel('2026-10-17')).toBe('17/10/2026 (Thứ bảy)')
+    expect(careDateLabel('2026-10-18')).toBe('18/10/2026 (Chủ nhật)')
+    expect(careDateLabel('2027-01-04')).toBe('04/01/2027 (Thứ hai)')
+  })
+
+  test('B7-ui M05: nút nhanh ngày hẹn — ngày lịch thuần, qua tháng/năm đúng, nút vượt hạn task bị tắt', () => {
+    expect(careNextDatePresets('2026-10-10', '2026-10-31')).toEqual([
+      { label: 'Hôm nay', value: '2026-10-10', disabled: false }, { label: 'Ngày mai', value: '2026-10-11', disabled: false },
+      { label: '+3 ngày', value: '2026-10-13', disabled: false }, { label: '+7 ngày', value: '2026-10-17', disabled: false },
+    ])
+    // Cuối tháng: chỉ "Hôm nay" còn trong [hôm nay, hạn] — các nút sau bị tắt (validate server không đổi).
+    expect(careNextDatePresets('2026-10-31', '2026-10-31').map((p) => [p.value, p.disabled])).toEqual([
+      ['2026-10-31', false], ['2026-11-01', true], ['2026-11-03', true], ['2026-11-07', true],
+    ])
+    expect(careNextDatePresets('2026-12-28', '2026-12-31').map((p) => [p.value, p.disabled])).toEqual([
+      ['2026-12-28', false], ['2026-12-29', false], ['2026-12-31', false], ['2027-01-04', true],
+    ])
+  })
+
   test('Q-82: gate ghi lượt / cấp URL ảnh — assignee + ĐÚNG store task + mở + kỳ hiện tại', () => {
     const me = { userId: S(1), storeId: S(101) }
     const t = { assignee_id: S(1), store_id: S(101), status: 'open', period_month: '2026-10-01' }
@@ -184,7 +232,8 @@ test.describe('care B4 — source: cờ, dược sĩ OS, session/RPC, upload, na
     expect(src).toContain("if (profile.role !== 'staff' || !profile.store_id || store?.store_type !== 'os' || store?.is_active === false) return { kind: 'forbidden' }")
     // Danh sách không tải sản phẩm/ảnh/timeline.
     const sels = [...src.matchAll(/from\('care_tasks'\)\.select\('([^']+)'/g)].map((m) => m[1])
-    expect(sels).toEqual(['id, status, next_action_date', 'id, customer_name, phone_norm, status, last_outcome, last_interaction_at, next_action_date, due_date'])
+    // + B6-qa-ui: thẻ tóm tắt ở chế độ QA local đếm từ task của mình (lib/care/qa/mirror.ts) — vẫn không PII/sản phẩm.
+    expect(sels).toEqual(['status, last_interaction_at, next_action_date', 'id, status, next_action_date', 'id, customer_name, phone_norm, status, last_outcome, last_interaction_at, next_action_date, due_date'])
     for (const sel of sels) expect(sel).not.toMatch(/product|image|care_interactions|care_customers|proof/)
     expect(src).toContain('maskVnPhone(phone_norm)')
     // Q-84: khoá sort của TOÀN TẬP (fetchExact, có tìm kiếm) → pageMyTasks → đọc đúng trang theo id.
@@ -194,7 +243,8 @@ test.describe('care B4 — source: cờ, dược sĩ OS, session/RPC, upload, na
     expect(load).toContain(".in('id', pageIds)")
     expect(load).not.toMatch(/order\('next_action_date'|CARE_MY_PAGE_SIZE - 1/)
     // Q-82: danh sách luôn lọc đúng store hiện tại (me.storeId) như RLS/summary.
-    expect(src).toContain('applyMyTaskFilters(q as unknown as LooseBuilder, me.userId, me.storeId, period, filter, todayISO)')
+    // B6-qa-ui: + phạm vi dữ liệu (production = is_test false như cũ; QA local = batch QA).
+    expect(src).toContain('applyMyTaskFilters(q as unknown as LooseBuilder, me.userId, me.storeId, period, filter, todayISO, careDataScope())')
   })
 
   test('action: cờ → dược sĩ OS → validate → session rpc care_record_interaction; không ghi thẳng bảng', () => {
@@ -246,7 +296,36 @@ test.describe('care B4 — source: cờ, dược sĩ OS, session/RPC, upload, na
     expect(nav).toContain("isStaffNav ? (careEnabled ? STAFF_NAV_CARE : STAFF_NAV)")
     expect(nav).toMatch(/STAFF_NAV_CARE: NavItem\[\] = \[\s*\.\.\.STAFF_NAV\.slice\(0, 4\),\s*\{ href: '\/care\/my',\s*label: 'CSKH'/)
     expect(nav).not.toMatch(/NEXT_PUBLIC_CARE|process\.env/)
-    expect(read('app/(dashboard)/layout.tsx')).toContain('careEnabled={isStaff && !isFsStore && isCareEnabled()}')
+    // B7-ui M01: màn con CSKH ẩn bottom nav (nút chính dính đáy); <main> bỏ phần chừa chỗ khi không có nav.
+    expect(nav).toContain('if (careMyBackTarget(pathname)) return null')
+    expect(nav).toContain('data-bottom-nav')
+    expect(read('app/globals.css')).toMatch(/body:not\(:has\(\[data-bottom-nav\]\)\) main \{\s*padding-bottom: env\(safe-area-inset-bottom\);/)
+    // B7-ui r2: 3 màn dược sĩ CSKH tự dựng header (CareMyHeader) ⇒ MobileHeader chung ẩn ĐÚNG ở đó (cờ từ
+    // server — không nháy header lúc hydrate); account sheet dùng chung AccountMenu (cùng tên "Tài khoản").
+    const header = read('components/layout/MobileHeader.tsx')
+    expect(header).toContain('if (careOwnHeader && careMyScreen(pathname)) return null')
+    expect(header).toContain('<AccountMenu tone="onPrimary" />')
+    expect(read('components/layout/AccountMenu.tsx')).toMatch(/aria-label="Tài khoản"[\s\S]*finalFocus=\{avatarRef\}/)
+    const care = read('components/care/CareMyHeader.tsx')
+    expect(care).toContain('<AccountMenu tone="onSurface" />')
+    expect(care).toMatch(/careBackMode\(previousEntryUrl\(\), back\.href, window\.location\.origin\) === 'back'/)
+    const layout = read('app/(dashboard)/layout.tsx')
+    expect(layout).toContain('careEnabled={isStaff && !isFsStore && isCareEnabled()}')
+    expect(layout).toContain('<MobileHeader careOwnHeader={isStaff && !isFsStore && isCareEnabled()} />')
+    // Mỗi trang render đúng 1 header CSKH; PageHeader chỉ từ md; gốc trang chung CareMyScreen.
+    for (const [file, screen] of [['app/(dashboard)/care/my/page.tsx', 'list'], ['app/(dashboard)/care/my/[id]/page.tsx', 'detail'], ['app/(dashboard)/care/my/[id]/update/page.tsx', 'update']]) {
+      const src = read(file)
+      expect(src.match(/<CareMyHeader /g), file).toHaveLength(1)
+      expect(src, file).toContain(`<CareMyHeader screen="${screen}"`)
+      expect(src, file).toMatch(/<PageHeader [^>]*className="hidden md:flex"/)
+      expect(src, file).toContain(`<CareMyScreen screen="${screen}">`)
+    }
+    // Banner QA đúng Q-107 (không còn "không gọi/nhắn"); mobile 3 màn dùng chip header — cùng nội dung.
+    const notice = read('components/care/CareQaNotice.tsx')
+    expect(notice).not.toMatch(/không gọi\/nhắn/)
+    expect(notice).toMatch(/mở\s+ứng dụng gọi\/SMS của máy với số QA giả — app không tự gọi hay gửi/)
+    expect(read('components/care/CareQaBanner.tsx')).toMatch(/data-testid="care-qa-banner"[\s\S]*careMyScreen\(pathname\) && 'max-md:hidden'/)
+    expect(care).toContain('<CareQaNoticeText />')
     const tasks = read('app/(dashboard)/tasks/page.tsx')
     expect(tasks).toMatch(/\{isStaff && isCareEnabled\(\) && \(\s*<Link href="\/care\/my"/)
     expect(tasks).not.toMatch(/care_tasks|care_my_summary|rpc\('care|lib\/care\/server/)
@@ -254,7 +333,7 @@ test.describe('care B4 — source: cờ, dược sĩ OS, session/RPC, upload, na
 
   test('catalog care-my: UI_CATALOG + super; mỗi action giả tự kiểm cổng', () => {
     const src = read('app/(dashboard)/ui-catalog/care-my/page.tsx')
-    expect(src).toMatch(/export default async function \w+\(\) \{\s*if \(!catalogOn\(\)\) notFound\(\)/)
+    expect(src).toMatch(/export default async function \w+\([^)]*\) \{\s*if \(!catalogOn\(\)\) notFound\(\)/)
     const fakes = [...src.matchAll(/async function (fake\w+)\([^)]*\) \{\s*'use server'\s*if \(!\(await gate\(\)\)\) return/g)]
     expect(fakes.map((m) => m[1]).sort()).toEqual(['fakeLoadMore', 'fakeRecord', 'fakeSearch'])
     expect([...src.matchAll(/async function (fake\w+)\(/g)].length).toBe(fakes.length)

@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
   const f = parseCareFilters(Object.fromEntries(request.nextUrl.searchParams), carePeriodOf(new Date()))
   let d: Awaited<ReturnType<typeof loadCareReport>>
   try {
-    d = await loadCareReport(v.perms, f)
+    d = await loadCareReport(v.perms, f, { withContacted: false })
   } catch {
     return NextResponse.json({ error: 'Không tải được báo cáo' }, { status: 503 })
   }

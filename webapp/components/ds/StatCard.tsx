@@ -11,13 +11,15 @@ const TONE_TILE: Record<string, string> = {
 
 // Summary stat card (grid layout owned by the page: e.g. grid-cols-2 sm:grid-cols-4).
 export function StatCard({
-  label, value, icon: Icon, tone = 'default', hint, className,
+  label, value, icon: Icon, tone = 'default', hint, hintLines = 1, className,
 }: {
   label: string
   value: React.ReactNode
   icon?: LucideIcon
   tone?: 'default' | 'success' | 'warning' | 'danger'
   hint?: string
+  /** Opt-in (B7-ui): 2 = hint giải thích dài xuống tối đa 2 dòng thay vì cắt 1 dòng. Mặc định 1 (giữ nguyên các trang cũ). */
+  hintLines?: 1 | 2
   className?: string
 }) {
   return (
@@ -34,7 +36,7 @@ export function StatCard({
         <div className="min-w-0">
           <p className="text-xs text-muted-foreground truncate">{label}</p>
           <p className="text-2xl font-semibold tabular-nums leading-none mt-0.5">{value}</p>
-          {hint && <p className="text-[11px] text-muted-foreground mt-1 truncate">{hint}</p>}
+          {hint && <p className={cn('text-[11px] text-muted-foreground mt-1', hintLines === 2 ? 'line-clamp-2' : 'truncate')} title={hint}>{hint}</p>}
         </div>
       </CardContent>
     </Card>

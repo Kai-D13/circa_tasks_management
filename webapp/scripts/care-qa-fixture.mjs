@@ -16,6 +16,17 @@
 //     lệch is_test ⇒ dừng, giữ marker. Không DELETE toàn bảng, không dựa vào prefix. Hậu kiểm 0 rồi mới xoá marker;
 //   · ghi lượt `proof=[]` (không object GCS); không ghi care_orders / không gọi sync;
 //   · log chỉ số đếm / mã — không ID, SĐT, email.
+//
+// B6-qa-ui (PM audit 10/10 b1-pilot) — lượt QA BROWSER bằng bản sao giả của file N1 mẫu, marker v2 kind 'ui':
+//   E2E_CARE_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> node scripts/care-qa-fixture.mjs prepare <goc.xlsx> [ra.xlsx]
+//   E2E_CARE_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> node scripts/care-qa-fixture.mjs serve [cổng=3100]
+//   node scripts/care-qa-fixture.mjs status            (chỉ đọc)
+//   E2E_CARE_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> node scripts/care-qa-fixture.mjs down
+//   · prepare CHỈ ĐỌC DB: sinh file QA (ID/tên/SĐT giả, cùng 10 cột/số dòng/sản phẩm, store + dược sĩ QA) ngoài repo,
+//     ghi marker (wx) gồm sha256 file, ID giả, batch ID định trước, tài khoản QA — TRƯỚC lần ghi DB đầu (import browser);
+//   · serve chạy `next dev -H 127.0.0.1` với cờ CHỈ trong process (CARE_ENABLED/CARE_QA_UI, sync OFF); server tự đặt
+//     is_test=true cho đúng file QA, khoá marker khi import (lib/care/qa/*);
+//   · down dọn đúng batch/khách/task is_test của marker (kiểm hash/batch/ID giả/liên kết TRƯỚC khi xoá), chạy lại được.
 
 import crypto from 'node:crypto'
 import fs from 'node:fs'
@@ -62,10 +73,116 @@ export function fixtureRows(externalIds, storeCode, staffEmail) {
   }))
 }
 
+// ─── QA UI (B6-qa-ui) ───────────────────────────────────────────────────────
+// Mirror lib/care/qa/uiGate.ts (server đọc CÙNG marker) — e2e/care-qa-ui-lifecycle.spec.ts ép khớp hai phía.
+export const UI_MAX_CUSTOMERS = 200
+const UI_PHASES = ['reserved', 'importing', 'imported', 'tearing_down']
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+/** Hợp đồng file N1 — trùng lib/care/import/contract.ts (spec ép khớp). */
+export const CARE_IMPORT_SHEET = 'KhachHang'
+export const CARE_IMPORT_HEADERS = ['customer_external_id', 'customer_name', 'customer_phone', 'target_store_code', 'assignee_email',
+  'reason_type', 'reason_text', 'product_id', 'product_name', 'product_url']
+/** reason_text của bản QA — câu mẫu cố định (bản gốc có thể chứa thông tin sức khoẻ của khách thật). */
+export const UI_REASON_SAMPLES = [
+  'QA — khách dùng thuốc định kỳ, sắp hết liều', 'QA — sản phẩm có chương trình trong tháng',
+  'QA — nhắc mua lại theo đơn đã dùng', 'QA — tư vấn thêm sản phẩm hỗ trợ',
+]
+
+/** ID khách giả của lượt QA UI — suy ra từ runId. */
+export function uiExternalIds(runId, n) {
+  return Array.from({ length: n }, (_, i) => `QA-UI-${runId}-${String(i + 1).padStart(3, '0')}`)
+}
+
+export function validUiMarker(m) {
+  const uuids = (a, min, max) => Array.isArray(a) && a.length >= min && a.length <= max && a.every((x) => typeof x === 'string' && UUID_RE.test(x)) && new Set(a).size === a.length
+  if (!m || m.v !== 2 || m.kind !== 'ui' || !/^[0-9a-f]{8}$/.test(m.runId ?? '') || typeof m.host !== 'string' || !m.host || typeof m.createdAt !== 'string') return false
+  if (!/^\d{4}-(0[1-9]|1[0-2])-01$/.test(m.period ?? '') || !UI_PHASES.includes(m.phase) || !UUID_RE.test(m.batchId ?? '') || !/^[0-9a-f]{64}$/.test(m.fileSha256 ?? '')) return false
+  const ext = m.externalIds
+  if (!Array.isArray(ext) || ext.length < 1 || ext.length > UI_MAX_CUSTOMERS) return false
+  const want = new Set(uiExternalIds(m.runId, ext.length))
+  if (new Set(ext).size !== ext.length || !ext.every((x) => want.has(x))) return false
+  const a = m.accounts
+  if (!a || typeof a !== 'object' || ![a.super, a.marketing, a.sm].every((x) => typeof x === 'string' && UUID_RE.test(x)) || !uuids(a.staff, 1, 4)) return false
+  const all = [a.super, a.marketing, a.sm, ...a.staff]
+  if (new Set(all).size !== all.length || !uuids(m.storeIds, 1, 4)) return false
+  if (m.importResult !== undefined && !['committed', 'rejected', 'duplicate', 'failed'].includes(m.importResult)) return false
+  if (m.customerIds !== undefined && !uuids(m.customerIds, 0, UI_MAX_CUSTOMERS)) return false
+  if (m.taskIds !== undefined && !uuids(m.taskIds, 0, UI_MAX_CUSTOMERS)) return false
+  return true
+}
+
+/** Đọc sheet N1 (đúng một sheet KhachHang, đúng 10 header) thành dòng chuỗi đã trim. Không in giá trị ô. */
+export function readCareSheet(XLSX, bytes) {
+  let wb
+  try { wb = XLSX.read(bytes, { type: 'buffer' }) } catch { throw new FixtureError('FILE_INVALID', 'không đọc được file Excel') }
+  if (wb.SheetNames.length !== 1 || wb.SheetNames[0] !== CARE_IMPORT_SHEET) throw new FixtureError('FILE_INVALID', `cần đúng một sheet ${CARE_IMPORT_SHEET}`)
+  const aoa = XLSX.utils.sheet_to_json(wb.Sheets[CARE_IMPORT_SHEET], { header: 1, raw: true, defval: '', blankrows: false })
+  const [head = [], ...body] = aoa
+  const cell = (v) => String(v ?? '').trim()
+  if (CARE_IMPORT_HEADERS.some((h, i) => cell(head[i]) !== h) || head.slice(CARE_IMPORT_HEADERS.length).some((v) => cell(v) !== '')) {
+    throw new FixtureError('FILE_INVALID', 'dòng tiêu đề không đúng 10 cột theo mẫu')
+  }
+  const rows = body.map((r) => Object.fromEntries(CARE_IMPORT_HEADERS.map((h, i) => [h, cell(r[i])])))
+  if (rows.length === 0) throw new FixtureError('FILE_INVALID', 'file không có dòng dữ liệu')
+  return rows
+}
+
+/** Ghi sheet N1 — mọi ô kiểu Text (như file mẫu của app) để Excel không đổi ID/SĐT. */
+export function writeCareSheet(XLSX, rows) {
+  const ws = XLSX.utils.aoa_to_sheet([CARE_IMPORT_HEADERS, ...rows.map((r) => CARE_IMPORT_HEADERS.map((h) => r[h]))])
+  for (const addr of Object.keys(ws)) {
+    if (addr.startsWith('!')) continue
+    ws[addr].t = 's'
+    ws[addr].z = '@'
+  }
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, CARE_IMPORT_SHEET)
+  return new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }))
+}
+
+/**
+ * Bản sao QA: thay ID/tên/SĐT khách bằng giá trị giả (theo thứ tự khách xuất hiện), store + dược sĩ = tài khoản QA;
+ * giữ số dòng, sản phẩm, reason_type. reason_text LUÔN thay bằng câu mẫu (security P2-3: nội dung gốc có thể là thông
+ * tin sức khoẻ của khách thật).
+ */
+export function uiRows(srcRows, runId, storeCode, staffEmail) {
+  const order = [...new Set(srcRows.map((r) => r.customer_external_id))]
+  if (order.length === 0 || order.length > UI_MAX_CUSTOMERS || order.some((x) => x === '')) {
+    throw new FixtureError('FILE_INVALID', `cần 1–${UI_MAX_CUSTOMERS} khách, mỗi dòng có customer_external_id`)
+  }
+  const externalIds = uiExternalIds(runId, order.length)
+  const idx = new Map(order.map((x, i) => [x, i]))
+  const rows = srcRows.map((r, n) => {
+    const i = idx.get(r.customer_external_id)
+    return {
+      customer_external_id: externalIds[i], customer_name: `KH QA ${String(i + 1).padStart(3, '0')}`,
+      customer_phone: `039001${String(i + 1).padStart(4, '0')}`, target_store_code: storeCode, assignee_email: staffEmail,
+      reason_type: r.reason_type, reason_text: UI_REASON_SAMPLES[n % UI_REASON_SAMPLES.length],
+      product_id: r.product_id, product_name: r.product_name, product_url: r.product_url,
+    }
+  })
+  return { rows, externalIds }
+}
+
+/** Khoá import của server QA: none | held (pid còn sống) | stale (process đã chết giữa chừng). */
+export function lockState(lockPath, isPidAlive = pidAlive) {
+  if (!fs.existsSync(lockPath)) return 'none'
+  let pid = null
+  try { pid = JSON.parse(fs.readFileSync(lockPath, 'utf8'))?.pid } catch { /* khoá hỏng = stale */ }
+  return Number.isInteger(pid) && isPidAlive(pid) ? 'held' : 'stale'
+}
+function pidAlive(pid) {
+  try { process.kill(pid, 0); return true } catch (e) { return e?.code === 'EPERM' }
+}
+
 // ─── Marker ─────────────────────────────────────────────────────────────────
 export function readMarker(p) {
   if (!fs.existsSync(p)) return null
   const m = JSON.parse(fs.readFileSync(p, 'utf8'))
+  if (m?.v === 2) {
+    if (!validUiMarker(m)) throw new FixtureError('MARKER_INVALID', 'marker QA UI không đúng định dạng — không tự xử lý, báo Dev')
+    return m
+  }
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   const ids = (a) => a === undefined || (Array.isArray(a) && a.every((x) => UUID.test(x)))
   if (m?.v !== MARKER_VERSION || !/^[0-9a-f]{8}$/.test(m.runId ?? '') || !UUID.test(m.batchId ?? '') || !Array.isArray(m.externalIds)
@@ -130,6 +247,7 @@ const batchSha = (runId) => crypto.createHash('sha256').update(`qa-b6:${runId}`)
  * Tra lại DB theo batch ID + external ID nên process chết trước khi marker có ID vẫn tìm đúng dòng.
  */
 async function resolveScope(gw, m) {
+  if (m.v === 2) return resolveUiScope(gw, m)
   const mismatch = (why) => { throw new FixtureError('SCOPE_MISMATCH', `marker không khớp DB (${why}) — dừng TRƯỚC khi xoá, giữ marker, báo Dev/PM`) }
   if (!sameSet(m.externalIds, fixtureExternalIds(m.runId, m.externalIds.length))) mismatch('ID khách không suy ra từ runId')
   const batch = await gw.svc.select('care_import_batches', 'id, is_test, file_name, file_sha256', [['id', 'in', [m.batchId]]])
@@ -148,6 +266,36 @@ async function resolveScope(gw, m) {
   if (byCust.some((t) => t.batch_id !== m.batchId)) mismatch('khách fixture có task ở batch khác')
   const taskIds = byBatch.map((t) => t.id)
   if (m.taskIds && !match(m.taskIds, taskIds)) mismatch('taskIds ≠ task của batch')
+  return { batchId: m.batchId, customerIds, taskIds, externalIds: m.externalIds }
+}
+
+/**
+ * Phạm vi dọn của lượt QA UI (B6-qa-ui) — batch do SERVER QA import từ browser (id định trước, sha256 file QA):
+ *  · ID giả = đúng tập suy ra từ runId (validUiMarker); batch (nếu có — staged/rejected/committed) is_test + đúng sha256;
+ *  · khách = đúng external_id của marker, is_test; task = task của batch (đã có thể bị SM chuyển store/dược sĩ);
+ *    mỗi task thuộc khách trong tập; khách không có task ở batch khác; sản phẩm ghi bởi batch chỉ gắn task trong tập.
+ *  Bất kỳ dòng không is_test ⇒ SCOPE_NOT_TEST; lệch tập ⇒ SCOPE_MISMATCH — dừng TRƯỚC mọi DELETE, giữ marker.
+ */
+async function resolveUiScope(gw, m) {
+  const mismatch = (why) => { throw new FixtureError('SCOPE_MISMATCH', `marker QA UI không khớp DB (${why}) — dừng TRƯỚC khi xoá, giữ marker, báo Dev/PM`) }
+  const notTest = (what) => { throw new FixtureError('SCOPE_NOT_TEST', `${what} trong phạm vi marker KHÔNG is_test — dừng, giữ marker, báo Dev/PM`) }
+  const batch = await gw.svc.select('care_import_batches', 'id, is_test, file_sha256', [['id', 'in', [m.batchId]]])
+  if (batch.some((b) => b.is_test !== true)) notTest('batch')
+  if (batch.some((b) => b.file_sha256 !== m.fileSha256)) mismatch('batch không phải file QA của marker')
+  const custRows = await gw.svc.select('care_customers', 'id, external_id, is_test', [['external_id', 'in', m.externalIds]])
+  if (custRows.some((c) => c.is_test !== true)) notTest('khách')
+  const customerIds = custRows.map((c) => c.id)
+  const match = m.phase === 'tearing_down' ? (marker, db) => subsetOf(db, marker) : sameSet
+  if (m.customerIds && !match(m.customerIds, customerIds)) mismatch('customerIds ≠ khách theo ID giả')
+  const byBatch = await gw.svc.select('care_tasks', 'id, customer_id, batch_id, is_test', [['batch_id', 'in', [m.batchId]]])
+  const byCust = customerIds.length ? await gw.svc.select('care_tasks', 'id, customer_id, batch_id, is_test', [['customer_id', 'in', customerIds]]) : []
+  if ([...byBatch, ...byCust].some((t) => t.is_test !== true)) notTest('task')
+  if (byBatch.some((t) => !customerIds.includes(t.customer_id))) mismatch('task của batch thuộc khách ngoài marker')
+  if (byCust.some((t) => t.batch_id !== m.batchId)) mismatch('khách QA có task ở batch khác')
+  const taskIds = byBatch.map((t) => t.id)
+  if (m.taskIds && !match(m.taskIds, taskIds)) mismatch('taskIds ≠ task của batch')
+  const prods = await gw.svc.select('care_task_products', 'task_id', [['batch_id', 'in', [m.batchId]]])
+  if (prods.some((p) => !taskIds.includes(p.task_id))) mismatch('sản phẩm của batch gắn task ngoài phạm vi')
   return { batchId: m.batchId, customerIds, taskIds, externalIds: m.externalIds }
 }
 
@@ -174,13 +322,12 @@ async function countScope(gw, s) {
   return out
 }
 
-export async function cmdUp({ gw, env, envFileText, markerPath, nowMs = Date.now(), runId = crypto.randomBytes(4).toString('hex') }) {
-  const g = writeGate({ env, envFileText, markerExists: fs.existsSync(markerPath), mode: 'up' })
-  if (!g.ok) throw new FixtureError('GATE', g.reason)
+/** Preflight chung trước lượt ghi QA (up / prepare): 114 đã chạy, không sát giờ giao tháng, không còn task mở kỳ trước. */
+async function preflightPeriod(gw, nowMs) {
   if ((await gw.svc.count('app_migrations', [['version', 'eq', '114']])) !== 1) throw new FixtureError('NO_114', 'migration 114 chưa chạy')
   // finalize luôn đóng MỌI task còn mở của kỳ trước (114 care__close_period_at, KHÔNG lọc is_test) ⇒ còn task
-  // mở kỳ trước — thật HOẶC is_test của lượt QA khác — thì up sẽ đóng chúng ngoài phạm vi marker, down không hoàn
-  // tác được ⇒ dừng trước khi ghi. (Vận hành: cờ OFF + cửa sổ operator ⇒ không có import cạnh tranh.)
+  // mở kỳ trước — thật HOẶC is_test của lượt QA khác — thì import QA sẽ đóng chúng ngoài phạm vi marker, down không
+  // hoàn tác được ⇒ dừng trước khi ghi. (Vận hành: cờ OFF + cửa sổ operator ⇒ không có import cạnh tranh.)
   // Ngày theo DB (care_vn_today — đúng ngày finalize dùng), không theo đồng hồ máy chạy script.
   const dbTodayRaw = await gw.svc.rpc('care_vn_today', {})
   const dbToday = typeof dbTodayRaw === 'string' ? dbTodayRaw.slice(0, 10) : new Date(dbTodayRaw).toISOString().slice(0, 10)
@@ -188,7 +335,14 @@ export async function cmdUp({ gw, env, envFileText, markerPath, nowMs = Date.now
   if (nearMonthBoundary(nowMs)) throw new FixtureError('MONTH_BOUNDARY', 'đang trong 15 phút quanh lúc giao tháng (giờ VN) — chạy lại sau')
   const curPeriod = `${dbToday.slice(0, 7)}-01`
   const openPrev = await gw.svc.count('care_tasks', [['status', 'eq', 'open'], ['period_month', 'lt', curPeriod]])
-  if (openPrev !== 0) throw new FixtureError('OPEN_PREVIOUS', `còn ${openPrev} task (thật hoặc test) đang mở của kỳ trước — up sẽ đóng chúng; chờ đóng kỳ / dọn fixture cũ`)
+  if (openPrev !== 0) throw new FixtureError('OPEN_PREVIOUS', `còn ${openPrev} task (thật hoặc test) đang mở của kỳ trước — import sẽ đóng chúng; chờ đóng kỳ / dọn fixture cũ`)
+  return curPeriod
+}
+
+export async function cmdUp({ gw, env, envFileText, markerPath, nowMs = Date.now(), runId = crypto.randomBytes(4).toString('hex') }) {
+  const g = writeGate({ env, envFileText, markerExists: fs.existsSync(markerPath), mode: 'up' })
+  if (!g.ok) throw new FixtureError('GATE', g.reason)
+  const curPeriod = await preflightPeriod(gw, nowMs)
   const staff = await gw.userByEmail(env.E2E_STAFF_EMAIL)
   const actor = await gw.userByEmail(env.E2E_SUPER_EMAIL)
   if (!staff || staff.role !== 'staff' || !staff.store_id) throw new FixtureError('STAFF_INVALID', 'E2E_STAFF_EMAIL không phải dược sĩ có store')
@@ -221,12 +375,76 @@ export async function cmdUp({ gw, env, envFileText, markerPath, nowMs = Date.now
   return { ok: true, period, customers: customers.length, tasks: tasks.length }
 }
 
+/** Năm tài khoản QA browser (env E2E_*), kiểm vai/store/phạm vi SM. Lỗi chỉ nêu TÊN biến env, không email. */
+async function resolveUiAccounts(gw, env) {
+  const need = { super: 'E2E_SUPER_EMAIL', marketing: 'E2E_MKT_ADMIN_EMAIL', sm: 'E2E_SM_EMAIL', staff: 'E2E_STAFF_EMAIL', staff2: 'E2E_CARE_TRANSFER_TO_EMAIL' }
+  const u = {}
+  for (const [k, v] of Object.entries(need)) {
+    u[k] = env[v] ? await gw.userByEmail(env[v]) : null
+    if (!u[k]) throw new FixtureError('ACCOUNT_MISSING', `${v} thiếu hoặc không khớp user nào`)
+  }
+  if (u.super.role !== 'admin') throw new FixtureError('ACCOUNT_ROLE', 'E2E_SUPER_EMAIL phải là admin super')
+  if (u.marketing.role !== 'admin' || !u.marketing.department_id
+      || (await gw.svc.count('care_access', [['department_id', 'eq', u.marketing.department_id], ['can_import', 'eq', true]])) !== 1) {
+    throw new FixtureError('ACCOUNT_ROLE', 'E2E_MKT_ADMIN_EMAIL phải là admin phòng có care_access.can_import')
+  }
+  if (u.sm.role !== 'sm') throw new FixtureError('ACCOUNT_ROLE', 'E2E_SM_EMAIL phải có role sm')
+  const storeIds = []
+  let storeCode = null
+  for (const k of ['staff', 'staff2']) {
+    if (u[k].role !== 'staff' || !u[k].store_id) throw new FixtureError('ACCOUNT_ROLE', `${need[k]} phải là dược sĩ có store`)
+    const [st] = await gw.svc.select('stores', 'code, store_type, is_active', [['id', 'eq', u[k].store_id]])
+    if (!st || st.store_type !== 'os' || !st.is_active) throw new FixtureError('STORE_INVALID', `store của ${need[k]} không phải OS đang hoạt động`)
+    if (!(await gw.smManagesStore(u.sm.id, u[k].store_id))) throw new FixtureError('SM_SCOPE', `store của ${need[k]} không thuộc vùng của E2E_SM_EMAIL`)
+    if (!storeIds.includes(u[k].store_id)) storeIds.push(u[k].store_id)
+    if (k === 'staff') storeCode = st.code
+  }
+  const ids = [u.super.id, u.marketing.id, u.sm.id, u.staff.id, u.staff2.id]
+  if (new Set(ids).size !== ids.length) throw new FixtureError('ACCOUNT_DUPLICATE', 'năm tài khoản QA phải khác nhau')
+  return { accounts: { super: u.super.id, marketing: u.marketing.id, sm: u.sm.id, staff: [u.staff.id, u.staff2.id] }, storeIds, storeCode }
+}
+
+/**
+ * B6-qa-ui — CHỈ ĐỌC DB. Sinh bản sao QA của file N1 mẫu (ID/tên/SĐT giả; store + dược sĩ = tài khoản QA thứ nhất;
+ * giữ số dòng/sản phẩm/reason_type) và marker v2 (wx) ràng buộc host/kỳ/sha256 file/tập ID giả/batch định trước/
+ * tài khoản QA. Lần ghi DB đầu tiên là import từ browser trên server QA (`serve`).
+ */
+export async function cmdPrepare({ gw, env, envFileText, markerPath, originalBytes, writeOut, XLSX,
+  nowMs = Date.now(), runId = crypto.randomBytes(4).toString('hex') }) {
+  const g = writeGate({ env, envFileText, markerExists: fs.existsSync(markerPath), mode: 'up' })
+  if (!g.ok) throw new FixtureError('GATE', g.reason)
+  if (fs.existsSync(`${markerPath}.lock`)) throw new FixtureError('GATE', 'còn khoá import QA của lượt trước — chạy status/down trước')
+  const period = await preflightPeriod(gw, nowMs)
+  // Kỳ này đã có task is_test (lượt QA khác chưa dọn) ⇒ finalize coi là revision của lượt kia ⇒ dừng.
+  const testNow = await gw.svc.count('care_tasks', [['is_test', 'eq', true], ['period_month', 'eq', period]])
+  if (testNow !== 0) throw new FixtureError('TEST_TASKS_EXIST', `kỳ này còn ${testNow} task thử nghiệm của lượt QA khác — dọn trước`)
+  const { accounts, storeIds, storeCode } = await resolveUiAccounts(gw, env)
+
+  const src = readCareSheet(XLSX, originalBytes)
+  const { rows, externalIds } = uiRows(src, runId, storeCode, String(env.E2E_STAFF_EMAIL).trim().toLowerCase())
+  if ((await gw.svc.count('care_customers', [['external_id', 'in', externalIds]])) !== 0) throw new FixtureError('ID_CLASH', 'ID giả đã tồn tại')
+  const bytes = writeCareSheet(XLSX, rows)
+  const fileSha256 = crypto.createHash('sha256').update(bytes).digest('hex')
+  const m = { v: 2, kind: 'ui', runId, host: g.host, createdAt: new Date(nowMs).toISOString(), period, phase: 'reserved',
+    batchId: crypto.randomUUID(), fileSha256, externalIds, accounts, storeIds }
+  if (!validUiMarker(m)) throw new FixtureError('MARKER_INVALID', 'marker sinh ra không hợp lệ — báo Dev')
+  createMarkerExclusive(markerPath, m) // TRƯỚC lần ghi DB đầu tiên (import browser); độc quyền (wx)
+  try {
+    writeOut(bytes)
+  } catch {
+    fs.rmSync(markerPath, { force: true }) // chưa ghi DB nào ⇒ bỏ marker an toàn
+    throw new FixtureError('OUT_WRITE', 'không ghi được file QA — kiểm đường dẫn ra')
+  }
+  return { ok: true, period, rows: rows.length, customers: externalIds.length, products: rows.length, stores: 1, assignees: 1, reasonText: 'mẫu QA' }
+}
+
 export async function cmdStatus({ gw, env, markerPath }) {
   const m = readMarker(markerPath)
   if (!m) return { ok: true, marker: false }
   assertMarkerHost(m, env)
   const s = await resolveScope(gw, m)
-  return { ok: true, marker: true, phase: m.phase, period: m.period, counts: await countScope(gw, s) }
+  const ui = m.v === 2 ? { kind: 'ui', importResult: m.importResult ?? null, lock: lockState(`${markerPath}.lock`) } : {}
+  return { ok: true, marker: true, ...ui, phase: m.phase, period: m.period, counts: await countScope(gw, s) }
 }
 
 /** Kiểm RLS/RPC dưới phiên đăng nhập thật từng vai. Mỗi mục: PASS | FAIL | NOT_VERIFIED (+ lý do không ID). */
@@ -235,6 +453,7 @@ export async function cmdVerify({ gw, env, envFileText, markerPath }) {
   if (!g.ok) throw new FixtureError('GATE', g.reason)
   const m = readMarker(markerPath)
   assertMarkerHost(m, env)
+  if (m.v === 2) throw new FixtureError('PHASE', 'marker là lượt QA browser — verify chỉ dành cho fixture up; kiểm trên browser theo ma trận vai')
   if (m.phase !== 'ready') throw new FixtureError('PHASE', `marker ở pha "${m.phase}" — verify chỉ chạy một lần sau up thành công (down rồi up lại để chạy lại)`)
   const n = m.taskIds.length
   const [t1, t2, t3] = m.taskIds
@@ -321,11 +540,31 @@ export async function cmdVerify({ gw, env, envFileText, markerPath }) {
 }
 
 /** Dọn theo thứ tự phụ thuộc; chạy lại được sau lỗi một phần; hậu kiểm 0 rồi xoá marker. */
-export async function cmdDown({ gw, env, envFileText, markerPath }) {
+export async function cmdDown({ gw, env, envFileText, markerPath, isPidAlive }) {
   const g = writeGate({ env, envFileText, markerExists: fs.existsSync(markerPath), mode: 'down' })
   if (!g.ok) throw new FixtureError('GATE', g.reason)
   const m = readMarker(markerPath)
   assertMarkerHost(m, env)
+  if (m.v !== 2) return downScoped(gw, m, markerPath)
+  // QA UI: server QA còn giữ khoá import (process sống) ⇒ chờ xong/tắt server. Khoá của process đã chết = stale, bỏ.
+  // down tự GIỮ khoá (wx) suốt lúc dọn ⇒ server không bắt đầu import chen giữa (security P2-1).
+  const lockPath = `${markerPath}.lock`
+  const st = lockState(lockPath, isPidAlive)
+  if (st === 'held') throw new FixtureError('IMPORT_RUNNING', 'server QA đang import (khoá còn sống) — chờ xong hoặc tắt server rồi chạy lại down')
+  if (st === 'stale') fs.rmSync(lockPath, { force: true })
+  try {
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, at: new Date().toISOString(), by: 'down' }), { flag: 'wx' })
+  } catch {
+    throw new FixtureError('IMPORT_RUNNING', 'server QA vừa giữ khoá import — chờ xong hoặc tắt server rồi chạy lại down')
+  }
+  try {
+    return await downScoped(gw, m, markerPath)
+  } finally {
+    fs.rmSync(lockPath, { force: true })
+  }
+}
+
+async function downScoped(gw, m, markerPath) {
   const s = await resolveScope(gw, m)
   await assertNothingOutOfScope(gw, s)
   // Trước DELETE đầu tiên: chốt tập ID đã kiểm vào marker ⇒ chạy lại sau lỗi một phần so TẬP CON với đúng tập này.
@@ -349,6 +588,29 @@ export async function cmdDown({ gw, env, envFileText, markerPath }) {
   if (left !== 0) throw new FixtureError('NOT_CLEAN', `còn ${left} dòng trong phạm vi — giữ marker, chạy lại down`)
   fs.rmSync(markerPath)
   return { ok: true, deleted, remaining: 0 }
+}
+
+/**
+ * B6-qa-ui — lệnh khởi động dev server QA (không tự spawn trong hàm để test được): `next dev` bind 127.0.0.1, cờ CRM
+ * CHỈ trong env process con, sync OFF. Server tự kiểm lại toàn bộ cổng (lib/care/qa/uiGate.ts) mỗi request.
+ * B7-ui r2: `clean` = cache dev (`.next/dev`) xoá TRƯỚC khi chạy — QA 11/10 thấy cache Turbopack giữ CSS cũ
+ * (thiếu luật mới của globals.css) dù mã nguồn đã đổi; lần đầu biên dịch chậm hơn nhưng UI đúng mã hiện tại.
+ */
+export function cmdServe({ env, envFileText, markerPath, port = 3100, appDir = path.resolve(HERE, '..') }) {
+  const g = careWriteGate({ env, envFileText, markerExists: false })
+  if (!g.ok) throw new FixtureError('GATE', g.reason)
+  const m = readMarker(markerPath)
+  if (!m || m.v !== 2) throw new FixtureError('GATE', 'chưa có marker QA UI — chạy prepare trước')
+  assertMarkerHost(m, env)
+  if (m.phase === 'tearing_down') throw new FixtureError('PHASE', 'marker đang dọn (tearing_down) — chạy down cho xong')
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) throw new FixtureError('PORT', 'cổng không hợp lệ')
+  const childEnv = { ...env, CARE_ENABLED: 'true', CARE_SYNC_ENABLED: 'false', CARE_QA_UI: 'YES', CARE_QA_UI_BIND: '127.0.0.1' }
+  delete childEnv.NODE_ENV // next dev tự đặt development
+  return {
+    command: process.execPath,
+    args: [path.join(appDir, 'node_modules', 'next', 'dist', 'bin', 'next'), 'dev', '-H', '127.0.0.1', '-p', String(port)],
+    cwd: appDir, env: childEnv, url: `http://localhost:${port}`, clean: path.join(appDir, '.next', 'dev'),
+  }
 }
 
 // ─── Gateway Supabase (prod) ────────────────────────────────────────────────
@@ -380,7 +642,7 @@ export async function makeSupabaseGateway(env, createClientImpl) {
       if (!email) return null
       if (email.includes('*')) throw new FixtureError('ENV', 'email có ký tự * — không hỗ trợ')
       // Không phân biệt hoa/thường (import N1 cũng vậy); escape ký tự đại diện LIKE để không khớp rộng.
-      const { data, error } = await admin.from('users').select('id, role, store_id').ilike('email', email.replace(/[\\%_]/g, (c) => `\\${c}`)).maybeSingle()
+      const { data, error } = await admin.from('users').select('id, role, store_id, department_id').ilike('email', email.replace(/[\\%_]/g, (c) => `\\${c}`)).maybeSingle()
       if (error) raise(error)
       return data
     },
@@ -402,16 +664,48 @@ export async function makeSupabaseGateway(env, createClientImpl) {
 
 // ─── CLI ────────────────────────────────────────────────────────────────────
 async function main() {
-  const cmd = process.argv[2]
-  if (!['up', 'verify', 'status', 'down'].includes(cmd)) {
-    console.error('dùng: node scripts/care-qa-fixture.mjs up | verify | status | down'); process.exit(2)
+  const [cmd, a1, a2] = process.argv.slice(2)
+  if (!['up', 'verify', 'status', 'down', 'prepare', 'serve'].includes(cmd)) {
+    console.error('dùng: node scripts/care-qa-fixture.mjs up | verify | status | down | prepare <goc.xlsx> [ra.xlsx] | serve [cổng]'); process.exit(2)
   }
   const envPath = path.resolve(HERE, '..', '.env.local')
   const envFileText = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : null
+  const fail = (e) => {
+    console.error(JSON.stringify({ ok: false, code: e?.code ?? 'UNKNOWN', message: e instanceof FixtureError ? e.message : 'lỗi không mong đợi — giữ nguyên marker, báo Dev' }))
+    process.exit(1)
+  }
+  if (cmd === 'serve') {
+    let s
+    try { s = cmdServe({ env: process.env, envFileText, markerPath: DEFAULT_MARKER_PATH, port: a1 ? Number(a1) : 3100 }) } catch (e) { fail(e) }
+    // Đổi tên TRƯỚC rồi mới xoá: thư mục đang bị next dev khác giữ (Windows: EBUSY/EPERM) ⇒ đổi tên lỗi nguyên
+    // khối, không xoá dở cache của server kia ⇒ dừng (không chạy 2 dev server chung .next/dev).
+    if (fs.existsSync(s.clean)) {
+      const stale = `${s.clean}-old-${Date.now()}`
+      try { fs.renameSync(s.clean, stale) } catch { fail(new FixtureError('DEV_CACHE_BUSY', 'không dọn được .next/dev — tắt MỌI next dev của webapp rồi chạy lại')) }
+      try { fs.rmSync(stale, { recursive: true, force: true }) } catch { /* bản cũ đã tách khỏi đường dùng — xoá sau cũng được */ }
+    }
+    console.log(JSON.stringify({ ok: true, url: s.url, note: 'Ctrl+C để tắt; xong QA: tắt server rồi chạy down. Lần đầu mở trang chậm hơn (đã dọn cache dev).' }))
+    const { spawn } = await import('node:child_process')
+    spawn(s.command, s.args, { cwd: s.cwd, env: s.env, stdio: 'inherit' }).on('exit', (code) => process.exit(code ?? 0))
+    return
+  }
   const gw = await makeSupabaseGateway(process.env)
   const ctx = { gw, env: process.env, envFileText, markerPath: DEFAULT_MARKER_PATH }
   try {
-    const out = cmd === 'up' ? await cmdUp(ctx) : cmd === 'verify' ? await cmdVerify(ctx) : cmd === 'status' ? await cmdStatus(ctx) : await cmdDown(ctx)
+    let out
+    if (cmd === 'prepare') {
+      if (!a1 || !fs.existsSync(a1)) throw new FixtureError('FILE_INVALID', 'thiếu đường dẫn file N1 gốc')
+      const runId = crypto.randomBytes(4).toString('hex')
+      const dest = path.resolve(a2 ?? path.join(path.dirname(path.resolve(a1)), `care-qa-ui-${runId}.xlsx`))
+      // File QA (PII đã thay nhưng vẫn là dữ liệu vận hành mẫu) KHÔNG nằm trong repo.
+      const repo = path.resolve(HERE, '..', '..')
+      if (!path.relative(repo, dest).startsWith('..')) throw new FixtureError('OUT_IN_REPO', 'file QA phải nằm ngoài thư mục repo')
+      const XLSX = await import('xlsx')
+      out = await cmdPrepare({ ...ctx, runId, XLSX, originalBytes: fs.readFileSync(a1), writeOut: (b) => fs.writeFileSync(dest, b, { flag: 'wx' }) })
+      out = { ...out, file: dest }
+    } else {
+      out = cmd === 'up' ? await cmdUp(ctx) : cmd === 'verify' ? await cmdVerify(ctx) : cmd === 'status' ? await cmdStatus(ctx) : await cmdDown(ctx)
+    }
     console.log(JSON.stringify(out, null, 2))
     process.exit(out.ok ? 0 : 1)
   } catch (e) {

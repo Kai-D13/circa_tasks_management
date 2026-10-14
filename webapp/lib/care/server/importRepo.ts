@@ -100,11 +100,13 @@ export const supabaseCareImportRepo: CareImportRepo = {
     }
   },
 
-  async createBatch({ period, fileName, sha256, rowCount, actorId, isTest }) {
+  async createBatch({ period, fileName, sha256, rowCount, actorId, isTest, id }) {
+    // `id` chỉ có ở import QA (batch định trước trong marker — B6-qa-ui); production để DB sinh.
     const { data, error } = await supabaseAdmin.from('care_import_batches')
-      .insert({ period_month: period, file_name: fileName, file_sha256: sha256, row_count: rowCount, created_by: actorId, is_test: isTest })
+      .insert({ ...(id ? { id } : {}), period_month: period, file_name: fileName, file_sha256: sha256, row_count: rowCount, created_by: actorId, is_test: isTest })
       .select('id').single()
     if (error || !data) throw new Error('care_import_batch_failed')
+    if (id && data.id !== id) throw new Error('care_import_batch_failed')
     return data.id as string
   },
 
