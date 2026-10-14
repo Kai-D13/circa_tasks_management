@@ -3,12 +3,16 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect } from '@playwright/test'
 import * as XLSX from 'xlsx'
-import { CARE_IMPORT_HEADERS as CONTRACT_HEADERS, CARE_IMPORT_SHEET as CONTRACT_SHEET, type CareImportRow } from '../lib/care/import/contract'
+import {
+  CARE_ERROR_FIXES, CARE_ERROR_SHORT, CARE_IMPORT_COLUMN_RULES, CARE_IMPORT_HEADERS as CONTRACT_HEADERS, CARE_IMPORT_SHEET as CONTRACT_SHEET,
+  CARE_ROW_ERROR_CODES, careColumnLetter, careOneField, type CareImportRow,
+} from '../lib/care/import/contract'
 import { CARE_NUMERIC_PRODUCT_ID_MAX_DIGITS, numericProductId, parseCareImportXlsx } from '../lib/care/import/parse'
 import { validateCareRows } from '../lib/care/import/validate'
-import { buildCarePreview, type CareExistingTask, type CareImportLookups } from '../lib/care/import/preview'
+import { buildCarePreview, type CareExistingTask, type CareImportLookups, type CarePreviewCustomer } from '../lib/care/import/preview'
+import { careAssignmentTable, careErrorCodeCounts } from '../lib/care/import/review'
 import {
-  handleCareCommit, handleCarePreview, handleCareTemplate,
+  CARE_PREVIEW_ERROR_LIMIT, careErrorPayload, handleCareCommit, handleCarePreview, handleCareTemplate,
   type CareFinalizeResult, type CareImportAccess, type CareImportDeps, type CareImportRepo,
 } from '../lib/care/import/handler'
 import { buildCareImportTemplate } from '../lib/care/import/template'
@@ -645,5 +649,179 @@ test.describe('care B2 r1.1 — fetchExact lookup fail-closed (audit PM B2 P1-1)
     expect(repo).toContain("from '@/lib/care/import/fetchExact'")
     expect(repo).not.toMatch(/async function fetchExact/)
     expect((repo.match(/count: 'exact'/g) ?? []).length).toBeGreaterThanOrEqual(6)
+  })
+})
+
+// ── B8.3 (Q-110): cột lỗi CHỈ khi chắc chắn + đếm lỗi đủ khi danh sách bị cắt ─────────────────────────────
+test.describe('care B8.3 — Q-110 cột lỗi chắc chắn, tổng lỗi không sai khi cắt @desktop', () => {
+  const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8')
+  const vrow = (rowNo: number, over: Partial<CareImportRow> = {}): CareImportRow => ({
+    rowNo, customer_external_id: `K${rowNo}`, customer_name: 'KH', customer_phone: '0390000001', target_store_code: 'QAOS01',
+    assignee_email: EA, reason_type: 'chronic', reason_text: 'QA', product_id: `P${rowNo}`, product_name: 'SP', product_url: '', ...over,
+  })
+
+  test('hợp đồng: chữ cột A..J theo đúng thứ tự header; mọi mã có nhãn ngắn + hướng sửa; mọi cột có yêu cầu', () => {
+    expect(CONTRACT_HEADERS.map((h) => careColumnLetter(h)).join('')).toBe('ABCDEFGHIJ')
+    expect(careColumnLetter('product_id')).toBe('H')
+    expect(careOneField(['customer_name'])).toEqual({ field: 'customer_name' })
+    expect(careOneField(['customer_name', 'reason_text'])).toEqual({})
+    expect(careOneField([])).toEqual({})
+    for (const c of CARE_ROW_ERROR_CODES) {
+      expect(CARE_ERROR_SHORT[c], c).toBeTruthy()
+      expect(CARE_ERROR_FIXES[c], c).toBeTruthy()
+    }
+    expect(Object.keys(CARE_IMPORT_COLUMN_RULES)).toEqual([...CONTRACT_HEADERS])
+    // Hướng sửa/nhãn không gợi ý import một phần (Q-110: lỗi chặn CẢ file).
+    expect(JSON.stringify([CARE_ERROR_FIXES, CARE_ERROR_SHORT])).not.toMatch(/bỏ qua dòng|dòng hợp lệ|tiếp tục với/i)
+  })
+
+  test('parser: công thức / ô sai kiểu đúng MỘT cột ⇒ field; hai cột ⇒ không field; dòng trống ⇒ không field', () => {
+    const blank: Cell[] = CONTRACT_HEADERS.map(() => null)
+    const p = parseCareImportXlsx(xlsx([
+      H,
+      r('A', 'QAOS01', EA, 'P1', { reason_text: { f: '"QA "&"x"' } }),
+      r('B', 'QAOS01', EA, 'P2', { reason_text: { f: '"x"' }, product_name: { f: '"y"' } }),
+      r('C', 'QAOS01', EA, 'P3', { customer_external_id: 123456 }),
+      r('D', 'QAOS01', EA, 'P4', { customer_name: true, product_id: 12.5 }),
+      blank,
+      r('E', 'QAOS01', EA, 'P5', { product_id: { f: '1000+1' } }),
+    ]))
+    expect(p.ok).toBe(true)
+    if (!p.ok) return
+    expect(p.errors).toEqual([
+      { row: 2, code: 'FORMULA_NOT_ALLOWED', field: 'reason_text' },
+      { row: 3, code: 'FORMULA_NOT_ALLOWED' },
+      { row: 4, code: 'CELL_NOT_TEXT', field: 'customer_external_id' },
+      { row: 5, code: 'CELL_NOT_TEXT' },
+      { row: 6, code: 'BLANK_ROW' },
+      { row: 7, code: 'FORMULA_NOT_ALLOWED', field: 'product_id' },
+    ])
+  })
+
+  test('validator: thiếu/quá dài đúng một cột ⇒ field, nhiều cột ⇒ không; SĐT/product_id/link ảnh cột cố định; trùng/không nhất quán không field', () => {
+    const v = validateCareRows([
+      vrow(2, { customer_name: '' }),
+      vrow(3, { customer_name: '', reason_text: '' }),
+      vrow(4, { reason_type: 'x'.repeat(51) }),
+      vrow(5, { reason_type: 'x'.repeat(51), product_name: 'y'.repeat(301) }),
+      vrow(6, { customer_phone: '0201234567' }),
+      vrow(7, { product_id: '00' }),
+      vrow(8, { product_url: 'https://storage.googleapis.com/x.png' }),
+      vrow(9, { customer_external_id: 'K-INC' }), vrow(10, { customer_external_id: 'K-INC', customer_name: 'Tên khác' }),
+      vrow(11, { customer_external_id: 'K-DUP', product_id: 'PX' }), vrow(12, { customer_external_id: 'K-DUP', product_id: 'PX' }),
+    ])
+    expect(v.errors).toEqual([
+      { row: 2, code: 'FIELD_REQUIRED', field: 'customer_name' },
+      { row: 3, code: 'FIELD_REQUIRED' },
+      { row: 4, code: 'TOO_LONG', field: 'reason_type' },
+      { row: 5, code: 'TOO_LONG' },
+      { row: 6, code: 'PHONE_INVALID', field: 'customer_phone' },
+      { row: 7, code: 'PRODUCT_ID_INVALID', field: 'product_id' },
+      { row: 8, code: 'IMAGE_URL_HOST', field: 'product_url' },
+      { row: 9, code: 'INCONSISTENT_CUSTOMER' },
+      { row: 10, code: 'INCONSISTENT_CUSTOMER' },
+      { row: 11, code: 'DUPLICATE_PRODUCT' },
+      { row: 12, code: 'DUPLICATE_PRODUCT' },
+    ])
+  })
+
+  test('preview: STORE_INVALID ⇒ target_store_code chỉ khi các dòng của khách nhất quán; lỗi email × cửa hàng / từ chối / QA không field', () => {
+    const lk = lookups()
+    lk.staff.push({ id: 'dup', storeId: sid(1), email: EB, fullName: 'QA trùng email' })
+    lk.customers.set('K-REF', { id: 'c-ref', isTest: false })
+    lk.refusals.add(`c-ref|${sid(1)}`)
+    lk.customers.set('K-TEST', { id: 'c-test', isTest: true })
+    const p = previewOf(xlsx([
+      H,
+      r('K-STORE', 'QAOS99', EA, 'P1'),
+      r('K-MIX', 'QAOS98', EA, 'P1'), r('K-MIX', 'QAOS01', EA, 'P2'),
+      r('K-NOSTAFF', 'QAOS01', 'khong.co@example.invalid', 'P1'),
+      r('K-AMB', 'QAOS01', EB, 'P1'),
+      r('K-REF', 'QAOS01', EA, 'P1'),
+      r('K-TEST', 'QAOS01', EA, 'P1'),
+    ]), lk)
+    expect(p.errors).toEqual([
+      { row: 2, code: 'STORE_INVALID', field: 'target_store_code' },
+      { row: 3, code: 'INCONSISTENT_CUSTOMER' }, { row: 3, code: 'STORE_INVALID' },
+      { row: 4, code: 'INCONSISTENT_CUSTOMER' }, { row: 4, code: 'STORE_INVALID' },
+      { row: 5, code: 'ASSIGNEE_INVALID' },
+      { row: 6, code: 'ASSIGNEE_AMBIGUOUS' },
+      { row: 7, code: 'REFUSED_AT_STORE' },
+      { row: 8, code: 'TEST_FLAG_MISMATCH' },
+    ])
+  })
+
+  test('route preview: > 500 lỗi ⇒ errorCount + errorCounts tính trên TOÀN BỘ, chi tiết cắt 500; lỗi chỉ {row, code, field?}; commit HAS_ERRORS cùng dạng', async () => {
+    const rows = [H, ...Array.from({ length: 600 }, (_, i) => r(`S${i}`, 'QAOS99', EA, 'P1')),
+      ...Array.from({ length: 100 }, (_, i) => r(`F${i}`, 'QAOS01', EA, 'P1', { customer_phone: '0201234567' }))]
+    const bytes = xlsx(rows)
+    const m = await multipart({ file: { name: 'care.xlsx', bytes } })
+    const s: Spy = { calls: [] }
+    const body = await (await handleCarePreview(req(m.body, m.contentType), deps(s))).json()
+    expect(body.preview.errorCount).toBe(700)
+    expect(body.preview.errors).toHaveLength(CARE_PREVIEW_ERROR_LIMIT)
+    expect(body.preview.errorCounts).toEqual({ STORE_INVALID: 600, PHONE_INVALID: 100 })
+    // Danh sách cắt không chứa lỗi SĐT nào ⇒ đếm từ danh sách sẽ sai; server đếm đúng.
+    expect(body.preview.errors.some((e: { code: string }) => e.code === 'PHONE_INVALID')).toBe(false)
+    for (const e of body.preview.errors) expect(Object.keys(e).every((k) => ['row', 'code', 'field'].includes(k))).toBe(true)
+    expect(JSON.stringify(body.preview.errors)).not.toMatch(/0201234567|QAOS99|"S\d+|example\.invalid/)
+    const sha700 = crypto.createHash('sha256').update(bytes).digest('hex')
+    const c = await multipart({ file: { name: 'care.xlsx', bytes }, sha256: sha700, period: '2026-10-01' })
+    const commit = await (await handleCareCommit(req(c.body, c.contentType), deps(s))).json()
+    expect(commit).toMatchObject({ code: 'HAS_ERRORS', errorCount: 700, errorCounts: { STORE_INVALID: 600, PHONE_INVALID: 100 } })
+    expect(commit.errors).toHaveLength(CARE_PREVIEW_ERROR_LIMIT)
+    expect(writes(s)).toEqual([])
+    expect(careErrorPayload([{ row: 2, code: 'BLANK_ROW' }])).toEqual({ errorCount: 1, errorCounts: { BLANK_ROW: 1 }, errors: [{ row: 2, code: 'BLANK_ROW' }] })
+  })
+
+  test('UI thuần: đếm theo mã — ưu tiên server; không có mà danh sách bị cắt ⇒ null (không hiện số sai)', () => {
+    const errs = [{ row: 2, code: 'STORE_INVALID' as const }, { row: 3, code: 'STORE_INVALID' as const }, { row: 4, code: 'BLANK_ROW' as const }]
+    expect(careErrorCodeCounts(errs, 3)).toEqual({ STORE_INVALID: 2, BLANK_ROW: 1 })
+    expect(careErrorCodeCounts(errs, 900)).toBeNull()
+    expect(careErrorCodeCounts(errs, 900, { STORE_INVALID: 899, BLANK_ROW: 1 })).toEqual({ STORE_INVALID: 899, BLANK_ROW: 1 })
+  })
+
+  test('bảng phân công (bước 3, chỉ đọc) tính từ preview thật: cửa hàng × email, đếm theo kết quả, owner giữ người cũ, bỏ khách lỗi', () => {
+    const c = (o: Partial<CarePreviewCustomer>): CarePreviewCustomer => ({
+      externalId: 'X', name: 'KH', phoneRaw: '0390000001', storeCode: 'QAOS01', storeName: 'QA 1', email: EA, assigneeName: 'An',
+      productCount: 1, rows: [2], action: 'create', ownerIgnored: false, ...o,
+    })
+    const t = careAssignmentTable([
+      c({ externalId: 'A' }), c({ externalId: 'B', action: 'update' }), c({ externalId: 'C', action: 'unchanged', ownerIgnored: true }),
+      c({ externalId: 'D', email: EB, assigneeName: 'Bình', action: 'skip_has_interaction' }),
+      c({ externalId: 'E', storeCode: 'QAOS02', storeName: 'QA 2', email: EB, assigneeName: 'Bình' }),
+      c({ externalId: 'F', action: 'error' }), c({ externalId: 'G', storeCode: 'QAOS99', storeName: null }),
+    ])
+    expect(t.stores.map((s) => [s.storeCode, s.customers, s.rows.map((x) => `${x.name}:${x.customers}/${x.created}/${x.updated}/${x.unchanged}/${x.skipped}/${x.ownerIgnored}`)])).toEqual([
+      ['QAOS01', 4, ['An:3/1/1/1/0/1', 'Bình:1/0/0/0/1/0']],
+      ['QAOS02', 1, ['Bình:1/1/0/0/0/0']],
+    ])
+    expect(t.totals).toEqual({ customers: 5, created: 2, updated: 1, unchanged: 1, skipped: 1, ownerIgnored: 1 })
+    expect(t.assignees).toBe(3)
+    expect(t.maxCustomers).toBe(3)
+    expect(careAssignmentTable([]).maxCustomers).toBe(0)
+  })
+
+  test('nguồn: wizard không import một phần / không khớp gần đúng / không ghi chú lần import; nút xác nhận khoá khi có lỗi; quyền link danh sách từ cùng RPC', () => {
+    const wiz = read('components/care/CareImportWizard.tsx') + read('components/care/CareImportPanels.tsx')
+    expect(wiz).not.toMatch(/Tiếp tục với|Gần đúng|gần đúng tên|Ghi chú lần import|<select/)
+    expect(wiz).toContain('disabled={busy || hasErrors || qaBlocked} onClick={runCommit}')
+    expect(wiz).toContain('if (!file || !preview || committing.current || preview.errorCount > 0 || (qa && !qa.commitAllowed)) return')
+    expect(wiz).toContain('<Button className={BTN} disabled={hasErrors} onClick={() => setStep(2)}>')
+    // PM B8.3 R1-01: phản hồi preview cũ (đã đổi/bỏ file) không được áp vào màn hiện tại.
+    const run = /async function runPreview\(\) \{([\s\S]*?)\n {2}\}/.exec(wiz)![1]
+    expect(run.match(/if \(my !== gen\.current\) return/g)).toHaveLength(2)
+    expect(run).toContain('if (my === gen.current) { inflight.current = null; setBusy(false) }')
+    expect(run.indexOf('if (my !== gen.current) return')).toBeLessThan(run.indexOf('setPreview(body.preview)'))
+    expect(wiz).toMatch(/const reset = \(\) => \{\s*invalidate\(\)/)
+    expect(wiz).toMatch(/const choose = \(f: File \| null\) => \{\s*invalidate\(\)/)
+    // Bảng lỗi: chỉ dòng/cột/mã/nhãn/hướng sửa — không cột giá trị ô.
+    expect(wiz).not.toMatch(/Giá trị/)
+    const acc = read('lib/care/server/importAccess.ts')
+    expect(acc).toContain("? { kind: 'ok', actorId: user.id, canView: carePermissions(access).canView }")
+    expect(acc.match(/supabase\.rpc\(/g)).toHaveLength(1)
+    const page = read('app/(dashboard)/care/assign/page.tsx')
+    expect(page).toContain("tasksHref={access.canView ? '/care/tasks' : null}")
+    expect(page).toMatch(/export default async function[\s\S]*?\{\s*if \(!isCareEnabled\(\)\) notFound\(\)/)
   })
 })

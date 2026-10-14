@@ -4,16 +4,18 @@ import { PageHeader } from '@/components/ds/PageHeader'
 import { ErrorState } from '@/components/ds/ErrorState'
 import { Pagination } from '@/components/common/Pagination'
 import { CareImportWizard } from '@/components/care/CareImportWizard'
+import { CareImportPageActions } from '@/components/care/CareImportPanels'
 import { CareImportHistory, type CareImportHistoryRow } from '@/components/care/CareImportHistory'
 import { careImportMaxBytes } from '@/lib/care/config'
 import { isCareEnabled } from '@/lib/care/flags'
+import { carePeriodOf } from '@/lib/care/time'
 import { getCareImportAccess } from '@/lib/care/server/importAccess'
 import { careDataScope } from '@/lib/care/server/qaUi'
 import { createClient } from '@/lib/supabase/server'
 
 // /care/assign — Phân công CRM (SPEC B2 §3). Chỉ super / admin phòng có
 // care_access.can_import. Cờ OFF hoặc không quyền ⇒ 404 (không lộ chức năng).
-// B2 chưa thêm mục sidebar/bottom nav (thuộc B3) — truy cập bằng URL để QA.
+// B8.3: bố cục theo artboard 11 (wizard 4 bước, lỗi chặn cả file Q-110, phân công chỉ đọc).
 const PAGE_SIZE = 20
 
 export default async function CareAssignPage({ searchParams }: { searchParams: Promise<{ page?: string }> }) {
@@ -24,7 +26,7 @@ export default async function CareAssignPage({ searchParams }: { searchParams: P
 
   if (access.kind === 'unavailable') {
     return (
-      <div data-layout-width="fluid" className="space-y-4 p-4 md:p-6">
+      <div data-layout-width="fluid" data-care-browse className="space-y-4 p-4 md:p-6">
         <PageHeader title="Phân công chăm sóc khách hàng" icon={ClipboardList} />
         <ErrorState message="Hệ thống CRM chưa sẵn sàng." hint="Cơ sở dữ liệu chưa có cấu hình CRM — báo quản trị." />
       </div>
@@ -56,17 +58,23 @@ export default async function CareAssignPage({ searchParams }: { searchParams: P
     }
   })
   const totalRows = count ?? 0
+  // Kỳ nhận = tháng hiện tại giờ VN (chỉ hiển thị); kỳ thật do server tính lại lúc kiểm tra và lúc ghi.
+  const period = carePeriodOf(new Date())
 
   return (
-    <div data-layout-width="fluid" className="space-y-6 p-4 md:p-6">
+    <div data-layout-width="fluid" data-care-browse className="space-y-6 p-4 md:p-6">
       <PageHeader
         title="Phân công chăm sóc khách hàng"
         subtitle="Import danh sách khách tháng từ Excel — mỗi khách một task, giao theo dược sĩ ghi trong file."
         icon={ClipboardList}
+        actions={<CareImportPageActions period={period} />}
       />
-      <CareImportWizard maxBytes={careImportMaxBytes(process.env)} />
+      <CareImportWizard maxBytes={careImportMaxBytes(process.env)} period={period} tasksHref={access.canView ? '/care/tasks' : null} />
       <section className="space-y-3">
-        <h2 className="text-base font-semibold">Lịch sử import</h2>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-base font-semibold">Lịch sử import</h2>
+          {!error && <span className="text-sm text-muted-foreground">{totalRows.toLocaleString('vi-VN')} lần</span>}
+        </div>
         {error ? (
           <ErrorState message="Không tải được lịch sử import." hint="Thử tải lại trang." />
         ) : (

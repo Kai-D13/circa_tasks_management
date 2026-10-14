@@ -30,7 +30,8 @@ export type CareImportAccess =
   | { kind: 'anonymous' }
   | { kind: 'forbidden' }
   | { kind: 'unavailable' }
-  | { kind: 'ok'; actorId: string }
+  /** `canView`: chỉ để trang /care/assign hiện link sang /care/tasks sau import (B8.3); route không dùng. */
+  | { kind: 'ok'; actorId: string; canView?: boolean }
 
 export type CareFinalizeResult =
   | ({ status: 'committed'; batch_id: string; idempotent?: boolean } & Partial<CarePreviewCounts> & { kind?: string; customers?: number; stores?: number })
@@ -200,6 +201,16 @@ const hasQaUiIds = (a: Extract<Analysis, { ok: true }>) => a.validated.customers
 /** Giới hạn lỗi chi tiết trả về (vẫn kèm tổng). */
 export const CARE_PREVIEW_ERROR_LIMIT = 500
 
+/**
+ * Lỗi trả client: TỔNG + đếm theo mã tính trên TOÀN BỘ lỗi (B8.3/Q-110 — chip lọc không sai khi danh sách chi
+ * tiết bị cắt) + tối đa CARE_PREVIEW_ERROR_LIMIT dòng chi tiết. Chỉ mã/dòng/cột, không giá trị ô.
+ */
+export function careErrorPayload(errors: CareRowError[]) {
+  const errorCounts: Partial<Record<CareRowError['code'], number>> = {}
+  for (const e of errors) errorCounts[e.code] = (errorCounts[e.code] ?? 0) + 1
+  return { errorCount: errors.length, errorCounts, errors: errors.slice(0, CARE_PREVIEW_ERROR_LIMIT) }
+}
+
 export async function handleCarePreview(req: Request, deps: CareImportDeps): Promise<Response> {
   const g = await guard(deps)
   if (!g.ok) return g.res
@@ -216,7 +227,7 @@ export async function handleCarePreview(req: Request, deps: CareImportDeps): Pro
   return json(200, {
     ok: true,
     sha256: a.sha256,
-    preview: { ...rest, errorCount: errors.length, errors: errors.slice(0, CARE_PREVIEW_ERROR_LIMIT) },
+    preview: { ...rest, ...careErrorPayload(errors) },
     ...(issues ? { qa: { commitAllowed: issues.length === 0, issues } } : {}),
   })
 }
@@ -239,7 +250,7 @@ export async function handleCareCommit(req: Request, deps: CareImportDeps): Prom
   if (!a.ok) return a.res
   if (!qa && hasQaUiIds(a)) return fail(409, 'QA_FILE_IN_PRODUCTION')
   if (a.preview.errors.length > 0) {
-    return fail(422, 'HAS_ERRORS', { errorCount: a.preview.errors.length, errors: a.preview.errors.slice(0, CARE_PREVIEW_ERROR_LIMIT) })
+    return fail(422, 'HAS_ERRORS', careErrorPayload(a.preview.errors))
   }
   if (qa) {
     const issues = qaIssues(qa, a, g.actorId)
