@@ -587,3 +587,170 @@ test.describe('care B3 — page thật khi cờ CARE_ENABLED tắt @desktop', ()
     await ctx.dispose()
   })
 })
+
+// ── B8.4 /care theo artboard 05 (frame dữ liệu giả, đúng bố cục trang thật) ─────────────────────────────────
+const SHOTS_B84 = path.resolve(__dirname, '..', 'qa-artifacts', 'b8-4')
+async function openDashboard(page: Page, qs = '', theme: 'light' | 'dark' = 'light') {
+  await page.goto(`/ui-catalog/care-browse?frame=dashboard${qs}`)
+  await page.evaluate((t) => localStorage.setItem('theme', t), theme)
+  await page.reload()
+  await page.waitForFunction((t) => document.documentElement.classList.contains('dark') === (t === 'dark'), theme, { timeout: 10_000 })
+  await page.getByTestId('catalog-frame-dashboard').waitFor({ timeout: 20_000 })
+  await page.waitForLoadState('networkidle')
+}
+async function dashShot(page: Page, name: string) {
+  fs.mkdirSync(SHOTS_B84, { recursive: true })
+  await hideShell(page)
+  await page.screenshot({ path: path.join(SHOTS_B84, `${name}.png`), fullPage: true })
+}
+const kpi = (page: Page, label: string) => page.getByTestId('care-dashboard').locator('> div').first().locator('> *').filter({ hasText: label }).first()
+
+test.describe('care B8.4 — /care theo artboard 05 (frame, dữ liệu giả) @desktop', () => {
+  test.skip(!HAS_STATE, 'chưa có storageState super')
+  test.use({ storageState: SUPER_STATE })
+
+  test('kỳ hiện tại: 4 ô KPI là link /care/tasks đúng trạng thái + giữ kỳ; "Khách có đơn" chưa đồng bộ là ô viền đứt, không link; bộ lọc trên header', async ({ page }) => {
+    await openDashboard(page)
+    const f = page.getByTestId('catalog-frame-dashboard')
+    const hdr = f.locator('> div').first()
+    await expect(hdr.getByRole('heading', { level: 1, name: 'Chăm sóc khách hàng' })).toBeVisible()
+    await expect(hdr.locator('button[aria-haspopup="listbox"], select, [role="combobox"]').first()).toBeVisible() // bộ lọc nằm trong header
+    const want: [string, string][] = [
+      ['Khách (task) trong kỳ', '/care/tasks?month=2026-10'],
+      ['Hoàn thành', '/care/tasks?month=2026-10&status=completed'],
+      ['Chưa chăm sóc', '/care/tasks?month=2026-10&status=not_cared'],
+      ['Quá hạn đang mở', '/care/tasks?month=2026-10&status=overdue_open'],
+    ]
+    for (const [label, href] of want) {
+      const t = kpi(page, label)
+      await expect(t, label).toHaveAttribute('href', href)
+      expect((await t.boundingBox())!.height, label).toBeGreaterThanOrEqual(44)
+    }
+    await expect(kpi(page, 'Khách (task) trong kỳ')).toContainText('2 cửa hàng · 3 dược sĩ có khách')
+    const orders = page.getByTestId('care-dashboard-orders').getByTestId('care-order-state')
+    await expect(orders).toHaveAttribute('data-state', 'none')
+    await expect(orders).toContainText('Chưa có dữ liệu')
+    expect(await orders.evaluate((el) => el.tagName)).toBe('DIV')
+    await expect(page.getByTestId('care-dashboard').locator('a[data-kpi-link]')).toHaveCount(4)
+    await expect(f.getByRole('link', { name: /Xem báo cáo theo dược sĩ/ })).toHaveAttribute('href', '/care/reports?month=2026-10')
+    expect(await noPageOverflow(page)).toBe(true)
+  })
+
+  test('lọc cửa hàng: link giữ kỳ + cửa hàng, KHÔNG mang dược sĩ', async ({ page }) => {
+    await openDashboard(page, '&store=1')
+    const href = await kpi(page, 'Chưa chăm sóc').getAttribute('href')
+    expect(href).toMatch(/^\/care\/tasks\?month=2026-10&store=[0-9a-f-]{36}&status=not_cared$/)
+    expect(href).not.toMatch(/assignee|staff/)
+  })
+
+  test('kỳ cũ: "Từng trễ hẹn" KHÔNG link (khác tập overdue_open); "Không hoàn thành" link closed_unfinished; không còn "Quá hạn đang mở"', async ({ page }) => {
+    await openDashboard(page, '&past=1')
+    const late = kpi(page, 'Từng trễ hẹn trong kỳ')
+    expect(await late.evaluate((el) => el.tagName)).toBe('DIV')
+    await expect(late).not.toHaveAttribute('href', /.*/)
+    await expect(kpi(page, 'Không hoàn thành trong kỳ')).toHaveAttribute('href', '/care/tasks?month=2026-09&status=closed_unfinished')
+    await expect(page.getByTestId('care-dashboard').getByText('Quá hạn đang mở', { exact: true })).toHaveCount(0)
+  })
+
+  test('kỳ mới import chưa có lượt nào: khối kết quả trống có giải thích + link khách chưa chăm sóc (cùng tập)', async ({ page }) => {
+    await openDashboard(page, '&fresh=1')
+    const empty = page.getByTestId('care-outcomes-empty')
+    await expect(empty).toContainText('Chưa có kết quả trong kỳ')
+    await expect(empty.getByRole('link', { name: /Xem khách chưa chăm sóc/ })).toHaveAttribute('href', '/care/tasks?month=2026-10&status=not_cared')
+    await expect(kpi(page, 'Hoàn thành')).not.toHaveAttribute('href', /.*/) // 0 ⇒ không link danh sách rỗng
+  })
+
+  test('RPC quyền lỗi (unavailable): thông báo mất kết nối/thử tải lại — không nói "thiếu cấu hình CRM"', async ({ page }) => {
+    await openDashboard(page, '&unavailable=1')
+    const f = page.getByTestId('catalog-frame-dashboard')
+    await expect(f.getByRole('alert')).toContainText('Không tải được hệ thống CRM.')
+    await expect(f.getByRole('alert')).toContainText('mất kết nối')
+    await expect(f.getByText(/cấu hình CRM/)).toHaveCount(0)
+    await expect(page.getByTestId('care-dashboard')).toHaveCount(0)
+  })
+
+  test('ảnh 1440/1280 sáng/tối (so artboard 05): kỳ hiện tại, kỳ mới, kỳ cũ, lỗi kết nối; không cuộn ngang', async ({ page }) => {
+    test.setTimeout(180_000)
+    for (const w of [1440, 1280]) for (const theme of ['light', 'dark'] as const) {
+      await page.setViewportSize({ width: w, height: 900 })
+      for (const [qs, name] of [['', 'current'], ['&fresh=1', 'fresh'], ['&past=1', 'past'], ['&unavailable=1', 'unavailable']] as const) {
+        await openDashboard(page, qs, theme)
+        expect(await noPageOverflow(page), `${w}-${theme}-${name}`).toBe(true)
+        await dashShot(page, `desktop-${w}-${theme}-${name}`)
+      }
+    }
+  })
+})
+
+test.describe('care B8.4 — /care mobile (frame) @mobile', () => {
+  test.skip(!HAS_STATE, 'chưa có storageState super')
+  test.use({ storageState: SUPER_STATE })
+
+  test('360/393 sáng/tối: không cuộn ngang trang, ô KPI link ≥ 44px; ảnh', async ({ page }) => {
+    const w = page.viewportSize()!.width
+    for (const theme of ['light', 'dark'] as const) for (const [qs, name] of [['', 'current'], ['&fresh=1', 'fresh']] as const) {
+      await openDashboard(page, qs, theme)
+      expect(await noPageOverflow(page), `${w}-${theme}-${name}`).toBe(true)
+      expect((await kpi(page, 'Chưa chăm sóc').boundingBox())!.height).toBeGreaterThanOrEqual(44)
+      await dashShot(page, `mobile-${w}-${theme}-${name}`)
+    }
+  })
+})
+
+// ── B8.4 r1.1 (PM R1-01): kỳ 0 task vẫn hiện ô "Khách có đơn" đúng trạng thái N3; KPI 0 không link ───────────
+test.describe('care B8.4 r1.1 — /care kỳ 0 task (frame) @desktop', () => {
+  test.skip(!HAS_STATE, 'chưa có storageState super')
+  test.use({ storageState: SUPER_STATE })
+
+  test('0 task + N3 chưa đồng bộ: lời giải thích kỳ rỗng + ô "Khách có đơn" viền đứt "—"/"Chưa có dữ liệu" (không 0 giả); KPI 0 không link', async ({ page }) => {
+    await openDashboard(page, '&empty=1')
+    const f = page.getByTestId('catalog-frame-dashboard')
+    await expect(f.getByText('Chưa có khách cần chăm sóc trong kỳ 10/2026')).toBeVisible()
+    const orders = f.getByTestId('care-dashboard-orders').getByTestId('care-order-state')
+    await expect(orders).toBeVisible()
+    await expect(orders).toHaveAttribute('data-state', 'none')
+    await expect(orders).toContainText('Chưa có dữ liệu')
+    await expect(orders.locator('span.text-2xl')).toHaveText('—')
+    await expect(f.locator('a[data-kpi-link]')).toHaveCount(0)
+    await expect(f.locator('a[href^="/care/tasks"]')).toHaveCount(0)
+    for (const label of ['Khách (task) trong kỳ', 'Hoàn thành', 'Chưa chăm sóc', 'Quá hạn đang mở']) await expect(kpi(page, label).locator('span.text-2xl')).toHaveText(/^0/)
+    await expect(f.getByRole('heading', { name: 'Theo cửa hàng' })).toHaveCount(0)
+    expect(await noPageOverflow(page)).toBe(true)
+  })
+
+  test('0 task + N3 đã đồng bộ: ô "Khách có đơn" hiện 0 THẬT + mốc đồng bộ; vẫn không link', async ({ page }) => {
+    await openDashboard(page, '&empty=1&synced=1')
+    const f = page.getByTestId('catalog-frame-dashboard')
+    const orders = f.getByTestId('care-dashboard-orders').getByTestId('care-order-state')
+    await expect(orders).toHaveAttribute('data-state', 'synced')
+    await expect(orders.locator('span.text-2xl')).toHaveText('0')
+    await expect(orders).toContainText('Cập nhật lúc 08:05 20/10/2026')
+    await expect(orders.getByTestId('care-order-not-seen')).toHaveCount(0) // 0 task Hoàn thành ⇒ không câu "chưa thấy đơn"
+    await expect(f.locator('a[href^="/care/tasks"]')).toHaveCount(0)
+  })
+
+  test('ảnh kỳ 0 task 1440/1280 sáng/tối (chưa đồng bộ + đã đồng bộ)', async ({ page }) => {
+    test.setTimeout(120_000)
+    for (const w of [1440, 1280]) for (const theme of ['light', 'dark'] as const) for (const [qs, name] of [['&empty=1', 'empty'], ['&empty=1&synced=1', 'empty-synced']] as const) {
+      await page.setViewportSize({ width: w, height: 900 })
+      await openDashboard(page, qs, theme)
+      expect(await noPageOverflow(page), `${w}-${theme}-${name}`).toBe(true)
+      await dashShot(page, `desktop-${w}-${theme}-${name}`)
+    }
+  })
+})
+
+test.describe('care B8.4 r1.1 — /care kỳ 0 task mobile @mobile', () => {
+  test.skip(!HAS_STATE, 'chưa có storageState super')
+  test.use({ storageState: SUPER_STATE })
+
+  test('360/393 sáng/tối: ô "Khách có đơn" vẫn hiện, không cuộn ngang; ảnh', async ({ page }) => {
+    const w = page.viewportSize()!.width
+    for (const theme of ['light', 'dark'] as const) for (const [qs, name] of [['&empty=1', 'empty'], ['&empty=1&synced=1', 'empty-synced']] as const) {
+      await openDashboard(page, qs, theme)
+      await expect(page.getByTestId('care-dashboard-orders').getByTestId('care-order-state')).toBeVisible()
+      expect(await noPageOverflow(page), `${w}-${theme}-${name}`).toBe(true)
+      await dashShot(page, `mobile-${w}-${theme}-${name}`)
+    }
+  })
+})

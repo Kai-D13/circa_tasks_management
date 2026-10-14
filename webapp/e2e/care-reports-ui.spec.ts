@@ -292,7 +292,7 @@ test.describe('care B5a — page thật khi cờ CARE_ENABLED BẬT (server riê
     expect((await page.goto('/care/reports?month=2026-01'))!.status()).toBe(200)
     const report = page.getByTestId('care-report')
     await expect(report).toBeVisible()
-    await expect(page.getByText('Hệ thống CRM chưa sẵn sàng.')).toHaveCount(0)
+    await expect(page.getByText('Không tải được hệ thống CRM.')).toHaveCount(0)
     await expect(report.getByText('Không có dữ liệu chăm sóc theo bộ lọc này')).toBeVisible()
     await expect(page.getByTestId('care-report-total')).toHaveCount(0)
     await expect(report.getByText('kỳ 01/2026')).toBeVisible()
@@ -327,7 +327,7 @@ test.describe('care B5a — nhánh chưa sẵn sàng (nguồn, không DB) @deskt
   test('page /care/reports: unavailable ⇒ CHỈ ErrorState, không dựng báo cáo; export unavailable ⇒ 503 không XLSX', () => {
     const page = read('app/(dashboard)/care/reports/page.tsx')
     const branch = /if \(g\.kind === 'unavailable'\) \{\n([\s\S]*?)\n  \}/.exec(page)![1]
-    expect(branch).toContain('<ErrorState message="Hệ thống CRM chưa sẵn sàng."')
+    expect(branch).toContain('<CareUnavailableState />') // B8.4: thông báo không khẳng định "thiếu cấu hình" (lỗi mạng cũng vào nhánh này)
     expect(branch).not.toMatch(/CareReportView|loadCareReport/)
     expect(page.indexOf("if (g.kind === 'unavailable')")).toBeLessThan(page.indexOf('loadCareReport('))
     const route = read('app/api/export/care/route.ts')

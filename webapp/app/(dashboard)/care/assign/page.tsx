@@ -2,6 +2,7 @@ import { notFound, redirect } from 'next/navigation'
 import { ClipboardList } from 'lucide-react'
 import { PageHeader } from '@/components/ds/PageHeader'
 import { ErrorState } from '@/components/ds/ErrorState'
+import { CareUnavailableState } from '@/components/care/CareUnavailableState'
 import { Pagination } from '@/components/common/Pagination'
 import { CareImportWizard } from '@/components/care/CareImportWizard'
 import { CareImportPageActions } from '@/components/care/CareImportPanels'
@@ -28,7 +29,7 @@ export default async function CareAssignPage({ searchParams }: { searchParams: P
     return (
       <div data-layout-width="fluid" data-care-browse className="space-y-4 p-4 md:p-6">
         <PageHeader title="Phân công chăm sóc khách hàng" icon={ClipboardList} />
-        <ErrorState message="Hệ thống CRM chưa sẵn sàng." hint="Cơ sở dữ liệu chưa có cấu hình CRM — báo quản trị." />
+        <CareUnavailableState />
       </div>
     )
   }

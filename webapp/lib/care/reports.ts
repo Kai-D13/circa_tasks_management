@@ -156,6 +156,17 @@ export const CARE_REPORT_LINK_STATUS = {
 } as const
 export type CareReportLinkKey = keyof typeof CARE_REPORT_LINK_STATUS
 
+/**
+ * B8.4 — ô KPI dashboard /care được làm link sang /care/tasks CHỈ khi danh sách đích trả ĐÚNG CÙNG TẬP với số đếm:
+ * 4 khoá của CARE_REPORT_LINK_STATUS (cùng care_report) + "Quá hạn đang mở" (đếm bằng chính bộ lọc `overdue_open`,
+ * chỉ kỳ hiện tại). Dashboard lọc kỳ + cửa hàng, KHÔNG lọc dược sĩ ⇒ link không mang dược sĩ.
+ * KHÔNG link: "Từng trễ hẹn" (first_overdue_on ≠ overdue_open), "Khách có đơn" (snapshot lượt Hoàn thành).
+ */
+export const CARE_DASHBOARD_LINK_STATUS = {
+  tasks: null, completed: 'completed', notCared: 'not_cared', closedUnfinished: 'closed_unfinished', overdueOpen: 'overdue_open',
+} as const
+export type CareDashboardLinkKey = keyof typeof CARE_DASHBOARD_LINK_STATUS
+
 // ── Export (cùng dòng/filter với màn hình) ──────────────────────────────────────
 /** Trần phòng thủ: dòng = store × dược sĩ (thực tế vài trăm). */
 export const CARE_REPORT_EXPORT_MAX_ROWS = 5000

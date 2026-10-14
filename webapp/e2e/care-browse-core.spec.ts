@@ -11,7 +11,7 @@ import {
   careCurrentProductCount, CARE_STATUS_CHIP_LABELS,
   type CareAccess, type CareQueryBuilder, type CareReportRow, type CareTotals,
 } from '../lib/care/browse'
-import { careReportKey, careReportLines, careReportSummary } from '../lib/care/reports'
+import { CARE_DASHBOARD_LINK_STATUS, CARE_REPORT_LINK_STATUS, careReportKey, careReportLines, careReportSummary } from '../lib/care/reports'
 import { CARE_OUTCOMES } from '../lib/care/outcome'
 import { buildCareImportRows } from './careImportFixture'
 
@@ -749,5 +749,49 @@ test.describe('care B3 — parity browser ↔ migration 114 (PGlite) @desktop', 
     expect(tot.overdueInPeriod).toBeLessThan(tot.closedUnfinished)
     expect(await browse(U.super, { month: P10, status: 'overdue_open' }, '2026-11-01')).toHaveLength(0)
     expect(old.every((r: any) => careTaskState(r, '2026-11-01').overdueOpen === false)).toBe(true)
+  })
+})
+
+// ── B8.4 /care: ô KPI chỉ link khi cùng tập; thông báo lỗi RPC không khẳng định "thiếu cấu hình" ─────────────
+test.describe('care B8.4 — /care: link KPI cùng tập + thông báo lỗi kết nối @desktop', () => {
+  test('link KPI dashboard: đúng 5 khoá cùng tập (4 của báo cáo + Quá hạn đang mở); không Từng trễ hẹn / Có đơn; không mang dược sĩ', () => {
+    expect(CARE_DASHBOARD_LINK_STATUS).toEqual({ tasks: null, completed: 'completed', notCared: 'not_cared', closedUnfinished: 'closed_unfinished', overdueOpen: 'overdue_open' })
+    for (const k of ['tasks', 'completed', 'notCared', 'closedUnfinished'] as const) expect(CARE_DASHBOARD_LINK_STATUS[k]).toBe(CARE_REPORT_LINK_STATUS[k])
+    // "Quá hạn đang mở" của dashboard đếm bằng CHÍNH bộ lọc overdue_open mà danh sách /care/tasks dùng.
+    expect(read('lib/care/server/browse.ts')).toContain("{ ...f, assigneeId: null, status: 'overdue_open' }, todayISO)")
+    const dash = read('components/care/CareDashboardView.tsx')
+    expect(dash).toContain("careFilterHref('/care/tasks', { month: scope.month, storeId: scope.storeId, assigneeId: null, status: CARE_DASHBOARD_LINK_STATUS[k] as CareStatusFilter | null })")
+    // Hai chỉ số không có danh sách tương đương: không truyền href.
+    expect(dash).toMatch(/label="Từng trễ hẹn trong kỳ" value=\{fmt\(totals\.overdueInPeriod\)\} dot="bg-status-warning"\s*hint="đếm mỗi task một lần, kể cả đã hoàn thành sau đó" \/>/)
+    expect(dash).toMatch(/<CareOrdersTile label="Khách có đơn" state=\{state\} converted=\{orders\?\.convertedTasks \?\? 0\}\s*hasNotSeen=\{[^}]*\} \/>/)
+    // 5 ô KPI có link + 1 link "Xem khách chưa chăm sóc" ở khối kết quả trống (cũng not_cared).
+    expect((dash.match(/href=\{link\('/g) ?? []).length).toBe(6)
+    expect(dash).toContain("<Link href={link('notCared', totals.notCared)!}")
+    expect(dash).not.toMatch(/link\('overdueInPeriod'|link\('inProgress'/)
+    // PM B8.4 R1-01: kỳ 0 task KHÔNG trả sớm trước hàng ô — ô "Khách có đơn" vẫn dựng theo trạng thái N3.
+    const empty = /if \(totals\.tasks === 0\) \{([\s\S]*?)\n {2}\}/.exec(dash)![1]
+    expect(empty).toContain('{kpis}')
+    expect(dash.indexOf('const kpis = (')).toBeLessThan(dash.indexOf('if (totals.tasks === 0)'))
+    expect(dash.indexOf('<CareOrdersTile')).toBeLessThan(dash.indexOf('if (totals.tasks === 0)'))
+    // Trang thật truyền đúng bộ lọc đang xem (kỳ + cửa hàng) — dashboard không lọc dược sĩ.
+    const page = read('app/(dashboard)/care/page.tsx')
+    expect(page).toContain('scope={{ month: f.month, storeId: f.storeId }}')
+    expect(page).toMatch(/<PageHeader \{\.\.\.title\}\s*actions=\{<CareFiltersBar path="\/care"/)
+  })
+
+  test('unavailable: 5 trang browser CRM dùng CareUnavailableState (mất kết nối/chưa sẵn sàng), không còn "chưa có cấu hình CRM"', () => {
+    const c = read('components/care/CareUnavailableState.tsx')
+    const msg = /CARE_UNAVAILABLE_MESSAGE = '([^']+)'/.exec(c)![1]
+    const hint = /CARE_UNAVAILABLE_HINT = '([^']+)'/.exec(c)![1]
+    expect(`${msg} ${hint}`).not.toMatch(/cấu hình/)
+    expect(hint).toMatch(/mất kết nối/)
+    expect(hint).toMatch(/tải lại trang/)
+    for (const p of ['app/(dashboard)/care/page.tsx', 'app/(dashboard)/care/tasks/page.tsx', 'app/(dashboard)/care/tasks/[id]/page.tsx',
+      'app/(dashboard)/care/reports/page.tsx', 'app/(dashboard)/care/assign/page.tsx']) {
+      const s = read(p)
+      const branch = /kind === 'unavailable'\) \{\n([\s\S]*?)\n {2}\}/.exec(s)![1]
+      expect(branch, p).toContain('<CareUnavailableState />')
+      expect(s, p).not.toMatch(/chưa có cấu hình CRM|Hệ thống CRM chưa sẵn sàng/)
+    }
   })
 })

@@ -5,6 +5,7 @@ import { isSuperAdminEmail } from '@/lib/authz'
 import { PageHeader } from '@/components/ds/PageHeader'
 import { FilterTabs } from '@/components/ds/FilterTabs'
 import { CareDashboardView } from '@/components/care/CareDashboardView'
+import { CareUnavailableState } from '@/components/care/CareUnavailableState'
 import { CareFiltersBar } from '@/components/care/CareFiltersBar'
 import { CareTaskTable, type CareTaskListRow } from '@/components/care/CareTaskTable'
 import { CareTaskDetailView } from '@/components/care/CareTaskDetailView'
@@ -136,6 +137,32 @@ export default async function CareBrowseCatalogPage({ searchParams }: { searchPa
           canTransfer isCurrentPeriod search={fakeSearch} loadTargets={fakeTargets} transfer={fakeTransfer} loadPanel={fakePanel} loadMore={fakeLoadMore}
           initialOpenId={parseCareOpenParam(sp)}
           toolbar={<CareFiltersBar path="/ui-catalog/care-browse" filters={FRAME_FILTERS} stores={STORES} staff={STAFF} clearable />} />
+      </div>
+    )
+  }
+
+  // B8.4: `?frame=dashboard[&past=1|&fresh=1|&empty=1|&synced=1|&store=1|&unavailable=1]` dựng ĐÚNG bố cục trang /care
+  // (header lọc + KPI link + 2 panel). `empty` = kỳ 0 task (PM B8.4 R1-01); `synced` = N3 đã đồng bộ (0 khách có đơn).
+  if (sp.frame === 'dashboard') {
+    const past = sp.past === '1'
+    const filters: CareFilters = { ...FRAME_FILTERS, month: past ? '2026-09-01' : '2026-10-01', storeId: sp.store === '1' ? STORES[0].id : null }
+    const fresh = sp.fresh === '1' // kỳ mới import, chưa có lượt nào (artboard 05)
+    const empty = sp.empty === '1'
+    const totals: CareTotals = empty ? { tasks: 0, completed: 0, notCared: 0, inProgress: 0, overdueInPeriod: 0, closedUnfinished: 0 }
+      : past ? PAST : fresh ? { tasks: 12, completed: 0, notCared: 12, inProgress: 0, overdueInPeriod: 0, closedUnfinished: 0 } : TOTALS
+    const orders = sp.synced === '1' ? { state: { kind: 'synced' as const, lastSuccessAt: '2026-10-20T01:05:00Z', lastFailed: false }, convertedTasks: 0 } : undefined
+    return (
+      <div data-layout-width="fluid" data-care-browse className="space-y-4 p-4 md:p-6" data-testid="catalog-frame-dashboard">
+        <PageHeader title="Chăm sóc khách hàng" subtitle="Tổng quan theo kỳ — mỗi khách một task trong tháng" icon={HeartHandshake}
+          actions={<CareFiltersBar path="/ui-catalog/care-browse" filters={filters} months={recentCarePeriods('2026-10-01')} stores={STORES} />} />
+        {sp.unavailable === '1' ? <CareUnavailableState /> : (
+          <CareDashboardView monthLabel={past ? '09/2026' : '10/2026'} isPast={past} totals={totals} overdueOpen={past ? null : fresh || empty ? 0 : 4}
+            stores={empty ? [] : fresh
+              ? [{ code: 'QAOS01', name: 'QA store 1', totals }]
+              : [{ code: 'QAOS01', name: 'QA store 1', totals: { tasks: 60, completed: 25, notCared: 18, inProgress: 17, overdueInPeriod: 6, closedUnfinished: 0 } }, { code: 'QAOS02', name: 'QA store 2', totals: { tasks: 40, completed: 16, notCared: 12, inProgress: 12, overdueInPeriod: 3, closedUnfinished: 0 } }]}
+            outcomes={careOutcomeDistribution(empty ? {} : fresh ? { none: 12 } : { none: 30, INTERESTED: 25, CALLBACK: 29, REFUSED: 16 })}
+            orders={orders} scope={{ month: filters.month, storeId: filters.storeId }} assignees={empty ? 0 : fresh ? 1 : 3} />
+        )}
       </div>
     )
   }

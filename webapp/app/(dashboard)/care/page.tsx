@@ -1,6 +1,7 @@
 import { HeartHandshake, Store } from 'lucide-react'
 import { PageHeader } from '@/components/ds/PageHeader'
 import { ErrorState } from '@/components/ds/ErrorState'
+import { CareUnavailableState } from '@/components/care/CareUnavailableState'
 import { EmptyState } from '@/components/ds/EmptyState'
 import { CareFiltersBar } from '@/components/care/CareFiltersBar'
 import { CareDashboardView } from '@/components/care/CareDashboardView'
@@ -16,11 +17,12 @@ import {
 import { requireCareViewer } from '@/lib/care/server/pageGuard'
 
 // /care — Khách hàng (SPEC B3 §2): tổng quan kỳ theo phạm vi người xem (RLS/care_report).
+// B8.4 (artboard 05): bộ lọc kỳ/cửa hàng trên header; ô KPI cùng tập là link /care/tasks giữ kỳ + cửa hàng.
 export default async function CarePage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const g = await requireCareViewer()
-  const header = <PageHeader title="Chăm sóc khách hàng" subtitle="Tổng quan theo kỳ — mỗi khách một task trong tháng" icon={HeartHandshake} />
+  const title = { title: 'Chăm sóc khách hàng', subtitle: 'Tổng quan theo kỳ — mỗi khách một task trong tháng', icon: HeartHandshake }
   if (g.kind === 'unavailable') {
-    return <div data-layout-width="fluid" className="space-y-4 p-4 md:p-6">{header}<ErrorState message="Hệ thống CRM chưa sẵn sàng." hint="Cơ sở dữ liệu chưa có cấu hình CRM — báo quản trị." /></div>
+    return <div data-layout-width="fluid" data-care-browse className="space-y-4 p-4 md:p-6"><PageHeader {...title} /><CareUnavailableState /></div>
   }
   const now = new Date()
   const current = carePeriodOf(now)
@@ -50,6 +52,8 @@ export default async function CarePage({ searchParams }: { searchParams: Promise
           .sort((a, b) => a.code.localeCompare(b.code))}
         outcomes={careOutcomeDistribution(d.outcomes)}
         orders={{ state: orderState, convertedTasks: careReportConvertedTotal(d.rows) }}
+        scope={{ month: f.month, storeId: f.storeId }}
+        assignees={new Set(d.rows.filter((r) => r.tasks_total > 0).map((r) => r.assignee_id)).size}
       />
     )
   }
@@ -65,9 +69,9 @@ export default async function CarePage({ searchParams }: { searchParams: Promise
   }
 
   return (
-    <div data-layout-width="fluid" className="space-y-6 p-4 md:p-6">
-      {header}
-      <CareFiltersBar path="/care" filters={outOfScope ? { ...f, storeId: null } : f} months={recentCarePeriods(current)} stores={stores} />
+    <div data-layout-width="fluid" data-care-browse className="space-y-4 p-4 md:p-6">
+      <PageHeader {...title}
+        actions={<CareFiltersBar path="/care" filters={outOfScope ? { ...f, storeId: null } : f} months={recentCarePeriods(current)} stores={stores} />} />
       {body}
     </div>
   )

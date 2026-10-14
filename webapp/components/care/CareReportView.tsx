@@ -22,38 +22,6 @@ import {
 const fmt = (n: number) => n.toLocaleString('vi-VN')
 const PANEL = 'rounded-care-panel border border-care-line bg-card'
 
-/** `hasNotSeen`: còn task Hoàn thành chưa có đơn ⇒ thêm dòng "Chưa thấy đơn…" (ẩn khi mọi task đã Có đơn). */
-export function CareOrderDataBanner({ state, hasNotSeen }: { state: CareOrderDataState; hasNotSeen: boolean }) {
-  if (state.kind === 'none') {
-    return (
-      <div className="rounded-lg border bg-card p-3 text-sm" data-testid="care-order-state" data-state="none">
-        <StatusBadge tone="neutral">Khách có đơn</StatusBadge>
-        <span className="ml-2 text-muted-foreground">{CARE_ORDER_NO_DATA} — sẽ có khi đồng bộ đơn hàng được bật.</span>
-      </div>
-    )
-  }
-  return (
-    <div className="rounded-lg border bg-card p-3 text-sm" data-testid="care-order-state" data-state={state.lastFailed ? 'stale' : 'synced'}>
-      {state.lastFailed ? (
-        <>
-          <StatusBadge tone="warning">Chưa cập nhật</StatusBadge>
-          <span className="ml-2 text-muted-foreground">Lần đồng bộ đơn gần nhất chưa thành công — giữ kết quả tính đến lần thành công {vnDateTime(state.lastSuccessAt)}.</span>
-        </>
-      ) : (
-        <>
-          <StatusBadge tone="info">Dữ liệu đơn</StatusBadge>
-          <span className="ml-2 text-muted-foreground">Cập nhật lúc {vnDateTime(state.lastSuccessAt)}. Khách có đơn ghi vào tháng của lượt chăm sóc Hoàn thành.</span>
-        </>
-      )}
-      {hasNotSeen && (
-        <span className="mt-1 block text-xs text-muted-foreground" data-testid="care-order-not-seen">
-          Task Hoàn thành chưa có đơn: {careOrderNotSeenText(state)}.
-        </span>
-      )}
-    </div>
-  )
-}
-
 /** Nút "Xuất Excel" (đặt trên header trang cùng hàng bộ lọc — artboard 13). Export giữ hợp đồng cột B5a. */
 export function CareReportExportLink({ href }: { href: string }) {
   return (
@@ -63,20 +31,30 @@ export function CareReportExportLink({ href }: { href: string }) {
   )
 }
 
-export function CareKpiTile({ label, value, pct, hint, dot }: { label: string; value: string; pct?: number; hint: string; dot?: string }) {
-  return (
-    <div className={cn(PANEL, 'flex flex-col gap-1 p-4')}>
+/** `href` (B8.4): ô thành link sang danh sách — chỉ truyền khi danh sách đích đếm ĐÚNG CÙNG TẬP với số trên ô. */
+export function CareKpiTile({ label, value, pct, hint, dot, href }: { label: string; value: string; pct?: number; hint: string; dot?: string; href?: string }) {
+  const body = (
+    <>
       <span className="flex items-center gap-1.5 text-xs text-muted-foreground">{dot && <span aria-hidden className={cn('size-1.5 rounded-full', dot)} />}{label}</span>
       <span className="text-2xl leading-tight font-bold tabular-nums">
         {value}{typeof pct === 'number' && <span className="ml-1.5 text-sm font-semibold text-muted-foreground">{pct}%</span>}
       </span>
       <span className="text-xs text-muted-foreground">{hint}</span>
-    </div>
+    </>
   )
+  if (href) {
+    return (
+      <Link href={href} title={`Xem danh sách: ${label}`} data-kpi-link
+        className={cn(PANEL, 'group flex flex-col gap-1 p-4 transition-colors hover:border-care-line-strong hover:bg-muted/30 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none')}>
+        {body}
+      </Link>
+    )
+  }
+  return <div className={cn(PANEL, 'flex flex-col gap-1 p-4')}>{body}</div>
 }
 
-/** Ô "Khách có đơn": viền đứt + nhãn khi chưa có dữ liệu (không 0 giả); đã đồng bộ ⇒ số + mốc giờ VN. */
-function OrdersTile({ label, state, converted, hasNotSeen }: { label: string; state: CareOrderDataState; converted: number; hasNotSeen: boolean }) {
+/** Ô "Khách có đơn": viền đứt + nhãn khi chưa có dữ liệu (không 0 giả); đã đồng bộ ⇒ số + mốc giờ VN. Dùng chung /care (B8.4). */
+export function CareOrdersTile({ label, state, converted, hasNotSeen }: { label: string; state: CareOrderDataState; converted: number; hasNotSeen: boolean }) {
   const none = state.kind === 'none'
   return (
     <div className={cn(PANEL, 'flex flex-col gap-1 p-4', none && 'border-dashed bg-transparent')}
@@ -199,7 +177,7 @@ export function CareReportView({ monthLabel, lines, totals, contacted, orderStat
         )}
         <CareKpiTile label="Hoàn thành" value={fmt(totals.completed)} pct={carePct(totals.completed, totals.tasks)} hint="kết thúc chăm sóc trong kỳ" dot="bg-status-success" />
         <CareKpiTile label="Từng trễ hẹn" value={fmt(totals.overdueInPeriod)} hint="khách có lịch hẹn từng bị lỡ" dot="bg-status-danger" />
-        <OrdersTile label="Khách có đơn" state={orderState} converted={totals.convertedTasks} hasNotSeen={totals.completed > totals.convertedTasks} />
+        <CareOrdersTile label="Khách có đơn" state={orderState} converted={totals.convertedTasks} hasNotSeen={totals.completed > totals.convertedTasks} />
       </div>
 
       {totals.tasks > 0 && (

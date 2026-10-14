@@ -2,6 +2,7 @@ import { Suspense } from 'react'
 import { ClipboardList } from 'lucide-react'
 import { PageHeader } from '@/components/ds/PageHeader'
 import { ErrorState } from '@/components/ds/ErrorState'
+import { CareUnavailableState } from '@/components/care/CareUnavailableState'
 import { CareFiltersBar } from '@/components/care/CareFiltersBar'
 import { CareStatusChips, CareStatusChipsBare } from '@/components/care/CareStatusChips'
 import { CareTaskTable } from '@/components/care/CareTaskTable'
@@ -25,7 +26,7 @@ export default async function CareTasksPage({ searchParams }: { searchParams: Pr
   const subtitle = `Danh sách khách cần chăm sóc theo kỳ · hạn ${due.slice(8, 10)}/${due.slice(5, 7)}/${due.slice(0, 4)}`
   if (g.kind === 'unavailable') {
     const header = <PageHeader title="Chăm sóc khách hàng" subtitle="Danh sách khách cần chăm sóc theo kỳ" icon={ClipboardList} />
-    return <div data-layout-width="fluid" className="space-y-4 p-4 md:p-6">{header}<ErrorState message="Hệ thống CRM chưa sẵn sàng." hint="Cơ sở dữ liệu chưa có cấu hình CRM — báo quản trị." /></div>
+    return <div data-layout-width="fluid" className="space-y-4 p-4 md:p-6">{header}<CareUnavailableState /></div>
   }
   const header = (
     <PageHeader title="Chăm sóc khách hàng" subtitle={subtitle} icon={ClipboardList}
