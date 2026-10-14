@@ -102,13 +102,15 @@ function EventItem({ e }: { e: CareTimelineEvent }) {
   )
 }
 
-export function CareTimeline({ taskId, initial, events, loadMore, showHeading = true }: {
+export function CareTimeline({ taskId, initial, events, loadMore, showHeading = true, title = 'Lịch sử chăm sóc & chuyển giao' }: {
   taskId: string
   initial: CareInteractionPage
   events: CareTimelineEvent[]
   loadMore?: CareLoadMoreInteractions
   /** B7-ui r2: màn dược sĩ — tab "Lịch sử" đã là tiêu đề ⇒ ẩn tiêu đề khỏi mắt (giữ cho trình đọc màn hình). */
   showHeading?: boolean
+  /** B8.5: browser tách chuyển giao ra khối riêng ⇒ "Lịch sử chăm sóc"; mặc định giữ nguyên cho mobile dược sĩ. */
+  title?: string
 }) {
   const [rows, setRows] = useState<CareInteractionRow[]>(initial.rows)
   const [next, setNext] = useState<number | null>(initial.hasMore ? initial.nextBefore : null)
@@ -144,7 +146,7 @@ export function CareTimeline({ taskId, initial, events, loadMore, showHeading = 
 
   return (
     <section className="space-y-3" data-testid="care-timeline">
-      <h2 className={showHeading ? 'flex items-center gap-2 text-base font-semibold' : 'sr-only'}><History className="size-4" /> Lịch sử chăm sóc &amp; chuyển giao</h2>
+      <h2 className={showHeading ? 'flex items-center gap-2 text-base font-semibold' : 'sr-only'}><History className="size-4" /> {title}</h2>
       {items.length === 0 ? <EmptyState title="Chưa có lượt chăm sóc nào" /> : (
         <ol className="space-y-3 border-l pl-4">
           {items.map((it) => <li key={it.key} className="relative before:absolute before:-left-[21px] before:top-1.5 before:size-2.5 before:rounded-full before:bg-border">{it.node}</li>)}

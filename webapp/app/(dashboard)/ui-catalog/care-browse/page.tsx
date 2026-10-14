@@ -111,7 +111,11 @@ async function fakePanel(input: { taskId: string }): Promise<CareTaskPanelResult
       task: { ...r, phone_norm: PHONES[i], phone_raw: PHONES[i], period_month: '2026-10-01', due_date: '2026-10-31', first_overdue_on: i === 2 ? '2026-10-03' : null, completed_at: r.status === 'completed' ? '2026-10-07T03:00:00Z' : null, closed_at: null },
       products: Array.from({ length: r.product_count }, (_, k) => ({ id: `p${i}${k}`, product_id: `QA-SKU-000${k + 1}`, product_name: `Sản phẩm QA 000${k + 1}`, image_url: null, reason_type: 'promotion', reason_text: 'QA: sản phẩm đang có chương trình tháng' })),
       interactions: i === 1 ? fakePage(null) : { rows: [], hasMore: false, nextBefore: null },
-      events: [{ id: 10, kind: 'assigned', note: null, created_at: '2026-10-01T02:00:00Z', from_user: null, to_user: r.assignee, actor: { full_name: 'QA Marketing' }, from_store: null, to_store: r.store ? { code: r.store.code } : null }],
+      events: [
+        { id: 10, kind: 'assigned', note: null, created_at: '2026-10-01T02:00:00Z', from_user: null, to_user: r.assignee, actor: { full_name: 'QA Marketing' }, from_store: null, to_store: r.store ? { code: r.store.code } : null },
+        // B8.5: khách thứ 2 có MỘT lần chuyển giao (drawer); các khách khác chỉ có sự kiện import ⇒ "Chưa có lần chuyển giao".
+        ...(i === 1 ? [{ id: 20, kind: 'transferred' as const, note: 'QA: chuyển để cân tải', created_at: '2026-10-03T04:15:00Z', from_user: { full_name: 'QA Dược sĩ 01b' }, to_user: r.assignee, actor: { full_name: 'QA SM' }, from_store: { code: 'QAOS01' }, to_store: r.store ? { code: r.store.code } : null }] : []),
+      ],
     },
     transfer: r.status === 'open' ? { id: r.id, customerName: r.customer_name, storeId: r.store_id, storeCode: r.store?.code ?? '—', assigneeId: r.assignee_id, assigneeName: r.assignee?.full_name ?? '—' } : null,
   }
@@ -203,9 +207,11 @@ export default async function CareBrowseCatalogPage({ searchParams }: { searchPa
               { id: 'p2', product_id: 'QA-SKU-0002', product_name: 'Sản phẩm QA 0002 có tên rất dài để kiểm tra cắt dòng hai dòng trên màn hình nhỏ', image_url: 'https://example.invalid/ngoai-cdn.png', reason_type: 'promotion', reason_text: 'QA: sản phẩm đang có chương trình tháng' },
             ],
             interactions: fakePage(null),
+            // B8.5: HAI lần chuyển giao (đặt lệch thứ tự để kiểm "mới nhất trước") + sự kiện import.
             events: [
-              { id: 11, kind: 'transferred', note: 'QA: dược sĩ nghỉ phép', created_at: '2026-10-04T03:00:00Z', from_user: { full_name: 'QA Dược sĩ 01b' }, to_user: { full_name: 'QA Dược sĩ 01a' }, actor: { full_name: 'QA SM' }, from_store: { code: 'QAOS01' }, to_store: { code: 'QAOS01' } },
-              { id: 10, kind: 'assigned', note: null, created_at: '2026-10-01T02:00:00Z', from_user: null, to_user: { full_name: 'QA Dược sĩ 01b' }, actor: { full_name: 'QA Marketing' }, from_store: null, to_store: { code: 'QAOS01' } },
+              { id: 9, kind: 'transferred', note: 'QA: tạm giao cửa hàng 2', created_at: '2026-10-02T09:30:00Z', from_user: { full_name: 'QA Dược sĩ 01a' }, to_user: { full_name: 'QA Dược sĩ 02a' }, actor: { full_name: 'QA Super' }, from_store: { code: 'QAOS01' }, to_store: { code: 'QAOS02' } },
+              { id: 11, kind: 'transferred', note: 'QA: dược sĩ nghỉ phép', created_at: '2026-10-04T03:00:00Z', from_user: { full_name: 'QA Dược sĩ 02a' }, to_user: { full_name: 'QA Dược sĩ 01a' }, actor: { full_name: 'QA SM' }, from_store: { code: 'QAOS02' }, to_store: { code: 'QAOS01' } },
+              { id: 10, kind: 'assigned', note: null, created_at: '2026-10-01T02:00:00Z', from_user: null, to_user: { full_name: 'QA Dược sĩ 01a' }, actor: { full_name: 'QA Marketing' }, from_store: null, to_store: { code: 'QAOS01' } },
             ],
           }} />
       </section>

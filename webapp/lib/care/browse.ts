@@ -276,6 +276,16 @@ export type CareOutcomeKey = CareOutcome | 'none'
 export const CARE_OUTCOME_KEYS: readonly CareOutcomeKey[] = [...CARE_OUTCOMES, 'none']
 
 /**
+ * B8.5 — các lần SM/super chuyển giao (A → B) của một task: CHỈ `transferred` (sự kiện `assigned` khi import
+ * KHÔNG phải chuyển giao), mới nhất trước (cùng thời điểm ⇒ id lớn trước). Dữ liệu là `care_assignment_events`
+ * đã đọc qua session/RLS ở loader chi tiết — không truy vấn thêm.
+ */
+export function careTransferEvents<T extends { id: number; kind: string; created_at: string }>(events: readonly T[]): T[] {
+  return events.filter((e) => e.kind === 'transferred')
+    .sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : b.id - a.id))
+}
+
+/**
  * Phân bố kết quả theo task từ SỐ ĐẾM (server đếm head:true theo từng khoá —
  * SPEC B3 §2: aggregate ở server, không tải toàn bộ dòng chỉ để vẽ).
  */

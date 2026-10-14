@@ -5,10 +5,13 @@ import { careTaskState, CARE_STATUS_LABELS, type CareInteractionPage } from '@/l
 import { formatDateTime } from '@/lib/dateUtils'
 import { CareProductGallery, type CareProductView } from './CareProductGallery'
 import { CareTimeline, type CareLoadMoreInteractions, type CareTimelineEvent } from './CareTimeline'
+import { CareTransferHistory } from './CareTransferHistory'
 
 // Chi tiết task browser, CHỈ ĐỌC (SPEC B3 §2): snapshot khách/kỳ/hạn/owner/store/
 // trạng thái; sản phẩm của task từ file import hiện hành; dòng thời gian lượt chăm
-// sóc + chuyển giao theo RLS (lịch sử khách theo helper B1). Không phải lịch sử mua.
+// sóc theo RLS (lịch sử khách theo helper B1). Không phải lịch sử mua.
+// B8.5: "Lịch sử chuyển giao" (A → B) thành khối riêng ngay dưới "Dược sĩ phụ trách"; lịch sử chăm sóc browser không
+// lặp lại sự kiện chuyển giao (vẫn giữ "Phân công từ file"). Mobile dược sĩ (CareMyTaskDetail) không đổi.
 
 export interface CareDetailViewData {
   task: {
@@ -69,6 +72,9 @@ export function CareTaskDetailView({ taskId, data, todayISO, actions, loadMore, 
           {t.completed_at && <Field label="Hoàn thành lúc">{formatDateTime(t.completed_at)}</Field>}
           {t.closed_at && <Field label="Đóng kỳ lúc">{formatDateTime(t.closed_at)}</Field>}
         </dl>
+        <div className={panel ? 'pt-1' : 'mt-4 border-t pt-4'}>
+          <CareTransferHistory events={data.events} />
+        </div>
       </section>
 
       {/* B7-ui: desktop rộng — sản phẩm và lịch sử đặt cạnh nhau (trước đây thẻ sản phẩm chiếm nửa hàng, nửa còn lại trống). */}
@@ -78,7 +84,8 @@ export function CareTaskDetailView({ taskId, data, todayISO, actions, loadMore, 
           {data.products.length ? <CareProductGallery products={data.products} columns={panel ? 'single' : 'auto'} /> : <EmptyState title="Không có sản phẩm" />}
         </section>
 
-        <CareTimeline taskId={taskId} initial={data.interactions} events={data.events} loadMore={loadMore} />
+        <CareTimeline taskId={taskId} initial={data.interactions} events={data.events.filter((e) => e.kind !== 'transferred')} loadMore={loadMore}
+          title="Lịch sử chăm sóc" />
       </div>
     </div>
   )

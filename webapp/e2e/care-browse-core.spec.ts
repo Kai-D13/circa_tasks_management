@@ -8,7 +8,7 @@ import {
   isPastPeriod, mapCareTransferError, parseCareFilters, recentCarePeriods, validateTransferInput, careSafeImageUrl, CARE_OUTCOME_KEYS,
   careInteractionPage, CARE_INTERACTION_PAGE_SIZE, CARE_EXCLUDED_ROLES,
   careStatusChipTabs, careApptHint, careShortDateTime, careTransferConflicts, careOpenLoadByAssignee, parseCareOpenParam,
-  careCurrentProductCount, CARE_STATUS_CHIP_LABELS,
+  careCurrentProductCount, CARE_STATUS_CHIP_LABELS, careTransferEvents,
   type CareAccess, type CareQueryBuilder, type CareReportRow, type CareTotals,
 } from '../lib/care/browse'
 import { CARE_DASHBOARD_LINK_STATUS, CARE_REPORT_LINK_STATUS, careReportKey, careReportLines, careReportSummary } from '../lib/care/reports'
@@ -698,6 +698,26 @@ test.describe('care B3 — parity browser ↔ migration 114 (PGlite) @desktop', 
     // Super / care admin toàn chuỗi; QLCH vẫn 0.
     for (const who of [U.super, U.mkt]) expect(await see(who)).toEqual({ task: 1, notes: [NOTE_X, NOTE_Y], events: ['assigned', 'transferred'], dnc: 1 })
     expect(await see(U.qlch1)).toEqual({ task: 0, notes: [], events: [], dnc: 0 })
+    // B8.5: khối "Lịch sử chuyển giao" = careTransferEvents trên CHÍNH các dòng care_assignment_events vai đó đọc
+    // được (RLS 114), và chỉ hiện khi vai đó MỞ ĐƯỢC chi tiết task (loader chi tiết đọc task trước, ngoài phạm vi ⇒ 404).
+    // ĐÍNH CHÍNH (PM B8.5 r1): SM chỉ quản lý store NGUỒN (SM3) đọc được dòng sự kiện theo RLS nhưng task đã chuyển ra
+    // ngoài vùng ⇒ không mở được chi tiết ⇒ KHÔNG thấy khối. Thấy khối: SM vùng đích (sm2), SM quản lý cả nguồn+đích
+    // (sm), super/Marketing, staff mới (A). Không thấy: staff cũ (C), QLCH, SM chỉ vùng nguồn (SM3).
+    const transfersOf = async (who: string) => careTransferEvents((await L.as(db, who, async () => (await db.query(
+      `SELECT id, kind, created_at::text AS created_at, note, actor_id FROM public.care_assignment_events WHERE task_id = $1`, [c1.id])).rows)) as
+      { id: number; kind: string; created_at: string; note: string | null; actor_id: string }[]).map((e) => `${e.note}|${e.actor_id === U.super ? 'super' : e.actor_id}`)
+    const opensDetail = async (who: string) => (await see(who)).task === 1   // cùng điều kiện loader chi tiết đọc được task
+    for (const who of [U.sm2, U.sm, U.A, U.super, U.mkt]) {
+      expect(await opensDetail(who), who).toBe(true)
+      expect(await transfersOf(who), who).toEqual(['QA chuyển X→Y|super'])
+    }
+    // SM3: RLS cho đọc dòng sự kiện (chạm store nguồn X) nhưng KHÔNG mở được task ⇒ khối không hiển thị cho SM3.
+    expect(await transfersOf(SM3)).toEqual(['QA chuyển X→Y|super'])
+    expect(await opensDetail(SM3)).toBe(false)
+    for (const who of [U.C, U.qlch1]) {
+      expect(await opensDetail(who), who).toBe(false)
+      expect(await transfersOf(who), who).toEqual([])
+    }
     for (const who of [U.sm2, SM3, U.sm, U.A, U.C, U.super, U.mkt, U.qlch1]) expect(await attrDenied(who), who).toBe(true)
     // care_report theo store snapshot (Q-79) — kênh DUY NHẤT xem Có đơn (Q-95): attribution tại X không vào vùng Y.
     const conv = async (who: string) => (await report(who, P10)).reduce((n, r) => n + r.converted_tasks, 0)
@@ -793,5 +813,35 @@ test.describe('care B8.4 — /care: link KPI cùng tập + thông báo lỗi k�
       expect(branch, p).toContain('<CareUnavailableState />')
       expect(s, p).not.toMatch(/chưa có cấu hình CRM|Hệ thống CRM chưa sẵn sàng/)
     }
+  })
+})
+
+// ── B8.5: Lịch sử chuyển giao — logic thuần + nguồn (quyền: test PGlite Q-79 ở trên dùng chính hàm này) ──────
+test.describe('care B8.5 — Lịch sử chuyển giao (thuần + nguồn) @desktop', () => {
+  const ev = (id: number, kind: 'assigned' | 'transferred', at: string) => ({ id, kind, created_at: at })
+  test('chỉ `transferred` (import `assigned` không tính), mới nhất trước, cùng thời điểm ⇒ id lớn trước; 0/1/n', () => {
+    expect(careTransferEvents([])).toEqual([])
+    expect(careTransferEvents([ev(1, 'assigned', '2026-10-01T02:00:00Z')])).toEqual([])
+    expect(careTransferEvents([ev(1, 'assigned', '2026-10-01T02:00:00Z'), ev(2, 'transferred', '2026-10-03T04:00:00Z')]).map((e) => e.id)).toEqual([2])
+    const n = [ev(5, 'transferred', '2026-10-02T09:30:00Z'), ev(1, 'assigned', '2026-10-01T02:00:00Z'),
+      ev(7, 'transferred', '2026-10-04T03:00:00Z'), ev(6, 'transferred', '2026-10-04T03:00:00Z'), ev(3, 'transferred', '2026-10-03T00:00:00Z')]
+    expect(careTransferEvents(n).map((e) => e.id)).toEqual([7, 6, 3, 5])
+    expect(n.map((e) => e.id)).toEqual([5, 1, 7, 6, 3])                     // không đổi mảng gốc
+  })
+
+  test('nguồn: khối trên chi tiết browser dùng CHÍNH data.events (session/RLS) — không query/RPC mới; lịch sử chăm sóc browser bỏ `transferred`; mobile dược sĩ giữ nguyên', () => {
+    const view = read('components/care/CareTaskDetailView.tsx')
+    expect(view).toContain('<CareTransferHistory events={data.events} />')
+    expect(view).toContain("events={data.events.filter((e) => e.kind !== 'transferred')}")
+    // Khối nằm trong phần thông tin, sau <dl> (Dược sĩ phụ trách), trước sản phẩm/lịch sử.
+    expect(view.indexOf('label="Dược sĩ phụ trách"')).toBeLessThan(view.indexOf('<CareTransferHistory'))
+    expect(view.indexOf('<CareTransferHistory')).toBeLessThan(view.indexOf('Sản phẩm cần chăm sóc'))
+    const comp = read('components/care/CareTransferHistory.tsx')
+    expect(comp).toContain('const list = careTransferEvents(events)')
+    expect(comp).not.toMatch(/supabase|createClient|\.rpc\(|\.from\(|'use server'|fetch\(/)
+    // Mobile dược sĩ: không đổi (vẫn truyền đủ events, tiêu đề ẩn mặc định).
+    expect(read('components/care/CareMyTaskDetail.tsx')).toContain('events={data.events} loadMore={loadMore} showHeading={false} />')
+    // Loader chi tiết vẫn là nguồn duy nhất (đã có từ B3) — B8.5 không thêm đường đọc.
+    expect(read('lib/care/server/browse.ts').match(/from\('care_assignment_events'\)/g)?.length ?? 0).toBe(1)
   })
 })

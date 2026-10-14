@@ -754,3 +754,95 @@ test.describe('care B8.4 r1.1 — /care kỳ 0 task mobile @mobile', () => {
     }
   })
 })
+
+// ── B8.5: "Lịch sử chuyển giao" trên chi tiết khách browser (trang đầy đủ + drawer) ───────────────────────────
+const SHOTS_B85 = path.resolve(__dirname, '..', 'qa-artifacts', 'b8-5')
+const noOverflowInside = (loc: ReturnType<Page['locator']>) => loc.evaluate((el) => el.scrollWidth <= el.clientWidth + 1)
+
+test.describe('care B8.5 — Lịch sử chuyển giao (dữ liệu giả) @desktop', () => {
+  test.skip(!HAS_STATE, 'chưa có storageState super')
+  test.use({ storageState: SUPER_STATE })
+
+  test('trang chi tiết: n = 2 lần, mới nhất trước, A → B + người chuyển + ghi chú; lịch sử chăm sóc KHÔNG lặp sự kiện chuyển giao; 0 lần ⇒ "Chưa có lần chuyển giao"', async ({ page }) => {
+    await openCatalog(page)
+    const det = page.getByTestId('catalog-care-detail')
+    const box = det.getByTestId('care-transfer-history')
+    await expect(box.getByRole('heading', { name: /Lịch sử chuyển giao/ })).toContainText('(2)')
+    const items = box.getByTestId('care-transfer-item')
+    await expect(items).toHaveCount(2)
+    // "sang" là chữ ẩn cho trình đọc màn hình (mũi tên aria-hidden).
+    await expect(items.nth(0)).toContainText(/QA Dược sĩ 02a \(QAOS02\) →(sang)? QA Dược sĩ 01a \(QAOS01\)/)   // 04/10 — mới nhất
+    await expect(items.nth(0)).toContainText('Người chuyển: QA SM')
+    await expect(items.nth(0)).toContainText('Ghi chú: QA: dược sĩ nghỉ phép')
+    await expect(items.nth(0)).toContainText('04/10/2026')
+    await expect(items.nth(1)).toContainText(/QA Dược sĩ 01a \(QAOS01\) →(sang)? QA Dược sĩ 02a \(QAOS02\)/)   // 02/10
+    await expect(items.nth(1)).toContainText('Người chuyển: QA Super')
+    // Khối nằm trong phần thông tin, ngay dưới "Dược sĩ phụ trách" (trước khối sản phẩm/lịch sử).
+    const y = async (l: ReturnType<Page['locator']>) => (await l.boundingBox())!.y
+    expect(await y(box)).toBeGreaterThan(await y(det.getByText('Dược sĩ phụ trách', { exact: true })))
+    expect(await y(box)).toBeLessThan(await y(det.getByRole('heading', { name: /Sản phẩm cần chăm sóc/ })))
+    // Không hiển thị cùng một sự kiện hai lần: lịch sử chăm sóc chỉ còn lượt chăm sóc + "Phân công từ file".
+    const tl = det.getByTestId('care-timeline')
+    await expect(tl.getByRole('heading', { name: 'Lịch sử chăm sóc' })).toBeVisible()
+    await expect(tl.getByText('Chuyển giao', { exact: true })).toHaveCount(0)
+    await expect(tl.getByText(/QA: dược sĩ nghỉ phép|QA: tạm giao cửa hàng 2/)).toHaveCount(0)
+    await expect(tl.getByText('Phân công từ file', { exact: true })).toHaveCount(1)
+    // 0 lần (khung QA, không event) ⇒ câu trống, không danh sách.
+    const qa = page.getByTestId('catalog-care-detail-qa').getByTestId('care-transfer-history')
+    await expect(qa).toContainText('Chưa có lần chuyển giao')
+    await expect(qa.getByTestId('care-transfer-item')).toHaveCount(0)
+    fs.mkdirSync(SHOTS_B85, { recursive: true })
+    await hideShell(page)
+    await saveLocatorShot(det, path.join(SHOTS_B85, 'desktop-detail-light.png'))
+  })
+
+  test('drawer ≥1280 (cạnh bảng): 1 lần chuyển giao của khách đó; khách chỉ có sự kiện import ⇒ "Chưa có lần chuyển giao"; không tràn ngang', async ({ page }) => {
+    for (const theme of ['light', 'dark'] as const) {
+      await page.setViewportSize({ width: 1440, height: 900 })
+      const fr = await openFrame(page, theme)
+      await fr.getByTestId('care-task-table').getByRole('link', { name: 'KH QA 00002' }).click()
+      const dr = page.getByTestId('care-task-drawer')
+      await expect(dr.getByRole('heading', { name: 'KH QA 00002' })).toBeVisible()
+      const box = dr.getByTestId('care-transfer-history')
+      await expect(box.getByTestId('care-transfer-item')).toHaveCount(1)
+      await expect(box).toContainText(/QA Dược sĩ 01b \(QAOS01\) →(sang)? QA Dược sĩ 01a/)
+      await expect(box).toContainText('Người chuyển: QA SM')
+      await expect(box).toContainText('Ghi chú: QA: chuyển để cân tải')
+      await expect(dr.getByTestId('care-timeline').getByText('Chuyển giao', { exact: true })).toHaveCount(0)
+      expect(await noOverflowInside(box)).toBe(true)
+      // Drawer cạnh bảng rộng 400px (CareTaskDrawer w-[400px]) — khối chuyển giao nằm gọn trong đó.
+      expect(Math.abs((await page.locator('aside[aria-label="Chi tiết khách"]').boundingBox())!.width - 400)).toBeLessThanOrEqual(1)
+      expect((await box.boundingBox())!.width).toBeLessThanOrEqual(400)
+      fs.mkdirSync(SHOTS_B85, { recursive: true })
+      await hideShell(page)
+      await page.screenshot({ path: path.join(SHOTS_B85, `desktop-1440-${theme}-drawer.png`), fullPage: true })
+      await page.keyboard.press('Escape')
+      await fr.getByTestId('care-task-table').getByRole('link', { name: 'KH QA 00001' }).click()
+      await expect(dr.getByRole('heading', { name: 'KH QA 00001' })).toBeVisible()
+      await expect(dr.getByTestId('care-transfer-history')).toContainText('Chưa có lần chuyển giao')
+      await expect(dr.getByTestId('care-transfer-item')).toHaveCount(0)
+      await expect(dr.getByTestId('care-timeline').getByText('Phân công từ file', { exact: true })).toHaveCount(1)
+      await page.keyboard.press('Escape')
+    }
+  })
+})
+
+test.describe('care B8.5 — Lịch sử chuyển giao drawer mobile @mobile', () => {
+  test.skip(!HAS_STATE, 'chưa có storageState super')
+  test.use({ storageState: SUPER_STATE })
+
+  test('360/393: drawer phủ màn có khối chuyển giao, không tràn ngang; ảnh', async ({ page }) => {
+    const w = page.viewportSize()!.width
+    const fr = await openFrame(page)
+    await fr.getByTestId('care-task-table').getByRole('link', { name: 'KH QA 00002' }).click()
+    const dlg = page.getByRole('dialog')
+    await expect(dlg.getByRole('heading', { name: 'KH QA 00002' })).toBeVisible()
+    const box = dlg.getByTestId('care-transfer-history')
+    await expect(box.getByTestId('care-transfer-item')).toHaveCount(1)
+    expect(await noOverflowInside(box)).toBe(true)
+    expect(await noPageOverflow(page)).toBe(true)
+    await box.scrollIntoViewIfNeeded()
+    fs.mkdirSync(SHOTS_B85, { recursive: true })
+    await page.screenshot({ path: path.join(SHOTS_B85, `mobile-${w}-drawer.png`) })
+  })
+})
