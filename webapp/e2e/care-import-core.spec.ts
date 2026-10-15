@@ -2,12 +2,12 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect } from '@playwright/test'
-import * as XLSX from 'xlsx'
 import {
-  CARE_ERROR_FIXES, CARE_ERROR_LABELS, CARE_ERROR_SHORT, CARE_IMPORT_COLUMN_RULES, CARE_IMPORT_MAX_ROWS, CARE_IMPORT_HEADERS as CONTRACT_HEADERS, CARE_IMPORT_SHEET as CONTRACT_SHEET,
+  CARE_ERROR_FIXES, CARE_ERROR_LABELS, CARE_ERROR_SHORT, CARE_FILE_ERROR_CODES, CARE_IMPORT_COLUMN_RULES, CARE_IMPORT_MAX_ROWS, CARE_IMPORT_HEADERS as CONTRACT_HEADERS,
   CARE_ROW_ERROR_CODES, careColumnLetter, careOneField, type CareImportRow,
 } from '../lib/care/import/contract'
-import { CARE_NUMERIC_PRODUCT_ID_MAX_DIGITS, numericProductId, parseCareImportXlsx } from '../lib/care/import/parse'
+import { CARE_CSV_BLANK_SLACK, CARE_CSV_MAX_FIELDS, CARE_SCIENTIFIC_ID_RE, parseCareImportCsv } from '../lib/care/import/parse'
+import { CARE_CSV_BOM, decodeCareCsv, parseCsvRecords, toCareCsv } from '../lib/care/import/csvCore'
 import { validateCareRows } from '../lib/care/import/validate'
 import { buildCarePreview, type CareExistingTask, type CareImportLookups, type CarePreviewCustomer } from '../lib/care/import/preview'
 import { careAssignmentTable, careErrorCodeCounts } from '../lib/care/import/review'
@@ -15,28 +15,34 @@ import {
   CARE_PREVIEW_ERROR_LIMIT, careErrorPayload, careServerTiming, handleCareCommit, handleCarePreview, handleCareTemplate,
   type CareFinalizeResult, type CareImportAccess, type CareImportDeps, type CareImportRepo,
 } from '../lib/care/import/handler'
-import { buildCareImportTemplate } from '../lib/care/import/template'
-import { CARE_IMPORT_HEADERS as FIXTURE_HEADERS, CARE_IMPORT_SHEET as FIXTURE_SHEET, buildCareImportRows, buildCareImportXlsx, defaultFixtureStores } from './careImportFixture'
+import { CARE_IMPORT_TEMPLATE_FILENAME, buildCareImportTemplate } from '../lib/care/import/template'
+import {
+  CARE_IMPORT_HEADERS as FIXTURE_HEADERS, buildCareImportCsv, buildCareImportRows, careRowsToCsv, defaultFixtureStores, fixtureCsv,
+} from './careImportFixture'
 
-// CRM-CSKH B2 — lõi import THUẦN (không DB, không server): parser Excel,
-// validate/gom khách, preview diff, Route Handler (deps giả: quyền, repo, đồng hồ).
-// Parity với finalize SQL 114 nằm ở care-import-parity.spec.ts (PGlite).
+// CRM-CSKH B2 — lõi import THUẦN (không DB, không server): parser CSV (Q-124), validate/gom khách, preview diff,
+// Route Handler (deps giả: quyền, repo, đồng hồ). Parity với finalize SQL 114 nằm ở care-import-parity.spec.ts (PGlite).
 
 const ROOT = path.resolve(__dirname, '..')
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-type Cell = string | number | boolean | { f: string } | null
-function xlsx(aoa: Cell[][], opts: { sheets?: string[] } = {}): Uint8Array<ArrayBuffer> {
-  const wb = XLSX.utils.book_new()
-  for (const name of opts.sheets ?? [CONTRACT_SHEET]) {
-    const ws = XLSX.utils.aoa_to_sheet(aoa.map((r) => r.map((c) => (c !== null && typeof c === 'object' ? null : c))))
-    aoa.forEach((r, ri) => r.forEach((c, ci) => {
-      if (c !== null && typeof c === 'object') ws[XLSX.utils.encode_cell({ r: ri, c: ci })] = { t: 's', v: '', f: c.f }
-    }))
-    XLSX.utils.book_append_sheet(wb, ws, name)
+type Cell = string | null
+const CRLF = String.fromCharCode(13, 10)
+/** Bảng ⇒ bytes CSV. Mặc định như Excel "CSV UTF-8": BOM + CRLF + dấu phẩy. */
+function csv(aoa: Cell[][], opts: { bom?: boolean; eol?: string; sep?: string } = {}): Uint8Array<ArrayBuffer> {
+  const sep = opts.sep ?? ','
+  const field = (v: Cell) => {
+    const s = v ?? ''
+    return sep === ',' && /[",\r\n]|^\s|\s$/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
   }
-  return new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer)
+  const text = (opts.bom === false ? '' : CARE_CSV_BOM) + aoa.map((row) => row.map(field).join(sep)).join(opts.eol ?? CRLF) + (opts.eol ?? CRLF)
+  const bytes = new TextEncoder().encode(text)
+  const out = new Uint8Array(new ArrayBuffer(bytes.byteLength))
+  out.set(bytes)
+  return out
 }
+/** Bytes thô (để dựng file hỏng: ANSI, UTF-16, nháy lạc…). */
+const raw = (text: string) => new TextEncoder().encode(text)
 const H = [...CONTRACT_HEADERS] as Cell[]
 const r = (ext: string, store: string, email: string, pid: string, over: Partial<Record<(typeof CONTRACT_HEADERS)[number], Cell>> = {}): Cell[] => {
   const base: Record<string, Cell> = {
@@ -60,20 +66,23 @@ function lookups(over: Partial<CareImportLookups> = {}): CareImportLookups {
   }
 }
 const previewOf = (bytes: Uint8Array, lk = lookups(), isTest = false) => {
-  const p = parseCareImportXlsx(bytes)
+  const p = parseCareImportCsv(bytes)
   if (!p.ok) throw new Error(p.fileError)
   return buildCarePreview({ rowCount: p.rows.length, validated: validateCareRows(p.rows), parseErrors: p.errors, lookups: lk, period: '2026-10-01', isTest })
 }
 const codes = (errs: { row: number; code: string }[]) => errs.map((e) => `${e.row}:${e.code}`)
 
-test.describe('care B2 — contract & parser Excel @desktop', () => {
-  test('hợp đồng: header/sheet của lib trùng fixture B0 (một nguồn)', () => {
+test.describe('care Q-124 — contract & parser CSV @desktop', () => {
+  test('hợp đồng: header của lib trùng fixture B0 (một nguồn); fixture ghi CSV giống hệt toCareCsv của app', () => {
     expect([...CONTRACT_HEADERS]).toEqual([...FIXTURE_HEADERS])
-    expect(CONTRACT_SHEET).toBe(FIXTURE_SHEET)
+    const sample = [[...CONTRACT_HEADERS], ['a,b', 'nháy "kép"', ' đầu', 'cuối ', `dòng${CRLF}hai`, '=1+1', '', 'x', 'y', 'z']]
+    expect(fixtureCsv(sample)).toBe(toCareCsv(sample))
+    expect(CARE_FILE_ERROR_CODES).toEqual(['FILE_NOT_CSV', 'ENCODING_INVALID', 'DELIMITER_INVALID', 'CSV_MALFORMED', 'HEADER_INVALID', 'NO_ROWS', 'TOO_MANY_ROWS'])
+    for (const c of CARE_FILE_ERROR_CODES) expect(CARE_ERROR_LABELS[c], c).toBeTruthy()
   })
 
-  test('fixture B0 25 store / 100 khách: đọc đủ, không lỗi, dòng Excel gốc', () => {
-    const p = parseCareImportXlsx(buildCareImportXlsx())
+  test('fixture B0 25 store / 100 khách: đọc đủ, không lỗi, số bản ghi gốc', () => {
+    const p = parseCareImportCsv(buildCareImportCsv())
     expect(p.ok).toBe(true)
     if (!p.ok) return
     expect(p.errors).toEqual([])
@@ -83,136 +92,129 @@ test.describe('care B2 — contract & parser Excel @desktop', () => {
     expect(p.rows.every((x) => /^0\d{9}$/.test(x.customer_phone))).toBe(true)
   })
 
-  test('lỗi cả file: không phải xlsx, zip hỏng, sai sheet, nhiều sheet, header sai/thiếu/dư, không dòng, vượt trần', () => {
-    expect(parseCareImportXlsx(new TextEncoder().encode('customer_external_id,customer_name\nX,Y'))).toEqual({ ok: false, fileError: 'WORKBOOK_INVALID' })
-    expect(parseCareImportXlsx(new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 4, 5]))).toEqual({ ok: false, fileError: 'WORKBOOK_INVALID' })
-    expect(parseCareImportXlsx(xlsx([H, r('A', 'QAOS01', EA, 'P1')], { sheets: ['Sheet1'] }))).toEqual({ ok: false, fileError: 'SHEET_INVALID' })
-    expect(parseCareImportXlsx(xlsx([H, r('A', 'QAOS01', EA, 'P1')], { sheets: ['KhachHang', 'Ghi chu'] }))).toEqual({ ok: false, fileError: 'SHEET_INVALID' })
+  test('lỗi cả file: nhị phân/.xlsx đổi đuôi, UTF-16, ANSI, dấu ; / tab, header sai/thiếu/dư, nháy hỏng, không dòng, vượt trần', () => {
+    const one = [H, r('A', 'QAOS01', EA, 'P1')]
+    const ok = csv(one)
+    expect(parseCareImportCsv(new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3]))).toEqual({ ok: false, fileError: 'FILE_NOT_CSV' }) // ZIP (.xlsx)
+    expect(parseCareImportCsv(new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 1, 2]))).toEqual({ ok: false, fileError: 'FILE_NOT_CSV' }) // .xls OLE
+    expect(parseCareImportCsv(new Uint8Array([...raw('customer_external_id'), 0, 0x41]))).toEqual({ ok: false, fileError: 'FILE_NOT_CSV' }) // byte NUL
+    expect(parseCareImportCsv(new Uint8Array([0xff, 0xfe, 0x63, 0x00]))).toEqual({ ok: false, fileError: 'ENCODING_INVALID' }) // UTF-16 LE
+    // "CSV (Comma delimited)" ANSI Windows-1258: "Nguyễn" có byte 0xE3/0xF2… không hợp lệ UTF-8.
+    const ansi = new Uint8Array([...raw(`${CONTRACT_HEADERS.join(',')}${CRLF}A,Nguy`), 0xf2, 0x6e, ...raw(`,0390000999,QAOS01,${EA},c,r,P1,SP,${CRLF}`)])
+    expect(parseCareImportCsv(ansi)).toEqual({ ok: false, fileError: 'ENCODING_INVALID' })
+    expect(parseCareImportCsv(csv(one, { sep: ';' }))).toEqual({ ok: false, fileError: 'DELIMITER_INVALID' })
+    expect(parseCareImportCsv(csv(one, { sep: '\t' }))).toEqual({ ok: false, fileError: 'DELIMITER_INVALID' })
     const swapped = [...H]; [swapped[0], swapped[1]] = [swapped[1], swapped[0]]
-    expect(parseCareImportXlsx(xlsx([swapped, r('A', 'QAOS01', EA, 'P1')]))).toEqual({ ok: false, fileError: 'HEADER_INVALID' })
-    expect(parseCareImportXlsx(xlsx([H.slice(0, 9), r('A', 'QAOS01', EA, 'P1').slice(0, 9)]))).toEqual({ ok: false, fileError: 'HEADER_INVALID' })
-    expect(parseCareImportXlsx(xlsx([[...H, 'due_date'], [...r('A', 'QAOS01', EA, 'P1'), '2026-10-31']]))).toEqual({ ok: false, fileError: 'HEADER_INVALID' })
-    expect(parseCareImportXlsx(xlsx([H]))).toEqual({ ok: false, fileError: 'NO_ROWS' })
+    expect(parseCareImportCsv(csv([swapped, r('A', 'QAOS01', EA, 'P1')]))).toEqual({ ok: false, fileError: 'HEADER_INVALID' })
+    expect(parseCareImportCsv(csv([H.slice(0, 9), r('A', 'QAOS01', EA, 'P1').slice(0, 9)]))).toEqual({ ok: false, fileError: 'HEADER_INVALID' })
+    expect(parseCareImportCsv(csv([[...H, 'due_date'], [...r('A', 'QAOS01', EA, 'P1'), '2026-10-31']]))).toEqual({ ok: false, fileError: 'HEADER_INVALID' })
+    expect(parseCareImportCsv(csv([[...H, ''], [...r('A', 'QAOS01', EA, 'P1'), '']])).ok).toBe(true) // cột trống thừa ở cuối: bỏ qua
+    expect(parseCareImportCsv(raw(`${CONTRACT_HEADERS.join(',')}${CRLF}"A,0390000999${CRLF}`))).toEqual({ ok: false, fileError: 'CSV_MALFORMED' }) // nháy không đóng
+    expect(parseCareImportCsv(raw(`${CONTRACT_HEADERS.join(',')}${CRLF}A"B,x,x,x,x,x,x,x,x,x${CRLF}`))).toEqual({ ok: false, fileError: 'CSV_MALFORMED' }) // nháy lạc
+    expect(parseCareImportCsv(raw(`${CONTRACT_HEADERS.join(',')}${CRLF}"A"B,x,x,x,x,x,x,x,x,x${CRLF}`))).toEqual({ ok: false, fileError: 'CSV_MALFORMED' }) // chữ sau nháy đóng
+    expect(parseCareImportCsv(csv([H]))).toEqual({ ok: false, fileError: 'NO_ROWS' })
+    expect(parseCareImportCsv(new Uint8Array())).toEqual({ ok: false, fileError: 'NO_ROWS' })
+    expect(parseCareImportCsv(raw(CARE_CSV_BOM + CRLF + CRLF))).toEqual({ ok: false, fileError: 'NO_ROWS' })
     const six = [H, ...Array.from({ length: 6 }, (_, i) => r(`A${i}`, 'QAOS01', EA, 'P1'))]
-    expect(parseCareImportXlsx(xlsx(six), 5)).toEqual({ ok: false, fileError: 'TOO_MANY_ROWS' })
-    expect(parseCareImportXlsx(xlsx(six), 6).ok).toBe(true)
+    expect(parseCareImportCsv(csv(six), 5)).toEqual({ ok: false, fileError: 'TOO_MANY_ROWS' })
+    expect(parseCareImportCsv(csv(six), 6).ok).toBe(true)
+    expect(parseCareImportCsv(ok).ok).toBe(true)
+    // UTF-16 LE KHÔNG BOM (chữ Latin ⇒ nửa số byte là 0) ⇒ sai mã hoá, không phải "file nhị phân".
+    const u16 = new Uint8Array([...raw('customer_external_id,customer_name')].flatMap((x) => [x, 0]))
+    expect(parseCareImportCsv(u16)).toEqual({ ok: false, fileError: 'ENCODING_INVALID' })
   })
 
-  test('Q-121 trần thật 20.000 dòng: 19.999 và 20.000 nhận, 20.001 ⇒ TOO_MANY_ROWS; thông báo đọc cùng hằng số', () => {
-    expect(CARE_IMPORT_MAX_ROWS).toBe(20_000)
-    expect(CARE_ERROR_LABELS.TOO_MANY_ROWS).toBe('File vượt 20.000 dòng dữ liệu')
-    const big = (n: number) => xlsx([H, ...Array.from({ length: n }, (_, i) => r(`C${i}`, 'QAOS01', EA, 'P1'))])
-    for (const n of [19_999, 20_000]) {
-      const p = parseCareImportXlsx(big(n))
+  test('security Q-124 P1: dừng đọc sớm — quá nhiều bản ghi (kể cả dòng trống) ⇒ TOO_MANY_ROWS; một dòng quá nhiều trường ⇒ CSV_MALFORMED', () => {
+    const head = CONTRACT_HEADERS.join(',') + CRLF
+    const line = r('A', 'QAOS01', EA, 'P1').join(',') + CRLF
+    // trần 5 dòng: 5 dữ liệu + đúng CARE_CSV_BLANK_SLACK dòng trống cuối ⇒ còn đọc được; thêm 1 dòng trống ⇒ dừng.
+    expect(parseCareImportCsv(raw(head + line.repeat(5) + CRLF.repeat(CARE_CSV_BLANK_SLACK)), 5).ok).toBe(true)
+    expect(parseCareImportCsv(raw(head + line.repeat(5) + CRLF.repeat(CARE_CSV_BLANK_SLACK + 1)), 5)).toEqual({ ok: false, fileError: 'TOO_MANY_ROWS' })
+    // file ~4 MB toàn dòng trống ⇒ dừng ngay (không dựng hàng triệu bản ghi).
+    const t0 = performance.now()
+    expect(parseCareImportCsv(raw(head + CRLF.repeat(2_000_000) + line))).toEqual({ ok: false, fileError: 'TOO_MANY_ROWS' })
+    expect(performance.now() - t0).toBeLessThan(2000)
+    // một dòng nhiều dấu phẩy ⇒ dừng ở CARE_CSV_MAX_FIELDS trường.
+    expect(parseCareImportCsv(raw(head + ','.repeat(CARE_CSV_MAX_FIELDS) + CRLF))).toEqual({ ok: false, fileError: 'CSV_MALFORMED' })
+    expect(parseCsvRecords('a,b,c', { maxFields: 2 })).toEqual({ ok: false, reason: 'TOO_MANY_FIELDS' })
+    expect(parseCsvRecords('a' + CRLF + 'b' + CRLF + 'c', { maxRecords: 2 })).toEqual({ ok: false, reason: 'TOO_MANY_RECORDS' })
+    expect(parseCsvRecords('"a', {})).toEqual({ ok: false, reason: 'MALFORMED' })
+  })
+
+  test('trần dòng phát hành N = 10.000 (PM 15/10): N−1 và N nhận, N+1 ⇒ TOO_MANY_ROWS; thông báo đọc cùng hằng số; parser đọc được 20.000 khi nâng trần (Q-121)', () => {
+    const N = CARE_IMPORT_MAX_ROWS
+    expect(N).toBe(10_000)
+    expect(CARE_ERROR_LABELS.TOO_MANY_ROWS).toBe(`File vượt ${N.toLocaleString('vi-VN')} dòng dữ liệu`)
+    const big = (n: number) => csv([H, ...Array.from({ length: n }, (_, i) => r(`C${i}`, 'QAOS01', EA, 'P1'))])
+    for (const n of [N - 1, N]) {
+      const p = parseCareImportCsv(big(n))
       expect(p.ok, String(n)).toBe(true)
       if (p.ok) expect([p.rows.length, p.rows[0].rowNo, p.rows[n - 1].rowNo]).toEqual([n, 2, n + 1])
     }
-    expect(parseCareImportXlsx(big(20_001))).toEqual({ ok: false, fileError: 'TOO_MANY_ROWS' })
+    expect(parseCareImportCsv(big(N + 1))).toEqual({ ok: false, fileError: 'TOO_MANY_ROWS' })
+    expect(parseCareImportCsv(big(20_000), 20_000).ok).toBe(true)
+    expect(parseCareImportCsv(big(20_001), 20_000)).toEqual({ ok: false, fileError: 'TOO_MANY_ROWS' })
   })
 
-  test('ô công thức, kiểu lạ ⇒ lỗi dòng; customer_external_id dạng SỐ ⇒ CELL_NOT_TEXT (Q-73); product_id số nguyên ⇒ nhận (Q-97); SĐT dạng số vẫn nhận', () => {
-    const p = parseCareImportXlsx(xlsx([
+  test('RFC 4180: BOM tuỳ chọn, CRLF/LF; dấu phẩy/nháy kép/xuống dòng trong ô; số bản ghi theo BẢN GHI; giữ số 0 đầu; trim; "=" chỉ là chữ', () => {
+    const rows = [
       H,
-      r('A', 'QAOS01', EA, 'P1', { reason_text: { f: '"QA "&"lý do"' } }),
-      r('B', 'QAOS01', EA, 'P1', { customer_name: true }),
-      r('C', 'QAOS01', EA, 'P1', { product_id: 12.5 }),
-      r('D', 'QAOS01', EA, 'P1', { customer_external_id: 123456 }),
-      r('E', 'QAOS01', EA, 'P1', { product_id: 1001 }),
-      r('F', 'QAOS01', EA, 'P1', { customer_phone: 901234567, reason_type: 2026 }),
+      r('007', 'QAOS01', EA, '0042', { reason_text: 'Mua 2, tặng 1', product_name: 'SP "đặc biệt"' }),
+      r('008', 'QAOS01', EA, 'P2', { reason_text: `Dòng 1${CRLF}Dòng 2`, customer_phone: '901234567' }),
+      r('009', 'QAOS01', EA, 'P3', { customer_name: '  KH có khoảng trắng  ', reason_text: '=HYPERLINK("x")' }),
+    ]
+    const base = parseCareImportCsv(csv(rows))
+    expect(base.ok).toBe(true)
+    if (!base.ok) return
+    expect(base.errors).toEqual([])
+    expect(base.rows.map((x) => x.rowNo)).toEqual([2, 3, 4]) // ô 3 có xuống dòng vẫn là bản ghi 3; bản ghi sau là 4
+    const [a, b, c] = base.rows
+    expect([a.customer_external_id, a.product_id, a.reason_text, a.product_name]).toEqual(['007', '0042', 'Mua 2, tặng 1', 'SP "đặc biệt"'])
+    expect(b.reason_text).toBe(`Dòng 1${CRLF}Dòng 2`)
+    expect(validateCareRows([b]).customers[0].phoneNorm).toBe('0901234567') // thiếu số 0 đầu vẫn chuẩn hoá
+    expect([c.customer_name, c.reason_text]).toEqual(['KH có khoảng trắng', '=HYPERLINK("x")'])
+    // Không BOM, LF thay CRLF ⇒ cùng kết quả.
+    const lf = parseCareImportCsv(csv(rows, { bom: false, eol: String.fromCharCode(10) }))
+    expect(lf.ok && JSON.stringify(lf.rows)).toBe(JSON.stringify(base.rows))
+  })
+
+  test('COLUMN_COUNT: bản ghi thiếu/thừa trường có dữ liệu ⇒ lỗi (không field); trường TRỐNG thừa ở cuối bỏ qua', () => {
+    const p = parseCareImportCsv(csv([
+      H,
+      r('A', 'QAOS01', EA, 'P1').slice(0, 9),
+      [...r('B', 'QAOS01', EA, 'P2'), 'thừa'],
+      [...r('C', 'QAOS01', EA, 'P3'), '', ''],
     ]))
     expect(p.ok).toBe(true)
     if (!p.ok) return
-    expect(codes(p.errors)).toEqual(['2:FORMULA_NOT_ALLOWED', '3:CELL_NOT_TEXT', '4:CELL_NOT_TEXT', '5:CELL_NOT_TEXT'])
-    expect(p.rows.find((x) => x.rowNo === 6)!.product_id).toBe('1001') // Q-97: ô Number General hợp lệ
-    const f = p.rows.find((x) => x.rowNo === 7)!
-    expect(f.customer_phone).toBe('901234567')
-    expect(f.reason_type).toBe('2026') // cột không phải ID nhận số như chuỗi
-    expect(validateCareRows([f]).customers[0].phoneNorm).toBe('0901234567')
-    // ID dạng text giữ nguyên số 0 đầu.
-    const t = parseCareImportXlsx(xlsx([H, r('007', 'QAOS01', EA, '0042')]))
-    expect(t.ok && t.errors.length === 0 && t.rows[0].customer_external_id === '007' && t.rows[0].product_id === '0042').toBe(true)
+    expect(p.errors.filter((e) => e.code === 'COLUMN_COUNT')).toEqual([{ row: 2, code: 'COLUMN_COUNT' }, { row: 3, code: 'COLUMN_COUNT' }])
+    expect(p.rows.find((x) => x.rowNo === 4)!.product_id).toBe('P3')
   })
 
-  test('Q-97: product_id ô Number — General 4/7/12/15 chữ số (kể cả hiển thị dạng mũ), format "0"; từ chối đệm số 0/#,##0/phân số/âm/16 chữ số/unsafe; luôn String(v)', () => {
-    const PID = CONTRACT_HEADERS.indexOf('product_id')
-    type PidCell = string | { v: number; z?: string } | { f: string }
-    const cases: [PidCell, string | null][] = [
-      [{ v: 1234 }, '1234'],                                        // 2: không format ⇒ General
-      [{ v: 1234567, z: 'General' }, '1234567'],                    // 3
-      [{ v: 123456789012 }, '123456789012'],                        // 4: 12 chữ số — w = "1.23457E+11"
-      [{ v: 123456789012345 }, '123456789012345'],                  // 5: 15 chữ số — w = "1.23457E+14"
-      [{ v: 123456789012345, z: '0' }, '123456789012345'],          // 6: format "0" — w === String(v)
-      [{ v: 0 }, '0'],                                              // 7: biên dưới
-      [{ v: 1234567, z: '000000000' }, null],                       // 8: đệm số 0 ⇒ hiển thị "001234567"
-      [{ v: 1234567, z: '#,##0' }, null],                           // 9: dấu phân cách ⇒ "1,234,567"
-      [{ v: 12.5 }, null],                                          // 10: phân số
-      [{ v: -5 }, null],                                            // 11: âm
-      [{ v: 1234567890123456 }, null],                              // 12: 16 chữ số (vẫn safe)
-      [{ v: 2 ** 53 + 2 }, null],                                   // 13: không an toàn
-      [{ f: '1000+1' }, null],                                      // 14: công thức
-      ['0042', '0042'],                                             // 15: Text giữ nguyên số 0 đầu
-    ]
-    const ws = XLSX.utils.aoa_to_sheet([H, ...cases.map((_, i) => r(`Q97-${i}`, 'QAOS01', EA, 'X'))].map((row) => row.map((c) => (c !== null && typeof c === 'object' ? null : c))))
-    cases.forEach(([cell], i) => {
-      const ref = XLSX.utils.encode_cell({ r: i + 1, c: PID })
-      if (typeof cell === 'string') ws[ref] = { t: 's', v: cell }
-      else if ('f' in cell) ws[ref] = { t: 's', v: '', f: cell.f }
-      else ws[ref] = { t: 'n', v: cell.v, ...(cell.z ? { z: cell.z } : {}) }
-    })
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, CONTRACT_SHEET)
-    const p = parseCareImportXlsx(new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer))
+  test('ID_NOT_TEXT: mã khách/mã sản phẩm dạng số mũ của Excel ⇒ lỗi; đúng một cột ⇒ field', () => {
+    for (const v of ['1.23457E+14', '1,23457E+14', '1E+15', '9.99999e+11']) expect(CARE_SCIENTIFIC_ID_RE.test(v), v).toBe(true)
+    for (const v of ['123456789012345', 'QA-1E+5', '1.5', 'E+14', '1,5']) expect(CARE_SCIENTIFIC_ID_RE.test(v), v).toBe(false)
+    const p = parseCareImportCsv(csv([
+      H,
+      r('1.23457E+14', 'QAOS01', EA, 'P1'),
+      r('K2', 'QAOS01', EA, '1.23457E+14'),
+      r('1E+15', 'QAOS01', EA, '2E+15'),
+      r('K4', 'QAOS01', EA, '123456789012345'),
+      r('1,23457E+14', 'QAOS01', EA, 'P6'), // Excel vùng VN: dấu phẩy thập phân, ô được bọc nháy trong CSV
+    ]))
     expect(p.ok).toBe(true)
     if (!p.ok) return
-    expect(codes(p.errors)).toEqual(['8:CELL_NOT_TEXT', '9:CELL_NOT_TEXT', '10:CELL_NOT_TEXT', '11:CELL_NOT_TEXT', '12:CELL_NOT_TEXT', '13:CELL_NOT_TEXT', '14:FORMULA_NOT_ALLOWED'])
-    cases.forEach(([, want], i) => { if (want !== null) expect(p.rows.find((x) => x.rowNo === i + 2)!.product_id, `dòng ${i + 2}`).toBe(want) })
-    // Hàm thuần: format khác General chỉ nhận khi w === String(v); không bao giờ lấy w làm giá trị.
-    expect(numericProductId({ v: 1234567, z: '@', w: '1234567' })).toBe('1234567')
-    expect(numericProductId({ v: 1234567, z: '0.00', w: '1234567.00' })).toBeNull()
-    expect(numericProductId({ v: 1234567, z: '"SP"0', w: 'SP1234567' })).toBeNull()
-    expect(numericProductId({ v: 123456789012345, z: 'General', w: '1.23457E+14' })).toBe('123456789012345')
-    expect(numericProductId({ v: -0 })).toBe('0')
-    expect(numericProductId({ v: '1234' as unknown as number })).toBeNull()
-    expect(CARE_NUMERIC_PRODUCT_ID_MAX_DIGITS).toBe(15)
+    expect(p.errors).toEqual([
+      { row: 2, code: 'ID_NOT_TEXT', field: 'customer_external_id' },
+      { row: 3, code: 'ID_NOT_TEXT', field: 'product_id' },
+      { row: 4, code: 'ID_NOT_TEXT' },
+      { row: 6, code: 'ID_NOT_TEXT', field: 'customer_external_id' },
+    ])
   })
 
-  test('Q-97: Text "7654321" và Number 7654321 cùng khách ⇒ cùng ID ⇒ DUPLICATE_PRODUCT; preview Number = preview Text', () => {
-    const PID = CONTRACT_HEADERS.indexOf('product_id')
-    const build = (numericRows: number[], rows: Cell[][]) => {
-      const ws = XLSX.utils.aoa_to_sheet([H, ...rows])
-      for (const i of numericRows) ws[XLSX.utils.encode_cell({ r: i + 1, c: PID })] = { t: 'n', v: Number(rows[i][PID]) }
-      const wb = XLSX.utils.book_new()
-      XLSX.utils.book_append_sheet(wb, ws, CONTRACT_SHEET)
-      return new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer)
-    }
-    const dup = previewOf(build([1], [r('D', 'QAOS01', EA, '7654321'), r('D', 'QAOS01', EA, '7654321', { reason_text: 'khác' })]))
-    expect(codes(dup.errors)).toEqual(['2:DUPLICATE_PRODUCT', '3:DUPLICATE_PRODUCT'])
-    const rows = [r('N', 'QAOS01', EA, '1234'), r('N', 'QAOS01', EA, '123456789012345'), r('M', 'QAOS01', EB, '1234567')]
-    const asText = previewOf(build([], rows))
-    const asNumber = previewOf(build([0, 1, 2], rows))
-    expect(asNumber.errors).toEqual([])
-    expect(JSON.stringify(asNumber.customers)).toBe(JSON.stringify(asText.customers))
-    expect(asNumber.counts).toEqual(asText.counts)
-    // Cùng chuỗi ID tới tận dữ liệu gom khách (thứ được stage cho finalize).
-    const parsedIds = (bytes: Uint8Array) => {
-      const p = parseCareImportXlsx(bytes)
-      if (!p.ok) throw new Error(p.fileError)
-      return validateCareRows(p.rows).customers.map((c) => [c.externalId, c.products.map((x) => x.product_id)])
-    }
-    expect(parsedIds(build([0, 1, 2], rows))).toEqual([['N', ['1234', '123456789012345']], ['M', ['1234567']]])
-    expect(parsedIds(build([0, 1, 2], rows))).toEqual(parsedIds(build([], rows)))
-  })
-
-  test('Q-104: product_id toàn số 0 (Number 0, Text "0"/"00") ⇒ PRODUCT_ID_INVALID; "0042"/"10" hợp lệ', () => {
-    const PID = CONTRACT_HEADERS.indexOf('product_id')
-    const rows = [r('Z1', 'QAOS01', EA, '0'), r('Z2', 'QAOS01', EA, '00'), r('Z3', 'QAOS01', EA, '0'), r('Z4', 'QAOS01', EA, '0042'), r('Z5', 'QAOS01', EA, '10')]
-    const ws = XLSX.utils.aoa_to_sheet([H, ...rows])
-    ws[XLSX.utils.encode_cell({ r: 3, c: PID })] = { t: 'n', v: 0 } // dòng 4 (Z3): ô Number 0
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, ws, CONTRACT_SHEET)
-    const p = previewOf(new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer))
-    expect(codes(p.errors)).toEqual(['2:PRODUCT_ID_INVALID', '3:PRODUCT_ID_INVALID', '4:PRODUCT_ID_INVALID'])
-    // Hàm validate thuần: cùng luật cho mọi đường (không phụ thuộc parser).
+  test('Q-104: product_id toàn số 0 ("0"/"00") ⇒ PRODUCT_ID_INVALID; "0042"/"10" hợp lệ', () => {
+    const p = previewOf(csv([H, r('Z1', 'QAOS01', EA, '0'), r('Z2', 'QAOS01', EA, '00'), r('Z4', 'QAOS01', EA, '0042'), r('Z5', 'QAOS01', EA, '10')]))
+    expect(codes(p.errors)).toEqual(['2:PRODUCT_ID_INVALID', '3:PRODUCT_ID_INVALID'])
     const one: CareImportRow = {
       rowNo: 9, customer_external_id: 'Z9', customer_name: 'KH Z9', customer_phone: '0390000999', target_store_code: 'QAOS01',
       assignee_email: EA, reason_type: 'chronic', reason_text: 'QA', product_id: '000', product_name: 'SP', product_url: '',
@@ -221,13 +223,28 @@ test.describe('care B2 — contract & parser Excel @desktop', () => {
     expect(validateCareRows([{ ...one, product_id: '100' }]).errors).toEqual([])
   })
 
-  test('dòng trống xen giữa ⇒ BLANK_ROW; dòng trống cuối bỏ qua', () => {
-    const blank = Array(10).fill(null) as Cell[]
-    const p = parseCareImportXlsx(xlsx([H, r('A', 'QAOS01', EA, 'P1'), blank, r('B', 'QAOS01', EA, 'P1'), blank, blank]))
+  test('bản ghi trống xen giữa ⇒ BLANK_ROW (cả dòng chỉ dấu phẩy và dòng rỗng); trống cuối bỏ qua; trần không đếm dòng trống', () => {
+    const blank: Cell[] = CONTRACT_HEADERS.map(() => null)
+    const bytes = csv([H, r('A', 'QAOS01', EA, 'P1'), blank, r('B', 'QAOS01', EA, 'P1'), blank, blank])
+    const p = parseCareImportCsv(bytes)
     expect(p.ok).toBe(true)
     if (!p.ok) return
     expect(codes(p.errors)).toEqual(['3:BLANK_ROW'])
     expect(p.rows.map((x) => x.rowNo)).toEqual([2, 4])
+    const emptyLine = parseCareImportCsv(raw(`${CONTRACT_HEADERS.join(',')}${CRLF}${r('A', 'QAOS01', EA, 'P1').join(',')}${CRLF}${CRLF}${r('B', 'QAOS01', EA, 'P2').join(',')}${CRLF}`))
+    expect(emptyLine.ok && codes(emptyLine.errors)).toEqual(['3:BLANK_ROW'])
+    expect(parseCareImportCsv(bytes, 2).ok).toBe(true) // 2 bản ghi có dữ liệu + 1 trống ⇒ không vượt trần 2
+  })
+
+  test('csvCore: giải mã UTF-8/BOM; tách bản ghi; ghi rồi đọc lại khứ hồi ổn định với ký tự đặc biệt', () => {
+    expect(decodeCareCsv(raw(`${CARE_CSV_BOM}a`))).toEqual({ ok: true, text: 'a', bom: true })
+    expect(decodeCareCsv(raw('a'))).toEqual({ ok: true, text: 'a', bom: false })
+    expect(parseCsvRecords('a,b' + CRLF + 'c,"d' + CRLF + 'e"' + CRLF)).toEqual({ ok: true, records: [['a', 'b'], ['c', `d${CRLF}e`]] })
+    expect(parseCsvRecords('a,,')).toEqual({ ok: true, records: [['a', '', '']] })
+    expect(parseCsvRecords('"a""b"')).toEqual({ ok: true, records: [['a"b']] })
+    const tricky = [['x,y', 'nháy "a"', ' cách', 'cuối ', `n${CRLF}m`, '', 'Tiếng Việt có dấu ễ ỗ ữ', '"', ',', '=SUM(A1)']]
+    const back = parseCsvRecords(toCareCsv(tricky, false))
+    expect(back).toEqual({ ok: true, records: tricky })
   })
 })
 
@@ -271,7 +288,7 @@ test.describe('care B2 — validate & gom khách (mirror finalize 114) @desktop'
 
 test.describe('care B2 — preview diff (mirror finalize 114) @desktop', () => {
   test('fixture 25 store: tạo 100 task, nhóm phân công đủ 25 store, kỳ/hạn VN', () => {
-    const p = previewOf(buildCareImportXlsx())
+    const p = previewOf(buildCareImportCsv())
     expect(p.errors).toEqual([])
     expect(p.customerCount).toBe(100)
     expect(p.counts.created).toBe(100)
@@ -292,7 +309,7 @@ test.describe('care B2 — preview diff (mirror finalize 114) @desktop', () => {
     lk.customers.set('K-REF-OTHER', { id: 'c-ref2', isTest: false })
     lk.refusals.add(`c-ref2|${sid(2)}`)
     lk.customers.set('K-TEST', { id: 'c-test', isTest: true })
-    const p = previewOf(xlsx([
+    const p = previewOf(csv([
       H,
       r('K-STORE', 'QAOS99', EA, 'P1'),
       r('K-NOSTAFF', 'QAOS01', 'khong.co@example.invalid', 'P1'),
@@ -321,7 +338,7 @@ test.describe('care B2 — preview diff (mirror finalize 114) @desktop', () => {
       lk.currentTasks.set(`c-${ext}`, { ...base, id: `t-${ext}`, customerId: `c-${ext}`, customerName: `KH ${ext}`, ...over })
     }
     add('K-SAME'); add('K-REASON'); add('K-NAME'); add('K-LOCK', { hasInteraction: true }); add('K-OWNER', { assigneeId: uidOf(EB) }); add('K-ABSENT')
-    const p = previewOf(xlsx([
+    const p = previewOf(csv([
       H,
       r('K-SAME', 'QAOS01', EA, 'P1'),
       r('K-REASON', 'QAOS01', EA, 'P1', { reason_text: 'lý do mới' }),
@@ -336,7 +353,7 @@ test.describe('care B2 — preview diff (mirror finalize 114) @desktop', () => {
   })
 
   test('store OS active vắng trong file được liệt kê (không hardcode 25)', () => {
-    const p = previewOf(xlsx([H, r('K1', 'QAOS01', EA, 'P1')]))
+    const p = previewOf(csv([H, r('K1', 'QAOS01', EA, 'P1')]))
     expect(p.storeCodesInFile).toBe(1)
     expect(p.activeOsStoresMissing.map((s) => s.code)).toEqual(STORES.slice(1).map((s) => s.code))
   })
@@ -367,9 +384,9 @@ async function multipart(fields: Record<string, string | { name: string; type?: 
   const fd = new FormData()
   for (const [k, v] of Object.entries(fields)) {
     if (typeof v === 'string') fd.append(k, v)
-    else fd.append(k, new File([new Uint8Array(v.bytes)], v.name, { type: v.type ?? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+    else fd.append(k, new File([new Uint8Array(v.bytes)], v.name, { type: v.type ?? 'text/csv' }))
   }
-  for (let i = 0; i < extraFiles; i++) fd.append(`extra${i}`, new File([new Uint8Array([1])], 'x.xlsx'))
+  for (let i = 0; i < extraFiles; i++) fd.append(`extra${i}`, new File([new Uint8Array([1])], 'x.csv'))
   const tmp = new Request('http://local/x', { method: 'POST', body: fd })
   return { body: new Uint8Array(await tmp.arrayBuffer()), contentType: tmp.headers.get('content-type')! }
 }
@@ -379,8 +396,8 @@ function req(body: Uint8Array, contentType: string, opts: { length?: string | nu
   if (len !== null) headers.set('content-length', len)
   return new Request('http://local/api/care/import/preview', { method: 'POST', headers, body, duplex: 'half' } as RequestInit)
 }
-const fixtureBytes = buildCareImportXlsx()
-const fileField = { name: 'care_T10.xlsx', bytes: fixtureBytes }
+const fixtureBytes = buildCareImportCsv()
+const fileField = { name: 'care_T10.csv', bytes: fixtureBytes }
 const sha = crypto.createHash('sha256').update(fixtureBytes).digest('hex')
 const writes = (s: Spy) => s.calls.filter((c) => ['createBatch', 'stageRows', 'finalize', 'discardBatch'].includes(c.fn))
 
@@ -415,20 +432,34 @@ test.describe('care B2 — Route Handler (deps giả) @desktop', () => {
     expect(s.calls.filter((c) => c.fn !== 'getAccess')).toEqual([])
   })
 
-  test('multipart/kiểu file: không multipart 400 · hai file 400 · đuôi/MIME sai 415 · CSV đổi tên .xlsx 422', async () => {
+  test('multipart/kiểu file (Q-124): không multipart 400 · hai file 400 · .xlsx/MIME lạ 415 · .xlsx đổi tên .csv 422 FILE_NOT_CSV · MIME Windows nhận', async () => {
     const s: Spy = { calls: [] }
-    const raw = new TextEncoder().encode('not multipart')
-    expect((await handleCarePreview(req(raw, 'application/json'), deps(s))).status).toBe(400)
+    const notMultipart = new TextEncoder().encode('not multipart')
+    expect((await handleCarePreview(req(notMultipart, 'application/json'), deps(s))).status).toBe(400)
     const two = await multipart({ file: fileField }, 1)
     expect((await (await handleCarePreview(req(two.body, two.contentType), deps(s))).json()).code).toBe('FILE_REQUIRED')
-    const csv = await multipart({ file: { name: 'care.csv', type: 'text/csv', bytes: fixtureBytes } })
-    expect((await handleCarePreview(req(csv.body, csv.contentType), deps(s))).status).toBe(415)
-    const mime = await multipart({ file: { name: 'care.xlsx', type: 'text/html', bytes: fixtureBytes } })
+    const xlsxName = await multipart({ file: { name: 'care.xlsx', type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', bytes: fixtureBytes } })
+    expect((await handleCarePreview(req(xlsxName.body, xlsxName.contentType), deps(s))).status).toBe(415)
+    const mime = await multipart({ file: { name: 'care.csv', type: 'text/html', bytes: fixtureBytes } })
     expect((await handleCarePreview(req(mime.body, mime.contentType), deps(s))).status).toBe(415)
-    const fake = await multipart({ file: { name: 'care.xlsx', bytes: new TextEncoder().encode('a,b\n1,2') } })
-    const res = await handleCarePreview(req(fake.body, fake.contentType), deps(s))
-    expect(res.status).toBe(422)
-    expect((await res.json()).code).toBe('WORKBOOK_INVALID')
+    expect(s.calls.filter((c) => c.fn !== 'getAccess')).toEqual([])
+    const zip = await multipart({ file: { name: 'care.csv', bytes: new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 4]) } })
+    const res = await handleCarePreview(req(zip.body, zip.contentType), deps(s))
+    expect([res.status, (await res.json()).code]).toEqual([422, 'FILE_NOT_CSV'])
+    expect(s.calls.filter((c) => c.fn === 'loadLookups')).toEqual([]) // lỗi file ⇒ không đọc DB
+    // commit dùng cùng readForm/parser ⇒ cùng kết luận, không đọc DB, không ghi.
+    const cs = { calls: [] } as Spy
+    const zipBytes = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3, 4])
+    const cx = await multipart({ file: { name: 'care.xlsx', type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', bytes: zipBytes }, sha256: crypto.createHash('sha256').update(zipBytes).digest('hex'), period: '2026-10-01' })
+    expect((await handleCareCommit(req(cx.body, cx.contentType), deps(cs))).status).toBe(415)
+    const cz = await multipart({ file: { name: 'care.csv', bytes: zipBytes }, sha256: crypto.createHash('sha256').update(zipBytes).digest('hex'), period: '2026-10-01' })
+    const rz = await handleCareCommit(req(cz.body, cz.contentType), deps(cs))
+    expect([rz.status, (await rz.json()).code]).toEqual([422, 'FILE_NOT_CSV'])
+    expect(cs.calls.filter((c) => c.fn !== 'getAccess')).toEqual([])
+    for (const type of ['application/vnd.ms-excel', 'text/plain', 'application/octet-stream', 'TEXT/CSV']) {
+      const m = await multipart({ file: { name: 'Care_T10.CSV', type, bytes: fixtureBytes } })
+      expect((await handleCarePreview(req(m.body, m.contentType), deps({ calls: [] }))).status, type).toBe(200)
+    }
   })
 
   test('preview OK: sha256 server, đếm, phân công — và KHÔNG ghi gì', async () => {
@@ -460,8 +491,8 @@ test.describe('care B2 — Route Handler (deps giả) @desktop', () => {
 
   test('commit có lỗi dữ liệu ⇒ 422 HAS_ERRORS, không tạo batch; phản hồi chỉ có mã + dòng', async () => {
     const s: Spy = { calls: [] }
-    const bytes = xlsx([H, r('K1', 'QAOS99', EA, 'P1')])
-    const m = await multipart({ file: { name: 'x.xlsx', bytes }, sha256: crypto.createHash('sha256').update(bytes).digest('hex'), period: '2026-10-01' })
+    const bytes = csv([H, r('K1', 'QAOS99', EA, 'P1')])
+    const m = await multipart({ file: { name: 'x.csv', bytes }, sha256: crypto.createHash('sha256').update(bytes).digest('hex'), period: '2026-10-01' })
     const res = await handleCareCommit(req(m.body, m.contentType), deps(s))
     expect(res.status).toBe(422)
     const body = await res.json()
@@ -478,7 +509,7 @@ test.describe('care B2 — Route Handler (deps giả) @desktop', () => {
     expect((await res.json()).result).toMatchObject({ status: 'committed', batch_id: 'batch-1' })
     const create = s.calls.find((c) => c.fn === 'createBatch')!.args[0] as Record<string, unknown>
     expect(create).toMatchObject({ period: '2026-10-01', isTest: false, actorId: 'actor-mkt', sha256: sha, rowCount: buildCareImportRows().length })
-    expect(create.fileName).toBe(`care-import-2026-10-${sha.slice(0, 12)}.xlsx`)
+    expect(create.fileName).toBe(`care-import-2026-10-${sha.slice(0, 12)}.csv`)
     const stages = s.calls.filter((c) => c.fn === 'stageRows').map((c) => c.args[1] as { row_no: number; payload: Record<string, string> }[])
     expect(stages.length).toBe(Math.ceil(buildCareImportRows().length / 50))
     const rowNos = stages.flat().map((x) => x.row_no)
@@ -528,7 +559,12 @@ test.describe('care B2 — Route Handler (deps giả) @desktop', () => {
     expect((await handleCareTemplate(deps(s, {}, { kind: 'forbidden' }), buildCareImportTemplate)).status).toBe(403)
     const res = await handleCareTemplate(deps(s), buildCareImportTemplate)
     expect(res.status).toBe(200)
-    const p = parseCareImportXlsx(new Uint8Array(await res.arrayBuffer()))
+    expect(res.headers.get('content-type')).toBe('text/csv; charset=utf-8')
+    expect(res.headers.get('content-disposition')).toBe(`attachment; filename="${CARE_IMPORT_TEMPLATE_FILENAME}"`)
+    expect(CARE_IMPORT_TEMPLATE_FILENAME).toBe('care_import_mau.csv')
+    const bytes = new Uint8Array(await res.arrayBuffer())
+    expect([bytes[0], bytes[1], bytes[2]]).toEqual([0xef, 0xbb, 0xbf]) // BOM ⇒ Excel mở đúng tiếng Việt
+    const p = parseCareImportCsv(bytes)
     expect(p.ok && p.errors.length === 0 && p.rows.length === 2).toBe(true)
     if (p.ok) expect(validateCareRows(p.rows).customers).toHaveLength(1)
     if (p.ok) expect(p.rows.every((x) => x.assignee_email.endsWith('@example.invalid'))).toBe(true)
@@ -554,24 +590,7 @@ test.describe('care B2 — nguồn route/page @desktop', () => {
   })
 })
 
-test.describe('care B2 — sửa sau review (zip bomb, staging kẹt, kỳ đổi lúc finalize) @desktop', () => {
-  test('zip bomb: kích thước giải nén khai báo vượt trần / quá nhiều entry ⇒ WORKBOOK_INVALID trước khi SheetJS inflate', async () => {
-    const { zipWithinLimits, CARE_XLSX_MAX_UNCOMPRESSED } = await import('../lib/care/import/parse')
-    expect(zipWithinLimits(fixtureBytes)).toBe(true)
-    // Vá central directory của file thật: khai báo uncompressed = trần + 1 cho entry đầu.
-    const bomb = new Uint8Array(fixtureBytes)
-    const dv = new DataView(bomb.buffer)
-    let eocd = -1
-    for (let i = bomb.length - 22; i >= 0; i--) if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break }
-    const cd = dv.getUint32(eocd + 16, true)
-    dv.setUint32(cd + 24, CARE_XLSX_MAX_UNCOMPRESSED + 1, true)
-    expect(zipWithinLimits(bomb)).toBe(false)
-    expect(parseCareImportXlsx(bomb)).toEqual({ ok: false, fileError: 'WORKBOOK_INVALID' })
-    expect(zipWithinLimits(fixtureBytes, CARE_XLSX_MAX_UNCOMPRESSED, 2)).toBe(false)
-    // EOCD hỏng / thiếu ⇒ từ chối.
-    expect(zipWithinLimits(fixtureBytes.slice(0, fixtureBytes.length - 30))).toBe(false)
-  })
-
+test.describe('care B2 — sửa sau review (staging kẹt, kỳ đổi lúc finalize) @desktop', () => {
   test('commit dọn batch staged kẹt trước khi tạo batch mới; lỗi dọn không chặn import', async () => {
     const s: Spy = { calls: [] }
     const m = await multipart({ file: fileField, sha256: sha, period: '2026-10-01' })
@@ -612,25 +631,24 @@ test.describe('care B2 — sửa sau review (zip bomb, staging kẹt, kỳ đổ
   })
 })
 
-test.describe('care Q-121 — 20.000 dòng qua route preview/commit (deps giả) @desktop', () => {
+test.describe('care Q-121/Q-124 — trần dòng N qua route preview/commit (deps giả) @desktop', () => {
   test.setTimeout(120_000)
+  const N = CARE_IMPORT_MAX_ROWS
+  /** Kích thước các khối staging 2.000 dòng của n dòng. */
+  const chunks = (n: number) => Array.from({ length: Math.ceil(n / 2000) }, (_, i) => Math.min(2000, n - i * 2000))
   // Fixture 25 store: 401 khách/store × 1–3 sản phẩm ⇒ > 20.001 dòng; cắt đúng số dòng cần (khách cuối có thể bớt sản phẩm — vẫn hợp lệ).
   let pool: Record<string, string>[] | null = null
   const rowsN = (n: number) => (pool ??= buildCareImportRows({ customersPerStore: 401 }) as unknown as Record<string, string>[]).slice(0, n)
-  // Nén deflate như Excel lưu (helper xlsx() ghi ZIP không nén — 20.000 dòng sẽ ~14 MB, quá trần byte vì lý do khác).
-  const fileOf = (rows: Record<string, string>[]) => {
-    const wb = XLSX.utils.book_new()
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([H, ...rows.map((x) => CONTRACT_HEADERS.map((h) => x[h]))]), CONTRACT_SHEET)
-    return new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx', compression: true }) as ArrayBuffer)
-  }
+  // CSV không nén (Q-124): 10.000–20.000 dòng fixture ~1,5–3 MB — dưới trần 8 MiB.
+  const fileOf = (rows: Record<string, string>[]) => careRowsToCsv(rows as unknown as CareImportRow[])
   const commitForm = (bytes: Uint8Array) =>
-    multipart({ file: { name: 'n1.xlsx', bytes }, sha256: crypto.createHash('sha256').update(bytes).digest('hex'), period: '2026-10-01' })
+    multipart({ file: { name: 'n1.csv', bytes }, sha256: crypto.createHash('sha256').update(bytes).digest('hex'), period: '2026-10-01' })
   const nonAccess = (s: Spy) => s.calls.filter((c) => c.fn !== 'getAccess')
 
-  test('20.001 dòng ⇒ 422 TOO_MANY_ROWS ở preview và commit — không đọc DB, không tạo batch/task', async () => {
+  test('N+1 dòng ⇒ 422 TOO_MANY_ROWS ở preview và commit — không đọc DB, không tạo batch/task', async () => {
     const s: Spy = { calls: [] }
-    const bytes = fileOf(rowsN(20_001))
-    const pv = await multipart({ file: { name: 'n1.xlsx', bytes } })
+    const bytes = fileOf(rowsN(N + 1))
+    const pv = await multipart({ file: { name: 'n1.csv', bytes } })
     const r1 = await handleCarePreview(req(pv.body, pv.contentType), deps(s))
     expect([r1.status, (await r1.json()).code]).toEqual([422, 'TOO_MANY_ROWS'])
     const cm = await commitForm(bytes)
@@ -639,47 +657,47 @@ test.describe('care Q-121 — 20.000 dòng qua route preview/commit (deps giả)
     expect(nonAccess(s)).toEqual([])
   })
 
-  test('20.000 dòng hợp lệ: preview 0 lỗi; commit đúng 1 batch rowCount 20.000, staging 10 khối × 2.000 liên tục, finalize một lần', async () => {
+  test('N dòng hợp lệ: preview 0 lỗi; commit đúng 1 batch rowCount N, staging khối 2.000 liên tục, finalize một lần', async () => {
     const s: Spy = { calls: [] }
-    const rows = rowsN(20_000)
+    const rows = rowsN(N)
     const bytes = fileOf(rows)
-    const pv = await multipart({ file: { name: 'n1.xlsx', bytes } })
+    const pv = await multipart({ file: { name: 'n1.csv', bytes } })
     const r1 = await handleCarePreview(req(pv.body, pv.contentType), deps(s, { stageChunk: undefined }))
     expect(r1.status).toBe(200)
     expect(r1.headers.get('server-timing')).toBeNull() // production không gửi thời gian từng pha
     const p = (await r1.json()).preview
-    expect([p.rowCount, p.customerCount, p.errorCount]).toEqual([20_000, new Set(rows.map((x) => x.customer_external_id)).size, 0])
+    expect([p.rowCount, p.customerCount, p.errorCount]).toEqual([N, new Set(rows.map((x) => x.customer_external_id)).size, 0])
     expect(writes(s)).toEqual([])
     const cm = await commitForm(bytes)
     const r2 = await handleCareCommit(req(cm.body, cm.contentType), deps(s, { stageChunk: undefined }))
     expect(r2.status, await r2.clone().text()).toBe(200)
-    expect(s.calls.filter((c) => c.fn === 'createBatch').map((c) => (c.args[0] as { rowCount: number }).rowCount)).toEqual([20_000])
+    expect(s.calls.filter((c) => c.fn === 'createBatch').map((c) => (c.args[0] as { rowCount: number }).rowCount)).toEqual([N])
     const stages = s.calls.filter((c) => c.fn === 'stageRows').map((c) => c.args[1] as { row_no: number }[])
-    expect(stages.map((x) => x.length)).toEqual(Array(10).fill(2000))
-    expect(stages.flat().map((x) => x.row_no)).toEqual(Array.from({ length: 20_000 }, (_, i) => i + 2))
+    expect(stages.map((x) => x.length)).toEqual(chunks(N))
+    expect(stages.flat().map((x) => x.row_no)).toEqual(Array.from({ length: N }, (_, i) => i + 2))
     expect(s.calls.filter((c) => c.fn === 'finalize').length).toBe(1)
     expect(s.calls.some((c) => c.fn === 'discardBatch')).toBe(false)
   })
 
-  test('19.999 dòng qua route: preview 200, commit staging đủ 19.999 dòng (khối cuối 1.999)', async () => {
+  test('N−1 dòng qua route: preview 200, commit staging đủ N−1 dòng (khối cuối 1.999)', async () => {
     const s: Spy = { calls: [] }
-    const bytes = fileOf(rowsN(19_999))
-    const pv = await multipart({ file: { name: 'n1.xlsx', bytes } })
+    const bytes = fileOf(rowsN(N - 1))
+    const pv = await multipart({ file: { name: 'n1.csv', bytes } })
     const r1 = await handleCarePreview(req(pv.body, pv.contentType), deps(s, { stageChunk: undefined }))
-    expect([r1.status, (await r1.json()).preview.rowCount]).toEqual([200, 19_999])
+    expect([r1.status, (await r1.json()).preview.rowCount]).toEqual([200, N - 1])
     const cm = await commitForm(bytes)
     expect((await handleCareCommit(req(cm.body, cm.contentType), deps(s, { stageChunk: undefined }))).status).toBe(200)
     const stages = s.calls.filter((c) => c.fn === 'stageRows').map((c) => (c.args[1] as unknown[]).length)
-    expect(stages).toEqual([...Array(9).fill(2000), 1999])
+    expect(stages).toEqual(chunks(N - 1))
   })
 
-  test('20.000 dòng, lỗi chỉ ở dòng cuối ⇒ preview báo đúng dòng 20.001; commit 422 HAS_ERRORS chặn cả file, không ghi', async () => {
+  test('N dòng, lỗi chỉ ở dòng cuối ⇒ preview báo đúng bản ghi N+1; commit 422 HAS_ERRORS chặn cả file, không ghi', async () => {
     const s: Spy = { calls: [] }
-    const rows = rowsN(20_000).map((x, i) => (i === 19_999 ? { ...x, product_url: 'https://evil.example/a.png' } : x))
+    const rows = rowsN(N).map((x, i) => (i === N - 1 ? { ...x, product_url: 'https://evil.example/a.png' } : x))
     const bytes = fileOf(rows)
-    const pv = await multipart({ file: { name: 'n1.xlsx', bytes } })
+    const pv = await multipart({ file: { name: 'n1.csv', bytes } })
     const p = (await (await handleCarePreview(req(pv.body, pv.contentType), deps(s))).json()).preview
-    expect([p.errorCount, p.errors]).toEqual([1, [{ row: 20_001, code: 'IMAGE_URL_HOST', field: 'product_url' }]])
+    expect([p.errorCount, p.errors]).toEqual([1, [{ row: N + 1, code: 'IMAGE_URL_HOST', field: 'product_url' }]])
     const cm = await commitForm(bytes)
     const r2 = await handleCareCommit(req(cm.body, cm.contentType), deps(s))
     expect(r2.status).toBe(422)
@@ -687,14 +705,14 @@ test.describe('care Q-121 — 20.000 dòng qua route preview/commit (deps giả)
     expect(writes(s)).toEqual([])
   })
 
-  test('đủ 20.000 dòng nhưng file > 8 MiB ⇒ 413 PAYLOAD_TOO_LARGE trước khi đọc/parse — không đọc DB', async () => {
+  test('đủ N dòng nhưng file > 8 MiB ⇒ 413 PAYLOAD_TOO_LARGE trước khi đọc/parse — không đọc DB', async () => {
     const s: Spy = { calls: [] }
     const rnd = (n: number) => crypto.randomBytes(n).toString('base64').slice(0, n) // khó nén ⇒ file lớn thật
-    const bytes = fileOf(rowsN(20_000).map((x) => ({ ...x, product_name: `SP ${rnd(290)}`, reason_text: `QA ${rnd(400)}` })))
+    const bytes = fileOf(rowsN(N).map((x) => ({ ...x, product_name: `SP ${rnd(290)}`, reason_text: `QA ${rnd(700)}` })))
     expect(bytes.byteLength).toBeGreaterThan(8 * 1024 * 1024)
-    const parsed = parseCareImportXlsx(bytes)
-    expect(parsed.ok && parsed.rows.length).toBe(20_000) // file hợp lệ về dòng — chỉ bị chặn vì byte
-    const pv = await multipart({ file: { name: 'n1.xlsx', bytes } })
+    const parsed = parseCareImportCsv(bytes)
+    expect(parsed.ok && parsed.rows.length).toBe(N) // file hợp lệ về dòng — chỉ bị chặn vì byte
+    const pv = await multipart({ file: { name: 'n1.csv', bytes } })
     const r1 = await handleCarePreview(req(pv.body, pv.contentType), deps(s))
     expect([r1.status, (await r1.json()).code]).toEqual([413, 'PAYLOAD_TOO_LARGE'])
     const cm = await commitForm(bytes)
@@ -780,26 +798,24 @@ test.describe('care B8.3 — Q-110 cột lỗi chắc chắn, tổng lỗi khôn
     expect(JSON.stringify([CARE_ERROR_FIXES, CARE_ERROR_SHORT])).not.toMatch(/bỏ qua dòng|dòng hợp lệ|tiếp tục với/i)
   })
 
-  test('parser: công thức / ô sai kiểu đúng MỘT cột ⇒ field; hai cột ⇒ không field; dòng trống ⇒ không field', () => {
+  test('parser: lỗi đúng MỘT cột ⇒ field (ID dạng mũ); sai số cột / hai cột / dòng trống ⇒ không field', () => {
     const blank: Cell[] = CONTRACT_HEADERS.map(() => null)
-    const p = parseCareImportXlsx(xlsx([
+    const p = parseCareImportCsv(csv([
       H,
-      r('A', 'QAOS01', EA, 'P1', { reason_text: { f: '"QA "&"x"' } }),
-      r('B', 'QAOS01', EA, 'P2', { reason_text: { f: '"x"' }, product_name: { f: '"y"' } }),
-      r('C', 'QAOS01', EA, 'P3', { customer_external_id: 123456 }),
-      r('D', 'QAOS01', EA, 'P4', { customer_name: true, product_id: 12.5 }),
+      r('1.23457E+14', 'QAOS01', EA, 'P1'),
+      r('B', 'QAOS01', EA, '1E+15', { customer_external_id: '2E+14' }),
+      r('C', 'QAOS01', EA, 'P3').slice(0, 8),
       blank,
-      r('E', 'QAOS01', EA, 'P5', { product_id: { f: '1000+1' } }),
+      r('E', 'QAOS01', EA, '3.5E+12'),
     ]))
     expect(p.ok).toBe(true)
     if (!p.ok) return
     expect(p.errors).toEqual([
-      { row: 2, code: 'FORMULA_NOT_ALLOWED', field: 'reason_text' },
-      { row: 3, code: 'FORMULA_NOT_ALLOWED' },
-      { row: 4, code: 'CELL_NOT_TEXT', field: 'customer_external_id' },
-      { row: 5, code: 'CELL_NOT_TEXT' },
-      { row: 6, code: 'BLANK_ROW' },
-      { row: 7, code: 'FORMULA_NOT_ALLOWED', field: 'product_id' },
+      { row: 2, code: 'ID_NOT_TEXT', field: 'customer_external_id' },
+      { row: 3, code: 'ID_NOT_TEXT' },
+      { row: 4, code: 'COLUMN_COUNT' },
+      { row: 5, code: 'BLANK_ROW' },
+      { row: 6, code: 'ID_NOT_TEXT', field: 'product_id' },
     ])
   })
 
@@ -836,7 +852,7 @@ test.describe('care B8.3 — Q-110 cột lỗi chắc chắn, tổng lỗi khôn
     lk.customers.set('K-REF', { id: 'c-ref', isTest: false })
     lk.refusals.add(`c-ref|${sid(1)}`)
     lk.customers.set('K-TEST', { id: 'c-test', isTest: true })
-    const p = previewOf(xlsx([
+    const p = previewOf(csv([
       H,
       r('K-STORE', 'QAOS99', EA, 'P1'),
       r('K-MIX', 'QAOS98', EA, 'P1'), r('K-MIX', 'QAOS01', EA, 'P2'),
@@ -859,8 +875,8 @@ test.describe('care B8.3 — Q-110 cột lỗi chắc chắn, tổng lỗi khôn
   test('route preview: > 500 lỗi ⇒ errorCount + errorCounts tính trên TOÀN BỘ, chi tiết cắt 500; lỗi chỉ {row, code, field?}; commit HAS_ERRORS cùng dạng', async () => {
     const rows = [H, ...Array.from({ length: 600 }, (_, i) => r(`S${i}`, 'QAOS99', EA, 'P1')),
       ...Array.from({ length: 100 }, (_, i) => r(`F${i}`, 'QAOS01', EA, 'P1', { customer_phone: '0201234567' }))]
-    const bytes = xlsx(rows)
-    const m = await multipart({ file: { name: 'care.xlsx', bytes } })
+    const bytes = csv(rows)
+    const m = await multipart({ file: { name: 'care.csv', bytes } })
     const s: Spy = { calls: [] }
     const body = await (await handleCarePreview(req(m.body, m.contentType), deps(s))).json()
     expect(body.preview.errorCount).toBe(700)
@@ -871,7 +887,7 @@ test.describe('care B8.3 — Q-110 cột lỗi chắc chắn, tổng lỗi khôn
     for (const e of body.preview.errors) expect(Object.keys(e).every((k) => ['row', 'code', 'field'].includes(k))).toBe(true)
     expect(JSON.stringify(body.preview.errors)).not.toMatch(/0201234567|QAOS99|"S\d+|example\.invalid/)
     const sha700 = crypto.createHash('sha256').update(bytes).digest('hex')
-    const c = await multipart({ file: { name: 'care.xlsx', bytes }, sha256: sha700, period: '2026-10-01' })
+    const c = await multipart({ file: { name: 'care.csv', bytes }, sha256: sha700, period: '2026-10-01' })
     const commit = await (await handleCareCommit(req(c.body, c.contentType), deps(s))).json()
     expect(commit).toMatchObject({ code: 'HAS_ERRORS', errorCount: 700, errorCounts: { STORE_INVALID: 600, PHONE_INVALID: 100 } })
     expect(commit.errors).toHaveLength(CARE_PREVIEW_ERROR_LIMIT)

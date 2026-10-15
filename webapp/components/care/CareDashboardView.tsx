@@ -82,7 +82,7 @@ export function CareDashboardView({
     return (
       <div className="space-y-4" data-testid="care-dashboard">
         {kpis}
-        <EmptyState icon={ClipboardList} title={`Chưa có khách cần chăm sóc trong kỳ ${monthLabel}`} hint="Danh sách khách được tạo khi phòng phụ trách import file Excel của tháng." />
+        <EmptyState icon={ClipboardList} title={`Chưa có khách cần chăm sóc trong kỳ ${monthLabel}`} hint="Danh sách khách được tạo khi phòng phụ trách import file CSV của tháng." />
       </div>
     )
   }

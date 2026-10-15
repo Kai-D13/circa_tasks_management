@@ -2,7 +2,8 @@ import { carePeriodOf } from '@/lib/care/time'
 import { CARE_QA_ISSUE_LABELS, type CareQaIssueCode } from '@/lib/care/qa/labels'
 import { CARE_QA_UI_ID_PREFIX, careQaCommitIssues, type CareImportQaMarker, type CareQaUiImportResult } from '@/lib/care/qa/uiGate'
 import { CARE_ERROR_LABELS, CARE_IMPORT_HEADERS, type CareFileErrorCode, type CareImportRow, type CareRowError } from './contract'
-import { parseCareImportXlsx } from './parse'
+import { parseCareImportCsv } from './parse'
+import { CARE_IMPORT_TEMPLATE_FILENAME } from './template'
 import { validateCareRows, type CareValidateResult } from './validate'
 import { buildCarePreview, type CareImportLookups, type CarePreview, type CarePreviewCounts } from './preview'
 
@@ -15,7 +16,7 @@ import { buildCarePreview, type CareImportLookups, type CarePreview, type CarePr
 //   1. cờ CARE_ENABLED (OFF ⇒ 404, không lộ chức năng)
 //   2. quyền từ SESSION thật (anonymous 401 · không quyền 403 · DB chưa sẵn 503)
 //   3. byte-cap TRƯỚC mọi parse: thiếu Content-Length 411, vượt 413, body hụt/thừa 400
-//   4. multipart → đúng một file .xlsx → parse/validate → lookups (service role,
+//   4. multipart → đúng một file .csv (Q-124) → parse/validate → lookups (service role,
 //      chỉ SAU bước 2) → preview
 //   5. commit: hash + kỳ phải khớp preview (409), không lỗi, rồi batch/staging/finalize.
 // Client KHÔNG quyết định is_test/actor/kỳ/số đếm: mọi field khác bị bỏ qua.
@@ -88,7 +89,11 @@ const json = (status: number, body: unknown) =>
 const fail = (status: number, code: CareImportErrorCode, extra: Record<string, unknown> = {}) =>
   json(status, { ok: false, code, message: LABELS[code] ?? null, ...extra })
 
-const XLSX_MIME = new Set(['', 'application/octet-stream', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'])
+/**
+ * Q-124: chỉ nhận CSV. MIME trình duyệt gửi cho .csv khác nhau theo hệ điều hành/phần mềm (Windows có Excel cài sẵn gửi
+ * `application/vnd.ms-excel`) ⇒ chấp nhận nhóm này; nội dung vẫn bị parser kiểm (ZIP/.xls/UTF-16/ANSI ⇒ lỗi rõ ràng).
+ */
+const CSV_MIME = new Set(['', 'text/csv', 'application/csv', 'text/comma-separated-values', 'text/plain', 'application/vnd.ms-excel', 'application/octet-stream'])
 
 /** Đọc body có trần byte; không bao giờ đệm quá `max` byte. */
 export async function readCappedBody(req: Request, max: number): Promise<{ ok: true; bytes: Uint8Array<ArrayBuffer> } | { ok: false; res: Response }> {
@@ -135,7 +140,7 @@ async function readForm(req: Request, deps: CareImportDeps) {
   const files = [...form.values()].filter((v): v is File => typeof v !== 'string')
   const file = form.get('file')
   if (!file || typeof file === 'string' || files.length !== 1) return { ok: false as const, res: fail(400, 'FILE_REQUIRED') }
-  if (!/\.xlsx$/i.test(file.name) || !XLSX_MIME.has(file.type)) return { ok: false as const, res: fail(415, 'FILE_TYPE') }
+  if (!/\.csv$/i.test(file.name) || !CSV_MIME.has(file.type.toLowerCase())) return { ok: false as const, res: fail(415, 'FILE_TYPE') }
   const bytes = new Uint8Array(await file.arrayBuffer())
   if (bytes.byteLength === 0) return { ok: false as const, res: fail(400, 'FILE_REQUIRED') }
   return { ok: true as const, form, bytes }
@@ -189,7 +194,7 @@ async function analyze(bytes: Uint8Array<ArrayBuffer>, deps: CareImportDeps, isT
 
 async function analyzeUnsafe(bytes: Uint8Array<ArrayBuffer>, deps: CareImportDeps, isTest: boolean): Promise<Analysis> {
   const t0 = performance.now()
-  const parsed = parseCareImportXlsx(bytes)
+  const parsed = parseCareImportCsv(bytes)
   if (!parsed.ok) return { ok: false, res: fail(422, parsed.fileError) }
   const validated = validateCareRows(parsed.rows)
   const period = carePeriodOf(deps.now())
@@ -286,7 +291,7 @@ export async function handleCareCommit(req: Request, deps: CareImportDeps): Prom
 
   const period = a.preview.period
   // Tên kỹ thuật vô hại (không dùng tên file người dùng — có thể chứa tên người).
-  const fileName = `care-import-${period.slice(0, 7)}-${sha.slice(0, 12)}.xlsx`
+  const fileName = `care-import-${period.slice(0, 7)}-${sha.slice(0, 12)}.csv`
 
   const timings: CareImportTimings = { ...a.timings }
   const write = async (): Promise<{ res: Response; outcome: CareQaUiImportResult }> => {
@@ -354,8 +359,8 @@ export async function handleCareTemplate(deps: Pick<CareImportDeps, 'enabled' | 
   return new Response(build(), {
     status: 200,
     headers: {
-      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'Content-Disposition': 'attachment; filename="care_import_mau.xlsx"',
+      'Content-Type': 'text/csv; charset=utf-8',
+      'Content-Disposition': `attachment; filename="${CARE_IMPORT_TEMPLATE_FILENAME}"`,
       'Cache-Control': 'no-store',
     },
   })

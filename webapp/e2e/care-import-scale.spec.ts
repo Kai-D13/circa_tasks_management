@@ -44,11 +44,11 @@ test.describe('care Q-121 — finalize 114 ở quy mô 20.000 dòng / 8.000 khá
     const db: any = await L.freshDb(PGlite)
     await db.exec('SET enable_seqscan = on')
     const n = async (sql: string, p: unknown[] = []) => Number(Object.values((await db.query(sql, p)).rows[0])[0])
-    /** Staging như route B2: khối 2.000 dòng, row_no = số dòng Excel liền mạch; sha theo nội dung (file trùng ⇒ cùng sha). */
+    /** Staging như route B2: khối 2.000 dòng, row_no = số bản ghi CSV liền mạch; sha theo nội dung (file trùng ⇒ cùng sha). */
     const run = async (rows: Record<string, string>[], today: string) => {
       const period = `${today.slice(0, 7)}-01`
       const id = (await db.query(`INSERT INTO public.care_import_batches (period_month, file_name, file_sha256, row_count, created_by)
-        VALUES ($1, 'qa.xlsx', $2, $3, $4) RETURNING id`, [period, L.sha(JSON.stringify(rows)), rows.length, L.U.mkt])).rows[0].id
+        VALUES ($1, 'qa.csv', $2, $3, $4) RETURNING id`, [period, L.sha(JSON.stringify(rows)), rows.length, L.U.mkt])).rows[0].id
       for (let i = 0; i < rows.length; i += 2000) {
         await db.query(`INSERT INTO public.care_import_staging (batch_id, row_no, payload)
           SELECT $1, (x->>'n')::int, x->'p' FROM jsonb_array_elements($2::jsonb) x`,
@@ -63,7 +63,9 @@ test.describe('care Q-121 — finalize 114 ở quy mô 20.000 dòng / 8.000 khá
 
     // (1) Đầu kỳ: 8.000 khách / 20.000 dòng.
     const first = rowsFor(L, range(1, 8000))
-    expect(first.length).toBe(CARE_IMPORT_MAX_ROWS)
+    // Quy mô mục tiêu Q-121 (DB finalize gọi thẳng — không qua trần dòng của route; trần phát hành hiện ≤ con số này).
+    expect(first.length).toBe(20_000)
+    expect(CARE_IMPORT_MAX_ROWS).toBeLessThanOrEqual(20_000)
     const r1 = await run(first, D1)
     expect(r1).toMatchObject({ status: 'committed', kind: 'initial', rows: 20_000, customers: 8000, created: 8000, stores: 25, absent_kept: 0 })
     expect([await tasksIn(OCT), await currentProducts(OCT)]).toEqual([8000, 20_000])

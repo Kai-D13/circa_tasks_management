@@ -36,7 +36,7 @@ const CARE_FLAGS_PROCESS_ONLY_TRUE = ['CARE_ENABLED', 'CARE_SYNC_ENABLED'] as co
 export const CARE_QA_UI_ID_PREFIX = 'QA-UI-'
 /**
  * Trần số khách giả trong MỘT marker. Bản sao QA từ file mẫu (`prepare`) tự giới hạn 200 khách; QA tải Q-121
- * (`prepare-load`, 20.000 dòng ~8.000 khách) cần marker lớn hơn ⇒ trần marker 10.000.
+ * (`prepare-load`, tới trần dòng của app — tối đa 20.000 dòng ~8.000 khách khi trần được nâng) cần marker lớn hơn ⇒ 10.000.
  */
 export const CARE_QA_UI_MAX_CUSTOMERS = 10_000
 

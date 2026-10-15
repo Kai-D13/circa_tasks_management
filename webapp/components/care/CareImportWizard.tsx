@@ -12,7 +12,7 @@ import {
   CareImportAssign, CareImportChanges, CareImportCustomers, CareImportIssues, CareImportRequirements, CareImportStepper,
   INSET, PANEL, dateLabel, fmt, monthLabel,
 } from '@/components/care/CareImportPanels'
-import { CARE_ERROR_LABELS, CARE_IMPORT_SHEET, type CareRowError, type CareRowErrorCode } from '@/lib/care/import/contract'
+import { CARE_ERROR_LABELS, type CareRowError, type CareRowErrorCode } from '@/lib/care/import/contract'
 import type { CarePreview, CarePreviewCounts } from '@/lib/care/import/preview'
 import { careAssignmentTable } from '@/lib/care/import/review'
 import { CARE_QA_ISSUE_LABELS } from '@/lib/care/qa/labels'
@@ -49,8 +49,8 @@ const SERVER_MESSAGES: Record<string, string> = {
   PAYLOAD_TOO_LARGE: 'File vượt dung lượng cho phép.',
   BODY_INCOMPLETE: 'File gửi lên không trọn vẹn — tải lại.',
   MULTIPART_INVALID: 'Dữ liệu gửi lên không hợp lệ — tải lại.',
-  FILE_REQUIRED: 'Chọn đúng một file .xlsx.',
-  FILE_TYPE: 'Chỉ nhận file Excel .xlsx.',
+  FILE_REQUIRED: 'Chọn đúng một file .csv.',
+  FILE_TYPE: 'Chỉ nhận file CSV (.csv) — trong Excel chọn Lưu thành "CSV UTF-8 (Comma delimited)".',
   SHA_MISMATCH: 'File đã thay đổi so với lúc kiểm tra — kiểm tra lại.',
   PERIOD_CHANGED: 'Đã sang tháng mới so với lúc kiểm tra — kiểm tra lại để lấy kỳ mới.',
   HAS_ERRORS: 'File còn lỗi — sửa file rồi kiểm tra lại.',
@@ -162,7 +162,7 @@ export function CareImportWizard({ maxBytes, period, tasksHref = null }: {
   const committed = result?.status === 'committed'
   const assign = preview && step >= 2 ? careAssignmentTable(preview.customers) : null
   const steps = [
-    { label: 'Tải file', desc: file ? file.name : 'Excel .xlsx theo mẫu' },
+    { label: 'Tải file', desc: file ? file.name : 'CSV UTF-8 theo mẫu' },
     { label: 'Kiểm tra dữ liệu', desc: preview ? `${fmt(preview.customerCount)} khách · ${hasErrors ? `${fmt(preview.errorCount)} lỗi` : 'không lỗi'}` : 'Lỗi bất kỳ chặn cả file' },
     { label: 'Phân công', desc: 'Dược sĩ theo email trong file' },
     { label: 'Xác nhận', desc: `Tạo task kỳ ${monthLabel(preview?.period ?? period)}` },
@@ -181,8 +181,8 @@ export function CareImportWizard({ maxBytes, period, tasksHref = null }: {
               <input
                 ref={inputRef}
                 type="file"
-                accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                aria-label="Chọn file Excel"
+                accept=".csv,text/csv"
+                aria-label="Chọn file CSV"
                 className="sr-only"
                 tabIndex={-1}
                 onChange={(e) => choose(e.target.files?.[0] ?? null)}
@@ -198,8 +198,8 @@ export function CareImportWizard({ maxBytes, period, tasksHref = null }: {
                     dragging ? 'border-primary bg-primary/5' : 'border-care-line-strong bg-care-surface')}
                 >
                   <span className="flex size-11 items-center justify-center rounded-lg bg-primary/10 text-primary"><Upload className="size-5" aria-hidden /></span>
-                  <p className="text-[15px] font-semibold">Kéo thả file Excel vào đây</p>
-                  <p className="text-sm text-muted-foreground">.xlsx · tối đa {limitLabel} · 1 sheet <code className="font-mono text-xs">{CARE_IMPORT_SHEET}</code></p>
+                  <p className="text-[15px] font-semibold">Kéo thả file CSV vào đây</p>
+                  <p className="text-sm text-muted-foreground">.csv UTF-8 · dấu phẩy · tối đa {limitLabel}</p>
                   <Button variant="outline" className={cn(BTN, 'mt-1')} onClick={() => inputRef.current?.click()}>Chọn file từ máy</Button>
                 </div>
               ) : (
@@ -207,7 +207,7 @@ export function CareImportWizard({ maxBytes, period, tasksHref = null }: {
                   <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-status-success-bg text-status-success"><FileSpreadsheet className="size-5" aria-hidden /></span>
                   <span className="flex min-w-0 flex-1 flex-col">
                     <span className="truncate text-sm font-semibold" title={file.name}>{file.name}</span>
-                    <span className="text-xs text-muted-foreground">{sizeLabel(file.size)} · Excel</span>
+                    <span className="text-xs text-muted-foreground">{sizeLabel(file.size)} · CSV</span>
                   </span>
                   <Button variant="ghost" size="icon" className="size-[44px] shrink-0" aria-label="Bỏ file" onClick={reset}><X className="size-4" /></Button>
                 </div>

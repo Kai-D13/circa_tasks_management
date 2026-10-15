@@ -1,7 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect } from '@playwright/test'
-import * as XLSX from 'xlsx'
 import {
   CARE_TZ, carePeriodOf, isDateInPeriod, isValidIsoDate, nextPeriod, overdueStampDate, periodLastDay,
   periodOfDate, periodRange, vnDateISO,
@@ -19,14 +18,15 @@ import {
 import { normalizeVnPhone } from '../lib/affiliate/phone'
 import { parseEnvText, resolveEnv } from './envLocal'
 import {
-  CARE_IMPORT_HEADERS, CARE_IMPORT_SHEET, buildCareImportRows, buildCareImportXlsx,
+  CARE_IMPORT_HEADERS, buildCareImportCsv, buildCareImportRows,
 } from './careImportFixture'
+import { parseCareImportCsv } from '../lib/care/import/parse'
 import { CARE_QA_MARKER, careWriteGate } from './writeQaGates'
 
 // CRM-CSKH B0 — unit gate THUẦN (không DB, không mạng, không BigQuery thật).
 // Map AC planning/SPEC.md §B0: thời gian kỳ VN · outcome một nguồn · cờ OFF ·
 // client BigQuery (mock: nhiều trang, job chưa xong, timeout, lỗi giữ snapshot)
-// · fixture Excel giả · loader credential · gate ghi QA.
+// · fixture CSV giả (Q-124) · loader credential · gate ghi QA.
 
 const ROOT = path.resolve(__dirname, '..')
 const read = (rel: string) => fs.readFileSync(path.join(ROOT, rel), 'utf8').replace(/\r\n/g, '\n') // chịu checkout CRLF (Windows)
@@ -435,16 +435,18 @@ test.describe('care B0 — BigQuery client phân trang/poll/timeout (mock) @desk
   })
 })
 
-// ─── Fixture Excel giả ───────────────────────────────────────────────────────
-test.describe('care B0 — fixture Excel giả (1 sheet, 10 header, 25 store) @desktop', () => {
-  const buf = buildCareImportXlsx()
-  const wb = XLSX.read(buf, { type: 'buffer' })
-  const aoa = XLSX.utils.sheet_to_json<string[]>(wb.Sheets[CARE_IMPORT_SHEET], { header: 1, raw: false, defval: '' })
-  const header = aoa[0]
-  const rows = aoa.slice(1).map((r) => Object.fromEntries(header.map((h, i) => [h, r[i] ?? ''])))
+// ─── Fixture CSV giả (Q-124) ─────────────────────────────────────────────────
+test.describe('care B0 — fixture CSV giả (UTF-8, 10 header, 25 store) @desktop', () => {
+  const buf = buildCareImportCsv()
+  const parsed = parseCareImportCsv(buf)
+  if (!parsed.ok) throw new Error(parsed.fileError)
+  // TextDecoder mặc định bỏ BOM ở đầu.
+  const header = new TextDecoder().decode(buf).split(String.fromCharCode(13, 10))[0].split(',')
+  const rows = parsed.rows as unknown as Record<string, string>[]
 
-  test('đúng một sheet KhachHang và 10 header đúng thứ tự data contract r3.2', () => {
-    expect(wb.SheetNames).toEqual(['KhachHang'])
+  test('CSV UTF-8 có BOM, CRLF; 10 header đúng thứ tự data contract r3.2; parser app đọc không lỗi', () => {
+    expect([buf[0], buf[1], buf[2]]).toEqual([0xef, 0xbb, 0xbf])
+    expect(parsed.ok && parsed.errors).toEqual([])
     expect(header).toEqual([...CARE_IMPORT_HEADERS])
     expect(header).toEqual([
       'customer_external_id', 'customer_name', 'customer_phone', 'target_store_code', 'assignee_email',
@@ -467,7 +469,7 @@ test.describe('care B0 — fixture Excel giả (1 sheet, 10 header, 25 store) @d
     }
   })
 
-  test('đọc lại từ xlsx: SĐT là text giữ số 0 đầu và hợp lệ; ảnh chỉ host CDN hoặc trống', () => {
+  test('đọc lại từ CSV: SĐT giữ số 0 đầu và hợp lệ; ảnh chỉ host CDN hoặc trống', () => {
     for (const r of rows) {
       expect(r.customer_phone).toMatch(/^0\d{9}$/)
       expect(normalizeVnPhone(r.customer_phone)).toBe(r.customer_phone)

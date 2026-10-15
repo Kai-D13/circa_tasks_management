@@ -1,10 +1,8 @@
-// CRM-CSKH B2 — hợp đồng file import N1 (SPEC B2 §1, data contract r3.2 §N1).
+// CRM-CSKH B2 — hợp đồng file import N1 (SPEC B2 §1, data contract r3.2 §N1). Q-124 (15/10): file là CSV UTF-8.
 // NGUỒN DUY NHẤT phía TS cho header/giới hạn/mã lỗi; các giới hạn độ dài và mã
 // lỗi dòng MIRROR finalize của migration 114 (`care__import_finalize_at`) để
 // preview không hứa nhận dữ liệu mà finalize sẽ bác. Spec ép parity.
 // Module thuần — dùng chung route, UI và test.
-
-export const CARE_IMPORT_SHEET = 'KhachHang'
 
 export const CARE_IMPORT_HEADERS = [
   'customer_external_id',
@@ -22,10 +20,13 @@ export const CARE_IMPORT_HEADERS = [
 export type CareImportField = (typeof CARE_IMPORT_HEADERS)[number]
 
 /**
- * Tối đa dòng dữ liệu (= dòng sản phẩm, không tính header) mỗi file. Q-121 (15/10/2026) nâng từ 10.000 (Q-74)
- * lên 20.000; trần byte 8 MiB của cả request (CARE_IMPORT_MAX_BYTES) giữ nguyên ⇒ file đủ dòng mà quá byte vẫn 413.
+ * Tối đa dòng dữ liệu (= dòng sản phẩm, không tính header) mỗi file; trần byte 8 MiB của cả request
+ * (CARE_IMPORT_MAX_BYTES) giữ nguyên ⇒ file đủ dòng mà quá byte vẫn 413.
+ * Q-121 chốt 20.000 nhưng QA tải trên DB thật 15/10 cho finalize 20.000 dòng ≥ 8 s (statement_timeout) ⇒ PM
+ * (planning/reviews/2026-10-15-crm-csv-plan-r1-pm.md): phát hành CSV (Q-124) với trần đang vận hành 10.000; nâng lại
+ * 20.000 (đổi hằng số này + bản sao trong scripts/care-qa-fixture.mjs) chỉ sau khi tối ưu finalize và đo lại < 6 s.
  */
-export const CARE_IMPORT_MAX_ROWS = 20_000
+export const CARE_IMPORT_MAX_ROWS = 10_000
 
 // reason_type: text tự do, chưa khoá enum (SPEC B2 §1 — vd chronic/promotion do BI/Marketing gửi).
 
@@ -55,13 +56,13 @@ export const CARE_ROW_ERROR_CODES = [
   'FIELD_REQUIRED', 'TOO_LONG', 'PHONE_INVALID', 'PRODUCT_ID_INVALID', 'IMAGE_URL_HOST', 'STORE_INVALID',
   'ASSIGNEE_INVALID', 'ASSIGNEE_AMBIGUOUS', 'DUPLICATE_PRODUCT', 'INCONSISTENT_CUSTOMER',
   'REFUSED_AT_STORE', 'TEST_FLAG_MISMATCH',
-  // Chỉ parser (Excel):
-  'FORMULA_NOT_ALLOWED', 'CELL_NOT_TEXT', 'BLANK_ROW',
+  // Chỉ parser (CSV, Q-124):
+  'COLUMN_COUNT', 'ID_NOT_TEXT', 'BLANK_ROW',
 ] as const
 export type CareRowErrorCode = (typeof CARE_ROW_ERROR_CODES)[number]
 
 export interface CareRowError {
-  /** Số dòng Excel gốc (header = dòng 1). */
+  /** Số bản ghi trong file CSV (header = bản ghi 1) — trùng số dòng khi mở bằng Excel. */
   row: number
   code: CareRowErrorCode
   /**
@@ -72,7 +73,7 @@ export interface CareRowError {
   field?: CareImportField
 }
 
-/** Chữ cột Excel của trường (header đã kiểm đúng thứ tự A..J ⇒ chắc chắn). */
+/** Chữ cột khi mở file bằng Excel (header đã kiểm đúng thứ tự A..J ⇒ chắc chắn). */
 export const careColumnLetter = (f: CareImportField) => String.fromCharCode(65 + CARE_IMPORT_HEADERS.indexOf(f))
 
 /** `{ field }` khi đúng một cột, ngược lại `{}` (Q-110: không chọn bừa cột đầu). */
@@ -81,7 +82,7 @@ export const careOneField = (fields: readonly CareImportField[]): { field?: Care
 
 /** Lỗi cả file — không đi tới bước kiểm từng dòng. */
 export const CARE_FILE_ERROR_CODES = [
-  'WORKBOOK_INVALID', 'SHEET_INVALID', 'HEADER_INVALID', 'NO_ROWS', 'TOO_MANY_ROWS',
+  'FILE_NOT_CSV', 'ENCODING_INVALID', 'DELIMITER_INVALID', 'CSV_MALFORMED', 'HEADER_INVALID', 'NO_ROWS', 'TOO_MANY_ROWS',
 ] as const
 export type CareFileErrorCode = (typeof CARE_FILE_ERROR_CODES)[number]
 
@@ -98,11 +99,13 @@ export const CARE_ERROR_LABELS: Record<CareRowErrorCode | CareFileErrorCode, str
   INCONSISTENT_CUSTOMER: 'Cùng khách nhưng tên/SĐT/cửa hàng/dược sĩ khác nhau giữa các dòng',
   REFUSED_AT_STORE: 'Khách đã từ chối chăm sóc tại cửa hàng này',
   TEST_FLAG_MISMATCH: 'Khách thuộc dữ liệu thử nghiệm (QA), không dùng chung với dữ liệu thật',
-  FORMULA_NOT_ALLOWED: 'Ô chứa công thức — dán giá trị (Paste values)',
-  CELL_NOT_TEXT: 'Ô sai định dạng: customer_external_id phải là Text; product_id là Text hoặc số nguyên tối đa 15 chữ số (định dạng General, không đệm số 0/dấu phân cách); ô ngày/đúng-sai/lỗi không đọc được',
+  COLUMN_COUNT: 'Dòng không đúng 10 cột (thừa/thiếu dấu phẩy hoặc ô có dấu phẩy không được bọc trong dấu nháy)',
+  ID_NOT_TEXT: 'Mã khách/mã sản phẩm bị Excel đổi sang dạng số mũ (vd 1,23457E+14) — dữ liệu đã sai',
   BLANK_ROW: 'Dòng trống giữa dữ liệu — xoá dòng trống',
-  WORKBOOK_INVALID: 'File không phải Excel .xlsx hợp lệ',
-  SHEET_INVALID: `File phải có đúng một sheet tên "${'KhachHang'}"`,
+  FILE_NOT_CSV: 'File không phải CSV (có thể là file Excel .xlsx/.xls đổi tên)',
+  ENCODING_INVALID: 'File không phải mã UTF-8 — trong Excel chọn Lưu thành "CSV UTF-8 (Comma delimited)"',
+  DELIMITER_INVALID: 'File dùng dấu chấm phẩy/tab thay vì dấu phẩy — lưu lại bằng "CSV UTF-8 (Comma delimited)"',
+  CSV_MALFORMED: 'File CSV hỏng: dấu nháy kép không đóng/đặt sai chỗ hoặc một dòng có quá nhiều cột — mở bằng Excel rồi lưu lại "CSV UTF-8"',
   HEADER_INVALID: 'Dòng tiêu đề phải đúng 10 cột theo mẫu, đúng thứ tự',
   NO_ROWS: 'File không có dòng dữ liệu',
   TOO_MANY_ROWS: `File vượt ${CARE_IMPORT_MAX_ROWS.toLocaleString('vi-VN')} dòng dữ liệu`,
@@ -122,8 +125,8 @@ export const CARE_ERROR_SHORT: Record<CareRowErrorCode, string> = {
   INCONSISTENT_CUSTOMER: 'Khách không nhất quán',
   REFUSED_AT_STORE: 'Khách đã từ chối',
   TEST_FLAG_MISMATCH: 'Lẫn dữ liệu QA',
-  FORMULA_NOT_ALLOWED: 'Có công thức',
-  CELL_NOT_TEXT: 'Sai định dạng ô',
+  COLUMN_COUNT: 'Sai số cột',
+  ID_NOT_TEXT: 'Mã bị đổi số mũ',
   BLANK_ROW: 'Dòng trống',
 }
 
@@ -141,24 +144,24 @@ export const CARE_ERROR_FIXES: Record<CareRowErrorCode, string> = {
   INCONSISTENT_CUSTOMER: 'Các dòng cùng customer_external_id phải cùng tên, SĐT, mã cửa hàng và email dược sĩ.',
   REFUSED_AT_STORE: 'Khách đã từ chối chăm sóc tại cửa hàng này — bỏ khách khỏi file.',
   TEST_FLAG_MISMATCH: 'Mã khách thuộc dữ liệu thử nghiệm — bỏ khỏi file thật.',
-  FORMULA_NOT_ALLOWED: 'Sao chép rồi dán giá trị (Paste values) thay cho công thức.',
-  CELL_NOT_TEXT: 'customer_external_id: đặt ô Text rồi nhập lại; product_id: Text hoặc số nguyên định dạng General (không đệm 0, không dấu phân cách); ô ngày/đúng-sai/lỗi: nhập lại dạng chữ.',
+  COLUMN_COUNT: 'Mở file bằng Excel, kiểm dòng đó đủ 10 cột A..J rồi lưu lại bằng "CSV UTF-8" (Excel tự bọc nháy ô có dấu phẩy).',
+  ID_NOT_TEXT: 'Trong file gốc đặt cột mã là Text, nhập lại mã đúng (từ nguồn BI), rồi lưu lại bằng "CSV UTF-8".',
   BLANK_ROW: 'Xoá dòng trống nằm giữa các dòng dữ liệu.',
 }
 
 /** Yêu cầu từng cột (card "Yêu cầu file"), cùng nguồn với giới hạn ở trên. */
 export const CARE_IMPORT_COLUMN_RULES: Record<CareImportField, string> = {
-  customer_external_id: 'Bắt buộc · ô Text (không để Excel đổi thành số)',
+  customer_external_id: 'Bắt buộc · cột Text trước khi lưu CSV (giữ số 0 đầu, không thành dạng mũ)',
   customer_name: 'Bắt buộc',
   customer_phone: 'Bắt buộc · di động VN, thiếu số 0 đầu tự chuẩn hoá',
   target_store_code: 'Bắt buộc · mã cửa hàng OS đang hoạt động',
   assignee_email: 'Bắt buộc · email staff của đúng cửa hàng (khớp chính xác)',
   reason_type: 'Bắt buộc',
   reason_text: 'Bắt buộc',
-  product_id: 'Bắt buộc · Text hoặc số nguyên ≤ 15 chữ số (General), khác 0',
+  product_id: 'Bắt buộc · khác 0 · mã số dài để cột Text (không thành dạng mũ)',
   product_name: 'Bắt buộc',
   product_url: 'Không bắt buộc · https://cdn-gcs.thuocsi.vn/…',
 }
 
-/** Một dòng Excel đã đọc thành chuỗi (trim), '' = ô trống. */
+/** Một bản ghi CSV đã đọc thành chuỗi (trim), '' = ô trống. */
 export type CareImportRow = { rowNo: number } & Record<CareImportField, string>

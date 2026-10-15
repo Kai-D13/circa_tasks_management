@@ -18,7 +18,7 @@
 //   · log chỉ số đếm / mã — không ID, SĐT, email.
 //
 // B6-qa-ui (PM audit 10/10 b1-pilot) — lượt QA BROWSER bằng bản sao giả của file N1 mẫu, marker v2 kind 'ui':
-//   E2E_CARE_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> node scripts/care-qa-fixture.mjs prepare <goc.xlsx> [ra.xlsx]
+//   E2E_CARE_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> node scripts/care-qa-fixture.mjs prepare <goc.csv> [ra.csv]
 //   E2E_CARE_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> node scripts/care-qa-fixture.mjs serve [cổng=3100]
 //   node scripts/care-qa-fixture.mjs status            (chỉ đọc)
 //   E2E_CARE_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> node scripts/care-qa-fixture.mjs down
@@ -28,10 +28,10 @@
 //     is_test=true cho đúng file QA, khoá marker khi import (lib/care/qa/*);
 //   · down dọn đúng batch/khách/task is_test của marker (kiểm hash/batch/ID giả/liên kết TRƯỚC khi xoá), chạy lại được.
 //
-// Q-121 (15/10) — QA TẢI LỚN 20.000 dòng (~8.000 khách) trên DB thật, cùng marker v2 / server QA / down:
-//   E2E_CARE_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> node scripts/care-qa-fixture.mjs prepare-load <ra.xlsx> [khách=8000] [dòng=20000]
+// Q-121 (15/10) — QA TẢI LỚN ở đúng trần dòng của app (mặc định CARE_IMPORT_MAX_ROWS dòng, 2,5 SP/khách) trên DB thật:
+//   E2E_CARE_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> node scripts/care-qa-fixture.mjs prepare-load <ra.csv> [khách=4000] [dòng=10000]
 //   E2E_CARE_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> node scripts/care-qa-fixture.mjs serve [cổng=3100]   (terminal khác)
-//   E2E_CARE_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> node scripts/care-qa-fixture.mjs load <ra.xlsx> [http://localhost:3100]
+//   E2E_CARE_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> node scripts/care-qa-fixture.mjs load <ra.csv> [http://localhost:3100]
 //   node scripts/care-qa-fixture.mjs status   ·   (tắt server) … down
 //   · prepare-load CHỈ ĐỌC DB: sinh file GIẢ hoàn toàn (không cần file gốc) — ID QA-UI-<run>-…, tên "KH QA …", SĐT dải
 //     03900xxxxx, SKU QALD…, ảnh qa-fixture/, câu lý do mẫu; marker (wx) trước lần ghi đầu như prepare;
@@ -45,9 +45,10 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { CARE_QA_MARKER, careWriteGate, urlHost } from '../e2e/writeQaGates.ts'
+import { decodeCareCsv, parseCsvRecords, toCareCsv } from '../lib/care/import/csvCore.ts'
 
 export const FIXTURE_CUSTOMERS = 3
-export const FIXTURE_FILE_NAME = 'qa-b6-fixture.xlsx'
+export const FIXTURE_FILE_NAME = 'qa-b6-fixture.xlsx' // tên batch của fixture B6 cũ (up/verify) — giữ để down tìm đúng batch đã tạo trước Q-124
 const MARKER_VERSION = 1
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 export const DEFAULT_MARKER_PATH = path.resolve(HERE, '..', CARE_QA_MARKER)
@@ -91,12 +92,11 @@ export function fixtureRows(externalIds, storeCode, staffEmail) {
 export const UI_MAX_CUSTOMERS = 10_000
 /** Bản sao QA từ file mẫu (`prepare`) — lượt QA browser nhỏ. */
 export const UI_COPY_MAX_CUSTOMERS = 200
-/** Trần dòng của file N1 — trùng CARE_IMPORT_MAX_ROWS (lib/care/import/contract.ts, Q-121). */
-export const CARE_IMPORT_MAX_ROWS = 20_000
+/** Trần dòng của file N1 — trùng CARE_IMPORT_MAX_ROWS (lib/care/import/contract.ts; phát hành 10.000, Q-121 nâng sau). */
+export const CARE_IMPORT_MAX_ROWS = 10_000
 const UI_PHASES = ['reserved', 'importing', 'imported', 'tearing_down']
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** Hợp đồng file N1 — trùng lib/care/import/contract.ts (spec ép khớp). */
-export const CARE_IMPORT_SHEET = 'KhachHang'
 export const CARE_IMPORT_HEADERS = ['customer_external_id', 'customer_name', 'customer_phone', 'target_store_code', 'assignee_email',
   'reason_type', 'reason_text', 'product_id', 'product_name', 'product_url']
 /** reason_text của bản QA — câu mẫu cố định (bản gốc có thể chứa thông tin sức khoẻ của khách thật). */
@@ -128,14 +128,17 @@ export function validUiMarker(m) {
   return true
 }
 
-/** Đọc sheet N1 (đúng một sheet KhachHang, đúng 10 header) thành dòng chuỗi đã trim. Không in giá trị ô. */
-export function readCareSheet(XLSX, bytes) {
-  let wb
-  try { wb = XLSX.read(bytes, { type: 'buffer' }) } catch { throw new FixtureError('FILE_INVALID', 'không đọc được file Excel') }
-  if (wb.SheetNames.length !== 1 || wb.SheetNames[0] !== CARE_IMPORT_SHEET) throw new FixtureError('FILE_INVALID', `cần đúng một sheet ${CARE_IMPORT_SHEET}`)
-  const aoa = XLSX.utils.sheet_to_json(wb.Sheets[CARE_IMPORT_SHEET], { header: 1, raw: true, defval: '', blankrows: false })
-  const [head = [], ...body] = aoa
+/**
+ * Đọc file N1 CSV (Q-124: UTF-8, dấu phẩy, đúng 10 header) thành dòng chuỗi đã trim; bỏ bản ghi trống. Không in giá trị ô.
+ * Dùng chung lõi lib/care/import/csvCore.ts với app (cùng cách tách trường/nháy).
+ */
+export function readCareCsv(bytes) {
+  const dec = decodeCareCsv(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes))
+  if (!dec.ok) throw new FixtureError('FILE_INVALID', dec.error === 'ENCODING_INVALID' ? 'file không phải CSV UTF-8' : 'file không phải CSV')
+  const parsed = parseCsvRecords(dec.text)
+  if (!parsed.ok) throw new FixtureError('FILE_INVALID', 'file CSV hỏng (dấu nháy)')
   const cell = (v) => String(v ?? '').trim()
+  const [head = [], ...body] = parsed.records.filter((r) => r.some((v) => cell(v) !== ''))
   if (CARE_IMPORT_HEADERS.some((h, i) => cell(head[i]) !== h) || head.slice(CARE_IMPORT_HEADERS.length).some((v) => cell(v) !== '')) {
     throw new FixtureError('FILE_INVALID', 'dòng tiêu đề không đúng 10 cột theo mẫu')
   }
@@ -144,18 +147,9 @@ export function readCareSheet(XLSX, bytes) {
   return rows
 }
 
-/** Ghi sheet N1 — mọi ô kiểu Text (như file mẫu của app) để Excel không đổi ID/SĐT. */
-export function writeCareSheet(XLSX, rows) {
-  const ws = XLSX.utils.aoa_to_sheet([CARE_IMPORT_HEADERS, ...rows.map((r) => CARE_IMPORT_HEADERS.map((h) => r[h]))])
-  for (const addr of Object.keys(ws)) {
-    if (addr.startsWith('!')) continue
-    ws[addr].t = 's'
-    ws[addr].z = '@'
-  }
-  const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, CARE_IMPORT_SHEET)
-  // Nén deflate như Excel lưu — không nén thì 20.000 dòng (~12 MB) vượt trần byte 8 MiB của route (Q-121).
-  return new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx', compression: true }))
+/** Ghi file N1 CSV UTF-8 có BOM, CRLF — đúng định dạng Excel "CSV UTF-8" và file mẫu của app. */
+export function writeCareCsv(rows) {
+  return new TextEncoder().encode(toCareCsv([CARE_IMPORT_HEADERS, ...rows.map((r) => CARE_IMPORT_HEADERS.map((h) => r[h]))]))
 }
 
 /**
@@ -183,8 +177,9 @@ export function uiRows(srcRows, runId, storeCode, staffEmail) {
 }
 
 // ─── QA tải lớn (Q-121) ─────────────────────────────────────────────────────
-export const LOAD_DEFAULT_CUSTOMERS = 8_000
-export const LOAD_DEFAULT_ROWS = 20_000
+/** Mặc định = đúng trần dòng của app, 2,5 sản phẩm/khách (như file N1 thật). */
+export const LOAD_DEFAULT_ROWS = CARE_IMPORT_MAX_ROWS
+export const LOAD_DEFAULT_CUSTOMERS = Math.round(LOAD_DEFAULT_ROWS / 2.5)
 /** Mỗi khách 1–4 sản phẩm; SKU giả dùng chung trong danh mục 1.500 mã (nhiều khách cùng sản phẩm như file thật). */
 export const LOAD_MAX_PRODUCTS = 4
 export const LOAD_CATALOG = 1_500
@@ -486,9 +481,9 @@ async function uiPrepareGate({ gw, env, envFileText, markerPath, nowMs }) {
 }
 
 /** Ghi file QA + marker v2 (wx) TRƯỚC lần ghi DB đầu tiên (import trên server QA). Lỗi ghi file ⇒ bỏ marker (chưa ghi DB). */
-async function uiPrepareWrite({ gw, markerPath, writeOut, XLSX, nowMs, runId, base, rows, externalIds, maxBytes = null }) {
+async function uiPrepareWrite({ gw, markerPath, writeOut, nowMs, runId, base, rows, externalIds, maxBytes = null }) {
   if ((await gw.svc.count('care_customers', [['external_id', 'in', externalIds]])) !== 0) throw new FixtureError('ID_CLASH', 'ID giả đã tồn tại')
-  const bytes = writeCareSheet(XLSX, rows)
+  const bytes = writeCareCsv(rows)
   // Chừa ~4 KB cho phần bọc multipart: file sát trần byte sẽ bị server trả 413 thay vì đo được tải.
   if (maxBytes !== null && bytes.byteLength + 4096 > maxBytes) {
     throw new FixtureError('FILE_TOO_LARGE', `file QA ${(bytes.byteLength / 1048576).toFixed(2)} MB vượt trần byte của request — giảm số dòng`)
@@ -512,26 +507,26 @@ async function uiPrepareWrite({ gw, markerPath, writeOut, XLSX, nowMs, runId, ba
  * giữ số dòng/sản phẩm/reason_type) và marker v2 (wx) ràng buộc host/kỳ/sha256 file/tập ID giả/batch định trước/
  * tài khoản QA. Lần ghi DB đầu tiên là import từ browser trên server QA (`serve`).
  */
-export async function cmdPrepare({ gw, env, envFileText, markerPath, originalBytes, writeOut, XLSX,
+export async function cmdPrepare({ gw, env, envFileText, markerPath, originalBytes, writeOut,
   nowMs = Date.now(), runId = crypto.randomBytes(4).toString('hex') }) {
   const base = await uiPrepareGate({ gw, env, envFileText, markerPath, nowMs })
-  const src = readCareSheet(XLSX, originalBytes)
+  const src = readCareCsv(originalBytes)
   const { rows, externalIds } = uiRows(src, runId, base.storeCode, base.staffEmail)
-  await uiPrepareWrite({ gw, markerPath, writeOut, XLSX, nowMs, runId, base, rows, externalIds })
+  await uiPrepareWrite({ gw, markerPath, writeOut, nowMs, runId, base, rows, externalIds })
   return { ok: true, period: base.period, rows: rows.length, customers: externalIds.length, products: rows.length, stores: 1, assignees: 1, reasonText: 'mẫu QA' }
 }
 
 /**
- * Q-121 — CHỈ ĐỌC DB. File tải GIẢ (mặc định 8.000 khách / 20.000 dòng) + marker v2 như prepare; lần ghi DB đầu tiên là
+ * Q-121 — CHỈ ĐỌC DB. File tải GIẢ (mặc định trần dòng của app, 2,5 SP/khách) + marker v2 như prepare; lần ghi DB đầu tiên là
  * `load` (hoặc import browser) trên server QA. `maxBytes` = trần byte request của server (CARE_IMPORT_MAX_BYTES, mặc định 8 MiB).
  */
-export async function cmdPrepareLoad({ gw, env, envFileText, markerPath, writeOut, XLSX, customers = LOAD_DEFAULT_CUSTOMERS, rows = LOAD_DEFAULT_ROWS,
+export async function cmdPrepareLoad({ gw, env, envFileText, markerPath, writeOut, customers = LOAD_DEFAULT_CUSTOMERS, rows = LOAD_DEFAULT_ROWS,
   nowMs = Date.now(), runId = crypto.randomBytes(4).toString('hex') }) {
   loadProductCounts(customers, rows) // sai kích thước ⇒ dừng TRƯỚC mọi đọc DB
   const maxBytes = loadMaxBytes(env)
   const base = await uiPrepareGate({ gw, env, envFileText, markerPath, nowMs })
   const data = loadRows(runId, customers, rows, base.storeCode, base.staffEmail)
-  const bytes = await uiPrepareWrite({ gw, markerPath, writeOut, XLSX, nowMs, runId, base, rows: data.rows, externalIds: data.externalIds, maxBytes })
+  const bytes = await uiPrepareWrite({ gw, markerPath, writeOut, nowMs, runId, base, rows: data.rows, externalIds: data.externalIds, maxBytes })
   return { ok: true, profile: 'load', period: base.period, rows: data.rows.length, customers: data.externalIds.length, products: data.rows.length,
     fileMb: Number((bytes.byteLength / 1048576).toFixed(2)), stores: 1, assignees: 1, reasonText: 'mẫu QA' }
 }
@@ -753,7 +748,7 @@ export async function cmdLoad({ env, markerPath, fileBytes, client }) {
   const sha = crypto.createHash('sha256').update(fileBytes).digest('hex')
   if (sha !== m.fileSha256) throw new FixtureError('FILE_NOT_MARKED', 'file không phải file QA của marker')
   if (m.phase !== 'reserved') throw new FixtureError('PHASE', `marker đang ở pha ${m.phase} — lượt tải chỉ chạy một lần; status → down → prepare-load lại`)
-  const file = { name: 'care-qa-load.xlsx', bytes: fileBytes }
+  const file = { name: 'care-qa-load.csv', bytes: fileBytes }
   const step = async (p, fields) => { const t = performance.now(); const r = await client.post(p, fields); return { ...r, ms: Math.round(performance.now() - t) } }
   const brief = (r) => ({ status: r.status, ms: r.ms, server: parseServerTiming(r.timing), code: r.body?.code ?? null })
   const customers = m.externalIds.length
@@ -788,7 +783,7 @@ export async function multipartBody(fields) {
   const fd = new FormData()
   for (const [k, v] of Object.entries(fields)) {
     if (typeof v === 'string') fd.append(k, v)
-    else fd.append(k, new File([v.bytes], v.name, { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+    else fd.append(k, new File([v.bytes], v.name, { type: 'text/csv' }))
   }
   const tmp = new Request('http://local/', { method: 'POST', body: fd })
   return { body: new Uint8Array(await tmp.arrayBuffer()), contentType: tmp.headers.get('content-type') }
@@ -928,8 +923,8 @@ export async function loginCookie(base, email, password) {
 async function main() {
   const [cmd, a1, a2, a3] = process.argv.slice(2)
   if (!['up', 'verify', 'status', 'down', 'prepare', 'serve', 'prepare-load', 'load'].includes(cmd)) {
-    console.error('dùng: node scripts/care-qa-fixture.mjs up | verify | status | down | prepare <goc.xlsx> [ra.xlsx] | serve [cổng]'
-      + ' | prepare-load <ra.xlsx> [khách=8000] [dòng=20000] | load <ra.xlsx> [http://localhost:3100]'); process.exit(2)
+    console.error('dùng: node scripts/care-qa-fixture.mjs up | verify | status | down | prepare <goc.csv> [ra.csv] | serve [cổng]'
+      + ' | prepare-load <ra.csv> [khách=4000] [dòng=10000] | load <ra.csv> [http://localhost:3100]'); process.exit(2)
   }
   const envPath = path.resolve(HERE, '..', '.env.local')
   const envFileText = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : null
@@ -959,20 +954,18 @@ async function main() {
     if (cmd === 'prepare') {
       if (!a1 || !fs.existsSync(a1)) throw new FixtureError('FILE_INVALID', 'thiếu đường dẫn file N1 gốc')
       const runId = crypto.randomBytes(4).toString('hex')
-      const dest = path.resolve(a2 ?? path.join(path.dirname(path.resolve(a1)), `care-qa-ui-${runId}.xlsx`))
+      const dest = path.resolve(a2 ?? path.join(path.dirname(path.resolve(a1)), `care-qa-ui-${runId}.csv`))
       // File QA (PII đã thay nhưng vẫn là dữ liệu vận hành mẫu) KHÔNG nằm trong repo.
       const repo = path.resolve(HERE, '..', '..')
       if (!path.relative(repo, dest).startsWith('..')) throw new FixtureError('OUT_IN_REPO', 'file QA phải nằm ngoài thư mục repo')
-      const XLSX = await import('xlsx')
-      out = await cmdPrepare({ ...ctx, runId, XLSX, originalBytes: fs.readFileSync(a1), writeOut: (b) => fs.writeFileSync(dest, b, { flag: 'wx' }) })
+      out = await cmdPrepare({ ...ctx, runId, originalBytes: fs.readFileSync(a1), writeOut: (b) => fs.writeFileSync(dest, b, { flag: 'wx' }) })
       out = { ...out, file: dest }
     } else if (cmd === 'prepare-load') {
       if (!a1) throw new FixtureError('FILE_INVALID', 'thiếu đường dẫn file QA ra (ngoài repo)')
       const dest = path.resolve(a1)
       const repo = path.resolve(HERE, '..', '..')
       if (!path.relative(repo, dest).startsWith('..')) throw new FixtureError('OUT_IN_REPO', 'file QA phải nằm ngoài thư mục repo')
-      const XLSX = await import('xlsx')
-      out = await cmdPrepareLoad({ ...ctx, XLSX, customers: loadArg(a2, LOAD_DEFAULT_CUSTOMERS), rows: loadArg(a3, LOAD_DEFAULT_ROWS),
+      out = await cmdPrepareLoad({ ...ctx, customers: loadArg(a2, LOAD_DEFAULT_CUSTOMERS), rows: loadArg(a3, LOAD_DEFAULT_ROWS),
         writeOut: (b) => fs.writeFileSync(dest, b, { flag: 'wx' }) })
       out = { ...out, file: dest }
     } else if (cmd === 'load') {

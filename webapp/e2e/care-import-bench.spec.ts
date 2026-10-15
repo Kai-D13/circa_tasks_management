@@ -5,15 +5,14 @@ import v8 from 'node:v8'
 import vm from 'node:vm'
 import { pathToFileURL } from 'node:url'
 import { test, expect } from '@playwright/test'
-import * as XLSX from 'xlsx'
 import { CARE_IMPORT_HEADERS, CARE_IMPORT_MAX_ROWS } from '../lib/care/import/contract'
-import { parseCareImportXlsx } from '../lib/care/import/parse'
+import { parseCareImportCsv } from '../lib/care/import/parse'
 import { validateCareRows } from '../lib/care/import/validate'
 import { buildCarePreview, type CareImportLookups } from '../lib/care/import/preview'
 import { handleCarePreview } from '../lib/care/import/handler'
-import { buildCareImportRows, defaultFixtureStores } from './careImportFixture'
+import { buildCareImportRows, defaultFixtureStores, fixtureCsv } from './careImportFixture'
 
-// CRM-CSKH — đo file lớn (B2, đo lại Q-121 ở 20.000 dòng). Chỉ chạy khi CARE_BENCH=1:
+// CRM-CSKH — đo file lớn (B2, đo lại Q-121 ở 20.000 dòng; Q-124: file CSV UTF-8). Chỉ chạy khi CARE_BENCH=1:
 //   cd webapp; $env:CARE_BENCH='1'; npx playwright test e2e/care-import-bench.spec.ts --project=desktop-chromium --no-deps
 // Kết quả: qa-artifacts/care-q121-bench.json (gitignored). Số đo TRÊN MÁY DEV, dữ liệu giả tất định (seed = công thức
 // trong rowsQ121), 1 lượt làm nóng + 3 lượt đo (min/median/max). KHÔNG thay được đo trên DB thật (gate Q-121 bước 3).
@@ -54,20 +53,9 @@ function lookups(): CareImportLookups {
     customers: new Map(), refusals: new Set(), currentTasks: new Map(), currentPeriodTaskCount: 0, openPreviousPeriodCount: 0,
   }
 }
-function toXlsx(rows: Record<string, string>[]): Uint8Array {
-  const ws = XLSX.utils.aoa_to_sheet([[...CARE_IMPORT_HEADERS], ...rows.map((r) => CARE_IMPORT_HEADERS.map((h) => r[h]))])
-  const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'KhachHang')
-  return new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx', compression: true }) as ArrayBuffer)
-}
-/** Tổng kích thước giải nén khai báo trong central directory (= số parse.ts kiểm với trần 64 MiB). */
-function xmlBytes(buf: Uint8Array) {
-  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
-  let e = -1
-  for (let i = buf.byteLength - 22; i >= 0; i--) if (dv.getUint32(i, true) === 0x06054b50) { e = i; break }
-  let p = dv.getUint32(e + 16, true), tot = 0
-  for (let k = dv.getUint16(e + 10, true); k > 0; k--) { tot += dv.getUint32(p + 24, true); p += 46 + dv.getUint16(p + 28, true) + dv.getUint16(p + 30, true) + dv.getUint16(p + 32, true) }
-  return tot
+/** File CSV như Excel "CSV UTF-8" (BOM, CRLF). CSV không nén ⇒ kích thước gần trần 8 MiB hơn .xlsx nhiều. */
+function toCsv(rows: Record<string, string>[]): Uint8Array {
+  return new TextEncoder().encode(fixtureCsv([[...CARE_IMPORT_HEADERS], ...rows.map((r) => CARE_IMPORT_HEADERS.map((h) => r[h]))]))
 }
 // GC tay để đo phần heap TĂNG do một lần parse (không lẫn rác của lượt trước / dữ liệu sinh file).
 v8.setFlagsFromString('--expose-gc')
@@ -84,19 +72,22 @@ test.describe('care Q-121 — benchmark 20.000 dòng @desktop', () => {
     const report: Record<string, any> = { node: process.version, platform: process.platform, at: new Date().toISOString(), runs: '1 làm nóng + 3 đo' }
 
     // ── Phía app ───────────────────────────────────────────────────────────────
-    for (const [name, rows] of [['typical_20k', rowsQ121()], ['near_8mib_20k', rowsQ121(8000, 260)]] as const) {
-      expect(rows.length).toBe(CARE_IMPORT_MAX_ROWS)
-      const bytes = toXlsx(rows)
+    // near_8mib: thêm văn bản ngẫu nhiên vào reason_text ⇒ file CSV sát (dưới) trần byte 8 MiB.
+    for (const [name, rows] of [['typical_20k', rowsQ121()], ['near_8mib_20k', rowsQ121(8000, 150)]] as const) {
+      expect(rows.length).toBe(20_000) // khả năng đọc của parser (Q-121); handler đo ở đúng trần phát hành
+      const bytes = toCsv(rows)
+      expect(bytes.byteLength).toBeLessThan(8 * 1024 * 1024)
+      const capBytes = toCsv(rows.slice(0, CARE_IMPORT_MAX_ROWS))
       const runs: Record<string, number[]> = { parse: [], validate: [], preview: [], handler: [], heap: [] }
       for (let r = 0; r < 4; r++) {
         gc()
         const heap0 = process.memoryUsage().heapUsed
         let t = performance.now()
-        const parsed = parseCareImportXlsx(bytes)
+        const parsed = parseCareImportCsv(bytes, rows.length) // đo khả năng đọc 20.000 dòng (trần phát hành có thể thấp hơn)
         const parseMs = ms(t)
         expect(parsed.ok).toBe(true)
         if (!parsed.ok) return
-        const heapDelta = process.memoryUsage().heapUsed - heap0 // gồm cả rác SheetJS chưa thu ⇒ cận trên
+        const heapDelta = process.memoryUsage().heapUsed - heap0 // gồm cả rác chưa thu ⇒ cận trên
         t = performance.now()
         const validated = validateCareRows(parsed.rows)
         const validateMs = ms(t)
@@ -105,7 +96,7 @@ test.describe('care Q-121 — benchmark 20.000 dòng @desktop', () => {
         const previewMs = ms(t)
         expect(preview.errors).toEqual([])
         const fd = new FormData()
-        fd.append('file', new File([new Uint8Array(bytes)], 'big.xlsx'))
+        fd.append('file', new File([new Uint8Array(capBytes)], 'big.csv', { type: 'text/csv' }))
         const tmp = new Request('http://x/', { method: 'POST', body: fd })
         const body = new Uint8Array(await tmp.arrayBuffer())
         t = performance.now()
@@ -121,8 +112,9 @@ test.describe('care Q-121 — benchmark 20.000 dòng @desktop', () => {
         runs.parse.push(parseMs); runs.validate.push(validateMs); runs.preview.push(previewMs); runs.handler.push(handlerMs); runs.heap.push(Math.round(heapDelta / 1048576))
       }
       report[name] = {
-        rows: rows.length, customers: new Set(rows.map((x) => x.customer_external_id)).size, xlsx_mb: mb(bytes.byteLength), xml_mb: mb(xmlBytes(bytes)),
-        parse_ms: stats(runs.parse), validate_ms: stats(runs.validate), preview_ms: stats(runs.preview), handler_total_ms: stats(runs.handler),
+        rows: rows.length, customers: new Set(rows.map((x) => x.customer_external_id)).size, csv_mb: mb(bytes.byteLength), csv_bytes_per_row: Math.round(bytes.byteLength / rows.length),
+        parse_ms: stats(runs.parse), validate_ms: stats(runs.validate), preview_ms: stats(runs.preview),
+        handler_rows: CARE_IMPORT_MAX_ROWS, handler_total_ms: stats(runs.handler),
         heap_increase_by_parse_mb: stats(runs.heap), worker_rss_peak_mb: mb(process.resourceUsage().maxRSS * 1024),
       }
     }
@@ -135,7 +127,7 @@ test.describe('care Q-121 — benchmark 20.000 dòng @desktop', () => {
       const once = async (rows: Record<string, string>[], settings: string) => {
         const db: any = await L.freshDb(PGlite)
         await db.exec(settings)
-        const batch = (await db.query(`INSERT INTO public.care_import_batches (period_month, file_name, file_sha256, row_count, created_by) VALUES ('2026-10-01', 'b.xlsx', $1, $2, $3) RETURNING id`,
+        const batch = (await db.query(`INSERT INTO public.care_import_batches (period_month, file_name, file_sha256, row_count, created_by) VALUES ('2026-10-01', 'b.csv', $1, $2, $3) RETURNING id`,
           ['a'.repeat(64), rows.length, L.U.mkt])).rows[0].id
         let t = performance.now()
         for (let i = 0; i < rows.length; i += 2000) {

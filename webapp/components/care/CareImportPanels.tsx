@@ -9,7 +9,7 @@ import { DataTableShell } from '@/components/ds/DataTableShell'
 import { StatusBadge, type StatusTone } from '@/components/ds/StatusBadge'
 import {
   CARE_ERROR_FIXES, CARE_ERROR_LABELS, CARE_ERROR_SHORT, CARE_FIELD_MAX_LENGTH, CARE_IMPORT_COLUMN_RULES,
-  CARE_IMPORT_HEADERS, CARE_IMPORT_MAX_ROWS, CARE_IMPORT_SHEET, careColumnLetter,
+  CARE_IMPORT_HEADERS, CARE_IMPORT_MAX_ROWS, careColumnLetter,
   type CareRowError, type CareRowErrorCode,
 } from '@/lib/care/import/contract'
 import type { CarePreviewCounts, CarePreviewCustomer } from '@/lib/care/import/preview'
@@ -110,9 +110,10 @@ export function CareImportStepper({ steps, step, allDone, canGo, onGo }: {
 // ── Bước 1: yêu cầu file (từ hợp đồng N1 thật) ────────────────────────────────
 export function CareImportRequirements() {
   const rules = [
-    <>Một file cho cả tháng: một sheet <code className="font-mono text-xs">{CARE_IMPORT_SHEET}</code>, đúng 10 cột theo thứ tự mẫu.</>,
+    <>Một file <b>CSV UTF-8</b> cho cả tháng, đúng 10 cột theo thứ tự mẫu. Trong Excel: <i>Lưu thành → CSV UTF-8 (Comma delimited)</i>.</>,
+    <>Trước khi lưu, đặt cột mã khách và mã sản phẩm là <b>Text</b> để giữ số 0 đầu và không bị đổi sang dạng số mũ.</>,
     <>Nhiều dòng sản phẩm của cùng một khách được gộp thành <b>một task</b>.</>,
-    <>Dán giá trị (không công thức), không để dòng trống xen giữa, tối đa {fmt(CARE_IMPORT_MAX_ROWS)} dòng.</>,
+    <>Không để dòng trống xen giữa, tối đa {fmt(CARE_IMPORT_MAX_ROWS)} dòng.</>,
     <>Có lỗi bất kỳ thì <b>cả file</b> không được import — sửa file gốc rồi kiểm tra lại.</>,
   ]
   return (
