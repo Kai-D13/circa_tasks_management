@@ -34,7 +34,11 @@ export const CARE_QA_UI_PROCESS_ONLY = [CARE_QA_UI_FLAG, CARE_QA_UI_BIND_ENV, 'E
 /** Không được BẬT (=true) trong file env — chỉ bật trong process của server QA. */
 const CARE_FLAGS_PROCESS_ONLY_TRUE = ['CARE_ENABLED', 'CARE_SYNC_ENABLED'] as const
 export const CARE_QA_UI_ID_PREFIX = 'QA-UI-'
-export const CARE_QA_UI_MAX_CUSTOMERS = 200
+/**
+ * Trần số khách giả trong MỘT marker. Bản sao QA từ file mẫu (`prepare`) tự giới hạn 200 khách; QA tải Q-121
+ * (`prepare-load`, 20.000 dòng ~8.000 khách) cần marker lớn hơn ⇒ trần marker 10.000.
+ */
+export const CARE_QA_UI_MAX_CUSTOMERS = 10_000
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const RUN_RE = /^[0-9a-f]{8}$/

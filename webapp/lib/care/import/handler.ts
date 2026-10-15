@@ -24,7 +24,8 @@ import { buildCarePreview, type CareImportLookups, type CarePreview, type CarePr
 // B6-qa-ui (chỉ dev server local, `deps.qa` khác null — lib/care/server/qaUi.ts): SERVER quyết is_test=true
 // cho đúng file QA trong marker (sha256), ghi đúng batch id định trước, khoá marker (reserved → importing)
 // TRƯỚC lần ghi DB đầu tiên, không dọn staging cơ hội (không chạm dòng ngoài phạm vi QA). File khác chỉ
-// preview chỉ đọc theo ngữ nghĩa production; commit bị từ chối.
+// preview chỉ đọc theo ngữ nghĩa production; commit bị từ chối. Q-121: ở chế độ QA, phản hồi preview/commit kèm
+// header Server-Timing (ms từng pha + RSS process) cho QA tải lớn; production không gửi.
 
 export type CareImportAccess =
   | { kind: 'anonymous' }
@@ -154,9 +155,27 @@ async function guard(deps: CareImportDeps): Promise<{ ok: true; actorId: string 
   return { ok: true, actorId: access.actorId }
 }
 
+/**
+ * Thời gian từng pha (ms) — CHỈ trả ra client ở chế độ QA local (header Server-Timing) để đo tải Q-121 (20.000 dòng
+ * trên DB thật). Production không gửi header này.
+ */
+export type CareImportTimings = Partial<Record<'parse' | 'lookups' | 'preview' | 'stage' | 'finalize', number>>
+
+/** Giá trị header Server-Timing: ms từng pha + RSS hiện tại/đỉnh của process (MB). Không chứa dữ liệu khách. */
+export function careServerTiming(t: CareImportTimings, mem?: { rssMb: number; peakRssMb: number }): string {
+  const parts = Object.entries(t).filter(([, v]) => typeof v === 'number' && Number.isFinite(v)).map(([k, v]) => `${k};dur=${(v as number).toFixed(1)}`)
+  if (mem) parts.push(`rss;desc="${mem.rssMb}"`, `rss_peak;desc="${mem.peakRssMb}"`)
+  return parts.join(', ')
+}
+function processMem() {
+  // maxRSS: kilobyte (Node) — đỉnh RSS của cả process từ lúc khởi động.
+  return { rssMb: Math.round(process.memoryUsage().rss / 1048576), peakRssMb: Math.round((process.resourceUsage().maxRSS * 1024) / 1048576) }
+}
+const withTiming = (res: Response, t: CareImportTimings) => { res.headers.set('Server-Timing', careServerTiming(t, processMem())); return res }
+
 type Analysis =
   | { ok: false; res: Response }
-  | { ok: true; sha256: string; preview: CarePreview; rows: CareImportRow[]; validated: CareValidateResult; lookups: CareImportLookups }
+  | { ok: true; sha256: string; preview: CarePreview; rows: CareImportRow[]; validated: CareValidateResult; lookups: CareImportLookups; timings: CareImportTimings }
 
 /** `isTest` do SERVER quyết (true chỉ cho đúng file QA trong marker) — không bao giờ từ client. */
 async function analyze(bytes: Uint8Array<ArrayBuffer>, deps: CareImportDeps, isTest: boolean): Promise<Analysis> {
@@ -169,10 +188,12 @@ async function analyze(bytes: Uint8Array<ArrayBuffer>, deps: CareImportDeps, isT
 }
 
 async function analyzeUnsafe(bytes: Uint8Array<ArrayBuffer>, deps: CareImportDeps, isTest: boolean): Promise<Analysis> {
+  const t0 = performance.now()
   const parsed = parseCareImportXlsx(bytes)
   if (!parsed.ok) return { ok: false, res: fail(422, parsed.fileError) }
   const validated = validateCareRows(parsed.rows)
   const period = carePeriodOf(deps.now())
+  const t1 = performance.now()
   let lookups: CareImportLookups
   try {
     lookups = await deps.repo.loadLookups({
@@ -181,10 +202,15 @@ async function analyzeUnsafe(bytes: Uint8Array<ArrayBuffer>, deps: CareImportDep
   } catch {
     return { ok: false, res: fail(503, 'LOOKUP_FAILED') }
   }
+  const t2 = performance.now()
   const preview = buildCarePreview({
     rowCount: parsed.rows.length, validated, parseErrors: parsed.errors, lookups, period, isTest,
   })
-  return { ok: true, sha256: await sha256Hex(bytes), preview, rows: parsed.rows, validated, lookups }
+  const sha256 = await sha256Hex(bytes)
+  return {
+    ok: true, sha256, preview, rows: parsed.rows, validated, lookups,
+    timings: { parse: t1 - t0, lookups: t2 - t1, preview: performance.now() - t2 },
+  }
 }
 
 /** QA: lý do KHÔNG cho import file QA (rỗng = được). */
@@ -224,12 +250,13 @@ export async function handleCarePreview(req: Request, deps: CareImportDeps): Pro
   const { errors, ...rest } = a.preview
   const issues: CareQaIssueCode[] | null = qa === null ? (hasQaUiIds(a) ? ['QA_FILE_IN_PRODUCTION'] : null)
     : qaFile ? qaIssues(qa, a, g.actorId) : ['QA_FILE_NOT_MARKED']
-  return json(200, {
+  const res = json(200, {
     ok: true,
     sha256: a.sha256,
     preview: { ...rest, ...careErrorPayload(errors) },
     ...(issues ? { qa: { commitAllowed: issues.length === 0, issues } } : {}),
   })
+  return qa ? withTiming(res, a.timings) : res
 }
 
 export async function handleCareCommit(req: Request, deps: CareImportDeps): Promise<Response> {
@@ -261,8 +288,10 @@ export async function handleCareCommit(req: Request, deps: CareImportDeps): Prom
   // Tên kỹ thuật vô hại (không dùng tên file người dùng — có thể chứa tên người).
   const fileName = `care-import-${period.slice(0, 7)}-${sha.slice(0, 12)}.xlsx`
 
+  const timings: CareImportTimings = { ...a.timings }
   const write = async (): Promise<{ res: Response; outcome: CareQaUiImportResult }> => {
     const failed = (res: Response) => ({ res, outcome: 'failed' as const })
+    const ts = performance.now()
     let batchId: string
     try {
       batchId = await deps.repo.createBatch({
@@ -281,13 +310,18 @@ export async function handleCareCommit(req: Request, deps: CareImportDeps): Prom
         })))
       }
     } catch {
+      timings.stage = performance.now() - ts
       await deps.repo.discardBatch(batchId).catch(() => {})
       return failed(fail(500, 'STAGING_FAILED'))
     }
+    timings.stage = performance.now() - ts
+    const tf = performance.now()
     let result: CareFinalizeResult
     try {
       result = await deps.repo.finalize(batchId, g.actorId)
+      timings.finalize = performance.now() - tf
     } catch (e) {
+      timings.finalize = performance.now() - tf
       // Finalize RAISE ⇒ transaction rollback, batch còn 'staged' ⇒ dọn ngay.
       await deps.repo.discardBatch(batchId).catch(() => {})
       if (e instanceof Error && e.message === CARE_PERIOD_CHANGED) return failed(fail(409, 'PERIOD_CHANGED'))
@@ -307,7 +341,7 @@ export async function handleCareCommit(req: Request, deps: CareImportDeps): Prom
   try {
     const w = await write()
     outcome = w.outcome
-    return w.res
+    return withTiming(w.res, timings)
   } finally {
     await qa.finish(outcome).catch(() => {})
   }

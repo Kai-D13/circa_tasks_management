@@ -270,7 +270,7 @@ test.describe('care B6-qa — scripts/care-qa-fixture.mjs trên PGlite (114 th�
     const calls: string[] = []
     const builder = (table: string, result: any) => {
       const b: any = {}
-      for (const m of ['select', 'in', 'eq', 'lt', 'ilike', 'delete', 'insert', 'maybeSingle']) {
+      for (const m of ['select', 'in', 'eq', 'lt', 'ilike', 'delete', 'insert', 'maybeSingle', 'order', 'range']) {
         b[m] = (...a: any[]) => { calls.push(`${table}.${m}(${JSON.stringify(a)})`); return m === 'maybeSingle' ? Promise.resolve(result) : b }
       }
       b.then = (res: any, rej: any) => Promise.resolve(result).then(res, rej)
@@ -303,6 +303,48 @@ test.describe('care B6-qa — scripts/care-qa-fixture.mjs trên PGlite (114 th�
     await expect(gw.as('qlch')).rejects.toMatchObject({ code: 'LOGIN' })
     expect(await gw.as('sm')).toBeNull() // thiếu tài khoản SM ⇒ NOT_VERIFIED ở verify, không lỗi
     await expect(gw.userByEmail('a*b@x')).rejects.toMatchObject({ code: 'ENV' }) // PostgREST đổi * thành % ⇒ từ chối
+  })
+
+  test('Q-121 gateway: `in` dài chia khối ≤ 100 (bỏ trùng); đọc theo trang tới đủ tổng exact dù max-rows nhỏ; tổng đổi giữa trang / thiếu id ⇒ PAGE; count/del cộng các khối', async () => {
+    const F: any = await import(pathToFileURL(path.join(ROOT, 'scripts', 'care-qa-fixture.mjs')).href)
+    const ids = Array.from({ length: 8000 }, (_, i) => `id-${String(i).padStart(5, '0')}`)
+    const MAX_ROWS = 300 // PostgREST db-max-rows nhỏ hơn trang yêu cầu (1.000) — cắt im lặng
+    const inSizes: number[] = []
+    let drift = false
+    const fakeCreate = () => ({
+      from: () => {
+        const st: any = {}
+        const b: any = {
+          select: (_c: string, o: any = {}) => { st.head = !!o.head; return b },
+          delete: () => { st.del = true; return b },
+          in: (col: string, v: string[]) => { if (v.length > 100) throw new Error('URL quá dài'); inSizes.push(v.length); if (col === 'id') st.vals = v; return b },
+          eq: () => b, lt: () => b, order: () => b,
+          range: (a: number, z: number) => { st.range = [a, z]; return b },
+          then: (res: any, rej: any) => {
+            const matched: string[] = st.vals ?? ids // lọc theo id ⇒ đúng các id; lọc khác (batch) ⇒ 8.000 dòng
+            const count = drift && st.range?.[0] > 0 ? matched.length + 1 : matched.length
+            const [a, z] = st.range ?? [0, matched.length - 1]
+            const data = st.head || st.del ? null : matched.slice(a, Math.min(z + 1, a + MAX_ROWS)).map((id) => ({ id }))
+            return Promise.resolve({ data, count, error: null }).then(res, rej)
+          },
+        }
+        return b
+      },
+      rpc: async () => ({ data: null, error: null }), auth: {},
+    })
+    const env = { NEXT_PUBLIC_SUPABASE_URL: 'https://db.example.test', SUPABASE_SERVICE_ROLE_KEY: 'svc', NEXT_PUBLIC_SUPABASE_ANON_KEY: 'anon' }
+    const gw = await F.makeSupabaseGateway(env, fakeCreate)
+    expect((await gw.svc.select('care_tasks', 'id, customer_id', [['id', 'in', [...ids, ids[0]]], ['is_test', 'eq', true]])).map((r: any) => r.id)).toEqual(ids)
+    expect(Math.max(...inSizes)).toBe(100)
+    expect(await gw.svc.count('care_tasks', [['id', 'in', ids]])).toBe(8000)
+    expect(await gw.svc.del('care_tasks', [['id', 'in', ids], ['is_test', 'eq', true]])).toBe(8000)
+    expect((await gw.svc.select('care_tasks', 'id', [['batch_id', 'in', ['b1']]])).length).toBe(8000) // 27 trang × ≤ 300
+    await expect(gw.svc.select('care_task_products', 'task_id', [['batch_id', 'in', ['b1']]])).rejects.toMatchObject({ code: 'PAGE' })
+    drift = true
+    await expect(gw.svc.select('care_tasks', 'id', [['batch_id', 'in', ['b1']]])).rejects.toMatchObject({ code: 'PAGE' })
+    expect(F.splitInFilters([['id', 'in', ['a', 'a', 'b']], ['is_test', 'eq', true]], 1))
+      .toEqual([[['id', 'in', ['a']], ['is_test', 'eq', true]], [['id', 'in', ['b']], ['is_test', 'eq', true]]])
+    expect(F.splitInFilters([['id', 'in', ['a', 'b']]], 2)).toEqual([[['id', 'in', ['a', 'b']]]])
   })
 
   test('nguồn script: không tự chạy khi import; không DELETE toàn bảng; mọi xoá bảng có is_test kèm is_test; proof=[]; không GCS/care_orders/sync', () => {

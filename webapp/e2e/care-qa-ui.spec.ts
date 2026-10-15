@@ -5,13 +5,13 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { test, expect } from '@playwright/test'
 import * as XLSX from 'xlsx'
-import { CARE_IMPORT_HEADERS, CARE_IMPORT_SHEET } from '../lib/care/import/contract'
+import { CARE_IMPORT_HEADERS, CARE_IMPORT_MAX_ROWS, CARE_IMPORT_SHEET } from '../lib/care/import/contract'
 import { parseCareImportXlsx } from '../lib/care/import/parse'
 import { validateCareRows } from '../lib/care/import/validate'
 import { handleCareCommit, handleCarePreview, type CareImportDeps, type CareImportQa, type CareImportRepo } from '../lib/care/import/handler'
 import { CARE_QA_ISSUE_CODES, CARE_QA_ISSUE_LABELS } from '../lib/care/qa/labels'
 import {
-  CARE_QA_LOCK_FILE, CARE_QA_MARKER_FILE, careImportQaMarker, careQaCommitIssues, careQaRequestAllowed, careQaUiExternalIds,
+  CARE_QA_LOCK_FILE, CARE_QA_MARKER_FILE, CARE_QA_UI_MAX_CUSTOMERS, careImportQaMarker, careQaCommitIssues, careQaRequestAllowed, careQaUiExternalIds,
   evaluateCareQaUi, isLoopbackHostHeader, parseCareQaUiMarker, type CareQaUiMarker,
 } from '../lib/care/qa/uiGate'
 import { beginCareQaImport, finishCareQaImport } from '../lib/care/qa/uiMarkerIo'
@@ -529,6 +529,77 @@ test.describe('care B6-qa-ui — vòng đời prepare → import browser → 5 v
     await db.close()
   })
 
+  test('Q-121 QA tải: prepare-load 8.000 khách / 20.000 dòng (chỉ đọc) → load qua handler QA thật (preview ×2 → commit → preview lại → commit lại) → status → down sạch, dữ liệu thật nguyên', async () => {
+    const { db, L, F, env, ctx, markerPath, today, period, totalTest, real, marker, prepared, qaDeps } = await setup()
+    await db.exec('SET enable_seqscan = on') // PGlite mặc định off (≠ prod) ⇒ finalize 20.000 dòng chậm bậc hai
+    await seedReal(db, L, today, period)
+    const realBefore = await real()
+    const outsideBefore = (await F.cmdStatus(ctx)).outside
+    expect(outsideBefore).toMatchObject({ test_tasks_all: 0, staging_rows_all: 0 })
+    expect(outsideBefore.real_tasks).toBeGreaterThan(0)
+    // Kích thước sai ⇒ dừng TRƯỚC mọi đọc DB / marker.
+    await expect(F.cmdPrepareLoad({ ...ctx, customers: 8000, rows: 20_001 })).rejects.toMatchObject({ code: 'LOAD_SIZE' })
+    await expect(F.cmdPrepareLoad({ ...ctx, customers: 10_001, rows: 20_000 })).rejects.toMatchObject({ code: 'LOAD_SIZE' })
+    expect(fs.existsSync(markerPath)).toBe(false)
+
+    const prep = await F.cmdPrepareLoad({ ...ctx, runId: 'c0ffee01' })
+    expect(prep).toMatchObject({ ok: true, profile: 'load', rows: 20_000, customers: 8000, products: 20_000 })
+    expect(prep.fileMb).toBeLessThan(8)
+    const m0 = marker()
+    expect([m0.phase, m0.externalIds.length, parseCareQaUiMarker(m0) !== null, F.validUiMarker(m0)]).toEqual(['reserved', 8000, true, true])
+    const parsed = parseCareImportXlsx(prepared())
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    const ids = parsed.rows.map((x) => x.customer_external_id)
+    expect(new Set(ids).size).toBe(8000)
+    expect(ids.filter((x, i) => i > 0 && x !== ids[i - 1]).length).toBe(7999) // mọi dòng của một khách liền nhau
+    expect(parsed.rows.every((x) => /^03900\d{5}$/.test(x.customer_phone) && /^KH QA \d{5}$/.test(x.customer_name)
+      && x.target_store_code === 'QAOS01' && x.assignee_email === L.EA.toLowerCase() && x.product_url.startsWith('https://cdn-gcs.thuocsi.vn/qa-fixture/'))).toBe(true)
+
+    // Client = handler THẬT ở chế độ QA (repo PGlite) + cùng serializer multipart với CLI.
+    const client = {
+      async post(p: string, fields: Record<string, unknown>) {
+        const { body, contentType } = await F.multipartBody(fields)
+        const r = new Request(`http://localhost:3100${p}`, {
+          method: 'POST', headers: { 'content-type': contentType, 'content-length': String(body.byteLength) }, body, duplex: 'half',
+        } as RequestInit)
+        const res = await (p.endsWith('/commit') ? handleCareCommit : handleCarePreview)(r, qaDeps(L.U.mkt))
+        return { status: res.status, timing: res.headers.get('server-timing'), body: await res.json() }
+      },
+    }
+    const out = await F.cmdLoad({ env, markerPath, fileBytes: prepared(), client })
+    expect(out).toMatchObject({
+      ok: true, rows: 20_000, customers: 8000,
+      preview: { status: 200, errorCount: 0, created: 8000, commitAllowed: true },
+      commit: { status: 200, result: { status: 'committed', kind: 'initial', rows: 20_000, customers: 8000, created: 8000 } },
+      preview_after: { status: 200, created: 0, updated: 0, unchanged: 8000 },
+      recommit: { status: 409, code: 'QA_ALREADY_USED' },
+    })
+    expect(Object.keys(out.preview.server)).toEqual(expect.arrayContaining(['parse', 'lookups', 'preview', 'rss', 'rss_peak']))
+    expect(Object.keys(out.commit.server)).toEqual(expect.arrayContaining(['parse', 'lookups', 'stage', 'finalize', 'rss_peak']))
+    expect(JSON.stringify(out)).not.toMatch(/QA-UI-|@example|03900|KH QA|[0-9a-f]{8}-[0-9a-f]{4}-/)
+    expect(marker()).toMatchObject({ phase: 'imported', importResult: 'committed' })
+    await expect(F.cmdLoad({ env, markerPath, fileBytes: prepared(), client })).rejects.toMatchObject({ code: 'PHASE' }) // một lượt / marker
+
+    const n = async (sql: string) => Number(Object.values((await db.query(sql, [m0.batchId])).rows[0])[0])
+    expect(await n(`SELECT count(*) FROM public.care_tasks WHERE is_test AND batch_id = $1`)).toBe(8000)
+    expect(await n(`SELECT count(*) FROM public.care_task_products WHERE is_current AND batch_id = $1`)).toBe(20_000)
+    expect(await n(`SELECT count(*) FROM public.care_import_staging WHERE batch_id = $1`)).toBe(0)
+    expect(await real()).toEqual(realBefore)
+
+    const st = await F.cmdStatus(ctx)
+    expect(st.counts).toMatchObject({ care_import_batches: 1, care_customers: 8000, care_tasks: 8000, care_task_products: 20_000, care_import_staging: 0, care_interactions: 0 })
+    expect(st.outside).toEqual({ ...outsideBefore, test_tasks_all: 8000 })
+    const down = await F.cmdDown(ctx)
+    expect(down).toMatchObject({ ok: true, remaining: 0, deleted: { care_tasks: 8000, care_customers: 8000, care_task_products: 20_000, care_assignment_events: 8000, care_import_batches: 1 } })
+    expect(fs.existsSync(markerPath)).toBe(false)
+    expect(await totalTest()).toBe(0)
+    expect(await real()).toEqual(realBefore)
+    expect(await F.cmdStatus(ctx)).toEqual({ ok: true, marker: false, outside: outsideBefore })
+    expect(JSON.stringify([st, down])).not.toMatch(/QA-UI-|@example|03900|[0-9a-f]{8}-[0-9a-f]{4}-/)
+    await db.close()
+  })
+
   test('prepare: cổng/tài khoản/phạm vi SM/kỳ có test khác/ID giả trùng ⇒ dừng TRƯỚC khi tạo marker; marker độc quyền', async () => {
     const { db, L, F, ctx, markerPath, period, today } = await setup()
     const orig = originalFile(L).bytes
@@ -688,6 +759,21 @@ test.describe('care B6-qa-ui — vòng đời prepare → import browser → 5 v
     expect(F.CARE_IMPORT_SHEET).toBe(CARE_IMPORT_SHEET)
     expect(F.uiExternalIds('a1b2c3d4', 3)).toEqual(careQaUiExternalIds('a1b2c3d4', 3))
     expect(path.basename(F.DEFAULT_MARKER_PATH)).toBe(CARE_QA_MARKER_FILE)
+    // Q-121: trần marker / trần dòng hai phía trùng nhau; bản sao từ file mẫu vẫn tối đa 200 khách.
+    expect([F.UI_MAX_CUSTOMERS, F.CARE_IMPORT_MAX_ROWS, F.UI_COPY_MAX_CUSTOMERS]).toEqual([CARE_QA_UI_MAX_CUSTOMERS, CARE_IMPORT_MAX_ROWS, 200])
+    const big = (k: number) => sampleMarker({ externalIds: careQaUiExternalIds('a1b2c3d4', k) })
+    for (const k of [8000, CARE_QA_UI_MAX_CUSTOMERS, CARE_QA_UI_MAX_CUSTOMERS + 1]) {
+      expect([F.validUiMarker(big(k)), parseCareQaUiMarker(big(k)) !== null], String(k)).toEqual(Array(2).fill(k <= CARE_QA_UI_MAX_CUSTOMERS))
+    }
+    const tooMany = Array.from({ length: 201 }, (_, i) => ({ ...Object.fromEntries(CARE_IMPORT_HEADERS.map((h) => [h, 'x'])), customer_external_id: `K${i}` }))
+    expect(() => F.uiRows(tooMany, 'a1b2c3d4', 'QAOS01', 'a@b')).toThrow(/1–200 khách/)
+    expect(F.loadProductCounts(8000, 20_000).reduce((a: number, b: number) => a + b, 0)).toBe(20_000)
+    expect(Math.max(...F.loadProductCounts(8000, 20_000))).toBeLessThanOrEqual(F.LOAD_MAX_PRODUCTS)
+    // Tham số CLI prepare-load + trần byte đọc từ env (review Q-121: regex số từng mất dấu \).
+    expect([F.loadArg(undefined, 8000), F.loadArg('5000', 8000), F.loadArg('20000', 1), F.loadArg('5e3', 1), F.loadArg('-1', 1), F.loadArg('', 1)])
+      .toEqual([8000, 5000, 20_000, Number.NaN, Number.NaN, Number.NaN])
+    expect([F.loadMaxBytes({}), F.loadMaxBytes({ CARE_IMPORT_MAX_BYTES: ' 5242880 ' }), F.loadMaxBytes({ CARE_IMPORT_MAX_BYTES: '8MB' })])
+      .toEqual([8 * 1024 * 1024, 5 * 1024 * 1024, 8 * 1024 * 1024])
     const variants: any[] = [sampleMarker(), sampleMarker({ phase: 'imported', importResult: 'committed' }), sampleMarker({ runId: 'x' }), sampleMarker({ externalIds: ['KH-1'] }),
       sampleMarker({ storeIds: [] }), sampleMarker({ taskIds: [UUID(1)] }), { ...sampleMarker(), kind: 'fixture' }, null]
     for (const v of variants) expect(F.validUiMarker(v), JSON.stringify(v)).toBe(parseCareQaUiMarker(v) !== null)

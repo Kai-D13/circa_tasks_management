@@ -53,7 +53,11 @@ export function isXlsxSignature(buf: Uint8Array): boolean {
   return buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04
 }
 
-/** Trần giải nén: file 10.000 dòng thật ~5–10 MB XML (đo 08/10) ⇒ 64 MB dư ~6 lần. */
+/**
+ * Trần giải nén (chống ZIP bomb). Đo 15/10 (Q-121): 20.000 dòng dữ liệu điển hình ~13–15 MB XML (~0,7 KB/dòng) ⇒ dư
+ * ~4,5 lần; chỉ khi trung bình > ~3,3 KB XML/dòng (cột dài gần trần độ dài trên phần lớn dòng) mới chạm 64 MiB ⇒
+ * fail-closed WORKBOOK_INVALID.
+ */
 export const CARE_XLSX_MAX_UNCOMPRESSED = 64 * 1024 * 1024
 export const CARE_XLSX_MAX_ENTRIES = 200
 

@@ -21,8 +21,11 @@ export const CARE_IMPORT_HEADERS = [
 
 export type CareImportField = (typeof CARE_IMPORT_HEADERS)[number]
 
-/** Tối đa dòng dữ liệu (không tính header) ở B2; file thật lớn hơn ⇒ đo lại ở QA B6. */
-export const CARE_IMPORT_MAX_ROWS = 10_000
+/**
+ * Tối đa dòng dữ liệu (= dòng sản phẩm, không tính header) mỗi file. Q-121 (15/10/2026) nâng từ 10.000 (Q-74)
+ * lên 20.000; trần byte 8 MiB của cả request (CARE_IMPORT_MAX_BYTES) giữ nguyên ⇒ file đủ dòng mà quá byte vẫn 413.
+ */
+export const CARE_IMPORT_MAX_ROWS = 20_000
 
 // reason_type: text tự do, chưa khoá enum (SPEC B2 §1 — vd chronic/promotion do BI/Marketing gửi).
 

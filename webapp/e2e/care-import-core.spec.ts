@@ -4,7 +4,7 @@ import path from 'node:path'
 import { test, expect } from '@playwright/test'
 import * as XLSX from 'xlsx'
 import {
-  CARE_ERROR_FIXES, CARE_ERROR_SHORT, CARE_IMPORT_COLUMN_RULES, CARE_IMPORT_HEADERS as CONTRACT_HEADERS, CARE_IMPORT_SHEET as CONTRACT_SHEET,
+  CARE_ERROR_FIXES, CARE_ERROR_LABELS, CARE_ERROR_SHORT, CARE_IMPORT_COLUMN_RULES, CARE_IMPORT_MAX_ROWS, CARE_IMPORT_HEADERS as CONTRACT_HEADERS, CARE_IMPORT_SHEET as CONTRACT_SHEET,
   CARE_ROW_ERROR_CODES, careColumnLetter, careOneField, type CareImportRow,
 } from '../lib/care/import/contract'
 import { CARE_NUMERIC_PRODUCT_ID_MAX_DIGITS, numericProductId, parseCareImportXlsx } from '../lib/care/import/parse'
@@ -12,7 +12,7 @@ import { validateCareRows } from '../lib/care/import/validate'
 import { buildCarePreview, type CareExistingTask, type CareImportLookups, type CarePreviewCustomer } from '../lib/care/import/preview'
 import { careAssignmentTable, careErrorCodeCounts } from '../lib/care/import/review'
 import {
-  CARE_PREVIEW_ERROR_LIMIT, careErrorPayload, handleCareCommit, handleCarePreview, handleCareTemplate,
+  CARE_PREVIEW_ERROR_LIMIT, careErrorPayload, careServerTiming, handleCareCommit, handleCarePreview, handleCareTemplate,
   type CareFinalizeResult, type CareImportAccess, type CareImportDeps, type CareImportRepo,
 } from '../lib/care/import/handler'
 import { buildCareImportTemplate } from '../lib/care/import/template'
@@ -98,9 +98,16 @@ test.describe('care B2 — contract & parser Excel @desktop', () => {
     expect(parseCareImportXlsx(xlsx(six), 6).ok).toBe(true)
   })
 
-  test('trần thật 10.000 dòng: 10.001 dòng ⇒ TOO_MANY_ROWS', () => {
-    const big = [H, ...Array.from({ length: 10_001 }, (_, i) => r(`C${i}`, 'QAOS01', EA, 'P1'))]
-    expect(parseCareImportXlsx(xlsx(big))).toEqual({ ok: false, fileError: 'TOO_MANY_ROWS' })
+  test('Q-121 trần thật 20.000 dòng: 19.999 và 20.000 nhận, 20.001 ⇒ TOO_MANY_ROWS; thông báo đọc cùng hằng số', () => {
+    expect(CARE_IMPORT_MAX_ROWS).toBe(20_000)
+    expect(CARE_ERROR_LABELS.TOO_MANY_ROWS).toBe('File vượt 20.000 dòng dữ liệu')
+    const big = (n: number) => xlsx([H, ...Array.from({ length: n }, (_, i) => r(`C${i}`, 'QAOS01', EA, 'P1'))])
+    for (const n of [19_999, 20_000]) {
+      const p = parseCareImportXlsx(big(n))
+      expect(p.ok, String(n)).toBe(true)
+      if (p.ok) expect([p.rows.length, p.rows[0].rowNo, p.rows[n - 1].rowNo]).toEqual([n, 2, n + 1])
+    }
+    expect(parseCareImportXlsx(big(20_001))).toEqual({ ok: false, fileError: 'TOO_MANY_ROWS' })
   })
 
   test('ô công thức, kiểu lạ ⇒ lỗi dòng; customer_external_id dạng SỐ ⇒ CELL_NOT_TEXT (Q-73); product_id số nguyên ⇒ nhận (Q-97); SĐT dạng số vẫn nhận', () => {
@@ -602,6 +609,104 @@ test.describe('care B2 — sửa sau review (zip bomb, staging kẹt, kỳ đổ
     const res2 = await handleCarePreview(req(m.body, m.contentType), deps(s, { repo: fakeRepo(s, {}, () => { throw new Error('secret 0390000001') }) }))
     expect(res2.status).toBe(503)
     expect(JSON.stringify(await res2.json())).not.toContain('secret')
+  })
+})
+
+test.describe('care Q-121 — 20.000 dòng qua route preview/commit (deps giả) @desktop', () => {
+  test.setTimeout(120_000)
+  // Fixture 25 store: 401 khách/store × 1–3 sản phẩm ⇒ > 20.001 dòng; cắt đúng số dòng cần (khách cuối có thể bớt sản phẩm — vẫn hợp lệ).
+  let pool: Record<string, string>[] | null = null
+  const rowsN = (n: number) => (pool ??= buildCareImportRows({ customersPerStore: 401 }) as unknown as Record<string, string>[]).slice(0, n)
+  // Nén deflate như Excel lưu (helper xlsx() ghi ZIP không nén — 20.000 dòng sẽ ~14 MB, quá trần byte vì lý do khác).
+  const fileOf = (rows: Record<string, string>[]) => {
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([H, ...rows.map((x) => CONTRACT_HEADERS.map((h) => x[h]))]), CONTRACT_SHEET)
+    return new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx', compression: true }) as ArrayBuffer)
+  }
+  const commitForm = (bytes: Uint8Array) =>
+    multipart({ file: { name: 'n1.xlsx', bytes }, sha256: crypto.createHash('sha256').update(bytes).digest('hex'), period: '2026-10-01' })
+  const nonAccess = (s: Spy) => s.calls.filter((c) => c.fn !== 'getAccess')
+
+  test('20.001 dòng ⇒ 422 TOO_MANY_ROWS ở preview và commit — không đọc DB, không tạo batch/task', async () => {
+    const s: Spy = { calls: [] }
+    const bytes = fileOf(rowsN(20_001))
+    const pv = await multipart({ file: { name: 'n1.xlsx', bytes } })
+    const r1 = await handleCarePreview(req(pv.body, pv.contentType), deps(s))
+    expect([r1.status, (await r1.json()).code]).toEqual([422, 'TOO_MANY_ROWS'])
+    const cm = await commitForm(bytes)
+    const r2 = await handleCareCommit(req(cm.body, cm.contentType), deps(s))
+    expect([r2.status, (await r2.json()).code]).toEqual([422, 'TOO_MANY_ROWS'])
+    expect(nonAccess(s)).toEqual([])
+  })
+
+  test('20.000 dòng hợp lệ: preview 0 lỗi; commit đúng 1 batch rowCount 20.000, staging 10 khối × 2.000 liên tục, finalize một lần', async () => {
+    const s: Spy = { calls: [] }
+    const rows = rowsN(20_000)
+    const bytes = fileOf(rows)
+    const pv = await multipart({ file: { name: 'n1.xlsx', bytes } })
+    const r1 = await handleCarePreview(req(pv.body, pv.contentType), deps(s, { stageChunk: undefined }))
+    expect(r1.status).toBe(200)
+    expect(r1.headers.get('server-timing')).toBeNull() // production không gửi thời gian từng pha
+    const p = (await r1.json()).preview
+    expect([p.rowCount, p.customerCount, p.errorCount]).toEqual([20_000, new Set(rows.map((x) => x.customer_external_id)).size, 0])
+    expect(writes(s)).toEqual([])
+    const cm = await commitForm(bytes)
+    const r2 = await handleCareCommit(req(cm.body, cm.contentType), deps(s, { stageChunk: undefined }))
+    expect(r2.status, await r2.clone().text()).toBe(200)
+    expect(s.calls.filter((c) => c.fn === 'createBatch').map((c) => (c.args[0] as { rowCount: number }).rowCount)).toEqual([20_000])
+    const stages = s.calls.filter((c) => c.fn === 'stageRows').map((c) => c.args[1] as { row_no: number }[])
+    expect(stages.map((x) => x.length)).toEqual(Array(10).fill(2000))
+    expect(stages.flat().map((x) => x.row_no)).toEqual(Array.from({ length: 20_000 }, (_, i) => i + 2))
+    expect(s.calls.filter((c) => c.fn === 'finalize').length).toBe(1)
+    expect(s.calls.some((c) => c.fn === 'discardBatch')).toBe(false)
+  })
+
+  test('19.999 dòng qua route: preview 200, commit staging đủ 19.999 dòng (khối cuối 1.999)', async () => {
+    const s: Spy = { calls: [] }
+    const bytes = fileOf(rowsN(19_999))
+    const pv = await multipart({ file: { name: 'n1.xlsx', bytes } })
+    const r1 = await handleCarePreview(req(pv.body, pv.contentType), deps(s, { stageChunk: undefined }))
+    expect([r1.status, (await r1.json()).preview.rowCount]).toEqual([200, 19_999])
+    const cm = await commitForm(bytes)
+    expect((await handleCareCommit(req(cm.body, cm.contentType), deps(s, { stageChunk: undefined }))).status).toBe(200)
+    const stages = s.calls.filter((c) => c.fn === 'stageRows').map((c) => (c.args[1] as unknown[]).length)
+    expect(stages).toEqual([...Array(9).fill(2000), 1999])
+  })
+
+  test('20.000 dòng, lỗi chỉ ở dòng cuối ⇒ preview báo đúng dòng 20.001; commit 422 HAS_ERRORS chặn cả file, không ghi', async () => {
+    const s: Spy = { calls: [] }
+    const rows = rowsN(20_000).map((x, i) => (i === 19_999 ? { ...x, product_url: 'https://evil.example/a.png' } : x))
+    const bytes = fileOf(rows)
+    const pv = await multipart({ file: { name: 'n1.xlsx', bytes } })
+    const p = (await (await handleCarePreview(req(pv.body, pv.contentType), deps(s))).json()).preview
+    expect([p.errorCount, p.errors]).toEqual([1, [{ row: 20_001, code: 'IMAGE_URL_HOST', field: 'product_url' }]])
+    const cm = await commitForm(bytes)
+    const r2 = await handleCareCommit(req(cm.body, cm.contentType), deps(s))
+    expect(r2.status).toBe(422)
+    expect(await r2.json()).toMatchObject({ code: 'HAS_ERRORS', errorCount: 1 })
+    expect(writes(s)).toEqual([])
+  })
+
+  test('đủ 20.000 dòng nhưng file > 8 MiB ⇒ 413 PAYLOAD_TOO_LARGE trước khi đọc/parse — không đọc DB', async () => {
+    const s: Spy = { calls: [] }
+    const rnd = (n: number) => crypto.randomBytes(n).toString('base64').slice(0, n) // khó nén ⇒ file lớn thật
+    const bytes = fileOf(rowsN(20_000).map((x) => ({ ...x, product_name: `SP ${rnd(290)}`, reason_text: `QA ${rnd(400)}` })))
+    expect(bytes.byteLength).toBeGreaterThan(8 * 1024 * 1024)
+    const parsed = parseCareImportXlsx(bytes)
+    expect(parsed.ok && parsed.rows.length).toBe(20_000) // file hợp lệ về dòng — chỉ bị chặn vì byte
+    const pv = await multipart({ file: { name: 'n1.xlsx', bytes } })
+    const r1 = await handleCarePreview(req(pv.body, pv.contentType), deps(s))
+    expect([r1.status, (await r1.json()).code]).toEqual([413, 'PAYLOAD_TOO_LARGE'])
+    const cm = await commitForm(bytes)
+    const r2 = await handleCareCommit(req(cm.body, cm.contentType), deps(s))
+    expect([r2.status, (await r2.json()).code]).toEqual([413, 'PAYLOAD_TOO_LARGE'])
+    expect(nonAccess(s)).toEqual([])
+  })
+
+  test('Server-Timing (chỉ chế độ QA): ms từng pha 1 chữ số thập phân + RSS; bỏ giá trị không hữu hạn', () => {
+    expect(careServerTiming({ parse: 12.34, lookups: 5, stage: Number.NaN }, { rssMb: 300, peakRssMb: 450 }))
+      .toBe('parse;dur=12.3, lookups;dur=5.0, rss;desc="300", rss_peak;desc="450"')
+    expect(careServerTiming({})).toBe('')
   })
 })
 
