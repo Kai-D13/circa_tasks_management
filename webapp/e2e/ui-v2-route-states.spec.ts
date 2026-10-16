@@ -14,13 +14,21 @@ const FAKE = '00000000-0000-4000-8000-00000000abcd'
 type Hold = { on: boolean; prefetched: Map<string, number> }
 
 // Giữ chậm request RSC điều hướng (không phải prefetch) của các path khớp — khi `on`. Request prefetch đi qua
-// route.fetch + fulfill để biết lúc HOÀN TẤT (đếm theo pathname) — prefetch() bên dưới chờ trên số đếm này.
+// route.fetch + fulfill để đếm phản hồi HOÀN TẤT theo pathname (trình duyệt tự huỷ request prefetch sau khi Next
+// đọc đủ ⇒ requestfinished không bắn, không dùng được). r1.1: route.fetch lỗi mạng (ECONNRESET dưới tải gate RC
+// 16/10) ⇒ huỷ đúng request đó, không đếm; ensurePrefetched sẽ gọi prefetch lại.
 async function holdRsc(page: Page, match: (pathname: string) => boolean): Promise<Hold> {
   const state: Hold = { on: false, prefetched: new Map() }
   await page.route((u) => match(u.pathname), async (route) => {
     const h = route.request().headers()
     if (h['rsc'] === '1' && h['next-router-prefetch']) {
-      const res = await route.fetch()
+      let res: Awaited<ReturnType<typeof route.fetch>>
+      try {
+        res = await route.fetch()
+      } catch {
+        await route.abort('failed')
+        return
+      }
       await route.fulfill({ response: res })
       const p = new URL(route.request().url()).pathname
       state.prefetched.set(p, (state.prefetched.get(p) ?? 0) + 1)
@@ -67,23 +75,21 @@ async function navigate(page: Page, href: string) {
 }
 
 // Link sidebar và link task trong TaskList dùng prefetch={false} (router chưa biết ranh giới loading trước khi
-// server trả) ⇒ prefetch tay qua router của app trước khi điều hướng, như link mặc định. router.prefetch không
-// trả promise ⇒ chờ ĐỦ 2 phản hồi prefetch (cây segment + dữ liệu) của đúng path đã hoàn tất.
-async function prefetch(page: Page, hold: Hold, href: string) {
-  const before = hold.prefetched.get(href) ?? 0
-  await page.evaluate((h) => {
+// server trả); link mặc định thì tự prefetch nhưng có lần bị huỷ (ERR_ABORTED). ensurePrefetched gọi
+// router.prefetch (bỏ qua nếu đang/đã có) và GỌI LẠI mỗi 3 s tới khi path có ĐỦ 2 phản hồi prefetch hoàn tất
+// (cây segment + dữ liệu) kể từ lần tải trang gần nhất (caller xoá đếm trước goto).
+async function ensurePrefetched(page: Page, hold: Hold, href: string) {
+  const kick = () => page.evaluate((h) => {
     const r = (window as unknown as { next?: { router?: { prefetch: (href: string) => unknown } } }).next?.router
     if (!r) throw new Error('window.next.router không có')
     r.prefetch(h)
   }, href)
-  await expect.poll(() => (hold.prefetched.get(href) ?? 0) - before, { message: `prefetch ${href} chưa xong`, timeout: 15_000 })
-    .toBeGreaterThanOrEqual(2)
-}
-
-// Link mặc định (prefetch tự động khi vào khung nhìn): chờ prefetch tự động của path đó đã hoàn tất.
-async function autoPrefetched(hold: Hold, href: string) {
-  await expect.poll(() => hold.prefetched.get(href) ?? 0, { message: `link ${href} chưa tự prefetch`, timeout: 15_000 })
-    .toBeGreaterThanOrEqual(2)
+  const done = () => (hold.prefetched.get(href) ?? 0) >= 2
+  for (let round = 0; round < 10 && !done(); round++) {
+    await kick()
+    for (let t = 0; t < 30 && !done(); t++) await page.waitForTimeout(100) // 3 s/vòng rồi gọi lại
+  }
+  expect(hold.prefetched.get(href) ?? 0, `prefetch ${href} chưa xong sau 10 lần gọi (~30 s)`).toBeGreaterThanOrEqual(2)
 }
 
 test.describe('ui v2 trạng thái route thật @desktop', () => {
@@ -99,50 +105,53 @@ test.describe('ui v2 trạng thái route thật @desktop', () => {
     const href = hrefs.find((h) => UUID.test(h))
     expect(href, 'không có link task nào trên /tasks').toBeTruthy()
     // Link task trong TaskList: prefetch={false} và (desktop) mở tab mới ⇒ prefetch tay + router.push của app.
-    await prefetch(page, hold, href!)
+    await ensurePrefetched(page, hold, href!)
     hold.on = true
     await navigate(page, href!)
     await expectLoading(page, 'task-detail')
     await expect(page.locator('main [data-detail-content]')).toBeVisible({ timeout: 15_000 })
     // Chỉnh sửa: mở chi tiết một task THƯỜNG (task cha "từng dược sĩ" có dialog hướng dẫn, không có link sửa)
     hold.on = false
-    await page.goto(`/tasks/${await pickNormal(page)}`)
+    const normal = await pickNormal(page)
+    hold.prefetched.clear()
+    await page.goto(`/tasks/${normal}`)
     await page.locator('main [data-detail-content]').waitFor()
     await page.waitForLoadState('networkidle')
     const edit = page.locator('main a[href$="/edit"]').first()
     await expect(edit, 'không thấy link Chỉnh sửa trên chi tiết task').toBeVisible()
-    await autoPrefetched(hold, (await edit.getAttribute('href'))!)
+    await ensurePrefetched(page, hold, (await edit.getAttribute('href'))!)
     hold.on = true
     await edit.click()
     await expectLoading(page, 'task-edit')
     await expect(page.locator('main h1').first()).toHaveText('Chỉnh sửa Task', { timeout: 15_000 })
-    // Tạo task (link "Tạo Task" dùng prefetch mặc định ⇒ chờ prefetch tự động xong)
+    // Tạo task (link "Tạo Task" dùng prefetch mặc định)
     hold.on = false
-    hold.prefetched.delete('/tasks/new')
+    hold.prefetched.clear()
     await page.goto('/tasks')
     await page.locator('main h1').first().waitFor()
-    await autoPrefetched(hold, '/tasks/new')
+    await ensurePrefetched(page, hold, '/tasks/new')
     hold.on = true
     await page.locator('main a[href="/tasks/new"]').first().click()
     await expectLoading(page, 'task-new')
     await expect(page.locator('main h1').first()).toHaveText('Tạo task mới', { timeout: 15_000 })
   })
 
-  test('loading: /tasks → /dashboard; /dashboard → /tasks (link sidebar)', async ({ page }) => {
+  test('loading: /tasks → /dashboard; /tasks/schedules → /tasks (link sidebar)', async ({ page }) => {
     const hold = await holdRsc(page, (p) => p === '/dashboard' || p === '/tasks')
     await page.goto('/tasks')
     await page.locator('main h1').first().waitFor()
-    await prefetch(page, hold, '/dashboard')
+    await ensurePrefetched(page, hold, '/dashboard')
     hold.on = true
     await page.locator('aside a[href="/dashboard"]').first().click()
     await expectLoading(page, 'dashboard')
     await expect(page.getByRole('heading', { level: 1, name: 'Tổng quan' })).toBeVisible({ timeout: 15_000 })
-    // /dashboard → /tasks: tải MỚI /dashboard để /tasks chưa nằm trong cache router ⇒ prefetch tay chạy thật.
-    // (Lượt gate 16/10: dựa vào cây /tasks còn trong cache từ lần tải đầu thì đỏ dưới tải full suite.)
+    // → /tasks: xuất phát từ /tasks/schedules (tải mới; trang KHÔNG có link nào tới /tasks tự prefetch tranh —
+    // /dashboard có 2 link mặc định tới /tasks, gate RC 16/10 đỏ vì tranh/huỷ prefetch).
     hold.on = false
-    await page.goto('/dashboard')
-    await expect(page.getByRole('heading', { level: 1, name: 'Tổng quan' })).toBeVisible()
-    await prefetch(page, hold, '/tasks')
+    hold.prefetched.clear()
+    await page.goto('/tasks/schedules')
+    await expect(page.locator('main h1').first()).toHaveText('Task định kỳ')
+    await ensurePrefetched(page, hold, '/tasks')
     hold.on = true
     await page.locator('aside a[href="/tasks"]').first().click()
     await expectLoading(page, 'tasks')
@@ -153,8 +162,9 @@ test.describe('ui v2 trạng thái route thật @desktop', () => {
   test('rỗng thật: /tasks lọc cửa hàng không tồn tại ⇒ EmptyState "thử xoá bộ lọc", không bảng', async ({ page }) => {
     await page.goto(`/tasks?store_id=${FAKE}`)
     await expect(page.locator('main [data-ui-v2="page"]')).toHaveCount(1)
-    await expect(page.getByText('Không có task nào', { exact: true })).toBeVisible()
-    await expect(page.getByText('Thử xoá bớt bộ lọc để xem thêm task.')).toBeVisible()
+    // .first(): lúc render lại (router refresh) có thể thoáng 2 bản cùng lúc (gate RC 16/10, 1/5 lượt) — kiểm hiện diện.
+    await expect(page.locator('main').getByText('Không có task nào', { exact: true }).first()).toBeVisible()
+    await expect(page.locator('main').getByText('Thử xoá bớt bộ lọc để xem thêm task.').first()).toBeVisible()
     await expect(page.locator('main table')).toHaveCount(0)
   })
 
@@ -163,7 +173,7 @@ test.describe('ui v2 trạng thái route thật @desktop', () => {
   test('404 thật: task / lịch không tồn tại ⇒ trang "not found", không lộ khung dữ liệu', async ({ page }) => {
     for (const url of [`/tasks/${FAKE}`, `/tasks/schedules/${FAKE}`]) {
       await page.goto(url)
-      await expect(page.getByText('This page could not be found.'), `${url} phải hiện trang 404`).toBeVisible({ timeout: 15_000 })
+      await expect(page.locator('main').getByText('This page could not be found.'), `${url} phải hiện trang 404`).toBeVisible({ timeout: 15_000 })
       await expect(page.locator('main [data-detail-content], main [data-schedule-config]')).toHaveCount(0)
     }
   })

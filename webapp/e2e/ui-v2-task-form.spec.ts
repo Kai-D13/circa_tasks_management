@@ -43,12 +43,12 @@ const lineCount = (page: Page, name: string, scope = 'main') =>
 async function chooseMultiStores(page: Page, n: number) {
   await expect(async () => {
     await btn(page, 'Nhiều CH').click()
-    await expect(page.getByText(/^Chọn cửa hàng \(\d+ đã chọn\)$/)).toBeVisible({ timeout: 1_000 })
+    await expect(page.locator('main').getByText(/^Chọn cửa hàng \(\d+ đã chọn\)$/)).toBeVisible({ timeout: 1_000 })
   }, 'không chuyển được sang Nhiều CH (hydrate?)').toPass({ timeout: 15_000 })
   const boxes = page.locator('main label input[type="checkbox"]')
   expect(await boxes.count(), 'phải có ít nhất 2 cửa hàng để chọn').toBeGreaterThanOrEqual(n)
   for (let i = 0; i < n; i++) await boxes.nth(i).check()
-  await expect(page.getByText(`Chọn cửa hàng (${n} đã chọn)`)).toBeVisible()
+  await expect(page.locator('main').getByText(`Chọn cửa hàng (${n} đã chọn)`)).toBeVisible()
 }
 
 test.describe('ui v2 form task — admin desktop @desktop', () => {
@@ -132,7 +132,7 @@ test.describe('ui v2 form task — admin desktop @desktop', () => {
     await expect(page.locator('main h1').first()).toHaveText('Chỉnh sửa Task')
     await expect(btn(page, 'Nhiều CH')).toHaveCount(0)
     await expect(btn(page, 'Cập nhật')).toBeVisible()
-    expect(await page.getByPlaceholder('Tiêu đề task...').inputValue()).not.toBe('')
+    expect(await page.locator('main').getByPlaceholder('Tiêu đề task...').filter({ visible: true }).inputValue()).not.toBe('')
     await assertPanels(page)
   })
 })

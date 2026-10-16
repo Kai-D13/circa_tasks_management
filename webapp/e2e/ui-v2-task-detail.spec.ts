@@ -81,7 +81,7 @@ test.describe('ui v2 /tasks/[id] — admin desktop @desktop', () => {
     const id = await pick(page, '/inventory/trf', 'main a[href^="/tasks/"]')
     await page.goto(`/tasks/${id}`)
     await expect(page.locator('main h1').first()).toHaveText(/^Phiếu /)
-    await expect(page.getByText('Thông tin phiếu TRF')).toBeVisible()
+    await expect(page.locator('main').getByText('Thông tin phiếu TRF')).toBeVisible()
     await expect(page.locator('main [data-ui-v2="page"]')).toHaveCount(1)
   })
 
