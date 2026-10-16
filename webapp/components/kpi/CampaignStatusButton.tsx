@@ -48,7 +48,7 @@ export function CampaignStatusButton({ id, status, name }: { id: string; status:
   return (
     <div className="flex items-center gap-1.5">
       {canToggle && (
-        <Button size="sm" variant="outline" onClick={handleToggle} disabled={pending} className="gap-1.5">
+        <Button size="sm" variant="outline" onClick={handleToggle} disabled={pending} className="gap-1.5 v2:min-h-[44px] md:v2:min-h-0 md:v2:h-[32px] v2:text-[13px]">
           {isActive ? <><Pause className="h-3.5 w-3.5" /> Tạm dừng</> : <><Play className="h-3.5 w-3.5" /> Kích hoạt</>}
         </Button>
       )}
@@ -56,7 +56,7 @@ export function CampaignStatusButton({ id, status, name }: { id: string; status:
         <Button
           size="sm" variant="ghost" onClick={() => setConfirming('archive')} disabled={pending}
           aria-label="Lưu trữ chiến dịch" title="Lưu trữ — ẩn khỏi hệ thống, giữ nguyên dữ liệu"
-          className="px-2 text-muted-foreground hover:text-primary"
+          className="px-2 text-muted-foreground hover:text-primary v2:size-[44px] md:v2:size-[32px] v2:px-0"
         >
           <Archive className="h-4 w-4" />
         </Button>
@@ -66,7 +66,7 @@ export function CampaignStatusButton({ id, status, name }: { id: string; status:
         <Button
           size="sm" variant="ghost" onClick={() => setConfirming('delete')} disabled={pending}
           aria-label="Xoá chiến dịch nháp" title="Xoá vĩnh viễn chiến dịch nháp"
-          className="px-2 text-muted-foreground hover:text-destructive"
+          className="px-2 text-muted-foreground hover:text-destructive v2:size-[44px] md:v2:size-[32px] v2:px-0"
         >
           <Trash2 className="h-4 w-4" />
         </Button>
