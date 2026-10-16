@@ -22,6 +22,7 @@ import { Panel } from '@/components/ds/Panel'
 import { Notice } from '@/components/ds/Notice'
 import { ProgressBar } from '@/components/ds/ProgressBar'
 import { BulkActionBar, BULK_ACTION_BUTTON } from '@/components/ds/BulkActionBar'
+import { TaskList, type ChildTask, type TaskListItem } from '@/components/tasks/TaskList'
 import { cn } from '@/lib/utils'
 
 // Dev-only catalog UI v2 Tasks (docs/ui/UI_V2_TASKS.md) — gốc trang data-ui-v2="page" nên MỌI token
@@ -44,6 +45,49 @@ const ROWS = [
   { title: 'Task QA 02 — kiểm kê cận date', tags: [['Kiểm tra', 'amber'], ['Cửa hàng nộp', 'indigo']] as const, meta: 'Tạo bởi Trần Thị B', store: 'POS_TEST Cửa hàng A', done: 0, total: 0, status: ['danger', 'Quá hạn'] as const, deadline: '13/10' },
   { title: 'Task QA 03 — training nhóm sản phẩm', tags: [['Training', 'blue'], ['Dược sĩ nộp', 'sky']] as const, meta: 'Tạo bởi Lê Văn C', store: '25 cửa hàng', done: 37, total: 90, status: null, deadline: '25/10' },
   { title: 'Task QA 04 — tentcard quầy', tags: [['Trưng bày', 'green']] as const, meta: 'Tạo bởi Phạm Thị D', store: 'POS_TEST Cửa hàng B', done: 0, total: 0, status: ['info', 'Đang thực hiện'] as const, deadline: '22/10' },
+]
+
+// P1.2 r1.1: TaskList THẬT với fixture đủ 4 loại dòng nhóm (broadcast, import mất tiến độ, từng dược sĩ
+// nhiều cửa hàng, từng dược sĩ max=0) + 1 task đơn — để test vị trí cột không phụ thuộc dữ liệu prod.
+const U = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+const DL = '2026-01-20T10:00:00.000Z'
+const child = (n: number, store: string, who: string, status = 'todo'): ChildTask => ({
+  id: U(n), status, stores: { name: store }, assignee: { full_name: who }, deadline: DL, overdue_at: null,
+})
+const TL_ITEMS: TaskListItem[] = [
+  {
+    type: 'broadcast', broadcastId: U(9001),
+    title: 'Nhóm QA broadcast — tiêu đề nhóm rất dài để kiểm tra xuống dòng trong cột Tiêu đề khi bảng hẹp',
+    category: 'display', department: { name: 'Commercial', color: null }, creator: { full_name: 'Nguyễn Văn A' },
+    total: 3, done: 2, createdAt: '2026-01-10T03:00:00.000Z', taskIds: [U(9101), U(9102), U(9103)],
+    childTasks: [child(9101, 'POS_TEST Cửa hàng A', 'Trần Thị B', 'done'), child(9102, 'POS_TEST Cửa hàng B', 'Lê Văn C', 'in_progress'), child(9103, 'POS_TEST Cửa hàng C', 'Phạm Thị D')],
+  },
+  {
+    type: 'import_batch', batchId: U(9002), title: 'Nhóm QA import Excel (mất tiến độ)', category: 'audit',
+    creator: { full_name: 'Trần Thị B' }, total: null, done: null, createdAt: '2026-01-09T03:00:00.000Z',
+    taskIds: [U(9201), U(9202)], childTasks: [child(9201, 'POS_TEST Cửa hàng A', 'Trần Thị B'), child(9202, 'POS_TEST Cửa hàng B', 'Lê Văn C')],
+  },
+  {
+    type: 'staff_broadcast', broadcastId: U(9003), title: 'Nhóm QA từng dược sĩ nhiều cửa hàng', category: 'training',
+    creator: { full_name: 'Lê Văn C' }, createdAt: '2026-01-08T03:00:00.000Z', taskIds: [U(9301), U(9311), U(9312)],
+    stores: [{ parentId: U(9301), storeName: 'POS_TEST Cửa hàng A', total: 2, done: 1,
+      childTasks: [child(9311, 'POS_TEST Cửa hàng A', 'Trần Thị B', 'done'), child(9312, 'POS_TEST Cửa hàng A', 'Phạm Thị D')] }],
+    totalStores: 1, totalStaff: 2, doneStaff: 1,
+  },
+  {
+    type: 'staff', parentId: U(9004), title: 'Nhóm QA từng dược sĩ một cửa hàng (chưa có dược sĩ)', category: 'other',
+    creator: { full_name: 'Phạm Thị D' }, storeName: 'POS_TEST Cửa hàng B', total: 0, done: 0,
+    createdAt: '2026-01-07T03:00:00.000Z', taskIds: [U(9004)], childTasks: [],
+  },
+  {
+    type: 'task',
+    task: {
+      id: U(9005), title: 'Task QA đơn — quá hạn', status: 'todo', priority: 'urgent', category: 'recall',
+      broadcast_id: null, source_schedule_id: null, assignment_mode: 'store', assigned_to: null,
+      stores: { name: 'POS_TEST Cửa hàng C' }, assignee: null, completed_by_user: null, creator: { full_name: 'Lê Văn C' },
+      completed_at: null, deadline: DL, overdue_at: null, created_at: '2026-01-06T03:00:00.000Z',
+    },
+  },
 ]
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -187,7 +231,7 @@ export default async function UiCatalogTasksV2Page() {
                   <TableCell className="align-top text-muted-foreground">{r.store}</TableCell>
                   <TableCell className="align-top">
                     {r.total > 0
-                      ? <ProgressBar value={r.done} max={r.total} tone={r.done === r.total ? 'success' : 'warning'} label={`${r.done}/${r.total} hoàn thành`} className="max-w-[170px]" />
+                      ? <ProgressBar value={r.done} max={r.total} tone={r.done === r.total ? 'success' : 'warning'} label={`${r.done}/${r.total} hoàn thành`} ariaLabel={`${r.done}/${r.total} hoàn thành`} className="max-w-[170px]" />
                       : <span className="text-[13px] text-v2-text-3">—</span>}
                   </TableCell>
                   <TableCell className="align-top">{r.status && <StatusBadge tone={r.status[0]}>{r.status[1]}</StatusBadge>}</TableCell>
@@ -234,6 +278,11 @@ export default async function UiCatalogTasksV2Page() {
           </div>
         </div>
         <LoadingState variant="table" rows={3} />
+      </Section>
+
+      <Section title="TaskList fixture — 4 loại nhóm (có / không ô chọn)">
+        <div data-testid="fx-tasklist-checkbox"><TaskList items={TL_ITEMS} canArchive userRole="admin" /></div>
+        <div data-testid="fx-tasklist-nocheckbox"><TaskList items={TL_ITEMS} canArchive={false} userRole="admin" /></div>
       </Section>
 
       <Section title="DetailPageShell v2">
