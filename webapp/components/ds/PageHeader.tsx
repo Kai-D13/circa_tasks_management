@@ -17,7 +17,8 @@ export function PageHeader({
 }) {
   return (
     <div className={cn('flex items-start justify-between flex-wrap gap-2 v2:gap-3', className)}>
-      <div className="min-w-0 v2:grid v2:grid-cols-[auto_minmax(0,1fr)] v2:items-center v2:gap-x-3 v2:gap-y-0.5">
+      {/* v2: lưới icon | (tiêu đề + phụ đề) CHỈ khi có icon — không icon thì tiêu đề và phụ đề xếp dọc như cũ. */}
+      <div className={cn('min-w-0', Icon && 'v2:grid v2:grid-cols-[auto_minmax(0,1fr)] v2:items-center v2:gap-x-3 v2:gap-y-0.5')}>
         <div className="flex items-center gap-2 v2:contents">
           {Icon && (
             <span className={cn(

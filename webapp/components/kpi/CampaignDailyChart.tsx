@@ -37,12 +37,17 @@ function niceMax(v: number): number {
 }
 
 export function CampaignDailyChart({
-  start, end, daily, todayISO, breakdown = false, metricType, series = 'orders',
+  start, end, daily, todayISO, breakdown = false, metricType, series = 'orders', requiredPerDay,
 }: {
   start: string; end: string; daily: DailyPoint[]; todayISO: string
   breakdown?: boolean // campaign có CẢ 2 chỉ số → tooltip tách Offline/Affiliate
   metricType?: string // mig 103: 'affiliate_customer_count' → trục/tooltip 'N khách'
   series?: DailySeries // mig 106: Chất lượng bán hàng — 'orders' | 'aov'
+  // UI v2 Phase 2 (K0, PM P1 16/10): "Trung bình/ngày cần đạt" từ lib/kpi/performance.requiredPerDay — CHỈ
+  // GMV. Là CHỈ DẪN cho các ngày còn lại (hôm nay → hết kỳ), không phải doanh thu hay dự báo. Không vẽ khi
+  // null/undefined/≤0 (đã đạt ⇒ 0 không có ý nghĩa vẽ), ngoài kỳ, hoặc loại Số khách / Số đơn + AOV.
+  // Caller KHÔNG được truyền `needPerDay ?? 0` của hero.
+  requiredPerDay?: number | null
 }) {
   const pres = metricPresentation(metricType)
   const isCustomer = pres.kind === 'affiliate_customer_count'
@@ -87,7 +92,13 @@ export function CampaignDailyChart({
 
   // r1.2 (audit P2): mọi ngày = 0 đơn thì trục KHÔNG được nhảy lên thang tiền
   // mặc định (1.000.000) — số đơn là ĐẾM, thang tối thiểu là 1.
-  const rawMax = Math.max(0, ...[...gmvByDate.values()])
+  // r1.1 (PM P1): cần ít nhất MỘT điểm daily thật trong [đầu kỳ, hôm nay] — daily rỗng = chưa có dữ liệu ngày
+  // ⇒ không vẽ. Ngày đã đồng bộ với doanh thu 0 THẬT vẫn là điểm hợp lệ (không chặn nhầm số 0 thật).
+  const hasDailyToToday = daily.some((d) => d.date >= start && d.date <= todayISO)
+  const showRequired = pres.kind === 'gmv' && hasDailyToToday
+    && typeof requiredPerDay === 'number' && Number.isFinite(requiredPerDay) && requiredPerDay > 0
+    && todayISO >= start && todayISO <= end
+  const rawMax = Math.max(0, ...[...gmvByDate.values()], showRequired ? (requiredPerDay as number) : 0)
   const max = isOrderAov && series === 'orders'
     ? Math.max(1, Math.ceil(rawMax))
     : niceMax(rawMax)
@@ -103,13 +114,14 @@ export function CampaignDailyChart({
   // tròn thành '3' sẽ đặt sai vị trí lưới. Dùng tick nguyên + khử trùng.
   const gridVals = isOrderAov && series === 'orders' ? orderAxisTicks(max) : [max / 2, max]
 
-  return (
+  const todayIdx = days.indexOf(todayISO)
+  const svg = (
     <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto" role="img" aria-label={ariaLabel}>
       {/* Recessive grid + y labels (text tokens, never series color) */}
       {gridVals.map((v) => (
         <g key={v}>
           <line x1={PAD_L} x2={W - 4} y1={y(v)} y2={y(v)} className="stroke-border" strokeWidth="0.5" strokeDasharray="2 3" />
-          <text x={PAD_L - 4} y={y(v) + 3} textAnchor="end" fontSize="8" className="fill-muted-foreground">{compactVnd(v)}</text>
+          <text x={PAD_L - 4} y={y(v) + 3} textAnchor="end" fontSize="8" className="fill-muted-foreground v2:fill-v2-text-3">{compactVnd(v)}</text>
         </g>
       ))}
       {/* Baseline */}
@@ -130,7 +142,7 @@ export function CampaignDailyChart({
                 width={barW}
                 height={Math.max(1.5, PAD_T + plotH - y(v))}
                 rx={Math.min(2, barW / 2)}
-                className={d === todayISO ? 'fill-primary' : 'fill-primary/70'}
+                className={d === todayISO ? 'fill-primary v2:fill-v2-series' : 'fill-primary/70 v2:fill-v2-series v2:opacity-55'}
               >
                 <title>{isOrderAov && pointByDate.get(d)
                   // Tooltip Chất lượng bán hàng: đủ 3 số để đối soát.
@@ -154,10 +166,22 @@ export function CampaignDailyChart({
                 textAnchor="middle"
                 fontSize="8"
                 fontWeight="600"
-                className="fill-primary"
+                className="fill-primary v2:fill-foreground"
               >
                 {compactVnd(v)}
               </text>
+            )}
+            {/* v2 (K0): ngày TƯƠNG LAI = vạch thấp để thấy còn bao nhiêu ngày — không phải số liệu. Ngoài v2 ẩn. */}
+            {v === undefined && d > todayISO && (
+              <rect
+                data-future-day
+                x={cx - barW / 2}
+                y={PAD_T + plotH - 2}
+                width={barW}
+                height={2}
+                rx={1}
+                className="hidden v2:inline fill-input"
+              />
             )}
             {showTick && (
               <text x={cx} y={H - 4} textAnchor="middle" fontSize="8" className="fill-muted-foreground">{dayNo}</text>
@@ -165,6 +189,33 @@ export function CampaignDailyChart({
           </g>
         )
       })}
+      {/* Đường "Trung bình/ngày cần đạt": hôm nay → hết kỳ, nét đứt màu chữ phụ (K0). */}
+      {showRequired && todayIdx >= 0 && (
+        <line
+          data-required-line
+          x1={PAD_L + todayIdx * slot}
+          x2={W - 4}
+          y1={y(requiredPerDay as number)}
+          y2={y(requiredPerDay as number)}
+          className="stroke-muted-foreground"
+          strokeWidth="1.5"
+          strokeDasharray="4 3"
+        />
+      )}
     </svg>
+  )
+  if (!showRequired || todayIdx < 0) return svg
+  // Chú giải bằng CHỮ (đọc được bằng bàn phím/trình đọc màn hình, số ĐẦY ĐỦ) — nhãn hiện có của màn KPI.
+  return (
+    <div className="space-y-1.5">
+      {svg}
+      <p data-required-legend className="flex flex-wrap items-center gap-x-1.5 text-[12px] text-muted-foreground">
+        <svg aria-hidden="true" width="18" height="4" className="shrink-0 overflow-visible">
+          <line x1="0" x2="18" y1="2" y2="2" className="stroke-muted-foreground" strokeWidth="1.5" strokeDasharray="4 3" />
+        </svg>
+        Trung bình/ngày cần đạt:
+        <span className="font-semibold tabular-nums text-foreground">{pres.value(requiredPerDay as number)}</span>
+      </p>
+    </div>
   )
 }

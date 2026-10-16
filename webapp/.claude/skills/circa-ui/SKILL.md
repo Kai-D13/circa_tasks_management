@@ -23,8 +23,9 @@ description: Circa Tasks design system — load BEFORE writing/altering any UI (
 ## Ngoại lệ có phạm vi: UI v2 Tasks (PM duyệt 16/10/2026)
 Chỉ trong trang có gốc `data-ui-v2="page"` (module Tasks — danh sách + chi tiết luật ở docs/ui/UI_V2_TASKS.md, ĐỌC trước khi làm):
 - Token v2 (canvas đá ấm, action `#C94A16`/`#F3743F`) trỏ thay token ngữ nghĩa; panel 12px / control 10px / chip 6px (thay luật 4 TRONG v2); tab đang chọn trung tính (thay "primary coral" của luật 6 TRONG v2).
-- Class `v2:` chỉ dùng trong `components/ds`, `components/ui` và code route Tasks v2. KHÔNG dùng/alias `--care-*`, không sửa `components/care`.
+- Class `v2:` chỉ dùng trong `components/ds`, `components/ui`, `components/kpi` (Phase 2) và code route Tasks/KPI v2. KHÔNG dùng/alias `--care-*`, không sửa `components/care`.
 - Ngoài phạm vi mọi luật trên giữ nguyên; snapshot `/ui-catalog` phải không đổi.
+- **Phase 2 "Chiến dịch KPI"** (PM GO 16/10/2026, docs/ui/UI_V2_KPI.md — ĐỌC trước khi làm): cùng cơ chế v2, áp dụng cho `/targets/campaigns/*` và `/targets` khi route đã gắn `data-ui-v2="page"`. Token thêm `--v2-series`/`--v2-series-soft`/`--v2-ok` (chỉ trong v2, luôn kèm màu mặc định ngoài v2); component KPI dùng chung ở `components/kpi/` (KpiProgressMeter, TierTrack, PaceBadge, CampaignDailyChart), khung ở `components/ds/`. Visual-only: không đổi công thức KPI/tiền thưởng, null ≠ 0, Số đơn + AOV không gộp, commission store không gọi là thưởng cá nhân.
 
 ## Khi migrate 1 route
 Chỉ đổi className/JSX → ds/. Sau đó: tsc + build + `git diff --check`; grep guardrail (xem UI_CHANGE_GUARDRAILS §sau-migrate) phải sạch cho route đó; check 8 viewport × light/dark + loading/empty/error/long-text; số query không tăng. 1 route = 1 commit trên branch UI, không merge main tới khi được duyệt.

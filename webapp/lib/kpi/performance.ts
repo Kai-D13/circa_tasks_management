@@ -42,6 +42,13 @@ export function performanceTone(pct: number): string {
   return 'text-status-danger'
 }
 
+// UI v2 Phase 2 (K0 PaceBadge): cùng ngưỡng với performanceTone, trả tone của ds StatusBadge.
+export function performanceStatusTone(pct: number): 'success' | 'warning' | 'danger' {
+  if (pct >= 100) return 'success'
+  if (pct >= 80) return 'warning'
+  return 'danger'
+}
+
 // ── "Trung bình/ngày cần đạt" (request stakeholder 10/08) ───────────────────
 // Công thức LẤY NGUYÊN của màn Staff (CampaignKpiView) để Super/SM và Staff
 // không bao giờ lệch số:
