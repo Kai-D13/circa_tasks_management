@@ -2,6 +2,12 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+/* `dark:` theo THEME CỦA APP (class .dark trên <html> do next-themes đặt, enableSystem=false), không
+   theo theme hệ điều hành. Thiếu dòng này Tailwind 4 mặc định @media (prefers-color-scheme: dark) ⇒
+   app tối + OS sáng thì mọi `dark:` tắt, app sáng + OS tối thì `dark:` bật sai (PM audit 16/10, F1).
+   :where() ⇒ không cộng specificity, giữ nguyên thứ tự cascade như bản media. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* UI v2 Tasks (docs/ui/UI_V2_TASKS.md): `v2:` chỉ khớp khi phần tử nằm trong (hoặc chính là)
    [data-ui-v2]. :where() ⇒ specificity bằng class thường; utility có variant luôn sinh sau nên thắng
    utility mặc định cùng thuộc tính. Ngoài phạm vi, mọi class v2:* là vô hiệu. */
