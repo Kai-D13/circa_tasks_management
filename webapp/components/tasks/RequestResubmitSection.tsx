@@ -35,15 +35,15 @@ export function RequestResubmitSection({ taskId, requestFn }: Props) {
 
   if (!open) {
     return (
-      <Card className="border-amber-200 bg-amber-50/50">
+      <Card className="bg-status-warning-bg/60 ring-status-warning/30 v2:ring-status-warning/30">
         <CardContent className="pt-4 flex items-center justify-between gap-4">
-          <p className="text-sm text-amber-800">
+          <p className="text-sm text-status-warning">
             Kết quả chưa đạt yêu cầu? Yêu cầu staff thực hiện lại task này.
           </p>
           <Button
             variant="outline"
             size="sm"
-            className="shrink-0 border-amber-300 text-amber-800 hover:bg-amber-100"
+            className="shrink-0 h-[44px] md:h-8 border-status-warning/40 text-status-warning hover:bg-status-warning-bg"
             onClick={() => setOpen(true)}
           >
             <RefreshCw className="h-4 w-4 mr-1.5" />
@@ -55,9 +55,9 @@ export function RequestResubmitSection({ taskId, requestFn }: Props) {
   }
 
   return (
-    <Card className="border-amber-200">
+    <Card className="ring-status-warning/30 v2:ring-status-warning/30">
       <CardHeader className="pb-2">
-        <CardTitle className="text-sm text-amber-800">Yêu cầu thực hiện lại</CardTitle>
+        <CardTitle className="text-sm text-status-warning">Yêu cầu thực hiện lại</CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
         <Textarea
@@ -71,7 +71,7 @@ export function RequestResubmitSection({ taskId, requestFn }: Props) {
             size="sm"
             disabled={pending}
             onClick={handleRequest}
-            className="bg-amber-600 hover:bg-amber-700"
+            className="h-[44px] md:h-8 bg-status-warning text-status-warning-bg hover:bg-status-warning/90"
           >
             {pending ? 'Đang gửi...' : 'Xác nhận yêu cầu'}
           </Button>

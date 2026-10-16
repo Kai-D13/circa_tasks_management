@@ -2,7 +2,6 @@ import { notFound, redirect } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
 import { TaskPriorityBadge } from '@/components/tasks/TaskPriorityBadge'
@@ -25,12 +24,13 @@ import { isSuperAdminEmail, getSmStoreIds, smHasStore } from '@/lib/authz'
 import { Task, RequiredOutput, UserRole, TaskCategory, TaskAttachment } from '@/types'
 import { Pencil, Trash2, Radio, Users } from 'lucide-react'
 
-const CATEGORY_STYLE: Record<TaskCategory, string> = {
-  training: 'bg-blue-100 text-blue-700',
-  recall:   'bg-red-100 text-red-700',
-  display:  'bg-green-100 text-green-700',
-  audit:    'bg-amber-100 text-amber-700',
-  other:    'bg-gray-100 text-gray-600',
+// Cùng hue danh mục với /tasks (TaskList CATEGORY_HUE) — thay pastel tự viết (UI v2 P1.3).
+const CATEGORY_HUE: Record<TaskCategory, TagHue> = {
+  training: 'blue',
+  recall:   'red',
+  display:  'green',
+  audit:    'amber',
+  other:    'gray',
 }
 const CATEGORY_LABEL_VN: Record<TaskCategory, string> = {
   training: 'Training',
@@ -43,6 +43,10 @@ import { cn, embeddedName } from '@/lib/utils'
 import { deptBadgeClass } from '@/lib/departments'
 import { formatTaskCode } from '@/lib/taskCode'
 import { RichText } from '@/components/tasks/RichText'
+import { Panel } from '@/components/ds/Panel'
+import { Notice } from '@/components/ds/Notice'
+import { StatusBadge } from '@/components/ds/StatusBadge'
+import { TagBadge, type TagHue } from '@/components/ds/TagBadge'
 import { CYCLE_COUNT_DEPT_ID } from '@/lib/inventory/constants'
 import { TrfInfoPanel } from '@/components/inventory/TrfInfoPanel'
 
@@ -340,61 +344,54 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
     // lg:h-full constrains the two-column body to viewport height on desktop so
     // each column gets independent overflow-y-auto scroll. On mobile no height
     // constraint — <main> (overflow-y-auto) handles natural page scroll.
-    <div data-layout-width="fluid" className="flex flex-col lg:h-full">
+    // UI v2 P1.3 (docs/ui/UI_V2_TASKS.md): chỉ trình bày — query/quyền/hành vi nộp/chữ giữ nguyên.
+    <div data-ui-v2="page" data-layout-width="fluid" className="flex flex-col lg:h-full">
       {userRole !== 'staff' && <AutoRefresh intervalMs={30000} />}
 
       {/* ── Page header (full width) ── */}
-      <div className="px-4 pt-4 pb-3 border-b bg-background shrink-0">
+      <div className="px-4 pt-4 pb-4 md:px-6 md:pt-5 border-b bg-background shrink-0">
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
             {(task as { seq?: number | null }).seq != null && (
-              <p className="text-xs font-mono text-muted-foreground mb-0.5">{formatTaskCode((task as { seq?: number | null }).seq)}</p>
+              <p className="text-[12px] font-mono text-v2-text-3 mb-1">{formatTaskCode((task as { seq?: number | null }).seq)}</p>
             )}
-            <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-xl font-bold leading-tight tracking-tight">
-                {isTrfTask && trfInput?.trf_code ? `Phiếu ${trfInput.trf_code}` : task.title}
-              </h1>
+            <h1 className="text-[20px] md:text-[24px] font-bold leading-[1.3] tracking-[-0.01em] wrap-anywhere">
+              {isTrfTask && trfInput?.trf_code ? `Phiếu ${trfInput.trf_code}` : task.title}
+            </h1>
+            {/* Tag xuống dòng riêng dưới tiêu đề (artboard 02/10); rỗng ⇒ ẩn. */}
+            <div className="mt-2 flex items-center gap-1.5 flex-wrap empty:hidden">
               {task.category && (
-                <span className={cn(
-                  'text-xs px-2 py-0.5 rounded font-medium shrink-0',
-                  CATEGORY_STYLE[task.category as TaskCategory] ?? 'bg-gray-100 text-gray-600'
-                )}>
+                <TagBadge hue={CATEGORY_HUE[task.category as TaskCategory] ?? 'gray'}>
                   {CATEGORY_LABEL_VN[task.category as TaskCategory] ?? task.category}
-                </span>
+                </TagBadge>
               )}
               {task.broadcast_id && (
-                <span className="flex items-center gap-1 text-xs text-primary bg-primary/10 px-2 py-0.5 rounded shrink-0">
-                  <Radio className="h-3 w-3" /> Broadcast
-                </span>
+                <TagBadge hue="slate"><Radio className="h-3 w-3" /> Broadcast</TagBadge>
               )}
               {(task.department as unknown as { name: string; color: string | null } | null) && (
                 <span className={cn(
-                  'text-xs px-2 py-0.5 rounded font-medium shrink-0',
+                  'text-xs px-2 py-0.5 rounded-[6px] font-medium shrink-0',
                   deptBadgeClass((task.department as unknown as { color: string | null }).color)
                 )}>
                   {(task.department as unknown as { name: string }).name}
                 </span>
               )}
               {(task as { source_schedule_id?: string | null }).source_schedule_id && (
-                <span className="text-xs bg-teal-100 text-teal-700 px-2 py-0.5 rounded font-medium shrink-0">
-                  Định kỳ
-                </span>
+                <TagBadge hue="teal">Định kỳ</TagBadge>
               )}
               {isStaffParent && (
-                <span className="flex items-center gap-1 text-xs text-primary bg-primary/10 px-2 py-0.5 rounded font-medium shrink-0">
-                  <Users className="h-3 w-3" /> Từng dược sĩ nộp
-                </span>
+                <TagBadge hue="sky"><Users className="h-3 w-3" /> Từng dược sĩ nộp</TagBadge>
               )}
             </div>
             {parentTaskId && parentInfo && (
-              <p className="text-xs text-muted-foreground mt-1">
+              <p className="text-[13px] text-muted-foreground mt-2">
                 Task con của{' '}
-                <Link href={`/tasks/${parentTaskId}`} className="text-primary hover:underline">
+                <Link href={`/tasks/${parentTaskId}`} className="font-medium text-accent-foreground hover:underline">
                   {(parentInfo as { title: string }).title}
                 </Link>
               </p>
             )}
-            <p className="text-xs text-muted-foreground mt-0.5">
+            <p className="text-[13px] text-muted-foreground mt-1.5">
               {isTrfTask ? (
                 // TRF: created_by is the Cycle Count system owner, NOT the phiếu
                 // author (that's "Người tạo phiếu" in TrfInfoPanel) — avoid the mix-up.
@@ -413,7 +410,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
             </p>
           </div>
           {canManageTask && (
-            <div className="flex gap-2 shrink-0">
+            <div className="flex flex-wrap justify-end gap-2 shrink-0">
               <ShareTaskDialog
                 taskId={id}
                 broadcastId={task.broadcast_id as string | null}
@@ -440,12 +437,12 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                   }}
                 />
               ) : (
-                <Link href={`/tasks/${id}/edit`} className={cn(buttonVariants({ variant: 'outline', size: 'sm' }))}>
+                <Link href={`/tasks/${id}/edit`} className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'h-[44px] md:h-[36px] px-3 text-[13px]')}>
                   <Pencil className="h-4 w-4 mr-1" /> Chỉnh sửa
                 </Link>
               )}
               <form action={handleDelete}>
-                <Button variant="destructive" size="sm" type="submit">
+                <Button variant="destructive" size="sm" type="submit" className="h-[44px] md:h-[36px] px-3 text-[13px]">
                   <Trash2 className="h-4 w-4 mr-1" /> Xoá
                 </Button>
               </form>
@@ -454,18 +451,32 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
         </div>
       </div>
 
+      {/* UI v2 P1.3 r1.1 — mobile (artboard 10): Deadline / Ưu tiên ngay sau header. Cùng dữ liệu với panel
+          metadata (ô tương ứng ở đó ẩn trên mobile để không lặp); desktop dùng panel metadata bên phải. */}
+      <div data-mobile-summary className="grid grid-cols-2 gap-2 px-4 pt-4 lg:hidden">
+        <div className="rounded-v2-panel border bg-card px-3 py-2.5">
+          <p className="text-[12px] text-v2-text-3">Deadline</p>
+          <p className={cn('mt-0.5 font-semibold', displayStatus === 'overdue' && 'text-status-danger')}>
+            {task.deadline ? formatDate(task.deadline) : '—'}
+          </p>
+        </div>
+        <div className="rounded-v2-panel border bg-card px-3 py-2.5">
+          <p className="mb-1 text-[12px] text-v2-text-3">Ưu tiên</p>
+          <TaskPriorityBadge priority={task.priority as Task['priority']} />
+        </div>
+      </div>
+
       {/* ── Two-column body ── */}
       {/* Desktop (lg): flex-row, each column independently overflow-y-auto within the
           constrained height from lg:h-full above → the right panel effectively "sticks"
           without requiring position:sticky (which breaks inside overflow containers).
-          Mobile: flex-col. order-2 on left, order-1 on right → right panel (status +
-          submit CTA) appears first on mobile. Using order-* avoids the DOM/focus
-          mismatch that flex-col-reverse causes for keyboard navigation. */}
+          Mobile: flex-col theo ĐÚNG thứ tự DOM — nội dung + form nộp trước, metadata/hành động phụ
+          sau (r1.1: bỏ order-* vì thứ tự nhìn lệch thứ tự đọc/Tab). */}
       <div className="flex flex-col lg:flex-row lg:flex-1 lg:min-h-0 w-full">
 
-        {/* ── Left — task content (order-2 mobile → below, order-first desktop → left) ── */}
-        <div className="order-2 lg:order-first flex-[2] min-w-0 px-4 py-3 lg:border-r lg:overflow-y-auto">
-          <div className="space-y-3">
+        {/* ── Left — task content (mobile: trước; desktop: cột trái) ── */}
+        <div data-detail-content className="flex-[2] min-w-0 px-4 py-4 md:px-6 lg:border-r lg:overflow-y-auto">
+          <div className="space-y-4">
 
           {/* Inventory → TRF: business-context panel (incl. "Người tạo phiếu") */}
           {isTrfTask && (
@@ -483,10 +494,9 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
 
           {/* Description — hidden for TRF (the reason is shown in TrfInfoPanel) */}
           {task.description && !isTrfTask && (
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Mô tả</p>
+            <Panel title="Mô tả" titleStyle="eyebrow">
               <RichText value={task.description as string} />
-            </div>
+            </Panel>
           )}
 
           {/* Input data (task attachments / links from creation) */}
@@ -496,19 +506,14 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
 
           {/* staff_all parent: per-staff progress table instead of a submit form */}
           {isStaffParent && (
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm flex items-center gap-2">
-                  Tiến độ dược sĩ
-                  <span className={cn(
-                    'text-xs font-medium px-1.5 py-0.5 rounded',
-                    staffTotal > 0 && staffDone === staffTotal ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'
-                  )}>
-                    {staffDone}/{staffTotal} đã nộp
-                  </span>
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-0">
+            <Panel title={
+              <span className="flex items-center gap-2">
+                Tiến độ dược sĩ
+                <StatusBadge tone={staffTotal > 0 && staffDone === staffTotal ? 'success' : 'warning'}>
+                  {staffDone}/{staffTotal} đã nộp
+                </StatusBadge>
+              </span>
+            }>
                 {staffTotal === 0 ? (
                   <p className="text-sm text-muted-foreground">Chưa có task con nào.</p>
                 ) : (
@@ -531,43 +536,37 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                     ))}
                   </div>
                 )}
-              </CardContent>
-            </Card>
+            </Panel>
           )}
 
           {/* Resubmit request banner — above submit form so the reason is visible
               before the submitter starts filling in the form */}
           {(userRole === 'staff' || isStoreModeSubmitter) && resubmitAt && !hasAlreadySubmitted && (
-            <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
-              <p className="font-medium text-amber-900">Quản lý yêu cầu thực hiện lại</p>
-              {resubmitReason && <p className="text-amber-800 mt-1">Lý do: {resubmitReason}</p>}
-              <p className="text-xs text-amber-700 mt-1">Kết quả cũ đã được lưu. Vui lòng nộp lại bên dưới.</p>
-            </div>
+            <Notice tone="warning" title="Quản lý yêu cầu thực hiện lại">
+              {resubmitReason && <p>Lý do: {resubmitReason}</p>}
+              <p className="mt-1 text-xs">Kết quả cũ đã được lưu. Vui lòng nộp lại bên dưới.</p>
+            </Notice>
           )}
 
           {/* Admin/PIC/SM banner — explains why a previously-submitted task is still
               "Quá hạn"/chờ: an open resubmit request the pharmacist hasn't fulfilled. */}
           {canReviewTask && resubmitAt && !hasValidSubmission && (
-            <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm">
-              <p className="font-medium text-amber-900">Đang chờ nộp lại</p>
-              <p className="text-amber-800 mt-1">
-                Đã yêu cầu làm lại từ {formatDate(resubmitAt)} — kết quả cũ không còn được tính. Dược sĩ chưa nộp lại nên task vẫn ở trạng thái chờ/quá hạn.
-              </p>
-            </div>
+            <Notice tone="warning" title="Đang chờ nộp lại">
+              Đã yêu cầu làm lại từ {formatDate(resubmitAt)} — kết quả cũ không còn được tính. Dược sĩ chưa nộp lại nên task vẫn ở trạng thái chờ/quá hạn.
+            </Notice>
           )}
 
           {/* Submit form — primary workflow step, right after task content */}
           {canSubmit && (
-            <Card className="border-primary/30">
-              <CardHeader className="pb-1">
-                <CardTitle className="text-sm text-primary flex items-center gap-2">
+            <Panel
+              className="border-[1.5px] border-v2-selected-line"
+              title={
+                <span className="flex items-center gap-2 text-[16px] font-bold">
                   Nộp kết quả
-                  {displayStatus === 'overdue' && (
-                    <span className="text-[11px] font-medium bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded">Quá hạn</span>
-                  )}
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="pt-0">
+                  {displayStatus === 'overdue' && <StatusBadge tone="danger" size="sm">Quá hạn</StatusBadge>}
+                </span>
+              }
+            >
                 {isStoreLevelTask && (
                   <p className="text-xs text-muted-foreground mb-2">
                     Task cửa hàng: Staff hoặc Quản lý cửa hàng đều có thể nộp. Chỉ cần một kết quả cho cả cửa hàng.
@@ -580,17 +579,12 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                   isStoreLevelTask={isStoreLevelTask}
                   storeStaff={(storeUsers ?? []).filter((u) => u.role === 'staff')}
                 />
-              </CardContent>
-            </Card>
+            </Panel>
           )}
 
           {/* Previous submissions */}
           {(results ?? []).length > 0 && (
-            <Card>
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm">Kết quả đã nộp ({results?.length})</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2">
+            <Panel title={<>Kết quả đã nộp ({results?.length})</>} bodyClassName="space-y-2">
                 {results!.map((r) => (
                   <TaskResultCard
                     key={r.id}
@@ -605,8 +599,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                     }}
                   />
                 ))}
-              </CardContent>
-            </Card>
+            </Panel>
           )}
 
           {/* Trao đổi với Admin — store_manager ↔ admin; staff cannot see */}
@@ -633,9 +626,9 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
 
           {/* Admin-only review actions — after results so context is clear */}
           {canReviewTask && hasValidSubmission && task.status !== 'done' && (
-            <div className="rounded-md border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+            <Notice tone="warning">
               Task đã có kết quả nộp nhưng trạng thái hiện không phải Hoàn thành. Có thể yêu cầu làm lại hoặc chỉnh trạng thái.
-            </div>
+            </Notice>
           )}
           {canReviewTask && hasValidSubmission && (
             <RequestResubmitSection taskId={id} requestFn={requestResubmit} />
@@ -643,8 +636,8 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
           </div>
         </div>
 
-        {/* ── Right — metadata sidebar (order-1 mobile → above, order-last desktop → right) ── */}
-        <div className="order-1 lg:order-last lg:w-[340px] lg:shrink-0 px-4 py-3 space-y-3 lg:border-l lg:overflow-y-auto">
+        {/* ── Right — metadata sidebar (mobile: sau nội dung; desktop: cột phải) ── */}
+        <div data-detail-meta className="lg:w-[340px] lg:shrink-0 px-4 py-4 md:px-5 space-y-4 lg:border-l lg:overflow-y-auto">
 
           {/* Extend deadline — admin when overdue; at the top so the action is
               immediately visible alongside the overdue status badge */}
@@ -658,8 +651,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
 
           {/* Status + metadata card — rows use border-t spacing rather than
               heavy Separators between every field */}
-          <Card>
-            <CardContent className="pt-4 text-sm divide-y divide-border/60">
+          <Panel className="text-sm" bodyClassName="divide-y">
 
               {/* Status */}
               <div className="pb-3">
@@ -671,28 +663,28 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                   )}
                 </div>
                 {submittedLocked && (
-                  <p className="text-xs text-amber-700 mt-1">
+                  <p className="text-xs text-status-warning mt-1">
                     Task đã nộp. Vui lòng chờ quản lý yêu cầu làm lại nếu cần chỉnh sửa.
                   </p>
                 )}
                 {displayStatus === 'overdue' && isSubmitterForTask && !hasAlreadySubmitted && (
-                  <p className="text-xs text-amber-700 mt-1">
+                  <p className="text-xs text-status-warning mt-1">
                     Task đã quá hạn — vẫn có thể nộp, kết quả sẽ được ghi nhận là nộp trễ.
                   </p>
                 )}
               </div>
 
               {/* Deadline + start date */}
-              <div className="py-3 grid grid-cols-2 gap-3">
+              <div className={cn('py-3 grid grid-cols-2 gap-3', !task.start_date && 'hidden lg:grid')}>
                 {task.start_date && (
                   <div>
                     <p className="text-xs text-muted-foreground">Bắt đầu</p>
                     <p className="font-medium mt-0.5">{formatDate(task.start_date)}</p>
                   </div>
                 )}
-                <div>
+                <div className="hidden lg:block">
                   <p className="text-xs text-muted-foreground">Deadline</p>
-                  <p className={cn('font-medium mt-0.5', displayStatus === 'overdue' && 'text-red-600')}>
+                  <p className={cn('font-medium mt-0.5', displayStatus === 'overdue' && 'font-semibold text-status-danger')}>
                     {task.deadline ? formatDate(task.deadline) : '—'}
                   </p>
                 </div>
@@ -700,7 +692,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
 
               {/* Priority + Store — same row group */}
               <div className="py-3 grid grid-cols-2 gap-3">
-                <div>
+                <div className="hidden lg:block">
                   <p className="text-xs text-muted-foreground mb-1">Ưu tiên</p>
                   <TaskPriorityBadge priority={task.priority as Task['priority']} />
                 </div>
@@ -761,7 +753,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                   <p className="text-xs text-muted-foreground mb-1.5">Output cần nộp</p>
                   <div className="flex flex-wrap gap-1.5">
                     {(task.required_outputs as RequiredOutput[]).map((o) => (
-                      <span key={o} className="text-xs bg-muted px-2 py-0.5 rounded">
+                      <span key={o} className="text-xs bg-muted px-2 py-0.5 rounded-[6px]">
                         {OUTPUT_LABEL[o] ?? o}
                       </span>
                     ))}
@@ -780,8 +772,7 @@ export default async function TaskDetailPage({ params }: { params: Promise<{ id:
                   </p>
                 </div>
               )}
-            </CardContent>
-          </Card>
+          </Panel>
         </div>
       </div>
     </div>

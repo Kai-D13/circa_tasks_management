@@ -98,7 +98,7 @@ export function EditStaffAllInstructionDialog({ taskId, isBroadcast, defaults }:
 
   return (
     <Dialog open={open} onOpenChange={handleOpen}>
-      <DialogTrigger render={<Button variant="outline" size="sm" />}>
+      <DialogTrigger render={<Button variant="outline" size="sm" className="h-[44px] md:h-[36px] px-3 text-[13px]" />}>
         <Pencil className="h-4 w-4 mr-1" /> Chỉnh sửa hướng dẫn
       </DialogTrigger>
       <DialogContent className="sm:max-w-lg max-h-[90vh] overflow-y-auto">
@@ -106,7 +106,7 @@ export function EditStaffAllInstructionDialog({ taskId, isBroadcast, defaults }:
           <DialogTitle>Chỉnh sửa hướng dẫn (toàn bộ dược sĩ)</DialogTitle>
         </DialogHeader>
 
-        <div className="flex items-start gap-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+        <div className="flex items-start gap-2 rounded-md bg-status-warning-bg border border-status-warning/30 px-3 py-2 text-xs text-status-warning">
           <Info className="h-4 w-4 shrink-0 mt-0.5" />
           <span>
             Thay đổi áp dụng cho <strong>toàn bộ dược sĩ</strong> của task này
