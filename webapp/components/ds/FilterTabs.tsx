@@ -37,7 +37,9 @@ export function FilterTabs({
     // <nav> + aria-current="page" (P1 r1 semantics). Touch target dùng PIXEL
     // LITERAL [44px]: root font-size là 15px nên min-h-11 (2.75rem) chỉ ra
     // 41.25px thật — guardrail test đo computed height bắt được. Desktop compact.
-    <nav aria-label={ariaLabel} className={cn('flex gap-1.5 overflow-x-auto pb-0.5', className)}>
+    // UI v2 (chỉ trong [data-ui-v2], PM duyệt 16/10): segmented — rãnh muted, tab đang chọn TRUNG
+    // TÍNH (nền panel + viền line-strong), cam chỉ dành cho hành động. Ngoài phạm vi giữ pill cam.
+    <nav aria-label={ariaLabel} className={cn('flex gap-1.5 overflow-x-auto pb-0.5 v2:w-fit v2:max-w-full v2:gap-1 v2:rounded-v2-control v2:bg-muted v2:p-1', className)}>
       {tabs.map((t) => {
         const active = t.key === activeKey
         return (
@@ -47,9 +49,10 @@ export function FilterTabs({
             aria-current={active ? 'page' : undefined}
             className={cn(
               'shrink-0 inline-flex items-center px-3.5 min-h-[44px] md:min-h-9 rounded-full border text-sm font-medium transition-colors',
+              'v2:rounded-[8px] v2:text-[13px] md:v2:min-h-[30px]',
               active
-                ? 'bg-primary text-primary-foreground border-primary'
-                : 'text-muted-foreground hover:text-foreground bg-background',
+                ? 'bg-primary text-primary-foreground border-primary v2:bg-card v2:text-foreground v2:border-input v2:font-semibold'
+                : 'text-muted-foreground hover:text-foreground bg-background v2:bg-transparent v2:border-transparent',
             )}
           >
             {t.label}

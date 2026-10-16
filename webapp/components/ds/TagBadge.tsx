@@ -35,6 +35,7 @@ export function TagBadge({
     <span
       className={cn(
         'inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded whitespace-nowrap',
+        'v2:rounded-v2-chip v2:px-[7px]', // UI v2: chip 6px; hue giữ nguyên (taxonomy toàn app)
         HUE[hue],
         className,
       )}
