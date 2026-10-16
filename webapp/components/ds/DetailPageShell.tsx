@@ -50,7 +50,8 @@ export function DetailPageShell({
       </Link>
       {actions ? (
         <div className={cn('flex items-start justify-between gap-4 flex-wrap', HEADER_V2)}>
-          {titleBlock()}
+          {/* v2: tiêu đề dài co lại bên trái, nhóm nút giữ bên phải khi còn chỗ (artboard 05: flex 1 1 520px). */}
+          {titleBlock('v2:flex-[1_1_420px]')}
           <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">{actions}</div>
         </div>
       ) : titleBlock(HEADER_V2)}
