@@ -430,13 +430,12 @@ test.describe('SM write-path @desktop', () => {
       const noteOut = page.getByRole('button', { name: 'Ghi chú', exact: true }).first()
       await expect(noteOut, 'không thấy nút output "Ghi chú"').toBeVisible({ timeout: 10_000 })
       for (let i = 0; i < 4; i++) {
-        const cls = (await noteOut.getAttribute('class')) ?? ''
-        if (cls.includes('bg-primary')) break
+        if ((await noteOut.getAttribute('aria-pressed')) === 'true') break
         await noteOut.click()
         await page.waitForTimeout(300)
       }
-      expect((await noteOut.getAttribute('class')) ?? '',
-        'không bật được output "Ghi chú"').toContain('bg-primary')
+      expect(await noteOut.getAttribute('aria-pressed'),
+        'không bật được output "Ghi chú"').toBe('true')
 
       // Bắt đầu + Hạn chót là input `required`. Bỏ trống thì TRÌNH DUYỆT chặn
       // submit bằng bong bóng native — không có toast, không có dòng nào trong

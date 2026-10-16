@@ -30,6 +30,8 @@ const FONT_SIZES = [
 interface Props {
   value: string
   onChange: (html: string) => void
+  // UI v2: editor nằm sát trong một Panel (không khung riêng).
+  flush?: boolean
 }
 
 const escapeHtml = (s: string) =>
@@ -62,7 +64,7 @@ function transformPastedHTML(html: string): string {
   }
 }
 
-export function RichTextEditor({ value, onChange }: Props) {
+export function RichTextEditor({ value, onChange, flush = false }: Props) {
   // Local state for the font-size <select> — binding it to editor.getAttributes
   // made it snap back to "Vừa" on a collapsed cursor (getAttributes returns '').
   const [fontSize, setFontSize] = useState<string>('')
@@ -82,7 +84,8 @@ export function RichTextEditor({ value, onChange }: Props) {
       transformPastedHTML,
       attributes: {
         class: cn(
-          'min-h-[180px] max-h-[400px] overflow-y-auto px-3 py-2 text-sm focus:outline-none',
+          'min-h-[180px] max-h-[400px] overflow-y-auto text-sm focus:outline-none',
+          flush ? 'px-4 md:px-5 py-4 leading-[1.65]' : 'px-3 py-2',
           '[&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5',
           '[&_mark]:bg-yellow-200 [&_mark]:rounded-sm [&_mark]:px-0.5',
           '[&_h1]:text-lg [&_h1]:font-semibold [&_h2]:text-base [&_h2]:font-semibold',
@@ -113,7 +116,7 @@ export function RichTextEditor({ value, onChange }: Props) {
   }, [value, editor])
 
   if (!editor) {
-    return <div className="min-h-[180px] rounded-md border bg-background" />
+    return <div className={cn('min-h-[180px]', flush ? 'border-t' : 'rounded-md border bg-background')} />
   }
 
   const Btn = ({ active, onClick, title, children }: {
@@ -126,7 +129,10 @@ export function RichTextEditor({ value, onChange }: Props) {
       onClick={onClick}
       className={cn(
         'h-8 w-8 inline-flex items-center justify-center rounded transition-colors',
-        active ? 'bg-primary text-white' : 'text-muted-foreground hover:bg-muted',
+        'v2:h-[44px] v2:w-[44px] md:v2:h-[32px] md:v2:w-[32px] v2:rounded-[8px]',
+        active
+          ? 'bg-primary text-primary-foreground v2:bg-accent v2:text-accent-foreground'
+          : 'text-muted-foreground hover:bg-muted v2:hover:bg-card v2:hover:text-foreground',
       )}
     >
       {children}
@@ -134,9 +140,9 @@ export function RichTextEditor({ value, onChange }: Props) {
   )
 
   return (
-    <div className="rounded-md border bg-background">
+    <div className={cn(!flush && 'rounded-md border bg-background')}>
       {/* Toolbar */}
-      <div className="flex items-center gap-0.5 flex-wrap border-b px-1.5 py-1">
+      <div className={cn('flex items-center gap-0.5 flex-wrap', flush ? 'border-y bg-muted px-2.5 md:px-3.5 py-1.5' : 'border-b px-1.5 py-1')}>
         <Btn active={editor.isActive('bold')} onClick={() => editor.chain().focus().toggleBold().run()} title="In đậm">
           <Bold className="h-4 w-4" />
         </Btn>
@@ -171,7 +177,7 @@ export function RichTextEditor({ value, onChange }: Props) {
           }}
           title="Cỡ chữ"
           aria-label="Cỡ chữ"
-          className="h-8 rounded border-0 bg-transparent px-1 text-xs text-muted-foreground hover:bg-muted focus:outline-none"
+          className="h-8 rounded border-0 bg-transparent px-1 text-xs text-muted-foreground hover:bg-muted focus:outline-none v2:h-[44px] md:v2:h-[32px] v2:rounded-[8px] v2:px-2 v2:text-[16px] md:v2:text-[13px] v2:hover:bg-card"
         >
           {FONT_SIZES.map((s) => (
             <option key={s.label} value={s.value}>{s.label}</option>

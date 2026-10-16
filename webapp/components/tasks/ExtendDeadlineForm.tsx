@@ -42,15 +42,15 @@ export function ExtendDeadlineForm({ taskId, extendFn, currentDeadline }: Props)
 
   if (!open) {
     return (
-      <Card className="border-red-200 bg-red-50/40">
+      <Card className="bg-status-danger-bg/60 ring-status-danger/30 v2:ring-status-danger/30">
         <CardContent className="pt-4 flex items-center justify-between gap-4">
-          <p className="text-sm text-red-800">
+          <p className="text-sm text-status-danger">
             Task đã quá hạn{currentDeadline ? ` từ ${new Date(currentDeadline).toLocaleDateString('vi-VN', { timeZone: 'Asia/Ho_Chi_Minh' })}` : ''}.
           </p>
           <Button
             variant="outline"
             size="sm"
-            className="shrink-0 border-red-300 text-red-800 hover:bg-red-100"
+            className="shrink-0 h-[44px] md:h-8 border-status-danger/40 text-status-danger hover:bg-status-danger-bg"
             onClick={() => setOpen(true)}
           >
             <CalendarClock className="h-4 w-4 mr-1.5" />
@@ -62,15 +62,15 @@ export function ExtendDeadlineForm({ taskId, extendFn, currentDeadline }: Props)
   }
 
   return (
-    <Card className="border-red-200">
+    <Card className="ring-status-danger/30 v2:ring-status-danger/30">
       <CardContent className="pt-4 space-y-3">
-        <p className="text-sm font-medium text-red-800">Chọn deadline mới</p>
+        <p className="text-sm font-medium text-status-danger">Chọn deadline mới</p>
         <input
           type="date"
           min={minDate}
           value={date}
           onChange={(e) => setDate(e.target.value)}
-          className="h-9 rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm w-full max-w-[200px]"
+          className="h-10 md:h-9 rounded-md v2:rounded-v2-control border border-input bg-background px-3 py-1 text-[16px] md:text-sm shadow-sm w-full max-w-[200px]"
           aria-label="Ngày gia hạn"
         />
         <div className="flex gap-2">
@@ -78,7 +78,7 @@ export function ExtendDeadlineForm({ taskId, extendFn, currentDeadline }: Props)
             size="sm"
             disabled={!date || pending}
             onClick={handleSubmit}
-            className="bg-red-600 hover:bg-red-700"
+            className="h-[44px] md:h-8 bg-status-danger text-status-danger-bg hover:bg-status-danger/90"
           >
             {pending ? 'Đang lưu...' : 'Xác nhận'}
           </Button>

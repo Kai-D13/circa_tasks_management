@@ -32,10 +32,14 @@ export function StatusBadge({
       className={cn(
         'inline-flex items-center rounded font-medium whitespace-nowrap',
         size === 'sm' ? 'text-[10px] px-1.5 py-0.5' : 'text-[11px] px-2 py-0.5',
+        // UI v2 (chỉ trong [data-ui-v2]): chip 6px, chấm + chữ — không phụ thuộc phân biệt màu.
+        'v2:gap-1.5 v2:rounded-v2-chip',
+        size === 'sm' ? 'v2:text-[11px] v2:px-[7px] v2:py-[2px]' : 'v2:text-[12px] v2:px-2 v2:py-[3px]',
         TONE[tone],
         className,
       )}
     >
+      <span aria-hidden="true" className="hidden v2:inline-block size-1.5 shrink-0 rounded-full bg-current" />
       {children}
     </span>
   )

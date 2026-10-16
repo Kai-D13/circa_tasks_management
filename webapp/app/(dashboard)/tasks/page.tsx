@@ -978,7 +978,8 @@ export default async function TasksPage({
   }
 
   return (
-    <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
+    // UI v2 P1.2 (docs/ui/UI_V2_TASKS.md): chỉ trình bày — query/quyền/URL/chữ giữ nguyên.
+    <div data-ui-v2="page" data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
       {!isStaff && <AutoRefresh intervalMs={45000} />}
       <PageHeader
         title="Danh sách Tasks"
@@ -986,9 +987,9 @@ export default async function TasksPage({
         actions={
           <>
             {/* canCreate nay đã gồm SM (108) — `|| isSm` cũ trở thành thừa. */}
-            {canCreate && <ExportButton endpoint="/api/export/tasks" className="h-[44px] md:h-8" />}
+            {canCreate && <ExportButton endpoint="/api/export/tasks" className="h-[44px] md:h-[36px] px-3.5 text-[13px]" />}
             {canCreate && (
-              <Link href="/tasks/new" className={cn(buttonVariants({ size: 'sm' }), 'h-[44px] md:h-8')}>
+              <Link href="/tasks/new" className={cn(buttonVariants({ size: 'sm' }), 'h-[44px] md:h-[36px] px-3.5 text-[13px] font-semibold')}>
                 <Plus className="h-4 w-4 mr-1" />
                 Tạo Task
               </Link>
@@ -1001,7 +1002,7 @@ export default async function TasksPage({
           đường render nóng của /tasks (đo trước/sau trong report B4). */}
       {isStaff && isCareEnabled() && (
         <Link href="/care/my" prefetch={false} data-testid="care-cta"
-          className="flex min-h-[44px] items-center gap-2 rounded-lg border bg-card px-3 py-2 text-sm font-medium text-primary active:bg-muted/60">
+          className="flex min-h-[44px] items-center gap-2.5 rounded-v2-panel border border-v2-selected-line bg-accent px-3.5 py-2 text-sm font-semibold text-accent-foreground active:opacity-80">
           <HeartHandshake className="size-4" aria-hidden />
           <span className="flex-1">Chăm sóc khách hàng →</span>
         </Link>
@@ -1046,7 +1047,7 @@ export default async function TasksPage({
               }
               action={
                 canCreate && !hasActiveFilters && view !== 'done' && !showArchived ? (
-                  <Link href="/tasks/new" className={cn(buttonVariants({ size: 'sm' }), 'h-[44px] md:h-8')}>
+                  <Link href="/tasks/new" className={cn(buttonVariants({ size: 'sm' }), 'h-[44px] md:h-[36px] px-3.5 text-[13px] font-semibold')}>
                     <Plus className="h-4 w-4 mr-1" /> Tạo Task
                   </Link>
                 ) : undefined
@@ -1067,8 +1068,8 @@ export default async function TasksPage({
           {/* Admin/manager pagination — numbered. Group-paginated views count by
               GROUP (slice above); row-paginated views use the exact row count. */}
           {!isStaff && effectiveTotalPages > 1 && (
-            <div className="flex items-center justify-between gap-2 pt-1">
-              <span className="text-xs text-muted-foreground">
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
+              <span className="text-[13px] text-muted-foreground">
                 {groupPaginate
                   ? `${(clampedPage - 1) * GROUPS_PER_PAGE + 1}–${Math.min(clampedPage * GROUPS_PER_PAGE, visibleItems.length)} / ${visibleItems.length} nhóm`
                   : `${offset + 1}–${Math.min(offset + pageSize, totalRows)} / ${totalRows} task`}
@@ -1079,7 +1080,7 @@ export default async function TasksPage({
                   aria-disabled={clampedPage <= 1}
                   className={cn(
                     buttonVariants({ variant: 'outline', size: 'sm' }),
-                    'h-7 w-7 p-0',
+                    'h-[44px] w-[44px] md:h-8 md:w-8 p-0',
                     clampedPage <= 1 && 'pointer-events-none opacity-40',
                   )}
                   aria-label="Trang trước"
@@ -1097,14 +1098,16 @@ export default async function TasksPage({
                   }, [])
                   .map((p, i) =>
                     p === '…' ? (
-                      <span key={`gap-${i}`} className="text-xs text-muted-foreground px-1">…</span>
+                      <span key={`gap-${i}`} className="text-[13px] text-muted-foreground px-1">…</span>
                     ) : (
                       <Link
                         key={p}
                         href={pageHref(p as number)}
+                        aria-current={p === clampedPage ? 'page' : undefined}
                         className={cn(
-                          buttonVariants({ variant: p === clampedPage ? 'default' : 'outline', size: 'sm' }),
-                          'h-7 w-7 p-0 text-xs',
+                          buttonVariants({ variant: 'outline', size: 'sm' }),
+                          'h-[44px] w-[44px] md:h-8 md:w-8 p-0 text-[13px]',
+                          p === clampedPage && 'border-input bg-muted font-semibold text-foreground',
                         )}
                       >
                         {p}
@@ -1117,7 +1120,7 @@ export default async function TasksPage({
                   aria-disabled={clampedPage >= effectiveTotalPages}
                   className={cn(
                     buttonVariants({ variant: 'outline', size: 'sm' }),
-                    'h-7 w-7 p-0',
+                    'h-[44px] w-[44px] md:h-8 md:w-8 p-0',
                     clampedPage >= effectiveTotalPages && 'pointer-events-none opacity-40',
                   )}
                   aria-label="Trang tiếp"

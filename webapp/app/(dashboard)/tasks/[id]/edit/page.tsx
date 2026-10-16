@@ -31,7 +31,7 @@ export default async function EditTaskPage({ params }: { params: Promise<{ id: s
   ])
 
   return (
-    <div className="flex flex-col h-full">
+    <div data-ui-v2="page" className="flex flex-col h-full">
       <TaskForm
         task={task as Task}
         stores={stores ?? []}

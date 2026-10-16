@@ -26,13 +26,15 @@ export function DetailPageShell({
   // `data-layout-width`, không sinh một class nào.
   layoutWidth?: 'fluid' | 'centered'
 }) {
-  const titleBlock = (
-    <div className="min-w-0">
-      <div className="flex flex-wrap items-center gap-3">
-        <h1 className="text-xl font-semibold break-words min-w-0">{title}</h1>
+  // UI v2 (chỉ trong [data-ui-v2]): khối tiêu đề có vạch kẻ dưới, h1 24px đậm, meta/back-link 13px.
+  const HEADER_V2 = 'v2:border-b v2:border-border v2:pb-[18px]'
+  const titleBlock = (extra?: string) => (
+    <div className={cn('min-w-0', extra)}>
+      <div className="flex flex-wrap items-center gap-3 v2:gap-2">
+        <h1 className="text-xl font-semibold break-words min-w-0 v2:text-[24px] v2:font-bold v2:leading-[1.3] v2:tracking-[-0.01em]">{title}</h1>
         {badges}
       </div>
-      {meta && <div className="text-sm text-muted-foreground mt-1">{meta}</div>}
+      {meta && <div className="text-sm text-muted-foreground mt-1 v2:mt-2 v2:text-[13px]">{meta}</div>}
     </div>
   )
   return (
@@ -42,16 +44,17 @@ export function DetailPageShell({
           compact. */}
       <Link
         href={backHref}
-        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0 -my-2.5 md:my-0"
+        className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0 -my-2.5 md:my-0 v2:text-[13px]"
       >
         <ChevronLeft className="h-4 w-4" /> {backLabel}
       </Link>
       {actions ? (
-        <div className="flex items-start justify-between gap-4 flex-wrap">
-          {titleBlock}
+        <div className={cn('flex items-start justify-between gap-4 flex-wrap', HEADER_V2)}>
+          {/* v2: tiêu đề dài co lại bên trái, nhóm nút giữ bên phải khi còn chỗ (artboard 05: flex 1 1 520px). */}
+          {titleBlock('v2:flex-[1_1_420px]')}
           <div className="flex items-center gap-2 shrink-0 flex-wrap justify-end">{actions}</div>
         </div>
-      ) : titleBlock}
+      ) : titleBlock(HEADER_V2)}
       {children}
     </div>
   )

@@ -7,13 +7,16 @@ import { RotateCcw } from 'lucide-react'
 import { bulkRequestResubmit } from '@/app/actions/tasks'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { cn } from '@/lib/utils'
 
 interface Props {
   taskIds: string[]
   onDone: () => void
+  /** UI v2 P1.2: class cho nút mở dialog (vd trong BulkActionBar); không truyền = như cũ. */
+  triggerClassName?: string
 }
 
-export function BulkResubmitButton({ taskIds, onDone }: Props) {
+export function BulkResubmitButton({ taskIds, onDone, triggerClassName }: Props) {
   const router = useRouter()
   const [open, setOpen]     = useState(false)
   const [reason, setReason] = useState('')
@@ -47,7 +50,7 @@ export function BulkResubmitButton({ taskIds, onDone }: Props) {
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (o) openDialog(); else setOpen(false) }}>
-      <DialogTrigger render={<Button variant="outline" size="sm" className="h-7 text-xs gap-1" />}>
+      <DialogTrigger render={<Button variant="outline" size="sm" className={cn('h-7 text-xs gap-1', triggerClassName)} />}>
         <RotateCcw className="h-3.5 w-3.5" /> Yêu cầu làm lại
       </DialogTrigger>
       <DialogContent className="sm:max-w-md">

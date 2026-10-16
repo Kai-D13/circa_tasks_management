@@ -2,6 +2,17 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+/* `dark:` theo THEME CỦA APP (class .dark trên <html> do next-themes đặt, enableSystem=false), không
+   theo theme hệ điều hành. Thiếu dòng này Tailwind 4 mặc định @media (prefers-color-scheme: dark) ⇒
+   app tối + OS sáng thì mọi `dark:` tắt, app sáng + OS tối thì `dark:` bật sai (PM audit 16/10, F1).
+   :where() ⇒ không cộng specificity, giữ nguyên thứ tự cascade như bản media. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* UI v2 Tasks (docs/ui/UI_V2_TASKS.md): `v2:` chỉ khớp khi phần tử nằm trong (hoặc chính là)
+   [data-ui-v2]. :where() ⇒ specificity bằng class thường; utility có variant luôn sinh sau nên thắng
+   utility mặc định cùng thuộc tính. Ngoài phạm vi, mọi class v2:* là vô hiệu. */
+@custom-variant v2 (&:where([data-ui-v2], [data-ui-v2] *));
+
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -63,6 +74,12 @@
   --radius-care-field: 10px;
   /* B8 (PM audit B8): card màn browser CRM (super/Marketing/SM) theo artboard 11–13 — chỉ trong components/care. */
   --radius-care-panel: 12px;
+  /* UI v2 Tasks — giá trị CHỈ khai báo dưới [data-ui-v2] (cuối file); ngoài phạm vi biến rỗng. */
+  --radius-v2-panel: var(--v2-radius-panel);
+  --radius-v2-control: var(--v2-radius-control);
+  --radius-v2-chip: var(--v2-radius-chip);
+  --color-v2-text-3: var(--v2-text-3);
+  --color-v2-selected-line: var(--v2-selected-line);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -210,6 +227,68 @@
   --care-cta-foreground: oklch(0.16 0.01 50);
   --care-select: oklch(0.23 0.04 44);
   --care-select-line: oklch(0.45 0.09 44);
+}
+
+/* ============================================================
+   UI v2 — module Tasks (batch feat/ui-v2-tasks, PM GO 16/10/2026). Ngoại lệ circa-ui CÓ PHẠM VI:
+   token v2 CHỈ tồn tại dưới [data-ui-v2] và trên <main> của trang có gốc data-ui-v2="page".
+   Giá trị copy đúng canvas Claude Design "Circa Tasks — Redesign v2 · Phase 1" (bảng 00 + palette
+   các màn). KHÔNG alias --care-* (dark khác giá trị đang chạy) ⇒ 4 màn CSKH giữ nguyên pixel.
+   Trong phạm vi, token ngữ nghĩa shadcn được trỏ sang token v2 ⇒ control sẵn có (button, input,
+   select, bảng…) tự đổi theo; --status-* GIỮ NGUYÊN (cặp đã đo ≥6,48:1). Portal (dialog, popup
+   select, tooltip, toast) render ngoài <main> ⇒ giữ giao diện mặc định.
+   ============================================================ */
+[data-ui-v2],
+main:has([data-ui-v2="page"]) {
+  --v2-canvas: #F7F6F4;
+  --v2-panel: #FFFFFF;
+  --v2-muted: #F1F0EE;
+  --v2-line: #E7E5E4;
+  --v2-line-strong: #D6D3D1;
+  --v2-text: #1C1917;
+  --v2-text-2: #57534E;
+  --v2-text-3: #6F6964;
+  --v2-action: #C94A16;            /* chữ trắng ≈5,5:1 (cam brand #FB743E + trắng chỉ ≈2,6:1) */
+  --v2-action-fg: #FFFFFF;
+  --v2-selected: #FFF1EA;
+  --v2-selected-line: #F3C2A8;
+  --v2-accent-text: #B8440F;
+  --v2-radius-panel: 12px;
+  --v2-radius-control: 10px;
+  --v2-radius-chip: 6px;
+  --background: var(--v2-canvas);
+  --foreground: var(--v2-text);
+  --card: var(--v2-panel);
+  --card-foreground: var(--v2-text);
+  --muted: var(--v2-muted);
+  --muted-foreground: var(--v2-text-2);
+  --border: var(--v2-line);
+  --input: var(--v2-line-strong);
+  --primary: var(--v2-action);
+  --primary-foreground: var(--v2-action-fg);
+  --ring: var(--v2-action);
+  --accent: var(--v2-selected);
+  --accent-foreground: var(--v2-accent-text);
+}
+.dark [data-ui-v2],
+.dark main:has([data-ui-v2="page"]) {
+  --v2-canvas: #121110;
+  --v2-panel: #1A1817;
+  --v2-muted: #24211F;
+  --v2-line: #2E2A27;
+  --v2-line-strong: #3D3833;
+  --v2-text: #F5F5F4;
+  --v2-text-2: #A8A29E;
+  --v2-text-3: #8A8480;
+  --v2-action: #F3743F;
+  --v2-action-fg: #141210;
+  --v2-selected: #2A1E17;
+  --v2-selected-line: #7A3E20;
+  --v2-accent-text: #F7A57E;
+}
+/* Nền canvas phủ cả vùng <main> của trang v2 (như care-browse) — sidebar/header/bottom nav không đổi. */
+main:has([data-ui-v2="page"]) {
+  background-color: var(--v2-canvas);
 }
 
 @layer base {

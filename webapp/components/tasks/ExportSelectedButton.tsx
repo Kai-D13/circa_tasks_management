@@ -4,10 +4,12 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { Download } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 // POSTs the selected task ids to the selected-export route and downloads the
 // xlsx. POST (with a JSON body) so a large selection can't overflow the URL.
-export function ExportSelectedButton({ ids }: { ids: string[] }) {
+// `className` (UI v2 P1.2): chỉ trình bày — vd nút trong BulkActionBar; không truyền = như cũ.
+export function ExportSelectedButton({ ids, className }: { ids: string[]; className?: string }) {
   const [pending, setPending] = useState(false)
 
   async function handleClick() {
@@ -42,7 +44,7 @@ export function ExportSelectedButton({ ids }: { ids: string[] }) {
   }
 
   return (
-    <Button variant="outline" size="sm" onClick={handleClick} disabled={pending} className="gap-1.5">
+    <Button variant="outline" size="sm" onClick={handleClick} disabled={pending} className={cn('gap-1.5', className)}>
       <Download className="h-3.5 w-3.5" />
       {pending ? 'Đang xuất...' : `Xuất đã chọn (${ids.length})`}
     </Button>

@@ -17,9 +17,9 @@ const STATUS_LABEL: Record<string, string> = {
   resolved: 'Đã đóng',
 }
 const STATUS_COLOR: Record<string, string> = {
-  open:     'bg-amber-100 text-amber-700',
-  answered: 'bg-blue-100 text-blue-700',
-  resolved: 'bg-gray-100 text-gray-500',
+  open:     'bg-status-warning-bg text-status-warning',
+  answered: 'bg-status-info-bg text-status-info',
+  resolved: 'bg-status-neutral-bg text-status-neutral',
 }
 
 export interface FeedbackMessage {
@@ -93,7 +93,7 @@ function ThreadCard({ thread, canReply, replyFn, resolveFn }: {
         <div className="flex items-center gap-2 min-w-0">
           {expanded ? <ChevronDown className="h-4 w-4 shrink-0" /> : <ChevronRight className="h-4 w-4 shrink-0" />}
           <span className="font-medium text-sm truncate">{thread.title}</span>
-          <Badge className={STATUS_COLOR[thread.status] ?? 'bg-gray-100 text-gray-500'}>
+          <Badge className={STATUS_COLOR[thread.status] ?? 'bg-status-neutral-bg text-status-neutral'}>
             {STATUS_LABEL[thread.status] ?? thread.status}
           </Badge>
         </div>
@@ -190,7 +190,7 @@ export function FeedbackSection({ taskId, threads, canCreate, canReply, createFn
             <MessageSquare className="h-4 w-4" />
             Trao đổi với Admin
             {openCount > 0 && (
-              <Badge className="bg-amber-100 text-amber-700">{openCount} đang mở</Badge>
+              <Badge className="bg-status-warning-bg text-status-warning">{openCount} đang mở</Badge>
             )}
           </CardTitle>
           {canCreate && !showForm && (

@@ -132,7 +132,7 @@ export function TaskExcelSplitPanel({ stores, allowedStoreIds, onChange }: Props
   }
 
   return (
-    <div className="rounded border bg-background/60 p-3 space-y-3">
+    <div className="rounded border bg-background/60 p-3 space-y-3 v2:rounded-v2-control">
       <div className="flex items-center gap-2">
         <FileSpreadsheet className="h-4 w-4 text-primary shrink-0" />
         <span className="text-xs font-medium">Chia file Excel theo cửa hàng (tuỳ chọn)</span>
@@ -149,7 +149,7 @@ export function TaskExcelSplitPanel({ stores, allowedStoreIds, onChange }: Props
         >
           {file ? (
             <div className="space-y-0.5">
-              <FileSpreadsheet className="h-6 w-6 mx-auto text-green-600" />
+              <FileSpreadsheet className="h-6 w-6 mx-auto text-status-success" />
               <p className="text-xs font-medium">{file.name}</p>
               <p className="text-[11px] text-muted-foreground">{rows.length} dòng &#183; sheet {selectedSheet}</p>
             </div>
@@ -208,8 +208,8 @@ export function TaskExcelSplitPanel({ stores, allowedStoreIds, onChange }: Props
       {file && rows.length > 0 && posCodeCol && (
         <div className="space-y-2">
           <div className="flex items-center gap-2 flex-wrap text-[11px]">
-            <span className="rounded bg-green-100 text-green-700 px-1.5 py-0.5">{inScope.length} cửa hàng trong phạm vi</span>
-            {outside.length > 0 && <span className="rounded bg-red-100 text-red-700 px-1.5 py-0.5">{outside.length} POS ngoài phạm vi</span>}
+            <span className="rounded bg-status-success-bg text-status-success px-1.5 py-0.5">{inScope.length} cửa hàng trong phạm vi</span>
+            {outside.length > 0 && <span className="rounded bg-status-danger-bg text-status-danger px-1.5 py-0.5">{outside.length} POS ngoài phạm vi</span>}
             <span className="text-muted-foreground">{rows.length} dòng</span>
           </div>
 
@@ -248,7 +248,7 @@ export function TaskExcelSplitPanel({ stores, allowedStoreIds, onChange }: Props
                   <TableRow key={m.posCode}>
                     <TableCell className="text-[11px] px-2 py-1 font-mono">{m.posCode}</TableCell>
                     <TableCell className="text-[11px] px-2 py-1">
-                      <span className="flex items-center gap-1"><CheckCircle className="h-3 w-3 text-green-600 shrink-0" />{m.storeName}</span>
+                      <span className="flex items-center gap-1"><CheckCircle className="h-3 w-3 text-status-success shrink-0" />{m.storeName}</span>
                     </TableCell>
                     <TableCell className="text-[11px] px-2 py-1 text-right text-muted-foreground">{m.count}</TableCell>
                   </TableRow>
@@ -257,7 +257,7 @@ export function TaskExcelSplitPanel({ stores, allowedStoreIds, onChange }: Props
                   <TableRow key={o.posCode} className="bg-destructive/5">
                     <TableCell className="text-[11px] px-2 py-1 font-mono">{o.posCode}</TableCell>
                     <TableCell className="text-[11px] px-2 py-1">
-                      <span className="flex items-center gap-1 text-red-500"><XCircle className="h-3 w-3 shrink-0" />{o.reason}</span>
+                      <span className="flex items-center gap-1 text-status-danger"><XCircle className="h-3 w-3 shrink-0" />{o.reason}</span>
                     </TableCell>
                     <TableCell className="text-[11px] px-2 py-1 text-right text-muted-foreground">{o.count}</TableCell>
                   </TableRow>

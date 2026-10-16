@@ -96,7 +96,7 @@ export function TaskSubmitForm({ taskId, requiredOutputs, role, isStoreLevelTask
         <div key={type} className="grid gap-1">
           <Label className="text-xs font-medium">
             {OUTPUT_LABEL[type]}
-            <span className="text-red-500 ml-0.5">*</span>
+            <span className="text-status-danger ml-0.5">*</span>
           </Label>
           {type === 'text' ? (
             <Textarea
@@ -124,16 +124,16 @@ export function TaskSubmitForm({ taskId, requiredOutputs, role, isStoreLevelTask
 
       {/* Dropdown chọn nhân viên thực hiện — chỉ hiện khi Store Manager nộp thay */}
       {needsPerformerSelect && (
-        <div className="grid gap-1 rounded-md border border-amber-200 bg-amber-50 p-3">
-          <Label className="text-xs font-medium text-amber-900">
+        <div className="grid gap-1 rounded-md v2:rounded-v2-control border border-status-warning/30 bg-status-warning-bg p-3">
+          <Label className="text-xs font-medium text-status-warning">
             Nhân viên đã thực hiện ca này
-            <span className="text-red-500 ml-0.5">*</span>
+            <span className="text-status-danger ml-0.5">*</span>
           </Label>
-          <p className="text-xs text-amber-700 mb-1">
+          <p className="text-xs text-status-warning mb-1">
             Bạn đang nộp bằng tài khoản cửa hàng. Chọn nhân viên thực tế thực hiện để admin tracking được.
           </p>
           <Select value={performedBy} onValueChange={(v) => setPerformedBy(v ?? '')}>
-            <SelectTrigger className="h-9 text-sm bg-white">
+            <SelectTrigger className="h-10 md:h-9 text-[16px] md:text-sm bg-card">
               <SelectValue>
                 {storeStaff?.find((s) => s.id === performedBy)?.full_name ?? 'Chọn nhân viên...'}
               </SelectValue>

@@ -11,6 +11,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Button } from '@/components/ui/button'
 import { DataTableShell } from '@/components/ds/DataTableShell'
 import { StatusBadge } from '@/components/ds/StatusBadge'
+import { ProgressBar } from '@/components/ds/ProgressBar'
+import { BulkActionBar, BULK_ACTION_BUTTON } from '@/components/ds/BulkActionBar'
 import { TagBadge, type TagHue } from '@/components/ds/TagBadge'
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
 import { TaskPriorityBadge } from '@/components/tasks/TaskPriorityBadge'
@@ -322,39 +324,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
 
   return (
     <div className="space-y-2">
-      {someSelected && showCheckbox && (
-        <div className="flex items-center gap-2 px-1 pt-2 flex-wrap">
-          <span className="text-sm text-muted-foreground">{selected.size} task đã chọn</span>
-          <ExportSelectedButton ids={Array.from(selected)} />
-          {canBulkResubmit && (
-            <BulkResubmitButton taskIds={Array.from(selected)} onDone={() => setSelected(new Set())} />
-          )}
-          {canArchive && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 text-xs gap-1"
-              onClick={handleArchive}
-              disabled={pending}
-            >
-              <Archive className="h-3.5 w-3.5" />
-              {pending ? 'Đang xử lý...' : 'Lưu trữ đã chọn'}
-            </Button>
-          )}
-          {canRestore && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-8 text-xs gap-1"
-              onClick={handleRestore}
-              disabled={pending}
-            >
-              <ArchiveRestore className="h-3.5 w-3.5" />
-              {pending ? 'Đang xử lý...' : 'Khôi phục đã chọn'}
-            </Button>
-          )}
-        </div>
-      )}
+      {/* Thanh chọn hàng loạt: BulkActionBar nổi dính đáy, đặt sau bảng desktop (chỉ desktop có ô chọn). */}
 
       {/* Desktop: dense table in the DS shell (page no longer wraps a Card).
           Mobile: card list (below), standalone cards. */}
@@ -365,7 +335,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
           {/* Header band styling comes from DataTableShell (thead bg + th type) */}
           <TableRow className="hover:bg-transparent">
             {showCheckbox && (
-              <TableHead className="w-[40px]">
+              <TableHead className="w-[44px]">
                 <input
                   type="checkbox"
                   checked={allSelected}
@@ -376,12 +346,12 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
               </TableHead>
             )}
             <TableHead>Tiêu đề</TableHead>
-            <TableHead>Cửa hàng</TableHead>
-            <TableHead>Thực hiện / Đã nộp</TableHead>
-            <TableHead>Ưu tiên</TableHead>
-            <TableHead>Trạng thái</TableHead>
-            <TableHead>Deadline</TableHead>
-            <TableHead>Ngày tạo</TableHead>
+            <TableHead className="w-[130px]">Cửa hàng</TableHead>
+            <TableHead className="w-[160px]">Thực hiện / Đã nộp</TableHead>
+            <TableHead className="w-[100px]">Ưu tiên</TableHead>
+            <TableHead className="w-[130px]">Trạng thái</TableHead>
+            <TableHead className="w-[92px]">Deadline</TableHead>
+            <TableHead className="w-[88px]">Ngày tạo</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -399,7 +369,8 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                 <React.Fragment key={`bc-${item.type}-${gid}`}>
                   {/* Group header row (broadcast / import batch) */}
                   <TableRow
-                    className="bg-primary/5 hover:bg-primary/10 cursor-pointer"
+                    data-group-type={item.type}
+                    className="cursor-pointer hover:bg-muted/40"
                   >
                     {showCheckbox && (
                       <TableCell>
@@ -413,47 +384,63 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                         />
                       </TableCell>
                     )}
+                    {/* P1.2 r1.1: tên nhóm ở cột Tiêu đề, số cửa hàng ở cột Cửa hàng, tiến độ ở cột Thực hiện / Đã nộp. */}
                     <TableCell
-                      colSpan={4}
+                      data-group-col="title"
+                      className="min-w-[240px] whitespace-normal"
                       onClick={() => toggleExpand(gid)}
                     >
-                      <div className="flex items-center gap-2 font-medium">
+                      <div className="flex items-start gap-2 font-semibold [&>button]:mt-[3px] [&>svg]:mt-[3px]">
                         {isExpanded
                           ? <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
                           : <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />
                         }
-                        <GroupIcon className="h-4 w-4 text-primary shrink-0" />
-                        <span>{item.title}</span>
-                        {item.category && item.category !== 'other' && (
-                          <TagBadge hue={CATEGORY_HUE[item.category as TaskCategory] ?? 'gray'}>
-                            {CATEGORY_LABEL[item.category as TaskCategory] ?? item.category}
-                          </TagBadge>
-                        )}
-                        {item.department && (
-                          <span className={cn('text-xs px-1.5 py-0.5 rounded', deptBadgeClass(item.department.color))}>
-                            {item.department.name}
-                          </span>
-                        )}
-                        <span className="text-xs text-muted-foreground font-normal ml-1">
-                          {/* r1.1 P1#2: total null → nói rõ "đang hiển thị", không suy đoán tổng */}
-                          {groupStoreCountLabel(item.total, item.childTasks.length)}
-                        </span>
+                        <GroupIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <span data-group-title className="min-w-0 wrap-anywhere">{item.title}</span>
                       </div>
+                      {/* Tag xuống dòng riêng: tên nhóm giữ đủ bề rộng cột Tiêu đề (1280px + sidebar mở). */}
+                      {((item.category && item.category !== 'other') || item.department) && (
+                        <div className="mt-1.5 ml-6 flex flex-wrap items-center gap-1.5">
+                          {item.category && item.category !== 'other' && (
+                            <TagBadge hue={CATEGORY_HUE[item.category as TaskCategory] ?? 'gray'}>
+                              {CATEGORY_LABEL[item.category as TaskCategory] ?? item.category}
+                            </TagBadge>
+                          )}
+                          {item.department && (
+                            <span className={cn('text-xs px-1.5 py-0.5 rounded', deptBadgeClass(item.department.color))}>
+                              {item.department.name}
+                            </span>
+                          )}
+                        </div>
+                      )}
                       <p className="text-xs text-muted-foreground font-normal ml-6 mt-0.5">Tạo bởi {item.creator?.full_name ?? '—'}</p>
                       {item.total === null && (
                         <p className="text-xs text-status-warning font-normal ml-6 mt-0.5">Không tải được tiến độ — thử tải lại trang.</p>
                       )}
                     </TableCell>
-                    <TableCell className="text-sm whitespace-nowrap" onClick={() => toggleExpand(gid)}>
-                      <span className={cn(
-                        'font-medium',
-                        item.total === null ? 'text-muted-foreground'
-                          : item.done === item.total ? 'text-status-success' : 'text-status-warning'
-                      )}>
-                        {item.done ?? '—'}/{item.total ?? '—'}
-                      </span>
-                      <span className="text-muted-foreground"> hoàn thành</span>
+                    <TableCell data-group-col="store" className="whitespace-normal text-sm text-muted-foreground" onClick={() => toggleExpand(gid)}>
+                      {/* r1.1 P1#2: total null → nói rõ "đang hiển thị", không suy đoán tổng */}
+                      {groupStoreCountLabel(item.total, item.childTasks.length)}
                     </TableCell>
+                    <TableCell data-group-col="progress" className="text-sm whitespace-nowrap" onClick={() => toggleExpand(gid)}>
+                      {item.total === null || item.done === null ? (
+                        // r1 P1#2: không tải được tiến độ ⇒ giữ "—/—", không vẽ thanh
+                        <>
+                          <span className="font-medium text-muted-foreground">{item.done ?? '—'}/{item.total ?? '—'}</span>
+                          <span className="text-muted-foreground"> hoàn thành</span>
+                        </>
+                      ) : (
+                        <ProgressBar
+                          value={item.done} max={item.total}
+                          tone={item.done === item.total ? 'success' : 'warning'}
+                          label={<>{item.done}/{item.total}<span className="font-normal text-muted-foreground"> hoàn thành</span></>}
+                          ariaLabel={`${item.done}/${item.total} hoàn thành`}
+                          className="max-w-[170px]"
+                        />
+                      )}
+                    </TableCell>
+                    <TableCell onClick={() => toggleExpand(gid)} />
+                    <TableCell onClick={() => toggleExpand(gid)} />
                     <TableCell onClick={() => toggleExpand(gid)} />
                     <TableCell className="text-sm text-muted-foreground" onClick={() => toggleExpand(gid)}>
                       {formatDate(item.createdAt)}
@@ -462,7 +449,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
 
                   {/* Expanded child rows */}
                   {isExpanded && item.childTasks.map((child) => (
-                    <TableRow key={child.id} className="bg-muted/30 hover:bg-muted/50">
+                    <TableRow key={child.id} className="hover:bg-muted/40">
                       {showCheckbox && <TableCell />}
                       <TableCell>
                         <Link
@@ -507,7 +494,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
               return (
                 <React.Fragment key={`sbc-${item.broadcastId}`}>
                   {/* Broadcast summary row */}
-                  <TableRow className="bg-primary/5 hover:bg-primary/10">
+                  <TableRow data-group-type="staff_broadcast" className="hover:bg-muted/40">
                     {showCheckbox && (
                       <TableCell>
                         <input
@@ -520,8 +507,8 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                         />
                       </TableCell>
                     )}
-                    <TableCell colSpan={4}>
-                      <div className="flex items-center gap-2 font-medium">
+                    <TableCell data-group-col="title" className="min-w-[240px] whitespace-normal">
+                      <div className="flex items-start gap-2 font-semibold [&>button]:mt-[3px] [&>svg]:mt-[3px]">
                         <button
                           type="button"
                           onClick={() => toggleExpand(item.broadcastId)}
@@ -533,42 +520,50 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                             : <ChevronRight className="h-4 w-4 text-muted-foreground" />
                           }
                         </button>
-                        <Radio className="h-4 w-4 text-primary shrink-0" />
-                        <Users className="h-4 w-4 text-primary shrink-0" />
+                        <Radio className="h-4 w-4 text-muted-foreground shrink-0" />
+                        <Users className="h-4 w-4 text-muted-foreground shrink-0" />
                         <Link
                           href={`/tasks/${item.stores[0]?.parentId ?? ''}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           prefetch={false}
-                          className="hover:underline"
+                          className="min-w-0 wrap-anywhere hover:underline"
+                          data-group-title
                         >
                           {item.title}
                         </Link>
-                        {item.category && item.category !== 'other' && (
-                          <TagBadge hue={CATEGORY_HUE[item.category as TaskCategory] ?? 'gray'}>
-                            {CATEGORY_LABEL[item.category as TaskCategory] ?? item.category}
-                          </TagBadge>
-                        )}
-                        {item.department && (
-                          <span className={cn('text-xs px-1.5 py-0.5 rounded', deptBadgeClass(item.department.color))}>
-                            {item.department.name}
-                          </span>
-                        )}
-                        <span className="text-xs text-muted-foreground font-normal ml-1">
-                          {item.totalStores} cửa hàng · {item.totalStaff} dược sĩ
-                        </span>
                       </div>
+                      {/* Tag xuống dòng riêng: tên nhóm giữ đủ bề rộng cột Tiêu đề (1280px + sidebar mở). */}
+                      {((item.category && item.category !== 'other') || item.department) && (
+                        <div className="mt-1.5 ml-6 flex flex-wrap items-center gap-1.5">
+                          {item.category && item.category !== 'other' && (
+                            <TagBadge hue={CATEGORY_HUE[item.category as TaskCategory] ?? 'gray'}>
+                              {CATEGORY_LABEL[item.category as TaskCategory] ?? item.category}
+                            </TagBadge>
+                          )}
+                          {item.department && (
+                            <span className={cn('text-xs px-1.5 py-0.5 rounded', deptBadgeClass(item.department.color))}>
+                              {item.department.name}
+                            </span>
+                          )}
+                        </div>
+                      )}
                       <p className="text-xs text-muted-foreground font-normal ml-6 mt-0.5">Tạo bởi {item.creator?.full_name ?? '—'}</p>
                     </TableCell>
-                    <TableCell className="text-sm whitespace-nowrap" onClick={() => toggleExpand(item.broadcastId)}>
-                      <span className={cn(
-                        'font-medium',
-                        item.totalStaff > 0 && item.doneStaff === item.totalStaff ? 'text-status-success' : 'text-status-warning'
-                      )}>
-                        {item.doneStaff}/{item.totalStaff}
-                      </span>
-                      <span className="text-muted-foreground"> đã nộp</span>
+                    <TableCell data-group-col="store" className="whitespace-normal text-sm text-muted-foreground">
+                      {item.totalStores} cửa hàng · {item.totalStaff} dược sĩ
                     </TableCell>
+                    <TableCell data-group-col="progress" className="text-sm whitespace-nowrap" onClick={() => toggleExpand(item.broadcastId)}>
+                      <ProgressBar
+                        value={item.doneStaff} max={item.totalStaff}
+                        tone={item.totalStaff > 0 && item.doneStaff === item.totalStaff ? 'success' : 'warning'}
+                        label={<>{item.doneStaff}/{item.totalStaff}<span className="font-normal text-muted-foreground"> đã nộp</span></>}
+                        ariaLabel={`${item.doneStaff}/${item.totalStaff} đã nộp`}
+                        className="max-w-[170px]"
+                      />
+                    </TableCell>
+                    <TableCell onClick={() => toggleExpand(item.broadcastId)} />
+                    <TableCell onClick={() => toggleExpand(item.broadcastId)} />
                     <TableCell onClick={() => toggleExpand(item.broadcastId)} />
                     <TableCell className="text-sm text-muted-foreground" onClick={() => toggleExpand(item.broadcastId)}>
                       {formatDate(item.createdAt)}
@@ -580,7 +575,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                     const storeExpanded = expanded.has(store.parentId)
                     return (
                       <React.Fragment key={store.parentId}>
-                        <TableRow className="bg-muted/30 hover:bg-muted/50">
+                        <TableRow className="hover:bg-muted/40">
                           {showCheckbox && <TableCell />}
                           <TableCell>
                             <div className="flex items-center gap-1.5 pl-8 text-sm">
@@ -624,7 +619,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
 
                         {/* Level 3: per-pharmacist rows */}
                         {storeExpanded && store.childTasks.map((child) => (
-                          <TableRow key={child.id} className="bg-muted/20 hover:bg-muted/40">
+                          <TableRow key={child.id} className="hover:bg-muted/40">
                             {showCheckbox && <TableCell />}
                             <TableCell>
                               <Link
@@ -668,7 +663,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
               return (
                 <React.Fragment key={`staff-${item.parentId}`}>
                   {/* Staff-required parent header row */}
-                  <TableRow className="bg-primary/5 hover:bg-primary/10">
+                  <TableRow data-group-type="staff" className="hover:bg-muted/40">
                     {showCheckbox && (
                       <TableCell>
                         <input
@@ -681,8 +676,8 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                         />
                       </TableCell>
                     )}
-                    <TableCell colSpan={4}>
-                      <div className="flex items-center gap-2 font-medium">
+                    <TableCell data-group-col="title" className="min-w-[240px] whitespace-normal">
+                      <div className="flex items-start gap-2 font-semibold [&>button]:mt-[3px] [&>svg]:mt-[3px]">
                         <button
                           type="button"
                           onClick={() => toggleExpand(item.parentId)}
@@ -694,41 +689,49 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                             : <ChevronRight className="h-4 w-4 text-muted-foreground" />
                           }
                         </button>
-                        <Users className="h-4 w-4 text-primary shrink-0" />
+                        <Users className="h-4 w-4 text-muted-foreground shrink-0" />
                         <Link
                           href={`/tasks/${item.parentId}`}
                           target="_blank"
                           rel="noopener noreferrer"
                           prefetch={false}
-                          className="hover:underline"
+                          className="min-w-0 wrap-anywhere hover:underline"
+                          data-group-title
                         >
                           {item.title}
                         </Link>
-                        {item.category && item.category !== 'other' && (
-                          <TagBadge hue={CATEGORY_HUE[item.category as TaskCategory] ?? 'gray'}>
-                            {CATEGORY_LABEL[item.category as TaskCategory] ?? item.category}
-                          </TagBadge>
-                        )}
-                        {item.department && (
-                          <span className={cn('text-xs px-1.5 py-0.5 rounded', deptBadgeClass(item.department.color))}>
-                            {item.department.name}
-                          </span>
-                        )}
-                        <span className="text-xs text-muted-foreground font-normal ml-1">
-                          {item.storeName ? `${item.storeName} · ` : ''}{item.total} dược sĩ
-                        </span>
                       </div>
+                      {/* Tag xuống dòng riêng: tên nhóm giữ đủ bề rộng cột Tiêu đề (1280px + sidebar mở). */}
+                      {((item.category && item.category !== 'other') || item.department) && (
+                        <div className="mt-1.5 ml-6 flex flex-wrap items-center gap-1.5">
+                          {item.category && item.category !== 'other' && (
+                            <TagBadge hue={CATEGORY_HUE[item.category as TaskCategory] ?? 'gray'}>
+                              {CATEGORY_LABEL[item.category as TaskCategory] ?? item.category}
+                            </TagBadge>
+                          )}
+                          {item.department && (
+                            <span className={cn('text-xs px-1.5 py-0.5 rounded', deptBadgeClass(item.department.color))}>
+                              {item.department.name}
+                            </span>
+                          )}
+                        </div>
+                      )}
                       <p className="text-xs text-muted-foreground font-normal ml-6 mt-0.5">Tạo bởi {item.creator?.full_name ?? '—'}</p>
                     </TableCell>
-                    <TableCell className="text-sm whitespace-nowrap" onClick={() => toggleExpand(item.parentId)}>
-                      <span className={cn(
-                        'font-medium',
-                        item.total > 0 && item.done === item.total ? 'text-status-success' : 'text-status-warning'
-                      )}>
-                        {item.done}/{item.total}
-                      </span>
-                      <span className="text-muted-foreground"> đã nộp</span>
+                    <TableCell data-group-col="store" className="whitespace-normal text-sm text-muted-foreground">
+                      {item.storeName ? `${item.storeName} · ` : ''}{item.total} dược sĩ
                     </TableCell>
+                    <TableCell data-group-col="progress" className="text-sm whitespace-nowrap" onClick={() => toggleExpand(item.parentId)}>
+                      <ProgressBar
+                        value={item.done} max={item.total}
+                        tone={item.total > 0 && item.done === item.total ? 'success' : 'warning'}
+                        label={<>{item.done}/{item.total}<span className="font-normal text-muted-foreground"> đã nộp</span></>}
+                        ariaLabel={`${item.done}/${item.total} đã nộp`}
+                        className="max-w-[170px]"
+                      />
+                    </TableCell>
+                    <TableCell onClick={() => toggleExpand(item.parentId)} />
+                    <TableCell onClick={() => toggleExpand(item.parentId)} />
                     <TableCell onClick={() => toggleExpand(item.parentId)} />
                     <TableCell className="text-sm text-muted-foreground" onClick={() => toggleExpand(item.parentId)}>
                       {formatDate(item.createdAt)}
@@ -737,7 +740,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
 
                   {/* Expanded per-staff child rows */}
                   {isExpanded && item.childTasks.map((child) => (
-                    <TableRow key={child.id} className="bg-muted/30 hover:bg-muted/50">
+                    <TableRow key={child.id} className="hover:bg-muted/40">
                       {showCheckbox && <TableCell />}
                       <TableCell>
                         <Link
@@ -781,7 +784,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                 key={task.id}
                 className={cn(
                   'cursor-pointer hover:bg-muted/50',
-                  isSelected && 'bg-primary/5',
+                  isSelected && 'bg-accent',
                   effStatus === 'overdue' && !isSelected && 'bg-status-danger-bg/40 hover:bg-status-danger-bg/60',
                 )}
               >
@@ -796,22 +799,22 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                     />
                   </TableCell>
                 )}
-                <TableCell>
-                  <Link href={`/tasks/${task.id}`} target="_blank" rel="noopener noreferrer" prefetch={false} className="font-medium hover:underline flex items-center gap-1.5">
+                <TableCell className="min-w-[240px] whitespace-normal">
+                  <Link href={`/tasks/${task.id}`} target="_blank" rel="noopener noreferrer" prefetch={false} className="font-semibold wrap-anywhere hover:underline flex items-center gap-1.5">
                     {task.title}
                     {task.broadcast_id && (
-                      <Radio className="h-3.5 w-3.5 text-primary shrink-0" />
+                      <Radio className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                     )}
                   </Link>
-                  <div className="mt-0.5 flex flex-wrap items-center gap-1">
+                  <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                     <TaskBadges task={task} userRole={userRole} effStatus={effStatus} />
                   </div>
-                  <p className="mt-0.5 text-xs text-muted-foreground">Tạo bởi {task.creator?.full_name ?? '—'}</p>
+                  <p className="mt-1 text-[12px] text-v2-text-3">Tạo bởi {task.creator?.full_name ?? '—'}</p>
                 </TableCell>
-                <TableCell className="text-sm text-muted-foreground">
+                <TableCell className="whitespace-normal wrap-anywhere text-sm text-muted-foreground">
                   {task.stores?.name ?? '—'}
                 </TableCell>
-                <TableCell className="text-sm">
+                <TableCell className="whitespace-normal text-sm">
                   <span className="font-medium text-foreground">{submitter.primary}</span>
                   {submitter.sub && (
                     <span className="block text-xs text-muted-foreground">{submitter.sub}</span>
@@ -823,7 +826,11 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                 <TableCell>
                   <TaskStatusBadge status={effStatus as Task['status']} late={task.status === 'done' && !!task.overdue_at} />
                 </TableCell>
-                <TableCell className="text-sm text-muted-foreground">
+                {/* Deadline: đỏ khi quá hạn, vàng khi ≤24h — chỉ tô theo trạng thái đã tính sẵn, không thêm chữ. */}
+                <TableCell className={cn('text-sm',
+                  effStatus === 'overdue' ? 'font-semibold text-status-danger'
+                    : isDueSoon(task.deadline, effStatus) ? 'font-semibold text-status-warning'
+                    : 'text-muted-foreground')}>
                   {task.deadline ? formatDate(task.deadline) : '—'}
                 </TableCell>
                 <TableCell className="text-sm text-muted-foreground">
@@ -843,6 +850,39 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
         </TableBody>
       </Table>
       </DataTableShell>
+      {/* UI v2 P1.2: cùng nút/chữ như cũ, trình bày trong thanh nổi đảo màu (dính đáy vùng cuộn). */}
+      {someSelected && showCheckbox && (
+        <BulkActionBar label={`${selected.size} task đã chọn`} className="mt-3">
+          <ExportSelectedButton ids={Array.from(selected)} className={BULK_ACTION_BUTTON} />
+          {canBulkResubmit && (
+            <BulkResubmitButton taskIds={Array.from(selected)} onDone={() => setSelected(new Set())} triggerClassName={BULK_ACTION_BUTTON} />
+          )}
+          {canArchive && (
+            <Button
+              variant="outline"
+              size="sm"
+              className={cn(BULK_ACTION_BUTTON, 'gap-1')}
+              onClick={handleArchive}
+              disabled={pending}
+            >
+              <Archive className="h-3.5 w-3.5" />
+              {pending ? 'Đang xử lý...' : 'Lưu trữ đã chọn'}
+            </Button>
+          )}
+          {canRestore && (
+            <Button
+              variant="outline"
+              size="sm"
+              className={cn(BULK_ACTION_BUTTON, 'gap-1')}
+              onClick={handleRestore}
+              disabled={pending}
+            >
+              <ArchiveRestore className="h-3.5 w-3.5" />
+              {pending ? 'Đang xử lý...' : 'Khôi phục đã chọn'}
+            </Button>
+          )}
+        </BulkActionBar>
+      )}
       </div>
 
       {/* Mobile: card list — same items, tap-to-open, groups expand inline. */}
@@ -852,7 +892,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
             const isExpanded = expanded.has(item.broadcastId)
             const allDone = item.totalStaff > 0 && item.doneStaff === item.totalStaff
             return (
-              <div key={`m-sbc-${item.broadcastId}`} className="rounded-lg border bg-primary/5">
+              <div key={`m-sbc-${item.broadcastId}`} className="rounded-v2-panel border bg-card">
                 <div className="flex items-center">
                   <button
                     type="button"
@@ -862,7 +902,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                     {isExpanded
                       ? <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
                       : <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />}
-                    <Radio className="h-4 w-4 text-primary shrink-0" />
+                    <Radio className="h-4 w-4 text-muted-foreground shrink-0" />
                     <span className="font-medium flex-1 min-w-0">
                       <span className="block truncate">{item.title}</span>
                       <span className="block text-xs text-muted-foreground font-normal">
@@ -960,7 +1000,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
             const Icon      = item.type === 'broadcast' ? Radio
               : item.type === 'import_batch' ? FileSpreadsheet : Users
             return (
-              <div key={`m-${item.type}-${id}`} className="rounded-lg border bg-primary/5">
+              <div key={`m-${item.type}-${id}`} className="rounded-v2-panel border bg-card">
                 <button
                   type="button"
                   onClick={() => toggleExpand(id)}
@@ -969,7 +1009,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
                   {isExpanded
                     ? <ChevronDown className="h-4 w-4 text-muted-foreground shrink-0" />
                     : <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0" />}
-                  <Icon className="h-4 w-4 text-primary shrink-0" />
+                  <Icon className="h-4 w-4 text-muted-foreground shrink-0" />
                   <span className="font-medium flex-1 min-w-0">
                     <span className="block truncate">{item.title}</span>
                     <span className="block text-xs text-muted-foreground font-normal">Tạo bởi {item.creator?.full_name ?? '—'}</span>
@@ -1020,18 +1060,18 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
               href={`/tasks/${task.id}`}
               prefetch={false}
               className={cn(
-                'block rounded-lg border bg-card p-3.5 active:bg-muted/50',
+                'block rounded-v2-panel border bg-card px-3.5 py-3 active:bg-muted/50',
                 effStatus === 'overdue' && 'border-status-danger/30 bg-status-danger-bg/50',
               )}
             >
               <div className="flex items-start justify-between gap-2">
-                <span className="font-semibold flex items-center gap-1.5 min-w-0">
-                  <span className="truncate">{task.title}</span>
-                  {task.broadcast_id && <Radio className="h-3.5 w-3.5 text-primary shrink-0" />}
+                <span className="font-semibold flex items-start gap-1.5 min-w-0 leading-snug">
+                  <span className="line-clamp-2 wrap-anywhere">{task.title}</span>
+                  {task.broadcast_id && <Radio className="h-3.5 w-3.5 text-muted-foreground shrink-0" />}
                 </span>
                 <TaskStatusBadge status={effStatus as Task['status']} late={task.status === 'done' && !!task.overdue_at} />
               </div>
-              <div className="mt-1 flex flex-wrap items-center gap-1">
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
                 <TaskBadges task={task} userRole={userRole} effStatus={effStatus} compact />
               </div>
               {/* One strong line (who acts / submitted) + one muted context line —
@@ -1041,9 +1081,9 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
               <p className="text-xs text-muted-foreground">
                 {task.stores?.name ?? '—'} · Tạo bởi {task.creator?.full_name ?? '—'}
               </p>
-              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-t pt-2 text-xs text-muted-foreground">
                 <TaskPriorityBadge priority={task.priority as Task['priority']} />
-                <span className={cn(deadlineHot && 'text-red-600 font-medium')}>
+                <span className={cn(deadlineHot && 'text-status-danger font-semibold')}>
                   Hạn: {task.deadline ? formatDate(task.deadline) : '—'}
                 </span>
                 <span>Tạo: {formatDate(task.created_at)}</span>

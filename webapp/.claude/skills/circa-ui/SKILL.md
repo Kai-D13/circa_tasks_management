@@ -20,5 +20,11 @@ description: Circa Tasks design system — load BEFORE writing/altering any UI (
 9. **Width page-root**: FLUID (không `max-w-*`) là mặc định; muốn hẹp thì CHỈ `max-w-2xl|3xl|4xl` và BẮT BUỘC kèm `mx-auto`. Cấm `max-w-5xl|6xl|7xl|[Npx]` ở page-root (grep gate trong UI_CHANGE_GUARDRAILS § Width policy); `DetailPageShell` không có cap mặc định — caller tự khai.
 10. Component mới thuộc bộ khung (header/stat/badge/tabs/toolbar/table/pagination/empty/error/loading/detail) → dùng/mở rộng `components/ds/`, KHÔNG tự chế tại route.
 
+## Ngoại lệ có phạm vi: UI v2 Tasks (PM duyệt 16/10/2026)
+Chỉ trong trang có gốc `data-ui-v2="page"` (module Tasks — danh sách + chi tiết luật ở docs/ui/UI_V2_TASKS.md, ĐỌC trước khi làm):
+- Token v2 (canvas đá ấm, action `#C94A16`/`#F3743F`) trỏ thay token ngữ nghĩa; panel 12px / control 10px / chip 6px (thay luật 4 TRONG v2); tab đang chọn trung tính (thay "primary coral" của luật 6 TRONG v2).
+- Class `v2:` chỉ dùng trong `components/ds`, `components/ui` và code route Tasks v2. KHÔNG dùng/alias `--care-*`, không sửa `components/care`.
+- Ngoài phạm vi mọi luật trên giữ nguyên; snapshot `/ui-catalog` phải không đổi.
+
 ## Khi migrate 1 route
 Chỉ đổi className/JSX → ds/. Sau đó: tsc + build + `git diff --check`; grep guardrail (xem UI_CHANGE_GUARDRAILS §sau-migrate) phải sạch cho route đó; check 8 viewport × light/dark + loading/empty/error/long-text; số query không tăng. 1 route = 1 commit trên branch UI, không merge main tới khi được duyệt.

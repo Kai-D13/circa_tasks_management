@@ -13,12 +13,16 @@ interface Props {
   // Owner/super-admin only — delete is hidden otherwise so a collaborator never
   // sees a button RLS would silently reject.
   canDelete?: boolean
+  // UI v2: nút gọn 32px trong bảng danh sách (mặc định 36px ở header chi tiết).
+  compact?: boolean
 }
 
 // [44px] PIXEL touch target on mobile (root 15px → rem lies), compact on md+.
-const ACTION_BTN = 'flex items-center justify-center gap-1.5 text-xs px-3 min-h-[44px] md:min-h-0 md:px-2.5 md:py-1.5 rounded border transition-colors'
+// UI v2 (artboard 04/05): bo 10px, chữ 13px, viền line-strong; 36px header chi tiết / 32px trong bảng.
+const ACTION_BTN = 'flex items-center justify-center gap-1.5 text-xs px-3 min-h-[44px] md:min-h-0 md:px-2.5 md:py-1.5 rounded border transition-colors v2:rounded-v2-control v2:text-[13px] v2:font-medium md:v2:py-0 md:v2:px-3'
 
-export function ScheduleActions({ scheduleId, isActive, canDelete = false }: Props) {
+export function ScheduleActions({ scheduleId, isActive, canDelete = false, compact = false }: Props) {
+  const size = compact ? 'md:v2:h-[32px] v2:rounded-[8px]' : 'md:v2:h-[36px]'
   const [pending, startTransition] = useTransition()
   const [confirmDelete, setConfirmDelete] = useState(false)
   const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -61,7 +65,8 @@ export function ScheduleActions({ scheduleId, isActive, canDelete = false }: Pro
         disabled={pending}
         onClick={handleToggle}
         className={cn(
-          ACTION_BTN,
+          ACTION_BTN, size,
+          'v2:border-input v2:bg-card v2:text-foreground',
           isActive
             ? 'border-border text-muted-foreground hover:border-status-warning hover:text-status-warning hover:bg-status-warning-bg'
             : 'border-border text-muted-foreground hover:border-status-success hover:text-status-success hover:bg-status-success-bg',
@@ -80,10 +85,10 @@ export function ScheduleActions({ scheduleId, isActive, canDelete = false }: Pro
           disabled={pending}
           onClick={handleDelete}
           className={cn(
-            ACTION_BTN,
+            ACTION_BTN, size,
             confirmDelete
-              ? 'border-status-danger bg-status-danger-bg text-status-danger font-medium'
-              : 'border-border text-muted-foreground hover:border-status-danger hover:text-status-danger hover:bg-status-danger-bg',
+              ? 'border-status-danger bg-status-danger-bg text-status-danger font-medium v2:font-semibold v2:ring-2 v2:ring-status-danger/30'
+              : 'border-border text-muted-foreground hover:border-status-danger hover:text-status-danger hover:bg-status-danger-bg v2:border-status-danger/30 v2:bg-status-danger-bg v2:text-status-danger',
             pending && 'opacity-50 pointer-events-none',
           )}
         >

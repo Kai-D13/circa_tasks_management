@@ -12,10 +12,12 @@ import { Input } from '@/components/ui/input'
 import { RichTextEditor } from '@/components/tasks/RichTextEditor'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { SearchableSelect } from '@/components/ui/searchable-select'
-import { Plus, X, Paperclip, Link2, Settings } from 'lucide-react'
+import { Check, Plus, X, Paperclip, Link2, Settings } from 'lucide-react'
 import { TaskInputAttachments, type TaskInputAttachmentsHandle } from '@/components/tasks/TaskInputAttachments'
 import { TaskExcelSplitPanel, type ExcelSplitState } from '@/components/tasks/TaskExcelSplitPanel'
 import { cn } from '@/lib/utils'
+import { Panel } from '@/components/ds/Panel'
+import { FILTER_ACTIVE } from '@/components/ds/DataToolbar'
 import {
   Task, Store, UserProfile, RequiredOutput, UserRole,
   TaskPriority, TaskVisibility, TaskCategory, TaskAttachment,
@@ -639,33 +641,56 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
         ? `Tạo ${effectiveBroadcastCount > 0 ? effectiveBroadcastCount + ' ' : ''}Task`
         : task ? 'Cập nhật' : 'Tạo Task'
 
-  const sectionLabel = 'block text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70 mb-1.5'
+  // UI v2 P1.4 (artboard 03) — chỉ trình bày. Nhãn khối 13px đậm (không in hoa); segmented TRUNG TÍNH như
+  // tab /tasks (cam chỉ dành cho nút hành động); chip đang bật = FILTER_ACTIVE (+ dấu ✓ để không chỉ dựa vào
+  // màu). Cao control PIXEL vì root 15px (rem lừa): [44px] mobile, [36px] desktop; chữ ô nhập 16px trên
+  // mobile (iOS không zoom).
+  const sectionLabel = 'block text-[13px] font-semibold text-foreground'
+  const fieldLabel = 'block mb-1.5 text-[12px] text-muted-foreground'
+  const control = 'h-[44px] md:h-[36px] text-[16px] md:text-[13px] bg-background'
+  const selectCtl = 'data-[size=default]:h-[44px] md:data-[size=default]:h-[36px] text-[16px] md:text-[13px] bg-background'
+  const segWrap = 'flex gap-1 rounded-v2-control bg-muted p-1'
+  const segBtn = (active: boolean) => cn(
+    'flex-auto whitespace-nowrap min-h-[44px] md:min-h-0 md:h-[30px] px-3 rounded-[8px] border text-[13px] transition-colors',
+    active
+      ? 'border-input bg-card font-semibold text-foreground'
+      : 'border-transparent font-medium text-muted-foreground hover:text-foreground',
+  )
+  const chipBtn = (active: boolean) => cn(
+    'inline-flex items-center justify-center gap-1.5 min-h-[44px] md:min-h-0 md:h-[34px] px-3 rounded-v2-control border text-[13px] font-medium transition-colors',
+    active ? FILTER_ACTIVE : 'border-input text-muted-foreground hover:text-foreground',
+  )
+  const toolBtn = (active: boolean) => cn(
+    'inline-flex items-center gap-1.5 min-h-[44px] md:min-h-0 md:h-[32px] px-3 rounded-[8px] text-[13px] font-medium transition-colors',
+    active ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+  )
+  const countChip = 'ml-0.5 rounded-v2-chip bg-muted-foreground/15 px-1.5 text-[11px] font-semibold leading-[18px] text-foreground'
 
   const WEEKDAY_LABELS: Record<number, string> = { 0: 'CN', 1: 'T2', 2: 'T3', 3: 'T4', 4: 'T5', 5: 'T6', 6: 'T7' }
 
   return (
     <form ref={formRef} onSubmit={handleSubmit} onInput={() => setDirtyTick((t) => t + 1)} className="flex flex-col h-full">
 
-      {/* ── Header (h-16) ── */}
-      <div className="h-16 flex items-center justify-between gap-3 px-5 border-b bg-background sticky top-0 z-10 shrink-0">
-        <h1 className="text-lg font-semibold">
+      {/* ── Header (64px, dính). Dưới sm: 2 hàng — tiêu đề, rồi [Cấu hình] … [Huỷ][Tạo] — để không cắt chữ ── */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 md:px-6 py-2 sm:py-0 sm:h-[64px] border-b bg-card sticky top-0 z-10 shrink-0">
+        <h1 className="basis-full sm:basis-auto sm:flex-1 min-w-0 text-[18px] font-bold leading-tight break-words">
           {isEditMode ? 'Chỉnh sửa Task' : 'Tạo task mới'}
         </h1>
-        <div className="flex items-center gap-2">
+        <div className="flex w-full sm:w-auto shrink-0 items-center gap-1.5 md:gap-2">
           {/* Config toggle — mobile only */}
           <button
             type="button"
             aria-label="Cấu hình task"
             onClick={() => setShowMobileConfig(true)}
-            className="lg:hidden flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground px-2.5 h-9 rounded border border-border transition-colors"
+            className="lg:hidden max-sm:mr-auto inline-flex items-center gap-1.5 h-[44px] md:h-[36px] px-3 rounded-v2-control border border-input text-[13px] font-medium text-muted-foreground hover:text-foreground transition-colors"
           >
-            <Settings className="h-3.5 w-3.5" />
+            <Settings className="h-4 w-4" />
             Cấu hình
           </button>
-          <Button type="button" variant="outline" onClick={() => router.back()} className="h-9 px-4">
+          <Button type="button" variant="ghost" onClick={() => router.back()} className="h-[44px] md:h-[36px] px-3 md:px-3.5 text-[13px] text-muted-foreground">
             Huỷ
           </Button>
-          <Button type="submit" disabled={pending} className="h-9 px-4">
+          <Button type="submit" disabled={pending} className="h-[44px] md:h-[36px] px-4 text-[13px] font-semibold">
             {submitLabel}
           </Button>
         </div>
@@ -674,25 +699,26 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
       {/* ── Body ── */}
       <div className="flex flex-1 min-h-0 overflow-auto flex-col lg:flex-row">
 
-        {/* ── Left: compose area ── */}
-        <div className="flex-1 min-w-0 flex flex-col lg:border-r">
+        {/* ── Left: compose area (các panel 12px trên nền canvas) ── */}
+        {/* Khối thường (không flex-col): panel không bị co khi "Giao đến" dài — body là vùng cuộn. */}
+        <div className="flex-1 min-w-0 space-y-4 p-4 md:p-6">
 
           {/* Draft restore banner — create mode only, no silent restore */}
           {isCreate && hasDraft && (
-            <div className="border-b px-5 py-2 flex items-center justify-between gap-2 bg-amber-50">
-              <span className="text-xs text-amber-800">Có bản nháp chưa gửi</span>
+            <div className="flex flex-wrap items-center justify-between gap-2 rounded-v2-panel border border-status-warning/30 bg-status-warning-bg px-4 py-2">
+              <span className="text-[13px] font-medium text-status-warning">Có bản nháp chưa gửi</span>
               <div className="flex gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={restoreDraft}
-                  className="text-xs px-2.5 py-1 rounded border border-amber-300 text-amber-800 hover:bg-amber-100"
+                  className="min-h-[44px] md:min-h-0 md:h-[32px] px-3 rounded-v2-control border border-status-warning/40 text-[13px] font-medium text-status-warning hover:bg-status-warning/10"
                 >
                   Khôi phục
                 </button>
                 <button
                   type="button"
                   onClick={discardDraft}
-                  className="text-xs px-2.5 py-1 rounded text-muted-foreground hover:text-destructive"
+                  className="min-h-[44px] md:min-h-0 md:h-[32px] px-3 rounded-v2-control text-[13px] text-muted-foreground hover:text-destructive"
                 >
                   Xóa
                 </button>
@@ -700,73 +726,45 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
             </div>
           )}
 
-          {/* Row 1: Scope pills — người tạo task + tạo mới; recurring ẩn "Một CH".
-              108.5: SM cũng KHÔNG có "Một CH" — request đã chốt là BROADCAST,
-              và tạo task đơn lẻ (createTask) vẫn admin-only ở server. Muốn giao
-              một cửa hàng thì SM tick đúng một ô trong "Nhiều CH". */}
-          {canCreate && !isEditMode && (
-            <div className="border-b px-5 py-2.5 flex items-center gap-2 flex-wrap">
-              <span className="text-xs text-muted-foreground shrink-0">Giao đến:</span>
-              {(['single', 'multi', 'all'] as Scope[]).map((s) => {
-                if (s === 'single' && (isRecurring || !isAdmin)) return null
-                const label = s === 'single' ? 'Một CH' : s === 'multi' ? 'Nhiều CH' : `Tất cả (${visibleStores.length})`
-                return (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => handleScopeChange(s)}
-                    className={cn(
-                      'text-xs px-3 py-1 rounded-full border transition-colors',
-                      scope === s
-                        ? 'bg-primary text-white border-primary'
-                        : 'border-border text-muted-foreground hover:border-primary/60 hover:text-foreground'
-                    )}
-                  >
-                    {label}
-                  </button>
-                )
-              })}
-            </div>
-          )}
-
-          {/* Row 2: Store / assignee */}
-          <div className="border-b px-5 py-3">
-            {showMultiStore ? (
-              <div className="space-y-2">
-                <p className="text-xs text-muted-foreground">
-                  {scope === 'all'
-                    ? `Tất cả ${visibleStores.length} cửa hàng ${isRecurring ? 'sẽ nhận task định kỳ' : 'sẽ nhận task này'}`
-                    : `Chọn cửa hàng (${selectedStoreIds.length} đã chọn)`}
-                </p>
-                {scope !== 'all' && (
-                  <div className="rounded border max-h-44 overflow-y-auto divide-y">
-                    {visibleStores.map((s) => (
-                      <label key={s.id} className="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-sidebar-accent text-sm">
-                        <input
-                          type="checkbox"
-                          checked={selectedStoreIds.includes(s.id)}
-                          onChange={() => toggleStoreSelection(s.id)}
-                          className="accent-primary h-4 w-4 shrink-0"
-                        />
-                        {s.name}
-                      </label>
-                    ))}
-                  </div>
-                )}
-                {/* Submit mode toggle — broadcast + admin + ad-hoc */}
+          {/* Panel "Giao đến": phạm vi + cách nộp + cửa hàng / người thực hiện */}
+          <Panel bodyClassName="space-y-3.5">
+            {/* Scope pills — người tạo task + tạo mới; recurring ẩn "Một CH".
+                108.5: SM cũng KHÔNG có "Một CH" — request đã chốt là BROADCAST,
+                và tạo task đơn lẻ (createTask) vẫn admin-only ở server. Muốn giao
+                một cửa hàng thì SM tick đúng một ô trong "Nhiều CH".
+                Submit mode (Cửa hàng nộp / Từng dược sĩ nộp) nằm cùng hàng như artboard:
+                canStaffMode ≡ canCreate && !isEditMode nên hiển thị đúng như trước. */}
+            {canCreate && !isEditMode && (
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                <span className="text-[13px] font-semibold shrink-0">Giao đến:</span>
+                <div className={cn(segWrap, 'w-full sm:w-auto')}>
+                  {(['single', 'multi', 'all'] as Scope[]).map((s) => {
+                    if (s === 'single' && (isRecurring || !isAdmin)) return null
+                    const label = s === 'single' ? 'Một CH' : s === 'multi' ? 'Nhiều CH' : `Tất cả (${visibleStores.length})`
+                    return (
+                      <button
+                        key={s}
+                        type="button"
+                        aria-pressed={scope === s}
+                        onClick={() => handleScopeChange(s)}
+                        className={cn(segBtn(scope === s), 'sm:flex-none')}
+                      >
+                        {label}
+                      </button>
+                    )
+                  })}
+                </div>
                 {canStaffMode && (
-                  <div className="flex rounded-[4px] border overflow-hidden">
+                  <div className={cn(segWrap, 'w-full sm:w-auto')}>
                     {([['store', 'Cửa hàng nộp'], ['staff_all', 'Từng dược sĩ nộp']] as const).map(([val, label]) => {
                       const active = (val === 'staff_all') === staffMode
                       return (
                         <button
                           key={val}
                           type="button"
+                          aria-pressed={active}
                           onClick={() => setStaffMode(val === 'staff_all')}
-                          className={cn(
-                            'flex-1 py-1.5 text-xs font-medium transition-colors',
-                            active ? 'bg-primary text-white' : 'text-muted-foreground hover:bg-muted'
-                          )}
+                          className={cn(segBtn(active), 'sm:flex-none')}
                         >
                           {label}
                         </button>
@@ -774,13 +772,50 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                     })}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* Store / assignee */}
+            {showMultiStore ? (
+              <div className="space-y-2.5">
+                <p className="text-[13px] text-muted-foreground">
+                  {scope === 'all'
+                    ? `Tất cả ${visibleStores.length} cửa hàng ${isRecurring ? 'sẽ nhận task định kỳ' : 'sẽ nhận task này'}`
+                    : `Chọn cửa hàng (${selectedStoreIds.length} đã chọn)`}
+                </p>
+                {scope !== 'all' && (
+                  <div className="@container">
+                    <div className="grid grid-cols-1 @sm:grid-cols-2 @xl:grid-cols-3 content-start gap-1.5 max-h-[176px] overflow-y-auto">
+                      {visibleStores.map((s) => {
+                        const on = selectedStoreIds.includes(s.id)
+                        return (
+                          <label
+                            key={s.id}
+                            className={cn(
+                              'flex items-center gap-2.5 min-h-[44px] md:min-h-[36px] px-2.5 py-1.5 rounded-v2-control border cursor-pointer text-[13px] transition-colors',
+                              on ? 'v2:border-v2-selected-line v2:bg-accent' : 'hover:bg-muted',
+                            )}
+                          >
+                            <input
+                              type="checkbox"
+                              checked={on}
+                              onChange={() => toggleStoreSelection(s.id)}
+                              className="accent-primary h-4 w-4 shrink-0"
+                            />
+                            <span className="min-w-0 break-words">{s.name}</span>
+                          </label>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
                 {effectiveStaffMode && isRecurring && (
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-[13px] text-muted-foreground">
                     Mỗi lần chạy sẽ giao cho <span className="font-medium">tất cả dược sĩ hiện có</span> của mỗi cửa hàng (cửa hàng chưa có dược sĩ sẽ được bỏ qua).
                   </p>
                 )}
                 {effectiveStaffMode && !isRecurring && (
-                  <p className={cn('text-xs', storesWithoutStaff.length > 0 ? 'text-destructive' : 'text-muted-foreground')}>
+                  <p className={cn('text-[13px]', storesWithoutStaff.length > 0 ? 'text-destructive' : 'text-muted-foreground')}>
                     {activeStoreIds.length === 0
                       ? 'Chọn cửa hàng để xem số dược sĩ sẽ nhận task.'
                       : storesWithoutStaff.length > 0
@@ -790,7 +825,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                 )}
                 {/* Cleared stores are skipped (not blocked) — warn so it's never silent */}
                 {effectiveStaffMode && storesWithoutStaff.length === 0 && storesClearedBySelection.length > 0 && (
-                  <p className="text-xs text-amber-600 dark:text-amber-500">
+                  <p className="text-[13px] text-status-warning">
                     ⚠ Sẽ bỏ qua {storesClearedBySelection.length} cửa hàng chưa chọn dược sĩ: {storesClearedBySelection.slice(0, 3).map(s => s.name).join(', ')}{storesClearedBySelection.length > 3 ? ` +${storesClearedBySelection.length - 3} khác` : ''}.
                   </p>
                 )}
@@ -811,14 +846,14 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                         value={staffQuery}
                         onChange={(e) => setStaffQuery(e.target.value)}
                         placeholder="Tìm dược sĩ theo tên / email (mọi cửa hàng)…"
-                        className="w-full h-8 rounded border bg-background px-2.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary/40"
+                        className="w-full h-[44px] md:h-[36px] rounded-v2-control border border-input bg-background px-3 text-[16px] md:text-[13px] focus:outline-none focus:ring-1 focus:ring-primary/40"
                       />
-                      <div className="space-y-2 max-h-72 overflow-y-auto pr-0.5">
+                      <div className="space-y-2.5 max-h-72 overflow-y-auto pr-0.5">
                         {visiblePerStore.length === 0 ? (
-                          <p className="text-xs text-muted-foreground px-0.5 py-2">Không tìm thấy dược sĩ phù hợp.</p>
+                          <p className="text-[13px] text-muted-foreground px-0.5 py-2">Không tìm thấy dược sĩ phù hợp.</p>
                         ) : visiblePerStore.map((s) => (
                           <div key={s.id} className="space-y-1">
-                            <p className="text-[11px] font-medium text-foreground/80 px-0.5">{s.name}</p>
+                            <p className="text-[12px] font-semibold text-foreground/80 px-0.5">{s.name}</p>
                             <StaffChecklist
                               staff={s.staff}
                               excluded={excludedStaff}
@@ -844,27 +879,6 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
               </div>
             ) : (
               <div className="space-y-2.5">
-                {/* Submit mode — store-level vs per-pharmacist (single-store ad-hoc only) */}
-                {canStaffMode && (
-                  <div className="flex rounded-[4px] border overflow-hidden">
-                    {([['store', 'Cửa hàng nộp'], ['staff_all', 'Từng dược sĩ nộp']] as const).map(([val, label]) => {
-                      const active = (val === 'staff_all') === staffMode
-                      return (
-                        <button
-                          key={val}
-                          type="button"
-                          onClick={() => setStaffMode(val === 'staff_all')}
-                          className={cn(
-                            'flex-1 py-1.5 text-xs font-medium transition-colors',
-                            active ? 'bg-primary text-white' : 'text-muted-foreground hover:bg-muted'
-                          )}
-                        >
-                          {label}
-                        </button>
-                      )
-                    })}
-                  </div>
-                )}
                 <div className="flex flex-col sm:flex-row gap-2.5">
                   <div className="flex-1">
                     <SearchableSelect
@@ -872,7 +886,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                       options={visibleStores.map((s) => ({ value: s.id, label: s.name }))}
                       onValueChange={handleStoreChange}
                       placeholder="Cửa hàng..."
-                      triggerClassName="h-8 text-sm bg-background"
+                      triggerClassName={cn(control, 'rounded-v2-control')}
                     />
                   </div>
                   {!effectiveStaffMode && (
@@ -889,14 +903,14 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                         ]}
                         onValueChange={(v) => setAssignedTo(v ?? '')}
                         placeholder="Người thực hiện..."
-                        triggerClassName="h-8 text-sm bg-background"
+                        triggerClassName={cn(control, 'rounded-v2-control')}
                       />
                     </div>
                   )}
                 </div>
                 {/* Preview when per-pharmacist mode is active */}
                 {effectiveStaffMode && (
-                  <p className={cn('text-xs', storeId && staffSelectedCount === 0 ? 'text-destructive' : 'text-muted-foreground')}>
+                  <p className={cn('text-[13px]', storeId && staffSelectedCount === 0 ? 'text-destructive' : 'text-muted-foreground')}>
                     {!storeId
                       ? 'Chọn cửa hàng để xem số dược sĩ sẽ nhận task.'
                       : staffCount === 0
@@ -917,138 +931,131 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                 )}
               </div>
             )}
-          </div>
+          </Panel>
 
-          {/* Row 3: Title — subject line, larger */}
-          <div className="border-b px-5 py-3">
-            <Input
-              name="title"
-              defaultValue={task?.title}
-              required
-              placeholder="Tiêu đề task..."
-              className="w-full text-xl font-semibold border-0 p-0 h-auto focus-visible:ring-0 shadow-none placeholder:text-muted-foreground/40 bg-transparent"
-            />
-          </div>
-
-          {/* Row 4: Description — WYSIWYG (bold/size/highlight/underline/align).
-              Controlled `description` HTML mirrored into a hidden input so the
-              existing formData('description') + draft DOM-read paths are unchanged. */}
-          <div className="px-5 pt-3 pb-2">
-            <input type="hidden" name="description" value={description} />
-            <RichTextEditor value={description} onChange={setDescription} />
-          </div>
-
-          {/* Attachment panel — always mounted (hidden when inactive) so the
-              toolbar button can open the file picker imperatively via ref */}
-          <div className={cn('px-5 pb-3 space-y-1.5 border-t', !showAttachments && 'hidden')}>
-            <p className="text-xs text-muted-foreground pt-3">Ảnh hướng dẫn, file Excel, PDF, audio...</p>
-            <TaskInputAttachments
-              ref={attachRef}
-              uploadId={uploadIdRef.current}
-              value={attachments}
-              onChange={setAttachments}
-            />
-          </div>
-
-          {/* Links panel */}
-          {showLinks && (
-            <div className="px-5 pb-3 space-y-2 border-t">
-              {links.length === 0 && (
-                <p className="text-xs text-muted-foreground pt-3">Link đăng ký, meeting, tài liệu...</p>
-              )}
-              {links.map((link, i) => (
-                <div key={i} className={cn('grid grid-cols-[1fr_1.5fr_auto] gap-2', i === 0 && 'pt-3')}>
-                  <Input placeholder="Nhãn" value={link.label} onChange={(e) => updateLink(i, 'label', e.target.value)} className="h-8 text-sm" />
-                  <Input placeholder="https://..." type="url" value={link.url} onChange={(e) => updateLink(i, 'url', e.target.value)} className="h-8 text-sm" />
-                  <button type="button" aria-label="Xoá link" onClick={() => removeLink(i)} className="h-8 w-8 flex items-center justify-center text-muted-foreground hover:text-destructive">
-                    <X className="h-4 w-4" />
-                  </button>
-                </div>
-              ))}
-              <Button type="button" variant="ghost" size="sm" onClick={addLink} className="h-7 text-xs gap-1 px-2 mt-1">
-                <Plus className="h-3 w-3" /> Thêm link
-              </Button>
+          {/* Panel tiêu đề + mô tả (artboard: tiêu đề 20px, thanh công cụ editor nền muted, nội dung) */}
+          <Panel flush>
+            <div className="px-4 md:px-5 pt-[18px] pb-1.5">
+              <Input
+                name="title"
+                defaultValue={task?.title}
+                required
+                placeholder="Tiêu đề task..."
+                className="w-full text-[20px] md:text-[20px] font-semibold border-0 p-0 h-auto focus-visible:ring-0 shadow-none placeholder:text-muted-foreground/40 bg-transparent dark:bg-transparent"
+              />
             </div>
-          )}
+            {/* Description — WYSIWYG (bold/size/highlight/underline/align).
+                Controlled `description` HTML mirrored into a hidden input so the
+                existing formData('description') + draft DOM-read paths are unchanged. */}
+            <input type="hidden" name="description" value={description} />
+            <RichTextEditor value={description} onChange={setDescription} flush />
+          </Panel>
 
-          {/* Toolbar */}
-          <div className="border-t px-4 py-1.5 flex items-center gap-0.5 shrink-0">
-            <button
-              type="button"
-              onClick={() => { setShowLinks(false); setShowAttachments(true); attachRef.current?.openFilePicker() }}
-              className={cn(
-                'flex items-center gap-1.5 text-xs px-3 py-1.5 rounded transition-colors',
-                showAttachments ? 'bg-sidebar-accent text-primary' : 'text-muted-foreground hover:bg-sidebar-accent hover:text-primary'
-              )}
-            >
-              <Paperclip className="h-3.5 w-3.5" />
-              Đính kèm
-              {attachments.length > 0 && (
-                <span className="ml-0.5 bg-primary text-white text-[10px] px-1.5 py-0 rounded-full leading-4">
-                  {attachments.length}
-                </span>
-              )}
-            </button>
-            <button
-              type="button"
-              onClick={() => { setShowLinks((v) => !v); if (isEditMode) setShowAttachments(false) }}
-              className={cn(
-                'flex items-center gap-1.5 text-xs px-3 py-1.5 rounded transition-colors',
-                showLinks ? 'bg-sidebar-accent text-primary' : 'text-muted-foreground hover:bg-sidebar-accent hover:text-primary'
-              )}
-            >
-              <Link2 className="h-3.5 w-3.5" />
-              Link
-              {links.filter((l) => l.url.trim()).length > 0 && (
-                <span className="ml-0.5 bg-primary text-white text-[10px] px-1.5 py-0 rounded-full leading-4">
-                  {links.filter((l) => l.url.trim()).length}
-                </span>
-              )}
-            </button>
-          </div>
+          {/* Panel Đính kèm / Link — 2 nút bật/tắt giữ nguyên hành vi; nội dung mở ngay dưới */}
+          <Panel flush>
+            <div className="flex items-center gap-1 px-2.5 py-1.5">
+              <button
+                type="button"
+                onClick={() => { setShowLinks(false); setShowAttachments(true); attachRef.current?.openFilePicker() }}
+                className={toolBtn(showAttachments)}
+              >
+                <Paperclip className="h-4 w-4" />
+                Đính kèm
+                {attachments.length > 0 && (
+                  <span className={countChip}>
+                    {attachments.length}
+                  </span>
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => { setShowLinks((v) => !v); if (isEditMode) setShowAttachments(false) }}
+                className={toolBtn(showLinks)}
+              >
+                <Link2 className="h-4 w-4" />
+                Link
+                {links.filter((l) => l.url.trim()).length > 0 && (
+                  <span className={countChip}>
+                    {links.filter((l) => l.url.trim()).length}
+                  </span>
+                )}
+              </button>
+            </div>
+
+            {/* Attachment panel — always mounted (hidden when inactive) so the
+                toolbar button can open the file picker imperatively via ref */}
+            <div className={cn('border-t px-4 md:px-5 py-4 space-y-2', !showAttachments && 'hidden')}>
+              <p className="text-[12px] text-v2-text-3">Ảnh hướng dẫn, file Excel, PDF, audio...</p>
+              <TaskInputAttachments
+                ref={attachRef}
+                uploadId={uploadIdRef.current}
+                value={attachments}
+                onChange={setAttachments}
+              />
+            </div>
+
+            {/* Links panel */}
+            {showLinks && (
+              <div className="border-t px-4 md:px-5 py-4 space-y-2">
+                {links.length === 0 && (
+                  <p className="text-[12px] text-v2-text-3">Link đăng ký, meeting, tài liệu...</p>
+                )}
+                {links.map((link, i) => (
+                  <div key={i} className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)_auto] gap-2">
+                    <Input placeholder="Nhãn" value={link.label} onChange={(e) => updateLink(i, 'label', e.target.value)} className={control} />
+                    <Input placeholder="https://..." type="url" value={link.url} onChange={(e) => updateLink(i, 'url', e.target.value)} className={control} />
+                    <button type="button" aria-label="Xoá link" onClick={() => removeLink(i)} className="h-[44px] w-[44px] md:h-[36px] md:w-[36px] inline-flex items-center justify-center rounded-v2-control text-muted-foreground hover:bg-muted hover:text-destructive">
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+                ))}
+                <Button type="button" variant="ghost" size="sm" onClick={addLink} className="min-h-[44px] md:min-h-0 md:h-[32px] gap-1 px-2.5 text-[13px] text-accent-foreground">
+                  <Plus className="h-3.5 w-3.5" /> Thêm link
+                </Button>
+              </div>
+            )}
+          </Panel>
         </div>
 
         {/* ── Right: config panel ── */}
         {/* Desktop: always-visible sidebar. Mobile: hidden by default, overlay when showMobileConfig. */}
-        <div className={cn(
-          'bg-muted/20 flex flex-col',
+        <div data-task-config className={cn(
+          'bg-card flex flex-col',
           'lg:w-[360px] lg:max-w-[360px] lg:shrink-0 lg:border-l',
           showMobileConfig
-            ? 'fixed inset-0 z-50 bg-background overflow-y-auto'
+            ? 'fixed inset-0 z-50 overflow-y-auto'
             : 'hidden lg:flex'
         )}>
           {/* Panel heading + mobile close */}
-          <div className="px-5 py-3 border-b flex items-center justify-between shrink-0">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <div className="px-5 py-1 lg:pt-5 lg:pb-0 border-b lg:border-b-0 flex items-center justify-between min-h-[52px] lg:min-h-0 shrink-0">
+            <p className="text-[12px] font-semibold uppercase tracking-[0.06em] text-v2-text-3">
               Cấu hình task
             </p>
             <button
               type="button"
               aria-label="Đóng"
               onClick={() => setShowMobileConfig(false)}
-              className="lg:hidden text-muted-foreground hover:text-foreground"
+              className="lg:hidden -mr-2.5 inline-flex h-[44px] w-[44px] items-center justify-center rounded-v2-control text-muted-foreground hover:bg-muted hover:text-foreground"
             >
               <X className="h-4 w-4" />
             </button>
           </div>
 
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 overflow-y-auto px-5 py-5 space-y-[20px]">
 
             {/* Loại task — admin + new only */}
             {/* Loại task: SM KHÔNG có 'Định kỳ' — cả khối ẩn khi chỉ còn một lựa chọn. */}
             {canRecurring && !isEditMode && (
-              <div className="px-5 py-3 border-b">
+              <div className="space-y-2">
                 <span className={sectionLabel}>Loại task</span>
-                <div className="flex rounded-[4px] border overflow-hidden">
+                <div className={segWrap}>
                   {(['adhoc', 'recurring'] as TaskType[]).map((t) => (
                     <button
                       key={t}
                       type="button"
+                      aria-pressed={taskType === t}
                       onClick={() => handleSetTaskType(t)}
-                      className={cn(
-                        'flex-1 py-1.5 text-xs font-medium transition-colors',
-                        taskType === t ? 'bg-primary text-white' : 'text-muted-foreground hover:bg-muted'
-                      )}
+                      className={segBtn(taskType === t)}
                     >
                       {t === 'adhoc' ? 'Phát sinh' : 'Định kỳ'}
                     </button>
@@ -1059,21 +1066,19 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
 
             {/* Lịch định kỳ — recurring mode only */}
             {isRecurring && (
-              <div className="px-5 py-3 border-b space-y-3">
+              <div className="space-y-3">
                 <span className={sectionLabel}>Lịch chạy</span>
 
                 <div>
-                  <p className="text-xs text-muted-foreground mb-1.5">Tần suất</p>
-                  <div className="flex rounded-[4px] border overflow-hidden">
+                  <p className={fieldLabel}>Tần suất</p>
+                  <div className={segWrap}>
                     {(['daily', 'weekly', 'monthly'] as const).map((f) => (
                       <button
                         key={f}
                         type="button"
+                        aria-pressed={frequency === f}
                         onClick={() => setFrequency(f)}
-                        className={cn(
-                          'flex-1 py-1.5 text-xs transition-colors',
-                          frequency === f ? 'bg-primary text-white' : 'text-muted-foreground hover:bg-muted'
-                        )}
+                        className={segBtn(frequency === f)}
                       >
                         {f === 'daily' ? 'Mỗi ngày' : f === 'weekly' ? 'Mỗi tuần' : 'Mỗi tháng'}
                       </button>
@@ -1083,19 +1088,15 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
 
                 {frequency === 'weekly' && (
                   <div>
-                    <p className="text-xs text-muted-foreground mb-1.5">Ngày trong tuần</p>
-                    <div className="flex gap-1 flex-wrap">
+                    <p className={fieldLabel}>Ngày trong tuần</p>
+                    <div className="grid grid-cols-7 gap-1 md:flex md:flex-wrap md:gap-1.5">
                       {[0, 1, 2, 3, 4, 5, 6].map((d) => (
                         <button
                           key={d}
                           type="button"
+                          aria-pressed={weekdays.includes(d)}
                           onClick={() => toggleWeekday(d)}
-                          className={cn(
-                            'text-xs px-2 py-1 rounded border transition-colors',
-                            weekdays.includes(d)
-                              ? 'bg-primary text-white border-primary'
-                              : 'border-border text-muted-foreground hover:border-primary/50'
-                          )}
+                          className={cn(chipBtn(weekdays.includes(d)), 'min-w-0 px-1 md:min-w-[38px] md:px-2')}
                         >
                           {WEEKDAY_LABELS[d]}
                         </button>
@@ -1106,22 +1107,22 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
 
                 {frequency === 'monthly' && (
                   <div>
-                    <label className="text-xs text-muted-foreground block mb-1.5">Ngày trong tháng (1–28)</label>
+                    <label className={fieldLabel}>Ngày trong tháng (1–28)</label>
                     <Input
                       type="number" min={1} max={28} value={monthDay}
                       onChange={(e) => setMonthDay(Number(e.target.value))}
-                      className="h-8 text-sm bg-background w-20"
+                      className={cn(control, 'w-[88px]')}
                     />
                   </div>
                 )}
 
                 <div>
-                  <label className="text-xs text-muted-foreground block mb-1.5">Giờ tạo task</label>
-                  <Input type="time" value={runTime} onChange={(e) => setRunTime(e.target.value)} className="h-8 text-sm bg-background w-28" />
+                  <label className={fieldLabel}>Giờ tạo task</label>
+                  <Input type="time" value={runTime} onChange={(e) => setRunTime(e.target.value)} className={cn(control, 'w-[150px] md:w-[120px]')} />
                 </div>
 
                 <div>
-                  <label className="text-xs text-muted-foreground block mb-1.5">Deadline sau khi tạo</label>
+                  <label className={fieldLabel}>Deadline sau khi tạo</label>
                   <div className="flex items-center gap-2">
                     <Select
                       value={customDeadline ? 'custom' : String(deadlineOffset)}
@@ -1132,7 +1133,7 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                         setDeadlineOffset(Number(v))
                       }}
                     >
-                      <SelectTrigger className="h-8 text-sm bg-background w-32">
+                      <SelectTrigger className={cn(selectCtl, 'w-[132px]')}>
                         <SelectValue>{customDeadline ? 'Tùy chỉnh' : `${deadlineOffset}h`}</SelectValue>
                       </SelectTrigger>
                       <SelectContent>
@@ -1143,79 +1144,80 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
                       </SelectContent>
                     </Select>
                     {customDeadline && (
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center gap-1.5">
                         <Input
                           type="number" min={1} max={168} value={deadlineOffset}
                           onChange={(e) => {
                             const n = Number(e.target.value)
                             if (Number.isFinite(n)) setDeadlineOffset(Math.max(1, Math.min(168, Math.round(n))))
                           }}
-                          className="h-8 text-sm bg-background w-20"
+                          className={cn(control, 'w-[88px]')}
                         />
-                        <span className="text-xs text-muted-foreground">giờ</span>
+                        <span className="text-[13px] text-muted-foreground">giờ</span>
                       </div>
                     )}
                   </div>
                 </div>
 
                 <div>
-                  <label className="text-xs text-muted-foreground block mb-1.5">Ngày bắt đầu *</label>
-                  <Input type="date" value={schedStartDate} onChange={(e) => setSchedStartDate(e.target.value)} required={isRecurring} className="h-8 text-sm bg-background" />
+                  <label className={fieldLabel}>Ngày bắt đầu *</label>
+                  <Input type="date" value={schedStartDate} onChange={(e) => setSchedStartDate(e.target.value)} required={isRecurring} className={control} />
                 </div>
 
                 <div>
-                  <label className="text-xs text-muted-foreground block mb-1.5">Ngày kết thúc (tuỳ chọn)</label>
-                  <Input type="date" value={schedEndDate} onChange={(e) => setSchedEndDate(e.target.value)} className="h-8 text-sm bg-background" />
+                  <label className={fieldLabel}>Ngày kết thúc (tuỳ chọn)</label>
+                  <Input type="date" value={schedEndDate} onChange={(e) => setSchedEndDate(e.target.value)} className={control} />
                 </div>
               </div>
             )}
 
-            {/* Danh mục */}
-            <div className="px-5 py-3 border-b">
-              <span className={sectionLabel}>Danh mục</span>
-              <Select value={category} onValueChange={handleCategoryChange}>
-                <SelectTrigger className="h-8 text-sm bg-background">
-                  <SelectValue>{CATEGORY_LABEL[category]}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  {(Object.keys(CATEGORY_LABEL) as TaskCategory[]).map((c) => (
-                    <SelectItem key={c} value={c}>{CATEGORY_LABEL[c]}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
+            {/* Danh mục + Ưu tiên — 2 cột như artboard */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="min-w-0 space-y-2">
+                <span className={sectionLabel}>Danh mục</span>
+                <Select value={category} onValueChange={handleCategoryChange}>
+                  <SelectTrigger className={cn(selectCtl, 'w-full')}>
+                    <SelectValue>{CATEGORY_LABEL[category]}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(Object.keys(CATEGORY_LABEL) as TaskCategory[]).map((c) => (
+                      <SelectItem key={c} value={c}>{CATEGORY_LABEL[c]}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
 
-            {/* Ưu tiên */}
-            <div className="px-5 py-3 border-b">
-              <span className={sectionLabel}>Ưu tiên</span>
-              <Select value={priority} onValueChange={(v) => { if (v) setPriority(v as TaskPriority) }}>
-                <SelectTrigger className="h-8 text-sm bg-background">
-                  <SelectValue>{PRIORITY_LABEL[priority]}</SelectValue>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="normal">Bình thường</SelectItem>
-                  <SelectItem value="urgent">Khẩn cấp</SelectItem>
-                </SelectContent>
-              </Select>
+              <div className="min-w-0 space-y-2">
+                <span className={sectionLabel}>Ưu tiên</span>
+                <Select value={priority} onValueChange={(v) => { if (v) setPriority(v as TaskPriority) }}>
+                  <SelectTrigger className={cn(selectCtl, 'w-full')}>
+                    <SelectValue>{PRIORITY_LABEL[priority]}</SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="normal">Bình thường</SelectItem>
+                    <SelectItem value="urgent">Khẩn cấp</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
 
             {/* Thời gian — hidden for recurring */}
             {!isRecurring && (
-              <div className="px-5 py-3 border-b space-y-3">
+              <div className="space-y-2.5">
                 <span className={sectionLabel}>Thời gian</span>
                 <div>
-                  <label className="text-xs text-muted-foreground block mb-1.5">Ngày bắt đầu <span className="text-destructive">*</span></label>
-                  <div className="flex gap-1.5">
-                    <Input type="date" required value={startDate} onChange={(e) => setStartDate(e.target.value)} className="h-8 text-sm bg-background flex-1" />
-                    <Input type="time" required value={startTime} onChange={(e) => setStartTime(e.target.value)} className="h-8 text-sm bg-background w-[88px]" />
+                  <label className={fieldLabel}>Ngày bắt đầu <span className="text-destructive">*</span></label>
+                  <div className="grid grid-cols-[minmax(0,3fr)_minmax(0,2fr)] gap-2">
+                    <Input type="date" required value={startDate} onChange={(e) => setStartDate(e.target.value)} className={control} />
+                    <Input type="time" required value={startTime} onChange={(e) => setStartTime(e.target.value)} className={control} />
                   </div>
                   <input type="hidden" name="start_date" value={combineDateTimeStr(startDate, startTime)} />
                 </div>
                 <div>
-                  <label className="text-xs text-muted-foreground block mb-1.5">Deadline <span className="text-destructive">*</span></label>
-                  <div className="flex gap-1.5">
-                    <Input type="date" required value={deadlineDate} onChange={(e) => setDeadlineDate(e.target.value)} className="h-8 text-sm bg-background flex-1" />
-                    <Input type="time" required value={deadlineTime} onChange={(e) => setDeadlineTime(e.target.value)} className="h-8 text-sm bg-background w-[88px]" />
+                  <label className={fieldLabel}>Deadline <span className="text-destructive">*</span></label>
+                  <div className="grid grid-cols-[minmax(0,3fr)_minmax(0,2fr)] gap-2">
+                    <Input type="date" required value={deadlineDate} onChange={(e) => setDeadlineDate(e.target.value)} className={control} />
+                    <Input type="time" required value={deadlineTime} onChange={(e) => setDeadlineTime(e.target.value)} className={control} />
                   </div>
                   <input type="hidden" name="deadline" value={combineDateTimeStr(deadlineDate, deadlineTime)} />
                 </div>
@@ -1223,24 +1225,26 @@ export function TaskForm({ stores, users, currentUserRole, currentUserStoreId, t
             )}
 
             {/* Output cần nộp — chips */}
-            <div className="px-5 py-3">
+            <div className="space-y-2">
               <span className={sectionLabel}>Output cần nộp <span className="text-destructive">*</span></span>
               <div className="flex flex-wrap gap-1.5">
-                {OUTPUT_OPTIONS.map(({ value, label }) => (
-                  <button
-                    key={value}
-                    type="button"
-                    onClick={() => toggleOutput(value)}
-                    className={cn(
-                      'text-xs px-3 py-1.5 rounded-full border transition-colors',
-                      outputs.includes(value)
-                        ? 'bg-primary text-white border-primary'
-                        : 'border-border text-muted-foreground hover:border-primary/60 hover:text-foreground'
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
+                {OUTPUT_OPTIONS.map(({ value, label }) => {
+                  const on = outputs.includes(value)
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() => toggleOutput(value)}
+                      className={cn(chipBtn(on), 'px-2.5')}
+                    >
+                      {on
+                        ? <Check aria-hidden="true" className="h-3.5 w-3.5" />
+                        : <Plus aria-hidden="true" className="h-3.5 w-3.5" />}
+                      {label}
+                    </button>
+                  )
+                })}
               </div>
             </div>
 
@@ -1278,13 +1282,13 @@ function StaffChecklist({ staff, excluded, onToggle, onBulk, externalQuery, hide
   const allFilteredSelected = filtered.length > 0 && filtered.every((s) => !excluded.has(s.id))
   const showSearch = !hideOwnSearch && staff.length > 3
   return (
-    <div className="rounded border">
-      <div className="flex items-center justify-between px-2.5 py-1.5 border-b bg-muted/40">
-        <span className="text-[11px] text-muted-foreground">{selectedCount}/{staff.length} dược sĩ</span>
+    <div className="rounded-v2-control border overflow-hidden">
+      <div className="flex items-center justify-between gap-2 px-3 border-b bg-muted">
+        <span className="text-[12px] text-muted-foreground">{selectedCount}/{staff.length} dược sĩ</span>
         <button
           type="button"
           onClick={() => onBulk(filteredIds, allFilteredSelected)}
-          className="text-[11px] text-primary hover:underline disabled:opacity-40 disabled:no-underline"
+          className="min-h-[44px] md:min-h-[32px] px-1 text-[12px] font-medium text-accent-foreground hover:underline disabled:opacity-40 disabled:no-underline"
           disabled={filtered.length === 0}
         >
           {allFilteredSelected ? 'Bỏ chọn tất cả' : 'Chọn tất cả'}{q && filtered.length !== staff.length ? ` (${filtered.length})` : ''}
@@ -1297,15 +1301,15 @@ function StaffChecklist({ staff, excluded, onToggle, onBulk, externalQuery, hide
             value={internalQuery}
             onChange={(e) => setInternalQuery(e.target.value)}
             placeholder="Tìm dược sĩ theo tên / email…"
-            className="w-full h-7 rounded border bg-background px-2 text-xs focus:outline-none focus:ring-1 focus:ring-primary/40"
+            className="w-full h-[44px] md:h-[32px] rounded-v2-control border border-input bg-background px-2.5 text-[16px] md:text-[13px] focus:outline-none focus:ring-1 focus:ring-primary/40"
           />
         </div>
       )}
-      <div className="max-h-40 overflow-y-auto divide-y">
+      <div className="max-h-[176px] overflow-y-auto divide-y">
         {filtered.length === 0 ? (
-          <p className="px-2.5 py-2 text-xs text-muted-foreground">Không tìm thấy dược sĩ phù hợp.</p>
+          <p className="px-3 py-2 text-[13px] text-muted-foreground">Không tìm thấy dược sĩ phù hợp.</p>
         ) : filtered.map((s) => (
-          <label key={s.id} className="flex items-center gap-2.5 px-2.5 py-1.5 cursor-pointer hover:bg-sidebar-accent text-sm">
+          <label key={s.id} className="flex items-center gap-2.5 px-3 py-1 min-h-[44px] md:min-h-[34px] cursor-pointer hover:bg-muted text-[13px]">
             <input
               type="checkbox"
               checked={!excluded.has(s.id)}
@@ -1314,7 +1318,7 @@ function StaffChecklist({ staff, excluded, onToggle, onBulk, externalQuery, hide
             />
             <span className="truncate">
               {s.full_name}
-              {s.email ? <span className="text-muted-foreground/70 text-xs"> · {s.email}</span> : null}
+              {s.email ? <span className="text-v2-text-3 text-[12px]"> · {s.email}</span> : null}
             </span>
           </label>
         ))}
