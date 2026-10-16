@@ -107,6 +107,32 @@ test.describe('ui v2 /tasks/[id] — dược sĩ mobile @mobile', () => {
     await assertMobileOrder(page)
     await assertDetailLayout(page, 20)
   })
+
+  // Nợ trước RC (PM): chọn CHẮC một task có form nộp — duyệt tối đa 12 task ở tab Chờ của staff QA, mở từng
+  // task (chỉ đọc) tới khi gặp heading "Nộp kết quả". Không có ⇒ FAIL (không kiểm có điều kiện).
+  test('task có form nộp — form nằm trong khối nội dung, trước metadata', async ({ page }) => {
+    await page.goto('/tasks')
+    await page.locator('main h1').first().waitFor()
+    await page.waitForLoadState('networkidle')
+    const ids = [...new Set((await page.locator('main a[href^="/tasks/"]').evaluateAll((els) => els.map((e) => e.getAttribute('href'))))
+      .map(taskId).filter((x): x is string => !!x))].slice(0, 12)
+    expect(ids.length, 'tài khoản QA staff phải có task ở tab Chờ').toBeGreaterThan(0)
+    let found: string | null = null
+    for (const id of ids) {
+      await page.goto(`/tasks/${id}`)
+      await page.locator('main h1').first().waitFor()
+      if (await page.locator('main [data-detail-content] h2', { hasText: 'Nộp kết quả' }).count() === 1) { found = id; break }
+    }
+    expect(found, `không task nào trong ${ids.length} task tab Chờ của staff QA có form nộp`).not.toBeNull()
+    await assertMobileOrder(page)
+    const submit = page.locator('main [data-detail-content] h2', { hasText: 'Nộp kết quả' })
+    await expect(submit).toBeVisible()
+    const sTop = (await submit.boundingBox())!.y
+    const metaTop = (await page.locator('main [data-detail-meta]').boundingBox())!.y
+    expect(sTop, 'form nộp phải trước metadata').toBeLessThan(metaTop)
+    const inContent = await submit.evaluate((el) => !!el.closest('[data-detail-content]'))
+    expect(inContent, 'form nộp phải thuộc khối nội dung').toBe(true)
+  })
 })
 
 // P1.3 r1.1 (PM): trên mobile thứ tự NHÌN = thứ tự DOM (đọc/Tab): header → Deadline/Ưu tiên → nội dung (+form nộp)
@@ -126,12 +152,7 @@ async function assertMobileOrder(page: Page) {
     expect(r.tops[i], `${parts[i]} phải nằm dưới ${parts[i - 1]}`).toBeGreaterThanOrEqual(r.bottoms[i - 1] - 1)
   }
   expect(r.orders.every((o) => o === '0'), 'không được dùng CSS order để đảo khối').toBe(true)
-  // Form nộp (nếu có) thuộc khối nội dung ⇒ trước metadata
-  const submit = page.locator('main [data-detail-content] h2', { hasText: 'Nộp kết quả' })
-  if (await submit.count()) {
-    const sTop = (await submit.first().boundingBox())!.y
-    expect(sTop, 'form nộp phải trước metadata').toBeLessThan(r.tops[3])
-  }
+  // Vị trí form nộp: kiểm CHẮC CHẮN ở ca "task có form nộp" (task chọn có form), không kiểm có điều kiện ở đây.
   const deadlineLabels = await page.locator('main p', { hasText: /^Deadline$/ }).evaluateAll((els) => els.filter((el) => (el as HTMLElement).offsetParent !== null).length)
   expect(deadlineLabels, 'chỉ một nhãn Deadline hiển thị trên mobile').toBe(1)
 }

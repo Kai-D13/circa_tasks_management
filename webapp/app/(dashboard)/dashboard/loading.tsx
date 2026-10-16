@@ -5,7 +5,7 @@ import { LoadingState } from '@/components/ds/LoadingState'
 // Chỉ trình bày; không truy vấn.
 export default function DashboardLoading() {
   return (
-    <div data-ui-v2="page" className="p-4 md:p-6 space-y-4 md:space-y-[18px]">
+    <div data-ui-v2="page" data-route-loading="dashboard" className="p-4 md:p-6 space-y-4 md:space-y-[18px]">
       <div className="flex items-center gap-3">
         <Skeleton className="size-10 rounded-v2-control" />
         <Skeleton className="h-6 w-36" />

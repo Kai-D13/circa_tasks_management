@@ -6,6 +6,8 @@ import { SUPER_STATE } from './authState'
 // Ở 1280px + sidebar MỞ RỘNG (232px) panel trái hẹp nhất ⇒ bảng phải vừa panel: cột Deadline nằm trong
 // vùng nhìn, không tràn ngang bảng/trang — kể cả khi tiêu đề rất dài (bơm chữ test-only vào DOM, không ghi DB).
 // Dưới 1280px: xếp dọc, định kỳ trước (thứ tự cũ).
+// Nợ trước RC (PM): KHÔNG nhánh có điều kiện — thiếu panel "Task định kỳ", bảng không có dòng hoặc không bơm
+// được tiêu đề dài đều là FAIL (prod hiện có lịch định kỳ + hoạt động gần đây; mất dữ liệu đó thì spec phải đỏ).
 
 const HAS_STATE = fs.existsSync(SUPER_STATE)
 const LONG = 'Tiêu đề kiểm tra rất dài cho bảng hoạt động gần đây ' + 'X'.repeat(48) + ' ' + 'chữ dài '.repeat(14)
@@ -27,11 +29,14 @@ async function assertTableFits(page: Page) {
   const panel = recent(page)
   const container = panel.locator('[data-slot="table-container"]')
   await container.waitFor()
-  // Bơm tiêu đề dài vào ô tiêu đề đầu tiên (nếu có dòng) — chỉ DOM, đo bố cục xấu nhất.
-  await panel.locator('tbody tr td:first-child').first().evaluate((td, text) => {
+  // Bơm tiêu đề dài vào ô tiêu đề đầu tiên — chỉ DOM, đo bố cục xấu nhất. Không có dòng ⇒ FAIL.
+  const firstCell = panel.locator('tbody tr td:first-child').first()
+  await expect(firstCell, 'bảng Hoạt động gần đây không có dòng nào').toBeVisible()
+  await firstCell.evaluate((td, text) => {
     const target = td.querySelector('a, div') ?? td
     target.textContent = text
-  }, LONG).catch(() => {})
+  }, LONG)
+  await expect(firstCell).toContainText('Tiêu đề kiểm tra rất dài')
   const m = await container.evaluate((el) => {
     const box = el.getBoundingClientRect()
     const ths = el.querySelectorAll('thead th')
@@ -57,12 +62,11 @@ test.describe('ui v2 /dashboard bố cục @desktop', () => {
       await open(page, 1280, theme, info.project.use.baseURL!)
       const aside = await page.locator('aside.bg-sidebar').first().boundingBox()
       expect(aside!.width, 'sidebar phải đang mở rộng').toBeGreaterThan(200)
-      if (await recurring(page).count()) {
-        const r = await recent(page).boundingBox()
-        const s = await recurring(page).boundingBox()
-        expect(Math.abs(r!.y - s!.y), '≥1280px: 2 panel cùng hàng').toBeLessThan(2)
-        expect(s!.x, 'Task định kỳ bên phải').toBeGreaterThan(r!.x)
-      }
+      await expect(recurring(page), 'thiếu panel Task định kỳ').toHaveCount(1)
+      const r = await recent(page).boundingBox()
+      const s = await recurring(page).boundingBox()
+      expect(Math.abs(r!.y - s!.y), '≥1280px: 2 panel cùng hàng').toBeLessThan(2)
+      expect(s!.x, 'Task định kỳ bên phải').toBeGreaterThan(r!.x)
       await assertTableFits(page)
     })
   }
@@ -74,11 +78,10 @@ test.describe('ui v2 /dashboard bố cục @desktop', () => {
 
   test('1200 (<1280) — xếp dọc, định kỳ trước, bảng vừa panel', async ({ page }, info) => {
     await open(page, 1200, 'light', info.project.use.baseURL!)
-    if (await recurring(page).count()) {
-      const r = await recent(page).boundingBox()
-      const s = await recurring(page).boundingBox()
-      expect(s!.y + s!.height, '<1280px: định kỳ nằm TRÊN hoạt động gần đây').toBeLessThanOrEqual(r!.y + 1)
-    }
+    await expect(recurring(page), 'thiếu panel Task định kỳ').toHaveCount(1)
+    const r = await recent(page).boundingBox()
+    const s = await recurring(page).boundingBox()
+    expect(s!.y + s!.height, '<1280px: định kỳ nằm TRÊN hoạt động gần đây').toBeLessThanOrEqual(r!.y + 1)
     await assertTableFits(page)
   })
 })

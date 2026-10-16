@@ -3,7 +3,7 @@
 // UI v2 P1.2: gốc data-ui-v2="page" (nền canvas), tab segmented + thẻ panel 12px như trang.
 export default function TasksLoading() {
   return (
-    <div data-ui-v2="page" className="p-4 md:p-6 space-y-4 animate-pulse">
+    <div data-ui-v2="page" data-route-loading="tasks" className="p-4 md:p-6 space-y-4 animate-pulse">
       <div className="flex items-center gap-3">
         <div className="size-10 rounded-v2-control bg-muted" />
         <div className="h-6 w-44 rounded bg-muted" />
