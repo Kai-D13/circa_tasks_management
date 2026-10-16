@@ -24,7 +24,8 @@ export function Panel({
     )}>{title}</h2>
   ) : null
   const header = heading || actions ? (
-    <div className={cn('flex items-center gap-3', flush && 'border-b px-4 py-3 v2:px-5 v2:py-4')}>
+    // v2 mobile: header flush thấp (link phụ đã tự cao 44px), desktop 16px.
+    <div className={cn('flex items-center gap-3', flush && 'border-b px-4 py-3 v2:px-5 v2:py-1.5 md:v2:py-4')}>
       {heading}
       {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
     </div>

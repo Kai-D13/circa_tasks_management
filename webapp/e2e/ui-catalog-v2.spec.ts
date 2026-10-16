@@ -51,7 +51,8 @@ for (const tag of ['@desktop', '@mobile'] as const) {
         const box = await cat.boundingBox()
         expect(box!.height).toBeGreaterThan(page.viewportSize()!.height)
         await page.waitForTimeout(250)
-        expect(await cat.screenshot()).toMatchSnapshot(`catalog-v2-${theme}.png`, { maxDiffPixelRatio: 0.01 })
+        // animations disabled: skeleton animate-pulse làm ảnh lệch 1–4% mỗi lần chụp (P1.1) ⇒ dừng để so chính xác.
+        expect(await cat.screenshot({ animations: 'disabled' })).toMatchSnapshot(`catalog-v2-${theme}.png`, { maxDiffPixelRatio: 0.01 })
       }
     })
   })

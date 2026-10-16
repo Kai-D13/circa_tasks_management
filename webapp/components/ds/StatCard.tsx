@@ -48,9 +48,10 @@ export function StatCard({
           </span>
         )}
         <div className="min-w-0">
-          <p className="text-xs text-muted-foreground truncate v2:flex v2:items-center v2:gap-2 v2:text-[13px]">
-            <span aria-hidden="true" className={cn('hidden v2:inline-block size-2 shrink-0 rounded-full', TONE_DOT[tone])} />
-            <span className="v2:min-w-0 v2:truncate">{label}</span>
+          {/* v2: nhãn xuống tối đa 2 dòng (2 cột mobile không được cắt mất chữ — P1.1). */}
+          <p className="text-xs text-muted-foreground truncate v2:flex v2:items-start v2:gap-2 v2:whitespace-normal v2:text-[13px] v2:leading-[1.4]">
+            <span aria-hidden="true" className={cn('hidden v2:inline-block size-2 shrink-0 rounded-full v2:mt-[5px]', TONE_DOT[tone])} />
+            <span className="v2:min-w-0 v2:line-clamp-2">{label}</span>
           </p>
           <p className={cn(
             'text-2xl font-semibold tabular-nums leading-none mt-0.5 v2:text-[30px] v2:font-bold v2:leading-[1.1] v2:mt-1.5',

@@ -1,21 +1,26 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { getDefaultRoute } from '@/lib/routes'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { TaskStatusBadge } from '@/components/tasks/TaskStatusBadge'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import Link from 'next/link'
 import { formatDistanceToNow, formatDate } from '@/lib/dateUtils'
-import { Radio, AlertCircle, CalendarClock } from 'lucide-react'
+import { Radio, LayoutDashboard } from 'lucide-react'
 import { TaskCategory } from '@/types'
 import { cn } from '@/lib/utils'
+import { PageHeader } from '@/components/ds/PageHeader'
+import { StatCard } from '@/components/ds/StatCard'
+import { ErrorState } from '@/components/ds/ErrorState'
+import { Panel } from '@/components/ds/Panel'
+import { TagBadge, type TagHue } from '@/components/ds/TagBadge'
 
-const CATEGORY_STYLE: Record<TaskCategory, string> = {
-  training: 'bg-blue-100 text-blue-700',
-  recall:   'bg-red-100 text-red-700',
-  display:  'bg-green-100 text-green-700',
-  audit:    'bg-amber-100 text-amber-700',
-  other:    'bg-gray-100 text-gray-600',
+// Cùng ánh xạ hue danh mục với /tasks (components/tasks/TaskList CATEGORY_HUE) — thay pastel tự viết.
+const CATEGORY_HUE: Record<TaskCategory, TagHue> = {
+  training: 'blue',
+  recall:   'red',
+  display:  'green',
+  audit:    'amber',
+  other:    'gray',
 }
 const CATEGORY_LABEL: Record<TaskCategory, string> = {
   training: 'Training',
@@ -259,147 +264,135 @@ export default async function DashboardPage() {
     }
   }
 
-  const kpis = [
-    { label: 'Tổng Tasks đang hoạt động', value: total ?? 0,      color: 'text-foreground' },
-    { label: 'Đang thực hiện',            value: inProgress ?? 0, color: 'text-blue-600' },
-    { label: 'Hoàn thành',                value: done ?? 0,       color: 'text-green-600' },
-    { label: 'Quá hạn',                   value: overdue ?? 0,    color: 'text-red-600' },
+  const kpis: { label: string; value: number; tone: 'default' | 'info' | 'success' | 'danger' }[] = [
+    { label: 'Tổng Tasks đang hoạt động', value: total ?? 0,      tone: 'default' },
+    { label: 'Đang thực hiện',            value: inProgress ?? 0, tone: 'info' },
+    { label: 'Hoàn thành',                value: done ?? 0,       tone: 'success' },
+    { label: 'Quá hạn',                   value: overdue ?? 0,    tone: 'danger' },
   ]
 
+  const categoryTag = (category: string | null, className?: string) =>
+    category && category !== 'other' ? (
+      <TagBadge hue={CATEGORY_HUE[category as TaskCategory] ?? 'gray'} className={className}>
+        {CATEGORY_LABEL[category as TaskCategory] ?? category}
+      </TagBadge>
+    ) : null
+  const progressText = (done: number, total: number) =>
+    done === total ? 'text-status-success' : 'text-status-warning'
+  // Link phụ trên header khối: chữ accent (cam chỉ dành cho hành động chính), vùng chạm 44px mobile.
+  const headerLink = 'inline-flex min-h-[44px] items-center text-[13px] font-medium text-accent-foreground hover:underline md:min-h-0'
+
+  // UI v2 (docs/ui/UI_V2_TASKS.md, P1.1): chỉ đổi trình bày — query/quyền/chữ giữ nguyên.
   return (
-    <div className="p-4 md:p-6 space-y-4 md:space-y-6">
-      <h1 className="text-lg md:text-xl font-semibold">Tổng quan</h1>
+    <div data-ui-v2="page" className="p-4 md:p-6 space-y-4 md:space-y-[18px]">
+      <PageHeader title="Tổng quan" icon={LayoutDashboard} />
 
       {kpiError && (
-        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-4 py-3 flex items-center gap-2 text-sm">
-          <AlertCircle className="h-4 w-4 text-destructive shrink-0" />
-          <span className="text-destructive font-medium">Lỗi tải KPI:</span>
-          <span className="text-muted-foreground">{kpiError.message}</span>
-          {kpiError.message.includes('archived_at') && (
-            <span className="text-muted-foreground">— Vui lòng chạy migration <code className="font-mono text-xs bg-muted px-1 rounded">011_archive_tasks.sql</code></span>
-          )}
-        </div>
+        <ErrorState
+          message={`Lỗi tải KPI: ${kpiError.message}`}
+          hint={kpiError.message.includes('archived_at') ? 'Vui lòng chạy migration 011_archive_tasks.sql' : undefined}
+        />
       )}
 
-      {/* KPI Cards — 2 cols on mobile, 4 on desktop */}
-      <div className="grid grid-cols-2 gap-3 md:gap-4 md:grid-cols-4">
-        {kpis.map(({ label, value, color }) => (
-          <Card key={label}>
-            <CardContent className="p-4">
-              <p className="text-xs font-medium text-muted-foreground leading-snug">{label}</p>
-              <p className={`text-3xl font-bold mt-1 ${color}`}>{value}</p>
-            </CardContent>
-          </Card>
+      {/* KPI — 2 cột mobile, 4 cột desktop */}
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+        {kpis.map(({ label, value, tone }) => (
+          <StatCard key={label} label={label} value={value} tone={tone} />
         ))}
       </div>
 
-      {/* Recurring summary — admin only */}
-      {isAdmin && (recurringActive > 0 || recurringPaused > 0) && (
-        <Card>
-          <CardHeader className="pb-2 px-4 pt-4 flex flex-row items-center justify-between">
-            <CardTitle className="text-sm font-medium flex items-center gap-1.5">
-              <CalendarClock className="h-4 w-4 text-muted-foreground" />
-              Task định kỳ
-            </CardTitle>
-            <Link href="/tasks/schedules" className="text-xs text-primary hover:underline">
-              Xem tất cả →
-            </Link>
-          </CardHeader>
-          <CardContent className="px-4 pb-4">
-            <div className="flex gap-4 mb-3 text-sm">
-              <span>
-                <span className="font-semibold text-green-600">{recurringActive}</span>
-                <span className="text-muted-foreground ml-1">đang hoạt động</span>
-              </span>
+      {/* ≥1280px: Hoạt động gần đây (trái) + Task định kỳ (phải). Hẹp hơn: xếp dọc, giữ thứ tự cũ (định kỳ trước). */}
+      <div className="flex flex-col gap-4 xl:flex-row xl:items-start">
+        {isAdmin && (recurringActive > 0 || recurringPaused > 0) && (
+          <Panel
+            title="Task định kỳ"
+            actions={<Link href="/tasks/schedules" className={headerLink}>Xem tất cả →</Link>}
+            className="xl:order-2 xl:w-[300px] xl:shrink-0"
+            bodyClassName="space-y-3.5"
+          >
+            <div className="grid grid-cols-2 gap-2.5">
+              <div className="rounded-v2-control bg-muted px-3 py-2.5">
+                <p className="text-[22px] font-bold leading-tight tabular-nums text-status-success">{recurringActive}</p>
+                <p className="text-[12px] text-muted-foreground">đang hoạt động</p>
+              </div>
               {recurringPaused > 0 && (
-                <span>
-                  <span className="font-semibold text-gray-500">{recurringPaused}</span>
-                  <span className="text-muted-foreground ml-1">tạm dừng</span>
-                </span>
+                <div className="rounded-v2-control bg-muted px-3 py-2.5">
+                  <p className="text-[22px] font-bold leading-tight tabular-nums">{recurringPaused}</p>
+                  <p className="text-[12px] text-muted-foreground">tạm dừng</p>
+                </div>
               )}
             </div>
             {upcomingSchedules.length > 0 && (
-              <div className="space-y-1">
-                <p className="text-xs text-muted-foreground mb-2">Sắp chạy tiếp</p>
-                {upcomingSchedules.map((s) => {
-                  const title = (s.task_templates as unknown as { title: string } | null)?.title ?? '—'
-                  return (
-                    <div key={s.id} className="flex items-center justify-between text-sm">
-                      <Link href={`/tasks/schedules/${s.id}`} className="hover:underline truncate max-w-[60%]">
-                        {title}
-                      </Link>
-                      <span className="text-xs text-muted-foreground whitespace-nowrap ml-2">
-                        {formatDate(s.next_run_at)}
-                      </span>
-                    </div>
-                  )
-                })}
+              <div>
+                <p className="pb-1.5 text-[12px] font-semibold uppercase tracking-[0.06em] text-v2-text-3">Sắp chạy tiếp</p>
+                {/* divide-y + border-t: vạch trên mỗi dòng như artboard; divide-y cũng để ui-baseline che vùng dữ liệu sống. */}
+                <ul className="divide-y border-t">
+                  {upcomingSchedules.map((s) => {
+                    const title = (s.task_templates as unknown as { title: string } | null)?.title ?? '—'
+                    return (
+                      <li key={s.id} className="flex items-center justify-between gap-2.5 py-1 md:py-2.5">
+                        <Link href={`/tasks/schedules/${s.id}`} className="inline-flex min-h-[44px] min-w-0 items-center text-[13px] font-medium hover:underline md:min-h-0">
+                          <span className="truncate">{title}</span>
+                        </Link>
+                        <span className="whitespace-nowrap text-[12px] text-muted-foreground">
+                          {formatDate(s.next_run_at)}
+                        </span>
+                      </li>
+                    )
+                  })}
+                </ul>
               </div>
             )}
-          </CardContent>
-        </Card>
-      )}
+          </Panel>
+        )}
 
-      {/* Recent Activity */}
-      <Card>
-        <CardHeader className="pb-2 px-4 pt-4 flex flex-row items-center justify-between">
-          <CardTitle className="text-sm font-medium">Hoạt động gần đây</CardTitle>
-          <Link href="/tasks" className="text-xs text-primary hover:underline">
-            Xem tất cả trong Tasks →
-          </Link>
-        </CardHeader>
-        <CardContent className="p-0">
+        <Panel
+          title="Hoạt động gần đây"
+          flush
+          actions={<Link href="/tasks" className={headerLink}>Xem tất cả trong Tasks →</Link>}
+          className="min-w-0 xl:flex-1"
+        >
           {recentError ? (
-            <div className="px-4 py-4 flex items-start gap-2 text-sm">
-              <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
-              <div>
-                <p className="font-medium text-destructive">Không thể tải danh sách gần đây</p>
-                <p className="text-muted-foreground mt-0.5">{recentError.message}</p>
-              </div>
+            <div className="p-4">
+              <ErrorState message="Không thể tải danh sách gần đây" hint={recentError.message} />
             </div>
           ) : (
             <>
-              {/* Desktop */}
+              {/* Desktop. ≥1280px + sidebar mở rộng (panel ~686px) bảng phải vừa: cột phụ ~460px, tiêu đề/cửa hàng ngắt ở mọi vị trí (P1.1-R1-01). Khung hẹp hơn 620px (tablet) cuộn ngang trong data-slot=table-container. */}
               <div className="hidden md:block">
-                <Table>
-                  <TableHeader>
+                <Table className="min-w-[620px] [&_td:first-child]:pl-5 [&_th:first-child]:pl-5 [&_td:last-child]:pr-5 [&_th:last-child]:pr-5 [&_td]:px-3 [&_td]:py-3 [&_th]:px-3">
+                  <TableHeader className="bg-muted [&_th]:h-auto [&_th]:py-2.5 [&_th]:text-[12px] [&_th]:font-medium [&_th]:text-muted-foreground">
                     <TableRow>
                       <TableHead>Tiêu đề</TableHead>
-                      <TableHead>Loại</TableHead>
-                      <TableHead>Cửa hàng</TableHead>
-                      <TableHead>Trạng thái</TableHead>
-                      <TableHead>Deadline</TableHead>
+                      <TableHead className="w-[92px]">Loại</TableHead>
+                      <TableHead className="w-[120px]">Cửa hàng</TableHead>
+                      <TableHead className="w-[140px]">Trạng thái</TableHead>
+                      <TableHead className="w-[108px]">Deadline</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {recentRows.map((row) => {
                       if (row.type === 'broadcast') {
                         return (
-                          <TableRow key={`bc-${row.broadcastId}`} className="bg-primary/5">
-                            <TableCell>
-                              <div className="flex items-center gap-1.5 font-medium">
-                                <Radio className="h-3.5 w-3.5 text-primary shrink-0" />
+                          <TableRow key={`bc-${row.broadcastId}`}>
+                            <TableCell className="whitespace-normal wrap-anywhere align-top">
+                              <div className="flex items-start gap-1.5 font-semibold">
+                                <Radio className="mt-[3px] h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                                 {row.title}
                               </div>
-                              <p className="mt-0.5 ml-5 text-xs text-muted-foreground">Tạo bởi {row.creator ?? '—'}</p>
+                              <p className="mt-0.5 ml-5 text-[12px] text-v2-text-3">Tạo bởi {row.creator ?? '—'}</p>
                             </TableCell>
-                            <TableCell>
-                              {row.category && row.category !== 'other' ? (
-                                <span className={cn('text-xs px-1.5 py-0.5 rounded', CATEGORY_STYLE[row.category as TaskCategory] ?? 'bg-gray-100 text-gray-600')}>
-                                  {CATEGORY_LABEL[row.category as TaskCategory] ?? row.category}
-                                </span>
-                              ) : '—'}
-                            </TableCell>
-                            <TableCell className="text-sm text-muted-foreground">
+                            <TableCell className="align-top">{categoryTag(row.category) ?? '—'}</TableCell>
+                            <TableCell className="align-top text-[13px] text-muted-foreground">
                               {row.total} cửa hàng
                             </TableCell>
-                            <TableCell className="text-sm">
-                              <span className={cn('font-medium', row.done === row.total ? 'text-green-600' : 'text-amber-600')}>
+                            <TableCell className="align-top text-[13px]">
+                              <span className={cn('font-semibold tabular-nums', progressText(row.done, row.total))}>
                                 {row.done}/{row.total}
                               </span>
                               <span className="text-muted-foreground"> hoàn thành</span>
                             </TableCell>
-                            <TableCell className="text-sm text-muted-foreground">
+                            <TableCell className="align-top text-[13px] text-muted-foreground">
                               {row.deadline ? formatDistanceToNow(row.deadline) : '—'}
                             </TableCell>
                           </TableRow>
@@ -407,24 +400,18 @@ export default async function DashboardPage() {
                       }
                       return (
                         <TableRow key={`task-${row.id}`}>
-                          <TableCell>
-                            <Link href={`/tasks/${row.id}`} className="font-medium hover:underline">
+                          <TableCell className="whitespace-normal wrap-anywhere align-top">
+                            <Link href={`/tasks/${row.id}`} className="font-semibold hover:underline">
                               {row.title}
                             </Link>
-                            <p className="mt-0.5 text-xs text-muted-foreground">Tạo bởi {row.creator ?? '—'}</p>
+                            <p className="mt-0.5 text-[12px] text-v2-text-3">Tạo bởi {row.creator ?? '—'}</p>
                           </TableCell>
-                          <TableCell>
-                            {row.category && row.category !== 'other' ? (
-                              <span className={cn('text-xs px-1.5 py-0.5 rounded', CATEGORY_STYLE[row.category as TaskCategory] ?? 'bg-gray-100 text-gray-600')}>
-                                {CATEGORY_LABEL[row.category as TaskCategory] ?? row.category}
-                              </span>
-                            ) : '—'}
-                          </TableCell>
-                          <TableCell className="text-muted-foreground text-sm">{row.store ?? '—'}</TableCell>
-                          <TableCell>
+                          <TableCell className="align-top">{categoryTag(row.category) ?? '—'}</TableCell>
+                          <TableCell className="whitespace-normal wrap-anywhere align-top text-[13px] text-muted-foreground">{row.store ?? '—'}</TableCell>
+                          <TableCell className="align-top">
                             <TaskStatusBadge status={row.status as 'todo' | 'in_progress' | 'done' | 'overdue'} late={row.status === 'done' && !!row.overdueAt} />
                           </TableCell>
-                          <TableCell className="text-muted-foreground text-sm">
+                          <TableCell className="align-top text-[13px] text-muted-foreground">
                             {row.deadline ? formatDistanceToNow(row.deadline) : '—'}
                           </TableCell>
                         </TableRow>
@@ -432,7 +419,7 @@ export default async function DashboardPage() {
                     })}
                     {recentRows.length === 0 && (
                       <TableRow>
-                        <TableCell colSpan={5} className="text-center text-muted-foreground py-8">
+                        <TableCell colSpan={5} className="py-8 text-center text-[13px] text-muted-foreground">
                           Chưa có task nào đang hoạt động
                         </TableCell>
                       </TableRow>
@@ -442,30 +429,26 @@ export default async function DashboardPage() {
               </div>
 
               {/* Mobile */}
-              <div className="md:hidden divide-y">
+              <div className="divide-y md:hidden">
                 {recentRows.length === 0 && (
-                  <p className="text-center text-muted-foreground py-8 text-sm">Chưa có task nào đang hoạt động</p>
+                  <p className="py-8 text-center text-[13px] text-muted-foreground">Chưa có task nào đang hoạt động</p>
                 )}
                 {recentRows.map((row) => {
                   if (row.type === 'broadcast') {
                     return (
-                      <div key={`bc-${row.broadcastId}`} className="flex flex-col gap-1.5 px-4 py-3 bg-primary/5">
+                      <div key={`bc-${row.broadcastId}`} className="flex flex-col gap-1.5 px-4 py-3">
                         <div className="flex items-start gap-1.5">
-                          <Radio className="h-3.5 w-3.5 text-primary shrink-0 mt-0.5" />
-                          <span className="font-medium text-sm leading-snug">{row.title}</span>
+                          <Radio className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          <span className="min-w-0 wrap-anywhere text-sm font-semibold leading-snug">{row.title}</span>
                         </div>
-                        <p className="pl-5 text-xs text-muted-foreground">Tạo bởi {row.creator ?? '—'}</p>
-                        <div className="flex items-center gap-2 flex-wrap pl-5">
-                          {row.category && row.category !== 'other' && (
-                            <span className={cn('text-xs px-1.5 py-0.5 rounded', CATEGORY_STYLE[row.category as TaskCategory] ?? 'bg-gray-100 text-gray-600')}>
-                              {CATEGORY_LABEL[row.category as TaskCategory] ?? row.category}
-                            </span>
-                          )}
-                          <span className={cn('text-xs font-medium', row.done === row.total ? 'text-green-600' : 'text-amber-600')}>
+                        <p className="pl-5 text-[12px] text-v2-text-3">Tạo bởi {row.creator ?? '—'}</p>
+                        <div className="flex flex-wrap items-center gap-2 pl-5">
+                          {categoryTag(row.category)}
+                          <span className={cn('text-[12px] font-semibold tabular-nums', progressText(row.done, row.total))}>
                             {row.done}/{row.total} hoàn thành
                           </span>
                           {row.deadline && (
-                            <span className="text-xs text-muted-foreground">{formatDistanceToNow(row.deadline)}</span>
+                            <span className="text-[12px] text-muted-foreground">{formatDistanceToNow(row.deadline)}</span>
                           )}
                         </div>
                       </div>
@@ -474,19 +457,15 @@ export default async function DashboardPage() {
                   return (
                     <Link key={`task-${row.id}`} href={`/tasks/${row.id}`} className="flex flex-col gap-1.5 px-4 py-3 hover:bg-muted/40 active:bg-muted/60">
                       <div className="flex items-start justify-between gap-2">
-                        <span className="font-medium text-sm leading-snug">{row.title}</span>
-                        {row.category && row.category !== 'other' && (
-                          <span className={cn('text-xs px-1.5 py-0.5 rounded shrink-0', CATEGORY_STYLE[row.category as TaskCategory] ?? 'bg-gray-100 text-gray-600')}>
-                            {CATEGORY_LABEL[row.category as TaskCategory] ?? row.category}
-                          </span>
-                        )}
+                        <span className="min-w-0 wrap-anywhere text-sm font-semibold leading-snug">{row.title}</span>
+                        {categoryTag(row.category, 'shrink-0')}
                       </div>
-                      <p className="text-xs text-muted-foreground">Tạo bởi {row.creator ?? '—'}</p>
-                      <div className="flex items-center gap-2 flex-wrap">
+                      <p className="text-[12px] text-v2-text-3">Tạo bởi {row.creator ?? '—'}</p>
+                      <div className="flex flex-wrap items-center gap-2">
                         <TaskStatusBadge status={row.status as 'todo' | 'in_progress' | 'done' | 'overdue'} late={row.status === 'done' && !!row.overdueAt} />
-                        <span className="text-xs text-muted-foreground">{row.store ?? '—'}</span>
+                        <span className="text-[12px] text-muted-foreground">{row.store ?? '—'}</span>
                         {row.deadline && (
-                          <span className="text-xs text-muted-foreground">{formatDistanceToNow(row.deadline)}</span>
+                          <span className="text-[12px] text-muted-foreground">{formatDistanceToNow(row.deadline)}</span>
                         )}
                       </div>
                     </Link>
@@ -495,12 +474,12 @@ export default async function DashboardPage() {
               </div>
             </>
           )}
-        </CardContent>
-      </Card>
+        </Panel>
+      </div>
 
-      <p className="text-xs text-muted-foreground text-center">
+      <p className="text-center text-[12px] text-v2-text-3">
         Trang tổng quan chỉ hiển thị task đang hoạt động.{' '}
-        <Link href="/tasks" className="text-primary hover:underline">Vào Tasks</Link>{' '}
+        <Link href="/tasks" className="font-medium text-accent-foreground hover:underline">Vào Tasks</Link>{' '}
         để quản lý chi tiết.
       </p>
     </div>
