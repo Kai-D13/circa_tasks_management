@@ -141,13 +141,13 @@ export const TaskInputAttachments = forwardRef<TaskInputAttachmentsHandle, Props
         {value.length > 0 && (
           <div className="space-y-1.5">
             {value.map((att, i) => (
-              <div key={i} className="flex items-center gap-2 p-2 border rounded text-sm bg-muted/20">
+              <div key={i} className="flex items-center gap-2 p-2 border rounded text-sm bg-muted/20 v2:gap-3 v2:rounded-v2-control v2:bg-transparent v2:px-3 v2:py-1.5">
                 {iconFor(att.type)}
                 <a
                   href={att.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex-1 truncate text-primary hover:underline text-xs"
+                  className="flex-1 truncate text-primary hover:underline text-xs v2:text-[13px] v2:font-medium v2:text-foreground"
                 >
                   {att.name}
                 </a>
@@ -162,7 +162,7 @@ export const TaskInputAttachments = forwardRef<TaskInputAttachmentsHandle, Props
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive shrink-0"
+                  className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive shrink-0 v2:h-[44px] v2:w-[44px] md:v2:h-[32px] md:v2:w-[32px] v2:rounded-[8px]"
                   onClick={() => remove(i)}
                 >
                   <X className="h-3 w-3" />
@@ -172,7 +172,7 @@ export const TaskInputAttachments = forwardRef<TaskInputAttachmentsHandle, Props
           </div>
         )}
         <div
-          className={`border-2 border-dashed rounded-md p-4 text-center cursor-pointer hover:bg-muted/40 transition-colors ${uploading ? 'opacity-60 pointer-events-none' : ''}`}
+          className={`border-2 border-dashed rounded-md p-4 text-center cursor-pointer hover:bg-muted/40 transition-colors v2:border-[1.5px] v2:border-input v2:rounded-v2-panel v2:py-[18px] ${uploading ? 'opacity-60 pointer-events-none' : ''}`}
           onClick={() => !uploading && inputRef.current?.click()}
         >
           {uploading ? (

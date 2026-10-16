@@ -40,7 +40,7 @@ export default async function NewTaskPage({
   // form sẽ render một biểu mẫu không thể submit.
   if (isSm && (stores ?? []).length === 0) {
     return (
-      <div className="p-4 md:p-6">
+      <div data-ui-v2="page" className="p-4 md:p-6">
         <EmptyState
           icon={ClipboardList}
           title={smStoreIds.length === 0
@@ -62,7 +62,7 @@ export default async function NewTaskPage({
   const { data: users } = await (isSm ? userQuery.in('store_id', allowedStoreIds) : userQuery)
 
   return (
-    <div className="flex flex-col h-full">
+    <div data-ui-v2="page" className="flex flex-col h-full">
       <TaskForm
         stores={stores ?? []}
         users={users ?? []}
