@@ -2,10 +2,7 @@
 
 import { useActionState, useEffect, useState } from 'react'
 import { login } from '@/app/actions/auth'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { LoginScreen } from './LoginScreen'
 
 export function LoginForm() {
   // The server action sets the Supabase auth cookies and returns { success,
@@ -27,45 +24,6 @@ export function LoginForm() {
   const error = state && 'error' in state ? state.error : null
   const busy = pending || redirecting
 
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-muted/40">
-      <Card className="w-full max-w-sm">
-        <CardHeader className="text-center">
-          <CardTitle className="text-2xl">Task Manager</CardTitle>
-          <CardDescription>Sign in to your account</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form action={formAction} className="flex flex-col gap-4">
-            <div className="grid gap-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                name="email"
-                type="email"
-                placeholder="you@example.com"
-                required
-                autoComplete="email"
-              />
-            </div>
-            <div className="grid gap-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                name="password"
-                type="password"
-                required
-                autoComplete="current-password"
-              />
-            </div>
-            {error && (
-              <p className="text-sm text-destructive" role="alert">{error}</p>
-            )}
-            <Button type="submit" disabled={busy} className="w-full mt-2">
-              {busy ? 'Signing in...' : 'Sign In'}
-            </Button>
-          </form>
-        </CardContent>
-      </Card>
-    </div>
-  )
+  // UI v2 Login: phần trình bày ở LoginScreen (dùng chung fixture /login/ui-catalog); luồng auth ở trên không đổi.
+  return <LoginScreen action={formAction} error={error} busy={busy} />
 }

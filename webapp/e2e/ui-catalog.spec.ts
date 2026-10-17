@@ -24,7 +24,7 @@ async function login(page: Page) {
     await page.waitForTimeout(150)
     expect(await page.inputValue('#email')).toBe(SUPER.email)
     expect(await page.inputValue('#password')).toBe(SUPER.password)
-    await page.getByRole('button', { name: /sign in/i }).click()
+    await page.getByRole('button', { name: /^đăng nhập$/i }).click()
     // 'commit' — URL change is enough; super lands on /dashboard (heaviest
     // page) and webkit under 4-project load can exceed a 'load' wait.
     await page.waitForURL(/\/(tasks|dashboard|targets|fs)/, { timeout: 10_000, waitUntil: 'commit' })
@@ -139,7 +139,7 @@ test.describe('catalog access @desktop', () => {
       await page.fill('#password', STAFF.password!)
       await page.waitForTimeout(150)
       expect(await page.inputValue('#email')).toBe(STAFF.email)
-      await page.getByRole('button', { name: /sign in/i }).click()
+      await page.getByRole('button', { name: /^đăng nhập$/i }).click()
       await page.waitForURL(/\/(tasks|dashboard|targets|fs)/, { timeout: 8_000, waitUntil: 'commit' })
     }).toPass({ timeout: 60_000, intervals: [1_000, 2_000] })
     await page.goto('/ui-catalog')

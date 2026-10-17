@@ -77,7 +77,7 @@ test.describe('staff bottom nav @mobile', () => {
     await page.goto('/login')
     await page.fill('#email', EMAIL!)
     await page.fill('#password', PASSWORD!)
-    await page.getByRole('button', { name: /sign in/i }).click()
+    await page.getByRole('button', { name: /^đăng nhập$/i }).click()
     await page.waitForURL(/\/(tasks|dashboard|targets)/, { timeout: 20_000 })
 
     const nav = page.getByRole('navigation', { name: 'Điều hướng chính' })

@@ -72,7 +72,7 @@ async function login(page: Page, who: { email?: string; password?: string } = SU
   await page.waitForLoadState('networkidle')
   await page.fill('#email', who.email!)
   await page.fill('#password', who.password!)
-  await page.getByRole('button', { name: /sign in/i }).click()
+  await page.getByRole('button', { name: /^đăng nhập$/i }).click()
   await page.waitForURL(/\/(tasks|dashboard|targets|fs)/, { timeout: 20_000, waitUntil: 'commit' })
 }
 
