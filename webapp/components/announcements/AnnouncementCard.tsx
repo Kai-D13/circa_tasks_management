@@ -37,6 +37,7 @@ export function AnnouncementCard({ a }: { a: AnnouncementCardData }) {
     <Link
       href={a.href}
       data-ann-card={a.id}
+      data-published-at={a.publishedAt}
       data-read={a.read}
       data-expired={a.expired ? '' : undefined}
       data-by-store={a.byStore ? '' : undefined}

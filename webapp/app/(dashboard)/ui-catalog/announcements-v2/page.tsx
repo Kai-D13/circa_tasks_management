@@ -9,6 +9,7 @@ import { ReadMeter, StoreReadBar } from '@/components/announcements/ReadMeter'
 import { AnnouncementImageAddTile, AnnouncementImageTile, AnnouncementImageUploadingTile } from '@/components/announcements/AnnouncementImageTile'
 import { AnnouncementsEmpty, AnnouncementsError, ReadStateErrorNotice } from '@/components/announcements/AnnouncementStates'
 import { AnnouncementFixtureBoundary } from '@/components/announcements/AnnouncementFixtureBoundary'
+import { AnnouncementsListView, type AnnouncementsListState } from '@/components/announcements/AnnouncementsListView'
 import { groupAnnouncementsByTime } from '@/lib/announcements/feed'
 
 // Dev-only fixture UI v2 Phase 3 · Bảng tin (artboard B0 — component dùng chung). Render ĐÚNG component của route thật
@@ -17,6 +18,10 @@ import { groupAnnouncementsByTime } from '@/lib/announcements/feed'
 // Cổng như /ui-catalog: UI_CATALOG=1 (prod 404) + super admin.
 // ?fx= components (mặc định, bảng B0) · feed (n tin, có trạng thái đọc) · feed-one · feed-empty · feed-error
 //      · feed-read-error (truy vấn đọc lỗi ⇒ không "Mới") · feed-admin (admin: không theo dõi đọc, có tin hết hạn)
+// A1 — trang danh sách (AnnouncementsListView, đúng view của /announcements; không khung fixture bên ngoài):
+//      · list-staff (dược sĩ/QLCH: 2 tin mới) · list-allread (đã đọc hết ⇒ không dòng đếm) · list-admin (nút Tạo, không
+//        theo dõi đọc, có tin hết hạn) · list-empty · list-error (truy vấn chính lỗi) · list-read-error (đọc lỗi)
+//      · list-long (tiêu đề + trích dẫn rất dài)
 
 const NOW = '2026-10-15T02:45:00.000Z' // 09:45 15/10/2026 giờ VN
 const img = (a: string, b: string) => `data:image/svg+xml;utf8,${encodeURIComponent(
@@ -126,6 +131,25 @@ export default async function UiCatalogAnnouncementsV2Page({ searchParams }: { s
   if (!user) redirect('/login')
   if (!(profile?.role === 'admin' && isSuperAdminEmail(user.email))) notFound()
   const { fx = 'components' } = await searchParams
+
+  if (fx.startsWith('list-')) {
+    const admin = fx === 'list-admin'
+    const state: AnnouncementsListState =
+      fx === 'list-error' ? { kind: 'error' }
+      : fx === 'list-empty' ? { kind: 'ok', items: [], reads: 'tracked' }
+      : fx === 'list-read-error' ? { kind: 'ok', items: asUntracked(FEED), reads: 'error' }
+      : admin ? { kind: 'ok', items: asAdmin(FEED), reads: 'untracked' }
+      : fx === 'list-allread' ? { kind: 'ok', items: FEED.map((a) => ({ ...a, read: 'read' as const })), reads: 'tracked' }
+      : fx === 'list-long' ? { kind: 'ok', items: [CARDS[4].a, ...FEED.slice(2)], reads: 'tracked' }
+      : { kind: 'ok', items: FEED, reads: 'tracked' }
+    return (
+      <AnnouncementFixtureBoundary>
+        <div data-testid="ui-catalog-ann-v2" data-fx={fx}>
+          <AnnouncementsListView canCreate={admin} state={state} now={NOW} />
+        </div>
+      </AnnouncementFixtureBoundary>
+    )
+  }
 
   const body = (() => {
     if (fx === 'components') return <Board />
