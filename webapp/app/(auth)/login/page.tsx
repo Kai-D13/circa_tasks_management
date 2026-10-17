@@ -1,4 +1,8 @@
+import type { Metadata } from 'next'
 import { LoginForm } from './LoginForm'
+
+// UI v2 Login: tiêu đề tab theo artboard L1.
+export const metadata: Metadata = { title: 'Đăng nhập — Circa Tasks' }
 
 // Force dynamic rendering so /login is NEVER prerendered or served with a long
 // `s-maxage` from a shared cache. The page embeds a per-deploy Server Action ID

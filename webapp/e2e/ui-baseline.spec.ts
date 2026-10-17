@@ -55,7 +55,7 @@ async function login(page: Page, email: string, password: string) {
   await page.goto('/login')
   await page.fill('#email', email)
   await page.fill('#password', password)
-  await page.getByRole('button', { name: /sign in/i }).click()
+  await page.getByRole('button', { name: /^đăng nhập$/i }).click()
   await page.waitForURL(/\/(tasks|dashboard|targets|fs)/, { timeout: 20_000 })
 }
 

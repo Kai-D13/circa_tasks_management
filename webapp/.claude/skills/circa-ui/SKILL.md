@@ -29,3 +29,6 @@ Chỉ trong trang có gốc `data-ui-v2="page"` (module Tasks — danh sách + c
 
 ## Khi migrate 1 route
 Chỉ đổi className/JSX → ds/. Sau đó: tsc + build + `git diff --check`; grep guardrail (xem UI_CHANGE_GUARDRAILS §sau-migrate) phải sạch cho route đó; check 8 viewport × light/dark + loading/empty/error/long-text; số query không tăng. 1 route = 1 commit trên branch UI, không merge main tới khi được duyệt.
+
+## Ngoại lệ có phạm vi: UI v2 Login (PM duyệt 16/10/2026)
+Chỉ màn `/login` (gốc `data-ui-v2="page" data-login`; luật ở docs/ui/UI_V2_LOGIN.md): token v2 như Tasks + màu panel cam `--login-*` CHỈ trong `[data-login]` (cuối globals.css). Không sửa `app/actions/auth.ts`, `proxy.ts`, cookie hay hard navigation; chữ lỗi credential khoá qua `lib/auth/loginCopy.ts`. Số đo px literal (root 15px). Fixture `/login/ui-catalog` chỉ khi `UI_CATALOG=1`.

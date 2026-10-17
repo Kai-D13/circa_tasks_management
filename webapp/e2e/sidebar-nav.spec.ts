@@ -119,7 +119,7 @@ async function login(page: Page) {
     await page.waitForTimeout(150)
     expect(await page.inputValue('#email')).toBe(SUPER.email)
     expect(await page.inputValue('#password')).toBe(SUPER.password)
-    await page.getByRole('button', { name: /sign in/i }).click()
+    await page.getByRole('button', { name: /^đăng nhập$/i }).click()
     await page.waitForURL(/\/(tasks|dashboard|targets|fs)/, { timeout: 10_000, waitUntil: 'commit' })
   }).toPass({ timeout: 60_000, intervals: [1_000, 2_000, 3_000] })
 }

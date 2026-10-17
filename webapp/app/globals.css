@@ -383,3 +383,19 @@ main:has([data-care-browse]) {
    đúng theme của app thay vì luôn sáng — theme bật bằng class .dark trên <html>. */
 :root { color-scheme: light; }
 :root.dark { color-scheme: dark; }
+
+/* ============================================================
+   UI v2 Login (artboard L1–L3 / M1–M3, PM GO 16/10/2026) — màu nhận diện của panel cam, CHỈ trong gốc
+   [data-login] (màn /login). Token v2 khác dùng chung bộ [data-ui-v2] ở trên. Panel cam giống nhau ở 2 theme;
+   màu nút lúc "Đang đăng nhập…" theo export (light #D9784F · dark #B9673F).
+   ============================================================ */
+[data-login] {
+  --login-brand: #F3743F;
+  --login-brand-deep: #E8622A;
+  --login-brand-soft: #F7925F;
+  --login-ink: #141210;
+  --login-action-busy: #D9784F;
+}
+.dark [data-login] {
+  --login-action-busy: #B9673F;
+}
