@@ -1,6 +1,5 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
-import { buttonVariants } from '@/components/ui/button'
 import { createClient } from '@/lib/supabase/server'
 import { redirectIfFsStaff } from '@/lib/fs/isolation'
 import { isSuperAdminEmail, getSmStoreIds } from '@/lib/authz'
@@ -26,17 +25,16 @@ import { isReferralEnabled } from '@/lib/affiliate/flags'
 import { AffiliateQrCard } from '@/components/affiliate/AffiliateQrCard'
 import { AffiliateGmvCard } from '@/components/affiliate/AffiliateGmvCard'
 import { AFFILIATE_QR_FILTER, qrCardVisible, qrCardKey, qrEligibleRole } from '@/lib/affiliate/qrDisplay'
-import { CampaignResultDashboard } from '@/components/kpi/CampaignResultDashboard'
-import { RegionalCampaignOverviewList } from '@/components/kpi/RegionalCampaignOverviewList'
+import { SmTargetsDetailView, SmTargetsErrorView, SmTargetsLandingView, SmTargetsOutOfScopeView } from '@/components/kpi/SmTargetsView'
 import { buildCampaignResultModel, smScopeState, type ResultActualRow, type ResultCampaign, type ResultTargetRow } from '@/lib/kpi/resultModel'
 import { reduceAffiliateAgg, currentVnMonthISO, overviewVisibleFor, canShowOwnOsGmv, smRegionalGmvVisible, type AffiliateAggInput } from '@/lib/affiliate/overview'
 import { vnDayRange } from '@/lib/kpi/engine'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAffiliateSyncHealth, supabaseAffiliateHealthDb } from '@/lib/affiliate/health'
 import { ReferralCard, type ReferralItem } from '@/components/referral/ReferralCard'
-import { formatDate, formatDateTime, currentWeekStart } from '@/lib/dateUtils'
+import { formatDateTime, currentWeekStart } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
-import { ChartNoAxesCombined, History, Target, TrendingUp } from 'lucide-react'
+import { ChartNoAxesCombined, Target } from 'lucide-react'
 
 // KPI v2 (migration 067): Day / Week / Month sales targets from the daily
 // BigQuery feed (store_kpi_targets, fed by /api/cron/pull-kpi-targets).
@@ -508,12 +506,7 @@ export default async function TargetsPage({
   if (isSm) {
     // r3: lỗi query store → ErrorState, không redirect che sự cố.
     if (smStoresRes.error) {
-      return (
-        <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
-          <PageHeader title="Doanh số chiến dịch" icon={TrendingUp} />
-          <ErrorState message="Không tải được danh sách cửa hàng được phân công" hint={`${smStoresRes.error} — thử tải lại hoặc báo Admin.`} />
-        </div>
-      )
+      return <SmTargetsErrorView message="Không tải được danh sách cửa hàng được phân công" hint={`${smStoresRes.error} — thử tải lại hoặc báo Admin.`} />
     }
 
     type SmTargetJoinRow = ResultTargetRow & { campaign_id: string; kpi_campaigns: ResultCampaign | null }
@@ -535,12 +528,7 @@ export default async function TargetsPage({
     if (tRes.error || aRes.error) {
       const msg = (tRes.error ?? aRes.error)!.message
       console.error('[targets] sm dashboard query failed:', msg)
-      return (
-        <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
-          <PageHeader title="Doanh số chiến dịch" icon={TrendingUp} />
-          <ErrorState message="Không tải được dữ liệu chiến dịch" hint={`${msg} — thử tải lại hoặc báo Admin.`} />
-        </div>
-      )
+      return <SmTargetsErrorView message="Không tải được dữ liệu chiến dịch" hint={`${msg} — thử tải lại hoặc báo Admin.`} />
     }
     const smTargetRows = (tRes.data ?? []) as unknown as SmTargetJoinRow[]
     const smActualRows = (aRes.data ?? []) as unknown as SmActualJoinRow[]
@@ -564,16 +552,7 @@ export default async function TargetsPage({
       const scope = smScopeState(!!entry)
       if (scope !== 'ok' || !entry) {
         // r3: campaign ngoài scope → forbidden, KHÔNG fallback dữ liệu khác.
-        return (
-          <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
-            <PageHeader title="Doanh số chiến dịch" icon={TrendingUp} />
-            <Link href="/targets" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0">← Danh sách chiến dịch</Link>
-            <ErrorState
-              message="Chiến dịch không thuộc phạm vi quản lý của bạn"
-              hint="Kiểm tra lại đường dẫn hoặc quay về danh sách chiến dịch."
-            />
-          </div>
-        )
+        return <SmTargetsOutOfScopeView />
       }
       // r6: model LUÔN trên toàn bộ store thuộc campaign ∩ phạm vi SM — bảng
       // trong dashboard vẫn hiển thị từng store.
@@ -631,38 +610,15 @@ export default async function TargetsPage({
         }
       }
       const model = buildCampaignResultModel(entry.campaign, entry.targets, smActualsForView, vnTodayISO)
+      // r1.6: SM detail full-width (bảng N cột Bậc động). r6: KHÔNG store chips/filter store — dashboard tổng hợp toàn
+      // phạm vi, bảng hiển thị từng store. UI v2 K-5b: trình bày qua SmTargetsDetailView (dashboard v2 của K-2).
       return (
-        // r1.6 (P1 UI 29/07): SM detail full-width như Super Result view —
-        // bảng N cột Bậc động. Batch UI 15/08: landing/list SM cũng đã bỏ cap
-        // max-w-5xl nên toàn trang /targets giờ fluid; max-w-none giữ lại vì
-        // vô hại và ghi rõ chủ đích của nhánh này.
-        <div className="p-4 md:p-6 space-y-4 max-w-none">
-          <PageHeader title="Doanh số chiến dịch" icon={TrendingUp} />
-          <div>
-            <Link href="/targets" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0">← Danh sách chiến dịch</Link>
-            <div className="flex items-center gap-2 flex-wrap mt-1">
-              <h2 className="text-lg font-bold">{entry.campaign.name}</h2>
-              <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground font-medium">{model.deadlineLabel}</span>
-            </div>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              {formatDate(entry.campaign.start_date)} – {formatDate(entry.campaign.end_date)} · {entry.targets.length} cửa hàng thuộc phạm vi bạn quản lý
-            </p>
-          </div>
-          {/* r6: KHÔNG còn store chips/filter — dashboard tổng hợp toàn phạm vi,
-              bảng dưới hiển thị từng store. */}
-          {smCanFilter && (
-            <CampaignDateRangeFilter
-              action="/targets"
-              campaignStart={entry.campaign.start_date}
-              campaignEnd={entry.campaign.end_date}
-              range={smRange}
-              keepParams={{ campaign: params.campaign }}
-              note={smRangeError}
-            />
-          )}
-          <CampaignResultDashboard model={model} emptyHint="Chưa có dữ liệu kết quả trong phạm vi của bạn." />
-          <p className="text-[11px] text-muted-foreground">Chế độ xem Quản lý vùng — chỉ đọc · số liệu giới hạn trong các cửa hàng bạn quản lý.</p>
-        </div>
+        <SmTargetsDetailView
+          campaign={entry.campaign}
+          storeCount={entry.targets.length}
+          model={model}
+          filter={smCanFilter ? { range: smRange, note: smRangeError, campaignParam: params.campaign } : null}
+        />
       )
     }
 
@@ -709,69 +665,20 @@ export default async function TargetsPage({
     }
 
     return (
-      <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
-        <PageHeader
-          title="Doanh số chiến dịch"
-          icon={TrendingUp}
-          subtitle={`Phạm vi: ${smStores.length} cửa hàng bạn quản lý`}
-          /* 111: lối vào lịch sử chiến dịch. Đặt ở đây thay vì thêm mục sidebar
-             mới — sidebar đã có "Doanh số" trỏ về chính trang này, thêm mục thứ
-             hai cùng chủ đề chỉ làm người dùng phải đoán cái nào là cái nào. */
-          actions={
-            <Link
-              href="/targets/campaigns?status=ended"
-              className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'h-[44px] md:h-8')}
-            >
-              <History className="h-4 w-4 mr-1.5" /> Lịch sử chiến dịch
-            </Link>
-          }
-        />
-        {/* r2.4 (audit P2#4): phạm vi quản lý ngay dưới header — chip TĨNH,
-            KHÔNG phải bộ lọc (SM r6 đã bỏ filter ?store=, dashboard luôn tổng
-            hợp toàn phạm vi). */}
-        {smStores.length > 0 && (
-          <div className="flex items-center gap-1.5 flex-wrap">
-            <span className="text-xs text-muted-foreground shrink-0">Phạm vi quản lý:</span>
-            {smStores.map((s) => (
-              <span key={s.id} className="text-[11px] px-2 py-0.5 rounded bg-muted text-muted-foreground font-medium truncate max-w-[180px]">
-                {s.name}
-              </span>
-            ))}
-          </div>
-        )}
-
-        {/* r2.4 (audit P2#4 — theo khuyến nghị auditor): GMV Affiliate REGIONAL
-            đổi từ CỘT PHẢI 340px sang DẢI NGANG trên danh sách campaign (2 cột
-            làm màn mất cân bằng: bảng campaign bị bóp, cột phải trống lửng).
-            Cùng data/props/fail-closed của AffiliateGmvCard, chỉ đổi layout qua
-            variant="strip"; QLCH vẫn dùng bản card. KHÔNG QR, KHÔNG nút sync. */}
-        {smGmvVisible && (
-          <AffiliateGmvCard
-            monthLabel={gmvMonthLabel}
-            gmv={smGmv.gmv}
-            orders={smGmv.orders}
-            storesWithSales={smGmv.storesWithSales}
-            storeCount={smStores.length}
-            syncedAt={smGmvSyncedAt}
-            error={smGmvError}
-            sourceWarning={smGmvWarning}
-            detailHref="/targets/campaigns/affiliate"
-            regional
-            variant="strip"
-          />
-        )}
-
-        {smCampaigns.length === 0 ? (
-          <EmptyState className="py-12" icon={TrendingUp} title="Chưa có chiến dịch nào áp dụng cho các cửa hàng bạn quản lý." />
-        ) : (
-          // r2.3 (audit P1#1/#2): trang KHÔNG tự dựng card + KHÔNG tự format
-          // nữa — trước đây gọi thẳng vnd() nên campaign Số khách hiện "Mục
-          // tiêu 450đ / Đã đạt 3đ". Toàn bộ định dạng đi qua contract
-          // campaignOverviewValue (type-aware theo metric_type).
-          // r2.4: full-width, không còn bị cột phải 340px bóp.
-          <RegionalCampaignOverviewList items={smCampaigns} hrefFor={(cid) => `/targets?campaign=${cid}`} />
-        )}
-      </div>
+      <SmTargetsLandingView
+        stores={smStores}
+        gmv={smGmvVisible ? {
+          monthLabel: gmvMonthLabel,
+          gmv: smGmv.gmv,
+          orders: smGmv.orders,
+          storesWithSales: smGmv.storesWithSales,
+          storeCount: smStores.length,
+          syncedAt: smGmvSyncedAt,
+          error: smGmvError,
+          sourceWarning: smGmvWarning,
+        } : null}
+        items={smCampaigns}
+      />
     )
   }
 

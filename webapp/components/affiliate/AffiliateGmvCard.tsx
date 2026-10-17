@@ -48,17 +48,21 @@ export function AffiliateGmvCard({
           : storeCount !== null ? `${storesWithSales}/${storeCount}` : `${storesWithSales}`,
       },
     ]
+    // UI v2 K-5 (canvas K6/M6, chỉ trong [data-ui-v2]): khối tiêu đề + tháng xếp dọc (ngoài v2 là `contents` ⇒ y như
+    // cũ), bỏ icon tròn, số 22px, nhãn/chú thích 12px. Dữ liệu, nhãn ô, fail-closed và data-affiliate-* giữ nguyên.
     return (
       <Card className="rounded-lg">
-        <CardContent className="p-4 space-y-2">
-          <div className="flex items-start gap-3 flex-wrap md:items-center">
-            <p className="flex items-center gap-1.5 font-semibold text-sm shrink-0">
-              <span className="flex h-7 w-7 items-center justify-center rounded-full bg-muted text-muted-foreground">
-                <Link2 className="h-3.5 w-3.5" />
-              </span>
-              GMV Affiliate — Circa Online
-            </p>
-            <span className="text-xs text-muted-foreground shrink-0">{monthLabel}</span>
+        <CardContent className="p-4 space-y-2 v2:px-5 v2:space-y-2.5">
+          <div className="flex items-start gap-3 flex-wrap md:items-center v2:gap-x-6">
+            <div className="contents v2:flex v2:shrink-0 v2:flex-col v2:gap-0.5">
+              <p className="flex items-center gap-1.5 font-semibold text-sm shrink-0 v2:text-[14px]">
+                <span className="flex h-7 w-7 items-center justify-center rounded-full bg-muted text-muted-foreground v2:hidden">
+                  <Link2 className="h-3.5 w-3.5" />
+                </span>
+                GMV Affiliate — Circa Online
+              </p>
+              <span className="text-xs text-muted-foreground shrink-0 v2:text-[12px]">{monthLabel}</span>
+            </div>
             {/* r2.7 (audit P1): ĐẢO NGƯỢC cách chống tràn của r2.6. `truncate`
                 trên GIÁ TRỊ biến "10.218.500₫" thành "10.218…" — trên màn TIỀN
                 đó là MẤT THÔNG TIN, tệ hơn hẳn một chữ số lấn sang máng gap.
@@ -85,29 +89,29 @@ export function AffiliateGmvCard({
             >
               {stats.map((s) => (
                 <div key={s.label} className="min-w-fit">
-                  <p className="text-[11px] text-muted-foreground truncate">{s.label}</p>
-                  <p data-affiliate-stat-value="" className="text-xl font-bold tabular-nums leading-none mt-1 whitespace-nowrap">{s.value}</p>
+                  <p className="text-[11px] text-muted-foreground truncate v2:text-[12px]">{s.label}</p>
+                  <p data-affiliate-stat-value="" className="text-xl font-bold tabular-nums leading-none mt-1 whitespace-nowrap v2:mt-1.5 v2:text-[22px]">{s.value}</p>
                 </div>
               ))}
             </div>
             {detailHref && (
               <Link
                 href={detailHref}
-                className="inline-flex items-center text-xs font-medium text-primary hover:underline min-h-[44px] md:min-h-0 shrink-0"
+                className="inline-flex items-center text-xs font-medium text-primary hover:underline min-h-[44px] md:min-h-0 shrink-0 v2:text-[13px] v2:font-semibold"
               >
                 Xem chi tiết Affiliate →
               </Link>
             )}
           </div>
           {error ? (
-            <p className="text-[11px] text-muted-foreground">Không tải được dữ liệu Affiliate. Vui lòng thử lại sau hoặc báo Admin.</p>
+            <p role="alert" className="text-[11px] text-muted-foreground v2:text-[12px] v2:text-status-danger">Không tải được dữ liệu Affiliate. Vui lòng thử lại sau hoặc báo Admin.</p>
           ) : sourceWarning ? (
             <>
-              <p className="text-[11px] text-status-warning">Nguồn dữ liệu chưa sẵn sàng: {sourceWarning} — số liệu tạm ẩn</p>
-              <p className="text-[11px] text-muted-foreground">{syncLine}</p>
+              <p className="text-[11px] text-status-warning v2:text-[12px]">Nguồn dữ liệu chưa sẵn sàng: {sourceWarning} — số liệu tạm ẩn</p>
+              <p className="text-[11px] text-muted-foreground v2:text-[12px]">{syncLine}</p>
             </>
           ) : (
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-[11px] text-muted-foreground v2:text-[12px] v2:text-v2-text-3">
               Chỉ tính đơn giao thành công (DELIVERED) · tổng các cửa hàng bạn quản lý, ghi nhận theo mã đối tác từng cửa hàng
               {syncedAt ? ` · đồng bộ ${formatDateTime(syncedAt)}` : ' · chưa đồng bộ'}
             </p>
