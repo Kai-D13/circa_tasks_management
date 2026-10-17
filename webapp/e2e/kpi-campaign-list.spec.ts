@@ -75,13 +75,15 @@ test.describe('kpi campaign list contract @desktop', () => {
     expect(campaignListPct({ ...IN({ metricType: 'offline_order_aov', storeCount: 8, qualityPassCount: 8 }), synced: false })).toEqual({ raw: null, text: '—' })
   })
 
-  test('khung chờ theo pathname (K-2): list / chi tiết uuid / còn lại null', () => {
+  test('khung chờ theo pathname (K-2/K-4): list / chi tiết uuid / affiliate / còn lại null', () => {
     const ID = '0f3c2a1b-9d8e-4c7b-a6f5-1e2d3c4b5a69'
     expect(campaignsLoadingKind('/targets/campaigns')).toBe('list')
     expect(campaignsLoadingKind('/targets/campaigns/')).toBe('list')
     expect(campaignsLoadingKind(`/targets/campaigns/${ID}`)).toBe('detail')
     expect(campaignsLoadingKind(`/targets/campaigns/${ID.toUpperCase()}`)).toBe('detail')
-    for (const p of ['/targets/campaigns/new', '/targets/campaigns/affiliate', `/targets/campaigns/${ID}/x`, '/targets', '/tasks', '', null, undefined]) {
+    expect(campaignsLoadingKind('/targets/campaigns/affiliate')).toBe('affiliate')
+    expect(campaignsLoadingKind('/targets/campaigns/affiliate/')).toBe('affiliate')
+    for (const p of ['/targets/campaigns/new', '/targets/campaigns/affiliate/x', '/targets/campaigns/Affiliate', '/affiliate', `/targets/campaigns/${ID}/x`, '/targets', '/tasks', '', null, undefined]) {
       expect(campaignsLoadingKind(p), String(p)).toBeNull()
     }
   })

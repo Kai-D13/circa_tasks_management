@@ -53,13 +53,14 @@ export function campaignListPct(v: CampaignListInput): { raw: number | null; tex
   return { raw, text: `${new Intl.NumberFormat('vi-VN').format(rounded)}%` }
 }
 
-// Khung chờ theo pathname (K-1/K-2): '/targets/campaigns' ⇒ list; '/targets/campaigns/<uuid>' ⇒ detail; còn lại
-// (new, affiliate, đường khác) ⇒ null — caller giữ khung cũ của nó. Thuần để unit test khoá.
+// Khung chờ theo pathname (K-1/K-2/K-4): '/targets/campaigns' ⇒ list; '/targets/campaigns/<uuid>' ⇒ detail;
+// '/targets/campaigns/affiliate' ⇒ affiliate; còn lại (new, đường khác) ⇒ null — caller giữ khung cũ. Thuần để unit test khoá.
 const CAMPAIGN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-export function campaignsLoadingKind(pathname: string | null | undefined): 'list' | 'detail' | null {
+export function campaignsLoadingKind(pathname: string | null | undefined): 'list' | 'detail' | 'affiliate' | null {
   if (!pathname) return null
   const p = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname
   if (p === '/targets/campaigns') return 'list'
+  if (p === '/targets/campaigns/affiliate') return 'affiliate'
   const m = p.match(/^\/targets\/campaigns\/([^/]+)$/)
   return m && CAMPAIGN_ID.test(m[1]) ? 'detail' : null
 }
