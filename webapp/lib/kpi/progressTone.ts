@@ -1,16 +1,17 @@
 // UI v2 Phase 2 (K0 ProgressMeter): chọn trạng thái HIỂN THỊ của thanh tiến độ KPI từ cờ của model —
 // KHÔNG suy verdict từ số đã làm tròn (vd 99,96% hiện "100%" nhưng chưa đạt).
+// Thứ tự PM chốt ở audit K-1 (16/10, §3): unsynced > reached > ended > series.
 //   - chưa đồng bộ (actual null) ⇒ 'unsynced': khung nét đứt + '—', không vẽ 0% giả
-//   - chiến dịch đã kết thúc ⇒ 'ended': xám, số đã chốt (ưu tiên hơn "đạt")
-//   - đạt (caller truyền: completion ≥ 100 theo model, đạt bậc, hoặc qualityKpiPass của Chất lượng bán hàng)
-//     ⇒ 'ok': xanh
+//   - đạt THẬT (caller truyền từ số thô: actual ≥ target, đạt bậc, hoặc qualityKpiPass của Chất lượng bán hàng)
+//     ⇒ 'ok': xanh — KỂ CẢ chiến dịch đã kết thúc
+//   - chiến dịch đã kết thúc mà CHƯA đạt ⇒ 'ended': trung tính (--v2-text-3), số đã chốt
 //   - còn lại ⇒ 'series': cam chuỗi dữ liệu
 export type KpiProgressTone = 'unsynced' | 'ended' | 'ok' | 'series'
 
 export function kpiProgressTone(p: { synced: boolean; ended: boolean; reached: boolean }): KpiProgressTone {
   if (!p.synced) return 'unsynced'
-  if (p.ended) return 'ended'
   if (p.reached) return 'ok'
+  if (p.ended) return 'ended'
   return 'series'
 }
 

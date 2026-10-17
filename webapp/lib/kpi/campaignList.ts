@@ -1,4 +1,4 @@
-import type { KpiProgressTone } from './progressTone'
+import { kpiProgressTone, type KpiProgressTone } from './progressTone'
 import { metricPresentation } from './campaignDisplay'
 
 // UI v2 Phase 2 · K-1 — luật THUẦN của màn danh sách /targets/campaigns. page.tsx (route thật) và fixture
@@ -53,12 +53,19 @@ export function campaignListPct(v: CampaignListInput): { raw: number | null; tex
   return { raw, text: `${new Intl.NumberFormat('vi-VN').format(rounded)}%` }
 }
 
-// Tone thanh của DÒNG danh sách theo artboard K1: chưa đồng bộ > đạt (xanh, KỂ CẢ đã kết thúc) > đã kết thúc
-// chưa đạt (--v2-text-3, PM thay token done) > còn lại màu chuỗi. Khác thứ tự của kpiProgressTone (K-0: ended
-// trước ok) — đã nêu PM.
+// Khung chờ theo pathname (K-1/K-2): '/targets/campaigns' ⇒ list; '/targets/campaigns/<uuid>' ⇒ detail; còn lại
+// (new, affiliate, đường khác) ⇒ null — caller giữ khung cũ của nó. Thuần để unit test khoá.
+const CAMPAIGN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+export function campaignsLoadingKind(pathname: string | null | undefined): 'list' | 'detail' | null {
+  if (!pathname) return null
+  const p = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname
+  if (p === '/targets/campaigns') return 'list'
+  const m = p.match(/^\/targets\/campaigns\/([^/]+)$/)
+  return m && CAMPAIGN_ID.test(m[1]) ? 'detail' : null
+}
+
+// Tone thanh của dòng danh sách / hero chi tiết: chưa đồng bộ > đạt (xanh, KỂ CẢ đã kết thúc) > đã kết thúc chưa đạt
+// (--v2-text-3) > màu chuỗi — CHÍNH luật chung kpiProgressTone (PM K-1 §3, sửa ở K-2), chỉ đổi status → cờ ended.
 export function campaignListTone(v: { synced: boolean; reached: boolean; status: string }): KpiProgressTone {
-  if (!v.synced) return 'unsynced'
-  if (v.reached) return 'ok'
-  if (v.status === 'ended') return 'ended'
-  return 'series'
+  return kpiProgressTone({ synced: v.synced, ended: v.status === 'ended', reached: v.reached })
 }

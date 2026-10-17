@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { toggleCampaign, deleteCampaign, archiveCampaign } from '@/app/actions/kpiCampaigns'
+import { useFixtureActionBlocked } from '@/components/kpi/KpiFixtureBoundary'
 import { Button } from '@/components/ui/button'
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle,
@@ -18,6 +19,7 @@ export function CampaignStatusButton({ id, status, name }: { id: string; status:
   const router = useRouter()
   const [pending, startTransition] = useTransition()
   const [confirming, setConfirming] = useState<'delete' | 'archive' | null>(null)
+  const fixtureBlocked = useFixtureActionBlocked()
   const isActive = status === 'active'
   const canToggle = status === 'active' || status === 'draft' || status === 'paused'
   // Mirror lib/kpi/archive (campaignArchivable/campaignDeletable) — list/detail
@@ -26,6 +28,7 @@ export function CampaignStatusButton({ id, status, name }: { id: string; status:
   const canDelete = status === 'draft'
 
   function handleToggle() {
+    if (fixtureBlocked()) return
     startTransition(async () => {
       const r = await toggleCampaign(id)
       if (r?.error) toast.error(r.error)
@@ -35,6 +38,7 @@ export function CampaignStatusButton({ id, status, name }: { id: string; status:
   function handleConfirmed() {
     const kind = confirming
     if (!kind) return
+    if (fixtureBlocked()) { setConfirming(null); return }
     startTransition(async () => {
       const r = kind === 'delete' ? await deleteCampaign(id) : await archiveCampaign(id)
       if (r?.error) { toast.error(r.error); setConfirming(null); return }

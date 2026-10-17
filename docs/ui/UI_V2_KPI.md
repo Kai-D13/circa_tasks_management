@@ -24,7 +24,7 @@
 | `--v2-ok` | `#2F9E5B` | `#5BBF7E` | đạt (≥ 100% theo model hoặc đạt bậc / `qualityKpiPass`) |
 - Class: `bg-v2-series`, `fill-v2-series`, `bg-v2-ok`… — luôn đi kèm màu mặc định ngoài v2 (`bg-primary v2:bg-v2-series`)
   vì component KPI dùng chung giữa route đã/chưa chuyển v2.
-- **Đã kết thúc:** KHÔNG có token `done` — dùng `--v2-text-3` theo theme (PM 16/10).
+- **Đã kết thúc:** KHÔNG có token `done` — dùng `--v2-text-3` theo theme (PM 16/10). Chỉ cho chiến dịch kết thúc **chưa đạt**; kết thúc mà **đạt thật** vẫn `--v2-ok` (PM audit K-1 §3). Badge trạng thái "Kết thúc" luôn trung tính.
 - Trạng thái (Đang chạy/Tạm dừng/Nháp/Kết thúc/TEST, đồng bộ, nhịp độ) = ds `StatusBadge` (có chấm trong v2); loại
   chiến dịch = ds `TagBadge` hue blue (Doanh số) · teal (Số khách) · indigo (Chất lượng bán hàng).
 - Chữ số luôn màu chữ (không màu chuỗi), `tabular-nums`.
@@ -33,7 +33,7 @@
 | Component | Vai trò | Hợp đồng |
 |---|---|---|
 | ds `ProgressBar` | thanh tiến độ | thêm tone `series` · `ok` · `ended` và `size` 5/6/8/10/12px; mặc định (tone success, 5px) không đổi; `ariaLabel` bắt buộc |
-| `lib/kpi/progressTone.kpiProgressTone` | chọn trạng thái hiển thị | từ CỜ model `{ synced, ended, reached }` — không suy từ số làm tròn; `unsynced` > `ended` > `ok` > `series` |
+| `lib/kpi/progressTone.kpiProgressTone` | chọn trạng thái hiển thị | từ CỜ model `{ synced, ended, reached }` — không suy từ số làm tròn; `unsynced` > `ok` (đạt THẬT, kể cả đã kết thúc) > `ended` (kết thúc chưa đạt, trung tính) > `series` — PM audit K-1 §3 (16/10), sửa ở K-2 |
 | `KpiProgressMeter` | K0 "ProgressMeter 4 trạng thái" | nhãn + số + thanh + gợi ý; `unsynced` ⇒ khung nét đứt, không `role=progressbar`, số `—` (không 0% giả) |
 | `TierTrack` | tiến độ + mốc thưởng | thang 0 → mốc cao nhất + 10 (`tierTrackScaleMax`, tối thiểu 100); vạch = ngưỡng thật; thẻ bậc ≤4 lưới / 5+ dọc; nhãn vạch quá gần ⇒ hàng 2; chữ "N%", "Thưởng: …"; dòng còn thiếu do caller truyền; commission là của STORE |
 | `PaceBadge` | badge nhịp độ | `performanceStatusTone` cùng ngưỡng `performanceTone` (≥100 · ≥80 · còn lại); null ⇒ `—` trung tính |
@@ -45,3 +45,14 @@
 Theo spec PM §5: tsc → spec liên quan → full Playwright → build → diff-check; số `.from/.rpc/.select/.eq/.order`,
 `searchParams`, href, flag, action trước/sau (mốc: `planning/reports/2026-10-16-ui-v2-kpi-baseline-counts.txt`); ảnh
 chỉ từ fixture; test theo vai super/SM/QLCH/staff/FS; null ≠ 0; Số đơn + AOV không gộp.
+
+## 5. Fixture bất khả gọi action (PM 17/10 P1)
+- Trang `/ui-catalog/kpi-v2/*` dựng CHÍNH component của route thật nên phải bọc **`<KpiFixtureBoundary>`**
+  (`components/kpi/KpiFixtureBoundary.tsx`). Component có server action hoặc export gọi `useFixtureActionBlocked()` và
+  `if (fixtureBlocked()) return` **ngay trước** lời gọi. Trong boundary: toast "Bản mẫu UI…", không action, không request.
+  Ngoài boundary (route thật): luôn `false`, action giữ nguyên. Không dùng CSS (`pointer-events`) làm lớp bảo vệ.
+- Route thật **không** import boundary. Component mới có `from '@/app/actions/…'` trong `components/kpi|affiliate`
+  phải thêm guard; spec quét nguồn sẽ đỏ nếu thiếu.
+- Test fixture dùng `e2e/fixtureGuard.ts` → `trapWrites`: ghi nhận rồi abort mọi request ghi ngay trong trình duyệt.
+  Khẳng định bộ đếm `[data-kpi-fixture-blocked]` và **0 request**. Route thật chỉ kiểm "vẫn gửi đúng 1 server action"
+  bằng request đã bị abort, không bao giờ tới máy chủ.

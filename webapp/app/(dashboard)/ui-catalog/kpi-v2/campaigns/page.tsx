@@ -5,11 +5,12 @@ import { CampaignListView, type CampaignListRow, type CampaignListCounts } from 
 import { campaignOverviewValue } from '@/lib/kpi/campaignDisplay'
 import { campaignListPct, campaignListReached } from '@/lib/kpi/campaignList'
 import { parseCampaignStatus } from '@/lib/kpi/campaignAccess'
-import CampaignsLoading from '@/app/(dashboard)/targets/campaigns/loading'
+import { CampaignListSkeleton } from '@/components/kpi/CampaignRouteSkeletons'
+import { KpiFixtureBoundary } from '@/components/kpi/KpiFixtureBoundary'
 
 // Dev-only fixture K-1 (canvas K1) cho /targets/campaigns — render ĐÚNG CampaignListView của route thật với dữ
 // liệu giả cố định (không truy vấn). Giá trị/% đi qua campaignOverviewValue y như page.tsx (một nguồn). Cổng như
-// /ui-catalog: UI_CATALOG=1 (prod 404) + super admin. ?fx=
+// /ui-catalog: UI_CATALOG=1 (prod 404) + super admin. Bọc KpiFixtureBoundary ⇒ nút trạng thái không gọi action (PM 17/10 P1). ?fx=
 //   super (mặc định) · sm (chỉ đọc, active/ended) · empty · filter-empty (&status=) · error (truy vấn chính lỗi)
 //   · side-error (target/actual lỗi) · loading (khung chờ loading.tsx)
 
@@ -63,7 +64,7 @@ export default async function UiCatalogKpiCampaignsPage({
   if (!(profile?.role === 'admin' && isSuperAdminEmail(user.email))) notFound()
   const { fx = 'super', status } = await searchParams
 
-  if (fx === 'loading') return <div data-testid="ui-catalog-kpi-campaigns" data-fx="loading"><CampaignsLoading /></div>
+  if (fx === 'loading') return <div data-testid="ui-catalog-kpi-campaigns" data-fx="loading"><CampaignListSkeleton /></div>
 
   const canManage = fx !== 'sm'
   const seeds = canManage ? SEEDS : SEEDS.filter((s) => s.status === 'active' || s.status === 'ended')
@@ -73,6 +74,7 @@ export default async function UiCatalogKpiCampaignsPage({
   const shown = statusFilter === 'all' ? pool : pool.filter((s) => s.status === statusFilter)
 
   return (
+    <KpiFixtureBoundary>
     <div data-testid="ui-catalog-kpi-campaigns" data-fx={fx}>
       <CampaignListView
         canManage={canManage}
@@ -85,5 +87,6 @@ export default async function UiCatalogKpiCampaignsPage({
         rows={shown.map((s) => toRow(s, fx === 'side-error'))}
       />
     </div>
+    </KpiFixtureBoundary>
   )
 }

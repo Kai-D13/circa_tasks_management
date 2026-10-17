@@ -47,8 +47,8 @@ export interface CampaignListRow {
 
 export interface CampaignListCounts { total: number; active: number; paused: number; draft: number; ended: number }
 
-const STATUS_TONE: Record<string, StatusTone> = { active: 'success', paused: 'warning', draft: 'neutral', ended: 'neutral' }
-const TYPE_HUE: Record<CampaignMetricType, TagHue> = { gmv: 'blue', affiliate_customer_count: 'teal', offline_order_aov: 'indigo' }
+export const STATUS_TONE: Record<string, StatusTone> = { active: 'success', paused: 'warning', draft: 'neutral', ended: 'neutral' }
+export const TYPE_HUE: Record<CampaignMetricType, TagHue> = { gmv: 'blue', affiliate_customer_count: 'teal', offline_order_aov: 'indigo' }
 const FILTER_DOT: Record<CampaignStatusFilter, string> = {
   all: 'bg-muted-foreground', active: 'bg-status-success', paused: 'bg-status-warning', draft: 'bg-v2-text-3', ended: 'bg-status-neutral',
 }

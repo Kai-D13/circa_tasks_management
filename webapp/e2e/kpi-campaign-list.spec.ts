@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test'
-import { campaignListErrors, campaignListPct, campaignListReached, campaignListTone } from '../lib/kpi/campaignList'
+import { campaignListErrors, campaignListPct, campaignListReached, campaignListTone, campaignsLoadingKind } from '../lib/kpi/campaignList'
 import { campaignOverviewValue } from '../lib/kpi/campaignDisplay'
+import { kpiProgressTone } from '../lib/kpi/progressTone'
 
 // UI v2 K-1 unit gate — luật thuần của /targets/campaigns (page.tsx dùng đúng các hàm này):
 // gộp lỗi 3 truy vấn (lỗi ≠ 0), "đạt" từ số THÔ (không từ % làm tròn), tone dòng theo artboard K1.
@@ -72,6 +73,25 @@ test.describe('kpi campaign list contract @desktop', () => {
     expect(q(8, 8)).toEqual({ raw: 100, text: '100%' })
     expect(q(0, 0)).toEqual({ raw: null, text: '—' })
     expect(campaignListPct({ ...IN({ metricType: 'offline_order_aov', storeCount: 8, qualityPassCount: 8 }), synced: false })).toEqual({ raw: null, text: '—' })
+  })
+
+  test('khung chờ theo pathname (K-2): list / chi tiết uuid / còn lại null', () => {
+    const ID = '0f3c2a1b-9d8e-4c7b-a6f5-1e2d3c4b5a69'
+    expect(campaignsLoadingKind('/targets/campaigns')).toBe('list')
+    expect(campaignsLoadingKind('/targets/campaigns/')).toBe('list')
+    expect(campaignsLoadingKind(`/targets/campaigns/${ID}`)).toBe('detail')
+    expect(campaignsLoadingKind(`/targets/campaigns/${ID.toUpperCase()}`)).toBe('detail')
+    for (const p of ['/targets/campaigns/new', '/targets/campaigns/affiliate', `/targets/campaigns/${ID}/x`, '/targets', '/tasks', '', null, undefined]) {
+      expect(campaignsLoadingKind(p), String(p)).toBeNull()
+    }
+  })
+
+  test('kpiProgressTone (luật chung, PM K-1 §3): unsynced > reached > ended > series — kết thúc + đạt ⇒ ok', () => {
+    expect(kpiProgressTone({ synced: false, ended: true, reached: true })).toBe('unsynced')
+    expect(kpiProgressTone({ synced: true, ended: true, reached: true })).toBe('ok')
+    expect(kpiProgressTone({ synced: true, ended: false, reached: true })).toBe('ok')
+    expect(kpiProgressTone({ synced: true, ended: true, reached: false })).toBe('ended')
+    expect(kpiProgressTone({ synced: true, ended: false, reached: false })).toBe('series')
   })
 
   test('tone dòng: chưa đồng bộ > đạt (kể cả đã kết thúc) > kết thúc chưa đạt > màu chuỗi', () => {

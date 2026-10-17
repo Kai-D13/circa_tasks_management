@@ -4,14 +4,17 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { Download } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { useFixtureActionBlocked } from '@/components/kpi/KpiFixtureBoundary'
 
 // Fixed-URL export (the campaign id is in the path, not page searchParams — so
 // the generic ExportButton, which appends searchParams, can't be reused here).
 // Mirrors ExportButton's blob download + error toast.
 export function CampaignExportButton({ campaignId }: { campaignId: string }) {
   const [pending, setPending] = useState(false)
+  const fixtureBlocked = useFixtureActionBlocked()
 
   async function handleClick() {
+    if (fixtureBlocked()) return
     setPending(true)
     try {
       const res = await fetch(`/api/export/kpi-campaigns?campaign_id=${encodeURIComponent(campaignId)}`)
@@ -39,7 +42,7 @@ export function CampaignExportButton({ campaignId }: { campaignId: string }) {
   }
 
   return (
-    <Button variant="outline" size="sm" onClick={handleClick} disabled={pending}>
+    <Button variant="outline" size="sm" onClick={handleClick} disabled={pending} className="v2:min-h-[44px] md:v2:min-h-0 md:v2:h-[36px] v2:rounded-[8px] v2:text-[13px]">
       <Download className="h-4 w-4 mr-1" />
       {pending ? 'Đang xuất...' : 'Xuất Excel'}
     </Button>
