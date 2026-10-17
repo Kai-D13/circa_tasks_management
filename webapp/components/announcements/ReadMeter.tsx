@@ -1,4 +1,5 @@
 import { Notice } from '@/components/ds/Notice'
+import { FocusAnchorLink } from '@/components/announcements/FocusAnchorLink'
 import { ProgressBar } from '@/components/ds/ProgressBar'
 import { readPercent } from '@/lib/announcements/feed'
 import { cn } from '@/lib/utils'
@@ -82,13 +83,14 @@ export function ReadMeter({
         </span>
         {bar}
         {unread > 0 && unreadHref && (
-          <a
-            href={unreadHref}
-            data-ann-unread-link
+          // Neo trong trang: chuyển cả FOCUS tới panel thống kê (đích có tabIndex -1), không chỉ cuộn.
+          <FocusAnchorLink
+            targetId={unreadHref.replace(/^#/, '')}
+            data-ann-unread-link=""
             className="inline-flex min-h-[44px] items-center text-[13px] font-medium text-accent-foreground underline-offset-4 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded-sm"
           >
             {unread} người chưa xem<span aria-hidden="true">&nbsp;↓</span>
-          </a>
+          </FocusAnchorLink>
         )}
       </div>
     )
@@ -110,7 +112,7 @@ export function ReadMeter({
 export function StoreReadBar({ name, read, total, className }: { name: string; read: number; total: number; className?: string }) {
   const done = total > 0 && read >= total
   return (
-    <span data-ann-store-bar={done ? 'complete' : 'partial'} className={cn('flex min-w-0 flex-1 items-center gap-3', className)}>
+    <span data-ann-store-bar={done ? 'complete' : 'partial'} data-read={read} data-total={total} className={cn('flex min-w-0 flex-1 items-center gap-3', className)}>
       <span className="min-w-0 flex-1 truncate font-semibold" title={name}>{name}</span>
       <ProgressBar
         value={read}

@@ -10,7 +10,11 @@ import { AnnouncementImageAddTile, AnnouncementImageTile, AnnouncementImageUploa
 import { AnnouncementsEmpty, AnnouncementsError, ReadStateErrorNotice } from '@/components/announcements/AnnouncementStates'
 import { AnnouncementFixtureBoundary } from '@/components/announcements/AnnouncementFixtureBoundary'
 import { AnnouncementsListView, type AnnouncementsListState } from '@/components/announcements/AnnouncementsListView'
+import { AnnouncementDetailView, type AnnouncementDetailData } from '@/components/announcements/AnnouncementDetailView'
+import { AnnouncementAdminActions } from '@/components/announcements/AnnouncementAdminActions'
+import type { ReadStatsData } from '@/components/announcements/ReadStatsPanel'
 import { groupAnnouncementsByTime } from '@/lib/announcements/feed'
+import { buildStoreReadGroups, UNASSIGNED_STORE, type ReadMember } from '@/lib/announcements/readStats'
 
 // Dev-only fixture UI v2 Phase 3 · Bảng tin (artboard B0 — component dùng chung). Render ĐÚNG component của route thật
 // với dữ liệu giả cố định: không truy vấn, không action, không upload; bọc AnnouncementFixtureBoundary. Ảnh = data URI
@@ -22,6 +26,11 @@ import { groupAnnouncementsByTime } from '@/lib/announcements/feed'
 //      · list-staff (dược sĩ/QLCH: 2 tin mới) · list-allread (đã đọc hết ⇒ không dòng đếm) · list-admin (nút Tạo, không
 //        theo dõi đọc, có tin hết hạn) · list-empty · list-error (truy vấn chính lỗi) · list-read-error (đọc lỗi)
 //      · list-long (tiêu đề + trích dẫn rất dài)
+// A2 — trang chi tiết (AnnouncementDetailView + AnnouncementAdminActions THẬT trong boundary ⇒ Xóa bị chặn trước
+//      confirm/action): detail-admin (16/23 đã xem, 5 cửa hàng gồm "Chưa gán cửa hàng", 2 người khác) · detail-complete
+//      (23/23) · detail-zero (0 người nhận) · detail-stats-error (truy vấn thống kê lỗi) · detail-staff (dược sĩ: không
+//      thống kê, không Sửa/Xóa) · detail-long (tiêu đề/nội dung dài, 5 ảnh carousel) · detail-noimage · detail-error
+//      · detail-admin-other (admin không phải tác giả: thống kê có, Sửa/Xóa không)
 
 const NOW = '2026-10-15T02:45:00.000Z' // 09:45 15/10/2026 giờ VN
 const img = (a: string, b: string) => `data:image/svg+xml;utf8,${encodeURIComponent(
@@ -55,6 +64,35 @@ const CARDS: { caption: string; a: AnnouncementCardData }[] = [
   { caption: 'Hết hạn (chỉ admin thấy)', a: { ...FEED[4], id: 'fx-ann-expired', href: '#fx-ann-expired', read: 'untracked', expired: true } },
   { caption: 'Tiêu đề dài · chưa đọc', a: { ...FEED[1], id: 'fx-ann-long', href: '#fx-ann-long', title: LONG_TITLE, excerpt: `${FEED[0].excerpt} ${FEED[3].excerpt} ${FEED[2].excerpt}` } },
 ]
+// A2 — người nhận giả: [cửa hàng, đã xem, tổng] (thứ tự KHÔNG theo tỷ lệ để test sắp xếp của readStats).
+const AUDIENCE: [string, number, number][] = [
+  ['CIRCA CENTRAL', 6, 6], ['CIRCA URBAN', 4, 5], [UNASSIGNED_STORE, 0, 1], ['CIRCA MIZUKI', 5, 7], ['CIRCA LUMINA', 1, 4],
+]
+const NAMES = ['Võ Thị E', 'Hồ Văn F', 'Đỗ Thị H', 'Ngô Văn K', 'Lê Thị M', 'Phan Văn N', 'Trịnh Thị P']
+function fxStats(allRead = false): ReadStatsData {
+  const members: ReadMember[] = []
+  const readMap = new Map<string, string>()
+  AUDIENCE.forEach(([store, read, total], si) => {
+    for (let i = 0; i < total; i++) {
+      const id = `fx-u${si}-${i}`
+      members.push({ id, full_name: `${NAMES[i]} (${si + 1})`, store_id: store === UNASSIGNED_STORE ? null : `fx-s${si}`, store })
+      if (allRead || i < read) readMap.set(id, `2026-10-15T0${2 + (i % 7)}:${10 + si}:00Z`)
+    }
+  })
+  const { groups, total, read } = buildStoreReadGroups(members, readMap)
+  return {
+    kind: 'ok', read, total, groups,
+    others: [
+      { user_id: 'fx-o1', full_name: 'Phạm Thị D', role: 'sm', dept: 'Vận hành', read_at: '2026-10-15T03:02:00Z' },
+      { user_id: 'fx-o2', full_name: 'Lê Văn G', role: 'admin', dept: 'Nhân sự', read_at: '2026-10-15T02:41:00Z' },
+    ],
+  }
+}
+const BODY = '<p>Các cửa hàng gửi lịch trực <strong>31/12/2026 – 01/01/2027</strong> cho Quản lý vùng trước <strong>17:00 ngày 20/10</strong>. Ca trực ngày lễ được tính công x3 theo quy định nhân sự hiện hành.</p><table><thead><tr><th>Ca</th><th>Giờ</th><th>Tối thiểu</th></tr></thead><tbody><tr><td>Sáng</td><td>07:00 – 14:00</td><td>1 dược sĩ</td></tr><tr><td>Chiều</td><td>14:00 – 22:00</td><td>2 dược sĩ</td></tr></tbody></table><p>Mẫu đăng ký xem ảnh bên dưới. Quản lý cửa hàng chịu trách nhiệm tổng hợp và gửi một bản duy nhất.</p>'
+const DETAIL: Extract<AnnouncementDetailData, { kind: 'ok' }> = {
+  kind: 'ok', title: FEED[0].title, creatorName: 'Nguyễn Văn A', publishedAt: FEED[0].publishedAt, body: BODY,
+  coverUrl: IMG_A, carousel: [IMG_B, IMG_C, img('#EAD9E6', '#B98FB0')],
+}
 const asAdmin = (list: AnnouncementCardData[]) => list.map((a, i) => ({ ...a, read: 'untracked' as const, expired: i === list.length - 1 }))
 const asUntracked = (list: AnnouncementCardData[]) => list.map((a) => ({ ...a, read: 'untracked' as const }))
 
@@ -131,6 +169,38 @@ export default async function UiCatalogAnnouncementsV2Page({ searchParams }: { s
   if (!user) redirect('/login')
   if (!(profile?.role === 'admin' && isSuperAdminEmail(user.email))) notFound()
   const { fx = 'components' } = await searchParams
+
+  if (fx.startsWith('detail-')) {
+    const staff = fx === 'detail-staff'
+    // detail-admin-other: admin KHÔNG phải tác giả (canManage = false) ⇒ vẫn thấy thống kê, KHÔNG Sửa/Xóa.
+    const noActions = staff || fx === 'detail-admin-other'
+    const data: AnnouncementDetailData =
+      fx === 'detail-error' ? { kind: 'error' }
+      : fx === 'detail-long' ? {
+          ...DETAIL, title: LONG_TITLE,
+          body: `${BODY}${BODY}<p>${'Nội dung rất dài để kiểm xuống dòng và không tràn ngang trên điện thoại. '.repeat(8)}</p>`,
+          carousel: [IMG_A, IMG_B, IMG_C, img('#EAD9E6', '#B98FB0'), img('#E2E6D3', '#A9B58A')],
+        }
+      : fx === 'detail-noimage' ? { ...DETAIL, coverUrl: null, carousel: [], body: 'Thông báo dạng chữ thường (không HTML).\nDòng thứ hai giữ xuống dòng.' }
+      : DETAIL
+    const stats: ReadStatsData | null = staff || fx === 'detail-error' ? null
+      : fx === 'detail-stats-error' ? { kind: 'error' }
+      : fx === 'detail-zero' ? { kind: 'ok', read: 0, total: 0, groups: [], others: [] }
+      : fx === 'detail-complete' ? fxStats(true)
+      : fxStats()
+    return (
+      <AnnouncementFixtureBoundary>
+        <div data-testid="ui-catalog-ann-v2" data-fx={fx}>
+          <AnnouncementDetailView
+            data={data}
+            backHref="#fx-back"
+            stats={stats}
+            actions={noActions ? undefined : <AnnouncementAdminActions announcementId="fx-ann-1" editHref="#fx-edit" />}
+          />
+        </div>
+      </AnnouncementFixtureBoundary>
+    )
+  }
 
   if (fx.startsWith('list-')) {
     const admin = fx === 'list-admin'
