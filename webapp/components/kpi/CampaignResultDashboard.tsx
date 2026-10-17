@@ -10,6 +10,8 @@ import {
   Store as StoreIcon, Link2 as LinkIcon, Gift, type LucideIcon,
 } from 'lucide-react'
 import { StatusBadge } from '@/components/ds/StatusBadge'
+import { ProgressBar } from '@/components/ds/ProgressBar'
+import { campaignListPct, campaignListReached, campaignListTone } from '@/lib/kpi/campaignList'
 
 // SM Dashboard r1 — component KẾT QUẢ campaign dùng chung Super Admin ↔ SM.
 // PRESENTATIONAL THUẦN: chỉ render CampaignResultModel (lib/kpi/resultModel —
@@ -31,11 +33,11 @@ function MetricCell({ mv }: { mv: OrderAovMetricView | null }) {
       <span className="mt-1 flex items-center gap-2">
         <span className="h-1.5 w-14 shrink-0 overflow-hidden rounded-full bg-muted">
           <span
-            className={cn('block h-full rounded-full', mv.pass ? 'bg-status-success' : 'bg-primary')}
+            className={cn('block h-full rounded-full', mv.pass ? 'bg-status-success v2:bg-v2-ok' : 'bg-primary v2:bg-v2-series')}
             style={{ width: `${Math.min(100, Math.max(0, mv.pctRaw ?? 0))}%` }}
           />
         </span>
-        <span className={cn('font-semibold tabular-nums', mv.pass ? 'text-status-success' : 'text-primary')}>
+        <span className={cn('font-semibold tabular-nums v2:text-foreground', mv.pass ? 'text-status-success' : 'text-primary')}>
           {mv.pctText}
         </span>
       </span>
@@ -43,9 +45,12 @@ function MetricCell({ mv }: { mv: OrderAovMetricView | null }) {
   )
 }
 
-export function CampaignResultDashboard({ model, emptyHint }: {
+export function CampaignResultDashboard({ model, emptyHint, layout = 'legacy' }: {
   model: CampaignResultModel
   emptyHint?: string
+  /** UI v2 Phase 2 (K-2): 'v2' = phần tóm tắt theo canvas K2 (hero Hoàn thành + ô + 2 thẻ nguồn) — CHỈ trang đã
+   *  gắn data-ui-v2 truyền. 'legacy' (mặc định) giữ nguyên DOM cũ cho route chưa chuyển (SM/QLCH /targets). */
+  layout?: 'legacy' | 'v2'
 }) {
   const m = model
   // Mig 103: giá trị METRIC (target/actual/còn thiếu — khách hoặc ₫) qua
@@ -61,7 +66,8 @@ export function CampaignResultDashboard({ model, emptyHint }: {
   const synced = m.lastSyncedAt !== null
   return (
     <>
-      {/* Summary cards — thứ tự/label/màu giữ nguyên tab Kết quả super */}
+      {layout === 'v2' ? <ResultSummaryV2 m={m} /> : (
+      /* Summary cards — thứ tự/label/màu giữ nguyên tab Kết quả super */
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         {((isOrderAov ? [
           // "X/Y cửa hàng đạt" theo KPI PASS (completion >= 100%), KHÔNG theo bậc.
@@ -142,6 +148,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
           </Card>
         ))}
       </div>
+      )}
 
       {/* Bảng kết quả từng store — cột giữ nguyên tab Kết quả super.
           r1.6 (P1 UI 29/07): MỘT scroll owner duy nhất (ngang + dọc, max-h
@@ -156,7 +163,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
             <div className="overflow-x-auto lg:overflow-auto lg:max-h-[70vh]">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b bg-muted/40 text-xs text-muted-foreground">
+                <tr className="border-b bg-muted/40 text-xs text-muted-foreground v2:bg-muted v2:text-[12px]">
                   {/* Tier progress (28/07): mobile giữ cột gộp cũ (scope
                       'mobile'); desktop ≥1024px = N cột Bậc động theo
                       maxTierCount (không hardcode 3). Thứ tự cột trong
@@ -243,11 +250,11 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                           <div className="flex items-center justify-end gap-2">
                             <div className="h-1.5 w-14 rounded-full bg-muted overflow-hidden shrink-0">
                               <div
-                                className={cn('h-full rounded-full', a.run_rate >= 100 ? 'bg-status-success' : 'bg-primary')}
+                                className={cn('h-full rounded-full', a.run_rate >= 100 ? 'bg-status-success v2:bg-v2-ok' : 'bg-primary v2:bg-v2-series')}
                                 style={{ width: `${Math.min(100, Math.max(0, a.run_rate))}%` }}
                               />
                             </div>
-                            <span className={cn('text-xs font-semibold', a.run_rate >= 100 ? 'text-status-success' : 'text-primary')}>
+                            <span className={cn('text-xs font-semibold tabular-nums v2:text-foreground', a.run_rate >= 100 ? 'text-status-success' : 'text-primary')}>
                               {a.run_rate.toFixed(1)}%
                             </span>
                           </div>
@@ -338,7 +345,7 @@ export function CampaignResultDashboard({ model, emptyHint }: {
                                   // Commit 5: order_aov KHÔNG hiện dòng này —
                                   // "còn thiếu tới bậc" là khoảng cách điểm gộp
                                   // tới 100, tức con số vừa bỏ khỏi UI đổi tên.
-                                  <p className="font-medium text-primary mt-0.5">
+                                  <p className="font-medium text-primary mt-0.5 v2:text-foreground">
                                     Còn thiếu {vnd(tp.remaining_amount)}
                                   </p>
                                 )}
@@ -359,5 +366,120 @@ export function CampaignResultDashboard({ model, emptyHint }: {
         <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">{emptyHint ?? 'Chưa có dữ liệu kết quả.'}</CardContent></Card>
       )}
     </>
+  )
+}
+
+// ── UI v2 (canvas K2) — phần tóm tắt. CHỈ trình bày lại số của CampaignResultModel; nhãn giữ wording hiện có
+// (Hoàn thành / Tổng KPI target / Nhịp độ (Performance) / Store đạt bậc / Tổng commission đạt / Thời hạn …).
+// % hero = campaignListPct (tỷ lệ THÔ, 1 chữ số, chưa đạt mà làm tròn lên 100 ⇒ "<100%") — cùng luật danh sách K-1;
+// màu "đạt" từ số thô (campaignListReached). Chưa đồng bộ ⇒ '—' + thanh nét đứt, không 0 giả.
+function ResultTile({ id, label, value, valueCls, hint }: {
+  id: string; label: string; value: string; valueCls?: string; hint?: string | null
+}) {
+  return (
+    <div data-result-tile={id} className="min-w-0 rounded-v2-panel border bg-card px-[18px] py-4">
+      <p className="text-[13px] leading-[1.4] text-v2-text-3">{label}</p>
+      <p className={cn('mt-1.5 text-[24px] font-bold leading-[1.1] tabular-nums', valueCls)}>{value}</p>
+      {hint && <p className="mt-1.5 text-[12px] text-v2-text-3">{hint}</p>}
+    </div>
+  )
+}
+
+function ResultSummaryV2({ m }: { m: CampaignResultModel }) {
+  const pres = metricPresentation(m.campaign.metric_type)
+  const vnd = (n: number) => pres.value(n)
+  const money = (n: number) => metricPresentation('gmv').value(n)
+  const nfInt = (n: number) => new Intl.NumberFormat('vi-VN').format(Math.round(n))
+  const isCustomer = pres.kind === 'affiliate_customer_count'
+  const synced = m.lastSyncedAt !== null
+  const commissionTone = synced && m.totalCommission > 0 ? 'text-status-success' : undefined
+  const deadline = <ResultTile id="deadline" label="Thời hạn" value={m.deadlineLabel} />
+
+  if (pres.kind === 'offline_order_aov') {
+    // Chất lượng bán hàng: GIỮ bộ ô riêng (không hero Hoàn thành — điểm gộp không hiển thị, commit 5).
+    return (
+      <div data-result-summary="quality" className="grid grid-cols-2 gap-3 lg:grid-cols-3">
+        <ResultTile id="quality-pass" label="Cửa hàng đạt KPI" value={synced ? `${m.qualityPassCount}/${m.storeCount}` : '—'}
+          valueCls={synced && m.qualityPassCount > 0 ? 'text-status-success' : undefined} />
+        <ResultTile id="orders" label="Tổng số đơn" value={synced && m.totalOfflineOrders != null ? `${nfInt(m.totalOfflineOrders)} đơn` : '—'} />
+        <ResultTile id="aov" label="AOV bình quân" value={synced && m.totalOfflineAov != null ? money(m.totalOfflineAov) : '—'} />
+        <ResultTile id="net" label="Net Revenue (tham khảo)" value={synced ? money(m.totalOffline) : '—'} />
+        <ResultTile id="commission" label="Tổng commission đạt" value={synced ? money(m.totalCommission) : '—'} valueCls={commissionTone} />
+        {deadline}
+      </div>
+    )
+  }
+
+  const input = {
+    metricType: m.campaign.metric_type, synced, storeCount: m.storeCount,
+    totalTarget: m.totalTarget, totalActual: m.totalActual, qualityPassCount: m.qualityPassCount,
+  }
+  const pct = campaignListPct(input)
+  const tone = synced && pct.raw !== null
+    ? campaignListTone({ synced, reached: campaignListReached(input), status: m.campaign.status })
+    : 'unsynced'
+  // 105: campaign offline-only (không breakdown) ⇒ dòng số đơn · AOV nằm dưới tổng thực đạt (như card cũ).
+  const totalSub = !m.showBreakdown && !isCustomer && synced ? offlineOrderLine(m.totalOffline, m.totalOfflineOrders) : null
+  const offlineSub = synced ? offlineOrderLine(m.totalOffline, m.totalOfflineOrders) : null
+
+  return (
+    <div data-result-summary={pres.kind} className="space-y-3">
+      <div className="grid gap-3 lg:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)]">
+        <section data-result-hero className="min-w-0 rounded-v2-panel border bg-card px-5 py-[18px] lg:px-6 lg:py-5">
+          <div className="flex flex-wrap items-end gap-x-8 gap-y-3">
+            <div>
+              <p className="text-[13px] text-v2-text-3">Hoàn thành</p>
+              <p data-result-completion={tone} className={cn('mt-1 text-[40px] font-bold leading-none tabular-nums', tone === 'unsynced' && 'text-v2-text-3')}>
+                {pct.text}
+              </p>
+            </div>
+            <div className="min-w-0">
+              <p className="text-[13px] text-v2-text-3">{isCustomer ? 'Tổng số khách' : REVENUE_LABELS.total}</p>
+              <p data-result-actual className="mt-1 text-[18px] font-bold tabular-nums">{synced ? vnd(m.totalActual) : '—'}</p>
+              {totalSub && <p className="text-[12px] text-v2-text-3">{totalSub}</p>}
+            </div>
+            <div className="min-w-0">
+              <p className="text-[13px] text-v2-text-3">Tổng KPI target</p>
+              <p data-result-target className="mt-1 text-[18px] font-bold tabular-nums text-muted-foreground">{vnd(m.totalTarget)}</p>
+            </div>
+          </div>
+          <div className="mt-5">
+            {tone === 'unsynced' ? (
+              <div aria-hidden="true" className="h-[12px] rounded-full border border-dashed border-input bg-muted" />
+            ) : (
+              <ProgressBar value={pct.raw ?? 0} max={100} tone={tone} size={12} ariaLabel={`Hoàn thành ${pct.text}`} />
+            )}
+          </div>
+        </section>
+        <div className="grid grid-cols-2 gap-3">
+          {/* Định dạng giữ như bản cũ và như cột "Nhịp độ" của bảng (toFixed(1)) — không đổi số trong batch UI (Q-129). */}
+          <ResultTile id="pace" label="Nhịp độ (Performance)" value={m.performance != null ? `${m.performance.toFixed(1)}%` : '—'}
+            valueCls={m.performance != null ? performanceTone(m.performance) : undefined} />
+          <ResultTile id="reached" label="Store đạt bậc" value={synced ? `${m.reachedStoreCount}/${m.storeCount}` : '—'} />
+          <ResultTile id="commission" label="Tổng commission đạt" value={synced ? money(m.totalCommission) : '—'} valueCls={commissionTone} />
+          {/* Mig 112: ô RIÊNG ngay sau commission — không cộng gộp hai khoản. */}
+          {m.showOrderBonus && (
+            <ResultTile id="bonus" label="Đạt thưởng thêm" value={synced ? `${m.bonusAchievedCount}/${m.storeCount} cửa hàng` : '—'}
+              valueCls={synced && m.bonusAchievedCount > 0 ? 'text-status-success' : undefined} hint={m.bonusPerStaffLabel} />
+          )}
+          {deadline}
+        </div>
+      </div>
+      {m.showBreakdown && (
+        <div data-result-breakdown className="grid gap-3 md:grid-cols-2">
+          <div className="flex min-w-0 items-end justify-between gap-3 rounded-v2-panel border bg-card px-5 py-4">
+            <div className="min-w-0">
+              <p className="text-[13px] text-v2-text-3">{REVENUE_LABELS.offline}</p>
+              <p className="mt-1 text-[18px] font-bold tabular-nums">{synced ? vnd(m.totalOffline) : '—'}</p>
+            </div>
+            {offlineSub && <p className="shrink-0 text-right text-[12px] text-v2-text-3">{offlineSub}</p>}
+          </div>
+          <div className="min-w-0 rounded-v2-panel border bg-card px-5 py-4">
+            <p className="text-[13px] text-v2-text-3">{REVENUE_LABELS.affiliate}</p>
+            <p className="mt-1 text-[18px] font-bold tabular-nums">{synced ? vnd(m.totalAffiliate) : '—'}</p>
+          </div>
+        </div>
+      )}
+    </div>
   )
 }

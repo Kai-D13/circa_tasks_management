@@ -75,10 +75,11 @@ export function AffiliateQrCard({ storeName, partnerCode, imageUrl, destinationU
   }
 
   return (
-    <Card className="rounded-lg">
-      <CardContent className="p-4 space-y-3">
+    // UI v2 K-6 (M1/M5): chỉ thêm class v2: — bỏ đệm kép của Card, tiêu đề 15px.
+    <Card className="rounded-lg v2:py-0">
+      <CardContent className="p-4 space-y-3 v2:p-5">
         <div className="flex items-center justify-between gap-2">
-          <p className="flex items-center gap-1.5 font-semibold text-sm">
+          <p className="flex items-center gap-1.5 font-semibold text-sm v2:text-[15px]">
             <QrCode className="h-4 w-4 text-primary" /> Mã QR Circa Online
           </p>
           {state === 'qr' && destinationUrl && (

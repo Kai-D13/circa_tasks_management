@@ -4,6 +4,7 @@ import { useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { syncCampaignActuals } from '@/app/actions/kpiCampaigns'
+import { useFixtureActionBlocked } from '@/components/kpi/KpiFixtureBoundary'
 import { syncedSubjectLabel } from '@/lib/kpi/campaignDisplay'
 import { Button } from '@/components/ui/button'
 import { RefreshCw } from 'lucide-react'
@@ -17,8 +18,10 @@ export function SyncActualsButton({ campaignId, metricType }: { campaignId: stri
     : 'Đồng bộ doanh số'
   const router = useRouter()
   const [pending, startTransition] = useTransition()
+  const fixtureBlocked = useFixtureActionBlocked()
 
   function handleSync() {
+    if (fixtureBlocked()) return
     startTransition(async () => {
       const r = await syncCampaignActuals(campaignId)
       if (r && 'error' in r && r.error) { toast.error(r.error); return }
@@ -57,7 +60,7 @@ export function SyncActualsButton({ campaignId, metricType }: { campaignId: stri
   }
 
   return (
-    <Button size="sm" variant="outline" onClick={handleSync} disabled={pending} className="gap-1.5">
+    <Button size="sm" variant="outline" onClick={handleSync} disabled={pending} className="gap-1.5 v2:min-h-[44px] md:v2:min-h-0 md:v2:h-[36px] v2:rounded-[8px] v2:text-[13px]">
       <RefreshCw className={pending ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
       {pending ? 'Đang đồng bộ…' : label}
     </Button>

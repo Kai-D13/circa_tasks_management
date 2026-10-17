@@ -1,5 +1,4 @@
 import { notFound } from 'next/navigation'
-import Link from 'next/link'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { createClient } from '@/lib/supabase/server'
 import { supabaseAdmin } from '@/lib/supabase/admin'
@@ -9,26 +8,14 @@ import { getAffiliateSyncHealth, supabaseAffiliateHealthDb } from '@/lib/affilia
 import { vnDayRange } from '@/lib/kpi/engine'
 import {
   reduceAffiliateAgg, reduceAffiliatePartnerAgg, parseOverviewRange, parseOverviewType,
-  salesPointsLabel, overviewDataState, overviewPageScope,
+  overviewDataState, overviewPageScope,
   canShowOwnOsGmv, smOverviewAllowed, type AffiliateAggInput, type PartnerAggInput,
 } from '@/lib/affiliate/overview'
 import {
-  drilldownEnabled, buildOverviewEntities, filterEntitiesByType, overviewEntityKey,
+  buildOverviewEntities, filterEntitiesByType, overviewEntityKey,
   type OverviewMappingRow,
 } from '@/lib/affiliate/orders'
-import { AffiliateStoreOrdersRow } from '@/components/affiliate/AffiliateStoreOrdersRow'
-import { CampaignsTabs } from '@/components/kpi/CampaignsTabs'
-import { PageHeader } from '@/components/ds/PageHeader'
-import { DataToolbar } from '@/components/ds/DataToolbar'
-import { StatCard } from '@/components/ds/StatCard'
-import { DataTableShell } from '@/components/ds/DataTableShell'
-import { ErrorState } from '@/components/ds/ErrorState'
-import { EmptyState } from '@/components/ds/EmptyState'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { buttonVariants } from '@/components/ui/button'
-import { formatDate, formatDateTime } from '@/lib/dateUtils'
-import { cn } from '@/lib/utils'
-import { Link2, TrendingUp, Package, Store as StoreIcon } from 'lucide-react'
+import { AffiliateOverviewView } from '@/components/affiliate/AffiliateOverviewView'
 
 // P3-I r1.3 — Affiliate Overview (KHÔNG phụ thuộc campaign): đọc doanh số
 // Affiliate đã sync trong Supabase qua rpc_aggregate_affiliate_gmv (DELIVERED
@@ -43,17 +30,8 @@ import { Link2, TrendingUp, Package, Store as StoreIcon } from 'lucide-react'
 // StatCard/DataTableShell; BỎ filter partner (partner_code = metadata nhỏ dưới
 // tên store phục vụ đối soát); 3 KPI card.
 
-const vnd = (n: number) => `${new Intl.NumberFormat('vi-VN').format(Math.round(n))}₫`
-
-function PageShell({ nav, children }: { nav?: React.ReactNode; children: React.ReactNode }) {
-  return (
-    <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
-      <PageHeader title="Doanh số Affiliate — Circa Online" icon={Link2} />
-      {nav}
-      {children}
-    </div>
-  )
-}
+// UI v2 Phase 2 · K-4: phần trình bày ở components/affiliate/AffiliateOverviewView (dùng chung fixture catalog);
+// page giữ cổng quyền, phạm vi, truy vấn mapping, health fail-closed và 2 RPC aggregate — không đổi.
 
 export default async function AffiliateOverviewPage({ searchParams }: {
   searchParams: Promise<{ from?: string; to?: string; type?: string; store?: string }>
@@ -79,12 +57,6 @@ export default async function AffiliateOverviewPage({ searchParams }: {
     role: profile?.role,
   })
   if (scope === 'denied') notFound()
-  const shellNav = scope === 'os-fs'
-    ? <CampaignsTabs active="affiliate" affiliateEnabled />
-    : (scope === 'os-assigned' || scope === 'os-own')
-      ? <Link href="/targets" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0">← Doanh số</Link>
-      : null
-
   const params = await searchParams
   const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
   // r1 P2#3: ngày lịch THẬT, hoán vị khi ngược, clamp ≤366 ngày — URL sai
@@ -155,14 +127,7 @@ export default async function AffiliateOverviewPage({ searchParams }: {
   // r1 P1#2: mapping lỗi → FAIL-CLOSED — chỉ ErrorState, không số 0 giả.
   if (mapErr) {
     console.error('[affiliate-overview] mapping query failed:', mapErr.message)
-    return (
-      <PageShell nav={shellNav}>
-        <ErrorState
-          message="Không tải được danh sách mapping affiliate — không thể tổng hợp doanh số"
-          hint={`${mapErr.message} — kiểm tra migration 090/095/096 và RLS, rồi tải lại.`}
-        />
-      </PageShell>
-    )
+    return <AffiliateOverviewView scope={scope} filter={null} body={{ kind: 'mapping-error', message: mapErr.message }} />
   }
 
   const mappings = ((mapRows ?? []) as unknown as OverviewMappingRow[])
@@ -184,55 +149,10 @@ export default async function AffiliateOverviewPage({ searchParams }: {
   const storeIds = filtered.flatMap((e) => (e.kind === 'store' ? [e.store_id] : []))
   const partnerCodes = filtered.flatMap((e) => (e.kind === 'partner' ? [e.partner_code] : []))
 
-  const filterForm = (
-    <DataToolbar
-      filters={
-        <form method="GET" className="flex flex-wrap items-end gap-2 text-sm">
-          <label className="grid gap-1">
-            <span className="text-xs text-muted-foreground">Từ ngày</span>
-            <input type="date" name="from" defaultValue={from} className="h-9 rounded-lg border bg-card px-2.5 text-sm" />
-          </label>
-          <label className="grid gap-1">
-            <span className="text-xs text-muted-foreground">Đến ngày</span>
-            <input type="date" name="to" defaultValue={to} className="h-9 rounded-lg border bg-card px-2.5 text-sm" />
-          </label>
-          {/* FS-expansion: filter Loại GIỮA thời gian và Cửa hàng — CHỈ super */}
-          {scope === 'os-fs' && (
-            <label className="grid gap-1">
-              <span className="text-xs text-muted-foreground">Loại</span>
-              <select name="type" defaultValue={typeFilter === 'all' ? '' : typeFilter} className="h-9 rounded-lg border bg-card px-2 text-sm">
-                <option value="">Tất cả</option>
-                <option value="os">OS</option>
-                <option value="fs">FS</option>
-              </select>
-            </label>
-          )}
-          <label className="grid gap-1">
-            <span className="text-xs text-muted-foreground">Cửa hàng</span>
-            <select name="store" defaultValue={storeParam ?? ''} className="h-9 rounded-lg border bg-card px-2 text-sm max-w-[220px]">
-              <option value="">Tất cả</option>
-              {/* Option theo entity của Loại đang chọn (store đã dedupe;
-                  partner theo display_name) */}
-              {typed.map((e) => (
-                <option key={entityKey(e)} value={entityKey(e)}>
-                  {e.kind === 'store' ? (e.name ?? e.partnerCodes[0]) : e.display_name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <button type="submit" className={cn(buttonVariants({ size: 'sm' }), 'min-h-[36px]')}>Áp dụng</button>
-        </form>
-      }
-    />
-  )
+  const filter = { from, to, typeFilter, storeParam, options: typed }
 
   if (storeIds.length === 0 && partnerCodes.length === 0) {
-    return (
-      <PageShell nav={shellNav}>
-        {filterForm}
-        <EmptyState className="py-12" icon={Link2} title="Không có mapping affiliate nào khớp bộ lọc." />
-      </PageShell>
-    )
+    return <AffiliateOverviewView scope={scope} filter={filter} body={{ kind: 'empty' }} />
   }
 
   // r1.1 HEALTH FAIL-CLOSED: health TRƯỚC theo ĐÚNG scope hiển thị (store +
@@ -282,7 +202,6 @@ export default async function AffiliateOverviewPage({ searchParams }: {
     console.warn('[affiliate-overview] source not ready:', health.reason)
   }
   const dataState = overviewDataState(health.ready, aggErrorMsg !== null)
-  const blocked = dataState !== 'ok'
 
   // 1 dòng / entity: store (agg theo store) hoặc FS partner (agg theo code).
   const rows = filtered
@@ -294,125 +213,13 @@ export default async function AffiliateOverviewPage({ searchParams }: {
     .sort((a, b) => b.agg.gmv - a.agg.gmv)
 
   return (
-    <PageShell nav={shellNav}>
-      {filterForm}
-      {clamped && (
-        <p className="text-xs text-muted-foreground">
-          Khoảng ngày vượt giới hạn 366 ngày — đã thu hẹp còn {formatDate(from)} – {formatDate(to)}.
-        </p>
-      )}
-
-      {/* Fail-closed theo trạng thái nguồn — không bao giờ render 0 giả */}
-      {dataState === 'source-not-ready' && (
-        <div title={scope === 'os-fs' ? (health.reason ?? undefined) : undefined}>
-          <ErrorState
-            message="Dữ liệu Affiliate chưa được cập nhật. Số liệu đang tạm ẩn."
-            hint={health.lastSuccessAt
-              ? `Đồng bộ gần nhất: ${formatDateTime(health.lastSuccessAt)}`
-              : 'Chưa có lần đồng bộ thành công nào.'}
-          />
-        </div>
-      )}
-      {dataState === 'aggregate-error' && (
-        <ErrorState message="Không tổng hợp được doanh số Affiliate" hint={aggErrorMsg ?? undefined} />
-      )}
-
-      {/* r1.3: đúng 3 KPI card cho khoảng thời gian đang xem — FS-expansion:
-          card 3 đếm ĐIỂM (store + đối tác) khi view có FS */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-        <StatCard label={`GMV Affiliate (${formatDate(from)} – ${formatDate(to)})`} value={blocked ? '—' : vnd(totals.gmv)} icon={TrendingUp} tone={!blocked && totals.gmv > 0 ? 'success' : 'default'} />
-        <StatCard label="Đơn giao thành công" value={blocked ? '—' : totals.orders} icon={Package} />
-        <StatCard label={salesPointsLabel(typeFilter)} value={blocked ? '—' : `${totals.points}/${filtered.length}`} icon={StoreIcon} />
-      </div>
-
-      <DataTableShell>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              {/* Drill-down (28/07): cột chevron — mở danh sách đơn DELIVERED */}
-              <TableHead className="w-10 pl-1 pr-0" />
-              <TableHead>Cửa hàng</TableHead>
-              <TableHead className="text-right">Đơn thành công</TableHead>
-              <TableHead className="text-right">GMV Affiliate</TableHead>
-              <TableHead className="text-right pr-4">Đơn gần nhất</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map(({ entity: e, agg }) => {
-              const has = agg.orders > 0
-              const numberCells = (
-                <>
-                  <TableCell className={cn('text-right tabular-nums', !has && 'text-muted-foreground')}>
-                    {blocked ? '—' : agg.orders}
-                  </TableCell>
-                  <TableCell className={cn('text-right tabular-nums font-medium', !has && 'text-muted-foreground font-normal')}>
-                    {blocked ? '—' : has || agg.gmv !== 0 ? vnd(agg.gmv) : '—'}
-                  </TableCell>
-                  <TableCell className="text-right pr-4 text-muted-foreground">
-                    {blocked ? '—' : agg.lastDate ? formatDate(agg.lastDate) : '—'}
-                  </TableCell>
-                </>
-              )
-              // Drill-down: client row lazy-load — store qua RPC 099 (mọi scope
-              // hợp lệ), FS partner qua RPC 102 (CHỈ super — chevron cũng chỉ
-              // render ở scope os-fs); chevron CHỈ khi số parent thật
-              // (!blocked) + có đơn; key gồm from/to → đổi filter hủy state.
-              if (e.kind === 'store') {
-                return (
-                  <AffiliateStoreOrdersRow
-                    key={`s-${e.store_id}-${from}-${to}`}
-                    storeId={e.store_id}
-                    from={from}
-                    to={to}
-                    canDrill={drilldownEnabled({ blocked, orders: agg.orders })}
-                    expectedOrders={agg.orders}
-                    expectedGmv={agg.gmv}
-                    parentCells={
-                      <>
-                        <TableCell>
-                          <span className="font-medium">{e.name ?? '—'}</span>
-                          <span className="text-xs text-muted-foreground"> · {e.code ?? '—'}</span>
-                          {e.isFs && (
-                            <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground align-middle">FS</span>
-                          )}
-                          {/* r1.3 + r1 P2#4: partner codes = metadata đối soát */}
-                          <span className="block font-mono text-[11px] text-muted-foreground">{e.partnerCodes.join(' · ')}</span>
-                        </TableCell>
-                        {numberCells}
-                      </>
-                    }
-                  />
-                )
-              }
-              // FS partner (không store): KHÔNG QR, KHÔNG liên quan FS Products.
-              return (
-                <AffiliateStoreOrdersRow
-                  key={`p-${e.partner_code}-${from}-${to}`}
-                  partnerCode={e.partner_code}
-                  from={from}
-                  to={to}
-                  canDrill={scope === 'os-fs' && drilldownEnabled({ blocked, orders: agg.orders })}
-                  expectedOrders={agg.orders}
-                  expectedGmv={agg.gmv}
-                  parentCells={
-                    <>
-                      <TableCell>
-                        <span className="font-medium">{e.display_name}</span>
-                        <span className="ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground align-middle">FS</span>
-                        <span className="block font-mono text-[11px] text-muted-foreground">{e.partner_code}</span>
-                      </TableCell>
-                      {numberCells}
-                    </>
-                  }
-                />
-              )
-            })}
-          </TableBody>
-        </Table>
-      </DataTableShell>
-
-      {/* r1 P2#4: footer 1 câu — chi tiết nguồn nằm ở source contract docs */}
-      <p className="text-[11px] text-muted-foreground">Nguồn: Circa Online · Chỉ tính đơn DELIVERED.</p>
-    </PageShell>
+    <AffiliateOverviewView
+      scope={scope}
+      filter={filter}
+      body={{
+        kind: 'data', clamped, dataState, aggErrorMsg, totals, rows, filteredCount: filtered.length,
+        healthReason: health.reason ?? null, healthLastSuccessAt: health.lastSuccessAt ?? null,
+      }}
+    />
   )
 }

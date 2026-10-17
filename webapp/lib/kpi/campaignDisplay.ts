@@ -417,7 +417,8 @@ export interface CampaignCardValue {
   tone: 'success' | 'warning' | 'neutral'
 }
 
-const CARD_TYPE_LABEL: Record<CampaignMetricType, string> = {
+// UI v2 Phase 2 (K-1): export để màn danh sách gắn tag loại chiến dịch (nhãn sẵn có, không đổi chữ).
+export const CARD_TYPE_LABEL: Record<CampaignMetricType, string> = {
   gmv: 'Doanh số',
   affiliate_customer_count: 'Số khách',
   offline_order_aov: 'Chất lượng bán hàng',

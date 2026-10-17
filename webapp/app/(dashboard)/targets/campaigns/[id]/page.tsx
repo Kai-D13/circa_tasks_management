@@ -1,45 +1,22 @@
 import { notFound } from 'next/navigation'
-import Link from 'next/link'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { createClient } from '@/lib/supabase/server'
 import { canManageCampaign, canViewCampaignDashboard } from '@/lib/kpi/campaignAccess'
 import { isKpiAffiliateEnabled, isKpiCampaignEnabled } from '@/lib/kpi/flags'
-import { Card, CardContent } from '@/components/ui/card'
-import { CampaignStatusButton } from '@/components/kpi/CampaignStatusButton'
-import { CampaignImport } from '@/components/kpi/CampaignImport'
-import { CampaignMetricEditor } from '@/components/kpi/CampaignMetricEditor'
-import { SyncActualsButton } from '@/components/kpi/SyncActualsButton'
-import { CampaignExportButton } from '@/components/kpi/CampaignExportButton'
-import { CampaignResultDashboard } from '@/components/kpi/CampaignResultDashboard'
-import { CampaignDateRangeFilter } from '@/components/kpi/CampaignDateRangeFilter'
+import { CampaignDetailView, type DetailCampaign, type DetailRun, type DetailTargetRow } from '@/components/kpi/CampaignDetailView'
 import { parseCampaignRange, rangeFilterVisibleForRole } from '@/lib/kpi/campaignDateRange'
 import { createRangeReadDeps } from '@/lib/kpi/campaignRangeDeps'
 import { loadCampaignRangeActuals } from '@/lib/kpi/campaignRangeServer'
-import { metricPresentation } from '@/lib/kpi/campaignDisplay'
 import { buildCampaignResultModel, type ResultActualRow, type ResultCampaign, type ResultTargetRow } from '@/lib/kpi/resultModel'
-import { STATUS_META, TEST_BADGE_CLS } from '@/lib/kpi/status'
-import { formatDate, formatDateTime } from '@/lib/dateUtils'
-import { cn } from '@/lib/utils'
-import { ChevronLeft, SlidersHorizontal, BarChart3, type LucideIcon } from 'lucide-react'
 
 // Campaign detail — ONE url, TWO tabs (?tab=):
 //   config → campaign info + import + the IMPORTED configuration only
 //   result → synced actuals: summary cards + per-store results + sync button
 // Default tab follows the lifecycle: draft/paused → config, active/ended → result.
+// UI v2 Phase 2 · K-2: phần trình bày ở components/kpi/CampaignDetailView (dùng chung fixture catalog); page giữ
+// cổng quyền, chọn tab, 3 truy vấn, lọc khoảng và dựng model — không đổi.
 
-const vnd = (n: number) => `${new Intl.NumberFormat('vi-VN').format(Math.round(n))}₫`
-
-interface TierRow { tier_order: number; threshold_pct: number; commission_amount: number }
-interface TargetRow {
-  id: string; store_id: string; pos_code: string | null; kpi_target: number
-  store_kpi_group: string | null
-  stores: { name: string } | null
-  kpi_campaign_store_tiers: TierRow[]
-  // Mig 106 — chỉ campaign Chất lượng bán hàng (NULL với 2 loại cũ).
-  order_target: number | null; aov_target: number | null
-  // Mig 112 — thưởng thêm theo ngưỡng số đơn (NULL = campaign không áp dụng).
-  minimum_order_target: number | null; order_bonus_per_staff: number | null
-}
+type TargetRow = DetailTargetRow
 interface ActualRow {
   store_id: string; actual_value: number; run_rate: number | null
   remaining_target: number | null; achieved_tier_order: number | null
@@ -51,19 +28,6 @@ interface ActualRow {
   affiliate_order_count: number | null
   bonus_order_count: number | null
   order_bonus_achieved: boolean | null
-}
-
-function TierChips({ tiers }: { tiers: TierRow[] }) {
-  if (tiers.length === 0) return <span className="text-xs text-muted-foreground">—</span>
-  return (
-    <div className="flex flex-wrap gap-1">
-      {[...tiers].sort((a, b) => a.tier_order - b.tier_order).map((t) => (
-        <span key={t.tier_order} className="inline-flex whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-[11px]">
-          {t.threshold_pct}% → {vnd(t.commission_amount)}
-        </span>
-      ))}
-    </div>
-  )
 }
 
 export default async function CampaignDetailPage({
@@ -124,20 +88,9 @@ export default async function CampaignDetailPage({
   if (queryError) console.error('[campaign-detail] query failed:', queryError)
 
   const targets = (targetsRaw ?? []) as unknown as TargetRow[]
-  // 107: 'Phân loại' là TÙY CHỌN. Mọi store đều trống ⇒ bỏ hẳn cột; dữ liệu
-  // hỗn hợp thì giữ cột và hiện '—' cho store chưa phân loại.
-  const showGroupCol = targets.some((t) => (t.store_kpi_group ?? '').trim().length > 0)
-  // 112: campaign không áp dụng thưởng thêm ⇒ 2 cột cấu hình không xuất hiện.
-  const showBonusCols = targets.some((t) => t.minimum_order_target != null)
   const actuals = (actualsRaw ?? []) as ActualRow[]
   const actualByStore = new Map(actuals.map((a) => [a.store_id, a]))
   const lastSynced = actuals.reduce<string | null>((max, a) => (!max || a.synced_at > max ? a.synced_at : max), null)
-
-  const s = STATUS_META[c.status] ?? STATUS_META.draft
-  const canImport = c.status === 'draft' || c.status === 'paused'
-  // Mig 103: KPI target theo đơn vị metric (khách/₫); TierChips (commission)
-  // vẫn dùng vnd tiền module-level.
-  const targetFmt = (n: number) => metricPresentation(c.metric_type as string | undefined).value(n)
 
   // SM Dashboard r1 (27/07): TOÀN BỘ công thức Kết quả chuyển vào
   // lib/kpi/resultModel (dùng chung Super ↔ SM — một nguồn số duy nhất, test
@@ -212,180 +165,19 @@ export default async function CampaignDetailPage({
     vnTodayISO,
   )
 
-  // Branded segmented control (review r2): active = Circa coral, inactive =
-  // coral text on the tinted track; ~36px touch target.
-  const tabLink = (t: 'config' | 'result', label: string, Icon: LucideIcon) => (
-    <Link
-      href={`/targets/campaigns/${c.id}?tab=${t}`}
-      className={cn(
-        'inline-flex items-center gap-1.5 px-4 py-2 rounded-md font-medium text-sm transition-colors',
-        tab === t
-          ? 'bg-primary text-primary-foreground shadow-sm'
-          : 'text-primary/80 hover:bg-primary/10 hover:text-primary',
-      )}
-    >
-      <Icon className="h-4 w-4" />
-      {label}
-    </Link>
-  )
-
   return (
-    // r1.6 (P1 UI 29/07): tab Kết quả dùng TOÀN BỘ chiều rộng main content
-    // (bảng N cột Bậc động cần chỗ; scroll ngang còn lại nằm TRONG bảng —
-    // body không bao giờ scroll ngang).
-    // Batch UI 15/08: bỏ ternary — TOÀN TRANG fluid, tab Cấu hình cũng vậy vì
-    // trung tâm của nó là bảng nhiều cột; hết dải trắng phải khi zoom-out.
-    <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
-      <div>
-        <Link href="/targets/campaigns" className="text-xs text-muted-foreground hover:text-primary inline-flex items-center gap-1">
-          <ChevronLeft className="h-3.5 w-3.5" /> Chiến dịch KPI
-        </Link>
-        <div className="flex items-center justify-between gap-3 flex-wrap mt-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h1 className="text-xl font-semibold">{c.name}</h1>
-            <span className={cn('text-xs px-2 py-0.5 rounded-full font-medium', s.cls)}>{s.label}</span>
-            {c.is_test && <span className={cn('text-[10px] px-1.5 py-0.5 rounded-full', TEST_BADGE_CLS)}>TEST</span>}
-          </div>
-          {canManage && <CampaignStatusButton id={c.id} status={c.status} name={c.name} />}
-        </div>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          {formatDate(c.start_date)} – {formatDate(c.end_date)} · {targets.length} cửa hàng · {resultModel.deadlineLabel}
-        </p>
-        {queryError && (
-          <p className="text-sm text-destructive mt-1">
-            Lỗi truy vấn dữ liệu: {queryError} — kiểm tra migration 070/071/072/092/093 đã apply chưa.
-          </p>
-        )}
-      </div>
-
-      {/* Tabs — one URL, two views. SM chỉ có Kết quả nên KHÔNG render thanh
-          tab: một thanh chỉ có đúng một lựa chọn là nhiễu, và để lộ 'Cấu hình'
-          rồi bấm vào không đổi gì thì còn tệ hơn. */}
-      {canManage && (
-        <div className="inline-flex rounded-lg border border-primary/20 bg-secondary p-0.5">
-          {tabLink('config', 'Cấu hình', SlidersHorizontal)}
-          {tabLink('result', 'Kết quả', BarChart3)}
-        </div>
-      )}
-
-      {tab === 'config' ? (
-        <>
-          {/* P3-E3: chỉ số doanh số của campaign — sửa khi draft/paused,
-              read-only khi active/ended; server action là boundary cuối. */}
-          <Card>
-            <CardContent className="p-4">
-              <p className="text-sm font-medium mb-2">{c.metric_type === 'affiliate_customer_count' ? 'Loại chỉ số' : 'Chỉ số doanh số'}</p>
-              <CampaignMetricEditor
-                campaignId={c.id}
-                status={c.status}
-                metricOffline={c.metric_offline === true}
-                metricAffiliate={c.metric_affiliate === true}
-                affiliateEnabled={isKpiAffiliateEnabled()}
-                metricType={c.metric_type as string | undefined}
-              />
-            </CardContent>
-          </Card>
-
-          {canImport && (
-            <Card>
-              <CardContent className="p-4">
-                <p className="text-sm font-medium mb-2">Nạp / cập nhật target (thay toàn bộ)</p>
-                <CampaignImport campaignId={c.id} guideDefaultOpen={targets.length === 0} metricType={c.metric_type as string | undefined} />
-              </CardContent>
-            </Card>
-          )}
-
-          {targets.length > 0 ? (
-            <Card>
-              <CardContent className="p-0 overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b bg-muted/40 text-xs text-muted-foreground">
-                      <th className="text-left px-4 py-2.5">Cửa hàng</th>
-                      {/* 107: cùng cờ với body ngay dưới — bỏ cột thì bỏ cả hai phía. */}
-                      {showGroupCol && <th className="text-left px-4 py-2.5">Phân loại</th>}
-                      <th className="text-right px-4 py-2.5">KPI target</th>
-                      <th className="text-left px-4 py-2.5">Bậc (mốc % → Commission)</th>
-                      {/* 112: cùng cờ với body — hai cột đi cùng nhau, riêng với Commission. */}
-                      {showBonusCols && <th className="text-right px-4 py-2.5 whitespace-nowrap">Ngưỡng đơn</th>}
-                      {showBonusCols && <th className="text-right px-4 py-2.5 whitespace-nowrap">Thưởng thêm/dược sĩ</th>}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {targets.map((t) => (
-                      <tr key={t.id} className="hover:bg-muted/30">
-                        <td className="px-4 py-2.5 font-medium">{t.stores?.name ?? '—'}{t.pos_code ? ` · ${t.pos_code}` : ''}</td>
-                        {showGroupCol && <td className="px-4 py-2.5 text-xs">{t.store_kpi_group ?? '—'}</td>}
-                        <td className="px-4 py-2.5 text-right">{targetFmt(t.kpi_target)}</td>
-                        <td className="px-4 py-2.5"><TierChips tiers={t.kpi_campaign_store_tiers} /></td>
-                        {showBonusCols && (
-                          <td className="px-4 py-2.5 text-right tabular-nums">
-                            {t.minimum_order_target != null ? `${new Intl.NumberFormat('vi-VN').format(t.minimum_order_target)} đơn` : '—'}
-                          </td>
-                        )}
-                        {showBonusCols && (
-                          <td className="px-4 py-2.5 text-right tabular-nums">
-                            {t.order_bonus_per_staff != null ? vnd(t.order_bonus_per_staff) : '—'}
-                          </td>
-                        )}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </CardContent>
-            </Card>
-          ) : (
-            <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">Chưa có target. Nạp file để thêm.</CardContent></Card>
-          )}
-
-          {(runs ?? []).length > 0 && (
-            <Card>
-              <CardContent className="p-4">
-                <p className="text-sm font-medium mb-2">Lịch sử nạp file</p>
-                <ul className="text-xs text-muted-foreground space-y-1">
-                  {(runs ?? []).map((r, i) => (
-                    <li key={i}>{formatDateTime(r.created_at as string)} · {r.file_name ?? '—'} · {r.success_count}/{r.row_count} dòng</li>
-                  ))}
-                </ul>
-              </CardContent>
-            </Card>
-          )}
-        </>
-      ) : (
-        <>
-          {/* ── Kết quả ── */}
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            <span className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs text-muted-foreground">
-              <span className={cn('h-1.5 w-1.5 rounded-full shrink-0', lastSynced ? 'bg-status-success' : 'bg-status-warning')} />
-              {lastSynced ? `Doanh số đồng bộ ${formatDateTime(lastSynced)}` : 'Chưa đồng bộ doanh số'}
-            </span>
-            <div className="flex items-center gap-2">
-              {/* Xuất Excel: SM ĐƯỢC (chốt 30/08) — file tự giới hạn theo cửa
-                  hàng của họ vì route export dùng session client, RLS lọc sẵn.
-                  Đồng bộ thủ công là hành vi quản trị ⇒ super-only. */}
-              <CampaignExportButton campaignId={c.id} />
-              {canManage && <SyncActualsButton campaignId={c.id} metricType={c.metric_type as string | undefined} />}
-            </div>
-          </div>
-
-          {/* SM Dashboard r1: summary + bảng chuyển vào CampaignResultDashboard
-              (dùng chung SM — model lib/kpi/resultModel, một nguồn số duy nhất) */}
-          {canFilter && (
-            <CampaignDateRangeFilter
-              action={`/targets/campaigns/${c.id}`}
-              campaignStart={c.start_date as string}
-              campaignEnd={c.end_date as string}
-              range={range}
-              keepParams={{ tab: 'result' }}
-              note={rangeError}
-            />
-          )}
-          <CampaignResultDashboard
-            model={resultModel}
-            emptyHint="Chưa có target — nạp file ở tab Cấu hình trước."
-          />
-        </>
-      )}
-    </div>
+    // Toàn trang fluid (r1.6 / batch UI 15/08): bảng N cột cuộn ngang TRONG khung, body không cuộn ngang.
+    <CampaignDetailView
+      campaign={c as DetailCampaign}
+      canManage={canManage}
+      tab={tab}
+      targets={targets}
+      runs={(runs ?? []) as DetailRun[]}
+      queryError={queryError}
+      affiliateEnabled={isKpiAffiliateEnabled()}
+      model={resultModel}
+      lastSynced={lastSynced}
+      filter={canFilter ? { range, note: rangeError } : null}
+    />
   )
 }

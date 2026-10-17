@@ -80,6 +80,10 @@
   --radius-v2-chip: var(--v2-radius-chip);
   --color-v2-text-3: var(--v2-text-3);
   --color-v2-selected-line: var(--v2-selected-line);
+  /* UI v2 Phase 2 KPI (canvas "Phase 2 Chiến dịch KPI" · K0): chuỗi số liệu chính + đạt mục tiêu. */
+  --color-v2-series: var(--v2-series);
+  --color-v2-series-soft: var(--v2-series-soft);
+  --color-v2-ok: var(--v2-ok);
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);
@@ -253,6 +257,10 @@ main:has([data-ui-v2="page"]) {
   --v2-selected: #FFF1EA;
   --v2-selected-line: #F3C2A8;
   --v2-accent-text: #B8440F;
+  /* Phase 2 KPI (K0): cam chuỗi dữ liệu (thanh/cột) — KHÁC action ở theme sáng; xanh "đạt" (≥100% / đạt bậc). */
+  --v2-series: #E8622A;
+  --v2-series-soft: #F6C2A9;
+  --v2-ok: #2F9E5B;
   --v2-radius-panel: 12px;
   --v2-radius-control: 10px;
   --v2-radius-chip: 6px;
@@ -285,6 +293,9 @@ main:has([data-ui-v2="page"]) {
   --v2-selected: #2A1E17;
   --v2-selected-line: #7A3E20;
   --v2-accent-text: #F7A57E;
+  --v2-series: #F3743F;
+  --v2-series-soft: #6B3A24;
+  --v2-ok: #5BBF7E;
 }
 /* Nền canvas phủ cả vùng <main> của trang v2 (như care-browse) — sidebar/header/bottom nav không đổi. */
 main:has([data-ui-v2="page"]) {

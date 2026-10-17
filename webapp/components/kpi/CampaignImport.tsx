@@ -4,6 +4,7 @@ import { useState, useTransition } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import { previewCampaignImport, commitCampaignImport } from '@/app/actions/kpiCampaigns'
+import { useFixtureActionBlocked } from '@/components/kpi/KpiFixtureBoundary'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { Download, FileUp, X } from 'lucide-react'
@@ -14,7 +15,7 @@ import { Download, FileUp, X } from 'lucide-react'
 // (server-trusted); parser + RPC vẫn là boundary cuối.
 import { campaignImportGuide } from '@/lib/kpi/campaignImportGuide'
 
-interface Preview {
+export interface CampaignImportPreviewData {
   validCount: number
   invalid: { row: number; pos_code: string | null; error: string }[]
   unmatched: string[]
@@ -58,22 +59,25 @@ export function CampaignImport({
   }
   const router = useRouter()
   const [file, setFile] = useState<File | null>(null)
-  const [preview, setPreview] = useState<Preview | null>(null)
+  const [preview, setPreview] = useState<CampaignImportPreviewData | null>(null)
   const [guideOpen, setGuideOpen] = useState(guideDefaultOpen)
   const [pending, startTransition] = useTransition()
+  const fixtureBlocked = useFixtureActionBlocked()
 
   function doPreview() {
     if (!file) { toast.error('Chưa chọn file'); return }
+    if (fixtureBlocked()) return
     const fd = new FormData(); fd.append('file', file)
     startTransition(async () => {
       const r = await previewCampaignImport(campaignId, fd)
       if ('error' in r && r.error) { toast.error(r.error); setPreview(null); return }
-      setPreview(r as unknown as Preview)
+      setPreview(r as unknown as CampaignImportPreviewData)
     })
   }
 
   function doCommit() {
     if (!file) return
+    if (fixtureBlocked()) return
     const fd = new FormData(); fd.append('file', file)
     startTransition(async () => {
       const r = await commitCampaignImport(campaignId, fd)
@@ -94,9 +98,9 @@ export function CampaignImport({
       <details
         open={guideOpen}
         onToggle={(e) => setGuideOpen((e.currentTarget as HTMLDetailsElement).open)}
-        className="rounded-md border bg-muted/20 text-xs"
+        className="rounded-md border bg-muted/20 text-xs v2:rounded-v2-control v2:bg-muted/40"
       >
-        <summary className="cursor-pointer px-3 py-2 font-medium select-none">
+        <summary className="cursor-pointer px-3 py-2 font-medium select-none v2:flex v2:min-h-[44px] v2:items-center md:v2:min-h-[36px] v2:text-[13px]">
           Hướng dẫn định dạng file Excel
         </summary>
         <div className="px-3 pb-3 space-y-2">
@@ -140,44 +144,53 @@ export function CampaignImport({
         />
         <label
           htmlFor={`campaign-file-${campaignId}`}
-          className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'cursor-pointer gap-1.5')}
+          className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'cursor-pointer gap-1.5 v2:min-h-[44px] md:v2:min-h-0 md:v2:h-[36px] v2:rounded-[8px] v2:text-[13px]')}
         >
           <FileUp className="h-3.5 w-3.5" /> Chọn file Excel/CSV
         </label>
         {file && (
-          <span className="inline-flex items-center gap-1 rounded-full bg-secondary text-secondary-foreground text-xs font-medium pl-2.5 pr-1 py-1 max-w-[240px]">
+          <span data-import-file className="inline-flex items-center gap-1 rounded-full bg-secondary text-secondary-foreground text-xs font-medium pl-2.5 pr-1 py-1 max-w-[240px] v2:rounded-[8px] v2:border v2:bg-card v2:text-foreground v2:text-[13px] v2:py-0.5">
             <span className="truncate">{file.name}</span>
             <button
               type="button"
               aria-label="Bỏ chọn file"
               onClick={() => { setFile(null); setPreview(null) }}
-              className="rounded-full p-0.5 hover:bg-primary/10"
+              className="rounded-full p-0.5 hover:bg-primary/10 v2:inline-flex v2:size-[32px] v2:items-center v2:justify-center v2:p-0"
             >
               <X className="h-3 w-3" />
             </button>
           </span>
         )}
-        <Button size="sm" variant="ghost" onClick={downloadTemplate} className="gap-1.5">
+        <Button size="sm" variant="ghost" onClick={downloadTemplate} className="gap-1.5 v2:min-h-[44px] md:v2:min-h-0 md:v2:h-[36px] v2:rounded-[8px] v2:text-[13px]">
           <Download className="h-3.5 w-3.5" /> Tải file mẫu CSV
         </Button>
-        <Button size="sm" variant="outline" onClick={doPreview} disabled={pending || !file}>
+        <Button size="sm" variant="outline" onClick={doPreview} disabled={pending || !file} className="v2:min-h-[44px] md:v2:min-h-0 md:v2:h-[36px] v2:rounded-[8px] v2:text-[13px]">
           {pending ? 'Đang đọc…' : 'Xem trước'}
         </Button>
-        <Button size="sm" onClick={doCommit} disabled={pending || blocked}>
+        <Button size="sm" onClick={doCommit} disabled={pending || blocked} className="v2:min-h-[44px] md:v2:min-h-0 md:v2:h-[36px] v2:rounded-[8px] v2:text-[13px]">
           Xác nhận nạp
         </Button>
       </div>
 
-      {preview && (
-        <div className="space-y-2 text-sm">
+      {preview && <CampaignImportPreview preview={preview} metricType={metricType} />}
+    </div>
+  )
+}
+
+// Khối XEM TRƯỚC (thuần — chỉ trình bày kết quả previewCampaignImport). Tách ra để catalog/fixture dựng đủ trạng
+// thái hợp lệ / lỗi / POS không khớp mà không gọi server action. Chữ, cột và điều kiện cột giữ nguyên.
+export function CampaignImportPreview({ preview, metricType }: { preview: CampaignImportPreviewData; metricType?: string }) {
+  const guide = campaignImportGuide(metricType)
+  return (
+        <div data-import-preview className="space-y-2 text-sm">
           <div className="flex flex-wrap gap-2">
-            <span className="text-xs px-2 py-0.5 rounded font-medium bg-status-success-bg text-status-success">Hợp lệ {preview.validCount}</span>
-            {preview.invalid.length > 0 && <span className="text-xs px-2 py-0.5 rounded font-medium bg-status-danger-bg text-status-danger">Lỗi {preview.invalid.length}</span>}
-            {preview.unmatched.length > 0 && <span className="text-xs px-2 py-0.5 rounded font-medium bg-status-warning-bg text-status-warning">POS không khớp {preview.unmatched.length}</span>}
+            <span className="text-xs px-2 py-0.5 rounded font-medium bg-status-success-bg text-status-success v2:rounded-full v2:px-2.5 v2:text-[12px]">Hợp lệ {preview.validCount}</span>
+            {preview.invalid.length > 0 && <span className="text-xs px-2 py-0.5 rounded font-medium bg-status-danger-bg text-status-danger v2:rounded-full v2:px-2.5 v2:text-[12px]">Lỗi {preview.invalid.length}</span>}
+            {preview.unmatched.length > 0 && <span className="text-xs px-2 py-0.5 rounded font-medium bg-status-warning-bg text-status-warning v2:rounded-full v2:px-2.5 v2:text-[12px]">POS không khớp {preview.unmatched.length}</span>}
           </div>
 
           {preview.invalid.length > 0 && (
-            <div className="rounded border border-status-danger/25 bg-status-danger-bg p-2 max-h-48 overflow-y-auto">
+            <div role="alert" className="rounded border border-status-danger/25 bg-status-danger-bg p-2 max-h-48 overflow-y-auto v2:rounded-v2-control v2:px-4 v2:py-3">
               <p className="text-xs font-medium text-status-danger mb-1">Sửa hết các dòng lỗi rồi nạp lại (không ghi từng phần):</p>
               <ul className="text-xs text-status-danger space-y-0.5">
                 {preview.invalid.slice(0, 50).map((e, i) => (
@@ -195,9 +208,9 @@ export function CampaignImport({
           // này không xuất hiện (parser đã bảo đảm có thì có đủ mọi dòng).
           const showBonusCols = preview.preview.some((r) => r.minimum_order_target != null)
           return (
-            <div className="rounded border overflow-x-auto max-h-72">
+            <div className="rounded border overflow-x-auto max-h-72 v2:rounded-v2-control">
               <table className="w-full text-xs">
-                <thead className="bg-muted/40">
+                <thead className="bg-muted/40 v2:bg-muted">
                   <tr>
                     <th className="text-left px-3 py-2">POS</th>
                     {showGroupCol && <th className="text-left px-3 py-2">Phân loại</th>}
@@ -216,7 +229,7 @@ export function CampaignImport({
                       <td className="px-3 py-1.5">
                         <div className="flex flex-wrap gap-1">
                           {r.tiers.map((t) => (
-                            <span key={t.threshold_pct} className="inline-flex whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-[11px]">
+                            <span key={t.threshold_pct} className="inline-flex whitespace-nowrap rounded-full bg-muted px-2 py-0.5 text-[11px] v2:rounded-[6px] v2:text-[12px] v2:tabular-nums">
                               {t.threshold_pct}% → {vndMoney(t.commission_amount)}
                             </span>
                           ))}
@@ -243,7 +256,5 @@ export function CampaignImport({
             <p className={cn('text-xs text-muted-foreground')}>… và {preview.validCount - preview.preview.length} dòng hợp lệ khác.</p>
           )}
         </div>
-      )}
-    </div>
   )
 }
