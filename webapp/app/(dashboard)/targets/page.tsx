@@ -1,40 +1,31 @@
 import { redirect } from 'next/navigation'
-import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { redirectIfFsStaff } from '@/lib/fs/isolation'
 import { isSuperAdminEmail, getSmStoreIds } from '@/lib/authz'
 import { Card, CardContent } from '@/components/ui/card'
 import { PageHeader } from '@/components/ds/PageHeader'
 import { StatusBadge } from '@/components/ds/StatusBadge'
-import { EmptyState } from '@/components/ds/EmptyState'
 import { ErrorState } from '@/components/ds/ErrorState'
 import { PeriodTabs, type TargetPeriod } from '@/components/targets/PeriodTabs'
-import { CampaignCardList } from '@/components/kpi/CampaignCardList'
-import { CampaignDateRangeFilter } from '@/components/kpi/CampaignDateRangeFilter'
 import { parseCampaignRange, rangeFilterVisibleForRole } from '@/lib/kpi/campaignDateRange'
 import { createRangeReadDeps } from '@/lib/kpi/campaignRangeDeps'
 import { loadCampaignRangeActuals } from '@/lib/kpi/campaignRangeServer'
-import {
-  CampaignKpiView, parseDailySeries, type CampaignView, type DailyPoint,
-} from '@/components/kpi/CampaignKpiView'
+import { parseDailySeries, type CampaignView, type DailyPoint } from '@/components/kpi/CampaignKpiView'
 import { normalizeDailyPoint, type DailyRawRow } from '@/lib/kpi/dailyPoint'
 import { orderBonusView } from '@/lib/kpi/orderBonus'
-import { CampaignResultSummary } from '@/components/kpi/CampaignResultSummary'
 import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import { isReferralEnabled } from '@/lib/affiliate/flags'
-import { AffiliateQrCard } from '@/components/affiliate/AffiliateQrCard'
-import { AffiliateGmvCard } from '@/components/affiliate/AffiliateGmvCard'
 import { AFFILIATE_QR_FILTER, qrCardVisible, qrCardKey, qrEligibleRole } from '@/lib/affiliate/qrDisplay'
 import { SmTargetsDetailView, SmTargetsErrorView, SmTargetsLandingView, SmTargetsOutOfScopeView } from '@/components/kpi/SmTargetsView'
+import { ManagerTargetsView, StaffCampaignView, StaffPeriodView, StaffStateView } from '@/components/kpi/StaffTargetsView'
 import { buildCampaignResultModel, smScopeState, type ResultActualRow, type ResultCampaign, type ResultTargetRow } from '@/lib/kpi/resultModel'
 import { reduceAffiliateAgg, currentVnMonthISO, overviewVisibleFor, canShowOwnOsGmv, smRegionalGmvVisible, type AffiliateAggInput } from '@/lib/affiliate/overview'
 import { vnDayRange } from '@/lib/kpi/engine'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { getAffiliateSyncHealth, supabaseAffiliateHealthDb } from '@/lib/affiliate/health'
-import { ReferralCard, type ReferralItem } from '@/components/referral/ReferralCard'
+import type { ReferralItem } from '@/components/referral/ReferralCard'
 import { formatDateTime, currentWeekStart } from '@/lib/dateUtils'
-import { cn } from '@/lib/utils'
-import { ChartNoAxesCombined, Target } from 'lucide-react'
+import { ChartNoAxesCombined } from 'lucide-react'
 
 // KPI v2 (migration 067): Day / Week / Month sales targets from the daily
 // BigQuery feed (store_kpi_targets, fed by /api/cron/pull-kpi-targets).
@@ -62,30 +53,7 @@ function currentLabel(period: TargetPeriod, start: string, end: string): string 
 const NOUN: Record<TargetPeriod, string> = { day: 'ngày', week: 'tuần', month: 'tháng' }
 const TITLE: Record<TargetPeriod, string> = { day: 'Doanh số hôm nay', week: 'Doanh số tuần', month: 'Doanh số tháng' }
 
-// KPI goal badge. Sits on the coral gradient hero, so it keeps its own
-// high-contrast white treatment there (DS status tokens are tuned for neutral
-// surfaces); wording + the "no target → never đã/chưa đạt" rule are unchanged.
-function GoalBadge({ status, hasGoal = true }: { status: string | null; hasGoal?: boolean }) {
-  const s = status?.toLowerCase()
-  const known = s === 'achieved' || s === 'not achieved'
-  // No target set (or unknown status) → neutral, never "đã/chưa đạt".
-  if (!hasGoal || !known) {
-    return (
-      <span className="text-xs px-2 py-0.5 rounded font-medium bg-white/20 text-white whitespace-nowrap">
-        Chưa có mục tiêu
-      </span>
-    )
-  }
-  const achieved = s === 'achieved'
-  return (
-    <span className={cn(
-      'text-xs px-2 py-0.5 rounded font-medium whitespace-nowrap',
-      achieved ? 'bg-white text-primary' : 'bg-white/20 text-white',
-    )}>
-      {achieved ? 'Đã đạt mục tiêu' : 'Chưa đạt mục tiêu'}
-    </span>
-  )
-}
+// GoalBadge + KpiSummaryCard (thẻ KPI kỳ) chuyển sang components/kpi/StaffTargetsView.tsx (UI v2 K-6, cùng chữ/luật).
 
 interface KpiRecord {
   period_type:      TargetPeriod
@@ -98,54 +66,6 @@ interface KpiRecord {
   remaining_target: number | null
   refreshed_at:     string
   stores?:          { name: string } | null
-}
-
-// KPI summary (gradient) card — shared by all three periods.
-function KpiSummaryCard({
-  noun, label, status, hasGoal, actual, goal, pct, remaining, achieved,
-}: {
-  noun: string; label: string; status: string | null; hasGoal: boolean
-  actual: number; goal: number; pct: number; remaining: number | null; achieved: boolean
-}) {
-  return (
-    <div className="rounded-xl bg-gradient-to-br from-primary to-orange-600 text-white p-4 space-y-4 shadow-sm">
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <p className="flex items-center gap-1.5 font-semibold text-sm uppercase tracking-wide">
-            <Target className="h-4 w-4" />
-            KPI {noun}
-          </p>
-          <p className="text-xs text-white/80 mt-0.5">{label}</p>
-        </div>
-        <GoalBadge status={status} hasGoal={hasGoal} />
-      </div>
-
-      <div>
-        <p className="text-xs uppercase text-white/80">Còn thiếu</p>
-        <p className="text-3xl font-bold leading-tight">
-          {!hasGoal ? '—' : achieved ? '0₫' : vnd(remaining)}
-        </p>
-        <p className="text-xs text-white/80 mt-0.5">để đạt mục tiêu {noun}</p>
-      </div>
-
-      <div className="space-y-1.5">
-        <p className="text-right text-xs font-semibold">{pct.toFixed(1)}%</p>
-        <div className="h-2.5 w-full rounded-full bg-white/25 overflow-hidden">
-          <div className="h-full rounded-full bg-white" style={{ width: `${Math.max(0, Math.min(100, pct))}%` }} />
-        </div>
-        <div className="flex items-end justify-between text-xs">
-          <div>
-            <p className="font-semibold text-sm">{vnd(actual)}</p>
-            <p className="text-white/80">Đã đạt</p>
-          </div>
-          <div className="text-right">
-            <p className="font-semibold text-sm">{hasGoal ? vnd(goal) : 'Chưa cập nhật'}</p>
-            <p className="text-white/80">Mục tiêu {noun}</p>
-          </div>
-        </div>
-      </div>
-    </div>
-  )
 }
 
 function parsePeriod(v: string | undefined): TargetPeriod {
@@ -688,76 +608,37 @@ export default async function TargetsPage({
     // max-w-5xl, shell giờ fluid theo <main>; landing md+ = grid 2 cột (nội dung
     // campaign + cột phụ QR/GMV); mobile giữ 1 cột đúng thứ tự cũ
     // (content → QR → GMV).
-    const mgrSideCards = (showAffiliateQr || showAffiliateGmv) ? (
-      <>
-        {showAffiliateQr && (
-          <AffiliateQrCard
-            key={qrCardKey(resolvedStoreId ?? null, affiliateQr?.qr_image_url ?? null)}
-            storeName={storeName}
-            partnerCode={affiliateQr?.partner_code ?? null}
-            imageUrl={affiliateQr?.qr_image_url ?? null}
-            destinationUrl={affiliateQr?.qr_destination_url ?? null}
-            queryError={affiliateQrError}
-          />
-        )}
-        {showAffiliateGmv && (
-          <AffiliateGmvCard
-            monthLabel={gmvMonthLabel}
-            gmv={affiliateGmv.gmv}
-            orders={affiliateGmv.orders}
-            syncedAt={affiliateGmvSyncedAt}
-            error={affiliateGmvError}
-            sourceWarning={affiliateGmvWarning}
-            detailHref="/targets/campaigns/affiliate"
-          />
-        )}
-      </>
-    ) : null
+    const qr = showAffiliateQr ? {
+      cardKey: qrCardKey(resolvedStoreId ?? null, affiliateQr?.qr_image_url ?? null),
+      storeName,
+      partnerCode: affiliateQr?.partner_code ?? null,
+      imageUrl: affiliateQr?.qr_image_url ?? null,
+      destinationUrl: affiliateQr?.qr_destination_url ?? null,
+      queryError: affiliateQrError,
+    } : null
+    // UI v2 K-6: trình bày qua ManagerTargetsView (khung desktop 2 cột như cũ, gốc data-ui-v2).
     return (
-      <div data-layout-width="fluid" className="p-4 md:p-6 space-y-4">
-        <PageHeader
-          title="Doanh số chiến dịch"
-          icon={ChartNoAxesCombined}
-          /* Campaign view carries its own store pill (r3) — avoid duplicating */
-          actions={campaignViews.length === 0 ? <span className="text-sm text-muted-foreground">{storeName}</span> : undefined}
-        />
-        <div className={cn('grid grid-cols-1 gap-4 items-start', mgrSideCards && 'md:grid-cols-[minmax(0,1fr)_340px]')}>
-          <div className="space-y-4 min-w-0">
-            {campaignViews.length === 0 ? (
-              <EmptyState className="py-12" icon={ChartNoAxesCombined} title="Hiện chưa có chiến dịch doanh số đang áp dụng." />
-            ) : showCampaignList ? (
-              <CampaignCardList items={campaignViews} hrefFor={campaignHref} />
-            ) : (
-              <>
-                <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0 -my-2.5 md:my-0">← Danh sách chiến dịch</Link>
-                <CampaignResultSummary
-                  campaign={campaignViews.find((c) => c.id === selectedCampaignId) ?? campaignViews[0]}
-                  todayISO={vnTodayISO}
-                />
-                {/* Tier progress (28/07): QLCH desktop thấy "Còn thiếu" từng
-                    mốc thưởng; Staff dùng chung component nhưng prop tắt. */}
-                {canRangeFilter && selectedView && (
-                  <CampaignDateRangeFilter
-                    action="/targets"
-                    campaignStart={selectedView.start_date}
-                    campaignEnd={selectedView.end_date}
-                    range={campaignRange}
-                    keepParams={{ campaign: params.campaign, store: params.store, series: params.series }}
-                    note={campaignRangeError}
-                  />
-                )}
-              <CampaignKpiView
-                  items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily}
-                  dailyError={campaignDailyError} roleLabel="Quản lý" todayISO={vnTodayISO}
-                  storeName={storeName} showTierRemaining
-                  series={chartSeries} seriesHrefBase={seriesHrefBase}
-                />
-              </>
-            )}
-          </div>
-          {mgrSideCards && <div className="space-y-4 min-w-0">{mgrSideCards}</div>}
-        </div>
-      </div>
+      <ManagerTargetsView
+        storeName={storeName}
+        items={campaignViews}
+        showList={showCampaignList}
+        hrefFor={campaignHref}
+        listHref={campaignListHref}
+        kpi={{ selectedId: selectedCampaignId, daily: campaignDaily, dailyError: campaignDailyError, todayISO: vnTodayISO, series: chartSeries, seriesHrefBase }}
+        selected={campaignViews.find((c) => c.id === selectedCampaignId) ?? campaignViews[0] ?? null}
+        range={canRangeFilter && selectedView ? {
+          campaignStart: selectedView.start_date,
+          campaignEnd: selectedView.end_date,
+          range: campaignRange,
+          keepParams: { campaign: params.campaign, store: params.store, series: params.series },
+          note: campaignRangeError,
+        } : null}
+        qr={qr}
+        gmv={showAffiliateGmv ? {
+          monthLabel: gmvMonthLabel, gmv: affiliateGmv.gmv, orders: affiliateGmv.orders,
+          syncedAt: affiliateGmvSyncedAt, error: affiliateGmvError, sourceWarning: affiliateGmvWarning,
+        } : null}
+      />
     )
   }
 
@@ -765,12 +646,7 @@ export default async function TargetsPage({
   //    fed by the BigQuery cron "Pull KPI targets") ──────────────────────────
   if (isStaff) {
     if (!profile?.store_id) {
-      return (
-        <div className="p-4 space-y-4">
-          <PageHeader title="Doanh số" icon={ChartNoAxesCombined} />
-          <EmptyState title="Tài khoản chưa được gán cửa hàng" hint="Vui lòng liên hệ Admin." />
-        </div>
-      )
+      return <StaffStateView kind="no-store" />
     }
     const { data: rows, error: rowsError } = await supabase
       .from('store_kpi_targets')
@@ -781,12 +657,7 @@ export default async function TargetsPage({
       .limit(6)
     if (rowsError) {
       console.error('[targets] staff query failed:', rowsError.message)
-      return (
-        <div className="p-4 space-y-4">
-          <PageHeader title="Doanh số" icon={ChartNoAxesCombined} />
-          <ErrorState message="Không tải được dữ liệu doanh số" hint="Vui lòng thử lại sau hoặc báo Admin." />
-        </div>
-      )
+      return <StaffStateView kind="error" />
     }
 
     const allRows = (rows ?? []) as KpiRecord[]
@@ -823,54 +694,31 @@ export default async function TargetsPage({
       }
     }
 
+    const staffQr = showAffiliateQr ? {
+      cardKey: qrCardKey(resolvedStoreId ?? null, affiliateQr?.qr_image_url ?? null),
+      storeName,
+      partnerCode: affiliateQr?.partner_code ?? null,
+      imageUrl: affiliateQr?.qr_image_url ?? null,
+      destinationUrl: affiliateQr?.qr_destination_url ?? null,
+      queryError: affiliateQrError,
+    } : null
+    const staffReferral = { referral, error: referralError, phoneMissing: referralOn && staffPhone === null }
+
     // ── Campaign mode: active campaigns REPLACE the Ngày/Tuần/Tháng tabs ─────
     if (campaignViews.length > 0) {
+      // UI v2 K-6 (M1–M4): trình bày qua StaffCampaignView. "Giới thiệu bạn bè" + QR chỉ ở landing (không ?campaign=).
       return (
-        <div className="p-4 space-y-4 max-w-xl mx-auto">
-          <PageHeader title="Doanh số chiến dịch" icon={ChartNoAxesCombined} />
-          {/* Card list to pick a campaign (stakeholder); a picked/single one → detail */}
-          {showCampaignList ? (
-            <CampaignCardList items={campaignViews} hrefFor={campaignHref} />
-          ) : (
-            <>
-              <Link href={campaignListHref} className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0 -my-2.5 md:my-0">← Danh sách chiến dịch</Link>
-              <CampaignKpiView
-                items={campaignViews} selectedId={selectedCampaignId} daily={campaignDaily}
-                dailyError={campaignDailyError} roleLabel="Dược sĩ" todayISO={vnTodayISO}
-                storeName={storeName}
-                series={chartSeries} seriesHrefBase={seriesHrefBase}
-              />
-            </>
-          )}
-          {/* "Giới thiệu bạn bè" belongs on the /targets landing (list / single-
-              campaign home) — hidden inside a drilled-in campaign detail (?campaign). */}
-          {!params.campaign && (
-            <>
-              {/* P3-H: QR ngay dưới danh sách chiến dịch */}
-              {showAffiliateQr && (
-                <AffiliateQrCard
-                  key={qrCardKey(resolvedStoreId ?? null, affiliateQr?.qr_image_url ?? null)}
-                  storeName={storeName}
-                  partnerCode={affiliateQr?.partner_code ?? null}
-                  imageUrl={affiliateQr?.qr_image_url ?? null}
-                  destinationUrl={affiliateQr?.qr_destination_url ?? null}
-                  queryError={affiliateQrError}
-                />
-              )}
-              {referral && <ReferralCard {...referral} />}
-              {referralError && (
-                <ErrorState message="Không tải được dữ liệu chương trình giới thiệu" hint="Vui lòng thử lại sau hoặc báo Admin." />
-              )}
-              {referralOn && staffPhone === null && (
-                <Card className="rounded-lg">
-                  <CardContent className="py-4 text-sm text-muted-foreground">
-                    Cập nhật <span className="font-medium">số điện thoại</span> (biểu tượng &ldquo;Sửa thông tin&rdquo; ở đầu trang) để xem chương trình giới thiệu bạn bè.
-                  </CardContent>
-                </Card>
-              )}
-            </>
-          )}
-        </div>
+        <StaffCampaignView
+          storeName={storeName}
+          items={campaignViews}
+          showList={showCampaignList}
+          hrefFor={campaignHref}
+          listHref={campaignListHref}
+          kpi={{ selectedId: selectedCampaignId, daily: campaignDaily, dailyError: campaignDailyError, todayISO: vnTodayISO, series: chartSeries, seriesHrefBase }}
+          landing={!params.campaign}
+          qr={staffQr}
+          referral={staffReferral}
+        />
       )
     }
 
@@ -887,65 +735,28 @@ export default async function TargetsPage({
       ? 'Chưa có dữ liệu doanh số hôm nay (dữ liệu cập nhật trong ngày).'
       : `Chưa có dữ liệu doanh số ${NOUN[period]} cho cửa hàng của bạn.`
 
+    // UI v2 K-6 (M5): trình bày qua StaffPeriodView (KpiSummaryCard chuyển sang component, cùng chữ/luật).
     return (
-      <div className="p-4 space-y-4 max-w-xl mx-auto">
-        <PageHeader
-          title={TITLE[period]}
-          icon={ChartNoAxesCombined}
-          actions={<span className="text-sm text-muted-foreground">{storeName}</span>}
-        />
-
-        <PeriodTabs period={period} />
-
-        {!current ? (
-          <EmptyState className="py-12" icon={ChartNoAxesCombined} title={emptyMsg} />
-        ) : (
-          <>
-            {/* KPI summary card — identical for day / week / month */}
-            <KpiSummaryCard
-              noun={NOUN[period]}
-              label={currentLabel(period, current.period_start, current.period_end)}
-              status={current.status}
-              hasGoal={hasGoal}
-              actual={current.actual}
-              goal={goal}
-              pct={pct}
-              remaining={remaining}
-              achieved={achieved}
-            />
-
-            <p className="text-[11px] text-muted-foreground">
-              Cập nhật lúc {formatDateTime(current.refreshed_at)} · Nguồn: báo cáo BI · * Không bao gồm đơn online
-            </p>
-          </>
-        )}
-
-        {/* P3-H: QR hiện cả khi store chưa có campaign active (giới thiệu khách
-            không phụ thuộc vòng đời campaign) */}
-        {showAffiliateQr && (
-          <AffiliateQrCard
-            key={qrCardKey(resolvedStoreId ?? null, affiliateQr?.qr_image_url ?? null)}
-            storeName={storeName}
-            partnerCode={affiliateQr?.partner_code ?? null}
-            imageUrl={affiliateQr?.qr_image_url ?? null}
-            destinationUrl={affiliateQr?.qr_destination_url ?? null}
-            queryError={affiliateQrError}
-          />
-        )}
-
-        {/* Referral campaign ("Giới thiệu bạn bè") — under Doanh số */}
-        {referral && <ReferralCard {...referral} />}
-        {referralError && (
-          <ErrorState message="Không tải được dữ liệu chương trình giới thiệu" hint="Vui lòng thử lại sau hoặc báo Admin." />
-        )}
-        {referralOn && staffPhone === null && (
-          <Card className="rounded-lg">
-            <CardContent className="py-4 text-sm text-muted-foreground">
-              Cập nhật <span className="font-medium">số điện thoại</span> (biểu tượng &ldquo;Sửa thông tin&rdquo; ở đầu trang) để xem chương trình giới thiệu bạn bè.
-            </CardContent>
-          </Card>
-        )}
-      </div>
+      <StaffPeriodView
+        title={TITLE[period]}
+        storeName={storeName}
+        period={period}
+        current={current ? {
+          noun: NOUN[period],
+          label: currentLabel(period, current.period_start, current.period_end),
+          status: current.status,
+          hasGoal,
+          actual: current.actual,
+          goal,
+          pct,
+          remaining,
+          achieved,
+          refreshedAt: current.refreshed_at,
+        } : null}
+        emptyMsg={emptyMsg}
+        qr={staffQr}
+        referral={staffReferral}
+      />
     )
   }
 

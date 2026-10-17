@@ -12,6 +12,7 @@ import { buildTierProgress, type TierProgress } from '@/lib/kpi/resultModel'
 import type { OrderBonusView } from '@/lib/kpi/orderBonus'
 import { StatusBadge } from '@/components/ds/StatusBadge'
 import { CampaignDailyChart } from '@/components/kpi/CampaignDailyChart'
+import { CampaignDailyTable } from '@/components/kpi/CampaignDailyTable'
 import { CampaignPicker } from '@/components/kpi/CampaignPicker'
 import { requiredPerDay } from '@/lib/kpi/performance'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
@@ -24,6 +25,10 @@ import { Target, CalendarDays, TrendingUp, Wallet, Info, Gift, Store, Link2 as L
 //   daily GMV chart · Thông tin áp dụng · Mốc thưởng (horizontal milestones)
 // Server component — campaign tabs are links (?campaign=), no client JS.
 // NO "Xem chi tiết KPI" button (explicit stakeholder note).
+// UI v2 Phase 2 · K-6 (canvas M2/M3/M4): chỉ thêm class v2: (trang staff/QLCH gắn data-ui-v2) — khối nền card, hero
+// "Đã đạt" lên trước bằng CSS order (DOM giữ thứ tự cũ), 3 ô canh trái không icon, mốc thưởng thành danh sách dọc
+// (thanh mốc ẩn trong v2 — % đã có ở hero), Thông tin áp dụng thành các hàng nhãn/giá trị. Thêm bảng số liệu ngày
+// (<details>, cùng nguồn với biểu đồ) và đường "Trung bình/ngày cần đạt" trên biểu đồ (chỉ GMV — K-0).
 
 export interface CampaignTierView { tier_order: number; threshold_pct: number; commission_amount: number }
 export interface CampaignView {
@@ -205,6 +210,12 @@ export function CampaignKpiView({
     kpiTarget: target, actual: sel.actual_value ?? 0,
     remainingTarget: sel.remaining_target, endISO: sel.end_date, todayISO,
   }) ?? 0)
+  // K-6: đường cần/ngày trên biểu đồ nhận giá trị THÔ (null khi chưa đồng bộ / đã đạt / hết kỳ); biểu đồ tự giới hạn
+  // chỉ GMV, > 0, hôm nay trong kỳ, có ≥1 điểm ngày (K-0).
+  const chartRequiredPerDay = sel.actual_value === null || achieved || campaignOver ? null : requiredPerDay({
+    kpiTarget: target, actual: sel.actual_value,
+    remainingTarget: sel.remaining_target, endISO: sel.end_date, todayISO,
+  })
   // P3-E: "GMV hôm nay" = TỔNG 2 nguồn của ngày hôm nay.
   // r1.1 (audit P1#1): campaign Chất lượng bán hàng đọc ĐÚNG offline_order_count
   // — trước đây lấy gmv + gmv_affiliate rồi format thành "N đơn" (sai hoàn toàn).
@@ -280,13 +291,13 @@ export function CampaignKpiView({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 v2:space-y-3">
       {/* ── Campaign header (review r3, per mockup): the SELECTED campaign is
              the screen's focus — its name is the title, with a date pill that
              opens the picker (scales to 3-5 long-named campaigns where the old
              chip row broke down) and a store pill. ── */}
       <div className="space-y-2">
-        <h2 className="text-lg font-bold leading-snug">{sel.name}</h2>
+        <h2 className="text-lg font-bold leading-snug v2:text-[22px] v2:tracking-[-0.01em] [overflow-wrap:anywhere]">{sel.name}</h2>
         <div className="flex flex-wrap items-center gap-2">
           <CampaignPicker
             items={items.map((i) => {
@@ -326,14 +337,14 @@ export function CampaignKpiView({
           mất chỉ số đang kéo điểm xuống. Loại đó dùng khối hai chỉ số bên dưới.
           actual_value vẫn nguyên trong DB/engine/export để xét thưởng. */}
       {!isOrderAovCampaign && (
-      <Card className="rounded-lg border-primary/20 bg-secondary">
-        <CardContent className="p-4 space-y-3">
+      <Card data-kpi-hero className="rounded-lg v2:py-0 border-primary/20 bg-secondary v2:border-border v2:bg-card">
+        <CardContent className="p-4 space-y-3 v2:p-5">
           <div className="flex items-start justify-between gap-3">
-            <div className="min-w-0 flex-1">
-              <p className="text-xs text-muted-foreground">{pres.targetLabel}</p>
-              <p className="text-2xl font-bold text-primary leading-tight">{vnd(target)}</p>
-              <p className="text-xs text-muted-foreground mt-2">Đã đạt</p>
-              <p className="text-2xl font-bold text-status-success leading-tight">
+            <div className="min-w-0 flex-1 v2:flex v2:flex-col">
+              <p className="text-xs text-muted-foreground v2:order-3 v2:mt-1.5 v2:text-[13px]">{pres.targetLabel}</p>
+              <p className="text-2xl font-bold text-primary leading-tight v2:order-4 v2:text-[15px] v2:text-foreground">{vnd(target)}</p>
+              <p className="text-xs text-muted-foreground mt-2 v2:order-1 v2:mt-0 v2:text-[13px]">Đã đạt</p>
+              <p className="text-2xl font-bold text-status-success leading-tight v2:order-2 v2:text-[28px] v2:tracking-[-0.01em] v2:text-foreground">
                 {sel.actual_value === null ? 'Chưa đồng bộ' : vnd(actual)}
               </p>
             </div>
@@ -364,7 +375,7 @@ export function CampaignKpiView({
               {`${pct.toFixed(0)}%`}
             </span>
           </div>
-          <p className="flex items-center gap-1.5 text-sm border-t pt-3">
+          <p className="flex items-center gap-1.5 text-sm border-t pt-3 v2:text-[14px]">
             <Target className="h-4 w-4 text-primary shrink-0" />
             <span className="text-muted-foreground">Còn thiếu:</span>
             {/* r1.2.1 (audit P1): BA trạng thái tách bạch — chưa đồng bộ KHÔNG
@@ -379,9 +390,9 @@ export function CampaignKpiView({
              Hero phía trên là ĐIỂM hoàn thành (chỉ số YẾU HƠN); khối này cho
              biết vì sao: số đơn/AOV thực tế so với mục tiêu + trạng thái. ── */}
       {qualityDual && (
-        <Card className="rounded-lg border-primary/20 bg-secondary">
-          <CardContent className="p-4 space-y-3">
-            <p className="text-sm font-semibold">Chất lượng bán hàng</p>
+        <Card data-kpi-quality className="rounded-lg v2:py-0 border-primary/20 bg-secondary v2:border-border v2:bg-card">
+          <CardContent className="p-4 space-y-3 v2:p-5">
+            <p className="text-sm font-semibold v2:text-[15px]">Chất lượng bán hàng</p>
             {/* HAI chỉ số ĐỘC LẬP, mỗi cái mục tiêu + tiến độ + % riêng.
                 % KHÔNG cap 100 (vượt mục tiêu thì hiện đúng mức vượt); thanh
                 thì clamp vì thanh không vẽ được quá khung. */}
@@ -393,7 +404,7 @@ export function CampaignKpiView({
                 <div key={label} className="space-y-1">
                   <div className="flex items-baseline justify-between gap-3">
                     <span className="text-sm text-muted-foreground shrink-0">{label}</span>
-                    <span className="text-right text-base font-bold tabular-nums">{mv.valueText}</span>
+                    <span className="text-right text-base font-bold tabular-nums v2:text-[20px]">{mv.valueText}</span>
                   </div>
                   <div data-metric-progress="" className="flex items-center gap-2">
                     <div className="h-2.5 flex-1 overflow-hidden rounded-full bg-muted">
@@ -418,7 +429,7 @@ export function CampaignKpiView({
                 )}>{qualityLabel}</span>
               </p>
             )}
-            <p className="text-[11px] text-muted-foreground">
+            <p className="text-[11px] text-muted-foreground v2:rounded-v2-control v2:bg-muted v2:px-3 v2:py-2.5 v2:text-[12px]">
               Phải đạt CẢ HAI mục tiêu Số đơn và AOV mới đạt KPI và được thưởng.
             </p>
           </CardContent>
@@ -429,9 +440,9 @@ export function CampaignKpiView({
              mỗi nguồn: giá trị · % trên CÙNG kpi_target · mốc đồng bộ riêng.
              Không chevron (chưa có trang chi tiết — audit P3-E). ── */}
       {showBreakdown && (
-        <Card className="rounded-lg">
-          <CardContent className="p-4 space-y-3">
-            <p className="font-semibold text-sm">Phân loại theo chỉ số</p>
+        <Card className="rounded-lg v2:py-0">
+          <CardContent className="p-4 space-y-3 v2:p-5">
+            <p className="font-semibold text-sm v2:text-[15px]">Phân loại theo chỉ số</p>
             <div className="flex items-start gap-3">
               <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
                 <Store className="h-4 w-4" />
@@ -465,38 +476,39 @@ export function CampaignKpiView({
 
       {/* ── 3 metric cards — solid colored icon circles per template
              (brand triad: blue-grey / coral / green) ── */}
-      <div className={cn('grid gap-2', isOrderAovCampaign ? 'grid-cols-2' : 'grid-cols-3')}>
-        <Card className="rounded-lg">
-          <CardContent className="p-3 text-center">
-            <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-muted text-muted-foreground">
+      {/* v2: số tiền ĐẦY ĐỦ (luật r2.7) không vừa 3 cột ở 360/390 ⇒ mobile 2 cột, ô thứ 3 chiếm cả hàng; md+ 3 cột. */}
+      <div data-kpi-tiles className={cn('grid gap-2 v2:gap-2.5', isOrderAovCampaign ? 'grid-cols-2' : 'grid-cols-3 v2:grid-cols-2 md:v2:grid-cols-3')}>
+        <Card className="rounded-lg v2:py-0">
+          <CardContent className="p-3 text-center v2:px-3.5 v2:text-left">
+            <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-muted text-muted-foreground v2:hidden">
               <CalendarDays className="h-4 w-4" />
             </span>
             {/* Inclusive rule (today counts — the store still sells today), so the
                 label says "ngày bán" to keep the TB/ngày math uncontested. */}
-            <p className="text-[11px] text-muted-foreground mt-1.5">Số ngày bán còn lại</p>
-            <p className="text-sm font-bold mt-0.5">{campaignOver ? 'Đã kết thúc' : `${daysLeft} ngày`}</p>
+            <p className="text-[11px] text-muted-foreground mt-1.5 v2:mt-0 v2:text-[12px] v2:leading-tight">Số ngày bán còn lại</p>
+            <p className="text-sm font-bold mt-0.5 v2:mt-1.5 v2:text-[17px]">{campaignOver ? 'Đã kết thúc' : `${daysLeft} ngày`}</p>
           </CardContent>
         </Card>
         {/* r1.1 (audit khuyến nghị): ẩn với Chất lượng bán hàng — "điểm %/ngày"
             KHÔNG tương đương số đơn/ngày hay AOV/ngày, dễ hiểu sai nghiệp vụ. */}
         {perDayVisible(sel.metric_type) && (
-          <Card className="rounded-lg">
-            <CardContent className="p-3 text-center">
-              <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground">
+          <Card className="rounded-lg v2:py-0">
+            <CardContent className="p-3 text-center v2:px-3.5 v2:text-left">
+              <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground v2:hidden">
                 <TrendingUp className="h-4 w-4" />
               </span>
-              <p className="text-[11px] text-muted-foreground mt-1.5">Trung bình/ngày cần đạt</p>
-              <p className="text-sm font-bold mt-0.5 text-primary">{achieved ? pres.zero : campaignOver ? '—' : vnd(needPerDay)}</p>
+              <p className="text-[11px] text-muted-foreground mt-1.5 v2:mt-0 v2:text-[12px] v2:leading-tight">Trung bình/ngày cần đạt</p>
+              <p className="text-sm font-bold mt-0.5 text-primary v2:mt-1.5 v2:text-[17px] v2:text-foreground">{achieved ? pres.zero : campaignOver ? '—' : vnd(needPerDay)}</p>
             </CardContent>
           </Card>
         )}
-        <Card className="rounded-lg">
-          <CardContent className="p-3 text-center">
-            <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-status-success-bg text-status-success">
+        <Card className={cn('rounded-lg v2:py-0', !isOrderAovCampaign && 'v2:col-span-2 md:v2:col-span-1')}>
+          <CardContent className="p-3 text-center v2:px-3.5 v2:text-left">
+            <span className="mx-auto flex h-8 w-8 items-center justify-center rounded-full bg-status-success-bg text-status-success v2:hidden">
               <Wallet className="h-4 w-4" />
             </span>
-            <p className="text-[11px] text-muted-foreground mt-1.5">{pres.todayLabel}</p>
-            <p className={cn('text-sm font-bold mt-0.5', todayGmv !== null && todayGmv > 0 && 'text-status-success')}>
+            <p className="text-[11px] text-muted-foreground mt-1.5 v2:mt-0 v2:text-[12px] v2:leading-tight">{pres.todayLabel}</p>
+            <p className={cn('text-sm font-bold mt-0.5 v2:mt-1.5 v2:text-[17px]', todayGmv !== null && todayGmv > 0 && 'text-status-success')}>
               {todayText}
             </p>
           </CardContent>
@@ -504,9 +516,9 @@ export function CampaignKpiView({
       </div>
 
       {/* ── Tiến độ theo ngày ── */}
-      <Card className="rounded-lg">
-        <CardContent className="p-4">
-          <p className="font-semibold text-sm mb-2">Tiến độ theo ngày</p>
+      <Card className="rounded-lg v2:py-0">
+        <CardContent className="p-4 v2:p-5">
+          <p className="font-semibold text-sm mb-2 v2:text-[15px]">Tiến độ theo ngày</p>
           {isOrderAovCampaign && seriesHrefBase && daily.length > 0 && (
               /* Segmented Số đơn | AOV — idiom PeriodTabs: <Link> giữ URL ổn
                  định (?series=), KHÔNG biến màn Staff thành client component. */
@@ -539,7 +551,7 @@ export function CampaignKpiView({
               sai ở mọi viewport còn lại. */}
           <div data-chart-frame="" className="aspect-[360/170] w-full">
             {daily.length > 0 ? (
-              <CampaignDailyChart start={sel.start_date} end={sel.end_date} daily={daily} todayISO={todayISO} breakdown={showBreakdown} metricType={sel.metric_type} series={series} />
+              <CampaignDailyChart start={sel.start_date} end={sel.end_date} daily={daily} todayISO={todayISO} breakdown={showBreakdown} metricType={sel.metric_type} series={series} requiredPerDay={chartRequiredPerDay} />
             ) : (
               <p className="flex h-full items-center justify-center text-center text-sm text-muted-foreground">
                 {dailyError
@@ -550,16 +562,19 @@ export function CampaignKpiView({
               </p>
             )}
           </div>
+          {daily.length > 0 && (
+            <CampaignDailyTable start={sel.start_date} end={sel.end_date} daily={daily} todayISO={todayISO} metricType={sel.metric_type} series={series} breakdown={showBreakdown} />
+          )}
         </CardContent>
       </Card>
 
       {/* ── Thông tin áp dụng ── */}
-      <Card className="rounded-lg">
-        <CardContent className="p-4">
-          <p className="flex items-center gap-1.5 font-semibold text-sm mb-2">
-            <Info className="h-4 w-4 text-primary" /> Thông tin áp dụng
+      <Card data-kpi-info className="rounded-lg v2:py-0">
+        <CardContent className="p-4 v2:p-5">
+          <p className="flex items-center gap-1.5 font-semibold text-sm mb-2 v2:text-[15px]">
+            <Info className="h-4 w-4 text-primary v2:hidden" /> Thông tin áp dụng
           </p>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 text-sm">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 text-sm v2:grid-cols-1 v2:divide-y v2:text-[13px] v2:[&>p]:flex v2:[&>p]:justify-between v2:[&>p]:gap-3 v2:[&>p]:py-2.5 v2:[&>p>span:last-child]:text-right">
             <p className="py-1"><span className="text-muted-foreground">Chiến dịch: </span><span className="font-medium text-primary">{sel.name}</span></p>
             {/* 107: chưa phân loại thì BỎ HẲN dòng — một dòng '—' trong khối
                 "Thông tin áp dụng" chỉ tạo cảm giác thiếu dữ liệu. */}
@@ -574,11 +589,11 @@ export function CampaignKpiView({
 
       {/* ── Mốc thưởng (horizontal milestones) ── */}
       {tiers.length > 0 && (
-        <Card className="rounded-lg">
-          <CardContent className="p-4 space-y-4">
+        <Card data-kpi-tiers className="rounded-lg v2:py-0">
+          <CardContent className="p-4 space-y-4 v2:p-5 v2:space-y-3">
             <div className="flex items-center justify-between gap-2 flex-wrap">
-              <p className="flex items-center gap-1.5 font-semibold text-sm">
-                <Gift className="h-4 w-4 text-primary" /> Mốc thưởng
+              <p className="flex items-center gap-1.5 font-semibold text-sm v2:text-[15px]">
+                <Gift className="h-4 w-4 text-primary v2:hidden" /> Mốc thưởng
               </p>
               <p className="text-sm">
                 <span className="text-muted-foreground">Commission Store dự kiến: </span>
@@ -588,8 +603,8 @@ export function CampaignKpiView({
               </p>
             </div>
 
-            {/* Track + nodes + current marker */}
-            <div className="px-2 pt-6 pb-1">
+            {/* Track + nodes + current marker (ẩn trong v2 — % hiện tại đã ở hero) */}
+            <div className="px-2 pt-6 pb-1 v2:hidden">
               <div className="relative">
                 <span
                   className="absolute -top-6 -translate-x-1/2 whitespace-nowrap rounded-full bg-status-success text-background text-[10px] font-semibold px-2 py-0.5"
@@ -618,7 +633,7 @@ export function CampaignKpiView({
             {/* Tier boxes — grid up to 4 tiers (template layout); 5+ tiers fall
                 back to a vertical list so 360px never gets unreadable slivers */}
             {tiers.length <= 4 ? (
-              <div className="grid gap-2" style={{ gridTemplateColumns: `repeat(${Math.min(tiers.length, 4)}, minmax(0, 1fr))` }}>
+              <div className="grid gap-2 v2:flex v2:flex-col" style={{ gridTemplateColumns: `repeat(${Math.min(tiers.length, 4)}, minmax(0, 1fr))` }}>
                 {tiers.map((t) => {
                   const reached = reachedOrder !== null && t.tier_order <= reachedOrder
                   const isNext = nextTier?.tier_order === t.tier_order
@@ -626,7 +641,7 @@ export function CampaignKpiView({
                     <div
                       key={t.tier_order}
                       className={cn(
-                        'rounded-lg border p-2 text-center',
+                        'rounded-lg border p-2 text-center v2:flex v2:items-baseline v2:justify-between v2:gap-3 v2:rounded-v2-control v2:px-3.5 v2:py-3 v2:text-left',
                         reached ? 'border-status-success/40 bg-status-success-bg' : isNext ? 'border-primary bg-secondary' : 'bg-muted/20',
                       )}
                     >
@@ -676,8 +691,8 @@ export function CampaignKpiView({
         const b = sel.order_bonus
         const barPct = b.pct === null ? 0 : Math.min(b.pct, 100)
         return (
-          <Card className="rounded-lg" data-order-bonus>
-            <CardContent className="p-4 space-y-3">
+          <Card className="rounded-lg v2:py-0" data-order-bonus>
+            <CardContent className="p-4 space-y-3 v2:p-5">
               <div className="flex items-center justify-between gap-2 flex-wrap">
                 <p className="flex items-center gap-1.5 font-semibold text-sm">
                   <Gift className="h-4 w-4 text-primary" /> Thưởng thêm theo số đơn
@@ -709,7 +724,7 @@ export function CampaignKpiView({
 
       {/* P3-E r1: chú thích nguồn từ campaignFootnote (contract có test) —
           offline-only giữ nguyên câu cũ; có affiliate → rule DELIVERED-only. */}
-      <p className="text-[11px] text-muted-foreground">
+      <p className="text-[11px] text-muted-foreground v2:text-[12px] v2:text-v2-text-3">
         {sel.synced_at ? `Cập nhật lúc ${formatDateTime(sel.synced_at)}` : 'Doanh số chưa được đồng bộ'} · {campaignFootnote(sel)}
       </p>
     </div>

@@ -10,6 +10,7 @@
 // Mig 103: campaign Số khách — cột = affiliate_customer_count, format 'N khách'
 // qua metricPresentation (GMV path dùng cùng module, format byte-equal cũ).
 import { metricPresentation, orderAxisTicks } from '@/lib/kpi/campaignDisplay'
+import { dailyPointValue, dailyValueFormatter } from '@/lib/kpi/dailySeries'
 
 interface DailyPoint {
   date: string
@@ -50,30 +51,20 @@ export function CampaignDailyChart({
   requiredPerDay?: number | null
 }) {
   const pres = metricPresentation(metricType)
-  const isCustomer = pres.kind === 'affiliate_customer_count'
   // Mig 106: campaign Chất lượng bán hàng KHÔNG vẽ tiền — cột là SỐ ĐƠN/ngày
   // (mặc định) hoặc AOV/ngày = net ngày / số đơn ngày. Ngày không có đơn →
   // null ⇒ KHÔNG vẽ cột (gap), tuyệt đối không quy về 0₫/0 đơn.
   const isOrderAov = pres.kind === 'offline_order_aov'
   const nfInt = new Intl.NumberFormat('vi-VN')
-  const pointValue = (d: DailyPoint): number | null => {
-    if (isOrderAov) {
-      const ord = d.offline_order_count
-      if (ord === null || ord === undefined) return null
-      if (series === 'orders') return ord
-      return ord > 0 ? d.gmv / ord : null            // AOV ngày (0 đơn → gap)
-    }
-    return isCustomer ? (d.affiliate_customer_count ?? 0) : d.gmv + d.gmv_affiliate
-  }
+  // K-6: giá trị ngày + định dạng đầy đủ từ lib/kpi/dailySeries — CHÍNH nguồn của bảng số liệu ngày (<details>).
+  const pointValue = (d: DailyPoint): number | null => dailyPointValue(d, metricType, series)
   // Trục/nhãn: số đơn là ĐẾM (không phải tiền); AOV là tiền.
   const compactVnd = isOrderAov && series === 'orders'
     ? (n: number) => nfInt.format(Math.round(n))
     : isOrderAov ? metricPresentation('gmv').compact : pres.compact
   const ariaLabel = !isOrderAov ? pres.chartAriaLabel
     : series === 'aov' ? 'Biểu đồ AOV theo ngày' : 'Biểu đồ số đơn theo ngày'
-  const fullVnd = isOrderAov && series === 'orders'
-    ? (n: number) => `${nfInt.format(Math.round(n))} đơn`
-    : isOrderAov ? metricPresentation('gmv').value : pres.value
+  const fullVnd = dailyValueFormatter(metricType, series)
   // Full day axis across the campaign range (future days render empty).
   // Giá trị cột = TỔNG 2 nguồn; point gốc giữ lại cho tooltip breakdown.
   const pointByDate = new Map(daily.map((d) => [d.date, d]))
@@ -82,10 +73,19 @@ export function CampaignDailyChart({
     const v = pointValue(d)
     if (v !== null) gmvByDate.set(d.date, v)          // null = gap, không set
   }
+  // Q-134 (PM 17/10, K-6): trục tối đa 92 ngày. Kỳ ≤ 92 ngày ⇒ đủ cả kỳ (ngày tương lai để trống) như cũ. Kỳ dài ⇒
+  // cửa sổ 92 ngày GẦN NHẤT kết thúc ở min(hôm nay, hết kỳ) — trước đây luôn lấy 92 ngày ĐẦU kỳ nên chiến dịch dài
+  // không thấy các ngày mới. Không bao giờ lấy ngày trước đầu kỳ; kỳ dài mới chạy chưa tới 92 ngày ⇒ vẫn 92 ngày đầu
+  // (có hôm nay). Giá trị từng điểm, ngưỡng trục và đường cần/ngày giữ nguyên.
   const days: string[] = []
   const DAY = 86400_000
+  const MAX_DAYS = 92
+  const startMs = Date.parse(`${start}T00:00:00Z`)
   const endMs = Date.parse(`${end}T00:00:00Z`)
-  for (let t = Date.parse(`${start}T00:00:00Z`); t <= endMs && days.length < 92; t += DAY) {
+  const anchorMs = Math.min(endMs, Math.max(startMs, Date.parse(`${todayISO}T00:00:00Z`)))
+  const lastMs = Math.min(endMs, Math.max(anchorMs, startMs + (MAX_DAYS - 1) * DAY))
+  const firstMs = Math.max(startMs, lastMs - (MAX_DAYS - 1) * DAY)
+  for (let t = firstMs; t <= lastMs; t += DAY) {
     days.push(new Date(t).toISOString().slice(0, 10))
   }
   if (days.length === 0) return null
@@ -134,7 +134,7 @@ export function CampaignDailyChart({
         const dayNo = d.slice(8, 10)
         const showTick = i === 0 || i === days.length - 1 || i % tickEvery === 0
         return (
-          <g key={d}>
+          <g key={d} data-day={d}>
             {v !== undefined && v > 0 && (
               <rect
                 x={cx - barW / 2}

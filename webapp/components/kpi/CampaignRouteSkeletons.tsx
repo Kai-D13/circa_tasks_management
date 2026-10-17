@@ -60,3 +60,20 @@ export function CampaignDetailSkeleton() {
     </div>
   )
 }
+
+// UI v2 K-6: khung chờ /targets (landing SM / staff / QLCH — cùng pathname nên KHÔNG phân biệt vai): tiêu đề + 3 thẻ.
+// Fluid như SM/QLCH; staff mobile-only nên tự hẹp theo màn hình. Thay khung cũ max-w-xl của targets/loading.tsx.
+export function TargetsLandingSkeleton() {
+  return (
+    <div data-ui-v2="page" data-route-loading="targets" className="p-4 md:p-6 space-y-4 md:space-y-[18px]">
+      <div className="flex items-center gap-3">
+        <Skeleton className="size-10 rounded-v2-control" />
+        <div className="space-y-2">
+          <Skeleton className="h-6 w-48 max-w-full" />
+          <Skeleton className="h-4 w-36 max-w-full" />
+        </div>
+      </div>
+      {Array.from({ length: 3 }, (_, i) => <Skeleton key={i} className="h-[132px] rounded-v2-panel" />)}
+    </div>
+  )
+}

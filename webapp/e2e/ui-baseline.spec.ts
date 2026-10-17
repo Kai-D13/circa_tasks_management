@@ -31,7 +31,10 @@ const THEMES = ['light', 'dark'] as const
 const STAFF_ROUTES: [string, string, string?][] = [
   ['/tasks', 'Danh sách Tasks'],
   ['/prescriptions', 'Toa thuốc'],
-  ['/targets', 'Doanh số'],
+  // UI v2 K-6 (PM 16/10): /targets bỏ khỏi baseline LIVE — ảnh lệch theo số liệu KPI sống (2 ảnh staff-targets-light
+  // 390/360 được miễn tạm tới K-6). Thay bằng ảnh FIXTURE ổn định, commit được: ui-v2-kpi-staff.spec.ts
+  // (staff-list / staff-detail-gmv sáng-tối / staff-detail-quality / staff-period m390 + manager-detail d1440) + test
+  // cấu trúc route thật cùng spec.
   ['/announcements', 'Bảng tin'],
   ['/inventory', 'Tồn kho'],
 ]

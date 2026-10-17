@@ -56,3 +56,16 @@ chỉ từ fixture; test theo vai super/SM/QLCH/staff/FS; null ≠ 0; Số đơn
 - Test fixture dùng `e2e/fixtureGuard.ts` → `trapWrites`: ghi nhận rồi abort mọi request ghi ngay trong trình duyệt.
   Khẳng định bộ đếm `[data-kpi-fixture-blocked]` và **0 request**. Route thật chỉ kiểm "vẫn gửi đúng 1 server action"
   bằng request đã bị abort, không bao giờ tới máy chủ.
+
+## 6. /targets staff + QLCH (K-6, canvas M1–M5)
+- **Phần trình bày** nằm ở `components/kpi/StaffTargetsView.tsx`: StaffCampaignView, StaffPeriodView, StaffStateView, ManagerTargetsView.
+  - `page.tsx` giữ auth, truy vấn, luật số.
+  - Fixture `/ui-catalog/kpi-v2/staff?fx=` dùng chung các view này.
+- **Restyle:** `CampaignKpiView`, `CampaignCardList`, `PeriodTabs`, `ReferralCard`, `AffiliateQrCard` chỉ thêm class `v2:`.
+  - Chữ, DOM và `data-*` giữ nguyên; hero "Đã đạt" lên trước bằng CSS order.
+  - Số tiền đầy đủ (không "trđ"); ô số 2 cột trên mobile để số không tràn.
+- **Bảng số liệu ngày** `CampaignDailyTable` (`<details>`, mở bằng bàn phím/chạm):
+  - giá trị lấy từ `lib/kpi/dailySeries` (`dailyPointValue`, `dailyValueFormatter`) — **chính nguồn** của `CampaignDailyChart`;
+  - ngày thiếu điểm / giá trị null ⇒ `—`.
+- **Đường "Trung bình/ngày cần đạt"** trên biểu đồ nhận giá trị THÔ (null khi chưa đồng bộ / đã đạt / hết kỳ), chỉ GMV (K-0).
+- **Khung chờ** `/targets` = `TargetsLandingSkeleton` (không phân biệt vai). **Baseline live** `/targets` staff đã thay bằng ảnh fixture.

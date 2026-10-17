@@ -25,16 +25,17 @@ export function ReferralCard({ total, success, sameDay, noOrder, items }: {
     { label: 'Không phát sinh đơn',  value: noOrder, tint: 'text-status-warning' },
   ]
   return (
-    <Card className="rounded-lg">
-      <CardContent className="p-4 space-y-3">
-        <p className="flex items-center gap-1.5 font-semibold text-sm uppercase tracking-wide">
-          <Gift className="h-4 w-4 text-primary" /> Giới thiệu bạn bè
+    // UI v2 K-6 (M1): ô số nền muted canh trái, tiêu đề chữ thường; chữ/số không đổi.
+    <Card className="rounded-lg v2:py-0">
+      <CardContent className="p-4 space-y-3 v2:p-5">
+        <p className="flex items-center gap-1.5 font-semibold text-sm uppercase tracking-wide v2:normal-case v2:tracking-normal v2:text-[15px]">
+          <Gift className="h-4 w-4 text-primary v2:hidden" /> Giới thiệu bạn bè
         </p>
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
           {tiles.map((t) => (
-            <div key={t.label} className="rounded-lg border p-2 text-center">
+            <div key={t.label} className="rounded-lg border p-2 text-center v2:rounded-v2-control v2:border-0 v2:bg-muted v2:p-3 v2:text-left">
               <p className={cn('text-xl font-bold leading-tight', t.tint)}>{t.value}</p>
-              <p className="text-[10px] text-muted-foreground mt-0.5 leading-tight">{t.label}</p>
+              <p className="text-[10px] text-muted-foreground mt-0.5 leading-tight v2:mt-1 v2:text-[12px]">{t.label}</p>
             </div>
           ))}
         </div>

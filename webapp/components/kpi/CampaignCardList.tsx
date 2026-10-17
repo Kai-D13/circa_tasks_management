@@ -39,9 +39,11 @@ const PCT_CLS = {
 
 // Chiến dịch đang chạy của một cửa hàng, dạng card bấm được (landing Staff +
 // QLCH) → mở chi tiết sẵn có (?campaign=<id>).
+// UI v2 Phase 2 · K-6 (canvas M1): chỉ thêm class v2: — thẻ bo panel, tên 16px, tag loại dạng chip, số 14px, thanh
+// cao hơn; chữ/số/luật màu (campaignCardValue) không đổi, icon trang trí ẩn trong v2.
 export function CampaignCardList({ items, hrefFor }: { items: CampaignCard[]; hrefFor: (id: string) => string }) {
   return (
-    <div className="space-y-2">
+    <div data-campaign-card-list className="space-y-2 v2:space-y-2.5">
       {items.map((c) => {
         // MỘT lời gọi duy nhất — mọi quyết định hiển thị (đơn vị, cặp
         // thực tế/mục tiêu, % , tone) nằm ở lib/kpi/campaignDisplay.
@@ -57,24 +59,24 @@ export function CampaignCardList({ items, hrefFor }: { items: CampaignCard[]; hr
         return (
           <Link key={c.id} href={hrefFor(c.id)} prefetch={false} className="block">
             {/* rounded-lg — DS cap 8px; padding đã đưa hàng vượt xa mức chạm 44px. */}
-            <Card className="rounded-lg hover:border-primary/40 active:bg-muted/40 transition-colors">
-              <CardContent className="p-3 space-y-2 min-h-[44px]">
+            <Card className="rounded-lg hover:border-primary/40 active:bg-muted/40 transition-colors v2:py-0">
+              <CardContent className="p-3 space-y-2 min-h-[44px] v2:p-4 v2:space-y-3">
                 {/* Hàng tên: icon nhỏ lại (28px) để nhường chỗ cho SỐ LIỆU —
                     trước đây ô 36px chiếm cột riêng suốt chiều cao card.
                     Tên dùng line-clamp-2 + break-words thay `truncate`: tên
                     chiến dịch tiếng Việt hay dài hơn một dòng ở 360px. */}
                 <div className="flex items-start gap-2.5">
-                  <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary">
+                  <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-primary/10 text-primary v2:hidden">
                     <ChartNoAxesCombined className="h-3.5 w-3.5" />
                   </span>
                   <div className="min-w-0 flex-1">
-                    <div className="font-medium leading-snug line-clamp-2 break-words">{c.name}</div>
-                    <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground">
+                    <div className="font-medium leading-snug line-clamp-2 break-words v2:text-[16px] v2:font-semibold">{c.name}</div>
+                    <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-muted-foreground v2:mt-1 v2:text-[12px]">
                       <span className="inline-flex items-center gap-1">
                         <CalendarDays className="h-3 w-3 shrink-0" />
                         {formatDate(c.start_date)} – {formatDate(c.end_date)}
                       </span>
-                      <span className="rounded bg-muted px-1.5 py-0.5 font-medium">{v.typeLabel}</span>
+                      <span className="rounded bg-muted px-1.5 py-0.5 font-medium v2:rounded-v2-chip v2:bg-accent v2:text-[11px] v2:text-foreground">{v.typeLabel}</span>
                     </div>
                   </div>
                   <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
@@ -87,15 +89,15 @@ export function CampaignCardList({ items, hrefFor }: { items: CampaignCard[]; hr
                   <div className="space-y-1">
                     {v.lines.map((l) => (
                       <div key={l.label} className="space-y-0.5">
-                        <div className="flex items-baseline justify-between gap-3 text-xs">
+                        <div className="flex items-baseline justify-between gap-3 text-xs v2:text-[13px]">
                           <span className="shrink-0 text-muted-foreground">{l.label}</span>
-                          <span className="text-right font-medium tabular-nums">{l.value}</span>
+                          <span className="text-right font-medium tabular-nums v2:text-[14px] v2:font-semibold">{l.value}</span>
                         </div>
                         {/* Commit 5: dòng nào mang % riêng thì có THANH riêng —
                             Số đơn và AOV mỗi cái một tiến độ, không gộp. */}
                         {l.pctText !== undefined && (
                           <div className="flex items-center gap-2">
-                            <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                            <div data-card-line-progress className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted v2:h-2">
                               {v.synced && l.pct != null && (
                                 <div
                                   className={cn('h-full', l.pass ? BAR_CLS.success : BAR_CLS.warning)}
@@ -103,7 +105,7 @@ export function CampaignCardList({ items, hrefFor }: { items: CampaignCard[]; hr
                                 />
                               )}
                             </div>
-                            <span className={cn('shrink-0 text-xs tabular-nums', l.pass ? PCT_CLS.success : PCT_CLS.warning)}>
+                            <span className={cn('shrink-0 text-xs tabular-nums v2:text-[13px] v2:font-semibold', l.pass ? PCT_CLS.success : PCT_CLS.warning)}>
                               {l.pctText}
                             </span>
                           </div>
@@ -115,13 +117,13 @@ export function CampaignCardList({ items, hrefFor }: { items: CampaignCard[]; hr
 
                 {v.showAggregate ? (
                   <div className="flex items-center gap-2">
-                    <div className="h-1.5 flex-1 rounded-full bg-muted overflow-hidden">
+                    <div className="h-1.5 flex-1 rounded-full bg-muted overflow-hidden v2:h-2">
                       {/* chưa đồng bộ → KHÔNG vẽ tiến độ (0% đọc như đã có kết quả) */}
                       {v.synced && (
                         <div className={cn('h-full', BAR_CLS[v.tone])} style={{ width: `${Math.min(v.pct, 100)}%` }} />
                       )}
                     </div>
-                    <span className={cn('shrink-0 text-xs tabular-nums', PCT_CLS[v.tone])}>{v.pctText}</span>
+                    <span className={cn('shrink-0 text-xs tabular-nums v2:text-[13px] v2:font-semibold', PCT_CLS[v.tone])}>{v.pctText}</span>
                   </div>
                 ) : (
                   // Không có % tổng ⇒ chỗ này là VERDICT ('Đạt KPI'/'Chưa đạt').
