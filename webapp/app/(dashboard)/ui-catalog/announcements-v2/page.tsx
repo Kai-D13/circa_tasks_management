@@ -13,6 +13,9 @@ import { AnnouncementsListView, type AnnouncementsListState } from '@/components
 import { AnnouncementDetailView, type AnnouncementDetailData } from '@/components/announcements/AnnouncementDetailView'
 import { AnnouncementAdminActions } from '@/components/announcements/AnnouncementAdminActions'
 import type { ReadStatsData } from '@/components/announcements/ReadStatsPanel'
+import { AnnouncementFormView } from '@/components/announcements/AnnouncementFormView'
+import { CreateAnnouncementForm } from '@/components/announcements/CreateAnnouncementForm'
+import { editLoadDecision, type EditLoad } from '@/lib/announcements/editLoad'
 import { groupAnnouncementsByTime } from '@/lib/announcements/feed'
 import { buildStoreReadGroups, UNASSIGNED_STORE, type ReadMember } from '@/lib/announcements/readStats'
 
@@ -31,6 +34,11 @@ import { buildStoreReadGroups, UNASSIGNED_STORE, type ReadMember } from '@/lib/a
 //      (23/23) · detail-zero (0 người nhận) · detail-stats-error (truy vấn thống kê lỗi) · detail-staff (dược sĩ: không
 //      thống kê, không Sửa/Xóa) · detail-long (tiêu đề/nội dung dài, 5 ảnh carousel) · detail-noimage · detail-error
 //      · detail-admin-other (admin không phải tác giả: thống kê có, Sửa/Xóa không)
+// A3 — form tạo/sửa (AnnouncementFormView + CreateAnnouncementForm + AnnouncementImageUpload THẬT trong boundary ⇒
+//      gửi form và chọn file bị chặn trước action/upload): form-new (25 cửa hàng) · form-edit (ảnh bìa + 3 carousel,
+//      4/25 cửa hàng, hạn 20/10/2026) · form-stores-error (truy vấn cửa hàng lỗi) · form-edit-error (truy vấn trang
+//      sửa lỗi) · form-nostores (0 cửa hàng) · form-edit-stores-error (tin THEO CỬA HÀNG + danh sách cửa hàng lỗi ⇒
+//      chỉ ErrorState — R1-01) · form-edit-all-stores-error (tin TẤT CẢ + danh sách lỗi ⇒ form, chỉ "Tất cả")
 
 const NOW = '2026-10-15T02:45:00.000Z' // 09:45 15/10/2026 giờ VN
 const img = (a: string, b: string) => `data:image/svg+xml;utf8,${encodeURIComponent(
@@ -93,6 +101,11 @@ const DETAIL: Extract<AnnouncementDetailData, { kind: 'ok' }> = {
   kind: 'ok', title: FEED[0].title, creatorName: 'Nguyễn Văn A', publishedAt: FEED[0].publishedAt, body: BODY,
   coverUrl: IMG_A, carousel: [IMG_B, IMG_C, img('#EAD9E6', '#B98FB0')],
 }
+// A3 — 25 cửa hàng giả cho bộ chọn (có dấu, để thử lọc bỏ dấu).
+const FORM_STORES = ['CIRCA CENTRAL', 'CIRCA URBAN', 'CIRCA LUMINA', 'CIRCA MIZUKI', 'CIRCA SUNRISE', 'CIRCA ELANA', 'CIRCA THỐNG NHẤT',
+  'CIRCA MORA', 'CIRCA SIGNATURE', 'CIRCA ÁNH DƯƠNG', 'CIRCA BÌNH THẠNH', 'CIRCA GÒ VẤP', 'CIRCA PHÚ NHUẬN', 'CIRCA TÂN BÌNH', 'CIRCA QUẬN 7',
+  'CIRCA THỦ ĐỨC', 'CIRCA NHÀ BÈ', 'CIRCA HÓC MÔN', 'CIRCA CỦ CHI', 'CIRCA BÌNH CHÁNH', 'CIRCA AKARI', 'CIRCA ASTORIA', 'CIRCA ECO GREEN',
+  'CIRCA BELVITA', 'CIRCA HOTCHLAND'].map((name, i) => ({ id: `fx-st${i}`, name }))
 const asAdmin = (list: AnnouncementCardData[]) => list.map((a, i) => ({ ...a, read: 'untracked' as const, expired: i === list.length - 1 }))
 const asUntracked = (list: AnnouncementCardData[]) => list.map((a) => ({ ...a, read: 'untracked' as const }))
 
@@ -169,6 +182,42 @@ export default async function UiCatalogAnnouncementsV2Page({ searchParams }: { s
   if (!user) redirect('/login')
   if (!(profile?.role === 'admin' && isSuperAdminEmail(user.email))) notFound()
   const { fx = 'components' } = await searchParams
+
+  if (fx.startsWith('form-')) {
+    const edit = ['form-edit', 'form-edit-error', 'form-edit-stores-error', 'form-edit-all-stores-error'].includes(fx)
+    const stores = fx === 'form-nostores' ? [] : FORM_STORES
+    // Trạng thái trang sửa đi qua CHÍNH editLoadDecision của route (R1-01): tin gửi theo cửa hàng + danh sách cửa hàng
+    // lỗi ⇒ chỉ ErrorState; tin gửi tất cả + danh sách lỗi ⇒ form, chỉ "Tất cả". form-edit-error = tải tin lỗi.
+    const editVisibility: 'all' | 'stores' = fx === 'form-edit-all-stores-error' ? 'all' : 'stores'
+    const load: EditLoad = !edit ? { kind: 'form', storesError: fx === 'form-stores-error' }
+      : fx === 'form-edit-error' ? { kind: 'error' }
+      : editLoadDecision({ aStoresErr: false, assetsErr: false, storesErr: fx.endsWith('stores-error'), visibility: editVisibility })
+    return (
+      <AnnouncementFixtureBoundary>
+        <div data-testid="ui-catalog-ann-v2" data-fx={fx}>
+          <AnnouncementFormView
+            heading={edit ? 'Sửa thông báo' : 'Tạo thông báo'}
+            backHref="#fx-back"
+            backLabel={edit ? 'Quay lại' : 'Bảng tin'}
+            error={load.kind === 'error'}
+          >
+            {load.kind === 'form' && <CreateAnnouncementForm
+              stores={stores}
+              storesError={load.storesError}
+              {...(edit ? {
+                mode: 'edit' as const, announcementId: 'fx-ann-1',
+                initial: {
+                  title: FEED[0].title, body: BODY, visibility: editVisibility,
+                  storeIds: editVisibility === 'stores' ? FORM_STORES.slice(0, 4).map((s) => s.id) : [],
+                  expiresAt: '2026-10-20', coverUrl: IMG_A, carouselUrls: [IMG_B, IMG_C, img('#EAD9E6', '#B98FB0')],
+                },
+              } : {})}
+            />}
+          </AnnouncementFormView>
+        </div>
+      </AnnouncementFixtureBoundary>
+    )
+  }
 
   if (fx.startsWith('detail-')) {
     const staff = fx === 'detail-staff'

@@ -1,11 +1,9 @@
 import { notFound, redirect } from 'next/navigation'
-import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
-import { buttonVariants } from '@/components/ui/button'
 import { CreateAnnouncementForm } from '@/components/announcements/CreateAnnouncementForm'
+import { AnnouncementFormView } from '@/components/announcements/AnnouncementFormView'
 import { isSuperAdminEmail } from '@/lib/authz'
-import { ArrowLeft } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { editLoadDecision } from '@/lib/announcements/editLoad'
 
 export default async function EditAnnouncementPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -15,15 +13,34 @@ export default async function EditAnnouncementPage({ params }: { params: Promise
   const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
   if (profile?.role !== 'admin') redirect('/announcements')
 
-  const [{ data: ann }, { data: stores }, { data: aStores }, { data: assets }] = await Promise.all([
+  const [{ data: ann, error: annErr }, { data: stores, error: storesErr }, { data: aStores, error: aStoresErr }, { data: assets, error: assetsErr }] = await Promise.all([
     supabase.from('announcements').select('id, title, body, visibility, expires_at, created_by').eq('id', id).maybeSingle(),
     supabase.from('stores').select('id, name').eq('store_type', 'os').order('name'),
     supabase.from('announcement_stores').select('store_id').eq('announcement_id', id),
     supabase.from('announcement_assets').select('kind, url, position').eq('announcement_id', id).order('position'),
   ])
+  // UI v2 A3 (PM P1): dùng `error` của CHÍNH các truy vấn trên — không thêm truy vấn.
+  //   · tải tin lỗi ⇒ ErrorState (trước: không có dữ liệu ⇒ 404 gây hiểu nhầm); tin thật sự không tồn tại vẫn 404.
+  //   · cửa hàng đích / ảnh của tin lỗi ⇒ ErrorState, KHÔNG dựng form thiếu dữ liệu (lưu form đó sẽ xóa ảnh / bỏ
+  //     cửa hàng đích của tin) — fail-closed.
+  //   · danh sách cửa hàng để chọn lỗi: tin gửi THEO CỬA HÀNG ⇒ ErrorState (không đối chiếu được tập cửa hàng đang
+  //     lưu — R1-01); tin gửi TẤT CẢ ⇒ form mở, chỉ giữ "Tất cả" (nút chọn cửa hàng tắt) + báo lỗi trong khối "Gửi cho".
+  //   Thứ tự giữ quyền như cũ: tin lỗi → không có tin (404) → không phải tác giả/super (redirect) → dữ liệu phụ
+  //   (lib/announcements/editLoad — hàm thuần, test được mọi nhánh).
+  const errorView = (err: { message: string }) => {
+    console.error('[announcements] edit query failed:', err.message)
+    return <AnnouncementFormView heading="Sửa thông báo" backHref={`/announcements/${id}`} backLabel="Quay lại" error />
+  }
+  if (annErr) return errorView(annErr)
   if (!ann) notFound()
   // Only the creator or a super admin may edit (matches RLS ann_update).
   if (ann.created_by !== user.id && !isSuperAdminEmail(user.email)) redirect(`/announcements/${id}`)
+  const load = editLoadDecision({
+    aStoresErr: !!aStoresErr, assetsErr: !!assetsErr, storesErr: !!storesErr,
+    visibility: (ann.visibility as 'all' | 'stores') ?? 'all',
+  })
+  if (load.kind === 'error') return errorView((aStoresErr ?? assetsErr ?? storesErr)!)
+  if (storesErr) console.error('[announcements] stores query failed:', storesErr.message)
 
   const initial = {
     title: ann.title as string,
@@ -36,12 +53,8 @@ export default async function EditAnnouncementPage({ params }: { params: Promise
   }
 
   return (
-    <div data-layout-width="centered" className="p-4 md:p-6 max-w-2xl mx-auto">
-      <Link href={`/announcements/${id}`} className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'mb-2 -ml-2')}>
-        <ArrowLeft className="h-4 w-4 mr-1" /> Quay lại
-      </Link>
-      <h1 className="text-xl font-semibold mb-4">Sửa thông báo</h1>
-      <CreateAnnouncementForm stores={stores ?? []} mode="edit" announcementId={id} initial={initial} />
-    </div>
+    <AnnouncementFormView heading="Sửa thông báo" backHref={`/announcements/${id}`} backLabel="Quay lại">
+      <CreateAnnouncementForm stores={stores ?? []} mode="edit" announcementId={id} initial={initial} storesError={load.storesError} />
+    </AnnouncementFormView>
   )
 }
