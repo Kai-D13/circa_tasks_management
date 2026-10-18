@@ -35,7 +35,10 @@ const STAFF_ROUTES: [string, string, string?][] = [
   // 390/360 được miễn tạm tới K-6). Thay bằng ảnh FIXTURE ổn định, commit được: ui-v2-kpi-staff.spec.ts
   // (staff-list / staff-detail-gmv sáng-tối / staff-detail-quality / staff-period m390 + manager-detail d1440) + test
   // cấu trúc route thật cùng spec.
-  ['/announcements', 'Bảng tin'],
+  // UI v2 Phase 3 A1 (PM 17/10): /announcements cũng bỏ khỏi baseline LIVE — trang đổi theo thiết kế v2 và ảnh live lệch
+  // theo nội dung bảng tin mới. Thay bằng ảnh FIXTURE commit được ở ui-v2-ann-list.spec.ts (list-staff 390/360 sáng-tối,
+  // list-admin 1440 / 1280 có sidebar) + test cấu trúc route thật (staff/QLCH/SM/super) cùng spec. /inventory phía sau
+  // vẫn được so ảnh.
   ['/inventory', 'Tồn kho'],
 ]
 const SUPER_ROUTES: [string, string, string?][] = [

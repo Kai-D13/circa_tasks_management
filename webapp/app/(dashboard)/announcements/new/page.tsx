@@ -1,10 +1,7 @@
 import { redirect } from 'next/navigation'
-import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
-import { buttonVariants } from '@/components/ui/button'
 import { CreateAnnouncementForm } from '@/components/announcements/CreateAnnouncementForm'
-import { ArrowLeft } from 'lucide-react'
-import { cn } from '@/lib/utils'
+import { AnnouncementFormView } from '@/components/announcements/AnnouncementFormView'
 
 export default async function NewAnnouncementPage() {
   const supabase = await createClient()
@@ -16,18 +13,11 @@ export default async function NewAnnouncementPage() {
   const { data: stores, error: storesErr } = await supabase.from('stores').select('id, name').eq('store_type', 'os').order('name')
   if (storesErr) console.error('[announcements] stores query failed:', storesErr.message)
 
+  // UI v2 A3: lỗi danh sách cửa hàng ⇒ form vẫn gửi được cho "Tất cả" (như cũ), câu báo lỗi chuyển vào khối "Gửi cho"
+  // và bộ chọn KHÔNG hiện rỗng giả "Chưa có cửa hàng." (PM P1).
   return (
-    <div data-layout-width="centered" className="p-4 md:p-6 max-w-2xl mx-auto">
-      <Link href="/announcements" className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'mb-2 -ml-2')}>
-        <ArrowLeft className="h-4 w-4 mr-1" /> Bảng tin
-      </Link>
-      <h1 className="text-xl font-semibold mb-4">Tạo thông báo</h1>
-      {storesErr && (
-        <p className="text-sm text-destructive mb-3">
-          Không tải được danh sách cửa hàng — chỉ có thể gửi cho “Tất cả”. Thử lại sau hoặc báo Admin.
-        </p>
-      )}
-      <CreateAnnouncementForm stores={stores ?? []} />
-    </div>
+    <AnnouncementFormView heading="Tạo thông báo" backHref="/announcements" backLabel="Bảng tin">
+      <CreateAnnouncementForm stores={stores ?? []} storesError={!!storesErr} />
+    </AnnouncementFormView>
   )
 }

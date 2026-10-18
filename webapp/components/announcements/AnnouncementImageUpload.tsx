@@ -6,7 +6,8 @@ import { safeStorageName } from '@/lib/storage'
 import { uploadViaGcs } from '@/lib/storage/uploadClient'
 import { compressImage } from '@/lib/prescriptions/compressImage'
 import { toast } from 'sonner'
-import { Plus, X, Loader2 } from 'lucide-react'
+import { useAnnouncementFixtureBlocked } from '@/components/announcements/AnnouncementFixtureBoundary'
+import { AnnouncementImageAddTile, AnnouncementImageTile, AnnouncementImageUploadingTile } from '@/components/announcements/AnnouncementImageTile'
 
 const BUCKET = 'task-uploads' // public bucket (shared); GCS used first when enabled
 const MAX_RAW = 25 * 1024 * 1024
@@ -19,14 +20,22 @@ interface Props {
   onChange:       (urls: string[]) => void
   max:            number
   label:          string
+  /** UI v2 A3: tên riêng cho nút xoá — 'cover' ⇒ "Xóa ảnh bìa", 'carousel' ⇒ "Xóa ảnh carousel N". */
+  kind?:          'cover' | 'carousel'
 }
 
-export function AnnouncementImageUpload({ announcementId, value, onChange, max, label }: Props) {
+// UI v2 A3 (artboard B3): logic tải lên GIỮ NGUYÊN (giới hạn số ảnh / loại / 25MB thô / nén / 5MB sau nén / GCS trước,
+// Supabase fallback cùng bucket + prefix). Mới: (1) ô ảnh A0 — nút xoá LUÔN hiện, vùng bấm 44px, aria-label riêng;
+// (2) guard fixture NGAY ĐẦU handleFiles, trước nén / uploadViaGcs (createUploadUrl) / storage.upload — fixture
+// /ui-catalog/announcements-v2 không bao giờ tải file thật; route thật: fixtureBlocked() = false ⇒ luồng cũ.
+export function AnnouncementImageUpload({ announcementId, value, onChange, max, label, kind = 'carousel' }: Props) {
   const [uploading, setUploading] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const fixtureBlocked = useAnnouncementFixtureBlocked()
 
   async function handleFiles(files: FileList | null) {
     if (!files?.length) return
+    if (fixtureBlocked()) { if (inputRef.current) inputRef.current.value = ''; return }
     const arr = Array.from(files)
     if (value.length + arr.length > max) { toast.error(`Tối đa ${max} ảnh`); return }
     const valid = arr.filter((f) => {
@@ -66,28 +75,26 @@ export function AnnouncementImageUpload({ announcementId, value, onChange, max, 
   function remove(i: number) { onChange(value.filter((_, idx) => idx !== i)) }
 
   return (
-    <div className="space-y-2">
-      <label className="text-sm font-medium">{label}</label>
-      {value.length > 0 && (
-        <div className="grid grid-cols-3 gap-2">
-          {value.map((url, i) => (
-            <div key={url} className="relative group aspect-video rounded border overflow-hidden bg-muted">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={url} alt="" className="w-full h-full object-cover" />
-              <button type="button" aria-label="Xóa ảnh" onClick={() => remove(i)}
-                className="absolute top-1 right-1 bg-black/60 text-white rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-          ))}
-        </div>
-      )}
-      {value.length < max && (
-        <button type="button" disabled={uploading} onClick={() => inputRef.current?.click()}
-          className="flex items-center justify-center gap-2 border-2 border-dashed rounded-md py-3 px-4 text-sm text-muted-foreground hover:bg-muted/40 transition-colors disabled:opacity-50 w-full">
-          {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <><Plus className="h-4 w-4" />{value.length === 0 ? 'Thêm ảnh' : 'Thêm ảnh khác'}</>}
-        </button>
-      )}
+    <div data-ann-upload={kind} className="space-y-2">
+      <p className="text-sm font-medium">
+        {label}
+        {max > 1 && <span data-ann-upload-count className="font-normal text-muted-foreground tabular-nums"> · {value.length}/{max}</span>}
+      </p>
+      <div className="grid grid-cols-3 gap-2">
+        {value.map((url, i) => (
+          <AnnouncementImageTile
+            key={url}
+            url={url}
+            removeLabel={kind === 'cover' ? 'Xóa ảnh bìa' : `Xóa ảnh carousel ${i + 1}`}
+            onRemove={() => remove(i)}
+            disabled={uploading}
+          />
+        ))}
+        {uploading && <AnnouncementImageUploadingTile />}
+        {!uploading && value.length < max && (
+          <AnnouncementImageAddTile label={value.length === 0 ? 'Thêm ảnh' : 'Thêm ảnh khác'} onClick={() => inputRef.current?.click()} />
+        )}
+      </div>
       <input ref={inputRef} type="file" multiple accept="image/jpeg,image/jpg,image/png,image/webp"
         className="hidden" onChange={(e) => handleFiles(e.target.files)} disabled={uploading} aria-label={label} />
     </div>
