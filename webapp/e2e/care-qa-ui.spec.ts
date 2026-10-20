@@ -4,14 +4,14 @@ import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { test, expect } from '@playwright/test'
-import * as XLSX from 'xlsx'
-import { CARE_IMPORT_HEADERS, CARE_IMPORT_SHEET } from '../lib/care/import/contract'
-import { parseCareImportXlsx } from '../lib/care/import/parse'
+import { CARE_IMPORT_HEADERS, CARE_IMPORT_MAX_ROWS } from '../lib/care/import/contract'
+import { parseCareImportCsv } from '../lib/care/import/parse'
+import { fixtureCsv } from './careImportFixture'
 import { validateCareRows } from '../lib/care/import/validate'
 import { handleCareCommit, handleCarePreview, type CareImportDeps, type CareImportQa, type CareImportRepo } from '../lib/care/import/handler'
 import { CARE_QA_ISSUE_CODES, CARE_QA_ISSUE_LABELS } from '../lib/care/qa/labels'
 import {
-  CARE_QA_LOCK_FILE, CARE_QA_MARKER_FILE, careImportQaMarker, careQaCommitIssues, careQaRequestAllowed, careQaUiExternalIds,
+  CARE_QA_LOCK_FILE, CARE_QA_MARKER_FILE, CARE_QA_UI_MAX_CUSTOMERS, careImportQaMarker, careQaCommitIssues, careQaRequestAllowed, careQaUiExternalIds,
   evaluateCareQaUi, isLoopbackHostHeader, parseCareQaUiMarker, type CareQaUiMarker,
 } from '../lib/care/qa/uiGate'
 import { beginCareQaImport, finishCareQaImport } from '../lib/care/qa/uiMarkerIo'
@@ -208,12 +208,12 @@ test.describe('care B6-qa-ui — cổng chế độ QA (thuần) @desktop', () =
 })
 
 // ── 2. Handler import ở chế độ QA (repo giả) ───────────────────────────────────
-function textXlsx(rows: Record<string, string>[]): Uint8Array<ArrayBuffer> {
-  const ws = XLSX.utils.aoa_to_sheet([[...CARE_IMPORT_HEADERS], ...rows.map((r) => CARE_IMPORT_HEADERS.map((h) => r[h] ?? ''))])
-  for (const k of Object.keys(ws)) if (!k.startsWith('!')) { (ws[k] as XLSX.CellObject).t = 's'; (ws[k] as XLSX.CellObject).z = '@' }
-  const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, CARE_IMPORT_SHEET)
-  return new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer)
+/** File N1 CSV UTF-8 (Q-124) — như Excel "CSV UTF-8" và file mẫu của app. */
+function textCsv(rows: Record<string, string>[]): Uint8Array<ArrayBuffer> {
+  const bytes = new TextEncoder().encode(fixtureCsv([[...CARE_IMPORT_HEADERS], ...rows.map((r) => CARE_IMPORT_HEADERS.map((h) => r[h] ?? ''))]))
+  const out = new Uint8Array(new ArrayBuffer(bytes.byteLength))
+  out.set(bytes)
+  return out
 }
 const row = (ext: string, i: number, store: string, email: string, pid = `P${i}`) => ({
   customer_external_id: ext, customer_name: `KH QA ${i}`, customer_phone: `039001${String(i).padStart(4, '0')}`, target_store_code: store,
@@ -221,7 +221,7 @@ const row = (ext: string, i: number, store: string, email: string, pid = `P${i}`
 })
 async function request(bytes: Uint8Array, fields: Record<string, string> = {}) {
   const fd = new FormData()
-  fd.append('file', new File([new Uint8Array(bytes)], 'ban-qa.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+  fd.append('file', new File([new Uint8Array(bytes)], 'ban-qa.csv', { type: 'text/csv' }))
   for (const [k, v] of Object.entries(fields)) fd.append(k, v)
   const tmp = new Request('http://localhost/x', { method: 'POST', body: fd })
   const body = new Uint8Array(await tmp.arrayBuffer())
@@ -258,7 +258,7 @@ test.describe('care B6-qa-ui — handler import chế độ QA (repo giả) @des
     return { marker, calls, deps }
   }
   const qaRows = careQaUiExternalIds('a1b2c3d4', 3).map((x, i) => row(x, i + 1, STORE, EMAIL))
-  const qaFile = textXlsx(qaRows)
+  const qaFile = textCsv(qaRows)
 
   test('file QA: server tự đặt is_test=true + batch id marker, BỎ QUA is_test/batch client gửi; khoá TRƯỚC ghi đầu; không dọn staging ngoài phạm vi', async () => {
     const { calls, deps, marker } = fakeWorld(qaFile)
@@ -271,7 +271,7 @@ test.describe('care B6-qa-ui — handler import chế độ QA (repo giả) @des
     const { calls, deps } = fakeWorld(qaFile)
     const p1 = await (await handleCarePreview(await request(qaFile), deps)).json()
     expect(p1).toMatchObject({ ok: true, qa: { commitAllowed: true, issues: [] } })
-    const other = textXlsx([row('KH-THAT-1', 1, STORE, EMAIL)])
+    const other = textCsv([row('KH-THAT-1', 1, STORE, EMAIL)])
     const p2 = await (await handleCarePreview(await request(other), deps)).json()
     expect(p2).toMatchObject({ ok: true, qa: { commitAllowed: false, issues: ['QA_FILE_NOT_MARKED'] } })
     expect(calls).toEqual(['loadLookups:isTest=true', 'loadLookups:isTest=false'])
@@ -308,7 +308,7 @@ test.describe('care B6-qa-ui — handler import chế độ QA (repo giả) @des
   })
 
   test('production (qa null) không đổi: is_test=false, không id, có dọn staging cơ hội; file QA-UI-… bị từ chối (security P1-1)', async () => {
-    const realFile = textXlsx([row('KH-1', 1, STORE, EMAIL), row('KH-2', 2, STORE, EMAIL)])
+    const realFile = textCsv([row('KH-1', 1, STORE, EMAIL), row('KH-2', 2, STORE, EMAIL)])
     const { calls, deps } = fakeWorld(realFile)
     deps.qa = null
     const res = await handleCareCommit(await request(realFile, { sha256: sha(realFile), period: vnPeriod(), is_test: 'true' }), deps)
@@ -339,7 +339,7 @@ test.describe('care B6-qa-ui — vòng đời prepare → import browser → 5 v
       product_name: `San pham ${i + 1}`, product_url: `https://cdn-gcs.thuocsi.vn/qa-fixture/SKU-${i + 1}.png`,
     }))
     rows.push({ ...rows[2], product_id: 'SKU-3B', product_name: 'San pham 3B', product_url: '' })
-    return { rows, bytes: textXlsx(rows) }
+    return { rows, bytes: textCsv(rows) }
   }
 
   async function setup() {
@@ -358,7 +358,7 @@ test.describe('care B6-qa-ui — vòng đời prepare → import browser → 5 v
     const gw = pgliteGateway(db, L, {})
     const { today, period } = F.vnToday()
     let out: Uint8Array | null = null
-    const ctx = { gw, env, envFileText: 'NEXT_PUBLIC_SUPABASE_URL=x\n', markerPath, nowMs: NOW_MID_MONTH, XLSX, writeOut: (b: Uint8Array) => { out = b } }
+    const ctx = { gw, env, envFileText: 'NEXT_PUBLIC_SUPABASE_URL=x\n', markerPath, nowMs: NOW_MID_MONTH, writeOut: (b: Uint8Array) => { out = b } }
     const totalTest = async () => Number((await db.query(`SELECT
       (SELECT count(*) FROM public.care_import_batches WHERE is_test) + (SELECT count(*) FROM public.care_customers WHERE is_test)
       + (SELECT count(*) FROM public.care_tasks WHERE is_test) + (SELECT count(*) FROM public.care_interactions WHERE is_test)
@@ -428,7 +428,7 @@ test.describe('care B6-qa-ui — vòng đời prepare → import browser → 5 v
     expect(F.validUiMarker(marker())).toBe(true)
     expect(m.accounts).toEqual({ super: L.U.super, marketing: L.U.mkt, sm: L.U.sm, staff: [L.U.A, L.U.C] })
     expect(evaluateCareQaUi({ nodeEnv: 'development', env: QA_ENV, envFiles: [], markerText: fs.readFileSync(markerPath, 'utf8'), period })).toMatchObject({ kind: 'active' })
-    const parsed = parseCareImportXlsx(new Uint8Array(prepared()) as Uint8Array<ArrayBuffer>)
+    const parsed = parseCareImportCsv(new Uint8Array(prepared()) as Uint8Array<ArrayBuffer>)
     if (!parsed.ok) throw new Error(parsed.fileError)
     const v = validateCareRows(parsed.rows)
     expect([parsed.rows.length, v.customers.length, parsed.errors.length + v.errors.length]).toEqual([13, 12, 0])
@@ -529,6 +529,79 @@ test.describe('care B6-qa-ui — vòng đời prepare → import browser → 5 v
     await db.close()
   })
 
+  test('Q-121 QA tải: prepare-load đúng trần dòng (mặc định, 2,5 SP/khách; chỉ đọc) → load qua handler QA thật (preview ×2 → commit → preview lại → commit lại) → status → down sạch, dữ liệu thật nguyên', async () => {
+    const { db, L, F, env, ctx, markerPath, today, period, totalTest, real, marker, prepared, qaDeps } = await setup()
+    await db.exec('SET enable_seqscan = on') // PGlite mặc định off (≠ prod) ⇒ finalize nhiều nghìn dòng chậm bậc hai
+    const R = F.LOAD_DEFAULT_ROWS as number, C = F.LOAD_DEFAULT_CUSTOMERS as number
+    expect([R, C]).toEqual([CARE_IMPORT_MAX_ROWS, CARE_IMPORT_MAX_ROWS / 2.5])
+    await seedReal(db, L, today, period)
+    const realBefore = await real()
+    const outsideBefore = (await F.cmdStatus(ctx)).outside
+    expect(outsideBefore).toMatchObject({ test_tasks_all: 0, staging_rows_all: 0 })
+    expect(outsideBefore.real_tasks).toBeGreaterThan(0)
+    // Kích thước sai ⇒ dừng TRƯỚC mọi đọc DB / marker.
+    await expect(F.cmdPrepareLoad({ ...ctx, customers: C, rows: R + 1 })).rejects.toMatchObject({ code: 'LOAD_SIZE' })
+    await expect(F.cmdPrepareLoad({ ...ctx, customers: 10_001, rows: R })).rejects.toMatchObject({ code: 'LOAD_SIZE' })
+    expect(fs.existsSync(markerPath)).toBe(false)
+
+    const prep = await F.cmdPrepareLoad({ ...ctx, runId: 'c0ffee01' })
+    expect(prep).toMatchObject({ ok: true, profile: 'load', rows: R, customers: C, products: R })
+    expect(prep.fileMb).toBeLessThan(8)
+    const m0 = marker()
+    expect([m0.phase, m0.externalIds.length, parseCareQaUiMarker(m0) !== null, F.validUiMarker(m0)]).toEqual(['reserved', C, true, true])
+    const parsed = parseCareImportCsv(prepared())
+    expect(parsed.ok).toBe(true)
+    if (!parsed.ok) return
+    const ids = parsed.rows.map((x) => x.customer_external_id)
+    expect(new Set(ids).size).toBe(C)
+    expect(ids.filter((x, i) => i > 0 && x !== ids[i - 1]).length).toBe(C - 1) // mọi dòng của một khách liền nhau
+    expect(parsed.rows.every((x) => /^03900\d{5}$/.test(x.customer_phone) && /^KH QA \d{5}$/.test(x.customer_name)
+      && x.target_store_code === 'QAOS01' && x.assignee_email === L.EA.toLowerCase() && x.product_url.startsWith('https://cdn-gcs.thuocsi.vn/qa-fixture/'))).toBe(true)
+
+    // Client = handler THẬT ở chế độ QA (repo PGlite) + cùng serializer multipart với CLI.
+    const client = {
+      async post(p: string, fields: Record<string, unknown>) {
+        const { body, contentType } = await F.multipartBody(fields)
+        const r = new Request(`http://localhost:3100${p}`, {
+          method: 'POST', headers: { 'content-type': contentType, 'content-length': String(body.byteLength) }, body, duplex: 'half',
+        } as RequestInit)
+        const res = await (p.endsWith('/commit') ? handleCareCommit : handleCarePreview)(r, qaDeps(L.U.mkt))
+        return { status: res.status, timing: res.headers.get('server-timing'), body: await res.json() }
+      },
+    }
+    const out = await F.cmdLoad({ env, markerPath, fileBytes: prepared(), client })
+    expect(out).toMatchObject({
+      ok: true, rows: R, customers: C,
+      preview: { status: 200, errorCount: 0, created: C, commitAllowed: true },
+      commit: { status: 200, result: { status: 'committed', kind: 'initial', rows: R, customers: C, created: C } },
+      preview_after: { status: 200, created: 0, updated: 0, unchanged: C },
+      recommit: { status: 409, code: 'QA_ALREADY_USED' },
+    })
+    expect(Object.keys(out.preview.server)).toEqual(expect.arrayContaining(['parse', 'lookups', 'preview', 'rss', 'rss_peak']))
+    expect(Object.keys(out.commit.server)).toEqual(expect.arrayContaining(['parse', 'lookups', 'stage', 'finalize', 'rss_peak']))
+    expect(JSON.stringify(out)).not.toMatch(/QA-UI-|@example|03900|KH QA|[0-9a-f]{8}-[0-9a-f]{4}-/)
+    expect(marker()).toMatchObject({ phase: 'imported', importResult: 'committed' })
+    await expect(F.cmdLoad({ env, markerPath, fileBytes: prepared(), client })).rejects.toMatchObject({ code: 'PHASE' }) // một lượt / marker
+
+    const n = async (sql: string) => Number(Object.values((await db.query(sql, [m0.batchId])).rows[0])[0])
+    expect(await n(`SELECT count(*) FROM public.care_tasks WHERE is_test AND batch_id = $1`)).toBe(C)
+    expect(await n(`SELECT count(*) FROM public.care_task_products WHERE is_current AND batch_id = $1`)).toBe(R)
+    expect(await n(`SELECT count(*) FROM public.care_import_staging WHERE batch_id = $1`)).toBe(0)
+    expect(await real()).toEqual(realBefore)
+
+    const st = await F.cmdStatus(ctx)
+    expect(st.counts).toMatchObject({ care_import_batches: 1, care_customers: C, care_tasks: C, care_task_products: R, care_import_staging: 0, care_interactions: 0 })
+    expect(st.outside).toEqual({ ...outsideBefore, test_tasks_all: C })
+    const down = await F.cmdDown(ctx)
+    expect(down).toMatchObject({ ok: true, remaining: 0, deleted: { care_tasks: C, care_customers: C, care_task_products: R, care_assignment_events: C, care_import_batches: 1 } })
+    expect(fs.existsSync(markerPath)).toBe(false)
+    expect(await totalTest()).toBe(0)
+    expect(await real()).toEqual(realBefore)
+    expect(await F.cmdStatus(ctx)).toEqual({ ok: true, marker: false, outside: outsideBefore })
+    expect(JSON.stringify([st, down])).not.toMatch(/QA-UI-|@example|03900|[0-9a-f]{8}-[0-9a-f]{4}-/)
+    await db.close()
+  })
+
   test('prepare: cổng/tài khoản/phạm vi SM/kỳ có test khác/ID giả trùng ⇒ dừng TRƯỚC khi tạo marker; marker độc quyền', async () => {
     const { db, L, F, ctx, markerPath, period, today } = await setup()
     const orig = originalFile(L).bytes
@@ -540,7 +613,8 @@ test.describe('care B6-qa-ui — vòng đời prepare → import browser → 5 v
       ['Marketing là admin phòng không có quyền import', { env: { ...ctx.env, E2E_MKT_ADMIN_EMAIL: 'qa.ops@example.invalid' } }, 'ACCOUNT_ROLE'],
       ['dược sĩ thứ hai ngoài vùng SM', { env: { ...ctx.env, E2E_CARE_TRANSFER_TO_EMAIL: L.STORES[2].assigneeEmails[0] } }, 'SM_SCOPE'],
       ['trùng tài khoản', { env: { ...ctx.env, E2E_CARE_TRANSFER_TO_EMAIL: L.EA } }, 'ACCOUNT_DUPLICATE'],
-      ['file sai sheet', { originalBytes: (() => { const wb = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['a']]), 'Sheet1'); return new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx' })) })() }, 'FILE_INVALID'],
+      ['file .xlsx (không phải CSV)', { originalBytes: new Uint8Array([0x50, 0x4b, 0x03, 0x04, 1, 2, 3]) }, 'FILE_INVALID'],
+      ['CSV sai tiêu đề', { originalBytes: new TextEncoder().encode('a,b,c') }, 'FILE_INVALID'],
       ['giao tháng', { nowMs: Date.parse('2026-10-31T17:05:00Z') }, 'MONTH_BOUNDARY'],
     ]
     for (const [name, over, code] of bad) {
@@ -575,8 +649,8 @@ test.describe('care B6-qa-ui — vòng đời prepare → import browser → 5 v
     expect(marker().phase).toBe('importing')
     expect(beginCareQaImport(dir, m.batchId)).toBe(false) // khoá độc quyền: lượt thứ hai không vào được
     const repo = pgliteImportRepo(db, L, today)
-    await repo.createBatch({ period, fileName: 'x.xlsx', sha256: m.fileSha256, rowCount: 13, actorId: L.U.mkt, isTest: true, id: m.batchId })
-    const parsed: any = parseCareImportXlsx(new Uint8Array(prepared()) as Uint8Array<ArrayBuffer>)
+    await repo.createBatch({ period, fileName: 'x.csv', sha256: m.fileSha256, rowCount: 13, actorId: L.U.mkt, isTest: true, id: m.batchId })
+    const parsed: any = parseCareImportCsv(new Uint8Array(prepared()) as Uint8Array<ArrayBuffer>)
     await repo.stageRows(m.batchId, parsed.rows.map((r: any) => ({ row_no: r.rowNo, payload: Object.fromEntries(CARE_IMPORT_HEADERS.map((h) => [h, r[h]])) })))
     const st = await F.cmdStatus(ctx)
     expect(st).toMatchObject({ phase: 'importing', counts: { care_import_batches: 1, care_import_staging: 13, care_tasks: 0 } })
@@ -651,7 +725,7 @@ test.describe('care B6-qa-ui — vòng đời prepare → import browser → 5 v
     await db.query(`UPDATE public.care_customers SET external_id = 'REAL-5' WHERE external_id = $1`, [fake13])
     // Khách QA có task ở batch KHÁC (lượt test khác chạm cùng khách) ⇒ SCOPE_MISMATCH.
     const [{ id: otherBatch }] = (await db.query(`INSERT INTO public.care_import_batches (period_month, file_name, file_sha256, row_count, created_by, is_test)
-      VALUES ($1, 'khac.xlsx', $2, 1, $3, true) RETURNING id`, [period, 'e'.repeat(64), L.U.mkt])).rows
+      VALUES ($1, 'khac.csv', $2, 1, $3, true) RETURNING id`, [period, 'e'.repeat(64), L.U.mkt])).rows
     const [{ id: moved }] = (await db.query(`SELECT id FROM public.care_tasks WHERE batch_id = $1 LIMIT 1`, [A.batchId])).rows
     await db.query(`UPDATE public.care_tasks SET batch_id = $1 WHERE id = $2`, [otherBatch, moved])
     await tamper('khách QA có task ở batch khác', {}, 'SCOPE_MISMATCH', 1) // +1 = batch phụ test vừa chèn
@@ -685,9 +759,24 @@ test.describe('care B6-qa-ui — vòng đời prepare → import browser → 5 v
   test('hợp đồng CLI ↔ app: header/sheet N1 trùng contract; marker hợp lệ/không hợp lệ giống nhau hai phía', async () => {
     const F: any = await import(pathToFileURL(path.join(ROOT, 'scripts', 'care-qa-fixture.mjs')).href)
     expect(F.CARE_IMPORT_HEADERS).toEqual([...CARE_IMPORT_HEADERS])
-    expect(F.CARE_IMPORT_SHEET).toBe(CARE_IMPORT_SHEET)
     expect(F.uiExternalIds('a1b2c3d4', 3)).toEqual(careQaUiExternalIds('a1b2c3d4', 3))
     expect(path.basename(F.DEFAULT_MARKER_PATH)).toBe(CARE_QA_MARKER_FILE)
+    // Q-121: trần marker / trần dòng hai phía trùng nhau; bản sao từ file mẫu vẫn tối đa 200 khách.
+    expect([F.UI_MAX_CUSTOMERS, F.CARE_IMPORT_MAX_ROWS, F.UI_COPY_MAX_CUSTOMERS]).toEqual([CARE_QA_UI_MAX_CUSTOMERS, CARE_IMPORT_MAX_ROWS, 200])
+    const big = (k: number) => sampleMarker({ externalIds: careQaUiExternalIds('a1b2c3d4', k) })
+    for (const k of [8000, CARE_QA_UI_MAX_CUSTOMERS, CARE_QA_UI_MAX_CUSTOMERS + 1]) {
+      expect([F.validUiMarker(big(k)), parseCareQaUiMarker(big(k)) !== null], String(k)).toEqual(Array(2).fill(k <= CARE_QA_UI_MAX_CUSTOMERS))
+    }
+    const tooMany = Array.from({ length: 201 }, (_, i) => ({ ...Object.fromEntries(CARE_IMPORT_HEADERS.map((h) => [h, 'x'])), customer_external_id: `K${i}` }))
+    expect(() => F.uiRows(tooMany, 'a1b2c3d4', 'QAOS01', 'a@b')).toThrow(/1–200 khách/)
+    expect(F.loadProductCounts(F.LOAD_DEFAULT_CUSTOMERS, F.LOAD_DEFAULT_ROWS).reduce((a: number, b: number) => a + b, 0)).toBe(F.LOAD_DEFAULT_ROWS)
+    expect(Math.max(...F.loadProductCounts(F.LOAD_DEFAULT_CUSTOMERS, F.LOAD_DEFAULT_ROWS))).toBeLessThanOrEqual(F.LOAD_MAX_PRODUCTS)
+    expect(() => F.loadProductCounts(4000, CARE_IMPORT_MAX_ROWS + 1)).toThrow()
+    // Tham số CLI prepare-load + trần byte đọc từ env (review Q-121: regex số từng mất dấu \).
+    expect([F.loadArg(undefined, 8000), F.loadArg('5000', 8000), F.loadArg('20000', 1), F.loadArg('5e3', 1), F.loadArg('-1', 1), F.loadArg('', 1)])
+      .toEqual([8000, 5000, 20_000, Number.NaN, Number.NaN, Number.NaN])
+    expect([F.loadMaxBytes({}), F.loadMaxBytes({ CARE_IMPORT_MAX_BYTES: ' 5242880 ' }), F.loadMaxBytes({ CARE_IMPORT_MAX_BYTES: '8MB' })])
+      .toEqual([8 * 1024 * 1024, 5 * 1024 * 1024, 8 * 1024 * 1024])
     const variants: any[] = [sampleMarker(), sampleMarker({ phase: 'imported', importResult: 'committed' }), sampleMarker({ runId: 'x' }), sampleMarker({ externalIds: ['KH-1'] }),
       sampleMarker({ storeIds: [] }), sampleMarker({ taskIds: [UUID(1)] }), { ...sampleMarker(), kind: 'fixture' }, null]
     for (const v of variants) expect(F.validUiMarker(v), JSON.stringify(v)).toBe(parseCareQaUiMarker(v) !== null)

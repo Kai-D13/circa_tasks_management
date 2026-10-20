@@ -66,7 +66,7 @@ export default async function CareAssignPage({ searchParams }: { searchParams: P
     <div data-layout-width="fluid" data-care-browse className="space-y-6 p-4 md:p-6">
       <PageHeader
         title="Phân công chăm sóc khách hàng"
-        subtitle="Import danh sách khách tháng từ Excel — mỗi khách một task, giao theo dược sĩ ghi trong file."
+        subtitle="Import danh sách khách tháng từ file CSV — mỗi khách một task, giao theo dược sĩ ghi trong file."
         icon={ClipboardList}
         actions={<CareImportPageActions period={period} />}
       />

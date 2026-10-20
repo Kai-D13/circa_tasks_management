@@ -1,169 +1,94 @@
-import * as XLSX from 'xlsx'
 import {
-  CARE_IMPORT_HEADERS, CARE_IMPORT_MAX_ROWS, CARE_IMPORT_SHEET, careOneField,
+  CARE_IMPORT_HEADERS, CARE_IMPORT_MAX_ROWS, careOneField,
   type CareFileErrorCode, type CareImportField, type CareImportRow, type CareRowError,
 } from './contract'
+import { decodeCareCsv, parseCsvRecords } from './csvCore'
 
-// CRM-CSKH B2 — đọc file Excel N1 thành dòng chuỗi (SPEC B2 §1). THUẦN (không IO).
+// CRM-CSKH — đọc file N1 **CSV** thành dòng chuỗi (Q-124, 15/10/2026: CSV thay hẳn .xlsx ở import CRM). THUẦN (không IO).
 //
 // Quy tắc:
-//   · Chỉ .xlsx (chữ ký ZIP "PK\x03\x04") — SheetJS vốn nuốt cả CSV/HTML, nên
-//     kiểm chữ ký trước khi đọc.
-//   · Đúng MỘT sheet tên KhachHang; dòng 1 đúng 10 header theo thứ tự, không cột dư.
-//   · KHÔNG đánh giá công thức: ô có công thức ⇒ FORMULA_NOT_ALLOWED.
-//   · `customer_external_id` phải là ô TEXT (Q-73) — ô SỐ ⇒ CELL_NOT_TEXT (Excel có thể đã làm
-//     mất số 0 đầu/độ chính xác, không phát hiện được sau khi đọc).
-//   · Q-97 (09/10): `product_id` nhận Text HOẶC ô Number nguyên an toàn, ≥ 0, tối đa 15 chữ số, khi
-//     định dạng là General (SheetJS hiển thị dạng mũ từ 12 chữ số — `w`="1.23457E+14" — nhưng `v`
-//     vẫn đúng) hoặc chuỗi hiển thị `w` trùng `String(v)`. Định dạng khác làm hiển thị lệch (đệm số 0
-//     "000…", "#,##0", tiền tố…) ⇒ CELL_NOT_TEXT. Giá trị luôn là `String(v)`, KHÔNG BAO GIỜ lấy `w`.
-//     Chuẩn hoá ở đây ⇒ preview, staging và finalize thấy cùng một chuỗi ID.
-//   · SĐT dạng số vẫn nhận vì chuẩn hoá thêm lại số 0 thành số di động VN 10 chữ số
-//     (normalizeVnPhone). Cột khác nhận số như chuỗi.
-//   · Mọi ô đọc thành chuỗi đã trim.
-//   · Dòng trống ở CUỐI bỏ qua; dòng trống XEN GIỮA ⇒ BLANK_ROW (staging cần
-//     row_no liên tục — finalize 114 kiểm).
-//   · Đọc tối đa CARE_IMPORT_MAX_ROWS + 1 dòng (sheetRows) ⇒ file khổng lồ không
-//     bị parse hết vào bộ nhớ.
-
-/** Q-97: số chữ số tối đa của `product_id` nhập từ ô Number (nguồn bảo đảm không có số 0 đầu). */
-export const CARE_NUMERIC_PRODUCT_ID_MAX_DIGITS = 15
-
-/**
- * Ô Number hợp lệ cho `product_id` (Q-97) ⇒ chuỗi ID; không hợp lệ ⇒ null. Number 0 ⇒ "0" có chủ đích:
- * Q-104 chặn ID toàn số 0 bằng MỘT luật ở validator chung (PRODUCT_ID_INVALID) cho cả Text "0"/"00" lẫn
- * Number 0 — cùng mã với finalize SQL, preview/finalize cùng kết luận.
- */
-export function numericProductId(cell: Pick<XLSX.CellObject, 'v' | 'w' | 'z'>): string | null {
-  const v = cell.v
-  if (typeof v !== 'number' || !Number.isSafeInteger(v) || v < 0) return null
-  const id = String(v) // -0 ⇒ "0"
-  if (id.length > CARE_NUMERIC_PRODUCT_ID_MAX_DIGITS) return null
-  // Không có format ⇒ SheetJS coi là General. General không bao giờ đệm số 0/thêm ký tự ⇒ an toàn.
-  const fmt = typeof cell.z === 'string' ? cell.z : 'General'
-  if (fmt === 'General') return id
-  return cell.w === id ? id : null
-}
+//   · UTF-8 nghiêm ngặt (BOM tuỳ chọn); nhị phân/.xlsx đổi đuôi ⇒ FILE_NOT_CSV; ANSI/UTF-16 ⇒ ENCODING_INVALID
+//     (Excel: "Lưu thành → CSV UTF-8"). Không đoán mã hoá.
+//   · Dấu phẩy, nháy kép RFC 4180 (csvCore.ts); nháy hỏng ⇒ CSV_MALFORMED. Tiêu đề dùng `;`/tab (Excel vùng Việt Nam)
+//     ⇒ DELIMITER_INVALID — không tự đổi dấu phân tách.
+//   · Bản ghi 1 = đúng 10 header theo thứ tự (trường rỗng thừa ở cuối được bỏ qua) ⇒ HEADER_INVALID nếu sai.
+//   · Mỗi bản ghi dữ liệu đúng 10 trường (trường RỖNG thừa ở cuối bỏ qua) ⇒ COLUMN_COUNT nếu sai.
+//   · `row` = SỐ BẢN GHI (header = 1), không phải số dòng vật lý (ô có xuống dòng).
+//   · Mọi giá trị là CHUỖI đã trim — ID/SĐT/product_id giữ nguyên số 0 đầu như trong file. ID ở dạng mũ
+//     (`1.23457E+14` — Excel lưu ô số General) ⇒ ID_NOT_TEXT: dữ liệu đã hỏng trước khi tới app, không khôi phục được.
+//   · CSV không có công thức: ô bắt đầu bằng `=` chỉ là chữ, không bao giờ được tính.
+//   · Bản ghi trống ở CUỐI bỏ qua; bản ghi trống XEN GIỮA ⇒ BLANK_ROW (staging cần row_no liên tục — finalize 114 kiểm).
+//   · Quá `maxRows` bản ghi dữ liệu ⇒ TOO_MANY_ROWS (cả file). Trần byte (8 MiB) đã chặn ở route TRƯỚC khi gọi hàm này.
 
 export type CareParseResult =
   | { ok: true; rows: CareImportRow[]; errors: CareRowError[] }
   | { ok: false; fileError: CareFileErrorCode }
 
-export function isXlsxSignature(buf: Uint8Array): boolean {
-  return buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04
-}
-
-/** Trần giải nén: file 10.000 dòng thật ~5–10 MB XML (đo 08/10) ⇒ 64 MB dư ~6 lần. */
-export const CARE_XLSX_MAX_UNCOMPRESSED = 64 * 1024 * 1024
-export const CARE_XLSX_MAX_ENTRIES = 200
-
 /**
- * Chống "zip bomb" (security B2 P1): đọc central directory của ZIP và cộng kích
- * thước giải nén KHAI BÁO trước khi để SheetJS inflate. Không đọc được / ZIP64 /
- * vượt trần ⇒ false. Giới hạn còn lại: kích thước khai báo có thể bị làm giả —
- * lớp bảo vệ tiếp theo là trần byte nén 8 MiB + sheetRows; cô lập parse trong
- * worker có giới hạn bộ nhớ là việc của batch sau nếu cần.
+ * `1.23457E+14`, `1,23457E+14` (Excel vùng Việt Nam dùng dấu phẩy thập phân — ô được bọc nháy trong CSV), `1E+15`… —
+ * dạng Excel ghi ô số General có ≥ 12 chữ số.
  */
-export function zipWithinLimits(buf: Uint8Array, maxUncompressed = CARE_XLSX_MAX_UNCOMPRESSED, maxEntries = CARE_XLSX_MAX_ENTRIES): boolean {
-  const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength)
-  let eocd = -1
-  for (let i = buf.byteLength - 22; i >= Math.max(0, buf.byteLength - 22 - 0xffff); i--) {
-    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break }
-  }
-  if (eocd < 0) return false
-  const entries = dv.getUint16(eocd + 10, true)
-  const cdOffset = dv.getUint32(eocd + 16, true)
-  if (entries === 0xffff || cdOffset === 0xffffffff || entries > maxEntries) return false
-  let p = cdOffset
-  let total = 0
-  for (let k = 0; k < entries; k++) {
-    if (p + 46 > buf.byteLength || dv.getUint32(p, true) !== 0x02014b50) return false
-    const size = dv.getUint32(p + 24, true)
-    if (size === 0xffffffff) return false // ZIP64 — file Excel thường không cần
-    total += size
-    if (total > maxUncompressed) return false
-    p += 46 + dv.getUint16(p + 28, true) + dv.getUint16(p + 30, true) + dv.getUint16(p + 32, true)
-  }
-  return true
+export const CARE_SCIENTIFIC_ID_RE = /^\d+([.,]\d+)?E\+\d+$/i
+/** Bản ghi trống được phép thêm ngoài trần dòng trước khi dừng đọc (security Q-124 P1: file toàn dòng trống). */
+export const CARE_CSV_BLANK_SLACK = 1_000
+/** Số trường tối đa một bản ghi trước khi dừng đọc (10 cột + cột trống thừa Excel có thể ghi). */
+export const CARE_CSV_MAX_FIELDS = 100
+const ID_FIELDS: readonly CareImportField[] = ['customer_external_id', 'product_id']
+
+const isBlank = (fields: readonly string[]) => fields.every((f) => f.trim() === '')
+/** Bỏ các trường RỖNG ở cuối vượt quá 10 (Excel có thể ghi thêm cột trống) — trường thừa có dữ liệu giữ lại để báo lỗi. */
+function trimTail(fields: string[]): string[] {
+  let n = fields.length
+  while (n > CARE_IMPORT_HEADERS.length && fields[n - 1].trim() === '') n--
+  return fields.slice(0, n)
 }
 
-function cellText(cell: XLSX.CellObject | undefined, field: CareImportField): { value: string; bad: boolean } {
-  if (!cell || cell.t === 'z' || cell.v === undefined || cell.v === null) return { value: '', bad: false }
-  if (cell.t === 's') return { value: String(cell.v).trim(), bad: false }
-  if (cell.t === 'n' && typeof cell.v === 'number' && Number.isFinite(cell.v)) {
-    if (field === 'customer_external_id') return { value: '', bad: true } // Q-73: ID khách phải là ô Text
-    if (field === 'product_id') {
-      const id = numericProductId(cell)
-      return id === null ? { value: '', bad: true } : { value: id, bad: false }
-    }
-    return { value: String(cell.v), bad: false }
-  }
-  // 'b' boolean, 'd' date, 'e' error, số vô hạn…
-  return { value: '', bad: true }
-}
+export function parseCareImportCsv(buf: Uint8Array, maxRows = CARE_IMPORT_MAX_ROWS): CareParseResult {
+  const dec = decodeCareCsv(buf)
+  if (!dec.ok) return { ok: false, fileError: dec.error }
+  // Trần đọc: header + maxRows dòng dữ liệu + một khoảng dòng trống (xen giữa/cuối) ⇒ vượt là file quá dài, không đọc tiếp.
+  const parsed = parseCsvRecords(dec.text, { maxRecords: maxRows + 1 + CARE_CSV_BLANK_SLACK, maxFields: CARE_CSV_MAX_FIELDS })
+  if (!parsed.ok) return { ok: false, fileError: parsed.reason === 'TOO_MANY_RECORDS' ? 'TOO_MANY_ROWS' : 'CSV_MALFORMED' }
+  const records = parsed.records
+  while (records.length > 0 && isBlank(records[records.length - 1])) records.pop()
+  if (records.length === 0) return { ok: false, fileError: 'NO_ROWS' }
 
-export function parseCareImportXlsx(buf: Uint8Array, maxRows = CARE_IMPORT_MAX_ROWS): CareParseResult {
-  if (!isXlsxSignature(buf) || !zipWithinLimits(buf)) return { ok: false, fileError: 'WORKBOOK_INVALID' }
-  let wb: XLSX.WorkBook
-  try {
-    wb = XLSX.read(buf, {
-      // cellNF: cần `z` (format) cho Q-97 — phân biệt General với format đệm số 0.
-      type: 'buffer', cellFormula: true, cellHTML: false, cellNF: true, cellStyles: false,
-      cellDates: false, sheetRows: maxRows + 2, // header + maxRows + 1 dòng để phát hiện vượt
-    })
-  } catch {
-    return { ok: false, fileError: 'WORKBOOK_INVALID' }
-  }
-  if (wb.SheetNames.length !== 1 || wb.SheetNames[0] !== CARE_IMPORT_SHEET) return { ok: false, fileError: 'SHEET_INVALID' }
-  const ws = wb.Sheets[CARE_IMPORT_SHEET]
-  if (!ws || !ws['!ref']) return { ok: false, fileError: 'NO_ROWS' }
-
-  const range = XLSX.utils.decode_range(ws['!ref'])
-  // Header: A1..J1 đúng tên/thứ tự; không ô nào khác ở dòng 1 có giá trị.
-  for (let c = range.s.c; c <= range.e.c; c++) {
-    const cell = ws[XLSX.utils.encode_cell({ r: 0, c })] as XLSX.CellObject | undefined
-    const v = cell && cell.v !== undefined && cell.v !== null ? String(cell.v).trim() : ''
-    if (c < CARE_IMPORT_HEADERS.length) {
-      if (v !== CARE_IMPORT_HEADERS[c] || cell?.f) return { ok: false, fileError: 'HEADER_INVALID' }
-    } else if (v !== '') {
-      return { ok: false, fileError: 'HEADER_INVALID' }
+  const head = trimTail(records[0]).map((h) => h.trim())
+  const headerOk = head.length === CARE_IMPORT_HEADERS.length && head.every((h, i) => h === CARE_IMPORT_HEADERS[i])
+  if (!headerOk) {
+    // Một trường duy nhất chứa ; hoặc tab mà tách ra đúng các header ⇒ sai dấu phân tách (không phải sai cột).
+    const one = head.length === 1 ? head[0] : ''
+    for (const sep of [';', '\t']) {
+      const parts = one.split(sep).map((x) => x.trim())
+      if (parts.length > 1 && parts.slice(0, CARE_IMPORT_HEADERS.length).every((x, i) => x === CARE_IMPORT_HEADERS[i])) {
+        return { ok: false, fileError: 'DELIMITER_INVALID' }
+      }
     }
-  }
-  if (range.s.c !== 0 || range.e.c < CARE_IMPORT_HEADERS.length - 1 || range.s.r !== 0) {
     return { ok: false, fileError: 'HEADER_INVALID' }
   }
-
-  // SheetJS ghi !fullref khi sheetRows cắt bớt ⇒ file có nhiều dòng hơn đã đọc.
-  const full = ws['!fullref'] ? XLSX.utils.decode_range(ws['!fullref'] as string) : range
+  const data = records.slice(1)
+  if (data.length === 0) return { ok: false, fileError: 'NO_ROWS' }
+  // Như parser XLSX cũ: trần tính trên bản ghi CÓ dữ liệu (bản ghi trống xen giữa là lỗi BLANK_ROW riêng).
+  if (data.filter((r) => !isBlank(r)).length > maxRows) return { ok: false, fileError: 'TOO_MANY_ROWS' }
 
   const rows: CareImportRow[] = []
   const errors: CareRowError[] = []
   const blankRows: number[] = []
-  for (let r = 1; r <= range.e.r; r++) {
-    const rowNo = r + 1
-    const row = { rowNo } as CareImportRow
-    let empty = true
-    // Cột có công thức / ô sai kiểu — đúng một cột thì báo `field` (Q-110).
-    const bad: CareImportField[] = []
-    const formula: CareImportField[] = []
-    CARE_IMPORT_HEADERS.forEach((field, c) => {
-      const cell = ws[XLSX.utils.encode_cell({ r, c })] as XLSX.CellObject | undefined
-      if (cell?.f) formula.push(field)
-      const { value, bad: b } = cellText(cell, field)
-      if (b) bad.push(field)
-      if (value !== '' || b || cell?.f) empty = false
-      row[field] = value
-    })
-    if (empty) { blankRows.push(rowNo); continue }
-    // Dòng trống trước dòng có dữ liệu này ⇒ dòng trống xen giữa.
+  data.forEach((raw, i) => {
+    const rowNo = i + 2
+    if (isBlank(raw)) { blankRows.push(rowNo); return }
+    // Bản ghi trống trước bản ghi có dữ liệu này ⇒ bản ghi trống xen giữa.
     for (const b of blankRows) errors.push({ row: b, code: 'BLANK_ROW' })
     blankRows.length = 0
-    if (formula.length) errors.push({ row: rowNo, code: 'FORMULA_NOT_ALLOWED', ...careOneField(formula) })
-    if (bad.length) errors.push({ row: rowNo, code: 'CELL_NOT_TEXT', ...careOneField(bad) })
+    const fields = trimTail(raw)
+    if (fields.length !== CARE_IMPORT_HEADERS.length) errors.push({ row: rowNo, code: 'COLUMN_COUNT' })
+    const row = { rowNo } as CareImportRow
+    CARE_IMPORT_HEADERS.forEach((f, c) => { row[f] = (fields[c] ?? '').trim() })
+    if (fields.length === CARE_IMPORT_HEADERS.length) {
+      const sci = ID_FIELDS.filter((f) => CARE_SCIENTIFIC_ID_RE.test(row[f]))
+      if (sci.length) errors.push({ row: rowNo, code: 'ID_NOT_TEXT', ...careOneField(sci) })
+    }
     rows.push(row)
-  }
-  if (rows.length === 0) return { ok: false, fileError: 'NO_ROWS' }
-  // Dòng dữ liệu cuối cùng (kể cả phần bị sheetRows cắt) vượt trần ⇒ từ chối cả file.
-  if (rows.length > maxRows || full.e.r > range.e.r) return { ok: false, fileError: 'TOO_MANY_ROWS' }
+  })
   return { ok: true, rows, errors }
 }

@@ -3,15 +3,14 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { pathToFileURL } from 'node:url'
 import { test, expect } from '@playwright/test'
-import * as XLSX from 'xlsx'
 import { CARE_IMPORT_HEADERS, type CareImportRow } from '../lib/care/import/contract'
-import { parseCareImportXlsx } from '../lib/care/import/parse'
+import { parseCareImportCsv } from '../lib/care/import/parse'
 import { validateCareRows } from '../lib/care/import/validate'
 import { buildCarePreview, type CareImportLookups, type CarePreview } from '../lib/care/import/preview'
-import { buildCareImportRows } from './careImportFixture'
+import { buildCareImportRows, fixtureCsv } from './careImportFixture'
 
 // CRM-CSKH B2 — PARITY preview (TS) ↔ finalize (SQL 114) trên PGlite.
-// Cùng một file Excel: preview tính từ lookup đọc DB (đúng ngữ nghĩa
+// Cùng một file CSV (Q-124): preview tính từ lookup đọc DB (đúng ngữ nghĩa
 // lib/care/server/importRepo.ts) và finalize chạy thật trên migration 114.
 // Kỳ vọng: preview có lỗi ⇔ finalize 'rejected' với CÙNG tập (dòng, mã);
 // preview sạch ⇔ finalize 'committed' với CÙNG số đếm.
@@ -55,25 +54,19 @@ async function loadLookupsSql(db: Db, externalIds: string[], period: string, isT
   }
 }
 
-/** `numericPid(row, i)` trả format (vd. 'General', '0') ⇒ ô product_id dòng đó ghi dạng Number (Q-97). */
-type XlsxOpts = { numericPid?: (row: Record<string, string>, i: number) => string | false }
-function xlsxOf(rows: Record<string, string>[], opts: XlsxOpts = {}): Uint8Array {
-  const ws = XLSX.utils.aoa_to_sheet([[...CARE_IMPORT_HEADERS], ...rows.map((r) => CARE_IMPORT_HEADERS.map((h) => r[h] ?? ''))])
-  for (const k of Object.keys(ws)) if (!k.startsWith('!')) { (ws[k] as XLSX.CellObject).t = 's' }
-  const pid = CARE_IMPORT_HEADERS.indexOf('product_id')
-  rows.forEach((r, i) => {
-    const fmt = opts.numericPid?.(r, i)
-    if (fmt) ws[XLSX.utils.encode_cell({ r: i + 1, c: pid })] = { t: 'n', v: Number(r.product_id), z: fmt }
-  })
-  const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, 'KhachHang')
-  return new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as ArrayBuffer)
+/** File CSV như Excel "CSV UTF-8" (BOM, CRLF); `bom: false` / `eol` để thử biến thể hợp lệ khác. */
+type CsvOpts = { bom?: boolean; eol?: string }
+function csvOf(rows: Record<string, string>[], opts: CsvOpts = {}): Uint8Array {
+  let text = fixtureCsv([[...CARE_IMPORT_HEADERS], ...rows.map((r) => CARE_IMPORT_HEADERS.map((h) => r[h] ?? ''))])
+  if (opts.bom === false) text = text.slice(1)
+  if (opts.eol) text = text.split(String.fromCharCode(13, 10)).join(opts.eol)
+  return new TextEncoder().encode(text)
 }
 
 /** Chạy một file qua preview TS rồi qua finalize SQL; trả cả hai để so. */
-async function runBoth(db: Db, L: Lib, rows: Record<string, string>[], today: string, actor: string, opts: XlsxOpts = {}) {
-  const bytes = xlsxOf(rows, opts)
-  const parsed = parseCareImportXlsx(bytes)
+async function runBoth(db: Db, L: Lib, rows: Record<string, string>[], today: string, actor: string, opts: CsvOpts = {}) {
+  const bytes = csvOf(rows, opts)
+  const parsed = parseCareImportCsv(bytes)
   if (!parsed.ok) throw new Error(parsed.fileError)
   const validated = validateCareRows(parsed.rows)
   const period = `${today.slice(0, 7)}-01`
@@ -82,7 +75,7 @@ async function runBoth(db: Db, L: Lib, rows: Record<string, string>[], today: st
 
   const sha = crypto.createHash('sha256').update(bytes).digest('hex')
   const batch = (await db.query(
-    `INSERT INTO public.care_import_batches (period_month, file_name, file_sha256, row_count, created_by) VALUES ($1, 'parity.xlsx', $2, $3, $4) RETURNING id`,
+    `INSERT INTO public.care_import_batches (period_month, file_name, file_sha256, row_count, created_by) VALUES ($1, 'parity.csv', $2, $3, $4) RETURNING id`,
     [period, sha, parsed.rows.length, actor])).rows[0].id
   for (const r of parsed.rows as CareImportRow[]) {
     await db.query(`INSERT INTO public.care_import_staging (batch_id, row_no, payload) VALUES ($1, $2, $3)`,
@@ -174,38 +167,41 @@ test.describe('care B2 — parity preview TS ↔ finalize SQL 114 (PGlite) @desk
     await db.close()
   })
 
-  test('Q-97: product_id ô Number (General 4/7/12/15 chữ số, format "0") ⇒ preview = finalize, cùng chuỗi ID như Text', async () => {
+  test('Q-124 CSV: mã số dài/số 0 đầu là CHUỖI, ô có dấu phẩy/nháy/xuống dòng ⇒ preview = finalize; trùng sản phẩm / product_id toàn số 0 cùng mã', async () => {
     test.setTimeout(240_000)
     const { PGlite } = await import('@electric-sql/pglite')
     const L: Lib = await import(pathToFileURL(path.join(ROOT, 'scripts', 'lib-care-pglite.mjs')).href)
     const db = await L.freshDb(PGlite)
     const EA = (L.STORES as { assigneeEmails: string[] }[])[0].assigneeEmails[0]
+    // Xuống dòng TRONG ô dùng LF ⇒ lượt "CRLF ⇒ LF" dưới đây chỉ đổi dấu xuống dòng giữa các bản ghi, không đổi nội dung ô.
+    const NL = String.fromCharCode(10)
     const rows = [
-      L.row('QA-N1', 'QAOS01', EA, '1234'), L.row('QA-N1', 'QAOS01', EA, '1234567'),
-      L.row('QA-N2', 'QAOS01', EA, '123456789012'), L.row('QA-N3', 'QAOS01', EA, '123456789012345'),
+      L.row('QA-N1', 'QAOS01', EA, '1234', { reason_text: 'Mua 2, tặng 1' }),
+      L.row('QA-N1', 'QAOS01', EA, '0001234567', { reason_text: `Nhắc "đơn cũ"${NL}gọi buổi sáng` }),
+      L.row('0042', 'QAOS01', EA, '123456789012'), L.row('QA-N3', 'QAOS01', EA, '123456789012345'),
     ] as Record<string, string>[]
-    // Lần 1: mọi product_id là ô Number (dòng cuối format "0", còn lại General ⇒ hiển thị dạng mũ từ 12 chữ số).
-    const num = await runBoth(db, L, rows, '2026-10-02', L.U.mkt, { numericPid: (_r, i) => (i === 3 ? '0' : 'General') })
-    expect(num.preview.errors).toEqual([])
-    expectParity('Number', num)
-    expect(num.result.created).toBe(3)
+    const a = await runBoth(db, L, rows, '2026-10-02', L.U.mkt)
+    expect(a.preview.errors).toEqual([])
+    expectParity('CSV chuỗi ID + ô đặc biệt', a)
+    expect(a.result.created).toBe(3)
     const ids = (await db.query(`SELECT p.product_id FROM public.care_task_products p WHERE p.is_current ORDER BY 1`)).rows.map((x: any) => x.product_id)
-    expect(ids).toEqual(['1234', '1234567', '123456789012', '123456789012345'])
-    // Lần 2: cùng nội dung nhưng ô Text ⇒ finalize thấy y hệt ⇒ không đổi gì (khác hash nên không phải duplicate).
-    const txt = await runBoth(db, L, rows, '2026-10-03', L.U.mkt)
-    expectParity('Text cùng ID', txt)
-    expect(txt.result).toMatchObject({ created: 0, updated: 0, unchanged: 3 })
-    // Text + Number cùng (khách, product_id) ⇒ DUPLICATE_PRODUCT ở cả preview lẫn finalize.
+    expect(ids).toEqual(['0001234567', '123456789012', '123456789012345', '1234'].sort())
+    const ext = (await db.query(`SELECT external_id FROM public.care_customers ORDER BY 1`)).rows.map((x: any) => x.external_id)
+    expect(ext).toContain('0042') // số 0 đầu của mã khách giữ nguyên tới DB
+    const reasons = (await db.query(`SELECT reason_text FROM public.care_task_products ORDER BY reason_text`)).rows.map((x: any) => x.reason_text)
+    expect(reasons).toContain(`Nhắc "đơn cũ"${NL}gọi buổi sáng`)
+    // Cùng nội dung, LF thay CRLF, không BOM (khác hash) ⇒ revision không đổi gì.
+    const again = await runBoth(db, L, rows, '2026-10-03', L.U.mkt, { bom: false, eol: String.fromCharCode(10) })
+    expectParity('CSV LF không BOM', again)
+    expect(again.result).toMatchObject({ created: 0, updated: 0, unchanged: 3 })
     const dupRows = [L.row('QA-N9', 'QAOS01', EA, '7654321'), L.row('QA-N9', 'QAOS01', EA, '7654321', { reason_text: 'khác' })] as Record<string, string>[]
-    const dup = await runBoth(db, L, dupRows, '2026-10-04', L.U.mkt, { numericPid: (_r, i) => (i === 0 ? 'General' : false) })
-    expectParity('Text + Number trùng', dup)
+    const dup = await runBoth(db, L, dupRows, '2026-10-04', L.U.mkt)
+    expectParity('trùng sản phẩm', dup)
     expect(dup.preview.errors.map((e) => e.code)).toEqual(['DUPLICATE_PRODUCT', 'DUPLICATE_PRODUCT'])
-    // Q-104: Text "0"/"00" và Number 0 ⇒ PRODUCT_ID_INVALID ở CẢ preview lẫn finalize (cùng tập dòng/mã).
-    const zeroRows = [L.row('QA-Z1', 'QAOS01', EA, '0'), L.row('QA-Z2', 'QAOS01', EA, '00'), L.row('QA-Z3', 'QAOS01', EA, '0'),
-      L.row('QA-Z4', 'QAOS01', EA, '0042')] as Record<string, string>[]
-    const zero = await runBoth(db, L, zeroRows, '2026-10-05', L.U.mkt, { numericPid: (_r, i) => (i === 2 ? 'General' : false) })
+    const zeroRows = [L.row('QA-Z1', 'QAOS01', EA, '0'), L.row('QA-Z2', 'QAOS01', EA, '00'), L.row('QA-Z4', 'QAOS01', EA, '0042')] as Record<string, string>[]
+    const zero = await runBoth(db, L, zeroRows, '2026-10-05', L.U.mkt)
     expectParity('Q-104 product_id toàn số 0', zero)
-    expect(zero.preview.errors.map((e) => `${e.row}:${e.code}`)).toEqual(['2:PRODUCT_ID_INVALID', '3:PRODUCT_ID_INVALID', '4:PRODUCT_ID_INVALID'])
+    expect(zero.preview.errors.map((e) => `${e.row}:${e.code}`)).toEqual(['2:PRODUCT_ID_INVALID', '3:PRODUCT_ID_INVALID'])
     await db.close()
   })
 })

@@ -18,7 +18,7 @@
 //   · log chỉ số đếm / mã — không ID, SĐT, email.
 //
 // B6-qa-ui (PM audit 10/10 b1-pilot) — lượt QA BROWSER bằng bản sao giả của file N1 mẫu, marker v2 kind 'ui':
-//   E2E_CARE_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> node scripts/care-qa-fixture.mjs prepare <goc.xlsx> [ra.xlsx]
+//   E2E_CARE_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> node scripts/care-qa-fixture.mjs prepare <goc.csv> [ra.csv]
 //   E2E_CARE_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> node scripts/care-qa-fixture.mjs serve [cổng=3100]
 //   node scripts/care-qa-fixture.mjs status            (chỉ đọc)
 //   E2E_CARE_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> node scripts/care-qa-fixture.mjs down
@@ -27,15 +27,28 @@
 //   · serve chạy `next dev -H 127.0.0.1` với cờ CHỈ trong process (CARE_ENABLED/CARE_QA_UI, sync OFF); server tự đặt
 //     is_test=true cho đúng file QA, khoá marker khi import (lib/care/qa/*);
 //   · down dọn đúng batch/khách/task is_test của marker (kiểm hash/batch/ID giả/liên kết TRƯỚC khi xoá), chạy lại được.
+//
+// Q-121 (15/10) — QA TẢI LỚN ở đúng trần dòng của app (mặc định CARE_IMPORT_MAX_ROWS dòng, 2,5 SP/khách) trên DB thật:
+//   E2E_CARE_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> node scripts/care-qa-fixture.mjs prepare-load <ra.csv> [khách=4000] [dòng=10000]
+//   E2E_CARE_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> node scripts/care-qa-fixture.mjs serve [cổng=3100]   (terminal khác)
+//   E2E_CARE_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> node scripts/care-qa-fixture.mjs load <ra.csv> [http://localhost:3100]
+//   node scripts/care-qa-fixture.mjs status   ·   (tắt server) … down
+//   · prepare-load CHỈ ĐỌC DB: sinh file GIẢ hoàn toàn (không cần file gốc) — ID QA-UI-<run>-…, tên "KH QA …", SĐT dải
+//     03900xxxxx, SKU QALD…, ảnh qa-fixture/, câu lý do mẫu; marker (wx) trước lần ghi đầu như prepare;
+//   · load đăng nhập server QA LOCAL bằng tài khoản Marketing QA, preview ×2 (lượt đầu làm nóng) → commit → preview lại
+//     (kỳ vọng 0 tạo mới) → commit lại (kỳ vọng bị chặn trước khi ghi). In ms từng pha (Server-Timing) + số đếm/mã;
+//   · gateway chia bộ lọc `in` dài thành khối 100 và phân trang có đếm exact (PostgREST max-rows) ⇒ status/down đúng với
+//     hàng nghìn dòng.
 
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { CARE_QA_MARKER, careWriteGate, urlHost } from '../e2e/writeQaGates.ts'
+import { decodeCareCsv, parseCsvRecords, toCareCsv } from '../lib/care/import/csvCore.ts'
 
 export const FIXTURE_CUSTOMERS = 3
-export const FIXTURE_FILE_NAME = 'qa-b6-fixture.xlsx'
+export const FIXTURE_FILE_NAME = 'qa-b6-fixture.xlsx' // tên batch của fixture B6 cũ (up/verify) — giữ để down tìm đúng batch đã tạo trước Q-124
 const MARKER_VERSION = 1
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 export const DEFAULT_MARKER_PATH = path.resolve(HERE, '..', CARE_QA_MARKER)
@@ -74,12 +87,16 @@ export function fixtureRows(externalIds, storeCode, staffEmail) {
 }
 
 // ─── QA UI (B6-qa-ui) ───────────────────────────────────────────────────────
-// Mirror lib/care/qa/uiGate.ts (server đọc CÙNG marker) — e2e/care-qa-ui-lifecycle.spec.ts ép khớp hai phía.
-export const UI_MAX_CUSTOMERS = 200
+// Mirror lib/care/qa/uiGate.ts (server đọc CÙNG marker) — e2e/care-qa-ui.spec.ts ép khớp hai phía.
+/** Trần khách giả trong marker (= CARE_QA_UI_MAX_CUSTOMERS). */
+export const UI_MAX_CUSTOMERS = 10_000
+/** Bản sao QA từ file mẫu (`prepare`) — lượt QA browser nhỏ. */
+export const UI_COPY_MAX_CUSTOMERS = 200
+/** Trần dòng của file N1 — trùng CARE_IMPORT_MAX_ROWS (lib/care/import/contract.ts; phát hành 10.000, Q-121 nâng sau). */
+export const CARE_IMPORT_MAX_ROWS = 10_000
 const UI_PHASES = ['reserved', 'importing', 'imported', 'tearing_down']
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** Hợp đồng file N1 — trùng lib/care/import/contract.ts (spec ép khớp). */
-export const CARE_IMPORT_SHEET = 'KhachHang'
 export const CARE_IMPORT_HEADERS = ['customer_external_id', 'customer_name', 'customer_phone', 'target_store_code', 'assignee_email',
   'reason_type', 'reason_text', 'product_id', 'product_name', 'product_url']
 /** reason_text của bản QA — câu mẫu cố định (bản gốc có thể chứa thông tin sức khoẻ của khách thật). */
@@ -111,14 +128,17 @@ export function validUiMarker(m) {
   return true
 }
 
-/** Đọc sheet N1 (đúng một sheet KhachHang, đúng 10 header) thành dòng chuỗi đã trim. Không in giá trị ô. */
-export function readCareSheet(XLSX, bytes) {
-  let wb
-  try { wb = XLSX.read(bytes, { type: 'buffer' }) } catch { throw new FixtureError('FILE_INVALID', 'không đọc được file Excel') }
-  if (wb.SheetNames.length !== 1 || wb.SheetNames[0] !== CARE_IMPORT_SHEET) throw new FixtureError('FILE_INVALID', `cần đúng một sheet ${CARE_IMPORT_SHEET}`)
-  const aoa = XLSX.utils.sheet_to_json(wb.Sheets[CARE_IMPORT_SHEET], { header: 1, raw: true, defval: '', blankrows: false })
-  const [head = [], ...body] = aoa
+/**
+ * Đọc file N1 CSV (Q-124: UTF-8, dấu phẩy, đúng 10 header) thành dòng chuỗi đã trim; bỏ bản ghi trống. Không in giá trị ô.
+ * Dùng chung lõi lib/care/import/csvCore.ts với app (cùng cách tách trường/nháy).
+ */
+export function readCareCsv(bytes) {
+  const dec = decodeCareCsv(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes))
+  if (!dec.ok) throw new FixtureError('FILE_INVALID', dec.error === 'ENCODING_INVALID' ? 'file không phải CSV UTF-8' : 'file không phải CSV')
+  const parsed = parseCsvRecords(dec.text)
+  if (!parsed.ok) throw new FixtureError('FILE_INVALID', 'file CSV hỏng (dấu nháy)')
   const cell = (v) => String(v ?? '').trim()
+  const [head = [], ...body] = parsed.records.filter((r) => r.some((v) => cell(v) !== ''))
   if (CARE_IMPORT_HEADERS.some((h, i) => cell(head[i]) !== h) || head.slice(CARE_IMPORT_HEADERS.length).some((v) => cell(v) !== '')) {
     throw new FixtureError('FILE_INVALID', 'dòng tiêu đề không đúng 10 cột theo mẫu')
   }
@@ -127,17 +147,9 @@ export function readCareSheet(XLSX, bytes) {
   return rows
 }
 
-/** Ghi sheet N1 — mọi ô kiểu Text (như file mẫu của app) để Excel không đổi ID/SĐT. */
-export function writeCareSheet(XLSX, rows) {
-  const ws = XLSX.utils.aoa_to_sheet([CARE_IMPORT_HEADERS, ...rows.map((r) => CARE_IMPORT_HEADERS.map((h) => r[h]))])
-  for (const addr of Object.keys(ws)) {
-    if (addr.startsWith('!')) continue
-    ws[addr].t = 's'
-    ws[addr].z = '@'
-  }
-  const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, CARE_IMPORT_SHEET)
-  return new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx' }))
+/** Ghi file N1 CSV UTF-8 có BOM, CRLF — đúng định dạng Excel "CSV UTF-8" và file mẫu của app. */
+export function writeCareCsv(rows) {
+  return new TextEncoder().encode(toCareCsv([CARE_IMPORT_HEADERS, ...rows.map((r) => CARE_IMPORT_HEADERS.map((h) => r[h]))]))
 }
 
 /**
@@ -147,8 +159,8 @@ export function writeCareSheet(XLSX, rows) {
  */
 export function uiRows(srcRows, runId, storeCode, staffEmail) {
   const order = [...new Set(srcRows.map((r) => r.customer_external_id))]
-  if (order.length === 0 || order.length > UI_MAX_CUSTOMERS || order.some((x) => x === '')) {
-    throw new FixtureError('FILE_INVALID', `cần 1–${UI_MAX_CUSTOMERS} khách, mỗi dòng có customer_external_id`)
+  if (order.length === 0 || order.length > UI_COPY_MAX_CUSTOMERS || order.some((x) => x === '')) {
+    throw new FixtureError('FILE_INVALID', `cần 1–${UI_COPY_MAX_CUSTOMERS} khách, mỗi dòng có customer_external_id`)
   }
   const externalIds = uiExternalIds(runId, order.length)
   const idx = new Map(order.map((x, i) => [x, i]))
@@ -162,6 +174,57 @@ export function uiRows(srcRows, runId, storeCode, staffEmail) {
     }
   })
   return { rows, externalIds }
+}
+
+// ─── QA tải lớn (Q-121) ─────────────────────────────────────────────────────
+/** Mặc định = đúng trần dòng của app, 2,5 sản phẩm/khách (như file N1 thật). */
+export const LOAD_DEFAULT_ROWS = CARE_IMPORT_MAX_ROWS
+export const LOAD_DEFAULT_CUSTOMERS = Math.round(LOAD_DEFAULT_ROWS / 2.5)
+/** Mỗi khách 1–4 sản phẩm; SKU giả dùng chung trong danh mục 1.500 mã (nhiều khách cùng sản phẩm như file thật). */
+export const LOAD_MAX_PRODUCTS = 4
+export const LOAD_CATALOG = 1_500
+const LOAD_REASON_TYPES = ['chronic', 'promotion', 'repurchase']
+
+/** Tham số CLI prepare-load: thiếu ⇒ mặc định; chỉ nhận số nguyên thập phân, sai dạng ⇒ NaN (LOAD_SIZE). */
+export const loadArg = (v, d) => (v === undefined ? d : /^\d+$/.test(v) ? Number(v) : NaN)
+/** Trần byte request của server QA (CARE_IMPORT_MAX_BYTES như lib/care/config.ts; trống/sai ⇒ 8 MiB mặc định). */
+export const loadMaxBytes = (env) => {
+  const raw = String(env.CARE_IMPORT_MAX_BYTES ?? '').trim()
+  return /^\d+$/.test(raw) ? Number(raw) : 8 * 1024 * 1024
+}
+
+/** Số sản phẩm của từng khách: đủ đúng `rows` dòng, rải đều theo vòng (khách đầu được thêm trước), mỗi khách 1–4. */
+export function loadProductCounts(customers, rows) {
+  if (!Number.isInteger(customers) || !Number.isInteger(rows) || customers < 1 || customers > UI_MAX_CUSTOMERS
+      || rows < customers || rows > customers * LOAD_MAX_PRODUCTS || rows > CARE_IMPORT_MAX_ROWS) {
+    throw new FixtureError('LOAD_SIZE', `cần 1–${UI_MAX_CUSTOMERS} khách, số dòng từ số khách tới min(${LOAD_MAX_PRODUCTS}×khách, ${CARE_IMPORT_MAX_ROWS})`)
+  }
+  const counts = new Array(customers).fill(1)
+  let left = rows - customers
+  for (let round = 1; left > 0 && round < LOAD_MAX_PRODUCTS; round++) {
+    for (let i = 0; i < customers && left > 0; i++) { counts[i]++; left-- }
+  }
+  return counts
+}
+
+/** File tải GIẢ hoàn toàn (không đọc file gốc): mọi dòng của một khách liền nhau, SKU khác nhau trong cùng khách. */
+export function loadRows(runId, customers, rows, storeCode, staffEmail) {
+  const counts = loadProductCounts(customers, rows)
+  const externalIds = uiExternalIds(runId, customers)
+  const out = []
+  externalIds.forEach((ext, i) => {
+    const no = String(i + 1).padStart(5, '0')
+    for (let p = 0; p < counts[i]; p++) {
+      const sku = String(((i * 37 + p * 101) % LOAD_CATALOG) + 1).padStart(4, '0')
+      out.push({
+        customer_external_id: ext, customer_name: `KH QA ${no}`, customer_phone: `03900${no}`, target_store_code: storeCode,
+        assignee_email: staffEmail, reason_type: LOAD_REASON_TYPES[(i + p) % LOAD_REASON_TYPES.length],
+        reason_text: UI_REASON_SAMPLES[(i + p) % UI_REASON_SAMPLES.length], product_id: `QALD${sku}`,
+        product_name: `SP QA tải ${sku} hộp 10 vỉ x 10 viên`, product_url: `https://cdn-gcs.thuocsi.vn/qa-fixture/QALD${sku}.png`,
+      })
+    }
+  })
+  return { rows: out, externalIds }
 }
 
 /** Khoá import của server QA: none | held (pid còn sống) | stale (process đã chết giữa chừng). */
@@ -294,7 +357,7 @@ async function resolveUiScope(gw, m) {
   if (byCust.some((t) => t.batch_id !== m.batchId)) mismatch('khách QA có task ở batch khác')
   const taskIds = byBatch.map((t) => t.id)
   if (m.taskIds && !match(m.taskIds, taskIds)) mismatch('taskIds ≠ task của batch')
-  const prods = await gw.svc.select('care_task_products', 'task_id', [['batch_id', 'in', [m.batchId]]])
+  const prods = await gw.svc.select('care_task_products', 'id, task_id', [['batch_id', 'in', [m.batchId]]]) // id ⇒ phân trang được (20.000 dòng)
   if (prods.some((p) => !taskIds.includes(p.task_id))) mismatch('sản phẩm của batch gắn task ngoài phạm vi')
   return { batchId: m.batchId, customerIds, taskIds, externalIds: m.externalIds }
 }
@@ -404,13 +467,8 @@ async function resolveUiAccounts(gw, env) {
   return { accounts: { super: u.super.id, marketing: u.marketing.id, sm: u.sm.id, staff: [u.staff.id, u.staff2.id] }, storeIds, storeCode }
 }
 
-/**
- * B6-qa-ui — CHỈ ĐỌC DB. Sinh bản sao QA của file N1 mẫu (ID/tên/SĐT giả; store + dược sĩ = tài khoản QA thứ nhất;
- * giữ số dòng/sản phẩm/reason_type) và marker v2 (wx) ràng buộc host/kỳ/sha256 file/tập ID giả/batch định trước/
- * tài khoản QA. Lần ghi DB đầu tiên là import từ browser trên server QA (`serve`).
- */
-export async function cmdPrepare({ gw, env, envFileText, markerPath, originalBytes, writeOut, XLSX,
-  nowMs = Date.now(), runId = crypto.randomBytes(4).toString('hex') }) {
+/** Cổng chung của prepare / prepare-load (CHỈ ĐỌC DB): cổng ghi, khoá, kỳ, không còn task test trong kỳ, tài khoản QA. */
+async function uiPrepareGate({ gw, env, envFileText, markerPath, nowMs }) {
   const g = writeGate({ env, envFileText, markerExists: fs.existsSync(markerPath), mode: 'up' })
   if (!g.ok) throw new FixtureError('GATE', g.reason)
   if (fs.existsSync(`${markerPath}.lock`)) throw new FixtureError('GATE', 'còn khoá import QA của lượt trước — chạy status/down trước')
@@ -419,14 +477,20 @@ export async function cmdPrepare({ gw, env, envFileText, markerPath, originalByt
   const testNow = await gw.svc.count('care_tasks', [['is_test', 'eq', true], ['period_month', 'eq', period]])
   if (testNow !== 0) throw new FixtureError('TEST_TASKS_EXIST', `kỳ này còn ${testNow} task thử nghiệm của lượt QA khác — dọn trước`)
   const { accounts, storeIds, storeCode } = await resolveUiAccounts(gw, env)
+  return { host: g.host, period, accounts, storeIds, storeCode, staffEmail: String(env.E2E_STAFF_EMAIL).trim().toLowerCase() }
+}
 
-  const src = readCareSheet(XLSX, originalBytes)
-  const { rows, externalIds } = uiRows(src, runId, storeCode, String(env.E2E_STAFF_EMAIL).trim().toLowerCase())
+/** Ghi file QA + marker v2 (wx) TRƯỚC lần ghi DB đầu tiên (import trên server QA). Lỗi ghi file ⇒ bỏ marker (chưa ghi DB). */
+async function uiPrepareWrite({ gw, markerPath, writeOut, nowMs, runId, base, rows, externalIds, maxBytes = null }) {
   if ((await gw.svc.count('care_customers', [['external_id', 'in', externalIds]])) !== 0) throw new FixtureError('ID_CLASH', 'ID giả đã tồn tại')
-  const bytes = writeCareSheet(XLSX, rows)
+  const bytes = writeCareCsv(rows)
+  // Chừa ~4 KB cho phần bọc multipart: file sát trần byte sẽ bị server trả 413 thay vì đo được tải.
+  if (maxBytes !== null && bytes.byteLength + 4096 > maxBytes) {
+    throw new FixtureError('FILE_TOO_LARGE', `file QA ${(bytes.byteLength / 1048576).toFixed(2)} MB vượt trần byte của request — giảm số dòng`)
+  }
   const fileSha256 = crypto.createHash('sha256').update(bytes).digest('hex')
-  const m = { v: 2, kind: 'ui', runId, host: g.host, createdAt: new Date(nowMs).toISOString(), period, phase: 'reserved',
-    batchId: crypto.randomUUID(), fileSha256, externalIds, accounts, storeIds }
+  const m = { v: 2, kind: 'ui', runId, host: base.host, createdAt: new Date(nowMs).toISOString(), period: base.period, phase: 'reserved',
+    batchId: crypto.randomUUID(), fileSha256, externalIds, accounts: base.accounts, storeIds: base.storeIds }
   if (!validUiMarker(m)) throw new FixtureError('MARKER_INVALID', 'marker sinh ra không hợp lệ — báo Dev')
   createMarkerExclusive(markerPath, m) // TRƯỚC lần ghi DB đầu tiên (import browser); độc quyền (wx)
   try {
@@ -435,16 +499,59 @@ export async function cmdPrepare({ gw, env, envFileText, markerPath, originalByt
     fs.rmSync(markerPath, { force: true }) // chưa ghi DB nào ⇒ bỏ marker an toàn
     throw new FixtureError('OUT_WRITE', 'không ghi được file QA — kiểm đường dẫn ra')
   }
-  return { ok: true, period, rows: rows.length, customers: externalIds.length, products: rows.length, stores: 1, assignees: 1, reasonText: 'mẫu QA' }
+  return bytes
+}
+
+/**
+ * B6-qa-ui — CHỈ ĐỌC DB. Sinh bản sao QA của file N1 mẫu (ID/tên/SĐT giả; store + dược sĩ = tài khoản QA thứ nhất;
+ * giữ số dòng/sản phẩm/reason_type) và marker v2 (wx) ràng buộc host/kỳ/sha256 file/tập ID giả/batch định trước/
+ * tài khoản QA. Lần ghi DB đầu tiên là import từ browser trên server QA (`serve`).
+ */
+export async function cmdPrepare({ gw, env, envFileText, markerPath, originalBytes, writeOut,
+  nowMs = Date.now(), runId = crypto.randomBytes(4).toString('hex') }) {
+  const base = await uiPrepareGate({ gw, env, envFileText, markerPath, nowMs })
+  const src = readCareCsv(originalBytes)
+  const { rows, externalIds } = uiRows(src, runId, base.storeCode, base.staffEmail)
+  await uiPrepareWrite({ gw, markerPath, writeOut, nowMs, runId, base, rows, externalIds })
+  return { ok: true, period: base.period, rows: rows.length, customers: externalIds.length, products: rows.length, stores: 1, assignees: 1, reasonText: 'mẫu QA' }
+}
+
+/**
+ * Q-121 — CHỈ ĐỌC DB. File tải GIẢ (mặc định trần dòng của app, 2,5 SP/khách) + marker v2 như prepare; lần ghi DB đầu tiên là
+ * `load` (hoặc import browser) trên server QA. `maxBytes` = trần byte request của server (CARE_IMPORT_MAX_BYTES, mặc định 8 MiB).
+ */
+export async function cmdPrepareLoad({ gw, env, envFileText, markerPath, writeOut, customers = LOAD_DEFAULT_CUSTOMERS, rows = LOAD_DEFAULT_ROWS,
+  nowMs = Date.now(), runId = crypto.randomBytes(4).toString('hex') }) {
+  loadProductCounts(customers, rows) // sai kích thước ⇒ dừng TRƯỚC mọi đọc DB
+  const maxBytes = loadMaxBytes(env)
+  const base = await uiPrepareGate({ gw, env, envFileText, markerPath, nowMs })
+  const data = loadRows(runId, customers, rows, base.storeCode, base.staffEmail)
+  const bytes = await uiPrepareWrite({ gw, markerPath, writeOut, nowMs, runId, base, rows: data.rows, externalIds: data.externalIds, maxBytes })
+  return { ok: true, profile: 'load', period: base.period, rows: data.rows.length, customers: data.externalIds.length, products: data.rows.length,
+    fileMb: Number((bytes.byteLength / 1048576).toFixed(2)), stores: 1, assignees: 1, reasonText: 'mẫu QA' }
+}
+
+/**
+ * Số đếm NGOÀI phạm vi marker (Q-121): so trước prepare-load và sau down ⇒ dữ liệu thật/staging không đổi. Dữ liệu thật
+ * chỉ đổi nếu có import thật xen giữa — QA tải chạy ngoài giờ Marketing import.
+ */
+async function outsideCounts(gw) {
+  return {
+    real_batches: await gw.svc.count('care_import_batches', [['is_test', 'eq', false]]),
+    real_customers: await gw.svc.count('care_customers', [['is_test', 'eq', false]]),
+    real_tasks: await gw.svc.count('care_tasks', [['is_test', 'eq', false]]),
+    test_tasks_all: await gw.svc.count('care_tasks', [['is_test', 'eq', true]]),
+    staging_rows_all: await gw.svc.count('care_import_staging', []),
+  }
 }
 
 export async function cmdStatus({ gw, env, markerPath }) {
   const m = readMarker(markerPath)
-  if (!m) return { ok: true, marker: false }
+  if (!m) return { ok: true, marker: false, outside: await outsideCounts(gw) }
   assertMarkerHost(m, env)
   const s = await resolveScope(gw, m)
   const ui = m.v === 2 ? { kind: 'ui', importResult: m.importResult ?? null, lock: lockState(`${markerPath}.lock`) } : {}
-  return { ok: true, marker: true, ...ui, phase: m.phase, period: m.period, counts: await countScope(gw, s) }
+  return { ok: true, marker: true, ...ui, phase: m.phase, period: m.period, counts: await countScope(gw, s), outside: await outsideCounts(gw) }
 }
 
 /** Kiểm RLS/RPC dưới phiên đăng nhập thật từng vai. Mỗi mục: PASS | FAIL | NOT_VERIFIED (+ lý do không ID). */
@@ -613,6 +720,75 @@ export function cmdServe({ env, envFileText, markerPath, port = 3100, appDir = p
   }
 }
 
+// ─── QA tải (Q-121): chạy trên server QA local ─────────────────────────────
+/** Header Server-Timing của route import (chế độ QA) ⇒ { parse, lookups, preview, stage, finalize: ms; rss, rss_peak: MB }. */
+export function parseServerTiming(header) {
+  const out = {}
+  for (const part of String(header ?? '').split(',')) {
+    const [name, ...params] = part.split(';').map((x) => x.trim())
+    if (!name) continue
+    for (const p of params) {
+      const [k, v] = p.split('=')
+      const n = Number(String(v ?? '').replace(/"/g, ''))
+      if ((k === 'dur' || k === 'desc') && Number.isFinite(n)) out[name] = n
+    }
+  }
+  return out
+}
+
+/**
+ * Q-121 — lượt tải trên server QA LOCAL đã `serve`: preview ×2 (lượt 1 làm nóng biên dịch next dev) → commit → preview lại
+ * (kỳ vọng 0 tạo mới, toàn bộ "không đổi") → commit lại (kỳ vọng 409 trước mọi ghi). `client.post(path, fields)` ⇒
+ * { status, timing, body } (main: fetch + cookie phiên Marketing QA). Chỉ trả số đếm/mã/ms — không ID/tên/SĐT.
+ */
+export async function cmdLoad({ env, markerPath, fileBytes, client }) {
+  const m = readMarker(markerPath)
+  if (!m || m.v !== 2) throw new FixtureError('GATE', 'chưa có marker QA UI — chạy prepare-load trước')
+  assertMarkerHost(m, env)
+  const sha = crypto.createHash('sha256').update(fileBytes).digest('hex')
+  if (sha !== m.fileSha256) throw new FixtureError('FILE_NOT_MARKED', 'file không phải file QA của marker')
+  if (m.phase !== 'reserved') throw new FixtureError('PHASE', `marker đang ở pha ${m.phase} — lượt tải chỉ chạy một lần; status → down → prepare-load lại`)
+  const file = { name: 'care-qa-load.csv', bytes: fileBytes }
+  const step = async (p, fields) => { const t = performance.now(); const r = await client.post(p, fields); return { ...r, ms: Math.round(performance.now() - t) } }
+  const brief = (r) => ({ status: r.status, ms: r.ms, server: parseServerTiming(r.timing), code: r.body?.code ?? null })
+  const customers = m.externalIds.length
+  const warm = await step('/api/care/import/preview', { file })
+  const pre = await step('/api/care/import/preview', { file })
+  const p = pre.body?.preview
+  const out = {
+    ok: false, rows: p?.rowCount ?? null, customers, fileMb: Number((fileBytes.byteLength / 1048576).toFixed(2)),
+    preview_warmup: brief(warm),
+    preview: { ...brief(pre), errorCount: p?.errorCount ?? null, created: p?.counts?.created ?? null, commitAllowed: pre.body?.qa?.commitAllowed ?? null, issues: pre.body?.qa?.issues ?? null },
+  }
+  if (pre.status !== 200 || pre.body?.qa?.commitAllowed !== true || p?.errorCount !== 0) return { ...out, stopped: 'PREVIEW_NOT_READY' }
+  const com = await step('/api/care/import/commit', { file, sha256: sha, period: p.period })
+  const r = com.body?.result ?? null
+  out.commit = {
+    ...brief(com),
+    result: r && { status: r.status, kind: r.kind ?? null, rows: r.rows ?? null, customers: r.customers ?? null, created: r.created ?? null,
+      updated: r.updated ?? null, unchanged: r.unchanged ?? null, absent_kept: r.absent_kept ?? null, error_count: r.error_count ?? null },
+  }
+  if (com.status !== 200 || r?.status !== 'committed') return { ...out, stopped: 'COMMIT_FAILED' }
+  const after = await step('/api/care/import/preview', { file })
+  const pa = after.body?.preview
+  out.preview_after = { ...brief(after), created: pa?.counts?.created ?? null, updated: pa?.counts?.updated ?? null, unchanged: pa?.counts?.unchanged ?? null, issues: after.body?.qa?.issues ?? null }
+  const again = await step('/api/care/import/commit', { file, sha256: sha, period: p.period })
+  out.recommit = brief(again)
+  out.ok = r.created === customers && r.rows === p.rowCount && pa?.counts?.created === 0 && pa?.counts?.unchanged === customers && again.status === 409
+  return out
+}
+
+/** multipart giống trình duyệt, kèm Content-Length (route import bắt buộc — 411 nếu thiếu). */
+export async function multipartBody(fields) {
+  const fd = new FormData()
+  for (const [k, v] of Object.entries(fields)) {
+    if (typeof v === 'string') fd.append(k, v)
+    else fd.append(k, new File([v.bytes], v.name, { type: 'text/csv' }))
+  }
+  const tmp = new Request('http://local/', { method: 'POST', body: fd })
+  return { body: new Uint8Array(await tmp.arrayBuffer()), contentType: tmp.headers.get('content-type') }
+}
+
 // ─── Gateway Supabase (prod) ────────────────────────────────────────────────
 function applyFilters(q, filters) {
   for (const [col, op, v] of filters) q = op === 'in' ? q.in(col, v) : op === 'lt' ? q.lt(col, v) : q.eq(col, v)
@@ -620,20 +796,78 @@ function applyFilters(q, filters) {
 }
 const raise = (error) => { const e = new Error(error.message); e.code = error.code; throw e }
 
+/** Số giá trị tối đa của một bộ lọc `in` trong một request (URL PostgREST/Kong có giới hạn) — như ID_CHUNK của importRepo. */
+export const GW_IN_CHUNK = 100
+/** Trang đọc; PostgREST có thể trả ít hơn (max-rows) — vòng đọc dựa trên tổng exact, không dựa vào cỡ trang. */
+export const GW_PAGE = 1000
+
+/** Tách bộ lọc `in` dài thành nhiều bộ lọc ≤ size giá trị (không trùng) — kết quả các phần rời nhau, cộng/ghép lại được. */
+export function splitInFilters(filters, size = GW_IN_CHUNK) {
+  const i = filters.findIndex(([, op, v]) => op === 'in' && Array.isArray(v) && new Set(v).size > size)
+  if (i < 0) return [filters]
+  const [col, , vals] = filters[i]
+  const uniq = [...new Set(vals)]
+  const out = []
+  for (let k = 0; k < uniq.length; k += size) {
+    const f = filters.slice()
+    f[i] = [col, 'in', uniq.slice(k, k + size)]
+    out.push(...splitInFilters(f, size))
+  }
+  return out
+}
+
 export async function makeSupabaseGateway(env, createClientImpl) {
   const createClient = createClientImpl ?? (await import('@supabase/supabase-js')).createClient
   const url = env.NEXT_PUBLIC_SUPABASE_URL
   if (!url || !env.SUPABASE_SERVICE_ROLE_KEY || !env.NEXT_PUBLIC_SUPABASE_ANON_KEY) throw new FixtureError('ENV', 'thiếu NEXT_PUBLIC_SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY / NEXT_PUBLIC_SUPABASE_ANON_KEY')
   const admin = createClient(url, env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } })
+  const pageErr = (table, why) => new FixtureError('PAGE', `${table}: ${why} — chạy lại`)
   const ops = (client) => ({
-    async select(table, cols, filters) { const { data, error } = await applyFilters(client.from(table).select(cols), filters); if (error) raise(error); return data },
-    async count(table, filters) { const { count, error } = await applyFilters(client.from(table).select('*', { count: 'exact', head: true }), filters); if (error) raise(error); return count ?? 0 },
+    // Q-121: `in` dài ⇒ nhiều request; mỗi phần đọc theo trang tới đủ tổng exact (PostgREST max-rows cắt im lặng).
+    async select(table, cols, filters) {
+      const hasId = cols.split(',').some((c) => c.trim() === 'id')
+      const out = []
+      for (const part of splitInFilters(filters)) {
+        let total = null
+        for (let from = 0; total === null || from < total;) {
+          let q = applyFilters(client.from(table).select(cols, { count: 'exact' }), part)
+          if (hasId) q = q.order('id')
+          const { data, count, error } = await q.range(from, from + GW_PAGE - 1)
+          if (error) raise(error)
+          if (typeof count !== 'number') throw pageErr(table, 'không đọc được tổng số dòng')
+          if (total !== null && count !== total) throw pageErr(table, 'số dòng đổi giữa các trang')
+          total = count
+          const rows = data ?? []
+          if (from + rows.length < total && (rows.length === 0 || !hasId)) throw pageErr(table, rows.length ? 'cần cột id để phân trang' : 'thiếu trang')
+          out.push(...rows)
+          from += rows.length
+        }
+      }
+      return out
+    },
+    async count(table, filters) {
+      let n = 0
+      for (const part of splitInFilters(filters)) {
+        const { count, error } = await applyFilters(client.from(table).select('*', { count: 'exact', head: true }), part)
+        if (error) raise(error)
+        n += count ?? 0
+      }
+      return n
+    },
     async rpc(fn, args) { const { data, error } = await client.rpc(fn, args); if (error) raise(error); return data },
   })
   const svc = {
     ...ops(admin),
     async insert(table, rows) { const { error } = await admin.from(table).insert(rows); if (error) raise(error) },
-    async del(table, filters) { const { count, error } = await applyFilters(admin.from(table).delete({ count: 'exact' }), filters); if (error) raise(error); return count ?? 0 },
+    async del(table, filters) {
+      let n = 0
+      for (const part of splitInFilters(filters)) {
+        const { count, error } = await applyFilters(admin.from(table).delete({ count: 'exact' }), part)
+        if (error) raise(error)
+        n += count ?? 0
+      }
+      return n
+    },
   }
   const ROLE_ENV = { staff: 'STAFF', qlch: 'QLCH', super: 'SUPER', sm: 'SM' }
   return {
@@ -663,10 +897,34 @@ export async function makeSupabaseGateway(env, createClientImpl) {
 }
 
 // ─── CLI ────────────────────────────────────────────────────────────────────
+/** Đăng nhập server QA local bằng form /login (tài khoản Marketing QA) ⇒ header Cookie phiên Supabase. Không in cookie. */
+export async function loginCookie(base, email, password) {
+  if (!email || !password) throw new FixtureError('ENV', 'thiếu E2E_MKT_ADMIN_EMAIL / E2E_MKT_ADMIN_PASSWORD')
+  const { chromium } = await import('@playwright/test')
+  const browser = await chromium.launch()
+  try {
+    const ctx = await browser.newContext({ baseURL: base.origin })
+    const page = await ctx.newPage()
+    await page.goto('/login', { timeout: 180_000 }) // lần đầu next dev biên dịch chậm
+    await page.fill('#email', email)
+    await page.fill('#password', password)
+    await page.getByRole('button', { name: /^đăng nhập$/i }).click()
+    await page.waitForURL((u) => !u.pathname.startsWith('/login'), { timeout: 120_000 })
+    const cookies = await ctx.cookies(base.origin)
+    if (!cookies.some((c) => c.name.startsWith('sb-'))) throw new FixtureError('LOGIN', 'không có cookie phiên sau đăng nhập')
+    return cookies.map((c) => `${c.name}=${c.value}`).join('; ')
+  } catch (e) {
+    throw e instanceof FixtureError ? e : new FixtureError('LOGIN', 'đăng nhập server QA lỗi (kiểm server đang chạy, tài khoản Marketing QA)')
+  } finally {
+    await browser.close()
+  }
+}
+
 async function main() {
-  const [cmd, a1, a2] = process.argv.slice(2)
-  if (!['up', 'verify', 'status', 'down', 'prepare', 'serve'].includes(cmd)) {
-    console.error('dùng: node scripts/care-qa-fixture.mjs up | verify | status | down | prepare <goc.xlsx> [ra.xlsx] | serve [cổng]'); process.exit(2)
+  const [cmd, a1, a2, a3] = process.argv.slice(2)
+  if (!['up', 'verify', 'status', 'down', 'prepare', 'serve', 'prepare-load', 'load'].includes(cmd)) {
+    console.error('dùng: node scripts/care-qa-fixture.mjs up | verify | status | down | prepare <goc.csv> [ra.csv] | serve [cổng]'
+      + ' | prepare-load <ra.csv> [khách=4000] [dòng=10000] | load <ra.csv> [http://localhost:3100]'); process.exit(2)
   }
   const envPath = path.resolve(HERE, '..', '.env.local')
   const envFileText = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : null
@@ -696,13 +954,38 @@ async function main() {
     if (cmd === 'prepare') {
       if (!a1 || !fs.existsSync(a1)) throw new FixtureError('FILE_INVALID', 'thiếu đường dẫn file N1 gốc')
       const runId = crypto.randomBytes(4).toString('hex')
-      const dest = path.resolve(a2 ?? path.join(path.dirname(path.resolve(a1)), `care-qa-ui-${runId}.xlsx`))
+      const dest = path.resolve(a2 ?? path.join(path.dirname(path.resolve(a1)), `care-qa-ui-${runId}.csv`))
       // File QA (PII đã thay nhưng vẫn là dữ liệu vận hành mẫu) KHÔNG nằm trong repo.
       const repo = path.resolve(HERE, '..', '..')
       if (!path.relative(repo, dest).startsWith('..')) throw new FixtureError('OUT_IN_REPO', 'file QA phải nằm ngoài thư mục repo')
-      const XLSX = await import('xlsx')
-      out = await cmdPrepare({ ...ctx, runId, XLSX, originalBytes: fs.readFileSync(a1), writeOut: (b) => fs.writeFileSync(dest, b, { flag: 'wx' }) })
+      out = await cmdPrepare({ ...ctx, runId, originalBytes: fs.readFileSync(a1), writeOut: (b) => fs.writeFileSync(dest, b, { flag: 'wx' }) })
       out = { ...out, file: dest }
+    } else if (cmd === 'prepare-load') {
+      if (!a1) throw new FixtureError('FILE_INVALID', 'thiếu đường dẫn file QA ra (ngoài repo)')
+      const dest = path.resolve(a1)
+      const repo = path.resolve(HERE, '..', '..')
+      if (!path.relative(repo, dest).startsWith('..')) throw new FixtureError('OUT_IN_REPO', 'file QA phải nằm ngoài thư mục repo')
+      out = await cmdPrepareLoad({ ...ctx, customers: loadArg(a2, LOAD_DEFAULT_CUSTOMERS), rows: loadArg(a3, LOAD_DEFAULT_ROWS),
+        writeOut: (b) => fs.writeFileSync(dest, b, { flag: 'wx' }) })
+      out = { ...out, file: dest }
+    } else if (cmd === 'load') {
+      if (!a1 || !fs.existsSync(a1)) throw new FixtureError('FILE_INVALID', 'thiếu đường dẫn file QA của prepare-load')
+      const base = new URL(a2 ?? 'http://localhost:3100')
+      // Chỉ server QA local; cookie Supabase (Secure) chỉ đi với localhost, không phải 127.0.0.1 (e2e/auth.setup.ts).
+      if (base.protocol !== 'http:' || base.hostname !== 'localhost') throw new FixtureError('GATE', 'load chỉ chạy với server QA local http://localhost:<cổng>')
+      const g = careWriteGate({ env: process.env, envFileText, markerExists: false })
+      if (!g.ok) throw new FixtureError('GATE', g.reason)
+      const cookie = await loginCookie(base, process.env.E2E_MKT_ADMIN_EMAIL, process.env.E2E_MKT_ADMIN_PASSWORD)
+      const client = {
+        async post(p, fields) {
+          const { body, contentType } = await multipartBody(fields)
+          const r = await fetch(new URL(p, base), { method: 'POST', body, headers: { 'content-type': contentType, cookie } })
+          let j = null
+          try { j = await r.json() } catch { /* không phải JSON ⇒ chỉ báo status */ }
+          return { status: r.status, timing: r.headers.get('server-timing'), body: j }
+        },
+      }
+      out = await cmdLoad({ env: process.env, markerPath: DEFAULT_MARKER_PATH, fileBytes: fs.readFileSync(a1), client })
     } else {
       out = cmd === 'up' ? await cmdUp(ctx) : cmd === 'verify' ? await cmdVerify(ctx) : cmd === 'status' ? await cmdStatus(ctx) : await cmdDown(ctx)
     }

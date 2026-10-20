@@ -5,14 +5,14 @@ import { SUPER_STATE } from './authState'
 import { saveLocatorShot } from './qaShot'
 import { handleCarePreview, type CareImportDeps } from '../lib/care/import/handler'
 import type { CareImportLookups } from '../lib/care/import/preview'
-import { buildCareImportXlsx, defaultFixtureStores } from './careImportFixture'
+import { buildCareImportCsv, defaultFixtureStores } from './careImportFixture'
 
 // CRM-CSKH B2 — UI wizard Phân công + smoke API thật.
 //
 // UI chạy trên /ui-catalog/care-import (UI_CATALOG=1 + super — Coolify không bao
 // giờ đặt ⇒ prod 404) với API GIẢ bằng page.route: DB chưa có migration 114 ở
 // B2 nên không gọi được API thật. JSON giả được dựng bằng CHÍNH handler thật
-// (lib/care/import/handler.ts) trên fixture Excel giả B0 ⇒ đúng shape thật.
+// (lib/care/import/handler.ts) trên fixture CSV giả B0 (Q-124) ⇒ đúng shape thật.
 // Ảnh chụp chỉ phần wizard (ẩn shell có tên người dùng thật) ⇒ lưu vào
 // qa-artifacts/ (gitignored), không phải snapshot commit.
 //
@@ -22,7 +22,7 @@ import { buildCareImportXlsx, defaultFixtureStores } from './careImportFixture'
 const HAS_STATE = fs.existsSync(SUPER_STATE)
 const SHOTS = path.resolve(__dirname, '..', 'qa-artifacts', 'care-b2-ui')
 const STORES = defaultFixtureStores(25)
-const fixture = Buffer.from(buildCareImportXlsx())
+const fixture = Buffer.from(buildCareImportCsv())
 
 function lookups(): CareImportLookups {
   return {
@@ -33,7 +33,7 @@ function lookups(): CareImportLookups {
 }
 async function realPreviewJson(bytes: Uint8Array, lk = lookups()) {
   const fd = new FormData()
-  fd.append('file', new File([new Uint8Array(bytes)], 'care.xlsx'))
+  fd.append('file', new File([new Uint8Array(bytes)], 'care.csv'))
   const tmp = new Request('http://x/', { method: 'POST', body: fd })
   const body = new Uint8Array(await tmp.arrayBuffer())
   const deps: CareImportDeps = {
@@ -57,7 +57,7 @@ async function openWizard(page: Page, theme: 'light' | 'dark' = 'light') {
   await page.getByTestId('care-import-wizard').waitFor({ timeout: 20_000 })
 }
 async function upload(page: Page, bytes: Buffer = fixture) {
-  await page.locator('input[type="file"]').setInputFiles({ name: 'care_T10.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: bytes })
+  await page.locator('input[type="file"]').setInputFiles({ name: 'care_T10.csv', mimeType: 'text/csv', buffer: bytes })
   await page.getByRole('button', { name: 'Kiểm tra file' }).click()
 }
 async function shot(page: Page, name: string) {
@@ -199,7 +199,7 @@ test.describe('care B2 — API/page thật khi cờ CARE_ENABLED tắt @desktop'
   test('super đăng nhập: /care/assign 404, preview/commit/template 404 — cờ OFF không lộ chức năng', async ({ page }) => {
     expect((await page.goto('/care/assign'))!.status()).toBe(404)
     for (const p of ['/api/care/import/preview', '/api/care/import/commit']) {
-      const res = await page.request.post(p, { multipart: { file: { name: 'care.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: fixture } } })
+      const res = await page.request.post(p, { multipart: { file: { name: 'care.csv', mimeType: 'text/csv', buffer: fixture } } })
       expect(res.status(), p).toBe(404)
       expect(await res.json(), p).toMatchObject({ ok: false, code: 'NOT_FOUND' })
     }
@@ -208,7 +208,7 @@ test.describe('care B2 — API/page thật khi cờ CARE_ENABLED tắt @desktop'
 
   test('không đăng nhập: proxy đẩy về /login, không tới handler', async ({ baseURL }) => {
     const ctx = await pwRequest.newContext({ baseURL, storageState: { cookies: [], origins: [] } })
-    const res = await ctx.post('/api/care/import/preview', { maxRedirects: 0, multipart: { file: { name: 'a.xlsx', mimeType: 'application/octet-stream', buffer: fixture } } })
+    const res = await ctx.post('/api/care/import/preview', { maxRedirects: 0, multipart: { file: { name: 'a.csv', mimeType: 'application/octet-stream', buffer: fixture } } })
     expect([302, 307]).toContain(res.status())
     expect(res.headers()['location']).toContain('/login')
     await ctx.dispose()
@@ -265,14 +265,14 @@ test.describe('care B8.3 — /care/assign theo artboard 11 (API giả) @desktop'
     const dt = await page.evaluateHandle((b64) => {
       const bytes = Uint8Array.from(atob(b64), (ch) => ch.charCodeAt(0))
       const d = new DataTransfer()
-      d.items.add(new File([bytes], 'care_keo_tha.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+      d.items.add(new File([bytes], 'care_keo_tha.csv', { type: 'text/csv' }))
       return d
     }, fixture.toString('base64'))
     const zone = page.getByTestId('care-import-dropzone')
     await zone.dispatchEvent('dragover', { dataTransfer: dt })
     await expect(zone).toHaveAttribute('data-dragging', 'true')
     await zone.dispatchEvent('drop', { dataTransfer: dt })
-    await expect(page.getByTestId('care-import-file')).toContainText('care_keo_tha.xlsx')
+    await expect(page.getByTestId('care-import-file')).toContainText('care_keo_tha.csv')
     await expect(page.getByRole('button', { name: /Kiểm tra file/ })).toBeEnabled()
     await page.getByRole('button', { name: 'Bỏ file' }).click()
     await expect(page.getByTestId('care-import-dropzone')).toBeVisible()
@@ -434,10 +434,10 @@ test.describe('care B8.3 — /care/assign mobile 360 (API giả) @mobile', () =>
 test.describe('care B8.3 r1.1 — preview cũ về muộn sau khi đổi/bỏ file @desktop', () => {
   test.skip(!HAS_STATE, 'chưa có storageState super')
   test.use({ storageState: SUPER_STATE })
-  const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-  const fileB = Buffer.from(buildCareImportXlsx({ stores: defaultFixtureStores(2), customersPerStore: 3 }))
+  const CSV_MIME = 'text/csv'
+  const fileB = Buffer.from(buildCareImportCsv({ stores: defaultFixtureStores(2), customersPerStore: 3 }))
 
-  /** Giữ phản hồi preview của care_A.xlsx tới khi `releaseA()`; file khác trả ngay. */
+  /** Giữ phản hồi preview của care_A.csv tới khi `releaseA()`; file khác trả ngay. */
   async function holdA(page: Page) {
     const [jsonA, jsonB] = [await realPreviewJson(fixture), await realPreviewJson(fileB)]
     expect([jsonA.preview.customerCount, jsonB.preview.customerCount]).toEqual([100, 6])
@@ -446,7 +446,7 @@ test.describe('care B8.3 r1.1 — preview cũ về muộn sau khi đổi/bỏ fi
     let aDone!: () => void
     const aFulfilled = new Promise<void>((ok) => { aDone = ok })
     await page.route('**/api/care/import/preview', async (r) => {
-      if ((r.request().postDataBuffer()?.toString('latin1') ?? '').includes('filename="care_A.xlsx"')) {
+      if ((r.request().postDataBuffer()?.toString('latin1') ?? '').includes('filename="care_A.csv"')) {
         await gate
         await fulfill(r, 200, jsonA).catch(() => {}) // request đã huỷ (abort) ⇒ bỏ qua
         aDone()
@@ -461,7 +461,7 @@ test.describe('care B8.3 r1.1 — preview cũ về muộn sau khi đổi/bỏ fi
       w.__a = []
       new MutationObserver(() => {
         const t = document.querySelector('[data-testid="care-import-wizard"]')?.textContent ?? ''
-        if (/gộp theo mã khách/.test(t) && /Khách \(task\)100/.test(t)) w.__a.push(t.includes('care_B.xlsx') ? 'A-under-B' : 'A')
+        if (/gộp theo mã khách/.test(t) && /Khách \(task\)100/.test(t)) w.__a.push(t.includes('care_B.csv') ? 'A-under-B' : 'A')
       }).observe(document.body, { subtree: true, childList: true, characterData: true })
     })
   }
@@ -473,18 +473,18 @@ test.describe('care B8.3 r1.1 — preview cũ về muộn sau khi đổi/bỏ fi
     await page.waitForLoadState('networkidle')
     await watchA(page)
     const input = page.locator('input[type="file"]')
-    await input.setInputFiles({ name: 'care_A.xlsx', mimeType: XLSX_MIME, buffer: fixture })
+    await input.setInputFiles({ name: 'care_A.csv', mimeType: CSV_MIME, buffer: fixture })
     await page.getByRole('button', { name: /Kiểm tra file/ }).click()
     await page.getByRole('button', { name: 'Bỏ file' }).click()
-    await input.setInputFiles({ name: 'care_B.xlsx', mimeType: XLSX_MIME, buffer: fileB })
-    await expect(page.getByTestId('care-import-file')).toContainText('care_B.xlsx')
+    await input.setInputFiles({ name: 'care_B.csv', mimeType: CSV_MIME, buffer: fileB })
+    await expect(page.getByTestId('care-import-file')).toContainText('care_B.csv')
     await releaseA()
     const wiz = page.getByTestId('care-import-wizard')
     await expect(wiz.getByRole('button', { name: 'Tiếp: xem phân công' })).toHaveCount(0)
-    await expect(page.getByTestId('care-import-file')).toContainText('care_B.xlsx')
+    await expect(page.getByTestId('care-import-file')).toContainText('care_B.csv')
     await page.getByRole('button', { name: /Kiểm tra file/ }).click()
     await expect(wiz.getByRole('button', { name: 'Tiếp: xem phân công' })).toBeVisible()
-    await expect(wiz).toContainText('care_B.xlsx')
+    await expect(wiz).toContainText('care_B.csv')
     await expect(wiz).toContainText('Khách (task)6')
     expect(await seenA(page)).toEqual([])
   })
@@ -494,7 +494,7 @@ test.describe('care B8.3 r1.1 — preview cũ về muộn sau khi đổi/bỏ fi
     await openWizard(page)
     await page.waitForLoadState('networkidle')
     await watchA(page)
-    await page.locator('input[type="file"]').setInputFiles({ name: 'care_A.xlsx', mimeType: XLSX_MIME, buffer: fixture })
+    await page.locator('input[type="file"]').setInputFiles({ name: 'care_A.csv', mimeType: CSV_MIME, buffer: fixture })
     await page.getByRole('button', { name: /Kiểm tra file/ }).click()
     await page.getByRole('button', { name: 'Bỏ file' }).click()
     await releaseA()

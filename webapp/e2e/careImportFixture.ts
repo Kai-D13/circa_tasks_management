@@ -1,7 +1,5 @@
-import * as XLSX from 'xlsx'
-
-// CRM-CSKH B0 (SPEC B0 mục 5, Q-63): fixture Excel GIẢ cho import N1 —
-// đúng một sheet `KhachHang`, đúng 10 header theo data contract r3.2, 25 store,
+// CRM-CSKH B0 (SPEC B0 mục 5, Q-63): fixture GIẢ cho import N1 — Q-124: file CSV UTF-8 (BOM, CRLF, dấu phẩy),
+// đúng 10 header theo data contract r3.2, 25 store,
 // nhiều dòng sản phẩm trên một khách (= một task khách/tháng).
 //
 // KHÔNG chứa PII thật: tên "KH QA …", email miền `.invalid` (RFC 2606 — không
@@ -12,10 +10,8 @@ import * as XLSX from 'xlsx'
 // fixture is_test) thay vì sửa file này.
 //
 // Tất định: cùng tham số ⇒ cùng nội dung (B2 test diff/idempotency/hash).
-// Module chỉ dùng cú pháp TS xoá được (Node 24 chạy trực tiếp qua
-// scripts/gen-care-import-fixture.mjs).
-
-export const CARE_IMPORT_SHEET = 'KhachHang'
+// Module chỉ dùng cú pháp TS xoá được và KHÔNG import gì (Node 24 chạy trực tiếp qua
+// scripts/gen-care-import-fixture.mjs) — vì vậy tự ghi CSV; care-import-core.spec ép trùng lib/care/import/csvCore.ts.
 
 export const CARE_IMPORT_HEADERS = [
   'customer_external_id',
@@ -96,26 +92,19 @@ export function buildCareImportRows(opts: FixtureOptions = {}): CareImportRow[] 
   return rows
 }
 
-/** Workbook một sheet, header đúng thứ tự, mọi ô kiểu text (giữ số 0 đầu SĐT). */
-export function buildCareImportWorkbook(rows: CareImportRow[]): XLSX.WorkBook {
-  const aoa: string[][] = [
-    [...CARE_IMPORT_HEADERS],
-    ...rows.map((r) => CARE_IMPORT_HEADERS.map((h) => r[h])),
-  ]
-  const ws = XLSX.utils.aoa_to_sheet(aoa)
-  // Ép kiểu chuỗi cho mọi ô có giá trị: Excel mở lại không tự đổi SĐT thành số.
-  for (const addr of Object.keys(ws)) {
-    if (addr.startsWith('!')) continue
-    const cell = ws[addr] as XLSX.CellObject
-    cell.t = 's'
-    cell.z = '@'
-  }
-  const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, ws, CARE_IMPORT_SHEET)
-  return wb
+/** Trường CSV: bọc nháy khi có dấu phẩy/nháy/xuống dòng/khoảng trắng đầu-cuối (trùng csvField của app). */
+const csvField = (v: string) => (/[",\r\n]|^\s|\s$/.test(v) ? `"${v.replace(/"/g, '""')}"` : v)
+
+/** Bảng ⇒ CSV UTF-8 có BOM, CRLF (như Excel "CSV UTF-8") — trùng toCareCsv(rows, true) của app. */
+export function fixtureCsv(rows: readonly (readonly string[])[]): string {
+  return String.fromCharCode(0xfeff) + rows.map((r) => r.map(csvField).join(',')).join('\r\n') + '\r\n'
 }
 
-export function buildCareImportXlsx(opts: FixtureOptions = {}): Buffer {
-  const wb = buildCareImportWorkbook(buildCareImportRows(opts))
-  return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }) as Buffer
+/** Dòng N1 ⇒ bytes file CSV (header + dòng theo đúng thứ tự cột). */
+export function careRowsToCsv(rows: readonly CareImportRow[]): Uint8Array {
+  return new TextEncoder().encode(fixtureCsv([[...CARE_IMPORT_HEADERS], ...rows.map((r) => CARE_IMPORT_HEADERS.map((h) => r[h]))]))
+}
+
+export function buildCareImportCsv(opts: FixtureOptions = {}): Uint8Array {
+  return careRowsToCsv(buildCareImportRows(opts))
 }

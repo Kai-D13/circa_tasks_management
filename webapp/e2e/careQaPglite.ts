@@ -104,7 +104,9 @@ export function pgliteImportRepo(db: any, L: any, today: string, opts: { failOn?
     },
     async stageRows(batchId, rows) {
       step('stageRows')
-      for (const r of rows) await q(`INSERT INTO public.care_import_staging (batch_id, row_no, payload) VALUES ($1, $2, $3)`, [batchId, r.row_no, JSON.stringify(r.payload)])
+      // Một câu cho cả khối (như một request PostgREST) — khối 2.000 dòng của QA tải Q-121 không chèn từng dòng.
+      await q(`INSERT INTO public.care_import_staging (batch_id, row_no, payload) SELECT $1, (x->>'n')::int, x->'p' FROM jsonb_array_elements($2::jsonb) x`,
+        [batchId, JSON.stringify(rows.map((r) => ({ n: r.row_no, p: r.payload })))])
     },
     async finalize(batchId, actorId) { step('finalize'); return L.finalize(db, batchId, actorId, today) },
     async discardBatch(batchId) { step('discardBatch'); await q(`DELETE FROM public.care_import_batches WHERE id = $1 AND status = 'staged'`, [batchId]) },
