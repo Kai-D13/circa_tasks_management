@@ -2,7 +2,8 @@
 
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
-import { isCareEnabled } from '@/lib/care/flags'
+import { isCareEnabled, isCareOrderLinksUiEnabled } from '@/lib/care/flags'
+import { loadTaskOrders } from '@/lib/care/server/orderLinks'
 import {
   CARE_TRANSFER_MESSAGES, mapCareTransferError, parseCareFilters, validateTransferInput,
   type CareInteractionPage, type CareTransferErrorCode,
@@ -88,10 +89,13 @@ export async function loadCareTaskPanel(input: { taskId: string }): Promise<Care
     if (!d) return { ok: false, code: 'NOT_FOUND', message: 'Không tìm thấy khách này trong phạm vi của bạn.' }
     const t = d.task
     const transferable = v.perms.canTransfer && t.status === 'open' && t.period_month === carePeriodOf(new Date())
+    // E3: đơn xác thực sau import — lỗi ⇒ null (chi tiết vẫn hiện, khối đơn không có).
+    const orders = isCareOrderLinksUiEnabled() ? await loadTaskOrders(v.userId, t.id).catch(() => null) : null
     return {
       ok: true,
       taskId: t.id,
       qa: isCareQaActive(),
+      orders,
       data: {
         task: {
           customer_name: t.customer_name, phone_raw: t.phone_raw, phone_norm: t.phone_norm, period_month: t.period_month, due_date: t.due_date,

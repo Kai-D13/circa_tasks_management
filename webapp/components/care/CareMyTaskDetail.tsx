@@ -44,7 +44,7 @@ type TabKey = (typeof TABS)[number]['key']
 const dmy = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`
 const CONTACT_BTN = 'inline-flex min-h-[44px] items-center justify-center gap-2 rounded-care-ctl text-[15px] font-semibold outline-none transition-opacity focus-visible:ring-3 focus-visible:ring-ring/50 active:opacity-80'
 
-export function CareMyTaskDetail({ data, todayISO, canRecord, updateHref, loadMore, qa = false }: {
+export function CareMyTaskDetail({ data, todayISO, canRecord, updateHref, loadMore, qa = false, orders }: {
   data: CareMyDetailData
   todayISO: string
   canRecord: boolean
@@ -52,6 +52,8 @@ export function CareMyTaskDetail({ data, todayISO, canRecord, updateHref, loadMo
   loadMore?: CareLoadMoreInteractions
   /** Chế độ QA local (Q-107): chỉ thêm dòng nhận biết số giả — nút vẫn là tel:/sms: thật. */
   qa?: boolean
+  /** E3: "Đơn xác thực sau import" ở tab Tổng quan — chỉ truyền khi CARE_ORDER_LINKS_UI_ENABLED. */
+  orders?: React.ReactNode
 }) {
   const [tab, setTab] = useState<TabKey>('overview')
   const t = data.task
@@ -123,6 +125,7 @@ export function CareMyTaskDetail({ data, todayISO, canRecord, updateHref, loadMo
                 </div>
               ))}
             </dl>
+            {orders && <div className="pt-3">{orders}</div>}
           </section>
         )}
 

@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { createClient } from '@/lib/supabase/server'
-import { isCareEnabled } from '@/lib/care/flags'
+import { isCareEnabled, isCareOrderLinksUiEnabled } from '@/lib/care/flags'
 import { carePeriodOf, vnDateISO } from '@/lib/care/time'
 import { type CareInteractionPage } from '@/lib/care/browse'
 import {
@@ -10,9 +10,10 @@ import {
   type CareMyFilter, type CareRecordErrorCode,
 } from '@/lib/care/my'
 import { loadCareInteractionsPage } from '@/lib/care/server/browse'
-import { getCareStaffAccess, loadMyTaskPage, type CareMyTaskRow } from '@/lib/care/server/my'
+import { getCareStaffAccess, loadMyOrderSearchPage, loadMyTaskPage, type CareMyTaskRow } from '@/lib/care/server/my'
 import { careDataScope, isCareQaActive } from '@/lib/care/server/qaUi'
 import { withCareScope } from '@/lib/care/scope'
+import { CareOrderSearchTooBroadError } from '@/lib/care/orderLinks/my'
 
 // CRM-CSKH B4 — server actions màn dược sĩ. Mọi action: cờ CARE_ENABLED → dược sĩ OS
 // (session) → làm việc bằng SESSION client; RPC/RLS 114 là chốt cuối. Không service role.
@@ -70,17 +71,25 @@ export async function recordCareInteraction(input: {
   return { ok: true, status }
 }
 
-/** Tìm khách của mình theo tên/SĐT — POST, từ khoá không vào URL/log. */
-export async function searchMyCareTasks(input: { filter: CareMyFilter; q: string; page: number }):
+/**
+ * Tìm khách của mình theo tên/SĐT — POST, từ khoá không vào URL/log. E3 r1.1: `orders: true` (đang ở chip "Có đơn xác thực")
+ * ⇒ chỉ task có ≥ 1 đơn sau import, cần thêm cờ CARE_ORDER_LINKS_UI_ENABLED (OFF ⇒ từ chối, không rơi về tìm mọi task).
+ */
+export async function searchMyCareTasks(input: { filter: CareMyFilter; q: string; page: number; orders?: boolean }):
   Promise<{ ok: true; rows: CareMyTaskRow[]; total: number } | { ok: false; message: string }> {
   if (!isCareEnabled()) return { ok: false, message: 'Chức năng chưa được bật.' }
+  const orders = input?.orders === true
+  if (orders && !isCareOrderLinksUiEnabled()) return { ok: false, message: 'Chức năng chưa được bật.' }
   const a = await getCareStaffAccess()
   if (a.kind !== 'ok') return { ok: false, message: 'Không có quyền xem.' }
   const f = parseMyFilters({ filter: String(input?.filter ?? ''), page: String(input?.page ?? 1) })
   const now = new Date()
+  const q = String(input?.q ?? '').slice(0, 200)
   try {
-    return { ok: true, ...(await loadMyTaskPage(a, carePeriodOf(now), f.filter, f.page, vnDateISO(now), String(input?.q ?? '').slice(0, 200))) }
-  } catch {
+    if (orders) return { ok: true, ...(await loadMyOrderSearchPage(a, carePeriodOf(now), f.page, vnDateISO(now), q)) }
+    return { ok: true, ...(await loadMyTaskPage(a, carePeriodOf(now), f.filter, f.page, vnDateISO(now), q)) }
+  } catch (e) {
+    if (e instanceof CareOrderSearchTooBroadError) return { ok: false, message: 'Quá nhiều khách khớp — nhập thêm tên hoặc số điện thoại.' }
     return { ok: false, message: 'Không tải được danh sách — thử lại.' }
   }
 }

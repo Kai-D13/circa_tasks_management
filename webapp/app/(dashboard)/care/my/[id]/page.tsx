@@ -13,6 +13,9 @@ import { loadCareTaskDetail } from '@/lib/care/server/browse'
 import { requireCareStaff } from '@/lib/care/server/my'
 import { isCareQaActive } from '@/lib/care/server/qaUi'
 import { loadMoreMyCareInteractions } from '@/app/actions/careMy'
+import { loadMoreTaskOrders } from '@/app/actions/careOrders'
+import { CareTaskOrdersSection } from '@/components/care/CareTaskOrdersSection'
+import { careOrderLinksUiOn, loadTaskOrders } from '@/lib/care/server/orderLinks'
 import { cn } from '@/lib/utils'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -43,6 +46,8 @@ export default async function CareMyTaskPage({ params }: { params: Promise<{ id:
   const t = detail.task
   // Q-82: cùng điều kiện với action/upload/RPC (assignee + đúng store task + mở + kỳ hiện tại).
   const canRecord = careStaffTaskBlock(t, me, carePeriodOf(now)) === null
+  // E3: đơn xác thực sau import ở tab Tổng quan (cờ UI) — lỗi đọc ⇒ không có khối.
+  const orders = careOrderLinksUiOn() ? await loadTaskOrders(me.userId, t.id).catch(() => null) : null
   return (
     <CareMyScreen screen="detail">
       {header}
@@ -52,6 +57,7 @@ export default async function CareMyTaskPage({ params }: { params: Promise<{ id:
         updateHref={`/care/my/${t.id}/update`}
         loadMore={loadMoreMyCareInteractions}
         qa={isCareQaActive()}
+        orders={orders ? <CareTaskOrdersSection taskId={t.id} initial={orders.view} next={orders.next} loadMore={loadMoreTaskOrders} compact /> : undefined}
         data={{ task: t, products: detail.products, interactions: detail.interactions, events: detail.events }}
       />
     </CareMyScreen>

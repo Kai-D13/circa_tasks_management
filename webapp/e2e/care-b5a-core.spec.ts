@@ -304,7 +304,9 @@ test.describe('care B8.2 — báo cáo /care/reports: Đã liên hệ, nhóm sto
     expect(v).toContain("const status = CARE_REPORT_LINK_STATUS[link] as CareStatusFilter | null")
     expect(v).toContain("{n('contacted')}")
     expect(v).toContain("{n('overdueInPeriod')}")
-    expect(v).toContain("{orderCell(t.convertedTasks)}")
+    expect(v).toContain("{orderCell(t.convertedTasks, storeId, assigneeId)}") // E3: ô Có đơn thành link cohort chỉ khi conversionHref (parity)
+    expect(v).toContain('if (!hasOrders) return \'—\'')
+    expect(v).toContain('if (!conversionHref || v <= 0) return fmt(v)')
   })
 })
 
@@ -363,7 +365,8 @@ test.describe('care B5a r1.1 — source: cổng cờ/quyền, session-only, cùn
     for (const f of files) {
       expect(read(f), f).not.toMatch(/Số đơn|Doanh thu|doanh thu ròng|net_revenue|netRevenue|net_amount|formatVnd|sumDecimal|₫|ShoppingBag/)
     }
-    expect(read('components/care/CareReportView.tsx')).toContain('label="Khách có đơn"')
+    // E3: cờ UI E OFF ⇒ nhãn giữ "Khách có đơn"; ON ⇒ "Khách có đơn sau chăm sóc" (tách khỏi khối đơn sau import).
+    expect(read('components/care/CareReportView.tsx')).toContain("label={importOrders ? 'Khách có đơn sau chăm sóc' : 'Khách có đơn'}")
     expect(read('components/care/CareDashboardView.tsx')).toContain('label="Khách có đơn"')
   })
 

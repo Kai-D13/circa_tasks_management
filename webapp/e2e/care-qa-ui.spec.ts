@@ -720,9 +720,10 @@ test.describe('care B6-qa-ui — vòng đời prepare → import browser → 5 v
     await tamper('ID khách không suy ra từ runId', { runId: 'deadbeef' }, 'MARKER_INVALID')
     // ID THẬT lẫn vào: khách không-test mang một ID giả của marker ⇒ SCOPE_NOT_TEST.
     const fake13 = careQaUiExternalIds(A.runId, 13)[12]
-    await db.query(`UPDATE public.care_customers SET external_id = $1 WHERE external_id = 'REAL-5'`, [fake13])
+    // 116 khoá external_id (trigger care_customers_freeze_external_id) ⇒ chèn một khách thật mang ID giả thay vì đổi ID.
+    await db.query(`INSERT INTO public.care_customers (external_id, is_test) VALUES ($1, false)`, [fake13])
     await tamper('ID thật mang mã giả', { externalIds: careQaUiExternalIds(A.runId, 13) }, 'SCOPE_NOT_TEST')
-    await db.query(`UPDATE public.care_customers SET external_id = 'REAL-5' WHERE external_id = $1`, [fake13])
+    await db.query(`DELETE FROM public.care_customers WHERE external_id = $1 AND NOT is_test`, [fake13])
     // Khách QA có task ở batch KHÁC (lượt test khác chạm cùng khách) ⇒ SCOPE_MISMATCH.
     const [{ id: otherBatch }] = (await db.query(`INSERT INTO public.care_import_batches (period_month, file_name, file_sha256, row_count, created_by, is_test)
       VALUES ($1, 'khac.csv', $2, 1, $3, true) RETURNING id`, [period, 'e'.repeat(64), L.U.mkt])).rows

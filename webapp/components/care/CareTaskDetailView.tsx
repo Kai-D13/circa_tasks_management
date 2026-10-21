@@ -38,8 +38,10 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
-export function CareTaskDetailView({ taskId, data, todayISO, actions, loadMore, qa = false, layout = 'page' }: {
+export function CareTaskDetailView({ taskId, data, todayISO, actions, loadMore, qa = false, layout = 'page', orders }: {
   taskId: string; data: CareDetailViewData; todayISO: string; actions?: React.ReactNode; loadMore?: CareLoadMoreInteractions
+  /** E3: khối "Đơn xác thực sau import" (CareTaskOrdersSection) — chỉ truyền khi CARE_ORDER_LINKS_UI_ENABLED. */
+  orders?: React.ReactNode
   /** Q-107: chế độ QA local vẫn là link tel: (số task is_test của batch marker) — chỉ thêm dòng nhận biết số giả. */
   qa?: boolean
   /** B8.1: 'panel' = drawer hẹp cạnh bảng /care/tasks — một cột, không chia đôi sản phẩm/lịch sử theo viewport. */
@@ -76,6 +78,8 @@ export function CareTaskDetailView({ taskId, data, todayISO, actions, loadMore, 
           <CareTransferHistory events={data.events} />
         </div>
       </section>
+
+      {orders}
 
       {/* B7-ui: desktop rộng — sản phẩm và lịch sử đặt cạnh nhau (trước đây thẻ sản phẩm chiếm nửa hàng, nửa còn lại trống). */}
       <div className={panel ? 'space-y-5' : 'grid gap-6 lg:grid-cols-2 lg:items-start'}>

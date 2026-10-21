@@ -13,12 +13,16 @@ import { careInteractionPage, CARE_INTERACTION_PAGE_SIZE } from '@/lib/care/brow
 import { CARE_RECORD_MESSAGES, CARE_PROOF_PUBLIC_BASE } from '@/lib/care/my'
 import { maskVnPhone } from '@/lib/affiliate/phone'
 import { CARE_OUTCOME_META, isCareOutcome } from '@/lib/care/outcome'
+import { CareTaskOrdersSection } from '@/components/care/CareTaskOrdersSection'
 
 // Dev-only bàn thử UI màn dược sĩ CRM (B4). 100% DỮ LIỆU GIẢ — DB chưa có migration 114.
 // Cùng cổng /ui-catalog: UI_CATALOG=1 (Coolify không đặt ⇒ prod 404) + super, ở page VÀ
 // mỗi action giả (endpoint action tồn tại trong build).
 // B7-ui r2: `?frame=list|detail|readonly|update[&qa=1]` dựng ĐÚNG MỘT màn theo bố cục trang thật (CareMyScreen +
 // header riêng) để test/chụp 360/390 như production; không có `frame` ⇒ bàn thử nhiều section như cũ.
+// E3: thêm `&orders=1` ⇒ list có chip "Có đơn xác thực", detail có khối đơn xác thực sau import ở tab Tổng quan (mã đơn giả).
+// E3 r1.1: `?frame=list&orders=1&view=orders[&n=21|41]` ⇒ ĐANG ở chip (n khách có đơn giả, 20 / trang, "Xem thêm" giả lặp 1 dòng
+// ở mỗi trang sau để kiểm UI bỏ trùng; tìm trong nhóm chỉ trong n khách này, 20 / trang).
 
 const S = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const TASK = S(700)
@@ -72,6 +76,12 @@ const QA_DETAIL: CareMyDetailData = {
   products: [], interactions: { rows: [], hasMore: false, nextBefore: null }, events: [],
 }
 const SUMMARY = { assigned: 5, notCared: 1, completed: 1, overdueLive: 1 }
+const orderRows = (n: number): CareMyRow[] => Array.from({ length: n }, (_, i) => ({
+  id: S(800 + i), customer_name: `KH có đơn ${String(i + 1).padStart(2, '0')}`, phone_masked: maskVnPhone(`039000${String(2000 + i)}`),
+  status: i % 3 === 0 ? 'completed' : 'open', last_outcome: i % 3 === 0 ? 'ORDERED' : 'CALLBACK',
+  last_interaction_at: '2026-10-08T03:00:00Z', next_action_date: i % 3 === 0 ? null : '2026-10-20', due_date: '2026-10-31',
+}))
+const orderN = (v: unknown) => (v === '21' ? 21 : 41)
 
 const catalogOn = () => process.env.UI_CATALOG === '1'
 async function gate(): Promise<boolean> {
@@ -80,11 +90,16 @@ async function gate(): Promise<boolean> {
   return !!user && profile?.role === 'admin' && isSuperAdminEmail(user.email)
 }
 
-async function fakeSearch(input: { filter: string; q: string; page: number }) {
+async function fakeSearch(input: { filter: string; q: string; page: number; orders?: boolean }) {
   'use server'
   if (!(await gate())) return { ok: false as const, message: 'Không khả dụng' }
   const q = String(input.q).toLowerCase()
   if (q === 'qa-loi') return { ok: false as const, message: 'Không tải được danh sách — thử lại.' }
+  if (input.orders === true) {
+    const hit = orderRows(41).filter((r) => r.customer_name.toLowerCase().includes(q))
+    const from = (Math.max(1, Number(input.page) || 1) - 1) * 20
+    return { ok: true as const, rows: hit.slice(from, from + 20), total: hit.length }
+  }
   const rows = ROWS.filter((r, i) => r.customer_name.toLowerCase().includes(q) || PHONES[i].includes(q))
   return { ok: true as const, rows, total: rows.length }
 }
@@ -102,6 +117,23 @@ async function fakeRecord(input: { taskId: string; outcome: string; note: string
   return { ok: true as const, status: (isCareOutcome(input.outcome) && CARE_OUTCOME_META[input.outcome].terminal ? 'completed' : 'open') as 'open' | 'completed' }
 }
 
+async function fakeMoreMyOrders(input: { cursor: string }) {
+  'use server'
+  if (!(await gate())) return { ok: false as const, message: 'Không có quyền xem.' }
+  const m = /^(21|41):(\d+)$/.exec(String(input.cursor))
+  if (!m) return { ok: false as const, message: 'Danh sách đã đổi (sang tháng mới hoặc phiên khác) — tải lại trang.' }
+  await new Promise((r) => setTimeout(r, 300))
+  const n = Number(m[1]), at = Number(m[2])
+  // Lặp lại dòng cuối của trang trước (đơn mới làm task nhảy hạng) ⇒ UI phải bỏ trùng.
+  return { ok: true as const, rows: orderRows(n).slice(at - 1, at + 20), next: at + 20 < n ? `${n}:${at + 20}` : null }
+}
+
+async function fakeMoreOrders() {
+  'use server'
+  if (!(await gate())) return { ok: false as const, message: 'Không có quyền.' }
+  return { ok: false as const, message: 'Không có thêm đơn.' }
+}
+
 export default async function CareMyCatalogPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   if (!catalogOn()) notFound()
   const { user, profile } = await getSessionProfile()
@@ -110,14 +142,29 @@ export default async function CareMyCatalogPage({ searchParams }: { searchParams
   const sp = await searchParams
   const frame = typeof sp.frame === 'string' ? sp.frame : null
   const qa = sp.qa === '1'
+  const withOrders = sp.orders === '1'
   const BASE = '/ui-catalog/care-my'
+  if (frame === 'list' && withOrders && sp.view === 'orders') {
+    const n = orderN(sp.n)
+    return (
+      <CareMyScreen screen="list">
+        <CareMyHeader screen="list" qa={qa} />
+        <div className="px-4 pt-1 pb-4 md:p-0" data-testid="catalog-care-my-home">
+          <CareMyHome summary={SUMMARY} rows={orderRows(n).slice(0, 20)} total={n} filter="all" page={1}
+            pageSize={20} todayISO="2026-10-10" search={fakeSearch} basePath={BASE}
+            ordersChip={{ count: n, active: true }} ordersList={{ next: `${n}:20`, total: n, loadMore: fakeMoreMyOrders }} />
+        </div>
+      </CareMyScreen>
+    )
+  }
   if (frame === 'list') {
     return (
       <CareMyScreen screen="list">
         <CareMyHeader screen="list" qa={qa} />
         <div className="px-4 pt-1 pb-4 md:p-0" data-testid="catalog-care-my-home">
           <CareMyHome summary={SUMMARY} rows={ROWS} total={ROWS.length} filter="all" page={1}
-            pageSize={20} todayISO="2026-10-10" search={fakeSearch} basePath={BASE} />
+            pageSize={20} todayISO="2026-10-10" search={fakeSearch} basePath={BASE}
+            ordersChip={withOrders ? { count: 2, active: false } : undefined} />
         </div>
       </CareMyScreen>
     )
@@ -127,6 +174,11 @@ export default async function CareMyCatalogPage({ searchParams }: { searchParams
       <CareMyScreen screen="detail">
         <CareMyHeader screen="detail" back={{ href: `${BASE}?frame=list`, label: 'Khách hàng của tôi' }} qa={qa} />
         <CareMyTaskDetail todayISO="2026-10-10" canRecord={frame === 'detail'} updateHref={`${BASE}?frame=update`} loadMore={fakeLoadMore} qa={qa}
+          orders={withOrders ? <CareTaskOrdersSection taskId={TASK} next={null} loadMore={fakeMoreOrders} compact initial={{
+            found: true, orders: [{ orderCode: 'DHC-QA-0071234', completedAt: '2026-10-08T03:15:00.000000Z', linkId: 2 },
+              { orderCode: 'DHC-QA-0070999', completedAt: '2026-10-06T10:02:00.000000Z', linkId: 1 }],
+            hasMore: false, ordersCount: 2, coverage: true, coveredUntil: '2026-10-10T02:30:00.000000Z', periodMonth: '2026-10-01', isCurrentPeriod: true,
+            periodStatus: 'active', closedAt: null, closedThrough: null, lagging: false }} /> : undefined}
           data={frame === 'readonly' ? READONLY : qa ? QA_DETAIL : DETAIL} />
       </CareMyScreen>
     )

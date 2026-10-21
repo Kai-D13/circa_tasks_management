@@ -39,6 +39,12 @@
 //     (kỳ vọng 0 tạo mới) → commit lại (kỳ vọng bị chặn trước khi ghi). In ms từng pha (Server-Timing) + số đếm/mã;
 //   · gateway chia bộ lọc `in` dài thành khối 100 và phân trang có đếm exact (PostgREST max-rows) ⇒ status/down đúng với
 //     hàng nghìn dòng.
+//
+// D1 (18/10) — QA HUỶ IMPORT trên DB thật (SAU migration 115), marker v3 kind 'cancel':
+//   E2E_CARE_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> node scripts/care-qa-fixture.mjs cancel-qa [khách=4] [dòng=8] [import-only]
+//   node scripts/care-qa-fixture.mjs status   ·   … down
+//   · initial + revision is_test (stage + care_import_finalize qua service role như app) → preview/huỷ revision (kiểm khôi
+//     phục chính xác) → preview/huỷ initial; in ms từng RPC + số đếm. `cancel-qa 4000 10000` = đo ở trần 10.000 dòng.
 
 import crypto from 'node:crypto'
 import fs from 'node:fs'
@@ -246,6 +252,10 @@ export function readMarker(p) {
     if (!validUiMarker(m)) throw new FixtureError('MARKER_INVALID', 'marker QA UI không đúng định dạng — không tự xử lý, báo Dev')
     return m
   }
+  if (m?.v === 3) {
+    if (!validCancelMarker(m)) throw new FixtureError('MARKER_INVALID', 'marker QA huỷ không đúng định dạng — không tự xử lý, báo Dev')
+    return m
+  }
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
   const ids = (a) => a === undefined || (Array.isArray(a) && a.every((x) => UUID.test(x)))
   if (m?.v !== MARKER_VERSION || !/^[0-9a-f]{8}$/.test(m.runId ?? '') || !UUID.test(m.batchId ?? '') || !Array.isArray(m.externalIds)
@@ -311,6 +321,7 @@ const batchSha = (runId) => crypto.createHash('sha256').update(`qa-b6:${runId}`)
  */
 async function resolveScope(gw, m) {
   if (m.v === 2) return resolveUiScope(gw, m)
+  if (m.v === 3) return resolveCancelScope(gw, m)
   const mismatch = (why) => { throw new FixtureError('SCOPE_MISMATCH', `marker không khớp DB (${why}) — dừng TRƯỚC khi xoá, giữ marker, báo Dev/PM`) }
   if (!sameSet(m.externalIds, fixtureExternalIds(m.runId, m.externalIds.length))) mismatch('ID khách không suy ra từ runId')
   const batch = await gw.svc.select('care_import_batches', 'id, is_test, file_name, file_sha256', [['id', 'in', [m.batchId]]])
@@ -382,6 +393,48 @@ async function countScope(gw, s) {
   for (const [table, filters] of SCOPED_COUNTS(s)) {
     out[table] = filters.some(([, , v]) => v.length === 0) ? 0 : await gw.svc.count(table, filters)
   }
+  return { ...out, ...(await countOrderLinksScope(gw, s.taskIds)) }
+}
+
+// ─── E (migration 116): service_role mất DELETE care_tasks ⇒ xoá task is_test qua RPC care_qa_delete_test_tasks ────────
+// (khoá X kỳ → L, từ chối khi lượt đồng bộ đơn sau import đang chạy, xoá link → task, trigger dọn coverage cùng transaction).
+// Dò theo RPC (không theo app_migrations): rollback mức 1 xoá dòng '116' nhưng GIỮ bảng link (FK RESTRICT) + RPC ⇒ vẫn phải đi
+// RPC. Chỉ khi RPC không tồn tại (trước 116 / sau rollback mức 2 — service_role có lại DELETE) ⇒ xoá thẳng như trước.
+const QA_DELETE_PART = 5_000
+const MISSING_FN = new Set(['PGRST202', '42883'])
+async function delTestTasks(gw, taskIds) {
+  if (taskIds.length === 0) return 0
+  let n = 0
+  for (let i = 0; i < taskIds.length; i += QA_DELETE_PART) {
+    let r
+    try {
+      r = await gw.svc.rpc('care_qa_delete_test_tasks', { p_task_ids: taskIds.slice(i, i + QA_DELETE_PART) })
+    } catch (e) {
+      if (i === 0 && MISSING_FN.has(e?.code)) return gw.svc.del('care_tasks', [['id', 'in', taskIds], ['is_test', 'eq', true]])
+      throw e
+    }
+    if (r?.status === 'busy') throw new FixtureError('ORDERS_SYNC_RUNNING', 'lượt đồng bộ đơn sau import đang chạy — giữ marker, chạy lại down sau ít phút')
+    if (r?.status !== 'ok' || !Number.isInteger(r.tasks)) throw new FixtureError('QA_DELETE_FAILED', 'xoá task QA qua RPC không trả kết quả hợp lệ — báo Dev')
+    n += r.tasks
+  }
+  return n
+}
+/** Link / coverage của task QA còn lại (bảng owner-only ⇒ đếm qua RPC); RPC không tồn tại (trước 116 / sau mức 2) ⇒ {}. */
+async function countOrderLinksScope(gw, taskIds) {
+  if (taskIds.length === 0) return {}
+  const out = { care_order_links: 0, care_order_task_coverage: 0 }
+  for (let i = 0; i < taskIds.length; i += QA_DELETE_PART) {
+    let r
+    try {
+      r = await gw.svc.rpc('care_order_links_qa_counts', { p_task_ids: taskIds.slice(i, i + QA_DELETE_PART) })
+    } catch (e) {
+      if (i === 0 && MISSING_FN.has(e?.code)) return {}
+      throw e
+    }
+    out.care_order_links += Number(r?.care_order_links ?? NaN)
+    out.care_order_task_coverage += Number(r?.care_order_task_coverage ?? NaN)
+  }
+  if (!Number.isInteger(out.care_order_links) || !Number.isInteger(out.care_order_task_coverage)) throw new FixtureError('QA_COUNTS_FAILED', 'đếm link / coverage QA lỗi — báo Dev')
   return out
 }
 
@@ -436,6 +489,221 @@ export async function cmdUp({ gw, env, envFileText, markerPath, nowMs = Date.now
   tasks.sort((a, b) => order.get(a.customer_id) - order.get(b.customer_id))
   writeMarker(markerPath, { ...m, phase: 'ready', customerIds: customers.map((c) => c.id), taskIds: tasks.map((t) => t.id) })
   return { ok: true, period, customers: customers.length, tasks: tasks.length }
+}
+
+// ─── D1 — QA huỷ import trên DB thật (marker v3, kind 'cancel'; migration 115) ─────────────────────────────────────────
+// `cancel-qa [khách=4] [dòng=8]`: import initial (n khách) + revision (sửa TOÀN BỘ n task — sản phẩm + tên — và thêm 1 khách
+// mới: trường hợp xấu nhất), rồi preview + huỷ revision (kiểm khôi phục CHÍNH XÁC), preview + huỷ initial; đo thời gian
+// từng RPC (gồm mạng tới DB ⇒ cận trên). `cancel-qa 4000 10000` = phép đo 10.000 dòng. Dữ liệu GIẢ is_test, ghi qua
+// service role như đường app (stage + RPC); marker tạo TRƯỚC lần ghi đầu; down dọn theo marker (journal CASCADE).
+export const CANCEL_QA_DEFAULT_CUSTOMERS = 4
+export const CANCEL_QA_DEFAULT_ROWS = 8
+export const CANCEL_FILE_NAME = 'qa-d1-cancel.csv'
+const CANCEL_PHASES = ['reserved', 'imported', 'cancelled', 'tearing_down']
+const STAGE_CHUNK = 2000
+
+export function cancelQaExternalIds(runId, n) {
+  return Array.from({ length: n }, (_, i) => `QA-D1-${runId}-${String(i + 1).padStart(5, '0')}`)
+}
+export const cancelBatchSha = (runId, i) => crypto.createHash('sha256').update(`qa-d1:${runId}:${i}`).digest('hex')
+
+/** Dòng N1 giả: mỗi khách ≥ 1 dòng, tổng = rows (chia đều, dư cho các khách đầu). variant 'b' = bản sửa: đổi tên + bộ sản phẩm. */
+export function cancelQaRows(externalIds, storeCode, staffEmail, rows, variant) {
+  const n = externalIds.length
+  const per = Math.floor(rows / n), extra = rows % n
+  const out = []
+  externalIds.forEach((ext, i) => {
+    const k = per + (i < extra ? 1 : 0)
+    for (let j = 0; j < k; j++) {
+      out.push({
+        customer_external_id: ext, customer_name: variant === 'b' ? `KH QA D1 ${i + 1} sửa` : `KH QA D1 ${i + 1}`,
+        customer_phone: `0390${String(i + 1).padStart(6, '0')}`, target_store_code: storeCode, assignee_email: staffEmail,
+        reason_type: 'chronic', reason_text: `QA D1 ${variant}`, product_id: `QAD1${variant.toUpperCase()}${i + 1}P${j + 1}`,
+        product_name: `SP QA D1 ${variant} ${j + 1}`, product_url: 'https://cdn-gcs.thuocsi.vn/qa-fixture/QAD1.png',
+      })
+    }
+  })
+  return out
+}
+
+export function validCancelMarker(m) {
+  const ids = (a) => a === undefined || (Array.isArray(a) && a.every((x) => typeof x === 'string' && UUID_RE.test(x)) && new Set(a).size === a.length)
+  if (!m || m.v !== 3 || m.kind !== 'cancel' || !/^[0-9a-f]{8}$/.test(m.runId ?? '') || typeof m.host !== 'string' || !m.host) return false
+  if (!/^\d{4}-(0[1-9]|1[0-2])-01$/.test(m.period ?? '') || !CANCEL_PHASES.includes(m.phase) || !UUID_RE.test(m.actorId ?? '')) return false
+  if (!Array.isArray(m.batchIds) || m.batchIds.length !== 2 || !m.batchIds.every((x) => typeof x === 'string' && UUID_RE.test(x)) || m.batchIds[0] === m.batchIds[1]) return false
+  const ext = m.externalIds
+  if (!Array.isArray(ext) || ext.length < 3 || ext.length > UI_MAX_CUSTOMERS) return false
+  const want = cancelQaExternalIds(m.runId, ext.length)
+  if (!ext.every((x, i) => x === want[i])) return false
+  return ids(m.customerIds) && ids(m.taskIds)
+}
+
+/** Phạm vi dọn lượt QA huỷ — RÀNG CHẶT như resolveScope: 2 batch (đúng tên/sha của runId, is_test), khách theo ID giả, task của
+ *  2 batch, khách không có task ở batch khác, sản phẩm của 2 batch chỉ gắn task trong tập. Lệch ⇒ dừng TRƯỚC mọi DELETE. */
+async function resolveCancelScope(gw, m) {
+  const mismatch = (why) => { throw new FixtureError('SCOPE_MISMATCH', `marker QA huỷ không khớp DB (${why}) — dừng TRƯỚC khi xoá, giữ marker, báo Dev/PM`) }
+  const notTest = (what) => { throw new FixtureError('SCOPE_NOT_TEST', `${what} trong phạm vi marker KHÔNG is_test — dừng, giữ marker, báo Dev/PM`) }
+  const batches = await gw.svc.select('care_import_batches', 'id, is_test, file_name, file_sha256', [['id', 'in', m.batchIds]])
+  if (batches.some((b) => b.is_test !== true)) notTest('batch')
+  if (batches.some((b) => b.file_name !== CANCEL_FILE_NAME || b.file_sha256 !== cancelBatchSha(m.runId, m.batchIds.indexOf(b.id)))) mismatch('batch không thuộc lần chạy này')
+  const custRows = await gw.svc.select('care_customers', 'id, external_id, is_test', [['external_id', 'in', m.externalIds]])
+  if (custRows.some((c) => c.is_test !== true)) notTest('khách')
+  const customerIds = custRows.map((c) => c.id)
+  // Sau huỷ / khi đang dọn: DB chỉ còn TẬP CON của marker (huỷ đã xoá task/khách); các pha khác: phải TRÙNG.
+  const match = m.phase === 'tearing_down' || m.phase === 'cancelled' ? (marker, db) => subsetOf(db, marker) : sameSet
+  if (m.customerIds && !match(m.customerIds, customerIds)) mismatch('customerIds ≠ khách theo ID giả')
+  const byBatch = await gw.svc.select('care_tasks', 'id, customer_id, batch_id, is_test', [['batch_id', 'in', m.batchIds]])
+  const byCust = customerIds.length ? await gw.svc.select('care_tasks', 'id, customer_id, batch_id, is_test', [['customer_id', 'in', customerIds]]) : []
+  if ([...byBatch, ...byCust].some((t) => t.is_test !== true)) notTest('task')
+  if (byBatch.some((t) => !customerIds.includes(t.customer_id))) mismatch('task của batch thuộc khách ngoài marker')
+  if (byCust.some((t) => !m.batchIds.includes(t.batch_id))) mismatch('khách QA có task ở batch khác')
+  const taskIds = byBatch.map((t) => t.id)
+  if (m.taskIds && !match(m.taskIds, taskIds)) mismatch('taskIds ≠ task của 2 batch')
+  const prods = await gw.svc.select('care_task_products', 'id, task_id', [['batch_id', 'in', m.batchIds]])
+  if (prods.some((p) => !taskIds.includes(p.task_id))) mismatch('sản phẩm của batch gắn task ngoài phạm vi')
+  return { batchIds: m.batchIds, customerIds, taskIds, externalIds: m.externalIds }
+}
+
+// care_import_revision_journal: chỉ owner đọc được (không đếm qua service role) — FK CASCADE theo task/batch khi dọn.
+const CANCEL_SCOPED_COUNTS = (s) => [
+  ['care_import_batches', [['id', 'in', s.batchIds]]],
+  ['care_import_staging', [['batch_id', 'in', s.batchIds]]],
+  ['care_customers', [['id', 'in', s.customerIds]]],
+  ['care_tasks', [['id', 'in', s.taskIds]]],
+  ['care_task_products', [['task_id', 'in', s.taskIds]]],
+  ['care_interactions', [['task_id', 'in', s.taskIds]]],
+  ['care_assignment_events', [['task_id', 'in', s.taskIds]]],
+  ['care_store_refusals', [['customer_id', 'in', s.customerIds]]],
+  ['care_reconcile_queue', [['customer_id', 'in', s.customerIds]]],
+  ['care_order_attributions', [['task_id', 'in', s.taskIds]]],
+  ['care_orders', [['customer_external_id', 'in', s.externalIds]]],
+]
+async function countCancelScope(gw, s) {
+  const out = {}
+  for (const [table, filters] of CANCEL_SCOPED_COUNTS(s)) out[table] = filters.some(([, , v]) => v.length === 0) ? 0 : await gw.svc.count(table, filters)
+  return { ...out, ...(await countOrderLinksScope(gw, s.taskIds)) }
+}
+
+async function downCancelScoped(gw, m, markerPath) {
+  const s = await resolveCancelScope(gw, m)
+  await assertNothingOutOfScope(gw, s)
+  if (m.phase !== 'tearing_down') writeMarker(markerPath, { ...m, phase: 'tearing_down', customerIds: s.customerIds, taskIds: s.taskIds })
+  const del = async (table, filters) => (filters.some(([, , v]) => v.length === 0) ? 0 : gw.svc.del(table, filters))
+  const T = [['is_test', 'eq', true]]
+  const deleted = {
+    care_order_attributions: await del('care_order_attributions', [['task_id', 'in', s.taskIds], ...T]),
+    care_reconcile_queue: await del('care_reconcile_queue', [['customer_id', 'in', s.customerIds]]),
+    care_store_refusals: await del('care_store_refusals', [['customer_id', 'in', s.customerIds], ...T]),
+    care_interactions: await del('care_interactions', [['task_id', 'in', s.taskIds], ...T]),
+    care_assignment_events: await del('care_assignment_events', [['task_id', 'in', s.taskIds], ...T]),
+    care_task_products: await del('care_task_products', [['task_id', 'in', s.taskIds]]),
+    care_tasks: await delTestTasks(gw, s.taskIds), // 116: qua RPC (X → L); trước 116: xoá thẳng is_test
+    care_customers: await del('care_customers', [['id', 'in', s.customerIds], ...T]), // TRƯỚC batch (FK created_batch_id)
+    care_import_staging: await del('care_import_staging', [['batch_id', 'in', s.batchIds]]),
+    care_import_batches: await del('care_import_batches', [['id', 'in', s.batchIds], ...T]), // batch cancelled is_test xoá được
+  }
+  const remaining = await countCancelScope(gw, s)
+  const left = Object.values(remaining).reduce((a, b) => a + b, 0)
+  if (left !== 0) throw new FixtureError('NOT_CLEAN', `còn ${left} dòng trong phạm vi — giữ marker, chạy lại down`)
+  fs.rmSync(markerPath)
+  return { ok: true, deleted, remaining: 0 }
+}
+
+export async function cmdCancelQa({ gw, env, envFileText, markerPath, nowMs = Date.now(), runId = crypto.randomBytes(4).toString('hex'),
+  customers = CANCEL_QA_DEFAULT_CUSTOMERS, rows = CANCEL_QA_DEFAULT_ROWS, importOnly = false, clock = () => performance.now() }) {
+  if (!Number.isInteger(customers) || !Number.isInteger(rows) || customers < 2 || customers + 1 > UI_MAX_CUSTOMERS
+      || rows < customers + 1 || rows > Math.min(CARE_IMPORT_MAX_ROWS, LOAD_MAX_PRODUCTS * customers)) {
+    throw new FixtureError('LOAD_SIZE', `khách 2–${UI_MAX_CUSTOMERS - 1}, dòng từ (khách+1) tới min(${LOAD_MAX_PRODUCTS}×khách, ${CARE_IMPORT_MAX_ROWS})`)
+  }
+  const g = writeGate({ env, envFileText, markerExists: fs.existsSync(markerPath), mode: 'up' })
+  if (!g.ok) throw new FixtureError('GATE', g.reason)
+  if (fs.existsSync(`${markerPath}.lock`)) throw new FixtureError('GATE', 'còn khoá import QA của lượt trước — chạy status/down trước')
+  const curPeriod = await preflightPeriod(gw, nowMs)
+  if ((await gw.svc.count('app_migrations', [['version', 'eq', '115']])) !== 1) throw new FixtureError('NO_115', 'migration 115 chưa chạy')
+  // Kỳ này còn batch/task is_test của lượt QA khác ⇒ initial thành revision, "mới nhất" lệch ⇒ dừng.
+  if ((await gw.svc.count('care_tasks', [['is_test', 'eq', true], ['period_month', 'eq', curPeriod]])) !== 0
+      || (await gw.svc.count('care_import_batches', [['is_test', 'eq', true], ['period_month', 'eq', curPeriod], ['status', 'eq', 'committed']])) !== 0) {
+    throw new FixtureError('TEST_TASKS_EXIST', 'kỳ này còn batch/task thử nghiệm của lượt QA khác — dọn trước')
+  }
+  const staff = await gw.userByEmail(env.E2E_STAFF_EMAIL)
+  const actor = await gw.userByEmail(env.E2E_SUPER_EMAIL)
+  if (!staff || staff.role !== 'staff' || !staff.store_id) throw new FixtureError('STAFF_INVALID', 'E2E_STAFF_EMAIL không phải dược sĩ có store')
+  if (!actor || actor.role !== 'admin') throw new FixtureError('ACTOR_INVALID', 'E2E_SUPER_EMAIL phải là admin super trong users')
+  const [store] = await gw.svc.select('stores', 'code, store_type, is_active', [['id', 'eq', staff.store_id]])
+  if (!store || store.store_type !== 'os' || !store.is_active) throw new FixtureError('STORE_INVALID', 'store của staff QA không phải OS đang hoạt động')
+
+  const externalIds = cancelQaExternalIds(runId, customers + 1)
+  if ((await gw.svc.count('care_customers', [['external_id', 'in', externalIds]])) !== 0) throw new FixtureError('ID_CLASH', 'ID giả đã tồn tại')
+  const batchIds = [crypto.randomUUID(), crypto.randomUUID()]
+  const m = { v: 3, kind: 'cancel', runId, host: g.host, createdAt: new Date(nowMs).toISOString(), period: curPeriod, phase: 'reserved',
+    batchIds, actorId: actor.id, externalIds }
+  if (!validCancelMarker(m)) throw new FixtureError('MARKER_INVALID', 'marker sinh ra không hợp lệ — báo Dev')
+  createMarkerExclusive(markerPath, m) // TRƯỚC mọi lần ghi DB; độc quyền (wx)
+
+  const timed = async (fn) => { const t0 = clock(); const r = await fn(); return [r, Math.round(clock() - t0)] }
+  const expect = (cond, code, why) => { if (!cond) throw new FixtureError(code, `${why} — giữ marker, chạy down, báo Dev`) }
+  const stageFinalize = async (i, fileRows) => {
+    await gw.svc.insert('care_import_batches', [{ id: batchIds[i], period_month: curPeriod, file_name: CANCEL_FILE_NAME,
+      file_sha256: cancelBatchSha(runId, i), row_count: fileRows.length, created_by: actor.id, is_test: true }])
+    for (let k = 0; k < fileRows.length; k += STAGE_CHUNK) {
+      await gw.svc.insert('care_import_staging', fileRows.slice(k, k + STAGE_CHUNK).map((payload, j) => ({ batch_id: batchIds[i], row_no: k + j + 2, payload })))
+    }
+    const [fin, ms] = await timed(() => gw.svc.rpc('care_import_finalize', { p_batch_id: batchIds[i], p_actor: actor.id }))
+    if (fin?.status !== 'committed') throw new FixtureError('FINALIZE_REJECTED', `finalize trả ${fin?.status ?? 'không rõ'} (mã lỗi dòng: ${(fin?.errors ?? []).map((e) => e.code).join(',') || '-'})`)
+    return [fin, ms]
+  }
+  const snapshot = async () => {
+    const tasks = await gw.svc.select('care_tasks', 'id, customer_name, phone_norm, phone_raw', [['batch_id', 'in', [batchIds[0]]]])
+    const prods = tasks.length ? await gw.svc.select('care_task_products', 'id, task_id', [['task_id', 'in', tasks.map((t) => t.id)], ['is_current', 'eq', true]]) : []
+    return { tasks: tasks.map((t) => `${t.id}|${t.customer_name}|${t.phone_norm}|${t.phone_raw}`), prods: prods.map((p) => p.id) }
+  }
+
+  const [f1, finalizeInitialMs] = await stageFinalize(0, cancelQaRows(externalIds.slice(0, customers), store.code, env.E2E_STAFF_EMAIL, rows, 'a'))
+  expect(f1.kind === 'initial' && f1.created === customers, 'FIXTURE_MISMATCH', 'initial không tạo đủ task')
+  const before = await snapshot()
+  const [f2, finalizeRevisionMs] = await stageFinalize(1, cancelQaRows(externalIds, store.code, env.E2E_STAFF_EMAIL, rows, 'b'))
+  expect(f2.kind === 'revision' && f2.created === 1 && f2.updated === customers, 'FIXTURE_MISMATCH', 'revision không sửa đủ task / không thêm đúng 1 khách')
+  writeMarker(markerPath, { ...m, phase: 'imported' })
+  // import-only: dừng ở đây để operator chạy VERIFY 115 giai đoạn qa (V6: journal_rows = summary.updated = số dòng journal) rồi down.
+  if (importOnly) {
+    return { ok: true, kind: 'cancel-qa', mode: 'import-only', period: curPeriod, customers, rows,
+      timings_ms: { finalize_initial: finalizeInitialMs, finalize_revision: finalizeRevisionMs }, revision: { created: f2.created, updated: f2.updated },
+      note: 'chạy crm-115-verify.mjs <host> qa, rồi status → down' }
+  }
+
+  const [p2, previewRevisionMs] = await timed(() => gw.svc.rpc('care_import_cancel_preview', { p_batch_id: batchIds[1], p_actor: actor.id }))
+  expect(p2?.status === 'ready' && typeof p2.commit_seq === 'string' && p2.tasks_deleted === 1 && p2.tasks_restored === customers,
+    'PREVIEW_UNEXPECTED', `preview revision trả ${p2?.status ?? '-'} ${p2?.code ?? ''}`)
+  const [c2, cancelRevisionMs] = await timed(() => gw.svc.rpc('care_import_cancel', { p_batch_id: batchIds[1], p_actor: actor.id, p_expected_commit_seq: p2.commit_seq }))
+  expect(c2?.status === 'cancelled' && c2.tasks_deleted === 1 && c2.tasks_restored === customers && c2.customers_deleted === 1,
+    'CANCEL_UNEXPECTED', `huỷ revision trả ${c2?.status ?? '-'} ${c2?.code ?? ''}`)
+  // Khôi phục CHÍNH XÁC: tên/SĐT + bộ sản phẩm hiện hành = đúng trước revision; task/khách do revision tạo đã xoá.
+  const after = await snapshot()
+  expect(sameSet(before.tasks, after.tasks), 'RESTORE_MISMATCH', 'tên/SĐT task sau huỷ revision khác trước revision')
+  expect(sameSet(before.prods, after.prods), 'RESTORE_MISMATCH', 'sản phẩm hiện hành sau huỷ revision khác trước revision')
+  expect((await gw.svc.count('care_tasks', [['batch_id', 'in', [batchIds[1]]]])) === 0
+    && (await gw.svc.count('care_customers', [['external_id', 'in', [externalIds[customers]]]])) === 0, 'RESTORE_MISMATCH', 'task/khách do revision tạo còn sót')
+
+  const [p1, previewInitialMs] = await timed(() => gw.svc.rpc('care_import_cancel_preview', { p_batch_id: batchIds[0], p_actor: actor.id }))
+  expect(p1?.status === 'ready' && typeof p1.commit_seq === 'string' && p1.tasks_deleted === customers,
+    'PREVIEW_UNEXPECTED', `preview initial trả ${p1?.status ?? '-'} ${p1?.code ?? ''}`)
+  const [c1, cancelInitialMs] = await timed(() => gw.svc.rpc('care_import_cancel', { p_batch_id: batchIds[0], p_actor: actor.id, p_expected_commit_seq: p1.commit_seq }))
+  expect(c1?.status === 'cancelled' && c1.tasks_deleted === customers && c1.customers_deleted === customers,
+    'CANCEL_UNEXPECTED', `huỷ initial trả ${c1?.status ?? '-'} ${c1?.code ?? ''}`)
+  expect((await gw.svc.count('care_tasks', [['batch_id', 'in', batchIds]])) === 0
+    && (await gw.svc.count('care_customers', [['external_id', 'in', externalIds]])) === 0, 'CANCEL_UNEXPECTED', 'còn task/khách sau huỷ initial')
+  expect((await gw.svc.count('care_import_batches', [['id', 'in', batchIds], ['status', 'eq', 'cancelled'], ['is_test', 'eq', true]])) === 2,
+    'CANCEL_UNEXPECTED', 'hai batch không ở trạng thái cancelled')
+  writeMarker(markerPath, { ...m, phase: 'cancelled', customerIds: [], taskIds: [] })
+
+  const counts = (o) => Object.fromEntries(Object.entries(o).filter(([k]) => k.endsWith('_deleted') || k.endsWith('_restored')))
+  return {
+    ok: true, kind: 'cancel-qa', period: curPeriod, customers, rows,
+    timings_ms: { finalize_initial: finalizeInitialMs, finalize_revision: finalizeRevisionMs, preview_revision: previewRevisionMs,
+      cancel_revision: cancelRevisionMs, preview_initial: previewInitialMs, cancel_initial: cancelInitialMs },
+    revision: { created: f2.created, updated: f2.updated }, cancel_revision: counts(c2), cancel_initial: counts(c1),
+    note: 'thời gian gồm mạng tới DB (cận trên); tiếp theo: status → down',
+  }
 }
 
 /** Năm tài khoản QA browser (env E2E_*), kiểm vai/store/phạm vi SM. Lỗi chỉ nêu TÊN biến env, không email. */
@@ -550,8 +818,9 @@ export async function cmdStatus({ gw, env, markerPath }) {
   if (!m) return { ok: true, marker: false, outside: await outsideCounts(gw) }
   assertMarkerHost(m, env)
   const s = await resolveScope(gw, m)
-  const ui = m.v === 2 ? { kind: 'ui', importResult: m.importResult ?? null, lock: lockState(`${markerPath}.lock`) } : {}
-  return { ok: true, marker: true, ...ui, phase: m.phase, period: m.period, counts: await countScope(gw, s), outside: await outsideCounts(gw) }
+  const ui = m.v === 2 ? { kind: 'ui', importResult: m.importResult ?? null, lock: lockState(`${markerPath}.lock`) } : m.v === 3 ? { kind: 'cancel' } : {}
+  const counts = m.v === 3 ? await countCancelScope(gw, s) : await countScope(gw, s)
+  return { ok: true, marker: true, ...ui, phase: m.phase, period: m.period, counts, outside: await outsideCounts(gw) }
 }
 
 /** Kiểm RLS/RPC dưới phiên đăng nhập thật từng vai. Mỗi mục: PASS | FAIL | NOT_VERIFIED (+ lý do không ID). */
@@ -561,6 +830,7 @@ export async function cmdVerify({ gw, env, envFileText, markerPath }) {
   const m = readMarker(markerPath)
   assertMarkerHost(m, env)
   if (m.v === 2) throw new FixtureError('PHASE', 'marker là lượt QA browser — verify chỉ dành cho fixture up; kiểm trên browser theo ma trận vai')
+  if (m.v === 3) throw new FixtureError('PHASE', 'marker là lượt QA huỷ import — verify chỉ dành cho fixture up; chạy status → down')
   if (m.phase !== 'ready') throw new FixtureError('PHASE', `marker ở pha "${m.phase}" — verify chỉ chạy một lần sau up thành công (down rồi up lại để chạy lại)`)
   const n = m.taskIds.length
   const [t1, t2, t3] = m.taskIds
@@ -652,6 +922,7 @@ export async function cmdDown({ gw, env, envFileText, markerPath, isPidAlive }) 
   if (!g.ok) throw new FixtureError('GATE', g.reason)
   const m = readMarker(markerPath)
   assertMarkerHost(m, env)
+  if (m.v === 3) return downCancelScoped(gw, m, markerPath)
   if (m.v !== 2) return downScoped(gw, m, markerPath)
   // QA UI: server QA còn giữ khoá import (process sống) ⇒ chờ xong/tắt server. Khoá của process đã chết = stale, bỏ.
   // down tự GIỮ khoá (wx) suốt lúc dọn ⇒ server không bắt đầu import chen giữa (security P2-1).
@@ -685,7 +956,7 @@ async function downScoped(gw, m, markerPath) {
     care_interactions: await del('care_interactions', [['task_id', 'in', s.taskIds], ...T]),
     care_assignment_events: await del('care_assignment_events', [['task_id', 'in', s.taskIds], ...T]),
     care_task_products: await del('care_task_products', [['task_id', 'in', s.taskIds]]), // không có is_test — cha đã kiểm
-    care_tasks: await del('care_tasks', [['id', 'in', s.taskIds], ...T]),
+    care_tasks: await delTestTasks(gw, s.taskIds), // 116: qua RPC (X → L); trước 116: xoá thẳng is_test
     care_customers: await del('care_customers', [['id', 'in', s.customerIds], ...T]),
     care_import_staging: await del('care_import_staging', [['batch_id', 'in', [s.batchId]]]), // không có is_test — batch đã kiểm
     care_import_batches: await del('care_import_batches', [['id', 'in', [s.batchId]], ...T]),
@@ -922,9 +1193,9 @@ export async function loginCookie(base, email, password) {
 
 async function main() {
   const [cmd, a1, a2, a3] = process.argv.slice(2)
-  if (!['up', 'verify', 'status', 'down', 'prepare', 'serve', 'prepare-load', 'load'].includes(cmd)) {
+  if (!['up', 'verify', 'status', 'down', 'prepare', 'serve', 'prepare-load', 'load', 'cancel-qa'].includes(cmd)) {
     console.error('dùng: node scripts/care-qa-fixture.mjs up | verify | status | down | prepare <goc.csv> [ra.csv] | serve [cổng]'
-      + ' | prepare-load <ra.csv> [khách=4000] [dòng=10000] | load <ra.csv> [http://localhost:3100]'); process.exit(2)
+      + ' | prepare-load <ra.csv> [khách=4000] [dòng=10000] | load <ra.csv> [http://localhost:3100] | cancel-qa [khách=4] [dòng=8] [import-only]'); process.exit(2)
   }
   const envPath = path.resolve(HERE, '..', '.env.local')
   const envFileText = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8') : null
@@ -986,6 +1257,9 @@ async function main() {
         },
       }
       out = await cmdLoad({ env: process.env, markerPath: DEFAULT_MARKER_PATH, fileBytes: fs.readFileSync(a1), client })
+    } else if (cmd === 'cancel-qa') {
+      if (a3 !== undefined && a3 !== 'import-only') throw new FixtureError('ARG', 'tham số thứ ba chỉ nhận import-only')
+      out = await cmdCancelQa({ ...ctx, customers: loadArg(a1, CANCEL_QA_DEFAULT_CUSTOMERS), rows: loadArg(a2, CANCEL_QA_DEFAULT_ROWS), importOnly: a3 === 'import-only' })
     } else {
       out = cmd === 'up' ? await cmdUp(ctx) : cmd === 'verify' ? await cmdVerify(ctx) : cmd === 'status' ? await cmdStatus(ctx) : await cmdDown(ctx)
     }

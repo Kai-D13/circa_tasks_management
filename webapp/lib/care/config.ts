@@ -19,6 +19,31 @@ export function careFlagsFromEnv(env: Env): CareFlags {
   }
 }
 
+/**
+ * CARE_IMPORT_CANCEL_ENABLED — nút/action huỷ file import (D1, Q-149–163). Mặc định OFF. Chỉ đúng chuỗi 'true'.
+ * Tách hàm riêng (không thêm vào CareFlags) để hợp đồng careFlagsFromEnv của B0 giữ nguyên.
+ */
+export function careImportCancelEnabledFromEnv(env: Env): boolean {
+  return env.CARE_IMPORT_CANCEL_ENABLED === 'true'
+}
+
+/** Ba cờ của E (đơn xác thực sau import, E0 r3.4 §0). Mặc định OFF; chỉ đúng chuỗi 'true'. Migration 116 phải đã chạy trước khi bật. */
+export interface CareOrderLinksFlags {
+  /** CARE_ORDER_LINKS_SYNC_ENABLED — route lượt thường + lượt chốt (Coolify Scheduled Task). */
+  sync: boolean
+  /** CARE_ORDER_LINKS_UI_ENABLED — mục đơn trên /care/reports, /care/orders, /care/my, chi tiết task. */
+  ui: boolean
+  /** CARE_ORDER_LINKS_TRIAL_ENABLED — route trial (không ghi link / coverage / trạng thái); TẠM, gỡ sau trial. */
+  trial: boolean
+}
+export function careOrderLinksFlagsFromEnv(env: Env): CareOrderLinksFlags {
+  return {
+    sync: env.CARE_ORDER_LINKS_SYNC_ENABLED === 'true',
+    ui: env.CARE_ORDER_LINKS_UI_ENABLED === 'true',
+    trial: env.CARE_ORDER_LINKS_TRIAL_ENABLED === 'true',
+  }
+}
+
 // Mặc định TẠM do Dev chọn (dưới trần cứng); Q-63 bỏ dependency số MB trước
 // B2. TODO(Q-63): chốt lại sau QA thủ công file Excel thật trước bật cờ (B6).
 export const CARE_IMPORT_DEFAULT_MAX_BYTES = 8 * 1024 * 1024

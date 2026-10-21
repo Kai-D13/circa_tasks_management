@@ -112,6 +112,27 @@ test.describe('range filter — Super @desktop', () => {
     return hrefs.find((h) => /^\/targets\/campaigns\/[0-9a-f-]{36}$/.test(h)) ?? null
   }
 
+  // Round-trip lọc cần chiến dịch CÓ cửa hàng: dữ liệu thật có thể có chiến dịch Nháp 0 cửa hàng (20/10: chiến dịch đầu danh
+  // sách là Nháp 19/10–31/10, 0 cửa hàng) — khoảng ngày không áp dụng được và màn hình nói đúng "Không áp dụng được khoảng đã
+  // chọn… chưa có cửa hàng nào", nên ca này không có gì để lọc. Chọn chiến dịch ĐẦU TIÊN có "· N cửa hàng" với N ≥ 1 ở đầu
+  // trang chi tiết; không có chiến dịch nào như vậy (đã đọc hết, tối đa 10) ⇒ skip có lý do, không đỏ vì thiếu dữ liệu.
+  async function firstCampaignWithStores(page: Page): Promise<string | null> {
+    await page.goto('/targets/campaigns')
+    await page.locator('main a[href^="/targets/campaigns/"]').first()
+      .waitFor({ state: 'attached', timeout: 15_000 })
+    const hrefs = (await page.locator('main a[href^="/targets/campaigns/"]').evaluateAll(
+      (as) => as.map((a) => a.getAttribute('href') ?? ''),
+    )).filter((h, i, all) => /^\/targets\/campaigns\/[0-9a-f-]{36}$/.test(h) && all.indexOf(h) === i)
+    for (const h of hrefs.slice(0, 10)) {
+      await page.goto(`${h}?tab=result`)
+      const line = page.locator('main p', { hasText: /cửa hàng/ }).first()
+      await line.waitFor({ state: 'visible', timeout: 15_000 })
+      const m = /·\s*([\d.]+)\s+cửa hàng/.exec(await line.innerText())
+      if (m && Number(m[1].replace(/\./g, '')) > 0) return h
+    }
+    return null
+  }
+
   test('super detail: đúng MỘT filter, hiện được, và giữ tab=result', async ({ page }) => {
     const href = await firstCampaign(page)
     test.skip(href === null, 'chưa có chiến dịch nào')
@@ -140,8 +161,8 @@ test.describe('range filter — Super @desktop', () => {
   })
 
   test('super: áp khoảng rồi bỏ lọc → trả đúng snapshot toàn kỳ', async ({ page }) => {
-    const href = await firstCampaign(page)
-    test.skip(href === null, 'chưa có chiến dịch nào')
+    const href = await firstCampaignWithStores(page)
+    test.skip(href === null, 'chưa có chiến dịch nào có cửa hàng')
     await expectRangeRoundTrip(page, `${href}?tab=result`)
   })
 })

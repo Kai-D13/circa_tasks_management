@@ -13,7 +13,7 @@ const N = Number(process.argv[2] ?? 20000)
 const M = Number(process.argv[3] ?? 20000)
 const BUDGET_MS = 8_000
 const over = []
-const db = await L.freshDb(PGlite)
+const db = await L.freshDb(PGlite, { through: '114' }) // bench 114: INSERT batch committed trực tiếp (115 có rào commit)
 const t = async (label, fn, budget = false) => {
   const t0 = performance.now(); const r = await fn(); const ms = performance.now() - t0
   console.log(`${label}: ${ms.toFixed(0)} ms${budget ? (ms < BUDGET_MS ? ' (< 8 s ✅)' : ' (≥ 8 s ❌)') : ''}`)

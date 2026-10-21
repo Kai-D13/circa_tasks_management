@@ -123,8 +123,10 @@ function Num({ value, link, scope, storeId, assigneeId, muted }: {
   return <Link href={href} className="underline decoration-muted-foreground/50 underline-offset-2 hover:decoration-foreground">{fmt(value)}</Link>
 }
 
+type OrderCell = (n: number, storeId?: string | null, assigneeId?: string | null) => React.ReactNode
+
 function Cells({ t, scope, storeId, assigneeId, orderCell, bold }: {
-  t: CareReportTotals; scope: CareReportLinkScope; storeId?: string | null; assigneeId?: string | null; orderCell: (n: number) => string; bold?: boolean
+  t: CareReportTotals; scope: CareReportLinkScope; storeId?: string | null; assigneeId?: string | null; orderCell: OrderCell; bold?: boolean
 }) {
   const n = (k: keyof CareReportTotals, link?: CareReportLinkKey) => (
     <TableCell className={cn('text-right tabular-nums', bold && 'font-semibold')}><Num value={t[k]} link={link} scope={scope} storeId={storeId} assigneeId={assigneeId} /></TableCell>
@@ -139,7 +141,7 @@ function Cells({ t, scope, storeId, assigneeId, orderCell, bold }: {
       {n('inProgress', 'inProgress')}
       {n('overdueInPeriod')}
       {n('closedUnfinished', 'closedUnfinished')}
-      <TableCell className={cn('text-right tabular-nums', bold && 'font-semibold')}>{orderCell(t.convertedTasks)}</TableCell>
+      <TableCell className={cn('text-right tabular-nums', bold && 'font-semibold')}>{orderCell(t.convertedTasks, storeId, assigneeId)}</TableCell>
       <TableCell>
         <span className="flex min-w-[120px] items-center gap-2">
           <StackedBar t={t} className="h-2 flex-1" />
@@ -150,7 +152,7 @@ function Cells({ t, scope, storeId, assigneeId, orderCell, bold }: {
   )
 }
 
-export function CareReportView({ monthLabel, lines, totals, contacted, orderState, elapsed, dueLabel, scope, outcomes }: {
+export function CareReportView({ monthLabel, lines, totals, contacted, orderState, elapsed, dueLabel, scope, outcomes, importOrders, conversionHref }: {
   monthLabel: string
   lines: CareReportLine[]
   totals: CareReportTotals
@@ -164,9 +166,17 @@ export function CareReportView({ monthLabel, lines, totals, contacted, orderStat
   scope: CareReportLinkScope
   /** Khối "Kết quả liên hệ" (trang thật stream qua Suspense). */
   outcomes?: React.ReactNode
+  /** E3 (cờ CARE_ORDER_LINKS_UI_ENABLED): khối "Đơn xác thực sau import" dưới hàng KPI. */
+  importOrders?: React.ReactNode
+  /** E3: link ô "Có đơn" > 0 sang cohort /care/orders/care — chỉ truyền khi cohort RPC khớp tổng báo cáo (parity). */
+  conversionHref?: (storeId: string | null, assigneeId: string | null) => string
 }) {
   const hasOrders = orderState.kind === 'synced'
-  const orderCell = (v: number) => (hasOrders ? fmt(v) : '—')
+  const orderCell: OrderCell = (v, storeId, assigneeId) => {
+    if (!hasOrders) return '—'
+    if (!conversionHref || v <= 0) return fmt(v)
+    return <Link href={conversionHref(storeId ?? scope.storeId, assigneeId ?? scope.assigneeId)} className="underline decoration-muted-foreground/50 underline-offset-2 hover:decoration-foreground">{fmt(v)}</Link>
+  }
   const groups = careReportGroups(lines)
   return (
     <div className="space-y-4" data-testid="care-report">
@@ -177,8 +187,10 @@ export function CareReportView({ monthLabel, lines, totals, contacted, orderStat
         )}
         <CareKpiTile label="Hoàn thành" value={fmt(totals.completed)} pct={carePct(totals.completed, totals.tasks)} hint="kết thúc chăm sóc trong kỳ" dot="bg-status-success" />
         <CareKpiTile label="Từng trễ hẹn" value={fmt(totals.overdueInPeriod)} hint="khách có lịch hẹn từng bị lỡ" dot="bg-status-danger" />
-        <CareOrdersTile label="Khách có đơn" state={orderState} converted={totals.convertedTasks} hasNotSeen={totals.completed > totals.convertedTasks} />
+        <CareOrdersTile label={importOrders ? 'Khách có đơn sau chăm sóc' : 'Khách có đơn'} state={orderState} converted={totals.convertedTasks} hasNotSeen={totals.completed > totals.convertedTasks} />
       </div>
+
+      {importOrders}
 
       {totals.tasks > 0 && (
         <div className="grid gap-3 lg:grid-cols-2">
@@ -212,7 +224,7 @@ export function CareReportView({ monthLabel, lines, totals, contacted, orderStat
       <section className={cn(PANEL, 'overflow-hidden')} aria-labelledby="care-report-table">
         <div className="flex flex-wrap items-baseline justify-between gap-2 border-b border-care-line px-4 py-3">
           <h2 id="care-report-table" className="text-base font-semibold">Theo cửa hàng &amp; dược sĩ</h2>
-          {lines.length > 0 && <span className="text-xs text-muted-foreground">Bấm số để mở danh sách khách đã lọc (trừ Đã liên hệ, Từng trễ hẹn, Có đơn)</span>}
+          {lines.length > 0 && <span className="text-xs text-muted-foreground">Bấm số để mở danh sách khách đã lọc (trừ Đã liên hệ, Từng trễ hẹn{conversionHref ? '' : ', Có đơn'})</span>}
         </div>
         {lines.length === 0 ? (
           <div className="p-3"><EmptyState icon={Users} title="Không có dữ liệu chăm sóc theo bộ lọc này" hint="Thử đổi kỳ, cửa hàng hoặc dược sĩ." /></div>
@@ -250,7 +262,7 @@ export function CareReportView({ monthLabel, lines, totals, contacted, orderStat
   )
 }
 
-function GroupRows({ g, scope, orderCell }: { g: ReturnType<typeof careReportGroups>[number]; scope: CareReportLinkScope; orderCell: (n: number) => string }) {
+function GroupRows({ g, scope, orderCell }: { g: ReturnType<typeof careReportGroups>[number]; scope: CareReportLinkScope; orderCell: OrderCell }) {
   return (
     <>
       <TableRow className="bg-muted/30" data-testid="care-report-store">

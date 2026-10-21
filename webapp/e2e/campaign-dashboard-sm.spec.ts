@@ -21,7 +21,9 @@ const CRED = {
 }
 
 const LIST = '/targets/campaigns'
-const TABS = 'nav[aria-label="Lọc chiến dịch theo trạng thái"] a'
+// Chỉ thẻ trong <main>: khi React streaming chuyển nội dung từ <div hidden id="S:…"> (ngay dưới body) vào chỗ, DOM có ~5 ms
+// hai bản nav (một hiển thị trong main, một ẩn) ⇒ đếm toàn trang ra 6 (gate RC 20/10, tái hiện 2/5 trên nền main + B).
+const TABS = 'main nav[aria-label="Lọc chiến dịch theo trạng thái"] a'
 
 async function mainReady(page: Page) {
   await expect

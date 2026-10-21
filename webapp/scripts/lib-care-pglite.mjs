@@ -1,6 +1,7 @@
-// Dựng DB PGlite cho QA CRM (dùng chung: scripts/qa-care-114.mjs, e2e/care-import-parity.spec.ts).
-// Postgres 16 WASM + schema nền giống prod (đọc qua pg-meta 07/10/2026) + nguyên file
-// migration 114. Tự chứa (không import .ts) để chạy được từ Node lẫn Playwright.
+// Dựng DB PGlite cho QA CRM (dùng chung: scripts/qa-care-114.mjs, scripts/qa-care-115.mjs, e2e/care-*.spec.ts).
+// Postgres 16 WASM + schema nền giống prod (đọc qua pg-meta 07/10/2026) + nguyên file migration 114, rồi 115
+// (huỷ import, D1), rồi 116 (đơn N3 sau import, E). Mặc định nạp tới migration MỚI NHẤT; freshDb(PGlite, { through: '114' | '115' })
+// hoặc env CARE_PGLITE_THROUGH=114|115 để dừng sớm hơn. Tự chứa (không import .ts) để chạy được từ Node lẫn Playwright.
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
@@ -9,6 +10,12 @@ import { fileURLToPath } from 'node:url'
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 export const MIG_DIR = path.resolve(HERE, '..', '..', 'supabase', 'migrations')
 export const MIGRATION = fs.readFileSync(path.join(MIG_DIR, '114_care_crm_foundation.sql'), 'utf8')
+export const MIGRATION_115 = fs.readFileSync(path.join(MIG_DIR, '115_care_import_cancel.sql'), 'utf8')
+export const ROLLBACK_115 = fs.readFileSync(path.join(MIG_DIR, 'rollback', '115_care_import_cancel_rollback.sql'), 'utf8')
+export const MIGRATION_116 = fs.readFileSync(path.join(MIG_DIR, '116_care_order_links.sql'), 'utf8')
+export const ROLLBACK_116_L1 = fs.readFileSync(path.join(MIG_DIR, 'rollback', '116_care_order_links_rollback_level1.sql'), 'utf8')
+export const ROLLBACK_116_L2 = fs.readFileSync(path.join(MIG_DIR, 'rollback', '116_care_order_links_rollback_level2.sql'), 'utf8')
+export const THROUGH_DEFAULT = ['114', '115'].includes(process.env.CARE_PGLITE_THROUGH) ? process.env.CARE_PGLITE_THROUGH : '116'
 
 // is_super_admin(): trích nguyên văn từ migration MỚI NHẤT định nghĩa nó (113).
 export function latestSuperAdminFn() {
@@ -40,7 +47,8 @@ export const U = {
   A: staffId(1, 'a'), B: staffId(1, 'b'), C: staffId(2, 'a'), D: staffId(2, 'b'),
 }
 
-export async function freshDb(PGlite) {
+export async function freshDb(PGlite, { through = THROUGH_DEFAULT } = {}) {
+  if (!['114', '115', '116'].includes(through)) throw new Error(`freshDb: through phải là '114', '115' hoặc '116'`)
   const db = new PGlite()
   await db.exec(`
     CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN BYPASSRLS;
@@ -57,6 +65,12 @@ export async function freshDb(PGlite) {
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO anon, authenticated, service_role;
     ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO anon, authenticated, service_role;
+    -- Supabase còn cấp default privileges cho role quản trị postgres (KHÁC owner supabase_admin của bảng/hàm care_*) — giả lập
+    -- bằng dashboard_qa để hậu kiểm owner-only (aclexplode) của 115/116 được kiểm thật (db-reviewer E1 P0).
+    DO $$ BEGIN CREATE ROLE dashboard_qa NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO dashboard_qa;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO dashboard_qa;
+    ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO dashboard_qa;
 
     CREATE TABLE public.app_migrations (version text PRIMARY KEY, name text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now(), applied_by text, checksum text, notes text);
     INSERT INTO public.app_migrations (version, name) VALUES ('113', 'super_admin_add_nikhilesh');
@@ -101,7 +115,36 @@ export async function freshDb(PGlite) {
   await db.query(`INSERT INTO public.sm_store_assignments (sm_user_id, store_id) VALUES ($1,$2), ($1,$3), ($4,$2), ($1,$5)`, [U.sm, storeId(1), storeId(2), U.sm2, S_FS])
 
   await db.exec(MIGRATION)
+  if (through !== '114') await db.exec(MIGRATION_115)
+  if (through === '116') await db.exec(MIGRATION_116)
   return db
+}
+
+// ── 116: một lượt thường 0 đơn (owner) — mọi task kỳ hiện tại có coverage = snapshot, last_success_at = snapshot ──
+// Dùng cho bộ QA của 114/115 khi chạy trên 116: gate huỷ D1 116 đòi đơn N3 đã được đối chiếu sau import (Q-175).
+export const SYNC_ORDERS_116_SQL = `DO $$
+DECLARE o jsonb; s jsonb; v_run bigint; n int; ids text[]; i int; c int := 0;
+BEGIN
+  o := public.care__order_links_begin_open_at('regular', 'apply', NULL, 5000, NULL);
+  IF o ->> 'status' <> 'ok' THEN RAISE EXCEPTION 'sync QA 116: %', o; END IF;
+  v_run := (o ->> 'run_id')::bigint;
+  s := public.care_order_links_begin_select(v_run, 100000, NULL);
+  FOR n IN 1..(s ->> 'jobs')::int LOOP
+    PERFORM public.care_order_links_job_done(v_run, n, 0, 0, public.care__order_links_params_sha(v_run, n));
+  END LOOP;
+  FOR n IN 1..(s ->> 'jobs')::int LOOP
+    ids := ARRAY(SELECT external_id FROM public.care_order_run_tasks WHERE run_id = v_run AND job_no = n ORDER BY external_id COLLATE "C");
+    i := 1;
+    WHILE i <= cardinality(ids) LOOP
+      c := c + 1;
+      PERFORM public.care_order_links_apply_chunk(v_run, n, c, ids[i:i + 1999], '[]'::jsonb);
+      i := i + 2000;
+    END LOOP;
+  END LOOP;
+  IF public.care_order_links_complete(v_run) ->> 'status' <> 'complete' THEN RAISE EXCEPTION 'sync QA 116: chưa complete'; END IF;
+END $$`
+export async function syncOrders116(db) {
+  if ((await db.query(`SELECT to_regclass('public.care_order_runs') IS NOT NULL AS e`)).rows[0].e) await db.exec(SYNC_ORDERS_116_SQL)
 }
 
 // ── Helper chạy dưới vai trò ─────────────────────────────────────────────────

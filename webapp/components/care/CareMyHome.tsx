@@ -12,6 +12,7 @@ import { ErrorState } from '@/components/ds/ErrorState'
 import { CARE_MY_FILTERS, CARE_MY_FILTER_LABELS, careMyBadge, myFilterHref, type CareMyFilter } from '@/lib/care/my'
 import { CARE_OUTCOME_META, isCareOutcome } from '@/lib/care/outcome'
 import { periodLastDay, periodOfDate, vnDateISO } from '@/lib/care/time'
+import { appendNewById } from '@/lib/care/orderLinks/view'
 import { cn } from '@/lib/utils'
 
 // "Khách hàng của tôi" (SPEC B4 §2) — mobile-first. Thẻ = một khách/task kỳ hiện tại dù
@@ -31,8 +32,9 @@ export interface CareMyRow {
   due_date: string
 }
 export interface CareMySummaryView { assigned: number; notCared: number; completed: number; overdueLive: number }
-type SearchFn = (input: { filter: CareMyFilter; q: string; page: number }) =>
+type SearchFn = (input: { filter: CareMyFilter; q: string; page: number; orders?: boolean }) =>
   Promise<{ ok: true; rows: CareMyRow[]; total: number } | { ok: false; message: string }>
+type MoreFn = (input: { cursor: string }) => Promise<{ ok: true; rows: CareMyRow[]; next: string | null } | { ok: false; message: string }>
 
 const dm = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}`
 
@@ -88,7 +90,7 @@ function filterCount(s: CareMySummaryView, k: CareMyFilter): number {
 }
 
 export function CareMyHome({
-  summary, rows: initialRows, total: initialTotal, filter, page: initialPage, pageSize, todayISO, search, basePath = '/care/my',
+  summary, rows: initialRows, total: initialTotal, filter, page: initialPage, pageSize, todayISO, search, basePath = '/care/my', ordersChip, ordersList,
 }: {
   summary: CareMySummaryView
   rows: CareMyRow[]
@@ -99,17 +101,36 @@ export function CareMyHome({
   todayISO: string
   search: SearchFn
   basePath?: string
+  /** E3 (cờ CARE_ORDER_LINKS_UI_ENABLED): chip "Có đơn xác thực" — số task kỳ hiện tại có ≥ 1 đơn N3 sau import. */
+  ordersChip?: { count?: number; active: boolean }
+  /** E3 r1.1: đang ở chip "Có đơn xác thực" — trang đầu keyset + cursor "Xem thêm" (POST); `total` = số trên chip (null khi không đọc được). */
+  ordersList?: { next: string | null; total: number | null; loadMore: MoreFn }
 }) {
   const [q, setQ] = useState('')
   const [busy, setBusy] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [result, setResult] = useState<{ rows: CareMyRow[]; total: number; page: number } | null>(null)
   const inflight = useRef(false)
+  const [more, setMore] = useState<{ rows: CareMyRow[]; next: string | null }>({ rows: initialRows, next: ordersList?.next ?? null })
+  const [moreBusy, setMoreBusy] = useState(false)
+  const [moreErr, setMoreErr] = useState<string | null>(null)
 
-  const rows = result?.rows ?? initialRows
+  const rows = result?.rows ?? (ordersList ? more.rows : initialRows)
   const total = result?.total ?? initialTotal
   const page = result?.page ?? initialPage
   const pages = Math.max(1, Math.ceil(total / pageSize))
+  // Chip "Có đơn": tổng của cả nhóm (số trên chip) — danh sách nối dần bằng "Xem thêm", không phân trang theo số.
+  const ordersTotal = ordersList?.total === null || ordersList?.total === undefined ? null : Math.max(ordersList.total, more.rows.length)
+
+  async function loadMore() {
+    if (!ordersList || !more.next || inflight.current) return
+    inflight.current = true
+    setMoreBusy(true); setMoreErr(null)
+    try {
+      const r = await ordersList.loadMore({ cursor: more.next })
+      if (r.ok) setMore((cur) => ({ rows: appendNewById(cur.rows, r.rows), next: r.next })); else setMoreErr(r.message)
+    } catch { setMoreErr('Không tải được danh sách — tải lại trang.') } finally { inflight.current = false; setMoreBusy(false) }
+  }
 
   async function runSearch(p = 1) {
     if (!q.trim()) { setResult(null); setErr(null); return }
@@ -117,7 +138,7 @@ export function CareMyHome({
     inflight.current = true
     setBusy(true); setErr(null)
     try {
-      const r = await search({ filter, q, page: p })
+      const r = await search({ filter, q, page: p, ...(ordersList ? { orders: true } : {}) })
       if (r.ok) setResult({ rows: r.rows, total: r.total, page: p }); else setErr(r.message)
     } catch { setErr('Không tìm được — thử lại.') } finally { inflight.current = false; setBusy(false) }
   }
@@ -128,8 +149,9 @@ export function CareMyHome({
 
       {/* Số trên chip là số đếm của cả kỳ (care_my_summary). Các nhóm có thể giao nhau (một khách
           vừa Đang theo dõi vừa Quá hạn) — không cộng thành tổng. */}
-      <FilterTabs ariaLabel="Lọc khách" activeKey={filter} variant="chip" className="-mx-4 px-4 md:mx-0 md:px-0"
-        tabs={CARE_MY_FILTERS.map((k) => ({ key: k, label: CARE_MY_FILTER_LABELS[k], count: filterCount(summary, k), href: myFilterHref(k).replace('/care/my', basePath) }))} />
+      <FilterTabs ariaLabel="Lọc khách" activeKey={ordersChip?.active ? 'orders' : filter} variant="chip" className="-mx-4 px-4 md:mx-0 md:px-0"
+        tabs={[...CARE_MY_FILTERS.map((k) => ({ key: k, label: CARE_MY_FILTER_LABELS[k], count: filterCount(summary, k), href: myFilterHref(k).replace('/care/my', basePath) })),
+          ...(ordersChip ? [{ key: 'orders', label: 'Có đơn xác thực', count: ordersChip.count, href: `${basePath}?filter=orders` }] : [])]} />
 
       {/* B7-ui r2 (artboard 08): MỘT ô tìm, gửi bằng phím Tìm/Enter của bàn phím (POST — SĐT không lên URL);
           bên phải: vòng quay khi đang tìm, ✕ bỏ tìm khi đang xem kết quả. */}
@@ -150,12 +172,17 @@ export function CareMyHome({
         </div>
       </form>
 
-      <p className="px-0.5 text-[13px] text-muted-foreground" aria-live="polite">{total} khách{result ? ' khớp tìm kiếm' : ''}</p>
+      <p className="px-0.5 text-[13px] text-muted-foreground" aria-live="polite" data-testid="care-my-count">
+        {ordersList && !result
+          ? ordersTotal === null ? <>Đang hiện {rows.length} khách có đơn xác thực</>
+            : <>{ordersTotal} khách có đơn xác thực{rows.length < ordersTotal ? <> · đang hiện {rows.length}</> : null}</>
+          : <>{total} khách{result ? (ordersList ? ' có đơn khớp tìm kiếm' : ' khớp tìm kiếm') : ''}</>}
+      </p>
 
       {err && <ErrorState message={err} />}
       {rows.length === 0 ? (
         <EmptyState icon={ClipboardList}
-          title={result ? 'Không tìm thấy khách phù hợp' : page > 1 && total > 0 ? 'Trang này không có khách' : filter === 'all' ? 'Chưa có khách nào được giao trong tháng' : 'Không có khách theo bộ lọc này'}
+          title={result ? 'Không tìm thấy khách phù hợp' : ordersList ? 'Chưa có khách nào có đơn xác thực trong tháng' : page > 1 && total > 0 ? 'Trang này không có khách' : filter === 'all' ? 'Chưa có khách nào được giao trong tháng' : 'Không có khách theo bộ lọc này'}
           hint={!result && page > 1 && total > 0 ? 'Quay về trang 1 của danh sách.' : undefined} />
       ) : (
         <ul className="space-y-2" aria-label="Danh sách khách">
@@ -163,7 +190,18 @@ export function CareMyHome({
         </ul>
       )}
 
-      {pages > 1 && (
+      {ordersList && !result && (more.next || moreErr) && (
+        <div className="flex flex-col items-center gap-2">
+          {more.next && (
+            <Button type="button" variant="outline" className="min-h-[44px] w-full md:w-auto md:min-h-0" disabled={moreBusy} onClick={() => void loadMore()}>
+              {moreBusy && <Loader2 className="size-4 animate-spin" aria-hidden />} Xem thêm
+            </Button>
+          )}
+          {moreErr && <p role="alert" className="text-[13px] text-status-danger">{moreErr}</p>}
+        </div>
+      )}
+
+      {pages > 1 && (!ordersList || result) && (
         <nav className="flex items-center justify-between gap-2 text-sm" aria-label="Phân trang">
           <span className="text-muted-foreground">Trang {page}/{pages} · {total} khách</span>
           <div className="flex gap-2">

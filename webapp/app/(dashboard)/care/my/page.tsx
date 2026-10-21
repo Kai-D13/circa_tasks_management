@@ -6,9 +6,11 @@ import { CareMyHeader } from '@/components/care/CareMyHeader'
 import { CareMyScreen } from '@/components/care/CareMyScreen'
 import { CARE_MY_PAGE_SIZE, parseMyFilters } from '@/lib/care/my'
 import { carePeriodOf, vnDateISO } from '@/lib/care/time'
-import { loadMySummary, loadMyTaskPage, requireCareStaff } from '@/lib/care/server/my'
+import { loadMySummary, loadMyTaskPage, loadMyTasksByIds, requireCareStaff } from '@/lib/care/server/my'
+import { careOrderLinksUiOn, loadMyOrderSummary, loadMyOrderTaskIds } from '@/lib/care/server/orderLinks'
 import { isCareQaActive } from '@/lib/care/server/qaUi'
 import { searchMyCareTasks } from '@/app/actions/careMy'
+import { loadMoreMyOrderTasks } from '@/app/actions/careOrders'
 
 // /care/my — "Khách hàng của tôi" (SPEC B4 §2): dược sĩ OS, task kỳ hiện tại giao cho mình.
 // Cờ OFF ⇒ 404 trước mọi đọc; role khác ⇒ 404. Đọc bằng session + RLS 114.
@@ -23,18 +25,31 @@ export default async function CareMyPage({ searchParams }: { searchParams: Promi
   )
   const now = new Date()
   const today = vnDateISO(now)
-  const f = parseMyFilters(await searchParams)
+  const sp = await searchParams
+  const f = parseMyFilters(sp)
+  // E3 (cờ UI): chip "Có đơn xác thực" — task kỳ hiện tại của mình có ≥ 1 đơn N3 sau import, mới nhất trước; 20 / trang,
+  // "Xem thêm" bằng keyset (cursor ký, POST). Tổng = số trên chip (care_my_order_summary); tìm trong nhóm giữ điều kiện có đơn.
+  const ui = careOrderLinksUiOn()
+  const ordersView = ui && sp.filter === 'orders'
+  const period = carePeriodOf(now)
   try {
-    const [summary, list] = await Promise.all([
+    const [summary, list, orderSummary] = await Promise.all([
       loadMySummary(me),
-      loadMyTaskPage(me, carePeriodOf(now), f.filter, f.page, today),
+      ordersView
+        ? loadMyOrderTaskIds(me.userId, period).then(async (o) => ({ rows: await loadMyTasksByIds(me, period, o.taskIds, today), total: null, next: o.next }))
+        : loadMyTaskPage(me, period, f.filter, f.page, today).then((p) => ({ ...p, next: null })),
+      ui ? loadMyOrderSummary().catch(() => null) : Promise.resolve(null),
     ])
+    const ordersTotal = orderSummary?.tasksWithOrders ?? null
     return (
       <CareMyScreen screen="list">
         {header}
         <div className="px-4 pt-1 pb-4 md:p-0">
-          <CareMyHome key={`${f.filter}:${f.page}`} summary={summary} rows={list.rows} total={list.total} filter={f.filter} page={f.page}
-            pageSize={CARE_MY_PAGE_SIZE} todayISO={today} search={searchMyCareTasks} />
+          <CareMyHome key={`${ordersView ? 'orders' : f.filter}:${f.page}`} summary={summary} rows={list.rows}
+            total={list.total ?? ordersTotal ?? list.rows.length} filter={f.filter} page={ordersView ? 1 : f.page}
+            pageSize={CARE_MY_PAGE_SIZE} todayISO={today} search={searchMyCareTasks}
+            ordersChip={ui && (orderSummary || ordersView) ? { count: ordersTotal ?? undefined, active: ordersView } : undefined}
+            ordersList={ordersView ? { next: list.next, total: ordersTotal, loadMore: loadMoreMyOrderTasks } : undefined} />
         </div>
       </CareMyScreen>
     )

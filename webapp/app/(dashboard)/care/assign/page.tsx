@@ -6,9 +6,10 @@ import { CareUnavailableState } from '@/components/care/CareUnavailableState'
 import { Pagination } from '@/components/common/Pagination'
 import { CareImportWizard } from '@/components/care/CareImportWizard'
 import { CareImportPageActions } from '@/components/care/CareImportPanels'
-import { CareImportHistory, type CareImportHistoryRow } from '@/components/care/CareImportHistory'
+import { CareImportHistory, type CareImportCancelSlot, type CareImportHistoryRow } from '@/components/care/CareImportHistory'
+import { cancelCareImport, previewCareImportCancel } from '@/app/actions/careImportCancel'
 import { careImportMaxBytes } from '@/lib/care/config'
-import { isCareEnabled } from '@/lib/care/flags'
+import { isCareEnabled, isCareImportCancelEnabled } from '@/lib/care/flags'
 import { carePeriodOf } from '@/lib/care/time'
 import { getCareImportAccess } from '@/lib/care/server/importAccess'
 import { careDataScope } from '@/lib/care/server/qaUi'
@@ -38,10 +39,13 @@ export default async function CareAssignPage({ searchParams }: { searchParams: P
   const page = Math.max(1, Number.parseInt(params.page ?? '1', 10) || 1)
   const supabase = await createClient()
   const scope = careDataScope()
+  const cancelOn = isCareImportCancelEnabled()
   // Session client: RLS care_import_batches chỉ cho người có quyền import/xem CRM.
+  // D1: cờ huỷ ON ⇒ đọc thêm người huỷ / lúc huỷ (cột 115, embed ghi FK — batch có 2 FK tới users). Cờ OFF không chạm cột 115.
+  const HISTORY_COLS = 'id, period_month, kind, status, row_count, customer_count, created_at, summary, users!care_import_batches_created_by_fkey(full_name)'
   let historyQ = supabase
     .from('care_import_batches')
-    .select('id, period_month, kind, status, row_count, customer_count, created_at, summary, users!care_import_batches_created_by_fkey(full_name)', { count: 'exact' })
+    .select(cancelOn ? `${HISTORY_COLS}, cancelled_at, canceller:users!care_import_batches_cancelled_by_fkey(full_name)` : HISTORY_COLS, { count: 'exact' })
   // B6-qa-ui: QA local chỉ hiện batch QA của marker (production giữ nguyên).
   if (scope.kind === 'qa') historyQ = historyQ.eq('id', scope.batchId).eq('is_test', true)
   const { data, count, error } = await historyQ
@@ -49,18 +53,30 @@ export default async function CareAssignPage({ searchParams }: { searchParams: P
     .order('id', { ascending: false })
     .range((page - 1) * PAGE_SIZE, page * PAGE_SIZE - 1)
 
-  const rows: CareImportHistoryRow[] = (data ?? []).map((r) => {
-    const u = r.users as { full_name?: string } | { full_name?: string }[] | null
-    const name = Array.isArray(u) ? u[0]?.full_name : u?.full_name
-    return {
-      id: r.id, period_month: r.period_month, kind: r.kind, status: r.status, row_count: r.row_count,
-      customer_count: r.customer_count, created_at: r.created_at,
-      summary: (r.summary ?? null) as Record<string, unknown> | null, created_by_name: name ?? null,
-    }
-  })
+  type Embed = { full_name?: string } | { full_name?: string }[] | null | undefined
+  const nameOf = (u: Embed) => (Array.isArray(u) ? u[0]?.full_name : u?.full_name) ?? null
+  type HistoryRecord = Omit<CareImportHistoryRow, 'created_by_name' | 'cancelled_by_name'> & { users?: Embed; canceller?: Embed }
+  const rows: CareImportHistoryRow[] = ((data ?? []) as unknown as HistoryRecord[]).map((r) => ({
+    id: r.id, period_month: r.period_month, kind: r.kind, status: r.status, row_count: r.row_count,
+    customer_count: r.customer_count, created_at: r.created_at,
+    summary: (r.summary ?? null) as Record<string, unknown> | null, created_by_name: nameOf(r.users),
+    ...(cancelOn ? { cancelled_at: r.cancelled_at ?? null, cancelled_by_name: nameOf(r.canceller) } : {}),
+  }))
   const totalRows = count ?? 0
   // Kỳ nhận = tháng hiện tại giờ VN (chỉ hiển thị); kỳ thật do server tính lại lúc kiểm tra và lúc ghi.
   const period = carePeriodOf(new Date())
+
+  // D1 — nút "Huỷ file" chỉ ở batch committed có commit_seq LỚN NHẤT của kỳ hiện tại (đúng phạm vi dữ liệu), khi cờ ON.
+  // Chỉ để quyết định hiển thị; action + RPC 115 kiểm lại quyền, phạm vi, "mới nhất" sau khoá. Cờ OFF ⇒ không truy vấn
+  // cột của 115 (trang chạy được cả khi DB chưa có 115).
+  let cancelSlot: CareImportCancelSlot | null = null
+  if (cancelOn) {
+    let latestQ = supabase.from('care_import_batches').select('id')
+      .eq('status', 'committed').eq('period_month', period).not('provenance_version', 'is', null)
+    latestQ = scope.kind === 'qa' ? latestQ.eq('id', scope.batchId).eq('is_test', true) : latestQ.eq('is_test', false)
+    const { data: latest } = await latestQ.order('commit_seq', { ascending: false, nullsFirst: false }).limit(1).maybeSingle()
+    if (latest?.id) cancelSlot = { batchId: latest.id, preview: previewCareImportCancel, cancel: cancelCareImport }
+  }
 
   return (
     <div data-layout-width="fluid" data-care-browse className="space-y-6 p-4 md:p-6">
@@ -80,7 +96,7 @@ export default async function CareAssignPage({ searchParams }: { searchParams: P
           <ErrorState message="Không tải được lịch sử import." hint="Thử tải lại trang." />
         ) : (
           <>
-            <CareImportHistory rows={rows} />
+            <CareImportHistory rows={rows} cancel={cancelSlot} />
             {totalRows > PAGE_SIZE && (
               <Pagination
                 page={page}

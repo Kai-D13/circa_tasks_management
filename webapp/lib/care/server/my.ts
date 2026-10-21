@@ -10,6 +10,7 @@ import { fetchExact } from '@/lib/care/import/fetchExact'
 import { careQaMySummary, type CareQaMyAgg } from '@/lib/care/qa/mirror'
 import { carePeriodOf, vnDateISO } from '@/lib/care/time'
 import { careDataScope, careQaViewerAllowed } from './qaUi'
+import { pickMyOrderSearchPage } from './orderLinks'
 
 // CRM-CSKH B4 — đọc dữ liệu màn dược sĩ bằng SESSION (RLS 114). Không service role.
 // B6-qa-ui: phạm vi dữ liệu (careDataScope) — production loại is_test; QA local chỉ batch QA.
@@ -89,23 +90,13 @@ export interface CareMyTaskRow {
   due_date: string
 }
 
-/**
- * Một trang danh sách của dược sĩ (không tải sản phẩm/ảnh/timeline). Tìm kiếm qua POST.
- * Q-84: thứ tự theo khoảng cách ngày hẹn tới hôm nay — PostgREST không order được theo biểu
- * thức ⇒ (1) đọc khoá sort của TOÀN TẬP đã lọc/tìm (session/RLS, vài chục task/tháng),
- * (2) sort bằng compareMyTasks, (3) đọc cột hiển thị của đúng trang theo id, giữ thứ tự.
- */
-export async function loadMyTaskPage(me: { userId: string; storeId: string }, period: string, filter: CareMyFilter, page: number, todayISO: string, q?: string):
-  Promise<{ rows: CareMyTaskRow[]; total: number }> {
+type CareSearchTerm = NonNullable<ReturnType<typeof careSearchTerm>>
+/** Khoá sort của TOÀN TẬP task của mình theo bộ lọc (+ từ khoá tên/SĐT) — session/RLS. */
+async function loadMySortKeys(me: { userId: string; storeId: string }, period: string, filter: CareMyFilter, todayISO: string, term: CareSearchTerm | null):
+  Promise<CareMySortKey[]> {
   const supabase = await createClient()
-  let term: ReturnType<typeof careSearchTerm> = null
-  if (q !== undefined) {
-    term = careSearchTerm(q)
-    if (!term) return { rows: [], total: 0 }
-  }
-  let keys: CareMySortKey[]
   try {
-    keys = await fetchExact<CareMySortKey>((from, to) => {
+    return await fetchExact<CareMySortKey>((from, to) => {
       let query = withMyFilters(supabase.from('care_tasks').select('id, status, next_action_date', { count: 'exact' }), me, period, filter, todayISO)
       if (term) {
         query = term.phone
@@ -117,6 +108,23 @@ export async function loadMyTaskPage(me: { userId: string; storeId: string }, pe
   } catch {
     throw new CareNotReadyError()
   }
+}
+
+/**
+ * Một trang danh sách của dược sĩ (không tải sản phẩm/ảnh/timeline). Tìm kiếm qua POST.
+ * Q-84: thứ tự theo khoảng cách ngày hẹn tới hôm nay — PostgREST không order được theo biểu
+ * thức ⇒ (1) đọc khoá sort của TOÀN TẬP đã lọc/tìm (session/RLS, vài chục task/tháng),
+ * (2) sort bằng compareMyTasks, (3) đọc cột hiển thị của đúng trang theo id, giữ thứ tự.
+ */
+export async function loadMyTaskPage(me: { userId: string; storeId: string }, period: string, filter: CareMyFilter, page: number, todayISO: string, q?: string):
+  Promise<{ rows: CareMyTaskRow[]; total: number }> {
+  let term: ReturnType<typeof careSearchTerm> = null
+  if (q !== undefined) {
+    term = careSearchTerm(q)
+    if (!term) return { rows: [], total: 0 }
+  }
+  const keys = await loadMySortKeys(me, period, filter, todayISO, term)
+  const supabase = await createClient()
   const { pageIds, total } = pageMyTasks(keys, page, todayISO)
   if (pageIds.length === 0) return { rows: [], total }
   const { data, error } = await withMyFilters(
@@ -131,4 +139,37 @@ export async function loadMyTaskPage(me: { userId: string; storeId: string }, pe
     return [{ ...rest, phone_masked: maskVnPhone(phone_norm) }]
   })
   return { rows, total }
+}
+
+/**
+ * E3 — chip "Có đơn xác thực": đọc đúng các task (id từ care_my_order_tasks, mới nhất trước) bằng session + bộ lọc của chính
+ * dược sĩ (withMyFilters 'all') ⇒ task vừa chuyển đi bị bỏ; cùng cột / che SĐT như loadMyTaskPage.
+ */
+export async function loadMyTasksByIds(me: { userId: string; storeId: string }, period: string, ids: string[], todayISO: string): Promise<CareMyTaskRow[]> {
+  if (ids.length === 0) return []
+  const supabase = await createClient()
+  const { data, error } = await withMyFilters(
+    supabase.from('care_tasks').select('id, customer_name, phone_norm, status, last_outcome, last_interaction_at, next_action_date, due_date'),
+    me, period, 'all', todayISO).in('id', ids)
+  if (error) throw new CareNotReadyError()
+  const byId = new Map(((data ?? []) as (Omit<CareMyTaskRow, 'phone_masked'> & { phone_norm: string })[]).map((r) => [r.id, r]))
+  return ids.flatMap((id) => {
+    const r = byId.get(id)
+    if (!r) return []
+    const { phone_norm, ...rest } = r
+    return [{ ...rest, phone_masked: maskVnPhone(phone_norm) }]
+  })
+}
+
+/**
+ * E3 r1.1 — tìm tên/SĐT TRONG chế độ "Có đơn xác thực": cùng tìm kiếm của loadMyTaskPage (task của mình kỳ hiện tại, mọi
+ * trạng thái) ∩ task có ≥ 1 đơn (RPC 116), thứ tự như danh sách chip (đơn mới nhất trước), 20 / trang.
+ */
+export async function loadMyOrderSearchPage(me: { userId: string; storeId: string }, period: string, page: number, todayISO: string, q: string):
+  Promise<{ rows: CareMyTaskRow[]; total: number }> {
+  const term = careSearchTerm(q)
+  if (!term) return { rows: [], total: 0 }
+  const keys = await loadMySortKeys(me, period, 'all', todayISO, term)
+  const { pageIds, total } = await pickMyOrderSearchPage(keys.map((k) => k.id), page)
+  return { rows: await loadMyTasksByIds(me, period, pageIds, todayISO), total }
 }

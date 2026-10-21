@@ -107,6 +107,12 @@ test.describe('care B6-qa — scripts/care-qa-fixture.mjs trên PGlite (114 th�
       let failOnce = true
       const origDel = ctx.gw.svc.del
       ctx.gw.svc.del = async (t: string, f: Filter[]) => { if (failOnce && t === failTable) { failOnce = false; const e: any = new Error('chết'); e.code = 'SIMULATED'; throw e } return origDel(t, f) }
+      // 116: task is_test xoá qua RPC care_qa_delete_test_tasks (service_role mất DELETE care_tasks) ⇒ chết ở RPC đó.
+      const origRpc = ctx.gw.svc.rpc
+      ctx.gw.svc.rpc = async (fn: string, a: any) => {
+        if (failOnce && failTable === 'care_tasks' && fn === 'care_qa_delete_test_tasks') { failOnce = false; const e: any = new Error('chết'); e.code = 'SIMULATED'; throw e }
+        return origRpc(fn, a)
+      }
       await expect(F.cmdDown(ctx), point).rejects.toBeTruthy()
       expect(fs.existsSync(markerPath), point).toBe(true)
       expect(await F.cmdDown(ctx), point).toMatchObject({ ok: true, remaining: 0 })
@@ -351,9 +357,14 @@ test.describe('care B6-qa — scripts/care-qa-fixture.mjs trên PGlite (114 th�
     const src = read('scripts/care-qa-fixture.mjs')
     expect(src).toMatch(/if \(process\.argv\[1\] && import\.meta\.url === pathToFileURL\(path\.resolve\(process\.argv\[1\]\)\)\.href\) await main\(\)/)
     expect(src).not.toMatch(/DELETE FROM|TRUNCATE|\.delete\(\)\s*$/m)
-    for (const t of ['care_order_attributions', 'care_interactions', 'care_assignment_events', 'care_store_refusals', 'care_tasks', 'care_customers', 'care_import_batches']) {
+    for (const t of ['care_order_attributions', 'care_interactions', 'care_assignment_events', 'care_store_refusals', 'care_customers', 'care_import_batches']) {
       expect(src, t).toMatch(new RegExp(`del\\('${t}', \\[[^\\n]*\\.\\.\\.T\\]\\)`))
     }
+    // 116: task is_test xoá qua RPC (X → L, chỉ is_test trong DB); trước 116 xoá thẳng — vẫn kèm is_test.
+    expect(src.match(/care_tasks: await delTestTasks\(gw, s\.taskIds\)/g)?.length).toBe(2)
+    expect(src).toContain("return gw.svc.del('care_tasks', [['id', 'in', taskIds], ['is_test', 'eq', true]])")
+    expect(src).toContain("gw.svc.rpc('care_qa_delete_test_tasks', { p_task_ids: taskIds.slice(i, i + QA_DELETE_PART) })")
+    expect(src).not.toMatch(/del\('care_tasks', \[\['id', 'in', s\.taskIds\]/)
     expect(src).toContain('p_proof: []')
     expect(src.indexOf("del('care_store_refusals'")).toBeLessThan(src.indexOf("del('care_interactions'")) // FK interaction_id
     expect(src.indexOf("del('care_order_attributions'")).toBeLessThan(src.indexOf("del('care_interactions'"))
