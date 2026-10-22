@@ -11,6 +11,9 @@ import { CareTaskDetailView, type CareDetailViewData } from './CareTaskDetailVie
 import { CareTaskTransferButton } from './CareTaskTransferButton'
 import type { CareLoadMoreInteractions } from './CareTimeline'
 import type { CareTransferActionResult, CareTransferTarget, CareTransferTaskRef } from './CareTransferDialog'
+import { CareTaskOrdersSection } from './CareTaskOrdersSection'
+import { loadMoreTaskOrders } from '@/app/actions/careOrders'
+import type { CareTaskOrdersView } from '@/lib/care/orderLinks/view'
 
 // B8.1 — khung chi tiết khách bên phải /care/tasks (`?open=<uuid>`, artboard 12). Dữ liệu đọc
 // qua action (trang thật: session/RLS như trang chi tiết; catalog: action giả) MỖI lần mở — không
@@ -18,7 +21,9 @@ import type { CareTransferActionResult, CareTransferTarget, CareTransferTaskRef 
 // (bẫy focus, Esc/X đóng, focus trả về tên khách). "Mở trang đầy đủ" giữ route /care/tasks/[id].
 
 export type CareTaskPanelResult =
-  | { ok: true; taskId: string; data: CareDetailViewData; transfer: CareTransferTaskRef | null; qa: boolean }
+  | { ok: true; taskId: string; data: CareDetailViewData; transfer: CareTransferTaskRef | null; qa: boolean
+      /** E3: chỉ khi CARE_ORDER_LINKS_UI_ENABLED; lỗi đọc đơn ⇒ null (không chặn chi tiết). */
+      orders?: { view: CareTaskOrdersView; next: string | null } | null }
   | { ok: false; code: 'NOT_FOUND' | 'FORBIDDEN' | 'INVALID' | 'FAILED'; message: string }
 export type CareTaskPanelLoader = (input: { taskId: string }) => Promise<CareTaskPanelResult>
 
@@ -80,6 +85,7 @@ export function CareTaskDrawer({
           <ErrorState message={r.message} />
         ) : (
           <CareTaskDetailView taskId={r.taskId} todayISO={todayISO} data={r.data} loadMore={loadMore} qa={r.qa} layout="panel"
+            orders={r.orders ? <CareTaskOrdersSection taskId={r.taskId} initial={r.orders.view} next={r.orders.next} loadMore={loadMoreTaskOrders} compact /> : undefined}
             actions={r.transfer ? <CareTaskTransferButton task={r.transfer} loadTargets={loadTargets} transfer={transfer} onDone={() => setReload((n) => n + 1)} /> : undefined} />
         )}
       </div>

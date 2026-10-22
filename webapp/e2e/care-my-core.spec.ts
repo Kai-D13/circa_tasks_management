@@ -233,13 +233,19 @@ test.describe('care B4 — source: cờ, dược sĩ OS, session/RPC, upload, na
     // Danh sách không tải sản phẩm/ảnh/timeline.
     const sels = [...src.matchAll(/from\('care_tasks'\)\.select\('([^']+)'/g)].map((m) => m[1])
     // + B6-qa-ui: thẻ tóm tắt ở chế độ QA local đếm từ task của mình (lib/care/qa/mirror.ts) — vẫn không PII/sản phẩm.
-    expect(sels).toEqual(['status, last_interaction_at, next_action_date', 'id, status, next_action_date', 'id, customer_name, phone_norm, status, last_outcome, last_interaction_at, next_action_date, due_date'])
+    // + E3: chip "Có đơn xác thực" đọc thẻ theo id (loadMyTasksByIds) — CÙNG cột hiển thị với trang danh sách.
+    expect(sels).toEqual(['status, last_interaction_at, next_action_date', 'id, status, next_action_date', 'id, customer_name, phone_norm, status, last_outcome, last_interaction_at, next_action_date, due_date',
+      'id, customer_name, phone_norm, status, last_outcome, last_interaction_at, next_action_date, due_date'])
     for (const sel of sels) expect(sel).not.toMatch(/product|image|care_interactions|care_customers|proof/)
     expect(src).toContain('maskVnPhone(phone_norm)')
     // Q-84: khoá sort của TOÀN TẬP (fetchExact, có tìm kiếm) → pageMyTasks → đọc đúng trang theo id.
+    // E3 r1.1: phần đọc khoá tách thành loadMySortKeys (dùng chung với tìm trong nhóm "Có đơn xác thực").
+    const keysFn = /async function loadMySortKeys[\s\S]*?\n\}/.exec(src)![0]
+    expect(keysFn).toMatch(/fetchExact<CareMySortKey>\([\s\S]*?query\.or\([\s\S]*?query\.order\('id'\)\.range\(from, to\)/)
     const load = /export async function loadMyTaskPage[\s\S]*?\n\}/.exec(src)![0]
-    expect(load).toMatch(/fetchExact<CareMySortKey>\([\s\S]*?query\.or\([\s\S]*?query\.order\('id'\)\.range\(from, to\)/)
-    expect(load.indexOf('pageMyTasks(keys, page, todayISO)')).toBeGreaterThan(load.indexOf('fetchExact'))
+    const keysAt = load.indexOf('const keys = await loadMySortKeys(me, period, filter, todayISO, term)')
+    expect(keysAt).toBeGreaterThan(0)
+    expect(load.indexOf('pageMyTasks(keys, page, todayISO)')).toBeGreaterThan(keysAt)
     expect(load).toContain(".in('id', pageIds)")
     expect(load).not.toMatch(/order\('next_action_date'|CARE_MY_PAGE_SIZE - 1/)
     // Q-82: danh sách luôn lọc đúng store hiện tại (me.storeId) như RLS/summary.
@@ -335,7 +341,7 @@ test.describe('care B4 — source: cờ, dược sĩ OS, session/RPC, upload, na
     const src = read('app/(dashboard)/ui-catalog/care-my/page.tsx')
     expect(src).toMatch(/export default async function \w+\([^)]*\) \{\s*if \(!catalogOn\(\)\) notFound\(\)/)
     const fakes = [...src.matchAll(/async function (fake\w+)\([^)]*\) \{\s*'use server'\s*if \(!\(await gate\(\)\)\) return/g)]
-    expect(fakes.map((m) => m[1]).sort()).toEqual(['fakeLoadMore', 'fakeRecord', 'fakeSearch'])
+    expect(fakes.map((m) => m[1]).sort()).toEqual(['fakeLoadMore', 'fakeMoreMyOrders', 'fakeMoreOrders', 'fakeRecord', 'fakeSearch'])
     expect([...src.matchAll(/async function (fake\w+)\(/g)].length).toBe(fakes.length)
     for (const m of src.matchAll(/(?<!\d)0[35789]\d{8}(?!\d)/g)) expect(m[0]).toMatch(/^0390000\d{3}$/)
   })

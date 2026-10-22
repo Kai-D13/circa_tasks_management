@@ -251,3 +251,6 @@ export async function runN3Preflight(table: string, runQuery: CareN3RunQuery): P
   if (!Number.isSafeInteger(future) || future < 0 || (age !== null && !Number.isSafeInteger(age))) throw new CareN3SourceError('malformed')
   return { futureCount: future, maxAgeMinutes: age, bytesProcessed: res.totalBytesProcessed }
 }
+
+// E (đơn sau import, lib/care/orderLinks): dùng chung CTE nguồn đã chuẩn hoá −7 giờ (Q-100) + phép chiếu ba cột — một chỗ định nghĩa.
+export { srcCte as careN3SourceCte, PROJECTION as CARE_N3_PROJECTION }

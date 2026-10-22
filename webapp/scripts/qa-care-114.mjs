@@ -47,15 +47,37 @@ const { SUPER_FN, SUPER_EMAIL, uid, MKT_DEPT, OPS_DEPT, storeId, S_INACTIVE, S_F
 const STORES = defaultFixtureStores(25)
 const freshDb = () => L.freshDb(PGlite)
 if (JSON.stringify(L.STORES) !== JSON.stringify(STORES)) { console.error('FAIL: lib-care-pglite STORES lệch e2e/careImportFixture'); process.exit(1) }
+// D1: mặc định chạy trên 114 + 115 (CARE_PGLITE_THROUGH=114 để chạy bản 114 thuần). Các kiểm riêng của 114 mà 115 thay CÓ CHỦ Ý
+// (số hàm, chạy lại file 114) được rẽ nhánh và ghi nhãn [115]; mọi kiểm nghiệp vụ khác giữ nguyên.
+// E: mặc định 114 + 115 + 116 (CARE_PGLITE_THROUGH=115 để dừng ở 115); kiểm 116 thay đổi CÓ CHỦ Ý ghi nhãn [116].
+const V115 = L.THROUGH_DEFAULT !== '114'
+const V116 = L.THROUGH_DEFAULT === '116'
+console.log(`(chạy trên migration 114${V115 ? ' + 115' : ''}${V116 ? ' + 116' : ''})`)
 
 // ════════════════════════════════════════════════════════════════════════════
 section(`MIGRATION (is_super_admin trích từ ${SUPER_FN.file})`)
 let db = await freshDb()
 ok(true, 'chạy lần 1 thành công (gồm hậu kiểm trong transaction)')
-try { await db.exec(MIGRATION); ok(true, 'chạy lần 2 (idempotent) thành công') } catch (e) { ok(false, 'chạy lần 2', e.message) }
+if (V115) {
+  // [115] Chạy lại 114 sau 115 KHÔNG được phép đè 3 hàm của 115: hậu kiểm "41 function" của chính 114 RAISE ⇒ rollback cả file.
+  ok(await raises(db.exec(MIGRATION), 'số function care* phải là 41') === true, '[115] chạy lại 114 sau 115 ⇒ hậu kiểm 114 chặn (không đè hàm 115)')
+  await db.exec('ROLLBACK')
+  ok(await count(db, `SELECT count(*) FROM pg_proc WHERE oid = 'public.care__cancel_delete_allowed(uuid,uuid,text)'::regprocedure`) === 1, '[115] sau lần chạy lại bị chặn, 115 vẫn nguyên')
+  if (V116) {
+    // [116] Không chạy lại 115 sau 116: hậu kiểm 15 bảng của 115 RAISE ⇒ rollback cả file; 116 chạy lại được.
+    ok(await raises(db.exec(L.MIGRATION_115), '115 hậu kiểm') === true, '[116] chạy lại 115 sau 116 ⇒ hậu kiểm 115 chặn')
+    await db.exec('ROLLBACK')
+    try { await db.exec(L.MIGRATION_116); ok(true, '[116] chạy lại 116 (idempotent) thành công') } catch (e) { ok(false, '[116] chạy lại 116', e.message) }
+  } else {
+    try { await db.exec(L.MIGRATION_115); ok(true, '[115] chạy lại 115 (idempotent) thành công') } catch (e) { ok(false, '[115] chạy lại 115', e.message) }
+  }
+} else {
+  try { await db.exec(MIGRATION); ok(true, 'chạy lần 2 (idempotent) thành công') } catch (e) { ok(false, 'chạy lần 2', e.message) }
+}
 ok(await count(db, `SELECT count(*) FROM public.app_migrations WHERE version = '114'`) === 1, 'app_migrations có đúng 1 dòng 114')
 ok(await count(db, `SELECT count(*) FROM public.care_access`) === 1, 'seed care_access đúng 1 dòng (không nhân đôi khi chạy lại)')
-ok(await count(db, `SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relname LIKE 'care\\_%' AND relkind = 'r' AND relrowsecurity`) === 13, '13 bảng care_* bật RLS')
+ok(await count(db, `SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relname LIKE 'care\\_%' AND relkind = 'r' AND relrowsecurity`) === (V116 ? 22 : V115 ? 15 : 13),
+   V116 ? '[116] 22 bảng care_* bật RLS (15 + 7 bảng E)' : V115 ? '[115] 15 bảng care_* bật RLS (13 + journal + token)' : '13 bảng care_* bật RLS')
 {
   const db0 = new PGlite()
   await db0.exec(`CREATE ROLE anon; CREATE ROLE authenticated; CREATE ROLE service_role;
@@ -70,12 +92,12 @@ section('QUYỀN')
       has_function_privilege('authenticated', p.oid, 'EXECUTE') AS auth,
       has_function_privilege('service_role', p.oid, 'EXECUTE') AS svc
     FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'care%'`)).rows
-  ok(fns.length === 41, '41 function care* (gồm care_assignee_uid — Q-76/77; care_staff_reads_task/customer — Q-79; care_staff_store_id — Q-82; care_recompute_attribution + care_order_sync_status — B5a; care_order_sync_candidates/apply/fail — B5b.2)', String(fns.length))
+  ok(fns.length === (V116 ? 78 : V115 ? 51 : 41), (V116 ? '[116] 78 function care* (51 + 27 đơn sau import); ' : V115 ? '[115] 51 function care* (41 của 114 + 10 huỷ import); ' : '') + '41 function care* (gồm care_assignee_uid — Q-76/77; care_staff_reads_task/customer — Q-79; care_staff_store_id — Q-82; care_recompute_attribution + care_order_sync_status — B5a; care_order_sync_candidates/apply/fail — B5b.2)', String(fns.length))
   const sid = fns.find((f) => f.fn === 'care_staff_store_id()')
   ok(sid && !sid.anon && sid.auth && sid.svc, 'care_staff_store_id(): authenticated + service_role, không anon (helper policy)', JSON.stringify(sid))
   ok(fns.every((f) => !f.anon), 'anon không EXECUTE function care* nào', fns.filter((f) => f.anon).map((f) => f.fn).join(', '))
   const internal = fns.filter((f) => f.fn.startsWith('care__'))
-  ok(internal.length === 8 && internal.every((f) => !f.auth && !f.svc), 'care__* (8 hàm nội bộ) không cấp cho role nào', JSON.stringify(internal.filter((f) => f.auth || f.svc)))
+  ok(internal.length === (V116 ? 25 : V115 ? 16 : 8) && internal.every((f) => !f.auth && !f.svc), `care__* (${V116 ? '[116] 25 = 16 + 9' : V115 ? '[115] 16 = 8 + 8' : '8'} hàm nội bộ) không cấp cho role nào`, JSON.stringify(internal.filter((f) => f.auth || f.svc)))
   const svcOnly = ['care_import_finalize(uuid,uuid)', 'care_close_period()', 'care_stamp_overdue()', 'care_purge_stale_staging(interval)', 'care_recompute_attribution(text[],text[])',
     'care_order_sync_candidates(integer)', 'care_order_sync_apply(jsonb,timestamp with time zone)', 'care_order_sync_fail(text,timestamp with time zone)']
   ok(fns.filter((f) => svcOnly.includes(f.fn)).every((f) => f.svc && !f.auth), 'finalize/close/stamp/purge/recompute/sync_* chỉ service_role')
@@ -114,9 +136,11 @@ section('QUYỀN')
       has_table_privilege('anon', 'public.care_customers', 'SELECT') tbl_anon,
       (SELECT count(*)::int FROM pg_class c, aclexplode(c.relacl) x WHERE c.oid = 'public.care_customers'::regclass
          AND x.privilege_type = 'SELECT' AND x.grantee IN (0::oid, 'authenticated'::regrole::oid, 'anon'::regrole::oid)) acl_sel`)
-  ok(cc.map((r) => `${r.col}:${r.auth ? 1 : 0}${r.anon ? 1 : 0}${r.svc ? 1 : 0}`).join(',') === 'id:101,external_id:001,is_test:101,created_at:101'
+  // [115] thêm cột created_batch_id: như external_id — authenticated/anon KHÔNG đọc, chỉ service_role.
+  ok(cc.map((r) => `${r.col}:${r.auth ? 1 : 0}${r.anon ? 1 : 0}${r.svc ? 1 : 0}`).join(',')
+       === 'id:101,external_id:001,is_test:101,created_at:101' + (V115 ? ',created_batch_id:001' : '')
      && !ct.tbl_auth && !ct.tbl_anon && ct.acl_sel === 0,
-     'Q-105: authenticated SELECT đúng (id, is_test, created_at) — external_id chỉ service_role; không quyền bảng/ACL SELECT cho authenticated/anon/PUBLIC',
+     'Q-105: authenticated SELECT đúng (id, is_test, created_at) — external_id' + (V115 ? ' + [115] created_batch_id' : '') + ' chỉ service_role; không quyền bảng/ACL SELECT cho authenticated/anon/PUBLIC',
      JSON.stringify({ cc, ct }))
   const cols = async (t) => (await one(db, `SELECT string_agg(column_name::text, ',' ORDER BY column_name) c FROM information_schema.columns WHERE table_schema = 'public' AND table_name = $1`, [t])).c
   ok(await cols('care_orders') === 'customer_external_id,order_key,ordered_at,synced_at',
@@ -526,7 +550,10 @@ const PC = (await one(db, `SELECT public.care_period_of(public.care_vn_today()):
 const PPREV = (await one(db, `SELECT (public.care_period_of(public.care_vn_today()) - interval '1 month')::date::text p`)).p
 {
   // Kỳ trước: khách H do B (QAOS01) chăm, có lượt; kỳ này H giao cho A. Chèn thẳng (superuser) như dữ liệu lịch sử.
+  // [115] dữ liệu lịch sử TRƯỚC 115 (commit_seq NULL): rào commit của 115 chỉ cho finalize 115 tạo batch committed ⇒ tắt rào đúng lệnh này.
+  if (V115) await db.exec('ALTER TABLE public.care_import_batches DISABLE TRIGGER care_import_batches_require_provenance')
   const bPrev = (await one(db, `INSERT INTO public.care_import_batches (period_month, kind, status, file_name, file_sha256, row_count, created_by, finished_at) VALUES ($1, 'initial', 'committed', 'old.xlsx', $2, 1, $3, now()) RETURNING id`, [PPREV, sha('old'), U.mkt])).id
+  if (V115) await db.exec('ALTER TABLE public.care_import_batches ENABLE ALWAYS TRIGGER care_import_batches_require_provenance')
   await db.query(`INSERT INTO public.care_customers (external_id) VALUES ('QA-H'), ('QA-OLDA')`)
   for (const [e, who] of [['QA-H', U.B], ['QA-OLDA', U.A]]) {
     const tid = (await one(db, `INSERT INTO public.care_tasks (customer_id, period_month, due_date, batch_id, store_id, assignee_id, customer_name, phone_norm, phone_raw, status, last_outcome, completed_at)
@@ -778,8 +805,8 @@ db = await freshDb()
   const v17a = verbatim("--    SELECT position('care_staff_store_id'", 'AS svc_x;')
   const v17b = verbatim('--    SELECT t.store_id, t.assignee_id, u.store_id AS user_store', 'GROUP BY 1, 2, 3;')
   const a17 = v17a && (await db.query(v17a)).rows[0]
-  ok(a17 && a17.rpc_q82 === true && a17.policy_q82 === true && Number(a17.n_fn) === 41 && a17.anon_x === false && a17.auth_x === true && a17.svc_x === true,
-     'VERIFY 17 (nguyên văn): đúng bản r1.1 — t, t, 41, f, t, t', JSON.stringify(a17))
+  ok(a17 && a17.rpc_q82 === true && a17.policy_q82 === true && Number(a17.n_fn) === (V116 ? 78 : V115 ? 51 : 41) && a17.anon_x === false && a17.auth_x === true && a17.svc_x === true,
+     `VERIFY 17 (nguyên văn): đúng bản r1.1 — t, t, ${V116 ? '[116] 78' : V115 ? '[115] 51' : '41'}, f, t, t`, JSON.stringify(a17))
   const b17 = v17b ? (await db.query(v17b)).rows : null
   ok(b17 && b17.length === 1 && b17[0].assignee_id === U.A && b17[0].user_store === storeId(2) && Number(b17[0].count) === 3,
      'VERIFY 17 giám sát (nguyên văn) bắt đúng 3 task mở của A lệch store', JSON.stringify(b17))

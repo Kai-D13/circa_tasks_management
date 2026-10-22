@@ -12,6 +12,8 @@ import { CARE_REPORT_STORE_OUT_OF_SCOPE, carePeriodElapsed, careReportExtrasKey 
 import { carePeriodOf, vnDateISO } from '@/lib/care/time'
 import { loadCareReport } from '@/lib/care/server/reports'
 import { requireCareViewer } from '@/lib/care/server/pageGuard'
+import { CareImportOrdersBlock } from '@/components/care/CareImportOrdersBlock'
+import { careOrderLinksUiOn, loadConversionList, loadImportOrderState } from '@/lib/care/server/orderLinks'
 
 // /care/reports — Báo cáo CSKH (SPEC §B5a.2; B8.2 theo artboard 13): super/care admin toàn chuỗi, SM theo vùng;
 // QLCH/staff/FS 404 (requireCareViewer). Số liệu từ care_report (DEFINER, scope server) + "Đã liên hệ" qua
@@ -31,6 +33,14 @@ export default async function CareReportsPage({ searchParams }: { searchParams: 
     const scoped = { month: f.month, storeId: d.storeId, assigneeId: f.assigneeId }
     const due = periodDue(f.month)
     const extras = { month: f.month.slice(0, 7), store: scoped.storeId, assignee: scoped.assigneeId }
+    // E3 (cờ UI): trạng thái đơn sau import + parity cohort ⇒ ô "Có đơn" thành link chỉ khi cohort RPC = tổng báo cáo.
+    const ui = careOrderLinksUiOn() && !d.storeOutOfScope
+    const [importState, conv] = ui
+      ? await Promise.all([loadImportOrderState(f.month).catch(() => null), loadConversionList(g.userId, scoped).catch(() => null)])
+      : [null, null]
+    const conversionHref = conv && conv.list.cohortTotal === d.totals.convertedTasks
+      ? (storeId: string | null, assigneeId: string | null) => careFilterHref('/care/orders/care', { month: f.month, storeId, assigneeId })
+      : undefined
     return (
       <div data-layout-width="fluid" data-care-browse className="space-y-4 p-4 md:p-6">
         <PageHeader title="Báo cáo chăm sóc khách hàng" subtitle="Theo tháng chăm sóc — khách có đơn ghi vào tháng của lượt Hoàn thành" icon={BarChart3}
@@ -52,7 +62,9 @@ export default async function CareReportsPage({ searchParams }: { searchParams: 
               contacted={{ kpi: <CareContactedKpiLive tasks={d.totals.tasks} />, pace: <CareContactedPaceLive tasks={d.totals.tasks} /> }}
               orderState={d.orderState} elapsed={carePeriodElapsed(f.month, today)}
               dueLabel={`${due.slice(8, 10)}/${due.slice(5, 7)}/${due.slice(0, 4)}`} scope={scoped}
-              outcomes={<CareReportOutcomesLive />} />
+              outcomes={<CareReportOutcomesLive />}
+              importOrders={ui ? <CareImportOrdersBlock state={importState} href={careFilterHref('/care/orders', scoped)} /> : undefined}
+              conversionHref={conversionHref} />
           </CareReportExtrasProvider>
         )}
       </div>

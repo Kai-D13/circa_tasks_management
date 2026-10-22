@@ -198,18 +198,26 @@ test.describe('care B0 — cờ và cấu hình (mặc định OFF) @desktop', (
       expect(src, f).not.toMatch(/lib\/care|CARE_ENABLED|\/care\b/)
     }
     // B5b.2 + B5c: hai cron CRM có route nhưng chặn bằng CARE_ENABLED + CARE_SYNC_ENABLED (care-b5b-sync,
-    // care-b5c-period-close spec — gồm HTTP thật 401/503). Không có cron CRM nào khác.
-    expect(fs.readdirSync(path.join(ROOT, 'app/api/cron')).filter((d) => d.startsWith('care')).sort()).toEqual(['care-orders-sync', 'care-period-close'])
+    // care-b5c-period-close spec — gồm HTTP thật 401/503). E: ba route đơn sau import chặn bằng cờ riêng (care-order-links-core).
+    // Không có cron CRM nào khác.
+    expect(fs.readdirSync(path.join(ROOT, 'app/api/cron')).filter((d) => d.startsWith('care')).sort())
+      .toEqual(['care-order-links-close', 'care-order-links-sync', 'care-order-links-trial', 'care-orders-sync', 'care-period-close'])
     for (const c of ['care-orders-sync', 'care-period-close']) {
       expect(read(`app/api/cron/${c}/route.ts`), c).toContain('if (!isCareEnabled() || !isCareSyncEnabled())')
     }
+    for (const c of ['care-order-links-sync', 'care-order-links-close']) expect(read(`app/api/cron/${c}/route.ts`), c).toContain('if (!isCareOrderLinksSyncEnabled())')
+    expect(read('app/api/cron/care-order-links-trial/route.ts')).toContain('if (!isCareOrderLinksTrialEnabled())')
+    expect(read('lib/care/flags.ts')).toMatch(/export function isCareOrderLinks(Sync|Ui|Trial)Enabled\(\): boolean \{\n  return isCareEnabled\(\) && /)
     // B2: entry duy nhất là URL /care/assign + /api/care/import/* — page kiểm cờ ngay đầu,
     // route đi qua handler mà bước đầu là `if (!deps.enabled) return 404` (care-import-core.spec).
     expect(read('app/(dashboard)/care/assign/page.tsx')).toMatch(/export default async function[\s\S]*?\{\s*if \(!isCareEnabled\(\)\) notFound\(\)/)
     expect(read('lib/care/import/handler.ts')).toMatch(/async function guard[\s\S]*?\{\s*if \(!deps\.enabled\) return/)
     // B3: /care + /care/tasks + /care/tasks/[id] — mọi page đi qua requireCareViewer (cờ trước tiên).
     const careDirs = fs.readdirSync(path.join(ROOT, 'app/(dashboard)/care')).sort()
-    expect(careDirs).toEqual(['assign', 'layout.tsx', 'my', 'page.tsx', 'reports', 'tasks'])
+    expect(careDirs).toEqual(['assign', 'layout.tsx', 'my', 'orders', 'page.tsx', 'reports', 'tasks'])
+    // E3: /care/orders + /care/orders/care — một màn chung, requireCareViewer (cờ CRM trước tiên) rồi cờ UI E (404 khi OFF).
+    for (const f of ['app/(dashboard)/care/orders/page.tsx', 'app/(dashboard)/care/orders/care/page.tsx']) expect(read(f), f).toContain('return <CareOrdersScreen basis=')
+    expect(read('components/care/CareOrdersScreen.tsx')).toMatch(/export async function CareOrdersScreen[\s\S]*?\{\s*const g = await requireCareViewer\(\)\n\s+if \(!careOrderLinksUiOn\(\)\) notFound\(\)/)
     // B6-qa-ui: layout chỉ hiện dải "Chế độ QA" theo cổng QA (production: luôn 'off') — không đọc dữ liệu.
     const careLayout = read('app/(dashboard)/care/layout.tsx')
     expect(careLayout).toContain("{qa.kind === 'active' && (")

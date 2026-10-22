@@ -65,5 +65,8 @@ next-env.d.ts
 .qa-care.json.tmp
 # B6-qa-ui — khoá import của dev server QA (lib/care/qa/uiMarkerIo.ts)
 .qa-care.json.lock
+# D1 race 115 — marker fixture (scripts/qa-race-115.mjs; chứa host Supabase + ID giả)
+.qa-race-115.json
+.qa-race-115.json.tmp
 # Log/trace QA cục bộ (có thể chứa URL/route prod) — không commit
 /qa-artifacts/

@@ -6,6 +6,7 @@ import { PageHeader } from '@/components/ds/PageHeader'
 import { CareImportWizard } from '@/components/care/CareImportWizard'
 import { CareImportPageActions } from '@/components/care/CareImportPanels'
 import { CareImportHistory, type CareImportHistoryRow } from '@/components/care/CareImportHistory'
+import { CareImportCancelFixture } from './CancelFixture'
 
 // Dev-only bàn thử UI cho wizard import CRM (B2). 100% DỮ LIỆU GIẢ: lịch sử là
 // fixture cứng; wizard gọi /api/care/import/* nhưng e2e/care-import-ui.spec.ts
@@ -35,11 +36,13 @@ const FAKE_HISTORY: CareImportHistoryRow[] = [
   },
 ]
 
-export default async function CareImportCatalogPage() {
+export default async function CareImportCatalogPage({ searchParams }: { searchParams: Promise<{ cancel?: string }> }) {
   if (process.env.UI_CATALOG !== '1') notFound()
   const { user, profile } = await getSessionProfile()
   if (!user) redirect('/login')
   if (!(profile?.role === 'admin' && isSuperAdminEmail(user.email))) notFound()
+  const c = (await searchParams).cancel
+  const cancelMode = c === 'has_activity' || c === 'not_latest' || c === 'off' ? c : 'ok'
 
   return (
     <div data-layout-width="fluid" data-care-browse className="space-y-6 p-4 md:p-6">
@@ -50,6 +53,11 @@ export default async function CareImportCatalogPage() {
       <section className="space-y-3">
         <h2 className="text-base font-semibold">Lịch sử import</h2>
         <CareImportHistory rows={FAKE_HISTORY} />
+      </section>
+      {/* D1 — huỷ file import: hộp thoại 2 bước với action giả (?cancel=ok|has_activity|not_latest). */}
+      <section className="space-y-3" data-testid="catalog-care-import-cancel">
+        <h2 className="text-base font-semibold">Huỷ file import (D1)</h2>
+        <CareImportCancelFixture mode={cancelMode} />
       </section>
     </div>
   )

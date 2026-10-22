@@ -12,6 +12,9 @@ import { loadCareTaskDetail } from '@/lib/care/server/browse'
 import { requireCareViewer } from '@/lib/care/server/pageGuard'
 import { isCareQaActive } from '@/lib/care/server/qaUi'
 import { listCareTransferTargets, loadMoreCareInteractions, transferCareTasks } from '@/app/actions/care'
+import { loadMoreTaskOrders } from '@/app/actions/careOrders'
+import { CareTaskOrdersSection } from '@/components/care/CareTaskOrdersSection'
+import { careOrderLinksUiOn, loadTaskOrders } from '@/lib/care/server/orderLinks'
 import { cn } from '@/lib/utils'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -37,6 +40,8 @@ export default async function CareTaskDetailPage({ params }: { params: Promise<{
   const now = new Date()
   const t = detail.task
   const transferable = g.perms.canTransfer && t.status === 'open' && t.period_month === carePeriodOf(now)
+  // E3: đơn xác thực sau import (cờ UI) — lỗi đọc ⇒ không có khối, chi tiết vẫn hiện.
+  const orders = careOrderLinksUiOn() ? await loadTaskOrders(g.userId, t.id).catch(() => null) : null
   return (
     <div data-layout-width="fluid" className="space-y-4 p-4 md:p-6">
       {header}
@@ -45,6 +50,7 @@ export default async function CareTaskDetailPage({ params }: { params: Promise<{
         todayISO={vnDateISO(now)}
         loadMore={loadMoreCareInteractions}
         qa={isCareQaActive()}
+        orders={orders ? <CareTaskOrdersSection taskId={t.id} initial={orders.view} next={orders.next} loadMore={loadMoreTaskOrders} /> : undefined}
         data={{
           task: t,
           products: detail.products,

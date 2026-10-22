@@ -2,11 +2,12 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
-import { MessageSquare, NotebookPen, Package, Phone } from 'lucide-react'
+import { MessageCircle, MessageSquare, NotebookPen, Package, Phone } from 'lucide-react'
 import { StatusBadge } from '@/components/ds/StatusBadge'
 import { EmptyState } from '@/components/ds/EmptyState'
 import { StickyActionBar } from '@/components/ds/StickyActionBar'
 import { careMyBadge, customerInitials } from '@/lib/care/my'
+import { careZaloHref } from '@/lib/care/zalo'
 import type { CareInteractionPage } from '@/lib/care/browse'
 import { formatDateTime } from '@/lib/dateUtils'
 import { cn } from '@/lib/utils'
@@ -23,6 +24,9 @@ import { CareTimeline, type CareLoadMoreInteractions, type CareTimelineEvent } f
 // tab gạch chân dính dưới header; Tổng quan dạng lưới 2 cột; "Ghi nhận chăm sóc" ở thanh đáy (mt-auto:
 // nội dung ngắn vẫn nằm sát đáy màn — gốc trang là cột flex cao tối thiểu bằng vùng cuộn).
 // SĐT ĐẦY ĐỦ ở đây (artboard che số): Q-107 cần đối chiếu số trước khi bấm gọi.
+// Lát C (Q-154, cờ CARE_ZALO_LINK_ENABLED do server truyền qua `zalo`): thêm nút Zalo tới https://zalo.me/<phone_norm của task>
+// (cùng tab, không referrer, không timer / tự chuyển SMS); nút nhắn tin thành "SMS dự phòng" — vẫn đúng MỘT link sms:. Cờ OFF ⇒
+// DOM y như cũ (Gọi khách / Nhắn tin).
 
 export interface CareMyDetailData {
   task: {
@@ -44,7 +48,7 @@ type TabKey = (typeof TABS)[number]['key']
 const dmy = (iso: string) => `${iso.slice(8, 10)}/${iso.slice(5, 7)}/${iso.slice(0, 4)}`
 const CONTACT_BTN = 'inline-flex min-h-[44px] items-center justify-center gap-2 rounded-care-ctl text-[15px] font-semibold outline-none transition-opacity focus-visible:ring-3 focus-visible:ring-ring/50 active:opacity-80'
 
-export function CareMyTaskDetail({ data, todayISO, canRecord, updateHref, loadMore, qa = false }: {
+export function CareMyTaskDetail({ data, todayISO, canRecord, updateHref, loadMore, qa = false, orders, zalo = false }: {
   data: CareMyDetailData
   todayISO: string
   canRecord: boolean
@@ -52,10 +56,15 @@ export function CareMyTaskDetail({ data, todayISO, canRecord, updateHref, loadMo
   loadMore?: CareLoadMoreInteractions
   /** Chế độ QA local (Q-107): chỉ thêm dòng nhận biết số giả — nút vẫn là tel:/sms: thật. */
   qa?: boolean
+  /** E3: "Đơn xác thực sau import" ở tab Tổng quan — chỉ truyền khi CARE_ORDER_LINKS_UI_ENABLED. */
+  orders?: React.ReactNode
+  /** Lát C: CARE_ZALO_LINK_ENABLED (server quyết) — nút Zalo + "SMS dự phòng". */
+  zalo?: boolean
 }) {
   const [tab, setTab] = useState<TabKey>('overview')
   const t = data.task
   const b = careMyBadge(t, todayISO)
+  const zaloHref = zalo ? careZaloHref(t.phone_norm) : null
   // Số mục lịch sử đang hiện (cùng quy tắc CareTimeline: còn trang cũ hơn ⇒ chỉ tính sự kiện từ lượt cũ
   // nhất đã tải, và ghi "N+").
   const loaded = data.interactions.rows
@@ -87,11 +96,27 @@ export function CareMyTaskDetail({ data, todayISO, canRecord, updateHref, loadMo
         </div>
         <div className="grid grid-cols-2 gap-2.5">
           <a href={`tel:${t.phone_norm}`} className={cn(CONTACT_BTN, 'bg-status-success-bg text-status-success')}><Phone className="size-[18px]" /> Gọi khách</a>
-          <a href={`sms:${t.phone_norm}`} className={cn(CONTACT_BTN, 'border border-care-line-strong bg-card text-foreground')}><MessageSquare className="size-[18px]" /> Nhắn tin</a>
+          {zalo && (zaloHref ? (
+            <a href={zaloHref} rel="noopener noreferrer" referrerPolicy="no-referrer" data-testid="care-contact-zalo"
+              className={cn(CONTACT_BTN, 'bg-status-info-bg text-status-info')}><MessageCircle className="size-[18px]" /> Zalo</a>
+          ) : (
+            <p role="note" data-testid="care-contact-zalo-invalid"
+              className="flex min-h-[44px] items-center justify-center rounded-care-ctl border border-dashed border-care-line-strong px-2 text-center text-[13px] text-muted-foreground">
+              Số điện thoại chưa hợp lệ để mở Zalo.
+            </p>
+          ))}
+          <a href={`sms:${t.phone_norm}`} className={cn(CONTACT_BTN, 'border border-care-line-strong bg-card text-foreground', zalo && 'col-span-2')}><MessageSquare className="size-[18px]" />{zalo ? ' SMS dự phòng' : ' Nhắn tin'}</a>
         </div>
+        {zaloHref && (
+          <p data-testid="care-contact-zalo-hint" className="text-xs text-muted-foreground">
+            Zalo không tìm thấy khách? Quay lại đây và bấm SMS dự phòng.
+          </p>
+        )}
         {qa && (
           <p role="note" data-testid="care-contact-qa" className="text-xs text-status-warning">
-            Chế độ QA: số của khách QA giả — máy sẽ mở ứng dụng gọi/SMS, kiểm tra số trước khi bấm gọi.
+            {zalo
+              ? 'Chế độ QA: số của khách QA giả — máy sẽ mở ứng dụng gọi/SMS/Zalo, kiểm tra số trước khi bấm.'
+              : 'Chế độ QA: số của khách QA giả — máy sẽ mở ứng dụng gọi/SMS, kiểm tra số trước khi bấm gọi.'}
           </p>
         )}
       </section>
@@ -123,6 +148,7 @@ export function CareMyTaskDetail({ data, todayISO, canRecord, updateHref, loadMo
                 </div>
               ))}
             </dl>
+            {orders && <div className="pt-3">{orders}</div>}
           </section>
         )}
 
