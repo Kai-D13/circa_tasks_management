@@ -9,8 +9,9 @@ import {
 } from '../lib/care/importCancel'
 import { careImportCancelEnabledFromEnv } from '../lib/care/config'
 
-// CRM-CSKH D1 — huỷ import (Q-149–163, SPEC §Sau go-live D, thiết kế D0 r1.5 §7–§8). Unit THUẦN + pin nguồn (không DB / mạng).
-// Phần DB (RPC, trigger, khôi phục, rollback) kiểm ở scripts/qa-care-115.mjs trên PGlite.
+// CRM-CSKH D1 — huỷ import (Q-149–163, SPEC §Sau go-live D, thiết kế D0 r1.5 §7–§8). Unit THUẦN + pin nguồn (không DB / mạng);
+// nhóm cuối chạy RPC 116 thật trên PGlite (mã huỷ của 116 ⇒ câu của app). Phần DB khác (trigger, khôi phục, rollback) ở
+// scripts/qa-care-115.mjs / qa-care-116.mjs.
 
 const ROOT = path.resolve(__dirname, '..')
 const read = (f: string) => fs.readFileSync(path.join(ROOT, f), 'utf8').replace(/\r\n/g, '\n')
@@ -319,5 +320,122 @@ test.describe('care D1 — huỷ import: pin nguồn @desktop', () => {
     }
     expect(writers.sort()).toEqual(['lib/care/server/importRepo.ts', 'scripts/care-qa-fixture.mjs'])
     expect(read('scripts/care-qa-fixture.mjs')).toMatch(/export const FIXTURE_FILE_NAME = 'qa-b6-fixture\.xlsx'/)
+  })
+})
+
+// PM 21/10 #4 (cổng bật huỷ D1): 4 mã gate / assess của migration 116 có chữ riêng (không gộp FAILED); 57014 ⇒ TIMEOUT
+// ("chưa có gì thay đổi" — RPC một transaction ⇒ bị huỷ = rollback), không hứa thử lại là được như RETRYABLE.
+test.describe('care D1 — mã huỷ của 116 + 57014 @desktop', () => {
+  const NEW_116 = ['ORDERS_SYNC_RUNNING', 'ORDERS_SYNC_STALE', 'ORDERS_NOT_COVERED', 'HAS_VERIFIED_ORDER'] as const
+  test('4 mã 116 nằm trong danh sách mã RPC, preview / kết quả huỷ giữ nguyên mã, mỗi mã một câu riêng ≠ FAILED', () => {
+    for (const code of NEW_116) {
+      expect(CARE_CANCEL_RPC_CODES as readonly string[]).toContain(code)
+      expect(readCancelPreview({ status: 'rejected', code })).toEqual({ ok: false, code })
+      expect(readCancelResult({ status: 'rejected', code })).toEqual({ ok: false, code })
+      expect(CARE_CANCEL_MESSAGES[code]).not.toBe(CARE_CANCEL_MESSAGES.FAILED)
+    }
+    expect(new Set(NEW_116.map((c) => CARE_CANCEL_MESSAGES[c])).size).toBe(4)
+    // "Chưa đủ dữ liệu đơn" chỉ cho 2 mã thiếu đối chiếu — không làm người dùng hiểu là đã có đơn / đã huỷ được.
+    for (const c of ['ORDERS_SYNC_STALE', 'ORDERS_NOT_COVERED'] as const) expect(CARE_CANCEL_MESSAGES[c]).toMatch(/^Chưa đủ dữ liệu đơn để huỷ/)
+    expect(CARE_CANCEL_MESSAGES.HAS_VERIFIED_ORDER).toMatch(/^Không huỷ được: .*đơn xác thực sau import/)
+    expect(CARE_CANCEL_MESSAGES.ORDERS_SYNC_RUNNING).toMatch(/thử lại sau/)
+  })
+  test('57014 (statement timeout) ⇒ TIMEOUT "chưa có gì thay đổi"; 55P03 / 40P01 vẫn RETRYABLE; qua cả preview lẫn action', async () => {
+    expect(mapCancelRpcError({ code: '57014', message: 'canceling statement due to statement timeout' })).toBe('TIMEOUT')
+    expect(mapCancelRpcError({ code: '55P03', message: 'lock' })).toBe('RETRYABLE')
+    expect(CARE_CANCEL_MESSAGES.TIMEOUT).toMatch(/chưa có gì thay đổi/)
+    expect(CARE_CANCEL_MESSAGES.TIMEOUT).not.toBe(CARE_CANCEL_MESSAGES.RETRYABLE)
+    const deps = (err: { code: string; message: string }): CareCancelDeps => ({
+      enabled: () => true, access: async () => ({ kind: 'ok', actorId: '00000000-0000-4000-8000-000000000001' }),
+      loadBatch: async (id) => ({ data: { id, is_test: false }, error: null }), scope: () => ({ kind: 'production' }),
+      rpc: async () => ({ data: null, error: err }), revalidate: () => { throw new Error('không được revalidate khi lỗi') },
+    })
+    const B = '00000000-0000-4000-8000-0000000000b1'
+    const to = { code: '57014', message: 'canceling statement due to statement timeout' }
+    expect(await runCareCancelPreview({ batchId: B }, deps(to))).toEqual({ ok: false, code: 'TIMEOUT' })
+    expect(await runCareCancel({ batchId: B, expectedCommitSeq: '7' }, deps(to))).toEqual({ ok: false, code: 'TIMEOUT' })
+  })
+})
+
+// Đầu–cuối: RPC THẬT care_import_cancel_preview / care_import_cancel (service_role) trên PGlite 114 + 115 + 116 ⇒ hàm đọc của app ⇒
+// đúng mã + câu: initial / revision chưa đối chiếu, có lượt chăm sóc, có đơn, đang đồng bộ, batch trước 115 (không snapshot), sẵn sàng.
+const HAS_PGLITE = fs.existsSync(path.join(ROOT, 'node_modules', '@electric-sql', 'pglite'))
+test.describe('care D1 — preview / huỷ trên RPC 116 thật (PGlite) @desktop', () => {
+  test.skip(!HAS_PGLITE, 'chưa cài PGlite — npm i --no-save @electric-sql/pglite@0.2.17 (trong webapp/)')
+  test('mỗi tình huống ra đúng mã của DB và câu riêng của app; batch sẵn sàng huỷ được', async () => {
+    test.setTimeout(240_000)
+    const { PGlite } = await import('@electric-sql/pglite')
+    const L: any = await import(pathToFileURL(path.join(ROOT, 'scripts', 'lib-care-pglite.mjs')).href)
+    const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date())
+    const P = `${todayVN.slice(0, 7)}-01`
+    const depsOf = (db: any): CareCancelDeps => ({
+      enabled: () => true, access: async () => ({ kind: 'ok', actorId: L.U.mkt }),
+      loadBatch: async (id) => ({ data: (await db.query('SELECT id, is_test FROM public.care_import_batches WHERE id = $1', [id])).rows[0] ?? null, error: null }),
+      scope: () => ({ kind: 'production' }),
+      rpc: async (fn, args) => {
+        try {
+          const sql = fn === 'care_import_cancel_preview' ? 'SELECT public.care_import_cancel_preview($1, $2) AS r'
+            : 'SELECT public.care_import_cancel($1, $2, $3::bigint) AS r'
+          const params = fn === 'care_import_cancel_preview' ? [args.p_batch_id, args.p_actor] : [args.p_batch_id, args.p_actor, args.p_expected_commit_seq]
+          return { data: (await L.as(db, null, () => db.query(sql, params), 'service_role')).rows[0].r, error: null }
+        } catch (e: any) { return { data: null, error: { code: e.code ?? null, message: String(e.message) } } }
+      },
+      revalidate: () => {},
+    })
+    const expectCode = async (db: any, b: string, code: string, why: string) => {
+      const r = await runCareCancelPreview({ batchId: b }, depsOf(db))
+      expect(r, why).toEqual({ ok: false, code })
+      expect(CARE_CANCEL_MESSAGES[r.ok ? 'FAILED' : r.code], why).not.toBe(CARE_CANCEL_MESSAGES.FAILED)
+    }
+
+    // (1) Batch import TRƯỚC 115 (không snapshot) ⇒ PROVENANCE_UNAVAILABLE.
+    const db0: any = await L.freshDb(PGlite, { through: '114' })
+    const b0 = await L.stage(db0, [L.row('QA-C0-1', 'QAOS01', L.EA, 'P1')], { period: P })
+    expect((await L.finalize(db0, b0, L.U.mkt, todayVN)).kind).toBe('initial')
+    await db0.exec(L.MIGRATION_115)
+    await db0.exec(L.MIGRATION_116)
+    await expectCode(db0, b0, 'PROVENANCE_UNAVAILABLE', 'batch trước 115')
+    await db0.close()
+
+    const db: any = await L.freshDb(PGlite, { through: '116' })
+    // (2) Initial, chưa có lượt đồng bộ thành công nào ⇒ ORDERS_SYNC_STALE ("chưa đủ dữ liệu đơn").
+    const b1 = await L.stage(db, [L.row('QA-C1-1', 'QAOS01', L.EA, 'P1'), L.row('QA-C1-2', 'QAOS01', L.EA, 'P2')], { period: P })
+    expect((await L.finalize(db, b1, L.U.mkt, todayVN)).kind).toBe('initial')
+    await expectCode(db, b1, 'ORDERS_SYNC_STALE', 'initial chưa đồng bộ')
+    // (3) Đang có lượt thường mở ⇒ ORDERS_SYNC_RUNNING.
+    const open = (await db.query(`SELECT public.care__order_links_begin_open_at('regular', 'apply', NULL, 5000, NULL) AS r`)).rows[0].r
+    expect(open.status).toBe('ok')
+    await expectCode(db, b1, 'ORDERS_SYNC_RUNNING', 'đang đồng bộ')
+    await db.query(`SELECT public.care_order_links_fail($1, 'QA_STOP')`, [open.run_id])
+    // (4) Sau lượt thường đủ coverage ⇒ sẵn sàng (preview ok).
+    await L.syncOrders116(db)
+    const ready = await runCareCancelPreview({ batchId: b1 }, depsOf(db))
+    expect(ready.ok, 'initial đã đối chiếu ⇒ sẵn sàng').toBe(true)
+    // (5) Revision mới chưa được quét ⇒ ORDERS_NOT_COVERED.
+    const b2 = await L.stage(db, [L.row('QA-C1-1', 'QAOS01', L.EA, 'P9'), L.row('QA-C1-3', 'QAOS01', L.EA, 'P1')], { period: P })
+    expect((await L.finalize(db, b2, L.U.mkt, todayVN)).kind).toBe('revision')
+    await expectCode(db, b2, 'ORDERS_NOT_COVERED', 'revision chưa đối chiếu')
+    // (6) Có đơn xác thực sau import trên task của file ⇒ HAS_VERIFIED_ORDER (sau lượt quét đủ coverage).
+    await L.syncOrders116(db)
+    const t3 = await L.taskOf(db, 'QA-C1-3', P)
+    await db.query(`INSERT INTO public.care_order_links (order_key, customer_external_id, ordered_at, task_id, is_test, first_run_id, updated_run_id)
+                    VALUES ('DHC-QA-C1', 'QA-C1-3', now(), $1, false, 1, 1)`, [t3.id])
+    await expectCode(db, b2, 'HAS_VERIFIED_ORDER', 'có đơn xác thực')
+    // (7) Batch có lượt chăm sóc ⇒ HAS_ACTIVITY (ưu tiên trước HAS_VERIFIED_ORDER).
+    await L.record(db, todayVN, L.staffId(1, 'a'), t3.id, 'INTERESTED', 'QA gọi')
+    await expectCode(db, b2, 'HAS_ACTIVITY', 'có lượt chăm sóc')
+    // (8) Action huỷ cùng đường đọc: batch sẵn sàng ⇒ huỷ được; huỷ lại ⇒ mã từ chối có chữ riêng.
+    const db2: any = await L.freshDb(PGlite, { through: '116' })
+    const b3 = await L.stage(db2, [L.row('QA-C3-1', 'QAOS01', L.EA, 'P1')], { period: P })
+    await L.finalize(db2, b3, L.U.mkt, todayVN)
+    await L.syncOrders116(db2)
+    const pv = await runCareCancelPreview({ batchId: b3 }, depsOf(db2))
+    expect(pv.ok).toBe(true)
+    const done = await runCareCancel({ batchId: b3, expectedCommitSeq: pv.ok ? pv.commitSeq : '' }, depsOf(db2))
+    expect(done.ok, JSON.stringify(done)).toBe(true)
+    const again = await runCareCancel({ batchId: b3, expectedCommitSeq: pv.ok ? pv.commitSeq : '' }, depsOf(db2))
+    expect(again.ok).toBe(false)
+    expect(CARE_CANCEL_MESSAGES[again.ok ? 'FAILED' : again.code]).not.toBe(CARE_CANCEL_MESSAGES.FAILED)
+    await db.close(); await db2.close()
   })
 })

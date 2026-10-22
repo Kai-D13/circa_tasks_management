@@ -1,5 +1,5 @@
 import 'server-only'
-import { careFlagsFromEnv, careImportCancelEnabledFromEnv, careOrderLinksFlagsFromEnv } from './config'
+import { careFlagsFromEnv, careImportCancelEnabledFromEnv, careOrderLinksFlagsFromEnv, careZaloLinkEnabledFromEnv } from './config'
 import { careQaUiState } from './server/qaUi'
 
 // Feature gate CRM-CSKH (SPEC B0). Mặc định OFF; chỉ bật ở bước rollout B6 sau
@@ -12,6 +12,11 @@ import { careQaUiState } from './server/qaUi'
  */
 export function isCareEnabled(): boolean {
   return careFlagsFromEnv(process.env).enabled && careQaUiState().kind !== 'blocked'
+}
+
+/** CARE_ZALO_LINK_ENABLED — nút Zalo trên chi tiết task dược sĩ (lát C). Cần CARE_ENABLED; không có migration. */
+export function isCareZaloLinkEnabled(): boolean {
+  return isCareEnabled() && careZaloLinkEnabledFromEnv(process.env)
 }
 
 /** CARE_SYNC_ENABLED — cron care-period-close + care-orders-sync (B5). */

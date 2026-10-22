@@ -9,6 +9,7 @@ import { CareMyHeader } from '@/components/care/CareMyHeader'
 import { CareMyScreen } from '@/components/care/CareMyScreen'
 import { carePeriodOf, vnDateISO } from '@/lib/care/time'
 import { careMyBackTarget, careStaffTaskBlock } from '@/lib/care/my'
+import { isCareZaloLinkEnabled } from '@/lib/care/flags'
 import { loadCareTaskDetail } from '@/lib/care/server/browse'
 import { requireCareStaff } from '@/lib/care/server/my'
 import { isCareQaActive } from '@/lib/care/server/qaUi'
@@ -52,6 +53,7 @@ export default async function CareMyTaskPage({ params }: { params: Promise<{ id:
     <CareMyScreen screen="detail">
       {header}
       <CareMyTaskDetail
+        zalo={isCareZaloLinkEnabled()}
         todayISO={vnDateISO(now)}
         canRecord={canRecord}
         updateHref={`/care/my/${t.id}/update`}

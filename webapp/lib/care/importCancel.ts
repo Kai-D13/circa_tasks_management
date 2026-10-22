@@ -1,12 +1,14 @@
 // CRM-CSKH D1 — huỷ file import N1 chưa có lượt (Q-149–163, SPEC §Sau go-live D). Logic THUẦN (không Next/Supabase) để test được:
 // kiểm input, đọc kết quả RPC care_import_cancel_preview / care_import_cancel (migration 115), map mã lỗi sang chữ an toàn.
 // commitSeq là CHUỖI số thập phân suốt đường đi (SPEC: bigint không đi qua JS Number).
+// Migration 116 (gate Q-175 / assess Q-182) trả thêm 4 mã về đơn sau import — mỗi mã có chữ riêng (PM 21/10 #4), không gộp FAILED.
 
 export const CARE_CANCEL_RPC_CODES = [
   'FORBIDDEN', 'NOT_FOUND', 'NOT_COMMITTED', 'NOT_CURRENT_PERIOD', 'PROVENANCE_UNAVAILABLE', 'NOT_LATEST', 'HAS_ACTIVITY', 'RESTORE_UNAVAILABLE',
+  'ORDERS_SYNC_RUNNING', 'ORDERS_SYNC_STALE', 'ORDERS_NOT_COVERED', 'HAS_VERIFIED_ORDER',
 ] as const
 export type CareCancelRpcCode = (typeof CARE_CANCEL_RPC_CODES)[number]
-export type CareCancelCode = CareCancelRpcCode | 'INVALID_INPUT' | 'NOT_ENABLED' | 'UNAUTHENTICATED' | 'UNAVAILABLE' | 'RETRYABLE' | 'FAILED'
+export type CareCancelCode = CareCancelRpcCode | 'INVALID_INPUT' | 'NOT_ENABLED' | 'UNAUTHENTICATED' | 'UNAVAILABLE' | 'RETRYABLE' | 'TIMEOUT' | 'FAILED'
 
 /** Q-157 — câu cảnh báo cố định của hộp thoại xác nhận. */
 export const CARE_CANCEL_WARNING =
@@ -21,11 +23,16 @@ export const CARE_CANCEL_MESSAGES: Record<CareCancelCode, string> = {
   NOT_LATEST: 'Chỉ huỷ được file import mới nhất của kỳ — tải lại trang và xem trước lại.',
   HAS_ACTIVITY: 'Không huỷ được: đã có task của file này được chăm sóc, chuyển giao hoặc từ chối.',
   RESTORE_UNAVAILABLE: 'Không huỷ được: không chứng minh được khôi phục chính xác trạng thái trước file này.',
+  ORDERS_SYNC_RUNNING: 'Đang đồng bộ đơn sau import — thử lại sau vài phút.',
+  ORDERS_SYNC_STALE: 'Chưa đủ dữ liệu đơn để huỷ: lượt đồng bộ đơn gần nhất đã quá 24 giờ — chờ lượt đồng bộ kế tiếp rồi thử lại.',
+  ORDERS_NOT_COVERED: 'Chưa đủ dữ liệu đơn để huỷ: khách của file này chưa được đối chiếu đơn sau import — chờ lượt đồng bộ kế tiếp rồi thử lại.',
+  HAS_VERIFIED_ORDER: 'Không huỷ được: đã có khách của file này phát sinh đơn xác thực sau import.',
   INVALID_INPUT: 'Yêu cầu không hợp lệ — tải lại trang và thử lại.',
   NOT_ENABLED: 'Chức năng huỷ file chưa được bật.',
   UNAUTHENTICATED: 'Phiên đăng nhập đã hết — đăng nhập lại.',
   UNAVAILABLE: 'Hệ thống CRM chưa sẵn sàng.',
   RETRYABLE: 'Hệ thống đang bận (đang có import hoặc thao tác khác) — thử lại sau ít phút.',
+  TIMEOUT: 'Thao tác quá thời gian nên đã dừng, chưa có gì thay đổi — tải lại trang để xem trạng thái file, thử lại sau ít phút; nếu lặp lại, báo quản trị.',
   FAILED: 'Không huỷ được file — thử lại sau.',
 }
 
@@ -95,10 +102,15 @@ export function readCancelResult(data: unknown): CareCancelResult {
   return counts ? { ok: true, counts } : { ok: false, code: 'FAILED' }
 }
 
-/** Lỗi PostgREST/Postgres khi gọi RPC ⇒ mã app. Khoá chờ quá hạn (55P03) / deadlock (40P01) ⇒ thử lại; thiếu tham số ⇒ input. */
+/**
+ * Lỗi PostgREST/Postgres khi gọi RPC ⇒ mã app. Khoá chờ quá hạn (55P03) / deadlock (40P01) ⇒ thử lại; thiếu tham số ⇒ input.
+ * 57014 (statement_timeout 8 s của PostgREST): RPC là MỘT transaction ⇒ bị huỷ = rollback, chưa có gì thay đổi; không gộp vào
+ * RETRYABLE vì nguyên nhân có thể là chờ khoá (thử lại được) hoặc file quá nặng (thử lại vẫn hết giờ) ⇒ mã TIMEOUT riêng.
+ */
 export function mapCancelRpcError(err: { code?: string | null; message?: string | null } | null | undefined): CareCancelCode {
   if (!err) return 'FAILED'
   if (err.code === '55P03' || err.code === '40P01') return 'RETRYABLE'
+  if (err.code === '57014') return 'TIMEOUT'
   if (typeof err.message === 'string' && err.message.includes('thiếu tham số')) return 'INVALID_INPUT'
   return 'FAILED'
 }

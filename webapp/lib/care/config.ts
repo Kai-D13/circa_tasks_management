@@ -92,3 +92,11 @@ export function careBqOrdersTable(env: Env): string | null {
   }
   return raw
 }
+
+/**
+ * CARE_ZALO_LINK_ENABLED — nút Zalo + "SMS dự phòng" trên chi tiết task của dược sĩ (lát C, Q-154). Mặc định OFF; chỉ đúng
+ * chuỗi 'true'. Tách hàm riêng (không thêm vào CareFlags) để hợp đồng careFlagsFromEnv của B0 giữ nguyên.
+ */
+export function careZaloLinkEnabledFromEnv(env: Env): boolean {
+  return env.CARE_ZALO_LINK_ENABLED === 'true'
+}
