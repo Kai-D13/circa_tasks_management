@@ -609,6 +609,49 @@ test.describe('care B8.4 — /care theo artboard 05 (frame, dữ liệu giả) @
   test.skip(!HAS_STATE, 'chưa có storageState super')
   test.use({ storageState: SUPER_STATE })
 
+  // PM 22/10 U1: bảng số theo cửa hàng ra khối rộng toàn vùng DƯỚI hai panel, mặc định đóng; ô cách ≥ 12 / 8 px, số căn phải
+  // tabular-nums không xuống dòng; mở / đóng bằng chuột, Enter, Space — KHÔNG request mới; 1440 và 1024, sáng / tối.
+  test('PM 22/10 U1: bảng số theo cửa hàng rộng toàn vùng dưới 2 panel; ô ≥ 12/8 px, số căn phải; chuột / Enter / Space; 0 request', async ({ page }) => {
+    for (const w of [1440, 1024]) for (const theme of ['light', 'dark'] as const) {
+      await page.setViewportSize({ width: w, height: 900 })
+      await openDashboard(page, '', theme)
+      const dash = page.getByTestId('care-dashboard')
+      const box = page.getByTestId('care-store-table')
+      await expect(box, `${w}-${theme}`).not.toHaveAttribute('open')
+      const dw = (await dash.boundingBox())!.width
+      const bb = (await box.boundingBox())!
+      expect(bb.width, 'rộng toàn vùng nội dung').toBeGreaterThan(dw - 2)
+      const panelsBottom = Math.max(...await dash.locator('section').evaluateAll((els) => els.map((e) => e.getBoundingClientRect().bottom + window.scrollY)))
+      expect(bb.y, 'nằm dưới hai panel').toBeGreaterThanOrEqual(panelsBottom)
+      const reqs: string[] = []
+      const onReq = (r: { url: () => string }) => { if (!r.url().includes('/cdn-cgi/')) reqs.push(r.url()) }
+      page.on('request', onReq)
+      await box.locator('summary').click()
+      await expect(box).toHaveAttribute('open', '')
+      const css = (loc: ReturnType<typeof box.getByRole>) => loc.evaluate((el) => {
+        const s = getComputedStyle(el)
+        return { pl: parseFloat(s.paddingLeft), pr: parseFloat(s.paddingRight), pt: parseFloat(s.paddingTop), ws: s.whiteSpace, ta: s.textAlign, nv: s.fontVariantNumeric }
+      })
+      const code = await css(box.getByRole('cell', { name: 'QAOS01' }))
+      expect(code.pl >= 12 && code.pr >= 12 && code.pt >= 8 && code.ws === 'nowrap', JSON.stringify(code)).toBe(true)
+      const num = await css(box.getByRole('row').nth(1).getByRole('cell').nth(1))
+      expect(num.ta === 'right' && num.ws === 'nowrap' && num.nv.includes('tabular-nums') && num.pl >= 12, JSON.stringify(num)).toBe(true)
+      const head = await css(box.getByRole('columnheader', { name: 'Không hoàn thành trong kỳ' }))
+      expect(head.pl >= 12 && head.pt >= 8 && head.ws !== 'nowrap', JSON.stringify(head)).toBe(true)
+      expect(await noPageOverflow(page), `${w}-${theme}`).toBe(true)
+      await dashShot(page, `u1-${w}-${theme}-open`)
+      await box.locator('summary').click()
+      await expect(box).not.toHaveAttribute('open')
+      await box.locator('summary').focus()
+      await page.keyboard.press('Enter')
+      await expect(box, 'Enter mở').toHaveAttribute('open', '')
+      await page.keyboard.press('Space')
+      await expect(box, 'Space đóng').not.toHaveAttribute('open')
+      page.off('request', onReq)
+      expect(reqs, 'mở / đóng bảng không gọi mạng').toEqual([])
+    }
+  })
+
   test('kỳ hiện tại: 4 ô KPI là link /care/tasks đúng trạng thái + giữ kỳ; "Khách có đơn" chưa đồng bộ là ô viền đứt, không link; bộ lọc trên header', async ({ page }) => {
     await openDashboard(page)
     const f = page.getByTestId('catalog-frame-dashboard')
@@ -693,6 +736,27 @@ test.describe('care B8.4 — /care mobile (frame) @mobile', () => {
       expect(await noPageOverflow(page), `${w}-${theme}-${name}`).toBe(true)
       expect((await kpi(page, 'Chưa chăm sóc').boundingBox())!.height).toBeGreaterThanOrEqual(44)
       await dashShot(page, `mobile-${w}-${theme}-${name}`)
+    }
+  })
+
+  test('PM 22/10 U1 mobile: nút mở bảng ≥ 44 px; mở ra CHỈ vùng bảng cuộn ngang (một lớp), trang không cuộn ngang; ảnh sáng/tối', async ({ page }) => {
+    const w = page.viewportSize()!.width
+    for (const theme of ['light', 'dark'] as const) {
+      await openDashboard(page, '', theme)
+      const box = page.getByTestId('care-store-table')
+      const sum = box.locator('summary')
+      expect((await sum.boundingBox())!.height).toBeGreaterThanOrEqual(44)
+      await sum.click()
+      await expect(box).toHaveAttribute('open', '')
+      await expect(box.getByRole('cell', { name: 'QAOS02' })).toBeVisible()
+      expect(await noPageOverflow(page), `${w}-${theme}`).toBe(true)
+      const scroll = await box.evaluate((el) => {
+        const sc = [...el.querySelectorAll('*')].filter((x) => ['auto', 'scroll'].includes(getComputedStyle(x).overflowX))
+        const c = el.querySelector('[data-slot="table-container"]') as HTMLElement
+        return { layers: sc.length, scrollable: c.scrollWidth > c.clientWidth + 1, isContainer: sc[0] === c }
+      })
+      expect(scroll, `${w}-${theme}`).toEqual({ layers: 1, scrollable: true, isContainer: true })
+      await dashShot(page, `u1-mobile-${w}-${theme}`)
     }
   })
 })

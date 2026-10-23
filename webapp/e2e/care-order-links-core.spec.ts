@@ -13,7 +13,7 @@ import {
   CARE_ORDER_LINKS_BUSY_BACKOFF_MS, CareOrderLinksDbError, parseBeginOpen, parseBeginSelect, parseChunk, parseCloseRetryHeader, parseComplete,
   runCareOrderLinks, type CareOrderLinksDeps,
 } from '../lib/care/orderLinks/run'
-import { appendNewById, parseMyOrderTasks, parseTaskOrderCounts } from '../lib/care/orderLinks/view'
+import { appendNewById, careImportCountState, careImportStale, careMyOrdersView, parseMyOrderTasks, parseTaskOrderCounts } from '../lib/care/orderLinks/view'
 import {
   CARE_MY_ORDER_SEARCH_MAX_IDS, CareOrderCursorError, CareOrderSearchTooBroadError, myOrderSearchPage, myOrderTaskPage, type CareOrderRpc,
 } from '../lib/care/orderLinks/my'
@@ -291,6 +291,88 @@ function plusUs(iso: string, us: number): string {
   const v = BigInt(Date.parse(head + 'Z')) * K + BigInt(frac) + BigInt(us)
   return new Date(Number(v / K)).toISOString().replace(/\.(\d{3})Z$/, (_, d) => `.${d}${String(v % K).padStart(3, '0')}Z`)
 }
+
+test.describe('care E — PM 22/10 P1 "số 0 giả": số đơn chỉ hiện khi phạm vi đã quét @desktop', () => {
+  test('thuần careImportCountState: trước sync / sang kỳ chưa quét ⇒ none; quét một phần ⇒ partial; quét đủ 0 đơn ⇒ full (0 thật)', () => {
+    const at = '2026-10-22T09:40:00.000000Z'
+    const cur = (p: Partial<Parameters<typeof careImportCountState>[0]>) => careImportCountState({ isCurrentPeriod: true, lastSuccessAt: at, tasks: 1381, covered: 1381, ...p })
+    expect(cur({ lastSuccessAt: null, covered: 0 }), 'trước lượt sync E đầu').toBe('none')
+    expect(cur({ lastSuccessAt: null }), 'chưa có lượt thành công ⇒ none dù có coverage').toBe('none')
+    expect(cur({ covered: 0 }), 'đã từng sync (kỳ trước) nhưng kỳ này chưa quét task nào').toBe('none')
+    expect(cur({ covered: 900 }), 'quét một phần').toBe('partial')
+    expect(cur({ partial: true }), 'RPC báo partial (task chậm / lượt lỗi giữ mốc cũ)').toBe('partial')
+    expect(cur({}), 'quét đủ — kể cả 0 đơn thật').toBe('full')
+    expect(cur({ tasks: 0, covered: 0 }), 'không có task ⇒ 0 / 0 là thật').toBe('full')
+    const past = (p: Partial<Parameters<typeof careImportCountState>[0]>) => careImportCountState({ isCurrentPeriod: false, periodStatus: 'closed', lastSuccessAt: at, tasks: 10, covered: 10, ...p })
+    expect(past({ periodStatus: 'none', covered: 0 }), 'kỳ cũ trước go-live E').toBe('none')
+    expect(past({}), 'kỳ cũ đã chốt đủ').toBe('full')
+    expect(past({ periodStatus: 'close_failed', covered: 7 }), 'kỳ cũ chốt lỗi một phần').toBe('partial')
+    // F1: truyền `now` ⇒ kỳ hiện tại quá 24 giờ từ lần thành công = một phần; kỳ cũ không xét thời gian.
+    const now = new Date('2026-10-23T09:40:01Z')
+    expect(cur({ now }), 'đúng 24 giờ + 1 s').toBe('partial')
+    expect(cur({ now: new Date('2026-10-23T09:39:59Z') }), 'chưa tới 24 giờ').toBe('full')
+    expect(past({ now }), 'kỳ cũ không xét 24 giờ').toBe('full')
+    expect(careImportStale(null, now)).toBe(false)
+  })
+  test('thuần careMyOrdersView (/care/my F1): gộp tóm tắt + trạng thái lượt CÙNG kỳ; nguồn lỗi / lệch kỳ ⇒ không kết luận; QA bỏ trạng thái thật', () => {
+    const at = '2026-10-22T09:40:00.000000Z'
+    const now = new Date('2026-10-22T12:00:00Z')
+    const summary = { tasks: 40, covered: 40, tasksWithOrders: 0, orders: 0, lastSuccessAt: at }
+    const status = { periodMonth: '2026-10-01', isCurrentPeriod: true, hasSynced: true, lastSuccessAt: at, lastFailed: false,
+      periodStatus: 'active' as const, closedAt: null, closedThrough: null, chain: null }
+    const v = (p: Partial<Parameters<typeof careMyOrdersView>[0]>) => careMyOrdersView({ summary, status, period: '2026-10-01', now, qa: false, ...p })
+    expect(v({}), 'quét đủ, lượt OK, 0 đơn THẬT').toEqual({ state: 'full', note: null })
+    expect(v({ summary: null }).state, 'tóm tắt lỗi').toBe('none')
+    expect(v({ status: 'error' }), 'RPC trạng thái lỗi ⇒ không kết luận + thử lại').toEqual({ state: 'none', note: 'Không đọc được trạng thái đồng bộ đơn — tải lại trang để thử lại.' })
+    expect(v({ status: null }).state, 'RPC trạng thái null').toBe('none')
+    expect(v({ status: { ...status, periodMonth: '2026-09-01' } }).state, 'lệch kỳ').toBe('none')
+    expect(v({ status: { ...status, isCurrentPeriod: false } }).state, 'trạng thái không phải kỳ hiện tại').toBe('none')
+    expect(v({ summary: { ...summary, covered: 0, lastSuccessAt: null } }).state, 'trước sync').toBe('none')
+    const failed = v({ status: { ...status, lastFailed: true } })
+    expect(failed.state).toBe('partial')
+    const DONE = 'Lượt đồng bộ hoàn tất gần nhất: 16:40 22/10/2026; số đang hiện có thể gồm task đã cập nhật sau mốc này, chưa phải số đầy đủ của cả kỳ.'
+    expect(failed.note).toBe(`Chưa cập nhật — lượt đồng bộ đơn gần nhất chưa thành công. ${DONE}`)
+    const stale = v({ now: new Date('2026-10-23T10:00:00Z') })
+    expect(stale.state).toBe('partial')
+    expect(stale.note).toBe(`Chưa cập nhật quá 24 giờ. ${DONE}`)
+    const part = v({ summary: { ...summary, covered: 30 } })
+    expect(part.state).toBe('partial')
+    expect(part.note).toBe(`Đang cập nhật một phần — còn khách chưa được quét đơn. ${DONE}`)
+    // PM 23/10 P1-1: hoàn tất T0 = 200 task có đơn → lượt T1 ghi chunk thêm 5 task rồi lỗi ⇒ đọc 205; hiện như một phần, KHÔNG nói
+    // 205 là số "theo" mốc T0.
+    const t1 = v({ summary: { ...summary, tasks: 400, covered: 400, tasksWithOrders: 205, orders: 260 }, status: { ...status, lastFailed: true } })
+    expect(t1.state).toBe('partial')
+    expect(t1.note).toContain('Lượt đồng bộ hoàn tất gần nhất: 16:40 22/10/2026')
+    expect(t1.note).toContain('có thể gồm task đã cập nhật sau mốc này')
+    expect(t1.note).not.toMatch(/theo lần thành công|số theo|cập nhật lúc/)
+    // QA (fixture is_test): không đọc / không áp trạng thái lượt THẬT — lượt thật lỗi hay quá hạn không đổi kết quả fixture.
+    expect(v({ qa: true, status: null }), 'QA bỏ trạng thái thật').toEqual({ state: 'full', note: null })
+    expect(v({ qa: true, status: 'error', now: new Date('2026-10-25T00:00:00Z') }).state, 'QA không xét 24 giờ của lượt thật').toBe('full')
+    expect(v({ qa: true, status: null, summary: { ...summary, covered: 0 } }).state, 'QA fixture chưa quét').toBe('none')
+  })
+  test('nguồn: 3 bề mặt E (/care/my, /care/orders, /care/reports) đều qua careImportCountState trước khi hiện số', () => {
+    const rd = (f: string) => fs.readFileSync(path.resolve(__dirname, '..', f), 'utf8')
+    const my = rd('app/(dashboard)/care/my/page.tsx')
+    expect(my).toMatch(/careMyOrdersView\(\{ summary: orderSummary, status: orderStatus, period, now, qa: qaScope \}\)/)
+    expect(my).toMatch(/ui && !qaScope \? loadImportOrderState\(period\)\.catch\(\(\) => 'error' as const\)/)
+    expect(my).toMatch(/ordersState !== 'none'/)
+    const orders = rd('components/care/CareOrdersScreen.tsx')
+    expect(orders).toMatch(/<CareImportOrdersSummary /)
+    // audit vòng 2 P1-2: nối dây trạng thái lượt (bàn thử không bắt được nếu trang bỏ status / catch).
+    expect(orders).toMatch(/loadImportOrderState\(scoped\.month\)\.catch\(\(\) => 'error' as const\)/)
+    expect(orders).toMatch(/<CareImportOrdersSummary list=\{list\} status=\{status\} now=\{new Date\(\)\}/)
+    const reports = rd('app/(dashboard)/care/reports/page.tsx')
+    expect(reports).toMatch(/loadImportOrderState\(f\.month\)\.catch\(\(\) => 'error' as const\)/)
+    expect(reports).toMatch(/<CareImportOrdersBlock state=\{importState\} /)
+    // PM 23/10 P1-1: không bề mặt E nào gán số cho mốc thành công cũ.
+    for (const f of ['lib/care/orderLinks/view.ts', 'components/care/CareImportOrdersSummary.tsx', 'components/care/CareImportOrdersBlock.tsx']) {
+      expect(rd(f), f).not.toMatch(/theo lần thành công|giữ dữ liệu đến lần thành công/)
+    }
+    expect(rd('components/care/CareOrdersScreen.tsx')).not.toMatch(/task có đơn sau import/)
+    expect(rd('components/care/CareImportOrdersSummary.tsx')).toMatch(/careImportCountState\(/)
+    expect(rd('components/care/CareImportOrdersBlock.tsx')).toMatch(/state\.chain && cs !== 'none'/)
+  })
+})
 
 test.describe('care E3 r1.1 — chip "Có đơn xác thực" của dược sĩ: keyset + tìm trong nhóm (PM E1–E3 r1 P1) @desktop', () => {
   test('thuần: nối trang bỏ trùng; parse fail-closed; counts chia khối ≤ 50, cùng thứ tự RPC, trang theo số', async () => {

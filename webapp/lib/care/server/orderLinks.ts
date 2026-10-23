@@ -25,6 +25,8 @@ function cursorKey(): string {
 }
 /** QA local: chỉ task is_test của batch marker; production: NOT is_test (careDataScope). */
 const qaBatchId = (): string | null => { const s = careDataScope(); return s.kind === 'qa' ? s.batchId : null }
+/** Đang ở phạm vi QA (fixture is_test) — /care/my không áp trạng thái lượt đồng bộ THẬT cho fixture (PM 22/10 F1). */
+export const isCareOrderQaScope = (): boolean => qaBatchId() !== null
 const after = (userId: string, ctx: string, cursor: string | null | undefined) => {
   if (!cursor) return null
   const v = verifyCareCursor(cursorKey(), cursor, { u: userId, c: ctx })

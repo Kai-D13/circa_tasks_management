@@ -14,6 +14,7 @@ import { CARE_RECORD_MESSAGES, CARE_PROOF_PUBLIC_BASE } from '@/lib/care/my'
 import { maskVnPhone } from '@/lib/affiliate/phone'
 import { CARE_OUTCOME_META, isCareOutcome } from '@/lib/care/outcome'
 import { CareTaskOrdersSection } from '@/components/care/CareTaskOrdersSection'
+import { careMyOrdersView, type CareImportOrderState, type CareMyOrderSummary, type CareMyOrdersView } from '@/lib/care/orderLinks/view'
 
 // Dev-only bàn thử UI màn dược sĩ CRM (B4). 100% DỮ LIỆU GIẢ — DB chưa có migration 114.
 // Cùng cổng /ui-catalog: UI_CATALOG=1 (Coolify không đặt ⇒ prod 404) + super, ở page VÀ
@@ -26,6 +27,21 @@ import { CareTaskOrdersSection } from '@/components/care/CareTaskOrdersSection'
 
 const S = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const TASK = S(700)
+// PM 22/10 F1: tóm tắt + trạng thái lượt GIẢ, gộp bằng careMyOrdersView như /care/my thật (mốc "bây giờ" cố định để ảnh ổn định).
+const CATALOG_NOW = new Date('2026-10-15T08:00:00.000Z')
+const OK_AT = '2026-10-15T02:30:00.000000Z'
+function catalogOrdersView(ostate: string): CareMyOrdersView {
+  const summary: CareMyOrderSummary = { tasks: 40, covered: 40, tasksWithOrders: 21, orders: 30, lastSuccessAt: OK_AT }
+  const status: CareImportOrderState = { periodMonth: '2026-10-01', isCurrentPeriod: true, hasSynced: true, lastSuccessAt: OK_AT, lastFailed: false,
+    periodStatus: 'active', closedAt: null, closedThrough: null, chain: null }
+  const go = (s: CareMyOrderSummary, st: CareImportOrderState | 'error', now = CATALOG_NOW) => careMyOrdersView({ summary: s, status: st, period: '2026-10-01', now, qa: false })
+  if (ostate === 'none') return go({ ...summary, covered: 0, tasksWithOrders: 0, orders: 0, lastSuccessAt: null }, { ...status, hasSynced: false, lastSuccessAt: null })
+  if (ostate === 'partial') return go({ ...summary, covered: 30 }, status)
+  if (ostate === 'failed') return go(summary, { ...status, lastFailed: true })
+  if (ostate === 'stale') return go(summary, status, new Date(CATALOG_NOW.getTime() + 2 * 86_400_000))
+  if (ostate === 'unknown') return go(summary, 'error')
+  return go(summary, status)
+}
 const PHONES = Array.from({ length: 6 }, (_, i) => `039000001${i}`)
 const ROWS: CareMyRow[] = [
   { id: S(701), customer_name: 'KH QA quá hạn', phone_masked: maskVnPhone(PHONES[0]), status: 'open', last_outcome: 'CALLBACK', last_interaction_at: '2026-10-03T03:00:00Z', next_action_date: '2026-10-05', due_date: '2026-10-31' },
@@ -144,15 +160,22 @@ export default async function CareMyCatalogPage({ searchParams }: { searchParams
   const qa = sp.qa === '1'
   const withOrders = sp.orders === '1'
   const BASE = '/ui-catalog/care-my'
+  // PM 22/10 F1 "số 0 giả": `&ostate=` đưa dữ liệu giả qua CHÍNH careMyOrdersView (như trang thật) — none = chưa quét;
+  // partial = quét một phần; failed = lượt gần nhất lỗi; stale = quá 24 giờ; unknown = RPC trạng thái lỗi; mặc định full.
+  const ostate = typeof sp.ostate === 'string' && ['none', 'partial', 'failed', 'stale', 'unknown'].includes(sp.ostate) ? sp.ostate : 'full'
+  const view = catalogOrdersView(ostate)
+  const known = view.state !== 'none'
   if (frame === 'list' && withOrders && sp.view === 'orders') {
-    const n = orderN(sp.n)
+    const n = known ? orderN(sp.n) : 0
     return (
       <CareMyScreen screen="list">
         <CareMyHeader screen="list" qa={qa} />
         <div className="px-4 pt-1 pb-4 md:p-0" data-testid="catalog-care-my-home">
           <CareMyHome summary={SUMMARY} rows={orderRows(n).slice(0, 20)} total={n} filter="all" page={1}
             pageSize={20} todayISO="2026-10-10" search={fakeSearch} basePath={BASE}
-            ordersChip={{ count: n, active: true }} ordersList={{ next: `${n}:20`, total: n, loadMore: fakeMoreMyOrders }} />
+            ordersChip={{ count: known ? n : undefined, active: true }}
+            ordersList={{ next: known ? `${n}:20` : null, total: known ? n : null, loadMore: fakeMoreMyOrders, state: view.state }}
+            ordersNote={view.note} />
         </div>
       </CareMyScreen>
     )
@@ -164,7 +187,7 @@ export default async function CareMyCatalogPage({ searchParams }: { searchParams
         <div className="px-4 pt-1 pb-4 md:p-0" data-testid="catalog-care-my-home">
           <CareMyHome summary={SUMMARY} rows={ROWS} total={ROWS.length} filter="all" page={1}
             pageSize={20} todayISO="2026-10-10" search={fakeSearch} basePath={BASE}
-            ordersChip={withOrders ? { count: 2, active: false } : undefined} />
+            ordersChip={withOrders && known ? { count: 2, active: false } : undefined} ordersNote={withOrders ? view.note : null} />
         </div>
       </CareMyScreen>
     )

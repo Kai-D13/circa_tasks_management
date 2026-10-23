@@ -3,6 +3,7 @@ import { Download, Users } from 'lucide-react'
 import { EmptyState } from '@/components/ds/EmptyState'
 import { StatusBadge } from '@/components/ds/StatusBadge'
 import { DataTableShell } from '@/components/ds/DataTableShell'
+import { CareReportStoreGroup } from '@/components/care/CareReportStoreGroup'
 import { buttonVariants } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { cn } from '@/lib/utils'
@@ -120,7 +121,8 @@ function Num({ value, link, scope, storeId, assigneeId, muted }: {
   if (!link || value <= 0) return <span className={cn((muted || value === 0) && 'text-muted-foreground')}>{fmt(value)}</span>
   const status = CARE_REPORT_LINK_STATUS[link] as CareStatusFilter | null
   const href = careFilterHref('/care/tasks', { month: scope.month, storeId: storeId ?? scope.storeId, assigneeId: assigneeId ?? scope.assigneeId, status })
-  return <Link href={href} className="underline decoration-muted-foreground/50 underline-offset-2 hover:decoration-foreground">{fmt(value)}</Link>
+  // U2: prefetch={false} — mở nhóm POS làm hiện hàng loạt link; không prefetch để toggle không tạo request.
+  return <Link href={href} prefetch={false} className="underline decoration-muted-foreground/50 underline-offset-2 hover:decoration-foreground">{fmt(value)}</Link>
 }
 
 type OrderCell = (n: number, storeId?: string | null, assigneeId?: string | null) => React.ReactNode
@@ -175,7 +177,7 @@ export function CareReportView({ monthLabel, lines, totals, contacted, orderStat
   const orderCell: OrderCell = (v, storeId, assigneeId) => {
     if (!hasOrders) return '—'
     if (!conversionHref || v <= 0) return fmt(v)
-    return <Link href={conversionHref(storeId ?? scope.storeId, assigneeId ?? scope.assigneeId)} className="underline decoration-muted-foreground/50 underline-offset-2 hover:decoration-foreground">{fmt(v)}</Link>
+    return <Link href={conversionHref(storeId ?? scope.storeId, assigneeId ?? scope.assigneeId)} prefetch={false} className="underline decoration-muted-foreground/50 underline-offset-2 hover:decoration-foreground">{fmt(v)}</Link>
   }
   const groups = careReportGroups(lines)
   return (
@@ -245,10 +247,21 @@ export function CareReportView({ monthLabel, lines, totals, contacted, orderStat
                   <TableHead>Tiến độ</TableHead>
                 </TableRow>
               </TableHeader>
-              <TableBody>
-                {groups.map((g) => (
-                  <GroupRows key={g.storeId} g={g} scope={scope} orderCell={orderCell} />
-                ))}
+              {/* PM 22/10 U2: mỗi POS = island thu gọn (hai <tbody> cùng cấp); hàng Tổng <tbody> riêng, luôn hiện. Lọc theo
+                  dược sĩ ⇒ nhóm tự mở; `key` gồm bộ lọc ⇒ đổi kỳ / store / dược sĩ về mặc định. */}
+              {groups.map((g) => (
+                <CareReportStoreGroup key={`${g.storeId}|${scope.month}|${scope.storeId ?? ''}|${scope.assigneeId ?? ''}`}
+                  groupId={`care-report-g-${g.storeId}`} title={g.storeName} count={g.lines.length} defaultOpen={scope.assigneeId !== null}
+                  label={<><span className="text-muted-foreground">{g.storeCode}</span>{g.storeName && <> · {g.storeName}</>}</>}
+                  storeCells={<Cells t={g.totals} scope={scope} storeId={g.storeId} orderCell={orderCell} bold />}
+                  assigneeRows={g.lines.map((l) => (
+                    <TableRow key={`${l.storeId}|${l.assigneeId}`}>
+                      <TableCell className="max-w-[240px] truncate pl-8" title={l.assigneeName}>{l.assigneeName}</TableCell>
+                      <Cells t={l} scope={scope} storeId={l.storeId} assigneeId={l.assigneeId} orderCell={orderCell} />
+                    </TableRow>
+                  ))} />
+              ))}
+              <TableBody data-testid="care-report-total-body">
                 <TableRow className="bg-muted/50 font-semibold" data-testid="care-report-total">
                   <TableCell>Tổng</TableCell>
                   <Cells t={totals} scope={scope} orderCell={orderCell} bold />
@@ -259,24 +272,5 @@ export function CareReportView({ monthLabel, lines, totals, contacted, orderStat
         )}
       </section>
     </div>
-  )
-}
-
-function GroupRows({ g, scope, orderCell }: { g: ReturnType<typeof careReportGroups>[number]; scope: CareReportLinkScope; orderCell: OrderCell }) {
-  return (
-    <>
-      <TableRow className="bg-muted/30" data-testid="care-report-store">
-        <TableCell className="font-semibold whitespace-nowrap" title={g.storeName}>
-          <span className="text-muted-foreground">{g.storeCode}</span>{g.storeName && <> · {g.storeName}</>}
-        </TableCell>
-        <Cells t={g.totals} scope={scope} storeId={g.storeId} orderCell={orderCell} bold />
-      </TableRow>
-      {g.lines.map((l) => (
-        <TableRow key={`${l.storeId}|${l.assigneeId}`}>
-          <TableCell className="max-w-[240px] truncate pl-8" title={l.assigneeName}>{l.assigneeName}</TableCell>
-          <Cells t={l} scope={scope} storeId={l.storeId} assigneeId={l.assigneeId} orderCell={orderCell} />
-        </TableRow>
-      ))}
-    </>
   )
 }

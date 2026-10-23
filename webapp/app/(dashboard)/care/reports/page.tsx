@@ -36,7 +36,7 @@ export default async function CareReportsPage({ searchParams }: { searchParams: 
     // E3 (cờ UI): trạng thái đơn sau import + parity cohort ⇒ ô "Có đơn" thành link chỉ khi cohort RPC = tổng báo cáo.
     const ui = careOrderLinksUiOn() && !d.storeOutOfScope
     const [importState, conv] = ui
-      ? await Promise.all([loadImportOrderState(f.month).catch(() => null), loadConversionList(g.userId, scoped).catch(() => null)])
+      ? await Promise.all([loadImportOrderState(f.month).catch(() => 'error' as const), loadConversionList(g.userId, scoped).catch(() => null)])
       : [null, null]
     const conversionHref = conv && conv.list.cohortTotal === d.totals.convertedTasks
       ? (storeId: string | null, assigneeId: string | null) => careFilterHref('/care/orders/care', { month: f.month, storeId, assigneeId })

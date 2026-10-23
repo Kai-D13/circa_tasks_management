@@ -1,6 +1,8 @@
 import Link from 'next/link'
-import { ArrowRight, ClipboardList } from 'lucide-react'
+import { ArrowRight, ChevronRight, ClipboardList } from 'lucide-react'
+import { DataTableShell } from '@/components/ds/DataTableShell'
 import { EmptyState } from '@/components/ds/EmptyState'
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { careFilterHref, type CareStatusFilter, type CareTotals } from '@/lib/care/browse'
 import { CARE_DASHBOARD_LINK_STATUS, carePct, type CareDashboardLinkKey, type CareOrderDataState } from '@/lib/care/reports'
 import { cn } from '@/lib/utils'
@@ -17,6 +19,10 @@ export interface CareDashboardStore { code: string; name: string; totals: CareTo
 
 const fmt = (n: number) => n.toLocaleString('vi-VN')
 const PANEL = 'space-y-3 rounded-care-panel border border-care-line bg-card p-4'
+// U1: ô bảng số theo cửa hàng — padding px literal (root 15 px ⇒ rem lệch); tiêu đề được xuống dòng, số không.
+const TH = 'h-auto px-[12px] py-[8px] align-bottom whitespace-normal'
+const TD = 'px-[12px] py-[8px] whitespace-nowrap'
+const NUM = 'text-right tabular-nums'
 
 const SEGMENTS = [
   { key: 'completed', label: 'Hoàn thành', cls: 'bg-status-success' },
@@ -115,33 +121,14 @@ export function CareDashboardView({
               </div>
             ))}
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-x-4">
-            <details className="text-sm">
-              <summary className="min-h-[44px] cursor-pointer py-2 text-muted-foreground md:min-h-0">Xem bảng số theo cửa hàng</summary>
-              <div className="overflow-x-auto">
-                <table className="mt-2 w-full text-sm">
-                  <thead className="text-xs text-muted-foreground"><tr>
-                    <th className="py-1 text-left font-medium">Cửa hàng</th><th className="text-right font-medium">Task</th>
-                    {SEGMENTS.map((g) => <th key={g.key} className="text-right font-medium">{g.label}</th>)}
-                    <th className="text-right font-medium">Từng trễ hẹn</th>
-                  </tr></thead>
-                  <tbody>{stores.map((s) => (
-                    <tr key={s.code} className="border-t">
-                      <td className="py-1">{s.code}</td><td className="text-right tabular-nums">{fmt(s.totals.tasks)}</td>
-                      {SEGMENTS.map((g) => <td key={g.key} className="text-right tabular-nums">{fmt(s.totals[g.key])}</td>)}
-                      <td className="text-right tabular-nums">{fmt(s.totals.overdueInPeriod)}</td>
-                    </tr>
-                  ))}</tbody>
-                </table>
-              </div>
-            </details>
-            {scope && (
+          {scope && (
+            <div className="flex justify-end">
               <Link href={careFilterHref('/care/reports', { month: scope.month, storeId: scope.storeId })}
                 className="inline-flex min-h-[44px] items-center gap-1 text-sm font-medium text-primary underline-offset-2 hover:underline md:min-h-0">
                 Xem báo cáo theo dược sĩ <ArrowRight className="size-4" aria-hidden />
               </Link>
-            )}
-          </div>
+            </div>
+          )}
         </section>
 
         <section className={PANEL} aria-labelledby="care-outcomes">
@@ -173,6 +160,39 @@ export function CareDashboardView({
           )}
         </section>
       </div>
+
+      {/* PM 22/10 U1: bảng số theo cửa hàng là khối RỘNG TOÀN VÙNG dưới hai panel (không ép trong cột 3fr), mặc định đóng;
+          mở / đóng bằng <details> gốc (chuột, Enter, Space — không gọi mạng). Ô cách nhau ≥ 12 px ngang / 8 px dọc (px literal:
+          root 15 px), số căn phải tabular-nums không xuống dòng, tiêu đề dài được xuống dòng, mã POS không cắt. Màn hẹp: CHỈ vùng
+          bảng cuộn ngang (table-container của ui/table — một lớp cuộn), trang không cuộn ngang. */}
+      <details className="group space-y-3 rounded-care-panel border border-care-line bg-card p-4" data-testid="care-store-table">
+        <summary className="flex min-h-[44px] cursor-pointer list-none items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground md:min-h-[36px] [&::-webkit-details-marker]:hidden">
+          <ChevronRight className="size-4 shrink-0 transition-transform group-open:rotate-90" aria-hidden />
+          Xem bảng số theo cửa hàng
+        </summary>
+        <DataTableShell>
+          <Table className="min-w-[760px]">
+            <TableHeader>
+              <TableRow>
+                <TableHead scope="col" className={TH}>Cửa hàng</TableHead>
+                <TableHead scope="col" className={cn(TH, 'text-right')}>Task</TableHead>
+                {SEGMENTS.map((g) => <TableHead key={g.key} scope="col" className={cn(TH, 'text-right')}>{g.label}</TableHead>)}
+                <TableHead scope="col" className={cn(TH, 'text-right')}>Từng trễ hẹn</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {stores.map((s) => (
+                <TableRow key={s.code}>
+                  <TableCell className={cn(TD, 'font-medium')}>{s.code}</TableCell>
+                  <TableCell className={cn(TD, NUM)}>{fmt(s.totals.tasks)}</TableCell>
+                  {SEGMENTS.map((g) => <TableCell key={g.key} className={cn(TD, NUM)}>{fmt(s.totals[g.key])}</TableCell>)}
+                  <TableCell className={cn(TD, NUM)}>{fmt(s.totals.overdueInPeriod)}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </DataTableShell>
+      </details>
     </div>
   )
 }

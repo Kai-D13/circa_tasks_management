@@ -9,6 +9,9 @@ import { CareReportOutcomesView } from '@/components/care/CareReportOutcomes'
 import { CareContactedKpiLive, CareContactedPaceLive, CareReportExtrasProvider, CareReportOutcomesLive } from '@/components/care/CareReportExtras'
 import { CareDashboardView } from '@/components/care/CareDashboardView'
 import { CareFiltersBar } from '@/components/care/CareFiltersBar'
+import { CareReportStoreGroup } from '@/components/care/CareReportStoreGroup'
+import { DataTableShell } from '@/components/ds/DataTableShell'
+import { Table, TableCell } from '@/components/ui/table'
 import { recentCarePeriods, type CareOutcomeKey, type CareReportRow } from '@/lib/care/browse'
 import {
   careReportConvertedTotal, careReportExtrasKey, careReportKey, careReportLines, careReportSummary, carePeriodElapsed,
@@ -44,6 +47,16 @@ const STALE: CareOrderDataState = { kind: 'synced', lastSuccessAt: '2026-10-19T2
 const EXPORT = '/api/export/care?month=2026-10'
 const TODAY = '2026-10-13'
 const SCOPE: CareReportLinkScope = { month: '2026-10-01', storeId: null, assigneeId: null }
+// PM 22/10 U2: `?frame=report-groups[&assignee=1]` — 5 POS (1 / 2 / 3 / 1 / 4 dược sĩ) để kiểm thu gọn theo POS; `assignee=1`
+// = đang lọc theo một dược sĩ (nhóm chứa kết quả tự mở). Nhóm 0 dược sĩ không sinh từ careReportGroups — kiểm riêng island.
+const G_STORES = new Map(Array.from({ length: 5 }, (_, i) => [S(201 + i), { code: `QAOS1${i}`, name: `QA nhóm ${i + 1}` }] as const))
+const G_SIZES = [1, 2, 3, 1, 4]
+const G_NAMES = new Map(G_SIZES.flatMap((n, i) => Array.from({ length: n }, (_, j) => [S(2000 + i * 10 + j), `QA DS ${i + 1}${'abcd'[j]}`] as const)))
+const G_ROWS: CareReportRow[] = G_SIZES.flatMap((n, i) => Array.from({ length: n }, (_, j) => ({
+  store_id: S(201 + i), assignee_id: S(2000 + i * 10 + j), tasks_total: 20 + i * 5 + j, completed: 10 + j, open_not_cared: 5 + i,
+  open_in_progress: 5 + 4 * i, overdue_in_period: j, closed_unfinished: 0, converted_tasks: 3 + j, // khách = HT + chưa CS + đang theo dõi
+})))
+const G_LINES = careReportLines(G_ROWS, { stores: G_STORES, names: G_NAMES })
 
 const catalogOn = () => process.env.UI_CATALOG === '1'
 /** Cổng cho action giả: cùng điều kiện page (UI_CATALOG + super) — endpoint action tồn tại trong build. */
@@ -135,6 +148,28 @@ export default async function CareReportsCatalogPage({ searchParams }: { searchP
             </div>
           )} />
         <Report lines={LINES} state={sp.orders === 'synced' ? SYNCED : NONE} />
+      </div>
+    )
+  }
+
+  if (sp.frame === 'report-groups') {
+    const one = sp.assignee === '1' ? S(2011) : null
+    const lines = one ? G_LINES.filter((l) => l.assigneeId === one) : G_LINES
+    const totals = careReportSummary(lines)
+    return (
+      <div data-layout-width="fluid" data-care-browse className="space-y-4 p-4 md:p-6" data-testid="catalog-frame-report-groups">
+        <PageHeader title="Báo cáo chăm sóc khách hàng" icon={BarChart3} actions={<CareReportExportLink href={EXPORT} />} />
+        <CareReportView monthLabel="10/2026" lines={lines} totals={totals} contacted={{ count: totals.contacted }} orderState={SYNCED}
+          elapsed={carePeriodElapsed('2026-10-01', TODAY)} dueLabel="31/10/2026" scope={{ ...SCOPE, assigneeId: one }} />
+        <section data-testid="catalog-zero-group" className="space-y-2">
+          <h2 className="text-sm font-medium text-muted-foreground">Nhóm POS 0 dược sĩ (island riêng — careReportGroups không sinh nhóm rỗng)</h2>
+          <DataTableShell>
+            <Table>
+              <CareReportStoreGroup groupId="care-report-g-zero" label="QAOS99 · QA nhóm rỗng" count={0} defaultOpen
+                storeCells={<TableCell className="text-right tabular-nums">0</TableCell>} assigneeRows={null} />
+            </Table>
+          </DataTableShell>
+        </section>
       </div>
     )
   }

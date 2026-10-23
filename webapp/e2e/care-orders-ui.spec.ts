@@ -14,6 +14,8 @@ const SHOTS = path.resolve(__dirname, '..', 'qa-artifacts', 'care-e3-ui')
 const ROOT = path.resolve(__dirname, '..')
 const read = (f: string) => fs.readFileSync(path.join(ROOT, f), 'utf8').replace(/\r\n/g, '\n')
 const DHC = /DHC-QA-\d+/
+/** PM 23/10 P1-1: câu mốc "lượt đồng bộ hoàn tất gần nhất" (careImportDoneText) — số có thể mới hơn mốc. */
+const done = (t: string) => `Lượt đồng bộ hoàn tất gần nhất: ${t}; số đang hiện có thể gồm task đã cập nhật sau mốc này, chưa phải số đầy đủ của cả kỳ.`
 
 async function open(page: Page, url: string, testId: string, theme: 'light' | 'dark' = 'light') {
   await page.goto(url)
@@ -107,6 +109,124 @@ test.describe('care E3 — đơn xác thực sau import (catalog, dữ liệu gi
     for (const k of ['none', 'synced', 'stale', 'closed']) await expect(page.getByTestId(`catalog-block-${k}`)).toContainText('chưa phải xác nhận từ N3')
     await shot(page, 'catalog-care-orders', 'catalog-desktop-dark')
   })
+
+  // PM 22/10 P1 "số 0 giả": trước lượt sync E đầu / sang kỳ chưa quét KHÔNG hiện "0 / N"; 0 chỉ hợp lệ khi đã quét đủ; quét một phần ghi rõ.
+  test('PM 22/10 số 0 giả — khối /care/reports (super): chưa sync / kỳ mới chưa quét ⇒ không "0 / N"; quét một phần ⇒ ghi rõ', async ({ page }) => {
+    await open(page, '/ui-catalog/care-orders', 'catalog-care-orders')
+    for (const [k, n] of [['nonechain', '1.381'], ['newperiod', '1.402']] as const) {
+      const b = page.getByTestId(`catalog-block-${k}`)
+      await expect(b, k).toContainText('Chưa có dữ liệu đơn')
+      await expect(b, k).toContainText('Sẽ có sau lượt đồng bộ đơn sau import đầu tiên của kỳ.')
+      await expect(b, k).not.toContainText(`/ ${n}`)
+      await expect(b, k).not.toContainText('task đã quét')
+    }
+    const p = page.getByTestId('catalog-block-partialchain')
+    await expect(p).toContainText('150 / 1.384 task có đơn N3 sau mốc import')
+    await expect(p).toContainText('900 task đã quét — đang cập nhật một phần')
+    // 'synced' còn 4 / 1.384 task chưa quét ⇒ cũng là một phần; lượt gần nhất lỗi (số giữ mốc cũ) dù đã quét đủ ⇒ một phần;
+    // kỳ cũ đã chốt quét đủ ⇒ không nhãn.
+    await expect(page.getByTestId('catalog-block-synced')).toContainText('1.380 task đã quét — đang cập nhật một phần')
+    await expect(page.getByTestId('catalog-block-failedfull')).toContainText('1.384 task đã quét — đang cập nhật một phần')
+    await expect(page.getByTestId('catalog-block-closed')).toContainText('301 / 1.290 task có đơn N3 sau mốc import')
+    await expect(page.getByTestId('catalog-block-closed')).not.toContainText('đang cập nhật một phần')
+    // F1: lượt cuối OK nhưng quá 24 giờ ⇒ "Chưa cập nhật"; số là một phần. PM 23/10 P1-1: mốc = lượt đồng bộ HOÀN TẤT gần nhất,
+    // số có thể mới hơn mốc — không gán số cho mốc ấy.
+    const st = page.getByTestId('catalog-block-stalechain')
+    await expect(st).toContainText('Chưa cập nhật')
+    await expect(st).toContainText(`Chưa cập nhật quá 24 giờ. ${done('09:30 13/10/2026')}`)
+    await expect(st).toContainText('1.384 task đã quét — đang cập nhật một phần')
+    const ff = page.getByTestId('catalog-block-failedfull')
+    await expect(ff).toContainText(`Chưa cập nhật — lượt đồng bộ đơn gần nhất chưa thành công. ${done('09:30 15/10/2026')}`)
+    for (const k of ['stalechain', 'failedfull', 'synced']) await expect(page.getByTestId(`catalog-block-${k}`), k).not.toContainText(/theo lần thành công|giữ dữ liệu đến/)
+    await expect(page.getByTestId('catalog-block-synced')).toContainText('Lượt đồng bộ hoàn tất gần nhất: 09:30 15/10/2026.')
+    await expect(page.getByTestId('catalog-block-synced')).not.toContainText('quá 24 giờ')
+    // F1 (audit cuối P2): không đọc được trạng thái ⇒ nói rõ + thử lại, không số, không ẩn im lặng.
+    const er = page.getByTestId('catalog-block-error')
+    await expect(er).toContainText('Không đọc được trạng thái đơn sau import — tải lại trang để thử lại.')
+    await expect(er).not.toContainText('task có đơn')
+    // audit vòng 2: RPC trả NULL ⇒ cùng thông báo, không ẩn im lặng khối.
+    const nu = page.getByTestId('catalog-block-null')
+    await expect(nu).toContainText('Không đọc được trạng thái đơn sau import — tải lại trang để thử lại.')
+    await expect(nu).not.toContainText('task có đơn')
+  })
+
+  test('PM 22/10 số 0 giả — /care/orders: trước sync không số / không "Chưa có task có đơn"; 0 đơn thật khi quét đủ; một phần ghi rõ', async ({ page }) => {
+    await open(page, '/ui-catalog/care-orders?frame=orders&ostate=none', 'catalog-frame-orders')
+    const state = page.getByTestId('care-orders-state')
+    await expect(state).toHaveAttribute('data-count-state', 'none')
+    await expect(state).toContainText('Chưa có dữ liệu đơn')
+    await expect(state).not.toContainText('task có đơn sau import')
+    await expect(page.getByTestId('catalog-frame-orders')).not.toContainText('/ 1.381')
+    await expect(page.getByTestId('catalog-frame-orders')).not.toContainText('Chưa có task có đơn sau import')
+    await expect(page.getByTestId('care-orders-partial')).toHaveCount(0)
+
+    await open(page, '/ui-catalog/care-orders?frame=orders&ostate=zero', 'catalog-frame-orders')
+    await expect(state).toHaveAttribute('data-count-state', 'full')
+    await expect(state).toContainText('0 / 120 task có đơn sau import')
+    await expect(state).not.toContainText('Chưa có dữ liệu đơn')
+    await expect(page.getByTestId('catalog-frame-orders')).toContainText('Chưa có task có đơn sau import')
+    await expect(page.getByTestId('catalog-frame-orders')).toContainText('Không thấy đơn theo dữ liệu đã quét.')
+
+    await open(page, '/ui-catalog/care-orders?frame=orders&ostate=partial', 'catalog-frame-orders')
+    await expect(state).toHaveAttribute('data-count-state', 'partial')
+    await expect(state).toContainText('4 / 120 task có đơn sau import')
+    await expect(page.getByTestId('care-orders-partial')).toContainText('Đang cập nhật một phần')
+    // F1 (audit cuối P1-1): quét đủ nhưng lượt gần nhất lỗi / quá 24 giờ ⇒ "Chưa cập nhật"; PM 23/10 P1-1: mốc = lượt đồng bộ hoàn
+    // tất gần nhất (số có thể mới hơn) + mốc quét từng task.
+    const RANGE = ' Mốc quét từng task: 19:30 14/10/2026 – 09:30 15/10/2026.'
+    for (const [o, txt] of [['failed', `Chưa cập nhật — lượt đồng bộ đơn gần nhất chưa thành công. ${done('09:30 15/10/2026')}${RANGE}`],
+      ['stale', `Chưa cập nhật quá 24 giờ. ${done('09:30 13/10/2026')}${RANGE}`]] as const) {
+      await open(page, `/ui-catalog/care-orders?frame=orders&ostate=${o}`, 'catalog-frame-orders')
+      await expect(state, o).toHaveAttribute('data-count-state', 'partial')
+      await expect(state, o).toContainText('Chưa cập nhật')
+      await expect(state, o).toContainText('4 / 120 task có đơn sau import')
+      await expect(page.getByTestId('care-orders-stale'), o).toHaveText(txt)
+    }
+    await open(page, '/ui-catalog/care-orders?frame=orders&ostate=zero', 'catalog-frame-orders')
+    await expect(page.getByTestId('care-orders-stale'), 'quét đủ, lượt OK, trong 24 giờ ⇒ không cảnh báo').toHaveCount(0)
+  })
+
+  test('PM 23/10 P1-1 — /care/orders: hoàn tất T0 → lượt T1 ghi chunk rồi lỗi ⇒ số hiện như một phần, không gán cho mốc T0', async ({ page }) => {
+    await open(page, '/ui-catalog/care-orders?frame=orders&ostate=failedchunk', 'catalog-frame-orders')
+    const state = page.getByTestId('care-orders-state')
+    await expect(state).toHaveAttribute('data-count-state', 'partial')
+    await expect(state).toContainText('5 / 120 task có đơn sau import · lượt đồng bộ hoàn tất gần nhất 09:30 15/10/2026')
+    await expect(state).toContainText('Chưa cập nhật')
+    // Banner một phần đã có mốc riêng từng task (tới 12:30 — sau T0) ⇒ ghi chú lượt lỗi không lặp mốc.
+    await expect(page.getByTestId('care-orders-stale')).toHaveText(`Chưa cập nhật — lượt đồng bộ đơn gần nhất chưa thành công. ${done('09:30 15/10/2026')}`)
+    await expect(page.getByTestId('care-orders-partial')).toContainText('(09:30 15/10/2026 – 12:30 15/10/2026)')
+    const frame = page.getByTestId('catalog-frame-orders')
+    await expect(frame).not.toContainText(/theo lần thành công|giữ dữ liệu đến|cập nhật lúc/)
+    await expect(page.getByTestId('care-import-orders-table').locator('tbody tr')).toHaveCount(4)
+  })
+
+  test('PM 23/10 P1-2 — /care/orders: không đọc được trạng thái lượt (lỗi / NULL / lệch kỳ) ⇒ giữ dòng, KHÔNG tổng N / M; rỗng không kết luận', async ({ page }) => {
+    const state = page.getByTestId('care-orders-state')
+    const frame = page.getByTestId('catalog-frame-orders')
+    const NOTE = 'Không đọc được trạng thái lượt đồng bộ đơn — chưa kết luận số task có đơn của cả kỳ; tải lại trang để thử lại.'
+    for (const o of ['error', 'nullstate', 'mismatch'] as const) {
+      for (const empty of [false, true]) {
+        const k = empty ? `${o}0` : o
+        await open(page, `/ui-catalog/care-orders?frame=orders&ostate=${k}`, 'catalog-frame-orders')
+        await expect(state, k).toHaveAttribute('data-count-state', 'unknown')
+        await expect(state, k).toContainText('Chưa đọc được trạng thái')
+        await expect(state, k).not.toContainText('task có đơn sau import')
+        await expect(frame, k).not.toContainText('/ 120')
+        await expect(page.getByTestId('care-orders-stale'), k).toHaveText(NOTE)
+        await expect(page.getByTestId('care-orders-partial'), k).toHaveCount(0)
+        await expect(frame, k).not.toContainText(/theo lần thành công|Lượt đồng bộ hoàn tất gần nhất/)
+        if (empty) {
+          await expect(frame, k).toContainText('Chưa đọc được trạng thái đơn')
+          await expect(frame, k).not.toContainText('Chưa có task có đơn sau import')
+          await expect(frame, k).not.toContainText('Không thấy đơn')
+          await expect(page.getByTestId('care-import-orders-table'), k).toHaveCount(0)
+        } else {
+          // Các dòng task đã xác thực vẫn xem được.
+          await expect(page.getByTestId('care-import-orders-table').locator('tbody tr'), k).toHaveCount(4)
+        }
+      }
+    }
+  })
 })
 
 test.describe('care E3 — đơn xác thực sau import (mobile, dữ liệu giả) @mobile', () => {
@@ -171,6 +291,40 @@ test.describe('care E3 — đơn xác thực sau import (mobile, dữ liệu gi�
     await expect(count).toHaveText('41 khách có đơn xác thực')
   })
 
+  test('PM 22/10 số 0 giả — dược sĩ: chưa quét ⇒ không chip, ở chip ⇒ "Chưa có dữ liệu đơn"; quét một phần ⇒ ghi rõ', async ({ page }) => {
+    await open(page, '/ui-catalog/care-my?frame=list&orders=1&ostate=none', 'catalog-care-my-home')
+    await expect(page.getByRole('link', { name: /Có đơn xác thực/ })).toHaveCount(0)
+    await open(page, '/ui-catalog/care-my?frame=list&orders=1&view=orders&ostate=none', 'catalog-care-my-home')
+    await expect(page.getByTestId('care-my-count')).toHaveText('Chưa có dữ liệu đơn')
+    const home = page.getByTestId('catalog-care-my-home')
+    await expect(home).not.toContainText('0 khách có đơn xác thực')
+    await expect(home).not.toContainText('Chưa có khách nào có đơn xác thực trong tháng')
+    await expect(home).toContainText('Sẽ có sau lượt đồng bộ đơn sau import đầu tiên của kỳ.')
+    await expect(page.getByRole('link', { name: /Có đơn xác thực/ })).not.toContainText(/\d/)
+    expect(await noPageOverflow(page)).toBe(true)
+    await open(page, '/ui-catalog/care-my?frame=list&orders=1&view=orders&ostate=partial&n=21', 'catalog-care-my-home')
+    await expect(page.getByTestId('care-my-count')).toHaveText('21 khách có đơn xác thực · đang hiện 20 · đang cập nhật một phần')
+    // pm-auditor P1-1: đọc tóm tắt lỗi (state không có) ⇒ KHÔNG kết luận "không có đơn".
+    await open(page, '/ui-catalog/care-my?frame=list&orders=1&view=orders&ostate=unknown', 'catalog-care-my-home')
+    await expect(page.getByTestId('care-my-count')).toHaveText('Chưa có dữ liệu đơn')
+    await expect(page.getByTestId('catalog-care-my-home')).not.toContainText('Chưa có khách nào có đơn xác thực trong tháng')
+    await expect(page.getByTestId('care-my-orders-note')).toHaveText('Không đọc được trạng thái đồng bộ đơn — tải lại trang để thử lại.')
+    // F1: lượt gần nhất lỗi / quá 24 giờ ⇒ chip vẫn có số nhưng KÈM cảnh báo, ở cả màn chính và màn chip. PM 23/10 P1-1: mốc =
+    // lượt đồng bộ hoàn tất gần nhất, số có thể mới hơn mốc.
+    for (const [o, txt] of [['failed', `Chưa cập nhật — lượt đồng bộ đơn gần nhất chưa thành công. ${done('09:30 15/10/2026')}`],
+      ['stale', `Chưa cập nhật quá 24 giờ. ${done('09:30 15/10/2026')}`]] as const) {
+      await open(page, `/ui-catalog/care-my?frame=list&orders=1&ostate=${o}`, 'catalog-care-my-home')
+      await expect(page.getByRole('link', { name: /Có đơn xác thực/ }), o).toContainText('2')
+      await expect(page.getByTestId('care-my-orders-note'), o).toHaveText(txt)
+      await open(page, `/ui-catalog/care-my?frame=list&orders=1&view=orders&ostate=${o}&n=21`, 'catalog-care-my-home')
+      await expect(page.getByTestId('care-my-orders-note'), o).toHaveText(txt)
+      await expect(page.getByTestId('care-my-count'), o).toHaveText('21 khách có đơn xác thực · đang hiện 20 · đang cập nhật một phần')
+      expect(await noPageOverflow(page)).toBe(true)
+    }
+    await open(page, '/ui-catalog/care-my?frame=list&orders=1', 'catalog-care-my-home')
+    await expect(page.getByTestId('care-my-orders-note')).toHaveCount(0)
+  })
+
   test('chip "Có đơn xác thực" 21 khách: trang đầu 20, Xem thêm còn đúng 1', async ({ page }) => {
     await open(page, '/ui-catalog/care-my?frame=list&orders=1&view=orders&n=21', 'catalog-care-my-home')
     const list = page.getByRole('list', { name: 'Danh sách khách' }).locator('li')
@@ -212,7 +366,7 @@ test.describe('care E3 — cờ OFF @desktop', () => {
     expect(read('app/(dashboard)/care/my/page.tsx')).toContain('const ui = careOrderLinksUiOn()')
     // E3 r1.1: chế độ chip / "Xem thêm" / tìm trong nhóm chỉ khi cờ UI ON; cờ OFF ⇒ ?filter=orders là danh sách thường, action từ chối.
     expect(read('app/(dashboard)/care/my/page.tsx')).toContain("const ordersView = ui && sp.filter === 'orders'")
-    expect(read('app/(dashboard)/care/my/page.tsx')).toContain('ordersList={ordersView ? { next: list.next, total: ordersTotal, loadMore: loadMoreMyOrderTasks } : undefined}')
+    expect(read('app/(dashboard)/care/my/page.tsx')).toContain('ordersList={ordersView ? { next: list.next, total: ordersTotal, loadMore: loadMoreMyOrderTasks, state: ordersState } : undefined}')
     expect(read('app/actions/careMy.ts')).toContain("if (orders && !isCareOrderLinksUiEnabled()) return { ok: false, message: 'Chức năng chưa được bật.' }")
     const more = read('app/actions/careOrders.ts').split('export async function loadMoreMyOrderTasks(')[1] ?? ''
     expect(more.indexOf("if (!isCareEnabled() || !isCareOrderLinksUiEnabled()) return { ok: false, message: 'Không có quyền xem.' }")).toBeGreaterThan(0)
@@ -225,7 +379,7 @@ test.describe('care E3 — cờ OFF @desktop', () => {
     expect(read('app/actions/careOrders.ts')).toContain("return v.kind === 'ok' && v.perms.canView ? v.userId : null")
     expect(read('app/actions/careOrders.ts').match(/const u = await listViewer\(\)/g)?.length).toBe(2)
     // Mã đơn không vào log / URL phía server: không console.* trong lớp đọc / action / component E3.
-    for (const f of ['lib/care/server/orderLinks.ts', 'app/actions/careOrders.ts', 'components/care/CareTaskOrdersSection.tsx', 'components/care/CareOrdersTable.tsx', 'lib/care/orderLinks/view.ts']) {
+    for (const f of ['lib/care/server/orderLinks.ts', 'app/actions/careOrders.ts', 'components/care/CareTaskOrdersSection.tsx', 'components/care/CareOrdersTable.tsx', 'lib/care/orderLinks/view.ts', 'components/care/CareImportOrdersSummary.tsx']) {
       expect(read(f), f).not.toMatch(/console\.(log|warn|error|info)/)
     }
     expect(read('components/care/CareTaskOrdersSection.tsx')).not.toMatch(/(title|aria-label|data-[a-z-]+)=\{o\.orderCode\}/)

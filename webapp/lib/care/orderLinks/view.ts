@@ -133,6 +133,73 @@ export function parseImportOrderList(raw: unknown): CareImportOrderList {
   }
 }
 
+/**
+ * PM 22/10 P1 "số 0 giả" (CONTRACT §E Q-186): số đơn sau import chỉ là số thật khi phạm vi đã được quét.
+ *  · 'none'    — kỳ hiện tại chưa có lượt sync E thành công, kỳ cũ chưa từng bật đối chiếu, hoặc chưa task nào trong phạm vi
+ *                được quét ⇒ KHÔNG hiện số / câu "không có đơn" — hiện "Chưa có dữ liệu đơn";
+ *  · 'partial' — đã quét một phần (hoặc RPC báo partial: task chậm / lượt lỗi giữ mốc cũ; hoặc — khi truyền `now` — kỳ hiện tại
+ *                quá 24 giờ từ lần thành công, PM 22/10 F1) ⇒ hiện số kèm "Đang cập nhật một phần" / "Chưa cập nhật" + mốc;
+ *  · 'full'    — mọi task trong phạm vi đã quét, lượt còn trong hạn ⇒ số hiện ra (kể cả 0) là số theo VIEW N3 tại mốc hiển thị.
+ */
+export type CareImportCountState = 'none' | 'partial' | 'full'
+export function careImportCountState(p: {
+  isCurrentPeriod: boolean; periodStatus?: CareOrderPeriodStatus; lastSuccessAt: string | null; tasks: number; covered: number; partial?: boolean
+  now?: Date
+}): CareImportCountState {
+  if (p.isCurrentPeriod ? !p.lastSuccessAt : p.periodStatus === 'none') return 'none'
+  if (p.tasks > 0 && p.covered === 0) return 'none'
+  const stale = p.isCurrentPeriod && !!p.now && careImportStale(p.lastSuccessAt, p.now)
+  return p.partial || stale || p.covered < p.tasks ? 'partial' : 'full'
+}
+export const CARE_IMPORT_NO_DATA_HINT = 'Sẽ có sau lượt đồng bộ đơn sau import đầu tiên của kỳ.'
+/** "Chưa cập nhật" theo thời gian (Q-183): lượt đồng bộ hoàn tất gần nhất cách `now` quá 24 giờ — một ngưỡng chung cho
+ *  /care/my, /care/orders, /care/reports (PM 23/10: Q-183 đã chốt, không mở câu hỏi mới). */
+export const CARE_IMPORT_STALE_MS = 24 * 3600_000
+export function careImportStale(lastSuccessAt: string | null, now: Date): boolean {
+  if (!lastSuccessAt) return false
+  const t = Date.parse(lastSuccessAt.slice(0, 23) + 'Z') // mốc µs UTC như careVnTime
+  return Number.isFinite(t) && now.getTime() - t > CARE_IMPORT_STALE_MS
+}
+
+/**
+ * PM 23/10 P1-1 (Q-181): `last_success_at` chỉ là mốc lượt đồng bộ HOÀN TẤT gần nhất — lượt sau ghi link + coverage theo từng chunk
+ * ngay cả khi rồi lỗi / còn đang chạy ⇒ số đang hiện có thể gồm task cập nhật SAU mốc này. Không gán số cho mốc ấy, không suy số cả
+ * kỳ từ nó. Dùng chung cho /care/my, /care/orders, /care/reports.
+ */
+export function careImportDoneText(lastSuccessAt: string): string {
+  return `Lượt đồng bộ hoàn tất gần nhất: ${careVnTime(lastSuccessAt)}; số đang hiện có thể gồm task đã cập nhật sau mốc này, chưa phải số đầy đủ của cả kỳ.`
+}
+export function careImportWarnText(kind: 'failed' | 'stale', lastSuccessAt: string): string {
+  return `${kind === 'failed' ? 'Chưa cập nhật — lượt đồng bộ đơn gần nhất chưa thành công.' : 'Chưa cập nhật quá 24 giờ.'} ${careImportDoneText(lastSuccessAt)}`
+}
+
+/**
+ * /care/my (PM 22/10 F1 P1): gộp tóm tắt của dược sĩ (`care_my_order_summary`) với trạng thái lượt (`care_import_order_state`,
+ * session dược sĩ — không `chain`) CỦA CÙNG KỲ. Thiếu / lỗi / lệch kỳ một nguồn ⇒ 'none' (không kết luận số; task vẫn dùng được).
+ * `qa` (fixture is_test) ⇒ không áp trạng thái lượt thật — fixture chỉ theo coverage của chính nó.
+ */
+export interface CareMyOrdersView { state: CareImportCountState; note: string | null }
+export function careMyOrdersView(p: {
+  summary: CareMyOrderSummary | null; status: CareImportOrderState | null | 'error'; period: string; now: Date; qa: boolean
+}): CareMyOrdersView {
+  const s = p.summary
+  if (!s) return { state: 'none', note: null }
+  let failed = false
+  if (!p.qa) {
+    const st = p.status
+    if (st === 'error') return { state: 'none', note: 'Không đọc được trạng thái đồng bộ đơn — tải lại trang để thử lại.' }
+    if (!st || st.periodMonth !== p.period || !st.isCurrentPeriod) return { state: 'none', note: null }
+    failed = st.lastFailed
+  }
+  const stale = !p.qa && careImportStale(s.lastSuccessAt, p.now)
+  const state = careImportCountState({ isCurrentPeriod: true, lastSuccessAt: s.lastSuccessAt, tasks: s.tasks, covered: s.covered, partial: failed || stale })
+  const note = state !== 'partial' ? null
+    : failed ? careImportWarnText('failed', s.lastSuccessAt!)
+    : stale ? careImportWarnText('stale', s.lastSuccessAt!)
+    : `Đang cập nhật một phần — còn khách chưa được quét đơn. ${careImportDoneText(s.lastSuccessAt!)}`
+  return { state, note }
+}
+
 /** Câu "Đang cập nhật một phần" (Q-181) — chỉ kỳ hiện tại; kỳ cũ dùng trạng thái chốt. */
 export function careImportPartialText(l: CareImportOrderList): string | null {
   if (!l.isCurrentPeriod || !l.partial) return null

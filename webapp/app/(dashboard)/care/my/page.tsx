@@ -7,7 +7,8 @@ import { CareMyScreen } from '@/components/care/CareMyScreen'
 import { CARE_MY_PAGE_SIZE, parseMyFilters } from '@/lib/care/my'
 import { carePeriodOf, vnDateISO } from '@/lib/care/time'
 import { loadMySummary, loadMyTaskPage, loadMyTasksByIds, requireCareStaff } from '@/lib/care/server/my'
-import { careOrderLinksUiOn, loadMyOrderSummary, loadMyOrderTaskIds } from '@/lib/care/server/orderLinks'
+import { careOrderLinksUiOn, isCareOrderQaScope, loadImportOrderState, loadMyOrderSummary, loadMyOrderTaskIds } from '@/lib/care/server/orderLinks'
+import { careMyOrdersView } from '@/lib/care/orderLinks/view'
 import { isCareQaActive } from '@/lib/care/server/qaUi'
 import { searchMyCareTasks } from '@/app/actions/careMy'
 import { loadMoreMyOrderTasks } from '@/app/actions/careOrders'
@@ -32,15 +33,23 @@ export default async function CareMyPage({ searchParams }: { searchParams: Promi
   const ui = careOrderLinksUiOn()
   const ordersView = ui && sp.filter === 'orders'
   const period = carePeriodOf(now)
+  const qaScope = ui && isCareOrderQaScope()
   try {
-    const [summary, list, orderSummary] = await Promise.all([
+    // PM 22/10 F1: tóm tắt của mình + trạng thái lượt đồng bộ (RPC 116 care_import_order_state, session — không `chain`) đọc SONG
+    // SONG; lỗi một nguồn KHÔNG làm hỏng trang (task vẫn dùng được) — chỉ phần số đơn fail-closed ('none').
+    const [summary, list, orderSummary, orderStatus] = await Promise.all([
       loadMySummary(me),
       ordersView
         ? loadMyOrderTaskIds(me.userId, period).then(async (o) => ({ rows: await loadMyTasksByIds(me, period, o.taskIds, today), total: null, next: o.next }))
         : loadMyTaskPage(me, period, f.filter, f.page, today).then((p) => ({ ...p, next: null })),
       ui ? loadMyOrderSummary().catch(() => null) : Promise.resolve(null),
+      ui && !qaScope ? loadImportOrderState(period).catch(() => 'error' as const) : Promise.resolve(null),
     ])
-    const ordersTotal = orderSummary?.tasksWithOrders ?? null
+    // PM 22/10 P1 "số 0 giả": chưa quét / không đọc được / lệch kỳ ('none') ⇒ ẩn chip (trừ khi đang ở chip) và không đếm;
+    // một phần / lượt lỗi / quá 24 giờ ('partial') ⇒ số kèm ghi chú mốc.
+    const orders = careMyOrdersView({ summary: orderSummary, status: orderStatus, period, now, qa: qaScope })
+    const ordersState = orders.state
+    const ordersTotal = orderSummary && ordersState !== 'none' ? orderSummary.tasksWithOrders : null
     return (
       <CareMyScreen screen="list">
         {header}
@@ -48,8 +57,9 @@ export default async function CareMyPage({ searchParams }: { searchParams: Promi
           <CareMyHome key={`${ordersView ? 'orders' : f.filter}:${f.page}`} summary={summary} rows={list.rows}
             total={list.total ?? ordersTotal ?? list.rows.length} filter={f.filter} page={ordersView ? 1 : f.page}
             pageSize={CARE_MY_PAGE_SIZE} todayISO={today} search={searchMyCareTasks}
-            ordersChip={ui && (orderSummary || ordersView) ? { count: ordersTotal ?? undefined, active: ordersView } : undefined}
-            ordersList={ordersView ? { next: list.next, total: ordersTotal, loadMore: loadMoreMyOrderTasks } : undefined} />
+            ordersChip={ui && ((orderSummary && ordersState !== 'none') || ordersView) ? { count: ordersTotal ?? undefined, active: ordersView } : undefined}
+            ordersList={ordersView ? { next: list.next, total: ordersTotal, loadMore: loadMoreMyOrderTasks, state: ordersState } : undefined}
+            ordersNote={ui ? orders.note : null} />
         </div>
       </CareMyScreen>
     )

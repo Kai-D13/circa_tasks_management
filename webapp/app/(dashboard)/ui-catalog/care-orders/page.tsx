@@ -6,9 +6,10 @@ import { PageHeader } from '@/components/ds/PageHeader'
 import { FilterTabs } from '@/components/ds/FilterTabs'
 import { CareTaskOrdersSection } from '@/components/care/CareTaskOrdersSection'
 import { CareImportOrdersBlock } from '@/components/care/CareImportOrdersBlock'
+import { CareImportOrdersSummary } from '@/components/care/CareImportOrdersSummary'
 import { CareConversionTable, CareImportOrdersTable } from '@/components/care/CareOrdersTable'
 import {
-  careImportPartialText, type CareConversionRow, type CareImportOrderList, type CareImportOrderRow, type CareImportOrderState,
+  type CareConversionRow, type CareImportOrderList, type CareImportOrderRow, type CareImportOrderState,
   type CareTaskOrder, type CareTaskOrdersView,
 } from '@/lib/care/orderLinks/view'
 
@@ -52,6 +53,8 @@ async function fakeMoreOrders(input: { taskId: string; cursor: string }) {
 }
 
 const STORE = ['QAOS01', 'QAOS02']
+/** PM 22/10 F1: "bây giờ" cố định cho khối /care/reports (mốc dữ liệu giả 15/10) — ảnh / test không đổi theo ngày chạy. */
+const CATALOG_NOW = new Date('2026-10-15T08:00:00.000Z')
 const IMPORT_ROWS: CareImportOrderRow[] = Array.from({ length: 4 }, (_, i) => ({
   taskId: S(600 + i), customerName: i === 0 ? 'KH QA tên rất dài để kiểm tra cắt chữ trong bảng danh sách đơn sau import' : `KH QA 0000${i + 1}`,
   storeId: S(101 + (i % 2)), assigneeId: S(901 + i), storeCode: STORE[i % 2], assigneeName: `QA Dược sĩ 0${i + 1}`, status: 'open',
@@ -73,11 +76,53 @@ const LIST: CareImportOrderList = {
   summary: { tasks: 120, covered: 112, withOrders: 4, notCovered: 8, lagging: 1, minCoveredUntil: '2026-10-14T12:30:00.000000Z', maxCoveredUntil: '2026-10-15T02:30:00.000000Z' },
   partial: true, rows: IMPORT_ROWS, hasMore: true,
 }
+// PM 22/10 P1 "số 0 giả" — `?frame=orders&ostate=…`: none = chưa có lượt sync E thành công; zero = đã quét đủ, 0 đơn THẬT.
+const LIST_BY_STATE: Record<string, CareImportOrderList> = {
+  none: { ...LIST, lastSuccessAt: null, partial: false, rows: [], hasMore: false,
+    summary: { tasks: 1381, covered: 0, withOrders: 0, notCovered: 1381, lagging: 0, minCoveredUntil: null, maxCoveredUntil: null } },
+  zero: { ...LIST, partial: false, rows: [], hasMore: false,
+    summary: { tasks: 120, covered: 120, withOrders: 0, notCovered: 0, lagging: 0, minCoveredUntil: '2026-10-15T02:30:00.000000Z', maxCoveredUntil: '2026-10-15T02:30:00.000000Z' } },
+  partial: LIST,
+  // F1 (audit cuối P1-1): quét đủ nhưng lượt gần nhất lỗi (không ghi chunk ⇒ RPC list không báo partial) / quá 24 giờ / không đọc
+  // được trạng thái lượt ⇒ "Chưa cập nhật" + mốc, không trình bày số như đầy đủ.
+  failed: { ...LIST, partial: false, summary: { ...LIST.summary, covered: 120, notCovered: 0, lagging: 0 } },
+  stale: { ...LIST, partial: false, lastSuccessAt: '2026-10-13T02:30:00.000000Z', summary: { ...LIST.summary, covered: 120, notCovered: 0, lagging: 0 } },
+  // PM 23/10 P1-1: lượt hoàn tất T0 (09:30 15/10) → lượt T1 ghi chunk (5 task có đơn, coverage tới 12:30 15/10) rồi lỗi ⇒ RPC list
+  // báo partial; số 5 KHÔNG thuộc T0.
+  failedchunk: { ...LIST, partial: true, summary: { tasks: 120, covered: 120, withOrders: 5, notCovered: 0, lagging: 0,
+    minCoveredUntil: '2026-10-15T02:30:00.000000Z', maxCoveredUntil: '2026-10-15T05:30:00.000000Z' } },
+  // PM 23/10 P1-2: không đọc được trạng thái lượt (lỗi / NULL / lệch kỳ) — có dòng và rỗng (hậu tố 0).
+  error: { ...LIST, partial: false, summary: { ...LIST.summary, covered: 120, notCovered: 0, lagging: 0 } },
+  nullstate: { ...LIST, partial: false, summary: { ...LIST.summary, covered: 120, notCovered: 0, lagging: 0 } },
+  mismatch: { ...LIST, partial: false, summary: { ...LIST.summary, covered: 120, notCovered: 0, lagging: 0 } },
+  error0: { ...LIST, partial: false, rows: [], hasMore: false, summary: { ...LIST.summary, covered: 120, notCovered: 0, lagging: 0, withOrders: 0 } },
+  nullstate0: { ...LIST, partial: false, rows: [], hasMore: false, summary: { ...LIST.summary, covered: 120, notCovered: 0, lagging: 0, withOrders: 0 } },
+  mismatch0: { ...LIST, partial: false, rows: [], hasMore: false, summary: { ...LIST.summary, covered: 120, notCovered: 0, lagging: 0, withOrders: 0 } },
+}
+const OK_STATUS: CareImportOrderState = { periodMonth: '2026-10-01', isCurrentPeriod: true, hasSynced: true, lastSuccessAt: '2026-10-15T02:30:00.000000Z',
+  lastFailed: false, periodStatus: 'active', closedAt: null, closedThrough: null, chain: null }
+const STATUS_BY_STATE: Record<string, CareImportOrderState | 'error' | null> = {
+  failed: { ...OK_STATUS, lastFailed: true }, failedchunk: { ...OK_STATUS, lastFailed: true }, stale: { ...OK_STATUS, lastSuccessAt: '2026-10-13T02:30:00.000000Z' },
+  error: 'error', nullstate: null, mismatch: { ...OK_STATUS, periodMonth: '2026-09-01' },
+  error0: 'error', nullstate0: null, mismatch0: { ...OK_STATUS, periodMonth: '2026-09-01' },
+}
 const STATES: { key: string; state: CareImportOrderState }[] = [
   { key: 'none', state: { periodMonth: '2026-10-01', isCurrentPeriod: true, hasSynced: false, lastSuccessAt: null, lastFailed: false, periodStatus: 'active', closedAt: null, closedThrough: null, chain: null } },
   { key: 'synced', state: { periodMonth: '2026-10-01', isCurrentPeriod: true, hasSynced: true, lastSuccessAt: '2026-10-15T02:30:00.000000Z', lastFailed: false, periodStatus: 'active', closedAt: null, closedThrough: null,
     chain: { tasks: 1384, covered: 1380, withOrders: 212 } } },
   { key: 'stale', state: { periodMonth: '2026-10-01', isCurrentPeriod: true, hasSynced: true, lastSuccessAt: '2026-10-14T02:30:00.000000Z', lastFailed: true, periodStatus: 'active', closedAt: null, closedThrough: null, chain: null } },
+  // PM 22/10 P1 "số 0 giả": super thấy số toàn chuỗi — chưa sync / sang kỳ mới chưa quét ⇒ KHÔNG hiện "0 / N"; quét một phần ⇒ ghi rõ.
+  { key: 'nonechain', state: { periodMonth: '2026-10-01', isCurrentPeriod: true, hasSynced: false, lastSuccessAt: null, lastFailed: false, periodStatus: 'none', closedAt: null, closedThrough: null,
+    chain: { tasks: 1381, covered: 0, withOrders: 0 } } },
+  { key: 'newperiod', state: { periodMonth: '2026-11-01', isCurrentPeriod: true, hasSynced: true, lastSuccessAt: '2026-10-31T12:40:00.000000Z', lastFailed: false, periodStatus: 'active', closedAt: null, closedThrough: null,
+    chain: { tasks: 1402, covered: 0, withOrders: 0 } } },
+  { key: 'partialchain', state: { periodMonth: '2026-10-01', isCurrentPeriod: true, hasSynced: true, lastSuccessAt: '2026-10-15T02:30:00.000000Z', lastFailed: true, periodStatus: 'active', closedAt: null, closedThrough: null,
+    chain: { tasks: 1384, covered: 900, withOrders: 150 } } },
+  { key: 'failedfull', state: { periodMonth: '2026-10-01', isCurrentPeriod: true, hasSynced: true, lastSuccessAt: '2026-10-15T02:30:00.000000Z', lastFailed: true, periodStatus: 'active', closedAt: null, closedThrough: null,
+    chain: { tasks: 1384, covered: 1384, withOrders: 210 } } },
+  // PM 22/10 F1: lượt cuối thành công nhưng đã quá 24 giờ (so CATALOG_NOW) ⇒ "Chưa cập nhật" + mốc; số là một phần.
+  { key: 'stalechain', state: { periodMonth: '2026-10-01', isCurrentPeriod: true, hasSynced: true, lastSuccessAt: '2026-10-13T02:30:00.000000Z', lastFailed: false, periodStatus: 'active', closedAt: null, closedThrough: null,
+    chain: { tasks: 1384, covered: 1384, withOrders: 205 } } },
   { key: 'closed', state: { periodMonth: '2026-09-01', isCurrentPeriod: false, hasSynced: true, lastSuccessAt: '2026-10-15T02:30:00.000000Z', lastFailed: false, periodStatus: 'closed',
     closedAt: '2026-09-30T17:40:12.000000Z', closedThrough: '2026-09-30T17:00:00.000000Z', chain: { tasks: 1290, covered: 1290, withOrders: 301 } } },
 ]
@@ -91,7 +136,9 @@ export default async function CareOrdersCatalogPage({ searchParams }: { searchPa
   const filter = { month: '2026-10-01', storeId: null, assigneeId: null }
   if (sp.frame === 'orders' || sp.frame === 'conversion') {
     const basis = sp.frame === 'orders' ? 'import' : 'care'
-    const partial = careImportPartialText(LIST)
+    const ostate = typeof sp.ostate === 'string' && sp.ostate in LIST_BY_STATE ? sp.ostate : 'partial'
+    const list = LIST_BY_STATE[ostate]
+    const status = ostate in STATUS_BY_STATE ? STATUS_BY_STATE[ostate] : OK_STATUS
     return (
       <div data-layout-width="fluid" data-care-browse className="space-y-4 p-4 md:p-6" data-testid={`catalog-frame-${sp.frame}`}>
         <PageHeader title={basis === 'import' ? 'Đơn xác thực sau import' : 'Khách có đơn sau chăm sóc'} icon={Receipt} />
@@ -99,10 +146,8 @@ export default async function CareOrdersCatalogPage({ searchParams }: { searchPa
           { key: 'import', label: 'Đơn sau import', href: '/ui-catalog/care-orders?frame=orders' },
           { key: 'care', label: 'Có đơn sau chăm sóc', href: '/ui-catalog/care-orders?frame=conversion' }]} />
         {basis === 'import' ? (
-          <>
-            {partial && <p role="note" data-testid="care-orders-partial" className="rounded-lg border border-status-warning/40 bg-status-warning-bg p-3 text-sm break-words text-status-warning">{partial}</p>}
-            <CareImportOrdersTable initial={LIST.rows} next="catalog-cursor" filter={filter} loadMore={fakeMoreImport} />
-          </>
+          <CareImportOrdersSummary list={list} status={status} now={CATALOG_NOW}
+            table={<CareImportOrdersTable initial={list.rows} next={list.hasMore ? 'catalog-cursor' : null} filter={filter} loadMore={fakeMoreImport} />} />
         ) : (
           <>
             <p className="text-sm text-muted-foreground" data-testid="care-conversion-totals">5 task theo báo cáo; 3 task bạn còn quyền xem (task đã chuyển giao ra ngoài phạm vi vẫn được tính trong báo cáo).</p>
@@ -117,7 +162,9 @@ export default async function CareOrdersCatalogPage({ searchParams }: { searchPa
       <PageHeader title="Đơn xác thực sau import — catalog" subtitle="Dữ liệu giả · các trạng thái E0 §5" icon={Receipt} />
       <section className="space-y-3">
         <h2 className="text-sm font-semibold tracking-wide text-muted-foreground uppercase">Khối trên /care/reports</h2>
-        {STATES.map((s) => <div key={s.key} data-testid={`catalog-block-${s.key}`}><CareImportOrdersBlock state={s.state} href="/ui-catalog/care-orders?frame=orders" /></div>)}
+        {STATES.map((s) => <div key={s.key} data-testid={`catalog-block-${s.key}`}><CareImportOrdersBlock state={s.state} href="/ui-catalog/care-orders?frame=orders" now={CATALOG_NOW} /></div>)}
+        <div data-testid="catalog-block-error"><CareImportOrdersBlock state="error" href="/ui-catalog/care-orders?frame=orders" now={CATALOG_NOW} /></div>
+        <div data-testid="catalog-block-null"><CareImportOrdersBlock state={null} href="/ui-catalog/care-orders?frame=orders" now={CATALOG_NOW} /></div>
       </section>
       <section className="space-y-3">
         <h2 className="text-sm font-semibold tracking-wide text-muted-foreground uppercase">Chi tiết task</h2>

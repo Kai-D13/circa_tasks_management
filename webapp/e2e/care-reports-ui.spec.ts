@@ -140,6 +140,8 @@ test.describe('care B8.2 — báo cáo (dữ liệu giả) @desktop', () => {
     await expect(cells.nth(4).getByRole('link')).toHaveAttribute('href', `/care/tasks?month=2026-10&store=${S(101)}&status=not_cared`)
     await expect(cells.nth(5).getByRole('link')).toHaveAttribute('href', `/care/tasks?month=2026-10&store=${S(101)}&status=following`)
     for (const i of [2, 6, 7, 8]) await expect(cells.nth(i).getByRole('link'), `cột ${i}`).toHaveCount(0)  // Đã liên hệ, Từng trễ, Không HT (=0), Có đơn
+    // PM 22/10 U2: dòng dược sĩ thu gọn theo POS — mở nhóm QAOS01 trước khi kiểm link của dòng dược sĩ.
+    await store1.getByRole('button', { name: 'Xem 2 dược sĩ' }).click()
     const ds = s.getByRole('row').filter({ hasText: 'QA Dược sĩ 01a' }).getByRole('cell')
     await expect(ds.nth(3).getByRole('link')).toHaveAttribute('href', `/care/tasks?month=2026-10&store=${S(101)}&assignee=${S(1002)}&status=completed`)
     await expect(s.getByTestId('care-report-total').getByRole('cell').nth(1).getByRole('link')).toHaveAttribute('href', '/care/tasks?month=2026-10')
@@ -224,9 +226,115 @@ test.describe('care B8.2 — báo cáo (dữ liệu giả) @desktop', () => {
   })
 })
 
+// ── PM 22/10 U2: thu gọn dược sĩ theo POS ngay trong bảng (không popup, không request mới) ─────────────────────────
+const S2 = (n: number) => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+async function openGroups(page: Page, qs = '', theme: 'light' | 'dark' = 'light') {
+  await page.goto(`/ui-catalog/care-reports?frame=report-groups${qs}`)
+  await page.evaluate((t) => localStorage.setItem('theme', t), theme)
+  await page.reload()
+  await page.waitForFunction((t) => document.documentElement.classList.contains('dark') === (t === 'dark'), theme, { timeout: 10_000 })
+  await page.getByTestId('catalog-frame-report-groups').waitFor({ timeout: 20_000 })
+  await page.waitForLoadState('networkidle')
+}
+
+test.describe('care U2 — /care/reports thu gọn dược sĩ theo POS (dữ liệu giả) @desktop', () => {
+  test.skip(!HAS_STATE, 'chưa có storageState super (E2E_SUPER_* + project setup)')
+  test.use({ storageState: SUPER_STATE })
+
+  test('5 POS mặc định đóng; mở A, mở B, đóng A độc lập; Tổng + số không đổi; <tbody> cùng cấp; link số; Enter / Space; 0 request', async ({ page }) => {
+    await openGroups(page)
+    const frame = page.getByTestId('catalog-frame-report-groups')
+    const report = frame.getByTestId('care-report')
+    const toggles = report.getByTestId('care-report-toggle')
+    await expect(toggles).toHaveText(['Xem 1 dược sĩ', 'Xem 2 dược sĩ', 'Xem 3 dược sĩ', 'Xem 1 dược sĩ', 'Xem 4 dược sĩ'])
+    for (let i = 0; i < 5; i++) await expect(toggles.nth(i)).toHaveAttribute('aria-expanded', 'false')
+    await expect(report.getByTestId('care-report-group-rows').first()).toBeHidden()
+    const shape = await report.evaluate((el) => {
+      const t = el.querySelector('table')!
+      const bodies = [...t.children].filter((c) => c.tagName === 'TBODY')
+      const ctl = [...el.querySelectorAll('[data-testid="care-report-toggle"]')].map((b) => {
+        const id = b.getAttribute('aria-controls')!
+        return !!id && document.getElementById(id)?.tagName === 'TBODY'
+      })
+      return { nested: el.querySelectorAll('tbody tbody').length, bodies: bodies.length, ctl: ctl.every(Boolean) }
+    })
+    expect(shape, 'hai <tbody> mỗi POS + một <tbody> Tổng, không lồng; aria-controls trỏ vào vùng dòng').toEqual({ nested: 0, bodies: 11, ctl: true })
+    const total = report.getByTestId('care-report-total')
+    const totalBefore = await total.getByRole('cell').allTextContents()
+    const storesBefore = await report.getByTestId('care-report-store').allTextContents()
+    const reqs: string[] = []
+    const onReq = (r: { url: () => string }) => { if (!r.url().includes('/cdn-cgi/')) reqs.push(r.url()) }
+    page.on('request', onReq)
+    const A = report.getByTestId('care-report-group').nth(0), B = report.getByTestId('care-report-group').nth(1)
+    await toggles.nth(0).click()
+    await expect(toggles.nth(0)).toHaveAttribute('aria-expanded', 'true')
+    await expect(toggles.nth(0)).toHaveText('Ẩn dược sĩ')
+    await expect(report.getByRole('row', { name: /QA DS 1a/ })).toBeVisible()
+    await toggles.nth(1).click()
+    await expect(report.getByRole('row', { name: /QA DS 2b/ })).toBeVisible()
+    await toggles.nth(0).click()
+    await expect(report.getByRole('row', { name: /QA DS 1a/ })).toHaveCount(0)
+    await expect(report.getByRole('row', { name: /QA DS 2a/ })).toBeVisible()
+    await expect(toggles.nth(1)).toHaveAttribute('aria-expanded', 'true')
+    // Bấm ô số KHÔNG toggle cả dòng (dòng POS không có handler; chỉ nút); ô số có link đúng phạm vi.
+    await A.getByTestId('care-report-store').getByRole('cell').nth(2).click()
+    await expect(toggles.nth(0)).toHaveAttribute('aria-expanded', 'false')
+    await expect(B.getByTestId('care-report-store').getByRole('cell').nth(1).getByRole('link')).toHaveAttribute('href', `/care/tasks?month=2026-10&store=${S2(202)}`)
+    await expect(report.getByRole('row', { name: /QA DS 2a/ }).getByRole('cell').nth(1).getByRole('link'))
+      .toHaveAttribute('href', `/care/tasks?month=2026-10&store=${S2(202)}&assignee=${S2(2010)}`)
+    // Bàn phím: Enter mở, Space đóng (nút thật).
+    await toggles.nth(2).focus()
+    await page.keyboard.press('Enter')
+    await expect(toggles.nth(2)).toHaveAttribute('aria-expanded', 'true')
+    await page.keyboard.press('Space')
+    await expect(toggles.nth(2)).toHaveAttribute('aria-expanded', 'false')
+    page.off('request', onReq)
+    expect(reqs, 'mở / đóng nhóm không gọi mạng (không prefetch link)').toEqual([])
+    expect(await total.getByRole('cell').allTextContents(), 'hàng Tổng không đổi').toEqual(totalBefore)
+    expect((await report.getByTestId('care-report-store').allTextContents()).map((t) => t.replace(/Xem \d+ dược sĩ|Ẩn dược sĩ/, '')),
+      'số POS không đổi').toEqual(storesBefore.map((t) => t.replace(/Xem \d+ dược sĩ|Ẩn dược sĩ/, '')))
+    await expect(frame.getByRole('link', { name: /Xuất Excel/ })).toHaveAttribute('href', '/api/export/care?month=2026-10')
+    expect(await noPageOverflow(page)).toBe(true)
+  })
+
+  test('lọc theo một dược sĩ ⇒ nhóm chứa kết quả TỰ MỞ; nhóm 0 dược sĩ không có nút', async ({ page }) => {
+    await openGroups(page, '&assignee=1')
+    const report = page.getByTestId('catalog-frame-report-groups').getByTestId('care-report')
+    await expect(report.getByTestId('care-report-group')).toHaveCount(1)
+    await expect(report.getByTestId('care-report-toggle')).toHaveAttribute('aria-expanded', 'true')
+    await expect(report.getByRole('row', { name: /QA DS 2b/ })).toBeVisible()
+    const zero = page.getByTestId('catalog-zero-group')
+    await expect(zero.getByTestId('care-report-store')).toBeVisible()
+    await expect(zero.getByRole('button')).toHaveCount(0)
+    await expect(zero.getByTestId('care-report-group-rows')).toHaveCount(0)
+  })
+
+  test('ảnh 1440 / 1024 sáng / tối — đóng và mở 2 nhóm', async ({ page }) => {
+    for (const w of [1440, 1024]) for (const theme of ['light', 'dark'] as const) {
+      await page.setViewportSize({ width: w, height: 900 })
+      await openGroups(page, '', theme)
+      const report = page.getByTestId('catalog-frame-report-groups').getByTestId('care-report')
+      await shot(page, 'catalog-frame-report-groups', `u2-${w}-${theme}-closed`)
+      await report.getByTestId('care-report-toggle').nth(1).click()
+      await report.getByTestId('care-report-toggle').nth(4).click()
+      expect(await noPageOverflow(page)).toBe(true)
+      await shot(page, 'catalog-frame-report-groups', `u2-${w}-${theme}-open`)
+    }
+  })
+})
+
 test.describe('care B8.2 — báo cáo mobile @mobile', () => {
   test.skip(!HAS_STATE, 'chưa có storageState super')
   test.use({ storageState: SUPER_STATE })
+
+  test('PM 22/10 U2 mobile: nút "Xem N dược sĩ" ≥ 44 px; mở nhóm không cuộn ngang trang', async ({ page }) => {
+    await openGroups(page)
+    const t = page.getByTestId('catalog-frame-report-groups').getByTestId('care-report-toggle').nth(1)
+    expect((await t.boundingBox())!.height).toBeGreaterThanOrEqual(44)
+    await t.click()
+    await expect(t).toHaveAttribute('aria-expanded', 'true')
+    expect(await noPageOverflow(page)).toBe(true)
+  })
 
   test('360/393: không cuộn ngang trang; bảng cuộn trong khung; Xuất Excel ≥ 44px', async ({ page }) => {
     for (const theme of ['light', 'dark'] as const) {
