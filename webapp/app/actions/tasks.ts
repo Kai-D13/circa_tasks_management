@@ -12,6 +12,8 @@ import { CYCLE_COUNT_DEPT_ID } from '@/lib/inventory/constants'
 import { publicStorageUrl } from '@/lib/storage/publicUrl'
 import { sanitizeRichText } from '@/lib/richtext/sanitize'
 import { assertOsStoreIds } from '@/lib/stores/assertOsStore'
+import { ARCHIVE_DISABLED_MESSAGE, runArchiveRpc, type ArchiveAction, type ArchiveResult } from '@/lib/tasks/archiveRpc'
+import { isTasksArchiveRpcEnabled } from '@/lib/tasks/flags'
 import {
   canCreateTask, smVisibilityAllowed, validateSmStaffSelection, validateSmStoreScope,
 } from '@/lib/tasks/smScope'
@@ -1730,87 +1732,30 @@ export async function addReviewNote(taskId: string, note: string) {
   return { success: true }
 }
 
-export async function archiveTasks(ids: string[]) {
-  if (!ids.length) return { error: 'Không có task nào được chọn' }
+// T1-B: lưu trữ / khôi phục hàng loạt CHỈ qua RPC 117 (rpc_set_tasks_archived) bằng session người dùng — một transaction,
+// RPC dựng tập cha + con staff_all, khoá dòng và kiểm quyền từng task (super / admin task mình tạo / SM store được giao); lỗi nào
+// cũng rollback toàn bộ. Cờ TASKS_ARCHIVE_RPC_ENABLED OFF ⇒ dừng trước mọi đọc/ghi; không còn đường ghi supabaseAdmin để quay về.
+async function setTasksArchived(ids: string[], action: ArchiveAction): Promise<ArchiveResult> {
+  if (!isTasksArchiveRpcEnabled()) return { error: ARCHIVE_DISABLED_MESSAGE }
 
   const supabase = await createClient()
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return { error: 'Chưa đăng nhập' }
 
-  const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
-  const isSm = profile?.role === 'sm'
-
-  if (profile?.role !== 'admin' && !isSm)
-    return { error: 'Không có quyền lưu trữ' }
-
-  // Cascade first: build the full set of IDs (parents + any staff_all children)
-  // so the SM scope check below covers every row that will be written.
-  const { data: childRows } = await supabaseAdmin.from('tasks').select('id').in('parent_task_id', ids)
-  const allIds = childRows?.length ? [...new Set([...ids, ...childRows.map(r => r.id)])] : ids
-
-  // SM: validate the full allIds set (parents + cascaded children) are all in scope.
-  // Using allIds here prevents a bypass where a parent is in scope but its children are not.
-  if (isSm) {
-    const smStoreIds = await getSmStoreIds(supabase, user.id)
-    const { data: taskRows } = await supabaseAdmin.from('tasks').select('id, store_id').in('id', allIds)
-    const allInScope = (taskRows ?? []).every((t) => smHasStore(smStoreIds, t.store_id as string | null))
-    if (!allInScope) return { error: 'Bạn không có quyền lưu trữ task này' }
+  const result = await runArchiveRpc(supabase, ids, action)
+  if ('success' in result) {
+    revalidatePath('/tasks')
+    revalidatePath('/dashboard')
   }
+  return result
+}
 
-  // Admin: RLS-scoped via supabase client (own-scope enforced by tasks_update_admin).
-  // SM: no RLS UPDATE policy — must use supabaseAdmin; app-layer validation above is the gate.
-  const client = isSm ? supabaseAdmin : supabase
-  const { data: updated, error } = await client
-    .from('tasks')
-    .update({ archived_at: new Date().toISOString() })
-    .in('id', allIds)
-    .select('id')
-
-  if (error) return { error: error.message }
-
-  revalidatePath('/tasks')
-  revalidatePath('/dashboard')
-  return { success: true, count: updated?.length ?? 0 }
+export async function archiveTasks(ids: string[]) {
+  return setTasksArchived(ids, 'archive')
 }
 
 export async function restoreTasks(ids: string[]) {
-  if (!ids.length) return { error: 'Không có task nào được chọn' }
-
-  const supabase = await createClient()
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) return { error: 'Chưa đăng nhập' }
-
-  const { data: profile } = await supabase.from('users').select('role').eq('id', user.id).single()
-  const isSm = profile?.role === 'sm'
-
-  if (profile?.role !== 'admin' && !isSm)
-    return { error: 'Không có quyền khôi phục' }
-
-  // Cascade first: build the full set of IDs (parents + any staff_all children)
-  // so the SM scope check below covers every row that will be written.
-  const { data: childRows } = await supabaseAdmin.from('tasks').select('id').in('parent_task_id', ids)
-  const allIds = childRows?.length ? [...new Set([...ids, ...childRows.map(r => r.id)])] : ids
-
-  // SM: validate the full allIds set (parents + cascaded children) are all in scope.
-  if (isSm) {
-    const smStoreIds = await getSmStoreIds(supabase, user.id)
-    const { data: taskRows } = await supabaseAdmin.from('tasks').select('id, store_id').in('id', allIds)
-    const allInScope = (taskRows ?? []).every((t) => smHasStore(smStoreIds, t.store_id as string | null))
-    if (!allInScope) return { error: 'Bạn không có quyền khôi phục task này' }
-  }
-
-  const client = isSm ? supabaseAdmin : supabase
-  const { data: updated, error } = await client
-    .from('tasks')
-    .update({ archived_at: null })
-    .in('id', allIds)
-    .select('id')
-
-  if (error) return { error: error.message }
-
-  revalidatePath('/tasks')
-  revalidatePath('/dashboard')
-  return { success: true, count: updated?.length ?? 0 }
+  return setTasksArchived(ids, 'restore')
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

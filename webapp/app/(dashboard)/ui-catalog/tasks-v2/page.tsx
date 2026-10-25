@@ -281,7 +281,7 @@ export default async function UiCatalogTasksV2Page() {
       </Section>
 
       <Section title="TaskList fixture — 4 loại nhóm (có / không ô chọn)">
-        <div data-testid="fx-tasklist-checkbox"><TaskList items={TL_ITEMS} canArchive userRole="admin" /></div>
+        <div data-testid="fx-tasklist-checkbox"><TaskList items={TL_ITEMS} canArchive bulkArchiveEnabled userRole="admin" /></div>
         <div data-testid="fx-tasklist-nocheckbox"><TaskList items={TL_ITEMS} canArchive={false} userRole="admin" /></div>
       </Section>
 

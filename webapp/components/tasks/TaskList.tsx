@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import { archiveTasks, restoreTasks } from '@/app/actions/tasks'
+import { archiveSuccessMessage } from '@/lib/tasks/archiveRpc'
 import { BulkResubmitButton } from '@/components/tasks/BulkResubmitButton'
 import { ExportSelectedButton } from '@/components/tasks/ExportSelectedButton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
@@ -166,6 +167,8 @@ interface Props {
   items:           TaskListItem[]
   canArchive:      boolean
   canRestore?:     boolean
+  // T1-B: cờ TASKS_ARCHIVE_RPC_ENABLED (từ page). OFF ⇒ ẩn nút Lưu trữ / Khôi phục đã chọn; checkbox + xuất vẫn theo canArchive/canRestore.
+  bulkArchiveEnabled?: boolean
   canBulkResubmit?: boolean
   showArchived?:   boolean
   userRole?:       string
@@ -237,7 +240,7 @@ function TaskBadges({ task, userRole, effStatus, compact }: {
   )
 }
 
-export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showArchived, userRole }: Props) {
+export function TaskList({ items, canArchive, canRestore, bulkArchiveEnabled = false, canBulkResubmit, showArchived, userRole }: Props) {
   const router = useRouter()
   const [selected, setSelected]    = useState<Set<string>>(new Set())
   const [expanded, setExpanded]    = useState<Set<string>>(new Set())
@@ -291,11 +294,10 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
     const ids = Array.from(selected)
     startTransition(async () => {
       const result = await archiveTasks(ids)
-      if (result?.error) {
+      if (!result.success) {
         toast.error(result.error)
       } else {
-        const count = (result as { count?: number }).count ?? ids.length
-        toast.success(`Đã lưu trữ ${count} task`)
+        toast.success(archiveSuccessMessage('archive', result.count))
         setSelected(new Set())
         router.refresh()
       }
@@ -306,11 +308,10 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
     const ids = Array.from(selected)
     startTransition(async () => {
       const result = await restoreTasks(ids)
-      if (result?.error) {
+      if (!result.success) {
         toast.error(result.error)
       } else {
-        const count = (result as { count?: number }).count ?? ids.length
-        toast.success(`Đã khôi phục ${count} task`)
+        toast.success(archiveSuccessMessage('restore', result.count))
         setSelected(new Set())
         router.refresh()
       }
@@ -857,7 +858,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
           {canBulkResubmit && (
             <BulkResubmitButton taskIds={Array.from(selected)} onDone={() => setSelected(new Set())} triggerClassName={BULK_ACTION_BUTTON} />
           )}
-          {canArchive && (
+          {canArchive && bulkArchiveEnabled && (
             <Button
               variant="outline"
               size="sm"
@@ -869,7 +870,7 @@ export function TaskList({ items, canArchive, canRestore, canBulkResubmit, showA
               {pending ? 'Đang xử lý...' : 'Lưu trữ đã chọn'}
             </Button>
           )}
-          {canRestore && (
+          {canRestore && bulkArchiveEnabled && (
             <Button
               variant="outline"
               size="sm"

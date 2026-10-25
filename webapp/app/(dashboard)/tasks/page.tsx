@@ -19,6 +19,7 @@ import { Plus, ChevronLeft, ChevronRight, ClipboardList, HeartHandshake } from '
 import { canCreateTask } from '@/lib/tasks/smScope'
 import { cn } from '@/lib/utils'
 import { isCareEnabled } from '@/lib/care/flags'
+import { isTasksArchiveRpcEnabled } from '@/lib/tasks/flags'
 
 const PAGE_SIZE = 30
 
@@ -259,6 +260,8 @@ export default async function TasksPage({
   const canCreate  = canCreateTask(profile?.role)
   const canArchive = !showArchived && (profile?.role === 'admin' || isSm)
   const canRestore = showArchived  && (profile?.role === 'admin' || isSm)
+  // T1-B: nút Lưu trữ / Khôi phục hàng loạt chỉ hiện khi đường RPC 117 bật; checkbox + xuất đã chọn giữ theo canArchive/canRestore.
+  const bulkArchiveEnabled = isTasksArchiveRpcEnabled()
   // Bulk "yêu cầu làm lại" — admin/SM in the Done view (tasks there have results).
   const canBulkResubmit = !showArchived && view === 'done' && (profile?.role === 'admin' || isSm)
 
@@ -474,23 +477,31 @@ export default async function TasksPage({
   let importMembers: ImportBatchMember[] | null = []
   if (importCandidates.length > 0) {
     const batchIds = [...new Set(importCandidates.map((t) => (t as { import_batch_id?: string }).import_batch_id!))]
-    let mq = supabase
-      .from('tasks')
-      .select('import_batch_id, status')
-      .in('import_batch_id', batchIds)
-      .is('archived_at', null)
-    if (params.priority) mq = mq.eq('priority', params.priority)
-    if (params.store_id) mq = mq.eq('store_id', params.store_id)
-    if (params.category) mq = mq.eq('category', params.category)
-    if (params.department_id) mq = mq.eq('department_id', params.department_id)
-    const { data: memberRows, error: memberErr } = await mq
+    // T1-A (PM 24/10): tập thành viên PHẢI đủ — một query không phân trang bị PostgREST cắt ở db-max-rows (batch > 1000 task
+    // ⇒ badge done/total sai mà không báo lỗi). Chọn thêm `id`, chia batchIds ≤ ID_CHUNK (né URI dài), mỗi chunk phân trang theo
+    // `id` duy nhất + count exact + verify đủ (fetchAllVerified). Trang lỗi / count đổi / trùng / thiếu / vượt FETCH_CAP ⇒ error.
+    const { rows: memberRows, error: memberErr } = await fetchAllByIdChunks<{ id: string; import_batch_id: string; status: string }>(
+      batchIds,
+      (idChunk) => (from, to) => {
+        let mq = supabase
+          .from('tasks')
+          .select('id, import_batch_id, status', { count: 'exact' })
+          .in('import_batch_id', idChunk)
+          .is('archived_at', null)
+        if (params.priority) mq = mq.eq('priority', params.priority)
+        if (params.store_id) mq = mq.eq('store_id', params.store_id)
+        if (params.category) mq = mq.eq('category', params.category)
+        if (params.department_id) mq = mq.eq('department_id', params.department_id)
+        return mq.order('id', { ascending: true }).range(from, to)
+      },
+    )
     if (memberErr) {
-      // r1 (audit P1#2): KHÔNG suy đoán tiến độ — members=null → group hiện
-      // "—/—" + "Không tải được tiến độ" (badge sai còn tệ hơn không có badge).
-      console.error('[tasks] import-batch members query failed:', memberErr.message)
+      // r1 (audit P1#2) + T1-A: KHÔNG suy đoán tiến độ từ tập thiếu — members=null → group hiện "—/—" + "Không tải được
+      // tiến độ" (badge sai còn tệ hơn không có badge).
+      console.error('[tasks] import-batch members fetch failed/incomplete:', memberErr.message)
       importMembers = null
     } else {
-      importMembers = (memberRows ?? []) as ImportBatchMember[]
+      importMembers = memberRows.map((r): ImportBatchMember => ({ import_batch_id: r.import_batch_id, status: r.status }))
     }
   }
   const importGroups = buildImportBatchGroups(
@@ -1054,7 +1065,7 @@ export default async function TasksPage({
               }
             />
           ) : (
-            <TaskList items={pageItems} canArchive={canArchive} canRestore={canRestore} canBulkResubmit={canBulkResubmit} showArchived={showArchived} userRole={profile?.role ?? 'staff'} />
+            <TaskList items={pageItems} canArchive={canArchive} canRestore={canRestore} bulkArchiveEnabled={bulkArchiveEnabled} canBulkResubmit={canBulkResubmit} showArchived={showArchived} userRole={profile?.role ?? 'staff'} />
           )}
 
           {/* Staff pagination — ds simple mode: Trang N + Trước/Tiếp, [44px]
