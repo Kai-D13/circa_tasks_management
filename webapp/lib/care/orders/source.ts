@@ -86,18 +86,23 @@ const PROJECTION = `s.entity_id AS customer_external_id,
        s.order_code AS order_key,
        FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%E6SZ', s.completed_utc, 'UTC') AS ordered_at`
 
-/** SQL production (SPEC §B5b): ba alias, khoảng (lo, hi] qua ba mảng named params cùng offset + EXISTS. */
+/**
+ * SQL production (SPEC §B5b): ba alias, khoảng (lo, hi] qua ba mảng named params cùng offset + EXISTS.
+ * Hotfix 28/10 (P1-DATA): lấy lo/hi bằng CHỈ SỐ từ một UNNEST — KHÔNG ghép mảng bằng `JOIN UNNEST … WITH OFFSET`
+ * (slot tăng theo bình phương số khoảng: 800 khoảng 95 s, 1.152 khoảng job lỗi sau ~205 s; bản chỉ số 1 s, 10.000
+ * khoảng 2,5 s, cùng kết quả). `IN UNNEST(@customer_ids)` thừa về nghĩa (EXISTS đã đòi w.id = s.entity_id) —
+ * chỉ để lọc sớm theo khách.
+ */
 export function buildN3OrdersSql(table: string): string {
   return `WITH windows AS (
-  SELECT id, lo, hi
+  SELECT id, @from_ts[OFFSET(i)] AS lo, @to_ts[OFFSET(i)] AS hi
   FROM UNNEST(@customer_ids) AS id WITH OFFSET i
-  JOIN UNNEST(@from_ts) AS lo WITH OFFSET j ON i = j
-  JOIN UNNEST(@to_ts) AS hi WITH OFFSET k ON i = k
 ),
 ${srcCte(table)}
 SELECT ${PROJECTION}
 FROM src AS s
 WHERE s.completed_utc > @min_care_at
+  AND s.entity_id IN UNNEST(@customer_ids)
   AND EXISTS (
     SELECT 1 FROM windows AS w
     WHERE w.id = s.entity_id

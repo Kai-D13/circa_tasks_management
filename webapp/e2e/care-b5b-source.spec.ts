@@ -39,12 +39,17 @@ test.describe('care B5b.1 — SQL + tham số khoảng (lo, hi] @desktop', () =>
   test('SQL production: ba alias, EXISTS theo khoảng, tham số NAMED, giờ chuẩn hoá MỘT lần (B5b.3); tên bảng kiểm lại', () => {
     const sql = buildN3OrdersSql(TABLE)
     expect(sql).toContain('FROM `qa-proj-123.qa_ds.qa_completed_order` AS v')
-    for (const s of ['UNNEST(@customer_ids) AS id WITH OFFSET i', 'JOIN UNNEST(@from_ts) AS lo WITH OFFSET j ON i = j', 'JOIN UNNEST(@to_ts) AS hi WITH OFFSET k ON i = k',
+    for (const s of ['SELECT id, @from_ts[OFFSET(i)] AS lo, @to_ts[OFFSET(i)] AS hi', 'FROM UNNEST(@customer_ids) AS id WITH OFFSET i',
       "WHERE v.type IN ('ONLINE', 'OFFLINE')", 'TIMESTAMP_SUB(v.completed_at, INTERVAL 7 HOUR) AS completed_utc',
-      'WHERE s.completed_utc > @min_care_at', 'AND s.completed_utc > w.lo', 'AND s.completed_utc <= w.hi',
+      'WHERE s.completed_utc > @min_care_at', 'AND s.entity_id IN UNNEST(@customer_ids)', 'AND s.completed_utc > w.lo', 'AND s.completed_utc <= w.hi',
       's.entity_id AS customer_external_id', 's.order_code AS order_key', "FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%E6SZ', s.completed_utc, 'UTC') AS ordered_at",
       'ORDER BY s.completed_utc, s.order_code']) expect(sql, s).toContain(s)
     expect(sql).toMatch(/AND EXISTS \(\s*SELECT 1 FROM windows AS w/)
+    // Hotfix 28/10 P1-DATA: ghép mảng tham số bằng JOIN UNNEST … WITH OFFSET làm slot BigQuery tăng theo bình phương số
+    // khoảng (1.152 khoảng ⇒ job lỗi ~205 s) — cấm quay lại; chỉ đúng MỘT UNNEST mang OFFSET, lo/hi lấy theo chỉ số.
+    expect(sql).not.toMatch(/JOIN\s+UNNEST/i)
+    expect((sql.match(/WITH OFFSET/g) ?? []).length).toBe(1)
+    expect((sql.match(/\[OFFSET\(i\)\]/g) ?? []).length).toBe(2)
     expect(sql).not.toMatch(/created_at|Asia\/Ho_Chi_Minh|DATETIME\(|TIMESTAMP_ADD\(v\.completed_at/)
     expect(sql).not.toMatch(/SELECT \*|v\.type AS/)
     for (const bad of ['p.d.t`; DROP', 'a.b', 'qa-proj-123.ds.t$20261001', 'qa-proj-123.ds.t x']) {
