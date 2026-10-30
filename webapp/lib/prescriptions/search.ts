@@ -85,11 +85,8 @@ export async function searchPrescriptionIds(
 // Paged row RPC (mig 087; precision metadata in mig 089). This avoids the old
 // ids -> .in(id, [...hundreds]) pattern, which can exceed PostgREST's URL
 // length for broad DHC searches.
-export async function searchPrescriptionsPage(
-  supabase: RpcClient,
-  args: PrescriptionSearchPageArgs,
-): Promise<{ rows: PrescriptionSearchPageRow[]; total: number } | 'fallback'> {
-  const { data, error } = await supabase.rpc('rpc_search_prescriptions_page', {
+function searchPageRpcArgs(args: PrescriptionSearchPageArgs): Record<string, unknown> {
+  return {
     p_q: args.q,
     p_by: args.by,
     p_limit: args.limit,
@@ -102,11 +99,29 @@ export async function searchPrescriptionsPage(
     p_today: args.today || null,
     p_date_from: args.dateFrom || null,
     p_date_to: args.dateTo || null,
-  })
+  }
+}
+
+export async function searchPrescriptionsPage(
+  supabase: RpcClient,
+  args: PrescriptionSearchPageArgs,
+): Promise<{ rows: PrescriptionSearchPageRow[]; total: number } | 'fallback'> {
+  const { data, error } = await supabase.rpc('rpc_search_prescriptions_page', searchPageRpcArgs(args))
   if (error) {
     console.error('[prescriptions] paged search rpc failed (mig 087/089 chua chay?):', error.message)
     return 'fallback'
   }
   const rows = (data ?? []) as PrescriptionSearchPageRow[]
   return { rows, total: rows[0]?.total_count ?? 0 }
+}
+
+// EXP-1: đường gọi STRICT cho export — trả nguyên { data, error }: không 'fallback', không suy total = 0 khi trang rỗng,
+// để export phân biệt lỗi / rỗng và KHÔNG hạ cấp sang tìm theo mã đơn (lib/export/fetchExportRows.fetchSearchExportRows).
+// Trang danh sách vẫn dùng searchPrescriptionsPage ở trên (hành vi cũ).
+export async function searchPrescriptionsPageStrict(
+  supabase: RpcClient,
+  args: PrescriptionSearchPageArgs,
+): Promise<{ data: PrescriptionSearchPageRow[] | null; error: { message: string } | null }> {
+  const { data, error } = await supabase.rpc('rpc_search_prescriptions_page', searchPageRpcArgs(args))
+  return { data: error ? null : ((data ?? []) as PrescriptionSearchPageRow[]), error }
 }

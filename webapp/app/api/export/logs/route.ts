@@ -3,8 +3,8 @@ import { createClient } from '@/lib/supabase/server'
 import { getSmStoreIds } from '@/lib/authz'
 import { ACTION_LABELS, formatMeta } from '@/lib/logs/constants'
 import { xlsxResponse, stampVN, fmtVN } from '@/lib/export/xlsx'
+import { EXPORT_MAX_ROWS as MAX_ROWS, fetchExportRows } from '@/lib/export/fetchExportRows'
 
-const MAX_ROWS = 5000
 const MAX_RANGE_DAYS = 92
 
 // GET /api/export/logs — Excel of the activity log, honoring the page filters.
@@ -43,27 +43,39 @@ export async function GET(request: NextRequest) {
     ? 'tasks!inner(title, source_schedule_id, stores(name))'
     : 'tasks(title, source_schedule_id, stores(name))'
 
-  let query = supabase
-    .from('task_logs')
-    .select(`id, action, created_at, metadata, ${taskEmbed}, users(full_name)`)
-    .order('created_at', { ascending: false })
-    .gte('created_at', dateFrom + 'T00:00:00+07:00')
-    .lte('created_at', dateTo + 'T23:59:59+07:00')
-    .limit(MAX_ROWS + 1)
+  // EXP-1: MỘT builder bộ lọc + thứ tự cho cả lượt đếm (head) và từng trang; kiểm đủ trước khi tạo file
+  // (lib/export/fetchExportRows). Thứ tự created_at DESC, id DESC (khoá cuối duy nhất).
+  // Cận trên = lúc bắt đầu request: task_logs được ghi liên tục — dòng mới trong lúc xuất không được làm đổi count (409 giả).
+  const startIso = new Date().toISOString()
+  const build = (head: boolean) => {
+    let query = supabase
+      .from('task_logs')
+      .select(`id, action, created_at, metadata, ${taskEmbed}, users(full_name)`, { count: 'exact', head })
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .gte('created_at', dateFrom + 'T00:00:00+07:00')
+      .lte('created_at', dateTo + 'T23:59:59+07:00')
+      .lte('created_at', startIso)
 
-  if (p.get('action'))  query = query.eq('action', p.get('action') as string)
-  if (p.get('user_id')) query = query.eq('user_id', p.get('user_id') as string)
-  if (storeFilter)      query = query.eq('tasks.store_id', storeFilter)
-  if (q)                query = query.ilike('tasks.title', `%${q}%`)
-  if (taskType === 'recurring') query = query.not('tasks.source_schedule_id', 'is', null)
-  if (taskType === 'adhoc')     query = query.is('tasks.source_schedule_id', null)
+    if (p.get('action'))  query = query.eq('action', p.get('action') as string)
+    if (p.get('user_id')) query = query.eq('user_id', p.get('user_id') as string)
+    if (storeFilter)      query = query.eq('tasks.store_id', storeFilter)
+    if (q)                query = query.ilike('tasks.title', `%${q}%`)
+    if (taskType === 'recurring') query = query.not('tasks.source_schedule_id', 'is', null)
+    if (taskType === 'adhoc')     query = query.is('tasks.source_schedule_id', null)
+    return query
+  }
 
-  const { data, error } = await query
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  if ((data?.length ?? 0) > MAX_ROWS)
-    return NextResponse.json({ error: `Quá nhiều dòng (>${MAX_ROWS}). Vui lòng thu hẹp khoảng ngày hoặc thêm bộ lọc rồi xuất lại.` }, { status: 400 })
+  const result = await fetchExportRows<{ id: string }>({
+    count: () => build(true),
+    page: (from, to) => build(false).range(from, to) as unknown as PromiseLike<{ data: { id: string }[] | null; error: { message: string } | null; count: number | null }>,
+    tooMany: `Quá nhiều dòng (>${MAX_ROWS}). Vui lòng thu hẹp khoảng ngày hoặc thêm bộ lọc rồi xuất lại.`,
+    label: 'logs',
+  })
+  if (!result.ok) return NextResponse.json({ error: result.error }, { status: result.status })
+  const data = result.rows as unknown as { action: unknown; created_at: unknown; metadata: unknown; tasks: unknown; users: unknown }[]
 
-  const rows = (data ?? []).map((log) => {
+  const rows = data.map((log) => {
     const task = log.tasks as unknown as { title?: string; source_schedule_id?: string | null; stores?: { name?: string } | null } | null
     return {
       'Thời gian':       fmtVN(log.created_at as string),
