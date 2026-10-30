@@ -3,7 +3,8 @@ import { Card, CardContent } from '@/components/ui/card'
 import { formatDate } from '@/lib/dateUtils'
 import { campaignCardValue } from '@/lib/kpi/campaignDisplay'
 import { cn } from '@/lib/utils'
-import { CalendarDays, ChevronRight, ChartNoAxesCombined } from 'lucide-react'
+import { CalendarDays, ChartNoAxesCombined } from 'lucide-react'
+import { NavChevron } from '@/components/common/NavWatchdog'
 
 // Đủ các trường `fetchCampaignViews` đã lấy sẵn (targets/page.tsx) — KHÔNG cần
 // đụng query. Các trường của Chất lượng bán hàng là optional vì hai loại còn
@@ -79,7 +80,8 @@ export function CampaignCardList({ items, hrefFor }: { items: CampaignCard[]; hr
                       <span className="rounded bg-muted px-1.5 py-0.5 font-medium v2:rounded-v2-chip v2:bg-accent v2:text-[11px] v2:text-foreground">{v.typeLabel}</span>
                     </div>
                   </div>
-                  <ChevronRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" />
+                  {/* NAV-1: mũi tên kiêm watchdog — chạm mà điều hướng treo quá 6 s ⇒ tải cứng trang chi tiết. */}
+                  <NavChevron href={hrefFor(c.id)} className="mt-1" />
                 </div>
 
                 {/* Số liệu: 1 dòng cho GMV/Số khách, 2 dòng cho Chất lượng bán
