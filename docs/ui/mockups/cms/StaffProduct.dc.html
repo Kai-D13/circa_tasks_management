@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>Dược sĩ · Chi tiết sản phẩm CMS</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#C94A16}a:hover{color:#9A3410}
+</style>
+</helmet>
+<div style="width: 390px; height: 1700px; box-sizing: border-box; overflow: hidden; font-family: 'Be Vietnam Pro', system-ui, sans-serif; background: {{t.bg}}; color: {{t.text}}; font-size: 15px; line-height: 1.5; display: flex; flex-direction: column">
+
+<header style="padding: 8px 8px 0; display: flex; align-items: center; gap: 4px">
+<a href="StaffHome.dc.html" aria-label="Quay lại CMS của tôi" style="width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: {{t.text}}">
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
+</a>
+<h1 style="margin: 0; font-size: 17px; font-weight: 700">Chi tiết sản phẩm</h1>
+</header>
+
+<main style="padding: 8px 16px 24px; display: flex; flex-direction: column; gap: 14px">
+
+<section aria-label="Sản phẩm" style="display: flex; flex-direction: column; gap: 12px">
+<div role="img" aria-label="Ảnh sản phẩm từ Product Master" style="height: 180px; border-radius: 16px; background: {{t.muted}}; border: 1px solid {{t.line}}; display: flex; align-items: center; justify-content: center">
+<svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="{{t.text2}}" stroke-width="1.4" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 16 5-5 4 4 3-3 6 6"></path></svg>
+</div>
+<div style="display: flex; flex-direction: column; gap: 4px">
+<h2 style="margin: 0; font-size: 20px; font-weight: 700; line-height: 1.3">Máy xông khí dung mini</h2>
+<span style="font-size: 13px; color: {{t.text2}}">SKU001 · Giá bán 1.000.000đ · CMS T11/2026 · Hô hấp &amp; cảm cúm</span>
+</div>
+</section>
+
+<section aria-label="CMS tạm tính" style="background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; justify-content: space-between; align-items: baseline; gap: 8px">
+<span style="font-size: 13px; color: {{t.text2}}">CMS tạm tính</span>
+<strong style="font-size: 28px; font-weight: 700; letter-spacing: -0.02em">235.000đ</strong>
+</div>
+<div style="display: flex; flex-direction: column; gap: 6px; font-size: 14px">
+<div style="display: flex; justify-content: space-between"><span style="color: {{t.text2}}">Bậc 1 · 9 SP × 15.000đ</span><span>135.000đ</span></div>
+<div style="display: flex; justify-content: space-between"><span style="color: {{t.text2}}">Bậc 2 · 5 SP × 20.000đ</span><span>100.000đ</span></div>
+</div>
+</section>
+
+<section aria-label="Điều kiện GMV" style="background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 8px">
+<strong style="font-size: 15px">Điều kiện: target GMV sản phẩm</strong>
+<span style="font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 6px; background: {{t.okBg}}; color: {{t.ok}}">Đã đạt</span>
+</div>
+<div style="height: 8px; border-radius: 4px; background: {{t.muted}}; overflow: hidden"><div style="height: 8px; width: 100%; background: {{t.ok}}"></div></div>
+<span style="font-size: 13px; color: {{t.text2}}">GMV của bạn 14.000.000đ / target 10.000.000đ. Đạt từ 12/11 — CMS được tính cho toàn bộ số lượng đã bán trong kỳ.</span>
+</section>
+
+<section aria-label="Thang bậc" style="background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 12px">
+<strong style="font-size: 15px">Thang CMS theo số lượng</strong>
+<ol style="list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px">
+<sc-for list="{{tiers}}" as="r" hint-placeholder-count="3">
+<li style="border-radius: 12px; border: 1px solid {{r.border}}; background: {{r.bg}}; padding: 12px; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 8px">
+<span style="display: flex; flex-direction: column">
+<strong style="font-size: 14px">{{r.name}} · {{r.range}}</strong>
+<span style="font-size: 12px; color: {{t.text2}}">{{r.state}}</span>
+</span>
+<strong style="font-size: 15px; white-space: nowrap">{{r.cms}}</strong>
+</div>
+<span style="display: block; height: 6px; border-radius: 3px; background: {{t.muted}}; overflow: hidden"><span style="display: block; height: 6px; width: {{r.pct}}; background: {{r.bar}}"></span></span>
+</li>
+</sc-for>
+</ol>
+</section>
+
+<section aria-label="Ước tính" style="background: {{t.accentSoft}}; border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 12px">
+<strong style="font-size: 15px">Nếu bán thêm</strong>
+<div style="display: flex; align-items: center; gap: 12px">
+<button type="button" onClick="{{dec}}" aria-label="Giảm 1 sản phẩm" style="width: 44px; height: 44px; border-radius: 12px; border: 1px solid {{t.line}}; background: {{t.panel}}; color: {{t.text}}; cursor: pointer; display: flex; align-items: center; justify-content: center">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"></path></svg>
+</button>
+<span aria-live="polite" style="flex: 1; text-align: center; display: flex; flex-direction: column">
+<strong style="font-size: 22px">{{extra}} SP</strong>
+<span style="font-size: 12px; color: {{t.text2}}">tổng {{total}} SP trong kỳ</span>
+</span>
+<button type="button" onClick="{{inc}}" aria-label="Tăng 1 sản phẩm" style="width: 44px; height: 44px; border-radius: 12px; border: 1px solid {{t.line}}; background: {{t.panel}}; color: {{t.text}}; cursor: pointer; display: flex; align-items: center; justify-content: center">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+</button>
+</div>
+<div style="display: flex; justify-content: space-between; align-items: baseline; border-top: 1px solid {{t.line}}; padding-top: 10px">
+<span style="font-size: 13px; color: {{t.text2}}">CMS ước tính</span>
+<span style="display: flex; gap: 8px; align-items: baseline"><strong style="font-size: 20px">{{est}}</strong><span style="font-size: 13px; color: {{t.ok}}; font-weight: 600">{{delta}}</span></span>
+</div>
+</section>
+
+<section aria-label="Nội dung tư vấn" style="background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 10px">
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 8px">
+<strong style="font-size: 15px">Nội dung tư vấn</strong>
+<span style="font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 6px; background: {{t.infoBg}}; color: {{t.info}}">Đã kiểm duyệt</span>
+</div>
+<p style="margin: 0; font-size: 15px; line-height: 1.65; white-space: pre-line">Thông tin sản phẩm và hướng dẫn tư vấn đã được phê duyệt.</p>
+<button type="button" style="align-self: flex-start; height: 44px; padding: 0 14px; border-radius: 10px; border: 1px solid {{t.line}}; background: {{t.panel}}; color: {{t.text}}; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 8px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V5a1 1 0 0 1 1-1h10"></path></svg>
+Sao chép</button>
+</section>
+
+<section aria-label="Ghi nhận gần đây" style="background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 16px; padding: 6px 16px 10px; display: flex; flex-direction: column">
+<div style="display: flex; justify-content: space-between; align-items: center; min-height: 44px">
+<strong style="font-size: 15px">Ghi nhận gần đây</strong>
+<a href="StaffHistory.dc.html" style="min-height: 44px; display: inline-flex; align-items: center; font-size: 14px; font-weight: 600">Xem tất cả</a>
+</div>
+<sc-for list="{{lines}}" as="l" hint-placeholder-count="3">
+<div style="display: flex; justify-content: space-between; gap: 8px; padding: 10px 0; border-top: 1px solid {{t.line}}">
+<span style="display: flex; flex-direction: column">
+<span style="font-size: 14px; font-weight: 600">{{l.code}}</span>
+<span style="font-size: 12px; color: {{t.text2}}">{{l.when}} · {{l.qty}}</span>
+</span>
+<span style="display: flex; flex-direction: column; align-items: flex-end">
+<strong style="font-size: 14px">{{l.cms}}</strong>
+<span style="font-size: 12px; color: {{t.text2}}">{{l.tier}}</span>
+</span>
+</div>
+</sc-for>
+</section>
+
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":390,"height":1700}}'>
+class Component extends DCLogic {
+  constructor(p) { super(p); this.state = {extra: 6}; }
+  renderVals() {
+    const P = {
+      light: {bg:'#F7F6F4',panel:'#FFFFFF',muted:'#F1F0EE',line:'#E7E5E4',text:'#1C1917',text2:'#57534E',brand:'#F3743F',onBrand:'#141210',accentSoft:'#FFF1EA',info:'#1F5A8F',infoBg:'#E5F0FA',ok:'#1D6B3A',okBg:'#E3F4E8',tier1:'#F9CBB3'},
+      dark: {bg:'#121110',panel:'#1A1817',muted:'#24211F',line:'#2E2A27',text:'#F5F5F4',text2:'#A8A29E',brand:'#F3743F',onBrand:'#141210',accentSoft:'#2A1E17',info:'#9DC6EF',infoBg:'#16243A',ok:'#8FD6A2',okBg:'#15291C',tier1:'#6B3218'}
+    };
+    const t = P[this.props.theme === 'dark' ? 'dark' : 'light'];
+    const sold = 14;
+    const ladder = [{from: 1, to: 9, rate: 15000}, {from: 10, to: 19, rate: 20000}, {from: 20, to: null, rate: 25000}];
+    const calc = (n) => ladder.reduce((sum, r) => {
+      const hi = r.to == null ? n : Math.min(n, r.to);
+      const units = Math.max(0, hi - r.from + 1);
+      return sum + units * r.rate;
+    }, 0);
+    const vnd = (x) => x.toLocaleString('vi-VN') + 'đ';
+    const extra = this.state.extra;
+    const total = sold + extra;
+    const now = calc(sold), est = calc(total);
+    const tiers = ladder.map((r, i) => {
+      const done = r.to != null && sold > r.to;
+      const cur = sold >= r.from && (r.to == null || sold <= r.to);
+      const span = r.to == null ? 10 : r.to - r.from + 1;
+      const inTier = Math.max(0, Math.min(sold, r.to == null ? sold : r.to) - r.from + 1);
+      const pct = Math.min(100, Math.round(inTier / span * 100)) + '%';
+      const state = done ? 'Đã hoàn thành' : cur ? 'Bạn đang ở đây · ' + sold + '/' + (r.to == null ? '∞' : r.to) + ' SP' : 'Còn ' + (r.from - sold) + ' SP để lên bậc này';
+      return {name: 'Bậc ' + (i + 1), range: r.to == null ? 'từ ' + r.from + ' SP' : r.from + '–' + r.to + ' SP', cms: vnd(r.rate) + '/SP', state, pct,
+        bg: cur ? t.accentSoft : t.panel, border: cur ? t.brand : t.line, bar: done ? t.tier1 : t.brand};
+    });
+    return {
+      t, tiers, extra, total, est: vnd(est), delta: est > now ? '+' + vnd(est - now) : '',
+      inc: () => this.setState({extra: Math.min(50, extra + 1)}),
+      dec: () => this.setState({extra: Math.max(0, extra - 1)}),
+      lines: [
+        {code: 'Đơn #DH-24117', when: '15/11', qty: '2 SP', cms: '+40.000đ', tier: 'Bậc 2'},
+        {code: 'Đơn #DH-23980', when: '12/11', qty: '3 SP', cms: '+60.000đ', tier: 'Bậc 2'},
+        {code: 'Đơn #DH-23871', when: '09/11', qty: '1 SP', cms: '+15.000đ', tier: 'Bậc 1'}
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

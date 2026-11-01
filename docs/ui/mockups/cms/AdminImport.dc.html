@@ -1,0 +1,345 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>Admin · Tạo chương trình CMS và import</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#C94A16}a:hover{color:#9A3410}
+</style>
+</helmet>
+<div style="font-family: 'Be Vietnam Pro', system-ui, sans-serif; background: {{t.bg}}; color: {{t.text}}; font-size: 15px; line-height: 1.5; min-height: 100%">
+<div style="max-width: 1200px; margin: 0 auto; padding: 28px 32px 64px; display: flex; flex-direction: column; gap: 24px">
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<a href="AdminPrograms.dc.html" style="align-self: flex-start; min-height: 44px; display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 500; color: {{t.text2}}; text-decoration: none">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
+CMS sản phẩm</a>
+<h1 style="margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -0.01em">Tạo chương trình CMS</h1>
+<p style="margin: 0; font-size: 14px; color: {{t.text2}}">Nhập thông tin chương trình, upload file IMPORT_CMS, chạy xử lý và kiểm tra kết quả trước khi kích hoạt.</p>
+</div>
+
+<ol aria-label="Các bước" style="list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 8px">
+<sc-for list="{{steps}}" as="s" hint-placeholder-count="4">
+<li aria-current="{{s.current}}" style="display: flex; gap: 10px; align-items: center; padding: 12px 14px; border-radius: 12px; background: {{s.bg}}; border: 1px solid {{s.border}}">
+<span style="width: 28px; height: 28px; flex: none; border-radius: 50%; background: {{s.dotBg}}; color: {{s.dotFg}}; font-size: 13px; font-weight: 700; display: flex; align-items: center; justify-content: center">{{s.mark}}</span>
+<span style="display: flex; flex-direction: column">
+<strong style="font-size: 14px">{{s.title}}</strong>
+<span style="font-size: 12px; color: {{t.text2}}">{{s.sub}}</span>
+</span>
+</li>
+</sc-for>
+</ol>
+
+<sc-if value="{{is1}}" hint-placeholder-val="{{ false }}">
+<section aria-label="Thông tin chương trình" style="background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 20px">
+<h2 style="margin: 0; font-size: 18px; font-weight: 700">Thông tin chương trình</h2>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 18px">
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 600">Tên chương trình *
+<input type="text" placeholder="VD: CMS T11/2026 · Hô hấp &amp; cảm cúm" style="height: 44px; padding: 0 12px; border-radius: 10px; border: 1px solid {{t.line}}; background: {{t.panel}}; color: {{t.text}}; font: inherit; font-size: 15px; font-weight: 400"></label>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px">
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 600">Từ ngày *
+<input type="date" style="height: 44px; padding: 0 12px; border-radius: 10px; border: 1px solid {{t.line}}; background: {{t.panel}}; color: {{t.text}}; font: inherit; font-size: 15px; font-weight: 400"></label>
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 600">Đến ngày *
+<input type="date" style="height: 44px; padding: 0 12px; border-radius: 10px; border: 1px solid {{t.line}}; background: {{t.panel}}; color: {{t.text}}; font: inherit; font-size: 15px; font-weight: 400"></label>
+</div>
+<fieldset style="border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px">
+<legend style="font-size: 14px; font-weight: 600; padding: 0; margin-bottom: 6px">Phạm vi nhà thuốc</legend>
+<label style="display: flex; gap: 10px; align-items: center; min-height: 44px; padding: 0 12px; border: 1px solid {{t.line}}; border-radius: 10px; font-size: 14px"><input type="radio" name="scope" checked="checked"> Tất cả nhà thuốc trong hệ thống</label>
+<label style="display: flex; gap: 10px; align-items: center; min-height: 44px; padding: 0 12px; border: 1px solid {{t.line}}; border-radius: 10px; font-size: 14px"><input type="radio" name="scope"> Chọn nhà thuốc / khu vực</label>
+</fieldset>
+<div style="display: flex; flex-direction: column; gap: 6px">
+<label style="display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 600">Target GMV toàn danh mục (VNĐ)
+<input type="text" inputmode="numeric" placeholder="VD: 5.000.000" style="height: 44px; padding: 0 12px; border-radius: 10px; border: 1px solid {{t.line}}; background: {{t.panel}}; color: {{t.text}}; font: inherit; font-size: 15px; font-weight: 400"></label>
+<span style="font-size: 13px; color: {{t.text2}}">Áp dụng cho các dòng có Loai_CMS_GMV = GMV_TOAN_DANH_MUC. Để trống nếu file không có loại này.</span>
+<span style="align-self: flex-start; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 6px; background: {{t.warnBg}}; color: {{t.warn}}">Giả định Q2 · chờ chốt</span>
+</div>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 14px 16px; border-radius: 12px; background: {{t.muted}}; font-size: 14px">
+<strong>Cách tính bậc:</strong> Lũy tiến — mỗi SP tính theo bậc nó rơi vào.
+<span style="font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 6px; background: {{t.warnBg}}; color: {{t.warn}}">Q3 · chờ chốt</span>
+</div>
+<div style="display: flex; justify-content: flex-end; gap: 10px; flex-wrap: wrap">
+<button type="button" style="height: 44px; padding: 0 18px; border-radius: 10px; border: 1px solid {{t.line}}; background: {{t.panel}}; color: {{t.text}}; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer">Lưu nháp</button>
+<button type="button" onClick="{{next}}" style="height: 44px; padding: 0 18px; border-radius: 10px; border: 0; background: {{t.brand}}; color: {{t.onBrand}}; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer">Tiếp tục · Upload file</button>
+</div>
+</section>
+</sc-if>
+
+<sc-if value="{{is2}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start">
+<section aria-label="Upload file" style="flex: 999 1 560px; min-width: 0; background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 18px">
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap">
+<h2 style="margin: 0; font-size: 18px; font-weight: 700">Upload file IMPORT_CMS</h2>
+<a href="#" style="min-height: 44px; display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 4v12m0 0-4-4m4 4 4-4M5 20h14"></path></svg>
+Tải file mẫu</a>
+</div>
+<label style="border: 2px dashed {{t.line2}}; border-radius: 14px; padding: 32px 16px; display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; cursor: pointer">
+<svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="{{t.text2}}" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"></path></svg>
+<strong style="font-size: 15px">Kéo thả file .xlsx vào đây hoặc bấm để chọn</strong>
+<span style="font-size: 13px; color: {{t.text2}}">Sheet IMPORT_CMS, tiêu đề cột ở dòng 3, tối đa 2.000 dòng</span>
+<input type="file" accept=".xlsx" style="position: absolute; width: 1px; height: 1px; opacity: 0">
+</label>
+<div style="display: flex; gap: 12px; align-items: center; padding: 12px 14px; border: 1px solid {{t.line}}; border-radius: 12px">
+<span style="width: 40px; height: 40px; border-radius: 10px; background: {{t.okBg}}; color: {{t.ok}}; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700">XLSX</span>
+<span style="flex: 1; min-width: 0; display: flex; flex-direction: column">
+<strong style="font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap">CMS_T11_HoHap.xlsx</strong>
+<span style="font-size: 12px; color: {{t.text2}}">22 KB · 14 dòng dữ liệu · đọc được 7 cột</span>
+</span>
+<button type="button" aria-label="Bỏ file" style="width: 44px; height: 44px; border-radius: 10px; border: 0; background: transparent; color: {{t.text2}}; cursor: pointer; display: flex; align-items: center; justify-content: center">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
+</button>
+</div>
+<div style="overflow-x: auto; border: 1px solid {{t.line}}; border-radius: 12px">
+<div role="table" aria-label="Cột của sheet IMPORT_CMS" style="min-width: 560px; font-size: 13px">
+<div role="row" style="display: grid; grid-template-columns: 1.2fr 2.4fr 0.8fr; gap: 12px; padding: 8px 12px; background: {{t.muted}}; color: {{t.text2}}; font-size: 12px; font-weight: 600">
+<span role="columnheader">Cột</span><span role="columnheader">Ý nghĩa</span><span role="columnheader">Bắt buộc</span>
+</div>
+<sc-for list="{{cols}}" as="c" hint-placeholder-count="7">
+<div role="row" style="display: grid; grid-template-columns: 1.2fr 2.4fr 0.8fr; gap: 12px; padding: 8px 12px; border-top: 1px solid {{t.line}}">
+<span role="cell" style="font-family: ui-monospace, Menlo, monospace; font-size: 12px; overflow-wrap: anywhere">{{c.k}}</span>
+<span role="cell" style="color: {{t.text2}}">{{c.v}}</span>
+<span role="cell">{{c.req}}</span>
+</div>
+</sc-for>
+</div>
+</div>
+<div style="display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap">
+<button type="button" onClick="{{back}}" style="height: 44px; padding: 0 18px; border-radius: 10px; border: 1px solid {{t.line}}; background: {{t.panel}}; color: {{t.text}}; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer">Quay lại</button>
+<button type="button" onClick="{{next}}" style="height: 44px; padding: 0 18px; border-radius: 10px; border: 0; background: {{t.brand}}; color: {{t.onBrand}}; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 8px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"></path></svg>
+Chạy xử lý</button>
+</div>
+</section>
+<aside aria-label="Hệ thống sẽ kiểm tra" style="flex: 1 1 300px; background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 16px; padding: 20px; display: flex; flex-direction: column; gap: 12px">
+<h3 style="margin: 0; font-size: 15px; font-weight: 700">Hệ thống sẽ kiểm tra</h3>
+<ul style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px">
+<sc-for list="{{checks}}" as="c" hint-placeholder-count="8">
+<li style="display: flex; gap: 10px; font-size: 13px; line-height: 1.45">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="{{t.text2}}" stroke-width="2" stroke-linecap="round" aria-hidden="true" style="flex: none; margin-top: 2px"><path d="m5 12 4 4L19 7"></path></svg>
+<span>{{c}}</span>
+</li>
+</sc-for>
+</ul>
+<p style="margin: 0; font-size: 13px; color: {{t.text2}}; border-top: 1px solid {{t.line}}; padding-top: 12px">Dòng lỗi bị loại, dòng hợp lệ vẫn được xử lý. Có thể tải file lỗi để sửa và import bổ sung.</p>
+</aside>
+</div>
+</sc-if>
+
+<sc-if value="{{is3}}" hint-placeholder-val="{{ false }}">
+<section aria-label="Đang xử lý" style="background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 16px; padding: 24px; display: flex; flex-direction: column; gap: 18px">
+<div style="display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap">
+<h2 style="margin: 0; font-size: 18px; font-weight: 700">Đang xử lý CMS_T11_HoHap.xlsx</h2>
+<span style="font-size: 14px; color: {{t.text2}}">9 / 14 dòng</span>
+</div>
+<div role="progressbar" aria-valuemin="0" aria-valuemax="14" aria-valuenow="9" aria-label="Tiến độ xử lý" style="height: 8px; border-radius: 4px; background: {{t.muted}}; overflow: hidden"><div style="height: 8px; width: 64%; background: {{t.brand}}"></div></div>
+<ol style="margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px">
+<sc-for list="{{stages}}" as="g" hint-placeholder-count="5">
+<li style="display: flex; gap: 12px; align-items: center; min-height: 44px; padding: 0 4px; border-top: 1px solid {{t.line}}">
+<span style="width: 24px; height: 24px; border-radius: 50%; background: {{g.bg}}; color: {{g.fg}}; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center">{{g.mark}}</span>
+<span style="flex: 1; font-size: 14px">{{g.label}}</span>
+<span style="font-size: 13px; color: {{t.text2}}">{{g.note}}</span>
+</li>
+</sc-for>
+</ol>
+<div style="display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap">
+<button type="button" onClick="{{back}}" style="height: 44px; padding: 0 18px; border-radius: 10px; border: 1px solid {{t.line}}; background: {{t.panel}}; color: {{t.text}}; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer">Hủy lần chạy</button>
+<button type="button" onClick="{{next}}" style="height: 44px; padding: 0 18px; border-radius: 10px; border: 0; background: {{t.brand}}; color: {{t.onBrand}}; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer">Xem kết quả</button>
+</div>
+</section>
+</sc-if>
+
+<sc-if value="{{is4}}" hint-placeholder-val="{{ true }}">
+<section aria-label="Kết quả import" style="display: flex; flex-direction: column; gap: 16px">
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr)); gap: 12px">
+<sc-for list="{{summary}}" as="m" hint-placeholder-count="4">
+<div style="background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 4px">
+<span style="display: flex; gap: 8px; align-items: center; font-size: 13px; color: {{t.text2}}"><span style="width: 8px; height: 8px; border-radius: 50%; background: {{m.dot}}"></span>{{m.label}}</span>
+<strong style="font-size: 26px; font-weight: 700">{{m.value}}</strong>
+<span style="font-size: 12px; color: {{t.text2}}">{{m.sub}}</span>
+</div>
+</sc-for>
+</div>
+
+<div style="background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 16px; overflow: hidden">
+<div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid {{t.line}}">
+<div role="tablist" aria-label="Kết quả" style="display: flex; gap: 6px; flex-wrap: wrap">
+<sc-for list="{{rtabs}}" as="f" hint-placeholder-count="3">
+<button type="button" role="tab" aria-selected="{{f.sel}}" onClick="{{f.pick}}" style="height: 36px; padding: 0 12px; border-radius: 9px; border: 1px solid {{f.border}}; background: {{f.bg}}; color: {{f.fg}}; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer">{{f.label}}</button>
+</sc-for>
+</div>
+<a href="#" style="min-height: 44px; display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 4v12m0 0-4-4m4 4 4-4M5 20h14"></path></svg>
+Tải file dòng lỗi (.xlsx)</a>
+</div>
+
+<sc-if value="{{showValid}}" hint-placeholder-val="{{ true }}">
+<div style="overflow-x: auto">
+<div role="table" aria-label="Sản phẩm hợp lệ" style="min-width: 980px; font-size: 14px">
+<div role="row" style="display: grid; grid-template-columns: 2.2fr 1.2fr 2fr 1.6fr 0.5fr; gap: 12px; padding: 10px 16px; background: {{t.muted}}; color: {{t.text2}}; font-size: 12px; font-weight: 600">
+<span role="columnheader">Sản phẩm (Product Master)</span>
+<span role="columnheader">Điều kiện GMV</span>
+<span role="columnheader">Bậc số lượng → CMS/SP</span>
+<span role="columnheader">Nội dung tư vấn</span>
+<span role="columnheader">Dòng</span>
+</div>
+<sc-for list="{{products}}" as="p" hint-placeholder-count="5">
+<div role="row" style="display: grid; grid-template-columns: 2.2fr 1.2fr 2fr 1.6fr 0.5fr; gap: 12px; padding: 14px 16px; border-top: 1px solid {{t.line}}; align-items: start">
+<div role="cell">
+<div style="display: flex; gap: 12px; align-items: center">
+<span role="img" aria-label="Ảnh sản phẩm từ Product Master" style="width: 44px; height: 44px; flex: none; border-radius: 10px; background: {{t.muted}}; border: 1px solid {{t.line}}; display: flex; align-items: center; justify-content: center">
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="{{t.text2}}" stroke-width="1.6" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2"></rect><path d="m3 16 5-5 4 4 3-3 6 6"></path></svg>
+</span>
+<span style="display: flex; flex-direction: column; min-width: 0">
+<strong style="font-size: 14px">{{p.name}}</strong>
+<span style="font-size: 12px; color: {{t.text2}}">{{p.id}} · {{p.price}}</span>
+<sc-if value="{{p.warn}}" hint-placeholder-val="{{ false }}"><span style="font-size: 12px; color: {{t.warn}}">{{p.warnText}}</span></sc-if>
+</span>
+</div>
+</div>
+<div role="cell">
+<span style="font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 6px; background: {{p.gBg}}; color: {{p.gFg}}; white-space: nowrap">{{p.gate}}</span>
+<span style="display: block; font-size: 12px; color: {{t.text2}}; margin-top: 6px">{{p.gateSub}}</span>
+</div>
+<div role="cell" style="display: flex; gap: 6px; flex-wrap: wrap">
+<sc-for list="{{p.tiers}}" as="r" hint-placeholder-count="3">
+<span style="font-size: 12px; padding: 4px 8px; border-radius: 7px; border: 1px solid {{t.line}}; white-space: nowrap"><strong>{{r.range}}</strong> · {{r.cms}}</span>
+</sc-for>
+</div>
+<span role="cell" style="font-size: 13px; color: {{t.text2}}">{{p.advice}}</span>
+<span role="cell" style="font-size: 13px; color: {{t.text2}}">{{p.rows}}</span>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{showErr}}" hint-placeholder-val="{{ false }}">
+<div style="overflow-x: auto">
+<div role="table" aria-label="Lỗi và cảnh báo" style="min-width: 860px; font-size: 14px">
+<div role="row" style="display: grid; grid-template-columns: 0.7fr 0.9fr 1fr 2.2fr 2fr; gap: 12px; padding: 10px 16px; background: {{t.muted}}; color: {{t.text2}}; font-size: 12px; font-weight: 600">
+<span role="columnheader">Dòng Excel</span>
+<span role="columnheader">ProductID</span>
+<span role="columnheader">Cột</span>
+<span role="columnheader">Lỗi</span>
+<span role="columnheader">Cách sửa</span>
+</div>
+<sc-for list="{{issues}}" as="e" hint-placeholder-count="3">
+<div role="row" style="display: grid; grid-template-columns: 0.7fr 0.9fr 1fr 2.2fr 2fr; gap: 12px; padding: 12px 16px; border-top: 1px solid {{t.line}}; align-items: start">
+<span role="cell" style="font-weight: 600">{{e.row}}</span>
+<span role="cell" style="font-family: ui-monospace, Menlo, monospace; font-size: 13px">{{e.id}}</span>
+<span role="cell" style="font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: {{t.text2}}">{{e.col}}</span>
+<span role="cell" style="display: flex; flex-direction: column; gap: 6px; align-items: flex-start"><span style="font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 6px; background: {{e.bg}}; color: {{e.fg}}">{{e.kind}}</span><span>{{e.msg}}</span></span>
+<span role="cell" style="color: {{t.text2}}; font-size: 13px">{{e.fix}}</span>
+</div>
+</sc-for>
+</div>
+</div>
+</sc-if>
+</div>
+
+<div style="display: flex; justify-content: space-between; gap: 10px; flex-wrap: wrap; align-items: center">
+<button type="button" onClick="{{restart}}" style="height: 44px; padding: 0 18px; border-radius: 10px; border: 1px solid {{t.line}}; background: {{t.panel}}; color: {{t.text}}; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer">Upload file khác</button>
+<div style="display: flex; gap: 10px; flex-wrap: wrap">
+<button type="button" style="height: 44px; padding: 0 18px; border-radius: 10px; border: 1px solid {{t.line}}; background: {{t.panel}}; color: {{t.text}}; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer">Lưu nháp</button>
+<a href="AdminProgramDetail.dc.html" style="height: 44px; padding: 0 18px; border-radius: 10px; background: {{t.brand}}; color: {{t.onBrand}}; font-size: 14px; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center">Kích hoạt 5 sản phẩm hợp lệ</a>
+</div>
+</div>
+</section>
+</sc-if>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"step":{"editor":"enum","options":["1","2","3","4"],"default":"4"},"$preview":{"width":1440,"height":1500}}'>
+class Component extends DCLogic {
+  constructor(p) { super(p); this.state = {step: null, rtab: 'valid'}; }
+  renderVals() {
+    const P = {
+      light: {bg:'#F7F6F4',panel:'#FFFFFF',muted:'#F1F0EE',line:'#E7E5E4',line2:'#A8A29E',text:'#1C1917',text2:'#57534E',brand:'#F3743F',onBrand:'#141210',sel:'#1C1917',onSel:'#FFFFFF',info:'#1F5A8F',infoBg:'#E5F0FA',ok:'#1D6B3A',okBg:'#E3F4E8',warn:'#7A4D00',warnBg:'#FCF1D6',bad:'#A3231A',badBg:'#FDECEA',neu:'#57534E',neuBg:'#F1F0EE',accentSoft:'#FFF1EA'},
+      dark: {bg:'#121110',panel:'#1A1817',muted:'#24211F',line:'#2E2A27',line2:'#57534E',text:'#F5F5F4',text2:'#A8A29E',brand:'#F3743F',onBrand:'#141210',sel:'#F5F5F4',onSel:'#141210',info:'#9DC6EF',infoBg:'#16243A',ok:'#8FD6A2',okBg:'#15291C',warn:'#EBC170',warnBg:'#2E2412',bad:'#F4A29A',badBg:'#3A1A17',neu:'#A8A29E',neuBg:'#24211F',accentSoft:'#2A1E17'}
+    };
+    const t = P[this.props.theme === 'dark' ? 'dark' : 'light'];
+    const step = this.state.step || Number(this.props.step || 4);
+    const go = (n) => this.setState({step: Math.max(1, Math.min(4, n))});
+    const defs = [['Thông tin', 'Tên, kỳ, phạm vi'], ['Upload', 'File IMPORT_CMS'], ['Chạy xử lý', 'Kiểm tra từng dòng'], ['Kết quả', 'Hợp lệ · Lỗi · Cảnh báo']];
+    const steps = defs.map(([title, sub], i) => {
+      const n = i + 1, done = n < step, cur = n === step;
+      return {title, sub, current: cur ? 'step' : 'false', mark: done ? '✓' : String(n),
+        bg: cur ? t.accentSoft : t.panel, border: cur ? t.brand : t.line,
+        dotBg: cur || done ? t.brand : t.muted, dotFg: cur || done ? t.onBrand : t.text2};
+    });
+    const rtab = this.state.rtab;
+    const rdefs = [['valid', 'Sản phẩm hợp lệ (5)'], ['issues', 'Lỗi & cảnh báo (3)']];
+    const rtabs = rdefs.map(([k, label]) => {
+      const sel = rtab === k;
+      return {label, sel: sel ? 'true' : 'false', bg: sel ? t.sel : t.panel, fg: sel ? t.onSel : t.text2, border: sel ? t.sel : t.line, pick: () => this.setState({rtab: k})};
+    });
+    const gate = {
+      sp: [t.infoBg, t.info], cat: [t.accentSoft, t.text], qty: [t.neuBg, t.neu]
+    };
+    const products = [
+      {name: 'Máy xông khí dung mini', id: 'SKU001', price: '1.000.000đ', g: 'sp', gate: 'Target SP', gateSub: '10.000.000đ / dược sĩ / kỳ', tiers: [{range: '1–9', cms: '15.000đ'}, {range: '10–19', cms: '20.000đ'}, {range: '20+', cms: '25.000đ'}], advice: 'Thông tin sản phẩm và hướng dẫn tư vấn đã được phê duyệt.', rows: '4–6'},
+      {name: 'Viên ngậm thảo dược (hộp 24 viên)', id: 'SKU002', price: '65.000đ', g: 'cat', gate: 'Theo danh mục', gateSub: 'Target nhóm 5.000.000đ', tiers: [{range: '1–29', cms: '8.000đ'}, {range: '30+', cms: '12.000đ'}], advice: 'Đã có · 1 đoạn', rows: '7–8'},
+      {name: 'Xịt mũi nước biển 70ml', id: 'SKU003', price: '48.000đ', g: 'cat', gate: 'Theo danh mục', gateSub: 'Target nhóm 5.000.000đ', tiers: [{range: '1–29', cms: '4.000đ'}, {range: '30+', cms: '6.000đ'}], advice: 'Đã có · 1 đoạn', rows: '9–10'},
+      {name: 'Siro ho thảo dược 100ml', id: 'SKU004', price: '85.000đ', g: 'sp', gate: 'Target SP', gateSub: '6.000.000đ / dược sĩ / kỳ', tiers: [{range: '1–29', cms: '5.000đ'}, {range: '30–59', cms: '7.000đ'}, {range: '60+', cms: '9.000đ'}], advice: 'Đã có · 1 đoạn', rows: '11–13'},
+      {name: 'Khẩu trang y tế 4 lớp (hộp 50)', id: 'SKU005', price: '45.000đ', g: 'qty', gate: 'Theo số lượng', gateSub: 'Không có target', tiers: [{range: '1–49', cms: '3.000đ'}, {range: '50+', cms: '4.000đ'}], advice: 'Đã có · 1 đoạn', rows: '14–15', warn: true, warnText: 'Cảnh báo: Product Master chưa có ảnh'}
+    ].map(p => ({...p, warn: !!p.warn, warnText: p.warnText || '', gBg: gate[p.g][0], gFg: gate[p.g][1]}));
+    const issues = [
+      {row: '16', id: 'SKU017', col: 'ProductID', kind: 'Lỗi · đã loại', msg: 'Không tìm thấy ProductID trên Product Master Circa.vn.', fix: 'Kiểm tra lại mã, hoặc chờ SP được tạo trên Circa.vn rồi import bổ sung.', bg: t.badBg, fg: t.bad},
+      {row: '17', id: 'SKU018', col: 'CMS_VND_SP', kind: 'Lỗi · đã loại', msg: 'Thiếu mức CMS cho bậc 1–19.', fix: 'Nhập số tiền CMS > 0 cho mỗi bậc.', bg: t.badBg, fg: t.bad},
+      {row: '14–15', id: 'SKU005', col: 'ProductID', kind: 'Cảnh báo · vẫn nạp', msg: 'Product Master chưa có ảnh sản phẩm, dược sĩ sẽ thấy ảnh mặc định.', fix: 'Bổ sung ảnh trên Circa.vn, hệ thống tự đồng bộ.', bg: t.warnBg, fg: t.warn}
+    ];
+    const stages = [
+      {label: 'Đọc file và tiêu đề cột', note: '7/7 cột', s: 'done'},
+      {label: 'Kiểm tra kiểu dữ liệu từng dòng', note: '14 dòng', s: 'done'},
+      {label: 'Tra ProductID trên Product Master', note: '9/14', s: 'run'},
+      {label: 'Kiểm tra bậc liên tục, không chồng lấn', note: 'Chờ', s: 'wait'},
+      {label: 'Ghi dữ liệu hợp lệ vào chương trình', note: 'Chờ', s: 'wait'}
+    ].map((g, i) => ({...g, mark: g.s === 'done' ? '✓' : String(i + 1),
+      bg: g.s === 'done' ? t.okBg : g.s === 'run' ? t.brand : t.muted,
+      fg: g.s === 'done' ? t.ok : g.s === 'run' ? t.onBrand : t.text2}));
+    return {
+      t, steps, rtabs, products, issues, stages,
+      is1: step === 1, is2: step === 2, is3: step === 3, is4: step === 4,
+      showValid: rtab === 'valid', showErr: rtab === 'issues',
+      next: () => go(step + 1), back: () => go(step - 1), restart: () => go(2),
+      cols: [
+        {k: 'ProductID', v: 'Mã trên Circa.vn, tự lấy tên và ảnh từ Product Master', req: 'Có'},
+        {k: 'KPI_Target_GMV_VND', v: 'Target GMV của SP; trống = tính theo số lượng', req: 'Không'},
+        {k: 'Loai_CMS_GMV', v: 'GMV_THEO_PRODUCTID hoặc GMV_TOAN_DANH_MUC', req: 'Khi có target'},
+        {k: 'Tu_SL_ban', v: 'Số lượng bắt đầu của bậc (≥ 1)', req: 'Có'},
+        {k: 'Den_SL_ban', v: 'Số lượng kết thúc; trống = không giới hạn', req: 'Không'},
+        {k: 'CMS_VND_SP', v: 'Tiền CMS cho mỗi SP trong bậc', req: 'Có'},
+        {k: 'Noi_dung_tu_van', v: 'Nội dung tư vấn đã kiểm duyệt chuyên môn', req: 'Có'}
+      ],
+      checks: [
+        'ProductID có trên Product Master Circa.vn',
+        'Loai_CMS_GMV đúng một trong hai giá trị cho phép',
+        'Tu_SL_ban ≥ 1 và Den_SL_ban ≥ Tu_SL_ban',
+        'Các bậc của một ProductID liên tục, không chồng lấn, chỉ bậc cuối được để trống Den_SL_ban',
+        'CMS_VND_SP > 0',
+        'Target, loại GMV và nội dung tư vấn giống nhau trên mọi dòng cùng ProductID',
+        'Có target toàn danh mục nếu file dùng GMV_TOAN_DANH_MUC',
+        'SP chưa nằm trong chương trình CMS khác trùng kỳ'
+      ],
+      summary: [
+        {label: 'Tổng dòng', value: '14', sub: '7 ProductID', dot: t.text2},
+        {label: 'Hợp lệ', value: '12', sub: '5 sản phẩm sẽ được nạp', dot: t.ok},
+        {label: 'Lỗi · đã loại', value: '2', sub: 'SKU017, SKU018', dot: t.bad},
+        {label: 'Cảnh báo', value: '1', sub: 'Vẫn nạp, nên kiểm tra', dot: t.warn}
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>
