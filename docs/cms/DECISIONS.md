@@ -3,7 +3,7 @@
 > Module CMS. Tách khỏi `planning/research/crm-cskh-handoff/DECISIONS.md` (CRM-CSKH).
 > Nguồn: spec r2 (chat PM, operator lưu `docs/PLAN.md` ngoài Git 01/11/2026), review PM `planning/reviews/2026-11-01-cms-r2-dev-intake-pm.md` (01/11), spec r1 (`cms-handoff-r1`, 31/10–01/11).
 > Thứ tự ưu tiên khi lệch: quyết định operator mới nhất → spec r2 → quyết định PM ở review intake → r1 (phần không bị thay). Riêng các điểm review PM đã sửa r2 (review §2/§5: Q chặn âm, thập phân 9 chữ số, đọc ô Excel, ảnh) thì review PM thắng r2.
-> Mã Q-206…Q-213 dành riêng cho CMS, không cấp lại cho module khác. **Mã Q kế tiếp chỉ ghi ở khối Hiện trạng sống `planning/STATE.md`.**
+> Mã Q-206…Q-215 dành riêng cho CMS, không cấp lại cho module khác (Q-214 / Q-215 thêm ở review PM P1-b 01/11). **Mã Q kế tiếp chỉ ghi ở khối Hiện trạng sống `planning/STATE.md`.**
 > Nhãn: **[Operator]** quyết định operator/stakeholder · **[PM]** quyết định/diễn giải PM · **[Pending]** chưa chốt, Dev không tự chọn.
 
 ## 1. Câu hỏi r1 (CMS-Q1…CMS-Q11, BI-1) — kết luận cuối
@@ -25,7 +25,7 @@
 
 Các quyết định r1 vẫn giữ: D2 (CMS cho từng dược sĩ bán, không chia pool), D3 (3 loại gate), D4 (thang bậc theo số lượng; SP 1 bậc = thang 1 dòng), D5 (ProductID liên kết Product Master lấy tên, ảnh), D6 (Upload → Run → Kết quả; nhóm lỗi bị loại, nhóm hợp lệ xử lý), D7 (nội dung tư vấn bắt buộc, đã kiểm duyệt chuyên môn). D1 r1 (BI cấp view dòng đơn có mã người bán) bị thay bởi Q-207.
 
-## 2. Q-206…Q-213
+## 2. Q-206…Q-215
 
 | Mã | Nội dung / quyết định mới nhất | Trạng thái |
 |---|---|---|
@@ -38,6 +38,8 @@ Các quyết định r1 vẫn giữ: D2 (CMS cho từng dược sĩ bán, không
 | **Q-211** | `gate_met_at` = lần chuyển từ chưa đạt sang đạt **gần nhất**; gate đang không đạt thì không hiện "Đạt từ"; câu "tụt do trả hàng ngày…" chỉ hiện khi dữ liệu chứng minh được sự kiện gây tụt. | Đã chốt operator; đầu vào trả hàng vẫn chờ Q-206 |
 | **Q-212** | Bỏ thống kê theo tháng; A1 tách **CMS tạm tính chương trình đang chạy** và **CMS chương trình chờ chốt**. "SP có CMS x/y": x = số ProductID có ít nhất một dược sĩ CMS > 0. "Lượt" = dược sĩ × sản phẩm. Gộp nhiều chương trình đếm user distinct. Mẫu số dùng tài khoản staff hiện có thuộc phạm vi nhà thuốc hợp lệ, không cộng QLCH dùng chung / nhân sự đã out; không thêm trạng thái "nhân viên active" mới. | Đã chốt; thay mặc định cũ có `store_manager` / người nghỉ |
 | **Q-213** | Chốt kỳ khi còn dòng chưa gán: đề xuất chặn nếu vượt 2% GMV hoặc vượt 20 dòng; dưới ngưỡng cần xác nhận + lý do; lưu người chốt, lý do, snapshot bị loại; không đưa dòng đã loại trở lại payout sau chốt. Ngưỡng và người duyệt chưa được stakeholder chốt. | **Pending**; không triển khai P3 từ mặc định này |
+| **Q-214** | Chương trình **đã kích hoạt nhưng chưa bắt đầu** chỉ được sửa ngày bắt đầu sang ngày **sau hôm nay VN**; không dời về hôm nay / quá khứ (RPC `CMS_PROGRAM_START_PAST`). Muốn hồi tố: tạo nháp đặt ngày hôm nay / quá khứ rồi kích hoạt có xác nhận (H7). Không thêm đường về nháp / xóa / hủy; không hứa chương trình thay thế nếu nó xung đột ProductID với chương trình đã kích hoạt (H8 + chống trùng giữ nguyên). | **[Operator — đã chốt 01/11]** nguyên văn: "Chặn; muốn hồi tố thì tạo nháp rồi kích hoạt có xác nhận (đề xuất Dev)" |
+| **Q-215** | **Không thêm trần độ dài kỳ** (không giới hạn 366 ngày hay trần khác) trong P1. Giữ kiểm kỹ thuật ngày trong 2020-01-01…2100-12-31 và `end_date ≥ start_date`; UI P1-c kiểm cùng khoảng ngày trước khi gửi (hằng số `CMS_PROGRAM_DATE_MIN/MAX`, `lib/cms/programInput.ts`). | **[Operator — đã chốt 01/11]** nguyên văn: "Giữ như spec: chưa thêm trần số ngày (đề xuất)" |
 
 ## 3. Quyết định PM tại review intake 01/11 (phần đã GO)
 
@@ -52,3 +54,4 @@ Các quyết định r1 vẫn giữ: D2 (CMS cho từng dược sĩ bán, không
 | H9b | **[PM xác nhận PR-0, 01/11]** Super admin cũng chỉ thấy chương trình QA qua marker QA hợp lệ. Quyền super admin không tự bỏ qua marker. Áp dụng đồng nhất ở route/RPC/RLS/export; thống kê A1 và báo cáo thật loại test. |
 | H11 | **[Operator xác nhận 01/11 trong chat: "H11 – Quy trình: Xác nhận"; PM đồng ý về kỹ thuật]** "PR" = batch commit trên nhánh `feat/cms` (worktree `C:/circa-cms` từ `main` `01a9185`) kèm report để PM audit; không mở GitHub Pull Request. P2-a ở nhánh con riêng. Mỗi commit / push / merge / deploy / DDL prod vẫn cần lệnh operator riêng. |
 | §2 / §5 | Mặc định kỹ thuật được PM sửa: Q = `floor(max(0, ΣB) / K)`; quy cách thập phân chính xác **tối đa 9 chữ số sau dấu chấm** (vượt ⇒ lỗi, không cắt / làm tròn); parser **không đoán** tiền từ text có dấu phân cách; ảnh dùng **Next Image** + `remotePatterns` HTTPS `cdn-gcs.thuocsi.vn` pathname `/thuocsi-live/images/**`, URL khác prefix ⇒ ảnh dự phòng + báo operator kiểm nguồn; reviewer sub-agent chỉ đọc source/diff và DB kiểm thử, không truy cập prod. Chi tiết ở `docs/cms/SPEC.md`. |
+| P1-b | **[PM review P1-b 01/11]** Chống trùng ProductID bằng **một khoá advisory toàn danh mục** (thay khoá theo ProductID), READ COMMITTED + kiểm lại sau khoá + `lock_timeout` 5 s; không thêm extension / EXCLUDE trong batch. Phạm vi `stores` có nhà thuốc ngừng / FS khi kích hoạt ⇒ **fail-closed** `STORE_INVALID`, super admin sửa phạm vi; không tự loại nhà thuốc. `cmsWriteGate` làm cùng spec QA ghi đầu tiên, bắt buộc trước mọi QA ghi prod. Miền số import: tiền = bigint dương PG (≤ 9.223.372.036.854.775.807), quy cách ≤ 29 chữ số nguyên / 9 thập phân — validator và RPC cùng contract. Nâng thư viện `xlsx` = batch dependency riêng toàn repo (operator chốt với PM: để sau, không trộn vào batch CMS). |

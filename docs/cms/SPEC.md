@@ -255,7 +255,9 @@ Chín cột:
 
 - **ProductID:** ô numeric chỉ nhận nếu là số nguyên an toàn; text nhận chuỗi chữ số sau trim. Từ chối phân số, text số mũ hoặc ô đã mất độ chính xác. Không dùng giá trị hiển thị số mũ của Excel để kết luận một ô numeric nguyên an toàn bị sai.
 - **Số tiền / số nguyên** (`KPI_Target_GMV_VND`, `Tu_SL_ban`, `Den_SL_ban`, `CMS_VND_SP`): ô numeric nguyên an toàn hoặc text chỉ có chữ số sau trim. **Không** strip dấu chấm/phẩy/khoảng trắng trong text để đoán giá trị. Ô numeric có number format phân cách nghìn vẫn đọc underlying value (hợp lệ).
-- **Ô công thức** trong cột hợp đồng ⇒ lỗi; công thức ở cột thừa bị bỏ qua.
+- **Ô công thức** trong cột hợp đồng ⇒ lỗi; công thức ở cột thừa bị bỏ qua. **[PM review P1-b]** Công thức có hoặc không có giá trị cache (kể cả cache trống) **không** phải điểm dừng: dòng đó lỗi `CELL_FORMULA`, các dòng sau vẫn đọc; chỉ ProductID thật sự trống mới là điểm dừng.
+- **[PM review P1-b] Ô ngày / giờ** (kể cả ô số mang định dạng ngày / giờ) trong cột hợp đồng ⇒ lỗi kiểu; không coi serial ngày là tiền, mã hay số lượng. Ô số có định dạng phân cách nghìn / thập phân vẫn hợp lệ.
+- **[PM review P1-b] Miền số chung validator ↔ RPC:** tiền (`CMS_VND_SP`, target sản phẩm, target danh mục) là bigint dương PG (≤ 9.223.372.036.854.775.807, chuỗi chính xác); quy cách ≤ 29 chữ số nguyên / 9 chữ số thập phân; ô số quy cách ngoài miền nguyên an toàn của JS ⇒ lỗi (nhập dạng text chính xác). Ngoài miền ⇒ loại đúng nhóm ngay preview; đây là kiểm kiểu dữ liệu, không phải trần ngân sách.
 - **`base_quantity_CMS`:** decimal chính xác tối đa 9 chữ số sau dấu chấm; vượt ⇒ lỗi, không cắt / làm tròn.
 
 **[Dev đề xuất]** cách hiện thực cho `base_quantity_CMS`:
@@ -333,7 +335,7 @@ Nguồn: r2 §2.3, §2.4, §3.4, §3.7 + H7/H8/H9. Mọi hành động chỉ sup
 | Hành động | Nháp | Đã kích hoạt, chưa bắt đầu | Đã bắt đầu (Đang chạy / Chờ chốt kỳ) | Đã chốt |
 |---|---|---|---|---|
 | Tạo chương trình (nháp) | — | — | — | — |
-| Sửa thông tin (tên, ngày, phạm vi) | Có | Có — kiểm trùng ProductID lại với khoảng ngày / phạm vi mới | Không | Không |
+| Sửa thông tin (tên, ngày, phạm vi) | Có | Có — kiểm trùng ProductID lại với khoảng ngày / phạm vi mới; **ngày bắt đầu mới phải sau hôm nay VN** (Q-214 — hồi tố chỉ qua nháp + kích hoạt có xác nhận) | Không | Không |
 | Nạp lại toàn bộ danh mục (`replace`) | Có | Có — kiểm trùng trong transaction | Không | Không |
 | Thêm sản phẩm mới (`append`, hồi tố) | — (dùng nạp lại) | — (dùng nạp lại) | Có — chỉ ProductID chưa có; target danh mục hiện hữu không đổi; nhóm danh mục đầu tiên được đặt target | Không |
 | Sửa / nạp lại sản phẩm đã có | Có (qua nạp lại) | Có (qua nạp lại) | Không — nhóm bị loại | Không |
@@ -341,7 +343,9 @@ Nguồn: r2 §2.3, §2.4, §3.4, §3.7 + H7/H8/H9. Mọi hành động chỉ sup
 | Xóa / hủy / về nháp / tạm dừng / mở khóa | Không (H8) | Không | Không | Không |
 | Chốt (`active → locked`) | — | — | P3 HOLD | — |
 
-Điều kiện kích hoạt (kiểm trong transaction, sau khi giữ khóa ProductID theo thứ tự):
+Khoảng ngày mọi chương trình: 2020-01-01…2100-12-31 và `end_date ≥ start_date`; **không có trần độ dài kỳ** (Q-215). Phạm vi `stores` khi kích hoạt có nhà thuốc ngừng / FS ⇒ từ chối `STORE_INVALID`, super admin sửa phạm vi (không tự loại).
+
+Điều kiện kích hoạt (kiểm trong transaction, sau khi giữ **khoá danh mục toàn cục** — PM chấp thuận review P1-b thay khoá theo ProductID; READ COMMITTED, `lock_timeout` 5 s):
 
 1. Trạng thái hiện tại là `draft`; `end_date ≥ start_date`.
 2. Có ≥ 1 sản phẩm hợp lệ đã ghi; mọi sản phẩm `catalog` có target danh mục chương trình.
