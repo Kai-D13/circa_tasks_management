@@ -28,6 +28,13 @@ const nextConfig: NextConfig = {
         hostname: 'storage.googleapis.com',
         pathname: '/duocsi-circa-vn/**',
       },
+      // CMS theo sản phẩm (SPEC §8.2, PM): ảnh Product Master — ĐÚNG host + prefix, không wildcard. URL khác prefix ⇒
+      // UI dùng ảnh dự phòng (lib/cms/image.ts cmsSafeImageUrl khớp cùng host / prefix).
+      {
+        protocol: 'https',
+        hostname: 'cdn-gcs.thuocsi.vn',
+        pathname: '/thuocsi-live/images/**',
+      },
     ],
   },
   // /documents → the static usage-guide HTML in /public. Array-form rewrites run

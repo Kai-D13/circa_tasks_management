@@ -46,7 +46,9 @@ export type AffiliateOverviewBody =
       filteredCount: number
     }
 
-export function AffiliateOverviewView({ scope, filter, body }: {
+export function AffiliateOverviewView({ scope, filter, body, cmsEnabled = false }: {
+  /** CMS P1-c: tab "CMS sản phẩm" (CMS_PROGRAM_ENABLED) — mặc định tắt. */
+  cmsEnabled?: boolean
   scope: Exclude<OverviewPageScope, 'denied'>
   /** null ⇒ chưa dựng được bộ lọc (mapping lỗi). */
   filter: { from: string; to: string; typeFilter: OverviewTypeFilter; storeParam?: string; options: OverviewEntity[] } | null
@@ -56,7 +58,7 @@ export function AffiliateOverviewView({ scope, filter, body }: {
     <div data-ui-v2="page" data-layout-width="fluid" data-affiliate-overview={body.kind} className="p-4 md:p-6 space-y-4 md:space-y-[18px]">
       <PageHeader title="Doanh số Affiliate — Circa Online" subtitle="Nguồn: Circa Online · Chỉ tính đơn DELIVERED." icon={Link2} />
       {scope === 'os-fs'
-        ? <CampaignsTabs active="affiliate" affiliateEnabled />
+        ? <CampaignsTabs active="affiliate" affiliateEnabled cmsEnabled={cmsEnabled} />
         : (scope === 'os-assigned' || scope === 'os-own')
           ? <Link href="/targets" className="inline-flex min-h-[44px] items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground md:min-h-0">← Doanh số</Link>
           : null}

@@ -5,14 +5,18 @@ import { cn } from '@/lib/utils'
 // /targets/campaigns/affiliate ("Affiliate"). Server Link, không client JS.
 // Tab Affiliate CHỈ hiện khi KPI_AFFILIATE_ENABLED (prop từ page — flag tắt
 // thì trang campaigns giữ nguyên như cũ, không render hàng tab).
-export function CampaignsTabs({ active, affiliateEnabled }: {
-  active: 'campaigns' | 'affiliate'
+// CMS P1-c (U15): tab "CMS sản phẩm" ĐỘC LẬP cờ Affiliate — chỉ theo CMS_PROGRAM_ENABLED (`cmsEnabled`). Không cờ nào
+// bật ⇒ vẫn null như cũ (KPI giữ nguyên).
+export function CampaignsTabs({ active, affiliateEnabled, cmsEnabled = false }: {
+  active: 'campaigns' | 'affiliate' | 'cms'
   affiliateEnabled: boolean
+  cmsEnabled?: boolean
 }) {
-  if (!affiliateEnabled) return null
+  if (!affiliateEnabled && !cmsEnabled) return null
   const tabs = [
     { key: 'campaigns' as const, label: 'Chiến dịch', href: '/targets/campaigns' },
-    { key: 'affiliate' as const, label: 'Affiliate', href: '/targets/campaigns/affiliate' },
+    ...(affiliateEnabled ? [{ key: 'affiliate' as const, label: 'Affiliate', href: '/targets/campaigns/affiliate' }] : []),
+    ...(cmsEnabled ? [{ key: 'cms' as const, label: 'CMS sản phẩm', href: '/targets/campaigns/cms' }] : []),
   ]
   return (
     <div className="flex gap-2 v2:w-fit v2:max-w-full v2:gap-1 v2:rounded-v2-control v2:bg-muted v2:p-1">
