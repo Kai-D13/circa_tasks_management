@@ -26,9 +26,11 @@ const vnd = (n: number | null | undefined) =>
 const BACK_LINK = 'inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground min-h-[44px] md:min-h-0 -my-2.5 md:my-0'
 
 type StaffKind = 'campaign-list' | 'campaign-detail' | 'period' | 'no-store' | 'error'
-function StaffShell({ kind, children }: { kind: StaffKind; children: React.ReactNode }) {
+// CMS P1-d: `segment` = thanh "KPI chiến dịch | CMS sản phẩm" (chỉ khi cờ CMS bật — page quyết; mặc định không render).
+function StaffShell({ kind, segment, children }: { kind: StaffKind; segment?: React.ReactNode; children: React.ReactNode }) {
   return (
     <div data-ui-v2="page" data-staff-targets={kind} className="p-4 space-y-4 max-w-xl mx-auto v2:space-y-3">
+      {segment}
       {children}
     </div>
   )
@@ -93,7 +95,9 @@ export interface StaffKpiProps {
 }
 
 /** Staff · chế độ chiến dịch (M1 danh sách / M2–M4 chi tiết). QR + Giới thiệu bạn bè chỉ ở landing (không ?campaign=). */
-export function StaffCampaignView({ storeName, items, showList, hrefFor, listHref, kpi, landing, qr, referral }: {
+export function StaffCampaignView({ storeName, items, showList, hrefFor, listHref, kpi, landing, qr, referral, segment }: {
+  /** CMS P1-d: segmented KPI | CMS (tuỳ chọn). */
+  segment?: React.ReactNode
   storeName: string
   items: CampaignView[]
   showList: boolean
@@ -106,7 +110,7 @@ export function StaffCampaignView({ storeName, items, showList, hrefFor, listHre
   referral: StaffReferral
 }) {
   return (
-    <StaffShell kind={showList ? 'campaign-list' : 'campaign-detail'}>
+    <StaffShell kind={showList ? 'campaign-list' : 'campaign-detail'} segment={segment}>
       <PageHeader title="Doanh số chiến dịch" icon={ChartNoAxesCombined} />
       {showList ? (
         <CampaignCardList items={items} hrefFor={hrefFor} />
@@ -210,7 +214,9 @@ export function KpiSummaryCard({ noun, label, status, hasGoal, actual, goal, pct
 }
 
 /** Staff · không có chiến dịch ⇒ Ngày/Tuần/Tháng (M5). */
-export function StaffPeriodView({ title, storeName, period, current, emptyMsg, qr, referral }: {
+export function StaffPeriodView({ title, storeName, period, current, emptyMsg, qr, referral, segment }: {
+  /** CMS P1-d: segmented KPI | CMS (tuỳ chọn). */
+  segment?: React.ReactNode
   title: string
   storeName: string
   period: TargetPeriod
@@ -221,7 +227,7 @@ export function StaffPeriodView({ title, storeName, period, current, emptyMsg, q
   referral: StaffReferral
 }) {
   return (
-    <StaffShell kind="period">
+    <StaffShell kind="period" segment={segment}>
       <PageHeader
         title={title}
         icon={ChartNoAxesCombined}
@@ -248,9 +254,9 @@ export function StaffPeriodView({ title, storeName, period, current, emptyMsg, q
 }
 
 /** Staff chưa gán cửa hàng / lỗi truy vấn store_kpi_targets — y như cũ. */
-export function StaffStateView({ kind }: { kind: 'no-store' | 'error' }) {
+export function StaffStateView({ kind, segment }: { kind: 'no-store' | 'error'; segment?: React.ReactNode }) {
   return (
-    <StaffShell kind={kind}>
+    <StaffShell kind={kind} segment={segment}>
       <PageHeader title="Doanh số" icon={ChartNoAxesCombined} />
       {kind === 'no-store'
         ? <EmptyState title="Tài khoản chưa được gán cửa hàng" hint="Vui lòng liên hệ Admin." />
@@ -270,7 +276,9 @@ export interface ManagerGmv {
 }
 
 /** QLCH (store_manager) — khung desktop fluid, md+ 2 cột (nội dung chiến dịch + cột phụ QR/GMV), mobile 1 cột. */
-export function ManagerTargetsView({ storeName, items, showList, hrefFor, listHref, kpi, selected, range, qr, gmv }: {
+export function ManagerTargetsView({ storeName, items, showList, hrefFor, listHref, kpi, selected, range, qr, gmv, segment }: {
+  /** CMS P1-d: segmented KPI | CMS (tuỳ chọn), sau tiêu đề. */
+  segment?: React.ReactNode
   storeName: string
   items: CampaignView[]
   showList: boolean
@@ -293,6 +301,7 @@ export function ManagerTargetsView({ storeName, items, showList, hrefFor, listHr
         /* Campaign view carries its own store pill (r3) — avoid duplicating */
         actions={items.length === 0 ? <span className="text-sm text-muted-foreground">{storeName}</span> : undefined}
       />
+      {segment}
       <div className={cn('grid grid-cols-1 gap-4 items-start', side && 'md:grid-cols-[minmax(0,1fr)_340px]')}>
         <div className="space-y-4 min-w-0 v2:space-y-3">
           {items.length === 0 ? (
