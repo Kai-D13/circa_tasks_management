@@ -141,6 +141,11 @@ test.describe('CMS P0-a · hợp đồng dòng đơn + Product Master @desktop',
     const bad = normalizeProductRow({ ...FX_PRODUCTS[0], is_active: 'yes', product_name: 'x', reference_price: '1,5' })
     expect(bad.ok).toBe(false)
     if (!bad.ok) expect(bad.issues.map((i) => i.kind)).toEqual(['BAD_BOOLEAN', 'BAD_NUMBER'])
+    // Trần giá khớp CHECK DB (< 1e15): vượt ⇒ lỗi dòng RANGE (held ở lõi đồng bộ, không vỡ RPC giữa lượt).
+    const big = normalizeProductRow({ ...FX_PRODUCTS[1], reference_price: '1000000000000000' })
+    expect(big.ok).toBe(false)
+    if (!big.ok) expect(big.issues).toEqual([{ kind: 'BAD_NUMBER', field: 'reference_price', error: 'RANGE' }])
+    expect(normalizeProductRow({ ...FX_PRODUCTS[1], reference_price: '999999999999999.999999999' }).ok).toBe(true)
     const missing = normalizeProductRow({ ...FX_PRODUCTS[0], product_name: '' })
     expect(missing.ok).toBe(false)
   })

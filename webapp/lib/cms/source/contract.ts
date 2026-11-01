@@ -6,12 +6,15 @@
 // giới hạn độ dài (quá ⇒ lỗi, không cắt). Ảnh qua allow-list (lib/cms/image.ts).
 // Issue chỉ mang TÊN trường, không mang giá trị. Hàm thuần, không I/O.
 
-import { parseCmsDecimal, type CmsDecError } from '../decimal'
+import { CMS_DEC_FACTOR, parseCmsDecimal, type CmsDecError } from '../decimal'
 import { cmsSafeImageUrl } from '../image'
 import { canonicalProductId } from '../productId'
 import { parseUtcMicros } from '../time'
 
 export type CmsRawRow = Record<string, string | null | undefined>
+
+/** Trần giá tham khảo khớp CHECK DB cms_product_master.reference_price < 1e15 (migration 120). */
+export const CMS_REFERENCE_PRICE_MAX_EXCLUSIVE = BigInt('1000000000000000') * CMS_DEC_FACTOR
 
 export type CmsRowIssue =
   | { kind: 'MISSING_FIELD'; field: string }
@@ -173,6 +176,8 @@ export function normalizeProductRow(raw: CmsRawRow): CmsNormalizeResult<CmsProdu
   if (priceText !== null) {
     const p = parseCmsDecimal(priceText)
     if (!p.ok) issues.push({ kind: 'BAD_NUMBER', field: 'reference_price', error: p.error })
+    // ≥ 1e15 vượt CHECK DB ⇒ lỗi dòng ở app (held, không ghi) thay vì vỡ RPC giữa lượt (UPSERT_FAILED ghi dở).
+    else if (p.units >= CMS_REFERENCE_PRICE_MAX_EXCLUSIVE) issues.push({ kind: 'BAD_NUMBER', field: 'reference_price', error: 'RANGE' })
     else price = p.units
   }
   if (issues.length || !pid.ok || name === null || updated === null) return { ok: false, issues }
