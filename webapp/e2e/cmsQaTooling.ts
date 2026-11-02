@@ -328,6 +328,208 @@ export function startCmsQaWatchdogLoop(d: {
   }
 }
 
+/**
+ * Ai khởi phát việc dừng server QA: operator (Ctrl+C / SIGTERM), bộ canh marker, lỗi tiến trình con khi server còn sống
+ * (`error` không phải bằng chứng đã thoát — PM `2026-11-02-cms-cli-exit-pm.md` §3), hoặc không ai (server tự thoát).
+ */
+export type CmsQaStopKind = 'operator' | 'watchdog' | 'error' | null
+
+/**
+ * Mã thoát launcher sau khi server QA đã dừng (PM `2026-11-02-cms-b3-and-cli-exit-pm.md` §5): **0 chỉ khi operator chủ động
+ * dừng**; bộ canh marker dừng (marker sắp hết / lỗi đọc) hoặc server tự chết ⇒ 1 — không đổi lỗi thành 0. Mã / tín hiệu
+ * của tiến trình con chỉ để in (Windows: kill ⇒ code null).
+ */
+export function cmsQaServerExitCode(stop: CmsQaStopKind): 0 | 1 {
+  return stop === 'operator' ? 0 : 1
+}
+
+/** Thời gian chờ sau khi server con thoát rồi mới chốt mã: Ctrl+C trên Windows tới cả cha lẫn con, thứ tự sự kiện không cố định. */
+export const CMS_QA_EXIT_GRACE_MS = 500
+/** SIGINT chưa làm server thoát sau chừng này ⇒ cưỡng bức SIGKILL. */
+export const CMS_QA_KILL_AFTER_MS = 10_000
+/** Sau SIGKILL, chờ sự kiện 'exit' tối đa chừng này; quá hạn ⇒ kết luận server CHƯA DỪNG (launcher hữu hạn, mã 1). */
+export const CMS_QA_KILL_CONFIRM_MS = 5_000
+
+/** Phần tiến trình con launcher cần (ChildProcess của node thoả mãn; test dùng EventEmitter giả). */
+export interface CmsQaChildLike {
+  /** Node: undefined khi spawn thất bại (không có tiến trình). */
+  readonly pid?: number
+  readonly exitCode: number | null
+  readonly signalCode: string | null
+  /** Node phát 'error' ĐỒNG BỘ trong kill() khi gửi tín hiệu lỗi (EPERM …), ném khi tín hiệu không hỗ trợ. */
+  kill(signal: 'SIGINT' | 'SIGKILL'): boolean
+  on(event: 'exit', fn: (code: number | null, signal: string | null) => void): unknown
+  on(event: 'error', fn: (e: Error) => void): unknown
+  /** Bỏ giữ event loop của launcher khi phải bỏ lại server không dừng được (launcher vẫn kết thúc). */
+  unref?(): void
+}
+
+export interface CmsQaServerLifecycleResult {
+  rc: 0 | 1
+  stopKind: CmsQaStopKind
+  code: number | null
+  signal: string | null
+  /** Lỗi spawn / tiến trình con (sự kiện 'error' đầu tiên), đã rút gọn. */
+  childError: string | null
+  /**
+   * true: có bằng chứng server không còn chạy — sự kiện 'exit', hoặc spawn thất bại không tạo tiến trình. false: SIGKILL
+   * không được xác nhận trong `killConfirmMs` ⇒ server CÓ THỂ CÒN CHẠY ở pid `pid` (rc luôn 1; launcher ghi cờ, chặn close).
+   */
+  stopped: boolean
+  pid: number | null
+}
+
+/** Lifecycle ném lỗi này khi setup lỗi sau spawn VÀ không xác nhận được server đã chết: server có thể còn chạy ở `pid`. */
+export class CmsQaServerNotStoppedError extends Error {
+  readonly pid: number | null
+  constructor(pid: number | null, cause: string) {
+    super(`server QA pid ${pid ?? '—'} CHƯA DỪNG sau lỗi dựng canh marker (${cause}) — tắt tay (Windows: taskkill /F /PID ${pid ?? '<pid>'}), KHÔNG QA tiếp, KHÔNG close run khi pid còn sống`)
+    this.name = 'CmsQaServerNotStoppedError'
+    this.pid = pid
+  }
+}
+
+/**
+ * Vòng đời server QA của launcher sau khi đã spawn (PM 02/11 B3 §5, security review P1-1, PM `2026-11-02-cms-cli-exit-pm.md`
+ * §3). Nghe 'exit' / 'error' của con NGAY từ đầu, bằng `on` (lỗi lần hai không thoát ngoài kiểm soát).
+ *
+ * - Bằng chứng server đã thoát CHỈ là 'exit' (hoặc spawn thất bại: không pid / đã có exitCode). 'error' trên tiến trình còn
+ *   sống (kill EPERM …) KHÔNG giải phóng cơ chế dừng: đang dừng ⇒ cưỡng bức SIGKILL ngay; chưa dừng ⇒ bắt đầu dừng
+ *   (`stopKind` 'error').
+ * - Dừng: SIGINT → quá `killAfterMs` ⇒ SIGKILL → chờ 'exit' tối đa `killConfirmMs`; quá hạn ⇒ `stopped: false` (server CÓ
+ *   THỂ còn chạy): báo rõ, huỷ timer / handler, `unref` con để launcher kết thúc — không báo đã dọn xong.
+ * - `setup()` (ghi manifest …) và dựng canh marker trong try — lỗi ⇒ SIGKILL ngay, chờ xác nhận như trên; đã thoát ⇒ ném lại
+ *   lỗi gốc, không xác nhận được ⇒ ném `CmsQaServerNotStoppedError`.
+ * - Chạy bình thường: con thoát ⇒ huỷ loop + poll đang chờ + timer ⇒ chờ `graceMs` (Ctrl+C Windows) ⇒ gỡ handler ⇒ mã theo
+ *   người khởi phát dừng (`cmsQaServerExitCode`), có 'error' ⇒ 1. Mọi phụ thuộc tiêm vào ⇒ test bằng con / timer giả.
+ */
+export async function runCmsQaServerLifecycle(d: {
+  child: CmsQaChildLike
+  watchdog: CmsQaWatchdog
+  preRows: readonly CmsQaStatusRow[]
+  preStartedAt: number
+  /** Đọc trạng thái marker; `signal` bị huỷ khi dọn dẹp. */
+  poll: (signal: AbortSignal) => Promise<CmsQaStatusRow[]>
+  setup: () => void
+  now: () => number
+  setInterval: (fn: () => void, ms: number) => unknown
+  clearInterval: (h: unknown) => void
+  setTimeout: (fn: () => void, ms: number) => unknown
+  clearTimeout: (h: unknown) => void
+  onSignal: (sig: 'SIGINT' | 'SIGTERM', fn: () => void) => void
+  offSignal: (sig: 'SIGINT' | 'SIGTERM', fn: () => void) => void
+  log: (line: string) => void
+  pollMs?: number
+  tickMs?: number
+  graceMs?: number
+  killAfterMs?: number
+  killConfirmMs?: number
+}): Promise<CmsQaServerLifecycleResult> {
+  const short = (e: unknown) => String((e as Error)?.message ?? e).split('\n')[0].slice(0, 200)
+  const pid = typeof d.child.pid === 'number' ? d.child.pid : null
+  let childError: string | null = null
+  let exit: { code: number | null; signal: string | null } | null = null
+  let wake: () => void = () => {}
+  const settled = new Promise<void>((r) => { wake = r })
+  const alive = () => exit === null && d.child.exitCode === null && d.child.signalCode === null
+  let stopKind: CmsQaStopKind = null
+  let killTimer: unknown = null
+  let confirmTimer: unknown = null
+  let sigkillSent = false
+  const clearKillTimers = () => {
+    if (killTimer !== null) { d.clearTimeout(killTimer); killTimer = null }
+    if (confirmTimer !== null) { d.clearTimeout(confirmTimer); confirmTimer = null }
+  }
+  const sendKill = (sig: 'SIGINT' | 'SIGKILL') => {
+    try { d.child.kill(sig) } catch (e) { onChildError(e) } // node ném khi tín hiệu không hỗ trợ — xử lý như 'error'
+  }
+  const giveUp = () => {
+    confirmTimer = null
+    if (alive()) d.log(`SERVER QA CHƯA DỪNG: pid ${pid ?? '—'} không xác nhận thoát sau SIGKILL — DỪNG MỌI THAO TÁC QA; tắt tay (Windows: taskkill /F /PID ${pid ?? '—'}); KHÔNG close run khi pid còn sống`)
+    wake() // luôn đánh thức: hạn xác nhận là mốc cuối, launcher không chờ vô hạn
+  }
+  const forceKill = (why: string) => {
+    if (sigkillSent || !alive()) return
+    sigkillSent = true
+    if (killTimer !== null) { d.clearTimeout(killTimer); killTimer = null }
+    d.log(`cưỡng bức SIGKILL server QA pid ${pid ?? '—'} (${why}); chờ xác nhận thoát tối đa ${d.killConfirmMs ?? CMS_QA_KILL_CONFIRM_MS} ms`)
+    confirmTimer = d.setTimeout(giveUp, d.killConfirmMs ?? CMS_QA_KILL_CONFIRM_MS) // hẹn TRƯỚC khi gửi: kill() có thể phát 'error' đồng bộ
+    sendKill('SIGKILL')
+  }
+  const stopServer = (why: string, kind: Exclude<CmsQaStopKind, null>) => {
+    if (stopKind) return
+    stopKind = kind
+    d.log(`DỪNG server QA: ${why} — DỪNG MỌI THAO TÁC QA (kể cả trên trình duyệt prod) và xử lý theo runbook`)
+    if (!alive()) return // con đã thoát (vd. Ctrl+C tới trong lúc chờ grace)
+    killTimer = d.setTimeout(() => { killTimer = null; forceKill(`quá ${d.killAfterMs ?? CMS_QA_KILL_AFTER_MS} ms sau SIGINT`) }, d.killAfterMs ?? CMS_QA_KILL_AFTER_MS)
+    sendKill('SIGINT')
+  }
+  function onChildError(e: unknown) {
+    const msg = short(e)
+    childError ??= msg
+    if (exit !== null) return
+    if (pid === null || !alive()) { // spawn thất bại: không có tiến trình (Node: pid undefined, exitCode âm, không phát 'exit')
+      exit = { code: null, signal: null }
+      wake()
+      return
+    }
+    d.log(`LỖI tiến trình con server QA pid ${pid} khi server CÒN SỐNG: ${msg} — chưa coi là đã dừng`)
+    if (!stopKind) stopServer(`lỗi tiến trình con: ${msg}`, 'error')
+    else forceKill(`gửi tín hiệu dừng lỗi: ${msg}`)
+  }
+  d.child.on('exit', (code, signal) => { if (exit === null) { exit = { code, signal }; wake() } })
+  d.child.on('error', (e) => onChildError(e))
+
+  const pollAbort = new AbortController()
+  let loop: { stop(): void; dispose(): void } | null = null
+  const onSigint = () => { stopServer('Ctrl+C', 'operator'); loop?.dispose() }
+  const onSigterm = () => { stopServer('SIGTERM', 'operator'); loop?.dispose() }
+  let signalsOn = false
+  const stopLoop = () => { loop?.dispose(); pollAbort.abort() }
+  const signalsOff = () => {
+    if (signalsOn) { d.offSignal('SIGINT', onSigint); d.offSignal('SIGTERM', onSigterm); signalsOn = false }
+  }
+  /** Bỏ lại server không dừng được: không giữ launcher, trạng thái rõ (không báo đã dọn xong). */
+  const abandon = () => { clearKillTimers(); signalsOff(); try { d.child.unref?.() } catch { /* chỉ bỏ giữ event loop */ } }
+  try {
+    d.setup()
+    const first = d.watchdog.onResult(d.preRows, d.preStartedAt)
+    if (first.stop) stopServer(first.reason ?? 'marker không đủ hạn', 'watchdog')
+    else if (d.watchdog.stopAt !== null) d.log(`canh marker: hạn dừng độc lập ${new Date(d.watchdog.stopAt).toISOString()}`)
+    loop = startCmsQaWatchdogLoop({
+      watchdog: d.watchdog, poll: () => d.poll(pollAbort.signal), now: d.now,
+      setInterval: d.setInterval, clearInterval: d.clearInterval, onStop: (why) => stopServer(why, 'watchdog'),
+      pollMs: d.pollMs, tickMs: d.tickMs,
+    })
+    d.onSignal('SIGINT', onSigint)
+    d.onSignal('SIGTERM', onSigterm)
+    signalsOn = true
+  } catch (e) {
+    d.log(`LỖI khi dựng canh marker sau spawn — GIẾT server QA ngay: ${short(e)}`)
+    stopKind ??= 'error'
+    stopLoop()
+    signalsOff()
+    forceKill('setup lỗi sau spawn')
+    await settled
+    if (alive()) { abandon(); throw new CmsQaServerNotStoppedError(pid, short(e)) }
+    clearKillTimers()
+    throw e
+  }
+  await settled
+  stopLoop()
+  if (alive()) { // hết hạn xác nhận sau SIGKILL mà chưa có 'exit'
+    abandon()
+    return { rc: 1, stopKind, code: null, signal: null, childError, stopped: false, pid }
+  }
+  clearKillTimers()
+  // Handler tín hiệu còn nghe trong lúc chờ: Ctrl+C tới cha muộn hơn 'exit' của con vẫn được ghi là operator.
+  await new Promise<void>((r) => { d.setTimeout(r, d.graceMs ?? CMS_QA_EXIT_GRACE_MS) })
+  signalsOff()
+  clearKillTimers()
+  const { code, signal } = exit ?? { code: d.child.exitCode, signal: d.child.signalCode }
+  return { rc: childError ? 1 : cmsQaServerExitCode(stopKind), stopKind, code, signal, childError, stopped: true, pid }
+}
+
 // ── Manifest run QA (.qa-cms.json) ───────────────────────────────────────────
 
 export interface CmsQaRunManifest {
@@ -345,6 +547,11 @@ export interface CmsQaRunManifest {
   buildId: string | null
   port: number | null
   serverPid: number | null
+  /**
+   * Launcher không xác nhận được server QA đã chết (SIGKILL lỗi / không có 'exit' trong hạn — PM cli-exit §3): close từ chối
+   * khi pid này còn sống. Vắng / null ⇒ server đã dừng có bằng chứng (hoặc chưa từng dựng).
+   */
+  serverNotStopped?: { pid: number | null; at: string } | null
   users: { id: string; role: string | null; markerExpiresAt: string }[]
   /** Spec tự động: ghi NGAY khi tạo. Khi đóng: mọi chương trình is_test tạo / sửa trong run (để lại, ẩn — H8). */
   programs: { id: string; status: string; isTest: boolean }[]
@@ -403,6 +610,10 @@ export function parseCmsQaManifest(text: string): Parsed<CmsQaRunManifest> {
   if (!Array.isArray(o.users) || o.users.length === 0 || !o.users.every((u) => isCmsUuid(u?.id))) return { ok: false, reason: 'manifest sai danh sách tài khoản QA' }
   if (!Array.isArray(o.programs) || !o.programs.every((p) => isCmsUuid(p?.id))) return { ok: false, reason: 'manifest sai danh sách chương trình' }
   if (o.port !== null && o.port !== undefined && !(Number.isInteger(o.port) && o.port >= 1024 && o.port <= 65535)) return { ok: false, reason: 'manifest sai port' }
+  const ns = o.serverNotStopped
+  if (ns !== undefined && ns !== null && !(typeof ns === 'object' && (ns.pid === null || (Number.isInteger(ns.pid) && (ns.pid as number) > 0 && (ns.pid as number) <= 2_147_483_647)) && typeof ns.at === 'string')) {
+    return { ok: false, reason: 'manifest sai serverNotStopped' }
+  }
   return { ok: true, value: o as CmsQaRunManifest }
 }
 

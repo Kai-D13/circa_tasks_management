@@ -47,8 +47,7 @@ export function supabaseHost(env) {
 export async function loadTooling() {
   let createJiti
   try { ({ createJiti } = await import('jiti')) } catch {
-    console.log('LỖI: thiếu gói jiti — chạy `npm ci` trong webapp/ rồi thử lại')
-    process.exit(2)
+    die2('thiếu gói jiti — chạy `npm ci` trong webapp/ rồi thử lại')
   }
   const jiti = createJiti(import.meta.url, { interopDefault: true })
   const T = await jiti.import(path.join(ROOT, 'e2e', 'cmsQaTooling.ts'))
@@ -58,15 +57,17 @@ export async function loadTooling() {
 
 /**
  * Gửi MỘT chuỗi lệnh đã dựng sẵn tới pg-meta (service role). Trả mảng dòng của câu SELECT / RETURNING cuối; lỗi DB ⇒
- * throw với mã + thông điệp rút gọn (không kèm key / body request).
+ * throw với mã + thông điệp rút gọn (không kèm key / body request). `opts.signal` (tuỳ chọn): huỷ request đang chờ khi
+ * launcher dọn dẹp (không để socket giữ process sống tới hết 60 s).
  */
-export async function pgMeta(env, query) {
+export async function pgMeta(env, query, opts = {}) {
   const base = String(env.NEXT_PUBLIC_SUPABASE_URL).replace(/\/$/, '')
+  const timeout = AbortSignal.timeout(60_000)
   const r = await fetch(`${base}/pg/query`, {
     method: 'POST',
     headers: { 'content-type': 'application/json', apikey: env.SUPABASE_SERVICE_ROLE_KEY, authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}` },
     body: JSON.stringify({ query }),
-    signal: AbortSignal.timeout(60_000),
+    signal: opts.signal ? AbortSignal.any([timeout, opts.signal]) : timeout,
   })
   let j
   try { j = await r.json() } catch { throw new Error(`pg-meta HTTP ${r.status}: phản hồi không phải JSON`) }
@@ -78,8 +79,50 @@ export async function pgMeta(env, query) {
   return j
 }
 
-/** Thoát với mã 2 (sai tham số / cấu hình) — trước mọi IO tới DB. */
+// ── Thoát CLI (PM `planning/reviews/2026-11-02-cms-b3-and-cli-exit-pm.md` §5) ─────────────────────────────────────────
+// KHÔNG gọi process.exit(): trên Node 24 / Windows, process.exit() ngay sau fetch (undici) đang đóng handle ⇒ libuv abort
+// `Assertion failed: !(handle->flags & UV_HANDLE_CLOSING)` ⇒ mã thoát 127 dù kết quả đã in / ghi (tái hiện 02/11).
+// Thay bằng: ném CliExit để DỪNG control flow ngay (không chạy tiếp tới fetch / ghi), entrypoint runCli đặt
+// process.exitCode rồi để process tự kết thúc khi event loop rỗng. Mã: 0 đạt · 1 lỗi DB / không đạt · 2 sai tham số.
+
+/** Lỗi có mã thoát — ném để dừng luồng; runCli chuyển thành process.exitCode. */
+export class CliExit extends Error {
+  constructor(code, message = `thoát ${code}`) {
+    super(message)
+    this.name = 'CliExit'
+    this.code = code
+  }
+}
+
+/** Dừng luồng với mã cho trước (0 / 1 / 2). Luôn ném — không bao giờ trả về. */
+export function exitWith(code) {
+  throw new CliExit(code)
+}
+
+/** Thoát với mã 2 (sai tham số / cấu hình) — trước mọi IO tới DB. Luôn ném. */
 export function die2(msg) {
   console.log(`LỖI: ${msg}`)
-  process.exit(2)
+  throw new CliExit(2, msg)
+}
+
+/** Trong khối catch bắt mọi lỗi: CliExit (die2 / exitWith) phải đi tiếp lên runCli, không bị đổi thành "LỖI DB" mã 1. */
+export function rethrowCliExit(e) {
+  if (e instanceof CliExit) throw e
+}
+
+/**
+ * Entrypoint chung: chạy main() (trả mã số hoặc undefined = 0), bắt CliExit ⇒ mã của nó; lỗi khác ⇒ in gọn + mã 1
+ * (không nuốt thành 0). Không gọi process.exit — process tự kết thúc khi không còn handle.
+ */
+export async function runCli(main) {
+  try {
+    const code = await main()
+    process.exitCode = code === undefined ? 0 : code
+  } catch (e) {
+    if (e instanceof CliExit) process.exitCode = e.code
+    else {
+      console.log(`LỖI: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`)
+      process.exitCode = 1
+    }
+  }
 }

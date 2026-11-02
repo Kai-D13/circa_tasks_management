@@ -2,11 +2,12 @@ import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { once } from 'node:events'
+import { EventEmitter, once } from 'node:events'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { test, expect } from '@playwright/test'
 import { CMS_QA_MARKER, cmsWriteGate } from './writeQaGates'
 import {
+  CMS_QA_EXIT_GRACE_MS, CmsQaServerNotStoppedError, cmsQaServerExitCode, runCmsQaServerLifecycle,
   CMS_QA_GIT_STATUS_ARGS, CMS_QA_GUARD_MINUTES_MIN, CMS_QA_POLL_MS, CMS_QA_TICK_MS, cmsQaTreeState, createCmsQaWatchdog,
   parseCmsQaGuardMinutes, startCmsQaWatchdogLoop,
   CMS_QA_GRANTED_BY, assertCmsQaProgramIds, cmsQaAckWarnings, cmsQaCloseCheck, cmsQaGrantSql, cmsQaManifestAddProgram, cmsQaPreflight,
@@ -443,7 +444,7 @@ test.describe('CMS QA tooling · CLI âm (thoát 2 trước mọi IO) @desktop',
     for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !k.startsWith('E2E_CMS') && k !== 'E2E_EXPECTED_SUPABASE_HOST') env[k] = v
     Object.assign(env, { NEXT_PUBLIC_SUPABASE_URL: 'https://cms-qa-test.invalid', SUPABASE_SERVICE_ROLE_KEY: 'test-only' }, extra)
     const r = spawnSync(process.execPath, [path.join(WEBAPP, 'scripts', script), ...args], { cwd: WEBAPP, env: env as NodeJS.ProcessEnv, encoding: 'utf8', timeout: 60_000 })
-    return { code: r.status, out: `${r.stdout}${r.stderr}` }
+    return { code: r.status, out: `${r.stdout}${r.stderr}`, stdout: r.stdout }
   }
 
   test('cms-qa-access: email / TTL / confirm thiếu hoặc sai host / tham số lạ ⇒ 2', () => {
@@ -519,6 +520,49 @@ test.describe('CMS QA tooling · CLI âm (thoát 2 trước mọi IO) @desktop',
     }
   })
 
+  test('PM cli-exit §3: manifest ghi serverNotStopped ⇒ close chặn khi pid còn sống (dù cổng đã đóng); pid đã chết ⇒ qua bước này; cờ hỏng ⇒ manifest hỏng', () => {
+    const marker = path.join(WEBAPP, CMS_QA_MARKER)
+    expect(fs.existsSync(marker), `đang có ${CMS_QA_MARKER} thật — đóng run trước khi chạy spec này`).toBe(false)
+    const base = newCmsQaManifest({
+      runId: 'cms-qa-spec-ns', mode: 'manual-localhost', host: 'cms-qa-test.invalid', dbNow: '2026-11-02T02:00:00Z',
+      gitHead: 'a'.repeat(40), gitTree: 'b'.repeat(40), buildId: 'B1', port: null,
+      users: [{ id: A, role: 'admin', markerExpiresAt: '2026-11-02T05:00:00Z', remainingS: 10800 }],
+    })
+    const deadPid = Number(spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }).stdout)
+    expect(Number.isInteger(deadPid) && deadPid > 0).toBe(true)
+    const at = '2026-11-02T03:00:00.000Z'
+    try {
+      fs.writeFileSync(marker, JSON.stringify({ ...base, serverPid: process.pid, serverNotStopped: { pid: process.pid, at } }), { flag: 'wx' })
+      let r = run('cms-qa-run.mjs', ['close'], { E2E_EXPECTED_SUPABASE_HOST: 'cms-qa-test.invalid' })
+      expect(r.code, r.out).toBe(2)
+      expect(r.out).toContain(`pid ${process.pid} được launcher ghi CHƯA DỪNG`)
+      fs.rmSync(marker)
+      fs.writeFileSync(marker, JSON.stringify({ ...base, serverNotStopped: { pid: null, at } }), { flag: 'wx' }) // không rõ pid ⇒ luôn chặn
+      r = run('cms-qa-run.mjs', ['close'], { E2E_EXPECTED_SUPABASE_HOST: 'cms-qa-test.invalid' })
+      expect(r.code, r.out).toBe(2)
+      expect(r.out).toContain('(không rõ pid) được launcher ghi CHƯA DỪNG')
+      fs.rmSync(marker)
+      fs.writeFileSync(marker, JSON.stringify({ ...base, serverNotStopped: { pid: 2 ** 31, at } }), { flag: 'wx' }) // ngoài miền pid
+      r = run('cms-qa-run.mjs', ['close'], { E2E_EXPECTED_SUPABASE_HOST: 'cms-qa-test.invalid' })
+      expect(r.code, r.out).toBe(2)
+      expect(r.out).toContain('manifest sai serverNotStopped')
+      fs.rmSync(marker)
+      fs.writeFileSync(marker, JSON.stringify({ ...base, serverPid: deadPid, serverNotStopped: { pid: deadPid, at } }), { flag: 'wx' })
+      r = run('cms-qa-run.mjs', ['close'], { E2E_EXPECTED_SUPABASE_HOST: 'cms-qa-test.invalid' })
+      expect(r.out).toContain(`pid ${deadPid} (launcher ghi CHƯA DỪNG`) // qua bước chặn ⇒ đối chiếu DB (host giả ⇒ LỖI DB, 1)
+      expect(r.code, r.out).toBe(1)
+      expect(fs.existsSync(marker)).toBe(true)
+      fs.rmSync(marker)
+      fs.writeFileSync(marker, JSON.stringify({ ...base, serverNotStopped: { pid: 'abc', at } }), { flag: 'wx' })
+      r = run('cms-qa-run.mjs', ['close'], { E2E_EXPECTED_SUPABASE_HOST: 'cms-qa-test.invalid' })
+      expect(r.code, r.out).toBe(2)
+      expect(r.out).toContain('manifest sai serverNotStopped')
+      expect(fs.existsSync(marker)).toBe(true) // không công cụ nào xoá manifest
+    } finally {
+      fs.rmSync(marker, { force: true })
+    }
+  })
+
   test('cms-verify: thiếu / sai host, phase, pre, user ⇒ 2; print-sql chỉ in khối READ ONLY', () => {
     for (const args of [['acl-snapshot'], ['post', '--phase=120', '--expect-host=other.invalid'],
       ['post', '--phase=122', '--expect-host=cms-qa-test.invalid'], ['post', '--phase=120', '--pre=khong-co.json', '--expect-host=cms-qa-test.invalid'],
@@ -533,7 +577,8 @@ test.describe('CMS QA tooling · CLI âm (thoát 2 trước mọi IO) @desktop',
     }
     const p = run('cms-verify.mjs', ['print-sql', '--what=v8', `--user=${A}`, '--role=sm'])
     expect(p.code).toBe(0)
-    expect(p.out.trim()).toMatch(/^BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; DO \$cmsv8\$[\s\S]*SET LOCAL ROLE authenticated;[\s\S]*ROLLBACK;$/)
+    // PM P2 cli-exit §5: SQL chỉ trên stdout (cảnh báo Node như NO_COLOR/FORCE_COLOR nằm ở stderr, không phải SQL).
+    expect(p.stdout.trim()).toMatch(/^BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; DO \$cmsv8\$[\s\S]*SET LOCAL ROLE authenticated;[\s\S]*ROLLBACK;$/)
   })
 })
 
@@ -543,4 +588,254 @@ test('CMS QA tooling — SQL thật trên PGlite (migration 120 / 121, marker, V
   const out = `${r.stdout}\n${r.stderr}`
   expect(out, out.slice(-2000)).toMatch(/\n\d+ đạt · 0 lỗi/)
   expect(r.status).toBe(0)
+})
+
+// PM `planning/reviews/2026-11-02-cms-b3-and-cli-exit-pm.md` §5 — mã thoát CLI đáng tin cậy (lỗi libuv Node 24 / Windows khi
+// process.exit() ngay sau fetch: rc 127 trên prod B3). Tiến trình con thật, fetch thật tới shim pg-meta localhost trên PGlite.
+test.describe('CMS QA tooling · mã thoát CLI (B3 rc 127) @desktop', () => {
+  test('mã launcher: chỉ operator dừng mới thoát 0; canh marker dừng / server tự thoát ⇒ 1', () => {
+    expect(cmsQaServerExitCode('operator')).toBe(0)
+    expect(cmsQaServerExitCode('watchdog')).toBe(1)
+    expect(cmsQaServerExitCode('error')).toBe(1)
+    expect(cmsQaServerExitCode(null)).toBe(1)
+    expect(CMS_QA_EXIT_GRACE_MS).toBeGreaterThan(0)
+    expect(CMS_QA_EXIT_GRACE_MS).toBeLessThanOrEqual(2_000)
+    const src = fs.readFileSync(path.join(WEBAPP, 'scripts', 'cms-qa-run.mjs'), 'utf8')
+    expect(src).toContain('life = await T.runCmsQaServerLifecycle({')
+    expect(src).toContain('return life.rc')
+    // PM cli-exit §3: không xác nhận được đã dừng ⇒ ghi cờ cho close + mã 1 (kể cả nhánh setup lỗi ném CmsQaServerNotStoppedError)
+    expect(src).toMatch(/if \(!life\.stopped\) \{\n\s+markNotStopped\(life\.pid\)[\s\S]*?return 1\n/)
+    expect(src).toContain('if (e instanceof T.CmsQaServerNotStoppedError) markNotStopped(e.pid)')
+  })
+
+  // Vòng đời server với tiến trình con GIẢ + timer thật rút ngắn (security review P1-1 / P2-1, PM cli-exit §3): hành vi, không
+  // grep nguồn. Mô phỏng ngữ nghĩa ChildProcess của Node 24 (đo 02/11): kill() lỗi ⇒ phát 'error' ĐỒNG BỘ rồi trả false;
+  // tín hiệu không hỗ trợ ⇒ ném; spawn hỏng ⇒ pid undefined, exitCode âm, 'error' rồi 'close', KHÔNG có 'exit'.
+  type KillMode = 'exit' | 'ignore-sigint' | 'sigint-error' | 'sigint-error-async' | 'kill-error' | 'kill-throws'
+  class FakeChild extends EventEmitter {
+    pid: number | undefined = 4242
+    exitCode: number | null = null
+    signalCode: string | null = null
+    kills: string[] = []
+    unrefs = 0
+    constructor(private onKill: KillMode = 'exit') { super() }
+    kill(sig: 'SIGINT' | 'SIGKILL') {
+      this.kills.push(sig)
+      if (this.pid === undefined || this.exitCode !== null || this.signalCode !== null) return false // Node: không handle ⇒ false
+      const m = this.onKill
+      if (m === 'kill-throws') throw new Error('kill EINVAL')
+      if (m === 'kill-error' || (m === 'sigint-error' && sig === 'SIGINT')) { this.emit('error', new Error('kill EPERM')); return false }
+      if (m === 'sigint-error-async' && sig === 'SIGINT') { setTimeout(() => this.emit('error', new Error('kill EPERM')), 1); return false }
+      if (m === 'exit' || sig === 'SIGKILL') setTimeout(() => this.die(null, sig), 2)
+      return true
+    }
+    unref() { this.unrefs++ }
+    die(code: number | null, signal: string | null) {
+      if (this.exitCode !== null || this.signalCode !== null) return
+      this.exitCode = code; this.signalCode = signal
+      this.emit('exit', code, signal)
+    }
+    get alive() { return this.exitCode === null && this.signalCode === null }
+  }
+  /** Spawn hỏng như Node thật: không pid; nextTick đặt exitCode âm, phát 'error' rồi 'close' — không 'exit'. */
+  const failedSpawn = () => {
+    const c = new FakeChild()
+    c.pid = undefined
+    process.nextTick(() => { c.exitCode = -4058; c.emit('error', new Error('spawn khong-co ENOENT')); c.emit('close', -4058, null) })
+    return c
+  }
+  const good = [row({ user_id: A, remaining_s: 3 * 3600 })]
+  const lifecycle = (child: FakeChild, o: { preRows?: CmsQaStatusRow[]; poll?: (s: AbortSignal) => Promise<CmsQaStatusRow[]>; setup?: () => void; graceMs?: number; killAfterMs?: number; killConfirmMs?: number } = {}) => {
+    const handlers = new Map<string, () => void>()
+    const signals: AbortSignal[] = []
+    const logs: string[] = []
+    let polls = 0
+    const timers = new Set<unknown>()
+    const p = runCmsQaServerLifecycle({
+      child, watchdog: createCmsQaWatchdog({ userIds: [A], guardMinutes: 10 }), preRows: o.preRows ?? good, preStartedAt: Date.now(),
+      poll: (s) => { polls++; signals.push(s); return o.poll ? o.poll(s) : Promise.resolve(good) },
+      setup: o.setup ?? (() => {}), now: () => Date.now(),
+      setInterval: (fn, ms) => { const h = setInterval(fn, ms); timers.add(h); return h },
+      clearInterval: (h) => { clearInterval(h as ReturnType<typeof setInterval>); timers.delete(h) },
+      setTimeout: (fn, ms) => { const h = setTimeout(() => { timers.delete(h); fn() }, ms); timers.add(h); return h },
+      clearTimeout: (h) => { clearTimeout(h as ReturnType<typeof setTimeout>); timers.delete(h) },
+      onSignal: (sig, fn) => { handlers.set(sig, fn) }, offSignal: (sig, fn) => { if (handlers.get(sig) === fn) handlers.delete(sig) },
+      log: (l) => { logs.push(l) }, pollMs: 10, tickMs: 10, graceMs: o.graceMs ?? 15, killAfterMs: o.killAfterMs ?? 30,
+      killConfirmMs: o.killConfirmMs ?? 40,
+    })
+    return { p, handlers, signals, logs, timers, polls: () => polls }
+  }
+  const tick = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  const lost = [row({ user_id: A, active: false, remaining_s: 0 })]
+
+  test('vòng đời: Ctrl+C operator ⇒ 0; handler gỡ, poll đang chờ bị huỷ, không còn timer', async () => {
+    const child = new FakeChild()
+    const box: { pending: AbortSignal | null } = { pending: null }
+    const L = lifecycle(child, { poll: (s) => { box.pending = s; return new Promise(() => {}) } }) // poll treo mãi
+    await tick(40)
+    expect(L.handlers.has('SIGINT') && L.handlers.has('SIGTERM')).toBe(true)
+    L.handlers.get('SIGINT')!()
+    const r = await L.p
+    expect(r).toMatchObject({ rc: 0, stopKind: 'operator', childError: null, stopped: true })
+    expect(child.kills).toEqual(['SIGINT'])
+    expect(L.handlers.size).toBe(0)
+    expect(box.pending?.aborted).toBe(true)
+    expect(L.timers.size).toBe(0)
+  })
+
+  test('vòng đời: canh marker dừng (mất marker giữa chừng) ⇒ 1; preflight dưới ngưỡng ⇒ dừng ngay, 1', async () => {
+    const c1 = new FakeChild()
+    const L1 = lifecycle(c1, { poll: () => Promise.resolve(lost) })
+    const r1 = await L1.p
+    expect(r1).toMatchObject({ rc: 1, stopKind: 'watchdog', stopped: true })
+    expect(c1.kills[0]).toBe('SIGINT')
+    expect(L1.handlers.size).toBe(0)
+    const c2 = new FakeChild()
+    const L2 = lifecycle(c2, { preRows: [row({ user_id: A, remaining_s: 5 * 60 })] })
+    const r2 = await L2.p
+    expect(r2).toMatchObject({ rc: 1, stopKind: 'watchdog' })
+    expect(L2.polls()).toBe(0)
+  })
+
+  test('vòng đời: server tự chết ⇒ 1 (không đổi thành 0); spawn hỏng (không pid, không exit) ⇒ tự kết thúc 1, không kill', async () => {
+    const c1 = new FakeChild()
+    const L1 = lifecycle(c1)
+    await tick(30)
+    c1.die(1, null)
+    expect(await L1.p).toMatchObject({ rc: 1, stopKind: null, code: 1, stopped: true })
+    expect(c1.kills).toEqual([])
+    const c2 = failedSpawn()
+    const L2 = lifecycle(c2)
+    expect(await L2.p).toMatchObject({ rc: 1, childError: 'spawn khong-co ENOENT', stopped: true, pid: null })
+    expect(c2.kills).toEqual([])
+    expect(L2.handlers.size).toBe(0)
+    expect(L2.timers.size).toBe(0)
+  })
+
+  test('PM cli-exit §3 — canh marker dừng → SIGINT lỗi EPERM (đồng bộ / trễ) → SIGKILL ngay → con THẬT SỰ thoát; timer / handler dọn', async () => {
+    for (const mode of ['sigint-error', 'sigint-error-async'] as const) {
+      const c = new FakeChild(mode)
+      // killAfterMs dài: SIGKILL phải đến từ việc xử lý lỗi, không phải hạn SIGINT; timer hạn đó cũng phải bị huỷ.
+      const L = lifecycle(c, { poll: () => Promise.resolve(lost), killAfterMs: 5_000 })
+      const r = await L.p
+      expect(r, mode).toMatchObject({ rc: 1, stopKind: 'watchdog', childError: 'kill EPERM', stopped: true, signal: 'SIGKILL', pid: 4242 })
+      expect(c.kills, mode).toEqual(['SIGINT', 'SIGKILL'])
+      expect(c.alive, mode).toBe(false)
+      expect(c.unrefs, mode).toBe(0)
+      expect(L.timers.size, mode).toBe(0)
+      expect(L.handlers.size, mode).toBe(0)
+    }
+  })
+
+  test('PM cli-exit §3 — operator Ctrl+C → SIGINT lỗi → SIGKILL → con thoát ⇒ 1 (có lỗi, không đổi thành 0); kill() ném ⇒ như error, hữu hạn', async () => {
+    const c1 = new FakeChild('sigint-error')
+    const L1 = lifecycle(c1, { killAfterMs: 5_000 })
+    await tick(20)
+    L1.handlers.get('SIGINT')!()
+    expect(await L1.p).toMatchObject({ rc: 1, stopKind: 'operator', childError: 'kill EPERM', stopped: true, signal: 'SIGKILL' })
+    expect(c1.kills).toEqual(['SIGINT', 'SIGKILL'])
+    expect(c1.alive).toBe(false)
+    expect(L1.timers.size).toBe(0)
+    expect(L1.handlers.size).toBe(0)
+    const c2 = new FakeChild('kill-throws')
+    const L2 = lifecycle(c2, { killAfterMs: 5_000 })
+    await tick(20)
+    expect(() => L2.handlers.get('SIGTERM')!()).not.toThrow()
+    expect(await L2.p).toMatchObject({ rc: 1, stopKind: 'operator', childError: 'kill EINVAL', stopped: false, pid: 4242 })
+    expect(c2.kills).toEqual(['SIGINT', 'SIGKILL'])
+    expect(c2.alive).toBe(true)
+    expect(c2.unrefs).toBe(1)
+    expect(L2.timers.size).toBe(0)
+    expect(L2.handlers.size).toBe(0)
+  })
+
+  test('PM cli-exit §3 — không dừng được ở cấp OS (mọi kill lỗi) ⇒ CHƯA DỪNG rõ ràng, hữu hạn, không báo đã dọn; error / exit muộn không thoát ngoài kiểm soát', async () => {
+    const c = new FakeChild('kill-error')
+    const L = lifecycle(c, { poll: () => Promise.resolve(lost), killAfterMs: 5_000, killConfirmMs: 40 })
+    const t0 = Date.now()
+    const r = await L.p
+    expect(r).toMatchObject({ rc: 1, stopKind: 'watchdog', childError: 'kill EPERM', stopped: false, pid: 4242, code: null, signal: null })
+    expect(Date.now() - t0).toBeLessThan(2_000)
+    expect(c.kills).toEqual(['SIGINT', 'SIGKILL'])
+    expect(c.alive).toBe(true)
+    expect(c.unrefs).toBe(1)
+    expect(L.timers.size).toBe(0)
+    expect(L.handlers.size).toBe(0)
+    expect(L.logs.join('\n')).toContain('SERVER QA CHƯA DỪNG: pid 4242')
+    expect(() => c.emit('error', new Error('kill EPERM lần 3'))).not.toThrow()
+    expect(L.timers.size).toBe(0)
+    expect(c.kills).toEqual(['SIGINT', 'SIGKILL']) // không gửi lại / không hẹn lại sau khi đã bỏ lại
+    expect(() => c.die(null, 'SIGKILL')).not.toThrow()
+    expect(L.timers.size).toBe(0)
+  })
+
+  test('PM cli-exit §3 — lỗi tiến trình con khi server còn sống, chưa ai dừng ⇒ bắt đầu dừng (error), con thoát thật ⇒ 1', async () => {
+    const c = new FakeChild()
+    const L = lifecycle(c)
+    await tick(20)
+    c.emit('error', new Error('channel closed'))
+    expect(await L.p).toMatchObject({ rc: 1, stopKind: 'error', childError: 'channel closed', stopped: true, signal: 'SIGINT' })
+    expect(c.kills).toEqual(['SIGINT'])
+    expect(c.alive).toBe(false)
+    expect(L.timers.size).toBe(0)
+    expect(L.handlers.size).toBe(0)
+  })
+
+  test('vòng đời: setup lỗi sau spawn ⇒ GIẾT server ngay; SIGKILL thành công ⇒ ném lỗi gốc; SIGKILL lỗi ⇒ CmsQaServerNotStoppedError, không poll / handler / timer', async () => {
+    const c1 = new FakeChild()
+    const L1 = lifecycle(c1, { setup: () => { throw new Error('EPERM: ghi manifest') } })
+    await expect(L1.p).rejects.toThrow('EPERM: ghi manifest')
+    expect(c1.kills).toEqual(['SIGKILL'])
+    expect(c1.signalCode).toBe('SIGKILL')
+    expect(L1.polls()).toBe(0)
+    expect(L1.handlers.size).toBe(0)
+    expect(L1.timers.size).toBe(0)
+    expect(L1.logs.join('\n')).toContain('GIẾT server QA')
+    const c2 = new FakeChild('kill-error')
+    const L2 = lifecycle(c2, { setup: () => { throw new Error('EPERM: ghi manifest') } })
+    const e = await L2.p.then(() => null, (x: unknown) => x)
+    expect(e).toBeInstanceOf(CmsQaServerNotStoppedError)
+    expect((e as CmsQaServerNotStoppedError).pid).toBe(4242)
+    expect(String((e as Error).message)).toMatch(/pid 4242 CHƯA DỪNG[\s\S]*EPERM: ghi manifest/)
+    expect(c2.kills).toEqual(['SIGKILL'])
+    expect(c2.alive).toBe(true)
+    expect(c2.unrefs).toBe(1)
+    expect(L2.polls()).toBe(0)
+    expect(L2.handlers.size).toBe(0)
+    expect(L2.timers.size).toBe(0)
+    // spawn hỏng + setup lỗi: không treo chờ 'exit' không bao giờ tới ⇒ ném lỗi gốc
+    const c3 = failedSpawn()
+    const L3 = lifecycle(c3, { setup: () => { throw new Error('EPERM: ghi manifest') } })
+    await expect(L3.p).rejects.toThrow('EPERM: ghi manifest')
+    expect(L3.timers.size).toBe(0)
+  })
+
+  test('vòng đời: Ctrl+C tới cha SAU exit của con nhưng trong grace ⇒ 0; server lờ SIGINT ⇒ SIGKILL sau hạn', async () => {
+    const c1 = new FakeChild()
+    const L1 = lifecycle(c1, { graceMs: 60 })
+    await tick(20)
+    c1.die(null, 'SIGINT') // Windows: con nhận Ctrl+C trước
+    await tick(10)
+    L1.handlers.get('SIGINT')!() // cha nhận muộn, vẫn trong grace
+    expect(await L1.p).toMatchObject({ rc: 0, stopKind: 'operator', stopped: true })
+    expect(c1.kills).toEqual([]) // con đã thoát ⇒ không kill / không hẹn SIGKILL
+    expect(L1.timers.size).toBe(0)
+    const c2 = new FakeChild('ignore-sigint')
+    const L2 = lifecycle(c2, { killAfterMs: 20 })
+    await tick(20)
+    L2.handlers.get('SIGTERM')!()
+    expect(await L2.p).toMatchObject({ rc: 0, stopKind: 'operator', signal: 'SIGKILL', stopped: true })
+    expect(c2.kills).toEqual(['SIGINT', 'SIGKILL'])
+    expect(c2.alive).toBe(false)
+    expect(L2.timers.size).toBe(0)
+  })
+
+  test('cms-verify / cms-qa-access / cms-qa-run thành tiến trình con: đúng mã 0 / 1 / 2, tự kết thúc, không UV_HANDLE_CLOSING', () => {
+    test.setTimeout(180_000)
+    const r = spawnSync(process.execPath, [path.join(WEBAPP, 'scripts', 'qa-cms-cli-exit.mjs')], { encoding: 'utf8', timeout: 170_000 })
+    const out = `${r.stdout}\n${r.stderr}`
+    expect(out, out.slice(-2500)).toMatch(/\n\d+ đạt · 0 lỗi/)
+    expect(out).not.toMatch(/Assertion failed|UV_HANDLE_CLOSING/)
+    expect(r.status).toBe(0)
+  })
 })
