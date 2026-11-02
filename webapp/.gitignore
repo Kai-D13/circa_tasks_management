@@ -68,5 +68,8 @@ next-env.d.ts
 # D1 race 115 — marker fixture (scripts/qa-race-115.mjs; chứa host Supabase + ID giả)
 .qa-race-115.json
 .qa-race-115.json.tmp
+# CMS P1-R1 — manifest run QA đang mở (scripts/cms-qa-run.mjs; host + user_id QA + id chương trình is_test). Run đóng ⇒ qa-artifacts/cms-qa/
+.qa-cms.json
+.qa-cms.json.tmp
 # Log/trace QA cục bộ (có thể chứa URL/route prod) — không commit
 /qa-artifacts/

@@ -101,3 +101,52 @@ export function careWriteGate(input: {
   }
   return { ok: true, host }
 }
+
+// ─── CMS theo sản phẩm (P1-R1, review PM runbook P1 02/11) ───────────────────
+// Cổng cho MỌI QA CMS ghi lên DB production — tự động (spec) lẫn QA tay qua server localhost (launcher
+// scripts/cms-qa-run.mjs gọi đúng hàm này trước khi dựng server). Cùng nguyên tắc care / order bonus, thêm:
+//   · host so `URL.host` (gồm port, như --expect-host của bootstrap) — gõ lại chính xác project đích;
+//   · CMS_PROGRAM_ENABLED=true KHÔNG được nằm trong .env.local (cờ CMS chỉ bật trong process của launcher);
+//   · marker = manifest run đang mở (.qa-cms.json) ⇒ chặn; KHÔNG xoá tay để bỏ qua — chạy
+//     `node scripts/cms-qa-run.mjs close` để đối chiếu DB (chương trình QA còn is_test, không có chương trình thật
+//     do tài khoản QA tạo trong run) rồi lưu manifest đã đóng. Chương trình QA không xoá qua app (H8).
+export const CMS_QA_MARKER = '.qa-cms.json'
+export const CMS_QA_PROCESS_FLAGS = ['E2E_CMS_WRITE_QA', 'E2E_EXPECTED_SUPABASE_HOST'] as const
+
+/** `host[:port]` của một URL (không chuẩn hoá thêm); null nếu không parse được. */
+export function urlHostWithPort(url: string | undefined): string | null {
+  if (!url) return null
+  try { return new URL(url).host || null } catch { return null }
+}
+
+export function cmsWriteGate(input: {
+  env: Record<string, string | undefined>
+  /** Nội dung .env.local (null nếu không có file). */
+  envFileText: string | null
+  markerExists: boolean
+}): GateResult {
+  const { env, envFileText, markerExists } = input
+  if (env.E2E_CMS_WRITE_QA !== 'YES') {
+    return { ok: false, reason: 'thiếu E2E_CMS_WRITE_QA=YES — QA CMS ghi chương trình is_test lên DB production, phải xác nhận bằng biến PROCESS tạm cho lần chạy này.' }
+  }
+  if (envFileText !== null) {
+    // `\\s` (không phải `\s`): trong template literal `\s` thành chữ 's'. Bắt cả dạng `export KEY=…`.
+    const leaked = CMS_QA_PROCESS_FLAGS.filter((k) => new RegExp(`^\\s*(?:export\\s+)?${k}\\s*=`, 'm').test(envFileText))
+    if (leaked.length > 0) {
+      return { ok: false, reason: `${leaked.join(', ')} đang nằm trong .env.local — đây phải là biến PROCESS tạm cho từng lần chạy, xoá khỏi .env.local.` }
+    }
+    // Bắt cả chú thích đuôi (`=true # ghi chú` — dotenv vẫn đọc là true).
+    if (/^\s*(?:export\s+)?CMS_PROGRAM_ENABLED\s*=\s*["']?true["']?\s*(?:#.*)?$/m.test(envFileText)) {
+      return { ok: false, reason: 'CMS_PROGRAM_ENABLED=true đang nằm trong .env.local — cờ CMS cho QA chỉ bật trong process của launcher (scripts/cms-qa-run.mjs), xoá khỏi .env.local.' }
+    }
+  }
+  const host = urlHostWithPort(env.NEXT_PUBLIC_SUPABASE_URL)
+  if (!host) return { ok: false, reason: 'NEXT_PUBLIC_SUPABASE_URL thiếu hoặc không parse được thành URL.' }
+  if (env.E2E_EXPECTED_SUPABASE_HOST !== host) {
+    return { ok: false, reason: `E2E_EXPECTED_SUPABASE_HOST (${env.E2E_EXPECTED_SUPABASE_HOST ?? 'THIẾU'}) phải TRÙNG CHÍNH XÁC host (gồm port) của NEXT_PUBLIC_SUPABASE_URL (${host}).` }
+  }
+  if (markerExists) {
+    return { ok: false, reason: `manifest ${CMS_QA_MARKER} của run trước còn mở — không xoá tay; chạy \`node scripts/cms-qa-run.mjs close\` để đối chiếu DB và lưu manifest đã đóng.` }
+  }
+  return { ok: true, host }
+}
