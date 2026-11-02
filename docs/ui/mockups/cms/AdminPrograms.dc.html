@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>Admin · Danh sách chương trình CMS</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#C94A16}a:hover{color:#9A3410}
+</style>
+</helmet>
+<div style="font-family: 'Be Vietnam Pro', system-ui, sans-serif; background: {{t.bg}}; color: {{t.text}}; font-size: 15px; line-height: 1.5; min-height: 100%">
+<div style="max-width: 1320px; margin: 0 auto; padding: 32px 32px 64px; display: flex; flex-direction: column; gap: 24px">
+
+<header style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; justify-content: space-between">
+<div style="display: flex; flex-direction: column; gap: 6px; flex: 1 1 420px">
+<h1 style="margin: 0; font-size: 26px; font-weight: 700; letter-spacing: -0.01em">Chiến dịch KPI</h1>
+<p style="margin: 0; color: {{t.text2}}; font-size: 14px">Quản lý chiến dịch, affiliate và chương trình hoa hồng theo sản phẩm.</p>
+</div>
+<a href="AdminImport.dc.html" style="height: 44px; padding: 0 18px; border-radius: 10px; background: {{t.brand}}; color: {{t.onBrand}}; font-weight: 600; font-size: 14px; text-decoration: none; display: inline-flex; align-items: center; gap: 8px">
+<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>
+Tạo chương trình CMS</a>
+</header>
+
+<nav aria-label="Phân hệ chiến dịch" style="display: flex; gap: 4px; border-bottom: 1px solid {{t.line}}; overflow-x: auto">
+<a href="#" style="height: 44px; padding: 0 14px; display: inline-flex; align-items: center; font-size: 14px; font-weight: 500; color: {{t.text2}}; text-decoration: none; border-bottom: 2px solid transparent; white-space: nowrap">Chiến dịch</a>
+<a href="#" style="height: 44px; padding: 0 14px; display: inline-flex; align-items: center; font-size: 14px; font-weight: 500; color: {{t.text2}}; text-decoration: none; border-bottom: 2px solid transparent; white-space: nowrap">Affiliate</a>
+<a href="#" aria-current="page" style="height: 44px; padding: 0 14px; display: inline-flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: {{t.text}}; text-decoration: none; border-bottom: 2px solid {{t.brand}}; white-space: nowrap">CMS sản phẩm <span style="font-size: 11px; font-weight: 700; padding: 1px 6px; border-radius: 5px; background: {{t.infoBg}}; color: {{t.info}}">Mới</span></a>
+</nav>
+
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr)); gap: 12px">
+<sc-for list="{{stats}}" as="s" hint-placeholder-count="4">
+<div style="background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 6px">
+<span style="font-size: 13px; color: {{t.text2}}">{{s.label}}</span>
+<strong style="font-size: 26px; font-weight: 700; letter-spacing: -0.01em">{{s.value}}</strong>
+<span style="font-size: 12px; color: {{t.text2}}">{{s.sub}}</span>
+</div>
+</sc-for>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between">
+<div role="tablist" aria-label="Lọc theo trạng thái" style="display: flex; gap: 6px; flex-wrap: wrap">
+<sc-for list="{{tabs}}" as="f" hint-placeholder-count="5">
+<button type="button" role="tab" aria-selected="{{f.sel}}" onClick="{{f.pick}}" style="height: 36px; padding: 0 12px; border-radius: 9px; border: 1px solid {{f.border}}; background: {{f.bg}}; color: {{f.fg}}; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 6px">{{f.label}} <span style="font-weight: 500; opacity: 0.8">{{f.count}}</span></button>
+</sc-for>
+</div>
+<label style="display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px; border-radius: 10px; border: 1px solid {{t.line}}; background: {{t.panel}}; flex: 0 1 320px; min-width: 220px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="{{t.text2}}" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+<span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Tìm chương trình</span>
+<input type="search" placeholder="Tìm theo tên chương trình hoặc ProductID" style="border: 0; outline: 0; background: transparent; color: {{t.text}}; font: inherit; font-size: 14px; flex: 1; min-width: 0">
+</label>
+</div>
+
+<div style="background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 14px; overflow-x: auto">
+<div role="table" aria-label="Chương trình CMS" style="min-width: 1040px; font-size: 14px">
+<div role="row" style="display: grid; grid-template-columns: 2.4fr 1fr 0.7fr 1.5fr 1fr 0.9fr 1.3fr; gap: 12px; padding: 10px 16px; background: {{t.muted}}; color: {{t.text2}}; font-size: 12px; font-weight: 600">
+<span role="columnheader">Chương trình</span>
+<span role="columnheader">Trạng thái</span>
+<span role="columnheader">Sản phẩm</span>
+<span role="columnheader">Đạt điều kiện</span>
+<span role="columnheader" style="text-align: right">CMS tạm tính</span>
+<span role="columnheader" style="text-align: right">Dược sĩ có CMS</span>
+<span role="columnheader">Import gần nhất</span>
+</div>
+<sc-for list="{{rows}}" as="r" hint-placeholder-count="6">
+<div role="row" style="display: grid; grid-template-columns: 2.4fr 1fr 0.7fr 1.5fr 1fr 0.9fr 1.3fr; gap: 12px; padding: 14px 16px; border-top: 1px solid {{t.line}}; align-items: center">
+<span role="cell" style="display: flex; flex-direction: column">
+<a href="AdminProgramDetail.dc.html" style="color: {{t.text}}; text-decoration: none; font-weight: 600">{{r.name}}</a>
+<span style="font-size: 12px; color: {{t.text2}}">{{r.period}}</span>
+</span>
+<span role="cell"><span style="font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 6px; background: {{r.sBg}}; color: {{r.sFg}}; white-space: nowrap">{{r.status}}</span></span>
+<span role="cell">{{r.products}}</span>
+<span role="cell" style="display: flex; flex-direction: column; gap: 6px">
+<span style="display: block; height: 6px; border-radius: 3px; background: {{t.muted}}; overflow: hidden"><span style="display: block; height: 6px; width: {{r.pct}}; background: {{r.bar}}"></span></span>
+<span style="font-size: 12px; color: {{t.text2}}">{{r.gate}}</span>
+</span>
+<span role="cell" style="text-align: right; font-weight: 600; white-space: nowrap">{{r.cms}}</span>
+<span role="cell" style="text-align: right">{{r.staff}}</span>
+<span role="cell" style="display: flex; flex-direction: column">
+<span style="font-size: 13px">{{r.imp}}</span>
+<span style="font-size: 12px; color: {{r.impFg}}">{{r.impNote}}</span>
+</span>
+</div>
+</sc-for>
+</div>
+<sc-if value="{{empty}}" hint-placeholder-val="{{ false }}">
+<div style="padding: 48px 16px; text-align: center; color: {{t.text2}}; font-size: 14px">Không có chương trình nào ở trạng thái này.</div>
+</sc-if>
+</div>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1440,"height":1040}}'>
+class Component extends DCLogic {
+  constructor(p) { super(p); this.state = {tab: 'all'}; }
+  renderVals() {
+    const P = {
+      light: {bg:'#F7F6F4',panel:'#FFFFFF',muted:'#F1F0EE',line:'#E7E5E4',text:'#1C1917',text2:'#57534E',brand:'#F3743F',onBrand:'#141210',sel:'#1C1917',onSel:'#FFFFFF',info:'#1F5A8F',infoBg:'#E5F0FA',ok:'#1D6B3A',okBg:'#E3F4E8',warn:'#7A4D00',warnBg:'#FCF1D6',bad:'#A3231A',badBg:'#FDECEA',neu:'#57534E',neuBg:'#F1F0EE'},
+      dark: {bg:'#121110',panel:'#1A1817',muted:'#24211F',line:'#2E2A27',text:'#F5F5F4',text2:'#A8A29E',brand:'#F3743F',onBrand:'#141210',sel:'#F5F5F4',onSel:'#141210',info:'#9DC6EF',infoBg:'#16243A',ok:'#8FD6A2',okBg:'#15291C',warn:'#EBC170',warnBg:'#2E2412',bad:'#F4A29A',badBg:'#3A1A17',neu:'#A8A29E',neuBg:'#24211F'}
+    };
+    const t = P[this.props.theme === 'dark' ? 'dark' : 'light'];
+    const tone = {ok: [t.okBg, t.ok], info: [t.infoBg, t.info], warn: [t.warnBg, t.warn], neu: [t.neuBg, t.neu], bad: [t.badBg, t.bad]};
+    const all = [
+      {k: 'running', name: 'CMS T11/2026 · Hô hấp & cảm cúm', period: '01/11 – 30/11/2026 · còn 12 ngày', status: 'Đang chạy', tone: 'ok', products: '5 SP', pct: '40%', gate: '2/5 SP đạt điều kiện', cms: '3.418.000đ', staff: '14', imp: '31/10 · 09:12', impNote: '12 dòng hợp lệ', impTone: 'neu'},
+      {k: 'running', name: 'CMS T11/2026 · Vitamin & khoáng chất', period: '01/11 – 30/11/2026 · còn 12 ngày', status: 'Đang chạy', tone: 'ok', products: '8 SP', pct: '63%', gate: '5/8 SP đạt điều kiện', cms: '2.106.000đ', staff: '11', imp: '30/10 · 16:40', impNote: '8 dòng hợp lệ', impTone: 'neu'},
+      {k: 'upcoming', name: 'CMS T12/2026 · Chăm sóc da', period: '01/12 – 31/12/2026 · bắt đầu sau 13 ngày', status: 'Sắp diễn ra', tone: 'info', products: '6 SP', pct: '0%', gate: 'Chưa bắt đầu', cms: '—', staff: '—', imp: '17/11 · 14:05', impNote: '2 dòng lỗi đã bị loại', impTone: 'warn'},
+      {k: 'closing', name: 'CMS T10/2026 · Hô hấp', period: '01/10 – 31/10/2026 · đã kết thúc', status: 'Chờ chốt kỳ', tone: 'warn', products: '5 SP', pct: '60%', gate: '3/5 SP đạt điều kiện', cms: '4.920.000đ', staff: '17', imp: '29/09 · 10:22', impNote: '9 dòng hợp lệ', impTone: 'neu'},
+      {k: 'closed', name: 'CMS T9/2026 · Tiêu hóa', period: '01/09 – 30/09/2026', status: 'Đã chốt', tone: 'neu', products: '4 SP', pct: '100%', gate: '4/4 SP đạt điều kiện', cms: '2.775.000đ', staff: '12', imp: '28/08 · 08:50', impNote: '4 dòng hợp lệ', impTone: 'neu'},
+      {k: 'draft', name: 'Thử nghiệm bậc thang Phase 2', period: 'Chưa đặt kỳ', status: 'Nháp', tone: 'neu', products: '—', pct: '0%', gate: 'Chưa import', cms: '—', staff: '—', imp: '—', impNote: 'Chưa có file', impTone: 'neu'}
+    ];
+    const defs = [['all', 'Tất cả'], ['running', 'Đang chạy'], ['upcoming', 'Sắp diễn ra'], ['closing', 'Chờ chốt kỳ'], ['closed', 'Đã chốt'], ['draft', 'Nháp']];
+    const tab = this.state.tab;
+    const tabs = defs.map(([k, label]) => {
+      const sel = tab === k;
+      return {label, count: k === 'all' ? all.length : all.filter(r => r.k === k).length, sel: sel ? 'true' : 'false',
+        bg: sel ? t.sel : t.panel, fg: sel ? t.onSel : t.text2, border: sel ? t.sel : t.line,
+        pick: () => this.setState({tab: k})};
+    });
+    const rows = all.filter(r => tab === 'all' || r.k === tab).map(r => ({...r,
+      sBg: tone[r.tone][0], sFg: tone[r.tone][1], impFg: r.impTone === 'warn' ? t.warn : t.text2,
+      bar: r.k === 'closed' ? t.text2 : t.brand}));
+    return {
+      t, tabs, rows, empty: rows.length === 0,
+      stats: [
+        {label: 'Chương trình đang chạy', value: '2', sub: '1 sắp diễn ra · 1 chờ chốt kỳ'},
+        {label: 'Sản phẩm đang áp dụng', value: '13', sub: '7 SP đã đạt điều kiện GMV'},
+        {label: 'CMS tạm tính tháng 11', value: '5.524.000đ', sub: 'Cập nhật 18/11 · 06:00 từ BI'},
+        {label: 'Dược sĩ có CMS', value: '21', sub: 'trên 38 dược sĩ thuộc phạm vi'}
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

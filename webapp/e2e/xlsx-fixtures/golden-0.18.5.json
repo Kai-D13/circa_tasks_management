@@ -1,0 +1,3077 @@
+{
+ "version": "0.18.5",
+ "snapshot": {
+  "regression-openpyxl.xlsx": {
+   "A": [
+    {
+     "name": "Data",
+     "ref": "A1:J6",
+     "merges": [
+      "B6:D6"
+     ],
+     "rows": [
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "001"
+        ],
+        [
+         "Tên nhà thuốc",
+         "Nhà thuốc Á Châu"
+        ],
+        [
+         "Mục tiêu",
+         12345678.9
+        ],
+        [
+         "Tỷ lệ",
+         0.15
+        ],
+        [
+         "Ngày",
+         46328
+        ],
+        [
+         "Giờ",
+         46328.57326388889
+        ],
+        [
+         "Ghi chú",
+         "Dòng 1\r\nxuống dòng"
+        ],
+        [
+         "ProductID",
+         900001
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Cờ",
+         true
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "002"
+        ],
+        [
+         "Tên nhà thuốc",
+         "Nhà thuốc \"Bình An\""
+        ],
+        [
+         "Mục tiêu",
+         0
+        ],
+        [
+         "Tỷ lệ",
+         1
+        ],
+        [
+         "Ngày",
+         46387
+        ],
+        [
+         "Giờ",
+         46387.99998842592
+        ],
+        [
+         "Ghi chú",
+         ""
+        ],
+        [
+         "ProductID",
+         9007199254740992
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Cờ",
+         false
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "003"
+        ],
+        [
+         "Tên nhà thuốc",
+         "  khoảng trắng  "
+        ],
+        [
+         "Mục tiêu",
+         -1500
+        ],
+        [
+         "Tỷ lệ",
+         0.333333333
+        ],
+        [
+         "Ngày",
+         43831
+        ],
+        [
+         "Giờ",
+         43831
+        ],
+        [
+         "Ghi chú",
+         null
+        ],
+        [
+         "ProductID",
+         "00123"
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Cờ",
+         null
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "004"
+        ],
+        [
+         "Tên nhà thuốc",
+         "Ký tự đặc biệt <>&'"
+        ],
+        [
+         "Mục tiêu",
+         1e+21
+        ],
+        [
+         "Tỷ lệ",
+         0.0005
+        ],
+        [
+         "Ngày",
+         73109
+        ],
+        [
+         "Giờ",
+         73109.5
+        ],
+        [
+         "Ghi chú",
+         "Tiếng Việt có dấu ỹ ữ ặ"
+        ],
+        [
+         "ProductID",
+         123456789012
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Cờ",
+         true
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "005"
+        ],
+        [
+         "Tên nhà thuốc",
+         "Gộp ô"
+        ],
+        [
+         "Mục tiêu",
+         null
+        ],
+        [
+         "Tỷ lệ",
+         null
+        ],
+        [
+         "Ngày",
+         null
+        ],
+        [
+         "Giờ",
+         null
+        ],
+        [
+         "Ghi chú",
+         null
+        ],
+        [
+         "ProductID",
+         null
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Cờ",
+         null
+        ]
+       ]
+      }
+     ]
+    },
+    {
+     "name": "Proto",
+     "ref": "A1:E3",
+     "merges": [],
+     "rows": [
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "__proto___NaN",
+         "{\"polluted\":1}"
+        ],
+        [
+         "constructor_NaN",
+         "x"
+        ],
+        [
+         "hasOwnProperty_NaN",
+         "y"
+        ],
+        [
+         "toString_NaN",
+         "z"
+        ],
+        [
+         "Mã",
+         "001"
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "__proto___NaN",
+         1
+        ],
+        [
+         "constructor_NaN",
+         2
+        ],
+        [
+         "hasOwnProperty_NaN",
+         3
+        ],
+        [
+         "toString_NaN",
+         4
+        ],
+        [
+         "Mã",
+         "002"
+        ]
+       ]
+      }
+     ]
+    },
+    {
+     "name": "Trống đầu",
+     "ref": "C3:D4",
+     "merges": [],
+     "rows": [
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "42",
+         null
+        ],
+        [
+         "bắt đầu ở C3",
+         "dòng 2"
+        ]
+       ]
+      }
+     ]
+    }
+   ],
+   "B": [
+    {
+     "name": "Data",
+     "rows": [
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "001"
+        ],
+        [
+         "Tên nhà thuốc",
+         "Nhà thuốc Á Châu"
+        ],
+        [
+         "Mục tiêu",
+         "12,345,678.90"
+        ],
+        [
+         "Tỷ lệ",
+         "15.00%"
+        ],
+        [
+         "Ngày",
+         "02/11/2026"
+        ],
+        [
+         "Giờ",
+         "02/11/2026 13:45:30"
+        ],
+        [
+         "Ghi chú",
+         "Dòng 1\r\nxuống dòng"
+        ],
+        [
+         "ProductID",
+         "900001"
+        ],
+        [
+         "Công thức",
+         ""
+        ],
+        [
+         "Cờ",
+         "TRUE"
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "002"
+        ],
+        [
+         "Tên nhà thuốc",
+         "Nhà thuốc \"Bình An\""
+        ],
+        [
+         "Mục tiêu",
+         "0.00"
+        ],
+        [
+         "Tỷ lệ",
+         "100.00%"
+        ],
+        [
+         "Ngày",
+         "31/12/2026"
+        ],
+        [
+         "Giờ",
+         "31/12/2026 23:59:59"
+        ],
+        [
+         "Ghi chú",
+         ""
+        ],
+        [
+         "ProductID",
+         "9007199254740992"
+        ],
+        [
+         "Công thức",
+         ""
+        ],
+        [
+         "Cờ",
+         "FALSE"
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "003"
+        ],
+        [
+         "Tên nhà thuốc",
+         "  khoảng trắng  "
+        ],
+        [
+         "Mục tiêu",
+         "-1,500.00"
+        ],
+        [
+         "Tỷ lệ",
+         "33.33%"
+        ],
+        [
+         "Ngày",
+         "01/01/2020"
+        ],
+        [
+         "Giờ",
+         "01/01/2020 00:00:00"
+        ],
+        [
+         "Ghi chú",
+         ""
+        ],
+        [
+         "ProductID",
+         "00123"
+        ],
+        [
+         "Công thức",
+         ""
+        ],
+        [
+         "Cờ",
+         ""
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "004"
+        ],
+        [
+         "Tên nhà thuốc",
+         "Ký tự đặc biệt <>&'"
+        ],
+        [
+         "Mục tiêu",
+         "1e,+21.00"
+        ],
+        [
+         "Tỷ lệ",
+         "0.05%"
+        ],
+        [
+         "Ngày",
+         "28/02/2100"
+        ],
+        [
+         "Giờ",
+         "28/02/2100 12:00:00"
+        ],
+        [
+         "Ghi chú",
+         "Tiếng Việt có dấu ỹ ữ ặ"
+        ],
+        [
+         "ProductID",
+         "123456789012"
+        ],
+        [
+         "Công thức",
+         ""
+        ],
+        [
+         "Cờ",
+         "TRUE"
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "005"
+        ],
+        [
+         "Tên nhà thuốc",
+         "Gộp ô"
+        ],
+        [
+         "Mục tiêu",
+         ""
+        ],
+        [
+         "Tỷ lệ",
+         ""
+        ],
+        [
+         "Ngày",
+         ""
+        ],
+        [
+         "Giờ",
+         ""
+        ],
+        [
+         "Ghi chú",
+         ""
+        ],
+        [
+         "ProductID",
+         ""
+        ],
+        [
+         "Công thức",
+         ""
+        ],
+        [
+         "Cờ",
+         ""
+        ]
+       ]
+      }
+     ]
+    },
+    {
+     "name": "Proto",
+     "rows": [
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "__proto___NaN",
+         "{\"polluted\":1}"
+        ],
+        [
+         "constructor_NaN",
+         "x"
+        ],
+        [
+         "hasOwnProperty_NaN",
+         "y"
+        ],
+        [
+         "toString_NaN",
+         "z"
+        ],
+        [
+         "Mã",
+         "001"
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "__proto___NaN",
+         "1"
+        ],
+        [
+         "constructor_NaN",
+         "2"
+        ],
+        [
+         "hasOwnProperty_NaN",
+         "3"
+        ],
+        [
+         "toString_NaN",
+         "4"
+        ],
+        [
+         "Mã",
+         "002"
+        ]
+       ]
+      }
+     ]
+    },
+    {
+     "name": "Trống đầu",
+     "rows": [
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "42",
+         ""
+        ],
+        [
+         "bắt đầu ở C3",
+         "dòng 2"
+        ]
+       ]
+      }
+     ]
+    }
+   ],
+   "W1": [
+    {
+     "zip": "PK",
+     "sheets": [
+      "Báo cáo CSKH"
+     ],
+     "rows": [
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "001"
+        ],
+        [
+         "Tên nhà thuốc",
+         "Nhà thuốc Á Châu"
+        ],
+        [
+         "Mục tiêu",
+         12345678.9
+        ],
+        [
+         "Tỷ lệ",
+         0.15
+        ],
+        [
+         "Ngày",
+         46328
+        ],
+        [
+         "Giờ",
+         46328.57326388889
+        ],
+        [
+         "Ghi chú",
+         "Dòng 1\r\nxuống dòng"
+        ],
+        [
+         "ProductID",
+         900001
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Cờ",
+         true
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "002"
+        ],
+        [
+         "Tên nhà thuốc",
+         "Nhà thuốc \"Bình An\""
+        ],
+        [
+         "Mục tiêu",
+         0
+        ],
+        [
+         "Tỷ lệ",
+         1
+        ],
+        [
+         "Ngày",
+         46387
+        ],
+        [
+         "Giờ",
+         46387.99998842592
+        ],
+        [
+         "Ghi chú",
+         ""
+        ],
+        [
+         "ProductID",
+         9007199254740992
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Cờ",
+         false
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "003"
+        ],
+        [
+         "Tên nhà thuốc",
+         "  khoảng trắng  "
+        ],
+        [
+         "Mục tiêu",
+         -1500
+        ],
+        [
+         "Tỷ lệ",
+         0.333333333
+        ],
+        [
+         "Ngày",
+         43831
+        ],
+        [
+         "Giờ",
+         43831
+        ],
+        [
+         "Ghi chú",
+         null
+        ],
+        [
+         "ProductID",
+         "00123"
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Cờ",
+         null
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "004"
+        ],
+        [
+         "Tên nhà thuốc",
+         "Ký tự đặc biệt <>&'"
+        ],
+        [
+         "Mục tiêu",
+         1e+21
+        ],
+        [
+         "Tỷ lệ",
+         0.0005
+        ],
+        [
+         "Ngày",
+         73109
+        ],
+        [
+         "Giờ",
+         73109.5
+        ],
+        [
+         "Ghi chú",
+         "Tiếng Việt có dấu ỹ ữ ặ"
+        ],
+        [
+         "ProductID",
+         123456789012
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Cờ",
+         true
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "005"
+        ],
+        [
+         "Tên nhà thuốc",
+         "Gộp ô"
+        ],
+        [
+         "Mục tiêu",
+         null
+        ],
+        [
+         "Tỷ lệ",
+         null
+        ],
+        [
+         "Ngày",
+         null
+        ],
+        [
+         "Giờ",
+         null
+        ],
+        [
+         "Ghi chú",
+         null
+        ],
+        [
+         "ProductID",
+         null
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Cờ",
+         null
+        ]
+       ]
+      }
+     ]
+    },
+    {
+     "zip": "PK",
+     "sheets": [
+      "Sản phẩm FS"
+     ],
+     "rows": [
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "001"
+        ],
+        [
+         "Tên nhà thuốc",
+         "Nhà thuốc Á Châu"
+        ],
+        [
+         "Mục tiêu",
+         12345678.9
+        ],
+        [
+         "Tỷ lệ",
+         0.15
+        ],
+        [
+         "Ngày",
+         46328
+        ],
+        [
+         "Giờ",
+         46328.57326388889
+        ],
+        [
+         "Ghi chú",
+         "Dòng 1\r\nxuống dòng"
+        ],
+        [
+         "ProductID",
+         900001
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Cờ",
+         true
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "002"
+        ],
+        [
+         "Tên nhà thuốc",
+         "Nhà thuốc \"Bình An\""
+        ],
+        [
+         "Mục tiêu",
+         0
+        ],
+        [
+         "Tỷ lệ",
+         1
+        ],
+        [
+         "Ngày",
+         46387
+        ],
+        [
+         "Giờ",
+         46387.99998842592
+        ],
+        [
+         "Ghi chú",
+         ""
+        ],
+        [
+         "ProductID",
+         9007199254740992
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Cờ",
+         false
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "003"
+        ],
+        [
+         "Tên nhà thuốc",
+         "  khoảng trắng  "
+        ],
+        [
+         "Mục tiêu",
+         -1500
+        ],
+        [
+         "Tỷ lệ",
+         0.333333333
+        ],
+        [
+         "Ngày",
+         43831
+        ],
+        [
+         "Giờ",
+         43831
+        ],
+        [
+         "Ghi chú",
+         null
+        ],
+        [
+         "ProductID",
+         "00123"
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Cờ",
+         null
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "004"
+        ],
+        [
+         "Tên nhà thuốc",
+         "Ký tự đặc biệt <>&'"
+        ],
+        [
+         "Mục tiêu",
+         1e+21
+        ],
+        [
+         "Tỷ lệ",
+         0.0005
+        ],
+        [
+         "Ngày",
+         73109
+        ],
+        [
+         "Giờ",
+         73109.5
+        ],
+        [
+         "Ghi chú",
+         "Tiếng Việt có dấu ỹ ữ ặ"
+        ],
+        [
+         "ProductID",
+         123456789012
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Cờ",
+         true
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "005"
+        ],
+        [
+         "Tên nhà thuốc",
+         "Gộp ô"
+        ],
+        [
+         "Mục tiêu",
+         null
+        ],
+        [
+         "Tỷ lệ",
+         null
+        ],
+        [
+         "Ngày",
+         null
+        ],
+        [
+         "Giờ",
+         null
+        ],
+        [
+         "Ghi chú",
+         null
+        ],
+        [
+         "ProductID",
+         null
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Cờ",
+         null
+        ]
+       ]
+      }
+     ]
+    },
+    {
+     "zip": "PK",
+     "sheets": [
+      "Kết quả chiến dịch"
+     ],
+     "rows": [
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "001"
+        ],
+        [
+         "Tên nhà thuốc",
+         "Nhà thuốc Á Châu"
+        ],
+        [
+         "Mục tiêu",
+         12345678.9
+        ],
+        [
+         "Tỷ lệ",
+         0.15
+        ],
+        [
+         "Ngày",
+         46328
+        ],
+        [
+         "Giờ",
+         46328.57326388889
+        ],
+        [
+         "Ghi chú",
+         "Dòng 1\r\nxuống dòng"
+        ],
+        [
+         "ProductID",
+         900001
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Cờ",
+         true
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "002"
+        ],
+        [
+         "Tên nhà thuốc",
+         "Nhà thuốc \"Bình An\""
+        ],
+        [
+         "Mục tiêu",
+         0
+        ],
+        [
+         "Tỷ lệ",
+         1
+        ],
+        [
+         "Ngày",
+         46387
+        ],
+        [
+         "Giờ",
+         46387.99998842592
+        ],
+        [
+         "Ghi chú",
+         ""
+        ],
+        [
+         "ProductID",
+         9007199254740992
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Cờ",
+         false
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "003"
+        ],
+        [
+         "Tên nhà thuốc",
+         "  khoảng trắng  "
+        ],
+        [
+         "Mục tiêu",
+         -1500
+        ],
+        [
+         "Tỷ lệ",
+         0.333333333
+        ],
+        [
+         "Ngày",
+         43831
+        ],
+        [
+         "Giờ",
+         43831
+        ],
+        [
+         "Ghi chú",
+         null
+        ],
+        [
+         "ProductID",
+         "00123"
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Cờ",
+         null
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "004"
+        ],
+        [
+         "Tên nhà thuốc",
+         "Ký tự đặc biệt <>&'"
+        ],
+        [
+         "Mục tiêu",
+         1e+21
+        ],
+        [
+         "Tỷ lệ",
+         0.0005
+        ],
+        [
+         "Ngày",
+         73109
+        ],
+        [
+         "Giờ",
+         73109.5
+        ],
+        [
+         "Ghi chú",
+         "Tiếng Việt có dấu ỹ ữ ặ"
+        ],
+        [
+         "ProductID",
+         123456789012
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Cờ",
+         true
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "005"
+        ],
+        [
+         "Tên nhà thuốc",
+         "Gộp ô"
+        ],
+        [
+         "Mục tiêu",
+         null
+        ],
+        [
+         "Tỷ lệ",
+         null
+        ],
+        [
+         "Ngày",
+         null
+        ],
+        [
+         "Giờ",
+         null
+        ],
+        [
+         "Ghi chú",
+         null
+        ],
+        [
+         "ProductID",
+         null
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Cờ",
+         null
+        ]
+       ]
+      }
+     ]
+    }
+   ],
+   "W1empty": {
+    "zip": "PK",
+    "sheets": [
+     "Nhật ký"
+    ],
+    "rows": [
+     {
+      "proto": "Object",
+      "entries": [
+       [
+        "(không có dữ liệu)",
+        ""
+       ]
+      ]
+     }
+    ]
+   },
+   "W2": {
+    "zip": "PK",
+    "rows": [
+     {
+      "proto": "Object",
+      "entries": [
+       [
+        "Mã CH",
+        "001"
+       ],
+       [
+        "Tên nhà thuốc",
+        "Nhà thuốc Á Châu"
+       ],
+       [
+        "Mục tiêu",
+        "12,345,678.90"
+       ],
+       [
+        "Tỷ lệ",
+        "15.00%"
+       ],
+       [
+        "Ngày",
+        "02/11/2026"
+       ],
+       [
+        "Giờ",
+        "02/11/2026 13:45:30"
+       ],
+       [
+        "Ghi chú",
+        "Dòng 1\r\nxuống dòng"
+       ],
+       [
+        "ProductID",
+        "900001"
+       ],
+       [
+        "Công thức",
+        ""
+       ],
+       [
+        "Cờ",
+        "TRUE"
+       ]
+      ]
+     },
+     {
+      "proto": "Object",
+      "entries": [
+       [
+        "Mã CH",
+        "002"
+       ],
+       [
+        "Tên nhà thuốc",
+        "Nhà thuốc \"Bình An\""
+       ],
+       [
+        "Mục tiêu",
+        "0.00"
+       ],
+       [
+        "Tỷ lệ",
+        "100.00%"
+       ],
+       [
+        "Ngày",
+        "31/12/2026"
+       ],
+       [
+        "Giờ",
+        "31/12/2026 23:59:59"
+       ],
+       [
+        "Ghi chú",
+        ""
+       ],
+       [
+        "ProductID",
+        "9007199254740992"
+       ],
+       [
+        "Công thức",
+        ""
+       ],
+       [
+        "Cờ",
+        "FALSE"
+       ]
+      ]
+     },
+     {
+      "proto": "Object",
+      "entries": [
+       [
+        "Mã CH",
+        "003"
+       ],
+       [
+        "Tên nhà thuốc",
+        "  khoảng trắng  "
+       ],
+       [
+        "Mục tiêu",
+        "-1,500.00"
+       ],
+       [
+        "Tỷ lệ",
+        "33.33%"
+       ],
+       [
+        "Ngày",
+        "01/01/2020"
+       ],
+       [
+        "Giờ",
+        "01/01/2020 00:00:00"
+       ],
+       [
+        "Ghi chú",
+        ""
+       ],
+       [
+        "ProductID",
+        "00123"
+       ],
+       [
+        "Công thức",
+        ""
+       ],
+       [
+        "Cờ",
+        ""
+       ]
+      ]
+     },
+     {
+      "proto": "Object",
+      "entries": [
+       [
+        "Mã CH",
+        "004"
+       ],
+       [
+        "Tên nhà thuốc",
+        "Ký tự đặc biệt <>&'"
+       ],
+       [
+        "Mục tiêu",
+        "1e,+21.00"
+       ],
+       [
+        "Tỷ lệ",
+        "0.05%"
+       ],
+       [
+        "Ngày",
+        "28/02/2100"
+       ],
+       [
+        "Giờ",
+        "28/02/2100 12:00:00"
+       ],
+       [
+        "Ghi chú",
+        "Tiếng Việt có dấu ỹ ữ ặ"
+       ],
+       [
+        "ProductID",
+        "123456789012"
+       ],
+       [
+        "Công thức",
+        ""
+       ],
+       [
+        "Cờ",
+        "TRUE"
+       ]
+      ]
+     },
+     {
+      "proto": "Object",
+      "entries": [
+       [
+        "Mã CH",
+        "005"
+       ],
+       [
+        "Tên nhà thuốc",
+        "Gộp ô"
+       ],
+       [
+        "Mục tiêu",
+        ""
+       ],
+       [
+        "Tỷ lệ",
+        ""
+       ],
+       [
+        "Ngày",
+        ""
+       ],
+       [
+        "Giờ",
+        ""
+       ],
+       [
+        "Ghi chú",
+        ""
+       ],
+       [
+        "ProductID",
+        ""
+       ],
+       [
+        "Công thức",
+        ""
+       ],
+       [
+        "Cờ",
+        ""
+       ]
+      ]
+     }
+    ]
+   }
+  },
+  "regression-sheetjs.xlsx": {
+   "A": [
+    {
+     "name": "Data",
+     "ref": "A1:H6",
+     "merges": [
+      "A6:C6"
+     ],
+     "rows": [
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "001"
+        ],
+        [
+         "Mục tiêu",
+         1500000
+        ],
+        [
+         "Tỷ lệ",
+         0.125
+        ],
+        [
+         "Ngày",
+         46327
+        ],
+        [
+         "Ngày giờ",
+         46327.75
+        ],
+        [
+         "Văn bản số",
+         "00123"
+        ],
+        [
+         "Công thức",
+         3000000
+        ],
+        [
+         "Lỗi",
+         null
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "002"
+        ],
+        [
+         "Mục tiêu",
+         0
+        ],
+        [
+         "Tỷ lệ",
+         1
+        ],
+        [
+         "Ngày",
+         43831
+        ],
+        [
+         "Ngày giờ",
+         43831
+        ],
+        [
+         "Văn bản số",
+         "9007199254740993"
+        ],
+        [
+         "Công thức",
+         1
+        ],
+        [
+         "Lỗi",
+         ""
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "003"
+        ],
+        [
+         "Mục tiêu",
+         -2.5
+        ],
+        [
+         "Tỷ lệ",
+         0.0001
+        ],
+        [
+         "Ngày",
+         73050
+        ],
+        [
+         "Ngày giờ",
+         73050.999988
+        ],
+        [
+         "Văn bản số",
+         "1e5"
+        ],
+        [
+         "Công thức",
+         0
+        ],
+        [
+         "Lỗi",
+         "x"
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "ô gộp"
+        ],
+        [
+         "Mục tiêu",
+         null
+        ],
+        [
+         "Tỷ lệ",
+         null
+        ],
+        [
+         "Ngày",
+         null
+        ],
+        [
+         "Ngày giờ",
+         null
+        ],
+        [
+         "Văn bản số",
+         null
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Lỗi",
+         null
+        ]
+       ]
+      }
+     ]
+    },
+    {
+     "name": "Header lạ",
+     "ref": "A1:D2",
+     "merges": [],
+     "rows": [
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "__proto___NaN",
+         "{\"polluted\":1}"
+        ],
+        [
+         "constructor_NaN",
+         "c"
+        ],
+        [
+         "Mã",
+         "001"
+        ],
+        [
+         "Mã_1",
+         "trùng tên cột"
+        ]
+       ]
+      }
+     ]
+    }
+   ],
+   "B": [
+    {
+     "name": "Data",
+     "rows": [
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "001"
+        ],
+        [
+         "Mục tiêu",
+         "1,500,000"
+        ],
+        [
+         "Tỷ lệ",
+         "12.50%"
+        ],
+        [
+         "Ngày",
+         "01/11/2026"
+        ],
+        [
+         "Ngày giờ",
+         "01/11/2026 18:00"
+        ],
+        [
+         "Văn bản số",
+         "00123"
+        ],
+        [
+         "Công thức",
+         "3000000"
+        ],
+        [
+         "Lỗi",
+         ""
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "002"
+        ],
+        [
+         "Mục tiêu",
+         "0"
+        ],
+        [
+         "Tỷ lệ",
+         "100.00%"
+        ],
+        [
+         "Ngày",
+         "01/01/2020"
+        ],
+        [
+         "Ngày giờ",
+         "01/01/2020 00:00"
+        ],
+        [
+         "Văn bản số",
+         "9007199254740993"
+        ],
+        [
+         "Công thức",
+         "1"
+        ],
+        [
+         "Lỗi",
+         ""
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "003"
+        ],
+        [
+         "Mục tiêu",
+         "-3"
+        ],
+        [
+         "Tỷ lệ",
+         "0.01%"
+        ],
+        [
+         "Ngày",
+         "31/12/2099"
+        ],
+        [
+         "Ngày giờ",
+         "31/12/2099 23:59"
+        ],
+        [
+         "Văn bản số",
+         "1e5"
+        ],
+        [
+         "Công thức",
+         "0"
+        ],
+        [
+         "Lỗi",
+         "x"
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "ô gộp"
+        ],
+        [
+         "Mục tiêu",
+         ""
+        ],
+        [
+         "Tỷ lệ",
+         ""
+        ],
+        [
+         "Ngày",
+         ""
+        ],
+        [
+         "Ngày giờ",
+         ""
+        ],
+        [
+         "Văn bản số",
+         ""
+        ],
+        [
+         "Công thức",
+         ""
+        ],
+        [
+         "Lỗi",
+         ""
+        ]
+       ]
+      }
+     ]
+    },
+    {
+     "name": "Header lạ",
+     "rows": [
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "__proto___NaN",
+         "{\"polluted\":1}"
+        ],
+        [
+         "constructor_NaN",
+         "c"
+        ],
+        [
+         "Mã",
+         "001"
+        ],
+        [
+         "Mã_1",
+         "trùng tên cột"
+        ]
+       ]
+      }
+     ]
+    }
+   ],
+   "W1": [
+    {
+     "zip": "PK",
+     "sheets": [
+      "Báo cáo CSKH"
+     ],
+     "rows": [
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "001"
+        ],
+        [
+         "Mục tiêu",
+         1500000
+        ],
+        [
+         "Tỷ lệ",
+         0.125
+        ],
+        [
+         "Ngày",
+         46327
+        ],
+        [
+         "Ngày giờ",
+         46327.75
+        ],
+        [
+         "Văn bản số",
+         "00123"
+        ],
+        [
+         "Công thức",
+         3000000
+        ],
+        [
+         "Lỗi",
+         null
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "002"
+        ],
+        [
+         "Mục tiêu",
+         0
+        ],
+        [
+         "Tỷ lệ",
+         1
+        ],
+        [
+         "Ngày",
+         43831
+        ],
+        [
+         "Ngày giờ",
+         43831
+        ],
+        [
+         "Văn bản số",
+         "9007199254740993"
+        ],
+        [
+         "Công thức",
+         1
+        ],
+        [
+         "Lỗi",
+         ""
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "003"
+        ],
+        [
+         "Mục tiêu",
+         -2.5
+        ],
+        [
+         "Tỷ lệ",
+         0.0001
+        ],
+        [
+         "Ngày",
+         73050
+        ],
+        [
+         "Ngày giờ",
+         73050.999988
+        ],
+        [
+         "Văn bản số",
+         "1e5"
+        ],
+        [
+         "Công thức",
+         0
+        ],
+        [
+         "Lỗi",
+         "x"
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "ô gộp"
+        ],
+        [
+         "Mục tiêu",
+         null
+        ],
+        [
+         "Tỷ lệ",
+         null
+        ],
+        [
+         "Ngày",
+         null
+        ],
+        [
+         "Ngày giờ",
+         null
+        ],
+        [
+         "Văn bản số",
+         null
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Lỗi",
+         null
+        ]
+       ]
+      }
+     ]
+    },
+    {
+     "zip": "PK",
+     "sheets": [
+      "Sản phẩm FS"
+     ],
+     "rows": [
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "001"
+        ],
+        [
+         "Mục tiêu",
+         1500000
+        ],
+        [
+         "Tỷ lệ",
+         0.125
+        ],
+        [
+         "Ngày",
+         46327
+        ],
+        [
+         "Ngày giờ",
+         46327.75
+        ],
+        [
+         "Văn bản số",
+         "00123"
+        ],
+        [
+         "Công thức",
+         3000000
+        ],
+        [
+         "Lỗi",
+         null
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "002"
+        ],
+        [
+         "Mục tiêu",
+         0
+        ],
+        [
+         "Tỷ lệ",
+         1
+        ],
+        [
+         "Ngày",
+         43831
+        ],
+        [
+         "Ngày giờ",
+         43831
+        ],
+        [
+         "Văn bản số",
+         "9007199254740993"
+        ],
+        [
+         "Công thức",
+         1
+        ],
+        [
+         "Lỗi",
+         ""
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "003"
+        ],
+        [
+         "Mục tiêu",
+         -2.5
+        ],
+        [
+         "Tỷ lệ",
+         0.0001
+        ],
+        [
+         "Ngày",
+         73050
+        ],
+        [
+         "Ngày giờ",
+         73050.999988
+        ],
+        [
+         "Văn bản số",
+         "1e5"
+        ],
+        [
+         "Công thức",
+         0
+        ],
+        [
+         "Lỗi",
+         "x"
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "ô gộp"
+        ],
+        [
+         "Mục tiêu",
+         null
+        ],
+        [
+         "Tỷ lệ",
+         null
+        ],
+        [
+         "Ngày",
+         null
+        ],
+        [
+         "Ngày giờ",
+         null
+        ],
+        [
+         "Văn bản số",
+         null
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Lỗi",
+         null
+        ]
+       ]
+      }
+     ]
+    },
+    {
+     "zip": "PK",
+     "sheets": [
+      "Kết quả chiến dịch"
+     ],
+     "rows": [
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "001"
+        ],
+        [
+         "Mục tiêu",
+         1500000
+        ],
+        [
+         "Tỷ lệ",
+         0.125
+        ],
+        [
+         "Ngày",
+         46327
+        ],
+        [
+         "Ngày giờ",
+         46327.75
+        ],
+        [
+         "Văn bản số",
+         "00123"
+        ],
+        [
+         "Công thức",
+         3000000
+        ],
+        [
+         "Lỗi",
+         null
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "002"
+        ],
+        [
+         "Mục tiêu",
+         0
+        ],
+        [
+         "Tỷ lệ",
+         1
+        ],
+        [
+         "Ngày",
+         43831
+        ],
+        [
+         "Ngày giờ",
+         43831
+        ],
+        [
+         "Văn bản số",
+         "9007199254740993"
+        ],
+        [
+         "Công thức",
+         1
+        ],
+        [
+         "Lỗi",
+         ""
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "003"
+        ],
+        [
+         "Mục tiêu",
+         -2.5
+        ],
+        [
+         "Tỷ lệ",
+         0.0001
+        ],
+        [
+         "Ngày",
+         73050
+        ],
+        [
+         "Ngày giờ",
+         73050.999988
+        ],
+        [
+         "Văn bản số",
+         "1e5"
+        ],
+        [
+         "Công thức",
+         0
+        ],
+        [
+         "Lỗi",
+         "x"
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "Mã CH",
+         "ô gộp"
+        ],
+        [
+         "Mục tiêu",
+         null
+        ],
+        [
+         "Tỷ lệ",
+         null
+        ],
+        [
+         "Ngày",
+         null
+        ],
+        [
+         "Ngày giờ",
+         null
+        ],
+        [
+         "Văn bản số",
+         null
+        ],
+        [
+         "Công thức",
+         null
+        ],
+        [
+         "Lỗi",
+         null
+        ]
+       ]
+      }
+     ]
+    }
+   ],
+   "W1empty": {
+    "zip": "PK",
+    "sheets": [
+     "Nhật ký"
+    ],
+    "rows": [
+     {
+      "proto": "Object",
+      "entries": [
+       [
+        "(không có dữ liệu)",
+        ""
+       ]
+      ]
+     }
+    ]
+   },
+   "W2": {
+    "zip": "PK",
+    "rows": [
+     {
+      "proto": "Object",
+      "entries": [
+       [
+        "Mã CH",
+        "001"
+       ],
+       [
+        "Mục tiêu",
+        "1,500,000"
+       ],
+       [
+        "Tỷ lệ",
+        "12.50%"
+       ],
+       [
+        "Ngày",
+        "01/11/2026"
+       ],
+       [
+        "Ngày giờ",
+        "01/11/2026 18:00"
+       ],
+       [
+        "Văn bản số",
+        "00123"
+       ],
+       [
+        "Công thức",
+        "3000000"
+       ],
+       [
+        "Lỗi",
+        ""
+       ]
+      ]
+     },
+     {
+      "proto": "Object",
+      "entries": [
+       [
+        "Mã CH",
+        "002"
+       ],
+       [
+        "Mục tiêu",
+        "0"
+       ],
+       [
+        "Tỷ lệ",
+        "100.00%"
+       ],
+       [
+        "Ngày",
+        "01/01/2020"
+       ],
+       [
+        "Ngày giờ",
+        "01/01/2020 00:00"
+       ],
+       [
+        "Văn bản số",
+        "9007199254740993"
+       ],
+       [
+        "Công thức",
+        "1"
+       ],
+       [
+        "Lỗi",
+        ""
+       ]
+      ]
+     },
+     {
+      "proto": "Object",
+      "entries": [
+       [
+        "Mã CH",
+        "003"
+       ],
+       [
+        "Mục tiêu",
+        "-3"
+       ],
+       [
+        "Tỷ lệ",
+        "0.01%"
+       ],
+       [
+        "Ngày",
+        "31/12/2099"
+       ],
+       [
+        "Ngày giờ",
+        "31/12/2099 23:59"
+       ],
+       [
+        "Văn bản số",
+        "1e5"
+       ],
+       [
+        "Công thức",
+        "0"
+       ],
+       [
+        "Lỗi",
+        "x"
+       ]
+      ]
+     },
+     {
+      "proto": "Object",
+      "entries": [
+       [
+        "Mã CH",
+        "ô gộp"
+       ],
+       [
+        "Mục tiêu",
+        ""
+       ],
+       [
+        "Tỷ lệ",
+        ""
+       ],
+       [
+        "Ngày",
+        ""
+       ],
+       [
+        "Ngày giờ",
+        ""
+       ],
+       [
+        "Văn bản số",
+        ""
+       ],
+       [
+        "Công thức",
+        ""
+       ],
+       [
+        "Lỗi",
+        ""
+       ]
+      ]
+     }
+    ]
+   }
+  },
+  "Circa_Import_CMS.xlsx": {
+   "A": [
+    {
+     "name": "IMPORT_CMS",
+     "ref": "A1:I9",
+     "merges": [],
+     "rows": [
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "CIRCA | FILE IMPORT CMS THEO SẢN PHẨM (mẫu r2 — 9 cột)",
+         "Dòng ví dụ dùng ProductID GIẢ (999xxx) — XOÁ trước khi nạp. Chỉ upload sau khi kiểm duyệt nội dung tư vấn."
+        ],
+        [
+         "__EMPTY",
+         null
+        ],
+        [
+         "__EMPTY_1",
+         null
+        ],
+        [
+         "__EMPTY_2",
+         null
+        ],
+        [
+         "__EMPTY_3",
+         null
+        ],
+        [
+         "__EMPTY_4",
+         null
+        ],
+        [
+         "__EMPTY_5",
+         null
+        ],
+        [
+         "__EMPTY_6",
+         null
+        ],
+        [
+         "__EMPTY_7",
+         null
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "CIRCA | FILE IMPORT CMS THEO SẢN PHẨM (mẫu r2 — 9 cột)",
+         "ProductID"
+        ],
+        [
+         "__EMPTY",
+         "KPI_Target_GMV_VND"
+        ],
+        [
+         "__EMPTY_1",
+         "Loai_CMS_GMV"
+        ],
+        [
+         "__EMPTY_2",
+         "Tu_SL_ban"
+        ],
+        [
+         "__EMPTY_3",
+         "Den_SL_ban"
+        ],
+        [
+         "__EMPTY_4",
+         "CMS_VND_SP"
+        ],
+        [
+         "__EMPTY_5",
+         "Noi_dung_tu_van"
+        ],
+        [
+         "__EMPTY_6",
+         "unit_CMS"
+        ],
+        [
+         "__EMPTY_7",
+         "base_quantity_CMS"
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "CIRCA | FILE IMPORT CMS THEO SẢN PHẨM (mẫu r2 — 9 cột)",
+         999001
+        ],
+        [
+         "__EMPTY",
+         10000000
+        ],
+        [
+         "__EMPTY_1",
+         "GMV_THEO_PRODUCTID"
+        ],
+        [
+         "__EMPTY_2",
+         1
+        ],
+        [
+         "__EMPTY_3",
+         9
+        ],
+        [
+         "__EMPTY_4",
+         15000
+        ],
+        [
+         "__EMPTY_5",
+         "Nội dung tư vấn mẫu — thay bằng tài liệu được duyệt."
+        ],
+        [
+         "__EMPTY_6",
+         "hộp"
+        ],
+        [
+         "__EMPTY_7",
+         24
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "CIRCA | FILE IMPORT CMS THEO SẢN PHẨM (mẫu r2 — 9 cột)",
+         999001
+        ],
+        [
+         "__EMPTY",
+         10000000
+        ],
+        [
+         "__EMPTY_1",
+         "GMV_THEO_PRODUCTID"
+        ],
+        [
+         "__EMPTY_2",
+         10
+        ],
+        [
+         "__EMPTY_3",
+         19
+        ],
+        [
+         "__EMPTY_4",
+         20000
+        ],
+        [
+         "__EMPTY_5",
+         "Nội dung tư vấn mẫu — thay bằng tài liệu được duyệt."
+        ],
+        [
+         "__EMPTY_6",
+         "hộp"
+        ],
+        [
+         "__EMPTY_7",
+         24
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "CIRCA | FILE IMPORT CMS THEO SẢN PHẨM (mẫu r2 — 9 cột)",
+         999001
+        ],
+        [
+         "__EMPTY",
+         10000000
+        ],
+        [
+         "__EMPTY_1",
+         "GMV_THEO_PRODUCTID"
+        ],
+        [
+         "__EMPTY_2",
+         20
+        ],
+        [
+         "__EMPTY_3",
+         null
+        ],
+        [
+         "__EMPTY_4",
+         25000
+        ],
+        [
+         "__EMPTY_5",
+         "Nội dung tư vấn mẫu — thay bằng tài liệu được duyệt."
+        ],
+        [
+         "__EMPTY_6",
+         "hộp"
+        ],
+        [
+         "__EMPTY_7",
+         24
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "CIRCA | FILE IMPORT CMS THEO SẢN PHẨM (mẫu r2 — 9 cột)",
+         999002
+        ],
+        [
+         "__EMPTY",
+         50000000
+        ],
+        [
+         "__EMPTY_1",
+         "GMV_TOAN_DANH_MUC"
+        ],
+        [
+         "__EMPTY_2",
+         1
+        ],
+        [
+         "__EMPTY_3",
+         null
+        ],
+        [
+         "__EMPTY_4",
+         8000
+        ],
+        [
+         "__EMPTY_5",
+         "Nội dung tư vấn mẫu — thay bằng tài liệu được duyệt."
+        ],
+        [
+         "__EMPTY_6",
+         "chai"
+        ],
+        [
+         "__EMPTY_7",
+         1
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "CIRCA | FILE IMPORT CMS THEO SẢN PHẨM (mẫu r2 — 9 cột)",
+         999003
+        ],
+        [
+         "__EMPTY",
+         null
+        ],
+        [
+         "__EMPTY_1",
+         null
+        ],
+        [
+         "__EMPTY_2",
+         1
+        ],
+        [
+         "__EMPTY_3",
+         50
+        ],
+        [
+         "__EMPTY_4",
+         5000
+        ],
+        [
+         "__EMPTY_5",
+         "Nội dung tư vấn mẫu — thay bằng tài liệu được duyệt."
+        ],
+        [
+         "__EMPTY_6",
+         "vỉ"
+        ],
+        [
+         "__EMPTY_7",
+         10
+        ]
+       ]
+      }
+     ]
+    },
+    {
+     "name": "HUONG_DAN",
+     "ref": "A1:D10",
+     "merges": [],
+     "rows": [
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "TRƯỜNG",
+         "ProductID"
+        ],
+        [
+         "Ý NGHĨA",
+         "Mã product_id trên POS (số nguyên)"
+        ],
+        [
+         "VÍ DỤ",
+         "12345"
+        ],
+        [
+         "GHI CHÚ",
+         "Bắt buộc; không dùng SKU / mã hàng; phải có trên Product Master"
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "TRƯỜNG",
+         "KPI_Target_GMV_VND"
+        ],
+        [
+         "Ý NGHĨA",
+         "Target GMV (VND, số nguyên)"
+        ],
+        [
+         "VÍ DỤ",
+         "10000000"
+        ],
+        [
+         "GHI CHÚ",
+         "Để trống nếu không xét target; nhập ô số, không gõ dấu chấm / phẩy"
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "TRƯỜNG",
+         "Loai_CMS_GMV"
+        ],
+        [
+         "Ý NGHĨA",
+         "Cơ sở xét target"
+        ],
+        [
+         "VÍ DỤ",
+         "GMV_THEO_PRODUCTID"
+        ],
+        [
+         "GHI CHÚ",
+         "Hoặc GMV_TOAN_DANH_MUC (mọi dòng danh mục cùng một target); trống khi không target"
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "TRƯỜNG",
+         "Tu_SL_ban / Den_SL_ban"
+        ],
+        [
+         "Ý NGHĨA",
+         "Bậc số lượng (đơn vị CMS) trong kỳ"
+        ],
+        [
+         "VÍ DỤ",
+         "1–9, 10–19, 20+"
+        ],
+        [
+         "GHI CHÚ",
+         "Bắt đầu từ 1, liên tục; chỉ bậc cuối được để trống Den_SL_ban (không giới hạn)"
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "TRƯỜNG",
+         "CMS_VND_SP"
+        ],
+        [
+         "Ý NGHĨA",
+         "CMS cho mỗi đơn vị CMS ở bậc"
+        ],
+        [
+         "VÍ DỤ",
+         "15000"
+        ],
+        [
+         "GHI CHÚ",
+         "Tính lũy tiến: mỗi đơn vị theo bậc nó rơi vào"
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "TRƯỜNG",
+         "Noi_dung_tu_van"
+        ],
+        [
+         "Ý NGHĨA",
+         "Nội dung tư vấn đã kiểm duyệt"
+        ],
+        [
+         "VÍ DỤ",
+         "Thông tin đã duyệt"
+        ],
+        [
+         "GHI CHÚ",
+         "Bắt buộc, tối đa 4.000 ký tự, text thuần"
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "TRƯỜNG",
+         "unit_CMS"
+        ],
+        [
+         "Ý NGHĨA",
+         "Đơn vị hưởng CMS"
+        ],
+        [
+         "VÍ DỤ",
+         "hộp"
+        ],
+        [
+         "GHI CHÚ",
+         "Bắt buộc; nhãn hiển thị"
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "TRƯỜNG",
+         "base_quantity_CMS"
+        ],
+        [
+         "Ý NGHĨA",
+         "Số đơn vị cơ sở = 1 đơn vị CMS"
+        ],
+        [
+         "VÍ DỤ",
+         "24"
+        ],
+        [
+         "GHI CHÚ",
+         "Số dương, dấu chấm thập phân, tối đa 9 chữ số sau dấu chấm; KHÔNG mặc định 1"
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "TRƯỜNG",
+         "THAO TÁC"
+        ],
+        [
+         "Ý NGHĨA",
+         "Upload → Kiểm tra → Xác nhận ghi → Kích hoạt"
+        ],
+        [
+         "VÍ DỤ",
+         ""
+        ],
+        [
+         "GHI CHÚ",
+         "Dòng lỗi làm loại cả nhóm ProductID; tải file lỗi để sửa"
+        ]
+       ]
+      }
+     ]
+    }
+   ]
+  }
+ }
+}

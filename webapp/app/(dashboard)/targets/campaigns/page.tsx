@@ -7,6 +7,7 @@ import {
 } from '@/lib/kpi/campaignAccess'
 
 import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
+import { isCmsProgramEnabled } from '@/lib/cms/flags'
 import { qualityKpiPass } from '@/lib/kpi/orderAov'
 import { campaignOverviewValue } from '@/lib/kpi/campaignDisplay'
 import { campaignListErrors, campaignListPct, campaignListReached } from '@/lib/kpi/campaignList'
@@ -93,6 +94,7 @@ export default async function CampaignsPage({
     <CampaignListView
       canManage={canManage}
       affiliateEnabled={isKpiAffiliateEnabled()}
+      cmsEnabled={isCmsProgramEnabled()}
       statusFilter={statusFilter}
       counts={counts}
       hasAny={list.length > 0}

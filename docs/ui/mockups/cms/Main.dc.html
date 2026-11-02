@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>Mô hình CMS theo sản phẩm</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#C94A16}a:hover{color:#9A3410}
+</style>
+</helmet>
+<div style="font-family: 'Be Vietnam Pro', system-ui, sans-serif; background: {{t.bg}}; color: {{t.text}}; font-size: 15px; line-height: 1.6; min-height: 100%">
+<div style="max-width: 1120px; margin: 0 auto; padding: 56px 32px 72px; display: flex; flex-direction: column; gap: 48px">
+
+<header style="display: flex; flex-direction: column; gap: 14px">
+<span style="font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: {{t.text2}}">Circa Tasks · Redesign v2 · Tính năng mới trong Chiến dịch KPI</span>
+<h1 style="margin: 0; font-size: 40px; line-height: 1.15; font-weight: 700; letter-spacing: -0.01em">CMS theo sản phẩm</h1>
+<p style="margin: 0; max-width: 72ch; color: {{t.text2}}">Hoa hồng (CMS) trả cho dược sĩ theo số lượng bán của từng ProductID, có thể kèm điều kiện đạt target GMV. Canvas này là tham chiếu UI/UX cho Claude Code, dựng theo email stakeholder và file mẫu Circa_Import_CMS_Phase_2_.xlsx (sheet IMPORT_CMS, HUONG_DAN).</p>
+<div style="display: flex; flex-wrap: wrap; gap: 8px">
+<span style="font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 6px; background: {{t.infoBg}}; color: {{t.info}}">Phase 1 · 1 mức CMS / sản phẩm</span>
+<span style="font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 6px; background: {{t.infoBg}}; color: {{t.info}}">Phase 2 · Bậc thang theo số lượng</span>
+<span style="font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 6px; background: {{t.warnBg}}; color: {{t.warn}}">6 điểm cần stakeholder chốt</span>
+</div>
+</header>
+
+<section style="display: flex; flex-direction: column; gap: 16px">
+<h2 style="margin: 0; font-size: 22px; font-weight: 700">1 · Luồng vận hành</h2>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(190px, 100%), 1fr)); gap: 12px">
+<sc-for list="{{flow}}" as="s" hint-placeholder-count="5">
+<div style="background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: 8px">
+<span style="width: 32px; height: 32px; border-radius: 10px; background: {{t.brand}}; color: {{t.onBrand}}; font-weight: 700; display: flex; align-items: center; justify-content: center; font-size: 14px">{{s.n}}</span>
+<strong style="font-size: 15px">{{s.title}}</strong>
+<span style="font-size: 13px; color: {{t.text2}}; line-height: 1.5">{{s.desc}}</span>
+<span style="font-size: 12px; font-weight: 600; color: {{t.text2}}; margin-top: auto">{{s.who}}</span>
+</div>
+</sc-for>
+</div>
+</section>
+
+<section style="display: flex; flex-direction: column; gap: 16px">
+<h2 style="margin: 0; font-size: 22px; font-weight: 700">2 · Ba cách xét điều kiện (cột Loai_CMS_GMV)</h2>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: 12px">
+<sc-for list="{{gates}}" as="g" hint-placeholder-count="3">
+<div style="background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 14px; padding: 20px; display: flex; flex-direction: column; gap: 10px">
+<span style="align-self: flex-start; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 6px; background: {{t.muted}}; color: {{t.text2}}; font-family: ui-monospace, Menlo, monospace">{{g.code}}</span>
+<strong style="font-size: 17px">{{g.title}}</strong>
+<span style="font-size: 14px; color: {{t.text2}}">{{g.rule}}</span>
+<div style="background: {{t.muted}}; border-radius: 10px; padding: 12px; font-size: 13px; line-height: 1.5">{{g.example}}</div>
+<span style="font-size: 12px; color: {{t.text2}}">UI: {{g.ui}}</span>
+</div>
+</sc-for>
+</div>
+</section>
+
+<section style="display: flex; flex-direction: column; gap: 16px">
+<h2 style="margin: 0; font-size: 22px; font-weight: 700">3 · Ví dụ trong email: tính lũy tiến</h2>
+<p style="margin: 0; color: {{t.text2}}; max-width: 72ch">SKU001, giá 1.000.000đ, KPI_Target_GMV_VND = 10.000.000đ, Loai_CMS_GMV = GMV_THEO_PRODUCTID. Bậc 1: 1–9 SP → 15.000đ/SP. Bậc 2: 10–19 SP → 20.000đ/SP. Bậc 3: từ 20 SP (Den_SL_ban để trống = không giới hạn) → 25.000đ/SP.</p>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(420px, 100%), 1fr)); gap: 12px">
+
+<div style="background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 14px; padding: 20px; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap">
+<strong style="font-size: 16px">Trường hợp A · Bán 9 SP</strong>
+<span style="font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 6px; background: {{t.neuBg}}; color: {{t.neu}}">Chưa đạt target</span>
+</div>
+<div style="display: flex; gap: 6px; flex-wrap: wrap" role="img" aria-label="9 sản phẩm, chưa đạt target nên không tính CMS">
+<sc-for list="{{unitsA}}" as="u" hint-placeholder-count="9">
+<span style="width: 34px; height: 34px; border-radius: 8px; border: 1px dashed {{t.line2}}; color: {{t.text2}}; font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: center">{{u.n}}</span>
+</sc-for>
+</div>
+<div style="display: flex; flex-direction: column; gap: 4px; font-size: 14px">
+<span>GMV = 9 × 1.000.000 = <strong>9.000.000đ</strong> &lt; 10.000.000đ</span>
+<span style="color: {{t.text2}}">Không đạt điều kiện → không tính CMS cho SKU001.</span>
+</div>
+<div style="border-top: 1px solid {{t.line}}; padding-top: 12px; display: flex; justify-content: space-between; align-items: baseline">
+<span style="color: {{t.text2}}; font-size: 13px">CMS tạm tính</span>
+<strong style="font-size: 24px">0đ</strong>
+</div>
+</div>
+
+<div style="background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 14px; padding: 20px; display: flex; flex-direction: column; gap: 14px">
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap">
+<strong style="font-size: 16px">Trường hợp B · Bán 11 SP</strong>
+<span style="font-size: 12px; font-weight: 600; padding: 3px 9px; border-radius: 6px; background: {{t.okBg}}; color: {{t.ok}}">Đạt target</span>
+</div>
+<div style="display: flex; gap: 6px; flex-wrap: wrap" role="img" aria-label="11 sản phẩm: 9 sản phẩm bậc 1 và 2 sản phẩm bậc 2">
+<sc-for list="{{unitsB}}" as="u" hint-placeholder-count="11">
+<span style="width: 34px; height: 34px; border-radius: 8px; background: {{u.bg}}; color: {{u.fg}}; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center">{{u.n}}</span>
+</sc-for>
+</div>
+<div style="display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: {{t.text2}}">
+<span style="display: inline-flex; gap: 6px; align-items: center"><span style="width: 12px; height: 12px; border-radius: 3px; background: {{t.tier1}}"></span>Bậc 1 · 15.000đ</span>
+<span style="display: inline-flex; gap: 6px; align-items: center"><span style="width: 12px; height: 12px; border-radius: 3px; background: {{t.brand}}"></span>Bậc 2 · 20.000đ</span>
+</div>
+<div style="display: flex; flex-direction: column; gap: 4px; font-size: 14px">
+<span>GMV = 11.000.000đ ≥ 10.000.000đ → đạt điều kiện</span>
+<span>CMS = 9 × 15.000 + 2 × 20.000</span>
+</div>
+<div style="border-top: 1px solid {{t.line}}; padding-top: 12px; display: flex; justify-content: space-between; align-items: baseline">
+<span style="color: {{t.text2}}; font-size: 13px">CMS tạm tính</span>
+<strong style="font-size: 24px">175.000đ</strong>
+</div>
+</div>
+
+</div>
+<div style="background: {{t.warnBg}}; color: {{t.warn}}; border-radius: 12px; padding: 14px 16px; font-size: 14px">Nếu stakeholder muốn “đạt bậc nào thì áp giá bậc đó cho toàn bộ số lượng”, trường hợp B sẽ là 11 × 20.000 = 220.000đ. Sheet HUONG_DAN cũng ghi chú cần xác nhận điểm này. Canvas đang vẽ theo lũy tiến (khớp ví dụ email) — xem câu hỏi Q3.</div>
+</section>
+
+<section style="display: flex; flex-direction: column; gap: 16px">
+<h2 style="margin: 0; font-size: 22px; font-weight: 700">4 · Phase 1 và Phase 2</h2>
+<div style="overflow-x: auto; background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 14px">
+<div role="table" aria-label="So sánh Phase 1 và Phase 2" style="min-width: 720px; font-size: 14px">
+<div role="row" style="display: grid; grid-template-columns: 1fr 1.5fr 1.5fr; gap: 16px; padding: 10px 16px; background: {{t.muted}}; color: {{t.text2}}; font-size: 12px; font-weight: 600">
+<span role="columnheader">Hạng mục</span>
+<span role="columnheader">Phase 1 · 1 mức</span>
+<span role="columnheader">Phase 2 · Bậc thang</span>
+</div>
+<sc-for list="{{phases}}" as="p" hint-placeholder-count="5">
+<div role="row" style="display: grid; grid-template-columns: 1fr 1.5fr 1.5fr; gap: 16px; padding: 12px 16px; border-top: 1px solid {{t.line}}">
+<span role="cell" style="font-weight: 600">{{p.k}}</span>
+<span role="cell" style="color: {{t.text2}}">{{p.a}}</span>
+<span role="cell" style="color: {{t.text2}}">{{p.b}}</span>
+</div>
+</sc-for>
+</div>
+</div>
+</section>
+
+<section style="display: flex; flex-direction: column; gap: 16px">
+<h2 style="margin: 0; font-size: 22px; font-weight: 700">5 · Giả định trong canvas & câu hỏi cần chốt</h2>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 12px">
+<sc-for list="{{questions}}" as="q" hint-placeholder-count="6">
+<div style="background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 14px; padding: 18px; display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; gap: 10px; align-items: center">
+<span style="font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 6px; background: {{t.warnBg}}; color: {{t.warn}}">{{q.id}}</span>
+<strong style="font-size: 15px">{{q.title}}</strong>
+</div>
+<span style="font-size: 14px; color: {{t.text2}}">{{q.body}}</span>
+<span style="font-size: 13px"><strong>Canvas đang vẽ:</strong> {{q.assume}}</span>
+</div>
+</sc-for>
+</div>
+</section>
+
+<section style="display: flex; flex-direction: column; gap: 16px">
+<h2 style="margin: 0; font-size: 22px; font-weight: 700">6 · Các màn trong canvas</h2>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(min(320px, 100%), 1fr)); gap: 12px">
+<sc-for list="{{screens}}" as="s" hint-placeholder-count="6">
+<a href="{{s.href}}" style="text-decoration: none; color: {{t.text}}; background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 4px; min-height: 44px">
+<span style="font-size: 12px; font-weight: 600; color: {{t.text2}}">{{s.code}} · {{s.route}}</span>
+<strong style="font-size: 15px">{{s.title}}</strong>
+<span style="font-size: 13px; color: {{t.text2}}">{{s.desc}}</span>
+</a>
+</sc-for>
+</div>
+</section>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":1280,"height":2280}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const P = {
+      light: {bg:'#F7F6F4',panel:'#FFFFFF',muted:'#F1F0EE',line:'#E7E5E4',line2:'#A8A29E',text:'#1C1917',text2:'#57534E',accent:'#C94A16',brand:'#F3743F',onBrand:'#141210',tier1:'#F9CBB3',onTier1:'#5A2208',info:'#1F5A8F',infoBg:'#E5F0FA',ok:'#1D6B3A',okBg:'#E3F4E8',warn:'#7A4D00',warnBg:'#FCF1D6',bad:'#A3231A',badBg:'#FDECEA',neu:'#57534E',neuBg:'#F1F0EE'},
+      dark: {bg:'#121110',panel:'#1A1817',muted:'#24211F',line:'#2E2A27',line2:'#57534E',text:'#F5F5F4',text2:'#A8A29E',accent:'#F3743F',brand:'#F3743F',onBrand:'#141210',tier1:'#6B3218',onTier1:'#FBD9C6',info:'#9DC6EF',infoBg:'#16243A',ok:'#8FD6A2',okBg:'#15291C',warn:'#EBC170',warnBg:'#2E2412',bad:'#F4A29A',badBg:'#3A1A17',neu:'#A8A29E',neuBg:'#24211F'}
+    };
+    const t = P[this.props.theme === 'dark' ? 'dark' : 'light'];
+    const unitsA = Array.from({length: 9}, (_, i) => ({n: i + 1}));
+    const unitsB = Array.from({length: 11}, (_, i) => i < 9
+      ? {n: i + 1, bg: t.tier1, fg: t.onTier1}
+      : {n: i + 1, bg: t.brand, fg: t.onBrand});
+    return {
+      t, unitsA, unitsB,
+      flow: [
+        {n: '1', title: 'Tạo chương trình', desc: 'Tên, kỳ áp dụng, phạm vi nhà thuốc, target toàn danh mục (nếu có).', who: 'Admin'},
+        {n: '2', title: 'Import danh mục & CMS', desc: 'Upload Excel → Chạy xử lý → Kết quả. Dòng lỗi bị loại, dòng hợp lệ được nạp.', who: 'Admin'},
+        {n: '3', title: 'Đồng bộ đơn từ BI', desc: 'Dòng đơn theo ProductID và người bán, cập nhật hằng ngày.', who: 'Hệ thống (cron)'},
+        {n: '4', title: 'Tính CMS tạm tính', desc: 'Xét điều kiện GMV, đếm số lượng, áp bậc. Dược sĩ xem trên mobile.', who: 'Hệ thống → Dược sĩ'},
+        {n: '5', title: 'Chốt kỳ', desc: 'Khóa số, ghi điều chỉnh đơn trả, xuất danh sách chi trả.', who: 'Admin'}
+      ],
+      gates: [
+        {code: 'GMV_THEO_PRODUCTID', title: 'Đạt target của chính sản phẩm', rule: 'GMV của ProductID đó phải ≥ KPI_Target_GMV_VND trên dòng của nó. Đạt mới tính CMS cho SP này.', example: 'SKU001 target 10.000.000đ. Bán 11 SP × 1.000.000đ → đạt.', ui: 'thanh tiến độ GMV riêng trên từng thẻ SP.'},
+        {code: 'GMV_TOAN_DANH_MUC', title: 'Đạt target cả danh mục', rule: 'Tổng GMV của mọi SP gắn loại này trong chương trình phải ≥ target toàn danh mục. Đạt → mọi SP trong nhóm được tính CMS.', example: 'File mẫu: SKU002 (1–29 SP: 8.000đ, từ 30 SP: 12.000đ) không có target riêng. Chỉ tính CMS khi tổng GMV cả nhóm đạt target danh mục.', ui: 'một thanh tiến độ chung ở đầu màn, SP trong nhóm gắn nhãn “Theo danh mục”.'},
+        {code: '(để trống target)', title: 'Không có target', rule: 'KPI_Target_GMV_VND để trống → tự động tính CMS theo số lượng ngay từ SP đầu tiên.', example: 'SP không target, 1–49 SP: 3.000đ/SP. Bán 6 SP → 18.000đ ngay, không chờ GMV.', ui: 'thẻ SP không có thanh GMV, nhãn “Tính theo số lượng”.'}
+      ],
+      phases: [
+        {k: 'Số bậc / sản phẩm', a: '1 dòng: Tu_SL_ban = 1, Den_SL_ban trống', b: 'Nhiều dòng cùng ProductID, liên tục không chồng lấn'},
+        {k: 'File import', a: 'Cùng mẫu IMPORT_CMS, mỗi ProductID 1 dòng', b: 'Mỗi bậc 1 dòng; target, loại GMV, nội dung tư vấn lặp lại trên mọi dòng của ProductID (như file mẫu)'},
+        {k: 'Admin xem trước', a: 'Bảng 1 dòng / SP', b: 'Gom theo ProductID, mở rộng xem thang bậc'},
+        {k: 'Dược sĩ', a: 'CMS/SP và tiến độ target', b: 'Thêm: bậc hiện tại, còn N SP lên bậc kế'},
+        {k: 'Tính toán', a: 'SL × mức CMS (khi đạt điều kiện)', b: 'Lũy tiến qua từng bậc (Q3)'}
+      ],
+      questions: [
+        {id: 'Q1', title: 'Phạm vi xét GMV và đếm số lượng', body: 'Target và bậc tính trên doanh số của từng dược sĩ, hay của cả nhà thuốc rồi chia cho dược sĩ?', assume: 'từng dược sĩ trong kỳ (khớp quyết định “CMS cho dược sĩ bán”).'},
+        {id: 'Q2', title: 'Target toàn danh mục đặt ở đâu', body: 'File mẫu để trống KPI_Target_GMV_VND ở dòng GMV_TOAN_DANH_MUC.', assume: 'admin nhập ở bước Thông tin chương trình.'},
+        {id: 'Q3', title: 'Lũy tiến hay áp nguyên bậc', body: 'Ví dụ email cho kết quả 9 × 15.000 + 2 × 20.000, tức lũy tiến.', assume: 'lũy tiến.'},
+        {id: 'Q4', title: 'GMV tính trên giá nào', body: 'Giá niêm yết, giá bán sau chiết khấu, có trừ đơn trả?', assume: 'doanh thu thuần dòng đơn từ view BI, đơn trả trừ ở lúc chốt kỳ.'},
+        {id: 'Q5', title: 'Product Master Circa.vn', body: 'HUONG_DAN ghi ProductID liên kết Product Master để tự đồng bộ tên, ảnh. Cần biết bảng nguồn, có giá bán không, đồng bộ bao lâu một lần.', assume: 'tra theo ProductID khi import, SP không tìm thấy → dòng lỗi.'},
+        {id: 'Q6', title: 'Kỳ chương trình', body: 'Chương trình chạy theo tháng cố định hay khoảng ngày tùy ý? Một SP có được nằm trong 2 chương trình cùng lúc?', assume: 'khoảng ngày tùy ý, mỗi SP chỉ thuộc 1 chương trình đang chạy.'}
+      ],
+      screens: [
+        {code: 'A1', route: '/targets/campaigns?tab=cms', title: 'Danh sách chương trình CMS', desc: 'Tab thứ 3 cạnh Chiến dịch KPI và Affiliate.', href: 'AdminPrograms.dc.html'},
+        {code: 'A2', route: '/targets/campaigns/cms/new', title: 'Tạo chương trình & Import', desc: 'Thông tin → Upload → Chạy xử lý → Kết quả.', href: 'AdminImport.dc.html'},
+        {code: 'A3', route: '/targets/campaigns/cms/[id]', title: 'Hiệu quả chương trình', desc: 'GMV so target, CMS theo SP và theo dược sĩ.', href: 'AdminProgramDetail.dc.html'},
+        {code: 'D1', route: '/targets?tab=cms', title: 'CMS của tôi', desc: 'CMS tạm tính, tiến độ target, danh sách SP.', href: 'StaffHome.dc.html'},
+        {code: 'D2', route: '/targets/cms/products/[id]', title: 'Chi tiết sản phẩm', desc: 'Thang bậc, vị trí của tôi, nội dung tư vấn.', href: 'StaffProduct.dc.html'},
+        {code: 'D3', route: '/targets/cms/history', title: 'Ghi nhận & hiệu quả tư vấn', desc: 'Từng dòng đơn được tính CMS và trạng thái.', href: 'StaffHistory.dc.html'}
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

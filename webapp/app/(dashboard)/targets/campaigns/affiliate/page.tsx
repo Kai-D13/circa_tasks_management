@@ -16,6 +16,7 @@ import {
   type OverviewMappingRow,
 } from '@/lib/affiliate/orders'
 import { AffiliateOverviewView } from '@/components/affiliate/AffiliateOverviewView'
+import { isCmsProgramEnabled } from '@/lib/cms/flags'
 
 // P3-I r1.3 — Affiliate Overview (KHÔNG phụ thuộc campaign): đọc doanh số
 // Affiliate đã sync trong Supabase qua rpc_aggregate_affiliate_gmv (DELIVERED
@@ -127,7 +128,7 @@ export default async function AffiliateOverviewPage({ searchParams }: {
   // r1 P1#2: mapping lỗi → FAIL-CLOSED — chỉ ErrorState, không số 0 giả.
   if (mapErr) {
     console.error('[affiliate-overview] mapping query failed:', mapErr.message)
-    return <AffiliateOverviewView scope={scope} filter={null} body={{ kind: 'mapping-error', message: mapErr.message }} />
+    return <AffiliateOverviewView cmsEnabled={isCmsProgramEnabled()} scope={scope} filter={null} body={{ kind: 'mapping-error', message: mapErr.message }} />
   }
 
   const mappings = ((mapRows ?? []) as unknown as OverviewMappingRow[])
@@ -152,7 +153,7 @@ export default async function AffiliateOverviewPage({ searchParams }: {
   const filter = { from, to, typeFilter, storeParam, options: typed }
 
   if (storeIds.length === 0 && partnerCodes.length === 0) {
-    return <AffiliateOverviewView scope={scope} filter={filter} body={{ kind: 'empty' }} />
+    return <AffiliateOverviewView cmsEnabled={isCmsProgramEnabled()} scope={scope} filter={filter} body={{ kind: 'empty' }} />
   }
 
   // r1.1 HEALTH FAIL-CLOSED: health TRƯỚC theo ĐÚNG scope hiển thị (store +
@@ -213,7 +214,7 @@ export default async function AffiliateOverviewPage({ searchParams }: {
     .sort((a, b) => b.agg.gmv - a.agg.gmv)
 
   return (
-    <AffiliateOverviewView
+    <AffiliateOverviewView cmsEnabled={isCmsProgramEnabled()}
       scope={scope}
       filter={filter}
       body={{

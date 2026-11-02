@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>Dược sĩ · Ghi nhận CMS và hiệu quả tư vấn</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+a{color:#C94A16}a:hover{color:#9A3410}
+</style>
+</helmet>
+<div style="width: 390px; height: 1380px; box-sizing: border-box; overflow: hidden; font-family: 'Be Vietnam Pro', system-ui, sans-serif; background: {{t.bg}}; color: {{t.text}}; font-size: 15px; line-height: 1.5; display: flex; flex-direction: column">
+
+<header style="padding: 8px 8px 0; display: flex; align-items: center; gap: 4px">
+<a href="StaffHome.dc.html" aria-label="Quay lại CMS của tôi" style="width: 44px; height: 44px; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: {{t.text}}">
+<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
+</a>
+<h1 style="margin: 0; font-size: 17px; font-weight: 700">Ghi nhận CMS</h1>
+</header>
+
+<main style="padding: 8px 16px 24px; display: flex; flex-direction: column; gap: 14px">
+
+<div role="tablist" aria-label="Kỳ" style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 4px; border-radius: 12px; background: {{t.muted}}">
+<sc-for list="{{periods}}" as="p" hint-placeholder-count="3">
+<button type="button" role="tab" aria-selected="{{p.sel}}" onClick="{{p.pick}}" style="height: 40px; border-radius: 9px; border: 0; background: {{p.bg}}; color: {{p.fg}}; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer">{{p.label}}</button>
+</sc-for>
+</div>
+
+<section aria-label="Tổng kỳ" style="background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 12px">
+<div style="display: flex; justify-content: space-between; align-items: center; gap: 8px">
+<span style="font-size: 13px; color: {{t.text2}}">{{cur.caption}}</span>
+<span style="font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 6px; background: {{cur.sBg}}; color: {{cur.sFg}}">{{cur.status}}</span>
+</div>
+<strong style="font-size: 30px; font-weight: 700; letter-spacing: -0.02em; line-height: 1.1">{{cur.cms}}</strong>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; border-top: 1px solid {{t.line}}; padding-top: 12px">
+<div style="display: flex; flex-direction: column"><strong style="font-size: 16px">{{cur.orders}}</strong><span style="font-size: 12px; color: {{t.text2}}">đơn có SP CMS</span></div>
+<div style="display: flex; flex-direction: column"><strong style="font-size: 16px">{{cur.qty}}</strong><span style="font-size: 12px; color: {{t.text2}}">SP tư vấn bán</span></div>
+<div style="display: flex; flex-direction: column"><strong style="font-size: 16px">{{cur.gmv}}</strong><span style="font-size: 12px; color: {{t.text2}}">GMV</span></div>
+</div>
+<span style="font-size: 12px; color: {{t.text2}}">{{cur.note}}</span>
+</section>
+
+<section aria-label="Hiệu quả theo sản phẩm" style="background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 16px; padding: 16px; display: flex; flex-direction: column; gap: 12px">
+<strong style="font-size: 15px">Hiệu quả tư vấn theo sản phẩm</strong>
+<sc-for list="{{cur.mix}}" as="m" hint-placeholder-count="5">
+<div style="display: flex; flex-direction: column; gap: 4px">
+<div style="display: flex; justify-content: space-between; gap: 8px; font-size: 13px"><span>{{m.name}}</span><strong style="white-space: nowrap">{{m.cms}}</strong></div>
+<span style="display: block; height: 6px; border-radius: 3px; background: {{t.muted}}; overflow: hidden"><span style="display: block; height: 6px; width: {{m.pct}}; background: {{m.bar}}"></span></span>
+<span style="font-size: 12px; color: {{t.text2}}">{{m.sub}}</span>
+</div>
+</sc-for>
+</section>
+
+<section aria-label="Dòng ghi nhận" style="display: flex; flex-direction: column; gap: 8px">
+<div style="display: flex; justify-content: space-between; align-items: center">
+<h2 style="margin: 0; font-size: 17px; font-weight: 700">Dòng đơn được tính</h2>
+<span style="font-size: 12px; color: {{t.text2}}">Mới nhất trước</span>
+</div>
+<sc-if value="{{hasLines}}" hint-placeholder-val="{{ true }}">
+<ul style="list-style: none; margin: 0; padding: 0 14px; background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 16px">
+<sc-for list="{{lines}}" as="l" hint-placeholder-count="6">
+<li style="display: flex; gap: 10px; padding: 12px 0; border-top: 1px solid {{l.topLine}}">
+<span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px">
+<strong style="font-size: 14px; line-height: 1.35">{{l.product}} × {{l.qty}}</strong>
+<span style="font-size: 12px; color: {{t.text2}}">{{l.code}} · {{l.when}}</span>
+<span style="align-self: flex-start; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 5px; background: {{l.sBg}}; color: {{l.sFg}}; margin-top: 2px">{{l.status}}</span>
+</span>
+<span style="display: flex; flex-direction: column; align-items: flex-end">
+<strong style="font-size: 14px; white-space: nowrap; color: {{l.amtFg}}">{{l.cms}}</strong>
+<span style="font-size: 12px; color: {{t.text2}}; text-align: right">{{l.why}}</span>
+</span>
+</li>
+</sc-for>
+</ul>
+</sc-if>
+<sc-if value="{{noLines}}" hint-placeholder-val="{{ false }}">
+<div style="background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 16px; padding: 20px; font-size: 14px; color: {{t.text2}}; text-align: center">{{cur.empty}}</div>
+</sc-if>
+</section>
+
+</main>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["light","dark"],"default":"light"},"$preview":{"width":390,"height":1380}}'>
+class Component extends DCLogic {
+  constructor(p) { super(p); this.state = {p: 'nov'}; }
+  renderVals() {
+    const P = {
+      light: {bg:'#F7F6F4',panel:'#FFFFFF',muted:'#F1F0EE',line:'#E7E5E4',text:'#1C1917',text2:'#57534E',brand:'#F3743F',sel:'#FFFFFF',info:'#1F5A8F',infoBg:'#E5F0FA',ok:'#1D6B3A',okBg:'#E3F4E8',warn:'#7A4D00',warnBg:'#FCF1D6',bad:'#A3231A',neu:'#57534E',neuBg:'#F1F0EE'},
+      dark: {bg:'#121110',panel:'#1A1817',muted:'#24211F',line:'#2E2A27',text:'#F5F5F4',text2:'#A8A29E',brand:'#F3743F',sel:'#1A1817',info:'#9DC6EF',infoBg:'#16243A',ok:'#8FD6A2',okBg:'#15291C',warn:'#EBC170',warnBg:'#2E2412',bad:'#F4A29A',neu:'#A8A29E',neuBg:'#24211F'}
+    };
+    const t = P[this.props.theme === 'dark' ? 'dark' : 'light'];
+    const tone = {rec: ['Đã ghi nhận', t.infoBg, t.info], adj: ['Điều chỉnh', t.warnBg, t.warn], wait: ['Chờ đạt target', t.neuBg, t.neu], lock: ['Đã chốt', t.okBg, t.ok]};
+    const data = {
+      nov: {label: 'Tháng 11', caption: 'CMS T11/2026 · tạm tính', status: 'Tạm tính', st: 'rec', cms: '907.000đ', orders: '41', qty: '162', gmv: '23,1tr', note: 'Cập nhật 18/11 · 06:00. Số liệu có thể thay đổi đến khi chốt kỳ (đơn trả, hủy).',
+        mix: [['Viên ngậm thảo dược', 364000, '40 SP · bậc 2'], ['Xịt mũi nước biển 70ml', 254000, '52 SP · bậc 2'], ['Máy xông khí dung mini', 235000, '14 SP · bậc 2'], ['Khẩu trang y tế 4 lớp', 54000, '18 SP · bậc 1'], ['Siro ho thảo dược 100ml', 0, '38 SP · chưa đạt target 6tr']],
+        lines: [
+          {product: 'Viên ngậm thảo dược', qty: 4, code: '#DH-24190', when: '18/11 · 09:40', s: 'rec', cms: '+48.000đ', why: '4 × 12.000đ'},
+          {product: 'Xịt mũi nước biển 70ml', qty: 3, code: '#DH-24152', when: '17/11 · 16:05', s: 'rec', cms: '+18.000đ', why: '3 × 6.000đ'},
+          {product: 'Khẩu trang y tế 4 lớp', qty: 2, code: '#DH-24150', when: '17/11 · 15:51', s: 'rec', cms: '+6.000đ', why: '2 × 3.000đ'},
+          {product: 'Siro ho thảo dược 100ml', qty: 2, code: '#DH-24133', when: '16/11 · 10:12', s: 'wait', cms: '0đ', why: 'GMV 54% target'},
+          {product: 'Máy xông khí dung mini', qty: 2, code: '#DH-24117', when: '15/11 · 14:30', s: 'rec', cms: '+40.000đ', why: '2 × 20.000đ'},
+          {product: 'Viên ngậm thảo dược', qty: 1, code: '#DH-24098', when: '15/11 · 08:22', s: 'adj', cms: '−12.000đ', why: 'Khách trả hàng'}
+        ], empty: ''},
+      oct: {label: 'Tháng 10', caption: 'CMS T10/2026 · Hô hấp', status: 'Chờ chốt kỳ', st: 'adj', cms: '684.000đ', orders: '35', qty: '128', gmv: '19,4tr', note: 'Kỳ đã kết thúc 31/10. Admin đang đối soát đơn trả trước khi chốt.',
+        mix: [['Viên ngậm thảo dược', 296000, '37 SP · bậc 2'], ['Xịt mũi nước biển 70ml', 212000, '47 SP · bậc 2'], ['Máy xông khí dung mini', 135000, '9 SP · bậc 1'], ['Khẩu trang y tế 4 lớp', 41000, '13 SP · bậc 1'], ['Siro ho thảo dược 100ml', 0, '22 SP · chưa đạt target']],
+        lines: [], empty: 'Kỳ đang chờ chốt. Danh sách dòng đơn sẽ hiển thị sau khi admin đối soát xong.'},
+      sep: {label: 'Tháng 9', caption: 'CMS T9/2026 · Tiêu hóa', status: 'Đã chốt', st: 'lock', cms: '512.000đ', orders: '29', qty: '104', gmv: '14,8tr', note: 'Đã chốt ngày 05/10/2026. Số tiền này dùng để chi trả.',
+        mix: [['Men vi sinh (hộp 20 ống)', 248000, '31 SP · bậc 2'], ['Oresol vị cam (hộp 20 gói)', 152000, '38 SP · bậc 2'], ['Than hoạt tính (hộp 30 viên)', 72000, '18 SP · bậc 1'], ['Siro tiêu hóa trẻ em', 40000, '17 SP · bậc 1']],
+        lines: [], empty: 'Kỳ đã chốt. Số liệu đã khóa, không thay đổi thêm.'}
+    };
+    const k = this.state.p;
+    const d = data[k];
+    const maxCms = Math.max(...d.mix.map(m => m[1]), 1);
+    const periods = ['nov', 'oct', 'sep'].map(id => ({label: data[id].label, sel: id === k ? 'true' : 'false',
+      bg: id === k ? t.sel : 'transparent', fg: id === k ? t.text : t.text2, pick: () => this.setState({p: id})}));
+    const cur = {...d, status: d.status, sBg: tone[d.st][1], sFg: tone[d.st][2],
+      mix: d.mix.map(([name, v, sub]) => ({name, sub, cms: v.toLocaleString('vi-VN') + 'đ', pct: Math.round(v / maxCms * 100) + '%', bar: v ? t.brand : t.muted}))};
+    const lines = d.lines.map((l, i) => ({...l, status: tone[l.s][0], sBg: tone[l.s][1], sFg: tone[l.s][2],
+      amtFg: l.s === 'adj' ? t.bad : l.s === 'wait' ? t.text2 : t.text, topLine: i === 0 ? 'transparent' : t.line}));
+    return {t, periods, cur, lines, hasLines: lines.length > 0, noLines: lines.length === 0};
+  }
+}
+</script>
+</body>
+</html>

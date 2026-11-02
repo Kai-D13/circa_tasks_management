@@ -18,6 +18,9 @@ import { isReferralEnabled } from '@/lib/affiliate/flags'
 import { AFFILIATE_QR_FILTER, qrCardVisible, qrCardKey, qrEligibleRole } from '@/lib/affiliate/qrDisplay'
 import { SmTargetsDetailView, SmTargetsErrorView, SmTargetsLandingView, SmTargetsOutOfScopeView } from '@/components/kpi/SmTargetsView'
 import { ManagerTargetsView, StaffCampaignView, StaffPeriodView, StaffStateView } from '@/components/kpi/StaffTargetsView'
+import { isCmsProgramEnabled } from '@/lib/cms/flags'
+import { CmsStaffCatalogPage } from '@/components/cms/staff/CmsStaffCatalogPage'
+import { CmsTargetsSegment } from '@/components/cms/staff/CmsTargetsSegment'
 import { buildCampaignResultModel, smScopeState, type ResultActualRow, type ResultCampaign, type ResultTargetRow } from '@/lib/kpi/resultModel'
 import { reduceAffiliateAgg, currentVnMonthISO, overviewVisibleFor, canShowOwnOsGmv, smRegionalGmvVisible, type AffiliateAggInput } from '@/lib/affiliate/overview'
 import { vnDayRange } from '@/lib/kpi/engine'
@@ -178,7 +181,8 @@ export default async function TargetsPage({
   searchParams,
 }: {
   // Mig 106: series = chuỗi chart của campaign Chất lượng bán hàng (?series=).
-  searchParams: Promise<{ period?: string; campaign?: string; store?: string; series?: string; from?: string; to?: string }>
+  // CMS P1-d: tab=cms (+ program=) — chỉ staff / QLCH khi cờ CMS bật.
+  searchParams: Promise<{ period?: string; campaign?: string; store?: string; series?: string; from?: string; to?: string; tab?: string; program?: string }>
 }) {
   const params = await searchParams
   const period = parsePeriod(params.period)
@@ -201,6 +205,15 @@ export default async function TargetsPage({
   const isStoreMgr = profile?.role === 'store_manager'
   const isSm = profile?.role === 'sm'
   const campaignEnabled = isKpiCampaignEnabled()
+
+  // CMS P1-d (SPEC §8.1, U15): `?tab=cms` rẽ nhánh NGAY SAU auth / FS / vai trò, TRƯỚC mọi query KPI (SM stores, campaign
+  // views, daily, QR, GMV…). Cờ CMS OFF ⇒ bỏ qua tab — KPI giữ nguyên. Chỉ staff / QLCH (SM / super dùng A1 / A3).
+  // QLCH + cờ KPI campaign OFF ⇒ `/targets` chuyển /tasks (bên dưới) ⇒ D1 không segmented (không link KPI chết).
+  const cmsStaff = isCmsProgramEnabled() && (isStaff || isStoreMgr)
+  if (cmsStaff && params.tab === 'cms') {
+    return <CmsStaffCatalogPage storeId={profile?.store_id ?? null} programId={params.program ?? null} manager={isStoreMgr} kpiTab={isStaff || campaignEnabled} />
+  }
+  const cmsSegment = cmsStaff ? <CmsTargetsSegment active="kpi" /> : undefined
 
   // SM (area manager) manages several stores via sm_store_assignments (store_id
   // is null). They get a campaign VIEW scoped to a chosen store (store selector).
@@ -619,6 +632,7 @@ export default async function TargetsPage({
     // UI v2 K-6: trình bày qua ManagerTargetsView (khung desktop 2 cột như cũ, gốc data-ui-v2).
     return (
       <ManagerTargetsView
+        segment={cmsSegment}
         storeName={storeName}
         items={campaignViews}
         showList={showCampaignList}
@@ -646,7 +660,7 @@ export default async function TargetsPage({
   //    fed by the BigQuery cron "Pull KPI targets") ──────────────────────────
   if (isStaff) {
     if (!profile?.store_id) {
-      return <StaffStateView kind="no-store" />
+      return <StaffStateView kind="no-store" segment={cmsSegment} />
     }
     const { data: rows, error: rowsError } = await supabase
       .from('store_kpi_targets')
@@ -657,7 +671,7 @@ export default async function TargetsPage({
       .limit(6)
     if (rowsError) {
       console.error('[targets] staff query failed:', rowsError.message)
-      return <StaffStateView kind="error" />
+      return <StaffStateView kind="error" segment={cmsSegment} />
     }
 
     const allRows = (rows ?? []) as KpiRecord[]
@@ -709,6 +723,7 @@ export default async function TargetsPage({
       // UI v2 K-6 (M1–M4): trình bày qua StaffCampaignView. "Giới thiệu bạn bè" + QR chỉ ở landing (không ?campaign=).
       return (
         <StaffCampaignView
+          segment={cmsSegment}
           storeName={storeName}
           items={campaignViews}
           showList={showCampaignList}
@@ -738,6 +753,7 @@ export default async function TargetsPage({
     // UI v2 K-6 (M5): trình bày qua StaffPeriodView (KpiSummaryCard chuyển sang component, cùng chữ/luật).
     return (
       <StaffPeriodView
+        segment={cmsSegment}
         title={TITLE[period]}
         storeName={storeName}
         period={period}
