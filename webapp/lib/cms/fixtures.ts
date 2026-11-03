@@ -37,18 +37,21 @@ export const CMS_FX_PRODUCTS: CmsProductView[] = [
   prod(4, { gmvBasis: 'product', targetGmv: '5000000', addedAfterStart: true, imageUrlSnapshot: 'http://example.invalid/anh.png', baseQuantityCms: '0.5', unitCms: 'gói' }),
 ]
 
-export function cmsFxDetail(kind: 'draft' | 'draft-empty' | 'running' | 'upcoming' | 'retro'): CmsProgramDetail {
+/** P3a: `ended` = đang active nhưng đã hết kỳ (chờ chốt) · `locked` = đã chốt (chương trình QA của fixture). */
+export function cmsFxDetail(kind: 'draft' | 'draft-empty' | 'running' | 'upcoming' | 'retro' | 'ended' | 'locked'): CmsProgramDetail {
+  const live = kind === 'running' || kind === 'upcoming' || kind === 'ended' || kind === 'locked'
+  const past = kind === 'ended' || kind === 'locked'
   const program = {
-    ...base, id: uid(1), name: LONG, catalogTargetGmv: '50000000',
-    status: kind === 'running' || kind === 'upcoming' ? 'active' as const : 'draft' as const,
-    startDate: kind === 'running' ? day(-14) : kind === 'retro' ? day(-3) : day(16),
-    endDate: kind === 'running' ? day(15) : kind === 'retro' ? day(27) : day(46),
-    activatedAt: kind === 'running' || kind === 'upcoming' ? '2026-11-01T02:00:00Z' : null,
+    ...base, id: uid(1), name: LONG, catalogTargetGmv: '50000000', isTest: past,
+    status: kind === 'locked' ? 'locked' as const : live ? 'active' as const : 'draft' as const,
+    startDate: kind === 'running' ? day(-14) : past ? day(-30) : kind === 'retro' ? day(-3) : day(16),
+    endDate: kind === 'running' ? day(15) : past ? day(-1) : kind === 'retro' ? day(27) : day(46),
+    activatedAt: live ? '2026-11-01T02:00:00Z' : null,
   }
   return {
     program,
     products: kind === 'draft-empty' ? [] : CMS_FX_PRODUCTS,
-    storeCount: kind === 'running' || kind === 'upcoming' ? 25 : 0,
+    storeCount: live ? 25 : 0,
     storeNames: null,
     storeIds: [],
     runs: kind === 'draft-empty' ? [] : [run(1), run(2, { status: 'previewed', committedAt: null, createdAt: '2026-11-09T08:00:00Z' })],

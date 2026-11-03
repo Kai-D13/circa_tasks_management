@@ -200,14 +200,15 @@ Phân bổ dòng: sắp theo `completed_at` (micro giây) rồi `order_line_id`;
 | `cms_results` | Kết quả dược sĩ × sản phẩm theo phiên | 122 |
 | `cms_result_catalog` | Gate danh mục của từng dược sĩ theo phiên | 122 |
 | `cms_result_lines` | Phân bổ tiền từng dòng của cùng phiên | 122 |
-| `cms_payouts`, `cms_payout_lines` | Dành cho P3 sau khi được giao tiếp | P3 |
+| `cms_payouts` | Một dòng / chương trình đã chốt: run đóng băng, tổng, Q-213, policy + version, nguồn đầy đủ, người / lúc chốt (bất biến) | 123 |
+| `cms_payout_staff` | Tổng theo dược sĩ + định danh snapshot (tên / email / nhà thuốc lúc chốt) — mọi dược sĩ có kết quả, kể cả 0 đ | 123 |
 
 Thay đổi so với r1: thêm hai trường quy cách CMS vào sản phẩm chương trình; thêm `config_version`; kết quả tổng và kết quả dòng cùng mang `run_id`; chương trình trỏ tới `current_result_run_id`; có `is_test`; D3 đọc `cms_result_lines` (không viết lại engine bằng SQL); bỏ `tier_mode` và ô target danh mục nhập tay.
 
 ### 3.1. Cột dự kiến cho 120 **[Dev đề xuất]**
 
 - `cms_product_master`: `product_id text PK CHECK (product_id ~ '^[1-9][0-9]*$')` (canonical dương, không số 0 đầu — §1.3), `product_name text NOT NULL`, `image_url text`, `is_active boolean NOT NULL`, `source_updated_at timestamptz NOT NULL`, `reference_price numeric`, `price_unit text`, `synced_at timestamptz NOT NULL`, `sync_run_id uuid`.
-- `cms_programs`: `id uuid PK`, `name text NOT NULL`, `status text CHECK IN ('draft','active','locked')`, `start_date date`, `end_date date` (`CHECK end_date >= start_date`), `scope text CHECK IN ('all','stores')`, `catalog_target_gmv bigint CHECK > 0` (suy từ Excel), `calc_mode text DEFAULT 'progressive' CHECK = 'progressive'`, `gate_scope text DEFAULT 'pharmacist' CHECK = 'pharmacist'`, `is_test boolean NOT NULL`, `config_version int NOT NULL`, `created_by/at`, `updated_by/at`, `activated_by/at`, `locked_by/at` (P3, chưa dùng).
+- `cms_programs`: `id uuid PK`, `name text NOT NULL`, `status text CHECK IN ('draft','active','locked')`, `start_date date`, `end_date date` (`CHECK end_date >= start_date`), `scope text CHECK IN ('all','stores')`, `catalog_target_gmv bigint CHECK > 0` (suy từ Excel), `calc_mode text DEFAULT 'progressive' CHECK = 'progressive'`, `gate_scope text DEFAULT 'pharmacist' CHECK = 'pharmacist'`, `is_test boolean NOT NULL`, `config_version int NOT NULL`, `created_by/at`, `updated_by/at`, `activated_by/at`, `locked_by/at` (P3a — RPC chốt 123 ghi; chỉ chuyển sang `locked` khi có `cms_payouts` khớp run hiện hành).
 - `cms_program_stores`: `PK (program_id, store_id)`; `scope = 'all'` được ghi thành danh sách OS active lúc kích hoạt.
 - `cms_program_products`: `id uuid PK`, `program_id`, `product_id text`, `gmv_basis text CHECK IN ('product','catalog','none')`, `target_gmv bigint` (bắt buộc ⇔ `gmv_basis = 'product'`), `unit_cms text NOT NULL`, `base_quantity_cms numeric NOT NULL CHECK (> 0 AND scale ≤ 9)`, `advice_text text NOT NULL CHECK (char_length ≤ 4000)`, `name_snapshot`, `image_url_snapshot`, `price_snapshot`, `import_run_id`, `added_after_start boolean`; `UNIQUE (program_id, product_id)`.
 - `cms_program_tiers`: `PK (program_product_id, tier_order)`, `qty_from int ≥ 1`, `qty_to int NULL` (chỉ bậc cuối), `amount_per_unit bigint > 0`. Import kiểm `Tu_SL_ban` / `Den_SL_ban` ≤ 2.147.483.647 (giới hạn `int`) — vượt ⇒ lỗi "ngoài khoảng", không cắt.
@@ -342,7 +343,7 @@ Nguồn: r2 §2.3, §2.4, §3.4, §3.7 + H7/H8/H9. Mọi hành động chỉ sup
 | Sửa / nạp lại sản phẩm đã có | Có (qua nạp lại) | Có (qua nạp lại) | Không — nhóm bị loại | Không |
 | Kích hoạt (`draft → active`) | Có | — | — | — |
 | Xóa / hủy / về nháp / tạm dừng / mở khóa | Không (H8) | Không | Không | Không |
-| Chốt (`active → locked`) | — | — | P3 HOLD | — |
+| Chốt (`active → locked`) | — | — | P3a: chỉ khi **đã hết kỳ** (`end_date < hôm nay VN`), super, cờ `CMS_LOCK_ENABLED`; preview → xác nhận; RPC 123 kiểm lại run / policy / mapping / Q-213 / cổng. Chương trình thật bị chặn tới Q-206 / Q-213 / Q-216 | — |
 
 Khoảng ngày mọi chương trình: 2020-01-01…2100-12-31 và `end_date ≥ start_date`; **không có trần độ dài kỳ** (Q-215). Phạm vi `stores` khi kích hoạt có nhà thuốc ngừng / FS ⇒ từ chối `STORE_INVALID`, super admin sửa phạm vi (không tự loại).
 
@@ -472,7 +473,7 @@ Yêu cầu P1:
 - Không hiển thị 0 giả cho phần chưa được bật.
 - Wizard bỏ ô nhập target danh mục riêng.
 - Preview có thêm đơn vị CMS và hệ số cơ sở.
-- Ẩn chức năng chốt kỳ.
+- Ẩn chức năng chốt kỳ (P1 / P2). P3a: khối Chốt kỳ chỉ hiện khi cờ `CMS_LOCK_ENABLED` (cùng `CMS_PROGRAM_ENABLED` + `CMS_EARNINGS_ENABLED`) bật — xem §P3a.
 - P1 ẩn các **kết quả thực tế** (CMS đã kiếm, GMV thực tế, SL bán, tiến độ/lượt/người đạt), không ẩn số cấu hình: số chương trình/SP, target, mốc bậc, mức CMS/đơn vị, quy cách và thống kê import vẫn hiện.
 
 Yêu cầu P2:
@@ -520,7 +521,7 @@ Sửa thông tin chương trình: `/targets/campaigns/cms/[id]/edit` (**[Dev đ�
 |---|---|
 | `CMS_PROGRAM_ENABLED` | Chương trình, danh mục, import, đọc tư vấn và Product Master cron |
 | `CMS_EARNINGS_ENABLED` | Sync/tính và hiển thị số CMS thực tế |
-| `CMS_LOCK_ENABLED` | Chốt và chi trả; giữ OFF đến khi P3 được duyệt |
+| `CMS_LOCK_ENABLED` | Chốt và chi trả (P3a); chỉ hiệu lực khi CẢ `CMS_PROGRAM_ENABLED` + `CMS_EARNINGS_ENABLED` bật; giữ OFF đến khi phát hành P3a được duyệt |
 
 Mặc định tất cả OFF (`lib/cms/flags.ts`, server-only, khai báo trong `webapp/.env.example`). Cờ OFF ⇒ cron/route không query nguồn.
 
@@ -540,3 +541,18 @@ Các cron dùng `Bearer CRON_SECRET`.
 **Bootstrap trước khi bật cờ [PM PR-0]:** P1-a bổ sung script operator-only `scripts/cms-bootstrap-products.mjs`, dùng cùng contract, core đồng bộ, validation và RPC upsert với cron. Mặc định dry-run; chỉ ghi khi operator gọi rõ `--confirm`. Script kiểm target cấu hình, không in key/email/dữ liệu nguồn thô và không đổi cờ môi trường. Đây là thao tác bootstrap được operator vận hành tại rollout, không phải endpoint công khai hoặc tham số bypass cờ cho cron. Public cron khi cờ OFF vẫn trả sớm, không query nguồn. Test dry-run không ghi, cron OFF không query, xác nhận ghi dùng đúng core/RPC. Đồng bộ lần đầu không thể gọi public cron đang OFF.
 
 Theo dõi: lần thành công cuối theo chương trình; thời gian, số dòng và chi phí query; dòng chưa gán/chưa quy đổi; run held/error hoặc không công bố được do revision đổi; chênh lệch tổng dòng với kết quả; độ trễ nguồn.
+
+## P3a — Chốt kỳ và chi trả (migration 123; local, cờ OFF)
+
+Nguồn: blueprint `planning/research/cms-i5-p3-blueprint.md` r3 + §7 r3.2; work order P3a 03/11. Chốt **thật** chưa mở (Q-206 / Q-213 / Q-216 / hợp đồng nguồn đầy đủ / P3b).
+
+- **Đóng băng run, không sao chép dòng.** Chốt ghi `cms_payouts` + `cms_payout_staff` từ run hiện hành; DB cấm mọi thay đổi run đã chốt, cấu hình chương trình đã chốt, payout (UPDATE / DELETE / TRUNCATE); trạng thái `locked` không mở lại (H8).
+- **Preview → xác nhận.** Super xem preview (`rpc_cms_lock_preview`): run, tổng, dược sĩ có tiền / có kết quả, dòng chưa gán so ngưỡng, quy tắc, blocker. Xác nhận gửi `expected_run_id` + `policy_version` (+ lý do 10–1.000 ký tự khi còn dòng chưa gán dưới ngưỡng). Server kiểm cờ + super từ session + namespace QA; actor lấy từ session. RPC chốt kiểm lại toàn bộ trong một transaction; run / policy / mapping đổi ⇒ báo xem lại. Mất phản hồi ⇒ "chưa xác định" (tải lại để xem trạng thái thật); gọi lại cùng run là idempotent.
+- **Policy ở DB** (`cms__lock_policy` + version): nhánh thật `ready = false` (pending Q-206 / Q-213 / Q-216 / nguồn đầy đủ / P3b) ⇒ `CMS_LOCK_POLICY_PENDING`; nhánh QA là giả định có nhãn `QA_ONLY_ASSUMPTION` (2 % GMV / 20 dòng, chờ 0 giờ) — không phải mặc định chi trả thật.
+- **Chỉ đường RPC được ghi.** Cấu hình chương trình, dữ liệu run và payout chỉ ghi được khi người ghi là owner bảng (RPC SECDEF 121 / 122 / 123); `service_role` / role quản trị ghi trực tiếp ⇒ `CMS_CONFIG_RPC_ONLY` / `CMS_RUN_RPC_ONLY` / `CMS_PAYOUT_RPC_ONLY`. Owner / superuser (chạy migration) là ranh giới tin cậy. Ghi dữ liệu run / TRUNCATE yêu cầu READ COMMITTED.
+- **Đọc số đã chốt** (`rpc_cms_payout`, session): phạm vi **hiện tại** (Q-208, Q-217): super mọi dòng + tổng toàn chương trình + email; SM / QLCH chỉ staff hiện thuộc phạm vi, chỉ tổng trong phạm vi, không email; staff chỉ dòng của mình; ra ngoài chương trình ⇒ không đọc. Định danh trong số chốt là ảnh chụp lúc chốt.
+- **XLSX chi trả** `GET /api/export/cms/payout?program=[&run=]`: super + SM, cùng run đã chốt, đủ dòng (kể cả 0 đ), Σ = tổng trả về; email chỉ super; nhãn phạm vi cho SM; chương trình QA ghi "không chi trả"; chưa chốt ⇒ 409. Không phải lệnh chuyển tiền.
+- **A3:** khối "Chốt kỳ" (super, chương trình active đã hết kỳ) và "Số đã chốt" (super + SM, chương trình locked); A3 của chương trình đã chốt đọc kết quả của run đóng băng (run hiện hành, RPC 122). Hộp xác nhận: checkbox "Tôi đã kiểm tra số liệu" bắt buộc (UI_V2_CMS §3.4). Server Action lỗi / mất phản hồi ⇒ "chưa xác định" + làm mới, nút khoá tới khi kiểm tra lại (không tự gửi lại); `revalidatePath` lỗi sau commit không đổi kết quả đã chốt. A1: SM có lọc Đã chốt (Q-219).
+- **Server QA chỉ đọc (PM r1 PKG-P1-2):** launcher `scripts/cms-qa-run.mjs` luôn đặt `CMS_QA_SERVER=1` cho server QA ⇒ `lockCmsProgram` trả `QA_SERVER_READONLY` **trước RPC** (preview / số đã chốt / XLSX vẫn chạy); chốt QA chỉ qua `cms-qa-results.mjs lock` (gate + sổ ý định). App thật không đặt biến này.
+- **Dược sĩ / QLCH (D1 / D2 / D3) — lối đọc sau hết kỳ / đã chốt (P3a r2, PM r1 PKG-P1-1; blueprint §3):** loader đọc chương trình `active` (mọi ngày) + `locked` qua RLS phiên (không nới vai / RLS): D1 bộ chọn có nhóm "Đã kết thúc"; D2 deep link mở được (RLS kiểm nhà thuốc hiện tại, QA marker, FS bị chuyển module); D3 gồm chương trình đã chốt. Số của chương trình đã chốt = kết quả run đóng băng (RPC 122 — cùng phạm vi hiện tại Q-208 / Q-217; Σ từng dược sĩ = payout, V5); nhãn "Đã chốt kỳ", không gợi ý gần đạt / "Nếu bán thêm". Chuyển ra ngoài chương trình ⇒ không đọc (Q-217). Quyền **đọc** (DB) tách khỏi **lối vào** (UI); định danh snapshot chỉ ở số đã chốt A3 / XLSX.
+- **Tắt cờ `CMS_LOCK_ENABLED`** (R-flag): ẩn khối Chốt kỳ / Số đã chốt trên A3 và XLSX chi trả trả 403; dữ liệu payout giữ nguyên ở DB. `rpc_cms_payout` vẫn là RPC `authenticated` (phạm vi do DB lọc) — cờ là lớp app, không phải lớp DB.

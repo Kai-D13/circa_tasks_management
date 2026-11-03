@@ -13,7 +13,8 @@ import { CmsStaffProductView } from '@/components/cms/staff/CmsStaffProductView'
 
 // CMS P1-d · D2 /targets/cms/products/[programProductId] — staff / QLCH (cùng cổng /targets: đăng nhập, FS ⇒ module FS).
 // Cờ CMS_PROGRAM_ENABLED OFF hoặc vai trò khác ⇒ 404 (super / SM xem A3). Sản phẩm ngoài phạm vi RLS 120 (nhà thuốc khác,
-// QA không marker, nháp) hoặc chương trình không còn Sắp diễn ra / Đang chạy (H5) ⇒ 404. Lỗi ⇒ ErrorState (không số giả).
+// QA không marker, nháp, đã chuyển ra ngoài — Q-217) ⇒ 404. P3a r2: Chờ chốt kỳ / Đã chốt vẫn mở (số của run đóng băng khi đã
+// chốt, không "Nếu bán thêm"). Lỗi ⇒ ErrorState (không số giả).
 // P2-c (I3): số liệu khi cờ CMS_EARNINGS_ENABLED bật + chương trình đã bắt đầu (lib/cms/server/resultLoad — RPC 122 lọc
 // phạm vi). Ghi nhận gần đây (staff): đọc dòng của SP trong CÙNG run, tối đa 1 trang 500 dòng rồi lấy 3 dòng cuối; nhiều
 // hơn ⇒ không hiện danh sách (chỉ link D3), không đọc lệch run.
@@ -29,7 +30,7 @@ export default async function CmsStaffProductPage({ params }: { params: Promise<
   if (!isCmsProgramEnabled()) notFound()
   if (!(profile?.role === 'staff' || profile?.role === 'store_manager')) notFound()
   const today = cmsTodayVn(new Date())
-  const res = await cmsLoadStaffProduct(programProductId, today)
+  const res = await cmsLoadStaffProduct(programProductId)
   if (!res.ok) {
     return (
       <div data-ui-v2="page" data-layout-width="centered" className="mx-auto max-w-2xl p-4">

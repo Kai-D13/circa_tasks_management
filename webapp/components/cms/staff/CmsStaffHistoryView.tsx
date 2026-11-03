@@ -20,7 +20,8 @@ import type { CmsProductView, CmsProgramRowView } from '@/lib/cms/server/catalog
 // CMS P2-c (I3) · D3 `/targets/cms/history?program=&product=` (UI §4.3; U12 / U14 / U18; kế hoạch PM §6.1). Staff xem dòng của
 // mình, QLCH xem dòng của staff hiện thuộc nhà thuốc (RPC 122 lọc). Dòng đọc từ cms_result_lines của run ĐÃ GHIM (`run=` trong
 // URL); run hiện hành đổi giữa các trang ⇒ báo "dữ liệu đã thay đổi", không nối hai phiên. Thứ tự = seq của engine (ổn định),
-// 20 dòng / lần. Tiền dòng lấy nguyên từ snapshot — không tự tính lại. Đã chốt (payout) là P3 — HOLD.
+// 20 dòng / lần. Tiền dòng lấy nguyên từ snapshot — không tự tính lại. P3a r2 (PM r1 PKG-P1-1): chương trình Đã chốt vẫn ở danh
+// sách — dòng / tổng của run ĐÓNG BĂNG (cùng số đã chốt), ghi chú "Đã chốt kỳ".
 
 export type CmsHistoryLines =
   | { kind: 'ok'; rows: CmsResultLineDto[]; nextAfterSeq: number | null }
@@ -111,7 +112,7 @@ export function CmsStaffHistoryView({ programs, selected, products, results, lin
               </div>
               <p className="text-[12px] text-muted-foreground">
                 {run
-                  ? <>{display === 'waiting_close' ? 'Chờ chốt kỳ — số tạm tính, có thể đổi khi chốt.' : 'Tạm tính — chưa chốt kỳ.'} Cập nhật {cmsDateTime(run.publishedAt)}.</>
+                  ? <span data-cms-history-note={display ?? 'running'}>{display === 'locked' ? `Đã chốt kỳ — số đã chốt, theo lần tính ${cmsDateTime(run.publishedAt)} (không đổi sau chốt).` : <>{display === 'waiting_close' ? 'Chờ chốt kỳ — số tạm tính, có thể đổi khi chốt.' : 'Tạm tính — chưa chốt kỳ.'} Cập nhật {cmsDateTime(run.publishedAt)}.</>}</span>
                   : 'Chưa có số liệu — hệ thống chưa tính lần nào.'}
               </p>
             </section>

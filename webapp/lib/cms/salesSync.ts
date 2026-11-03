@@ -46,7 +46,7 @@ export const CMS_CLEANUP_MAX_CALLS = 20
 export const CMS_SEAL_STEPS = 10
 
 export type CmsSalesRunDetail = Record<string, string | number | boolean | null>
-/** Tuỳ chọn I/O của một RPC: timeout tính từ ngân sách còn lại. */
+/** Tuỳ chọn I/O của một RPC: timeout tính từ ngân sách còn lại — số NGUYÊN ms dương (AbortSignal.timeout từ chối số lẻ). */
 export interface CmsIo { timeoutMs: number }
 export type CmsSealReply = { ok?: boolean; sealed?: boolean; status?: string; code?: string; already?: boolean }
 
@@ -121,7 +121,8 @@ export type CmsSalesSyncOpts = { dryRun: boolean; source: 'cron' | 'operator' | 
 /** Đồng hồ ngân sách của một lượt chương trình. Không có deadline ⇒ chỉ timeout RPC tối đa. */
 export function cmsBudget(now: () => number, deadlineAt: number | undefined) {
   const workUntil = deadlineAt === undefined ? undefined : deadlineAt - CMS_SALES_STOP_RESERVE_MS
-  const clamp = (ms: number) => Math.max(CMS_RPC_TIMEOUT_MIN_MS, Math.min(CMS_RPC_TIMEOUT_MAX_MS, ms))
+  // floor: đồng hồ có phần lẻ (writer QA dùng performance) vẫn cho timeout nguyên, không vượt phần còn lại (PM r2 §3).
+  const clamp = (ms: number) => Math.floor(Math.max(CMS_RPC_TIMEOUT_MIN_MS, Math.min(CMS_RPC_TIMEOUT_MAX_MS, ms)))
   return {
     /** Còn được bắt đầu bước làm việc mới không (≥ CMS_RPC_START_MIN_MS trước mốc dừng làm việc). */
     canWork: () => workUntil === undefined || now() + CMS_RPC_START_MIN_MS <= workUntil,
@@ -132,7 +133,7 @@ export function cmsBudget(now: () => number, deadlineAt: number | undefined) {
     /** Còn thời gian trước hạn cứng không (cleanup best effort). */
     beforeHard: (marginMs = 0) => deadlineAt === undefined || now() + marginMs < deadlineAt,
     /** BigQuery: hạn tổng theo mốc dừng làm việc. */
-    sourceMs: () => (workUntil === undefined ? CMS_BQ_DEFAULT_DEADLINE_MS : Math.max(1, Math.min(CMS_BQ_DEFAULT_DEADLINE_MS, workUntil - now()))),
+    sourceMs: () => (workUntil === undefined ? CMS_BQ_DEFAULT_DEADLINE_MS : Math.max(1, Math.floor(Math.min(CMS_BQ_DEFAULT_DEADLINE_MS, workUntil - now())))),
   }
 }
 

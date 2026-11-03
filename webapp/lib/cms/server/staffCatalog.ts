@@ -8,8 +8,11 @@ import { CmsQueryError, cmsQueryFailLine } from '@/lib/cms/queryLog'
 
 // CMS P1-d — đọc danh mục cho staff / QLCH (D1 `/targets?tab=cms`, D2 `/targets/cms/products/[id]`) bằng SESSION client:
 // RLS 120 đã giới hạn chương trình active / locked có nhà thuốc hiện tại của người xem (store OS đang hoạt động; QA chỉ
-// với marker). P1 (H5) chỉ hiện Sắp diễn ra + Đang chạy ⇒ lọc thêm status = 'active' và end_date ≥ hôm nay VN. Không
-// service role. Lỗi ⇒ log server + mã chung (không đưa message DB lên UI). File riêng P1-d — không sửa catalog.ts (P1-c).
+// với marker; chuyển ra ngoài chương trình ⇒ không đọc — Q-217). P3a r2 (PM r1 PKG-P1-1): đọc active (MỌI ngày — gồm Chờ
+// chốt kỳ) + locked; D1 nhóm "Đã kết thúc" trong bộ chọn (H5: bộ lọc P1 không dùng để giấu lịch sử). Không nới RLS / vai.
+// Không service role. Lỗi ⇒ log server + mã chung (không đưa message DB lên UI). File riêng P1-d — không sửa catalog.ts.
+/** Trạng thái DB mở được ở D1 / D2 (nháp không bao giờ — RLS cũng không trả nháp cho staff / QLCH). */
+export const CMS_STAFF_PROGRAM_STATUSES = ['active', 'locked'] as const
 
 const PAGE = 1000
 const MAX_PAGES = 100
@@ -73,7 +76,7 @@ export async function cmsLoadStaffCatalog(o: { today: string; programId: string 
   try {
     const supabase = await createClient()
     const programs = (await readAll<ProgramDb>((a, b) => supabase.from('cms_programs').select(PROGRAM_COLS)
-      .eq('status', 'active').gte('end_date', o.today).order('start_date').order('id').range(a, b))).map(toProgram)
+      .in('status', [...CMS_STAFF_PROGRAM_STATUSES]).order('start_date').order('id').range(a, b))).map(toProgram)
     const selected = cmsPickStaffProgram(programs, o.today, o.programId)
     if (!selected) return { ok: true, data: { programs, selected: null, products: [] } }
     const [products, tiers] = await Promise.all([
@@ -90,8 +93,9 @@ export async function cmsLoadStaffCatalog(o: { today: string; programId: string 
 
 export interface CmsStaffProduct { program: CmsProgramRowView; product: CmsProductView }
 
-/** D2: theo id dòng chương trình; ngoài RLS hoặc không còn Sắp diễn ra / Đang chạy ⇒ null (404). */
-export async function cmsLoadStaffProduct(programProductId: string, today: string): Promise<CmsResult<CmsStaffProduct | null>> {
+/** D2: theo id dòng chương trình; ngoài RLS (nhà thuốc khác, QA không marker, nháp, đã chuyển ra ngoài — Q-217) ⇒ null
+ *  (404). P3a r2: Sắp diễn ra / Đang chạy / Chờ chốt kỳ / Đã chốt đều mở được (deep link kiểm quyền bằng RLS phiên). */
+export async function cmsLoadStaffProduct(programProductId: string): Promise<CmsResult<CmsStaffProduct | null>> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(programProductId)) return { ok: true, data: null }
   try {
     const supabase = await createClient()
@@ -99,12 +103,12 @@ export async function cmsLoadStaffProduct(programProductId: string, today: strin
     if (error) throw new CmsQueryError(error.code)
     if (!pp) return { ok: true, data: null }
     const prod = pp as unknown as ProductDb
-    // Lọc trạng thái / hạn ngay ở truy vấn (phòng thủ chiều sâu, cùng điều kiện D1) + kiểm lại ở app bên dưới.
+    // Lọc trạng thái ngay ở truy vấn (phòng thủ chiều sâu, cùng điều kiện D1) + kiểm lại ở app bên dưới.
     const { data: prog, error: pErr } = await supabase.from('cms_programs').select(PROGRAM_COLS).eq('id', prod.program_id)
-      .eq('status', 'active').gte('end_date', today).maybeSingle()
+      .in('status', [...CMS_STAFF_PROGRAM_STATUSES]).maybeSingle()
     if (pErr) throw new CmsQueryError(pErr.code)
     const program = prog ? toProgram(prog as unknown as ProgramDb) : null
-    if (!program || program.status !== 'active' || program.endDate < today) return { ok: true, data: null }
+    if (!program || !(CMS_STAFF_PROGRAM_STATUSES as readonly string[]).includes(program.status)) return { ok: true, data: null }
     const tiers = await readAll<TierDb>((a, b) => supabase.from('cms_program_tiers').select(TIER_COLS)
       .eq('program_product_id', programProductId).order('tier_order').range(a, b))
     return { ok: true, data: { program, product: attachTiers([prod], tiers)[0] } }

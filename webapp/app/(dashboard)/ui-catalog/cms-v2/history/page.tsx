@@ -3,14 +3,14 @@ import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { KpiFixtureBoundary } from '@/components/kpi/KpiFixtureBoundary'
 import { CmsStaffHistoryView, type CmsHistoryLines } from '@/components/cms/staff/CmsStaffHistoryView'
-import { CMS_FX_STAFF_PROGRAMS, CMS_FX_TODAY, cmsFxStaffProducts } from '@/lib/cms/fixturesStaff'
+import { CMS_FX_STAFF_ENDED, CMS_FX_STAFF_PROGRAMS, CMS_FX_TODAY, cmsFxStaffProducts } from '@/lib/cms/fixturesStaff'
 import { CMS_FX_RUN, cmsFxLines, cmsFxParseScenario, cmsFxStaffResults, cmsFxStoreResults } from '@/lib/cms/fixturesResults'
 import { cmsParseHistoryParams } from '@/lib/cms/resultUi'
 
 // Dev-only fixture D3 `/targets/cms/history` — ĐÚNG CmsStaffHistoryView + cmsParseHistoryParams / phân trang của route thật,
 // dữ liệu giả (không truy vấn, không ghi). Cổng: UI_CATALOG=1 + super admin. ?p2=running|top|held|none|error|gone|config
 // (mặc định running) · &role=manager (QLCH) · &product= · &n= · &after= · &run= (khác run giả ⇒ "dữ liệu đã thay đổi") ·
-// &fx=empty (chưa có chương trình) | lines-error.
+// &fx=empty (chưa có chương trình) | lines-error | with-ended (P3a r2: danh sách gồm Chờ chốt kỳ + Đã chốt; chọn bằng &program=).
 export default async function CmsHistoryFixture({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   if (process.env.UI_CATALOG !== '1') notFound()
   const { user, profile } = await getSessionProfile()
@@ -21,7 +21,7 @@ export default async function CmsHistoryFixture({ searchParams }: { searchParams
   const scenario = cmsFxParseScenario(one('p2')) ?? 'running'
   const fx = one('fx')
   const manager = one('role') === 'manager'
-  const programs = fx === 'empty' ? [] : CMS_FX_STAFF_PROGRAMS.slice(0, 2)
+  const programs = fx === 'empty' ? [] : fx === 'with-ended' ? [...CMS_FX_STAFF_PROGRAMS.slice(0, 2), ...CMS_FX_STAFF_ENDED] : CMS_FX_STAFF_PROGRAMS.slice(0, 2)
   const params = cmsParseHistoryParams(sp)
   const selected = programs.find((p) => p.id === params.programId) ?? programs[0] ?? null
   const products = selected ? cmsFxStaffProducts(selected.id) : []

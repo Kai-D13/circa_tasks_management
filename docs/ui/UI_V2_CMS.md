@@ -17,13 +17,13 @@
 | U5 | A2 Kết quả, bảng hợp lệ | Thêm **đơn vị CMS** và **hệ số cơ sở** (`1 {unit_CMS} = {base_quantity_CMS} đơn vị cơ sở`); chip bậc ghi `đ/{unit_CMS}`. Cảnh báo ảnh ngoài prefix được duyệt. |
 | U6 | Kích hoạt | Hộp xác nhận: số SP, khoảng ngày, phạm vi. Nếu ngày bắt đầu đã qua: nói rõ **áp dụng hồi tố từ ngày bắt đầu** và sau kích hoạt **chỉ còn thêm sản phẩm** (H7). |
 | U7 | Xóa / hủy / về nháp | **Không có** nút, menu hay action nào cho các đường này (H8). |
-| U8 | A1/A3 quyền | Super admin quản lý. **SM chỉ đọc** chương trình có nhà thuốc được phân công: thấy Sắp diễn ra / Đang chạy / Chờ chốt kỳ; không thấy Nháp/QA; ẩn Tạo, Import bổ sung, Kích hoạt (H6). |
-| U9 | D1 danh sách chương trình | Staff/QLCH P1 thấy **Sắp diễn ra** (ghi "Bắt đầu dd/mm") và **Đang chạy**, theo nhà thuốc hiện tại. Không có Nháp; Chờ chốt kỳ / Đã chốt không vào danh sách chính P1 (H5). QLCH không có CMS cá nhân; P2 thấy tổng CMS các staff hiện thuộc nhà thuốc. |
+| U8 | A1/A3 quyền | Super admin quản lý. **SM chỉ đọc** chương trình có nhà thuốc được phân công: thấy Sắp diễn ra / Đang chạy / Chờ chốt kỳ / **Đã chốt** (P3a r2 — Q-219: 123 cho SM đọc `locked` trong phạm vi; A1 có lọc Đã chốt); không thấy Nháp/QA; ẩn Tạo, Import bổ sung, Kích hoạt (H6). |
+| U9 | D1 danh sách chương trình | Staff/QLCH P1 thấy **Sắp diễn ra** (ghi "Bắt đầu dd/mm") và **Đang chạy**, theo nhà thuốc hiện tại. Không có Nháp; Chờ chốt kỳ / Đã chốt không vào danh sách chính P1 (H5). **P3a r2 (PM r1 PKG-P1-1):** bộ chọn chương trình D1 có nhóm "Đã kết thúc" (Chờ chốt kỳ / Đã chốt) — H5 không dùng bộ lọc P1 để giấu lịch sử; chương trình mặc định vẫn là Đang chạy → Sắp diễn ra, chỉ khi không còn mới mở chương trình đã kết thúc gần nhất. QLCH không có CMS cá nhân; P2 thấy tổng CMS các staff hiện thuộc nhà thuốc. |
 | U10 | Ảnh | **Next Image** + `remotePatterns` HTTPS `cdn-gcs.thuocsi.vn` pathname `/thuocsi-live/images/**`. URL khác host/prefix ⇒ ô chữ cái đầu (ảnh dự phòng). Không dùng `<img>`, không wildcard host. |
 | U11 | "Chưa gán dược sĩ" link tới trang gán mã nhân viên | Bỏ `employee_code`. P2 hiện nhóm "Chưa gán dược sĩ" với **lý do** (email không khớp / trùng / tài khoản dùng chung / không phải staff / nhà thuốc không hợp lệ); không có trang gán mã. |
 | U12 | Trạng thái dòng ghi nhận (P2) | Chờ đạt target · Đang cộng dồn · Đã ghi nhận · Đã đạt trần · Điều chỉnh (chỉ sự kiện trả hàng đã chuẩn hóa, Q-206) · Đã chốt (P3). "Đạt từ dd/mm" = lần chuyển sang đạt gần nhất; gate đang không đạt thì không hiện. |
 | U13 | "Gợi ý gần đạt" / "Nếu bán thêm" (P2) | Dùng cùng engine `lib/cms/engine`. Ước tính GMV **chỉ khi** có giá tham khảo đúng theo `unit_CMS`; thiếu giá ⇒ bỏ câu ước tính cần giá. |
-| U14 | D3 "Đã chốt" đọc `cms_payout_lines` | P3 (HOLD). P2: D3 đọc `cms_result_lines` của phiên kết quả hiện hành. |
+| U14 | D3 "Đã chốt" | **P3a r2:** chương trình Đã chốt ở D1 / D2 / D3 đọc `cms_result_lines` / kết quả của run **đóng băng** (pointer + dữ liệu run không đổi sau chốt — guard 123; Σ từng dược sĩ = `cms_payout_staff`, V5). Không có bảng `cms_payout_lines` (P3a không sao chép dòng). Nhãn "Đã chốt kỳ", không gợi ý / mô phỏng bán thêm. |
 | U15 | Tab | `CampaignsTabs` thêm tab "CMS sản phẩm" **độc lập với cờ Affiliate**. `/targets?tab=cms` không chạy query KPI cũ; cờ CMS OFF giữ nguyên hành vi KPI. |
 | U16 | A2 "Chạy xử lý" = 1 lần gọi server action; nút "Lưu nháp" / "Kích hoạt N" | Import **hai bước qua Route Handler** (SPEC §4.5): (1) **Kiểm tra file** = POST preview → lưu import run (`run_id`, hash), hiện Kết quả; (2) **Xác nhận ghi** = POST commit gửi lại file + `run_id`, server parse lại; kết quả khác preview ⇒ báo "Dữ liệu đã thay đổi — kiểm tra lại file" và quay về bước Upload. **Kích hoạt** là hành động riêng sau khi đã ghi danh mục (U6), chỉ ở chương trình nháp. Nhãn nút xác nhận ghi theo trạng thái (SPEC §4.7): nháp / đã kích hoạt chưa bắt đầu = "Nạp danh mục (thay toàn bộ, N sản phẩm)"; đã bắt đầu = "Thêm N sản phẩm". Ẩn nút khi N = 0. "Hủy lần chạy" chỉ bỏ kết quả kiểm tra phía client (run `previewed` không được ghi), **không** phải huỷ chương trình (U7). |
 | U17 | Sửa thông tin chương trình | Route `/targets/campaigns/cms/[id]/edit` (bước Thông tin của A2, điền sẵn) — chỉ super admin, chỉ khi **nháp** hoặc **đã kích hoạt chưa bắt đầu** (SPEC §4.7); đã bắt đầu / đã chốt ⇒ không có nút sửa. |
@@ -99,16 +99,18 @@ Stepper 4 bước (danh sách có `aria-current="step"`): **Thông tin → Uploa
 - Nhóm **"Chưa gán dược sĩ"** (P2): khối cảnh báo trên tab Theo dược sĩ "N dòng đơn chưa map được người bán" kèm lý do (r2: không có trang gán mã nhân viên — U11).
 - P1: ẩn ô/cột **kết quả thực tế** (CMS đã kiếm, GMV/SL bán, tiến độ/lượt/người đạt). Giữ số SP cấu hình, target, bậc, mức CMS/`unit_CMS`, quy cách, số dòng import và lịch sử import. Không thay kết quả chưa bật bằng 0 hoặc thanh rỗng.
 
-### 3.4 Chốt kỳ (P3, chưa có artboard — **HOLD** Q-206 / Q-213; r2 chưa giao, giữ để tham chiếu)
+### 3.4 Chốt kỳ (P3a — hiện thực local, cờ `CMS_LOCK_ENABLED` OFF; chốt thật chặn tới Q-206 / Q-213 / Q-216)
 
 Dialog từ nút "Chốt kỳ" ở A3: tóm tắt (tổng CMS, số dược sĩ, số dòng chưa gán, số dòng trả, lần đồng bộ cuối) + checkbox "Tôi đã kiểm tra số liệu" + nút danger "Chốt kỳ". Sau chốt: badge "Đã chốt", nút đổi thành "Xuất file chi trả".
+
+P3a: tóm tắt = lần tính dùng để chốt, tổng CMS, dược sĩ có tiền / có kết quả, dòng chưa gán so ngưỡng, quy tắc (nhãn "Giả định QA" với chương trình QA); blocker có câu dễ hiểu; checkbox **bắt buộc** (mở lại hộp ⇒ tick lại) + lý do 10–1.000 ký tự khi còn dòng chưa gán dưới ngưỡng. Chưa nhận được phản hồi (Server Action lỗi / mất kết nối) ⇒ "Chưa xác định được kết quả chốt" + làm mới trang, nút khoá tới khi "Kiểm tra lại" thành công — không tự gửi lại; run / quy tắc đổi ⇒ tải điều kiện mới, tải lỗi ⇒ nút khoá. Server QA (launcher QA) ⇒ khối chỉ đọc, máy chủ từ chối xác nhận chốt. Sau chốt: khối "Số đã chốt" (super / SM theo phạm vi) + "Xuất file chi trả".
 
 ## 4. Dược sĩ (mobile-first, 360/390; desktop = cột giữa `max-w-2xl mx-auto`)
 
 ### 4.1 D1 · `/targets?tab=cms` — mockup `StaffHome.dc.html`
 
 - Đầu trang "Mục tiêu" + segmented 2 mục "KPI chiến dịch | CMS sản phẩm" (link, `aria-current`). Không đổi BottomNav.
-- Chọn chương trình: nút 52px mở sheet danh sách chương trình đang áp dụng (`?program=`). Chỉ 1 chương trình → hiện như nhãn, không mở sheet.
+- Chọn chương trình: nút 52px mở sheet danh sách chương trình (`?program=`) — P3a r2: hai nhóm **Đang áp dụng** (Đang chạy / Sắp diễn ra) và **Đã kết thúc** (Chờ chốt kỳ / Đã chốt, kết thúc gần nhất trước). Chỉ 1 chương trình → hiện như nhãn, không mở sheet. Chương trình đã kết thúc: hero "CMS tạm tính … · chờ chốt kỳ" hoặc "CMS đã chốt …" (run đóng băng), không "Gợi ý gần đạt", dòng bậc trên thẻ chỉ ghi kết quả đạt được.
 - **Hero** (light: nền `#1C1917`, chữ sáng; dark: nền cam `#F3743F`, chữ `#141210`, như canvas): "CMS tạm tính của bạn", số lớn, 3 ô (SP đạt điều kiện x/y · SP đã bán · GMV), dòng "Cập nhật dd/mm · hh:mm · chưa chốt kỳ" + link "Xem ghi nhận" → D3.
 - **Gợi ý gần đạt** (nền `accent-soft`): SP có gate `product` chưa đạt và còn thiếu ít nhất (theo %). Chữ: "Còn {tiền} để mở CMS {tên ngắn}" + "Khoảng {N} {đơn vị} nữa. Đạt target sẽ được tính CMS cho cả {Q+N} {đơn vị}, ước ≈ {tiền}." N = ceil(thiếu / giá tham khảo) **chỉ khi** giá tham khảo đúng theo `unit_CMS` (r2, U13); không có giá phù hợp → bỏ câu ước tính. Không có SP nào chưa đạt → ẩn khối.
 - **Target nhóm danh mục**: thanh + "x / target · tên các SP trong nhóm" + badge Đã đạt / Chưa đạt.
@@ -138,7 +140,7 @@ Thứ tự khối:
 - Thẻ tổng: chữ phụ tên chương trình + badge trạng thái chương trình, số CMS lớn, 3 ô (đơn có SP CMS · SP tư vấn bán · GMV), câu ghi chú theo trạng thái (Tạm tính / Chờ chốt kỳ / Đã chốt).
 - **Hiệu quả tư vấn theo sản phẩm**: mỗi SP 1 hàng (tên, CMS, thanh so với SP cao nhất, "N SP · bậc k" hoặc "chưa đạt target …").
 - **Dòng đơn được tính**: danh sách thẻ (không dùng bảng trên mobile): "{SP} × {qty}", "Đơn #… · dd/mm · hh:mm", badge trạng thái dòng, tiền bên phải + dòng phụ cách tính ("4 × 12.000đ", "GMV 54% target"; "Khách trả hàng" chỉ khi Q-206 chốt — U18). Phân trang "Xem thêm" 20 dòng.
-- Chương trình "Chờ chốt kỳ": vẫn hiện dòng (tạm tính) — canvas đang ẩn, **theo spec: hiện**. P2 đọc `cms_result_lines` của phiên hiện hành; chương trình "Đã chốt" đọc `cms_payout_lines` là P3 (HOLD — U14).
+- Chương trình "Chờ chốt kỳ": vẫn hiện dòng (tạm tính) — canvas đang ẩn, **theo spec: hiện**. P2 đọc `cms_result_lines` của phiên hiện hành; P3a r2: chương trình "Đã chốt" vẫn trong danh sách, đọc dòng của run đóng băng, ghi chú "Đã chốt kỳ — số đã chốt" (U14).
 
 ## 5. Nghiệm thu UI
 

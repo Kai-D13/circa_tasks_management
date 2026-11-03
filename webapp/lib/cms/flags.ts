@@ -29,3 +29,26 @@ export function isCmsEarningsEnabled(): boolean {
   const f = cmsFlagsFromEnv(process.env)
   return f.program && f.earnings
 }
+
+/** Chốt kỳ / chi trả (P3a) chỉ khi CẢ BA cờ program + earnings + lock bật — chốt dựa trên kết quả P2. */
+export function cmsLockEnabledFromEnv(env: Env): boolean {
+  const f = cmsFlagsFromEnv(env)
+  return f.program && f.earnings && f.lock
+}
+
+export function isCmsLockEnabled(): boolean {
+  return cmsLockEnabledFromEnv(process.env)
+}
+
+/**
+ * Server QA (PM r1 PKG-P1-2): launcher `scripts/cms-qa-run.mjs` luôn đặt CMS_QA_SERVER=1 cho server localhost của run QA ⇒
+ * action chốt từ UI bị từ chối TRƯỚC RPC (chỉ đọc: preview / số đã chốt / XLSX vẫn chạy). Chốt QA chỉ qua công cụ có gate +
+ * sổ ý định (`scripts/cms-qa-results.mjs lock`). Chiều an toàn: đặt nhầm trên app thật chỉ làm khoá nút chốt, không mở quyền.
+ */
+export function cmsQaServerFromEnv(env: Env): boolean {
+  return env.CMS_QA_SERVER === '1'
+}
+
+export function isCmsQaServer(): boolean {
+  return cmsQaServerFromEnv(process.env)
+}

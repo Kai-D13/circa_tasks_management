@@ -53,9 +53,12 @@ test.describe('CMS P1-d · kiểm tĩnh @desktop', () => {
     expect(s).not.toContain('supabaseAdmin')
     const sc = read('lib/cms/server/staffCatalog.ts')
     expect(sc).not.toContain('supabaseAdmin')
-    // D2 lọc trạng thái / hạn ngay ở truy vấn chương trình (phòng thủ chiều sâu, security-reviewer P2) + kiểm lại ở app.
-    expect(sc).toContain(".eq('status', 'active').gte('end_date', today).maybeSingle()")
-    expect(sc).toContain("program.status !== 'active' || program.endDate < today")
+    // D2 lọc trạng thái ngay ở truy vấn chương trình (phòng thủ chiều sâu, security-reviewer P2) + kiểm lại ở app.
+    // P3a r2 (PM r1 PKG-P1-1): active (mọi ngày — gồm Chờ chốt kỳ) + locked; nháp không bao giờ; phạm vi vẫn do RLS phiên.
+    expect(sc).toContain("export const CMS_STAFF_PROGRAM_STATUSES = ['active', 'locked'] as const")
+    expect(sc).toContain(".in('status', [...CMS_STAFF_PROGRAM_STATUSES]).maybeSingle()")
+    expect(sc).toContain('!(CMS_STAFF_PROGRAM_STATUSES as readonly string[]).includes(program.status)')
+    expect(sc).not.toContain("gte('end_date'")
   })
   test('màn staff: không <img>; không gọi action; số liệu P2 chỉ khi `results` được truyền (mặc định off = P1)', () => {
     const dir = path.join(ROOT, 'components/cms/staff')

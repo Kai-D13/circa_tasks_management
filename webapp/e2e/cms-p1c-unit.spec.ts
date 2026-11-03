@@ -96,7 +96,8 @@ test.describe('CMS P1-c · model A1 @desktop', () => {
     expect(cmsParseListFilter('draft', false)).toBe('all')
     expect(cmsParseListFilter('draft', true)).toBe('draft')
     expect(cmsParseListFilter('xyz', true)).toBe('all')
-    expect(cmsParseListFilter('locked', false)).toBe('all')
+    // P3a r2 (PM r1 §4 Q-219): SM có lọc Đã chốt (123 cho SM đọc 'locked' trong phạm vi) — trước r2 là 'all'.
+    expect(cmsParseListFilter('locked', false)).toBe('locked')
     expect(cmsParseListFilter('waiting_close', false)).toBe('waiting_close')
     expect(cmsBuildListModel(CMS_FX_LIST, { canManage: false, today: CMS_FX_TODAY, filter: 'all', q: '' }).rows.every((r) => r.lastImport === null)).toBe(true)
   })

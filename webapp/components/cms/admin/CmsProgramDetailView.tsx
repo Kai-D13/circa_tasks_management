@@ -11,6 +11,9 @@ import { CmsTierChips } from '@/components/cms/CmsTierChips'
 import { CmsActivateButton } from '@/components/cms/admin/CmsActivateButton'
 import { CmsErrorFileLink } from '@/components/cms/admin/CmsErrorFileLink'
 import { CmsA3CatalogBlock, CmsA3ProductResult, CmsA3StaffTab, CmsA3StatCards, CmsA3SyncLine } from '@/components/cms/admin/CmsProgramResults'
+import { CmsLockPanel } from '@/components/cms/admin/CmsLockPanel'
+import { CmsPayoutPanel } from '@/components/cms/admin/CmsPayoutPanel'
+import type { CmsLockPreviewDto, CmsPayoutDto } from '@/lib/cms/payoutView'
 import { cn } from '@/lib/utils'
 import { CMS_GATE_HUE, CMS_GATE_LABEL, cmsBaseQtyLine, cmsDate, cmsDateRange, cmsDateTime, cmsPrice, cmsVnd } from '@/lib/cms/display'
 import {
@@ -25,12 +28,14 @@ import type { CmsResultRowDto } from '@/lib/cms/resultView'
 // lượt đạt…), không Xuất Excel / Chốt kỳ (P2 / P3). Nút quản trị theo SPEC §4.7, chỉ super; SM chỉ đọc.
 // P2-c (I3): `results` (mặc định 'off' ⇒ P1 nguyên trạng) — cờ CMS_EARNINGS_ENABLED + chương trình đã bắt đầu: 4 ô kết quả,
 // trạng thái đồng bộ, khối danh mục, cột kết quả theo SP (+ bảng con theo dược sĩ), tab Theo dược sĩ (super thấy nhóm Chưa gán),
-// Xuất Excel cùng run. SM: phạm vi theo RPC 122 (nhà thuốc được phân công). Chốt kỳ (P3) vẫn ẩn.
+// Xuất Excel cùng run. SM: phạm vi theo RPC 122 (nhà thuốc được phân công).
+// P3a (cờ program + earnings + lock): khối Chốt kỳ (super, chương trình đã hết kỳ — CmsLockPanel) và Số đã chốt (super + SM,
+// chương trình locked — CmsPayoutPanel, phạm vi hiện tại Q-208 / Q-217, file chi trả). Cờ lock OFF ⇒ cả hai ẩn.
 export type CmsDetailView = 'products' | 'staff' | 'runs'
 
 const BTN = 'h-[44px] md:h-[36px] gap-1.5 text-[13px]'
 
-export function CmsProgramDetailView({ detail, today, canManage, view, results = { kind: 'off' }, eligibleStaffIds = null, storeNames = new Map(), staffPage = 1 }: {
+export function CmsProgramDetailView({ detail, today, canManage, view, results = { kind: 'off' }, eligibleStaffIds = null, storeNames = new Map(), staffPage = 1, lock = null, payout = null }: {
   detail: CmsProgramDetail
   today: string
   canManage: boolean
@@ -40,6 +45,10 @@ export function CmsProgramDetailView({ detail, today, canManage, view, results =
   eligibleStaffIds?: string[] | null
   storeNames?: Map<string, string>
   staffPage?: number
+  /** P3a: khối Chốt kỳ (chỉ super + cờ lock + chương trình đã hết kỳ) — null ⇒ ẩn. */
+  lock?: { preview: CmsLockPreviewDto | null; error: string | null; qaReadonly?: boolean } | null
+  /** P3a: số đã chốt (chương trình locked + cờ lock) — null ⇒ ẩn. */
+  payout?: { data: CmsPayoutDto | null; error: string | null } | null
 }) {
   const p = detail.program
   const display = cmsDisplayStatus(p, today)
@@ -111,6 +120,8 @@ export function CmsProgramDetailView({ detail, today, canManage, view, results =
         {hasCatalog && <StatCard label="Target danh mục" value={<span className="tabular-nums">{cmsVnd(p.catalogTargetGmv)}</span>} />}
       </div>
 
+      {payout && <CmsPayoutPanel programId={p.id} payout={payout.data} error={payout.error} />}
+      {lock && <CmsLockPanel programId={p.id} preview={lock.preview} loadError={lock.error} qaReadonly={lock.qaReadonly === true} />}
       {loaded && <CmsA3SyncLine header={loaded.header} isSuper={canManage} />}
       {loaded && <CmsA3StatCards stats={stats} />}
       {run && loaded && hasCatalog && loaded.rows.catalog.length > 0 &&<CmsA3CatalogBlock catalog={loaded.rows.catalog} target={p.catalogTargetGmv} />}

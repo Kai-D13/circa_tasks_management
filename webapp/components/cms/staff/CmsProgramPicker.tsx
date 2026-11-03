@@ -8,11 +8,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { cn } from '@/lib/utils'
 import { cmsDate, cmsDateRange } from '@/lib/cms/display'
 import { CMS_STATUS_LABEL, CMS_STATUS_TONE, cmsDisplayStatus } from '@/lib/cms/programStatus'
-import { cmsStaffHref } from '@/lib/cms/staffView'
+import { cmsGroupStaffPrograms, cmsStaffHref } from '@/lib/cms/staffView'
 import type { CmsProgramRowView } from '@/lib/cms/server/catalog'
 
 // CMS P1-d (UI §4.1) — chọn chương trình: nút 52px mở danh sách chương trình đang áp dụng (`?program=`, link — không gọi
 // máy chủ ghi). Chỉ 1 chương trình ⇒ nhãn, không mở danh sách. Sắp diễn ra ghi "Bắt đầu dd/mm".
+// P3a r2 (PM r1 PKG-P1-1): hai nhóm "Đang áp dụng" (Đang chạy / Sắp diễn ra) và "Đã kết thúc" (Chờ chốt kỳ / Đã chốt) —
+// lối xem lại số sau hết kỳ ngay trong bộ chọn sẵn có (không màn riêng, không đổi BottomNav).
 function Meta({ p, today }: { p: CmsProgramRowView; today: string }) {
   const d = cmsDisplayStatus(p, today)
   return (
@@ -27,6 +29,7 @@ export function CmsProgramPicker({ programs, selectedId, today }: { programs: Cm
   const [open, setOpen] = useState(false)
   const selected = programs.find((p) => p.id === selectedId) ?? programs[0]
   if (!selected) return null
+  const groups = cmsGroupStaffPrograms(programs, today)
   if (programs.length === 1) {
     return (
       <div data-cms-program-label className="space-y-1 rounded-v2-panel border bg-card px-4 py-3">
@@ -56,24 +59,31 @@ export function CmsProgramPicker({ programs, selectedId, today }: { programs: Cm
           <DialogHeader>
             <DialogTitle>Chọn chương trình CMS</DialogTitle>
           </DialogHeader>
-          <ul data-cms-program-list className="max-h-[60vh] divide-y overflow-y-auto">
-            {programs.map((p) => (
-              <li key={p.id}>
-                <Link
-                  href={cmsStaffHref(p.id)}
-                  onClick={() => setOpen(false)}
-                  aria-current={p.id === selected.id ? 'true' : undefined}
-                  className={cn('flex min-h-[52px] items-center gap-3 py-2', p.id === selected.id && 'font-semibold')}
-                >
-                  <span className="min-w-0 flex-1 space-y-1">
-                    <span className="leading-snug line-clamp-2 break-words">{p.name}</span>
-                    <Meta p={p} today={today} />
-                  </span>
-                  {p.id === selected.id && <Check aria-hidden="true" className="h-4 w-4 shrink-0" />}
-                </Link>
-              </li>
+          <div data-cms-program-list className="max-h-[60vh] space-y-3 overflow-y-auto">
+            {([['current', 'Đang áp dụng', groups.current], ['ended', 'Đã kết thúc', groups.ended]] as const).map(([key, title, list]) => list.length > 0 && (
+              <section key={key} data-cms-program-group={key} aria-label={title}>
+                {groups.ended.length > 0 && <h3 className="pb-1 text-[12px] font-semibold uppercase tracking-wide text-muted-foreground">{title}</h3>}
+                <ul className="divide-y">
+                  {list.map((p) => (
+                    <li key={p.id}>
+                      <Link
+                        href={cmsStaffHref(p.id)}
+                        onClick={() => setOpen(false)}
+                        aria-current={p.id === selected.id ? 'true' : undefined}
+                        className={cn('flex min-h-[52px] items-center gap-3 py-2', p.id === selected.id && 'font-semibold')}
+                      >
+                        <span className="min-w-0 flex-1 space-y-1">
+                          <span className="leading-snug line-clamp-2 break-words">{p.name}</span>
+                          <Meta p={p} today={today} />
+                        </span>
+                        {p.id === selected.id && <Check aria-hidden="true" className="h-4 w-4 shrink-0" />}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </section>
             ))}
-          </ul>
+          </div>
         </DialogContent>
       </Dialog>
     </>

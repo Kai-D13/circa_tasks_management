@@ -3,7 +3,7 @@ import * as R from './cmsQaResults'
 import { newCmsQaManifest, type CmsQaRunManifest, type CmsQaStatusRow } from './cmsQaTooling'
 import { cmsQaWriterGate, CMS_QA_MARKER } from './writeQaGates'
 import { createCmsFixtureRunner } from './cmsFixtureRunner'
-import { runCmsSalesSync, type CmsSalesSyncDeps } from '../lib/cms/salesSync'
+import { cmsBudget, runCmsSalesSync, CMS_SALES_STOP_RESERVE_MS, CMS_RPC_START_MIN_MS, type CmsSalesSyncDeps } from '../lib/cms/salesSync'
 import { normalizeSalesRow } from '../lib/cms/source/contract'
 import { parseUtcMicros, vnDateOfMicros } from '../lib/cms/time'
 
@@ -266,6 +266,61 @@ test.describe('CMS QA kết quả — preflight và guard @desktop', () => {
     expect(seen[0]).toBeLessThanOrEqual(30_000)
   })
 
+  test('PM r2 P2: đồng hồ có phần lẻ — mọi timeout I/O nguyên, ≤ phần còn lại, AbortSignal.timeout THẬT nhận (biên 12 s / 20 s / 50 s)', async () => {
+    // Đúng loại lỗi Node cần chặn (Node 24: ERR_OUT_OF_RANGE) — nếu Node đổi hành vi, test vẫn ép số nguyên ở dưới.
+    expect(() => AbortSignal.timeout(12_000.25)).toThrow()
+    // Đồng hồ writer: nguyên, không giảm, kể cả timeOrigin / now có phần lẻ.
+    let pt = 0.37
+    const mono = R.cmsQaMonoClock({ timeOrigin: 1_762_164_900_123.618, now: () => (pt += 0.41) })
+    const ticks = Array.from({ length: 50 }, () => mono())
+    expect(ticks.every((x) => Number.isInteger(x))).toBe(true)
+    expect(ticks.every((x, i) => i === 0 || x >= ticks[i - 1])).toBe(true)
+    // Helper biên: floor, sàn, NaN ⇒ ném.
+    expect(R.cmsQaIoTimeoutMs(30_000, 19_999.75)).toBe(19_999)
+    expect(R.cmsQaIoTimeoutMs(30_000, 400.5, 1_000)).toBe(1_000)
+    expect(() => R.cmsQaIoTimeoutMs(30_000, Number.NaN)).toThrow(R.CMS_QA_GUARD_DEADLINE)
+    for (const leftMs of [12_000, 20_000, 50_000]) {
+      // Lõi: work / stop / sourceMs từ đồng hồ lẻ.
+      const b = cmsBudget(() => 0.25, leftMs + CMS_SALES_STOP_RESERVE_MS)
+      for (const ms of [b.work().timeoutMs, b.stop().timeoutMs, b.sourceMs()]) {
+        expect(Number.isInteger(ms)).toBe(true)
+        expect(() => AbortSignal.timeout(ms)).not.toThrow()
+      }
+      expect(b.work().timeoutMs).toBeLessThanOrEqual(leftMs)
+      // Lõi + wrapper: mỗi deps gọi AbortSignal.timeout thật; đồng hồ lẻ tăng dần giữa các lần gọi.
+      let t = 0.25
+      const now = () => (t += 0.37)
+      const seen: Array<[string, number]> = []
+      const io = (fn: string, x: { timeoutMs: number }) => { seen.push([fn, x.timeoutMs]); AbortSignal.timeout(x.timeoutMs) }
+      const f = coreDeps(R.cmsQaFakeSalesRows(fakeIn({ linesPerStaff: 5 })), {
+        now,
+        loadSnapshot: async (_id: string, x: { timeoutMs: number }) => { io('loadSnapshot', x); return snapshot() },
+        openRun: async (_id: string, _d: unknown, x: { timeoutMs: number }) => { io('openRun', x); return { ...snapshot(), run_id: uid(99) } },
+        stage: async (_r: string, _p: string, _n: number, rows: unknown[], x: { timeoutMs: number }) => { io('stage', x); return rows.length },
+        sealBegin: async (_r: string, _e: unknown, x: { timeoutMs: number }) => { io('sealBegin', x); return { ok: true } },
+        sealStep: async (_r: string, n: number, x: { timeoutMs: number }) => { io('sealStep', x); return n === 10 ? { sealed: true } : { ok: true } },
+        publish: async (_r: string, x: { timeoutMs: number }) => { io('publish', x); return { published: true } },
+        finish: async (_r: string, _s: string, _d: unknown, x: { timeoutMs: number }) => { io('finish', x) },
+        cleanup: async (_p: string, _m: number, x: { timeoutMs: number }) => { io('cleanup', x); return { purged: 0, deleted: 0, more: false } },
+      })
+      const workUntil = leftMs // đồng hồ bắt đầu ở 0,25 ⇒ phần còn lại < leftMs, có phần lẻ
+      const deps = R.cmsQaGuardedDeps(f.deps, async () => { t += 0.29 }, { clock: { now, workUntil, minStartMs: CMS_RPC_START_MIN_MS } })
+      const r = await runCmsSalesSync(deps, PROG, { dryRun: false, source: 'qa', deadlineAt: workUntil + CMS_SALES_STOP_RESERVE_MS })
+      expect([leftMs, r.status, r.code]).toEqual([leftMs, 'published', null])
+      expect(seen.map((s) => s[0])).toEqual(expect.arrayContaining(['loadSnapshot', 'openRun', 'stage', 'sealBegin', 'sealStep', 'publish', 'cleanup']))
+      expect(seen.filter(([, ms]) => !Number.isInteger(ms) || ms <= 0)).toEqual([])
+      expect(seen.filter(([fn, ms]) => fn !== 'cleanup' && fn !== 'finish' && ms > leftMs)).toEqual([])
+    }
+    // finish (đóng run khi guard mất) cũng đi qua biên số nguyên.
+    let t2 = 0.25
+    const now2 = () => (t2 += 0.37)
+    const fin: number[] = []
+    const g = coreDeps(R.cmsQaFakeSalesRows(fakeIn({ linesPerStaff: 5 })), { now: now2, finish: async (_r: string, _s: string, _d: unknown, x: { timeoutMs: number }) => { fin.push(x.timeoutMs); AbortSignal.timeout(x.timeoutMs) } })
+    const dg = R.cmsQaGuardedDeps(g.deps, async (s) => { if (s === 'stage') throw new Error('mất') }, { clock: { now: now2, workUntil: 21_000, minStartMs: CMS_RPC_START_MIN_MS } })
+    const rg = await runCmsSalesSync(dg, PROG, { dryRun: false, source: 'qa', deadlineAt: 21_000 + CMS_SALES_STOP_RESERVE_MS })
+    expect([rg.status, rg.code, fin.length, fin.every((x) => Number.isInteger(x))]).toEqual(['error', R.CMS_QA_GUARD_LOST, 1, true])
+  })
+
   test('QA-P1-2: ghi sổ ngay sau openRun lỗi ⇒ CMS_QA_LEDGER_FAILED, dừng trước stage; kết quả ⇒ sổ `unknown`', async () => {
     const f = coreDeps(R.cmsQaFakeSalesRows(fakeIn()))
     const deps = R.cmsQaGuardedDeps(f.deps, async () => {}, { clock: farClock().clock, onOpened: async () => { throw new Error('EPERM') } })
@@ -367,5 +422,206 @@ test.describe('CMS QA kết quả — sổ writer và đối chiếu close @desk
       expect(c.ok, JSON.stringify(bad)).toBe(false)
     }
     expect(R.cmsQaReconcileCheck(entry(), [run({ status: 'running' }), run({ id: uid(97), status: 'running' })], false)).toMatchObject({ ok: false })
+  })
+})
+
+// ── P3a — QA chốt có gate + sổ ý định (work order 03/11 §4.2) ─────────────────
+test.describe('CMS QA chốt (P3a) — tham số, cờ process, sổ ý định, reconcile, close @desktop', () => {
+  const RUN_X = uid(31), OP = 'l-0123456789ab', OP2 = 'l-ba9876543210'
+  const lockEntry = (o: Partial<R.CmsQaLockEntry> = {}): R.CmsQaLockEntry => ({
+    ...R.newCmsQaLockEntry({ operationId: OP, qaRunId: RUN, pid: 4243, programId: PROG, actorId: SUPER, expectedRunId: RUN_X, policyVersion: 1, ack: false, now: '2026-11-03T10:20:00.000Z' }),
+    ...o,
+  })
+  const done = (o: Partial<R.CmsQaLockEntry> = {}) => lockEntry({ status: 'done', finishedAt: '2026-11-03T10:20:01.000Z',
+    result: { ok: true, code: null, already: false, runId: RUN_X, amountVnd: '120000' }, ...o })
+  const unknownResult = { ok: false, code: 'UNKNOWN_OUTCOME', already: false, runId: null, amountVnd: null }
+
+  test('cờ LOCK chỉ từ biến PROCESS: đủ 3 cờ ⇒ đạt; thiếu cờ nào nêu cờ đó; .env.local có CMS_LOCK_ENABLED=true ⇒ gate chặn', () => {
+    expect(R.cmsQaLockFlagsOk({ CMS_PROGRAM_ENABLED: 'true', CMS_EARNINGS_ENABLED: 'true', CMS_LOCK_ENABLED: 'true' })).toEqual({ ok: true })
+    const r = R.cmsQaLockFlagsOk({ CMS_PROGRAM_ENABLED: 'true', CMS_LOCK_ENABLED: 'true' })
+    expect(r.ok).toBe(false)
+    if (!r.ok) { expect(r.reason).toMatch(/CMS_EARNINGS_ENABLED=true/); expect(r.reason).not.toMatch(/CMS_PROGRAM_ENABLED/) }
+    expect(R.cmsQaLockFlagsOk({ CMS_PROGRAM_ENABLED: 'true', CMS_EARNINGS_ENABLED: 'true', CMS_LOCK_ENABLED: '1' }).ok).toBe(false)
+    const env = { E2E_CMS_WRITE_QA: 'YES', E2E_EXPECTED_SUPABASE_HOST: 'db.example.test', NEXT_PUBLIC_SUPABASE_URL: 'https://db.example.test' }
+    for (const text of ['CMS_LOCK_ENABLED=true\n', 'export CMS_LOCK_ENABLED = "true" # thử\n']) {
+      const g = cmsQaWriterGate({ env, envFileText: text, markerExists: true })
+      expect(g.ok, text).toBe(false)
+      if (!g.ok) expect(g.reason).toMatch(/CMS_LOCK_ENABLED=true đang nằm trong \.env\.local/)
+    }
+    expect(cmsQaWriterGate({ env, envFileText: 'CMS_LOCK_ENABLED=false\n', markerExists: true }).ok).toBe(true)
+  })
+
+  test('tham số: actor bắt buộc; lock cần --expect-run + --policy-version; preview không nhận; lý do chuẩn hoá như action', () => {
+    expect(R.parseCmsQaLockArgs({ actor: SUPER.toUpperCase() }, false)).toEqual({ ok: true, value: { actorId: SUPER, expectedRunId: null, policyVersion: null, ack: null } })
+    expect(R.parseCmsQaLockArgs({ actor: SUPER, expectRun: RUN_X, policyVersion: '1', ack: '  Đã soát dòng chưa gán  ' }, true))
+      .toEqual({ ok: true, value: { actorId: SUPER, expectedRunId: RUN_X, policyVersion: 1, ack: 'Đã soát dòng chưa gán' } })
+    const bad: [Parameters<typeof R.parseCmsQaLockArgs>[0], boolean, RegExp][] = [
+      [{}, true, /--actor/],
+      [{ actor: 'x' }, false, /--actor/],
+      [{ actor: SUPER, expectRun: RUN_X }, false, /lock-preview không nhận/],
+      [{ actor: SUPER, policyVersion: '1' }, true, /--expect-run/],
+      [{ actor: SUPER, expectRun: 'abc', policyVersion: '1' }, true, /--expect-run/],
+      [{ actor: SUPER, expectRun: RUN_X }, true, /--policy-version/],
+      [{ actor: SUPER, expectRun: RUN_X, policyVersion: '0' }, true, /--policy-version/],
+      [{ actor: SUPER, expectRun: RUN_X, policyVersion: '1.5' }, true, /--policy-version/],
+      [{ actor: SUPER, expectRun: RUN_X, policyVersion: '1', ack: '   ngắn   ' }, true, /--ack/],
+      [{ actor: SUPER, expectRun: RUN_X, policyVersion: '1', ack: 'x'.repeat(1001) }, true, /--ack/],
+    ]
+    for (const [v, forLock, re] of bad) {
+      const r = R.parseCmsQaLockArgs(v, forLock)
+      expect(r.ok, JSON.stringify(v)).toBe(false)
+      if (!r.ok) expect(r.reason).toMatch(re)
+    }
+  })
+
+  test('kiểm cục bộ: như writer + actor là QA vai admin của run (staff / SM / ngoài run ⇒ chặn)', () => {
+    type In = Parameters<typeof R.cmsQaLockLocalCheck>[0]
+    const local = (o: Partial<In> = {}) => R.cmsQaLockLocalCheck({
+      manifest: manifest(), confirmRun: RUN, host: 'db.example.test', treeClean: true, gitHead: HEAD, gitTree: TREE, launcherAlive: true, actorId: SUPER, ...o,
+    })
+    expect(local()).toEqual({ ok: true })
+    const cases: [Partial<In>, RegExp][] = [
+      [{ manifest: null }, /không có run QA đang mở/],
+      [{ actorId: A }, /không phải tài khoản QA vai admin/],
+      [{ actorId: SM }, /không phải tài khoản QA vai admin/],
+      [{ actorId: REAL }, /không phải tài khoản QA vai admin/],
+      [{ launcherAlive: false }, /launcher \/ server QA của run không còn chạy/],
+      [{ treeClean: false }, /cây Git không sạch/],
+      [{ confirmRun: undefined }, /thiếu --confirm-run/],
+    ]
+    for (const [o, re] of cases) {
+      const r = local(o)
+      expect(r.ok, JSON.stringify(o)).toBe(false)
+      if (!r.ok) expect(r.reasons.join(' | ')).toMatch(re)
+    }
+  })
+
+  test('sổ ý định: đủ khoá vết (qa_run_id, operation_id, program, expected run, policy) trước RPC; parse từ chối sổ hỏng; outcome', () => {
+    const e = lockEntry()
+    expect(e).toMatchObject({ kind: 'cms-qa-lock', status: 'intent', operationId: OP, qaRunId: RUN, programId: PROG, expectedRunId: RUN_X, policyVersion: 1, result: null })
+    expect(JSON.stringify(e)).not.toMatch(/@/)
+    expect(R.parseCmsQaLockEntry(JSON.stringify(e))).toEqual({ ok: true, value: e })
+    expect(R.parseCmsQaLockEntry(JSON.stringify(done()))).toMatchObject({ ok: true })
+    for (const bad of ['{', JSON.stringify({ ...e, kind: 'cms-qa-writer' }), JSON.stringify({ ...e, operationId: 'w-0123456789ab' }),
+      JSON.stringify({ ...e, expectedRunId: 'x' }), JSON.stringify({ ...e, policyVersion: 0 }), JSON.stringify({ ...e, status: 'done' }),
+      JSON.stringify({ ...e, status: 'reconciled' }), JSON.stringify({ ...e, status: 'lạ' })]) {
+      expect(R.parseCmsQaLockEntry(bad).ok, bad.slice(0, 80)).toBe(false)
+    }
+    expect(() => R.newCmsQaLockEntry({ operationId: 'l-xyz', qaRunId: RUN, pid: 1, programId: PROG, actorId: SUPER, expectedRunId: RUN_X, policyVersion: 1, ack: false, now: 'x' })).toThrow()
+    expect(R.cmsQaLockOutcome({ ok: true })).toBe('done')
+    expect(R.cmsQaLockOutcome({ ok: false, code: 'UNKNOWN_OUTCOME' })).toBe('unknown')
+    for (const c of ['CMS_LOCK_RUN_CHANGED', 'BUSY', 'QUERY_FAILED', 'CMS_PROGRAM_LOCKED']) expect(R.cmsQaLockOutcome({ ok: false, code: c })).toBe('rejected')
+    expect(R.cmsQaLockClaimedRun(done())).toBe(RUN_X)
+    expect(R.cmsQaLockClaimedRun(lockEntry())).toBeNull()
+    const pending = R.cmsQaPendingLockOps([lockEntry(), done({ operationId: OP2 }), lockEntry({ operationId: OP2, status: 'unknown', result: unknownResult }),
+      lockEntry({ programId: uid(2) })], PROG)
+    expect(pending.map((x) => x.status)).toEqual(['intent', 'unknown'])
+  })
+
+  test('reconcile: payout khớp ⇒ đã chốt (mất phản hồi sau commit); lệch ⇒ điều tra; không payout ⇒ chưa chốt CHỈ khi hết phiên chốt + qua thời gian lắng', () => {
+    const t0 = Date.parse('2026-11-03T10:20:00.000Z')
+    const row = (o: Partial<R.CmsQaLockStateRow> = {}): R.CmsQaLockStateRow => ({ program_id: PROG, status: 'active', is_test: true, run_id: null, locked_by: null, locked_at: null, ...o })
+    const unk = lockEntry({ status: 'unknown', finishedAt: '2026-11-03T10:20:05.000Z', result: unknownResult })
+    const probe = (o: Partial<R.CmsQaLockProbeRow> = {}): R.CmsQaLockProbeRow => ({ can_see_all: true, tracking: true, hidden: 0, inflight: 0, payout_writers: 0, ...o })
+    const opt = (o: { pidAlive?: boolean; nowMs?: number; probe?: R.CmsQaLockProbeRow | undefined } = {}) => ({ pidAlive: false, nowMs: t0 + 10 * 60_000, probe: probe(), ...o })
+    expect(R.cmsQaLockReconcileCheck(unk, row({ status: 'locked', run_id: RUN_X, locked_by: SUPER, locked_at: '2026-11-03 10:20:00+00' }), opt()))
+      .toEqual({ ok: true, locked: true, payout: { programId: PROG, runId: RUN_X, lockedBy: SUPER, lockedAt: '2026-11-03 10:20:00+00', isTest: true } })
+    expect(R.cmsQaLockReconcileCheck(lockEntry(), row({ status: 'locked', run_id: RUN_X, locked_by: SUPER }), opt())).toMatchObject({ ok: true, locked: true })
+    expect(R.cmsQaLockReconcileCheck(unk, row(), opt())).toEqual({ ok: true, locked: false, payout: null })
+    const no = (e: R.CmsQaLockEntry, r: R.CmsQaLockStateRow | undefined, o = opt()) => {
+      const c = R.cmsQaLockReconcileCheck(e, r, o)
+      expect(c.ok).toBe(false)
+      return c.ok ? null : c
+    }
+    expect(no(lockEntry(), row(), opt({ pidAlive: true }))).toMatchObject({ wait: true, reason: expect.stringMatching(/còn chạy/) })
+    expect(no(done(), row())?.reason).toMatch(/kết quả xác định/)
+    expect(no(lockEntry({ status: 'reconciled', reconcile: { at: 'x', locked: false, payout: null } }), row())?.reason).toMatch(/đã reconciled/)
+    expect(no(unk, undefined)?.reason).toMatch(/không có chương trình/)
+    expect(no(unk, row({ is_test: false }))?.reason).toMatch(/không phải is_test/)
+    expect(no(unk, row({ status: 'locked', run_id: uid(99), locked_by: SUPER }))?.reason).toMatch(/KHÔNG khớp/)
+    expect(no(unk, row({ status: 'locked', run_id: RUN_X, locked_by: uid(98) }))?.reason).toMatch(/KHÔNG khớp/)
+    expect(no(unk, row({ status: 'locked' }))?.reason).toMatch(/không có payout/)
+    expect(no(unk, row(), opt({ probe: probe({ inflight: 1 }) }))).toMatchObject({ wait: true, reason: expect.stringMatching(/phiên DB đang chạy/) })
+    // db-review P2-3: transaction chốt "idle in transaction" (query đã đổi) vẫn giữ RowExclusiveLock trên bảng payout ⇒ chờ.
+    expect(no(unk, row(), opt({ probe: probe({ payout_writers: 1 }) }))).toMatchObject({ wait: true, reason: expect.stringMatching(/khoá ghi bảng payout/) })
+    // Không chứng minh được (vai không thấy query mọi phiên / track_activities tắt / phiên ẩn / thiếu lượt dò) ⇒ không kết luận, không "chờ".
+    for (const p of [probe({ can_see_all: false }), probe({ tracking: false }), probe({ hidden: 2 }), undefined]) {
+      const c = no(unk, row(), opt({ probe: p }))
+      expect(c?.reason).toMatch(/không chứng minh được/)
+      expect(c?.wait).toBeUndefined()
+    }
+    // Payout khớp sổ ⇒ đã chốt, không cần lượt dò (kể cả dò thất bại).
+    expect(R.cmsQaLockReconcileCheck(unk, row({ status: 'locked', run_id: RUN_X, locked_by: SUPER }), opt({ probe: undefined }))).toMatchObject({ ok: true, locked: true })
+    const fin = Date.parse('2026-11-03T10:20:05.000Z')
+    expect(no(unk, row(), opt({ nowMs: fin + R.CMS_QA_LOCK_SETTLE_MS - 1 }))).toMatchObject({ wait: true, reason: expect.stringMatching(/thời gian lắng/) })
+    expect(R.cmsQaLockReconcileCheck(unk, row(), opt({ nowMs: fin + R.CMS_QA_LOCK_SETTLE_MS }))).toMatchObject({ ok: true, locked: false })
+  })
+
+  test('close: thao tác chốt còn chạy / không rõ ⇒ ĐỎ; payout QA phải khớp sổ (chốt ngoài sổ ⇒ ĐỎ); sổ nói đã chốt mà DB không có ⇒ ĐỎ; thật do QA ⇒ ĐỎ', () => {
+    const f = (e: R.CmsQaLockEntry, name = `${e.operationId}.json`) => ({ name, text: JSON.stringify(e) })
+    const red = (files: { name: string; text: string }[], alive = false) => R.cmsQaLocksCloseCheck(RUN, files, () => alive).reasons.join(' | ')
+    expect(red([f(lockEntry())], true)).toMatch(/CÒN CHẠY/)
+    expect(red([f(lockEntry())])).toMatch(/không rõ kết thúc.*reconcile --writer=l-0123456789ab/)
+    expect(red([f(lockEntry({ status: 'unknown', result: unknownResult }))])).toMatch(/KẾT QUẢ KHÔNG RÕ/)
+    expect(red([f(done(), 'l-ffffffffffff.json')])).toMatch(/sai tên file/)
+    expect(red([f(done({ qaRunId: 'cms-qa-20261103T101500-ffff' }))])).toMatch(/thuộc run khác/)
+    expect(red([{ name: `${OP}.json`, text: '{' }])).toMatch(/hỏng/)
+    const rejected = lockEntry({ operationId: OP2, status: 'rejected', result: { ok: false, code: 'CMS_LOCK_RUN_CHANGED', already: false, runId: null, amountVnd: null } })
+    expect(R.cmsQaLocksCloseCheck(RUN, [f(done()), f(rejected)], () => false).reasons).toEqual([])
+
+    const pay = (o: Partial<R.CmsQaPayoutRow> = {}): R.CmsQaPayoutRow => ({ program_id: PROG, run_id: RUN_X, locked_by: SUPER, locked_at: '2026-11-03 10:20:00+00', is_test: true, program_is_test: true, program_status: 'locked', ...o })
+    const pc = (rows: R.CmsQaPayoutRow[], locks: R.CmsQaLockEntry[], payoutsTable = true) => R.cmsQaPayoutsCloseCheck(rows, locks, { qaUserIds: [SUPER, A, B, SM], payoutsTable })
+    const good = pc([pay()], [done()])
+    expect(good.reasons).toEqual([])
+    expect(good.payouts).toEqual([{ programId: PROG, runId: RUN_X, isTest: true, lockedAt: '2026-11-03 10:20:00+00', operationId: OP }])
+    const viaReconcile = lockEntry({ status: 'reconciled', reconcile: { at: 'x', locked: true, payout: { programId: PROG, runId: RUN_X, lockedBy: SUPER, lockedAt: 'x', isTest: true } } })
+    expect(pc([pay()], [viaReconcile]).reasons).toEqual([])
+    expect(pc([pay()], []).reasons.join(' | ')).toMatch(/chốt ngoài sổ/)
+    expect(pc([pay()], [lockEntry({ status: 'unknown', result: unknownResult })]).reasons.join(' | ')).toMatch(/chốt ngoài sổ .*mất phản hồi chưa reconcile/)
+    expect(pc([pay({ locked_by: uid(97) })], [done()]).reasons.join(' | ')).toMatch(/chốt ngoài sổ/)
+    expect(pc([pay({ run_id: uid(96) })], [done()]).reasons.join(' | ')).toMatch(/chốt ngoài sổ/)
+    expect(pc([], [done()]).reasons.join(' | ')).toMatch(/DB không có payout tương ứng/)
+    expect(pc([], [done()], false).reasons.join(' | ')).toMatch(/DB không có payout tương ứng/)
+    expect(pc([pay({ is_test: false, program_is_test: false, program_id: uid(95) })], []).reasons.join(' | ')).toMatch(/THẬT .* bị tài khoản QA của run chốt/)
+    const w = pc([pay({ is_test: false, program_is_test: false, program_id: uid(95), locked_by: uid(94) })], [])
+    expect(w.reasons).toEqual([])
+    expect(w.warningProgramIds).toEqual([uid(95)])
+    expect(R.cmsQaLedgerPartition(['w-0123456789ab.json', 'l-0123456789ab.json', 'x.json', 'l-xyz.json']))
+      .toEqual({ writers: ['w-0123456789ab.json'], locks: ['l-0123456789ab.json'], other: ['x.json', 'l-xyz.json'] })
+  })
+})
+
+test.describe('CMS QA chốt (P3a) — launcher chỉ mở cờ LOCK cho server QA khi opt-in (security review P1-1) @desktop', () => {
+  test('LOCK ở shell không opt-in ⇒ chặn; --with-lock cần EARNINGS + LOCK + server; DB phải có 123 và policy thật còn khoá', () => {
+    const L = (env: Record<string, string | undefined>, withLock: boolean, server = true) => R.cmsQaLauncherLockCheck({ processEnv: env, withLock, server })
+    expect(L({}, false)).toEqual({ ok: true, lock: false })
+    expect(L({ CMS_LOCK_ENABLED: 'false', CMS_EARNINGS_ENABLED: 'true' }, false)).toEqual({ ok: true, lock: false })
+    const no = (r: ReturnType<typeof L>) => (r.ok ? '' : r.reason)
+    expect(no(L({ CMS_LOCK_ENABLED: 'true', CMS_EARNINGS_ENABLED: 'true' }, false))).toMatch(/start --with-lock/)
+    expect(no(L({}, true))).toMatch(/--with-lock cần CMS_EARNINGS_ENABLED=true và CMS_LOCK_ENABLED=true/)
+    expect(no(L({ CMS_LOCK_ENABLED: 'true' }, true))).toMatch(/CMS_EARNINGS_ENABLED=true/)
+    expect(no(L({ CMS_LOCK_ENABLED: 'true', CMS_EARNINGS_ENABLED: 'true' }, true, false))).toMatch(/--no-server/)
+    expect(L({ CMS_LOCK_ENABLED: 'true', CMS_EARNINGS_ENABLED: 'true' }, true)).toEqual({ ok: true, lock: true })
+    expect(R.cmsQaLauncherLockDbCheck(true, 'false')).toEqual({ ok: true })
+    const db = (h: unknown, r: unknown) => { const c = R.cmsQaLauncherLockDbCheck(h, r); return c.ok ? '' : c.reason }
+    expect(db(false, null)).toMatch(/chưa có migration 123/)
+    expect(db(true, 'true')).toMatch(/policy chốt THẬT không còn khoá/)
+    expect(db(true, null)).toMatch(/policy chốt THẬT không còn khoá/)
+  })
+})
+
+test.describe('CMS QA chốt (P3a r2) — server QA chỉ đọc chốt (PM r1 PKG-P1-2) @desktop', () => {
+  test('launcher LUÔN đặt CMS_QA_SERVER=1 cho server con (có / không --with-lock); CLI lock (đường có sổ) không áp chỉ-đọc', async () => {
+    const fs = await import('node:fs')
+    const path = await import('node:path')
+    const run = fs.readFileSync(path.resolve(__dirname, '..', 'scripts', 'cms-qa-run.mjs'), 'utf8')
+    expect(run).toContain("const childEnv = { ...env, CMS_PROGRAM_ENABLED: 'true', CMS_QA_SERVER: '1', PORT: String(port), HOSTNAME: 'localhost' }")
+    expect(run).not.toMatch(/delete childEnv\.CMS_QA_SERVER/)
+    const cli = fs.readFileSync(path.resolve(__dirname, '..', 'scripts', 'cms-qa-results.mjs'), 'utf8')
+    expect(cli).toContain('qaReadonly: () => false,')
+    const { cmsQaServerFromEnv } = await import('../lib/cms/flags')
+    expect(cmsQaServerFromEnv({ CMS_QA_SERVER: '1' })).toBe(true)
+    expect(cmsQaServerFromEnv({ CMS_QA_SERVER: 'true' })).toBe(false) // chỉ đúng giá trị launcher đặt
+    expect(cmsQaServerFromEnv({})).toBe(false)
   })
 })

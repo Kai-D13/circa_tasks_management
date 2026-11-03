@@ -14,9 +14,10 @@ export const CMS_STATUS_TONE: Record<CmsDisplayStatus, StatusTone> = {
 }
 /** Thứ tự tab lọc A1; SM không có Nháp (RLS không trả nháp cho SM — H6). */
 export const CMS_STATUS_ORDER: CmsDisplayStatus[] = ['running', 'upcoming', 'waiting_close', 'draft', 'locked']
-/** Tab lọc theo quyền: super đủ 5; SM chỉ Sắp diễn ra / Đang chạy / Chờ chốt kỳ (U8 / H6 — RLS 120 không trả nháp / đã chốt cho SM). */
+/** Tab lọc theo quyền: super đủ 5; SM không có Nháp (U8 / H6). P3a r2 (PM r1 §4 Q-219, blueprint §3 "A1 tách đã chốt"): SM có
+ *  thêm Đã chốt — từ 123 `cms_readable_program_ids` trả 'locked' cho SM trong phạm vi nhà thuốc được phân công. */
 export function cmsStatusesFor(canManage: boolean): CmsDisplayStatus[] {
-  return canManage ? CMS_STATUS_ORDER : CMS_STATUS_ORDER.filter((s) => s !== 'draft' && s !== 'locked')
+  return canManage ? CMS_STATUS_ORDER : CMS_STATUS_ORDER.filter((s) => s !== 'draft')
 }
 
 /** Ngày VN (UTC+7, không DST) dạng YYYY-MM-DD — cùng quy ước RPC 121 (`cms__vn_today`). */

@@ -23,7 +23,7 @@ export default async function CmsListFixture({ searchParams }: { searchParams: P
   const { fx = 'super', status, q = '', p2: p2Raw } = await searchParams
   const scenario = cmsFxParseScenario(p2Raw)
   const canManage = fx !== 'sm'
-  const items = fx === 'empty' ? [] : fx === 'sm' ? CMS_FX_LIST.filter((p) => p.status === 'active' && !p.isTest) : CMS_FX_LIST
+  const items = fx === 'empty' ? [] : fx === 'sm' ? CMS_FX_LIST.filter((p) => p.status !== 'draft' && !p.isTest) : CMS_FX_LIST
   const filter = cmsParseListFilter(fx === 'filter-empty' ? (status ?? 'locked') : status, canManage)
   const m = cmsBuildListModel(fx === 'filter-empty' ? items.filter((p) => p.status !== 'locked') : items, { canManage, today: CMS_FX_TODAY, filter, q })
   const targets = items.map((p) => ({ id: p.id, display: cmsDisplayStatus(p, CMS_FX_TODAY), isTest: p.isTest, productCount: p.productCount }))

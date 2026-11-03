@@ -17,6 +17,13 @@ export const CMS_FX_STAFF_PROGRAMS: CmsProgramRowView[] = [
   prog(3, { name: 'CMS Chăm sóc da tháng 12', startDate: day(16), endDate: day(46), catalogTargetGmv: null }),
 ]
 
+/** P3a r2 (PM r1 PKG-P1-1): chương trình ĐÃ KẾT THÚC cho fixture — [0] Chờ chốt kỳ (active, hết ngày), [1] Đã chốt (locked).
+ *  Tách khỏi CMS_FX_STAFF_PROGRAMS để không đổi các fixture / test P1–P2 sẵn có. */
+export const CMS_FX_STAFF_ENDED: CmsProgramRowView[] = [
+  prog(4, { name: 'CMS Khẩu trang tháng 10', startDate: day(-40), endDate: day(-2), catalogTargetGmv: null }),
+  prog(5, { name: 'CMS Thực phẩm chức năng quý 3', status: 'locked', startDate: day(-70), endDate: day(-35), catalogTargetGmv: null }),
+]
+
 export const CMS_FX_LONG_ADVICE = [
   'Hỏi nhu cầu và đối tượng dùng (người lớn, trẻ em, phụ nữ có thai) trước khi tư vấn.',
   'Liều dùng theo hướng dẫn trên nhãn; không dùng quá liều khuyến cáo.',

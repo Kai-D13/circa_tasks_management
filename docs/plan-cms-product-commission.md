@@ -136,8 +136,8 @@ Chương trình nhìn thấy theo vai trò ở P1:
 | Vai trò | Nháp | Sắp diễn ra | Đang chạy | Chờ chốt kỳ | Đã chốt | Chương trình QA (`is_test`) |
 |---|---|---|---|---|---|---|
 | Super admin | Có | Có | Có | Có | Có | Chỉ trong phiên QA đã kiểm soát (marker QA hợp lệ — H9) |
-| SM (A1/A3 chỉ đọc, có nhà thuốc được phân công trong phạm vi) | Không | Có | Có | Có | — (P3) | Chỉ trong phiên QA đã kiểm soát |
-| Staff / QLCH (D1/D2, nhà thuốc hiện tại trong phạm vi) | Không | Có, ghi ngày bắt đầu | Có | Không vào danh sách chính D1 P1 | Không vào danh sách chính D1 P1 | Chỉ trong phiên QA đã kiểm soát |
+| SM (A1/A3 chỉ đọc, có nhà thuốc được phân công trong phạm vi) | Không | Có | Có | Có | Có (P3a — chỉ đọc, số đã chốt trong phạm vi) | Chỉ trong phiên QA đã kiểm soát |
+| Staff / QLCH (D1/D2, nhà thuốc hiện tại trong phạm vi) | Không | Có, ghi ngày bắt đầu | Có | Không vào danh sách chính D1 P1; P3a: nhóm "Đã kết thúc" của bộ chọn D1, D2 / D3 đọc được (tạm tính, chờ chốt) | Như Chờ chốt kỳ; số của run đóng băng, nhãn đã chốt (P3a) | Chỉ trong phiên QA đã kiểm soát |
 
 Đọc lịch sử ở P2 (D3) giữ theo spec; bộ lọc D1 P1 không dùng để xóa hoặc giấu lịch sử phát sinh sau này (H5).
 

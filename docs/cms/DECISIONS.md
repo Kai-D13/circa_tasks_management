@@ -25,7 +25,7 @@
 
 Các quyết định r1 vẫn giữ: D2 (CMS cho từng dược sĩ bán, không chia pool), D3 (3 loại gate), D4 (thang bậc theo số lượng; SP 1 bậc = thang 1 dòng), D5 (ProductID liên kết Product Master lấy tên, ảnh), D6 (Upload → Run → Kết quả; nhóm lỗi bị loại, nhóm hợp lệ xử lý), D7 (nội dung tư vấn bắt buộc, đã kiểm duyệt chuyên môn). D1 r1 (BI cấp view dòng đơn có mã người bán) bị thay bởi Q-207.
 
-## 2. Q-206…Q-215
+## 2. Q-206…Q-219
 
 | Mã | Nội dung / quyết định mới nhất | Trạng thái |
 |---|---|---|
@@ -37,9 +37,13 @@ Các quyết định r1 vẫn giữ: D2 (CMS cho từng dược sĩ bán, không
 | **Q-210b** | Cộng dồn số lượng cơ sở cả kỳ, chia theo `base_quantity_CMS` admin import rồi `floor`; phần lẻ cộng tiếp trong kỳ, không chuyển sang chương trình khác; `unit_CMS` là nhãn hiển thị và hưởng thưởng; `base_unit` không bắt buộc. Thay đề xuất ban đầu "BI quy đổi về đơn vị CMS". | Đã chốt operator |
 | **Q-211** | `gate_met_at` = lần chuyển từ chưa đạt sang đạt **gần nhất**; gate đang không đạt thì không hiện "Đạt từ"; câu "tụt do trả hàng ngày…" chỉ hiện khi dữ liệu chứng minh được sự kiện gây tụt. | Đã chốt operator; đầu vào trả hàng vẫn chờ Q-206 |
 | **Q-212** | Bỏ thống kê theo tháng; A1 tách **CMS tạm tính chương trình đang chạy** và **CMS chương trình chờ chốt**. "SP có CMS x/y": x = số ProductID có ít nhất một dược sĩ CMS > 0. "Lượt" = dược sĩ × sản phẩm. Gộp nhiều chương trình đếm user distinct. Mẫu số dùng tài khoản staff hiện có thuộc phạm vi nhà thuốc hợp lệ, không cộng QLCH dùng chung / nhân sự đã out; không thêm trạng thái "nhân viên active" mới. | Đã chốt; thay mặc định cũ có `store_manager` / người nghỉ |
-| **Q-213** | Chốt kỳ khi còn dòng chưa gán: đề xuất chặn nếu vượt 2% GMV hoặc vượt 20 dòng; dưới ngưỡng cần xác nhận + lý do; lưu người chốt, lý do, snapshot bị loại; không đưa dòng đã loại trở lại payout sau chốt. Ngưỡng và người duyệt chưa được stakeholder chốt. | **Pending**; không triển khai P3 từ mặc định này |
+| **Q-213** | Chốt kỳ khi còn dòng chưa gán: đề xuất chặn nếu vượt 2% GMV hoặc vượt 20 dòng; dưới ngưỡng cần xác nhận + lý do; lưu người chốt, lý do, snapshot bị loại; không đưa dòng đã loại trở lại payout sau chốt. Ngưỡng và người duyệt chưa được stakeholder chốt. P3a (migration 123) chỉ dùng **giả định QA có nhãn** `QA_ONLY_ASSUMPTION` cho chương trình `is_test`; nhánh thật `real.ready = false` ⇒ chốt thật bị chặn `CMS_LOCK_POLICY_PENDING`. | **Pending**; không triển khai P3 từ mặc định này |
 | **Q-214** | Chương trình **đã kích hoạt nhưng chưa bắt đầu** chỉ được sửa ngày bắt đầu sang ngày **sau hôm nay VN**; không dời về hôm nay / quá khứ (RPC `CMS_PROGRAM_START_PAST`). Muốn hồi tố: tạo nháp đặt ngày hôm nay / quá khứ rồi kích hoạt có xác nhận (H7). Không thêm đường về nháp / xóa / hủy; không hứa chương trình thay thế nếu nó xung đột ProductID với chương trình đã kích hoạt (H8 + chống trùng giữ nguyên). | **[Operator — đã chốt 01/11]** nguyên văn: "Chặn; muốn hồi tố thì tạo nháp rồi kích hoạt có xác nhận (đề xuất Dev)" |
 | **Q-215** | **Không thêm trần độ dài kỳ** (không giới hạn 366 ngày hay trần khác) trong P1. Giữ kiểm kỹ thuật ngày trong 2020-01-01…2100-12-31 và `end_date ≥ start_date`; UI P1-c kiểm cùng khoảng ngày trước khi gửi (hằng số `CMS_PROGRAM_DATE_MIN/MAX`, `lib/cms/programInput.ts`). | **[Operator — đã chốt 01/11]** nguyên văn: "Giữ như spec: chưa thêm trần số ngày (đề xuất)" |
+| **Q-216** | Sau ngày kết thúc, chỉ cần một lượt tính từ nguồn BI xác nhận đủ tới hết kỳ là được chốt, hay phải chờ thêm N ngày / giờ (theo giờ VN, tính từ mốc nào)? Đề xuất PM: không tự thêm N; chưa chốt thì không mở chốt thật. | **Pending** — policy chốt thật (`cms__lock_policy` real.ready = false) chặn chốt chương trình thật |
+| **Q-217** | Sau chốt, dược sĩ chuyển sang nhà thuốc **ngoài** chương trình (hoặc đổi vai) có còn xem được số đã chốt của mình không? | **[Operator — đã chốt 03/11]** nguyên văn: "Giữ phạm vi hiện tại (đề xuất, không thêm logic)". Đọc payout theo Q-208 (phạm vi hiện tại); ra ngoài chương trình ⇒ không đọc; chuyển giữa hai nhà thuốc cùng thuộc chương trình vẫn đọc, định danh snapshot lúc chốt không đổi. Không thêm quyền đọc lịch sử |
+| **Q-218** | (Dev nêu 03/11) Lối xem số sau hết kỳ / đã chốt cho dược sĩ / QLCH. | **PM 03/11 (review P3a r1 §4): thuộc baseline blueprint P3 §3 — không cần stakeholder; đã làm trong P3a r2** (D1 nhóm "Đã kết thúc", D2 / D3 đọc run đóng băng). Màn riêng / thiết kế mở rộng (nếu có) là yêu cầu sau. Giữ mã để truy vết, không dùng lại |
+| **Q-219** | (Dev nêu 03/11) Lọc "Đã chốt" cho SM trên A1. | **PM 03/11 (review P3a r1 §4): thuộc baseline — đã làm trong P3a r2** (SM có lọc Đã chốt; 123 cho SM đọc `locked` trong phạm vi). Giữ mã để truy vết, không dùng lại |
 
 ## 3. Quyết định PM tại review intake 01/11 (phần đã GO)
 

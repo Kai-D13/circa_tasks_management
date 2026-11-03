@@ -62,8 +62,9 @@ export async function cmsLoadEligibleStaffIds(o: { programStoreIds: string[]; vi
 }
 
 // ── D3: chương trình có lịch sử (Đang chạy + Chờ chốt kỳ) của người xem ──────────────────────────────────────────────
-// RLS 120: staff / QLCH đọc chương trình active / locked có nhà thuốc hiện tại. D3 P2 đọc phiên kết quả hiện hành của
-// chương trình active đã bắt đầu (kể cả đã hết ngày — Chờ chốt kỳ, UI §4.3); Đã chốt đọc payout là P3 (HOLD — U14).
+// RLS 120: staff / QLCH đọc chương trình active / locked có nhà thuốc hiện tại. D3 đọc phiên kết quả hiện hành của chương
+// trình đã bắt đầu: active (gồm Chờ chốt kỳ, UI §4.3) và — P3a r2 (PM r1 PKG-P1-1) — locked: phiên hiện hành của chương trình
+// đã chốt là run ĐÓNG BĂNG (guard 123 cấm đổi pointer / dữ liệu run sau chốt; Σ = payout theo V5).
 type ProgramDb = {
   id: string; name: string; status: CmsProgramDbStatus; start_date: string; end_date: string; scope: 'all' | 'stores'
   is_test: boolean; catalog_target_gmv: string | null; config_version: number; activated_at: string | null; created_at: string
@@ -99,7 +100,7 @@ export async function cmsLoadHistoryPrograms(today: string): Promise<{ ok: true;
   try {
     const supabase = await createClient()
     const rows = await readAll<ProgramDb>((a, b) => supabase.from('cms_programs').select(PROGRAM_COLS)
-      .eq('status', 'active').lte('start_date', today).order('end_date', { ascending: false }).order('id').range(a, b))
+      .in('status', ['active', 'locked']).lte('start_date', today).order('end_date', { ascending: false }).order('id').range(a, b))
     return { ok: true, data: rows.map(toProgram) }
   } catch (e) {
     console.error(cmsQueryFailLine('cms-history-programs', e))

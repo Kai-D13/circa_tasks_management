@@ -146,12 +146,12 @@ test.describe('ui v2 CMS P1-c — A1 danh sách (fixture) @desktop', () => {
     await expect(main.locator('[data-cms-table]')).toContainText('QA')
     await expect(main.locator('[data-cms-table]')).toContainText('1 nhóm lỗi đã loại')
   })
-  test('SM: chỉ đọc — không Tạo, không lọc Nháp, không cột Import', async ({ page }) => {
+  test('SM: chỉ đọc — không Tạo, không lọc Nháp, không cột Import; có lọc Đã chốt (P3a r2 — Q-219)', async ({ page }) => {
     await openFx(page, 'list', 'sm')
     const main = page.locator('main [data-cms-list]')
     await expect(main.getByRole('link', { name: /Tạo chương trình CMS/ })).toHaveCount(0)
     await expect(main.getByRole('link', { name: /^Nháp/ })).toHaveCount(0)
-    await expect(main.getByRole('link', { name: /^Đã chốt/ })).toHaveCount(0)
+    await expect(main.getByRole('link', { name: /^Đã chốt/ })).toBeVisible()
     await expect(main.getByRole('link', { name: /^Chờ chốt kỳ/ })).toBeVisible()
     await expect(main.locator('[data-cms-table] thead')).not.toContainText('Import gần nhất')
   })

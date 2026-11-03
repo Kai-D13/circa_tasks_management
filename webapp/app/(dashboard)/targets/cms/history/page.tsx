@@ -12,8 +12,8 @@ import { CmsStaffHistoryView, type CmsHistoryLines } from '@/components/cms/staf
 
 // CMS P2-c (I3) · D3 /targets/cms/history?program=&product=&run=&after=&n= — staff / QLCH (cổng như /targets: đăng nhập,
 // FS ⇒ module FS). Cần CẢ cờ CMS_PROGRAM_ENABLED + CMS_EARNINGS_ENABLED (isCmsEarningsEnabled) — OFF ⇒ 404, không query.
-// Phạm vi: chương trình active đã bắt đầu đọc được qua RLS 120 (gồm Chờ chốt kỳ); dòng qua RPC 122 (staff = mình, QLCH = staff
-// hiện thuộc nhà thuốc). `run` ghim phiên: khác run hiện hành / đã dọn ⇒ "dữ liệu đã thay đổi" (không nối hai phiên).
+// Phạm vi: chương trình active đã bắt đầu (gồm Chờ chốt kỳ) + đã chốt (P3a r2 — run đóng băng) đọc được qua RLS 120; dòng qua
+// RPC 122 (staff = mình, QLCH = staff hiện thuộc nhà thuốc; chuyển ra ngoài chương trình ⇒ không đọc — Q-217). `run` ghim phiên: khác run hiện hành / đã dọn ⇒ "dữ liệu đã thay đổi" (không nối hai phiên).
 export default async function CmsStaffHistoryPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const sp = await searchParams
   const supabase = await createClient()

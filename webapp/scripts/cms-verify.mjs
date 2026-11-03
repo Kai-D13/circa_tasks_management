@@ -1,17 +1,23 @@
 #!/usr/bin/env node
 // CMS P1-R2 — gói VERIFY CHỈ ĐỌC cho migration 120 / 121 (review PM runbook P1 02/11; r1 sau db-reviewer / security);
 // phase 122 (PM 03/11 §5): bộ kỳ vọng / vân tay sau 122 riêng, phase DB ≠ phase khai báo ⇒ mục phase-match đỏ (không xanh giả).
+// phase 123 (P3a chốt kỳ): bộ riêng — 18 hàm / 46 trigger ALWAYS / 2 bảng payout / TRUNCATE thu hồi / V0 owner / V4 policy /
+// V5–V6 bất biến payout (tổng + từng dược sĩ + run còn như lúc seal; chưa có payout ⇒ CHƯA) / V7 isolation / quyền cột gián
+// tiếp + view phụ thuộc bảng payout / V8 migration (mọi chương trình thật bị chặn chốt); PRE 123 = acl-snapshot ngay trước 123
+// (đúng 37 hàm cms). `--require-proven=v5,lock-preview` ép mục đó phải ĐÃ chứng minh (CHƯA ⇒ rc 1).
 // Mỗi lệnh = MỘT transaction `BEGIN; SET TRANSACTION READ ONLY; …; ROLLBACK;` qua pg-meta với câu lệnh CỐ ĐỊNH ở
 // e2e/cmsQaTooling.ts (không nhận SQL tự do, không nới ops-ro). V8 mô phỏng phiên authenticated (SET LOCAL ROLE + claim
 // không ký — không đọc secret), so với oracle tính độc lập theo VAI KHAI BÁO; không thay smoke đăng nhập thật (D3 / E3).
 //
 //   node scripts/cms-verify.mjs acl-snapshot --expect-host=<host> --out=<pre.json>      # PRE: chụp NGAY TRƯỚC migration
-//   node scripts/cms-verify.mjs post --phase=120|121|122 --pre=<pre.json> --expect-host=<host> [--out=<file.json>]
-//   node scripts/cms-verify.mjs v8 --user=<uuid> --role=super|admin|sm|staff|qlch [--phase=120|121|122] --expect-host=<host> [--expect-qa=true|false] [--expect-readable=N] [--require-proven=programs,products,…,results] [--out=…]
-//   node scripts/cms-verify.mjs print-sql --what=acl|v8 [--user=<uuid> --role=… --phase=121|122]   # khối cố định cho Studio (V8: REPEATABLE READ)
-// V8 --phase bỏ trống chỉ hợp lệ khi DB ở 120 / 121; DB đã chạy 122 mà không khai --phase=122 ⇒ mục v8-phase đỏ.
+//   node scripts/cms-verify.mjs post --phase=120|121|122|123 --pre=<pre.json> --expect-host=<host> [--require-proven=v5,lock-preview (chỉ 123)] [--out=<file.json>]
+//   node scripts/cms-verify.mjs v8 --user=<uuid> --role=super|admin|sm|staff|qlch [--phase=120|121|122|123] --expect-host=<host> [--expect-qa=true|false] [--expect-readable=N] [--require-proven=programs,products,…,results] [--out=…]
+//   node scripts/cms-verify.mjs print-sql --what=acl|v8 [--user=<uuid> --role=… --phase=121|122|123]   # khối cố định cho Studio (V8: REPEATABLE READ)
+// V8 --phase bỏ trống chỉ hợp lệ khi DB ở 120 / 121; DB đã chạy 122 / 123 mà không khai đúng --phase=122 / --phase=123 ⇒ mục v8-phase đỏ.
+// V8 --phase=123 (P3a): như 122 + rpc_cms_payout theo phạm vi hiện tại (Q-208 / Q-217) và SM thấy chương trình 'locked'.
 //
-// --out nên trỏ ra NGOÀI repo (vd. C:/circa-gate-logs/…). Kết quả chỉ có tên hàm / bảng / cờ / số đếm / id che.
+// --out nên trỏ ra NGOÀI repo (vd. C:/circa-gate-logs/…). Không có email / tên / SĐT. Dòng in màn hình che UUID (8 ký tự);
+// file --out giữ input THÔ để soát lại — gồm UUID chương trình / run / user ĐẦY ĐỦ (V8: uid ghi 'khớp' / 'LỆCH', user che).
 // Dòng in: ĐẠT · LỆCH (gate đỏ) · CHƯA (điều kiện đúng nhưng dữ liệu chưa đủ để chứng minh — vd. RLS cắt bớt).
 // Thoát: 0 không mục LỆCH · 1 có mục lệch / lỗi DB · 2 sai tham số (trước mọi IO). Kết thúc tự nhiên qua runCli
 // (process.exitCode) — không process.exit (lỗi libuv Node 24 / Windows sau fetch, PM 02/11 B3).
@@ -23,14 +29,14 @@ async function main() {
     values: ['--expect-host', '--out', '--phase', '--pre', '--user', '--role', '--expect-qa', '--expect-readable', '--require-proven', '--what'],
   })
   if (!['acl-snapshot', 'post', 'v8', 'print-sql'].includes(a.cmd) || a.bad.length) {
-    console.log('dùng: node scripts/cms-verify.mjs <acl-snapshot | post --phase=120|121|122 --pre=FILE | v8 --user=UUID --role=… [--phase=121|122] | print-sql --what=acl|v8> --expect-host=<host>')
+    console.log('dùng: node scripts/cms-verify.mjs <acl-snapshot | post --phase=120|121|122|123 --pre=FILE [--require-proven=v5,lock-preview] | v8 --user=UUID --role=… [--phase=121|122|123] | print-sql --what=acl|v8> --expect-host=<host>')
     return 2
   }
   const { T } = await loadTooling()
-  // V8: --phase tuỳ chọn (bỏ trống = trước 122, giữ lệnh runbook P1); DB đã 122 ⇒ phải khai --phase=122 (mục v8-phase).
+  // V8: --phase tuỳ chọn (bỏ trống = trước 122, giữ lệnh runbook P1); DB đã 122 ⇒ phải khai --phase=122, DB đã 123 ⇒ --phase=123 (mục v8-phase).
   const v8Phase = () => {
     const p = a.values['--phase']
-    if (p !== undefined && !T.CMS_V8_PHASES.includes(p)) die2('--phase=120|121|122 cho v8')
+    if (p !== undefined && !T.CMS_V8_PHASES.includes(p)) die2('--phase=120|121|122|123 cho v8')
     return p
   }
 
@@ -41,7 +47,7 @@ async function main() {
       if (!T.CMS_V8_ROLES.includes(a.values['--role'])) die2(`--role bắt buộc: ${T.CMS_V8_ROLES.join('|')}`)
       const ph = v8Phase()
       // SQL Studio không có bộ đánh giá: thiếu --phase ⇒ SQL KHÔNG kiểm RPC 122 (db-reviewer P2-7) — cảnh báo ở stderr (stdout chỉ SQL).
-      if (ph === undefined) console.error('CẢNH BÁO: không khai --phase — SQL này chỉ hợp lệ trước 122 và KHÔNG kiểm 4 RPC đọc kết quả; sau 122 dùng --phase=122.')
+      if (ph === undefined) console.error('CẢNH BÁO: không khai --phase — SQL này chỉ hợp lệ trước 122 và KHÔNG kiểm RPC đọc kết quả / chi trả; DB 122 dùng --phase=122, DB 123 dùng --phase=123.')
       console.log(T.pgMetaReadOnlySnapshot(T.cmsVerifyV8Sql(a.values['--user'], a.values['--role'], ph)))
     } else die2('--what=acl|v8')
     return 0
@@ -58,7 +64,7 @@ async function main() {
   if (a.cmd === 'v8') expect.phase = v8Phase()
   if (a.cmd === 'post') {
     phase = a.values['--phase']
-    if (!T.CMS_VERIFY_PHASES.includes(phase)) die2('--phase=120|121|122')
+    if (!T.CMS_VERIFY_PHASES.includes(phase)) die2(`--phase=${T.CMS_VERIFY_PHASES.join('|')}`)
     try {
       pre = JSON.parse(fs.readFileSync(String(a.values['--pre']), 'utf8'))
     } catch { die2('--pre phải là file JSON từ `acl-snapshot` chụp NGAY TRƯỚC migration') }
@@ -67,10 +73,18 @@ async function main() {
       || !['md5_all', 'md5_old'].every((k) => isMd5(acl[k])) || !acl.db_now) {
       die2('--pre sai định dạng hoặc chụp ở host khác')
     }
-    // PRE phải đúng phase: trước 120 chưa có hàm cms nào; trước 121 có đúng 7 (120); trước 122 có đúng 14 (120 + 121).
+    // PRE phải đúng phase: trước 120 chưa có hàm cms nào; trước 121 có đúng 7 (120); trước 122 có đúng 14 (120 + 121);
+    // trước 123 có đúng 37 (120 + 121 + 122).
     const cmsBefore = acl.n_all - acl.n_old
     if (cmsBefore !== T.cmsFnCountBefore(phase)) {
       die2(`--pre không phải ảnh ngay trước ${phase} (đang có ${cmsBefore} hàm cms)`)
+    }
+    // --require-proven cho post (cùng cơ chế V8): mục của khoá CHƯA chứng minh ⇒ LỆCH (rc 1). Khoá theo phase.
+    if (a.values['--require-proven'] !== undefined) {
+      const list = a.values['--require-proven'].split(',').map((s) => s.trim()).filter(Boolean)
+      const keys = T.cmsPostProvenKeys(phase)
+      if (!list.length || list.some((k) => !keys.includes(k))) die2(`--require-proven cho post --phase=${phase}: <${keys.join('|') || '(không có khoá)'}>,…`)
+      expect.requireProven = list
     }
   }
   if (a.cmd === 'v8') {
@@ -124,7 +138,7 @@ async function main() {
         input.inv121 = { overlap: await ro(q.inv121Overlap), tiers: await ro(q.inv121Tiers), catalog: await ro(q.inv121Catalog) }
         input.isolation = (await ro(q.isolation))[0]
       }
-      if (phase === '122') {
+      if (Number(phase) >= 122) {
         // Hàm 122 chỉ tồn tại sau 122 — DB chưa ở 122 ⇒ lỗi DB (rc 1) + phase-match đỏ trên lượt chạy đúng phase.
         input.p122 = {
           tiersUnique: await ro(q.tiersUnique), pointerFk: await ro(q.pointerFk),
@@ -132,6 +146,17 @@ async function main() {
           fnDefs: await ro(q.fnDefs), columns: await ro(q.columns),
         }
       }
+      if (phase === '123') {
+        // cms__lock_policy / cms__config_fp / cms_payouts chỉ có sau 123 — DB chưa ở 123 ⇒ LỖI DB (rc 1), không bao giờ xanh.
+        input.p123 = {
+          owners: (await ro(q.owners))[0], isolation123: (await ro(q.isolation123))[0], triggerFns: await ro(q.triggerFns),
+          lockPolicy: (await ro(q.lockPolicy))[0], payoutAcl: await ro(q.payoutAcl),
+          invPayout: (await ro(q.invPayout))[0], invLocked: (await ro(q.invLocked))[0],
+          invPayoutStaff: (await ro(q.invPayoutStaff))[0], invRunFrozen: (await ro(q.invRunFrozen))[0],
+          payoutReach: await ro(q.payoutReach), lockPreview: (await ro(q.lockPreview))[0],
+        }
+      }
+      if (expect.requireProven) input.requireProven = expect.requireProven
       const checks = T.evaluateCmsVerify(input)
       result = { kind: 'cms-verify-post', at, host, phase, preAt: pre.acl.db_now, input, checks }
     } else {

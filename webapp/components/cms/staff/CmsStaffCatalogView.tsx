@@ -11,7 +11,7 @@ import {
 } from '@/components/cms/staff/CmsStaffResults'
 import { CMS_GATE_HUE, CMS_GATE_LABEL, cmsDate, cmsVnd } from '@/lib/cms/display'
 import { cmsDaysLeft, cmsDisplayStatus } from '@/lib/cms/programStatus'
-import { cmsProductHref, cmsStaffHref, cmsTierSummary } from '@/lib/cms/staffView'
+import { cmsIsClosedDisplay, cmsProductHref, cmsStaffHref, cmsTierSummary } from '@/lib/cms/staffView'
 import {
   cmsCardMatches, cmsCatalogGateView, cmsNearestGate, cmsProductTotals, cmsStaffCard, cmsStaffSummary, cmsStoreSummary,
   type CmsCardFilter, type CmsResultsLoad,
@@ -26,6 +26,8 @@ import type { CmsProductView, CmsProgramRowView } from '@/lib/cms/server/catalog
 // trình đã bắt đầu: staff có hero "CMS tạm tính của bạn", gợi ý gần đạt, target danh mục, số liệu trên thẻ + bộ lọc;
 // QLCH (U19) có khối tổng nhà thuốc, không hero cá nhân / gợi ý. Chưa có snapshot ⇒ '—' (không 0 giả); lỗi ⇒ thông báo,
 // danh mục vẫn hiện.
+// P3a r2 (PM r1 PKG-P1-1): bộ chọn có nhóm "Đã kết thúc" (Chờ chốt kỳ / Đã chốt); chương trình đã kết thúc vẫn xem được số
+// (Đã chốt = run đóng băng, nhãn "đã chốt"), không gợi ý gần đạt / gợi ý bán thêm.
 
 export type CmsStaffKind = 'ok' | 'empty' | 'error' | 'no-store'
 
@@ -43,6 +45,7 @@ export function CmsStaffCatalogView({ kind, programs, selected, products, today,
 }) {
   const display = selected ? cmsDisplayStatus(selected, today) : null
   const left = selected ? cmsDaysLeft(selected, today) : null
+  const closed = cmsIsClosedDisplay(display)
   const catalog = products.filter((p) => p.gmvBasis === 'catalog')
 
   // ── P2: số liệu (chỉ khi đã tải được và có snapshot đã công bố) ──
@@ -58,7 +61,7 @@ export function CmsStaffCatalogView({ kind, programs, selected, products, today,
   const counts = { all: products.length, met: 0, unmet: 0 }
   if (cards) for (const c of cards.values()) { if (cmsCardMatches(c, 'met')) counts.met += 1; else counts.unmet += 1 }
   const visible = cards ? products.filter((p) => cmsCardMatches(cards.get(p.id)!, filter)) : products
-  const near = cards ? cmsNearestGate(rows) : null
+  const near = cards && display === 'running' ? cmsNearestGate(rows) : null
   const nearProduct = near ? products.find((p) => p.id === near.programProductId) : undefined
   const ownCatalog = withNumbers && !manager && loaded.rows.catalog.length > 0 ? cmsCatalogGateView(loaded.rows.catalog[0]) : null
   const storeCatalog = withNumbers && manager ? loaded.rows.catalog : null
@@ -83,13 +86,17 @@ export function CmsStaffCatalogView({ kind, programs, selected, products, today,
           <p data-cms-staff-note className="text-[13px] text-muted-foreground">
             {display === 'upcoming'
               ? <>Chương trình bắt đầu {cmsDate(selected.startDate)} — xem trước danh mục để chuẩn bị tư vấn.</>
-              : <>{left !== null ? `Còn ${left} ngày. ` : ''}CMS tính theo số lượng từng dược sĩ bán trong kỳ.</>}
+              : display === 'locked'
+                ? <>Đã chốt kỳ — số bên dưới là số đã chốt (không đổi sau chốt).</>
+                : display === 'waiting_close'
+                  ? <>Đã kết thúc ngày {cmsDate(selected.endDate)} — số tạm tính, chờ chốt kỳ.</>
+                  : <>{left !== null ? `Còn ${left} ngày. ` : ''}CMS tính theo số lượng từng dược sĩ bán trong kỳ.</>}
             {manager && !loaded && ' Tài khoản cửa hàng chỉ xem danh mục.'}
           </p>
 
           <CmsResultsNotice results={results} reloadHref={cmsStaffHref(selected.id)} />
-          {loaded && !manager && <CmsStaffHero summary={withNumbers ? cmsStaffSummary(rows, products.length) : null} header={loaded.header} programId={selected.id} />}
-          {loaded && manager && <CmsStoreHero summary={withNumbers ? cmsStoreSummary(rows, products.length) : null} header={loaded.header} programId={selected.id} />}
+          {loaded && !manager && <CmsStaffHero summary={withNumbers ? cmsStaffSummary(rows, products.length) : null} header={loaded.header} programId={selected.id} display={display} />}
+          {loaded && manager && <CmsStoreHero summary={withNumbers ? cmsStoreSummary(rows, products.length) : null} header={loaded.header} programId={selected.id} display={display} />}
           {near && nearProduct && <CmsNearGateCard near={near} productName={nearProduct.nameSnapshot} unit={nearProduct.unitCms} />}
 
           {catalog.length > 0 && (
@@ -134,7 +141,7 @@ export function CmsStaffCatalogView({ kind, programs, selected, products, today,
                         </span>
                         {card?.gate && card.gate.basis === 'product' && <CmsGateMeter gate={card.gate} label="GMV / target" size={5} />}
                         <span data-cms-tier-line className="block rounded-[6px] bg-muted px-2 py-1 text-[12px] leading-snug tabular-nums break-words">
-                          {card ? cmsCardTierText(card, p.tiers, p.unitCms) || cmsTierSummary(p.tiers, p.unitCms) : cmsTierSummary(p.tiers, p.unitCms)}
+                          {card ? cmsCardTierText(card, p.tiers, p.unitCms, closed) || cmsTierSummary(p.tiers, p.unitCms) : cmsTierSummary(p.tiers, p.unitCms)}
                         </span>
                       </div>
                       <ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0 self-center text-muted-foreground" />

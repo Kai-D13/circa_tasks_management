@@ -635,8 +635,22 @@ section('11. Run mới: ghim run cũ, dọn dữ liệu')
   ok(R3.pub?.published, 'run 3 công bố')
   // Retention (PM 03/11 §4): nhiều run held / error trong 24 h ⇒ chỉ 2 gần nhất giữ dữ liệu; run ok cũ (run 1) dọn.
   const heTotal = await count(db, `SELECT count(*) FROM public.cms_sync_runs WHERE program_id = '${P}' AND kind = 'sales' AND status IN ('held','error')`)
+  // r2.3 (PM 03/11): trần lô 50.000 = lô app. 50.001 / 100.000 ⇒ CMS_SALES_BAD_INPUT TRƯỚC khi ghi (không đặt purged_at, không
+  // xoá dòng); 50.000 và mặc định (không truyền) nhận.
+  {
+    const snapRuns = async () => JSON.stringify((await db.query(`SELECT id, purged_at, cleared_at FROM public.cms_sync_runs WHERE program_id = $1 ORDER BY id`, [P])).rows)
+    const nRows = async () => count(db, `SELECT (SELECT count(*) FROM public.cms_sales_lines s JOIN public.cms_sync_runs r ON r.id = s.run_id WHERE r.program_id = '${P}')
+      + (SELECT count(*) FROM public.cms_result_lines l JOIN public.cms_sync_runs r ON r.id = l.run_id WHERE r.program_id = '${P}')`)
+    const before = await snapRuns(), rows0 = await nRows()
+    for (const bad of [50001, 100000]) {
+      ok(await raises(db, svc(`SELECT public.rpc_cms_sales_run_cleanup($1, ${bad})`, [P]), 'CMS_SALES_BAD_INPUT'), `cleanup p_max_rows = ${bad} ⇒ CMS_SALES_BAD_INPUT`)
+    }
+    ok((await snapRuns()) === before && (await nRows()) === rows0, 'đầu vào vượt trần bị từ chối trước khi ghi: purged_at / cleared_at / số dòng không đổi')
+    const def = (await svc(`SELECT public.rpc_cms_sales_run_cleanup($1) r`, [P])).rows[0].r
+    ok(def && typeof def.more === 'boolean', 'cleanup không truyền p_max_rows (mặc định 50.000) ⇒ nhận', JSON.stringify(def))
+  }
   let c1 = { more: true }, g1 = 0
-  while (c1.more && g1++ < 400) c1 = (await svc(`SELECT public.rpc_cms_sales_run_cleanup($1, 100000) r`, [P])).rows[0].r
+  while (c1.more && g1++ < 400) c1 = (await svc(`SELECT public.rpc_cms_sales_run_cleanup($1, 50000) r`, [P])).rows[0].r
   ok(!c1.more && (await runRow(db, R1.runId)).purged_at !== null && (await runRow(db, R1.runId)).cleared_at !== null, 'cleanup dọn run 1 (không phải hiện hành / liền trước)', JSON.stringify(c1))
   const keep2 = (await db.query(`SELECT id FROM public.cms_sync_runs WHERE program_id = $1 AND kind = 'sales' AND status IN ('held','error')
      ORDER BY finished_at DESC, id DESC LIMIT 2`, [P])).rows.map((x) => x.id)
@@ -672,7 +686,7 @@ section('11. Run mới: ghim run cũ, dọn dữ liệu')
   // đã rơi khỏi 2 gần nhất nên bị dọn theo luật đếm, không chứng minh luật 24 h.)
   await db.query(`UPDATE public.cms_sync_runs SET finished_at = now() - interval '25 hours' WHERE program_id = $1 AND status IN ('held','error')`, [P])
   let more = true, guard = 0
-  while (more && guard++ < 200) more = (await svc(`SELECT public.rpc_cms_sales_run_cleanup($1, 100000) r`, [P])).rows[0].r.more
+  while (more && guard++ < 200) more = (await svc(`SELECT public.rpc_cms_sales_run_cleanup($1, 50000) r`, [P])).rows[0].r.more
   ok(await count(db, `SELECT count(*) FROM public.cms_sync_runs WHERE program_id = '${P}' AND status IN ('held','error') AND purged_at IS NULL`) === 0, 'run held / error > 24 h được dọn')
   ok(await count(db, `SELECT count(*) FROM public.cms_sync_run_chunks c JOIN public.cms_sync_runs r ON r.id = c.run_id WHERE r.purged_at IS NOT NULL`) === 0, 'không còn khối của run đã dọn')
   // Đã chốt: pointer không đổi; publish ⇒ held PROGRAM_LOCKED; open ⇒ LOCKED.
@@ -697,10 +711,10 @@ section('11. Run mới: ghim run cũ, dọn dữ liệu')
   const expectKeep = (await db.query(`SELECT id FROM public.cms_sync_runs WHERE id = ANY ($1::uuid[]) ORDER BY id DESC LIMIT 2`, [ids])).rows.map((x) => x.id).sort()
   const kept = async () => (await db.query(`SELECT id FROM public.cms_sync_runs WHERE id = ANY ($1::uuid[]) AND purged_at IS NULL`, [ids])).rows.map((x) => x.id).sort()
   let mt = true, gt = 0
-  while (mt && gt++ < 20) mt = (await svc(`SELECT public.rpc_cms_sales_run_cleanup($1, 100000) r`, [P7])).rows[0].r.more
+  while (mt && gt++ < 20) mt = (await svc(`SELECT public.rpc_cms_sales_run_cleanup($1, 50000) r`, [P7])).rows[0].r.more
   const k1 = await kept()
   ok(JSON.stringify(k1) === JSON.stringify(expectKeep), 'tie-break: cùng finished_at ⇒ giữ 2 run id lớn nhất (finished_at DESC, id DESC)', JSON.stringify({ k1, expectKeep }))
-  await svc(`SELECT public.rpc_cms_sales_run_cleanup($1, 100000)`, [P7])
+  await svc(`SELECT public.rpc_cms_sales_run_cleanup($1, 50000)`, [P7])
   ok(JSON.stringify(await kept()) === JSON.stringify(k1), 'gọi lại cleanup ⇒ tập giữ không đổi (tất định)')
 }
 // Trần tuổi 24 h ĐỘC LẬP trần số lượng (db-reviewer r2.2 P1): chương trình chỉ có 2 run error — cả hai trong "2 gần nhất";
@@ -717,7 +731,7 @@ section('11. Run mới: ghim run cũ, dọn dữ liệu')
   await db.query(`UPDATE public.cms_sync_runs SET finished_at = now() - interval '23 hours' WHERE id = $1`, [B])
   const Rr = RS.parseCmsSalesSnapshot((await svc(`SELECT public.rpc_cms_sales_run_open($1) s`, [P8])).rows[0].s).runId
   let ma = { more: true }, ga = 0
-  while (ma.more && ga++ < 20) ma = (await svc(`SELECT public.rpc_cms_sales_run_cleanup($1, 100000) r`, [P8])).rows[0].r
+  while (ma.more && ga++ < 20) ma = (await svc(`SELECT public.rpc_cms_sales_run_cleanup($1, 50000) r`, [P8])).rows[0].r
   const ra = await runRow(db, A), rb = await runRow(db, B), rr = await runRow(db, Rr)
   ok(!ma.more && ra.purged_at !== null && ra.cleared_at !== null && rb.purged_at === null,
      'tuổi > 24 h dù nằm trong 2 run gần nhất ⇒ dọn; run < 24 h ⇒ giữ', JSON.stringify({ ma, ga, a: ra.purged_at, b: rb.purged_at }))

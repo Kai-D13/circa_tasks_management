@@ -1,6 +1,9 @@
 -- ============================================================================
--- 122_cms_results.sql  (r2.2 — DRAFT Dev sau PM audit 03/11 (GO kiến trúc draft) + db-reviewer r1 / r2 / r3 + security r1 / r2;
+-- 122_cms_results.sql  (r2.3 — DRAFT Dev sau PM audit 03/11 (GO kiến trúc draft) + db-reviewer r1 / r2 / r3 + security r1 / r2;
 --                        CHƯA chạy prod)
+-- r2.3 (PM 03/11 review P3a §3, delta riêng): trần lô rpc_cms_sales_run_cleanup 100.000 → 50.000 = CMS_CLEANUP_BATCH_ROWS của app —
+--     lô 100.000 đo trên PG15 local khi máy tải vượt statement_timeout 8 s (11,1 s / 9,2 s cả khi không có trigger 123). Chỉ đổi
+--     điều kiện đầu vào: 50.001 / 100.000 ⇒ CMS_SALES_BAD_INPUT trước khi ghi; mặc định 50.000 giữ nguyên.
 -- r2.2: retention held / error tối đa 2 run gần nhất VÀ ≤ 24 h (PM §4); index tra bậc UNIQUE + preflight kiểm trùng (PM §5);
 --     GET DIAGNOSTICS sát từng INSERT (R3-3). Ghi chú R3-4: kiểm cấu hình / mapping chạy ở ĐẦU mỗi bước seal (bỏ lần kiểm cuối
 --     bước 10) — cửa sổ nhỏ trước khi đặt sealed_at an toàn vì publish kiểm lại dưới FOR UPDATE dòng chương trình + vân tay.
@@ -1235,8 +1238,9 @@ DECLARE
   v_del  integer := 0;
   v_done boolean := false;
 BEGIN
-  -- Trần 100.000 dòng / lần (đo PG15: lô 50.000 ≈ 2 s — giữ biên dưới statement_timeout 8 s, db-reviewer r2 N7).
-  IF p_program_id IS NULL OR p_max_rows IS NULL OR p_max_rows < 1 OR p_max_rows > 100000 THEN
+  -- Trần 50.000 dòng / lần = lô app (r2.3, PM 03/11: lô 100.000 vượt statement_timeout 8 s trên PG15 khi máy tải; lô 50.000 đo
+  -- local 1,4–3,5 s tuỳ tải, kể cả ở tập lưu giữ tối đa — dưới 8 s, không phải SLA).
+  IF p_program_id IS NULL OR p_max_rows IS NULL OR p_max_rows < 1 OR p_max_rows > 50000 THEN
     RAISE EXCEPTION 'CMS_SALES_BAD_INPUT' USING ERRCODE = '22023';
   END IF;
   SELECT current_result_run_id INTO v_cur FROM public.cms_programs WHERE id = p_program_id FOR SHARE;

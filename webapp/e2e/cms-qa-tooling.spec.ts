@@ -13,6 +13,8 @@ import {
   CMS_QA_GRANTED_BY, assertCmsQaProgramIds, cmsQaAckWarnings, cmsQaCloseCheck, cmsQaGrantSql, cmsQaManifestAddProgram, cmsQaPreflight,
   cmsQaRevokeSql, cmsQaStatusSql, cmsQaWatchdog, cmsVerifyV8Sql, evaluateCmsV8, maskCmsUuid, newCmsQaManifest, parseCmsQaManifest,
   CMS_VERIFY_PHASES, CMS_PHASE_FUNCTIONS, CMS_FN_MATRIX, CMS_FN_DEF_122, CMS_COL_122, CMS_TABLE_SHAPE_122, cmsFnCountBefore,
+  CMS_FN_DEF_123, CMS_COL_123, CMS_TABLE_SHAPE_123, CMS_TRIGGERS_123, CMS_FN_SRC_123, CMS_TABLES_FROZEN_123, CMS_V8_PHASES, CMS_V8_RPC_CALLABLE,
+  cmsVerifyAclSql, cmsVerifyV8Sql123, cmsV8ProvenKeys, cmsPostProvenKeys, CMS_VERIFY_SQL, CMS_PAYOUT_KEYS_TOP, CMS_PAYOUT_KEYS_TOP_SUPER, CMS_PAYOUT_KEYS_ROW,
   parseCmsQaTtlHours, parseCmsQaUserIds, pgMetaReadOnly, pgMetaReadOnlySnapshot, pgMetaWrite, toIsoUtc, type CmsQaProgramRow,
   type CmsQaStatusRow, type CmsV8Role,
 } from './cmsQaTooling'
@@ -332,7 +334,7 @@ test.describe('CMS QA tooling · preflight, manifest, đóng run, id is_test @de
     expect(v8).toContain('public.rpc_cms_result_header(v_id)')
     expect(v8.split('\n').filter((l) => /^(SELECT|WITH) /.test(l)).map((l) => l.slice(0, 6))).toEqual(['WITH h', 'SELECT'])
     expect(cmsVerifyV8Sql(A, 'staff')).not.toContain('cmsv8r')
-    expect(() => cmsVerifyV8Sql(A, 'staff', '123' as never)).toThrow()
+    expect(() => cmsVerifyV8Sql(A, 'staff', '124' as never)).toThrow()
   })
 
   test('danh sách hàm theo phase = khoá CMS_FN_MATRIX cùng phase; đếm trước phase suy từ ma trận (db-reviewer P2-5)', () => {
@@ -340,9 +342,114 @@ test.describe('CMS QA tooling · preflight, manifest, đóng run, id is_test @de
       const fromMatrix = Object.entries(CMS_FN_MATRIX).filter(([, m]) => m.phase === ph).map(([n]) => n).sort()
       expect([...CMS_PHASE_FUNCTIONS[ph]].sort(), ph).toEqual(fromMatrix)
     }
-    expect(CMS_VERIFY_PHASES.map((ph) => cmsFnCountBefore(ph))).toEqual([0, 7, 14])
-    expect(Object.keys(CMS_FN_DEF_122).sort()).toEqual(Object.keys(CMS_FN_MATRIX).sort())
+    expect(CMS_VERIFY_PHASES.map((ph) => cmsFnCountBefore(ph))).toEqual([0, 7, 14, 37])
+    // 122: khoá định nghĩa = đúng các hàm có tới 122 (phase 123 thêm hàm ⇒ lọc theo phase; độ chặt cho 122 giữ nguyên).
+    expect(Object.keys(CMS_FN_DEF_122).sort()).toEqual(Object.entries(CMS_FN_MATRIX).filter(([, m]) => Number(m.phase) <= 122).map(([n]) => n).sort())
     expect(Object.keys(CMS_COL_122).sort()).toEqual(Object.keys(CMS_TABLE_SHAPE_122).sort())
+    // 123: 18 hàm mới (15 helper không cấp ai — 3 INVOKER; 2 service_role; 1 authenticated), tổng 55; 2 bảng mới; 46 trigger ALWAYS.
+    expect(Object.keys(CMS_FN_DEF_123).sort()).toEqual(Object.keys(CMS_FN_MATRIX).sort())
+    expect(Object.keys(CMS_FN_MATRIX)).toHaveLength(55)
+    expect(Object.keys(CMS_COL_123).sort()).toEqual(Object.keys(CMS_TABLE_SHAPE_123).sort())
+    expect(Object.keys(CMS_TABLE_SHAPE_123).filter((t) => !(t in CMS_TABLE_SHAPE_122)).sort()).toEqual(['cms_payout_staff', 'cms_payouts'])
+    for (const [n, def] of Object.entries(CMS_FN_DEF_122)) expect(CMS_FN_DEF_123[n], n).toBe(def)
+    for (const [t, sh] of Object.entries(CMS_TABLE_SHAPE_122)) expect(CMS_TABLE_SHAPE_123[t], t).toEqual(sh)
+    const p123 = Object.entries(CMS_FN_MATRIX).filter(([, m]) => m.phase === '123')
+    expect(p123).toHaveLength(18)
+    expect(p123.filter(([, m]) => !m.secdef).map(([n]) => n).sort()).toEqual(['cms__config_auth_guard', 'cms__payout_insert_guard', 'cms__run_auth_guard'])
+    expect(p123.filter(([, m]) => m.acl === 'service_role:EXECUTE').map(([n]) => n).sort()).toEqual(['rpc_cms_lock_preview', 'rpc_cms_program_lock'])
+    expect(p123.filter(([, m]) => m.acl === 'authenticated:EXECUTE').map(([n]) => n)).toEqual(['rpc_cms_payout'])
+    expect(p123.filter(([n, m]) => n.startsWith('cms__') && m.acl === null)).toHaveLength(15)
+    expect(p123.filter(([, m]) => m.lock || m.nestloop)).toHaveLength(0)
+    expect(p123.filter(([, m]) => m.lock3).map(([n]) => n)).toEqual(['rpc_cms_program_lock'])
+    // Thân thay ở 123 chỉ áp từ 123; kỳ vọng 120–122 của hàm đó giữ nguyên.
+    expect(Object.keys(CMS_FN_SRC_123)).toEqual(['cms_readable_program_ids'])
+    expect(CMS_FN_MATRIX.cms_readable_program_ids).toMatchObject({ phase: '120', src: '7043f93b323dbd2fc4c1f883181201d7' })
+    expect(CMS_FN_SRC_123.cms_readable_program_ids).not.toBe(CMS_FN_MATRIX.cms_readable_program_ids.src)
+    expect(CMS_TRIGGERS_123).toHaveLength(49)
+    expect(CMS_TRIGGERS_123.filter((t) => t.endsWith('|A'))).toHaveLength(46)
+    expect(CMS_TRIGGERS_123.filter((t) => t.endsWith('|O'))).toHaveLength(3)
+    expect(new Set(CMS_TRIGGERS_123).size).toBe(49)
+    expect(CMS_TRIGGERS_123.filter((t) => / REFERENCING .* FOR EACH STATEMENT /.test(t))).toHaveLength(15)
+    expect(CMS_TRIGGERS_123.filter((t) => / BEFORE TRUNCATE ON /.test(t)).map((t) => / ON (\w+) /.exec(t)![1]).sort()).toEqual([...CMS_TABLES_FROZEN_123].sort())
+    expect(cmsVerifyAclSql()).toMatch(/AS n_ex123,[\s\S]*AS md5_ex123/)
+    // db-reviewer 123 P2: post --require-proven chỉ có ở 123; SQL mới đọc đúng khoá seal_expect của 122, quyền gián tiếp, V8 migration.
+    expect(cmsPostProvenKeys('123')).toEqual(['v5', 'lock-preview'])
+    expect((['120', '121', '122'] as const).map((p) => cmsPostProvenKeys(p).length)).toEqual([0, 0, 0])
+    expect(CMS_VERIFY_SQL.invRunFrozen).toMatch(/seal_expect ->> 'sales_lines'[\s\S]*seal_expect ->> 'results'[\s\S]*seal_expect ->> 'catalog'[\s\S]*seal_expect ->> 'result_lines'/)
+    expect(CMS_VERIFY_SQL.invPayoutStaff).toContain('FULL JOIN')
+    expect(CMS_VERIFY_SQL.payoutReach).toContain("has_any_column_privilege(ro.n, c.oid, 'SELECT,INSERT,UPDATE,REFERENCES')")
+    expect(CMS_VERIFY_SQL.payoutReach).toContain('pg_rewrite')
+    expect(CMS_VERIFY_SQL.lockPreview).toContain("ARRAY['CMS_LOCK_RELEASE_GATE', 'CMS_LOCK_POLICY_PENDING']")
+    for (const k of ['invPayoutStaff', 'invRunFrozen', 'payoutReach', 'lockPreview'] as const) {
+      expect(CMS_VERIFY_SQL[k], k).not.toMatch(/\b(INSERT|UPDATE|DELETE|TRUNCATE|ALTER|GRANT|CREATE)\b(?! *,)|email|full_name|name_snapshot/)
+    }
+  })
+
+  test('V8 phase 123 (Q-208 / Q-217): rpc_cms_payout gọi được; lộ / chặn sai / lỗi / email / tổng / tập dòng lệch ⇒ đỏ; chưa có payout ⇒ CHƯA; khoá JSON theo danh sách cho phép của vai; CLI v8 --phase=123', () => {
+    const g123: Record<string, unknown> = {
+      role_now: 'authenticated', uid: A, ro: 'on', iso: 'repeatable read', me_bypass: false, runner_bypass: true, user_role: 'store_manager', su: false, db_phase: '123',
+      qa_db: false, qa: false, same_set: true, readable: 1,
+      rls_cms_programs: true, rls_cms_program_stores: true, rls_cms_program_products: true, rls_cms_program_tiers: true,
+      rls_cms_import_runs: true, rls_cms_product_master: true,
+      seen_programs: 1, exp_programs: 1, total_programs: 3, seen_stores: 1, exp_stores: 1, total_stores: 3,
+      seen_products: 1, exp_products: 1, total_products: 3, seen_tiers: 1, exp_tiers: 1, total_tiers: 3,
+      seen_import_runs: 0, exp_import_runs: 0, total_import_runs: 1, seen_master: 0, exp_master: 0, total_master: 3,
+      test_programs: 0, draft_programs: 0, out_programs: 0, out_stores: 0, out_products: 0, out_tiers: 0, out_import_runs: 0,
+      read_qa_access: false, read_sync_runs: false, write_programs: false, private_tables: 0,
+      rpc_callable: 'rpc_cms_payout,rpc_cms_result_excluded,rpc_cms_result_header,rpc_cms_result_lines,rpc_cms_result_rows',
+      rx_leak: 0, rx_deny: 0, rx_err: 0, rx_exc: 0, rx_seen_n: 2, rx_exp_n: 2, rx_total_n: 3, rx_same_set: true,
+      rx_role: 'authenticated', rx_outsider: true, rx_outside: 2, rx_exc_calls: 3, rx_lleak: 0,
+      rx_lseen_n: 4, rx_lexp_n: 4, rx_ltotal_n: 6, rx_lines_same: true, rx_catalog_same: true, rx_users_same: true,
+      py_role: 'authenticated', py_leak: 0, py_deny: 0, py_err: 0, py_nolock: 0, py_calls: 1, py_field: 0, py_prog_n: 1,
+      py_seen_n: 2, py_exp_n: 2, py_total_n: 3, py_same_set: true, py_totals_same: true,
+    }
+    const okRun = evaluateCmsV8(g123, A, 'qlch', { phase: '123', requireProven: ['payout', 'results'] })
+    expect(okRun.filter((c) => !c.ok)).toEqual([])
+    expect(['v8-table:payout', 'v8-payout-rpc', 'v8-payout-fields'].map((id) => okRun.find((c) => c.id === id)?.proven)).toEqual([true, true, true])
+    // Chưa có payout / chưa đọc được payout nào ⇒ ĐẠT nhưng CHƯA CHỨNG MINH; --require-proven=payout ⇒ đỏ.
+    const empty = { ...g123, py_calls: 0, py_prog_n: 0, py_seen_n: 0, py_exp_n: 0, py_total_n: 0 }
+    const un = evaluateCmsV8(empty, A, 'qlch', { phase: '123' })
+    expect(un.filter((c) => !c.ok)).toEqual([])
+    expect(['v8-table:payout', 'v8-payout-fields'].map((id) => un.find((c) => c.id === id)?.proven)).toEqual([false, false])
+    expect(evaluateCmsV8(empty, A, 'qlch', { phase: '123', requireProven: ['payout'] }).filter((c) => !c.ok).map((c) => c.id)).toEqual(['v8-require-proven:payout'])
+    const bad: Array<[Record<string, unknown>, string]> = [
+      [{ py_leak: 1 }, 'v8-payout-rpc'], [{ py_deny: 1 }, 'v8-payout-rpc'], [{ py_err: 1 }, 'v8-payout-rpc'], [{ py_role: 'postgres' }, 'v8-payout-role'],
+      [{ py_same_set: false }, 'v8-table:payout'], [{ py_seen_n: 3 }, 'v8-table:payout'],
+      [{ py_totals_same: false }, 'v8-payout-fields'], [{ py_field: 1 }, 'v8-payout-fields'],
+      [{ rpc_callable: CMS_V8_RPC_CALLABLE['122'] }, 'v8-private'], [{ db_phase: '122' }, 'v8-phase'],
+      [{ rx_same_set: false }, 'v8-table:results'], [{ rx_lleak: 1 }, 'v8-result-lines-user'],
+    ]
+    for (const [o, id] of bad) expect(evaluateCmsV8({ ...g123, ...o }, A, 'qlch', { phase: '123' }).filter((c) => !c.ok).map((c) => c.id), JSON.stringify(o)).toContain(id)
+    // Khai phase 122 trên DB 123 ⇒ đỏ v8-phase (lời rõ) + v8-private (rpc_cms_payout gọi được).
+    const as122 = evaluateCmsV8(g123, A, 'qlch', { phase: '122' })
+    expect(as122.filter((c) => !c.ok).map((c) => c.id)).toEqual(['v8-phase', 'v8-private'])
+    expect(as122.find((c) => c.id === 'v8-phase')!.detail).toMatch(/PHASE KHÔNG PHÙ HỢP: DB phase 123 — khai báo --phase=122/)
+    // SQL 123: khối rpc_cms_payout chạy SAU SET LOCAL ROLE authenticated và sau khối 122; oracle SM gồm 'locked'; chỉ câu SELECT cuối trả dòng.
+    const v8 = pgMetaReadOnlySnapshot(cmsVerifyV8Sql123(A, 'sm'))
+    expect(v8.indexOf('SET LOCAL ROLE authenticated;')).toBeLessThan(v8.indexOf('DO $cmsv8r$'))
+    expect(v8.indexOf('DO $cmsv8r$')).toBeLessThan(v8.indexOf('DO $cmsv8p$'))
+    expect(v8).toContain('public.rpc_cms_payout(v_id)')
+    expect(v8).toContain("WHERE (NOT p.is_test OR v_qa) AND p.status IN ('active', 'locked')\n       AND EXISTS (SELECT 1 FROM public.cms_program_stores ps\n                     JOIN public.sm_store_assignments")
+    expect(v8.split('\n').filter((l) => /^(SELECT|WITH) /.test(l)).map((l) => l.slice(0, 6))).toEqual(['WITH h', 'SELECT'])
+    const v8p122 = cmsVerifyV8Sql(A, 'sm', '122')
+    expect(v8p122).not.toContain('cmsv8p')
+    expect(v8p122).toContain("WHERE (NOT p.is_test OR v_qa) AND p.status = 'active'\n       AND EXISTS (SELECT 1 FROM public.cms_program_stores ps\n                     JOIN public.sm_store_assignments")
+    expect(cmsV8ProvenKeys('123')).toContain('payout')
+    expect(cmsV8ProvenKeys('122')).not.toContain('payout')
+    const qsql = cmsVerifyV8Sql123(A, 'qlch'), ssql = cmsVerifyV8Sql123(A, 'super')
+    const arr = (sql: string, v: string) => new RegExp(`${v} text\\[\\] := ([^;]*);`).exec(sql)![1]
+    expect(qsql).toContain('v_sdecl boolean := false')
+    expect(ssql).toContain('v_sdecl boolean := true')
+    for (const k of CMS_PAYOUT_KEYS_TOP) { expect(arr(qsql, 'v_top_ok')).toContain(`'${k}'`); expect(arr(ssql, 'v_top_ok')).toContain(`'${k}'`) }
+    for (const k of CMS_PAYOUT_KEYS_TOP_SUPER) { expect(arr(qsql, 'v_top_ok')).not.toContain(`'${k}'`); expect(arr(ssql, 'v_top_ok')).toContain(`'${k}'`) }
+    for (const k of CMS_PAYOUT_KEYS_ROW) { expect(arr(qsql, 'v_row_ok')).toContain(`'${k}'`); expect(arr(ssql, 'v_row_ok')).toContain(`'${k}'`) }
+    expect(arr(qsql, 'v_row_ok')).not.toContain("'email'")
+    expect(arr(ssql, 'v_row_ok')).toContain("'email'")
+    expect(qsql).not.toContain("v_p ? 'locked_by'")
+    expect(qsql).toContain("has_any_column_privilege(c.oid, 'SELECT,INSERT,UPDATE,REFERENCES')")
+    expect(cmsVerifyV8Sql(A, 'qlch', '122')).not.toContain('has_any_column_privilege')
+    // P3a: CLI nhận v8 --phase=123 (harness qa-cms-cli-exit.mjs §2b dùng 124 làm "phase lạ"; §7 chạy v8 123 trên DB đã chốt).
+    expect(CMS_V8_PHASES).toEqual(['120', '121', '122', '123'])
   })
 
   test('đóng run có cảnh báo: chỉ đóng khi xác nhận ĐÚNG tập chương trình bị cảnh báo', () => {
@@ -627,6 +734,7 @@ test.describe('CMS QA tooling · CLI âm (thoát 2 trước mọi IO) @desktop',
   test('cms-verify: thiếu / sai host, phase, pre, user ⇒ 2; print-sql chỉ in khối READ ONLY', () => {
     for (const args of [['acl-snapshot'], ['post', '--phase=120', '--expect-host=other.invalid'],
       ['post', '--phase=122', '--expect-host=cms-qa-test.invalid'], ['post', '--phase=120', '--pre=khong-co.json', '--expect-host=cms-qa-test.invalid'],
+      ['post', '--phase=123', '--expect-host=cms-qa-test.invalid'], ['post', '--phase=124', '--pre=khong-co.json', '--expect-host=cms-qa-test.invalid'],
       ['v8', '--user=abc', '--role=staff', '--expect-host=cms-qa-test.invalid'],
       ['v8', `--user=${A}`, '--expect-host=cms-qa-test.invalid'], // thiếu --role
       ['v8', `--user=${A}`, '--role=root', '--expect-host=cms-qa-test.invalid'],
@@ -636,6 +744,26 @@ test.describe('CMS QA tooling · CLI âm (thoát 2 trước mọi IO) @desktop',
       const r = run('cms-verify.mjs', args)
       expect(r.code, args.join(' ') + '\n' + r.out).toBe(2)
     }
+    // post --require-proven: khoá theo phase (123: v5 | lock-preview); 120–122 không có khoá ⇒ 2 trước IO.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cms-verify-rp-'))
+    try {
+      const preOf = (nCms: number) => {
+        const fp = path.join(tmpDir, `pre-${nCms}.json`)
+        fs.writeFileSync(fp, JSON.stringify({ kind: 'cms-acl-snapshot', host: 'cms-qa-test.invalid',
+          acl: { db_now: '2026-11-03T00:00:00.000Z', n_all: 60 + nCms, n_old: 60, md5_all: 'a'.repeat(32), md5_old: 'b'.repeat(32) } }))
+        return fp
+      }
+      const pre123 = preOf(37), pre122 = preOf(14)
+      for (const [args, re] of [
+        [['post', '--phase=123', `--pre=${pre123}`, '--require-proven=results', '--expect-host=cms-qa-test.invalid'], /--require-proven cho post --phase=123: <v5\|lock-preview>/],
+        [['post', '--phase=123', `--pre=${pre123}`, '--require-proven=v5,nope', '--expect-host=cms-qa-test.invalid'], /--require-proven cho post --phase=123/],
+        [['post', '--phase=122', `--pre=${pre122}`, '--require-proven=v5', '--expect-host=cms-qa-test.invalid'], /--require-proven cho post --phase=122: <\(không có khoá\)>/],
+      ] as Array<[string[], RegExp]>) {
+        const r = run('cms-verify.mjs', args)
+        expect(r.code, args.join(' ') + '\n' + r.out).toBe(2)
+        expect(r.out).toMatch(re)
+      }
+    } finally { fs.rmSync(tmpDir, { recursive: true, force: true }) }
     const p = run('cms-verify.mjs', ['print-sql', '--what=v8', `--user=${A}`, '--role=sm'])
     expect(p.code).toBe(0)
     // PM P2 cli-exit §5: SQL chỉ trên stdout (cảnh báo Node như NO_COLOR/FORCE_COLOR nằm ở stderr, không phải SQL).
@@ -645,9 +773,20 @@ test.describe('CMS QA tooling · CLI âm (thoát 2 trước mọi IO) @desktop',
 
 test('CMS QA tooling — SQL thật trên PGlite (migration 120 / 121 / 122, marker, V8, đóng run, VERIFY phase 122 + bắt lệch) @desktop', () => {
   test.setTimeout(300_000)
-  const r = spawnSync(process.execPath, [path.join(WEBAPP, 'scripts', 'qa-cms-qa-tooling.mjs')], { encoding: 'utf8', timeout: 290_000 })
+  // --part=base: đúng §1–§12 như trước (phase 123 tách sang test dưới để mỗi phần có hạn giờ riêng).
+  const r = spawnSync(process.execPath, [path.join(WEBAPP, 'scripts', 'qa-cms-qa-tooling.mjs'), '--part=base'], { encoding: 'utf8', timeout: 290_000 })
   const out = `${r.stdout}\n${r.stderr}`
   expect(out, out.slice(-2000)).toMatch(/\n\d+ đạt · 0 lỗi/)
+  expect(r.status).toBe(0)
+})
+
+test('CMS QA tooling — VERIFY phase 123 trên PGlite (120 → 121 → 122 → 123 thật: POST 123, phase sai, bắt lệch, bất biến V5 / V6, rollback ⇒ POST 122, V8 123) @desktop', () => {
+  test.setTimeout(300_000)
+  const r = spawnSync(process.execPath, [path.join(WEBAPP, 'scripts', 'qa-cms-qa-tooling.mjs'), '--part=123'], { encoding: 'utf8', timeout: 290_000 })
+  const out = `${r.stdout}\n${r.stderr}`
+  expect(out, out.slice(-2000)).toMatch(/\n\d+ đạt · 0 lỗi/)
+  expect(out).toContain('13. VERIFY POST 123')
+  expect(out).toContain('17. V8 phase 123')
   expect(r.status).toBe(0)
 })
 

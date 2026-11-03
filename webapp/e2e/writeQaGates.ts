@@ -106,7 +106,7 @@ export function careWriteGate(input: {
 // Cổng cho MỌI QA CMS ghi lên DB production — tự động (spec) lẫn QA tay qua server localhost (launcher
 // scripts/cms-qa-run.mjs gọi đúng hàm này trước khi dựng server). Cùng nguyên tắc care / order bonus, thêm:
 //   · host so `URL.host` (gồm port, như --expect-host của bootstrap) — gõ lại chính xác project đích;
-//   · CMS_PROGRAM_ENABLED=true KHÔNG được nằm trong .env.local (cờ CMS chỉ bật trong process của launcher);
+//   · CMS_PROGRAM_ENABLED=true / CMS_LOCK_ENABLED=true KHÔNG được nằm trong .env.local (cờ CMS chỉ bật trong process QA);
 //   · marker = manifest run đang mở (.qa-cms.json) ⇒ chặn; KHÔNG xoá tay để bỏ qua — chạy
 //     `node scripts/cms-qa-run.mjs close` để đối chiếu DB (chương trình QA còn is_test, không có chương trình thật
 //     do tài khoản QA tạo trong run) rồi lưu manifest đã đóng. Chương trình QA không xoá qua app (H8).
@@ -138,6 +138,10 @@ export function cmsWriteGate(input: {
     // Bắt cả chú thích đuôi (`=true # ghi chú` — dotenv vẫn đọc là true).
     if (/^\s*(?:export\s+)?CMS_PROGRAM_ENABLED\s*=\s*["']?true["']?\s*(?:#.*)?$/m.test(envFileText)) {
       return { ok: false, reason: 'CMS_PROGRAM_ENABLED=true đang nằm trong .env.local — cờ CMS cho QA chỉ bật trong process của launcher (scripts/cms-qa-run.mjs), xoá khỏi .env.local.' }
+    }
+    // P3a (work order §4.2): cờ chốt chỉ bật trong process QA được kiểm soát (launcher / cms-qa-results.mjs lock).
+    if (/^\s*(?:export\s+)?CMS_LOCK_ENABLED\s*=\s*["']?true["']?\s*(?:#.*)?$/m.test(envFileText)) {
+      return { ok: false, reason: 'CMS_LOCK_ENABLED=true đang nằm trong .env.local — cờ chốt CMS chỉ bật bằng biến PROCESS của lệnh QA (launcher / cms-qa-results.mjs lock), xoá khỏi .env.local.' }
     }
   }
   const host = urlHostWithPort(env.NEXT_PUBLIC_SUPABASE_URL)

@@ -19,6 +19,8 @@ import { CMS_DEC_FACTOR, formatCmsDecimal, parseCmsDecimal } from '../lib/cms/de
 import type { CmsSalesSyncDeps } from '../lib/cms/salesSync'
 import type { CmsRawRow } from '../lib/cms/source/contract'
 import { formatUtcMicros, isCmsIsoDate, parseUtcMicros } from '../lib/cms/time'
+import { cmsLockEnabledFromEnv } from '../lib/cms/flags'
+import { cmsNormalizeAck } from '../lib/cms/payoutView'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const ISO_UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/
@@ -151,7 +153,7 @@ export function parseCmsQaLinesPerStaff(raw: string | undefined): { ok: true; va
  * (launcher QA tay — chế độ có canh marker) và launcher còn sống, cây sạch + HEAD / tree = candidate của run, staff chọn
  * là tài khoản QA vai staff của run.
  */
-export function cmsQaWriterLocalCheck(i: {
+export interface CmsQaRunLocalInput {
   manifest: CmsQaRunManifest | null
   confirmRun: string | undefined
   host: string | null
@@ -159,11 +161,24 @@ export function cmsQaWriterLocalCheck(i: {
   gitHead: string
   gitTree: string
   launcherAlive: boolean
-  staffIds: readonly string[]
-}): { ok: true } | { ok: false; reasons: string[] } {
+}
+
+export function cmsQaWriterLocalCheck(i: CmsQaRunLocalInput & { staffIds: readonly string[] }): { ok: true } | { ok: false; reasons: string[] } {
+  const base = cmsQaRunLocalReasons(i)
+  if (base === null) return { ok: false, reasons: ['không có run QA đang mở'] }
+  const m = i.manifest as CmsQaRunManifest
+  const reasons = [...base]
+  const qaStaff = new Set(m.users.filter((u) => u.role === 'staff').map((u) => u.id))
+  for (const id of i.staffIds) if (!qaStaff.has(id)) reasons.push(`${mask(id)} không phải tài khoản QA vai staff của run`)
+  if (i.staffIds.length === 0) reasons.push('chưa chọn tài khoản staff QA')
+  return reasons.length ? { ok: false, reasons } : { ok: true }
+}
+
+/** Điều kiện cục bộ chung của mọi lệnh GHI trong run (writer kết quả, thao tác chốt). null ⇒ không có run mở. */
+function cmsQaRunLocalReasons(i: CmsQaRunLocalInput): string[] | null {
   const m = i.manifest
   const reasons: string[] = []
-  if (!m || m.status !== 'open') return { ok: false, reasons: ['không có run QA đang mở'] }
+  if (!m || m.status !== 'open') return null
   if (!i.confirmRun) reasons.push(`thiếu --confirm-run=<runId> (run đang mở: ${m.runId}) — gõ lại runId để xác nhận ghi`)
   else if (i.confirmRun !== m.runId) reasons.push(`--confirm-run (${i.confirmRun}) khác run đang mở (${m.runId})`)
   if (!i.host || i.host !== m.host) reasons.push(`host hiện tại (${i.host ?? '—'}) khác host của run (${m.host})`)
@@ -174,10 +189,7 @@ export function cmsQaWriterLocalCheck(i: {
   else if (!i.launcherAlive) reasons.push('launcher / server QA của run không còn chạy (pid launcher, pid server hoặc cổng) — canh marker không còn hiệu lực, không ghi')
   if (!i.treeClean) reasons.push('cây Git không sạch — writer phải chạy trên đúng candidate của run')
   if (i.gitHead !== m.gitHead || i.gitTree !== m.gitTree) reasons.push('HEAD / tree hiện tại khác candidate của run')
-  const qaStaff = new Set(m.users.filter((u) => u.role === 'staff').map((u) => u.id))
-  for (const id of i.staffIds) if (!qaStaff.has(id)) reasons.push(`${mask(id)} không phải tài khoản QA vai staff của run`)
-  if (i.staffIds.length === 0) reasons.push('chưa chọn tài khoản staff QA')
-  return reasons.length ? { ok: false, reasons } : { ok: true }
+  return reasons
 }
 
 /** Chương trình + mốc run (một câu SELECT chỉ đọc). */
@@ -226,6 +238,21 @@ export function cmsQaWriterDbCheck(i: {
 export interface CmsQaGuardClock { now(): number; workUntil: number; minStartMs: number }
 
 /**
+ * Đồng hồ đơn điệu của writer theo thang epoch ms, số NGUYÊN (floor — vẫn không giảm): mọi hiệu thời gian / timeout tính từ
+ * nó là số nguyên. Node từ chối `AbortSignal.timeout(số lẻ)` (ERR_OUT_OF_RANGE) — PM r2 §3.
+ */
+export function cmsQaMonoClock(perf: { timeOrigin: number; now(): number } = performance): () => number {
+  return () => Math.floor(perf.timeOrigin + perf.now())
+}
+
+/** Timeout I/O = số nguyên hữu hạn, max(sàn, floor(min(muốn, còn lại))) — không vượt phần còn lại khi còn lại ≥ sàn; NaN ⇒ ném. */
+export function cmsQaIoTimeoutMs(wantMs: number, remainMs: number, floorMs = 1): number {
+  const v = Math.floor(Math.min(wantMs, remainMs))
+  if (!Number.isFinite(v)) throw new Error(CMS_QA_GUARD_DEADLINE)
+  return Math.max(floorMs, v)
+}
+
+/**
  * Bọc các bước GHI của deps lõi (PM 03/11 QA-P1-1 / QA-P1-2):
  *  · trước open / stage / seal / publish / cleanup: hết ngân sách ⇒ CMS_QA_GUARD_DEADLINE (không ghi); gọi `guard(step,
  *    ngânSáchCònLạiMs)` — guard ném ⇒ CMS_QA_GUARD_LOST (không ghi); guard tiêu hết ngân sách ⇒ CMS_QA_GUARD_DEADLINE;
@@ -249,7 +276,7 @@ export function cmsQaGuardedDeps<D extends Pick<CmsSalesSyncDeps, 'openRun' | 's
       const remain = left()
       if (remain < clock.minStartMs) throw new Error(CMS_QA_GUARD_DEADLINE)
       const io = a[a.length - 1] as { timeoutMs: number }
-      a[a.length - 1] = { ...io, timeoutMs: Math.max(1, Math.min(io.timeoutMs, remain)) }
+      a[a.length - 1] = { ...io, timeoutMs: cmsQaIoTimeoutMs(io.timeoutMs, remain) }
       if (k === 'openRun' && opts.tag) a[1] = { ...(a[1] as object), qa_run_id: opts.tag.qaRunId, qa_writer_id: opts.tag.writerId }
       const out = await orig(...a)
       if (k === 'openRun' && opts.onOpened) {
@@ -430,4 +457,317 @@ export function cmsQaReconcileCheck(e: CmsQaWriterEntry, rows: readonly CmsQaSal
   const running = linked.filter((r) => r.status === 'running')
   if (running.length > 1) return { ok: false, reason: `${running.length} run running cùng gắn writer ${e.writerId} — báo PM / operator` }
   return { ok: true, linked, orphan: running[0]?.id ?? null }
+}
+
+// ── QA CHỐT (P3a) — thao tác chốt có gate + sổ ý định ─────────────────────────
+// Work order P3a §4.2: chỉ trong run QA đang mở (cùng manifest / launcher / candidate / marker / ngân sách đơn điệu của writer);
+// chương trình is_test thuộc run, đã hết kỳ (QA-C); actor = super QA của run (allowlist app — canManageCms), không phải người
+// gõ lệnh. Cờ PROGRAM + EARNINGS + LOCK chỉ ở biến PROCESS của lệnh (LOCK trong .env.local ⇒ gate chặn).
+// Thứ tự một lần chốt: guard (đọc DB → kiểm lại manifest + launcher SAU IO) → ghi Ý ĐỊNH vào sổ (đồng bộ, độc quyền `wx`,
+// không await giữa guard cuối và RPC) → RPC 123 → ghi kết quả (atomic). Mất phản hồi / lưu sổ sau RPC lỗi ⇒ `unknown` / sổ
+// còn `intent` ⇒ rc 1; KHÔNG kết luận chưa chốt. `reconcile --writer=l-…` đọc payout theo program / run / actor của sổ: có ⇒
+// đã chốt; không có ⇒ chỉ kết luận CHƯA chốt khi không còn phiên DB nào đang chạy rpc_cms_program_lock và đã qua thời gian
+// lắng. close đối chiếu mọi payout trong cửa sổ run với sổ (chốt ngoài sổ — kể cả bấm trên UI — ⇒ ĐỎ).
+
+export const CMS_QA_LOCK_ID_RE = /^l-[0-9a-f]{12}$/
+/** Timeout phía client của RPC chốt (DB tự lock_timeout 3 s). Hết ⇒ không rõ (UNKNOWN_OUTCOME). */
+export const CMS_QA_LOCK_RPC_TIMEOUT_MS = 30_000
+/** Ngân sách guard + RPC của một lần chốt (đồng hồ đơn điệu). */
+export const CMS_QA_LOCK_BUDGET_MS = 120_000
+/**
+ * Thời gian lắng (tính từ lúc lệnh chốt kết thúc / bắt đầu nếu tiến trình chết) trước khi reconcile được kết luận "CHƯA chốt":
+ * request có thể còn xếp hàng ở gateway / pool PostgREST (mặc định chờ pool 10 s) dù client đã bỏ.
+ */
+export const CMS_QA_LOCK_SETTLE_MS = 30_000
+export const CMS_QA_LOCK_FLAGS = ['CMS_PROGRAM_ENABLED', 'CMS_EARNINGS_ENABLED', 'CMS_LOCK_ENABLED'] as const
+
+/** Cờ chốt bật bằng biến PROCESS của chính lệnh (không lấy từ .env.local). */
+export function cmsQaLockFlagsOk(processEnv: Record<string, string | undefined>): { ok: true } | { ok: false; reason: string } {
+  if (cmsLockEnabledFromEnv(processEnv)) return { ok: true }
+  const off = CMS_QA_LOCK_FLAGS.filter((k) => processEnv[k] !== 'true')
+  return { ok: false, reason: `cần ${off.join(', ')}=true là biến PROCESS của lệnh này (cờ LOCK chỉ bật trong process QA, không .env.local / Coolify)` }
+}
+
+/**
+ * Launcher (security review P3a P1-1): server QA kế thừa env của shell ⇒ CMS_LOCK_ENABLED trong process mở nút "Chốt kỳ" trên
+ * UI (đường action không có guard run / sổ của công cụ). Chỉ cho khi operator opt-in `start --with-lock` (QA chốt — runbook
+ * §4.4) cùng EARNINGS; ngược lại chặn trước IO. Opt-in còn phải qua cmsQaLauncherLockDbCheck (policy chốt THẬT còn khoá).
+ */
+export function cmsQaLauncherLockCheck(i: { processEnv: Record<string, string | undefined>; withLock: boolean; server: boolean }):
+  { ok: true; lock: boolean } | { ok: false; reason: string } {
+  const on = i.processEnv.CMS_LOCK_ENABLED === 'true'
+  if (on && !i.withLock) {
+    return { ok: false, reason: 'CMS_LOCK_ENABLED=true đang ở process — server QA sẽ mở nút "Chốt kỳ" trên UI. Chỉ dùng cho QA chốt (runbook §4.4) bằng `start --with-lock`; còn lại bỏ biến này khỏi shell rồi chạy lại' }
+  }
+  if (!i.withLock) return { ok: true, lock: false }
+  if (!i.server) return { ok: false, reason: '--with-lock chỉ dùng khi dựng server QA (không kèm --no-server)' }
+  if (!on || i.processEnv.CMS_EARNINGS_ENABLED !== 'true') return { ok: false, reason: '--with-lock cần CMS_EARNINGS_ENABLED=true và CMS_LOCK_ENABLED=true là biến PROCESS của lệnh start' }
+  return { ok: true, lock: true }
+}
+
+/** 123 đã có (hàm policy). Câu riêng: gọi hàm chưa tồn tại làm hỏng cả câu. */
+export const CMS_QA_HAS_LOCK_POLICY_SQL = `SELECT (to_regprocedure('public.cms__lock_policy()') IS NOT NULL) AS has_policy`
+export const CMS_QA_REAL_LOCK_READY_SQL = `SELECT (public.cms__lock_policy() -> 'real' ->> 'ready') AS real_ready`
+
+/** `--with-lock` chỉ khi DB đã có 123 và policy chốt THẬT còn khoá (real.ready = false) ⇒ UI server QA không chốt được chương trình thật. */
+export function cmsQaLauncherLockDbCheck(hasPolicy: unknown, realReady: unknown): { ok: true } | { ok: false; reason: string } {
+  if (hasPolicy !== true) return { ok: false, reason: 'DB chưa có migration 123 (cms__lock_policy) — không cần / không dùng --with-lock' }
+  if (realReady !== 'false') return { ok: false, reason: `policy chốt THẬT không còn khoá (real.ready = ${String(realReady)}) — server QA có LOCK sẽ chốt được chương trình thật bằng UI; không dùng --with-lock, báo PM / operator` }
+  return { ok: true }
+}
+
+export interface CmsQaLockArgs { actorId: string; expectedRunId: string | null; policyVersion: number | null; ack: string | null }
+
+/** Tham số lệnh `lock` (forLock) / `lock-preview`. Lý do (Q-213, giả định QA) chuẩn hoá như action; sai ⇒ chặn trước IO. */
+export function parseCmsQaLockArgs(v: { actor?: string; expectRun?: string; policyVersion?: string; ack?: string }, forLock: boolean):
+  { ok: true; value: CmsQaLockArgs } | { ok: false; reason: string } {
+  const actor = v.actor?.trim().toLowerCase()
+  if (!actor || !UUID_RE.test(actor)) return { ok: false, reason: 'cần --actor=<uuid super QA của run>' }
+  if (!forLock) {
+    if (v.expectRun !== undefined || v.policyVersion !== undefined || v.ack !== undefined) return { ok: false, reason: 'lock-preview không nhận --expect-run / --policy-version / --ack' }
+    return { ok: true, value: { actorId: actor, expectedRunId: null, policyVersion: null, ack: null } }
+  }
+  const run = v.expectRun?.trim().toLowerCase()
+  if (!run || !UUID_RE.test(run)) return { ok: false, reason: 'cần --expect-run=<run_id hiện hành gõ lại từ lock-preview>' }
+  if (v.policyVersion === undefined || !/^[1-9][0-9]{0,8}$/.test(v.policyVersion)) return { ok: false, reason: 'cần --policy-version=<số nguyên dương từ lock-preview>' }
+  let ack: string | null = null
+  if (v.ack !== undefined) {
+    ack = cmsNormalizeAck(v.ack)
+    if (ack === null) return { ok: false, reason: '--ack phải dài 10…1.000 ký tự sau khi bỏ khoảng trắng hai đầu' }
+  }
+  return { ok: true, value: { actorId: actor, expectedRunId: run, policyVersion: Number(v.policyVersion), ack } }
+}
+
+/** Điều kiện cục bộ của thao tác chốt: như writer + actor là tài khoản QA vai admin của run (super kiểm ở DB + allowlist app). */
+export function cmsQaLockLocalCheck(i: CmsQaRunLocalInput & { actorId: string }): { ok: true } | { ok: false; reasons: string[] } {
+  const base = cmsQaRunLocalReasons(i)
+  if (base === null) return { ok: false, reasons: ['không có run QA đang mở'] }
+  const m = i.manifest as CmsQaRunManifest
+  const reasons = [...base]
+  if (!m.users.some((u) => u.id === i.actorId && u.role === 'admin')) reasons.push(`${mask(i.actorId)} không phải tài khoản QA vai admin của run — chỉ super QA của run được chốt chương trình QA`)
+  return reasons.length ? { ok: false, reasons } : { ok: true }
+}
+
+/** Vai + email của actor (đọc chỉ để kiểm super bằng allowlist app — không in). */
+export function cmsQaActorSql(actorId: string): string {
+  if (!UUID_RE.test(actorId)) throw new Error('actorId không phải UUID')
+  return `SELECT u.id::text AS id, u.role::text AS role, u.email FROM public.users u WHERE u.id = '${actorId}'::uuid`
+}
+
+export type CmsQaLockStatus = 'intent' | 'done' | 'rejected' | 'unknown' | 'reconciled'
+export interface CmsQaPayoutRef { programId: string; runId: string; lockedBy: string; lockedAt: string; isTest: boolean }
+
+export interface CmsQaLockEntry {
+  kind: 'cms-qa-lock'
+  version: 1
+  operationId: string
+  qaRunId: string
+  pid: number
+  programId: string
+  actorId: string
+  expectedRunId: string
+  policyVersion: number
+  /** Có gửi lý do xác nhận (Q-213) — nội dung lý do nằm ở DB (cms_payouts.ack_reason), sổ không chép. */
+  ack: boolean
+  startedAt: string
+  status: CmsQaLockStatus
+  finishedAt: string | null
+  result: { ok: boolean; code: string | null; already: boolean; runId: string | null; amountVnd: string | null } | null
+  reconcile?: { at: string; locked: boolean; payout: CmsQaPayoutRef | null } | null
+}
+
+/** Mục sổ Ý ĐỊNH — ghi TRƯỚC RPC (qa_run_id, operation_id, program_id, expected_run_id, policy_version). */
+export function newCmsQaLockEntry(i: { operationId: string; qaRunId: string; pid: number; programId: string; actorId: string; expectedRunId: string; policyVersion: number; ack: boolean; now: string }): CmsQaLockEntry {
+  if (!CMS_QA_LOCK_ID_RE.test(i.operationId) || !RUN_ID_RE.test(i.qaRunId) || !UUID_RE.test(i.programId) || !UUID_RE.test(i.actorId)
+      || !UUID_RE.test(i.expectedRunId) || !Number.isSafeInteger(i.policyVersion) || i.policyVersion < 1 || !Number.isInteger(i.pid) || i.pid <= 0) {
+    throw new Error('mục sổ chốt không hợp lệ')
+  }
+  return {
+    kind: 'cms-qa-lock', version: 1, operationId: i.operationId, qaRunId: i.qaRunId, pid: i.pid, programId: i.programId,
+    actorId: i.actorId, expectedRunId: i.expectedRunId, policyVersion: i.policyVersion, ack: i.ack, startedAt: i.now,
+    status: 'intent', finishedAt: null, result: null,
+  }
+}
+
+export function parseCmsQaLockEntry(text: string): { ok: true; value: CmsQaLockEntry } | { ok: false; reason: string } {
+  let o: Partial<CmsQaLockEntry>
+  try { o = JSON.parse(text) } catch { return { ok: false, reason: 'không phải JSON' } }
+  if (!o || o.kind !== 'cms-qa-lock' || o.version !== 1) return { ok: false, reason: 'sai loại / phiên bản' }
+  if (typeof o.operationId !== 'string' || !CMS_QA_LOCK_ID_RE.test(o.operationId)) return { ok: false, reason: 'operationId sai' }
+  if (typeof o.qaRunId !== 'string' || !RUN_ID_RE.test(o.qaRunId)) return { ok: false, reason: 'qaRunId sai' }
+  for (const k of ['programId', 'actorId', 'expectedRunId'] as const) {
+    if (typeof o[k] !== 'string' || !UUID_RE.test(o[k] as string)) return { ok: false, reason: `${k} sai` }
+  }
+  if (!Number.isSafeInteger(o.policyVersion) || (o.policyVersion as number) < 1) return { ok: false, reason: 'policyVersion sai' }
+  if (!Number.isInteger(o.pid) || (o.pid as number) <= 0) return { ok: false, reason: 'pid sai' }
+  if (typeof o.startedAt !== 'string' || Number.isNaN(Date.parse(o.startedAt))) return { ok: false, reason: 'startedAt sai' }
+  if (!['intent', 'done', 'rejected', 'unknown', 'reconciled'].includes(o.status as string)) return { ok: false, reason: 'trạng thái sai' }
+  if (o.status !== 'intent' && (o.result === null || o.result === undefined) && o.status !== 'reconciled') return { ok: false, reason: 'thiếu kết quả' }
+  if (o.status === 'reconciled' && (!o.reconcile || typeof o.reconcile.locked !== 'boolean')) return { ok: false, reason: 'thiếu đối chiếu' }
+  return { ok: true, value: o as CmsQaLockEntry }
+}
+
+/** Kết quả lõi action (lib/cms/lockAction) ⇒ trạng thái sổ: thành công ⇒ done; UNKNOWN_OUTCOME ⇒ unknown; mã khác ⇒ rejected (DB / cổng từ chối xác định). */
+export function cmsQaLockOutcome(r: { ok: boolean; code?: string }): 'done' | 'rejected' | 'unknown' {
+  if (r.ok) return 'done'
+  return r.code === 'UNKNOWN_OUTCOME' ? 'unknown' : 'rejected'
+}
+
+/** Sổ khẳng định chương trình đã chốt (thành công trực tiếp hoặc reconcile thấy payout) — run nào. */
+export function cmsQaLockClaimedRun(e: CmsQaLockEntry): string | null {
+  if (e.status === 'done' && e.result?.ok) return e.result.runId
+  if (e.status === 'reconciled' && e.reconcile?.locked) return e.reconcile.payout?.runId ?? null
+  return null
+}
+
+/** Thao tác chốt CHƯA khép của một chương trình (intent / unknown) — chặn lần chốt mới tới khi reconcile. */
+export function cmsQaPendingLockOps(entries: readonly CmsQaLockEntry[], programId: string): CmsQaLockEntry[] {
+  return entries.filter((e) => e.programId === programId && (e.status === 'intent' || e.status === 'unknown'))
+}
+
+/** Bảng payout có chưa (DB trước 123 ⇒ close vẫn chạy, chỉ kiểm sổ). */
+export const CMS_QA_HAS_PAYOUTS_SQL = `SELECT (to_regclass('public.cms_payouts') IS NOT NULL) AS has_payouts`
+
+/** Payout chốt TRONG cửa sổ run QA (chỉ đọc). Chỉ gọi khi bảng tồn tại. */
+export function cmsQaRunPayoutsSql(startedAt: string): string {
+  if (!ISO_UTC_RE.test(startedAt) || Number.isNaN(Date.parse(startedAt))) throw new Error('startedAt không hợp lệ')
+  return `SELECT p.program_id::text AS program_id, p.run_id::text AS run_id, p.locked_by::text AS locked_by, p.locked_at,
+       p.is_test, g.is_test AS program_is_test, g.status::text AS program_status
+  FROM public.cms_payouts p JOIN public.cms_programs g ON g.id = p.program_id
+ WHERE p.locked_at >= '${startedAt}'::timestamptz ORDER BY p.locked_at, p.program_id`
+}
+
+export interface CmsQaPayoutRow {
+  program_id: string; run_id: string; locked_by: string; locked_at: string; is_test: boolean; program_is_test: boolean; program_status: string
+}
+
+/**
+ * Lượt 1 của reconcile (db-review P2-3): dò phiên ghi payout có thể chưa commit — chạy TRƯỚC khi đọc payout (lượt 2 có snapshot
+ * mới, READ COMMITTED). Chỉ kết luận "CHƯA chốt" khi: vai thấy được query của mọi phiên (superuser / pg_read_all_stats),
+ * track_activities bật, 0 phiên ẩn, 0 phiên client đang chạy chốt (kể cả `idle in transaction` sau câu chốt — bắt qua khoá),
+ * 0 phiên giữ RowExclusiveLock trên bảng payout (INSERT chưa commit giữ khoá tới hết transaction, không phụ thuộc chữ query).
+ */
+export const CMS_QA_LOCK_PROBE_SQL = `SELECT
+  (SELECT r.rolsuper OR pg_has_role(current_user, 'pg_read_all_stats', 'MEMBER') FROM pg_roles r WHERE r.rolname = current_user) AS can_see_all,
+  current_setting('track_activities') = 'on' AS tracking,
+  (SELECT count(*)::int FROM pg_stat_activity a WHERE a.pid <> pg_backend_pid() AND a.datname = current_database()
+     AND a.backend_type = 'client backend' AND a.query = '<insufficient privilege>') AS hidden,
+  (SELECT count(*)::int FROM pg_stat_activity a WHERE a.pid <> pg_backend_pid() AND a.datname = current_database()
+     AND a.backend_type = 'client backend' AND a.state IS DISTINCT FROM 'idle' AND a.query ILIKE '%rpc\\_cms\\_program\\_lock%') AS inflight,
+  (SELECT count(*)::int FROM pg_locks l WHERE l.pid <> pg_backend_pid() AND l.locktype = 'relation' AND l.mode = 'RowExclusiveLock'
+     AND l.relation IN ('public.cms_payouts'::regclass, 'public.cms_payout_staff'::regclass)) AS payout_writers`
+
+export interface CmsQaLockProbeRow { can_see_all: boolean; tracking: boolean; hidden: number; inflight: number; payout_writers: number }
+
+/** Lượt 2 của reconcile: chương trình + payout (nếu có) — đọc SAU lượt dò. */
+export function cmsQaLockStateSql(programId: string): string {
+  if (!UUID_RE.test(programId)) throw new Error('programId không phải UUID')
+  return `SELECT g.id::text AS program_id, g.status::text AS status, g.is_test, p.run_id::text AS run_id, p.locked_by::text AS locked_by, p.locked_at
+  FROM public.cms_programs g LEFT JOIN public.cms_payouts p ON p.program_id = g.id WHERE g.id = '${programId}'::uuid`
+}
+
+export interface CmsQaLockStateRow {
+  program_id: string; status: string; is_test: boolean; run_id: string | null; locked_by: string | null; locked_at: string | null
+}
+
+/**
+ * Reconcile một thao tác chốt (work order §4.2): chỉ khi sổ `intent` (tiến trình đã chết) hoặc `unknown`. Payout khớp ĐÚNG
+ * chương trình + run + actor của sổ ⇒ đã chốt (lệnh mất phản hồi sau commit). Payout lệch ⇒ điều tra, không tự nhận. Không có
+ * payout ⇒ CHƯA chốt chỉ khi không còn phiên DB đang chạy chốt và đã qua thời gian lắng; chưa đủ ⇒ chờ rồi chạy lại.
+ */
+export function cmsQaLockReconcileCheck(e: CmsQaLockEntry, row: CmsQaLockStateRow | undefined, o: { pidAlive: boolean; nowMs: number; probe: CmsQaLockProbeRow | undefined }):
+  { ok: true; locked: boolean; payout: CmsQaPayoutRef | null } | { ok: false; reason: string; wait?: true } {
+  if (e.status === 'reconciled') return { ok: false, reason: `thao tác chốt ${e.operationId} đã reconciled` }
+  if (e.status === 'done' || e.status === 'rejected') return { ok: false, reason: `thao tác chốt ${e.operationId} đã có kết quả xác định (${e.status}${e.result?.code ? ` ${e.result.code}` : ''}) — không cần reconcile` }
+  if (e.status === 'intent' && o.pidAlive) return { ok: false, reason: `thao tác chốt ${e.operationId} (pid ${e.pid}) còn chạy — chờ xong`, wait: true }
+  if (!row) return { ok: false, reason: `không có chương trình ${mask(e.programId)}` }
+  if (row.is_test !== true) return { ok: false, reason: `chương trình ${mask(e.programId)} không phải is_test — dừng, báo PM / operator` }
+  if (row.run_id !== null) {
+    if (row.run_id === e.expectedRunId && row.locked_by === e.actorId && row.status === 'locked') {
+      return { ok: true, locked: true, payout: { programId: e.programId, runId: row.run_id, lockedBy: row.locked_by, lockedAt: String(row.locked_at), isTest: true } }
+    }
+    return { ok: false, reason: `chương trình ${mask(e.programId)} đã chốt nhưng KHÔNG khớp thao tác ${e.operationId} (run / người chốt khác sổ) — điều tra, không tự nhận` }
+  }
+  if (row.status === 'locked') return { ok: false, reason: `chương trình ${mask(e.programId)} locked mà không có payout — bất thường, báo PM / operator` }
+  const pr = o.probe
+  if (!pr || pr.can_see_all !== true || pr.tracking !== true || !Number.isInteger(pr.hidden) || pr.hidden > 0) {
+    return { ok: false, reason: 'không chứng minh được không còn phiên chốt (vai không thấy query mọi phiên / track_activities tắt / có phiên ẩn) — chạy reconcile bằng vai superuser của pg-meta; báo PM / operator nếu vẫn vậy' }
+  }
+  if (!Number.isInteger(pr.inflight) || pr.inflight > 0) return { ok: false, reason: `còn ${pr.inflight} phiên DB đang chạy rpc_cms_program_lock — chờ rồi chạy lại reconcile`, wait: true }
+  if (!Number.isInteger(pr.payout_writers) || pr.payout_writers > 0) return { ok: false, reason: `còn ${pr.payout_writers} phiên giữ khoá ghi bảng payout (transaction chốt chưa kết thúc) — chờ rồi chạy lại reconcile`, wait: true }
+  const since = Date.parse(e.finishedAt ?? e.startedAt)
+  const left = CMS_QA_LOCK_SETTLE_MS - (o.nowMs - since)
+  if (!Number.isFinite(since) || left > 0) return { ok: false, reason: `chưa đủ thời gian lắng — chờ thêm ${Math.ceil(Math.max(left, 0) / 1000)} s rồi chạy lại reconcile (request có thể còn xếp hàng ở gateway)`, wait: true }
+  return { ok: true, locked: false, payout: null }
+}
+
+/** Close: thao tác chốt còn chạy / không rõ ⇒ từ chối (chỉ reconcile gỡ). Sổ hỏng / thuộc run khác / sai tên ⇒ từ chối. */
+export function cmsQaLocksCloseCheck(
+  qaRunId: string, files: readonly { name: string; text: string }[], pidAlive: (pid: number) => boolean,
+): { reasons: string[]; entries: CmsQaLockEntry[] } {
+  const reasons: string[] = []
+  const entries: CmsQaLockEntry[] = []
+  const rec = (id: string) => `chạy \`node scripts/cms-qa-results.mjs reconcile --writer=${id}\``
+  for (const f of files) {
+    const p = parseCmsQaLockEntry(f.text)
+    if (!p.ok) { reasons.push(`sổ chốt ${f.name} hỏng (${p.reason}) — không xoá tay; báo PM / operator`); continue }
+    const e = p.value
+    if (e.qaRunId !== qaRunId) { reasons.push(`sổ chốt ${e.operationId} thuộc run khác (${e.qaRunId})`); continue }
+    if (`${e.operationId}.json` !== f.name) { reasons.push(`sổ chốt ${f.name} sai tên file`); continue }
+    if (e.status === 'intent') {
+      if (pidAlive(e.pid)) reasons.push(`thao tác chốt ${e.operationId} (pid ${e.pid}) CÒN CHẠY — chờ xong rồi mới close`)
+      else reasons.push(`thao tác chốt ${e.operationId} (pid ${e.pid}) không rõ kết thúc (sổ còn ý định) — ${rec(e.operationId)}`)
+    } else if (e.status === 'unknown') {
+      reasons.push(`thao tác chốt ${e.operationId} KẾT QUẢ KHÔNG RÕ (${e.result?.code ?? '—'}; có thể đã chốt) — ${rec(e.operationId)}`)
+    }
+    entries.push(e)
+  }
+  return { reasons, entries }
+}
+
+/**
+ * Close: đối chiếu MỌI payout chốt trong cửa sổ run với sổ chốt (work order §4.2):
+ *  · chương trình THẬT: actor là tài khoản QA của run ⇒ ĐỎ; người khác ⇒ cảnh báo (soát tay + --ack-warnings);
+ *  · chương trình QA: phải có thao tác trong sổ khẳng định đã chốt ĐÚNG run + actor; không có ⇒ ĐỎ (chốt ngoài sổ — UI / công
+ *    cụ khác / mất phản hồi chưa reconcile);
+ *  · sổ khẳng định đã chốt nhưng DB không có payout tương ứng trong cửa sổ ⇒ ĐỎ.
+ */
+export function cmsQaPayoutsCloseCheck(
+  rows: readonly CmsQaPayoutRow[], locks: readonly CmsQaLockEntry[], opts: { qaUserIds: readonly string[]; payoutsTable: boolean },
+): { reasons: string[]; warningProgramIds: string[]; payouts: { programId: string; runId: string; isTest: boolean; lockedAt: string; operationId: string | null }[] } {
+  const reasons: string[] = []
+  const warn = new Set<string>()
+  const qa = new Set(opts.qaUserIds)
+  const payouts: { programId: string; runId: string; isTest: boolean; lockedAt: string; operationId: string | null }[] = []
+  for (const r of rows) {
+    const isTest = r.is_test === true && r.program_is_test === true
+    let op: CmsQaLockEntry | undefined
+    if (!isTest) {
+      if (qa.has(r.locked_by)) reasons.push(`chương trình THẬT ${mask(r.program_id)} bị tài khoản QA của run chốt — dừng, báo PM / operator`)
+      else warn.add(r.program_id)
+    } else {
+      op = locks.find((e) => e.programId === r.program_id && e.actorId === r.locked_by && cmsQaLockClaimedRun(e) === r.run_id)
+      if (!op) reasons.push(`chương trình QA ${mask(r.program_id)} được chốt (run ${mask(r.run_id)}) mà sổ chốt của run không khẳng định — chốt ngoài sổ (UI / công cụ khác) hoặc mất phản hồi chưa reconcile; điều tra, không tự nhận`)
+    }
+    payouts.push({ programId: r.program_id, runId: r.run_id, isTest, lockedAt: String(r.locked_at), operationId: op?.operationId ?? null })
+  }
+  for (const e of locks) {
+    const run = cmsQaLockClaimedRun(e)
+    if (run === null) continue
+    if (!opts.payoutsTable || !rows.some((r) => r.program_id === e.programId && r.run_id === run && r.locked_by === e.actorId)) {
+      reasons.push(`sổ chốt ${e.operationId} ghi đã chốt ${mask(e.programId)} nhưng DB không có payout tương ứng trong cửa sổ run — điều tra`)
+    }
+  }
+  return { reasons, warningProgramIds: [...warn], payouts }
+}
+
+/** Phân loại tệp trong thư mục sổ của run: writer (w-…), chốt (l-…), lạ (từ chối — không tự bỏ qua). */
+export function cmsQaLedgerPartition(names: readonly string[]): { writers: string[]; locks: string[]; other: string[] } {
+  const writers: string[] = [], locks: string[] = [], other: string[] = []
+  for (const n of names) {
+    if (/^w-[0-9a-f]{12}\.json$/.test(n)) writers.push(n)
+    else if (/^l-[0-9a-f]{12}\.json$/.test(n)) locks.push(n)
+    else other.push(n)
+  }
+  return { writers, locks, other }
 }

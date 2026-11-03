@@ -7,6 +7,8 @@
 // không gửi request nào tới shim. KHÔNG chạm DB thật: URL + key là của shim; --expect-host là host shim.
 //   npm i --no-save @electric-sql/pglite@0.2.17     # một lần, trong webapp/
 //   node scripts/qa-cms-cli-exit.mjs                 # kỳ vọng: N đạt · 0 lỗi
+//   QA_HARNESS_GIT=real node scripts/qa-cms-cli-exit.mjs   # §6 writer gọi Git THẬT (không preload Git) — cây phải sạch
+//   (bản sao byte-giống trong webapp/qa-artifacts/ cũng chạy được: mọi đường dẫn theo ROOT = thư mục cha của file)
 import fs from 'node:fs'
 import http from 'node:http'
 import net from 'node:net'
@@ -15,10 +17,10 @@ import path from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createJiti } from 'jiti'
-import * as L from './lib-care-pglite.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const ROOT = path.resolve(HERE, '..')
+const L = await import(pathToFileURL(path.join(ROOT, 'scripts', 'lib-care-pglite.mjs')).href)
 const MIG = path.join(ROOT, '..', 'supabase', 'migrations')
 const SQL_120 = fs.readFileSync(path.join(MIG, '120_cms_foundation.sql'), 'utf8')
 const SQL_121 = fs.readFileSync(path.join(MIG, '121_cms_import_activation.sql'), 'utf8')
@@ -56,6 +58,8 @@ async function main() {
   // §6: trễ pg-meta (mô phỏng guard chờ DB) + lỗi RPC "đã commit nhưng mất phản hồi" theo tên hàm.
   let pgDelayMs = 0
   const rpcFaults = [] // { fn, n }
+  const rpcFaultsBefore = [] // { fn, n } — §7 mất phản hồi TRƯỚC khi hàm chạy
+  const rpcByFn = {}
   let rpcCalls = 0
   let chain = Promise.resolve()
   const server = http.createServer((req, res) => {
@@ -72,6 +76,10 @@ async function main() {
           let args
           try { args = body ? JSON.parse(body) : {} } catch { args = null }
           if (!/^rpc_cms_[a-z_]+$/.test(fn) || !args || !Object.keys(args).every((k) => /^p_[a-z_]+$/.test(k))) { res.writeHead(404, { 'content-type': 'application/json' }); res.end('{"message":"no rpc"}'); return }
+          rpcByFn[fn] = (rpcByFn[fn] ?? 0) + 1
+          // §7: mất phản hồi TRƯỚC khi hàm chạy (request tới gateway rồi đứt — DB chưa nhận) ⇒ cắt kết nối, không chạy hàm.
+          const faultBefore = rpcFaultsBefore.find((f) => f.fn === fn && f.n > 0)
+          if (faultBefore) { faultBefore.n--; req.socket.destroy(); return }
           const keys = Object.keys(args)
           const params = keys.map((k) => (args[k] !== null && typeof args[k] === 'object' ? JSON.stringify(args[k]) : args[k]))
           const parts = keys.map((k, i) => (args[k] !== null && typeof args[k] === 'object' ? `${k} => $${i + 1}::jsonb` : `${k} => $${i + 1}`))
@@ -213,9 +221,9 @@ async function main() {
   r = await run('cms-verify.mjs', ['v8', `--user=${SUPER}`, '--role=super', '--phase=122', '--require-proven=results', `--expect-host=${HOST}`])
   exp(r, 1, 'V8 --require-proven=results trên bảng rỗng ⇒ LỆCH (không xanh khi 0 = 0)', /LỆCH\s+v8-require-proven:results/.test(r.out))
   for (const [args, why] of [
-    [['v8', `--user=${SUPER}`, '--role=super', '--phase=123', `--expect-host=${HOST}`], 'V8 --phase lạ'],
+    [['v8', `--user=${SUPER}`, '--role=super', '--phase=124', `--expect-host=${HOST}`], 'V8 --phase lạ'],
     [['v8', `--user=${SUPER}`, '--role=super', '--require-proven=results', `--expect-host=${HOST}`], 'V8 --require-proven=results khi không khai --phase=122'],
-    [['post', '--phase=123', `--pre=${pre122}`, `--expect-host=${HOST}`], 'post --phase lạ'],
+    [['post', '--phase=124', `--pre=${pre122}`, `--expect-host=${HOST}`], 'post --phase lạ'],
   ]) {
     r = await run('cms-verify.mjs', args)
     exp(r, 2, `${why} ⇒ sai tham số trước IO`, r.reqs === 0)
@@ -253,6 +261,16 @@ async function main() {
   exp(r, 2, 'start thiếu opt-in E2E_CMS_WRITE_QA (trước IO)', r.reqs === 0 && /E2E_CMS_WRITE_QA=YES/.test(r.out))
   r = await run('cms-qa-run.mjs', ['start', `--users=${U.A}`, '--guard-minutes=1'], { E2E_CMS_WRITE_QA: 'YES', E2E_EXPECTED_SUPABASE_HOST: HOST })
   exp(r, 2, 'start guard dưới sàn 10 phút (trước IO)', r.reqs === 0)
+  // P3a (security review P1-1): cờ LOCK ở shell chỉ tới server QA khi opt-in --with-lock (§4.4) — các ca sai chặn trước IO.
+  const WS = { E2E_CMS_WRITE_QA: 'YES', E2E_EXPECTED_SUPABASE_HOST: HOST }
+  r = await run('cms-qa-run.mjs', ['start', `--users=${U.A}`], { ...WS, CMS_EARNINGS_ENABLED: 'true', CMS_LOCK_ENABLED: 'true' })
+  exp(r, 2, 'start khi shell có CMS_LOCK_ENABLED=true mà không --with-lock (trước IO)', r.reqs === 0 && /start --with-lock/.test(r.out))
+  r = await run('cms-qa-run.mjs', ['start', `--users=${U.A}`, '--with-lock'], WS)
+  exp(r, 2, 'start --with-lock thiếu EARNINGS + LOCK ở process (trước IO)', r.reqs === 0 && /--with-lock cần CMS_EARNINGS_ENABLED=true/.test(r.out))
+  r = await run('cms-qa-run.mjs', ['start', `--users=${U.A}`, '--with-lock', '--no-server'], { ...WS, CMS_EARNINGS_ENABLED: 'true', CMS_LOCK_ENABLED: 'true' })
+  exp(r, 2, 'start --with-lock --no-server (trước IO)', r.reqs === 0 && /--no-server/.test(r.out))
+  r = await run('cms-qa-run.mjs', ['status', '--with-lock'])
+  exp(r, 2, '--with-lock ngoài start', r.reqs === 0 && /chỉ dùng với start/.test(r.out))
   ok(T.cmsQaServerExitCode('operator') === 0 && T.cmsQaServerExitCode('watchdog') === 1 && T.cmsQaServerExitCode(null) === 1,
     'mã launcher khi server dừng: operator 0 · canh marker 1 · server tự thoát 1')
   ok(!fs.existsSync(markerFile), `không để lại ${G.CMS_QA_MARKER}`)
@@ -273,20 +291,33 @@ async function main() {
     ok(bad.length === 0, `${f}: ${bare.length} khối try … catch {} không có die2 / exitWith trong thân try`, JSON.stringify(bad))
   }
 
-  section('6. QA kết quả có gate (PM 03/11 REL-P1-1 + delta r2): writer cms-qa-results.mjs — chặn trước IO, guard DB, shim PostgREST + lỗi giả, reconcile, close')
+  // PM r2 §5.2: QA_HARNESS_GIT=real ⇒ writer gọi Git THẬT (preload chỉ còn lỗi giả rename sổ, không đụng execFileSync); cây phải sạch.
+  const REAL_GIT = process.env.QA_HARNESS_GIT === 'real'
+  section(`6. QA kết quả có gate (PM 03/11 REL-P1-1 + delta r2): writer cms-qa-results.mjs — chặn trước IO, guard DB, shim PostgREST + lỗi giả, reconcile, close · Git ${REAL_GIT ? 'THẬT (không preload Git)' : 'giả qua preload'}`)
   const R = await jiti.import(path.join(ROOT, 'e2e', 'cmsQaResults.ts'))
   const { execFileSync } = await import('node:child_process')
   const git = (...args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim()
   const head = git('rev-parse', 'HEAD'), treeId = git('rev-parse', 'HEAD^{tree}')
+  if (REAL_GIT) {
+    const st = git('status', '--porcelain', '--untracked-files=all')
+    if (st) {
+      console.error(`FAIL: QA_HARNESS_GIT=real cần cây sạch — git status:\n${st}`)
+      process.exitCode = 2
+      await new Promise((res) => server.close(res)); await db.close()
+      return
+    }
+    console.log(`  Git thật: HEAD ${head} · tree ${treeId} · cây sạch`)
+  }
   const runId = 'cms-qa-20261103T101500-ab12'
   const writersDir = path.join(ROOT, 'qa-artifacts', 'cms-qa', `${runId}.writers`)
   const archived = path.join(ROOT, 'qa-artifacts', 'cms-qa', `${runId}.json`)
   for (const p of [writersDir, archived]) if (fs.existsSync(p)) { console.error(`FAIL: đã có ${p} — dọn trước khi chạy`); process.exitCode = 2; return }
-  // Preload CHỈ trong tiến trình con writer của harness (không có trong code sản phẩm): Git "sạch" + HEAD / tree = manifest
-  // (để đi qua kiểm cục bộ trên cây chưa commit — cùng cách PM kiểm bản sao cô lập), tuỳ chọn giả status bẩn / lỗi rename sổ.
+  // Preload CHỈ trong tiến trình con writer của harness (không có trong code sản phẩm): mặc định giả Git "sạch" + HEAD / tree
+  // = manifest (đi qua kiểm cục bộ trên cây chưa commit — cùng cách PM kiểm bản sao cô lập), tuỳ chọn giả status bẩn; lỗi
+  // rename sổ. QA_HARNESS_GIT=real: chỉ còn lỗi rename sổ — writer đọc Git thật (cây bẩn = file untracked tạm, HEAD khác =
+  // manifest ghi HEAD khác).
   const preload = path.join(tmp, 'qa-writer-preload.mjs')
-  fs.writeFileSync(preload, [
-    "import cp from 'node:child_process'", "import fs from 'node:fs'", "import { syncBuiltinESMExports } from 'node:module'",
+  const gitFake = [
     'const orig = cp.execFileSync',
     "cp.execFileSync = function (cmd, args, opts) {",
     "  if (cmd === 'git' && Array.isArray(args)) {",
@@ -296,15 +327,25 @@ async function main() {
     '  }',
     '  return orig.apply(this, arguments)',
     '}',
+  ]
+  fs.writeFileSync(preload, [
+    "import cp from 'node:child_process'", "import fs from 'node:fs'", "import { syncBuiltinESMExports } from 'node:module'",
+    ...(REAL_GIT ? [] : gitFake),
     'if (process.env.QA_FAULT_LEDGER_RENAME) {',
     '  const rn = fs.renameSync; let n = 0',
     "  fs.renameSync = function (a, b) { if (String(b).includes('.writers') && ++n === Number(process.env.QA_FAULT_LEDGER_RENAME)) { const e = new Error('EPERM giả'); e.code = 'EPERM'; throw e } return rn.apply(this, arguments) }",
     '}',
+    // §7: ghi sổ Ý ĐỊNH chốt (l-….json, flag wx) lỗi ⇒ công cụ phải dừng TRƯỚC RPC.
+    'if (process.env.QA_FAULT_LOCK_INTENT) {',
+    '  const wf = fs.writeFileSync',
+    "  fs.writeFileSync = function (f, d, o) { if (/[\\\\/]l-[0-9a-f]{12}\\.json$/.test(String(f)) && o && o.flag === 'wx') { const e = new Error('EPERM giả'); e.code = 'EPERM'; throw e } return wf.apply(this, arguments) }",
+    '}',
     'syncBuiltinESMExports()',
   ].join('\n'))
   const PRE = ['--import', pathToFileURL(preload).href]
+  if (REAL_GIT) ok(!/execFileSync\s*=/.test(fs.readFileSync(preload, 'utf8')), 'Git thật: preload KHÔNG thay execFileSync (chỉ lỗi giả rename sổ)')
   const W = { E2E_CMS_WRITE_QA: 'YES', E2E_EXPECTED_SUPABASE_HOST: HOST }
-  const WG = { ...W, QA_FAKE_HEAD: head, QA_FAKE_TREE: treeId }
+  const WG = REAL_GIT ? { ...W } : { ...W, QA_FAKE_HEAD: head, QA_FAKE_TREE: treeId }
   const nRuns = async () => Number((await db.query(`SELECT count(*)::int n FROM public.cms_sync_runs WHERE kind = 'sales'`)).rows[0].n)
   const ledgers = () => (fs.existsSync(writersDir) ? fs.readdirSync(writersDir).filter((f) => /^w-[0-9a-f]{12}\.json$/.test(f)).sort() : [])
   const readLedger = (f) => R.parseCmsQaWriterEntry(fs.readFileSync(path.join(writersDir, f), 'utf8')).value
@@ -345,9 +386,13 @@ async function main() {
   exp(r, 2, 'publish --confirm-run khác run đang mở', (await noWrite(r)) && /khác run đang mở/.test(r.out))
   r = await run('cms-qa-results.mjs', ['publish', `--program=${P_QA}`, `--staff=${U.B}`, `--confirm-run=${runId}`], WG, PRE)
   exp(r, 2, 'publish staff không phải tài khoản QA của run', (await noWrite(r)) && /không phải tài khoản QA vai staff/.test(r.out))
-  r = await pub([], { ...WG, QA_FAKE_STATUS: ' M webapp/x.ts' })
+  const dirtyProbe = path.join(ROOT, 'qa-harness-dirty-probe.txt')
+  if (REAL_GIT) {
+    fs.writeFileSync(dirtyProbe, 'tạm — harness QA_HARNESS_GIT=real\n', { flag: 'wx' })
+    try { r = await pub() } finally { fs.rmSync(dirtyProbe, { force: true }) }
+  } else r = await pub([], { ...WG, QA_FAKE_STATUS: ' M webapp/x.ts' })
   exp(r, 2, 'publish trên cây bẩn ⇒ chặn (candidate phải sạch)', (await noWrite(r)) && /cây Git không sạch/.test(r.out))
-  r = await pub([], { ...WG, QA_FAKE_HEAD: 'f'.repeat(40) })
+  if (REAL_GIT) { writeManifest({ gitHead: 'f'.repeat(40) }); r = await pub(); writeManifest() } else r = await pub([], { ...WG, QA_FAKE_HEAD: 'f'.repeat(40) })
   exp(r, 2, 'publish khi HEAD khác candidate của run', (await noWrite(r)) && /HEAD \/ tree hiện tại khác/.test(r.out))
   await launcherDown()
   r = await pub()
@@ -475,6 +520,232 @@ async function main() {
   fs.rmSync(writersDir, { recursive: true, force: true })
   fs.rmSync(archived, { force: true })
   ok(!fs.existsSync(markerFile) && !fs.existsSync(writersDir), `không để lại ${G.CMS_QA_MARKER} / sổ writer`)
+  if (REAL_GIT) ok(git('status', '--porcelain', '--untracked-files=all') === '' && git('rev-parse', 'HEAD') === head, 'Git thật: cây vẫn sạch, HEAD không đổi sau §6')
+
+  section('7. QA chốt P3a (work order 03/11 §4.2): lock-preview / lock có gate + sổ ý định — chặn trước IO, guard / quyền, từ chối xác định, mất phản hồi TRƯỚC / SAU commit, lỗi sổ ý định / sổ cuối, reconcile + thời gian lắng, close đối chiếu payout, chốt ngoài sổ')
+  const SQL_123 = fs.readFileSync(path.join(MIG, '123_cms_payouts.sql'), 'utf8')
+  const has123 = async () => (await db.query(`SELECT to_regclass('public.cms_payouts') IS NOT NULL AS h`)).rows[0].h === true
+  const pre123 = path.join(tmp, 'pre123.json')
+  if (!(await has123())) {
+    await sleep(20)
+    r = await run('cms-verify.mjs', ['acl-snapshot', `--expect-host=${HOST}`, `--out=${pre123}`])
+    const p123 = readJson(pre123)
+    exp(r, 0, 'acl-snapshot trước 123 (37 hàm cms của 120 + 121 + 122)', p123 && p123.acl.n_all - p123.acl.n_old === 37 && Number.isInteger(p123.acl.n_ex123))
+    await sleep(20)
+    await db.exec(SQL_123)
+  }
+  ok(await has123(), '123 THẬT đã áp trên PGlite của shim (cms_payouts tồn tại)')
+  {
+    // SQL của `start --with-lock` (launcher) + lượt dò reconcile chạy THẬT trên schema 123: có policy, nhánh thật còn khoá.
+    const hp = (await db.query(R.CMS_QA_HAS_LOCK_POLICY_SQL)).rows[0]?.has_policy
+    const rr = (await db.query(R.CMS_QA_REAL_LOCK_READY_SQL)).rows[0]?.real_ready
+    const pb = (await db.query(R.CMS_QA_LOCK_PROBE_SQL)).rows[0]
+    ok(hp === true && rr === 'false' && R.cmsQaLauncherLockDbCheck(hp, rr).ok === true
+      && pb && typeof pb.can_see_all === 'boolean' && Number.isInteger(pb.payout_writers) && pb.payout_writers === 0,
+      `SQL --with-lock + lượt dò reconcile chạy trên schema 123 (has_policy ${hp}, real.ready ${rr}, dò ${JSON.stringify(pb)})`)
+  }
+  const runId2 ='cms-qa-20261103T111500-cd34', runId3 = 'cms-qa-20261103T121500-ef56'
+  const writersDir2 = path.join(ROOT, 'qa-artifacts', 'cms-qa', `${runId2}.writers`)
+  const archived2 = path.join(ROOT, 'qa-artifacts', 'cms-qa', `${runId2}.json`)
+  const writersDir3 = path.join(ROOT, 'qa-artifacts', 'cms-qa', `${runId3}.writers`)
+  for (const p of [writersDir2, archived2, writersDir3]) if (fs.existsSync(p)) { console.error(`FAIL: đã có ${p} — dọn trước khi chạy`); process.exitCode = 2; return }
+  await db.exec(`INSERT INTO public.cms_qa_access (user_id, granted_by, expires_at) VALUES ('${U.mkt}', 'qa-script:harness', now() + interval '2 hours')`)
+  const dbNowAt = async () => (await db.query(`SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') t`)).rows[0].t
+  const manifestFor = (rid, at, o = {}) => ({
+    ...T.newCmsQaManifest({ runId: rid, mode: 'manual-localhost', host: HOST, dbNow: at, gitHead: head, gitTree: treeId, buildId: 'qa', port: lport,
+      users: [{ id: U.A, role: 'staff', markerExpiresAt: at, remainingS: 0 }, { id: SUPER, role: 'admin', markerExpiresAt: at, remainingS: 0 },
+        { id: U.mkt, role: 'admin', markerExpiresAt: at, remainingS: 0 }] }),
+    serverPid: process.pid, launcherPid: process.pid, ...o,
+  })
+  // QA-C: chương trình QA ĐÃ HẾT KỲ (ProductID riêng 9001xx, kỳ đã qua) do super QA tạo trong run; P_ACT còn đang chạy.
+  const QC1 = uid(5101), QC2 = uid(5102), QC3 = uid(5103), QC4 = uid(5104), QC5 = uid(5105), P_ACT = uid(5106)
+  const mkProg = (id, n, ended) => `INSERT INTO public.cms_programs (id, name, status, start_date, end_date, scope, is_test, created_by, created_at, updated_at, activated_at, activated_by)
+      VALUES ('${id}', 'QA-C ${n}', 'active', current_date - ${ended ? 20 : 2}, current_date ${ended ? '- 2' : '+ 27'}, 'stores', true, '${SUPER}', now(), now(), now(), '${SUPER}');
+    INSERT INTO public.cms_program_stores (program_id, store_id) VALUES ('${id}', '${L.storeId(1)}');
+    INSERT INTO public.cms_program_products (id, program_id, product_id, gmv_basis, target_gmv, unit_cms, base_quantity_cms, advice_text, name_snapshot)
+      VALUES ('${uid(5200 + n)}', '${id}', '9001${String(n).padStart(2, '0')}', 'none', NULL, 'Hộp', 30, 'Tư vấn QA-C', 'SP QA-C ${n}');
+    INSERT INTO public.cms_program_tiers (program_product_id, program_id, tier_order, qty_from, qty_to, amount_per_unit) VALUES ('${uid(5200 + n)}', '${id}', 1, 1, NULL, 10000);`
+  await sleep(20)
+  const dbNow2 = await dbNowAt()
+  await sleep(20)
+  await db.exec([[QC1, 1, true], [QC2, 2, true], [QC3, 3, true], [QC4, 4, true], [P_ACT, 6, false]].map(([id, n, e]) => mkProg(id, n, e)).join('\n'))
+  fs.writeFileSync(markerFile, JSON.stringify(manifestFor(runId2, dbNow2), null, 2))
+  await launcherUp()
+  const pub2 = (prog, extra = [], rid = runId2) => run('cms-qa-results.mjs', ['publish', `--program=${prog}`, `--staff=${U.A}`, `--confirm-run=${rid}`, '--lines-per-staff=60', ...extra], WG, PRE)
+  for (const [p, extra] of [[QC1, []], [QC2, []], [QC3, []], [QC4, ['--unassigned']], [P_ACT, []]]) {
+    r = await pub2(p, extra)
+    exp(r, 0, `publish bán giả ${p === P_ACT ? 'chương trình QA đang chạy' : 'QA-C đã hết kỳ'} …${p.slice(-4)}${extra.length ? ' (+ 2 dòng Chưa gán)' : ''}`)
+  }
+  const WL = { ...WG, CMS_PROGRAM_ENABLED: 'true', CMS_EARNINGS_ENABLED: 'true', CMS_LOCK_ENABLED: 'true' }
+  const lockPrev = (prog, actor = SUPER, extra = [], env = WL) => run('cms-qa-results.mjs', ['lock-preview', `--program=${prog}`, `--actor=${actor}`, `--confirm-run=${runId2}`, ...extra], env, PRE)
+  const prevOf = (x) => { const l = x.out.split('\n').find((s) => s.startsWith('{"program"')); try { return l ? JSON.parse(l) : null } catch { return null } }
+  const lockCli = (prog, runX, pv, extra = [], env = WL, actor = SUPER) => run('cms-qa-results.mjs', ['lock', `--program=${prog}`, `--actor=${actor}`, `--confirm-run=${runId2}`, `--expect-run=${runX}`, `--policy-version=${pv}`, ...extra], env, PRE)
+  const lastOp = (x) => /thao tác (l-[0-9a-f]{12})/.exec(x.out)?.[1] ?? null
+  const lockFiles = () => (fs.existsSync(writersDir2) ? fs.readdirSync(writersDir2).filter((f) => /^l-[0-9a-f]{12}\.json$/.test(f)).sort() : [])
+  const readLock = (op) => { try { return op ? R.parseCmsQaLockEntry(fs.readFileSync(path.join(writersDir2, `${op}.json`), 'utf8')).value ?? null : null } catch { return null } }
+  const progState = async (p) => (await db.query(`SELECT g.status, (SELECT count(*)::int FROM public.cms_payouts x WHERE x.program_id = g.id) AS n FROM public.cms_programs g WHERE g.id = $1`, [p])).rows[0]
+  const lockRpcs = () => rpcByFn.rpc_cms_program_lock ?? 0
+  const recon = (op) => run('cms-qa-results.mjs', ['reconcile', `--writer=${op}`], W)
+  const closeRun = () => run('cms-qa-run.mjs', ['close'], { E2E_EXPECTED_SUPABASE_HOST: HOST })
+  const FAKE_RUN = uid(7777)
+  let op
+
+  // 7a — chặn TRƯỚC IO (0 request, không sổ chốt)
+  const noLockWrite = (x) => x.reqs === 0 && lockFiles().length === 0
+  r = await lockCli(QC1, FAKE_RUN, 1, [], WG)
+  exp(r, 2, 'lock thiếu cờ PROGRAM / EARNINGS / LOCK ở PROCESS env', noLockWrite(r) && /CMS_LOCK_ENABLED=true là biến PROCESS/.test(r.out))
+  r = await lockCli(QC1, FAKE_RUN, 1, [], { ...WL, CMS_LOCK_ENABLED: 'false' })
+  exp(r, 2, 'lock khi CMS_LOCK_ENABLED ≠ true ở process (chỉ nêu cờ thiếu)', noLockWrite(r) && /cần CMS_LOCK_ENABLED=true là biến PROCESS/.test(r.out))
+  r = await lockPrev(QC1, U.A)
+  exp(r, 2, 'lock-preview actor là staff QA (không phải admin của run)', noLockWrite(r) && /không phải tài khoản QA vai admin/.test(r.out))
+  r = await run('cms-qa-results.mjs', ['lock', `--program=${QC1}`, `--actor=${SUPER}`, `--confirm-run=${runId2}`, `--expect-run=${FAKE_RUN}`], WL, PRE)
+  exp(r, 2, 'lock thiếu --policy-version', noLockWrite(r) && /--policy-version/.test(r.out))
+  r = await lockPrev(QC1, SUPER, [`--expect-run=${FAKE_RUN}`])
+  exp(r, 2, 'lock-preview kèm --expect-run', noLockWrite(r) && /lock-preview không nhận/.test(r.out))
+  r = await lockCli(QC1, FAKE_RUN, 1, [`--staff=${U.A}`])
+  exp(r, 2, 'lock kèm --staff', noLockWrite(r) && /không nhận --staff/.test(r.out))
+  r = await lockCli(QC1, FAKE_RUN, 1, ['--ack=ngắn'])
+  exp(r, 2, 'lock --ack ngắn hơn 10 ký tự', noLockWrite(r) && /--ack/.test(r.out))
+  r = await run('cms-qa-results.mjs', ['publish', `--program=${QC1}`, `--staff=${U.A}`, `--confirm-run=${runId2}`, `--actor=${SUPER}`], WG, PRE)
+  exp(r, 2, 'publish kèm tham số chốt --actor ⇒ sai tham số', r.reqs === 0)
+  await launcherDown()
+  r = await lockCli(QC1, FAKE_RUN, 1)
+  exp(r, 2, 'lock khi launcher không còn chạy', noLockWrite(r) && /launcher \/ server QA của run không còn chạy/.test(r.out))
+  await launcherUp()
+
+  // 7b — guard / quyền: không sổ, không RPC chốt
+  const rpc0 = lockRpcs()
+  r = await lockPrev(P_REAL)
+  exp(r, 1, 'lock-preview chương trình THẬT ⇒ guard chặn (không mượn tài khoản QA)', lockFiles().length === 0 && /chương trình THẬT/.test(r.out))
+  r = await lockPrev(QC1, U.mkt)
+  exp(r, 1, 'lock-preview bởi admin QA KHÔNG phải super ⇒ FORBIDDEN (allowlist app)', /CHẶN: preview FORBIDDEN/.test(r.out))
+  r = await lockCli(QC1, FAKE_RUN, 1, [], WL, U.mkt)
+  exp(r, 1, 'lock bởi admin không phải super ⇒ FORBIDDEN, không sổ, không RPC', lockFiles().length === 0 && lockRpcs() === rpc0 && /CHẶN \(không gọi RPC chốt\): FORBIDDEN/.test(r.out))
+  r = await lockPrev(P_ACT)
+  exp(r, 1, 'lock-preview chương trình QA CHƯA hết kỳ ⇒ CMS_LOCK_NOT_ENDED', /CHƯA CHỐT ĐƯỢC: .*CMS_LOCK_NOT_ENDED/.test(r.out))
+
+  // 7c — từ chối XÁC ĐỊNH ở DB (RPC đã gọi, transaction rollback) ⇒ sổ rejected, chương trình vẫn active
+  r = await lockPrev(QC1)
+  const pv1 = prevOf(r) ?? {}
+  exp(r, 0, 'lock-preview QA-C đã hết kỳ ⇒ SẴN SÀNG (run hiện hành, policy QA, 0 blocker)', pv1.blockers?.length === 0 && /^[0-9a-f-]{36}$/.test(pv1.runId ?? '') && pv1.isTest === true && /SẴN SÀNG/.test(r.out))
+  r = await lockCli(QC1, FAKE_RUN, pv1.policyVersion)
+  op = lastOp(r)
+  exp(r, 1, 'lock với run kỳ vọng sai ⇒ CMS_LOCK_RUN_CHANGED, sổ rejected, chương trình active', readLock(op)?.status === 'rejected' && readLock(op)?.result?.code === 'CMS_LOCK_RUN_CHANGED' && (await progState(QC1)).status === 'active')
+  r = await lockCli(QC1, pv1.runId, pv1.policyVersion + 1)
+  op = lastOp(r)
+  exp(r, 1, 'lock với policy version sai ⇒ CMS_LOCK_POLICY_CHANGED, sổ rejected', readLock(op)?.status === 'rejected' && readLock(op)?.result?.code === 'CMS_LOCK_POLICY_CHANGED' && (await progState(QC1)).status === 'active')
+  r = await lockCli(P_ACT, FAKE_RUN, pv1.policyVersion)
+  op = lastOp(r)
+  exp(r, 1, 'lock chương trình CHƯA hết kỳ ⇒ CMS_LOCK_NOT_ENDED, sổ rejected', readLock(op)?.result?.code === 'CMS_LOCK_NOT_ENDED' && (await progState(P_ACT)).status === 'active')
+
+  // 7d — mất phản hồi TRƯỚC commit (đứt trước khi DB chạy hàm) ⇒ KHÔNG RÕ; chặn chốt lại; reconcile phải chờ lắng
+  rpcFaultsBefore.push({ fn: 'rpc_cms_program_lock', n: 1 })
+  r = await lockCli(QC1, pv1.runId, pv1.policyVersion)
+  const opBefore = lastOp(r)
+  const tBefore = Date.now()
+  exp(r, 1, 'mất phản hồi TRƯỚC commit ⇒ KẾT QUẢ CHỐT KHÔNG RÕ, sổ unknown, DB chưa chốt', /KẾT QUẢ CHỐT KHÔNG RÕ/.test(r.out) && readLock(opBefore)?.status === 'unknown' && (await progState(QC1)).n === 0)
+  const nB = lockFiles().length, rpcB = lockRpcs()
+  r = await lockCli(QC1, pv1.runId, pv1.policyVersion)
+  exp(r, 1, 'chốt lại khi còn thao tác unknown ⇒ CHẶN (reconcile trước), không sổ mới, không RPC', lockFiles().length === nB && lockRpcs() === rpcB && new RegExp(`${opBefore} của chương trình này còn unknown`).test(r.out))
+  r = await recon(opBefore)
+  exp(r, 1, 'reconcile ngay ⇒ CHỜ (chưa đủ thời gian lắng), sổ giữ unknown', /CHỜ: chưa đủ thời gian lắng/.test(r.out) && readLock(opBefore)?.status === 'unknown')
+
+  // 7e — mất phản hồi SAU commit ⇒ KHÔNG RÕ (không báo thành công); close ĐỎ; reconcile phát hiện đã chốt
+  r = await lockPrev(QC2)
+  const pv2 = prevOf(r) ?? {}
+  rpcFaults.push({ fn: 'rpc_cms_program_lock', n: 1 })
+  r = await lockCli(QC2, pv2.runId, pv2.policyVersion)
+  const opAfter = lastOp(r)
+  exp(r, 1, 'mất phản hồi SAU commit ⇒ KẾT QUẢ CHỐT KHÔNG RÕ, sổ unknown, DB ĐÃ chốt', /KẾT QUẢ CHỐT KHÔNG RÕ/.test(r.out) && readLock(opAfter)?.status === 'unknown' && (await progState(QC2)).status === 'locked')
+  await launcherDown()
+  r = await closeRun()
+  exp(r, 1, 'close khi còn thao tác chốt unknown + payout chưa khớp sổ ⇒ ĐỎ, manifest giữ', fs.existsSync(markerFile) && new RegExp(`thao tác chốt ${opBefore} KẾT QUẢ KHÔNG RÕ`).test(r.out) && /chốt ngoài sổ .*mất phản hồi chưa reconcile/.test(r.out))
+  await launcherUp()
+  r = await recon(opAfter)
+  exp(r, 0, 'reconcile ⇒ phát hiện ĐÃ CHỐT (payout đúng run + actor của sổ), sổ reconciled', /ĐÃ CHỐT run/.test(r.out) && readLock(opAfter)?.status === 'reconciled' && readLock(opAfter)?.reconcile?.locked === true)
+  const nA = lockFiles().length, rpcA = lockRpcs()
+  r = await lockCli(QC2, pv2.runId, pv2.policyVersion)
+  exp(r, 1, 'chốt lại chương trình đã locked ⇒ guard chặn trước sổ / RPC', lockFiles().length === nA && lockRpcs() === rpcA && /đã chốt \(locked\)/.test(r.out))
+
+  // 7f — lưu sổ CUỐI lỗi sau RPC ⇒ SỔ CHỐT CHƯA ĐÓNG (rc 1), sổ còn ý định ⇒ reconcile
+  r = await lockPrev(QC3)
+  const pv3 = prevOf(r) ?? {}
+  r = await lockCli(QC3, pv3.runId, pv3.policyVersion, [], { ...WL, QA_FAULT_LEDGER_RENAME: '1' })
+  const opSave = lastOp(r)
+  exp(r, 1, 'sổ cuối EPERM sau RPC ⇒ SỔ CHỐT CHƯA ĐÓNG, sổ còn intent, DB đã chốt', /SỔ CHỐT CHƯA ĐÓNG/.test(r.out) && /"status":"locked"/.test(r.out) && readLock(opSave)?.status === 'intent' && (await progState(QC3)).status === 'locked')
+  r = await run('cms-qa-results.mjs', ['status'], W)
+  exp(r, 0, 'status liệt kê thao tác chốt (ý định, pid không còn ⇒ cần reconcile)', new RegExp(`${opSave} · chốt intent \\(pid KHÔNG còn`).test(r.out))
+  r = await recon(opSave)
+  exp(r, 0, 'reconcile sổ còn ý định ⇒ ĐÃ CHỐT, reconciled', readLock(opSave)?.status === 'reconciled' && readLock(opSave)?.reconcile?.locked === true)
+
+  // 7g — ghi sổ Ý ĐỊNH lỗi ⇒ dừng TRƯỚC RPC; lý do Q-213 (giả định QA) bắt buộc khi còn dòng Chưa gán
+  r = await lockPrev(QC4)
+  const pv4 = prevOf(r) ?? {}
+  exp(r, 0, 'lock-preview QA-C có 2 dòng Chưa gán dưới ngưỡng QA ⇒ SẴN SÀNG, cần lý do', pv4.needsAck === true && pv4.unassignedLines === 2 && /--ack=/.test(r.out))
+  const nI = lockFiles().length, rpcI = lockRpcs()
+  r = await lockCli(QC4, pv4.runId, pv4.policyVersion, ['--ack=Đã soát 2 dòng Chưa gán QA'], { ...WL, QA_FAULT_LOCK_INTENT: '1' })
+  exp(r, 1, 'ghi sổ Ý ĐỊNH lỗi ⇒ CMS_QA_LEDGER_FAILED, không sổ, KHÔNG gọi RPC, chưa chốt', /CHẶN \(không gọi RPC chốt\): CMS_QA_LEDGER_FAILED/.test(r.out) && lockFiles().length === nI && lockRpcs() === rpcI && (await progState(QC4)).status === 'active')
+  r = await lockCli(QC4, pv4.runId, pv4.policyVersion)
+  op = lastOp(r)
+  exp(r, 1, 'lock thiếu lý do khi còn dòng Chưa gán ⇒ CMS_LOCK_ACK_REQUIRED (sổ rejected)', readLock(op)?.result?.code === 'CMS_LOCK_ACK_REQUIRED' && (await progState(QC4)).status === 'active')
+  r = await lockCli(QC4, pv4.runId, pv4.policyVersion, ['--ack=  Đã soát 2 dòng Chưa gán QA  '])
+  op = lastOp(r)
+  const ack4 = (await db.query(`SELECT ack_reason FROM public.cms_payouts WHERE program_id = $1`, [QC4])).rows[0]?.ack_reason
+  exp(r, 0, 'lock có lý do ⇒ ĐÃ CHỐT; sổ done (ack = true, không chép lý do); DB lưu lý do đã chuẩn hoá', readLock(op)?.status === 'done' && readLock(op)?.ack === true
+    && !JSON.stringify(readLock(op)).includes('Đã soát') && ack4 === 'Đã soát 2 dòng Chưa gán QA' && (await progState(QC4)).status === 'locked')
+
+  // 7d (tiếp) — qua thời gian lắng, 0 phiên chốt ⇒ reconcile kết luận CHƯA chốt; chốt lại cùng run kỳ vọng ⇒ ĐẠT
+  const waitMs = tBefore + R.CMS_QA_LOCK_SETTLE_MS + 1_500 - Date.now()
+  if (waitMs > 0) await sleep(waitMs)
+  r = await recon(opBefore)
+  exp(r, 0, 'reconcile sau thời gian lắng ⇒ CHƯA chốt (không payout, 0 phiên chốt), sổ reconciled', /CHƯA chốt/.test(r.out) && readLock(opBefore)?.status === 'reconciled' && readLock(opBefore)?.reconcile?.locked === false)
+  r = await lockCli(QC1, pv1.runId, pv1.policyVersion)
+  op = lastOp(r)
+  exp(r, 0, 'chốt lại sau reconcile (cùng run kỳ vọng) ⇒ ĐẠT, sổ done', readLock(op)?.status === 'done' && readLock(op)?.result?.runId === pv1.runId && (await progState(QC1)).status === 'locked')
+
+  // 7h — close ĐẠT: mọi thao tác chốt đã khép, mọi payout QA-C trong cửa sổ khớp sổ
+  await launcherDown()
+  const nLocks = lockFiles().length
+  r = await closeRun()
+  const c2 = readJson(archived2)
+  exp(r, 0, `close ĐẠT: ${nLocks} thao tác chốt khép, 4 payout QA-C trong cửa sổ đều khớp sổ, 5 writer`, !fs.existsSync(markerFile) && c2?.locks?.length === nLocks
+    && c2.payouts?.length === 4 && c2.payouts.every((p) => p.isTest && /^l-[0-9a-f]{12}$/.test(p.operationId ?? '')) && c2.writers?.length === 5)
+  ok(rpcFaults.every((f) => f.n === 0) && rpcFaultsBefore.every((f) => f.n === 0), '§7: mọi lỗi giả đã được tiêu thụ đúng số lần')
+
+  // 7h' — VERIFY phase 123 bằng CLI thật trên DB đã có payout QA (V5 phải "đã chứng minh"); phase 122 trên DB 123 ⇒ LỆCH
+  if (fs.existsSync(pre123)) {
+    const post123 = path.join(tmp, 'post123.json')
+    r = await run('cms-verify.mjs', ['post', '--phase=123', `--pre=${pre123}`, `--expect-host=${HOST}`, `--out=${post123}`])
+    const j123 = readJson(post123)
+    const v5 = j123?.checks?.find((c) => c.id === 'v5-payout-invariants')
+    exp(r, 0, `post 123 sau 4 lần chốt QA (${j123?.checks?.length ?? 0} mục) — V5 bất biến payout ĐÃ chứng minh`, j123?.checks?.every((c) => c.ok) && v5?.ok === true && v5.proven !== false)
+    r = await run('cms-verify.mjs', ['post', '--phase=122', `--pre=${pre122}`, `--expect-host=${HOST}`])
+    exp(r, 1, 'post 122 trên DB đã 123 ⇒ LỆCH phase-match (không lấy xanh bằng phase cũ)', /LỆCH\s+phase-match — PHASE KHÔNG PHÙ HỢP: DB có marker CMS cao nhất 123/.test(r.out))
+    r = await run('cms-verify.mjs', ['v8', `--user=${SUPER}`, '--role=super', '--phase=123', '--expect-qa=true', `--expect-host=${HOST}`])
+    exp(r, 0, 'v8 --phase=123 super có marker (rpc_cms_payout theo phạm vi hiện tại)', /ĐẠT: \d+ \/ \d+/.test(r.out))
+  } else ok(false, 'PRE 123 không có — §7 phải tự áp 123 (không chạy phase 123 trên DB áp từ trước)')
+
+  // 7i — chốt NGOÀI sổ (mô phỏng bấm "Chốt kỳ" trên UI server QA / gọi RPC trực tiếp) ⇒ close ĐỎ
+  await sleep(20)
+  const dbNow3 = await dbNowAt()
+  await sleep(20)
+  await db.exec(mkProg(QC5, 5, true))
+  fs.writeFileSync(markerFile, JSON.stringify(manifestFor(runId3, dbNow3), null, 2))
+  await launcherUp()
+  r = await pub2(QC5, [], runId3)
+  exp(r, 0, 'run 3: publish bán giả QA-C 5')
+  const pv5 = (await db.query(`SELECT public.rpc_cms_lock_preview($1) AS p`, [QC5])).rows[0].p
+  await db.query(`SELECT public.rpc_cms_program_lock($1, $2, $3, $4, NULL)`, [QC5, pv5.run_id, pv5.policy_version, SUPER])
+  await launcherDown()
+  r = await closeRun()
+  exp(r, 1, 'close: payout QA trong cửa sổ KHÔNG có thao tác trong sổ ⇒ ĐỎ (chốt ngoài sổ), manifest giữ', fs.existsSync(markerFile) && /chốt ngoài sổ/.test(r.out) && (await progState(QC5)).status === 'locked')
+  // Dọn ĐÚNG đường dẫn harness tạo (run 3 cố ý không đóng được: QC5 locked vĩnh viễn trên PGlite tạm — H8).
+  fs.rmSync(markerFile, { force: true })
+  fs.rmSync(writersDir3, { recursive: true, force: true })
+  fs.rmSync(writersDir2, { recursive: true, force: true })
+  fs.rmSync(archived2, { force: true })
+  ok(!fs.existsSync(markerFile) && !fs.existsSync(writersDir2) && !fs.existsSync(writersDir3) && !fs.existsSync(archived2), `§7: không để lại ${G.CMS_QA_MARKER} / sổ`)
+  if (REAL_GIT) ok(git('status', '--porcelain', '--untracked-files=all') === '' && git('rev-parse', 'HEAD') === head, 'Git thật: cây vẫn sạch, HEAD không đổi sau §7')
 
   await new Promise((res) => server.close(res))
   await db.close()
