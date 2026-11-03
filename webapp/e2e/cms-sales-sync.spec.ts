@@ -129,15 +129,52 @@ test.describe('CMS P2-b — salesSync @desktop', () => {
     expect(r.cleanup).toEqual({ purged: 0, more: false, calls: 1, stoppedBy: 'done' })
   })
 
-  test('chương trình thật: dừng held RESULTS_RELEASE_GATE TRƯỚC stage — không ghi email / tiền vào DB, không publish (Q-206)', async () => {
-    const f = fakeDeps({ snap: snapshot({ is_test: false }) })
-    const r = await runCmsSalesSync(f.deps, PROG, { dryRun: false, source: 'cron' })
-    expect([r.status, r.code, r.stagedRows]).toEqual(['held', 'RESULTS_RELEASE_GATE', 0])
-    expect(f.fns()).toEqual(['openRun', 'finish', 'cleanup'])
-    expect((finishes(f)[0].args[2] as Record<string, unknown>).error_code).toBe('RESULTS_RELEASE_GATE')
+  test('chương trình thật + Q-206 HOLD: lượt ghi bị chặn TRƯỚC openRun — 0 run, 0 ghi, 0 truy vấn nguồn (PM 03/11 REL-P1-1)', async () => {
+    for (const source of ['operator', 'cron', 'qa'] as const) {
+      let queries = 0
+      const f = fakeDeps({ snap: snapshot({ is_test: false }) })
+      const inner = f.deps.runner
+      f.deps.runner = async (...a) => { queries++; return inner(...a) }
+      const r = await runCmsSalesSync(f.deps, PROG, { dryRun: false, source })
+      expect([r.status, r.code, r.runId, r.isTest, r.stagedRows, r.cleanup]).toEqual(['held', 'RESULTS_RELEASE_GATE', null, false, 0, null])
+      expect(f.fns()).toEqual(['loadSnapshot'])
+      expect(queries).toBe(0)
+      expect(cmsSalesExitCode(r)).toBe(1)
+    }
+    // Dry-run thật vẫn đọc nguồn + engine như cũ (đối soát trước khi mở cổng), không ghi.
     const d = fakeDeps({ snap: snapshot({ is_test: false }) })
     const dr = await runCmsSalesSync(d.deps, PROG, { dryRun: true, source: 'operator' })
     expect([dr.status, dr.code, d.fns()]).toEqual(['dry_run', null, ['loadSnapshot']])
+    // Snapshot đọc trước lỗi / chương trình không còn / sai shape / lệch id ⇒ không mở run.
+    for (const [loadSnapshot, want] of [
+      [async () => { throw new Error('CMS_PROGRAM_NOT_FOUND') }, ['skipped', 'CMS_PROGRAM_NOT_FOUND']],
+      [async () => { throw new Error('boom') }, ['error', 'SNAPSHOT_FAILED']],
+      [async () => ({ program_id: PROG }), ['error', 'SNAPSHOT_INVALID']],
+      [async () => snapshot({ program_id: uid(2) }), ['error', 'SNAPSHOT_INVALID']],
+    ] as const) {
+      const g = fakeDeps({ loadSnapshot })
+      const r = await runCmsSalesSync(g.deps, PROG, { dryRun: false, source: 'operator' })
+      expect([r.status, r.code, r.runId]).toEqual([...want, null])
+      expect(g.fns().some((x) => WRITE_FNS.includes(x))).toBe(false)
+    }
+  })
+
+  test('lớp thứ hai giữ nguyên: snapshot của openRun là chương trình thật ⇒ held RESULTS_RELEASE_GATE trước stage, đóng run (Q-206)', async () => {
+    const f = fakeDeps({ openRun: async (id: string) => ({ ...snapshot({ is_test: false }), program_id: id, run_id: uid(99) }) })
+    const r = await runCmsSalesSync(f.deps, PROG, { dryRun: false, source: 'operator' })
+    expect([r.status, r.code, r.stagedRows]).toEqual(['held', 'RESULTS_RELEASE_GATE', 0])
+    // openRun bị thay (không ghi log) — dãy gọi: snapshot đọc trước (QA) → [openRun] → finish → cleanup; không stage / publish.
+    expect(f.fns()).toEqual(['loadSnapshot', 'finish', 'cleanup'])
+    expect((finishes(f)[0].args[2] as Record<string, unknown>).error_code).toBe('RESULTS_RELEASE_GATE')
+  })
+
+  test('PM 03/11 QA-P1-1: snapshot đọc trước (HOLD) tiêu hết ngân sách ⇒ held DEADLINE, KHÔNG mở run', async () => {
+    const f = fakeDeps()
+    const loadSnap = f.deps.loadSnapshot
+    f.deps.loadSnapshot = async (id, io) => { f.clock.t += 150_000; return loadSnap(id, io) }
+    const r = await runCmsSalesSync(f.deps, PROG, { dryRun: false, source: 'qa', deadlineAt: f.clock.t + 100_000 })
+    expect([r.status, r.code, r.runId]).toEqual(['held', 'DEADLINE', null])
+    expect(f.fns()).toEqual(['loadSnapshot'])
   })
 
   test('open: bận / chưa đủ điều kiện / lỗi; thiếu cấu hình không gọi gì', async () => {
@@ -438,8 +475,11 @@ test.describe('CMS P2-b — cron sync-cms-sales @desktop', () => {
     const f = fakeDeps()
     const order: string[] = []
     const open = f.deps.openRun
+    const load = f.deps.loadSnapshot
     const deps = Object.assign(f.deps, {
       openRun: async (id: string, d: S.CmsSalesRunDetail, io: S.CmsIo) => { order.push(id); return open(id, d, io).then((s) => ({ ...(s as object), program_id: id })) },
+      // RPC snapshot thật trả đúng chương trình được hỏi (bước đọc trước openRun khi Q-206 HOLD kiểm id).
+      loadSnapshot: async (id: string, io: S.CmsIo) => ({ ...(await load(id, io) as object), program_id: id }),
       listDuePrograms: async () => programs,
       ...o,
     }) as CmsSalesCronDeps

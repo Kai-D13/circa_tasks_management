@@ -150,3 +150,22 @@ export function cmsWriteGate(input: {
   }
   return { ok: true, host }
 }
+
+/**
+ * Cổng đường ghi KẾT QUẢ QA (scripts/cms-qa-results.mjs — PM 03/11 REL-P1-1): cùng kiểm biến PROCESS / host / .env.local như
+ * cmsWriteGate nhưng NGƯỢC điều kiện manifest — writer chỉ chạy BÊN TRONG run QA đang mở của launcher (manifest phải có).
+ * Không gọi cmsWriteGate với markerExists = true (hàm đó cố ý chặn khi còn run trước). Kiểm runId / candidate / launcher /
+ * chương trình / marker ở e2e/cmsQaResults.ts.
+ */
+export function cmsQaWriterGate(input: {
+  env: Record<string, string | undefined>
+  envFileText: string | null
+  markerExists: boolean
+}): GateResult {
+  const base = cmsWriteGate({ env: input.env, envFileText: input.envFileText, markerExists: false })
+  if (!base.ok) return base
+  if (!input.markerExists) {
+    return { ok: false, reason: `không có run QA đang mở (${CMS_QA_MARKER}) — writer kết quả chỉ chạy trong run do \`node scripts/cms-qa-run.mjs start\` mở.` }
+  }
+  return base
+}

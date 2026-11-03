@@ -52,7 +52,9 @@ export async function loadTooling() {
   const jiti = createJiti(import.meta.url, { interopDefault: true })
   const T = await jiti.import(path.join(ROOT, 'e2e', 'cmsQaTooling.ts'))
   const G = await jiti.import(path.join(ROOT, 'e2e', 'writeQaGates.ts'))
-  return { T, G }
+  // QA kết quả có gate (PM 03/11 REL-P1-1) — writer scripts/cms-qa-results.mjs + đối chiếu close.
+  const R = await jiti.import(path.join(ROOT, 'e2e', 'cmsQaResults.ts'))
+  return { T, G, R }
 }
 
 /**
@@ -125,4 +127,22 @@ export async function runCli(main) {
       process.exitCode = 1
     }
   }
+}
+
+/** pid còn tồn tại? (signal 0 chỉ kiểm.) Chỉ ESRCH mới là "không có tiến trình"; lỗi khác (EPERM …) ⇒ coi là sống. */
+export function pidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try { process.kill(pid, 0); return true } catch (e) { rethrowCliExit(e); return e?.code !== 'ESRCH' }
+}
+
+/** Cổng localhost còn nhận kết nối? */
+export async function portOpen(port) {
+  const net = await import('node:net')
+  return new Promise((resolve) => {
+    const s = net.connect({ host: 'localhost', port })
+    const done = (v) => { s.destroy(); resolve(v) }
+    s.setTimeout(1500, () => done(false))
+    s.once('connect', () => done(true))
+    s.once('error', () => done(false))
+  })
 }

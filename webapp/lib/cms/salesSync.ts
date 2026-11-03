@@ -3,7 +3,7 @@
 // scripts/cms-sales-sync.mjs (dry-run mặc định). Luồng (fail-closed, KHÔNG giữ transaction DB khi gọi BigQuery):
 //   open (khoá + chụp cấu hình / mapping, trả snapshot) → đọc TOÀN KỲ đủ trang → chất lượng (trùng / lỗi dòng / chưa quy đổi /
 //   rỗng sau dữ liệu / chưa gán > 20 %) → engine P2-a (KHÔNG tính lại ở đây) → kiểm miền số → cổng Q-206 (chương trình
-//   thật dừng ở đây, không stage) → stage theo khối có số → seal (begin + từng bước, DB đối chiếu độc lập) → publish (đổi
+//   thật dừng ở đây, không stage; khi cổng HOLD lượt ghi còn bị chặn từ TRƯỚC open bằng snapshot chỉ đọc) → stage theo khối có số → seal (begin + từng bước, DB đối chiếu độc lập) → publish (đổi
 //   pointer một lần) → dọn run cũ ở mọi nhánh đã mở run (best effort, có ngân sách).
 // NGÂN SÁCH (PM audit 03/11 P1-I2-1): `deadlineAt` là hạn cứng của cả chương trình. Mọi bước MỚI (đọc nguồn, khối stage,
 // seal begin / bước, publish) chỉ bắt đầu khi còn ≥ CMS_RPC_START_MIN_MS trước `deadlineAt − CMS_SALES_STOP_RESERVE_MS`;
@@ -191,6 +191,24 @@ async function runCmsSalesSyncInner(deps: CmsSalesSyncDeps, programId: string, o
 
   if (!deps.table) return done({ status: 'config_missing', code: 'CONFIG_MISSING' })
   if (!budget.canWork()) return done({ status: 'held', code: 'DEADLINE' })
+
+  // Q-206 HOLD (PM 03/11 REL-P1-1): lượt GHI chỉ được mở run cho chương trình QA. Kiểm namespace bằng snapshot CHỈ ĐỌC TRƯỚC
+  // openRun ⇒ chương trình thật bị từ chối với 0 run / 0 ghi / 0 truy vấn nguồn (trước đây mở run rồi held — một run sales
+  // của chương trình thật làm preflight rollback 122 từ chối). Cổng mở ⇒ bỏ bước này; kiểm sau openRun / trước stage giữ nguyên.
+  if (!opts.dryRun && !cmsCanPublishResults(false)) {
+    let preRaw: unknown
+    try { preRaw = await deps.loadSnapshot(programId, budget.work()) } catch (e) {
+      const code = cmsRpcCode(e, 'SNAPSHOT_FAILED')
+      return done({ status: SKIP_CODES.has(code) ? 'skipped' : 'error', code })
+    }
+    let pre: CmsSalesSnapshot
+    try { pre = parseCmsSalesSnapshot(preRaw) } catch { return done({ status: 'error', code: 'SNAPSHOT_INVALID' }) }
+    if (pre.programId !== programId) return done({ status: 'error', code: 'SNAPSHOT_INVALID' })
+    res.isTest = pre.isTest
+    if (!pre.isTest) return done({ status: 'held', code: 'RESULTS_RELEASE_GATE' })
+    // Snapshot đọc trước có thể tiêu hết ngân sách ⇒ không mở run sau mốc làm việc (PM 03/11 QA-P1-1).
+    if (!budget.canWork()) return done({ status: 'held', code: 'DEADLINE' })
+  }
 
   let raw: unknown
   if (opts.dryRun) {

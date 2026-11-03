@@ -19,7 +19,9 @@
 // close: từ chối khi cổng server của run còn mở; đối chiếu DB — chương trình is_test trong run ghi vào manifest (để lại,
 //   ẩn — H8); chương trình THẬT bị tài khoản QA chạm (theo mốc của chính hành động) ⇒ ĐỎ, giữ manifest mở; chương trình
 //   thật đổi trong run không do QA ⇒ cảnh báo, CHẶN đóng tới khi operator soát tay và xác nhận đúng tập đó bằng
-//   --ack-warnings (ghi vào manifest đóng). Đạt ⇒ lưu qa-artifacts/cms-qa/<runId>.json rồi mới gỡ .qa-cms.json.
+//   --ack-warnings (ghi vào manifest đóng). QA kết quả (PM 03/11 REL-P1-1): writer scripts/cms-qa-results.mjs còn chạy /
+//   không rõ kết thúc, run sales QA không qua writer, run sales QA còn running, run sales của chương trình thật khi Q-206 HOLD
+//   ⇒ ĐỎ; danh sách run sales + writer ghi vào manifest đóng. Đạt ⇒ lưu qa-artifacts/cms-qa/<runId>.json rồi mới gỡ .qa-cms.json.
 // Không xoá manifest tay để bỏ qua close. sha256 manifest in ra ở start / close để nộp kèm bằng chứng.
 // Thoát: 0 đạt · 1 preflight / đối chiếu DB không đạt / server QA dừng KHÔNG do operator (canh marker, tự chết, lỗi tiến
 //   trình con) hoặc KHÔNG xác nhận được đã dừng (ghi serverNotStopped vào manifest ⇒ close chặn khi pid còn sống) · 2 sai
@@ -39,7 +41,7 @@ if (!['start', 'status', 'close'].includes(a.cmd) || a.bad.length) {
   return 2
 }
 if (a.values['--ack-warnings'] !== undefined && a.cmd !== 'close') die2('--ack-warnings chỉ dùng với close')
-const { T, G } = await loadTooling()
+const { T, G, R } = await loadTooling()
 const MARKER = path.join(ROOT, G.CMS_QA_MARKER)
 const envFileText = readEnvFileText()
 const env = mergedEnv(envFileText)
@@ -102,21 +104,35 @@ if (a.cmd === 'close') {
     const status = await pgMeta(env, T.pgMetaReadOnly(T.cmsQaStatusSql(uids)))
     const recorded = m.programs.length ? await pgMeta(env, T.pgMetaReadOnly(T.cmsQaProgramFlagsSql(m.programs.map((p) => p.id)))) : []
     const c = T.cmsQaCloseCheck(m, programs, status, recorded)
-    console.log(`đối chiếu run ${m.runId}: ${c.closed.programs.length} chương trình is_test (để lại, ẩn với user không marker) · ${c.closed.closeCheck.realProgramsTouchedByQaUsers.length} chương trình thật bị tài khoản QA chạm · ${c.warnings.length} cảnh báo`)
+    // QA kết quả (PM 03/11 REL-P1-1): sổ writer của run + mọi run sales mở trong cửa sổ run.
+    const writerDir = path.join(ROOT, 'qa-artifacts', 'cms-qa', `${m.runId}.writers`)
+    const wFiles = fs.existsSync(writerDir)
+      ? fs.readdirSync(writerDir).filter((f) => f.endsWith('.json')).sort().map((name) => ({ name, text: fs.readFileSync(path.join(writerDir, name), 'utf8') }))
+      : []
+    const wc = R.cmsQaWritersCloseCheck(m.runId, wFiles, pidAlive)
+    const sales = await pgMeta(env, T.pgMetaReadOnly(R.cmsQaRunSalesRunsSql(m.startedAt)))
+    const sc = R.cmsQaSalesRunsCheck(sales, wc.entries, { qaRunId: m.runId })
+    console.log(`đối chiếu run ${m.runId}: ${c.closed.programs.length} chương trình is_test (để lại, ẩn với user không marker) · ${c.closed.closeCheck.realProgramsTouchedByQaUsers.length} chương trình thật bị tài khoản QA chạm · ${wc.entries.length} writer kết quả · ${sc.runs.length} run sales trong cửa sổ · ${c.warnings.length + sc.warningProgramIds.length} cảnh báo`)
     for (const p of c.closed.programs) console.log(`  QA ${mask(p.id)} ${p.status}`)
     for (const w of c.warnings) console.log(`CẢNH BÁO: ${w}`)
-    if (!c.ok) {
-      for (const r of c.reasons) console.log(`ĐỎ: ${r}`)
+    for (const id of sc.warningProgramIds) console.log(`CẢNH BÁO: chương trình thật ${mask(id)} có run sales trong cửa sổ (cổng đã mở — cron thật) — soát tay`)
+    const red = [...c.reasons, ...wc.reasons, ...sc.reasons]
+    if (red.length) {
+      for (const r of red) console.log(`ĐỎ: ${r}`)
       console.log(`giữ ${G.CMS_QA_MARKER} mở — không đóng run (runbook D: dừng QA, báo PM / operator)`)
       return 1
     }
-    const ack = T.cmsQaAckWarnings(c.closed.closeCheck.realProgramsChangedByOthers, a.values['--ack-warnings'])
+    const ack = T.cmsQaAckWarnings([...new Set([...c.closed.closeCheck.realProgramsChangedByOthers, ...sc.warningProgramIds])], a.values['--ack-warnings'])
     if (!ack.ok) {
       console.log(`CHẶN ĐÓNG: ${ack.reason}`)
       console.log(`giữ ${G.CMS_QA_MARKER} mở`)
       return 1
     }
-    const closed = ack.acked.length ? { ...c.closed, closeCheck: { ...c.closed.closeCheck, acknowledgedWarnings: ack.acked } } : c.closed
+    const withSales = {
+      ...c.closed, salesRuns: sc.runs,
+      writers: wc.entries.map((e) => ({ writerId: e.writerId, programId: e.programId, status: e.status, runId: e.result?.runId ?? null, code: e.result?.code ?? null })),
+    }
+    const closed = ack.acked.length ? { ...withSales, closeCheck: { ...withSales.closeCheck, acknowledgedWarnings: ack.acked } } : withSales
     const out = path.join(ROOT, 'qa-artifacts', 'cms-qa', `${m.runId}.json`)
     writeAtomic(out, closed)
     fs.rmSync(MARKER)
@@ -185,6 +201,8 @@ const runId = `cms-qa-${pre.dbNow.replace(/[-:]/g, '').replace(/\..*$/, '')}-${c
 let manifest = T.newCmsQaManifest({
   runId, mode: 'manual-localhost', host: gate.host, dbNow: pre.dbNow, gitHead, gitTree, buildId, port: server ? port : null, users: pre.users,
 })
+// pid CỦA LAUNCHER (nơi chạy canh marker) — writer kết quả QA đòi pid này còn sống, không chỉ server con (security review 03/11 P1-1).
+manifest = { ...manifest, launcherPid: process.pid }
 try {
   fs.writeFileSync(MARKER, json(manifest), { flag: 'wx' }) // độc quyền: hai launcher song song ⇒ cái sau thất bại
 } catch { die2(`${G.CMS_QA_MARKER} vừa được run khác tạo — không ghi đè`) }
