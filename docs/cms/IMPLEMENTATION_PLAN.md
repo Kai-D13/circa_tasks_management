@@ -26,9 +26,11 @@
 | **P1-c** | A1/A2/A3 phần danh mục; tab CMS; loading/error/empty | `app/(dashboard)/targets/campaigns/cms/**`, `components/cms/admin/*`, `components/kpi/CampaignsTabs.tsx`, fixture `/ui-catalog/cms-v2` | Đúng trạng thái, đúng quyền, fixture bất khả ghi |
 | **P1-d** | D1/D2 danh mục; QLCH đọc danh mục; mobile | `app/(dashboard)/targets/page.tsx` (nhánh `tab=cms`), `app/(dashboard)/targets/cms/products/[programProductId]/*`, `components/cms/staff/*` | 360/390 light/dark, không lộ số thực tế chưa bật |
 | **P2-a** | Engine thuần, quy đổi, gate, lũy tiến, trần, phân bổ dòng | `lib/cms/engine/*`, `e2e/cms-engine.spec.ts` (nhánh `feat/cms-p2`) | Đúng từng số trong bảng AC và các ca số lẻ |
-| P2-b | Migration 122: snapshot nguồn/kết quả; stage/publish; sync và nhóm dữ liệu lỗi | — | **Chưa giao thực hiện** |
-| P2-c | D1/D2 có số, D3, A3 kết quả, QLCH/SM, export | — | **Chưa giao thực hiện** |
-| P3 | Payout, chốt kỳ, xuất chi trả và phát sinh sau chốt | — | HOLD Q-206/Q-213 |
+| **P2-b** (I1 + I2) | Migration 122: snapshot đầu vào / kết quả theo run, stage → seal → publish atomic qua pointer, RPC đọc theo phạm vi hiện tại; lõi đồng bộ bán + cron + script operator; cổng Q-206 | `supabase/migrations/122_cms_results.sql` + rollback, `lib/cms/{resultStage,salesSync,cronSales,releaseGate}.ts`, `lib/cms/server/salesSyncDeps.ts`, `app/api/cron/sync-cms-sales/route.ts`, `scripts/cms-sales-sync.mjs`, `scripts/qa-cms-122.mjs`, `e2e/cms-{122-pglite,sales-sync}.spec.ts` | **Giao 02/11** (kế hoạch tích hợp PM — `planning/research/cms-consolidated-implementation-plan-2026-11-02.md` §4–§5). PGlite + PG15 thật (race / quy mô), ACL 21 hàm, nguồn giả; chương trình thật chưa công bố tiền khi Q-206 HOLD |
+| **P2-c** (I3) | D1/D2 có số, D3, A3 kết quả, QLCH/SM, export XLSX cùng `run_id` | `lib/cms/server/results*.ts`, `components/cms/**`, `app/(dashboard)/targets/cms/history/*`, `app/api/export/cms/*` | **Giao 02/11** (kế hoạch tích hợp PM §6) — fixture theo DTO 122, UI / XLSX / lịch sử lệch 0đ |
+| P3 (I5) | Payout, chốt kỳ, xuất chi trả và phát sinh sau chốt | — | Chỉ blueprint + test fixture (kế hoạch PM §8); hành vi thật HOLD Q-206 / Q-213; số migration chờ PM phân bổ |
+
+Phát hành gộp (kế hoạch PM §10): không deploy theo từng batch; một candidate tích hợp + một cửa sổ migration 121 → 122 (→ P3 nếu được duyệt) → QA → deploy → smoke.
 
 Phụ thuộc: PR-0 → (P0-a ∥ P1-a, sau khi khóa interface nguồn) → P1-b → (P1-c ∥ P1-d). P2-a độc lập khi dùng đúng contract đã chốt; P2-b phụ thuộc engine và nền DB. Không còn migration hoặc UI `users.employee_code` trong P0-a.
 
@@ -120,7 +122,7 @@ Ca bắt buộc (r2 §5.2):
 
 Fixture điều chỉnh âm chỉ chứng minh số học trên sự kiện đã chuẩn hóa; không thay thế việc chốt quy thuộc trả hàng (Q-206).
 
-### 3.6. Tích hợp, quyền (áp dụng dần theo batch; phần P2 kiểm khi P2-b/c được giao)
+### 3.6. Tích hợp, quyền (áp dụng dần theo batch; P2-b/c đã giao 02/11 — ma trận chi tiết ở kế hoạch PM §9.2)
 
 - Staff A không đọc được số của staff B.
 - QLCH không có payout cá nhân trên tài khoản dùng chung.

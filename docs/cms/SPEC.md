@@ -195,6 +195,7 @@ Phân bổ dòng: sắp theo `completed_at` (micro giây) rồi `order_line_id`;
 | `cms_program_tiers` | Bậc số lượng và tiền trên đơn vị CMS | 120 |
 | `cms_import_runs` | Preview/commit, hash, kết quả từng dòng, thống kê và người nhập | 120 (bảng) / 121 (RPC) |
 | `cms_sync_runs` | Phiên lấy nguồn/tính kết quả, trạng thái, revision, số dòng, lỗi và thời gian | 120 (kind `products`) / 122 mở rộng |
+| `cms_sync_run_chunks` | Sổ khối đã stage của run (retry không nhân đôi, seal kiểm đủ khối) | 122 |
 | `cms_sales_lines` | Snapshot đầu vào theo phiên tính | 122 |
 | `cms_results` | Kết quả dược sĩ × sản phẩm theo phiên | 122 |
 | `cms_result_catalog` | Gate danh mục của từng dược sĩ theo phiên | 122 |
@@ -353,7 +354,7 @@ Khoảng ngày mọi chương trình: 2020-01-01…2100-12-31 và `end_date ≥ 
 4. Ngày bắt đầu đã qua vẫn được kích hoạt (H7): màn xác nhận nói rõ áp dụng hồi tố từ ngày bắt đầu và sau kích hoạt chỉ còn thêm sản phẩm; ngày kết thúc đã qua ⇒ hiển thị Chờ chốt kỳ, không cấp quyền chốt hay bật tiền.
 5. Phạm vi `all` ⇒ ghi danh sách nhà thuốc OS đang hoạt động tại thời điểm kích hoạt; tăng `config_version`.
 
-## 5. Công bố kết quả atomic (P2-b, chưa giao thực hiện)
+## 5. Công bố kết quả atomic (P2-b — giao 02/11 theo kế hoạch tích hợp PM; hiện thực 122 ở §5.1, chờ audit DDL)
 
 Chọn một phiên bản kết quả làm nguồn chung cho UI và export.
 
@@ -382,6 +383,18 @@ Staging của run chưa công bố không được xuất hiện qua RLS/RPC đ�
 
 Giữ phiên hiện hành và phiên thành công trước để đối soát; dọn staging lỗi quá 24 giờ bằng batch có điều kiện. Metadata run được giữ phục vụ audit.
 
+**[PM 03/11 §4 — đã duyệt]** Retention cụ thể: giữ dữ liệu của run hiện hành + run công bố liền trước; dữ liệu nặng (khối stage, dòng bán, kết quả) của run `held` / `error` giữ **tối đa 2 run gần nhất mỗi chương trình VÀ không quá 24 giờ** (thứ tự `finished_at DESC, id DESC` — tất định khi trùng thời điểm); run `ok` cũ hơn liền trước bị dọn. Dòng `cms_sync_runs` (metadata) không xoá. Dọn theo lô có trần dòng / lần gọi; run đang dọn dở đọc ra `CMS_RESULT_RUN_GONE`, không thấy dữ liệu cụt.
+
+### 5.1. Hiện thực migration 122 **[Dev đề xuất — chờ db-reviewer + PM audit DDL]**
+
+- `cms_sync_runs`: kind `sales`; cột `config_version`, `is_test`, `mapping_fp` (vân tay users + stores lúc open), `sealed_at`, `published_at`, `purged_at` (bắt đầu dọn), `cleared_at` (dọn xong), `seal_expect` / `seal_step` (seal tách bước), `source_max_updated_at`, `amount_vnd`.
+- `cms_program_tiers`: index **UNIQUE** `(program_product_id, qty_from)` để seal tra bậc chứa Q bằng `LIMIT 1` **[PM 03/11 §5 — đã duyệt]**; preflight 122 dừng cả migration nếu dữ liệu bậc hiện có trùng mốc (không tự xoá / gộp); hậu kiểm index UNIQUE, hợp lệ, đúng cột. Không thay kiểm bậc liên tục / không chồng của 121 / engine. Ràng buộc: run sales `ok` ⇔ đã công bố (cần seal + tổng tiền) — `rpc_cms_sync_run_close` của 120 không đóng được run sales thành `ok`.
+- `cms_programs.current_result_run_id` + FK kép (run, chương trình) + trigger: chỉ trỏ run sales `ok` chưa dọn của chính chương trình, cùng `config_version` / `is_test`; chỉ đổi khi `active`; đã chốt thì bất biến.
+- Bảng (RLS bật, không policy, chỉ service_role): `cms_sync_run_chunks` (sổ khối đã stage), `cms_sales_lines` (chỉ dòng **ứng viên** INCLUDED / UNASSIGNED / OUT_OF_SCOPE, `seq` = thứ tự engine; dòng không ứng viên chỉ đếm theo lý do), `cms_results`, `cms_result_catalog`, `cms_result_lines`.
+- Luồng ghi (service_role): `rpc_cms_sales_run_open` (khoá dòng chương trình, chỉ `active` đã bắt đầu theo ngày VN, một run / chương trình, treo > 30′ ⇒ STALE; trả snapshot cấu hình + users / stores để map) → `rpc_cms_sales_run_stage` (khối ≤ 5.000 dòng có số; gửi lại cùng digest không nhân đôi) → `rpc_cms_sales_run_seal_begin` + `rpc_cms_sales_run_seal_step` bước 1…10 (mỗi bước một câu lệnh ngắn < 8 s `statement_timeout` của PostgREST; đối chiếu độc lập: đủ khối, thứ tự, kỳ / phạm vi, người bán, cấu hình, tổng nhóm, Q, F(Q), gate + "đạt từ", phân bổ + trạng thái dòng, tổng tiền; đầu mỗi bước kiểm lại cấu hình / mapping / chương trình chốt ⇒ held; gọi lại bước đã qua ⇒ already) → `rpc_cms_sales_run_publish` (khoá chương trình → run; lỗi thời / đã chốt ⇒ held, gọi lại ⇒ already) → `rpc_cms_sales_run_finish` / `rpc_cms_sales_run_cleanup`. SQL không tính tiền thay engine.
+- Đọc (authenticated, SECDEF): `rpc_cms_result_header`, `rpc_cms_result_rows`, `rpc_cms_result_lines` (D3 / XLSX, con trỏ `seq`), `rpc_cms_result_excluded` (chỉ super — có email nguồn để sửa mapping). Phạm vi **hiện tại** theo §4.3 kế hoạch PM; `run_id` không thuộc chương trình / chưa công bố / đã dọn ⇒ `CMS_RESULT_RUN_GONE`.
+- Q-206: hai lớp. App: lõi đồng bộ (`lib/cms/releaseGate.ts`, hằng trong mã) dừng chương trình thật ở held `RESULTS_RELEASE_GATE` sau seal; cron bỏ qua chương trình thật khi cổng đóng. DB: `cms__results_release_open()` = false ⇒ `rpc_cms_sales_run_publish` từ chối run không `is_test`. Mở cổng = migration riêng sau khi Q-206 chốt. Chương trình QA (`is_test`) công bố được.
+
 ## 6. Đồng bộ và kiểm soát nguồn
 
 Bản đầu **đọc lại toàn kỳ của từng chương trình** thay vì phụ thuộc hoàn toàn vào watermark tăng dần — bắt đơn đến muộn và chỉnh sửa cũ; tự xử lý danh mục bổ sung hồi tố; tính lại sau khi mapping tài khoản được sửa; tránh đánh mất thay đổi do chỉ nhìn `item.updated_at`.
@@ -392,7 +405,7 @@ Mặc định kỹ thuật:
 
 - Trần 200.000 dòng/chương trình/lượt; vượt thì held, không lấy một phần.
 - Thứ tự xử lý ưu tiên chương trình có lần thành công cũ nhất.
-- Deadline toàn lượt; hết budget thì để chương trình chưa xử lý cho lượt sau.
+- Deadline toàn lượt; hết budget thì để chương trình chưa xử lý cho lượt sau. **[PM 03/11 P1-I2-1]** Deadline phủ cả stage, từng bước seal, publish và cleanup: timeout mỗi RPC lấy từ ngân sách còn lại (kẹp 1…60 s), giữ dự trữ 15 s để đóng run (finish) và báo cáo; một RPC làm việc / một lô cleanup chỉ **bắt đầu** khi còn ≥ 10 s trước mốc của nó (statement_timeout 8 s + mạng — không tự huỷ RPC hợp lệ); hết ngân sách giữa chừng ⇒ đóng run `held DEADLINE`, không chạy tiếp bước sau; RPC bị huỷ không mã khi ngân sách đã hết cũng là `DEADLINE`, có mã `CMS_*` là lỗi đúng mã. Publish: DB trả mã `CMS_*` = từ chối xác định (đã rollback) ⇒ báo mã; không nhận được phản hồi ⇒ gọi lại một lần (idempotent), vẫn không rõ ⇒ `PUBLISH_UNKNOWN`, không tự đánh held / rollback. Cleanup chạy theo lô trong ngân sách còn lại, tóm tắt cron báo `cleanupMore` / `cleanupStoppedBy`; `elapsedMs` đo sau cleanup; truy vấn chọn chương trình cũng theo ngân sách cron. Rủi ro đã biết: cleanup của chương trình trước (≤ 20 lô) dùng chung ngân sách ⇒ chương trình sau có thể `pending` — theo dõi qua cảnh báo cron, đo ở I4. Script operator (`cms-sales-sync.mjs`) chạy tay, không có hạn tổng: mỗi RPC ≤ 60 s, cleanup ≤ 20 lô.
 - Chương trình lỗi không chặn những chương trình khác.
 - Chương trình `is_test` không vào cron/báo cáo thật.
 
@@ -415,9 +428,9 @@ Chất lượng nguồn:
 | Chương trình | Server actions tạo/sửa/kích hoạt |
 | Import | POST preview, POST commit, GET file lỗi; template tĩnh `public/templates/Circa_Import_CMS.xlsx` |
 | Đọc danh mục (P1) | Bảng danh mục qua RLS |
-| Đọc kết quả (P2) | RPC tổng quan, sản phẩm, dược sĩ, lịch sử |
-| Export (P2) | GET export CMS theo chương trình và bộ lọc |
-| Cron | Pull Product Master (P1), sync dữ liệu bán (P2) |
+| Đọc kết quả (P2) | RPC `rpc_cms_result_header` / `_rows` / `_lines` / `_excluded` (122, §5.1) |
+| Export (P2) | GET export CMS theo chương trình, bộ lọc và `run_id` của màn hình |
+| Cron | Pull Product Master (P1); `/api/cron/sync-cms-sales` (P2, cần `CMS_PROGRAM_ENABLED` + `CMS_EARNINGS_ENABLED`); script operator `scripts/cms-sales-sync.mjs` cùng lõi, dry-run mặc định |
 
 Quy tắc:
 

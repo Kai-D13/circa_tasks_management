@@ -23,3 +23,9 @@ export function cmsFlagsFromEnv(env: Env): CmsFlags {
 export function isCmsProgramEnabled(): boolean {
   return cmsFlagsFromEnv(process.env).program
 }
+
+/** Số CMS thực tế (sync / tính / hiển thị) chỉ khi CẢ hai cờ program + earnings bật. */
+export function isCmsEarningsEnabled(): boolean {
+  const f = cmsFlagsFromEnv(process.env)
+  return f.program && f.earnings
+}
