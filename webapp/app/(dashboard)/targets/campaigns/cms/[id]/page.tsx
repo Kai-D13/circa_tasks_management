@@ -3,17 +3,20 @@ import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { isCmsProgramEnabled } from '@/lib/cms/flags'
 import { canManageCms, canViewCmsAdmin } from '@/lib/cms/access'
 import { cmsLoadProgramDetail } from '@/lib/cms/server/catalog'
+import { cmsLoadEligibleStaffIds, cmsLoadResults, cmsLoadStoreNames } from '@/lib/cms/server/resultLoad'
 import { cmsTodayVn } from '@/lib/cms/programStatus'
 import { ErrorState } from '@/components/ds/ErrorState'
-import { CmsProgramDetailView } from '@/components/cms/admin/CmsProgramDetailView'
+import { CmsProgramDetailView, type CmsDetailView } from '@/components/cms/admin/CmsProgramDetailView'
 
 // CMS P1-c · A3 /targets/campaigns/cms/[id]. Cổng như A1 (cờ + super / SM). Chương trình ngoài phạm vi RLS (kể cả QA không
 // marker — H9b) ⇒ 404 như không tồn tại. SM chỉ đọc. Lỗi truy vấn ⇒ ErrorState (không danh mục rỗng giả).
+// P2-c (I3): cờ CMS_EARNINGS_ENABLED + chương trình active đã bắt đầu ⇒ kết quả qua RPC 122 (session: super toàn bộ, SM theo
+// nhà thuốc được phân công) + mẫu số Q-212 + tên nhà thuốc; OFF / nháp / chưa bắt đầu ⇒ không gọi RPC (P1 nguyên trạng).
 export default async function CmsProgramPage({ params, searchParams }: {
   params: Promise<{ id: string }>
-  searchParams: Promise<{ view?: string }>
+  searchParams: Promise<{ view?: string; page?: string }>
 }) {
-  const [{ id }, { view }] = await Promise.all([params, searchParams])
+  const [{ id }, { view, page }] = await Promise.all([params, searchParams])
   const { user, profile } = await getSessionProfile()
   if (!user) notFound()
   if (!(isCmsProgramEnabled() && canViewCmsAdmin(profile?.role, user.email))) notFound()
@@ -28,5 +31,24 @@ export default async function CmsProgramPage({ params, searchParams }: {
     )
   }
   if (!res.data) notFound()
-  return <CmsProgramDetailView detail={res.data} today={cmsTodayVn(new Date())} canManage={canManage} view={view === 'runs' ? 'runs' : 'products'} />
+  const today = cmsTodayVn(new Date())
+  const prog = res.data.program
+  const results = prog.status === 'active'
+    ? await cmsLoadResults(prog.id, { started: prog.startDate <= today })
+    : { kind: 'off' as const }
+  let eligible: string[] | null = null
+  let storeNames = new Map<string, string>()
+  if (results.kind === 'loaded' && results.header.run) {
+    const storeIds = [...results.rows.results.map((r) => r.storeId), ...results.rows.users.flatMap((u) => (u.storeId ? [u.storeId] : []))]
+    ;[eligible, storeNames] = await Promise.all([
+      cmsLoadEligibleStaffIds({ programStoreIds: res.data.storeIds, viewer: { id: user.id, role: profile?.role ?? null, isSuper: canManage } }),
+      cmsLoadStoreNames(storeIds),
+    ])
+  }
+  const v: CmsDetailView = view === 'runs' ? 'runs' : view === 'staff' ? 'staff' : 'products'
+  const pageNum = Number(page)
+  return (
+    <CmsProgramDetailView detail={res.data} today={today} canManage={canManage} view={v} results={results}
+      eligibleStaffIds={eligible} storeNames={storeNames} staffPage={Number.isInteger(pageNum) && pageNum > 0 ? pageNum : 1} />
+  )
 }

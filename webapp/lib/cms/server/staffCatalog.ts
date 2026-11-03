@@ -4,6 +4,7 @@ import type { CmsGmvBasis } from '@/lib/cms/display'
 import type { CmsProgramDbStatus } from '@/lib/cms/programStatus'
 import type { CmsProductView, CmsProgramRowView, CmsResult, CmsTierView } from '@/lib/cms/server/catalog'
 import { cmsPickStaffProgram } from '@/lib/cms/staffView'
+import { CmsQueryError, cmsQueryFailLine } from '@/lib/cms/queryLog'
 
 // CMS P1-d — đọc danh mục cho staff / QLCH (D1 `/targets?tab=cms`, D2 `/targets/cms/products/[id]`) bằng SESSION client:
 // RLS 120 đã giới hạn chương trình active / locked có nhà thuốc hiện tại của người xem (store OS đang hoạt động; QA chỉ
@@ -12,20 +13,20 @@ import { cmsPickStaffProgram } from '@/lib/cms/staffView'
 
 const PAGE = 1000
 const MAX_PAGES = 100
-type Q = (from: number, to: number) => PromiseLike<{ data: unknown[] | null; error: { message?: string } | null }>
+type Q = (from: number, to: number) => PromiseLike<{ data: unknown[] | null; error: { code?: string } | null }>
 async function readAll<T>(query: Q): Promise<T[]> {
   const out: T[] = []
   for (let p = 0; p < MAX_PAGES; p++) {
     const { data, error } = await query(out.length, out.length + PAGE - 1)
-    if (error) throw new Error(error.message ?? 'query failed')
+    if (error) throw new CmsQueryError(error.code)
     const rows = (data ?? []) as T[]
     if (rows.length === 0) return out
     out.push(...rows)
   }
-  throw new Error('too many rows')
+  throw new CmsQueryError('TOO_MANY_ROWS')
 }
 const fail = (e: unknown): { ok: false; error: string } => {
-  console.error('[cms-staff-catalog] query failed:', e instanceof Error ? e.message : e)
+  console.error(cmsQueryFailLine('cms-staff-catalog', e)) // chỉ mã máy, không message DB (PM 03/11 §3.2)
   return { ok: false, error: 'QUERY_FAILED' }
 }
 
@@ -95,13 +96,13 @@ export async function cmsLoadStaffProduct(programProductId: string, today: strin
   try {
     const supabase = await createClient()
     const { data: pp, error } = await supabase.from('cms_program_products').select(PRODUCT_COLS).eq('id', programProductId).maybeSingle()
-    if (error) throw new Error(error.message)
+    if (error) throw new CmsQueryError(error.code)
     if (!pp) return { ok: true, data: null }
     const prod = pp as unknown as ProductDb
     // Lọc trạng thái / hạn ngay ở truy vấn (phòng thủ chiều sâu, cùng điều kiện D1) + kiểm lại ở app bên dưới.
     const { data: prog, error: pErr } = await supabase.from('cms_programs').select(PROGRAM_COLS).eq('id', prod.program_id)
       .eq('status', 'active').gte('end_date', today).maybeSingle()
-    if (pErr) throw new Error(pErr.message)
+    if (pErr) throw new CmsQueryError(pErr.code)
     const program = prog ? toProgram(prog as unknown as ProgramDb) : null
     if (!program || program.status !== 'active' || program.endDate < today) return { ok: true, data: null }
     const tiers = await readAll<TierDb>((a, b) => supabase.from('cms_program_tiers').select(TIER_COLS)

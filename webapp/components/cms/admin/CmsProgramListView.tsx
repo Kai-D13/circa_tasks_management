@@ -6,10 +6,13 @@ import { FilterTabs } from '@/components/ds/FilterTabs'
 import { StatusBadge } from '@/components/ds/StatusBadge'
 import { EmptyState } from '@/components/ds/EmptyState'
 import { ErrorState } from '@/components/ds/ErrorState'
+import { ProgressBar } from '@/components/ds/ProgressBar'
+import { Notice } from '@/components/ds/Notice'
 import { CampaignsTabs } from '@/components/kpi/CampaignsTabs'
 import { buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { cmsDate, cmsDateRange, cmsDateTime } from '@/lib/cms/display'
+import { cmsDate, cmsDateRange, cmsDateTime, cmsVnd } from '@/lib/cms/display'
+import type { CmsA1Cell, CmsA1Stats } from '@/lib/cms/resultUi'
 import {
   CMS_STATUS_LABEL, CMS_STATUS_TONE, cmsDaysLeft, cmsStatusesFor,
 } from '@/lib/cms/programStatus'
@@ -19,6 +22,26 @@ import type { CmsListFilter, CmsListModelRow } from '@/lib/cms/programList'
 // CMS P1-c · A1 /targets/campaigns/cms (UI §3.1, r2 U1/U2/U8/U20). Dùng chung route thật + fixture /ui-catalog/cms-v2.
 // P1: KHÔNG render cột / ô kết quả thực tế (Đạt điều kiện, CMS tạm tính, Dược sĩ có CMS) — không ô 0 / thanh rỗng.
 // StatCard chỉ ô không có tiền; chương trình QA không vào thống kê. SM: chỉ đọc, không có Nháp / Tạo / Import.
+// P2-c (I3): `p2` (chỉ khi cờ CMS_EARNINGS_ENABLED) thêm 3 ô (CMS đang chạy · CMS chờ chốt · Dược sĩ có CMS — loại QA, lỗi / chưa
+// có số ⇒ '—') và 3 cột Đạt điều kiện / CMS tạm tính / Dược sĩ có CMS (SM: theo phạm vi RPC). p2 null ⇒ P1 nguyên trạng.
+
+function ResultCells({ cell }: { cell: CmsA1Cell | undefined }) {
+  if (!cell) return <><td className="px-3 py-3 text-muted-foreground">—</td><td className="px-3 py-3 text-right text-muted-foreground">—</td><td className="px-3 py-3 text-right text-muted-foreground">—</td></>
+  if (cell.kind !== 'ok') {
+    const t = cell.kind === 'none' ? 'Chưa có số liệu' : 'Lỗi tải số liệu'
+    return <td colSpan={3} data-cms-result-cell={cell.kind} className={cn('px-3 py-3 text-[12px]', cell.kind === 'error' ? 'text-status-danger' : 'text-muted-foreground')}>{t}</td>
+  }
+  return (
+    <>
+      <td className="px-3 py-3" data-cms-result-cell="ok">
+        <ProgressBar value={cell.productsWithCms} max={Math.max(1, cell.productCount)} tone="ok" size={5} ariaLabel={`${cell.productsWithCms}/${cell.productCount} SP có CMS`}
+          label={<span className="text-[12px] font-normal text-muted-foreground">{cell.productsWithCms}/{cell.productCount} SP có CMS</span>} />
+      </td>
+      <td className="px-3 py-3 text-right font-semibold tabular-nums">{cmsVnd(cell.amountVnd)}</td>
+      <td className="px-3 py-3 text-right tabular-nums">{cell.pharmacistsWithCms}</td>
+    </>
+  )
+}
 
 /** Hàng A1 (lib/cms/programList). lastImport null khi người xem không đọc được import run (SM) hoặc chưa ghi lần nào. */
 export type CmsListRow = CmsListModelRow
@@ -57,7 +80,7 @@ function DateLine({ r, today }: { r: CmsListRow; today: string }) {
 }
 
 export function CmsProgramListView({
-  canManage, affiliateEnabled, today, filter, q, counts, rows, hasAny, stats, error,
+  canManage, affiliateEnabled, today, filter, q, counts, rows, hasAny, stats, error, p2 = null,
 }: {
   canManage: boolean
   affiliateEnabled: boolean
@@ -71,6 +94,8 @@ export function CmsProgramListView({
   /** Thống kê thật (loại QA): null khi lỗi. */
   stats: { running: number; productsRunning: number } | null
   error: string | null
+  /** P2 (cờ earnings): ô kết quả theo chương trình + thống kê; null ⇒ P1. */
+  p2?: { cells: Map<string, CmsA1Cell>; stats: CmsA1Stats } | null
 }) {
   const statuses = cmsStatusesFor(canManage)
   const tabs = [
@@ -95,10 +120,23 @@ export function CmsProgramListView({
       ) : (
         <>
           {stats && (
-            <div data-cms-stats className="grid grid-cols-2 gap-2.5 md:max-w-xl">
+            <div data-cms-stats className={p2 ? 'grid grid-cols-2 gap-2.5 lg:grid-cols-5' : 'grid grid-cols-2 gap-2.5 md:max-w-xl'}>
               <StatCard label="Chương trình đang chạy" value={<span className="tabular-nums">{stats.running}</span>} />
               <StatCard label="Sản phẩm đang áp dụng" value={<span className="tabular-nums">{stats.productsRunning}</span>} />
+              {p2 && (
+                <>
+                  <StatCard label="CMS tạm tính · đang chạy" value={<span data-cms-stat-running className="tabular-nums">{p2.stats.runningVnd === null ? '—' : cmsVnd(p2.stats.runningVnd)}</span>}
+                    hint={p2.stats.withoutSnapshot > 0 ? `${p2.stats.withoutSnapshot} chương trình chưa có số liệu` : undefined} />
+                  <StatCard label="CMS · chờ chốt kỳ" value={<span data-cms-stat-waiting className="tabular-nums">{p2.stats.waitingVnd === null ? '—' : cmsVnd(p2.stats.waitingVnd)}</span>} />
+                  <StatCard label="Dược sĩ có CMS" value={<span data-cms-stat-pharmacists className="tabular-nums">{p2.stats.pharmacists === null ? '—' : p2.stats.pharmacists}</span>} />
+                </>
+              )}
             </div>
+          )}
+          {p2 && p2.stats.notLoaded > 0 && (
+            <Notice tone="warning" role="status" title="Không cộng tổng CMS trên danh sách">
+              <span data-cms-stats-truncated>{p2.stats.notLoaded} chương trình đang chạy / chờ chốt chưa được tải số liệu ở màn này — xem số từng chương trình trong trang chi tiết.</span>
+            </Notice>
           )}
 
           {hasAny && (
@@ -134,12 +172,15 @@ export function CmsProgramListView({
             <>
               <div className="hidden md:block overflow-hidden rounded-v2-panel border bg-card">
                 <div className="overflow-x-auto">
-                  <table data-cms-table className="w-full min-w-[760px] text-[13px]">
+                  <table data-cms-table className={cn('w-full text-[13px]', p2 ? 'min-w-[1080px]' : 'min-w-[760px]')}>
                     <thead className="bg-muted">
                       <tr className="text-left whitespace-nowrap">
                         <th className="pl-5 pr-3 py-2.5 text-[12px] font-medium text-muted-foreground">Chương trình</th>
                         <th className="px-3 py-2.5 text-[12px] font-medium text-muted-foreground">Trạng thái</th>
                         <th className="px-3 py-2.5 text-[12px] font-medium text-muted-foreground text-right">Sản phẩm</th>
+                        {p2 && <th className="px-3 py-2.5 text-[12px] font-medium text-muted-foreground">Đạt điều kiện</th>}
+                        {p2 && <th className="px-3 py-2.5 text-[12px] font-medium text-muted-foreground text-right">CMS tạm tính</th>}
+                        {p2 && <th className="px-3 py-2.5 text-[12px] font-medium text-muted-foreground text-right">Dược sĩ có CMS</th>}
                         {canManage && <th className="pl-3 pr-5 py-2.5 text-[12px] font-medium text-muted-foreground">Import gần nhất</th>}
                       </tr>
                     </thead>
@@ -159,6 +200,7 @@ export function CmsProgramListView({
                             </span>
                           </td>
                           <td className="px-3 py-3 text-right tabular-nums">{r.productCount}</td>
+                          {p2 && <ResultCells cell={p2.cells.get(r.id)} />}
                           {canManage && <td className="pl-3 pr-5 py-3"><RunCell run={r.lastImport} /></td>}
                         </tr>
                       ))}
@@ -183,6 +225,12 @@ export function CmsProgramListView({
                         <span className="text-muted-foreground">Sản phẩm</span>
                         <span className="font-semibold tabular-nums">{r.productCount}</span>
                       </span>
+                      {p2?.cells.get(r.id)?.kind === 'ok' && (
+                        <span data-cms-card-amount className="flex items-center justify-between text-[13px]">
+                          <span className="text-muted-foreground">CMS tạm tính</span>
+                          <span className="font-semibold tabular-nums">{cmsVnd((p2.cells.get(r.id) as Extract<CmsA1Cell, { kind: 'ok' }>).amountVnd)}</span>
+                        </span>
+                      )}
                       {canManage && <span className="block text-[13px]"><RunCell run={r.lastImport} /></span>}
                     </Link>
                   </li>

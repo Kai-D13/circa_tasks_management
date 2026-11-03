@@ -385,6 +385,8 @@ Giữ phiên hiện hành và phiên thành công trước để đối soát; d
 
 **[PM 03/11 §4 — đã duyệt]** Retention cụ thể: giữ dữ liệu của run hiện hành + run công bố liền trước; dữ liệu nặng (khối stage, dòng bán, kết quả) của run `held` / `error` giữ **tối đa 2 run gần nhất mỗi chương trình VÀ không quá 24 giờ** (thứ tự `finished_at DESC, id DESC` — tất định khi trùng thời điểm); run `ok` cũ hơn liền trước bị dọn. Dòng `cms_sync_runs` (metadata) không xoá. Dọn theo lô có trần dòng / lần gọi; run đang dọn dở đọc ra `CMS_RESULT_RUN_GONE`, không thấy dữ liệu cụt.
 
+**[PM 03/11 r2.2 §3.3 — đã chốt]** "2 run gần nhất" đếm **mọi** run sales `held` / `error` của chương trình, kể cả run đã dọn hoặc chưa từng stage dữ liệu (thứ tự `finished_at DESC, id DESC`); 24 giờ vẫn là trần bổ sung; run hiện hành / công bố liền trước / đang chạy không thuộc tập này. Đây là giới hạn **tối đa**, không cam kết luôn còn hai snapshot lỗi đủ dữ liệu chẩn đoán: hai lỗi nguồn mới có thể làm run seal cũ bị dọn (metadata vẫn còn). Cần giữ bằng chứng đặc biệt ⇒ operator thu bản đã che định danh theo quy trình trước khi dọn; không tự sửa retention SQL hay giữ raw data vô hạn.
+
 ### 5.1. Hiện thực migration 122 **[Dev đề xuất — chờ db-reviewer + PM audit DDL]**
 
 - `cms_sync_runs`: kind `sales`; cột `config_version`, `is_test`, `mapping_fp` (vân tay users + stores lúc open), `sealed_at`, `published_at`, `purged_at` (bắt đầu dọn), `cleared_at` (dọn xong), `seal_expect` / `seal_step` (seal tách bước), `source_max_updated_at`, `amount_vnd`.
@@ -482,6 +484,21 @@ Yêu cầu P2:
 - Export sử dụng đúng bộ lọc và `run_id` của màn hình.
 
 Ước tính “Nếu bán thêm” dùng cùng engine. Chỉ ước tính GMV khi có giá tham khảo xác định đúng theo `unit_CMS`; thiếu giá phù hợp thì bỏ phần ước tính cần giá.
+
+**Hiện thực P2-c (I3) [Dev — chờ PM audit]:**
+
+- Cờ: mọi số liệu chỉ khi `CMS_PROGRAM_ENABLED` + `CMS_EARNINGS_ENABLED` (`isCmsEarningsEnabled`); OFF ⇒ loader `lib/cms/server/resultLoad.ts` trả `off` TRƯỚC mọi RPC, view giữ nguyên P1; D3 và `GET /api/export/cms` ⇒ 404 / 403. Đọc bằng session client qua 4 RPC 122 (không service role).
+- Nhất quán: header rồi rows **ghim `run_id` của header** (run đổi giữa hai lần gọi ⇒ đọc lại một lần, vẫn đổi ⇒ "dữ liệu đã thay đổi"); D3 ghim `run=` trong URL, 20 dòng / lần theo `seq` của engine (tăng `n` tới 200 trên cùng con trỏ, sau đó chuyển con trỏ `after=`); run trong URL khác run hiện hành ⇒ báo thay đổi, không nối hai phiên. Export chỉ nhận đúng run hiện hành của màn.
+- Trình bày (`lib/cms/resultUi.ts`, thuần): chỉ cộng số engine trong snapshot; tổng QLCH / SM / A1 / A3 cộng tiền cá nhân, không áp lại bậc. Bảng chia theo bậc / thanh phân bố bậc chỉ hiện khi tổng lát (cùng hàm bậc engine) khớp tiền / tiềm năng của snapshot — lệch (danh mục đổi sau run) ⇒ ẩn, không tự sửa số. Chưa có snapshot ⇒ `—`; 0₫ chỉ khi run đã công bố và người xem thật sự chưa có CMS.
+- U13: snapshot danh mục (`price_snapshot`) không mang đơn vị của giá tham khảo ⇒ chưa xác định được "giá đúng theo `unit_CMS`" ⇒ bản này **không** có câu ước tính GMV / số đơn vị cần bán theo giá (gợi ý gần đạt chỉ nêu GMV còn thiếu + CMS khi đạt từ `potential_amount`).
+- U18 / Q-206: dòng `ADJUSTMENT` khi hợp đồng trả hàng chưa chốt ⇒ UI hiện "Chờ xác nhận", tiền `—`; export từ chối (409) thay vì ẩn dòng mà vẫn khớp tổng. Chương trình thật không có snapshot công bố khi cổng Q-206 đóng ⇒ trên prod các ô kết quả hiện `—`.
+- XLSX (`lib/cms/exportResults.ts`): sheet Thông tin (run_id, thời điểm công bố / dữ liệu bán, config_version) · Theo sản phẩm · Theo dược sĩ · Chi tiết dòng · Chưa gán (chỉ super, có email người bán nguồn để sửa mapping); đọc đủ mọi trang (trần 50.000 dòng ⇒ 413, không xuất thiếu); trước khi trả kiểm số dòng = Σ `line_count` và Σ tiền dòng = Σ tiền dược sĩ × SP; chuỗi ghi kiểu text, số nguyên ngoài miền an toàn / số lẻ ⇒ ô text.
+- Mẫu số Q-212 (A3 "Dược sĩ có CMS x / y"): staff hiện thuộc nhà thuốc OS đang hoạt động trong phạm vi chương trình ∩ phạm vi người xem (SM ∩ nhà thuốc được phân công) — cùng định nghĩa `cms__visible_result_users`; lỗi đọc ⇒ không hiện "/y". Khối tổng QLCH ở D1 ghi "Dược sĩ có CMS" kèm "/ N người có bán" (RPC chỉ trả người có dòng kết quả) — không phải mẫu số Q-212.
+- Bộ lọc export: A3 không có bộ lọc dữ liệu (chỉ tab / trang) ⇒ export là **toàn bộ run** trong phạm vi người xem (super: cả chương trình + sheet Chưa gán; SM: nhà thuốc được phân công). Có bộ lọc ở màn sau này thì export phải nhận đúng tham số đó.
+- A1: đọc kết quả tối đa 30 chương trình đang chạy / chờ chốt mỗi lượt xem (chương trình thật trước QA); vượt ⇒ cả 3 ô tổng `—` + cảnh báo, không cộng thiếu.
+- D3: "Xem thêm" tăng số dòng hiện thêm 20 trên cùng con trỏ (mỗi lần đọc lại ≤ 200 dòng / request); tới 200 thì chuyển sang con trỏ kế (dòng trước không còn trên màn, có "Về đầu danh sách"). Phiên hết hạn: D1 / D2 / D3 chuyển `/login`, export 401 — không có trạng thái UI riêng.
+- Dòng `ADJUSTMENT` chỉ có thể có ở chương trình QA khi Q-206 HOLD: tổng D1 / D2 / A1 / A3 vẫn là tiền snapshot (đã gồm điều chỉnh) trong khi dòng đó hiện `—`; export từ chối. Không ảnh hưởng chương trình thật (không công bố được khi HOLD).
+- Export ghi một dòng log kiểm toán không PII: `[cms-export] OK user=<uuid> program=<uuid> run=<uuid> scope=super|sm lines=N excluded=N`. Chưa giới hạn tần suất (mỗi lượt ≤ ~100 RPC đọc tuần tự) — theo dõi ở I4 nếu cần.
 
 UI dùng `data-ui-v2="page"`, khai báo width, component DS, touch target 44px và input mobile 16px.
 
