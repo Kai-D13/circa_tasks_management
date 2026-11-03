@@ -1,13 +1,15 @@
 #!/usr/bin/env node
-// CMS P1-R2 — gói VERIFY CHỈ ĐỌC cho migration 120 / 121 (review PM runbook P1 02/11; r1 sau db-reviewer / security).
+// CMS P1-R2 — gói VERIFY CHỈ ĐỌC cho migration 120 / 121 (review PM runbook P1 02/11; r1 sau db-reviewer / security);
+// phase 122 (PM 03/11 §5): bộ kỳ vọng / vân tay sau 122 riêng, phase DB ≠ phase khai báo ⇒ mục phase-match đỏ (không xanh giả).
 // Mỗi lệnh = MỘT transaction `BEGIN; SET TRANSACTION READ ONLY; …; ROLLBACK;` qua pg-meta với câu lệnh CỐ ĐỊNH ở
 // e2e/cmsQaTooling.ts (không nhận SQL tự do, không nới ops-ro). V8 mô phỏng phiên authenticated (SET LOCAL ROLE + claim
 // không ký — không đọc secret), so với oracle tính độc lập theo VAI KHAI BÁO; không thay smoke đăng nhập thật (D3 / E3).
 //
 //   node scripts/cms-verify.mjs acl-snapshot --expect-host=<host> --out=<pre.json>      # PRE: chụp NGAY TRƯỚC migration
-//   node scripts/cms-verify.mjs post --phase=120|121 --pre=<pre.json> --expect-host=<host> [--out=<file.json>]
-//   node scripts/cms-verify.mjs v8 --user=<uuid> --role=super|admin|sm|staff|qlch --expect-host=<host> [--expect-qa=true|false] [--expect-readable=N] [--require-proven=programs,products,…] [--out=…]
-//   node scripts/cms-verify.mjs print-sql --what=acl|v8 [--user=<uuid> --role=…]          # khối cố định cho Studio (V8: REPEATABLE READ)
+//   node scripts/cms-verify.mjs post --phase=120|121|122 --pre=<pre.json> --expect-host=<host> [--out=<file.json>]
+//   node scripts/cms-verify.mjs v8 --user=<uuid> --role=super|admin|sm|staff|qlch [--phase=120|121|122] --expect-host=<host> [--expect-qa=true|false] [--expect-readable=N] [--require-proven=programs,products,…,results] [--out=…]
+//   node scripts/cms-verify.mjs print-sql --what=acl|v8 [--user=<uuid> --role=… --phase=121|122]   # khối cố định cho Studio (V8: REPEATABLE READ)
+// V8 --phase bỏ trống chỉ hợp lệ khi DB ở 120 / 121; DB đã chạy 122 mà không khai --phase=122 ⇒ mục v8-phase đỏ.
 //
 // --out nên trỏ ra NGOÀI repo (vd. C:/circa-gate-logs/…). Kết quả chỉ có tên hàm / bảng / cờ / số đếm / id che.
 // Dòng in: ĐẠT · LỆCH (gate đỏ) · CHƯA (điều kiện đúng nhưng dữ liệu chưa đủ để chứng minh — vd. RLS cắt bớt).
@@ -21,17 +23,26 @@ async function main() {
     values: ['--expect-host', '--out', '--phase', '--pre', '--user', '--role', '--expect-qa', '--expect-readable', '--require-proven', '--what'],
   })
   if (!['acl-snapshot', 'post', 'v8', 'print-sql'].includes(a.cmd) || a.bad.length) {
-    console.log('dùng: node scripts/cms-verify.mjs <acl-snapshot | post --phase=120|121 --pre=FILE | v8 --user=UUID --role=… | print-sql --what=acl|v8> --expect-host=<host>')
+    console.log('dùng: node scripts/cms-verify.mjs <acl-snapshot | post --phase=120|121|122 --pre=FILE | v8 --user=UUID --role=… [--phase=121|122] | print-sql --what=acl|v8> --expect-host=<host>')
     return 2
   }
   const { T } = await loadTooling()
+  // V8: --phase tuỳ chọn (bỏ trống = trước 122, giữ lệnh runbook P1); DB đã 122 ⇒ phải khai --phase=122 (mục v8-phase).
+  const v8Phase = () => {
+    const p = a.values['--phase']
+    if (p !== undefined && !T.CMS_V8_PHASES.includes(p)) die2('--phase=120|121|122 cho v8')
+    return p
+  }
 
   if (a.cmd === 'print-sql') {
     if (a.values['--what'] === 'acl') console.log(T.pgMetaReadOnly(T.cmsVerifyAclSql()))
     else if (a.values['--what'] === 'v8') {
       if (!T.isCmsUuid(a.values['--user'])) die2('--user phải là UUID')
       if (!T.CMS_V8_ROLES.includes(a.values['--role'])) die2(`--role bắt buộc: ${T.CMS_V8_ROLES.join('|')}`)
-      console.log(T.pgMetaReadOnlySnapshot(T.cmsVerifyV8Sql(a.values['--user'], a.values['--role'])))
+      const ph = v8Phase()
+      // SQL Studio không có bộ đánh giá: thiếu --phase ⇒ SQL KHÔNG kiểm RPC 122 (db-reviewer P2-7) — cảnh báo ở stderr (stdout chỉ SQL).
+      if (ph === undefined) console.error('CẢNH BÁO: không khai --phase — SQL này chỉ hợp lệ trước 122 và KHÔNG kiểm 4 RPC đọc kết quả; sau 122 dùng --phase=122.')
+      console.log(T.pgMetaReadOnlySnapshot(T.cmsVerifyV8Sql(a.values['--user'], a.values['--role'], ph)))
     } else die2('--what=acl|v8')
     return 0
   }
@@ -44,9 +55,10 @@ async function main() {
   const isMd5 = (s) => /^[0-9a-f]{32}$/.test(String(s))
   let phase = null, pre = null, user = null, role = null
   const expect = {}
+  if (a.cmd === 'v8') expect.phase = v8Phase()
   if (a.cmd === 'post') {
     phase = a.values['--phase']
-    if (phase !== '120' && phase !== '121') die2('--phase=120|121')
+    if (!T.CMS_VERIFY_PHASES.includes(phase)) die2('--phase=120|121|122')
     try {
       pre = JSON.parse(fs.readFileSync(String(a.values['--pre']), 'utf8'))
     } catch { die2('--pre phải là file JSON từ `acl-snapshot` chụp NGAY TRƯỚC migration') }
@@ -55,9 +67,9 @@ async function main() {
       || !['md5_all', 'md5_old'].every((k) => isMd5(acl[k])) || !acl.db_now) {
       die2('--pre sai định dạng hoặc chụp ở host khác')
     }
-    // PRE phải đúng phase: trước 120 chưa có hàm cms nào; trước 121 có đúng 7 hàm của 120.
+    // PRE phải đúng phase: trước 120 chưa có hàm cms nào; trước 121 có đúng 7 (120); trước 122 có đúng 14 (120 + 121).
     const cmsBefore = acl.n_all - acl.n_old
-    if ((phase === '120' && cmsBefore !== 0) || (phase === '121' && cmsBefore !== 7)) {
+    if (cmsBefore !== T.cmsFnCountBefore(phase)) {
       die2(`--pre không phải ảnh ngay trước ${phase} (đang có ${cmsBefore} hàm cms)`)
     }
   }
@@ -76,7 +88,8 @@ async function main() {
     }
     if (a.values['--require-proven'] !== undefined) {
       const list = a.values['--require-proven'].split(',').map((s) => s.trim()).filter(Boolean)
-      if (!list.length || list.some((k) => !T.CMS_V8_TABLE_KEYS.includes(k))) die2(`--require-proven=<${T.CMS_V8_TABLE_KEYS.join('|')}>,…`)
+      const keys = T.cmsV8ProvenKeys(expect.phase)
+      if (!list.length || list.some((k) => !keys.includes(k))) die2(`--require-proven=<${keys.join('|')}>,… (theo --phase)`)
       expect.requireProven = list
     }
   }
@@ -107,18 +120,26 @@ async function main() {
         aclPost: (await ro(T.cmsVerifyAclSql()))[0],
         aclPre: pre.acl,
       }
-      if (phase === '121') {
+      if (phase !== '120') {
         input.inv121 = { overlap: await ro(q.inv121Overlap), tiers: await ro(q.inv121Tiers), catalog: await ro(q.inv121Catalog) }
         input.isolation = (await ro(q.isolation))[0]
+      }
+      if (phase === '122') {
+        // Hàm 122 chỉ tồn tại sau 122 — DB chưa ở 122 ⇒ lỗi DB (rc 1) + phase-match đỏ trên lượt chạy đúng phase.
+        input.p122 = {
+          tiersUnique: await ro(q.tiersUnique), pointerFk: await ro(q.pointerFk),
+          releaseGate: (await ro(q.releaseGate))[0], inv122Pointer: await ro(q.inv122Pointer),
+          fnDefs: await ro(q.fnDefs), columns: await ro(q.columns),
+        }
       }
       const checks = T.evaluateCmsVerify(input)
       result = { kind: 'cms-verify-post', at, host, phase, preAt: pre.acl.db_now, input, checks }
     } else {
       // V8 trong snapshot REPEATABLE READ: oracle (DO) và phiên authenticated (SELECT) đọc cùng dữ liệu.
-      const [row] = await pgMeta(env, T.pgMetaReadOnlySnapshot(T.cmsVerifyV8Sql(user, role)))
+      const [row] = await pgMeta(env, T.pgMetaReadOnlySnapshot(T.cmsVerifyV8Sql(user, role, expect.phase)))
       const checks = T.evaluateCmsV8(row, user, role, expect)
       result = { kind: 'cms-verify-v8', at, host, user: T.maskCmsUuid(user), role, expect, row: { ...row, uid: row.uid === user ? 'khớp' : 'LỆCH' }, checks }
-      console.log(`V8 · ${T.maskCmsUuid(user)} · ${role} · tổng ${row.total_programs} chương trình · thấy ${row.seen_programs} (QA ${row.test_programs}, nháp ${row.draft_programs}) · marker ${row.qa}`)
+      console.log(`V8 · phase ${expect.phase ?? '(trước 122)'} · ${T.maskCmsUuid(user)} · ${role} · tổng ${row.total_programs} chương trình · thấy ${row.seen_programs} (QA ${row.test_programs}, nháp ${row.draft_programs}) · marker ${row.qa}`)
     }
   } catch (e) {
     rethrowCliExit(e)

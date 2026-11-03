@@ -1,5 +1,5 @@
-// QA công cụ CMS P1-R1 / P1-R2 trên PGlite (Postgres 16 WASM) với nền giống prod của lib-care-pglite.mjs + migration 120
-// + 121 THẬT: chạy đúng chuỗi SQL mà scripts/cms-qa-access.mjs / cms-qa-run.mjs / cms-verify.mjs gửi tới pg-meta (bọc
+// QA công cụ CMS P1-R1 / P1-R2 + VERIFY phase 122 (PM 03/11 §5) trên PGlite (Postgres 16 WASM) với nền giống prod của
+// lib-care-pglite.mjs + migration 120 + 121 + 122 THẬT: chạy đúng chuỗi SQL mà scripts/cms-qa-access.mjs / cms-qa-run.mjs / cms-verify.mjs gửi tới pg-meta (bọc
 // READ ONLY … ROLLBACK hoặc BEGIN … COMMIT), lấy result set như pg-meta (probe prod 02/11: kết quả CUỐI CÙNG CÓ ≥ 1 DÒNG,
 // không có ⇒ []). Gồm ca âm cho từng lỗ db-reviewer / security-reviewer đã tái hiện. KHÔNG chạm DB thật.
 //   npm i --no-save @electric-sql/pglite@0.2.17     # một lần, trong webapp/
@@ -16,6 +16,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url))
 const MIG = path.join(HERE, '..', '..', 'supabase', 'migrations')
 const SQL_120 = fs.readFileSync(path.join(MIG, '120_cms_foundation.sql'), 'utf8')
 const SQL_121 = fs.readFileSync(path.join(MIG, '121_cms_import_activation.sql'), 'utf8')
+const SQL_122 = fs.readFileSync(path.join(MIG, '122_cms_results.sql'), 'utf8')
 let PGlite
 try { ({ PGlite } = await import('@electric-sql/pglite')) } catch {
   console.error('FAIL: thiếu @electric-sql/pglite — chạy: npm i --no-save @electric-sql/pglite@0.2.17 (trong webapp/)')
@@ -48,8 +49,10 @@ function ctx(db) {
       c.lastErr = 'KHÔNG raise'
       return false
     },
-    async postInput(phase, aclPre) {
+    async postInput(phase, aclPre, { tolerant = false } = {}) {
       const q = T.CMS_VERIFY_SQL
+      // tolerant: DB chưa ở phase khai báo ⇒ truy vấn của phase sau lỗi (CLI rc 1); ở đây coi như THIẾU để kiểm bộ đánh giá.
+      const tr = async (sql, fallback) => { try { return await c.ro(sql) } catch (e) { if (!tolerant) throw e; await db.exec('ROLLBACK').catch(() => {}); return fallback } }
       const input = {
         phase,
         whoami: (await c.ro(q.whoami))[0], markers: await c.ro(q.markers), maxNumeric: (await c.ro(q.maxNumeric))[0],
@@ -57,14 +60,21 @@ function ctx(db) {
         tables: await c.ro(q.tables), roles: await c.ro(q.roles),
         oneRunningIndex: await c.ro(q.oneRunningIndex), aclPost: (await c.ro(T.cmsVerifyAclSql()))[0], aclPre,
       }
-      if (phase === '121') {
+      if (phase !== '120') {
         input.inv121 = { overlap: await c.ro(q.inv121Overlap), tiers: await c.ro(q.inv121Tiers), catalog: await c.ro(q.inv121Catalog) }
         input.isolation = (await c.ro(q.isolation))[0]
+      }
+      if (phase === '122') {
+        input.p122 = {
+          tiersUnique: await tr(q.tiersUnique, []), pointerFk: await tr(q.pointerFk, []),
+          releaseGate: (await tr(q.releaseGate, [{}]))[0] ?? {}, inv122Pointer: await tr(q.inv122Pointer, [{ id: 'THIẾU' }]),
+          fnDefs: await tr(q.fnDefs, []), columns: await tr(q.columns, []),
+        }
       }
       return input
     },
     async v8(user, role, expect) {
-      const [row] = lastRows(await db.exec(T.pgMetaReadOnlySnapshot(T.cmsVerifyV8Sql(user, role))))
+      const [row] = lastRows(await db.exec(T.pgMetaReadOnlySnapshot(T.cmsVerifyV8Sql(user, role, expect?.phase))))
       return { row, checks: T.evaluateCmsV8(row, user, role, expect) }
     },
   }
@@ -353,6 +363,253 @@ section('9. POST bắt lệch — mỗi ca khẳng định mục CHƯA đỏ tr�
     ok(!before.includes(want) && after.includes(want), `${id}: ${sql.slice(0, 70)}… ⇒ đỏ ${want} (trước đó chưa đỏ)`, JSON.stringify({ before, after }))
     if (restore[id]) await N.db.exec(restore[id])
   }
+}
+
+// ── Phase 122 (PM 03/11 §5) ──────────────────────────────────────────────────
+/** Thay chuỗi trong định nghĩa hàm — mẫu không khớp ⇒ ném (không để đột biến thành no-op âm thầm). */
+const must = (def, from, to) => { if (!def.includes(from)) throw new Error(`đột biến: mẫu không khớp — ${from.slice(0, 60)}`); return def.split(from).join(to) }
+/** Run sales ĐÃ CÔNG BỐ hợp lệ (đúng ràng buộc 122 + trigger pointer) với dòng kết quả cho các dược sĩ — dựng tay bằng superuser. */
+async function publishRun(db, programId, ppId, productId, rows) {
+  const p = await L.one(db, `SELECT config_version, is_test FROM public.cms_programs WHERE id = $1`, [programId])
+  const run = (await L.one(db, `INSERT INTO public.cms_sync_runs (kind, status, program_id, config_version, is_test, mapping_fp, seal_expect, seal_step,
+      sealed_at, published_at, amount_vnd, finished_at) VALUES ('sales', 'ok', $1, $2, $3, md5('fp'), '{}'::jsonb, 10, now(), now(), $4, now())
+      RETURNING id::text AS id`, [programId, p.config_version, p.is_test, rows.length * 1000])).id
+  let seq = 0
+  for (const [user, store] of rows) {
+    await db.query(`INSERT INTO public.cms_results (run_id, program_id, program_product_id, product_id, user_id, store_id, gmv_basis, base_quantity, per_unit,
+        cms_quantity, rewarded_quantity, cap_quantity, at_cap, gmv_amount, gate_gmv, target_gmv, gate_met, gate_met_at, potential_amount, amount_vnd, line_count)
+      VALUES ($1, $2, $3, $4, $5, $6, 'none', 1, 1, 1, 1, NULL, false, 1000, NULL, NULL, true, NULL, 1000, 1000, 2)`, [run, programId, ppId, productId, user, store])
+    for (let k = 0; k < 2; k++) {
+      const ol = `OL-${run.slice(0, 8)}-${seq}`
+      await db.query(`INSERT INTO public.cms_sales_lines (run_id, program_id, order_line_id, seq, order_id, order_code, product_id, program_product_id,
+          seller_email, user_id, store_id, completed_at, source_updated_at, base_quantity, gmv_amount, disposition)
+        VALUES ($1, $2, $3, $4, $3, $3, $5, $6, 'qa@example.invalid', $7, $8, now(), now(), 0.5, 500, 'INCLUDED')`, [run, programId, ol, seq, productId, ppId, user, store])
+      await db.query(`INSERT INTO public.cms_result_lines (run_id, program_id, order_line_id, seq, user_id, program_product_id, base_before, base_after,
+          qty_before, qty_after, amount_vnd, status) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+        [run, programId, ol, seq, user, ppId, k * 0.5, (k + 1) * 0.5, 0, k, k * 1000, k === 0 ? 'ACCUMULATING' : 'RECORDED'])
+      seq++
+    }
+  }
+  if (rows.length) await db.query(`INSERT INTO public.cms_result_catalog (run_id, program_id, user_id, store_id, catalog_gmv, target_gmv, met, met_at, line_count)
+      VALUES ($1, $2, $3, $4, 1000, 5000, false, NULL, 2)`, [run, programId, rows[0][0], rows[0][1]])
+  await db.query(`UPDATE public.cms_programs SET current_result_run_id = $1 WHERE id = $2`, [run, programId])
+  return run
+}
+/** Nền 120 → 121 → (PRE122) → 122 + dữ liệu mẫu (chương trình thật / QA / nhà thuốc 2) và kết quả đã công bố. */
+async function fresh122({ results = true } = {}) {
+  const { c, pre121 } = await freshCms()
+  await sleep(15)
+  const pre122 = (await c.ro(T.cmsVerifyAclSql()))[0]
+  await sleep(15)
+  await c.db.exec(SQL_122)
+  if (results) {
+    // Chương trình thật store 1: A, B (store 1) + C (store 2 — đã chuyển / bán chéo; QLCH store 1 không thấy, SM thấy).
+    await publishRun(c.db, P.real, uid(7101), '900001', [[U.A, storeId(1)], [U.B, storeId(1)], [U.C, storeId(1)]])
+    await publishRun(c.db, P.test, uid(7102), '900002', [[U.A, storeId(1)]])
+    await publishRun(c.db, P.s2, uid(7103), '900003', [[U.D, storeId(2)]])
+  }
+  return { c, pre121, pre122 }
+}
+
+section('10. VERIFY POST 122 — bộ kỳ vọng riêng; phase sai / PRE sai thứ tự ⇒ đỏ rõ (không xanh giả)')
+{
+  const { c: N, pre121, pre122 } = await fresh122()
+  ok(pre122.n_all - pre122.n_old === 14, 'PRE 122: đúng 14 hàm cms (120 + 121) trước 122')
+  const post = T.evaluateCmsVerify(await N.postInput('122', pre122))
+  ok(failed(post).length === 0 && post.length >= 200, `POST 122: ${post.length} mục đạt hết (37 hàm, 13 bảng, 3 trigger, UNIQUE, FK pointer, cổng Q-206)`, JSON.stringify(failed(post)))
+  for (const id of ['phase-match', 'marker-122', 'index-tiers-unique', 'pointer-fk', 'release-gate-closed', 'inv122-pointer', 'fn-src:rpc_cms_result_rows', 'fn-config:rpc_cms_sales_run_seal_step', 'table:cms_results', 'table-shape:cms_programs']) {
+    ok(post.some((x) => x.id === id && x.ok), `POST 122 có mục ${id} đạt`)
+  }
+  const as121 = T.evaluateCmsVerify(await N.postInput('121', pre121))
+  ok(failedIds(as121).includes('phase-match') && /PHASE KHÔNG PHÙ HỢP: DB có marker CMS cao nhất 122/.test(as121.find((x) => x.id === 'phase-match').detail)
+    && failedIds(as121).includes('fn-set') && failedIds(as121).includes('marker-122-absent'),
+  'checker 121 trên DB đã 122 ⇒ đỏ phase-match (lời rõ) + fn-set + marker — không thành bằng chứng POST 122', JSON.stringify(failedIds(as121).slice(0, 8)))
+  ok(failedIds(T.evaluateCmsVerify(await N.postInput('122', pre121))).includes('pre-order'), 'PRE của 121 dùng cho 122 ⇒ đỏ pre-order')
+  const late = (await N.ro(T.cmsVerifyAclSql()))[0]
+  ok(failedIds(T.evaluateCmsVerify(await N.postInput('122', late))).includes('pre-order'), 'PRE chụp SAU khi chạy 122 ⇒ đỏ pre-order')
+  await N.db.close() // giải phóng bộ nhớ WASM (nhiều DB PGlite trong một tiến trình)
+}
+{
+  // DB mới ở 121 mà khai --phase=122: truy vấn 122 không chạy được (CLI rc 1); bộ đánh giá vẫn đỏ phase-match / fn-set / bảng.
+  const { c: N, pre121 } = await freshCms()
+  const input = await N.postInput('122', pre121, { tolerant: true })
+  const ids = failedIds(T.evaluateCmsVerify(input))
+  ok(ids.includes('phase-match') && ids.includes('fn-set') && ids.includes('tables') && ids.includes('release-gate-closed') && ids.includes('index-tiers-unique'),
+    'khai --phase=122 trên DB 121 ⇒ đỏ phase-match + thiếu hàm / bảng / UNIQUE / cổng', JSON.stringify(ids.slice(0, 10)))
+  await N.db.close() // giải phóng bộ nhớ WASM (nhiều DB PGlite trong một tiến trình)
+}
+
+section('11. V8 phase 122 — gọi THẬT 4 RPC đọc dưới phiên authenticated; tập dòng kết quả = oracle phạm vi hiện tại')
+{
+  const { c: N } = await fresh122()
+  await N.wr(T.cmsQaGrantSql([U.A], 2))
+  let r = await N.v8(U.A, 'staff', { phase: '122', qa: true, readable: 2 })
+  ok(failed(r.checks).length === 0 && r.row.rx_seen_n === 2 && r.row.rx_total_n === 4 && r.row.rpc_callable === T.CMS_V8_RPC_CALLABLE['122'],
+    'staff A + marker: header 2 chương trình đọc được, dòng kết quả = của chính A (thật + QA), 4 RPC đọc gọi được', JSON.stringify(failed(r.checks)))
+  ok(r.checks.find((x) => x.id === 'v8-table:results')?.proven === true, 'staff A: phạm vi dòng kết quả được CHỨNG MINH cắt (tổng 4 > thấy 2)')
+  ok(r.row.rx_lseen_n === 4 && r.row.rx_ltotal_n === 8 && r.checks.find((x) => x.id === 'v8-table:result_lines')?.proven === true
+    && r.checks.find((x) => x.id === 'v8-result-lines-user')?.proven === true && r.row.rx_role === 'authenticated',
+  'staff A: rpc_cms_result_lines phân trang đủ 4 / 8 dòng đơn của chính A; p_user_id ngoài phạm vi bị chặn (đã chứng minh); khối RPC chạy bằng authenticated', JSON.stringify({ l: r.row.rx_lseen_n, t: r.row.rx_ltotal_n, role: r.row.rx_role }))
+  ok(r.checks.find((x) => x.id === 'v8-result-excluded')?.proven === true && r.checks.find((x) => x.id === 'v8-result-rpc')?.proven === true,
+    'staff A: excluded đã thực sự gọi (FORBIDDEN) và có chương trình ngoài tập ⇒ hai mục được CHỨNG MINH')
+  r = await N.v8(U.qlch1, 'qlch', { phase: '122' })
+  ok(failed(r.checks).length === 0 && r.row.rx_seen_n === 2, 'QLCH store 1: chỉ A, B (staff HIỆN thuộc store 1) — không C dù bán tại store 1', JSON.stringify(failed(r.checks)))
+  r = await N.v8(U.sm, 'sm', { phase: '122' })
+  ok(failed(r.checks).length === 0 && r.row.rx_seen_n === 4, 'SM store 1 + 2: A, B, C (chương trình thật) + D (store 2); QA không marker không đọc', JSON.stringify(failed(r.checks)))
+  r = await N.v8(U.super, 'super', { phase: '122', qa: false })
+  ok(failed(r.checks).length === 0 && r.row.rx_seen_n === 4 && r.checks.find((x) => x.id === 'v8-table:results')?.proven === false,
+    'super không marker: 4 dòng thật, không QA; tổng = thấy ⇒ CHƯA chứng minh cắt (không ĐẠT oan)', JSON.stringify(failed(r.checks)))
+  r = await N.v8(U.super, 'super', { phase: '122', requireProven: ['results'] })
+  ok(failedIds(r.checks).includes('v8-require-proven:results'), '--require-proven=results với super thấy hết ⇒ đỏ')
+  r = await N.v8(U.mkt, 'admin', { phase: '122', readable: 0 })
+  ok(failed(r.checks).length === 0 && r.row.rx_seen_n === 0, 'admin thường: 0 chương trình, header mọi chương trình FORBIDDEN', JSON.stringify(failed(r.checks)))
+  r = await N.v8(U.A, 'staff', { phase: '121' })
+  ok(failedIds(r.checks).includes('v8-phase') && failedIds(r.checks).includes('v8-private') && /PHASE KHÔNG PHÙ HỢP: DB phase 122/.test(r.checks.find((x) => x.id === 'v8-phase').detail),
+    'V8 khai phase 121 trên DB 122 ⇒ đỏ v8-phase (lời rõ) + v8-private (RPC 122 gọi được)', JSON.stringify(failedIds(r.checks)))
+  r = await N.v8(U.A, 'staff', {})
+  ok(failedIds(r.checks).includes('v8-phase') && /không khai --phase/.test(r.checks.find((x) => x.id === 'v8-phase').detail),
+    'V8 KHÔNG khai --phase trên DB 122 ⇒ đỏ v8-phase (lệnh runbook P1 cũ không thành xanh giả sau 122)', JSON.stringify(failedIds(r.checks)))
+  await N.db.close() // giải phóng bộ nhớ WASM (nhiều DB PGlite trong một tiến trình)
+}
+{
+  const { c: N } = await fresh122({ results: false })
+  const r = await N.v8(U.A, 'staff', { phase: '122', requireProven: ['results', 'programs'] })
+  ok(failedIds(r.checks).includes('v8-require-proven:results') && !failedIds(r.checks).includes('v8-require-proven:programs') && r.row.rx_total_n === 0,
+    '--require-proven=results trên bảng kết quả RỖNG ⇒ đỏ (không xanh khi 0 = 0)', JSON.stringify(failedIds(r.checks)))
+  await N.db.close() // giải phóng bộ nhớ WASM (nhiều DB PGlite trong một tiến trình)
+}
+
+{
+  const { c: N } = await freshCms()
+  let r = await N.v8(U.A, 'staff', { phase: '121' })
+  ok(failed(r.checks).length === 0 && r.row.db_phase === '121', 'V8 khai --phase=121 trên DB 121 ⇒ đạt (db_phase 121)', JSON.stringify(failed(r.checks)))
+  r = await N.v8(U.A, 'staff', { phase: '120' })
+  ok(failedIds(r.checks).includes('v8-phase'), 'V8 khai --phase=120 trên DB 121 ⇒ đỏ v8-phase')
+  await N.db.close() // giải phóng bộ nhớ WASM (nhiều DB PGlite trong một tiến trình)
+}
+
+{
+  // Phân trang thật: 600 dòng đơn thêm của A trong chương trình thật ⇒ rpc_cms_result_lines cần 2 trang (500 + …) — V8 phải gom đủ.
+  const { c: N } = await fresh122()
+  await N.db.exec(`WITH r AS (SELECT current_result_run_id AS run FROM public.cms_programs WHERE id = '${P.real}'),
+    s AS (INSERT INTO public.cms_sales_lines (run_id, program_id, order_line_id, seq, order_id, order_code, product_id, program_product_id,
+            seller_email, user_id, store_id, completed_at, source_updated_at, base_quantity, gmv_amount, disposition)
+          SELECT r.run, '${P.real}', 'PG-' || g, 1000 + g, 'PG-' || g, 'PG-' || g, '900001', '${uid(7101)}', 'qa@example.invalid',
+                 '${U.A}', '${storeId(1)}', now(), now(), 0.5, 500, 'INCLUDED' FROM r, generate_series(1, 600) g RETURNING run_id, order_line_id, seq)
+    INSERT INTO public.cms_result_lines (run_id, program_id, order_line_id, seq, user_id, program_product_id, base_before, base_after, qty_before, qty_after, amount_vnd, status)
+      SELECT run_id, '${P.real}', order_line_id, seq, '${U.A}', '${uid(7101)}', 0, 0.5, 0, 0, 0, 'ACCUMULATING' FROM s`)
+  const r = await N.v8(U.A, 'staff', { phase: '122' })
+  ok(failed(r.checks).length === 0 && r.row.rx_lseen_n === 602 && r.row.rx_lexp_n === 602, 'PAGING: 602 dòng đơn của A ở chương trình thật (không marker; 2 trang 500) gom đủ, tập = oracle', JSON.stringify({ seen: r.row.rx_lseen_n, exp: r.row.rx_lexp_n, f: failed(r.checks) }))
+  await N.db.close()
+}
+
+section('12. Bắt lệch sau 122 (PM §5) — mỗi ca khẳng định mục CHƯA đỏ trước khi gây lệch; DB riêng mỗi nhóm')
+{
+  const { c: N, pre122 } = await fresh122()
+  const evalIds = async () => failedIds(T.evaluateCmsVerify(await N.postInput('122', pre122)))
+  ok((await evalIds()).length === 0, 'đối chứng: POST 122 đạt hết trước khi gây lệch')
+  const sig = async (name) => (await L.one(N.db, `SELECT oid::regprocedure::text s FROM pg_proc WHERE proname = $1`, [name])).s.replace(/^public\./, '')
+  const src = async (name) => (await L.one(N.db, `SELECT pg_get_functiondef(oid) d FROM pg_proc WHERE proname = $1`, [name])).d
+  const hdr = must(await src('rpc_cms_result_header'), "'program_id', p_program_id,", "'program_id', p_program_id, 'probe', 1,")
+  const cases = [
+    ['ANON', `GRANT EXECUTE ON FUNCTION public.${await sig('rpc_cms_result_rows')} TO anon`, 'fn-exec:rpc_cms_result_rows'],
+    ['AUTH-SALES', `GRANT EXECUTE ON FUNCTION public.${await sig('rpc_cms_sales_run_publish')} TO authenticated`, 'fn-acl:rpc_cms_sales_run_publish'],
+    ['HELPER', `GRANT EXECUTE ON FUNCTION public.cms__visible_result_users() TO authenticated`, 'fn-acl:cms__visible_result_users'],
+    ['NESTLOOP', `ALTER FUNCTION public.${await sig('rpc_cms_sales_run_seal_step')} RESET enable_nestloop`, 'fn-config:rpc_cms_sales_run_seal_step'],
+    ['BODY', hdr, 'fn-src:rpc_cms_result_header'],
+    ['GATE', `CREATE OR REPLACE FUNCTION public.cms__results_release_open() RETURNS boolean LANGUAGE sql IMMUTABLE SECURITY DEFINER SET search_path = public AS $$ SELECT true $$`, 'release-gate-closed'],
+    ['TBL', `GRANT SELECT ON public.cms_results TO authenticated`, 'table:cms_results'],
+    ['COL', `GRANT SELECT (user_id) ON public.cms_sales_lines TO authenticated`, 'table:cms_sales_lines'],
+    ['TRG', `ALTER TABLE public.cms_programs DISABLE TRIGGER cms_programs_result_guard`, 'triggers'],
+    ['UNIQ', `DROP INDEX public.cms_program_tiers_product_from_idx; CREATE INDEX cms_program_tiers_product_from_idx ON public.cms_program_tiers (program_product_id, qty_from)`, 'index-tiers-unique'],
+    ['UNIQ-PART', `DROP INDEX public.cms_program_tiers_product_from_idx; CREATE UNIQUE INDEX cms_program_tiers_product_from_idx ON public.cms_program_tiers (program_product_id, qty_from) WHERE qty_from > 0`, 'index-tiers-unique'],
+    ['UNIQ-ORDER', `DROP INDEX public.cms_program_tiers_product_from_idx; CREATE UNIQUE INDEX cms_program_tiers_product_from_idx ON public.cms_program_tiers (qty_from, program_product_id)`, 'index-tiers-unique'],
+    ['FK', `ALTER TABLE public.cms_programs DROP CONSTRAINT cms_programs_result_run_fk`, 'pointer-fk'],
+    ['POLICY', `CREATE POLICY cms_results_probe ON public.cms_results FOR SELECT TO authenticated USING (true)`, 'policies'],
+    // db-reviewer P2-1: giữ nguyên thân nhưng đổi DEFAULT tham số; bỏ NOT NULL (CHECK vẫn qua với NULL).
+    ['DEFAULT', must(await src('rpc_cms_sales_run_cleanup'), 'p_max_rows integer DEFAULT 50000', 'p_max_rows integer DEFAULT 5000000'), 'fn-def:rpc_cms_sales_run_cleanup'],
+    ['NOTNULL', `ALTER TABLE public.cms_results ALTER COLUMN amount_vnd DROP NOT NULL`, 'table-cols:cms_results'],
+  ]
+  const restore = {
+    TRG: `ALTER TABLE public.cms_programs ENABLE TRIGGER cms_programs_result_guard`,
+    UNIQ: `DROP INDEX public.cms_program_tiers_product_from_idx; CREATE UNIQUE INDEX cms_program_tiers_product_from_idx ON public.cms_program_tiers (program_product_id, qty_from)`,
+    'UNIQ-PART': `DROP INDEX public.cms_program_tiers_product_from_idx; CREATE UNIQUE INDEX cms_program_tiers_product_from_idx ON public.cms_program_tiers (program_product_id, qty_from)`,
+  }
+  for (const [id, sql, want] of cases) {
+    const before = await evalIds()
+    await N.db.exec(sql)
+    const after = await evalIds()
+    ok(!before.includes(want) && after.includes(want), `${id}: ${sql.replace(/\s+/g, ' ').slice(0, 70)}… ⇒ đỏ ${want} (trước đó chưa đỏ)`, JSON.stringify({ before, after }))
+    if (restore[id]) await N.db.exec(restore[id])
+  }
+  await N.db.close() // giải phóng bộ nhớ WASM (nhiều DB PGlite trong một tiến trình)
+}
+{
+  // Pointer trỏ run đã dọn (sửa tay khi tắt trigger) ⇒ inv122-pointer đỏ.
+  const { c: N, pre122 } = await fresh122()
+  const before = failedIds(T.evaluateCmsVerify(await N.postInput('122', pre122)))
+  await N.db.exec(`UPDATE public.cms_sync_runs SET purged_at = now() WHERE id = (SELECT current_result_run_id FROM public.cms_programs WHERE id = '${P.real}')`)
+  const after = failedIds(T.evaluateCmsVerify(await N.postInput('122', pre122)))
+  ok(!before.includes('inv122-pointer') && after.includes('inv122-pointer'), 'pointer trỏ run đã dọn ⇒ đỏ inv122-pointer (trước đó chưa đỏ)', JSON.stringify(after))
+  await N.db.close() // giải phóng bộ nhớ WASM (nhiều DB PGlite trong một tiến trình)
+}
+{
+  // Sai namespace / quyền đọc ở RPC 122 — V8 phải bắt dù POST vân tay cũng đỏ (hai lớp).
+  let prev = null
+  const mk = async () => { if (prev) await prev.db.close(); const { c: N } = await fresh122(); prev = N; return N }
+  let N = await mk()
+  let v = await N.v8(U.B, 'staff', { phase: '122' })
+  ok(failed(v.checks).length === 0, 'đối chứng V8: staff B không marker đạt')
+  await N.db.exec(must((await L.one(N.db, `SELECT pg_get_functiondef('public.cms__result_run(uuid, uuid)'::regprocedure) d`)).d,
+    'IF auth.uid() IS NULL OR p_program_id IS NULL OR NOT (p_program_id = ANY (public.cms_readable_program_ids())) THEN', 'IF auth.uid() IS NULL OR p_program_id IS NULL THEN'))
+  v = await N.v8(U.B, 'staff', { phase: '122' })
+  ok(failedIds(v.checks).includes('v8-result-rpc'), 'NAMESPACE: bỏ kiểm chương trình đọc được ⇒ staff đọc header QA / nhà thuốc khác ⇒ đỏ v8-result-rpc', JSON.stringify(failed(v.checks)))
+  N = await mk()
+  await N.db.exec(`CREATE OR REPLACE FUNCTION public.cms__visible_result_users() RETURNS uuid[] LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$ SELECT NULL::uuid[] $$`)
+  v = await N.v8(U.B, 'staff', { phase: '122' })
+  ok(failedIds(v.checks).includes('v8-table:results') && !failedIds(v.checks).includes('v8-result-rpc'), 'SCOPE: staff thấy dòng của mọi người (cùng số chương trình) ⇒ đỏ v8-table:results', JSON.stringify(failed(v.checks)))
+  N = await mk()
+  // Tập LỆCH nhưng CÙNG SỐ: staff B nhận dòng của A (1 dòng) thay vì của mình (1 dòng) — chỉ đếm sẽ xanh oan.
+  await N.db.exec(`CREATE OR REPLACE FUNCTION public.cms__visible_result_users() RETURNS uuid[] LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$ SELECT ARRAY['${U.A}'::uuid] $$`)
+  v = await N.v8(U.B, 'staff', { phase: '122' })
+  ok(v.row.rx_seen_n === v.row.rx_exp_n && v.row.rx_same_set === false && failedIds(v.checks).includes('v8-table:results'),
+    'SCOPE-SWAP: tập dòng khác nhưng cùng số đếm ⇒ vẫn đỏ v8-table:results (so TẬP, không chỉ đếm)', JSON.stringify({ seen: v.row.rx_seen_n, exp: v.row.rx_exp_n, f: failedIds(v.checks) }))
+  N = await mk()
+  // Chặn nhầm: RPC từ chối cả chương trình người xem đọc được.
+  await N.db.exec(must((await L.one(N.db, `SELECT pg_get_functiondef('public.cms__result_run(uuid, uuid)'::regprocedure) d`)).d,
+    'IF auth.uid() IS NULL OR p_program_id IS NULL OR NOT (p_program_id = ANY (public.cms_readable_program_ids())) THEN', 'IF true THEN'))
+  v = await N.v8(U.B, 'staff', { phase: '122' })
+  ok(failedIds(v.checks).includes('v8-result-rpc') && v.row.rx_deny === 1 && v.row.rx_leak === 0, 'DENY: RPC chặn chương trình người xem đọc được ⇒ đỏ v8-result-rpc (đếm chặn sai)', JSON.stringify({ deny: v.row.rx_deny, f: failedIds(v.checks) }))
+  N = await mk()
+  await N.db.exec(must((await L.one(N.db, `SELECT pg_get_functiondef('public.rpc_cms_result_excluded(uuid, uuid, integer, integer)'::regprocedure) d`)).d,
+    "IF NOT public.is_super_admin() THEN RAISE EXCEPTION 'CMS_RESULT_FORBIDDEN' USING ERRCODE = '42501'; END IF;", ''))
+  v = await N.v8(U.B, 'staff', { phase: '122' })
+  ok(failedIds(v.checks).includes('v8-result-excluded'), 'EXCLUDED: bỏ kiểm super ⇒ staff đọc email nguồn ⇒ đỏ v8-result-excluded', JSON.stringify(failed(v.checks)))
+  N = await mk()
+  // db-reviewer P1: rpc_cms_result_lines bỏ lọc người xem ⇒ staff thấy dòng đơn của người khác.
+  await N.db.exec(must((await L.one(N.db, `SELECT pg_get_functiondef('public.rpc_cms_result_lines(uuid, uuid, uuid, uuid, integer, integer)'::regprocedure) d`)).d,
+    'AND (v_users IS NULL OR rl.user_id = ANY (v_users))', ''))
+  v = await N.v8(U.B, 'staff', { phase: '122' })
+  ok(failedIds(v.checks).includes('v8-table:result_lines') && !failedIds(v.checks).includes('v8-table:results'), 'LINES-SCOPE: lines bỏ lọc người xem ⇒ đỏ v8-table:result_lines', JSON.stringify(failed(v.checks)))
+  N = await mk()
+  await N.db.exec(must((await L.one(N.db, `SELECT pg_get_functiondef('public.rpc_cms_result_lines(uuid, uuid, uuid, uuid, integer, integer)'::regprocedure) d`)).d,
+    'IF p_user_id IS NOT NULL AND v_users IS NOT NULL AND NOT (p_user_id = ANY (v_users)) THEN', 'IF false THEN'))
+  v = await N.v8(U.B, 'staff', { phase: '122' })
+  ok(failedIds(v.checks).includes('v8-result-lines-user'), 'LINES-USER: bỏ kiểm p_user_id ngoài phạm vi ⇒ đỏ v8-result-lines-user', JSON.stringify(failed(v.checks)))
+  N = await mk()
+  // db-reviewer P2-3: mảng users của rows không lọc phạm vi (tên người ngoài phạm vi) — tập results vẫn đúng.
+  await N.db.exec(must((await L.one(N.db, `SELECT pg_get_functiondef('public.rpc_cms_result_rows(uuid, uuid)'::regprocedure) d`)).d,
+    `FROM public.users u WHERE u.id IN (SELECT r.user_id FROM public.cms_results r
+                                          WHERE r.run_id = v_run AND (v_users IS NULL OR r.user_id = ANY (v_users)))`,
+    `FROM public.users u WHERE u.id IN (SELECT r.user_id FROM public.cms_results r
+                                          WHERE r.run_id = v_run)`))
+  v = await N.v8(U.B, 'staff', { phase: '122' })
+  ok(failedIds(v.checks).includes('v8-result-shape') && !failedIds(v.checks).includes('v8-table:results'), 'USERS: mảng users không lọc phạm vi ⇒ đỏ v8-result-shape', JSON.stringify(failed(v.checks)))
+  N = await mk()
+  await N.db.exec(`GRANT SELECT ON public.cms_sales_lines TO authenticated`)
+  v = await N.v8(U.B, 'staff', { phase: '122' })
+  ok(failedIds(v.checks).includes('v8-private'), 'PRIVATE: authenticated đọc được cms_sales_lines ⇒ đỏ v8-private', JSON.stringify(failed(v.checks)))
+  await prev.db.close()
 }
 
 console.log(`\n${pass} đạt · ${fail} lỗi`)

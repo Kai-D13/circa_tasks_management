@@ -21,6 +21,7 @@ const ROOT = path.resolve(HERE, '..')
 const MIG = path.join(ROOT, '..', 'supabase', 'migrations')
 const SQL_120 = fs.readFileSync(path.join(MIG, '120_cms_foundation.sql'), 'utf8')
 const SQL_121 = fs.readFileSync(path.join(MIG, '121_cms_import_activation.sql'), 'utf8')
+const SQL_122 = fs.readFileSync(path.join(MIG, '122_cms_results.sql'), 'utf8')
 let PGlite
 try { ({ PGlite } = await import('@electric-sql/pglite')) } catch {
   console.error('FAIL: thiếu @electric-sql/pglite — chạy: npm i --no-save @electric-sql/pglite@0.2.17 (trong webapp/)')
@@ -110,7 +111,7 @@ async function main() {
   const v8 = path.join(tmp, 'v8.json')
   r = await run('cms-verify.mjs', ['v8', `--user=${SUPER}`, '--role=super', '--expect-qa=false', '--expect-readable=0', `--expect-host=${HOST}`, `--out=${v8}`])
   const jv8 = readJson(v8)
-  exp(r, 0, 'v8 super (bảng rỗng ⇒ CHƯA, không LỆCH) — đúng ca rc 127 trên prod B3', jv8?.kind === 'cms-verify-v8' && jv8.checks.length === 18 && jv8.checks.every((c) => c.ok)
+  exp(r, 0, 'v8 super (bảng rỗng ⇒ CHƯA, không LỆCH) — đúng ca rc 127 trên prod B3', jv8?.kind === 'cms-verify-v8' && jv8.checks.length === 19 && jv8.checks.every((c) => c.ok)
     && jv8.checks.filter((c) => c.proven === false).length === 6 && /6 mục CHƯA CHỨNG MINH/.test(r.out))
   const v8p = path.join(tmp, 'v8-proven.json')
   r = await run('cms-verify.mjs', ['v8', `--user=${SUPER}`, '--role=super', '--require-proven=programs,products', `--expect-host=${HOST}`, `--out=${v8p}`])
@@ -158,6 +159,40 @@ async function main() {
   r = await run('cms-verify.mjs', ['post', '--phase=121', `--pre=${pre121}`, `--expect-host=${HOST}`, `--out=${post121}`])
   const j121 = readJson(post121)
   exp(r, 0, 'post 121 (DB đúng)', j121?.checks.length >= 80 && j121.checks.every((c) => c.ok))
+
+  section('2b. cms-verify — phase 122 (PM 03/11 §5): PRE đúng 14 hàm, phase sai không xanh, V8 --phase')
+  r = await run('cms-verify.mjs', ['post', '--phase=122', `--pre=${pre121}`, `--expect-host=${HOST}`])
+  exp(r, 2, 'post 122 với PRE của 121 (7 hàm cms) ⇒ sai tham số trước IO', r.reqs === 0 && /không phải ảnh ngay trước 122/.test(r.out))
+  await sleep(20)
+  const pre122 = path.join(tmp, 'pre122.json')
+  r = await run('cms-verify.mjs', ['acl-snapshot', `--expect-host=${HOST}`, `--out=${pre122}`])
+  const p122 = readJson(pre122)
+  exp(r, 0, 'acl-snapshot trước 122 (14 hàm cms của 120 + 121)', p122 && p122.acl.n_all - p122.acl.n_old === 14 && Number.isInteger(p122.acl.n_ex122))
+  r = await run('cms-verify.mjs', ['post', '--phase=122', `--pre=${pre122}`, `--expect-host=${HOST}`])
+  exp(r, 1, 'post 122 khi DB CHƯA chạy 122 ⇒ LỖI DB (không xanh giả)', /LỖI DB/.test(r.out))
+  await sleep(20)
+  await db.exec(SQL_122)
+  const post122 = path.join(tmp, 'post122.json')
+  r = await run('cms-verify.mjs', ['post', '--phase=122', `--pre=${pre122}`, `--expect-host=${HOST}`, `--out=${post122}`])
+  const j122 = readJson(post122)
+  exp(r, 0, 'post 122 (DB đúng): mọi mục ĐẠT', j122?.phase === '122' && j122.checks.length >= 200 && j122.checks.every((c) => c.ok)
+    && ['phase-match', 'release-gate-closed', 'index-tiers-unique', 'pointer-fk'].every((id) => j122.checks.some((c) => c.id === id && c.ok)))
+  r = await run('cms-verify.mjs', ['post', '--phase=121', `--pre=${pre121}`, `--expect-host=${HOST}`])
+  exp(r, 1, 'checker 121 trên DB 122 ⇒ LỆCH phase-match (lời rõ), không thành bằng chứng', /LỆCH\s+phase-match — PHASE KHÔNG PHÙ HỢP/.test(r.out))
+  r = await run('cms-verify.mjs', ['v8', `--user=${SUPER}`, '--role=super', `--expect-host=${HOST}`])
+  exp(r, 1, 'V8 không khai --phase trên DB 122 ⇒ LỆCH v8-phase', /LỆCH\s+v8-phase/.test(r.out))
+  r = await run('cms-verify.mjs', ['v8', `--user=${SUPER}`, '--role=super', '--phase=122', `--expect-host=${HOST}`])
+  exp(r, 0, 'V8 --phase=122 (bảng rỗng ⇒ CHƯA, không LỆCH)', /ĐẠT: \d+ \/ \d+/.test(r.out) && /v8-table:results/.test(r.out))
+  r = await run('cms-verify.mjs', ['v8', `--user=${SUPER}`, '--role=super', '--phase=122', '--require-proven=results', `--expect-host=${HOST}`])
+  exp(r, 1, 'V8 --require-proven=results trên bảng rỗng ⇒ LỆCH (không xanh khi 0 = 0)', /LỆCH\s+v8-require-proven:results/.test(r.out))
+  for (const [args, why] of [
+    [['v8', `--user=${SUPER}`, '--role=super', '--phase=123', `--expect-host=${HOST}`], 'V8 --phase lạ'],
+    [['v8', `--user=${SUPER}`, '--role=super', '--require-proven=results', `--expect-host=${HOST}`], 'V8 --require-proven=results khi không khai --phase=122'],
+    [['post', '--phase=123', `--pre=${pre122}`, `--expect-host=${HOST}`], 'post --phase lạ'],
+  ]) {
+    r = await run('cms-verify.mjs', args)
+    exp(r, 2, `${why} ⇒ sai tham số trước IO`, r.reqs === 0)
+  }
 
   section('3. cms-qa-access — dry-run / guard / ghi / thu (ghi vào PGlite của shim)')
   const nMarker = async () => Number((await db.query(`SELECT count(*)::int n FROM public.cms_qa_access`)).rows[0].n)

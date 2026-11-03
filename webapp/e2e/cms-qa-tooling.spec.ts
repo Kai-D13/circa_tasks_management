@@ -12,6 +12,7 @@ import {
   parseCmsQaGuardMinutes, startCmsQaWatchdogLoop,
   CMS_QA_GRANTED_BY, assertCmsQaProgramIds, cmsQaAckWarnings, cmsQaCloseCheck, cmsQaGrantSql, cmsQaManifestAddProgram, cmsQaPreflight,
   cmsQaRevokeSql, cmsQaStatusSql, cmsQaWatchdog, cmsVerifyV8Sql, evaluateCmsV8, maskCmsUuid, newCmsQaManifest, parseCmsQaManifest,
+  CMS_VERIFY_PHASES, CMS_PHASE_FUNCTIONS, CMS_FN_MATRIX, CMS_FN_DEF_122, CMS_COL_122, CMS_TABLE_SHAPE_122, cmsFnCountBefore,
   parseCmsQaTtlHours, parseCmsQaUserIds, pgMetaReadOnly, pgMetaReadOnlySnapshot, pgMetaWrite, toIsoUtc, type CmsQaProgramRow,
   type CmsQaStatusRow, type CmsV8Role,
 } from './cmsQaTooling'
@@ -246,7 +247,7 @@ test.describe('CMS QA tooling · preflight, manifest, đóng run, id is_test @de
 
   test('V8: phiên / snapshot / super / RLS / tập id / từng bảng / riêng tư — mỗi lệch ⇒ đỏ; tổng = kỳ vọng ⇒ CHƯA CHỨNG MINH', () => {
     const good: Record<string, unknown> = {
-      role_now: 'authenticated', uid: A, ro: 'on', iso: 'repeatable read', me_bypass: false, runner_bypass: true, user_role: 'staff', su: false,
+      role_now: 'authenticated', uid: A, ro: 'on', iso: 'repeatable read', me_bypass: false, runner_bypass: true, user_role: 'staff', su: false, db_phase: '121',
       qa_db: false, qa: false, same_set: true, readable: 2,
       rls_cms_programs: true, rls_cms_program_stores: true, rls_cms_program_products: true, rls_cms_program_tiers: true,
       rls_cms_import_runs: true, rls_cms_product_master: true,
@@ -254,7 +255,7 @@ test.describe('CMS QA tooling · preflight, manifest, đóng run, id is_test @de
       seen_products: 3, exp_products: 3, total_products: 7, seen_tiers: 4, exp_tiers: 4, total_tiers: 9,
       seen_import_runs: 0, exp_import_runs: 0, total_import_runs: 2, seen_master: 0, exp_master: 0, total_master: 9,
       test_programs: 0, draft_programs: 0, out_programs: 0, out_stores: 0, out_products: 0, out_tiers: 0, out_import_runs: 0,
-      read_qa_access: false, read_sync_runs: false, write_programs: false, rpc_callable: 0,
+      read_qa_access: false, read_sync_runs: false, write_programs: false, private_tables: 0, rpc_callable: '',
     }
     // --require-proven: bảng yêu cầu đã chứng minh ⇒ đạt; CHƯA ⇒ đỏ (gate D3 do máy ép).
     expect(evaluateCmsV8(good, A, 'staff', { requireProven: ['programs', 'products'] }).every((c) => c.ok)).toBe(true)
@@ -276,12 +277,72 @@ test.describe('CMS QA tooling · preflight, manifest, đóng run, id is_test @de
       [{ seen_stores: 3 }, 'staff', 'v8-table:stores'], [{ seen_products: 2 }, 'staff', 'v8-table:products'], [{ seen_tiers: 5 }, 'staff', 'v8-table:tiers'],
       [{ seen_import_runs: 1 }, 'staff', 'v8-table:import_runs'], [{ seen_master: 1 }, 'staff', 'v8-table:master'],
       [{ qa: true }, 'staff', 'v8-oracle-qa'], [{ draft_programs: 1 }, 'staff', 'v8-no-draft'], [{ test_programs: 1 }, 'staff', 'v8-no-test-without-marker'],
-      [{ read_qa_access: true }, 'staff', 'v8-private'], [{ write_programs: true }, 'staff', 'v8-private'], [{ rpc_callable: 1 }, 'staff', 'v8-private'],
+      [{ read_qa_access: true }, 'staff', 'v8-private'], [{ write_programs: true }, 'staff', 'v8-private'], [{ rpc_callable: 'rpc_cms_result_rows' }, 'staff', 'v8-private'],
+      [{ private_tables: 1 }, 'staff', 'v8-private'], [{ db_phase: '122' }, 'staff', 'v8-phase'], [{ db_phase: '' }, 'staff', 'v8-phase'],
     ]
     for (const [o, role, id] of bad) {
       const failedIds = evaluateCmsV8({ ...good, ...o }, A, role).filter((c) => !c.ok).map((c) => c.id)
       expect(failedIds, `${role} ${JSON.stringify(o)}`).toContain(id)
     }
+  })
+
+  test('V8 phase 122 (PM 03/11 §5): khai đúng phase; 4 RPC đọc gọi được; lộ / chặn sai / lỗi / excluded / tập dòng lệch ⇒ đỏ; results chưa cắt ⇒ CHƯA', () => {
+    const g122: Record<string, unknown> = {
+      role_now: 'authenticated', uid: A, ro: 'on', iso: 'repeatable read', me_bypass: false, runner_bypass: true, user_role: 'staff', su: false, db_phase: '122',
+      qa_db: false, qa: false, same_set: true, readable: 1,
+      rls_cms_programs: true, rls_cms_program_stores: true, rls_cms_program_products: true, rls_cms_program_tiers: true,
+      rls_cms_import_runs: true, rls_cms_product_master: true,
+      seen_programs: 1, exp_programs: 1, total_programs: 3, seen_stores: 1, exp_stores: 1, total_stores: 3,
+      seen_products: 1, exp_products: 1, total_products: 3, seen_tiers: 1, exp_tiers: 1, total_tiers: 3,
+      seen_import_runs: 0, exp_import_runs: 0, total_import_runs: 1, seen_master: 0, exp_master: 0, total_master: 3,
+      test_programs: 0, draft_programs: 0, out_programs: 0, out_stores: 0, out_products: 0, out_tiers: 0, out_import_runs: 0,
+      read_qa_access: false, read_sync_runs: false, write_programs: false, private_tables: 0,
+      rpc_callable: 'rpc_cms_result_excluded,rpc_cms_result_header,rpc_cms_result_lines,rpc_cms_result_rows',
+      rx_leak: 0, rx_deny: 0, rx_err: 0, rx_exc: 0, rx_seen_n: 1, rx_exp_n: 1, rx_total_n: 3, rx_same_set: true,
+      rx_role: 'authenticated', rx_outsider: true, rx_outside: 2, rx_exc_calls: 3, rx_lleak: 0,
+      rx_lseen_n: 2, rx_lexp_n: 2, rx_ltotal_n: 6, rx_lines_same: true, rx_catalog_same: true, rx_users_same: true,
+    }
+    const okRun = evaluateCmsV8(g122, A, 'staff', { phase: '122', requireProven: ['results', 'result_lines'] })
+    expect(okRun.filter((c) => !c.ok)).toEqual([])
+    expect(okRun.find((c) => c.id === 'v8-table:results')).toMatchObject({ ok: true, proven: true })
+    expect(evaluateCmsV8({ ...g122, rx_total_n: 1 }, A, 'staff', { phase: '122', requireProven: ['results'] }).filter((c) => !c.ok).map((c) => c.id))
+      .toEqual(['v8-require-proven:results'])
+    // Chưa gọi excluded / không có chương trình ngoài tập / không có staff ngoài phạm vi ⇒ ĐẠT nhưng CHƯA CHỨNG MINH (không xanh oan).
+    const unproven = evaluateCmsV8({ ...g122, rx_exc_calls: 0, rx_outside: 0, rx_outsider: false }, A, 'staff', { phase: '122' })
+    expect(unproven.filter((c) => !c.ok)).toEqual([])
+    expect(['v8-result-excluded', 'v8-result-rpc', 'v8-result-lines-user'].map((id) => unproven.find((c) => c.id === id)?.proven)).toEqual([false, false, false])
+    // Không khai phase trên DB 122 / khai 121 ⇒ đỏ v8-phase (lời rõ); phase 121 cũng đỏ private (RPC 122 gọi được).
+    const noPhase = evaluateCmsV8(g122, A, 'staff')
+    expect(noPhase.filter((c) => !c.ok).map((c) => c.id)).toEqual(['v8-phase', 'v8-private'])
+    expect(noPhase.find((c) => c.id === 'v8-phase')!.detail).toMatch(/PHASE KHÔNG PHÙ HỢP: DB phase 122 — không khai --phase/)
+    const bad: Array<[Record<string, unknown>, string]> = [
+      [{ rx_leak: 1 }, 'v8-result-rpc'], [{ rx_deny: 1 }, 'v8-result-rpc'], [{ rx_err: 1 }, 'v8-result-rpc'], [{ rx_exc: 1 }, 'v8-result-excluded'],
+      [{ rx_same_set: false }, 'v8-table:results'], [{ rx_seen_n: 2 }, 'v8-table:results'],
+      [{ rpc_callable: 'rpc_cms_result_header,rpc_cms_result_lines,rpc_cms_result_rows' }, 'v8-private'],
+      [{ rpc_callable: 'rpc_cms_result_excluded,rpc_cms_result_header,rpc_cms_result_lines,rpc_cms_result_rows,rpc_cms_sales_run_publish' }, 'v8-private'],
+      [{ db_phase: '121' }, 'v8-phase'],
+      // db-reviewer r1: lines (P1), vai DO #2, catalog / users (P2).
+      [{ rx_role: 'postgres' }, 'v8-result-role'], [{ rx_lleak: 1 }, 'v8-result-lines-user'], [{ rx_lines_same: false }, 'v8-table:result_lines'],
+      [{ rx_lseen_n: 3 }, 'v8-table:result_lines'], [{ rx_catalog_same: false }, 'v8-result-shape'], [{ rx_users_same: false }, 'v8-result-shape'],
+    ]
+    for (const [o, id] of bad) expect(evaluateCmsV8({ ...g122, ...o }, A, 'staff', { phase: '122' }).filter((c) => !c.ok).map((c) => c.id), JSON.stringify(o)).toContain(id)
+    // SQL phase 122: khối DO thứ hai chạy SAU SET LOCAL ROLE authenticated; vẫn chỉ câu SELECT cuối trả dòng.
+    const v8 = pgMetaReadOnlySnapshot(cmsVerifyV8Sql(A, 'staff', '122'))
+    expect(v8.indexOf('SET LOCAL ROLE authenticated;')).toBeLessThan(v8.indexOf('DO $cmsv8r$'))
+    expect(v8).toContain('public.rpc_cms_result_header(v_id)')
+    expect(v8.split('\n').filter((l) => /^(SELECT|WITH) /.test(l)).map((l) => l.slice(0, 6))).toEqual(['WITH h', 'SELECT'])
+    expect(cmsVerifyV8Sql(A, 'staff')).not.toContain('cmsv8r')
+    expect(() => cmsVerifyV8Sql(A, 'staff', '123' as never)).toThrow()
+  })
+
+  test('danh sách hàm theo phase = khoá CMS_FN_MATRIX cùng phase; đếm trước phase suy từ ma trận (db-reviewer P2-5)', () => {
+    for (const ph of CMS_VERIFY_PHASES) {
+      const fromMatrix = Object.entries(CMS_FN_MATRIX).filter(([, m]) => m.phase === ph).map(([n]) => n).sort()
+      expect([...CMS_PHASE_FUNCTIONS[ph]].sort(), ph).toEqual(fromMatrix)
+    }
+    expect(CMS_VERIFY_PHASES.map((ph) => cmsFnCountBefore(ph))).toEqual([0, 7, 14])
+    expect(Object.keys(CMS_FN_DEF_122).sort()).toEqual(Object.keys(CMS_FN_MATRIX).sort())
+    expect(Object.keys(CMS_COL_122).sort()).toEqual(Object.keys(CMS_TABLE_SHAPE_122).sort())
   })
 
   test('đóng run có cảnh báo: chỉ đóng khi xác nhận ĐÚNG tập chương trình bị cảnh báo', () => {
@@ -582,9 +643,9 @@ test.describe('CMS QA tooling · CLI âm (thoát 2 trước mọi IO) @desktop',
   })
 })
 
-test('CMS QA tooling — SQL thật trên PGlite (migration 120 / 121, marker, V8, đóng run, VERIFY bắt lệch) @desktop', () => {
-  test.setTimeout(180_000)
-  const r = spawnSync(process.execPath, [path.join(WEBAPP, 'scripts', 'qa-cms-qa-tooling.mjs')], { encoding: 'utf8', timeout: 170_000 })
+test('CMS QA tooling — SQL thật trên PGlite (migration 120 / 121 / 122, marker, V8, đóng run, VERIFY phase 122 + bắt lệch) @desktop', () => {
+  test.setTimeout(300_000)
+  const r = spawnSync(process.execPath, [path.join(WEBAPP, 'scripts', 'qa-cms-qa-tooling.mjs')], { encoding: 'utf8', timeout: 290_000 })
   const out = `${r.stdout}\n${r.stderr}`
   expect(out, out.slice(-2000)).toMatch(/\n\d+ đạt · 0 lỗi/)
   expect(r.status).toBe(0)
