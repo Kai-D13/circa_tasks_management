@@ -1,0 +1,20 @@
+{
+  "_note": "DỮ LIỆU GIẢ — metadata mẫu cho compare-source (I4-FINAL). Bản thật lưu NGOÀI Git cùng hai file xuất.",
+  "version": 1,
+  "reference": {
+    "inputKind": "reference_source",
+    "source": "Export nguồn gốc giả — operator QA",
+    "exportedAt": "2026-12-01T04:00:00Z",
+    "asOf": "2026-12-01T03:00:00Z",
+    "fileSha256": "1a74e7016492e1192fb7e91eea18d7801de13e82396726e9a837b580882aa076",
+    "scope": { "startDate": "2026-11-01", "endDate": "2026-11-30", "productIds": ["900001", "900002"] }
+  },
+  "app": {
+    "inputKind": "bi_view",
+    "source": "Export view CMS giả bằng cmsI4ExportSql('scope')",
+    "exportedAt": "2026-12-01T04:05:00Z",
+    "asOf": "2026-12-01T03:00:00Z",
+    "fileSha256": "d68dfdd5e15e19fd54400a2d7cf85e58ead385c44786db07dce843a00d1d1c1a",
+    "scope": { "startDate": "2026-11-01", "endDate": "2026-11-30", "productIds": ["900001", "900002"] }
+  }
+}

@@ -697,13 +697,16 @@ export function cmsI4N4bMarkdown(r: CmsI4Reconcile): string {
  * Email đi bằng tham số `@seller_emails` (trim + chữ thường như app), không nhúng vào SQL.
  *   products: NGUYÊN dòng SELECT của buildCmsProductsQuery — view vật lý 6 cột, file chuẩn 7 cột (`is_active` là hằng
  *   `CAST(TRUE AS STRING)` do app tạo — PM 04/11 `2026-11-04-cms-bi-product-master-pm.md` §2.3), không LIMIT.
+ *   scope (I4-FINAL `compare-source`, phía `bi_view`): NGUYÊN SELECT + WHERE kỳ / SP của câu app chạy, KHÔNG lọc email / trạng thái /
+ *   loại đơn, không LIMIT — đúng tập adapter đọc cho chương trình. Không phải export của run đã công bố (`published_run`).
  */
-export function cmsI4ExportSql(kind: 'n4a' | 'n4b' | 'products', table = kind === 'products' ? 'bi-project.buymed_tech.CMS_PRODUCTS_VIEW' : 'bi-project.buymed_tech.CMS_SALES_VIEW'): string {
+export function cmsI4ExportSql(kind: 'n4a' | 'n4b' | 'products' | 'scope', table = kind === 'products' ? 'bi-project.buymed_tech.CMS_PRODUCTS_VIEW' : 'bi-project.buymed_tech.CMS_SALES_VIEW'): string {
   if (kind === 'products') return [...buildCmsProductsQuery(table).sql.split('\n').slice(0, 2), 'ORDER BY product_id'].join('\n')
   const app = buildCmsSalesQuery({ table, fromMicros: B(1), toMicrosExclusive: B(2), productIds: ['1'] }).sql.split('\n')
+  const scope = ['WHERE completed_at >= @from_ts AND completed_at < @to_ts', '  AND CAST(product_id AS STRING) IN UNNEST(@product_ids)']
   const where = kind === 'n4a'
     ? ['WHERE CAST(order_code AS STRING) IN UNNEST(@order_codes)']
-    : ['WHERE completed_at >= @from_ts AND completed_at < @to_ts', '  AND CAST(product_id AS STRING) IN UNNEST(@product_ids)', `  AND LOWER(TRIM(${cmsSalesSourceColumn('seller_email')})) IN UNNEST(@seller_emails)`]
+    : kind === 'scope' ? scope : [...scope, `  AND LOWER(TRIM(${cmsSalesSourceColumn('seller_email')})) IN UNNEST(@seller_emails)`]
   return [app[0], app[1], ...where, 'ORDER BY completed_at, order_line_id'].join('\n')
 }
 

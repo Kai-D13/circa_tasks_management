@@ -7,6 +7,10 @@
 //   node scripts/cms-i4-offline.mjs check-sales --sales=<csv> [--context=<json>]            (context ⇒ kỳ + SP + mapping)
 //   node scripts/cms-i4-offline.mjs n4a --sales=<csv> [--context=<json>] --out=<md>          (bảng kiểm dữ liệu THÔ)
 //   node scripts/cms-i4-offline.mjs reconcile --sales=<csv> --context=<json> [--expected=<csv>] [--out=<md>]   (N4b)
+//   node scripts/cms-i4-offline.mjs compare-source --reference=<csv> --app=<csv> --context=<json> [--evidence-meta=<json>] [--out=<md>]
+//        (I4-FINAL: so tập tham chiếu ĐỘC LẬP với export app / view cùng scope theo order_line_id — lõi e2e/cmsI4CompareSource.ts;
+//         rc 0 CHỈ khi KHỚP + metadata nhất quán (scope = context, cùng mốc M, hash byte file khớp); thiếu metadata ⇒ rc 1
+//         "chưa chứng minh"; metadata sai dạng / JSON hỏng ⇒ rc 2. Không chứng minh run DB đã dùng tập này.)
 //
 // Dữ liệu thật KHÔNG được nằm trong Git: mọi đường dẫn vào / ra nằm trong một cây Git (có thư mục cha chứa `.git`) ⇒ từ chối
 // (rc 2), trừ fixture GIẢ e2e/fixtures/cms-i4/ (chỉ đầu vào). stdout chỉ in số đếm / mã / hash (không email, không giá trị
@@ -15,16 +19,17 @@
 // r2 (PM 04/11 I4-P1-2): MỌI lệnh dùng MỘT kết luận `readiness` của lõi (held như app · vi phạm hợp đồng ProductID canonical ·
 // rỗng / 0 ứng viên = không có bằng chứng). rc 0 CHỈ khi readiness `ready` VÀ các phép so riêng của lệnh đạt (n4a: đủ ca; reconcile:
 // engine = oracle, khớp số tay). `notProven` (trang BigQuery, snapshot trước, độ đủ toàn kỳ) luôn in ra — không phải "đạt".
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { die2, parseArgs, runCli } from './lib-cms-ops.mjs'
+import { CliExit, die2, parseArgs, runCli } from './lib-cms-ops.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const WEBAPP = path.resolve(HERE, '..')
 const FIXTURES = path.join(WEBAPP, 'e2e', 'fixtures', 'cms-i4')
-/** Ngoại lệ "trong Git" CHỈ cho đúng 4 file giả này (spec quét: chỉ email @example.test / UUID 00000000-…). */
-const FIXTURE_FILES = ['sales.csv', 'products.csv', 'context.json', 'expected.csv']
+/** Ngoại lệ "trong Git" CHỈ cho đúng các file giả này (spec quét: chỉ email @example.test / UUID 00000000-…). */
+const FIXTURE_FILES = ['sales.csv', 'products.csv', 'context.json', 'expected.csv', 'reference.csv', 'evidence-meta.json']
 
 const norm = (p) => {
   const r = path.resolve(p)
@@ -49,7 +54,7 @@ function checkInput(flag, p) {
   try { real = fs.realpathSync(abs) } catch { die2(`${flag}: không đọc được file`) }
   if (!fs.statSync(real).isFile()) die2(`${flag}: không phải file`)
   if (FIXTURE_FILES.some((f) => norm(real) === norm(path.join(FIXTURES, f)))) return real
-  if (gitTreeOf(real)) die2(`${flag}: file nằm trong một cây Git — dữ liệu thật phải lưu NGOÀI Git (chỉ 4 fixture giả e2e/fixtures/cms-i4/ được phép)`)
+  if (gitTreeOf(real)) die2(`${flag}: file nằm trong một cây Git — dữ liệu thật phải lưu NGOÀI Git (chỉ fixture giả e2e/fixtures/cms-i4/ được phép)`)
   return real
 }
 
@@ -64,11 +69,19 @@ function checkOutput(p) {
 
 const j = (v) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? x.toString() : x))
 
-async function loadI4() {
+async function loadI4(mod = 'cmsI4Offline.ts') {
   let createJiti
   try { ({ createJiti } = await import('jiti')) } catch { die2('thiếu gói jiti — chạy `npm ci` trong webapp/ rồi thử lại') }
   const jiti = createJiti(import.meta.url, { interopDefault: true })
-  return jiti.import(path.join(WEBAPP, 'e2e', 'cmsI4Offline.ts'))
+  return jiti.import(path.join(WEBAPP, 'e2e', mod))
+}
+
+/** Đọc file MỘT lần: hash byte và parse dùng chung buffer. */
+function readCsvOnce(I, flag, file, columns) {
+  const buf = fs.readFileSync(file)
+  const r = I.cmsI4ReadCsv(new Uint8Array(buf), columns)
+  if (!r.ok) die2(`${flag}: ${r.reason}`)
+  return { ...r, sha256: crypto.createHash('sha256').update(buf).digest('hex') }
 }
 
 function readCsv(I, flag, file, columns, optional) {
@@ -86,25 +99,51 @@ function readContext(I, file) {
 }
 
 async function main() {
-  const a = parseArgs(process.argv.slice(2), { values: ['--sales', '--products', '--context', '--expected', '--out'] })
+  const a = parseArgs(process.argv.slice(2), { values: ['--sales', '--products', '--context', '--expected', '--out', '--reference', '--app', '--evidence-meta'] })
   const allowed = {
     'check-products': ['--products'],
     'check-sales': ['--sales', '--context'],
     n4a: ['--sales', '--context', '--out'],
     reconcile: ['--sales', '--context', '--expected', '--out'],
+    'compare-source': ['--reference', '--app', '--context', '--evidence-meta', '--out'],
   }
   const extra = Object.keys(a.values).filter((k) => !(allowed[a.cmd] ?? []).includes(k))
   if (!allowed[a.cmd] || a.bad.length || extra.length) {
-    console.log('dùng: node scripts/cms-i4-offline.mjs <check-products --products=<csv> | check-sales --sales=<csv> [--context=<json>] | n4a --sales=<csv> [--context=<json>] --out=<md> | reconcile --sales=<csv> --context=<json> [--expected=<csv>] [--out=<md>]>')
+    console.log('dùng: node scripts/cms-i4-offline.mjs <check-products --products=<csv> | check-sales --sales=<csv> [--context=<json>] | n4a --sales=<csv> [--context=<json>] --out=<md> | reconcile --sales=<csv> --context=<json> [--expected=<csv>] [--out=<md>] | compare-source --reference=<csv> --app=<csv> --context=<json> [--evidence-meta=<json>] [--out=<md>]>')
     return 2
   }
   // Kiểm MỌI đường dẫn trước khi đọc bất kỳ file nào.
   const files = {}
-  for (const k of ['--sales', '--products', '--context', '--expected']) if (a.values[k] !== undefined) files[k] = checkInput(k, a.values[k])
+  for (const k of ['--sales', '--products', '--context', '--expected', '--reference', '--app', '--evidence-meta']) if (a.values[k] !== undefined) files[k] = checkInput(k, a.values[k])
   if (a.cmd === 'n4a' && a.values['--out'] === undefined) die2('n4a cần --out=<md ngoài Git> (bảng chi tiết không in ra stdout)')
   if (a.cmd === 'reconcile' && !files['--context']) die2('reconcile cần --context=<json>')
+  if (a.cmd === 'compare-source') for (const k of ['--reference', '--app', '--context']) if (!files[k]) die2(`compare-source cần ${k}=<file>`)
   const out = a.values['--out'] !== undefined ? checkOutput(a.values['--out']) : null
   const I = await loadI4()
+
+  if (a.cmd === 'compare-source') {
+    const C = await loadI4('cmsI4CompareSource.ts')
+    const ref = readCsvOnce(I, '--reference', files['--reference'], I.CMS_SALES_COLUMNS)
+    const app = readCsvOnce(I, '--app', files['--app'], I.CMS_SALES_COLUMNS)
+    const ctx = readContext(I, files['--context'])
+    let meta = null
+    if (files['--evidence-meta']) {
+      let json
+      try { json = JSON.parse(fs.readFileSync(files['--evidence-meta'], 'utf8')) } catch { die2('--evidence-meta: JSON không hợp lệ') }
+      const m = C.cmsI4ParseEvidenceMeta(json)
+      if (!m.ok) die2(`--evidence-meta: ${m.reason}`)
+      meta = m.value
+    }
+    const r = C.cmsI4CompareSource({
+      context: ctx,
+      reference: { rows: ref.rows, fileSha256: ref.sha256 },
+      app: { rows: app.rows, fileSha256: app.sha256 },
+      meta,
+    })
+    if (out) fs.writeFileSync(out, C.cmsI4CompareMarkdown(r, C.cmsI4LinesById(ref.rows)), { flag: 'wx', mode: 0o600 })
+    console.log(`I4 compare-source ${j({ accepted: r.verdict === 'MATCH', ...C.cmsI4CompareSummary(r), extraColumns: { reference: ref.extraColumns.length, app: app.extraColumns.length }, out: out ? path.basename(out) : null })}`)
+    return r.verdict === 'MATCH' ? 0 : 1
+  }
 
   if (a.cmd === 'check-products') {
     const csv = readCsv(I, '--products', files['--products'], I.CMS_PRODUCT_COLUMNS)
@@ -167,4 +206,19 @@ async function main() {
   return accepted ? 0 : 1
 }
 
-await runCli(main)
+/**
+ * Biên lỗi của CLI I4 (PM I4F-P1-2 — chỉ entrypoint này, không đổi lib-cms-ops dùng chung của QA / VERIFY / ops):
+ * CliExit (die2 / mã chủ đích) đi tiếp nguyên mã; MỌI lỗi khác — Error, chuỗi, object, lỗi I/O, lỗi nạp module — ⇒ mã cố định
+ * CMS_I4_INTERNAL, rc 1. Không in message / stack / cause / đường dẫn / giá trị dòng (file đối soát chứa email, mã đơn).
+ */
+async function guardedMain() {
+  try {
+    return await main()
+  } catch (e) {
+    if (e instanceof CliExit) throw e
+    console.log('LỖI: CMS_I4_INTERNAL — lỗi không dự kiến; chi tiết không in để tránh lộ đường dẫn / giá trị dòng. Kiểm quyền đọc / ghi file và chạy lại.')
+    return 1
+  }
+}
+
+await runCli(guardedMain)

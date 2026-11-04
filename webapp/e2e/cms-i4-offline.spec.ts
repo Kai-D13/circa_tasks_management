@@ -573,15 +573,15 @@ test.describe('CMS I4 · CLI offline (đường dẫn ngoài Git, stdout chỉ s
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
         const p = path.join(d, e.name)
         if (e.isDirectory()) walk(p)
-        else if (/\.(ts|tsx|mjs|js)$/.test(e.name) && /cmsI4Offline|cmsQ206Cases/.test(fs.readFileSync(p, 'utf8'))) hits.push(path.relative(WEBAPP, p).replace(/\\/g, '/'))
+        else if (/\.(ts|tsx|mjs|js)$/.test(e.name) && /cmsI4Offline|cmsI4CompareSource|cmsQ206Cases/.test(fs.readFileSync(p, 'utf8'))) hits.push(path.relative(WEBAPP, p).replace(/\\/g, '/'))
       }
     }
     for (const d of ['app', 'lib', 'components', 'scripts']) walk(path.join(WEBAPP, d))
     expect(hits).toEqual(['scripts/cms-i4-offline.mjs'])
   })
 
-  test('fixture chỉ gồm 4 file GIẢ (email @example.test, UUID 00000000-…); file khác thả vào thư mục fixture vẫn bị chặn như dữ liệu trong Git', () => {
-    expect(fs.readdirSync(FX).sort()).toEqual(['context.json', 'expected.csv', 'products.csv', 'sales.csv'])
+  test('fixture chỉ gồm các file GIẢ (I4 + compare-source) (email @example.test, UUID 00000000-…); file khác thả vào thư mục fixture vẫn bị chặn như dữ liệu trong Git', () => {
+    expect(fs.readdirSync(FX).sort()).toEqual(['context.json', 'evidence-meta.json', 'expected.csv', 'products.csv', 'reference.csv', 'sales.csv'])
     for (const f of fs.readdirSync(FX)) {
       const t = fs.readFileSync(path.join(FX, f), 'utf8')
       for (const m of t.match(/[^\s",]+@[^\s",]+/g) ?? []) expect(m.trim(), f).toMatch(/@example\.test$/i)
