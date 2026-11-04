@@ -288,28 +288,31 @@ test.describe('CMS P3a — fixture UI qua parser DTO thật @desktop', () => {
     const F = await import('../lib/cms/fixturesPayout')
     const R = await import('../lib/cms/fixturesResults')
     const PID = '00000000-0000-4000-8000-000000000001'
-    const sum = (viewer: 'super' | 'sm') => {
-      const r = R.cmsFxAdminResults('running', viewer)
+    // CMS-UI-1: Chốt kỳ ⇒ PG8 (QA hết kỳ), Số đã chốt ⇒ PG9 (QA đã chốt) — số = Σ kết quả engine CÙNG chương trình.
+    const sum = (viewer: 'super' | 'sm', program = F.cmsFxP3Program('ready')) => {
+      const r = R.cmsFxAdminResults('running', viewer, program)
       if (r.kind !== 'loaded') throw new Error('fx')
       return r.rows.results.reduce((a, x) => a + BigInt(x.amountVnd), BigInt(0)).toString()
     }
-    const ready = F.cmsFxLockPreview('ready', PID, '2026-11-14')!
+    void PID
+    const ready = F.cmsFxLockPreview('ready')!
     expect(ready.blockers).toEqual([])
     expect(ready.needsAck).toBe(false)
     expect(ready.amountVnd).toBe(sum('super'))
     expect(ready.policy.label).toBe('QA_ONLY_ASSUMPTION')
-    expect(F.cmsFxLockPreview('ack', PID, '2026-11-14')).toMatchObject({ needsAck: true, unassignedLines: 7, blockers: [] })
-    expect(F.cmsFxLockPreview('blocked', PID, '2026-11-14')?.blockers).toEqual(['CMS_LOCK_RUN_CHANGED', 'CMS_LOCK_UNASSIGNED_OVER'])
-    expect(F.cmsFxLockPreview('pending', PID, '2026-11-14')).toMatchObject({ isTest: false, blockers: ['CMS_LOCK_POLICY_PENDING'], policy: { ready: false, label: null } })
-    expect(F.cmsFxLockPreview('error', PID, '2026-11-14')).toBeNull()
-    const sup = F.cmsFxPayout('locked', PID)!
-    expect(sup).toMatchObject({ viewer: 'super', programTotal: sum('super'), scopeTotal: sum('super'), isTest: true })
+    expect(F.cmsFxLockPreview('ack')).toMatchObject({ needsAck: true, unassignedLines: 8, blockers: [] }) // 8 = totals engine của run PG8
+    expect(F.cmsFxLockPreview('blocked')?.blockers).toEqual(['CMS_LOCK_RUN_CHANGED', 'CMS_LOCK_UNASSIGNED_OVER'])
+    expect(F.cmsFxLockPreview('pending')).toMatchObject({ isTest: false, blockers: ['CMS_LOCK_POLICY_PENDING'], policy: { ready: false, label: null } })
+    expect(F.cmsFxLockPreview('error')).toBeNull()
+    const sup = F.cmsFxPayout('locked')!
+    const P9 = F.cmsFxP3Program('locked')
+    expect(sup).toMatchObject({ viewer: 'super', programTotal: sum('super', P9), scopeTotal: sum('super', P9), isTest: true })
     expect(sup.rows.every((r) => r.email !== null)).toBe(true)
-    const sm = F.cmsFxPayout('locked-sm', PID)!
-    expect(sm).toMatchObject({ viewer: 'sm', programTotal: null, scopeTotal: sum('sm'), super: null })
+    const sm = F.cmsFxPayout('locked-sm')!
+    expect(sm).toMatchObject({ viewer: 'sm', programTotal: null, scopeTotal: sum('sm', P9), super: null })
     expect(sm.rows.every((r) => r.email === null)).toBe(true)
     expect(sm.rows.length).toBeLessThan(sup.rows.length)
-    expect(F.cmsFxPayout('locked-error', PID)).toBeNull()
+    expect(F.cmsFxPayout('locked-error')).toBeNull()
     expect(F.cmsFxParseP3('locked-sm')).toBe('locked-sm')
     expect(F.cmsFxParseP3('x')).toBeNull()
   })

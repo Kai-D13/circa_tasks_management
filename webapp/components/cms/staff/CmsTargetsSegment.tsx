@@ -1,12 +1,13 @@
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
+import { cmsNavHref, type CmsNav } from '@/lib/cms/fixtureNav'
 
 // CMS P1-d (UI §4.1, U15) — segmented 2 mục trên /targets cho staff / QLCH: "KPI chiến dịch | CMS sản phẩm". Server Link,
 // aria-current; chỉ render khi cờ CMS_PROGRAM_ENABLED bật (page quyết). Không đổi BottomNav.
-export function CmsTargetsSegment({ active }: { active: 'kpi' | 'cms' }) {
+export function CmsTargetsSegment({ active, nav }: { active: 'kpi' | 'cms'; nav?: CmsNav }) {
   const items = [
-    { key: 'kpi' as const, label: 'KPI chiến dịch', href: '/targets' },
-    { key: 'cms' as const, label: 'CMS sản phẩm', href: '/targets?tab=cms' },
+    { key: 'kpi' as const, label: 'KPI chiến dịch', href: cmsNavHref(nav, '/targets') },
+    { key: 'cms' as const, label: 'CMS sản phẩm', href: cmsNavHref(nav, '/targets?tab=cms') },
   ]
   return (
     <nav aria-label="Mục tiêu" data-cms-targets-segment={active} className="grid w-full grid-cols-2 gap-1 rounded-v2-control bg-muted p-1 sm:w-fit">

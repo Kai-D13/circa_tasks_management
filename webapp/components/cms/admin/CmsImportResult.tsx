@@ -2,19 +2,19 @@
 
 import { useState } from 'react'
 import { AlertTriangle, Download } from 'lucide-react'
-import { useFixtureActionBlocked } from '@/components/kpi/KpiFixtureBoundary'
 import { Notice } from '@/components/ds/Notice'
 import { StatusBadge } from '@/components/ds/StatusBadge'
 import { TagBadge } from '@/components/ds/TagBadge'
 import { CmsProductImage } from '@/components/cms/CmsProductImage'
 import { CmsTierChips } from '@/components/cms/CmsTierChips'
+import { CmsDownloadLink } from '@/components/cms/CmsDownloadLink'
 import { cn } from '@/lib/utils'
 import { CMS_GATE_HUE, CMS_GATE_LABEL, cmsBaseQtyLine, cmsPrice, cmsVnd } from '@/lib/cms/display'
 import type { CmsPreviewResult } from '@/lib/cms/importView'
 
 // CMS P1-c — bước "Kết quả" A2 (UI §3.2 bước 4; r2 U5 / U16): 4 ô, tab hợp lệ / lỗi & cảnh báo, file dòng lỗi, thông
 // báo nội dung sau điểm dừng. Chỉ trình bày kết quả kiểm tra (preview) — không ghi gì. Link file lỗi là GET export ⇒
-// trong fixture bị chặn qua useFixtureActionBlocked.
+// trong fixture là nút bị chặn (CmsDownloadLink — không có href endpoint thật).
 
 function Box({ label, value, tone }: { label: string; value: number; tone: 'neutral' | 'success' | 'danger' | 'warning' }) {
   const dot = { neutral: 'bg-muted-foreground', success: 'bg-status-success', danger: 'bg-status-danger', warning: 'bg-status-warning' }[tone]
@@ -30,7 +30,6 @@ function Box({ label, value, tone }: { label: string; value: number; tone: 'neut
 
 export function CmsImportResult({ result }: { result: CmsPreviewResult }) {
   const [tab, setTab] = useState<'ok' | 'errors'>(result.groupsOk.length > 0 ? 'ok' : 'errors')
-  const fixtureBlocked = useFixtureActionBlocked()
   const s = result.stats
   const errorRows = result.groupsRejected.flatMap((g) => g.errors.map((e) => ({ ...e, key: g.key })))
   const warnCount = result.groupsOk.reduce((n, g) => n + g.warnings.length, 0)
@@ -65,13 +64,13 @@ export function CmsImportResult({ result }: { result: CmsPreviewResult }) {
           ))}
         </div>
         {result.groupsRejected.length > 0 && (
-          <a
+          <CmsDownloadLink
             href={`/api/cms/import/errors?run_id=${encodeURIComponent(result.runId)}`}
-            onClick={(e) => { if (fixtureBlocked()) e.preventDefault() }}
+            data-cms-import-error-file
             className="inline-flex min-h-[44px] items-center gap-1.5 text-[13px] font-medium underline-offset-2 hover:underline"
           >
             <Download className="h-4 w-4" /> Tải file dòng lỗi (.xlsx)
-          </a>
+          </CmsDownloadLink>
         )}
       </div>
 

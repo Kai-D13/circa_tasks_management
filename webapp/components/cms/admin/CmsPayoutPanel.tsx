@@ -7,6 +7,7 @@ import { buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { cmsDateTime, cmsVnd } from '@/lib/cms/display'
 import { cmsUnassignedRatioText, type CmsPayoutDto } from '@/lib/cms/payoutView'
+import { CmsDownloadLink } from '@/components/cms/CmsDownloadLink'
 
 // CMS P3a — số ĐÃ CHỐT trên A3 (rpc_cms_payout, SESSION — phạm vi hiện tại theo Q-208 / Q-217). Super: tổng toàn chương trình,
 // thông tin chốt (Q-213, lý do, quy tắc); SM: chỉ tổng trong phạm vi được phân công, không email. Danh sách = định danh SNAPSHOT
@@ -30,9 +31,9 @@ export function CmsPayoutPanel({ programId, payout, error }: { programId: string
       title="Số đã chốt"
       className="v2:rounded-v2-panel"
       actions={(
-        <a href={exportHref} data-cms-payout-export className={cn(buttonVariants({ variant: 'outline' }), BTN)}>
+        <CmsDownloadLink href={exportHref} data-cms-payout-export className={cn(buttonVariants({ variant: 'outline' }), BTN)}>
           <Download className="h-4 w-4" /> Xuất file chi trả
-        </a>
+        </CmsDownloadLink>
       )}
     >
       <div data-cms-payout className="space-y-3">

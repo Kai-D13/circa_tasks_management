@@ -528,8 +528,11 @@ export function cmsA3Stats(rows: readonly CmsResultRowDto[], productIds: readonl
 }
 
 // ── A1: ô kết quả theo chương trình + thống kê P2 (U2 / U20; Q-212) ──────────
+// CMS-UI-1 (PM 04/11 §6.4): A1 đọc thêm chương trình ĐÃ CHỐT (run đóng băng, cùng RPC 122 / session) trong CÙNG ngân sách
+// CMS_A1_MAX: đang chạy / chờ chốt thật trước, đã chốt thật dùng phần còn lại, QA cuối. Ô đã chốt ghi "Đã chốt", KHÔNG cộng vào
+// hai ô tổng đang chạy / chờ chốt, không vào "Dược sĩ có CMS". Đã chốt chưa tải / lỗi ⇒ '—' + link A3 (không 0 giả).
 export type CmsA1Cell =
-  | { kind: 'ok'; amountVnd: bigint; productsWithCms: number; productCount: number; pharmacistsWithCms: number; publishedAt: string | null }
+  | { kind: 'ok'; amountVnd: bigint; productsWithCms: number; productCount: number; pharmacistsWithCms: number; publishedAt: string | null; locked: boolean }
   | { kind: 'none' }
   | { kind: 'error' }
 
@@ -538,47 +541,59 @@ export interface CmsA1Stats {
   runningVnd: bigint | null
   /** Σ CMS các chương trình CHỜ CHỐT KỲ (không QA). */
   waitingVnd: bigint | null
-  /** Dược sĩ distinct có CMS > 0 trên các chương trình đang chạy + chờ chốt (không QA). */
+  /** Dược sĩ distinct có CMS > 0 trên các chương trình đang chạy + chờ chốt (không QA, không đã chốt). */
   pharmacists: number | null
   /** Số chương trình (không QA, đang chạy / chờ chốt) chưa có snapshot — gợi ý dưới ô. */
   withoutSnapshot: number
+  /** Tách theo nhóm để gợi ý nằm đúng ô (PM 04/11 §6.5). */
+  withoutSnapshotRunning: number
+  withoutSnapshotWaiting: number
   /** Số chương trình thật (đang chạy / chờ chốt) KHÔNG được tải vì vượt trần một lượt xem — > 0 ⇒ mọi ô tổng '—'. */
   notLoaded: number
 }
 
-/** Thứ tự tải A1 khi có trần: chương trình thật trước (thống kê cần đủ), QA sau; giữ thứ tự danh sách trong mỗi nhóm. */
-export function cmsA1LoadOrder<T extends { isTest: boolean }>(programs: readonly T[], max: number): T[] {
-  return [...programs.filter((p) => !p.isTest), ...programs.filter((p) => p.isTest)].slice(0, max)
+export type CmsA1Display = 'draft' | 'upcoming' | 'running' | 'waiting_close' | 'locked' | string
+const A1_OPEN = (d: CmsA1Display) => d === 'running' || d === 'waiting_close'
+
+/** Thứ tự tải A1 khi có trần: thật đang chạy / chờ chốt → thật đã chốt → QA; giữ thứ tự danh sách trong mỗi nhóm. */
+export function cmsA1LoadOrder<T extends { isTest: boolean; display?: CmsA1Display }>(programs: readonly T[], max: number): T[] {
+  const open = (p: T) => p.display === undefined || A1_OPEN(p.display)
+  return [
+    ...programs.filter((p) => !p.isTest && open(p)),
+    ...programs.filter((p) => !p.isTest && p.display === 'locked'),
+    ...programs.filter((p) => p.isTest),
+  ].slice(0, Math.max(0, max))
 }
 
 /**
- * `programs`: TOÀN BỘ chương trình đang chạy / chờ chốt kỳ người xem đọc được; `loads`: kết quả đã tải theo id (thiếu ⇒ không
- * có ô). Thống kê loại QA (U20); một chương trình thật lỗi tải ⇒ ô thống kê liên quan '—'; chương trình thật không được tải (vượt
- * trần) ⇒ mọi ô tổng '—' + `notLoaded` — không bao giờ cộng thiếu thành một tổng trông như đủ (pm-auditor I3 P1-1).
+ * `programs`: TOÀN BỘ chương trình đang chạy / chờ chốt kỳ / đã chốt người xem đọc được; `loads`: kết quả đã tải theo id (thiếu ⇒
+ * không có ô). Thống kê loại QA (U20) và loại đã chốt; một chương trình thật đang chạy / chờ chốt lỗi tải ⇒ ô thống kê liên quan
+ * '—'; chương trình thật đang chạy / chờ chốt không được tải (vượt trần) ⇒ mọi ô tổng '—' + `notLoaded` — không bao giờ cộng thiếu
+ * thành một tổng trông như đủ (pm-auditor I3 P1-1).
  */
-export function cmsA1Results(programs: readonly { id: string; display: string; isTest: boolean; productCount: number }[], loads: ReadonlyMap<string, CmsResultsLoad>): { cells: Map<string, CmsA1Cell>; stats: CmsA1Stats } {
+export function cmsA1Results(programs: readonly { id: string; display: CmsA1Display; isTest: boolean; productCount: number }[], loads: ReadonlyMap<string, CmsResultsLoad>): { cells: Map<string, CmsA1Cell>; stats: CmsA1Stats } {
   const cells = new Map<string, CmsA1Cell>()
   let running: bigint | null = ZERO, waiting: bigint | null = ZERO
-  let anyRunning = false, anyWaiting = false, pharmErr = false, withoutSnapshot = 0, notLoaded = 0
+  let anyRunning = false, anyWaiting = false, pharmErr = false, notLoaded = 0, noneRunning = 0, noneWaiting = 0
   const users = new Set<string>()
   for (const p of programs) {
     const l = loads.get(p.id)
     if (!l) {
-      if (!p.isTest && (p.display === 'running' || p.display === 'waiting_close')) notLoaded += 1
+      if (!p.isTest && A1_OPEN(p.display)) notLoaded += 1
       continue
     }
     let cell: CmsA1Cell
     if (l.kind === 'loaded' && l.header.run) {
       const s = cmsProgramResultSummary(l.rows.results, p.productCount)
-      cell = { kind: 'ok', amountVnd: s.amountVnd, productsWithCms: s.productsWithCms, productCount: p.productCount, pharmacistsWithCms: s.pharmacistsWithCms, publishedAt: l.header.run.publishedAt }
+      cell = { kind: 'ok', amountVnd: s.amountVnd, productsWithCms: s.productsWithCms, productCount: p.productCount, pharmacistsWithCms: s.pharmacistsWithCms, publishedAt: l.header.run.publishedAt, locked: p.display === 'locked' }
     } else if (l.kind === 'loaded') cell = { kind: 'none' }
     else if (l.kind === 'off' || l.kind === 'upcoming') continue
     else cell = { kind: 'error' }
     cells.set(p.id, cell)
-    if (p.isTest || (p.display !== 'running' && p.display !== 'waiting_close')) continue
+    if (p.isTest || !A1_OPEN(p.display)) continue
     const isRunning = p.display === 'running'
     if (cell.kind === 'error') { if (isRunning) running = null; else waiting = null; pharmErr = true; continue }
-    if (cell.kind === 'none') { withoutSnapshot += 1; continue }
+    if (cell.kind === 'none') { if (isRunning) noneRunning += 1; else noneWaiting += 1; continue }
     if (isRunning) { anyRunning = true; if (running !== null) running += cell.amountVnd } else { anyWaiting = true; if (waiting !== null) waiting += cell.amountVnd }
     const l2 = l as Extract<CmsResultsLoad, { kind: 'loaded' }>
     for (const u of cmsProgramResultSummary(l2.rows.results, p.productCount).userIdsWithCms) users.add(u)
@@ -589,7 +604,9 @@ export function cmsA1Results(programs: readonly { id: string; display: string; i
       runningVnd: anyRunning && notLoaded === 0 ? running : null,
       waitingVnd: anyWaiting && notLoaded === 0 ? waiting : null,
       pharmacists: pharmErr || notLoaded > 0 || (!anyRunning && !anyWaiting) ? null : users.size,
-      withoutSnapshot,
+      withoutSnapshot: noneRunning + noneWaiting,
+      withoutSnapshotRunning: noneRunning,
+      withoutSnapshotWaiting: noneWaiting,
       notLoaded,
     },
   }

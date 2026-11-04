@@ -1,0 +1,5 @@
+seller_email,product_id,expected_cms_vnd,expected_q,expected_gmv
+ds.a@example.test,900001,20000,2,242000
+ds.a@example.test,900002,0,3,450000
+ds.b@example.test,900001,0,0,63000
+ds.b@example.test,900002,40000,8,1200000

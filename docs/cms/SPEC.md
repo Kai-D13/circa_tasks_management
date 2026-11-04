@@ -21,7 +21,7 @@ JSON mẫu hiện có dùng cho phát triển và kiểm thử (chỉ để hi�
 | `product_id` | Text, duy nhất; text số nguyên (H4) |
 | `product_name` | Bắt buộc |
 | `image_url` | Tùy chọn |
-| `is_active` | Bắt buộc; `false` = nguồn đánh dấu ngừng hoạt động / dừng bán |
+| `is_active` | Cột chuẩn nội bộ (7 cột output / normalizer / RPC / DB không đổi). **Không còn là cột nguồn** (S-BI-3, operator 04/11): adapter tạo hằng `CAST(TRUE AS STRING) AS is_active` = "CMS không áp dụng kiểm tra trạng thái kinh doanh", **không** phải bằng chứng SP đang bán |
 | `source_updated_at` | Bắt buộc |
 | `reference_price`, `price_unit` | Tùy chọn, chỉ phục vụ hiển thị/ước tính; thiếu không chặn P1 |
 
@@ -29,11 +29,15 @@ Product Master không quyết định đơn vị hưởng CMS.
 
 Giá từ dòng bán là giá giao dịch. Không tự lấy nó làm giá bán tham khảo hiện hành của Product Master.
 
-`is_active` phải map từ cột trạng thái nguồn do operator/BI chỉ rõ; **không suy** từ `p.unit NOT IN ('test')`, tồn kho, có ảnh hoặc có giá. `is_active = false`: import vẫn được nhưng có cảnh báo; không tự xóa sản phẩm khỏi chương trình hoặc loại doanh số lịch sử.
+**[r2.1 — S-BI-3, PM `planning/reviews/2026-11-04-cms-bi-product-master-pm.md` §2]** Operator bỏ trạng thái SP: view BI Product Master chỉ cần **6 cột vật lý** (`product_id`, `product_name`, `image_url`, `source_updated_at`, `reference_price`, `price_unit`); adapter không đọc cột `is_active` trên view (không dò / fallback hai schema) mà tạo hằng `true` (`CMS_PRODUCT_DERIVED_COLUMN`). Import **không** cảnh báo trạng thái SP (kể cả cache cũ còn `false`); ProductID phải có trong cache Master hợp lệ như cũ. UI không trình bày "đang kinh doanh" dựa vào hằng này. Normalizer / file chuẩn 7 cột vẫn chỉ nhận `true` / `false` (contract nội bộ). Không migration, không đổi 120. *(Trước r2.1: `is_active` map từ cột trạng thái nguồn, `false` ⇒ cảnh báo khi import.)*
+
+**Mỗi `product_id` đúng một dòng** trên view: trùng ⇒ lượt đồng bộ held `DUPLICATE_PRODUCT`, 0 ghi, cache giữ nguyên — app **không** chọn MAX / MIN / dòng đầu. `reference_price` phải đi cùng đúng `price_unit`; chưa xác định được giá đúng đơn vị thì BI để cả hai NULL (không dùng tính CMS).
 
 Bản đầu pull **đầy đủ** Product Master; P0 đo quy mô/budget để chứng minh đọc đủ, không tự đổi sang incremental.
 
 ### 1.2. Dòng đơn
+
+FQN nguồn (operator 04/11, cấu hình qua env — Dev không sửa env prod): dòng đơn `CMS_BQ_SALES_TABLE=lakehouse-prod-394907.buymed_tech.tech__dim_circa_growth_cms_order`; Product Master `CMS_BQ_PRODUCTS_TABLE=lakehouse-prod-394907.buymed_tech.tech__dim_circa_growth_cms_product_master` (đều là VIEW). Đổi tên chỉ ở biên nguồn (`lib/cms/source/bigquery.ts` → `CMS_SALES_SOURCE_COLUMN`); view thiếu cột vật lý ⇒ lỗi nguồn, giữ snapshot cũ, không tự thử cột khác. `order_line_id` (= `item.id`) đã có trên view (probe 04/11 khuya: duy nhất, không NULL) — app không điền mặc định thay. Product Master không cần `is_active` (§1.1, S-BI-3).
 
 | Trường chuẩn | Nguồn đã xác định |
 |---|---|
@@ -41,7 +45,7 @@ Bản đầu pull **đầy đủ** Product Master; P0 đo quy mô/budget để c
 | `order_id` | `o.id` |
 | `order_code` | `o.code` |
 | `product_id` | `item.product_id`, chuẩn hóa text số nguyên |
-| `seller_email` | Email của entity ứng với `o.updated_by` |
+| `seller_email` | Email của entity ứng với `o.updated_by`. **Cột vật lý trên view BI: `employee_email`** (operator 04/11 — BI giữ tên); adapter đọc `CAST(employee_email AS STRING) AS seller_email`, mọi lớp sau dùng tên chuẩn |
 | `pos_code` | `pos.code` |
 | `order_type` | `o.type` |
 | `order_status` | `o.status` |
@@ -296,7 +300,7 @@ Nếu các nhóm danh mục khai báo target khác nhau, loại các nhóm danh 
 Cảnh báo vẫn cho nhập:
 
 - Thiếu ảnh (hoặc URL ảnh ngoài prefix được duyệt, §8.2).
-- Sản phẩm ngừng hoạt động.
+- ~~Sản phẩm ngừng hoạt động~~ — bỏ từ r2.1 (S-BI-3, operator 04/11).
 - Mức CMS > 500.000đ.
 - Bậc cuối hữu hạn rất lớn (`Den_SL_ban` ≥ 10.000, theo r1).
 

@@ -16,6 +16,7 @@ import {
 } from '@/lib/cms/resultUi'
 import type { CmsResultLineDto } from '@/lib/cms/resultView'
 import type { CmsProductView, CmsProgramRowView } from '@/lib/cms/server/catalog'
+import { cmsNavHref, type CmsNav } from '@/lib/cms/fixtureNav'
 
 // CMS P2-c (I3) · D3 `/targets/cms/history?program=&product=` (UI §4.3; U12 / U14 / U18; kế hoạch PM §6.1). Staff xem dòng của
 // mình, QLCH xem dòng của staff hiện thuộc nhà thuốc (RPC 122 lọc). Dòng đọc từ cms_result_lines của run ĐÃ GHIM (`run=` trong
@@ -31,7 +32,7 @@ export type CmsHistoryLines =
 
 const SEG = 'inline-flex min-h-[44px] items-center whitespace-nowrap rounded-[8px] px-3 text-[13px]'
 
-export function CmsStaffHistoryView({ programs, selected, products, results, lines, params, manager, today, returnsApproved, userNames }: {
+export function CmsStaffHistoryView({ programs, selected, products, results, lines, params, manager, today, returnsApproved, userNames, nav }: {
   programs: CmsProgramRowView[]
   selected: CmsProgramRowView | null
   products: CmsProductView[] | null
@@ -43,6 +44,8 @@ export function CmsStaffHistoryView({ programs, selected, products, results, lin
   returnsApproved: boolean
   /** QLCH: tên dược sĩ theo id (từ rows của cùng run). */
   userNames: Map<string, string>
+  /** Fixture: điều hướng trong /ui-catalog (route thật bỏ trống). */
+  nav?: CmsNav
 }) {
   const loaded = results.kind === 'loaded' ? results : null
   const run = loaded?.header.run ?? null
@@ -66,7 +69,7 @@ export function CmsStaffHistoryView({ programs, selected, products, results, lin
 
   return (
     <div data-ui-v2="page" data-layout-width="centered" data-cms-history={lines.kind} className="mx-auto max-w-2xl p-4 space-y-4 v2:space-y-3">
-      <Link href={cmsStaffHref(selected?.id)} className="inline-flex min-h-[44px] items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground">
+      <Link href={cmsNavHref(nav, cmsStaffHref(selected?.id))} className="inline-flex min-h-[44px] items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground">
         <ArrowLeft className="h-4 w-4" /> CMS sản phẩm
       </Link>
       <h1 className="text-[20px] font-bold leading-tight">Ghi nhận CMS</h1>
@@ -77,7 +80,7 @@ export function CmsStaffHistoryView({ programs, selected, products, results, lin
         <>
           <nav aria-label="Chương trình" className="flex max-w-full flex-wrap gap-1 rounded-v2-control bg-muted p-1">
             {recent.map((p) => (
-              <Link key={p.id} href={cmsHistoryUrl({ programId: p.id })} aria-current={p.id === selected.id ? 'page' : undefined}
+              <Link key={p.id} href={cmsNavHref(nav, cmsHistoryUrl({ programId: p.id }))} aria-current={p.id === selected.id ? 'page' : undefined}
                 className={cn(SEG, 'max-w-full', p.id === selected.id ? 'border border-input bg-card font-semibold text-foreground' : 'text-muted-foreground')}>
                 <span className="truncate">{p.name}</span>
               </Link>
@@ -87,14 +90,14 @@ export function CmsStaffHistoryView({ programs, selected, products, results, lin
                 <summary className={cn(SEG, 'cursor-pointer list-none text-muted-foreground [&::-webkit-details-marker]:hidden')}>Khác ({others.length})</summary>
                 <ul className="mt-1 space-y-1 rounded-v2-panel border bg-card p-1">
                   {others.map((p) => (
-                    <li key={p.id}><Link href={cmsHistoryUrl({ programId: p.id })} className={cn(SEG, 'w-full')}><span className="truncate">{p.name}</span></Link></li>
+                    <li key={p.id}><Link href={cmsNavHref(nav, cmsHistoryUrl({ programId: p.id }))} className={cn(SEG, 'w-full')}><span className="truncate">{p.name}</span></Link></li>
                   ))}
                 </ul>
               </details>
             )}
           </nav>
 
-          <CmsResultsNotice results={results} reloadHref={cmsHistoryUrl({ programId: selected.id, productId: params.productId })} />
+          <CmsResultsNotice results={results} reloadHref={cmsNavHref(nav, cmsHistoryUrl({ programId: selected.id, productId: params.productId }))} />
 
           {loaded && (
             <section data-cms-history-total className="space-y-3 rounded-v2-panel border bg-card p-4">
@@ -124,7 +127,7 @@ export function CmsStaffHistoryView({ programs, selected, products, results, lin
               <ul className="space-y-2.5">
                 {effects.map((e) => (
                   <li key={e.id} className="space-y-1">
-                    <Link href={cmsHistoryUrl({ programId: selected.id, productId: e.id })} className="flex min-h-[44px] items-center justify-between gap-3 text-[13px]">
+                    <Link href={cmsNavHref(nav, cmsHistoryUrl({ programId: selected.id, productId: e.id }))} className="flex min-h-[44px] items-center justify-between gap-3 text-[13px]">
                       <span className="min-w-0 line-clamp-2 break-words font-medium">{byId.get(e.id)?.nameSnapshot}</span>
                       <span className={cn('shrink-0 font-semibold tabular-nums', e.amount === BigInt(0) && 'text-muted-foreground')}>{cmsVnd(e.amount)}</span>
                     </Link>
@@ -138,7 +141,7 @@ export function CmsStaffHistoryView({ programs, selected, products, results, lin
 
           {params.productId && byId.has(params.productId) && (
             <Notice tone="neutral" title={`Đang lọc: ${byId.get(params.productId)!.nameSnapshot}`}>
-              <Link href={cmsHistoryUrl({ programId: selected.id })} className="inline-flex min-h-[44px] items-center font-medium underline underline-offset-2">Xem mọi sản phẩm</Link>
+              <Link href={cmsNavHref(nav, cmsHistoryUrl({ programId: selected.id }))} className="inline-flex min-h-[44px] items-center font-medium underline underline-offset-2">Xem mọi sản phẩm</Link>
             </Notice>
           )}
 
@@ -147,7 +150,7 @@ export function CmsStaffHistoryView({ programs, selected, products, results, lin
           ) : lines.kind === 'stale' ? (
             <Notice tone="info" role="status" title="Dữ liệu đã thay đổi">
               Có lượt cập nhật mới trong lúc bạn xem.{' '}
-              <Link href={cmsHistoryUrl({ programId: selected.id, productId: params.productId })} className="inline-flex min-h-[44px] items-center font-medium underline underline-offset-2">Tải lại từ đầu</Link>
+              <Link href={cmsNavHref(nav, cmsHistoryUrl({ programId: selected.id, productId: params.productId }))} className="inline-flex min-h-[44px] items-center font-medium underline underline-offset-2">Tải lại từ đầu</Link>
             </Notice>
           ) : lines.kind === 'error' ? (
             <ErrorState message="Không tải được dòng ghi nhận" hint="Thử tải lại trang." />
@@ -180,9 +183,9 @@ export function CmsStaffHistoryView({ programs, selected, products, results, lin
                 </ul>
               )}
               <div className="flex flex-wrap gap-2">
-                {moreHref && <Link href={moreHref} scroll={false} data-cms-history-more className="inline-flex min-h-[44px] items-center rounded-v2-control border bg-card px-4 text-[13px] font-semibold">{params.n >= CMS_HISTORY_MAX_N ? 'Xem 20 dòng tiếp' : 'Xem thêm 20 dòng'}</Link>}
+                {moreHref && <Link href={cmsNavHref(nav, moreHref)} scroll={false} data-cms-history-more className="inline-flex min-h-[44px] items-center rounded-v2-control border bg-card px-4 text-[13px] font-semibold">{params.n >= CMS_HISTORY_MAX_N ? 'Xem 20 dòng tiếp' : 'Xem thêm 20 dòng'}</Link>}
                 {params.after !== null && run && (
-                  <Link href={cmsHistoryUrl({ programId: selected.id, productId: params.productId, run: run.id })} className="inline-flex min-h-[44px] items-center px-2 text-[13px] text-muted-foreground underline-offset-2 hover:underline">Về đầu danh sách</Link>
+                  <Link href={cmsNavHref(nav, cmsHistoryUrl({ programId: selected.id, productId: params.productId, run: run.id }))} className="inline-flex min-h-[44px] items-center px-2 text-[13px] text-muted-foreground underline-offset-2 hover:underline">Về đầu danh sách</Link>
                 )}
               </div>
             </section>

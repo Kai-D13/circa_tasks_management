@@ -55,6 +55,7 @@ export interface CmsImportGroupRejected {
 export interface CmsProductMasterLite {
   productName: string
   imageUrl: string | null
+  /** Cột cache (mig 120) — import KHÔNG dùng để cảnh báo / chặn (operator bỏ trạng thái SP 04/11). */
   isActive: boolean
   referencePrice: string | null
 }
@@ -259,7 +260,8 @@ export function validateCmsImport(rows: readonly CmsImportRawRow[], ctx: CmsImpo
     const img = cmsSafeImageUrl(pm.imageUrl)
     if (!pm.imageUrl) warnings.push(ISSUE(pRow, 'ProductID', 'IMAGE_MISSING', 'Sản phẩm chưa có ảnh', 'Vẫn nạp; ảnh dự phòng sẽ hiển thị'))
     else if (!img) warnings.push(ISSUE(pRow, 'ProductID', 'IMAGE_NOT_ALLOWED', 'Ảnh sản phẩm ngoài nguồn được duyệt', 'Vẫn nạp; báo operator kiểm nguồn ảnh'))
-    if (!pm.isActive) warnings.push(ISSUE(pRow, 'ProductID', 'PRODUCT_INACTIVE', 'Sản phẩm đang ngừng hoạt động', 'Vẫn nạp; kiểm lại nếu không chủ ý'))
+    // Không cảnh báo trạng thái SP (operator bỏ 04/11 — PM `2026-11-04-cms-bi-product-master-pm.md` §2.2): kể cả cache cũ còn
+    // is_active=false cũng không sinh PRODUCT_INACTIVE. ProductID không có trên Master vẫn bị từ chối (PRODUCT_NOT_FOUND ở trên).
     for (const t of tiers) if (t.amount! > CMS_AMOUNT_WARN) warnings.push(ISSUE(t.row.excelRow, 'CMS_VND_SP', 'AMOUNT_HIGH', 'Mức CMS > 500.000đ', 'Vẫn nạp; kiểm lại mức thưởng'))
     const lastTier = tiers[tiers.length - 1]
     if (lastTier.to !== null && lastTier.to >= CMS_LAST_TIER_WARN) warnings.push(ISSUE(lastTier.row.excelRow, 'Den_SL_ban', 'LAST_TIER_LARGE', 'Bậc cuối hữu hạn rất lớn (≥ 10.000)', 'Vẫn nạp; để trống nếu ý là không giới hạn'))

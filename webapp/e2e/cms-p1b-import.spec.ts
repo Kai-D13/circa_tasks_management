@@ -189,11 +189,15 @@ test.describe('CMS P1-b · kiểm nhóm (r2 §5.1) @desktop', () => {
     expect([first.groupsOk.map((g) => g.productId), first.catalogTarget]).toEqual([['900003'], '70000000'])
   })
 
-  test('cảnh báo vẫn cho nạp: thiếu ảnh, ảnh ngoài allow-list, SP ngừng, CMS > 500.000', () => {
-    const v = validateCmsImport(rowsOf(book([r(900004, null, null, 1, null, 600000), r(900005, null, null, 1, null, 1)])), ctx())
+  test('cảnh báo vẫn cho nạp: thiếu ảnh, ảnh ngoài allow-list, CMS > 500.000; KHÔNG cảnh báo trạng thái SP (cache cũ is_active=false)', () => {
+    // Operator bỏ trạng thái SP 04/11 (PM `2026-11-04-cms-bi-product-master-pm.md` §2.2): 900004 có isActive=false trong cache
+    // nhưng KHÔNG sinh PRODUCT_INACTIVE; ProductID không có trên Master vẫn bị từ chối.
+    const v = validateCmsImport(rowsOf(book([r(900004, null, null, 1, null, 600000), r(900005, null, null, 1, null, 1), r(900099, null, null, 1, null, 1)])), ctx())
     expect(v.groupsOk.map((g) => [g.productId, g.warnings.map((w) => w.code).sort()])).toEqual([
-      ['900004', ['AMOUNT_HIGH', 'IMAGE_MISSING', 'PRODUCT_INACTIVE']], ['900005', ['IMAGE_NOT_ALLOWED']]])
+      ['900004', ['AMOUNT_HIGH', 'IMAGE_MISSING']], ['900005', ['IMAGE_NOT_ALLOWED']]])
     expect(v.groupsOk[1].imageUrlSnapshot).toBeNull()
+    expect(JSON.stringify(v)).not.toContain('PRODUCT_INACTIVE')
+    expect(v.groupsRejected.map((g) => [g.key, g.errors.map((e) => e.code)])).toEqual([['900099', ['PRODUCT_NOT_FOUND']]])
   })
 })
 

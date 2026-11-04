@@ -12,10 +12,12 @@ import { CMS_GATE_HUE, CMS_GATE_LABEL, cmsAmountPerUnit, cmsBaseQtyLine, cmsDate
 import { CMS_STATUS_LABEL, CMS_STATUS_TONE, cmsDisplayStatus } from '@/lib/cms/programStatus'
 import { cmsIsClosedDisplay, cmsProductHref, cmsStaffAmountTitle, cmsStaffHref, cmsStaffUpdatedText } from '@/lib/cms/staffView'
 import {
-  cmsHistoryHref, cmsLineView, cmsProductTotals, cmsStaffCard, cmsStaffRows, cmsTierBreakdown, type CmsResultsLoad,
+  cmsHistoryHref, cmsLineView, cmsProductTotals, cmsQtyText, cmsStaffCard, cmsStaffRows, cmsTierBreakdown, type CmsResultsLoad,
 } from '@/lib/cms/resultUi'
 import type { CmsResultLineDto } from '@/lib/cms/resultView'
 import type { CmsStaffProduct } from '@/lib/cms/server/staffCatalog'
+import { cmsQtyExplainRow } from '@/lib/cms/productPresentation'
+import { cmsNavHref, type CmsNav } from '@/lib/cms/fixtureNav'
 
 // CMS P1-d · D2 `/targets/cms/products/[programProductId]` (UI §4.2; r2 U1 / U19). P1 CHỈ: ảnh, tên, ProductID · giá ·
 // chương trình, điều kiện cấu hình (ẩn khi không target), thang chính sách `đ/unit_CMS`, quy cách, tư vấn ĐẦY ĐỦ (text
@@ -26,7 +28,7 @@ import type { CmsStaffProduct } from '@/lib/cms/server/staffCatalog'
 // P3a r2 (PM r1 PKG-P1-1): Chờ chốt kỳ / Đã chốt vẫn mở — nhãn theo trạng thái (Đã chốt = run đóng băng), không "Nếu bán thêm",
 // thang bậc chỉ ghi kết quả đạt được.
 
-export function CmsStaffProductView({ data, today, results = { kind: 'off' }, manager = false, recent = null, returnsApproved = false }: {
+export function CmsStaffProductView({ data, today, results = { kind: 'off' }, manager = false, recent = null, returnsApproved = false, nav }: {
   data: CmsStaffProduct
   today: string
   results?: CmsResultsLoad
@@ -35,6 +37,8 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
    *  không trình bày phần đầu như "gần nhất" — PM I3 §5). */
   recent?: CmsResultLineDto[] | null
   returnsApproved?: boolean
+  /** Fixture: điều hướng trong /ui-catalog (route thật bỏ trống). */
+  nav?: CmsNav
 }) {
   const { program, product: p } = data
   const display = cmsDisplayStatus(program, today)
@@ -51,10 +55,11 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
   const storeTot = withNumbers && manager ? cmsProductTotals(rows, new Map([[p.id, p.baseQuantityCms]])).get(p.id) ?? null : null
   const storeStaff = withNumbers && manager ? cmsStaffRows(rows, loaded.rows.users) : []
   const tierUnitsDone = (i: number) => (slices ? slices[i].units : BigInt(0))
+  const qty = card?.row ? cmsQtyExplainRow(card.row) : null
 
   return (
     <div data-ui-v2="page" data-layout-width="centered" data-cms-staff-product-detail={p.gmvBasis} data-cms-results={results.kind} className="mx-auto max-w-2xl p-4 space-y-4 v2:space-y-3">
-      <Link href={cmsStaffHref(program.id)} className="inline-flex min-h-[44px] items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground">
+      <Link href={cmsNavHref(nav, cmsStaffHref(program.id))} className="inline-flex min-h-[44px] items-center gap-1.5 text-[13px] text-muted-foreground hover:text-foreground">
         <ArrowLeft className="h-4 w-4" /> CMS sản phẩm
       </Link>
 
@@ -75,7 +80,7 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
         </div>
       </div>
 
-      <CmsResultsNotice results={results} reloadHref={cmsProductHref(p.id)} />
+      <CmsResultsNotice results={results} reloadHref={cmsNavHref(nav, cmsProductHref(p.id))} />
 
       {loaded && !manager && (
         <section data-cms-product-amount={card?.tone ?? 'none'} className="space-y-2 rounded-v2-panel border bg-card p-4">
@@ -86,10 +91,15 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
           {card ? (
             <>
               <p className="text-[13px] text-muted-foreground tabular-nums" data-cms-qty-line>
-                Đã bán {card.soldText} {p.unitCms} · tính CMS {card.cmsQuantity.toString()} {p.unitCms}
-                {card.fraction ? <> · đang cộng dồn {card.fraction}</> : null}
+                Đã bán {card.soldText} {p.unitCms} · {gateOpen ? <>được tính CMS {(qty?.rewarded ?? card.cmsQuantity).toString()} {p.unitCms}</> : <>chưa tính CMS {card.cmsQuantity.toString()} {p.unitCms} (chờ đạt target)</>}
               </p>
-              {card.position.atCap && <p className="text-[12px] text-muted-foreground">Đã đạt trần — phần vượt trần không thêm CMS (vẫn tính vào số đã bán).</p>}
+              {qty && (qty.overCap > BigInt(0) || qty.fractionBase > BigInt(0)) && (
+                <ul data-cms-qty-explain className="space-y-0.5 text-[12px] text-muted-foreground tabular-nums">
+                  {qty.overCap > BigInt(0) && <li>Vượt trần {qty.cap?.toString()} {p.unitCms}: {qty.overCap.toString()} {p.unitCms} không thêm CMS (vẫn tính vào số đã bán).</li>}
+                  {qty.fractionBase > BigInt(0) && <li>Phần lẻ {cmsQtyText(qty.fractionBase, qty.perUnit)} {p.unitCms} chưa đủ 1 {p.unitCms} — đang cộng dồn ({card.fraction}).</li>}
+                </ul>
+              )}
+              {card.position.atCap && !(qty && qty.overCap > BigInt(0)) && <p className="text-[12px] text-muted-foreground">Đã đạt mức trần {p.tiers[p.tiers.length - 1]?.to} {p.unitCms} — bán thêm không thêm CMS.</p>}
               {slices && card.cmsQuantity > BigInt(0) && (
                 <ul data-cms-tier-breakdown className="space-y-1 border-t pt-2 text-[13px]">
                   {slices.filter((s) => s.units > BigInt(0)).map((s) => (
@@ -207,7 +217,7 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
         <section data-cms-recent className="space-y-2 rounded-v2-panel border bg-card p-4">
           <div className="flex items-center justify-between gap-2">
             <h2 className="text-[14px] font-semibold">Ghi nhận gần đây</h2>
-            <Link href={cmsHistoryHref(program.id, p.id)} className="inline-flex min-h-[44px] items-center text-[13px] font-medium underline-offset-2 hover:underline">Xem tất cả</Link>
+            <Link href={cmsNavHref(nav, cmsHistoryHref(program.id, p.id))} className="inline-flex min-h-[44px] items-center text-[13px] font-medium underline-offset-2 hover:underline">Xem tất cả</Link>
           </div>
           {recent && recent.length > 0 ? (
             <ul className="divide-y text-[13px]">

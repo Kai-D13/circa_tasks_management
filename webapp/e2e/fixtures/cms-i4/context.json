@@ -1,0 +1,23 @@
+{
+  "_note": "DỮ LIỆU GIẢ — mẫu §2.2 planning/research/cms-i4-bi-checklist.md. Bối cảnh thật (cấu hình chương trình + tài khoản) lưu NGOÀI Git.",
+  "program": {
+    "startDate": "2026-11-01",
+    "endDate": "2026-11-30",
+    "catalogTargetGmv": null,
+    "storeIds": ["00000000-0000-4000-8000-0000000000a1"],
+    "products": [
+      { "productId": "900001", "gmvBasis": "none", "targetGmv": null, "baseQuantityCms": "30",
+        "tiers": [{ "from": 1, "to": 9, "amount": 10000 }, { "from": 10, "to": null, "amount": 12000 }] },
+      { "productId": "900002", "gmvBasis": "product", "targetGmv": 1000000, "baseQuantityCms": "1",
+        "tiers": [{ "from": 1, "to": null, "amount": 5000 }] }
+    ]
+  },
+  "users": [
+    { "id": "00000000-0000-4000-8000-00000000000a", "email": "ds.a@example.test", "role": "staff", "storeId": "00000000-0000-4000-8000-0000000000a1" },
+    { "id": "00000000-0000-4000-8000-00000000000b", "email": "ds.b@example.test", "role": "staff", "storeId": "00000000-0000-4000-8000-0000000000a1" },
+    { "id": "00000000-0000-4000-8000-00000000000c", "email": "qlch.x@example.test", "role": "store_manager", "storeId": "00000000-0000-4000-8000-0000000000a1" }
+  ],
+  "stores": [
+    { "id": "00000000-0000-4000-8000-0000000000a1", "storeType": "os", "isActive": true }
+  ]
+}

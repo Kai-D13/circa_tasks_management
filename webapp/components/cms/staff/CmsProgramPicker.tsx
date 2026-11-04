@@ -10,6 +10,7 @@ import { cmsDate, cmsDateRange } from '@/lib/cms/display'
 import { CMS_STATUS_LABEL, CMS_STATUS_TONE, cmsDisplayStatus } from '@/lib/cms/programStatus'
 import { cmsGroupStaffPrograms, cmsStaffHref } from '@/lib/cms/staffView'
 import type { CmsProgramRowView } from '@/lib/cms/server/catalog'
+import { cmsNavHref, type CmsNav } from '@/lib/cms/fixtureNav'
 
 // CMS P1-d (UI §4.1) — chọn chương trình: nút 52px mở danh sách chương trình đang áp dụng (`?program=`, link — không gọi
 // máy chủ ghi). Chỉ 1 chương trình ⇒ nhãn, không mở danh sách. Sắp diễn ra ghi "Bắt đầu dd/mm".
@@ -25,7 +26,7 @@ function Meta({ p, today }: { p: CmsProgramRowView; today: string }) {
   )
 }
 
-export function CmsProgramPicker({ programs, selectedId, today }: { programs: CmsProgramRowView[]; selectedId: string; today: string }) {
+export function CmsProgramPicker({ programs, selectedId, today, nav }: { programs: CmsProgramRowView[]; selectedId: string; today: string; nav?: CmsNav }) {
   const [open, setOpen] = useState(false)
   const selected = programs.find((p) => p.id === selectedId) ?? programs[0]
   if (!selected) return null
@@ -67,7 +68,7 @@ export function CmsProgramPicker({ programs, selectedId, today }: { programs: Cm
                   {list.map((p) => (
                     <li key={p.id}>
                       <Link
-                        href={cmsStaffHref(p.id)}
+                        href={cmsNavHref(nav, cmsStaffHref(p.id))}
                         onClick={() => setOpen(false)}
                         aria-current={p.id === selected.id ? 'true' : undefined}
                         className={cn('flex min-h-[52px] items-center gap-3 py-2', p.id === selected.id && 'font-semibold')}

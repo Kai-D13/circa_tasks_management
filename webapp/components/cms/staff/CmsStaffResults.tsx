@@ -8,6 +8,8 @@ import { cmsHistoryHref, cmsLoadState, type CmsCardFilter, type CmsGateView, typ
 import type { CmsResultHeaderDto } from '@/lib/cms/resultView'
 import type { CmsDisplayStatus } from '@/lib/cms/programStatus'
 import { cmsStaffAmountTitle, cmsStaffUpdatedText } from '@/lib/cms/staffView'
+import { cmsQtyExplainRow } from '@/lib/cms/productPresentation'
+import { cmsNavHref, type CmsNav } from '@/lib/cms/fixtureNav'
 
 // CMS P2-c (I3) · khối số liệu D1 / D2 (UI §4.1–§4.2; U12 / U13 / U18 / U19). Chỉ TRÌNH BÀY số từ view-model
 // (lib/cms/resultUi) — không tự tính tiền. null / chưa có snapshot ⇒ '—', không 0 giả. Không render nhãn trả hàng / số âm
@@ -51,13 +53,13 @@ function Tile({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div className="min-w-0 rounded-[8px] bg-background/10 px-2.5 py-2 dark:bg-primary-foreground/10">
       <p className="text-[11px] leading-tight opacity-80">{label}</p>
-      <p className="mt-0.5 text-[15px] font-bold tabular-nums leading-tight">{value}</p>
+      <p className="mt-0.5 text-[15px] font-bold tabular-nums leading-tight [overflow-wrap:anywhere]">{value}</p>
     </div>
   )
 }
 
 /** Hero staff "CMS tạm tính của bạn" (light: nền chữ đậm; dark: nền action — UI §4.1). */
-export function CmsStaffHero({ summary, header, programId, display = null }: { summary: CmsStaffSummary | null; header: CmsResultHeaderDto; programId: string; display?: CmsDisplayStatus | null }) {
+export function CmsStaffHero({ summary, header, programId, display = null, nav }: { summary: CmsStaffSummary | null; header: CmsResultHeaderDto; programId: string; display?: CmsDisplayStatus | null; nav?: CmsNav }) {
   const has = header.run !== null && summary !== null
   return (
     <section data-cms-hero={has ? 'ok' : 'none'} className="space-y-3 rounded-v2-panel bg-foreground p-4 text-background dark:bg-primary dark:text-primary-foreground">
@@ -67,13 +69,13 @@ export function CmsStaffHero({ summary, header, programId, display = null }: { s
       </div>
       <div className="grid grid-cols-3 gap-2">
         <Tile label="SP có CMS" value={has ? `${summary.productsWithCms}/${summary.productCount}` : '—'} />
-        <Tile label="SP đã bán" value={has ? summary.productsSold : '—'} />
+        <Tile label="SP có bán" value={has ? summary.productsSold : '—'} />
         <Tile label="GMV" value={has ? cmsVnd(summary.gmvVnd) : '—'} />
       </div>
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[12px] opacity-90">
         <span><UpdatedLine header={header} display={display} /></span>
         {has && (
-          <Link href={cmsHistoryHref(programId)} className="inline-flex min-h-[44px] items-center gap-1 font-semibold underline-offset-2 hover:underline">
+          <Link href={cmsNavHref(nav, cmsHistoryHref(programId))} className="inline-flex min-h-[44px] items-center gap-1 font-semibold underline-offset-2 hover:underline">
             <History className="h-4 w-4" aria-hidden="true" /> Xem ghi nhận
           </Link>
         )}
@@ -83,7 +85,7 @@ export function CmsStaffHero({ summary, header, programId, display = null }: { s
 }
 
 /** QLCH (U19): tổng nhà thuốc = cộng kết quả cá nhân của staff HIỆN thuộc nhà thuốc; không "của bạn", không gợi ý. */
-export function CmsStoreHero({ summary, header, programId, display = null }: { summary: CmsStoreSummary | null; header: CmsResultHeaderDto; programId: string; display?: CmsDisplayStatus | null }) {
+export function CmsStoreHero({ summary, header, programId, display = null, nav }: { summary: CmsStoreSummary | null; header: CmsResultHeaderDto; programId: string; display?: CmsDisplayStatus | null; nav?: CmsNav }) {
   const has = header.run !== null && summary !== null
   return (
     <section data-cms-store-hero={has ? 'ok' : 'none'} className="space-y-3 rounded-v2-panel border bg-card p-4">
@@ -101,7 +103,7 @@ export function CmsStoreHero({ summary, header, programId, display = null }: { s
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[12px] text-muted-foreground">
         <span><UpdatedLine header={header} display={display} /></span>
         {has && (
-          <Link href={cmsHistoryHref(programId)} className="inline-flex min-h-[44px] items-center gap-1 font-semibold text-foreground underline-offset-2 hover:underline">
+          <Link href={cmsNavHref(nav, cmsHistoryHref(programId))} className="inline-flex min-h-[44px] items-center gap-1 font-semibold text-foreground underline-offset-2 hover:underline">
             <History className="h-4 w-4" aria-hidden="true" /> Xem ghi nhận
           </Link>
         )}
@@ -122,13 +124,14 @@ export function CmsNearGateCard({ near, productName, unit }: { near: CmsNearGate
   )
 }
 
-/** Thanh gate (product / catalog): GMV / target; "Đạt từ" chỉ khi đang đạt (Q-211); thiếu ⇒ còn thiếu. */
+/** Thanh gate (product / catalog): GMV / target; "Đạt từ" chỉ khi đang đạt (Q-211); thiếu ⇒ còn thiếu.
+ *  CMS-UI-1 (PM §6.6): nhãn và số GMV / target tự xuống hàng (số giữ nguyên một hàng) — không ép hai cột hẹp làm số gãy dòng. */
 export function CmsGateMeter({ gate, label, size = 8 }: { gate: CmsGateView; label: string; size?: 5 | 8 }) {
   return (
-    <div data-cms-gate={gate.met ? 'met' : 'unmet'} className="space-y-1.5">
-      <div className="flex items-baseline justify-between gap-2 text-[12px]">
+    <div data-cms-gate={gate.met ? 'met' : 'unmet'} className="space-y-1">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-2 gap-y-0.5 text-[12px]">
         <span className="text-muted-foreground">{label}</span>
-        <span className="tabular-nums font-semibold">{cmsVnd(gate.gmvVnd)} / {cmsVnd(gate.targetVnd)}</span>
+        <span data-cms-gate-value className="tabular-nums font-semibold whitespace-nowrap">{cmsVnd(gate.gmvVnd)} / {cmsVnd(gate.targetVnd)}</span>
       </div>
       {gate.pct !== null && (
         <ProgressBar value={gate.pct} max={100} tone={gate.met ? 'ok' : 'series'} size={size} ariaLabel={`${label}: ${cmsVnd(gate.gmvVnd)} trên ${cmsVnd(gate.targetVnd)}`} />
@@ -148,12 +151,23 @@ export function cmsCardTierText(card: CmsStaffCard, tiers: readonly CmsUiTier[],
   if (tiers.length === 0) return ''
   if (card.gate && !card.gate.met) return closed ? 'Chưa đạt target trong kỳ' : 'Cần đạt target trước'
   const pos = card.position
-  if (pos.atCap) return `Đã đạt trần ${tiers[tiers.length - 1].to} ${unit}`
+  const last = tiers[tiers.length - 1]
+  if (pos.atCap) return `Đã đạt mức trần ${last.to} ${unit}`
   if (pos.index === null) return closed ? 'Chưa đạt bậc 1 trong kỳ' : pos.next ? `Bán ${pos.next.unitsToNext.toString()} ${unit} để có ${cmsAmountPerUnit(tiers[pos.next.index].amount, unit)}` : ''
   const cur = `Bậc ${tiers[pos.index].order} · ${cmsAmountPerUnit(tiers[pos.index].amount, unit)}`
   if (closed) return cur
   if (pos.next) return `${cur} · Còn ${pos.next.unitsToNext.toString()} ${unit} lên ${cmsAmountPerUnit(tiers[pos.next.index].amount, unit)}`
+  // Bậc cuối hữu hạn = trần số lượng / dược sĩ (Q-210a): ghi rõ tối đa + còn bao nhiêu thay vì "Bậc cao nhất" (PM §6.6).
+  if (last.to !== null) return `${cur} · Tối đa ${last.to} ${unit} · còn ${(BigInt(last.to) - card.cmsQuantity).toString()} ${unit}`
   return `${cur} · Bậc cao nhất`
+}
+
+/** "tính 12" khi lượng bán có phần lẻ / vượt trần (gate đã mở) — số nguyên được xét khác số đã bán. */
+export function cmsCardCountedNote(card: CmsStaffCard): string | null {
+  if (!card.row || (card.gate && !card.gate.met)) return null
+  const e = cmsQtyExplainRow(card.row)
+  if (!e || (e.fractionBase === BigInt(0) && e.overCap === BigInt(0))) return null
+  return `tính ${e.rewarded.toString()}`
 }
 
 export function CmsCardFilterTabs({ filter, counts, href }: { filter: CmsCardFilter; counts: Record<CmsCardFilter, number>; href: (f: CmsCardFilter) => string }) {

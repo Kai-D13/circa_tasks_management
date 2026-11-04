@@ -84,7 +84,7 @@ test.describe('ui v2 CMS P3a r2 — hành vi lối đọc sau hết kỳ / đã 
     await expect(dlg.locator('[data-cms-program-group="ended"] li')).toHaveCount(2)
     await expect(dlg.locator('[data-cms-program-group="ended"]')).toContainText('Chờ chốt kỳ')
     await expect(dlg.locator('[data-cms-program-group="ended"]')).toContainText('Đã chốt')
-    await expect(dlg.getByRole('link', { name: new RegExp(LOCKED.name) })).toHaveAttribute('href', `/targets?tab=cms&program=${LOCKED.id}`)
+    await expect(dlg.getByRole('link', { name: new RegExp(LOCKED.name) })).toHaveAttribute('href', `/ui-catalog/cms-v2/staff?program=${LOCKED.id}&p2=running`) // CMS-UI-1: ở lại catalog
     expect(writes).toEqual([])
   })
 

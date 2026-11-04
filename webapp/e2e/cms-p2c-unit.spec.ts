@@ -79,13 +79,14 @@ test.describe('CMS P2-c — view-model resultUi @desktop', () => {
   test('staff D1: tổng = Σ tiền dòng kết quả; SP có CMS / đã bán; gate SP + danh mục; gợi ý gần đạt = SP thiếu ít nhất theo %', () => {
     const l = loaded(cmsFxStaffResults('running'))
     const s = cmsStaffSummary(l.rows.results, 4)
-    expect([s.amountVnd, s.productsWithCms, s.productCount, s.productsSold, s.gmvVnd]).toEqual([BigInt(295000), 2, 4, 4, BigInt(17885000)])
+    // CMS-UI-1: số do engine tính trên dòng bán giả (dược sĩ A): 315.000 (SP1 bậc 2) + 60.000 (SP3 12 vỉ) — SP2 / SP4 chưa đạt gate.
+    expect([s.amountVnd, s.productsWithCms, s.productCount, s.productsSold, s.gmvVnd]).toEqual([BigInt(375000), 2, 4, 4, BigInt(5095000)])
     const r1 = l.rows.results.find((r) => r.programProductId === CMS_FX_PRODUCTS[0].id)!
-    expect(cmsGateView(r1, l.rows.catalog)).toMatchObject({ basis: 'product', met: true, metAt: '2026-11-08T03:12:45.000000Z', shortVnd: BigInt(0), pct: 125 })
+    expect(cmsGateView(r1, l.rows.catalog)).toMatchObject({ basis: 'product', met: true, metAt: '2026-11-14T08:33:00.000000Z', shortVnd: BigInt(0), pct: 108 })
     const r2 = l.rows.results.find((r) => r.programProductId === CMS_FX_PRODUCTS[1].id)!
-    expect(cmsGateView(r2, l.rows.catalog)).toMatchObject({ basis: 'catalog', met: false, metAt: null, shortVnd: BigInt(20000000), pct: 60 })
+    expect(cmsGateView(r2, l.rows.catalog)).toMatchObject({ basis: 'catalog', met: false, metAt: null, shortVnd: BigInt(480000), pct: 68 })
     const near = cmsNearestGate(l.rows.results)!
-    expect([near.programProductId, near.shortVnd, near.potentialVnd, near.cmsQuantity]).toEqual([CMS_FX_PRODUCTS[3].id, BigInt(800000), BigInt(105000), BigInt(7)])
+    expect([near.programProductId, near.shortVnd, near.potentialVnd, near.cmsQuantity]).toEqual([CMS_FX_PRODUCTS[3].id, BigInt(390000), BigInt(105000), BigInt(7)])
     const card = cmsStaffCard({ programProductId: CMS_FX_PRODUCTS[2].id, perUnit: '10', tiers: CMS_FX_PRODUCTS[2].tiers, row: l.rows.results[2], catalog: l.rows.catalog })
     expect([card.soldText, card.cmsQuantity, card.fraction, card.tone]).toEqual(['12,5', BigInt(12), '5 / 10 đơn vị cơ sở', 'earning'])
     const none = cmsStaffCard({ programProductId: 'x', perUnit: '30', tiers: tiers3, row: null, catalog: [] })
@@ -98,17 +99,17 @@ test.describe('CMS P2-c — view-model resultUi @desktop', () => {
     const st = cmsStoreSummary(l.rows.results, 4)
     const sumRows = l.rows.results.reduce((a, r) => a + BigInt(r.amountVnd), BigInt(0))
     expect(st.amountVnd).toBe(sumRows)
-    expect(st.amountVnd).toBe(BigInt(295000 + 485000 + 250000))
-    expect([st.staffWithCms, st.staffWithSales]).toEqual([2, 3])
+    expect(st.amountVnd).toBe(BigInt(375000 + 970000 + 40000)) // A + B + C (J chưa đạt target) — nhà thuốc 01
+    expect([st.staffWithCms, st.staffWithSales]).toEqual([3, 4])
     const rows = cmsStaffRows(l.rows.results, l.rows.users)
-    expect(rows.map((x) => x.userId)).toEqual([CMS_FX_USERS.B, CMS_FX_USERS.A, CMS_FX_USERS.C])
+    expect(rows.map((x) => x.userId)).toEqual([CMS_FX_USERS.B, CMS_FX_USERS.A, CMS_FX_USERS.C, CMS_FX_USERS.J])
     expect(rows.reduce((a, x) => a + x.amountVnd, BigInt(0))).toBe(sumRows)
   })
 
   test('A3 phân bố bậc cộng từng người; dòng chưa đạt gate không vào; A1: QA không vào thống kê, lỗi ⇒ null, chưa có số ⇒ đếm riêng', () => {
     const l = loaded(cmsFxAdminResults('running'))
     const p1 = l.rows.results.filter((r) => r.programProductId === CMS_FX_PRODUCTS[0].id)
-    expect(cmsProductTierDistribution(p1, tiers3)).toEqual([BigInt(27), BigInt(25), BigInt(15)])
+    expect(cmsProductTierDistribution(p1, tiers3)).toEqual([BigInt(63), BigInt(67), BigInt(29)])
     const bad: CmsResultRowDto[] = p1.map((r, i) => (i === 0 ? { ...r, amountVnd: String(BigInt(r.amountVnd) + BigInt(1)) } : r))
     expect(cmsProductTierDistribution(bad, tiers3)).toBeNull()
     const progs = [
@@ -117,8 +118,9 @@ test.describe('CMS P2-c — view-model resultUi @desktop', () => {
     ]
     const ok = cmsA1Results(progs, new Map<string, CmsResultsLoad>([['a', cmsFxAdminResults('running')], ['b', cmsFxAdminResults('top')], ['c', cmsFxAdminResults('none')], ['d', cmsFxStaffResults('running')]]))
     const aSum = l.rows.results.reduce((s, r) => s + BigInt(r.amountVnd), BigInt(0))
-    expect(ok.stats.runningVnd).toBe(aSum + BigInt(295000))
-    expect([ok.stats.waitingVnd, ok.stats.withoutSnapshot, ok.stats.pharmacists]).toEqual([null, 1, 3])
+    expect(ok.stats.runningVnd).toBe(aSum + BigInt(375000))
+    expect([ok.stats.waitingVnd, ok.stats.withoutSnapshot, ok.stats.pharmacists]).toEqual([null, 1, 9])
+    expect([ok.stats.withoutSnapshotRunning, ok.stats.withoutSnapshotWaiting]).toEqual([0, 1]) // CMS-UI-1: gợi ý đúng nhóm chờ chốt
     expect(ok.cells.get('b')?.kind).toBe('ok')                     // QA có ô nhưng không vào tổng
     const err = cmsA1Results(progs, new Map<string, CmsResultsLoad>([['a', { kind: 'error' }], ['d', cmsFxStaffResults('running')]]))
     // Vượt trần một lượt xem (pm-auditor I3 P1-1): chương trình thật không được tải ⇒ mọi ô tổng null + notLoaded, không tổng thiếu.
@@ -167,13 +169,14 @@ test.describe('CMS P2-c — view-model resultUi @desktop', () => {
 })
 
 test.describe('CMS P2-c — fixture khớp như snapshot @desktop', () => {
-  test('mọi kịch bản: Σ tiền dòng = Σ tiền kết quả; số dòng = Σ line_count; seq tăng dần liên tục', () => {
+  test('mọi kịch bản: Σ tiền dòng = Σ tiền kết quả; số dòng = Σ line_count; seq tăng dần (thứ tự engine trên toàn ứng viên)', () => {
     for (const s of CMS_FX_RESULT_SCENARIOS) for (const l of [cmsFxStaffResults(s), cmsFxStoreResults(s), cmsFxAdminResults(s), cmsFxAdminResults(s, 'sm')]) {
       if (l.kind !== 'loaded') continue
       const lines = cmsFxLines(l.rows.results)
       expect(lines.length, s).toBe(l.rows.results.reduce((a, r) => a + r.lineCount, 0))
       expect(lines.reduce((a, x) => a + BigInt(x.amountVnd), BigInt(0)), s).toBe(l.rows.results.reduce((a, r) => a + BigInt(r.amountVnd), BigInt(0)))
-      expect(lines.map((x) => x.seq)).toEqual(lines.map((_, i) => i))
+      // CMS-UI-1: dòng là đầu ra engine — seq theo TOÀN BỘ ứng viên của run (như cms_sales_lines), lọc theo người xem ⇒ tăng dần, không liên tục.
+      expect(lines.every((x, i) => i === 0 || x.seq > lines[i - 1].seq), s).toBe(true)
       for (const r of l.rows.results) {
         const p = CMS_FX_PRODUCTS.find((x) => x.id === r.programProductId)!
         const exp = r.gateMet ? BigInt(r.amountVnd) : BigInt(r.potentialAmount)
@@ -209,17 +212,20 @@ test.describe('CMS P2-c r1.1 — "người có bán" một định nghĩa (PM P1
     expect(cmsProductTotals(rows, new Map([[p.id, p.baseQuantityCms]])).get(p.id)!.staffWithSales).toBe(2) // D1 / D2 / D3 QLCH
     expect(cmsStoreSummary(rows, 1).staffWithSales).toBe(2)
     expect(cmsStaffRows(rows, l.rows.users).map((x) => [x.userId, x.productsSold])).toEqual(expect.arrayContaining([[CMS_FX_USERS.A, 1], [CMS_FX_USERS.B, 1], [CMS_FX_USERS.C, 0]]))
-    // XLSX đọc lại bằng xlsx thật — cùng con số.
-    const lines = cmsFxLines(rows)
+    // XLSX đọc lại bằng xlsx thật — cùng con số. Dòng tổng hợp đúng các dòng kết quả giả định ở trên (1 dòng / người, tiền = tiền
+    // kết quả) — CMS-UI-1: fixture demo nay là dòng engine thật nên ca giả định này tự dựng dòng khớp.
+    const lines = cmsFxLines(l.rows.results).slice(0, 3).map((x, i) => ({ ...x, userId: rows[i].userId, programProductId: p.id, productId: p.productId,
+      baseQuantity: rows[i].baseQuantity, amountVnd: rows[i].amountVnd, status: 'RECORDED' as const }))
     const b = buildCmsResultWorkbook({ ...input(), rows: { ...l.rows, results: rows, catalog: [] }, lines, excluded: [] })
     if (!b.ok) throw new Error(b.error)
     const prod = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheets(b.bytes).Sheets['Theo san pham'])
     const r0 = prod.find((r) => r.ProductID === p.productId)!
     expect([r0['Dược sĩ có bán'], r0['Dược sĩ đạt'], r0['SL tính CMS']]).toEqual([2, 1, 1])
     // A3 dùng CÙNG helper (không tự đếm lại theo ngưỡng khác); không còn ngưỡng "có bán" riêng trong component / export.
+    // CMS-UI-1: bảng Theo sản phẩm dựng view-model ở lib/cms/productPresentation (vẫn qua cmsProductSalesStats).
     const a3 = read('components/cms/admin/CmsProgramResults.tsx')
-    expect(a3).toContain('cmsProductSalesStats(rows)')
-    for (const f of ['components/cms/admin/CmsProgramResults.tsx', 'lib/cms/exportResults.ts']) expect(read(f), f).not.toMatch(/baseQuantity\) > BigInt\(0\)\) (a\.)?sold/)
+    expect(read('lib/cms/productPresentation.ts')).toContain('cmsProductSalesStats(rows)')
+    for (const f of ['components/cms/admin/CmsProgramResults.tsx', 'components/cms/admin/CmsA3ProductTable.tsx', 'lib/cms/productPresentation.ts', 'lib/cms/exportResults.ts']) expect(read(f), f).not.toMatch(/baseQuantity\) > BigInt\(0\)\) (a\.)?sold/)
     expect(a3).toContain('Lượt = dược sĩ × SP đã bán đủ ≥ 1 đơn vị CMS')
   })
 })

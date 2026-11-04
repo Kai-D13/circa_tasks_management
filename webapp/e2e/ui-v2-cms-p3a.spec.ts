@@ -4,7 +4,6 @@ import { test, expect, type Page } from '@playwright/test'
 import { SUPER_STATE } from './authState'
 import { expectBlocked, expectGuardedCalls, trapWrites } from './fixtureGuard'
 import { cmsVnd } from '../lib/cms/display'
-import { CMS_FX_RUN } from '../lib/cms/fixturesResults'
 import { cmsFxLockPreview, cmsFxPayout } from '../lib/cms/fixturesPayout'
 import { cmsLockCodeLabel } from '../lib/cms/payoutView'
 
@@ -19,8 +18,6 @@ const SHOTS = process.env.CMS_SHOTS_DIR
 type Theme = 'light' | 'dark'
 const DEVICES = { m360: { width: 360, height: 800 }, m390: { width: 390, height: 844 }, d1280: { width: 1280, height: 900 } } as const
 type Dev = keyof typeof DEVICES
-const PID = '00000000-0000-4000-8000-000000000001'
-const END = '2026-11-14'
 
 async function open(page: Page, qs: string, theme: Theme = 'light') {
   await page.goto(`/ui-catalog/cms-v2/detail?${qs}`)
@@ -82,7 +79,7 @@ test.describe('ui v2 CMS P3a — hành vi khối Chốt kỳ / Số đã chốt 
 
   test('sẵn sàng: tổng = Σ kết quả cùng run, giả định QA có nhãn, hộp xác nhận "không thể mở lại"; xác nhận / kiểm tra lại bị chặn, 0 request ghi', async ({ page }) => {
     const writes = await trapWrites(page)
-    const pv = cmsFxLockPreview('ready', PID, END)!
+    const pv = cmsFxLockPreview('ready')! // CMS-UI-1: chương trình QA hết kỳ của kịch bản (PG8)
     await open(page, 'p3=ready')
     const panel = page.locator('main [data-cms-lock-panel]')
     await expect(panel).toHaveAttribute('data-cms-lock-panel', 'ready')
@@ -112,7 +109,7 @@ test.describe('ui v2 CMS P3a — hành vi khối Chốt kỳ / Số đã chốt 
     await page.locator('main [data-cms-lock-open]').click()
     const dlg = page.getByRole('dialog')
     const ack = dlg.locator('[data-cms-lock-ack]')
-    await expect(dlg).toContainText('Lý do xác nhận 7 dòng chưa gán')
+    await expect(dlg).toContainText(`Lý do xác nhận ${cmsFxLockPreview('ack')!.unassignedLines} dòng chưa gán`)
     await expect(dlg.locator('[data-cms-lock-confirm]')).toBeDisabled()
     await ack.fill('   ngắn    ')
     await expect(dlg.locator('[data-cms-lock-confirm]')).toBeDisabled()
@@ -142,14 +139,18 @@ test.describe('ui v2 CMS P3a — hành vi khối Chốt kỳ / Số đã chốt 
 
   test('số đã chốt (super): tổng toàn chương trình = Σ dòng, nhãn QA không chi trả, lý do lúc chốt, danh sách đủ dòng, link xuất ghim run; không còn khối Chốt kỳ', async ({ page }) => {
     const writes = await trapWrites(page)
-    const po = cmsFxPayout('locked', PID)!
+    const po = cmsFxPayout('locked')! // CMS-UI-1: chương trình QA đã chốt của kịch bản (PG9)
     await open(page, 'p3=locked')
     const main = page.locator('main [data-cms-payout]')
     await expect(main.locator('[data-cms-payout-total]')).toHaveText(cmsVnd(po.scopeTotal))
     await expect(main).toContainText('Tổng toàn chương trình')
     await expect(main).toContainText('QA — không chi trả')
     await expect(main).toContainText(po.super!.ackReason!)
-    await expect(page.locator('main [data-cms-payout-export]')).toHaveAttribute('href', `/api/export/cms/payout?program=${PID}&run=${CMS_FX_RUN}`)
+    // r2: trong fixture là nút (không href endpoint thật); route thật giữ link /api/export/cms/payout?program=…&run=… (kiểm nguồn).
+    await expect(page.locator('main [data-cms-payout-export]')).toHaveJSProperty('tagName', 'BUTTON')
+    expect(await page.locator('main [data-cms-payout-export]').getAttribute('href')).toBeNull()
+    await page.locator('main [data-cms-payout-export]').click()
+    await expectBlocked(page, 1, 'Xuất file chi trả (fixture)')
     await main.locator('[data-cms-payout-rows] > summary').click()
     await expect(main.locator('[data-cms-payout-row]')).toHaveCount(po.rows.length)
     await expect(page.locator('main [data-cms-lock-panel]')).toHaveCount(0)
@@ -157,8 +158,8 @@ test.describe('ui v2 CMS P3a — hành vi khối Chốt kỳ / Số đã chốt 
   })
 
   test('số đã chốt (SM): tổng trong phạm vi, ít dòng hơn super, không email / không tổng toàn chương trình', async ({ page }) => {
-    const sm = cmsFxPayout('locked-sm', PID)!
-    const sup = cmsFxPayout('locked', PID)!
+    const sm = cmsFxPayout('locked-sm')!
+    const sup = cmsFxPayout('locked')!
     await open(page, 'p3=locked-sm')
     const main = page.locator('main [data-cms-payout]')
     await expect(main.locator('[data-cms-payout-total]')).toHaveText(cmsVnd(sm.scopeTotal))

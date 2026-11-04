@@ -16,6 +16,9 @@ import { CmsProgramListView } from '@/components/cms/admin/CmsProgramListView'
 // P2-c (I3): cờ CMS_EARNINGS_ENABLED ⇒ đọc kết quả (RPC 122, session — SM theo phạm vi) cho chương trình đang chạy / chờ chốt
 // kỳ (tối đa CMS_A1_MAX chương trình / lượt xem, chương trình thật trước QA); vượt trần ⇒ ô tổng '—' + cảnh báo (không tổng
 // thiếu); OFF ⇒ không gọi RPC, P1 nguyên trạng.
+// CMS-UI-1 (PM 04/11 §6.4): thêm chương trình ĐÃ CHỐT (run đóng băng qua CHÍNH cmsLoadResults / RPC 122 / session — không RPC,
+// migration hay service role mới) trong CÙNG trần CMS_A1_MAX: đang chạy / chờ chốt thật trước, đã chốt thật dùng phần còn lại, QA
+// cuối. Đã chốt không cộng vào hai ô tổng; chưa tải ⇒ '—' + link A3. SM: RLS / RPC phạm vi như cũ (Q-219).
 const CMS_A1_MAX = 30
 
 export default async function CmsProgramsPage({ searchParams }: { searchParams: Promise<{ status?: string; q?: string }> }) {
@@ -34,7 +37,7 @@ export default async function CmsProgramsPage({ searchParams }: { searchParams: 
   let p2: ReturnType<typeof cmsA1Results> | null = null
   if (res.ok && isCmsEarningsEnabled()) {
     const targets = res.data.map((p) => ({ id: p.id, display: cmsDisplayStatus(p, today), isTest: p.isTest, productCount: p.productCount }))
-      .filter((p) => p.display === 'running' || p.display === 'waiting_close')
+      .filter((p) => p.display === 'running' || p.display === 'waiting_close' || p.display === 'locked')
     const loads = await Promise.all(cmsA1LoadOrder(targets, CMS_A1_MAX).map(async (p) => [p.id, await cmsLoadResults(p.id, { started: true })] as const))
     p2 = cmsA1Results(targets, new Map<string, CmsResultsLoad>(loads))
   }

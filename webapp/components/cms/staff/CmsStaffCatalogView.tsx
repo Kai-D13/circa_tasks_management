@@ -7,7 +7,7 @@ import { CmsProductImage } from '@/components/cms/CmsProductImage'
 import { CmsTargetsSegment } from '@/components/cms/staff/CmsTargetsSegment'
 import { CmsProgramPicker } from '@/components/cms/staff/CmsProgramPicker'
 import {
-  CmsAmountBadge, CmsCardFilterTabs, CmsGateMeter, CmsNearGateCard, CmsResultsNotice, CmsStaffHero, CmsStoreHero, cmsCardTierText,
+  CmsAmountBadge, CmsCardFilterTabs, CmsGateMeter, CmsNearGateCard, CmsResultsNotice, CmsStaffHero, CmsStoreHero, cmsCardCountedNote, cmsCardTierText,
 } from '@/components/cms/staff/CmsStaffResults'
 import { CMS_GATE_HUE, CMS_GATE_LABEL, cmsDate, cmsVnd } from '@/lib/cms/display'
 import { cmsDaysLeft, cmsDisplayStatus } from '@/lib/cms/programStatus'
@@ -18,6 +18,7 @@ import {
 } from '@/lib/cms/resultUi'
 import type { CmsResultRowDto } from '@/lib/cms/resultView'
 import type { CmsProductView, CmsProgramRowView } from '@/lib/cms/server/catalog'
+import { cmsNavHref, type CmsNav } from '@/lib/cms/fixtureNav'
 
 // CMS P1-d · D1 `/targets?tab=cms` (UI §4.1; r2 U1 / U9 / U19; H5). Staff + QLCH xem DANH MỤC chương trình Sắp diễn ra /
 // Đang chạy của nhà thuốc hiện tại: SP, loại điều kiện, target cấu hình, thang `đ/unit_CMS`. Dùng chung route thật +
@@ -31,7 +32,7 @@ import type { CmsProductView, CmsProgramRowView } from '@/lib/cms/server/catalog
 
 export type CmsStaffKind = 'ok' | 'empty' | 'error' | 'no-store'
 
-export function CmsStaffCatalogView({ kind, programs, selected, products, today, manager, kpiTab, results = { kind: 'off' }, filter = 'all' }: {
+export function CmsStaffCatalogView({ kind, programs, selected, products, today, manager, kpiTab, results = { kind: 'off' }, filter = 'all', nav }: {
   kind: CmsStaffKind
   programs: CmsProgramRowView[]
   selected: CmsProgramRowView | null
@@ -42,6 +43,8 @@ export function CmsStaffCatalogView({ kind, programs, selected, products, today,
   kpiTab: boolean
   results?: CmsResultsLoad
   filter?: CmsCardFilter
+  /** Fixture: điều hướng trong /ui-catalog (route thật bỏ trống). */
+  nav?: CmsNav
 }) {
   const display = selected ? cmsDisplayStatus(selected, today) : null
   const left = selected ? cmsDaysLeft(selected, today) : null
@@ -65,13 +68,13 @@ export function CmsStaffCatalogView({ kind, programs, selected, products, today,
   const nearProduct = near ? products.find((p) => p.id === near.programProductId) : undefined
   const ownCatalog = withNumbers && !manager && loaded.rows.catalog.length > 0 ? cmsCatalogGateView(loaded.rows.catalog[0]) : null
   const storeCatalog = withNumbers && manager ? loaded.rows.catalog : null
-  const hrefFor = (f: CmsCardFilter) => `${cmsStaffHref(selected?.id)}${f === 'all' ? '' : `&f=${f}`}`
+  const hrefFor = (f: CmsCardFilter) => cmsNavHref(nav, `${cmsStaffHref(selected?.id)}${f === 'all' ? '' : `&f=${f}`}`)
 
   return (
     <div data-ui-v2="page" data-layout-width="centered" data-cms-staff={kind} data-cms-results={results.kind} className="mx-auto max-w-2xl p-4 space-y-4 v2:space-y-3">
       <div className="space-y-3">
         <h1 className="text-[20px] font-bold leading-tight">{kpiTab ? 'Mục tiêu' : 'CMS sản phẩm'}</h1>
-        {kpiTab && <CmsTargetsSegment active="cms" />}
+        {kpiTab && <CmsTargetsSegment active="cms" nav={nav} />}
       </div>
 
       {kind === 'error' ? (
@@ -82,7 +85,7 @@ export function CmsStaffCatalogView({ kind, programs, selected, products, today,
         <EmptyState className="py-12 rounded-v2-panel border border-dashed border-input bg-card" icon={Boxes} title="Hiện chưa có chương trình CMS cho nhà thuốc của bạn" />
       ) : (
         <>
-          <CmsProgramPicker programs={programs} selectedId={selected.id} today={today} />
+          <CmsProgramPicker programs={programs} selectedId={selected.id} today={today} nav={nav} />
           <p data-cms-staff-note className="text-[13px] text-muted-foreground">
             {display === 'upcoming'
               ? <>Chương trình bắt đầu {cmsDate(selected.startDate)} — xem trước danh mục để chuẩn bị tư vấn.</>
@@ -94,9 +97,9 @@ export function CmsStaffCatalogView({ kind, programs, selected, products, today,
             {manager && !loaded && ' Tài khoản cửa hàng chỉ xem danh mục.'}
           </p>
 
-          <CmsResultsNotice results={results} reloadHref={cmsStaffHref(selected.id)} />
-          {loaded && !manager && <CmsStaffHero summary={withNumbers ? cmsStaffSummary(rows, products.length) : null} header={loaded.header} programId={selected.id} display={display} />}
-          {loaded && manager && <CmsStoreHero summary={withNumbers ? cmsStoreSummary(rows, products.length) : null} header={loaded.header} programId={selected.id} display={display} />}
+          <CmsResultsNotice results={results} reloadHref={cmsNavHref(nav, cmsStaffHref(selected.id))} />
+          {loaded && !manager && <CmsStaffHero summary={withNumbers ? cmsStaffSummary(rows, products.length) : null} header={loaded.header} programId={selected.id} display={display} nav={nav} />}
+          {loaded && manager && <CmsStoreHero summary={withNumbers ? cmsStoreSummary(rows, products.length) : null} header={loaded.header} programId={selected.id} display={display} nav={nav} />}
           {near && nearProduct && <CmsNearGateCard near={near} productName={nearProduct.nameSnapshot} unit={nearProduct.unitCms} />}
 
           {catalog.length > 0 && (
@@ -124,7 +127,7 @@ export function CmsStaffCatalogView({ kind, programs, selected, products, today,
                 const tot = totals?.get(p.id) ?? null
                 return (
                   <li key={p.id}>
-                    <Link href={cmsProductHref(p.id)} data-cms-staff-product={p.productId} data-cms-card-tone={card?.tone} className="flex min-h-[44px] gap-3 rounded-v2-panel border bg-card p-3">
+                    <Link href={cmsNavHref(nav, cmsProductHref(p.id))} data-cms-staff-product={p.productId} data-cms-card-tone={card?.tone} className="flex min-h-[44px] gap-3 rounded-v2-panel border bg-card p-3">
                       <CmsProductImage url={p.imageUrlSnapshot} name={p.nameSnapshot} size={48} />
                       <div className="min-w-0 flex-1 space-y-1">
                         <span className="flex items-start justify-between gap-2">
@@ -134,7 +137,7 @@ export function CmsStaffCatalogView({ kind, programs, selected, products, today,
                         </span>
                         <span className="flex flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground">
                           <TagBadge hue={CMS_GATE_HUE[p.gmvBasis]}>{CMS_GATE_LABEL[p.gmvBasis]}</TagBadge>
-                          {card && <span className="tabular-nums" data-cms-sold>Đã bán {card.soldText} {p.unitCms}</span>}
+                          {card && <span className="tabular-nums" data-cms-sold>Đã bán {card.soldText} {p.unitCms}{cmsCardCountedNote(card) ? ` (${cmsCardCountedNote(card)})` : ''}</span>}
                           {tot && <span className="tabular-nums" data-cms-sold>Đã bán {tot.soldText} {p.unitCms} · {tot.staffWithSales} dược sĩ</span>}
                           {!card && !tot && p.gmvBasis === 'product' && <span className="tabular-nums">Target {cmsVnd(p.targetGmv)}</span>}
                           {!card && !tot && p.gmvBasis === 'catalog' && <span>Theo target danh mục</span>}

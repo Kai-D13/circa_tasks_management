@@ -45,6 +45,14 @@ Các quyết định r1 vẫn giữ: D2 (CMS cho từng dược sĩ bán, không
 | **Q-218** | (Dev nêu 03/11) Lối xem số sau hết kỳ / đã chốt cho dược sĩ / QLCH. | **PM 03/11 (review P3a r1 §4): thuộc baseline blueprint P3 §3 — không cần stakeholder; đã làm trong P3a r2** (D1 nhóm "Đã kết thúc", D2 / D3 đọc run đóng băng). Màn riêng / thiết kế mở rộng (nếu có) là yêu cầu sau. Giữ mã để truy vết, không dùng lại |
 | **Q-219** | (Dev nêu 03/11) Lọc "Đã chốt" cho SM trên A1. | **PM 03/11 (review P3a r1 §4): thuộc baseline — đã làm trong P3a r2** (SM có lọc Đã chốt; 123 cho SM đọc `locked` trong phạm vi). Giữ mã để truy vết, không dùng lại |
 
+## 2b. Nguồn BI (04/11/2026)
+
+| Mã | Quyết định |
+|---|---|
+| S-BI-1 | **[Operator 04/11]** Hai view BI: `lakehouse-prod-394907.buymed_tech.tech__dim_circa_growth_cms_order` (dòng đơn) và `…tech__dim_circa_growth_cms_product_master`. BI **giữ tên cột `employee_email`**; **[PM 04/11 — work order tích hợp nguồn §2.1]** app đổi tên tại adapter `CAST(employee_email AS STRING) AS seller_email`, không đổi DB / RPC / engine / file đối soát; SQL xuất N4b lọc trên cột vật lý `employee_email`. Thay yêu cầu "BI đổi tên email" trong probe 04/11. |
+| S-BI-2 | **[Operator 04/11]** BI bổ sung `order_line_id` (= `item.id`, duy nhất trên view) ~~và `is_active` (BOOL thật, giữ cả SP ngừng bán)~~. App **không** giả line ID bằng đơn + SP~~, **không** điền `is_active = true`~~; thiếu cột ⇒ lỗi nguồn. **Phần `is_active` bị thay bởi S-BI-3**; phần `order_line_id` giữ nguyên (probe 04/11 khuya: 5.716 / 5.716 duy nhất). |
+| S-BI-3 | **[Operator 04/11 khuya — PM `planning/reviews/2026-11-04-cms-bi-product-master-pm.md` §2]** Bỏ yêu cầu BI có `is_active`; không cần cảnh báo SP ngừng hoạt động. App tạo hằng tương thích `CAST(TRUE AS STRING) AS is_active` ở adapter (view 6 cột vật lý, output chuẩn vẫn 7 cột), bỏ cảnh báo `PRODUCT_INACTIVE` khi import; không migration. Hằng nghĩa là "CMS không kiểm trạng thái kinh doanh SP", không phải bằng chứng SP đang bán; không áp cho trạng thái nhà thuốc / users. Product Master vẫn phải **một dòng / `product_id`** (trùng ⇒ held `DUPLICATE_PRODUCT`, app không chọn MAX / MIN / dòng đầu); BI được phép để `reference_price` / `price_unit` NULL khi chưa xác định giá đúng đơn vị. |
+
 ## 3. Quyết định PM tại review intake 01/11 (phần đã GO)
 
 | Mã | Quyết định |

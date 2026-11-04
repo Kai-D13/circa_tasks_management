@@ -34,3 +34,9 @@ export function useFixtureActionBlocked(): () => boolean {
     return true
   }, [block])
 }
+
+/** Đang nằm trong KpiFixtureBoundary (fixture /ui-catalog)? — chỉ ĐỌC context, không chặn / không đếm. Dùng để không render href tới
+ *  endpoint thật trong fixture (CMS-UI-1 r2). Ngoài boundary (route thật) ⇒ false. */
+export function useInFixtureBoundary(): boolean {
+  return useContext(FixtureBlockContext) !== null
+}
