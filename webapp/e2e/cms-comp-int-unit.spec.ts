@@ -317,7 +317,7 @@ test.describe('COMP-INT — lõi CLI chứng nhận @desktop', () => {
     const m = { runId: QA, users: [{ id: ACTOR, role: 'admin', markerExpiresAt: TS }], programs: [{ id: P, status: 'active', isTest: true }] } as unknown as CmsQaRunManifest
     const f = (e: A.CmsAttestOp) => ({ name: `${e.operationId}.json`, text: JSON.stringify(e) })
     const done = op({ status: 'done', finishedAt: TS, result: { code: null, attestationId: ATT, already: false } })
-    const rowA = { id: ATT, program_id: P, program_is_test: true, attested_by: ACTOR, idem_key: uid(500), attested_in_run: true, revoked_by: null, revoke_idem_key: null, revoked_in_run: false }
+    const rowA = { id: ATT, program_id: P, run_id: RUN, program_is_test: true, attested_by: ACTOR, idem_key: uid(500), attested_in_run: true, revoked_by: null, revoke_idem_key: null, revoked_in_run: false }
     const opts = { pidAlive: () => false, attestTable: true, programIdsInRun: [P] }
     expect(A.cmsQaAttestCloseCheck(m, [f(done)], [rowA], opts).reasons).toEqual([])
     expect(A.cmsQaAttestCloseCheck(m, [f(op())], [], opts).reasons.join()).toMatch(/không rõ kết thúc/)
@@ -338,6 +338,195 @@ test.describe('COMP-INT — lõi CLI chứng nhận @desktop', () => {
     expect(A.cmsQaExportsCloseCheck(m, [xf({ ...x, qaRunId: 'cms-qa-20261105zzzz-ffff' })], () => false).reasons.join()).toMatch(/run khác/)
     expect(A.cmsQaExportsCloseCheck(m, [xf({ ...x, status: 'done' })], () => false).reasons.join()).toMatch(/hỏng/)
     expect(JSON.stringify(x)).not.toMatch(/@/)
+  })
+
+  // ── r4 — PM COMPINT-P1-1: revoke gắn đúng chương trình; sổ / reconcile / close đối chiếu đủ bộ ──
+  test('r4 P1-1 revoke: đích thật (pg-meta) phải là --program; lịch sử phiên super phải có đúng id + run; sổ revoke ghi run', () => {
+    const t = { id: ATT, program_id: P, run_id: RUN, program_is_test: true }
+    expect(A.cmsAttestRevokeTargetCheck({ programId: P, attestationId: ATT, rows: [t] })).toEqual({ ok: true, target: { id: ATT, programId: P, runId: RUN, programIsTest: true } })
+    expect(A.cmsAttestRevokeTargetCheck({ programId: P, attestationId: ATT, rows: [] })).toMatchObject({ ok: false, code: 'ATTEST_NOT_FOUND' })
+    // Tái hiện PM: --program = Q, chứng nhận của P ⇒ chặn TRƯỚC guard / dry-run / RPC.
+    const Q = uid(77)
+    expect(A.cmsAttestRevokeTargetCheck({ programId: Q, attestationId: ATT, rows: [t] })).toMatchObject({ ok: false, code: 'ATTEST_PROGRAM_MISMATCH' })
+    for (const bad of [[{ ...t, id: ATT2 }], [t, t], [{ ...t, run_id: 'x' }], [{ ...t, program_is_test: 'true' }]]) {
+      expect(A.cmsAttestRevokeTargetCheck({ programId: P, attestationId: ATT, rows: bad }).ok).toBe(false)
+    }
+    const target = { id: ATT, programId: P, runId: RUN, programIsTest: true }
+    expect(A.cmsAttestRevokeHistoryCheck(target, [{ id: ATT2, run_id: RUN }, { id: ATT, run_id: RUN, live: true }])).toEqual({ ok: true })
+    for (const h of [[], null, { id: ATT }, [{ id: ATT2, run_id: RUN }], [{ id: ATT, run_id: uid(66) }], [{ id: ATT, run_id: RUN }, { id: ATT, run_id: RUN }]]) {
+      expect(A.cmsAttestRevokeHistoryCheck(target, h)).toMatchObject({ ok: false, code: 'ATTEST_NOT_IN_PROGRAM' })
+    }
+    expect(A.cmsAttestTargetSql(ATT)).toMatch(/WHERE a\.id = '00000000-0000-4000-8000-000000000003'::uuid/)
+    expect(() => A.cmsAttestTargetSql("x' OR true --")).toThrow()
+    // Sổ revoke mới BẮT BUỘC có run; sổ cũ (trước r4, run null) vẫn đọc được.
+    const rv = { operationId: 'a-0123456789ac', op: 'revoke' as const, qaRunId: null, host: 'h', pid: 1, programId: P, runId: RUN, attestationId: ATT, idemKey: uid(501), payloadSha256: null, actorId: ACTOR, startedAt: TS }
+    expect(A.newCmsAttestOp(rv).runId).toBe(RUN)
+    expect(() => A.newCmsAttestOp({ ...rv, runId: null })).toThrow()
+    expect(() => A.newCmsAttestOp({ ...rv, payloadSha256: H('a') })).toThrow()
+    expect(A.parseCmsAttestOp(JSON.stringify({ ...A.newCmsAttestOp(rv), runId: null })).ok).toBe(true)
+    // Reconcile revoke: đúng id + chương trình + người nhưng run khác sổ ⇒ không tự nhận.
+    const now = Date.parse(TS) + 120_000
+    const probe = { can_see_all: true, hidden: 0, inflight: 0 }
+    const e = { ...A.newCmsAttestOp(rv), status: 'unknown' as const, finishedAt: TS, result: { code: 'TRANSPORT', attestationId: null, already: false } }
+    const row = { id: ATT, program_id: P, run_id: RUN, attested_by: ACTOR, revoked_by: ACTOR }
+    expect(A.cmsAttestReconcileCheck(e, [row], { nowMs: now, pidAlive: false, probe })).toEqual({ ok: true, found: true, attestationId: ATT })
+    expect(A.cmsAttestReconcileCheck(e, [{ ...row, run_id: uid(66) }], { nowMs: now, pidAlive: false, probe }).ok).toBe(false)
+    expect(A.cmsAttestReconcileCheck(e, [{ ...row, program_id: Q }], { nowMs: now, pidAlive: false, probe }).ok).toBe(false)
+    expect(A.cmsAttestReconcileCheck(e, [{ ...row, id: ATT2 }], { nowMs: now, pidAlive: false, probe }).ok).toBe(false)
+  })
+
+  test('r4 P1-1 close: sổ phải khớp ĐỦ BỘ (loại, khoá, người, chương trình, run, id) — đúng một khoá / một id nhưng sai đích ⇒ ĐỎ', () => {
+    const QA = 'cms-qa-20261105abcd-1a2b'
+    const m = { runId: QA, users: [{ id: ACTOR, role: 'admin', markerExpiresAt: TS }], programs: [{ id: P, status: 'active', isTest: true }] } as unknown as CmsQaRunManifest
+    const f = (e: A.CmsAttestOp) => ({ name: `${e.operationId}.json`, text: JSON.stringify(e) })
+    const opts = { pidAlive: () => false, attestTable: true, programIdsInRun: [P] }
+    const base = { qaRunId: QA, host: 'h', pid: 4242, actorId: ACTOR, startedAt: TS }
+    const att = A.newCmsAttestOp({ ...base, operationId: 'a-0123456789ab', op: 'attest', programId: P, runId: RUN, attestationId: null, idemKey: uid(500), payloadSha256: H('f') })
+    const attDone = { ...att, status: 'done' as const, finishedAt: TS, result: { code: null, attestationId: ATT, already: false } }
+    const rv = A.newCmsAttestOp({ ...base, operationId: 'a-0123456789ac', op: 'revoke', programId: P, runId: RUN, attestationId: ATT, idemKey: uid(501), payloadSha256: null })
+    const rvDone = { ...rv, status: 'done' as const, finishedAt: TS, result: { code: null, attestationId: ATT, already: false } }
+    const row = { id: ATT, program_id: P, run_id: RUN, program_is_test: true, attested_by: ACTOR, idem_key: uid(500), attested_in_run: true,
+      revoked_by: ACTOR, revoke_idem_key: uid(501), revoked_in_run: true }
+    expect(A.cmsQaAttestCloseCheck(m, [f(attDone), f(rvDone)], [row], opts).reasons).toEqual([])
+    // Cùng khoá + người nhưng sổ ghi chương trình / run / id khác ⇒ không khẳng định dòng DB, và sổ không có dòng khớp.
+    const variants: [string, A.CmsAttestOp][] = [
+      ['attest chương trình khác', { ...attDone, programId: uid(77) }],
+      ['attest run khác', { ...attDone, runId: uid(66) }],
+      ['attest id khác', { ...attDone, result: { code: null, attestationId: ATT2, already: false } }],
+      ['revoke chương trình khác', { ...rvDone, programId: uid(77) }],
+      ['revoke run khác', { ...rvDone, runId: uid(66) }],
+      ['revoke chứng nhận khác', { ...rvDone, attestationId: ATT2, result: { code: null, attestationId: ATT2, already: false } }],
+      ['revoke ghi thành attest', { ...rvDone, op: 'attest', payloadSha256: H('f') }],
+    ]
+    for (const [label, bad] of variants) {
+      // thay ĐÚNG mục sổ của thao tác đang thử (mục kia giữ nguyên, hợp lệ)
+      const files = label.startsWith('attest') ? [f(bad), f(rvDone)] : [f(attDone), f(bad)]
+      const r = A.cmsQaAttestCloseCheck(m, files, [row], opts).reasons.join('\n')
+      expect(r, label).toMatch(/không có thao tác khẳng định/)
+      expect(r, label).toMatch(/không có dòng khớp đủ bộ/)
+    }
+    // Sổ revoke trước r4 (run null) vẫn khớp khi các trường còn lại đúng.
+    expect(A.cmsQaAttestCloseCheck(m, [f(attDone), f({ ...rvDone, runId: null })], [row], opts).reasons).toEqual([])
+    expect(A.cmsQaRunAttestSql('2026-11-05T00:00:00.000Z')).toMatch(/a\.run_id::text AS run_id/)
+    expect(A.cmsAttestOpMatchesRow(attDone, 'attest', row)).toBe(true)
+    expect(A.cmsAttestOpMatchesRow(attDone, 'revoke', row)).toBe(false)
+  })
+
+  // ── r4 — PM COMPINT-P1-2: guard hai pha (deps giả — đồng hồ / IO điều khiển được) ──
+  const QA_RUN = 'cms-qa-20261105abcd-1a2b'
+  const GM = {
+    kind: 'cms-qa-run', version: 1, runId: QA_RUN, status: 'open', mode: 'manual-localhost', host: 'qa.invalid', startedAt: '2026-11-05T00:00:00.000Z',
+    gitHead: 'a'.repeat(40), gitTree: 'b'.repeat(40), buildId: 'b', port: 12345, serverPid: 111, launcherPid: 112, serverNotStopped: null,
+    users: [{ id: ACTOR, role: 'admin', markerExpiresAt: TS }], programs: [{ id: P, status: 'active', isTest: true }], closedAt: null, closeCheck: null,
+  } as unknown as CmsQaRunManifest
+  const GM_TEXT = JSON.stringify(GM, null, 2)
+  function guardWorld() {
+    let t = 5_000_000
+    const w = {
+      text: GM_TEXT as string | null, alive: new Set([111, 112]), port: true, git: { treeClean: true, gitHead: 'a'.repeat(40), gitTree: 'b'.repeat(40) } as { treeClean: boolean; gitHead: string; gitTree: string } | null,
+      remaining: 3600, readMs: 0, fail: false, onRead: (_n: number, _sql: string) => {}, reads: [] as { sql: string; timeoutMs: number }[],
+    }
+    const d: A.CmsAttestGuardDeps = {
+      now: () => t,
+      manifestText: () => w.text,
+      parseManifest: (s) => { try { return JSON.parse(s) as CmsQaRunManifest } catch { return null } },
+      git: () => w.git,
+      pidAlive: (pid) => w.alive.has(pid),
+      portOpen: async () => w.port,
+      read: async (sql, timeoutMs) => {
+        w.reads.push({ sql, timeoutMs })
+        w.onRead(w.reads.length, sql)
+        t += w.readMs
+        if (w.fail) throw new Error('pg-meta giả lỗi chứa fake@example.invalid')
+        return /cms_qa_access/.test(sql) ? [{ user_id: ACTOR, user_exists: true, active: true, remaining_s: w.remaining }]
+          : [{ id: P, is_test: true, status: 'active', qa_created_in_run: false }]
+      },
+    }
+    return { w, d, now: () => t, advance: (ms: number) => { t += ms } }
+  }
+  const gIn = (deadlineAt: number) => ({ manifestText: GM_TEXT, manifest: GM, confirmRun: QA_RUN, host: 'qa.invalid', actorId: ACTOR, programId: P, deadlineAt })
+
+  test('r4 P1-2 guard: đạt ⇒ final() ĐỒNG BỘ trả phần ngân sách còn lại; timeout đọc DB ≤ 10 s và chừa ≥ 5 s để gửi', async () => {
+    const { w, d, now } = guardWorld()
+    w.readMs = 300
+    const dl = now() + A.CMS_ATTEST_QA_BUDGET_MS
+    const g = await A.cmsAttestQaGuard(d, gIn(dl))
+    const f = g.final()
+    expect(f instanceof Promise).toBe(false)
+    expect(f).toEqual({ ok: true, remainMs: dl - now() })
+    expect(w.reads).toHaveLength(2)
+    for (const r of w.reads) expect(Number.isInteger(r.timeoutMs) && r.timeoutMs >= 1_000 && r.timeoutMs <= A.CMS_ATTEST_GUARD_IO_MS).toBe(true)
+    // ngân sách gần cạn: timeout đọc = phần còn lại TRỪ phần chừa để gửi.
+    const s = guardWorld()
+    const g2 = await A.cmsAttestQaGuard(s.d, gIn(s.now() + 12_000))
+    expect(s.w.reads[0].timeoutMs).toBe(7_000)
+    expect(g2.final()).toMatchObject({ ok: true })
+  })
+
+  test('r4 P1-2 guard: tái hiện PM — launcher chết trong lúc query chương trình, marker 600 s trả chậm 1,2 s ⇒ CHẶN', async () => {
+    const { w, d, now } = guardWorld()
+    w.remaining = 600
+    w.onRead = (n) => { if (n === 1) w.alive.delete(112) }
+    w.readMs = 600
+    const f = (await A.cmsAttestQaGuard(d, gIn(now() + A.CMS_ATTEST_QA_BUDGET_MS))).final()
+    expect(f).toMatchObject({ ok: false, code: 'GUARD_BLOCKED' })
+    expect(JSON.stringify(f)).toMatch(/launcher \/ server QA/)
+    // Chỉ marker: launcher sống, DB đo 600 s nhưng trả sau 1,2 s ⇒ trừ thời gian chờ ⇒ dưới sàn 10 phút.
+    const s = guardWorld()
+    s.w.remaining = 600
+    s.w.readMs = 600
+    const f2 = (await A.cmsAttestQaGuard(s.d, gIn(s.now() + A.CMS_ATTEST_QA_BUDGET_MS))).final()
+    expect(f2).toMatchObject({ ok: false, code: 'GUARD_BLOCKED' })
+    expect(JSON.stringify(f2)).toMatch(/marker còn 9 phút < ngưỡng canh 10 phút/)
+    const s3 = guardWorld()
+    s3.w.remaining = 602
+    s3.w.readMs = 600
+    expect((await A.cmsAttestQaGuard(s3.d, gIn(s3.now() + A.CMS_ATTEST_QA_BUDGET_MS))).final()).toMatchObject({ ok: true })
+  })
+
+  test('r4 P1-2 guard: đổi trạng thái SAU IO (trước final) ⇒ final đọc lại và CHẶN — manifest / Git / pid server / cổng', async () => {
+    const cases: [string, (w: ReturnType<typeof guardWorld>['w']) => void, RegExp][] = [
+      ['manifest đổi byte', (w) => { w.text = GM_TEXT.replace('"open"', '"closed"') }, /manifest run QA không còn/],
+      ['manifest bị xoá', (w) => { w.text = null }, /manifest run QA không còn/],
+      ['launcher ghi cờ server chưa dừng', (w) => { w.text = JSON.stringify({ ...GM, serverNotStopped: { pid: 111, at: TS } }, null, 2) }, /manifest run QA không còn/],
+      ['HEAD đổi', (w) => { w.git = { treeClean: true, gitHead: 'c'.repeat(40), gitTree: 'b'.repeat(40) } }, /HEAD \/ tree/],
+      ['cây bẩn', (w) => { w.git = { treeClean: false, gitHead: 'a'.repeat(40), gitTree: 'b'.repeat(40) } }, /cây Git không sạch/],
+      ['Git lỗi', (w) => { w.git = null }, /không đọc được Git/],
+      ['server chết', (w) => { w.alive.delete(111) }, /launcher \/ server QA/],
+    ]
+    for (const [label, mutate, re] of cases) {
+      const { w, d, now } = guardWorld()
+      const g = await A.cmsAttestQaGuard(d, gIn(now() + A.CMS_ATTEST_QA_BUDGET_MS))
+      mutate(w)
+      const f = g.final()
+      expect(f.ok, label).toBe(false)
+      expect(JSON.stringify(f), label).toMatch(re)
+    }
+    const { w, d, now } = guardWorld()
+    w.port = false
+    expect(JSON.stringify((await A.cmsAttestQaGuard(d, gIn(now() + A.CMS_ATTEST_QA_BUDGET_MS))).final())).toMatch(/launcher \/ server QA/)
+  })
+
+  test('r4 P1-2 guard: ngân sách — cạn từ đầu ⇒ 0 IO; DB chậm ăn hết ngân sách ⇒ DEADLINE; DB lỗi ⇒ GUARD_IO không lộ lỗi thô; cục bộ hỏng ⇒ 0 IO', async () => {
+    const a = guardWorld()
+    expect((await A.cmsAttestQaGuard(a.d, gIn(a.now() + 4_999))).final()).toMatchObject({ ok: false, code: 'GUARD_DEADLINE' })
+    expect(a.w.reads).toHaveLength(0)
+    const b = guardWorld()
+    b.w.readMs = 28_000
+    expect((await A.cmsAttestQaGuard(b.d, gIn(b.now() + A.CMS_ATTEST_QA_BUDGET_MS))).final()).toMatchObject({ ok: false, code: 'GUARD_DEADLINE' })
+    const b2 = guardWorld() // đọc thứ nhất đã ăn gần hết ⇒ không gửi lượt đọc thứ hai
+    b2.w.readMs = 56_000
+    expect((await A.cmsAttestQaGuard(b2.d, gIn(b2.now() + A.CMS_ATTEST_QA_BUDGET_MS))).final()).toMatchObject({ ok: false, code: 'GUARD_DEADLINE' })
+    expect(b2.w.reads).toHaveLength(1)
+    const c = guardWorld()
+    c.w.fail = true
+    const fc = (await A.cmsAttestQaGuard(c.d, gIn(c.now() + A.CMS_ATTEST_QA_BUDGET_MS))).final()
+    expect(fc).toMatchObject({ ok: false, code: 'GUARD_IO' })
+    expect(JSON.stringify(fc)).not.toMatch(/example\.invalid/)
+    const e = guardWorld()
+    e.w.alive.delete(112)
+    expect((await A.cmsAttestQaGuard(e.d, gIn(e.now() + A.CMS_ATTEST_QA_BUDGET_MS))).final()).toMatchObject({ ok: false, code: 'GUARD_BLOCKED' })
+    expect(e.w.reads).toHaveLength(0)
   })
 
   test('QA chốt: --expect-attestation chỉ cho lock, phải UUID; sổ chốt ghi id chứng nhận', () => {

@@ -21,20 +21,30 @@
 //   mới dựng payload. Mặc định DRY-RUN (in payload tóm tắt, không gọi DB ghi). --write: cần --idem do operator cấp (KHÔNG tự sinh) +
 //   --expect-host đúng; ghi Ý ĐỊNH vào sổ (a-….json, độc quyền) TRƯỚC request; mất phản hồi ⇒ KHÔNG RÕ (rc 1) — reconcile đọc DB theo
 //   đúng khoá idem; gọi lại chỉ bằng CÙNG --idem + cùng file (DB trả already).
+// · revoke (r4 — PM COMPINT-P1-1): TRƯỚC khi chọn guard / dry-run / ý định / RPC, chứng nhận phải thuộc ĐÚNG --program: đọc chương trình /
+//   run thật của chứng nhận (pg-meta chỉ đọc) rồi, sau guard preflight, lịch sử chứng nhận của --program bằng PHIÊN super
+//   (rpc_cms_source_attestations — kiểm super + marker QA). Lệch ⇒ rc 2, 0 RPC ghi. Sổ revoke ghi cả run của chứng nhận.
 // · Run QA (--confirm-run): chỉ chương trình is_test thuộc run, trong run đang mở (gate PROCESS / host / candidate / launcher / marker
 //   như writer QA), actor (claim sub của token) phải là tài khoản QA vai admin của run; sổ nằm trong qa-artifacts/cms-qa/<run>.writers/
 //   ⇒ close của launcher đối chiếu. Ngoài run QA (--ledger-dir): CẤM chương trình is_test.
-// In: chế độ, host, id che, số đếm, hash — không email, không token, không lỗi thô. Thoát: 0 đạt · 1 DB từ chối / không rõ / không
-// MATCH · 2 sai tham số / gate (trước mọi IO ghi).
+//   Guard hai pha (r4 — PM COMPINT-P1-2, lõi cmsAttestQaGuard): preflight, TRƯỚC MỖI trang export và ngay trước ghi ý định / RPC ghi:
+//   ngân sách đặt trước guard; đọc DB rồi thăm cổng; bước cuối ĐỒNG BỘ đọc lại manifest / Git / pid và trừ thời gian chờ khỏi marker;
+//   không còn await giữa bước cuối và ghi ý định / gửi request; timeout request tính lại từ phần ngân sách còn lại.
+// In: chế độ, host, id che, số đếm, hash — không email, không token, không lỗi thô (r4 — PM COMPINT-P1-3: lỗi ngoài dự kiến tới
+// entrypoint chỉ in mã CMS_ATTEST_INTERNAL, rc 1; đã ghi ý định ⇒ sổ giữ nguyên, nhắc reconcile). Thoát: 0 đạt · 1 DB từ chối / không
+// rõ / không MATCH / guard không đọc được DB hoặc hết ngân sách · 2 sai tham số / gate / guard chặn (trước mọi IO ghi).
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { ROOT, die2, exitWith, loadTooling, mergedEnv, parseArgs, pgMeta, pidAlive, portOpen, readEnvFileText, rethrowCliExit, runCli, supabaseHost } from './lib-cms-ops.mjs'
+import { CliExit, ROOT, die2, loadTooling, mergedEnv, parseArgs, pgMeta, pidAlive, portOpen, readEnvFileText, rethrowCliExit, runCli, supabaseHost } from './lib-cms-ops.mjs'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+const INTERNAL = 'CMS_ATTEST_INTERNAL' // = A.CMS_ATTEST_INTERNAL (lõi có thể chưa nạp khi lỗi xảy ra)
 const json = (o) => JSON.stringify(o, null, 2) + '\n'
 const writeAtomic = (file, obj) => { const tmp = `${file}.tmp`; fs.writeFileSync(tmp, json(obj)); fs.renameSync(tmp, file) }
+/** operationId khi đã ghi Ý ĐỊNH (request ghi có thể đã gửi) — entrypoint nhắc reconcile nếu lỗi ngoài dự kiến sau đó. */
+let pendingIntent = null
 
 /** Thư mục cha gần nhất có `.git` ⇒ đường dẫn nằm trong một cây Git. */
 function gitTreeOf(p) {
@@ -79,16 +89,17 @@ async function main() {
   if (!host) die2('thiếu / sai NEXT_PUBLIC_SUPABASE_URL')
   if (!env.SUPABASE_SERVICE_ROLE_KEY) die2('thiếu SUPABASE_SERVICE_ROLE_KEY (đọc chỉ đọc qua pg-meta)')
   const mask = T.maskCmsUuid
-  const ro = (q) => pgMeta(env, T.pgMetaReadOnly(q))
+  const ro = (q, opts) => pgMeta(env, T.pgMetaReadOnly(q), opts)
 
   // ── Chế độ: run QA (--confirm-run) hoặc vận hành (--ledger-dir) ──
   const qaRun = a.values['--confirm-run']
   const ledgerArg = a.values['--ledger-dir']
   if ((qaRun === undefined) === (ledgerArg === undefined)) die2('cần ĐÚNG MỘT trong --confirm-run=<runId QA> | --ledger-dir=<thư mục sổ NGOÀI Git>')
   const MARKER = path.join(ROOT, G.CMS_QA_MARKER)
-  let m = null, ledgerDir
+  let m = null, markerText = null, ledgerDir
   if (qaRun !== undefined) {
-    const p = fs.existsSync(MARKER) ? T.parseCmsQaManifest(fs.readFileSync(MARKER, 'utf8')) : null
+    markerText = fs.existsSync(MARKER) ? fs.readFileSync(MARKER, 'utf8') : null
+    const p = markerText !== null ? T.parseCmsQaManifest(markerText) : null
     if (!p || !p.ok || p.value.status !== 'open') die2(`không có run QA đang mở (${G.CMS_QA_MARKER})`)
     m = p.value
     if (qaRun !== m.runId) die2(`--confirm-run (${qaRun}) khác run đang mở (${m.runId})`)
@@ -149,7 +160,7 @@ async function main() {
     }
   }
 
-  // ── export-run / attest / revoke: tham số → token → chương trình (+ guard QA) ──
+  // ── export-run / attest / revoke: tham số → token → chương trình (+ đích revoke) → chế độ → guard QA ──
   const programId = a.values['--program']
   if (!programId || !UUID_RE.test(programId)) die2('cần --program=<uuid>')
   const write = a.flags.has('--write')
@@ -167,45 +178,67 @@ async function main() {
     if (a.values['--idem'] !== undefined) die2('export-run không nhận --idem')
     if (a.values['--expect-host'] !== host) die2(`export-run cần --expect-host=${host} (xuất email nhân viên — xác nhận đúng DB nguồn)`)
   } else if (a.values['--idem'] !== undefined || a.values['--expect-host'] !== undefined) die2('--idem / --expect-host chỉ dùng cùng --write')
-
-  // Guard run QA (gate PROCESS + cục bộ + DB), dùng lại đúng hàm của writer / chốt QA.
-  const guardQa = async () => {
-    const gate = G.cmsQaWriterGate({ env, envFileText, markerExists: fs.existsSync(MARKER) })
-    if (!gate.ok) die2(gate.reason)
-    let treeClean = false, gitHead = '', gitTree = ''
-    try {
-      const gitEnv = { ...process.env }
-      delete gitEnv[A.CMS_ATTEST_TOKEN_ENV] // tiến trình con không kế thừa token
-      const git = (...args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', env: gitEnv }).trim()
-      treeClean = T.cmsQaTreeState(git(...T.CMS_QA_GIT_STATUS_ARGS)).clean
-      gitHead = git('rev-parse', 'HEAD')
-      gitTree = git('rev-parse', 'HEAD^{tree}')
-    } catch (e) { rethrowCliExit(e); die2('không đọc được Git') }
-    const launcherAlive = m.port !== null && m.serverPid !== null && !m.serverNotStopped && Number.isInteger(m.launcherPid)
-      && pidAlive(m.launcherPid) && pidAlive(m.serverPid) && await portOpen(m.port)
-    const local = R.cmsQaLockLocalCheck({ manifest: m, confirmRun: qaRun, host, treeClean, gitHead, gitTree, launcherAlive, actorId })
-    if (!local.ok) { for (const r of local.reasons) console.log(`CHẶN: ${r}`); die2('guard run QA') }
-    const uids = m.users.map((u) => u.id)
-    let programRows, statusRows
-    try {
-      programRows = await ro(R.cmsQaWriterProgramSql(programId, m.startedAt, uids))
-      statusRows = await ro(T.cmsQaStatusSql(uids))
-    } catch (e) { rethrowCliExit(e); console.log('LỖI: không đọc được DB (guard run QA)'); exitWith(1) }
-    const c = R.cmsQaWriterDbCheck({ manifest: m, programId, programRows, statusRows, guardMinutes: T.CMS_QA_GUARD_MINUTES_MIN })
-    if (!c.ok) { for (const r of c.reasons) console.log(`CHẶN: ${r}`); die2('guard run QA') }
+  let attestationId = null, revokeReason = null
+  if (a.cmd === 'revoke') {
+    attestationId = a.values['--attestation']
+    if (!attestationId || !UUID_RE.test(attestationId)) die2('cần --attestation=<uuid chứng nhận cần thu hồi>')
+    const { cmsNormalizeAck } = await jiti.import(path.join(ROOT, 'lib', 'cms', 'payoutView.ts'))
+    revokeReason = cmsNormalizeAck(a.values['--reason'])
+    if (revokeReason === null) die2('--reason: 10…1.000 ký tự sau khi bỏ khoảng trắng hai đầu')
   }
 
   let prog
   try { prog = A.parseCmsAttestProgram((await ro(A.cmsAttestProgramSql(programId)))[0]) } catch (e) { rethrowCliExit(e); console.log('LỖI: không đọc được chương trình'); return 1 }
   if (!prog) die2(`không có chương trình ${mask(programId)}`)
+  // revoke: đích THẬT của chứng nhận (chương trình / run bất biến) phải là --program — TRƯỚC khi chọn guard QA / vận hành.
+  let target = null
+  if (a.cmd === 'revoke') {
+    let rows
+    try { rows = await ro(A.cmsAttestTargetSql(attestationId)) } catch (e) { rethrowCliExit(e); console.log('LỖI: không đọc được chứng nhận cần thu hồi'); return 1 }
+    const t = A.cmsAttestRevokeTargetCheck({ programId, attestationId, rows })
+    if (!t.ok) die2(`${t.code}: ${t.reason}`)
+    target = t.target
+  }
   if (m && !prog.isTest) die2('run QA chỉ thao tác chương trình is_test — chương trình này là THẬT')
   if (!m && prog.isTest) die2('chương trình QA (is_test) chỉ thao tác BÊN TRONG run QA (--confirm-run)')
-  if (m) await guardQa() // mọi thao tác trên chương trình QA (kể cả dry-run / xuất) — gate như writer QA
+
+  // Guard run QA (r4 — PM COMPINT-P1-2): lõi cmsAttestQaGuard, deps THẬT. Mọi đồng hồ = đồng hồ đơn điệu ms nguyên.
+  const mono = R.cmsQaMonoClock()
+  const gitEnv = { ...process.env }
+  delete gitEnv[A.CMS_ATTEST_TOKEN_ENV] // tiến trình con không kế thừa token
+  const guardDeps = {
+    now: mono,
+    manifestText: () => { try { return fs.existsSync(MARKER) ? fs.readFileSync(MARKER, 'utf8') : null } catch { return null } },
+    parseManifest: (text) => { const p = T.parseCmsQaManifest(text); return p.ok ? p.value : null },
+    git: () => {
+      try {
+        const git = (...args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8', env: gitEnv }).trim()
+        return { treeClean: T.cmsQaTreeState(git(...T.CMS_QA_GIT_STATUS_ARGS)).clean, gitHead: git('rev-parse', 'HEAD'), gitTree: git('rev-parse', 'HEAD^{tree}') }
+      } catch { return null }
+    },
+    pidAlive,
+    portOpen,
+    read: (sql, timeoutMs) => ro(sql, { signal: AbortSignal.timeout(timeoutMs) }),
+  }
+  /** Pha IO của guard với ngân sách đặt TRƯỚC guard; trả `final()` đồng bộ — gọi ngay trước bước gửi. */
+  const guardIo = (deadlineAt) => A.cmsAttestQaGuard(guardDeps, { manifestText: markerText, manifest: m, confirmRun: qaRun, host, actorId, programId, deadlineAt })
+  const guardBlocked = (step, g) => {
+    for (const r of g.reasons) console.log(`CHẶN (${step}): ${r}`)
+    console.log(`${g.code} — không gửi request${a.cmd === 'export-run' ? ' xuất' : ' ghi'}`)
+    return g.code === 'GUARD_BLOCKED' ? 2 : 1
+  }
+  if (m) {
+    // mọi thao tác trên chương trình QA (kể cả dry-run / xuất) — gate PROCESS như writer QA, rồi guard hai pha.
+    const gate = G.cmsQaWriterGate({ env, envFileText, markerExists: fs.existsSync(MARKER) })
+    if (!gate.ok) die2(gate.reason)
+    const g = (await guardIo(mono() + A.CMS_ATTEST_QA_BUDGET_MS)).final()
+    if (!g.ok) return guardBlocked('preflight', g)
+  }
 
   const base = String(env.NEXT_PUBLIC_SUPABASE_URL).replace(/\/$/, '')
   const anon = env.NEXT_PUBLIC_SUPABASE_ANON_KEY
   if (!anon) die2('thiếu NEXT_PUBLIC_SUPABASE_ANON_KEY')
-  /** RPC bằng PHIÊN super (authenticated). Không in token / body lỗi thô. */
+  /** RPC bằng PHIÊN super (authenticated). Không in token / body lỗi thô. fetch được gọi ĐỒNG BỘ ngay khi gọi hàm. */
   const rpc = async (fn, args, timeoutMs) => {
     let status = null, body = null, transportError = false
     try {
@@ -217,6 +250,16 @@ async function main() {
       try { body = await r.json() } catch { body = null }
     } catch { transportError = true }
     return A.cmsAttestRpcOutcome({ transportError, status, body })
+  }
+  /** Timeout request sau guard = min(timeout chuẩn, phần ngân sách còn lại) — không tự mở hạn mới. */
+  const sendTimeout = (deadlineAt) => (m ? R.cmsQaIoTimeoutMs(A.CMS_ATTEST_RPC_TIMEOUT_MS, deadlineAt - mono(), 1_000) : A.CMS_ATTEST_RPC_TIMEOUT_MS)
+
+  // revoke: lịch sử chứng nhận của --program qua PHIÊN super (super + marker QA) phải có đúng id + run của đích.
+  if (a.cmd === 'revoke') {
+    const h = await rpc('rpc_cms_source_attestations', { p_program_id: programId }, A.CMS_ATTEST_RPC_TIMEOUT_MS)
+    if (h.kind !== 'ok') { console.log(`LỖI: không đọc được lịch sử chứng nhận bằng phiên super (${h.code}) — không thu hồi`); return 1 }
+    const c = A.cmsAttestRevokeHistoryCheck(target, h.data)
+    if (!c.ok) die2(`${c.code}: ${c.reason}`)
   }
 
   if (a.cmd === 'export-run') {
@@ -239,7 +282,16 @@ async function main() {
     const xFail = (code) => { try { writeAtomic(xFile, { ...xRec, status: 'failed', finishedAt: new Date().toISOString(), code }) } catch { /* sổ còn started */ } }
     let st = A.newCmsAttestExportState(programId, runId)
     for (let after = null; ;) {
-      const o = await rpc('rpc_cms_run_source_export', { p_program_id: programId, p_run_id: runId, p_after_line_id: after, p_limit: A.CMS_ATTEST_PAGE_LIMIT }, A.CMS_ATTEST_RPC_TIMEOUT_MS)
+      // Chương trình QA: guard hai pha TRƯỚC MỖI trang (PM COMPINT-P1-2) — bước cuối đồng bộ rồi gửi ngay.
+      let timeoutMs = A.CMS_ATTEST_RPC_TIMEOUT_MS
+      if (m) {
+        const dl = mono() + A.CMS_ATTEST_QA_BUDGET_MS
+        const io = await guardIo(dl)
+        const g = io.final()
+        if (!g.ok) { xFail(g.code); console.log(`LỖI XUẤT: guard trang ${st.pages + 1} — không có file`); return guardBlocked(`trang ${st.pages + 1}`, g) }
+        timeoutMs = sendTimeout(dl)
+      }
+      const o = await rpc('rpc_cms_run_source_export', { p_program_id: programId, p_run_id: runId, p_after_line_id: after, p_limit: A.CMS_ATTEST_PAGE_LIMIT }, timeoutMs)
       if (o.kind !== 'ok') { xFail(o.code); console.log(`LỖI XUẤT: ${o.code} (trang ${st.pages + 1}) — không có file`); return 1 }
       const pg = A.cmsAttestExportPage(st, o.data, A.CMS_ATTEST_PAGE_LIMIT)
       if (!pg.ok) { xFail(pg.code); console.log(`LỖI XUẤT: ${pg.code} (trang ${st.pages + 1}) — không có file`); return 1 }
@@ -291,7 +343,7 @@ async function main() {
   if (opsAll.some((x) => x.p.value.host !== host)) die2('thư mục sổ có thao tác của host khác — dùng thư mục sổ riêng cho từng môi trường')
   const pending = A.cmsAttestPendingOps(opsAll.map((x) => x.p.value), programId)
 
-  let op, args, expect, payloadSha = null, runId = null, attestationId = null
+  let op, args, expect, payloadSha = null, runId = null
   if (a.cmd === 'attest') {
     runId = a.values['--run']
     if (!runId || !UUID_RE.test(runId)) die2('cần --run=<uuid run hiện hành đã xuất>')
@@ -324,20 +376,17 @@ async function main() {
     args = { p_program_id: programId, p_run_id: runId, p_payload: built.payload, p_idem: idem }
     expect = { runId }
   } else {
-    attestationId = a.values['--attestation']
-    if (!attestationId || !UUID_RE.test(attestationId)) die2('cần --attestation=<uuid chứng nhận cần thu hồi>')
-    const { cmsNormalizeAck } = await jiti.import(path.join(ROOT, 'lib', 'cms', 'payoutView.ts'))
-    const reason = cmsNormalizeAck(a.values['--reason'])
-    if (reason === null) die2('--reason: 10…1.000 ký tự sau khi bỏ khoảng trắng hai đầu')
-    if (!write) { console.log(`DRY-RUN: thu hồi ${mask(attestationId)} của ${mask(programId)}; ghi bằng: (cùng tham số) --write --idem=<uuid mới, LƯU LẠI> --expect-host=${host}`); return 0 }
+    runId = target.runId
+    if (!write) { console.log(`DRY-RUN: thu hồi ${mask(attestationId)} (run ${mask(runId)}) của ${mask(programId)}; ghi bằng: (cùng tham số) --write --idem=<uuid mới, LƯU LẠI> --expect-host=${host}`); return 0 }
     op = 'revoke'
-    args = { p_attestation_id: attestationId, p_reason: reason, p_idem: idem }
+    args = { p_attestation_id: attestationId, p_reason: revokeReason, p_idem: idem }
     expect = { attestationId }
   }
 
-  // Cùng khoá đã có trong sổ ⇒ chỉ cho gọi lại đúng thao tác (cùng nội dung); thao tác chưa khép khác ⇒ chặn tới reconcile.
+  // Cùng khoá đã có trong sổ ⇒ chỉ cho gọi lại đúng thao tác (cùng nội dung, chương trình, run, chứng nhận); thao tác chưa khép khác ⇒ chặn tới reconcile.
   const same = opsAll.map((x) => x.p.value).find((e) => e.idemKey === idem)
-  if (same && (same.op !== op || same.programId !== programId || same.payloadSha256 !== payloadSha || same.attestationId !== (op === 'revoke' ? attestationId : same.attestationId))) {
+  if (same && (same.op !== op || same.programId !== programId || same.payloadSha256 !== payloadSha
+      || (same.runId !== null && same.runId !== runId) || (op === 'revoke' && same.attestationId !== attestationId))) {
     die2(`--idem đã dùng cho thao tác KHÁC (${same.operationId}) — không dùng lại khoá cho nội dung khác`)
   }
   const blocking = pending.filter((e) => e.idemKey !== idem)
@@ -349,17 +398,26 @@ async function main() {
   const file = path.join(ledgerDir, `${operationId}.json`)
   let entry = A.newCmsAttestOp({ operationId, op, qaRunId: m?.runId ?? null, host, pid: process.pid, programId, runId,
     attestationId: op === 'revoke' ? attestationId : null, idemKey: idem, payloadSha256: payloadSha, actorId, startedAt: new Date().toISOString() })
-  // Guard QA lần cuối NGAY trước ý định + request (không còn await nào khác giữa chúng ngoài ghi sổ đồng bộ).
-  if (m) await guardQa()
+  // Chương trình QA: ngân sách đặt TRƯỚC guard; guard IO → bước cuối ĐỒNG BỘ → ghi ý định (đồng bộ) → gửi RPC — không await xen giữa.
+  let deadlineAt = null
+  if (m) {
+    deadlineAt = mono() + A.CMS_ATTEST_QA_BUDGET_MS
+    const io = await guardIo(deadlineAt)
+    const g = io.final()
+    if (!g.ok) return guardBlocked('trước ghi', g)
+  }
   try { fs.writeFileSync(file, json(entry), { flag: 'wx' }) } catch { die2(`không ghi được sổ ${operationId} — chưa gửi request`) }
+  pendingIntent = operationId
+  const sent = rpc(op === 'attest' ? 'rpc_cms_source_attest' : 'rpc_cms_source_attest_revoke', args, sendTimeout(deadlineAt))
   console.log(`${op === 'attest' ? 'CHỨNG NHẬN' : 'THU HỒI'} · ${m ? `run QA ${m.runId}` : 'vận hành'} · đích ${host} · chương trình ${mask(programId)} · thao tác ${operationId}`)
-  const o = await rpc(op === 'attest' ? 'rpc_cms_source_attest' : 'rpc_cms_source_attest_revoke', args, A.CMS_ATTEST_RPC_TIMEOUT_MS)
+  const o = await sent
   const reply = o.kind === 'ok' ? A.cmsAttestCheckReply(op, o.data, expect) : { ok: false }
   const outcome = A.cmsAttestOpOutcome(o, reply.ok)
   entry = { ...entry, status: outcome, finishedAt: new Date().toISOString(),
     result: { code: o.kind === 'ok' ? (reply.ok ? null : 'REPLY_MISMATCH') : o.code, attestationId: reply.ok ? reply.id : null, already: reply.ok ? reply.already : false } }
   let saved = true
   try { writeAtomic(file, entry) } catch (e) { rethrowCliExit(e); saved = false }
+  if (saved) pendingIntent = null
   console.log(JSON.stringify({ status: outcome, code: entry.result.code, id: reply.ok ? mask(reply.id) : null, already: reply.ok ? reply.already : undefined,
     operation: operationId, ledger: saved ? outcome : 'NOT_SAVED' }))
   if (!saved) { console.log(`SỔ CHƯA ĐÓNG: không ghi được kết quả ${operationId} (sổ còn ý định) — có thể đã ghi; chạy reconcile --op=${operationId}`); return 1 }
@@ -370,4 +428,30 @@ async function main() {
   }
 }
 
-await runCli(main)
+// ── Biên lỗi entrypoint (PM COMPINT-P1-3) ───────────────────────────────────
+// runCli chung in dòng đầu message của lỗi lạ — lỗi đọc file / ghi sổ có thể mang đường dẫn / email / marker. Ở CLI này: CliExit (mã
+// chủ đích) đi tiếp; MỌI lỗi khác (Error / chuỗi / object / reject không bắt) ⇒ chỉ in mã cố định, rc 1. Đã ghi ý định mà chưa đóng
+// sổ ⇒ sổ GIỮ NGUYÊN (chưa rõ kết quả), nhắc reconcile — không xoá / không đổi thành "chưa ghi". Không sửa lib chung (lib-cms-ops).
+// security review r4 P2-1: lỗi nền (reject / exception không bắt) trong lúc main() vẫn trả 0 ⇒ runCli sẽ ghi đè exitCode ⇒ giữ cờ
+// và ép mã 1 khi main trả về; lỗi nền SAU khi runCli đã đặt mã ⇒ handler đặt lại 1.
+let internalHit = false
+const internal = () => {
+  internalHit = true
+  console.log(`LỖI: ${INTERNAL} — lỗi ngoài dự kiến (không in chi tiết)`)
+  if (pendingIntent) console.log(`sổ ${pendingIntent} còn ý định — KẾT QUẢ KHÔNG RÕ, có thể đã ghi; KHÔNG dùng khoá mới; chạy reconcile --op=${pendingIntent}`)
+}
+process.on('unhandledRejection', () => { internal(); process.exitCode = 1 })
+process.on('uncaughtException', () => { internal(); process.exitCode = 1 })
+async function guardedMain() {
+  let code
+  try {
+    code = await main()
+  } catch (e) {
+    if (e instanceof CliExit) { if (internalHit) return 1; throw e }
+    internal()
+    return 1
+  }
+  return internalHit ? 1 : code
+}
+
+await runCli(guardedMain)

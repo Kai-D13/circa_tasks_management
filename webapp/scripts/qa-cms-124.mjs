@@ -6,17 +6,24 @@
 //   chỉ source_updated_at khác vẫn MATCH · §5 lõi action chốt 6 tham số + payout / XLSX · §6 rollback (dừng khi đã chốt bằng chứng
 //   nhận; DB khác: md5 về 122 / 123, app capture ⇒ SOURCE_SCHEMA_UNSUPPORTED, áp lại) · §7 CLI scripts/cms-source-attest.mjs đầu-cuối
 //   qua shim HTTP (pg-meta + PostgREST giả trên PGlite: export-run / attest dry-run + --write / mất phản hồi ⇒ unknown ⇒ reconcile /
-//   revoke / status).
+//   revoke / status) · §8 (r4, PM 2026-11-05-cms-comp-int-pm.md) CLI chế độ run QA (--confirm-run) đầu-cuối: manifest THẬT ở
+//   webapp/.qa-cms.json + launcher giả (tiến trình con giết được) + cổng; guard hai pha preflight / MỖI trang xuất / trước ghi —
+//   launcher chết, manifest đổi, marker tụt dưới sàn do phản hồi chậm (DB đo ≥ 600 s), request treo; revoke sai chương trình
+//   (Q→P, QA→thật, thật→QA, QA→QA ngoài run) + hợp lệ; close / reconcile trên dòng DB thật (đủ bộ); lỗi ngoài dự kiến (đọc file /
+//   ghi sổ / sau ý định, Error / chuỗi / object chứa marker giả) ⇒ chỉ CMS_ATTEST_INTERNAL.
 // GIỚI HẠN: PGlite một session ⇒ race / timeout / cancel / benchmark ở PG15 thật
-// (planning/research/dev-tools/cms/draft-completeness/124-realpg-test.mjs). KHÔNG chạm DB thật.
+// (planning/research/dev-tools/cms/draft-completeness/124-realpg-test.mjs). KHÔNG chạm DB thật. §8 mặc định giả Git qua preload
+// (cây đang sửa); QA_HARNESS_GIT=real ⇒ CLI đọc Git THẬT (cây phải sạch — chạy sau commit). §8 chỉ dọn đúng marker + sổ của run giả.
 //   npm i --no-save @electric-sql/pglite@0.2.17 ; node scripts/qa-cms-124.mjs     # kỳ vọng: N đạt · 0 lỗi
+//   QA_HARNESS_GIT=real node scripts/qa-cms-124.mjs                                # §8 với Git thật
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import http from 'node:http'
+import net from 'node:net'
 import crypto from 'node:crypto'
-import { execFile } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
+import { execFile, execFileSync, spawn } from 'node:child_process'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createJiti } from 'jiti'
 import * as XLSX from 'xlsx'
 import * as L from './lib-care-pglite.mjs'
@@ -436,7 +443,7 @@ section('7. CLI scripts/cms-source-attest.mjs đầu-cuối qua shim HTTP (pg-me
   const P = await H2.makeProgram({ isTest: false })
   const rws = rawRows(P, [{ n: 12 }, { n: 2, type: 'ONLINE' }])
   // Lõi app giữ cổng Q-206 (releaseGate) cho chương trình thật ⇒ công bố TRỰC TIẾP qua RPC 122 / 124 (engine + payload THẬT + lớp nguồn).
-  const sync = await (async () => {
+  const publishDirect = async (P, rws) => {
     const snap = RS.parseCmsSalesSnapshot((await H2.svc(`SELECT public.rpc_cms_sales_run_open($1, '{"source":"qa"}'::jsonb) r`, [P.id])).rows[0].r)
     const ls = linesOf(rws)
     const inp = RS.cmsSnapshotToEngineInput(snap)
@@ -450,22 +457,36 @@ section('7. CLI scripts/cms-source-attest.mjs đầu-cuối qua shim HTTP (pg-me
     const pub = (await H2.svc(`SELECT public.rpc_cms_sales_run_publish($1) r`, [snap.runId])).rows[0].r
     if (!pub.published) throw new Error('publish thật lỗi ' + JSON.stringify(pub))
     return { runId: snap.runId }
-  })()
+  }
+  const sync = await publishDirect(P, rws)
   let dropNext = false
+  // §8 (r4): đếm + móc lỗi giả theo request. pgHook(sql, rows) chạy SAU khi DB đã thực thi, TRƯỚC khi trả (mô phỏng phản hồi chậm /
+  // trạng thái đổi trong lúc chờ); trả 'hold' ⇒ không bao giờ trả (request treo, socket giữ tới khi dọn). rpcHook(fn) như vậy cho PostgREST.
+  const counts = { pg: 0, rpc: {} }
+  let pgHook = null, rpcHook = null
+  const held = []
   const server = http.createServer(async (req, res) => {
     let body = ''
     for await (const ch of req) body += ch
     const send = (st, obj) => { res.writeHead(st, { 'content-type': 'application/json' }); res.end(JSON.stringify(obj)) }
     try {
-      if (req.url === '/pg/query') return send(200, lastRows(await db2.exec(JSON.parse(body).query)))
+      if (req.url === '/pg/query') {
+        counts.pg++
+        const q = JSON.parse(body).query
+        const rows = lastRows(await db2.exec(q))
+        if (pgHook && (await pgHook(q, rows)) === 'hold') { held.push(res); return }
+        return send(200, rows)
+      }
       const m = /^\/rest\/v1\/rpc\/([a-z_]+)$/.exec(req.url ?? '')
       if (!m) return send(404, { message: 'not found' })
+      counts.rpc[m[1]] = (counts.rpc[m[1]] ?? 0) + 1
       const tok = String(req.headers.authorization ?? '').replace(/^Bearer /, '')
       const sub = JSON.parse(Buffer.from(tok.split('.')[1], 'base64url').toString()).sub
       const args = JSON.parse(body)
       const named = Object.keys(args).map((k, i) => `${k} => $${i + 1}`).join(', ')
       const vals = Object.values(args).map((v) => (v !== null && typeof v === 'object' ? JSON.stringify(v) : v))
       const out = (await as(db2, sub, () => db2.query(`SELECT public.${m[1]}(${named}) r`, vals))).rows[0].r
+      if (rpcHook) await rpcHook(m[1], out)
       if (dropNext) { dropNext = false; res.writeHead(502); return res.end() } // ĐÃ commit nhưng mất phản hồi
       return send(200, out)
     } catch (e) { return send(400, { code: e.code ?? '', message: String(e.message) }) }
@@ -546,6 +567,299 @@ section('7. CLI scripts/cms-source-attest.mjs đầu-cuối qua shim HTTP (pg-me
     await db2.exec(polOrig)
     ok(pv.source_complete_basis === null && pv.blockers.includes('CMS_LOCK_SOURCE_INCOMPLETE') && pv.source_attestation.code === 'NONE',
       'policy thật khai operator_reconciliation nhưng chứng nhận đã thu hồi ⇒ basis NULL (không báo nhầm) + SOURCE_INCOMPLETE (db-reviewer r2 P2-9)', JSON.stringify([pv.source_complete_basis, pv.blockers]))
+  }
+
+  // ════ §8 (r4) — chế độ run QA đầu-cuối + revoke đúng chương trình + biên lỗi entrypoint ════
+  section(`8. CLI run QA (--confirm-run) đầu-cuối trên RPC 124 THẬT (r4): guard hai pha (PM COMPINT-P1-2) · revoke đúng chương trình + sổ / close đủ bộ (P1-1) · biên lỗi entrypoint (P1-3) · Git ${process.env.QA_HARNESS_GIT === 'real' ? 'THẬT' : 'giả qua preload'}`)
+  const G = await lib('e2e/writeQaGates.ts')
+  const WEBAPP = path.join(HERE, '..')
+  const REAL_GIT = process.env.QA_HARNESS_GIT === 'real'
+  const sleep = (n) => new Promise((r) => setTimeout(r, n))
+  const leaked = (s) => /fake\.leak@example\.invalid|FAKE_TOKEN_123|secret[\\/]qa/.test(s)
+  const gitR = (...args) => execFileSync('git', args, { cwd: WEBAPP, encoding: 'utf8' }).trim()
+  const head = gitR('rev-parse', 'HEAD'), treeId = gitR('rev-parse', 'HEAD^{tree}')
+  const runIdQa = 'cms-qa-20261105T080000-a1b2'
+  const pre = REAL_GIT && gitR('status', '--porcelain', '--untracked-files=all') ? 'QA_HARNESS_GIT=real cần cây sạch' : null
+  ok(pre === null, '§8 điều kiện chạy (cây sạch khi Git thật)', pre ?? '')
+  // CLI chạy từ BẢN SAO byte-giống trong webapp/qa-artifacts/s8-…/ (gitignore; ROOT của CLI = thư mục cha của scripts/) ⇒ marker +
+  // sổ của run giả CÔ LẬP, không đụng webapp/.qa-cms.json mà cms-qa-tooling.spec chạy song song dùng. node_modules lấy từ webapp/.
+  let S8 = null
+  let launcher = null
+  let portSrv = null
+  const launchers = [] // MỌI launcher giả đã tạo — finally giết hết (đột biến có thể bỏ qua bước giết giữa chừng)
+  try {
+    if (pre !== null) throw new Error('SKIP8')
+    fs.mkdirSync(path.join(WEBAPP, 'qa-artifacts'), { recursive: true })
+    S8 = fs.mkdtempSync(path.join(WEBAPP, 'qa-artifacts', 's8-'))
+    fs.cpSync(path.join(WEBAPP, 'lib'), path.join(S8, 'lib'), { recursive: true })
+    fs.mkdirSync(path.join(S8, 'e2e'))
+    for (const f of fs.readdirSync(path.join(WEBAPP, 'e2e'))) if (f.endsWith('.ts')) fs.copyFileSync(path.join(WEBAPP, 'e2e', f), path.join(S8, 'e2e', f))
+    fs.mkdirSync(path.join(S8, 'scripts'))
+    for (const f of ['cms-source-attest.mjs', 'lib-cms-ops.mjs']) fs.copyFileSync(path.join(HERE, f), path.join(S8, 'scripts', f))
+    const same = ['scripts/cms-source-attest.mjs', 'scripts/lib-cms-ops.mjs', 'e2e/cmsSourceAttest.ts', 'e2e/cmsQaResults.ts', 'e2e/cmsQaTooling.ts', 'e2e/writeQaGates.ts', 'lib/cms/payoutView.ts']
+      .every((f) => { const h = (p) => crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex'); return h(path.join(WEBAPP, f)) === h(path.join(S8, f)) })
+    ok(same, '§8 bản sao CLI + lõi byte-giống bản đang test (sha256)')
+    const ROOT = S8
+    const markerFile = path.join(ROOT, G.CMS_QA_MARKER)
+    const wdir = path.join(ROOT, 'qa-artifacts', 'cms-qa', `${runIdQa}.writers`)
+    // Launcher giả = tiến trình con sống (giết được); server QA = harness; cổng = server TCP của harness.
+    const spawnLauncher = () => new Promise((res) => { const ch = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' }); launchers.push(ch); ch.once('spawn', () => res(ch)) })
+    const killWait = (ch) => new Promise((res) => { if (!ch || ch.exitCode !== null || ch.signalCode !== null) return res(); ch.once('exit', () => res()); ch.kill() })
+    launcher = await spawnLauncher()
+    portSrv = net.createServer((s) => s.destroy())
+    await new Promise((r) => portSrv.listen(0, 'localhost', r))
+    const lport = portSrv.address().port
+    // Chương trình: Q1 (5.003 dòng nguồn ⇒ 2 trang xuất), Q2 / Q3 nhỏ (QA, trong run), P2 thật (không run).
+    const Q1 = await H2.makeProgram(), Q2 = await H2.makeProgram(), Q3 = await H2.makeProgram()
+    const P2 = await H2.makeProgram({ isTest: false })
+    // Mốc hoàn tất trong kỳ, cách nhau 1 phút (rawRows tính theo bộ đếm dòng toàn cục ⇒ 5.003 dòng sẽ vượt kỳ).
+    const inPeriod = (Q, rows) => rows.map((r, i) => {
+      const at = `${new Date(Date.parse(`${Q.start}T01:00:00Z`) + i * 60_000).toISOString().replace('Z', '')}${String(i % 1000).padStart(3, '0')}Z`
+      return { ...r, completed_at: at, source_updated_at: at }
+    })
+    const runQ1 = await publishDirect(Q1, inPeriod(Q1, rawRows(Q1, [{ n: 5003 }])))
+    const runQ2 = await publishDirect(Q2, inPeriod(Q2, rawRows(Q2, [{ n: 6 }])))
+    const runQ3 = await publishDirect(Q3, inPeriod(Q3, rawRows(Q3, [{ n: 8 }])))
+    const setMarker = (sec) => db2.query(`INSERT INTO public.cms_qa_access (user_id, granted_by, expires_at) VALUES ($1, 'qa-script:qa-cms-124-s8', now() + make_interval(secs => $2))
+      ON CONFLICT (user_id) DO UPDATE SET expires_at = EXCLUDED.expires_at, granted_by = EXCLUDED.granted_by`, [U.super, sec])
+    await setMarker(7200)
+    const dbNow = (await one(db2, `SELECT now() t`)).t
+    const manifest = (o = {}) => ({ ...T.newCmsQaManifest({ runId: runIdQa, mode: 'manual-localhost', host, dbNow, gitHead: head, gitTree: treeId, buildId: 'qa', port: lport,
+      users: [{ id: U.super, role: 'admin', markerExpiresAt: dbNow, remainingS: 0 }] }), serverPid: process.pid, launcherPid: launcher.pid,
+    programs: [Q1, Q2, Q3].map((q) => ({ id: q.id, status: 'active', isTest: true })), ...o })
+    const writeManifest = (o) => fs.writeFileSync(markerFile, JSON.stringify(manifest(o), null, 2))
+    writeManifest()
+    // Preload CHỈ trong tiến trình con của harness (không trong code sản phẩm): Git giả (trừ QA_HARNESS_GIT=real) + lỗi giả P1-3.
+    const preload = path.join(tmp, 'qa8-preload.mjs')
+    fs.writeFileSync(preload, [
+      "import cp from 'node:child_process'", "import fs from 'node:fs'", "import { syncBuiltinESMExports } from 'node:module'",
+      "const MARK = 'fake.leak@example.invalid FAKE_TOKEN_123 C:/secret/qa'",
+      "const boom = () => { const k = process.env.QA_FAULT_KIND || 'error'; if (k === 'string') throw MARK; if (k === 'object') throw { message: MARK, toString: () => MARK };",
+      "  const e = new Error(MARK); e.code = 'EPERM'; e.path = MARK; e.cause = new Error(MARK); throw e }",
+      'if (!process.env.QA_REAL_GIT) {',
+      '  const orig = cp.execFileSync',
+      '  cp.execFileSync = function (cmd, args) {',
+      "    if (cmd === 'git' && Array.isArray(args)) {",
+      "      if (args[0] === 'status') return process.env.QA_FAKE_STATUS || ''",
+      "      if (args[0] === 'rev-parse' && args[1] === 'HEAD') return process.env.QA_FAKE_HEAD + '\\n'",
+      "      if (args[0] === 'rev-parse' && args[1] === 'HEAD^{tree}') return process.env.QA_FAKE_TREE + '\\n'",
+      '    }',
+      '    return orig.apply(this, arguments)',
+      '  }',
+      '}',
+      'if (process.env.QA_FAULT_READ) { const re = new RegExp(process.env.QA_FAULT_READ); const rf = fs.readFileSync; fs.readFileSync = function (p) { if (re.test(String(p))) boom(); return rf.apply(this, arguments) } }',
+      "if (process.env.QA_FAULT_INTENT) { const wf = fs.writeFileSync; fs.writeFileSync = function (f, d, o) { if (/[\\\\/]a-[0-9a-f]{12}\\.json$/.test(String(f)) && o && o.flag === 'wx') boom(); return wf.apply(this, arguments) } }",
+      'if (process.env.QA_FAULT_RENAME) { const re = new RegExp(process.env.QA_FAULT_RENAME); const rn = fs.renameSync; fs.renameSync = function (a, b) { if (re.test(String(b))) boom(); return rn.apply(this, arguments) } }',
+      'if (process.env.QA_FAULT_AFTER_RPC) {',
+      '  const f0 = globalThis.fetch; let hit = false',
+      '  globalThis.fetch = async function (u) { const r = await f0.apply(this, arguments); if (/\\/rpc\\/rpc_cms_source_attest$/.test(String(u))) hit = true; return r }',
+      '  const iso = Date.prototype.toISOString',
+      '  Date.prototype.toISOString = function () { if (hit) boom(); return iso.call(this) }',
+      '}',
+      // security review r4 P2-1: reject nền không ai bắt trong lúc lệnh vẫn đạt ⇒ phải rc 1, chỉ mã cố định.
+      "if (process.env.QA_FAULT_BG_REJECT) setTimeout(() => { Promise.reject(new Error(MARK)) }, 0)",
+      // …và TRONG lúc main còn chạy: reject không bắt phát ra ở lần fetch đầu (lệnh vẫn đi tiếp tới thành công).
+      "if (process.env.QA_FAULT_BG_REJECT_FETCH) { const f1 = globalThis.fetch; let once = false; globalThis.fetch = function () { if (!once) { once = true; Promise.reject(new Error(MARK)) } return f1.apply(this, arguments) } }",
+      'syncBuiltinESMExports()',
+    ].join('\n'))
+    const QENV = { E2E_CMS_WRITE_QA: 'YES', E2E_EXPECTED_SUPABASE_HOST: host, ...(REAL_GIT ? { QA_REAL_GIT: '1' } : { QA_FAKE_HEAD: head, QA_FAKE_TREE: treeId }) }
+    const qcli = (args, extra = {}) => new Promise((resolve) => execFile(process.execPath, ['--import', pathToFileURL(preload).href, path.join(ROOT, 'scripts', 'cms-source-attest.mjs'), ...args],
+      { env: { ...env, ...QENV, ...extra }, cwd: ROOT, timeout: 120_000 }, (err, stdout, stderr) => resolve({ code: err ? (err.code ?? 1) : 0, out: `${stdout}${stderr}` })))
+    const snapC = () => ({ pg: counts.pg, rpc: { ...counts.rpc } })
+    const dRpc = (c0, fn) => (counts.rpc[fn] ?? 0) - (c0.rpc[fn] ?? 0)
+    const WRITE_RPCS = ['rpc_cms_source_attest', 'rpc_cms_source_attest_revoke']
+    const noWriteRpc = (c0) => WRITE_RPCS.every((fn) => dRpc(c0, fn) === 0)
+    const aFiles = (dir = wdir) => (fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => /^a-[0-9a-f]{12}\.json$/.test(f)).sort() : [])
+    const readA = (f, dir = wdir) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'))
+    const isStatusSql = (q) => /cms_qa_access/.test(q)
+    const isProgGuardSql = (q) => /qa_created_in_run/.test(q)
+    const attOf = async (pid) => (await db2.query(`SELECT id::text, run_id::text, revoked_at IS NOT NULL AS revoked FROM public.cms_source_attestations WHERE program_id = $1 ORDER BY attested_at`, [pid])).rows
+    /** n-th lần khớp `pred` (đếm từ 1, trong lượt gọi hiện tại) ⇒ chạy `fn(rows)`; trả giá trị của fn (vd. 'hold'). */
+    const onNth = (pred, n, fn) => { let k = 0; return async (q, rows) => (pred(q) && ++k === n ? fn(rows) : undefined) }
+    const QARGS = [`--confirm-run=${runIdQa}`]
+    const exportQa = (Q, runId, outF) => qcli(['export-run', `--program=${Q.id}`, `--run=${runId}`, `--out=${outF}`, ...QARGS, `--expect-host=${host}`])
+    const evidence = async (outF, tag) => {
+      const appSide = JSON.parse(fs.readFileSync(`${outF}.app-side.json`, 'utf8'))
+      const refF = path.join(tmp, `${tag}-ref.csv`)
+      fs.copyFileSync(outF, refF)
+      const refSha = crypto.createHash('sha256').update(fs.readFileSync(refF)).digest('hex')
+      const at = (await one(db2, `SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') t`)).t
+      const metaF = path.join(tmp, `${tag}-meta.json`)
+      fs.writeFileSync(metaF, JSON.stringify({ version: 1, reference: { inputKind: 'reference_source', source: 'Nguồn độc lập giả — QA §8', exportedAt: at, asOf: at,
+        fileSha256: refSha, scope: appSide.scope }, app: { ...appSide, asOf: at, exportedAt: at > appSide.exportedAt ? at : appSide.exportedAt } }))
+      return { ref: refF, meta: metaF }
+    }
+    const attestArgs = (Q, runId, outF, ev) => ['attest', `--program=${Q.id}`, `--run=${runId}`, `--reference=${ev.ref}`, `--app=${outF}`, `--evidence-meta=${ev.meta}`,
+      '--ack=Đã đối soát nguồn độc lập toàn kỳ (QA §8)', ...QARGS]
+    const statusCount = { n: 0 }
+    const countStatus = async (q) => { if (isStatusSql(q)) statusCount.n++ }
+
+    // 8a — xuất 2 trang: guard TRƯỚC MỖI trang (preflight + 2 trang = 3 lượt đọc marker).
+    const q1out = path.join(tmp, 'q1.csv')
+    let c0 = snapC(); statusCount.n = 0; pgHook = countStatus
+    let r8 = await exportQa(Q1, runQ1.runId, q1out)
+    ok(r8.code === 0 && /"pages":2/.test(r8.out) && /"rows":5003/.test(r8.out) && dRpc(c0, 'rpc_cms_run_source_export') === 2 && statusCount.n === 3,
+      'QA export-run 2 trang: guard preflight + trước MỖI trang (3 lượt đọc marker), 2 RPC xuất, file đủ 5.003 dòng', `${r8.code} ${statusCount.n} ${r8.out.slice(-400)}`)
+    // 8b — launcher chết sau khi trang 1 đã guard + gửi ⇒ guard trang 2 CHẶN: 1 RPC xuất, không file, sổ xuất failed.
+    const q1b = path.join(tmp, 'q1b.csv')
+    c0 = snapC()
+    let killed = false
+    rpcHook = async (fn) => { if (fn === 'rpc_cms_run_source_export' && !killed) { killed = true; await killWait(launcher) } }
+    r8 = await exportQa(Q1, runQ1.runId, q1b)
+    rpcHook = null
+    const xf = fs.readdirSync(wdir).filter((f) => /^x-/.test(f)).map((f) => JSON.parse(fs.readFileSync(path.join(wdir, f), 'utf8')))
+    ok(r8.code === 2 && dRpc(c0, 'rpc_cms_run_source_export') === 1 && !fs.existsSync(q1b) && !fs.existsSync(`${q1b}.partial`) && /trang 2/.test(r8.out)
+      && /launcher \/ server QA/.test(r8.out) && xf.some((x) => x.status === 'failed' && x.code === 'GUARD_BLOCKED'),
+    'QA export-run: launcher chết giữa hai trang ⇒ guard trang 2 chặn (rc 2), không file, sổ xuất failed GUARD_BLOCKED', r8.out.slice(-400))
+    launcher = await spawnLauncher(); writeManifest()
+    // 8c — xuất Q2 / Q3 (1 trang) làm file run cho chứng nhận.
+    const q2out = path.join(tmp, 'q2.csv'), q3out = path.join(tmp, 'q3.csv')
+    const e2 = await exportQa(Q2, runQ2.runId, q2out), e3 = await exportQa(Q3, runQ3.runId, q3out)
+    ok(e2.code === 0 && e3.code === 0, 'QA export-run Q2 / Q3 ⇒ đạt', `${e2.out.slice(-200)} ${e3.out.slice(-200)}`)
+    const ev2 = await evidence(q2out, 'q2'), ev3 = await evidence(q3out, 'q3')
+    // 8d — chứng nhận Q2 (trong run) ⇒ dùng cho ca "QA ngoài run" ở 8l.
+    r8 = await qcli([...attestArgs(Q2, runQ2.runId, q2out, ev2), '--write', `--idem=${crypto.randomUUID()}`, `--expect-host=${host}`])
+    const attQ2 = (await attOf(Q2.id))[0]
+    ok(r8.code === 0 && /"status":"done"/.test(r8.out) && attQ2 && !attQ2.revoked, 'QA attest --write Q2 ⇒ done', r8.out.slice(-300))
+    r8 = await qcli(attestArgs(Q3, runQ3.runId, q3out, ev3))
+    ok(r8.code === 0 && /DRY-RUN đạt/.test(r8.out), 'QA attest dry-run Q3 ⇒ đạt (guard preflight)', r8.out.slice(-300))
+    const a0 = aFiles().length
+    const blockedWrite = async (label, hook, re, rc = 2) => {
+      c0 = snapC(); pgHook = hook
+      const r = await qcli([...attestArgs(Q3, runQ3.runId, q3out, ev3), '--write', `--idem=${crypto.randomUUID()}`, `--expect-host=${host}`])
+      pgHook = null
+      ok(r.code === rc && noWriteRpc(c0) && aFiles().length === a0 && (await attOf(Q3.id)).length === 0 && re.test(r.out) && !/CHỨNG NHẬN ·/.test(r.out),
+        `${label} ⇒ rc ${rc}, 0 RPC ghi, không ghi ý định, không chứng nhận`, `${r.code} ${r.out.slice(-500)}`)
+      return r
+    }
+    // 8e — tái hiện PM: launcher chết TRONG query chương trình của guard trước ghi.
+    await blockedWrite('QA attest --write: launcher chết trong lúc guard trước ghi đọc chương trình', onNth(isProgGuardSql, 2, async () => { await killWait(launcher) }), /launcher \/ server QA/)
+    launcher = await spawnLauncher(); writeManifest()
+    // 8f — manifest đổi (launcher ghi cờ server chưa dừng) trong lúc guard đọc marker.
+    await blockedWrite('QA attest --write: manifest đổi trong lúc guard chờ DB', onNth(isStatusSql, 2, async () => { writeManifest({ serverNotStopped: { pid: 1, at: new Date().toISOString() } }) }),
+      /manifest run QA không còn \/ đã đổi/)
+    writeManifest()
+    // 8g — marker tụt dưới sàn TRONG lúc DB chậm: DB đo ≥ 600 s nhưng phản hồi chậm 5 s ⇒ trừ thời gian chờ ⇒ chặn.
+    // Marker đặt lại 603 s NGAY SAU lượt đọc chương trình của guard trước ghi ⇒ lượt đọc marker kế tiếp đo ~602 s; phản hồi chậm 5 s.
+    let measured = null, progN = 0, statN = 0
+    await blockedWrite('QA attest --write: marker ≥ 10 phút lúc DB đo nhưng phản hồi chậm 5 s ⇒ trừ thời gian chờ',
+      async (q, rows) => {
+        if (isProgGuardSql(q) && ++progN === 2) await setMarker(603)
+        if (isStatusSql(q) && ++statN === 2) { measured = rows[0]?.remaining_s ?? null; await sleep(5_000) }
+      }, /marker còn \d+ phút < ngưỡng canh 10 phút/)
+    ok(Number.isInteger(measured) && measured >= 600, `ca marker: DB đo ${measured} s ≥ 600 (chặn là do trừ thời gian chờ, không do DB)`)
+    await setMarker(7200)
+    // 8h — request treo: lượt đọc marker của guard trước ghi không bao giờ trả ⇒ timeout guard (≤ 10 s) ⇒ GUARD_IO rc 1.
+    const t8 = Date.now()
+    await blockedWrite('QA attest --write: pg-meta treo trong guard trước ghi', onNth(isStatusSql, 2, async () => 'hold'), /GUARD_IO/, 1)
+    ok(Date.now() - t8 < 40_000, `request treo bị cắt theo ngân sách guard (${Date.now() - t8} ms)`)
+    for (const h of held.splice(0)) { try { h.socket.destroy() } catch { /* đã đóng */ } }
+    // 8i — chứng nhận Q3 hợp lệ.
+    r8 = await qcli([...attestArgs(Q3, runQ3.runId, q3out, ev3), '--write', `--idem=${crypto.randomUUID()}`, `--expect-host=${host}`])
+    const attQ3 = (await attOf(Q3.id))[0]
+    ok(r8.code === 0 && /"status":"done"/.test(r8.out) && attQ3 && !attQ3.revoked && aFiles().length === a0 + 1, 'QA attest --write Q3 ⇒ done (sau các ca chặn)', r8.out.slice(-300))
+
+    // 8j — revoke sai chương trình (PM COMPINT-P1-1): chặn TRƯỚC guard / lịch sử / RPC ghi; chứng nhận không đổi.
+    const attP = opR?.reconcile?.attestationId
+    const before = JSON.stringify([await attOf(P.id), await attOf(Q2.id), await attOf(Q3.id)])
+    const revokeQa = (Qp, attId, extra = []) => qcli(['revoke', `--program=${Qp.id}`, `--attestation=${attId}`, '--reason=Thu hồi để đối soát lại (QA §8)', ...QARGS, ...extra])
+    const mis = async (label, p) => {
+      c0 = snapC()
+      const r = await p()
+      ok(r.code === 2 && /ATTEST_PROGRAM_MISMATCH/.test(r.out) && noWriteRpc(c0) && dRpc(c0, 'rpc_cms_source_attestations') === 0,
+        `${label} ⇒ rc 2 ATTEST_PROGRAM_MISMATCH, 0 RPC ghi, chưa đọc lịch sử`, `${r.code} ${r.out.slice(-300)}`)
+    }
+    await mis('QA: --program=Q3, chứng nhận của chương trình THẬT P', () => revokeQa(Q3, attP, ['--write', `--idem=${crypto.randomUUID()}`, `--expect-host=${host}`]))
+    await mis('QA: --program=Q3, chứng nhận CÒN HIỆU LỰC của Q2 (--write)', () => revokeQa(Q3, attQ2.id, ['--write', `--idem=${crypto.randomUUID()}`, `--expect-host=${host}`]))
+    await mis('QA: --program=Q3, chứng nhận của Q2 (dry-run)', () => revokeQa(Q3, attQ2.id))
+    await mis('vận hành (tái hiện PM): --program=P2 thật, chứng nhận của P thật', () => cli(['revoke', `--program=${P2.id}`, `--attestation=${attP}`, '--reason=PM cross-program test reason', `--ledger-dir=${ledger}`, '--write', `--idem=${crypto.randomUUID()}`, `--expect-host=${host}`]))
+    await mis('vận hành: --program=P thật, chứng nhận của chương trình QA Q3', () => cli(['revoke', `--program=${P.id}`, `--attestation=${attQ3.id}`, '--reason=Thu hồi thử chéo chế độ', `--ledger-dir=${ledger}`, '--write', `--idem=${crypto.randomUUID()}`, `--expect-host=${host}`]))
+    c0 = snapC()
+    r8 = await revokeQa(Q3, crypto.randomUUID())
+    ok(r8.code === 2 && /ATTEST_NOT_FOUND/.test(r8.out) && noWriteRpc(c0), 'QA: chứng nhận không tồn tại ⇒ rc 2 ATTEST_NOT_FOUND', r8.out.slice(-200))
+    // QA ngoài run: Q2 rời manifest ⇒ guard preflight chặn (chương trình không thuộc run).
+    writeManifest({ programs: [Q1, Q3].map((q) => ({ id: q.id, status: 'active', isTest: true })) })
+    c0 = snapC()
+    r8 = await revokeQa(Q2, attQ2.id, ['--write', `--idem=${crypto.randomUUID()}`, `--expect-host=${host}`])
+    ok(r8.code === 2 && /không thuộc run/.test(r8.out) && noWriteRpc(c0), 'QA: chương trình QA NGOÀI run (đúng chương trình của chứng nhận) ⇒ guard chặn, 0 RPC ghi', r8.out.slice(-300))
+    ok(JSON.stringify([await attOf(P.id), await attOf(Q2.id), await attOf(Q3.id)]) === before, 'sau mọi ca chặn: không chứng nhận nào đổi trạng thái')
+    // Hợp lệ: dry-run nêu run; --write ⇒ sổ revoke ghi run của chứng nhận.
+    r8 = await revokeQa(Q3, attQ3.id)
+    ok(r8.code === 0 && new RegExp(`DRY-RUN: thu hồi ${attQ3.id.slice(0, 8)}… \\(run ${runQ3.runId.slice(0, 8)}…\\)`).test(r8.out), 'QA revoke dry-run đúng chương trình ⇒ đạt, nêu run của chứng nhận', r8.out.slice(-300))
+    const rvIdem = crypto.randomUUID()
+    r8 = await revokeQa(Q3, attQ3.id, ['--write', `--idem=${rvIdem}`, `--expect-host=${host}`])
+    const rvFile = aFiles().find((f) => readA(f).idemKey === rvIdem)
+    const rvE = rvFile && readA(rvFile)
+    ok(r8.code === 0 && /"status":"done"/.test(r8.out) && rvE?.op === 'revoke' && rvE.runId === runQ3.runId && rvE.attestationId === attQ3.id && (await attOf(Q3.id))[0].revoked,
+      'QA revoke --write đúng chương trình ⇒ done; sổ revoke ghi run + id chứng nhận', r8.out.slice(-300))
+
+    // 8k — close / reconcile trên dòng DB THẬT của cửa sổ run: sổ khớp đủ bộ ⇒ xanh; sửa chương trình / run trong bản sao sổ ⇒ ĐỎ.
+    const startedAt = manifest().startedAt
+    const rowsDb = lastRows(await db2.exec(T.pgMetaReadOnly(A.cmsQaRunAttestSql(startedAt))))
+    const files = aFiles().map((f) => ({ name: f, text: fs.readFileSync(path.join(wdir, f), 'utf8') }))
+    const mQa = manifest()
+    const optsC = { pidAlive: () => false, attestTable: true, programIdsInRun: [Q1.id, Q2.id, Q3.id] }
+    const cc = A.cmsQaAttestCloseCheck(mQa, files, rowsDb, optsC)
+    ok(cc.reasons.length === 0 && rowsDb.length === 2 && files.length === 3, 'close: sổ (Q2 attest, Q3 attest + revoke) khớp đủ bộ với DB ⇒ không lý do đỏ', JSON.stringify(cc.reasons))
+    for (const [label, patch] of [['chương trình khác', { programId: Q2.id }], ['run khác', { runId: runQ2.runId }], ['chứng nhận khác', { attestationId: attQ2.id }]]) {
+      const tampered = files.map((f) => (f.name === rvFile ? { name: f.name, text: JSON.stringify({ ...JSON.parse(f.text), ...patch }) } : f))
+      const rr = A.cmsQaAttestCloseCheck(mQa, tampered, rowsDb, optsC).reasons.join('\n')
+      ok(/không có thao tác khẳng định/.test(rr) && /không có dòng khớp đủ bộ/.test(rr), `close: bản sao sổ revoke ghi ${label} (cùng khoá / người) ⇒ ĐỎ`, rr.slice(0, 300))
+    }
+    r8 = await qcli(['reconcile', `--op=${rvFile}`.replace('.json', ''), ...QARGS])
+    ok(r8.code === 1 && /đã có kết quả/.test(r8.out), 'reconcile thao tác đã done ⇒ từ chối (không cần)', r8.out.slice(-200))
+    r8 = await qcli(['status', ...QARGS])
+    ok(r8.code === 0 && /3 thao tác/.test(r8.out) && !/@/.test(r8.out), 'status run QA ⇒ liệt kê 3 thao tác, không email', r8.out.slice(0, 300))
+
+    // 8l — P1-3: lỗi ngoài dự kiến (đọc file / ghi sổ / sau ý định) ⇒ chỉ mã CMS_ATTEST_INTERNAL, không rò marker giả (email / token / đường dẫn).
+    const opBase = base.filter((x) => !x.startsWith('--ledger-dir='))
+    const freshLedger = () => { const d = fs.mkdtempSync(path.join(tmp, 'l8-')); return d }
+    for (const kind of ['error', 'string', 'object']) {
+      const r = await qcli([...opBase, `--ledger-dir=${freshLedger()}`], { QA_FAULT_READ: 'ref\\.csv$', QA_FAULT_KIND: kind })
+      ok(r.code === 1 && r.out.includes(A.CMS_ATTEST_INTERNAL) && !leaked(r.out), `đọc --reference ném ${kind} chứa marker giả ⇒ rc 1, chỉ ${A.CMS_ATTEST_INTERNAL}, không rò`, r.out.slice(-300))
+    }
+    r8 = await qcli(['status', `--ledger-dir=${ledger}`], { QA_FAULT_READ: '[\\\\/]a-[0-9a-f]{12}\\.json$' })
+    ok(r8.code === 1 && r8.out.includes(A.CMS_ATTEST_INTERNAL) && !leaked(r8.out), 'status: đọc sổ ném lỗi chứa marker ⇒ rc 1, không rò', r8.out.slice(-300))
+    r8 = await qcli(['status', `--ledger-dir=${ledger}`], { QA_FAULT_BG_REJECT: '1' })
+    ok(r8.code === 1 && r8.out.includes(A.CMS_ATTEST_INTERNAL) && /sổ chứng nhận · vận hành/.test(r8.out) && !leaked(r8.out),
+      'reject nền không bắt (marker) sau khi status chạy xong ⇒ rc 1, chỉ mã, không rò (security r4 P2-1)', r8.out.slice(-300))
+    {
+      const xo = path.join(tmp, 'bg-reject.csv')
+      const r = await qcli(['export-run', `--program=${P.id}`, `--run=${sync.runId}`, `--out=${xo}`, `--ledger-dir=${freshLedger()}`, `--expect-host=${host}`], { QA_FAULT_BG_REJECT_FETCH: '1' })
+      ok(r.code === 1 && r.out.includes(A.CMS_ATTEST_INTERNAL) && /"export":"ok"/.test(r.out) && !leaked(r.out),
+        'reject nền không bắt (marker) TRONG lúc export-run còn chạy, lệnh vẫn xong ⇒ rc 1 (runCli không ghi đè thành 0), chỉ mã, không rò (security r4 P2-1)', r.out.slice(-300))
+    }
+    {
+      const d = freshLedger()
+      c0 = snapC()
+      const r = await qcli([...opBase, `--ledger-dir=${d}`, '--write', `--idem=${crypto.randomUUID()}`, `--expect-host=${host}`], { QA_FAULT_INTENT: '1' })
+      ok(r.code === 2 && /chưa gửi request/.test(r.out) && !leaked(r.out) && noWriteRpc(c0) && aFiles(d).length === 0, 'ghi Ý ĐỊNH lỗi (marker) ⇒ rc 2, 0 RPC ghi, không rò', r.out.slice(-300))
+    }
+    {
+      const d = freshLedger()
+      dropNext = true
+      const r = await qcli([...opBase, `--ledger-dir=${d}`, '--write', `--idem=${crypto.randomUUID()}`, `--expect-host=${host}`], { QA_FAULT_RENAME: '[\\\\/]a-[0-9a-f]{12}\\.json$' })
+      dropNext = false
+      const fs8 = aFiles(d)
+      ok(r.code === 1 && /SỔ CHƯA ĐÓNG/.test(r.out) && !leaked(r.out) && fs8.length === 1 && readA(fs8[0], d).status === 'intent',
+        'mất phản hồi + ghi kết quả sổ lỗi (marker) ⇒ rc 1, sổ GIỮ ý định (không đổi thành chưa ghi), không rò', r.out.slice(-300))
+    }
+    {
+      const d = freshLedger()
+      const r = await qcli([...opBase, `--ledger-dir=${d}`, '--write', `--idem=${crypto.randomUUID()}`, `--expect-host=${host}`], { QA_FAULT_AFTER_RPC: '1' })
+      const fs8 = aFiles(d)
+      ok(r.code === 1 && r.out.includes(A.CMS_ATTEST_INTERNAL) && /còn ý định/.test(r.out) && !leaked(r.out) && fs8.length === 1 && readA(fs8[0], d).status === 'intent',
+        'lỗi ngoài dự kiến SAU khi gửi RPC ghi ⇒ chỉ mã, nhắc reconcile, sổ giữ ý định, không rò', r.out.slice(-300))
+    }
+  } catch (e) {
+    if (String(e?.message) !== 'SKIP8') ok(false, '§8 lỗi harness', String(e?.stack ?? e))
+  } finally {
+    pgHook = null; rpcHook = null
+    for (const h of held.splice(0)) { try { h.socket.destroy() } catch { /* đã đóng */ } }
+    for (const ch of launchers) { if (ch.exitCode === null && ch.signalCode === null) { try { ch.kill() } catch { /* đã chết */ } } }
+    if (portSrv) await new Promise((r) => portSrv.close(() => r()))
+    // Chỉ dọn đúng đường dẫn do lượt này tạo (bản sao s8-… gồm marker + sổ của run giả).
+    if (S8) fs.rmSync(S8, { recursive: true, force: true })
   }
   server.close()
   fs.rmSync(tmp, { recursive: true, force: true })
