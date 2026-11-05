@@ -5,6 +5,11 @@
 //   rỗng sau dữ liệu / chưa gán > 20 %) → engine P2-a (KHÔNG tính lại ở đây) → kiểm miền số → cổng Q-206 (chương trình
 //   thật dừng ở đây, không stage; khi cổng HOLD lượt ghi còn bị chặn từ TRƯỚC open bằng snapshot chỉ đọc) → stage theo khối có số → seal (begin + từng bước, DB đối chiếu độc lập) → publish (đổi
 //   pointer một lần) → dọn run cũ ở mọi nhánh đã mở run (best effort, có ngân sách).
+// LỚP NGUỒN (migration 124, PM COMP-INT §5.A): opts.sourceCapture (cờ CMS_SOURCE_CAPTURE_ENABLED, mặc định OFF) ⇒ ngay sau mở run
+//   đòi snapshot.sourceSchema = CMS_SOURCE_SCHEMA_SUPPORTED (giá trị THỰC DB trả) — thiếu / lạ ⇒ đóng run error
+//   SOURCE_SCHEMA_UNSUPPORTED TRƯỚC khi đọc nguồn (không stage / publish, không tự hạ cấp thành run thiếu nguồn). Hỗ trợ ⇒ stage
+//   part 'source_lines' = MỌI dòng hợp lệ đã đọc (kể cả ONLINE / chưa hoàn tất / không gán) SAU 4 part engine, TRƯỚC seal. OFF ⇒
+//   không gửi 'source_lines' (run sau 124 không chứng nhận được — SOURCE_COUNT ở DB).
 // NGÂN SÁCH (PM audit 03/11 P1-I2-1): `deadlineAt` là hạn cứng của cả chương trình. Mọi bước MỚI (đọc nguồn, khối stage,
 // seal begin / bước, publish) chỉ bắt đầu khi còn ≥ CMS_RPC_START_MIN_MS trước `deadlineAt − CMS_SALES_STOP_RESERVE_MS`;
 // phần dự phòng dành cho đóng run (finish). Mỗi RPC nhận timeout = min(60 s, thời gian còn lại). Hết ngân sách ⇒ held
@@ -21,8 +26,9 @@ import { parseCmsEngineProgram } from './engine/config'
 import { assessSalesSnapshot, findDuplicates } from './quality'
 import { cmsCanPublishResults } from './releaseGate'
 import {
-  buildCmsStagePayload, chunkCmsStageRows, cmsSnapshotToEngineInput, cmsStageBoundsIssue, parseCmsSalesSnapshot,
-  CMS_STAGE_CHUNK_DEFAULT, CMS_STAGE_PARTS, type CmsSalesSnapshot, type CmsStageExpect, type CmsStagePart, type CmsStageRow,
+  buildCmsSourceStageRows, buildCmsStagePayload, chunkCmsStageRows, cmsSnapshotToEngineInput, cmsStageBoundsIssue, parseCmsSalesSnapshot,
+  CMS_SOURCE_PART, CMS_SOURCE_SCHEMA_SUPPORTED, CMS_STAGE_CHUNK_DEFAULT, CMS_STAGE_PARTS,
+  type CmsAnyStagePart, type CmsSalesSnapshot, type CmsStageExpect, type CmsStageRow,
 } from './resultStage'
 import { CMS_BQ_DEFAULT_DEADLINE_MS, fetchCmsSalesSnapshot, type CmsBqRunner } from './source/bigquery'
 import { vnProgramWindowMicros } from './time'
@@ -58,7 +64,7 @@ export interface CmsSalesSyncDeps {
   loadSnapshot(programId: string, io: CmsIo): Promise<unknown>
   /** rpc_cms_sales_run_open — throw Error(<mã CMS_*>) khi bận / không đủ điều kiện. */
   openRun(programId: string, detail: CmsSalesRunDetail, io: CmsIo): Promise<unknown>
-  stage(runId: string, part: CmsStagePart, chunkNo: number, rows: CmsStageRow[], io: CmsIo): Promise<number>
+  stage(runId: string, part: CmsAnyStagePart, chunkNo: number, rows: CmsStageRow[], io: CmsIo): Promise<number>
   sealBegin(runId: string, expect: CmsStageExpect, io: CmsIo): Promise<CmsSealReply>
   sealStep(runId: string, step: number, io: CmsIo): Promise<CmsSealReply>
   publish(runId: string, io: CmsIo): Promise<{ published: boolean; already?: boolean; code?: string }>
@@ -97,6 +103,8 @@ export interface CmsSalesSyncResult {
   /** Tổng CMS của snapshot (chuỗi VND nguyên); null khi chưa tính tới. */
   amountVnd: string | null
   stagedRows: number
+  /** Số dòng lớp nguồn đã stage (capture bật + run hỗ trợ); null = không capture. */
+  sourceRows: number | null
   bytesProcessed: number | null
   /** sha256 của payload kết quả (so hai dry-run trên cùng snapshot nguồn). */
   resultHash: string | null
@@ -116,7 +124,11 @@ export function cmsRpcCode(e: unknown, fallback: string): string {
   return m ? m[0] : fallback
 }
 
-export type CmsSalesSyncOpts = { dryRun: boolean; source: 'cron' | 'operator' | 'qa'; chunkSize?: number; deadlineAt?: number }
+export type CmsSalesSyncOpts = {
+  dryRun: boolean; source: 'cron' | 'operator' | 'qa'; chunkSize?: number; deadlineAt?: number
+  /** Capture lớp nguồn (cờ CMS_SOURCE_CAPTURE_ENABLED) — mặc định false. */
+  sourceCapture?: boolean
+}
 
 /** Đồng hồ ngân sách của một lượt chương trình. Không có deadline ⇒ chỉ timeout RPC tối đa. */
 export function cmsBudget(now: () => number, deadlineAt: number | undefined) {
@@ -168,7 +180,7 @@ async function runCmsSalesSyncInner(deps: CmsSalesSyncDeps, programId: string, o
   budget: ReturnType<typeof cmsBudget>): Promise<CmsSalesSyncResult> {
   const res: CmsSalesSyncResult = {
     programId, status: 'error', code: null, reasons: [], runId: null, isTest: null, rowsRead: null, rowsRejected: null,
-    candidates: null, included: null, unassigned: null, outOfScope: null, amountVnd: null, stagedRows: 0,
+    candidates: null, included: null, unassigned: null, outOfScope: null, amountVnd: null, stagedRows: 0, sourceRows: null,
     bytesProcessed: null, resultHash: null, elapsedMs: 0, cause: null, cleanup: null,
   }
   const done = (o: Partial<CmsSalesSyncResult>): CmsSalesSyncResult => ({ ...res, ...o })
@@ -235,6 +247,9 @@ async function runCmsSalesSyncInner(deps: CmsSalesSyncDeps, programId: string, o
     return stop('error', 'SNAPSHOT_INVALID')
   }
   res.isTest = snap.isTest
+  // Capability lớp nguồn: chỉ tin giá trị DB trả lúc mở run (cờ không phải chứng cứ DB hỗ trợ).
+  const capture = !opts.dryRun && opts.sourceCapture === true
+  if (capture && snap.sourceSchema !== CMS_SOURCE_SCHEMA_SUPPORTED) return stop('error', 'SOURCE_SCHEMA_UNSUPPORTED')
 
   let engineInput: ReturnType<typeof cmsSnapshotToEngineInput>
   let win: { fromMicros: bigint; toMicrosExclusive: bigint }
@@ -325,6 +340,21 @@ async function runCmsSalesSyncInner(deps: CmsSalesSyncDeps, programId: string, o
       }
       if (n !== chunks[i].length) return stop('error', 'STAGE_COUNT_MISMATCH', qualityDetail)
       res.stagedRows += n
+    }
+  }
+  // Lớp nguồn (124): sau 4 part engine, TRƯỚC seal (seal_begin đóng băng khối). Cùng ngân sách / mã lỗi như part engine.
+  if (capture) {
+    const chunks = chunkCmsStageRows(buildCmsSourceStageRows(fetched.lines), opts.chunkSize ?? CMS_STAGE_CHUNK_DEFAULT)
+    res.sourceRows = 0
+    for (let i = 0; i < chunks.length; i++) {
+      if (!budget.canWork()) return stop('held', 'DEADLINE', qualityDetail)
+      let n: number
+      try { n = await deps.stage(runId, CMS_SOURCE_PART, i, chunks[i], budget.work()) } catch (e) {
+        const f = workFail(e, 'STAGE_FAILED')
+        return stop(f.status, f.code, qualityDetail)
+      }
+      if (n !== chunks[i].length) return stop('error', 'STAGE_COUNT_MISMATCH', qualityDetail)
+      res.sourceRows += n
     }
   }
 

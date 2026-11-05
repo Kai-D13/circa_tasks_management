@@ -322,6 +322,8 @@ export interface CmsQaWriterEntry {
   result: {
     status: string; code: string | null; runId: string | null; stagedRows: number; rowsRead: number | null
     candidates: number | null; included: number | null; unassigned: number | null
+    /** Dòng lớp nguồn (124) đã stage; null = không capture. Sổ cũ không có khoá này. */
+    sourceRows?: number | null
   } | null
   /** reconcile: run sales LIÊN KẾT với writer (detail.qa_writer_id) trong DB lúc đối chiếu. */
   reconcile?: { at: string; runs: { id: string; status: string; errorCode: string | null }[]; finishedOrphan: string | null } | null
@@ -516,16 +518,22 @@ export function cmsQaLauncherLockDbCheck(hasPolicy: unknown, realReady: unknown)
   return { ok: true }
 }
 
-export interface CmsQaLockArgs { actorId: string; expectedRunId: string | null; policyVersion: number | null; ack: string | null }
+export interface CmsQaLockArgs {
+  actorId: string; expectedRunId: string | null; policyVersion: number | null; ack: string | null
+  /** 124: id chứng nhận preview đã thấy khi preview chốt bằng chứng nhận (basis operator_reconciliation); null = không gửi. */
+  expectedAttestationId: string | null
+}
 
 /** Tham số lệnh `lock` (forLock) / `lock-preview`. Lý do (Q-213, giả định QA) chuẩn hoá như action; sai ⇒ chặn trước IO. */
-export function parseCmsQaLockArgs(v: { actor?: string; expectRun?: string; policyVersion?: string; ack?: string }, forLock: boolean):
+export function parseCmsQaLockArgs(v: { actor?: string; expectRun?: string; policyVersion?: string; ack?: string; expectAttestation?: string }, forLock: boolean):
   { ok: true; value: CmsQaLockArgs } | { ok: false; reason: string } {
   const actor = v.actor?.trim().toLowerCase()
   if (!actor || !UUID_RE.test(actor)) return { ok: false, reason: 'cần --actor=<uuid super QA của run>' }
   if (!forLock) {
-    if (v.expectRun !== undefined || v.policyVersion !== undefined || v.ack !== undefined) return { ok: false, reason: 'lock-preview không nhận --expect-run / --policy-version / --ack' }
-    return { ok: true, value: { actorId: actor, expectedRunId: null, policyVersion: null, ack: null } }
+    if (v.expectRun !== undefined || v.policyVersion !== undefined || v.ack !== undefined || v.expectAttestation !== undefined) {
+      return { ok: false, reason: 'lock-preview không nhận --expect-run / --policy-version / --ack / --expect-attestation' }
+    }
+    return { ok: true, value: { actorId: actor, expectedRunId: null, policyVersion: null, ack: null, expectedAttestationId: null } }
   }
   const run = v.expectRun?.trim().toLowerCase()
   if (!run || !UUID_RE.test(run)) return { ok: false, reason: 'cần --expect-run=<run_id hiện hành gõ lại từ lock-preview>' }
@@ -535,7 +543,12 @@ export function parseCmsQaLockArgs(v: { actor?: string; expectRun?: string; poli
     ack = cmsNormalizeAck(v.ack)
     if (ack === null) return { ok: false, reason: '--ack phải dài 10…1.000 ký tự sau khi bỏ khoảng trắng hai đầu' }
   }
-  return { ok: true, value: { actorId: actor, expectedRunId: run, policyVersion: Number(v.policyVersion), ack } }
+  let att: string | null = null
+  if (v.expectAttestation !== undefined) {
+    att = v.expectAttestation.trim().toLowerCase()
+    if (!UUID_RE.test(att)) return { ok: false, reason: '--expect-attestation phải là id chứng nhận (UUID) gõ lại từ lock-preview' }
+  }
+  return { ok: true, value: { actorId: actor, expectedRunId: run, policyVersion: Number(v.policyVersion), ack, expectedAttestationId: att } }
 }
 
 /** Điều kiện cục bộ của thao tác chốt: như writer + actor là tài khoản QA vai admin của run (super kiểm ở DB + allowlist app). */
@@ -569,6 +582,8 @@ export interface CmsQaLockEntry {
   policyVersion: number
   /** Có gửi lý do xác nhận (Q-213) — nội dung lý do nằm ở DB (cms_payouts.ack_reason), sổ không chép. */
   ack: boolean
+  /** 124: id chứng nhận gửi kèm lệnh chốt (null = không gửi). Sổ cũ không có khoá này. */
+  expectedAttestationId?: string | null
   startedAt: string
   status: CmsQaLockStatus
   finishedAt: string | null
@@ -577,14 +592,16 @@ export interface CmsQaLockEntry {
 }
 
 /** Mục sổ Ý ĐỊNH — ghi TRƯỚC RPC (qa_run_id, operation_id, program_id, expected_run_id, policy_version). */
-export function newCmsQaLockEntry(i: { operationId: string; qaRunId: string; pid: number; programId: string; actorId: string; expectedRunId: string; policyVersion: number; ack: boolean; now: string }): CmsQaLockEntry {
+export function newCmsQaLockEntry(i: { operationId: string; qaRunId: string; pid: number; programId: string; actorId: string; expectedRunId: string; policyVersion: number; ack: boolean; now: string; expectedAttestationId?: string | null }): CmsQaLockEntry {
+  if (i.expectedAttestationId !== undefined && i.expectedAttestationId !== null && !UUID_RE.test(i.expectedAttestationId)) throw new Error('mục sổ chốt không hợp lệ')
   if (!CMS_QA_LOCK_ID_RE.test(i.operationId) || !RUN_ID_RE.test(i.qaRunId) || !UUID_RE.test(i.programId) || !UUID_RE.test(i.actorId)
       || !UUID_RE.test(i.expectedRunId) || !Number.isSafeInteger(i.policyVersion) || i.policyVersion < 1 || !Number.isInteger(i.pid) || i.pid <= 0) {
     throw new Error('mục sổ chốt không hợp lệ')
   }
   return {
     kind: 'cms-qa-lock', version: 1, operationId: i.operationId, qaRunId: i.qaRunId, pid: i.pid, programId: i.programId,
-    actorId: i.actorId, expectedRunId: i.expectedRunId, policyVersion: i.policyVersion, ack: i.ack, startedAt: i.now,
+    actorId: i.actorId, expectedRunId: i.expectedRunId, policyVersion: i.policyVersion, ack: i.ack,
+    expectedAttestationId: i.expectedAttestationId ?? null, startedAt: i.now,
     status: 'intent', finishedAt: null, result: null,
   }
 }
@@ -599,6 +616,9 @@ export function parseCmsQaLockEntry(text: string): { ok: true; value: CmsQaLockE
     if (typeof o[k] !== 'string' || !UUID_RE.test(o[k] as string)) return { ok: false, reason: `${k} sai` }
   }
   if (!Number.isSafeInteger(o.policyVersion) || (o.policyVersion as number) < 1) return { ok: false, reason: 'policyVersion sai' }
+  if (o.expectedAttestationId !== undefined && o.expectedAttestationId !== null && !(typeof o.expectedAttestationId === 'string' && UUID_RE.test(o.expectedAttestationId))) {
+    return { ok: false, reason: 'expectedAttestationId sai' }
+  }
   if (!Number.isInteger(o.pid) || (o.pid as number) <= 0) return { ok: false, reason: 'pid sai' }
   if (typeof o.startedAt !== 'string' || Number.isNaN(Date.parse(o.startedAt))) return { ok: false, reason: 'startedAt sai' }
   if (!['intent', 'done', 'rejected', 'unknown', 'reconciled'].includes(o.status as string)) return { ok: false, reason: 'trạng thái sai' }
@@ -761,13 +781,15 @@ export function cmsQaPayoutsCloseCheck(
   return { reasons, warningProgramIds: [...warn], payouts }
 }
 
-/** Phân loại tệp trong thư mục sổ của run: writer (w-…), chốt (l-…), lạ (từ chối — không tự bỏ qua). */
-export function cmsQaLedgerPartition(names: readonly string[]): { writers: string[]; locks: string[]; other: string[] } {
-  const writers: string[] = [], locks: string[] = [], other: string[] = []
+/** Phân loại tệp trong thư mục sổ của run: writer (w-…), chốt (l-…), chứng nhận nguồn 124 (a-…), xuất lớp nguồn 124 (x-…), lạ (từ chối — không tự bỏ qua). */
+export function cmsQaLedgerPartition(names: readonly string[]): { writers: string[]; locks: string[]; attests: string[]; exports: string[]; other: string[] } {
+  const writers: string[] = [], locks: string[] = [], attests: string[] = [], exports: string[] = [], other: string[] = []
   for (const n of names) {
     if (/^w-[0-9a-f]{12}\.json$/.test(n)) writers.push(n)
     else if (/^l-[0-9a-f]{12}\.json$/.test(n)) locks.push(n)
+    else if (/^a-[0-9a-f]{12}\.json$/.test(n)) attests.push(n)
+    else if (/^x-[0-9a-f]{12}\.json$/.test(n)) exports.push(n)
     else other.push(n)
   }
-  return { writers, locks, other }
+  return { writers, locks, attests, exports, other }
 }

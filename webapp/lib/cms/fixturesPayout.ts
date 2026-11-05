@@ -10,15 +10,20 @@ import { cmsFxAdminResults } from './fixturesResults'
 import { formatCmsDecimal } from './decimal'
 import { parseCmsLockPreview, parseCmsPayout, type CmsLockPreviewDto, type CmsPayoutDto } from './payoutView'
 
-export type CmsFxLockScenario = 'ready' | 'ack' | 'blocked' | 'pending' | 'error' | 'qa-readonly'
+// 124 (COMP-INT): `attested` — chứng nhận đối soát nguồn decision10 hợp lệ (basis operator_reconciliation, sẵn sàng chốt);
+// `attest-invalid` — chứng nhận không còn khớp lần tính (mapping đổi) ⇒ blocker CMS_LOCK_ATTEST_INVALID.
+export type CmsFxLockScenario = 'ready' | 'ack' | 'blocked' | 'pending' | 'error' | 'qa-readonly' | 'attested' | 'attest-invalid'
 export type CmsFxPayoutScenario = 'locked' | 'locked-sm' | 'locked-error'
-export const CMS_FX_LOCK_SCENARIOS: readonly CmsFxLockScenario[] = ['ready', 'ack', 'blocked', 'pending', 'error', 'qa-readonly']
+export const CMS_FX_LOCK_SCENARIOS: readonly CmsFxLockScenario[] = ['ready', 'ack', 'blocked', 'pending', 'error', 'qa-readonly', 'attested', 'attest-invalid']
 export const CMS_FX_PAYOUT_SCENARIOS: readonly CmsFxPayoutScenario[] = ['locked', 'locked-sm', 'locked-error']
 
 export function cmsFxParseP3(raw: string | undefined): CmsFxLockScenario | CmsFxPayoutScenario | null {
   return [...CMS_FX_LOCK_SCENARIOS, ...CMS_FX_PAYOUT_SCENARIOS].find((s) => s === raw) ?? null
 }
 export const cmsFxIsPayoutScenario = (s: string): s is CmsFxPayoutScenario => (CMS_FX_PAYOUT_SCENARIOS as readonly string[]).includes(s)
+
+/** Id chứng nhận giả (124) — UUID dạng 00000000-…, không trỏ dữ liệu thật. */
+export const CMS_FX_ATTESTATION = '00000000-0000-4000-8000-000000124001'
 
 /** Chương trình của từng kịch bản P3a (đều có trong danh sách A1). */
 export function cmsFxP3Program(s: CmsFxLockScenario | CmsFxPayoutScenario): string {
@@ -67,8 +72,14 @@ export function cmsFxLockPreview(s: CmsFxLockScenario, programId: string = cmsFx
     unassigned_over: s === 'blocked', needs_ack: s === 'ack' || s === 'blocked',
     policy: p.row.isTest ? QA_POLICY : REAL_POLICY, policy_version: 1,
     mapping_fp_run: 'a'.repeat(32), mapping_fp_now: 'a'.repeat(32),
-    source_complete_basis: p.row.isTest ? 'qa_assumption' : null, earliest_lock_at: '2026-11-15T00:00:00.000000Z',
-    blockers: s === 'blocked' ? ['CMS_LOCK_RUN_CHANGED', 'CMS_LOCK_UNASSIGNED_OVER'] : p.row.isTest ? [] : ['CMS_LOCK_POLICY_PENDING'],
+    source_complete_basis: s === 'attested' ? 'operator_reconciliation' : s === 'attest-invalid' ? null : p.row.isTest ? 'qa_assumption' : null,
+    source_complete_through: s === 'attested' ? (endDate ?? p.row.endDate) : null,
+    earliest_lock_at: '2026-11-15T00:00:00.000000Z',
+    blockers: s === 'blocked' ? ['CMS_LOCK_RUN_CHANGED', 'CMS_LOCK_UNASSIGNED_OVER'] : s === 'attest-invalid' ? ['CMS_LOCK_ATTEST_INVALID'] : p.row.isTest ? [] : ['CMS_LOCK_POLICY_PENDING'],
+    // 124: DB trước 124 không có khoá này (preview cũ ⇒ không hiện dòng đối soát); fixture 124 có NONE / hợp lệ / không còn khớp.
+    source_attestation: s === 'attested' ? { id: CMS_FX_ATTESTATION, scope_to: endDate ?? p.row.endDate, field_set: 'decision10', attested_at: '2026-11-15T01:30:00.000000Z', as_of: '2026-11-15T00:30:00.000000Z', code: null }
+      : s === 'attest-invalid' ? { id: CMS_FX_ATTESTATION, scope_to: endDate ?? p.row.endDate, field_set: 'decision10', attested_at: '2026-11-15T01:30:00.000000Z', as_of: '2026-11-15T00:30:00.000000Z', code: 'STALE_MAPPING' }
+      : { code: 'NONE' },
   })
 }
 

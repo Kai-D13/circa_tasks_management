@@ -10,6 +10,7 @@
 
 import { cronBearerMatches } from './cronProducts'
 import { cmsCanPublishResults } from './releaseGate'
+import { cmsSourceCaptureFromEnv } from './flags'
 import {
   CMS_RPC_TIMEOUT_MAX_MS, CMS_RPC_TIMEOUT_MIN_MS, CMS_SALES_MIN_PROGRAM_MS, runCmsSalesSync,
   type CmsIo, type CmsSalesSyncDeps, type CmsSalesSyncResult,
@@ -55,7 +56,8 @@ export function orderDuePrograms(list: readonly CmsDueProgram[]): CmsDueProgram[
 export async function runCmsSalesCron(
   deps: CmsSalesCronDeps,
   // releaseOpen: CHỈ để test luồng cron khi cổng Q-206 đã mở; handler route không truyền ⇒ luôn theo hằng releaseGate.
-  opts: { budgetMs?: number; releaseOpen?: boolean } = {},
+  // sourceCapture: mặc định theo cờ CMS_SOURCE_CAPTURE_ENABLED (migration 124); test truyền tường minh.
+  opts: { budgetMs?: number; releaseOpen?: boolean; sourceCapture?: boolean } = {},
 ): Promise<CmsSalesCronSummary> {
   const t0 = deps.now()
   const budget = opts.budgetMs ?? CMS_SALES_CRON_BUDGET_MS
@@ -69,6 +71,7 @@ export async function runCmsSalesCron(
   // Cron chỉ chọn chương trình thật (is_test = false). Cổng Q-206 đóng ⇒ bỏ qua TRƯỚC khi mở run: không quét BigQuery, không
   // tạo run held mỗi lượt (security review r2 P2-b). Đối soát trước khi mở cổng dùng script operator ở chế độ dry-run.
   const releaseOpen = opts.releaseOpen ?? cmsCanPublishResults(false)
+  const sourceCapture = opts.sourceCapture ?? cmsSourceCaptureFromEnv(process.env)
   for (const p of programs) {
     if (!releaseOpen) {
       results.push({ programId: p.id, status: 'skipped', code: 'RESULTS_RELEASE_GATE', rowsRead: null, candidates: null, unassigned: null, stagedRows: 0, elapsedMs: 0, ...NO_CLEANUP })
@@ -79,7 +82,7 @@ export async function runCmsSalesCron(
     let r: CmsSalesSyncResult
     const tp = deps.now()
     try {
-      r = await runCmsSalesSync(deps, p.id, { dryRun: false, source: 'cron', deadlineAt })
+      r = await runCmsSalesSync(deps, p.id, { dryRun: false, source: 'cron', deadlineAt, sourceCapture })
     } catch {
       results.push({ programId: p.id, status: 'error', code: 'INTERNAL', rowsRead: null, candidates: null, unassigned: null, stagedRows: 0,
         elapsedMs: deps.now() - tp, ...NO_CLEANUP })

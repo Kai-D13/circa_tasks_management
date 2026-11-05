@@ -89,11 +89,13 @@ async function main(args) {
   console.log(`CMS đồng bộ bán · chế độ ${confirm ? 'GHI (--confirm)' : 'DRY-RUN (không ghi)'} · đích ${proto}//${host} · view ${table} · chương trình ${programId}`)
   const { runCmsSalesSync, cmsSalesExitCode } = await jiti.import(path.join(ROOT, 'lib/cms/salesSync.ts'))
   const { cmsSalesSyncDeps } = await jiti.import(path.join(ROOT, 'lib/cms/server/salesSyncDeps.ts'))
-  const r = await runCmsSalesSync(cmsSalesSyncDeps(process.env), programId, { dryRun: !confirm, source: 'operator' })
+  // Capture lớp nguồn (124) theo cờ CMS_SOURCE_CAPTURE_ENABLED (lib/cms/flags.ts) — lõi vẫn đòi run_open trả source_schema = 1.
+  const { cmsSourceCaptureFromEnv } = await jiti.import(path.join(ROOT, 'lib/cms/flags.ts'))
+  const r = await runCmsSalesSync(cmsSalesSyncDeps(process.env), programId, { dryRun: !confirm, source: 'operator', sourceCapture: cmsSourceCaptureFromEnv(process.env) })
   console.log(JSON.stringify({
     status: r.status, code: r.code, reasons: r.reasons, runId: r.runId, isTest: r.isTest, rowsRead: r.rowsRead,
     rowsRejected: r.rowsRejected, candidates: r.candidates, included: r.included, unassigned: r.unassigned,
-    outOfScope: r.outOfScope, amountVnd: r.amountVnd, stagedRows: r.stagedRows, bytesProcessed: r.bytesProcessed,
+    outOfScope: r.outOfScope, amountVnd: r.amountVnd, stagedRows: r.stagedRows, sourceRows: r.sourceRows, bytesProcessed: r.bytesProcessed,
     resultHash: r.resultHash, elapsedMs: r.elapsedMs, cause: r.cause, cleanup: r.cleanup,
   }))
   return cmsSalesExitCode(r)

@@ -53,7 +53,7 @@ async function shot(page: Page, name: string) {
 test.describe('ui v2 CMS P3a — bố cục Chốt kỳ / Số đã chốt @desktop', () => {
   test.skip(!HAS_SUPER, 'chưa có phiên super')
   test.use({ storageState: SUPER_STATE })
-  const MATRIX = ['ready', 'ack', 'blocked', 'pending', 'error', 'qa-readonly', 'locked', 'locked-sm', 'locked-error']
+  const MATRIX = ['ready', 'ack', 'blocked', 'pending', 'error', 'qa-readonly', 'attested', 'attest-invalid', 'locked', 'locked-sm', 'locked-error']
   for (const p3 of MATRIX) for (const theme of ['light', 'dark'] as Theme[]) for (const dev of Object.keys(DEVICES) as Dev[]) {
     test(`p3=${p3} ${dev} ${theme}`, async ({ page }) => {
       const writes = await trapWrites(page)
@@ -120,6 +120,19 @@ test.describe('ui v2 CMS P3a — hành vi khối Chốt kỳ / Số đã chốt 
     await dlg.getByRole('button', { name: 'Để sau' }).click()
     await expect(dlg).toHaveCount(0)
     expect(writes).toEqual([])
+  })
+
+  test('124 chứng nhận nguồn: hợp lệ ⇒ "Đã chứng nhận" + cơ sở đối soát độc lập, nút chốt mở; không còn khớp ⇒ blocker có câu, nút khoá; preview không chứng nhận ⇒ "Chưa có chứng nhận"', async ({ page }) => {
+    await open(page, 'p3=attested')
+    await expect(page.locator('main [data-cms-lock-attest="valid"]')).toContainText('Đã chứng nhận')
+    await expect(page.locator('main [data-cms-lock-basis="operator_reconciliation"]')).toContainText('Đối soát nguồn độc lập')
+    await expect(page.locator('main [data-cms-lock-panel]')).toHaveAttribute('data-cms-lock-panel', 'ready')
+    await open(page, 'p3=attest-invalid')
+    await expect(page.locator('main [data-cms-lock-attest="invalid"]')).toContainText('Không còn khớp')
+    await expect(page.locator('main [data-cms-lock-blocker="CMS_LOCK_ATTEST_INVALID"]')).toHaveText(cmsLockCodeLabel('CMS_LOCK_ATTEST_INVALID'))
+    await expect(page.locator('main [data-cms-lock-open]')).toBeDisabled()
+    await open(page, 'p3=ready')
+    await expect(page.locator('main [data-cms-lock-attest="none"]')).toContainText('Chưa có chứng nhận')
   })
 
   test('bị chặn: nút Chốt kỳ… khoá, mỗi blocker một câu dễ hiểu; chương trình thật: quy tắc chốt chưa chốt (không nhãn QA)', async ({ page }) => {

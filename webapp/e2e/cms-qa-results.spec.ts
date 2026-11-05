@@ -452,9 +452,9 @@ test.describe('CMS QA chốt (P3a) — tham số, cờ process, sổ ý định,
   })
 
   test('tham số: actor bắt buộc; lock cần --expect-run + --policy-version; preview không nhận; lý do chuẩn hoá như action', () => {
-    expect(R.parseCmsQaLockArgs({ actor: SUPER.toUpperCase() }, false)).toEqual({ ok: true, value: { actorId: SUPER, expectedRunId: null, policyVersion: null, ack: null } })
+    expect(R.parseCmsQaLockArgs({ actor: SUPER.toUpperCase() }, false)).toEqual({ ok: true, value: { actorId: SUPER, expectedRunId: null, policyVersion: null, ack: null, expectedAttestationId: null } })
     expect(R.parseCmsQaLockArgs({ actor: SUPER, expectRun: RUN_X, policyVersion: '1', ack: '  Đã soát dòng chưa gán  ' }, true))
-      .toEqual({ ok: true, value: { actorId: SUPER, expectedRunId: RUN_X, policyVersion: 1, ack: 'Đã soát dòng chưa gán' } })
+      .toEqual({ ok: true, value: { actorId: SUPER, expectedRunId: RUN_X, policyVersion: 1, ack: 'Đã soát dòng chưa gán', expectedAttestationId: null } })
     const bad: [Parameters<typeof R.parseCmsQaLockArgs>[0], boolean, RegExp][] = [
       [{}, true, /--actor/],
       [{ actor: 'x' }, false, /--actor/],
@@ -586,8 +586,8 @@ test.describe('CMS QA chốt (P3a) — tham số, cờ process, sổ ý định,
     const w = pc([pay({ is_test: false, program_is_test: false, program_id: uid(95), locked_by: uid(94) })], [])
     expect(w.reasons).toEqual([])
     expect(w.warningProgramIds).toEqual([uid(95)])
-    expect(R.cmsQaLedgerPartition(['w-0123456789ab.json', 'l-0123456789ab.json', 'x.json', 'l-xyz.json']))
-      .toEqual({ writers: ['w-0123456789ab.json'], locks: ['l-0123456789ab.json'], other: ['x.json', 'l-xyz.json'] })
+    expect(R.cmsQaLedgerPartition(['w-0123456789ab.json', 'l-0123456789ab.json', 'a-0123456789ab.json', 'x.json', 'l-xyz.json', 'a-xyz.json']))
+      .toEqual({ writers: ['w-0123456789ab.json'], locks: ['l-0123456789ab.json'], attests: ['a-0123456789ab.json'], exports: [], other: ['x.json', 'l-xyz.json', 'a-xyz.json'] })
   })
 })
 

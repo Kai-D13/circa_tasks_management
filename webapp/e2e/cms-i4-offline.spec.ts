@@ -577,7 +577,8 @@ test.describe('CMS I4 · CLI offline (đường dẫn ngoài Git, stdout chỉ s
       }
     }
     for (const d of ['app', 'lib', 'components', 'scripts']) walk(path.join(WEBAPP, d))
-    expect(hits).toEqual(['scripts/cms-i4-offline.mjs'])
+    // 124 (COMP-INT): CLI chứng nhận (tính lại compare-source) + QA PGlite 124 là script OFFLINE / operator — app vẫn không import.
+    expect(hits).toEqual(['scripts/cms-i4-offline.mjs', 'scripts/cms-source-attest.mjs', 'scripts/qa-cms-124.mjs'])
   })
 
   test('fixture chỉ gồm các file GIẢ (I4 + compare-source) (email @example.test, UUID 00000000-…); file khác thả vào thư mục fixture vẫn bị chặn như dữ liệu trong Git', () => {

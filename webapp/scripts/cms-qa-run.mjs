@@ -50,7 +50,7 @@ if (!['start', 'status', 'close'].includes(a.cmd) || a.bad.length) {
 }
 if (a.values['--ack-warnings'] !== undefined && a.cmd !== 'close') die2('--ack-warnings chỉ dùng với close')
 if (a.flags.has('--with-lock') && a.cmd !== 'start') die2('--with-lock chỉ dùng với start')
-const { T, G, R } = await loadTooling()
+const { T, G, R, A } = await loadTooling()
 const MARKER = path.join(ROOT, G.CMS_QA_MARKER)
 const envFileText = readEnvFileText()
 const env = mergedEnv(envFileText)
@@ -126,19 +126,26 @@ if (a.cmd === 'close') {
     const payoutsTable = (await pgMeta(env, T.pgMetaReadOnly(R.CMS_QA_HAS_PAYOUTS_SQL)))[0]?.has_payouts === true
     const payoutRows = payoutsTable ? await pgMeta(env, T.pgMetaReadOnly(R.cmsQaRunPayoutsSql(m.startedAt))) : []
     const pc = R.cmsQaPayoutsCloseCheck(payoutRows, lc.entries, { qaUserIds: uids, payoutsTable })
+    // 124: mọi chứng nhận / thu hồi trong cửa sổ phải khớp sổ a-… (DB trước 124 ⇒ không có bảng, chỉ kiểm sổ).
+    const attestTable = (await pgMeta(env, T.pgMetaReadOnly(A.CMS_QA_HAS_ATTEST_SQL)))[0]?.has_attest === true
+    const attestRows = attestTable ? await pgMeta(env, T.pgMetaReadOnly(A.cmsQaRunAttestSql(m.startedAt))) : []
+    const xc = A.cmsQaExportsCloseCheck(m, readL(part.exports), pidAlive)
+    const ac = A.cmsQaAttestCloseCheck(m, readL(part.attests), attestRows,
+      { pidAlive, attestTable, programIdsInRun: [...new Set([...m.programs.map((p) => p.id), ...c.closed.programs.map((p) => p.id)])] })
     console.log(`đối chiếu run ${m.runId}: ${c.closed.programs.length} chương trình is_test (để lại, ẩn với user không marker) · ${c.closed.closeCheck.realProgramsTouchedByQaUsers.length} chương trình thật bị tài khoản QA chạm · ${wc.entries.length} writer kết quả · ${sc.runs.length} run sales trong cửa sổ · ${lc.entries.length} thao tác chốt · ${pc.payouts.length} payout chốt trong cửa sổ · ${c.warnings.length + sc.warningProgramIds.length + pc.warningProgramIds.length} cảnh báo`)
     for (const p of c.closed.programs) console.log(`  QA ${mask(p.id)} ${p.status}`)
     for (const w of c.warnings) console.log(`CẢNH BÁO: ${w}`)
     for (const id of sc.warningProgramIds) console.log(`CẢNH BÁO: chương trình thật ${mask(id)} có run sales trong cửa sổ (cổng đã mở — cron thật) — soát tay`)
     for (const id of pc.warningProgramIds) console.log(`CẢNH BÁO: chương trình thật ${mask(id)} được chốt trong cửa sổ (không bởi tài khoản QA) — soát tay`)
-    const red = [...c.reasons, ...wc.reasons, ...sc.reasons, ...lc.reasons, ...pc.reasons,
+    for (const id of ac.warningProgramIds) console.log(`CẢNH BÁO: chương trình thật ${mask(id)} có chứng nhận / thu hồi nguồn trong cửa sổ (không bởi tài khoản QA) — soát tay`)
+    const red = [...c.reasons, ...wc.reasons, ...sc.reasons, ...lc.reasons, ...pc.reasons, ...ac.reasons, ...xc.reasons,
       ...part.other.map((n) => `tệp lạ ${n} trong sổ của run — không xoá tay; báo PM / operator`)]
     if (red.length) {
       for (const r of red) console.log(`ĐỎ: ${r}`)
       console.log(`giữ ${G.CMS_QA_MARKER} mở — không đóng run (runbook D: dừng QA, báo PM / operator)`)
       return 1
     }
-    const ack = T.cmsQaAckWarnings([...new Set([...c.closed.closeCheck.realProgramsChangedByOthers, ...sc.warningProgramIds, ...pc.warningProgramIds])], a.values['--ack-warnings'])
+    const ack = T.cmsQaAckWarnings([...new Set([...c.closed.closeCheck.realProgramsChangedByOthers, ...sc.warningProgramIds, ...pc.warningProgramIds, ...ac.warningProgramIds])], a.values['--ack-warnings'])
     if (!ack.ok) {
       console.log(`CHẶN ĐÓNG: ${ack.reason}`)
       console.log(`giữ ${G.CMS_QA_MARKER} mở`)
@@ -151,6 +158,10 @@ if (a.cmd === 'close') {
       locks: lc.entries.map((e) => ({ operationId: e.operationId, programId: e.programId, status: e.status, expectedRunId: e.expectedRunId,
         lockedRunId: R.cmsQaLockClaimedRun(e), code: e.result?.code ?? null })),
       payouts: pc.payouts,
+      // 124: thao tác chứng nhận / thu hồi nguồn của run (id che ở log; manifest giữ id đầy đủ như locks).
+      attests: ac.entries.map((e) => ({ operationId: e.operationId, op: e.op, programId: e.programId, status: e.status, landedId: A.cmsAttestOpLanded(e), code: e.result?.code ?? null })),
+      // 124 (security review P1-1): mọi lần xuất lớp nguồn (CSV có email nhân viên) trong run — vết kiểm toán, không email.
+      exports: xc.entries.map((e) => ({ exportId: e.exportId, programId: e.programId, runId: e.runId, actorId: e.actorId, status: e.status, rows: e.rows, sha256: e.sha256 })),
     }
     const closed = ack.acked.length ? { ...withSales, closeCheck: { ...withSales.closeCheck, acknowledgedWarnings: ack.acked } } : withSales
     const out = path.join(ROOT, 'qa-artifacts', 'cms-qa', `${m.runId}.json`)

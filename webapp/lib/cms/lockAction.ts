@@ -8,6 +8,9 @@
 //   · mất phản hồi / timeout câu lệnh / lỗi kết nối ⇒ UNKNOWN_OUTCOME — KHÔNG kết luận "chưa chốt": UI bảo tải lại để kiểm;
 //     gọi lại cùng expected_run là idempotent ({already: true}).
 //   · SQLSTATE khác ⇒ QUERY_FAILED (từ chối xác định, không lộ message DB).
+// 124 (COMP-INT): `expectedAttestationId` = id chứng nhận preview đã thấy (payoutView.cmsLockExpectedAttestation). Chuỗi ⇒ gửi
+// p_expected_attestation_id (lock 6 tham số); null / không có ⇒ KHÔNG gửi tham số (DB 124 mặc định NULL; DB trước 124 chỉ có lock
+// 5 tham số). Phản hồi phải nói đúng chứng nhận đã dùng — lệch ⇒ không kết luận thành công.
 
 import { cmsNormalizeAck, parseCmsLockPreview, type CmsLockPreviewDto } from './payoutView'
 
@@ -27,7 +30,7 @@ export interface CmsLockDeps {
 }
 
 export type CmsLockResult =
-  | { ok: true; already: boolean; programId: string; runId: string; amountVnd: string; policyVersion: number }
+  | { ok: true; already: boolean; programId: string; runId: string; amountVnd: string; policyVersion: number; sourceAttestationId: string | null }
   | { ok: false; code: string }
 export type CmsLockPreviewResult = { ok: true; preview: CmsLockPreviewDto } | { ok: false; code: string }
 
@@ -94,10 +97,13 @@ export async function runCmsLock(deps: CmsLockDeps, input: unknown): Promise<Cms
   } else if (i.ackReason !== undefined && i.ackReason !== null && typeof i.ackReason !== 'string') {
     return { ok: false, code: 'BAD_INPUT' }
   }
+  const att = i.expectedAttestationId
+  if (att !== undefined && att !== null && (typeof att !== 'string' || !UUID_RE.test(att))) return { ok: false, code: 'BAD_INPUT' }
   let res: { data: unknown; error: CmsRpcError | null }
   try {
     res = await deps.rpc('rpc_cms_program_lock', {
       p_program_id: i.programId, p_expected_run_id: runId, p_expected_policy_version: pv, p_actor: g.actorId, p_ack_reason: ack,
+      ...(typeof att === 'string' ? { p_expected_attestation_id: att } : {}),
     })
   } catch {
     return { ok: false, code: 'UNKNOWN_OUTCOME' }
@@ -111,5 +117,9 @@ export async function runCmsLock(deps: CmsLockDeps, input: unknown): Promise<Cms
       || typeof o.policy_version !== 'number') {
     return { ok: false, code: 'UNKNOWN_OUTCOME' }
   }
-  return { ok: true, already: o.already === true, programId: i.programId as string, runId, amountVnd: o.amount_vnd, policyVersion: o.policy_version }
+  // Chứng nhận đã dùng phải đúng id gửi (hoặc không có khi không gửi). DB trước 124 không trả khoá ⇒ coi là null.
+  const usedAtt = o.source_attestation_id === undefined ? null : o.source_attestation_id
+  if (usedAtt !== (typeof att === 'string' ? att : null)) return { ok: false, code: 'UNKNOWN_OUTCOME' }
+  return { ok: true, already: o.already === true, programId: i.programId as string, runId, amountVnd: o.amount_vnd, policyVersion: o.policy_version,
+    sourceAttestationId: usedAtt as string | null }
 }

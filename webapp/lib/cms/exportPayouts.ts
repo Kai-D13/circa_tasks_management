@@ -6,10 +6,12 @@
 //    SM: chỉ staff hiện thuộc phạm vi, KHÔNG email, nhãn "trong phạm vi của bạn", so với scope_total (không so tổng run).
 //  · Đủ dòng (kể cả 0 đ — không lọc); Σ tiền = tổng trả về, lệch ⇒ 500 không file. Chưa chốt ⇒ 409, không file số 0.
 //  · Không phải lệnh chuyển tiền; chương trình QA ghi nhãn "dữ liệu QA — không chi trả".
+//  · 124: super có thêm metadata chứng nhận đối soát nguồn đã dùng chốt (id, bộ trường decision10, mốc dữ liệu, nhãn nguồn tham
+//    chiếu, số dòng, vân tay decision10) — không actor / email / hash file. SM không có các dòng này.
 //  · Ô: chuỗi ghi kiểu text (không công thức); tiền nguyên trong miền an toàn ⇒ số, ngoài miền ⇒ text đủ chữ số.
 import * as XLSX from 'xlsx'
 import { cmsDecCell, cmsIntCell } from './exportResults'
-import { cmsUnassignedRatioText, type CmsPayoutDto } from './payoutView'
+import { cmsSourceBasisLabel, cmsUnassignedRatioText, type CmsPayoutDto } from './payoutView'
 
 type Cell = string | number | null
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -85,9 +87,21 @@ export function buildCmsPayoutWorkbook(i: CmsPayoutExportInput): CmsPayoutBuild 
       ['Tỷ lệ GMV chưa gán', cmsUnassignedRatioText(s.unassignedGmv, s.candidateGmv)],
       ['Lý do xác nhận dòng chưa gán', s.ackReason ?? ''],
       ['Quy tắc áp dụng', s.policy.label === 'QA_ONLY_ASSUMPTION' ? 'Giả định QA (không phải quy tắc chi trả thật)' : (s.policy.label ?? '')],
-      ['Cơ sở nguồn đầy đủ', s.sourceCompleteBasis === 'qa_assumption' ? 'Giả định QA' : s.sourceCompleteBasis],
+      ['Cơ sở nguồn đầy đủ', cmsSourceBasisLabel(s.sourceCompleteBasis)],
       ['Nguồn đủ tới ngày', s.sourceCompleteThrough ? vnDate(s.sourceCompleteThrough) : ''],
     )
+    if (s.sourceAttestationId && s.sourceAttestation) {
+      const a = s.sourceAttestation
+      info.push(
+        ['Chứng nhận đối soát nguồn (id)', s.sourceAttestationId],
+        ['Bộ trường đối soát', a.fieldSet],
+        ['Mốc dữ liệu đối soát (VN)', vnTime(a.asOf)],
+        ['Nguồn tham chiếu', a.referenceLabel],
+        ['Số dòng đã đối soát', a.linesCompared],
+        ['Chứng nhận lúc (VN)', vnTime(a.attestedAt)],
+        ['Vân tay decision10 của lần tính', a.runRowsFp],
+      )
+    }
   }
   info.push(['Xuất lúc (VN)', vnTime(i.exportedAt.toISOString())])
   add('Thong tin', info)

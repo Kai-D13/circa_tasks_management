@@ -41,6 +41,19 @@ export function isCmsLockEnabled(): boolean {
 }
 
 /**
+ * Capture lớp NGUỒN của run bán (migration 124, PM COMP-INT §5.A): mặc định OFF, chỉ đúng chuỗi 'true' mới bật. Cờ CHỈ điều
+ * khiển hành vi app — KHÔNG phải chứng cứ DB hỗ trợ: khi ON, lõi đồng bộ còn đòi rpc_cms_sales_run_open trả source_schema = 1
+ * (thiếu / lạ ⇒ đóng run lỗi SOURCE_SCHEMA_UNSUPPORTED, không stage / publish). OFF ⇒ không gửi part 'source_lines'.
+ */
+export function cmsSourceCaptureFromEnv(env: Env): boolean {
+  return env.CMS_SOURCE_CAPTURE_ENABLED === 'true'
+}
+
+export function isCmsSourceCaptureEnabled(): boolean {
+  return cmsSourceCaptureFromEnv(process.env)
+}
+
+/**
  * Server QA (PM r1 PKG-P1-2): launcher `scripts/cms-qa-run.mjs` luôn đặt CMS_QA_SERVER=1 cho server localhost của run QA ⇒
  * action chốt từ UI bị từ chối TRƯỚC RPC (chỉ đọc: preview / số đã chốt / XLSX vẫn chạy). Chốt QA chỉ qua công cụ có gate +
  * sổ ý định (`scripts/cms-qa-results.mjs lock`). Chiều an toàn: đặt nhầm trên app thật chỉ làm khoá nút chốt, không mở quyền.

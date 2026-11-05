@@ -153,7 +153,7 @@ test.describe('CMS P3a — lõi action chốt @desktop', () => {
   test('actor lấy từ SESSION (form gửi actor / tổng / is_test bị bỏ qua); expected run / policy / lý do đã cắt chuyển nguyên vào RPC', async () => {
     const { d, calls } = deps()
     const r = await runCmsLock(d, { ...INPUT, actor: uid(666), amountVnd: '999999', isTest: false, ackReason: '  Đã đối soát với vận hành (QA)  ' })
-    expect(r).toEqual({ ok: true, already: false, programId: P, runId: R, amountVnd: '42000', policyVersion: 1 })
+    expect(r).toEqual({ ok: true, already: false, programId: P, runId: R, amountVnd: '42000', policyVersion: 1, sourceAttestationId: null })
     expect(calls).toEqual([{ fn: 'rpc_cms_program_lock', args: { p_program_id: P, p_expected_run_id: R, p_expected_policy_version: 1, p_actor: ACTOR, p_ack_reason: 'Đã đối soát với vận hành (QA)' } }])
     const empty = deps()
     await runCmsLock(empty.d, { ...INPUT, ackReason: '   ' })

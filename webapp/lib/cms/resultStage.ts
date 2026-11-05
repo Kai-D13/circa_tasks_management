@@ -55,7 +55,15 @@ export interface CmsSalesSnapshot {
   mappingFp: string
   /** Chỉ có khi snapshot đến từ rpc_cms_sales_run_open. */
   runId: string | null
+  /**
+   * Capability lớp nguồn của run vừa mở (migration 124: rpc_cms_sales_run_open trả `source_schema` THỰC của run). null = DB
+   * không trả (trước 124 / snapshot chỉ đọc). Chỉ hợp lệ khi có runId — snapshot chỉ đọc mang khoá này ⇒ DTO hỏng.
+   */
+  sourceSchema: number | null
 }
+
+/** Phiên bản lớp nguồn app biết stage (migration 124). Khác ⇒ không capture (SOURCE_SCHEMA_UNSUPPORTED). */
+export const CMS_SOURCE_SCHEMA_SUPPORTED = 1
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
@@ -124,6 +132,11 @@ export function parseCmsSalesSnapshot(raw: unknown): CmsSalesSnapshot {
     if (typeof s !== 'string' || !UUID_RE.test(s)) throw new CmsSnapshotError('store_ids[]')
     return s
   })
+  const runId = strOrNull(raw, 'run_id', UUID_RE)
+  const sch = raw.source_schema
+  if (sch !== null && sch !== undefined && (runId === null || typeof sch !== 'number' || !Number.isSafeInteger(sch) || sch < 1 || sch > 32767)) {
+    throw new CmsSnapshotError('source_schema')
+  }
   return {
     programId: str(raw, 'program_id', UUID_RE),
     status: str(raw, 'status'),
@@ -140,7 +153,8 @@ export function parseCmsSalesSnapshot(raw: unknown): CmsSalesSnapshot {
     sellers,
     stores,
     mappingFp: str(raw, 'mapping_fp', /^[0-9a-f]{32}$/),
-    runId: strOrNull(raw, 'run_id', UUID_RE),
+    runId,
+    sourceSchema: (sch ?? null) as number | null,
   }
 }
 
@@ -323,6 +337,38 @@ export function buildCmsStagePayload(
       },
     },
   }
+}
+
+/** Part lớp NGUỒN (migration 124) — không thuộc seal 122; stage TRƯỚC seal khi capture bật và run hỗ trợ. */
+export const CMS_SOURCE_PART = 'source_lines' as const
+/** Mọi part RPC stage nhận (4 part engine của seal 122 + lớp nguồn 124). */
+export type CmsAnyStagePart = CmsStagePart | typeof CMS_SOURCE_PART
+
+/**
+ * Dòng lớp NGUỒN (14 trường thô đã chuẩn hoá) = TOÀN BỘ dòng hợp lệ adapter đã đọc (`lines` — cùng tập đưa vào engine, kể cả
+ * ONLINE / chưa hoàn tất / không gán). Dòng bị từ chối khi chuẩn hoá KHÔNG có ở đây (DB kiểm số dòng = rows_read − rows_rejected).
+ * Thứ tự cố định theo order_line_id ⇒ chia khối tất định (gọi lại cùng khối nhận cùng digest). Số scale 9 / micro giây dạng
+ * chuỗi như part sales_lines.
+ */
+export function buildCmsSourceStageRows(lines: readonly CmsSalesLine[]): CmsStageRow[] {
+  return [...lines]
+    .sort((a, b) => (a.orderLineId < b.orderLineId ? -1 : a.orderLineId > b.orderLineId ? 1 : 0))
+    .map((l) => ({
+      order_line_id: l.orderLineId,
+      order_id: l.orderId,
+      order_code: l.orderCode,
+      product_id: l.productId,
+      seller_email: l.sellerEmail,
+      pos_code: l.posCode,
+      order_type: l.orderType,
+      order_status: l.orderStatus,
+      completed_at: formatUtcMicros(l.completedAtMicros),
+      source_updated_at: formatUtcMicros(l.sourceUpdatedAtMicros),
+      quantity_raw: l.quantityRaw,
+      uom_raw: l.uomRaw,
+      base_quantity: dec(l.baseQuantityUnits),
+      gmv_amount: dec(l.gmvUnits),
+    }))
 }
 
 /** Chia một part thành khối liên tục 0…n−1 (cùng kích thước với expect.chunks). */

@@ -12,10 +12,12 @@
 import type { CmsLockPreviewResult, CmsLockResult } from './lockAction'
 import { cmsLockActionLabel, cmsLockCodeLabel, type CmsLockPreviewDto } from './payoutView'
 
-export const CMS_LOCK_RECHECK_CODES: ReadonlySet<string> = new Set(['CMS_LOCK_RUN_CHANGED', 'CMS_LOCK_POLICY_CHANGED', 'CMS_LOCK_STALE_MAPPING', 'CMS_LOCK_STALE_RUN'])
+// 124: chứng nhận đổi / không còn khớp giữa preview và chốt ⇒ cũng phải tải preview mới (không giữ trạng thái sẵn sàng cũ).
+export const CMS_LOCK_RECHECK_CODES: ReadonlySet<string> = new Set(['CMS_LOCK_RUN_CHANGED', 'CMS_LOCK_POLICY_CHANGED', 'CMS_LOCK_STALE_MAPPING', 'CMS_LOCK_STALE_RUN',
+  'CMS_LOCK_EVIDENCE_CHANGED', 'CMS_LOCK_ATTEST_INVALID'])
 
 export interface CmsLockIo {
-  lock(input: { programId: string; expectedRunId: string; expectedPolicyVersion: number; ackReason: string | null }): Promise<CmsLockResult>
+  lock(input: { programId: string; expectedRunId: string; expectedPolicyVersion: number; ackReason: string | null; expectedAttestationId?: string | null }): Promise<CmsLockResult>
   preview(programId: string): Promise<CmsLockPreviewResult>
 }
 

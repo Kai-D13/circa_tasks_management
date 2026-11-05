@@ -13,6 +13,7 @@
 //       node scripts/cms-qa-results.mjs lock-preview --program=<uuid QA-C> --actor=<uuid super QA> --confirm-run=<runId>
 //   (cùng biến) node scripts/cms-qa-results.mjs lock --program=<uuid QA-C> --actor=<uuid super QA> --confirm-run=<runId>
 //       --expect-run=<run_id từ lock-preview> --policy-version=<N từ lock-preview> [--ack=<lý do 10…1.000 ký tự>]
+//       [--expect-attestation=<id chứng nhận từ lock-preview — bắt buộc khi preview chốt bằng chứng nhận (124)>]
 //
 // lock-preview / lock (P3a, work order 03/11 §4.2 — chỉ chương trình QA đã hết kỳ trong run; VĨNH VIỄN theo H8): cùng gate
 //   PROCESS / host / manifest / candidate / launcher / marker / ngân sách đơn điệu của publish; cờ PROGRAM + EARNINGS + LOCK
@@ -46,10 +47,10 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 async function main() {
   const a = parseArgs(process.argv.slice(2), {
     flags: ['--unassigned', '--finish-orphan'],
-    values: ['--program', '--staff', '--lines-per-staff', '--confirm-run', '--writer', '--actor', '--expect-run', '--policy-version', '--ack'],
+    values: ['--program', '--staff', '--lines-per-staff', '--confirm-run', '--writer', '--actor', '--expect-run', '--policy-version', '--ack', '--expect-attestation'],
   })
   const lockCmd = a.cmd === 'lock' || a.cmd === 'lock-preview'
-  const lockOnly = ['--actor', '--expect-run', '--policy-version', '--ack'].filter((k) => a.values[k] !== undefined)
+  const lockOnly = ['--actor', '--expect-run', '--policy-version', '--ack', '--expect-attestation'].filter((k) => a.values[k] !== undefined)
   if (!['publish', 'status', 'reconcile', 'lock', 'lock-preview'].includes(a.cmd) || a.bad.length || (!lockCmd && lockOnly.length)) {
     console.log('dùng: node scripts/cms-qa-results.mjs <publish --program=<uuid> --staff=<uuid,…> --confirm-run=<runId> [--lines-per-staff=N] [--unassigned] | status | reconcile --writer=<w-…|l-…> [--finish-orphan] | lock-preview --program=<uuid> --actor=<uuid> --confirm-run=<runId> | lock --program=<uuid> --actor=<uuid> --confirm-run=<runId> --expect-run=<uuid> --policy-version=<N> [--ack=<lý do>]>')
     return 2
@@ -129,6 +130,7 @@ async function main() {
     const jiti = createJiti(import.meta.url, { alias: { '@': ROOT, 'server-only': path.join(HERE, 'cms-server-only-stub.mjs') }, interopDefault: true })
     return {
       action: await jiti.import(path.join(ROOT, 'lib/cms/lockAction.ts')),
+      payout: await jiti.import(path.join(ROOT, 'lib/cms/payoutView.ts')),
       access: await jiti.import(path.join(ROOT, 'lib/cms/access.ts')),
       admin: (await jiti.import(path.join(ROOT, 'lib/supabase/admin.ts'))).supabaseAdmin,
     }
@@ -214,7 +216,8 @@ async function main() {
     if (a.values['--staff'] !== undefined || a.values['--lines-per-staff'] !== undefined || a.flags.has('--unassigned') || a.flags.has('--finish-orphan')) {
       die2(`${a.cmd} không nhận --staff / --lines-per-staff / --unassigned / --finish-orphan`)
     }
-    la = R.parseCmsQaLockArgs({ actor: a.values['--actor'], expectRun: a.values['--expect-run'], policyVersion: a.values['--policy-version'], ack: a.values['--ack'] }, a.cmd === 'lock')
+    la = R.parseCmsQaLockArgs({ actor: a.values['--actor'], expectRun: a.values['--expect-run'], policyVersion: a.values['--policy-version'], ack: a.values['--ack'],
+      expectAttestation: a.values['--expect-attestation'] }, a.cmd === 'lock')
     if (!la.ok) die2(la.reason)
   } else {
     staff = R.parseCmsQaStaffIds(a.values['--staff'])
@@ -307,7 +310,8 @@ async function main() {
         if (remain < 5_000) return { data: null, error: { message: R.CMS_QA_GUARD_DEADLINE } }
         // Ý ĐỊNH vào sổ TRƯỚC RPC (đồng bộ, độc quyền) — không còn await giữa guard cuối, ghi sổ và gửi RPC.
         const intent = R.newCmsQaLockEntry({ operationId, qaRunId: m.runId, pid: process.pid, programId, actorId: L.actorId,
-          expectedRunId: L.expectedRunId, policyVersion: L.policyVersion, ack: L.ack !== null, now: new Date().toISOString() })
+          expectedRunId: L.expectedRunId, policyVersion: L.policyVersion, ack: L.ack !== null, now: new Date().toISOString(),
+          expectedAttestationId: L.expectedAttestationId })
         try { fs.writeFileSync(lockFile, json(intent), { flag: 'wx' }) } catch { return { data: null, error: { message: R.CMS_QA_LEDGER_FAILED } } }
         entry = intent
         return await lc.admin.rpc(fn, args).abortSignal(AbortSignal.timeout(R.cmsQaIoTimeoutMs(R.CMS_QA_LOCK_RPC_TIMEOUT_MS, remain, 1_000)))
@@ -320,15 +324,18 @@ async function main() {
       const p = pv.preview
       console.log(JSON.stringify({ program: mask(programId), status: p.status, isTest: p.isTest, endDate: p.endDate, runId: p.runId,
         amountVnd: p.amountVnd, staffRows: p.staffRows, staffPaid: p.staffPaid, candidateLines: p.candidateLines, unassignedLines: p.unassignedLines,
-        unassignedOver: p.unassignedOver, needsAck: p.needsAck, policyVersion: p.policyVersion, sourceCompleteBasis: p.sourceCompleteBasis, blockers: p.blockers }))
+        unassignedOver: p.unassignedOver, needsAck: p.needsAck, policyVersion: p.policyVersion, sourceCompleteBasis: p.sourceCompleteBasis,
+        sourceAttestation: p.sourceAttestation, blockers: p.blockers }))
       if (p.blockers.length) { console.log(`CHƯA CHỐT ĐƯỢC: ${p.blockers.join(', ')}`); return 1 }
-      console.log(`SẴN SÀNG — chốt là VĨNH VIỄN (H8). Gõ lại: node scripts/cms-qa-results.mjs lock --program=${programId} --actor=${L.actorId} --confirm-run=${m.runId} --expect-run=${p.runId} --policy-version=${p.policyVersion}${p.needsAck ? ' --ack="<lý do 10…1.000 ký tự>"' : ''}`)
+      const expAtt = lc.payout.cmsLockExpectedAttestation(p)
+      console.log(`SẴN SÀNG — chốt là VĨNH VIỄN (H8). Gõ lại: node scripts/cms-qa-results.mjs lock --program=${programId} --actor=${L.actorId} --confirm-run=${m.runId} --expect-run=${p.runId} --policy-version=${p.policyVersion}${typeof expAtt === 'string' ? ` --expect-attestation=${expAtt}` : ''}${p.needsAck ? ' --ack="<lý do 10…1.000 ký tự>"' : ''}`)
       return 0
     }
 
     fs.mkdirSync(ledgerDir, { recursive: true })
-    console.log(`QA chốt · run ${m.runId} · đích ${m.host} · chương trình ${mask(programId)} · run kỳ vọng ${mask(L.expectedRunId)} · policy v${L.policyVersion} · thao tác ${operationId}`)
-    const r = await lc.action.runCmsLock(deps, { programId, expectedRunId: L.expectedRunId, expectedPolicyVersion: L.policyVersion, ackReason: L.ack ?? undefined })
+    console.log(`QA chốt · run ${m.runId} · đích ${m.host} · chương trình ${mask(programId)} · run kỳ vọng ${mask(L.expectedRunId)} · policy v${L.policyVersion}${L.expectedAttestationId ? ` · chứng nhận ${mask(L.expectedAttestationId)}` : ''} · thao tác ${operationId}`)
+    const r = await lc.action.runCmsLock(deps, { programId, expectedRunId: L.expectedRunId, expectedPolicyVersion: L.policyVersion, ackReason: L.ack ?? undefined,
+      expectedAttestationId: L.expectedAttestationId })
     if (!entry) {
       // Không có Ý ĐỊNH trong sổ ⇒ chưa gửi RPC chốt nào.
       console.log(`CHẶN (không gọi RPC chốt): ${r.ok ? 'INTERNAL' : r.code}${guardReasons.length ? ` — ${guardReasons.join('; ')}` : ''}`)
@@ -391,7 +398,10 @@ async function main() {
   })
   let r
   try {
-    r = await core.runCmsSalesSync(deps, programId, { dryRun: false, source: R.CMS_QA_WRITER_SOURCE, deadlineAt })
+    // Capture lớp nguồn (124) theo cờ CMS_SOURCE_CAPTURE_ENABLED (lib/cms/flags.ts cmsSourceCaptureFromEnv) — lõi vẫn đòi
+    // run_open trả source_schema = 1 (thiếu ⇒ đóng run SOURCE_SCHEMA_UNSUPPORTED; run_id đã vào sổ qua onOpened).
+    r = await core.runCmsSalesSync(deps, programId, { dryRun: false, source: R.CMS_QA_WRITER_SOURCE, deadlineAt,
+      sourceCapture: process.env.CMS_SOURCE_CAPTURE_ENABLED === 'true' })
   } catch (e) {
     rethrowCliExit(e)
     r = { status: 'error', code: 'INTERNAL', runId: null, stagedRows: 0, rowsRead: null, candidates: null, included: null, unassigned: null }
@@ -399,12 +409,12 @@ async function main() {
   const outcome = R.cmsQaWriterOutcome(r)
   entry = { ...entry, status: outcome, finishedAt: new Date().toISOString(), result: {
     status: r.status, code: r.code, runId: r.runId, stagedRows: r.stagedRows, rowsRead: r.rowsRead,
-    candidates: r.candidates, included: r.included, unassigned: r.unassigned,
+    candidates: r.candidates, included: r.included, unassigned: r.unassigned, sourceRows: r.sourceRows ?? null,
   } }
   let saved = true
   try { writeAtomic(ledgerFile, entry) } catch (e) { rethrowCliExit(e); saved = false }
   console.log(JSON.stringify({ status: r.status, code: r.code, runId: r.runId, rowsRead: r.rowsRead, candidates: r.candidates,
-    included: r.included, unassigned: r.unassigned, stagedRows: r.stagedRows, ledger: saved ? outcome : 'NOT_SAVED',
+    included: r.included, unassigned: r.unassigned, stagedRows: r.stagedRows, sourceRows: r.sourceRows ?? null, ledger: saved ? outcome : 'NOT_SAVED',
     guard: r.code === R.CMS_QA_GUARD_LOST ? guardReasons : undefined }))
   if (!saved) {
     // Ledger cuối không lưu được ⇒ KHÔNG báo thành công trọn lượt; publish CÓ THỂ đã thành công — không tự publish lại.

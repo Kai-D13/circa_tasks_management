@@ -17,7 +17,8 @@ import {
 import { cmsDateTime, cmsVnd } from '@/lib/cms/display'
 import { cmsLockConfirmFlow, cmsLockReloadFlow, type CmsLockIo } from '@/lib/cms/lockFlow'
 import {
-  cmsLockActionLabel, cmsLockCodeLabel, cmsLockReady, cmsNormalizeAck, cmsUnassignedRatioText, type CmsLockPreviewDto,
+  cmsAttestStateLabel, cmsLockActionLabel, cmsLockCodeLabel, cmsLockExpectedAttestation, cmsLockReady, cmsNormalizeAck, cmsSourceBasisLabel,
+  cmsUnassignedRatioText, type CmsLockPreviewDto,
 } from '@/lib/cms/payoutView'
 
 // CMS P3a — khối "Chốt kỳ" trên A3 (blueprint P3 §3; UI_V2_CMS §3.4; work order luồng D). Chỉ super + cờ program + earnings +
@@ -26,6 +27,8 @@ import {
 // toàn bộ trong transaction. r2 (PM r1 PKG-P1-3): mọi kết quả action đi qua lib/cms/lockFlow — Server Action reject / mất phản
 // hồi ⇒ "chưa xác định" + làm mới trang, KHOÁ nút tới khi "Kiểm tra lại" thành công (không tự gửi lại); RECHECK / tải lại lỗi ⇒
 // khoá nút (không giữ sẵn sàng giả). Server QA (CMS_QA_SERVER) ⇒ chỉ đọc: nút khoá + server từ chối trước RPC (PKG-P1-2).
+// 124 (COMP-INT): dòng "Đối soát nguồn" hiện trạng thái chứng nhận của run (DB tính lại); chốt gửi id chứng nhận CỦA preview đang
+// xem. Không có thao tác chứng nhận / gán người bán trên UI (CLI có sổ là đường ghi duy nhất).
 const BTN = 'h-[44px] md:h-[36px] gap-1.5'
 
 function Summary({ p }: { p: CmsLockPreviewDto }) {
@@ -45,6 +48,28 @@ function Summary({ p }: { p: CmsLockPreviewDto }) {
           <span className="text-muted-foreground"> (ngưỡng {pol.unassignedMaxLines} dòng · {(pol.unassignedMaxGmvBp / 100).toLocaleString('vi-VN')}%)</span>
         )}
       </dd>
+      {p.sourceAttestation.state !== 'unsupported' && (
+        <>
+          <dt className="text-muted-foreground">Đối soát nguồn</dt>
+          <dd data-cms-lock-attest={p.sourceAttestation.state}>
+            {p.sourceAttestation.state === 'valid' ? (
+              <span className="inline-flex flex-wrap items-center gap-1.5">
+                <StatusBadge tone="success" size="sm">Đã chứng nhận</StatusBadge>
+                <span className="tabular-nums text-muted-foreground">mốc dữ liệu {cmsDateTime(p.sourceAttestation.asOf)}</span>
+              </span>
+            ) : p.sourceAttestation.state === 'invalid' ? (
+              <span className="inline-flex flex-wrap items-center gap-1.5">
+                <StatusBadge tone="danger" size="sm">Không còn khớp</StatusBadge>
+                <span className="text-muted-foreground">{cmsAttestStateLabel(p.sourceAttestation.code)}</span>
+              </span>
+            ) : (
+              <StatusBadge tone="neutral" size="sm">Chưa có chứng nhận</StatusBadge>
+            )}
+          </dd>
+          <dt className="text-muted-foreground">Cơ sở nguồn đầy đủ</dt>
+          <dd data-cms-lock-basis={p.sourceCompleteBasis ?? 'none'}>{cmsSourceBasisLabel(p.sourceCompleteBasis)}</dd>
+        </>
+      )}
       <dt className="text-muted-foreground">Quy tắc chốt</dt>
       <dd>
         {pol.label === 'QA_ONLY_ASSUMPTION'
@@ -102,7 +127,8 @@ export function CmsLockPanel({ programId, preview: initial, loadError, qaReadonl
     setError(null)
     if (fixtureBlocked()) { setOpen(false); return }
     if (!preview || !preview.runId || preview.policyVersion === null) return
-    const input = { programId, expectedRunId: preview.runId, expectedPolicyVersion: preview.policyVersion, ackReason: preview.needsAck ? ack : null }
+    const input = { programId, expectedRunId: preview.runId, expectedPolicyVersion: preview.policyVersion, ackReason: preview.needsAck ? ack : null,
+      expectedAttestationId: cmsLockExpectedAttestation(preview) }
     const io: CmsLockIo = { lock: (i) => lockCmsProgram(i), preview: (id) => previewCmsLock(id) }
     startTransition(async () => {
       const o = await cmsLockConfirmFlow(io, input)

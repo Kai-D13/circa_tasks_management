@@ -67,3 +67,15 @@ Các quyết định r1 vẫn giữ: D2 (CMS cho từng dược sĩ bán, không
 | H11 | **[Operator xác nhận 01/11 trong chat: "H11 – Quy trình: Xác nhận"; PM đồng ý về kỹ thuật]** "PR" = batch commit trên nhánh `feat/cms` (worktree `C:/circa-cms` từ `main` `01a9185`) kèm report để PM audit; không mở GitHub Pull Request. P2-a ở nhánh con riêng. Mỗi commit / push / merge / deploy / DDL prod vẫn cần lệnh operator riêng. |
 | §2 / §5 | Mặc định kỹ thuật được PM sửa: Q = `floor(max(0, ΣB) / K)`; quy cách thập phân chính xác **tối đa 9 chữ số sau dấu chấm** (vượt ⇒ lỗi, không cắt / làm tròn); parser **không đoán** tiền từ text có dấu phân cách; ảnh dùng **Next Image** + `remotePatterns` HTTPS `cdn-gcs.thuocsi.vn` pathname `/thuocsi-live/images/**`, URL khác prefix ⇒ ảnh dự phòng + báo operator kiểm nguồn; reviewer sub-agent chỉ đọc source/diff và DB kiểm thử, không truy cập prod. Chi tiết ở `docs/cms/SPEC.md`. |
 | P1-b | **[PM review P1-b 01/11]** Chống trùng ProductID bằng **một khoá advisory toàn danh mục** (thay khoá theo ProductID), READ COMMITTED + kiểm lại sau khoá + `lock_timeout` 5 s; không thêm extension / EXCLUDE trong batch. Phạm vi `stores` có nhà thuốc ngừng / FS khi kích hoạt ⇒ **fail-closed** `STORE_INVALID`, super admin sửa phạm vi; không tự loại nhà thuốc. `cmsWriteGate` làm cùng spec QA ghi đầu tiên, bắt buộc trước mọi QA ghi prod. Miền số import: tiền = bigint dương PG (≤ 9.223.372.036.854.775.807), quy cách ≤ 29 chữ số nguyên / 9 thập phân — validator và RPC cùng contract. Nâng thư viện `xlsx` = batch dependency riêng toàn repo (operator chốt với PM: để sau, không trộn vào batch CMS). |
+
+## 4. Chứng nhận đối soát nguồn (COMP-INT, 05/11/2026)
+
+| Mã | Quyết định |
+|---|---|
+| COMP-1 | **[PM 05/11 — `planning/reviews/2026-11-05-cms-comp-draft-pm.md` §3 COMP-P1-1]** Chứng nhận dùng làm basis chốt CHỈ nhận `decision10`, `reference_rows_fp = run_rows_fp = decision10(DB)`. `audit14` là thông tin tra soát, không làm chứng nhận. |
+| COMP-2 | **[PM 05/11 §4]** Mốc M ≥ 00:00 VN ngày `end_date + 1`, ≥ dòng trong scope cuối, ≤ hai thời điểm xuất; thời điểm xuất ≤ giờ DB + 5 phút. Điều kiện tối thiểu để ghi "đủ tới end_date" — KHÔNG chốt Q-216. |
+| COMP-3 | **[PM 05/11 §4]** `lock_timeout` 2 s cho attest / revoke / lock; hết hạn ⇒ rollback toàn RPC. Không coi là hạn tổng RPC; không nới trần statement_timeout đã duyệt. |
+| COMP-4 | **[PM 05/11 §4]** Chương trình thật chỉ dùng chứng nhận làm basis khi policy thật sẵn sàng và khai `operator_reconciliation`; `real.ready = false` giữ nguyên; Q-206 / Q-213 / Q-216 chưa tự chốt. |
+| COMP-5 | **[PM 05/11 §4]** `rpc_cms_sales_run_open` trả `source_schema` thực của run; cờ env không phải chứng cứ DB hỗ trợ. |
+| COMP-6 | **[PM 05/11 §4]** Chấp nhận chi phí lớp nguồn cho mọi sales run khi capture bật; dọn theo retention / ngân sách lô chung; không thu thêm PII ngoài 14 trường. |
+| COMP-7 | **[PM 05/11 §5.B]** CLI dùng access token phiên super hiện có (biến process / nhập ẩn); không xây luồng auth mới; không lưu token. |

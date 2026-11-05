@@ -54,7 +54,9 @@ export async function loadTooling() {
   const G = await jiti.import(path.join(ROOT, 'e2e', 'writeQaGates.ts'))
   // QA kết quả có gate (PM 03/11 REL-P1-1) — writer scripts/cms-qa-results.mjs + đối chiếu close.
   const R = await jiti.import(path.join(ROOT, 'e2e', 'cmsQaResults.ts'))
-  return { T, G, R }
+  // 124 (COMP-INT): sổ chứng nhận đối soát nguồn (scripts/cms-source-attest.mjs) — close đối chiếu.
+  const A = await jiti.import(path.join(ROOT, 'e2e', 'cmsSourceAttest.ts'))
+  return { T, G, R, A }
 }
 
 /**
