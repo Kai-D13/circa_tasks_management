@@ -15,6 +15,7 @@ import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { createJiti } from 'jiti'
 import * as L from './lib-care-pglite.mjs'
+import { cmsLegacy } from './lib-cms-legacy.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const MIG = path.join(HERE, '..', '..', 'supabase', 'migrations')
@@ -32,6 +33,11 @@ const jiti = createJiti(import.meta.url, { interopDefault: true, alias: { '@': p
 const E = await jiti.import(path.join(HERE, '..', 'lib', 'cms', 'engine', 'compute.ts'))
 const RS = await jiti.import(path.join(HERE, '..', 'lib', 'cms', 'resultStage.ts'))
 const C = await jiti.import(path.join(HERE, '..', 'lib', 'cms', 'source', 'contract.ts'))
+// CMS-UNCAPPED-1 (CMS-Q-220): engine hiện hành chỉ nhận bậc cuối không giới hạn. Ca LỊCH SỬ (seal SQL 122 vẫn nhận payload có trần
+// của app trước CMS-Q-220 — run cũ) dựng bằng engine CŨ git 60a2231 (scripts/lib-cms-legacy.mjs), không bằng engine mới.
+const LEG = cmsLegacy()
+if (!LEG.isLegacy) { console.error('FAIL: app cũ không phải bản trước CMS-Q-220'); process.exit(2) }
+const E_OLD = await LEG.load('lib/cms/engine/compute.ts')
 
 const bail = (e) => {
   const where = e?.where ? `\n  where: ${String(e.where).split('\n').slice(-2).join(' | ')}` : ''
@@ -82,7 +88,9 @@ const RELEASE_OPEN_SQL = `CREATE OR REPLACE FUNCTION public.cms__results_release
   REVOKE ALL ON FUNCTION public.cms__results_release_open() FROM PUBLIC, anon, authenticated, service_role;`
 
 const PIDS = { none: '910001', prod: '910002', catA: '910003', catB: '910004', out: '910099' }
-const T_NONE = [{ order: 1, from: 1, to: 2, amount: '15000' }, { order: 2, from: 3, to: 4, amount: '20000' }]   // trần 4
+// CMS-Q-220: bậc cuối không giới hạn (trước đây 3–4 = trần 4 — ca có trần chuyển thành ca lịch sử §4c, engine cũ).
+const T_NONE = [{ order: 1, from: 1, to: 2, amount: '15000' }, { order: 2, from: 3, to: null, amount: '20000' }]
+const T_CAP_LEGACY = [{ order: 1, from: 1, to: 2, amount: '15000' }, { order: 2, from: 3, to: 4, amount: '20000' }]   // trần 4 (luật cũ)
 const T_ONE = [{ order: 1, from: 1, to: null, amount: '10000' }]
 
 async function baseDb() {
@@ -140,7 +148,7 @@ function linesFor(today) {
   lineSeq = 0
   const d = (n, hh = '03') => `${dayFrom(today)(n)}T${hh}:00:00.000001Z`
   const raws = [
-    // A: SP none — 30 + 30 + 60 viên / K 24 ⇒ Q 1 → 2 → 5 (trần 4)
+    // A: SP none — 30 + 30 + 60 viên / K 24 ⇒ Q 1 → 2 → 5 (bậc cuối không giới hạn — CMS-Q-220)
     rawLine({ pid: PIDS.none, bq: '30', gmv: '30000', at: d(-9) }),
     rawLine({ pid: PIDS.none, bq: '30', gmv: '30000', at: d(-8) }),
     rawLine({ pid: PIDS.none, bq: '60', gmv: '60000', at: d(-7) }),
@@ -171,13 +179,13 @@ function linesFor(today) {
 }
 
 /** Một lượt đầy đủ: open → engine → payload → (tamper) → stage → seal → (publish). */
-async function runOnce(db, programId, { lines, tamper, publish = true, chunkSize = 3, skipChunk = null, expectTamper } = {}) {
+async function runOnce(db, programId, { lines, tamper, publish = true, chunkSize = 3, skipChunk = null, expectTamper, engine = E } = {}) {
   const svc = svcOf(db)
   const snapRaw = (await svc(`SELECT public.rpc_cms_sales_run_open($1, '{"source":"qa"}'::jsonb) s`, [programId])).rows[0].s
   const snap = RS.parseCmsSalesSnapshot(snapRaw)
   const input = RS.cmsSnapshotToEngineInput(snap)
   const ls = lines ?? linesFor(snap.todayVn)
-  const out = E.computeCmsProgram({ program: input.program, lines: ls, sellers: input.sellers })
+  const out = engine.computeCmsProgram({ program: input.program, lines: ls, sellers: input.sellers })
   const payload = RS.buildCmsStagePayload(snap, ls, out, { rowsRead: ls.length, rowsRejected: 0, bytesProcessed: 1234, chunkSize })
   if (tamper) tamper(payload)
   if (expectTamper) expectTamper(payload.expect)
@@ -285,9 +293,10 @@ const R1 = await runOnce(db, P)
   ok(await count(db, `SELECT count(*) FROM public.cms_sales_lines WHERE run_id = '${R1.runId}' AND disposition = 'UNASSIGNED'`) === 4, 'DB: 4 dòng UNASSIGNED (NOT_FOUND / SHARED_ACCOUNT / STORE_NOT_ELIGIBLE / NO_EMAIL)')
   const exc = R1.payload.expect.totals.excluded_by_reason
   ok(exc.ORDER_NOT_ELIGIBLE === 2 && exc.OUT_OF_WINDOW === 1 && exc.PRODUCT_NOT_IN_PROGRAM === 1, 'dòng không ứng viên chỉ đếm theo lý do (không lưu)', JSON.stringify(exc))
-  // A × SP none: 120 viên / 24 = 5 ⇒ trần 4 ⇒ 15000·2 + 20000·2 = 70000
+  // A × SP none: 120 viên / 24 = 5 ⇒ bậc cuối không giới hạn (CMS-Q-220) ⇒ 15000·2 + 20000·3 = 90000 (không dừng ở mốc 4 cũ)
   const aNone = await one(db, `SELECT r.* FROM public.cms_results r JOIN public.cms_program_products pp ON pp.id = r.program_product_id WHERE r.run_id = $1 AND r.user_id = $2 AND pp.product_id = $3`, [R1.runId, U.A, PIDS.none])
-  ok(aNone && aNone.cms_quantity === 5 && aNone.rewarded_quantity === 4 && aNone.at_cap === true && Number(aNone.amount_vnd) === 70000, 'A × SP none: Q 5, hưởng 4 (trần), 70.000đ', JSON.stringify(aNone && { q: aNone.cms_quantity, rw: aNone.rewarded_quantity, a: aNone.amount_vnd }))
+  ok(aNone && aNone.cms_quantity === 5 && aNone.rewarded_quantity === 5 && aNone.cap_quantity === null && aNone.at_cap === false && Number(aNone.amount_vnd) === 90000,
+    'A × SP none: Q 5, hưởng 5 (không trần), 90.000đ', JSON.stringify(aNone && { q: aNone.cms_quantity, rw: aNone.rewarded_quantity, cap: aNone.cap_quantity, a: aNone.amount_vnd }))
   const aProd = await one(db, `SELECT r.*, public.cms__ts(r.gate_met_at) mt FROM public.cms_results r JOIN public.cms_program_products pp ON pp.id = r.program_product_id WHERE r.run_id = $1 AND r.user_id = $2 AND pp.product_id = $3`, [R1.runId, U.A, PIDS.prod])
   ok(aProd && aProd.gate_met === true && aProd.mt === `${day(-3)}T03:00:00.000001Z`, 'A × SP product: tụt rồi đạt lại ⇒ "đạt từ" = lần chuyển gần nhất (Q-211)', JSON.stringify(aProd && { m: aProd.gate_met, t: aProd.mt }))
   const cat = (await db.query(`SELECT user_id, met FROM public.cms_result_catalog WHERE run_id = $1 ORDER BY user_id`, [R1.runId])).rows
@@ -300,9 +309,9 @@ const R1 = await runOnce(db, P)
   ok(await count(db, `SELECT count(*) FROM public.cms_sync_runs WHERE program_id = '${P}' AND status = 'ok'`) === 1, 'vẫn đúng 1 run ok')
 }
 
-section('4b. Nhiều bậc (100 bậc / SP, trần) — F(Q) tra theo cặp (SP, Q) khớp engine')
+section('4b. Nhiều bậc (100 bậc / SP, bậc cuối không giới hạn — CMS-Q-220) — F(Q) tra theo cặp (SP, Q) khớp engine')
 {
-  const T100 = Array.from({ length: 100 }, (_, i) => ({ order: i + 1, from: i * 3 + 1, to: i * 3 + 3, amount: String(1000 + i * 37) }))
+  const T100 = Array.from({ length: 100 }, (_, i) => ({ order: i + 1, from: i * 3 + 1, to: i === 99 ? null : i * 3 + 3, amount: String(1000 + i * 37) }))
   const PM = await makeProgram(db, { products: [
     { product_id: '910100', gmv_basis: 'none', target_gmv: null, base_quantity_cms: '1', tiers: T100 },
     { product_id: '910101', gmv_basis: 'product', target_gmv: '50000', base_quantity_cms: '0.5', tiers: T100 },
@@ -314,14 +323,33 @@ section('4b. Nhiều bậc (100 bậc / SP, trần) — F(Q) tra theo cặp (SP,
     lm.push(C.normalizeSalesRow(raw).value)
   }
   const r = await runOnce(db, PM, { lines: lm, chunkSize: 50 })
-  const capHit = r.out.results.some((x) => x.atCap)
-  ok(r.seal.sealed === true && r.pub?.published === true && capHit, 'seal 100 bậc đạt (có dược sĩ chạm trần) — F theo cặp (SP, Q) = engine', JSON.stringify(r.seal))
+  // Có dược sĩ vượt mốc bắt đầu bậc 100 (Q ≥ 298) vẫn được cộng tiền bậc cuối — không trần, không AT_CAP.
+  const beyond = r.out.results.some((x) => x.cmsQuantity >= BigInt(298) && x.amountVnd > BigInt(0))
+  ok(r.seal.sealed === true && r.pub?.published === true && beyond && r.out.results.every((x) => x.capQuantity === null && !x.atCap),
+    'seal 100 bậc đạt (có dược sĩ vào bậc cuối không giới hạn, không trần) — F theo cặp (SP, Q) = engine', JSON.stringify(r.seal))
   const t = await runOnce(db, PM, { lines: lm, chunkSize: 50, publish: false, tamper: (p) => {
     const rr = p.parts.results.find((x) => x.program_product_id && Number(x.cms_quantity) > 5 && x.gate_met)
     const ll = p.parts.result_lines.filter((x) => x.user_id === rr.user_id && x.program_product_id === rr.program_product_id && Number(x.amount_vnd) > 0)
     ll[0].amount_vnd = String(Number(ll[0].amount_vnd) + 37); ll[1].amount_vnd = String(Number(ll[1].amount_vnd) - 37)
   } })
   ok(t.seal.sealed === false && t.seal.code === 'SEAL_LINE_ALLOC', 'dồn tiền giữa hai dòng ở chương trình 100 bậc ⇒ SEAL_LINE_ALLOC', JSON.stringify(t.seal))
+}
+
+section('4c. LỊCH SỬ (trước CMS-Q-220): app cũ có trần — seal SQL 122 vẫn kiểm đúng payload có trần; engine mới từ chối cấu hình đó')
+{
+  // DB 122 chưa có guard 125 ⇒ còn nạp được bậc cuối hữu hạn (đúng thế giới trước 125). Run công bố bằng engine CŨ = run lịch sử.
+  const PC = await makeProgram(db, { isTest: true, products: [{ product_id: '910110', gmv_basis: 'none', target_gmv: null, base_quantity_cms: '24', tiers: T_CAP_LEGACY }] })
+  const lc = ['30', '30', '60'].map((bq, i) => C.normalizeSalesRow(rawLine({ pid: '910110', bq, gmv: '1000', at: `${day(-9 + i)}T03:00:00.000001Z` })).value)
+  const old = await runOnce(db, PC, { lines: lc, engine: E_OLD })
+  const res = await one(db, `SELECT cms_quantity, rewarded_quantity, cap_quantity, at_cap, amount_vnd FROM public.cms_results WHERE run_id = $1`, [old.runId])
+  ok(old.seal.sealed === true && old.pub?.published === true && res?.cms_quantity === 5 && res?.rewarded_quantity === 4 && res?.cap_quantity === 4 && res?.at_cap === true
+    && Number(res?.amount_vnd) === 70000, 'engine cũ: Q 5 ⇒ hưởng 4 (trần), 70.000đ — seal S7 / S8 / S14 khớp cấu hình hữu hạn', JSON.stringify([old.seal, res]))
+  const fake = await runOnce(db, PC, { lines: lc, engine: E_OLD, publish: false, tamper: (p) => { const x = p.parts.results[0]; x.cap_quantity = null; x.at_cap = false; x.rewarded_quantity = x.cms_quantity } })
+  ok(fake.seal.sealed === false, 'payload bỏ trần trên cấu hình CÒN trần ⇒ seal 122 từ chối (cap phải theo cấu hình)', JSON.stringify(fake.seal))
+  let threw = null
+  try { await runOnce(db, PC, { lines: lc }) } catch (e) { threw = String(e?.message ?? e) }
+  ok(/FINITE_LAST_TIER/.test(threw ?? ''), 'engine MỚI trên cấu hình bậc cuối hữu hạn (chưa chuyển đổi) ⇒ FINITE_LAST_TIER, không tính theo trần', threw ?? 'không ném')
+  await svc(`SELECT public.rpc_cms_sales_run_finish(id, 'error', '{"error_code":"CONFIG_FINITE_LAST_TIER"}'::jsonb) FROM public.cms_sync_runs WHERE program_id = $1 AND status = 'running'`, [PC])
 }
 
 section('5. Stage — idempotent / xung đột / sai dạng / sau seal')

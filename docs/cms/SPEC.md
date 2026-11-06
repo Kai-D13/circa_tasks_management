@@ -169,7 +169,7 @@ Các phần chính:
 - Chuẩn hóa số thập phân chính xác.
 - Quy đổi số lượng.
 - Xét gate.
-- Tính lũy tiến và trần.
+- Tính lũy tiến (bậc cuối không giới hạn — CMS-Q-220; cấu hình bậc cuối hữu hạn ⇒ lỗi `FINITE_LAST_TIER`, không tính theo trần).
 - Phân bổ theo dòng.
 - Tổng hợp theo người/sản phẩm.
 - Phát hiện vấn đề dữ liệu.

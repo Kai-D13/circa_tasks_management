@@ -11,7 +11,7 @@
 import * as XLSX from 'xlsx'
 import { formatCmsDecimal, parseCmsDecimal } from './decimal'
 import { CMS_LINE_LABEL, cmsProductSalesStats, cmsQtyText } from './resultUi'
-import type { CmsResultHeaderDto, CmsResultLineDto, CmsResultRowsDto } from './resultView'
+import { cmsRunHasLegacyCap, type CmsResultHeaderDto, type CmsResultLineDto, type CmsResultRowsDto } from './resultView'
 
 export const CMS_EXPORT_MAX_LINES = 50_000
 export const CMS_EXPORT_MAX_EXCLUDED = 50_000
@@ -119,6 +119,7 @@ export function buildCmsResultWorkbook(i: CmsExportInput): CmsExportBuild {
   const wb = XLSX.utils.book_new()
   const add = (name: string, aoa: Cell[][]) => XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), name)
 
+  const legacyCap = cmsRunHasLegacyCap(i.rows.results, i.lines)
   add('Thong tin', [
     ['Mục', 'Giá trị'],
     ['Chương trình', i.program.name],
@@ -134,7 +135,9 @@ export function buildCmsResultWorkbook(i: CmsExportInput): CmsExportBuild {
     ['Xuất lúc (VN)', vnTime(i.exportedAt.toISOString())],
     ['Tổng CMS tạm tính (VND)', cmsIntCell(sumRows)],
     ['Số dòng đơn được tính', i.lines.length],
-    ['Ghi chú', 'Tạm tính — chưa chốt kỳ. Mỗi dược sĩ tính gate / bậc / trần riêng; tổng không áp lại bậc.'],
+    ['Ghi chú', legacyCap
+      ? 'Tạm tính — chưa chốt kỳ. Mỗi dược sĩ tính gate / bậc riêng; tổng không áp lại bậc. Phiên này theo cấu hình CŨ có trần số lượng (trước CMS-Q-220) — giữ đúng snapshot.'
+      : 'Tạm tính — chưa chốt kỳ. Mỗi dược sĩ tính gate / bậc riêng; tổng không áp lại bậc. Bậc cuối không giới hạn số lượng.'],
   ])
 
   // Cùng helper với A3 / QLCH / D3 (PM P1-I3-1): dược sĩ có bán = lượng cơ sở thuần > 0 (nửa đơn vị CMS vẫn tính).
@@ -149,14 +152,18 @@ export function buildCmsResultWorkbook(i: CmsExportInput): CmsExportBuild {
   prodSheet.push(['Tổng', '', '', '', '', '', '', '', '', cmsIntCell(sumRows)])
   add('Theo san pham', prodSheet)
 
-  const staffSheet: Cell[][] = [['Dược sĩ', 'user_id', 'Nhà thuốc hiện tại', 'Nhà thuốc lúc bán', 'ProductID', 'Tên sản phẩm', 'SL bán (đv CMS)', 'SL tính CMS', 'SL hưởng (sau trần)',
-    'Trần', 'Đạt trần', 'GMV (VND)', 'Target (VND)', 'Đạt target', 'Đạt từ (VN)', 'CMS khi đạt (VND)', 'CMS tạm tính (VND)', 'Số dòng']]
+  // CMS-Q-220: run mới không có trần ⇒ KHÔNG quảng bá cột "SL hưởng (sau trần)" / "Trần" / "Đạt trần". Chỉ phiên LỊCH SỬ có trần
+  // (snapshot cũ đã đóng băng — legacyCap) mới xuất 3 cột đó để thể hiện đúng cấu hình của run, không tô lại thành luật mới.
+  const staffSheet: Cell[][] = [['Dược sĩ', 'user_id', 'Nhà thuốc hiện tại', 'Nhà thuốc lúc bán', 'ProductID', 'Tên sản phẩm', 'SL bán (đv CMS)', 'SL tính CMS',
+    ...(legacyCap ? ['SL hưởng (sau trần)', 'Trần', 'Đạt trần'] : []),
+    'GMV (VND)', 'Target (VND)', 'Đạt target', 'Đạt từ (VN)', 'CMS khi đạt (VND)', 'CMS tạm tính (VND)', 'Số dòng']]
   const sorted = [...i.rows.results].sort((a, b) => (names.get(a.userId)?.fullName ?? '').localeCompare(names.get(b.userId)?.fullName ?? '', 'vi')
     || a.userId.localeCompare(b.userId) || (prod.get(a.programProductId)?.productId ?? '').localeCompare(prod.get(b.programProductId)?.productId ?? ''))
   for (const r of sorted) {
     const p = prod.get(r.programProductId)
     staffSheet.push([names.get(r.userId)?.fullName ?? '', r.userId, store(names.get(r.userId)?.storeId ?? null), store(r.storeId), r.productId, p?.nameSnapshot ?? '',
-      cmsQtyText(units(r.baseQuantity), units(r.perUnit)), cmsIntCell(r.cmsQuantity), cmsIntCell(r.rewardedQuantity), cmsIntCell(r.capQuantity), r.atCap ? 'Có' : 'Không',
+      cmsQtyText(units(r.baseQuantity), units(r.perUnit)), cmsIntCell(r.cmsQuantity),
+      ...(legacyCap ? [cmsIntCell(r.rewardedQuantity), cmsIntCell(r.capQuantity), r.atCap ? 'Có' : 'Không'] : []),
       cmsDecCell(r.gmvAmount), cmsIntCell(r.targetGmv), r.gmvBasis === 'none' ? '' : r.gateMet ? 'Đạt' : 'Chưa đạt', vnTime(r.gateMetAt),
       cmsIntCell(r.potentialAmount), cmsIntCell(r.amountVnd), r.lineCount])
   }

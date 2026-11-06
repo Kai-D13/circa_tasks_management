@@ -281,7 +281,9 @@ Nhóm danh mục chỉ cộng những sản phẩm được khai báo `GMV_TOAN_
 
 Đạt gate thì CMS được tính cho toàn bộ số lượng hợp lệ trong kỳ, gồm lượng đã bán trước thời điểm đạt.
 
-### 2.9. Tính thưởng lũy tiến và trần
+### 2.9. Tính thưởng lũy tiến (bậc cuối không giới hạn — CMS-Q-220)
+
+> **CMS-Q-220 (05/11) THAY Q-210a:** bỏ trần số lượng hưởng CMS. Bậc cuối luôn **không có cận trên**; nội dung "bậc cuối hữu hạn tạo trần" bên dưới chỉ còn là lịch sử (run QA đã chốt trước 125). Xem `docs/cms/DECISIONS.md` CMS-Q-220.
 
 Bậc liên tục, bắt đầu từ 1. Mỗi bậc có:
 
@@ -289,10 +291,10 @@ Bậc liên tục, bắt đầu từ 1. Mỗi bậc có:
 [from, to] → CMS_VND_SP
 ```
 
-Bậc cuối có thể:
+Bậc cuối:
 
-- Không có cận trên: không giới hạn.
-- Có cận trên: tạo trần số lượng hưởng CMS (Q-210a).
+- **Không có cận trên: không giới hạn** — bắt buộc với mọi cấu hình tính mới (CMS-Q-220). Bậc trung gian vẫn có cận trên (chặn `min(Q, to)` để không tính chồng).
+- ~~Có cận trên: tạo trần số lượng hưởng CMS (Q-210a).~~ Hết hiệu lực; file cũ có số ở `Den_SL_ban` bậc cuối được bỏ giới hạn khi kiểm tra (có cảnh báo).
 
 Với Q là số lượng nguyên đủ xét:
 
@@ -301,7 +303,7 @@ F(Q) = tổng tiền của số đơn vị nằm trong từng bậc
 CMS = gate đạt ? F(Q) : 0
 ```
 
-Số lượng vượt trần không được thêm CMS. GMV và số lượng bán thực tế vẫn giữ đầy đủ.
+Mỗi đơn vị đủ sau mốc bậc cuối (khi gate đã mở) làm CMS tăng đúng mức bậc cuối. GMV và số lượng bán thực tế giữ đầy đủ.
 
 Bảng nghiệm thu:
 
@@ -316,13 +318,24 @@ Bảng nghiệm thu:
 
 Bậc mẫu: 1–9 hưởng 15.000; 10–19 hưởng 20.000; từ 20 hưởng 25.000.
 
-Nếu bậc cuối kết thúc ở 50:
+Bậc cuối không giới hạn (CMS-Q-220 — bảng nghiệm thu stakeholder):
 
-| Q | CMS khi gate đạt |
+| Q | CMS khi gate đạt / không target |
 |---:|---:|
+| 0 | 0 |
+| 1 | 15.000 |
+| 9 | 135.000 |
+| 10 | 155.000 |
+| 19 | 335.000 |
+| 20 | 360.000 |
+| 49 | 1.085.000 |
 | 50 | 1.110.000 |
-| 51 | 1.110.000 |
-| 60 | 1.110.000 |
+| 51 | 1.135.000 |
+| 100 | 2.360.000 |
+| 101 | 2.385.000 |
+| 100.000 | 2.499.860.000 |
+
+(Lịch sử Q-210a — đã bị thay: "bậc cuối kết thúc ở 50" cho Q 50 / 51 / 60 = 1.110.000.)
 
 ### 2.10. Phân bổ tiền theo dòng và ngày đạt
 
@@ -341,7 +354,7 @@ Cách này xử lý đúng:
 
 - Hai dòng nửa hộp cộng thành một hộp.
 - Một dòng đi qua nhiều bậc.
-- Dòng bán vượt trần.
+- Dòng bán đi qua mốc bậc cuối (vd. 50 → 51 vẫn +25.000).
 - Các sự kiện điều chỉnh đã được quy thuộc đúng khi Q-206 được chốt.
 
 Trạng thái hiển thị:
@@ -349,7 +362,7 @@ Trạng thái hiển thị:
 - Chờ đạt target.
 - Đang cộng dồn, khi chưa hoàn thành thêm đơn vị CMS.
 - Đã ghi nhận.
-- Đã đạt trần, khi lượng thêm không tăng CMS.
+- ~~Đã đạt trần~~ — chỉ còn đọc ở run lịch sử trước CMS-Q-220; run mới không sinh trạng thái này.
 - Điều chỉnh cho sự kiện trả hàng đã được chuẩn hóa.
 - Đã chốt sau P3.
 

@@ -30,7 +30,8 @@ function snapshot(o: Partial<Record<string, unknown>> = {}): Record<string, unkn
       { id: PP.p1, product_id: '900001', gmv_basis: 'none', target_gmv: null, base_quantity_cms: '24',
         tiers: [{ order: 1, from: 1, to: null, amount: '10000' }] },
       { id: PP.p2, product_id: '900002', gmv_basis: 'product', target_gmv: '100000', base_quantity_cms: '1',
-        tiers: [{ order: 1, from: 1, to: 5, amount: '5000' }] },
+        // CMS-Q-220: bậc cuối không giới hạn (lượng bán SP này ≤ 3 ⇒ tiền như cấu hình cũ 1–5).
+        tiers: [{ order: 1, from: 1, to: 5, amount: '5000' }, { order: 2, from: 6, to: null, amount: '6000' }] },
     ],
     sellers: [
       { id: A, email: 'DS.A@cms.example.test', role: 'staff', store_id: S1 },

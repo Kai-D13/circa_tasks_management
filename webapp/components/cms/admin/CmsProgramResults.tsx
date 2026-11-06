@@ -7,7 +7,7 @@ import { DataTableShell } from '@/components/ds/DataTableShell'
 import { ProgressBar } from '@/components/ds/ProgressBar'
 import { cmsDateTime, cmsVnd } from '@/lib/cms/display'
 import { cmsStaffRows, type CmsA3Stats, type CmsStaffRowView, type CmsUnassignedSummary } from '@/lib/cms/resultUi'
-import type { CmsCatalogRowDto, CmsResultHeaderDto, CmsResultRowDto, CmsResultUserDto } from '@/lib/cms/resultView'
+import { cmsResultState, type CmsCatalogRowDto, type CmsResultHeaderDto, type CmsResultRowDto, type CmsResultUserDto } from '@/lib/cms/resultView'
 import type { CmsDisplayStatus } from '@/lib/cms/programStatus'
 
 // CMS P2-c (I3) · khối kết quả A3 /targets/campaigns/cms/[id] (UI §3.3; U11 / U12 / U20; Q-212). Chỉ TRÌNH BÀY số đã cộng
@@ -41,14 +41,14 @@ export function CmsA3SyncLine({ header, isSuper, display = 'running' }: { header
   return (
     <div className="space-y-2">
       <p data-cms-synced={display} className="text-[13px] text-muted-foreground">
-        {!header.run ? <>Chưa có số liệu đã công bố</>
+        {!header.run ? (cmsResultState(header) === 'config_reset' ? <>Chưa có số liệu sau thay đổi cấu hình — lần công bố trước theo cấu hình cũ không còn hiện hành</> : <>Chưa có số liệu đã công bố</>)
           : display === 'locked' ? <>Số đã chốt · theo lần tính {at} (không đổi sau chốt) · Xuất Excel: toàn chương trình trong phạm vi của bạn</>
             : display === 'waiting_close' ? <>Số liệu cập nhật {at} · tạm tính, chờ chốt kỳ · Xuất Excel: toàn chương trình trong phạm vi của bạn</>
               : <>Số liệu cập nhật {at} · tạm tính, chưa chốt kỳ · Xuất Excel: toàn chương trình trong phạm vi của bạn</>}
       </p>
       {display !== 'locked' && last && !last.isCurrent && (last.status === 'held' || last.status === 'error') && (
         <Notice tone="warning" role="status" title="Lần đồng bộ gần nhất chưa công bố">
-          {header.run ? 'Đang giữ số liệu của lần công bố trước.' : 'Chưa có lần công bố nào.'}
+          {header.run ? 'Đang giữ số liệu của lần công bố trước.' : cmsResultState(header) === 'config_reset' ? 'Chưa có lần công bố nào theo cấu hình hiện tại.' : 'Chưa có lần công bố nào.'}
           {isSuper && last.errorCode ? <> Mã: <code className="tabular-nums">{last.errorCode}</code>{last.finishedAt ? ` · ${cmsDateTime(last.finishedAt)}` : ''}.</> : null}
         </Notice>
       )}

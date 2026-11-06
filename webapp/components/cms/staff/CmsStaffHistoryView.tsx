@@ -14,7 +14,7 @@ import {
   CMS_HISTORY_MAX_N, cmsHistoryMore, cmsHistoryUrl, cmsLineView, cmsProductTotals, cmsStaffCard, cmsStaffSummary, cmsStoreSummary,
   type CmsHistoryParams, type CmsResultsLoad,
 } from '@/lib/cms/resultUi'
-import type { CmsResultLineDto } from '@/lib/cms/resultView'
+import { CMS_NO_RUN_TEXT, cmsNoRunText, type CmsResultLineDto } from '@/lib/cms/resultView'
 import type { CmsProductView, CmsProgramRowView } from '@/lib/cms/server/catalog'
 import { cmsNavHref, type CmsNav } from '@/lib/cms/fixtureNav'
 
@@ -116,7 +116,7 @@ export function CmsStaffHistoryView({ programs, selected, products, results, lin
               <p className="text-[12px] text-muted-foreground">
                 {run
                   ? <span data-cms-history-note={display ?? 'running'}>{display === 'locked' ? `Đã chốt kỳ — số đã chốt, theo lần tính ${cmsDateTime(run.publishedAt)} (không đổi sau chốt).` : <>{display === 'waiting_close' ? 'Chờ chốt kỳ — số tạm tính, có thể đổi khi chốt.' : 'Tạm tính — chưa chốt kỳ.'} Cập nhật {cmsDateTime(run.publishedAt)}.</>}</span>
-                  : 'Chưa có số liệu — hệ thống chưa tính lần nào.'}
+                  : loaded ? `${cmsNoRunText(loaded.header)}.` : `${CMS_NO_RUN_TEXT}.`}
               </p>
             </section>
           )}

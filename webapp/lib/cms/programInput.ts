@@ -59,6 +59,9 @@ export const CMS_PROGRAM_ERROR_LABELS: Record<string, string> = {
   CMS_PROGRAM_EMPTY: 'Chương trình chưa có sản phẩm hợp lệ — nạp danh mục trước',
   CMS_PROGRAM_CATALOG_TARGET_MISSING: 'Có sản phẩm GMV toàn danh mục nhưng thiếu target danh mục',
   CMS_ACTIVATE_CONFLICT: 'Có sản phẩm thuộc chương trình khác đang chạy cùng thời gian',
+  // CMS-Q-220 (migration 125): bậc cuối phải không giới hạn — cấu hình cũ có cận cuối hữu hạn không kích hoạt được.
+  CMS_PROGRAM_TIER_LAST_FINITE: 'Danh mục còn bậc cuối có giới hạn (cấu hình trước chính sách không trần) — nạp lại file, để trống Đến SL bán ở bậc cuối',
+  CMS_PROGRAM_TIERS_INVALID: 'Thang bậc của danh mục không hợp lệ (phải bắt đầu từ 1, liên tục) — nạp lại file danh mục',
   CMS_PROGRAM_IS_TEST_IMMUTABLE: 'Không đổi được loại chương trình',
   // Q-214 (operator chốt 01/11): chặn dời ngày bắt đầu của chương trình đã kích hoạt về hôm nay / quá khứ.
   CMS_PROGRAM_START_PAST: 'Chương trình đã kích hoạt chỉ được dời ngày bắt đầu sang một ngày sau hôm nay',

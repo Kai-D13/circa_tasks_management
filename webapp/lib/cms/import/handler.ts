@@ -16,7 +16,8 @@ import { readCappedBody, sha256Hex } from '@/lib/care/import/handler'
 import { canonicalProductId } from '@/lib/cms/productId'
 import { parseCmsImportXlsx, type CmsParseError } from './parse'
 import {
-  canonicalCmsImport, validateCmsImport, type CmsImportGroupOk, type CmsImportMode, type CmsImportValidation, type CmsProductMasterLite,
+  CMS_TIER_POLICY, canonicalCmsImport, validateCmsImport,
+  type CmsImportGroupOk, type CmsImportMode, type CmsImportValidation, type CmsProductMasterLite,
 } from './validate'
 import { buildCmsImportErrorXlsx, type CmsRejectedGroupRaw } from './workbooks'
 
@@ -51,6 +52,10 @@ export interface CmsStoredImportResult {
   digest: string
   ignoredFromRow: number | null
   rejected: CmsRejectedGroupRaw[]
+  /** CMS-Q-220: chính sách bậc của lần kiểm (preview lập trước chính sách không có field này). */
+  tierPolicy?: typeof CMS_TIER_POLICY
+  /** Cận cuối hữu hạn đã chuẩn hoá → không giới hạn (audit; file gốc / SHA / raw không đổi). */
+  normalizedLastTiers?: { productId: string; excelRow: number; from: number; originalTo: number }[]
 }
 
 export interface CmsImportRunRow {
@@ -277,6 +282,14 @@ const rejectedRaw = (v: CmsImportValidation): CmsRejectedGroupRaw[] =>
     errors: g.errors,
   }))
 
+const normalizedLastTiers = (v: CmsImportValidation): NonNullable<CmsStoredImportResult['normalizedLastTiers']> =>
+  v.groupsOk.flatMap((g) => {
+    if (g.normalizedLastTo === null) return []
+    const last = g.tiers[g.tiers.length - 1]
+    const row = g.warnings.find((w) => w.code === 'LAST_TIER_UNBOUNDED_NORMALIZED')?.excelRow ?? 0
+    return [{ productId: g.productId, excelRow: row, from: last.from, originalTo: g.normalizedLastTo }]
+  })
+
 export async function handleCmsImportPreview(req: Request, deps: CmsImportDeps): Promise<Response> {
   const g = await guard(deps)
   if (!g.ok) return g.res
@@ -295,7 +308,10 @@ export async function handleCmsImportPreview(req: Request, deps: CmsImportDeps):
       programId: program.id, mode, sha256: sha, fileBytes: f.bytes.byteLength, actorId: g.actorId, stats: a.v.stats,
       // Tên kỹ thuật (không lưu tên file người dùng).
       fileName: `cms-import-${sha.slice(0, 12)}.xlsx`,
-      result: { digest: a.digest, ignoredFromRow: a.ignoredFromRow, rejected: rejectedRaw(a.v) },
+      result: {
+        digest: a.digest, ignoredFromRow: a.ignoredFromRow, rejected: rejectedRaw(a.v),
+        tierPolicy: CMS_TIER_POLICY, normalizedLastTiers: normalizedLastTiers(a.v),
+      },
     })
   } catch (e) {
     const code = e instanceof CmsRepoError ? e.code : ''
@@ -305,7 +321,7 @@ export async function handleCmsImportPreview(req: Request, deps: CmsImportDeps):
     return fail(500, 'PREVIEW_FAILED')
   }
   return json(200, {
-    ok: true, runId, sha256: sha, mode, configVersion: program.configVersion, catalogTarget: a.v.catalogTarget,
+    ok: true, runId, sha256: sha, mode, configVersion: program.configVersion, catalogTarget: a.v.catalogTarget, tierPolicy: CMS_TIER_POLICY,
     ignoredFromRow: a.ignoredFromRow, stats: a.v.stats,
     groupsOk: a.v.groupsOk.map(({ adviceText, ...rest }) => ({
       ...rest, advicePreview: adviceText.length > ADVICE_PREVIEW_CHARS ? `${adviceText.slice(0, ADVICE_PREVIEW_CHARS)}…` : adviceText,
@@ -323,6 +339,11 @@ const COMMIT_ERRORS: Record<string, [number, CmsImportErrorCode]> = {
   CMS_IMPORT_RUN_NOT_FOUND: [404, 'RUN_NOT_FOUND'],
   // SP biến khỏi Product Master sau preview (phòng thủ — Product Master không xoá dòng) ⇒ xem preview mới.
   CMS_IMPORT_PRODUCT_UNKNOWN: [409, 'PREVIEW_STALE'],
+  // CMS-Q-220 (migration 125): DB từ chối payload có bậc cuối hữu hạn — chỉ xảy ra với preview / bản app trước chính sách (app luôn
+  // chuẩn hoá cuối = null) ⇒ kiểm lại file.
+  CMS_IMPORT_TIER_LAST_FINITE: [409, 'PREVIEW_STALE'],
+  // Guard deferred 125 lúc COMMIT (RPC bản cũ đang chạy dở khi áp 125 — db-reviewer 125 P2-9) ⇒ kiểm lại file.
+  CMS_TIER_LAST_FINITE: [409, 'PREVIEW_STALE'],
   BUSY: [503, 'BUSY'],
 }
 

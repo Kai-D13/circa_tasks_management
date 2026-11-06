@@ -151,18 +151,26 @@ test.describe('CMS-UI-1 — giải thích SL bán / SL được CMS (PM §5) @de
     expect([e.rewarded, e.fractionBase]).toEqual([BigInt(0), u('1.2')]) // 1,2 đơn vị lẻ KHÔNG thành 1 đơn vị được tính
     expect(cmsQtyReasons(e, 'hộp', 'none')).toEqual(['1,2 hộp phần lẻ chưa đủ 1 hộp (2 dược sĩ)'])
     expect(cmsQtyExplain([a, row({ perUnit: '2', baseQuantity: '0', cmsQuantity: '0', rewardedQuantity: '0' })])).toBeNull()
-    // Fixture PG1 — mọi SP: bất biến giữ; ví dụ SP1 199,5 = 159 + 40 chưa đạt + 0,5 lẻ; SP3 130,5 = 120 + 10 vượt trần + 0,5 lẻ.
+    // Fixture PG1 — mọi SP: bất biến giữ; ví dụ SP1 199,5 = 159 + 40 chưa đạt + 0,5 lẻ; SP3 130,5 = 130 + 0,5 lẻ (CMS-Q-220: không
+    // còn "vượt trần" — 10 vỉ trên mốc 50 cũ nay được CMS).
     const l = loaded(cmsFxAdminResults('running'))
     for (const p of CMS_FX_PRODUCTS) {
       const rows = l.rows.results.filter((r) => r.programProductId === p.id)
       const x = cmsQtyExplain(rows)!
       expect(x.baseUnits).toBe((x.rewarded + x.unmetGate + x.overCap) * x.perUnit + x.fractionBase)
+      expect([x.overCap, x.overCapStaff, x.cap]).toEqual([BigInt(0), 0, null])
+      expect(rows.every((r) => r.capQuantity === null && r.atCap === false && r.rewardedQuantity === r.cmsQuantity)).toBe(true)
     }
     const s1 = cmsQtyExplain(l.rows.results.filter((r) => r.programProductId === CMS_FX_PRODUCTS[0].id))!
     expect([s1.rewarded, s1.unmetGate, s1.overCap, s1.fractionBase]).toEqual([BigInt(159), BigInt(40), BigInt(0), u('15')])
     const s3 = cmsQtyExplain(l.rows.results.filter((r) => r.programProductId === CMS_FX_PRODUCTS[2].id))!
-    expect([s3.rewarded, s3.unmetGate, s3.overCap, s3.fractionBase, s3.cap]).toEqual([BigInt(120), BigInt(0), BigInt(10), u('5'), BigInt(50)])
-    expect(cmsQtyReasons(s3, 'vỉ', 'none')).toEqual(['10 vỉ vượt trần 50 vỉ/dược sĩ (1 dược sĩ)', '0,5 vỉ phần lẻ chưa đủ 1 vỉ (1 dược sĩ)'])
+    expect([s3.rewarded, s3.unmetGate, s3.overCap, s3.fractionBase, s3.cap]).toEqual([BigInt(130), BigInt(0), BigInt(0), u('5'), null])
+    expect(cmsQtyReasons(s3, 'vỉ', 'none')).toEqual(['0,5 vỉ phần lẻ chưa đủ 1 vỉ (1 dược sĩ)'])
+    // Run LỊCH SỬ đã đóng băng trước CMS-Q-220 (cấu hình cũ có trần): reader vẫn giải thích đúng snapshot, không tô lại luật mới.
+    const legacy = cmsQtyExplain([row({ baseQuantity: '605', perUnit: '10', cmsQuantity: '60', rewardedQuantity: '50', capQuantity: '50', atCap: true }),
+      row({ userId: 'b', baseQuantity: '700', perUnit: '10', cmsQuantity: '70', rewardedQuantity: '50', capQuantity: '50', atCap: true, gateMet: false })])!
+    expect([legacy.rewarded, legacy.unmetGate, legacy.overCap, legacy.fractionBase, legacy.cap]).toEqual([BigInt(50), BigInt(70), BigInt(10), u('5'), BigInt(50)])
+    expect(cmsQtyReasons(legacy, 'vỉ', 'none')).toEqual(['70 vỉ chưa đạt target (1 dược sĩ)', '10 vỉ vượt trần 50 vỉ/dược sĩ (1 dược sĩ)', '0,5 vỉ phần lẻ chưa đủ 1 vỉ (1 dược sĩ)'])
   })
 
   test('thanh phân bố: Σ đoạn bậc = Σ được CMS; Σ đoạn × mức = Σ tiền; mẫu số là lượng (không phải số người); ≥ 4 bậc đọc đủ; lệch tiền ⇒ null', () => {
@@ -208,10 +216,17 @@ test.describe('CMS-UI-1 — giải thích SL bán / SL được CMS (PM §5) @de
     const p2 = CMS_FX_PRODUCTS[1]
     const st2 = cmsA3StaffRows(l.rows.results.filter((x) => x.programProductId === p2.id), { tiers: p2.tiers, unit: p2.unitCms, catalog: l.rows.catalog, users: l.rows.users, storeNames: CMS_FX_STORE_NAMES })
     expect(st2.every((s) => s.gate?.basis === 'catalog' && s.gate.text.startsWith('Nhóm DM '))).toBe(true)
-    // Trần: trạng thái ghi trần theo từng người; số tính khác số bán.
+    // CMS-Q-220: bán 60 vỉ (trên mốc 50 cũ) ⇒ tính đủ 60, trạng thái bậc (không "Đã đạt trần"), không ghi chú "tính 50".
     const p3 = CMS_FX_PRODUCTS[2]
+    expect(p3.tiers.at(-1)!.to).toBeNull()
     const st3 = cmsA3StaffRows(l.rows.results.filter((x) => x.programProductId === p3.id), { tiers: p3.tiers, unit: p3.unitCms, catalog: l.rows.catalog, users: l.rows.users, storeNames: CMS_FX_STORE_NAMES })
-    expect(st3.find((s) => s.soldText === '60')).toMatchObject({ qtyNote: 'tính 50', status: { tone: 'info', label: 'Đã đạt trần 50 vỉ' } })
+    expect(st3.find((s) => s.soldText === '60')).toMatchObject({ qtyNote: null, status: { tone: 'success', label: 'Bậc 1 · 5.000₫/vỉ' }, amountText: '300.000₫' })
+    expect(st3.some((s) => /trần/i.test(s.status.label) || /trần/i.test(s.qtyNote ?? ''))).toBe(false)
+    // Run lịch sử có trần (cấu hình cũ, đã đóng băng): vẫn hiện đúng snapshot — "tính 50" / "Đã đạt trần 50 vỉ".
+    const legacyTiers = [{ order: 1, from: 1, to: 50, amount: '5000' }]
+    const lg = cmsA3StaffRows([row({ baseQuantity: '600', perUnit: '10', cmsQuantity: '60', rewardedQuantity: '50', capQuantity: '50', atCap: true, amountVnd: '250000', potentialAmount: '250000' })],
+      { tiers: legacyTiers, unit: 'vỉ', catalog: [], users: [], storeNames: new Map() })
+    expect(lg[0]).toMatchObject({ qtyNote: 'tính 50', status: { tone: 'info', label: 'Đã đạt trần 50 vỉ' }, amountText: '250.000₫' })
     // Tiền lớn: chuỗi đầy đủ (không rút gọn).
     const big = row({ gmvBasis: 'none', baseQuantity: '1000000000', perUnit: '1', cmsQuantity: '1000000000', rewardedQuantity: '1000000000', amountVnd: '123456789012', potentialAmount: '123456789012' })
     expect(cmsA3StaffRows([big], { tiers: [{ order: 1, from: 1, to: null, amount: '1' }], unit: 'hộp', catalog: [], users: [], storeNames: new Map() })[0].amountText).toBe('123.456.789.012₫')

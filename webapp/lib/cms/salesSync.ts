@@ -22,7 +22,7 @@
 
 import { createHash } from 'node:crypto'
 import { computeCmsProgram, CmsEngineInputError } from './engine/compute'
-import { parseCmsEngineProgram } from './engine/config'
+import { CmsEngineConfigError, parseCmsEngineProgram } from './engine/config'
 import { assessSalesSnapshot, findDuplicates } from './quality'
 import { cmsCanPublishResults } from './releaseGate'
 import {
@@ -257,8 +257,10 @@ async function runCmsSalesSyncInner(deps: CmsSalesSyncDeps, programId: string, o
     engineInput = cmsSnapshotToEngineInput(snap)
     parseCmsEngineProgram(engineInput.program)
     win = vnProgramWindowMicros(snap.startDate, snap.endDate)
-  } catch {
-    return stop('error', 'CONFIG_INVALID')
+  } catch (e) {
+    // CMS-Q-220: cấu hình bậc cuối hữu hạn (chưa chuyển đổi bằng migration 125) ⇒ mã riêng, KHÔNG tính theo trần; run đóng
+    // 'error' ⇒ pointer / snapshot đã công bố giữ nguyên (fail-closed như CONFIG_INVALID).
+    return stop('error', e instanceof CmsEngineConfigError && e.code === 'FINITE_LAST_TIER' ? 'CONFIG_FINITE_LAST_TIER' : 'CONFIG_INVALID')
   }
   if (!budget.canWork()) return stop('held', 'DEADLINE')
 

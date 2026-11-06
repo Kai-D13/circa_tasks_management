@@ -5,7 +5,7 @@ import { ProgressBar } from '@/components/ds/ProgressBar'
 import { cn } from '@/lib/utils'
 import { cmsAmountPerUnit, cmsDateTime, cmsVnd } from '@/lib/cms/display'
 import { cmsHistoryHref, cmsLoadState, type CmsCardFilter, type CmsGateView, type CmsNearGate, type CmsResultsLoad, type CmsStaffCard, type CmsStaffSummary, type CmsStoreSummary, type CmsUiTier } from '@/lib/cms/resultUi'
-import type { CmsResultHeaderDto } from '@/lib/cms/resultView'
+import { cmsNoRunText, cmsResultState, type CmsResultHeaderDto } from '@/lib/cms/resultView'
 import type { CmsDisplayStatus } from '@/lib/cms/programStatus'
 import { cmsStaffAmountTitle, cmsStaffUpdatedText } from '@/lib/cms/staffView'
 import { cmsQtyExplainRow } from '@/lib/cms/productPresentation'
@@ -46,7 +46,7 @@ export function CmsResultsNotice({ results, reloadHref }: { results: CmsResultsL
 function UpdatedLine({ header, display }: { header: CmsResultHeaderDto; display: CmsDisplayStatus | null }) {
   return header.run
     ? <span data-cms-updated={display ?? 'running'}>{cmsStaffUpdatedText(display, header.run.publishedAt)}</span>
-    : <>Chưa có số liệu — hệ thống chưa tính lần nào</>
+    : <span data-cms-no-run={cmsResultState(header)}>{cmsNoRunText(header)}</span>
 }
 
 function Tile({ label, value }: { label: string; value: React.ReactNode }) {
@@ -157,7 +157,8 @@ export function cmsCardTierText(card: CmsStaffCard, tiers: readonly CmsUiTier[],
   const cur = `Bậc ${tiers[pos.index].order} · ${cmsAmountPerUnit(tiers[pos.index].amount, unit)}`
   if (closed) return cur
   if (pos.next) return `${cur} · Còn ${pos.next.unitsToNext.toString()} ${unit} lên ${cmsAmountPerUnit(tiers[pos.next.index].amount, unit)}`
-  // Bậc cuối hữu hạn = trần số lượng / dược sĩ (Q-210a): ghi rõ tối đa + còn bao nhiêu thay vì "Bậc cao nhất" (PM §6.6).
+  // CMS-Q-220: bậc cuối không giới hạn ⇒ "Bậc cao nhất" (mỗi đơn vị đủ thêm vẫn cộng đúng mức bậc cuối). Hai nhánh trần (atCap ở
+  // trên + "Tối đa" dưới đây) chỉ còn cho run LỊCH SỬ đã đóng băng có cấu hình cũ (Q-210a, đã bị thay) — cấu hình tính mới không có.
   if (last.to !== null) return `${cur} · Tối đa ${last.to} ${unit} · còn ${(BigInt(last.to) - card.cmsQuantity).toString()} ${unit}`
   return `${cur} · Bậc cao nhất`
 }

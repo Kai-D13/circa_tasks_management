@@ -429,7 +429,7 @@ export interface CmsI4Pair {
  * Oracle ĐỘC LẬP (không gọi compute.ts / mapping.ts / time.ts): lọc OFFLINE + COMPLETED, ngày VN trong kỳ (tự tính UTC+7), SP thuộc
  * chương trình, email trim + chữ thường khớp ĐÚNG MỘT tài khoản staff có nhà thuốc OS đang hoạt động thuộc chương trình; cộng B
  * và GMV theo dược sĩ × SP; Q = floor(max(0, B) / K); gate theo GMV cuối kỳ (danh mục = Σ GMV các SP danh mục của dược sĩ);
- * tiền = Σ mức bậc chứa TỪNG đơn vị 1…min(Q, trần) khi gate đạt.
+ * tiền = Σ mức bậc chứa TỪNG đơn vị 1…Q khi gate đạt (CMS-Q-220: bậc cuối không giới hạn — cấu hình cuối hữu hạn bị parser app từ chối).
  */
 export function cmsI4Oracle(p: CmsEngineProgram, lines: readonly CmsSalesLine[], users: readonly CmsUserRef[], stores: readonly CmsStoreRef[], startDate: string, endDate: string) {
   const byEmail = new Map<string, CmsUserRef[]>()
@@ -465,7 +465,7 @@ export function cmsI4Oracle(p: CmsEngineProgram, lines: readonly CmsSalesLine[],
     const met = prod.gmvBasis === 'none' ? true
       : prod.gmvBasis === 'product' ? a.gmv >= prod.targetVnd! * CMS_DEC_FACTOR
         : (catalogGmv.get(a.userId) ?? ZERO) >= p.catalogTargetVnd! * CMS_DEC_FACTOR
-    // Mỗi bậc [from, to] trả mức của bậc cho số đơn vị của Q rơi vào bậc đó; Q vượt bậc cuối hữu hạn ⇒ phần vượt = 0 (trần).
+    // Mỗi bậc [from, to] trả mức của bậc cho số đơn vị của Q rơi vào bậc đó; bậc cuối to = null ⇒ tới Q (không trần, CMS-Q-220).
     // Viết theo đoạn (không lặp từng đơn vị) để Q rất lớn do dữ liệu bẩn không treo công cụ; spec so thêm với oracle từng đơn vị.
     let amount = ZERO
     if (met) {
@@ -530,7 +530,7 @@ export interface CmsI4Reconcile {
 const hintFor = (names: string[]) =>
   names.includes('q') ? 'Q lệch — kiểm Σ base_quantity (TỔNG cả dòng, đơn vị cơ sở) và K của chương trình'
     : names.includes('met') || names.includes('gmv') ? 'GMV / gate lệch — kiểm gmv_amount = item.amount (giữ VAT, không phân bổ voucher) và target'
-      : names.includes('amount') ? 'Cùng Q và gate nhưng tiền lệch — kiểm bậc lũy tiến / trần'
+      : names.includes('amount') ? 'Cùng Q và gate nhưng tiền lệch — kiểm bậc lũy tiến'
         : 'lệch khác — đối chiếu từng dòng'
 
 /**
@@ -683,7 +683,7 @@ export function cmsI4N4aMarkdown(r: ReturnType<typeof cmsI4N4a>): string {
 
 /** Bảng N4b (markdown, email che) — đầu ra ghi NGOÀI Git. */
 export function cmsI4N4bMarkdown(r: CmsI4Reconcile): string {
-  const head = '| Dược sĩ (che) | SP | Số dòng | Σ base_quantity | K | Q | Hưởng (trần) | GMV | Gate GMV / target | Đạt từ (UTC) | CMS engine |\n|---|---|---|---|---|---|---|---|---|---|---|'
+  const head = '| Dược sĩ (che) | SP | Số dòng | Σ base_quantity | K | Q | Hưởng | GMV | Gate GMV / target | Đạt từ (UTC) | CMS engine |\n|---|---|---|---|---|---|---|---|---|---|---|'
   const body = r.pairs.map((p) => `| ${p.sellerMasked}#${cmsI4Pseudo(p.userId)} | ${p.productId} | ${p.lines} | ${p.baseQuantity} | ${p.k} | ${p.q} | ${p.rewarded}${p.cap === null ? '' : ` / ${p.cap}`} | ${p.gmv} | ${p.target === null ? 'không gate' : `${p.gateGmv} / ${p.target} ${p.met ? 'đạt' : 'chưa đạt'}`} | ${p.metAtUtc ?? '—'} | ${p.amount} |`)
   return [head, ...body].join('\n')
 }

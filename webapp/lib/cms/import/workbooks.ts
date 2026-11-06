@@ -2,6 +2,7 @@
 //  · File lỗi: TOÀN BỘ dòng của các nhóm bị loại (không tạo thang bậc thiếu khi nạp lại) + cột Loi; sheet IMPORT_CMS
 //    để sửa rồi nạp lại trực tiếp; giữ giá trị gốc (số giữ số, chữ giữ chữ).
 //  · Template: 9 cột, ProductID SỐ GIẢ (999xxx — không tồn tại trên Product Master ⇒ dòng ví dụ bị loại nếu quên xoá).
+//  · CMS-Q-220: bậc cuối luôn để TRỐNG Den_SL_ban (không giới hạn); không dùng số giả 999999 / 2147483647 để biểu diễn vô hạn.
 
 import * as XLSX from 'xlsx'
 import { CMS_IMPORT_COLUMNS, CMS_IMPORT_SHEET, type CmsImportRawRow } from './parse'
@@ -48,7 +49,7 @@ export function buildCmsImportTemplateXlsx(): Uint8Array<ArrayBuffer> {
     [Number(a), 10000000, 'GMV_THEO_PRODUCTID', 10, 19, 20000, 'Nội dung tư vấn mẫu — thay bằng tài liệu được duyệt.', 'hộp', 24],
     [Number(a), 10000000, 'GMV_THEO_PRODUCTID', 20, null, 25000, 'Nội dung tư vấn mẫu — thay bằng tài liệu được duyệt.', 'hộp', 24],
     [Number(b), 50000000, 'GMV_TOAN_DANH_MUC', 1, null, 8000, 'Nội dung tư vấn mẫu — thay bằng tài liệu được duyệt.', 'chai', 1],
-    [Number(c), null, null, 1, 50, 5000, 'Nội dung tư vấn mẫu — thay bằng tài liệu được duyệt.', 'vỉ', 10],
+    [Number(c), null, null, 1, null, 5000, 'Nội dung tư vấn mẫu — thay bằng tài liệu được duyệt.', 'vỉ', 10],
   ]
   const ws = XLSX.utils.aoa_to_sheet(aoa)
   ws['!cols'] = [{ wch: 12 }, { wch: 20 }, { wch: 22 }, { wch: 11 }, { wch: 11 }, { wch: 12 }, { wch: 48 }, { wch: 10 }, { wch: 18 }]
@@ -57,7 +58,8 @@ export function buildCmsImportTemplateXlsx(): Uint8Array<ArrayBuffer> {
     ['ProductID', 'Mã product_id trên POS (số nguyên)', '12345', 'Bắt buộc; không dùng SKU / mã hàng; phải có trên Product Master'],
     ['KPI_Target_GMV_VND', 'Target GMV (VND, số nguyên)', '10000000', 'Để trống nếu không xét target; nhập ô số, không gõ dấu chấm / phẩy'],
     ['Loai_CMS_GMV', 'Cơ sở xét target', 'GMV_THEO_PRODUCTID', 'Hoặc GMV_TOAN_DANH_MUC (mọi dòng danh mục cùng một target); trống khi không target'],
-    ['Tu_SL_ban / Den_SL_ban', 'Bậc số lượng (đơn vị CMS) trong kỳ', '1–9, 10–19, 20+', 'Bắt đầu từ 1, liên tục; chỉ bậc cuối được để trống Den_SL_ban (không giới hạn)'],
+    ['Tu_SL_ban / Den_SL_ban', 'Bậc số lượng (đơn vị CMS) trong kỳ', '1–9, 10–19, từ 20 trở lên', 'Bắt đầu từ 1, liên tục; bậc giữa ghi đủ Đến SL bán'],
+    ['Den_SL_ban (bậc cuối)', 'Bậc cuối tính từ mốc này trở lên, không giới hạn số lượng', '(trống)', 'Để trống Đến SL bán. File cũ có số ở bậc cuối sẽ được bỏ giới hạn khi kiểm tra (có cảnh báo)'],
     ['CMS_VND_SP', 'CMS cho mỗi đơn vị CMS ở bậc', '15000', 'Tính lũy tiến: mỗi đơn vị theo bậc nó rơi vào'],
     ['Noi_dung_tu_van', 'Nội dung tư vấn đã kiểm duyệt', 'Thông tin đã duyệt', 'Bắt buộc, tối đa 4.000 ký tự, text thuần'],
     ['unit_CMS', 'Đơn vị hưởng CMS', 'hộp', 'Bắt buộc; nhãn hiển thị'],

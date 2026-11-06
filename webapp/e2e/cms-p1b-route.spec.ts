@@ -193,6 +193,35 @@ test.describe('CMS P1-b · route import — preview / commit @desktop', () => {
     expect([again.status, (await body(again)).result]).toEqual([200, { already: true }])
     expect(d.repo.commits.length).toBe(1)
   })
+  test('CMS-Q-220: file cũ có cận cuối hữu hạn ⇒ preview chuẩn hoá + cảnh báo + lưu policy / cận đã bỏ; commit ghi cuối NULL; preview trước chính sách ⇒ 409', async () => {
+    const OLD = book([row(900001, 1, 9, 15000), row(900001, 10, 19, 20000), row(900001, 20, 50, 25000), row(900002, 1, 100, 5000, { tgt: 1000000, loai: 'GMV_THEO_PRODUCTID' })])
+    const d = deps()
+    const r = await preview(d, PID.draft, OLD)
+    const b = await body(r)
+    expect(r.status).toBe(200)
+    expect(b.tierPolicy).toBe('uncapped_last_v1')
+    const g = b.groupsOk as { productId: string; tiers: { to: number | null }[]; normalizedLastTo: number | null; warnings: { code: string; message: string }[] }[]
+    expect(g.map((x) => [x.productId, x.tiers.map((t) => t.to), x.normalizedLastTo])).toEqual([['900001', [9, 19, null], 50], ['900002', [null], 100]])
+    expect(g[0].warnings.find((w) => w.code === 'LAST_TIER_UNBOUNDED_NORMALIZED')?.message).toBe('Đã bỏ giới hạn 50 của bậc cuối theo chính sách CMS mới; từ 20 trở lên đều được xét bậc này.')
+    const run = d.repo.runs.get(String(b.runId))!
+    // Audit trong metadata preview (file gốc / SHA / raw KHÔNG đổi: file_sha256 = SHA của byte gốc).
+    expect(run.result.tierPolicy).toBe('uncapped_last_v1')
+    expect(run.result.normalizedLastTiers).toEqual([{ productId: '900001', excelRow: 4, from: 20, originalTo: 50 }, { productId: '900002', excelRow: 5, from: 1, originalTo: 100 }])
+    expect(run.fileSha256).toBe(await sha(OLD))
+    const c = await commit(d, String(b.runId), OLD)
+    expect(c.status).toBe(200)
+    expect(d.repo.commits[0].products.map((x) => x.tiers.at(-1)!.to)).toEqual([null, null])
+    expect(d.repo.commits[0].products[0].tiers.map((t) => t.to)).toEqual([9, 19, null])
+    // Preview lập TRƯỚC chính sách (digest không có định danh policy) ⇒ commit 409 PREVIEW_STALE, không ghi.
+    const d2 = deps()
+    const b2 = await body(await preview(d2, PID.draft, OLD))
+    const stale = d2.repo.runs.get(String(b2.runId))!
+    stale.result.digest = 'f'.repeat(64)
+    delete stale.result.tierPolicy
+    const c2 = await commit(d2, String(b2.runId), OLD)
+    expect([c2.status, (await body(c2)).code]).toEqual([409, 'PREVIEW_STALE'])
+    expect(d2.repo.commits.length).toBe(0)
+  })
   test('commit: hash client ≠ file ⇒ 409; file khác file đã preview ⇒ 409 SHA_MISMATCH', async () => {
     const d = deps()
     const runId = String((await body(await preview(d, PID.draft))).runId)
@@ -236,6 +265,8 @@ test.describe('CMS P1-b · route import — preview / commit @desktop', () => {
       ['CMS_IMPORT_PRODUCT_CONFLICT', 409, 'PRODUCT_CONFLICT'], ['CMS_IMPORT_PRODUCT_EXISTS', 409, 'PRODUCT_EXISTS'],
       ['CMS_IMPORT_CATALOG_TARGET_CHANGED', 409, 'CATALOG_TARGET_CHANGED'], ['CMS_PROGRAM_NOT_EDITABLE', 409, 'NOT_EDITABLE'],
       ['CMS_IMPORT_CONFLICT', 409, 'PREVIEW_STALE'], ['CMS_IMPORT_PRODUCT_UNKNOWN', 409, 'PREVIEW_STALE'], ['BUSY', 503, 'BUSY'],
+      // CMS-Q-220 (125): DB từ chối bậc cuối hữu hạn — chỉ preview / app trước chính sách ⇒ kiểm lại file.
+      ['CMS_IMPORT_TIER_LAST_FINITE', 409, 'PREVIEW_STALE'], ['CMS_TIER_LAST_FINITE', 409, 'PREVIEW_STALE'],
       ['CMS_IMPORT_BAD_PAYLOAD', 500, 'COMMIT_FAILED'], ['COMMIT_FAILED', 500, 'COMMIT_FAILED'],
     ] as const) {
       const d = deps()
@@ -289,6 +320,7 @@ test.describe('CMS P1-b · đầu vào chương trình (server action) @desktop'
     expect(cmsProgramErrorLabel('CMS_ACTIVATE_CONFLICT')).toContain('chương trình khác')
     expect(cmsProgramErrorLabel('CMS_PROGRAM_EMPTY')).toContain('nạp danh mục')
     expect(cmsProgramErrorLabel('CMS_PROGRAM_START_PAST')).toContain('sau hôm nay')
+    expect(cmsProgramErrorLabel('CMS_PROGRAM_TIER_LAST_FINITE')).toContain('để trống Đến SL bán ở bậc cuối')
     expect(cmsProgramErrorLabel('BUSY')).toContain('thử lại')
     expect(cmsProgramErrorLabel('XYZ')).toBe('Không lưu được — thử lại sau')
   })

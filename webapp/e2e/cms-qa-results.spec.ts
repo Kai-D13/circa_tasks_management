@@ -42,7 +42,8 @@ function snapshot(o: Record<string, unknown> = {}): Record<string, unknown> {
     catalog_target_gmv: null, today_vn: '2026-11-03', current_result_run_id: null, previous_rows_read: null, store_ids: [S1, S2],
     products: [
       { id: uid(31), product_id: '900001', gmv_basis: 'none', target_gmv: null, base_quantity_cms: '30', tiers: [{ order: 1, from: 1, to: null, amount: '10000' }] },
-      { id: uid(32), product_id: '900002', gmv_basis: 'product', target_gmv: '200000', base_quantity_cms: '0.5', tiers: [{ order: 1, from: 1, to: 9, amount: '5000' }] },
+      // CMS-Q-220: bậc cuối không giới hạn (snapshot có bậc cuối hữu hạn ⇒ lõi dừng CONFIG_FINITE_LAST_TIER — ca riêng bên dưới).
+      { id: uid(32), product_id: '900002', gmv_basis: 'product', target_gmv: '200000', base_quantity_cms: '0.5', tiers: [{ order: 1, from: 1, to: 9, amount: '5000' }, { order: 2, from: 10, to: null, amount: '6000' }] },
     ],
     sellers: [
       { id: A, email: 'qa.staff.a@cms.example.test', role: 'staff', store_id: S1 },
@@ -129,6 +130,21 @@ test.describe('CMS QA kết quả — nguồn bán giả @desktop', () => {
     expect(r.candidates).toBe(rows.filter((x) => x.order_type === 'OFFLINE').length)
     expect(BigInt(r.amountVnd!) > BigInt(0)).toBe(true)
     expect(f.calls.find((c) => c.fn === 'openRun')!.args[1]).toEqual({ source: 'qa' })
+  })
+
+  test('CMS-Q-220: snapshot còn bậc cuối hữu hạn (chưa chuyển đổi) ⇒ error CONFIG_FINITE_LAST_TIER, không stage / publish, pointer giữ', async () => {
+    const rows = R.cmsQaFakeSalesRows(fakeIn())
+    const f = coreDeps(rows)
+    const finite = snapshot({
+      products: [{ id: uid(31), product_id: '900001', gmv_basis: 'none', target_gmv: null, base_quantity_cms: '30', tiers: [{ order: 1, from: 1, to: 50, amount: '10000' }] }],
+    })
+    f.deps.loadSnapshot = async () => finite
+    f.deps.openRun = async (id: string, d: unknown) => { f.calls.push({ fn: 'openRun', args: [id, d] }); return { ...finite, run_id: uid(99) } }
+    const r = await runCmsSalesSync(f.deps, PROG, { dryRun: false, source: R.CMS_QA_WRITER_SOURCE })
+    expect([r.status, r.code]).toEqual(['error', 'CONFIG_FINITE_LAST_TIER'])
+    expect(f.fns()).not.toContain('stage')
+    expect(f.fns()).not.toContain('publish')
+    expect(f.calls.filter((c) => c.fn === 'finish').map((c) => c.args)).toEqual([['error', 'CONFIG_FINITE_LAST_TIER']])
   })
 })
 

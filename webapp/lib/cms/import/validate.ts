@@ -2,6 +2,8 @@
 //  · Một dòng lỗi ⇒ loại CẢ nhóm (không nạp thang bậc thiếu). Nhóm danh mục khác target ⇒ loại mọi nhóm danh mục.
 //  · Không tự ép mức thưởng tăng dần; cảnh báo vẫn cho nạp.
 //  · Kết quả có chuỗi chuẩn hoá (canonicalCmsImport) để server so preview ↔ commit (digest sha256 ở route).
+//  · CMS-Q-220 (bỏ trần — thay Q-210a): bậc cuối luôn không giới hạn. File cũ có cận cuối hữu hạn HỢP LỆ được chuẩn hoá
+//    (chỉ cận cuối → null) kèm cảnh báo LAST_TIER_UNBOUNDED_NORMALIZED; KHÔNG chữa lỗi khác (gap / overlap / kiểu / range…).
 
 import { cmsNumberToDecimalString, formatCmsDecimal, parseCmsDecimal } from '../decimal'
 import { cmsSafeImageUrl } from '../image'
@@ -12,7 +14,8 @@ export const CMS_INT_MAX = BigInt(2147483647)
 /** Miền tiền (CMS_VND_SP, target sản phẩm / danh mục) = bigint dương của PG — cùng contract với RPC 121 (PM P1-b P1-1). */
 export const CMS_BIGINT_MAX = BigInt('9223372036854775807')
 export const CMS_AMOUNT_WARN = BigInt(500000)
-export const CMS_LAST_TIER_WARN = BigInt(10000)
+/** Định danh chính sách bậc (CMS-Q-220) — nằm trong chuỗi canonical ⇒ digest preview cũ (trước chính sách) không còn khớp ⇒ 409. */
+export const CMS_TIER_POLICY = 'uncapped_last_v1' as const
 const ADVICE_MAX = 4000
 const UNIT_MAX = 50
 
@@ -41,7 +44,10 @@ export interface CmsImportGroupOk {
   nameSnapshot: string
   imageUrlSnapshot: string | null
   priceSnapshot: string | null
+  /** Bậc canonical đã chuẩn hoá: bậc cuối LUÔN to = null (CMS-Q-220). */
   tiers: CmsImportTier[]
+  /** Cận cuối hữu hạn trong file đã được bỏ (null = file vốn để trống). Chỉ để hiển thị / audit — không vào canonical. */
+  normalizedLastTo: number | null
   excelRows: number[]
   warnings: CmsImportIssue[]
 }
@@ -79,6 +85,9 @@ export interface CmsImportValidation {
   catalogTarget: string | null
   stats: { rowsTotal: number; rowsOk: number; rowsRejected: number; productsOk: number; productsRejected: number; warnings: number }
 }
+
+/** Số nguyên dạng VN có dấu chấm ngăn nghìn (10.000) — tất định, không phụ thuộc locale máy. */
+const vnInt = (n: bigint): string => n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, '.')
 
 const ISSUE = (excelRow: number | null, column: CmsImportColumn | null, code: string, message: string, fix: string): CmsImportIssue =>
   ({ excelRow, column, code, message, fix })
@@ -263,8 +272,14 @@ export function validateCmsImport(rows: readonly CmsImportRawRow[], ctx: CmsImpo
     // Không cảnh báo trạng thái SP (operator bỏ 04/11 — PM `2026-11-04-cms-bi-product-master-pm.md` §2.2): kể cả cache cũ còn
     // is_active=false cũng không sinh PRODUCT_INACTIVE. ProductID không có trên Master vẫn bị từ chối (PRODUCT_NOT_FOUND ở trên).
     for (const t of tiers) if (t.amount! > CMS_AMOUNT_WARN) warnings.push(ISSUE(t.row.excelRow, 'CMS_VND_SP', 'AMOUNT_HIGH', 'Mức CMS > 500.000đ', 'Vẫn nạp; kiểm lại mức thưởng'))
+    // CMS-Q-220: chỉ tới đây khi MỌI kiểm kiểu / range / liên tục đã đạt ⇒ chuẩn hoá đúng một chỗ: cận trên bậc cuối → null.
     const lastTier = tiers[tiers.length - 1]
-    if (lastTier.to !== null && lastTier.to >= CMS_LAST_TIER_WARN) warnings.push(ISSUE(lastTier.row.excelRow, 'Den_SL_ban', 'LAST_TIER_LARGE', 'Bậc cuối hữu hạn rất lớn (≥ 10.000)', 'Vẫn nạp; để trống nếu ý là không giới hạn'))
+    const normalizedLastTo = lastTier.to
+    if (normalizedLastTo !== null) {
+      warnings.push(ISSUE(lastTier.row.excelRow, 'Den_SL_ban', 'LAST_TIER_UNBOUNDED_NORMALIZED',
+        `Đã bỏ giới hạn ${vnInt(normalizedLastTo)} của bậc cuối theo chính sách CMS mới; từ ${vnInt(lastTier.from!)} trở lên đều được xét bậc này.`,
+        'Vẫn nạp; lần sau để trống Den_SL_ban ở bậc cuối'))
+    }
     p.ok = {
       productId: pid,
       gmvBasis,
@@ -276,7 +291,10 @@ export function validateCmsImport(rows: readonly CmsImportRawRow[], ctx: CmsImpo
       nameSnapshot: pm.productName,
       imageUrlSnapshot: img,
       priceSnapshot: pm.referencePrice,
-      tiers: tiers.map((t, i) => ({ order: i + 1, from: Number(t.from!), to: t.to === null ? null : Number(t.to), amount: t.amount!.toString() })),
+      tiers: tiers.map((t, i) => ({
+        order: i + 1, from: Number(t.from!), to: i === tiers.length - 1 || t.to === null ? null : Number(t.to), amount: t.amount!.toString(),
+      })),
+      normalizedLastTo: normalizedLastTo === null ? null : Number(normalizedLastTo),
       excelRows: items.map((i) => i.row.excelRow).sort((a, b) => a - b),
       warnings,
     }
@@ -321,9 +339,11 @@ export function validateCmsImport(rows: readonly CmsImportRawRow[], ctx: CmsImpo
   }
 }
 
-/** Chuỗi chuẩn hoá payload sẽ ghi (để so preview ↔ commit). Không gồm cảnh báo / số dòng Excel. */
+/** Chuỗi chuẩn hoá payload sẽ ghi (để so preview ↔ commit). Không gồm cảnh báo / số dòng Excel / cận cuối gốc đã bỏ.
+ *  Có định danh chính sách bậc (CMS_TIER_POLICY): preview lập trước CMS-Q-220 ⇒ digest khác ⇒ commit 409 PREVIEW_STALE. */
 export function canonicalCmsImport(v: Pick<CmsImportValidation, 'mode' | 'groupsOk' | 'catalogTarget'>): string {
   return JSON.stringify({
+    policy: CMS_TIER_POLICY,
     mode: v.mode,
     catalogTarget: v.catalogTarget,
     groups: v.groupsOk.map((g) => [g.productId, g.gmvBasis, g.targetGmv, g.unitCms, g.baseQuantityCms, g.adviceText,

@@ -14,7 +14,7 @@ import { cmsIsClosedDisplay, cmsProductHref, cmsStaffAmountTitle, cmsStaffHref, 
 import {
   cmsHistoryHref, cmsLineView, cmsProductTotals, cmsQtyText, cmsStaffCard, cmsStaffRows, cmsTierBreakdown, type CmsResultsLoad,
 } from '@/lib/cms/resultUi'
-import type { CmsResultLineDto } from '@/lib/cms/resultView'
+import { CMS_NO_RUN_TEXT, cmsNoRunText, type CmsResultLineDto } from '@/lib/cms/resultView'
 import type { CmsStaffProduct } from '@/lib/cms/server/staffCatalog'
 import { cmsQtyExplainRow } from '@/lib/cms/productPresentation'
 import { cmsNavHref, type CmsNav } from '@/lib/cms/fixtureNav'
@@ -93,6 +93,7 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
               <p className="text-[13px] text-muted-foreground tabular-nums" data-cms-qty-line>
                 Đã bán {card.soldText} {p.unitCms} · {gateOpen ? <>được tính CMS {(qty?.rewarded ?? card.cmsQuantity).toString()} {p.unitCms}</> : <>chưa tính CMS {card.cmsQuantity.toString()} {p.unitCms} (chờ đạt target)</>}
               </p>
+              {/* CMS-Q-220: overCap / atCap chỉ khác 0 với run LỊCH SỬ có trần (cấu hình cũ đã đóng băng); run mới luôn 0 / false. */}
               {qty && (qty.overCap > BigInt(0) || qty.fractionBase > BigInt(0)) && (
                 <ul data-cms-qty-explain className="space-y-0.5 text-[12px] text-muted-foreground tabular-nums">
                   {qty.overCap > BigInt(0) && <li>Vượt trần {qty.cap?.toString()} {p.unitCms}: {qty.overCap.toString()} {p.unitCms} không thêm CMS (vẫn tính vào số đã bán).</li>}
@@ -113,7 +114,7 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
               <p className="text-[12px] text-muted-foreground" data-cms-updated={display}>{cmsStaffUpdatedText(display, loaded.header.run?.publishedAt)}</p>
             </>
           ) : (
-            <p className="text-[13px] text-muted-foreground">Chưa có số liệu — hệ thống chưa tính lần nào.</p>
+            <p className="text-[13px] text-muted-foreground">{loaded ? `${cmsNoRunText(loaded.header)}.` : `${CMS_NO_RUN_TEXT}.`}</p>
           )}
         </section>
       )}
@@ -140,7 +141,7 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
               <p className="text-[12px] text-muted-foreground" data-cms-updated={display}>Mỗi dược sĩ tính bậc riêng · {cmsStaffUpdatedText(display, loaded.header.run?.publishedAt)}</p>
             </>
           ) : (
-            <p className="text-[13px] text-muted-foreground">Chưa có số liệu — hệ thống chưa tính lần nào.</p>
+            <p className="text-[13px] text-muted-foreground">{loaded ? `${cmsNoRunText(loaded.header)}.` : `${CMS_NO_RUN_TEXT}.`}</p>
           )}
         </section>
       )}
@@ -171,7 +172,7 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
                 <li key={t.order} data-cms-staff-tier={t.order} data-cms-tier-state={card ? (current ? 'current' : done ? 'done' : 'ahead') : undefined}
                   className={cn('space-y-1 rounded-[8px] border px-3 py-2 text-[13px]', current && 'border-primary bg-accent')}>
                   <span className="flex items-center justify-between gap-3">
-                    <span><span className="text-muted-foreground">Bậc {t.order} · </span><span className="tabular-nums">{cmsTierRange(t.from, t.to)} {p.unitCms}</span></span>
+                    <span><span className="text-muted-foreground">Bậc {t.order} · </span><span className="tabular-nums">{cmsTierRange(t.from, t.to, p.unitCms)}</span></span>
                     <b className="tabular-nums">{cmsAmountPerUnit(t.amount, p.unitCms)}</b>
                   </span>
                   {card && (

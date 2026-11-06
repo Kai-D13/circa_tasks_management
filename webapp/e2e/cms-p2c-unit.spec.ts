@@ -99,7 +99,9 @@ test.describe('CMS P2-c — view-model resultUi @desktop', () => {
     const st = cmsStoreSummary(l.rows.results, 4)
     const sumRows = l.rows.results.reduce((a, r) => a + BigInt(r.amountVnd), BigInt(0))
     expect(st.amountVnd).toBe(sumRows)
-    expect(st.amountVnd).toBe(BigInt(375000 + 970000 + 40000)) // A + B + C (J chưa đạt target) — nhà thuốc 01
+    // A + B + C (J chưa đạt target) — nhà thuốc 01. CMS-Q-220: B = F(28) 560.000 + 20 × 8.000 + 60 vỉ × 5.000 (không còn trần
+    // 50 vỉ: trước đây 250.000) = 1.020.000.
+    expect(st.amountVnd).toBe(BigInt(375000 + (560000 + 160000 + 300000) + 40000))
     expect([st.staffWithCms, st.staffWithSales]).toEqual([3, 4])
     const rows = cmsStaffRows(l.rows.results, l.rows.users)
     expect(rows.map((x) => x.userId)).toEqual([CMS_FX_USERS.B, CMS_FX_USERS.A, CMS_FX_USERS.C, CMS_FX_USERS.J])
@@ -249,6 +251,27 @@ test.describe('CMS P2-c — XLSX kết quả @desktop', () => {
     const sm = buildCmsResultWorkbook(input({ scope: 'sm', excluded: null }))
     if (!sm.ok) throw new Error(sm.error)
     expect(sheets(sm.bytes).SheetNames).not.toContain('Chua gan')
+  })
+
+  test('CMS-Q-220: run mới KHÔNG có cột "SL hưởng (sau trần)" / "Trần" / "Đạt trần"; run lịch sử có trần giữ đúng snapshot cũ', () => {
+    const i = input()
+    expect(i.rows.results.every((r) => r.capQuantity === null && !r.atCap)).toBe(true)
+    const b = buildCmsResultWorkbook(i)
+    if (!b.ok) throw new Error(b.error)
+    const wb = sheets(b.bytes)
+    const head = (XLSX.utils.sheet_to_json<string[]>(wb.Sheets['Theo duoc si'], { header: 1 })[0] ?? []).map(String)
+    expect(head).toContain('SL tính CMS')
+    expect(head.filter((h) => /trần/i.test(h))).toEqual([])
+    expect(JSON.stringify(XLSX.utils.sheet_to_json(wb.Sheets['Thong tin'], { header: 1 }))).toContain('Bậc cuối không giới hạn số lượng')
+    // Snapshot lịch sử (cấu hình cũ có trần, đã đóng băng): 3 cột trần + ghi chú phiên cũ, số giữ nguyên (không tô lại luật mới).
+    const legacyRows = i.rows.results.map((r, k) => (k === 0 ? { ...r, capQuantity: '1', atCap: true, rewardedQuantity: r.cmsQuantity === '0' ? '0' : '1' } : r))
+    const lg = buildCmsResultWorkbook({ ...i, rows: { ...i.rows, results: legacyRows } })
+    if (!lg.ok) throw new Error(lg.error)
+    expect(lg.amountVnd).toBe(b.amountVnd)
+    const lw = sheets(lg.bytes)
+    const lh = (XLSX.utils.sheet_to_json<string[]>(lw.Sheets['Theo duoc si'], { header: 1 })[0] ?? []).map(String)
+    expect(lh.filter((h) => /trần/i.test(h))).toEqual(['SL hưởng (sau trần)', 'Trần', 'Đạt trần'])
+    expect(JSON.stringify(XLSX.utils.sheet_to_json(lw.Sheets['Thong tin'], { header: 1 }))).toContain('cấu hình CŨ có trần số lượng')
   })
 
   test('kiểm toàn vẹn trước khi trả file: thiếu dòng / lệch tổng / khác run / dòng điều chỉnh khi Q-206 HOLD ⇒ không file', () => {

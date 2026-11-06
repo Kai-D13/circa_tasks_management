@@ -21,6 +21,8 @@ export type CmsEngineConfigErrorCode =
   | 'CATALOG_TARGET_MISSING'
   | 'BAD_BASE_QUANTITY'
   | 'BAD_TIERS'
+  /** CMS-Q-220 (thay Q-210a): bậc cuối hữu hạn = cấu hình CHƯA chuyển đổi sang chính sách không trần ⇒ không tính mới. */
+  | 'FINITE_LAST_TIER'
   | 'BAD_STORE_ID'
 
 export class CmsEngineConfigError extends Error {
@@ -39,7 +41,7 @@ export type CmsIntLike = string | number | bigint
 
 export interface CmsEngineTierInput {
   from: CmsIntLike
-  /** null chỉ ở bậc cuối = không giới hạn; bậc cuối hữu hạn = trần số lượng hưởng CMS (Q-210a). */
+  /** null CHỈ ở bậc cuối và BẮT BUỘC ở bậc cuối (CMS-Q-220 — bậc cuối không giới hạn; Q-210a "bậc cuối hữu hạn = trần" hết hiệu lực). */
   to: CmsIntLike | null
   /** CMS_VND_SP — số nguyên VND > 0 cho mỗi đơn vị CMS. */
   amount: CmsIntLike
@@ -79,8 +81,8 @@ export interface CmsEngineProduct {
   /** K ở scale 9 (units). */
   perUnitUnits: bigint
   tiers: readonly CmsEngineTier[]
-  /** Trần số lượng hưởng CMS = `to` của bậc cuối; null = không giới hạn. */
-  capQuantity: bigint | null
+  /** Luôn null từ CMS-Q-220 (bậc cuối không giới hạn). Giữ field để wire / DTO / reader lịch sử tương thích. */
+  capQuantity: null
 }
 
 export interface CmsEngineProgram {
@@ -127,6 +129,11 @@ function parseTiers(productId: string, tiers: readonly CmsEngineTierInput[]): Cm
     }
     out.push({ from, to, amountVnd })
   })
+  // CMS-Q-220: bậc cuối phải không giới hạn. Cấu hình hữu hạn (dữ liệu chưa qua migration 125 / payload cũ) ⇒ lỗi mã cố định,
+  // lõi đồng bộ giữ snapshot cũ — KHÔNG tự tính theo trần rồi công bố, KHÔNG tự đổi cấu hình ở đây (chuẩn hoá chỉ ở import preview).
+  if (out[out.length - 1].to !== null) {
+    throw new CmsEngineConfigError('FINITE_LAST_TIER', `bậc cuối có cận trên ${out[out.length - 1].to} — chính sách CMS không trần cần bậc cuối trống (chưa chuyển đổi)`, productId)
+  }
   return out
 }
 
@@ -184,7 +191,7 @@ export function parseCmsEngineProgram(input: CmsEngineProgramInput): CmsEnginePr
       targetVnd,
       perUnitUnits: k.units,
       tiers,
-      capQuantity: tiers[tiers.length - 1].to,
+      capQuantity: null,
     })
   }
 

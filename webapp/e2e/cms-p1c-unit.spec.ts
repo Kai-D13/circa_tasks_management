@@ -68,7 +68,8 @@ test.describe('CMS P1-c · định dạng @desktop', () => {
     expect(cmsPrice('9.5')).toBe('9,5₫')
     expect(cmsPrice(null)).toBe('—')
     expect(cmsBaseQtyLine('hộp', '24')).toBe('1 hộp = 24 đơn vị cơ sở')
-    expect([cmsTierRange(1, 9), cmsTierRange(20, null), cmsTierRange(5, 5)]).toEqual(['1–9', '20+', '5'])
+    expect([cmsTierRange(1, 9), cmsTierRange(20, null), cmsTierRange(5, 5)]).toEqual(['1–9', 'Từ 20 trở lên', '5'])
+    expect([cmsTierRange(1, 9, 'hộp'), cmsTierRange(20, null, 'hộp'), cmsTierRange(5, 5, 'hộp')]).toEqual(['1–9 hộp', 'Từ 20 hộp trở lên', '5 hộp'])
     expect(cmsAmountPerUnit('15000', 'hộp')).toBe('15.000₫/hộp')
   })
   test('ngày', () => {

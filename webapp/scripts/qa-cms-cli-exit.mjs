@@ -221,9 +221,9 @@ async function main() {
   r = await run('cms-verify.mjs', ['v8', `--user=${SUPER}`, '--role=super', '--phase=122', '--require-proven=results', `--expect-host=${HOST}`])
   exp(r, 1, 'V8 --require-proven=results trên bảng rỗng ⇒ LỆCH (không xanh khi 0 = 0)', /LỆCH\s+v8-require-proven:results/.test(r.out))
   for (const [args, why] of [
-    [['v8', `--user=${SUPER}`, '--role=super', '--phase=125', `--expect-host=${HOST}`], 'V8 --phase lạ'],
+    [['v8', `--user=${SUPER}`, '--role=super', '--phase=126', `--expect-host=${HOST}`], 'V8 --phase lạ'],
     [['v8', `--user=${SUPER}`, '--role=super', '--require-proven=results', `--expect-host=${HOST}`], 'V8 --require-proven=results khi không khai --phase=122'],
-    [['post', '--phase=125', `--pre=${pre122}`, `--expect-host=${HOST}`], 'post --phase lạ'],
+    [['post', '--phase=126', `--pre=${pre122}`, `--expect-host=${HOST}`], 'post --phase lạ'],
   ]) {
     r = await run('cms-verify.mjs', args)
     exp(r, 2, `${why} ⇒ sai tham số trước IO`, r.reqs === 0)

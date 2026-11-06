@@ -15,6 +15,7 @@ import {
   CMS_VERIFY_PHASES, CMS_PHASE_FUNCTIONS, CMS_FN_MATRIX, CMS_FN_DEF_122, CMS_COL_122, CMS_TABLE_SHAPE_122, cmsFnCountBefore,
   CMS_FN_DEF_123, CMS_COL_123, CMS_TABLE_SHAPE_123, CMS_TRIGGERS_123, CMS_FN_SRC_123, CMS_TABLES_FROZEN_123, CMS_V8_PHASES, CMS_V8_RPC_CALLABLE,
   CMS_FN_DEF_124, CMS_COL_124, CMS_TABLE_SHAPE_124, CMS_TRIGGERS_124, CMS_FN_SRC_124, CMS_FN_CFG_124,
+  CMS_FN_DEF_125, CMS_COL_125, CMS_TABLE_SHAPE_125, CMS_TRIGGERS_125, CMS_FN_SRC_125,
   cmsVerifyAclSql, cmsVerifyV8Sql123, cmsV8ProvenKeys, cmsPostProvenKeys, CMS_VERIFY_SQL, CMS_PAYOUT_KEYS_TOP, CMS_PAYOUT_KEYS_TOP_SUPER, CMS_PAYOUT_KEYS_ROW,
   parseCmsQaTtlHours, parseCmsQaUserIds, pgMetaReadOnly, pgMetaReadOnlySnapshot, pgMetaWrite, toIsoUtc, type CmsQaProgramRow,
   type CmsQaStatusRow, type CmsV8Role,
@@ -335,7 +336,7 @@ test.describe('CMS QA tooling · preflight, manifest, đóng run, id is_test @de
     expect(v8).toContain('public.rpc_cms_result_header(v_id)')
     expect(v8.split('\n').filter((l) => /^(SELECT|WITH) /.test(l)).map((l) => l.slice(0, 6))).toEqual(['WITH h', 'SELECT'])
     expect(cmsVerifyV8Sql(A, 'staff')).not.toContain('cmsv8r')
-    expect(() => cmsVerifyV8Sql(A, 'staff', '125' as never)).toThrow()
+    expect(() => cmsVerifyV8Sql(A, 'staff', '126' as never)).toThrow()
   })
 
   test('danh sách hàm theo phase = khoá CMS_FN_MATRIX cùng phase; đếm trước phase suy từ ma trận (db-reviewer P2-5)', () => {
@@ -344,7 +345,8 @@ test.describe('CMS QA tooling · preflight, manifest, đóng run, id is_test @de
       // 124: rpc_cms_program_lock ĐỔI CHỮ KÝ ⇒ thuộc tập loại trừ khi so ACL hàm có trước (dù tên có từ 123).
       expect([...CMS_PHASE_FUNCTIONS[ph]].sort(), ph).toEqual([...fromMatrix, ...(ph === '124' ? ['rpc_cms_program_lock'] : [])].sort())
     }
-    expect(CMS_VERIFY_PHASES.map((ph) => cmsFnCountBefore(ph))).toEqual([0, 7, 14, 37, 55])
+    // 125 (CMS-UNCAPPED-1): trước 125 có đúng 67 hàm cms (55 + 12 của 124).
+    expect(CMS_VERIFY_PHASES.map((ph) => cmsFnCountBefore(ph))).toEqual([0, 7, 14, 37, 55, 67])
     // 122: khoá định nghĩa = đúng các hàm có tới 122 (phase 123 thêm hàm ⇒ lọc theo phase; độ chặt cho 122 giữ nguyên).
     expect(Object.keys(CMS_FN_DEF_122).sort()).toEqual(Object.entries(CMS_FN_MATRIX).filter(([, m]) => Number(m.phase) <= 122).map(([n]) => n).sort())
     expect(Object.keys(CMS_COL_122).sort()).toEqual(Object.keys(CMS_TABLE_SHAPE_122).sort())
@@ -352,8 +354,24 @@ test.describe('CMS QA tooling · preflight, manifest, đóng run, id is_test @de
     expect(Object.keys(CMS_FN_DEF_123).sort()).toEqual(Object.entries(CMS_FN_MATRIX).filter(([, m]) => Number(m.phase) <= 123).map(([n]) => n).sort())
     // 124 (COMP-INT): 12 hàm mới (8 helper không cấp ai, 4 RPC authenticated — attest / revoke lock_timeout 2 s), tổng 67; 2 bảng mới;
     // 9 trigger ALWAYS; 6 thân thay (run_open / stage / cleanup / lock_eval / payout / lock 6 tham số); lock 3 s → 2 s.
-    expect(Object.keys(CMS_FN_DEF_124).sort()).toEqual(Object.keys(CMS_FN_MATRIX).sort())
-    expect(Object.keys(CMS_FN_MATRIX)).toHaveLength(67)
+    expect(Object.keys(CMS_FN_DEF_124).sort()).toEqual(Object.entries(CMS_FN_MATRIX).filter(([, m]) => Number(m.phase) <= 124).map(([n]) => n).sort())
+    expect(Object.entries(CMS_FN_MATRIX).filter(([, m]) => Number(m.phase) <= 124)).toHaveLength(67)
+    // 125 (CMS-UNCAPPED-1): 1 hàm mới (guard, không cấp ai, SECDEF) + 2 thân 121 thay (giữ ACL / lock 5 s); tổng 68; +1 constraint trigger
+    // ALWAYS; shape đổi đúng cms_program_tiers (ràng buộc của constraint trigger); cột không đổi.
+    expect(Object.keys(CMS_FN_DEF_125).sort()).toEqual(Object.keys(CMS_FN_MATRIX).sort())
+    expect(Object.keys(CMS_FN_MATRIX)).toHaveLength(68)
+    expect(Object.entries(CMS_FN_MATRIX).filter(([, m]) => m.phase === '125')).toEqual([['cms__tiers_last_open_guard', { phase: '125', acl: null, secdef: true, lock: false, src: 'd83088c260633f520dac35cfe8169475' }]])
+    expect(Object.keys(CMS_FN_SRC_125).sort()).toEqual(['rpc_cms_import_commit', 'rpc_cms_program_activate'])
+    for (const [n, src] of Object.entries(CMS_FN_SRC_125)) expect(src, n).not.toBe(CMS_FN_MATRIX[n].src)
+    expect(CMS_TRIGGERS_125).toHaveLength(59)
+    expect(CMS_TRIGGERS_125.filter((t) => !CMS_TRIGGERS_124.includes(t))).toEqual(['CREATE CONSTRAINT TRIGGER cms_tiers_last_open AFTER INSERT OR DELETE OR UPDATE ON cms_program_tiers DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION cms__tiers_last_open_guard()|A'])
+    expect(Object.keys(CMS_TABLE_SHAPE_125).filter((t) => JSON.stringify(CMS_TABLE_SHAPE_125[t]) !== JSON.stringify(CMS_TABLE_SHAPE_124[t]))).toEqual(['cms_program_tiers'])
+    expect(CMS_TABLE_SHAPE_125.cms_program_tiers.idx).toBe(CMS_TABLE_SHAPE_124.cms_program_tiers.idx)
+    expect(CMS_COL_125).toEqual(CMS_COL_124)
+    expect(cmsPostProvenKeys('125')).toEqual(['v5', 'lock-preview', 'attest', 'uncapped'])
+    expect(CMS_V8_RPC_CALLABLE['125']).toBe(CMS_V8_RPC_CALLABLE['124'])
+    expect(CMS_VERIFY_SQL.markers).toContain("'125'")
+    expect(cmsVerifyAclSql()).toContain('n_ex125')
     expect(Object.keys(CMS_COL_124).sort()).toEqual(Object.keys(CMS_TABLE_SHAPE_124).sort())
     expect(Object.keys(CMS_TABLE_SHAPE_124).filter((t) => !(t in CMS_TABLE_SHAPE_123)).sort()).toEqual(['cms_sales_source_lines', 'cms_source_attestations'])
     const p124 = Object.entries(CMS_FN_MATRIX).filter(([, m]) => m.phase === '124')
@@ -466,8 +484,9 @@ test.describe('CMS QA tooling · preflight, manifest, đóng run, id is_test @de
     expect(qsql).not.toContain("v_p ? 'locked_by'")
     expect(qsql).toContain("has_any_column_privilege(c.oid, 'SELECT,INSERT,UPDATE,REFERENCES')")
     expect(cmsVerifyV8Sql(A, 'qlch', '122')).not.toContain('has_any_column_privilege')
-    // P3a: CLI nhận v8 --phase=123; 124 (COMP-INT) nhận --phase=124 (harness qa-cms-cli-exit.mjs §2b dùng 125 làm "phase lạ").
-    expect(CMS_V8_PHASES).toEqual(['120', '121', '122', '123', '124'])
+    // P3a: CLI nhận v8 --phase=123; 124 (COMP-INT) nhận --phase=124; 125 (CMS-UNCAPPED-1) nhận --phase=125 (harness qa-cms-cli-exit.mjs
+    // §2b dùng 126 làm "phase lạ").
+    expect(CMS_V8_PHASES).toEqual(['120', '121', '122', '123', '124', '125'])
   })
 
   test('đóng run có cảnh báo: chỉ đóng khi xác nhận ĐÚNG tập chương trình bị cảnh báo', () => {

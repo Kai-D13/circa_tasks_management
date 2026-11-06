@@ -14,7 +14,7 @@ import { mapSeller, type CmsSellerIndex, type CmsUnassignedReason } from '../map
 import { isEligibleOrder, type CmsSalesLine } from '../source/contract'
 import { isWithinWindow } from '../time'
 import { parseCmsEngineProgram, type CmsEngineProduct, type CmsEngineProgramInput } from './config'
-import { cmsAmountAtBase, cmsProgressiveAmount, cmsQuantityOf, cmsRewardedQuantity } from './tiers'
+import { cmsAmountAtBase, cmsProgressiveAmount, cmsQuantityOf } from './tiers'
 
 const ZERO = BigInt(0)
 
@@ -30,7 +30,7 @@ export type CmsLineStatus =
   | 'WAITING_GATE'   // Chờ đạt target
   | 'ACCUMULATING'   // Đang cộng dồn — dòng chưa hoàn thành thêm đơn vị CMS
   | 'RECORDED'       // Đã ghi nhận — dòng làm tăng CMS
-  | 'AT_CAP'         // Đã đạt trần — lượng thêm không tăng CMS
+  | 'AT_CAP'         // LỊCH SỬ: run trước CMS-Q-220 (bậc cuối hữu hạn). Engine KHÔNG sinh nữa; reader giữ để đọc run QA cũ đã đóng băng
   | 'ADJUSTMENT'     // Điều chỉnh (sự kiện âm đã chuẩn hóa — Q-206)
 
 export class CmsEngineInputError extends Error {
@@ -79,17 +79,19 @@ export interface CmsEngineProductResult {
   storeId: string
   productId: string
   gmvBasis: CmsEngineProduct['gmvBasis']
-  /** B — tổng lượng cơ sở hợp lệ cả kỳ (scale 9), giữ đủ kể cả khi vượt trần. */
+  /** B — tổng lượng cơ sở hợp lệ cả kỳ (scale 9). */
   baseQuantityUnits: bigint
   /** K (scale 9) để hiển thị số lượng thực tế B / K. */
   perUnitUnits: bigint
-  /** Q = floor(max(0, B) / K), chưa áp trần. */
+  /** Q = floor(max(0, B) / K). */
   cmsQuantity: bigint
-  /** min(Q, trần) — số lượng được hưởng CMS. */
+  /** = Q (CMS-Q-220 — không trần; số lượng TRƯỚC gate như contract cũ, tiền vẫn xét gate). */
   rewardedQuantity: bigint
+  /** computeCmsProgram LUÔN ghi null / false (CMS-Q-220). Kiểu rộng vì shape này dùng chung với reader DTO của run QA cũ
+   *  đã đóng băng (có thể mang trần cũ) — không phải cho phép cấu hình tính mới có trần. */
   capQuantity: bigint | null
   atCap: boolean
-  /** GMV của dược sĩ trên sản phẩm (scale 9), giữ đủ kể cả khi vượt trần. */
+  /** GMV của dược sĩ trên sản phẩm (scale 9). */
   gmvUnits: bigint
   gate: CmsGateOutcome
   /** F(Q) — mức CMS nếu gate đạt (để hiển thị "Chờ đạt target"). */
@@ -319,8 +321,7 @@ export function computeCmsProgram(input: CmsEngineInput): CmsEngineOutput {
       if (adjustment) status = 'ADJUSTMENT'
       else if (!gate.met) status = 'WAITING_GATE'
       else if (amountVnd > ZERO) status = 'RECORDED'
-      else if (product.capQuantity !== null && qtyBefore >= product.capQuantity) status = 'AT_CAP'
-      else status = 'ACCUMULATING'
+      else status = 'ACCUMULATING'   // CMS-Q-220: không còn AT_CAP — mọi đơn vị đủ sau bậc cuối vẫn tăng tiền
       lineResults.push({
         orderLineId: line.orderLineId, orderId: line.orderId, orderCode: line.orderCode, productId: product.productId,
         userId: g.userId, storeId: g.storeId, posCode: line.posCode, completedAtMicros: line.completedAtMicros,
@@ -340,8 +341,7 @@ export function computeCmsProgram(input: CmsEngineInput): CmsEngineOutput {
     results.push({
       userId: g.userId, storeId: g.storeId, productId: product.productId, gmvBasis: product.gmvBasis,
       baseQuantityUnits: base, perUnitUnits: product.perUnitUnits, cmsQuantity,
-      rewardedQuantity: cmsRewardedQuantity(cmsQuantity, product.capQuantity), capQuantity: product.capQuantity,
-      atCap: product.capQuantity !== null && cmsQuantity >= product.capQuantity,
+      rewardedQuantity: cmsQuantity, capQuantity: null, atCap: false,
       gmvUnits: gmv, gate, potentialAmountVnd, amountVnd, lineCount: g.items.length,
     })
   }

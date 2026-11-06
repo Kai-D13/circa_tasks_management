@@ -309,16 +309,20 @@ test.describe('CMS I4 · ca biên tại ranh adapter (engine + oracle) @desktop'
     expect(cmsI4CheckSales(n(5, 2), ctx)).toMatchObject({ candidates: 5, unassigned: { NOT_FOUND: 2 }, readiness: { held: ['UNASSIGNED_OVER_THRESHOLD'] } })
   })
 
-  test('bậc lũy tiến: một dòng đi qua 9 → 10; hai dòng 9 rồi 1; trần ở bậc cuối hữu hạn', () => {
+  test('bậc lũy tiến: một dòng đi qua 9 → 10; hai dòng 9 rồi 1; không trần ở bậc cuối (CMS-Q-220), cấu hình cuối hữu hạn bị từ chối', () => {
     const T: CmsEngineProductInput = { productId: '900005', gmvBasis: 'none', targetGmv: null, baseQuantityCms: '1', tiers: [{ from: 1, to: 9, amount: 10000 }, { from: 10, to: null, amount: 12000 }] }
-    const CAP: CmsEngineProductInput = { productId: '900006', gmvBasis: 'none', targetGmv: null, baseQuantityCms: '1', tiers: [{ from: 1, to: 5, amount: 1000 }, { from: 6, to: 10, amount: 2000 }] }
+    const CAP: CmsEngineProductInput = { productId: '900006', gmvBasis: 'none', targetGmv: null, baseQuantityCms: '1', tiers: [{ from: 1, to: 5, amount: 1000 }, { from: 6, to: null, amount: 2000 }] }
     const r1 = rec([row({ product_id: '900005', base_quantity: '12' })], prog([T]))
     expect(pair(r1, U.A, '900005')!.amount).toBe(B(9 * 10000 + 3 * 12000))
     const r2 = rec([row({ product_id: '900005', base_quantity: '9' }), row({ product_id: '900005', base_quantity: '1', completed_at: '2026-11-06T03:00:00.000000Z' })], prog([T]))
     expect(pair(r2, U.A, '900005')!.amount).toBe(B(102000))
     const r3 = rec([row({ product_id: '900006', base_quantity: '15' })], prog([CAP]))
-    expect(pair(r3, U.A, '900006')).toMatchObject({ q: B(15), rewarded: B(10), cap: B(10), amount: B(15000) })
+    // Q 15 vượt mốc 10 cũ: 5 × 1.000 + 10 × 2.000 (không dừng ở 10); rewarded = Q, cap null.
+    expect(pair(r3, U.A, '900006')).toMatchObject({ q: B(15), rewarded: B(15), cap: null, amount: B(25000) })
     for (const r of [r1, r2, r3]) expect(r.oracleMismatches).toEqual([])
+    // Ngữ cảnh còn bậc cuối hữu hạn (chưa chuyển đổi) ⇒ công cụ từ chối bằng CHÍNH parser app, không tính theo trần.
+    expect(() => rec([row({ product_id: '900006', base_quantity: '15' })], prog([{ ...CAP, tiers: [{ from: 1, to: 5, amount: 1000 }, { from: 6, to: 10, amount: 2000 }] }])))
+      .toThrow(/FINITE_LAST_TIER/)
   })
 
   test('gate theo SP: bằng target đạt, thiếu 0,000000001 không đạt (tiềm năng vẫn hiện)', () => {
@@ -371,7 +375,7 @@ test.describe('CMS I4 · ca biên tại ranh adapter (engine + oracle) @desktop'
   test('ngẫu nhiên (3 hạt × 600 dòng): engine = oracle độc lập ở mọi cặp; oracle theo đoạn = oracle từng đơn vị', () => {
     const C1: CmsEngineProductInput = { productId: '910001', gmvBasis: 'catalog', targetGmv: null, baseQuantityCms: '1', tiers: [{ from: 1, to: 3, amount: 1000 }, { from: 4, to: null, amount: 1500 }] }
     const C2: CmsEngineProductInput = { productId: '910002', gmvBasis: 'catalog', targetGmv: null, baseQuantityCms: '0.5', tiers: [{ from: 1, to: null, amount: 700 }] }
-    const KC: CmsEngineProductInput = { productId: '900007', gmvBasis: 'none', targetGmv: null, baseQuantityCms: '2.5', tiers: [{ from: 1, to: 4, amount: 3000 }, { from: 5, to: 8, amount: 3500 }] }
+    const KC: CmsEngineProductInput = { productId: '900007', gmvBasis: 'none', targetGmv: null, baseQuantityCms: '2.5', tiers: [{ from: 1, to: 4, amount: 3000 }, { from: 5, to: null, amount: 3500 }] }
     const products = [P1, P2, C1, C2, KC]
     const p = prog(products, { catalogTargetGmv: 2000000, storeIds: [STORE] })
     const emails = ['ds.a@example.test', 'DS.B@example.test ', 'qlch.x@example.test', 'ai@example.test', 'ds.fs@example.test', 'ds.out@example.test', null]

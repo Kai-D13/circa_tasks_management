@@ -107,13 +107,34 @@ export function parseCmsResultHeader(raw: unknown): CmsResultHeaderDto {
   }
 }
 
-/** Trạng thái dữ liệu cho UI (kế hoạch PM §6.2): chưa có / có / đang giữ bản cũ vì lượt sau lỗi / cấu hình đã đổi chờ tính lại. */
-export type CmsResultState = 'none' | 'ok' | 'held_old' | 'config_pending'
+/**
+ * Trạng thái dữ liệu cho UI (kế hoạch PM §6.2): chưa có / có / đang giữ bản cũ vì lượt sau lỗi / cấu hình đã đổi chờ tính lại /
+ * `config_reset` — CMS-Q-220 (migration 125): đổi cấu hình bỏ trần đã VÔ HIỆU pointer kết quả (không hiện tiền theo trần cũ như
+ * tiền hiện hành) nhưng chương trình đã từng có lần công bố ⇒ "Chưa có số liệu sau thay đổi cấu hình" tới khi tính lại, không 0₫ giả.
+ * Publish luôn đặt pointer ⇒ không pointer mà có lần công bố 'ok' chỉ xảy ra khi pointer bị vô hiệu hoá.
+ */
+export type CmsResultState = 'none' | 'ok' | 'held_old' | 'config_pending' | 'config_reset'
 export function cmsResultState(h: CmsResultHeaderDto): CmsResultState {
-  if (!h.run) return 'none'
+  if (!h.run) return h.lastAttempt?.status === 'ok' || (h.recentRuns ?? []).some((r) => r.status === 'ok') ? 'config_reset' : 'none'
   if (h.lastAttempt && !h.lastAttempt.isCurrent && (h.lastAttempt.status === 'held' || h.lastAttempt.status === 'error')) return 'held_old'
   if (h.configVersion !== h.run.configVersion) return 'config_pending'
   return 'ok'
+}
+
+/**
+ * Run LỊCH SỬ có trần số lượng (cấu hình trước CMS-Q-220, snapshot đã đóng băng): có dòng kết quả mang cap_quantity / at_cap hoặc
+ * dòng đơn AT_CAP. Run tính mới luôn false (engine ghi cap null / atCap false, không sinh AT_CAP). Chỉ dùng để HIỂN THỊ đúng snapshot
+ * cũ (cột trần XLSX, nhãn lịch sử) — không phải cho phép cấu hình mới có trần.
+ */
+export function cmsRunHasLegacyCap(rows: readonly Pick<CmsResultRowDto, 'capQuantity' | 'atCap'>[], lines: readonly Pick<CmsResultLineDto, 'status'>[] = []): boolean {
+  return rows.some((r) => r.capQuantity !== null || r.atCap) || lines.some((l) => l.status === 'AT_CAP')
+}
+
+/** Chữ khi CHƯA có run hiện hành (D1 / D2 / lịch sử): phân biệt "chưa tính lần nào" với "vừa đổi cấu hình, chờ tính lại". */
+export const CMS_NO_RUN_TEXT = 'Chưa có số liệu — hệ thống chưa tính lần nào'
+export const CMS_CONFIG_RESET_TEXT = 'Chưa có số liệu sau thay đổi cấu hình — hệ thống sẽ tính lại ở lượt tiếp theo'
+export function cmsNoRunText(h: CmsResultHeaderDto): string {
+  return cmsResultState(h) === 'config_reset' ? CMS_CONFIG_RESET_TEXT : CMS_NO_RUN_TEXT
 }
 
 // ── Rows ────────────────────────────────────────────────────────────────────

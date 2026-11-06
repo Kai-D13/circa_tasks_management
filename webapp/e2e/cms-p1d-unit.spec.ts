@@ -24,7 +24,7 @@ test.describe('CMS P1-d · thuần @desktop', () => {
   })
   test('thang bậc rút gọn đ/unit_CMS; href giữ chương trình', () => {
     expect(cmsTierSummary([{ order: 1, from: 1, to: 9, amount: '15000' }, { order: 2, from: 10, to: null, amount: '20000' }], 'hộp'))
-      .toBe('1–9: 15.000₫/hộp · 10+: 20.000₫/hộp')
+      .toBe('1–9: 15.000₫/hộp · Từ 10 trở lên: 20.000₫/hộp')
     expect(cmsStaffHref('abc')).toBe('/targets?tab=cms&program=abc')
     expect(cmsStaffHref(null)).toBe('/targets?tab=cms')
     expect(cmsProductHref('x-1')).toBe('/targets/cms/products/x-1')

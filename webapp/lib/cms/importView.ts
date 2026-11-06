@@ -18,7 +18,10 @@ export interface CmsPreviewGroupOk {
   nameSnapshot: string
   imageUrlSnapshot: string | null
   priceSnapshot: string | null
+  /** Bậc canonical đã chuẩn hoá — bậc cuối luôn to = null (CMS-Q-220). */
   tiers: { order: number; from: number; to: number | null; amount: string }[]
+  /** Cận cuối hữu hạn trong file đã được bỏ (null = file vốn trống) — chỉ hiển thị cảnh báo, không ghi. */
+  normalizedLastTo?: number | null
   excelRows: number[]
   warnings: CmsPreviewIssue[]
   advicePreview: string
@@ -37,6 +40,8 @@ export interface CmsPreviewResult {
   mode: 'replace' | 'append'
   configVersion: number
   catalogTarget: string | null
+  /** Chính sách bậc của lần kiểm (CMS-Q-220: 'uncapped_last_v1'). */
+  tierPolicy?: string
   ignoredFromRow: number | null
   stats: CmsPreviewStats
   groupsOk: CmsPreviewGroupOk[]
@@ -60,7 +65,7 @@ export const CMS_IMPORT_COLUMN_HELP: [string, string][] = [
   ['KPI_Target_GMV_VND', 'Target GMV (VND) — trống nếu không xét target'],
   ['Loai_CMS_GMV', 'GMV_THEO_PRODUCTID / GMV_TOAN_DANH_MUC'],
   ['Tu_SL_ban', 'Bậc: từ (đơn vị CMS)'],
-  ['Den_SL_ban', 'Bậc: đến — trống ở bậc cuối = không giới hạn'],
+  ['Den_SL_ban', 'Bậc: đến — bậc cuối để trống: tính từ mốc đó trở lên, không giới hạn'],
   ['CMS_VND_SP', 'CMS mỗi đơn vị CMS ở bậc'],
   ['Noi_dung_tu_van', 'Nội dung tư vấn đã kiểm duyệt'],
   ['unit_CMS', 'Đơn vị hưởng CMS (hộp, chai…)'],
@@ -71,7 +76,7 @@ export const CMS_IMPORT_COLUMN_HELP: [string, string][] = [
 export const CMS_IMPORT_CHECKS: string[] = [
   'ProductID có trên Product Master',
   'Cùng ProductID: target, loại, đơn vị, quy cách, tư vấn thống nhất',
-  'Bậc bắt đầu từ 1, liên tục, không chồng; chỉ bậc cuối để trống "đến"',
+  'Bậc bắt đầu từ 1, liên tục, không chồng; bậc cuối không giới hạn (số ở "đến" bậc cuối được bỏ, có cảnh báo)',
   'Có target thì phải có loại (và ngược lại); mọi dòng danh mục cùng một target',
   'Không trùng sản phẩm với chương trình khác đang chạy cùng thời gian',
   'Ô công thức / ô ngày / chữ có dấu phân cách trong cột số ⇒ lỗi',

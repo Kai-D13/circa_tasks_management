@@ -28,10 +28,14 @@ export function cmsPrice(v: string | null | undefined): string {
   return d === '—' ? d : `${d}₫`
 }
 
-/** Khoảng bậc: "1–9", "20+", "5" (một số). */
-export function cmsTierRange(from: number, to: number | null): string {
-  if (to === null) return `${from}+`
-  return from === to ? `${from}` : `${from}–${to}`
+/**
+ * Khoảng bậc: "1–9", "Từ 20 trở lên" (bậc cuối không giới hạn — CMS-Q-220), "5" (một số). Có `unit` ⇒ "1–9 hộp",
+ * "Từ 20 hộp trở lên". Bậc cuối không bao giờ hiện số giả (999999…) hay "Tối đa".
+ */
+export function cmsTierRange(from: number, to: number | null, unit?: string): string {
+  const u = unit ? ` ${unit}` : ''
+  if (to === null) return `Từ ${from}${u} trở lên`
+  return from === to ? `${from}${u}` : `${from}–${to}${u}`
 }
 
 /** Mức thưởng mỗi đơn vị CMS: "15.000₫/hộp". */

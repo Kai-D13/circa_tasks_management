@@ -106,14 +106,14 @@ Bổ sung từ review PM:
 
 Ca bắt buộc (r2 §5.2):
 
-- Toàn bộ bảng số §2.9 nghiệp vụ (Q 9/10/11/14/20/25; trần 50 với Q 50/51/60).
+- Toàn bộ bảng số §2.9 nghiệp vụ (Q 9/10/11/14/20/25) + bảng CMS-Q-220 (Q 0/1/8/9/10/18/19/20/49/50/51/99/100/101/100.000; không trần — thay ca "trần 50" của Q-210a).
 - Gate thiếu 1đ, bằng target và vượt target.
 - Gate danh mục cộng nhiều sản phẩm.
 - Không target.
 - Hai lần nửa hộp bằng một hộp.
 - Cộng nhiều dòng lẻ rồi mới floor.
 - Một dòng đi qua hai bậc.
-- Vượt trần vẫn giữ GMV và lượng bán đầy đủ.
+- Trên mốc bậc cuối cũ (50 / 100) vẫn cộng mức bậc cuối; cấu hình bậc cuối hữu hạn ⇒ `FINITE_LAST_TIER` (CMS-Q-220).
 - Tổng tiền dòng bằng tổng dược sĩ × sản phẩm.
 - Cùng đầu vào, khác thứ tự nhận từ nguồn vẫn cho kết quả giống nhau.
 - Timestamp microsecond và tie-break bằng item ID.

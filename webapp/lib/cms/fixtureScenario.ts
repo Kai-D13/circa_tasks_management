@@ -5,10 +5,12 @@
 // Không IO, không gọi mạng; id / tên / email / nhà thuốc đều giả (example.invalid). Không dùng ở route thật.
 //
 // Chương trình (hôm nay của fixture = 15/11/2026):
-//  PG1 Vitamin mùa lạnh — đang chạy, 4 SP (target SP · nhóm danh mục · theo số lượng có trần · SP bổ sung, quy cách 0,5), 12 dược
+//  PG1 Vitamin mùa lạnh — đang chạy, 4 SP (target SP · nhóm danh mục · theo số lượng một bậc · SP bổ sung, quy cách 0,5), 12 dược
 //      sĩ có bán / 3 nhà thuốc + dòng chưa gán (4 lý do). SP 900001 có 11 dược sĩ bán (> 10 ⇒ "Đang hiện 10/11").
 //  PG2 Chăm sóc da tháng 12 — sắp diễn ra, 1 SP · PG3 Nhỏ mắt — nháp, 0 SP · PG4 Khẩu trang tháng 10 — chờ chốt kỳ, 2 SP
-//  PG5 Thực phẩm chức năng quý 3 — đã chốt (run đóng băng), 14 SP (4 bậc, 1 bậc, trần, tư vấn ~4.000 ký tự, tên dài)
+//  PG5 Thực phẩm chức năng quý 3 — đã chốt (run đóng băng), 14 SP (4 bậc, 2 bậc, 1 bậc, tư vấn ~4.000 ký tự, tên dài)
+// CMS-Q-220: mọi bậc cuối không giới hạn (to = null) — engine từ chối bậc cuối hữu hạn; hiển thị run lịch sử có trần chỉ kiểm bằng DTO
+// dựng tay trong spec (cms-ui1-unit / cms-p2c-unit), không đưa vào fixture tính bằng engine.
 //  PG6 QA — đang chạy, 2 SP · PG7 Men vi sinh — đang chạy, phạm vi 2 nhà thuốc, 1 SP (có dòng ngoài phạm vi)
 //  PG8 QA — Vitamin đã hết kỳ (khối Chốt kỳ) · PG9 QA — Vitamin đã chốt (khối Số đã chốt) — cùng 4 SP / dòng bán như PG1.
 import { compareCmsLineId, computeCmsProgram, type CmsEngineOutput } from './engine/compute'
@@ -137,7 +139,7 @@ const VITAMIN_PRODUCTS: ProductDef[] = [
   { productId: '900002', name: 'Siro ho thảo dược chai 100ml', gmvBasis: 'catalog', targetGmv: null,
     unit: 'chai', k: '1', tiers: [{ order: 1, from: 1, to: null, amount: '8000' }], price: '85000', unitGmv: 85000 },
   { productId: '900003', name: 'Men tiêu hoá vỉ 10 viên', gmvBasis: 'none', targetGmv: null,
-    unit: 'vỉ', k: '10', tiers: [{ order: 1, from: 1, to: 50, amount: '5000' }], price: null, unitGmv: 50000 },
+    unit: 'vỉ', k: '10', tiers: [{ order: 1, from: 1, to: null, amount: '5000' }], price: null, unitGmv: 50000 },
   { productId: '900004', name: 'Cốm bổ sung kẽm gói 2g', gmvBasis: 'product', targetGmv: '600000',
     unit: 'gói', k: '0.5', tiers: T3(15000, 20000, 25000), price: '30000', unitGmv: 30000, addedAfterStart: true, image: 'http://example.invalid/anh.png' },
 ]
@@ -163,7 +165,7 @@ const PG5_PRODUCTS: ProductDef[] = Array.from({ length: 14 }, (_, i): ProductDef
   const tiers: CmsTierView[] = i % 4 === 0
     ? [{ order: 1, from: 1, to: 4, amount: '5000' }, { order: 2, from: 5, to: 9, amount: '7000' }, { order: 3, from: 10, to: 19, amount: '9000' }, { order: 4, from: 20, to: null, amount: '12000' }]
     : i % 4 === 1 ? [{ order: 1, from: 1, to: null, amount: '6000' }]
-      : i % 4 === 2 ? [{ order: 1, from: 1, to: 12, amount: '4000' }]
+      : i % 4 === 2 ? [{ order: 1, from: 1, to: 12, amount: '4000' }, { order: 2, from: 13, to: null, amount: '5000' }]
         : T3(3000, 4000, 6000)
   return {
     productId: String(900030 + i),

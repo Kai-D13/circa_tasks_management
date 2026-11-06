@@ -10,10 +10,12 @@ import {
 } from '../lib/cms/engine/config'
 import { CmsEngineInputError, compareCmsLineId, computeCmsProgram, type CmsEngineOutput } from '../lib/cms/engine/compute'
 import { cmsAmountByStore, countDistinctPharmacistsWithCms, summarizeCmsProgram } from '../lib/cms/engine/summary'
-import { cmsProgressiveAmount, cmsRewardedQuantity } from '../lib/cms/engine/tiers'
+import { cmsProgressiveAmount } from '../lib/cms/engine/tiers'
+import { CMS_INT64_MAX, cmsStageBoundsIssue } from '../lib/cms/resultStage'
 
 // CMS P2-a — engine THUẦN (không DB, không mạng, không BigQuery). Map IMPLEMENTATION_PLAN §3.5 (ca bắt buộc r2 §5.2),
-// docs/plan-cms-product-commission.md §2.5–§2.11, docs/cms/SPEC.md §2, Q-210a / Q-210b / Q-211 / Q-212.
+// docs/plan-cms-product-commission.md §2.5–§2.11, docs/cms/SPEC.md §2, Q-210b / Q-211 / Q-212; CMS-Q-220 (bỏ trần —
+// thay Q-210a): bậc cuối không giới hạn, cấu hình bậc cuối hữu hạn ⇒ FINITE_LAST_TIER, không tính theo trần.
 // Fixture giả hoàn toàn (email @example.test, mã nhà thuốc S1–S3). Dòng âm chỉ chứng minh số học trên sự kiện
 // đã chuẩn hóa — KHÔNG thay việc chốt quy thuộc trả hàng (Q-206).
 
@@ -47,8 +49,14 @@ const TIERS: CmsEngineTierInput[] = [
   { from: 10, to: 19, amount: '20000' },
   { from: 20, to: null, amount: '25000' },
 ]
-/** Cùng bậc, bậc cuối kết thúc ở 50 (trần — Q-210a). */
+/** Cùng bậc, bậc cuối kết thúc ở 50 — cấu hình CŨ (Q-210a, đã bị CMS-Q-220 thay): engine phải TỪ CHỐI, không tính trần. */
 const TIERS_CAP50: CmsEngineTierInput[] = [TIERS[0], TIERS[1], { from: 20, to: 50, amount: '25000' }]
+/** Oracle độc lập ví dụ stakeholder CMS-Q-220 (không dùng tiers.ts): 15.000×min(Q,9) + 20.000×min(max(Q−9,0),10) + 25.000×max(Q−19,0). */
+const stakeholderF = (q: bigint): bigint => {
+  const min = (a: bigint, b: bigint) => (a < b ? a : b)
+  const max = (a: bigint, b: bigint) => (a > b ? a : b)
+  return B(15000) * min(q, B(9)) + B(20000) * min(max(q - B(9), ZERO), B(10)) + B(25000) * max(q - B(19), ZERO)
+}
 
 let seq = 1000
 function rawRow(o: { id: string; pid: string; email?: string | null; at?: string; base: string; gmv: string; type?: string; status?: string }): CmsRawRow {
@@ -109,18 +117,45 @@ function configErrorCode(fn: () => unknown): string | null {
   }
 }
 
-test.describe('CMS P2-a · bảng nghiệm thu, lũy tiến và trần @desktop', () => {
-  test('F(Q) đúng từng số bảng §2.9 và bảng trần 50', () => {
+test.describe('CMS P2-a · bảng nghiệm thu, lũy tiến, bậc cuối không trần (CMS-Q-220) @desktop', () => {
+  test('F(Q) đúng từng số bảng §3 CMS-Q-220 (gồm 8/18/99 và Q rất lớn); oracle độc lập; không trần ở 50/100', () => {
     const t = parsedTiers(TIERS)
-    const table: Array<[number, number]> = [[9, 135000], [10, 155000], [11, 175000], [14, 235000], [20, 360000], [25, 485000]]
-    for (const [q, cms] of table) expect(cmsProgressiveAmount(B(q), t), `Q=${q}`).toBe(B(cms))
-    const cap = parsedTiers(TIERS_CAP50)
-    for (const q of [50, 51, 60]) expect(cmsProgressiveAmount(B(q), cap), `Q=${q}`).toBe(B(1110000))
-    expect(cmsProgressiveAmount(ZERO, t)).toBe(ZERO)
-    expect(cmsProgressiveAmount(B(1), t)).toBe(B(15000))
-    expect(cmsRewardedQuantity(B(60), B(50))).toBe(B(50))
-    expect(cmsRewardedQuantity(B(5), null)).toBe(B(5))
-    expect(cmsRewardedQuantity(ZERO, B(50))).toBe(ZERO)
+    expect(t[t.length - 1].to).toBeNull()
+    // Số nguyên văn bảng §3 spec CMS-UNCAPPED-1 + mốc bổ sung §9.1(1) — không sinh từ code.
+    const table: Array<[number, number]> = [
+      [0, 0], [1, 15000], [8, 120000], [9, 135000], [10, 155000], [11, 175000], [14, 235000], [18, 315000], [19, 335000],
+      [20, 360000], [25, 485000], [49, 1085000], [50, 1110000], [51, 1135000], [99, 2335000], [100, 2360000], [101, 2385000],
+      [100000, 2499860000],
+    ]
+    for (const [q, cms] of table) {
+      expect(cmsProgressiveAmount(B(q), t), `Q=${q}`).toBe(B(cms))
+      expect(stakeholderF(B(q)), `oracle Q=${q}`).toBe(B(cms))
+    }
+    // Q rất lớn trong miền bigint: vẫn đúng mức bậc cuối, không chặn ở mốc nào.
+    for (const q of [B(10) ** B(12), B(10) ** B(30) + B(7)]) expect(cmsProgressiveAmount(q, t)).toBe(stakeholderF(q))
+    // Mỗi đơn vị đủ sau bậc cuối +25.000 (§9.1(2)); không áp một mức 25.000 cho toàn bộ Q; không dừng sau 50 / 100.
+    expect(cmsProgressiveAmount(B(51), t) - cmsProgressiveAmount(B(50), t)).toBe(B(25000))
+    expect(cmsProgressiveAmount(B(101), t) - cmsProgressiveAmount(B(100), t)).toBe(B(25000))
+    expect(cmsProgressiveAmount(B(100), t)).not.toBe(B(100) * B(25000))
+    expect(cmsProgressiveAmount(B(100), t)).not.toBe(B(1110000))
+    // 100 = 9×15.000 + 10×20.000 + 81×25.000.
+    expect(cmsProgressiveAmount(B(100), t)).toBe(B(9 * 15000 + 10 * 20000 + 81 * 25000))
+    // Bậc TRUNG GIAN vẫn chặn min(Q, to): Q 15 không tính 15 đơn vị ở mức 20.000.
+    expect(cmsProgressiveAmount(B(15), t)).toBe(B(9 * 15000 + 6 * 20000))
+  })
+
+  test('cấu hình bậc cuối hữu hạn (chưa chuyển đổi) ⇒ FINITE_LAST_TIER, không tính theo trần; bậc giữa hữu hạn vẫn hợp lệ', () => {
+    for (const tiers of [TIERS_CAP50, [{ from: 1, to: 50, amount: '25000' }], [TIERS[0], { from: 10, to: 100, amount: '20000' }]] as CmsEngineTierInput[][]) {
+      const p = program([prod('102', { tiers })])
+      expect(configErrorCode(() => parseCmsEngineProgram(p))).toBe('FINITE_LAST_TIER')
+      expect(configErrorCode(() => computeCmsProgram({ program: p, lines: [line({ pid: '102', base: '60', gmv: '1' })], sellers: SELLERS }))).toBe('FINITE_LAST_TIER')
+    }
+    // Lỗi cấu hình khác vẫn đúng mã cũ (không bị "chuẩn hoá" thành hợp lệ hay đổi sang FINITE_LAST_TIER).
+    expect(configErrorCode(() => parseCmsEngineProgram(program([prod('1', { tiers: [{ from: 1, to: 9, amount: '1' }, { from: 11, to: 50, amount: '2' }] })])))).toBe('BAD_TIERS')
+    expect(configErrorCode(() => parseCmsEngineProgram(program([prod('1', { tiers: [{ from: 1, to: null, amount: '1' }, { from: 10, to: 50, amount: '2' }] })])))).toBe('BAD_TIERS')
+    const ok = parseCmsEngineProgram(program([prod('1', { tiers: [{ from: 1, to: 1, amount: '1' }, { from: 2, to: 2, amount: '2' }, { from: 3, to: null, amount: '3' }] })]))
+    expect(ok.products.get('1')!.capQuantity).toBeNull()
+    expect(ok.products.get('1')!.tiers.map((x) => x.to)).toEqual([B(1), B(2), null])
   })
 
   test('engine: gate 10 triệu, 1 triệu/SP — Q 9 chưa đạt (0), Q 10…25 đúng bảng; tính cả lượng bán trước khi đạt', () => {
@@ -148,43 +183,151 @@ test.describe('CMS P2-a · bảng nghiệm thu, lũy tiến và trần @desktop'
     }
   })
 
-  test('trần 50: Q 50 / 51 / 60 ⇒ 1.110.000; GMV và lượng bán giữ đủ; dòng sau trần = Đã đạt trần', () => {
-    const p = program([prod('102', { gmvBasis: 'product', targetGmv: '10000000', tiers: TIERS_CAP50 })])
-    for (const q of [50, 51, 60]) {
+  test('không trần: Q 50 / 51 / 60 / 100 / 101 ⇒ đúng F(Q); rewarded = Q, cap null, atCap false; không dòng AT_CAP', () => {
+    const p = program([prod('102', { gmvBasis: 'product', targetGmv: '10000000' })])
+    for (const q of [50, 51, 60, 100, 101]) {
       const lines = Array.from({ length: q }, (_, i) => line({ pid: '102', base: '1', gmv: '1000000', at: ts(i) }))
       const out = run(p, lines)
       const r = out.results[0]
-      expect(r.amountVnd, `Q=${q}`).toBe(B(1110000))
+      expect(r.amountVnd, `Q=${q}`).toBe(stakeholderF(B(q)))
       expect(r.cmsQuantity).toBe(B(q))
-      expect(r.rewardedQuantity).toBe(B(50))
-      expect(r.capQuantity).toBe(B(50))
-      expect(r.atCap).toBe(true)
+      expect(r.rewardedQuantity).toBe(B(q))
+      expect(r.capQuantity).toBeNull()
+      expect(r.atCap).toBe(false)
       expect(r.baseQuantityUnits).toBe(U(q))
       expect(r.gmvUnits).toBe(U(q * 1_000_000))
-      expect(out.lines[49].status).toBe('RECORDED')
-      expect(out.lines.slice(50).every((l) => l.status === 'AT_CAP' && l.amountVnd === ZERO)).toBe(true)
+      // Từng dòng một đơn vị: 1–9 = 15.000, 10–19 = 20.000, từ 20 = 25.000 (kể cả đơn vị 51, 100, 101).
+      expect(out.lines.map((l) => l.amountVnd)).toEqual(
+        Array.from({ length: q }, (_, i) => (i < 9 ? B(15000) : i < 19 ? B(20000) : B(25000))))
+      expect(out.lines.every((l) => l.status === 'RECORDED')).toBe(true)
     }
-    // Một dòng vượt trần: ghi nhận đúng phần trong trần, lượng bán vẫn 60.
+    const q100 = run(p, Array.from({ length: 100 }, (_, i) => line({ pid: '102', base: '1', gmv: '1000000', at: ts(i) })))
+    expect(q100.results[0].amountVnd).toBe(B(2360000))
+    // Một dòng 60 đơn vị: F(60) đầy đủ, không dừng ở 50.
     const one = run(p, [line({ pid: '102', base: '60', gmv: '60000000' })])
-    expect(one.results[0].amountVnd).toBe(B(1110000))
+    expect(one.results[0].amountVnd).toBe(B(1360000))
     expect(one.results[0].cmsQuantity).toBe(B(60))
     expect(one.lines[0].status).toBe('RECORDED')
-    // Đã ở trần, thêm phần lẻ (chưa đủ đơn vị) ⇒ vẫn "Đã đạt trần", không phải "Đang cộng dồn".
+    // Từ 50 thêm phần lẻ (chưa đủ đơn vị) ⇒ "Đang cộng dồn" (không còn "Đã đạt trần"); đủ đơn vị 51 ⇒ +25.000.
     const frac = run(p, [
       line({ pid: '102', base: '50', gmv: '50000000', at: ts(1) }),
       line({ pid: '102', base: '0.5', gmv: '500000', at: ts(2) }),
+      line({ pid: '102', base: '0.5', gmv: '500000', at: ts(3) }),
     ])
     expect(frac.lines.map((l) => [l.status, l.qtyBefore, l.qtyAfter, l.amountVnd])).toEqual([
       ['RECORDED', ZERO, B(50), B(1110000)],
-      ['AT_CAP', B(50), B(50), ZERO],
+      ['ACCUMULATING', B(50), B(50), ZERO],
+      ['RECORDED', B(50), B(51), B(25000)],
     ])
-    // Chưa tới trần ⇒ không atCap; phần lẻ dưới trần = "Đang cộng dồn".
-    const below = run(p, [
-      line({ pid: '102', base: '49', gmv: '49000000', at: ts(1) }),
-      line({ pid: '102', base: '0.5', gmv: '500000', at: ts(2) }),
+  })
+
+  test('gate: Q 100 chưa đạt target ⇒ tiền 0 nhưng giữ đủ lượng / potential; đạt ⇒ 2.360.000 (sản phẩm / danh mục / none)', () => {
+    const hundred = (pid: string, gmv: string) => Array.from({ length: 100 }, (_, i) => line({ pid, base: '1', gmv, at: ts(i) }))
+    const miss = run(program([prod('110', { gmvBasis: 'product', targetGmv: '200000000' })]), hundred('110', '1000000'))
+    expect(miss.results[0]).toMatchObject({ cmsQuantity: B(100), rewardedQuantity: B(100), capQuantity: null, atCap: false, amountVnd: ZERO, potentialAmountVnd: B(2360000) })
+    expect(miss.results[0].gate.met).toBe(false)
+    expect(miss.lines.every((l) => l.status === 'WAITING_GATE' && l.amountVnd === ZERO)).toBe(true)
+    const hit = run(program([prod('110', { gmvBasis: 'product', targetGmv: '100000000' })]), hundred('110', '1000000'))
+    expect(hit.results[0]).toMatchObject({ cmsQuantity: B(100), amountVnd: B(2360000) })
+    expect(hit.results[0].gate.metAtMicros).toBe(parseUtcMicros(ts(99)))
+    const cat = run(program([prod('111', { gmvBasis: 'catalog' })], { catalogTargetGmv: '50000000' }), hundred('111', '1000000'))
+    expect(cat.results[0]).toMatchObject({ amountVnd: B(2360000) })
+    expect(cat.results[0].gate.metAtMicros).toBe(parseUtcMicros(ts(49)))
+    const none = run(program([prod('112')]), hundred('112', '0'))
+    expect(none.results[0]).toMatchObject({ amountVnd: B(2360000), cmsQuantity: B(100) })
+  })
+
+  test('K = 100: dòng lẻ cộng dồn thành đơn vị nguyên quanh 50 / 51; phần lẻ không trả sớm; bậc tính theo từng dược sĩ, không theo store', () => {
+    const p = program([prod('120', { baseQuantityCms: '100' }), prod('121')], { storeIds: ['S1'] })
+    const out = run(p, [
+      line({ pid: '120', base: '4995', gmv: '1', at: ts(1) }),   // B 4.995 ⇒ Q 49
+      line({ pid: '120', base: '95', gmv: '1', at: ts(2) }),     // B 5.090 ⇒ Q 50 (50,9)
+      line({ pid: '120', base: '5', gmv: '1', at: ts(3) }),      // B 5.095 ⇒ Q 50 — phần lẻ, chưa trả
+      line({ pid: '120', base: '5', gmv: '1', at: ts(4) }),      // B 5.100 ⇒ Q 51
+      // Hai dược sĩ cùng store, mỗi người Q 15 ở SP 121 ⇒ mỗi người F(15), không gộp F(30) của store.
+      line({ pid: '121', email: EMAIL_A, base: '15', gmv: '1', at: ts(5) }),
+      line({ pid: '121', email: EMAIL_B, base: '15', gmv: '1', at: ts(6) }),
     ])
-    expect(below.results[0].atCap).toBe(false)
-    expect(below.lines[1].status).toBe('ACCUMULATING')
+    const l120 = out.lines.filter((l) => l.productId === '120')
+    expect(l120.map((l) => [l.status, l.qtyBefore, l.qtyAfter, l.amountVnd])).toEqual([
+      ['RECORDED', ZERO, B(49), B(1085000)],
+      ['RECORDED', B(49), B(50), B(25000)],
+      ['ACCUMULATING', B(50), B(50), ZERO],
+      ['RECORDED', B(50), B(51), B(25000)],
+    ])
+    const r120 = out.results.find((r) => r.productId === '120')!
+    expect(r120).toMatchObject({ cmsQuantity: B(51), rewardedQuantity: B(51), amountVnd: B(1135000) })
+    const r121 = out.results.filter((r) => r.productId === '121')
+    expect(r121.map((r) => r.amountVnd)).toEqual([B(255000), B(255000)])
+    expect(cmsAmountByStore(out.results).get('S1')).toBe(B(1135000 + 2 * 255000))
+    expect(B(2 * 255000)).not.toBe(stakeholderF(B(30)))
+  })
+
+  test('phân bổ dòng qua ranh 9→10, 19→20, 50→51; tổng dòng = F(Q); đảo thứ tự đầu vào ⇒ cùng thứ tự / tiền', () => {
+    const p = program([prod('130')])
+    const lines = [
+      line({ id: '1301', pid: '130', base: '9', gmv: '1', at: ts(1) }),
+      line({ id: '1302', pid: '130', base: '1', gmv: '1', at: ts(2) }),
+      line({ id: '1303', pid: '130', base: '9', gmv: '1', at: ts(3) }),
+      line({ id: '1304', pid: '130', base: '1', gmv: '1', at: ts(4) }),
+      line({ id: '1305', pid: '130', base: '30', gmv: '1', at: ts(5) }),
+      line({ id: '1306', pid: '130', base: '1', gmv: '1', at: ts(6) }),
+      // Một dòng đi qua cả 9→10 và 19→20 của dược sĩ B.
+      line({ id: '1307', pid: '130', email: EMAIL_B, base: '8', gmv: '1', at: ts(7) }),
+      line({ id: '1308', pid: '130', email: EMAIL_B, base: '43', gmv: '1', at: ts(8) }),
+    ]
+    const out = run(p, lines)
+    expect(out.lines.map((l) => [l.orderLineId, l.qtyBefore, l.qtyAfter, l.amountVnd])).toEqual([
+      ['1301', ZERO, B(9), B(135000)],
+      ['1302', B(9), B(10), B(20000)],
+      ['1303', B(10), B(19), B(180000)],
+      ['1304', B(19), B(20), B(25000)],
+      ['1305', B(20), B(50), B(750000)],
+      ['1306', B(50), B(51), B(25000)],
+      ['1307', ZERO, B(8), B(120000)],
+      ['1308', B(8), B(51), stakeholderF(B(51)) - B(120000)],
+    ])
+    expect(out.results.map((r) => r.amountVnd)).toEqual([B(1135000), B(1135000)])
+    expect(out.totals.amountVnd).toBe(B(2270000))
+    expect(run(p, [...lines].reverse())).toEqual(out)
+  })
+
+  test('trả hàng (số học trên sự kiện đã chuẩn hoá, KHÔNG chốt Q-206): 51→50 −25.000; 20→19 −25.000; 10→9 −20.000; gate tụt ⇒ theo trạng thái cuối', () => {
+    const p = program([prod('140')])
+    const cases: Array<[number, bigint]> = [[51, B(-25000)], [20, B(-25000)], [10, B(-20000)]]
+    for (const [q, delta] of cases) {
+      const out = run(p, [line({ pid: '140', base: String(q), gmv: '1', at: ts(1) }), line({ pid: '140', base: '-1', gmv: '-1', at: ts(2) })])
+      expect(out.lines.map((l) => [l.status, l.amountVnd]), `Q ${q}→${q - 1}`).toEqual([['RECORDED', stakeholderF(B(q))], ['ADJUSTMENT', delta]])
+      expect(out.results[0].amountVnd).toBe(stakeholderF(B(q - 1)))
+    }
+    // Gate sản phẩm: Q 100 đạt target rồi dòng âm kéo GMV dưới target ⇒ cả kỳ chưa đạt, tiền cuối 0 (mọi dòng 0 theo trạng thái cuối).
+    const g = program([prod('141', { gmvBasis: 'product', targetGmv: '100000000' })])
+    const gl = [...Array.from({ length: 100 }, (_, i) => line({ pid: '141', base: '1', gmv: '1000000', at: ts(i) })), line({ pid: '141', base: '-1', gmv: '-1000000', at: ts(150) })]
+    const dropped = run(g, gl)
+    expect(dropped.results[0]).toMatchObject({ cmsQuantity: B(99), amountVnd: ZERO, potentialAmountVnd: B(2335000) })
+    expect(dropped.results[0].gate.met).toBe(false)
+    expect(dropped.lines.every((l) => l.amountVnd === ZERO)).toBe(true)
+  })
+
+  test('không trần nên số rất lớn phải bị chặn ở miền kỹ thuật (OVERFLOW, giữ snapshot cũ) — không cắt về trần / 0', () => {
+    // Một dược sĩ: Q đủ lớn để F(Q) > int8 ⇒ engine giữ số đúng (bigint), stage báo OVERFLOW.
+    const qBig = (CMS_INT64_MAX / B(25000)) + B(10)
+    const p = program([prod('150')])
+    const lines = [line({ pid: '150', base: qBig.toString(), gmv: '1' })]
+    const out = run(p, lines)
+    expect(out.results[0].amountVnd).toBe(stakeholderF(qBig))
+    expect(out.results[0].amountVnd > CMS_INT64_MAX).toBe(true)
+    expect(cmsStageBoundsIssue(out, lines)).toBe('OVERFLOW')
+    // Từng người trong miền nhưng TỔNG chương trình vượt int8 ⇒ vẫn OVERFLOW.
+    const qHalf = (CMS_INT64_MAX / B(25000)) / B(2) + B(100)
+    const many = [EMAIL_A, EMAIL_B, EMAIL_C].map((email, i) => line({ pid: '150', email, base: qHalf.toString(), gmv: '1', at: ts(i) }))
+    const out2 = run(program([prod('150')], { storeIds: ['S1', 'S2'] }), many)
+    expect(out2.results.every((r) => r.amountVnd <= CMS_INT64_MAX)).toBe(true)
+    expect(out2.totals.amountVnd > CMS_INT64_MAX).toBe(true)
+    expect(cmsStageBoundsIssue(out2, many)).toBe('OVERFLOW')
+    // Trong miền ⇒ không OVERFLOW.
+    const small = [line({ pid: '150', base: '100000', gmv: '1' })]
+    expect(cmsStageBoundsIssue(run(p, small), small)).toBeNull()
   })
 
   test('một dòng đi qua hai bậc', () => {
@@ -348,18 +491,18 @@ test.describe('CMS P2-a · quy đổi số lượng (Q-210b) @desktop', () => {
     expect(out.lines.map((l) => [l.status, l.amountVnd])).toEqual([['RECORDED', B(75000)], ['ADJUSTMENT', B(-75000)]])
     expect(out.totals.adjustmentLines).toBe(1)
 
-    // Đã vượt trần rồi có dòng âm: ADJUSTMENT ưu tiên hơn AT_CAP; còn trên trần ⇒ tiền dòng âm = 0, tổng giữ trần.
-    const capped = run(program([prod('407', { tiers: TIERS_CAP50 })]), [
+    // Trên mốc 50 cũ có dòng âm: không trần ⇒ mỗi đơn vị trả bớt ở bậc cuối −25.000 (không còn "dòng âm = 0 vì trên trần").
+    const above = run(program([prod('407')]), [
       line({ pid: '407', base: '55', gmv: '5500000', at: ts(1) }),
       line({ pid: '407', base: '-3', gmv: '-300000', at: ts(2) }),
       line({ pid: '407', base: '-5', gmv: '-500000', at: ts(3) }),
     ])
-    expect(capped.lines.map((l) => [l.status, l.qtyBefore, l.qtyAfter, l.amountVnd])).toEqual([
-      ['RECORDED', ZERO, B(55), B(1110000)],
-      ['ADJUSTMENT', B(55), B(52), ZERO],
-      ['ADJUSTMENT', B(52), B(47), B(-75000)],
+    expect(above.lines.map((l) => [l.status, l.qtyBefore, l.qtyAfter, l.amountVnd])).toEqual([
+      ['RECORDED', ZERO, B(55), B(1235000)],
+      ['ADJUSTMENT', B(55), B(52), B(-75000)],
+      ['ADJUSTMENT', B(52), B(47), B(-125000)],
     ])
-    expect(capped.results[0]).toMatchObject({ cmsQuantity: B(47), rewardedQuantity: B(47), atCap: false, amountVnd: B(1035000) })
+    expect(above.results[0]).toMatchObject({ cmsQuantity: B(47), rewardedQuantity: B(47), capQuantity: null, atCap: false, amountVnd: B(1035000) })
     // Dòng GMV âm nhưng lượng dương cũng là điều chỉnh (Q-206), không phải bán mới.
     const gmvNeg = run(program([prod('408')]), [line({ pid: '408', base: '1', gmv: '-1000' })])
     expect(gmvNeg.lines[0].status).toBe('ADJUSTMENT')
@@ -418,7 +561,7 @@ test.describe('CMS P2-a · thứ tự, phân bổ, phạm vi @desktop', () => {
 
   test('cùng đầu vào, khác thứ tự nhận từ nguồn ⇒ kết quả giống hệt', () => {
     const p = program(
-      [prod('601', { gmvBasis: 'product', targetGmv: '300000', tiers: TIERS_CAP50, baseQuantityCms: '2.5' }),
+      [prod('601', { gmvBasis: 'product', targetGmv: '300000', baseQuantityCms: '2.5' }),
         prod('602', { gmvBasis: 'catalog' }), prod('603', { gmvBasis: 'catalog', baseQuantityCms: '0.5' })],
       { catalogTargetGmv: '400000' },
     )
@@ -523,6 +666,9 @@ test.describe('CMS P2-a · cấu hình và đầu vào sai ⇒ lỗi @desktop', 
       ['bậc chồng', program([prod('1', { tiers: [{ from: 1, to: 9, amount: '1' }, { from: 9, to: null, amount: '2' }] })]), 'BAD_TIERS'],
       ['bậc giữa để trống cận trên', program([prod('1', { tiers: [{ from: 1, to: null, amount: '1' }, { from: 10, to: null, amount: '2' }] })]), 'BAD_TIERS'],
       ['to < from', program([prod('1', { tiers: [{ from: 1, to: 0, amount: '1' }] })]), 'BAD_TIERS'],
+      ['to < from ở bậc cuối hữu hạn (lỗi trước, không thành FINITE_LAST_TIER)', program([prod('1', { tiers: [{ from: 1, to: 9, amount: '1' }, { from: 10, to: 5, amount: '2' }] })]), 'BAD_TIERS'],
+      ['bậc cuối hữu hạn — chưa chuyển đổi CMS-Q-220', program([prod('1', { tiers: TIERS_CAP50 })]), 'FINITE_LAST_TIER'],
+      ['một bậc 1–50 — chưa chuyển đổi CMS-Q-220', program([prod('1', { tiers: [{ from: 1, to: 50, amount: '25000' }] })]), 'FINITE_LAST_TIER'],
       ['CMS_VND_SP = 0', program([prod('1', { tiers: [{ from: 1, to: null, amount: '0' }] })]), 'BAD_TIERS'],
       ['CMS_VND_SP lẻ', program([prod('1', { tiers: [{ from: 1, to: null, amount: '1.5' }] })]), 'BAD_TIERS'],
       ['số JS không an toàn', program([prod('1', { tiers: [{ from: 1, to: null, amount: 2 ** 53 }] })]), 'BAD_TIERS'],
@@ -532,8 +678,9 @@ test.describe('CMS P2-a · cấu hình và đầu vào sai ⇒ lỗi @desktop', 
       expect(configErrorCode(() => computeCmsProgram({ program: p, lines: [], sellers: SELLERS })), name).toBe(code)
     }
     // Cấu hình hợp lệ, số / bigint / chuỗi đều nhận.
-    const ok = parseCmsEngineProgram(program([prod('1', { gmvBasis: 'product', targetGmv: 10, tiers: [{ from: B(1), to: '3', amount: 7 }] })]))
-    expect(ok.products.get('1')).toMatchObject({ targetVnd: B(10), capQuantity: B(3), perUnitUnits: U(1) })
+    const ok = parseCmsEngineProgram(program([prod('1', { gmvBasis: 'product', targetGmv: 10, tiers: [{ from: B(1), to: '3', amount: 7 }, { from: 4, to: null, amount: B(8) }] })]))
+    expect(ok.products.get('1')).toMatchObject({ targetVnd: B(10), capQuantity: null, perUnitUnits: U(1) })
+    expect(ok.products.get('1')!.tiers).toEqual([{ from: B(1), to: B(3), amountVnd: B(7) }, { from: B(4), to: null, amountVnd: B(8) }])
   })
 
   test('order_line_id lặp ⇒ lỗi đầu vào, không tính', () => {
@@ -582,13 +729,13 @@ test.describe('CMS P2-a · chỉ số báo cáo §2.11 @desktop', () => {
 })
 
 test.describe('CMS P2-a · đối chiếu oracle tham chiếu (fixture sinh xác định) @desktop', () => {
-  // Oracle độc lập: cộng tiền TỪNG đơn vị trong khoảng (0, min(Q, trần)] theo bậc chứa nó — không dùng telescoping,
-  // không dùng compute.ts; gate tự cộng lại từ dòng thô.
+  // Oracle độc lập: cộng tiền TỪNG đơn vị trong khoảng (0, Q] theo bậc chứa nó — không dùng telescoping,
+  // không dùng compute.ts; gate tự cộng lại từ dòng thô. CMS-Q-220: không có trần, đơn vị nào cũng thuộc một bậc.
   function naiveF(q: bigint, tiers: readonly CmsEngineTier[]): bigint {
     let total = ZERO
     for (let u = B(1); u <= q; u += B(1)) {
       const t = tiers.find((x) => u >= x.from && (x.to === null || u <= x.to))
-      if (!t) break
+      if (!t) throw new Error(`oracle: đơn vị ${u} không thuộc bậc nào (cấu hình có trần?)`)
       total += t.amountVnd
     }
     return total
@@ -604,10 +751,10 @@ test.describe('CMS P2-a · đối chiếu oracle tham chiếu (fixture sinh xác
   test('300 dòng ngẫu nhiên xác định: kết quả = oracle, bất biến dòng, không phụ thuộc thứ tự', () => {
     const p = program(
       [
-        prod('901', { gmvBasis: 'product', targetGmv: '3000000', baseQuantityCms: '2.5', tiers: TIERS_CAP50 }),
+        prod('901', { gmvBasis: 'product', targetGmv: '3000000', baseQuantityCms: '2.5' }),
         prod('902', { gmvBasis: 'catalog' }),
         prod('903', { gmvBasis: 'catalog', baseQuantityCms: '0.5' }),
-        prod('904', { baseQuantityCms: '10', tiers: [{ from: 1, to: 3, amount: '5000' }, { from: 4, to: 6, amount: '7000' }] }),
+        prod('904', { baseQuantityCms: '10', tiers: [{ from: 1, to: 3, amount: '5000' }, { from: 4, to: null, amount: '7000' }] }),
         // Target rất cao ⇒ bảo đảm oracle đi qua nhánh gate chưa đạt.
         prod('906', { gmvBasis: 'product', targetGmv: '100000000', baseQuantityCms: '0.5' }),
       ],
@@ -657,6 +804,8 @@ test.describe('CMS P2-a · đối chiếu oracle tham chiếu (fixture sinh xác
       expect(r.baseQuantityUnits, `${r.userId}/${r.productId}`).toBe(b)
       expect(r.gmvUnits).toBe(gmv)
       expect(r.cmsQuantity).toBe(q)
+      expect(r.rewardedQuantity).toBe(q)
+      expect([r.capQuantity, r.atCap]).toEqual([null, false])
       expect(r.gate.met).toBe(met)
       expect(r.amountVnd, `${r.userId}/${r.productId}`).toBe(met ? naiveF(q, prodCfg.tiers) : ZERO)
       // "Đạt từ" (Q-211) tự dò lại: sắp độc lập (micro giây rồi BigInt id), cộng dồn, lấy lần chuyển chưa đạt → đạt cuối.
@@ -688,6 +837,9 @@ test.describe('CMS P2-a · đối chiếu oracle tham chiếu (fixture sinh xác
     expect(out.lines.map((l) => l.orderLineId)).toEqual(expectedOrder)
     expect(out.results.some((r) => r.gate.metAtMicros !== null)).toBe(true)
     expect(out.results.some((r) => r.gmvBasis !== 'none' && !r.gate.met)).toBe(true)
+    // Vector phải đi qua vùng trên các mốc cuối cũ (50 / 100) và không sinh trạng thái lịch sử AT_CAP.
+    expect(out.results.some((r) => r.cmsQuantity > B(100) && r.amountVnd > ZERO)).toBe(true)
+    expect(out.lines.some((l) => l.status === 'AT_CAP')).toBe(false)
 
     const shuffled = [...lines]
     const rnd2 = lcg(7)
