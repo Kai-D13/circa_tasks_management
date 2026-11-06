@@ -10,7 +10,7 @@ const WEBAPP = path.join(__dirname, '..')
 test.describe('CMS VERIFY — profile hậu rollback 124 @desktop', () => {
   test('hằng: chỉ phase nền 123 / 122; phần dư = đúng ràng buộc part 124 của cms_sync_run_chunks, khác bản nền', () => {
     expect(CMS_VERIFY_PROFILE_PHASES['after-rollback-124']).toEqual(['123', '122'])
-    for (const ph of ['120', '121', '124', '125', '']) expect(cmsVerifyProfileValid('after-rollback-124', ph)).toBe(false)
+    for (const ph of ['120', '121', '124', '125', '126', '']) expect(cmsVerifyProfileValid('after-rollback-124', ph)).toBe(false)
     expect(cmsVerifyProfileValid('after-rollback-124', '123')).toBe(true)
     expect(cmsVerifyProfileValid('after-rollback-123', '122')).toBe(false)
     const res = CMS_VERIFY_PROFILE_RESIDUAL['after-rollback-124']

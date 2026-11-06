@@ -55,7 +55,8 @@ export function orderDuePrograms(list: readonly CmsDueProgram[]): CmsDueProgram[
 
 export async function runCmsSalesCron(
   deps: CmsSalesCronDeps,
-  // releaseOpen: CHỈ để test luồng cron khi cổng Q-206 đã mở; handler route không truyền ⇒ luôn theo hằng releaseGate.
+  // releaseOpen: CHỈ để test nhánh cổng kết quả đóng / mở; handler route không truyền ⇒ luôn theo hằng releaseGate
+  // (CMS_RESULTS_RELEASE_MODE — SALES_ONLY_V1 từ 126; trạng thái trả hàng KHÔNG quyết định cron chạy hay không).
   // sourceCapture: mặc định theo cờ CMS_SOURCE_CAPTURE_ENABLED (migration 124); test truyền tường minh.
   opts: { budgetMs?: number; releaseOpen?: boolean; sourceCapture?: boolean } = {},
 ): Promise<CmsSalesCronSummary> {
@@ -68,8 +69,9 @@ export async function runCmsSalesCron(
   const programs = orderDuePrograms(await deps.listDuePrograms(today, listIo))
   const results: CmsSalesCronSummary['results'] = []
   const pending: string[] = []
-  // Cron chỉ chọn chương trình thật (is_test = false). Cổng Q-206 đóng ⇒ bỏ qua TRƯỚC khi mở run: không quét BigQuery, không
-  // tạo run held mỗi lượt (security review r2 P2-b). Đối soát trước khi mở cổng dùng script operator ở chế độ dry-run.
+  // Cron chỉ chọn chương trình thật (is_test = false). Cổng kết quả đóng (chế độ HOLD) ⇒ bỏ qua TRƯỚC khi mở run: không quét
+  // BigQuery, không tạo run held mỗi lượt (security review r2 P2-b). Cổng SALES_ONLY_V1 ⇒ tính + công bố CMS tạm tính; dòng âm /
+  // điều chỉnh ⇒ lõi held RETURNS_NOT_SUPPORTED_THIS_PHASE (trả hàng phase sau).
   const releaseOpen = opts.releaseOpen ?? cmsCanPublishResults(false)
   const sourceCapture = opts.sourceCapture ?? cmsSourceCaptureFromEnv(process.env)
   for (const p of programs) {

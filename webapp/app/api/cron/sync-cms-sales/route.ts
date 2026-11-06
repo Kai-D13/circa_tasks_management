@@ -5,8 +5,9 @@ import { cmsSalesSyncDeps } from '@/lib/cms/server/salesSyncDeps'
 
 // GET /api/cron/sync-cms-sales — đồng bộ bán + tính + công bố CMS theo chương trình (kế hoạch PM 02/11 §5; SPEC §6, §9).
 // Bearer CRON_SECRET; CMS_PROGRAM_ENABLED hoặc CMS_EARNINGS_ENABLED tắt ⇒ 503, 0 query nguồn. Coolify Scheduled Task chỉ
-// tạo ở cửa sổ phát hành gộp theo lệnh operator (lịch UTC đề xuất SPEC §9). Chương trình thật dừng ở held
-// RESULTS_RELEASE_GATE tới khi Q-206 được chốt (lib/cms/releaseGate.ts). Response / log: số đếm + mã, không số tiền / email.
+// tạo ở cửa sổ phát hành gộp theo lệnh operator (lịch UTC đề xuất SPEC §9). Chương trình thật: CMS tạm tính theo dòng bán
+// (cổng SALES_ONLY_V1 — lib/cms/releaseGate.ts + migration 126); có dòng âm / điều chỉnh ⇒ held RETURNS_NOT_SUPPORTED_THIS_PHASE
+// (trả hàng phase sau). Response / log: số đếm + mã, không số tiền / email.
 
 export const dynamic = 'force-dynamic'
 

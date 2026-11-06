@@ -8,7 +8,8 @@
 //   node scripts/cms-sales-sync.mjs --program=<uuid> --confirm --expect-host=<host>   # GHI: open → stage → seal → publish
 //   node scripts/cms-sales-sync.mjs --self-check                                      # chỉ kiểm nạp module (không mạng / DB)
 //
-// Chương trình thật dừng ở held RESULTS_RELEASE_GATE tới khi Q-206 được chốt (lib/cms/releaseGate.ts) — script không vượt cổng.
+// Cổng kết quả theo hằng lib/cms/releaseGate.ts (SALES_ONLY_V1 từ 126: chương trình thật được công bố CMS tạm tính; dòng âm /
+// điều chỉnh ⇒ held RETURNS_NOT_SUPPORTED_THIS_PHASE) — script không có tham số vượt / đổi cổng.
 // Env (process env > webapp/.env.local; CMS_SALES_ENV_FILE=none để không đọc file):
 //   CMS_BQ_SALES_TABLE (bắt buộc), BQ_SERVICE_ACCOUNT_KEY, NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY.
 // Thoát: 0 published / dry-run sạch · 1 held / busy / skipped / lỗi / CLOSE_FAILED · 2 sai tham số / thiếu cấu hình.

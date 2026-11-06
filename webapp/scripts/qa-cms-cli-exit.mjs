@@ -220,10 +220,12 @@ async function main() {
   exp(r, 0, 'V8 --phase=122 (bảng rỗng ⇒ CHƯA, không LỆCH)', /ĐẠT: \d+ \/ \d+/.test(r.out) && /v8-table:results/.test(r.out))
   r = await run('cms-verify.mjs', ['v8', `--user=${SUPER}`, '--role=super', '--phase=122', '--require-proven=results', `--expect-host=${HOST}`])
   exp(r, 1, 'V8 --require-proven=results trên bảng rỗng ⇒ LỆCH (không xanh khi 0 = 0)', /LỆCH\s+v8-require-proven:results/.test(r.out))
+  // Phase "lạ" = 127: 126 (sales-only) nay là phase VERIFY / V8 hợp lệ (CMS_VERIFY_PHASES / CMS_V8_PHASES) — dùng 126 sẽ không còn
+  // thử nhánh phase lạ (post 126 với PRE 122 vẫn mã 2 nhưng vì PRE sai, không vì phase).
   for (const [args, why] of [
-    [['v8', `--user=${SUPER}`, '--role=super', '--phase=126', `--expect-host=${HOST}`], 'V8 --phase lạ'],
+    [['v8', `--user=${SUPER}`, '--role=super', '--phase=127', `--expect-host=${HOST}`], 'V8 --phase lạ'],
     [['v8', `--user=${SUPER}`, '--role=super', '--require-proven=results', `--expect-host=${HOST}`], 'V8 --require-proven=results khi không khai --phase=122'],
-    [['post', '--phase=126', `--pre=${pre122}`, `--expect-host=${HOST}`], 'post --phase lạ'],
+    [['post', '--phase=127', `--pre=${pre122}`, `--expect-host=${HOST}`], 'post --phase lạ'],
   ]) {
     r = await run('cms-verify.mjs', args)
     exp(r, 2, `${why} ⇒ sai tham số trước IO`, r.reqs === 0)
@@ -497,9 +499,17 @@ async function main() {
   const insRun = (prog, isTest, status, code, detail) => db.exec(`INSERT INTO public.cms_sync_runs (kind, program_id, config_version, is_test, mapping_fp, status, finished_at, error_code, detail)
     VALUES ('sales', '${prog}', 1, ${isTest}, md5('x'), '${status}', now(), '${code}', '${JSON.stringify(detail)}'::jsonb)`)
   const closeQa = () => run('cms-qa-run.mjs', ['close'], { E2E_EXPECTED_SUPABASE_HOST: HOST })
-  await insRun(P_REAL, false, 'held', 'RESULTS_RELEASE_GATE', { source: 'operator' })
+  // PM 06/11 sales-only: cổng kết quả mở (SALES_ONLY_V1) ⇒ run thật do cron / operator trong cửa sổ là CẢNH BÁO soát tay (close dừng
+  // mã 1 khi chưa --ack-warnings), KHÔNG còn ĐỎ như thời HOLD (nhánh HOLD vẫn ĐỎ — e2e/cms-qa-results.spec.ts). Run thật do writer QA
+  // mở ⇒ vẫn ĐỎ.
+  await insRun(P_REAL, false, 'held', 'RETURNS_NOT_SUPPORTED_THIS_PHASE', { source: 'cron' })
   r = await closeQa()
-  exp(r, 1, 'close: run sales chương trình THẬT trong cửa sổ khi Q-206 HOLD ⇒ ĐỎ', fs.existsSync(markerFile) && /Q-206 HOLD/.test(r.out))
+  exp(r, 1, 'close: run sales chương trình THẬT (cron) trong cửa sổ khi cổng kết quả mở ⇒ CẢNH BÁO, dừng khi chưa --ack-warnings',
+    fs.existsSync(markerFile) && /CẢNH BÁO: chương trình thật .* có run sales trong cửa sổ \(cổng đã mở/.test(r.out))
+  await db.exec(`DELETE FROM public.cms_sync_runs WHERE program_id = '${P_REAL}'`)
+  await insRun(P_REAL, false, 'held', 'QA_SOURCE_REAL_PROGRAM', { source: 'qa' })
+  r = await closeQa()
+  exp(r, 1, 'close: run sales chương trình THẬT do writer QA (source qa) ⇒ ĐỎ', fs.existsSync(markerFile) && /THẬT.*do writer QA/.test(r.out))
   await db.exec(`DELETE FROM public.cms_sync_runs WHERE program_id = '${P_REAL}'`)
   await insRun(P_QA, true, 'held', 'X', { source: 'operator' })
   r = await closeQa()

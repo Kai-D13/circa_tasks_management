@@ -5,14 +5,18 @@
 // V5–V6 bất biến payout (tổng + từng dược sĩ + run còn như lúc seal; chưa có payout ⇒ CHƯA) / V7 isolation / quyền cột gián
 // tiếp + view phụ thuộc bảng payout / V8 migration (mọi chương trình thật bị chặn chốt); PRE 123 = acl-snapshot ngay trước 123
 // (đúng 37 hàm cms). `--require-proven=v5,lock-preview` ép mục đó phải ĐÃ chứng minh (CHƯA ⇒ rc 1).
+// phase 126 (sales-only, PM 06/11): kế thừa toàn bộ kỳ vọng 125, chỉ đổi thân 2 hàm 122 (CMS_FN_SRC_126), cổng
+// cms__results_release_open() phải MỞ (mục release-gate-open; policy real.ready vẫn false), marker 126, ACL POST so TOÀN BỘ hàm
+// public với PRE 126 (126 không thêm hàm — PRE phải có đúng 68 hàm cms) + V-126 run bán thật công bố sau 126 mang results_basis
+// sales_only_v1 (0 run ⇒ CHƯA; `--require-proven=basis` ép). Checker 125 trên DB 126 ⇒ LỆCH phase-match.
 // Mỗi lệnh = MỘT transaction `BEGIN; SET TRANSACTION READ ONLY; …; ROLLBACK;` qua pg-meta với câu lệnh CỐ ĐỊNH ở
 // e2e/cmsQaTooling.ts (không nhận SQL tự do, không nới ops-ro). V8 mô phỏng phiên authenticated (SET LOCAL ROLE + claim
 // không ký — không đọc secret), so với oracle tính độc lập theo VAI KHAI BÁO; không thay smoke đăng nhập thật (D3 / E3).
 //
 //   node scripts/cms-verify.mjs acl-snapshot --expect-host=<host> --out=<pre.json>      # PRE: chụp NGAY TRƯỚC migration
-//   node scripts/cms-verify.mjs post --phase=120|121|122|123|124|125 --pre=<pre.json> --expect-host=<host> [--require-proven=v5,lock-preview (chỉ 123)] [--out=<file.json>]
-//   node scripts/cms-verify.mjs v8 --user=<uuid> --role=super|admin|sm|staff|qlch [--phase=120|121|122|123|124|125] --expect-host=<host> [--expect-qa=true|false] [--expect-readable=N] [--require-proven=programs,products,…,results] [--out=…]
-//   node scripts/cms-verify.mjs print-sql --what=acl|v8 [--user=<uuid> --role=… --phase=121|122|123|124|125]   # khối cố định cho Studio (V8: REPEATABLE READ)
+//   node scripts/cms-verify.mjs post --phase=120|121|122|123|124|125|126 --pre=<pre.json> --expect-host=<host> [--require-proven=v5,lock-preview (123+) | …,attest (124+) | …,uncapped (125+) | …,basis (126)] [--out=<file.json>]
+//   node scripts/cms-verify.mjs v8 --user=<uuid> --role=super|admin|sm|staff|qlch [--phase=120|121|122|123|124|125|126] --expect-host=<host> [--expect-qa=true|false] [--expect-readable=N] [--require-proven=programs,products,…,results] [--out=…]
+//   node scripts/cms-verify.mjs print-sql --what=acl|v8 [--user=<uuid> --role=… --phase=121|122|123|124|125|126]   # khối cố định cho Studio (V8: REPEATABLE READ)
 //   … post --phase=123|122 --profile=after-rollback-124 --pre=<PRE của phase nền, chụp TRƯỚC khi áp phase đó>   # sau rollback 124:
 //     rollback 124 cố ý giữ ràng buộc part cms_sync_run_chunks có 'source_lines' ⇒ profile chỉ nhận đúng phần dư đó, marker 124 phải
 //     vắng, mọi mục khác theo phase nền. Không dùng được trên DB còn 124 / phase khác (PM 2026-11-05 INV-P1-1).
@@ -32,7 +36,7 @@ async function main() {
     values: ['--expect-host', '--out', '--phase', '--pre', '--user', '--role', '--expect-qa', '--expect-readable', '--require-proven', '--what', '--profile'],
   })
   if (!['acl-snapshot', 'post', 'v8', 'print-sql'].includes(a.cmd) || a.bad.length) {
-    console.log('dùng: node scripts/cms-verify.mjs <acl-snapshot | post --phase=120|121|122|123|124|125 --pre=FILE [--require-proven=v5,lock-preview] [--profile=after-rollback-124 (chỉ --phase=123|122)] | v8 --user=UUID --role=… [--phase=121|122|123|124|125] | print-sql --what=acl|v8> --expect-host=<host>')
+    console.log('dùng: node scripts/cms-verify.mjs <acl-snapshot | post --phase=120|121|122|123|124|125|126 --pre=FILE [--require-proven=v5,lock-preview] [--profile=after-rollback-124 (chỉ --phase=123|122)] | v8 --user=UUID --role=… [--phase=121|122|123|124|125|126] | print-sql --what=acl|v8> --expect-host=<host>')
     return 2
   }
   const { T } = await loadTooling()
@@ -47,7 +51,7 @@ async function main() {
   // V8: --phase tuỳ chọn (bỏ trống = trước 122, giữ lệnh runbook P1); DB đã 122 ⇒ phải khai --phase=122, DB đã 123 ⇒ --phase=123 (mục v8-phase).
   const v8Phase = () => {
     const p = a.values['--phase']
-    if (p !== undefined && !T.CMS_V8_PHASES.includes(p)) die2('--phase=120|121|122|123|124|125 cho v8')
+    if (p !== undefined && !T.CMS_V8_PHASES.includes(p)) die2('--phase=120|121|122|123|124|125|126 cho v8')
     return p
   }
 
@@ -85,7 +89,7 @@ async function main() {
       die2('--pre sai định dạng hoặc chụp ở host khác')
     }
     // PRE phải đúng phase: trước 120 chưa có hàm cms nào; trước 121 có đúng 7 (120); trước 122 có đúng 14 (120 + 121);
-    // trước 123 có đúng 37 (120 + 121 + 122).
+    // trước 123 có đúng 37 (120 + 121 + 122); … trước 126 có đúng 68 (126 không thêm hàm).
     const cmsBefore = acl.n_all - acl.n_old
     if (cmsBefore !== T.cmsFnCountBefore(phase)) {
       die2(`--pre không phải ảnh ngay trước ${phase} (đang có ${cmsBefore} hàm cms)`)
@@ -170,6 +174,8 @@ async function main() {
       if (Number(phase) >= 124) input.p124 = { invAttest: (await ro(q.invAttest))[0] }
       // 125 (CMS-Q-220): cấu hình chưa chốt không còn bậc cuối hữu hạn + run hiện hành không mang trần (không áp run lịch sử đã chốt).
       if (Number(phase) >= 125) input.p125 = { invLastTier: await ro(q.inv125LastTier), invCurrentCap: await ro(q.inv125CurrentCap), current: (await ro(q.inv125Current))[0] }
+      // 126 (sales-only): run bán THẬT công bố sau marker 126 mang results_basis = 'sales_only_v1' (một dòng tổng hợp; thiếu marker ⇒ đỏ).
+      if (Number(phase) >= 126) input.p126 = { invRealBasis: (await ro(q.inv126RealBasis))[0] }
       if (expect.requireProven) input.requireProven = expect.requireProven
       if (profile !== undefined) {
         input.profile = profile

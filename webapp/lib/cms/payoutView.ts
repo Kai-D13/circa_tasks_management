@@ -289,7 +289,7 @@ export const CMS_LOCK_CODE_LABEL: Record<string, string> = {
   CMS_PROGRAM_NOT_FOUND: 'Không tìm thấy chương trình',
   CMS_PROGRAM_LOCKED: 'Chương trình đã chốt kỳ',
   CMS_LOCK_NOT_ENDED: 'Chương trình chưa kết thúc (chốt sau ngày kết thúc)',
-  CMS_LOCK_RELEASE_GATE: 'Chưa mở công bố tiền cho chương trình thật (chờ chốt Q-206)',
+  CMS_LOCK_RELEASE_GATE: 'Chưa mở cổng công bố kết quả cho chương trình thật (DB chưa áp migration 126)',
   CMS_LOCK_NO_RESULT: 'Chưa có kết quả đã công bố để chốt',
   CMS_LOCK_RUN_CHANGED: 'Kết quả vừa được cập nhật — kiểm tra lại trước khi chốt',
   CMS_LOCK_STALE_RUN: 'Kết quả hiện tại không còn khớp cấu hình — cần đồng bộ lại',

@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { test, expect } from '@playwright/test'
 import { CMS_Q206_OPTIONS, cmsQ206Adapt, type CmsQ206EventRaw, type CmsQ206Option } from './cmsQ206Cases'
-import { CMS_Q206_RETURNS_CONTRACT, cmsCanPublishResults } from '../lib/cms/releaseGate'
+import { CMS_Q206_RETURNS_CONTRACT, cmsAdjustmentBlocksRelease, cmsCanPublishResults } from '../lib/cms/releaseGate'
 import { normalizeSalesRow, type CmsRawRow, type CmsSalesLine } from '../lib/cms/source/contract'
 import { computeCmsProgram } from '../lib/cms/engine/compute'
 import { buildSellerIndex, type CmsUserRef } from '../lib/cms/mapping'
@@ -216,10 +216,13 @@ test.describe('CMS Q-206 · minh hoạ §3.4 và ca T1–T11 (HOLD — không m�
     }
   })
 
-  test('nguyên mẫu không mở cổng: hợp đồng trả hàng vẫn HOLD, chương trình thật không công bố được sau khi chạy mọi phương án; file nguyên mẫu không chạm releaseGate', () => {
+  test('nguyên mẫu không mở trả hàng: hợp đồng trả hàng vẫn HOLD (phase sau), dòng điều chỉnh của chương trình thật vẫn bị chặn sau khi chạy mọi phương án; file nguyên mẫu không chạm releaseGate', () => {
     for (const o of OPTS) run([S1()], [ev('E1')], o)
     expect(CMS_Q206_RETURNS_CONTRACT).toBe('HOLD')
-    expect(cmsCanPublishResults(false)).toBe(false)
+    // PM 06/11 sales-only: cổng kết quả BÁN tách khỏi trả hàng — chương trình thật công bố được phần bán, KHÔNG được công bố
+    // dòng điều chỉnh (held RETURNS_NOT_SUPPORTED_THIS_PHASE); chế độ HOLD vẫn chặn toàn bộ.
+    expect(cmsAdjustmentBlocksRelease(false)).toBe(true)
+    expect(cmsCanPublishResults(false, 'HOLD')).toBe(false)
     expect(Object.keys(CMS_Q206_OPTIONS)).toHaveLength(4) // không có phương án "mặc định"
     expect(fs.readFileSync(path.join(__dirname, 'cmsQ206Cases.ts'), 'utf8')).not.toMatch(/releaseGate|CMS_Q206_RETURNS_CONTRACT|cmsCanPublishResults/)
   })

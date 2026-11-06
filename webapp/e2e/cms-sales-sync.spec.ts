@@ -1,7 +1,9 @@
 import { test, expect } from '@playwright/test'
 import { BigQueryError } from '../lib/bigquery/query'
 import { cmsSalesCronHttpStatus, handleSyncCmsSales, orderDuePrograms, runCmsSalesCron, type CmsSalesCronDeps } from '../lib/cms/cronSales'
-import { cmsCanPublishResults, CMS_Q206_RETURNS_CONTRACT } from '../lib/cms/releaseGate'
+import {
+  cmsAdjustmentBlocksRelease, cmsCanPublishResults, CMS_Q206_RETURNS_CONTRACT, CMS_RESULTS_RELEASE_MODE, CMS_RETURNS_NOT_SUPPORTED,
+} from '../lib/cms/releaseGate'
 import { CMS_STAGE_PARTS, type CmsStagePart } from '../lib/cms/resultStage'
 import * as S from '../lib/cms/salesSync'
 import type { CmsRawRow } from '../lib/cms/source/contract'
@@ -90,11 +92,19 @@ const WRITE_FNS = ['openRun', 'stage', 'sealBegin', 'sealStep', 'publish', 'fini
 const finishes = (f: Fake) => f.calls.filter((c) => c.fn === 'finish')
 
 test.describe('CMS P2-b — salesSync @desktop', () => {
-  test('cổng Q-206: chương trình thật chưa công bố, QA công bố được', () => {
+  test('cổng tách (PM 06/11 sales-only AC01): kết quả bán SALES_ONLY_V1 mở cho chương trình thật; trả hàng vẫn HOLD (không APPROVED)', () => {
+    expect(CMS_RESULTS_RELEASE_MODE).toBe('SALES_ONLY_V1')
     expect(CMS_Q206_RETURNS_CONTRACT).toBe('HOLD')
-    expect(cmsCanPublishResults(false)).toBe(false)
+    expect(cmsCanPublishResults(false)).toBe(true)
     expect(cmsCanPublishResults(true)).toBe(true)
-    expect(cmsCanPublishResults(false, 'APPROVED')).toBe(true)
+    // Chế độ HOLD (trước 126 / nhánh test) vẫn chặn chương trình thật, QA luôn được.
+    expect(cmsCanPublishResults(false, 'HOLD')).toBe(false)
+    expect(cmsCanPublishResults(true, 'HOLD')).toBe(true)
+    // Dòng điều chỉnh: chặn chương trình thật khi trả hàng chưa APPROVED; QA không chặn.
+    expect(cmsAdjustmentBlocksRelease(false)).toBe(true)
+    expect(cmsAdjustmentBlocksRelease(true)).toBe(false)
+    expect(cmsAdjustmentBlocksRelease(false, 'APPROVED')).toBe(false)
+    expect(CMS_RETURNS_NOT_SUPPORTED).toBe('RETURNS_NOT_SUPPORTED_THIS_PHASE')
   })
 
   test('dry-run: chỉ đọc snapshot + nguồn, 0 lệnh ghi; hash ổn định khi đổi thứ tự nguồn', async () => {
@@ -130,14 +140,15 @@ test.describe('CMS P2-b — salesSync @desktop', () => {
     expect(r.cleanup).toEqual({ purged: 0, more: false, calls: 1, stoppedBy: 'done' })
   })
 
-  test('chương trình thật + Q-206 HOLD: lượt ghi bị chặn TRƯỚC openRun — 0 run, 0 ghi, 0 truy vấn nguồn (PM 03/11 REL-P1-1)', async () => {
+  test('chương trình thật + cổng HOLD (releaseHold — nhánh test): lượt ghi bị chặn TRƯỚC openRun — 0 run, 0 ghi, 0 truy vấn nguồn (PM 03/11 REL-P1-1)', async () => {
     for (const source of ['operator', 'cron', 'qa'] as const) {
       let queries = 0
       const f = fakeDeps({ snap: snapshot({ is_test: false }) })
       const inner = f.deps.runner
       f.deps.runner = async (...a) => { queries++; return inner(...a) }
-      const r = await runCmsSalesSync(f.deps, PROG, { dryRun: false, source })
-      expect([r.status, r.code, r.runId, r.isTest, r.stagedRows, r.cleanup]).toEqual(['held', 'RESULTS_RELEASE_GATE', null, false, 0, null])
+      const r = await runCmsSalesSync(f.deps, PROG, { dryRun: false, source, releaseHold: true })
+      const want = source === 'qa' ? S.CMS_QA_SOURCE_REAL_PROGRAM : 'RESULTS_RELEASE_GATE'
+      expect([r.status, r.code, r.runId, r.isTest, r.stagedRows, r.cleanup]).toEqual(['held', want, null, false, 0, null])
       expect(f.fns()).toEqual(['loadSnapshot'])
       expect(queries).toBe(0)
       expect(cmsSalesExitCode(r)).toBe(1)
@@ -154,22 +165,86 @@ test.describe('CMS P2-b — salesSync @desktop', () => {
       [async () => snapshot({ program_id: uid(2) }), ['error', 'SNAPSHOT_INVALID']],
     ] as const) {
       const g = fakeDeps({ loadSnapshot })
-      const r = await runCmsSalesSync(g.deps, PROG, { dryRun: false, source: 'operator' })
+      const r = await runCmsSalesSync(g.deps, PROG, { dryRun: false, source: 'operator', releaseHold: true })
       expect([r.status, r.code, r.runId]).toEqual([...want, null])
       expect(g.fns().some((x) => WRITE_FNS.includes(x))).toBe(false)
     }
   })
 
-  test('lớp thứ hai giữ nguyên: snapshot của openRun là chương trình thật ⇒ held RESULTS_RELEASE_GATE trước stage, đóng run (Q-206)', async () => {
+  test('lớp thứ hai giữ nguyên (cổng HOLD): snapshot của openRun là chương trình thật ⇒ held RESULTS_RELEASE_GATE trước stage, đóng run', async () => {
     const f = fakeDeps({ openRun: async (id: string) => ({ ...snapshot({ is_test: false }), program_id: id, run_id: uid(99) }) })
-    const r = await runCmsSalesSync(f.deps, PROG, { dryRun: false, source: 'operator' })
+    const r = await runCmsSalesSync(f.deps, PROG, { dryRun: false, source: 'operator', releaseHold: true })
     expect([r.status, r.code, r.stagedRows]).toEqual(['held', 'RESULTS_RELEASE_GATE', 0])
     // openRun bị thay (không ghi log) — dãy gọi: snapshot đọc trước (QA) → [openRun] → finish → cleanup; không stage / publish.
     expect(f.fns()).toEqual(['loadSnapshot', 'finish', 'cleanup'])
     expect((finishes(f)[0].args[2] as Record<string, unknown>).error_code).toBe('RESULTS_RELEASE_GATE')
   })
 
-  test('PM 03/11 QA-P1-1: snapshot đọc trước (HOLD) tiêu hết ngân sách ⇒ held DEADLINE, KHÔNG mở run', async () => {
+  test('sales-only AC03: chương trình thật (cron / operator) open → stage → seal 10 bước → publish → dọn; không snapshot đọc trước', async () => {
+    for (const source of ['cron', 'operator'] as const) {
+      const f = fakeDeps({ snap: snapshot({ is_test: false }) })
+      const r = await runCmsSalesSync(f.deps, PROG, { dryRun: false, source, chunkSize: 3 })
+      expect([r.status, r.code, r.isTest, r.runId]).toEqual(['published', null, false, uid(99)])
+      expect(f.fns()[0]).toBe('openRun')
+      expect(f.fns()).not.toContain('loadSnapshot')
+      expect(f.fns()).not.toContain('finish')
+      expect(f.fns().slice(-3)).toEqual(['sealStep', 'publish', 'cleanup'])
+      expect(f.calls.filter((c) => c.fn === 'sealStep').map((c) => c.args[1])).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])
+      // Cùng snapshot QA ⇒ cùng tiền / hash (chương trình thật không tính khác).
+      const q = await runCmsSalesSync(fakeDeps().deps, PROG, { dryRun: false, source: 'qa', chunkSize: 3 })
+      expect([r.amountVnd, r.resultHash]).toEqual([q.amountVnd, q.resultHash])
+    }
+    // AC06 replay: chạy lại cùng tập nguồn ⇒ snapshot đầy đủ cùng hash / tiền (tính lại, không cộng dồn vào snapshot cũ).
+    const a = await runCmsSalesSync(fakeDeps({ snap: snapshot({ is_test: false }) }).deps, PROG, { dryRun: false, source: 'cron' })
+    const b = await runCmsSalesSync(fakeDeps({ snap: snapshot({ is_test: false, previous_rows_read: 8 }) }).deps, PROG, { dryRun: false, source: 'cron' })
+    expect([b.status, b.amountVnd, b.resultHash]).toEqual(['published', a.amountVnd, a.resultHash])
+  })
+
+  test('sales-only AC05: chương trình thật có dòng ứng viên âm ⇒ held RETURNS_NOT_SUPPORTED_THIS_PHASE, 0 stage / publish, không công bố riêng phần dương', async () => {
+    const NEG_INC = IN(9, { base_quantity: '-24', gmv_amount: '-50000' })                                       // ADJUSTMENT (INCLUDED)
+    const NEG_UNA = IN(9, { base_quantity: '-1', gmv_amount: '-10000', seller_email: 'khong.co@cms.example.test' }) // ứng viên chưa gán
+    const NEG_GMV = IN(9, { gmv_amount: '-1' })                                                                 // chỉ GMV âm
+    const NEG_OFF = IN(9, { base_quantity: '-24', order_type: 'ONLINE' })                                       // KHÔNG ứng viên
+    for (const [neg, n] of [[NEG_INC, 1], [NEG_UNA, 1], [NEG_GMV, 1]] as const) {
+      const f = fakeDeps({ snap: snapshot({ is_test: false }), source: { sales: [...SALES, neg] } })
+      const r = await runCmsSalesSync(f.deps, PROG, { dryRun: false, source: 'cron' })
+      expect([r.status, r.code, r.stagedRows]).toEqual(['held', CMS_RETURNS_NOT_SUPPORTED, 0])
+      expect(f.fns()).toEqual(['openRun', 'finish', 'cleanup'])
+      const d = finishes(f)[0].args[2] as Record<string, unknown>
+      expect([finishes(f)[0].args[1], d.error_code, d.adjustment_lines]).toEqual(['held', CMS_RETURNS_NOT_SUPPORTED, n])
+      expect(cmsSalesExitCode(r)).toBe(1)
+      // Dry-run operator báo đúng mã (rc 1), không ghi.
+      const g = fakeDeps({ snap: snapshot({ is_test: false }), source: { sales: [...SALES, neg] } })
+      const dr = await runCmsSalesSync(g.deps, PROG, { dryRun: true, source: 'operator' })
+      expect([dr.status, dr.code, g.fns()]).toEqual(['dry_run', CMS_RETURNS_NOT_SUPPORTED, ['loadSnapshot']])
+      expect(cmsSalesExitCode(dr)).toBe(1)
+    }
+    // Dòng âm KHÔNG phải ứng viên (ONLINE) ⇒ phân loại / loại như trước, công bố bình thường.
+    const o = fakeDeps({ snap: snapshot({ is_test: false }), source: { sales: [...SALES, NEG_OFF] } })
+    expect((await runCmsSalesSync(o.deps, PROG, { dryRun: false, source: 'cron' })).status).toBe('published')
+    // QA (is_test): fixture điều chỉnh vẫn công bố được trong namespace test.
+    const qa = fakeDeps({ source: { sales: [...SALES, NEG_INC] } })
+    expect((await runCmsSalesSync(qa.deps, PROG, { dryRun: false, source: 'qa' })).status).toBe('published')
+  })
+
+  test('sales-only AC08: nguồn qa trỏ vào chương trình thật ⇒ held QA_SOURCE_REAL_PROGRAM — trước open 0 run / 0 nguồn; sau open đóng run, 0 stage', async () => {
+    let queries = 0
+    const f = fakeDeps({ snap: snapshot({ is_test: false }) })
+    const inner = f.deps.runner
+    f.deps.runner = async (...a) => { queries++; return inner(...a) }
+    const r = await runCmsSalesSync(f.deps, PROG, { dryRun: false, source: 'qa' })
+    expect([r.status, r.code, r.runId, f.fns(), queries]).toEqual(['held', S.CMS_QA_SOURCE_REAL_PROGRAM, null, ['loadSnapshot'], 0])
+    // Snapshot đọc trước là QA nhưng run vừa mở là chương trình thật (đổi namespace giữa hai lần đọc) ⇒ đóng run, không đọc nguồn.
+    const g = fakeDeps({ openRun: async (id: string) => ({ ...snapshot({ is_test: false }), program_id: id, run_id: uid(99) }) })
+    const inner2 = g.deps.runner
+    let q2 = 0
+    g.deps.runner = async (...a) => { q2++; return inner2(...a) }
+    const r2 = await runCmsSalesSync(g.deps, PROG, { dryRun: false, source: 'qa' })
+    expect([r2.status, r2.code, r2.stagedRows, q2]).toEqual(['held', S.CMS_QA_SOURCE_REAL_PROGRAM, 0, 0])
+    expect(g.fns()).toEqual(['loadSnapshot', 'finish', 'cleanup'])
+  })
+
+  test('PM 03/11 QA-P1-1: snapshot đọc trước (nguồn qa) tiêu hết ngân sách ⇒ held DEADLINE, KHÔNG mở run', async () => {
     const f = fakeDeps()
     const loadSnap = f.deps.loadSnapshot
     f.deps.loadSnapshot = async (id, io) => { f.clock.t += 150_000; return loadSnap(id, io) }
@@ -523,10 +598,15 @@ test.describe('CMS P2-b — cron sync-cms-sales @desktop', () => {
     expect(JSON.stringify(s)).not.toMatch(/amount|email/i)
     const e = cronDeps([{ id: P1, lastPublishedAt: null }], { stage: async () => { throw new Error('x') } })
     expect(cmsSalesCronHttpStatus(await runCmsSalesCron(e.deps, { releaseOpen: true }))).toBe(500)
+    // Cổng kết quả đóng (nhánh test releaseOpen false) ⇒ bỏ qua hết TRƯỚC khi mở run, 0 ghi.
     const before = c.order.length
+    const hold = await runCmsSalesCron(c.deps, { releaseOpen: false })
+    expect([hold.results.every((x) => x.status === 'skipped' && x.code === 'RESULTS_RELEASE_GATE'), hold.results.length, c.order.length]).toEqual([true, 3, before])
+    // Handler route không truyền releaseOpen ⇒ theo hằng releaseGate (SALES_ONLY_V1): tính + công bố CMS tạm tính.
     const h = await handleSyncCmsSales({ authorization: 'Bearer s', cronSecret: 's', programEnabled: true, earningsEnabled: true, makeDeps: () => c.deps })
     const hr = h.body.results as Array<{ status: string; code: string }>
-    expect([h.status, hr.length, hr.every((x) => x.status === 'skipped' && x.code === 'RESULTS_RELEASE_GATE'), c.order.length]).toEqual([200, 3, true, before])
+    expect([h.status, hr.map((x) => x.status)]).toEqual([207, ['published', 'busy', 'published']])
+    expect(c.order.length).toBeGreaterThan(before)
     const l = cronDeps([], { listDuePrograms: async () => { throw new Error('x') } })
     const lr = await handleSyncCmsSales({ authorization: 'Bearer s', cronSecret: 's', programEnabled: true, earningsEnabled: true, makeDeps: () => l.deps })
     expect([lr.status, lr.body.code]).toEqual([500, 'LIST_FAILED'])

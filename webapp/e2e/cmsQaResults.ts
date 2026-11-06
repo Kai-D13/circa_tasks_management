@@ -11,7 +11,7 @@
 // mã dòng / đơn có tiền tố QA- (không giả mạo giao dịch nguồn thật); không bao giờ là fallback của cron / app production.
 // Sổ writer (qa-artifacts/cms-qa/<runId>.writers/<writerId>.json, ghi độc quyền + atomic) cho close đối chiếu: writer còn
 // chạy / không rõ kết thúc ⇒ close từ chối; mọi run sales QA trong cửa sổ phải đi qua writer; run sales của chương trình
-// thật trong cửa sổ ⇒ ĐỎ khi Q-206 HOLD.
+// thật trong cửa sổ ⇒ ĐỎ khi cổng kết quả HOLD (SALES_ONLY_V1 ⇒ cảnh báo).
 
 import type { CmsQaRunManifest, CmsQaStatusRow } from './cmsQaTooling'
 import { cmsCanPublishResults } from '../lib/cms/releaseGate'
@@ -403,7 +403,7 @@ export interface CmsQaSalesRunRow {
 
 /**
  * Đối chiếu run sales mở trong cửa sổ run QA (so theo RUN + liên kết writer — security review P1-2, PM QA-P1-2):
- *  · chương trình THẬT: do writer QA (source / qa_writer_id) ⇒ ĐỎ; khi Q-206 HOLD mọi run thật ⇒ ĐỎ; cổng mở ⇒ cảnh báo
+ *  · chương trình THẬT: do writer QA (source / qa_writer_id) ⇒ ĐỎ; khi cổng kết quả HOLD mọi run thật ⇒ ĐỎ; cổng mở ⇒ cảnh báo
  *    (cron thật), cần --ack-warnings;
  *  · run QA `running` ⇒ ĐỎ;
  *  · run QA hợp lệ CHỈ KHI source = 'qa', qa_run_id = run QA này, qa_writer_id là writer có sổ, và sổ của đúng writer đó
@@ -421,7 +421,7 @@ export function cmsQaSalesRunsCheck(
     const fromQa = r.source === CMS_QA_WRITER_SOURCE || !!r.qa_writer_id
     if (!r.is_test) {
       if (fromQa) reasons.push(`run sales ${mask(r.id)} của chương trình THẬT ${mask(r.program_id)} do writer QA mở — dừng, báo PM / operator`)
-      else if (!releaseOpen) reasons.push(`run sales ${mask(r.id)} của chương trình THẬT ${mask(r.program_id)} trong khi Q-206 HOLD — bất thường, dừng, báo PM / operator (rollback 122 sẽ từ chối)`)
+      else if (!releaseOpen) reasons.push(`run sales ${mask(r.id)} của chương trình THẬT ${mask(r.program_id)} trong khi cổng kết quả HOLD — bất thường, dừng, báo PM / operator (rollback 122 sẽ từ chối)`)
       else warn.add(r.program_id)
       continue
     }

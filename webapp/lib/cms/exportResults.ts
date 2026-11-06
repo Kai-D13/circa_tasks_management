@@ -10,7 +10,7 @@
 //    sửa mapping) chỉ super — RPC excluded cũng chỉ trả cho super.
 import * as XLSX from 'xlsx'
 import { formatCmsDecimal, parseCmsDecimal } from './decimal'
-import { CMS_LINE_LABEL, cmsProductSalesStats, cmsQtyText } from './resultUi'
+import { CMS_LINE_LABEL, CMS_SALES_ONLY_NOTE, cmsProductSalesStats, cmsQtyText } from './resultUi'
 import { cmsRunHasLegacyCap, type CmsResultHeaderDto, type CmsResultLineDto, type CmsResultRowsDto } from './resultView'
 
 export const CMS_EXPORT_MAX_LINES = 50_000
@@ -128,6 +128,7 @@ export function buildCmsResultWorkbook(i: CmsExportInput): CmsExportBuild {
     ['run_id (phiên kết quả)', run.id],
     ['Công bố lúc (VN)', vnTime(run.publishedAt)],
     ['Dữ liệu bán đến (VN)', vnTime(run.sourceMaxUpdatedAt)],
+    ['Phạm vi số liệu', CMS_SALES_ONLY_NOTE],
     ['config_version của phiên', run.configVersion],
     ['config_version hiện tại', i.header.configVersion],
     ['Phạm vi người xuất', i.scope === 'super' ? 'Toàn chương trình (super)' : 'Toàn chương trình trong phạm vi của bạn — nhà thuốc được phân công (SM)'],
@@ -260,7 +261,7 @@ export async function handleCmsResultExport(req: Request, deps: CmsExportDeps): 
   })
   if (!built.ok) {
     if (built.error === 'RUN_MISMATCH') return readFail('RUN_GONE')
-    if (built.error === 'RETURNS_HOLD') return json(409, 'RETURNS_HOLD', 'Có dòng điều chỉnh trả hàng chưa được công bố (Q-206) — không xuất.')
+    if (built.error === 'RETURNS_HOLD') return json(409, 'RETURNS_HOLD', 'Có dòng điều chỉnh trả hàng chưa được công bố (trả hàng phase sau — Q-206) — không xuất.')
     return json(500, built.error, 'Số dòng / tổng tiền không khớp — không xuất file thiếu.')
   }
   // Vết kiểm toán (security review I3 P2-1): ai xuất phiên nào, bao nhiêu dòng — chỉ id / số đếm, không email / tên / tiền.

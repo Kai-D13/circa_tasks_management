@@ -22,7 +22,7 @@ Thứ tự phát hành đã thống nhất:
 
 1. Phát hành **P1 — chương trình, import và danh mục tư vấn** trước.
 2. Xây dựng, kiểm thử P2 song song với việc hoàn thiện nguồn BI.
-3. Bật số tiền cho người dùng sau khi hoàn tất hợp đồng dữ liệu, xử lý trả hàng Q-206 và các gate đối soát.
+3. ~~Bật số tiền cho người dùng sau khi hoàn tất hợp đồng dữ liệu, xử lý trả hàng Q-206 và các gate đối soát.~~ **PM 06/11 (docs/cms/DECISIONS.md §5):** bật **CMS tạm tính theo dữ liệu bán hiện có** (chưa bao gồm xử lý trả hàng); trả hàng Q-206 là phase sau (B1 người bán gốc, D1 kỳ ngày bán đã chốt cho phase đó).
 4. P3 chốt kỳ chỉ được giao triển khai sau khi PM chốt bổ sung Q-206 và Q-213.
 
 Các phần còn pending có ranh giới rõ ở §4. Dev không tự chọn cách xử lý nghiệp vụ cho những phần đó.
@@ -35,8 +35,8 @@ Phạm vi giao (PM 01/11):
 | P1 — DB nền, chương trình, import, danh mục và UI | GO triển khai |
 | P2-a — engine và kiểm thử dữ liệu mẫu | GO triển khai |
 | P2-b / P2-c | Chưa giao thực hiện |
-| Bật số tiền P2 cho người dùng | Chờ nguồn BI và Q-206 |
-| P3 — chốt kỳ, payout | HOLD, chờ Q-206 và Q-213 |
+| Bật số tiền P2 cho người dùng | ~~Chờ nguồn BI và Q-206~~ PM 06/11: GO local phase sales-only (migration 126, CMS tạm tính); trả hàng phase sau |
+| P3 — chốt kỳ, payout | HOLD (chốt thật: `real.ready = false`, chờ Q-213 / Q-216 / policy chốt; trả hàng phase sau) |
 
 GO triển khai không bao gồm quyền commit, push, merge, DDL prod, deploy hoặc bật cờ; mỗi việc đó cần lệnh operator riêng.
 

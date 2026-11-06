@@ -411,6 +411,13 @@ export function cmsStaffRows(rows: readonly CmsResultRowDto[], users: readonly C
 }
 
 // ── Dòng (D3 / XLSX) ────────────────────────────────────────────────────────
+/**
+ * Ghi chú phạm vi số liệu phase sales-only (PM 06/11 — planning/research/cms-sales-only-phase-spec-plan-2026-11-06.md §4.3): màn kết
+ * quả (A3 admin / SM, hero staff, hero QLCH) và sheet "Thong tin" của XLSX dùng CHUNG một câu. Chỉ hiện khi có snapshot đã công bố và
+ * chương trình chưa chốt (chưa có snapshot ⇒ "Chưa có số liệu", không 0 giả). Trả hàng (Q-206) là phase sau.
+ */
+export const CMS_SALES_ONLY_NOTE = 'CMS tạm tính theo dữ liệu bán hiện có; chưa bao gồm xử lý trả hàng.'
+
 export const CMS_LINE_LABEL: Record<CmsLineStatus, string> = {
   WAITING_GATE: 'Chờ đạt target', ACCUMULATING: 'Đang cộng dồn', RECORDED: 'Đã ghi nhận', AT_CAP: 'Đã đạt trần', ADJUSTMENT: 'Điều chỉnh',
 }

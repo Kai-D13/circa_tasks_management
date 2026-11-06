@@ -8,6 +8,7 @@ import {
   cmsParseCardFilter, cmsParseHistoryParams, cmsProductTierDistribution, cmsQtyText, cmsStaffCard, cmsStaffRows, cmsStaffSummary,
   cmsStoreSummary, cmsTierBreakdown, cmsTierPosition, cmsUnassignedSummary, cmsA1LoadOrder, cmsPinnedResults, type CmsPinDeps, type CmsResultsLoad,
   cmsHasSales, cmsProductSalesStats, cmsProductTotals,
+  CMS_SALES_ONLY_NOTE,
 } from '../lib/cms/resultUi'
 import {
   CMS_FX_RESULT_SCENARIOS, CMS_FX_RUN, CMS_FX_USERS, cmsFxAdminResults, cmsFxLines, cmsFxStaffResults, cmsFxStoreResults,
@@ -241,6 +242,8 @@ test.describe('CMS P2-c — XLSX kết quả @desktop', () => {
     const info = XLSX.utils.sheet_to_json<string[]>(wb.Sheets['Thong tin'], { header: 1 })
     expect(info.find((r) => r[0] === 'run_id (phiên kết quả)')?.[1]).toBe(CMS_FX_RUN)
     expect(info.find((r) => r[0] === 'Chương trình')?.[1]).toBe(PROGRAM.name)
+    // PM 06/11 sales-only §4.3: sheet Thông tin ghi phạm vi số liệu (CMS tạm tính, chưa gồm trả hàng) — cùng câu với màn kết quả.
+    expect(info.find((r) => r[0] === 'Phạm vi số liệu')?.[1]).toBe(CMS_SALES_ONLY_NOTE)
     expect(wb.Sheets['Thong tin'].B2.t).toBe('s')
     expect(wb.Sheets['Thong tin'].B2.f).toBeUndefined()
     const lines = XLSX.utils.sheet_to_json<Record<string, unknown>>(wb.Sheets['Chi tiet dong'])

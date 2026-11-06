@@ -24,7 +24,7 @@
 //   ẩn — H8); chương trình THẬT bị tài khoản QA chạm (theo mốc của chính hành động) ⇒ ĐỎ, giữ manifest mở; chương trình
 //   thật đổi trong run không do QA ⇒ cảnh báo, CHẶN đóng tới khi operator soát tay và xác nhận đúng tập đó bằng
 //   --ack-warnings (ghi vào manifest đóng). QA kết quả (PM 03/11 REL-P1-1): writer scripts/cms-qa-results.mjs còn chạy /
-//   không rõ kết thúc, run sales QA không qua writer, run sales QA còn running, run sales của chương trình thật khi Q-206 HOLD
+//   không rõ kết thúc, run sales QA không qua writer, run sales QA còn running, run sales của chương trình thật khi cổng kết quả HOLD
 //   ⇒ ĐỎ; danh sách run sales + writer ghi vào manifest đóng. QA chốt P3a (work order 03/11 §4.2): thao tác chốt (sổ l-…)
 //   còn chạy / không rõ ⇒ ĐỎ; payout chốt trong cửa sổ trên chương trình QA phải khớp thao tác chốt trong sổ (chốt ngoài sổ —
 //   kể cả bấm "Chốt kỳ" trên UI của server QA — ⇒ ĐỎ); sổ ghi đã chốt mà DB không có payout ⇒ ĐỎ; chương trình thật bị tài

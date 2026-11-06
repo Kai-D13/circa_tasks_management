@@ -708,9 +708,10 @@ export function assertCmsQaProgramIds(
 
 // ── VERIFY chỉ đọc 120 / 121 + V8 (P1-R2) ───────────────────────────────────
 
-/** Phase VERIFY CMS = số migration CMS đã chạy cuối cùng (120 nền · 121 import / kích hoạt · 122 kết quả P2-b · 123 chốt kỳ P3a · 124 chứng nhận nguồn). */
-export type CmsVerifyPhase = '120' | '121' | '122' | '123' | '124' | '125'
-export const CMS_VERIFY_PHASES: readonly CmsVerifyPhase[] = ['120', '121', '122', '123', '124', '125']
+/** Phase VERIFY CMS = số migration CMS đã chạy cuối cùng (120 nền · 121 import / kích hoạt · 122 kết quả P2-b · 123 chốt kỳ P3a · 124 chứng nhận nguồn
+ *  · 125 bỏ trần bậc cuối · 126 sales-only: mở cổng kết quả bán tạm tính). */
+export type CmsVerifyPhase = '120' | '121' | '122' | '123' | '124' | '125' | '126'
+export const CMS_VERIFY_PHASES: readonly CmsVerifyPhase[] = ['120', '121', '122', '123', '124', '125', '126']
 /** Số hàm CMS tích luỹ ngay TRƯỚC phase (PRE phải đúng ảnh trước migration của phase) — SUY từ CMS_FN_MATRIX (db-reviewer P2-5). */
 export function cmsFnCountBefore(phase: CmsVerifyPhase): number {
   return Object.values(CMS_FN_MATRIX).filter((m) => Number(m.phase) < Number(phase)).length
@@ -742,6 +743,10 @@ export const CMS_PHASE_FUNCTIONS: Record<CmsVerifyPhase, string[]> = {
   // 125 (CMS-UNCAPPED-1 — CMS-Q-220): 1 hàm trigger mới không cấp ai. rpc_cms_import_commit / rpc_cms_program_activate (121) thay bằng
   // CREATE OR REPLACE GIỮ chữ ký + ACL ⇒ thuộc tập "hàm có trước" khi so ACL với PRE; thân mới ở CMS_FN_SRC_125.
   '125': ['cms__tiers_last_open_guard'],
+  // 126 (sales-only, PM 06/11): KHÔNG hàm mới — chỉ CREATE OR REPLACE 2 hàm 122 (cms__results_release_open, rpc_cms_sales_run_publish)
+  // GIỮ chữ ký + ACL ⇒ POST 126 so TOÀN BỘ hàm public (n_all / md5_all) với PRE 126; thân mới ở CMS_FN_SRC_126. Tập rỗng ⇒
+  // cmsVerifyAclSql KHÔNG sinh cột n_ex126 (NOT IN () là lỗi cú pháp).
+  '126': [],
 }
 
 const isCmsFnSql = `(left(p.proname, 4) = 'cms_' OR left(p.proname, 8) = 'rpc_cms_')`
@@ -785,8 +790,8 @@ const privList = (role: string) =>
 export const CMS_VERIFY_SQL = {
   whoami: `SELECT current_user::text AS u, current_database()::text AS db,
        (SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user) AS bypass`,
-  // '123' / '124' / '125' có trong lọc ⇒ checker phase trước trên DB đã ở phase sau đỏ phase-match (lời rõ), không chỉ max-numeric.
-  markers: `SELECT version, name, applied_at FROM public.app_migrations WHERE version IN ('119', '120', '121', '122', '123', '124', '125') OR version !~ '^[0-9]+$' ORDER BY 1`,
+  // '123' … '126' có trong lọc ⇒ checker phase trước trên DB đã ở phase sau đỏ phase-match (lời rõ), không chỉ max-numeric.
+  markers: `SELECT version, name, applied_at FROM public.app_migrations WHERE version IN ('119', '120', '121', '122', '123', '124', '125', '126') OR version !~ '^[0-9]+$' ORDER BY 1`,
   maxNumeric: `SELECT max(CASE WHEN version ~ '^[0-9]+$' THEN version::int END) AS max_v FROM public.app_migrations`,
   functions: `SELECT p.proname::text AS name, p.oid::regprocedure::text AS sig, p.prosecdef AS secdef,
        md5(replace(p.prosrc, E'\\r', '')) AS src_md5,
@@ -878,7 +883,7 @@ export const CMS_VERIFY_SQL = {
   pointerFk: `SELECT k.conname::text AS name, replace(pg_get_constraintdef(k.oid), 'public.', '') AS def, k.convalidated AS valid
   FROM pg_constraint k WHERE k.conrelid = 'public.cms_programs'::regclass AND k.contype = 'f'
    AND k.confrelid = 'public.cms_sync_runs'::regclass ORDER BY 1`,
-  // Cổng Q-206 ở DB: phải còn đóng (mở = migration riêng sau khi Q-206 chốt — 122 §5.1).
+  // Cổng kết quả ở DB: phase 122–125 phải còn đóng (false); 126 (sales-only — migration riêng được duyệt) phải MỞ (true).
   releaseGate: `SELECT public.cms__results_release_open() AS open`,
   // Pointer hiện hành phải trỏ run sales 'ok' đã công bố, chưa dọn, của CHÍNH chương trình, cùng namespace (kỳ vọng 0 dòng).
   inv122Pointer: `SELECT p.id::text AS id FROM public.cms_programs p LEFT JOIN public.cms_sync_runs r ON r.id = p.current_result_run_id
@@ -1001,6 +1006,16 @@ SELECT count(*)::int AS n, count(*) FILTER (WHERE x.ok IS NOT TRUE)::int AS bad,
  ORDER BY 1`,
   // Số chương trình chưa chốt có run hiện hành (0 ⇒ bất biến run hiện hành CHƯA CHỨNG MINH — không xanh rỗng).
   inv125Current: `SELECT count(*)::int AS n FROM public.cms_programs WHERE status IN ('draft', 'active') AND current_result_run_id IS NOT NULL`,
+  // ── 126 (sales-only, chỉ phase ≥ 126) — như V4 cuối migration 126: run bán của chương trình THẬT công bố SAU marker 126 phải mang
+  // detail.results_basis = 'sales_only_v1' (dấu do DB đóng trong publish). MỘT dòng tổng hợp: marker_at NULL ⇒ thiếu marker (đỏ,
+  // không xanh rỗng); n = số run thật công bố sau 126 (0 ⇒ CHƯA CHỨNG MINH); bad = số run thiếu dấu (kỳ vọng 0).
+  inv126RealBasis: `WITH m AS (SELECT applied_at FROM public.app_migrations WHERE version = '126'),
+x AS (SELECT r.id, ((r.detail ->> 'results_basis') IS DISTINCT FROM 'sales_only_v1' OR (r.detail ->> 'results_gate') IS DISTINCT FROM '126') AS bad
+        FROM public.cms_sync_runs r CROSS JOIN m
+       WHERE r.kind = 'sales' AND NOT r.is_test AND r.published_at > m.applied_at)
+SELECT (SELECT max(m.applied_at) FROM m) AS marker_at, count(*)::int AS n, count(*) FILTER (WHERE x.bad)::int AS bad,
+       coalesce(string_agg(x.id::text, ',' ORDER BY x.id) FILTER (WHERE x.bad), '') AS bad_ids
+  FROM x`,
 } as const
 
 export type CmsV8Role = 'super' | 'admin' | 'sm' | 'staff' | 'qlch'
@@ -1023,12 +1038,12 @@ export function pgMetaReadOnlySnapshot(statements: string): string {
 
 /** Phase khai báo cho V8: 120 / 121 (trước kết quả) · 122 (có 4 RPC đọc kết quả) · 123 (thêm rpc_cms_payout, SM thấy 'locked').
  *  Không khai ⇒ chỉ hợp lệ trên DB 120 / 121 (giữ nguyên lệnh runbook P1); DB đã chạy 122 bắt buộc khai --phase=122. */
-export type CmsV8Phase = '120' | '121' | '122' | '123' | '124' | '125'
+export type CmsV8Phase = '120' | '121' | '122' | '123' | '124' | '125' | '126'
 /**
  * Phase mà CLI `cms-verify v8 --phase=` / `print-sql --what=v8` NHẬN (và cmsVerifyV8Sql kiểm). 123 mở ở CLI (P3a): harness
- * scripts/qa-cms-cli-exit.mjs §2b dùng phase 126 làm ca "phase lạ"; §7 chạy `v8 --phase=123` trên DB đã chốt QA.
+ * scripts/qa-cms-cli-exit.mjs §2b dùng phase 127 làm ca "phase lạ" (126 nay hợp lệ); §7 chạy `v8 --phase=123` trên DB đã chốt QA.
  */
-export const CMS_V8_PHASES: readonly CmsV8Phase[] = ['120', '121', '122', '123', '124', '125']
+export const CMS_V8_PHASES: readonly CmsV8Phase[] = ['120', '121', '122', '123', '124', '125', '126']
 /** RPC authenticated được gọi theo phase (tên, sắp C). */
 export const CMS_V8_RPC_CALLABLE: Record<CmsV8Phase, string> = {
   '120': '',
@@ -1039,6 +1054,8 @@ export const CMS_V8_RPC_CALLABLE: Record<CmsV8Phase, string> = {
   '124': 'rpc_cms_payout,rpc_cms_result_excluded,rpc_cms_result_header,rpc_cms_result_lines,rpc_cms_result_rows,rpc_cms_run_source_export,rpc_cms_source_attest,rpc_cms_source_attest_revoke,rpc_cms_source_attestations',
   // 125: không thêm RPC authenticated (2 RPC thay vẫn service_role; guard không cấp ai).
   '125': 'rpc_cms_payout,rpc_cms_result_excluded,rpc_cms_result_header,rpc_cms_result_lines,rpc_cms_result_rows,rpc_cms_run_source_export,rpc_cms_source_attest,rpc_cms_source_attest_revoke,rpc_cms_source_attestations',
+  // 126: không thêm RPC (2 hàm thay giữ ACL: cổng chỉ owner, publish service_role) ⇒ như 125.
+  '126': 'rpc_cms_payout,rpc_cms_result_excluded,rpc_cms_result_header,rpc_cms_result_lines,rpc_cms_result_rows,rpc_cms_run_source_export,rpc_cms_source_attest,rpc_cms_source_attest_revoke,rpc_cms_source_attestations',
 }
 /**
  * Khoá JSON của rpc_cms_payout (migration 123 §6 — đọc từ thân hàm): cấp trên mọi vai (program_total = null với non-super),
@@ -1081,7 +1098,7 @@ function buildCmsV8Sql(userId: string, role: CmsV8Role, phase?: CmsV8Phase): str
   if (!isCmsUuid(userId)) throw new Error('CMS VERIFY V8: user id không hợp lệ')
   if (!CMS_V8_ROLES.includes(role)) throw new Error('CMS VERIFY V8: vai không hợp lệ')
   const childCount = (table: string) => `(SELECT count(*) FROM public.${table} x WHERE x.program_id = ANY (v_exp))`
-  const p124 = phase === '124' || phase === '125'
+  const p124 = phase === '124' || phase === '125' || phase === '126'
   const p123 = phase === '123' || p124
   const p122 = phase === '122' || p123
   // Oracle người xem kết quả (122) — viết lại độc lập theo luật phạm vi hiện tại (kế hoạch PM §4.3), KHÔNG gọi helper 122.
@@ -1343,7 +1360,8 @@ BEGIN
   PERFORM set_config('cms_v8.user_role', coalesce(v_role, ''), true);
   PERFORM set_config('cms_v8.qa_db', v_qa::text, true);
   PERFORM set_config('cms_v8.runner_bypass', (SELECT (r.rolsuper OR r.rolbypassrls)::text FROM pg_roles r WHERE r.rolname = current_user), true);
-  PERFORM set_config('cms_v8.db_phase', CASE WHEN EXISTS (SELECT 1 FROM public.app_migrations m WHERE m.version = '125') THEN '125'
+  PERFORM set_config('cms_v8.db_phase', CASE WHEN EXISTS (SELECT 1 FROM public.app_migrations m WHERE m.version = '126') THEN '126'
+    WHEN EXISTS (SELECT 1 FROM public.app_migrations m WHERE m.version = '125') THEN '125'
     WHEN EXISTS (SELECT 1 FROM public.app_migrations m WHERE m.version = '124') THEN '124'
     WHEN EXISTS (SELECT 1 FROM public.app_migrations m WHERE m.version = '123') THEN '123'
     WHEN EXISTS (SELECT 1 FROM public.app_migrations m WHERE m.version = '122') THEN '122'
@@ -1506,6 +1524,17 @@ export const CMS_FN_SRC_124: Record<string, string> = {
 export const CMS_FN_SRC_125: Record<string, string> = {
   rpc_cms_import_commit: '65bd0b43e24fda590eec4cd764f959c2',
   rpc_cms_program_activate: '6ae92590bf7afc237c80cc3db15e5aad',
+}
+/**
+ * 126 (sales-only, PM 06/11) thay 2 hàm 122 (OR REPLACE giữ chữ ký / owner / ACL / config): cổng cms__results_release_open false → true
+ * (vẫn IMMUTABLE SECDEF, chỉ owner); rpc_cms_sales_run_publish thêm held RETURNS_NOT_SUPPORTED_THIS_PHASE + dấu results_basis /
+ * results_gate cho chương trình thật (service_role, lock_timeout 5 s). Thân mới chỉ áp từ 126 (phase trước giữ src 122). Sinh bằng
+ * scripts/gen-cms-verify-fp-126.mjs (PGlite 120 → 125 → 126): 0 hàm mới; định nghĩa / ACL / config, hình dạng / cột bảng, trigger
+ * KHÔNG đổi ⇒ 126 kế thừa CMS_FN_DEF_125 / CMS_TABLE_SHAPE_125 / CMS_COL_125 / CMS_TRIGGERS_125.
+ */
+export const CMS_FN_SRC_126: Record<string, string> = {
+  cms__results_release_open: 'aebe1ff46ba51dcf533fe328af7ea2a0',
+  rpc_cms_sales_run_publish: 'db2c97efad2bb5ee9d69399b99c7c258',
 }
 /** 124: cấu hình đổi của hàm có trước — lock 6 tham số lock_timeout 3 s → 2 s (PM COMP-INT §4). */
 export const CMS_FN_CFG_124: Record<string, { lock3: boolean; lock2: boolean }> = { rpc_cms_program_lock: { lock3: false, lock2: true } }
@@ -1686,7 +1715,8 @@ const CMS_TABLES_PAYOUT = ['cms_payout_staff', 'cms_payouts']
 /** 12 bảng tập đóng băng 123: TRUNCATE thu hồi khỏi anon / authenticated / service_role + trigger BEFORE TRUNCATE. */
 export const CMS_TABLES_FROZEN_123 = ['cms_programs', 'cms_program_products', 'cms_program_tiers', 'cms_program_stores', 'cms_sync_runs',
   'cms_sync_run_chunks', 'cms_sales_lines', 'cms_results', 'cms_result_catalog', 'cms_result_lines', 'cms_payouts', 'cms_payout_staff']
-const CMS_MARKER_NAME: Record<CmsVerifyPhase, string> = { '120': 'cms_foundation', '121': 'cms_import_activation', '122': 'cms_results', '123': 'cms_payouts', '124': 'cms_source_attestation', '125': 'cms_uncapped_last_tier' }
+const CMS_MARKER_NAME: Record<CmsVerifyPhase, string> = { '120': 'cms_foundation', '121': 'cms_import_activation', '122': 'cms_results', '123': 'cms_payouts', '124': 'cms_source_attestation', '125': 'cms_uncapped_last_tier',
+  '126': 'cms_sales_only_results_release' }
 
 const CMS_TABLES_READ = ['cms_import_runs', 'cms_product_master', 'cms_program_products', 'cms_program_stores', 'cms_program_tiers', 'cms_programs']
 const CMS_TABLES_NO_AUTH = ['cms_qa_access', 'cms_sync_runs']
@@ -1779,6 +1809,7 @@ export interface CmsAclSnapshot {
   n_ex124?: number; md5_ex124?: string
   /** Có từ phase125 tooling — POST 125 so MỌI hàm có trước 125 (2 RPC thay giữ chữ ký + ACL) với n_all / md5_all của PRE 125. */
   n_ex125?: number; md5_ex125?: string
+  // 126: không có n_ex126 — 126 không thêm hàm ⇒ POST 126 so n_all / md5_all với n_all / md5_all của PRE 126 (mọi hàm public).
 }
 
 /**
@@ -1827,6 +1858,8 @@ export interface CmsVerifyInput {
   p124?: { invAttest: Row }
   /** Phase ≥ 125 (CMS-Q-220): cấu hình chưa chốt không còn bậc cuối hữu hạn; run hiện hành không mang trần. */
   p125?: { invLastTier: Row[]; invCurrentCap: Row[]; current?: Row }
+  /** Phase ≥ 126 (sales-only): run bán thật công bố sau marker 126 mang results_basis = 'sales_only_v1' (CMS_VERIFY_SQL.inv126RealBasis). */
+  p126?: { invRealBasis: Row }
   p123?: { owners: Row; isolation123: Row; triggerFns: Row[]; lockPolicy: Row; payoutAcl: Row[]; invPayout: Row; invLocked: Row
     invPayoutStaff?: Row; invRunFrozen?: Row; payoutReach?: Row[]; lockPreview?: Row }
   /** `post --require-proven=…` (như V8): khoá trong cmsPostProvenKeys(phase); mục CHƯA chứng minh ⇒ đỏ. */
@@ -1840,6 +1873,8 @@ const CMS_POST_PROVEN: Record<CmsVerifyPhase, Record<string, readonly string[]>>
   '124': { v5: ['v5-payout-invariants', 'v5-payout-staff', 'v5-run-frozen'], 'lock-preview': ['lock-preview-blocked'], attest: ['v124-payout-attest'] },
   '125': { v5: ['v5-payout-invariants', 'v5-payout-staff', 'v5-run-frozen'], 'lock-preview': ['lock-preview-blocked'], attest: ['v124-payout-attest'],
     uncapped: ['v125-current-run-uncapped'] },
+  '126': { v5: ['v5-payout-invariants', 'v5-payout-staff', 'v5-run-frozen'], 'lock-preview': ['lock-preview-blocked'], attest: ['v124-payout-attest'],
+    uncapped: ['v125-current-run-uncapped'], basis: ['v126-real-basis'] },
 }
 export const cmsPostProvenKeys = (phase: CmsVerifyPhase): readonly string[] => Object.keys(CMS_POST_PROVEN[phase] ?? {})
 
@@ -1857,7 +1892,7 @@ export function evaluateCmsVerify(v: CmsVerifyInput): CmsVerifyCheck[] {
   const add = (id: string, ok: boolean, detail: string) => out.push({ id, ok, detail })
   const P = Number(v.phase)
   const marker = new Map(v.markers.map((r) => [String(r.version), r]))
-  const dbPhase = (['125', '124', '123', '122', '121', '120'] as CmsVerifyPhase[]).find((x) => marker.has(x)) ?? null
+  const dbPhase = (['126', '125', '124', '123', '122', '121', '120'] as CmsVerifyPhase[]).find((x) => marker.has(x)) ?? null
   add('phase-match', dbPhase === v.phase, dbPhase === v.phase ? `DB đang ở phase ${v.phase}`
     : `PHASE KHÔNG PHÙ HỢP: DB có marker CMS cao nhất ${dbPhase ?? '(chưa có)'} — khai báo --phase=${v.phase}; chạy đúng phase, không dùng kết quả phase khác làm bằng chứng`)
   add('runner', v.whoami.bypass === true, `chạy bằng ${String(v.whoami.u)} (superuser / BYPASSRLS ${String(v.whoami.bypass)})`)
@@ -1917,7 +1952,8 @@ export function evaluateCmsVerify(v: CmsVerifyInput): CmsVerifyCheck[] {
     add(`fn-config:${name}`, f.has_path === true && f.has_lock === m.lock && lock3Ok && lock2Ok && f.has_nestloop === !!m.nestloop && Number(f.n_config) === nConfig,
       `search_path=public ${String(f.has_path)} · lock_timeout=5s ${String(f.has_lock)}${m.lock3 || f.has_lock3 === true ? ` · lock_timeout=3s ${String(f.has_lock3)} (kỳ vọng ${!!m.lock3})` : ''}${m.lock2 || f.has_lock2 === true ? ` · lock_timeout=2s ${String(f.has_lock2)} (kỳ vọng ${!!m.lock2})` : ''} · enable_nestloop=off ${String(f.has_nestloop)} · ${String(f.n_config)} mục config (kỳ vọng ${nConfig})`)
     add(`fn-owner:${name}`, f.owner_bypass === true, `owner superuser / BYPASSRLS ${String(f.owner_bypass)}`)
-    const src = P >= 125 && CMS_FN_SRC_125[name] !== undefined ? CMS_FN_SRC_125[name]
+    const src = P >= 126 && CMS_FN_SRC_126[name] !== undefined ? CMS_FN_SRC_126[name]
+      : P >= 125 && CMS_FN_SRC_125[name] !== undefined ? CMS_FN_SRC_125[name]
       : P >= 124 && CMS_FN_SRC_124[name] !== undefined ? CMS_FN_SRC_124[name]
       : P >= 123 && CMS_FN_SRC_123[name] !== undefined ? CMS_FN_SRC_123[name] : m.src
     add(`fn-src:${name}`, f.src_md5 === src, `thân hàm md5 ${String(f.src_md5)}${f.src_md5 === src ? '' : ` · kỳ vọng ${src} (bản migration khác / sửa tay?)`}`)
@@ -1933,6 +1969,7 @@ export function evaluateCmsVerify(v: CmsVerifyInput): CmsVerifyCheck[] {
     const got = normalizeCmsQual(p.qual)
     add(`policy-qual:${String(p.t)}`, want !== undefined && got === want, `qual ${got.slice(0, 200)}${want !== undefined && got !== want ? ` · kỳ vọng ${want}` : ''}`)
   }
+  // 126 KHÔNG đổi trigger / hình dạng / cột / định nghĩa hàm (scripts/gen-cms-verify-fp-126.mjs) ⇒ nhánh `P >= 125` phủ cả 126 (có chủ đích).
   const trgWant = [...(P >= 125 ? CMS_TRIGGERS_125 : P >= 124 ? CMS_TRIGGERS_124 : P >= 123 ? CMS_TRIGGERS_123 : P >= 122 ? CMS_TRIGGERS_122 : CMS_TRIGGERS_120)].sort()
   const trgGot = v.triggers.map((t) => `${normalizeCmsQual(t.def)}|${String(t.enabled)}`).sort()
   if (P >= 123) {
@@ -1977,15 +2014,16 @@ export function evaluateCmsVerify(v: CmsVerifyInput): CmsVerifyCheck[] {
   // ACL: (1) hàm ngoài cms = PRE; (2) MỌI hàm có trước phase (gồm hàm 120 / 121 khi chạy 122) = PRE của phase.
   add('acl-old-functions', v.aclPost.n_old === v.aclPre.n_old && v.aclPost.md5_old === v.aclPre.md5_old,
     `hàm ngoài cms ${v.aclPost.n_old} / ${v.aclPost.md5_old} · PRE ${v.aclPre.n_old} / ${v.aclPre.md5_old}`)
+  // 126 không thêm hàm (2 hàm 122 thay giữ chữ ký + ACL) ⇒ POST so TOÀN BỘ hàm public (n_all / md5_all) với PRE.
   const nEx = v.phase === '120' ? v.aclPost.n_ex120 : v.phase === '121' ? v.aclPost.n_ex121 : v.phase === '122' ? v.aclPost.n_ex122 : v.phase === '123' ? v.aclPost.n_ex123
-    : v.phase === '124' ? v.aclPost.n_ex124 : v.aclPost.n_ex125
+    : v.phase === '124' ? v.aclPost.n_ex124 : v.phase === '125' ? v.aclPost.n_ex125 : v.aclPost.n_all
   const mdEx = v.phase === '120' ? v.aclPost.md5_ex120 : v.phase === '121' ? v.aclPost.md5_ex121 : v.phase === '122' ? v.aclPost.md5_ex122 : v.phase === '123' ? v.aclPost.md5_ex123
-    : v.phase === '124' ? v.aclPost.md5_ex124 : v.aclPost.md5_ex125
+    : v.phase === '124' ? v.aclPost.md5_ex124 : v.phase === '125' ? v.aclPost.md5_ex125 : v.aclPost.md5_all
   // 124 đổi chữ ký rpc_cms_program_lock ⇒ so trên tập TRỪ hàm đó ở cả PRE lẫn POST (PRE phải chụp bằng tooling 124 — có n_ex124).
   const nPre = v.phase === '124' ? v.aclPre.n_ex124 : v.aclPre.n_all
   const mdPre = v.phase === '124' ? v.aclPre.md5_ex124 : v.aclPre.md5_all
   add('acl-preexisting-functions', nEx !== undefined && nPre !== undefined && nEx === nPre && mdEx === mdPre,
-    `mọi hàm có trước ${v.phase}${v.phase === '124' ? ' (trừ rpc_cms_program_lock đổi chữ ký)' : ''}: ${String(nEx)} / ${String(mdEx)} · PRE ${String(nPre)} / ${String(mdPre)}`)
+    `mọi hàm có trước ${v.phase}${v.phase === '124' ? ' (trừ rpc_cms_program_lock đổi chữ ký)' : v.phase === '126' ? ' (126 không thêm hàm ⇒ toàn bộ hàm public)' : ''}: ${String(nEx)} / ${String(mdEx)} · PRE ${String(nPre)} / ${String(mdPre)}`)
 
   if (P >= 121) {
     const inv = v.inv121
@@ -2006,8 +2044,15 @@ export function evaluateCmsVerify(v: CmsVerifyInput): CmsVerifyCheck[] {
       : 'THIẾU cms_program_tiers_product_from_idx')
     const fk = (q?.pointerFk ?? []).map((r) => `${String(r.name)}=${normalizeCmsQual(r.def)}|${String(r.valid)}`)
     add('pointer-fk', fk.length === 1 && fk[0] === CMS_POINTER_FK, fk.join(' ; ') || 'THIẾU FK pointer kết quả')
-    add('release-gate-closed', q?.releaseGate?.open === false,
-      `cms__results_release_open() = ${String(q?.releaseGate?.open ?? 'THIẾU')} (Q-206 HOLD ⇒ phải false; mở cổng = migration riêng được duyệt)`)
+    // 126 (sales-only, PM 06/11) là migration riêng được duyệt mở cổng kết quả bán tạm tính ⇒ phase ≥ 126 kỳ vọng true (mục đổi id
+    // để báo cáo không nhầm); phase 122–125 giữ false. Chốt / chi trả thật vẫn do policy chặn (v4-lock-policy: real.ready = false).
+    if (P >= 126) {
+      add('release-gate-open', q?.releaseGate?.open === true,
+        `cms__results_release_open() = ${String(q?.releaseGate?.open ?? 'THIẾU')} (126 sales-only ⇒ phải true — cổng kết quả bán tạm tính MỞ; trả hàng Q-206 phase sau)`)
+    } else {
+      add('release-gate-closed', q?.releaseGate?.open === false,
+        `cms__results_release_open() = ${String(q?.releaseGate?.open ?? 'THIẾU')} (Q-206 HOLD ⇒ phải false; mở cổng = migration riêng được duyệt)`)
+    }
     add('inv122-pointer', !!q && q.inv122Pointer.length === 0, `${q?.inv122Pointer.length ?? 'THIẾU'} chương trình trỏ run không hợp lệ`)
     // Vân tay định nghĩa hàm / cột sau 122 (db-reviewer P2-1) — sinh từ file migration, kiểm lại PG15.
     const defWant = P >= 125 ? CMS_FN_DEF_125 : P >= 124 ? CMS_FN_DEF_124 : P >= 123 ? CMS_FN_DEF_123 : CMS_FN_DEF_122
@@ -2034,10 +2079,12 @@ export function evaluateCmsVerify(v: CmsVerifyInput): CmsVerifyCheck[] {
     const trgN = (P >= 125 ? CMS_TRIGGERS_125 : P >= 124 ? CMS_TRIGGERS_124 : CMS_TRIGGERS_123).length
     add('trigger-fns', tf.length === trgN && tfBad.length === 0,
       `${tf.length} trigger (kỳ vọng ${trgN}) · hàm sai / sai INVOKER-DEFINER ${tfBad.length}${tfBad.slice(0, 5).map((r) => ` · ${String(r.t)}.${String(r.name)}→${String(r.fn)} secdef ${String(r.secdef)}`).join('')}`)
-    // V4 — policy thật chưa ready + version 1; cổng Q-206 đóng (đã có release-gate-closed ở P ≥ 122).
+    // V4 — policy thật chưa ready + version 1; cổng kết quả đóng ở 123–125 (đã có release-gate-closed ở P ≥ 122), MỞ từ 126
+    // (release-gate-open) — real.ready VẪN false ở mọi phase (126 không mở chốt / chi trả thật).
     const lp = q?.lockPolicy
-    add('v4-lock-policy', lp?.real_ready === 'false' && lp?.version === '1' && lp?.release_open === false,
-      `cms__lock_policy(): real.ready ${String(lp?.real_ready ?? 'THIẾU')} (kỳ vọng false) · version ${String(lp?.version ?? 'THIẾU')} (kỳ vọng 1) · cổng Q-206 ${String(lp?.release_open ?? 'THIẾU')}`)
+    const gateWant = P >= 126
+    add('v4-lock-policy', lp?.real_ready === 'false' && lp?.version === '1' && lp?.release_open === gateWant,
+      `cms__lock_policy(): real.ready ${String(lp?.real_ready ?? 'THIẾU')} (kỳ vọng false) · version ${String(lp?.version ?? 'THIẾU')} (kỳ vọng 1) · cổng kết quả ${String(lp?.release_open ?? 'THIẾU')} (kỳ vọng ${gateWant}${gateWant ? ' — 126 sales-only' : ' — Q-206 HOLD'})`)
     // V3 — 2 bảng payout: RLS, relacl / attacl không có PUBLIC / anon / authenticated / service_role.
     const pa = q?.payoutAcl ?? []
     add('v3-payout-acl', pa.length === 2 && pa.every((r) => r.rls === true && Number(r.api_grants) === 0 && Number(r.api_col_grants) === 0),
@@ -2097,6 +2144,18 @@ export function evaluateCmsVerify(v: CmsVerifyInput): CmsVerifyCheck[] {
       detail: `${Array.isArray(cc) ? cc.length : 'THIẾU'} chương trình chưa chốt có run hiện hành mang trần / AT_CAP${(cc ?? []).slice(0, 5).map((r) => ` · ${maskCmsUuid(String(r.id))} cap ${String(r.cap_rows)} · AT_CAP ${String(r.at_cap_lines)}`).join('')} · ${Number.isInteger(nCur) ? nCur : 'THIẾU'} chương trình chưa chốt có run hiện hành${nCur > 0 ? '' : ' — CHƯA CHỨNG MINH (chưa có run hiện hành nào)'}`,
       proven: nCur > 0 })
   }
+  if (P >= 126) {
+    // V-126 (sales-only, = V4 cuối migration 126): run bán của chương trình THẬT công bố SAU marker 126 phải mang dấu DB
+    // detail.results_basis = 'sales_only_v1'. Thiếu marker (marker_at NULL) ⇒ đỏ; 0 run thật công bố sau 126 ⇒ CHƯA CHỨNG MINH.
+    const ib = v.p126?.invRealBasis
+    const n = Number(ib?.n ?? NaN), bad = Number(ib?.bad ?? NaN)
+    let markerAt: string | null = null
+    try { if (ib?.marker_at !== undefined && ib?.marker_at !== null && ib?.marker_at !== '') markerAt = toIsoUtc(ib.marker_at) } catch { /* sai dạng ⇒ coi như thiếu */ }
+    const hasMarker = markerAt !== null
+    out.push({ id: 'v126-real-basis', ok: hasMarker && Number.isInteger(n) && bad === 0, proven: n > 0,
+      detail: `${hasMarker ? `marker 126 ${markerAt}` : 'THIẾU marker 126'} · ${Number.isInteger(n) ? n : 'THIẾU'} run bán THẬT công bố sau 126 · thiếu results_basis = sales_only_v1 / results_gate = 126 ${Number.isInteger(bad) ? bad : 'THIẾU'}${
+        String(ib?.bad_ids ?? '').split(',').filter(Boolean).slice(0, 5).map((x) => ` ${maskCmsUuid(x)}`).join('')}${n > 0 ? '' : ' — CHƯA CHỨNG MINH (chưa có run thật công bố sau 126)'}` })
+  }
   // post --require-proven (như V8): mọi mục của khoá phải ĐẠT và ĐÃ chứng minh.
   for (const k of v.requireProven ?? []) {
     const ids = CMS_POST_PROVEN[v.phase]?.[k]
@@ -2117,7 +2176,7 @@ export function evaluateCmsVerify(v: CmsVerifyInput): CmsVerifyCheck[] {
 /** Tên bảng V8 dùng được cho `--require-proven`. */
 export const CMS_V8_TABLE_KEYS: readonly string[] = V8_TABLES.map(([k]) => k)
 /** Khoá `--require-proven` theo phase: 122 thêm `results` (phạm vi dòng kết quả thật sự bị cắt). */
-export const cmsV8ProvenKeys = (phase?: CmsV8Phase): readonly string[] => (phase === '123' || phase === '124' || phase === '125' ? [...CMS_V8_TABLE_KEYS, 'results', 'result_lines', 'payout']
+export const cmsV8ProvenKeys = (phase?: CmsV8Phase): readonly string[] => (phase === '123' || phase === '124' || phase === '125' || phase === '126' ? [...CMS_V8_TABLE_KEYS, 'results', 'result_lines', 'payout']
   : phase === '122' ? [...CMS_V8_TABLE_KEYS, 'results', 'result_lines'] : CMS_V8_TABLE_KEYS)
 
 /**
@@ -2163,7 +2222,7 @@ export function evaluateCmsV8(
   add('v8-private', row.read_qa_access === false && row.read_sync_runs === false && row.write_programs === false && row.private_tables === 0
     && row.rpc_callable === wantRpc,
   `cms_qa_access ${String(row.read_qa_access)} · cms_sync_runs ${String(row.read_sync_runs)} · ghi ${String(row.write_programs)} · bảng riêng tư đọc / ghi được ${String(row.private_tables)} · rpc_cms_* gọi được [${String(row.rpc_callable)}] (kỳ vọng [${wantRpc}])`)
-  if (phase === '122' || phase === '123' || phase === '124' || phase === '125') {
+  if (phase === '122' || phase === '123' || phase === '124' || phase === '125' || phase === '126') {
     add('v8-result-role', row.rx_role === 'authenticated', `khối gọi RPC chạy bằng vai ${String(row.rx_role)} (kỳ vọng authenticated)`)
     add('v8-result-rpc', row.rx_leak === 0 && row.rx_deny === 0 && row.rx_err === 0,
       `header ngoài tập đọc được ${String(row.rx_leak)} · trong tập bị chặn ${String(row.rx_deny)} · lỗi khác ${String(row.rx_err)} · chương trình ngoài tập ${String(row.rx_outside)}${Number(row.rx_outside) > 0 ? '' : ' — CHƯA CHỨNG MINH chặn (mọi chương trình đều trong tập)'}`,
@@ -2181,7 +2240,7 @@ export function evaluateCmsV8(
     add('v8-result-lines-user', row.rx_lleak === 0,
       `rpc_cms_result_lines với p_user_id ngoài phạm vi trả dữ liệu ${String(row.rx_lleak)} lần${row.rx_outsider === true ? '' : ' — CHƯA CHỨNG MINH (không có staff ngoài phạm vi / super)'}`, row.rx_outsider === true)
   }
-  if (phase === '123' || phase === '124' || phase === '125') {
+  if (phase === '123' || phase === '124' || phase === '125' || phase === '126') {
     // rpc_cms_payout gọi thật dưới authenticated cho MỌI chương trình (Q-208 / Q-217).
     add('v8-payout-role', row.py_role === 'authenticated', `khối gọi rpc_cms_payout chạy bằng vai ${String(row.py_role)} (kỳ vọng authenticated)`)
     add('v8-payout-rpc', row.py_leak === 0 && row.py_deny === 0 && row.py_err === 0,

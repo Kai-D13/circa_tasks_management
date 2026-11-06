@@ -2,9 +2,13 @@
 // Thuần: mọi I/O qua deps tiêm vào; dùng CHUNG cho cron /api/cron/sync-cms-sales và script operator
 // scripts/cms-sales-sync.mjs (dry-run mặc định). Luồng (fail-closed, KHÔNG giữ transaction DB khi gọi BigQuery):
 //   open (khoá + chụp cấu hình / mapping, trả snapshot) → đọc TOÀN KỲ đủ trang → chất lượng (trùng / lỗi dòng / chưa quy đổi /
-//   rỗng sau dữ liệu / chưa gán > 20 %) → engine P2-a (KHÔNG tính lại ở đây) → kiểm miền số → cổng Q-206 (chương trình
-//   thật dừng ở đây, không stage; khi cổng HOLD lượt ghi còn bị chặn từ TRƯỚC open bằng snapshot chỉ đọc) → stage theo khối có số → seal (begin + từng bước, DB đối chiếu độc lập) → publish (đổi
-//   pointer một lần) → dọn run cũ ở mọi nhánh đã mở run (best effort, có ngân sách).
+//   rỗng sau dữ liệu / chưa gán > 20 %) → engine P2-a (KHÔNG tính lại ở đây) → kiểm miền số → dòng âm / điều chỉnh của chương trình
+//   thật ⇒ held RETURNS_NOT_SUPPORTED_THIS_PHASE (trả hàng chưa triển khai — PM 06/11 sales-only §4.2) → cổng công bố kết quả
+//   (releaseGate: SALES_ONLY_V1 từ 126; chế độ HOLD ⇒ chương trình thật dừng, lượt ghi còn bị chặn TRƯỚC open bằng snapshot chỉ đọc)
+//   → stage theo khối có số → seal (begin + từng bước, DB đối chiếu độc lập) → publish (đổi pointer một lần; DB 126 kiểm lại cổng +
+//   dòng điều chỉnh, đóng dấu results_basis) → dọn run cũ ở mọi nhánh đã mở run (best effort, có ngân sách).
+// Nguồn 'qa' (writer QA / harness) CHỈ ghi chương trình is_test: kiểm bằng snapshot chỉ đọc TRƯỚC open và lại sau open ⇒ chương trình
+//   thật bị từ chối held QA_SOURCE_REAL_PROGRAM với 0 run / 0 ghi (kể cả khi cổng kết quả thật đã mở).
 // LỚP NGUỒN (migration 124, PM COMP-INT §5.A): opts.sourceCapture (cờ CMS_SOURCE_CAPTURE_ENABLED, mặc định OFF) ⇒ ngay sau mở run
 //   đòi snapshot.sourceSchema = CMS_SOURCE_SCHEMA_SUPPORTED (giá trị THỰC DB trả) — thiếu / lạ ⇒ đóng run error
 //   SOURCE_SCHEMA_UNSUPPORTED TRƯỚC khi đọc nguồn (không stage / publish, không tự hạ cấp thành run thiếu nguồn). Hỗ trợ ⇒ stage
@@ -24,7 +28,9 @@ import { createHash } from 'node:crypto'
 import { computeCmsProgram, CmsEngineInputError } from './engine/compute'
 import { CmsEngineConfigError, parseCmsEngineProgram } from './engine/config'
 import { assessSalesSnapshot, findDuplicates } from './quality'
-import { cmsCanPublishResults } from './releaseGate'
+import {
+  cmsAdjustmentBlocksRelease, cmsCanPublishResults, CMS_RESULTS_RELEASE_MODE, CMS_RETURNS_NOT_SUPPORTED, type CmsResultsReleaseMode,
+} from './releaseGate'
 import {
   buildCmsSourceStageRows, buildCmsStagePayload, chunkCmsStageRows, cmsSnapshotToEngineInput, cmsStageBoundsIssue, parseCmsSalesSnapshot,
   CMS_SOURCE_PART, CMS_SOURCE_SCHEMA_SUPPORTED, CMS_STAGE_CHUNK_DEFAULT, CMS_STAGE_PARTS,
@@ -128,6 +134,27 @@ export type CmsSalesSyncOpts = {
   dryRun: boolean; source: 'cron' | 'operator' | 'qa'; chunkSize?: number; deadlineAt?: number
   /** Capture lớp nguồn (cờ CMS_SOURCE_CAPTURE_ENABLED) — mặc định false. */
   sourceCapture?: boolean
+  /** CHỈ TEST: ép cổng kết quả về HOLD để kiểm nhánh đóng (chỉ ĐÓNG thêm — không mở được cổng). Route / script không truyền. */
+  releaseHold?: boolean
+}
+
+/** Mã held: nguồn 'qa' trỏ vào chương trình thật (writer QA không bao giờ ghi chương trình thật — PM 06/11 AC08). */
+export const CMS_QA_SOURCE_REAL_PROGRAM = 'QA_SOURCE_REAL_PROGRAM'
+
+/**
+ * Số dòng ỨNG VIÊN (INCLUDED + chưa gán + ngoài phạm vi) có lượng cơ sở hoặc GMV âm — dấu hiệu trả hàng / điều chỉnh từ nguồn.
+ * TODO(Q-a): phạm vi "dòng âm bị held" là MẶC ĐỊNH Dev fail-closed (cả chưa gán / ngoài phạm vi — dòng âm chưa gán có thể là trả
+ * của dòng bán đã tính tiền), chờ PM chốt (report 2026-11-07-cms-sales-only §7). Thu hẹp về chỉ INCLUDED ⇒ đổi CÙNG LÚC hàm này và
+ * nhánh EXISTS của publish 126 (scripts/gen-cms-126.mjs CMS_126_PUBLISH_ADJ), sinh lại 126.
+ */
+export function cmsNegativeCandidateLines(out: Pick<ReturnType<typeof computeCmsProgram>, 'lines' | 'excluded'>): number {
+  const Z = BigInt(0)
+  let n = 0
+  for (const l of out.lines) if (l.baseQuantityUnits < Z || l.gmvUnits < Z) n++
+  for (const l of out.excluded) {
+    if ((l.reason === 'UNASSIGNED' || l.reason === 'OUT_OF_SCOPE') && (l.baseQuantityUnits < Z || l.gmvUnits < Z)) n++
+  }
+  return n
 }
 
 /** Đồng hồ ngân sách của một lượt chương trình. Không có deadline ⇒ chỉ timeout RPC tối đa. */
@@ -205,10 +232,12 @@ async function runCmsSalesSyncInner(deps: CmsSalesSyncDeps, programId: string, o
   if (!deps.table) return done({ status: 'config_missing', code: 'CONFIG_MISSING' })
   if (!budget.canWork()) return done({ status: 'held', code: 'DEADLINE' })
 
-  // Q-206 HOLD (PM 03/11 REL-P1-1): lượt GHI chỉ được mở run cho chương trình QA. Kiểm namespace bằng snapshot CHỈ ĐỌC TRƯỚC
-  // openRun ⇒ chương trình thật bị từ chối với 0 run / 0 ghi / 0 truy vấn nguồn (trước đây mở run rồi held — một run sales
-  // của chương trình thật làm preflight rollback 122 từ chối). Cổng mở ⇒ bỏ bước này; kiểm sau openRun / trước stage giữ nguyên.
-  if (!opts.dryRun && !cmsCanPublishResults(false)) {
+  const mode: CmsResultsReleaseMode = opts.releaseHold === true ? 'HOLD' : CMS_RESULTS_RELEASE_MODE
+  const qaSource = opts.source === 'qa'
+  // Lượt GHI chỉ mở run khi được phép (PM 03/11 REL-P1-1 + PM 06/11 AC08): cổng HOLD ⇒ chỉ chương trình QA; nguồn 'qa' ⇒ chỉ
+  // chương trình QA (cả khi cổng kết quả thật đã mở). Kiểm namespace bằng snapshot CHỈ ĐỌC TRƯỚC openRun ⇒ bị từ chối với 0 run /
+  // 0 ghi / 0 truy vấn nguồn. Cron / operator khi cổng mở ⇒ bỏ bước này; kiểm sau openRun / trước stage giữ nguyên.
+  if (!opts.dryRun && (!cmsCanPublishResults(false, mode) || qaSource)) {
     let preRaw: unknown
     try { preRaw = await deps.loadSnapshot(programId, budget.work()) } catch (e) {
       const code = cmsRpcCode(e, 'SNAPSHOT_FAILED')
@@ -218,7 +247,7 @@ async function runCmsSalesSyncInner(deps: CmsSalesSyncDeps, programId: string, o
     try { pre = parseCmsSalesSnapshot(preRaw) } catch { return done({ status: 'error', code: 'SNAPSHOT_INVALID' }) }
     if (pre.programId !== programId) return done({ status: 'error', code: 'SNAPSHOT_INVALID' })
     res.isTest = pre.isTest
-    if (!pre.isTest) return done({ status: 'held', code: 'RESULTS_RELEASE_GATE' })
+    if (!pre.isTest) return done({ status: 'held', code: qaSource ? CMS_QA_SOURCE_REAL_PROGRAM : 'RESULTS_RELEASE_GATE' })
     // Snapshot đọc trước có thể tiêu hết ngân sách ⇒ không mở run sau mốc làm việc (PM 03/11 QA-P1-1).
     if (!budget.canWork()) return done({ status: 'held', code: 'DEADLINE' })
   }
@@ -247,6 +276,8 @@ async function runCmsSalesSyncInner(deps: CmsSalesSyncDeps, programId: string, o
     return stop('error', 'SNAPSHOT_INVALID')
   }
   res.isTest = snap.isTest
+  // Lớp thứ hai cho nguồn 'qa': snapshot của chính run vừa mở là chương trình thật ⇒ đóng run trước khi đọc nguồn / stage.
+  if (!opts.dryRun && qaSource && !snap.isTest) return stop('held', CMS_QA_SOURCE_REAL_PROGRAM)
   // Capability lớp nguồn: chỉ tin giá trị DB trả lúc mở run (cờ không phải chứng cứ DB hỗ trợ).
   const capture = !opts.dryRun && opts.sourceCapture === true
   if (capture && snap.sourceSchema !== CMS_SOURCE_SCHEMA_SUPPORTED) return stop('error', 'SOURCE_SCHEMA_UNSUPPORTED')
@@ -306,6 +337,13 @@ async function runCmsSalesSyncInner(deps: CmsSalesSyncDeps, programId: string, o
     return stop('held', verdict.reasons[0], { ...qualityDetail, reasons: verdict.reasons.join(',') })
   }
   if (cmsStageBoundsIssue(out, fetched.lines)) return stop('held', 'OVERFLOW', qualityDetail)
+  // Trả hàng chưa triển khai (phase sau — PM 06/11 sales-only §4.2): chương trình thật có dòng ứng viên âm (engine ⇒ ADJUSTMENT) ⇒
+  // held, KHÔNG stage / publish, pointer cũ giữ nguyên. Không bỏ dòng âm để công bố riêng phần dương, không clamp về 0. QA giữ fixture
+  // điều chỉnh trong namespace test. DB 126 chặn lại ở publish (tổng điều chỉnh đã seal + dòng âm đã stage).
+  const negative = cmsNegativeCandidateLines(out)
+  if (negative > 0 && cmsAdjustmentBlocksRelease(snap.isTest)) {
+    return stop('held', CMS_RETURNS_NOT_SUPPORTED, { ...qualityDetail, adjustment_lines: negative })
+  }
 
   let payload: ReturnType<typeof buildCmsStagePayload>
   try {
@@ -319,9 +357,9 @@ async function runCmsSalesSyncInner(deps: CmsSalesSyncDeps, programId: string, o
   res.resultHash = createHash('sha256').update(JSON.stringify(payload.parts)).update(payload.expect.amount_vnd).digest('hex')
   if (opts.dryRun) return done({ status: 'dry_run', code: null })
 
-  // Q-206: chương trình thật chưa được công bố tiền ⇒ dừng TRƯỚC khi stage — không ghi email người bán / tiền thật vào DB
-  // mỗi lượt cron khi chưa được phép công bố (security review P1-1). DB publish có cổng riêng (122) làm lớp thứ hai.
-  if (!cmsCanPublishResults(snap.isTest)) return stop('held', 'RESULTS_RELEASE_GATE', qualityDetail)
+  // Cổng kết quả HOLD: chương trình thật chưa được công bố tiền ⇒ dừng TRƯỚC khi stage — không ghi email người bán / tiền thật vào
+  // DB mỗi lượt cron khi chưa được phép công bố (security review P1-1). DB publish có cổng riêng (122 / 126) làm lớp thứ hai.
+  if (!cmsCanPublishResults(snap.isTest, mode)) return stop('held', 'RESULTS_RELEASE_GATE', qualityDetail)
 
   const runId = res.runId!
   // RPC làm việc ném lỗi: mã CMS_* = DB từ chối xác định ⇒ error đúng mã; không mã (transport / huỷ do timeout) mà ngân sách

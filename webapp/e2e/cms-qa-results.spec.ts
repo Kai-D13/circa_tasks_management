@@ -411,7 +411,11 @@ test.describe('CMS QA kết quả — sổ writer và đối chiếu close @desk
     red([run({ status: 'running' })], /còn running/)
     // Chương trình thật.
     red([run({ is_test: false, program_id: REAL })], /THẬT.*do writer QA/)
-    red([run({ is_test: false, program_id: REAL, source: 'operator', qa_writer_id: null, status: 'held', error_code: 'RESULTS_RELEASE_GATE' })], /Q-206 HOLD/)
+    // Cổng kết quả HOLD (nhánh releaseOpen false): mọi run thật ⇒ ĐỎ. Mặc định (SALES_ONLY_V1 — PM 06/11) run cron / operator thật ⇒
+    // chỉ cảnh báo (cần --ack-warnings); run thật do writer QA ⇒ vẫn ĐỎ.
+    expect(R.cmsQaSalesRunsCheck([run({ is_test: false, program_id: REAL, source: 'operator', qa_writer_id: null, status: 'held', error_code: 'RESULTS_RELEASE_GATE' })], w, { qaRunId: RUN, releaseOpen: false }).reasons.join(' | ')).toMatch(/cổng kết quả HOLD/)
+    expect(R.cmsQaSalesRunsCheck([run({ is_test: false, program_id: REAL, source: 'cron', qa_writer_id: null, qa_run_id: null })], w, { qaRunId: RUN })).toMatchObject({ reasons: [], warningProgramIds: [REAL] })
+    expect(R.cmsQaSalesRunsCheck([run({ is_test: false, program_id: REAL, source: 'qa' })], w, { qaRunId: RUN }).reasons.join(' | ')).toMatch(/THẬT.*do writer QA/)
     expect(R.cmsQaSalesRunsCheck([run({ is_test: false, program_id: REAL, source: 'cron', qa_writer_id: null, qa_run_id: null })], w, { qaRunId: RUN, releaseOpen: true })).toMatchObject({ reasons: [], warningProgramIds: [REAL] })
     expect(R.cmsQaSalesRunsCheck([run({ is_test: false, program_id: REAL, source: 'qa' })], w, { qaRunId: RUN, releaseOpen: true }).reasons.length).toBe(1)
     expect(() => R.cmsQaRunSalesRunsSql("x' OR 1=1")).toThrow()

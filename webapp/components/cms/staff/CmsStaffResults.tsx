@@ -4,7 +4,7 @@ import { Notice } from '@/components/ds/Notice'
 import { ProgressBar } from '@/components/ds/ProgressBar'
 import { cn } from '@/lib/utils'
 import { cmsAmountPerUnit, cmsDateTime, cmsVnd } from '@/lib/cms/display'
-import { cmsHistoryHref, cmsLoadState, type CmsCardFilter, type CmsGateView, type CmsNearGate, type CmsResultsLoad, type CmsStaffCard, type CmsStaffSummary, type CmsStoreSummary, type CmsUiTier } from '@/lib/cms/resultUi'
+import { cmsHistoryHref, cmsLoadState, CMS_SALES_ONLY_NOTE, type CmsCardFilter, type CmsGateView, type CmsNearGate, type CmsResultsLoad, type CmsStaffCard, type CmsStaffSummary, type CmsStoreSummary, type CmsUiTier } from '@/lib/cms/resultUi'
 import { cmsNoRunText, cmsResultState, type CmsResultHeaderDto } from '@/lib/cms/resultView'
 import type { CmsDisplayStatus } from '@/lib/cms/programStatus'
 import { cmsStaffAmountTitle, cmsStaffUpdatedText } from '@/lib/cms/staffView'
@@ -13,7 +13,7 @@ import { cmsNavHref, type CmsNav } from '@/lib/cms/fixtureNav'
 
 // CMS P2-c (I3) · khối số liệu D1 / D2 (UI §4.1–§4.2; U12 / U13 / U18 / U19). Chỉ TRÌNH BÀY số từ view-model
 // (lib/cms/resultUi) — không tự tính tiền. null / chưa có snapshot ⇒ '—', không 0 giả. Không render nhãn trả hàng / số âm
-// (Q-206 HOLD). Dùng chung route thật + fixture /ui-catalog/cms-v2.
+// (trả hàng Q-206 phase sau — chương trình thật có dòng âm bị held, không công bố). Dùng chung route thật + fixture /ui-catalog/cms-v2.
 // P3a r2 (PM r1 PKG-P1-1): `display` của chương trình quyết nhãn — Đang chạy "tạm tính · chưa chốt kỳ", Chờ chốt kỳ "tạm
 // tính · chờ chốt", Đã chốt "đã chốt" (số của run đóng băng).
 
@@ -43,6 +43,11 @@ export function CmsResultsNotice({ results, reloadHref }: { results: CmsResultsL
   return null
 }
 
+/** Ghi chú sales-only (PM 06/11 §4.3) — một dòng dưới số tiền hero; chỉ khi có snapshot đã công bố và chưa chốt. */
+function SalesOnlyNote({ header, display, className }: { header: CmsResultHeaderDto; display: CmsDisplayStatus | null; className: string }) {
+  return header.run && display !== 'locked' ? <p data-cms-sales-only className={className}>{CMS_SALES_ONLY_NOTE}</p> : null
+}
+
 function UpdatedLine({ header, display }: { header: CmsResultHeaderDto; display: CmsDisplayStatus | null }) {
   return header.run
     ? <span data-cms-updated={display ?? 'running'}>{cmsStaffUpdatedText(display, header.run.publishedAt)}</span>
@@ -66,6 +71,7 @@ export function CmsStaffHero({ summary, header, programId, display = null, nav }
       <div>
         <p data-cms-hero-title className="text-[13px] opacity-80">{cmsStaffAmountTitle(display, 'own')}</p>
         <p data-cms-hero-amount className="text-[30px] font-bold leading-tight tabular-nums">{has ? cmsVnd(summary.amountVnd) : '—'}</p>
+        <SalesOnlyNote header={header} display={display} className="text-[12px] opacity-80" />
       </div>
       <div className="grid grid-cols-3 gap-2">
         <Tile label="SP có CMS" value={has ? `${summary.productsWithCms}/${summary.productCount}` : '—'} />
@@ -93,6 +99,7 @@ export function CmsStoreHero({ summary, header, programId, display = null, nav }
         <p data-cms-store-title className="text-[13px] text-muted-foreground">{cmsStaffAmountTitle(display, 'store')}</p>
         <p data-cms-store-amount className="text-[26px] font-bold leading-tight tabular-nums">{has ? cmsVnd(summary.amountVnd) : '—'}</p>
         <p className="text-[12px] text-muted-foreground">Cộng CMS từng dược sĩ hiện thuộc nhà thuốc — mỗi người tính bậc riêng.</p>
+        <SalesOnlyNote header={header} display={display} className="text-[12px] text-muted-foreground" />
       </div>
       <div className="grid grid-cols-3 gap-2 text-[12px]">
         {/* Mẫu số ở đây là dược sĩ CÓ BÁN (RPC chỉ trả người có dòng kết quả) — ghi rõ, không lẫn mẫu số Q-212 (mọi staff). */}

@@ -6,7 +6,7 @@ import { EmptyState } from '@/components/ds/EmptyState'
 import { DataTableShell } from '@/components/ds/DataTableShell'
 import { ProgressBar } from '@/components/ds/ProgressBar'
 import { cmsDateTime, cmsVnd } from '@/lib/cms/display'
-import { cmsStaffRows, type CmsA3Stats, type CmsStaffRowView, type CmsUnassignedSummary } from '@/lib/cms/resultUi'
+import { cmsStaffRows, CMS_SALES_ONLY_NOTE, type CmsA3Stats, type CmsStaffRowView, type CmsUnassignedSummary } from '@/lib/cms/resultUi'
 import { cmsResultState, type CmsCatalogRowDto, type CmsResultHeaderDto, type CmsResultRowDto, type CmsResultUserDto } from '@/lib/cms/resultView'
 import type { CmsDisplayStatus } from '@/lib/cms/programStatus'
 
@@ -46,6 +46,7 @@ export function CmsA3SyncLine({ header, isSuper, display = 'running' }: { header
             : display === 'waiting_close' ? <>Số liệu cập nhật {at} · tạm tính, chờ chốt kỳ · Xuất Excel: toàn chương trình trong phạm vi của bạn</>
               : <>Số liệu cập nhật {at} · tạm tính, chưa chốt kỳ · Xuất Excel: toàn chương trình trong phạm vi của bạn</>}
       </p>
+      {header.run && display !== 'locked' && <p data-cms-sales-only className="text-[13px] text-muted-foreground">{CMS_SALES_ONLY_NOTE}</p>}
       {display !== 'locked' && last && !last.isCurrent && (last.status === 'held' || last.status === 'error') && (
         <Notice tone="warning" role="status" title="Lần đồng bộ gần nhất chưa công bố">
           {header.run ? 'Đang giữ số liệu của lần công bố trước.' : cmsResultState(header) === 'config_reset' ? 'Chưa có lần công bố nào theo cấu hình hiện tại.' : 'Chưa có lần công bố nào.'}
