@@ -698,12 +698,12 @@ BEGIN
 END $$;
 DO $$
 BEGIN
-  IF (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_sales_run_open(uuid, jsonb)'::regprocedure) IS DISTINCT FROM '4aa263fb8d4a526eb52d76bf561dbc59'
-     OR (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_sales_run_stage(uuid, text, integer, jsonb)'::regprocedure) IS DISTINCT FROM '7815855f252939ddbd9961597b1d1823'
-     OR (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_sales_run_cleanup(uuid, integer)'::regprocedure) IS DISTINCT FROM '72db7f1c3f562f5c841fcb68314c4e30'
-     OR (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = 'public.cms__lock_eval(uuid, uuid, integer, text, boolean)'::regprocedure) IS DISTINCT FROM 'c4a9c555e6c1cd85fb89e15a26155b0a'
-     OR (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_payout(uuid)'::regprocedure) IS DISTINCT FROM '6b75e9a3c8b5fec978bc8a63d6579e5c'
-     OR (SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_program_lock(uuid, uuid, integer, uuid, text)'::regprocedure) IS DISTINCT FROM 'f71538167e3c48ae46bc87e1257ae7d3' THEN
+  IF (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_sales_run_open(uuid, jsonb)'::regprocedure) IS DISTINCT FROM '4aa263fb8d4a526eb52d76bf561dbc59'
+     OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_sales_run_stage(uuid, text, integer, jsonb)'::regprocedure) IS DISTINCT FROM '7815855f252939ddbd9961597b1d1823'
+     OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_sales_run_cleanup(uuid, integer)'::regprocedure) IS DISTINCT FROM '72db7f1c3f562f5c841fcb68314c4e30'
+     OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.cms__lock_eval(uuid, uuid, integer, text, boolean)'::regprocedure) IS DISTINCT FROM 'c4a9c555e6c1cd85fb89e15a26155b0a'
+     OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_payout(uuid)'::regprocedure) IS DISTINCT FROM '6b75e9a3c8b5fec978bc8a63d6579e5c'
+     OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_program_lock(uuid, uuid, integer, uuid, text)'::regprocedure) IS DISTINCT FROM 'f71538167e3c48ae46bc87e1257ae7d3' THEN
     RAISE EXCEPTION 'rollback 124 hậu kiểm: thân hàm 122 / 123 khôi phục lệch nguyên văn (md5)';
   END IF;
 END $$;

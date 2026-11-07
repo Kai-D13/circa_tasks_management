@@ -1,6 +1,6 @@
 // QA migration 124 (CMS COMP-INT — chứng nhận đối soát nguồn) + tầng app trên PGlite (Postgres 16 WASM): nền 114–116 + 120 → 124
 // NGUYÊN VĂN từ supabase/migrations (124 SINH bằng scripts/gen-cms-124.mjs — kiểm không lệch). Kiểm trên JSON THẬT của RPC:
-//   §0 generator ↔ file · §1 áp / chạy lại dừng · §2 VERIFY phase 124 (POST đạt, phase 123 trên DB 124 đỏ, đột biến ACL / config /
+//   §0 generator ↔ file · §1 áp / chạy lại dừng · §1b dán CRLF như Studio (preflight / rollback md5 bỏ CR) · §2 VERIFY phase 124 (POST đạt, phase 123 trên DB 124 đỏ, đột biến ACL / config /
 //   trigger đỏ) + V8 phase 124 · §3 lõi đồng bộ (lib/cms/salesSync) capture ON / OFF / DB không trả source_schema · §4 chứng nhận qua
 //   lõi CLI (e2e/cmsSourceAttest) — xuất phân trang, compare TÍNH LẠI, decision10 duy nhất, tái hiện PM COMP-P1-1 (audit14 / GMV +1 …),
 //   chỉ source_updated_at khác vẫn MATCH · §5 lõi action chốt 6 tham số + payout / XLSX · §6 rollback (dừng khi đã chốt bằng chứng
@@ -166,6 +166,48 @@ await new Promise((r) => setTimeout(r, 20))
   const again = await settle(db.exec(SQL_124))
   await db.exec('ROLLBACK').catch(() => {})
   ok(!again.ok && /đã có marker 124/.test(again.err), 'chạy lại 124 ⇒ preflight dừng', again.err)
+}
+
+section('1b. Studio dán CRLF (REL2 07/11): thân 122 / 123 trên DB có CR ⇒ preflight 124 + hậu kiểm rollback vẫn khớp; thân lệch thật ⇒ dừng')
+{
+  // Prod 07/11: Studio lưu prosrc kèm CR (55/55 hàm cms, 139/178 hàm khác) ⇒ md5(prosrc) thô của preflight 124 cũ lệch dù nội dung đúng.
+  const CRLF = (t) => t.replace(/\r?\n/g, '\r\n')
+  const crlfDb = async () => {
+    const d = await L.freshDb(PGlite)
+    await d.query(`INSERT INTO public.app_migrations (version, name) VALUES ('117','t'),('118','t'),('118a','t'),('119','t'),('119a','t') ON CONFLICT DO NOTHING`)
+    for (const f of ['120_cms_foundation.sql', '121_cms_import_activation.sql', '122_cms_results.sql', '123_cms_payouts.sql']) await d.exec(CRLF(SQL(f)))
+    return d
+  }
+  const execTry = async (d, sql) => { const r = await settle(d.exec(sql)); if (!r.ok) await d.exec('ROLLBACK').catch(() => {}); return r }
+  const crCount = (d) => one(d, `SELECT count(*)::int n, count(*) FILTER (WHERE strpos(prosrc, chr(13)) > 0)::int n_cr
+    FROM pg_catalog.pg_proc WHERE pronamespace = 'public'::regnamespace AND (left(proname, 4) = 'cms_' OR left(proname, 8) = 'rpc_cms_')`)
+  const d1 = await crlfDb()
+  const c1 = await crCount(d1)
+  ok(c1.n > 0 && c1.n_cr === c1.n, `120–123 dán CRLF ⇒ ${c1.n_cr}/${c1.n} thân hàm cms có CR (như prod 07/11)`)
+  const raw = await one(d1, `SELECT md5(prosrc) raw, md5(replace(prosrc, chr(13), '')) norm FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_payout(uuid)'::regprocedure`)
+  ok(raw.raw !== raw.norm, 'đối chứng: md5(prosrc) thô ≠ md5 bỏ CR (công thức cũ của 124 sẽ RAISE)')
+  const r1 = await execTry(d1, CRLF(SQL_124))
+  ok(r1.ok, 'chạy 124 (dán CRLF) trên 120–123 CRLF ⇒ preflight md5 bỏ CR khớp, COMMIT', r1.err)
+  ok((await one(d1, `SELECT count(*)::int n FROM public.app_migrations WHERE version = '124'`)).n === 1, 'marker 124 có sau khi chạy CRLF')
+  const rb = await execTry(d1, CRLF(RB_124))
+  ok(rb.ok, 'rollback 124 (dán CRLF) ⇒ hậu kiểm md5 thân 122 / 123 khôi phục khớp', rb.err)
+  ok((await one(d1, `SELECT count(*)::int n FROM public.app_migrations WHERE version = '124'`)).n === 0, 'marker 124 đã gỡ sau rollback CRLF')
+  const again = await execTry(d1, CRLF(SQL_124))
+  ok(again.ok, 'áp lại 124 (CRLF) sau rollback CRLF ⇒ COMMIT', again.err)
+  // DB dán CRLF ≡ DB LF (§1, đã 124) theo trạng thái hàm public: chữ ký, thân bỏ CR, SECDEF, volatility, config, ACL ⇒ chỉ khác CR.
+  const fnState = async (d) => JSON.stringify((await d.query(`SELECT p.oid::regprocedure::text sig, md5(replace(p.prosrc, chr(13), '')) src, p.prosecdef,
+      p.provolatile, p.proconfig::text cfg, p.proacl::text acl FROM pg_catalog.pg_proc p WHERE p.pronamespace = 'public'::regnamespace ORDER BY 1`)).rows)
+  const [sCr, sLf] = [await fnState(d1), await fnState(db)]
+  const nFn = JSON.parse(sLf).length
+  ok(nFn > 0 && sCr === sLf, `DB 120–124 dán CRLF ≡ DB LF: ${nFn} hàm public cùng chữ ký / thân bỏ CR / SECDEF / volatility / config / ACL`)
+  await d1.close()
+  // Thân lệch THẬT (không chỉ CR) vẫn bị chặn.
+  const d2 = await crlfDb()
+  await d2.query(`UPDATE pg_catalog.pg_proc SET prosrc = prosrc || chr(13) || chr(10) || '-- lệch tay' WHERE oid = 'public.rpc_cms_payout(uuid)'::regprocedure`)
+  const r2 = await execTry(d2, CRLF(SQL_124))
+  ok(!r2.ok && /thân hàm 122 \/ 123 sắp thay KHÁC bản đã duyệt/.test(r2.err), 'thân rpc_cms_payout lệch nội dung (CRLF) ⇒ preflight 124 dừng', r2.err)
+  ok((await one(d2, `SELECT count(*)::int n FROM public.app_migrations WHERE version = '124'`)).n === 0, 'preflight dừng ⇒ không marker 124, không đối tượng dở')
+  await d2.close()
 }
 
 section('2. VERIFY phase 124 (POST) · phase 123 trên DB 124 ⇒ đỏ · đột biến ⇒ đỏ · V8 phase 124')
@@ -408,7 +450,7 @@ section('6. Rollback 124')
 const db2 = await baseDb()
 const H2 = helpers(db2)
 {
-  const md5s = async () => (await db2.query(`SELECT proname, md5(prosrc) m FROM pg_proc WHERE pronamespace = 'public'::regnamespace
+  const md5s = async () => (await db2.query(`SELECT proname, md5(replace(prosrc, E'\\r', '')) m FROM pg_proc WHERE pronamespace = 'public'::regnamespace
     AND proname IN ('rpc_cms_sales_run_open','rpc_cms_sales_run_stage','rpc_cms_sales_run_cleanup','cms__lock_eval','rpc_cms_payout','rpc_cms_program_lock') ORDER BY 1`)).rows
   const m0 = await md5s()
   const origOpen = buildCms124().originals.run_open.replace('CREATE FUNCTION public.', 'CREATE OR REPLACE FUNCTION public.')

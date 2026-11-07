@@ -29,8 +29,8 @@ function patch(text, from, to, label) {
   return text.split(from).join(to)
 }
 const orReplace = (t) => patch(t, 'CREATE FUNCTION public.', 'CREATE OR REPLACE FUNCTION public.', 'OR REPLACE')
-/** prosrc = chuỗi giữa `AS $$` và `$$;` cuối (md5 khớp md5(prosrc) của DB). */
-export const cmsProsrc = (t) => t.slice(t.indexOf('AS $$') + 5, t.lastIndexOf('$$;'))
+/** prosrc = chuỗi giữa `AS $$` và `$$;` cuối, BỎ \r (md5 khớp md5(replace(prosrc, E'\r', '')) của DB — cùng công thức VERIFY / 125 / 126). */
+export const cmsProsrc = (t) => t.slice(t.indexOf('AS $$') + 5, t.lastIndexOf('$$;')).split('\r').join('')
 const md5 = (s) => crypto.createHash('md5').update(s).digest('hex')
 
 export function buildCms124() {
@@ -176,13 +176,14 @@ export function buildCms124() {
 `, 'payout read')
 
   const sec = (t) => `\n-- ── ${t} ${'─'.repeat(Math.max(4, 74 - t.length))}\n`
-  // md5(prosrc) 6 hàm = thân nguyên văn 122 / 123: preflight 124 (thân hiện tại) + hậu kiểm rollback (thân khôi phục).
+  // md5 thân 6 hàm (BỎ CR) = thân nguyên văn 122 / 123: preflight 124 (thân hiện tại) + hậu kiểm rollback (thân khôi phục).
+  // REL2 07/11: Studio dán CRLF ⇒ prosrc prod chứa CR; md5(prosrc) thô lệch dù nội dung đúng ⇒ cùng công thức VERIFY / 125 / 126.
   const MD5_FNS = [['rpc_cms_sales_run_open(uuid, jsonb)', OPEN0], ['rpc_cms_sales_run_stage(uuid, text, integer, jsonb)', STAGE0],
     ['rpc_cms_sales_run_cleanup(uuid, integer)', CLEAN0], ['cms__lock_eval(uuid, uuid, integer, text, boolean)', EVAL0],
     ['rpc_cms_payout(uuid)', PAY0], ['rpc_cms_program_lock(uuid, uuid, integer, uuid, text)', LOCK0]]
   const md5Block = (msg) => `DO $$
 BEGIN
-  IF ${MD5_FNS.map(([sig, t]) => `(SELECT md5(prosrc) FROM pg_catalog.pg_proc WHERE oid = 'public.${sig}'::regprocedure) IS DISTINCT FROM '${md5(cmsProsrc(t))}'`).join('\n     OR ')} THEN
+  IF ${MD5_FNS.map(([sig, t]) => `(SELECT md5(replace(prosrc, E'\\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.${sig}'::regprocedure) IS DISTINCT FROM '${md5(cmsProsrc(t))}'`).join('\n     OR ')} THEN
     RAISE EXCEPTION '${msg}';
   END IF;
 END $$;`
