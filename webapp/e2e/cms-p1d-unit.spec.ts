@@ -24,7 +24,7 @@ test.describe('CMS P1-d · thuần @desktop', () => {
   })
   test('thang bậc rút gọn đ/unit_CMS; href giữ chương trình', () => {
     expect(cmsTierSummary([{ order: 1, from: 1, to: 9, amount: '15000' }, { order: 2, from: 10, to: null, amount: '20000' }], 'hộp'))
-      .toBe('1–9: 15.000₫/hộp · 10+: 20.000₫/hộp')
+      .toBe('1–9: 15.000₫/hộp · Từ 10 trở lên: 20.000₫/hộp')
     expect(cmsStaffHref('abc')).toBe('/targets?tab=cms&program=abc')
     expect(cmsStaffHref(null)).toBe('/targets?tab=cms')
     expect(cmsProductHref('x-1')).toBe('/targets/cms/products/x-1')
@@ -53,22 +53,26 @@ test.describe('CMS P1-d · kiểm tĩnh @desktop', () => {
     expect(s).not.toContain('supabaseAdmin')
     const sc = read('lib/cms/server/staffCatalog.ts')
     expect(sc).not.toContain('supabaseAdmin')
-    // D2 lọc trạng thái / hạn ngay ở truy vấn chương trình (phòng thủ chiều sâu, security-reviewer P2) + kiểm lại ở app.
-    expect(sc).toContain(".eq('status', 'active').gte('end_date', today).maybeSingle()")
-    expect(sc).toContain("program.status !== 'active' || program.endDate < today")
+    // D2 lọc trạng thái ngay ở truy vấn chương trình (phòng thủ chiều sâu, security-reviewer P2) + kiểm lại ở app.
+    // P3a r2 (PM r1 PKG-P1-1): active (mọi ngày — gồm Chờ chốt kỳ) + locked; nháp không bao giờ; phạm vi vẫn do RLS phiên.
+    expect(sc).toContain("export const CMS_STAFF_PROGRAM_STATUSES = ['active', 'locked'] as const")
+    expect(sc).toContain(".in('status', [...CMS_STAFF_PROGRAM_STATUSES]).maybeSingle()")
+    expect(sc).toContain('!(CMS_STAFF_PROGRAM_STATUSES as readonly string[]).includes(program.status)')
+    expect(sc).not.toContain("gte('end_date'")
   })
-  test('màn staff P1 không hero / gợi ý / "Nếu bán thêm" / số thực tế; không <img>; không gọi action', () => {
+  test('màn staff: không <img>; không gọi action; số liệu P2 chỉ khi `results` được truyền (mặc định off = P1)', () => {
     const dir = path.join(ROOT, 'components/cms/staff')
     for (const f of fs.readdirSync(dir).filter((x) => x.endsWith('.tsx'))) {
-      // Bỏ chú thích (đầu file có liệt kê chính các mục bị cấm) — chỉ kiểm code / JSX thật.
       const s = fs.readFileSync(path.join(dir, f), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
-      expect(s, f).not.toMatch(/CMS tạm tính của bạn|Gợi ý gần đạt|Nếu bán thêm|Đã bán|Xem ghi nhận|Đã đạt|Chưa đạt/)
       expect(s, f).not.toMatch(/<img[\s>]/)
       expect(s, f).not.toContain("from '@/app/actions/")
     }
-    // U19: D2 dùng chung staff / QLCH (tài khoản dùng chung) ⇒ câu điều kiện trung tính, không "của bạn".
-    const d2 = read('components/cms/staff/CmsStaffProductView.tsx').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
-    expect(d2).not.toContain('của bạn')
+    // P2-c (I3): chốt P1 "không hero / gợi ý / Nếu bán thêm / số thực tế / 0₫ giả" giữ ở RUNTIME — fixture không `p2` render
+    // ĐÚNG view với results mặc định 'off' (ui-v2-cms-staff.spec FORBIDDEN); cờ CMS_EARNINGS_ENABLED OFF ⇒ loader trả 'off'
+    // trước mọi RPC (cms-p2c-unit). U19 (QLCH không "của bạn") kiểm runtime ở ui-v2-cms-p2c.spec (fixture manager).
+    for (const f of ['components/cms/staff/CmsStaffCatalogView.tsx', 'components/cms/staff/CmsStaffProductView.tsx']) {
+      expect(read(f), f).toContain("results = { kind: 'off' }")
+    }
   })
   test('BottomNav không đổi; fixture staff / product bọc boundary, route D2 không', () => {
     expect(read('components/layout/BottomNav.tsx')).not.toContain('tab=cms')

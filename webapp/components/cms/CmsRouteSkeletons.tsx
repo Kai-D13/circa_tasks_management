@@ -23,11 +23,11 @@ export function CmsDetailSkeleton() {
     <div data-ui-v2="page" data-layout-width="fluid" data-cms-skeleton="detail" aria-busy="true" className="p-4 md:p-6 space-y-4 md:space-y-[18px]">
       <Skeleton className="h-5 w-32" />
       <Skeleton className="h-8 w-80 max-w-full" />
-      <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
-        {Array.from({ length: 3 }, (_, i) => <Skeleton key={i} className="h-[76px]" />)}
-      </div>
+      {/* CMS-UI-1: cấu hình là một dòng meta (không còn 3 ô cấu hình); bảng SP hàng gọn. */}
+      <Skeleton className="h-4 w-[28rem] max-w-full" />
       <div className="space-y-2">
-        {Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-[72px] w-full" />)}
+        <Skeleton className="h-[38px] w-full" />
+        {Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="h-[76px] w-full" />)}
       </div>
     </div>
   )

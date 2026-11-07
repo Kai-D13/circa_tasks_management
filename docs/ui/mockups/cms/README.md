@@ -14,3 +14,15 @@ Không chạy độc lập (cần runtime của canvas), không import vào app,
 | StaffHistory.dc.html | D3 · Ghi nhận & hiệu quả tư vấn | /targets/cms/history |
 
 Đặc tả: `docs/ui/UI_V2_CMS.md`. Nghiệp vụ: `docs/plan-cms-product-commission.md`.
+
+## CMS-UI-1 (04/11/2026) — tham chiếu, KHÔNG phải bản chốt
+
+| File | Màn | Ghi chú |
+|---|---|---|
+| AdminProgramProducts.dc.html | A3 · tab Theo sản phẩm (desktop) | Mockup operator cung cấp 04/11 — **reference**, áp theo redline PM |
+| AdminProgramProductsMobile.dc.html | A3 · tab Theo sản phẩm (390px) | Wrapper 390px nhập component desktop qua `dc-import` — không phải app độc lập |
+
+Nhãn "bản chốt" trong mockup **không** có hiệu lực. Quyết định PM (`planning/research/cms-ui-enhancement-plan-2026-11-04.md` §3,
+ghi lại ở `docs/ui/UI_V2_CMS.md` §6) thắng mockup: không `max-w-[1320px]` ở page-root (giữ fluid), đổi bảng ⇄ card theo container
+chứ không theo viewport 900px, SP bổ sung giữa kỳ vẫn hồi tố (không `effective_from`), không "Chốt sau 2 ngày", không màn "Gán người
+bán", tiền chính đọc đủ bằng mắt (không rút gọn chỉ còn ARIA), không link tab dược sĩ "đã lọc SP".

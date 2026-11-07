@@ -16,26 +16,41 @@
 //   HẠN DỪNG ĐỘC LẬP = lúc bắt đầu lần đọc tốt gần nhất + (min remaining − guard), tick 5 s không IO ⇒ dừng cả khi request
 //   treo; mất marker / dưới ngưỡng / 3 lỗi đọc liên tiếp ⇒ dừng (marker hết hạn ⇒ chương trình tạo ra là THẬT).
 //   --no-server KHÔNG có canh marker (chỉ cho spec tự động có preflight riêng).
+//   --with-lock (P3a, runbook §4.4 — security review P1-1): CMS_LOCK_ENABLED trong process của server QA mở nút "Chốt kỳ"
+//   trên UI ⇒ có cờ này trong shell mà KHÔNG opt-in ⇒ chặn (2); opt-in cần EARNINGS + LOCK ở process, có server, DB đã có 123
+//   và policy chốt THẬT còn khoá (real.ready = false) ⇒ nút UI không chốt được chương trình thật. Không opt-in ⇒ xoá
+//   CMS_LOCK_ENABLED khỏi env của server con.
 // close: từ chối khi cổng server của run còn mở; đối chiếu DB — chương trình is_test trong run ghi vào manifest (để lại,
 //   ẩn — H8); chương trình THẬT bị tài khoản QA chạm (theo mốc của chính hành động) ⇒ ĐỎ, giữ manifest mở; chương trình
 //   thật đổi trong run không do QA ⇒ cảnh báo, CHẶN đóng tới khi operator soát tay và xác nhận đúng tập đó bằng
-//   --ack-warnings (ghi vào manifest đóng). Đạt ⇒ lưu qa-artifacts/cms-qa/<runId>.json rồi mới gỡ .qa-cms.json.
+//   --ack-warnings (ghi vào manifest đóng). QA kết quả (PM 03/11 REL-P1-1): writer scripts/cms-qa-results.mjs còn chạy /
+//   không rõ kết thúc, run sales QA không qua writer, run sales QA còn running, run sales của chương trình thật khi cổng kết quả HOLD
+//   ⇒ ĐỎ; danh sách run sales + writer ghi vào manifest đóng. QA chốt P3a (work order 03/11 §4.2): thao tác chốt (sổ l-…)
+//   còn chạy / không rõ ⇒ ĐỎ; payout chốt trong cửa sổ trên chương trình QA phải khớp thao tác chốt trong sổ (chốt ngoài sổ —
+//   kể cả bấm "Chốt kỳ" trên UI của server QA — ⇒ ĐỎ); sổ ghi đã chốt mà DB không có payout ⇒ ĐỎ; chương trình thật bị tài
+//   khoản QA chốt ⇒ ĐỎ. Cờ LOCK cho server QA chỉ truyền bằng process env của launcher (không .env.local — gate chặn).
+//   Đạt ⇒ lưu qa-artifacts/cms-qa/<runId>.json rồi mới gỡ .qa-cms.json.
 // Không xoá manifest tay để bỏ qua close. sha256 manifest in ra ở start / close để nộp kèm bằng chứng.
-// Thoát: 0 đạt · 1 preflight / đối chiếu DB không đạt · 2 sai tham số / gate (trước mọi IO tới DB).
+// Thoát: 0 đạt · 1 preflight / đối chiếu DB không đạt / server QA dừng KHÔNG do operator (canh marker, tự chết, lỗi tiến
+//   trình con) hoặc KHÔNG xác nhận được đã dừng (ghi serverNotStopped vào manifest ⇒ close chặn khi pid còn sống) · 2 sai
+// tham số / gate (trước mọi IO tới DB). Kết thúc tự nhiên qua runCli (process.exitCode) — không process.exit (lỗi libuv
+// Node 24 / Windows sau fetch, PM 02/11 B3); thân main() giữ thụt lề cũ để diff chỉ còn đường thoát.
 import crypto from 'node:crypto'
 import fs from 'node:fs'
 import net from 'node:net'
 import path from 'node:path'
 import { execFileSync, spawn } from 'node:child_process'
-import { ROOT, die2, loadTooling, mergedEnv, parseArgs, pgMeta, readEnvFileText, supabaseHost } from './lib-cms-ops.mjs'
+import { ROOT, die2, loadTooling, mergedEnv, parseArgs, pgMeta, readEnvFileText, rethrowCliExit, runCli, supabaseHost } from './lib-cms-ops.mjs'
 
-const a = parseArgs(process.argv.slice(2), { flags: ['--no-server'], values: ['--users', '--port', '--min-ttl-minutes', '--guard-minutes', '--ack-warnings'] })
+async function main() {
+const a = parseArgs(process.argv.slice(2), { flags: ['--no-server', '--with-lock'], values: ['--users', '--port', '--min-ttl-minutes', '--guard-minutes', '--ack-warnings'] })
 if (!['start', 'status', 'close'].includes(a.cmd) || a.bad.length) {
-  console.log('dùng: node scripts/cms-qa-run.mjs <start --users=<uuid,…> [--port=N] [--min-ttl-minutes=N] [--guard-minutes=N] [--no-server] | status | close [--ack-warnings=<8 ký tự id>,…]>')
-  process.exit(2)
+  console.log('dùng: node scripts/cms-qa-run.mjs <start --users=<uuid,…> [--port=N] [--min-ttl-minutes=N] [--guard-minutes=N] [--no-server] [--with-lock] | status | close [--ack-warnings=<8 ký tự id>,…]>')
+  return 2
 }
 if (a.values['--ack-warnings'] !== undefined && a.cmd !== 'close') die2('--ack-warnings chỉ dùng với close')
-const { T, G } = await loadTooling()
+if (a.flags.has('--with-lock') && a.cmd !== 'start') die2('--with-lock chỉ dùng với start')
+const { T, G, R, A } = await loadTooling()
 const MARKER = path.join(ROOT, G.CMS_QA_MARKER)
 const envFileText = readEnvFileText()
 const env = mergedEnv(envFileText)
@@ -56,6 +71,10 @@ function writeAtomic(file, obj) {
   fs.renameSync(tmp, file)
 }
 const git = (...args) => execFileSync('git', args, { cwd: ROOT, encoding: 'utf8' }).trim()
+/** pid còn tồn tại? (signal 0 chỉ kiểm, không gửi gì.) Chỉ ESRCH mới là "không có tiến trình"; lỗi khác (EPERM …) ⇒ coi là sống. */
+const pidAlive = (pid) => {
+  try { process.kill(pid, 0); return true } catch (e) { rethrowCliExit(e); return e?.code !== 'ESRCH' }
+}
 /** Cổng localhost còn nhận kết nối (server QA còn chạy)? */
 const portOpen = (port) => new Promise((resolve) => {
   const s = net.connect({ host: 'localhost', port })
@@ -67,11 +86,11 @@ const portOpen = (port) => new Promise((resolve) => {
 
 if (a.cmd === 'status') {
   const m = readManifest()
-  if (!m) { console.log('không có run QA CMS đang mở'); process.exit(0) }
+  if (!m) { console.log('không có run QA CMS đang mở'); return 0 }
   console.log(`run ${m.runId} · ${m.status} · ${m.mode} · đích ${m.host} · bắt đầu ${m.startedAt} (giờ DB) · HEAD ${m.gitHead.slice(0, 7)} · build ${m.buildId ?? '—'} · cổng ${m.port ?? '—'}`)
   for (const u of m.users) console.log(`  QA ${mask(u.id)} ${u.role ?? '?'} · marker hết ${u.markerExpiresAt}`)
   console.log(`sha256 manifest ${sha(fs.readFileSync(MARKER))}`)
-  process.exit(0)
+  return 0
 }
 
 if (a.cmd === 'close') {
@@ -81,6 +100,12 @@ if (a.cmd === 'close') {
   if (host !== m.host) die2(`host hiện tại (${host}) khác host của run (${m.host})`)
   if (env.E2E_EXPECTED_SUPABASE_HOST !== host) die2(`cần E2E_EXPECTED_SUPABASE_HOST=${host} (gõ lại host để xác nhận)`)
   if (!env.SUPABASE_SERVICE_ROLE_KEY) die2('thiếu SUPABASE_SERVICE_ROLE_KEY')
+  // PM cli-exit §3: launcher không xác nhận được server đã chết ⇒ pid còn sống thì chặn close (kể cả khi cổng đã đóng).
+  if (m.serverNotStopped) {
+    const sp = m.serverNotStopped.pid
+    if (sp === null || pidAlive(sp)) die2(`server QA ${sp === null ? '(không rõ pid)' : `pid ${sp}`} được launcher ghi CHƯA DỪNG lúc ${m.serverNotStopped.at}${sp === null ? '' : ' và pid vẫn còn sống'} — tắt tay (Windows: taskkill /F /PID ${sp ?? '<pid>'}), kiểm tasklist rồi mới close; pid đã bị tiến trình khác dùng lại ⇒ báo PM / operator, không sửa manifest tay`)
+    console.log(`server QA pid ${sp} (launcher ghi CHƯA DỪNG lúc ${m.serverNotStopped.at}) nay không còn tiến trình — tiếp tục đối chiếu`)
+  }
   if (m.port !== null && await portOpen(m.port)) die2(`cổng ${m.port} của server QA còn mở — dừng server (Ctrl+C ở cửa sổ launcher${m.serverPid ? `, pid ${m.serverPid}` : ''}) rồi mới đóng run`)
   const uids = m.users.map((u) => u.id)
   try {
@@ -88,30 +113,67 @@ if (a.cmd === 'close') {
     const status = await pgMeta(env, T.pgMetaReadOnly(T.cmsQaStatusSql(uids)))
     const recorded = m.programs.length ? await pgMeta(env, T.pgMetaReadOnly(T.cmsQaProgramFlagsSql(m.programs.map((p) => p.id)))) : []
     const c = T.cmsQaCloseCheck(m, programs, status, recorded)
-    console.log(`đối chiếu run ${m.runId}: ${c.closed.programs.length} chương trình is_test (để lại, ẩn với user không marker) · ${c.closed.closeCheck.realProgramsTouchedByQaUsers.length} chương trình thật bị tài khoản QA chạm · ${c.warnings.length} cảnh báo`)
+    // QA kết quả (PM 03/11 REL-P1-1): sổ writer của run + mọi run sales mở trong cửa sổ run.
+    const writerDir = path.join(ROOT, 'qa-artifacts', 'cms-qa', `${m.runId}.writers`)
+    // Sổ của run: writer kết quả (w-…) + thao tác chốt P3a (l-…); tệp .json lạ ⇒ ĐỎ (không tự bỏ qua).
+    const part = R.cmsQaLedgerPartition(fs.existsSync(writerDir) ? fs.readdirSync(writerDir).filter((f) => f.endsWith('.json')).sort() : [])
+    const readL = (names) => names.map((name) => ({ name, text: fs.readFileSync(path.join(writerDir, name), 'utf8') }))
+    const wc = R.cmsQaWritersCloseCheck(m.runId, readL(part.writers), pidAlive)
+    const lc = R.cmsQaLocksCloseCheck(m.runId, readL(part.locks), pidAlive)
+    const sales = await pgMeta(env, T.pgMetaReadOnly(R.cmsQaRunSalesRunsSql(m.startedAt)))
+    const sc = R.cmsQaSalesRunsCheck(sales, wc.entries, { qaRunId: m.runId })
+    // P3a: mọi payout chốt trong cửa sổ phải khớp thao tác chốt trong sổ (DB trước 123 ⇒ không có bảng, chỉ kiểm sổ).
+    const payoutsTable = (await pgMeta(env, T.pgMetaReadOnly(R.CMS_QA_HAS_PAYOUTS_SQL)))[0]?.has_payouts === true
+    const payoutRows = payoutsTable ? await pgMeta(env, T.pgMetaReadOnly(R.cmsQaRunPayoutsSql(m.startedAt))) : []
+    const pc = R.cmsQaPayoutsCloseCheck(payoutRows, lc.entries, { qaUserIds: uids, payoutsTable })
+    // 124: mọi chứng nhận / thu hồi trong cửa sổ phải khớp sổ a-… (DB trước 124 ⇒ không có bảng, chỉ kiểm sổ).
+    const attestTable = (await pgMeta(env, T.pgMetaReadOnly(A.CMS_QA_HAS_ATTEST_SQL)))[0]?.has_attest === true
+    const attestRows = attestTable ? await pgMeta(env, T.pgMetaReadOnly(A.cmsQaRunAttestSql(m.startedAt))) : []
+    const xc = A.cmsQaExportsCloseCheck(m, readL(part.exports), pidAlive)
+    const ac = A.cmsQaAttestCloseCheck(m, readL(part.attests), attestRows,
+      { pidAlive, attestTable, programIdsInRun: [...new Set([...m.programs.map((p) => p.id), ...c.closed.programs.map((p) => p.id)])] })
+    console.log(`đối chiếu run ${m.runId}: ${c.closed.programs.length} chương trình is_test (để lại, ẩn với user không marker) · ${c.closed.closeCheck.realProgramsTouchedByQaUsers.length} chương trình thật bị tài khoản QA chạm · ${wc.entries.length} writer kết quả · ${sc.runs.length} run sales trong cửa sổ · ${lc.entries.length} thao tác chốt · ${pc.payouts.length} payout chốt trong cửa sổ · ${c.warnings.length + sc.warningProgramIds.length + pc.warningProgramIds.length} cảnh báo`)
     for (const p of c.closed.programs) console.log(`  QA ${mask(p.id)} ${p.status}`)
     for (const w of c.warnings) console.log(`CẢNH BÁO: ${w}`)
-    if (!c.ok) {
-      for (const r of c.reasons) console.log(`ĐỎ: ${r}`)
+    for (const id of sc.warningProgramIds) console.log(`CẢNH BÁO: chương trình thật ${mask(id)} có run sales trong cửa sổ (cổng đã mở — cron thật) — soát tay`)
+    for (const id of pc.warningProgramIds) console.log(`CẢNH BÁO: chương trình thật ${mask(id)} được chốt trong cửa sổ (không bởi tài khoản QA) — soát tay`)
+    for (const id of ac.warningProgramIds) console.log(`CẢNH BÁO: chương trình thật ${mask(id)} có chứng nhận / thu hồi nguồn trong cửa sổ (không bởi tài khoản QA) — soát tay`)
+    const red = [...c.reasons, ...wc.reasons, ...sc.reasons, ...lc.reasons, ...pc.reasons, ...ac.reasons, ...xc.reasons,
+      ...part.other.map((n) => `tệp lạ ${n} trong sổ của run — không xoá tay; báo PM / operator`)]
+    if (red.length) {
+      for (const r of red) console.log(`ĐỎ: ${r}`)
       console.log(`giữ ${G.CMS_QA_MARKER} mở — không đóng run (runbook D: dừng QA, báo PM / operator)`)
-      process.exit(1)
+      return 1
     }
-    const ack = T.cmsQaAckWarnings(c.closed.closeCheck.realProgramsChangedByOthers, a.values['--ack-warnings'])
+    const ack = T.cmsQaAckWarnings([...new Set([...c.closed.closeCheck.realProgramsChangedByOthers, ...sc.warningProgramIds, ...pc.warningProgramIds, ...ac.warningProgramIds])], a.values['--ack-warnings'])
     if (!ack.ok) {
       console.log(`CHẶN ĐÓNG: ${ack.reason}`)
       console.log(`giữ ${G.CMS_QA_MARKER} mở`)
-      process.exit(1)
+      return 1
     }
-    const closed = ack.acked.length ? { ...c.closed, closeCheck: { ...c.closed.closeCheck, acknowledgedWarnings: ack.acked } } : c.closed
+    const withSales = {
+      ...c.closed, salesRuns: sc.runs,
+      writers: wc.entries.map((e) => ({ writerId: e.writerId, programId: e.programId, status: e.status, runId: e.result?.runId ?? null, code: e.result?.code ?? null })),
+      // P3a: thao tác chốt + payout chốt trong cửa sổ (chương trình QA locked là VĨNH VIỄN — H8).
+      locks: lc.entries.map((e) => ({ operationId: e.operationId, programId: e.programId, status: e.status, expectedRunId: e.expectedRunId,
+        lockedRunId: R.cmsQaLockClaimedRun(e), code: e.result?.code ?? null })),
+      payouts: pc.payouts,
+      // 124: thao tác chứng nhận / thu hồi nguồn của run (id che ở log; manifest giữ id đầy đủ như locks).
+      attests: ac.entries.map((e) => ({ operationId: e.operationId, op: e.op, programId: e.programId, status: e.status, landedId: A.cmsAttestOpLanded(e), code: e.result?.code ?? null })),
+      // 124 (security review P1-1): mọi lần xuất lớp nguồn (CSV có email nhân viên) trong run — vết kiểm toán, không email.
+      exports: xc.entries.map((e) => ({ exportId: e.exportId, programId: e.programId, runId: e.runId, actorId: e.actorId, status: e.status, rows: e.rows, sha256: e.sha256 })),
+    }
+    const closed = ack.acked.length ? { ...withSales, closeCheck: { ...withSales.closeCheck, acknowledgedWarnings: ack.acked } } : withSales
     const out = path.join(ROOT, 'qa-artifacts', 'cms-qa', `${m.runId}.json`)
     writeAtomic(out, closed)
     fs.rmSync(MARKER)
     const active = c.closed.closeCheck.markerActiveAtClose
     console.log(`ĐÃ ĐÓNG run · manifest ${path.relative(ROOT, out)} · sha256 ${sha(fs.readFileSync(out))}${active.length ? ` · ${active.length} marker còn hạn — thu bằng cms-qa-access.mjs revoke khi xong QA (bắt buộc trước khi super tạo chương trình thật)` : ''}`)
-    process.exit(0)
+    return 0
   } catch (e) {
+    rethrowCliExit(e)
     console.log(`LỖI DB: ${e instanceof Error ? e.message : String(e)}`)
-    process.exit(1)
+    return 1
   }
 }
 
@@ -129,6 +191,9 @@ const port = a.values['--port'] === undefined ? 3120 : Number(a.values['--port']
 if (!Number.isInteger(port) || port < 1024 || port > 65535) die2('--port phải là số nguyên 1024…65535')
 if (!env.SUPABASE_SERVICE_ROLE_KEY) die2('thiếu SUPABASE_SERVICE_ROLE_KEY')
 const server = !a.flags.has('--no-server')
+// P3a (security review P1-1): CMS_LOCK_ENABLED của shell mở nút "Chốt kỳ" trên UI server QA ⇒ chỉ khi opt-in --with-lock.
+const lockGate = R.cmsQaLauncherLockCheck({ processEnv: process.env, withLock: a.flags.has('--with-lock'), server })
+if (!lockGate.ok) die2(lockGate.reason)
 
 let gitHead, gitTree
 try {
@@ -137,7 +202,7 @@ try {
   if (!tree.clean) die2(`cây Git không sạch (${tree.entries.length} mục, vd. ${tree.entries.slice(0, 3).join(' | ')}) — QA phải chạy trên candidate đã commit, không file chưa track`)
   gitHead = git('rev-parse', 'HEAD')
   gitTree = git('rev-parse', 'HEAD^{tree}')
-} catch (e) { die2(`không đọc được Git: ${e instanceof Error ? e.message.split('\n')[0] : e}`) }
+} catch (e) { rethrowCliExit(e); die2(`không đọc được Git: ${e instanceof Error ? e.message.split('\n')[0] : e}`) }
 
 const standalone = path.join(ROOT, '.next', 'standalone')
 let buildId = null
@@ -153,22 +218,33 @@ if (server) {
 const statusSql = T.pgMetaReadOnly(T.cmsQaStatusSql(users.value))
 let pre, preRows, preStartedAt
 try {
+  if (lockGate.lock) {
+    // --with-lock: DB phải có 123 và policy chốt THẬT còn khoá ⇒ nút Chốt kỳ trên UI không chốt được chương trình thật.
+    const has = (await pgMeta(env, T.pgMetaReadOnly(R.CMS_QA_HAS_LOCK_POLICY_SQL)))[0]?.has_policy
+    const ready = has === true ? (await pgMeta(env, T.pgMetaReadOnly(R.CMS_QA_REAL_LOCK_READY_SQL)))[0]?.real_ready : null
+    const lc = R.cmsQaLauncherLockDbCheck(has, ready)
+    if (!lc.ok) { console.log(`CHẶN: ${lc.reason}`); return 1 }
+  }
   preStartedAt = Date.now()
   preRows = await pgMeta(env, statusSql)
   pre = T.cmsQaPreflight(preRows, users.value, minTtl.value)
 } catch (e) {
+  rethrowCliExit(e)
   console.log(`LỖI DB: ${e instanceof Error ? e.message : String(e)}`)
-  process.exit(1)
+  return 1
 }
 if (!pre.ok) {
   for (const r of pre.reasons) console.log(`CHẶN: ${r}`)
   console.log('cấp / gia hạn marker bằng scripts/cms-qa-access.mjs grant (operator) rồi chạy lại')
-  process.exit(1)
+  return 1
 }
 const runId = `cms-qa-${pre.dbNow.replace(/[-:]/g, '').replace(/\..*$/, '')}-${crypto.randomBytes(2).toString('hex')}`
 let manifest = T.newCmsQaManifest({
   runId, mode: 'manual-localhost', host: gate.host, dbNow: pre.dbNow, gitHead, gitTree, buildId, port: server ? port : null, users: pre.users,
 })
+// pid CỦA LAUNCHER (nơi chạy canh marker) — writer kết quả QA đòi pid này còn sống, không chỉ server con (security review 03/11 P1-1).
+// lockUi: server QA có cờ LOCK (opt-in --with-lock) — bằng chứng cho close / report.
+manifest = { ...manifest, launcherPid: process.pid, lockUi: lockGate.lock }
 try {
   fs.writeFileSync(MARKER, json(manifest), { flag: 'wx' }) // độc quyền: hai launcher song song ⇒ cái sau thất bại
 } catch { die2(`${G.CMS_QA_MARKER} vừa được run khác tạo — không ghi đè`) }
@@ -177,7 +253,7 @@ for (const u of pre.users) console.log(`  QA ${mask(u.id)} ${u.role ?? '?'} · m
 console.log('QA chỉ thao tác chương trình is_test; kết thúc: dừng server rồi `node scripts/cms-qa-run.mjs close`')
 if (!server) {
   console.log('CẢNH BÁO: --no-server KHÔNG có canh marker — chỉ dùng cho spec tự động có preflight riêng; QA tay / smoke prod dùng launcher có server')
-  process.exit(0)
+  return 0
 }
 
 // Server standalone: chép static / public như gate (planning/research/dev-tools/cms/gate-full-app.sh), cờ CMS chỉ ở process này.
@@ -193,35 +269,69 @@ fs.rmSync(path.join(standalone, '.next', 'static'), { recursive: true, force: tr
 fs.rmSync(path.join(standalone, 'public'), { recursive: true, force: true })
 fs.cpSync(path.join(ROOT, '.next', 'static'), path.join(standalone, '.next', 'static'), { recursive: true })
 fs.cpSync(path.join(ROOT, 'public'), path.join(standalone, 'public'), { recursive: true })
-const childEnv = { ...env, CMS_PROGRAM_ENABLED: 'true', PORT: String(port), HOSTNAME: 'localhost' }
+// CMS_QA_SERVER=1 (PM r1 PKG-P1-2): action chốt trên server QA bị từ chối trước RPC — chốt QA chỉ qua cms-qa-results.mjs lock.
+const childEnv = { ...env, CMS_PROGRAM_ENABLED: 'true', CMS_QA_SERVER: '1', PORT: String(port), HOSTNAME: 'localhost' }
 for (const k of ['E2E_CMS_WRITE_QA', 'E2E_EXPECTED_SUPABASE_HOST']) delete childEnv[k]
+if (!lockGate.lock) delete childEnv.CMS_LOCK_ENABLED
+else console.log('--with-lock: server QA có CMS_LOCK_ENABLED (runbook §4.4) để xem khối Chốt kỳ / Số đã chốt / XLSX; xác nhận chốt trên UI bị SERVER từ chối trước RPC (CMS_QA_SERVER=1) — chốt QA bằng `cms-qa-results.mjs lock` (có sổ)')
 const onFlags = Object.keys(childEnv).filter((k) => /_ENABLED$/.test(k) && childEnv[k] === 'true').sort()
 console.log(`cờ *_ENABLED đang bật cho server QA (DB prod): ${onFlags.join(', ') || '(không)'} — module khác bật ở đây cũng ghi được prod; tắt bằng process env nếu không cần`)
 const child = spawn(process.execPath, ['server.js'], { cwd: standalone, env: childEnv, stdio: 'inherit' })
-manifest = { ...manifest, serverPid: child.pid ?? null }
-writeAtomic(MARKER, manifest)
-// Canh marker: deadline độc lập từ lần đọc preflight + poll 60 s (không chồng request) + tick 5 s không IO (PM P1-2).
+// Vòng đời server (PM 02/11 B3 §5 + security review P1-1): T.runCmsQaServerLifecycle nghe 'exit' / 'error' của con ngay từ
+// đầu; ghi manifest + dựng canh marker trong try — lỗi ⇒ GIẾT server QA ngay (không chạy thiếu canh) rồi ném lại (mã 1).
+// Chạy bình thường: deadline độc lập từ lần đọc preflight + poll 60 s (không chồng request, huỷ được) + tick 5 s không IO
+// (PM P1-2); mã thoát theo người khởi phát dừng — operator 0, canh marker / server tự thoát / lỗi tiến trình con 1.
+// Chỉ 'exit' là bằng chứng server đã thoát; kill lỗi ⇒ SIGKILL, không xác nhận trong hạn ⇒ CHƯA DỪNG (PM cli-exit §3).
 const watchdog = T.createCmsQaWatchdog({ userIds: users.value, guardMinutes: guard.value })
-const first = watchdog.onResult(preRows, preStartedAt)
-if (first.stop) { console.log(`DỪNG: ${first.reason}`); child.kill('SIGINT') }
-console.log(`server QA: http://localhost:${port} (pid ${child.pid}) — Ctrl+C để dừng; canh marker mỗi ${T.CMS_QA_POLL_MS / 1000} s + hạn dừng độc lập ${new Date(watchdog.stopAt).toISOString()} (ngưỡng ${guard.value} phút)`)
-
-let stopping = false
-const stopServer = (why) => {
-  if (stopping) return
-  stopping = true
-  console.log(`DỪNG server QA: ${why} — DỪNG MỌI THAO TÁC QA (kể cả trên trình duyệt prod) và xử lý theo runbook`)
-  child.kill('SIGINT')
-  setTimeout(() => { if (child.exitCode === null) child.kill('SIGKILL') }, 10_000).unref()
+// Không xác nhận được server đã chết (PM cli-exit §3) ⇒ ghi cờ vào manifest để close chặn khi pid còn sống. Ghi qua file tạm
+// lỗi (vd. rename EPERM — cùng lỗi làm setup hỏng) ⇒ ghi thẳng (ghi dở ⇒ manifest hỏng ⇒ close vẫn từ chối); vẫn lỗi ⇒ nói rõ
+// close KHÔNG bị cờ chặn, chỉ còn kiểm cổng (security review r3 P2-1).
+const markNotStopped = (pid) => {
+  manifest = { ...manifest, serverNotStopped: { pid, at: new Date().toISOString() } }
+  const short = (e) => String(e?.message ?? e).split('\n')[0]
+  try {
+    writeAtomic(MARKER, manifest)
+    return
+  } catch (e) {
+    rethrowCliExit(e)
+    console.log(`ghi cờ serverNotStopped qua file tạm lỗi (${short(e)}) — thử ghi thẳng ${G.CMS_QA_MARKER}`)
+  }
+  try {
+    fs.writeFileSync(MARKER, json(manifest))
+  } catch (e) {
+    rethrowCliExit(e)
+    console.log(`KHÔNG ghi được cờ serverNotStopped vào ${G.CMS_QA_MARKER}: ${short(e)} — close SẼ KHÔNG bị cờ chặn (chỉ còn kiểm cổng): operator tự xác nhận pid ${pid ?? '—'} đã tắt (tasklist /FI "PID eq ${pid ?? '<pid>'}") trước khi close`)
+  }
 }
-const loop = T.startCmsQaWatchdogLoop({
-  watchdog, poll: () => pgMeta(env, statusSql), now: () => Date.now(),
-  setInterval: (fn, ms) => setInterval(fn, ms), clearInterval: (h) => clearInterval(h), onStop: stopServer,
+let life
+try {
+life = await T.runCmsQaServerLifecycle({
+  child, watchdog, preRows, preStartedAt,
+  poll: (signal) => pgMeta(env, statusSql, { signal }),
+  setup: () => {
+    manifest = { ...manifest, serverPid: child.pid ?? null }
+    writeAtomic(MARKER, manifest)
+    console.log(`server QA: http://localhost:${port} (pid ${child.pid}) — Ctrl+C để dừng; canh marker mỗi ${T.CMS_QA_POLL_MS / 1000} s (ngưỡng ${guard.value} phút)`)
+  },
+  now: () => Date.now(),
+  setInterval: (fn, ms) => setInterval(fn, ms), clearInterval: (h) => clearInterval(h),
+  setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: (h) => clearTimeout(h),
+  onSignal: (sig, fn) => process.on(sig, fn), offSignal: (sig, fn) => process.off(sig, fn),
+  log: (line) => console.log(line),
 })
-process.on('SIGINT', () => { stopServer('Ctrl+C'); loop.dispose() })
-process.on('SIGTERM', () => { stopServer('SIGTERM'); loop.dispose() })
-child.on('exit', (code) => {
-  loop.dispose()
-  console.log(`server dừng (mã ${code}). Run ${runId} VẪN MỞ — đóng bằng: E2E_EXPECTED_SUPABASE_HOST=${gate.host} node scripts/cms-qa-run.mjs close`)
-  process.exit(0)
-})
+} catch (e) {
+  rethrowCliExit(e)
+  if (e instanceof T.CmsQaServerNotStoppedError) markNotStopped(e.pid)
+  throw e
+}
+if (!life.stopped) {
+  markNotStopped(life.pid)
+  console.log(`SERVER QA CHƯA DỪNG (pid ${life.pid ?? '—'}; ${life.childError ? `lỗi ${life.childError}` : 'SIGKILL không được xác nhận'}) ⇒ thoát 1. DỪNG MỌI THAO TÁC QA; tắt tay: taskkill /F /PID ${life.pid ?? '<pid>'} rồi kiểm tasklist. Run ${runId} VẪN MỞ — close bị chặn khi pid còn sống`)
+  return 1
+}
+const why = life.childError ? `LỖI tiến trình server: ${life.childError}` : life.stopKind === 'operator' ? 'operator dừng' : life.stopKind === 'watchdog' ? 'canh marker dừng' : life.stopKind === 'error' ? 'lỗi tiến trình con' : 'server TỰ THOÁT (bất thường)'
+console.log(`server dừng (${why}; mã ${life.code ?? '—'}${life.signal ? `, tín hiệu ${life.signal}` : ''}) ⇒ thoát ${life.rc}. Run ${runId} VẪN MỞ — đóng bằng: E2E_EXPECTED_SUPABASE_HOST=${gate.host} node scripts/cms-qa-run.mjs close`)
+return life.rc
+}
+
+await runCli(main)

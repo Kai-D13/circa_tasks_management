@@ -1,0 +1,4 @@
+product_id,product_name,image_url,is_active,source_updated_at,reference_price,price_unit
+900001,Thuốc mẫu A 500mg (hộp 3 vỉ x 10 viên),https://cdn-gcs.thuocsi.vn/thuocsi-live/images/mau-a.jpg,true,2026-11-01T22:00:00.000000Z,120000,Hộp
+900002,Kem mẫu B 20g,,true,2026-11-01T22:00:00.000000Z,150000,Tuýp
+900003,Siro mẫu C 60ml,https://example.test/c.jpg,false,2026-11-01T22:00:00.000000Z,,

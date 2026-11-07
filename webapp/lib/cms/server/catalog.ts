@@ -2,6 +2,7 @@ import 'server-only'
 import { createClient } from '@/lib/supabase/server'
 import type { CmsGmvBasis } from '@/lib/cms/display'
 import type { CmsProgramDbStatus } from '@/lib/cms/programStatus'
+import { CmsQueryError, cmsQueryFailLine } from '@/lib/cms/queryLog'
 
 // CMS P1 — đọc danh mục bằng SESSION client (SPEC §7: "Đọc danh mục (P1): bảng danh mục qua RLS"). RLS 120 quyết định
 // phạm vi: super (mọi chương trình thật; QA chỉ khi có marker — H9b), SM (active có nhà thuốc phân công — H6),
@@ -11,17 +12,17 @@ import type { CmsProgramDbStatus } from '@/lib/cms/programStatus'
 const PAGE = 1000
 const MAX_PAGES = 100
 
-type Q = (from: number, to: number) => PromiseLike<{ data: unknown[] | null; error: { message?: string } | null }>
+type Q = (from: number, to: number) => PromiseLike<{ data: unknown[] | null; error: { code?: string } | null }>
 async function readAll<T>(query: Q): Promise<T[]> {
   const out: T[] = []
   for (let p = 0; p < MAX_PAGES; p++) {
     const { data, error } = await query(out.length, out.length + PAGE - 1)
-    if (error) throw new Error(error.message ?? 'query failed')
+    if (error) throw new CmsQueryError(error.code)
     const rows = (data ?? []) as T[]
     if (rows.length === 0) return out
     out.push(...rows)
   }
-  throw new Error('too many rows')
+  throw new CmsQueryError('TOO_MANY_ROWS')
 }
 
 export interface CmsProgramRowView {
@@ -94,7 +95,7 @@ const toRun = (r: RunDb): CmsImportRunView => ({
 export type CmsResult<T> = { ok: true; data: T } | { ok: false; error: string }
 // Lỗi DB chỉ ghi log phía server; kết quả trả MÃ chung (không đưa message DB lên UI — security review P1-c P2-3).
 const fail = (e: unknown): { ok: false; error: string } => {
-  console.error('[cms-catalog] query failed:', e instanceof Error ? e.message : e)
+  console.error(cmsQueryFailLine('cms-catalog', e)) // chỉ mã máy, không message DB (PM 03/11 §3.2)
   return { ok: false, error: 'QUERY_FAILED' }
 }
 
@@ -177,7 +178,7 @@ export async function cmsLoadProgramDetail(id: string, o: { manage: boolean }): 
   try {
     const supabase = await createClient()
     const { data: prog, error } = await supabase.from('cms_programs').select(PROGRAM_COLS).eq('id', id).maybeSingle()
-    if (error) throw new Error(error.message)
+    if (error) throw new CmsQueryError(error.code)
     if (!prog) return { ok: true, data: null } // không tồn tại HOẶC ngoài phạm vi RLS (kể cả QA không marker) ⇒ 404
     const [products, tiers, storeRows, runs] = await Promise.all([
       readAll<ProductDb>((a, b) => supabase.from('cms_program_products').select(PRODUCT_COLS).eq('program_id', id)
@@ -225,7 +226,7 @@ export async function cmsLoadInvalidStores(ids: string[]): Promise<CmsResult<Cms
     const rows: { id: string; name: string; code: string; store_type: string; is_active: boolean }[] = []
     for (let i = 0; i < ids.length; i += 200) {
       const { data, error } = await supabase.from('stores').select('id, name, code, store_type, is_active').in('id', ids.slice(i, i + 200))
-      if (error) throw new Error(error.message)
+      if (error) throw new CmsQueryError(error.code)
       rows.push(...((data ?? []) as typeof rows))
     }
     const byId = new Map(rows.map((r) => [r.id, r]))

@@ -22,7 +22,7 @@ Thứ tự phát hành đã thống nhất:
 
 1. Phát hành **P1 — chương trình, import và danh mục tư vấn** trước.
 2. Xây dựng, kiểm thử P2 song song với việc hoàn thiện nguồn BI.
-3. Bật số tiền cho người dùng sau khi hoàn tất hợp đồng dữ liệu, xử lý trả hàng Q-206 và các gate đối soát.
+3. ~~Bật số tiền cho người dùng sau khi hoàn tất hợp đồng dữ liệu, xử lý trả hàng Q-206 và các gate đối soát.~~ **PM 06/11 (docs/cms/DECISIONS.md §5):** bật **CMS tạm tính theo dữ liệu bán hiện có** (chưa bao gồm xử lý trả hàng); trả hàng Q-206 là phase sau (B1 người bán gốc, D1 kỳ ngày bán đã chốt cho phase đó).
 4. P3 chốt kỳ chỉ được giao triển khai sau khi PM chốt bổ sung Q-206 và Q-213.
 
 Các phần còn pending có ranh giới rõ ở §4. Dev không tự chọn cách xử lý nghiệp vụ cho những phần đó.
@@ -35,8 +35,8 @@ Phạm vi giao (PM 01/11):
 | P1 — DB nền, chương trình, import, danh mục và UI | GO triển khai |
 | P2-a — engine và kiểm thử dữ liệu mẫu | GO triển khai |
 | P2-b / P2-c | Chưa giao thực hiện |
-| Bật số tiền P2 cho người dùng | Chờ nguồn BI và Q-206 |
-| P3 — chốt kỳ, payout | HOLD, chờ Q-206 và Q-213 |
+| Bật số tiền P2 cho người dùng | ~~Chờ nguồn BI và Q-206~~ PM 06/11: GO local phase sales-only (migration 126, CMS tạm tính); trả hàng phase sau |
+| P3 — chốt kỳ, payout | HOLD (chốt thật: `real.ready = false`, chờ Q-213 / Q-216 / policy chốt; trả hàng phase sau) |
 
 GO triển khai không bao gồm quyền commit, push, merge, DDL prod, deploy hoặc bật cờ; mỗi việc đó cần lệnh operator riêng.
 
@@ -136,8 +136,8 @@ Chương trình nhìn thấy theo vai trò ở P1:
 | Vai trò | Nháp | Sắp diễn ra | Đang chạy | Chờ chốt kỳ | Đã chốt | Chương trình QA (`is_test`) |
 |---|---|---|---|---|---|---|
 | Super admin | Có | Có | Có | Có | Có | Chỉ trong phiên QA đã kiểm soát (marker QA hợp lệ — H9) |
-| SM (A1/A3 chỉ đọc, có nhà thuốc được phân công trong phạm vi) | Không | Có | Có | Có | — (P3) | Chỉ trong phiên QA đã kiểm soát |
-| Staff / QLCH (D1/D2, nhà thuốc hiện tại trong phạm vi) | Không | Có, ghi ngày bắt đầu | Có | Không vào danh sách chính D1 P1 | Không vào danh sách chính D1 P1 | Chỉ trong phiên QA đã kiểm soát |
+| SM (A1/A3 chỉ đọc, có nhà thuốc được phân công trong phạm vi) | Không | Có | Có | Có | Có (P3a — chỉ đọc, số đã chốt trong phạm vi) | Chỉ trong phiên QA đã kiểm soát |
+| Staff / QLCH (D1/D2, nhà thuốc hiện tại trong phạm vi) | Không | Có, ghi ngày bắt đầu | Có | Không vào danh sách chính D1 P1; P3a: nhóm "Đã kết thúc" của bộ chọn D1, D2 / D3 đọc được (tạm tính, chờ chốt) | Như Chờ chốt kỳ; số của run đóng băng, nhãn đã chốt (P3a) | Chỉ trong phiên QA đã kiểm soát |
 
 Đọc lịch sử ở P2 (D3) giữ theo spec; bộ lọc D1 P1 không dùng để xóa hoặc giấu lịch sử phát sinh sau này (H5).
 
@@ -281,7 +281,9 @@ Nhóm danh mục chỉ cộng những sản phẩm được khai báo `GMV_TOAN_
 
 Đạt gate thì CMS được tính cho toàn bộ số lượng hợp lệ trong kỳ, gồm lượng đã bán trước thời điểm đạt.
 
-### 2.9. Tính thưởng lũy tiến và trần
+### 2.9. Tính thưởng lũy tiến (bậc cuối không giới hạn — CMS-Q-220)
+
+> **CMS-Q-220 (05/11) THAY Q-210a:** bỏ trần số lượng hưởng CMS. Bậc cuối luôn **không có cận trên**; nội dung "bậc cuối hữu hạn tạo trần" bên dưới chỉ còn là lịch sử (run QA đã chốt trước 125). Xem `docs/cms/DECISIONS.md` CMS-Q-220.
 
 Bậc liên tục, bắt đầu từ 1. Mỗi bậc có:
 
@@ -289,10 +291,10 @@ Bậc liên tục, bắt đầu từ 1. Mỗi bậc có:
 [from, to] → CMS_VND_SP
 ```
 
-Bậc cuối có thể:
+Bậc cuối:
 
-- Không có cận trên: không giới hạn.
-- Có cận trên: tạo trần số lượng hưởng CMS (Q-210a).
+- **Không có cận trên: không giới hạn** — bắt buộc với mọi cấu hình tính mới (CMS-Q-220). Bậc trung gian vẫn có cận trên (chặn `min(Q, to)` để không tính chồng).
+- ~~Có cận trên: tạo trần số lượng hưởng CMS (Q-210a).~~ Hết hiệu lực; file cũ có số ở `Den_SL_ban` bậc cuối được bỏ giới hạn khi kiểm tra (có cảnh báo).
 
 Với Q là số lượng nguyên đủ xét:
 
@@ -301,7 +303,7 @@ F(Q) = tổng tiền của số đơn vị nằm trong từng bậc
 CMS = gate đạt ? F(Q) : 0
 ```
 
-Số lượng vượt trần không được thêm CMS. GMV và số lượng bán thực tế vẫn giữ đầy đủ.
+Mỗi đơn vị đủ sau mốc bậc cuối (khi gate đã mở) làm CMS tăng đúng mức bậc cuối. GMV và số lượng bán thực tế giữ đầy đủ.
 
 Bảng nghiệm thu:
 
@@ -316,13 +318,24 @@ Bảng nghiệm thu:
 
 Bậc mẫu: 1–9 hưởng 15.000; 10–19 hưởng 20.000; từ 20 hưởng 25.000.
 
-Nếu bậc cuối kết thúc ở 50:
+Bậc cuối không giới hạn (CMS-Q-220 — bảng nghiệm thu stakeholder):
 
-| Q | CMS khi gate đạt |
+| Q | CMS khi gate đạt / không target |
 |---:|---:|
+| 0 | 0 |
+| 1 | 15.000 |
+| 9 | 135.000 |
+| 10 | 155.000 |
+| 19 | 335.000 |
+| 20 | 360.000 |
+| 49 | 1.085.000 |
 | 50 | 1.110.000 |
-| 51 | 1.110.000 |
-| 60 | 1.110.000 |
+| 51 | 1.135.000 |
+| 100 | 2.360.000 |
+| 101 | 2.385.000 |
+| 100.000 | 2.499.860.000 |
+
+(Lịch sử Q-210a — đã bị thay: "bậc cuối kết thúc ở 50" cho Q 50 / 51 / 60 = 1.110.000.)
 
 ### 2.10. Phân bổ tiền theo dòng và ngày đạt
 
@@ -341,7 +354,7 @@ Cách này xử lý đúng:
 
 - Hai dòng nửa hộp cộng thành một hộp.
 - Một dòng đi qua nhiều bậc.
-- Dòng bán vượt trần.
+- Dòng bán đi qua mốc bậc cuối (vd. 50 → 51 vẫn +25.000).
 - Các sự kiện điều chỉnh đã được quy thuộc đúng khi Q-206 được chốt.
 
 Trạng thái hiển thị:
@@ -349,7 +362,7 @@ Trạng thái hiển thị:
 - Chờ đạt target.
 - Đang cộng dồn, khi chưa hoàn thành thêm đơn vị CMS.
 - Đã ghi nhận.
-- Đã đạt trần, khi lượng thêm không tăng CMS.
+- ~~Đã đạt trần~~ — chỉ còn đọc ở run lịch sử trước CMS-Q-220; run mới không sinh trạng thái này.
 - Điều chỉnh cho sự kiện trả hàng đã được chuẩn hóa.
 - Đã chốt sau P3.
 

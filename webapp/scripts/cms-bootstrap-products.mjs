@@ -95,4 +95,5 @@ const out = {
   cause: r.cause,
 }
 console.log(JSON.stringify(out))
-process.exit(cmsBootstrapExitCode(r))
+// exitCode thay process.exit: process.exit ngay sau fetch làm libuv abort trên Node 24 / Windows (rc 127 — batch CLI exit r3).
+process.exitCode = cmsBootstrapExitCode(r)

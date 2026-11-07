@@ -7,16 +7,18 @@ import { cn } from '@/lib/utils'
 // thì trang campaigns giữ nguyên như cũ, không render hàng tab).
 // CMS P1-c (U15): tab "CMS sản phẩm" ĐỘC LẬP cờ Affiliate — chỉ theo CMS_PROGRAM_ENABLED (`cmsEnabled`). Không cờ nào
 // bật ⇒ vẫn null như cũ (KPI giữ nguyên).
-export function CampaignsTabs({ active, affiliateEnabled, cmsEnabled = false }: {
+// CMS-UI-1: `hrefs` (tuỳ chọn, chỉ fixture /ui-catalog) đổi đích link để demo không rời catalog; route thật không truyền ⇒ y cũ.
+export function CampaignsTabs({ active, affiliateEnabled, cmsEnabled = false, hrefs }: {
   active: 'campaigns' | 'affiliate' | 'cms'
   affiliateEnabled: boolean
   cmsEnabled?: boolean
+  hrefs?: Partial<Record<'campaigns' | 'affiliate' | 'cms', string>>
 }) {
   if (!affiliateEnabled && !cmsEnabled) return null
   const tabs = [
-    { key: 'campaigns' as const, label: 'Chiến dịch', href: '/targets/campaigns' },
-    ...(affiliateEnabled ? [{ key: 'affiliate' as const, label: 'Affiliate', href: '/targets/campaigns/affiliate' }] : []),
-    ...(cmsEnabled ? [{ key: 'cms' as const, label: 'CMS sản phẩm', href: '/targets/campaigns/cms' }] : []),
+    { key: 'campaigns' as const, label: 'Chiến dịch', href: hrefs?.campaigns ?? '/targets/campaigns' },
+    ...(affiliateEnabled ? [{ key: 'affiliate' as const, label: 'Affiliate', href: hrefs?.affiliate ?? '/targets/campaigns/affiliate' }] : []),
+    ...(cmsEnabled ? [{ key: 'cms' as const, label: 'CMS sản phẩm', href: hrefs?.cms ?? '/targets/campaigns/cms' }] : []),
   ]
   return (
     <div className="flex gap-2 v2:w-fit v2:max-w-full v2:gap-1 v2:rounded-v2-control v2:bg-muted v2:p-1">

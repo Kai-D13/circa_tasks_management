@@ -119,7 +119,11 @@ test.describe('CMS P1-b · kiểm nhóm (r2 §5.1) @desktop', () => {
     expect(v.groupsOk.map((g) => [g.productId, g.gmvBasis, g.targetGmv])).toEqual([['900001', 'product', '10000000'], ['900002', 'catalog', null], ['900003', 'none', null]])
     expect(v.catalogTarget).toBe('50000000')
     expect(v.groupsOk[0].tiers).toEqual([{ order: 1, from: 1, to: 9, amount: '15000' }, { order: 2, from: 10, to: 19, amount: '20000' }, { order: 3, from: 20, to: null, amount: '25000' }])
-    expect(v.groupsOk[2].tiers).toEqual([{ order: 1, from: 1, to: 50, amount: '5000' }])
+    // CMS-Q-220: một bậc 1–50 ⇒ chuẩn hoá 1+ (cuối null) kèm cảnh báo; nhóm vốn để trống cận cuối không có cảnh báo chuyển đổi giả.
+    expect(v.groupsOk[2].tiers).toEqual([{ order: 1, from: 1, to: null, amount: '5000' }])
+    expect(v.groupsOk[2].normalizedLastTo).toBe(50)
+    expect(v.groupsOk[2].warnings.map((w) => [w.code, w.excelRow, w.column])).toEqual([['LAST_TIER_UNBOUNDED_NORMALIZED', v.groupsOk[2].excelRows[0], 'Den_SL_ban']])
+    expect(v.groupsOk.slice(0, 2).map((g) => [g.normalizedLastTo, g.warnings.filter((w) => w.code === 'LAST_TIER_UNBOUNDED_NORMALIZED').length])).toEqual([[null, 0], [null, 0]])
     expect(v.stats).toMatchObject({ rowsTotal: 5, rowsOk: 5, rowsRejected: 0, productsOk: 3, productsRejected: 0 })
   })
 
@@ -135,7 +139,7 @@ test.describe('CMS P1-b · kiểm nhóm (r2 §5.1) @desktop', () => {
       .toEqual(['KPI_Target_GMV_VND', 'unit_CMS', 'base_quantity_CMS', 'Noi_dung_tu_van'])
   })
 
-  test('bậc hở / chồng / không từ 1 / trống giữa / đến < từ; bậc cuối hữu hạn hợp lệ (+ cảnh báo khi rất lớn)', () => {
+  test('bậc hở / chồng / không từ 1 / trống giữa / đến < từ; bậc cuối hữu hạn hợp lệ ⇒ chuẩn hoá không giới hạn + cảnh báo (CMS-Q-220)', () => {
     const v = validateCmsImport(rowsOf(book([
       r(900001, null, null, 1, 9, 1), r(900001, null, null, 11, 19, 2),
       r(900002, null, null, 1, 10, 1), r(900002, null, null, 10, 19, 2),
@@ -148,9 +152,30 @@ test.describe('CMS P1-b · kiểm nhóm (r2 §5.1) @desktop', () => {
     expect(codesOf(v, '900003')).toContain('TIER_NOT_FROM_ONE')
     expect(codesOf(v, '900004')).toContain('TIER_OPEN_NOT_LAST')
     expect(codesOf(v, '900005')).toContain('TIER_TO_LT_FROM')
-    const fin = validateCmsImport(rowsOf(book([r(900001, null, null, 1, 9, 1), r(900001, null, null, 10, 50, 2), r(900002, null, null, 1, 10000, 3)])), ctx())
-    expect(fin.groupsOk.map((g) => g.tiers.at(-1)?.to)).toEqual([50, 10000])
-    expect(fin.groupsOk[1].warnings.map((w) => w.code)).toContain('LAST_TIER_LARGE')
+    // Lỗi khác KHÔNG được chuẩn hoá thành hợp lệ: cả nhóm vẫn bị loại, không có cảnh báo chuyển đổi.
+    expect(v.groupsOk).toEqual([])
+    expect(v.groupsRejected.every((g) => g.errors.every((e) => e.code !== 'LAST_TIER_UNBOUNDED_NORMALIZED'))).toBe(true)
+    const fin = validateCmsImport(rowsOf(book([r(900001, null, null, 1, 9, 1), r(900001, null, null, 10, 50, 2), r(900002, null, null, 1, 10000, 3),
+      r(900003, null, null, 1, 9, 15000), r(900003, null, null, 10, 19, 20000), r(900003, null, null, 20, 100, 25000)])), ctx())
+    // Chỉ cận cuối → null; bậc giữa 9 / 19 nguyên vẹn; mức tiền không đổi.
+    expect(fin.groupsOk.map((g) => g.tiers)).toEqual([
+      [{ order: 1, from: 1, to: 9, amount: '1' }, { order: 2, from: 10, to: null, amount: '2' }],
+      [{ order: 1, from: 1, to: null, amount: '3' }],
+      [{ order: 1, from: 1, to: 9, amount: '15000' }, { order: 2, from: 10, to: 19, amount: '20000' }, { order: 3, from: 20, to: null, amount: '25000' }],
+    ])
+    expect(fin.groupsOk.map((g) => g.normalizedLastTo)).toEqual([50, 10000, 100])
+    const w = fin.groupsOk[2].warnings.find((x) => x.code === 'LAST_TIER_UNBOUNDED_NORMALIZED')!
+    expect([w.excelRow, w.column, w.message]).toEqual([fin.groupsOk[2].excelRows[2], 'Den_SL_ban',
+      'Đã bỏ giới hạn 100 của bậc cuối theo chính sách CMS mới; từ 20 trở lên đều được xét bậc này.'])
+    expect(fin.groupsOk[1].warnings.find((x) => x.code === 'LAST_TIER_UNBOUNDED_NORMALIZED')!.message).toContain('Đã bỏ giới hạn 10.000 của bậc cuối')
+    // Cảnh báo cũ "bậc cuối hữu hạn rất lớn" không còn (bậc cuối luôn không giới hạn).
+    expect(fin.groupsOk.flatMap((g) => g.warnings.map((x) => x.code))).not.toContain('LAST_TIER_LARGE')
+    // Canonical (digest preview ↔ commit) = file vốn để trống cận cuối: chuẩn hoá không đổi nghĩa payload, có định danh chính sách.
+    const blank = validateCmsImport(rowsOf(book([r(900001, null, null, 1, 9, 1), r(900001, null, null, 10, null, 2), r(900002, null, null, 1, null, 3),
+      r(900003, null, null, 1, 9, 15000), r(900003, null, null, 10, 19, 20000), r(900003, null, null, 20, null, 25000)])), ctx())
+    expect(blank.groupsOk.map((g) => g.normalizedLastTo)).toEqual([null, null, null])
+    expect(canonicalCmsImport(fin)).toBe(canonicalCmsImport(blank))
+    expect(JSON.parse(canonicalCmsImport(fin)).policy).toBe('uncapped_last_v1')
   })
 
   test('gate thiếu target / thiếu loại ⇒ lỗi', () => {
@@ -189,11 +214,15 @@ test.describe('CMS P1-b · kiểm nhóm (r2 §5.1) @desktop', () => {
     expect([first.groupsOk.map((g) => g.productId), first.catalogTarget]).toEqual([['900003'], '70000000'])
   })
 
-  test('cảnh báo vẫn cho nạp: thiếu ảnh, ảnh ngoài allow-list, SP ngừng, CMS > 500.000', () => {
-    const v = validateCmsImport(rowsOf(book([r(900004, null, null, 1, null, 600000), r(900005, null, null, 1, null, 1)])), ctx())
+  test('cảnh báo vẫn cho nạp: thiếu ảnh, ảnh ngoài allow-list, CMS > 500.000; KHÔNG cảnh báo trạng thái SP (cache cũ is_active=false)', () => {
+    // Operator bỏ trạng thái SP 04/11 (PM `2026-11-04-cms-bi-product-master-pm.md` §2.2): 900004 có isActive=false trong cache
+    // nhưng KHÔNG sinh PRODUCT_INACTIVE; ProductID không có trên Master vẫn bị từ chối.
+    const v = validateCmsImport(rowsOf(book([r(900004, null, null, 1, null, 600000), r(900005, null, null, 1, null, 1), r(900099, null, null, 1, null, 1)])), ctx())
     expect(v.groupsOk.map((g) => [g.productId, g.warnings.map((w) => w.code).sort()])).toEqual([
-      ['900004', ['AMOUNT_HIGH', 'IMAGE_MISSING', 'PRODUCT_INACTIVE']], ['900005', ['IMAGE_NOT_ALLOWED']]])
+      ['900004', ['AMOUNT_HIGH', 'IMAGE_MISSING']], ['900005', ['IMAGE_NOT_ALLOWED']]])
     expect(v.groupsOk[1].imageUrlSnapshot).toBeNull()
+    expect(JSON.stringify(v)).not.toContain('PRODUCT_INACTIVE')
+    expect(v.groupsRejected.map((g) => [g.key, g.errors.map((e) => e.code)])).toEqual([['900099', ['PRODUCT_NOT_FOUND']]])
   })
 })
 
@@ -224,7 +253,14 @@ test.describe('CMS P1-b · file lỗi, digest, template @desktop', () => {
     expect(rows.length).toBe(5)
     expect(validateCmsImport(rows, ctx()).groupsRejected.map((g) => g.errors[0].code)).toEqual(['PRODUCT_NOT_FOUND', 'PRODUCT_NOT_FOUND', 'PRODUCT_NOT_FOUND'])
     const pmFake = new Map([...PM, ...CMS_TEMPLATE_EXAMPLE_IDS.map((id) => [id, { productName: `Giả ${id}`, imageUrl: null, isActive: true, referencePrice: null }] as const)])
-    expect(validateCmsImport(rows, ctx({ productMaster: pmFake })).groupsOk.map((g) => g.gmvBasis)).toEqual(['product', 'catalog', 'none'])
+    const ok = validateCmsImport(rows, ctx({ productMaster: pmFake }))
+    expect(ok.groupsOk.map((g) => g.gmvBasis)).toEqual(['product', 'catalog', 'none'])
+    // CMS-Q-220: mẫu để trống Den_SL_ban ở bậc cuối mọi nhóm (không số giả), không sinh cảnh báo chuyển đổi; hướng dẫn ghi rõ.
+    expect(ok.groupsOk.map((g) => [g.tiers.at(-1)!.to, g.normalizedLastTo])).toEqual([[null, null], [null, null], [null, null]])
+    expect(ok.groupsOk.flatMap((g) => g.warnings.map((w) => w.code))).not.toContain('LAST_TIER_UNBOUNDED_NORMALIZED')
+    const guide = XLSX.utils.sheet_to_json<string[]>(XLSX.read(t, { type: 'array' }).Sheets.HUONG_DAN, { header: 1 })
+    expect(guide.some((x) => x.join(' ').includes('Bậc cuối tính từ mốc này trở lên, không giới hạn số lượng') && x.join(' ').includes('Để trống Đến SL bán'))).toBe(true)
+    expect(JSON.stringify(guide)).not.toMatch(/999999|2147483647|20\+/)
     const staticFile = path.resolve(__dirname, '..', 'public', 'templates', 'Circa_Import_CMS.xlsx')
     const s = parseCmsImportXlsx(new Uint8Array(fs.readFileSync(staticFile)))
     expect(s.ok && s.rows.map((x) => x.raw)).toEqual(rows.map((x) => x.raw))

@@ -8,6 +8,13 @@
 //    app phát hiện thiếu trường (adapter production từ chối, không tự điền).
 //  · Đọc đủ trang; vượt trần ⇒ OVER_CAP (không lấy một phần); thiếu cột ⇒
 //    SCHEMA_MISMATCH; lỗi nguồn ⇒ SOURCE_ERROR. Không fallback JSON/Sheet.
+//  · Tên cột VẬT LÝ của view BI có thể khác tên chuẩn (CMS_SALES_SOURCE_COLUMN — operator chốt 04/11 BI giữ
+//    `employee_email`): đổi tên DUY NHẤT ở SELECT `CAST(employee_email AS STRING) AS seller_email`; runner / normalizer / DB /
+//    engine / file đối soát vẫn dùng tên chuẩn. View thiếu cột vật lý ⇒ BigQuery lỗi truy vấn ⇒ SOURCE_ERROR (giữ snapshot cũ),
+//    KHÔNG tự thử cột khác.
+//  · Product Master: `is_active` là hằng tương thích nội bộ `CAST(TRUE AS STRING) AS is_active` (CMS_PRODUCT_DERIVED_COLUMN —
+//    operator bỏ trạng thái SP 04/11); view chỉ cần 6 cột vật lý. Trùng product_id vẫn held DUPLICATE_PRODUCT (productSync) —
+//    KHÔNG chọn MAX / MIN / dòng đầu để vượt lỗi.
 //  · Lỗi trả về CHỈ là mã cố định + số đếm / HTTP status — KHÔNG mang message
 //    thô của BigQuery/Google (có thể chứa giá trị dòng nguồn, email, URL, tên
 //    view nội bộ) để không rò ra log / UI / DB (security review P0-a P1-1).
@@ -20,6 +27,20 @@ import {
   CMS_PRODUCT_COLUMNS, CMS_SALES_COLUMNS, normalizeProductRow, normalizeSalesRow,
   type CmsProductMasterRow, type CmsRowIssue, type CmsSalesLine,
 } from './contract'
+
+/** Cột vật lý trên view dòng đơn khi khác tên chuẩn của app (PM 04/11 — work order tích hợp nguồn BI §2.1). */
+export const CMS_SALES_SOURCE_COLUMN: Readonly<Partial<Record<(typeof CMS_SALES_COLUMNS)[number], string>>> = { seller_email: 'employee_email' }
+/** Tên cột vật lý (dùng khi lọc ngay trên view — vd. SQL xuất đối soát N4b). */
+export const cmsSalesSourceColumn = (c: (typeof CMS_SALES_COLUMNS)[number]): string => CMS_SALES_SOURCE_COLUMN[c] ?? c
+
+/**
+ * Cột chuẩn Product Master do adapter TẠO bằng hằng — KHÔNG đọc trên view (PM 04/11 `2026-11-04-cms-bi-product-master-pm.md` §2,
+ * quyết định operator bỏ trạng thái SP). `is_active` = 'true' nghĩa là "CMS không áp dụng kiểm tra trạng thái kinh doanh", KHÔNG phải
+ * bằng chứng SP đang bán ở nguồn; không hiển thị "đang kinh doanh" dựa vào hằng này. Output chuẩn / normalizer / RPC vẫn 7 cột.
+ */
+export const CMS_PRODUCT_DERIVED_COLUMN: Readonly<Partial<Record<(typeof CMS_PRODUCT_COLUMNS)[number], string>>> = { is_active: 'CAST(TRUE AS STRING)' }
+/** Cột VẬT LÝ view Product Master phải có (6) — thiếu cột nào trong số này ⇒ BigQuery lỗi ⇒ SOURCE_ERROR, không tạo output giả. */
+export const CMS_PRODUCT_SOURCE_COLUMNS: readonly string[] = CMS_PRODUCT_COLUMNS.filter((c) => !CMS_PRODUCT_DERIVED_COLUMN[c])
 
 /** Trần dòng Product Master / lượt (đọc đầy đủ; vượt ⇒ OVER_CAP — đo quy mô thật ở P0, SPEC §1.1). */
 export const CMS_PRODUCTS_ROW_CAP = 200_000
@@ -60,7 +81,8 @@ function rowLimitParam(cap: number): BqParam {
 
 export function buildCmsProductsQuery(table: string, cap: number = CMS_PRODUCTS_ROW_CAP): { sql: string; params: BqParam[]; cap: number } {
   assertTable(table)
-  const cols = CMS_PRODUCT_COLUMNS.map((c) => (c === 'source_updated_at' ? TS(c) : STR(c)))
+  const cols = CMS_PRODUCT_COLUMNS.map((c) => (CMS_PRODUCT_DERIVED_COLUMN[c] ? `${CMS_PRODUCT_DERIVED_COLUMN[c]} AS ${c}`
+    : c === 'source_updated_at' ? TS(c) : STR(c)))
   return { sql: `SELECT ${cols.join(', ')}\nFROM \`${table}\`\nLIMIT @row_limit`, params: [rowLimitParam(cap)], cap }
 }
 
@@ -80,7 +102,8 @@ export function buildCmsSalesQuery(a: CmsSalesQueryArgs): { sql: string; params:
   if (a.productIds.length === 0) throw new BigQueryError('config', 'CMS: chương trình chưa có ProductID')
   if (a.toMicrosExclusive <= a.fromMicros) throw new BigQueryError('config', 'CMS: cửa sổ kỳ rỗng')
   const cap = a.cap ?? CMS_SALES_ROW_CAP
-  const cols = CMS_SALES_COLUMNS.map((c) => (c === 'completed_at' || c === 'source_updated_at' ? TS(c) : STR(c)))
+  const cols = CMS_SALES_COLUMNS.map((c) => (c === 'completed_at' || c === 'source_updated_at' ? TS(c)
+    : CMS_SALES_SOURCE_COLUMN[c] ? `CAST(${CMS_SALES_SOURCE_COLUMN[c]} AS STRING) AS ${c}` : STR(c)))
   const sql = [
     `SELECT ${cols.join(', ')}`,
     `FROM \`${a.table}\``,

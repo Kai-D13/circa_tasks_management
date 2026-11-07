@@ -68,7 +68,8 @@ test.describe('CMS P1-c · định dạng @desktop', () => {
     expect(cmsPrice('9.5')).toBe('9,5₫')
     expect(cmsPrice(null)).toBe('—')
     expect(cmsBaseQtyLine('hộp', '24')).toBe('1 hộp = 24 đơn vị cơ sở')
-    expect([cmsTierRange(1, 9), cmsTierRange(20, null), cmsTierRange(5, 5)]).toEqual(['1–9', '20+', '5'])
+    expect([cmsTierRange(1, 9), cmsTierRange(20, null), cmsTierRange(5, 5)]).toEqual(['1–9', 'Từ 20 trở lên', '5'])
+    expect([cmsTierRange(1, 9, 'hộp'), cmsTierRange(20, null, 'hộp'), cmsTierRange(5, 5, 'hộp')]).toEqual(['1–9 hộp', 'Từ 20 hộp trở lên', '5 hộp'])
     expect(cmsAmountPerUnit('15000', 'hộp')).toBe('15.000₫/hộp')
   })
   test('ngày', () => {
@@ -88,15 +89,17 @@ test.describe('CMS P1-c · định dạng @desktop', () => {
 test.describe('CMS P1-c · model A1 @desktop', () => {
   test('đếm toàn tập; thống kê đang chạy LOẠI QA; tìm tên / ProductID; SM không có lọc Nháp', () => {
     const m = cmsBuildListModel(CMS_FX_LIST, { canManage: true, today: CMS_FX_TODAY, filter: 'all', q: '' })
-    expect(m.counts).toMatchObject({ all: 6, running: 2, upcoming: 1, draft: 1, waiting_close: 1, locked: 1 })
-    expect(m.stats).toEqual({ running: 1, productsRunning: 2 })
-    expect(cmsBuildListModel(CMS_FX_LIST, { canManage: true, today: CMS_FX_TODAY, filter: 'all', q: '900010' }).rows.map((r) => r.name)).toEqual(['CMS Men vi sinh tháng 12'])
+    // CMS-UI-1: kịch bản một nguồn (lib/cms/fixtureScenario) — 9 chương trình; số SP = danh mục thật của từng chương trình.
+    expect(m.counts).toMatchObject({ all: 9, running: 3, upcoming: 1, draft: 1, waiting_close: 2, locked: 2 })
+    expect(m.stats).toEqual({ running: 2, productsRunning: 5 }) // PG1 (4 SP) + PG7 (1 SP); QA PG6 không tính
+    expect(cmsBuildListModel(CMS_FX_LIST, { canManage: true, today: CMS_FX_TODAY, filter: 'all', q: '900010' }).rows.map((r) => r.name)).toEqual(['CMS Chăm sóc da tháng 12'])
     expect(cmsBuildListModel(CMS_FX_LIST, { canManage: true, today: CMS_FX_TODAY, filter: 'all', q: 'khẩu TRANG' }).rows.length).toBe(1)
-    expect(cmsBuildListModel(CMS_FX_LIST, { canManage: true, today: CMS_FX_TODAY, filter: 'locked', q: '' }).rows.map((r) => r.display)).toEqual(['locked'])
+    expect(cmsBuildListModel(CMS_FX_LIST, { canManage: true, today: CMS_FX_TODAY, filter: 'locked', q: '' }).rows.map((r) => r.display)).toEqual(['locked', 'locked'])
     expect(cmsParseListFilter('draft', false)).toBe('all')
     expect(cmsParseListFilter('draft', true)).toBe('draft')
     expect(cmsParseListFilter('xyz', true)).toBe('all')
-    expect(cmsParseListFilter('locked', false)).toBe('all')
+    // P3a r2 (PM r1 §4 Q-219): SM có lọc Đã chốt (123 cho SM đọc 'locked' trong phạm vi) — trước r2 là 'all'.
+    expect(cmsParseListFilter('locked', false)).toBe('locked')
     expect(cmsParseListFilter('waiting_close', false)).toBe('waiting_close')
     expect(cmsBuildListModel(CMS_FX_LIST, { canManage: false, today: CMS_FX_TODAY, filter: 'all', q: '' }).rows.every((r) => r.lastImport === null)).toBe(true)
   })
@@ -110,10 +113,19 @@ test.describe('CMS P1-c · kiểm tĩnh @desktop', () => {
   test('mọi component CMS gọi server action / fetch ghi / link export đều qua useFixtureActionBlocked()', () => {
     const risky = cmsFiles.filter((f) => {
       const s = fs.readFileSync(path.join(ROOT, f), 'utf8')
-      return s.includes("from '@/app/actions/") || /fetch\(['"`]\/api\/cms/.test(s) || s.includes('/api/cms/import/errors')
+      return s.includes("from '@/app/actions/") || /fetch\(['"`]\/api\/cms/.test(s) || s.includes('/api/cms/import/errors') || s.includes('/api/export/cms')
     })
     expect(risky.length).toBeGreaterThan(0)
-    for (const f of risky) expect(fs.readFileSync(path.join(ROOT, f), 'utf8'), f).toContain('useFixtureActionBlocked()')
+    // CMS-UI-1 r2: link tải file đi qua CmsDownloadLink (chính nó gọi useFixtureActionBlocked() và trong fixture KHÔNG render href
+    // endpoint thật). File chỉ dựng link tải qua CmsDownloadLink — không còn <a href={`/api/...`}> trực tiếp — được coi là đã chặn.
+    const dl = fs.readFileSync(path.join(ROOT, 'components/cms/CmsDownloadLink.tsx'), 'utf8')
+    expect(dl).toContain('useFixtureActionBlocked()')
+    expect(dl).toContain('if (inFixture) {')
+    for (const f of risky) {
+      const s = fs.readFileSync(path.join(ROOT, f), 'utf8')
+      const viaDownload = s.includes('<CmsDownloadLink') && !/<a\s[^>]*href=\{`\/api\//.test(s) && !/fetch\(/.test(s) && !s.includes("from '@/app/actions/")
+      if (!viaDownload) expect(s, f).toContain('useFixtureActionBlocked()')
+    }
   })
   test('H8 / U7: không có nút / action xoá, huỷ chương trình, về nháp, tạm dừng', () => {
     for (const f of cmsFiles) {
@@ -151,6 +163,8 @@ test.describe('CMS P1-c · kiểm tĩnh @desktop', () => {
   test('CampaignsTabs: tab CMS độc lập cờ Affiliate; không cờ nào ⇒ null như cũ', () => {
     const s = fs.readFileSync(path.join(ROOT, 'components/kpi/CampaignsTabs.tsx'), 'utf8')
     expect(s).toContain('if (!affiliateEnabled && !cmsEnabled) return null')
-    expect(s).toContain("...(cmsEnabled ? [{ key: 'cms' as const, label: 'CMS sản phẩm', href: '/targets/campaigns/cms' }] : [])")
+    expect(s).toContain("...(cmsEnabled ? [{ key: 'cms' as const, label: 'CMS sản phẩm', href: hrefs?.cms ?? '/targets/campaigns/cms' }] : [])")
+    // CMS-UI-1: `hrefs` chỉ fixture truyền (giữ demo trong catalog); route thật không truyền ⇒ href cũ.
+    expect(s).toContain("href: hrefs?.campaigns ?? '/targets/campaigns'")
   })
 })

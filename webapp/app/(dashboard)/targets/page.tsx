@@ -181,8 +181,8 @@ export default async function TargetsPage({
   searchParams,
 }: {
   // Mig 106: series = chuỗi chart của campaign Chất lượng bán hàng (?series=).
-  // CMS P1-d: tab=cms (+ program=) — chỉ staff / QLCH khi cờ CMS bật.
-  searchParams: Promise<{ period?: string; campaign?: string; store?: string; series?: string; from?: string; to?: string; tab?: string; program?: string }>
+  // CMS P1-d: tab=cms (+ program=) — chỉ staff / QLCH khi cờ CMS bật. P2-c: f= bộ lọc thẻ SP (all | met | unmet).
+  searchParams: Promise<{ period?: string; campaign?: string; store?: string; series?: string; from?: string; to?: string; tab?: string; program?: string; f?: string }>
 }) {
   const params = await searchParams
   const period = parsePeriod(params.period)
@@ -211,7 +211,7 @@ export default async function TargetsPage({
   // QLCH + cờ KPI campaign OFF ⇒ `/targets` chuyển /tasks (bên dưới) ⇒ D1 không segmented (không link KPI chết).
   const cmsStaff = isCmsProgramEnabled() && (isStaff || isStoreMgr)
   if (cmsStaff && params.tab === 'cms') {
-    return <CmsStaffCatalogPage storeId={profile?.store_id ?? null} programId={params.program ?? null} manager={isStoreMgr} kpiTab={isStaff || campaignEnabled} />
+    return <CmsStaffCatalogPage storeId={profile?.store_id ?? null} programId={params.program ?? null} manager={isStoreMgr} kpiTab={isStaff || campaignEnabled} filter={params.f ?? null} />
   }
   const cmsSegment = cmsStaff ? <CmsTargetsSegment active="kpi" /> : undefined
 

@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<title>Admin · Hiệu quả chương trình CMS · Theo sản phẩm</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0}
+</style>
+</helmet>
+<div ref="{{setRoot}}" style="font-family: 'Be Vietnam Pro', system-ui, sans-serif; background: {{t.bg}}; color: {{t.text}}; font-size: 14px; line-height: 1.5; min-height: 100%">
+<div style="max-width: 1320px; margin: 0 auto; padding: {{L.pad}}; display: flex; flex-direction: column; gap: 20px">
+
+<div style="display: flex; flex-direction: column; gap: 8px">
+<a href="AdminPrograms.dc.html" style="align-self: flex-start; min-height: 44px; display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 500; color: {{t.text2}}; text-decoration: none">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="m15 18-6-6 6-6"></path></svg>
+CMS sản phẩm</a>
+<div style="display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-start; justify-content: space-between">
+<div style="display: flex; flex-direction: column; gap: 8px; flex: 1 1 520px; min-width: 0">
+<span style="align-self: flex-start; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 6px; background: {{t.okBg}}; color: {{t.ok}}">Đang chạy</span>
+<h1 style="margin: 0; font-size: {{L.h1}}; line-height: 1.3; font-weight: 700; letter-spacing: -0.01em; text-wrap: balance">Chương trình CMS Vitamin &amp; khoáng chất mùa lạnh — tăng tư vấn sản phẩm tăng đề kháng cho khách gia đình (đợt 2)</h1>
+<p style="margin: 0; font-size: 13px; color: {{t.text2}}">01/11 – 30/11/2026 · còn 16 ngày · Tất cả nhà thuốc OS (25) · 4 sản phẩm · Target nhóm danh mục 50.000.000₫ / dược sĩ</p>
+</div>
+<div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; flex: 0 1 300px; min-width: 260px">
+<a href="AdminImport.dc.html" style="height: 44px; padding: 0 14px; border-radius: 10px; border: 1px solid {{t.line}}; background: {{t.panel}}; color: {{t.text}}; font-size: 14px; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; justify-content: center; gap: 8px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 20h16"></path></svg>
+Import bổ sung</a>
+<button type="button" style="height: 44px; padding: 0 14px; border-radius: 10px; border: 1px solid {{t.line}}; background: {{t.panel}}; color: {{t.text}}; font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M12 4v12m0 0-4-4m4 4 4-4M4 20h16"></path></svg>
+Xuất Excel</button>
+</div>
+</div>
+</div>
+
+<div style="display: flex; flex-direction: column; gap: 10px">
+<span style="font-size: 12px; color: {{t.text2}}">Số liệu cập nhật 15/11/2026 08:05 · tạm tính, chưa chốt kỳ</span>
+<div style="display: grid; grid-template-columns: {{L.tiles}}; gap: 12px">
+<sc-for list="{{tiles}}" as="s" hint-placeholder-count="4">
+<div style="background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 14px; padding: 14px 16px; display: flex; flex-direction: column; gap: 4px; min-width: 0">
+<span style="font-size: 12px; color: {{t.text2}}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{s.label}}</span>
+<strong style="font-size: {{L.num}}; font-weight: 700; letter-spacing: -0.01em; line-height: 1.2; font-variant-numeric: tabular-nums">{{s.value}}</strong>
+<span style="font-size: 12px; color: {{t.text2}}">{{s.sub}}</span>
+</div>
+</sc-for>
+</div>
+</div>
+
+<div style="background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 14px; padding: 14px 16px; display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: center">
+<div style="display: flex; flex-direction: column; flex: 1 1 260px; min-width: 0">
+<strong style="font-size: 14px">Nhóm theo danh mục · target 50.000.000₫ / dược sĩ</strong>
+<span style="font-size: 12px; color: {{t.text2}}">Sản phẩm mẫu 2</span>
+</div>
+<div style="flex: 2 1 280px; display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; justify-content: space-between; font-size: 12px"><span>1 / 2 dược sĩ có bán đã đạt</span><strong>50%</strong></div>
+<div role="progressbar" aria-label="Dược sĩ đạt target nhóm danh mục" aria-valuemin="0" aria-valuemax="2" aria-valuenow="1" style="height: 6px; border-radius: 3px; background: {{t.muted}}; overflow: hidden"><div style="height: 6px; width: 50%; background: {{t.ok}}"></div></div>
+</div>
+</div>
+
+<div style="display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center; justify-content: space-between">
+<nav aria-label="Góc nhìn" style="display: flex; gap: 4px; padding: 4px; border-radius: 12px; background: {{t.muted}}; overflow-x: auto; max-width: 100%">
+<a href="#" aria-current="page" style="height: 36px; padding: 0 12px; border-radius: 9px; background: {{t.panel}}; color: {{t.text}}; font-size: 13px; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; white-space: nowrap">Theo sản phẩm (4)</a>
+<a href="#" style="height: 36px; padding: 0 12px; border-radius: 9px; color: {{t.text2}}; font-size: 13px; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; white-space: nowrap">Theo dược sĩ (4)</a>
+<a href="#" style="height: 36px; padding: 0 12px; border-radius: 9px; color: {{t.text2}}; font-size: 13px; font-weight: 600; text-decoration: none; display: inline-flex; align-items: center; white-space: nowrap">Lịch sử import (2)</a>
+</nav>
+<ul aria-label="Chú giải phân bố số lượng" style="list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; color: {{t.text2}}">
+<li style="display: inline-flex; gap: 6px; align-items: center"><span style="width: 12px; height: 12px; border-radius: 3px; background: {{t.tier1}}"></span>Bậc 1</li>
+<li style="display: inline-flex; gap: 6px; align-items: center"><span style="width: 12px; height: 12px; border-radius: 3px; background: {{t.tier2}}"></span>Bậc 2</li>
+<li style="display: inline-flex; gap: 6px; align-items: center"><span style="width: 12px; height: 12px; border-radius: 3px; background: {{t.tier3}}"></span>Bậc 3</li>
+<li style="display: inline-flex; gap: 6px; align-items: center"><span style="width: 12px; height: 12px; border-radius: 3px; background: {{t.excl}}; border: 1px solid {{t.line}}"></span>Không tính CMS</li>
+</ul>
+</div>
+
+<section aria-label="Hiệu quả theo sản phẩm" style="background: {{t.panel}}; border: 1px solid {{t.line}}; border-radius: 16px; overflow: hidden">
+
+<sc-if value="{{wide}}" hint-placeholder-val="{{ true }}">
+<div role="row" style="display: grid; grid-template-columns: {{L.row}}; gap: 12px; padding: 10px 16px; background: {{t.muted}}; color: {{t.text2}}; font-size: 12px; font-weight: 600; align-items: end">
+<span role="columnheader">Sản phẩm</span>
+<span role="columnheader">Điều kiện</span>
+<span role="columnheader" style="text-align: right">SL bán</span>
+<span role="columnheader" style="text-align: right">GMV</span>
+<span role="columnheader" style="text-align: center">Dược sĩ đạt</span>
+<span role="columnheader">Phân bố SL theo bậc</span>
+<span role="columnheader" style="text-align: right">CMS tạm tính</span>
+<span role="columnheader"><span style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0)">Mở rộng</span></span>
+</div>
+</sc-if>
+
+<sc-for list="{{products}}" as="p" hint-placeholder-count="4">
+<div style="border-top: 1px solid {{t.line}}">
+
+<sc-if value="{{wide}}" hint-placeholder-val="{{ true }}">
+<div role="row" style="display: grid; grid-template-columns: {{L.row}}; gap: 12px; padding: 12px 16px; align-items: center; background: {{p.rowBg}}">
+<div role="cell" style="display: flex; gap: 12px; align-items: center; min-width: 0">
+<span aria-hidden="true" style="width: 40px; height: 40px; flex: none; border-radius: 10px; background: {{t.muted}}; color: {{t.text2}}; font-weight: 700; display: flex; align-items: center; justify-content: center">{{p.initial}}</span>
+<span style="display: flex; flex-direction: column; gap: 2px; min-width: 0">
+<strong title="{{p.name}}" style="font-size: 14px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden">{{p.name}}</strong>
+<span style="font-size: 12px; color: {{t.text2}}">{{p.id}} · tính theo {{p.unit}}</span>
+<sc-if value="{{p.late}}" hint-placeholder-val="{{ false }}"><span style="align-self: flex-start; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 5px; background: {{t.infoBg}}; color: {{t.info}}">Áp dụng từ {{p.from}}</span></sc-if>
+</span>
+</div>
+<div role="cell" style="display: flex; flex-direction: column; gap: 4px; align-items: flex-start; min-width: 0">
+<span style="font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 5px; background: {{p.gBg}}; color: {{p.gFg}}; white-space: nowrap">{{p.gate}}</span>
+<span style="font-size: 12px; color: {{t.text2}}">{{p.gateSub}}</span>
+</div>
+<div role="cell" style="text-align: right; display: flex; flex-direction: column">
+<span style="font-weight: 600; font-variant-numeric: tabular-nums">{{p.qty}} {{p.unit}}</span>
+<span style="font-size: 12px; color: {{t.text2}}">{{p.counted}} tính CMS</span>
+</div>
+<span role="cell" style="text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap">{{p.gmv}}</span>
+<div role="cell" style="text-align: center; display: flex; flex-direction: column">
+<span style="font-weight: 600; font-variant-numeric: tabular-nums">{{p.pass}}</span>
+<span style="font-size: 12px; color: {{t.text2}}">đạt / có bán</span>
+</div>
+<div role="cell" style="display: flex; flex-direction: column; gap: 6px; min-width: 0">
+<span role="img" aria-label="{{p.barLabel}}" style="display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: {{t.muted}}">
+<sc-for list="{{p.segs}}" as="g" hint-placeholder-count="3"><span style="display: block; height: 10px; width: {{g.w}}; background: {{g.c}}"></span></sc-for>
+</span>
+<span style="font-size: 12px; color: {{t.text2}}; font-variant-numeric: tabular-nums">{{p.barText}}</span>
+</div>
+<strong role="cell" style="text-align: right; font-size: 15px; white-space: nowrap; font-variant-numeric: tabular-nums; color: {{p.cmsFg}}">{{p.cms}}</strong>
+<span role="cell" style="display: flex; justify-content: flex-end">
+<button type="button" onClick="{{p.toggle}}" aria-expanded="{{p.expanded}}" aria-label="{{p.toggleLabel}}" style="width: 44px; height: 44px; border-radius: 10px; border: 1px solid {{t.line}}; background: {{t.panel}}; color: {{t.text}}; cursor: pointer; display: inline-flex; align-items: center; justify-content: center">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" style="transform: {{p.rot}}"><path d="m6 9 6 6 6-6"></path></svg>
+</button>
+</span>
+</div>
+</sc-if>
+
+<sc-if value="{{compact}}" hint-placeholder-val="{{ false }}">
+<div style="padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; background: {{p.rowBg}}">
+<div style="display: flex; gap: 12px; align-items: flex-start">
+<span aria-hidden="true" style="width: 40px; height: 40px; flex: none; border-radius: 10px; background: {{t.muted}}; color: {{t.text2}}; font-weight: 700; display: flex; align-items: center; justify-content: center">{{p.initial}}</span>
+<span style="flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px">
+<strong title="{{p.name}}" style="font-size: 14px; line-height: 1.35; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden">{{p.name}}</strong>
+<span style="font-size: 12px; color: {{t.text2}}">{{p.id}} · tính theo {{p.unit}}</span>
+</span>
+<span style="display: flex; flex-direction: column; align-items: flex-end">
+<strong style="font-size: 15px; white-space: nowrap; font-variant-numeric: tabular-nums; color: {{p.cmsFg}}">{{p.cms}}</strong>
+<span style="font-size: 11px; color: {{t.text2}}">CMS tạm tính</span>
+</span>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center">
+<span style="font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 5px; background: {{p.gBg}}; color: {{p.gFg}}">{{p.gate}}</span>
+<span style="font-size: 12px; color: {{t.text2}}">{{p.gateSub}}</span>
+<sc-if value="{{p.late}}" hint-placeholder-val="{{ false }}"><span style="font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 5px; background: {{t.infoBg}}; color: {{t.info}}">Áp dụng từ {{p.from}}</span></sc-if>
+</div>
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; font-size: 12px; color: {{t.text2}}">
+<span style="display: flex; flex-direction: column"><strong style="font-size: 14px; color: {{t.text}}; font-variant-numeric: tabular-nums">{{p.qty}} {{p.unit}}</strong>{{p.counted}} tính CMS</span>
+<span style="display: flex; flex-direction: column"><strong style="font-size: 14px; color: {{t.text}}; font-variant-numeric: tabular-nums">{{p.gmvShort}}</strong>GMV</span>
+<span style="display: flex; flex-direction: column"><strong style="font-size: 14px; color: {{t.text}}; font-variant-numeric: tabular-nums">{{p.pass}}</strong>dược sĩ đạt</span>
+</div>
+<span role="img" aria-label="{{p.barLabel}}" style="display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: {{t.muted}}">
+<sc-for list="{{p.segs}}" as="g" hint-placeholder-count="3"><span style="display: block; height: 10px; width: {{g.w}}; background: {{g.c}}"></span></sc-for>
+</span>
+<span style="font-size: 12px; color: {{t.text2}}">{{p.barText}}</span>
+<button type="button" onClick="{{p.toggle}}" aria-expanded="{{p.expanded}}" style="height: 44px; border-radius: 10px; border: 1px solid {{t.line}}; background: {{t.panel}}; color: {{t.text}}; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; gap: 8px">{{p.toggleText}}
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" style="transform: {{p.rot}}"><path d="m6 9 6 6 6-6"></path></svg>
+</button>
+</div>
+</sc-if>
+
+<sc-if value="{{p.open}}" hint-placeholder-val="{{ false }}">
+<div style="padding: {{L.panelPad}}; background: {{p.rowBg}}">
+<div style="background: {{t.bg}}; border: 1px solid {{t.line}}; border-radius: 12px; overflow: hidden">
+
+<div style="padding: 12px 14px; display: flex; flex-wrap: wrap; gap: 10px 24px; align-items: center; border-bottom: 1px solid {{t.line}}; font-size: 12px">
+<div style="display: flex; flex-wrap: wrap; gap: 6px; align-items: center">
+<span style="color: {{t.text2}}">Thang bậc</span>
+<sc-for list="{{p.tiers}}" as="r" hint-placeholder-count="3">
+<span style="padding: 3px 8px; border-radius: 7px; border: 1px solid {{t.line}}; white-space: nowrap; font-variant-numeric: tabular-nums">{{r.range}} · <strong>{{r.rate}}</strong></span>
+</sc-for>
+<sc-if value="{{p.hasCap}}" hint-placeholder-val="{{ false }}"><span style="padding: 3px 8px; border-radius: 7px; background: {{t.warnBg}}; color: {{t.warn}}; font-weight: 600; white-space: nowrap">Trần {{p.cap}} / dược sĩ</span></sc-if>
+</div>
+<span style="color: {{t.text2}}">{{p.targetLine}}</span>
+<span style="color: {{t.text2}}">Quy đổi: {{p.convert}}</span>
+<span style="color: {{t.text2}}">Áp dụng từ {{p.fromLong}}</span>
+<button type="button" onClick="{{p.toggleAdvice}}" aria-expanded="{{p.adviceExpanded}}" style="margin-left: auto; height: 36px; padding: 0 10px; border-radius: 8px; border: 1px solid {{t.line}}; background: {{t.panel}}; color: {{t.text}}; font: inherit; font-size: 12px; font-weight: 600; cursor: pointer">{{p.adviceBtn}}</button>
+</div>
+
+<sc-if value="{{p.adviceOpen}}" hint-placeholder-val="{{ false }}">
+<div style="padding: 12px 14px; border-bottom: 1px solid {{t.line}}; display: flex; flex-direction: column; gap: 6px">
+<span style="align-self: flex-start; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 5px; background: {{t.infoBg}}; color: {{t.info}}">Nội dung tư vấn · đã kiểm duyệt</span>
+<p style="margin: 0; font-size: 13px; line-height: 1.6; white-space: pre-line; max-width: 80ch">{{p.advice}}</p>
+</div>
+</sc-if>
+
+<sc-if value="{{wide}}" hint-placeholder-val="{{ true }}">
+<div role="table" aria-label="{{p.tableLabel}}">
+<div role="row" style="display: grid; grid-template-columns: {{L.staff}}; gap: 12px; padding: 8px 14px; color: {{t.text2}}; font-size: 12px; font-weight: 600; border-bottom: 1px solid {{t.line}}">
+<span role="columnheader">Dược sĩ · nhà thuốc</span>
+<span role="columnheader" style="text-align: right">SL</span>
+<span role="columnheader">{{p.gmvHead}}</span>
+<span role="columnheader">Trạng thái</span>
+<span role="columnheader" style="text-align: right">CMS</span>
+</div>
+<sc-for list="{{p.staff}}" as="d" hint-placeholder-count="4">
+<div role="row" style="display: grid; grid-template-columns: {{L.staff}}; gap: 12px; padding: 10px 14px; border-top: 1px solid {{t.line}}; align-items: center">
+<span role="cell" style="display: flex; flex-direction: column; min-width: 0">
+<span title="{{d.name}}" style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{d.name}}</span>
+<span title="{{d.store}}" style="font-size: 12px; color: {{t.text2}}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{d.store}}</span>
+</span>
+<span role="cell" style="text-align: right; display: flex; flex-direction: column; font-variant-numeric: tabular-nums">
+<span>{{d.qty}}</span>
+<sc-if value="{{d.hasQtyNote}}" hint-placeholder-val="{{ false }}"><span style="font-size: 11px; color: {{t.text2}}">{{d.qtyNote}}</span></sc-if>
+</span>
+<span role="cell" style="display: flex; align-items: center; gap: 10px; min-width: 0">
+<span style="font-variant-numeric: tabular-nums; white-space: nowrap; min-width: 108px">{{d.gmv}}</span>
+<sc-if value="{{d.hasBar}}" hint-placeholder-val="{{ true }}">
+<span role="img" aria-label="{{d.pctLabel}}" style="flex: 1; min-width: 48px; height: 6px; border-radius: 3px; background: {{t.muted}}; overflow: hidden; display: block"><span style="display: block; height: 6px; width: {{d.pctW}}; background: {{d.bar}}"></span></span>
+<span style="font-size: 12px; color: {{t.text2}}; min-width: 40px; text-align: right; font-variant-numeric: tabular-nums">{{d.pct}}</span>
+</sc-if>
+<sc-if value="{{d.noBar}}" hint-placeholder-val="{{ false }}"><span style="font-size: 12px; color: {{t.text2}}">{{d.gmvNote}}</span></sc-if>
+</span>
+<span role="cell"><span style="font-size: 12px; font-weight: 600; padding: 3px 8px; border-radius: 6px; background: {{d.sBg}}; color: {{d.sFg}}; white-space: nowrap">{{d.status}}</span></span>
+<span role="cell" style="text-align: right; font-weight: 700; white-space: nowrap; font-variant-numeric: tabular-nums; color: {{d.cmsFg}}">{{d.cms}}</span>
+</div>
+</sc-for>
+<div role="row" style="display: grid; grid-template-columns: {{L.staff}}; gap: 12px; padding: 10px 14px; border-top: 1px solid {{t.line}}; background: {{t.muted}}; font-weight: 700; align-items: center">
+<span role="cell">Tổng · {{p.staffCount}} dược sĩ</span>
+<span role="cell" style="text-align: right; font-variant-numeric: tabular-nums">{{p.qty}}</span>
+<span role="cell" style="font-variant-numeric: tabular-nums">{{p.gmv}}</span>
+<span role="cell"></span>
+<span role="cell" style="text-align: right; font-variant-numeric: tabular-nums">{{p.cms}}</span>
+</div>
+</div>
+</sc-if>
+
+<sc-if value="{{compact}}" hint-placeholder-val="{{ false }}">
+<ul aria-label="{{p.tableLabel}}" style="list-style: none; margin: 0; padding: 0">
+<sc-for list="{{p.staff}}" as="d" hint-placeholder-count="4">
+<li style="padding: 12px 14px; border-top: 1px solid {{t.line}}; display: flex; flex-direction: column; gap: 6px">
+<div style="display: flex; justify-content: space-between; gap: 10px; align-items: flex-start">
+<span style="display: flex; flex-direction: column; min-width: 0">
+<span style="font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{d.name}}</span>
+<span style="font-size: 12px; color: {{t.text2}}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis">{{d.store}}</span>
+</span>
+<strong style="white-space: nowrap; font-variant-numeric: tabular-nums; color: {{d.cmsFg}}">{{d.cms}}</strong>
+</div>
+<div style="display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; font-size: 12px; color: {{t.text2}}">
+<span style="font-size: 12px; font-weight: 600; padding: 2px 7px; border-radius: 6px; background: {{d.sBg}}; color: {{d.sFg}}">{{d.status}}</span>
+<span style="font-variant-numeric: tabular-nums">{{d.qty}} {{p.unit}} · {{d.gmv}}</span>
+</div>
+<sc-if value="{{d.hasBar}}" hint-placeholder-val="{{ true }}">
+<span style="display: flex; align-items: center; gap: 8px">
+<span role="img" aria-label="{{d.pctLabel}}" style="flex: 1; height: 6px; border-radius: 3px; background: {{t.muted}}; overflow: hidden; display: block"><span style="display: block; height: 6px; width: {{d.pctW}}; background: {{d.bar}}"></span></span>
+<span style="font-size: 12px; color: {{t.text2}}; font-variant-numeric: tabular-nums">{{d.pct}}</span>
+</span>
+</sc-if>
+</li>
+</sc-for>
+<li style="padding: 12px 14px; border-top: 1px solid {{t.line}}; background: {{t.muted}}; display: flex; justify-content: space-between; font-weight: 700"><span>Tổng · {{p.staffCount}} dược sĩ</span><span style="font-variant-numeric: tabular-nums">{{p.cms}}</span></li>
+</ul>
+</sc-if>
+
+<div style="padding: 10px 14px; border-top: 1px solid {{t.line}}; display: flex; flex-wrap: wrap; gap: 6px 16px; justify-content: space-between; align-items: center; font-size: 12px">
+<span style="display: inline-flex; gap: 8px; align-items: center; color: {{t.text2}}"><span style="width: 12px; height: 12px; flex: none; border-radius: 3px; background: {{t.excl}}; border: 1px solid {{t.line}}"></span>{{p.note}}</span>
+<a href="#" style="min-height: 36px; display: inline-flex; align-items: center; font-weight: 600; color: {{t.link}}">Xem ở tab Theo dược sĩ</a>
+</div>
+
+</div>
+</div>
+</sc-if>
+
+</div>
+</sc-for>
+</section>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"theme":{"editor":"enum","options":["dark","light"],"default":"dark"},"$preview":{"width":1440,"height":1560}}'>
+class Component extends DCLogic {
+  constructor(p) {
+    super(p);
+    this.state = {w: 1440, open: {'900001': true}, advice: {}};
+    this.setRoot = (el) => {
+      if (!el || this._ro || typeof ResizeObserver === 'undefined') return;
+      this._ro = new ResizeObserver((entries) => {
+        const w = Math.round(entries[0].contentRect.width);
+        if (Math.abs(w - this.state.w) > 4) this.setState({w});
+      });
+      this._ro.observe(el);
+    };
+  }
+  componentWillUnmount() { if (this._ro) this._ro.disconnect(); }
+  renderVals() {
+    const P = {
+      light: {bg:'#F7F6F4',panel:'#FFFFFF',muted:'#F1F0EE',line:'#E7E5E4',text:'#1C1917',text2:'#57534E',link:'#C94A16',
+        tier1:'#F6C2A9',tier2:'#E8622A',tier3:'#9A3410',excl:'repeating-linear-gradient(135deg, #A8A29E 0 2px, transparent 2px 5px)',
+        info:'#1F5A8F',infoBg:'#E5F0FA',ok:'#1D6B3A',okBg:'#E3F4E8',warn:'#7A4D00',warnBg:'#FCF1D6',neu:'#57534E',neuBg:'#F1F0EE',accentSoft:'#FFF1EA',okBar:'#2F9E5B',series:'#E8622A',openBg:'#FBFAF9'},
+      dark: {bg:'#121110',panel:'#1A1817',muted:'#24211F',line:'#2E2A27',text:'#F5F5F4',text2:'#A8A29E',link:'#F3743F',
+        tier1:'#6B3A24',tier2:'#F3743F',tier3:'#FBD9C6',excl:'repeating-linear-gradient(135deg, #78716C 0 2px, transparent 2px 5px)',
+        info:'#9DC6EF',infoBg:'#16243A',ok:'#8FD6A2',okBg:'#15291C',warn:'#EBC170',warnBg:'#2E2412',neu:'#A8A29E',neuBg:'#24211F',accentSoft:'#2A1E17',okBar:'#5BBF7E',series:'#F3743F',openBg:'#1E1C1A'}
+    };
+    const t = P[this.props.theme === 'light' ? 'light' : 'dark'];
+    const compact = this.state.w < 900;
+    const L = compact
+      ? {pad: '16px 16px 48px', h1: '19px', num: '22px', tiles: 'repeat(2, minmax(0, 1fr))', panelPad: '0 12px 14px'}
+      : {pad: '28px 32px 64px', h1: '24px', num: '28px', tiles: 'repeat(4, minmax(0, 1fr))', panelPad: '0 16px 16px 68px',
+         row: 'minmax(220px, 2.4fr) minmax(130px, 1.2fr) 96px 128px 92px minmax(170px, 1.6fr) 120px 44px',
+         staff: 'minmax(200px, 1.8fr) 72px minmax(240px, 2fr) 170px 110px'};
+    const gateTone = {sp: [t.infoBg, t.info], cat: [t.accentSoft, t.text], qty: [t.neuBg, t.neu]};
+    const st = {
+      ok: (s) => ({status: s, sBg: t.okBg, sFg: t.ok}),
+      no: (s) => ({status: s, sBg: t.neuBg, sFg: t.neu}),
+      cap: (s) => ({status: s, sBg: t.warnBg, sFg: t.warn})
+    };
+    const advice = 'Hỏi nhu cầu và đối tượng dùng.\nLiều theo hướng dẫn trên nhãn.\nNhắc khách đọc kỹ hướng dẫn sử dụng trước khi dùng.';
+    const raw = [
+      {id: '900001', name: 'Viên uống vitamin C 1000mg hộp 30 viên — tên rất dài để kiểm tra xuống dòng trong khung', unit: 'hộp', g: 'sp', gate: 'Target SP', gateSub: '10.000.000₫ / dược sĩ',
+        targetLine: 'Target GMV 10.000.000₫ / dược sĩ', convert: '1 hộp = 30 đơn vị cơ sở', from: '01/11', fromLong: '01/11 (đầu kỳ)', late: false,
+        tiers: [['1–9', '15.000₫'], ['10–19', '20.000₫'], ['20+', '25.000₫']], hasCap: false, cap: '',
+        qty: '70', counted: '67', gmv: '61.200.000₫', gmvShort: '61,2tr', pass: '3/4', segs: [27, 25, 15], excl: 3, cms: '1.280.000₫', zero: false,
+        barText: 'B1 27 · B2 25 · B3 15 · không tính 3', note: 'Không tính 3 hộp: 1 dược sĩ chưa đạt target.', gmvHead: 'GMV so với target 10tr',
+        staff: [
+          {name: 'Dược sĩ mẫu D', store: 'Nhà thuốc mẫu 02 — tên dài để kiểm tra xuống dòng', qty: '28', gmv: '25.000.000₫', pct: 250, s: st.ok('Bậc 3 · 25.000₫'), cms: '560.000₫'},
+          {name: 'Dược sĩ mẫu B', store: 'Nhà thuốc mẫu 01', qty: '25', gmv: '21.000.000₫', pct: 210, s: st.ok('Bậc 3 · 25.000₫'), cms: '485.000₫'},
+          {name: 'Dược sĩ mẫu A', store: 'Nhà thuốc mẫu 01', qty: '14', gmv: '12.500.000₫', pct: 125, s: st.ok('Bậc 2 · 20.000₫'), cms: '235.000₫'},
+          {name: 'Dược sĩ mẫu C — tên rất dài để kiểm tra cắt dòng', store: 'Nhà thuốc mẫu 01', qty: '3', gmv: '2.700.000₫', pct: 27, s: st.no('Chưa đạt · thiếu 7,3tr'), cms: '0₫'}
+        ]},
+      {id: '900002', name: 'Sản phẩm mẫu 2', unit: 'chai', g: 'cat', gate: 'Nhóm danh mục', gateSub: '50.000.000₫ / dược sĩ',
+        targetLine: 'Target nhóm danh mục 50.000.000₫ / dược sĩ (cộng GMV các SP trong nhóm)', convert: '1 chai = 1 đơn vị cơ sở', from: '01/11', fromLong: '01/11 (đầu kỳ)', late: false,
+        tiers: [['1+', '8.000₫']], hasCap: false, cap: '',
+        qty: '27', counted: '20', gmv: '2.160.000₫', gmvShort: '2,16tr', pass: '1/2', segs: [20], excl: 7, cms: '160.000₫', zero: false,
+        barText: 'B1 20 · không tính 7', note: 'Không tính 7 chai: 1 dược sĩ chưa đạt target nhóm danh mục.', gmvHead: 'GMV sản phẩm · nhóm danh mục',
+        staff: [
+          {name: 'Dược sĩ mẫu D', store: 'Nhà thuốc mẫu 02 — tên dài để kiểm tra xuống dòng', qty: '20', gmv: '1.600.000₫', gmvNote: 'Nhóm danh mục: đạt', s: st.ok('Bậc 1 · 8.000₫'), cms: '160.000₫'},
+          {name: 'Dược sĩ mẫu A', store: 'Nhà thuốc mẫu 01', qty: '7', gmv: '560.000₫', gmvNote: 'Nhóm danh mục: chưa đạt', s: st.no('Chưa đạt nhóm'), cms: '0₫'}
+        ]},
+      {id: '900003', name: 'Sản phẩm mẫu 3', unit: 'vỉ', g: 'qty', gate: 'Không target', gateSub: 'Tính từ SP đầu tiên',
+        targetLine: 'Không target — tính theo số lượng', convert: '1 vỉ = 10 đơn vị cơ sở', from: '01/11', fromLong: '01/11 (đầu kỳ)', late: false,
+        tiers: [['1–50', '5.000₫']], hasCap: true, cap: '50 vỉ',
+        qty: '97,5', counted: '87', gmv: '4.875.000₫', gmvShort: '4,88tr', pass: '3/3', segs: [87], excl: 10.5, cms: '435.000₫', zero: false,
+        barText: 'B1 87 · không tính 10,5', note: 'Không tính 10,5 vỉ: vượt trần 50 vỉ (10 vỉ) · phần lẻ chưa đủ 1 vỉ (0,5 vỉ).', gmvHead: 'GMV sản phẩm',
+        staff: [
+          {name: 'Dược sĩ mẫu B', store: 'Nhà thuốc mẫu 01', qty: '60', qtyNote: 'tính 50', gmv: '3.000.000₫', gmvNote: 'Không target', s: st.cap('Chạm trần 50 vỉ'), cms: '250.000₫'},
+          {name: 'Dược sĩ mẫu D', store: 'Nhà thuốc mẫu 02 — tên dài để kiểm tra xuống dòng', qty: '25', gmv: '1.250.000₫', gmvNote: 'Không target', s: st.ok('Bậc 1 · 5.000₫'), cms: '125.000₫'},
+          {name: 'Dược sĩ mẫu A', store: 'Nhà thuốc mẫu 01', qty: '12,5', qtyNote: 'tính 12', gmv: '625.000₫', gmvNote: 'Không target', s: st.ok('Bậc 1 · 5.000₫'), cms: '60.000₫'}
+        ]},
+      {id: '900004', name: 'Sản phẩm mẫu 4', unit: 'gói', g: 'sp', gate: 'Target SP', gateSub: '5.000.000₫ / dược sĩ',
+        targetLine: 'Target GMV 5.000.000₫ / dược sĩ', convert: '1 gói = 0,5 đơn vị cơ sở', from: '15/11', fromLong: '15/11 · bổ sung giữa kỳ, không tính đơn trước ngày này', late: true,
+        tiers: [['1–9', '15.000₫'], ['10–19', '20.000₫'], ['20+', '25.000₫']], hasCap: false, cap: '',
+        qty: '7', counted: '0', gmv: '4.200.000₫', gmvShort: '4,2tr', pass: '0/1', segs: [], excl: 7, cms: '0₫', zero: true,
+        barText: 'không tính 7', note: 'Không tính 7 gói: 1 dược sĩ chưa đạt target.', gmvHead: 'GMV so với target 5tr',
+        staff: [
+          {name: 'Dược sĩ mẫu A', store: 'Nhà thuốc mẫu 01', qty: '7', gmv: '4.200.000₫', pct: 84, s: st.no('Chưa đạt · thiếu 800k'), cms: '0₫'}
+        ]}
+    ];
+    const tierCol = [t.tier1, t.tier2, t.tier3];
+    const products = raw.map((p) => {
+      const total = p.segs.reduce((a, b) => a + b, 0) + p.excl;
+      const segs = p.segs.map((n, i) => ({w: (n / total * 100).toFixed(2) + '%', c: tierCol[i]}));
+      if (p.excl > 0) segs.push({w: (p.excl / total * 100).toFixed(2) + '%', c: t.excl});
+      const open = !!this.state.open[p.id];
+      const adviceOpen = !!this.state.advice[p.id];
+      const staff = p.staff.map((d) => {
+        const hasBar = typeof d.pct === 'number';
+        return {...d, ...d.s, hasBar, noBar: !hasBar, gmvNote: d.gmvNote || '',
+          pct: hasBar ? d.pct + '%' : '', pctW: hasBar ? Math.min(100, d.pct) + '%' : '0%',
+          pctLabel: hasBar ? 'Đạt ' + d.pct + '% target' : '',
+          bar: hasBar && d.pct >= 100 ? t.okBar : t.series,
+          hasQtyNote: !!d.qtyNote, qtyNote: d.qtyNote || '',
+          cmsFg: d.cms === '0₫' ? t.text2 : t.text};
+      });
+      return {...p, segs, staff, initial: p.name.charAt(0),
+        tiers: p.tiers.map(([range, rate]) => ({range, rate: rate + '/' + p.unit})),
+        gBg: gateTone[p.g][0], gFg: gateTone[p.g][1],
+        cmsFg: p.zero ? t.text2 : t.text,
+        barLabel: 'Phân bố số lượng: ' + p.barText + ' ' + p.unit,
+        rowBg: open ? t.openBg : t.panel,
+        open, expanded: open ? 'true' : 'false', rot: open ? 'rotate(180deg)' : 'none',
+        toggleLabel: (open ? 'Thu gọn ' : 'Xem dược sĩ bán ') + p.name,
+        toggleText: open ? 'Thu gọn' : 'Xem ' + p.staff.length + ' dược sĩ',
+        toggle: () => this.setState({open: {...this.state.open, [p.id]: !this.state.open[p.id]}}),
+        adviceOpen, adviceExpanded: adviceOpen ? 'true' : 'false', adviceBtn: adviceOpen ? 'Ẩn nội dung tư vấn' : 'Nội dung tư vấn', advice,
+        toggleAdvice: () => this.setState({advice: {...this.state.advice, [p.id]: !this.state.advice[p.id]}}),
+        staffCount: String(p.staff.length), tableLabel: 'Dược sĩ bán ' + p.name};
+    });
+    return {
+      t, L, compact, wide: !compact, products, setRoot: this.setRoot,
+      tiles: [
+        {label: 'CMS tạm tính', value: '1.875.000₫', sub: '3/4 sản phẩm có CMS'},
+        {label: 'GMV chương trình', value: '72.435.000₫', sub: 'đã trừ đơn trả / huỷ'},
+        {label: 'Dược sĩ có CMS', value: '3/5', sub: 'trên 5 dược sĩ trong phạm vi'},
+        {label: 'Lượt đạt điều kiện', value: '7/10', sub: 'lượt = dược sĩ × SP có bán'}
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

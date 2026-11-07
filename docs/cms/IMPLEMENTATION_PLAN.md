@@ -26,9 +26,14 @@
 | **P1-c** | A1/A2/A3 phần danh mục; tab CMS; loading/error/empty | `app/(dashboard)/targets/campaigns/cms/**`, `components/cms/admin/*`, `components/kpi/CampaignsTabs.tsx`, fixture `/ui-catalog/cms-v2` | Đúng trạng thái, đúng quyền, fixture bất khả ghi |
 | **P1-d** | D1/D2 danh mục; QLCH đọc danh mục; mobile | `app/(dashboard)/targets/page.tsx` (nhánh `tab=cms`), `app/(dashboard)/targets/cms/products/[programProductId]/*`, `components/cms/staff/*` | 360/390 light/dark, không lộ số thực tế chưa bật |
 | **P2-a** | Engine thuần, quy đổi, gate, lũy tiến, trần, phân bổ dòng | `lib/cms/engine/*`, `e2e/cms-engine.spec.ts` (nhánh `feat/cms-p2`) | Đúng từng số trong bảng AC và các ca số lẻ |
-| P2-b | Migration 122: snapshot nguồn/kết quả; stage/publish; sync và nhóm dữ liệu lỗi | — | **Chưa giao thực hiện** |
-| P2-c | D1/D2 có số, D3, A3 kết quả, QLCH/SM, export | — | **Chưa giao thực hiện** |
-| P3 | Payout, chốt kỳ, xuất chi trả và phát sinh sau chốt | — | HOLD Q-206/Q-213 |
+| **P2-b** (I1 + I2) | Migration 122: snapshot đầu vào / kết quả theo run, stage → seal → publish atomic qua pointer, RPC đọc theo phạm vi hiện tại; lõi đồng bộ bán + cron + script operator; cổng Q-206 | `supabase/migrations/122_cms_results.sql` + rollback, `lib/cms/{resultStage,salesSync,cronSales,releaseGate}.ts`, `lib/cms/server/salesSyncDeps.ts`, `app/api/cron/sync-cms-sales/route.ts`, `scripts/cms-sales-sync.mjs`, `scripts/qa-cms-122.mjs`, `e2e/cms-{122-pglite,sales-sync}.spec.ts` | **Giao 02/11** (kế hoạch tích hợp PM — `planning/research/cms-consolidated-implementation-plan-2026-11-02.md` §4–§5). PGlite + PG15 thật (race / quy mô), ACL 21 hàm, nguồn giả; chương trình thật chưa công bố tiền khi Q-206 HOLD |
+| **P2-c** (I3) | D1/D2 có số, D3, A1/A3 kết quả, QLCH/SM, export XLSX cùng `run_id`; log mã cố định ở `server/{catalog,staffCatalog}.ts` (PM 03/11 §3.2) | `lib/cms/{resultUi,queryLog,exportResults,fixturesResults}.ts`, `lib/cms/server/resultLoad.ts`, `components/cms/{staff,admin}/**`, `app/(dashboard)/targets/cms/history/*`, `app/api/export/cms/route.ts`, `/ui-catalog/cms-v2/*?p2=`, `e2e/{cms-p2c-unit,ui-v2-cms-p2c}.spec.ts` | **Giao 02/11** (kế hoạch tích hợp PM §6) — r1 Dev 03/11 chờ PM audit (SPEC §8.1 "Hiện thực P2-c"); fixture theo DTO 122, UI / XLSX / lịch sử lệch 0đ; cờ earnings OFF ⇒ P1 nguyên trạng |
+| P3a (I5) | Chốt kỳ + payout: migration 123 (đóng băng run, payout theo dược sĩ có định danh snapshot, policy DB, guard dữ liệu run / cấu hình / TRUNCATE / chỉ RPC ghi), action preview → xác nhận (`app/actions/cmsPayouts.ts`, lõi `lib/cms/lockAction.ts`), A3 khối Chốt kỳ / Số đã chốt, XLSX chi trả `GET /api/export/cms/payout`, VERIFY phase 123, công cụ QA chốt | `supabase/migrations/123_cms_payouts.sql` + rollback, `lib/cms/{payoutView,lockAction,exportPayouts}.ts`, `lib/cms/server/payouts.ts`, `components/cms/admin/Cms{Lock,Payout}Panel.tsx`, `scripts/qa-cms-123.mjs`, `e2e/cms-p3a-unit.spec.ts` | Local, cờ `CMS_LOCK_ENABLED` OFF. Chốt **thật** chặn tới khi Q-206 + Q-213 + Q-216 + hợp đồng nguồn đầy đủ + P3b (CMS-Q7) chốt; QA chốt `is_test` là vĩnh viễn (H8) |
+| P3b | Báo cáo phát sinh sau chốt (CMS-Q7) | — | Thiết kế chờ hợp đồng Q-206 |
+| **SALES-ONLY** (06/11) | Tách cổng công bố kết quả bán tạm tính khỏi trả hàng (DECISIONS §5): `releaseGate` SALES_ONLY_V1 + held điều chỉnh / nguồn qa, migration 126 (`cms__results_release_open` = true, publish chặn điều chỉnh đã seal + dấu `results_basis`) + rollback + VERIFY phase 126, ghi chú tạm tính A3 / hero / XLSX | `lib/cms/{releaseGate,salesSync,cronSales,exportResults,resultUi}.ts`, `components/cms/{admin/CmsProgramResults,staff/CmsStaffResults}.tsx`, `supabase/migrations/126_*` (sinh `scripts/gen-cms-126.mjs`), `scripts/qa-cms-126.mjs`, `e2e/cmsQaTooling.ts` | AC01–AC12 spec/plan PM 06/11 |
+| Trả hàng (phase sau) | Adapter nguồn trả + quy thuộc B1 người bán gốc / D1 kỳ ngày bán, mở `CMS_Q206_RETURNS_CONTRACT` | — | Chờ nguồn trả BI (A1) + batch riêng |
+
+Phát hành gộp (kế hoạch PM §10): không deploy theo từng batch; một candidate tích hợp + một cửa sổ migration 121 → 122 → 123 (P3a) → 124 → 125 → **126 (cổng kết quả bán tạm tính — thay "migration mở cổng Q-206", PM 06/11)** → QA → deploy → smoke. Trả hàng là phase sau.
 
 Phụ thuộc: PR-0 → (P0-a ∥ P1-a, sau khi khóa interface nguồn) → P1-b → (P1-c ∥ P1-d). P2-a độc lập khi dùng đúng contract đã chốt; P2-b phụ thuộc engine và nền DB. Không còn migration hoặc UI `users.employee_code` trong P0-a.
 
@@ -103,14 +108,14 @@ Bổ sung từ review PM:
 
 Ca bắt buộc (r2 §5.2):
 
-- Toàn bộ bảng số §2.9 nghiệp vụ (Q 9/10/11/14/20/25; trần 50 với Q 50/51/60).
+- Toàn bộ bảng số §2.9 nghiệp vụ (Q 9/10/11/14/20/25) + bảng CMS-Q-220 (Q 0/1/8/9/10/18/19/20/49/50/51/99/100/101/100.000; không trần — thay ca "trần 50" của Q-210a).
 - Gate thiếu 1đ, bằng target và vượt target.
 - Gate danh mục cộng nhiều sản phẩm.
 - Không target.
 - Hai lần nửa hộp bằng một hộp.
 - Cộng nhiều dòng lẻ rồi mới floor.
 - Một dòng đi qua hai bậc.
-- Vượt trần vẫn giữ GMV và lượng bán đầy đủ.
+- Trên mốc bậc cuối cũ (50 / 100) vẫn cộng mức bậc cuối; cấu hình bậc cuối hữu hạn ⇒ `FINITE_LAST_TIER` (CMS-Q-220).
 - Tổng tiền dòng bằng tổng dược sĩ × sản phẩm.
 - Cùng đầu vào, khác thứ tự nhận từ nguồn vẫn cho kết quả giống nhau.
 - Timestamp microsecond và tie-break bằng item ID.
@@ -120,7 +125,7 @@ Ca bắt buộc (r2 §5.2):
 
 Fixture điều chỉnh âm chỉ chứng minh số học trên sự kiện đã chuẩn hóa; không thay thế việc chốt quy thuộc trả hàng (Q-206).
 
-### 3.6. Tích hợp, quyền (áp dụng dần theo batch; phần P2 kiểm khi P2-b/c được giao)
+### 3.6. Tích hợp, quyền (áp dụng dần theo batch; P2-b/c đã giao 02/11 — ma trận chi tiết ở kế hoạch PM §9.2)
 
 - Staff A không đọc được số của staff B.
 - QLCH không có payout cá nhân trên tài khoản dùng chung.
@@ -193,6 +198,6 @@ Rollback P1: tắt `CMS_PROGRAM_ENABLED` (không cần rollback app/DB khi chưa
 | SA app 403 trên nguồn thô (01/11) | Chặn phát hành P1 (Product Master) và số đo P0 | Operator/BI cung cấp nguồn trong dataset SA được phép; không nới quyền SA trong batch |
 | Quy mô Product Master chưa biết | Thời gian/bytes cron P1 | Đo ở P0 khi có nguồn; pull đầy đủ, đọc đủ trang |
 | Điều kiện `item.created_date = o.created_date` | Có thể mất dòng thêm muộn | Kiểm chứng trước feed production (P0/P2) |
-| Q-206 chưa chốt | Chặn bật tiền thật | Engine chỉ số học sự kiện đã chuẩn hóa; không adapter trả hàng |
+| Q-206 chưa chốt | ~~Chặn bật tiền thật~~ Từ 06/11: chỉ chặn trả hàng / dòng điều chỉnh + chốt thật | Phase sales-only: run thật có dòng âm ⇒ held `RETURNS_NOT_SUPPORTED_THIS_PHASE` (app + DB 126); không adapter trả hàng |
 | RAM máy Dev thấp | Full gate dừng giữa chừng | Cần ≥ 4 GB trống trước full Playwright / build |
 | `/targets/page.tsx` lớn (842 dòng) | Rẽ nhánh `tab=cms` có thể kéo theo query KPI | Rẽ sớm sau auth/FS; test cờ OFF giữ query cũ |

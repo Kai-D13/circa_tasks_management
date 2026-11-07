@@ -2,15 +2,21 @@ import fs from 'node:fs'
 import net from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
-import { once } from 'node:events'
+import { EventEmitter, once } from 'node:events'
 import { execFileSync, spawnSync } from 'node:child_process'
 import { test, expect } from '@playwright/test'
 import { CMS_QA_MARKER, cmsWriteGate } from './writeQaGates'
 import {
+  CMS_QA_EXIT_GRACE_MS, CmsQaServerNotStoppedError, cmsQaServerExitCode, runCmsQaServerLifecycle,
   CMS_QA_GIT_STATUS_ARGS, CMS_QA_GUARD_MINUTES_MIN, CMS_QA_POLL_MS, CMS_QA_TICK_MS, cmsQaTreeState, createCmsQaWatchdog,
   parseCmsQaGuardMinutes, startCmsQaWatchdogLoop,
   CMS_QA_GRANTED_BY, assertCmsQaProgramIds, cmsQaAckWarnings, cmsQaCloseCheck, cmsQaGrantSql, cmsQaManifestAddProgram, cmsQaPreflight,
   cmsQaRevokeSql, cmsQaStatusSql, cmsQaWatchdog, cmsVerifyV8Sql, evaluateCmsV8, maskCmsUuid, newCmsQaManifest, parseCmsQaManifest,
+  CMS_VERIFY_PHASES, CMS_PHASE_FUNCTIONS, CMS_FN_MATRIX, CMS_FN_DEF_122, CMS_COL_122, CMS_TABLE_SHAPE_122, cmsFnCountBefore,
+  CMS_FN_DEF_123, CMS_COL_123, CMS_TABLE_SHAPE_123, CMS_TRIGGERS_123, CMS_FN_SRC_123, CMS_TABLES_FROZEN_123, CMS_V8_PHASES, CMS_V8_RPC_CALLABLE,
+  CMS_FN_DEF_124, CMS_COL_124, CMS_TABLE_SHAPE_124, CMS_TRIGGERS_124, CMS_FN_SRC_124, CMS_FN_CFG_124,
+  CMS_FN_DEF_125, CMS_COL_125, CMS_TABLE_SHAPE_125, CMS_TRIGGERS_125, CMS_FN_SRC_125, CMS_FN_SRC_126,
+  cmsVerifyAclSql, cmsVerifyV8Sql123, cmsV8ProvenKeys, cmsPostProvenKeys, CMS_VERIFY_SQL, CMS_PAYOUT_KEYS_TOP, CMS_PAYOUT_KEYS_TOP_SUPER, CMS_PAYOUT_KEYS_ROW,
   parseCmsQaTtlHours, parseCmsQaUserIds, pgMetaReadOnly, pgMetaReadOnlySnapshot, pgMetaWrite, toIsoUtc, type CmsQaProgramRow,
   type CmsQaStatusRow, type CmsV8Role,
 } from './cmsQaTooling'
@@ -245,7 +251,7 @@ test.describe('CMS QA tooling · preflight, manifest, đóng run, id is_test @de
 
   test('V8: phiên / snapshot / super / RLS / tập id / từng bảng / riêng tư — mỗi lệch ⇒ đỏ; tổng = kỳ vọng ⇒ CHƯA CHỨNG MINH', () => {
     const good: Record<string, unknown> = {
-      role_now: 'authenticated', uid: A, ro: 'on', iso: 'repeatable read', me_bypass: false, runner_bypass: true, user_role: 'staff', su: false,
+      role_now: 'authenticated', uid: A, ro: 'on', iso: 'repeatable read', me_bypass: false, runner_bypass: true, user_role: 'staff', su: false, db_phase: '121',
       qa_db: false, qa: false, same_set: true, readable: 2,
       rls_cms_programs: true, rls_cms_program_stores: true, rls_cms_program_products: true, rls_cms_program_tiers: true,
       rls_cms_import_runs: true, rls_cms_product_master: true,
@@ -253,7 +259,7 @@ test.describe('CMS QA tooling · preflight, manifest, đóng run, id is_test @de
       seen_products: 3, exp_products: 3, total_products: 7, seen_tiers: 4, exp_tiers: 4, total_tiers: 9,
       seen_import_runs: 0, exp_import_runs: 0, total_import_runs: 2, seen_master: 0, exp_master: 0, total_master: 9,
       test_programs: 0, draft_programs: 0, out_programs: 0, out_stores: 0, out_products: 0, out_tiers: 0, out_import_runs: 0,
-      read_qa_access: false, read_sync_runs: false, write_programs: false, rpc_callable: 0,
+      read_qa_access: false, read_sync_runs: false, write_programs: false, private_tables: 0, rpc_callable: '',
     }
     // --require-proven: bảng yêu cầu đã chứng minh ⇒ đạt; CHƯA ⇒ đỏ (gate D3 do máy ép).
     expect(evaluateCmsV8(good, A, 'staff', { requireProven: ['programs', 'products'] }).every((c) => c.ok)).toBe(true)
@@ -275,12 +281,231 @@ test.describe('CMS QA tooling · preflight, manifest, đóng run, id is_test @de
       [{ seen_stores: 3 }, 'staff', 'v8-table:stores'], [{ seen_products: 2 }, 'staff', 'v8-table:products'], [{ seen_tiers: 5 }, 'staff', 'v8-table:tiers'],
       [{ seen_import_runs: 1 }, 'staff', 'v8-table:import_runs'], [{ seen_master: 1 }, 'staff', 'v8-table:master'],
       [{ qa: true }, 'staff', 'v8-oracle-qa'], [{ draft_programs: 1 }, 'staff', 'v8-no-draft'], [{ test_programs: 1 }, 'staff', 'v8-no-test-without-marker'],
-      [{ read_qa_access: true }, 'staff', 'v8-private'], [{ write_programs: true }, 'staff', 'v8-private'], [{ rpc_callable: 1 }, 'staff', 'v8-private'],
+      [{ read_qa_access: true }, 'staff', 'v8-private'], [{ write_programs: true }, 'staff', 'v8-private'], [{ rpc_callable: 'rpc_cms_result_rows' }, 'staff', 'v8-private'],
+      [{ private_tables: 1 }, 'staff', 'v8-private'], [{ db_phase: '122' }, 'staff', 'v8-phase'], [{ db_phase: '' }, 'staff', 'v8-phase'],
     ]
     for (const [o, role, id] of bad) {
       const failedIds = evaluateCmsV8({ ...good, ...o }, A, role).filter((c) => !c.ok).map((c) => c.id)
       expect(failedIds, `${role} ${JSON.stringify(o)}`).toContain(id)
     }
+  })
+
+  test('V8 phase 122 (PM 03/11 §5): khai đúng phase; 4 RPC đọc gọi được; lộ / chặn sai / lỗi / excluded / tập dòng lệch ⇒ đỏ; results chưa cắt ⇒ CHƯA', () => {
+    const g122: Record<string, unknown> = {
+      role_now: 'authenticated', uid: A, ro: 'on', iso: 'repeatable read', me_bypass: false, runner_bypass: true, user_role: 'staff', su: false, db_phase: '122',
+      qa_db: false, qa: false, same_set: true, readable: 1,
+      rls_cms_programs: true, rls_cms_program_stores: true, rls_cms_program_products: true, rls_cms_program_tiers: true,
+      rls_cms_import_runs: true, rls_cms_product_master: true,
+      seen_programs: 1, exp_programs: 1, total_programs: 3, seen_stores: 1, exp_stores: 1, total_stores: 3,
+      seen_products: 1, exp_products: 1, total_products: 3, seen_tiers: 1, exp_tiers: 1, total_tiers: 3,
+      seen_import_runs: 0, exp_import_runs: 0, total_import_runs: 1, seen_master: 0, exp_master: 0, total_master: 3,
+      test_programs: 0, draft_programs: 0, out_programs: 0, out_stores: 0, out_products: 0, out_tiers: 0, out_import_runs: 0,
+      read_qa_access: false, read_sync_runs: false, write_programs: false, private_tables: 0,
+      rpc_callable: 'rpc_cms_result_excluded,rpc_cms_result_header,rpc_cms_result_lines,rpc_cms_result_rows',
+      rx_leak: 0, rx_deny: 0, rx_err: 0, rx_exc: 0, rx_seen_n: 1, rx_exp_n: 1, rx_total_n: 3, rx_same_set: true,
+      rx_role: 'authenticated', rx_outsider: true, rx_outside: 2, rx_exc_calls: 3, rx_lleak: 0,
+      rx_lseen_n: 2, rx_lexp_n: 2, rx_ltotal_n: 6, rx_lines_same: true, rx_catalog_same: true, rx_users_same: true,
+    }
+    const okRun = evaluateCmsV8(g122, A, 'staff', { phase: '122', requireProven: ['results', 'result_lines'] })
+    expect(okRun.filter((c) => !c.ok)).toEqual([])
+    expect(okRun.find((c) => c.id === 'v8-table:results')).toMatchObject({ ok: true, proven: true })
+    expect(evaluateCmsV8({ ...g122, rx_total_n: 1 }, A, 'staff', { phase: '122', requireProven: ['results'] }).filter((c) => !c.ok).map((c) => c.id))
+      .toEqual(['v8-require-proven:results'])
+    // Chưa gọi excluded / không có chương trình ngoài tập / không có staff ngoài phạm vi ⇒ ĐẠT nhưng CHƯA CHỨNG MINH (không xanh oan).
+    const unproven = evaluateCmsV8({ ...g122, rx_exc_calls: 0, rx_outside: 0, rx_outsider: false }, A, 'staff', { phase: '122' })
+    expect(unproven.filter((c) => !c.ok)).toEqual([])
+    expect(['v8-result-excluded', 'v8-result-rpc', 'v8-result-lines-user'].map((id) => unproven.find((c) => c.id === id)?.proven)).toEqual([false, false, false])
+    // Không khai phase trên DB 122 / khai 121 ⇒ đỏ v8-phase (lời rõ); phase 121 cũng đỏ private (RPC 122 gọi được).
+    const noPhase = evaluateCmsV8(g122, A, 'staff')
+    expect(noPhase.filter((c) => !c.ok).map((c) => c.id)).toEqual(['v8-phase', 'v8-private'])
+    expect(noPhase.find((c) => c.id === 'v8-phase')!.detail).toMatch(/PHASE KHÔNG PHÙ HỢP: DB phase 122 — không khai --phase/)
+    const bad: Array<[Record<string, unknown>, string]> = [
+      [{ rx_leak: 1 }, 'v8-result-rpc'], [{ rx_deny: 1 }, 'v8-result-rpc'], [{ rx_err: 1 }, 'v8-result-rpc'], [{ rx_exc: 1 }, 'v8-result-excluded'],
+      [{ rx_same_set: false }, 'v8-table:results'], [{ rx_seen_n: 2 }, 'v8-table:results'],
+      [{ rpc_callable: 'rpc_cms_result_header,rpc_cms_result_lines,rpc_cms_result_rows' }, 'v8-private'],
+      [{ rpc_callable: 'rpc_cms_result_excluded,rpc_cms_result_header,rpc_cms_result_lines,rpc_cms_result_rows,rpc_cms_sales_run_publish' }, 'v8-private'],
+      [{ db_phase: '121' }, 'v8-phase'],
+      // db-reviewer r1: lines (P1), vai DO #2, catalog / users (P2).
+      [{ rx_role: 'postgres' }, 'v8-result-role'], [{ rx_lleak: 1 }, 'v8-result-lines-user'], [{ rx_lines_same: false }, 'v8-table:result_lines'],
+      [{ rx_lseen_n: 3 }, 'v8-table:result_lines'], [{ rx_catalog_same: false }, 'v8-result-shape'], [{ rx_users_same: false }, 'v8-result-shape'],
+    ]
+    for (const [o, id] of bad) expect(evaluateCmsV8({ ...g122, ...o }, A, 'staff', { phase: '122' }).filter((c) => !c.ok).map((c) => c.id), JSON.stringify(o)).toContain(id)
+    // SQL phase 122: khối DO thứ hai chạy SAU SET LOCAL ROLE authenticated; vẫn chỉ câu SELECT cuối trả dòng.
+    const v8 = pgMetaReadOnlySnapshot(cmsVerifyV8Sql(A, 'staff', '122'))
+    expect(v8.indexOf('SET LOCAL ROLE authenticated;')).toBeLessThan(v8.indexOf('DO $cmsv8r$'))
+    expect(v8).toContain('public.rpc_cms_result_header(v_id)')
+    expect(v8.split('\n').filter((l) => /^(SELECT|WITH) /.test(l)).map((l) => l.slice(0, 6))).toEqual(['WITH h', 'SELECT'])
+    expect(cmsVerifyV8Sql(A, 'staff')).not.toContain('cmsv8r')
+    // Phase lạ = 127 (126 sales-only nay là phase V8 hợp lệ — đổi có chủ đích khi mở phase 126, không nới kiểm).
+    expect(() => cmsVerifyV8Sql(A, 'staff', '127' as never)).toThrow()
+  })
+
+  test('danh sách hàm theo phase = khoá CMS_FN_MATRIX cùng phase; đếm trước phase suy từ ma trận (db-reviewer P2-5)', () => {
+    for (const ph of CMS_VERIFY_PHASES) {
+      const fromMatrix = Object.entries(CMS_FN_MATRIX).filter(([, m]) => m.phase === ph).map(([n]) => n)
+      // 124: rpc_cms_program_lock ĐỔI CHỮ KÝ ⇒ thuộc tập loại trừ khi so ACL hàm có trước (dù tên có từ 123).
+      expect([...CMS_PHASE_FUNCTIONS[ph]].sort(), ph).toEqual([...fromMatrix, ...(ph === '124' ? ['rpc_cms_program_lock'] : [])].sort())
+    }
+    // 125 (CMS-UNCAPPED-1): trước 125 có đúng 67 hàm cms (55 + 12 của 124). 126 (sales-only): trước 126 có đúng 68 (126 không thêm
+    // hàm) — phần tử cuối thêm có chủ đích khi mở phase 126, không phải nới kỳ vọng cũ.
+    expect(CMS_VERIFY_PHASES.map((ph) => cmsFnCountBefore(ph))).toEqual([0, 7, 14, 37, 55, 67, 68])
+    // 122: khoá định nghĩa = đúng các hàm có tới 122 (phase 123 thêm hàm ⇒ lọc theo phase; độ chặt cho 122 giữ nguyên).
+    expect(Object.keys(CMS_FN_DEF_122).sort()).toEqual(Object.entries(CMS_FN_MATRIX).filter(([, m]) => Number(m.phase) <= 122).map(([n]) => n).sort())
+    expect(Object.keys(CMS_COL_122).sort()).toEqual(Object.keys(CMS_TABLE_SHAPE_122).sort())
+    // 123: 18 hàm mới (15 helper không cấp ai — 3 INVOKER; 2 service_role; 1 authenticated), tổng 55; 2 bảng mới; 46 trigger ALWAYS.
+    expect(Object.keys(CMS_FN_DEF_123).sort()).toEqual(Object.entries(CMS_FN_MATRIX).filter(([, m]) => Number(m.phase) <= 123).map(([n]) => n).sort())
+    // 124 (COMP-INT): 12 hàm mới (8 helper không cấp ai, 4 RPC authenticated — attest / revoke lock_timeout 2 s), tổng 67; 2 bảng mới;
+    // 9 trigger ALWAYS; 6 thân thay (run_open / stage / cleanup / lock_eval / payout / lock 6 tham số); lock 3 s → 2 s.
+    expect(Object.keys(CMS_FN_DEF_124).sort()).toEqual(Object.entries(CMS_FN_MATRIX).filter(([, m]) => Number(m.phase) <= 124).map(([n]) => n).sort())
+    expect(Object.entries(CMS_FN_MATRIX).filter(([, m]) => Number(m.phase) <= 124)).toHaveLength(67)
+    // 125 (CMS-UNCAPPED-1): 1 hàm mới (guard, không cấp ai, SECDEF) + 2 thân 121 thay (giữ ACL / lock 5 s); tổng 68; +1 constraint trigger
+    // ALWAYS; shape đổi đúng cms_program_tiers (ràng buộc của constraint trigger); cột không đổi.
+    expect(Object.keys(CMS_FN_DEF_125).sort()).toEqual(Object.keys(CMS_FN_MATRIX).sort())
+    expect(Object.keys(CMS_FN_MATRIX)).toHaveLength(68)
+    expect(Object.entries(CMS_FN_MATRIX).filter(([, m]) => m.phase === '125')).toEqual([['cms__tiers_last_open_guard', { phase: '125', acl: null, secdef: true, lock: false, src: 'd83088c260633f520dac35cfe8169475' }]])
+    expect(Object.keys(CMS_FN_SRC_125).sort()).toEqual(['rpc_cms_import_commit', 'rpc_cms_program_activate'])
+    for (const [n, src] of Object.entries(CMS_FN_SRC_125)) expect(src, n).not.toBe(CMS_FN_MATRIX[n].src)
+    expect(CMS_TRIGGERS_125).toHaveLength(59)
+    expect(CMS_TRIGGERS_125.filter((t) => !CMS_TRIGGERS_124.includes(t))).toEqual(['CREATE CONSTRAINT TRIGGER cms_tiers_last_open AFTER INSERT OR DELETE OR UPDATE ON cms_program_tiers DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION cms__tiers_last_open_guard()|A'])
+    expect(Object.keys(CMS_TABLE_SHAPE_125).filter((t) => JSON.stringify(CMS_TABLE_SHAPE_125[t]) !== JSON.stringify(CMS_TABLE_SHAPE_124[t]))).toEqual(['cms_program_tiers'])
+    expect(CMS_TABLE_SHAPE_125.cms_program_tiers.idx).toBe(CMS_TABLE_SHAPE_124.cms_program_tiers.idx)
+    expect(CMS_COL_125).toEqual(CMS_COL_124)
+    expect(cmsPostProvenKeys('125')).toEqual(['v5', 'lock-preview', 'attest', 'uncapped'])
+    expect(CMS_V8_RPC_CALLABLE['125']).toBe(CMS_V8_RPC_CALLABLE['124'])
+    expect(CMS_VERIFY_SQL.markers).toContain("'125'")
+    expect(cmsVerifyAclSql()).toContain('n_ex125')
+    // 126 (sales-only, PM 06/11): 0 hàm mới (POST so TOÀN BỘ hàm với PRE ⇒ không có cột n_ex126 / NOT IN ()); chỉ thân 2 hàm 122 đổi
+    // (CMS_FN_SRC_126 = generator scripts/gen-cms-verify-fp-126.mjs); định nghĩa / shape / cột / trigger kế thừa 125.
+    expect(CMS_VERIFY_PHASES.at(-1)).toBe('126')
+    expect(CMS_PHASE_FUNCTIONS['126']).toEqual([])
+    expect(Object.entries(CMS_FN_MATRIX).filter(([, m]) => m.phase === '126')).toEqual([])
+    expect(CMS_FN_SRC_126).toEqual({ cms__results_release_open: 'aebe1ff46ba51dcf533fe328af7ea2a0', rpc_cms_sales_run_publish: 'db2c97efad2bb5ee9d69399b99c7c258' })
+    expect(CMS_FN_MATRIX.cms__results_release_open).toMatchObject({ phase: '122', acl: null, secdef: true, lock: false, src: 'd6b7f93f75ed7daafd9977463a3d0a3b' })
+    expect(CMS_FN_MATRIX.rpc_cms_sales_run_publish).toMatchObject({ phase: '122', acl: 'service_role:EXECUTE', secdef: true, lock: true, src: 'a12d10f071ac6ef93d6a35f9fa623c12' })
+    for (const n of Object.keys(CMS_FN_SRC_126)) expect(CMS_FN_SRC_124[n] ?? CMS_FN_SRC_125[n] ?? CMS_FN_SRC_123[n], n).toBeUndefined()
+    expect(cmsPostProvenKeys('126')).toEqual(['v5', 'lock-preview', 'attest', 'uncapped', 'basis'])
+    expect(CMS_V8_RPC_CALLABLE['126']).toBe(CMS_V8_RPC_CALLABLE['125'])
+    expect(cmsV8ProvenKeys('126')).toEqual(cmsV8ProvenKeys('125'))
+    expect(CMS_VERIFY_SQL.markers).toContain("'126'")
+    expect(cmsVerifyAclSql()).not.toContain('n_ex126')
+    expect(cmsVerifyAclSql()).not.toContain('NOT IN ()')
+    expect(CMS_VERIFY_SQL.inv126RealBasis).toContain("r.kind = 'sales' AND NOT r.is_test AND r.published_at > m.applied_at")
+    expect(CMS_VERIFY_SQL.inv126RealBasis).toContain("IS DISTINCT FROM 'sales_only_v1'")
+    expect(Object.keys(CMS_COL_124).sort()).toEqual(Object.keys(CMS_TABLE_SHAPE_124).sort())
+    expect(Object.keys(CMS_TABLE_SHAPE_124).filter((t) => !(t in CMS_TABLE_SHAPE_123)).sort()).toEqual(['cms_sales_source_lines', 'cms_source_attestations'])
+    const p124 = Object.entries(CMS_FN_MATRIX).filter(([, m]) => m.phase === '124')
+    expect(p124).toHaveLength(12)
+    expect(p124.filter(([, m]) => m.acl === 'authenticated:EXECUTE').map(([n]) => n).sort()).toEqual(['rpc_cms_run_source_export', 'rpc_cms_source_attest', 'rpc_cms_source_attest_revoke', 'rpc_cms_source_attestations'])
+    expect(p124.filter(([, m]) => m.lock2).map(([n]) => n).sort()).toEqual(['rpc_cms_source_attest', 'rpc_cms_source_attest_revoke'])
+    expect(Object.keys(CMS_FN_SRC_124).sort()).toEqual(['cms__lock_eval', 'rpc_cms_payout', 'rpc_cms_program_lock', 'rpc_cms_sales_run_cleanup', 'rpc_cms_sales_run_open', 'rpc_cms_sales_run_stage'])
+    for (const [n, src] of Object.entries(CMS_FN_SRC_124)) expect(src, n).not.toBe(CMS_FN_MATRIX[n].src)
+    expect(CMS_FN_CFG_124).toEqual({ rpc_cms_program_lock: { lock3: false, lock2: true } })
+    expect(CMS_TRIGGERS_124).toHaveLength(58)
+    expect(CMS_TRIGGERS_124.filter((t) => t.endsWith('|A'))).toHaveLength(55)
+    expect(new Set(CMS_TRIGGERS_124).size).toBe(58)
+    expect(Object.entries(CMS_FN_MATRIX).filter(([, m]) => Number(m.phase) <= 123)).toHaveLength(55)
+    expect(Object.keys(CMS_COL_123).sort()).toEqual(Object.keys(CMS_TABLE_SHAPE_123).sort())
+    expect(Object.keys(CMS_TABLE_SHAPE_123).filter((t) => !(t in CMS_TABLE_SHAPE_122)).sort()).toEqual(['cms_payout_staff', 'cms_payouts'])
+    for (const [n, def] of Object.entries(CMS_FN_DEF_122)) expect(CMS_FN_DEF_123[n], n).toBe(def)
+    for (const [t, sh] of Object.entries(CMS_TABLE_SHAPE_122)) expect(CMS_TABLE_SHAPE_123[t], t).toEqual(sh)
+    const p123 = Object.entries(CMS_FN_MATRIX).filter(([, m]) => m.phase === '123')
+    expect(p123).toHaveLength(18)
+    expect(p123.filter(([, m]) => !m.secdef).map(([n]) => n).sort()).toEqual(['cms__config_auth_guard', 'cms__payout_insert_guard', 'cms__run_auth_guard'])
+    expect(p123.filter(([, m]) => m.acl === 'service_role:EXECUTE').map(([n]) => n).sort()).toEqual(['rpc_cms_lock_preview', 'rpc_cms_program_lock'])
+    expect(p123.filter(([, m]) => m.acl === 'authenticated:EXECUTE').map(([n]) => n)).toEqual(['rpc_cms_payout'])
+    expect(p123.filter(([n, m]) => n.startsWith('cms__') && m.acl === null)).toHaveLength(15)
+    expect(p123.filter(([, m]) => m.lock || m.nestloop)).toHaveLength(0)
+    expect(p123.filter(([, m]) => m.lock3).map(([n]) => n)).toEqual(['rpc_cms_program_lock'])
+    // Thân thay ở 123 chỉ áp từ 123; kỳ vọng 120–122 của hàm đó giữ nguyên.
+    expect(Object.keys(CMS_FN_SRC_123)).toEqual(['cms_readable_program_ids'])
+    expect(CMS_FN_MATRIX.cms_readable_program_ids).toMatchObject({ phase: '120', src: '7043f93b323dbd2fc4c1f883181201d7' })
+    expect(CMS_FN_SRC_123.cms_readable_program_ids).not.toBe(CMS_FN_MATRIX.cms_readable_program_ids.src)
+    expect(CMS_TRIGGERS_123).toHaveLength(49)
+    expect(CMS_TRIGGERS_123.filter((t) => t.endsWith('|A'))).toHaveLength(46)
+    expect(CMS_TRIGGERS_123.filter((t) => t.endsWith('|O'))).toHaveLength(3)
+    expect(new Set(CMS_TRIGGERS_123).size).toBe(49)
+    expect(CMS_TRIGGERS_123.filter((t) => / REFERENCING .* FOR EACH STATEMENT /.test(t))).toHaveLength(15)
+    expect(CMS_TRIGGERS_123.filter((t) => / BEFORE TRUNCATE ON /.test(t)).map((t) => / ON (\w+) /.exec(t)![1]).sort()).toEqual([...CMS_TABLES_FROZEN_123].sort())
+    expect(cmsVerifyAclSql()).toMatch(/AS n_ex123,[\s\S]*AS md5_ex123/)
+    // db-reviewer 123 P2: post --require-proven chỉ có ở 123; SQL mới đọc đúng khoá seal_expect của 122, quyền gián tiếp, V8 migration.
+    expect(cmsPostProvenKeys('123')).toEqual(['v5', 'lock-preview'])
+    expect((['120', '121', '122'] as const).map((p) => cmsPostProvenKeys(p).length)).toEqual([0, 0, 0])
+    expect(CMS_VERIFY_SQL.invRunFrozen).toMatch(/seal_expect ->> 'sales_lines'[\s\S]*seal_expect ->> 'results'[\s\S]*seal_expect ->> 'catalog'[\s\S]*seal_expect ->> 'result_lines'/)
+    expect(CMS_VERIFY_SQL.invPayoutStaff).toContain('FULL JOIN')
+    expect(CMS_VERIFY_SQL.payoutReach).toContain("has_any_column_privilege(ro.n, c.oid, 'SELECT,INSERT,UPDATE,REFERENCES')")
+    expect(CMS_VERIFY_SQL.payoutReach).toContain('pg_rewrite')
+    expect(CMS_VERIFY_SQL.lockPreview).toContain("ARRAY['CMS_LOCK_RELEASE_GATE', 'CMS_LOCK_POLICY_PENDING']")
+    for (const k of ['invPayoutStaff', 'invRunFrozen', 'payoutReach', 'lockPreview'] as const) {
+      expect(CMS_VERIFY_SQL[k], k).not.toMatch(/\b(INSERT|UPDATE|DELETE|TRUNCATE|ALTER|GRANT|CREATE)\b(?! *,)|email|full_name|name_snapshot/)
+    }
+  })
+
+  test('V8 phase 123 (Q-208 / Q-217): rpc_cms_payout gọi được; lộ / chặn sai / lỗi / email / tổng / tập dòng lệch ⇒ đỏ; chưa có payout ⇒ CHƯA; khoá JSON theo danh sách cho phép của vai; CLI v8 --phase=123', () => {
+    const g123: Record<string, unknown> = {
+      role_now: 'authenticated', uid: A, ro: 'on', iso: 'repeatable read', me_bypass: false, runner_bypass: true, user_role: 'store_manager', su: false, db_phase: '123',
+      qa_db: false, qa: false, same_set: true, readable: 1,
+      rls_cms_programs: true, rls_cms_program_stores: true, rls_cms_program_products: true, rls_cms_program_tiers: true,
+      rls_cms_import_runs: true, rls_cms_product_master: true,
+      seen_programs: 1, exp_programs: 1, total_programs: 3, seen_stores: 1, exp_stores: 1, total_stores: 3,
+      seen_products: 1, exp_products: 1, total_products: 3, seen_tiers: 1, exp_tiers: 1, total_tiers: 3,
+      seen_import_runs: 0, exp_import_runs: 0, total_import_runs: 1, seen_master: 0, exp_master: 0, total_master: 3,
+      test_programs: 0, draft_programs: 0, out_programs: 0, out_stores: 0, out_products: 0, out_tiers: 0, out_import_runs: 0,
+      read_qa_access: false, read_sync_runs: false, write_programs: false, private_tables: 0,
+      rpc_callable: 'rpc_cms_payout,rpc_cms_result_excluded,rpc_cms_result_header,rpc_cms_result_lines,rpc_cms_result_rows',
+      rx_leak: 0, rx_deny: 0, rx_err: 0, rx_exc: 0, rx_seen_n: 2, rx_exp_n: 2, rx_total_n: 3, rx_same_set: true,
+      rx_role: 'authenticated', rx_outsider: true, rx_outside: 2, rx_exc_calls: 3, rx_lleak: 0,
+      rx_lseen_n: 4, rx_lexp_n: 4, rx_ltotal_n: 6, rx_lines_same: true, rx_catalog_same: true, rx_users_same: true,
+      py_role: 'authenticated', py_leak: 0, py_deny: 0, py_err: 0, py_nolock: 0, py_calls: 1, py_field: 0, py_prog_n: 1,
+      py_seen_n: 2, py_exp_n: 2, py_total_n: 3, py_same_set: true, py_totals_same: true,
+    }
+    const okRun = evaluateCmsV8(g123, A, 'qlch', { phase: '123', requireProven: ['payout', 'results'] })
+    expect(okRun.filter((c) => !c.ok)).toEqual([])
+    expect(['v8-table:payout', 'v8-payout-rpc', 'v8-payout-fields'].map((id) => okRun.find((c) => c.id === id)?.proven)).toEqual([true, true, true])
+    // Chưa có payout / chưa đọc được payout nào ⇒ ĐẠT nhưng CHƯA CHỨNG MINH; --require-proven=payout ⇒ đỏ.
+    const empty = { ...g123, py_calls: 0, py_prog_n: 0, py_seen_n: 0, py_exp_n: 0, py_total_n: 0 }
+    const un = evaluateCmsV8(empty, A, 'qlch', { phase: '123' })
+    expect(un.filter((c) => !c.ok)).toEqual([])
+    expect(['v8-table:payout', 'v8-payout-fields'].map((id) => un.find((c) => c.id === id)?.proven)).toEqual([false, false])
+    expect(evaluateCmsV8(empty, A, 'qlch', { phase: '123', requireProven: ['payout'] }).filter((c) => !c.ok).map((c) => c.id)).toEqual(['v8-require-proven:payout'])
+    const bad: Array<[Record<string, unknown>, string]> = [
+      [{ py_leak: 1 }, 'v8-payout-rpc'], [{ py_deny: 1 }, 'v8-payout-rpc'], [{ py_err: 1 }, 'v8-payout-rpc'], [{ py_role: 'postgres' }, 'v8-payout-role'],
+      [{ py_same_set: false }, 'v8-table:payout'], [{ py_seen_n: 3 }, 'v8-table:payout'],
+      [{ py_totals_same: false }, 'v8-payout-fields'], [{ py_field: 1 }, 'v8-payout-fields'],
+      [{ rpc_callable: CMS_V8_RPC_CALLABLE['122'] }, 'v8-private'], [{ db_phase: '122' }, 'v8-phase'],
+      [{ rx_same_set: false }, 'v8-table:results'], [{ rx_lleak: 1 }, 'v8-result-lines-user'],
+    ]
+    for (const [o, id] of bad) expect(evaluateCmsV8({ ...g123, ...o }, A, 'qlch', { phase: '123' }).filter((c) => !c.ok).map((c) => c.id), JSON.stringify(o)).toContain(id)
+    // Khai phase 122 trên DB 123 ⇒ đỏ v8-phase (lời rõ) + v8-private (rpc_cms_payout gọi được).
+    const as122 = evaluateCmsV8(g123, A, 'qlch', { phase: '122' })
+    expect(as122.filter((c) => !c.ok).map((c) => c.id)).toEqual(['v8-phase', 'v8-private'])
+    expect(as122.find((c) => c.id === 'v8-phase')!.detail).toMatch(/PHASE KHÔNG PHÙ HỢP: DB phase 123 — khai báo --phase=122/)
+    // SQL 123: khối rpc_cms_payout chạy SAU SET LOCAL ROLE authenticated và sau khối 122; oracle SM gồm 'locked'; chỉ câu SELECT cuối trả dòng.
+    const v8 = pgMetaReadOnlySnapshot(cmsVerifyV8Sql123(A, 'sm'))
+    expect(v8.indexOf('SET LOCAL ROLE authenticated;')).toBeLessThan(v8.indexOf('DO $cmsv8r$'))
+    expect(v8.indexOf('DO $cmsv8r$')).toBeLessThan(v8.indexOf('DO $cmsv8p$'))
+    expect(v8).toContain('public.rpc_cms_payout(v_id)')
+    expect(v8).toContain("WHERE (NOT p.is_test OR v_qa) AND p.status IN ('active', 'locked')\n       AND EXISTS (SELECT 1 FROM public.cms_program_stores ps\n                     JOIN public.sm_store_assignments")
+    expect(v8.split('\n').filter((l) => /^(SELECT|WITH) /.test(l)).map((l) => l.slice(0, 6))).toEqual(['WITH h', 'SELECT'])
+    const v8p122 = cmsVerifyV8Sql(A, 'sm', '122')
+    expect(v8p122).not.toContain('cmsv8p')
+    expect(v8p122).toContain("WHERE (NOT p.is_test OR v_qa) AND p.status = 'active'\n       AND EXISTS (SELECT 1 FROM public.cms_program_stores ps\n                     JOIN public.sm_store_assignments")
+    expect(cmsV8ProvenKeys('123')).toContain('payout')
+    expect(cmsV8ProvenKeys('122')).not.toContain('payout')
+    const qsql = cmsVerifyV8Sql123(A, 'qlch'), ssql = cmsVerifyV8Sql123(A, 'super')
+    const arr = (sql: string, v: string) => new RegExp(`${v} text\\[\\] := ([^;]*);`).exec(sql)![1]
+    expect(qsql).toContain('v_sdecl boolean := false')
+    expect(ssql).toContain('v_sdecl boolean := true')
+    for (const k of CMS_PAYOUT_KEYS_TOP) { expect(arr(qsql, 'v_top_ok')).toContain(`'${k}'`); expect(arr(ssql, 'v_top_ok')).toContain(`'${k}'`) }
+    for (const k of CMS_PAYOUT_KEYS_TOP_SUPER) { expect(arr(qsql, 'v_top_ok')).not.toContain(`'${k}'`); expect(arr(ssql, 'v_top_ok')).toContain(`'${k}'`) }
+    for (const k of CMS_PAYOUT_KEYS_ROW) { expect(arr(qsql, 'v_row_ok')).toContain(`'${k}'`); expect(arr(ssql, 'v_row_ok')).toContain(`'${k}'`) }
+    expect(arr(qsql, 'v_row_ok')).not.toContain("'email'")
+    expect(arr(ssql, 'v_row_ok')).toContain("'email'")
+    expect(qsql).not.toContain("v_p ? 'locked_by'")
+    expect(qsql).toContain("has_any_column_privilege(c.oid, 'SELECT,INSERT,UPDATE,REFERENCES')")
+    expect(cmsVerifyV8Sql(A, 'qlch', '122')).not.toContain('has_any_column_privilege')
+    // P3a: CLI nhận v8 --phase=123; 124 (COMP-INT) nhận --phase=124; 125 (CMS-UNCAPPED-1) nhận --phase=125; 126 (sales-only) nhận
+    // --phase=126 (harness qa-cms-cli-exit.mjs §2b đổi "phase lạ" từ 126 sang 127 — 126 nay hợp lệ).
+    expect(CMS_V8_PHASES).toEqual(['120', '121', '122', '123', '124', '125', '126'])
   })
 
   test('đóng run có cảnh báo: chỉ đóng khi xác nhận ĐÚNG tập chương trình bị cảnh báo', () => {
@@ -443,7 +668,7 @@ test.describe('CMS QA tooling · CLI âm (thoát 2 trước mọi IO) @desktop',
     for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !k.startsWith('E2E_CMS') && k !== 'E2E_EXPECTED_SUPABASE_HOST') env[k] = v
     Object.assign(env, { NEXT_PUBLIC_SUPABASE_URL: 'https://cms-qa-test.invalid', SUPABASE_SERVICE_ROLE_KEY: 'test-only' }, extra)
     const r = spawnSync(process.execPath, [path.join(WEBAPP, 'scripts', script), ...args], { cwd: WEBAPP, env: env as NodeJS.ProcessEnv, encoding: 'utf8', timeout: 60_000 })
-    return { code: r.status, out: `${r.stdout}${r.stderr}` }
+    return { code: r.status, out: `${r.stdout}${r.stderr}`, stdout: r.stdout }
   }
 
   test('cms-qa-access: email / TTL / confirm thiếu hoặc sai host / tham số lạ ⇒ 2', () => {
@@ -519,9 +744,53 @@ test.describe('CMS QA tooling · CLI âm (thoát 2 trước mọi IO) @desktop',
     }
   })
 
+  test('PM cli-exit §3: manifest ghi serverNotStopped ⇒ close chặn khi pid còn sống (dù cổng đã đóng); pid đã chết ⇒ qua bước này; cờ hỏng ⇒ manifest hỏng', () => {
+    const marker = path.join(WEBAPP, CMS_QA_MARKER)
+    expect(fs.existsSync(marker), `đang có ${CMS_QA_MARKER} thật — đóng run trước khi chạy spec này`).toBe(false)
+    const base = newCmsQaManifest({
+      runId: 'cms-qa-spec-ns', mode: 'manual-localhost', host: 'cms-qa-test.invalid', dbNow: '2026-11-02T02:00:00Z',
+      gitHead: 'a'.repeat(40), gitTree: 'b'.repeat(40), buildId: 'B1', port: null,
+      users: [{ id: A, role: 'admin', markerExpiresAt: '2026-11-02T05:00:00Z', remainingS: 10800 }],
+    })
+    const deadPid = Number(spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }).stdout)
+    expect(Number.isInteger(deadPid) && deadPid > 0).toBe(true)
+    const at = '2026-11-02T03:00:00.000Z'
+    try {
+      fs.writeFileSync(marker, JSON.stringify({ ...base, serverPid: process.pid, serverNotStopped: { pid: process.pid, at } }), { flag: 'wx' })
+      let r = run('cms-qa-run.mjs', ['close'], { E2E_EXPECTED_SUPABASE_HOST: 'cms-qa-test.invalid' })
+      expect(r.code, r.out).toBe(2)
+      expect(r.out).toContain(`pid ${process.pid} được launcher ghi CHƯA DỪNG`)
+      fs.rmSync(marker)
+      fs.writeFileSync(marker, JSON.stringify({ ...base, serverNotStopped: { pid: null, at } }), { flag: 'wx' }) // không rõ pid ⇒ luôn chặn
+      r = run('cms-qa-run.mjs', ['close'], { E2E_EXPECTED_SUPABASE_HOST: 'cms-qa-test.invalid' })
+      expect(r.code, r.out).toBe(2)
+      expect(r.out).toContain('(không rõ pid) được launcher ghi CHƯA DỪNG')
+      fs.rmSync(marker)
+      fs.writeFileSync(marker, JSON.stringify({ ...base, serverNotStopped: { pid: 2 ** 31, at } }), { flag: 'wx' }) // ngoài miền pid
+      r = run('cms-qa-run.mjs', ['close'], { E2E_EXPECTED_SUPABASE_HOST: 'cms-qa-test.invalid' })
+      expect(r.code, r.out).toBe(2)
+      expect(r.out).toContain('manifest sai serverNotStopped')
+      fs.rmSync(marker)
+      fs.writeFileSync(marker, JSON.stringify({ ...base, serverPid: deadPid, serverNotStopped: { pid: deadPid, at } }), { flag: 'wx' })
+      r = run('cms-qa-run.mjs', ['close'], { E2E_EXPECTED_SUPABASE_HOST: 'cms-qa-test.invalid' })
+      expect(r.out).toContain(`pid ${deadPid} (launcher ghi CHƯA DỪNG`) // qua bước chặn ⇒ đối chiếu DB (host giả ⇒ LỖI DB, 1)
+      expect(r.code, r.out).toBe(1)
+      expect(fs.existsSync(marker)).toBe(true)
+      fs.rmSync(marker)
+      fs.writeFileSync(marker, JSON.stringify({ ...base, serverNotStopped: { pid: 'abc', at } }), { flag: 'wx' })
+      r = run('cms-qa-run.mjs', ['close'], { E2E_EXPECTED_SUPABASE_HOST: 'cms-qa-test.invalid' })
+      expect(r.code, r.out).toBe(2)
+      expect(r.out).toContain('manifest sai serverNotStopped')
+      expect(fs.existsSync(marker)).toBe(true) // không công cụ nào xoá manifest
+    } finally {
+      fs.rmSync(marker, { force: true })
+    }
+  })
+
   test('cms-verify: thiếu / sai host, phase, pre, user ⇒ 2; print-sql chỉ in khối READ ONLY', () => {
     for (const args of [['acl-snapshot'], ['post', '--phase=120', '--expect-host=other.invalid'],
       ['post', '--phase=122', '--expect-host=cms-qa-test.invalid'], ['post', '--phase=120', '--pre=khong-co.json', '--expect-host=cms-qa-test.invalid'],
+      ['post', '--phase=123', '--expect-host=cms-qa-test.invalid'], ['post', '--phase=124', '--pre=khong-co.json', '--expect-host=cms-qa-test.invalid'],
       ['v8', '--user=abc', '--role=staff', '--expect-host=cms-qa-test.invalid'],
       ['v8', `--user=${A}`, '--expect-host=cms-qa-test.invalid'], // thiếu --role
       ['v8', `--user=${A}`, '--role=root', '--expect-host=cms-qa-test.invalid'],
@@ -531,16 +800,302 @@ test.describe('CMS QA tooling · CLI âm (thoát 2 trước mọi IO) @desktop',
       const r = run('cms-verify.mjs', args)
       expect(r.code, args.join(' ') + '\n' + r.out).toBe(2)
     }
+    // post --require-proven: khoá theo phase (123: v5 | lock-preview); 120–122 không có khoá ⇒ 2 trước IO.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cms-verify-rp-'))
+    try {
+      const preOf = (nCms: number) => {
+        const fp = path.join(tmpDir, `pre-${nCms}.json`)
+        fs.writeFileSync(fp, JSON.stringify({ kind: 'cms-acl-snapshot', host: 'cms-qa-test.invalid',
+          acl: { db_now: '2026-11-03T00:00:00.000Z', n_all: 60 + nCms, n_old: 60, md5_all: 'a'.repeat(32), md5_old: 'b'.repeat(32) } }))
+        return fp
+      }
+      const pre123 = preOf(37), pre122 = preOf(14)
+      for (const [args, re] of [
+        [['post', '--phase=123', `--pre=${pre123}`, '--require-proven=results', '--expect-host=cms-qa-test.invalid'], /--require-proven cho post --phase=123: <v5\|lock-preview>/],
+        [['post', '--phase=123', `--pre=${pre123}`, '--require-proven=v5,nope', '--expect-host=cms-qa-test.invalid'], /--require-proven cho post --phase=123/],
+        [['post', '--phase=122', `--pre=${pre122}`, '--require-proven=v5', '--expect-host=cms-qa-test.invalid'], /--require-proven cho post --phase=122: <\(không có khoá\)>/],
+        // 126 (sales-only): PRE phải có đúng 68 hàm cms (126 không thêm hàm); khoá basis; 127 là phase lạ.
+        [['post', '--phase=126', `--pre=${preOf(67)}`, '--expect-host=cms-qa-test.invalid'], /không phải ảnh ngay trước 126 \(đang có 67 hàm cms\)/],
+        [['post', '--phase=126', `--pre=${preOf(68)}`, '--require-proven=nope', '--expect-host=cms-qa-test.invalid'], /--require-proven cho post --phase=126: <v5\|lock-preview\|attest\|uncapped\|basis>/],
+        [['post', '--phase=127', `--pre=${preOf(68)}`, '--expect-host=cms-qa-test.invalid'], /--phase=120\|121\|122\|123\|124\|125\|126/],
+      ] as Array<[string[], RegExp]>) {
+        const r = run('cms-verify.mjs', args)
+        expect(r.code, args.join(' ') + '\n' + r.out).toBe(2)
+        expect(r.out).toMatch(re)
+      }
+    } finally { fs.rmSync(tmpDir, { recursive: true, force: true }) }
     const p = run('cms-verify.mjs', ['print-sql', '--what=v8', `--user=${A}`, '--role=sm'])
     expect(p.code).toBe(0)
-    expect(p.out.trim()).toMatch(/^BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; DO \$cmsv8\$[\s\S]*SET LOCAL ROLE authenticated;[\s\S]*ROLLBACK;$/)
+    // PM P2 cli-exit §5: SQL chỉ trên stdout (cảnh báo Node như NO_COLOR/FORCE_COLOR nằm ở stderr, không phải SQL).
+    expect(p.stdout.trim()).toMatch(/^BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; DO \$cmsv8\$[\s\S]*SET LOCAL ROLE authenticated;[\s\S]*ROLLBACK;$/)
   })
 })
 
-test('CMS QA tooling — SQL thật trên PGlite (migration 120 / 121, marker, V8, đóng run, VERIFY bắt lệch) @desktop', () => {
-  test.setTimeout(180_000)
-  const r = spawnSync(process.execPath, [path.join(WEBAPP, 'scripts', 'qa-cms-qa-tooling.mjs')], { encoding: 'utf8', timeout: 170_000 })
+test('CMS QA tooling — SQL thật trên PGlite (migration 120 / 121 / 122, marker, V8, đóng run, VERIFY phase 122 + bắt lệch) @desktop', () => {
+  test.setTimeout(300_000)
+  // --part=base: đúng §1–§12 như trước (phase 123 tách sang test dưới để mỗi phần có hạn giờ riêng).
+  const r = spawnSync(process.execPath, [path.join(WEBAPP, 'scripts', 'qa-cms-qa-tooling.mjs'), '--part=base'], { encoding: 'utf8', timeout: 290_000 })
   const out = `${r.stdout}\n${r.stderr}`
   expect(out, out.slice(-2000)).toMatch(/\n\d+ đạt · 0 lỗi/)
   expect(r.status).toBe(0)
+})
+
+test('CMS QA tooling — VERIFY phase 123 trên PGlite (120 → 121 → 122 → 123 thật: POST 123, phase sai, bắt lệch, bất biến V5 / V6, rollback ⇒ POST 122, V8 123) @desktop', () => {
+  test.setTimeout(300_000)
+  const r = spawnSync(process.execPath, [path.join(WEBAPP, 'scripts', 'qa-cms-qa-tooling.mjs'), '--part=123'], { encoding: 'utf8', timeout: 290_000 })
+  const out = `${r.stdout}\n${r.stderr}`
+  expect(out, out.slice(-2000)).toMatch(/\n\d+ đạt · 0 lỗi/)
+  expect(out).toContain('13. VERIFY POST 123')
+  expect(out).toContain('17. V8 phase 123')
+  expect(r.status).toBe(0)
+})
+
+// PM `planning/reviews/2026-11-02-cms-b3-and-cli-exit-pm.md` §5 — mã thoát CLI đáng tin cậy (lỗi libuv Node 24 / Windows khi
+// process.exit() ngay sau fetch: rc 127 trên prod B3). Tiến trình con thật, fetch thật tới shim pg-meta localhost trên PGlite.
+test.describe('CMS QA tooling · mã thoát CLI (B3 rc 127) @desktop', () => {
+  test('mã launcher: chỉ operator dừng mới thoát 0; canh marker dừng / server tự thoát ⇒ 1', () => {
+    expect(cmsQaServerExitCode('operator')).toBe(0)
+    expect(cmsQaServerExitCode('watchdog')).toBe(1)
+    expect(cmsQaServerExitCode('error')).toBe(1)
+    expect(cmsQaServerExitCode(null)).toBe(1)
+    expect(CMS_QA_EXIT_GRACE_MS).toBeGreaterThan(0)
+    expect(CMS_QA_EXIT_GRACE_MS).toBeLessThanOrEqual(2_000)
+    const src = fs.readFileSync(path.join(WEBAPP, 'scripts', 'cms-qa-run.mjs'), 'utf8')
+    expect(src).toContain('life = await T.runCmsQaServerLifecycle({')
+    expect(src).toContain('return life.rc')
+    // PM cli-exit §3: không xác nhận được đã dừng ⇒ ghi cờ cho close + mã 1 (kể cả nhánh setup lỗi ném CmsQaServerNotStoppedError)
+    expect(src).toMatch(/if \(!life\.stopped\) \{\n\s+markNotStopped\(life\.pid\)[\s\S]*?return 1\n/)
+    expect(src).toContain('if (e instanceof T.CmsQaServerNotStoppedError) markNotStopped(e.pid)')
+  })
+
+  // Vòng đời server với tiến trình con GIẢ + timer thật rút ngắn (security review P1-1 / P2-1, PM cli-exit §3): hành vi, không
+  // grep nguồn. Mô phỏng ngữ nghĩa ChildProcess của Node 24 (đo 02/11): kill() lỗi ⇒ phát 'error' ĐỒNG BỘ rồi trả false;
+  // tín hiệu không hỗ trợ ⇒ ném; spawn hỏng ⇒ pid undefined, exitCode âm, 'error' rồi 'close', KHÔNG có 'exit'.
+  type KillMode = 'exit' | 'ignore-sigint' | 'sigint-error' | 'sigint-error-async' | 'kill-error' | 'kill-throws'
+  class FakeChild extends EventEmitter {
+    pid: number | undefined = 4242
+    exitCode: number | null = null
+    signalCode: string | null = null
+    kills: string[] = []
+    unrefs = 0
+    constructor(private onKill: KillMode = 'exit') { super() }
+    kill(sig: 'SIGINT' | 'SIGKILL') {
+      this.kills.push(sig)
+      if (this.pid === undefined || this.exitCode !== null || this.signalCode !== null) return false // Node: không handle ⇒ false
+      const m = this.onKill
+      if (m === 'kill-throws') throw new Error('kill EINVAL')
+      if (m === 'kill-error' || (m === 'sigint-error' && sig === 'SIGINT')) { this.emit('error', new Error('kill EPERM')); return false }
+      if (m === 'sigint-error-async' && sig === 'SIGINT') { setTimeout(() => this.emit('error', new Error('kill EPERM')), 1); return false }
+      if (m === 'exit' || sig === 'SIGKILL') setTimeout(() => this.die(null, sig), 2)
+      return true
+    }
+    unref() { this.unrefs++ }
+    die(code: number | null, signal: string | null) {
+      if (this.exitCode !== null || this.signalCode !== null) return
+      this.exitCode = code; this.signalCode = signal
+      this.emit('exit', code, signal)
+    }
+    get alive() { return this.exitCode === null && this.signalCode === null }
+  }
+  /** Spawn hỏng như Node thật: không pid; nextTick đặt exitCode âm, phát 'error' rồi 'close' — không 'exit'. */
+  const failedSpawn = () => {
+    const c = new FakeChild()
+    c.pid = undefined
+    process.nextTick(() => { c.exitCode = -4058; c.emit('error', new Error('spawn khong-co ENOENT')); c.emit('close', -4058, null) })
+    return c
+  }
+  const good = [row({ user_id: A, remaining_s: 3 * 3600 })]
+  const lifecycle = (child: FakeChild, o: { preRows?: CmsQaStatusRow[]; poll?: (s: AbortSignal) => Promise<CmsQaStatusRow[]>; setup?: () => void; graceMs?: number; killAfterMs?: number; killConfirmMs?: number } = {}) => {
+    const handlers = new Map<string, () => void>()
+    const signals: AbortSignal[] = []
+    const logs: string[] = []
+    let polls = 0
+    const timers = new Set<unknown>()
+    const p = runCmsQaServerLifecycle({
+      child, watchdog: createCmsQaWatchdog({ userIds: [A], guardMinutes: 10 }), preRows: o.preRows ?? good, preStartedAt: Date.now(),
+      poll: (s) => { polls++; signals.push(s); return o.poll ? o.poll(s) : Promise.resolve(good) },
+      setup: o.setup ?? (() => {}), now: () => Date.now(),
+      setInterval: (fn, ms) => { const h = setInterval(fn, ms); timers.add(h); return h },
+      clearInterval: (h) => { clearInterval(h as ReturnType<typeof setInterval>); timers.delete(h) },
+      setTimeout: (fn, ms) => { const h = setTimeout(() => { timers.delete(h); fn() }, ms); timers.add(h); return h },
+      clearTimeout: (h) => { clearTimeout(h as ReturnType<typeof setTimeout>); timers.delete(h) },
+      onSignal: (sig, fn) => { handlers.set(sig, fn) }, offSignal: (sig, fn) => { if (handlers.get(sig) === fn) handlers.delete(sig) },
+      log: (l) => { logs.push(l) }, pollMs: 10, tickMs: 10, graceMs: o.graceMs ?? 15, killAfterMs: o.killAfterMs ?? 30,
+      killConfirmMs: o.killConfirmMs ?? 40,
+    })
+    return { p, handlers, signals, logs, timers, polls: () => polls }
+  }
+  const tick = (ms: number) => new Promise((r) => setTimeout(r, ms))
+  const lost = [row({ user_id: A, active: false, remaining_s: 0 })]
+
+  test('vòng đời: Ctrl+C operator ⇒ 0; handler gỡ, poll đang chờ bị huỷ, không còn timer', async () => {
+    const child = new FakeChild()
+    const box: { pending: AbortSignal | null } = { pending: null }
+    const L = lifecycle(child, { poll: (s) => { box.pending = s; return new Promise(() => {}) } }) // poll treo mãi
+    await tick(40)
+    expect(L.handlers.has('SIGINT') && L.handlers.has('SIGTERM')).toBe(true)
+    L.handlers.get('SIGINT')!()
+    const r = await L.p
+    expect(r).toMatchObject({ rc: 0, stopKind: 'operator', childError: null, stopped: true })
+    expect(child.kills).toEqual(['SIGINT'])
+    expect(L.handlers.size).toBe(0)
+    expect(box.pending?.aborted).toBe(true)
+    expect(L.timers.size).toBe(0)
+  })
+
+  test('vòng đời: canh marker dừng (mất marker giữa chừng) ⇒ 1; preflight dưới ngưỡng ⇒ dừng ngay, 1', async () => {
+    const c1 = new FakeChild()
+    const L1 = lifecycle(c1, { poll: () => Promise.resolve(lost) })
+    const r1 = await L1.p
+    expect(r1).toMatchObject({ rc: 1, stopKind: 'watchdog', stopped: true })
+    expect(c1.kills[0]).toBe('SIGINT')
+    expect(L1.handlers.size).toBe(0)
+    const c2 = new FakeChild()
+    const L2 = lifecycle(c2, { preRows: [row({ user_id: A, remaining_s: 5 * 60 })] })
+    const r2 = await L2.p
+    expect(r2).toMatchObject({ rc: 1, stopKind: 'watchdog' })
+    expect(L2.polls()).toBe(0)
+  })
+
+  test('vòng đời: server tự chết ⇒ 1 (không đổi thành 0); spawn hỏng (không pid, không exit) ⇒ tự kết thúc 1, không kill', async () => {
+    const c1 = new FakeChild()
+    const L1 = lifecycle(c1)
+    await tick(30)
+    c1.die(1, null)
+    expect(await L1.p).toMatchObject({ rc: 1, stopKind: null, code: 1, stopped: true })
+    expect(c1.kills).toEqual([])
+    const c2 = failedSpawn()
+    const L2 = lifecycle(c2)
+    expect(await L2.p).toMatchObject({ rc: 1, childError: 'spawn khong-co ENOENT', stopped: true, pid: null })
+    expect(c2.kills).toEqual([])
+    expect(L2.handlers.size).toBe(0)
+    expect(L2.timers.size).toBe(0)
+  })
+
+  test('PM cli-exit §3 — canh marker dừng → SIGINT lỗi EPERM (đồng bộ / trễ) → SIGKILL ngay → con THẬT SỰ thoát; timer / handler dọn', async () => {
+    for (const mode of ['sigint-error', 'sigint-error-async'] as const) {
+      const c = new FakeChild(mode)
+      // killAfterMs dài: SIGKILL phải đến từ việc xử lý lỗi, không phải hạn SIGINT; timer hạn đó cũng phải bị huỷ.
+      const L = lifecycle(c, { poll: () => Promise.resolve(lost), killAfterMs: 5_000 })
+      const r = await L.p
+      expect(r, mode).toMatchObject({ rc: 1, stopKind: 'watchdog', childError: 'kill EPERM', stopped: true, signal: 'SIGKILL', pid: 4242 })
+      expect(c.kills, mode).toEqual(['SIGINT', 'SIGKILL'])
+      expect(c.alive, mode).toBe(false)
+      expect(c.unrefs, mode).toBe(0)
+      expect(L.timers.size, mode).toBe(0)
+      expect(L.handlers.size, mode).toBe(0)
+    }
+  })
+
+  test('PM cli-exit §3 — operator Ctrl+C → SIGINT lỗi → SIGKILL → con thoát ⇒ 1 (có lỗi, không đổi thành 0); kill() ném ⇒ như error, hữu hạn', async () => {
+    const c1 = new FakeChild('sigint-error')
+    const L1 = lifecycle(c1, { killAfterMs: 5_000 })
+    await tick(20)
+    L1.handlers.get('SIGINT')!()
+    expect(await L1.p).toMatchObject({ rc: 1, stopKind: 'operator', childError: 'kill EPERM', stopped: true, signal: 'SIGKILL' })
+    expect(c1.kills).toEqual(['SIGINT', 'SIGKILL'])
+    expect(c1.alive).toBe(false)
+    expect(L1.timers.size).toBe(0)
+    expect(L1.handlers.size).toBe(0)
+    const c2 = new FakeChild('kill-throws')
+    const L2 = lifecycle(c2, { killAfterMs: 5_000 })
+    await tick(20)
+    expect(() => L2.handlers.get('SIGTERM')!()).not.toThrow()
+    expect(await L2.p).toMatchObject({ rc: 1, stopKind: 'operator', childError: 'kill EINVAL', stopped: false, pid: 4242 })
+    expect(c2.kills).toEqual(['SIGINT', 'SIGKILL'])
+    expect(c2.alive).toBe(true)
+    expect(c2.unrefs).toBe(1)
+    expect(L2.timers.size).toBe(0)
+    expect(L2.handlers.size).toBe(0)
+  })
+
+  test('PM cli-exit §3 — không dừng được ở cấp OS (mọi kill lỗi) ⇒ CHƯA DỪNG rõ ràng, hữu hạn, không báo đã dọn; error / exit muộn không thoát ngoài kiểm soát', async () => {
+    const c = new FakeChild('kill-error')
+    const L = lifecycle(c, { poll: () => Promise.resolve(lost), killAfterMs: 5_000, killConfirmMs: 40 })
+    const t0 = Date.now()
+    const r = await L.p
+    expect(r).toMatchObject({ rc: 1, stopKind: 'watchdog', childError: 'kill EPERM', stopped: false, pid: 4242, code: null, signal: null })
+    expect(Date.now() - t0).toBeLessThan(2_000)
+    expect(c.kills).toEqual(['SIGINT', 'SIGKILL'])
+    expect(c.alive).toBe(true)
+    expect(c.unrefs).toBe(1)
+    expect(L.timers.size).toBe(0)
+    expect(L.handlers.size).toBe(0)
+    expect(L.logs.join('\n')).toContain('SERVER QA CHƯA DỪNG: pid 4242')
+    expect(() => c.emit('error', new Error('kill EPERM lần 3'))).not.toThrow()
+    expect(L.timers.size).toBe(0)
+    expect(c.kills).toEqual(['SIGINT', 'SIGKILL']) // không gửi lại / không hẹn lại sau khi đã bỏ lại
+    expect(() => c.die(null, 'SIGKILL')).not.toThrow()
+    expect(L.timers.size).toBe(0)
+  })
+
+  test('PM cli-exit §3 — lỗi tiến trình con khi server còn sống, chưa ai dừng ⇒ bắt đầu dừng (error), con thoát thật ⇒ 1', async () => {
+    const c = new FakeChild()
+    const L = lifecycle(c)
+    await tick(20)
+    c.emit('error', new Error('channel closed'))
+    expect(await L.p).toMatchObject({ rc: 1, stopKind: 'error', childError: 'channel closed', stopped: true, signal: 'SIGINT' })
+    expect(c.kills).toEqual(['SIGINT'])
+    expect(c.alive).toBe(false)
+    expect(L.timers.size).toBe(0)
+    expect(L.handlers.size).toBe(0)
+  })
+
+  test('vòng đời: setup lỗi sau spawn ⇒ GIẾT server ngay; SIGKILL thành công ⇒ ném lỗi gốc; SIGKILL lỗi ⇒ CmsQaServerNotStoppedError, không poll / handler / timer', async () => {
+    const c1 = new FakeChild()
+    const L1 = lifecycle(c1, { setup: () => { throw new Error('EPERM: ghi manifest') } })
+    await expect(L1.p).rejects.toThrow('EPERM: ghi manifest')
+    expect(c1.kills).toEqual(['SIGKILL'])
+    expect(c1.signalCode).toBe('SIGKILL')
+    expect(L1.polls()).toBe(0)
+    expect(L1.handlers.size).toBe(0)
+    expect(L1.timers.size).toBe(0)
+    expect(L1.logs.join('\n')).toContain('GIẾT server QA')
+    const c2 = new FakeChild('kill-error')
+    const L2 = lifecycle(c2, { setup: () => { throw new Error('EPERM: ghi manifest') } })
+    const e = await L2.p.then(() => null, (x: unknown) => x)
+    expect(e).toBeInstanceOf(CmsQaServerNotStoppedError)
+    expect((e as CmsQaServerNotStoppedError).pid).toBe(4242)
+    expect(String((e as Error).message)).toMatch(/pid 4242 CHƯA DỪNG[\s\S]*EPERM: ghi manifest/)
+    expect(c2.kills).toEqual(['SIGKILL'])
+    expect(c2.alive).toBe(true)
+    expect(c2.unrefs).toBe(1)
+    expect(L2.polls()).toBe(0)
+    expect(L2.handlers.size).toBe(0)
+    expect(L2.timers.size).toBe(0)
+    // spawn hỏng + setup lỗi: không treo chờ 'exit' không bao giờ tới ⇒ ném lỗi gốc
+    const c3 = failedSpawn()
+    const L3 = lifecycle(c3, { setup: () => { throw new Error('EPERM: ghi manifest') } })
+    await expect(L3.p).rejects.toThrow('EPERM: ghi manifest')
+    expect(L3.timers.size).toBe(0)
+  })
+
+  test('vòng đời: Ctrl+C tới cha SAU exit của con nhưng trong grace ⇒ 0; server lờ SIGINT ⇒ SIGKILL sau hạn', async () => {
+    const c1 = new FakeChild()
+    const L1 = lifecycle(c1, { graceMs: 60 })
+    await tick(20)
+    c1.die(null, 'SIGINT') // Windows: con nhận Ctrl+C trước
+    await tick(10)
+    L1.handlers.get('SIGINT')!() // cha nhận muộn, vẫn trong grace
+    expect(await L1.p).toMatchObject({ rc: 0, stopKind: 'operator', stopped: true })
+    expect(c1.kills).toEqual([]) // con đã thoát ⇒ không kill / không hẹn SIGKILL
+    expect(L1.timers.size).toBe(0)
+    const c2 = new FakeChild('ignore-sigint')
+    const L2 = lifecycle(c2, { killAfterMs: 20 })
+    await tick(20)
+    L2.handlers.get('SIGTERM')!()
+    expect(await L2.p).toMatchObject({ rc: 0, stopKind: 'operator', signal: 'SIGKILL', stopped: true })
+    expect(c2.kills).toEqual(['SIGINT', 'SIGKILL'])
+    expect(c2.alive).toBe(false)
+    expect(L2.timers.size).toBe(0)
+  })
+
+  test('cms-verify / cms-qa-access / cms-qa-run thành tiến trình con: đúng mã 0 / 1 / 2, tự kết thúc, không UV_HANDLE_CLOSING', () => {
+    test.setTimeout(180_000)
+    const r = spawnSync(process.execPath, [path.join(WEBAPP, 'scripts', 'qa-cms-cli-exit.mjs')], { encoding: 'utf8', timeout: 170_000 })
+    const out = `${r.stdout}\n${r.stderr}`
+    expect(out, out.slice(-2500)).toMatch(/\n\d+ đạt · 0 lỗi/)
+    expect(out).not.toMatch(/Assertion failed|UV_HANDLE_CLOSING/)
+    expect(r.status).toBe(0)
+  })
 })

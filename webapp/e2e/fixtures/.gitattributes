@@ -1,0 +1,2 @@
+# Fixture CMS I4 được ghim sha256 byte (evidence-meta.json) — giữ nguyên byte khi checkout, không đổi EOL.
+cms-i4/** -text

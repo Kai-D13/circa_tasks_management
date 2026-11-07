@@ -26,9 +26,10 @@ export type CmsRowIssue =
 
 export type CmsNormalizeResult<T> = { ok: true; value: T } | { ok: false; issues: CmsRowIssue[] }
 
-// Ký tự điều khiển C0 + DEL ⇒ khoảng trắng (không lưu / xuất ký tự điều khiển).
+// Ký tự điều khiển C0 + DEL + C1 (U+0080–009F) ⇒ khoảng trắng (không lưu / xuất ký tự điều khiển). Cùng lớp với regex stage
+// của migration 122 (db-reviewer P2-3) — lệch lớp ⇒ một dòng nguồn có C1 làm run kẹt lỗi mãi.
 // eslint-disable-next-line no-control-regex
-const CONTROL_RE = /[\u0000-\u001F\u007F]/g
+const CONTROL_RE = /[\u0000-\u001F\u007F-\u009F]/g
 
 const text = (v: string | null | undefined): string | null => {
   if (v === null || v === undefined) return null

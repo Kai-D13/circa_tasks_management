@@ -2853,7 +2853,7 @@
         ],
         [
          "__EMPTY_3",
-         50
+         null
         ],
         [
          "__EMPTY_4",
@@ -2877,7 +2877,7 @@
     },
     {
      "name": "HUONG_DAN",
-     "ref": "A1:D10",
+     "ref": "A1:D11",
      "merges": [],
      "rows": [
       {
@@ -2956,11 +2956,32 @@
         ],
         [
          "VÍ DỤ",
-         "1–9, 10–19, 20+"
+         "1–9, 10–19, từ 20 trở lên"
         ],
         [
          "GHI CHÚ",
-         "Bắt đầu từ 1, liên tục; chỉ bậc cuối được để trống Den_SL_ban (không giới hạn)"
+         "Bắt đầu từ 1, liên tục; bậc giữa ghi đủ Đến SL bán"
+        ]
+       ]
+      },
+      {
+       "proto": "Object",
+       "entries": [
+        [
+         "TRƯỜNG",
+         "Den_SL_ban (bậc cuối)"
+        ],
+        [
+         "Ý NGHĨA",
+         "Bậc cuối tính từ mốc này trở lên, không giới hạn số lượng"
+        ],
+        [
+         "VÍ DỤ",
+         "(trống)"
+        ],
+        [
+         "GHI CHÚ",
+         "Để trống Đến SL bán. File cũ có số ở bậc cuối sẽ được bỏ giới hạn khi kiểm tra (có cảnh báo)"
         ]
        ]
       },
