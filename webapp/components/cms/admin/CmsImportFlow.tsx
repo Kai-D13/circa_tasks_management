@@ -10,10 +10,12 @@ import { Notice } from '@/components/ds/Notice'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { CmsStepper } from '@/components/cms/admin/CmsStepper'
 import { CmsImportResult } from '@/components/cms/admin/CmsImportResult'
+import { CmsKCheckPanel, type CmsKAckDraft } from '@/components/cms/admin/CmsKCheckPanel'
 import { cn } from '@/lib/utils'
 import { cmsFileSize } from '@/lib/cms/display'
 import {
-  CMS_IMPORT_CHECKS, CMS_IMPORT_COLUMN_HELP, CMS_REUPLOAD_CODES, cmsCommitLabel, type CmsPreviewResult, type CmsRouteError,
+  CMS_IMPORT_CHECKS, CMS_IMPORT_COLUMN_HELP, CMS_REUPLOAD_CODES, CMS_SIMPLE_CHECKS, CMS_SIMPLE_COLUMN_HELP, cmsCommitLabel, cmsKAckable,
+  type CmsPreviewResult, type CmsRouteError,
 } from '@/lib/cms/importView'
 
 // CMS P1-c — A2 bước 2–4 + /[id]/import (UI §3.2; r2 U4 / U16; SPEC §4.5–§4.7). Hai bước qua Route Handler P1-b:
@@ -22,23 +24,31 @@ import {
 //       ⇒ 409 ⇒ "Dữ liệu đã thay đổi — kiểm tra lại file", quay về Upload. Kích hoạt là bước riêng ở A3 (U6).
 // "Hủy lần chạy" chỉ bỏ kết quả phía client (run previewed không được ghi) — KHÔNG huỷ chương trình (H8).
 // Mọi request ghi / tải file lỗi hỏi useFixtureActionBlocked() trước (fixture /ui-catalog/cms-v2: 0 request ghi).
+// CMS đơn giản S1 / S2 (PM r1 08/11 §4–§5; chỉ khi `v2` = cờ CMS_IMPORT_V2_ENABLED): chọn TƯỜNG MINH loại file (9 cột nhiều bậc /
+// 7 cột mức cố định) — server parse + kiểm theo loại đã lưu trong lần kiểm, commit không nhận loại khác; bảng kiểm K + xác nhận tay
+// (gửi lại preview kèm ý định, server gắn người / giờ). v2 OFF ⇒ request y như trước (không gửi format / k_acks).
 
 const MAX_FILE = 5 * 1024 * 1024
 type Step = 'upload' | 'running' | 'result'
 const RUN_STEPS = ['Đọc file và sheet IMPORT_CMS', 'Kiểm tra cột và kiểu ô', 'Tra Product Master', 'Kiểm tra nhóm và thang bậc', 'Kiểm tra trùng chương trình đang chạy']
+const RUN_STEPS_SIMPLE = ['Đọc file mức cố định (sheet đầu tiên)', 'Kiểm tra 7 cột và kiểu ô', 'Tra Product Master', 'Kiểm tra mỗi sản phẩm một mức', 'Kiểm tra trùng chương trình đang chạy']
+type Format = 'tiers' | 'simple'
 
 function errorText(body: CmsRouteError | null): string {
   if (!body) return 'Máy chủ không phản hồi đúng — thử lại'
   const base = body.message ?? 'Không xử lý được file'
-  return body.missing?.length ? `${base}: ${body.missing.join(', ')}` : base
+  if (body.missing?.length) return `${base}: ${body.missing.join(', ')}`
+  return body.duplicate?.length ? `${base}: ${body.duplicate.join(', ')}` : base
 }
 
-export function CmsImportFlow({ program, mode, fromNew, fixture }: {
+export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false }: {
   program: { id: string; name: string }
   mode: 'replace' | 'append'
   fromNew: boolean
   /** Chỉ fixture /ui-catalog: bắt đầu ở bước / kết quả dựng sẵn. */
-  fixture?: { step: Step; result?: CmsPreviewResult; fileName?: string; fileBytes?: number }
+  fixture?: { step: Step; result?: CmsPreviewResult; fileName?: string; fileBytes?: number; format?: Format }
+  /** Cờ CMS_IMPORT_V2_ENABLED (server quyết; page truyền xuống). */
+  v2?: boolean
 }) {
   const router = useRouter()
   const fixtureBlocked = useFixtureActionBlocked()
@@ -47,6 +57,9 @@ export function CmsImportFlow({ program, mode, fromNew, fixture }: {
   const [result, setResult] = useState<CmsPreviewResult | null>(fixture?.result ?? null)
   const [error, setError] = useState<string | null>(null)
   const [committing, setCommitting] = useState(false)
+  const [format, setFormat] = useState<Format>(fixture?.format ?? fixture?.result?.format ?? 'tiers')
+  const [drafts, setDrafts] = useState<CmsKAckDraft>({})
+  const [rechecking, setRechecking] = useState(false)
   const abort = useRef<AbortController | null>(null)
   const fileName = file?.name ?? fixture?.fileName ?? null
   const fileBytes = file?.size ?? fixture?.fileBytes ?? null
@@ -62,31 +75,52 @@ export function CmsImportFlow({ program, mode, fromNew, fixture }: {
   function reset(keepFile: boolean) {
     abort.current?.abort()
     setResult(null)
+    setDrafts({})
     setStep('upload')
     if (!keepFile) setFile(null)
   }
 
-  async function runPreview() {
-    if (!file) return
+  function pickFormat(f: Format) {
+    if (f === format) return
+    setFormat(f)
+    setResult(null)
+    setDrafts({})
+  }
+
+  /** `withAcks`: gửi lại CHÍNH file kèm ý định xác nhận K (chỉ SP được phép xác nhận + có nguồn). */
+  async function runPreview(withAcks = false) {
     if (fixtureBlocked()) return
+    if (!file) { if (withAcks) setError('Chọn lại file để kiểm tra lại'); return }
     setError(null)
-    setStep('running')
+    if (withAcks) setRechecking(true); else setStep('running')
     const ac = new AbortController()
     abort.current = ac
     const fd = new FormData()
     fd.append('program_id', program.id)
     fd.append('file', file)
+    if (v2) fd.append('format', format)
+    if (v2 && withAcks && result?.kCheck) {
+      const kept = result.kCheck.products.filter((x) => x.ack !== null && x.k !== null).map((x) => ({ product_id: x.productId, unit: x.unit, k: x.k, source: x.ack!.source }))
+      const added = result.kCheck.products
+        .filter((x) => cmsKAckable(x) && drafts[x.productId]?.checked && drafts[x.productId].source.trim().length >= 3)
+        .map((x) => ({ product_id: x.productId, unit: x.unit, k: x.k, source: drafts[x.productId].source.trim() }))
+      const acks = [...kept, ...added]
+      fd.append('k_acks', JSON.stringify(acks))
+    }
     try {
       const res = await fetch('/api/cms/import/preview', { method: 'POST', body: fd, signal: ac.signal })
       const body = (await res.json().catch(() => null)) as CmsPreviewResult | CmsRouteError | null
       if (ac.signal.aborted) return
-      if (!res.ok || !body || !body.ok) { setError(errorText(body as CmsRouteError | null)); setStep('upload'); return }
+      if (!res.ok || !body || !body.ok) { setError(errorText(body as CmsRouteError | null)); if (!withAcks) setStep('upload'); return }
       setResult(body)
+      setDrafts({})
       setStep('result')
     } catch {
       if (ac.signal.aborted) return
       setError('Không kết nối được máy chủ — thử lại')
-      setStep('upload')
+      if (!withAcks) setStep('upload')
+    } finally {
+      if (withAcks) setRechecking(false)
     }
   }
 
@@ -100,6 +134,7 @@ export function CmsImportFlow({ program, mode, fromNew, fixture }: {
     fd.append('run_id', result.runId)
     fd.append('sha256', result.sha256)
     fd.append('file', file)
+    if (v2) fd.append('format', result.format ?? 'tiers')
     try {
       const res = await fetch('/api/cms/import/commit', { method: 'POST', body: fd })
       const body = (await res.json().catch(() => null)) as ({ ok: true } | CmsRouteError | null)
@@ -139,10 +174,23 @@ export function CmsImportFlow({ program, mode, fromNew, fixture }: {
       {step === 'upload' && (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
           <div className="min-w-0 space-y-3">
+            {v2 && (
+              <fieldset data-cms-import-format={format} className="space-y-1.5">
+                <legend className="text-[13px] font-semibold">Loại file</legend>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  {([['simple', 'Mức cố định', 'Mỗi sản phẩm một mức CMS / đơn vị, không target (7 cột)'], ['tiers', 'Nhiều bậc / có target', 'Mẫu IMPORT_CMS 9 cột']] as const).map(([f, t, d]) => (
+                    <label key={f} className={cn('flex min-h-[44px] cursor-pointer items-start gap-2.5 rounded-v2-control border bg-card p-3', format === f && 'border-v2-selected-line bg-accent')}>
+                      <input type="radio" name="cms-import-format" value={f} checked={format === f} onChange={() => pickFormat(f)} className="mt-0.5 h-4 w-4" />
+                      <span className="min-w-0"><span className="block text-[13px] font-semibold">{t}</span><span className="block text-[12px] text-muted-foreground">{d}</span></span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+            )}
             <label className="flex min-h-[160px] cursor-pointer flex-col items-center justify-center gap-2 rounded-v2-panel border border-dashed border-input bg-card p-6 text-center">
               <Upload aria-hidden="true" className="h-6 w-6 text-muted-foreground" />
-              <span className="font-semibold">Chọn file .xlsx (sheet IMPORT_CMS)</span>
-              <span className="text-[12px] text-muted-foreground">Tối đa 5 MiB · 2.000 dòng · 9 cột</span>
+              <span className="font-semibold">{format === 'simple' ? 'Chọn file .xlsx mức cố định (sheet đầu tiên)' : 'Chọn file .xlsx (sheet IMPORT_CMS)'}</span>
+              <span className="text-[12px] text-muted-foreground">{format === 'simple' ? 'Tối đa 5 MiB · 2.000 dòng · 7 cột + 2 cột bổ sung' : 'Tối đa 5 MiB · 2.000 dòng · 9 cột'}</span>
               <input
                 type="file"
                 accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -150,9 +198,15 @@ export function CmsImportFlow({ program, mode, fromNew, fixture }: {
                 onChange={(e) => pick(e.target.files?.[0] ?? null)}
               />
             </label>
-            <a href="/templates/Circa_Import_CMS.xlsx" download className="inline-flex min-h-[44px] items-center gap-1.5 text-[13px] font-medium underline-offset-2 hover:underline">
-              <FileSpreadsheet className="h-4 w-4" /> Tải file mẫu (9 cột)
-            </a>
+            {format === 'simple' ? (
+              <a href="/templates/Circa_Import_CMS_muc_co_dinh.xlsx" download className="inline-flex min-h-[44px] items-center gap-1.5 text-[13px] font-medium underline-offset-2 hover:underline">
+                <FileSpreadsheet className="h-4 w-4" /> Tải file mẫu mức cố định
+              </a>
+            ) : (
+              <a href="/templates/Circa_Import_CMS.xlsx" download className="inline-flex min-h-[44px] items-center gap-1.5 text-[13px] font-medium underline-offset-2 hover:underline">
+                <FileSpreadsheet className="h-4 w-4" /> Tải file mẫu (9 cột)
+              </a>
+            )}
             {fileName && (
               <div data-cms-file className="flex items-center gap-3 rounded-v2-panel border bg-card p-3">
                 <FileSpreadsheet aria-hidden="true" className="h-5 w-5 shrink-0 text-muted-foreground" />
@@ -167,7 +221,7 @@ export function CmsImportFlow({ program, mode, fromNew, fixture }: {
                     <tr className="text-left"><th className="pl-4 pr-3 py-2 text-[12px] font-medium text-muted-foreground">Cột</th><th className="pl-3 pr-4 py-2 text-[12px] font-medium text-muted-foreground">Ý nghĩa</th></tr>
                   </thead>
                   <tbody>
-                    {CMS_IMPORT_COLUMN_HELP.map(([c, m]) => (
+                    {(format === 'simple' ? CMS_SIMPLE_COLUMN_HELP : CMS_IMPORT_COLUMN_HELP).map(([c, m]) => (
                       <tr key={c} className="border-t"><td className="pl-4 pr-3 py-2 font-mono text-[12px] whitespace-nowrap">{c}</td><td className="pl-3 pr-4 py-2 text-muted-foreground">{m}</td></tr>
                     ))}
                   </tbody>
@@ -178,13 +232,14 @@ export function CmsImportFlow({ program, mode, fromNew, fixture }: {
           <div className="min-w-0 space-y-2 rounded-v2-panel border bg-card p-4">
             <p className="text-[13px] font-semibold">Hệ thống sẽ kiểm tra</p>
             <ul className="list-disc space-y-1 pl-5 text-[13px] text-muted-foreground">
-              {CMS_IMPORT_CHECKS.map((c) => <li key={c}>{c}</li>)}
+              {(format === 'simple' ? CMS_SIMPLE_CHECKS : CMS_IMPORT_CHECKS).map((c) => <li key={c}>{c}</li>)}
+              {v2 && <li>K (quy đổi đơn vị) đối chiếu với dữ liệu bán; chưa có bằng chứng ⇒ cần super xác nhận kèm nguồn</li>}
             </ul>
             <p className="text-[12px] text-muted-foreground">Một dòng lỗi làm loại cả nhóm ProductID; nhóm hợp lệ khác vẫn được nạp.</p>
           </div>
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end lg:col-span-2">
             <Link href={`/targets/campaigns/cms/${program.id}`} className={cn(buttonVariants({ variant: 'ghost' }), 'h-[44px] md:h-[36px]')}>Quay lại</Link>
-            <Button type="button" disabled={!file} onClick={runPreview} className="h-[44px] md:h-[36px] font-semibold">Chạy xử lý</Button>
+            <Button type="button" disabled={!file} onClick={() => runPreview(false)} className="h-[44px] md:h-[36px] font-semibold">Chạy xử lý</Button>
           </div>
         </div>
       )}
@@ -196,7 +251,7 @@ export function CmsImportFlow({ program, mode, fromNew, fixture }: {
           </div>
           <ul className="space-y-1.5 text-[13px]">
             {/* Một lần POST preview (không stream): bước đầu "đang chạy", các bước sau "chờ" — kết quả từng bước hiện ở Kết quả. */}
-            {RUN_STEPS.map((s, i) => (
+            {(format === 'simple' ? RUN_STEPS_SIMPLE : RUN_STEPS).map((s, i) => (
               <li key={s} data-cms-run-step={i === 0 ? 'running' : 'pending'} className={cn('flex items-center gap-2', i === 0 ? 'text-foreground' : 'text-muted-foreground')}>
                 {i === 0 ? <Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" /> : <Circle aria-hidden="true" className="h-4 w-4" />}
                 {s}<span className="sr-only">{i === 0 ? ' — đang chạy' : ' — chờ'}</span>
@@ -212,14 +267,23 @@ export function CmsImportFlow({ program, mode, fromNew, fixture }: {
       {step === 'result' && result && (
         <div className="space-y-4">
           <CmsImportResult result={result} />
+          {result.kCheck && (
+            <CmsKCheckPanel
+              kCheck={result.kCheck}
+              drafts={drafts}
+              onDraft={(id, d) => setDrafts((x) => ({ ...x, [id]: d }))}
+              onRecheck={() => runPreview(true)}
+              busy={rechecking || committing}
+            />
+          )}
           {result.groupsOk.length === 0 && (
             <Notice tone="warning">Không có sản phẩm hợp lệ để ghi — sửa file theo danh sách lỗi rồi kiểm tra lại.</Notice>
           )}
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-            <Button type="button" variant="ghost" onClick={() => reset(false)} disabled={committing} className="h-[44px] md:h-[36px]">Hủy lần chạy</Button>
-            <Button type="button" variant="outline" onClick={() => reset(false)} disabled={committing} className="h-[44px] md:h-[36px]">Upload file khác</Button>
+            <Button type="button" variant="ghost" onClick={() => reset(false)} disabled={committing || rechecking} className="h-[44px] md:h-[36px]">Hủy lần chạy</Button>
+            <Button type="button" variant="outline" onClick={() => reset(false)} disabled={committing || rechecking} className="h-[44px] md:h-[36px]">Upload file khác</Button>
             {commitLabel && (
-              <Button type="button" onClick={commit} disabled={committing} data-cms-commit={result.mode} className="h-[44px] md:h-[36px] font-semibold">
+              <Button type="button" onClick={commit} disabled={committing || rechecking} data-cms-commit={result.mode} className="h-[44px] md:h-[36px] font-semibold">
                 {committing && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}{commitLabel}
               </Button>
             )}

@@ -17,6 +17,7 @@ import {
 import { CMS_NO_RUN_TEXT, cmsNoRunText, type CmsResultLineDto } from '@/lib/cms/resultView'
 import type { CmsProductView, CmsProgramRowView } from '@/lib/cms/server/catalog'
 import { cmsNavHref, type CmsNav } from '@/lib/cms/fixtureNav'
+import { cmsIsFlatProduct } from '@/lib/cms/flat'
 
 // CMS P2-c (I3) · D3 `/targets/cms/history?program=&product=` (UI §4.3; U12 / U14 / U18; kế hoạch PM §6.1). Staff xem dòng của
 // mình, QLCH xem dòng của staff hiện thuộc nhà thuốc (RPC 122 lọc). Dòng đọc từ cms_result_lines của run ĐÃ GHIM (`run=` trong
@@ -60,7 +61,8 @@ export function CmsStaffHistoryView({ programs, selected, products, results, lin
       ? [...cmsProductTotals(rows, new Map(products.map((p) => [p.id, p.baseQuantityCms]))).entries()].map(([id, t]) => ({ id, amount: t.amountVnd, note: `${t.soldText} ${byId.get(id)?.unitCms ?? ''} · ${t.staffWithSales} dược sĩ` }))
       : products.map((p) => {
         const c = cmsStaffCard({ programProductId: p.id, perUnit: p.baseQuantityCms, tiers: p.tiers, row: rows.find((r) => r.programProductId === p.id) ?? null, catalog: loaded!.rows.catalog })
-        const tier = c.position.index !== null ? ` · bậc ${p.tiers[c.position.index].order}` : ''
+        // CMS đơn giản (PM r1 §6): SP mức cố định không có "bậc".
+        const tier = c.position.index !== null && !cmsIsFlatProduct(p) ? ` · bậc ${p.tiers[c.position.index].order}` : ''
         return { id: p.id, amount: c.amountVnd, note: c.gate && !c.gate.met ? `${c.soldText} ${p.unitCms} · chưa đạt target` : `${c.soldText} ${p.unitCms}${tier}` }
       })).filter((e) => byId.has(e.id)).sort((a, b) => (a.amount === b.amount ? 0 : a.amount > b.amount ? -1 : 1))
     : []
@@ -78,16 +80,16 @@ export function CmsStaffHistoryView({ programs, selected, products, results, lin
         <EmptyState className="py-12 rounded-v2-panel border border-dashed border-input bg-card" icon={ListX} title="Chưa có chương trình CMS nào đang tính" />
       ) : (
         <>
-          <nav aria-label="Chương trình" className="flex max-w-full flex-wrap gap-1 rounded-v2-control bg-muted p-1">
+          <nav aria-label="Chương trình" className="flex max-w-full flex-wrap gap-1 rounded-v2-control border bg-card p-1">
             {recent.map((p) => (
               <Link key={p.id} href={cmsNavHref(nav, cmsHistoryUrl({ programId: p.id }))} aria-current={p.id === selected.id ? 'page' : undefined}
-                className={cn(SEG, 'max-w-full', p.id === selected.id ? 'border border-input bg-card font-semibold text-foreground' : 'text-muted-foreground')}>
+                className={cn(SEG, 'max-w-full', p.id === selected.id ? 'bg-primary font-semibold text-primary-foreground' : 'font-medium text-foreground hover:bg-muted')}>
                 <span className="truncate">{p.name}</span>
               </Link>
             ))}
             {others.length > 0 && (
               <details className="relative">
-                <summary className={cn(SEG, 'cursor-pointer list-none text-muted-foreground [&::-webkit-details-marker]:hidden')}>Khác ({others.length})</summary>
+                <summary className={cn(SEG, 'cursor-pointer list-none font-medium text-foreground hover:bg-muted [&::-webkit-details-marker]:hidden')}>Khác ({others.length})</summary>
                 <ul className="mt-1 space-y-1 rounded-v2-panel border bg-card p-1">
                   {others.map((p) => (
                     <li key={p.id}><Link href={cmsNavHref(nav, cmsHistoryUrl({ programId: p.id }))} className={cn(SEG, 'w-full')}><span className="truncate">{p.name}</span></Link></li>

@@ -62,6 +62,18 @@ export function cmsQaServerFromEnv(env: Env): boolean {
   return env.CMS_QA_SERVER === '1'
 }
 
+/**
+ * CMS đơn giản S1 + S2 (PM spec r1 08/11 §4–§5): import mẫu mức cố định (7 cột) + kiểm K theo dữ liệu bán khi import. Mặc định OFF —
+ * OFF ⇒ import như trước (chỉ mẫu 9 cột, không kiểm K). Chỉ có hiệu lực khi CMS_PROGRAM_ENABLED bật.
+ */
+export function cmsImportV2FromEnv(env: Env): boolean {
+  return cmsFlagsFromEnv(env).program && env.CMS_IMPORT_V2_ENABLED === 'true'
+}
+
+export function isCmsImportV2Enabled(): boolean {
+  return cmsImportV2FromEnv(process.env)
+}
+
 export function isCmsQaServer(): boolean {
   return cmsQaServerFromEnv(process.env)
 }

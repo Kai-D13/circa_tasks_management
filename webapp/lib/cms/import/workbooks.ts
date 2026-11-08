@@ -5,8 +5,9 @@
 //  · CMS-Q-220: bậc cuối luôn để TRỐNG Den_SL_ban (không giới hạn); không dùng số giả 999999 / 2147483647 để biểu diễn vô hạn.
 
 import * as XLSX from 'xlsx'
-import { CMS_IMPORT_COLUMNS, CMS_IMPORT_SHEET, type CmsImportRawRow } from './parse'
+import { CMS_IMPORT_COLUMNS, CMS_IMPORT_SHEET, type CmsImportColumn, type CmsImportRawRow } from './parse'
 import type { CmsImportIssue } from './validate'
+import { CMS_SIMPLE_HEADER, cmsImportColumnLabel, type CmsSimpleField } from './simpleColumns'
 
 function toBytes(wb: XLSX.WorkBook): Uint8Array<ArrayBuffer> {
   return new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx', compression: true }) as ArrayBuffer)
@@ -15,7 +16,7 @@ function toBytes(wb: XLSX.WorkBook): Uint8Array<ArrayBuffer> {
 /** Nhóm bị loại ở dạng lưu trong import run (raw cells, không kèm ô đã phân loại). */
 export interface CmsRejectedGroupRaw {
   key: string
-  rows: readonly Pick<CmsImportRawRow, 'excelRow' | 'raw'>[]
+  rows: readonly Pick<CmsImportRawRow, 'excelRow' | 'raw' | 'info'>[]
   errors: readonly CmsImportIssue[]
 }
 
@@ -33,6 +34,57 @@ export function buildCmsImportErrorXlsx(rejected: readonly CmsRejectedGroupRaw[]
   const ws = XLSX.utils.aoa_to_sheet(aoa)
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, CMS_IMPORT_SHEET)
+  return toBytes(wb)
+}
+
+/** CMS đơn giản S1 — file lỗi đúng BỐ CỤC mức cố định (7 cột business + 2 cột bổ sung + Loi) để sửa rồi nạp lại bằng mẫu mức cố định. */
+export const CMS_SIMPLE_SHEET = 'MUC_CO_DINH'
+const SIMPLE_ORDER: CmsSimpleField[] = ['product_id', 'product_name', 'brand_name', 'unit', 'price', 'cms', 'promo', 'base_quantity', 'advice']
+const SIMPLE_FROM_RAW: Partial<Record<CmsSimpleField, CmsImportColumn>> = {
+  product_id: 'ProductID', unit: 'unit_CMS', cms: 'CMS_VND_SP', base_quantity: 'base_quantity_CMS', advice: 'Noi_dung_tu_van',
+}
+export function buildCmsSimpleErrorXlsx(rejected: readonly CmsRejectedGroupRaw[]): Uint8Array<ArrayBuffer> {
+  const aoa: (string | number | null)[][] = [[...SIMPLE_ORDER.map((f) => CMS_SIMPLE_HEADER[f]), 'Loi']]
+  for (const g of rejected) {
+    const first = g.errors[0]
+    const label = (e: CmsImportIssue) => cmsImportColumnLabel(e.column, 'simple')
+    for (const row of [...g.rows].sort((a, b) => a.excelRow - b.excelRow)) {
+      const own = g.errors.filter((e) => e.excelRow === row.excelRow).map((e) => `${label(e) ? `[${label(e)}] ` : ''}${e.message} — ${e.fix}`)
+      const loi = own.length ? own.join('; ')
+        : first ? `Cả sản phẩm bị loại do lỗi ở dòng ${first.excelRow ?? '?'}: ${first.message}` : 'Cả sản phẩm bị loại'
+      aoa.push([...SIMPLE_ORDER.map((f) => { const c = SIMPLE_FROM_RAW[f]; return c ? row.raw[c] : row.info?.[f] ?? null }), loi])
+    }
+  }
+  const ws = XLSX.utils.aoa_to_sheet(aoa)
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, CMS_SIMPLE_SHEET)
+  return toBytes(wb)
+}
+
+/** File mẫu mức cố định: 7 cột business + 2 cột bổ sung bắt buộc để ghi (K, tư vấn); ProductID GIẢ 999xxx. */
+export function buildCmsSimpleTemplateXlsx(): Uint8Array<ArrayBuffer> {
+  const [a, b] = CMS_TEMPLATE_EXAMPLE_IDS
+  const advice = 'Nội dung tư vấn mẫu — thay bằng tài liệu được duyệt.'
+  const aoa: (string | number | null)[][] = [
+    SIMPLE_ORDER.map((f) => (f === 'promo' ? 'CTKM tháng 11' : CMS_SIMPLE_HEADER[f])),
+    [Number(a), 'Sản phẩm mẫu A (xoá dòng này)', 'Brand mẫu', 'hộp', 320000, 25000, 0, 30, advice],
+    [Number(b), 'Sản phẩm mẫu B (xoá dòng này)', 'Brand mẫu', 'chai', 95000, 18000, 0.1, 1, advice],
+  ]
+  const ws = XLSX.utils.aoa_to_sheet(aoa)
+  ws['!cols'] = [{ wch: 12 }, { wch: 36 }, { wch: 14 }, { wch: 18 }, { wch: 18 }, { wch: 14 }, { wch: 14 }, { wch: 18 }, { wch: 48 }]
+  const guide = XLSX.utils.aoa_to_sheet([
+    ['CỘT', 'Ý NGHĨA', 'GHI CHÚ'],
+    ['product_id', 'Mã product_id trên POS (số nguyên)', 'Bắt buộc; mỗi sản phẩm MỘT dòng; phải có trên Product Master'],
+    ['product_name · brand_name · Giá bán / item (đ) · CTKM', 'Thông tin tham khảo', 'KHÔNG dùng trong công thức CMS; tên / ảnh / giá hiển thị theo Product Master'],
+    ['ĐV tính CMS (1 item)', 'Đơn vị hưởng CMS', 'Bắt buộc (vd. hộp, chai)'],
+    ['CMS proposal', 'Mức CMS cố định cho MỖI đơn vị CMS (VND, số nguyên)', 'Bắt buộc; nhập ô số; không target, không bậc'],
+    ['base_quantity_CMS', 'Số đơn vị cơ sở = 1 đơn vị CMS (K)', 'Bắt buộc để ghi; KHÔNG mặc định 1; hệ thống đối chiếu với dữ liệu bán khi kiểm tra'],
+    ['Noi_dung_tu_van', 'Nội dung tư vấn đã kiểm duyệt', 'Bắt buộc để ghi; tối đa 4.000 ký tự'],
+    ['CÁCH TÍNH', 'CMS = floor(tổng lượng cơ sở bán / K) × CMS proposal, theo từng dược sĩ × sản phẩm trong kỳ', ''],
+  ])
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, ws, CMS_SIMPLE_SHEET)
+  XLSX.utils.book_append_sheet(wb, guide, 'HUONG_DAN')
   return toBytes(wb)
 }
 

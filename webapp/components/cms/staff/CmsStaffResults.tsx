@@ -56,32 +56,34 @@ function UpdatedLine({ header, display }: { header: CmsResultHeaderDto; display:
 
 function Tile({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="min-w-0 rounded-[8px] bg-background/10 px-2.5 py-2 dark:bg-primary-foreground/10">
-      <p className="text-[11px] leading-tight opacity-80">{label}</p>
+    <div className="min-w-0 rounded-[8px] bg-card px-2.5 py-2">
+      <p className="text-[11px] leading-tight text-muted-foreground">{label}</p>
       <p className="mt-0.5 text-[15px] font-bold tabular-nums leading-tight [overflow-wrap:anywhere]">{value}</p>
     </div>
   )
 }
 
-/** Hero staff "CMS tạm tính của bạn" (light: nền chữ đậm; dark: nền action — UI §4.1). */
+/** Hero staff "CMS tạm tính của bạn". CMS đơn giản S3 (PM r1 08/11 §6 — thay "thẻ đen" UI §4.1): nền selected nhạt `bg-accent`
+ *  (v2 #FFF1EA / tối #2A1E17) + viền `border-v2-selected-line`, chữ `text-foreground`, nhãn `text-accent-foreground`; ô con `bg-card`. */
 export function CmsStaffHero({ summary, header, programId, display = null, nav }: { summary: CmsStaffSummary | null; header: CmsResultHeaderDto; programId: string; display?: CmsDisplayStatus | null; nav?: CmsNav }) {
   const has = header.run !== null && summary !== null
   return (
-    <section data-cms-hero={has ? 'ok' : 'none'} className="space-y-3 rounded-v2-panel bg-foreground p-4 text-background dark:bg-primary dark:text-primary-foreground">
+    <section data-cms-hero={has ? 'ok' : 'none'} className="space-y-3 rounded-v2-panel border border-v2-selected-line bg-accent p-4 text-foreground">
       <div>
-        <p data-cms-hero-title className="text-[13px] opacity-80">{cmsStaffAmountTitle(display, 'own')}</p>
-        <p data-cms-hero-amount className="text-[30px] font-bold leading-tight tabular-nums">{has ? cmsVnd(summary.amountVnd) : '—'}</p>
-        <SalesOnlyNote header={header} display={display} className="text-[12px] opacity-80" />
+        <p data-cms-hero-title className="text-[13px] font-medium text-accent-foreground">{cmsStaffAmountTitle(display, 'own')}</p>
+        <p data-cms-hero-amount className="text-[30px] font-bold leading-tight tabular-nums [overflow-wrap:anywhere]">{has ? cmsVnd(summary.amountVnd) : '—'}</p>
+        <SalesOnlyNote header={header} display={display} className="text-[12px] text-muted-foreground" />
       </div>
-      <div className="grid grid-cols-3 gap-2">
+      {/* Ô GMV rộng hơn (số tiền dài nhất) — số lớn không gãy giữa chữ số ở 360 / 390. */}
+      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.6fr)] gap-2">
         <Tile label="SP có CMS" value={has ? `${summary.productsWithCms}/${summary.productCount}` : '—'} />
         <Tile label="SP có bán" value={has ? summary.productsSold : '—'} />
         <Tile label="GMV" value={has ? cmsVnd(summary.gmvVnd) : '—'} />
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[12px] opacity-90">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[12px] text-muted-foreground">
         <span><UpdatedLine header={header} display={display} /></span>
         {has && (
-          <Link href={cmsNavHref(nav, cmsHistoryHref(programId))} className="inline-flex min-h-[44px] items-center gap-1 font-semibold underline-offset-2 hover:underline">
+          <Link href={cmsNavHref(nav, cmsHistoryHref(programId))} className="inline-flex min-h-[44px] items-center gap-1 font-semibold text-foreground underline-offset-2 hover:underline">
             <History className="h-4 w-4" aria-hidden="true" /> Xem ghi nhận
           </Link>
         )}
@@ -90,22 +92,23 @@ export function CmsStaffHero({ summary, header, programId, display = null, nav }
   )
 }
 
-/** QLCH (U19): tổng nhà thuốc = cộng kết quả cá nhân của staff HIỆN thuộc nhà thuốc; không "của bạn", không gợi ý. */
-export function CmsStoreHero({ summary, header, programId, display = null, nav }: { summary: CmsStoreSummary | null; header: CmsResultHeaderDto; programId: string; display?: CmsDisplayStatus | null; nav?: CmsNav }) {
+/** QLCH (U19): tổng nhà thuốc = cộng kết quả cá nhân của staff HIỆN thuộc nhà thuốc; không "của bạn", không gợi ý.
+ *  CMS đơn giản S3: cùng kiểu nền selected nhạt + viền như hero staff; `simple` (mọi SP mức cố định) ⇒ bỏ câu "tính bậc riêng". */
+export function CmsStoreHero({ summary, header, programId, display = null, simple = false, nav }: { summary: CmsStoreSummary | null; header: CmsResultHeaderDto; programId: string; display?: CmsDisplayStatus | null; simple?: boolean; nav?: CmsNav }) {
   const has = header.run !== null && summary !== null
   return (
-    <section data-cms-store-hero={has ? 'ok' : 'none'} className="space-y-3 rounded-v2-panel border bg-card p-4">
+    <section data-cms-store-hero={has ? 'ok' : 'none'} className="space-y-3 rounded-v2-panel border border-v2-selected-line bg-accent p-4 text-foreground">
       <div>
-        <p data-cms-store-title className="text-[13px] text-muted-foreground">{cmsStaffAmountTitle(display, 'store')}</p>
-        <p data-cms-store-amount className="text-[26px] font-bold leading-tight tabular-nums">{has ? cmsVnd(summary.amountVnd) : '—'}</p>
-        <p className="text-[12px] text-muted-foreground">Cộng CMS từng dược sĩ hiện thuộc nhà thuốc — mỗi người tính bậc riêng.</p>
+        <p data-cms-store-title className="text-[13px] font-medium text-accent-foreground">{cmsStaffAmountTitle(display, 'store')}</p>
+        <p data-cms-store-amount className="text-[26px] font-bold leading-tight tabular-nums [overflow-wrap:anywhere]">{has ? cmsVnd(summary.amountVnd) : '—'}</p>
+        <p data-cms-store-note className="text-[12px] text-muted-foreground">{simple ? 'Cộng CMS từng dược sĩ hiện thuộc nhà thuốc.' : 'Cộng CMS từng dược sĩ hiện thuộc nhà thuốc — mỗi người tính bậc riêng.'}</p>
         <SalesOnlyNote header={header} display={display} className="text-[12px] text-muted-foreground" />
       </div>
-      <div className="grid grid-cols-3 gap-2 text-[12px]">
+      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.6fr)] gap-2 text-[12px]">
         {/* Mẫu số ở đây là dược sĩ CÓ BÁN (RPC chỉ trả người có dòng kết quả) — ghi rõ, không lẫn mẫu số Q-212 (mọi staff). */}
-        <div className="rounded-[8px] bg-muted px-2.5 py-2"><p className="text-muted-foreground">Dược sĩ có CMS</p><p className="text-[15px] font-bold tabular-nums">{has ? summary.staffWithCms : '—'}</p>{has && <p data-cms-store-staff-sales className="text-[11px] text-muted-foreground tabular-nums">/ {summary.staffWithSales} người có bán</p>}</div>
-        <div className="rounded-[8px] bg-muted px-2.5 py-2"><p className="text-muted-foreground">SP có CMS</p><p className="text-[15px] font-bold tabular-nums">{has ? `${summary.productsWithCms}/${summary.productCount}` : '—'}</p></div>
-        <div className="rounded-[8px] bg-muted px-2.5 py-2"><p className="text-muted-foreground">GMV</p><p className="text-[15px] font-bold tabular-nums">{has ? cmsVnd(summary.gmvVnd) : '—'}</p></div>
+        <div className="rounded-[8px] bg-card px-2.5 py-2"><p className="text-muted-foreground">Dược sĩ có CMS</p><p className="text-[15px] font-bold tabular-nums">{has ? summary.staffWithCms : '—'}</p>{has && <p data-cms-store-staff-sales className="text-[11px] text-muted-foreground tabular-nums">/ {summary.staffWithSales} người có bán</p>}</div>
+        <div className="rounded-[8px] bg-card px-2.5 py-2"><p className="text-muted-foreground">SP có CMS</p><p className="text-[15px] font-bold tabular-nums">{has ? `${summary.productsWithCms}/${summary.productCount}` : '—'}</p></div>
+        <div className="rounded-[8px] bg-card px-2.5 py-2"><p className="text-muted-foreground">GMV</p><p className="text-[15px] font-bold tabular-nums">{has ? cmsVnd(summary.gmvVnd) : '—'}</p></div>
       </div>
       <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 text-[12px] text-muted-foreground">
         <span><UpdatedLine header={header} display={display} /></span>

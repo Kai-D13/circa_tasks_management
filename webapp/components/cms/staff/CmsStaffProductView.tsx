@@ -18,6 +18,7 @@ import { CMS_NO_RUN_TEXT, cmsNoRunText, type CmsResultLineDto } from '@/lib/cms/
 import type { CmsStaffProduct } from '@/lib/cms/server/staffCatalog'
 import { cmsQtyExplainRow } from '@/lib/cms/productPresentation'
 import { cmsNavHref, type CmsNav } from '@/lib/cms/fixtureNav'
+import { cmsFlatEachText, cmsFlatEquation, cmsFlatEquationText, cmsFlatRate } from '@/lib/cms/flat'
 
 // CMS P1-d · D2 `/targets/cms/products/[programProductId]` (UI §4.2; r2 U1 / U19). P1 CHỈ: ảnh, tên, ProductID · giá ·
 // chương trình, điều kiện cấu hình (ẩn khi không target), thang chính sách `đ/unit_CMS`, quy cách, tư vấn ĐẦY ĐỦ (text
@@ -27,6 +28,9 @@ import { cmsNavHref, type CmsNav } from '@/lib/cms/fixtureNav'
 // cùng hàm bậc engine), 3 ghi nhận gần nhất. QLCH (U19): tổng SP của nhà thuốc + theo dược sĩ, không "Nếu bán thêm".
 // P3a r2 (PM r1 PKG-P1-1): Chờ chốt kỳ / Đã chốt vẫn mở — nhãn theo trạng thái (Đã chốt = run đóng băng), không "Nếu bán thêm",
 // thang bậc chỉ ghi kết quả đạt được.
+// CMS đơn giản S3 (PM r1 08/11 §6): SP mức cố định ⇒ "Q hộp × X₫ = A₫" (chỉ khi khớp tiền snapshot — UI không tính lại tiền), khối
+// "Mức CMS" thay "Thang CMS" + câu "Lũy tiến", không chia bậc, KHÔNG "Nếu bán thêm" (chỉ dòng tĩnh "Mỗi hộp được tính CMS X₫" khi đang
+// chạy). Phần lẻ giải thích bằng đơn vị cơ sở; quy cách (K) giữ ở dòng phụ. SP có bậc / target giữ nguyên.
 
 export function CmsStaffProductView({ data, today, results = { kind: 'off' }, manager = false, recent = null, returnsApproved = false, nav }: {
   data: CmsStaffProduct
@@ -56,6 +60,8 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
   const storeStaff = withNumbers && manager ? cmsStaffRows(rows, loaded.rows.users) : []
   const tierUnitsDone = (i: number) => (slices ? slices[i].units : BigInt(0))
   const qty = card?.row ? cmsQtyExplainRow(card.row) : null
+  const rate = cmsFlatRate(p)
+  const eq = card && rate ? cmsFlatEquation(p, card.row) : null
 
   return (
     <div data-ui-v2="page" data-layout-width="centered" data-cms-staff-product-detail={p.gmvBasis} data-cms-results={results.kind} className="mx-auto max-w-2xl p-4 space-y-4 v2:space-y-3">
@@ -90,9 +96,16 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
           </div>
           {card ? (
             <>
-              <p className="text-[13px] text-muted-foreground tabular-nums" data-cms-qty-line>
-                Đã bán {card.soldText} {p.unitCms} · {gateOpen ? <>được tính CMS {(qty?.rewarded ?? card.cmsQuantity).toString()} {p.unitCms}</> : <>chưa tính CMS {card.cmsQuantity.toString()} {p.unitCms} (chờ đạt target)</>}
-              </p>
+              {eq ? (
+                <>
+                  <p className="text-[13px] text-muted-foreground tabular-nums" data-cms-qty-line>Đã bán {card.soldText} {p.unitCms}</p>
+                  <p data-cms-flat-equation className="text-[15px] font-semibold tabular-nums [overflow-wrap:anywhere]">{cmsFlatEquationText(eq, p.unitCms)}</p>
+                </>
+              ) : (
+                <p className="text-[13px] text-muted-foreground tabular-nums" data-cms-qty-line>
+                  Đã bán {card.soldText} {p.unitCms} · {gateOpen ? <>được tính CMS {(qty?.rewarded ?? card.cmsQuantity).toString()} {p.unitCms}</> : <>chưa tính CMS {card.cmsQuantity.toString()} {p.unitCms} (chờ đạt target)</>}
+                </p>
+              )}
               {/* CMS-Q-220: overCap / atCap chỉ khác 0 với run LỊCH SỬ có trần (cấu hình cũ đã đóng băng); run mới luôn 0 / false. */}
               {qty && (qty.overCap > BigInt(0) || qty.fractionBase > BigInt(0)) && (
                 <ul data-cms-qty-explain className="space-y-0.5 text-[12px] text-muted-foreground tabular-nums">
@@ -101,7 +114,7 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
                 </ul>
               )}
               {card.position.atCap && !(qty && qty.overCap > BigInt(0)) && <p className="text-[12px] text-muted-foreground">Đã đạt mức trần {p.tiers[p.tiers.length - 1]?.to} {p.unitCms} — bán thêm không thêm CMS.</p>}
-              {slices && card.cmsQuantity > BigInt(0) && (
+              {!rate && slices && card.cmsQuantity > BigInt(0) && (
                 <ul data-cms-tier-breakdown className="space-y-1 border-t pt-2 text-[13px]">
                   {slices.filter((s) => s.units > BigInt(0)).map((s) => (
                     <li key={s.order} className="flex justify-between gap-3 tabular-nums">
@@ -138,7 +151,7 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
                   ))}
                 </ul>
               )}
-              <p className="text-[12px] text-muted-foreground" data-cms-updated={display}>Mỗi dược sĩ tính bậc riêng · {cmsStaffUpdatedText(display, loaded.header.run?.publishedAt)}</p>
+              <p className="text-[12px] text-muted-foreground" data-cms-updated={display}>{rate ? '' : 'Mỗi dược sĩ tính bậc riêng · '}{cmsStaffUpdatedText(display, loaded.header.run?.publishedAt)}</p>
             </>
           ) : (
             <p className="text-[13px] text-muted-foreground">{loaded ? `${cmsNoRunText(loaded.header)}.` : `${CMS_NO_RUN_TEXT}.`}</p>
@@ -158,6 +171,16 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
         </section>
       )}
 
+      {rate ? (
+        <section data-cms-staff-rate className="space-y-1.5 rounded-v2-panel border bg-card p-4">
+          <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+            <h2 className="text-[14px] font-semibold">Mức CMS</h2>
+            <b className="text-[18px] tabular-nums">{cmsAmountPerUnit(rate, p.unitCms)}</b>
+          </div>
+          {display === 'running' && <p data-cms-flat-each className="text-[13px]">{cmsFlatEachText(rate, p.unitCms)}.</p>}
+          <p className="text-[12px] text-muted-foreground">{cmsBaseQtyLine(p.unitCms, p.baseQuantityCms)}.</p>
+        </section>
+      ) : (
       <section data-cms-staff-tiers className="space-y-2 rounded-v2-panel border bg-card p-4">
         <h2 className="text-[14px] font-semibold">Thang CMS theo số lượng</h2>
         {p.tiers.length === 1 ? (
@@ -192,8 +215,9 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
         )}
         <p className="text-[12px] text-muted-foreground">Lũy tiến: mỗi {p.unitCms} tính theo bậc nó rơi vào. {cmsBaseQtyLine(p.unitCms, p.baseQuantityCms)}.</p>
       </section>
+      )}
 
-      {card?.row && !card.position.atCap && display === 'running' && (
+      {!rate && card?.row && !card.position.atCap && display === 'running' && (
         <CmsWhatIf
           baseQuantity={card.row.baseQuantity}
           perUnit={card.row.perUnit}

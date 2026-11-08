@@ -247,7 +247,45 @@ const PROGRAM_DEFS: ProgramDef[] = [
     publishedAt: '2026-11-02T02:10:00.000000Z', createdAt: '2026-09-25T02:00:00Z', activatedAt: '2026-09-28T02:00:00Z', runs: [],
   },
 ]
-for (const d of PROGRAM_DEFS) {
+// ── CMS đơn giản (PM spec r1 08/11 §6) — mỗi SP MỘT mức CMS cố định / đơn vị, không target, không bậc ─────────────────────────
+// Mức và SP đều GIẢ (không phải bảng T11, không doanh số thật). Dòng bán giả ⇒ engine thật như các chương trình trên. Không nằm trong
+// danh sách A1 (cmsFxListItems giữ 9 chương trình); mở bằng ?program= / &pp= / fx=simple. Ca phủ: có CMS · phần lẻ (K 10, bán 2,5
+// hộp) · không giá tham khảo · SP chưa bán (0) · số lớn (1.250 hộp) · sắp diễn ra (PG11) · đã hết kỳ chờ chốt (PG12).
+const FLAT = (amount: number): CmsTierView[] => [{ order: 1, from: 1, to: null, amount: String(amount) }]
+const flat = (productId: string, name: string, k: string, amount: number, price: string | null, unitGmv: number): ProductDef =>
+  ({ productId, name, gmvBasis: 'none', targetGmv: null, unit: 'hộp', k, tiers: FLAT(amount), price, unitGmv })
+const SIMPLE_PRODUCTS: ProductDef[] = [
+  flat('900101', 'Viên uống bổ sung sắt hộp 30 viên', '30', 58000, '320000', 320000),
+  flat('900102', 'Siro bổ sung kẽm trẻ em chai 100ml', '1', 24000, '95000', 95000),
+  flat('900103', 'Men vi sinh dạng gói hộp 10 gói', '10', 31500, '185000', 185000),
+  flat('900104', 'Dung dịch vệ sinh mũi chai 70ml — tên rất dài để kiểm tra xuống dòng trong thẻ trên màn hình hẹp', '1', 17000, null, 70000),
+  flat('900105', 'Viên ngậm thảo dược hộp 24 viên', '24', 18000, '60000', 60000),
+  flat('900106', 'Sữa bột dinh dưỡng lon 900g', '1', 42800, '650000', 650000),
+]
+const SIMPLE_SALES: SaleSpec[] = [
+  ['A', 0, ['2', '1']], ['A', 1, ['1']], ['A', 2, ['1.5', '1']], ['A', 3, ['3']], ['A', 5, ['600', '650']],
+  ['B', 0, ['5', '4']], ['B', 1, ['2', '2']], ['B', 2, ['0.5']], ['C', 3, ['1']],
+  ['D', 0, ['3']], ['D', 2, ['4', '2']], ['E', 1, ['6']], ['H', 0, ['2']], ['H', 3, ['2', '2']],
+]
+const SIMPLE_DEFS: ProgramDef[] = [
+  {
+    n: 10, name: 'CMS mẫu mức cố định — mỗi sản phẩm một mức / hộp', status: 'active', startDate: cmsFxDay(-14), endDate: cmsFxDay(15),
+    scope: 'all', storeIds: OS_STORE_IDS, isTest: false, catalogTargetGmv: null, configVersion: 2, products: SIMPLE_PRODUCTS, sales: SIMPLE_SALES,
+    unassigned: false, publishedAt: '2026-11-15T01:05:00.000000Z', createdAt: '2026-10-28T02:00:00Z', activatedAt: '2026-10-31T02:00:00Z', runs: [],
+  },
+  {
+    n: 11, name: 'CMS mẫu mức cố định tháng 12', status: 'active', startDate: cmsFxDay(16), endDate: cmsFxDay(46), scope: 'all', storeIds: OS_STORE_IDS,
+    isTest: false, catalogTargetGmv: null, configVersion: 1, products: SIMPLE_PRODUCTS.slice(0, 2), sales: [], unassigned: false, publishedAt: null,
+    createdAt: '2026-11-10T02:00:00Z', activatedAt: '2026-11-12T02:00:00Z', runs: [],
+  },
+  {
+    n: 12, name: 'CMS mẫu mức cố định tháng 10', status: 'active', startDate: cmsFxDay(-45), endDate: cmsFxDay(-15), scope: 'all', storeIds: OS_STORE_IDS,
+    isTest: false, catalogTargetGmv: null, configVersion: 1, products: SIMPLE_PRODUCTS.slice(0, 3), sales: [['A', 0, ['4']], ['A', 2, ['2.5']], ['B', 1, ['3']]],
+    unassigned: false, publishedAt: '2026-11-01T01:05:00.000000Z', createdAt: '2026-09-25T02:00:00Z', activatedAt: '2026-09-28T02:00:00Z', runs: [],
+  },
+]
+
+for (const d of [...PROGRAM_DEFS, ...SIMPLE_DEFS]) {
   if (d.runs.length === 0 && d.products.length > 0) d.runs.push(importRun(d.n * 10, d.products, `${d.createdAt.slice(0, 10)}T05:00:00Z`))
 }
 
@@ -333,9 +371,13 @@ function build(d: ProgramDef): CmsFxProgram {
 
 export const CMS_FX_PROGRAMS: readonly CmsFxProgram[] = PROGRAM_DEFS.map(build)
 export const CMS_FX_PG = Object.fromEntries(CMS_FX_PROGRAMS.map((p, i) => [`PG${PROGRAM_DEFS[i].n}`, p.row.id])) as Record<'PG1' | 'PG2' | 'PG3' | 'PG4' | 'PG5' | 'PG6' | 'PG7' | 'PG8' | 'PG9', string>
-export const cmsFxProgram = (id: string | null | undefined): CmsFxProgram | null => CMS_FX_PROGRAMS.find((p) => p.row.id === id) ?? null
+/** CMS đơn giản (PM r1 §6): PG10 đang chạy · PG11 sắp diễn ra · PG12 hết kỳ chờ chốt — ngoài danh sách A1. */
+export const CMS_FX_SIMPLE_PROGRAMS: readonly CmsFxProgram[] = SIMPLE_DEFS.map(build)
+export const CMS_FX_PG_SIMPLE = Object.fromEntries(CMS_FX_SIMPLE_PROGRAMS.map((p, i) => [`PG${SIMPLE_DEFS[i].n}`, p.row.id])) as Record<'PG10' | 'PG11' | 'PG12', string>
+const ALL_FX: readonly CmsFxProgram[] = [...CMS_FX_PROGRAMS, ...CMS_FX_SIMPLE_PROGRAMS]
+export const cmsFxProgram = (id: string | null | undefined): CmsFxProgram | null => ALL_FX.find((p) => p.row.id === id) ?? null
 /** Tìm chương trình chứa program_product (D2). */
-export const cmsFxProgramOfProduct = (ppId: string | null | undefined): CmsFxProgram | null => CMS_FX_PROGRAMS.find((p) => p.products.some((x) => x.id === ppId)) ?? null
+export const cmsFxProgramOfProduct = (ppId: string | null | undefined): CmsFxProgram | null => ALL_FX.find((p) => p.products.some((x) => x.id === ppId)) ?? null
 
 export function cmsFxListItems(): CmsAdminListItem[] {
   return CMS_FX_PROGRAMS.map((p) => p.row)
@@ -369,11 +411,11 @@ function visibleUser(v: CmsFxViewer, userId: string): boolean {
 }
 const viewerName = (v: CmsFxViewer): CmsResultHeaderDto['viewer'] => (v.kind === 'store_manager' ? 'store_manager' : v.kind)
 
-export interface CmsFxHeaderOpts { held?: boolean; configChanged?: boolean }
+export interface CmsFxHeaderOpts { held?: boolean; configChanged?: boolean; /** config_reset (mig 125 / 127): pointer NULL sau đổi cấu hình, đã từng công bố. */ reset?: boolean }
 
 export function cmsFxHeader(p: CmsFxProgram, v: CmsFxViewer, o: CmsFxHeaderOpts = {}): CmsResultHeaderDto {
-  const r = p.run
-  const out = p.out
+  const r = o.reset ? null : p.run
+  const out = o.reset ? null : p.out
   const totals = v.kind === 'super' && out ? {
     lines_read: out.totals.linesRead, candidates: out.totals.candidates, included: out.totals.included, unassigned: out.totals.unassigned,
     out_of_scope: out.totals.outOfScope, adjustment_lines: out.totals.adjustmentLines, candidate_gmv: fmt(out.totals.candidateGmvUnits),
@@ -386,7 +428,9 @@ export function cmsFxHeader(p: CmsFxProgram, v: CmsFxViewer, o: CmsFxHeaderOpts 
       id: r.id, config_version: r.configVersion, published_at: r.publishedAt, source_max_updated_at: startedAt, started_at: startedAt,
       amount_vnd: v.kind === 'super' && out ? out.totals.amountVnd.toString() : null, rows_read: v.kind === 'super' && out ? out.totals.linesRead : null, totals,
     } : null,
-    last_attempt: o.held && r
+    last_attempt: o.reset && p.run
+      ? { status: 'ok', started_at: '2026-11-15T01:00:00.000000Z', finished_at: p.run.publishedAt, is_current: false, error_code: null }
+      : o.held && r
       ? { status: 'held', started_at: '2026-11-15T03:00:00.000000Z', finished_at: '2026-11-15T03:01:10.000000Z', is_current: false, error_code: 'SOURCE_TIMEOUT' }
       : r ? { status: 'ok', started_at: startedAt, finished_at: r.publishedAt, is_current: true, error_code: null } : null,
     recent_runs: null,

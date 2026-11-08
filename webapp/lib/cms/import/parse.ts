@@ -31,6 +31,9 @@ export interface CmsImportRawRow {
   cells: Record<CmsImportColumn, CmsCell>
   /** Giá trị gốc để xuất lại file lỗi (number giữ number, text giữ text). */
   raw: Record<CmsImportColumn, string | number | null>
+  /** CMS đơn giản S1: giá trị gốc các cột THAM KHẢO của file 7 cột (tên / brand / giá / CTKM) — chỉ để file lỗi / cảnh báo, không vào
+   *  công thức hay payload. Không có ở mẫu 9 cột. */
+  info?: Record<string, string | number | null>
 }
 
 export type CmsParseError = 'NOT_XLSX' | 'FILE_TOO_COMPLEX' | 'NO_SHEET' | 'MISSING_COLUMNS' | 'TOO_MANY_ROWS' | 'NO_DATA'
@@ -42,13 +45,13 @@ export type CmsParseResult =
 const canonHeader = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase()
 const CANON_TO_COL = new Map(CMS_IMPORT_COLUMNS.map((c) => [canonHeader(c), c]))
 
-function cellOf(ws: XLSX.WorkSheet, r: number, c: number): XLSX.CellObject | undefined {
+export function cellOf(ws: XLSX.WorkSheet, r: number, c: number): XLSX.CellObject | undefined {
   return ws[XLSX.utils.encode_cell({ r, c })] as XLSX.CellObject | undefined
 }
 
 // Ô có công thức (kể cả KHÔNG có giá trị cache — đọc bằng sheetStubs thành t='z' — hoặc cache rỗng) KHÔNG bao giờ là ô
 // trống: ProductID công thức không được thành điểm dừng (PM P1-b P1-3), phải đi tới lỗi CELL_FORMULA.
-function isBlank(cell: XLSX.CellObject | undefined): boolean {
+export function isBlank(cell: XLSX.CellObject | undefined): boolean {
   if (!cell) return true
   if (cell.f) return false
   if (cell.t === 'z') return true
@@ -56,7 +59,7 @@ function isBlank(cell: XLSX.CellObject | undefined): boolean {
   return cell.v === undefined || cell.v === null
 }
 
-function readCell(cell: XLSX.CellObject | undefined): { cell: CmsCell; raw: string | number | null } {
+export function readCell(cell: XLSX.CellObject | undefined): { cell: CmsCell; raw: string | number | null } {
   if (!cell) return { cell: { kind: 'empty' }, raw: null }
   if (cell.f) {
     const noCache = cell.t === 'z' || cell.v === undefined || cell.v === null || cell.v === ''

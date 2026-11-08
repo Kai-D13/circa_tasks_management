@@ -97,9 +97,14 @@ test.describe('ui v2 CMS P2-c — D1 / D2 / D3 dược sĩ @desktop', () => {
     await expect(main.locator('[data-cms-staff-catalog-target] [data-cms-gate="unmet"]')).toContainText('1.020.000₫ / 1.500.000₫')
     await expect(main.locator('[data-cms-staff-product="900001"] [data-cms-tier-line]')).toHaveText('Bậc 2 · 20.000₫/hộp · Còn 2 hộp lên 25.000₫/hộp')
     await expect(main.locator('[data-cms-staff-product="900004"] [data-cms-tier-line]')).toHaveText('Cần đạt target trước')
-    await expect(main.locator('[data-cms-staff-product="900003"] [data-cms-sold]')).toHaveText('Đã bán 12,5 vỉ (tính 12)')
-    // CMS-Q-220: bậc cuối không giới hạn ⇒ không "Tối đa / còn … vỉ".
-    await expect(main.locator('[data-cms-staff-product="900003"] [data-cms-tier-line]')).toHaveText('Bậc 1 · 5.000₫/vỉ · Bậc cao nhất')
+    // CMS đơn giản S3 (PM r1 08/11 §6): 900003 = 1 bậc từ 1 không giới hạn, không target ⇒ thẻ mức cố định — "Mức CMS X₫/vỉ",
+    // "Đã bán N · tính Q vỉ"; không badge "Theo số lượng", không dòng bậc "Bậc 1 · … · Bậc cao nhất" (CMS-Q-220 không "Tối đa").
+    await expect(main.locator('[data-cms-staff-product="900003"] [data-cms-sold]')).toHaveText('Đã bán 12,5 vỉ · tính 12 vỉ')
+    await expect(main.locator('[data-cms-staff-product="900003"] [data-cms-flat-rate]')).toHaveText('Mức CMS 5.000₫/vỉ')
+    await expect(main.locator('[data-cms-staff-product="900003"] [data-cms-tier-line]')).toHaveCount(0)
+    await expect(main.locator('[data-cms-staff-product="900003"]')).not.toContainText(/Theo số lượng|Bậc|Tối đa/)
+    // Chương trình trộn: SP có bậc / target cạnh SP flat vẫn giữ badge + dòng bậc của nó.
+    await expect(main.locator('[data-cms-staff-product="900001"]')).toContainText('Target SP')
     await expect(main.locator('[data-cms-card-filter] a')).toHaveText(['Tất cả (4)', 'Có CMS (2)', 'Chưa có CMS (2)'])
     // CMS-UI-1 §6.7: link bộ lọc ở lại catalog và giữ kịch bản.
     await expect(main.getByRole('link', { name: 'Có CMS (2)', exact: true })).toHaveAttribute('href', `/ui-catalog/cms-v2/staff?program=${PG1}&f=met&p2=running`)
@@ -176,12 +181,14 @@ test.describe('ui v2 CMS P2-c — D1 / D2 / D3 dược sĩ @desktop', () => {
     await expect(main.locator('[data-cms-what-if]')).toContainText('CMS ước tính khi đạt target')
     await open(page, 'product', 'fx=none&p2=top')
     main = page.locator('main [data-cms-staff-product-detail]')
-    // 60 vỉ × 5.000 (không còn trần 50: trước đây 250.000₫ + "Vượt trần"); bán thêm 1 vỉ vẫn +5.000₫.
+    // 60 vỉ × 5.000 (không còn trần 50: trước đây 250.000₫ + "Vượt trần"). CMS đơn giản S3 (PM r1 §6): SP mức cố định ⇒ phép nhân
+    // giải thích khớp tiền snapshot, KHÔNG khối tương tác "Nếu bán thêm" — chỉ dòng tĩnh "Mỗi vỉ được tính CMS 5.000₫" khi đang chạy.
     await expect(main.locator('[data-cms-product-cms]')).toHaveText('300.000₫')
-    await expect(main.locator('[data-cms-qty-line]')).toContainText('được tính CMS 60 vỉ')
-    expect(await main.innerText()).not.toMatch(/trần|Tối đa|không thêm CMS/)
-    await expect(main.locator('[data-cms-what-if]')).toHaveCount(1)
-    await expect(main.locator('[data-cms-what-if-delta]')).toHaveText('+5.000₫')
+    await expect(main.locator('[data-cms-qty-line]')).toHaveText('Đã bán 60 vỉ')
+    await expect(main.locator('[data-cms-flat-equation]')).toHaveText('60 vỉ × 5.000₫ = 300.000₫')
+    expect(await main.innerText()).not.toMatch(/trần|Tối đa|không thêm CMS|Lũy tiến|Thang CMS/)
+    await expect(main.locator('[data-cms-what-if], [data-cms-tier-breakdown], [data-cms-staff-tiers]')).toHaveCount(0)
+    await expect(main.locator('[data-cms-flat-each]')).toHaveText('Mỗi vỉ được tính CMS 5.000₫.')
     await open(page, 'product', 'fx=none&p2=running')
     await expect(page.locator('main [data-cms-qty-explain]')).toContainText('Phần lẻ 0,5 vỉ chưa đủ 1 vỉ')
     await open(page, 'product', 'fx=product&p2=running&role=manager')

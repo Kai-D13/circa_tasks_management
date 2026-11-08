@@ -19,9 +19,17 @@ import {
   CMS_TIER_POLICY, canonicalCmsImport, validateCmsImport,
   type CmsImportGroupOk, type CmsImportMode, type CmsImportValidation, type CmsProductMasterLite,
 } from './validate'
-import { buildCmsImportErrorXlsx, type CmsRejectedGroupRaw } from './workbooks'
+import { buildCmsImportErrorXlsx, buildCmsSimpleErrorXlsx, type CmsRejectedGroupRaw } from './workbooks'
+import { parseCmsSimpleXlsx } from './parseSimple'
+import { validateCmsSimpleImport } from './validateSimple'
+import {
+  cmsApplyKCheck, cmsBindKAcks, cmsKClassify, cmsKTargets, cmsParseKAckInput, cmsStoredKAcks,
+  type CmsKAck, type CmsKAckInput, type CmsKEvidence, type CmsKResult,
+} from './kCheck'
 
 export const CMS_IMPORT_MAX_FILE_BYTES = 5 * 1024 * 1024
+/** CMS đơn giản S1: loại file do UI chọn TƯỜNG MINH; 'tiers' = IMPORT_CMS 9 cột (mặc định, như cũ), 'simple' = 7 cột mức cố định. */
+export type CmsImportFormat = 'tiers' | 'simple'
 /** Trần request = file + phần đầu multipart. */
 export const CMS_IMPORT_MAX_REQUEST_BYTES = CMS_IMPORT_MAX_FILE_BYTES + 64 * 1024
 const ADVICE_PREVIEW_CHARS = 300
@@ -56,6 +64,12 @@ export interface CmsStoredImportResult {
   tierPolicy?: typeof CMS_TIER_POLICY
   /** Cận cuối hữu hạn đã chuẩn hoá → không giới hạn (audit; file gốc / SHA / raw không đổi). */
   normalizedLastTiers?: { productId: string; excelRow: number; from: number; originalTo: number }[]
+  /** CMS đơn giản S1: chỉ có khi file mức cố định — commit parse lại theo CHÍNH giá trị này (không theo client). */
+  format?: 'simple'
+  /** S2: kết quả kiểm K lúc preview (chỉ khi CMS_IMPORT_V2_ENABLED) — để trình bày / audit; commit kiểm lại. */
+  kCheck?: { asOf: string | null; available: boolean; reason: string | null; products: CmsKResult[] }
+  /** S2: xác nhận tay đã áp — actor từ phiên super, thời điểm server, nguồn căn cứ; commit đọc lại từ đây (không từ client). */
+  kAcks?: CmsKAck[]
 }
 
 export interface CmsImportRunRow {
@@ -115,6 +129,10 @@ export interface CmsImportRepo {
 
 export interface CmsImportDeps {
   enabled: boolean
+  /** CMS_IMPORT_V2_ENABLED (mặc định OFF): mẫu mức cố định + kiểm K. OFF ⇒ hành vi như trước (chỉ 9 cột, không kiểm K). */
+  v2?: boolean
+  /** Bằng chứng quy đổi đơn vị (kSource) cho ProductID của file. Chỉ gọi khi v2. */
+  kProbe?(productIds: string[]): Promise<CmsKEvidence>
   getAccess(): Promise<CmsAdminAccess>
   repo: CmsImportRepo
   now(): Date
@@ -127,6 +145,7 @@ export type CmsImportErrorCode =
   | CmsParseError
   | 'SHA_MISMATCH' | 'PREVIEW_STALE' | 'NOTHING_TO_COMMIT' | 'PRODUCT_CONFLICT' | 'PRODUCT_EXISTS' | 'CATALOG_TARGET_CHANGED'
   | 'LOOKUP_FAILED' | 'PREVIEW_FAILED' | 'COMMIT_FAILED' | 'NO_ERRORS' | 'BUSY'
+  | 'DUPLICATE_COLUMNS' | 'FORMAT_UNAVAILABLE' | 'K_ACK_INVALID'
 
 export const CMS_IMPORT_ERROR_LABELS: Record<CmsImportErrorCode, string> = {
   NOT_FOUND: 'Không tìm thấy',
@@ -162,6 +181,9 @@ export const CMS_IMPORT_ERROR_LABELS: Record<CmsImportErrorCode, string> = {
   COMMIT_FAILED: 'Không ghi được danh mục — thử lại sau',
   NO_ERRORS: 'Lần kiểm tra này không có nhóm bị loại',
   BUSY: 'Đang có thao tác khác trên danh mục CMS — thử lại sau ít giây',
+  DUPLICATE_COLUMNS: 'Có hai cột cùng ý nghĩa trong dòng tiêu đề — giữ một cột',
+  FORMAT_UNAVAILABLE: 'Mẫu mức cố định chưa được bật',
+  K_ACK_INVALID: 'Xác nhận K không hợp lệ — mỗi dòng cần ProductID, đơn vị, K và nguồn căn cứ (3–200 ký tự)',
 }
 
 const json = (status: number, body: unknown) =>
@@ -241,12 +263,27 @@ async function programFor(deps: CmsImportDeps, id: string, qa: boolean): Promise
 }
 
 type Analysis =
-  | { ok: true; v: CmsImportValidation; digest: string; ignoredFromRow: number | null }
+  | { ok: true; v: CmsImportValidation; digest: string; ignoredFromRow: number | null; supplement: { baseQuantity: boolean; advice: boolean } | null
+    k: { evidence: CmsKEvidence; before: CmsKResult[]; results: CmsKResult[]; acks: CmsKAck[] } | null }
   | { ok: false; res: Response }
 
-async function analyze(bytes: Uint8Array, program: CmsProgramRow, mode: CmsImportMode, deps: CmsImportDeps): Promise<Analysis> {
-  const parsed = parseCmsImportXlsx(bytes)
-  if (!parsed.ok) return { ok: false, res: fail(422, parsed.error, parsed.missing ? { missing: parsed.missing } : {}) }
+interface AnalyzeOpts {
+  format: CmsImportFormat
+  /** S2 bật (cờ v2): kiểm K. */
+  kCheck: boolean
+  /** Xác nhận tay: preview = ý định từ client (gắn actor / giờ server); commit = bản ĐÃ LƯU trong run. */
+  acks: { kind: 'input'; inputs: CmsKAckInput[]; actor: string; at: string } | { kind: 'stored'; acks: CmsKAck[] }
+}
+
+async function analyze(bytes: Uint8Array, program: CmsProgramRow, mode: CmsImportMode, deps: CmsImportDeps, o: AnalyzeOpts): Promise<Analysis> {
+  const sp = o.format === 'simple' ? parseCmsSimpleXlsx(bytes) : null
+  const parsed = sp ?? parseCmsImportXlsx(bytes)
+  if (!parsed.ok) {
+    const extra: Record<string, unknown> = {}
+    if (parsed.missing) extra.missing = parsed.missing
+    if ('duplicate' in parsed && parsed.duplicate) extra.duplicate = parsed.duplicate
+    return { ok: false, res: fail(422, parsed.error, extra) }
+  }
   const ids = new Set<string>()
   for (const r of parsed.rows) {
     const c = r.cells.ProductID
@@ -259,12 +296,29 @@ async function analyze(bytes: Uint8Array, program: CmsProgramRow, mode: CmsImpor
   } catch {
     return { ok: false, res: fail(503, 'LOOKUP_FAILED') }
   }
-  const v = validateCmsImport(parsed.rows, {
+  const vctx = {
     mode, productMaster: ctx.productMaster, existingProductIds: ctx.existingProductIds,
     conflictProductIds: ctx.conflictProductIds, currentCatalogTarget: program.catalogTargetGmv,
-  })
-  const digest = await sha256Hex(new TextEncoder().encode(canonicalCmsImport(v)))
-  return { ok: true, v, digest, ignoredFromRow: parsed.ignoredFromRow }
+  }
+  let v = sp ? validateCmsSimpleImport(parsed.rows, vctx) : validateCmsImport(parsed.rows, vctx)
+  let k: Extract<Analysis, { ok: true }>['k'] = null
+  if (o.kCheck) {
+    // S2: kiểm K trên MỌI SP đọc được của file (kể cả nhóm đã bị loại vì thiếu K — để hiện đề xuất). Nguồn lỗi ⇒ KHÔNG KIỂM ĐƯỢC.
+    const targets = cmsKTargets(parsed.rows)
+    let evidence: CmsKEvidence
+    try {
+      evidence = targets.length && deps.kProbe ? await deps.kProbe(targets.map((t) => t.productId)) : { ok: false, reason: 'CONFIG' }
+    } catch {
+      evidence = { ok: false, reason: 'SOURCE_UNKNOWN' }
+    }
+    const before = cmsKClassify(targets, evidence)
+    const acks = o.acks.kind === 'stored' ? o.acks.acks : cmsBindKAcks(o.acks.inputs, before, o.acks.actor, o.acks.at)
+    const results = acks.length ? cmsKClassify(targets, evidence, acks) : before
+    v = cmsApplyKCheck(v, parsed.rows, results)
+    k = { evidence, before, results, acks: results.flatMap((x) => (x.ack ? [x.ack] : [])) }
+  }
+  const digest = await sha256Hex(new TextEncoder().encode(canonicalCmsImport(v, o.format)))
+  return { ok: true, v, digest, ignoredFromRow: parsed.ignoredFromRow, supplement: sp && sp.ok ? sp.supplement : null, k }
 }
 
 // Raw lưu trong run có trần độ dài từng ô (security review P1-b, P1-2): ô dài hơn trần chắc chắn đã lỗi (tư vấn
@@ -278,6 +332,7 @@ const rejectedRaw = (v: CmsImportValidation): CmsRejectedGroupRaw[] =>
     rows: g.rows.map((r) => ({
       excelRow: r.excelRow,
       raw: Object.fromEntries(Object.entries(r.raw).map(([k, x]) => [k, clip(x, k === 'Noi_dung_tu_van' ? RAW_MAX_ADVICE : RAW_MAX_OTHER)])) as typeof r.raw,
+      ...(r.info ? { info: Object.fromEntries(Object.entries(r.info).map(([k, x]) => [k, clip(x, RAW_MAX_OTHER)])) } : {}),
     })),
     errors: g.errors,
   }))
@@ -299,7 +354,16 @@ export async function handleCmsImportPreview(req: Request, deps: CmsImportDeps):
   if (!program) return fail(404, 'PROGRAM_NOT_FOUND')
   const mode = cmsImportModeFor(program, cmsVnToday(deps.now()))
   if (!mode) return fail(409, 'NOT_EDITABLE')
-  const a = await analyze(f.bytes, program, mode, deps)
+  const fmtRaw = String(f.form.get('format') ?? 'tiers')
+  if (fmtRaw !== 'tiers' && fmtRaw !== 'simple') return fail(400, 'BAD_REQUEST')
+  const format: CmsImportFormat = fmtRaw
+  if (format === 'simple' && !deps.v2) return fail(400, 'FORMAT_UNAVAILABLE')
+  const ackRaw = f.form.get('k_acks')
+  const inputs = cmsParseKAckInput(typeof ackRaw === 'string' ? ackRaw : null)
+  if (inputs === null || (inputs.length > 0 && !deps.v2)) return fail(400, 'K_ACK_INVALID')
+  const a = await analyze(f.bytes, program, mode, deps, {
+    format, kCheck: deps.v2 === true, acks: { kind: 'input', inputs, actor: g.actorId, at: deps.now().toISOString() },
+  })
   if (!a.ok) return a.res
   const sha = await sha256Hex(f.bytes)
   let runId: string
@@ -307,10 +371,15 @@ export async function handleCmsImportPreview(req: Request, deps: CmsImportDeps):
     runId = await deps.repo.savePreview({
       programId: program.id, mode, sha256: sha, fileBytes: f.bytes.byteLength, actorId: g.actorId, stats: a.v.stats,
       // Tên kỹ thuật (không lưu tên file người dùng).
-      fileName: `cms-import-${sha.slice(0, 12)}.xlsx`,
+      fileName: `cms-import-${format === 'simple' ? 'muc-co-dinh-' : ''}${sha.slice(0, 12)}.xlsx`,
       result: {
         digest: a.digest, ignoredFromRow: a.ignoredFromRow, rejected: rejectedRaw(a.v),
         tierPolicy: CMS_TIER_POLICY, normalizedLastTiers: normalizedLastTiers(a.v),
+        ...(format === 'simple' ? { format: 'simple' as const } : {}),
+        ...(a.k ? {
+          kCheck: { asOf: a.k.evidence.ok ? a.k.evidence.asOf : null, available: a.k.evidence.ok, reason: a.k.evidence.ok ? null : a.k.evidence.reason, products: a.k.results },
+          kAcks: a.k.acks,
+        } : {}),
       },
     })
   } catch (e) {
@@ -322,7 +391,13 @@ export async function handleCmsImportPreview(req: Request, deps: CmsImportDeps):
   }
   return json(200, {
     ok: true, runId, sha256: sha, mode, configVersion: program.configVersion, catalogTarget: a.v.catalogTarget, tierPolicy: CMS_TIER_POLICY,
-    ignoredFromRow: a.ignoredFromRow, stats: a.v.stats,
+    ignoredFromRow: a.ignoredFromRow, stats: a.v.stats, format,
+    ...(a.supplement ? { supplement: a.supplement } : {}),
+    ...(a.k ? { kCheck: {
+      asOf: a.k.evidence.ok ? a.k.evidence.asOf : null, available: a.k.evidence.ok, reason: a.k.evidence.ok ? null : a.k.evidence.reason,
+      // Phản hồi tối thiểu: xác nhận chỉ trả nguồn + thời điểm (actor lưu trong run, không gửi lại trình duyệt).
+      products: a.k.results.map((x) => ({ ...x, ack: x.ack ? { source: x.ack.source, at: x.ack.at } : null })),
+    } } : {}),
     groupsOk: a.v.groupsOk.map(({ adviceText, ...rest }) => ({
       ...rest, advicePreview: adviceText.length > ADVICE_PREVIEW_CHARS ? `${adviceText.slice(0, ADVICE_PREVIEW_CHARS)}…` : adviceText,
     })),
@@ -365,7 +440,13 @@ export async function handleCmsImportCommit(req: Request, deps: CmsImportDeps): 
   const mode = cmsImportModeFor(program, cmsVnToday(deps.now()))
   if (!mode) return fail(409, 'NOT_EDITABLE')
   if (mode !== run.mode || program.configVersion !== run.configVersionAtPreview) return fail(409, 'PREVIEW_STALE')
-  const a = await analyze(f.bytes, program, mode, deps)
+  // Loại file + kiểm K theo CHÍNH run đã lưu ở server. Client gửi format khác / cờ v2 đổi giữa preview và commit ⇒ xem preview mới.
+  const format: CmsImportFormat = run.result?.format === 'simple' ? 'simple' : 'tiers'
+  const clientFormat = f.form.get('format')
+  if (clientFormat !== null && clientFormat !== format) return fail(409, 'PREVIEW_STALE')
+  const kStored = run.result?.kCheck !== undefined
+  if (kStored !== (deps.v2 === true) || (format === 'simple' && !deps.v2)) return fail(409, 'PREVIEW_STALE')
+  const a = await analyze(f.bytes, program, mode, deps, { format, kCheck: kStored, acks: { kind: 'stored', acks: cmsStoredKAcks(run.result?.kAcks) } })
   if (!a.ok) return a.res
   // Nguồn / trùng / cấu hình đổi sau preview ⇒ kết quả khác ⇒ yêu cầu xem preview mới (SPEC §4.5).
   if (a.digest !== run.result.digest) return fail(409, 'PREVIEW_STALE')
@@ -390,7 +471,8 @@ export async function handleCmsImportErrors(req: Request, deps: CmsImportDeps): 
   if (!run || !program) return fail(404, 'RUN_NOT_FOUND')
   const rejected = Array.isArray(run.result?.rejected) ? run.result.rejected : []
   if (rejected.length === 0) return fail(404, 'NO_ERRORS')
-  return new Response(buildCmsImportErrorXlsx(rejected), {
+  const bytes = run.result?.format === 'simple' ? buildCmsSimpleErrorXlsx(rejected) : buildCmsImportErrorXlsx(rejected)
+  return new Response(bytes, {
     status: 200,
     headers: {
       'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',

@@ -1,6 +1,6 @@
 import { notFound, redirect } from 'next/navigation'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
-import { isCmsProgramEnabled } from '@/lib/cms/flags'
+import { isCmsImportV2Enabled, isCmsProgramEnabled } from '@/lib/cms/flags'
 import { canManageCms } from '@/lib/cms/access'
 import { cmsLoadProgramDetail } from '@/lib/cms/server/catalog'
 import { cmsProgramActions, cmsTodayVn } from '@/lib/cms/programStatus'
@@ -37,7 +37,7 @@ export default async function CmsImportPage({ params, searchParams }: {
       backLabel="Chi tiết chương trình"
       kind="import"
     >
-      <CmsImportFlow program={{ id: p.id, name: p.name }} mode={mode} fromNew={fromNew} />
+      <CmsImportFlow program={{ id: p.id, name: p.name }} mode={mode} fromNew={fromNew} v2={isCmsImportV2Enabled()} />
     </CmsWizardShell>
   )
 }

@@ -3,7 +3,7 @@ import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { KpiFixtureBoundary } from '@/components/kpi/KpiFixtureBoundary'
 import { CmsStaffCatalogView } from '@/components/cms/staff/CmsStaffCatalogView'
-import { CMS_FX_STAFF_ENDED, CMS_FX_STAFF_PROGRAMS, CMS_FX_TODAY, cmsFxStaffProducts } from '@/lib/cms/fixturesStaff'
+import { CMS_FX_STAFF_ENDED, CMS_FX_STAFF_PROGRAMS, CMS_FX_STAFF_SIMPLE, CMS_FX_TODAY, cmsFxStaffProducts } from '@/lib/cms/fixturesStaff'
 import { cmsPickStaffProgram } from '@/lib/cms/staffView'
 import { cmsFxParseScenario, cmsFxStaffResults, cmsFxStoreResults } from '@/lib/cms/fixturesResults'
 import { cmsParseCardFilter } from '@/lib/cms/resultUi'
@@ -17,6 +17,8 @@ import { cmsFixtureNav } from '@/lib/cms/fixtureNav'
 // P2-c: &p2=running|top|held|none|error|gone|config (+ &f=all|met|unmet) — dược sĩ A (top: dược sĩ B) / QLCH nhà thuốc 01.
 // P3a r2: fx=history (danh sách gồm nhóm "Đã kết thúc") · ended (Chờ chốt kỳ) · locked (Đã chốt — run đóng băng) · locked-manager.
 // CMS-UI-1: &program=<id> (link bộ chọn / quay lại từ D2 / D3) — danh sách gồm cả chương trình đã kết thúc như route thật.
+// CMS đơn giản (PM r1 08/11 §6): fx=simple (PG10 đang chạy, mỗi SP một mức / hộp) · simple-manager (QLCH) · simple-upcoming (PG11) ·
+//   simple-ended (PG12 chờ chốt kỳ); &program=<PG10–12> cũng dùng danh sách này.
 export default async function CmsStaffFixture({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   if (process.env.UI_CATALOG !== '1') notFound()
   const { user, profile } = await getSessionProfile()
@@ -26,11 +28,12 @@ export default async function CmsStaffFixture({ searchParams }: { searchParams: 
   const one = (k: string) => (typeof sp[k] === 'string' ? (sp[k] as string) : undefined)
   const fx = one('fx') ?? (one('as') === 'manager' ? 'manager' : 'many')
   const program = one('program')
+  const simple = fx.startsWith('simple') || CMS_FX_STAFF_SIMPLE.some((p) => p.id === program)
   const scenario = cmsFxParseScenario(one('p2'))
-  const manager = fx === 'manager' || fx === 'manager-nokpi' || fx === 'locked-manager'
+  const manager = fx === 'manager' || fx === 'manager-nokpi' || fx === 'locked-manager' || fx === 'simple-manager' || (simple && one('as') === 'manager')
   const withEnded = fx === 'history' || fx === 'ended' || fx === 'locked' || fx === 'locked-manager' || program !== undefined
-  const programs = fx === 'single' ? CMS_FX_STAFF_PROGRAMS.slice(0, 1) : withEnded ? [...CMS_FX_STAFF_PROGRAMS, ...CMS_FX_STAFF_ENDED] : CMS_FX_STAFF_PROGRAMS
-  const forced = fx === 'upcoming' ? CMS_FX_STAFF_PROGRAMS[2].id : fx === 'ended' ? CMS_FX_STAFF_ENDED[0].id : fx === 'locked' || fx === 'locked-manager' ? CMS_FX_STAFF_ENDED[1].id : null
+  const programs = simple ? CMS_FX_STAFF_SIMPLE : fx === 'single' ? CMS_FX_STAFF_PROGRAMS.slice(0, 1) : withEnded ? [...CMS_FX_STAFF_PROGRAMS, ...CMS_FX_STAFF_ENDED] : CMS_FX_STAFF_PROGRAMS
+  const forced = fx === 'simple-upcoming' ? CMS_FX_STAFF_SIMPLE[1].id : fx === 'simple-ended' ? CMS_FX_STAFF_SIMPLE[2].id : fx === 'upcoming' ? CMS_FX_STAFF_PROGRAMS[2].id : fx === 'ended' ? CMS_FX_STAFF_ENDED[0].id : fx === 'locked' || fx === 'locked-manager' ? CMS_FX_STAFF_ENDED[1].id : null
   const selected = fx === 'empty' || fx === 'no-store' || fx === 'error' ? null
     : cmsPickStaffProgram(programs, CMS_FX_TODAY, forced ?? program ?? null)
   const kind = fx === 'error' ? 'error' : fx === 'no-store' ? 'no-store' : selected ? 'ok' : 'empty'

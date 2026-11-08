@@ -165,9 +165,14 @@ test.describe('ui v2 CMS P1-d — D1 / D2 chức năng (fixture, 0 ghi) @desktop
     await expect(page.locator('main [data-cms-staff-tiers]')).toContainText('CMS 8.000₫/chai')
     await openFx(page, 'product', 'none')
     await expect(page.locator('main [data-cms-staff-gate]')).toHaveCount(0)
-    // CMS-Q-220: một bậc không giới hạn ⇒ chỉ mức CMS, không "tối đa 50 vỉ" (trước đây bậc 1–50 = trần).
-    await expect(page.locator('main [data-cms-staff-tiers]')).toContainText('CMS 5.000₫/vỉ')
-    await expect(page.locator('main [data-cms-staff-tiers]')).not.toContainText('tối đa')
+    // CMS-Q-220: một bậc không giới hạn ⇒ chỉ mức CMS, không "tối đa 50 vỉ" (trước đây bậc 1–50 = trần). CMS đơn giản S3 (PM r1 §6):
+    // SP mức cố định ⇒ khối "Mức CMS" thay "Thang CMS theo số lượng", không câu "Lũy tiến", vẫn giữ quy cách (K) ở dòng phụ.
+    const rate = page.locator('main [data-cms-staff-rate]')
+    await expect(rate).toContainText('Mức CMS')
+    await expect(rate).toContainText('5.000₫/vỉ')
+    await expect(rate).toContainText('1 vỉ = 10 đơn vị cơ sở')
+    await expect(rate).not.toContainText(/tối đa|Lũy tiến|Thang CMS/)
+    await expect(page.locator('main [data-cms-staff-tiers]')).toHaveCount(0)
     await openFx(page, 'product', 'upcoming')
     await expect(page.locator('main [data-cms-staff-product-detail]')).toContainText('Bắt đầu 01/12/2026')
   })
