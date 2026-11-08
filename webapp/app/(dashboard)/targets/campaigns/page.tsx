@@ -12,6 +12,7 @@ import { qualityKpiPass } from '@/lib/kpi/orderAov'
 import { campaignOverviewValue } from '@/lib/kpi/campaignDisplay'
 import { campaignListErrors, campaignListPct, campaignListReached } from '@/lib/kpi/campaignList'
 import { CampaignListView } from '@/components/kpi/CampaignListView'
+import { campaignTabsDesktopReplaced } from '@/lib/layout/campaignNavServer'
 
 // Super-admin campaign dashboard (mockup "Các chiến dịch KPI đang áp dụng"):
 // each campaign row shows Mục tiêu (SUM kpi_target) / Đã đạt (SUM actual_value)
@@ -95,6 +96,7 @@ export default async function CampaignsPage({
       canManage={canManage}
       affiliateEnabled={isKpiAffiliateEnabled()}
       cmsEnabled={isCmsProgramEnabled()}
+      tabsDesktopReplaced={campaignTabsDesktopReplaced({ role: profile?.role, email: user.email }, { affiliate: isKpiAffiliateEnabled(), cms: isCmsProgramEnabled() })}
       statusFilter={statusFilter}
       counts={counts}
       hasAny={list.length > 0}

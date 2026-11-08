@@ -1,5 +1,7 @@
+import fs from 'node:fs'
 import { test, expect, type Page } from '@playwright/test'
 import { resolveActiveHref } from '../lib/layout/sidebarNav'
+import { MANAGER_STATE, SM_STATE } from './authState'
 
 // Unit thuần (không cần browser/server) khoá contract active-state của Sidebar
 // sau audit UI-fluid-sidebar-r1 (P1#1): "đúng 1 nền active".
@@ -7,7 +9,7 @@ import { resolveActiveHref } from '../lib/layout/sidebarNav'
 // "Tasks" lẫn "Định kỳ" cùng sáng; nút CHA accordion còn tint bằng
 // `startsWith('/inventory')` nên ở /inventory/trf cha và con cùng nền.
 // Bộ href dưới đây là TẬP THẬT của sidebar (mọi item role + 2 link con
-// accordion + 2 link gated KPI/Affiliate) — super admin thấy nhiều nhất.
+// accordion + nhóm Chiến dịch KPI / Affiliate / CMS — UI-NAV U1) — super admin thấy nhiều nhất.
 const HREFS = [
   '/dashboard',
   '/tasks',
@@ -15,6 +17,7 @@ const HREFS = [
   '/targets',
   '/targets/campaigns',
   '/targets/campaigns/affiliate',
+  '/targets/campaigns/cms',
   '/users',
   '/stores',
   '/prescriptions',
@@ -139,16 +142,19 @@ type NestedCase = {
 
 const NESTED: NestedCase[] = [
   { route: '/tasks/schedules', expect: ['/tasks/schedules'] },
-  // Super admin KHÔNG có mục nav "Affiliate" (chỉ admin phòng được cấp quyền
-  // mới có — prop `affiliateOverviewNav`), nên trên route này href DÀI NHẤT
-  // ĐANG HIỂN THỊ là '/targets/campaigns'. Liệt kê cả hai theo thứ tự dài→ngắn
-  // rồi lấy cái đầu tiên thực sự có trong sidebar: contract "con thắng cha" vẫn
-  // bị khoá chặt, mà test không vỡ chỉ vì role/flag đổi tập nav.
-  { route: '/targets/campaigns/affiliate', expect: ['/targets/campaigns/affiliate', '/targets/campaigns'] },
+  // UI-NAV U1: super CÓ mục "Affiliate" trong nhóm "Chiến dịch" (cờ KPI + Affiliate của server gate bật) ⇒ con Affiliate active,
+  // nút cha "Chiến dịch" chỉ tint. (Trước UI-NAV super không có mục này — kỳ vọng cũ đã bỏ theo spec §6.)
+  { route: '/targets/campaigns', expect: ['/targets/campaigns'], parent: 'Chiến dịch' },
+  { route: '/targets/campaigns/affiliate', expect: ['/targets/campaigns/affiliate'], parent: 'Chiến dịch' },
   // Nhãn cha đổi 'Inventory' → 'Tồn kho' ở sidebar r2 (chỉ NHÃN — href và gating
   // y nguyên); test tìm nút accordion bằng textContent nên phải đi cùng.
   { route: '/inventory/trf', expect: ['/inventory/trf'], parent: 'Tồn kho' },
   { route: '/fs/products',   expect: ['/fs/products'],   parent: 'Quản lý FS' },
+  // CMS: route chỉ tồn tại khi server bật CMS_PROGRAM_ENABLED (E2E_CMS_ENABLED=1); chi tiết = chương trình T11 (đọc).
+  ...(process.env.E2E_CMS_ENABLED === '1' ? [
+    { route: '/targets/campaigns/cms', expect: ['/targets/campaigns/cms'], parent: 'Chiến dịch' },
+    { route: '/targets/campaigns/cms/942194ce-893f-4f62-a88a-bd9efa464bae', expect: ['/targets/campaigns/cms'], parent: 'Chiến dịch' },
+  ] : []),
 ]
 
 test.describe('sidebar active-state trên DOM thật @desktop', () => {
@@ -217,6 +223,193 @@ test.describe('sidebar active-state trên DOM thật @desktop', () => {
         expect(parentRow!.bg, `${route}: nút cha "${parent}" đang mang nền active`).toBe(NO_BG)
         expect(parentRow!.color, `${route}: nút cha "${parent}" thiếu tint text-primary`).toBe(painted[0].color)
       }
+    }
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────────
+// UI-NAV U1 (PM spec planning/research/ui-nav-spec-implementation-2026-11-08.md §3, AC01–AC04, AC09, AC11): nhóm Sidebar
+// "Chiến dịch" trên DOM thật theo vai + hàng tab trong trang. Chỉ đọc (không bấm nút ghi). Cờ server gate: KPI + Affiliate bật;
+// CMS theo E2E_CMS_ENABLED (route CMS chỉ kiểm khi bật).
+// ─────────────────────────────────────────────────────────────────────────────
+const CMS_ON = process.env.E2E_CMS_ENABLED === '1'
+const GROUP_BTN = '#sidebar-nav [data-sidebar-group="campaigns"] button'
+const SUB = '#sidebar-campaigns-sub'
+const subLabels = (page: Page) => page.locator(`${SUB} a`).evaluateAll((as) => as.map((a) => ({ text: (a.textContent ?? '').trim(), href: a.getAttribute('href'), cur: a.getAttribute('aria-current') })))
+const tabsRow = (page: Page) => page.locator('main [data-campaigns-tabs]').first()
+const asideWidth = (page: Page) => page.locator('aside').evaluate((e) => Math.round(e.getBoundingClientRect().width))
+
+test.describe('UI-NAV nhóm "Chiến dịch" — super @desktop', () => {
+  test.skip(!SUPER.email || !SUPER.password, 'E2E_SUPER_* not set')
+
+  test('mục con theo cờ, mở sẵn trên route module, đúng một con active; cha không nền / không aria-current', async ({ page }) => {
+    test.setTimeout(180_000)
+    await page.setViewportSize({ width: 1280, height: 900 })
+    await login(page)
+    const want = [
+      { text: 'Chiến dịch KPI', href: '/targets/campaigns' },
+      { text: 'Affiliate', href: '/targets/campaigns/affiliate' },
+      ...(CMS_ON ? [{ text: 'CMS sản phẩm', href: '/targets/campaigns/cms' }] : []),
+    ]
+    // Route ngoài module: nhóm đóng (không tự mở), không con nào active.
+    await page.goto('/tasks')
+    const btn = page.locator(GROUP_BTN).first()
+    await expect(btn).toBeVisible()
+    await expect(btn).toHaveText(/^Chiến dịch$/)
+    await expect(btn).toHaveAttribute('aria-expanded', 'false')
+    await expect(page.locator(SUB)).toHaveCount(0)
+    await page.goto('/targets/campaigns')
+    await expect(btn).toHaveAttribute('aria-expanded', 'true')
+    await expect(btn).toHaveAttribute('aria-controls', 'sidebar-campaigns-sub')
+    expect((await subLabels(page)).map(({ text, href }) => ({ text, href })), 'mục con / thứ tự').toEqual(want)
+    // KPI chi tiết = thẻ đầu danh sách (nếu có): con KPI active, Sidebar không có href chi tiết riêng.
+    const detail = await page.locator('main a[href^="/targets/campaigns/"]').evaluateAll((as) => as.map((a) => a.getAttribute('href') ?? '')
+      .find((h) => /^\/targets\/campaigns\/[0-9a-f-]{36}$/.test(h)) ?? null)
+    const routes = ['/targets/campaigns', '/targets/campaigns/affiliate', ...(detail ? [detail] : []), ...(CMS_ON ? ['/targets/campaigns/cms', '/targets/campaigns/cms/942194ce-893f-4f62-a88a-bd9efa464bae'] : [])]
+    for (const route of routes) {
+      await page.goto(route)
+      await expect(page).toHaveURL(new RegExp(`${route}(\\?|$)`))
+      await expect(btn, `${route}: nhóm phải mở sẵn khi tải thẳng URL module`).toHaveAttribute('aria-expanded', 'true')
+      const subs = await subLabels(page)
+      const cur = subs.filter((x) => x.cur === 'page')
+      const expectHref = resolveActiveHref(route, subs.map((x) => x.href ?? ''))
+      expect(cur.map((x) => x.href), `${route}: đúng một con aria-current`).toEqual([expectHref])
+      await expect(page.locator('aside [aria-current="page"]'), `${route}: số aria-current trong Sidebar`).toHaveCount(1)
+      expect(await btn.getAttribute('aria-current'), `${route}: cha không được aria-current`).toBeNull()
+      expect(await btn.evaluate((e) => getComputedStyle(e).backgroundColor), `${route}: cha mang nền`).toBe(NO_BG)
+    }
+    if (!detail) test.info().annotations.push({ type: 'ui-nav', description: 'không có thẻ chiến dịch KPI để mở chi tiết — CHƯA KIỂM route chi tiết KPI' })
+  })
+
+  test('thu / mở bằng chuột + Enter + Space; Back vào module tự mở lại; route ngoài không ép mở', async ({ page }) => {
+    test.setTimeout(120_000)
+    await page.setViewportSize({ width: 1280, height: 900 })
+    await login(page)
+    await page.goto('/targets/campaigns/affiliate')
+    const btn = page.locator(GROUP_BTN).first()
+    await expect(btn).toHaveAttribute('aria-expanded', 'true')
+    await btn.click()
+    await expect(btn, 'user thu nhóm khi đang ở trong module').toHaveAttribute('aria-expanded', 'false')
+    await expect(page.locator(SUB)).toHaveCount(0)
+    await page.waitForTimeout(500)
+    await expect(btn, 'nhóm tự mở lại dù route không đổi').toHaveAttribute('aria-expanded', 'false')
+    await btn.focus()
+    await page.keyboard.press('Enter')
+    await expect(btn).toHaveAttribute('aria-expanded', 'true')
+    await page.keyboard.press('Space')
+    await expect(btn).toHaveAttribute('aria-expanded', 'false')
+    const ring = await btn.evaluate((e) => getComputedStyle(e).boxShadow !== 'none')
+    expect(ring, 'focus ring của nút cha khi dùng bàn phím').toBe(true)
+    // Rời module bằng Sidebar (điều hướng client) rồi Back ⇒ vào lại module ⇒ tự mở.
+    await page.locator('#sidebar-nav a[href="/tasks"]').first().click()
+    await expect(page).toHaveURL(/\/tasks(\?|$)/)
+    await expect(btn).toHaveAttribute('aria-expanded', 'false')
+    await page.goBack()
+    await expect(page).toHaveURL(/\/targets\/campaigns\/affiliate$/)
+    await expect(btn, 'Back vào module: nhóm tự mở').toHaveAttribute('aria-expanded', 'true')
+    await expect(page.locator(`${SUB} a[aria-current="page"]`)).toHaveAttribute('href', '/targets/campaigns/affiliate')
+  })
+
+  test('rail 64px: bấm icon nhóm ⇒ mở Sidebar (cookie) + bung nhóm, KHÔNG điều hướng; tải lại giữ; HTML đầu không nháy', async ({ page, baseURL }) => {
+    test.setTimeout(120_000)
+    await page.setViewportSize({ width: 1280, height: 900 })
+    await login(page)
+    await page.context().addCookies([{ name: 'sidebar_collapsed', value: '1', url: baseURL! }])
+    await page.goto('/tasks')
+    expect(await asideWidth(page)).toBe(64)
+    const btn = page.locator(GROUP_BTN).first()
+    await expect(btn).toHaveAttribute('aria-label', 'Chiến dịch')
+    await btn.click()
+    await expect.poll(() => asideWidth(page)).toBe(232)
+    await expect(page).toHaveURL(/\/tasks(\?|$)/)
+    await expect(btn).toHaveAttribute('aria-expanded', 'true')
+    expect((await page.context().cookies()).find((c) => c.name === 'sidebar_collapsed')?.value).toBe('0')
+    await page.reload()
+    expect(await asideWidth(page), 'tải lại giữ mở rộng (cookie)').toBe(232)
+    // HTML server (trước hydrate) của route module đã có nhóm mở + con active ⇒ không nháy first paint.
+    const html = await (await page.request.get('/targets/campaigns/affiliate')).text()
+    expect(html, 'SSR: nhóm chưa mở sẵn').toContain('id="sidebar-campaigns-sub"')
+    expect(html, 'SSR: thiếu nhóm').toContain('data-sidebar-group="campaigns"')
+    await page.context().addCookies([{ name: 'sidebar_collapsed', value: '1', url: baseURL! }])
+    const htmlRail = await (await page.request.get('/targets/campaigns/affiliate')).text()
+    expect(htmlRail, 'SSR rail: bề rộng 64px ngay HTML đầu').toContain('w-[64px]')
+    await page.context().addCookies([{ name: 'sidebar_collapsed', value: '0', url: baseURL! }])
+  })
+
+  test('hàng tab chuyển module: ẩn từ 768px khi Sidebar thay thế đủ; 767px vẫn hiện', async ({ page }) => {
+    test.setTimeout(120_000)
+    await login(page)
+    for (const route of ['/targets/campaigns', '/targets/campaigns/affiliate', ...(CMS_ON ? ['/targets/campaigns/cms'] : [])]) {
+      await page.setViewportSize({ width: 1280, height: 900 })
+      await page.goto(route)
+      await expect(tabsRow(page), `${route}: thiếu hàng tab trong DOM`).toHaveAttribute('data-campaigns-tabs', 'mobile-only')
+      await expect(tabsRow(page), `${route} @1280: hàng tab còn hiện`).toBeHidden()
+      for (const [w, visible] of [[768, false], [767, true]] as const) {
+        await page.setViewportSize({ width: w, height: 900 })
+        if (visible) await expect(tabsRow(page), `${route} @${w}: mobile phải còn hàng tab`).toBeVisible()
+        else await expect(tabsRow(page), `${route} @${w}: hàng tab còn hiện`).toBeHidden()
+      }
+      // Mobile vẫn đi được giữa các module bằng tab (Sidebar ẩn < 768).
+      await expect(page.locator('aside')).toBeHidden()
+      await expect(tabsRow(page).locator('a', { hasText: 'Affiliate' })).toHaveAttribute('href', '/targets/campaigns/affiliate')
+    }
+  })
+})
+
+test.describe('UI-NAV — SM giữ điều hướng hiện tại @desktop', () => {
+  test.skip(!fs.existsSync(SM_STATE), 'chưa có phiên SM')
+  test.use({ storageState: SM_STATE })
+  test('SM: không nhóm "Chiến dịch" trong Sidebar; hàng tab trên desktop vẫn hiện ở /targets/campaigns', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 })
+    await page.goto('/targets/campaigns')
+    await expect(page, 'SM phải xem được /targets/campaigns').toHaveURL(/\/targets\/campaigns(\?|$)/)
+    await expect(page.locator('aside')).toBeVisible()
+    await expect(page.locator('#sidebar-nav [data-sidebar-group="campaigns"]')).toHaveCount(0)
+    await expect(page.locator('#sidebar-nav a[href^="/targets/campaigns"]')).toHaveCount(0)
+    const tabs = tabsRow(page)
+    await expect(tabs, 'SM: hàng tab phải còn trong trang (cờ Affiliate bật ở server gate)').toHaveAttribute('data-campaigns-tabs', 'all')
+    await expect(tabs, 'SM desktop: hàng tab phải hiện').toBeVisible()
+  })
+})
+
+test.describe('UI-NAV — QLCH không nhận nhóm @desktop', () => {
+  test.skip(!fs.existsSync(MANAGER_STATE), 'chưa có phiên QLCH')
+  test.use({ storageState: MANAGER_STATE })
+  test('QLCH: Sidebar không có nhóm / link Chiến dịch; /targets/campaigns ⇒ 404 như cũ', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 900 })
+    await page.goto('/tasks')
+    await expect(page.locator('aside')).toBeVisible()
+    await expect(page.locator('#sidebar-nav [data-sidebar-group="campaigns"]')).toHaveCount(0)
+    await expect(page.locator('#sidebar-nav a[href^="/targets/campaigns"]')).toHaveCount(0)
+    await page.goto('/targets/campaigns')
+    await expect(page.locator('main').getByText('This page could not be found.')).toBeVisible({ timeout: 15_000 })
+  })
+})
+
+const MKT = { email: process.env.E2E_MKT_ADMIN_EMAIL, password: process.env.E2E_MKT_ADMIN_PASSWORD }
+test.describe('UI-NAV — admin không super (MKT) @desktop', () => {
+  test.skip(!MKT.email || !MKT.password, 'E2E_MKT_ADMIN_* not set')
+  test('admin không super: không KPI / CMS; Affiliate chỉ là link đơn khi phòng được cấp quyền; deep link KPI / CMS ⇒ 404', async ({ page }) => {
+    test.setTimeout(120_000)
+    await page.setViewportSize({ width: 1280, height: 900 })
+    await page.goto('/login')
+    await page.fill('#email', MKT.email!)
+    await page.fill('#password', MKT.password!)
+    await page.getByRole('button', { name: /^đăng nhập$/i }).click()
+    await page.waitForURL(/\/(tasks|dashboard|targets|fs)/, { timeout: 20_000 })
+    await expect(page.locator('aside')).toBeVisible()
+    await expect(page.locator('#sidebar-nav [data-sidebar-group="campaigns"]'), 'admin không super không được có accordion').toHaveCount(0)
+    const hrefs = await page.locator('#sidebar-nav a[href^="/targets/campaigns"]').evaluateAll((as) => as.map((a) => a.getAttribute('href')))
+    expect(hrefs.every((h) => h === '/targets/campaigns/affiliate'), `mục chiến dịch ngoài Affiliate: ${hrefs.join(', ')}`).toBe(true)
+    test.info().annotations.push({ type: 'ui-nav', description: `MKT admin: ${hrefs.length ? 'link đơn Affiliate (phòng được cấp quyền)' : 'không mục chiến dịch (admin thường)'}` })
+    for (const route of ['/targets/campaigns', ...(CMS_ON ? ['/targets/campaigns/cms'] : [])]) {
+      await page.goto(route)
+      await expect(page.locator('main').getByText('This page could not be found.'), `${route}: admin không super phải 404`).toBeVisible({ timeout: 15_000 })
+    }
+    if (hrefs.length) {
+      await page.goto('/targets/campaigns/affiliate')
+      await expect(page.locator('#sidebar-nav a[aria-current="page"]')).toHaveAttribute('href', '/targets/campaigns/affiliate')
+      await expect(page.locator('main [data-campaigns-tabs]'), 'admin phòng: trang Affiliate không có hàng tab').toHaveCount(0)
     }
   })
 })

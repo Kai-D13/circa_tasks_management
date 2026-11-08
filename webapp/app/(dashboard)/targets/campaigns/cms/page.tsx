@@ -3,6 +3,7 @@ import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { isCmsEarningsEnabled, isCmsProgramEnabled } from '@/lib/cms/flags'
 import { isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import { canManageCms, canViewCmsAdmin } from '@/lib/cms/access'
+import { campaignTabsDesktopReplaced } from '@/lib/layout/campaignNavServer'
 import { cmsLoadAdminList } from '@/lib/cms/server/catalog'
 import { cmsLoadResults } from '@/lib/cms/server/resultLoad'
 import { cmsA1LoadOrder, cmsA1Results, type CmsResultsLoad } from '@/lib/cms/resultUi'
@@ -46,6 +47,7 @@ export default async function CmsProgramsPage({ searchParams }: { searchParams: 
     <CmsProgramListView
       canManage={canManage}
       affiliateEnabled={isKpiAffiliateEnabled()}
+      tabsDesktopReplaced={campaignTabsDesktopReplaced({ role: profile?.role, email: user.email }, { affiliate: isKpiAffiliateEnabled(), cms: true })}
       today={today}
       filter={filter}
       q={q}

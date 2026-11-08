@@ -93,11 +93,10 @@ const ROUTES = [
 ] as const
 
 // Bottom nav: <nav aria-label> là hợp đồng ổn định (e2e/staff-mobile-nav.spec.ts
-// đã dùng). Ranh giới che nội dung là VÙNG THỊ GIÁC của nút giữa nổi — vòng
-// tròn CỘNG quầng ring — chứ không phải mép trên pill: nút nhô lên khỏi pill.
-// `[data-nav-center-zone]` là hộp vô hình bao trọn vùng đó (xem NavCenterBtn).
+// đã dùng). UI-NAV U2 (D04): staff không còn nút giữa nổi ⇒ ranh giới che nội dung là MÉP TRÊN PILL (con đầu của <nav>),
+// cộng khoảng thở --bottom-nav-content-gap (8px).
 const NAV = 'nav[aria-label="Điều hướng chính"]'
-const NAV_CENTER_ZONE = '[data-nav-center-zone]'
+const NAV_CONTENT_GAP = 8
 
 // Chụp đúng khung viewport (KHÔNG fullPage): cần thấy bottom nav nằm đâu so với
 // nội dung, ảnh fullPage duỗi thẳng cả trang thì mất chính thông tin đó.
@@ -153,14 +152,13 @@ async function expectMobileHeader(page: Page, where: string) {
     .toBe('Circa Tasks')
 }
 
-// Phần tử cuối cùng của <main> KHÔNG được nằm dưới vùng thị giác của nút giữa —
-// đo SAU KHI đã cuộn hết xuống (lúc đó phần tử cuối ở vị trí thấp nhất trên màn
-// hình). Đây chính là invariant mà `--bottom-nav-clearance` phải bảo đảm: đổi
-// chiều cao nav / quầng nút giữa mà quên đổi token thì đỏ ở đây.
+// Phần tử cuối cùng của <main> phải nằm trên mép trên pill + khoảng thở — đo SAU KHI đã cuộn hết xuống (lúc đó phần tử cuối
+// ở vị trí thấp nhất). Đây là invariant mà `--bottom-nav-clearance-flat` (staff OS) phải bảo đảm: đổi chiều cao nav mà quên
+// token thì đỏ ở đây.
 async function expectLastElementNotUnderNav(page: Page, where: string) {
-  const geom = await page.evaluate((zoneSel) => {
+  const geom = await page.evaluate((navSel) => {
     const main = document.querySelector('main')
-    const zone = document.querySelector(zoneSel)
+    const zone = document.querySelector(navSel)?.firstElementChild
     if (!main || !zone) return null
     const last = [...main.children]
       .filter((el) => el.getBoundingClientRect().height > 0)
@@ -171,13 +169,13 @@ async function expectLastElementNotUnderNav(page: Page, where: string) {
       lastDesc: `${last.tagName.toLowerCase()}.${(last.className || '').toString().split(' ').slice(0, 3).join('.')}`,
       zoneTop: zone.getBoundingClientRect().top,
     }
-  }, NAV_CENTER_ZONE)
+  }, NAV)
 
-  expect(geom, `${where}: không đo được (thiếu <main>, vùng nút giữa, hoặc main rỗng)`).not.toBeNull()
+  expect(geom, `${where}: không đo được (thiếu <main>, pill bottom nav, hoặc main rỗng)`).not.toBeNull()
   expect(
     geom!.lastBottom,
-    `${where}: phần tử cuối (${geom!.lastDesc}) chạm đáy ${geom!.lastBottom}px, bị nút giữa (vùng thị giác từ ${geom!.zoneTop}px) che`,
-  ).toBeLessThanOrEqual(geom!.zoneTop)
+    `${where}: phần tử cuối (${geom!.lastDesc}) chạm đáy ${geom!.lastBottom}px, lấn khoảng thở trên pill (mép trên ${geom!.zoneTop}px)`,
+  ).toBeLessThanOrEqual(geom!.zoneTop - NAV_CONTENT_GAP + 0.5)
 }
 
 for (const vp of VIEWPORTS) {

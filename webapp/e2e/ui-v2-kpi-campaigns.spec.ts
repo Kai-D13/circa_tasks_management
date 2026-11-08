@@ -310,8 +310,9 @@ test.describe('ui v2 KPI K-1 /targets/campaigns route thật — super @desktop'
   // đường dẫn); trong cây /targets/campaigns (link quay lại của trang tạo) ⇒ campaigns/loading.tsx. Cả hai phải ra
   // cùng khung v2 — không còn skeleton max-w-xl cũ rồi nhảy sang bố cục fluid.
   for (const entry of [
-    { from: '/tasks', link: `aside a[href="${LIST}"]`, name: 'link sidebar từ /tasks' },
-    { from: '/targets/campaigns/new', link: `main a[href="${LIST}"]`, name: 'link quay lại từ /targets/campaigns/new' },
+    // UI-NAV U1: ở /tasks nhóm Sidebar "Chiến dịch" đóng ⇒ mở nhóm rồi bấm mục con "Chiến dịch KPI".
+    { from: '/tasks', open: '#sidebar-nav [data-sidebar-group="campaigns"] button', link: `#sidebar-campaigns-sub a[href="${LIST}"]`, name: 'link sidebar từ /tasks' },
+    { from: '/targets/campaigns/new', open: null, link: `main a[href="${LIST}"]`, name: 'link quay lại từ /targets/campaigns/new' },
   ]) {
     test(`loading: ${entry.name} → /targets/campaigns hiện khung chờ v2`, async ({ page }) => {
       const prefetched = new Map<string, number>()
@@ -341,6 +342,7 @@ test.describe('ui v2 KPI K-1 /targets/campaigns route thật — super @desktop'
         for (let t = 0; t < 30 && (prefetched.get(LIST) ?? 0) < 2; t++) await page.waitForTimeout(100)
       }
       expect(prefetched.get(LIST) ?? 0, `prefetch ${LIST} chưa xong`).toBeGreaterThanOrEqual(2)
+      if (entry.open) await page.locator(entry.open).first().click()
       hold = true
       await page.locator(entry.link).first().click()
       const l = page.locator('[data-route-loading="campaigns"]')

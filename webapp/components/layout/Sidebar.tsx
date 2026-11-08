@@ -31,9 +31,11 @@ import {
   LogOut,
   type LucideIcon,
   HeartHandshake, UserCog, ClipboardPlus, ChartColumn,
+  Target, BadgePercent,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { resolveActiveHref } from '@/lib/layout/sidebarNav'
+import { CAMPAIGN_NAV_GROUP_LABEL, type CampaignNavItem, type CampaignNavKey } from '@/lib/layout/campaignNav'
 import { isSuperAdmin } from '@/lib/authz'
 import { CYCLE_COUNT_DEPT_ID } from '@/lib/inventory/constants'
 import { POLICY_DEPT_ID } from '@/lib/fs/constants'
@@ -213,7 +215,10 @@ function SectionLabel({ label, collapsed, first }: { label: string; collapsed: b
   )
 }
 
-export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, referralEnabled = false, isFsStore = false, affiliateOverviewNav = false, defaultCollapsed = false, careNav = [] }: { announcementsUnread?: number; kpiCampaignEnabled?: boolean; referralEnabled?: boolean; isFsStore?: boolean; affiliateOverviewNav?: boolean; defaultCollapsed?: boolean; careNav?: { href: string; label: string }[] }) {
+// UI-NAV U1: icon mục con nhóm "Chiến dịch" (khi chỉ còn 1 mục, link đơn dùng icon của chính mục đó; riêng KPI giữ icon cũ).
+const CAMPAIGN_ICONS: Record<CampaignNavKey, LucideIcon> = { kpi: Target, affiliate: Link2, cms: BadgePercent }
+
+export function Sidebar({ announcementsUnread = 0, referralEnabled = false, isFsStore = false, campaignNav = [], defaultCollapsed = false, careNav = [] }: { announcementsUnread?: number; referralEnabled?: boolean; isFsStore?: boolean; campaignNav?: CampaignNavItem[]; defaultCollapsed?: boolean; careNav?: { href: string; label: string }[] }) {
   const pathname = usePathname()
   const router   = useRouter()
   const profile  = useUserStore((s) => s.profile)
@@ -261,13 +266,19 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
     || role === 'store_manager')
   const [invOpen, setInvOpen] = useState(() => pathname.startsWith('/inventory'))
 
-  // KPI (→ Chiến dịch): super admin only, gated by the feature flag. Single flat
-  // link now that the old all-stores Doanh số (/targets) is hidden from super admin.
-  const showKpi = isSuper && kpiCampaignEnabled
-
-  // Affiliate overview: đúng predicate cũ, chỉ đặt tên để dùng lại ở 3 chỗ
-  // (tập href của resolveActiveHref, render mục, và phép lọc nhóm rỗng).
-  const showAffiliate = affiliateOverviewNav && !isFsStore
+  // UI-NAV U1 (PM spec ui-nav-spec-implementation-2026-11-08 §3): nhóm "Chiến dịch" = Chiến dịch KPI · Affiliate · CMS sản phẩm.
+  // Tập mục do LAYOUT (server) tính từ quyền ∩ cờ hiện có (`lib/layout/campaignNav`) — Sidebar chỉ trình bày, không tự suy quyền.
+  // 0 mục: không render · 1 mục: link đơn đúng tên mục (không accordion một con) · ≥ 2: accordion. Route vẫn tự kiểm quyền.
+  const campItems = isFsStore ? [] : campaignNav
+  const inCampaignSection = pathname === '/targets/campaigns' || pathname.startsWith('/targets/campaigns/')
+  // Mở sẵn khi tải thẳng URL trong module; điều hướng client VÀO / GIỮA module (kể cả Back) ⇒ tự mở lại. Không effect: điều
+  // chỉnh state ngay trong render khi pathname đổi — người dùng tự thu nhóm khi đang ở trong module thì giữ thu tới lần đổi route sau.
+  const [campOpen, setCampOpen] = useState(inCampaignSection)
+  const [campPath, setCampPath] = useState(pathname)
+  if (campPath !== pathname) {
+    setCampPath(pathname)
+    if (inCampaignSection && !campOpen) setCampOpen(true)
+  }
 
   // Quản lý FS (→ Sản phẩm): super admin, an admin of dept Policy, OR an FS
   // store_manager (their ONLY nav item — everything else is hidden above).
@@ -281,13 +292,12 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
   const [careOpen, setCareOpen] = useState(() => pathname === '/care' || pathname.startsWith('/care/'))
 
   // Active = LONGEST-MATCH ĐƠN NHẤT (hàm thuần `resolveActiveHref`, khoá bằng
-  // e2e/sidebar-nav.spec.ts). Gom mọi href đang hiển thị (item theo role + 2
-  // link con của accordion + link gated KPI/Affiliate) rồi để hàm chọn ĐÚNG 1.
+  // e2e/sidebar-nav.spec.ts). Gom mọi href đang hiển thị (item theo role + link
+  // con của accordion + mục nhóm Chiến dịch) rồi để hàm chọn ĐÚNG 1.
   const activeHref = resolveActiveHref(pathname, [
     ...visibleItems.map((item) => item.href),
     ...(showInventory ? ['/inventory/trf'] : []),
-    ...(showKpi ? ['/targets/campaigns'] : []),
-    ...(showAffiliate ? ['/targets/campaigns/affiliate'] : []),
+    ...campItems.map((c) => c.href),
     ...(showFs ? ['/fs/products'] : []),
     ...careItems.map((c) => c.href),
   ])
@@ -303,7 +313,7 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
   // Trình bày: những nhóm THỰC SỰ có mục sau gating. Nhóm rỗng không được để
   // lại nhãn/gạch mồ côi (một admin phòng khác super chẳng hạn chỉ còn 2 nhóm).
   // Mục gated của nhóm 'data' nằm NGOÀI navItems (accordion + link theo flag).
-  const hasGatedData  = showInventory || showKpi || showAffiliate || showFs
+  const hasGatedData  = showInventory || campItems.length > 0 || showFs
   const sections = NAV_SECTIONS.filter(({ key }) =>
     visibleItems.some((item) => item.group === key) || (key === 'data' && hasGatedData) || (key === 'ops' && showCare),
   )
@@ -425,32 +435,60 @@ export function Sidebar({ announcementsUnread = 0, kpiCampaignEnabled = false, r
                     </div>
                   )}
 
-                  {/* KPI — super admin only (flag on). The old all-stores "Doanh số"
-                      (/targets) is hidden now that campaigns own KPI; this is a single
-                      flat link straight to campaign management (accordion no longer needed). */}
-                  {showKpi && (
+                  {/* UI-NAV U1 — nhóm "Chiến dịch" tại vị trí link "Chiến dịch KPI" cũ. Một mục (vd. admin phòng chỉ có
+                      Affiliate) ⇒ link đơn đúng tên mục; ≥ 2 mục ⇒ accordion: nút cha KHÔNG điều hướng (không route /campaigns),
+                      chỉ tint ngữ cảnh, không nền / aria-current; mục con là Link thường, prefetch=false như mọi link Sidebar. */}
+                  {campItems.length === 1 && (
                     <NavLink
-                      href="/targets/campaigns"
-                      label="Chiến dịch KPI"
-                      icon={Megaphone}
+                      href={campItems[0].href}
+                      label={campItems[0].label}
+                      icon={campItems[0].key === 'kpi' ? Megaphone : CAMPAIGN_ICONS[campItems[0].key]}
                       prefetch={false}
                       collapsed={collapsed}
-                      active={activeHref === '/targets/campaigns'}
+                      active={activeHref === campItems[0].href}
                     />
                   )}
-
-                  {/* P3-I.2: Affiliate overview — admin phòng được cấp quyền (layout tính
-                      server-side từ affiliate_department_access + flag; route tự re-verify).
-                      Super không cần item này (đi qua Chiến dịch KPI → tab Affiliate). */}
-                  {showAffiliate && (
-                    <NavLink
-                      href="/targets/campaigns/affiliate"
-                      label="Affiliate"
-                      icon={Link2}
-                      prefetch={false}
-                      collapsed={collapsed}
-                      active={activeHref === '/targets/campaigns/affiliate'}
-                    />
+                  {campItems.length > 1 && (
+                    <div data-sidebar-group="campaigns">
+                      <CollapsedTip label={CAMPAIGN_NAV_GROUP_LABEL} collapsed={collapsed}>
+                        <button
+                          type="button"
+                          // Thu gọn: nút cha KHÔNG điều hướng — mở rộng sidebar (cookie như cũ) rồi bung nhóm; không tự đi KPI.
+                          onClick={() => {
+                            if (collapsed) { applyCollapsed(false); setCampOpen(true); return }
+                            setCampOpen((o) => !o)
+                          }}
+                          aria-label={collapsed ? CAMPAIGN_NAV_GROUP_LABEL : undefined}
+                          aria-expanded={!collapsed && campOpen}
+                          aria-controls={!collapsed && campOpen ? 'sidebar-campaigns-sub' : undefined}
+                          className={cn(itemCls(inCampaignSection ? 'context' : 'idle', collapsed), 'w-full font-medium', collapsed && 'whitespace-nowrap')}
+                        >
+                          <Megaphone className={iconCls(inCampaignSection ? 'context' : 'idle')} />
+                          {!collapsed && (
+                            <>
+                              <span className="flex-1 text-left">{CAMPAIGN_NAV_GROUP_LABEL}</span>
+                              <ChevronRight className={cn('h-[14px] w-[14px] shrink-0 text-sidebar-foreground/60 transition-transform', campOpen && 'rotate-90')} />
+                            </>
+                          )}
+                        </button>
+                      </CollapsedTip>
+                      {!collapsed && campOpen && (
+                        <div id="sidebar-campaigns-sub" className={SUB_LIST}>
+                          {campItems.map((c) => (
+                            <NavLink
+                              key={c.key}
+                              href={c.href}
+                              label={c.label}
+                              icon={CAMPAIGN_ICONS[c.key]}
+                              prefetch={false}
+                              collapsed={false}
+                              sub
+                              active={activeHref === c.href}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   )}
 
                   {/* Quản lý FS — collapsible parent → submodules (Sản phẩm) */}

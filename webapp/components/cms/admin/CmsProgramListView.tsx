@@ -103,7 +103,7 @@ function DateLine({ r, today }: { r: CmsListRow; today: string }) {
 const HAS_RESULTS = (d: CmsListRow['display']) => d === 'running' || d === 'waiting_close' || d === 'locked'
 
 export function CmsProgramListView({
-  canManage, affiliateEnabled, today, filter, q, counts, rows, hasAny, stats, error, p2 = null, nav,
+  canManage, affiliateEnabled, today, filter, q, counts, rows, hasAny, stats, error, p2 = null, nav, tabsDesktopReplaced = false,
 }: {
   canManage: boolean
   affiliateEnabled: boolean
@@ -121,6 +121,8 @@ export function CmsProgramListView({
   p2?: { cells: Map<string, CmsA1Cell>; stats: CmsA1Stats } | null
   /** Fixture: điều hướng trong /ui-catalog (route thật bỏ trống). */
   nav?: CmsNav
+  /** UI-NAV U1: ẩn hàng tab chuyển module ở desktop — page server tính (campaignTabsDesktopReplaced); mặc định false (fixture / SM). */
+  tabsDesktopReplaced?: boolean
 }) {
   const href = (h: string) => cmsNavHref(nav, h)
   const statuses = cmsStatusesFor(canManage)
@@ -142,7 +144,7 @@ export function CmsProgramListView({
           </Link>
         ) : undefined}
       />
-      <CampaignsTabs active="cms" affiliateEnabled={affiliateEnabled} cmsEnabled
+      <CampaignsTabs active="cms" affiliateEnabled={affiliateEnabled} cmsEnabled desktopSidebarReplacement={nav?.mode === 'fixture' ? false : tabsDesktopReplaced}
         hrefs={nav?.mode === 'fixture' ? { campaigns: href('/targets/campaigns'), affiliate: href('/targets/campaigns/affiliate'), cms: href('/targets/campaigns/cms') } : undefined} />
 
       {error ? (
