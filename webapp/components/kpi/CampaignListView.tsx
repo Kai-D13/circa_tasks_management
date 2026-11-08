@@ -72,7 +72,7 @@ function RowProgress({ tone, raw, text, size }: { tone: KpiProgressTone; raw: nu
 }
 
 export function CampaignListView({
-  canManage, affiliateEnabled, cmsEnabled = false, statusFilter, counts, rows, hasAny, campaignsError, sideError,
+  canManage, affiliateEnabled, cmsEnabled = false, statusFilter, counts, rows, hasAny, campaignsError, sideError, tabsDesktopReplaced = false,
 }: {
   canManage: boolean
   affiliateEnabled: boolean
@@ -86,6 +86,8 @@ export function CampaignListView({
   hasAny: boolean
   campaignsError: string | null
   sideError: string | null
+  /** UI-NAV U1: ẩn hàng tab chuyển module ở desktop — page server tính (campaignTabsDesktopReplaced); mặc định false (fixture / SM). */
+  tabsDesktopReplaced?: boolean
 }) {
   const tabHref = (k: string) => k === 'all' ? '/targets/campaigns' : `/targets/campaigns?status=${k}`
   const queryError = campaignsError ?? sideError
@@ -103,7 +105,7 @@ export function CampaignListView({
       />
 
       {/* P3-I: tab Affiliate overview — chỉ render khi KPI_AFFILIATE_ENABLED */}
-      <CampaignsTabs active="campaigns" affiliateEnabled={affiliateEnabled} cmsEnabled={cmsEnabled} />
+      <CampaignsTabs active="campaigns" affiliateEnabled={affiliateEnabled} cmsEnabled={cmsEnabled} desktopSidebarReplacement={tabsDesktopReplaced} />
 
       {queryError && (
         <ErrorState message={`Lỗi truy vấn dữ liệu campaign: ${queryError}`} hint="Kiểm tra migration 070/071/072 đã apply chưa." />

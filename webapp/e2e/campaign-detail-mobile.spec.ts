@@ -216,19 +216,19 @@ function mobileSuite(label: string, state: string, creds: { email?: string; pass
         })
         await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))))
 
-        const geom = await page.evaluate((zoneSel) => {
+        // UI-NAV U2: không còn nút giữa nổi ⇒ ranh giới che nội dung là MÉP TRÊN PILL của bottom nav (mọi vai, không chỉ staff).
+        const geom = await page.evaluate(() => {
           const main = document.querySelector('main')
-          const zone = document.querySelector(zoneSel)
-          if (!main || !zone) return null
+          const pill = document.querySelector('[data-bottom-nav]')?.firstElementChild
+          if (!main || !pill) return null
           const last = [...main.children].filter((el) => el.getBoundingClientRect().height > 0).pop()
           if (!last) return null
-          return { lastBottom: last.getBoundingClientRect().bottom, zoneTop: zone.getBoundingClientRect().top }
-        }, '[data-nav-center-zone]')
+          return { lastBottom: last.getBoundingClientRect().bottom, pillTop: pill.getBoundingClientRect().top }
+        })
 
-        if (geom) {
-          expect(geom.lastBottom, `@${vp.w}: phần tử cuối bị vùng nút giữa của bottom nav che`)
-            .toBeLessThanOrEqual(geom.zoneTop)
-        }
+        expect(geom, `@${vp.w}: không đo được <main> / bottom nav`).not.toBeNull()
+        expect(geom!.lastBottom, `@${vp.w}: phần tử cuối bị bottom nav che`)
+          .toBeLessThanOrEqual(geom!.pillTop)
       })
 
       // Hành trình THẬT: bấm card ở danh sách → detail → back về danh sách.

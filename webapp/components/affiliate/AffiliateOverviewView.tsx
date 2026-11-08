@@ -46,7 +46,9 @@ export type AffiliateOverviewBody =
       filteredCount: number
     }
 
-export function AffiliateOverviewView({ scope, filter, body, cmsEnabled = false }: {
+export function AffiliateOverviewView({ scope, filter, body, cmsEnabled = false, tabsDesktopReplaced = false }: {
+  /** UI-NAV U1: ẩn hàng tab chuyển module ở desktop — page server tính (campaignTabsDesktopReplaced); mặc định false (fixture / SM). */
+  tabsDesktopReplaced?: boolean
   /** CMS P1-c: tab "CMS sản phẩm" (CMS_PROGRAM_ENABLED) — mặc định tắt. */
   cmsEnabled?: boolean
   scope: Exclude<OverviewPageScope, 'denied'>
@@ -58,7 +60,7 @@ export function AffiliateOverviewView({ scope, filter, body, cmsEnabled = false 
     <div data-ui-v2="page" data-layout-width="fluid" data-affiliate-overview={body.kind} className="p-4 md:p-6 space-y-4 md:space-y-[18px]">
       <PageHeader title="Doanh số Affiliate — Circa Online" subtitle="Nguồn: Circa Online · Chỉ tính đơn DELIVERED." icon={Link2} />
       {scope === 'os-fs'
-        ? <CampaignsTabs active="affiliate" affiliateEnabled cmsEnabled={cmsEnabled} />
+        ? <CampaignsTabs active="affiliate" affiliateEnabled cmsEnabled={cmsEnabled} desktopSidebarReplacement={tabsDesktopReplaced} />
         : (scope === 'os-assigned' || scope === 'os-own')
           ? <Link href="/targets" className="inline-flex min-h-[44px] items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground md:min-h-0">← Doanh số</Link>
           : null}

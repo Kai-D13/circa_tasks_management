@@ -8,11 +8,15 @@ import { cn } from '@/lib/utils'
 // CMS P1-c (U15): tab "CMS sản phẩm" ĐỘC LẬP cờ Affiliate — chỉ theo CMS_PROGRAM_ENABLED (`cmsEnabled`). Không cờ nào
 // bật ⇒ vẫn null như cũ (KPI giữ nguyên).
 // CMS-UI-1: `hrefs` (tuỳ chọn, chỉ fixture /ui-catalog) đổi đích link để demo không rời catalog; route thật không truyền ⇒ y cũ.
-export function CampaignsTabs({ active, affiliateEnabled, cmsEnabled = false, hrefs }: {
+// UI-NAV U1 (PM spec §3.3): `desktopSidebarReplacement` — prop TRÌNH BÀY do page server tính (campaignTabsDesktopReplaced:
+// admin + Sidebar có đủ mọi đích của hàng tab này). true ⇒ ẩn hàng tab từ breakpoint md (768px) — mobile (không Sidebar) vẫn có.
+// Mặc định false: fixture / SM / thiếu đích ⇒ giữ tabs.
+export function CampaignsTabs({ active, affiliateEnabled, cmsEnabled = false, hrefs, desktopSidebarReplacement = false }: {
   active: 'campaigns' | 'affiliate' | 'cms'
   affiliateEnabled: boolean
   cmsEnabled?: boolean
   hrefs?: Partial<Record<'campaigns' | 'affiliate' | 'cms', string>>
+  desktopSidebarReplacement?: boolean
 }) {
   if (!affiliateEnabled && !cmsEnabled) return null
   const tabs = [
@@ -21,7 +25,7 @@ export function CampaignsTabs({ active, affiliateEnabled, cmsEnabled = false, hr
     ...(cmsEnabled ? [{ key: 'cms' as const, label: 'CMS sản phẩm', href: hrefs?.cms ?? '/targets/campaigns/cms' }] : []),
   ]
   return (
-    <div className="flex gap-2 v2:w-fit v2:max-w-full v2:gap-1 v2:rounded-v2-control v2:bg-muted v2:p-1">
+    <div data-campaigns-tabs={desktopSidebarReplacement ? 'mobile-only' : 'all'} className={cn('flex gap-2 v2:w-fit v2:max-w-full v2:gap-1 v2:rounded-v2-control v2:bg-muted v2:p-1', desktopSidebarReplacement && 'md:hidden')}>
       {tabs.map((t) => (
         <Link
           key={t.key}

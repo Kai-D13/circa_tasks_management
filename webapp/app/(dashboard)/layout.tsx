@@ -3,12 +3,7 @@ import { redirect } from 'next/navigation'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { getUnreadAnnouncementCount } from '@/app/actions/announcements'
 import { getStaffPendingTaskCount } from '@/app/actions/tasks'
-import { UserProvider } from '@/components/providers/UserProvider'
-import { ThemeProvider } from '@/components/providers/ThemeProvider'
-import { NotificationProvider } from '@/components/layout/NotificationProvider'
-import { Sidebar } from '@/components/layout/Sidebar'
-import { MobileHeader } from '@/components/layout/MobileHeader'
-import { BottomNav } from '@/components/layout/BottomNav'
+import { DashboardShell } from '@/components/layout/DashboardShell'
 import { isKpiCampaignEnabled, isKpiAffiliateEnabled } from '@/lib/kpi/flags'
 import { careNavItems } from '@/lib/care/browse'
 import { getCareNavPermissions } from '@/lib/care/server/browse'
@@ -16,6 +11,7 @@ import { isCareEnabled } from '@/lib/care/flags'
 import { isReferralEnabled } from '@/lib/affiliate/flags'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { opsSidebarVisible } from '@/lib/affiliate/overview'
+import { campaignNavForViewer } from '@/lib/layout/campaignNavServer'
 import { supabaseAdmin } from '@/lib/supabase/admin'
 import { UserProfile } from '@/types'
 
@@ -41,22 +37,20 @@ export default async function DashboardLayout({
   // realtime: recomputed each navigation (server render), 2 light queries. Skipped
   // for FS-store users (they never see the announcements tab).
   const announcementsUnread = profile.role !== 'admin' && !isFsStore ? await getUnreadAnnouncementCount() : 0
-  // Staff are mobile-only: skip rendering/hydrating the desktop Sidebar entirely
-  // (it's display:none for them anyway) for a leaner shell. 100dvh avoids the
-  // mobile address-bar resize jank.
+  // Staff are mobile-only (no desktop Sidebar — xem DashboardShell).
   const isStaff = profile.role === 'staff'
   // Tasks-tab badge (OS staff only): head-count of the staff pending list, same
   // posture as the announcements badge — recomputed per navigation, no polling.
   const tasksPending = isStaff && !isFsStore ? await getStaffPendingTaskCount() : 0
-  // KPI Campaign nav gate (server env) → passed to the client Sidebar as a prop
-  // (avoids a NEXT_PUBLIC_ var; keeps the flag server-controlled).
+  // KPI Campaign flag (server env) — gate của mục Affiliate admin phòng bên dưới; nhóm Sidebar "Chiến dịch" tính ở
+  // campaignNavForViewer (cùng cờ, server-controlled, không NEXT_PUBLIC).
   const kpiCampaignEnabled = isKpiCampaignEnabled()
   const referralEnabled = isReferralEnabled()
   // P3-I.2 r1.2a: item sidebar "Affiliate" cho admin PHÒNG ĐƯỢC CẤP QUYỀN
   // (affiliate_department_access — grant 096; RLS bảng này super-only nên đọc
   // bằng admin client, 1 PK lookup chỉ khi role=admin non-super có department).
-  // Super BỊ LOẠI tường minh (audit P2#1 — đi qua Chiến dịch KPI → tab, không
-  // nhân đôi nav; contract opsSidebarVisible có test). Route tự re-verify.
+  // opsSidebarVisible vẫn loại super (helper quyền / phòng giữ nguyên, có test); từ UI-NAV super nhận mục Affiliate qua nhánh
+  // super trong campaignNav (cùng cờ KPI + Affiliate) — không mở Affiliate cho admin thường. Route tự re-verify.
   const affiliateNavCandidate = isKpiAffiliateEnabled() && kpiCampaignEnabled
     && profile.role === 'admin' && !isSuperAdminEmail(user.email) && !!profile.department_id
   // Sidebar thu gọn: đọc cookie ngay ở server (layout đã dynamic vì auth) rồi
@@ -79,36 +73,23 @@ export default async function DashboardLayout({
           .maybeSingle()).data
       : false,
   })
+  // UI-NAV U1: nhóm Sidebar "Chiến dịch" (KPI · Affiliate · CMS) — quyền ∩ cờ hiện có, không query thêm.
+  const campaignNav = campaignNavForViewer({ role: profile.role, email: user.email, isFsStore, affiliateDeptAdmin: affiliateOverviewNav })
 
+  // UI-NAV r1: phần trình bày (Sidebar + <main> + BottomNav) ở DashboardShell — dùng chung với fixture /ui-catalog-shell/nav.
   return (
-    <ThemeProvider>
-      <UserProvider profile={profile as UserProfile}>
-        <NotificationProvider>
-        <div className="flex h-[100dvh] overflow-hidden">
-          {/* Desktop sidebar — hidden on mobile; not rendered for staff */}
-          {/* Staff get no desktop Sidebar. An FS store_manager DOES get one → pass
-              isFsStore so it collapses to the single FS item (no OS links). */}
-          {!isStaff && <Sidebar announcementsUnread={announcementsUnread} kpiCampaignEnabled={kpiCampaignEnabled} referralEnabled={referralEnabled} isFsStore={isFsStore} affiliateOverviewNav={affiliateOverviewNav} defaultCollapsed={sidebarCollapsed} careNav={careNav} />}
-
-          {/* Main content — full width on mobile */}
-          {/* Mobile bottom padding clears the fixed BottomNav + the iPhone
-              home-indicator safe area + a little breathing room, so the last card /
-              Staff pager is never hidden behind the nav. Desktop has no bottom nav.
-              `--bottom-nav-clearance` (globals.css) DẪN XUẤT từ `--bottom-nav-h`
-              — cùng token mà BottomNav dùng cho chiều cao pill — nên đổi chiều
-              cao nav là chỗ này tự khớp. Giá trị hiện tại bằng đúng pb cũ
-              (5.5rem + safe-area = 82.5px + safe-area @ root 15px). */}
-          <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden bg-muted/20 pb-[var(--bottom-nav-clearance)] md:pb-0">
-            {/* Mobile top header — 3 màn dược sĩ CSKH tự dựng header riêng (B7-ui r2), cùng điều kiện tab CSKH */}
-            <MobileHeader careOwnHeader={isStaff && !isFsStore && isCareEnabled()} />
-            {children}
-          </main>
-        </div>
-
-        {/* Bottom navigation — mobile only */}
-        <BottomNav announcementsUnread={announcementsUnread} tasksPending={tasksPending} isFsStore={isFsStore} careEnabled={isStaff && !isFsStore && isCareEnabled()} />
-        </NotificationProvider>
-      </UserProvider>
-    </ThemeProvider>
+    <DashboardShell
+      profile={profile as UserProfile}
+      isFsStore={isFsStore}
+      announcementsUnread={announcementsUnread}
+      tasksPending={tasksPending}
+      referralEnabled={referralEnabled}
+      campaignNav={campaignNav}
+      sidebarCollapsed={sidebarCollapsed}
+      careNav={careNav}
+      careEnabled={isCareEnabled()}
+    >
+      {children}
+    </DashboardShell>
   )
 }

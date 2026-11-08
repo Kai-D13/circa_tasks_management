@@ -247,7 +247,9 @@ test.describe('ui v2 KPI K-4 /targets/campaigns/affiliate route thật — super
   // Hai lối vào, hai ranh giới chờ: tab ở danh sách (cùng segment campaigns) ⇒ affiliate/loading.tsx; sidebar admin phòng
   // ban (ngoài /targets) ⇒ targets/loading.tsx chọn khung theo pathname (kind 'affiliate'). Cả hai ⇒ khung Affiliate v2.
   for (const entry of ['tab', 'outside'] as const) {
-    test(`loading: ${entry === 'tab' ? 'tab "Affiliate" ở danh sách chiến dịch' : 'lối vào sidebar (router từ /tasks)'} → khung chờ Affiliate`, async ({ page }) => {
+    // UI-NAV U1: desktop super không còn hàng tab trong trang (Sidebar nhóm "Chiến dịch" thay thế) ⇒ lối vào TRONG cây
+    // /targets/campaigns trên desktop = mục con Sidebar "Affiliate" (nhóm mở sẵn ở danh sách). Hàng tab mobile kiểm ở sidebar-nav.
+    test(`loading: ${entry === 'tab' ? 'mục Sidebar "Affiliate" từ danh sách chiến dịch' : 'lối vào sidebar (router từ /tasks)'} → khung chờ Affiliate`, async ({ page }) => {
       let prefetched = 0
       let hold = false
       await page.route((u) => u.pathname === ROUTE, async (route) => {
@@ -280,7 +282,7 @@ test.describe('ui v2 KPI K-4 /targets/campaigns/affiliate route thật — super
       expect(prefetched, `prefetch ${ROUTE} chưa xong`).toBeGreaterThanOrEqual(2)
       await page.waitForLoadState('networkidle')
       hold = true
-      if (entry === 'tab') await page.locator('main').getByRole('link', { name: 'Affiliate' }).click()
+      if (entry === 'tab') await page.locator('#sidebar-campaigns-sub a[href="/targets/campaigns/affiliate"]').click()
       else await page.evaluate((h) => {
         const r = (window as unknown as { next?: { router?: { push: (href: string) => void } } }).next?.router
         if (!r) throw new Error('window.next.router không có')

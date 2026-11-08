@@ -9,6 +9,7 @@
 4. **Workflow**: submit/claim/care/approve/resubmit/export — hành vi giữ nguyên 100%.
 5. **DB**: KHÔNG migration, KHÔNG ENV mới trong toàn chương trình UI.
 6. **Cấu trúc nav**: Sidebar/BottomNav/MobileHeader structure giữ (đổi style token OK, không đổi item/behavior).
+   - **Ngoại lệ có phạm vi UI-NAV (PM 08/11/2026 — `planning/research/ui-nav-spec-implementation-2026-11-08.md`, quyết định UI-NAV-D01–D06):** (a) Sidebar admin gom "Chiến dịch KPI · Affiliate · CMS sản phẩm" thành nhóm **Chiến dịch** theo quyền ∩ cờ hiện có (`lib/layout/campaignNav.ts`), hàng tab chuyển module trong trang ẩn từ `md` khi Sidebar thay thế đủ; (b) BottomNav staff OS bỏ hình thức nút giữa nổi (thay quyết định 15/08 về hình thức; thứ tự / href / nhãn **Doanh số** giữ), `<main>` staff OS dùng `--bottom-nav-clearance-flat`. Ngoài hai điểm này luật 6 giữ nguyên; luật token / a11y / quyền / route / query vẫn áp dụng.
 7. Root `html font-size: 15px` giữ; mobile input dùng `text-[16px] md:text-sm`.
 
 ## ĐƯỢC ĐỔI
