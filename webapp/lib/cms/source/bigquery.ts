@@ -22,6 +22,7 @@
 import { BigQueryError, type BqParam, type BqQueryResult } from '../../bigquery/query'
 import { isSafeBqTableName } from '../../care/config'
 import { CMS_SALES_ROW_CAP } from '../quality'
+import { cmsRowIssueContext, type CmsRowIssueContext } from '../sourceDiagnostics'
 import { formatUtcMicros } from '../time'
 import {
   CMS_PRODUCT_COLUMNS, CMS_SALES_COLUMNS, normalizeProductRow, normalizeSalesRow,
@@ -64,6 +65,9 @@ export interface CmsRowIssueAt {
   /** Thứ tự dòng trong kết quả nguồn (0-based) — không mang dữ liệu dòng. */
   index: number
   issues: CmsRowIssue[]
+  /** S2 (PM r1 §5.2): ngữ cảnh tối thiểu lấy TRƯỚC khi bỏ dòng lỗi — ProductID canonical (hỏng ⇒ null) + đơn vị chuẩn hoá.
+   *  Không email / mã đơn / người bán. Chỉ có ở nguồn dòng đơn. */
+  ctx?: CmsRowIssueContext
 }
 
 const TS = (col: string) => `FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%E6SZ', ${col}, 'UTC') AS ${col}`
@@ -208,7 +212,7 @@ export async function fetchCmsSalesSnapshot(
   r.result.rows.forEach((raw, index) => {
     const n = normalizeSalesRow(raw)
     if (n.ok) lines.push(n.value)
-    else rowIssues.push({ index, issues: n.issues })
+    else rowIssues.push({ index, issues: n.issues, ctx: cmsRowIssueContext(raw) })
   })
   return {
     ok: true, lines, rowIssues,

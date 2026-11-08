@@ -17,8 +17,9 @@ const PG1 = cmsFxProgram(CMS_FX_PG.PG1)!
 export const CMS_FX_PROGRAM = PG1.row.id
 export const CMS_FX_RUN = PG1.run!.id
 
-export type CmsFxResultScenario = 'running' | 'top' | 'held' | 'none' | 'error' | 'gone' | 'config'
-export const CMS_FX_RESULT_SCENARIOS: CmsFxResultScenario[] = ['running', 'top', 'held', 'none', 'error', 'gone', 'config']
+// reset (CMS đơn giản S0 / mig 125–127): cấu hình đổi đã vô hiệu pointer — chưa có run hiện hành nhưng từng công bố ⇒ config_reset.
+export type CmsFxResultScenario = 'running' | 'top' | 'held' | 'none' | 'error' | 'gone' | 'config' | 'reset'
+export const CMS_FX_RESULT_SCENARIOS: CmsFxResultScenario[] = ['running', 'top', 'held', 'none', 'error', 'gone', 'config', 'reset']
 
 /** Kết quả của một chương trình theo người xem + kịch bản hiển thị. Chương trình chưa bắt đầu / nháp ⇒ 'upcoming' / 'off'. */
 export function cmsFxResultsOf(programId: string, s: CmsFxResultScenario, v: CmsFxViewer): CmsResultsLoad {
@@ -27,6 +28,7 @@ export function cmsFxResultsOf(programId: string, s: CmsFxResultScenario, v: Cms
   if (p.row.startDate > CMS_FX_TODAY) return { kind: 'upcoming' }
   if (s === 'error' || s === 'gone') return { kind: s }
   if (s === 'none' || !p.run) return { kind: 'loaded', header: cmsFxHeader({ ...p, run: null, out: null } as CmsFxProgram, v), rows: { runId: null, results: [], catalog: [], users: [] } }
+  if (s === 'reset') return { kind: 'loaded', header: cmsFxHeader(p, v, { reset: true }), rows: { runId: null, results: [], catalog: [], users: [] } }
   return { kind: 'loaded', header: cmsFxHeader(p, v, { held: s === 'held', configChanged: s === 'config' }), rows: cmsFxRows(p, v) }
 }
 

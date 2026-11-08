@@ -24,6 +24,7 @@
 // Mọi lỗi giữ pointer cũ (không công bố 0 thay dữ liệu lỗi). Đóng run thất bại KHÔNG bị nuốt ⇒ CLOSE_FAILED + cause.
 // Kết quả / log chỉ số đếm + mã cố định — không email, không giá trị dòng, không message thô của nguồn.
 
+import { cmsEncodeUnitIssueSummary, cmsSummarizeRowIssues, type CmsUnitIssueSummary } from './sourceDiagnostics'
 import { createHash } from 'node:crypto'
 import { computeCmsProgram, CmsEngineInputError } from './engine/compute'
 import { CmsEngineConfigError, parseCmsEngineProgram } from './engine/config'
@@ -114,6 +115,9 @@ export interface CmsSalesSyncResult {
   bytesProcessed: number | null
   /** sha256 của payload kết quả (so hai dry-run trên cùng snapshot nguồn). */
   resultHash: string | null
+  /** S2 (PM r1 §5.2): chẩn đoán dòng nguồn bị loại (ProductID × đơn vị × mã, ≤ 20 nhóm) khi held ROW_ISSUES / UNCONVERTED_UNITS;
+   *  null khi không có dòng lỗi. Chỉ cho super / operator (CLI, detail run) — không gửi staff / QLCH / SM, không tự gửi BI. */
+  unitIssues?: CmsUnitIssueSummary | null
   /** Toàn bộ thời gian của lượt chương trình, GỒM cleanup. */
   elapsedMs: number
   /** Đóng run thất bại: kết quả dự định trước bước đóng (status = 'error', code = 'CLOSE_FAILED'). */
@@ -334,7 +338,16 @@ async function runCmsSalesSyncInner(deps: CmsSalesSyncDeps, programId: string, o
   }
   if (verdict.status === 'held') {
     res.reasons = verdict.reasons
-    return stop('held', verdict.reasons[0], { ...qualityDetail, reasons: verdict.reasons.join(',') })
+    // S2: chẩn đoán bổ sung — guard held toàn run giữ nguyên (không bỏ SP / dòng để publish). Mã hoá ≤ 8 KiB (RPC finish ≤ 16 KiB).
+    const diag: CmsSalesRunDetail = {}
+    if (fetched.rowIssues.length) {
+      const s = cmsSummarizeRowIssues(fetched.rowIssues.map((x) => ({ ctx: x.ctx, issues: x.issues })))
+      res.unitIssues = s
+      diag.unit_issue_summary = cmsEncodeUnitIssueSummary(s)
+      diag.unit_issue_rows = s.rows
+      diag.unit_issue_groups_truncated = s.truncated
+    }
+    return stop('held', verdict.reasons[0], { ...qualityDetail, reasons: verdict.reasons.join(','), ...diag })
   }
   if (cmsStageBoundsIssue(out, fetched.lines)) return stop('held', 'OVERFLOW', qualityDetail)
   // Trả hàng chưa triển khai (phase sau — PM 06/11 sales-only §4.2): chương trình thật có dòng ứng viên âm (engine ⇒ ADJUSTMENT) ⇒

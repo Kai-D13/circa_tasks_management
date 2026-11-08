@@ -38,6 +38,8 @@ export interface BqQueryOptions {
   pollTimeoutMs?: number
   /** Trần số dòng — vượt ⇒ lỗi, không trả dữ liệu cắt cụt. */
   maxRows?: number
+  /** Trần byte BigQuery tự chặn (jobs.query maximumBytesBilled) — vượt ⇒ job lỗi ⇒ BigQueryError 'http'. Không đặt ⇒ như cũ. */
+  maximumBytesBilled?: number
 }
 
 export interface BqTransport {
@@ -181,6 +183,7 @@ export async function bqQueryAll(transport: BqTransport, opts: BqQueryOptions): 
       useLegacySql: false,
       timeoutMs: pollTimeoutMs,
       maxResults: pageSize,
+      ...(opts.maximumBytesBilled !== undefined ? { maximumBytesBilled: positiveIntString(opts.maximumBytesBilled) } : {}),
       ...(opts.params?.length
         ? { parameterMode: 'NAMED', queryParameters: buildQueryParameters(opts.params) }
         : {}),
@@ -230,6 +233,50 @@ export async function bqQueryAll(transport: BqTransport, opts: BqQueryOptions): 
     throw new BigQueryError('malformed', `thiếu dữ liệu: đọc ${rows.length}/${totalRows} dòng`)
   }
   return { rows, fields, totalRows, jobId, pages, totalBytesProcessed }
+}
+
+function positiveIntString(n: number): string {
+  if (!Number.isSafeInteger(n) || n <= 0) throw new BigQueryError('config', `maximumBytesBilled không hợp lệ: ${n}`)
+  return String(n)
+}
+
+/**
+ * Dry-run (jobs.query dryRun) — CHỈ trả số byte BigQuery ước tính sẽ quét; không chạy truy vấn, không đọc dòng. Dùng làm cổng trước
+ * truy vấn có trần byte (CMS kiểm K khi import — PM r1 §5.1). Lỗi ⇒ BigQueryError như bqQueryAll; thiếu totalBytesProcessed ⇒ malformed.
+ */
+export async function bqDryRunBytes(transport: BqTransport, opts: Pick<BqQueryOptions, 'projectId' | 'sql' | 'params' | 'deadlineMs'>): Promise<number> {
+  if (!opts.projectId) throw new BigQueryError('config', 'thiếu projectId')
+  if (!opts.sql.trim()) throw new BigQueryError('config', 'SQL rỗng')
+  // Hạn tính XUYÊN bước lấy token (PM 08/11 audit P2): token chậm làm cạn hạn ⇒ timeout, không cấp thêm thời gian cho fetch.
+  const deadline = transport.now() + (opts.deadlineMs ?? DEFAULTS.deadlineMs)
+  const token = await transport.getToken()
+  const left = deadline - transport.now()
+  if (left <= 0) throw new BigQueryError('timeout', 'dry-run BigQuery quá hạn trước khi gửi')
+  let res: Response
+  try {
+    res = await transport.fetch(`${BASE}/projects/${encodeURIComponent(opts.projectId)}/queries`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query: opts.sql, useLegacySql: false, dryRun: true,
+        ...(opts.params?.length ? { parameterMode: 'NAMED', queryParameters: buildQueryParameters(opts.params) } : {}),
+      }),
+      signal: AbortSignal.timeout(Math.max(1, left)),
+    })
+  } catch (err) {
+    const name = (err as { name?: string } | null)?.name
+    if (name === 'TimeoutError' || name === 'AbortError') throw new BigQueryError('timeout', 'dry-run BigQuery bị hủy do quá thời gian')
+    throw new BigQueryError('http', 'không gọi được BigQuery (dry-run)')
+  }
+  if (!res.ok) throw new BigQueryError('http', `BigQuery dry-run HTTP ${res.status}`, res.status)
+  let body: { totalBytesProcessed?: unknown }
+  try { body = (await res.json()) as { totalBytesProcessed?: unknown } } catch { throw new BigQueryError('malformed', 'dry-run không phải JSON') }
+  // Chỉ nhận chuỗi int64 không âm ('0' hợp lệ); null / '' / bool / số / object ⇒ malformed (không để Number(null) thành 0).
+  const raw = body.totalBytesProcessed
+  if (typeof raw !== 'string' || !/^(0|[1-9][0-9]{0,18})$/.test(raw)) throw new BigQueryError('malformed', 'dry-run thiếu / sai totalBytesProcessed')
+  const bytes = Number(raw)
+  if (!Number.isSafeInteger(bytes)) throw new BigQueryError('malformed', 'dry-run totalBytesProcessed vượt miền an toàn')
+  return bytes
 }
 
 function toRow(fields: string[], r: { f?: { v?: unknown }[] }): BqRow {

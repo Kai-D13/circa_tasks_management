@@ -19,6 +19,7 @@ import {
 import type { CmsResultRowDto } from '@/lib/cms/resultView'
 import type { CmsProductView, CmsProgramRowView } from '@/lib/cms/server/catalog'
 import { cmsNavHref, type CmsNav } from '@/lib/cms/fixtureNav'
+import { cmsFlatRate, cmsFlatRateText, cmsIsSimpleProgram } from '@/lib/cms/flat'
 
 // CMS P1-d · D1 `/targets?tab=cms` (UI §4.1; r2 U1 / U9 / U19; H5). Staff + QLCH xem DANH MỤC chương trình Sắp diễn ra /
 // Đang chạy của nhà thuốc hiện tại: SP, loại điều kiện, target cấu hình, thang `đ/unit_CMS`. Dùng chung route thật +
@@ -29,6 +30,8 @@ import { cmsNavHref, type CmsNav } from '@/lib/cms/fixtureNav'
 // danh mục vẫn hiện.
 // P3a r2 (PM r1 PKG-P1-1): bộ chọn có nhóm "Đã kết thúc" (Chờ chốt kỳ / Đã chốt); chương trình đã kết thúc vẫn xem được số
 // (Đã chốt = run đóng băng, nhãn "đã chốt"), không gợi ý gần đạt / gợi ý bán thêm.
+// CMS đơn giản S3 (PM r1 08/11 §6): SP mức cố định (cmsFlatRate — 1 bậc từ 1 không giới hạn, không target) ⇒ thẻ "Mức CMS X₫/hộp",
+// "Đã bán N hộp · tính Q hộp" + tổng CMS; không badge "Theo số lượng", không dòng bậc / "Bậc cao nhất". SP có bậc / target giữ nguyên.
 
 export type CmsStaffKind = 'ok' | 'empty' | 'error' | 'no-store'
 
@@ -99,7 +102,7 @@ export function CmsStaffCatalogView({ kind, programs, selected, products, today,
 
           <CmsResultsNotice results={results} reloadHref={cmsNavHref(nav, cmsStaffHref(selected.id))} />
           {loaded && !manager && <CmsStaffHero summary={withNumbers ? cmsStaffSummary(rows, products.length) : null} header={loaded.header} programId={selected.id} display={display} nav={nav} />}
-          {loaded && manager && <CmsStoreHero summary={withNumbers ? cmsStoreSummary(rows, products.length) : null} header={loaded.header} programId={selected.id} display={display} nav={nav} />}
+          {loaded && manager && <CmsStoreHero summary={withNumbers ? cmsStoreSummary(rows, products.length) : null} header={loaded.header} programId={selected.id} display={display} simple={cmsIsSimpleProgram(products)} nav={nav} />}
           {near && nearProduct && <CmsNearGateCard near={near} productName={nearProduct.nameSnapshot} unit={nearProduct.unitCms} />}
 
           {catalog.length > 0 && (
@@ -125,9 +128,10 @@ export function CmsStaffCatalogView({ kind, programs, selected, products, today,
               {visible.map((p) => {
                 const card = cards?.get(p.id) ?? null
                 const tot = totals?.get(p.id) ?? null
+                const rate = cmsFlatRate(p)
                 return (
                   <li key={p.id}>
-                    <Link href={cmsNavHref(nav, cmsProductHref(p.id))} data-cms-staff-product={p.productId} data-cms-card-tone={card?.tone} className="flex min-h-[44px] gap-3 rounded-v2-panel border bg-card p-3">
+                    <Link href={cmsNavHref(nav, cmsProductHref(p.id))} data-cms-staff-product={p.productId} data-cms-card-tone={card?.tone} data-cms-flat={rate ? '' : undefined} className="flex min-h-[44px] gap-3 rounded-v2-panel border bg-card p-3">
                       <CmsProductImage url={p.imageUrlSnapshot} name={p.nameSnapshot} size={48} />
                       <div className="min-w-0 flex-1 space-y-1">
                         <span className="flex items-start justify-between gap-2">
@@ -136,16 +140,23 @@ export function CmsStaffCatalogView({ kind, programs, selected, products, today,
                           {tot && <CmsAmountBadge amount={tot.amountVnd} />}
                         </span>
                         <span className="flex flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground">
-                          <TagBadge hue={CMS_GATE_HUE[p.gmvBasis]}>{CMS_GATE_LABEL[p.gmvBasis]}</TagBadge>
-                          {card && <span className="tabular-nums" data-cms-sold>Đã bán {card.soldText} {p.unitCms}{cmsCardCountedNote(card) ? ` (${cmsCardCountedNote(card)})` : ''}</span>}
+                          {!rate && <TagBadge hue={CMS_GATE_HUE[p.gmvBasis]}>{CMS_GATE_LABEL[p.gmvBasis]}</TagBadge>}
+                          {card && rate && <span className="tabular-nums" data-cms-sold>Đã bán {card.soldText} {p.unitCms}{card.row ? ` · tính ${card.cmsQuantity.toLocaleString('vi-VN')} ${p.unitCms}` : ''}</span>}
+                          {card && !rate && <span className="tabular-nums" data-cms-sold>Đã bán {card.soldText} {p.unitCms}{cmsCardCountedNote(card) ? ` (${cmsCardCountedNote(card)})` : ''}</span>}
                           {tot && <span className="tabular-nums" data-cms-sold>Đã bán {tot.soldText} {p.unitCms} · {tot.staffWithSales} dược sĩ</span>}
                           {!card && !tot && p.gmvBasis === 'product' && <span className="tabular-nums">Target {cmsVnd(p.targetGmv)}</span>}
                           {!card && !tot && p.gmvBasis === 'catalog' && <span>Theo target danh mục</span>}
                         </span>
                         {card?.gate && card.gate.basis === 'product' && <CmsGateMeter gate={card.gate} label="GMV / target" size={5} />}
-                        <span data-cms-tier-line className="block rounded-[6px] bg-muted px-2 py-1 text-[12px] leading-snug tabular-nums break-words">
-                          {card ? cmsCardTierText(card, p.tiers, p.unitCms, closed) || cmsTierSummary(p.tiers, p.unitCms) : cmsTierSummary(p.tiers, p.unitCms)}
-                        </span>
+                        {rate ? (
+                          <span data-cms-flat-rate className="block w-fit max-w-full rounded-[6px] bg-muted px-2 py-1 text-[12px] font-semibold leading-snug tabular-nums break-words">
+                            {cmsFlatRateText(rate, p.unitCms)}
+                          </span>
+                        ) : (
+                          <span data-cms-tier-line className="block rounded-[6px] bg-muted px-2 py-1 text-[12px] leading-snug tabular-nums break-words">
+                            {card ? cmsCardTierText(card, p.tiers, p.unitCms, closed) || cmsTierSummary(p.tiers, p.unitCms) : cmsTierSummary(p.tiers, p.unitCms)}
+                          </span>
+                        )}
                       </div>
                       <ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
                     </Link>

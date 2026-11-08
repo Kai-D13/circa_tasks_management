@@ -98,6 +98,8 @@ async function main(args) {
     rowsRejected: r.rowsRejected, candidates: r.candidates, included: r.included, unassigned: r.unassigned,
     outOfScope: r.outOfScope, amountVnd: r.amountVnd, stagedRows: r.stagedRows, sourceRows: r.sourceRows, bytesProcessed: r.bytesProcessed,
     resultHash: r.resultHash, elapsedMs: r.elapsedMs, cause: r.cause, cleanup: r.cleanup,
+    // S2: chẩn đoán dòng nguồn bị loại (ProductID × đơn vị × mã; không email / mã đơn) — chỉ khi held do dòng lỗi.
+    ...(r.unitIssues ? { unitIssues: r.unitIssues } : {}),
   }))
   return cmsSalesExitCode(r)
 }

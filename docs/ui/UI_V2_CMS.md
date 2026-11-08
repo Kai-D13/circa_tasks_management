@@ -45,6 +45,8 @@
 | Dùng cho | Token | Ghi chú |
 |---|---|---|
 | Nút chính, tab đang chọn (gạch chân) | action v2 hiện có | Nền cam, chữ `#141210`. |
+| Segmented "KPI chiến dịch | CMS sản phẩm" + tab chương trình D3 (CMS đơn giản S3 — PM r1 08/11 §6, ngoại lệ CHỈ hai chỗ này) | `bg-primary text-primary-foreground` (= action v2: sáng `#C94A16`/trắng ≈ 5,5:1, tối `#F3743F`/`#141210`) | Tab còn lại `text-foreground`, khung `bg-card` có viền. Không đổi globals / Sidebar / BottomNav / module khác; bộ lọc thẻ D1 giữ trung tính. |
+| Hero D1 staff + khối tổng QLCH (CMS đơn giản S3) | `bg-accent` (selected v2 `#FFF1EA` / tối `#2A1E17`) + viền `border-v2-selected-line` | Thay "thẻ đen" cũ. Số `text-foreground`, nhãn `text-accent-foreground`, 3 ô con `bg-card` (ô GMV rộng 1,6 phần). Spec `ui-v2-cms-simple` đo tương phản ≥ 4,5 cả hai theme. |
 | Thanh tiến độ đang chạy, chuỗi số liệu | `--v2-series` | |
 | Đạt điều kiện | `--v2-ok` | Thanh GMV đã đạt, badge "Đã đạt". |
 | Bậc đã qua (thang bậc, thanh phân bố) | `--v2-series-soft` | |
@@ -112,13 +114,14 @@ P3a: tóm tắt = lần tính dùng để chốt, tổng CMS, dược sĩ có ti
 
 - Đầu trang "Mục tiêu" + segmented 2 mục "KPI chiến dịch | CMS sản phẩm" (link, `aria-current`). Không đổi BottomNav.
 - Chọn chương trình: nút 52px mở sheet danh sách chương trình (`?program=`) — P3a r2: hai nhóm **Đang áp dụng** (Đang chạy / Sắp diễn ra) và **Đã kết thúc** (Chờ chốt kỳ / Đã chốt, kết thúc gần nhất trước). Chỉ 1 chương trình → hiện như nhãn, không mở sheet. Chương trình đã kết thúc: hero "CMS tạm tính … · chờ chốt kỳ" hoặc "CMS đã chốt …" (run đóng băng), không "Gợi ý gần đạt", dòng bậc trên thẻ chỉ ghi kết quả đạt được.
-- **Hero** (light: nền `#1C1917`, chữ sáng; dark: nền cam `#F3743F`, chữ `#141210`, như canvas): "CMS tạm tính của bạn", số lớn, 3 ô (SP đạt điều kiện x/y · SP đã bán · GMV), dòng "Cập nhật dd/mm · hh:mm · chưa chốt kỳ" + link "Xem ghi nhận" → D3.
+- **Hero** (CMS đơn giản S3 — PM r1 08/11 §6: nền selected nhạt `bg-accent` + viền `border-v2-selected-line` ở cả hai theme, thay nền `#1C1917` / cam đặc cũ): "CMS tạm tính của bạn", số lớn, 3 ô (SP đạt điều kiện x/y · SP đã bán · GMV), dòng "Cập nhật dd/mm · hh:mm · chưa chốt kỳ" + link "Xem ghi nhận" → D3.
 - **Gợi ý gần đạt** (nền `accent-soft`): SP có gate `product` chưa đạt và còn thiếu ít nhất (theo %). Chữ: "Còn {tiền} để mở CMS {tên ngắn}" + "Khoảng {N} {đơn vị} nữa. Đạt target sẽ được tính CMS cho cả {Q+N} {đơn vị}, ước ≈ {tiền}." N = ceil(thiếu / giá tham khảo) **chỉ khi** giá tham khảo đúng theo `unit_CMS` (r2, U13); không có giá phù hợp → bỏ câu ước tính. Không có SP nào chưa đạt → ẩn khối.
 - **Target nhóm danh mục**: thanh + "x / target · tên các SP trong nhóm" + badge Đã đạt / Chưa đạt.
 - **Danh sách SP** + bộ lọc Tất cả / Đã đạt / Chưa đạt. Thẻ là 1 link → D2: ảnh 48, tên, TagBadge loại, "Đã bán N", CMS bên phải (màu chữ phụ khi 0đ), thanh GMV nếu có target, dòng nền muted "Bậc k · {mức}/SP" + "Còn N SP lên {mức kế}" / "Bậc cao nhất" / "Cần đạt target trước".
 - P1 (chưa có tiền): ẩn hero tiền, thanh GMV, gợi ý; thẻ SP hiện thang bậc rút gọn ("1–9: 15.000đ/hộp · 10–19: 20.000đ/hộp · Từ 20 trở lên: 25.000đ/hộp" — r2 ghi `đ/{unit_CMS}`; CMS-Q-220: bậc cuối ghi "Từ N trở lên", không "N+" / "Tối đa") và loại điều kiện. Danh sách chương trình P1: Sắp diễn ra + Đang chạy (U9).
 - Trạng thái: chưa có chương trình → `EmptyState` "Hiện chưa có chương trình CMS cho nhà thuốc của bạn". P2 đồng bộ lỗi: đã có snapshot tốt thì giữ số cũ, ghi thời điểm cập nhật và trạng thái chưa mới; chưa có snapshot tốt thì hiện `—`, không hiện 0đ giả. P1 không có hero kết quả thực tế.
 - QLCH (tài khoản dùng chung, U19): không hero "của bạn", không "Gợi ý gần đạt"; P1 chỉ danh mục; P2 hiện khối tổng nhà thuốc.
+- **SP mức cố định** (CMS đơn giản S3 — PM r1 08/11 §6; `lib/cms/flat.ts`: đúng 1 bậc {1, từ 1, không giới hạn}, gate `none`, không target — suy từ cấu hình đã validate, không nhận cờ client): thẻ "Mức CMS X₫/{đơn vị}" (thay dòng bậc), "Đã bán N · tính Q {đơn vị}" + CMS; **không** badge "Theo số lượng", "Bậc 1 / Bậc cao nhất", "Lũy tiến", "Thang CMS". Chương trình **đơn giản** = ≥ 1 SP và mọi SP flat (0 SP ⇒ không); QLCH bỏ câu "mỗi người tính bậc riêng". Chương trình trộn: nhánh theo từng SP — SP có bậc / target giữ nguyên UI trên.
 
 ### 4.2 D2 · `/targets/cms/products/[programProductId]` — mockup `StaffProduct.dc.html`
 
@@ -134,6 +137,8 @@ Thứ tự khối:
 6. **Nếu bán thêm** (P2; không có với QLCH — U19; ước tính, chỉ client, không lưu): nút −/+ 44×44 (`aria-label`), số ở giữa `aria-live="polite"`, "CMS ước tính" + "+chênh lệch". Mặc định = số SP còn thiếu để lên bậc kế (hoặc để đạt target). Dùng **cùng engine** `lib/cms/engine` (r2) và kiểm tra cả gate; GMV ước tính = thêm × giá tham khảo **chỉ khi** giá đúng theo `unit_CMS` (U13).
 7. **Nội dung tư vấn**: badge "Đã kiểm duyệt", text thuần `white-space: pre-line`, nút "Sao chép" (toast "Đã sao chép").
 8. **Ghi nhận gần đây**: 3 dòng mới nhất của SP này + link "Xem tất cả" → D3 lọc theo SP.
+
+**SP mức cố định** (CMS đơn giản S3): mục 3 = "Đã bán N" + **"Q {đơn vị} × X₫ = A₫"** — CHỈ khi Q × X đúng bằng tiền snapshot (UI không tính lại tiền; lệch, vd. cấu hình đổi so với run ⇒ chỉ hiện số tiền + câu "được tính CMS Q"); phần lẻ giải thích theo đơn vị cơ sở. Mục 5 thay bằng khối **"Mức CMS"** (X₫/{đơn vị} + quy cách K ở dòng phụ), không "Lũy tiến". Mục 6 **ẩn** (không thay bằng mô phỏng khác); chỉ khi chương trình đang chạy mới có dòng tĩnh "Mỗi {đơn vị} được tính CMS X₫." — hết kỳ / đã chốt không gợi ý bán thêm. D3 không ghi " · bậc k" cho SP flat.
 
 ### 4.3 D3 · `/targets/cms/history?program=&product=` — mockup `StaffHistory.dc.html`
 

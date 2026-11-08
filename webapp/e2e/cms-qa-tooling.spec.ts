@@ -15,7 +15,8 @@ import {
   CMS_VERIFY_PHASES, CMS_PHASE_FUNCTIONS, CMS_FN_MATRIX, CMS_FN_DEF_122, CMS_COL_122, CMS_TABLE_SHAPE_122, cmsFnCountBefore,
   CMS_FN_DEF_123, CMS_COL_123, CMS_TABLE_SHAPE_123, CMS_TRIGGERS_123, CMS_FN_SRC_123, CMS_TABLES_FROZEN_123, CMS_V8_PHASES, CMS_V8_RPC_CALLABLE,
   CMS_FN_DEF_124, CMS_COL_124, CMS_TABLE_SHAPE_124, CMS_TRIGGERS_124, CMS_FN_SRC_124, CMS_FN_CFG_124,
-  CMS_FN_DEF_125, CMS_COL_125, CMS_TABLE_SHAPE_125, CMS_TRIGGERS_125, CMS_FN_SRC_125, CMS_FN_SRC_126,
+  CMS_FN_DEF_125, CMS_COL_125, CMS_TABLE_SHAPE_125, CMS_TRIGGERS_125, CMS_FN_SRC_125, CMS_FN_SRC_126, CMS_127_T11_ID, CMS_127_PM_RATES_MD5,
+  evaluateCmsVerify,
   cmsVerifyAclSql, cmsVerifyV8Sql123, cmsV8ProvenKeys, cmsPostProvenKeys, CMS_VERIFY_SQL, CMS_PAYOUT_KEYS_TOP, CMS_PAYOUT_KEYS_TOP_SUPER, CMS_PAYOUT_KEYS_ROW,
   parseCmsQaTtlHours, parseCmsQaUserIds, pgMetaReadOnly, pgMetaReadOnlySnapshot, pgMetaWrite, toIsoUtc, type CmsQaProgramRow,
   type CmsQaStatusRow, type CmsV8Role,
@@ -340,6 +341,47 @@ test.describe('CMS QA tooling · preflight, manifest, đóng run, id is_test @de
     expect(() => cmsVerifyV8Sql(A, 'staff', '127' as never)).toThrow()
   })
 
+  test('phase 127 (S0 T11 mức cố định / hộp): chỉ dữ liệu — kế thừa 126, marker + bất biến v127-flat / resync / t11-pm', () => {
+    expect(CMS_VERIFY_PHASES.at(-1)).toBe('127')
+    expect(CMS_PHASE_FUNCTIONS['127']).toEqual([])
+    expect(Object.entries(CMS_FN_MATRIX).filter(([, m]) => m.phase === '127')).toEqual([])
+    expect(cmsPostProvenKeys('127')).toEqual(['v5', 'lock-preview', 'attest', 'uncapped', 'basis', 'resync'])
+    expect(CMS_V8_PHASES).not.toContain('127')
+    expect(CMS_VERIFY_SQL.markers).toContain("'127'")
+    expect(cmsVerifyAclSql()).not.toContain('n_ex127')
+    expect(CMS_VERIFY_SQL.inv127Flat).toContain("FROM public.app_migrations WHERE version = '127'")
+    expect(CMS_VERIFY_SQL.inv127Flat).toContain('ORDER BY product_id COLLATE "C"')
+    expect(CMS_127_T11_ID).toBe('942194ce-893f-4f62-a88a-bd9efa464bae')
+    expect(CMS_127_PM_RATES_MD5).toMatch(/^[0-9a-f]{32}$/)
+    // Bộ đánh giá: chỉ các mục 127 (input tối thiểu) — chuỗi đầy đủ chạy ở scripts/qa-cms-127.mjs.
+    const base = { marker_at: '2026-11-08T10:00:00Z', program_id: CMS_127_T11_ID, rates_md5_marker: CMS_127_PM_RATES_MD5, rates_md5_db: CMS_127_PM_RATES_MD5,
+      version_after: 4, products_marker: 17, program_n: 1, products_n: 17, not_flat: 0, config_version: 4, pointer_null: true, pointer_ok: null }
+    const ev = (f: Record<string, unknown>) => {
+      const cs = evaluateCmsVerify({ phase: '127', whoami: { u: 'x', bypass: true }, markers: [], maxNumeric: { max_v: 127 }, functions: [], policies: [],
+        triggers: [], tableShape: [], tables: [], roles: [], oneRunningIndex: [], aclPost: {}, aclPre: {}, inv121: { overlap: [], tiers: [], catalog: [] },
+        isolation: {}, p127: { invFlat: f } } as never)
+      return Object.fromEntries(cs.filter((c) => c.id.startsWith('v127-')).map((c) => [c.id, c]))
+    }
+    let c = ev(base)
+    expect(c['v127-flat'].ok && c['v127-resync'].ok && c['v127-t11-pm'].ok).toBe(true)
+    expect(c['v127-resync'].proven).toBe(false)
+    c = ev({ ...base, pointer_null: false, pointer_ok: true })
+    expect(c['v127-resync'].ok && c['v127-resync'].proven).toBe(true)
+    expect(ev({ ...base, pointer_null: false, pointer_ok: false })['v127-resync'].ok).toBe(false)
+    expect(ev({ ...base, not_flat: 1 })['v127-flat'].ok).toBe(false)
+    expect(ev({ ...base, rates_md5_db: 'x' })['v127-flat'].ok).toBe(false)
+    expect(ev({ ...base, products_n: 16 })['v127-flat'].ok).toBe(false)
+    expect(ev({ ...base, config_version: 3 })['v127-flat'].ok).toBe(false)
+    // db-reviewer 127 P2-4: version > version sau 127 (chỉnh sửa hợp lệ về sau) ⇒ ĐẠT nhưng CHƯA chứng minh, không đỏ vĩnh viễn.
+    c = ev({ ...base, config_version: 5, products_n: 18, not_flat: 1, rates_md5_db: 'x' })
+    expect(c['v127-flat'].ok).toBe(true)
+    expect(c['v127-flat'].proven).toBe(false)
+    expect(ev(base)['v127-flat'].proven).toBe(true)
+    expect(ev({ ...base, marker_at: null })['v127-flat'].ok).toBe(false)
+    expect(ev({ ...base, program_id: '00000000-0000-4000-8000-000000000001' })['v127-t11-pm'].ok).toBe(false)
+    expect(ev({ ...base, rates_md5_marker: 'x', rates_md5_db: 'x' })['v127-t11-pm'].ok).toBe(false)
+  })
+
   test('danh sách hàm theo phase = khoá CMS_FN_MATRIX cùng phase; đếm trước phase suy từ ma trận (db-reviewer P2-5)', () => {
     for (const ph of CMS_VERIFY_PHASES) {
       const fromMatrix = Object.entries(CMS_FN_MATRIX).filter(([, m]) => m.phase === ph).map(([n]) => n)
@@ -348,7 +390,8 @@ test.describe('CMS QA tooling · preflight, manifest, đóng run, id is_test @de
     }
     // 125 (CMS-UNCAPPED-1): trước 125 có đúng 67 hàm cms (55 + 12 của 124). 126 (sales-only): trước 126 có đúng 68 (126 không thêm
     // hàm) — phần tử cuối thêm có chủ đích khi mở phase 126, không phải nới kỳ vọng cũ.
-    expect(CMS_VERIFY_PHASES.map((ph) => cmsFnCountBefore(ph))).toEqual([0, 7, 14, 37, 55, 67, 68])
+    // 127 (S0 T11, PM 08/11): chỉ dữ liệu ⇒ trước 127 vẫn đúng 68 hàm.
+    expect(CMS_VERIFY_PHASES.map((ph) => cmsFnCountBefore(ph))).toEqual([0, 7, 14, 37, 55, 67, 68, 68])
     // 122: khoá định nghĩa = đúng các hàm có tới 122 (phase 123 thêm hàm ⇒ lọc theo phase; độ chặt cho 122 giữ nguyên).
     expect(Object.keys(CMS_FN_DEF_122).sort()).toEqual(Object.entries(CMS_FN_MATRIX).filter(([, m]) => Number(m.phase) <= 122).map(([n]) => n).sort())
     expect(Object.keys(CMS_COL_122).sort()).toEqual(Object.keys(CMS_TABLE_SHAPE_122).sort())
@@ -376,7 +419,7 @@ test.describe('CMS QA tooling · preflight, manifest, đóng run, id is_test @de
     expect(cmsVerifyAclSql()).toContain('n_ex125')
     // 126 (sales-only, PM 06/11): 0 hàm mới (POST so TOÀN BỘ hàm với PRE ⇒ không có cột n_ex126 / NOT IN ()); chỉ thân 2 hàm 122 đổi
     // (CMS_FN_SRC_126 = generator scripts/gen-cms-verify-fp-126.mjs); định nghĩa / shape / cột / trigger kế thừa 125.
-    expect(CMS_VERIFY_PHASES.at(-1)).toBe('126')
+    expect(CMS_VERIFY_PHASES.at(-2)).toBe('126')
     expect(CMS_PHASE_FUNCTIONS['126']).toEqual([])
     expect(Object.entries(CMS_FN_MATRIX).filter(([, m]) => m.phase === '126')).toEqual([])
     expect(CMS_FN_SRC_126).toEqual({ cms__results_release_open: 'aebe1ff46ba51dcf533fe328af7ea2a0', rpc_cms_sales_run_publish: 'db2c97efad2bb5ee9d69399b99c7c258' })
@@ -814,10 +857,12 @@ test.describe('CMS QA tooling · CLI âm (thoát 2 trước mọi IO) @desktop',
         [['post', '--phase=123', `--pre=${pre123}`, '--require-proven=results', '--expect-host=cms-qa-test.invalid'], /--require-proven cho post --phase=123: <v5\|lock-preview>/],
         [['post', '--phase=123', `--pre=${pre123}`, '--require-proven=v5,nope', '--expect-host=cms-qa-test.invalid'], /--require-proven cho post --phase=123/],
         [['post', '--phase=122', `--pre=${pre122}`, '--require-proven=v5', '--expect-host=cms-qa-test.invalid'], /--require-proven cho post --phase=122: <\(không có khoá\)>/],
-        // 126 (sales-only): PRE phải có đúng 68 hàm cms (126 không thêm hàm); khoá basis; 127 là phase lạ.
+        // 126 (sales-only): PRE phải có đúng 68 hàm cms (126 không thêm hàm); khoá basis. 127 (S0) hợp lệ, PRE 68; 128 là phase lạ.
         [['post', '--phase=126', `--pre=${preOf(67)}`, '--expect-host=cms-qa-test.invalid'], /không phải ảnh ngay trước 126 \(đang có 67 hàm cms\)/],
         [['post', '--phase=126', `--pre=${preOf(68)}`, '--require-proven=nope', '--expect-host=cms-qa-test.invalid'], /--require-proven cho post --phase=126: <v5\|lock-preview\|attest\|uncapped\|basis>/],
-        [['post', '--phase=127', `--pre=${preOf(68)}`, '--expect-host=cms-qa-test.invalid'], /--phase=120\|121\|122\|123\|124\|125\|126/],
+        [['post', '--phase=127', `--pre=${preOf(67)}`, '--expect-host=cms-qa-test.invalid'], /không phải ảnh ngay trước 127 \(đang có 67 hàm cms\)/],
+        [['post', '--phase=127', `--pre=${preOf(68)}`, '--require-proven=nope', '--expect-host=cms-qa-test.invalid'], /--require-proven cho post --phase=127: <v5\|lock-preview\|attest\|uncapped\|basis\|resync>/],
+        [['post', '--phase=128', `--pre=${preOf(68)}`, '--expect-host=cms-qa-test.invalid'], /--phase=120\|121\|122\|123\|124\|125\|126\|127/],
       ] as Array<[string[], RegExp]>) {
         const r = run('cms-verify.mjs', args)
         expect(r.code, args.join(' ') + '\n' + r.out).toBe(2)

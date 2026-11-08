@@ -225,7 +225,8 @@ async function main() {
   for (const [args, why] of [
     [['v8', `--user=${SUPER}`, '--role=super', '--phase=127', `--expect-host=${HOST}`], 'V8 --phase lạ'],
     [['v8', `--user=${SUPER}`, '--role=super', '--require-proven=results', `--expect-host=${HOST}`], 'V8 --require-proven=results khi không khai --phase=122'],
-    [['post', '--phase=127', `--pre=${pre122}`, `--expect-host=${HOST}`], 'post --phase lạ'],
+    // post: 127 (S0 T11) nay hợp lệ ⇒ phase lạ của post = 128; V8 không thêm 127 ⇒ V8 --phase=127 vẫn là phase lạ.
+    [['post', '--phase=128', `--pre=${pre122}`, `--expect-host=${HOST}`], 'post --phase lạ'],
   ]) {
     r = await run('cms-verify.mjs', args)
     exp(r, 2, `${why} ⇒ sai tham số trước IO`, r.reqs === 0)
@@ -424,8 +425,11 @@ async function main() {
 
   // 6c — QA-P1-1: launcher dừng TRONG LÚC guard chờ đọc DB ⇒ guard kiểm lại SAU IO, không ghi
   pgDelayMs = 700
+  // Chờ ĐÚNG lúc guard đang đọc DB (shim đã nhận request /pg/query, còn giữ 700 ms) rồi mới dừng launcher — không đoán bằng mốc 300 ms
+  // cố định (CLI khởi động chậm hơn mốc ⇒ dừng TRƯỚC IO ⇒ rc 2, thử sai nhánh; S0 127 08/11).
+  const req0 = requests
   const pending = pub()
-  await sleep(300)
+  for (let t = 0; requests === req0 && t < 250; t++) await sleep(20)
   await launcherDown()
   r = await pending
   pgDelayMs = 0

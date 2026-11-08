@@ -1,6 +1,6 @@
 // CMS P1-d — dữ liệu GIẢ cho fixture /ui-catalog/cms-v2/{staff,product,history} (dev-only, UI_CATALOG=1). CMS-UI-1: chương
 // trình / SP lấy từ CÙNG kịch bản (lib/cms/fixtureScenario) với A1 / A3 — mỗi chương trình có danh mục riêng của nó.
-import { CMS_FX_ADVICE_4000, CMS_FX_PG, CMS_FX_TODAY, cmsFxProgram, cmsFxRowView } from './fixtureScenario'
+import { CMS_FX_ADVICE_4000, CMS_FX_PG, CMS_FX_PG_SIMPLE, CMS_FX_TODAY, cmsFxProgram, cmsFxRowView } from './fixtureScenario'
 import type { CmsProductView, CmsProgramRowView } from './server/catalog'
 
 export { CMS_FX_TODAY }
@@ -11,6 +11,9 @@ export const CMS_FX_STAFF_PROGRAMS: CmsProgramRowView[] = [row(CMS_FX_PG.PG1), r
 
 /** P3a r2 (PM r1 PKG-P1-1): chương trình ĐÃ KẾT THÚC — [0] Chờ chốt kỳ (PG4), [1] Đã chốt (PG5, run đóng băng). */
 export const CMS_FX_STAFF_ENDED: CmsProgramRowView[] = [row(CMS_FX_PG.PG4), row(CMS_FX_PG.PG5)]
+
+/** CMS đơn giản (PM r1 08/11 §6, fx=simple): [0] PG10 đang chạy · [1] PG11 sắp diễn ra · [2] PG12 hết kỳ chờ chốt — mỗi SP một mức / hộp. */
+export const CMS_FX_STAFF_SIMPLE: CmsProgramRowView[] = [row(CMS_FX_PG_SIMPLE.PG10), row(CMS_FX_PG_SIMPLE.PG11), row(CMS_FX_PG_SIMPLE.PG12)]
 
 /** Tư vấn nhiều dòng (D2 ?fx=long). Bản ~4.000 ký tự: CMS_FX_ADVICE_4000 (SP thứ 3 của PG5). */
 export const CMS_FX_LONG_ADVICE = [

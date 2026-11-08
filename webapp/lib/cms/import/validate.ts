@@ -340,10 +340,12 @@ export function validateCmsImport(rows: readonly CmsImportRawRow[], ctx: CmsImpo
 }
 
 /** Chuỗi chuẩn hoá payload sẽ ghi (để so preview ↔ commit). Không gồm cảnh báo / số dòng Excel / cận cuối gốc đã bỏ.
- *  Có định danh chính sách bậc (CMS_TIER_POLICY): preview lập trước CMS-Q-220 ⇒ digest khác ⇒ commit 409 PREVIEW_STALE. */
-export function canonicalCmsImport(v: Pick<CmsImportValidation, 'mode' | 'groupsOk' | 'catalogTarget'>): string {
+ *  Có định danh chính sách bậc (CMS_TIER_POLICY): preview lập trước CMS-Q-220 ⇒ digest khác ⇒ commit 409 PREVIEW_STALE.
+ *  CMS đơn giản S1: file mức cố định gắn thêm `format: 'simple_v1'` (mẫu 9 cột giữ NGUYÊN chuỗi cũ ⇒ digest cũ không đổi). */
+export function canonicalCmsImport(v: Pick<CmsImportValidation, 'mode' | 'groupsOk' | 'catalogTarget'>, format: 'tiers' | 'simple' = 'tiers'): string {
   return JSON.stringify({
     policy: CMS_TIER_POLICY,
+    ...(format === 'simple' ? { format: 'simple_v1' } : {}),
     mode: v.mode,
     catalogTarget: v.catalogTarget,
     groups: v.groupsOk.map((g) => [g.productId, g.gmvBasis, g.targetGmv, g.unitCms, g.baseQuantityCms, g.adviceText,

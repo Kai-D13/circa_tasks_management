@@ -10,10 +10,11 @@ import { cmsFixtureNav } from '@/lib/cms/fixtureNav'
 
 // Dev-only fixture D2 `/targets/cms/products/[id]` — ĐÚNG CmsStaffProductView của route thật, dữ liệu giả (kịch bản
 // lib/cms/fixtureScenario). Cổng: UI_CATALOG=1 + super admin. &pp=<program_product_id> (link từ thẻ D1) hoặc ?fx=
-//   product (mặc định: target SP, 3 bậc) · catalog (target danh mục, 1 bậc mở) · none (không target, 1 bậc có trần, số lẻ) ·
+//   product (mặc định: target SP, 3 bậc) · catalog (target danh mục, 1 bậc mở) · none (không target, 1 bậc không giới hạn = SP mức cố định — CMS đơn giản S3, số lẻ) ·
 //   long (tư vấn ~4.000 ký tự) · upcoming (chương trình sắp diễn ra) · gate4 (SP target chưa đạt, quy cách 0,5)
 // P2-c: &p2=running|top|held|none|error|gone|config (&role=manager hoặc &as=manager ⇒ tổng nhà thuốc) — số engine + 3 ghi nhận.
 // P3a r2: fx=ended (Chờ chốt kỳ) · fx=locked (Đã chốt — không "Nếu bán thêm", nhãn đã chốt).
+// CMS đơn giản (PM r1 08/11 §6): &pp=<SP của PG10–12> (mức cố định / hộp); p2=reset ⇒ config_reset.
 export default async function CmsProductFixture({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   if (process.env.UI_CATALOG !== '1') notFound()
   const { user, profile } = await getSessionProfile()

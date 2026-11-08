@@ -9,12 +9,16 @@
 // cms__results_release_open() phải MỞ (mục release-gate-open; policy real.ready vẫn false), marker 126, ACL POST so TOÀN BỘ hàm
 // public với PRE 126 (126 không thêm hàm — PRE phải có đúng 68 hàm cms) + V-126 run bán thật công bố sau 126 mang results_basis
 // sales_only_v1 (0 run ⇒ CHƯA; `--require-proven=basis` ép). Checker 125 trên DB 126 ⇒ LỆCH phase-match.
+// phase 127 (S0 CMS đơn giản, PM 08/11): CHỈ dữ liệu — kế thừa toàn bộ 126 + marker 127 + v127-flat (chương trình trong notes marker:
+// mọi SP 1 bậc mở, bảng mức = md5 marker) + v127-resync (pointer NULL ⇒ CHƯA; `--require-proven=resync` ép đã tính lại) + v127-t11-pm
+// (chương trình / bảng mức đúng quyết định PM). PRE = acl-snapshot NGAY TRƯỚC 127 (68 hàm cms). Checker 126 trên DB 127 ⇒ LỆCH
+// phase-match. V8: 127 không đổi quyền đọc ⇒ dùng v8 --phase=126 (V8 nhận DB 127 là 126).
 // Mỗi lệnh = MỘT transaction `BEGIN; SET TRANSACTION READ ONLY; …; ROLLBACK;` qua pg-meta với câu lệnh CỐ ĐỊNH ở
 // e2e/cmsQaTooling.ts (không nhận SQL tự do, không nới ops-ro). V8 mô phỏng phiên authenticated (SET LOCAL ROLE + claim
 // không ký — không đọc secret), so với oracle tính độc lập theo VAI KHAI BÁO; không thay smoke đăng nhập thật (D3 / E3).
 //
 //   node scripts/cms-verify.mjs acl-snapshot --expect-host=<host> --out=<pre.json>      # PRE: chụp NGAY TRƯỚC migration
-//   node scripts/cms-verify.mjs post --phase=120|121|122|123|124|125|126 --pre=<pre.json> --expect-host=<host> [--require-proven=v5,lock-preview (123+) | …,attest (124+) | …,uncapped (125+) | …,basis (126)] [--out=<file.json>]
+//   node scripts/cms-verify.mjs post --phase=120|121|122|123|124|125|126|127 --pre=<pre.json> --expect-host=<host> [--require-proven=v5,lock-preview (123+) | …,attest (124+) | …,uncapped (125+) | …,basis (126) | …,resync (127)] [--out=<file.json>]
 //   node scripts/cms-verify.mjs v8 --user=<uuid> --role=super|admin|sm|staff|qlch [--phase=120|121|122|123|124|125|126] --expect-host=<host> [--expect-qa=true|false] [--expect-readable=N] [--require-proven=programs,products,…,results] [--out=…]
 //   node scripts/cms-verify.mjs print-sql --what=acl|v8 [--user=<uuid> --role=… --phase=121|122|123|124|125|126]   # khối cố định cho Studio (V8: REPEATABLE READ)
 //   … post --phase=123|122 --profile=after-rollback-124 --pre=<PRE của phase nền, chụp TRƯỚC khi áp phase đó>   # sau rollback 124:
@@ -36,7 +40,7 @@ async function main() {
     values: ['--expect-host', '--out', '--phase', '--pre', '--user', '--role', '--expect-qa', '--expect-readable', '--require-proven', '--what', '--profile'],
   })
   if (!['acl-snapshot', 'post', 'v8', 'print-sql'].includes(a.cmd) || a.bad.length) {
-    console.log('dùng: node scripts/cms-verify.mjs <acl-snapshot | post --phase=120|121|122|123|124|125|126 --pre=FILE [--require-proven=v5,lock-preview] [--profile=after-rollback-124 (chỉ --phase=123|122)] | v8 --user=UUID --role=… [--phase=121|122|123|124|125|126] | print-sql --what=acl|v8> --expect-host=<host>')
+    console.log('dùng: node scripts/cms-verify.mjs <acl-snapshot | post --phase=120|121|122|123|124|125|126|127 --pre=FILE [--require-proven=v5,lock-preview] [--profile=after-rollback-124 (chỉ --phase=123|122)] | v8 --user=UUID --role=… [--phase=121|122|123|124|125|126] | print-sql --what=acl|v8> --expect-host=<host>')
     return 2
   }
   const { T } = await loadTooling()
@@ -176,6 +180,8 @@ async function main() {
       if (Number(phase) >= 125) input.p125 = { invLastTier: await ro(q.inv125LastTier), invCurrentCap: await ro(q.inv125CurrentCap), current: (await ro(q.inv125Current))[0] }
       // 126 (sales-only): run bán THẬT công bố sau marker 126 mang results_basis = 'sales_only_v1' (một dòng tổng hợp; thiếu marker ⇒ đỏ).
       if (Number(phase) >= 126) input.p126 = { invRealBasis: (await ro(q.inv126RealBasis))[0] }
+      // 127 (S0 T11): bất biến dữ liệu chương trình ghi trong marker 127 (một dòng tổng hợp; thiếu marker ⇒ đỏ).
+      if (Number(phase) >= 127) input.p127 = { invFlat: (await ro(q.inv127Flat))[0] }
       if (expect.requireProven) input.requireProven = expect.requireProven
       if (profile !== undefined) {
         input.profile = profile
