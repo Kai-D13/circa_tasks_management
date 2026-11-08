@@ -709,9 +709,9 @@ export function assertCmsQaProgramIds(
 // ── VERIFY chỉ đọc 120 / 121 + V8 (P1-R2) ───────────────────────────────────
 
 /** Phase VERIFY CMS = số migration CMS đã chạy cuối cùng (120 nền · 121 import / kích hoạt · 122 kết quả P2-b · 123 chốt kỳ P3a · 124 chứng nhận nguồn
- *  · 125 bỏ trần bậc cuối · 126 sales-only: mở cổng kết quả bán tạm tính). */
-export type CmsVerifyPhase = '120' | '121' | '122' | '123' | '124' | '125' | '126'
-export const CMS_VERIFY_PHASES: readonly CmsVerifyPhase[] = ['120', '121', '122', '123', '124', '125', '126']
+ *  · 125 bỏ trần bậc cuối · 126 sales-only: mở cổng kết quả bán tạm tính · 127 sửa dữ liệu T11 sang mức cố định / hộp — CHỈ dữ liệu). */
+export type CmsVerifyPhase = '120' | '121' | '122' | '123' | '124' | '125' | '126' | '127'
+export const CMS_VERIFY_PHASES: readonly CmsVerifyPhase[] = ['120', '121', '122', '123', '124', '125', '126', '127']
 /** Số hàm CMS tích luỹ ngay TRƯỚC phase (PRE phải đúng ảnh trước migration của phase) — SUY từ CMS_FN_MATRIX (db-reviewer P2-5). */
 export function cmsFnCountBefore(phase: CmsVerifyPhase): number {
   return Object.values(CMS_FN_MATRIX).filter((m) => Number(m.phase) < Number(phase)).length
@@ -747,6 +747,9 @@ export const CMS_PHASE_FUNCTIONS: Record<CmsVerifyPhase, string[]> = {
   // GIỮ chữ ký + ACL ⇒ POST 126 so TOÀN BỘ hàm public (n_all / md5_all) với PRE 126; thân mới ở CMS_FN_SRC_126. Tập rỗng ⇒
   // cmsVerifyAclSql KHÔNG sinh cột n_ex126 (NOT IN () là lỗi cú pháp).
   '126': [],
+  // 127 (S0 CMS đơn giản, PM 08/11): CHỈ sửa dữ liệu một chương trình (bậc T11 + config_version + pointer) — KHÔNG hàm / trigger /
+  // bảng / ACL mới hay thay ⇒ kế thừa nguyên kỳ vọng 126; ACL POST so toàn bộ hàm public với PRE 127.
+  '127': [],
 }
 
 const isCmsFnSql = `(left(p.proname, 4) = 'cms_' OR left(p.proname, 8) = 'rpc_cms_')`
@@ -791,7 +794,7 @@ export const CMS_VERIFY_SQL = {
   whoami: `SELECT current_user::text AS u, current_database()::text AS db,
        (SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user) AS bypass`,
   // '123' … '126' có trong lọc ⇒ checker phase trước trên DB đã ở phase sau đỏ phase-match (lời rõ), không chỉ max-numeric.
-  markers: `SELECT version, name, applied_at FROM public.app_migrations WHERE version IN ('119', '120', '121', '122', '123', '124', '125', '126') OR version !~ '^[0-9]+$' ORDER BY 1`,
+  markers: `SELECT version, name, applied_at FROM public.app_migrations WHERE version IN ('119', '120', '121', '122', '123', '124', '125', '126', '127') OR version !~ '^[0-9]+$' ORDER BY 1`,
   maxNumeric: `SELECT max(CASE WHEN version ~ '^[0-9]+$' THEN version::int END) AS max_v FROM public.app_migrations`,
   functions: `SELECT p.proname::text AS name, p.oid::regprocedure::text AS sig, p.prosecdef AS secdef,
        md5(replace(p.prosrc, E'\\r', '')) AS src_md5,
@@ -1016,7 +1019,30 @@ x AS (SELECT r.id, ((r.detail ->> 'results_basis') IS DISTINCT FROM 'sales_only_
 SELECT (SELECT max(m.applied_at) FROM m) AS marker_at, count(*)::int AS n, count(*) FILTER (WHERE x.bad)::int AS bad,
        coalesce(string_agg(x.id::text, ',' ORDER BY x.id) FILTER (WHERE x.bad), '') AS bad_ids
   FROM x`,
+  // ── 127 (S0 T11 mức cố định / hộp, chỉ phase ≥ 127) — chương trình ghi trong notes marker 127: mọi SP đúng 1 bậc {thứ tự 1, từ 1,
+  // không giới hạn}; md5 "ProductID:mức" (thứ tự byte) = notes.rates_md5; số SP = notes.products; config_version = notes.config_version.to
+  // (lớn hơn ⇒ đã có chỉnh sửa hợp lệ sau 127 qua RPC — không còn đánh giá như ảnh 127, CHƯA chứng minh, không đỏ vĩnh viễn);
+  // pointer NULL (chờ tính lại — CHƯA chứng minh) HOẶC run bán ok công bố SAU marker mang đúng config_version hiện hành. MỘT dòng:
+  // marker_at NULL ⇒ thiếu marker (đỏ, không xanh rỗng). notes là JSON do 127 ghi (không nhận SQL / tham số ngoài).
+  inv127Flat: `WITH m AS (SELECT applied_at, notes::jsonb AS j FROM public.app_migrations WHERE version = '127'),
+g AS (SELECT p.id, p.config_version, p.current_result_run_id FROM public.cms_programs p JOIN m ON p.id::text = m.j ->> 'program'),
+pp AS (SELECT x.id, x.product_id FROM public.cms_program_products x JOIN g ON x.program_id = g.id),
+t AS (SELECT pp.product_id, count(y.*) AS n, coalesce(bool_and(y.tier_order = 1 AND y.qty_from = 1 AND y.qty_to IS NULL), false) AS flat,
+             max(y.amount_per_unit) AS amount
+        FROM pp LEFT JOIN public.cms_program_tiers y ON y.program_product_id = pp.id GROUP BY pp.product_id)
+SELECT (SELECT max(applied_at) FROM m) AS marker_at, (SELECT j ->> 'program' FROM m) AS program_id,
+       (SELECT j ->> 'rates_md5' FROM m) AS rates_md5_marker, (SELECT ((j -> 'config_version') ->> 'to')::int FROM m) AS version_after,
+       (SELECT (j ->> 'products')::int FROM m) AS products_marker, (SELECT count(*) FROM g)::int AS program_n,
+       (SELECT count(*) FROM t)::int AS products_n, (SELECT count(*) FROM t WHERE n <> 1 OR NOT flat)::int AS not_flat,
+       (SELECT md5(string_agg(product_id || ':' || amount, ',' ORDER BY product_id COLLATE "C")) FROM t) AS rates_md5_db,
+       (SELECT config_version FROM g) AS config_version, (SELECT current_result_run_id IS NULL FROM g) AS pointer_null,
+       (SELECT r.kind = 'sales' AND r.status = 'ok' AND r.published_at IS NOT NULL AND r.published_at > (SELECT max(applied_at) FROM m)
+               AND r.config_version = g.config_version
+          FROM g JOIN public.cms_sync_runs r ON r.id = g.current_result_run_id) AS pointer_ok`,
 } as const
+/** 127 — chương trình T11 thật + md5 bảng 17 mức PM spec r1 §1 (sinh bởi scripts/gen-cms-127.mjs, cmsRatesMd5). */
+export const CMS_127_T11_ID = '942194ce-893f-4f62-a88a-bd9efa464bae'
+export const CMS_127_PM_RATES_MD5 = '29a0464bd08e27fb95440415209c4b2a'
 
 export type CmsV8Role = 'super' | 'admin' | 'sm' | 'staff' | 'qlch'
 export const CMS_V8_ROLES: readonly CmsV8Role[] = ['super', 'admin', 'sm', 'staff', 'qlch']
@@ -1716,7 +1742,7 @@ const CMS_TABLES_PAYOUT = ['cms_payout_staff', 'cms_payouts']
 export const CMS_TABLES_FROZEN_123 = ['cms_programs', 'cms_program_products', 'cms_program_tiers', 'cms_program_stores', 'cms_sync_runs',
   'cms_sync_run_chunks', 'cms_sales_lines', 'cms_results', 'cms_result_catalog', 'cms_result_lines', 'cms_payouts', 'cms_payout_staff']
 const CMS_MARKER_NAME: Record<CmsVerifyPhase, string> = { '120': 'cms_foundation', '121': 'cms_import_activation', '122': 'cms_results', '123': 'cms_payouts', '124': 'cms_source_attestation', '125': 'cms_uncapped_last_tier',
-  '126': 'cms_sales_only_results_release' }
+  '126': 'cms_sales_only_results_release', '127': 'cms_t11_flat_amounts' }
 
 const CMS_TABLES_READ = ['cms_import_runs', 'cms_product_master', 'cms_program_products', 'cms_program_stores', 'cms_program_tiers', 'cms_programs']
 const CMS_TABLES_NO_AUTH = ['cms_qa_access', 'cms_sync_runs']
@@ -1860,6 +1886,8 @@ export interface CmsVerifyInput {
   p125?: { invLastTier: Row[]; invCurrentCap: Row[]; current?: Row }
   /** Phase ≥ 126 (sales-only): run bán thật công bố sau marker 126 mang results_basis = 'sales_only_v1' (CMS_VERIFY_SQL.inv126RealBasis). */
   p126?: { invRealBasis: Row }
+  /** Phase ≥ 127 (S0 T11): bất biến dữ liệu chương trình ghi trong marker 127 (CMS_VERIFY_SQL.inv127Flat). */
+  p127?: { invFlat: Row }
   p123?: { owners: Row; isolation123: Row; triggerFns: Row[]; lockPolicy: Row; payoutAcl: Row[]; invPayout: Row; invLocked: Row
     invPayoutStaff?: Row; invRunFrozen?: Row; payoutReach?: Row[]; lockPreview?: Row }
   /** `post --require-proven=…` (như V8): khoá trong cmsPostProvenKeys(phase); mục CHƯA chứng minh ⇒ đỏ. */
@@ -1875,6 +1903,8 @@ const CMS_POST_PROVEN: Record<CmsVerifyPhase, Record<string, readonly string[]>>
     uncapped: ['v125-current-run-uncapped'] },
   '126': { v5: ['v5-payout-invariants', 'v5-payout-staff', 'v5-run-frozen'], 'lock-preview': ['lock-preview-blocked'], attest: ['v124-payout-attest'],
     uncapped: ['v125-current-run-uncapped'], basis: ['v126-real-basis'] },
+  '127': { v5: ['v5-payout-invariants', 'v5-payout-staff', 'v5-run-frozen'], 'lock-preview': ['lock-preview-blocked'], attest: ['v124-payout-attest'],
+    uncapped: ['v125-current-run-uncapped'], basis: ['v126-real-basis'], resync: ['v127-resync'] },
 }
 export const cmsPostProvenKeys = (phase: CmsVerifyPhase): readonly string[] => Object.keys(CMS_POST_PROVEN[phase] ?? {})
 
@@ -1892,7 +1922,7 @@ export function evaluateCmsVerify(v: CmsVerifyInput): CmsVerifyCheck[] {
   const add = (id: string, ok: boolean, detail: string) => out.push({ id, ok, detail })
   const P = Number(v.phase)
   const marker = new Map(v.markers.map((r) => [String(r.version), r]))
-  const dbPhase = (['126', '125', '124', '123', '122', '121', '120'] as CmsVerifyPhase[]).find((x) => marker.has(x)) ?? null
+  const dbPhase = (['127', '126', '125', '124', '123', '122', '121', '120'] as CmsVerifyPhase[]).find((x) => marker.has(x)) ?? null
   add('phase-match', dbPhase === v.phase, dbPhase === v.phase ? `DB đang ở phase ${v.phase}`
     : `PHASE KHÔNG PHÙ HỢP: DB có marker CMS cao nhất ${dbPhase ?? '(chưa có)'} — khai báo --phase=${v.phase}; chạy đúng phase, không dùng kết quả phase khác làm bằng chứng`)
   add('runner', v.whoami.bypass === true, `chạy bằng ${String(v.whoami.u)} (superuser / BYPASSRLS ${String(v.whoami.bypass)})`)
@@ -2155,6 +2185,32 @@ export function evaluateCmsVerify(v: CmsVerifyInput): CmsVerifyCheck[] {
     out.push({ id: 'v126-real-basis', ok: hasMarker && Number.isInteger(n) && bad === 0, proven: n > 0,
       detail: `${hasMarker ? `marker 126 ${markerAt}` : 'THIẾU marker 126'} · ${Number.isInteger(n) ? n : 'THIẾU'} run bán THẬT công bố sau 126 · thiếu results_basis = sales_only_v1 / results_gate = 126 ${Number.isInteger(bad) ? bad : 'THIẾU'}${
         String(ib?.bad_ids ?? '').split(',').filter(Boolean).slice(0, 5).map((x) => ` ${maskCmsUuid(x)}`).join('')}${n > 0 ? '' : ' — CHƯA CHỨNG MINH (chưa có run thật công bố sau 126)'}` })
+  }
+  if (P >= 127) {
+    // V-127 (S0 T11, = hậu kiểm 127): chương trình ghi trong marker có mọi SP đúng 1 bậc mở, bảng mức = md5 marker, số SP = marker,
+    // version ≥ version sau 127; pointer NULL (chờ tính lại ⇒ resync CHƯA chứng minh) hoặc run bán ok công bố sau marker đúng version.
+    const f = v.p127?.invFlat
+    let fAt: string | null = null
+    try { if (f?.marker_at !== undefined && f?.marker_at !== null && f?.marker_at !== '') fAt = toIsoUtc(f.marker_at) } catch { /* thiếu */ }
+    const nProg = Number(f?.program_n ?? NaN), nProd = Number(f?.products_n ?? NaN), nWant = Number(f?.products_marker ?? NaN)
+    const notFlat = Number(f?.not_flat ?? NaN), cv = Number(f?.config_version ?? NaN), cvAfter = Number(f?.version_after ?? NaN)
+    const ratesOk = typeof f?.rates_md5_db === 'string' && f.rates_md5_db === f?.rates_md5_marker
+    // db-reviewer 127 P2-4: chỉ đánh giá ảnh 127 khi version = version sau 127; lớn hơn ⇒ đã chỉnh sửa hợp lệ sau đó (append / đổi mức qua
+    // RPC) ⇒ ĐẠT nhưng CHƯA CHỨNG MINH (không đỏ vĩnh viễn); nhỏ hơn / thiếu ⇒ đỏ.
+    const later = Number.isInteger(cvAfter) && Number.isInteger(cv) && cv > cvAfter
+    const flatOk = fAt !== null && nProg === 1 && Number.isInteger(cvAfter) && (later
+      || (cv === cvAfter && Number.isInteger(nWant) && nProd === nWant && notFlat === 0 && ratesOk))
+    out.push({ id: 'v127-flat', ok: flatOk, proven: !later, detail: (later ? `ĐÃ CÓ CHỈNH SỬA SAU 127 (version ${cv} > ${cvAfter}) — không đánh giá lại ảnh 127, CHƯA CHỨNG MINH · ` : '') + `${fAt ? `marker 127 ${fAt}` : 'THIẾU marker 127'} · chương trình ${maskCmsUuid(String(f?.program_id ?? ''))} ${nProg === 1 ? 'có' : 'THIẾU'}`
+      + ` · ${Number.isInteger(nProd) ? nProd : 'THIẾU'}/${Number.isInteger(nWant) ? nWant : 'THIẾU'} SP · ${Number.isInteger(notFlat) ? notFlat : 'THIẾU'} SP không đúng 1 bậc mở`
+      + ` · bảng mức ${ratesOk ? 'khớp marker' : 'LỆCH marker'} · version ${Number.isInteger(cv) ? cv : 'THIẾU'} (sau 127: ${Number.isInteger(cvAfter) ? cvAfter : 'THIẾU'})` })
+    const ptrNull = f?.pointer_null === true, ptrOk = f?.pointer_ok === true
+    out.push({ id: 'v127-resync', ok: fAt !== null && (ptrNull || ptrOk), proven: ptrOk,
+      detail: ptrOk ? 'pointer → run bán ok công bố sau 127, đúng config_version hiện hành'
+        : ptrNull ? 'pointer NULL — chờ tính lại theo cấu hình mới (CHƯA CHỨNG MINH)'
+          : 'pointer trỏ run KHÔNG hợp lệ với cấu hình sau 127 (trước marker / sai version / không ok)' })
+    // Chương trình / bảng mức là đúng quyết định PM (T11 thật + 17 mức spec r1 §1) — DB thử dựng chương trình khác ⇒ mục này đỏ có chủ đích.
+    add('v127-t11-pm', String(f?.program_id ?? '') === CMS_127_T11_ID && f?.rates_md5_marker === CMS_127_PM_RATES_MD5,
+      `marker: chương trình ${maskCmsUuid(String(f?.program_id ?? ''))} · md5 mức ${String(f?.rates_md5_marker ?? 'THIẾU').slice(0, 8)} (PM: ${maskCmsUuid(CMS_127_T11_ID)} · ${CMS_127_PM_RATES_MD5.slice(0, 8)})`)
   }
   // post --require-proven (như V8): mọi mục của khoá phải ĐẠT và ĐÃ chứng minh.
   for (const k of v.requireProven ?? []) {
