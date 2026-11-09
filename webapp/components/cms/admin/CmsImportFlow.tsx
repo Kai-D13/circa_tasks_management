@@ -13,6 +13,7 @@ import { CmsImportResult } from '@/components/cms/admin/CmsImportResult'
 import { CmsKCheckPanel, type CmsKAckDraft } from '@/components/cms/admin/CmsKCheckPanel'
 import { cn } from '@/lib/utils'
 import { cmsFileSize } from '@/lib/cms/display'
+import { CMS_BASIS_LABEL, type CmsQuantityBasis } from '@/lib/cms/unitBasis'
 import {
   CMS_IMPORT_CHECKS, CMS_IMPORT_COLUMN_HELP, CMS_REUPLOAD_CODES, CMS_SIMPLE_CHECKS, CMS_SIMPLE_COLUMN_HELP, cmsCommitLabel, cmsKAckable,
   type CmsPreviewResult, type CmsRouteError,
@@ -27,6 +28,8 @@ import {
 // CMS đơn giản S1 / S2 (PM r1 08/11 §4–§5; chỉ khi `v2` = cờ CMS_IMPORT_V2_ENABLED): chọn TƯỜNG MINH loại file (9 cột nhiều bậc /
 // 7 cột mức cố định) — server parse + kiểm theo loại đã lưu trong lần kiểm, commit không nhận loại khác; bảng kiểm K + xác nhận tay
 // (gửi lại preview kèm ý định, server gắn người / giờ). v2 OFF ⇒ request y như trước (không gửi format / k_acks).
+// CMS-UNIT (spec PM 09/11 §4): chương trình cơ sở cms_unit ⇒ bảng kiểm K + xác nhận tay có ở MỌI mẫu file (kể cả v2 OFF, 9 cột) —
+// gửi k_acks khi xác nhận; khung Upload / Kết quả ghi rõ cách tính. Route handler quyết lại theo DB (client không đổi được cơ sở).
 
 const MAX_FILE = 5 * 1024 * 1024
 type Step = 'upload' | 'running' | 'result'
@@ -41,7 +44,7 @@ function errorText(body: CmsRouteError | null): string {
   return body.duplicate?.length ? `${base}: ${body.duplicate.join(', ')}` : base
 }
 
-export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false }: {
+export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false, quantityBasis = 'pos_base' }: {
   program: { id: string; name: string }
   mode: 'replace' | 'append'
   fromNew: boolean
@@ -49,7 +52,11 @@ export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false }: {
   fixture?: { step: Step; result?: CmsPreviewResult; fileName?: string; fileBytes?: number; format?: Format }
   /** Cờ CMS_IMPORT_V2_ENABLED (server quyết; page truyền xuống). */
   v2?: boolean
+  /** Cơ sở tính hiện tại của chương trình (page đọc từ DB). */
+  quantityBasis?: CmsQuantityBasis
 }) {
+  /** Kiểm K bắt buộc: cờ v2 HOẶC chương trình cms_unit (cùng điều kiện route handler cmsImportKRequired). */
+  const kRequired = v2 || quantityBasis === 'cms_unit'
   const router = useRouter()
   const fixtureBlocked = useFixtureActionBlocked()
   const [step, setStep] = useState<Step>(fixture?.step ?? 'upload')
@@ -99,7 +106,7 @@ export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false }: {
     fd.append('program_id', program.id)
     fd.append('file', file)
     if (v2) fd.append('format', format)
-    if (v2 && withAcks && result?.kCheck) {
+    if (kRequired && withAcks && result?.kCheck) {
       const kept = result.kCheck.products.filter((x) => x.ack !== null && x.k !== null).map((x) => ({ product_id: x.productId, unit: x.unit, k: x.k, source: x.ack!.source }))
       const added = result.kCheck.products
         .filter((x) => cmsKAckable(x) && drafts[x.productId]?.checked && drafts[x.productId].source.trim().length >= 3)
@@ -233,7 +240,8 @@ export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false }: {
             <p className="text-[13px] font-semibold">Hệ thống sẽ kiểm tra</p>
             <ul className="list-disc space-y-1 pl-5 text-[13px] text-muted-foreground">
               {(format === 'simple' ? CMS_SIMPLE_CHECKS : CMS_IMPORT_CHECKS).map((c) => <li key={c}>{c}</li>)}
-              {v2 && <li>K (quy đổi đơn vị) đối chiếu với dữ liệu bán; chưa có bằng chứng ⇒ cần super xác nhận kèm nguồn</li>}
+              {kRequired && <li>K (quy đổi đơn vị) đối chiếu với dữ liệu bán; chưa có bằng chứng ⇒ cần super xác nhận kèm nguồn</li>}
+              {quantityBasis === 'cms_unit' && <li data-cms-import-basis="cms_unit">{CMS_BASIS_LABEL.cms_unit}: unit_CMS phải đúng tên đơn vị bán trên POS (vd. hộp) — chỉ đơn bán đúng đơn vị này được tính CMS; ô có ký tự ẩn bị loại</li>}
             </ul>
             <p className="text-[12px] text-muted-foreground">Một dòng lỗi làm loại cả nhóm ProductID; nhóm hợp lệ khác vẫn được nạp.</p>
           </div>

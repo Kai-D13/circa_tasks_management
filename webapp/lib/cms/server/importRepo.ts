@@ -38,18 +38,33 @@ async function readAll<T>(query: (from: number, to: number) => PromiseLike<{ dat
   throw new CmsRepoError('LOOKUP_FAILED')
 }
 
-type ProgramDb = { id: string; status: CmsProgramRow['status']; start_date: string; end_date: string; is_test: boolean; config_version: number; catalog_target_gmv: string | null }
+type ProgramDb = { id: string; status: CmsProgramRow['status']; start_date: string; end_date: string; is_test: boolean; config_version: number; catalog_target_gmv: string | null; quantity_basis?: string }
 const PROGRAM_COLS = 'id, status, start_date, end_date, is_test, config_version, catalog_target_gmv::text'
 
 export const supabaseCmsImportRepo: CmsImportRepo = {
   async getProgram(id) {
-    const { data, error } = await supabaseAdmin.from('cms_programs').select(PROGRAM_COLS).eq('id', id).abortSignal(sig()).maybeSingle()
+    // CMS-UNIT: đọc kèm quantity_basis (128). DB chưa có 128 ⇒ PostgREST báo cột không tồn tại (42703) ⇒ đọc lại không có cột, coi
+    // pos_base (app mới chạy được trên schema cũ). Giá trị lạ ⇒ LOOKUP_FAILED (không tự chọn cơ sở).
+    let { data, error } = await supabaseAdmin.from('cms_programs').select(`${PROGRAM_COLS}, quantity_basis`).eq('id', id).abortSignal(sig()).maybeSingle()
+    if (error && (error as { code?: string }).code === '42703') {
+      ({ data, error } = await supabaseAdmin.from('cms_programs').select(PROGRAM_COLS).eq('id', id).abortSignal(sig()).maybeSingle())
+    }
     if (error) throw new CmsRepoError('LOOKUP_FAILED')
     const p = data as unknown as ProgramDb | null
+    if (p && p.quantity_basis !== undefined && p.quantity_basis !== 'pos_base' && p.quantity_basis !== 'cms_unit') throw new CmsRepoError('LOOKUP_FAILED')
     return p ? {
       id: p.id, status: p.status, startDate: p.start_date, endDate: p.end_date, isTest: p.is_test,
       configVersion: p.config_version, catalogTargetGmv: p.catalog_target_gmv,
+      quantityBasis: p.quantity_basis === 'cms_unit' ? 'cms_unit' : 'pos_base',
     } : null
+  },
+
+  /** CMS-UNIT: DB có capability 128 (cột cms_programs.quantity_basis) — probe chỉ đọc, 0 dòng. */
+  async unitBasisCapable() {
+    const { error } = await supabaseAdmin.from('cms_programs').select('quantity_basis').limit(0).abortSignal(sig())
+    if (!error) return true
+    if ((error as { code?: string }).code === '42703') return false
+    throw new CmsRepoError('LOOKUP_FAILED')
   },
 
   async loadContext(program, productIds): Promise<CmsImportContextData> {

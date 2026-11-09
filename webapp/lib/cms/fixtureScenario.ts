@@ -13,6 +13,9 @@
 // dựng tay trong spec (cms-ui1-unit / cms-p2c-unit), không đưa vào fixture tính bằng engine.
 //  PG6 QA — đang chạy, 2 SP · PG7 Men vi sinh — đang chạy, phạm vi 2 nhà thuốc, 1 SP (có dòng ngoài phạm vi)
 //  PG8 QA — Vitamin đã hết kỳ (khối Chốt kỳ) · PG9 QA — Vitamin đã chốt (khối Số đã chốt) — cùng 4 SP / dòng bán như PG1.
+//  PG13 (CMS-UNIT, spec PM 09/11 §4) — đang chạy, cơ sở cms_unit: chỉ đơn bán đúng ĐV tính CMS được tính; dòng bán GIẢ có cả đơn
+//      khác ĐV (viên / vỉ / lọ) — engine thật tính Q = Σ lượng đúng ĐV; DTO dựng theo hình dạng RPC 128 (cơ sở / phiên bản, ĐV snapshot,
+//      unit_match / counted_quantity). Các chương trình khác giữ DTO dạng DB trước 128 (không khoá cơ sở) — giao diện pos_base không đổi.
 import { compareCmsLineId, computeCmsProgram, type CmsEngineOutput } from './engine/compute'
 import type { CmsEngineProgramInput } from './engine/config'
 import { buildSellerIndex, type CmsStoreRef, type CmsUserRef } from './mapping'
@@ -101,8 +104,8 @@ interface ProductDef {
   image?: string | null
   advice?: string
 }
-/** [dược sĩ, chỉ số SP, số lượng từng dòng theo đơn vị CMS]. */
-type SaleSpec = [UserKey, number, string[]]
+/** [dược sĩ, chỉ số SP, số lượng từng dòng theo đơn vị CMS] + (CMS-UNIT) [đơn vị bán khác ĐV CMS, lượng cơ sở / 1 đơn vị đó]. */
+type SaleSpec = [UserKey, number, string[]] | [UserKey, number, string[], string, string]
 interface ProgramDef {
   n: number
   name: string
@@ -122,6 +125,8 @@ interface ProgramDef {
   runs: CmsImportRunView[]
   createdAt: string
   activatedAt: string | null
+  /** CMS-UNIT: cơ sở tính (thiếu ⇒ fixture dạng DB trước 128, luật pos_base). */
+  basis?: 'cms_unit'
 }
 
 const T3 = (a: number, b: number, c: number): CmsTierView[] => [
@@ -285,7 +290,37 @@ const SIMPLE_DEFS: ProgramDef[] = [
   },
 ]
 
-for (const d of [...PROGRAM_DEFS, ...SIMPLE_DEFS]) {
+// ── CMS-UNIT (spec PM 09/11 §4) — chương trình cơ sở cms_unit. SP / mức / dòng bán đều GIẢ (không phải bảng T11). Ca phủ: đúng ĐV
+// nhiều bậc · đơn khác ĐV đủ K vẫn 0 (A bán 5 viên + 10 vỉ = đủ 1 hộp theo K — luật cũ Q 4, luật mới Q 3) · chỉ bán khác ĐV ⇒ Q 0 (D) · mức cố định theo chai · target SP mà
+// GMV đơn khác ĐV giúp đạt target (A 900203) · bậc 2 (B 12 hộp).
+const UNIT_PRODUCTS: ProductDef[] = [
+  { productId: '900201', name: 'Viên uống vitamin C hộp 10 vỉ x 10 viên', gmvBasis: 'none', targetGmv: null, unit: 'hộp', k: '100', tiers: T3(12000, 15000, 18000), price: '150000', unitGmv: 150000 },
+  { productId: '900202', name: 'Siro ho thảo dược chai 100ml', gmvBasis: 'none', targetGmv: null, unit: 'chai', k: '1', tiers: FLAT(20000), price: '85000', unitGmv: 85000 },
+  { productId: '900203', name: 'Viên kẽm hộp 3 vỉ x 10 viên', gmvBasis: 'product', targetGmv: '600000', unit: 'hộp', k: '30', tiers: T3(9000, 11000, 13000), price: '120000', unitGmv: 120000 },
+]
+const UNIT_SALES: SaleSpec[] = [
+  ['A', 0, ['2', '1']], ['A', 0, ['5'], 'viên', '1'], ['A', 0, ['10'], 'vỉ', '10'], ['A', 1, ['3']], ['A', 2, ['4']], ['A', 2, ['30'], 'viên', '1'],
+  ['B', 0, ['12']], ['B', 2, ['1']], ['D', 0, ['20'], 'viên', '1'], ['H', 1, ['1']], ['H', 1, ['2'], 'lọ', '1'],
+]
+const UNIT_DEFS: ProgramDef[] = [
+  {
+    n: 13, name: 'CMS mẫu theo ĐV tính CMS — chỉ tính đơn bán đúng đơn vị', status: 'active', startDate: cmsFxDay(-14), endDate: cmsFxDay(15),
+    scope: 'all', storeIds: OS_STORE_IDS, isTest: false, catalogTargetGmv: null, configVersion: 3, products: UNIT_PRODUCTS, sales: UNIT_SALES,
+    unassigned: false, publishedAt: '2026-11-15T01:05:00.000000Z', createdAt: '2026-10-28T02:00:00Z', activatedAt: '2026-10-31T02:00:00Z', runs: [], basis: 'cms_unit',
+  },
+  // PG14: mức CỐ ĐỊNH / hộp theo ĐV tính CMS (dạng chương trình T11 sau chuyển — mức / SP GIẢ, không phải bảng T11). Ca phủ (ảnh guide):
+  // hộp được tính · gói / viên đủ quy cách vẫn 0 (A 900103: 2 + 1 hộp tính 3, 15 gói không tính — luật cũ 4; A 900101: 1 hộp tính 1,
+  // 10 viên không tính) · chỉ bán gói ⇒ 0 (B 900103) · SP K 1 (900102) như cũ.
+  {
+    n: 14, name: 'CMS mẫu mức cố định — chỉ tính đơn bán đúng ĐV tính CMS', status: 'active', startDate: cmsFxDay(-14), endDate: cmsFxDay(15),
+    scope: 'all', storeIds: OS_STORE_IDS, isTest: false, catalogTargetGmv: null, configVersion: 3, products: SIMPLE_PRODUCTS.slice(0, 3),
+    sales: [['A', 2, ['2', '1']], ['A', 2, ['15'], 'gói', '1'], ['A', 0, ['1']], ['A', 0, ['10'], 'viên', '1'], ['A', 1, ['2']],
+      ['B', 2, ['5'], 'gói', '1'], ['B', 1, ['1']], ['D', 0, ['3']]],
+    unassigned: false, publishedAt: '2026-11-15T01:05:00.000000Z', createdAt: '2026-10-28T02:00:00Z', activatedAt: '2026-10-31T02:00:00Z', runs: [], basis: 'cms_unit',
+  },
+]
+
+for (const d of [...PROGRAM_DEFS, ...SIMPLE_DEFS, ...UNIT_DEFS]) {
   if (d.runs.length === 0 && d.products.length > 0) d.runs.push(importRun(d.n * 10, d.products, `${d.createdAt.slice(0, 10)}T05:00:00Z`))
 }
 
@@ -301,20 +336,22 @@ function salesLines(d: ProgramDef): CmsSalesLine[] {
   const span = Math.max(1, Math.min(daysBetween(d.startDate, d.endDate) + 1, daysBetween(d.startDate, CMS_FX_TODAY)))
   const out: CmsSalesLine[] = []
   let seq = 0
-  const push = (email: string | null, p: ProductDef, qty: string, day: number, h: number, m: number, store: string) => {
+  // uom / per: đơn vị bán + lượng cơ sở mỗi đơn vị đó (mặc định = ĐV CMS / K). GMV tỷ lệ theo lượng cơ sở.
+  const push = (email: string | null, p: ProductDef, qty: string, day: number, h: number, m: number, store: string, uom: string = p.unit, per: string = p.k) => {
     seq += 1
     const id = String(d.n * 100_000 + seq)
     const at = vnMicros(addDays(d.startDate, day % span), 8 + (h % 12), m % 60)
+    const base = (units(qty) * units(per)) / CMS_DEC_FACTOR
     out.push({
       orderLineId: id, orderId: `HD${id}`, orderCode: `HD${id}`, productId: p.productId, sellerEmail: email, posCode: `POS-${store.slice(-2)}`,
-      orderType: 'OFFLINE', orderStatus: 'COMPLETED', completedAtMicros: at, quantityRaw: qty, uomRaw: p.unit,
-      baseQuantityUnits: (units(qty) * units(p.k)) / CMS_DEC_FACTOR, gmvUnits: units(qty) * BigInt(p.unitGmv), sourceUpdatedAtMicros: at + HOUR,
+      orderType: 'OFFLINE', orderStatus: 'COMPLETED', completedAtMicros: at, quantityRaw: qty, uomRaw: uom,
+      baseQuantityUnits: base, gmvUnits: per === p.k ? units(qty) * BigInt(p.unitGmv) : (base * BigInt(p.unitGmv) * CMS_DEC_FACTOR) / units(p.k), sourceUpdatedAtMicros: at + HOUR,
     })
   }
-  for (const [u, pi, qtys] of d.sales) {
+  for (const [u, pi, qtys, uom, per] of d.sales) {
     const p = d.products[pi]
     const def = USER_DEFS.find((x) => x.key === u)!
-    qtys.forEach((q, k) => push(email(u), p, q, KEY_NUM[u] * 5 + pi * 3 + k * 4, KEY_NUM[u] + k * 3 + pi, KEY_NUM[u] * 7 + k * 13 + pi * 17, def.store))
+    qtys.forEach((q, k) => push(email(u), p, q, KEY_NUM[u] * 5 + pi * 3 + k * 4 + (uom ? 2 : 0), KEY_NUM[u] + k * 3 + pi, KEY_NUM[u] * 7 + k * 13 + pi * 17 + (uom ? 5 : 0), def.store, uom, per))
   }
   if (d.unassigned) {
     const p = (i: number) => d.products[Math.min(i, d.products.length - 1)]
@@ -338,6 +375,8 @@ export interface CmsFxProgram {
   lines: CmsSalesLine[]
   /** product_id ⇒ program_product_id. */
   pp: Map<string, string>
+  /** CMS-UNIT: cơ sở cms_unit ⇒ DTO dạng 128; null ⇒ DTO dạng DB trước 128 (pos_base legacy). */
+  basis: 'cms_unit' | null
 }
 
 function build(d: ProgramDef): CmsFxProgram {
@@ -351,6 +390,7 @@ function build(d: ProgramDef): CmsFxProgram {
   const row: CmsAdminListItem = {
     id: cmsFxUid(d.n), name: d.name, status: d.status, startDate: d.startDate, endDate: d.endDate, scope: d.scope, isTest: d.isTest,
     catalogTargetGmv: d.catalogTargetGmv, configVersion: d.configVersion, activatedAt: d.activatedAt, createdAt: d.createdAt,
+    ...(d.basis ? { quantityBasis: d.basis } : {}),
     productCount: products.length, productIds: products.map((p) => p.productId),
     lastImport: committed.length ? committed.reduce((a, b) => ((b.committedAt ?? '') > (a.committedAt ?? '') ? b : a)) : null,
   }
@@ -359,12 +399,13 @@ function build(d: ProgramDef): CmsFxProgram {
   if (d.publishedAt && d.products.length > 0) {
     const input: CmsEngineProgramInput = {
       startDate: d.startDate, endDate: d.endDate, catalogTargetGmv: d.catalogTargetGmv, storeIds: d.storeIds,
-      products: d.products.map((p) => ({ productId: p.productId, gmvBasis: p.gmvBasis, targetGmv: p.targetGmv, baseQuantityCms: p.k, tiers: p.tiers.map((t) => ({ from: t.from, to: t.to, amount: t.amount })) })),
+      products: d.products.map((p) => ({ productId: p.productId, gmvBasis: p.gmvBasis, targetGmv: p.targetGmv, baseQuantityCms: p.k, tiers: p.tiers.map((t) => ({ from: t.from, to: t.to, amount: t.amount })), ...(d.basis ? { unitCms: p.unit } : {}) })),
+      ...(d.basis ? { quantityBasis: d.basis } : {}),
     }
     out = computeCmsProgram({ program: input, lines, sellers: SELLERS })
   }
   return {
-    row, products, storeIds: d.storeIds, runs: d.runs, lines, pp, out,
+    row, products, storeIds: d.storeIds, runs: d.runs, lines, pp, out, basis: d.basis ?? null,
     run: d.publishedAt && out ? { id: cmsFxUid(9500 + (d.n - 1) * 10), publishedAt: d.publishedAt, configVersion: d.configVersion } : null,
   }
 }
@@ -374,7 +415,11 @@ export const CMS_FX_PG = Object.fromEntries(CMS_FX_PROGRAMS.map((p, i) => [`PG${
 /** CMS đơn giản (PM r1 §6): PG10 đang chạy · PG11 sắp diễn ra · PG12 hết kỳ chờ chốt — ngoài danh sách A1. */
 export const CMS_FX_SIMPLE_PROGRAMS: readonly CmsFxProgram[] = SIMPLE_DEFS.map(build)
 export const CMS_FX_PG_SIMPLE = Object.fromEntries(CMS_FX_SIMPLE_PROGRAMS.map((p, i) => [`PG${SIMPLE_DEFS[i].n}`, p.row.id])) as Record<'PG10' | 'PG11' | 'PG12', string>
-const ALL_FX: readonly CmsFxProgram[] = [...CMS_FX_PROGRAMS, ...CMS_FX_SIMPLE_PROGRAMS]
+/** CMS-UNIT: PG13 (có bậc / target) và PG14 (mức cố định / hộp) đang chạy, cơ sở cms_unit — ngoài danh sách A1; mở bằng ?program= / &pp= /
+ *  fx=unit (PG13) · fx=unit-flat (PG14). */
+export const CMS_FX_UNIT_PROGRAMS: readonly CmsFxProgram[] = UNIT_DEFS.map(build)
+export const CMS_FX_PG_UNIT = { PG13: CMS_FX_UNIT_PROGRAMS[0].row.id, PG14: CMS_FX_UNIT_PROGRAMS[1].row.id }
+const ALL_FX: readonly CmsFxProgram[] = [...CMS_FX_PROGRAMS, ...CMS_FX_SIMPLE_PROGRAMS, ...CMS_FX_UNIT_PROGRAMS]
 export const cmsFxProgram = (id: string | null | undefined): CmsFxProgram | null => ALL_FX.find((p) => p.row.id === id) ?? null
 /** Tìm chương trình chứa program_product (D2). */
 export const cmsFxProgramOfProduct = (ppId: string | null | undefined): CmsFxProgram | null => ALL_FX.find((p) => p.products.some((x) => x.id === ppId)) ?? null
@@ -394,6 +439,7 @@ export function cmsFxDetailOf(p: CmsFxProgram, o: { sm?: boolean } = {}): CmsPro
 const rowView = (r: CmsAdminListItem): CmsProgramRowView => ({
   id: r.id, name: r.name, status: r.status, startDate: r.startDate, endDate: r.endDate, scope: r.scope, isTest: r.isTest,
   catalogTargetGmv: r.catalogTargetGmv, configVersion: r.configVersion, activatedAt: r.activatedAt, createdAt: r.createdAt,
+  ...(r.quantityBasis ? { quantityBasis: r.quantityBasis } : {}),
 })
 export const cmsFxRowView = rowView
 
@@ -422,17 +468,25 @@ export function cmsFxHeader(p: CmsFxProgram, v: CmsFxViewer, o: CmsFxHeaderOpts 
     unassigned_gmv: fmt(out.totals.unassignedGmvUnits), amount_vnd: out.totals.amountVnd.toString(), unassigned_by_reason: { ...out.totals.unassignedByReason },
   } : null
   const startedAt = r ? new Date(Date.parse(r.publishedAt) - 5 * 60_000).toISOString().replace(/\.\d{3}Z$/, '.000000Z') : null
+  // CMS-UNIT: chương trình cms_unit ⇒ khoá cơ sở dạng 128. reset ⇒ "vừa chuyển cơ sở": lần ok trước theo pos_base_v1, pointer NULL,
+  // lượt theo luật mới đang HOLD (cờ tắt) ⇒ basis_pending.
+  const u = p.basis === 'cms_unit'
+  const meta = (b: 'pos_base' | 'cms_unit') => (u ? { quantity_basis: b, calculation_policy_version: b === 'cms_unit' ? 'cms_unit_v1' : 'pos_base_v1' } : {})
   return parseCmsResultHeader({
     program_id: p.row.id, config_version: o.configChanged ? p.row.configVersion + 1 : p.row.configVersion, viewer: viewerName(v),
+    ...(u ? { quantity_basis: 'cms_unit' } : {}),
     run: r ? {
       id: r.id, config_version: r.configVersion, published_at: r.publishedAt, source_max_updated_at: startedAt, started_at: startedAt,
       amount_vnd: v.kind === 'super' && out ? out.totals.amountVnd.toString() : null, rows_read: v.kind === 'super' && out ? out.totals.linesRead : null, totals,
+      ...meta('cms_unit'),
     } : null,
-    last_attempt: o.reset && p.run
+    last_attempt: o.reset && p.run && u
+      ? { status: 'held', started_at: '2026-11-15T03:00:00.000000Z', finished_at: '2026-11-15T03:00:05.000000Z', is_current: false, error_code: 'UNIT_BASIS_DISABLED', ...meta('cms_unit') }
+      : o.reset && p.run
       ? { status: 'ok', started_at: '2026-11-15T01:00:00.000000Z', finished_at: p.run.publishedAt, is_current: false, error_code: null }
       : o.held && r
-      ? { status: 'held', started_at: '2026-11-15T03:00:00.000000Z', finished_at: '2026-11-15T03:01:10.000000Z', is_current: false, error_code: 'SOURCE_TIMEOUT' }
-      : r ? { status: 'ok', started_at: startedAt, finished_at: r.publishedAt, is_current: true, error_code: null } : null,
+      ? { status: 'held', started_at: '2026-11-15T03:00:00.000000Z', finished_at: '2026-11-15T03:01:10.000000Z', is_current: false, error_code: u ? 'UNIT_QUANTITY_FRACTION' : 'SOURCE_TIMEOUT', ...meta('cms_unit') }
+      : r ? { status: 'ok', started_at: startedAt, finished_at: r.publishedAt, is_current: true, error_code: null, ...meta('cms_unit') } : null,
     recent_runs: null,
   })
 }
@@ -443,8 +497,13 @@ export function cmsFxRows(p: CmsFxProgram, v: CmsFxViewer): CmsResultRowsDto {
   const results = out.results.filter((r) => visibleUser(v, r.userId))
   const catalog = out.catalog.filter((c) => visibleUser(v, c.userId))
   const userIds = [...new Set(results.map((r) => r.userId))]
+  const u = p.basis === 'cms_unit'
   return parseCmsResultRows({
     run_id: p.run.id,
+    ...(u ? {
+      quantity_basis: 'cms_unit', calculation_policy_version: 'cms_unit_v1',
+      units: p.products.map((x) => ({ program_product_id: x.id, product_id: x.productId, unit_cms: x.unitCms, base_quantity_cms: x.baseQuantityCms })),
+    } : {}),
     results: results.map((r) => ({
       user_id: r.userId, store_id: r.storeId, program_product_id: p.pp.get(r.productId), product_id: r.productId, gmv_basis: r.gmvBasis,
       base_quantity: fmt(r.baseQuantityUnits), per_unit: fmt(r.perUnitUnits), cms_quantity: r.cmsQuantity.toString(), rewarded_quantity: r.rewardedQuantity.toString(),
@@ -477,7 +536,11 @@ export function cmsFxLinesOf(p: CmsFxProgram, pairs?: ReadonlySet<string>): CmsR
       quantity_raw: src.get(l.orderLineId)?.quantityRaw ?? null, uom_raw: src.get(l.orderLineId)?.uomRaw ?? null,
       base_quantity: fmt(l.baseQuantityUnits), gmv_amount: fmt(l.gmvUnits), base_before: fmt(l.baseBeforeUnits), base_after: fmt(l.baseAfterUnits),
       qty_before: l.qtyBefore.toString(), qty_after: l.qtyAfter.toString(), amount_vnd: l.amountVnd.toString(), status: l.status,
+      ...(p.basis === 'cms_unit' ? { unit_match: l.unitMatch === true, counted_quantity: (l.countedQuantity ?? BigInt(0)).toString() } : {}),
     }))
     .sort((a, b) => a.seq - b.seq)
-  return parseCmsResultLines({ run_id: p.run.id, next_after_seq: null, rows }).rows
+  return parseCmsResultLines({
+    run_id: p.run.id, next_after_seq: null, rows,
+    ...(p.basis === 'cms_unit' ? { quantity_basis: 'cms_unit', calculation_policy_version: 'cms_unit_v1' } : {}),
+  }).rows
 }

@@ -4,12 +4,17 @@
 //  · tổng hợp CỘNG số engine đã tính (tiền theo dược sĩ × SP) — KHÔNG áp lại bậc / gate trên tổng (CMS-Q1); chỉ số Q-212
 //    dùng lại summarizeCmsProgram của engine P2-a.
 //  · "Nếu bán thêm" dùng cùng hàm bậc của engine (cmsProgressiveAmount) — không công thức thứ hai.
+//  · CMS-UNIT (128 — planning/research/cms-unit-basis-spec-implementation-2026-11-09.md §4): mọi reader đọc CƠ SỞ TÍNH CỦA RUN
+//    (header.run / rows / lines mang quantity_basis + calculation_policy_version; rows mang ĐV CMS theo snapshot run). DB trước 128
+//    (không có cả hai khoá) ⇒ pos_base luật cũ; có khoá mà cặp lạ / thiếu ĐV / dòng lệch cơ sở ⇒ CmsResultDtoError (QUERY_FAILED —
+//    không tự chọn pos_base, không 0 giả). Cơ sở được GẮN vào từng dòng kết quả / dòng đơn để trình bày không lẫn luật.
 
 import { CMS_DEC_FACTOR, parseCmsDecimal } from './decimal'
 import type { CmsEngineProductResult } from './engine/compute'
 import { summarizeCmsProgram, type CmsProgramSummary } from './engine/summary'
 import { parsePositiveInt, type CmsEngineTier } from './engine/config'
 import { cmsProgressiveAmount, cmsQuantityOf } from './engine/tiers'
+import { CmsBasisMetaError, isCmsQuantityBasis, parseCmsRunBasis, type CmsQuantityBasis, type CmsRunBasis } from './unitBasis'
 
 const ZERO = BigInt(0)
 
@@ -58,18 +63,38 @@ function arr(o: Obj, k: string): unknown[] {
 export type CmsResultViewer = 'super' | 'sm' | 'store_manager' | 'staff' | 'admin' | null
 export interface CmsResultRunDto {
   id: string; configVersion: number; publishedAt: string | null; sourceMaxUpdatedAt: string | null; startedAt: string | null
+  /** Cơ sở tính / phiên bản chính sách của RUN (DB trước 128 ⇒ pos_base legacy). */
+  basis: CmsRunBasis
   /** Chỉ super. */
   amountVnd: string | null; rowsRead: number | null; totals: Record<string, unknown> | null
 }
-export interface CmsResultAttemptDto { status: 'running' | 'ok' | 'held' | 'error'; startedAt: string | null; finishedAt: string | null; isCurrent: boolean; errorCode: string | null }
+export interface CmsResultAttemptDto { status: 'running' | 'ok' | 'held' | 'error'; startedAt: string | null; finishedAt: string | null; isCurrent: boolean; errorCode: string | null; basis: CmsRunBasis }
 export interface CmsResultHeaderDto {
   programId: string
   configVersion: number
+  /** Cơ sở tính HIỆN TẠI của chương trình (128); DB trước 128 ⇒ pos_base. null = DB không trả (không suy). */
+  programBasis: CmsQuantityBasis | null
   viewer: CmsResultViewer
   run: CmsResultRunDto | null
   lastAttempt: CmsResultAttemptDto | null
   /** Chỉ super. */
-  recentRuns: Array<{ id: string; status: string; errorCode: string | null; startedAt: string | null; finishedAt: string | null; rowsRead: number | null; amountVnd: string | null; configVersion: number; purged: boolean }> | null
+  recentRuns: Array<{ id: string; status: string; errorCode: string | null; startedAt: string | null; finishedAt: string | null; rowsRead: number | null; amountVnd: string | null; configVersion: number; purged: boolean; basis: CmsRunBasis }> | null
+}
+
+/** Metadata cơ sở của run trong DTO — lỗi hợp đồng ⇒ CmsResultDtoError (route trả QUERY_FAILED). */
+function runBasis(o: Obj, at: string): CmsRunBasis {
+  try { return parseCmsRunBasis(o) } catch (e) {
+    if (e instanceof CmsBasisMetaError) throw new CmsResultDtoError(`${at}.quantity_basis`)
+    throw e
+  }
+}
+/** Cơ sở hiện tại của chương trình ở header: thiếu khoá (DB trước 128) ⇒ pos_base; null ⇒ null; giá trị lạ ⇒ lỗi. */
+function programBasisOf(raw: Obj): CmsQuantityBasis | null {
+  if (!Object.prototype.hasOwnProperty.call(raw, 'quantity_basis')) return 'pos_base'
+  const v = raw.quantity_basis
+  if (v === null) return null
+  if (!isCmsQuantityBasis(v)) throw new CmsResultDtoError('quantity_basis')
+  return v
 }
 
 export function parseCmsResultHeader(raw: unknown): CmsResultHeaderDto {
@@ -82,6 +107,7 @@ export function parseCmsResultHeader(raw: unknown): CmsResultHeaderDto {
   return {
     programId: s(raw, 'program_id', UUID_RE),
     configVersion: n(raw, 'config_version'),
+    programBasis: programBasisOf(raw),
     viewer: viewer as CmsResultViewer,
     run: run === null || run === undefined ? null : (() => {
       if (!isObj(run)) throw new CmsResultDtoError('run')
@@ -89,6 +115,7 @@ export function parseCmsResultHeader(raw: unknown): CmsResultHeaderDto {
         id: s(run, 'id', UUID_RE), configVersion: n(run, 'config_version'), publishedAt: sn(run, 'published_at', TS_RE),
         sourceMaxUpdatedAt: sn(run, 'source_max_updated_at', TS_RE), startedAt: sn(run, 'started_at', TS_RE),
         amountVnd: sn(run, 'amount_vnd', INT_RE), rowsRead: nn(run, 'rows_read'), totals: isObj(run.totals) ? run.totals : null,
+        basis: runBasis(run, 'run'),
       }
     })(),
     lastAttempt: last === null || last === undefined ? null : (() => {
@@ -96,13 +123,13 @@ export function parseCmsResultHeader(raw: unknown): CmsResultHeaderDto {
       const st = s(last, 'status')
       if (!['running', 'ok', 'held', 'error'].includes(st)) throw new CmsResultDtoError('last_attempt.status')
       return { status: st as CmsResultAttemptDto['status'], startedAt: sn(last, 'started_at', TS_RE), finishedAt: sn(last, 'finished_at', TS_RE),
-        isCurrent: b(last, 'is_current'), errorCode: sn(last, 'error_code') }
+        isCurrent: b(last, 'is_current'), errorCode: sn(last, 'error_code'), basis: runBasis(last, 'last_attempt') }
     })(),
     recentRuns: rr === null || rr === undefined ? null : (rr as unknown[]).map((x) => {
       if (!isObj(x)) throw new CmsResultDtoError('recent_runs[]')
       return { id: s(x, 'id', UUID_RE), status: s(x, 'status'), errorCode: sn(x, 'error_code'), startedAt: sn(x, 'started_at', TS_RE),
         finishedAt: sn(x, 'finished_at', TS_RE), rowsRead: nn(x, 'rows_read'), amountVnd: sn(x, 'amount_vnd', INT_RE),
-        configVersion: n(x, 'config_version'), purged: b(x, 'purged') }
+        configVersion: n(x, 'config_version'), purged: b(x, 'purged'), basis: runBasis(x, 'recent_runs[]') }
     }),
   }
 }
@@ -113,8 +140,13 @@ export function parseCmsResultHeader(raw: unknown): CmsResultHeaderDto {
  * tiền hiện hành) nhưng chương trình đã từng có lần công bố ⇒ "Chưa có số liệu sau thay đổi cấu hình" tới khi tính lại, không 0₫ giả.
  * Publish luôn đặt pointer ⇒ không pointer mà có lần công bố 'ok' chỉ xảy ra khi pointer bị vô hiệu hoá.
  */
-export type CmsResultState = 'none' | 'ok' | 'held_old' | 'config_pending' | 'config_reset'
+export type CmsResultState = 'none' | 'ok' | 'held_old' | 'config_pending' | 'config_reset' | 'basis_pending'
+/**
+ * CMS-UNIT `basis_pending`: chương trình đang theo cơ sở cms_unit, CHƯA có phiên kết quả hiện hành nhưng đã có lượt tính (đổi cơ sở đặt
+ * pointer NULL — 128; hoặc lượt theo luật mới đang HOLD) ⇒ "Chưa có số liệu theo cách tính mới", không 0₫ giả, không hiện số luật cũ.
+ */
 export function cmsResultState(h: CmsResultHeaderDto): CmsResultState {
+  if (!h.run && h.programBasis === 'cms_unit' && (h.lastAttempt !== null || (h.recentRuns ?? []).length > 0)) return 'basis_pending'
   if (!h.run) return h.lastAttempt?.status === 'ok' || (h.recentRuns ?? []).some((r) => r.status === 'ok') ? 'config_reset' : 'none'
   if (h.lastAttempt && !h.lastAttempt.isCurrent && (h.lastAttempt.status === 'held' || h.lastAttempt.status === 'error')) return 'held_old'
   if (h.configVersion !== h.run.configVersion) return 'config_pending'
@@ -133,8 +165,10 @@ export function cmsRunHasLegacyCap(rows: readonly Pick<CmsResultRowDto, 'capQuan
 /** Chữ khi CHƯA có run hiện hành (D1 / D2 / lịch sử): phân biệt "chưa tính lần nào" với "vừa đổi cấu hình, chờ tính lại". */
 export const CMS_NO_RUN_TEXT = 'Chưa có số liệu — hệ thống chưa tính lần nào'
 export const CMS_CONFIG_RESET_TEXT = 'Chưa có số liệu sau thay đổi cấu hình — hệ thống sẽ tính lại ở lượt tiếp theo'
+export const CMS_BASIS_PENDING_TEXT = 'Chưa có số liệu theo cách tính mới (chỉ tính đơn bán đúng ĐV tính CMS) — hệ thống sẽ tính ở lượt tiếp theo'
 export function cmsNoRunText(h: CmsResultHeaderDto): string {
-  return cmsResultState(h) === 'config_reset' ? CMS_CONFIG_RESET_TEXT : CMS_NO_RUN_TEXT
+  const st = cmsResultState(h)
+  return st === 'basis_pending' ? CMS_BASIS_PENDING_TEXT : st === 'config_reset' ? CMS_CONFIG_RESET_TEXT : CMS_NO_RUN_TEXT
 }
 
 // ── Rows ────────────────────────────────────────────────────────────────────
@@ -143,10 +177,24 @@ export interface CmsResultRowDto {
   baseQuantity: string; perUnit: string; cmsQuantity: string; rewardedQuantity: string; capQuantity: string | null; atCap: boolean
   gmvAmount: string; gateGmv: string | null; targetGmv: string | null; gateMet: boolean; gateMetAt: string | null
   potentialAmount: string; amountVnd: string; lineCount: number
+  /** CMS-UNIT: cơ sở tính của RUN chứa dòng (gắn khi parse). Thiếu (fixture / DTO cũ dựng tay) ⇒ pos_base. */
+  quantityBasis?: CmsQuantityBasis
 }
 export interface CmsCatalogRowDto { userId: string; storeId: string; catalogGmv: string; targetGmv: string; met: boolean; metAt: string | null; lineCount: number }
 export interface CmsResultUserDto { id: string; fullName: string; storeId: string | null }
-export interface CmsResultRowsDto { runId: string | null; results: CmsResultRowDto[]; catalog: CmsCatalogRowDto[]; users: CmsResultUserDto[] }
+/** ĐV tính CMS / K theo snapshot của RUN (128) — nhãn đơn vị đúng của run, không theo cấu hình hiện tại. */
+export interface CmsRunUnitDto { programProductId: string; productId: string; unitCms: string; baseQuantityCms: string }
+export interface CmsResultRowsDto {
+  runId: string | null; results: CmsResultRowDto[]; catalog: CmsCatalogRowDto[]; users: CmsResultUserDto[]
+  /** CMS-UNIT: cơ sở của run (null khi chưa có run). Thiếu ⇒ pos_base (DTO dựng tay / DB trước 128). */
+  basis?: CmsRunBasis | null
+  /** ĐV CMS theo snapshot run; null = run legacy / chưa có run. */
+  units?: CmsRunUnitDto[] | null
+}
+
+/** Cơ sở tính của một dòng / tập dòng (thiếu ⇒ pos_base). */
+export const cmsRowBasis = (r: { quantityBasis?: CmsQuantityBasis }): CmsQuantityBasis => r.quantityBasis ?? 'pos_base'
+export const cmsRowsBasis = (rows: Pick<CmsResultRowsDto, 'basis'>): CmsQuantityBasis => rows.basis?.basis ?? 'pos_base'
 
 export function parseCmsResultRows(raw: unknown): CmsResultRowsDto {
   if (!isObj(raw)) throw new CmsResultDtoError('rows')
@@ -155,10 +203,31 @@ export function parseCmsResultRows(raw: unknown): CmsResultRowsDto {
     if (v !== 'product' && v !== 'catalog' && v !== 'none') throw new CmsResultDtoError('gmv_basis')
     return v
   }
-  return {
-    runId: sn(raw, 'run_id', UUID_RE),
+  const runId = sn(raw, 'run_id', UUID_RE)
+  const hasMeta = Object.prototype.hasOwnProperty.call(raw, 'quantity_basis') || Object.prototype.hasOwnProperty.call(raw, 'calculation_policy_version')
+  let rb: CmsRunBasis | null = null
+  if (runId === null) {
+    if (hasMeta && (raw.quantity_basis !== null || raw.calculation_policy_version !== null)) throw new CmsResultDtoError('quantity_basis')
+  } else rb = runBasis(raw, 'rows')
+  let units: CmsRunUnitDto[] | null = null
+  if (raw.units !== null && raw.units !== undefined) {
+    units = arr(raw, 'units').map((u) => {
+      if (!isObj(u)) throw new CmsResultDtoError('units[]')
+      const unitCms = s(u, 'unit_cms')
+      if (unitCms.trim() === '') throw new CmsResultDtoError('units[].unit_cms')
+      return { programProductId: s(u, 'program_product_id', UUID_RE), productId: s(u, 'product_id'), unitCms, baseQuantityCms: s(u, 'base_quantity_cms', DEC_RE) }
+    })
+  }
+  // cms_unit: ĐV theo snapshot run là bắt buộc (không mượn cấu hình hiện tại để gắn nhãn đơn vị cho số của run).
+  if (rb?.basis === 'cms_unit' && (units === null || units.length === 0)) throw new CmsResultDtoError('units')
+  const unitPp = units ? new Set(units.map((u) => u.programProductId)) : null
+  const out: CmsResultRowsDto = {
+    runId,
+    basis: rb,
+    units,
     results: arr(raw, 'results').map((r) => {
       if (!isObj(r)) throw new CmsResultDtoError('results[]')
+      if (rb?.basis === 'cms_unit' && !unitPp!.has(r.program_product_id as string)) throw new CmsResultDtoError('results[].program_product_id')
       return {
         userId: s(r, 'user_id', UUID_RE), storeId: s(r, 'store_id', UUID_RE), programProductId: s(r, 'program_product_id', UUID_RE),
         productId: s(r, 'product_id'), gmvBasis: basis(r), baseQuantity: s(r, 'base_quantity', DEC_RE), perUnit: s(r, 'per_unit', DEC_RE),
@@ -166,6 +235,7 @@ export function parseCmsResultRows(raw: unknown): CmsResultRowsDto {
         atCap: b(r, 'at_cap'), gmvAmount: s(r, 'gmv_amount', DEC_RE), gateGmv: sn(r, 'gate_gmv', DEC_RE), targetGmv: sn(r, 'target_gmv', INT_RE),
         gateMet: b(r, 'gate_met'), gateMetAt: sn(r, 'gate_met_at', TS_RE), potentialAmount: s(r, 'potential_amount', INT_RE),
         amountVnd: s(r, 'amount_vnd', INT_RE), lineCount: n(r, 'line_count'),
+        ...(rb && !rb.legacy ? { quantityBasis: rb.basis } : {}),
       }
     }),
     catalog: arr(raw, 'catalog').map((c) => {
@@ -178,6 +248,12 @@ export function parseCmsResultRows(raw: unknown): CmsResultRowsDto {
       return { id: s(u, 'id', UUID_RE), fullName: s(u, 'full_name'), storeId: sn(u, 'store_id', UUID_RE) }
     }),
   }
+  return out
+}
+
+/** ĐV tính CMS của SP theo snapshot run (cms_unit / pos_base_v1); không có ⇒ `fallback` (cấu hình hiện tại — run legacy). */
+export function cmsRunUnitOf(rows: Pick<CmsResultRowsDto, 'units'> | null | undefined, programProductId: string, fallback: string): string {
+  return rows?.units?.find((u) => u.programProductId === programProductId)?.unitCms ?? fallback
 }
 
 // ── Lines (D3 / XLSX) ───────────────────────────────────────────────────────
@@ -186,21 +262,38 @@ export interface CmsResultLineDto {
   seq: number; orderLineId: string; orderCode: string; productId: string; programProductId: string; userId: string; storeId: string
   posCode: string | null; completedAt: string; quantityRaw: string | null; uomRaw: string | null; baseQuantity: string; gmvAmount: string
   baseBefore: string; baseAfter: string; qtyBefore: string; qtyAfter: string; amountVnd: string; status: CmsLineStatus
+  /** CMS-UNIT: cơ sở của run (gắn khi parse; thiếu ⇒ pos_base). */
+  quantityBasis?: CmsQuantityBasis
+  /** CHỈ cms_unit: đơn vị bán khớp ĐV tính CMS (theo khoá cms-unit-key-v1 của snapshot run). */
+  unitMatch?: boolean | null
+  /** CHỈ cms_unit: lượng dòng được tính (số nguyên; khác đơn vị ⇒ "0"). */
+  countedQuantity?: string | null
 }
-export interface CmsResultLinesPage { runId: string; rows: CmsResultLineDto[]; nextAfterSeq: number | null }
+export interface CmsResultLinesPage { runId: string; rows: CmsResultLineDto[]; nextAfterSeq: number | null; basis?: CmsRunBasis }
 const LINE_STATUS = new Set(['WAITING_GATE', 'ACCUMULATING', 'RECORDED', 'AT_CAP', 'ADJUSTMENT'])
 
 export function parseCmsResultLines(raw: unknown): CmsResultLinesPage {
   if (!isObj(raw)) throw new CmsResultDtoError('lines')
   const next = raw.next_after_seq
   if (next !== null && next !== undefined && (typeof next !== 'number' || !Number.isSafeInteger(next) || next < 0)) throw new CmsResultDtoError('next_after_seq')
+  const lb = runBasis(raw, 'lines')
   return {
     runId: s(raw, 'run_id', UUID_RE),
     nextAfterSeq: (next ?? null) as number | null,
+    basis: lb,
     rows: arr(raw, 'rows').map((x) => {
       if (!isObj(x)) throw new CmsResultDtoError('rows[]')
       const st = s(x, 'status')
       if (!LINE_STATUS.has(st)) throw new CmsResultDtoError('status')
+      let unit: Pick<CmsResultLineDto, 'unitMatch' | 'countedQuantity'> = {}
+      if (lb.basis === 'cms_unit') {
+        if (typeof x.unit_match !== 'boolean') throw new CmsResultDtoError('unit_match')
+        const c = s(x, 'counted_quantity', SINT_RE)
+        if (!x.unit_match && c !== '0') throw new CmsResultDtoError('counted_quantity')
+        unit = { unitMatch: x.unit_match, countedQuantity: c }
+      } else if ((x.unit_match !== null && x.unit_match !== undefined) || (x.counted_quantity !== null && x.counted_quantity !== undefined)) {
+        throw new CmsResultDtoError('unit_match')
+      }
       return {
         seq: n(x, 'seq'), orderLineId: s(x, 'order_line_id'), orderCode: s(x, 'order_code'), productId: s(x, 'product_id'),
         programProductId: s(x, 'program_product_id', UUID_RE), userId: s(x, 'user_id', UUID_RE), storeId: s(x, 'store_id', UUID_RE),
@@ -208,6 +301,7 @@ export function parseCmsResultLines(raw: unknown): CmsResultLinesPage {
         baseQuantity: s(x, 'base_quantity', DEC_RE), gmvAmount: s(x, 'gmv_amount', DEC_RE), baseBefore: s(x, 'base_before', DEC_RE),
         baseAfter: s(x, 'base_after', DEC_RE), qtyBefore: s(x, 'qty_before', INT_RE), qtyAfter: s(x, 'qty_after', INT_RE),
         amountVnd: s(x, 'amount_vnd', SINT_RE), status: st as CmsLineStatus,
+        ...(lb.legacy ? {} : { quantityBasis: lb.basis }), ...unit,
       }
     }),
   }
@@ -302,14 +396,21 @@ export function cmsFractionUnits(r: Pick<CmsResultRowDto, 'baseQuantity' | 'perU
  * "Nếu bán thêm" (D2): thêm `extraUnits` đơn vị CMS vào lượng hiện tại ⇒ CMS tăng thêm bao nhiêu, dùng CÙNG hàm bậc engine.
  * Gate chưa đạt ⇒ trả potential (ghi rõ ở UI là "khi đạt target"). Trần ⇒ phần vượt không thêm CMS.
  */
-export function cmsWhatIf(o: { baseQuantity: string; perUnit: string; tiers: readonly { from: number; to: number | null; amount: string }[]; extraUnits: number }): { amountNowVnd: bigint; amountAfterVnd: bigint; deltaVnd: bigint } {
+export function cmsWhatIf(o: {
+  baseQuantity: string; perUnit: string; tiers: readonly { from: number; to: number | null; amount: string }[]; extraUnits: number
+  /** CMS-UNIT: cms_unit ⇒ lượng hiện tại = Q của snapshot (số đúng ĐV), +N là N đơn vị ĐÚNG ĐV — không suy từ B / K. */
+  quantityBasis?: CmsQuantityBasis; cmsQuantity?: string
+}): { amountNowVnd: bigint; amountAfterVnd: bigint; deltaVnd: bigint } {
   const tiers: CmsEngineTier[] = o.tiers.map((t) => {
     const amount = parsePositiveInt(t.amount)
     if (amount === null) throw new CmsResultDtoError('tier.amount')
     return { from: BigInt(t.from), to: t.to === null ? null : BigInt(t.to), amountVnd: amount }
   })
-  const k = units(o.perUnit)
-  const qNow = cmsQuantityOf(units(o.baseQuantity), k)
+  let qNow: bigint
+  if (o.quantityBasis === 'cms_unit') {
+    if (o.cmsQuantity === undefined || !INT_RE.test(o.cmsQuantity)) throw new CmsResultDtoError('cms_quantity')
+    qNow = BigInt(o.cmsQuantity)
+  } else qNow = cmsQuantityOf(units(o.baseQuantity), units(o.perUnit))
   const extra = BigInt(Math.max(0, Math.trunc(o.extraUnits)))
   const now = cmsProgressiveAmount(qNow, tiers)
   const after = cmsProgressiveAmount(qNow + extra, tiers)

@@ -6,15 +6,19 @@
 //  · `null` = chưa có dữ liệu ⇒ UI hiện '—'; 0 chỉ khi run đã công bố và người xem thật sự chưa có CMS (0 hợp lệ).
 //  · Không ước tính GMV / số đơn vị cần bán theo giá: snapshot danh mục không mang đơn vị của giá tham khảo nên không xác
 //    định được "giá đúng theo unit_CMS" (U13) ⇒ bỏ câu ước tính cần giá.
+//  · CMS-UNIT (spec PM 09/11 §4): mọi số lượng trình bày theo CƠ SỞ CỦA RUN (gắn ở từng dòng khi parse). cms_unit ⇒ "đã bán" = Q
+//    (Σ lượng đơn bán đúng ĐV tính CMS, ≥ 0), không phần lẻ, không B / K; dòng đơn khác ĐV ⇒ "Đơn vị bán khác ĐV tính CMS — không tính
+//    CMS" (tiền 0, giữ lineage). pos_base giữ nguyên B / K.
 import { CMS_DEC_FACTOR, formatCmsDecimal, parseCmsDecimal } from './decimal'
 import { cmsProgressiveAmount } from './engine/tiers'
 import type { CmsEngineTier } from './engine/config'
 import {
-  cmsFractionUnits, cmsResultState, cmsResultSummary,
+  cmsFractionUnits, cmsResultState, cmsResultSummary, cmsRowBasis, cmsRowsBasis,
   type CmsCatalogRowDto, type CmsLineStatus, type CmsResultHeaderDto, type CmsResultRowDto, type CmsResultRowsDto, type CmsResultState,
   type CmsResultLineDto, type CmsResultUserDto,
 } from './resultView'
 import type { StatusTone } from '@/components/ds/StatusBadge'
+import { CMS_OTHER_UNIT_TEXT, type CmsQuantityBasis, type CmsRunBasis } from './unitBasis'
 
 const ZERO = BigInt(0)
 const ONE = BigInt(1)
@@ -52,7 +56,13 @@ export async function cmsPinnedResults(d: CmsPinDeps, programId: string, o: { st
     if (!h.ok) return { kind: h.error === 'RUN_GONE' ? 'gone' : 'error' }
     if (!h.data.run) return { kind: 'loaded', header: h.data, rows: { runId: null, results: [], catalog: [], users: [] } }
     const r = await d.rows(programId, h.data.run.id)
-    if (r.ok && r.data.runId === h.data.run.id) return { kind: 'loaded', header: h.data, rows: r.data }
+    // CMS-UNIT: rows phải mang CÙNG cơ sở / phiên bản với run của header (lệch ⇒ lỗi, không trình bày số theo luật khác).
+    if (r.ok && r.data.runId === h.data.run.id) {
+      const rb = r.data.basis ?? null
+      const hb = h.data.run.basis
+      if (rb !== null && (rb.basis !== hb.basis || rb.policy !== hb.policy)) return { kind: 'error' }
+      return { kind: 'loaded', header: h.data, rows: r.data }
+    }
     if (r.ok || r.error !== 'RUN_GONE') return { kind: 'error' }
   }
   return { kind: 'gone' }
@@ -68,6 +78,26 @@ export const cmsHistoryHref = (programId?: string | null, programProductId?: str
 }
 
 export const cmsResultsShown = (r: CmsResultsLoad): r is Extract<CmsResultsLoad, { kind: 'loaded' }> => r.kind === 'loaded'
+
+/**
+ * Cơ sở để trình bày LUẬT trên màn (câu nhắc, dòng quy đổi): có run ⇒ cơ sở của run; chưa có run ⇒ cơ sở hiện tại của chương trình
+ * (header 128, hoặc `programBasis` đọc từ danh mục khi cờ kết quả tắt / chưa bắt đầu). Số luôn theo cơ sở gắn ở dòng.
+ */
+export function cmsScreenBasis(r: CmsResultsLoad, programBasis: CmsQuantityBasis | undefined): CmsQuantityBasis {
+  if (r.kind === 'loaded') {
+    if (r.header.run) return r.header.run.basis.basis
+    if (r.header.programBasis) return r.header.programBasis
+  }
+  return programBasis ?? 'pos_base'
+}
+/** Trang dòng thuộc ĐÚNG run đã ghim và cùng cơ sở / phiên bản của run (trang DB trước 128 không mang cơ sở ⇒ run phải legacy). */
+export function cmsLinesMatchRun(page: { runId: string; basis?: CmsRunBasis }, run: { id: string; basis: CmsRunBasis }): boolean {
+  if (page.runId !== run.id) return false
+  if (!page.basis) return run.basis.legacy
+  return page.basis.basis === run.basis.basis && page.basis.policy === run.basis.policy
+}
+/** Cơ sở của tập rows đã tải (chưa có run ⇒ pos_base — không có số). */
+export const cmsLoadedRowsBasis = (r: CmsResultsLoad): CmsQuantityBasis => (r.kind === 'loaded' ? cmsRowsBasis(r.rows) : 'pos_base')
 
 /** Trạng thái dữ liệu cho nhãn (none ⇒ "Chưa có số liệu", số '—'). */
 export function cmsLoadState(r: CmsResultsLoad): CmsResultState | null {
@@ -204,8 +234,28 @@ export function cmsQtyText(baseUnits: bigint, perUnitUnits: bigint): string {
   return `${neg ? '-' : ''}${int}${frac ? `,${frac}` : ''}`
 }
 
-/** Phần đang cộng dồn (lượng cơ sở chưa đủ một đơn vị CMS), dạng "12 / 24 đơn vị cơ sở"; 0 ⇒ null. */
-export function cmsFractionText(r: Pick<CmsResultRowDto, 'baseQuantity' | 'perUnit' | 'cmsQuantity'>): string | null {
+/**
+ * Số "đã bán" theo cơ sở của run: pos_base ⇒ B / K ("5,5"); cms_unit ⇒ Q (số đúng ĐV tính CMS, nguyên) — KHÔNG dùng B / K (spec §4).
+ */
+export function cmsSoldText(r: Pick<CmsResultRowDto, 'baseQuantity' | 'perUnit' | 'cmsQuantity' | 'quantityBasis'>): string {
+  return cmsRowBasis(r) === 'cms_unit' ? BigInt(r.cmsQuantity).toLocaleString('vi-VN') : cmsQtyText(dec(r.baseQuantity), dec(r.perUnit))
+}
+
+/** Câu nhắc luật mới (spec §4) — dùng chung D1 / D2 / D3 / A3 / XLSX. */
+export const CMS_UNIT_RULE_NOTE = 'Chỉ tính đơn bán đúng ĐV tính CMS'
+/** "Đã bán 5 hộp" (pos_base) · "Đã bán 5 hộp đúng ĐV" (cms_unit). */
+export const cmsSoldPhrase = (soldText: string, unit: string, basis: CmsQuantityBasis): string =>
+  basis === 'cms_unit' ? `Đã bán ${soldText} ${unit} đúng ĐV` : `Đã bán ${soldText} ${unit}`
+/** Dòng luật dưới thang / mức: pos_base giữ quy đổi cơ sở (U5); cms_unit nhắc chỉ đơn đúng ĐV, không quy đổi đơn vị khác. */
+export const cmsQtyRuleLine = (unit: string, baseQtyLine: string, basis: CmsQuantityBasis): string =>
+  basis === 'cms_unit' ? `${CMS_UNIT_RULE_NOTE} (${unit}) — bán theo đơn vị khác không quy đổi thành ${unit}` : baseQtyLine
+/** Điều kiện target khi cms_unit: GMV target gồm mọi đơn vị bán của SP, còn lượng CMS chỉ đơn đúng ĐV (Q-224). */
+export const cmsUnitTargetNote = (unit: string): string =>
+  `GMV tính target gồm đơn bán mọi đơn vị của sản phẩm; số lượng tính CMS chỉ gồm đơn bán đúng ĐV ${unit}.`
+
+/** Phần đang cộng dồn (lượng cơ sở chưa đủ một đơn vị CMS), dạng "12 / 24 đơn vị cơ sở"; 0 ⇒ null. cms_unit ⇒ luôn null (không có phần lẻ). */
+export function cmsFractionText(r: Pick<CmsResultRowDto, 'baseQuantity' | 'perUnit' | 'cmsQuantity' | 'quantityBasis'>): string | null {
+  if (cmsRowBasis(r) === 'cms_unit') return null
   const f = cmsFractionUnits(r)
   if (f <= ZERO) return null
   return `${formatCmsDecimal(f).replace('.', ',')} / ${formatCmsDecimal(dec(r.perUnit)).replace('.', ',')} đơn vị cơ sở`
@@ -220,6 +270,8 @@ export const cmsHasSales = (r: Pick<CmsResultRowDto, 'baseQuantity'>): boolean =
 
 export interface CmsProductSalesStats {
   programProductId: string
+  /** Cơ sở của run (mọi dòng của một run cùng cơ sở). */
+  quantityBasis: CmsQuantityBasis
   amountVnd: bigint
   baseUnits: bigint
   perUnitUnits: bigint
@@ -235,8 +287,9 @@ export interface CmsProductSalesStats {
 export function cmsProductSalesStats(rows: readonly CmsResultRowDto[]): Map<string, CmsProductSalesStats> {
   const m = new Map<string, CmsProductSalesStats & { sold: Set<string>; done: Set<string> }>()
   for (const r of rows) {
-    const a = m.get(r.programProductId) ?? { programProductId: r.programProductId, amountVnd: ZERO, baseUnits: ZERO, perUnitUnits: dec(r.perUnit),
+    const a = m.get(r.programProductId) ?? { programProductId: r.programProductId, quantityBasis: cmsRowBasis(r), amountVnd: ZERO, baseUnits: ZERO, perUnitUnits: dec(r.perUnit),
       gmvUnits: ZERO, cmsQuantity: ZERO, staffWithSales: 0, staffAchieved: 0, sold: new Set<string>(), done: new Set<string>() }
+    if (a.quantityBasis !== cmsRowBasis(r)) throw new Error('CMS_UI_BASIS_MIXED')
     a.amountVnd += BigInt(r.amountVnd)
     a.baseUnits += dec(r.baseQuantity)
     a.gmvUnits += dec(r.gmvAmount)
@@ -279,6 +332,8 @@ export function cmsStaffSummary(rows: readonly CmsResultRowDto[], productCount: 
 export type CmsCardTone = 'earning' | 'waiting_gate' | 'at_cap' | 'none'
 export interface CmsStaffCard {
   programProductId: string
+  /** Cơ sở của run (row ⇒ của row; chưa có row ⇒ của tập rows). */
+  quantityBasis: CmsQuantityBasis
   /** null ⇒ người xem chưa có dòng kết quả cho SP (0 hợp lệ khi run đã công bố). */
   row: CmsResultRowDto | null
   amountVnd: bigint
@@ -290,16 +345,21 @@ export interface CmsStaffCard {
   position: CmsTierPosition
 }
 
-export function cmsStaffCard(o: { programProductId: string; perUnit: string; tiers: readonly CmsUiTier[]; row: CmsResultRowDto | null; catalog: readonly CmsCatalogRowDto[] }): CmsStaffCard {
+export function cmsStaffCard(o: {
+  programProductId: string; perUnit: string; tiers: readonly CmsUiTier[]; row: CmsResultRowDto | null; catalog: readonly CmsCatalogRowDto[]
+  /** Cơ sở của run khi người xem chưa có dòng cho SP (cmsRowsBasis(rows)); có row ⇒ cơ sở của row. */
+  basis?: CmsQuantityBasis
+}): CmsStaffCard {
   const r = o.row
   const q = r ? BigInt(r.cmsQuantity) : ZERO
   const gate = r ? cmsGateView(r, o.catalog) : null
   const amount = r ? BigInt(r.amountVnd) : ZERO
   const position = cmsTierPosition(q, o.tiers)
   const tone: CmsCardTone = gate && !gate.met && q > ZERO ? 'waiting_gate' : position.atCap && amount > ZERO ? 'at_cap' : amount > ZERO ? 'earning' : 'none'
+  const basis = r ? cmsRowBasis(r) : o.basis ?? 'pos_base'
   return {
-    programProductId: o.programProductId, row: r, amountVnd: amount,
-    soldText: cmsQtyText(r ? dec(r.baseQuantity) : ZERO, dec(r ? r.perUnit : o.perUnit)),
+    programProductId: o.programProductId, quantityBasis: basis, row: r, amountVnd: amount,
+    soldText: r ? cmsSoldText(r) : basis === 'cms_unit' ? '0' : cmsQtyText(ZERO, dec(o.perUnit)),
     cmsQuantity: q, fraction: r ? cmsFractionText(r) : null, gate, tone, position,
   }
 }
@@ -349,19 +409,21 @@ export function cmsStoreSummary(rows: readonly CmsResultRowDto[], productCount: 
   return { amountVnd: amount, staffWithCms: withCms.size, staffWithSales: withSales.size, productsWithCms: prodCms.size, productCount, gmvVnd: cmsTruncVnd(gmv) }
 }
 
-export interface CmsProductTotals { amountVnd: bigint; soldText: string; staffWithSales: number; staffAchieved: number; gmvVnd: bigint }
+export interface CmsProductTotals { amountVnd: bigint; soldText: string; staffWithSales: number; staffAchieved: number; gmvVnd: bigint; quantityBasis: CmsQuantityBasis }
 
 /** Tổng theo SP (QLCH thẻ D1 / D2 / D3). SP không có dòng ⇒ 0 hợp lệ (run đã công bố). Người có bán theo cmsHasSales (PM P1-I3-1). */
-export function cmsProductTotals(rows: readonly CmsResultRowDto[], perUnitFallback: Map<string, string>): Map<string, CmsProductTotals> {
+export function cmsProductTotals(rows: readonly CmsResultRowDto[], perUnitFallback: Map<string, string>, basis: CmsQuantityBasis = 'pos_base'): Map<string, CmsProductTotals> {
   const out = new Map<string, CmsProductTotals>()
   for (const a of cmsProductSalesStats(rows).values()) {
     out.set(a.programProductId, {
-      amountVnd: a.amountVnd, soldText: cmsQtyText(a.baseUnits, a.perUnitUnits), staffWithSales: a.staffWithSales,
-      staffAchieved: a.staffAchieved, gmvVnd: cmsTruncVnd(a.gmvUnits),
+      amountVnd: a.amountVnd,
+      // cms_unit: Σ Q từng dược sĩ (số đúng ĐV) — không B / K.
+      soldText: a.quantityBasis === 'cms_unit' ? a.cmsQuantity.toLocaleString('vi-VN') : cmsQtyText(a.baseUnits, a.perUnitUnits),
+      staffWithSales: a.staffWithSales, staffAchieved: a.staffAchieved, gmvVnd: cmsTruncVnd(a.gmvUnits), quantityBasis: a.quantityBasis,
     })
   }
   for (const [pp, k] of perUnitFallback) {
-    if (!out.has(pp)) out.set(pp, { amountVnd: ZERO, soldText: cmsQtyText(ZERO, dec(k)), staffWithSales: 0, staffAchieved: 0, gmvVnd: ZERO })
+    if (!out.has(pp)) out.set(pp, { amountVnd: ZERO, soldText: basis === 'cms_unit' ? '0' : cmsQtyText(ZERO, dec(k)), staffWithSales: 0, staffAchieved: 0, gmvVnd: ZERO, quantityBasis: basis })
   }
   return out
 }
@@ -433,25 +495,50 @@ export interface CmsLineView {
   tone: StatusTone
   /** Tiền dòng (snapshot); null ⇒ không hiển thị số (dòng điều chỉnh khi Q-206 chưa chốt — U18). */
   amountVnd: bigint | null
-  /** Số lượng dòng theo đơn vị CMS (B / K, cắt 2 chữ số). */
+  /** Số lượng dòng theo đơn vị CMS (pos_base: B / K, cắt 2 chữ số; cms_unit: lượng đúng ĐV). */
   qtyText: string
+  /** Nhãn lượng ĐẦY ĐỦ để hiển thị: "1,5 hộp" · "2 hộp" (cms_unit đúng ĐV) · "3 viên" (cms_unit khác ĐV — đơn vị bán gốc). */
+  qtyLabel: string
   /** Dòng phụ cách tính — không tự tính lại tiền. */
   note: string
+  /** CHỈ cms_unit: đơn vị bán có khớp ĐV tính CMS; pos_base ⇒ null. */
+  unitMatch: boolean | null
 }
 
 /**
  * Trình bày một dòng lịch sử. `returnsApproved` = hợp đồng trả hàng Q-206 đã chốt (lib/cms/releaseGate) — chưa chốt thì KHÔNG
  * hiện nhãn "Điều chỉnh" / số âm (U18): dòng ADJUSTMENT (chỉ có thể xuất hiện ở dữ liệu QA) hiện "Chờ xác nhận", tiền '—'.
  */
-export function cmsLineView(l: Pick<CmsResultLineDto, 'status' | 'amountVnd' | 'baseQuantity' | 'qtyBefore' | 'qtyAfter'>, perUnit: string, unit: string, returnsApproved: boolean): CmsLineView {
+export function cmsLineView(l: Pick<CmsResultLineDto, 'status' | 'amountVnd' | 'baseQuantity' | 'qtyBefore' | 'qtyAfter' | 'quantityBasis' | 'unitMatch' | 'countedQuantity'> & Partial<Pick<CmsResultLineDto, 'quantityRaw' | 'uomRaw'>>, perUnit: string, unit: string, returnsApproved: boolean): CmsLineView {
+  if (l.quantityBasis === 'cms_unit') return cmsUnitLineView(l, unit, returnsApproved)
   const qtyText = cmsQtyText(dec(l.baseQuantity), dec(perUnit))
-  if (l.status === 'ADJUSTMENT' && !returnsApproved) return { label: 'Chờ xác nhận', tone: 'neutral', amountVnd: null, qtyText, note: 'Dòng điều chỉnh chưa được công bố' }
+  const qtyLabel = `${qtyText} ${unit}`
+  if (l.status === 'ADJUSTMENT' && !returnsApproved) return { label: 'Chờ xác nhận', tone: 'neutral', amountVnd: null, qtyText, qtyLabel, note: 'Dòng điều chỉnh chưa được công bố', unitMatch: null }
   const units = cmsLineUnits(l)
   const note = l.status === 'WAITING_GATE' ? 'Chưa đạt target — CMS tính khi đạt'
     : l.status === 'ACCUMULATING' ? `Cộng dồn, chưa đủ thêm 1 ${unit}`
       : l.status === 'AT_CAP' ? (units > ZERO ? `+${units} ${unit} tính CMS · chạm trần` : 'Vượt trần — không thêm CMS')
         : units > ZERO ? `+${units} ${unit} tính CMS` : ''
-  return { label: CMS_LINE_LABEL[l.status], tone: CMS_LINE_TONE[l.status], amountVnd: BigInt(l.amountVnd), qtyText, note }
+  return { label: CMS_LINE_LABEL[l.status], tone: CMS_LINE_TONE[l.status], amountVnd: BigInt(l.amountVnd), qtyText, qtyLabel, note, unitMatch: null }
+}
+
+/**
+ * Dòng run cms_unit (UNIT-D03): đúng ĐV ⇒ lượng dòng = c_i (nguyên) "2 hộp"; khác ĐV ⇒ nhãn "Khác ĐV tính CMS", lượng hiển thị theo
+ * ĐƠN VỊ BÁN GỐC ("3 viên"), ghi chú lý do, tiền 0 của snapshot (không quy đổi). Điều chỉnh khi Q-206 chưa chốt ⇒ như pos_base (U18).
+ */
+function cmsUnitLineView(l: Pick<CmsResultLineDto, 'status' | 'amountVnd' | 'qtyBefore' | 'qtyAfter' | 'unitMatch' | 'countedQuantity'> & Partial<Pick<CmsResultLineDto, 'quantityRaw' | 'uomRaw'>>, unit: string, returnsApproved: boolean): CmsLineView {
+  const match = l.unitMatch === true
+  const qtyText = match ? BigInt(l.countedQuantity ?? '0').toLocaleString('vi-VN') : (l.quantityRaw ?? '—')
+  const qtyLabel = match ? `${qtyText} ${unit}` : `${qtyText} ${l.uomRaw ?? ''}`.trim()
+  if (l.status === 'ADJUSTMENT' && !returnsApproved) return { label: 'Chờ xác nhận', tone: 'neutral', amountVnd: null, qtyText, qtyLabel, note: 'Dòng điều chỉnh chưa được công bố', unitMatch: match }
+  if (!match && l.status !== 'ADJUSTMENT') {
+    return { label: 'Khác ĐV tính CMS', tone: 'neutral', amountVnd: BigInt(l.amountVnd), qtyText, qtyLabel, note: CMS_OTHER_UNIT_TEXT, unitMatch: false }
+  }
+  const units = cmsLineUnits(l)
+  const note = l.status === 'ADJUSTMENT' ? (match ? '' : CMS_OTHER_UNIT_TEXT)
+    : l.status === 'WAITING_GATE' ? 'Chưa đạt target — CMS tính khi đạt'
+      : units > ZERO ? (BigInt(l.amountVnd) > ZERO ? `+${units} ${unit} tính CMS` : `+${units} ${unit} · chưa tới bậc tính CMS`) : ''
+  return { label: CMS_LINE_LABEL[l.status], tone: CMS_LINE_TONE[l.status], amountVnd: BigInt(l.amountVnd), qtyText, qtyLabel, note, unitMatch: match }
 }
 
 // ── D3: phân trang ghim run (UI §4.3; kế hoạch PM §6.1) ─────────────────────

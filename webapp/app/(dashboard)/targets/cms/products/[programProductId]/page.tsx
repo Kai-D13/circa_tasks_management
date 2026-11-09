@@ -5,6 +5,7 @@ import { isCmsProgramEnabled } from '@/lib/cms/flags'
 import { cmsLoadStaffProduct } from '@/lib/cms/server/staffCatalog'
 import { cmsLoadResults } from '@/lib/cms/server/resultLoad'
 import { cmsLoadResultLines } from '@/lib/cms/server/results'
+import { cmsLinesMatchRun } from '@/lib/cms/resultUi'
 import { CMS_Q206_RETURNS_CONTRACT } from '@/lib/cms/releaseGate'
 import { cmsTodayVn } from '@/lib/cms/programStatus'
 import type { CmsResultLineDto } from '@/lib/cms/resultView'
@@ -49,7 +50,7 @@ export default async function CmsStaffProductPage({ params }: { params: Promise<
       const lines = await cmsLoadResultLines({
         programId: res.data.program.id, runId: results.header.run.id, programProductId, userId: user.id, afterSeq: null, limit: RECENT_PAGE,
       })
-      if (lines.ok && lines.data.runId === results.header.run.id && lines.data.nextAfterSeq === null) recent = lines.data.rows.slice(-3).reverse()
+      if (lines.ok && cmsLinesMatchRun(lines.data, results.header.run) && lines.data.nextAfterSeq === null) recent = lines.data.rows.slice(-3).reverse()
     }
   }
   return (

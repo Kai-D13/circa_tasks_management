@@ -11,6 +11,7 @@ import { Button, buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { CMS_PROGRAM_DATE_MAX, CMS_PROGRAM_DATE_MIN, normalizeCmsProgramInput } from '@/lib/cms/programInput'
 import type { CmsInvalidStore, CmsStoreOption } from '@/lib/cms/server/catalog'
+import { CMS_BASIS_LABEL, type CmsQuantityBasis } from '@/lib/cms/unitBasis'
 
 // CMS P1-c — bước "Thông tin" A2 (tạo) và màn sửa /[id]/edit (U3 / U17; SPEC §4.7). Không có ô target danh mục (đọc
 // từ Excel). is_test / trạng thái KHÔNG gửi từ client (server quyết — H9). Server action + RPC 121 kiểm lại mọi thứ;
@@ -20,6 +21,8 @@ import type { CmsInvalidStore, CmsStoreOption } from '@/lib/cms/server/catalog'
 // "Bỏ chọn" tường minh — không tự loại, không buộc chuyển "Tất cả"; còn mục không hợp lệ ⇒ chặn lưu kèm hướng dẫn.
 // `data-cms-pending-payload`: đúng dữ liệu sắp gửi (dữ liệu của chính người dùng) — để test fixture kiểm payload khi
 // boundary chặn action.
+// CMS-UNIT (spec PM 09/11 §4): cơ sở tính do SERVER quyết (tạo: cờ CMS_UNIT_BASIS_ENABLED; sửa: giữ nguyên) — page truyền xuống để form
+// ghi rõ khi là cms_unit và gửi kèm `quantity_basis` làm KHẲNG ĐỊNH (server so lại, lệch ⇒ từ chối). pos_base ⇒ form / payload y như cũ.
 
 export interface CmsProgramFormInitial {
   id: string
@@ -38,8 +41,10 @@ const INVALID_REASON: Record<CmsInvalidStore['reason'], string> = {
   inactive: 'đã ngừng hoạt động', not_os: 'không phải nhà thuốc OS', unknown: 'không còn trong danh sách',
 }
 
-export function CmsProgramForm({ mode, initial, stores, storesError, invalidStores = [], today }: {
+export function CmsProgramForm({ mode, initial, stores, storesError, invalidStores = [], today, quantityBasis = 'pos_base' }: {
   mode: 'create' | 'edit'
+  /** Cơ sở tính server đã quyết (tạo) / hiện tại (sửa). */
+  quantityBasis?: CmsQuantityBasis
   initial?: CmsProgramFormInitial
   stores: CmsStoreOption[]
   storesError: boolean
@@ -79,10 +84,12 @@ export function CmsProgramForm({ mode, initial, stores, storesError, invalidStor
       setError('Chương trình đã kích hoạt chỉ được dời ngày bắt đầu sang một ngày sau hôm nay')
       return
     }
-    setPendingPayload(JSON.stringify(v.value))
+    // cms_unit: gửi kèm khẳng định cơ sở đã hiển thị (server kiểm lại; pos_base giữ payload cũ).
+    const payload = quantityBasis === 'cms_unit' ? { ...v.value, quantity_basis: quantityBasis } : v.value
+    setPendingPayload(JSON.stringify(payload))
     if (fixtureBlocked()) return
     startTransition(async () => {
-      const r = mode === 'create' ? await createCmsProgram(v.value) : await updateCmsProgram(initial!.id, v.value)
+      const r = mode === 'create' ? await createCmsProgram(payload) : await updateCmsProgram(initial!.id, payload)
       if (!r.ok) { setError(r.error); return }
       toast.success(mode === 'create' ? 'Đã lưu nháp chương trình' : 'Đã lưu thay đổi')
       router.push(next === 'upload' ? `/targets/campaigns/cms/${r.id}/import?from=new` : `/targets/campaigns/cms/${r.id}`)
@@ -174,6 +181,12 @@ export function CmsProgramForm({ mode, initial, stores, storesError, invalidStor
       </fieldset>
 
       <p className="text-[13px] text-muted-foreground">Cách tính bậc: <span className="font-medium text-foreground">Lũy tiến</span> · target danh mục đọc từ file Excel.</p>
+      {quantityBasis === 'cms_unit' && (
+        <Notice tone="info" role="status">
+          <span data-cms-form-basis="cms_unit" className="block">Cách tính số lượng: <b>{CMS_BASIS_LABEL.cms_unit}</b> — chỉ tính đơn bán đúng ĐV tính CMS khai trong file (vd. hộp); đơn bán theo đơn vị khác (viên, vỉ…) không quy đổi thành đơn vị CMS. GMV target vẫn gồm mọi đơn vị.</span>
+          {mode === 'edit' && <span className="mt-1 block text-[12px]">Không đổi cách tính qua form.</span>}
+        </Notice>
+      )}
 
       {error && <Notice tone="danger" role="alert">{error}</Notice>}
 

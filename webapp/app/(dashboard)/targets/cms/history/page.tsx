@@ -6,7 +6,7 @@ import { cmsLoadHistoryPrograms, cmsLoadProgramProducts, cmsLoadResults } from '
 import { cmsLoadResultLines } from '@/lib/cms/server/results'
 import { CMS_Q206_RETURNS_CONTRACT } from '@/lib/cms/releaseGate'
 import { cmsTodayVn } from '@/lib/cms/programStatus'
-import { cmsParseHistoryParams, type CmsResultsLoad } from '@/lib/cms/resultUi'
+import { cmsParseHistoryParams, type CmsResultsLoad, cmsLinesMatchRun } from '@/lib/cms/resultUi'
 import { ErrorState } from '@/components/ds/ErrorState'
 import { CmsStaffHistoryView, type CmsHistoryLines } from '@/components/cms/staff/CmsStaffHistoryView'
 
@@ -56,7 +56,8 @@ export default async function CmsStaffHistoryPage({ searchParams }: { searchPara
         programId: selected.id, runId: run.id, programProductId: productId, userId: manager ? null : user.id,
         afterSeq: params.after, limit: params.n,
       })
-      lines = r.ok && r.data.runId === run.id ? { kind: 'ok', rows: r.data.rows, nextAfterSeq: r.data.nextAfterSeq }
+      // CMS-UNIT: trang dòng phải cùng run VÀ cùng cơ sở / phiên bản của run (lệch ⇒ lỗi, không trình bày theo luật khác).
+      lines = r.ok && cmsLinesMatchRun(r.data, run) ? { kind: 'ok', rows: r.data.rows, nextAfterSeq: r.data.nextAfterSeq }
         : !r.ok && r.error === 'RUN_GONE' ? { kind: 'stale' } : { kind: 'error' }
     }
   }

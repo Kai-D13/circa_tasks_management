@@ -5,6 +5,7 @@ import type { CmsProgramDbStatus } from '@/lib/cms/programStatus'
 import type { CmsProductView, CmsProgramRowView, CmsResult, CmsTierView } from '@/lib/cms/server/catalog'
 import { cmsPickStaffProgram } from '@/lib/cms/staffView'
 import { CmsQueryError, cmsQueryFailLine } from '@/lib/cms/queryLog'
+import { cmsProgramBasisOf, cmsSelectWithBasis } from '@/lib/cms/programBasisCol'
 
 // CMS P1-d — đọc danh mục cho staff / QLCH (D1 `/targets?tab=cms`, D2 `/targets/cms/products/[id]`) bằng SESSION client:
 // RLS 120 đã giới hạn chương trình active / locked có nhà thuốc hiện tại của người xem (store OS đang hoạt động; QA chỉ
@@ -36,11 +37,14 @@ const fail = (e: unknown): { ok: false; error: string } => {
 type ProgramDb = {
   id: string; name: string; status: CmsProgramDbStatus; start_date: string; end_date: string; scope: 'all' | 'stores'
   is_test: boolean; catalog_target_gmv: string | null; config_version: number; activated_at: string | null; created_at: string
+  /** CMS-UNIT (128): thiếu trên DB cũ ⇒ pos_base (cmsProgramBasisOf). */
+  quantity_basis?: string
 }
 const PROGRAM_COLS = 'id, name, status, start_date, end_date, scope, is_test, catalog_target_gmv::text, config_version, activated_at, created_at'
 const toProgram = (p: ProgramDb): CmsProgramRowView => ({
   id: p.id, name: p.name, status: p.status, startDate: p.start_date, endDate: p.end_date, scope: p.scope, isTest: p.is_test,
   catalogTargetGmv: p.catalog_target_gmv, configVersion: p.config_version, activatedAt: p.activated_at, createdAt: p.created_at,
+  quantityBasis: cmsProgramBasisOf(p.quantity_basis),
 })
 type ProductDb = {
   id: string; program_id: string; product_id: string; gmv_basis: CmsGmvBasis; target_gmv: string | null; unit_cms: string
@@ -75,8 +79,8 @@ export interface CmsStaffCatalog {
 export async function cmsLoadStaffCatalog(o: { today: string; programId: string | null }): Promise<CmsResult<CmsStaffCatalog>> {
   try {
     const supabase = await createClient()
-    const programs = (await readAll<ProgramDb>((a, b) => supabase.from('cms_programs').select(PROGRAM_COLS)
-      .in('status', [...CMS_STAFF_PROGRAM_STATUSES]).order('start_date').order('id').range(a, b))).map(toProgram)
+    const programs = (await readAll<ProgramDb>((a, b) => cmsSelectWithBasis((x) => supabase.from('cms_programs').select(PROGRAM_COLS + x)
+      .in('status', [...CMS_STAFF_PROGRAM_STATUSES]).order('start_date').order('id').range(a, b)))).map(toProgram)
     const selected = cmsPickStaffProgram(programs, o.today, o.programId)
     if (!selected) return { ok: true, data: { programs, selected: null, products: [] } }
     const [products, tiers] = await Promise.all([
@@ -104,8 +108,8 @@ export async function cmsLoadStaffProduct(programProductId: string): Promise<Cms
     if (!pp) return { ok: true, data: null }
     const prod = pp as unknown as ProductDb
     // Lọc trạng thái ngay ở truy vấn (phòng thủ chiều sâu, cùng điều kiện D1) + kiểm lại ở app bên dưới.
-    const { data: prog, error: pErr } = await supabase.from('cms_programs').select(PROGRAM_COLS).eq('id', prod.program_id)
-      .in('status', [...CMS_STAFF_PROGRAM_STATUSES]).maybeSingle()
+    const { data: prog, error: pErr } = await cmsSelectWithBasis((x) => supabase.from('cms_programs').select(PROGRAM_COLS + x).eq('id', prod.program_id)
+      .in('status', [...CMS_STAFF_PROGRAM_STATUSES]).maybeSingle())
     if (pErr) throw new CmsQueryError(pErr.code)
     const program = prog ? toProgram(prog as unknown as ProgramDb) : null
     if (!program || !(CMS_STAFF_PROGRAM_STATUSES as readonly string[]).includes(program.status)) return { ok: true, data: null }

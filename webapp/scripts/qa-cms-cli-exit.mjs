@@ -225,8 +225,8 @@ async function main() {
   for (const [args, why] of [
     [['v8', `--user=${SUPER}`, '--role=super', '--phase=127', `--expect-host=${HOST}`], 'V8 --phase lạ'],
     [['v8', `--user=${SUPER}`, '--role=super', '--require-proven=results', `--expect-host=${HOST}`], 'V8 --require-proven=results khi không khai --phase=122'],
-    // post: 127 (S0 T11) nay hợp lệ ⇒ phase lạ của post = 128; V8 không thêm 127 ⇒ V8 --phase=127 vẫn là phase lạ.
-    [['post', '--phase=128', `--pre=${pre122}`, `--expect-host=${HOST}`], 'post --phase lạ'],
+    // post: 127 (S0 T11) và 128 (CMS-UNIT) nay hợp lệ ⇒ phase lạ của post = 129; V8 không thêm 127 / 128 ⇒ V8 --phase=127 vẫn là phase lạ.
+    [['post', '--phase=129', `--pre=${pre122}`, `--expect-host=${HOST}`], 'post --phase lạ'],
   ]) {
     r = await run('cms-verify.mjs', args)
     exp(r, 2, `${why} ⇒ sai tham số trước IO`, r.reqs === 0)

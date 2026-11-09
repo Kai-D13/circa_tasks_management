@@ -7,9 +7,13 @@
 //                                                                                     # đọc nguồn + engine, KHÔNG ghi DB
 //   node scripts/cms-sales-sync.mjs --program=<uuid> --confirm --expect-host=<host>   # GHI: open → stage → seal → publish
 //   node scripts/cms-sales-sync.mjs --self-check                                      # chỉ kiểm nạp module (không mạng / DB)
+//   node scripts/cms-sales-sync.mjs --program=<uuid> --basis-override=cms_unit        # CMS-UNIT: DRY-RUN tính thử theo cơ sở khác
+//                                                                                     # (chỉ đọc — kết hợp --confirm bị từ chối)
 //
 // Cổng kết quả theo hằng lib/cms/releaseGate.ts (SALES_ONLY_V1 từ 126: chương trình thật được công bố CMS tạm tính; dòng âm /
 // điều chỉnh ⇒ held RETURNS_NOT_SUPPORTED_THIS_PHASE) — script không có tham số vượt / đổi cổng.
+// CMS-UNIT: cơ sở tính lấy từ run (DB ghi lúc open); chương trình cms_unit chỉ GHI khi CMS_UNIT_BASIS_ENABLED=true (OFF ⇒ held
+//   UNIT_BASIS_DISABLED). --basis-override chỉ cho dry-run (không bao giờ ghi run theo cơ sở không phải của chương trình).
 // Env (process env > webapp/.env.local; CMS_SALES_ENV_FILE=none để không đọc file):
 //   CMS_BQ_SALES_TABLE (bắt buộc), BQ_SERVICE_ACCOUNT_KEY, NEXT_PUBLIC_SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY.
 // Thoát: 0 published / dry-run sạch · 1 held / busy / skipped / lỗi / CLOSE_FAILED · 2 sai tham số / thiếu cấu hình.
@@ -27,10 +31,19 @@ async function main(args) {
   const has = (f) => args.includes(f)
   const val = (f) => args.find((a) => a.startsWith(`${f}=`))?.slice(f.length + 1)
   const known = new Set(['--confirm', '--self-check', '--help'])
-  const bad = args.filter((a) => !known.has(a) && !a.startsWith('--expect-host=') && !a.startsWith('--program='))
+  const bad = args.filter((a) => !known.has(a) && !a.startsWith('--expect-host=') && !a.startsWith('--program=') && !a.startsWith('--basis-override='))
   if (has('--help') || bad.length) {
-    console.log('dùng: node scripts/cms-sales-sync.mjs --program=<uuid> [--confirm --expect-host=<host>] | --self-check')
+    console.log('dùng: node scripts/cms-sales-sync.mjs --program=<uuid> [--confirm --expect-host=<host> | --basis-override=<pos_base|cms_unit>] | --self-check')
     return bad.length ? 2 : 0
+  }
+  const basisOverride = val('--basis-override')
+  if (basisOverride !== undefined && basisOverride !== 'pos_base' && basisOverride !== 'cms_unit') {
+    console.log('LỖI: --basis-override chỉ nhận pos_base | cms_unit')
+    return 2
+  }
+  if (basisOverride !== undefined && has('--confirm')) {
+    console.log('LỖI: --basis-override chỉ dùng cho DRY-RUN (không kết hợp --confirm)')
+    return 2
   }
 
   if (process.env.CMS_SALES_ENV_FILE !== 'none') {
@@ -87,17 +100,22 @@ async function main(args) {
     return 2
   }
 
-  console.log(`CMS đồng bộ bán · chế độ ${confirm ? 'GHI (--confirm)' : 'DRY-RUN (không ghi)'} · đích ${proto}//${host} · view ${table} · chương trình ${programId}`)
+  console.log(`CMS đồng bộ bán · chế độ ${confirm ? 'GHI (--confirm)' : 'DRY-RUN (không ghi)'} · đích ${proto}//${host} · view ${table} · chương trình ${programId}${basisOverride ? ` · cơ sở thử ${basisOverride}` : ''}`)
   const { runCmsSalesSync, cmsSalesExitCode } = await jiti.import(path.join(ROOT, 'lib/cms/salesSync.ts'))
   const { cmsSalesSyncDeps } = await jiti.import(path.join(ROOT, 'lib/cms/server/salesSyncDeps.ts'))
   // Capture lớp nguồn (124) theo cờ CMS_SOURCE_CAPTURE_ENABLED (lib/cms/flags.ts) — lõi vẫn đòi run_open trả source_schema = 1.
-  const { cmsSourceCaptureFromEnv } = await jiti.import(path.join(ROOT, 'lib/cms/flags.ts'))
-  const r = await runCmsSalesSync(cmsSalesSyncDeps(process.env), programId, { dryRun: !confirm, source: 'operator', sourceCapture: cmsSourceCaptureFromEnv(process.env) })
+  const { cmsSourceCaptureFromEnv, cmsUnitBasisFromEnv } = await jiti.import(path.join(ROOT, 'lib/cms/flags.ts'))
+  const r = await runCmsSalesSync(cmsSalesSyncDeps(process.env), programId, {
+    dryRun: !confirm, source: 'operator', sourceCapture: cmsSourceCaptureFromEnv(process.env),
+    unitBasisEnabled: cmsUnitBasisFromEnv(process.env), ...(basisOverride ? { basisOverride } : {}),
+  })
   console.log(JSON.stringify({
     status: r.status, code: r.code, reasons: r.reasons, runId: r.runId, isTest: r.isTest, rowsRead: r.rowsRead,
     rowsRejected: r.rowsRejected, candidates: r.candidates, included: r.included, unassigned: r.unassigned,
     outOfScope: r.outOfScope, amountVnd: r.amountVnd, stagedRows: r.stagedRows, sourceRows: r.sourceRows, bytesProcessed: r.bytesProcessed,
     resultHash: r.resultHash, elapsedMs: r.elapsedMs, cause: r.cause, cleanup: r.cleanup,
+    quantityBasis: r.quantityBasis ?? null, calculationPolicyVersion: r.calculationPolicyVersion ?? null,
+    ...(r.unitInvalid ? { unitInvalid: r.unitInvalid } : {}),
     // S2: chẩn đoán dòng nguồn bị loại (ProductID × đơn vị × mã; không email / mã đơn) — chỉ khi held do dòng lỗi.
     ...(r.unitIssues ? { unitIssues: r.unitIssues } : {}),
   }))

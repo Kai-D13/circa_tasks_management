@@ -70,7 +70,7 @@ export function CmsA3ProductTable({ products, amountLabel, staffTabHref }: {
   const [open, setOpen] = useState<Set<string>>(() => new Set())
   const toggle = (id: string) => setOpen((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
   const head = results
-    ? ['Sản phẩm', 'Điều kiện', 'SL bán', 'GMV', 'Đạt/có bán', 'Phân bố lượng', amountLabel, '']
+    ? ['Sản phẩm', 'Điều kiện', products.some((p) => p.results?.quantityBasis === 'cms_unit') ? 'SL đúng ĐV' : 'SL bán', 'GMV', 'Đạt/có bán', 'Phân bố lượng', amountLabel, '']
     : ['Sản phẩm', 'Điều kiện', 'Thang CMS', 'Quy cách', '']
   return (
     // P2 PM 04/11: bề mặt bảng theo DS (DataTableShell — panel, viền, bo góc); bên trong là bảng ARIA grid (ngoại lệ có ghi ở
@@ -145,8 +145,8 @@ function ProductRows({ p, results, open, onToggle, amountLabel, staffTabHref }: 
           <span role="cell" className="order-1 col-span-4 @max-[340px]:col-span-6 @min-[984px]:order-none @min-[984px]:col-span-1">{product}</span>
           <span role="cell" className="order-3 col-span-6 @min-[984px]:order-none @min-[984px]:col-span-1">{condition}</span>
           <span role="cell" data-cms-sold className="order-4 col-span-2 @min-[984px]:order-none @min-[984px]:col-span-1 @min-[984px]:text-right">
-            <span className={cn(LBL, 'block @min-[984px]:hidden')}>SL bán</span>
-            {r ? <><span className="block font-semibold tabular-nums">{r.soldText} {p.unit}</span>{r.countedText && <span className="block text-[12px] text-muted-foreground tabular-nums">{r.countedText}</span>}</> : <span className="text-muted-foreground">—</span>}
+            <span className={cn(LBL, 'block @min-[984px]:hidden')}>{r?.quantityBasis === 'cms_unit' ? 'SL đúng ĐV' : 'SL bán'}</span>
+            {r ? <><span className="block font-semibold tabular-nums" data-cms-sold-basis={r.quantityBasis}>{r.soldText} {p.unit}</span>{r.countedText && <span className="block text-[12px] text-muted-foreground tabular-nums">{r.countedText}</span>}</> : <span className="text-muted-foreground">—</span>}
           </span>
           <span role="cell" className="order-5 col-span-2 @min-[984px]:order-none @min-[984px]:col-span-1 @min-[984px]:text-right">
             <span className={cn(LBL, 'block @min-[984px]:hidden')}>GMV</span>
@@ -213,7 +213,7 @@ function Expansion({ p, staffTabHref, amountLabel }: { p: CmsA3ProductVM; staffT
         <TierChips p={p} />
         {p.capText && <span data-cms-cap className="rounded-[6px] border border-dashed px-2 py-1 text-foreground">{p.capText}</span>}
         {p.targetText && <span className="tabular-nums">Target {p.targetText}</span>}
-        <span>Quy đổi: {p.perUnitText}</span>
+        <span data-cms-qty-rule={p.quantityBasis}>{p.quantityBasis === 'cms_unit' ? '' : 'Quy đổi: '}{p.perUnitText}</span>
         {p.priceText && <span className="tabular-nums">Giá tham khảo {p.priceText}</span>}
         {p.addedAfterStart && <span data-cms-added>Bổ sung giữa kỳ · tính từ ngày bắt đầu chương trình</span>}
         <button type="button" aria-expanded={advice} aria-controls={advice ? adviceId : undefined} onClick={() => setAdvice((v) => !v)} data-cms-advice-toggle
@@ -231,7 +231,7 @@ function Expansion({ p, staffTabHref, amountLabel }: { p: CmsA3ProductVM; staffT
           <div role="table" aria-label={`Dược sĩ bán ${p.name}`}>
             <div role="rowgroup" className="hidden bg-muted text-[12px] font-medium text-muted-foreground @min-[820px]:block">
               <div role="row" className="grid grid-cols-[minmax(170px,1.8fr)_84px_minmax(190px,2fr)_minmax(150px,1.2fr)_120px] gap-x-3 px-3 py-2">
-                <span role="columnheader">Dược sĩ · nhà thuốc</span><span role="columnheader" className="text-right">SL ({p.unit})</span>
+                <span role="columnheader">Dược sĩ · nhà thuốc</span><span role="columnheader" className="text-right">{r.quantityBasis === 'cms_unit' ? `SL đúng ĐV (${p.unit})` : `SL (${p.unit})`}</span>
                 <span role="columnheader">GMV / điều kiện</span><span role="columnheader">Trạng thái</span><span role="columnheader" className="text-right">{amountLabel}</span>
               </div>
             </div>
@@ -265,8 +265,9 @@ function Expansion({ p, staffTabHref, amountLabel }: { p: CmsA3ProductVM; staffT
       {r && r.staff.length > 0 && (
         <div data-cms-qty-reasons className="space-y-1 text-[12px] text-muted-foreground">
           {r.reasons === null ? <p>Chưa đủ dữ liệu giải thích phần không tính CMS — số tiền vẫn theo snapshot.</p>
-            : r.reasons.length === 0 ? <p>Toàn bộ lượng bán đủ đơn vị đã được tính CMS.</p>
+            : r.reasons.length === 0 ? <p>{r.quantityBasis === 'cms_unit' ? `Toàn bộ số ${p.unit} bán đúng ĐV đã được tính CMS.` : 'Toàn bộ lượng bán đủ đơn vị đã được tính CMS.'}</p>
               : <p><span className="inline-block h-[10px] w-[14px] rounded-[3px] bg-muted align-middle" style={STRIPES} aria-hidden="true" /> Không tính CMS: {r.reasons.join(' · ')}.</p>}
+          {r.ruleNote && <p data-cms-unit-rule>{r.ruleNote} — đơn bán đơn vị khác không tính CMS (vẫn cộng GMV target).</p>}
           {staffTabHref && <p><a href={staffTabHref} className="inline-flex min-h-[44px] items-center font-medium text-foreground underline underline-offset-2 @min-[760px]:min-h-0">Xem tất cả dược sĩ ở tab Theo dược sĩ</a></p>}
         </div>
       )}

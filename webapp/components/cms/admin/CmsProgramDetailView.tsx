@@ -19,7 +19,8 @@ import {
   CMS_STATUS_LABEL, CMS_STATUS_TONE, cmsDaysLeft, cmsDisplayStatus, cmsProgramActions,
 } from '@/lib/cms/programStatus'
 import type { CmsProgramDetail } from '@/lib/cms/server/catalog'
-import { cmsA3Stats, cmsUnassignedSummary, type CmsResultsLoad } from '@/lib/cms/resultUi'
+import { CMS_UNIT_RULE_NOTE, cmsA3Stats, cmsUnassignedSummary, type CmsResultsLoad } from '@/lib/cms/resultUi'
+import { CMS_BASIS_LABEL } from '@/lib/cms/unitBasis'
 import { cmsA3ProductVM } from '@/lib/cms/productPresentation'
 import { cmsNavHref, type CmsNav } from '@/lib/cms/fixtureNav'
 import type { CmsResultRowDto } from '@/lib/cms/resultView'
@@ -80,9 +81,11 @@ export function CmsProgramDetailView({ detail, today, canManage, view, results =
   const showRuns = active === 'runs'
   const exportHref = run ? `/api/export/cms?program=${encodeURIComponent(p.id)}&run=${encodeURIComponent(run.id)}` : null
   const amountLabel = display === 'locked' ? 'CMS đã chốt' : 'CMS tạm tính'
+  // CMS-UNIT: số theo cơ sở của RUN; dòng quy đổi / câu luật theo cơ sở HIỆN TẠI của chương trình (cấu hình).
+  const runBasis = run ? run.basis.basis : null
   const products = detail.products.map((x) => cmsA3ProductVM(x, {
-    catalogTargetGmv: p.catalogTargetGmv, priceText: cmsPrice,
-    results: run && loaded ? { rows: rowsByPp.get(x.id) ?? [], catalog: loaded.rows.catalog, users: loaded.rows.users, storeNames } : null,
+    catalogTargetGmv: p.catalogTargetGmv, priceText: cmsPrice, programBasis: p.quantityBasis,
+    results: run && loaded ? { rows: rowsByPp.get(x.id) ?? [], catalog: loaded.rows.catalog, users: loaded.rows.users, storeNames, basis: runBasis ?? undefined } : null,
   }))
   const showActions = canManage && (actions.edit || actions.importMode || actions.activate)
 
@@ -106,6 +109,7 @@ export function CmsProgramDetailView({ detail, today, canManage, view, results =
             {' · '}{scopeText}
             {' · '}{detail.products.length} sản phẩm
             {hasCatalog && <> · target nhóm danh mục {cmsVnd(p.catalogTargetGmv)} / dược sĩ</>}
+            {p.quantityBasis === 'cms_unit' && <span data-cms-program-basis="cms_unit"> · {CMS_BASIS_LABEL.cms_unit} ({CMS_UNIT_RULE_NOTE})</span>}
           </p>
           {p.scope === 'stores' && detail.storeNames && detail.storeNames.length > 0 && (
             <p data-cms-store-names className="text-[13px] text-muted-foreground line-clamp-2 break-words">Phạm vi: {detail.storeNames.join(', ')}</p>
@@ -140,7 +144,7 @@ export function CmsProgramDetailView({ detail, today, canManage, view, results =
       {payout && <CmsPayoutPanel programId={p.id} payout={payout.data} error={payout.error} />}
       {lock && <CmsLockPanel programId={p.id} preview={lock.preview} loadError={lock.error} qaReadonly={lock.qaReadonly === true} />}
       {loaded && <CmsA3SyncLine header={loaded.header} isSuper={canManage} display={display} />}
-      {loaded && <CmsA3StatCards stats={stats} display={display} />}
+      {loaded && <CmsA3StatCards stats={stats} display={display} basis={runBasis ?? undefined} />}
       {run && loaded && hasCatalog && loaded.rows.catalog.length > 0 && <CmsA3CatalogBlock catalog={loaded.rows.catalog} target={p.catalogTargetGmv} />}
       {(results.kind === 'error' || results.kind === 'gone') && (
         <div data-cms-results-error>

@@ -77,3 +77,17 @@ export function isCmsImportV2Enabled(): boolean {
 export function isCmsQaServer(): boolean {
   return cmsQaServerFromEnv(process.env)
 }
+
+/**
+ * CMS-UNIT (PM spec 09/11 §4): writer cơ sở tính `cms_unit` (chỉ đếm dòng bán đúng ĐV tính CMS). Mặc định OFF, chỉ đúng chuỗi
+ * 'true' mới bật; chỉ có hiệu lực khi CMS_PROGRAM_ENABLED bật. Cờ KHÔNG tự chuyển cơ sở chương trình cũ. OFF + chương trình cms_unit ⇒
+ * lượt tính HOLD UNIT_BASIS_DISABLED: run mở ra bị đóng `held` ngay sau snapshot (không stage / seal / công bố, pointer giữ nguyên,
+ * không lùi về luật cũ — super thấy mã ở lịch sử lượt tính); reader vẫn đọc run theo cơ sở của chính run.
+ */
+export function cmsUnitBasisFromEnv(env: Env): boolean {
+  return cmsFlagsFromEnv(env).program && env.CMS_UNIT_BASIS_ENABLED === 'true'
+}
+
+export function isCmsUnitBasisEnabled(): boolean {
+  return cmsUnitBasisFromEnv(process.env)
+}

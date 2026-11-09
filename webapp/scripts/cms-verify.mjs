@@ -13,12 +13,16 @@
 // mọi SP 1 bậc mở, bảng mức = md5 marker) + v127-resync (pointer NULL ⇒ CHƯA; `--require-proven=resync` ép đã tính lại) + v127-t11-pm
 // (chương trình / bảng mức đúng quyết định PM). PRE = acl-snapshot NGAY TRƯỚC 127 (68 hàm cms). Checker 126 trên DB 127 ⇒ LỆCH
 // phase-match. V8: 127 không đổi quyền đọc ⇒ dùng v8 --phase=126 (V8 nhận DB 127 là 126).
+// phase 128 (CMS-UNIT capability, PM 09/11): 6 helper mới chỉ owner (CMS_FN_MATRIX phase 128), 15 thân thay (CMS_FN_SRC_128), shape /
+// cột cms_programs + cms_sync_runs, +2 trigger ALWAYS, ACL POST so mọi hàm có trước 128 (n_ex128) với PRE 128 (68 hàm cms) + V-128
+// (legacy chỉ trước marker, snapshot run v1 đúng version / khoá đơn vị, pointer cùng cơ sở; `--require-proven=unit` ép đã có run
+// cms_unit công bố). Checker 127 trên DB 128 ⇒ LỆCH phase-match. V8: 128 không đổi quyền đọc / RPC authenticated ⇒ v8 --phase=126.
 // Mỗi lệnh = MỘT transaction `BEGIN; SET TRANSACTION READ ONLY; …; ROLLBACK;` qua pg-meta với câu lệnh CỐ ĐỊNH ở
 // e2e/cmsQaTooling.ts (không nhận SQL tự do, không nới ops-ro). V8 mô phỏng phiên authenticated (SET LOCAL ROLE + claim
 // không ký — không đọc secret), so với oracle tính độc lập theo VAI KHAI BÁO; không thay smoke đăng nhập thật (D3 / E3).
 //
 //   node scripts/cms-verify.mjs acl-snapshot --expect-host=<host> --out=<pre.json>      # PRE: chụp NGAY TRƯỚC migration
-//   node scripts/cms-verify.mjs post --phase=120|121|122|123|124|125|126|127 --pre=<pre.json> --expect-host=<host> [--require-proven=v5,lock-preview (123+) | …,attest (124+) | …,uncapped (125+) | …,basis (126) | …,resync (127)] [--out=<file.json>]
+//   node scripts/cms-verify.mjs post --phase=120|121|122|123|124|125|126|127|128 --pre=<pre.json> --expect-host=<host> [--require-proven=v5,lock-preview (123+) | …,attest (124+) | …,uncapped (125+) | …,basis (126) | …,resync (127) | …,unit (128)] [--out=<file.json>]
 //   node scripts/cms-verify.mjs v8 --user=<uuid> --role=super|admin|sm|staff|qlch [--phase=120|121|122|123|124|125|126] --expect-host=<host> [--expect-qa=true|false] [--expect-readable=N] [--require-proven=programs,products,…,results] [--out=…]
 //   node scripts/cms-verify.mjs print-sql --what=acl|v8 [--user=<uuid> --role=… --phase=121|122|123|124|125|126]   # khối cố định cho Studio (V8: REPEATABLE READ)
 //   … post --phase=123|122 --profile=after-rollback-124 --pre=<PRE của phase nền, chụp TRƯỚC khi áp phase đó>   # sau rollback 124:
@@ -40,7 +44,7 @@ async function main() {
     values: ['--expect-host', '--out', '--phase', '--pre', '--user', '--role', '--expect-qa', '--expect-readable', '--require-proven', '--what', '--profile'],
   })
   if (!['acl-snapshot', 'post', 'v8', 'print-sql'].includes(a.cmd) || a.bad.length) {
-    console.log('dùng: node scripts/cms-verify.mjs <acl-snapshot | post --phase=120|121|122|123|124|125|126|127 --pre=FILE [--require-proven=v5,lock-preview] [--profile=after-rollback-124 (chỉ --phase=123|122)] | v8 --user=UUID --role=… [--phase=121|122|123|124|125|126] | print-sql --what=acl|v8> --expect-host=<host>')
+    console.log('dùng: node scripts/cms-verify.mjs <acl-snapshot | post --phase=120|121|122|123|124|125|126|127|128 --pre=FILE [--require-proven=v5,lock-preview] [--profile=after-rollback-124 (chỉ --phase=123|122)] | v8 --user=UUID --role=… [--phase=121|122|123|124|125|126] | print-sql --what=acl|v8> --expect-host=<host>')
     return 2
   }
   const { T } = await loadTooling()
@@ -182,6 +186,8 @@ async function main() {
       if (Number(phase) >= 126) input.p126 = { invRealBasis: (await ro(q.inv126RealBasis))[0] }
       // 127 (S0 T11): bất biến dữ liệu chương trình ghi trong marker 127 (một dòng tổng hợp; thiếu marker ⇒ đỏ).
       if (Number(phase) >= 127) input.p127 = { invFlat: (await ro(q.inv127Flat))[0] }
+      // 128 (CMS-UNIT): metadata tính của run + pointer cùng cơ sở (một dòng tổng hợp; thiếu marker ⇒ đỏ).
+      if (Number(phase) >= 128) input.p128 = { invBasis: (await ro(q.inv128Basis))[0] }
       if (expect.requireProven) input.requireProven = expect.requireProven
       if (profile !== undefined) {
         input.profile = profile

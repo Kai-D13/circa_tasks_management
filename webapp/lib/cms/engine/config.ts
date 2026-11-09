@@ -4,6 +4,8 @@
 // CmsEngineConfigError — không đoán, không cắt, không làm tròn, không thay bằng 0. Hàm thuần, không I/O.
 
 import { parseCmsDecimal } from '../decimal'
+import type { CmsQuantityBasis } from '../unitBasis'
+import { cmsUnitKey } from '../unitKey'
 import type { CmsGmvBasis } from '../import/validate'
 import { canonicalProductId } from '../productId'
 import { vnProgramWindowMicros } from '../time'
@@ -24,6 +26,9 @@ export type CmsEngineConfigErrorCode =
   /** CMS-Q-220 (thay Q-210a): bậc cuối hữu hạn = cấu hình CHƯA chuyển đổi sang chính sách không trần ⇒ không tính mới. */
   | 'FINITE_LAST_TIER'
   | 'BAD_STORE_ID'
+  /** CMS-UNIT: cơ sở tính lạ, hoặc chương trình cms_unit có SP thiếu / sai ĐV tính CMS (khoá đơn vị rỗng). */
+  | 'BAD_QUANTITY_BASIS'
+  | 'BAD_UNIT'
 
 export class CmsEngineConfigError extends Error {
   readonly code: CmsEngineConfigErrorCode
@@ -55,6 +60,8 @@ export interface CmsEngineProductInput {
   /** base_quantity_CMS — decimal > 0, tối đa 9 chữ số thập phân (Q-210b). */
   baseQuantityCms: string
   tiers: readonly CmsEngineTierInput[]
+  /** unit_CMS ("ĐV tính CMS (1 item)") — BẮT BUỘC khi chương trình cms_unit; pos_base chỉ mang theo để hiển thị. */
+  unitCms?: string | null
 }
 
 export interface CmsEngineProgramInput {
@@ -66,6 +73,8 @@ export interface CmsEngineProgramInput {
   /** Nhà thuốc tham gia (scope 'all' đã được ghi thành danh sách lúc kích hoạt — Q-209). */
   storeIds: readonly string[]
   products: readonly CmsEngineProductInput[]
+  /** CMS-UNIT (Q-221): cơ sở tính số lượng. Thiếu ⇒ 'pos_base' (luật cũ — mọi đường gọi trước CMS-UNIT giữ nguyên ngữ nghĩa). */
+  quantityBasis?: CmsQuantityBasis
 }
 
 export interface CmsEngineTier {
@@ -83,6 +92,10 @@ export interface CmsEngineProduct {
   tiers: readonly CmsEngineTier[]
   /** Luôn null từ CMS-Q-220 (bậc cuối không giới hạn). Giữ field để wire / DTO / reader lịch sử tương thích. */
   capQuantity: null
+  /** unit_CMS gốc (null khi đầu vào không mang — chỉ hợp lệ với pos_base). */
+  unitCms: string | null
+  /** cmsUnitKey(unitCms) — so khớp đơn vị của nhánh cms_unit (null với pos_base thiếu đơn vị). */
+  unitKey: string | null
 }
 
 export interface CmsEngineProgram {
@@ -90,6 +103,7 @@ export interface CmsEngineProgram {
   catalogTargetVnd: bigint | null
   storeIds: ReadonlySet<string>
   products: ReadonlyMap<string, CmsEngineProduct>
+  quantityBasis: CmsQuantityBasis
 }
 
 const DIGITS_RE = /^[0-9]+$/
@@ -142,6 +156,10 @@ function parseTiers(productId: string, tiers: readonly CmsEngineTierInput[]): Cm
  * theo `from`); bậc phải liên tục từ 1 — không tự sắp lại để không che lỗi cấu hình.
  */
 export function parseCmsEngineProgram(input: CmsEngineProgramInput): CmsEngineProgram {
+  const quantityBasis = input.quantityBasis ?? 'pos_base'
+  if (quantityBasis !== 'pos_base' && quantityBasis !== 'cms_unit') {
+    throw new CmsEngineConfigError('BAD_QUANTITY_BASIS', `cơ sở tính lạ: ${String(quantityBasis)}`)
+  }
   let window: CmsEngineProgram['window']
   try {
     window = vnProgramWindowMicros(input.startDate, input.endDate)
@@ -185,6 +203,12 @@ export function parseCmsEngineProgram(input: CmsEngineProgramInput): CmsEnginePr
     if (!k.ok) throw new CmsEngineConfigError('BAD_BASE_QUANTITY', `base_quantity_CMS lỗi ${k.error}`, pid.id)
     if (k.units <= ZERO) throw new CmsEngineConfigError('BAD_BASE_QUANTITY', 'base_quantity_CMS phải > 0', pid.id)
     const tiers = parseTiers(pid.id, p.tiers)
+    const unitCms = typeof p.unitCms === 'string' ? p.unitCms : null
+    const unitKey = cmsUnitKey(unitCms)
+    // cms_unit: ĐV tính CMS là MẪU SO KHỚP — thiếu / có ký tự điều khiển / chỉ khoảng trắng ⇒ không tính (không đoán, không lùi luật cũ).
+    if (quantityBasis === 'cms_unit' && unitKey === null) {
+      throw new CmsEngineConfigError('BAD_UNIT', 'chương trình cms_unit cần ĐV tính CMS hợp lệ cho mọi SP', pid.id)
+    }
     products.set(pid.id, {
       productId: pid.id,
       gmvBasis: p.gmvBasis,
@@ -192,8 +216,10 @@ export function parseCmsEngineProgram(input: CmsEngineProgramInput): CmsEnginePr
       perUnitUnits: k.units,
       tiers,
       capQuantity: null,
+      unitCms,
+      unitKey,
     })
   }
 
-  return { window, catalogTargetVnd, storeIds, products }
+  return { window, catalogTargetVnd, storeIds, products, quantityBasis }
 }

@@ -5,7 +5,7 @@
 // SQLSTATE (5 ký tự chữ hoa / số) hoặc mã PostgREST (PGRST + 3 số) — cùng whitelist với server/results.ts (cmsSafeErrorCode).
 const SAFE_SQLSTATE_RE = /^(?:[0-9A-Z]{5}|PGRST\d{3})$/
 /** Mã nội bộ cố định của lớp đọc (không lấy từ DB). */
-const INTERNAL = new Set(['TOO_MANY_ROWS'])
+const INTERNAL = new Set(['TOO_MANY_ROWS', 'BASIS_INVALID'])
 
 export function cmsSafeSqlstate(code: unknown): string {
   return typeof code === 'string' && (SAFE_SQLSTATE_RE.test(code) || INTERNAL.has(code)) ? code : 'UNKNOWN'

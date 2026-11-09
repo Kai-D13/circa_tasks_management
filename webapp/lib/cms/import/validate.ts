@@ -8,6 +8,8 @@
 import { cmsNumberToDecimalString, formatCmsDecimal, parseCmsDecimal } from '../decimal'
 import { cmsSafeImageUrl } from '../image'
 import { canonicalProductId } from '../productId'
+import type { CmsQuantityBasis } from '../unitBasis'
+import { CMS_UNIT_KEY_VERSION } from '../unitKey'
 import type { CmsCell, CmsImportColumn, CmsImportRawRow } from './parse'
 
 export const CMS_INT_MAX = BigInt(2147483647)
@@ -341,11 +343,15 @@ export function validateCmsImport(rows: readonly CmsImportRawRow[], ctx: CmsImpo
 
 /** Chuỗi chuẩn hoá payload sẽ ghi (để so preview ↔ commit). Không gồm cảnh báo / số dòng Excel / cận cuối gốc đã bỏ.
  *  Có định danh chính sách bậc (CMS_TIER_POLICY): preview lập trước CMS-Q-220 ⇒ digest khác ⇒ commit 409 PREVIEW_STALE.
- *  CMS đơn giản S1: file mức cố định gắn thêm `format: 'simple_v1'` (mẫu 9 cột giữ NGUYÊN chuỗi cũ ⇒ digest cũ không đổi). */
-export function canonicalCmsImport(v: Pick<CmsImportValidation, 'mode' | 'groupsOk' | 'catalogTarget'>, format: 'tiers' | 'simple' = 'tiers'): string {
+ *  CMS đơn giản S1: file mức cố định gắn thêm `format: 'simple_v1'` (mẫu 9 cột giữ NGUYÊN chuỗi cũ ⇒ digest cũ không đổi).
+ *  CMS-UNIT: chương trình cms_unit gắn thêm cơ sở + phiên bản khoá đơn vị (pos_base giữ NGUYÊN chuỗi cũ) ⇒ cơ sở / hợp đồng khoá đơn
+ *  vị đổi giữa preview và commit ⇒ digest khác ⇒ 409. */
+export function canonicalCmsImport(v: Pick<CmsImportValidation, 'mode' | 'groupsOk' | 'catalogTarget'>, format: 'tiers' | 'simple' = 'tiers',
+  basis: CmsQuantityBasis = 'pos_base'): string {
   return JSON.stringify({
     policy: CMS_TIER_POLICY,
     ...(format === 'simple' ? { format: 'simple_v1' } : {}),
+    ...(basis === 'cms_unit' ? { quantityBasis: 'cms_unit', unitKeyVersion: CMS_UNIT_KEY_VERSION } : {}),
     mode: v.mode,
     catalogTarget: v.catalogTarget,
     groups: v.groupsOk.map((g) => [g.productId, g.gmvBasis, g.targetGmv, g.unitCms, g.baseQuantityCms, g.adviceText,

@@ -10,7 +10,7 @@
 
 import { cronBearerMatches } from './cronProducts'
 import { cmsCanPublishResults } from './releaseGate'
-import { cmsSourceCaptureFromEnv } from './flags'
+import { cmsSourceCaptureFromEnv, cmsUnitBasisFromEnv } from './flags'
 import {
   CMS_RPC_TIMEOUT_MAX_MS, CMS_RPC_TIMEOUT_MIN_MS, CMS_SALES_MIN_PROGRAM_MS, runCmsSalesSync,
   type CmsIo, type CmsSalesSyncDeps, type CmsSalesSyncResult,
@@ -58,7 +58,8 @@ export async function runCmsSalesCron(
   // releaseOpen: CHỈ để test nhánh cổng kết quả đóng / mở; handler route không truyền ⇒ luôn theo hằng releaseGate
   // (CMS_RESULTS_RELEASE_MODE — SALES_ONLY_V1 từ 126; trạng thái trả hàng KHÔNG quyết định cron chạy hay không).
   // sourceCapture: mặc định theo cờ CMS_SOURCE_CAPTURE_ENABLED (migration 124); test truyền tường minh.
-  opts: { budgetMs?: number; releaseOpen?: boolean; sourceCapture?: boolean } = {},
+  // unitBasisEnabled: mặc định theo cờ CMS_UNIT_BASIS_ENABLED (CMS-UNIT, migration 128); test truyền tường minh.
+  opts: { budgetMs?: number; releaseOpen?: boolean; sourceCapture?: boolean; unitBasisEnabled?: boolean } = {},
 ): Promise<CmsSalesCronSummary> {
   const t0 = deps.now()
   const budget = opts.budgetMs ?? CMS_SALES_CRON_BUDGET_MS
@@ -74,6 +75,7 @@ export async function runCmsSalesCron(
   // điều chỉnh ⇒ lõi held RETURNS_NOT_SUPPORTED_THIS_PHASE (trả hàng phase sau).
   const releaseOpen = opts.releaseOpen ?? cmsCanPublishResults(false)
   const sourceCapture = opts.sourceCapture ?? cmsSourceCaptureFromEnv(process.env)
+  const unitBasisEnabled = opts.unitBasisEnabled ?? cmsUnitBasisFromEnv(process.env)
   for (const p of programs) {
     if (!releaseOpen) {
       results.push({ programId: p.id, status: 'skipped', code: 'RESULTS_RELEASE_GATE', rowsRead: null, candidates: null, unassigned: null, stagedRows: 0, elapsedMs: 0, ...NO_CLEANUP })
@@ -84,7 +86,7 @@ export async function runCmsSalesCron(
     let r: CmsSalesSyncResult
     const tp = deps.now()
     try {
-      r = await runCmsSalesSync(deps, p.id, { dryRun: false, source: 'cron', deadlineAt, sourceCapture })
+      r = await runCmsSalesSync(deps, p.id, { dryRun: false, source: 'cron', deadlineAt, sourceCapture, unitBasisEnabled })
     } catch {
       results.push({ programId: p.id, status: 'error', code: 'INTERNAL', rowsRead: null, candidates: null, unassigned: null, stagedRows: 0,
         elapsedMs: deps.now() - tp, ...NO_CLEANUP })

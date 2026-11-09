@@ -16,11 +16,13 @@ import {
   CMS_FN_DEF_123, CMS_COL_123, CMS_TABLE_SHAPE_123, CMS_TRIGGERS_123, CMS_FN_SRC_123, CMS_TABLES_FROZEN_123, CMS_V8_PHASES, CMS_V8_RPC_CALLABLE,
   CMS_FN_DEF_124, CMS_COL_124, CMS_TABLE_SHAPE_124, CMS_TRIGGERS_124, CMS_FN_SRC_124, CMS_FN_CFG_124,
   CMS_FN_DEF_125, CMS_COL_125, CMS_TABLE_SHAPE_125, CMS_TRIGGERS_125, CMS_FN_SRC_125, CMS_FN_SRC_126, CMS_127_T11_ID, CMS_127_PM_RATES_MD5,
+  CMS_FN_DEF_128, CMS_COL_128, CMS_TABLE_SHAPE_128, CMS_TRIGGERS_128, CMS_FN_SRC_128, CMS_128_UNIT_KEY_VERSION,
   evaluateCmsVerify,
   cmsVerifyAclSql, cmsVerifyV8Sql123, cmsV8ProvenKeys, cmsPostProvenKeys, CMS_VERIFY_SQL, CMS_PAYOUT_KEYS_TOP, CMS_PAYOUT_KEYS_TOP_SUPER, CMS_PAYOUT_KEYS_ROW,
   parseCmsQaTtlHours, parseCmsQaUserIds, pgMetaReadOnly, pgMetaReadOnlySnapshot, pgMetaWrite, toIsoUtc, type CmsQaProgramRow,
   type CmsQaStatusRow, type CmsV8Role,
 } from './cmsQaTooling'
+import { CMS_UNIT_KEY_VERSION } from '../lib/cms/unitKey'
 
 // CMS P1-R1 / P1-R2 (review PM runbook P1 02/11) — công cụ QA ghi prod + VERIFY chỉ đọc. Spec THUẦN + CLI âm (không
 // mạng: URL giả .invalid, mọi ca thoát 2 TRƯỚC IO) + QA PGlite (migration 120 / 121 thật, scripts/qa-cms-qa-tooling.mjs).
@@ -342,7 +344,8 @@ test.describe('CMS QA tooling · preflight, manifest, đóng run, id is_test @de
   })
 
   test('phase 127 (S0 T11 mức cố định / hộp): chỉ dữ liệu — kế thừa 126, marker + bất biến v127-flat / resync / t11-pm', () => {
-    expect(CMS_VERIFY_PHASES.at(-1)).toBe('127')
+    // 128 (CMS-UNIT) thêm sau — phần tử áp chót có chủ đích, không nới kiểm 127.
+    expect(CMS_VERIFY_PHASES.at(-2)).toBe('127')
     expect(CMS_PHASE_FUNCTIONS['127']).toEqual([])
     expect(Object.entries(CMS_FN_MATRIX).filter(([, m]) => m.phase === '127')).toEqual([])
     expect(cmsPostProvenKeys('127')).toEqual(['v5', 'lock-preview', 'attest', 'uncapped', 'basis', 'resync'])
@@ -382,6 +385,70 @@ test.describe('CMS QA tooling · preflight, manifest, đóng run, id is_test @de
     expect(ev({ ...base, rates_md5_marker: 'x', rates_md5_db: 'x' })['v127-t11-pm'].ok).toBe(false)
   })
 
+  test('phase 128 (CMS-UNIT capability): 6 helper chỉ owner + 15 thân thay + shape / cột 2 bảng + 2 trigger ALWAYS + V-128', () => {
+    expect(CMS_VERIFY_PHASES.at(-1)).toBe('128')
+    const m128 = Object.entries(CMS_FN_MATRIX).filter(([, m]) => m.phase === '128')
+    expect(m128.map(([n]) => n).sort()).toEqual(['cms__basis_policy', 'cms__calc_snapshot', 'cms__programs_basis_guard', 'cms__qty_dec',
+      'cms__runs_basis_guard', 'cms__unit_key'])
+    for (const [n, m] of m128) expect({ n, acl: m.acl, secdef: m.secdef, lock: m.lock, lock2: m.lock2, lock3: m.lock3, nestloop: m.nestloop })
+      .toEqual({ n, acl: null, secdef: true, lock: false, lock2: undefined, lock3: undefined, nestloop: undefined })
+    expect(Object.keys(CMS_FN_MATRIX)).toHaveLength(74)
+    // 15 thân thay: đúng danh sách migration 128 §4, khác mọi kỳ vọng phase trước, mọi hàm có từ trước 128.
+    expect(Object.keys(CMS_FN_SRC_128).sort()).toEqual(['cms__attest_eval', 'cms__config_fp', 'cms__lock_eval', 'cms__sales_snapshot',
+      'rpc_cms_program_save', 'rpc_cms_result_header', 'rpc_cms_result_lines', 'rpc_cms_result_rows', 'rpc_cms_run_source_export',
+      'rpc_cms_sales_run_finish', 'rpc_cms_sales_run_open', 'rpc_cms_sales_run_publish', 'rpc_cms_sales_run_seal_begin',
+      'rpc_cms_sales_run_seal_step', 'rpc_cms_source_attest'])
+    for (const [n, src] of Object.entries(CMS_FN_SRC_128)) {
+      expect(Number(CMS_FN_MATRIX[n].phase), n).toBeLessThan(128)
+      for (const prev of [CMS_FN_MATRIX[n].src, CMS_FN_SRC_123[n], CMS_FN_SRC_124[n], CMS_FN_SRC_125[n], CMS_FN_SRC_126[n]]) expect(src, n).not.toBe(prev)
+    }
+    expect(Object.keys(CMS_FN_DEF_128).sort()).toEqual(Object.keys(CMS_FN_MATRIX).sort())
+    expect(Object.keys(CMS_FN_DEF_128).filter((n) => CMS_FN_DEF_128[n] !== CMS_FN_DEF_125[n]).sort()).toEqual(m128.map(([n]) => n).sort())
+    expect(Object.keys(CMS_TABLE_SHAPE_128).filter((t) => JSON.stringify(CMS_TABLE_SHAPE_128[t]) !== JSON.stringify(CMS_TABLE_SHAPE_125[t])).sort())
+      .toEqual(['cms_programs', 'cms_sync_runs'])
+    for (const t of ['cms_programs', 'cms_sync_runs']) expect(CMS_TABLE_SHAPE_128[t].idx).toBe(CMS_TABLE_SHAPE_125[t].idx)
+    expect(Object.keys(CMS_COL_128).filter((t) => CMS_COL_128[t] !== CMS_COL_125[t]).sort()).toEqual(['cms_programs', 'cms_sync_runs'])
+    expect(CMS_TRIGGERS_128).toHaveLength(61)
+    expect(CMS_TRIGGERS_128.filter((t) => !CMS_TRIGGERS_125.includes(t))).toEqual([
+      'CREATE TRIGGER cms_programs_basis_guard BEFORE UPDATE OF quantity_basis ON cms_programs FOR EACH ROW EXECUTE FUNCTION cms__programs_basis_guard()|A',
+      'CREATE TRIGGER cms_sync_runs_basis_guard BEFORE INSERT OR UPDATE ON cms_sync_runs FOR EACH ROW EXECUTE FUNCTION cms__runs_basis_guard()|A'])
+    expect(cmsPostProvenKeys('128')).toEqual(['v5', 'lock-preview', 'attest', 'uncapped', 'basis', 'resync', 'unit'])
+    expect(CMS_V8_PHASES).not.toContain('128')
+    expect(CMS_VERIFY_SQL.markers).toContain("'128'")
+    expect(cmsVerifyAclSql()).toContain('n_ex128')
+    expect(CMS_128_UNIT_KEY_VERSION).toBe(CMS_UNIT_KEY_VERSION)
+    expect(CMS_VERIFY_SQL.inv128Basis).toContain(`'${CMS_UNIT_KEY_VERSION}'`)
+    // Bộ đánh giá V-128 (input tối thiểu) — chuỗi đầy đủ chạy ở scripts/qa-cms-128.mjs.
+    const base = { marker_at: '2026-11-10T10:00:00Z', runs_n: 3, v1_n: 1, legacy_after: 0, snap_bad: 0, ptr_basis_bad: 0, ptr_bad_ids: '',
+      unit_programs: 0, unit_published: 0 }
+    const ev = (b: Record<string, unknown>) => {
+      const cs = evaluateCmsVerify({ phase: '128', whoami: { u: 'x', bypass: true }, markers: [], maxNumeric: { max_v: 128 }, functions: [], policies: [],
+        triggers: [], tableShape: [], tables: [], roles: [], oneRunningIndex: [], aclPost: {}, aclPre: {}, inv121: { overlap: [], tiers: [], catalog: [] },
+        isolation: {}, p128: { invBasis: b } } as never)
+      return Object.fromEntries(cs.filter((c) => c.id.startsWith('v128-')).map((c) => [c.id, c]))
+    }
+    let c = ev(base)
+    expect(c['v128-run-basis'].ok && c['v128-pointer-basis'].ok && c['v128-unit-published'].ok).toBe(true)
+    expect(c['v128-run-basis'].proven).toBe(true)
+    expect(c['v128-unit-published'].proven).toBe(false)
+    expect(ev({ ...base, v1_n: 0 })['v128-run-basis'].proven).toBe(false)
+    expect(ev({ ...base, unit_programs: 1, unit_published: 2 })['v128-unit-published'].proven).toBe(true)
+    expect(ev({ ...base, legacy_after: 1 })['v128-run-basis'].ok).toBe(false)
+    expect(ev({ ...base, snap_bad: 1 })['v128-run-basis'].ok).toBe(false)
+    expect(ev({ ...base, ptr_basis_bad: 1, ptr_bad_ids: '00000000-0000-4000-8000-000000000001' })['v128-pointer-basis'].ok).toBe(false)
+    c = ev({ ...base, marker_at: null })
+    expect(c['v128-run-basis'].ok || c['v128-pointer-basis'].ok || c['v128-unit-published'].ok).toBe(false)
+    expect(ev({ ...base, runs_n: undefined })['v128-run-basis'].ok).toBe(false)
+    // ACL POST 128 so n_ex128 (trừ 6 helper mới) với n_all PRE; thiếu n_ex128 ⇒ đỏ (không rơi về n_all — POST có thêm 6 hàm).
+    const acl = (post: Record<string, unknown>, pre: Record<string, unknown>) => evaluateCmsVerify({ phase: '128', whoami: { u: 'x', bypass: true }, markers: [],
+      maxNumeric: { max_v: 128 }, functions: [], policies: [], triggers: [], tableShape: [], tables: [], roles: [], oneRunningIndex: [], aclPost: post, aclPre: pre,
+      inv121: { overlap: [], tiers: [], catalog: [] }, isolation: {} } as never).find((x) => x.id === 'acl-preexisting-functions')!
+    const md = 'a'.repeat(32), md2 = 'b'.repeat(32)
+    expect(acl({ n_all: 80, md5_all: md2, n_ex128: 74, md5_ex128: md }, { n_all: 74, md5_all: md }).ok).toBe(true)
+    expect(acl({ n_all: 80, md5_all: md2 }, { n_all: 74, md5_all: md }).ok).toBe(false)
+    expect(acl({ n_all: 80, md5_all: md2, n_ex128: 74, md5_ex128: md2 }, { n_all: 74, md5_all: md }).ok).toBe(false)
+  })
+
   test('danh sách hàm theo phase = khoá CMS_FN_MATRIX cùng phase; đếm trước phase suy từ ma trận (db-reviewer P2-5)', () => {
     for (const ph of CMS_VERIFY_PHASES) {
       const fromMatrix = Object.entries(CMS_FN_MATRIX).filter(([, m]) => m.phase === ph).map(([n]) => n)
@@ -391,7 +458,8 @@ test.describe('CMS QA tooling · preflight, manifest, đóng run, id is_test @de
     // 125 (CMS-UNCAPPED-1): trước 125 có đúng 67 hàm cms (55 + 12 của 124). 126 (sales-only): trước 126 có đúng 68 (126 không thêm
     // hàm) — phần tử cuối thêm có chủ đích khi mở phase 126, không phải nới kỳ vọng cũ.
     // 127 (S0 T11, PM 08/11): chỉ dữ liệu ⇒ trước 127 vẫn đúng 68 hàm.
-    expect(CMS_VERIFY_PHASES.map((ph) => cmsFnCountBefore(ph))).toEqual([0, 7, 14, 37, 55, 67, 68, 68])
+    // 128 (CMS-UNIT): trước 128 vẫn đúng 68 hàm (127 chỉ dữ liệu).
+    expect(CMS_VERIFY_PHASES.map((ph) => cmsFnCountBefore(ph))).toEqual([0, 7, 14, 37, 55, 67, 68, 68, 68])
     // 122: khoá định nghĩa = đúng các hàm có tới 122 (phase 123 thêm hàm ⇒ lọc theo phase; độ chặt cho 122 giữ nguyên).
     expect(Object.keys(CMS_FN_DEF_122).sort()).toEqual(Object.entries(CMS_FN_MATRIX).filter(([, m]) => Number(m.phase) <= 122).map(([n]) => n).sort())
     expect(Object.keys(CMS_COL_122).sort()).toEqual(Object.keys(CMS_TABLE_SHAPE_122).sort())
@@ -403,8 +471,8 @@ test.describe('CMS QA tooling · preflight, manifest, đóng run, id is_test @de
     expect(Object.entries(CMS_FN_MATRIX).filter(([, m]) => Number(m.phase) <= 124)).toHaveLength(67)
     // 125 (CMS-UNCAPPED-1): 1 hàm mới (guard, không cấp ai, SECDEF) + 2 thân 121 thay (giữ ACL / lock 5 s); tổng 68; +1 constraint trigger
     // ALWAYS; shape đổi đúng cms_program_tiers (ràng buộc của constraint trigger); cột không đổi.
-    expect(Object.keys(CMS_FN_DEF_125).sort()).toEqual(Object.keys(CMS_FN_MATRIX).sort())
-    expect(Object.keys(CMS_FN_MATRIX)).toHaveLength(68)
+    expect(Object.keys(CMS_FN_DEF_125).sort()).toEqual(Object.entries(CMS_FN_MATRIX).filter(([, m]) => Number(m.phase) <= 125).map(([n]) => n).sort())
+    expect(Object.entries(CMS_FN_MATRIX).filter(([, m]) => Number(m.phase) <= 127)).toHaveLength(68)
     expect(Object.entries(CMS_FN_MATRIX).filter(([, m]) => m.phase === '125')).toEqual([['cms__tiers_last_open_guard', { phase: '125', acl: null, secdef: true, lock: false, src: 'd83088c260633f520dac35cfe8169475' }]])
     expect(Object.keys(CMS_FN_SRC_125).sort()).toEqual(['rpc_cms_import_commit', 'rpc_cms_program_activate'])
     for (const [n, src] of Object.entries(CMS_FN_SRC_125)) expect(src, n).not.toBe(CMS_FN_MATRIX[n].src)
@@ -419,7 +487,7 @@ test.describe('CMS QA tooling · preflight, manifest, đóng run, id is_test @de
     expect(cmsVerifyAclSql()).toContain('n_ex125')
     // 126 (sales-only, PM 06/11): 0 hàm mới (POST so TOÀN BỘ hàm với PRE ⇒ không có cột n_ex126 / NOT IN ()); chỉ thân 2 hàm 122 đổi
     // (CMS_FN_SRC_126 = generator scripts/gen-cms-verify-fp-126.mjs); định nghĩa / shape / cột / trigger kế thừa 125.
-    expect(CMS_VERIFY_PHASES.at(-2)).toBe('126')
+    expect(CMS_VERIFY_PHASES.at(-3)).toBe('126')
     expect(CMS_PHASE_FUNCTIONS['126']).toEqual([])
     expect(Object.entries(CMS_FN_MATRIX).filter(([, m]) => m.phase === '126')).toEqual([])
     expect(CMS_FN_SRC_126).toEqual({ cms__results_release_open: 'aebe1ff46ba51dcf533fe328af7ea2a0', rpc_cms_sales_run_publish: 'db2c97efad2bb5ee9d69399b99c7c258' })
@@ -857,12 +925,15 @@ test.describe('CMS QA tooling · CLI âm (thoát 2 trước mọi IO) @desktop',
         [['post', '--phase=123', `--pre=${pre123}`, '--require-proven=results', '--expect-host=cms-qa-test.invalid'], /--require-proven cho post --phase=123: <v5\|lock-preview>/],
         [['post', '--phase=123', `--pre=${pre123}`, '--require-proven=v5,nope', '--expect-host=cms-qa-test.invalid'], /--require-proven cho post --phase=123/],
         [['post', '--phase=122', `--pre=${pre122}`, '--require-proven=v5', '--expect-host=cms-qa-test.invalid'], /--require-proven cho post --phase=122: <\(không có khoá\)>/],
-        // 126 (sales-only): PRE phải có đúng 68 hàm cms (126 không thêm hàm); khoá basis. 127 (S0) hợp lệ, PRE 68; 128 là phase lạ.
+        // 126 (sales-only): PRE phải có đúng 68 hàm cms (126 không thêm hàm); khoá basis. 127 (S0) hợp lệ, PRE 68. 128 (CMS-UNIT) hợp lệ,
+        // PRE 68 (6 helper mới chưa có), khoá unit; 129 là phase lạ.
         [['post', '--phase=126', `--pre=${preOf(67)}`, '--expect-host=cms-qa-test.invalid'], /không phải ảnh ngay trước 126 \(đang có 67 hàm cms\)/],
         [['post', '--phase=126', `--pre=${preOf(68)}`, '--require-proven=nope', '--expect-host=cms-qa-test.invalid'], /--require-proven cho post --phase=126: <v5\|lock-preview\|attest\|uncapped\|basis>/],
         [['post', '--phase=127', `--pre=${preOf(67)}`, '--expect-host=cms-qa-test.invalid'], /không phải ảnh ngay trước 127 \(đang có 67 hàm cms\)/],
         [['post', '--phase=127', `--pre=${preOf(68)}`, '--require-proven=nope', '--expect-host=cms-qa-test.invalid'], /--require-proven cho post --phase=127: <v5\|lock-preview\|attest\|uncapped\|basis\|resync>/],
-        [['post', '--phase=128', `--pre=${preOf(68)}`, '--expect-host=cms-qa-test.invalid'], /--phase=120\|121\|122\|123\|124\|125\|126\|127/],
+        [['post', '--phase=128', `--pre=${preOf(74)}`, '--expect-host=cms-qa-test.invalid'], /không phải ảnh ngay trước 128 \(đang có 74 hàm cms\)/],
+        [['post', '--phase=128', `--pre=${preOf(68)}`, '--require-proven=nope', '--expect-host=cms-qa-test.invalid'], /--require-proven cho post --phase=128: <v5\|lock-preview\|attest\|uncapped\|basis\|resync\|unit>/],
+        [['post', '--phase=129', `--pre=${preOf(68)}`, '--expect-host=cms-qa-test.invalid'], /--phase=120\|121\|122\|123\|124\|125\|126\|127\|128/],
       ] as Array<[string[], RegExp]>) {
         const r = run('cms-verify.mjs', args)
         expect(r.code, args.join(' ') + '\n' + r.out).toBe(2)

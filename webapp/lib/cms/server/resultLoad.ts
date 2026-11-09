@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { isCmsEarningsEnabled } from '@/lib/cms/flags'
 import { cmsLoadResultHeader, cmsLoadResultRows } from '@/lib/cms/server/results'
 import { CmsQueryError, cmsQueryFailLine } from '@/lib/cms/queryLog'
+import { cmsProgramBasisOf, cmsSelectWithBasis } from '@/lib/cms/programBasisCol'
 import { cmsPinnedResults, type CmsResultsLoad } from '@/lib/cms/resultUi'
 import type { CmsProductView, CmsProgramRowView, CmsTierView } from '@/lib/cms/server/catalog'
 import type { CmsGmvBasis } from '@/lib/cms/display'
@@ -68,11 +69,14 @@ export async function cmsLoadEligibleStaffIds(o: { programStoreIds: string[]; vi
 type ProgramDb = {
   id: string; name: string; status: CmsProgramDbStatus; start_date: string; end_date: string; scope: 'all' | 'stores'
   is_test: boolean; catalog_target_gmv: string | null; config_version: number; activated_at: string | null; created_at: string
+  /** CMS-UNIT (128): thiếu trên DB cũ ⇒ pos_base (cmsProgramBasisOf). */
+  quantity_basis?: string
 }
 const PROGRAM_COLS = 'id, name, status, start_date, end_date, scope, is_test, catalog_target_gmv::text, config_version, activated_at, created_at'
 const toProgram = (p: ProgramDb): CmsProgramRowView => ({
   id: p.id, name: p.name, status: p.status, startDate: p.start_date, endDate: p.end_date, scope: p.scope, isTest: p.is_test,
   catalogTargetGmv: p.catalog_target_gmv, configVersion: p.config_version, activatedAt: p.activated_at, createdAt: p.created_at,
+  quantityBasis: cmsProgramBasisOf(p.quantity_basis),
 })
 type ProductDb = {
   id: string; program_id: string; product_id: string; gmv_basis: CmsGmvBasis; target_gmv: string | null; unit_cms: string
@@ -99,8 +103,8 @@ export interface CmsHistoryPrograms { programs: CmsProgramRowView[] }
 export async function cmsLoadHistoryPrograms(today: string): Promise<{ ok: true; data: CmsProgramRowView[] } | { ok: false }> {
   try {
     const supabase = await createClient()
-    const rows = await readAll<ProgramDb>((a, b) => supabase.from('cms_programs').select(PROGRAM_COLS)
-      .in('status', ['active', 'locked']).lte('start_date', today).order('end_date', { ascending: false }).order('id').range(a, b))
+    const rows = await readAll<ProgramDb>((a, b) => cmsSelectWithBasis((x) => supabase.from('cms_programs').select(PROGRAM_COLS + x)
+      .in('status', ['active', 'locked']).lte('start_date', today).order('end_date', { ascending: false }).order('id').range(a, b)))
     return { ok: true, data: rows.map(toProgram) }
   } catch (e) {
     console.error(cmsQueryFailLine('cms-history-programs', e))

@@ -11,6 +11,9 @@
 //   5. commit: hash = run, parse + validate LẠI theo cấu hình / nguồn hiện tại; digest khác preview ⇒ 409 (xem preview
 //      mới, không tự commit tập khác); RPC kiểm lại trạng thái / ngày / config_version / trùng trong transaction.
 // Client KHÔNG quyết định is_test / actor / mode / số đếm. Phản hồi lỗi chỉ có MÃ (+ nhãn), không message DB.
+// CMS-UNIT (PM spec 09/11 §4): chương trình cơ sở cms_unit ⇒ MỌI mẫu file (kể cả 9 cột v1, cờ import v2 OFF) chạy kiểm unit_CMS
+//   (unitCheck.ts) + kiểm K / bằng chứng "đã bán theo ĐV này" với khoá cmsUnitKey (không có đường bypass qua file v1); digest gắn cơ
+//   sở. Cơ sở do DB (chương trình) quyết, client không gửi được; import không đổi cơ sở chương trình.
 
 import { readCappedBody, sha256Hex } from '@/lib/care/import/handler'
 import { canonicalProductId } from '@/lib/cms/productId'
@@ -23,9 +26,11 @@ import { buildCmsImportErrorXlsx, buildCmsSimpleErrorXlsx, type CmsRejectedGroup
 import { parseCmsSimpleXlsx } from './parseSimple'
 import { validateCmsSimpleImport } from './validateSimple'
 import {
-  cmsApplyKCheck, cmsBindKAcks, cmsKClassify, cmsKTargets, cmsParseKAckInput, cmsStoredKAcks,
+  cmsApplyKCheck, cmsBindKAcks, cmsKClassify, cmsKTargets, cmsKUnitNorm, cmsParseKAckInput, cmsStoredKAcks,
   type CmsKAck, type CmsKAckInput, type CmsKEvidence, type CmsKResult,
 } from './kCheck'
+import { cmsApplyUnitBasisCheck } from './unitCheck'
+import type { CmsQuantityBasis } from '../unitBasis'
 
 export const CMS_IMPORT_MAX_FILE_BYTES = 5 * 1024 * 1024
 /** CMS đơn giản S1: loại file do UI chọn TƯỜNG MINH; 'tiers' = IMPORT_CMS 9 cột (mặc định, như cũ), 'simple' = 7 cột mức cố định. */
@@ -53,6 +58,13 @@ export interface CmsProgramRow {
   configVersion: number
   /** bigint dạng chuỗi (đọc ::text, không qua number JS). */
   catalogTargetGmv: string | null
+  /** CMS-UNIT (128): cơ sở tính của chương trình; thiếu (DB trước 128 / fixture cũ) ⇒ pos_base. */
+  quantityBasis?: CmsQuantityBasis
+}
+
+/** Kiểm K / bằng chứng đơn vị bắt buộc: cờ import v2 HOẶC chương trình cms_unit (mọi mẫu file). */
+export function cmsImportKRequired(deps: Pick<CmsImportDeps, 'v2'>, program: Pick<CmsProgramRow, 'quantityBasis'>): boolean {
+  return deps.v2 === true || program.quantityBasis === 'cms_unit'
 }
 
 /** Phần `result` lưu trong cms_import_runs (raw cells của nhóm bị loại để sinh file lỗi — SPEC §4.6). */
@@ -125,6 +137,8 @@ export interface CmsImportRepo {
   commit(input: { runId: string; sha256: string; digest: string; payload: CmsImportPayload; actorId: string }):
     Promise<{ already: boolean; mode?: CmsImportMode; products?: number }>
   getRun(id: string): Promise<CmsImportRunRow | null>
+  /** CMS-UNIT: DB có capability 128 (probe chỉ đọc). Không có ⇒ action không tạo chương trình cms_unit. */
+  unitBasisCapable?(): Promise<boolean>
 }
 
 export interface CmsImportDeps {
@@ -301,23 +315,27 @@ async function analyze(bytes: Uint8Array, program: CmsProgramRow, mode: CmsImpor
     conflictProductIds: ctx.conflictProductIds, currentCatalogTarget: program.catalogTargetGmv,
   }
   let v = sp ? validateCmsSimpleImport(parsed.rows, vctx) : validateCmsImport(parsed.rows, vctx)
+  const basis: CmsQuantityBasis = program.quantityBasis ?? 'pos_base'
+  const norm = cmsKUnitNorm(basis)
+  // CMS-UNIT: unit_CMS là mẫu so khớp của engine ⇒ ký tự điều khiển / khoá rỗng ⇒ loại nhóm (mọi mẫu file).
+  if (basis === 'cms_unit') v = cmsApplyUnitBasisCheck(v, parsed.rows)
   let k: Extract<Analysis, { ok: true }>['k'] = null
   if (o.kCheck) {
     // S2: kiểm K trên MỌI SP đọc được của file (kể cả nhóm đã bị loại vì thiếu K — để hiện đề xuất). Nguồn lỗi ⇒ KHÔNG KIỂM ĐƯỢC.
-    const targets = cmsKTargets(parsed.rows)
+    const targets = cmsKTargets(parsed.rows, norm)
     let evidence: CmsKEvidence
     try {
       evidence = targets.length && deps.kProbe ? await deps.kProbe(targets.map((t) => t.productId)) : { ok: false, reason: 'CONFIG' }
     } catch {
       evidence = { ok: false, reason: 'SOURCE_UNKNOWN' }
     }
-    const before = cmsKClassify(targets, evidence)
+    const before = cmsKClassify(targets, evidence, [], norm)
     const acks = o.acks.kind === 'stored' ? o.acks.acks : cmsBindKAcks(o.acks.inputs, before, o.acks.actor, o.acks.at)
-    const results = acks.length ? cmsKClassify(targets, evidence, acks) : before
+    const results = acks.length ? cmsKClassify(targets, evidence, acks, norm) : before
     v = cmsApplyKCheck(v, parsed.rows, results)
     k = { evidence, before, results, acks: results.flatMap((x) => (x.ack ? [x.ack] : [])) }
   }
-  const digest = await sha256Hex(new TextEncoder().encode(canonicalCmsImport(v, o.format)))
+  const digest = await sha256Hex(new TextEncoder().encode(canonicalCmsImport(v, o.format, basis)))
   return { ok: true, v, digest, ignoredFromRow: parsed.ignoredFromRow, supplement: sp && sp.ok ? sp.supplement : null, k }
 }
 
@@ -358,11 +376,12 @@ export async function handleCmsImportPreview(req: Request, deps: CmsImportDeps):
   if (fmtRaw !== 'tiers' && fmtRaw !== 'simple') return fail(400, 'BAD_REQUEST')
   const format: CmsImportFormat = fmtRaw
   if (format === 'simple' && !deps.v2) return fail(400, 'FORMAT_UNAVAILABLE')
+  const kReq = cmsImportKRequired(deps, program)
   const ackRaw = f.form.get('k_acks')
-  const inputs = cmsParseKAckInput(typeof ackRaw === 'string' ? ackRaw : null)
-  if (inputs === null || (inputs.length > 0 && !deps.v2)) return fail(400, 'K_ACK_INVALID')
+  const inputs = cmsParseKAckInput(typeof ackRaw === 'string' ? ackRaw : null, cmsKUnitNorm(program.quantityBasis))
+  if (inputs === null || (inputs.length > 0 && !kReq)) return fail(400, 'K_ACK_INVALID')
   const a = await analyze(f.bytes, program, mode, deps, {
-    format, kCheck: deps.v2 === true, acks: { kind: 'input', inputs, actor: g.actorId, at: deps.now().toISOString() },
+    format, kCheck: kReq, acks: { kind: 'input', inputs, actor: g.actorId, at: deps.now().toISOString() },
   })
   if (!a.ok) return a.res
   const sha = await sha256Hex(f.bytes)
@@ -391,7 +410,7 @@ export async function handleCmsImportPreview(req: Request, deps: CmsImportDeps):
   }
   return json(200, {
     ok: true, runId, sha256: sha, mode, configVersion: program.configVersion, catalogTarget: a.v.catalogTarget, tierPolicy: CMS_TIER_POLICY,
-    ignoredFromRow: a.ignoredFromRow, stats: a.v.stats, format,
+    ignoredFromRow: a.ignoredFromRow, stats: a.v.stats, format, quantityBasis: program.quantityBasis ?? 'pos_base',
     ...(a.supplement ? { supplement: a.supplement } : {}),
     ...(a.k ? { kCheck: {
       asOf: a.k.evidence.ok ? a.k.evidence.asOf : null, available: a.k.evidence.ok, reason: a.k.evidence.ok ? null : a.k.evidence.reason,
@@ -445,7 +464,7 @@ export async function handleCmsImportCommit(req: Request, deps: CmsImportDeps): 
   const clientFormat = f.form.get('format')
   if (clientFormat !== null && clientFormat !== format) return fail(409, 'PREVIEW_STALE')
   const kStored = run.result?.kCheck !== undefined
-  if (kStored !== (deps.v2 === true) || (format === 'simple' && !deps.v2)) return fail(409, 'PREVIEW_STALE')
+  if (kStored !== cmsImportKRequired(deps, program) || (format === 'simple' && !deps.v2)) return fail(409, 'PREVIEW_STALE')
   const a = await analyze(f.bytes, program, mode, deps, { format, kCheck: kStored, acks: { kind: 'stored', acks: cmsStoredKAcks(run.result?.kAcks) } })
   if (!a.ok) return a.res
   // Nguồn / trùng / cấu hình đổi sau preview ⇒ kết quả khác ⇒ yêu cầu xem preview mới (SPEC §4.5).

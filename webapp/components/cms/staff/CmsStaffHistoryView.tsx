@@ -11,10 +11,11 @@ import { cmsDateTime, cmsVnd } from '@/lib/cms/display'
 import { CMS_STATUS_LABEL, CMS_STATUS_TONE, cmsDisplayStatus } from '@/lib/cms/programStatus'
 import { cmsStaffHref } from '@/lib/cms/staffView'
 import {
-  CMS_HISTORY_MAX_N, cmsHistoryMore, cmsHistoryUrl, cmsLineView, cmsProductTotals, cmsStaffCard, cmsStaffSummary, cmsStoreSummary,
-  type CmsHistoryParams, type CmsResultsLoad,
+  CMS_HISTORY_MAX_N, CMS_UNIT_RULE_NOTE, cmsHistoryMore, cmsHistoryUrl, cmsLineView, cmsProductTotals, cmsSoldPhrase, cmsStaffCard, cmsStaffSummary,
+  cmsStoreSummary, type CmsHistoryParams, type CmsResultsLoad,
 } from '@/lib/cms/resultUi'
-import { CMS_NO_RUN_TEXT, cmsNoRunText, type CmsResultLineDto } from '@/lib/cms/resultView'
+import { CMS_NO_RUN_TEXT, cmsNoRunText, cmsRowsBasis, cmsRunUnitOf, type CmsResultLineDto } from '@/lib/cms/resultView'
+import { CMS_BASIS_LABEL } from '@/lib/cms/unitBasis'
 import type { CmsProductView, CmsProgramRowView } from '@/lib/cms/server/catalog'
 import { cmsNavHref, type CmsNav } from '@/lib/cms/fixtureNav'
 import { cmsIsFlatProduct } from '@/lib/cms/flat'
@@ -24,6 +25,9 @@ import { cmsIsFlatProduct } from '@/lib/cms/flat'
 // URL); run hiện hành đổi giữa các trang ⇒ báo "dữ liệu đã thay đổi", không nối hai phiên. Thứ tự = seq của engine (ổn định),
 // 20 dòng / lần. Tiền dòng lấy nguyên từ snapshot — không tự tính lại. P3a r2 (PM r1 PKG-P1-1): chương trình Đã chốt vẫn ở danh
 // sách — dòng / tổng của run ĐÓNG BĂNG (cùng số đã chốt), ghi chú "Đã chốt kỳ".
+// CMS-UNIT (spec PM 09/11 §4): MỖI run trình bày theo cơ sở của chính run (lịch sử trước / sau đổi cơ sở không trộn luật): run cms_unit
+// ⇒ "N hộp đúng ĐV", dòng khác ĐV ghi "Đơn vị bán khác ĐV tính CMS — không tính CMS" với lượng theo đơn vị bán gốc, tiền 0; nhãn
+// cách tính của run hiện trong khối tổng. Chưa có run sau đổi cơ sở ⇒ "Chưa có số liệu theo cách tính mới".
 
 export type CmsHistoryLines =
   | { kind: 'ok'; rows: CmsResultLineDto[]; nextAfterSeq: number | null }
@@ -50,20 +54,26 @@ export function CmsStaffHistoryView({ programs, selected, products, results, lin
 }) {
   const loaded = results.kind === 'loaded' ? results : null
   const run = loaded?.header.run ?? null
+  // CMS-UNIT: run cms_unit liệt kê cả dòng khác ĐV (tiền 0, có lý do) ⇒ "ghi nhận", không "được tính"; pos_base giữ nhãn cũ.
+  const linesLabel = run?.basis.basis === 'cms_unit' ? 'Dòng đơn ghi nhận' : 'Dòng đơn được tính'
   const byId = new Map((products ?? []).map((p) => [p.id, p]))
   const rows = loaded ? loaded.rows.results : []
   const scoped = params.productId ? rows.filter((r) => r.programProductId === params.productId) : rows
   const display = selected ? cmsDisplayStatus(selected, today) : null
   const recent = programs.slice(0, 3)
   const others = programs.slice(3)
+  const runBasis = loaded ? cmsRowsBasis(loaded.rows) : 'pos_base'
+  const unitOf = (id: string) => cmsRunUnitOf(loaded?.rows, id, byId.get(id)?.unitCms ?? '')
+  /** "5 hộp" (pos_base) · "5 hộp đúng ĐV" (cms_unit) — cụm số lượng không có chữ "Đã bán". */
+  const qtyOf = (soldText: string, id: string) => cmsSoldPhrase(soldText, unitOf(id), runBasis).replace(/^Đã bán /, '')
   const effects = products && run
     ? (manager
-      ? [...cmsProductTotals(rows, new Map(products.map((p) => [p.id, p.baseQuantityCms]))).entries()].map(([id, t]) => ({ id, amount: t.amountVnd, note: `${t.soldText} ${byId.get(id)?.unitCms ?? ''} · ${t.staffWithSales} dược sĩ` }))
+      ? [...cmsProductTotals(rows, new Map(products.map((p) => [p.id, p.baseQuantityCms])), runBasis).entries()].map(([id, t]) => ({ id, amount: t.amountVnd, note: `${qtyOf(t.soldText, id)} · ${t.staffWithSales} dược sĩ` }))
       : products.map((p) => {
-        const c = cmsStaffCard({ programProductId: p.id, perUnit: p.baseQuantityCms, tiers: p.tiers, row: rows.find((r) => r.programProductId === p.id) ?? null, catalog: loaded!.rows.catalog })
+        const c = cmsStaffCard({ programProductId: p.id, perUnit: p.baseQuantityCms, tiers: p.tiers, row: rows.find((r) => r.programProductId === p.id) ?? null, catalog: loaded!.rows.catalog, basis: runBasis })
         // CMS đơn giản (PM r1 §6): SP mức cố định không có "bậc".
         const tier = c.position.index !== null && !cmsIsFlatProduct(p) ? ` · bậc ${p.tiers[c.position.index].order}` : ''
-        return { id: p.id, amount: c.amountVnd, note: c.gate && !c.gate.met ? `${c.soldText} ${p.unitCms} · chưa đạt target` : `${c.soldText} ${p.unitCms}${tier}` }
+        return { id: p.id, amount: c.amountVnd, note: c.gate && !c.gate.met ? `${qtyOf(c.soldText, p.id)} · chưa đạt target` : `${qtyOf(c.soldText, p.id)}${tier}` }
       })).filter((e) => byId.has(e.id)).sort((a, b) => (a.amount === b.amount ? 0 : a.amount > b.amount ? -1 : 1))
     : []
   const maxEffect = effects.reduce((m, e) => (e.amount > m ? e.amount : m), BigInt(0))
@@ -111,7 +121,7 @@ export function CmsStaffHistoryView({ programs, selected, products, results, lin
                 {run ? cmsVnd((manager ? cmsStoreSummary(scoped, 0) : cmsStaffSummary(scoped, 0)).amountVnd) : '—'}
               </p>
               <div className="grid grid-cols-3 gap-2 text-[12px]">
-                <div className="rounded-[8px] bg-muted px-2.5 py-2"><p className="text-muted-foreground">Dòng đơn được tính</p><p className="text-[15px] font-bold tabular-nums">{run ? scoped.reduce((s, r) => s + r.lineCount, 0) : '—'}</p></div>
+                <div className="rounded-[8px] bg-muted px-2.5 py-2"><p className="text-muted-foreground">{linesLabel}</p><p className="text-[15px] font-bold tabular-nums">{run ? scoped.reduce((s, r) => s + r.lineCount, 0) : '—'}</p></div>
                 <div className="rounded-[8px] bg-muted px-2.5 py-2"><p className="text-muted-foreground">SP đã bán</p><p className="text-[15px] font-bold tabular-nums">{run ? cmsStaffSummary(scoped, 0).productsSold : '—'}</p></div>
                 <div className="rounded-[8px] bg-muted px-2.5 py-2"><p className="text-muted-foreground">GMV</p><p className="text-[15px] font-bold tabular-nums">{run ? cmsVnd(cmsStaffSummary(scoped, 0).gmvVnd) : '—'}</p></div>
               </div>
@@ -120,6 +130,11 @@ export function CmsStaffHistoryView({ programs, selected, products, results, lin
                   ? <span data-cms-history-note={display ?? 'running'}>{display === 'locked' ? `Đã chốt kỳ — số đã chốt, theo lần tính ${cmsDateTime(run.publishedAt)} (không đổi sau chốt).` : <>{display === 'waiting_close' ? 'Chờ chốt kỳ — số tạm tính, có thể đổi khi chốt.' : 'Tạm tính — chưa chốt kỳ.'} Cập nhật {cmsDateTime(run.publishedAt)}.</>}</span>
                   : loaded ? `${cmsNoRunText(loaded.header)}.` : `${CMS_NO_RUN_TEXT}.`}
               </p>
+              {run && (
+                <p className="text-[12px] text-muted-foreground" data-cms-run-basis={run.basis.basis}>
+                  Cách tính của lần tính này: {CMS_BASIS_LABEL[run.basis.basis]}{run.basis.basis === 'cms_unit' ? ` — ${CMS_UNIT_RULE_NOTE}.` : '.'}
+                </p>
+              )}
             </section>
           )}
 
@@ -158,19 +173,19 @@ export function CmsStaffHistoryView({ programs, selected, products, results, lin
             <ErrorState message="Không tải được dòng ghi nhận" hint="Thử tải lại trang." />
           ) : lines.kind === 'ok' ? (
             <section data-cms-history-lines className="space-y-2">
-              <h2 className="text-[14px] font-semibold">Dòng đơn được tính{params.after !== null ? ' (tiếp)' : ''}</h2>
+              <h2 className="text-[14px] font-semibold">{linesLabel}{params.after !== null ? ' (tiếp)' : ''}</h2>
               {lines.rows.length === 0 ? (
                 <EmptyState className="py-10 rounded-v2-panel border border-dashed border-input bg-card" icon={ListX} title="Chưa có dòng đơn nào được tính" />
               ) : (
                 <ul className="space-y-2">
                   {lines.rows.map((l) => {
                     const p = byId.get(l.programProductId)
-                    const unit = p?.unitCms ?? ''
+                    const unit = cmsRunUnitOf(loaded?.rows, l.programProductId, p?.unitCms ?? '')
                     const v = cmsLineView(l, p?.baseQuantityCms ?? '1', unit, returnsApproved)
                     return (
                       <li key={l.seq} data-cms-line={l.status} className="flex items-start justify-between gap-3 rounded-v2-panel border bg-card p-3 text-[13px]">
                         <span className="min-w-0 space-y-0.5">
-                          <span className="block font-medium leading-snug break-words">{p?.nameSnapshot ?? l.productId} × <span className="tabular-nums">{v.qtyText}</span> {unit}</span>
+                          <span className="block font-medium leading-snug break-words" data-cms-line-unit={v.unitMatch === null ? undefined : v.unitMatch ? 'match' : 'other'}>{p?.nameSnapshot ?? l.productId} × <span className="tabular-nums">{v.qtyLabel}</span></span>
                           <span className="block text-[12px] text-muted-foreground tabular-nums">Đơn #{l.orderCode} · {cmsDateTime(l.completedAt)}</span>
                           {manager && <span className="block text-[12px] text-muted-foreground">{userNames.get(l.userId) ?? '—'}</span>}
                           {v.note && <span className="block text-[12px] text-muted-foreground">{v.note}</span>}

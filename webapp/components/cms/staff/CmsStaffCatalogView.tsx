@@ -13,10 +13,10 @@ import { CMS_GATE_HUE, CMS_GATE_LABEL, cmsDate, cmsVnd } from '@/lib/cms/display
 import { cmsDaysLeft, cmsDisplayStatus } from '@/lib/cms/programStatus'
 import { cmsIsClosedDisplay, cmsProductHref, cmsStaffHref, cmsTierSummary } from '@/lib/cms/staffView'
 import {
-  cmsCardMatches, cmsCatalogGateView, cmsNearestGate, cmsProductTotals, cmsStaffCard, cmsStaffSummary, cmsStoreSummary,
-  type CmsCardFilter, type CmsResultsLoad,
+  CMS_UNIT_RULE_NOTE, cmsCardMatches, cmsCatalogGateView, cmsNearestGate, cmsProductTotals, cmsScreenBasis, cmsSoldPhrase, cmsStaffCard,
+  cmsStaffSummary, cmsStoreSummary, type CmsCardFilter, type CmsResultsLoad,
 } from '@/lib/cms/resultUi'
-import type { CmsResultRowDto } from '@/lib/cms/resultView'
+import { cmsRowsBasis, cmsRunUnitOf, type CmsResultRowDto } from '@/lib/cms/resultView'
 import type { CmsProductView, CmsProgramRowView } from '@/lib/cms/server/catalog'
 import { cmsNavHref, type CmsNav } from '@/lib/cms/fixtureNav'
 import { cmsFlatRate, cmsFlatRateText, cmsIsSimpleProgram } from '@/lib/cms/flat'
@@ -32,6 +32,8 @@ import { cmsFlatRate, cmsFlatRateText, cmsIsSimpleProgram } from '@/lib/cms/flat
 // (Đã chốt = run đóng băng, nhãn "đã chốt"), không gợi ý gần đạt / gợi ý bán thêm.
 // CMS đơn giản S3 (PM r1 08/11 §6): SP mức cố định (cmsFlatRate — 1 bậc từ 1 không giới hạn, không target) ⇒ thẻ "Mức CMS X₫/hộp",
 // "Đã bán N hộp · tính Q hộp" + tổng CMS; không badge "Theo số lượng", không dòng bậc / "Bậc cao nhất". SP có bậc / target giữ nguyên.
+// CMS-UNIT (spec PM 09/11 §4): số trên thẻ theo cơ sở của RUN ("Đã bán N hộp đúng ĐV" — Q, không B / K / phần lẻ); câu nhắc "Chỉ tính
+// đơn bán đúng ĐV tính CMS" theo cơ sở màn (run, hoặc cấu hình chương trình khi chưa có run / cờ kết quả tắt).
 
 export type CmsStaffKind = 'ok' | 'empty' | 'error' | 'no-store'
 
@@ -60,10 +62,13 @@ export function CmsStaffCatalogView({ kind, programs, selected, products, today,
   const rows = loaded ? loaded.rows.results : []
   const byPp = new Map<string, CmsResultRowDto[]>()
   for (const r of rows) { const l = byPp.get(r.programProductId); if (l) l.push(r); else byPp.set(r.programProductId, [r]) }
+  const runBasis = loaded ? cmsRowsBasis(loaded.rows) : 'pos_base'
+  const screenBasis = cmsScreenBasis(results, selected?.quantityBasis)
+  const unitOf = (p: CmsProductView) => cmsRunUnitOf(loaded?.rows, p.id, p.unitCms)
   const cards = withNumbers && !manager
-    ? new Map(products.map((p) => [p.id, cmsStaffCard({ programProductId: p.id, perUnit: p.baseQuantityCms, tiers: p.tiers, row: byPp.get(p.id)?.[0] ?? null, catalog: loaded.rows.catalog })]))
+    ? new Map(products.map((p) => [p.id, cmsStaffCard({ programProductId: p.id, perUnit: p.baseQuantityCms, tiers: p.tiers, row: byPp.get(p.id)?.[0] ?? null, catalog: loaded.rows.catalog, basis: runBasis })]))
     : null
-  const totals = withNumbers && manager ? cmsProductTotals(rows, new Map(products.map((p) => [p.id, p.baseQuantityCms]))) : null
+  const totals = withNumbers && manager ? cmsProductTotals(rows, new Map(products.map((p) => [p.id, p.baseQuantityCms])), runBasis) : null
   const counts = { all: products.length, met: 0, unmet: 0 }
   if (cards) for (const c of cards.values()) { if (cmsCardMatches(c, 'met')) counts.met += 1; else counts.unmet += 1 }
   const visible = cards ? products.filter((p) => cmsCardMatches(cards.get(p.id)!, filter)) : products
@@ -97,6 +102,7 @@ export function CmsStaffCatalogView({ kind, programs, selected, products, today,
                 : display === 'waiting_close'
                   ? <>Đã kết thúc ngày {cmsDate(selected.endDate)} — số tạm tính, chờ chốt kỳ.</>
                   : <>{left !== null ? `Còn ${left} ngày. ` : ''}CMS tính theo số lượng từng dược sĩ bán trong kỳ.</>}
+            {screenBasis === 'cms_unit' && <span data-cms-unit-rule> {CMS_UNIT_RULE_NOTE} — bán theo đơn vị khác (vd. viên, vỉ) không được quy đổi.</span>}
             {manager && !loaded && ' Tài khoản cửa hàng chỉ xem danh mục.'}
           </p>
 
@@ -141,9 +147,9 @@ export function CmsStaffCatalogView({ kind, programs, selected, products, today,
                         </span>
                         <span className="flex flex-wrap items-center gap-1.5 text-[12px] text-muted-foreground">
                           {!rate && <TagBadge hue={CMS_GATE_HUE[p.gmvBasis]}>{CMS_GATE_LABEL[p.gmvBasis]}</TagBadge>}
-                          {card && rate && <span className="tabular-nums" data-cms-sold>Đã bán {card.soldText} {p.unitCms}{card.row ? ` · tính ${card.cmsQuantity.toLocaleString('vi-VN')} ${p.unitCms}` : ''}</span>}
-                          {card && !rate && <span className="tabular-nums" data-cms-sold>Đã bán {card.soldText} {p.unitCms}{cmsCardCountedNote(card) ? ` (${cmsCardCountedNote(card)})` : ''}</span>}
-                          {tot && <span className="tabular-nums" data-cms-sold>Đã bán {tot.soldText} {p.unitCms} · {tot.staffWithSales} dược sĩ</span>}
+                          {card && rate && <span className="tabular-nums" data-cms-sold>{cmsSoldPhrase(card.soldText, unitOf(p), card.quantityBasis)}{card.row && card.quantityBasis !== 'cms_unit' ? ` · tính ${card.cmsQuantity.toLocaleString('vi-VN')} ${unitOf(p)}` : ''}</span>}
+                          {card && !rate && <span className="tabular-nums" data-cms-sold>{cmsSoldPhrase(card.soldText, unitOf(p), card.quantityBasis)}{cmsCardCountedNote(card) ? ` (${cmsCardCountedNote(card)})` : ''}</span>}
+                          {tot && <span className="tabular-nums" data-cms-sold>{cmsSoldPhrase(tot.soldText, unitOf(p), tot.quantityBasis)} · {tot.staffWithSales} dược sĩ</span>}
                           {!card && !tot && p.gmvBasis === 'product' && <span className="tabular-nums">Target {cmsVnd(p.targetGmv)}</span>}
                           {!card && !tot && p.gmvBasis === 'catalog' && <span>Theo target danh mục</span>}
                         </span>

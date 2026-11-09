@@ -8,11 +8,20 @@
 //
 // TODO(Q-206): dòng âm (base_quantity / amount < 0) chỉ được tính số học như "sự kiện đã chuẩn hóa" và gắn
 // trạng thái ADJUSTMENT; quy thuộc trả hàng production vẫn HOLD — engine không suy dòng âm từ status.
+//
+// CMS-UNIT (Q-221…Q-224, UNIT-D01…D03 — planning/research/cms-unit-basis-spec-implementation-2026-11-09.md §2): chương trình cơ sở
+// `cms_unit` ⇒ mỗi dòng ỨNG VIÊN (kể cả chưa gán / ngoài phạm vi) được phân loại theo ĐV tính CMS của SP (unitKey.ts — cùng hợp
+// đồng SQL 128). Đơn vị / lượng thiếu, hỏng, lượng lẻ đúng đơn vị ⇒ ném CmsEngineInputError UNIT_SOURCE_INVALID (HOLD cả lượt —
+// không bỏ dòng, không làm tròn, không 0 giả). Dòng hợp lệ: c_i = quantity_raw nguyên nếu đúng đơn vị, khác đơn vị ⇒ 0 (vẫn giữ
+// GMV / lineage / result_line). C cộng dồn theo thứ tự dòng; Q trước / sau = max(C, 0); tiền dòng = gate ? F(Q_sau) − F(Q_trước) : 0;
+// B trước / sau vẫn là lượng cơ sở THẬT; K giữ ở output (perUnitUnits) nhưng KHÔNG là mẫu số. Điều chỉnh gồm cả quantity_raw âm (mọi
+// đơn vị). Nhánh pos_base giữ nguyên biểu thức và shape output (không thêm khoá).
 
 import { CMS_DEC_FACTOR } from '../decimal'
 import { mapSeller, type CmsSellerIndex, type CmsUnassignedReason } from '../mapping'
 import { isEligibleOrder, type CmsSalesLine } from '../source/contract'
 import { isWithinWindow } from '../time'
+import { cmsClassifyUnitLine, type CmsUnitInvalidReason, type CmsUnitLine } from '../unitKey'
 import { parseCmsEngineProgram, type CmsEngineProduct, type CmsEngineProgramInput } from './config'
 import { cmsAmountAtBase, cmsProgressiveAmount, cmsQuantityOf } from './tiers'
 
@@ -33,14 +42,21 @@ export type CmsLineStatus =
   | 'AT_CAP'         // LỊCH SỬ: run trước CMS-Q-220 (bậc cuối hữu hạn). Engine KHÔNG sinh nữa; reader giữ để đọc run QA cũ đã đóng băng
   | 'ADJUSTMENT'     // Điều chỉnh (sự kiện âm đã chuẩn hóa — Q-206)
 
+export type CmsEngineInputCode = 'DUPLICATE_LINE_ID' | 'UNIT_SOURCE_INVALID'
+
 export class CmsEngineInputError extends Error {
-  readonly code: 'DUPLICATE_LINE_ID'
+  readonly code: CmsEngineInputCode
   readonly lineIds: string[]
-  constructor(code: 'DUPLICATE_LINE_ID', lineIds: string[]) {
-    super(`CMS engine input ${code}: ${lineIds.length} order_line_id lặp`)
+  /** UNIT_SOURCE_INVALID: số dòng ứng viên theo lý do (cms_unit). */
+  readonly unitIssues: Partial<Record<CmsUnitInvalidReason, number>>
+  constructor(code: CmsEngineInputCode, lineIds: string[], unitIssues: Partial<Record<CmsUnitInvalidReason, number>> = {}) {
+    super(code === 'DUPLICATE_LINE_ID'
+      ? `CMS engine input ${code}: ${lineIds.length} order_line_id lặp`
+      : `CMS engine input ${code}: ${lineIds.length} dòng ứng viên thiếu / sai đơn vị hoặc số lượng`)
     this.name = 'CmsEngineInputError'
     this.code = code
     this.lineIds = lineIds
+    this.unitIssues = unitIssues
   }
 }
 
@@ -64,14 +80,20 @@ export interface CmsEngineLineResult {
   completedAtMicros: bigint
   baseQuantityUnits: bigint
   gmvUnits: bigint
-  /** Lượng cơ sở cộng dồn của dược sĩ × sản phẩm trước / sau dòng (scale 9). */
+  /** Lượng cơ sở cộng dồn của dược sĩ × sản phẩm trước / sau dòng (scale 9) — B THẬT ở mọi cơ sở tính. */
   baseBeforeUnits: bigint
   baseAfterUnits: bigint
-  /** floor(max(0, B) / K) trước / sau dòng (chưa áp trần). */
+  /** pos_base: floor(max(0, B) / K) trước / sau dòng; cms_unit: max(C, 0) trước / sau dòng (C = Σ lượng đúng ĐV CMS). */
   qtyBefore: bigint
   qtyAfter: bigint
   amountVnd: bigint
   status: CmsLineStatus
+  /** CHỈ cms_unit: c_i — lượng đúng ĐV CMS của dòng (khác đơn vị ⇒ 0). */
+  countedQuantity?: bigint
+  /** CHỈ cms_unit: đơn vị bán khớp ĐV tính CMS của SP. */
+  unitMatch?: boolean
+  /** CHỈ cms_unit: quantity_raw âm (mọi đơn vị) — điều chỉnh / trả hàng. */
+  rawQuantityNegative?: boolean
 }
 
 export interface CmsEngineProductResult {
@@ -81,9 +103,9 @@ export interface CmsEngineProductResult {
   gmvBasis: CmsEngineProduct['gmvBasis']
   /** B — tổng lượng cơ sở hợp lệ cả kỳ (scale 9). */
   baseQuantityUnits: bigint
-  /** K (scale 9) để hiển thị số lượng thực tế B / K. */
+  /** K (scale 9) cấu hình — pos_base: mẫu số; cms_unit: CHỈ thông tin kiểm chéo POS (UNIT-D02), không là mẫu số. */
   perUnitUnits: bigint
-  /** Q = floor(max(0, B) / K). */
+  /** pos_base: Q = floor(max(0, B) / K); cms_unit: Q = max(C, 0). */
   cmsQuantity: bigint
   /** = Q (CMS-Q-220 — không trần; số lượng TRƯỚC gate như contract cũ, tiền vẫn xét gate). */
   rewardedQuantity: bigint
@@ -123,6 +145,10 @@ export interface CmsEngineExcludedLine {
   completedAtMicros: bigint
   baseQuantityUnits: bigint
   gmvUnits: bigint
+  /** CHỈ cms_unit, dòng ứng viên chưa gán / ngoài phạm vi: đơn vị khớp ĐV CMS. */
+  unitMatch?: boolean
+  /** CHỈ cms_unit, dòng ứng viên chưa gán / ngoài phạm vi: quantity_raw âm (cổng trả hàng — không để né guard âm). */
+  rawQuantityNegative?: boolean
 }
 
 export interface CmsEngineTotals {
@@ -136,9 +162,12 @@ export interface CmsEngineTotals {
   unassignedByReason: Partial<Record<CmsUnassignedReason, number>>
   outOfScope: number
   included: number
-  /** Dòng âm đã được tính (Q-206). */
+  /** Dòng âm đã được tính (Q-206; cms_unit gồm cả quantity_raw âm). */
   adjustmentLines: number
   amountVnd: bigint
+  /** CHỈ cms_unit: số dòng ứng viên đúng / khác ĐV tính CMS. */
+  unitMatchedLines?: number
+  unitOtherLines?: number
 }
 
 export interface CmsEngineOutput {
@@ -234,6 +263,12 @@ export function computeCmsProgram(input: CmsEngineInput): CmsEngineOutput {
   // Nhóm theo dược sĩ × sản phẩm; Map giữ thứ tự chèn = thứ tự dòng đã xếp.
   const groups = new Map<string, { userId: string; storeId: string; product: CmsEngineProduct; items: Included[] }>()
   const catalogLines = new Map<string, { storeId: string; lines: CmsSalesLine[] }>()
+  const unitBasis = program.quantityBasis === 'cms_unit'
+  /** cms_unit: phân loại của dòng ứng viên hợp lệ (COUNTED / OTHER_UNIT). */
+  const unitOf = new Map<string, Exclude<CmsUnitLine, { kind: 'INVALID' }>>()
+  const unitInvalid: string[] = []
+  const unitIssues: Partial<Record<CmsUnitInvalidReason, number>> = {}
+  if (unitBasis) { totals.unitMatchedLines = 0; totals.unitOtherLines = 0 }
 
   for (const line of sorted) {
     if (!isEligibleOrder(line)) { exclude(line, 'ORDER_NOT_ELIGIBLE'); continue }
@@ -242,17 +277,31 @@ export function computeCmsProgram(input: CmsEngineInput): CmsEngineOutput {
     if (!product) { exclude(line, 'PRODUCT_NOT_IN_PROGRAM'); continue }
     totals.candidates += 1
     totals.candidateGmvUnits += line.gmvUnits
+    // cms_unit: phân loại MỌI dòng ứng viên trước khi map người bán (cùng tập seal S9u của 128 — cả chưa gán / ngoài phạm vi).
+    let unitExtra: Partial<CmsEngineExcludedLine> = {}
+    if (unitBasis) {
+      const u = cmsClassifyUnitLine(line, product.unitKey!) // parseCmsEngineProgram bảo đảm unitKey khi cms_unit
+      if (u.kind === 'INVALID') {
+        unitInvalid.push(line.orderLineId)
+        unitIssues[u.reason] = (unitIssues[u.reason] ?? 0) + 1
+        continue
+      }
+      unitOf.set(line.orderLineId, u)
+      if (u.kind === 'COUNTED') totals.unitMatchedLines! += 1
+      else totals.unitOtherLines! += 1
+      unitExtra = { unitMatch: u.kind === 'COUNTED', rawQuantityNegative: u.negative }
+    }
     const seller = mapSeller(line.sellerEmail, input.sellers)
     if (!seller.ok) {
       totals.unassigned += 1
       totals.unassignedGmvUnits += line.gmvUnits
       totals.unassignedByReason[seller.reason] = (totals.unassignedByReason[seller.reason] ?? 0) + 1
-      exclude(line, 'UNASSIGNED', { unassignedReason: seller.reason })
+      exclude(line, 'UNASSIGNED', { unassignedReason: seller.reason, ...unitExtra })
       continue
     }
     if (!program.storeIds.has(seller.storeId)) {
       totals.outOfScope += 1
-      exclude(line, 'OUT_OF_SCOPE', { userId: seller.userId, storeId: seller.storeId })
+      exclude(line, 'OUT_OF_SCOPE', { userId: seller.userId, storeId: seller.storeId, ...unitExtra })
       continue
     }
     totals.included += 1
@@ -272,6 +321,8 @@ export function computeCmsProgram(input: CmsEngineInput): CmsEngineOutput {
       c.lines.push(line)
     }
   }
+  // UNIT-D01: nguồn đơn vị / lượng hỏng ở BẤT KỲ dòng ứng viên nào ⇒ HOLD cả lượt (không tính phần còn lại, không 0 giả).
+  if (unitInvalid.length) throw new CmsEngineInputError('UNIT_SOURCE_INVALID', unitInvalid.sort(compareCmsLineId), unitIssues)
 
   const catalog: CmsEngineCatalogResult[] = []
   const catalogByUser = new Map<string, CmsEngineCatalogResult>()
@@ -304,18 +355,35 @@ export function computeCmsProgram(input: CmsEngineInput): CmsEngineOutput {
 
     let base = ZERO
     let gmv = ZERO
+    let counted = ZERO // C — chỉ cms_unit
     let lineSum = ZERO
     for (const { line } of g.items) {
       const before = base
       base += line.baseQuantityUnits
       gmv += line.gmvUnits
-      const qtyBefore = cmsQuantityOf(before, product.perUnitUnits)
-      const qtyAfter = cmsQuantityOf(base, product.perUnitUnits)
-      const amountVnd = gate.met
-        ? cmsAmountAtBase(base, product.perUnitUnits, product.tiers) - cmsAmountAtBase(before, product.perUnitUnits, product.tiers)
-        : ZERO
+      let qtyBefore: bigint
+      let qtyAfter: bigint
+      let amountVnd: bigint
+      let unit: { countedQuantity: bigint; unitMatch: boolean; rawQuantityNegative: boolean } | null = null
+      if (unitBasis) {
+        const u = unitOf.get(line.orderLineId)
+        if (!u) throw new Error('CMS engine invariant: dòng INCLUDED cms_unit chưa phân loại đơn vị')
+        const ci = u.kind === 'COUNTED' ? u.qty : ZERO
+        const cBefore = counted
+        counted += ci
+        qtyBefore = cBefore > ZERO ? cBefore : ZERO
+        qtyAfter = counted > ZERO ? counted : ZERO
+        amountVnd = gate.met ? cmsProgressiveAmount(qtyAfter, product.tiers) - cmsProgressiveAmount(qtyBefore, product.tiers) : ZERO
+        unit = { countedQuantity: ci, unitMatch: u.kind === 'COUNTED', rawQuantityNegative: u.negative }
+      } else {
+        qtyBefore = cmsQuantityOf(before, product.perUnitUnits)
+        qtyAfter = cmsQuantityOf(base, product.perUnitUnits)
+        amountVnd = gate.met
+          ? cmsAmountAtBase(base, product.perUnitUnits, product.tiers) - cmsAmountAtBase(before, product.perUnitUnits, product.tiers)
+          : ZERO
+      }
       lineSum += amountVnd
-      const adjustment = line.baseQuantityUnits < ZERO || line.gmvUnits < ZERO
+      const adjustment = line.baseQuantityUnits < ZERO || line.gmvUnits < ZERO || unit?.rawQuantityNegative === true
       if (adjustment) totals.adjustmentLines += 1
       let status: CmsLineStatus
       if (adjustment) status = 'ADJUSTMENT'
@@ -327,10 +395,11 @@ export function computeCmsProgram(input: CmsEngineInput): CmsEngineOutput {
         userId: g.userId, storeId: g.storeId, posCode: line.posCode, completedAtMicros: line.completedAtMicros,
         baseQuantityUnits: line.baseQuantityUnits, gmvUnits: line.gmvUnits, baseBeforeUnits: before, baseAfterUnits: base,
         qtyBefore, qtyAfter, amountVnd, status,
+        ...(unit ?? {}),
       })
     }
 
-    const cmsQuantity = cmsQuantityOf(base, product.perUnitUnits)
+    const cmsQuantity = unitBasis ? (counted > ZERO ? counted : ZERO) : cmsQuantityOf(base, product.perUnitUnits)
     const potentialAmountVnd = cmsProgressiveAmount(cmsQuantity, product.tiers)
     const amountVnd = gate.met ? potentialAmountVnd : ZERO
     if (lineSum !== amountVnd) {

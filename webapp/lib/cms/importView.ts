@@ -53,8 +53,10 @@ export interface CmsPreviewResult {
   format?: 'tiers' | 'simple'
   /** File mức cố định có cột bổ sung K / tư vấn không. */
   supplement?: { baseQuantity: boolean; advice: boolean }
-  /** S2: kết quả kiểm K (chỉ khi cờ v2). */
+  /** S2: kết quả kiểm K (cờ v2, HOẶC chương trình cơ sở cms_unit — mọi mẫu file). */
   kCheck?: CmsPreviewKCheck
+  /** CMS-UNIT: cơ sở tính của chương trình (server đọc từ DB; thiếu ⇒ pos_base). */
+  quantityBasis?: 'pos_base' | 'cms_unit'
 }
 
 export type CmsKStatusView = 'MATCH' | 'PROPOSED' | 'MISMATCH' | 'SOURCE_CONFLICT' | 'SOURCE_ERROR' | 'NO_EVIDENCE' | 'UNAVAILABLE'

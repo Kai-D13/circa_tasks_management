@@ -1,6 +1,6 @@
 import { notFound } from 'next/navigation'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
-import { isCmsProgramEnabled } from '@/lib/cms/flags'
+import { isCmsProgramEnabled, isCmsUnitBasisEnabled } from '@/lib/cms/flags'
 import { canManageCms } from '@/lib/cms/access'
 import { cmsLoadOsStores } from '@/lib/cms/server/catalog'
 import { cmsTodayVn } from '@/lib/cms/programStatus'
@@ -19,7 +19,9 @@ export default async function CmsNewPage() {
   return (
     <CmsWizardShell title="Tạo chương trình CMS" backHref="/targets/campaigns/cms" backLabel="CMS sản phẩm" kind="new">
       <CmsStepper current={0} />
-      <CmsProgramForm mode="create" stores={stores.ok ? stores.data : []} storesError={!stores.ok} today={cmsTodayVn(new Date())} />
+      {/* CMS-UNIT: cơ sở cho chương trình mới = server quyết theo cờ (action kiểm lại + probe DB 128). */}
+      <CmsProgramForm mode="create" stores={stores.ok ? stores.data : []} storesError={!stores.ok} today={cmsTodayVn(new Date())}
+        quantityBasis={isCmsUnitBasisEnabled() ? 'cms_unit' : 'pos_base'} />
     </CmsWizardShell>
   )
 }

@@ -7,12 +7,18 @@
 // Thứ tự này không tính chồng chưa đạt gate và vượt trần. Đối soát BigInt: ΣB = (Σđược + Σchưa đạt + Σvượt trần)×K + ΣF khi K chung
 // (không floor sau khi cộng nhiều người). K khác nhau / số âm / snapshot bất nhất ⇒ null ("chưa đủ dữ liệu giải thích"), tiền vẫn
 // lấy snapshot. Chưa có Q-206 ⇒ không suy lý do trả hàng.
+// CMS-UNIT (spec PM 09/11 §4): run cms_unit ⇒ "lượng" giải thích là Q (Σ đơn đúng ĐV tính CMS) quy về thang đơn vị CMS (K quy ước = 1,
+// không phần lẻ, không trần); B / K không dùng để hiện số / tiến độ / phần lẻ. Lượng bán khác ĐV không có trong Q (không suy từ B).
 import { CMS_GATE_HUE, CMS_GATE_LABEL, cmsAmountPerUnit, cmsBaseQtyLine, cmsTierRange, cmsVnd, type CmsGmvBasis } from './display'
 import type { TagHue } from '@/components/ds/TagBadge'
 import type { StatusTone } from '@/components/ds/StatusBadge'
-import { parseCmsDecimal } from './decimal'
-import { cmsGateView, cmsHasSales, cmsProductSalesStats, cmsProductTierDistribution, cmsQtyText, cmsTierPosition, cmsTruncVnd, type CmsUiTier } from './resultUi'
-import type { CmsCatalogRowDto, CmsResultRowDto, CmsResultUserDto } from './resultView'
+import { CMS_DEC_FACTOR, parseCmsDecimal } from './decimal'
+import {
+  CMS_UNIT_RULE_NOTE, cmsGateView, cmsHasSales, cmsProductSalesStats, cmsProductTierDistribution, cmsQtyRuleLine, cmsQtyText, cmsSoldText,
+  cmsTierPosition, cmsTruncVnd, type CmsUiTier,
+} from './resultUi'
+import { cmsRowBasis, type CmsCatalogRowDto, type CmsResultRowDto, type CmsResultUserDto } from './resultView'
+import type { CmsQuantityBasis } from './unitBasis'
 
 const ZERO = BigInt(0)
 const dec = (v: string): bigint | null => { const r = parseCmsDecimal(v, { allowNegative: true }); return r.ok ? r.units : null }
@@ -40,7 +46,18 @@ export interface CmsQtyExplain {
 }
 
 /** Một dòng kết quả ⇒ phần tách; null khi dữ liệu âm / bất nhất (không bịa breakdown). */
-export function cmsQtyExplainRow(r: Pick<CmsResultRowDto, 'baseQuantity' | 'perUnit' | 'cmsQuantity' | 'rewardedQuantity' | 'capQuantity' | 'gateMet'>): CmsQtyExplain | null {
+type ExplainRow = Pick<CmsResultRowDto, 'baseQuantity' | 'perUnit' | 'cmsQuantity' | 'rewardedQuantity' | 'capQuantity' | 'gateMet' | 'quantityBasis'>
+
+export function cmsQtyExplainRow(r: ExplainRow): CmsQtyExplain | null {
+  if (cmsRowBasis(r) === 'cms_unit') {
+    // cms_unit: đơn vị giải thích = đơn vị CMS (perUnit quy ước 1,0 ⇒ baseUnits = Q × 10^9); không trần, không phần lẻ.
+    const q = big(r.cmsQuantity), rq = big(r.rewardedQuantity)
+    if (q === null || rq === null || q < ZERO || rq !== q || r.capQuantity !== null) return null
+    return {
+      perUnit: CMS_DEC_FACTOR, baseUnits: q * CMS_DEC_FACTOR, rewarded: r.gateMet ? q : ZERO, unmetGate: r.gateMet ? ZERO : q, overCap: ZERO,
+      fractionBase: ZERO, unmetStaff: !r.gateMet && q > ZERO ? 1 : 0, overCapStaff: 0, fractionStaff: 0, cap: null,
+    }
+  }
   const b = dec(r.baseQuantity), k = dec(r.perUnit), q = big(r.cmsQuantity), rq = big(r.rewardedQuantity)
   const cap = r.capQuantity === null ? null : big(r.capQuantity)
   if (b === null || k === null || q === null || rq === null || (r.capQuantity !== null && cap === null)) return null
@@ -56,10 +73,12 @@ export function cmsQtyExplainRow(r: Pick<CmsResultRowDto, 'baseQuantity' | 'perU
 }
 
 /** Cộng nhiều dòng CÙNG K (một SP). Một dòng bất nhất / K khác ⇒ null. Bất biến ΣB đã kiểm. */
-export function cmsQtyExplain(rows: readonly Pick<CmsResultRowDto, 'baseQuantity' | 'perUnit' | 'cmsQuantity' | 'rewardedQuantity' | 'capQuantity' | 'gateMet'>[]): CmsQtyExplain | null {
+export function cmsQtyExplain(rows: readonly ExplainRow[]): CmsQtyExplain | null {
   let acc: CmsQtyExplain | null = null
   let capSame = true
+  const basis = rows.length ? cmsRowBasis(rows[0]) : 'pos_base'
   for (const r of rows) {
+    if (cmsRowBasis(r) !== basis) return null
     const e = cmsQtyExplainRow(r)
     if (!e) return null
     if (!acc) { acc = { ...e }; continue }
@@ -109,7 +128,8 @@ export function cmsProductDistribution(rows: readonly CmsResultRowDto[], tiers: 
   const segments: CmsDistSegment[] = tiers.map((t, i) => ({ key: `t${t.order}`, kind: 'tier' as const, order: t.order, pct: pct(dist[i] * e.perUnit), text: `B${t.order} ${dist[i].toString()}` }))
   segments.push({ key: 'x', kind: 'excluded', order: null, pct: pct(excluded), text: `không tính ${cmsQtyText(excluded, e.perUnit)}` })
   const legend = segments.map((s) => s.text).join(' · ')
-  return { segments, legend, aria: `Phân bố ${cmsQtyText(total, e.perUnit)} ${unit} đã bán: ${tiers.map((t, i) => `bậc ${t.order} ${dist[i].toString()}`).join(', ')}, không tính CMS ${cmsQtyText(excluded, e.perUnit)} ${unit}` }
+  const sold = rows.length && cmsRowBasis(rows[0]) === 'cms_unit' ? `${unit} đã bán đúng ĐV` : `${unit} đã bán`
+  return { segments, legend, aria: `Phân bố ${cmsQtyText(total, e.perUnit)} ${sold}: ${tiers.map((t, i) => `bậc ${t.order} ${dist[i].toString()}`).join(', ')}, không tính CMS ${cmsQtyText(excluded, e.perUnit)} ${unit}` }
 }
 
 // ── Dòng dược sĩ (A3 mở rộng) ──────────────────────────────────────────────
@@ -133,7 +153,7 @@ export function cmsA3StaffStatus(r: CmsResultRowDto, tiers: readonly CmsUiTier[]
   const q = BigInt(r.cmsQuantity)
   const pos = cmsTierPosition(q, tiers)
   if (pos.atCap) return { tone: 'info', label: `Đã đạt trần ${tiers[tiers.length - 1].to} ${unit}` }
-  if (pos.index === null) return { tone: 'neutral', label: q === ZERO ? `Chưa đủ 1 ${unit}` : 'Chưa vào bậc' }
+  if (pos.index === null) return { tone: 'neutral', label: q === ZERO ? (cmsRowBasis(r) === 'cms_unit' ? `Chưa có đơn đúng ĐV ${unit}` : `Chưa đủ 1 ${unit}`) : 'Chưa vào bậc' }
   return { tone: 'success', label: `Bậc ${tiers[pos.index].order} · ${cmsAmountPerUnit(tiers[pos.index].amount, unit)}` }
 }
 
@@ -146,8 +166,6 @@ export function cmsA3StaffRows(rows: readonly CmsResultRowDto[], o: { tiers: rea
   })
   return sorted.map((r) => {
     const e = cmsQtyExplainRow(r)
-    const k = dec(r.perUnit) ?? ZERO
-    const b = dec(r.baseQuantity) ?? ZERO
     const g = cmsGateView(r, o.catalog)
     const qtyNote = !e ? null
       : !r.gateMet && BigInt(r.cmsQuantity) > ZERO ? 'chưa tính'
@@ -156,7 +174,7 @@ export function cmsA3StaffRows(rows: readonly CmsResultRowDto[], o: { tiers: rea
     const store = u?.storeId ?? r.storeId
     return {
       name: u?.fullName ?? '—', store: o.storeNames.get(store) ?? '—',
-      soldText: cmsQtyText(b, k), qtyNote, gmvText: cmsVnd(cmsTruncVnd(dec(r.gmvAmount) ?? ZERO)),
+      soldText: cmsSoldText(r), qtyNote, gmvText: cmsVnd(cmsTruncVnd(dec(r.gmvAmount) ?? ZERO)),
       gate: g ? {
         basis: g.basis, met: g.met, pct: g.pct,
         text: `${g.basis === 'catalog' ? 'Nhóm DM ' : ''}${cmsVnd(g.gmvVnd)} / ${cmsVnd(g.targetVnd)}`,
@@ -182,6 +200,8 @@ export interface CmsA3ProductVM {
   targetText: string | null
   priceText: string | null
   perUnitText: string
+  /** Cơ sở tính HIỆN TẠI của chương trình (cấu hình) — quyết dòng quy đổi / câu nhắc luật. */
+  quantityBasis: CmsQuantityBasis
   tiers: { order: number; range: string; amountText: string }[]
   /** "Trần 50 vỉ / dược sĩ" khi bậc cuối hữu hạn. */
   capText: string | null
@@ -190,7 +210,11 @@ export interface CmsA3ProductVM {
   results: CmsA3ProductResultsVM | null
 }
 export interface CmsA3ProductResultsVM {
+  /** Cơ sở của RUN (số bên dưới theo cơ sở này). */
+  quantityBasis: CmsQuantityBasis
   soldText: string
+  /** cms_unit ⇒ câu nhắc "Chỉ tính đơn bán đúng ĐV tính CMS"; pos_base ⇒ null. */
+  ruleNote: string | null
   /** "159 tính CMS"; null khi không giải thích được. */
   countedText: string | null
   gmvText: string
@@ -208,18 +232,29 @@ export interface CmsA3ProductResultsVM {
 export function cmsA3ProductVM(p: {
   id: string; productId: string; nameSnapshot: string; imageUrlSnapshot: string | null; unitCms: string; baseQuantityCms: string; gmvBasis: CmsGmvBasis
   targetGmv: string | null; priceSnapshot: string | null; adviceText: string; addedAfterStart: boolean; tiers: CmsUiTier[]
-}, o: { catalogTargetGmv: string | null; results: null | { rows: readonly CmsResultRowDto[]; catalog: readonly CmsCatalogRowDto[]; users: readonly CmsResultUserDto[]; storeNames: ReadonlyMap<string, string> }; priceText: (v: string | null) => string }): CmsA3ProductVM {
+}, o: {
+  catalogTargetGmv: string | null
+  results: null | { rows: readonly CmsResultRowDto[]; catalog: readonly CmsCatalogRowDto[]; users: readonly CmsResultUserDto[]; storeNames: ReadonlyMap<string, string>; basis?: CmsQuantityBasis }
+  priceText: (v: string | null) => string
+  /** Cơ sở tính hiện tại của chương trình (thiếu ⇒ pos_base). */
+  programBasis?: CmsQuantityBasis
+}): CmsA3ProductVM {
   const last = p.tiers[p.tiers.length - 1]
   const k = dec(p.baseQuantityCms) ?? ZERO
+  const programBasis = o.programBasis ?? 'pos_base'
   let results: CmsA3ProductResultsVM | null = null
   if (o.results) {
     const rows = o.results.rows
     const st = rows.length ? [...cmsProductSalesStats(rows).values()][0] : null
+    const runBasis: CmsQuantityBasis = st?.quantityBasis ?? o.results.basis ?? 'pos_base'
     const e = rows.length ? cmsQtyExplain(rows) : null
     const amount = st?.amountVnd ?? ZERO
     const reasons = rows.length === 0 ? [] : e ? cmsQtyReasons(e, p.unitCms, p.gmvBasis) : null
+    const sold = runBasis === 'cms_unit' ? (st?.cmsQuantity ?? ZERO).toLocaleString('vi-VN') : cmsQtyText(st?.baseUnits ?? ZERO, st?.perUnitUnits ?? k)
     results = {
-      soldText: cmsQtyText(st?.baseUnits ?? ZERO, st?.perUnitUnits ?? k),
+      quantityBasis: runBasis,
+      ruleNote: runBasis === 'cms_unit' ? CMS_UNIT_RULE_NOTE : null,
+      soldText: sold,
       countedText: rows.length === 0 ? null : e ? `${e.rewarded.toString()} tính CMS` : null,
       gmvText: cmsVnd(cmsTruncVnd(st?.gmvUnits ?? ZERO)),
       staffAchieved: st?.staffAchieved ?? 0, staffWithSales: st?.staffWithSales ?? 0,
@@ -228,7 +263,7 @@ export function cmsA3ProductVM(p: {
       reasons,
       staff: cmsA3StaffRows(rows.filter(cmsHasSalesOrAmount), { tiers: p.tiers, unit: p.unitCms, catalog: o.results.catalog, users: o.results.users, storeNames: o.results.storeNames }),
       totals: {
-        count: rows.filter(cmsHasSalesOrAmount).length, soldText: cmsQtyText(st?.baseUnits ?? ZERO, st?.perUnitUnits ?? k),
+        count: rows.filter(cmsHasSalesOrAmount).length, soldText: sold,
         gmvText: cmsVnd(cmsTruncVnd(st?.gmvUnits ?? ZERO)), amountText: cmsVnd(amount),
       },
     }
@@ -238,7 +273,11 @@ export function cmsA3ProductVM(p: {
     gateLabel: CMS_GATE_LABEL[p.gmvBasis], gateHue: CMS_GATE_HUE[p.gmvBasis],
     targetText: p.gmvBasis === 'product' ? `${cmsVnd(p.targetGmv)} / dược sĩ` : p.gmvBasis === 'catalog' ? `Nhóm DM ${cmsVnd(o.catalogTargetGmv)} / dược sĩ` : null,
     priceText: p.priceSnapshot ? o.priceText(p.priceSnapshot) : null,
-    perUnitText: cmsBaseQtyLine(p.unitCms, p.baseQuantityCms),
+    // cms_unit: K chỉ là thông tin kiểm chéo POS (UNIT-D02) — ghi rõ, không là phép quy đổi tính CMS.
+    perUnitText: programBasis === 'cms_unit'
+      ? `${cmsQtyRuleLine(p.unitCms, '', 'cms_unit')} · Quy cách POS (chỉ kiểm chéo): ${cmsBaseQtyLine(p.unitCms, p.baseQuantityCms)}`
+      : cmsBaseQtyLine(p.unitCms, p.baseQuantityCms),
+    quantityBasis: programBasis,
     tiers: p.tiers.map((t) => ({ order: t.order, range: cmsTierRange(t.from, t.to), amountText: cmsAmountPerUnit(t.amount, p.unitCms) })),
     capText: last && last.to !== null ? `Trần ${last.to} ${p.unitCms} / dược sĩ` : null,
     advice: p.adviceText, addedAfterStart: p.addedAfterStart, results,

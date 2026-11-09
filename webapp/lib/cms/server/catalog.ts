@@ -3,6 +3,8 @@ import { createClient } from '@/lib/supabase/server'
 import type { CmsGmvBasis } from '@/lib/cms/display'
 import type { CmsProgramDbStatus } from '@/lib/cms/programStatus'
 import { CmsQueryError, cmsQueryFailLine } from '@/lib/cms/queryLog'
+import { cmsProgramBasisOf, cmsSelectWithBasis } from '@/lib/cms/programBasisCol'
+import type { CmsQuantityBasis } from '@/lib/cms/unitBasis'
 
 // CMS P1 — đọc danh mục bằng SESSION client (SPEC §7: "Đọc danh mục (P1): bảng danh mục qua RLS"). RLS 120 quyết định
 // phạm vi: super (mọi chương trình thật; QA chỉ khi có marker — H9b), SM (active có nhà thuốc phân công — H6),
@@ -37,6 +39,8 @@ export interface CmsProgramRowView {
   configVersion: number
   activatedAt: string | null
   createdAt: string
+  /** CMS-UNIT: cơ sở tính HIỆN TẠI (cấu hình) — số của run luôn theo cơ sở của run. Thiếu (fixture cũ) ⇒ pos_base. */
+  quantityBasis?: CmsQuantityBasis
 }
 
 export interface CmsImportRunView {
@@ -74,11 +78,14 @@ export interface CmsProductView {
 type ProgramDb = {
   id: string; name: string; status: CmsProgramDbStatus; start_date: string; end_date: string; scope: 'all' | 'stores'
   is_test: boolean; catalog_target_gmv: string | null; config_version: number; activated_at: string | null; created_at: string
+  /** CMS-UNIT (128): thiếu trên DB cũ ⇒ pos_base (cmsProgramBasisOf). */
+  quantity_basis?: string
 }
 const PROGRAM_COLS = 'id, name, status, start_date, end_date, scope, is_test, catalog_target_gmv::text, config_version, activated_at, created_at'
 const toProgram = (p: ProgramDb): CmsProgramRowView => ({
   id: p.id, name: p.name, status: p.status, startDate: p.start_date, endDate: p.end_date, scope: p.scope, isTest: p.is_test,
   catalogTargetGmv: p.catalog_target_gmv, configVersion: p.config_version, activatedAt: p.activated_at, createdAt: p.created_at,
+  quantityBasis: cmsProgramBasisOf(p.quantity_basis),
 })
 
 type RunDb = {
@@ -111,8 +118,8 @@ export interface CmsAdminListItem extends CmsProgramRowView {
 export async function cmsLoadAdminList(o: { manage: boolean }): Promise<CmsResult<CmsAdminListItem[]>> {
   try {
     const supabase = await createClient()
-    const programs = await readAll<ProgramDb>((a, b) => supabase.from('cms_programs').select(PROGRAM_COLS)
-      .order('created_at', { ascending: false }).order('id').range(a, b))
+    const programs = await readAll<ProgramDb>((a, b) => cmsSelectWithBasis((x) => supabase.from('cms_programs').select(PROGRAM_COLS + x)
+      .order('created_at', { ascending: false }).order('id').range(a, b)))
     const products = await readAll<{ program_id: string; product_id: string }>((a, b) => supabase.from('cms_program_products')
       .select('program_id, product_id').order('program_id').order('product_id').range(a, b))
     const runs = !o.manage ? [] as RunDb[] : await readAll<RunDb>((a, b) => supabase.from('cms_import_runs').select(RUN_COLS)
@@ -177,7 +184,7 @@ export async function cmsLoadProgramDetail(id: string, o: { manage: boolean }): 
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return { ok: true, data: null }
   try {
     const supabase = await createClient()
-    const { data: prog, error } = await supabase.from('cms_programs').select(PROGRAM_COLS).eq('id', id).maybeSingle()
+    const { data: prog, error } = await cmsSelectWithBasis((x) => supabase.from('cms_programs').select(PROGRAM_COLS + x).eq('id', id).maybeSingle())
     if (error) throw new CmsQueryError(error.code)
     if (!prog) return { ok: true, data: null } // không tồn tại HOẶC ngoài phạm vi RLS (kể cả QA không marker) ⇒ 404
     const [products, tiers, storeRows, runs] = await Promise.all([

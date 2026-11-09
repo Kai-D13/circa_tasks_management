@@ -173,9 +173,9 @@ export function cmsCardTierText(card: CmsStaffCard, tiers: readonly CmsUiTier[],
   return `${cur} · Bậc cao nhất`
 }
 
-/** "tính 12" khi lượng bán có phần lẻ / vượt trần (gate đã mở) — số nguyên được xét khác số đã bán. */
+/** "tính 12" khi lượng bán có phần lẻ / vượt trần (gate đã mở) — số nguyên được xét khác số đã bán. cms_unit: đã bán = số tính ⇒ null. */
 export function cmsCardCountedNote(card: CmsStaffCard): string | null {
-  if (!card.row || (card.gate && !card.gate.met)) return null
+  if (!card.row || (card.gate && !card.gate.met) || card.quantityBasis === 'cms_unit') return null
   const e = cmsQtyExplainRow(card.row)
   if (!e || (e.fractionBase === BigInt(0) && e.overCap === BigInt(0))) return null
   return `tính ${e.rewarded.toString()}`

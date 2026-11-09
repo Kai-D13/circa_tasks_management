@@ -6,6 +6,10 @@
 //    Số thập phân / bigint đi dạng chuỗi (không qua number), timestamp ISO UTC 6 chữ số micro giây.
 //  · cmsStageBoundsIssue: số vượt miền cột DB (bigint, |x| < 1e35 …) ⇒ mã OVERFLOW trước khi stage (không để DB cắt / lỗi giữa
 //    chừng, không clamp).
+//  · CMS-UNIT (migration 128): snapshot mang cơ sở tính của CHƯƠNG TRÌNH (quantity_basis / calculation_policy_version /
+//    unit_key_version) + unit_cms từng SP; run_open trả thêm calculation_snapshot BẤT BIẾN của run ⇒ đối chiếu từng trường với
+//    snapshot (lệch ⇒ không hợp lệ). DB trước 128 (thiếu CẢ hai khoá cơ sở) ⇒ legacy pos_base; khoá có mà lạ ⇒ lỗi (không tự chọn
+//    pos_base). expect mang dấu writer (quantity_basis + calculation_policy_version) khi DB có 128.
 
 import { formatCmsDecimal, CMS_DEC_FACTOR } from './decimal'
 import { compareCmsLines, type CmsEngineOutput, type CmsExcludeReason } from './engine/compute'
@@ -13,6 +17,10 @@ import type { CmsEngineProgramInput } from './engine/config'
 import { buildSellerIndex, type CmsSellerIndex, type CmsStoreRef, type CmsUserRef } from './mapping'
 import type { CmsSalesLine } from './source/contract'
 import { formatUtcMicros } from './time'
+import {
+  CMS_BASIS_POLICY, CMS_CALC_SNAPSHOT_SCHEMA, isCmsQuantityBasis, type CmsCalcPolicyVersion, type CmsQuantityBasis,
+} from './unitBasis'
+import { CMS_UNIT_KEY_VERSION, cmsUnitKey } from './unitKey'
 
 const ZERO = BigInt(0)
 export const CMS_INT64_MAX = BigInt('9223372036854775807')
@@ -36,6 +44,8 @@ export interface CmsSnapshotProduct {
   targetGmv: string | null
   baseQuantityCms: string
   tiers: CmsSnapshotTier[]
+  /** unit_CMS gốc (128); null khi DB trước 128 không trả khoá. */
+  unitCms: string | null
 }
 export interface CmsSalesSnapshot {
   programId: string
@@ -60,6 +70,15 @@ export interface CmsSalesSnapshot {
    * không trả (trước 124 / snapshot chỉ đọc). Chỉ hợp lệ khi có runId — snapshot chỉ đọc mang khoá này ⇒ DTO hỏng.
    */
   sourceSchema: number | null
+  /** CMS-UNIT: cơ sở tính của chương trình (= của run khi snapshot từ run_open — DB ghi cùng giá trị dưới khoá). */
+  quantityBasis: CmsQuantityBasis
+  calculationPolicyVersion: CmsCalcPolicyVersion
+  /** DB trước 128: snapshot không mang khoá cơ sở ⇒ pos_base luật cũ, không có metadata run / dấu writer. */
+  basisLegacy: boolean
+  /** Phiên bản hợp đồng khoá đơn vị DB dùng (128); null khi legacy. */
+  unitKeyVersion: string | null
+  /** run_open (128) trả calculation_snapshot của run và đã đối chiếu khớp snapshot. */
+  calculationSnapshotChecked: boolean
 }
 
 /** Phiên bản lớp nguồn app biết stage (migration 124). Khác ⇒ không capture (SOURCE_SCHEMA_UNSUPPORTED). */
@@ -92,6 +111,75 @@ function arr(o: Obj, k: string): unknown[] {
   return v
 }
 
+const has = (o: Obj, k: string) => Object.prototype.hasOwnProperty.call(o, k)
+
+/** Cơ sở tính của snapshot chương trình: thiếu CẢ hai khoá ⇒ legacy; có ⇒ đúng cặp (không nhận nhãn legacy của run cũ). */
+function snapshotBasis(raw: Obj): { basis: CmsQuantityBasis; policy: CmsCalcPolicyVersion; legacy: boolean; unitKeyVersion: string | null } {
+  if (!has(raw, 'quantity_basis') && !has(raw, 'calculation_policy_version') && !has(raw, 'unit_key_version')) {
+    return { basis: 'pos_base', policy: 'pos_base_legacy', legacy: true, unitKeyVersion: null }
+  }
+  const b = raw.quantity_basis
+  if (!isCmsQuantityBasis(b)) throw new CmsSnapshotError('quantity_basis')
+  if (raw.calculation_policy_version !== CMS_BASIS_POLICY[b]) throw new CmsSnapshotError('calculation_policy_version')
+  const ukv = str(raw, 'unit_key_version')
+  // cms_unit: khoá đơn vị DB phải đúng hợp đồng app đang dùng (lệch ⇒ TS và SQL so khớp khác nhau ⇒ không tính).
+  if (b === 'cms_unit' && ukv !== CMS_UNIT_KEY_VERSION) throw new CmsSnapshotError('unit_key_version')
+  return { basis: b, policy: CMS_BASIS_POLICY[b], legacy: false, unitKeyVersion: ukv }
+}
+
+/**
+ * calculation_snapshot của run (128 cms__calc_snapshot) phải khớp TỪNG trường cấu hình tính với snapshot chương trình cùng
+ * transaction open (engine tính theo snapshot; reader / seal theo metadata run) — lệch ⇒ DTO hỏng, không tính.
+ */
+function checkCalcSnapshot(c: unknown, s: Omit<CmsSalesSnapshot, 'calculationSnapshotChecked'>): void {
+  if (!isObj(c)) throw new CmsSnapshotError('calculation_snapshot')
+  const eq = (k: string, v: unknown) => {
+    if (c[k] !== v) throw new CmsSnapshotError(`calculation_snapshot.${k}`)
+  }
+  eq('schema', CMS_CALC_SNAPSHOT_SCHEMA)
+  eq('quantity_basis', s.quantityBasis)
+  eq('calculation_policy_version', s.calculationPolicyVersion)
+  eq('unit_key_version', s.unitKeyVersion)
+  eq('config_version', s.configVersion)
+  eq('start_date', s.startDate)
+  eq('end_date', s.endDate)
+  eq('catalog_target_gmv', s.catalogTargetGmv)
+  str(c, 'config_fp', /^[0-9a-f]{32}$/)
+  const ps = arr(c, 'products')
+  if (ps.length !== s.products.length) throw new CmsSnapshotError('calculation_snapshot.products')
+  const byId = new Map(s.products.map((p) => [p.id, p]))
+  const seen = new Set<string>()
+  for (const x of ps) {
+    if (!isObj(x)) throw new CmsSnapshotError('calculation_snapshot.products[]')
+    const id = str(x, 'id', UUID_RE)
+    const p = byId.get(id)
+    if (!p || seen.has(id)) throw new CmsSnapshotError('calculation_snapshot.products.id')
+    seen.add(id)
+    const peq = (k: string, v: unknown) => {
+      if (x[k] !== v) throw new CmsSnapshotError(`calculation_snapshot.products.${k}`)
+    }
+    peq('product_id', p.productId)
+    peq('unit_cms', p.unitCms)
+    peq('base_quantity_cms', p.baseQuantityCms)
+    peq('gmv_basis', p.gmvBasis)
+    peq('target_gmv', p.targetGmv)
+    const uk = x.unit_key
+    if (uk !== null && typeof uk !== 'string') throw new CmsSnapshotError('calculation_snapshot.products.unit_key')
+    // cms_unit: khoá đơn vị DB (cms__unit_key) phải TRÙNG khoá app (cmsUnitKey) — parity TS ↔ SQL kiểm cả lúc chạy; lệch ⇒ không tính.
+    if (s.quantityBasis === 'cms_unit' && (uk === null || uk !== cmsUnitKey(p.unitCms))) {
+      throw new CmsSnapshotError('calculation_snapshot.products.unit_key')
+    }
+    const ts = arr(x, 'tiers')
+    if (ts.length !== p.tiers.length) throw new CmsSnapshotError('calculation_snapshot.products.tiers')
+    const mine = [...p.tiers].sort((a, b) => a.order - b.order)
+    ts.forEach((t, i) => {
+      if (!isObj(t) || t.order !== mine[i].order || t.from !== mine[i].from || t.to !== mine[i].to || t.amount !== mine[i].amount) {
+        throw new CmsSnapshotError('calculation_snapshot.products.tiers[]')
+      }
+    })
+  }
+}
+
 export function parseCmsSalesSnapshot(raw: unknown): CmsSalesSnapshot {
   if (!isObj(raw)) throw new CmsSnapshotError('root')
   const isTest = raw.is_test
@@ -100,8 +188,12 @@ export function parseCmsSalesSnapshot(raw: unknown): CmsSalesSnapshot {
   if (prevRows !== null && prevRows !== undefined && (typeof prevRows !== 'number' || !Number.isSafeInteger(prevRows) || prevRows < 0)) {
     throw new CmsSnapshotError('previous_rows_read')
   }
+  const qb = snapshotBasis(raw)
   const products = arr(raw, 'products').map((p): CmsSnapshotProduct => {
     if (!isObj(p)) throw new CmsSnapshotError('products[]')
+    // 128: unit_cms bắt buộc có khoá (chuỗi hoặc null); legacy không có khoá.
+    if (!qb.legacy && !has(p, 'unit_cms')) throw new CmsSnapshotError('unit_cms')
+    const unitCms = strOrNull(p, 'unit_cms')
     const basis = str(p, 'gmv_basis')
     if (basis !== 'product' && basis !== 'catalog' && basis !== 'none') throw new CmsSnapshotError('gmv_basis')
     return {
@@ -116,6 +208,7 @@ export function parseCmsSalesSnapshot(raw: unknown): CmsSalesSnapshot {
         if (to !== null && (typeof to !== 'number' || !Number.isSafeInteger(to))) throw new CmsSnapshotError('tiers.to')
         return { order: int(t, 'order'), from: int(t, 'from'), to: to as number | null, amount: str(t, 'amount', INT_RE) }
       }),
+      unitCms,
     }
   })
   const sellers = arr(raw, 'sellers').map((u): CmsUserRef => {
@@ -137,7 +230,7 @@ export function parseCmsSalesSnapshot(raw: unknown): CmsSalesSnapshot {
   if (sch !== null && sch !== undefined && (runId === null || typeof sch !== 'number' || !Number.isSafeInteger(sch) || sch < 1 || sch > 32767)) {
     throw new CmsSnapshotError('source_schema')
   }
-  return {
+  const base: Omit<CmsSalesSnapshot, 'calculationSnapshotChecked'> = {
     programId: str(raw, 'program_id', UUID_RE),
     status: str(raw, 'status'),
     isTest,
@@ -155,7 +248,18 @@ export function parseCmsSalesSnapshot(raw: unknown): CmsSalesSnapshot {
     mappingFp: str(raw, 'mapping_fp', /^[0-9a-f]{32}$/),
     runId,
     sourceSchema: (sch ?? null) as number | null,
+    quantityBasis: qb.basis,
+    calculationPolicyVersion: qb.policy,
+    basisLegacy: qb.legacy,
+    unitKeyVersion: qb.unitKeyVersion,
   }
+  // calculation_snapshot: chỉ snapshot run_open của DB có 128 mang (bắt buộc); snapshot chỉ đọc / DB legacy mang ⇒ DTO hỏng.
+  const calc = raw.calculation_snapshot
+  const hasCalc = calc !== null && calc !== undefined
+  if (hasCalc && (runId === null || qb.legacy)) throw new CmsSnapshotError('calculation_snapshot')
+  if (!hasCalc && runId !== null && !qb.legacy) throw new CmsSnapshotError('calculation_snapshot')
+  if (hasCalc) checkCalcSnapshot(calc, base)
+  return { ...base, calculationSnapshotChecked: hasCalc }
 }
 
 export function cmsSnapshotToEngineInput(s: CmsSalesSnapshot): { program: CmsEngineProgramInput; sellers: CmsSellerIndex } {
@@ -171,7 +275,9 @@ export function cmsSnapshotToEngineInput(s: CmsSalesSnapshot): { program: CmsEng
         targetGmv: p.targetGmv,
         baseQuantityCms: p.baseQuantityCms,
         tiers: [...p.tiers].sort((a, b) => a.order - b.order).map((t) => ({ from: t.from, to: t.to, amount: t.amount })),
+        unitCms: p.unitCms,
       })),
+      quantityBasis: s.quantityBasis,
     },
     sellers: buildSellerIndex(s.sellers, s.stores),
   }
@@ -194,6 +300,9 @@ export interface CmsStageExpect {
   bytes_processed: number | null
   source_max_updated_at: string | null
   totals: Record<string, string | number | Record<string, number>>
+  /** CMS-UNIT dấu writer (128): cơ sở + phiên bản chính sách của run. Không gửi khi DB legacy (trước 128). */
+  quantity_basis?: CmsQuantityBasis
+  calculation_policy_version?: CmsCalcPolicyVersion
 }
 
 export interface CmsStagePayload {
@@ -335,6 +444,11 @@ export function buildCmsStagePayload(
         unassigned_by_reason: { ...t.unassignedByReason } as Record<string, number>,
         excluded_by_reason: { ...excludedByReason } as Record<string, number>,
       },
+      // 128: dấu writer — seal_begin / publish đối chiếu với metadata run (writer cũ không khai chỉ hợp lệ với pos_base).
+      ...(snapshot.basisLegacy ? {} : {
+        quantity_basis: snapshot.quantityBasis,
+        calculation_policy_version: snapshot.calculationPolicyVersion,
+      }),
     },
   }
 }

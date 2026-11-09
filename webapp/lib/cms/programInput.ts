@@ -1,8 +1,12 @@
 // CMS P1-b — chuẩn hoá đầu vào tạo / sửa chương trình (thuần, test được) + nhãn lỗi RPC 121 cho server action.
 // Server action dùng; RPC rpc_cms_program_save kiểm lại toàn bộ trong transaction (không tin tầng này).
 // KHÔNG nhận is_test / actor / status từ client (H9: server quyết namespace QA theo marker của người tạo).
+// CMS-UNIT (PM spec 09/11 §4): cơ sở tính do SERVER quyết (tạo mới: cờ CMS_UNIT_BASIS_ENABLED ⇒ cms_unit, tắt ⇒ pos_base; sửa: giữ
+// nguyên). Client có thể gửi `quantity_basis` để khẳng định cơ sở đã xem trong preview — enum lạ ⇒ từ chối; khác cơ sở server ⇒
+// từ chối (cmsResolveProgramBasis). Không có đường đổi cơ sở qua form (đổi cơ sở = quy trình chuyển đổi riêng).
 
 import { isCmsIsoDate } from './time'
+import { CMS_BASIS_LABEL, isCmsQuantityBasis, type CmsQuantityBasis } from './unitBasis'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 export const CMS_PROGRAM_NAME_MAX = 200
@@ -17,6 +21,33 @@ export interface CmsProgramInput {
   end_date: string
   scope: 'all' | 'stores'
   store_ids: string[]
+}
+
+/** Khoá quantity_basis client gửi (null = không gửi). Sai enum ⇒ lỗi. */
+export function cmsProgramBasisClaim(raw: unknown): { ok: true; value: CmsQuantityBasis | null } | { ok: false; error: string } {
+  if (!raw || typeof raw !== 'object' || !Object.prototype.hasOwnProperty.call(raw, 'quantity_basis')) return { ok: true, value: null }
+  const b = (raw as Record<string, unknown>).quantity_basis
+  if (b === undefined || b === null) return { ok: true, value: null }
+  return isCmsQuantityBasis(b) ? { ok: true, value: b } : { ok: false, error: 'Cơ sở tính không hợp lệ' }
+}
+
+/**
+ * Cơ sở tính sẽ dùng. Tạo mới: cờ bật ⇒ cms_unit, tắt ⇒ pos_base. Sửa: cơ sở hiện tại của chương trình (không đổi qua form).
+ * Client khẳng định khác ⇒ lỗi (không âm thầm theo client, không âm thầm bỏ qua).
+ */
+export function cmsResolveProgramBasis(
+  claim: CmsQuantityBasis | null, ctx: { kind: 'create'; unitBasisEnabled: boolean } | { kind: 'update'; current: CmsQuantityBasis },
+): { ok: true; value: CmsQuantityBasis } | { ok: false; error: string } {
+  const server: CmsQuantityBasis = ctx.kind === 'create' ? (ctx.unitBasisEnabled ? 'cms_unit' : 'pos_base') : ctx.current
+  if (claim !== null && claim !== server) {
+    return {
+      ok: false,
+      error: ctx.kind === 'create'
+        ? `Cơ sở tính hiện áp dụng cho chương trình mới là "${CMS_BASIS_LABEL[server]}" — tải lại trang rồi thử lại`
+        : 'Không đổi cơ sở tính của chương trình qua form',
+    }
+  }
+  return { ok: true, value: server }
 }
 
 export function normalizeCmsProgramInput(raw: unknown): { ok: true; value: CmsProgramInput } | { ok: false; error: string } {
@@ -65,6 +96,9 @@ export const CMS_PROGRAM_ERROR_LABELS: Record<string, string> = {
   CMS_PROGRAM_IS_TEST_IMMUTABLE: 'Không đổi được loại chương trình',
   // Q-214 (operator chốt 01/11): chặn dời ngày bắt đầu của chương trình đã kích hoạt về hôm nay / quá khứ.
   CMS_PROGRAM_START_PAST: 'Chương trình đã kích hoạt chỉ được dời ngày bắt đầu sang một ngày sau hôm nay',
+  // CMS-UNIT (128): trigger cms_programs_basis_guard từ chối đổi cơ sở ngoài quy trình chuyển đổi.
+  CMS_PROGRAM_BASIS_CHANGE_INVALID: 'Không đổi được cơ sở tính của chương trình đã có lượt tính',
+  UNIT_BASIS_DB_UNSUPPORTED: 'CSDL chưa hỗ trợ cách tính theo ĐV tính CMS — chưa tạo được chương trình',
   BUSY: 'Đang có thao tác khác trên danh mục CMS — thử lại sau ít giây',
 }
 

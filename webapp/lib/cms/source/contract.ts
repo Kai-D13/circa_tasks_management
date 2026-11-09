@@ -88,7 +88,18 @@ export interface CmsSalesLine {
   /** Nguyên `item.amount`, scale 9 (giữ VAT, không phân bổ voucher). */
   gmvUnits: bigint
   sourceUpdatedAtMicros: bigint
+  /**
+   * CMS-UNIT: quantity_raw / uom_raw THÔ có ký tự điều khiển (đã bị thay bằng khoảng trắng ở trên). CHỈ có mặt khi ít nhất một cờ
+   * true — dòng sạch không mang khoá này (shape cũ giữ nguyên). Nhánh cms_unit coi dòng ứng viên như vậy là nguồn hỏng (HOLD), không
+   * dùng giá trị đã làm sạch để tạo ra một đơn vị / lượng có vẻ hợp lệ.
+   */
+  rawControl?: { uom: boolean; quantity: boolean }
 }
+
+// Không cờ g: test() trên regex g có lastIndex trạng thái.
+// eslint-disable-next-line no-control-regex
+const HAS_CONTROL_RE = /[\u0000-\u001F\u007F-\u009F]/
+const hasControl = (v: string | null | undefined) => typeof v === 'string' && HAS_CONTROL_RE.test(v)
 
 export function normalizeSalesRow(raw: CmsRawRow): CmsNormalizeResult<CmsSalesLine> {
   const issues: CmsRowIssue[] = []
@@ -112,6 +123,8 @@ export function normalizeSalesRow(raw: CmsRawRow): CmsNormalizeResult<CmsSalesLi
   if (issues.length || !pid.ok || !bq.ok || !gmv.ok || completed === null || updated === null) {
     return { ok: false, issues }
   }
+  const ctlUom = hasControl(raw.uom_raw)
+  const ctlQty = hasControl(raw.quantity_raw)
   return {
     ok: true,
     value: {
@@ -129,6 +142,7 @@ export function normalizeSalesRow(raw: CmsRawRow): CmsNormalizeResult<CmsSalesLi
       baseQuantityUnits: bq.units,
       gmvUnits: gmv.units,
       sourceUpdatedAtMicros: updated,
+      ...(ctlUom || ctlQty ? { rawControl: { uom: ctlUom, quantity: ctlQty } } : {}),
     },
   }
 }

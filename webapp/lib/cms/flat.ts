@@ -62,6 +62,6 @@ export function cmsFlatEquation(
   return { quantity: q, rate: r, amountVnd: amount }
 }
 
-/** "12 hộp × 25.000₫ = 300.000₫". */
-export const cmsFlatEquationText = (e: CmsFlatEquation, unit: string): string =>
-  `${e.quantity.toLocaleString('vi-VN')} ${unit} × ${cmsVnd(e.rate)} = ${cmsVnd(e.amountVnd)}`
+/** "12 hộp × 25.000₫ = 300.000₫"; run cms_unit (spec PM 09/11 §4) ⇒ "12 hộp đúng ĐV × 25.000₫ = 300.000₫". */
+export const cmsFlatEquationText = (e: CmsFlatEquation, unit: string, basis: 'pos_base' | 'cms_unit' = 'pos_base'): string =>
+  `${e.quantity.toLocaleString('vi-VN')} ${unit}${basis === 'cms_unit' ? ' đúng ĐV' : ''} × ${cmsVnd(e.rate)} = ${cmsVnd(e.amountVnd)}`

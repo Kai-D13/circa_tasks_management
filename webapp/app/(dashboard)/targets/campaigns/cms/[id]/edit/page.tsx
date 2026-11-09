@@ -40,6 +40,7 @@ export default async function CmsEditPage({ params }: { params: Promise<{ id: st
         storesError={!stores.ok}
         invalidStores={invalidStores}
         today={today}
+        quantityBasis={p.quantityBasis}
       />
     </CmsWizardShell>
   )

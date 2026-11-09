@@ -145,7 +145,7 @@ test.describe('CMS P2-c — view-model resultUi @desktop', () => {
 
   test('dòng lịch sử: nhãn / ghi chú; ADJUSTMENT khi Q-206 chưa chốt ⇒ không nhãn "Điều chỉnh", tiền null (U18)', () => {
     const l = { status: 'RECORDED' as const, amountVnd: '30000', baseQuantity: '60', qtyBefore: '0', qtyAfter: '2' }
-    expect(cmsLineView(l, '30', 'hộp', false)).toEqual({ label: 'Đã ghi nhận', tone: 'info', amountVnd: BigInt(30000), qtyText: '2', note: '+2 hộp tính CMS' })
+    expect(cmsLineView(l, '30', 'hộp', false)).toEqual({ label: 'Đã ghi nhận', tone: 'info', amountVnd: BigInt(30000), qtyText: '2', qtyLabel: '2 hộp', note: '+2 hộp tính CMS', unitMatch: null }) // CMS-UNIT: + qtyLabel / unitMatch (pos_base ⇒ null)
     const adj = cmsLineView({ ...l, status: 'ADJUSTMENT', amountVnd: '-15000' }, '30', 'hộp', false)
     expect([adj.label, adj.amountVnd]).toEqual(['Chờ xác nhận', null])
     expect(cmsLineView({ ...l, status: 'ADJUSTMENT', amountVnd: '-15000' }, '30', 'hộp', true).label).toBe('Điều chỉnh')

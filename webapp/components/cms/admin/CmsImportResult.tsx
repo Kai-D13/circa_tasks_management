@@ -51,6 +51,11 @@ export function CmsImportResult({ result }: { result: CmsPreviewResult }) {
           )}
         </Notice>
       )}
+      {result.quantityBasis === 'cms_unit' && (
+        <Notice tone="info" role="status">
+          <span data-cms-preview-basis="cms_unit">Cách tính số lượng của chương trình: <b>Theo ĐV tính CMS</b> — chỉ đơn bán đúng ĐV khai ở cột unit_CMS được tính CMS; K chỉ để kiểm chéo với POS.</span>
+        </Notice>
+      )}
       {result.ignoredFromRow !== null && (
         <Notice tone="warning" icon={AlertTriangle}>Nội dung từ dòng {result.ignoredFromRow} trở đi không được nhập (sau dòng ProductID trống đầu tiên).</Notice>
       )}

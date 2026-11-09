@@ -3,7 +3,7 @@ import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { KpiFixtureBoundary } from '@/components/kpi/KpiFixtureBoundary'
 import { CmsStaffHistoryView, type CmsHistoryLines } from '@/components/cms/staff/CmsStaffHistoryView'
-import { CMS_FX_STAFF_ENDED, CMS_FX_STAFF_PROGRAMS, CMS_FX_STAFF_SIMPLE, CMS_FX_TODAY, cmsFxStaffProducts } from '@/lib/cms/fixturesStaff'
+import { CMS_FX_STAFF_ENDED, CMS_FX_STAFF_PROGRAMS, CMS_FX_STAFF_SIMPLE, CMS_FX_STAFF_UNIT, CMS_FX_STAFF_UNIT_FLAT, CMS_FX_TODAY, cmsFxStaffProducts } from '@/lib/cms/fixturesStaff'
 import { cmsFxProgram } from '@/lib/cms/fixtureScenario'
 import { cmsFxLines, cmsFxParseScenario, cmsFxStaffResults, cmsFxStoreResults } from '@/lib/cms/fixturesResults'
 import { cmsParseHistoryParams } from '@/lib/cms/resultUi'
@@ -13,7 +13,8 @@ import { cmsFixtureNav } from '@/lib/cms/fixtureNav'
 // dữ liệu giả (kịch bản lib/cms/fixtureScenario — dòng engine của run, seq theo toàn bộ ứng viên). Cổng: UI_CATALOG=1 + super
 // admin. ?p2=running|top|held|none|error|gone|config (mặc định running) · &role=manager hoặc &as=manager (QLCH) · &program= ·
 // &product= · &n= · &after= · &run= (khác run hiện hành ⇒ "dữ liệu đã thay đổi") · &fx=empty | lines-error | with-ended | simple
-// (CMS đơn giản PG10 / PG12; &program=<PG10–12> cũng dùng danh sách này).
+// (CMS đơn giản PG10 / PG12; &program=<PG10–12> cũng dùng danh sách này) | unit (CMS-UNIT PG13 cơ sở cms_unit — dòng khác ĐV ghi
+// "Khác ĐV tính CMS"; &program=<PG13> cũng dùng danh sách này) | unit-flat (PG14 mức cố định / hộp; &program=<PG14>).
 export default async function CmsHistoryFixture({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   if (process.env.UI_CATALOG !== '1') notFound()
   const { user, profile } = await getSessionProfile()
@@ -27,7 +28,9 @@ export default async function CmsHistoryFixture({ searchParams }: { searchParams
   const params = cmsParseHistoryParams(sp)
   // Như route thật: chương trình ĐÃ BẮT ĐẦU (đang chạy / chờ chốt / đã chốt) — sắp diễn ra không có lịch sử.
   const simple = fx === 'simple' || CMS_FX_STAFF_SIMPLE.some((p) => p.id === params.programId)
-  const started = (simple ? CMS_FX_STAFF_SIMPLE : [...CMS_FX_STAFF_PROGRAMS, ...CMS_FX_STAFF_ENDED]).filter((p) => p.startDate <= CMS_FX_TODAY)
+  const unitFlat = fx === 'unit-flat' || CMS_FX_STAFF_UNIT_FLAT.some((p) => p.id === params.programId)
+  const unit = !unitFlat && (fx === 'unit' || CMS_FX_STAFF_UNIT.some((p) => p.id === params.programId))
+  const started = (unitFlat ? CMS_FX_STAFF_UNIT_FLAT : unit ? CMS_FX_STAFF_UNIT : simple ? CMS_FX_STAFF_SIMPLE : [...CMS_FX_STAFF_PROGRAMS, ...CMS_FX_STAFF_ENDED]).filter((p) => p.startDate <= CMS_FX_TODAY)
   const programs = fx === 'empty' ? [] : fx === 'with-ended' || params.programId ? started : started.filter((p) => p.status === 'active' && p.endDate >= CMS_FX_TODAY)
   const selected = programs.find((p) => p.id === params.programId) ?? programs[0] ?? null
   const products = selected ? cmsFxStaffProducts(selected.id) : []

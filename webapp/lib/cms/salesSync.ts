@@ -23,10 +23,17 @@
 // đối soát). elapsedMs tính SAU cleanup.
 // Mọi lỗi giữ pointer cũ (không công bố 0 thay dữ liệu lỗi). Đóng run thất bại KHÔNG bị nuốt ⇒ CLOSE_FAILED + cause.
 // Kết quả / log chỉ số đếm + mã cố định — không email, không giá trị dòng, không message thô của nguồn.
+// CMS-UNIT (PM spec 09/11 §2 / §4; migration 128): cơ sở tính lấy từ snapshot CỦA RUN (DB ghi lúc open). Chương trình cms_unit mà
+//   opts.unitBasisEnabled (cờ CMS_UNIT_BASIS_ENABLED) tắt ⇒ held UNIT_BASIS_DISABLED (không lùi về luật cũ). Dòng ứng viên thiếu /
+//   sai đơn vị hoặc lượng ⇒ held UNIT_SOURCE_INVALID; đúng ĐV CMS mà lượng lẻ ⇒ held UNIT_QUANTITY_FRACTION (Q-223 — không làm tròn).
+//   quantity_raw âm (mọi đơn vị, cả chưa gán / ngoài phạm vi) vào cổng trả hàng. opts.basisOverride CHỈ cho dry-run (đọc, không ghi) —
+//   lượt ghi có override ⇒ từ chối trước mọi I/O.
 
 import { cmsEncodeUnitIssueSummary, cmsSummarizeRowIssues, type CmsUnitIssueSummary } from './sourceDiagnostics'
 import { createHash } from 'node:crypto'
 import { computeCmsProgram, CmsEngineInputError } from './engine/compute'
+import { CMS_BASIS_POLICY, CMS_UNIT_CODES, type CmsCalcPolicyVersion, type CmsQuantityBasis } from './unitBasis'
+import type { CmsUnitInvalidReason } from './unitKey'
 import { CmsEngineConfigError, parseCmsEngineProgram } from './engine/config'
 import { assessSalesSnapshot, findDuplicates } from './quality'
 import {
@@ -118,6 +125,11 @@ export interface CmsSalesSyncResult {
   /** S2 (PM r1 §5.2): chẩn đoán dòng nguồn bị loại (ProductID × đơn vị × mã, ≤ 20 nhóm) khi held ROW_ISSUES / UNCONVERTED_UNITS;
    *  null khi không có dòng lỗi. Chỉ cho super / operator (CLI, detail run) — không gửi staff / QLCH / SM, không tự gửi BI. */
   unitIssues?: CmsUnitIssueSummary | null
+  /** CMS-UNIT: cơ sở tính / phiên bản chính sách đã dùng (dry-run override ⇒ giá trị override); null khi chưa đọc snapshot. */
+  quantityBasis?: CmsQuantityBasis | null
+  calculationPolicyVersion?: CmsCalcPolicyVersion | null
+  /** CMS-UNIT: dòng ứng viên hỏng đơn vị / lượng theo lý do (held UNIT_*). */
+  unitInvalid?: Partial<Record<CmsUnitInvalidReason, number>> | null
   /** Toàn bộ thời gian của lượt chương trình, GỒM cleanup. */
   elapsedMs: number
   /** Đóng run thất bại: kết quả dự định trước bước đóng (status = 'error', code = 'CLOSE_FAILED'). */
@@ -140,6 +152,31 @@ export type CmsSalesSyncOpts = {
   sourceCapture?: boolean
   /** CHỈ TEST: ép cổng kết quả về HOLD để kiểm nhánh đóng (chỉ ĐÓNG thêm — không mở được cổng). Route / script không truyền. */
   releaseHold?: boolean
+  /** CMS-UNIT: cờ CMS_UNIT_BASIS_ENABLED (route / script đọc env). Thiếu ⇒ false: chương trình cms_unit ⇒ held UNIT_BASIS_DISABLED. */
+  unitBasisEnabled?: boolean
+  /**
+   * CMS-UNIT: tính thử theo cơ sở khác cơ sở của chương trình — CHỈ dry-run (chỉ đọc; release §8 bước 4). Lượt ghi có override ⇒
+   * error BASIS_OVERRIDE_WRITE_FORBIDDEN trước mọi I/O (không bao giờ ghi run theo cơ sở không phải của chương trình).
+   */
+  basisOverride?: CmsQuantityBasis
+}
+
+/** Mã lỗi: basis override ở lượt ghi. */
+export const CMS_BASIS_OVERRIDE_WRITE_FORBIDDEN = 'BASIS_OVERRIDE_WRITE_FORBIDDEN'
+
+/** Mã held + chi tiết (chỉ số đếm) của dòng ứng viên hỏng đơn vị / lượng (cms_unit). */
+export function cmsUnitHold(issues: Partial<Record<CmsUnitInvalidReason, number>>): { code: string; reasons: string[]; detail: CmsSalesRunDetail } {
+  const keys = (Object.keys(issues) as CmsUnitInvalidReason[]).filter((k) => (issues[k] ?? 0) > 0).sort()
+  const fraction = keys.includes('QTY_FRACTION')
+  const other = keys.some((k) => k !== 'QTY_FRACTION')
+  const reasons = [...(other ? [CMS_UNIT_CODES.sourceInvalid] : []), ...(fraction ? [CMS_UNIT_CODES.fraction] : [])]
+  let n = 0
+  for (const k of keys) n += issues[k] ?? 0
+  return {
+    code: reasons[0] ?? CMS_UNIT_CODES.sourceInvalid,
+    reasons,
+    detail: { unit_invalid_lines: n, unit_invalid_by_reason: keys.map((k) => `${k}=${issues[k]}`).join(',') },
+  }
 }
 
 /** Mã held: nguồn 'qa' trỏ vào chương trình thật (writer QA không bao giờ ghi chương trình thật — PM 06/11 AC08). */
@@ -154,9 +191,11 @@ export const CMS_QA_SOURCE_REAL_PROGRAM = 'QA_SOURCE_REAL_PROGRAM'
 export function cmsNegativeCandidateLines(out: Pick<ReturnType<typeof computeCmsProgram>, 'lines' | 'excluded'>): number {
   const Z = BigInt(0)
   let n = 0
-  for (const l of out.lines) if (l.baseQuantityUnits < Z || l.gmvUnits < Z) n++
+  // CMS-UNIT: rawQuantityNegative chỉ có ở run cms_unit (quantity_raw âm ở MỌI đơn vị — không để dòng khác đơn vị né cổng âm).
+  for (const l of out.lines) if (l.baseQuantityUnits < Z || l.gmvUnits < Z || l.rawQuantityNegative === true) n++
   for (const l of out.excluded) {
-    if ((l.reason === 'UNASSIGNED' || l.reason === 'OUT_OF_SCOPE') && (l.baseQuantityUnits < Z || l.gmvUnits < Z)) n++
+    if ((l.reason === 'UNASSIGNED' || l.reason === 'OUT_OF_SCOPE')
+        && (l.baseQuantityUnits < Z || l.gmvUnits < Z || l.rawQuantityNegative === true)) n++
   }
   return n
 }
@@ -233,6 +272,8 @@ async function runCmsSalesSyncInner(deps: CmsSalesSyncDeps, programId: string, o
     return done({ status, code })
   }
 
+  // CMS-UNIT: override cơ sở chỉ cho dry-run — chặn TRƯỚC mọi I/O.
+  if (opts.basisOverride !== undefined && !opts.dryRun) return done({ status: 'error', code: CMS_BASIS_OVERRIDE_WRITE_FORBIDDEN })
   if (!deps.table) return done({ status: 'config_missing', code: 'CONFIG_MISSING' })
   if (!budget.canWork()) return done({ status: 'held', code: 'DEADLINE' })
 
@@ -285,6 +326,14 @@ async function runCmsSalesSyncInner(deps: CmsSalesSyncDeps, programId: string, o
   // Capability lớp nguồn: chỉ tin giá trị DB trả lúc mở run (cờ không phải chứng cứ DB hỗ trợ).
   const capture = !opts.dryRun && opts.sourceCapture === true
   if (capture && snap.sourceSchema !== CMS_SOURCE_SCHEMA_SUPPORTED) return stop('error', 'SOURCE_SCHEMA_UNSUPPORTED')
+  // CMS-UNIT: cơ sở tính của run (dry-run có thể override — chỉ đọc). cms_unit cần cờ bật (lượt ghi) và DB có 128.
+  if (opts.basisOverride !== undefined && opts.basisOverride !== snap.quantityBasis) {
+    if (snap.basisLegacy) return done({ status: 'dry_run', code: CMS_UNIT_CODES.dbUnsupported })
+    snap = { ...snap, quantityBasis: opts.basisOverride, calculationPolicyVersion: CMS_BASIS_POLICY[opts.basisOverride] }
+  }
+  res.quantityBasis = snap.quantityBasis
+  res.calculationPolicyVersion = snap.calculationPolicyVersion
+  if (snap.quantityBasis === 'cms_unit' && !opts.dryRun && opts.unitBasisEnabled !== true) return stop('held', CMS_UNIT_CODES.disabled)
 
   let engineInput: ReturnType<typeof cmsSnapshotToEngineInput>
   let win: { fromMicros: bigint; toMicrosExclusive: bigint }
@@ -295,6 +344,8 @@ async function runCmsSalesSyncInner(deps: CmsSalesSyncDeps, programId: string, o
   } catch (e) {
     // CMS-Q-220: cấu hình bậc cuối hữu hạn (chưa chuyển đổi bằng migration 125) ⇒ mã riêng, KHÔNG tính theo trần; run đóng
     // 'error' ⇒ pointer / snapshot đã công bố giữ nguyên (fail-closed như CONFIG_INVALID).
+    // CMS-UNIT: chương trình cms_unit có SP thiếu / sai ĐV tính CMS ⇒ CONFIG_UNIT_INVALID (không lùi về luật cũ).
+    if (e instanceof CmsEngineConfigError && e.code === 'BAD_UNIT') return stop('error', 'CONFIG_UNIT_INVALID')
     return stop('error', e instanceof CmsEngineConfigError && e.code === 'FINITE_LAST_TIER' ? 'CONFIG_FINITE_LAST_TIER' : 'CONFIG_INVALID')
   }
   if (!budget.canWork()) return stop('held', 'DEADLINE')
@@ -320,6 +371,13 @@ async function runCmsSalesSyncInner(deps: CmsSalesSyncDeps, programId: string, o
   try {
     out = computeCmsProgram({ program: engineInput.program, lines: fetched.lines, sellers: engineInput.sellers })
   } catch (e) {
+    if (e instanceof CmsEngineInputError && e.code === 'UNIT_SOURCE_INVALID') {
+      // UNIT-D01: HOLD cả lượt — không bỏ dòng, không làm tròn, không 0 giả; pointer cũ giữ nguyên. Chi tiết chỉ số đếm theo lý do.
+      const h = cmsUnitHold(e.unitIssues)
+      res.reasons = h.reasons
+      res.unitInvalid = { ...e.unitIssues }
+      return stop('held', h.code, { ...h.detail, reasons: h.reasons.join(',') })
+    }
     if (e instanceof CmsEngineInputError) { res.reasons = ['DUPLICATE_LINE_ID']; return stop('held', 'DUPLICATE_LINE_ID') }
     return stop('error', 'ENGINE_FAILED')
   }

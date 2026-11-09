@@ -8,10 +8,15 @@
 //  · Ô: chuỗi ghi kiểu text (không công thức); số nguyên trong miền an toàn ⇒ số, ngoài miền / thập phân ⇒ text (không mất chữ số).
 //  · Quyền: cờ program + earnings, super hoặc SM; phạm vi dòng do RPC 122 (session). Sheet "Chua gan" (email người bán nguồn để
 //    sửa mapping) chỉ super — RPC excluded cũng chỉ trả cho super.
+//  · CMS-UNIT (spec PM 09/11 §4): sheet Thông tin ghi cơ sở tính / phiên bản chính sách của RUN (mọi run). Run cms_unit: "SL bán đúng ĐV"
+//    = SL tính CMS (Q), dòng đơn có cột "Đúng ĐV CMS" / "SL tính CMS của dòng" / lý do khác ĐV; lượng cơ sở B / K giữ ở cột có nhãn
+//    riêng "[Tra soát POS] …" (số vẫn là số — không trộn text). Header / rows / lines phải cùng cơ sở của run ⇒ lệch ⇒ không xuất.
 import * as XLSX from 'xlsx'
 import { formatCmsDecimal, parseCmsDecimal } from './decimal'
-import { CMS_LINE_LABEL, CMS_SALES_ONLY_NOTE, cmsProductSalesStats, cmsQtyText } from './resultUi'
-import { cmsRunHasLegacyCap, type CmsResultHeaderDto, type CmsResultLineDto, type CmsResultRowsDto } from './resultView'
+import { CMS_LINE_LABEL, CMS_SALES_ONLY_NOTE, CMS_UNIT_RULE_NOTE, cmsProductSalesStats, cmsQtyText } from './resultUi'
+import { cmsRunHasLegacyCap, cmsRunUnitOf, type CmsResultHeaderDto, type CmsResultLineDto, type CmsResultRowsDto } from './resultView'
+import { CMS_BASIS_LABEL, CMS_OTHER_UNIT_TEXT } from './unitBasis'
+import { CMS_UNIT_KEY_VERSION } from './unitKey'
 
 export const CMS_EXPORT_MAX_LINES = 50_000
 export const CMS_EXPORT_MAX_EXCLUDED = 50_000
@@ -98,7 +103,7 @@ export interface CmsExportInput {
   returnsApproved: boolean
 }
 export type CmsExportBuild = { ok: true; bytes: Uint8Array<ArrayBuffer>; lineCount: number; amountVnd: bigint }
-  | { ok: false; error: 'RUN_MISMATCH' | 'COUNT_MISMATCH' | 'TOTAL_MISMATCH' | 'RETURNS_HOLD' }
+  | { ok: false; error: 'RUN_MISMATCH' | 'COUNT_MISMATCH' | 'TOTAL_MISMATCH' | 'RETURNS_HOLD' | 'BASIS_MISMATCH' }
 
 const GATE_LABEL: Record<string, string> = { product: 'Target SP', catalog: 'Theo danh mục', none: 'Theo số lượng' }
 const DISPOSITION_LABEL: Record<string, string> = { UNASSIGNED: 'Chưa gán dược sĩ', OUT_OF_SCOPE: 'Ngoài phạm vi nhà thuốc' }
@@ -112,6 +117,13 @@ export function buildCmsResultWorkbook(i: CmsExportInput): CmsExportBuild {
   const sumLines = i.lines.reduce((s, l) => s + BigInt(l.amountVnd), BigInt(0))
   if (sumRows !== sumLines) return { ok: false, error: 'TOTAL_MISMATCH' }
   if (!i.returnsApproved && i.lines.some((l) => l.status === 'ADJUSTMENT')) return { ok: false, error: 'RETURNS_HOLD' }
+  // CMS-UNIT: header / rows / lines cùng cơ sở của run (dòng legacy không gắn cơ sở). cms_unit: mọi dòng đơn phải có phân loại đơn vị.
+  const rb = run.basis
+  const unit = rb.basis === 'cms_unit'
+  const lineBasis = rb.legacy ? undefined : rb.basis
+  if ((i.rows.basis && (i.rows.basis.basis !== rb.basis || i.rows.basis.policy !== rb.policy))
+    || i.rows.results.some((r) => r.quantityBasis !== lineBasis)
+    || i.lines.some((l) => l.quantityBasis !== lineBasis || (unit && typeof l.unitMatch !== 'boolean'))) return { ok: false, error: 'BASIS_MISMATCH' }
 
   const prod = new Map(i.products.map((p) => [p.id, p]))
   const names = new Map(i.rows.users.map((u) => [u.id, u]))
@@ -131,8 +143,16 @@ export function buildCmsResultWorkbook(i: CmsExportInput): CmsExportBuild {
     ['Phạm vi số liệu', CMS_SALES_ONLY_NOTE],
     ['config_version của phiên', run.configVersion],
     ['config_version hiện tại', i.header.configVersion],
+    ['Cơ sở tính số lượng (của phiên)', CMS_BASIS_LABEL[rb.basis]],
+    ['Phiên bản chính sách tính (của phiên)', rb.policy],
+    ...(unit ? [
+      ['Khoá chuẩn hoá đơn vị', CMS_UNIT_KEY_VERSION],
+      ['Luật số lượng', `${CMS_UNIT_RULE_NOTE}: SL tính CMS = Σ số lượng các dòng bán đúng ĐV tính CMS (số nguyên). Dòng bán đơn vị khác không tính CMS nhưng vẫn cộng GMV target. Cột [Tra soát POS] (lượng cơ sở B, K) chỉ để đối chiếu POS — không dùng tính tiền.`],
+    ] as Cell[][] : []),
     ['Phạm vi người xuất', i.scope === 'super' ? 'Toàn chương trình (super)' : 'Toàn chương trình trong phạm vi của bạn — nhà thuốc được phân công (SM)'],
-    ['Định nghĩa', 'Dược sĩ có bán = lượng cơ sở thuần > 0 (kể cả chưa đủ 1 đơn vị CMS); SL tính CMS = số đơn vị CMS nguyên.'],
+    ['Định nghĩa', unit
+      ? 'Dược sĩ có bán = lượng cơ sở thuần > 0 (mọi đơn vị bán); SL bán đúng ĐV = SL tính CMS = Σ số lượng đơn bán đúng ĐV tính CMS.'
+      : 'Dược sĩ có bán = lượng cơ sở thuần > 0 (kể cả chưa đủ 1 đơn vị CMS); SL tính CMS = số đơn vị CMS nguyên.'],
     ['Xuất lúc (VN)', vnTime(i.exportedAt.toISOString())],
     ['Tổng CMS tạm tính (VND)', cmsIntCell(sumRows)],
     ['Số dòng đơn được tính', i.lines.length],
@@ -143,37 +163,61 @@ export function buildCmsResultWorkbook(i: CmsExportInput): CmsExportBuild {
 
   // Cùng helper với A3 / QLCH / D3 (PM P1-I3-1): dược sĩ có bán = lượng cơ sở thuần > 0 (nửa đơn vị CMS vẫn tính).
   const byPp = new Map([...cmsProductSalesStats(i.rows.results)].map(([k, x]) => [k, { base: x.baseUnits, q: x.cmsQuantity, gmv: x.gmvUnits, sold: x.staffWithSales, achieved: x.staffAchieved, amount: x.amountVnd }]))
-  const prodSheet: Cell[][] = [['ProductID', 'Tên sản phẩm', 'Loại điều kiện', 'Đơn vị CMS', 'SL bán (đv CMS)', 'SL tính CMS', 'GMV (VND)', 'Dược sĩ có bán', 'Dược sĩ đạt', 'CMS tạm tính (VND)']]
+  const POS = '[Tra soát POS]'
+  const prodSheet: Cell[][] = [unit
+    ? ['ProductID', 'Tên sản phẩm', 'Loại điều kiện', 'ĐV tính CMS (của phiên)', 'SL bán đúng ĐV CMS', 'SL tính CMS', 'GMV (VND, mọi đơn vị)', 'Dược sĩ có bán', 'Dược sĩ đạt', 'CMS tạm tính (VND)',
+      `${POS} Lượng cơ sở (B)`, `${POS} K (1 ĐV CMS = K cơ sở)`, `${POS} B / K (tham khảo)`]
+    : ['ProductID', 'Tên sản phẩm', 'Loại điều kiện', 'Đơn vị CMS', 'SL bán (đv CMS)', 'SL tính CMS', 'GMV (VND)', 'Dược sĩ có bán', 'Dược sĩ đạt', 'CMS tạm tính (VND)']]
   for (const p of i.products) {
     const a = byPp.get(p.id)
+    if (unit) {
+      const k = i.rows.units?.find((u) => u.programProductId === p.id)?.baseQuantityCms ?? p.baseQuantityCms
+      prodSheet.push([p.productId, p.nameSnapshot, GATE_LABEL[p.gmvBasis] ?? p.gmvBasis, cmsRunUnitOf(i.rows, p.id, p.unitCms),
+        a ? cmsIntCell(a.q) : 0, a ? cmsIntCell(a.q) : 0, a ? cmsDecCell(formatCmsDecimal(a.gmv)) : 0, a?.sold ?? 0, a?.achieved ?? 0, a ? cmsIntCell(a.amount) : 0,
+        a ? cmsDecCell(formatCmsDecimal(a.base)) : 0, cmsDecCell(k), a ? cmsQtyText(a.base, units(k)) : '0'])
+      continue
+    }
     prodSheet.push([p.productId, p.nameSnapshot, GATE_LABEL[p.gmvBasis] ?? p.gmvBasis, p.unitCms,
       a ? cmsQtyText(a.base, units(p.baseQuantityCms)) : '0', a ? cmsIntCell(a.q) : 0, a ? cmsDecCell(formatCmsDecimal(a.gmv)) : 0,
       a?.sold ?? 0, a?.achieved ?? 0, a ? cmsIntCell(a.amount) : 0])
   }
-  prodSheet.push(['Tổng', '', '', '', '', '', '', '', '', cmsIntCell(sumRows)])
+  prodSheet.push(['Tổng', '', '', '', '', '', '', '', '', cmsIntCell(sumRows), ...(unit ? ['', '', ''] : [])])
   add('Theo san pham', prodSheet)
 
   // CMS-Q-220: run mới không có trần ⇒ KHÔNG quảng bá cột "SL hưởng (sau trần)" / "Trần" / "Đạt trần". Chỉ phiên LỊCH SỬ có trần
   // (snapshot cũ đã đóng băng — legacyCap) mới xuất 3 cột đó để thể hiện đúng cấu hình của run, không tô lại thành luật mới.
-  const staffSheet: Cell[][] = [['Dược sĩ', 'user_id', 'Nhà thuốc hiện tại', 'Nhà thuốc lúc bán', 'ProductID', 'Tên sản phẩm', 'SL bán (đv CMS)', 'SL tính CMS',
+  const staffSheet: Cell[][] = [['Dược sĩ', 'user_id', 'Nhà thuốc hiện tại', 'Nhà thuốc lúc bán', 'ProductID', 'Tên sản phẩm', unit ? 'SL bán đúng ĐV CMS' : 'SL bán (đv CMS)', 'SL tính CMS',
     ...(legacyCap ? ['SL hưởng (sau trần)', 'Trần', 'Đạt trần'] : []),
-    'GMV (VND)', 'Target (VND)', 'Đạt target', 'Đạt từ (VN)', 'CMS khi đạt (VND)', 'CMS tạm tính (VND)', 'Số dòng']]
+    unit ? 'GMV (VND, mọi đơn vị)' : 'GMV (VND)', 'Target (VND)', 'Đạt target', 'Đạt từ (VN)', 'CMS khi đạt (VND)', 'CMS tạm tính (VND)', 'Số dòng',
+    ...(unit ? [`${POS} Lượng cơ sở (B)`, `${POS} B / K (tham khảo)`] : [])]]
   const sorted = [...i.rows.results].sort((a, b) => (names.get(a.userId)?.fullName ?? '').localeCompare(names.get(b.userId)?.fullName ?? '', 'vi')
     || a.userId.localeCompare(b.userId) || (prod.get(a.programProductId)?.productId ?? '').localeCompare(prod.get(b.programProductId)?.productId ?? ''))
   for (const r of sorted) {
     const p = prod.get(r.programProductId)
     staffSheet.push([names.get(r.userId)?.fullName ?? '', r.userId, store(names.get(r.userId)?.storeId ?? null), store(r.storeId), r.productId, p?.nameSnapshot ?? '',
-      cmsQtyText(units(r.baseQuantity), units(r.perUnit)), cmsIntCell(r.cmsQuantity),
+      unit ? cmsIntCell(r.cmsQuantity) : cmsQtyText(units(r.baseQuantity), units(r.perUnit)), cmsIntCell(r.cmsQuantity),
       ...(legacyCap ? [cmsIntCell(r.rewardedQuantity), cmsIntCell(r.capQuantity), r.atCap ? 'Có' : 'Không'] : []),
       cmsDecCell(r.gmvAmount), cmsIntCell(r.targetGmv), r.gmvBasis === 'none' ? '' : r.gateMet ? 'Đạt' : 'Chưa đạt', vnTime(r.gateMetAt),
-      cmsIntCell(r.potentialAmount), cmsIntCell(r.amountVnd), r.lineCount])
+      cmsIntCell(r.potentialAmount), cmsIntCell(r.amountVnd), r.lineCount,
+      ...(unit ? [cmsDecCell(r.baseQuantity), cmsQtyText(units(r.baseQuantity), units(r.perUnit))] : [])])
   }
   add('Theo duoc si', staffSheet)
 
-  const lineSheet: Cell[][] = [['seq', 'Mã đơn', 'order_line_id', 'ProductID', 'Tên sản phẩm', 'Dược sĩ', 'Nhà thuốc lúc bán', 'POS', 'Hoàn tất (VN)',
-    'SL gốc', 'ĐVT gốc', 'SL cơ sở', 'GMV (VND)', 'Lũy kế cơ sở trước', 'Lũy kế cơ sở sau', 'SL CMS trước', 'SL CMS sau', 'Trạng thái', 'CMS dòng (VND)']]
+  const lineSheet: Cell[][] = [unit
+    ? ['seq', 'Mã đơn', 'order_line_id', 'ProductID', 'Tên sản phẩm', 'Dược sĩ', 'Nhà thuốc lúc bán', 'POS', 'Hoàn tất (VN)',
+      'SL gốc', 'ĐVT gốc', 'Đúng ĐV CMS', 'SL tính CMS của dòng', 'GMV (VND)', 'SL CMS trước', 'SL CMS sau', 'Trạng thái', 'CMS dòng (VND)', 'Ghi chú đơn vị',
+      `${POS} SL cơ sở`, `${POS} Lũy kế cơ sở trước`, `${POS} Lũy kế cơ sở sau`]
+    : ['seq', 'Mã đơn', 'order_line_id', 'ProductID', 'Tên sản phẩm', 'Dược sĩ', 'Nhà thuốc lúc bán', 'POS', 'Hoàn tất (VN)',
+      'SL gốc', 'ĐVT gốc', 'SL cơ sở', 'GMV (VND)', 'Lũy kế cơ sở trước', 'Lũy kế cơ sở sau', 'SL CMS trước', 'SL CMS sau', 'Trạng thái', 'CMS dòng (VND)']]
   for (const l of i.lines) {
     const p = prod.get(l.programProductId)
+    if (unit) {
+      lineSheet.push([l.seq, l.orderCode, l.orderLineId, l.productId, p?.nameSnapshot ?? '', names.get(l.userId)?.fullName ?? '', store(l.storeId), l.posCode,
+        vnTime(l.completedAt), l.quantityRaw, l.uomRaw, l.unitMatch ? 'Có' : 'Không', cmsIntCell(l.countedQuantity ?? null), cmsDecCell(l.gmvAmount),
+        cmsIntCell(l.qtyBefore), cmsIntCell(l.qtyAfter), CMS_LINE_LABEL[l.status], cmsIntCell(l.amountVnd), l.unitMatch ? '' : CMS_OTHER_UNIT_TEXT,
+        cmsDecCell(l.baseQuantity), cmsDecCell(l.baseBefore), cmsDecCell(l.baseAfter)])
+      continue
+    }
     lineSheet.push([l.seq, l.orderCode, l.orderLineId, l.productId, p?.nameSnapshot ?? '', names.get(l.userId)?.fullName ?? '', store(l.storeId), l.posCode,
       vnTime(l.completedAt), l.quantityRaw, l.uomRaw, cmsDecCell(l.baseQuantity), cmsDecCell(l.gmvAmount), cmsDecCell(l.baseBefore), cmsDecCell(l.baseAfter),
       cmsIntCell(l.qtyBefore), cmsIntCell(l.qtyAfter), CMS_LINE_LABEL[l.status], cmsIntCell(l.amountVnd)])

@@ -7,6 +7,9 @@
 //    tròn ở nguồn (hai dòng lệch nhỏ bù nhau từng thành "cùng hệ số" sau làm tròn scale 9). Cùng hệ số ⇔ b_i × q_0 = b_0 × q_i với MỌI
 //    cặp; KHỚP ⇔ b_i × 10^9 = K × q_i với MỌI cặp (BigInt, không float / AVG / epsilon); K đề xuất chỉ khi b_0 × 10^9 chia hết q_0;
 //  · có viên mà không có hộp ⇒ CHƯA CÓ BẰNG CHỨNG (không K = 1, không kết luận lệch); không suy K từ tên SP.
+// CMS-UNIT (PM spec 09/11 §2 / §4): chương trình cơ sở cms_unit so khớp đơn vị bằng cmsUnitKey (CÙNG khoá engine / SQL 128 — không
+//   lower() / trim lỏng hơn khiến "đã bán theo ĐV này" thành KHỚP trong khi engine không đếm). Chuẩn hoá là tham số `norm`; mặc
+//   định cmsNormUnitFull ⇒ hành vi pos_base / v2 cũ không đổi.
 // Nhánh app (bảng PM §5.1): K trống + bằng chứng duy nhất hợp lệ ⇒ ĐỀ XUẤT (chỉ hiện, admin tự nhập vào file — không tự điền);
 // CHƯA CÓ BẰNG CHỨNG / KHÔNG KIỂM ĐƯỢC + K có ⇒ chỉ qua được bằng xác nhận tay của super kèm nguồn căn cứ, gắn đúng SP / đơn vị / K,
 // actor lấy từ PHIÊN, thời điểm từ server; LỆCH / NGUỒN XUNG ĐỘT / NGUỒN LỖI ⇒ chặn, xác nhận tay KHÔNG bỏ được.
@@ -15,6 +18,15 @@ import { canonicalProductId } from '../productId'
 import { cmsNormUnitFull as cmsNormUnit } from '../sourceDiagnostics'
 import type { CmsImportRawRow } from './parse'
 import type { CmsImportGroupRejected, CmsImportIssue, CmsImportValidation } from './validate'
+import type { CmsQuantityBasis } from '../unitBasis'
+import { cmsUnitKey } from '../unitKey'
+
+/** Chuẩn hoá đơn vị dùng để gộp / so khớp trong kiểm K. */
+export type CmsUnitNorm = (v: string | null | undefined) => string | null
+/** cms_unit ⇒ cmsUnitKey (khoá engine / SQL); khác ⇒ cmsNormUnitFull (hành vi cũ). */
+export function cmsKUnitNorm(basis: CmsQuantityBasis | undefined): CmsUnitNorm {
+  return basis === 'cms_unit' ? cmsUnitKey : cmsNormUnit
+}
 
 export type CmsKStatus = 'MATCH' | 'PROPOSED' | 'MISMATCH' | 'SOURCE_CONFLICT' | 'SOURCE_ERROR' | 'NO_EVIDENCE' | 'UNAVAILABLE'
 
@@ -83,14 +95,14 @@ const cellText = (c: CmsImportRawRow['cells'][keyof CmsImportRawRow['cells']]): 
  * SP cần kiểm từ dòng đã parse: ProductID canonical, đơn vị (dòng đầu), K (nếu đọc được, > 0). SP có nhiều đơn vị / K khác nhau giữa
  * các dòng ⇒ bỏ qua (validator đã loại GROUP_INCONSISTENT). ProductID hỏng ⇒ bỏ (validator loại).
  */
-export function cmsKTargets(rows: readonly CmsImportRawRow[]): CmsKTarget[] {
+export function cmsKTargets(rows: readonly CmsImportRawRow[], norm: CmsUnitNorm = cmsNormUnit): CmsKTarget[] {
   const by = new Map<string, { units: Set<string>; ks: Set<string>; unit: string; k: bigint | null; bad: boolean }>()
   for (const r of rows) {
     const pc = r.cells.ProductID
     const pid = canonicalProductId(pc.kind === 'number' || pc.kind === 'text' ? pc.value : null)
     if (!pid.ok) continue
     const unitRaw = cellText(r.cells.unit_CMS)
-    const unit = cmsNormUnit(unitRaw)
+    const unit = norm(unitRaw)
     const kc = r.cells.base_quantity_CMS
     // Cùng cách đọc ô K của validator (ô số: cmsNumberToDecimalString trong miền an toàn; text: nguyên văn).
     const kText = kc.kind === 'number' ? (Math.abs(kc.value) <= Number.MAX_SAFE_INTEGER ? cmsNumberToDecimalString(kc.value) : null) : kc.kind === 'text' ? kc.value.trim() : null
@@ -112,10 +124,10 @@ interface Group { productId: string; unit: string; raws: Set<string>; n: bigint;
 const ZERO = BigInt(0)
 const F = CMS_DEC_FACTOR
 
-function groupEvidence(rows: readonly CmsKEvidenceRow[]): Map<string, Group[]> {
+function groupEvidence(rows: readonly CmsKEvidenceRow[], norm: CmsUnitNorm): Map<string, Group[]> {
   const groups = new Map<string, Group>()
   for (const r of rows) {
-    const unit = cmsNormUnit(r.uomRaw) ?? ''
+    const unit = norm(r.uomRaw) ?? ''
     const key = `${r.productId}\u0000${unit}`
     const g = groups.get(key) ?? { productId: r.productId, unit, raws: new Set<string>(), n: ZERO, badQ: ZERO, badB: ZERO, neg: ZERO, pairs: [] }
     g.raws.add(r.uomRaw); g.n += r.lines
@@ -152,8 +164,9 @@ function problem(g: Group): { status: 'SOURCE_CONFLICT' | 'SOURCE_ERROR'; note: 
 const toNum = (n: bigint) => (n > BigInt(Number.MAX_SAFE_INTEGER) ? Number.MAX_SAFE_INTEGER : Number(n))
 
 /** Phân loại từng SP. `acks` = xác nhận tay hợp lệ (đã gắn actor / thời điểm ở server). */
-export function cmsKClassify(targets: readonly CmsKTarget[], evidence: CmsKEvidence, acks: readonly CmsKAck[] = []): CmsKResult[] {
-  const byPid = evidence.ok ? groupEvidence(evidence.rows) : new Map<string, Group[]>()
+export function cmsKClassify(targets: readonly CmsKTarget[], evidence: CmsKEvidence, acks: readonly CmsKAck[] = [],
+  norm: CmsUnitNorm = cmsNormUnit): CmsKResult[] {
+  const byPid = evidence.ok ? groupEvidence(evidence.rows, norm) : new Map<string, Group[]>()
   return targets.map((t): CmsKResult => {
     const k = t.k === null ? null : fmt(t.k)
     const gs = byPid.get(t.productId) ?? []
@@ -237,7 +250,7 @@ export const CMS_K_ACK_MAX = 2000
 export interface CmsKAckInput { productId: string; unit: string; k: string; source: string }
 
 /** Đọc `k_acks` (JSON) từ form; sai dạng ⇒ null (route trả 400). Chuẩn hoá đơn vị / K / nguồn; bỏ ký tự điều khiển. */
-export function cmsParseKAckInput(raw: string | null): CmsKAckInput[] | null {
+export function cmsParseKAckInput(raw: string | null, norm: CmsUnitNorm = cmsNormUnit): CmsKAckInput[] | null {
   if (raw === null || raw === '') return []
   if (raw.length > 1_000_000) return null
   let x: unknown
@@ -248,7 +261,7 @@ export function cmsParseKAckInput(raw: string | null): CmsKAckInput[] | null {
     if (typeof it !== 'object' || it === null) return null
     const o = it as Record<string, unknown>
     const pid = canonicalProductId(typeof o.product_id === 'string' ? o.product_id : null)
-    const unit = cmsNormUnit(typeof o.unit === 'string' ? o.unit : null)
+    const unit = norm(typeof o.unit === 'string' ? o.unit : null)
     const kp = typeof o.k === 'string' ? parseCmsDecimal(o.k) : null
     // eslint-disable-next-line no-control-regex
     const source = typeof o.source === 'string' ? o.source.replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ').replace(/\s+/g, ' ').trim() : ''

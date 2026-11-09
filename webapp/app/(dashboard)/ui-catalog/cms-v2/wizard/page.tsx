@@ -18,9 +18,11 @@ import type { CmsInvalidStore } from '@/lib/cms/server/catalog'
 //   cảnh báo + nội dung sau điểm dừng) · result-append · result-none (0 hợp lệ)
 // CMS đơn giản S1 / S2 (cờ v2 giả lập bật): upload-v2 (bộ chọn loại file) · upload-simple (đã chọn mức cố định) · result-simple
 //   (7 trạng thái kiểm K, ô xác nhận tay) · result-simple-unavailable (KHÔNG KIỂM ĐƯỢC) · result-simple-nok (thiếu cột K / tư vấn).
+// CMS-UNIT (PM 09/11): &basis=cms_unit (hoặc &program=<chương trình cms_unit, PG13>) ⇒ form ghi cách tính "Theo ĐV tính CMS"; import
+//   bắt buộc kiểm K ở mọi mẫu file (kể cả v2 OFF) + dòng luật đơn vị; kết quả kiểm ghi cơ sở. Không có ⇒ pos_base như cũ.
 const STORES = Array.from({ length: 12 }, (_, i) => ({ id: `00000000-0000-4000-8000-0000000001${String(i).padStart(2, '0')}`, name: `Nhà thuốc mẫu ${i + 1}`, code: `QAOS${String(i + 1).padStart(2, '0')}` }))
 // CMS-UI-1: chương trình của kịch bản (lib/cms/fixtureScenario); &program=<id> (link Sửa / Import từ A3 fixture) — mặc định PG1.
-const programOf = (id: string | undefined) => { const p = cmsFxProgram(id) ?? cmsFxProgram(CMS_FX_PG.PG1)!; return { id: p.row.id, name: p.row.name } }
+const programOf = (id: string | undefined) => { const p = cmsFxProgram(id) ?? cmsFxProgram(CMS_FX_PG.PG1)!; return { id: p.row.id, name: p.row.name, basis: p.basis } }
 const INVALID: CmsInvalidStore[] = [
   { id: '00000000-0000-4000-8000-000000000190', name: 'Nhà thuốc mẫu đã ngừng', code: 'QAOS90', reason: 'inactive' },
   { id: '00000000-0000-4000-8000-000000000191', name: 'Nhà thuốc mẫu FS', code: 'QAFS91', reason: 'not_os' },
@@ -37,25 +39,27 @@ function formFor(fx: string, PROGRAM: { id: string; name: string }): { initial?:
   return { invalid: [] }
 }
 
-export default async function CmsWizardFixture({ searchParams }: { searchParams: Promise<{ fx?: string; program?: string }> }) {
+export default async function CmsWizardFixture({ searchParams }: { searchParams: Promise<{ fx?: string; program?: string; basis?: string }> }) {
   if (process.env.UI_CATALOG !== '1') notFound()
   const { user, profile } = await getSessionProfile()
   if (!user) redirect('/login')
   if (!(profile?.role === 'admin' && isSuperAdminEmail(user.email))) notFound()
-  const { fx = 'info', program } = await searchParams
+  const { fx = 'info', program, basis } = await searchParams
   const PROGRAM = programOf(program)
+  const quantityBasis = basis === 'cms_unit' || PROGRAM.basis === 'cms_unit' ? 'cms_unit' as const : 'pos_base' as const
   const isEdit = EDIT_FX.includes(fx)
   const isForm = isEdit || fx === 'info' || fx === 'stores'
   const form = formFor(fx, PROGRAM)
   const simple = fx === 'result-simple' ? CMS_FX_PREVIEW_SIMPLE : fx === 'result-simple-unavailable' ? CMS_FX_PREVIEW_SIMPLE_UNAVAILABLE
     : fx === 'result-simple-nok' ? CMS_FX_PREVIEW_SIMPLE_NOSUPP : null
   const v2 = simple !== null || fx === 'upload-v2' || fx === 'upload-simple'
-  const result = simple ?? (fx === 'result-append' ? { ...CMS_FX_PREVIEW, mode: 'append' as const, ignoredFromRow: null }
+  const result0 = simple ?? (fx === 'result-append' ? { ...CMS_FX_PREVIEW, mode: 'append' as const, ignoredFromRow: null }
     : fx === 'result-none' ? { ...CMS_FX_PREVIEW, groupsOk: [], stats: { ...CMS_FX_PREVIEW.stats, rowsOk: 0, productsOk: 0, warnings: 0 } }
     : CMS_FX_PREVIEW)
+  const result = quantityBasis === 'cms_unit' ? { ...result0, quantityBasis } : result0
   return (
     <KpiFixtureBoundary>
-      <div data-testid="ui-catalog-cms-wizard" data-fx={fx}>
+      <div data-testid="ui-catalog-cms-wizard" data-fx={fx} data-basis={quantityBasis}>
         <CmsWizardShell
           title={isEdit ? 'Sửa thông tin chương trình' : 'Tạo chương trình CMS'}
           subtitle={isForm && !isEdit ? undefined : PROGRAM.name}
@@ -73,6 +77,7 @@ export default async function CmsWizardFixture({ searchParams }: { searchParams:
                 storesError={false}
                 invalidStores={form.invalid}
                 today={CMS_FX_TODAY}
+                quantityBasis={quantityBasis}
               />
             </>
           ) : (
@@ -82,6 +87,7 @@ export default async function CmsWizardFixture({ searchParams }: { searchParams:
               fromNew={fx !== 'result-append'}
               fixture={{ step: fx === 'upload' || fx === 'upload-v2' || fx === 'upload-simple' ? 'upload' : fx === 'running' ? 'running' : 'result', result, fileName: simple || fx === 'upload-simple' ? 'CMS_muc_co_dinh_thang12.xlsx' : 'Circa_Import_CMS_thang11.xlsx', fileBytes: 48_213, format: simple || fx === 'upload-simple' ? 'simple' : 'tiers' }}
               v2={v2}
+              quantityBasis={quantityBasis}
             />
           )}
         </CmsWizardShell>

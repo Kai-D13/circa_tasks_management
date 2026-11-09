@@ -37,7 +37,8 @@ export default async function CmsImportPage({ params, searchParams }: {
       backLabel="Chi tiết chương trình"
       kind="import"
     >
-      <CmsImportFlow program={{ id: p.id, name: p.name }} mode={mode} fromNew={fromNew} v2={isCmsImportV2Enabled()} />
+      {/* CMS-UNIT: chương trình cms_unit ⇒ kiểm K / bằng chứng đơn vị bắt buộc ở MỌI mẫu file (route handler quyết lại theo DB). */}
+      <CmsImportFlow program={{ id: p.id, name: p.name }} mode={mode} fromNew={fromNew} v2={isCmsImportV2Enabled()} quantityBasis={p.quantityBasis} />
     </CmsWizardShell>
   )
 }

@@ -401,7 +401,9 @@ async function main() {
     // Capture lớp nguồn (124) theo cờ CMS_SOURCE_CAPTURE_ENABLED (lib/cms/flags.ts cmsSourceCaptureFromEnv) — lõi vẫn đòi
     // run_open trả source_schema = 1 (thiếu ⇒ đóng run SOURCE_SCHEMA_UNSUPPORTED; run_id đã vào sổ qua onOpened).
     r = await core.runCmsSalesSync(deps, programId, { dryRun: false, source: R.CMS_QA_WRITER_SOURCE, deadlineAt,
-      sourceCapture: process.env.CMS_SOURCE_CAPTURE_ENABLED === 'true' })
+      sourceCapture: process.env.CMS_SOURCE_CAPTURE_ENABLED === 'true',
+      // CMS-UNIT: cùng hợp đồng cờ với cron (program + CMS_UNIT_BASIS_ENABLED); writer QA vẫn chỉ ghi chương trình is_test.
+      unitBasisEnabled: process.env.CMS_PROGRAM_ENABLED === 'true' && process.env.CMS_UNIT_BASIS_ENABLED === 'true' })
   } catch (e) {
     rethrowCliExit(e)
     r = { status: 'error', code: 'INTERNAL', runId: null, stagedRows: 0, rowsRead: null, candidates: null, included: null, unassigned: null }

@@ -6,8 +6,9 @@ import { EmptyState } from '@/components/ds/EmptyState'
 import { DataTableShell } from '@/components/ds/DataTableShell'
 import { ProgressBar } from '@/components/ds/ProgressBar'
 import { cmsDateTime, cmsVnd } from '@/lib/cms/display'
-import { cmsStaffRows, CMS_SALES_ONLY_NOTE, type CmsA3Stats, type CmsStaffRowView, type CmsUnassignedSummary } from '@/lib/cms/resultUi'
-import { cmsResultState, type CmsCatalogRowDto, type CmsResultHeaderDto, type CmsResultRowDto, type CmsResultUserDto } from '@/lib/cms/resultView'
+import { cmsStaffRows, CMS_SALES_ONLY_NOTE, CMS_UNIT_RULE_NOTE, type CmsA3Stats, type CmsStaffRowView, type CmsUnassignedSummary } from '@/lib/cms/resultUi'
+import { CMS_BASIS_PENDING_TEXT, cmsResultState, type CmsCatalogRowDto, type CmsResultHeaderDto, type CmsResultRowDto, type CmsResultUserDto } from '@/lib/cms/resultView'
+import { CMS_BASIS_LABEL, CMS_UNIT_HOLD_LABEL, type CmsQuantityBasis } from '@/lib/cms/unitBasis'
 import type { CmsDisplayStatus } from '@/lib/cms/programStatus'
 
 // CMS P2-c (I3) · khối kết quả A3 /targets/campaigns/cms/[id] (UI §3.3; U11 / U12 / U20; Q-212). Chỉ TRÌNH BÀY số đã cộng
@@ -15,10 +16,12 @@ import type { CmsDisplayStatus } from '@/lib/cms/programStatus'
 // CMS-UI-1: bảng "Theo sản phẩm" chuyển sang CmsA3ProductTable (lib/cms/productPresentation dùng cmsProductSalesStats); nhãn
 // theo trạng thái chương trình (Đã chốt ⇒ "CMS đã chốt", không "tạm tính / chưa chốt kỳ"); số tiền không bị cắt (cỡ chữ theo
 // độ rộng ô — container query, xuống dòng ở dấu chấm khi vẫn thiếu chỗ).
+// CMS-UNIT (spec PM 09/11 §4): dòng đồng bộ ghi cách tính của LẦN TÍNH khi là cms_unit (kèm phiên bản chính sách); chưa có run sau
+// đổi cơ sở ⇒ "Chưa có số liệu theo cách tính mới"; mã HOLD cms_unit có nhãn cạnh mã (chỉ super); "lượt" theo đơn vị đúng ĐV.
 
 const MONEY = 'tabular-nums [overflow-wrap:anywhere] text-[length:clamp(20px,11cqi,30px)]'
 
-export function CmsA3StatCards({ stats, display = 'running' }: { stats: CmsA3Stats | null; display?: CmsDisplayStatus }) {
+export function CmsA3StatCards({ stats, display = 'running', basis = 'pos_base' }: { stats: CmsA3Stats | null; display?: CmsDisplayStatus; basis?: CmsQuantityBasis }) {
   const v = (x: React.ReactNode, money = false) => <span className={money ? MONEY : 'tabular-nums'}>{stats ? x : '—'}</span>
   const locked = display === 'locked'
   return (
@@ -28,7 +31,7 @@ export function CmsA3StatCards({ stats, display = 'running' }: { stats: CmsA3Sta
         <StatCard className="@container" label="GMV chương trình" value={v(stats && cmsVnd(stats.gmvVnd), true)} />
         <StatCard label="Dược sĩ có CMS" value={v(stats && (stats.pharmacistDenominator === null ? stats.pharmacistsWithCms : `${stats.pharmacistsWithCms}/${stats.pharmacistDenominator}`))}
           hint={stats && stats.pharmacistDenominator !== null ? `trên ${stats.pharmacistDenominator} dược sĩ hiện thuộc phạm vi` : undefined} hintLines={2} />
-        <StatCard label="Lượt đạt điều kiện" value={v(stats && `${stats.turnsAchieved}/${stats.turnsWithSales}`)} hint="Lượt = dược sĩ × SP đã bán đủ ≥ 1 đơn vị CMS" hintLines={2} />
+        <StatCard label="Lượt đạt điều kiện" value={v(stats && `${stats.turnsAchieved}/${stats.turnsWithSales}`)} hint={basis === 'cms_unit' ? 'Lượt = dược sĩ × SP đã bán ≥ 1 đơn vị đúng ĐV tính CMS' : 'Lượt = dược sĩ × SP đã bán đủ ≥ 1 đơn vị CMS'} hintLines={2} />
       </div>
     </div>
   )
@@ -41,16 +44,22 @@ export function CmsA3SyncLine({ header, isSuper, display = 'running' }: { header
   return (
     <div className="space-y-2">
       <p data-cms-synced={display} className="text-[13px] text-muted-foreground">
-        {!header.run ? (cmsResultState(header) === 'config_reset' ? <>Chưa có số liệu sau thay đổi cấu hình — lần công bố trước theo cấu hình cũ không còn hiện hành</> : <>Chưa có số liệu đã công bố</>)
+        {!header.run ? (cmsResultState(header) === 'basis_pending' ? <span data-cms-no-run="basis_pending">{CMS_BASIS_PENDING_TEXT}</span>
+          : cmsResultState(header) === 'config_reset' ? <>Chưa có số liệu sau thay đổi cấu hình — lần công bố trước theo cấu hình cũ không còn hiện hành</> : <>Chưa có số liệu đã công bố</>)
           : display === 'locked' ? <>Số đã chốt · theo lần tính {at} (không đổi sau chốt) · Xuất Excel: toàn chương trình trong phạm vi của bạn</>
             : display === 'waiting_close' ? <>Số liệu cập nhật {at} · tạm tính, chờ chốt kỳ · Xuất Excel: toàn chương trình trong phạm vi của bạn</>
               : <>Số liệu cập nhật {at} · tạm tính, chưa chốt kỳ · Xuất Excel: toàn chương trình trong phạm vi của bạn</>}
       </p>
       {header.run && display !== 'locked' && <p data-cms-sales-only className="text-[13px] text-muted-foreground">{CMS_SALES_ONLY_NOTE}</p>}
+      {header.run && header.run.basis.basis === 'cms_unit' && (
+        <p data-cms-run-basis="cms_unit" className="text-[13px] text-muted-foreground">
+          Cách tính của lần tính: {CMS_BASIS_LABEL.cms_unit}{isSuper ? <> (<code className="tabular-nums">{header.run.basis.policy}</code>)</> : null} — {CMS_UNIT_RULE_NOTE}; đơn bán đơn vị khác không tính CMS nhưng vẫn cộng GMV target.
+        </p>
+      )}
       {display !== 'locked' && last && !last.isCurrent && (last.status === 'held' || last.status === 'error') && (
         <Notice tone="warning" role="status" title="Lần đồng bộ gần nhất chưa công bố">
           {header.run ? 'Đang giữ số liệu của lần công bố trước.' : cmsResultState(header) === 'config_reset' ? 'Chưa có lần công bố nào theo cấu hình hiện tại.' : 'Chưa có lần công bố nào.'}
-          {isSuper && last.errorCode ? <> Mã: <code className="tabular-nums">{last.errorCode}</code>{last.finishedAt ? ` · ${cmsDateTime(last.finishedAt)}` : ''}.</> : null}
+          {isSuper && last.errorCode ? <> Mã: <code className="tabular-nums">{last.errorCode}</code>{CMS_UNIT_HOLD_LABEL[last.errorCode] ? <span data-cms-hold-label> — {CMS_UNIT_HOLD_LABEL[last.errorCode]}</span> : null}{last.finishedAt ? ` · ${cmsDateTime(last.finishedAt)}` : ''}.</> : null}
         </Notice>
       )}
       {display !== 'locked' && header.run && header.configVersion !== header.run.configVersion && (
