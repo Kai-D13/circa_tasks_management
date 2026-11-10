@@ -130,13 +130,16 @@ BEGIN
   PERFORM set_config('cmsunit.stage', 'p2', true);
 END $$;`
   const ratesMd5 = cmsUnitRatesMd5(products)
+  // Phiên bản khoá đơn vị = giá trị cms__calc_snapshot của NỀN ghi vào snapshot run (r1: v2 — ký tự vô hình ⇒ không hợp lệ); không ghi cứng.
+  const ukvAll = [...lastDefinition('cms__calc_snapshot', pred).text.matchAll(/'unit_key_version', '([a-z0-9-]+)'/g)].map((m) => m[1])
+  if (ukvAll.length !== 1) throw new Error(`cms__calc_snapshot nền ${pred}: cần đúng 1 unit_key_version (có ${ukvAll.length})`)
   const note = pinned && !rehearsal ? '' : '\n-- *** BẢN DIỄN TẬP (rehearsal) — bản ghim chưa chụp tại cửa sổ; KHÔNG dùng cho prod. ***'
   const map = {
     '@@REHEARSAL_NOTE@@': note, '@@VERSION@@': v, '@@PRED@@': pred, '@@PID@@': g.id, '@@START@@': g.start_date, '@@END@@': g.end_date,
     '@@SCOPE@@': g.scope, '@@CALC_MODE@@': g.calc_mode, '@@GATE_SCOPE@@': g.gate_scope, '@@CATALOG@@': g.catalog_target_gmv === null ? 'NULL' : String(g.catalog_target_gmv),
     '@@CV@@': g.config_version, '@@CV_AFTER@@': g.config_version + 1, '@@CV_ROLLBACK@@': g.config_version + 2,
     '@@STORES_N@@': g.stores_n, '@@STORES_MD5@@': g.stores_md5, '@@RATES_MD5@@': ratesMd5, '@@CONFIG_FP@@': g.config_fp ?? '(chưa ghim)',
-    '@@TRIGGERS@@': CMS_UNIT_T11_TRIGGERS.join(' | '),
+    '@@TRIGGERS@@': CMS_UNIT_T11_TRIGGERS.join(' | '), '@@UNIT_KEY_VERSION@@': ukvAll[0],
   }
   const build = (tplName, who) => {
     const t = fs.readFileSync(path.join(TPL, tplName), 'utf8')
@@ -149,7 +152,7 @@ END $$;`
   }
   const migration = build('fwd.sql', `${v} preflight`)
   const rollback = build('rb.sql', `rollback ${v} preflight`)
-  return { migration, rollback, guards, ratesMd5, pinned: pinned && !rehearsal, version: v, after: pred,
+  return { migration, rollback, guards, ratesMd5, unitKeyVersion: ukvAll[0], pinned: pinned && !rehearsal, version: v, after: pred,
     fileName: `${v}_${CMS_UNIT_T11_NAME}.sql`, rollbackName: `${v}_${CMS_UNIT_T11_NAME}_rollback.sql` }
 }
 

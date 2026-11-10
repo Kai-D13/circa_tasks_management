@@ -6,6 +6,7 @@
 // giới hạn độ dài (quá ⇒ lỗi, không cắt). Ảnh qua allow-list (lib/cms/image.ts).
 // Issue chỉ mang TÊN trường, không mang giá trị. Hàm thuần, không I/O.
 
+import { cmsUnitRawFlags } from '../unitKey'
 import { CMS_DEC_FACTOR, parseCmsDecimal, type CmsDecError } from '../decimal'
 import { cmsSafeImageUrl } from '../image'
 import { canonicalProductId } from '../productId'
@@ -89,17 +90,16 @@ export interface CmsSalesLine {
   gmvUnits: bigint
   sourceUpdatedAtMicros: bigint
   /**
-   * CMS-UNIT: quantity_raw / uom_raw THÔ có ký tự điều khiển (đã bị thay bằng khoảng trắng ở trên). CHỈ có mặt khi ít nhất một cờ
+   * CMS-UNIT: quantity_raw / uom_raw THÔ có ký tự điều khiển (đã bị thay bằng khoảng trắng ở trên) hoặc ký tự vô hình CMS_UNIT_INVISIBLE
+   * (r1 Q-225 — FEFF ở hai đầu bị trim mất nên phải đánh dấu trên chuỗi thô). CHỈ có mặt khi ít nhất một cờ
    * true — dòng sạch không mang khoá này (shape cũ giữ nguyên). Nhánh cms_unit coi dòng ứng viên như vậy là nguồn hỏng (HOLD), không
    * dùng giá trị đã làm sạch để tạo ra một đơn vị / lượng có vẻ hợp lệ.
    */
   rawControl?: { uom: boolean; quantity: boolean }
 }
 
-// Không cờ g: test() trên regex g có lastIndex trạng thái.
-// eslint-disable-next-line no-control-regex
-const HAS_CONTROL_RE = /[\u0000-\u001F\u007F-\u009F]/
-const hasControl = (v: string | null | undefined) => typeof v === 'string' && HAS_CONTROL_RE.test(v)
+// Ký tự điều khiển (C0 / DEL / C1) hoặc vô hình (cmsUnitRawFlags — cùng hợp đồng khoá đơn vị v2) trên chuỗi THÔ, trước trim.
+const hasControl = (v: string | null | undefined) => { const x = cmsUnitRawFlags(v); return x.control || x.invisible }
 
 export function normalizeSalesRow(raw: CmsRawRow): CmsNormalizeResult<CmsSalesLine> {
   const issues: CmsRowIssue[] = []

@@ -1,14 +1,14 @@
 -- ============================================================================
--- rollback/128_cms_unit_quantity_basis_rollback.sql  (r1 — CMS-UNIT capability, Dev 09/11/2026; KHÔNG chạy prod)
--- SINH bằng webapp/scripts/gen-cms-128.mjs: khôi phục NGUYÊN VĂN 15 hàm (bản cuối trước 128: 121 / 122 / 123 / 124 / 126) + ACL, gỡ 2
--- trigger guard + 6 helper, gỡ ràng buộc / cột cơ sở tính (cms_programs.quantity_basis; cms_sync_runs.quantity_basis /
+-- rollback/128_cms_unit_quantity_basis_rollback.sql  (bản PM-r1 — CMS-UNIT capability, Dev 09–10/11/2026; KHÔNG chạy prod)
+-- SINH bằng webapp/scripts/gen-cms-128.mjs: khôi phục NGUYÊN VĂN 17 hàm (bản cuối trước 128: 121 / 122 / 123 / 124 / 125 / 126) +
+-- ACL, gỡ 2 trigger guard + 5 helper, gỡ ràng buộc / cột cơ sở tính (cms_programs.quantity_basis; cms_sync_runs.quantity_basis /
 -- calculation_policy_version / calculation_snapshot), xoá marker 128; hậu kiểm md5 thân khôi phục + ACL + tổng hàm 68.
 -- CHỈ dùng TRƯỚC khi có dữ liệu cms_unit (spec §5 rollback schema): có chương trình cơ sở cms_unit HOẶC run mang cơ sở cms_unit (mọi
 -- trạng thái) ⇒ DỪNG — không drop metadata làm mất nghĩa lịch sử; xử lý tiến (đổi chương trình về pos_base bằng transaction bù có
 -- version tăng tiếp, giữ app / reader mới). Run pos_base_v1 tạo sau 128 mất metadata (đọc như run cũ — cùng luật pos_base).
 -- Thứ tự vận hành: app về bản không đọc metadata 128 (hoặc giữ app mới — app mới tương thích DB không có 128: snapshot thiếu khoá
 -- quantity_basis ⇒ luật pos_base legacy), tạm dừng task CMS sales, không run bán running, rồi chạy file này.
--- Dừng nếu: thiếu marker 128 · có migration > 128 · owner / isolation sai · thân 15 hàm hiện tại khác bản 128 đã sinh.
+-- Dừng nếu: thiếu marker 128 · có migration > 128 · owner / isolation sai · thân 17 hàm hiện tại khác bản 128 đã sinh.
 -- Sau rollback: `cms-verify post --phase=127` (PRE chụp trước 128) phải ĐẠT.
 -- Vận hành: DÁN NGUYÊN FILE, nên GIỮ LF. Chạy bằng ĐÚNG role owner bảng / hàm CMS. Gồm DELETE FROM app_migrations WHERE version = '128'.
 -- ============================================================================
@@ -48,25 +48,27 @@ BEGIN
     RAISE EXCEPTION 'rollback 128: còn run bán running — tạm dừng task CMS sales trước';
   END IF;
 END $$;
--- Thân 15 hàm hiện tại phải đúng bản 128 đã sinh — khối sinh bởi gen-cms-128.mjs.
+-- Thân 17 hàm hiện tại phải đúng bản 128 đã sinh — khối sinh bởi gen-cms-128.mjs.
 DO $$
 BEGIN
-  IF (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.cms__sales_snapshot(uuid)'::regprocedure) IS DISTINCT FROM '5b23f40e341fbffeece40f69a90653c5'
+  IF (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.cms__sales_snapshot(uuid)'::regprocedure) IS DISTINCT FROM '6aeef9d9b8cdd085a5684819e008fc1d'
      OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.cms__config_fp(uuid)'::regprocedure) IS DISTINCT FROM '8534cfcbebecc0bd699e8ccecd9bcdd4'
      OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.cms__attest_eval(uuid, uuid)'::regprocedure) IS DISTINCT FROM '3f9f3d9ad9697caab34991082b58a45c'
      OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.cms__lock_eval(uuid, uuid, integer, text, boolean)'::regprocedure) IS DISTINCT FROM 'ded0e1ccc95ffbb78c8aac29ad923b59'
-     OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_program_save(jsonb)'::regprocedure) IS DISTINCT FROM 'a067cedf4136313b684eec9ad3e80ffd'
-     OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_sales_run_open(uuid, jsonb)'::regprocedure) IS DISTINCT FROM '5d90e13103a0c828e18813d3b02dca03'
+     OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_program_save(jsonb)'::regprocedure) IS DISTINCT FROM '91001438180ea2982a463b02c2464af3'
+     OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_import_commit(uuid, text, text, jsonb, uuid)'::regprocedure) IS DISTINCT FROM '69176cc50730bebd46af56aee555fbea'
+     OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_program_activate(uuid, uuid)'::regprocedure) IS DISTINCT FROM 'fe46b372821db6d9919fcb810a2ec15a'
+     OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_sales_run_open(uuid, jsonb)'::regprocedure) IS DISTINCT FROM '72fc2ed6e219b2238d596b6e2e422b5e'
      OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_sales_run_seal_begin(uuid, jsonb)'::regprocedure) IS DISTINCT FROM 'b81e7dd702a0ad579ad8515357eb8538'
      OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_sales_run_seal_step(uuid, integer)'::regprocedure) IS DISTINCT FROM 'd68aabb675d8ee609ea769dbf36efaeb'
-     OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_sales_run_publish(uuid)'::regprocedure) IS DISTINCT FROM 'fa7be492995e11a2054e9af258cd55b6'
-     OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_sales_run_finish(uuid, text, jsonb)'::regprocedure) IS DISTINCT FROM '020d48720b83c1aed0aebedb3a19afff'
+     OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_sales_run_publish(uuid)'::regprocedure) IS DISTINCT FROM 'cfeaf8d5f8e3e9ee2572a4596ea16f1a'
+     OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_sales_run_finish(uuid, text, jsonb)'::regprocedure) IS DISTINCT FROM 'a942cf5e645770faa3b1717539923609'
      OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_result_header(uuid)'::regprocedure) IS DISTINCT FROM 'a55a96a70796163a8f6dcd9b042d3931'
      OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_result_rows(uuid, uuid)'::regprocedure) IS DISTINCT FROM 'c32b8e2183e4fc9e9914abfc770a6b3f'
      OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_result_lines(uuid, uuid, uuid, uuid, integer, integer)'::regprocedure) IS DISTINCT FROM '79f3960c3e7a4b186056fcd6e09839c5'
      OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_source_attest(uuid, uuid, jsonb, uuid)'::regprocedure) IS DISTINCT FROM '74cd1e68de442952596576c803594be7'
      OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_run_source_export(uuid, uuid, text, integer)'::regprocedure) IS DISTINCT FROM 'b4cf8f9fe5f5b7d6201f9e51e3aa690f' THEN
-    RAISE EXCEPTION 'rollback 128 preflight: thân 15 hàm hiện tại KHÁC bản 128 đã sinh (md5) — có sửa tay? dừng, đối chiếu';
+    RAISE EXCEPTION 'rollback 128 preflight: thân 17 hàm hiện tại KHÁC bản 128 đã sinh (md5) — có sửa tay? dừng, đối chiếu';
   END IF;
 END $$;
 
@@ -75,7 +77,7 @@ DROP TRIGGER cms_programs_basis_guard ON public.cms_programs;
 DROP TRIGGER cms_sync_runs_basis_guard ON public.cms_sync_runs;
 ALTER TABLE public.cms_sync_runs DROP CONSTRAINT cms_sync_runs_basis_shape;
 
--- ── Khôi phục NGUYÊN VĂN 15 hàm (bản cuối trước 128) ──────────────────────────
+-- ── Khôi phục NGUYÊN VĂN 17 hàm (bản cuối trước 128) ──────────────────────────
 CREATE OR REPLACE FUNCTION public.cms__sales_snapshot(p_program_id uuid)
 RETURNS jsonb LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT jsonb_build_object(
@@ -437,6 +439,237 @@ BEGIN
     INSERT INTO public.cms_program_stores (program_id, store_id) SELECT v_prog.id, x FROM unnest(v_stores) x;
   END IF;
   RETURN v_prog.id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.rpc_cms_import_commit(p_run_id uuid, p_sha256 text, p_digest text, p_payload jsonb, p_actor uuid)
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public SET lock_timeout = '5s' AS $$
+DECLARE
+  v_run     public.cms_import_runs%ROWTYPE;
+  v_prog    public.cms_programs%ROWTYPE;
+  v_today   date := public.cms__vn_today();
+  v_mode    text;
+  v_cat     bigint;
+  v_ids     text[];
+  e         jsonb;
+  t         jsonb;
+  v_pp      uuid;
+  v_k       integer;
+  v_prev_to integer;
+  v_n       integer := 0;
+  v_tiers   integer := 0;
+  v_has_cat boolean := false;
+BEGIN
+  IF p_run_id IS NULL OR p_actor IS NULL THEN RAISE EXCEPTION 'CMS_IMPORT_BAD_INPUT' USING ERRCODE = '22023'; END IF;
+  SELECT * INTO v_run FROM public.cms_import_runs WHERE id = p_run_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'CMS_IMPORT_RUN_NOT_FOUND' USING ERRCODE = 'P0002'; END IF;
+  IF v_run.file_sha256 IS DISTINCT FROM p_sha256 OR (v_run.result->>'digest') IS DISTINCT FROM p_digest THEN
+    RAISE EXCEPTION 'CMS_IMPORT_CONFLICT' USING ERRCODE = 'P0001';
+  END IF;
+  IF v_run.status = 'committed' THEN
+    RETURN jsonb_build_object('already', true, 'program_id', v_run.program_id);
+  END IF;
+  SELECT * INTO v_prog FROM public.cms_programs WHERE id = v_run.program_id FOR UPDATE;
+  v_mode := CASE
+    WHEN v_prog.status = 'draft' OR (v_prog.status = 'active' AND v_today < v_prog.start_date) THEN 'replace'
+    WHEN v_prog.status = 'active' THEN 'append'
+    ELSE NULL END;
+  IF v_mode IS NULL THEN RAISE EXCEPTION 'CMS_PROGRAM_NOT_EDITABLE' USING ERRCODE = 'P0001'; END IF;
+  IF v_run.config_version_at_preview <> v_prog.config_version OR v_mode IS DISTINCT FROM v_run.mode THEN
+    RAISE EXCEPTION 'CMS_IMPORT_CONFLICT' USING ERRCODE = 'P0001';
+  END IF;
+
+  -- Kiểm payload (không tin client — dù payload do server sinh từ lần parse lại).
+  IF p_payload IS NULL OR jsonb_typeof(p_payload) IS DISTINCT FROM 'object' THEN
+    RAISE EXCEPTION 'CMS_IMPORT_BAD_PAYLOAD' USING ERRCODE = '22023';
+  END IF;
+  IF p_payload->>'mode' IS DISTINCT FROM v_mode OR jsonb_typeof(p_payload->'products') IS DISTINCT FROM 'array'
+     OR COALESCE(jsonb_typeof(p_payload->'catalog_target'), 'null') NOT IN ('string', 'null') THEN
+    RAISE EXCEPTION 'CMS_IMPORT_BAD_PAYLOAD' USING ERRCODE = '22023';
+  END IF;
+  IF jsonb_array_length(p_payload->'products') NOT BETWEEN 1 AND 2000 THEN
+    RAISE EXCEPTION 'CMS_IMPORT_BAD_PAYLOAD' USING ERRCODE = '22023';
+  END IF;
+  -- Miền tiền = bigint dương của PG (cùng contract validator app — PM P1-b P1-1): kiểm dạng + so numeric TRƯỚC cast.
+  IF jsonb_typeof(p_payload->'catalog_target') = 'string' THEN
+    IF (p_payload->>'catalog_target') !~ '^[1-9][0-9]{0,18}$' THEN RAISE EXCEPTION 'CMS_IMPORT_BAD_PAYLOAD' USING ERRCODE = '22023'; END IF;
+    IF (p_payload->>'catalog_target')::numeric > 9223372036854775807 THEN RAISE EXCEPTION 'CMS_IMPORT_BAD_PAYLOAD' USING ERRCODE = '22023'; END IF;
+    v_cat := (p_payload->>'catalog_target')::bigint;
+  END IF;
+  -- Mỗi điều kiện phụ thuộc kiểu được kiểm ở IF riêng (thứ tự đánh giá OR trong SQL không được bảo đảm; không ép kiểu
+  -- trước khi đã chắc kiểu / dạng chuỗi ⇒ không lọt NULL, không lỗi cast thô). Kiểm tường minh mọi CHECK của bảng.
+  FOR e IN SELECT x FROM jsonb_array_elements(p_payload->'products') x LOOP
+    IF jsonb_typeof(e) IS DISTINCT FROM 'object' THEN RAISE EXCEPTION 'CMS_IMPORT_BAD_PAYLOAD' USING ERRCODE = '22023'; END IF;
+    IF jsonb_typeof(e->'product_id') IS DISTINCT FROM 'string' OR jsonb_typeof(e->'gmv_basis') IS DISTINCT FROM 'string'
+       OR jsonb_typeof(e->'unit_cms') IS DISTINCT FROM 'string' OR jsonb_typeof(e->'advice_text') IS DISTINCT FROM 'string'
+       OR jsonb_typeof(e->'name_snapshot') IS DISTINCT FROM 'string' OR jsonb_typeof(e->'base_quantity_cms') IS DISTINCT FROM 'string'
+       OR COALESCE(jsonb_typeof(e->'target_gmv'), '-') NOT IN ('string', 'null')
+       OR COALESCE(jsonb_typeof(e->'image_url_snapshot'), '-') NOT IN ('string', 'null')
+       OR COALESCE(jsonb_typeof(e->'price_snapshot'), '-') NOT IN ('string', 'null')
+       OR jsonb_typeof(e->'tiers') IS DISTINCT FROM 'array' THEN
+      RAISE EXCEPTION 'CMS_IMPORT_BAD_PAYLOAD' USING ERRCODE = '22023';
+    END IF;
+    IF (e->>'product_id') !~ '^[1-9][0-9]{0,18}$' OR (e->>'gmv_basis') NOT IN ('product', 'catalog', 'none')
+       -- quy cách: decimal dương ≤ 29 chữ số nguyên / 9 chữ số thập phân (nền 120: < 1e29, scale ≤ 9)
+       OR (e->>'base_quantity_cms') !~ '^[0-9]{1,29}(\.[0-9]{1,9})?$' OR (e->>'base_quantity_cms') !~ '[1-9]'
+       OR (jsonb_typeof(e->'price_snapshot') = 'string' AND (e->>'price_snapshot') !~ '^[0-9]{1,15}(\.[0-9]{1,9})?$')
+       OR ((e->>'gmv_basis') = 'product') IS DISTINCT FROM (jsonb_typeof(e->'target_gmv') = 'string')
+       OR (jsonb_typeof(e->'target_gmv') = 'string' AND (e->>'target_gmv') !~ '^[1-9][0-9]{0,18}$')
+       OR char_length(e->>'unit_cms') NOT BETWEEN 1 AND 50 OR (e->>'unit_cms') !~ '\S'
+       OR char_length(e->>'advice_text') NOT BETWEEN 1 AND 4000 OR (e->>'advice_text') !~ '\S'
+       OR char_length(e->>'name_snapshot') NOT BETWEEN 1 AND 500 OR (e->>'name_snapshot') !~ '\S'
+       OR (jsonb_typeof(e->'image_url_snapshot') = 'string'
+           AND ((e->>'image_url_snapshot') !~ '^https://' OR char_length(e->>'image_url_snapshot') > 2000))
+       OR jsonb_array_length(e->'tiers') NOT BETWEEN 1 AND 2000 THEN
+      RAISE EXCEPTION 'CMS_IMPORT_BAD_PAYLOAD' USING ERRCODE = '22023';
+    END IF;
+    IF jsonb_typeof(e->'target_gmv') = 'string' AND (e->>'target_gmv')::numeric > 9223372036854775807 THEN
+      RAISE EXCEPTION 'CMS_IMPORT_BAD_PAYLOAD' USING ERRCODE = '22023';
+    END IF;
+    IF (e->>'gmv_basis') = 'catalog' THEN v_has_cat := true; END IF;
+    v_tiers := v_tiers + jsonb_array_length(e->'tiers');
+    -- Bậc: payload đã sắp; order = vị trí 1..n, bắt đầu 1, liên tục, chỉ bậc cuối mở, đến ≥ từ, ≤ int max, tiền > 0.
+    v_prev_to := 0;
+    FOR t, v_k IN SELECT x, n::integer FROM jsonb_array_elements(e->'tiers') WITH ORDINALITY a(x, n) LOOP
+      IF jsonb_typeof(t) IS DISTINCT FROM 'object' OR jsonb_typeof(t->'order') IS DISTINCT FROM 'number'
+         OR jsonb_typeof(t->'from') IS DISTINCT FROM 'number' OR COALESCE(jsonb_typeof(t->'to'), '-') NOT IN ('number', 'null')
+         OR jsonb_typeof(t->'amount') IS DISTINCT FROM 'string' THEN
+        RAISE EXCEPTION 'CMS_IMPORT_BAD_TIERS' USING ERRCODE = '22023';
+      END IF;
+      IF (t->>'order') !~ '^[1-9][0-9]{0,9}$' OR (t->>'from') !~ '^[1-9][0-9]{0,9}$'
+         OR (jsonb_typeof(t->'to') = 'number' AND (t->>'to') !~ '^[1-9][0-9]{0,9}$')
+         OR (t->>'amount') !~ '^[1-9][0-9]{0,18}$' THEN
+        RAISE EXCEPTION 'CMS_IMPORT_BAD_TIERS' USING ERRCODE = '22023';
+      END IF;
+      IF (t->>'order')::bigint <> v_k OR (t->>'from')::bigint <> v_prev_to::bigint + 1
+         OR (t->>'amount')::numeric > 9223372036854775807
+         OR (jsonb_typeof(t->'to') = 'null' AND v_k <> jsonb_array_length(e->'tiers'))
+         OR (t->>'from')::bigint > 2147483647
+         OR (jsonb_typeof(t->'to') = 'number' AND ((t->>'to')::bigint < (t->>'from')::bigint OR (t->>'to')::bigint > 2147483647)) THEN
+        RAISE EXCEPTION 'CMS_IMPORT_BAD_TIERS' USING ERRCODE = '22023';
+      END IF;
+      v_prev_to := CASE WHEN jsonb_typeof(t->'to') = 'number' THEN (t->>'to')::integer ELSE v_prev_to END;
+    END LOOP;
+  END LOOP;
+  IF v_tiers > 2000 THEN RAISE EXCEPTION 'CMS_IMPORT_BAD_TIERS' USING ERRCODE = '22023'; END IF;
+  IF v_has_cat AND v_cat IS NULL THEN RAISE EXCEPTION 'CMS_IMPORT_BAD_PAYLOAD' USING ERRCODE = '22023'; END IF;
+  IF (SELECT count(*) - count(DISTINCT x->>'product_id') FROM jsonb_array_elements(p_payload->'products') x) <> 0 THEN
+    RAISE EXCEPTION 'CMS_IMPORT_BAD_PAYLOAD' USING ERRCODE = '22023';
+  END IF;
+  SELECT array_agg(x->>'product_id') INTO v_ids FROM jsonb_array_elements(p_payload->'products') x;
+  IF EXISTS (SELECT 1 FROM unnest(v_ids) x WHERE NOT EXISTS (SELECT 1 FROM public.cms_product_master m WHERE m.product_id = x)) THEN
+    RAISE EXCEPTION 'CMS_IMPORT_PRODUCT_UNKNOWN' USING ERRCODE = 'P0001';
+  END IF;
+
+  -- 125 (CMS-Q-220 — bỏ trần, thay Q-210a): bậc CUỐI mỗi SP phải không giới hạn ("to": null). Chạy SAU mọi kiểm kiểu / range /
+  -- liên tục / payload ở trên (payload hỏng vẫn CMS_IMPORT_BAD_TIERS / BAD_PAYLOAD), TRƯỚC khoá danh mục (thứ tự khoá 121 giữ nguyên).
+  IF EXISTS (SELECT 1 FROM jsonb_array_elements(p_payload->'products') x
+              WHERE jsonb_typeof((x->'tiers')->(jsonb_array_length(x->'tiers') - 1)->'to') IS DISTINCT FROM 'null') THEN
+    RAISE EXCEPTION 'CMS_IMPORT_TIER_LAST_FINITE' USING ERRCODE = '22023';
+  END IF;
+
+  -- Khoá danh mục rồi kiểm trùng với chương trình active / locked khác, giao ngày, cùng namespace (câu lệnh mới).
+  PERFORM public.cms__lock_catalog();
+  IF cardinality(public.cms__conflicts(v_prog.id, v_prog.is_test, v_prog.start_date, v_prog.end_date, v_ids)) > 0 THEN
+    RAISE EXCEPTION 'CMS_IMPORT_PRODUCT_CONFLICT' USING ERRCODE = 'P0001';
+  END IF;
+
+  IF v_mode = 'replace' THEN
+    DELETE FROM public.cms_program_tiers WHERE program_id = v_prog.id;
+    DELETE FROM public.cms_program_products WHERE program_id = v_prog.id;
+    UPDATE public.cms_programs SET catalog_target_gmv = CASE WHEN v_has_cat THEN v_cat ELSE NULL END WHERE id = v_prog.id;
+  ELSE
+    IF EXISTS (SELECT 1 FROM public.cms_program_products WHERE program_id = v_prog.id AND product_id = ANY (v_ids)) THEN
+      RAISE EXCEPTION 'CMS_IMPORT_PRODUCT_EXISTS' USING ERRCODE = 'P0001';
+    END IF;
+    IF v_has_cat THEN
+      IF v_prog.catalog_target_gmv IS NULL THEN
+        UPDATE public.cms_programs SET catalog_target_gmv = v_cat WHERE id = v_prog.id;
+      ELSIF v_prog.catalog_target_gmv <> v_cat THEN
+        RAISE EXCEPTION 'CMS_IMPORT_CATALOG_TARGET_CHANGED' USING ERRCODE = 'P0001';
+      END IF;
+    END IF;
+  END IF;
+
+  FOR e IN SELECT x FROM jsonb_array_elements(p_payload->'products') x LOOP
+    INSERT INTO public.cms_program_products (program_id, product_id, gmv_basis, target_gmv, unit_cms, base_quantity_cms,
+        advice_text, name_snapshot, image_url_snapshot, price_snapshot, import_run_id, added_after_start)
+    VALUES (v_prog.id, e->>'product_id', e->>'gmv_basis', NULLIF(e->>'target_gmv', '')::bigint, e->>'unit_cms',
+        (e->>'base_quantity_cms')::numeric, e->>'advice_text', e->>'name_snapshot', NULLIF(e->>'image_url_snapshot', ''),
+        NULLIF(e->>'price_snapshot', '')::numeric, v_run.id, v_mode = 'append')
+    RETURNING id INTO v_pp;
+    INSERT INTO public.cms_program_tiers (program_product_id, program_id, tier_order, qty_from, qty_to, amount_per_unit)
+    SELECT v_pp, v_prog.id, (x->>'order')::integer, (x->>'from')::integer, NULLIF(x->>'to', '')::integer, (x->>'amount')::bigint
+      FROM jsonb_array_elements(e->'tiers') x;
+    v_n := v_n + 1;
+  END LOOP;
+
+  -- Audit: lưu payload đã ghi vào run (chuỗi run committed dựng lại được mọi phiên bản danh mục).
+  UPDATE public.cms_import_runs
+     SET status = 'committed', committed_by = p_actor, committed_at = now(),
+         result = result || jsonb_build_object('committed', p_payload)
+   WHERE id = v_run.id;
+  UPDATE public.cms_programs SET config_version = config_version + 1, updated_by = p_actor, updated_at = now() WHERE id = v_prog.id;
+  RETURN jsonb_build_object('already', false, 'program_id', v_prog.id, 'mode', v_mode, 'products', v_n);
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION public.rpc_cms_program_activate(p_program_id uuid, p_actor uuid)
+RETURNS jsonb LANGUAGE plpgsql VOLATILE SECURITY DEFINER SET search_path = public SET lock_timeout = '5s' AS $$
+DECLARE
+  v_prog  public.cms_programs%ROWTYPE;
+  v_today date := public.cms__vn_today();
+  v_ids   text[];
+BEGIN
+  IF p_program_id IS NULL OR p_actor IS NULL THEN RAISE EXCEPTION 'CMS_PROGRAM_BAD_INPUT' USING ERRCODE = '22023'; END IF;
+  SELECT * INTO v_prog FROM public.cms_programs WHERE id = p_program_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'CMS_PROGRAM_NOT_FOUND' USING ERRCODE = 'P0002'; END IF;
+  IF v_prog.status <> 'draft' THEN RAISE EXCEPTION 'CMS_PROGRAM_NOT_DRAFT' USING ERRCODE = 'P0001'; END IF;
+  SELECT COALESCE(array_agg(product_id), '{}'::text[]) INTO v_ids FROM public.cms_program_products WHERE program_id = v_prog.id;
+  IF cardinality(v_ids) = 0 THEN RAISE EXCEPTION 'CMS_PROGRAM_EMPTY' USING ERRCODE = 'P0001'; END IF;
+  IF EXISTS (SELECT 1 FROM public.cms_program_products WHERE program_id = v_prog.id AND gmv_basis = 'catalog')
+     AND v_prog.catalog_target_gmv IS NULL THEN
+    RAISE EXCEPTION 'CMS_PROGRAM_CATALOG_TARGET_MISSING' USING ERRCODE = 'P0001';
+  END IF;
+  -- 125 (CMS-Q-220): mọi SP có thang bậc hợp lệ (bắt đầu 1, liên tục theo tier_order, chỉ bậc cuối mở) và bậc cuối KHÔNG giới hạn
+  -- — cấu hình chưa chuyển đổi (cận cuối hữu hạn) không kích hoạt được, kể cả khi guard bị vượt bằng quyền owner.
+  IF EXISTS (SELECT 1 FROM public.cms_program_products pp WHERE pp.program_id = v_prog.id
+               AND NOT EXISTS (SELECT 1 FROM public.cms_program_tiers t WHERE t.program_product_id = pp.id))
+     OR EXISTS (SELECT 1 FROM (SELECT t.tier_order, t.qty_from, t.qty_to,
+                                      lag(t.qty_to) OVER w AS prev_to, row_number() OVER w AS rn,
+                                      count(*) OVER (PARTITION BY t.program_product_id) AS n
+                                 FROM public.cms_program_tiers t WHERE t.program_id = v_prog.id
+                               WINDOW w AS (PARTITION BY t.program_product_id ORDER BY t.tier_order)) x
+                 WHERE x.tier_order <> x.rn OR (x.rn = 1 AND x.qty_from <> 1)
+                    OR (x.rn > 1 AND (x.prev_to IS NULL OR x.qty_from::bigint <> x.prev_to::bigint + 1)) OR (x.qty_to IS NULL AND x.rn <> x.n)) THEN
+    RAISE EXCEPTION 'CMS_PROGRAM_TIERS_INVALID' USING ERRCODE = 'P0001';
+  END IF;
+  IF EXISTS (SELECT 1 FROM public.cms_program_products pp
+              WHERE pp.program_id = v_prog.id
+                AND (SELECT t.qty_to FROM public.cms_program_tiers t WHERE t.program_product_id = pp.id
+                      ORDER BY t.tier_order DESC LIMIT 1) IS NOT NULL) THEN
+    RAISE EXCEPTION 'CMS_PROGRAM_TIER_LAST_FINITE' USING ERRCODE = 'P0001';
+  END IF;
+  IF v_prog.scope = 'all' THEN
+    DELETE FROM public.cms_program_stores WHERE program_id = v_prog.id;
+    INSERT INTO public.cms_program_stores (program_id, store_id)
+      SELECT v_prog.id, s.id FROM public.stores s WHERE s.store_type = 'os' AND s.is_active;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM public.cms_program_stores WHERE program_id = v_prog.id)
+     OR EXISTS (SELECT 1 FROM public.cms_program_stores ps JOIN public.stores s ON s.id = ps.store_id
+                 WHERE ps.program_id = v_prog.id AND NOT (s.store_type = 'os' AND s.is_active)) THEN
+    RAISE EXCEPTION 'CMS_PROGRAM_STORE_INVALID' USING ERRCODE = 'P0001';
+  END IF;
+  PERFORM public.cms__lock_catalog();
+  IF cardinality(public.cms__conflicts(v_prog.id, v_prog.is_test, v_prog.start_date, v_prog.end_date, v_ids)) > 0 THEN
+    RAISE EXCEPTION 'CMS_ACTIVATE_CONFLICT' USING ERRCODE = 'P0001';
+  END IF;
+  UPDATE public.cms_programs
+     SET status = 'active', activated_at = now(), activated_by = p_actor, config_version = config_version + 1,
+         updated_by = p_actor, updated_at = now()
+   WHERE id = v_prog.id;
+  RETURN jsonb_build_object('program_id', v_prog.id, 'started', v_today >= v_prog.start_date, 'ended', v_today > v_prog.end_date,
+                            'stores', (SELECT count(*) FROM public.cms_program_stores WHERE program_id = v_prog.id));
 END;
 $$;
 
@@ -1290,6 +1523,7 @@ $$;
 -- ── Gỡ helper + cột (sau khi thân cũ không còn tham chiếu) ─────────────────
 DROP FUNCTION public.cms__programs_basis_guard();
 DROP FUNCTION public.cms__runs_basis_guard();
+DROP FUNCTION public.cms__units_invalid(text[]);
 DROP FUNCTION public.cms__calc_snapshot(uuid);
 DROP FUNCTION public.cms__basis_policy(text);
 DROP FUNCTION public.cms__qty_dec(text);
@@ -1297,24 +1531,42 @@ DROP FUNCTION public.cms__unit_key(text);
 ALTER TABLE public.cms_sync_runs DROP COLUMN calculation_snapshot, DROP COLUMN calculation_policy_version, DROP COLUMN quantity_basis;
 ALTER TABLE public.cms_programs DROP COLUMN quantity_basis;
 
--- ── ACL 15 hàm khôi phục: thu hồi đích danh rồi cấp đúng ma trận trước 128 ──
+-- ── ACL 17 hàm khôi phục: thu hồi đích danh rồi cấp đúng ma trận trước 128 (danh sách sinh từ generator) ──
 REVOKE ALL ON FUNCTION
-  public.cms__sales_snapshot(uuid), public.cms__config_fp(uuid), public.cms__attest_eval(uuid, uuid),
+  public.cms__sales_snapshot(uuid),
+  public.cms__config_fp(uuid),
+  public.cms__attest_eval(uuid, uuid),
   public.cms__lock_eval(uuid, uuid, integer, text, boolean),
-  public.rpc_cms_program_save(jsonb), public.rpc_cms_sales_run_open(uuid, jsonb), public.rpc_cms_sales_run_seal_begin(uuid, jsonb),
-  public.rpc_cms_sales_run_seal_step(uuid, integer), public.rpc_cms_sales_run_publish(uuid), public.rpc_cms_sales_run_finish(uuid, text, jsonb),
-  public.rpc_cms_result_header(uuid), public.rpc_cms_result_rows(uuid, uuid),
+  public.rpc_cms_program_save(jsonb),
+  public.rpc_cms_import_commit(uuid, text, text, jsonb, uuid),
+  public.rpc_cms_program_activate(uuid, uuid),
+  public.rpc_cms_sales_run_open(uuid, jsonb),
+  public.rpc_cms_sales_run_seal_begin(uuid, jsonb),
+  public.rpc_cms_sales_run_seal_step(uuid, integer),
+  public.rpc_cms_sales_run_publish(uuid),
+  public.rpc_cms_sales_run_finish(uuid, text, jsonb),
+  public.rpc_cms_result_header(uuid),
+  public.rpc_cms_result_rows(uuid, uuid),
   public.rpc_cms_result_lines(uuid, uuid, uuid, uuid, integer, integer),
-  public.rpc_cms_source_attest(uuid, uuid, jsonb, uuid), public.rpc_cms_run_source_export(uuid, uuid, text, integer)
+  public.rpc_cms_source_attest(uuid, uuid, jsonb, uuid),
+  public.rpc_cms_run_source_export(uuid, uuid, text, integer)
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION
-  public.rpc_cms_program_save(jsonb), public.rpc_cms_sales_run_open(uuid, jsonb), public.rpc_cms_sales_run_seal_begin(uuid, jsonb),
-  public.rpc_cms_sales_run_seal_step(uuid, integer), public.rpc_cms_sales_run_publish(uuid), public.rpc_cms_sales_run_finish(uuid, text, jsonb)
+  public.rpc_cms_program_save(jsonb),
+  public.rpc_cms_import_commit(uuid, text, text, jsonb, uuid),
+  public.rpc_cms_program_activate(uuid, uuid),
+  public.rpc_cms_sales_run_open(uuid, jsonb),
+  public.rpc_cms_sales_run_seal_begin(uuid, jsonb),
+  public.rpc_cms_sales_run_seal_step(uuid, integer),
+  public.rpc_cms_sales_run_publish(uuid),
+  public.rpc_cms_sales_run_finish(uuid, text, jsonb)
   TO service_role;
 GRANT EXECUTE ON FUNCTION
-  public.rpc_cms_result_header(uuid), public.rpc_cms_result_rows(uuid, uuid),
+  public.rpc_cms_result_header(uuid),
+  public.rpc_cms_result_rows(uuid, uuid),
   public.rpc_cms_result_lines(uuid, uuid, uuid, uuid, integer, integer),
-  public.rpc_cms_source_attest(uuid, uuid, jsonb, uuid), public.rpc_cms_run_source_export(uuid, uuid, text, integer)
+  public.rpc_cms_source_attest(uuid, uuid, jsonb, uuid),
+  public.rpc_cms_run_source_export(uuid, uuid, text, integer)
   TO authenticated;
 
 -- ── Hậu kiểm ────────────────────────────────────────────────────────────────
@@ -1329,15 +1581,15 @@ BEGIN
            (SELECT string_agg(CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE pg_catalog.pg_get_userbyid(x.grantee) END || ':' || x.privilege_type, ','
                               ORDER BY CASE WHEN x.grantee = 0 THEN 'PUBLIC' ELSE pg_catalog.pg_get_userbyid(x.grantee) END, x.privilege_type)
               FROM aclexplode(p.proacl) x WHERE x.grantee <> p.proowner) AS acl
-      FROM pg_catalog.pg_proc p WHERE p.oid IN (SELECT unnest(ARRAY['public.cms__sales_snapshot(uuid)', 'public.cms__config_fp(uuid)', 'public.cms__attest_eval(uuid, uuid)', 'public.cms__lock_eval(uuid, uuid, integer, text, boolean)', 'public.rpc_cms_program_save(jsonb)', 'public.rpc_cms_sales_run_open(uuid, jsonb)', 'public.rpc_cms_sales_run_seal_begin(uuid, jsonb)', 'public.rpc_cms_sales_run_seal_step(uuid, integer)', 'public.rpc_cms_sales_run_publish(uuid)', 'public.rpc_cms_sales_run_finish(uuid, text, jsonb)', 'public.rpc_cms_result_header(uuid)', 'public.rpc_cms_result_rows(uuid, uuid)', 'public.rpc_cms_result_lines(uuid, uuid, uuid, uuid, integer, integer)', 'public.rpc_cms_source_attest(uuid, uuid, jsonb, uuid)', 'public.rpc_cms_run_source_export(uuid, uuid, text, integer)']::regprocedure[]))
+      FROM pg_catalog.pg_proc p WHERE p.oid IN (SELECT unnest(ARRAY['public.cms__sales_snapshot(uuid)', 'public.cms__config_fp(uuid)', 'public.cms__attest_eval(uuid, uuid)', 'public.cms__lock_eval(uuid, uuid, integer, text, boolean)', 'public.rpc_cms_program_save(jsonb)', 'public.rpc_cms_import_commit(uuid, text, text, jsonb, uuid)', 'public.rpc_cms_program_activate(uuid, uuid)', 'public.rpc_cms_sales_run_open(uuid, jsonb)', 'public.rpc_cms_sales_run_seal_begin(uuid, jsonb)', 'public.rpc_cms_sales_run_seal_step(uuid, integer)', 'public.rpc_cms_sales_run_publish(uuid)', 'public.rpc_cms_sales_run_finish(uuid, text, jsonb)', 'public.rpc_cms_result_header(uuid)', 'public.rpc_cms_result_rows(uuid, uuid)', 'public.rpc_cms_result_lines(uuid, uuid, uuid, uuid, integer, integer)', 'public.rpc_cms_source_attest(uuid, uuid, jsonb, uuid)', 'public.rpc_cms_run_source_export(uuid, uuid, text, integer)']::regprocedure[]))
   LOOP
     v_n := v_n + 1;
-    IF r.acl IS DISTINCT FROM (CASE WHEN r.proname IN ('rpc_cms_program_save', 'rpc_cms_sales_run_open', 'rpc_cms_sales_run_seal_begin', 'rpc_cms_sales_run_seal_step', 'rpc_cms_sales_run_publish', 'rpc_cms_sales_run_finish') THEN 'service_role:EXECUTE'
+    IF r.acl IS DISTINCT FROM (CASE WHEN r.proname IN ('rpc_cms_program_save', 'rpc_cms_import_commit', 'rpc_cms_program_activate', 'rpc_cms_sales_run_open', 'rpc_cms_sales_run_seal_begin', 'rpc_cms_sales_run_seal_step', 'rpc_cms_sales_run_publish', 'rpc_cms_sales_run_finish') THEN 'service_role:EXECUTE'
                                     WHEN r.proname IN ('rpc_cms_result_header', 'rpc_cms_result_rows', 'rpc_cms_result_lines', 'rpc_cms_source_attest', 'rpc_cms_run_source_export') THEN 'authenticated:EXECUTE' END) THEN
       RAISE EXCEPTION 'rollback 128 hậu kiểm: ACL % = %', r.proname, r.acl;
     END IF;
   END LOOP;
-  IF v_n <> 15 THEN RAISE EXCEPTION 'rollback 128 hậu kiểm: cần 15 hàm khôi phục, có %', v_n; END IF;
+  IF v_n <> 17 THEN RAISE EXCEPTION 'rollback 128 hậu kiểm: cần 17 hàm khôi phục, có %', v_n; END IF;
   SELECT count(*) INTO v_n FROM pg_catalog.pg_proc
    WHERE pronamespace = 'public'::regnamespace AND (proname LIKE 'cms\_%' OR proname LIKE 'rpc\_cms\_%');
   IF v_n <> 68 THEN RAISE EXCEPTION 'rollback 128 hậu kiểm: tổng hàm CMS phải 68, có %', v_n; END IF;
@@ -1354,6 +1606,8 @@ BEGIN
      OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.cms__attest_eval(uuid, uuid)'::regprocedure) IS DISTINCT FROM 'a75e03e0b4c7a45c446af38698cf44e9'
      OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.cms__lock_eval(uuid, uuid, integer, text, boolean)'::regprocedure) IS DISTINCT FROM '6c38e2ca40f37d1cc5e715f8cd3e2bb5'
      OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_program_save(jsonb)'::regprocedure) IS DISTINCT FROM '5f9360e7c3c1d4dd828b50f8fc1c2115'
+     OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_import_commit(uuid, text, text, jsonb, uuid)'::regprocedure) IS DISTINCT FROM '65bd0b43e24fda590eec4cd764f959c2'
+     OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_program_activate(uuid, uuid)'::regprocedure) IS DISTINCT FROM '6ae92590bf7afc237c80cc3db15e5aad'
      OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_sales_run_open(uuid, jsonb)'::regprocedure) IS DISTINCT FROM 'a0123bc5abeefac9da1c8dbcd645a97a'
      OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_sales_run_seal_begin(uuid, jsonb)'::regprocedure) IS DISTINCT FROM '327d53af6739ffdbf780363aa6460bcc'
      OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_sales_run_seal_step(uuid, integer)'::regprocedure) IS DISTINCT FROM '55462ce6e7a5b5e6ad26a2c1751ca726'
@@ -1364,7 +1618,7 @@ BEGIN
      OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_result_lines(uuid, uuid, uuid, uuid, integer, integer)'::regprocedure) IS DISTINCT FROM 'c1bf6ff7c059a4b3fe13c140205306cd'
      OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_source_attest(uuid, uuid, jsonb, uuid)'::regprocedure) IS DISTINCT FROM '32b51294e2837918377ba37007da38f1'
      OR (SELECT md5(replace(prosrc, E'\r', '')) FROM pg_catalog.pg_proc WHERE oid = 'public.rpc_cms_run_source_export(uuid, uuid, text, integer)'::regprocedure) IS DISTINCT FROM '8f1d48eaf1b532490cfc3582a6312d18' THEN
-    RAISE EXCEPTION 'rollback 128 hậu kiểm: thân 15 hàm khôi phục lệch nguyên văn (md5)';
+    RAISE EXCEPTION 'rollback 128 hậu kiểm: thân 17 hàm khôi phục lệch nguyên văn (md5)';
   END IF;
 END $$;
 

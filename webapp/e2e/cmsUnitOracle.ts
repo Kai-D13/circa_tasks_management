@@ -4,7 +4,7 @@
 //   C = Σ quantity_raw nguyên của dòng INCLUDED đúng ĐV CMS; Q = max(C, 0); tiềm năng = F(Q) lũy tiến; nhận = gate ? F(Q) : 0;
 //   gate SP = Σ GMV INCLUDED của (dược sĩ, SP) ≥ target; gate danh mục = Σ GMV INCLUDED các SP danh mục của dược sĩ ≥ target danh mục.
 // HOLD khi BẤT KỲ dòng ứng viên (OFFLINE + COMPLETED + trong kỳ VN + SP thuộc chương trình — kể cả chưa gán / ngoài phạm vi) có đơn vị
-// thiếu / có ký tự điều khiển, lượng thiếu / sai hình thức, hoặc đúng ĐV mà lượng lẻ / ngoài miền bigint. Không clamp, không làm tròn.
+// thiếu / có ký tự điều khiển hoặc ký tự vô hình (r1 Q-225), lượng thiếu / sai hình thức, hoặc đúng ĐV mà lượng lẻ / ngoài miền bigint. Không clamp, không làm tròn.
 // Phạm vi oracle: người bán là email ↔ (user, nhà thuốc) đơn giản (fixture chỉ dùng dược sĩ OS hợp lệ); thứ tự dòng không ảnh hưởng.
 
 export type OracleRaw = Record<string, string | null | undefined>
@@ -40,7 +40,11 @@ const Z = BigInt(0)
 
 // ── khoá đơn vị (dựng lại từ Unicode, không đọc bảng của app) ───────────────────────────────────────────────────────────────
 const CTRL = /[\u0000-\u001f\u007f-\u009f]/
-const WS = '                  　﻿'
+// Khoảng trắng cắt hai đầu (khoá v2 — KHÔNG còn U+FEFF), viết bằng code point độc lập với hằng của app.
+const WS = String.fromCodePoint(0x20, 0xa0, 0x1680, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200a,
+  0x2028, 0x2029, 0x202f, 0x205f, 0x3000)
+// r1 Q-225 (PM 10/11): ký tự định dạng / vô hình ở BẤT KỲ vị trí nào ⇒ đơn vị / lượng không hợp lệ (kiểm trên chuỗi THÔ, trước trim).
+const INVIS = /[\u00ad\u034f\u0600-\u0605\u061c\u06dd\u070f\u0890\u0891\u08e2\u115f\u1160\u17b4\u17b5\u180b-\u180f\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff\uffa0\ufff0-\ufffb]/
 const isWs = (c: string) => WS.includes(c)
 const inLatinBlocks = (cp: number) =>
   (cp >= 0x41 && cp <= 0x5a) || (cp >= 0xc0 && cp <= 0xde) || (cp >= 0x100 && cp <= 0x17f) || (cp >= 0x1a0 && cp <= 0x1a1)
@@ -53,7 +57,7 @@ function lowerOne(c: string): string {
   return l
 }
 export function oracleUnitKey(v: string | null | undefined): string | null {
-  if (typeof v !== 'string' || CTRL.test(v)) return null
+  if (typeof v !== 'string' || CTRL.test(v) || INVIS.test(v)) return null
   const cs = [...v.normalize('NFC')]
   while (cs.length && isWs(cs[0])) cs.shift()
   while (cs.length && isWs(cs[cs.length - 1])) cs.pop()
@@ -108,11 +112,11 @@ export function cmsUnitOracle(prog: OracleProgram, rows: readonly OracleRaw[], s
     const uom = typeof r.uom_raw === 'string' ? r.uom_raw : null
     const qraw = typeof r.quantity_raw === 'string' ? r.quantity_raw : null
     let bad: string | null = null
-    if (uom !== null && CTRL.test(uom)) bad = 'UNIT_INVALID'
+    if (uom !== null && (CTRL.test(uom) || INVIS.test(uom))) bad = 'UNIT_INVALID'
     else if (uom === null || uom.trim() === '') bad = 'UNIT_MISSING'
     const key = bad ? null : oracleUnitKey(uom!.trim())
     if (!bad && key === null) bad = 'UNIT_INVALID'
-    if (!bad && qraw !== null && CTRL.test(qraw)) bad = 'QTY_INVALID'
+    if (!bad && qraw !== null && (CTRL.test(qraw) || INVIS.test(qraw))) bad = 'QTY_INVALID'
     const q9 = bad ? null : oracleDec9(qraw === null ? null : qraw.trim())
     if (!bad && q9 === null) bad = qraw === null || qraw.trim() === '' ? 'QTY_MISSING' : 'QTY_INVALID'
     const matched = !bad && key === unitKeyCms

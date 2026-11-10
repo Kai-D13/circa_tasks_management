@@ -7,6 +7,8 @@
 //      (quantity_raw âm với B / GMV dương, mọi đơn vị)
 //   C3 metadata (cùng ca spec "snapshot / metadata run / dấu writer"): dấu writer = cơ sở snapshot; snapshot chỉ đọc có cơ sở / chính
 //      sách / phiên bản lạ hoặc cặp lệch ⇒ lỗi (không tự chọn pos_base); calc snapshot run_open lệch cơ sở / khoá đơn vị ⇒ lỗi
+//   C4 (r1 PM 10/11) Q-225: ký tự vô hình ở khoá / marker nguồn (FEFF bị trim) / import ⇒ không hợp lệ (HOLD / loại nhóm), NBSP vẫn hợp lệ;
+//      lượt ghi cms_unit khi capture lớp nguồn OFF ⇒ held UNIT_SOURCE_CAPTURE_REQUIRED trước khi stage
 // Bản gốc phải ĐẠT mọi bộ; MỌI đột biến phải bị ít nhất một bộ GIẾT. Không chạm DB / mạng. Dọn thư mục tạm của chính lượt này.
 //   node scripts/qa-cms-unit-mutation.mjs
 import fs from 'node:fs'
@@ -22,9 +24,11 @@ const SC = await orig.import(path.join(ROOT, 'e2e', 'cmsUnitScenario.ts'))
 const OR = await orig.import(path.join(ROOT, 'e2e', 'cmsUnitOracle.ts'))
 const MAP = await orig.import(path.join(ROOT, 'lib', 'cms', 'mapping.ts'))
 const CT = await orig.import(path.join(ROOT, 'lib', 'cms', 'source', 'contract.ts'))
+const FX = await orig.import(path.join(ROOT, 'e2e', 'cmsFixtureRunner.ts'))
 const SELLERS = MAP.buildSellerIndex(SC.USERS, SC.STORES)
 
 const ENGINE = 'lib/cms/engine/compute.ts', UNITKEY = 'lib/cms/unitKey.ts', STAGE = 'lib/cms/resultStage.ts'
+const CONTRACT = 'lib/cms/source/contract.ts', UNITCHECK = 'lib/cms/import/unitCheck.ts', SYNC = 'lib/cms/salesSync.ts'
 /** Đột biến: tệp + đoạn GỐC (phải khớp ĐÚNG một lần) → đoạn thay. */
 const MUTANTS = [
   { id: 'M1-bk-formula', why: 'chương trình cms_unit tính bằng công thức cũ Q = floor(ΣB / K)', edits: [[ENGINE,
@@ -55,6 +59,16 @@ const MUTANTS = [
     "    if (s.quantityBasis === 'cms_unit' && (uk === null || uk !== cmsUnitKey(p.unitCms))) {", '    if (false) {']] },
   { id: 'M13-policy-unchecked', why: 'chính sách không khớp cơ sở vẫn nhận', edits: [[STAGE,
     "  if (raw.calculation_policy_version !== CMS_BASIS_POLICY[b]) throw new CmsSnapshotError('calculation_policy_version')", '']] },
+  // r1 (PM 10/11 §5): bỏ kiểm ký tự vô hình / kiểm SAU trim / marker nguồn chỉ điều khiển / import bỏ nhánh vô hình / bỏ capture bắt buộc.
+  { id: 'M14-no-invisible-key', why: 'khoá đơn vị bỏ kiểm ký tự vô hình (U+200B ⇒ "khác ĐV" 0₫)', edits: [[UNITKEY,
+    'if (CONTROL_RE.test(v) || INVISIBLE_RE.test(v)) return null', 'if (CONTROL_RE.test(v)) return null']] },
+  { id: 'M15-invisible-after-trim', why: 'kiểm ký tự vô hình SAU trim (FEFF hai đầu lọt)', edits: [[UNITKEY,
+    'if (CONTROL_RE.test(v) || INVISIBLE_RE.test(v)) return null', 'if (CONTROL_RE.test(v) || INVISIBLE_RE.test(v.trim())) return null']] },
+  { id: 'M16-source-marker-control-only', why: 'marker thô nguồn chỉ ký tự điều khiển (FEFF bị adapter trim ⇒ dòng "Hộp" hợp lệ)', edits: [[CONTRACT,
+    'return x.control || x.invisible }', 'return x.control }']] },
+  { id: 'M17-import-invisible-ignored', why: 'import bỏ nhánh UNIT_CMS_INVISIBLE', edits: [[UNITCHECK, '} else if (invis) {', '} else if (false) {']] },
+  { id: 'M18-capture-not-required', why: 'lượt ghi cms_unit chạy khi capture lớp nguồn OFF', edits: [[SYNC,
+    "  if (snap.quantityBasis === 'cms_unit' && !opts.dryRun && !capture) return stop('held', CMS_UNIT_CODES.captureRequired)\n", '']] },
 ]
 
 const lines = (rows) => rows.map((r) => { const x = CT.normalizeSalesRow(r); if (!x.ok) throw new Error('fixture lỗi'); return x.value })
@@ -65,7 +79,7 @@ async function checks(libRoot) {
   const j = createJiti(import.meta.url, { interopDefault: true, moduleCache: false, fsCache: false, alias: { '@': libRoot } })
   const EN = await j.import(path.join(libRoot, 'lib', 'cms', 'engine', 'compute.ts'))
   const RS = await j.import(path.join(libRoot, 'lib', 'cms', 'resultStage.ts'))
-  const out = { C1: { bad: 0, ex: [] }, C2: { bad: 0, ex: [] }, C3: { bad: 0, ex: [] } }
+  const out = { C1: { bad: 0, ex: [] }, C2: { bad: 0, ex: [] }, C3: { bad: 0, ex: [] }, C4: { bad: 0, ex: [] } }
   const miss = (k, s) => { out[k].bad++; if (out[k].ex.length < 3) out[k].ex.push(s) }
   let held = 0, compared = 0
   for (let seed = 1; seed <= 300; seed++) {
@@ -124,13 +138,77 @@ async function checks(libRoot) {
   // Snapshot CHỈ ĐỌC (không run_id, không calc) — lớp kiểm duy nhất là cơ sở / chính sách của chính snapshot.
   for (const [label, o] of [['cơ sở lạ', { quantity_basis: 'unit' }], ['cơ sở null', { quantity_basis: null }],
     ['chính sách lệch cơ sở', { calculation_policy_version: 'pos_base_v1' }], ['nhãn legacy của run', { quantity_basis: 'pos_base', calculation_policy_version: 'pos_base_legacy' }],
-    ['phiên bản khoá đơn vị lạ', { unit_key_version: 'cms-unit-key-v2' }]]) mustThrow(`snapshot chỉ đọc: ${label}`, SC.snap128(o))
+    ['phiên bản khoá đơn vị lạ', { unit_key_version: 'cms-unit-key-v1' }]]) mustThrow(`snapshot chỉ đọc: ${label}`, SC.snap128(o))
   const sx = SC.snap128({ quantity_basis: 'cms_unitX' })
   mustThrow('cơ sở lạ', open(sx, SC.calcOf(SC.snap128())))
   const sp = SC.snap128({ calculation_policy_version: 'pos_base_v1' })
   mustThrow('chính sách lệch cơ sở', open(sp, SC.calcOf(sp)))
   const s0 = SC.snap128()
   mustThrow('calc snapshot khoá đơn vị lệch app', open(s0, SC.calcOf(s0, {}, { unit_key: 'vỉ' })))
+  // C4 (r1 — PM 10/11): Q-225 ký tự vô hình (khoá / marker nguồn / import) + lượt ghi cms_unit bắt buộc capture lớp nguồn.
+  {
+    const UKm = await j.import(path.join(libRoot, 'lib', 'cms', 'unitKey.ts'))
+    const CTm = await j.import(path.join(libRoot, 'lib', 'cms', 'source', 'contract.ts'))
+    const VA = await j.import(path.join(libRoot, 'lib', 'cms', 'import', 'validate.ts'))
+    const UC = await j.import(path.join(libRoot, 'lib', 'cms', 'import', 'unitCheck.ts'))
+    const SSm = await j.import(path.join(libRoot, 'lib', 'cms', 'salesSync.ts'))
+    const ZW = '\u200b', BOM = '\ufeff', SHY = '\u00ad', NB = '\u00a0'
+    for (const v of [`h${ZW}ộp`, `${BOM}hộp`, `hộp${BOM}`, `hộp${SHY}`, '\u2060', `${NB}hộp${BOM}`]) {
+      if (UKm.cmsUnitKey(v) !== null) miss('C4', `cmsUnitKey(${JSON.stringify(v)}) = ${JSON.stringify(UKm.cmsUnitKey(v))} (cần null)`)
+    }
+    if (UKm.cmsUnitKey(`${NB}Hộp${NB}`) !== 'hộp') miss('C4', 'NBSP hai đầu không còn hợp lệ')
+    // Nguồn: FEFF cuối bị adapter trim / U+200B giữa ⇒ marker thô ⇒ engine HOLD UNIT_INVALID (không thành dòng đúng ĐV / khác ĐV 0₫).
+    for (const uom of [`Hộp${BOM}`, `H${ZW}ộp`, `${BOM}hộp`]) {
+      const n = CTm.normalizeSalesRow(SC.L({ uom_raw: uom, quantity_raw: '2' }))
+      let err = null
+      try { if (n.ok) EN.computeCmsProgram({ program: SC.prog([SC.P('900001')]), lines: [n.value], sellers: SELLERS }) } catch (e) { err = e }
+      if (!n.ok || err?.code !== 'UNIT_SOURCE_INVALID' || JSON.stringify(err.unitIssues) !== '{"UNIT_INVALID":1}') {
+        miss('C4', `nguồn ${JSON.stringify(uom)}: engine ${err ? `${err.code} ${JSON.stringify(err.unitIssues)}` : 'KHÔNG HOLD'}`)
+      }
+    }
+    {
+      const n = CTm.normalizeSalesRow(SC.L({ quantity_raw: `${BOM}2` }))
+      if (!n.ok || n.value.rawControl?.quantity !== true) miss('C4', 'lượng có FEFF đầu (bị trim) không gắn marker')
+    }
+    // Import: ô unit_CMS thô có ký tự vô hình (kể cả hai đầu bị trim) ⇒ loại nhóm UNIT_CMS_INVISIBLE.
+    {
+      const cell = (v) => (v === null ? { kind: 'empty' } : typeof v === 'number' ? { kind: 'number', value: v } : { kind: 'text', value: v })
+      const irow = (excelRow, o = {}) => {
+        const raw = { ProductID: '900001', KPI_Target_GMV_VND: null, Loai_CMS_GMV: null, Tu_SL_ban: 1, Den_SL_ban: null, CMS_VND_SP: 1000,
+          Noi_dung_tu_van: 'Tư vấn giả', unit_CMS: 'hộp', base_quantity_CMS: 24, ...o }
+        return { excelRow, cells: Object.fromEntries(Object.entries(raw).map(([k, v]) => [k, cell(v)])), raw }
+      }
+      const PMm = new Map(['900001', '900002', '900003'].map((id) => [id, { productName: `SP ${id}`, imageUrl: null, isActive: true, referencePrice: null }]))
+      const vctx = { mode: 'replace', productMaster: PMm, existingProductIds: new Set(), conflictProductIds: new Set(), currentCatalogTarget: null }
+      const rows = [irow(2, { unit_CMS: `${NB}hộp${NB}` }), irow(3, { ProductID: '900002', unit_CMS: `hộp${BOM}` }), irow(4, { ProductID: '900003', unit_CMS: `h${ZW}ộp` })]
+      const x = UC.cmsApplyUnitBasisCheck(VA.validateCmsImport(rows, vctx), rows)
+      const got = x.groupsRejected.map((g) => `${g.key}:${g.errors[0].code}`).join()
+      if (got !== '900002:UNIT_CMS_INVISIBLE,900003:UNIT_CMS_INVISIBLE' || x.groupsOk.length !== 1) miss('C4', `import vô hình: ${got} · ok ${x.groupsOk.length}`)
+    }
+    // salesSync: cms_unit + cờ ON + capture OFF ⇒ held UNIT_SOURCE_CAPTURE_REQUIRED trước khi đọc nguồn / stage.
+    {
+      const calls = []
+      const snap = SC.snap128()
+      let t = 1_000_000
+      const deps = {
+        table: 'qa-project.dataset.cms_sales', runner: FX.createCmsFixtureRunner({ sales: [SC.L({ quantity_raw: '2' })] }),
+        loadSnapshot: async () => { calls.push('loadSnapshot'); return snap },
+        openRun: async () => { calls.push('openRun'); return SC.openOf(snap, SC.calcOf(snap)) },
+        stage: async (_r, _p, _n, rows) => { calls.push('stage'); return rows.length },
+        sealBegin: async () => { calls.push('sealBegin'); return { ok: true } },
+        sealStep: async (_r, n) => { calls.push('sealStep'); return n === 10 ? { sealed: true } : { ok: true } },
+        publish: async () => { calls.push('publish'); return { published: true } },
+        finish: async () => { calls.push('finish') },
+        cleanup: async () => ({ purged: 0, deleted: 0, more: false }),
+        now: () => (t += 10),
+      }
+      let r = null
+      try { r = await SSm.runCmsSalesSync(deps, SC.PROG, { dryRun: false, source: 'qa', unitBasisEnabled: true }) } catch (e) { r = { status: 'throw', code: String(e?.message ?? e).slice(0, 60) } }
+      if (r.status !== 'held' || r.code !== 'UNIT_SOURCE_CAPTURE_REQUIRED' || calls.includes('stage') || calls.includes('publish')) {
+        miss('C4', `capture OFF: ${r.status}/${r.code} · gọi ${calls.join(',')}`)
+      }
+    }
+  }
   return { ...out, held, compared }
 }
 
@@ -140,8 +218,8 @@ try {
   const base = path.join(TMP, 'm0')
   fs.cpSync(path.join(ROOT, 'lib'), path.join(base, 'lib'), { recursive: true })
   const r0 = await checks(base)
-  const pass0 = r0.C1.bad === 0 && r0.C2.bad === 0 && r0.C3.bad === 0
-  console.log(`${pass0 ? '✓' : '✗'} bản gốc (bản sao lib/): C1 ${r0.C1.bad} lệch (held ${r0.held} · so ${r0.compared}) · C2 ${r0.C2.bad} · C3 ${r0.C3.bad}${pass0 ? '' : ` — ${[...r0.C1.ex, ...r0.C2.ex, ...r0.C3.ex].join(' | ')}`}`)
+  const pass0 = r0.C1.bad === 0 && r0.C2.bad === 0 && r0.C3.bad === 0 && r0.C4.bad === 0
+  console.log(`${pass0 ? '✓' : '✗'} bản gốc (bản sao lib/): C1 ${r0.C1.bad} lệch (held ${r0.held} · so ${r0.compared}) · C2 ${r0.C2.bad} · C3 ${r0.C3.bad} · C4 ${r0.C4.bad}${pass0 ? '' : ` — ${[...r0.C1.ex, ...r0.C2.ex, ...r0.C3.ex, ...r0.C4.ex].join(' | ')}`}`)
   if (!pass0) rc = 1
   for (const m of MUTANTS) {
     const dir = path.join(TMP, m.id)
@@ -155,7 +233,7 @@ try {
     }
     let r
     try { r = await checks(dir) } catch (e) { r = { crash: String(e?.message ?? e).slice(0, 120) } }
-    const killedBy = r.crash ? ['nạp lỗi'] : ['C1', 'C2', 'C3'].filter((k) => r[k].bad > 0)
+    const killedBy = r.crash ? ['nạp lỗi'] : ['C1', 'C2', 'C3', 'C4'].filter((k) => r[k].bad > 0)
     const killed = killedBy.length > 0
     if (!killed) rc = 1
     console.log(`${killed ? '✓' : '✗'} ${m.id} (${m.why}) ⇒ ${killed ? `BỊ GIẾT bởi ${killedBy.join(' + ')}` : 'SỐNG SÓT'}${r.crash ? ` — ${r.crash}` : killed ? ` — ví dụ: ${(r[killedBy[0]].ex[0] ?? '').slice(0, 150)}` : ''}`)

@@ -15,7 +15,8 @@ import * as S from '../lib/cms/salesSync'
 import { normalizeSalesRow, type CmsRawRow, type CmsSalesLine } from '../lib/cms/source/contract'
 import { CMS_UNIT_CODES, parseCmsRunBasis } from '../lib/cms/unitBasis'
 import {
-  CMS_UNIT_CASE_LOWER, CMS_UNIT_CASE_UPPER, CMS_UNIT_KEY_VERSION, CMS_UNIT_WS, cmsClassifyUnitLine, cmsUnitKey, cmsUnitQuantity,
+  CMS_UNIT_CASE_LOWER, CMS_UNIT_CASE_UPPER, CMS_UNIT_INVISIBLE, CMS_UNIT_KEY_VERSION, CMS_UNIT_WS, cmsClassifyUnitLine, cmsUnitKey,
+  cmsUnitQuantity, cmsUnitRawFlags,
 } from '../lib/cms/unitKey'
 import { createCmsFixtureRunner } from './cmsFixtureRunner'
 import { fxSale } from './cmsSourceFixture'
@@ -49,12 +50,14 @@ const unitErr = (f: () => unknown): CmsEngineInputError => {
 const J = (v: unknown) => JSON.stringify(v, (_k, x) => (typeof x === 'bigint' ? `${x}n` : x))
 
 // ── AC03: hợp đồng khoá đơn vị (TS; parity PG15 / PGlite ở qa-cms-128) ─────────────────────────────────────────────────
-test.describe('CMS-UNIT · khoá đơn vị cms-unit-key-v1 (AC03) @desktop', () => {
+test.describe('CMS-UNIT · khoá đơn vị cms-unit-key-v2 (AC03 / Q-225) @desktop', () => {
   test('NFC / NFD, hoa thường tiếng Việt, khoảng trắng tường minh; không alias, không cắt, không mờ', () => {
-    expect(CMS_UNIT_KEY_VERSION).toBe('cms-unit-key-v1')
+    expect(CMS_UNIT_KEY_VERSION).toBe('cms-unit-key-v2')
     const hop = 'hộp'
     expect(cmsUnitKey('Hộp'.normalize('NFD'))).toBe(hop)
-    for (const v of ['HỘP', 'hỘp', 'Hộp', ' hộp ', ' hộp　', '﻿hộp', ' hộp ', ' hộp ']) expect(cmsUnitKey(v), J(v)).toBe(hop)
+    for (const v of ['HỘP', 'hỘp', 'Hộp', ' hộp ', ' hộp\u3000', '\u00a0hộp\u00a0', '\u2003hộp\u202f', '\u205fhộp\u1680']) {
+      expect(cmsUnitKey(v), J(v)).toBe(hop)
+    }
     expect(cmsUnitKey('BOX')).toBe('box')
     expect(cmsUnitKey('box')).not.toBe(cmsUnitKey('hộp'))
     expect(cmsUnitKey('h')).not.toBe(hop)
@@ -64,15 +67,57 @@ test.describe('CMS-UNIT · khoá đơn vị cms-unit-key-v1 (AC03) @desktop', ()
     expect(cmsUnitKey('hộp  lớn')).not.toBe(cmsUnitKey('hộp lớn'))
     const long = 'Hộp'.repeat(100)
     expect(cmsUnitKey(long)).toBe('hộp'.repeat(100)) // không cắt 30 ký tự
-    expect(cmsUnitKey('​hộp')).toBe('​hộp') // zero-width không phải khoảng trắng hợp đồng ⇒ không khớp
+    expect(cmsUnitKey('\u200bhộp')).toBeNull() // r1 Q-225: zero-width ⇒ KHÔNG HỢP LỆ (r0: "khác ĐV" ⇒ 0₫ âm thầm)
     expect(cmsUnitKey('ĐƯỜNG ƠI ỸỴ')).toBe('đường ơi ỹỵ')
     expect(cmsUnitKey('Σ')).toBe('Σ') // ngoài bảng ⇒ phân biệt hoa thường
     expect(cmsUnitKey('İ')).toBe('İ')
   })
   test('ký tự điều khiển / rỗng ⇒ không hợp lệ (null), không làm sạch thành đơn vị có vẻ hợp lệ', () => {
-    for (const v of ['hộp\t', 'hộp\n', '\rhộp', '\u0085hộp', 'hộp\u007f', 'h\u0001p', '', ' ', '　 ', null, undefined]) {
+    for (const v of ['hộp\t', 'hộp\n', '\rhộp', '\u0085hộp', 'hộp\u007f', 'h\u0001p', '', ' ', '\u3000\u00a0', null, undefined]) {
       expect(cmsUnitKey(v as string | null), J(v)).toBeNull()
     }
+  })
+  test('r1 Q-225: ký tự vô hình (tối thiểu PM + phần BMP của Cf ∪ Default_Ignorable) ở đầu / giữa / cuối ⇒ null, không xoá để ép khớp', () => {
+    expect(CMS_UNIT_INVISIBLE.flatMap(([a, b]) => [a.toString(16), b.toString(16)]).join(',')).toBe(
+      'ad,ad,34f,34f,600,605,61c,61c,6dd,6dd,70f,70f,890,891,8e2,8e2,115f,1160,17b4,17b5,180b,180f,200b,200f,202a,202e,2060,206f,3164,3164,'
+      + 'fe00,fe0f,feff,feff,ffa0,ffa0,fff0,fffb')
+    // Tập tối thiểu PM (Q-225) nằm trọn trong tập.
+    for (const cp of [0xad, 0x34f, 0x61c, 0x180e, 0x200b, 0x200f, 0x202a, 0x202e, 0x2060, 0x206f, 0xfeff]) {
+      expect(cmsUnitRawFlags(String.fromCodePoint(cp)).invisible, `PM U+${cp.toString(16)}`).toBe(true)
+    }
+    let n = 0
+    for (const [a, b] of CMS_UNIT_INVISIBLE) {
+      for (let cp = a; cp <= b; cp++) {
+        const c = String.fromCodePoint(cp)
+        for (const v of [c + 'hộp', 'h' + c + 'ộp', 'hộp' + c, c, ' ' + c + ' ', '\u00a0Hộp' + c, c + c]) {
+          const tag = `U+${cp.toString(16)} ${J(v)}`
+          expect(cmsUnitKey(v), tag).toBeNull()
+          expect(oracleUnitKey(v), `oracle ${tag}`).toBeNull()
+          expect(cmsUnitRawFlags(v), tag).toEqual({ control: false, invisible: true })
+          n++
+        }
+      }
+    }
+    expect(n).toBe(7 * 80)
+    // Khoảng trắng hợp lệ vẫn cắt hai đầu; ký tự sát biên tập vô hình KHÔNG bị coi là vô hình; điều khiển vẫn riêng cờ control.
+    expect(cmsUnitKey('\u00a0Hộp\u3000')).toBe('hộp')
+    expect(cmsUnitKey('\u202fhộp\u205f')).toBe('hộp')
+    for (const cp of [0xac, 0xae, 0x34e, 0x350, 0x5ff, 0x606, 0x61b, 0x61d, 0x6dc, 0x6de, 0x70e, 0x710, 0x88f, 0x892, 0x8e1, 0x8e3, 0x115e,
+      0x1161, 0x17b3, 0x17b6, 0x180a, 0x1810, 0x200a, 0x2010, 0x2029, 0x202f, 0x205f, 0x2070, 0x3163, 0x3165, 0xfdff, 0xfe10, 0xfefe, 0xff00,
+      0xff9f, 0xffa1, 0xffef, 0xfffc]) {
+      expect(cmsUnitRawFlags(String.fromCodePoint(cp)).invisible, `U+${cp.toString(16)}`).toBe(false)
+    }
+    expect(cmsUnitRawFlags('hộp\t')).toEqual({ control: true, invisible: false })
+    expect(cmsUnitRawFlags('\ufeffhộp\t')).toEqual({ control: true, invisible: true })
+  })
+  test('r1 Q-225: quét toàn BMP — khoá TS = oracle độc lập (ký tự ở giữa và ở hai đầu: khoảng trắng, điều khiển, vô hình, chữ)', () => {
+    const bad: string[] = []
+    for (let cp = 1; cp <= 0xffff; cp++) {
+      if (cp >= 0xd800 && cp <= 0xdfff) continue
+      const c = String.fromCodePoint(cp)
+      for (const v of ['h' + c + 'ộp', c + 'hộp' + c]) if (cmsUnitKey(v) !== oracleUnitKey(v)) bad.push(`U+${cp.toString(16)}`)
+    }
+    expect(bad.slice(0, 20)).toEqual([])
   })
   test('bảng hoa → thường 243 cặp khứ hồi + NFC; khoá TS = oracle dựng lại từ Unicode trên mọi ký tự bảng + chuỗi trộn', () => {
     const up = [...CMS_UNIT_CASE_UPPER]
@@ -83,8 +128,8 @@ test.describe('CMS-UNIT · khoá đơn vị cms-unit-key-v1 (AC03) @desktop', ()
       expect(lo[i].toUpperCase(), u).toBe(u)
       expect(u.normalize('NFC')).toBe(u)
     })
-    expect([...CMS_UNIT_WS].map((c) => c.codePointAt(0)!.toString(16)).join(',')).toBe('20,a0,1680,2000,2001,2002,2003,2004,2005,2006,2007,2008,2009,200a,2028,2029,202f,205f,3000,feff')
-    const corpus = [...up, ...lo, 'Hộp', 'HỘP VIÊN', 'Ống 10ml', 'Tuýp', 'Gói', 'CHAI 100ML', 'Σσ', 'ǅ', 'ẞ', 'Ⅻ', 'Ｈộp', ' Ẩ ', ' Ư　']
+    expect([...CMS_UNIT_WS].map((c) => c.codePointAt(0)!.toString(16)).join(',')).toBe('20,a0,1680,2000,2001,2002,2003,2004,2005,2006,2007,2008,2009,200a,2028,2029,202f,205f,3000')
+    const corpus = [...up, ...lo, 'Hộp', 'HỘP VIÊN', 'Ống 10ml', 'Tuýp', 'Gói', 'CHAI 100ML', 'Σσ', 'ǅ', 'ẞ', 'Ⅻ', 'Ｈộp', ' Ẩ ', '\u00a0Ư\u3000']
     for (const s of corpus) {
       expect(cmsUnitKey(s), J(s)).toBe(oracleUnitKey(s))
       expect(cmsUnitKey(s.normalize('NFD')), J(s)).toBe(oracleUnitKey(s.normalize('NFD')))
@@ -120,9 +165,11 @@ test.describe('CMS-UNIT · lượng đúng ĐV phải nguyên (AC02 / Q-223 / UN
     expect(cls('abc', 'viên')).toEqual({ kind: 'INVALID', reason: 'QTY_INVALID' })
     expect(cls('1', null)).toEqual({ kind: 'INVALID', reason: 'UNIT_MISSING' })
     expect(cls('1', '')).toEqual({ kind: 'INVALID', reason: 'UNIT_MISSING' })
-    expect(cls('1', '　')).toEqual({ kind: 'INVALID', reason: 'UNIT_INVALID' })
+    expect(cls('1', '\u3000')).toEqual({ kind: 'INVALID', reason: 'UNIT_INVALID' })
     expect(cls('1', 'hộp', { uom: true, quantity: false })).toEqual({ kind: 'INVALID', reason: 'UNIT_INVALID' })
     expect(cls('1', 'hộp', { uom: false, quantity: true })).toEqual({ kind: 'INVALID', reason: 'QTY_INVALID' })
+    expect(cls('1', 'h\u200bộp')).toEqual({ kind: 'INVALID', reason: 'UNIT_INVALID' }) // r1 Q-225: không phải "khác ĐV"
+    expect(cls('1', 'h\u00adộp')).toEqual({ kind: 'INVALID', reason: 'UNIT_INVALID' })
   })
   test('nguồn: ký tự điều khiển ở giá trị THÔ gắn rawControl (dòng sạch giữ shape cũ, không có khoá)', () => {
     const clean = normalizeSalesRow(fxSale({}))
@@ -132,6 +179,15 @@ test.describe('CMS-UNIT · lượng đúng ĐV phải nguyên (AC02 / Q-223 / UN
     expect(tab.ok && tab.value.rawControl).toEqual({ uom: true, quantity: false })
     const nel = normalizeSalesRow(fxSale({ quantity_raw: '1\u0085' }))
     expect(nel.ok && nel.value.rawControl).toEqual({ uom: false, quantity: true })
+    // r1 Q-225: FEFF hai đầu bị adapter trim mất ⇒ marker lấy trên giá trị THÔ; U+200B giữa chuỗi / FEFF trước lượng cũng đánh dấu.
+    const bom = normalizeSalesRow(fxSale({ uom_raw: 'hộp\ufeff' }))
+    expect(bom.ok && bom.value.uomRaw).toBe('hộp')
+    expect(bom.ok && bom.value.rawControl).toEqual({ uom: true, quantity: false })
+    const zw = normalizeSalesRow(fxSale({ uom_raw: 'h\u200bộp', quantity_raw: '\ufeff1' }))
+    expect(zw.ok && zw.value.quantityRaw).toBe('1')
+    expect(zw.ok && zw.value.rawControl).toEqual({ uom: true, quantity: true })
+    const nb = normalizeSalesRow(fxSale({ uom_raw: '\u00a0hộp\u00a0' }))
+    expect(nb.ok && 'rawControl' in nb.value).toBe(false)
   })
 })
 
@@ -339,7 +395,8 @@ test.describe('CMS-UNIT · snapshot / metadata run / dấu writer @desktop', () 
   test('enum / phiên bản lạ, cặp lệch, thiếu unit_cms, khoá đơn vị khác hợp đồng ⇒ snapshot không hợp lệ (không tự chọn pos_base)', () => {
     const bad: Record<string, unknown>[] = [
       snap128({ quantity_basis: 'unit' }), snap128({ quantity_basis: null }), snap128({ calculation_policy_version: 'pos_base_v1' }),
-      snap128({ quantity_basis: 'pos_base', calculation_policy_version: 'pos_base_legacy' }), snap128({ unit_key_version: 'cms-unit-key-v2' }),
+      snap128({ quantity_basis: 'pos_base', calculation_policy_version: 'pos_base_legacy' }), snap128({ unit_key_version: 'cms-unit-key-v1' }),
+      snap128({ unit_key_version: 'cms-unit-key-v3' }),
       snap128({ unit_key_version: undefined }),
     ]
     const noUnit = snap128(); delete (noUnit.products as Record<string, unknown>[])[0].unit_cms
@@ -400,7 +457,7 @@ test.describe('CMS-UNIT · salesSync (cờ / override chỉ đọc / HOLD nguồ
     expect(off.fns()).not.toContain('stage')
     expect(off.calls.find((c) => c.fn === 'finish')!.args[1]).toBe('held')
     const on = fake()
-    const r2 = await S.runCmsSalesSync(on.deps, PROG, { dryRun: false, source: 'qa', unitBasisEnabled: true })
+    const r2 = await S.runCmsSalesSync(on.deps, PROG, { dryRun: false, source: 'qa', unitBasisEnabled: true, sourceCapture: true })
     expect([r2.status, r2.amountVnd]).toEqual(['published', '2000'])
     const e = on.calls.find((c) => c.fn === 'sealBegin')!.args[1] as Record<string, unknown>
     expect([e.quantity_basis, e.calculation_policy_version]).toEqual(['cms_unit', 'cms_unit_v1'])
@@ -408,9 +465,31 @@ test.describe('CMS-UNIT · salesSync (cờ / override chỉ đọc / HOLD nguồ
     const r3 = await S.runCmsSalesSync(dry.deps, PROG, { dryRun: true, source: 'operator' })
     expect([r3.status, r3.code, r3.amountVnd, dry.fns()]).toEqual(['dry_run', null, '2000', ['loadSnapshot']])
   })
+  test('r1 UNIT-P1-2: cms_unit + cờ ON nhưng capture lớp nguồn OFF ⇒ held UNIT_SOURCE_CAPTURE_REQUIRED trước khi đọc nguồn; pos_base không đổi', async () => {
+    const off = fake()
+    const r = await S.runCmsSalesSync(off.deps, PROG, { dryRun: false, source: 'qa', unitBasisEnabled: true })
+    expect([r.status, r.code]).toEqual(['held', CMS_UNIT_CODES.captureRequired])
+    expect(off.fns()).toEqual(['loadSnapshot', 'openRun', 'finish'])
+    expect(off.calls.find((c) => c.fn === 'finish')!.args[1]).toBe('held')
+    const on = fake()
+    const r2 = await S.runCmsSalesSync(on.deps, PROG, { dryRun: false, source: 'qa', unitBasisEnabled: true, sourceCapture: true })
+    expect(r2.status).toBe('published')
+    expect(on.calls.filter((c) => c.fn === 'stage').map((c) => c.args[1])).toContain('source_lines')
+    const pb = fake({ snap: snap128({ quantity_basis: 'pos_base', calculation_policy_version: 'pos_base_v1' }) })
+    const r3 = await S.runCmsSalesSync(pb.deps, PROG, { dryRun: false, source: 'qa' })
+    expect([r3.status, pb.calls.some((c) => c.fn === 'stage' && c.args[1] === 'source_lines')]).toEqual(['published', false])
+    const dry = await S.runCmsSalesSync(fake().deps, PROG, { dryRun: true, source: 'operator' })
+    expect(dry.status).toBe('dry_run')
+  })
+  test('r1 UNIT-P1-2: DB publish giữ run cms_unit (UNIT_SOURCE_MISMATCH) ⇒ held đúng mã, không báo published', async () => {
+    const f = fake()
+    f.deps.publish = async () => ({ published: false, code: 'UNIT_SOURCE_MISMATCH' })
+    const r = await S.runCmsSalesSync(f.deps, PROG, { dryRun: false, source: 'qa', unitBasisEnabled: true, sourceCapture: true })
+    expect([r.status, r.code]).toEqual(['held', 'UNIT_SOURCE_MISMATCH'])
+  })
   test('basisOverride: lượt ghi ⇒ từ chối trước mọi I/O; dry-run tính thử theo cơ sở khác; DB legacy ⇒ không hỗ trợ', async () => {
     const w = fake()
-    const r = await S.runCmsSalesSync(w.deps, PROG, { dryRun: false, source: 'operator', basisOverride: 'cms_unit', unitBasisEnabled: true })
+    const r = await S.runCmsSalesSync(w.deps, PROG, { dryRun: false, source: 'operator', basisOverride: 'cms_unit', unitBasisEnabled: true, sourceCapture: true })
     expect([r.status, r.code, w.calls.length]).toEqual(['error', S.CMS_BASIS_OVERRIDE_WRITE_FORBIDDEN, 0])
     const pb = snap128({ quantity_basis: 'pos_base', calculation_policy_version: 'pos_base_v1' })
     const base = await S.runCmsSalesSync(fake({ snap: pb }).deps, PROG, { dryRun: true, source: 'operator' })
@@ -424,20 +503,20 @@ test.describe('CMS-UNIT · salesSync (cờ / override chỉ đọc / HOLD nguồ
   })
   test('HOLD nguồn: lẻ ⇒ UNIT_QUANTITY_FRACTION; hỏng + lẻ ⇒ UNIT_SOURCE_INVALID (+ lý do), chi tiết chỉ số đếm; không stage', async () => {
     const f = fake({ sales: [L({ quantity_raw: '0.5' }), L({ quantity_raw: '0.5' }), L({ quantity_raw: '3' })] })
-    const r = await S.runCmsSalesSync(f.deps, PROG, { dryRun: false, source: 'qa', unitBasisEnabled: true })
+    const r = await S.runCmsSalesSync(f.deps, PROG, { dryRun: false, source: 'qa', unitBasisEnabled: true, sourceCapture: true })
     expect([r.status, r.code, r.reasons, r.unitInvalid]).toEqual(['held', CMS_UNIT_CODES.fraction, [CMS_UNIT_CODES.fraction], { QTY_FRACTION: 2 }])
     const d = f.calls.find((c) => c.fn === 'finish')!.args[2] as Record<string, unknown>
     expect([d.error_code, d.unit_invalid_lines, d.unit_invalid_by_reason]).toEqual([CMS_UNIT_CODES.fraction, 2, 'QTY_FRACTION=2'])
     expect(f.fns()).not.toContain('stage')
     const g = fake({ sales: [L({ quantity_raw: '0.5' }), L({ uom_raw: null })] })
-    const r2 = await S.runCmsSalesSync(g.deps, PROG, { dryRun: false, source: 'qa', unitBasisEnabled: true })
+    const r2 = await S.runCmsSalesSync(g.deps, PROG, { dryRun: false, source: 'qa', unitBasisEnabled: true, sourceCapture: true })
     expect([r2.code, r2.reasons]).toEqual([CMS_UNIT_CODES.sourceInvalid, [CMS_UNIT_CODES.sourceInvalid, CMS_UNIT_CODES.fraction]])
     expect(S.cmsUnitHold({ UNIT_MISSING: 1, QTY_FRACTION: 2 }).detail).toEqual({ unit_invalid_lines: 3, unit_invalid_by_reason: 'QTY_FRACTION=2,UNIT_MISSING=1' })
   })
   test('chương trình thật cms_unit: quantity_raw âm ở dòng khác ĐV ⇒ held trả hàng (không công bố phần dương); legacy / pos_base: dấu writer đúng', async () => {
     const real = snap128({ is_test: false })
     const f = fake({ snap: real, sales: [L({ quantity_raw: '2' }), L({ uom_raw: 'viên', quantity_raw: '-1', base_quantity: '1', gmv_amount: '1' })] })
-    const r = await S.runCmsSalesSync(f.deps, PROG, { dryRun: false, source: 'cron', unitBasisEnabled: true })
+    const r = await S.runCmsSalesSync(f.deps, PROG, { dryRun: false, source: 'cron', unitBasisEnabled: true, sourceCapture: true })
     expect([r.status, r.code]).toEqual(['held', 'RETURNS_NOT_SUPPORTED_THIS_PHASE'])
     expect(f.fns()).not.toContain('publish')
     const lg = fake({ snap: legacySnap() })
@@ -453,7 +532,7 @@ test.describe('CMS-UNIT · salesSync (cờ / override chỉ đọc / HOLD nguồ
   test('snapshot run_open thiếu / lệch calculation_snapshot ⇒ error SNAPSHOT_INVALID (đóng run, không tính)', async () => {
     const s = snap128()
     const f = fake({ open: openOf(s, calcOf(s, { config_version: 4 })) })
-    const r = await S.runCmsSalesSync(f.deps, PROG, { dryRun: false, source: 'qa', unitBasisEnabled: true })
+    const r = await S.runCmsSalesSync(f.deps, PROG, { dryRun: false, source: 'qa', unitBasisEnabled: true, sourceCapture: true })
     expect([r.status, r.code]).toEqual(['error', 'SNAPSHOT_INVALID'])
     expect(f.fns()).not.toContain('stage')
   })
@@ -483,11 +562,22 @@ test.describe('CMS-UNIT · import + tạo chương trình @desktop', () => {
     expect([u.stats.productsOk, u.stats.productsRejected, u.stats.rowsOk]).toEqual([1, 2, 1])
     expect(cmsApplyUnitBasisCheck(validateCmsImport([irow(2)], vctx), [irow(2)])).toEqual(validateCmsImport([irow(2)], vctx))
   })
+  test('r1 Q-225: unit_CMS có ký tự vô hình (kể cả FEFF / U+200B ở hai đầu bị trim) ⇒ loại nhóm UNIT_CMS_INVISIBLE; NBSP hai đầu vẫn hợp lệ', () => {
+    const rows = [irow(2, { unit_CMS: '\u00a0hộp\u00a0' }), irow(3, { ProductID: '900002', unit_CMS: 'hộp\ufeff' }),
+      irow(4, { ProductID: '900003', unit_CMS: '\u200bhộp' })]
+    const v = validateCmsImport(rows, vctx)
+    expect(v.groupsOk.map((g) => g.productId)).toEqual(['900001', '900002', '900003'])
+    const x = cmsApplyUnitBasisCheck(v, rows)
+    expect(x.groupsOk.map((g) => g.productId)).toEqual(['900001'])
+    expect(x.groupsRejected.map((g) => [g.key, g.errors[0].code, g.errors[0].column])).toEqual([['900002', 'UNIT_CMS_INVISIBLE', 'unit_CMS'], ['900003', 'UNIT_CMS_INVISIBLE', 'unit_CMS']])
+    const ctl = [irow(2, { unit_CMS: '\ufeffhộp\t' })]
+    expect(cmsApplyUnitBasisCheck(validateCmsImport(ctl, vctx), ctl).groupsRejected[0].errors[0].code).toBe('UNIT_CMS_CONTROL') // điều khiển ưu tiên
+  })
   test('digest: pos_base giữ NGUYÊN chuỗi cũ; cms_unit gắn cơ sở + phiên bản khoá đơn vị ⇒ đổi cơ sở giữa preview / commit ⇒ 409', () => {
     const v = validateCmsImport([irow(2)], vctx)
     expect(canonicalCmsImport(v, 'tiers', 'pos_base')).toBe(canonicalCmsImport(v))
     const u = JSON.parse(canonicalCmsImport(v, 'tiers', 'cms_unit'))
-    expect([u.quantityBasis, u.unitKeyVersion]).toEqual(['cms_unit', 'cms-unit-key-v1'])
+    expect([u.quantityBasis, u.unitKeyVersion]).toEqual(['cms_unit', 'cms-unit-key-v2'])
     expect(canonicalCmsImport(v, 'tiers', 'cms_unit')).not.toBe(canonicalCmsImport(v))
   })
   test('kiểm K / bằng chứng đơn vị: cms_unit so bằng cmsUnitKey (ký tự điều khiển ở POS không thành KHỚP); bắt buộc cả khi cờ v2 OFF', () => {
@@ -497,8 +587,8 @@ test.describe('CMS-UNIT · import + tạo chương trình @desktop', () => {
     expect(cmsKClassify(t, ev('Hộp'), [], norm)[0].status).toBe('MATCH')
     expect(cmsKClassify(t, ev('Hộp\t'), [], norm)[0].status).toBe('NO_EVIDENCE')
     expect(cmsKClassify([{ ...t[0], unit: cmsKUnitNorm('pos_base')('HỘP')! }], ev('Hộp\t'))[0].status).toBe('MATCH') // luật cũ lỏng hơn — chỉ pos_base
-    expect(cmsKClassify(t, ev('Hộp'.normalize('NFD') + ' '), [], norm)[0].status).toBe('MATCH')
-    expect(cmsParseKAckInput(JSON.stringify([{ product_id: '900001', unit: 'HỘP　', k: '24', source: 'quy cách NCC' }]), norm)![0].unit).toBe('hộp')
+    expect(cmsKClassify(t, ev('Hộp'.normalize('NFD') + '\u00a0'), [], norm)[0].status).toBe('MATCH')
+    expect(cmsParseKAckInput(JSON.stringify([{ product_id: '900001', unit: 'HỘP\u3000', k: '24', source: 'quy cách NCC' }]), norm)![0].unit).toBe('hộp')
     expect(cmsImportKRequired({ v2: false }, { quantityBasis: 'cms_unit' })).toBe(true)
     expect(cmsImportKRequired({ v2: false }, { quantityBasis: 'pos_base' })).toBe(false)
     expect(cmsImportKRequired({ v2: false }, {})).toBe(false)

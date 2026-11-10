@@ -30,12 +30,14 @@ ALTER TABLE public.cms_sync_runs
                  AND (calculation_snapshot ->> 'config_fp') ~ '^[0-9a-f]{32}$'))));
 
 -- ── 3. Helper nội bộ (không cấp ai; chỉ RPC SECDEF cùng owner gọi) ─────────
--- Khoá so khớp đơn vị — hợp đồng CHUNG với lib/cms/unitKey.ts cmsUnitKey (@@UNIT_KEY_VERSION@@): ký tự điều khiển C0 / DEL / C1 ⇒ NULL
--- (không hợp lệ, không xoá); NFC; cắt khoảng trắng hai đầu theo TẬP TƯỜNG MINH (gồm NBSP); hoa → thường theo BẢNG TƯỜNG MINH bằng
+-- Khoá so khớp đơn vị — hợp đồng CHUNG với lib/cms/unitKey.ts cmsUnitKey (@@UNIT_KEY_VERSION@@): ký tự điều khiển C0 / DEL / C1 hoặc
+-- ký tự định dạng / vô hình của TẬP TƯỜNG MINH CMS_UNIT_INVISIBLE (r1 Q-225: tối thiểu PM U+00AD, 034F, 061C, 180E, 200B–200F,
+-- 202A–202E, 2060–206F, FEFF + phần BMP còn lại của Cf ∪ Default_Ignorable — lớp sinh từ hằng TS) ở BẤT KỲ vị trí nào ⇒ NULL (không hợp lệ, kiểm trên chuỗi THÔ trước NFC / cắt; không xoá để ép khớp); NFC; cắt
+-- khoảng trắng hai đầu theo TẬP TƯỜNG MINH (gồm NBSP; v2 không còn FEFF); hoa → thường theo BẢNG TƯỜNG MINH bằng
 -- translate (KHÔNG lower(): phụ thuộc locale DB — PGlite / cluster locale C chỉ hạ ASCII). Không bỏ dấu / alias / cắt độ dài.
 CREATE FUNCTION public.cms__unit_key(p_unit text)
 RETURNS text LANGUAGE sql IMMUTABLE STRICT SECURITY DEFINER SET search_path = public AS $$
-  SELECT CASE WHEN p_unit ~ '[\x01-\x1f\x7f-\x9f]' THEN NULL
+  SELECT CASE WHEN p_unit ~ '[\x01-\x1f\x7f-\x9f]' OR p_unit ~ '@@UNIT_KEY_INVIS@@' THEN NULL
               ELSE NULLIF(translate(btrim(normalize(p_unit, NFC), '@@UNIT_KEY_WS@@'),
                                     '@@UNIT_KEY_UP@@',
                                     '@@UNIT_KEY_LO@@'), '') END
@@ -54,6 +56,14 @@ $$;
 CREATE FUNCTION public.cms__basis_policy(p_basis text)
 RETURNS text LANGUAGE sql IMMUTABLE SECURITY DEFINER SET search_path = public AS $$
   SELECT CASE p_basis WHEN 'pos_base' THEN 'pos_base_v1' WHEN 'cms_unit' THEN 'cms_unit_v1' END
+$$;
+
+-- r1 (PM 10/11 UNIT-P2-3): có ĐV tính CMS nào KHÔNG có khoá đơn vị hợp lệ (cms__unit_key NULL — rỗng / chỉ khoảng trắng / ký tự
+-- điều khiển / ký tự vô hình)? Guard DÙNG CHUNG cho import (đơn vị của payload), kích hoạt và lưu (đơn vị đang có của chương trình)
+-- ⇒ chương trình cms_unit không sang active / không nhận danh mục với đơn vị hỏng (trước: chỉ lỗi khi mở lượt tính). Mảng rỗng ⇒ false.
+CREATE FUNCTION public.cms__units_invalid(p_units text[])
+RETURNS boolean LANGUAGE sql IMMUTABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT EXISTS (SELECT 1 FROM unnest(COALESCE(p_units, '{}'::text[])) u WHERE public.cms__unit_key(u) IS NULL)
 $$;
 
 -- Snapshot cấu hình tính BẤT BIẾN của run (cms-calc-snapshot-v1) — DB tự dựng dưới khoá dòng chương trình của rpc_cms_sales_run_open,

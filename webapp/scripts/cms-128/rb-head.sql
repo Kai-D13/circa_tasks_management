@@ -1,14 +1,14 @@
 -- ============================================================================
--- rollback/128_cms_unit_quantity_basis_rollback.sql  (r1 — CMS-UNIT capability, Dev 09/11/2026; KHÔNG chạy prod)
--- SINH bằng webapp/scripts/gen-cms-128.mjs: khôi phục NGUYÊN VĂN 15 hàm (bản cuối trước 128: 121 / 122 / 123 / 124 / 126) + ACL, gỡ 2
--- trigger guard + 6 helper, gỡ ràng buộc / cột cơ sở tính (cms_programs.quantity_basis; cms_sync_runs.quantity_basis /
--- calculation_policy_version / calculation_snapshot), xoá marker 128; hậu kiểm md5 thân khôi phục + ACL + tổng hàm 68.
+-- rollback/128_cms_unit_quantity_basis_rollback.sql  (bản PM-r1 — CMS-UNIT capability, Dev 09–10/11/2026; KHÔNG chạy prod)
+-- SINH bằng webapp/scripts/gen-cms-128.mjs: khôi phục NGUYÊN VĂN @@N_REP@@ hàm (bản cuối trước 128: 121 / 122 / 123 / 124 / 125 / 126) +
+-- ACL, gỡ 2 trigger guard + @@N_NEW_HELPERS@@ helper, gỡ ràng buộc / cột cơ sở tính (cms_programs.quantity_basis; cms_sync_runs.quantity_basis /
+-- calculation_policy_version / calculation_snapshot), xoá marker 128; hậu kiểm md5 thân khôi phục + ACL + tổng hàm @@N_CMS_BEFORE@@.
 -- CHỈ dùng TRƯỚC khi có dữ liệu cms_unit (spec §5 rollback schema): có chương trình cơ sở cms_unit HOẶC run mang cơ sở cms_unit (mọi
 -- trạng thái) ⇒ DỪNG — không drop metadata làm mất nghĩa lịch sử; xử lý tiến (đổi chương trình về pos_base bằng transaction bù có
 -- version tăng tiếp, giữ app / reader mới). Run pos_base_v1 tạo sau 128 mất metadata (đọc như run cũ — cùng luật pos_base).
 -- Thứ tự vận hành: app về bản không đọc metadata 128 (hoặc giữ app mới — app mới tương thích DB không có 128: snapshot thiếu khoá
 -- quantity_basis ⇒ luật pos_base legacy), tạm dừng task CMS sales, không run bán running, rồi chạy file này.
--- Dừng nếu: thiếu marker 128 · có migration > 128 · owner / isolation sai · thân 15 hàm hiện tại khác bản 128 đã sinh.
+-- Dừng nếu: thiếu marker 128 · có migration > 128 · owner / isolation sai · thân @@N_REP@@ hàm hiện tại khác bản 128 đã sinh.
 -- Sau rollback: `cms-verify post --phase=127` (PRE chụp trước 128) phải ĐẠT.
 -- Vận hành: DÁN NGUYÊN FILE, nên GIỮ LF. Chạy bằng ĐÚNG role owner bảng / hàm CMS. Gồm DELETE FROM app_migrations WHERE version = '128'.
 -- ============================================================================
@@ -48,7 +48,7 @@ BEGIN
     RAISE EXCEPTION 'rollback 128: còn run bán running — tạm dừng task CMS sales trước';
   END IF;
 END $$;
--- Thân 15 hàm hiện tại phải đúng bản 128 đã sinh — khối sinh bởi gen-cms-128.mjs.
+-- Thân @@N_REP@@ hàm hiện tại phải đúng bản 128 đã sinh — khối sinh bởi gen-cms-128.mjs.
 -- @@PRE_MD5@@
 
 -- Gỡ trigger + ràng buộc TRƯỚC khi khôi phục thân hàm (thân cũ không đọc / ghi cột 128).

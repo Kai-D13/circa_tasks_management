@@ -159,7 +159,7 @@ export type CmsImportErrorCode =
   | CmsParseError
   | 'SHA_MISMATCH' | 'PREVIEW_STALE' | 'NOTHING_TO_COMMIT' | 'PRODUCT_CONFLICT' | 'PRODUCT_EXISTS' | 'CATALOG_TARGET_CHANGED'
   | 'LOOKUP_FAILED' | 'PREVIEW_FAILED' | 'COMMIT_FAILED' | 'NO_ERRORS' | 'BUSY'
-  | 'DUPLICATE_COLUMNS' | 'FORMAT_UNAVAILABLE' | 'K_ACK_INVALID'
+  | 'DUPLICATE_COLUMNS' | 'FORMAT_UNAVAILABLE' | 'K_ACK_INVALID' | 'UNIT_INVALID'
 
 export const CMS_IMPORT_ERROR_LABELS: Record<CmsImportErrorCode, string> = {
   NOT_FOUND: 'Không tìm thấy',
@@ -197,6 +197,8 @@ export const CMS_IMPORT_ERROR_LABELS: Record<CmsImportErrorCode, string> = {
   BUSY: 'Đang có thao tác khác trên danh mục CMS — thử lại sau ít giây',
   DUPLICATE_COLUMNS: 'Có hai cột cùng ý nghĩa trong dòng tiêu đề — giữ một cột',
   FORMAT_UNAVAILABLE: 'Mẫu mức cố định chưa được bật',
+  // r1 (PM 10/11 UNIT-P2-3): DB 128 từ chối ĐV tính CMS không có khoá đơn vị hợp lệ của chương trình cms_unit (0 ghi).
+  UNIT_INVALID: 'Có ĐV tính CMS không hợp lệ (trống, ký tự điều khiển hoặc ký tự vô hình) — gõ lại ô unit_CMS rồi kiểm tra lại file',
   K_ACK_INVALID: 'Xác nhận K không hợp lệ — mỗi dòng cần ProductID, đơn vị, K và nguồn căn cứ (3–200 ký tự)',
 }
 
@@ -438,6 +440,8 @@ const COMMIT_ERRORS: Record<string, [number, CmsImportErrorCode]> = {
   CMS_IMPORT_TIER_LAST_FINITE: [409, 'PREVIEW_STALE'],
   // Guard deferred 125 lúc COMMIT (RPC bản cũ đang chạy dở khi áp 125 — db-reviewer 125 P2-9) ⇒ kiểm lại file.
   CMS_TIER_LAST_FINITE: [409, 'PREVIEW_STALE'],
+  // r1 (PM 10/11 UNIT-P2-3, 128): chương trình cms_unit — payload có ĐV tính CMS không hợp lệ (preview bản cũ / gọi RPC trực tiếp).
+  CMS_IMPORT_UNIT_INVALID: [409, 'UNIT_INVALID'],
   BUSY: [503, 'BUSY'],
 }
 

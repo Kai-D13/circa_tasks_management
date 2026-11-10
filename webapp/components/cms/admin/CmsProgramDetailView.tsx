@@ -144,7 +144,8 @@ export function CmsProgramDetailView({ detail, today, canManage, view, results =
       {payout && <CmsPayoutPanel programId={p.id} payout={payout.data} error={payout.error} />}
       {lock && <CmsLockPanel programId={p.id} preview={lock.preview} loadError={lock.error} qaReadonly={lock.qaReadonly === true} />}
       {loaded && <CmsA3SyncLine header={loaded.header} isSuper={canManage} display={display} />}
-      {loaded && <CmsA3StatCards stats={stats} display={display} basis={runBasis ?? undefined} />}
+      {/* r1: chưa có run (vd. vừa chuyển cơ sở) ⇒ gợi ý "Lượt" theo cơ sở của chương trình, không rơi về câu luật cũ. */}
+      {loaded && <CmsA3StatCards stats={stats} display={display} basis={runBasis ?? p.quantityBasis ?? undefined} />}
       {run && loaded && hasCatalog && loaded.rows.catalog.length > 0 && <CmsA3CatalogBlock catalog={loaded.rows.catalog} target={p.catalogTargetGmv} />}
       {(results.kind === 'error' || results.kind === 'gone') && (
         <div data-cms-results-error>

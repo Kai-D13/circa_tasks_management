@@ -63,7 +63,7 @@ export function scenario(seed: number, inject: boolean) {
   })
   const catalogTarget = products.some((p) => p.gmvBasis === 'catalog') ? String(pick([100000, 400000])) : null
   const variants: Record<string, string[]> = {
-    hộp: ['hộp', 'HỘP', 'Hộp'.normalize('NFD'), ' hộp', 'hộp　'], viên: ['viên', 'VIÊN', 'Viên'], chai: ['chai', 'CHAI', 'Chai '],
+    hộp: ['hộp', 'HỘP', 'Hộp'.normalize('NFD'), ' hộp', 'hộp\u3000'], viên: ['viên', 'VIÊN', 'Viên'], chai: ['chai', 'CHAI', 'Chai '],
   }
   const other = ['vỉ', 'gói', 'box', 'h', 'tuýp']
   const emails = ['ds.a@cms.example.test', 'DS.B@cms.example.test', 'ds.c@cms.example.test', 'nobody@cms.example.test']
@@ -98,7 +98,7 @@ export function snap128(o: Record<string, unknown> = {}, prod: Record<string, un
   return {
     program_id: PROG, status: 'active', is_test: true, config_version: 5, start_date: '2026-11-05', end_date: '2026-11-06',
     catalog_target_gmv: null, today_vn: '2026-11-07', current_result_run_id: null, previous_rows_read: null, store_ids: SCOPE,
-    quantity_basis: 'cms_unit', calculation_policy_version: 'cms_unit_v1', unit_key_version: 'cms-unit-key-v1',
+    quantity_basis: 'cms_unit', calculation_policy_version: 'cms_unit_v1', unit_key_version: 'cms-unit-key-v2',
     products: [{ id: PP1, product_id: '900001', gmv_basis: 'none', target_gmv: null, base_quantity_cms: '24', unit_cms: 'Hộp',
       tiers: [{ order: 1, from: 1, to: null, amount: '1000' }], ...prod }],
     sellers: USERS.map((u) => ({ id: u.id, email: u.email, role: u.role, store_id: u.storeId })),

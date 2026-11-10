@@ -40,16 +40,30 @@ const orReplace = (t) => (t.startsWith('CREATE OR REPLACE FUNCTION public.') ? t
 export const cmsProsrc = (t) => t.slice(t.indexOf('AS $$') + 5, t.lastIndexOf('$$;')).split('\r').join('')
 const md5 = (s) => crypto.createHash('md5').update(s).digest('hex')
 const sqlLit = (s) => s.split("'").join("''")
-/** U&'\XXXX…' (mọi ký tự BMP) — khoảng trắng tường minh không lẫn trong file. */
-const uLit = (s) => [...s].map((c) => '\\' + c.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')).join('')
+/** Thân literal E'\uXXXX…' (mọi ký tự BMP) — khoảng trắng tường minh không lẫn trong file. r1 (db-review P2-7a): dùng E'' thay U&''
+ *  (U&'' báo lỗi khi phiên đặt standard_conforming_strings = off; E'' không phụ thuộc cài đặt đó). */
+const uLit = (s) => [...s].map((c) => '\\u' + c.codePointAt(0).toString(16).toUpperCase().padStart(4, '0')).join('')
+// r1 Q-225: lớp ký tự vô hình cho regex SQL (E'' — mỗi đầu khoảng là ký tự BMP ngoài khoảng trắng cắt / điều khiển / '-' ']' '\\' '^').
+const invisClass = (ranges) => {
+  const u = (n) => {
+    if (!Number.isInteger(n) || n < 0xa0 || n > 0xffff) throw new Error(`CMS_UNIT_INVISIBLE: code point ${n} ngoài BMP / nằm trong lớp điều khiển`)
+    if ([...UK.CMS_UNIT_WS].some((c) => c.codePointAt(0) === n)) throw new Error(`CMS_UNIT_INVISIBLE: U+${n.toString(16)} trùng tập khoảng trắng cắt`)
+    return '\\u' + n.toString(16).toUpperCase().padStart(4, '0')
+  }
+  if (!Array.isArray(ranges) || ranges.length === 0) throw new Error('CMS_UNIT_INVISIBLE rỗng')
+  return ranges.map(([a, b]) => { if (!(b >= a)) throw new Error('CMS_UNIT_INVISIBLE: khoảng ngược'); for (let n = a; n <= b; n++) u(n); return a === b ? u(a) : `${u(a)}-${u(b)}` }).join('')
+}
 
-/** 15 hàm thay: tên, chữ ký regprocedure, file nguồn của bản cuối, quyền EXECUTE kỳ vọng (ngoài owner). */
+/** Hàm thay (r1: 17 — thêm import_commit / activate 125 cho guard ĐV): tên, chữ ký regprocedure, file nguồn của bản cuối, quyền
+ *  EXECUTE kỳ vọng (ngoài owner). Số đếm / danh sách ACL / md5 trong file sinh lấy từ CHÍNH mảng này (không ghi cứng). */
 export const CMS_128_REPLACED = [
   { name: 'cms__sales_snapshot', sig: 'cms__sales_snapshot(uuid)', file: '122_cms_results.sql', grant: null },
   { name: 'cms__config_fp', sig: 'cms__config_fp(uuid)', file: '123_cms_payouts.sql', grant: null },
   { name: 'cms__attest_eval', sig: 'cms__attest_eval(uuid, uuid)', file: '124_cms_source_attestation.sql', grant: null },
   { name: 'cms__lock_eval', sig: 'cms__lock_eval(uuid, uuid, integer, text, boolean)', file: '124_cms_source_attestation.sql', grant: null },
   { name: 'rpc_cms_program_save', sig: 'rpc_cms_program_save(jsonb)', file: '121_cms_import_activation.sql', grant: 'service_role' },
+  { name: 'rpc_cms_import_commit', sig: 'rpc_cms_import_commit(uuid, text, text, jsonb, uuid)', file: '125_cms_uncapped_last_tier.sql', grant: 'service_role' },
+  { name: 'rpc_cms_program_activate', sig: 'rpc_cms_program_activate(uuid, uuid)', file: '125_cms_uncapped_last_tier.sql', grant: 'service_role' },
   { name: 'rpc_cms_sales_run_open', sig: 'rpc_cms_sales_run_open(uuid, jsonb)', file: '124_cms_source_attestation.sql', grant: 'service_role' },
   { name: 'rpc_cms_sales_run_seal_begin', sig: 'rpc_cms_sales_run_seal_begin(uuid, jsonb)', file: '122_cms_results.sql', grant: 'service_role' },
   { name: 'rpc_cms_sales_run_seal_step', sig: 'rpc_cms_sales_run_seal_step(uuid, integer)', file: '122_cms_results.sql', grant: 'service_role' },
@@ -61,11 +75,18 @@ export const CMS_128_REPLACED = [
   { name: 'rpc_cms_source_attest', sig: 'rpc_cms_source_attest(uuid, uuid, jsonb, uuid)', file: '124_cms_source_attestation.sql', grant: 'authenticated' },
   { name: 'rpc_cms_run_source_export', sig: 'rpc_cms_run_source_export(uuid, uuid, text, integer)', file: '124_cms_source_attestation.sql', grant: 'authenticated' },
 ]
-/** 6 hàm mới (chỉ owner — không cấp PUBLIC / anon / authenticated / service_role). */
+/** Tổng hàm CMS (cms_* / rpc_cms_*) trước 128 = sau 126 / 127 (preflight; hậu kiểm = trước + số hàm mới; rollback về đúng số này). */
+export const CMS_128_FN_BEFORE = 68
+/** r1 (db-review P2-4): hàm nền KHÔNG thay nhưng publish 128 dựa vào ngữ nghĩa của nó ⇒ ghim md5 thân ở preflight (bản cuối = 124). */
+export const CMS_128_PINNED = [
+  { name: 'cms__run_source_check', sig: 'cms__run_source_check(uuid)', file: '124_cms_source_attestation.sql' },
+]
+/** Hàm mới (r1: 7 — thêm cms__units_invalid; chỉ owner — không cấp PUBLIC / anon / authenticated / service_role). */
 export const CMS_128_NEW = [
   { name: 'cms__unit_key', sig: 'cms__unit_key(text)' },
   { name: 'cms__qty_dec', sig: 'cms__qty_dec(text)' },
   { name: 'cms__basis_policy', sig: 'cms__basis_policy(text)' },
+  { name: 'cms__units_invalid', sig: 'cms__units_invalid(text[])' },
   { name: 'cms__calc_snapshot', sig: 'cms__calc_snapshot(uuid)' },
   { name: 'cms__programs_basis_guard', sig: 'cms__programs_basis_guard()' },
   { name: 'cms__runs_basis_guard', sig: 'cms__runs_basis_guard()' },
@@ -78,10 +99,47 @@ export const CMS_128_CODES = {
   runBasisInvalid: 'RUN_BASIS_INVALID',
   sealUnitSource: 'SEAL_UNIT_SOURCE',
   unitInvalid: 'CMS_SALES_UNIT_INVALID',
+  /** r1 UNIT-P1-2: publish run cms_unit — lớp nguồn thiếu / lệch lớp engine (mã con ở detail.source_check / phản hồi). */
+  publishSource: 'UNIT_SOURCE_MISMATCH',
+  /** r1 UNIT-P2-3: nạp danh mục cho chương trình cms_unit có ĐV tính CMS không hợp lệ (khoá v2 NULL) ⇒ từ chối trước mọi ghi. */
+  importUnitInvalid: 'CMS_IMPORT_UNIT_INVALID',
+  /** r1 UNIT-P2-3: kích hoạt / lưu chương trình cms_unit có SP mang ĐV tính CMS không hợp lệ ⇒ từ chối nguyên khối. */
+  programUnitInvalid: 'CMS_PROGRAM_UNIT_INVALID',
 }
 
+// r1 UNIT-P1-2 — publish: điểm giữ run (held) cũ ⇒ thêm kiểm lớp nguồn cho run cms_unit + mã con.
+const PUBLISH_HOLD_OLD = `  END;
+  IF v_code IS NOT NULL THEN
+    UPDATE public.cms_sync_runs SET status = CASE WHEN v_code = 'STALE' THEN 'error' ELSE 'held' END,
+           finished_at = now(), error_code = v_code
+     WHERE id = p_run_id;
+    RETURN jsonb_build_object('published', false, 'code', v_code, 'run_id', p_run_id);
+  END IF;
+`
+const PUBLISH_HOLD_NEW = `  END;
+  -- r1 (PM 10/11 UNIT-P1-2): run cms_unit CHỈ công bố khi lớp nguồn 124 đủ và trùng lớp engine — cms__run_source_check: capture có
+  -- (source_schema 1), không dòng bị từ chối, đủ rows_read − rows_rejected của seal, đúng kỳ / SP, MỌI dòng engine trùng 14 trường thô
+  -- (gồm quantity_raw / uom_raw) của dòng nguồn cùng order_line_id, không bỏ dòng đủ điều kiện. Kiểm MỘT lần tại ranh giới công bố,
+  -- dưới khoá chương trình → run, SAU các điều kiện rẻ; lệch / thiếu ⇒ held mã cố định ${CMS_128_CODES.publishSource} (+ mã con
+  -- source_check — không giá trị dòng), pointer giữ nguyên. Không nới, không tự sửa nguồn. pos_base giữ hợp đồng 124 (kiểm ở chốt).
+  -- Điều kiện viết "khác pos_base" (db-review P2-2): cơ sở tính thêm sau này mặc định vẫn bị kiểm nguồn.
+  IF v_code IS NULL AND v_run.quantity_basis IS DISTINCT FROM 'pos_base' THEN
+    v_src := public.cms__run_source_check(p_run_id);
+    IF v_src IS NOT NULL THEN v_code := '${CMS_128_CODES.publishSource}'; END IF;
+  END IF;
+  IF v_code IS NOT NULL THEN
+    UPDATE public.cms_sync_runs SET status = CASE WHEN v_code = 'STALE' THEN 'error' ELSE 'held' END,
+           finished_at = now(), error_code = v_code,
+           detail = CASE WHEN v_src IS NULL THEN detail ELSE detail || jsonb_build_object('source_check', v_src) END
+     WHERE id = p_run_id;
+    RETURN jsonb_build_object('published', false, 'code', v_code, 'run_id', p_run_id)
+           || CASE WHEN v_src IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('source_check', v_src) END;
+  END IF;
+`
+
 // ── Khối chèn ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────
-const RESERVED = `ARRAY['quantity_basis', 'calculation_policy_version', 'calculation_snapshot']`
+// r1 (db-review P2-6): `source_check` do publish ghi ⇒ writer không được tự gửi khoá này lúc open / finish.
+const RESERVED = `ARRAY['quantity_basis', 'calculation_policy_version', 'calculation_snapshot', 'source_check']`
 
 /** Kiểm metadata run + cơ sở / vân tay cấu hình — đầu seal_begin và đầu MỖI bước seal. */
 const RUN_BASIS_CHECK = String.raw`  -- 128: metadata tính của run (DB ghi lúc open, bất biến) phải hợp lệ; cơ sở + TOÀN BỘ snapshot cấu hình tính của run = snapshot dựng
@@ -210,6 +268,7 @@ export function buildCms128() {
   const src = (f) => fs.readFileSync(path.join(MIG, f), 'utf8')
   const tpl = (f) => fs.readFileSync(path.join(HERE, 'cms-128', f), 'utf8')
   const base = Object.fromEntries(CMS_128_REPLACED.map((r) => [r.name, fn(src(r.file), r.name)]))
+  const pinned = Object.fromEntries(CMS_128_PINNED.map((r) => [r.name, fn(src(r.file), r.name)]))
   const out = {}
 
   // cms__sales_snapshot (122): cơ sở / phiên bản của CHƯƠNG TRÌNH + unit_cms từng SP (app cũ bỏ qua khoá thừa).
@@ -270,7 +329,45 @@ export function buildCms128() {
     VALUES (v_name, v_start, v_end, v_scope, (p->>'is_test')::boolean, v_actor, v_actor)`, `    INSERT INTO public.cms_programs (name, start_date, end_date, scope, is_test, created_by, updated_by, quantity_basis)
     VALUES (v_name, v_start, v_end, v_scope, (p->>'is_test')::boolean, v_actor, v_actor, COALESCE(v_basis, 'pos_base'))`, 'save insert')
   t = patch(t, '     SET name = v_name, start_date = v_start, end_date = v_end, scope = v_scope,\n', '     SET name = v_name, start_date = v_start, end_date = v_end, scope = v_scope, quantity_basis = COALESCE(v_basis, quantity_basis),\n', 'save update')
+  // r1 (PM 10/11 UNIT-P2-3): sửa chương trình — cơ sở SAU lưu là cms_unit ⇒ ĐV đang có phải hợp lệ, chặn trước mọi ghi.
+  t = patch(t, '  UPDATE public.cms_programs\n     SET name = v_name,', `  -- r1 (PM 10/11 UNIT-P2-3): cơ sở SAU lần lưu là cms_unit ⇒ mọi SP đang có phải mang ĐV tính CMS có khoá đơn vị hợp lệ (v2 — không
+  -- rỗng / ký tự điều khiển / ký tự vô hình) — chặn TRƯỚC mọi ghi; chương trình chưa có SP (nháp rỗng) vẫn lưu được.
+  IF COALESCE(v_basis, v_prog.quantity_basis) = 'cms_unit'
+     AND public.cms__units_invalid(ARRAY(SELECT pp.unit_cms FROM public.cms_program_products pp WHERE pp.program_id = v_prog.id)) THEN
+    RAISE EXCEPTION '${CMS_128_CODES.programUnitInvalid}' USING ERRCODE = 'P0001';
+  END IF;
+  UPDATE public.cms_programs
+     SET name = v_name,`, 'save unit guard')
   out.rpc_cms_program_save = t
+
+  // r1 (PM 10/11 UNIT-P2-3): rpc_cms_import_commit (125) — chương trình cms_unit: ĐV của payload phải hợp lệ, chặn trước khoá / xoá / ghi.
+  t = orReplace(base.rpc_cms_import_commit)
+  t = patch(t, `    RAISE EXCEPTION 'CMS_IMPORT_TIER_LAST_FINITE' USING ERRCODE = '22023';
+  END IF;
+`, `    RAISE EXCEPTION 'CMS_IMPORT_TIER_LAST_FINITE' USING ERRCODE = '22023';
+  END IF;
+  -- r1 (PM 10/11 UNIT-P2-3, 128): chương trình theo ĐV tính CMS — MỌI ĐV tính CMS của payload phải có khoá đơn vị hợp lệ (cms__unit_key
+  -- v2: không rỗng / ký tự điều khiển / ký tự vô hình) ⇒ chặn SAU kiểm hình thức payload, TRƯỚC khoá danh mục và mọi xoá / ghi (0 delta).
+  -- Chương trình pos_base không đổi hành vi.
+  IF v_prog.quantity_basis = 'cms_unit'
+     AND public.cms__units_invalid(ARRAY(SELECT x->>'unit_cms' FROM jsonb_array_elements(p_payload->'products') x)) THEN
+    RAISE EXCEPTION '${CMS_128_CODES.importUnitInvalid}' USING ERRCODE = '22023';
+  END IF;
+`, 'import unit guard')
+  out.rpc_cms_import_commit = t
+
+  // r1 (PM 10/11 UNIT-P2-3): rpc_cms_program_activate (125) — chương trình cms_unit có SP mang ĐV hỏng ⇒ không sang active.
+  t = orReplace(base.rpc_cms_program_activate)
+  t = patch(t, "  IF cardinality(v_ids) = 0 THEN RAISE EXCEPTION 'CMS_PROGRAM_EMPTY' USING ERRCODE = 'P0001'; END IF;\n",
+    `  IF cardinality(v_ids) = 0 THEN RAISE EXCEPTION 'CMS_PROGRAM_EMPTY' USING ERRCODE = 'P0001'; END IF;
+  -- r1 (PM 10/11 UNIT-P2-3, 128): chương trình theo ĐV tính CMS — mọi SP phải mang ĐV tính CMS có khoá đơn vị hợp lệ ⇒ từ chối NGUYÊN
+  -- KHỐI trước mọi ghi (trước: vẫn sang active rồi mới lỗi CMS_SALES_UNIT_INVALID khi mở lượt tính).
+  IF v_prog.quantity_basis = 'cms_unit'
+     AND public.cms__units_invalid(ARRAY(SELECT pp.unit_cms FROM public.cms_program_products pp WHERE pp.program_id = v_prog.id)) THEN
+    RAISE EXCEPTION '${CMS_128_CODES.programUnitInvalid}' USING ERRCODE = 'P0001';
+  END IF;
+`, 'activate unit guard')
+  out.rpc_cms_program_activate = t
 
   // rpc_cms_sales_run_open (124): ghi metadata run.
   t = orReplace(base.rpc_cms_sales_run_open)
@@ -336,6 +433,9 @@ export function buildCms128() {
                           -- 128: run cms_unit — lượng gốc âm khác 0 (hình thức đã được seal S9u kiểm) cũng là điều chỉnh.
                           OR (v_run.quantity_basis = 'cms_unit' AND sl.quantity_raw ~ '^-' AND sl.quantity_raw ~ '[1-9]'))))
 `, 'publish negative qty')
+  // r1 (PM 10/11 UNIT-P1-2): run cms_unit chỉ công bố khi lớp nguồn 124 đủ + trùng lớp engine — kiểm MỘT lần ở ranh giới công bố.
+  t = patch(t, '  v_code text;\n  v_prev uuid;\n', '  v_code text;\n  v_prev uuid;\n  v_src  text;  -- r1: mã con cms__run_source_check (run cms_unit)\n', 'publish declare')
+  t = patch(t, PUBLISH_HOLD_OLD, PUBLISH_HOLD_NEW, 'publish source check')
   out.rpc_cms_sales_run_publish = t
 
   // finish (122): khoá metadata trong detail ⇒ BAD_DETAIL.
@@ -428,10 +528,11 @@ BEGIN
   END IF;
 END $$;`
   const schema = [
-    ['@@UNIT_KEY_VERSION@@', UK.CMS_UNIT_KEY_VERSION], ['@@UNIT_KEY_WS@@', null], ['@@UNIT_KEY_UP@@', sqlLit(UK.CMS_UNIT_CASE_UPPER)],
-    ['@@UNIT_KEY_LO@@', sqlLit(UK.CMS_UNIT_CASE_LOWER)],
+    ['@@UNIT_KEY_VERSION@@', UK.CMS_UNIT_KEY_VERSION], ['@@UNIT_KEY_WS@@', null], ['@@UNIT_KEY_INVIS@@', null],
+    ['@@UNIT_KEY_UP@@', sqlLit(UK.CMS_UNIT_CASE_UPPER)], ['@@UNIT_KEY_LO@@', sqlLit(UK.CMS_UNIT_CASE_LOWER)],
   ].reduce((acc, [k, v]) => {
-    if (k === '@@UNIT_KEY_WS@@') return patch(acc, `'${k}'`, `U&'${uLit(UK.CMS_UNIT_WS)}'`, 'ws literal')
+    if (k === '@@UNIT_KEY_WS@@') return patch(acc, `'${k}'`, `E'${uLit(UK.CMS_UNIT_WS)}'`, 'ws literal')
+    if (k === '@@UNIT_KEY_INVIS@@') return patch(acc, `'${k}'`, `E'[${invisClass(UK.CMS_UNIT_INVISIBLE)}]'`, 'invisible class')
     const n = acc.split(k).length - 1
     if (n < 1) throw new Error(`placeholder ${k} không có`)
     return acc.split(k).join(v)
@@ -442,38 +543,64 @@ END $$;`
   }
   const sigList = [...CMS_128_NEW, ...CMS_128_REPLACED].map((x) => `'public.${x.sig}'`).join(', ')
   const names = (g) => CMS_128_REPLACED.filter((x) => x.grant === g).map((x) => `'${x.name}'`).join(', ')
-  const tail = [['@@ALL_SIGS@@', sigList], ['@@SVC_NAMES@@', names('service_role')], ['@@AUTH_NAMES@@', names('authenticated')]]
-    .reduce((acc, [k, v]) => acc.split(k).join(v), tpl('c-tail.sql'))
+  // r1 (PM 10/11 §P2-3): danh sách REVOKE / GRANT + số đếm sinh từ CMS_128_NEW / CMS_128_REPLACED — không ghi cứng 21 / 15 / 6.
+  const sigLines = (xs) => xs.map((x) => `  public.${x.sig}`).join(',\n')
+  const nRep = CMS_128_REPLACED.length
+  const nNew = CMS_128_NEW.length
+  const counts = [
+    ['@@N_REP@@', nRep], ['@@N_NEW@@', nNew], ['@@N_ALL@@', nRep + nNew], ['@@N_CMS_BEFORE@@', CMS_128_FN_BEFORE],
+    ['@@N_CMS_AFTER@@', CMS_128_FN_BEFORE + nNew], ['@@N_SVC@@', CMS_128_REPLACED.filter((x) => x.grant === 'service_role').length],
+    ['@@N_AUTH@@', CMS_128_REPLACED.filter((x) => x.grant === 'authenticated').length],
+    ['@@N_OWNER@@', nNew + CMS_128_REPLACED.filter((x) => x.grant === null).length],
+    ['@@N_NEW_HELPERS@@', CMS_128_NEW.filter((x) => !x.sig.endsWith('_guard()')).length],
+  ]
+  const fill = (text, pairs) => pairs.reduce((acc, [k, v]) => acc.split(k).join(String(v)), text)
+  const lists = [['@@SVC_LIST@@', sigLines(CMS_128_REPLACED.filter((x) => x.grant === 'service_role'))],
+    ['@@AUTH_LIST@@', sigLines(CMS_128_REPLACED.filter((x) => x.grant === 'authenticated'))]]
+  const tail = fill(tpl('c-tail.sql'), [['@@ALL_SIGS@@', sigList], ['@@SVC_NAMES@@', names('service_role')], ['@@AUTH_NAMES@@', names('authenticated')],
+    ['@@REVOKE_LIST@@', sigLines([...CMS_128_NEW, ...CMS_128_REPLACED])], ...lists, ...counts])
 
   const PREFLIGHT_MD5 = md5Block(CMS_128_REPLACED.map((r) => [r.sig, base[r.name]]),
-    '128 preflight: thân một trong 15 hàm sắp thay KHÁC bản cuối đã duyệt (md5) — dừng, đối chiếu tay')
+    `128 preflight: thân một trong ${nRep} hàm sắp thay KHÁC bản cuối đã duyệt (md5) — dừng, đối chiếu tay`)
+    + '\n' + md5Block(CMS_128_PINNED.map((r) => [r.sig, pinned[r.name]]),
+      `128 preflight: thân hàm nền publish dựa vào (${CMS_128_PINNED.map((r) => r.name).join(', ')}) KHÁC bản đã duyệt (md5) — dừng, đối chiếu tay`)
   const POST_MD5 = md5Block([...CMS_128_NEW.map((x) => [x.sig, fnFromSchema(x.name)]), ...CMS_128_REPLACED.map((r) => [r.sig, out[r.name]])],
-    '128 hậu kiểm: thân 21 hàm lệch bản sinh (md5)')
+    `128 hậu kiểm: thân ${nRep + nNew} hàm lệch bản sinh (md5)`)
   const RB_PRE_MD5 = md5Block(CMS_128_REPLACED.map((r) => [r.sig, out[r.name]]),
-    'rollback 128 preflight: thân 15 hàm hiện tại KHÁC bản 128 đã sinh (md5) — có sửa tay? dừng, đối chiếu')
-  const RB_POST_MD5 = md5Block(CMS_128_REPLACED.map((r) => [r.sig, base[r.name]]), 'rollback 128 hậu kiểm: thân 15 hàm khôi phục lệch nguyên văn (md5)')
+    `rollback 128 preflight: thân ${nRep} hàm hiện tại KHÁC bản 128 đã sinh (md5) — có sửa tay? dừng, đối chiếu`)
+  const RB_POST_MD5 = md5Block(CMS_128_REPLACED.map((r) => [r.sig, base[r.name]]), `rollback 128 hậu kiểm: thân ${nRep} hàm khôi phục lệch nguyên văn (md5)`)
 
   const migration = [
-    patch(tpl('a-head.sql'), '-- @@PREFLIGHT_MD5@@', PREFLIGHT_MD5, 'preflight md5'),
+    fill(patch(tpl('a-head.sql'), '-- @@PREFLIGHT_MD5@@', PREFLIGHT_MD5, 'preflight md5'), counts),
     schema,
-    sec('6. Mười lăm hàm thay (thân nguyên văn bản cuối + vá gen-cms-128)'),
+    sec(`6. ${nRep} hàm thay (thân nguyên văn bản cuối + vá gen-cms-128)`),
     CMS_128_REPLACED.map((r) => out[r.name]).join('\n\n'), '\n',
     patch(tail, '-- @@POST_MD5@@', POST_MD5, 'post md5'),
   ].join('')
-  const rbTail = [['@@ALL_SIGS_OLD@@', CMS_128_REPLACED.map((x) => `'public.${x.sig}'`).join(', ')],
-    ['@@SVC_NAMES@@', names('service_role')], ['@@AUTH_NAMES@@', names('authenticated')]]
-    .reduce((acc, [k, v]) => acc.split(k).join(v), tpl('rb-tail.sql'))
+  const rbTail = fill(tpl('rb-tail.sql'), [['@@ALL_SIGS_OLD@@', CMS_128_REPLACED.map((x) => `'public.${x.sig}'`).join(', ')],
+    ['@@SVC_NAMES@@', names('service_role')], ['@@AUTH_NAMES@@', names('authenticated')],
+    ['@@REVOKE_OLD_LIST@@', sigLines(CMS_128_REPLACED)], ...lists, ...counts])
   const rollback = [
-    patch(tpl('rb-head.sql'), '-- @@PRE_MD5@@', RB_PRE_MD5, 'rollback pre md5'),
-    sec('Khôi phục NGUYÊN VĂN 15 hàm (bản cuối trước 128)'), CMS_128_REPLACED.map((r) => orReplace(base[r.name])).join('\n\n'), '\n',
+    fill(patch(tpl('rb-head.sql'), '-- @@PRE_MD5@@', RB_PRE_MD5, 'rollback pre md5'), counts),
+    sec(`Khôi phục NGUYÊN VĂN ${nRep} hàm (bản cuối trước 128)`), CMS_128_REPLACED.map((r) => orReplace(base[r.name])).join('\n\n'), '\n',
     patch(rbTail, '-- @@MD5_CHECK@@', RB_POST_MD5, 'rollback md5 check'),
   ].join('')
+  // Không còn placeholder; mọi hàm mới (trừ 2 trigger guard đã gỡ trước) có DROP đúng một lần trong rollback; mọi hàm thay có thân sinh.
+  for (const [n, x] of [['migration', migration], ['rollback', rollback]]) {
+    const left = x.match(/@@[A-Z_]+@@/g)
+    if (left) throw new Error(`${n}: còn placeholder ${[...new Set(left)].join(' ')}`)
+  }
+  for (const x of CMS_128_NEW) {
+    const k = rollback.split(`DROP FUNCTION public.${x.sig};`).length - 1
+    if (k !== 1) throw new Error(`rollback: DROP ${x.sig} xuất hiện ${k} lần (cần 1)`)
+  }
+  for (const r of CMS_128_REPLACED) if (!out[r.name]) throw new Error(`thiếu thân sinh của ${r.name}`)
   const md5s = {
     base: Object.fromEntries(CMS_128_REPLACED.map((r) => [r.name, md5(cmsProsrc(base[r.name]))])),
     after: Object.fromEntries([...CMS_128_NEW.map((x) => [x.name, md5(cmsProsrc(fnFromSchema(x.name)))]),
       ...CMS_128_REPLACED.map((r) => [r.name, md5(cmsProsrc(out[r.name]))])]),
   }
-  return { migration, rollback, base, replaced: out, md5s, fnFromSchema }
+  return { migration, rollback, base, pinned, replaced: out, md5s, fnFromSchema }
 }
 
 const isMain = process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url

@@ -142,11 +142,13 @@ export function createCmsEnv(o) {
       cleanup: (id, max) => rpc(`SELECT public.rpc_cms_sales_run_cleanup($1, $2) r`, [id, max]),
       now: () => Date.now(),
     })
-    const sync = (p, rws, o = {}) => SS.runCmsSalesSync(syncDeps(rws), p.id, { dryRun: false, source: o.source ?? 'cron', sourceCapture: true, unitBasisEnabled: o.flag ?? true })
+    const sync = (p, rws, o = {}) => SS.runCmsSalesSync(syncDeps(rws), p.id, { dryRun: false, source: o.source ?? 'cron', sourceCapture: o.capture ?? true, unitBasisEnabled: o.flag ?? true })
     /**
      * Stage + seal TRỰC TIẾP qua RPC (bỏ qua chặn của app — mô phỏng caller service_role / writer khác), KHÔNG publish.
      * o.engineBasis: tính bằng cơ sở khác (writer cũ) · o.mutate(payload): sửa payload trước stage · o.expect(e): sửa expect ·
      * o.beforeSeal(): chạy sau stage, trước seal · o.detail: detail open.
+     * o.source (r1 UNIT-P1-2): lớp nguồn 124 — mặc định writer TRUNG THỰC stage đủ dòng nguồn (buildCmsSourceStageRows); false ⇒ không
+     * capture; hàm (rows) ⇒ sửa / bỏ / thêm dòng nguồn trước khi stage (phản ví dụ lệch nguồn ↔ engine).
      */
     async function stageDirect(p, rws, o = {}) {
       const raw = await rpc(`SELECT public.rpc_cms_sales_run_open($1, $2::jsonb) r`, [p.id, JSON.stringify(o.detail ?? { source: 'operator' })])
@@ -161,11 +163,18 @@ export function createCmsEnv(o) {
         const chunks = RS.chunkCmsStageRows(payload.parts[part])
         for (let i = 0; i < chunks.length; i++) await rpc(`SELECT public.rpc_cms_sales_run_stage($1, $2, $3, $4::jsonb) r`, [snap.runId, part, i, JSON.stringify(chunks[i])])
       }
+      let sourceRows = null
+      if (o.source !== false) {
+        sourceRows = RS.buildCmsSourceStageRows(lines)
+        if (typeof o.source === 'function') sourceRows = o.source(sourceRows.map((r) => ({ ...r })))
+        const chunks = RS.chunkCmsStageRows(sourceRows)
+        for (let i = 0; i < chunks.length; i++) await rpc(`SELECT public.rpc_cms_sales_run_stage($1, $2, $3, $4::jsonb) r`, [snap.runId, RS.CMS_SOURCE_PART, i, JSON.stringify(chunks[i])])
+      }
       if (o.beforeSeal) await o.beforeSeal(snap.runId)
       const expect = o.expect ? o.expect({ ...payload.expect }) : payload.expect
       const seal = await SS.runCmsSealSteps({ begin: () => rpc(`SELECT public.rpc_cms_sales_run_seal_begin($1, $2::jsonb) r`, [snap.runId, JSON.stringify(expect)]),
         step: (n) => rpc(`SELECT public.rpc_cms_sales_run_seal_step($1, $2) r`, [snap.runId, n]) })
-      return { runId: snap.runId, snap, sealed: seal.sealed, status: seal.status, code: seal.code, out, expect, payload }
+      return { runId: snap.runId, snap, sealed: seal.sealed, status: seal.status, code: seal.code, out, expect, payload, sourceRows }
     }
     const publishRpc = (runId) => rpc(`SELECT public.rpc_cms_sales_run_publish($1) r`, [runId])
     const prog = (id) => one(`SELECT status, config_version v, current_result_run_id::text ptr, is_test, quantity_basis qb FROM public.cms_programs WHERE id = $1`, [id])

@@ -40,6 +40,9 @@ export const CMS_UNIT_CODES = {
   fraction: 'UNIT_QUANTITY_FRACTION',
   /** Metadata cơ sở / phiên bản của run lạ hoặc không khớp chương trình ⇒ lỗi, không tự chọn pos_base. */
   metaInvalid: 'UNIT_BASIS_META_INVALID',
+  /** r1 UNIT-P1-2: lượt ghi cms_unit khi capture lớp nguồn (CMS_SOURCE_CAPTURE_ENABLED) tắt ⇒ held trước khi đọc nguồn — DB chỉ công bố
+   *  run cms_unit có lớp nguồn đủ + trùng lớp engine (UNIT_SOURCE_MISMATCH), không công bố số chưa đối chiếu. */
+  captureRequired: 'UNIT_SOURCE_CAPTURE_REQUIRED',
 } as const
 
 /** Nhãn ngắn hiển thị cơ sở tính (super / XLSX / lịch sử). */
@@ -61,6 +64,8 @@ export const CMS_UNIT_HOLD_LABEL: Readonly<Record<string, string>> = {
   BASIS_WRITER_MISMATCH: 'Bản ghi số dùng sai cách tính so với lần tính — giữ số cũ',
   RUN_BASIS_INVALID: 'Cách tính của lần tính không hợp lệ — giữ số cũ',
   CMS_UNIT_ATTESTATION_NOT_SUPPORTED: 'Chưa hỗ trợ chứng nhận nguồn cho cách tính theo ĐV tính CMS',
+  UNIT_SOURCE_CAPTURE_REQUIRED: 'Chưa bật lưu lớp nguồn bán — tính theo ĐV tính CMS cần đối chiếu nguồn, giữ số cũ',
+  UNIT_SOURCE_MISMATCH: 'Lớp nguồn bán thiếu hoặc lệch dòng đã tính (số lượng / đơn vị…) — không công bố, giữ số cũ',
 }
 
 /** Diễn giải dòng bán khác đơn vị (UNIT-D03). */

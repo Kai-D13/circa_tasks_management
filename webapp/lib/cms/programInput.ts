@@ -98,6 +98,8 @@ export const CMS_PROGRAM_ERROR_LABELS: Record<string, string> = {
   CMS_PROGRAM_START_PAST: 'Chương trình đã kích hoạt chỉ được dời ngày bắt đầu sang một ngày sau hôm nay',
   // CMS-UNIT (128): trigger cms_programs_basis_guard từ chối đổi cơ sở ngoài quy trình chuyển đổi.
   CMS_PROGRAM_BASIS_CHANGE_INVALID: 'Không đổi được cơ sở tính của chương trình đã có lượt tính',
+  // r1 (PM 10/11 UNIT-P2-3, 128): kích hoạt / lưu chương trình theo ĐV tính CMS có SP mang ĐV không hợp lệ — từ chối nguyên khối.
+  CMS_PROGRAM_UNIT_INVALID: 'Có sản phẩm mang ĐV tính CMS không hợp lệ (trống, ký tự điều khiển hoặc ký tự vô hình) — nạp lại danh mục với ĐV đúng như trên POS',
   UNIT_BASIS_DB_UNSUPPORTED: 'CSDL chưa hỗ trợ cách tính theo ĐV tính CMS — chưa tạo được chương trình',
   BUSY: 'Đang có thao tác khác trên danh mục CMS — thử lại sau ít giây',
 }

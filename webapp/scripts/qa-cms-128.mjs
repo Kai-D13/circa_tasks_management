@@ -2,25 +2,29 @@
 // migration THẬT 120 → 126 + marker 127 (MÔ PHỎNG: 127 chỉ sửa dữ liệu MỘT chương trình thật — bất biến v127-* kiểm ở
 // scripts/qa-cms-127.mjs, ở đây loại khỏi danh sách đỏ có chủ đích) + app MỚI (engine / salesSync / resultStage CMS-UNIT).
 // Hai backend: PGlite (mặc định, Postgres 16 WASM) và PostgreSQL 15 thật (embedded: `--pg15 <embedded-postgres-dir> <data-root>`).
-//   §0 generator ↔ file (byte, LF) · md5 thân NỀN 15 hàm = kỳ vọng VERIFY 127 · md5 SAU = CMS_FN_SRC_128 / ma trận 128
+//   §0 generator ↔ file (byte, LF) · md5 thân NỀN các hàm thay (r1: 17) = kỳ vọng VERIFY 127 · md5 SAU = CMS_FN_SRC_128 / ma trận 128
 //   §1 DB 127 + app mới: chương trình pos_base (thật + QA) công bố theo đường legacy (không dấu writer); RPC lưu chương trình bỏ qua khoá
 //      quantity_basis (lý do action phải probe capability); cột chưa có (42703)
 //   §2 preflight 128 dừng, 0 delta: thiếu 127 · số > 127 · run running · thân nền lạ · role không phải owner · không READ COMMITTED ·
 //      cột có sẵn không marker
-//   §3 áp 128: marker · 74 hàm · ma trận ACL has_function_privilege 21 hàm × anon / authenticated / service_role / PUBLIC · run cũ nhãn
+//   §3 áp 128: marker · 68 + hàm mới · ma trận ACL has_function_privilege (r1: 24 hàm) × anon / authenticated / service_role / PUBLIC · run cũ nhãn
 //      legacy · vân tay cấu hình pos_base KHÔNG đổi · dữ liệu run KHÔNG đổi · reader giữ giá trị cũ · chạy lại bị chặn · VERIFY 128 đạt ·
 //      VERIFY 127 trên DB 128 đỏ
 //   §4 parity pos_base sau 128: run v1 + snapshot; kết quả = run trước 128 từng cặp; writer cũ (không dấu) vẫn seal / công bố; dấu sai ⇒ held
-//   §5 khoá đơn vị / lượng: SQL ↔ TS ↔ oracle độc lập (243 cặp hoa / thường, khoảng trắng, điều khiển, NFD, fuzz)
+//   §5 khoá đơn vị / lượng: SQL ↔ TS ↔ oracle độc lập (243 cặp hoa / thường, khoảng trắng, điều khiển, ký tự vô hình Q-225 ở đầu / giữa /
+//      cuối, NFD, fuzz) + cms__units_invalid
 //   §6 rollback khi CHƯA có cms_unit: thân lạ ⇒ dừng · rollback ⇒ thân nền, 68 hàm, cột / trigger gỡ, app chạy lại legacy · áp lại 128
 //   §7 cms_unit đầu-cuối (thật + QA): nguồn → engine → stage → seal → publish; kết quả = oracle TS độc lập VÀ fixture SQL độc lập (C / Q /
 //      tiền nhóm + C trước / sau từng dòng); reader theo snapshot RUN; chứng nhận / chốt bị chặn; replay cùng tiền; cờ OFF ⇒ held
 //   §8 đột biến seal / metadata: công thức B / K cũ · cms_quantity giả · per_unit 1 · phân bổ dòng · lẻ / thiếu / sai lượng · dấu writer
 //      thiếu / sai · metadata bất biến / INSERT thiếu · đổi cấu hình (đơn vị / K) open ↔ seal ↔ publish · khoá dành riêng · lượng âm dòng
 //      không INCLUDED (thật) · guard đổi cơ sở (form / datafix / nháp)
+//   §8b (r1 PM 10/11) publish run cms_unit đối chiếu lớp nguồn (lệch lượng / đơn vị, hoán đổi bù trừ, thiếu dòng / trang, không capture,
+//      né đếm, ngoài kỳ, QA; pos_base không đổi; app capture OFF) · guard ĐV tại import / kích hoạt / lưu (0 delta)
 //   §9 rollback bị chặn khi đã có cms_unit (0 delta) · VERIFY 128 chứng minh đủ (unit) · đột biến VERIFY (grant / thân / trigger / pointer / nhãn)
 //   §10 dán CRLF (Studio): 128 + rollback CRLF ≡ LF
-//   §11 (chỉ --pg15) race lock_timeout · bench seal cms_unit ở TRẦN nguồn 200.000 dòng, statement_timeout 8 s GIỮ NGUYÊN (không nới)
+//   §11 (chỉ --pg15) race lock_timeout · bench seal + publish (kiểm nguồn) cms_unit ở TRẦN nguồn 200.000 dòng, ~20.000 lượng phân biệt,
+//      statement_timeout 8 s GIỮ NGUYÊN (không nới)
 // KHÔNG chạm DB thật / nguồn thật / mạng (PG15 chỉ 127.0.0.1).
 //   npm i --no-save @electric-sql/pglite@0.2.17 ; node scripts/qa-cms-128.mjs
 //   node scripts/qa-cms-128.mjs --pg15 <embedded-postgres-dir> <data-root> [--bench-rows=200000] [--bench-only]
@@ -30,7 +34,7 @@ import { createRequire } from 'node:module'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { createJiti } from 'jiti'
 import * as L from './lib-care-pglite.mjs'
-import { buildCms128, CMS_128_FILE, CMS_128_ROLLBACK_FILE, CMS_128_REPLACED, CMS_128_NEW, CMS_128_CODES } from './gen-cms-128.mjs'
+import { buildCms128, CMS_128_FILE, CMS_128_ROLLBACK_FILE, CMS_128_REPLACED, CMS_128_NEW, CMS_128_CODES, CMS_128_FN_BEFORE } from './gen-cms-128.mjs'
 import { createCmsEnv } from './lib-cms-128-env.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
@@ -47,6 +51,7 @@ const RS = await lib('lib/cms/resultStage.ts')
 const EN = await lib('lib/cms/engine/compute.ts')
 const UK = await lib('lib/cms/unitKey.ts')
 const UB = await lib('lib/cms/unitBasis.ts')
+const PI = await lib('lib/cms/programInput.ts')
 const OR = await lib('e2e/cmsUnitOracle.ts')
 const FX = await lib('e2e/cmsFixtureRunner.ts')
 const QR = await lib('e2e/cmsQaResults.ts')
@@ -73,6 +78,7 @@ const stripNew = (o) => (Array.isArray(o) ? o.map(stripNew) : o && typeof o === 
 
 const T3 = [{ order: 1, from: 1, to: 9, amount: '15000' }, { order: 2, from: 10, to: 19, amount: '20000' }, { order: 3, from: 20, to: null, amount: '25000' }]
 const T_FLAT = [{ order: 1, from: 1, to: null, amount: '20000' }]
+const N_REP = CMS_128_REPLACED.length, N_NEW = CMS_128_NEW.length, N_ALL = N_REP + N_NEW, N_AFTER = CMS_128_FN_BEFORE + N_NEW
 
 // ── §0 ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 section('0. Generator ↔ file · md5 nền / sau = VERIFY')
@@ -82,10 +88,14 @@ ok(!SQL_128.includes('\r') && !RB_128.includes('\r'), '128 + rollback giữ LF (
 const want127 = (n) => T.CMS_FN_SRC_126[n] ?? T.CMS_FN_SRC_125[n] ?? T.CMS_FN_SRC_124[n] ?? T.CMS_FN_SRC_123[n] ?? T.CMS_FN_MATRIX[n]?.src
 {
   const bad = CMS_128_REPLACED.filter((r) => GEN.md5s.base[r.name] !== want127(r.name)).map((r) => r.name)
-  ok(bad.length === 0, 'md5 thân NỀN 15 hàm (bản cuối 121–126) = kỳ vọng VERIFY 127 (preflight đúng bản prod)', bad.join(', '))
+  ok(bad.length === 0, `md5 thân NỀN ${N_REP} hàm (bản cuối 121–126) = kỳ vọng VERIFY 127 (preflight đúng bản prod)`, bad.join(', '))
   const bad2 = [...CMS_128_REPLACED.filter((r) => GEN.md5s.after[r.name] !== T.CMS_FN_SRC_128[r.name]).map((r) => r.name),
     ...CMS_128_NEW.filter((x) => GEN.md5s.after[x.name] !== T.CMS_FN_MATRIX[x.name]?.src || T.CMS_FN_MATRIX[x.name]?.phase !== '128').map((x) => x.name)]
-  ok(bad2.length === 0, 'md5 thân SAU 21 hàm = CMS_FN_SRC_128 (15 thay) + CMS_FN_MATRIX phase 128 (6 mới)', bad2.join(', '))
+  ok(bad2.length === 0, `md5 thân SAU ${N_ALL} hàm = CMS_FN_SRC_128 (${N_REP} thay) + CMS_FN_MATRIX phase 128 (${N_NEW} mới)`, bad2.join(', '))
+  ok(N_REP === 17 && N_NEW === 7 && jeq(T.CMS_PHASE_FUNCTIONS['128'].slice().sort(), CMS_128_NEW.map((x) => x.name).sort()),
+    'r1: 17 hàm thay (+ import_commit / activate 125) · 7 hàm mới (+ cms__units_invalid) — tập hàm mới VERIFY = generator')
+  ok(!/@@[A-Z_]+@@/.test(SQL_128) && !/@@[A-Z_]+@@/.test(RB_128) && SQL_128.includes(`IF v_n <> ${N_ALL} THEN`) && SQL_128.includes(`IF v_n <> ${N_AFTER} THEN`)
+    && RB_128.includes(`IF v_n <> ${N_REP} THEN`), 'file sinh: không còn placeholder; số đếm hậu kiểm / rollback lấy từ mảng generator (không ghi cứng 21 / 15 / 6)')
   ok(jeq(Object.keys(T.CMS_FN_SRC_128).sort(), CMS_128_REPLACED.map((r) => r.name).sort()), 'tập thay của VERIFY = tập thay của generator')
 }
 ok(UK.CMS_UNIT_KEY_VERSION === T.CMS_128_UNIT_KEY_VERSION && SQL_128.includes(`'${UK.CMS_UNIT_KEY_VERSION}'`), `phiên bản khoá đơn vị ${UK.CMS_UNIT_KEY_VERSION} chung app / SQL / VERIFY`)
@@ -193,8 +203,23 @@ async function main() {
   ok((await one(`SELECT status FROM public.cms_sync_runs WHERE id = $1`, [openQ.run_id])).status !== 'running', 'đóng run thử')
   const rFix = CMS_128_REPLACED.find((x) => x.name === 'rpc_cms_result_rows')
   await db.exec(orReplace(GEN.base[rFix.name]).split("'CMS_RESULT_TOO_LARGE'").join("'CMS_RESULT_TOO_LARGE' /* sửa tay */"))
-  await failsWith(SQL_128, /128 preflight: thân một trong 15 hàm/, 'thân nền lạ (md5) ⇒ dừng')
+  await failsWith(SQL_128, new RegExp(`128 preflight: thân một trong ${N_REP} hàm`), 'thân nền lạ (md5) ⇒ dừng')
+  {
+    // r1: thân nền 125 của rpc_cms_import_commit lạ ⇒ preflight cũng dừng (hàm thay mới của r1 nằm trong khối md5).
+    const ic = CMS_128_REPLACED.find((x) => x.name === 'rpc_cms_import_commit')
+    await db.exec(orReplace(GEN.base[ic.name]).split("'CMS_IMPORT_TIER_LAST_FINITE'").join("'CMS_IMPORT_TIER_LAST_FINITE' /* sửa tay */"))
+    await failsWith(SQL_128, new RegExp(`128 preflight: thân một trong ${N_REP} hàm`), 'r1: thân nền rpc_cms_import_commit (125) lạ ⇒ dừng')
+    await db.exec(orReplace(GEN.base[ic.name]))
+  }
   await db.exec(orReplace(GEN.base[rFix.name]))
+  {
+    // r1 (db-review P2-4): thân nền cms__run_source_check (124 — KHÔNG thay, publish 128 dựa vào) lạ ⇒ preflight dừng (17 hàm thay
+    // đều đúng bản nền ở bước này ⇒ chỉ khối ghim này dừng).
+    const pc = GEN.pinned.cms__run_source_check
+    await db.exec(orReplace(pc).split("'SOURCE_REJECTED'").join("'SOURCE_REJECTED' /* sửa tay */"))
+    await failsWith(SQL_128, /128 preflight: thân hàm nền publish dựa vào \(cms__run_source_check\)/, 'r1: thân nền cms__run_source_check (124) lạ ⇒ dừng')
+    await db.exec(orReplace(pc))
+  }
   await db.exec(`DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'qa128_su') THEN CREATE ROLE qa128_su SUPERUSER; END IF; END $$`)
   {
     const r = await settle(db.exec(`SET ROLE qa128_su; ${SQL_128}`))
@@ -217,16 +242,17 @@ async function main() {
   await db.exec(SQL_128); await sleep(20)
   console.log(`    áp 128: ${Date.now() - t128} ms`)
   const mk = await one(`SELECT name FROM public.app_migrations WHERE version = '128'`)
-  ok(mk?.name === 'cms_unit_quantity_basis' && (await E.fnCount()) === 74, 'marker 128 + tổng hàm CMS 74 (68 + 6)')
-  const names21 = [...CMS_128_NEW.map((x) => x.name), ...CMS_128_REPLACED.map((x) => x.name)]
+  ok(mk?.name === 'cms_unit_quantity_basis' && (await E.fnCount()) === N_AFTER, `marker 128 + tổng hàm CMS ${N_AFTER} (${CMS_128_FN_BEFORE} + ${N_NEW})`)
+  const namesAll = [...CMS_128_NEW.map((x) => x.name), ...CMS_128_REPLACED.map((x) => x.name)]
   const acl = await E.all(`SELECT p.proname n, has_function_privilege('anon', p.oid, 'EXECUTE') a, has_function_privilege('authenticated', p.oid, 'EXECUTE') u,
       has_function_privilege('service_role', p.oid, 'EXECUTE') s, p.proacl IS NULL dflt, p.prosecdef sd, p.proconfig cfg,
       (SELECT count(*) FROM aclexplode(p.proacl) x WHERE x.grantee = 0)::int pub, md5(replace(p.prosrc, E'\\r', '')) m
-    FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY($1)`, [names21])
+    FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname = ANY($1)`, [namesAll])
   const grantOf = Object.fromEntries([...CMS_128_NEW.map((x) => [x.name, null]), ...CMS_128_REPLACED.map((x) => [x.name, x.grant])])
   const aclBad = acl.filter((r) => r.a || r.dflt || r.pub > 0 || !r.sd || !(r.cfg ?? []).includes('search_path=public')
     || r.u !== (grantOf[r.n] === 'authenticated') || r.s !== (grantOf[r.n] === 'service_role') || r.m !== GEN.md5s.after[r.n])
-  ok(acl.length === 21 && aclBad.length === 0, 'ma trận ACL 21 hàm: anon ∅ · PUBLIC ∅ · 6 mới chỉ owner · 6 RPC ghi chỉ service_role · 5 RPC đọc / chứng nhận chỉ authenticated · 4 helper chỉ owner · SECDEF + search_path · md5 = bản sinh',
+  const nG = (g) => CMS_128_REPLACED.filter((x) => x.grant === g).length
+  ok(acl.length === N_ALL && aclBad.length === 0, `ma trận ACL ${N_ALL} hàm: anon ∅ · PUBLIC ∅ · ${N_NEW} mới chỉ owner · ${nG('service_role')} RPC ghi chỉ service_role · ${nG('authenticated')} RPC đọc / chứng nhận chỉ authenticated · ${nG(null)} helper chỉ owner · SECDEF + search_path · md5 = bản sinh`,
     aclBad.map((r) => `${r.n} a${r.a} u${r.u} s${r.s} pub${r.pub}`).join(' | '))
   const lbl = await E.all(`SELECT kind, quantity_basis qb, calculation_policy_version pv, calculation_snapshot IS NULL nsnap, count(*)::int n FROM public.cms_sync_runs GROUP BY 1, 2, 3, 4 ORDER BY 1, 2`)
   ok(lbl.every((r) => (r.kind === 'sales' ? r.qb === 'pos_base' && r.pv === 'pos_base_legacy' : r.qb === null && r.pv === null) && r.nsnap),
@@ -270,14 +296,21 @@ async function main() {
   section('5. Khoá đơn vị / lượng: SQL ↔ TS ↔ oracle độc lập')
   {
     const up = [...UK.CMS_UNIT_CASE_UPPER], lo = [...UK.CMS_UNIT_CASE_LOWER], ws = [...UK.CMS_UNIT_WS]
-    const corpus = ['Hộp', ' HỘP ', 'hộp', 'Hộp', 'VỈ', 'Viên', 'Ống', 'chai', '', ' ', ' hộp　', '﻿Hộp', 'hộp\u0007', '\u0085hộp', 'h\u007fp',
+    // r1 Q-225: MỌI ký tự của tập vô hình ở đầu / giữa / cuối / hai phía + kèm khoảng trắng; ký tự sát biên tập (không vô hình).
+    const invis = UK.CMS_UNIT_INVISIBLE.flatMap(([a, b]) => Array.from({ length: b - a + 1 }, (_, i) => String.fromCodePoint(a + i)))
+    const nearInvis = [0xac, 0xae, 0x34e, 0x350, 0x5ff, 0x606, 0x61b, 0x61d, 0x6dc, 0x6de, 0x70e, 0x710, 0x88f, 0x892, 0x8e1, 0x8e3, 0x115e,
+      0x1161, 0x17b3, 0x17b6, 0x180a, 0x1810, 0x200a, 0x2010, 0x2029, 0x202f, 0x205f, 0x2070, 0x3163, 0x3165, 0xfdff, 0xfe10, 0xfefe, 0xff00,
+      0xff9f, 0xffa1, 0xffef, 0xfffc].map((c) => String.fromCodePoint(c))
+    const corpus = ['Hộp', ' HỘP ', 'hộp', 'Hộp', 'VỈ', 'Viên', 'Ống', 'chai', '', ' ', '\u00a0hộp\u3000', '\ufeffHộp', 'hộp\u0007', '\u0085hộp', 'h\u007fp',
       'Σ', 'İ', 'ß', 'ẞ', 'ǅ', 'Ω', 'K', 'Å', 'ﬃ', 'Hộp 10 vỉ', 'HỘP\tLỚN', 'ĐƠN VỊ', 'ƠƯ', 'ỸỶỴ', 'Ǆ', 'ı', 'ſ', 'Ⅻ', 'Ａ', 'Ꞵ', 'Ǳ', 'Ϊ́']
     for (const c of up) corpus.push(c, ` ${c}x `)
     for (const c of lo) corpus.push(c.toUpperCase(), c)
     for (const w of ws) corpus.push(`${w}Hộp${w}`, `Hộp${w}Hộp`)
+    for (const c of invis) corpus.push(`${c}Hộp`, `H${c}ộp`, `Hộp${c}`, c, `${c}${c}`, `\u00a0${c}Hộp\u3000`, `${c}Hộp\t`)
+    for (const c of nearInvis) corpus.push(`${c}Hộp`, `H${c}ộp`, `Hộp${c}`)
     let seed = 128
     const rnd = () => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed / 0x7fffffff }
-    const alpha = [...up, ...lo, ...ws, 'a', 'Z', '0', '9', ' ', '́', '̣', 'Σ', 'İ', 'ß', '\u0007', '\u0085', 'Đ', 'đ', 'ǅ', 'ﬃ']
+    const alpha = [...up, ...lo, ...ws, ...invis, 'a', 'Z', '0', '9', ' ', '́', '̣', 'Σ', 'İ', 'ß', '\u0007', '\u0085', 'Đ', 'đ', 'ǅ', 'ﬃ']
     for (let i = 0; i < 1500; i++) { let s = ''; const n = 1 + Math.floor(rnd() * 8); for (let j = 0; j < n; j++) s += alpha[Math.floor(rnd() * alpha.length)]; corpus.push(s) }
     const sqlKeys = (await E.all(`SELECT x.i::int i, public.cms__unit_key(x.s) k FROM jsonb_array_elements_text($1::jsonb) WITH ORDINALITY x(s, i)`, [JSON.stringify(corpus)]))
     const byI = new Map(sqlKeys.map((r) => [r.i - 1, r.k]))
@@ -287,7 +320,14 @@ async function main() {
       if (t !== q) diff.push(`${JSON.stringify(s)} TS ${JSON.stringify(t)} SQL ${JSON.stringify(q)}`)
       if (t !== o) diffO.push(`${JSON.stringify(s)} TS ${JSON.stringify(t)} oracle ${JSON.stringify(o)}`)
     })
-    ok(diff.length === 0, `khoá đơn vị SQL cms__unit_key ≡ TS cmsUnitKey trên ${corpus.length} chuỗi (243 cặp, 20 khoảng trắng, điều khiển, NFD, fuzz)`, diff.slice(0, 4).join(' | '))
+    ok(diff.length === 0, `khoá đơn vị SQL cms__unit_key ≡ TS cmsUnitKey trên ${corpus.length} chuỗi (243 cặp, ${ws.length} khoảng trắng, điều khiển, ${invis.length} ký tự vô hình × 7 vị trí, NFD, fuzz)`, diff.slice(0, 4).join(' | '))
+    const invisBad = corpus.filter((x, i) => invis.some((c) => x.includes(c)) && (byI.get(i) ?? null) !== null)
+    ok(invisBad.length === 0, `Q-225: mọi chuỗi chứa ký tự vô hình ⇒ SQL cms__unit_key NULL (${corpus.filter((x) => invis.some((c) => x.includes(c))).length} chuỗi)`, invisBad.slice(0, 3).map((x) => JSON.stringify(x)).join(' | '))
+    const arrs = [['Hộp', 'Vỉ'], [], ['Hộp', `H${invis[4]}ộp`], [`Hộp${invis.at(-1)}`], ['\u00a0Hộp\u00a0'], ['Hộp\t'], ['   ']]
+    const ui = await E.all(`SELECT x.i::int i, public.cms__units_invalid(ARRAY(SELECT jsonb_array_elements_text(x.a))) b FROM jsonb_array_elements($1::jsonb) WITH ORDINALITY x(a, i)`, [JSON.stringify(arrs)])
+    const uiWant = arrs.map((a) => a.some((v) => UK.cmsUnitKey(v) === null))
+    ok(jeq(ui.sort((a, b) => a.i - b.i).map((r) => r.b), uiWant) && jeq(uiWant, [false, false, true, true, false, true, true]),
+      'cms__units_invalid ≡ TS (có ĐV khoá NULL?) — rỗng / NBSP hợp lệ; vô hình / tab / chỉ khoảng trắng ⇒ true', JSON.stringify(ui))
     ok(diffO.length === 0, `TS cmsUnitKey ≡ oracle độc lập (Unicode) trên ${corpus.length} chuỗi`, diffO.slice(0, 4).join(' | '))
     const qc = ['0', '1', '-1', '2.000', '2.5', '0.000000001', '1.0000000001', '00012', '-0', '-0.000', '1e3', ' 1', '1 ', '+1', '.5', '5.', '1,5', '٣',
       '9223372036854775807', '9223372036854775808', '-9223372036854775808', '1'.repeat(29), '1'.repeat(30), '0'.repeat(40) + '7', 'abc', '', '1.123456789', '1.1234567890']
@@ -311,10 +351,10 @@ async function main() {
   const ptrRb = (await E.prog(R.id)).ptr
   await db.exec(RB_128); await sleep(20)
   const md5Rb = await E.fnMd5(CMS_128_REPLACED.map((x) => x.name))
-  ok(CMS_128_REPLACED.every((x) => md5Rb[x.name] === GEN.md5s.base[x.name]) && (await E.fnCount()) === 68 && !(await E.hasCol())
+  ok(CMS_128_REPLACED.every((x) => md5Rb[x.name] === GEN.md5s.base[x.name]) && (await E.fnCount()) === CMS_128_FN_BEFORE && !(await E.hasCol())
     && !(await one(`SELECT 1 x FROM public.app_migrations WHERE version = '128'`))
     && Number((await one(`SELECT count(*)::int n FROM pg_trigger WHERE tgname IN ('cms_programs_basis_guard', 'cms_sync_runs_basis_guard')`)).n) === 0,
-  'rollback: 15 thân NỀN nguyên văn, 68 hàm, cột / trigger / marker gỡ')
+  `rollback: ${N_REP} thân NỀN nguyên văn (gồm import_commit / activate 125), ${CMS_128_FN_BEFORE} hàm, cột / trigger / marker gỡ`)
   ok((await E.prog127(R.id)).ptr === ptrRb && (await E.runRow(ptrRb)).status === 'ok', 'rollback GIỮ run đã công bố (pointer không đổi)')
   const v127rb = await E.verify('127', E.pre127)
   ok(E.bad(v127rb).length === 0, 'VERIFY 127 sau rollback ĐẠT (128 không để phần dư)', E.show(v127rb))
@@ -487,6 +527,9 @@ async function main() {
   {
     const o = await settle(E.rpc(`SELECT public.rpc_cms_sales_run_open($1, $2::jsonb) r`, [UR.id, JSON.stringify({ source: 'operator', quantity_basis: 'pos_base' })]))
     ok(!o.ok && o.err === 'CMS_SYNC_BAD_DETAIL', 'open: detail mang khoá dành riêng (quantity_basis) ⇒ CMS_SYNC_BAD_DETAIL', o.ok ? 'KHÔNG chặn' : o.err)
+    // r1 (db-review P2-6): source_check chỉ publish ghi ⇒ writer gửi khoá này lúc open cũng bị chặn.
+    const o2 = await settle(E.rpc(`SELECT public.rpc_cms_sales_run_open($1, $2::jsonb) r`, [UR.id, JSON.stringify({ source: 'operator', source_check: null })]))
+    ok(!o2.ok && o2.err === 'CMS_SYNC_BAD_DETAIL', 'r1: open: detail mang khoá source_check ⇒ CMS_SYNC_BAD_DETAIL', o2.ok ? 'KHÔNG chặn' : o2.err)
     const s = await E.stageDirect(UR, UROWS)
     const f = await settle(E.rpc(`SELECT public.rpc_cms_sales_run_finish($1, $2, $3::jsonb) r`, [s.runId, 'error', JSON.stringify({ calculation_snapshot: {} })]))
     ok(!f.ok && f.err === 'CMS_SYNC_BAD_DETAIL', 'finish: detail mang calculation_snapshot ⇒ CMS_SYNC_BAD_DETAIL', f.ok ? 'KHÔNG chặn' : f.err)
@@ -564,11 +607,163 @@ async function main() {
     ok(rqx.status === 'published' && rqx.quantityBasis === 'cms_unit' && (await E.results(rqx.runId))[0]?.q === '7', 'sau datafix: tính lại theo cms_unit (Q = 7, không floor(7 / 6))', JSON.stringify([rqx.status, rqx.code]))
   }
 
+  // ── §8b (r1 — PM 10/11) ──
+  section('8b. r1: kiểm lớp nguồn trước publish (UNIT-P1-2) · guard ĐV tại import / kích hoạt / lưu (UNIT-P2-3)')
+  {
+    const PUB = CMS_128_CODES.publishSource
+    const lineOf = (i) => UROWS[i].order_line_id
+    // Mỗi ca: writer trực tiếp (service_role) stage engine TRUNG THỰC + lớp nguồn bị sửa ⇒ seal đạt (seal không đọc lớp nguồn) ⇒ publish.
+    const srcCase = async (label, o, want) => {
+      const ptr0 = (await E.prog(o.prog?.id ?? UR.id)).ptr
+      const s = await E.stageDirect(o.prog ?? UR, o.rows ?? UROWS, { source: o.source, expect: o.expect })
+      const p = s.sealed ? await settle(E.publishRpc(s.runId)) : null
+      const rr = await E.runRow(s.runId)
+      const ptr1 = (await E.prog(o.prog?.id ?? UR.id)).ptr
+      const got = p?.ok ? p.v : p
+      if (want === 'published') {
+        ok(s.sealed && p?.ok && p.v.published === true && ptr1 === s.runId, `${label} ⇒ công bố`, JSON.stringify([s.code, got]))
+      } else {
+        ok(s.sealed && p?.ok && p.v.published === false && p.v.code === PUB && p.v.source_check === want && rr.status === 'held'
+          && rr.error_code === PUB && rr.detail?.source_check === want && rr.published_at === null && ptr1 === ptr0,
+        `${label} ⇒ held ${PUB} (${want}), run held + detail.source_check, pointer giữ`, JSON.stringify([s.code, got, rr.status, rr.error_code, rr.detail?.source_check, ptr1 === ptr0]))
+      }
+      return s
+    }
+    const setSrc = (id, patch) => (rows) => rows.map((r) => (r.order_line_id === id ? { ...r, ...patch } : r))
+    // PM tái hiện: lớp nguồn ghi lượng 10, engine ghi lượng 1 (dòng khác ĐV — vẫn phải chặn) + biến thể dòng đúng ĐV.
+    const otherOne = UROWS.findIndex((r) => r.uom_raw === 'Hộp' && r.quantity_raw === '1' && r.product_id === u2)
+    ok(otherOne >= 0, 'fixture: có dòng engine lượng 1')
+    await srcCase('nguồn lượng 10 · engine lượng 1 (tái hiện PM)', { source: setSrc(lineOf(otherOne), { quantity_raw: '10' }) }, 'SOURCE_ENGINE_MISMATCH')
+    await srcCase('nguồn lượng 30 · engine 3 (dòng đúng ĐV)', { source: setSrc(lineOf(0), { quantity_raw: '30' }) }, 'SOURCE_ENGINE_MISMATCH')
+    await srcCase('nguồn đơn vị Vỉ · engine Hộp', { source: setSrc(lineOf(0), { uom_raw: 'Vỉ' }) }, 'SOURCE_ENGINE_MISMATCH')
+    await srcCase('nguồn đơn vị có U+200B · engine Hộp', { source: setSrc(lineOf(0), { uom_raw: 'H\u200bộp' }) }, 'SOURCE_ENGINE_MISMATCH')
+    // Lệch bù trừ: hoán đổi lượng 3 ↔ 2 của hai dòng cùng nhóm — cùng số dòng, cùng tổng ⇒ vẫn chặn (so TỪNG dòng).
+    await srcCase('hoán đổi lượng 3 ↔ 2 hai dòng cùng nhóm (cùng số dòng / tổng)', { source: (rows) => rows.map((r) => (r.order_line_id === lineOf(0)
+      ? { ...r, quantity_raw: UROWS[1].quantity_raw } : r.order_line_id === lineOf(1) ? { ...r, quantity_raw: UROWS[0].quantity_raw } : r)) }, 'SOURCE_ENGINE_MISMATCH')
+    await srcCase('thiếu 1 dòng nguồn', { source: (rows) => rows.filter((r) => r.order_line_id !== lineOf(3)) }, 'SOURCE_COUNT')
+    await srcCase('thiếu nửa lớp nguồn (mất trang)', { source: (rows) => rows.slice(0, Math.floor(rows.length / 2)) }, 'SOURCE_COUNT')
+    await srcCase('không capture lớp nguồn (writer trực tiếp)', { source: false }, 'SOURCE_COUNT')
+    {
+      // Né đếm bằng cách khai rows_read + 1 cho dòng nguồn thêm ⇒ seal 122 đã chặn (SEAL_TOTALS) trước khi tới publish.
+      const ptr0 = (await E.prog(UR.id)).ptr
+      const s = await E.stageDirect(UR, UROWS, {
+        source: (rows) => [...rows, { ...rows.find((r) => r.order_line_id === lineOf(0)), order_line_id: '958999999', order_id: 'O-extra', order_code: 'QA-extra' }],
+        expect: (e) => ({ ...e, rows_read: e.rows_read + 1 }) })
+      ok(!s.sealed && s.code === 'SEAL_TOTALS' && (await E.prog(UR.id)).ptr === ptr0, 'lớp nguồn thêm dòng + khai rows_read + 1 (né đếm) ⇒ seal chặn SEAL_TOTALS, pointer giữ', JSON.stringify([s.status, s.code]))
+    }
+    const onlineIdx = UROWS.findIndex((r) => r.order_type === 'ONLINE')
+    ok(onlineIdx >= 0, 'fixture: có dòng ONLINE (không đủ điều kiện)')
+    await srcCase('lớp nguồn đổi dòng ONLINE thành OFFLINE (dòng đủ điều kiện bị engine bỏ, cùng số dòng)',
+      { source: setSrc(lineOf(onlineIdx), { order_type: 'OFFLINE' }) }, 'SOURCE_ELIGIBLE_MISMATCH')
+    await srcCase('lớp nguồn đổi một dòng sang ONLINE (né đủ điều kiện)', { source: setSrc(lineOf(0), { order_type: 'ONLINE' }) }, 'SOURCE_ENGINE_MISMATCH')
+    await srcCase('dòng nguồn ngoài kỳ', { source: (rows) => rows.map((r) => (r.order_line_id === lineOf(0)
+      ? { ...r, completed_at: String(r.completed_at).replace(/^\d{4}-\d{2}-\d{2}/, '2020-01-01') } : r)) }, 'SOURCE_SCOPE')
+    // Writer trung thực ⇒ công bố (đối chứng); app với capture OFF ⇒ held trước khi đọc nguồn, 0 stage.
+    await srcCase('writer trực tiếp TRUNG THỰC (lớp nguồn đủ + trùng)', {}, 'published')
+    const ptrA = (await E.prog(UR.id)).ptr
+    const off = await E.sync(UR, UROWS, { capture: false })
+    const stOff = off.runId ? Number((await one(`SELECT (SELECT count(*) FROM public.cms_sales_lines WHERE run_id = $1) + (SELECT count(*) FROM public.cms_sales_source_lines WHERE run_id = $1) n`, [off.runId])).n) : -1
+    ok(off.status === 'held' && off.code === UB.CMS_UNIT_CODES.captureRequired && stOff === 0 && (await E.prog(UR.id)).ptr === ptrA,
+      'app: cms_unit + capture lớp nguồn OFF ⇒ held UNIT_SOURCE_CAPTURE_REQUIRED, 0 dòng stage, pointer giữ', JSON.stringify([off.status, off.code, stOff]))
+    // QA (is_test) cms_unit cũng bị kiểm; pos_base KHÔNG đổi hợp đồng (publish không đối chiếu nguồn — chứng nhận / chốt 124 kiểm riêng).
+    await srcCase('QA cms_unit: nguồn lượng lệch', { prog: UQ, rows: UQROWS, source: setSrc(UQROWS[0].order_line_id, { quantity_raw: '13' }) }, 'SOURCE_ENGINE_MISMATCH')
+    {
+      const s = await E.stageDirect(R, POS, { source: setSrc(POS[0].order_line_id, { quantity_raw: '99' }) })
+      const p = s.sealed ? await E.publishRpc(s.runId) : null
+      ok(s.sealed && p?.published === true && !('source_check' in p), 'pos_base: publish KHÔNG đối chiếu lớp nguồn (hợp đồng 124 / 126 giữ nguyên)', JSON.stringify(p))
+    }
+    // Publish lại run đã held ⇒ không công bố được (không có cửa "thử lại" bỏ qua kiểm).
+    {
+      const s = await E.stageDirect(UR, UROWS, { source: setSrc(lineOf(0), { quantity_raw: '30' }) })
+      await E.publishRpc(s.runId)
+      const again = await settle(E.publishRpc(s.runId))
+      ok(!again.ok && again.err === 'CMS_SYNC_RUN_NOT_RUNNING' && (await E.runRow(s.runId)).status === 'held', 'gọi publish lại run đã held ⇒ CMS_SYNC_RUN_NOT_RUNNING (không vòng qua kiểm)', again.ok ? JSON.stringify(again.v) : again.err)
+    }
+  }
+  {
+    // ── P2-3: guard ĐV tính CMS tại import / kích hoạt / lưu — chặn sớm, 0 delta, chỉ chương trình cms_unit.
+    const IMP = CMS_128_CODES.importUnitInvalid, PRG = CMS_128_CODES.programUnitInvalid
+    const state = async (id) => E.one(`SELECT p.status, p.config_version v, p.name, p.quantity_basis qb, (SELECT count(*)::int FROM public.cms_program_products x WHERE x.program_id = p.id) np,
+        (SELECT string_agg(x.unit_cms, '|' ORDER BY x.product_id) FROM public.cms_program_products x WHERE x.program_id = p.id) units,
+        (SELECT count(*)::int FROM public.cms_program_stores s WHERE s.program_id = p.id) ns FROM public.cms_programs p WHERE p.id = $1`, [id])
+    const mk = async (name, basis, scope = 'stores') => E.saveProgram({ name, start_date: await E.day(3), end_date: await E.day(9), scope, store_ids: scope === 'stores' ? [storeId(1)] : [],
+      is_test: true, ...(basis ? { quantity_basis: basis } : {}) })
+    const okP = E.pid(), okP2 = E.pid()
+    const D = await mk('QA r1 nháp cms_unit', 'cms_unit')
+    ok(!!(await settle(E.saveProgram({ id: D, name: 'QA r1 nháp cms_unit', start_date: await E.day(3), end_date: await E.day(9), scope: 'stores', store_ids: [storeId(1)] }))).ok,
+      'lưu nháp cms_unit RỖNG (chưa có SP) vẫn được — không chặn nháp hợp lệ')
+    await E.commit(await E.preview(D), 'replace', [{ pid: okP, unit: 'Hộp', tiers: T3 }, { pid: okP2, unit: '\u00a0Vỉ\u00a0', tiers: T3 }])
+    const d0 = await state(D)
+    ok(d0.np === 2, 'import cms_unit đơn vị hợp lệ (gồm NBSP hai đầu) ⇒ ghi 2 SP')
+    const bads = [['h\u200bộp', 'U+200B giữa'], ['\ufeffhộp', 'FEFF đầu'], ['hộp\u00ad', 'gạch nối mềm cuối'], ['\u2060', 'chỉ ký tự vô hình'], ['hộp\t', 'tab cuối'], ['\u202ehộp', 'đảo chiều đầu']]
+    for (const [unit, label] of bads) {
+      const r = await settle(E.commit(await E.preview(D), 'replace', [{ pid: okP, unit: 'Hộp', tiers: T3 }, { pid: E.pid(), unit, tiers: T3 }]))
+      const d1 = await state(D)
+      ok(!r.ok && r.err.includes(IMP) && jeq(d1, d0), `import cms_unit ĐV "${label}" ⇒ ${IMP}, 0 delta (SP / đơn vị / version giữ)`, r.ok ? 'KHÔNG chặn' : r.err.slice(0, 120))
+    }
+    // pos_base: hành vi import KHÔNG đổi (đơn vị chỉ để hiển thị).
+    const PBD = await mk('QA r1 nháp pos_base', null)
+    const pr = await settle(E.commit(await E.preview(PBD), 'replace', [{ pid: E.pid(), unit: 'h\u200bộp', tiers: T3 }]))
+    ok(pr.ok && (await state(PBD)).np === 1, 'pos_base: import đơn vị có ký tự vô hình vẫn nhận như cũ (không đổi hành vi luật cũ)', pr.ok ? '' : pr.err.slice(0, 120))
+    // Lưu: pos_base → cms_unit khi đang có SP đơn vị hỏng ⇒ chặn, 0 delta.
+    const pb0 = await state(PBD)
+    const sv = await settle(E.saveProgram({ id: PBD, name: 'QA r1 nháp pos_base', start_date: await E.day(3), end_date: await E.day(9), scope: 'stores', store_ids: [storeId(1)], quantity_basis: 'cms_unit' }))
+    ok(!sv.ok && sv.err.includes(PRG) && jeq(await state(PBD), pb0), `lưu đổi pos_base → cms_unit khi có ĐV hỏng ⇒ ${PRG}, 0 delta`, sv.ok ? 'KHÔNG chặn' : sv.err.slice(0, 120))
+    const sv2 = await settle(E.saveProgram({ id: PBD, name: 'QA r1 nháp pos_base 2', start_date: await E.day(3), end_date: await E.day(9), scope: 'stores', store_ids: [storeId(1)] }))
+    ok(sv2.ok && (await state(PBD)).qb === 'pos_base', 'đối chứng: sửa nháp pos_base (đơn vị hỏng) KHÔNG đổi cơ sở ⇒ vẫn lưu được')
+    // Kích hoạt / lưu chương trình cms_unit có ĐV hỏng (dữ liệu ghi ngoài RPC — owner) ⇒ từ chối nguyên khối.
+    const A = await mk('QA r1 kích hoạt cms_unit', 'cms_unit', 'all')
+    const aP = E.pid()
+    await E.commit(await E.preview(A), 'replace', [{ pid: aP, unit: 'Hộp', tiers: T3 }, { pid: E.pid(), unit: 'Vỉ', tiers: T3 }])
+    await db.query(`UPDATE public.cms_program_products SET unit_cms = 'Vỉ' || chr(8203) WHERE program_id = $1 AND product_id <> $2`, [A, aP])
+    const a0 = await state(A)
+    const ac = await settle(E.svc(`SELECT public.rpc_cms_program_activate($1, $2)`, [A, U.super]))
+    ok(!ac.ok && ac.err.includes(PRG) && jeq(await state(A), a0) && a0.status === 'draft' && a0.ns === 0,
+      `kích hoạt cms_unit có SP mang ĐV vô hình ⇒ ${PRG}, vẫn nháp, 0 delta (version / phạm vi 'all' chưa nạp)`, ac.ok ? 'KHÔNG chặn' : ac.err.slice(0, 120))
+    const se = await settle(E.saveProgram({ id: A, name: 'QA r1 đổi tên', start_date: await E.day(3), end_date: await E.day(9), scope: 'all' }))
+    ok(!se.ok && se.err.includes(PRG) && jeq(await state(A), a0), `lưu chương trình cms_unit có ĐV hỏng ⇒ ${PRG}, 0 delta`, se.ok ? 'KHÔNG chặn' : se.err.slice(0, 120))
+    await db.query(`UPDATE public.cms_program_products SET unit_cms = 'Vỉ' WHERE program_id = $1 AND product_id <> $2`, [A, aP])
+    const ac2 = await settle(E.svc(`SELECT public.rpc_cms_program_activate($1, $2)`, [A, U.super]))
+    ok(ac2.ok && (await state(A)).status === 'active', 'sửa ĐV về hợp lệ ⇒ kích hoạt được (đối chứng)', ac2.ok ? '' : ac2.err.slice(0, 120))
+    // Mã lỗi DB → nhãn super (không message DB thô).
+    ok(PI.cmsProgramErrorLabel(PRG) !== PI.cmsProgramErrorLabel('X_KHONG_CO') && /ĐV tính CMS/.test(PI.cmsProgramErrorLabel(PRG)), 'nhãn super cho CMS_PROGRAM_UNIT_INVALID (action kích hoạt / lưu)')
+  }
+  {
+    // ── Đột biến SQL r1 (thân thay tạm qua owner, trả lại NGUYÊN VĂN bản sinh + kiểm md5): ca kiểm phải nhạy với từng lớp chặn.
+    const fnMd5Now = async (n) => (await E.fnMd5([n]))[n]
+    const mutate = async (name, from, to, run) => {
+      const body = GEN.replaced[name] ?? GEN.fnFromSchema(name)
+      const n = body.split(from).length - 1
+      if (n !== 1) throw new Error(`đột biến SQL ${name}: đoạn gốc khớp ${n} lần`)
+      await db.exec(orReplace(body).split(from).join(to))
+      try { return await run() } finally { await db.exec(orReplace(body)) }
+    }
+    const want = (n) => GEN.md5s.after[n]
+    const m1 = await mutate('rpc_cms_sales_run_publish', "  IF v_code IS NULL AND v_run.quantity_basis IS DISTINCT FROM 'pos_base' THEN\n", '  IF false THEN\n', async () => {
+      const s = await E.stageDirect(UR, UROWS, { source: (rows) => rows.map((r) => (r.order_line_id === UROWS[0].order_line_id ? { ...r, quantity_raw: '30' } : r)) })
+      return s.sealed ? E.publishRpc(s.runId) : null
+    })
+    ok(m1?.published === true && (await fnMd5Now('rpc_cms_sales_run_publish')) === want('rpc_cms_sales_run_publish'),
+      'đột biến SQL publish bỏ kiểm nguồn ⇒ run lệch nguồn ĐƯỢC công bố (ca §8b sẽ đỏ) · trả thân nguyên văn (md5)', JSON.stringify(m1))
+    const keySql = async () => (await E.one(`SELECT public.cms__unit_key(E'hộp\\uFEFF') a, public.cms__unit_key(E'h\\u200Bộp') b`))
+    const m2 = await mutate('cms__unit_key', " OR p_unit ~ E'[", " AND p_unit ~ E'[", keySql)
+    ok(m2.a !== null && m2.b !== null && (await fnMd5Now('cms__unit_key')) === want('cms__unit_key') && (await keySql()).a === null,
+      'đột biến SQL cms__unit_key bỏ lớp vô hình ⇒ FEFF / U+200B thành khoá "khác ĐV" không NULL (parity §5 sẽ đỏ) · trả thân nguyên văn', JSON.stringify(m2))
+    const Dm = await E.saveProgram({ name: 'QA r1 đột biến import', start_date: await E.day(3), end_date: await E.day(9), scope: 'stores', store_ids: [storeId(1)], is_test: true, quantity_basis: 'cms_unit' })
+    const m3 = await mutate('rpc_cms_import_commit', "  IF v_prog.quantity_basis = 'cms_unit'\n     AND public.cms__units_invalid(", "  IF false\n     AND public.cms__units_invalid(",
+      async () => settle(E.commit(await E.preview(Dm), 'replace', [{ pid: E.pid(), unit: 'hộp\u200b', tiers: T3 }])))
+    ok(m3.ok && (await fnMd5Now('rpc_cms_import_commit')) === want('rpc_cms_import_commit'),
+      'đột biến SQL import bỏ guard ĐV ⇒ ĐV vô hình được ghi (ca import §8b sẽ đỏ) · trả thân nguyên văn', m3.ok ? '' : m3.err.slice(0, 120))
+    // Dọn: chương trình nháp đột biến mang ĐV hỏng (QA, nháp) — giữ nháp, không kích hoạt được (đã chứng minh ở trên).
+    const ac = await settle(E.svc(`SELECT public.rpc_cms_program_activate($1, $2)`, [Dm, U.super]))
+    ok(!ac.ok && ac.err.includes(CMS_128_CODES.programUnitInvalid), 'dữ liệu do đột biến để lại vẫn bị guard kích hoạt chặn (lớp 2)', ac.ok ? 'KHÔNG chặn' : ac.err.slice(0, 120))
+  }
+
   // ── §9 ──
   section('9. Rollback bị chặn khi đã có cms_unit · VERIFY 128 + đột biến')
   {
     const r = await execFail(db, RB_128)
-    ok(!r.ok && /đã có chương trình \/ run cơ sở cms_unit/.test(r.err) && (await E.fnCount()) === 74 && (await E.hasCol()), 'rollback 128 dừng khi đã có cms_unit (0 delta — xử lý tiến)', r.ok ? 'KHÔNG dừng' : r.err.slice(0, 160))
+    ok(!r.ok && /đã có chương trình \/ run cơ sở cms_unit/.test(r.err) && (await E.fnCount()) === N_AFTER && (await E.hasCol()), 'rollback 128 dừng khi đã có cms_unit (0 delta — xử lý tiến)', r.ok ? 'KHÔNG dừng' : r.err.slice(0, 160))
   }
   const vAll = await E.verify('128', E.pre128, ['unit'])
   ok(E.bad(vAll).length === 0 && vAll.find((c) => c.id === 'v128-run-basis')?.proven === true, 'VERIFY 128 ĐẠT, run-basis + unit ĐÃ chứng minh', E.show(vAll))
@@ -612,10 +807,11 @@ async function crlfCase() {
   const ax = await settle(X.db.exec(CRLF(SQL_128)))
   const vx = ax.ok ? await X.verify('128', X.pre128) : []
   ok(ax.ok && X.bad(vx).length === 0, '128 dán CRLF ⇒ hậu kiểm md5 bỏ \\r đạt + VERIFY 128 đạt', ax.ok ? X.show(vx) : ax.err.slice(0, 160))
-  const k = await X.one(`SELECT public.cms__unit_key(E' Ho\\u0323\\u0302p\\u00a0') k, public.cms__unit_key(E'h\\u0007p') bad, public.cms__qty_dec('2.000')::text q`)
-  ok(k.k === 'hộp' && k.bad === null && k.q === '2.000', 'helper sau CRLF giữ hợp đồng (NFC / NBSP / điều khiển / lượng)', JSON.stringify(k))
+  const k = await X.one(`SELECT public.cms__unit_key(E' Ho\\u0323\\u0302p\\u00a0') k, public.cms__unit_key(E'h\\u0007p') bad, public.cms__qty_dec('2.000')::text q,
+    public.cms__unit_key(E'hộp\\uFEFF') bom, public.cms__unit_key(E'h\\u200Bộp') zw`)
+  ok(k.k === 'hộp' && k.bad === null && k.q === '2.000' && k.bom === null && k.zw === null, 'helper sau CRLF giữ hợp đồng (NFC / NBSP / điều khiển / vô hình v2 / lượng)', JSON.stringify(k))
   const rx = await settle(X.db.exec(CRLF(RB_128)))
-  ok(rx.ok && (await X.fnCount()) === 68 && !(await X.hasCol()), 'rollback dán CRLF ⇒ 68 hàm, cột gỡ', rx.ok ? '' : rx.err.slice(0, 160))
+  ok(rx.ok && (await X.fnCount()) === CMS_128_FN_BEFORE && !(await X.hasCol()), `rollback dán CRLF ⇒ ${CMS_128_FN_BEFORE} hàm, cột gỡ`, rx.ok ? '' : rx.err.slice(0, 160))
 }
 
 async function pg15Extra() {
@@ -641,15 +837,26 @@ async function pg15Extra() {
   await E.db.exec(SQL_128)
   ok(await E.hasCol(), 'nhả khoá ⇒ áp 128 được')
 
-  // Bench: cms_unit, 2 SP, 19 % chưa gán, 30 % khác ĐV, lượng nguyên 1–3 — mỗi RPC < 8 s với statement_timeout 8 s như PostgREST (KHÔNG nới).
+  // Bench (r1 — PM 10/11 §5): cms_unit, 2 SP, 19 % chưa gán, ~50 % khác ĐV, lượng ĐA DẠNG (~20.000 chuỗi quantity_raw phân biệt: nguyên
+  // 1–20.000 ở dòng đúng ĐV, thập phân ở dòng khác ĐV) — mỗi RPC < 8 s với statement_timeout 8 s như PostgREST (KHÔNG nới); publish gồm
+  // kiểm lớp nguồn ↔ engine (cms__run_source_check) trên toàn bộ dòng.
   const b1p = E.pid(), b2p = E.pid()
   const PB = await E.makeProgram({ name: 'THẬT bench cms_unit', isTest: false, basis: 'cms_unit', catalogTarget: null,
     products: [{ pid: b1p, unit: 'hộp', k: '10', tiers: T3 }, { pid: b2p, unit: 'Vỉ', k: '24', tiers: T3 }] })
   const una = Math.floor(BENCH_ROWS * 0.19), rest = BENCH_ROWS - una, quarter = Math.floor(rest / 4)
-  const specs = [{ pid: b1p, s: 0, uom: 'Hộp', qty: '2', base: 20, n: quarter }, { pid: b2p, s: 1, uom: 'vỉ', qty: '3', base: 3, n: quarter },
-    { pid: b1p, s: 2, uom: 'Vỉ', qty: '1', base: 1, n: quarter }, { pid: b2p, s: 3, uom: 'Hộp', qty: '1', base: 24, n: rest - 3 * quarter },
-    { pid: b1p, email: 'chua.gan.bench@example.invalid', uom: 'Hộp', qty: '1', base: 10, n: una }]
+  const specs = []
+  const wantQ = new Map()
+  const addQ = (s, p, q) => { const k = `${SELLER_IDS[s]}|${p}`; wantQ.set(k, (wantQ.get(k) ?? 0) + q) }
+  for (let i = 0; i < quarter; i++) { const q = 1 + ((i * 7919) % 20000); specs.push({ pid: b1p, s: 0, uom: 'Hộp', qty: String(q), base: q * 10 }); addQ(0, b1p, q) }
+  for (let i = 0; i < quarter; i++) { const q = 1 + ((i * 104729) % 20000); specs.push({ pid: b2p, s: 1, uom: 'vỉ', qty: String(q), base: q }); addQ(1, b2p, q) }
+  for (let i = 0; i < quarter; i++) specs.push({ pid: b1p, s: 2, uom: 'Vỉ', qty: `${1 + (i % 5000)}.${String(i % 997).padStart(3, '0')}`, base: 1 })
+  for (let i = 0; i < rest - 3 * quarter; i++) specs.push({ pid: b2p, s: 3, uom: 'Hộp', qty: `${1 + (i % 3000)}.5`, base: 24 })
+  addQ(2, b1p, 0); addQ(3, b2p, 0)
+  for (let i = 0; i < una; i++) specs.push({ pid: b1p, email: 'chua.gan.bench@example.invalid', uom: 'Hộp', qty: String(1 + (i % 20000)), base: 10 })
   const rowsB = E.rows(PB, specs)
+  const distinctQty = new Set(rowsB.map((r) => r.quantity_raw)).size
+  console.log(`    bench: ${rowsB.length} dòng · ${distinctQty} chuỗi quantity_raw phân biệt`)
+  ok(distinctQty >= 20000, `bench: phân bố lượng đa dạng (${distinctQty} chuỗi quantity_raw phân biệt ≥ 20.000)`)
   await E.db.query(`SET statement_timeout = '8s'`)
   // db-reviewer P1: số lần gọi cms__unit_key / cms__qty_dec trong cả lượt (track_functions, reset trước) — phải ≈ số giá trị PHÂN BIỆT,
   // không tỷ lệ số dòng (CTE du / dq MATERIALIZED; PG15 không bọc PlaceHolderVar cho biểu thức strict phía nullable của LEFT JOIN).
@@ -668,17 +875,20 @@ async function pg15Extra() {
   for (const l of ['seal_begin', 'seal_step', 'publish']) console.log(`    ${l}: max ${mx(l)} ms (${E.timings.filter((t) => t.label === l).length} lần)`)
   console.log(`    seal_step theo bước: ${E.timings.filter((t) => t.label === 'seal_step').map((t) => `${t.step}:${t.ms}`).join(' · ')} ms`)
   console.log(`    số lần gọi: cms__unit_key ${calls.cms__unit_key} · cms__qty_dec ${calls.cms__qty_dec} (${BENCH_ROWS} dòng)`)
-  ok(calls.cms__unit_key > 0 && calls.cms__unit_key <= 64 && calls.cms__qty_dec > 0 && calls.cms__qty_dec <= 64,
-    `seal chuẩn hoá theo giá trị PHÂN BIỆT, không theo dòng (cms__unit_key ${calls.cms__unit_key} · cms__qty_dec ${calls.cms__qty_dec} lần / ${BENCH_ROWS} dòng)`)
+  // 2 điểm chuẩn hoá lượng (seal bước 7 + bước 10, mỗi bước CTE MATERIALIZED một lần / giá trị phân biệt) ⇒ trần 2 × phân biệt + 64;
+  // gọi theo dòng sẽ ≥ BENCH_ROWS (> trần khi phân biệt < 50 % số dòng — bench có 63.500 / 200.000).
+  ok(calls.cms__unit_key > 0 && calls.cms__unit_key <= 64 && calls.cms__qty_dec > 0 && calls.cms__qty_dec <= 2 * distinctQty + 64 && 2 * distinctQty + 64 < BENCH_ROWS,
+    `seal chuẩn hoá theo giá trị PHÂN BIỆT, không theo dòng (cms__unit_key ${calls.cms__unit_key} · cms__qty_dec ${calls.cms__qty_dec} lần ≤ 2 bước × ${distinctQty} lượng phân biệt + 64 < ${BENCH_ROWS} dòng)`)
   const st = E.timings.filter((t) => t.label === 'stage').map((t) => t.ms).sort((a, b) => a - b)
   console.log(`    stage: ${st.length} khối · p50 ${st[Math.floor(st.length / 2)]} · max ${st.at(-1)} ms`)
   console.log(`    bench ${rowsB.length} dòng (${una} chưa gán): tổng ${totalMs} ms`)
   ok(rB.status === 'published' && rB.rowsRead === BENCH_ROWS && rB.quantityBasis === 'cms_unit', `bench: ${BENCH_ROWS} dòng nguồn cms_unit công bố được`, JSON.stringify([rB.status, rB.code, rB.rowsRead]))
   const sealMs = Math.max(mx('seal_begin'), mx('seal_step')), pubMs = mx('publish'), stageMs = st.at(-1) ?? 0
-  ok(sealMs < 8000 && pubMs < 8000 && stageMs < 8000, `mỗi RPC < 8 s, statement_timeout 8 s giữ nguyên (seal ${sealMs} · publish ${pubMs} · stage ${stageMs} ms)`)
+  ok(sealMs < 8000 && pubMs < 8000 && stageMs < 8000, `mỗi RPC < 8 s, statement_timeout 8 s giữ nguyên (seal ${sealMs} · publish gồm kiểm nguồn ${pubMs} · stage ${stageMs} ms)`)
+  const srcN = Number((await E.one(`SELECT count(*)::int n FROM public.cms_sales_source_lines WHERE run_id = $1`, [rB.runId])).n)
+  ok(srcN === BENCH_ROWS, `bench: lớp nguồn đủ ${srcN} dòng — publish đã đối chiếu toàn bộ (không bỏ qua kiểm)`)
   const qs = await E.results(rB.runId)
-  const want = new Map([[`${SELLER_IDS[0]}|${b1p}`, 2 * quarter], [`${SELLER_IDS[1]}|${b2p}`, 3 * quarter], [`${SELLER_IDS[2]}|${b1p}`, 0], [`${SELLER_IDS[3]}|${b2p}`, 0]])
-  ok(qs.length === 4 && qs.every((r) => want.get(`${r.u}|${r.pid}`) === Number(r.q)), 'bench: Q đúng ĐV từng cặp (khác ĐV ⇒ 0)', JSON.stringify(qs.map((r) => [r.pid, r.q])))
+  ok(qs.length === 4 && qs.every((r) => wantQ.get(`${r.u}|${r.pid}`) === Number(r.q)), 'bench: Q đúng ĐV từng cặp = Σ quantity_raw tính độc lập (khác ĐV ⇒ 0)', JSON.stringify(qs.map((r) => [r.pid, r.q])))
   await E.db.query(`SET statement_timeout = 0`)
 }
 

@@ -19,7 +19,7 @@
 -- Dừng (fail-closed, 0 delta): thiếu 128 / thiếu nền @@PRED@@ / đã có marker @@VERSION@@ / có số > @@PRED@@; không READ COMMITTED; role
 -- không phải owner bảng & hàm CMS; trigger / thân guard lệch bản duyệt; còn run bán 'running'; chương trình khác bản ghim (UUID / trạng
 -- thái / kỳ / phạm vi / config_version / vân tay cấu hình / 17 SP / 17 mức); đã chốt / có payout; ĐÃ ở cms_unit (không chạy lại); ĐV
--- tính CMS của SP nào đó không có khoá đơn vị hợp lệ (cms-unit-key-v1). Lệch ghim ⇒ chụp PRE mới, cập nhật pin.json, sinh lại, PM audit.
+-- tính CMS của SP nào đó không có khoá đơn vị hợp lệ (@@UNIT_KEY_VERSION@@). Lệch ghim ⇒ chụp PRE mới, cập nhật pin.json, sinh lại, PM audit.
 --
 -- Client: Supabase Studio SQL editor / pg-meta (một transaction, lỗi ⇒ huỷ cả). KHÔNG chạy bằng client tự savepoint từng câu (psql
 -- \set ON_ERROR_ROLLBACK on) — cờ giai đoạn cmsunit.stage vẫn chặn ghi, nhưng đừng thử.
@@ -178,7 +178,7 @@ BEGIN
   IF (SELECT md5(string_agg(product_id || ':' || amount, ',' ORDER BY product_id COLLATE "C")) FROM cmsunit_pin) IS DISTINCT FROM '@@RATES_MD5@@' THEN
     RAISE EXCEPTION '@@VERSION@@: bảng 17 mức lệch md5 ghim';
   END IF;
-  -- ĐV tính CMS của mọi SP có khoá đơn vị hợp lệ (cms-unit-key-v1) — nếu không, run cms_unit không mở được (CMS_SALES_UNIT_INVALID).
+  -- ĐV tính CMS của mọi SP có khoá đơn vị hợp lệ (@@UNIT_KEY_VERSION@@) — nếu không, run cms_unit không mở được (CMS_SALES_UNIT_INVALID).
   IF EXISTS (SELECT 1 FROM public.cms_program_products pp WHERE pp.program_id = g.id AND public.cms__unit_key(pp.unit_cms) IS NULL) THEN
     RAISE EXCEPTION '@@VERSION@@: có SP mà ĐV tính CMS không có khoá đơn vị hợp lệ — sửa cấu hình trước, không đổi cơ sở';
   END IF;
@@ -335,7 +335,7 @@ BEGIN
   INSERT INTO public.app_migrations (version, name, notes)
   VALUES ('@@VERSION@@', 'cms_unit_t11_basis', jsonb_build_object(
     'program', '@@PID@@', 'products', 17,
-    'quantity_basis', jsonb_build_object('from', 'pos_base', 'to', 'cms_unit'), 'policy', 'cms_unit_v1', 'unit_key_version', 'cms-unit-key-v1',
+    'quantity_basis', jsonb_build_object('from', 'pos_base', 'to', 'cms_unit'), 'policy', 'cms_unit_v1', 'unit_key_version', '@@UNIT_KEY_VERSION@@',
     'config_version', jsonb_build_object('from', (v_pre ->> 'config_version')::int, 'to', (v_pre ->> 'config_version')::int + 1),
     'config_fp_pinned', '@@CONFIG_FP@@', 'rates_md5', '@@RATES_MD5@@',
     'old_pointer', v_pre ->> 'old_pointer', 'pointer_cleared', true,

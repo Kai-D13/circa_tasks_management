@@ -385,16 +385,18 @@ test.describe('CMS QA tooling · preflight, manifest, đóng run, id is_test @de
     expect(ev({ ...base, rates_md5_marker: 'x', rates_md5_db: 'x' })['v127-t11-pm'].ok).toBe(false)
   })
 
-  test('phase 128 (CMS-UNIT capability): 6 helper chỉ owner + 15 thân thay + shape / cột 2 bảng + 2 trigger ALWAYS + V-128', () => {
+  test('phase 128 (CMS-UNIT capability, PM-r1): 7 helper chỉ owner + 17 thân thay + shape / cột 2 bảng + 2 trigger ALWAYS + V-128', () => {
     expect(CMS_VERIFY_PHASES.at(-1)).toBe('128')
     const m128 = Object.entries(CMS_FN_MATRIX).filter(([, m]) => m.phase === '128')
     expect(m128.map(([n]) => n).sort()).toEqual(['cms__basis_policy', 'cms__calc_snapshot', 'cms__programs_basis_guard', 'cms__qty_dec',
-      'cms__runs_basis_guard', 'cms__unit_key'])
+      'cms__runs_basis_guard', 'cms__unit_key', 'cms__units_invalid'])
     for (const [n, m] of m128) expect({ n, acl: m.acl, secdef: m.secdef, lock: m.lock, lock2: m.lock2, lock3: m.lock3, nestloop: m.nestloop })
       .toEqual({ n, acl: null, secdef: true, lock: false, lock2: undefined, lock3: undefined, nestloop: undefined })
-    expect(Object.keys(CMS_FN_MATRIX)).toHaveLength(74)
-    // 15 thân thay: đúng danh sách migration 128 §4, khác mọi kỳ vọng phase trước, mọi hàm có từ trước 128.
+    expect(Object.keys(CMS_FN_MATRIX)).toHaveLength(75)
+    // 17 thân thay (r1: + import_commit / activate của 125 cho guard ĐV): đúng danh sách migration 128 §4, khác mọi kỳ vọng phase
+    // trước, mọi hàm có từ trước 128.
     expect(Object.keys(CMS_FN_SRC_128).sort()).toEqual(['cms__attest_eval', 'cms__config_fp', 'cms__lock_eval', 'cms__sales_snapshot',
+      'rpc_cms_import_commit', 'rpc_cms_program_activate',
       'rpc_cms_program_save', 'rpc_cms_result_header', 'rpc_cms_result_lines', 'rpc_cms_result_rows', 'rpc_cms_run_source_export',
       'rpc_cms_sales_run_finish', 'rpc_cms_sales_run_open', 'rpc_cms_sales_run_publish', 'rpc_cms_sales_run_seal_begin',
       'rpc_cms_sales_run_seal_step', 'rpc_cms_source_attest'])

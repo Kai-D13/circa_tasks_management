@@ -2,6 +2,7 @@
 -- ── Gỡ helper + cột (sau khi thân cũ không còn tham chiếu) ─────────────────
 DROP FUNCTION public.cms__programs_basis_guard();
 DROP FUNCTION public.cms__runs_basis_guard();
+DROP FUNCTION public.cms__units_invalid(text[]);
 DROP FUNCTION public.cms__calc_snapshot(uuid);
 DROP FUNCTION public.cms__basis_policy(text);
 DROP FUNCTION public.cms__qty_dec(text);
@@ -9,24 +10,15 @@ DROP FUNCTION public.cms__unit_key(text);
 ALTER TABLE public.cms_sync_runs DROP COLUMN calculation_snapshot, DROP COLUMN calculation_policy_version, DROP COLUMN quantity_basis;
 ALTER TABLE public.cms_programs DROP COLUMN quantity_basis;
 
--- ── ACL 15 hàm khôi phục: thu hồi đích danh rồi cấp đúng ma trận trước 128 ──
+-- ── ACL @@N_REP@@ hàm khôi phục: thu hồi đích danh rồi cấp đúng ma trận trước 128 (danh sách sinh từ generator) ──
 REVOKE ALL ON FUNCTION
-  public.cms__sales_snapshot(uuid), public.cms__config_fp(uuid), public.cms__attest_eval(uuid, uuid),
-  public.cms__lock_eval(uuid, uuid, integer, text, boolean),
-  public.rpc_cms_program_save(jsonb), public.rpc_cms_sales_run_open(uuid, jsonb), public.rpc_cms_sales_run_seal_begin(uuid, jsonb),
-  public.rpc_cms_sales_run_seal_step(uuid, integer), public.rpc_cms_sales_run_publish(uuid), public.rpc_cms_sales_run_finish(uuid, text, jsonb),
-  public.rpc_cms_result_header(uuid), public.rpc_cms_result_rows(uuid, uuid),
-  public.rpc_cms_result_lines(uuid, uuid, uuid, uuid, integer, integer),
-  public.rpc_cms_source_attest(uuid, uuid, jsonb, uuid), public.rpc_cms_run_source_export(uuid, uuid, text, integer)
+@@REVOKE_OLD_LIST@@
   FROM PUBLIC, anon, authenticated, service_role;
 GRANT EXECUTE ON FUNCTION
-  public.rpc_cms_program_save(jsonb), public.rpc_cms_sales_run_open(uuid, jsonb), public.rpc_cms_sales_run_seal_begin(uuid, jsonb),
-  public.rpc_cms_sales_run_seal_step(uuid, integer), public.rpc_cms_sales_run_publish(uuid), public.rpc_cms_sales_run_finish(uuid, text, jsonb)
+@@SVC_LIST@@
   TO service_role;
 GRANT EXECUTE ON FUNCTION
-  public.rpc_cms_result_header(uuid), public.rpc_cms_result_rows(uuid, uuid),
-  public.rpc_cms_result_lines(uuid, uuid, uuid, uuid, integer, integer),
-  public.rpc_cms_source_attest(uuid, uuid, jsonb, uuid), public.rpc_cms_run_source_export(uuid, uuid, text, integer)
+@@AUTH_LIST@@
   TO authenticated;
 
 -- ── Hậu kiểm ────────────────────────────────────────────────────────────────
@@ -49,10 +41,10 @@ BEGIN
       RAISE EXCEPTION 'rollback 128 hậu kiểm: ACL % = %', r.proname, r.acl;
     END IF;
   END LOOP;
-  IF v_n <> 15 THEN RAISE EXCEPTION 'rollback 128 hậu kiểm: cần 15 hàm khôi phục, có %', v_n; END IF;
+  IF v_n <> @@N_REP@@ THEN RAISE EXCEPTION 'rollback 128 hậu kiểm: cần @@N_REP@@ hàm khôi phục, có %', v_n; END IF;
   SELECT count(*) INTO v_n FROM pg_catalog.pg_proc
    WHERE pronamespace = 'public'::regnamespace AND (proname LIKE 'cms\_%' OR proname LIKE 'rpc\_cms\_%');
-  IF v_n <> 68 THEN RAISE EXCEPTION 'rollback 128 hậu kiểm: tổng hàm CMS phải 68, có %', v_n; END IF;
+  IF v_n <> @@N_CMS_BEFORE@@ THEN RAISE EXCEPTION 'rollback 128 hậu kiểm: tổng hàm CMS phải @@N_CMS_BEFORE@@, có %', v_n; END IF;
   IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public'
               AND ((table_name = 'cms_programs' AND column_name = 'quantity_basis')
                    OR (table_name = 'cms_sync_runs' AND column_name IN ('quantity_basis', 'calculation_policy_version', 'calculation_snapshot')))) THEN

@@ -77,6 +77,11 @@ section('0. Generator · bản ghim mặc định · không file mang số')
   const numbered = fs.readdirSync(MIG).concat(fs.readdirSync(path.join(MIG, 'rollback'))).filter((f) => /cms_unit_t11/.test(f))
   ok(numbered.length === 0, 'repo KHÔNG có file datafix mang số (PM ghim số khi chốt release tổng)', numbered.join(', '))
   ok(r.guards.length === CMS_UNIT_T11_GUARDS.length && r.guards.every((g) => /^[0-9a-f]{32}$/.test(g.md5)), `md5 ${r.guards.length} hàm guard / 128 lấy từ định nghĩa cuối 120–128`)
+  // r1 (PM 10/11): phiên bản khoá đơn vị của datafix lấy từ cms__calc_snapshot của NỀN (không ghi cứng) = phiên bản app.
+  const UK = await lib('lib/cms/unitKey.ts')
+  ok(r.unitKeyVersion === UK.CMS_UNIT_KEY_VERSION && r.unitKeyVersion === 'cms-unit-key-v2' && r.migration.includes(`'unit_key_version', '${UK.CMS_UNIT_KEY_VERSION}'`)
+    && !/cms-unit-key-v1/.test(r.migration) && !/@@[A-Z_]+@@/.test(r.migration + r.rollback),
+  `datafix ghi unit_key_version ${r.unitKeyVersion} lấy từ 128 (= app ${UK.CMS_UNIT_KEY_VERSION}); không còn v1 / placeholder`)
 }
 
 // ── Tiện ích ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────

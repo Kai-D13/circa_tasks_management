@@ -183,6 +183,9 @@ test.describe('ui v2 CMS-UNIT — nội dung theo cơ sở cms_unit @desktop', (
     await shot(page, 'unit-detail-expanded-900201-d1280-light')
     await open(page, 'detail', `program=${PG13.row.id}&p2=reset`)
     await expect(page.locator('main [data-cms-no-run="basis_pending"]')).toHaveText(CMS_BASIS_PENDING_TEXT)
+    // r1 (soát ảnh Q-226): chưa có run ⇒ gợi ý ô "Lượt" theo cơ sở của CHƯƠNG TRÌNH (cms_unit), không rơi về câu luật cũ.
+    await expect(page.locator('main').getByText('Lượt = dược sĩ × SP đã bán ≥ 1 đơn vị đúng ĐV tính CMS')).toBeVisible()
+    await expect(page.locator('main').getByText('Lượt = dược sĩ × SP đã bán đủ ≥ 1 đơn vị CMS')).toHaveCount(0)
     expect(writes).toEqual([])
   })
 

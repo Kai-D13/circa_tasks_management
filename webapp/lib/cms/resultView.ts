@@ -264,7 +264,7 @@ export interface CmsResultLineDto {
   baseBefore: string; baseAfter: string; qtyBefore: string; qtyAfter: string; amountVnd: string; status: CmsLineStatus
   /** CMS-UNIT: cơ sở của run (gắn khi parse; thiếu ⇒ pos_base). */
   quantityBasis?: CmsQuantityBasis
-  /** CHỈ cms_unit: đơn vị bán khớp ĐV tính CMS (theo khoá cms-unit-key-v1 của snapshot run). */
+  /** CHỈ cms_unit: đơn vị bán khớp ĐV tính CMS (theo khoá unit_key_version của snapshot run — hiện cms-unit-key-v2). */
   unitMatch?: boolean | null
   /** CHỈ cms_unit: lượng dòng được tính (số nguyên; khác đơn vị ⇒ "0"). */
   countedQuantity?: string | null

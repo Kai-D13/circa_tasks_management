@@ -750,10 +750,12 @@ export const CMS_PHASE_FUNCTIONS: Record<CmsVerifyPhase, string[]> = {
   // 127 (S0 CMS đơn giản, PM 08/11): CHỈ sửa dữ liệu một chương trình (bậc T11 + config_version + pointer) — KHÔNG hàm / trigger /
   // bảng / ACL mới hay thay ⇒ kế thừa nguyên kỳ vọng 126; ACL POST so toàn bộ hàm public với PRE 127.
   '127': [],
-  // 128 (CMS-UNIT capability, PM 09/11): 6 helper mới KHÔNG cấp ai (kể cả service_role — 4 helper + 2 hàm trigger); 15 hàm có trước
-  // thay bằng CREATE OR REPLACE GIỮ chữ ký / owner / SECDEF / config / ACL ⇒ POST so MỌI hàm có trước 128 (n_ex128 / md5_ex128) với
-  // n_all / md5_all của PRE 128; thân mới ở CMS_FN_SRC_128.
-  '128': ['cms__unit_key', 'cms__qty_dec', 'cms__basis_policy', 'cms__calc_snapshot', 'cms__programs_basis_guard', 'cms__runs_basis_guard'],
+  // 128 (CMS-UNIT capability, PM 09/11 + r1 10/11): 7 helper mới KHÔNG cấp ai (kể cả service_role — 5 helper + 2 hàm trigger; r1 thêm
+  // cms__units_invalid); 17 hàm có trước (r1 thêm rpc_cms_import_commit / rpc_cms_program_activate 125) thay bằng CREATE OR REPLACE GIỮ
+  // chữ ký / owner / SECDEF / config / ACL ⇒ POST so MỌI hàm có trước 128 (n_ex128 / md5_ex128) với n_all / md5_all của PRE 128; thân
+  // mới ở CMS_FN_SRC_128.
+  '128': ['cms__unit_key', 'cms__qty_dec', 'cms__basis_policy', 'cms__units_invalid', 'cms__calc_snapshot', 'cms__programs_basis_guard',
+    'cms__runs_basis_guard'],
 }
 
 const isCmsFnSql = `(left(p.proname, 4) = 'cms_' OR left(p.proname, 8) = 'rpc_cms_')`
@@ -798,7 +800,7 @@ const privList = (role: string) =>
   `(SELECT string_agg(pr, ',' ORDER BY pr) FROM unnest(ARRAY[${TABLE_PRIVS.map((p) => `'${p}'`).join(',')}]) pr WHERE has_table_privilege('${role}', c.oid, pr))`
 
 /** 128 — phiên bản hợp đồng khoá đơn vị (= lib/cms/unitKey.ts CMS_UNIT_KEY_VERSION; tooling không import lib — spec ép bằng nhau). */
-export const CMS_128_UNIT_KEY_VERSION = 'cms-unit-key-v1'
+export const CMS_128_UNIT_KEY_VERSION = 'cms-unit-key-v2'
 export const CMS_VERIFY_SQL = {
   whoami: `SELECT current_user::text AS u, current_database()::text AS db,
        (SELECT rolsuper OR rolbypassrls FROM pg_roles WHERE rolname = current_user) AS bypass`,
@@ -1550,11 +1552,13 @@ export const CMS_FN_MATRIX: Record<string, { phase: CmsVerifyPhase; acl: 'authen
   // 125 (CMS-UNCAPPED-1) — sinh bằng scripts/gen-cms-verify-fp-125.mjs từ file migration; kiểm lại PG15 (scripts/qa-cms-125.mjs --pg15).
   cms__tiers_last_open_guard: { phase: '125', acl: null, secdef: true, lock: false, src: 'd83088c260633f520dac35cfe8169475' },
   // 128 (CMS-UNIT) — sinh bằng scripts/gen-cms-verify-fp-128.mjs từ file migration (PGlite 120 → 126 + marker 127 → 128); kiểm lại PG15
-  // (scripts/qa-cms-128.mjs --pg15). 6 hàm chỉ owner (không PUBLIC / anon / authenticated / service_role), SECDEF, search_path, không lock.
-  cms__unit_key: { phase: '128', acl: null, secdef: true, lock: false, src: 'a5452292d761fc646857ac76a2019ef3' },
+  // (scripts/qa-cms-128.mjs --pg15). 7 hàm chỉ owner (không PUBLIC / anon / authenticated / service_role), SECDEF, search_path, không lock.
+  // r1 (PM 10/11): cms__unit_key khoá v2 (ký tự vô hình ⇒ NULL), cms__calc_snapshot ghi unit_key_version v2, + cms__units_invalid.
+  cms__unit_key: { phase: '128', acl: null, secdef: true, lock: false, src: '6b17869eff0467849d7ba001149bffa5' },
   cms__qty_dec: { phase: '128', acl: null, secdef: true, lock: false, src: 'fb241862be3362150b732839e0d492b4' },
   cms__basis_policy: { phase: '128', acl: null, secdef: true, lock: false, src: '6cb8e9477a077ab77d1a06ceac88228d' },
-  cms__calc_snapshot: { phase: '128', acl: null, secdef: true, lock: false, src: '96ab15b002533fb6a9c26a1ea5cea772' },
+  cms__units_invalid: { phase: '128', acl: null, secdef: true, lock: false, src: '7ca7d3dafb3862928cac7d86dcbdc086' },
+  cms__calc_snapshot: { phase: '128', acl: null, secdef: true, lock: false, src: '8b398510b1e50c53a8d49dd9c8998b37' },
   cms__programs_basis_guard: { phase: '128', acl: null, secdef: true, lock: false, src: '7373882ed1ace933597e8c8aa9910be1' },
   cms__runs_basis_guard: { phase: '128', acl: null, secdef: true, lock: false, src: '4812474ee419e38306870b70da91227d' },
 }
@@ -1597,24 +1601,26 @@ export const CMS_FN_SRC_126: Record<string, string> = {
   rpc_cms_sales_run_publish: 'db2c97efad2bb5ee9d69399b99c7c258',
 }
 /**
- * 128 (CMS-UNIT capability, PM 09/11) thay 15 hàm có trước (OR REPLACE giữ chữ ký / owner / SECDEF / config / ACL): snapshot / vân tay
- * cấu hình / lưu chương trình / open / seal (begin + step) / publish / finish / 3 RPC đọc kết quả / chứng nhận (eval + attest + lock_eval)
- * / xuất nguồn. Thân mới chỉ áp từ 128 (ưu tiên trên 126 / 125 / 124 / 123). Sinh bằng scripts/gen-cms-verify-fp-128.mjs: 0 đổi định
+ * 128 (CMS-UNIT capability, PM 09/11 + r1 10/11) thay 17 hàm có trước (OR REPLACE giữ chữ ký / owner / SECDEF / config / ACL): snapshot /
+ * vân tay cấu hình / lưu chương trình / nạp danh mục + kích hoạt (r1 — guard ĐV tính CMS) / open / seal (begin + step) / publish (r1 —
+ * đối chiếu lớp nguồn run cms_unit) / finish / 3 RPC đọc kết quả / chứng nhận (eval + attest + lock_eval) / xuất nguồn. Thân mới chỉ áp từ 128 (ưu tiên trên 126 / 125 / 124 / 123). Sinh bằng scripts/gen-cms-verify-fp-128.mjs: 0 đổi định
  * nghĩa / ACL / config; đổi hình dạng + cột đúng cms_programs / cms_sync_runs; +2 trigger ALWAYS.
  */
 export const CMS_FN_SRC_128: Record<string, string> = {
   cms__attest_eval: '3f9f3d9ad9697caab34991082b58a45c',
   cms__config_fp: '8534cfcbebecc0bd699e8ccecd9bcdd4',
   cms__lock_eval: 'ded0e1ccc95ffbb78c8aac29ad923b59',
-  cms__sales_snapshot: '5b23f40e341fbffeece40f69a90653c5',
-  rpc_cms_program_save: 'a067cedf4136313b684eec9ad3e80ffd',
+  cms__sales_snapshot: '6aeef9d9b8cdd085a5684819e008fc1d',
+  rpc_cms_import_commit: '69176cc50730bebd46af56aee555fbea',
+  rpc_cms_program_activate: 'fe46b372821db6d9919fcb810a2ec15a',
+  rpc_cms_program_save: '91001438180ea2982a463b02c2464af3',
   rpc_cms_result_header: 'a55a96a70796163a8f6dcd9b042d3931',
   rpc_cms_result_lines: '79f3960c3e7a4b186056fcd6e09839c5',
   rpc_cms_result_rows: 'c32b8e2183e4fc9e9914abfc770a6b3f',
   rpc_cms_run_source_export: 'b4cf8f9fe5f5b7d6201f9e51e3aa690f',
-  rpc_cms_sales_run_finish: '020d48720b83c1aed0aebedb3a19afff',
-  rpc_cms_sales_run_open: '5d90e13103a0c828e18813d3b02dca03',
-  rpc_cms_sales_run_publish: 'fa7be492995e11a2054e9af258cd55b6',
+  rpc_cms_sales_run_finish: 'a942cf5e645770faa3b1717539923609',
+  rpc_cms_sales_run_open: '72fc2ed6e219b2238d596b6e2e422b5e',
+  rpc_cms_sales_run_publish: 'cfeaf8d5f8e3e9ee2572a4596ea16f1a',
   rpc_cms_sales_run_seal_begin: 'b81e7dd702a0ad579ad8515357eb8538',
   rpc_cms_sales_run_seal_step: 'd68aabb675d8ee609ea769dbf36efaeb',
   rpc_cms_source_attest: '74cd1e68de442952596576c803594be7',
@@ -1807,6 +1813,7 @@ export const CMS_FN_DEF_128: Record<string, string> = {
   cms__qty_dec: '4e26b159eb405b451b930c980ffb5ab7',
   cms__runs_basis_guard: 'f38b7b9f842dcae4ee3eaacacca0b3fe',
   cms__unit_key: 'd82eaf0fd530c0e284612360b9628be9',
+  cms__units_invalid: 'cb0b7babb410977e39a119f006f9248b',
 }
 export const CMS_COL_128: Record<string, string> = {
   ...CMS_COL_125,
@@ -2149,7 +2156,7 @@ export function evaluateCmsVerify(v: CmsVerifyInput): CmsVerifyCheck[] {
   const nPre = v.phase === '124' ? v.aclPre.n_ex124 : v.aclPre.n_all
   const mdPre = v.phase === '124' ? v.aclPre.md5_ex124 : v.aclPre.md5_all
   add('acl-preexisting-functions', nEx !== undefined && nPre !== undefined && nEx === nPre && mdEx === mdPre,
-    `mọi hàm có trước ${v.phase}${v.phase === '124' ? ' (trừ rpc_cms_program_lock đổi chữ ký)' : v.phase === '126' ? ' (126 không thêm hàm ⇒ toàn bộ hàm public)' : v.phase === '128' ? ' (trừ 6 helper mới; 15 hàm thay giữ ACL)' : ''}: ${String(nEx)} / ${String(mdEx)} · PRE ${String(nPre)} / ${String(mdPre)}`)
+    `mọi hàm có trước ${v.phase}${v.phase === '124' ? ' (trừ rpc_cms_program_lock đổi chữ ký)' : v.phase === '126' ? ' (126 không thêm hàm ⇒ toàn bộ hàm public)' : v.phase === '128' ? ' (trừ 7 helper mới; 17 hàm thay giữ ACL)' : ''}: ${String(nEx)} / ${String(mdEx)} · PRE ${String(nPre)} / ${String(mdPre)}`)
 
   if (P >= 121) {
     const inv = v.inv121

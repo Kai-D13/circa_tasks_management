@@ -1,16 +1,14 @@
 // CMS-UNIT (PM spec 09/11 §2 "Chuẩn hoá tên đơn vị", §4 import) — kiểm unit_CMS của file import cho chương trình cơ sở `cms_unit`.
 // Chạy ở MỌI mẫu file (9 cột v1 đang phát hành + mẫu mức cố định v2) — không có đường bypass qua file v1. Hàm thuần.
-//  · Ô unit_CMS THÔ có ký tự điều khiển (C0 / DEL / C1, kể cả tab / xuống dòng) ⇒ loại nhóm (UNIT_CMS_CONTROL): không xoá ký tự để
-//    tạo ra một đơn vị có vẻ hợp lệ.
+//  · Ô unit_CMS THÔ có ký tự điều khiển (C0 / DEL / C1, kể cả tab / xuống dòng) ⇒ loại nhóm (UNIT_CMS_CONTROL); có ký tự vô hình
+//    (r1 Q-225 — CMS_UNIT_INVISIBLE, vd. U+200B / FEFF / gạch nối mềm, kể cả ở hai đầu) ⇒ loại nhóm (UNIT_CMS_INVISIBLE): kiểm trên ô
+//    THÔ trước trim; không xoá ký tự để tạo ra một đơn vị có vẻ hợp lệ.
 //  · Khoá đơn vị (cmsUnitKey — cùng hợp đồng SQL cms__unit_key của 128) rỗng ⇒ loại nhóm (UNIT_CMS_INVALID).
 // Bằng chứng "đã bán theo ĐV này" do kiểm K (kCheck.ts) đảm nhiệm với chuẩn hoá cmsUnitKey khi chương trình cms_unit.
 
 import type { CmsImportRawRow } from './parse'
 import type { CmsImportGroupRejected, CmsImportIssue, CmsImportValidation } from './validate'
-import { cmsUnitKey } from '../unitKey'
-
-// eslint-disable-next-line no-control-regex
-const CONTROL_RE = /[\u0000-\u001F\u007F-\u009F]/
+import { cmsUnitKey, cmsUnitRawFlags } from '../unitKey'
 
 const rawUnitText = (r: CmsImportRawRow): string | null => {
   const c = r.cells.unit_CMS
@@ -23,12 +21,19 @@ export function cmsApplyUnitBasisCheck(v: CmsImportValidation, rows: readonly Cm
   const groupsOk = v.groupsOk.filter((g) => {
     const gr = rows.filter((r) => g.excelRows.includes(r.excelRow))
     let issue: CmsImportIssue | null = null
-    const bad = gr.find((r) => { const t = rawUnitText(r); return t !== null && CONTROL_RE.test(t) })
+    const bad = gr.find((r) => cmsUnitRawFlags(rawUnitText(r)).control)
+    const invis = gr.find((r) => cmsUnitRawFlags(rawUnitText(r)).invisible)
     if (bad) {
       issue = {
         excelRow: bad.excelRow, column: 'unit_CMS', code: 'UNIT_CMS_CONTROL',
         message: 'unit_CMS có ký tự điều khiển (tab / xuống dòng / ký tự ẩn) — không dùng làm ĐV tính CMS được',
         fix: 'Gõ lại tên đơn vị đúng như trên POS (vd. hộp), không dán kèm ký tự ẩn',
+      }
+    } else if (invis) {
+      issue = {
+        excelRow: invis.excelRow, column: 'unit_CMS', code: 'UNIT_CMS_INVISIBLE',
+        message: 'unit_CMS có ký tự vô hình (khoảng trắng độ rộng 0, BOM, gạch nối mềm…) — không dùng làm ĐV tính CMS được',
+        fix: 'Xoá ô và gõ lại tên đơn vị đúng như trên POS (vd. hộp), không dán từ nguồn có ký tự ẩn',
       }
     } else if (cmsUnitKey(g.unitCms) === null) {
       issue = {

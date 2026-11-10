@@ -26,6 +26,8 @@
 // CMS-UNIT (PM spec 09/11 §2 / §4; migration 128): cơ sở tính lấy từ snapshot CỦA RUN (DB ghi lúc open). Chương trình cms_unit mà
 //   opts.unitBasisEnabled (cờ CMS_UNIT_BASIS_ENABLED) tắt ⇒ held UNIT_BASIS_DISABLED (không lùi về luật cũ). Dòng ứng viên thiếu /
 //   sai đơn vị hoặc lượng ⇒ held UNIT_SOURCE_INVALID; đúng ĐV CMS mà lượng lẻ ⇒ held UNIT_QUANTITY_FRACTION (Q-223 — không làm tròn).
+//   r1 (PM 10/11): lượt ghi cms_unit khi capture lớp nguồn tắt ⇒ held UNIT_SOURCE_CAPTURE_REQUIRED; DB publish đối chiếu nguồn ↔ engine
+//   (lệch ⇒ held UNIT_SOURCE_MISMATCH, pointer giữ nguyên).
 //   quantity_raw âm (mọi đơn vị, cả chưa gán / ngoài phạm vi) vào cổng trả hàng. opts.basisOverride CHỈ cho dry-run (đọc, không ghi) —
 //   lượt ghi có override ⇒ từ chối trước mọi I/O.
 
@@ -334,6 +336,9 @@ async function runCmsSalesSyncInner(deps: CmsSalesSyncDeps, programId: string, o
   res.quantityBasis = snap.quantityBasis
   res.calculationPolicyVersion = snap.calculationPolicyVersion
   if (snap.quantityBasis === 'cms_unit' && !opts.dryRun && opts.unitBasisEnabled !== true) return stop('held', CMS_UNIT_CODES.disabled)
+  // r1 (PM 10/11 UNIT-P1-2): lượt ghi cms_unit cần lớp nguồn — DB chỉ công bố khi nguồn đủ + trùng engine; capture tắt ⇒ held trước khi
+  // đọc nguồn (không tốn lượt đọc rồi mới bị DB giữ), không lùi về luật cũ.
+  if (snap.quantityBasis === 'cms_unit' && !opts.dryRun && !capture) return stop('held', CMS_UNIT_CODES.captureRequired)
 
   let engineInput: ReturnType<typeof cmsSnapshotToEngineInput>
   let win: { fromMicros: bigint; toMicrosExclusive: bigint }
