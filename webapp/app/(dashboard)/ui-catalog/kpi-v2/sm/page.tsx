@@ -13,6 +13,7 @@ import { parseCampaignRange } from '@/lib/kpi/campaignDateRange'
 // action; bọc KpiFixtureBoundary như mọi fixture KPI). Cổng như /ui-catalog: UI_CATALOG=1 (prod 404) + super admin.
 // ?fx= list (mặc định) · one · empty · long · gmv-warning · gmv-error · gmv-off · stores-error · data-error · out-of-scope
 //      · detail (GMV, có bộ lọc) · detail-quality · detail-unsynced · detail-range (đang xem khoảng)
+// &cms=1 (SM-CMS-ENTRY-1): landing có nút "CMS sản phẩm" — chỉ khi bật rõ.
 
 const TODAY = '2026-10-14'
 const SYNC = '2026-10-15T09:15:00Z'
@@ -82,12 +83,15 @@ const GMV: SmGmvStrip = {
   syncedAt: '2026-10-15T09:00:00Z', error: false, sourceWarning: null,
 }
 
-export default async function UiCatalogKpiSmPage({ searchParams }: { searchParams: Promise<{ fx?: string }> }) {
+export default async function UiCatalogKpiSmPage({ searchParams }: { searchParams: Promise<{ fx?: string; cms?: string }> }) {
   if (process.env.UI_CATALOG !== '1') notFound()
   const { user, profile } = await getSessionProfile()
   if (!user) redirect('/login')
   if (!(profile?.role === 'admin' && isSuperAdminEmail(user.email))) notFound()
-  const { fx = 'list' } = await searchParams
+  const { fx = 'list', cms } = await searchParams
+  // SM-CMS-ENTRY-1: nút "CMS sản phẩm" chỉ khi fixture bật RÕ `cms=1` (mặc định tắt ⇒ ảnh baseline cũ không đổi). Trên route
+  // thật page.tsx tính bằng smCmsEntryVisible; fixture không đọc cờ env.
+  const cmsEntry = cms === '1'
 
   const body = (() => {
     if (fx.startsWith('detail')) {
@@ -116,12 +120,12 @@ export default async function UiCatalogKpiSmPage({ searchParams }: { searchParam
       : fx === 'gmv-error' ? { ...GMV, error: true }
       : fx === 'long' ? { ...GMV, gmv: 1_284_913_200, orders: 12_148, storesWithSales: 23, storeCount: LONG_STORES.length }
       : GMV
-    return <SmTargetsLandingView stores={fx === 'long' ? LONG_STORES : STORES} gmv={gmv} items={items} />
+    return <SmTargetsLandingView stores={fx === 'long' ? LONG_STORES : STORES} gmv={gmv} items={items} cmsEntry={cmsEntry} />
   })()
 
   return (
     <KpiFixtureBoundary>
-    <div data-testid="ui-catalog-kpi-sm" data-fx={fx}>{body}</div>
+    <div data-testid="ui-catalog-kpi-sm" data-fx={fx} data-cms={cmsEntry ? '1' : '0'}>{body}</div>
     </KpiFixtureBoundary>
   )
 }

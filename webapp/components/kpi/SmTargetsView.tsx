@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { History, TrendingUp } from 'lucide-react'
+import { Boxes, History, TrendingUp } from 'lucide-react'
 import { buttonVariants } from '@/components/ui/button'
 import { PageHeader } from '@/components/ds/PageHeader'
 import { ErrorState } from '@/components/ds/ErrorState'
@@ -12,6 +12,7 @@ import { CampaignResultDashboard } from '@/components/kpi/CampaignResultDashboar
 import { TYPE_HUE } from '@/components/kpi/CampaignListView'
 import { RegionalCampaignOverviewList, deadlineTone, type RegionalCampaignItem } from '@/components/kpi/RegionalCampaignOverviewList'
 import { CARD_TYPE_LABEL, metricPresentation } from '@/lib/kpi/campaignDisplay'
+import { SM_CMS_ENTRY_HREF } from '@/lib/cms/access'
 import type { CampaignRange } from '@/lib/kpi/campaignDateRange'
 import type { CampaignResultModel, ResultCampaign } from '@/lib/kpi/resultModel'
 import { formatDate, formatDateTime } from '@/lib/dateUtils'
@@ -71,13 +72,19 @@ export interface SmGmvStrip {
   sourceWarning: string | null
 }
 
-export function SmTargetsLandingView({ stores, gmv, items }: {
+// Nút header của landing: cao 44px ở mobile, 36px ở desktop (như bản cũ).
+const HEADER_BTN = cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'h-[44px] px-3.5 text-[13px] md:h-[36px]')
+
+export function SmTargetsLandingView({ stores, gmv, items, cmsEntry = false }: {
   /** Store phân công (đã validate server-side) — chip TĨNH, không phải bộ lọc (SM r6). */
   stores: { id: string; name: string }[]
   /** null ⇒ không render dải (cờ tắt / 0 store — smRegionalGmvVisible). */
   gmv: SmGmvStrip | null
   /** Đã sắp hạn gần nhất lên đầu. */
   items: RegionalCampaignItem[]
+  /** SM-CMS-ENTRY-1: server tính bằng `smCmsEntryVisible` (vai SM + CMS_PROGRAM_ENABLED). Chỉ quyết định hiển thị, không cấp
+   *  quyền; mặc định false (fixture phải bật rõ). */
+  cmsEntry?: boolean
 }) {
   return (
     <Shell kind="landing">
@@ -87,12 +94,23 @@ export function SmTargetsLandingView({ stores, gmv, items }: {
         subtitle={`Phạm vi: ${stores.length} cửa hàng bạn quản lý`}
         /* 111: lối vào lịch sử chiến dịch — đặt ở header thay vì thêm mục sidebar thứ hai cùng chủ đề. */
         actions={
-          <Link
-            href="/targets/campaigns?status=ended"
-            className={cn(buttonVariants({ variant: 'outline', size: 'sm' }), 'h-[44px] px-3.5 text-[13px] md:h-[36px]')}
-          >
-            <History className="h-4 w-4 mr-1.5" /> Lịch sử chiến dịch
-          </Link>
+          <>
+            <Link href="/targets/campaigns?status=ended" className={HEADER_BTN}>
+              <History className="h-4 w-4 mr-1.5" /> Lịch sử chiến dịch
+            </Link>
+            {/* SM-CMS-ENTRY-1: lối vào danh sách CMS (A1, chỉ đọc, phạm vi RLS). Anchor HTML thường — một lần tải document,
+                không đi soft navigation (tránh kéo NAV-ROOT vào batch). Desktop: nút 36px như nút bên cạnh, vùng bấm nới
+                ::after lên 44px (::after tính từ padding box, trong viền 1px ⇒ 34 + 2 × 5 = 44). */}
+            {cmsEntry && (
+              <a
+                href={SM_CMS_ENTRY_HREF}
+                data-sm-cms-entry
+                className={cn(HEADER_BTN, "relative md:after:absolute md:after:inset-x-0 md:after:-top-[5px] md:after:-bottom-[5px] md:after:content-['']")}
+              >
+                <Boxes className="h-4 w-4 mr-1.5" /> CMS sản phẩm
+              </a>
+            )}
+          </>
         }
       />
       {/* r2.4 (audit P2#4): phạm vi quản lý — chip TĨNH. Mobile: một hàng cuộn ngang trong khung (không tràn trang). */}

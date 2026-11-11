@@ -19,6 +19,7 @@ import { AFFILIATE_QR_FILTER, qrCardVisible, qrCardKey, qrEligibleRole } from '@
 import { SmTargetsDetailView, SmTargetsErrorView, SmTargetsLandingView, SmTargetsOutOfScopeView } from '@/components/kpi/SmTargetsView'
 import { ManagerTargetsView, StaffCampaignView, StaffPeriodView, StaffStateView } from '@/components/kpi/StaffTargetsView'
 import { isCmsProgramEnabled } from '@/lib/cms/flags'
+import { smCmsEntryVisible } from '@/lib/cms/access'
 import { CmsStaffCatalogPage } from '@/components/cms/staff/CmsStaffCatalogPage'
 import { CmsTargetsSegment } from '@/components/cms/staff/CmsTargetsSegment'
 import { buildCampaignResultModel, smScopeState, type ResultActualRow, type ResultCampaign, type ResultTargetRow } from '@/lib/kpi/resultModel'
@@ -611,6 +612,8 @@ export default async function TargetsPage({
           sourceWarning: smGmvWarning,
         } : null}
         items={smCampaigns}
+        // SM-CMS-ENTRY-1: nút "CMS sản phẩm" — vai SM (session server) + CMS_PROGRAM_ENABLED; không query thêm.
+        cmsEntry={smCmsEntryVisible(profile?.role, user.email, isCmsProgramEnabled())}
       />
     )
   }
