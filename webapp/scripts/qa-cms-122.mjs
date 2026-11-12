@@ -425,6 +425,23 @@ await sealCase('dòng kết quả trỏ dòng chưa gán', 'SEAL_LINE_LINK', { t
 } })
 await sealCase('K trong kết quả ≠ cấu hình', 'SEAL_RESULT_CONFIG', { tamper: (p) => { findRes(p, U.C, PIDS.none).per_unit = '12' } })
 await sealCase('line_count sai', 'SEAL_RESULT_SUMS', { tamper: (p) => { const r = findRes(p, U.C, PIDS.none); r.line_count = '2' } })
+// CMS-QTY-RET-1 phần A (Q-227): B của nhóm phải = Σ base_quantity các dòng (bắt kiểu floor / quy đổi từng dòng rồi cộng ở app).
+await sealCase('B nhóm ≠ Σ lượng cơ sở các dòng (Q-227)', 'SEAL_RESULT_SUMS', { tamper: (p) => {
+  const r = findRes(p, U.C, PIDS.none); const [i, f] = r.base_quantity.split('.')
+  r.base_quantity = String(BigInt(i) + BigInt(1)) + (f === undefined ? '' : `.${f}`)
+} })
+// Q-227: Q = floor(B / K) — Q làm tròn lên một đơn vị, tiền nhóm / tiền dòng / qty_after đều khớp F(Q + 1) ⇒ chỉ bất đẳng thức S9 bắt.
+await sealCase('Q làm tròn lên (tiền khớp F(Q + 1)) (Q-227)', 'SEAL_TIER_AMOUNT', { tamper: (p) => {
+  const fNone = (q) => BigInt(15000) * (q < BigInt(2) ? q : BigInt(2)) + BigInt(20000) * (q > BigInt(2) ? q - BigInt(2) : BigInt(0)) // T_NONE
+  const r = findRes(p, U.C, PIDS.none); const q = BigInt(r.cms_quantity) + BigInt(1); const delta = fNone(q) - fNone(q - BigInt(1))
+  if (r.gmv_basis !== 'none' || !r.gate_met || r.at_cap) throw new Error('ca Q làm tròn lên cần nhóm không target / không trần')
+  if (JSON.stringify(T_NONE) !== JSON.stringify([{ order: 1, from: 1, to: 2, amount: '15000' }, { order: 2, from: 3, to: null, amount: '20000' }])) {
+    throw new Error('ca Q làm tròn lên: fNone viết theo T_NONE — T_NONE đổi thì sửa fNone') // auditor P2-4
+  }
+  Object.assign(r, { cms_quantity: String(q), rewarded_quantity: String(q), potential_amount: String(fNone(q)), amount_vnd: String(fNone(q)) })
+  const l = linesOf(p, U.C, r.program_product_id); const last = l[l.length - 1]
+  Object.assign(last, { qty_after: String(q), amount_vnd: String(BigInt(last.amount_vnd) + delta), status: 'RECORDED' })
+} })
 await sealCase('tiền kết quả + tiền dòng cùng lệch (F(Q) sai)', 'SEAL_TIER_AMOUNT', { tamper: (p) => {
   const r = findRes(p, U.C, PIDS.none); r.potential_amount = String(Number(r.potential_amount) + 1); r.amount_vnd = r.potential_amount
   const l = linesOf(p, U.C, r.program_product_id); l[l.length - 1].amount_vnd = String(Number(l[l.length - 1].amount_vnd) + 1)
