@@ -121,7 +121,7 @@ export function CmsProgramListView({
   p2?: { cells: Map<string, CmsA1Cell>; stats: CmsA1Stats } | null
   /** Fixture: điều hướng trong /ui-catalog (route thật bỏ trống). */
   nav?: CmsNav
-  /** UI-NAV U1: ẩn hàng tab chuyển module ở desktop — page server tính (campaignTabsDesktopReplaced); mặc định false (fixture / SM). */
+  /** UI-NAV U1: ẩn hàng tab chuyển module ở desktop — page server tính (campaignTabsDesktopReplaced: super / SM); mặc định false (fixture). */
   tabsDesktopReplaced?: boolean
 }) {
   const href = (h: string) => cmsNavHref(nav, h)

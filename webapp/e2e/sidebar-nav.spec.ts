@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import { test, expect, type Page } from '@playwright/test'
 import { resolveActiveHref } from '../lib/layout/sidebarNav'
 import { MANAGER_STATE, SM_STATE } from './authState'
+import { trapWrites } from './fixtureGuard'
 
 // Unit thuần (không cần browser/server) khoá contract active-state của Sidebar
 // sau audit UI-fluid-sidebar-r1 (P1#1): "đúng 1 nền active".
@@ -356,19 +357,121 @@ test.describe('UI-NAV nhóm "Chiến dịch" — super @desktop', () => {
   })
 })
 
-test.describe('UI-NAV — SM giữ điều hướng hiện tại @desktop', () => {
+// SM-CAMPAIGN-NAV-1 (work order PM 12/11, SM-NAV-D01 thay nhánh SM của UI-NAV-D03): SM nhận nhóm "Chiến dịch" (KPI · Affiliate ·
+// CMS theo cờ ∩ quyền hiện có), GIỮ mục Doanh số + trang tổng hợp + hai nút header; BottomNav không đổi. Chỉ đọc: 0 request ghi.
+// Affiliate của SM 404 khi tài khoản không có nhà thuốc OS active (cổng cũ) ⇒ ghi nhánh, không coi là đạt nhánh có view.
+test.describe('UI-NAV — SM nhóm "Chiến dịch" (SM-NAV-D01) @desktop', () => {
   test.skip(!fs.existsSync(SM_STATE), 'chưa có phiên SM')
   test.use({ storageState: SM_STATE })
-  test('SM: không nhóm "Chiến dịch" trong Sidebar; hàng tab trên desktop vẫn hiện ở /targets/campaigns', async ({ page }) => {
+  const want = [
+    { text: 'Chiến dịch KPI', href: '/targets/campaigns' },
+    { text: 'Affiliate', href: '/targets/campaigns/affiliate' },
+    ...(CMS_ON ? [{ text: 'CMS sản phẩm', href: '/targets/campaigns/cms' }] : []),
+  ]
+  const notFound = (page: Page) => page.locator('main').getByText('This page could not be found.')
+  const doanhSo = (page: Page) => page.locator('#sidebar-nav a[href="/targets"]')
+
+  test('desktop 1280: Doanh số giữ nguyên; nhóm đúng mục theo cờ; đúng một aria-current (Doanh số không cùng sáng); tabs chỉ còn ở mobile', async ({ page }) => {
+    test.setTimeout(180_000)
     await page.setViewportSize({ width: 1280, height: 900 })
+    const writes = await trapWrites(page)
+    // Landing tổng hợp: Doanh số sáng, nhóm đóng, hai nút header còn nguyên.
+    await page.goto('/targets')
+    await expect(page.locator('main [data-sm-targets]')).toHaveAttribute('data-sm-targets', 'landing', { timeout: 20_000 })
+    await expect(doanhSo(page)).toHaveAttribute('aria-current', 'page')
+    await expect(page.locator('aside [aria-current="page"]'), '/targets: số aria-current trong Sidebar').toHaveCount(1)
+    await expect(page.locator('main [data-sm-targets]').getByRole('link', { name: 'Lịch sử chiến dịch' })).toHaveAttribute('href', '/targets/campaigns?status=ended')
+    await expect(page.locator('main [data-sm-cms-entry]'), 'nút CMS landing theo cờ CMS').toHaveCount(CMS_ON ? 1 : 0)
+    const btn = page.locator(GROUP_BTN).first()
+    await expect(btn).toHaveText(/^Chiến dịch$/)
+    await expect(btn, 'route ngoài module: nhóm không tự mở').toHaveAttribute('aria-expanded', 'false')
+    // Bàn phím: Enter mở nhóm, đúng mục / thứ tự, chưa mục con nào sáng.
+    await btn.focus()
+    await page.keyboard.press('Enter')
+    await expect(btn).toHaveAttribute('aria-expanded', 'true')
+    const subs0 = await subLabels(page)
+    expect(subs0.map(({ text, href }) => ({ text, href })), 'mục con / thứ tự').toEqual(want)
+    expect(subs0.filter((x) => x.cur === 'page'), '/targets: không mục con nào sáng').toEqual([])
+    // Từng route module: nhóm mở sẵn, đúng một con sáng, Doanh số không sáng, cha không nền / aria-current; tabs mobile-only.
+    const visited: string[] = []
+    for (const route of want.map((w) => w.href)) {
+      await page.goto(route)
+      await expect(page).toHaveURL(new RegExp(`${route}(\\?|$)`))
+      if (route.endsWith('/affiliate') && await notFound(page).isVisible({ timeout: 5_000 }).catch(() => false)) {
+        test.info().annotations.push({ type: 'nhánh', description: 'SM Affiliate 404 (không có nhà thuốc OS active) — CHƯA KIỂM nhánh có view' })
+        continue
+      }
+      visited.push(route)
+      await expect(btn, `${route}: nhóm phải mở sẵn`).toHaveAttribute('aria-expanded', 'true')
+      const subs = await subLabels(page)
+      expect(subs.filter((x) => x.cur === 'page').map((x) => x.href), `${route}: đúng một con aria-current`).toEqual([route])
+      await expect(page.locator('aside [aria-current="page"]'), `${route}: số aria-current trong Sidebar`).toHaveCount(1)
+      expect(await doanhSo(page).getAttribute('aria-current'), `${route}: Doanh số không được cùng sáng`).toBeNull()
+      expect(await btn.getAttribute('aria-current'), `${route}: cha không được aria-current`).toBeNull()
+      expect(await btn.evaluate((e) => getComputedStyle(e).backgroundColor), `${route}: cha mang nền`).toBe(NO_BG)
+      await expect(tabsRow(page), `${route}: hàng tab phải còn trong DOM, chỉ cho mobile`).toHaveAttribute('data-campaigns-tabs', 'mobile-only')
+      await expect(tabsRow(page), `${route} @1280: hàng tab còn hiện`).toBeHidden()
+    }
+    // Chi tiết KPI (thẻ đầu danh sách nếu có) ⇒ con KPI sáng, Doanh số không.
     await page.goto('/targets/campaigns')
-    await expect(page, 'SM phải xem được /targets/campaigns').toHaveURL(/\/targets\/campaigns(\?|$)/)
-    await expect(page.locator('aside')).toBeVisible()
-    await expect(page.locator('#sidebar-nav [data-sidebar-group="campaigns"]')).toHaveCount(0)
-    await expect(page.locator('#sidebar-nav a[href^="/targets/campaigns"]')).toHaveCount(0)
-    const tabs = tabsRow(page)
-    await expect(tabs, 'SM: hàng tab phải còn trong trang (cờ Affiliate bật ở server gate)').toHaveAttribute('data-campaigns-tabs', 'all')
-    await expect(tabs, 'SM desktop: hàng tab phải hiện').toBeVisible()
+    const detail = await page.locator('main a[href^="/targets/campaigns/"]').evaluateAll((as) => as.map((a) => a.getAttribute('href') ?? '')
+      .find((h) => /^\/targets\/campaigns\/[0-9a-f-]{36}$/.test(h)) ?? null)
+    if (detail) {
+      await page.goto(detail)
+      expect((await subLabels(page)).filter((x) => x.cur === 'page').map((x) => x.href), 'chi tiết KPI: con KPI sáng').toEqual(['/targets/campaigns'])
+      expect(await doanhSo(page).getAttribute('aria-current')).toBeNull()
+    } else test.info().annotations.push({ type: 'nhánh', description: 'SM không có thẻ chiến dịch KPI — CHƯA KIỂM chi tiết KPI' })
+    // Điều hướng client bằng Sidebar rồi Back: về đúng route, đúng mục sáng.
+    const last = visited[visited.length - 1]
+    await page.goto('/targets')
+    await btn.click()
+    await page.locator(`${SUB} a[href="${last}"]`).click()
+    await expect(page).toHaveURL(new RegExp(`${last}(\\?|$)`))
+    await expect(page.locator(`${SUB} a[aria-current="page"]`)).toHaveAttribute('href', last)
+    await page.goBack()
+    await expect(page).toHaveURL(/\/targets$/)
+    await expect(doanhSo(page)).toHaveAttribute('aria-current', 'page')
+    expect(writes, 'SM chỉ đọc: không request ghi').toEqual([])
+  })
+
+  test('rail 64px: nhóm SM có tên truy cập; bấm ⇒ mở Sidebar + bung nhóm, không điều hướng', async ({ page, baseURL }) => {
+    test.setTimeout(90_000)
+    await page.setViewportSize({ width: 1280, height: 900 })
+    await page.context().addCookies([{ name: 'sidebar_collapsed', value: '1', url: baseURL! }])
+    await page.goto('/targets')
+    expect(await asideWidth(page)).toBe(64)
+    const btn = page.locator(GROUP_BTN).first()
+    await expect(btn).toHaveAttribute('aria-label', 'Chiến dịch')
+    await btn.click()
+    await expect.poll(() => asideWidth(page)).toBe(232)
+    await expect(page).toHaveURL(/\/targets$/)
+    await expect(btn).toHaveAttribute('aria-expanded', 'true')
+    await page.context().addCookies([{ name: 'sidebar_collapsed', value: '0', url: baseURL! }])
+  })
+
+  test('mobile 390: không Sidebar; ba trang module có hàng tab chung (Affiliate kèm "← Doanh số"); BottomNav giữ Doanh số', async ({ page }) => {
+    test.setTimeout(120_000)
+    await page.setViewportSize({ width: 390, height: 844 })
+    const writes = await trapWrites(page)
+    const tabLabels = ['Chiến dịch', 'Affiliate', ...(CMS_ON ? ['CMS sản phẩm'] : [])]
+    const active: Record<string, string> = { '/targets/campaigns': 'Chiến dịch', '/targets/campaigns/affiliate': 'Affiliate', '/targets/campaigns/cms': 'CMS sản phẩm' }
+    for (const route of want.map((w) => w.href)) {
+      await page.goto(route)
+      if (route.endsWith('/affiliate') && await notFound(page).isVisible({ timeout: 5_000 }).catch(() => false)) {
+        test.info().annotations.push({ type: 'nhánh', description: 'SM Affiliate 404 (không có nhà thuốc OS active) — CHƯA KIỂM tab mobile Affiliate' })
+        continue
+      }
+      await expect(page.locator('aside')).toBeHidden()
+      await expect(tabsRow(page), `${route} @390: hàng tab phải hiện`).toBeVisible()
+      expect(await tabsRow(page).locator('a').evaluateAll((as) => as.map((a) => (a.textContent ?? '').trim())), `${route}: nhãn tab`).toEqual(tabLabels)
+      await expect(tabsRow(page).locator('a[aria-current="page"]'), `${route}: tab đang chọn`).toHaveText(active[route])
+      if (route.endsWith('/affiliate')) await expect(page.locator('main').getByRole('link', { name: '← Doanh số' })).toHaveAttribute('href', '/targets')
+      const nav = page.locator('[data-bottom-nav]')
+      await expect(nav).toBeVisible()
+      await expect(nav.locator('a[href="/targets"]'), 'BottomNav giữ mục Doanh số').toHaveCount(1)
+      await expect(nav.locator('a[href^="/targets/campaigns"]'), 'BottomNav không nhận mục Chiến dịch').toHaveCount(0)
+    }
+    expect(writes, 'SM chỉ đọc: không request ghi').toEqual([])
   })
 })
 

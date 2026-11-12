@@ -47,7 +47,8 @@ export type AffiliateOverviewBody =
     }
 
 export function AffiliateOverviewView({ scope, filter, body, cmsEnabled = false, tabsDesktopReplaced = false }: {
-  /** UI-NAV U1: ẩn hàng tab chuyển module ở desktop — page server tính (campaignTabsDesktopReplaced); mặc định false (fixture / SM). */
+  /** UI-NAV U1: ẩn hàng tab chuyển module ở desktop — page server tính (campaignTabsDesktopReplaced: super / SM có đủ đích trong
+   *  Sidebar); mặc định false (fixture). */
   tabsDesktopReplaced?: boolean
   /** CMS P1-c: tab "CMS sản phẩm" (CMS_PROGRAM_ENABLED) — mặc định tắt. */
   cmsEnabled?: boolean
@@ -59,11 +60,14 @@ export function AffiliateOverviewView({ scope, filter, body, cmsEnabled = false,
   return (
     <div data-ui-v2="page" data-layout-width="fluid" data-affiliate-overview={body.kind} className="p-4 md:p-6 space-y-4 md:space-y-[18px]">
       <PageHeader title="Doanh số Affiliate — Circa Online" subtitle="Nguồn: Circa Online · Chỉ tính đơn DELIVERED." icon={Link2} />
-      {scope === 'os-fs'
-        ? <CampaignsTabs active="affiliate" affiliateEnabled cmsEnabled={cmsEnabled} desktopSidebarReplacement={tabsDesktopReplaced} />
-        : (scope === 'os-assigned' || scope === 'os-own')
-          ? <Link href="/targets" className="inline-flex min-h-[44px] items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground md:min-h-0">← Doanh số</Link>
-          : null}
+      {(scope === 'os-assigned' || scope === 'os-own') && (
+        <Link href="/targets" className="inline-flex min-h-[44px] items-center gap-1 text-[13px] text-muted-foreground hover:text-foreground md:min-h-0">← Doanh số</Link>
+      )}
+      {/* SM-CAMPAIGN-NAV-1: SM (os-assigned) dùng chung hàng tab module như super (os-fs) — chỉ là lối điều hướng; phạm vi dữ liệu
+          giữ os-assigned. QLCH (os-own) / admin phòng (os-all) không có hàng tab như cũ. */}
+      {(scope === 'os-fs' || scope === 'os-assigned') && (
+        <CampaignsTabs active="affiliate" affiliateEnabled cmsEnabled={cmsEnabled} desktopSidebarReplacement={tabsDesktopReplaced} />
+      )}
 
       {body.kind === 'mapping-error' ? (
         // r1 P1#2: mapping lỗi → FAIL-CLOSED — chỉ ErrorState, không số 0 giả.

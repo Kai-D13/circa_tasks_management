@@ -59,7 +59,8 @@ export default async function AffiliateOverviewPage({ searchParams }: {
     role: profile?.role,
   })
   if (scope === 'denied') notFound()
-  // UI-NAV U1: hàng tab (chỉ scope os-fs = super) ẩn ở desktop khi Sidebar của người xem có đủ đích; SM / admin phòng không có tab.
+  // UI-NAV U1 / SM-CAMPAIGN-NAV-1: hàng tab (scope os-fs = super, os-assigned = SM) ẩn ở desktop khi Sidebar của người xem có đủ
+  // đích; admin phòng / QLCH không có tab.
   const tabsReplaced = campaignTabsDesktopReplaced({ role: profile?.role, email: user.email }, { affiliate: true, cms: isCmsProgramEnabled() })
   const params = await searchParams
   const vnTodayISO = new Date(Date.now() + 7 * 3600_000).toISOString().slice(0, 10)
