@@ -91,13 +91,15 @@ async function main(args) {
   const { runCmsSalesSync, cmsSalesExitCode } = await jiti.import(path.join(ROOT, 'lib/cms/salesSync.ts'))
   const { cmsSalesSyncDeps } = await jiti.import(path.join(ROOT, 'lib/cms/server/salesSyncDeps.ts'))
   // Capture lớp nguồn (124) theo cờ CMS_SOURCE_CAPTURE_ENABLED (lib/cms/flags.ts) — lõi vẫn đòi run_open trả source_schema = 1.
-  const { cmsSourceCaptureFromEnv } = await jiti.import(path.join(ROOT, 'lib/cms/flags.ts'))
-  const r = await runCmsSalesSync(cmsSalesSyncDeps(process.env), programId, { dryRun: !confirm, source: 'operator', sourceCapture: cmsSourceCaptureFromEnv(process.env) })
+  const { cmsSourceCaptureFromEnv, cmsCalcFlagsFromEnv } = await jiti.import(path.join(ROOT, 'lib/cms/flags.ts'))
+  // Run contract (CMS-CALC-RET-2) theo cờ CMS_CALC_MODES_ENABLED / CMS_RETURNS_ENABLED — OFF ⇒ chương trình contract held.
+  const r = await runCmsSalesSync(cmsSalesSyncDeps(process.env), programId, { dryRun: !confirm, source: 'operator',
+    sourceCapture: cmsSourceCaptureFromEnv(process.env), calcFlags: cmsCalcFlagsFromEnv(process.env) })
   console.log(JSON.stringify({
     status: r.status, code: r.code, reasons: r.reasons, runId: r.runId, isTest: r.isTest, rowsRead: r.rowsRead,
     rowsRejected: r.rowsRejected, candidates: r.candidates, included: r.included, unassigned: r.unassigned,
     outOfScope: r.outOfScope, amountVnd: r.amountVnd, stagedRows: r.stagedRows, sourceRows: r.sourceRows, bytesProcessed: r.bytesProcessed,
-    resultHash: r.resultHash, elapsedMs: r.elapsedMs, cause: r.cause, cleanup: r.cleanup,
+    resultHash: r.resultHash, elapsedMs: r.elapsedMs, cause: r.cause, cleanup: r.cleanup, contract: r.contract ?? null,
     // S2: chẩn đoán dòng nguồn bị loại (ProductID × đơn vị × mã; không email / mã đơn) — chỉ khi held do dòng lỗi.
     ...(r.unitIssues ? { unitIssues: r.unitIssues } : {}),
   }))

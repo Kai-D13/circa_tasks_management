@@ -7,6 +7,7 @@ import { cmsProgramActions, cmsTodayVn } from '@/lib/cms/programStatus'
 import { ErrorState } from '@/components/ds/ErrorState'
 import { CmsWizardShell } from '@/components/cms/admin/CmsWizardShell'
 import { CmsImportFlow } from '@/components/cms/admin/CmsImportFlow'
+import { cmsBasisEnv, cmsProgramBasisFor } from '@/lib/cms/server/basisEnv'
 
 // CMS P1-c · A2 bước 2–4 (`?from=new`) và nạp lại / import bổ sung /targets/campaigns/cms/[id]/import (SPEC §4.6–§4.7):
 // nháp / đã kích hoạt chưa bắt đầu ⇒ nạp lại toàn bộ; đã bắt đầu ⇒ chỉ thêm SP mới; đã chốt ⇒ về A3. Chỉ super admin.
@@ -29,6 +30,8 @@ export default async function CmsImportPage({ params, searchParams }: {
   const mode = cmsProgramActions(p, cmsTodayVn(new Date()), res.data.products.length, true).importMode
   if (!mode) redirect(`/targets/campaigns/cms/${p.id}`)
   const fromNew = from === 'new' && p.status === 'draft'
+  const basisMap = await cmsProgramBasisFor(await cmsBasisEnv(), [p.id])
+  const basis = basisMap === undefined ? undefined : basisMap.get(p.id) ?? null
   return (
     <CmsWizardShell
       title={fromNew ? 'Tạo chương trình CMS' : mode === 'replace' ? 'Nạp danh mục' : 'Import bổ sung sản phẩm'}
@@ -37,7 +40,7 @@ export default async function CmsImportPage({ params, searchParams }: {
       backLabel="Chi tiết chương trình"
       kind="import"
     >
-      <CmsImportFlow program={{ id: p.id, name: p.name }} mode={mode} fromNew={fromNew} v2={isCmsImportV2Enabled()} />
+      <CmsImportFlow program={{ id: p.id, name: p.name }} mode={mode} fromNew={fromNew} v2={isCmsImportV2Enabled()} basis={basis} />
     </CmsWizardShell>
   )
 }

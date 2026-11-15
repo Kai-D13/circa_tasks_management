@@ -6,11 +6,12 @@ import { CmsProgramDetailView } from '@/components/cms/admin/CmsProgramDetailVie
 import { CmsDetailSkeleton } from '@/components/cms/CmsRouteSkeletons'
 import { CMS_FX_TODAY, cmsFxDetail } from '@/lib/cms/fixtures'
 import { CMS_FX_STORE_NAMES, cmsFxDetailOf, cmsFxEligibleStaff, cmsFxProgram } from '@/lib/cms/fixtureScenario'
-import { cmsFxAdminResults, cmsFxCorruptResults, cmsFxParseScenario } from '@/lib/cms/fixturesResults'
+import { cmsFxAdminResults, cmsFxCorruptResults, cmsFxParseScenario, withBasisUi } from '@/lib/cms/fixturesResults'
 import { cmsFxIsPayoutScenario, cmsFxLockPreview, cmsFxP3Program, cmsFxParseP3, cmsFxPayout } from '@/lib/cms/fixturesPayout'
 import { cmsDisplayStatus } from '@/lib/cms/programStatus'
 import { cmsFixtureNav } from '@/lib/cms/fixtureNav'
 import type { CmsResultsLoad } from '@/lib/cms/resultUi'
+import { CMS_FX_REPORT_PROGRAM, cmsFxContract, cmsFxContractBasis } from '@/lib/cms/fixturesContract'
 
 // Dev-only fixture A3 — ĐÚNG CmsProgramDetailView của route thật, dữ liệu giả (kịch bản lib/cms/fixtureScenario — số do engine
 // tính). Kích hoạt / tải file đi qua useFixtureActionBlocked ⇒ 0 request ghi / export. Cổng: UI_CATALOG=1 + super admin.
@@ -21,6 +22,10 @@ import type { CmsResultsLoad } from '@/lib/cms/resultUi'
 // thích") + &view=products|staff|runs &page= — số liệu engine; SM không có nhóm Chưa gán. Không p2 ⇒ P1 nguyên trạng.
 // P3a: &p3=ready|ack|blocked|error|qa-readonly ⇒ PG8 (QA hết kỳ) + khối "Chốt kỳ"; &p3=pending ⇒ PG4 (chương trình thật chờ chốt);
 //   &p3=locked|locked-sm|locked-error ⇒ PG9 (QA đã chốt) + "Số đã chốt". Có p2 + chương trình đã chốt ⇒ cũng hiện "Số đã chốt".
+// CMS-CALC-RET-2 P5: &program=<PG13–15> (run contract — badge cách tính / chính sách trả, dòng "Cách tính", tổng trả hàng; không p2 ⇒
+//   running). &bu=1 giả lập cờ mode / trả BẬT (run legacy cũng hiện dòng "Cách tính").
+//   &ret=1 giả lập CMS_RETURNS_ENABLED (route thật: cmsReturnsPageEnabled) ⇒ nút "Trả hàng" (super) ⇒ /ui-catalog/cms-v2/returns
+//   cho PG13–15 và PG9 (đã chốt — báo cáo sau chốt). Không ret ⇒ như bản phát hành CMS bán hàng (PM 14/11): KHÔNG nút Trả hàng.
 export default async function CmsDetailFixture({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   if (process.env.UI_CATALOG !== '1') notFound()
   const { user, profile } = await getSessionProfile()
@@ -32,19 +37,20 @@ export default async function CmsDetailFixture({ searchParams }: { searchParams:
   const p2Raw = one('p2')
   const p3 = cmsFxParseP3(one('p3'))
   const corrupt = p2Raw === 'corrupt'
-  const scenario = p3 ? 'running' : corrupt ? 'running' : cmsFxParseScenario(p2Raw)
+  const contractFx = cmsFxContract(one('program'))
+  const scenario = p3 ? 'running' : corrupt ? 'running' : cmsFxParseScenario(p2Raw) ?? (contractFx ? 'running' : null)
   const sm = fx === 'sm' || one('as') === 'sm' || p3 === 'locked-sm'
   const viewer = sm ? 'sm' : 'super'
   const programParam = p3 ? cmsFxP3Program(p3) : one('program')
-  const fxProgram = programParam ? cmsFxProgram(programParam) : null
+  const fxProgram = programParam ? cmsFxProgram(programParam) ?? cmsFxContract(programParam)?.fx ?? null : null
   if (programParam && !fxProgram) notFound()
   const detail = fxProgram ? cmsFxDetailOf(fxProgram, { sm })
     : cmsFxDetail(scenario ? 'running' : fx === 'draft-empty' || fx === 'retro' || fx === 'upcoming' || fx === 'running' ? fx : fx === 'sm' ? 'running' : 'draft')
   const prog = detail.program
   const display = cmsDisplayStatus(prog, CMS_FX_TODAY)
   const started = prog.status !== 'draft' && prog.startDate <= CMS_FX_TODAY
-  const results: CmsResultsLoad | undefined = !scenario || !started ? undefined
-    : corrupt ? cmsFxCorruptResults() : cmsFxAdminResults(scenario, viewer, prog.id)
+  const results: CmsResultsLoad | undefined = withBasisUi(!scenario || !started ? undefined
+    : corrupt ? cmsFxCorruptResults() : cmsFxAdminResults(scenario, viewer, prog.id), one('bu') === '1')
   const v = one('view') === 'staff' ? 'staff' : one('view') === 'runs' || fx === 'runs' ? 'runs' : 'products'
   const lock = p3 && !cmsFxIsPayoutScenario(p3)
     ? { preview: cmsFxLockPreview(p3, prog.id), error: p3 === 'error' ? 'QUERY_FAILED' : null, qaReadonly: p3 === 'qa-readonly' }
@@ -60,7 +66,9 @@ export default async function CmsDetailFixture({ searchParams }: { searchParams:
         {fx === 'loading' ? <CmsDetailSkeleton /> : (
           <CmsProgramDetailView detail={detail} today={CMS_FX_TODAY} canManage={!sm} view={v} results={results}
             eligibleStaffIds={results ? cmsFxEligibleStaff(viewer, detail.storeIds) : null} storeNames={CMS_FX_STORE_NAMES} staffPage={page > 0 ? page : 1}
-            lock={lock} payout={payout} nav={nav} />
+            lock={lock} payout={payout} nav={nav}
+            basis={contractFx ? cmsFxContractBasis(contractFx.fx.row.id) : undefined}
+            returnsHref={!sm && one('ret') === '1' && (contractFx || prog.id === CMS_FX_REPORT_PROGRAM) ? `/targets/campaigns/cms/${prog.id}/returns` : null} />
         )}
       </div>
     </KpiFixtureBoundary>

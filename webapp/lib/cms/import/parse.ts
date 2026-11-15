@@ -8,6 +8,7 @@
 
 import * as XLSX from 'xlsx'
 import { cmsZipGuard } from './zipGuard'
+import { cmsIsBasisHeader } from '../calc/basisUi'
 
 export const CMS_IMPORT_SHEET = 'IMPORT_CMS'
 export const CMS_IMPORT_MAX_ROWS = 2000
@@ -36,11 +37,11 @@ export interface CmsImportRawRow {
   info?: Record<string, string | number | null>
 }
 
-export type CmsParseError = 'NOT_XLSX' | 'FILE_TOO_COMPLEX' | 'NO_SHEET' | 'MISSING_COLUMNS' | 'TOO_MANY_ROWS' | 'NO_DATA'
+export type CmsParseError = 'NOT_XLSX' | 'FILE_TOO_COMPLEX' | 'NO_SHEET' | 'MISSING_COLUMNS' | 'TOO_MANY_ROWS' | 'NO_DATA' | 'BASIS_COLUMN'
 
 export type CmsParseResult =
   | { ok: true; headerRow: number; rows: CmsImportRawRow[]; ignoredFromRow: number | null }
-  | { ok: false; error: CmsParseError; missing?: string[] }
+  | { ok: false; error: CmsParseError; missing?: string[]; column?: string }
 
 const canonHeader = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase()
 const CANON_TO_COL = new Map(CMS_IMPORT_COLUMNS.map((c) => [canonHeader(c), c]))
@@ -84,6 +85,15 @@ export function readCell(cell: XLSX.CellObject | undefined): { cell: CmsCell; ra
   }
 }
 
+/** Ô tiêu đề là cột "Cách tính" (dòng header đã tìm) ⇒ trả nguyên văn (cắt 60 ký tự) để báo lỗi; không có ⇒ null. */
+export function cmsFindBasisHeader(ws: XLSX.WorkSheet, headerRow: number, c0: number, c1: number): string | null {
+  for (let c = c0; c <= c1; c++) {
+    const cell = cellOf(ws, headerRow, c)
+    if (cell && cell.t === 's' && cmsIsBasisHeader(String(cell.v ?? ''))) return String(cell.v).slice(0, 60)
+  }
+  return null
+}
+
 export function parseCmsImportXlsx(bytes: Uint8Array): CmsParseResult {
   // .xlsx là ZIP (PK\x03\x04). Thư viện xlsx còn đọc được CSV / HTML / .xls ⇒ chặn trước, không đoán định dạng.
   if (bytes.byteLength < 4 || bytes[0] !== 0x50 || bytes[1] !== 0x4b || bytes[2] !== 0x03 || bytes[3] !== 0x04) {
@@ -123,6 +133,9 @@ export function parseCmsImportXlsx(bytes: Uint8Array): CmsParseResult {
     if (found.has('ProductID')) { headerRow = r; for (const [k, v] of found) colIndex.set(k, v) }
   }
   if (headerRow < 0) return { ok: false, error: 'MISSING_COLUMNS', missing: [...CMS_IMPORT_COLUMNS] }
+  // CMS-CALC-RET-2: cột "Cách tính" tự thêm ⇒ chặn cả file (cách tính chọn cho cả chương trình ở bước Thông tin — spec §8.5).
+  const basisCol = cmsFindBasisHeader(ws, headerRow, range.s.c, range.e.c)
+  if (basisCol !== null) return { ok: false, error: 'BASIS_COLUMN', column: basisCol }
   const missing = CMS_IMPORT_COLUMNS.filter((c) => !colIndex.has(c))
   if (missing.length) return { ok: false, error: 'MISSING_COLUMNS', missing }
 

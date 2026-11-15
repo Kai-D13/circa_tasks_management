@@ -5,4 +5,7 @@ import type { CmsBqRunner } from './bigquery'
 // Runner THẬT cho adapter CMS: SA của app (BQ_SERVICE_ACCOUNT_KEY, scope
 // bigquery.readonly), đọc đủ mọi trang qua bqQueryAll. Chỉ ĐỌC.
 export const cmsBqRunner: CmsBqRunner = (sql, params, opts) =>
-  runBigQueryPaged(sql, params, { maxRows: opts.maxRows, deadlineMs: opts.deadlineMs })
+  runBigQueryPaged(sql, params, {
+    maxRows: opts.maxRows, deadlineMs: opts.deadlineMs,
+    ...(opts.maximumBytesBilled !== undefined ? { maximumBytesBilled: opts.maximumBytesBilled } : {}),
+  })

@@ -51,6 +51,8 @@ export interface CmsPreviewResult {
   groupsRejected: CmsPreviewGroupRejected[]
   /** CMS đơn giản S1: loại file của lần kiểm (thiếu ⇒ tiers). */
   format?: 'tiers' | 'simple'
+  /** CMS-CALC-RET-2 P5.1: cách tính của chương trình lúc kiểm (null / thiếu = DB chưa có khái niệm). */
+  quantityBasis?: 'pos_base' | 'cms_unit' | null
   /** File mức cố định có cột bổ sung K / tư vấn không. */
   supplement?: { baseQuantity: boolean; advice: boolean }
   /** S2: kết quả kiểm K (chỉ khi cờ v2). */
@@ -71,7 +73,7 @@ export interface CmsPreviewKResult {
 }
 export interface CmsPreviewKCheck { asOf: string | null; available: boolean; reason: string | null; products: CmsPreviewKResult[] }
 
-export interface CmsRouteError { ok: false; code: string; message: string | null; missing?: string[]; duplicate?: string[] }
+export interface CmsRouteError { ok: false; code: string; message: string | null; missing?: string[]; duplicate?: string[]; column?: string }
 
 export const CMS_K_VIEW: Record<CmsKStatusView, { label: string; tone: StatusTone }> = {
   MATCH: { label: 'KHỚP', tone: 'success' },

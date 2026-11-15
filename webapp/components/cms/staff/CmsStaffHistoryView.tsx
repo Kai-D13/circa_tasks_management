@@ -11,7 +11,7 @@ import { cmsDateTime, cmsVnd } from '@/lib/cms/display'
 import { CMS_STATUS_LABEL, CMS_STATUS_TONE, cmsDisplayStatus } from '@/lib/cms/programStatus'
 import { cmsStaffHref } from '@/lib/cms/staffView'
 import {
-  CMS_HISTORY_MAX_N, cmsHistoryMore, cmsHistoryUrl, cmsLineView, cmsProductTotals, cmsStaffCard, cmsStaffSummary, cmsStoreSummary,
+  CMS_HISTORY_MAX_N, cmsHistoryMore, cmsHistoryUrl, cmsLineOrderText, cmsLineView, cmsProductTotals, cmsStaffCard, cmsStaffSummary, cmsStoreSummary,
   type CmsHistoryParams, type CmsResultsLoad,
 } from '@/lib/cms/resultUi'
 import { CMS_NO_RUN_TEXT, cmsNoRunText, type CmsResultLineDto } from '@/lib/cms/resultView'
@@ -168,10 +168,10 @@ export function CmsStaffHistoryView({ programs, selected, products, results, lin
                     const unit = p?.unitCms ?? ''
                     const v = cmsLineView(l, p?.baseQuantityCms ?? '1', unit, returnsApproved)
                     return (
-                      <li key={l.seq} data-cms-line={l.status} className="flex items-start justify-between gap-3 rounded-v2-panel border bg-card p-3 text-[13px]">
+                      <li key={l.seq} data-cms-line={l.status} data-cms-line-kind={l.kind} className="flex items-start justify-between gap-3 rounded-v2-panel border bg-card p-3 text-[13px]">
                         <span className="min-w-0 space-y-0.5">
                           <span className="block font-medium leading-snug break-words">{p?.nameSnapshot ?? l.productId} × <span className="tabular-nums">{v.qtyText}</span> {unit}</span>
-                          <span className="block text-[12px] text-muted-foreground tabular-nums">Đơn #{l.orderCode} · {cmsDateTime(l.completedAt)}</span>
+                          <span className="block text-[12px] text-muted-foreground tabular-nums">{cmsLineOrderText(l)} · {cmsDateTime(l.completedAt)}</span>
                           {manager && <span className="block text-[12px] text-muted-foreground">{userNames.get(l.userId) ?? '—'}</span>}
                           {v.note && <span className="block text-[12px] text-muted-foreground">{v.note}</span>}
                         </span>

@@ -10,7 +10,9 @@
 //    sửa mapping) chỉ super — RPC excluded cũng chỉ trả cho super.
 import * as XLSX from 'xlsx'
 import { formatCmsDecimal, parseCmsDecimal } from './decimal'
-import { CMS_LINE_LABEL, CMS_SALES_ONLY_NOTE, cmsProductSalesStats, cmsQtyText } from './resultUi'
+import { CMS_LINE_LABEL, CMS_QUANTITY_CLASS_LABEL, cmsLockedScopeNote, cmsNetSummary, cmsProductSalesStats, cmsQtyText, cmsResultScopeNote } from './resultUi'
+import { CMS_QUANTITY_BASIS_LABEL } from './calc/policy'
+import { CMS_RETURNS_POLICY_LABEL } from './calc/basisUi'
 import { cmsRunHasLegacyCap, type CmsResultHeaderDto, type CmsResultLineDto, type CmsResultRowsDto } from './resultView'
 
 export const CMS_EXPORT_MAX_LINES = 50_000
@@ -26,6 +28,8 @@ export interface CmsExcludedLineDto {
   seq: number; orderLineId: string; orderCode: string; productId: string; programProductId: string | null
   disposition: string; unassignedReason: string | null; sellerEmail: string | null; userId: string | null; storeId: string | null
   posCode: string | null; completedAt: string; baseQuantity: string; gmvAmount: string
+  /** P5.4 (reader v2): lớp lượng + B đủ của dòng; SL / ĐVT gốc. Reader 122 không có ⇒ undefined. */
+  quantityClass?: string | null; eligibleBase?: string | null; quantityRaw?: string | null; uomRaw?: string | null
 }
 export interface CmsExcludedPage { runId: string; rows: CmsExcludedLineDto[]; nextAfterSeq: number | null }
 
@@ -51,6 +55,9 @@ export function parseCmsExcludedPage(raw: unknown): CmsExcludedPage {
         programProductId: strN(x, 'program_product_id', UUID_RE), disposition: str(x, 'disposition'), unassignedReason: strN(x, 'unassigned_reason'),
         sellerEmail: strN(x, 'seller_email'), userId: strN(x, 'user_id', UUID_RE), storeId: strN(x, 'store_id', UUID_RE), posCode: strN(x, 'pos_code'),
         completedAt: str(x, 'completed_at', TS_RE), baseQuantity: str(x, 'base_quantity', DEC_RE), gmvAmount: str(x, 'gmv_amount', DEC_RE),
+        ...('quantity_class' in x ? {
+          quantityClass: strN(x, 'quantity_class'), eligibleBase: strN(x, 'eligible_base', DEC_RE), quantityRaw: strN(x, 'quantity_raw'), uomRaw: strN(x, 'uom_raw'),
+        } : {}),
       }
     }),
   }
@@ -86,11 +93,13 @@ const units = (v: string) => { const r = parseCmsDecimal(v, { allowNegative: tru
 // ── Workbook ────────────────────────────────────────────────────────────────
 export interface CmsExportProduct { id: string; productId: string; nameSnapshot: string; unitCms: string; baseQuantityCms: string; gmvBasis: string }
 export interface CmsExportInput {
-  program: { id: string; name: string; startDate: string; endDate: string; configVersion: number }
+  program: { id: string; name: string; startDate: string; endDate: string; configVersion: number; status?: string }
   header: CmsResultHeaderDto
   rows: CmsResultRowsDto
   lines: CmsResultLineDto[]
   excluded: CmsExcludedLineDto[] | null
+  /** P5.4: dòng INCLUDED không vào lượng (run contract, super) — reader v2 kind 'quantity'. */
+  excludedQty?: CmsExcludedLineDto[] | null
   products: CmsExportProduct[]
   storeNames: Map<string, string>
   exportedAt: Date
@@ -106,8 +115,21 @@ const DISPOSITION_LABEL: Record<string, string> = { UNASSIGNED: 'Chưa gán dư�
 export function buildCmsResultWorkbook(i: CmsExportInput): CmsExportBuild {
   const run = i.header.run
   if (!run || i.rows.runId !== run.id) return { ok: false, error: 'RUN_MISMATCH' }
-  const expectLines = i.rows.results.reduce((s, r) => s + r.lineCount, 0)
+  // P5.4: hợp đồng GHIM từ run; header và rows phải cùng hợp đồng (khác ⇒ không trộn hai cách diễn giải).
+  const c = run.contract
+  if (i.rows.contract && JSON.stringify(i.rows.contract) !== JSON.stringify(c)) return { ok: false, error: 'RUN_MISMATCH' }
+  const contractRun = !c.legacy
+  // PM RC r2 SALES-RC-03: bố cục theo CHÍNH SÁCH TRẢ GHIM của run (không theo cờ hiện tại, không theo `!legacy` hay object net):
+  //   · legacy — như cũ · contract net_returns_v1 — cột ròng / trả / sự kiện bán + trả như P5.4
+  //   · contract sales_only_v1 (DB: chỉ cms_unit) — "SL bán / GMV", KHÔNG cột / dòng trả; giữ K + lượng đủ điều kiện + lớp lượng.
+  const netRun = contractRun && c.returnsPolicy === 'net_returns_v1'
+  const salesContract = contractRun && !netRun
+  // Run contract: line_count = số sự kiện BÁN, return_count = số DÒNG trả (sự kiện theo item — không phải số chứng từ; seal 130
+  // SEAL_RESULT_SUMS) ⇒ đủ dòng = bán + trả.
+  const expectLines = i.rows.results.reduce((s, r) => s + r.lineCount + (contractRun ? r.net?.returnCount ?? 0 : 0), 0)
   if (expectLines !== i.lines.length) return { ok: false, error: 'COUNT_MISMATCH' }
+  // Run sales-only không có sự kiện trả (seal 130) — có ⇒ dữ liệu lệch hợp đồng, không xuất file.
+  if (salesContract && i.lines.some((l) => l.kind === 'RETURN')) return { ok: false, error: 'COUNT_MISMATCH' }
   const sumRows = i.rows.results.reduce((s, r) => s + BigInt(r.amountVnd), BigInt(0))
   const sumLines = i.lines.reduce((s, l) => s + BigInt(l.amountVnd), BigInt(0))
   if (sumRows !== sumLines) return { ok: false, error: 'TOTAL_MISMATCH' }
@@ -120,6 +142,11 @@ export function buildCmsResultWorkbook(i: CmsExportInput): CmsExportBuild {
   const add = (name: string, aoa: Cell[][]) => XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), name)
 
   const legacyCap = cmsRunHasLegacyCap(i.rows.results, i.lines)
+  // PM P5-04: nhãn theo TRẠNG THÁI chương trình, chung legacy / contract (đã chốt ⇒ "Số đã chốt", không còn "Tạm tính"); không đổi số.
+  const locked = i.program.status === 'locked'
+  const kindNote = locked ? 'Số đã chốt — phiên đóng băng' : 'Tạm tính — chưa chốt kỳ'
+  const amtHead = locked ? 'CMS đã chốt (VND)' : 'CMS tạm tính (VND)'
+  const nSale = i.lines.filter((l) => l.kind === 'SALE').length
   add('Thong tin', [
     ['Mục', 'Giá trị'],
     ['Chương trình', i.program.name],
@@ -128,36 +155,68 @@ export function buildCmsResultWorkbook(i: CmsExportInput): CmsExportBuild {
     ['run_id (phiên kết quả)', run.id],
     ['Công bố lúc (VN)', vnTime(run.publishedAt)],
     ['Dữ liệu bán đến (VN)', vnTime(run.sourceMaxUpdatedAt)],
-    ['Phạm vi số liệu', CMS_SALES_ONLY_NOTE],
+    ['Phạm vi số liệu', locked ? cmsLockedScopeNote(c) : cmsResultScopeNote(c)],
+    ...(contractRun ? [
+      ['Cách tính lượng (ghim theo phiên)', CMS_QUANTITY_BASIS_LABEL[c.quantityBasis]],
+      ['Chính sách trả hàng (ghim theo phiên)', CMS_RETURNS_POLICY_LABEL[c.returnsPolicy]],
+      ...(c.returnsAsOf ? [['Dữ liệu trả đến (VN)', vnTime(c.returnsAsOf)]] : []),
+      ['Hợp đồng tính', `${c.calcContractVersion} · ${c.quantityPolicyVersion}${c.unitKeyVersion ? ` · ${c.unitKeyVersion}` : ''}`],
+      ['Loại số liệu', locked && c.returnsPolicy === 'net_returns_v1' ? `${kindNote} (phiếu trả sau chốt xem ở báo cáo sau chốt, không sửa số này)` : kindNote],
+      ['Định nghĩa lượng', c.quantityBasis === 'cms_unit'
+        ? `SL tính CMS = floor(lượng cơ sở ĐỦ ĐIỀU KIỆN${netRun ? ' ròng' : ''} / K). Chỉ dòng bán đúng đơn vị CMS, số lượng nguyên được tính lượng; dòng khác đơn vị / số lẻ vẫn vào GMV.`
+        : 'SL tính CMS = floor(lượng cơ sở ròng cộng dồn / K).'],
+    ] as Cell[][] : []),
     ['config_version của phiên', run.configVersion],
     ['config_version hiện tại', i.header.configVersion],
     ['Phạm vi người xuất', i.scope === 'super' ? 'Toàn chương trình (super)' : 'Toàn chương trình trong phạm vi của bạn — nhà thuốc được phân công (SM)'],
     ['Định nghĩa', 'Dược sĩ có bán = lượng cơ sở thuần > 0 (kể cả chưa đủ 1 đơn vị CMS); SL tính CMS = số đơn vị CMS nguyên.'],
     ['Xuất lúc (VN)', vnTime(i.exportedAt.toISOString())],
-    ['Tổng CMS tạm tính (VND)', cmsIntCell(sumRows)],
-    ['Số dòng đơn được tính', i.lines.length],
+    [`Tổng ${amtHead}`, cmsIntCell(sumRows)],
+    // Run net: chi tiết là SỰ KIỆN (bán + trả, gồm dòng không tính lượng). Run sales-only: chỉ dòng BÁN ghi nhận (gồm dòng không tính
+    // lượng) — không "bán + trả", không hàng trả 0. Legacy giữ nhãn cũ.
+    ...(netRun
+      ? [['Số sự kiện ghi nhận (dòng bán + dòng trả, gồm dòng không tính lượng)', i.lines.length], ['Trong đó dòng bán', nSale], ['Trong đó dòng trả hàng', i.lines.length - nSale]]
+      : salesContract
+        ? [['Số dòng bán ghi nhận (gồm dòng không tính lượng)', i.lines.length]]
+        : [['Số dòng đơn được tính', i.lines.length]]) as Cell[][],
     ['Ghi chú', legacyCap
-      ? 'Tạm tính — chưa chốt kỳ. Mỗi dược sĩ tính gate / bậc riêng; tổng không áp lại bậc. Phiên này theo cấu hình CŨ có trần số lượng (trước CMS-Q-220) — giữ đúng snapshot.'
-      : 'Tạm tính — chưa chốt kỳ. Mỗi dược sĩ tính gate / bậc riêng; tổng không áp lại bậc. Bậc cuối không giới hạn số lượng.'],
+      ? `${kindNote}. Mỗi dược sĩ tính gate / bậc riêng; tổng không áp lại bậc. Phiên này theo cấu hình CŨ có trần số lượng (trước CMS-Q-220) — giữ đúng snapshot.`
+      : `${kindNote}. Mỗi dược sĩ tính gate / bậc riêng; tổng không áp lại bậc. Bậc cuối không giới hạn số lượng.`],
   ])
 
   // Cùng helper với A3 / QLCH / D3 (PM P1-I3-1): dược sĩ có bán = lượng cơ sở thuần > 0 (nửa đơn vị CMS vẫn tính).
   const byPp = new Map([...cmsProductSalesStats(i.rows.results)].map(([k, x]) => [k, { base: x.baseUnits, q: x.cmsQuantity, gmv: x.gmvUnits, sold: x.staffWithSales, achieved: x.staffAchieved, amount: x.amountVnd }]))
-  const prodSheet: Cell[][] = [['ProductID', 'Tên sản phẩm', 'Loại điều kiện', 'Đơn vị CMS', 'SL bán (đv CMS)', 'SL tính CMS', 'GMV (VND)', 'Dược sĩ có bán', 'Dược sĩ đạt', 'CMS tạm tính (VND)']]
+  // P5.4: run NET thêm cột CUỐI (cột cũ giữ vị trí): K, đủ điều kiện, gộp / trả / số dòng trả. SL bán / GMV ở cột cũ = RÒNG.
+  // Run sales-only (RC r2 SALES-RC-03): cột cũ là "SL bán / GMV" (chưa trừ trả), cột cuối chỉ K + đủ điều kiện.
+  // "Dòng trả hàng" = số sự kiện trả theo item (PM P5-04) — một phiếu nhiều item là nhiều dòng; không gọi là số phiếu.
+  const NET_PROD_COLS = ['K (cơ sở / 1 đv CMS)', 'SL đủ điều kiện (đv CMS)', 'SL bán gộp (đv CMS)', 'SL trả (đv CMS)', 'GMV bán gộp (VND)', 'GMV trả (VND)', 'Dòng trả hàng']
+  // Sales-only: chỉ K + lượng đủ điều kiện (căn cứ Q tính nguyên); "gộp" / trả trùng hoặc bằng 0 ⇒ không xuất.
+  const SALES_PROD_COLS = ['K (cơ sở / 1 đv CMS)', 'SL đủ điều kiện (đv CMS)']
+  const extraProd = netRun ? NET_PROD_COLS : salesContract ? SALES_PROD_COLS : []
+  const prodSheet: Cell[][] = [['ProductID', 'Tên sản phẩm', 'Loại điều kiện', 'Đơn vị CMS', netRun ? 'SL bán ròng (đv CMS)' : 'SL bán (đv CMS)', 'SL tính CMS', netRun ? 'GMV ròng (VND)' : 'GMV (VND)', 'Dược sĩ có bán', 'Dược sĩ đạt', amtHead,
+    ...extraProd]]
   for (const p of i.products) {
     const a = byPp.get(p.id)
+    const k = units(p.baseQuantityCms)
+    const pr = i.rows.results.filter((r) => r.programProductId === p.id)
+    const ns = netRun ? cmsNetSummary(pr) : null
+    const elig = pr.reduce((s, r) => s + units(r.eligibleBase), BigInt(0))
     prodSheet.push([p.productId, p.nameSnapshot, GATE_LABEL[p.gmvBasis] ?? p.gmvBasis, p.unitCms,
-      a ? cmsQtyText(a.base, units(p.baseQuantityCms)) : '0', a ? cmsIntCell(a.q) : 0, a ? cmsDecCell(formatCmsDecimal(a.gmv)) : 0,
-      a?.sold ?? 0, a?.achieved ?? 0, a ? cmsIntCell(a.amount) : 0])
+      a ? cmsQtyText(a.base, k) : '0', a ? cmsIntCell(a.q) : 0, a ? cmsDecCell(formatCmsDecimal(a.gmv)) : 0,
+      a?.sold ?? 0, a?.achieved ?? 0, a ? cmsIntCell(a.amount) : 0,
+      ...(netRun ? [cmsDecCell(p.baseQuantityCms), cmsQtyText(elig, k), cmsQtyText(ns?.saleBase ?? BigInt(0), k), cmsQtyText(ns?.returnBase ?? BigInt(0), k),
+        cmsDecCell(formatCmsDecimal(ns?.saleGmv ?? BigInt(0))), cmsDecCell(formatCmsDecimal(ns?.returnGmv ?? BigInt(0))), ns?.returnCount ?? 0]
+        : salesContract ? [cmsDecCell(p.baseQuantityCms), cmsQtyText(elig, k)] : [])])
   }
-  prodSheet.push(['Tổng', '', '', '', '', '', '', '', '', cmsIntCell(sumRows)])
+  prodSheet.push(['Tổng', '', '', '', '', '', '', '', '', cmsIntCell(sumRows), ...extraProd.map(() => '')])
   add('Theo san pham', prodSheet)
 
   // CMS-Q-220: run mới không có trần ⇒ KHÔNG quảng bá cột "SL hưởng (sau trần)" / "Trần" / "Đạt trần". Chỉ phiên LỊCH SỬ có trần
   // (snapshot cũ đã đóng băng — legacyCap) mới xuất 3 cột đó để thể hiện đúng cấu hình của run, không tô lại thành luật mới.
-  const staffSheet: Cell[][] = [['Dược sĩ', 'user_id', 'Nhà thuốc hiện tại', 'Nhà thuốc lúc bán', 'ProductID', 'Tên sản phẩm', 'SL bán (đv CMS)', 'SL tính CMS',
+  const staffSheet: Cell[][] = [['Dược sĩ', 'user_id', 'Nhà thuốc hiện tại', 'Nhà thuốc lúc bán', 'ProductID', 'Tên sản phẩm', netRun ? 'SL bán ròng (đv CMS)' : 'SL bán (đv CMS)', 'SL tính CMS',
     ...(legacyCap ? ['SL hưởng (sau trần)', 'Trần', 'Đạt trần'] : []),
-    'GMV (VND)', 'Target (VND)', 'Đạt target', 'Đạt từ (VN)', 'CMS khi đạt (VND)', 'CMS tạm tính (VND)', 'Số dòng']]
+    netRun ? 'GMV ròng (VND)' : 'GMV (VND)', 'Target (VND)', 'Đạt target', 'Đạt từ (VN)', 'CMS khi đạt (VND)', amtHead, contractRun ? 'Số dòng bán' : 'Số dòng',
+    ...(netRun ? ['SL đủ điều kiện (đv CMS)', 'SL bán gộp (đv CMS)', 'SL trả (đv CMS)', 'GMV trả (VND)', 'Dòng trả hàng'] : salesContract ? ['SL đủ điều kiện (đv CMS)'] : [])]]
   const sorted = [...i.rows.results].sort((a, b) => (names.get(a.userId)?.fullName ?? '').localeCompare(names.get(b.userId)?.fullName ?? '', 'vi')
     || a.userId.localeCompare(b.userId) || (prod.get(a.programProductId)?.productId ?? '').localeCompare(prod.get(b.programProductId)?.productId ?? ''))
   for (const r of sorted) {
@@ -166,17 +225,28 @@ export function buildCmsResultWorkbook(i: CmsExportInput): CmsExportBuild {
       cmsQtyText(units(r.baseQuantity), units(r.perUnit)), cmsIntCell(r.cmsQuantity),
       ...(legacyCap ? [cmsIntCell(r.rewardedQuantity), cmsIntCell(r.capQuantity), r.atCap ? 'Có' : 'Không'] : []),
       cmsDecCell(r.gmvAmount), cmsIntCell(r.targetGmv), r.gmvBasis === 'none' ? '' : r.gateMet ? 'Đạt' : 'Chưa đạt', vnTime(r.gateMetAt),
-      cmsIntCell(r.potentialAmount), cmsIntCell(r.amountVnd), r.lineCount])
+      cmsIntCell(r.potentialAmount), cmsIntCell(r.amountVnd), r.lineCount,
+      ...(netRun ? [cmsQtyText(units(r.eligibleBase), units(r.perUnit)), cmsQtyText(units(r.net?.saleBase ?? '0'), units(r.perUnit)),
+        cmsQtyText(units(r.net?.returnBase ?? '0'), units(r.perUnit)), cmsDecCell(r.net?.returnGmv ?? '0'), r.net?.returnCount ?? 0]
+        : salesContract ? [cmsQtyText(units(r.eligibleBase), units(r.perUnit))] : [])])
   }
   add('Theo duoc si', staffSheet)
 
-  const lineSheet: Cell[][] = [['seq', 'Mã đơn', 'order_line_id', 'ProductID', 'Tên sản phẩm', 'Dược sĩ', 'Nhà thuốc lúc bán', 'POS', 'Hoàn tất (VN)',
-    'SL gốc', 'ĐVT gốc', 'SL cơ sở', 'GMV (VND)', 'Lũy kế cơ sở trước', 'Lũy kế cơ sở sau', 'SL CMS trước', 'SL CMS sau', 'Trạng thái', 'CMS dòng (VND)']]
+  // P5.4: run NET — mỗi dòng là SỰ KIỆN (bán / phiếu trả); lũy kế là lượng cơ sở ĐỦ ĐIỀU KIỆN; dòng trả mang số âm (CMS tính lại,
+  // không phải tiền hoàn khách); thêm cột cuối Loại / Lớp lượng / Mã phiếu trả / Thay đổi đủ điều kiện.
+  // Sales-only: mỗi dòng là một dòng BÁN ⇒ nhãn như legacy (Mã đơn / Hoàn tất / SL cơ sở / GMV / CMS dòng), giữ lũy kế ĐỦ ĐK + lớp lượng
+  // + lượng cơ sở đủ ĐK của dòng (căn cứ tính nguyên); KHÔNG cột Loại / Mã phiếu trả (luôn "Bán" / rỗng).
+  const lineSheet: Cell[][] = [[netRun ? 'seq sự kiện' : 'seq', netRun ? 'Mã đơn (gốc)' : 'Mã đơn', 'order_line_id', 'ProductID', 'Tên sản phẩm', 'Dược sĩ', 'Nhà thuốc lúc bán', 'POS', netRun ? 'Thời điểm (VN)' : 'Hoàn tất (VN)',
+    'SL gốc', 'ĐVT gốc', netRun ? 'Thay đổi cơ sở' : 'SL cơ sở', netRun ? 'Thay đổi GMV (VND)' : 'GMV (VND)',
+    contractRun ? 'Lũy kế cơ sở đủ ĐK trước' : 'Lũy kế cơ sở trước', contractRun ? 'Lũy kế cơ sở đủ ĐK sau' : 'Lũy kế cơ sở sau', 'SL CMS trước', 'SL CMS sau', 'Trạng thái', netRun ? 'Thay đổi CMS (VND)' : 'CMS dòng (VND)',
+    ...(netRun ? ['Loại', 'Lớp lượng', 'Mã phiếu trả', 'Thay đổi cơ sở đủ ĐK'] : salesContract ? ['Lớp lượng', 'SL cơ sở đủ ĐK'] : [])]]
   for (const l of i.lines) {
     const p = prod.get(l.programProductId)
     lineSheet.push([l.seq, l.orderCode, l.orderLineId, l.productId, p?.nameSnapshot ?? '', names.get(l.userId)?.fullName ?? '', store(l.storeId), l.posCode,
       vnTime(l.completedAt), l.quantityRaw, l.uomRaw, cmsDecCell(l.baseQuantity), cmsDecCell(l.gmvAmount), cmsDecCell(l.baseBefore), cmsDecCell(l.baseAfter),
-      cmsIntCell(l.qtyBefore), cmsIntCell(l.qtyAfter), CMS_LINE_LABEL[l.status], cmsIntCell(l.amountVnd)])
+      cmsIntCell(l.qtyBefore), cmsIntCell(l.qtyAfter), CMS_LINE_LABEL[l.status], cmsIntCell(l.amountVnd),
+      ...(netRun ? [l.kind === 'RETURN' ? 'Trả hàng' : 'Bán', CMS_QUANTITY_CLASS_LABEL[l.quantityClass], l.returnCode, cmsDecCell(l.eligibleDelta)]
+        : salesContract ? [CMS_QUANTITY_CLASS_LABEL[l.quantityClass], cmsDecCell(l.eligibleDelta)] : [])])
   }
   add('Chi tiet dong', lineSheet)
 
@@ -187,6 +257,15 @@ export function buildCmsResultWorkbook(i: CmsExportInput): CmsExportBuild {
         x.posCode, vnTime(x.completedAt), cmsDecCell(x.baseQuantity), cmsDecCell(x.gmvAmount)])
     }
     add('Chua gan', ex)
+  }
+  if (i.scope === 'super' && contractRun && i.excludedQty) {
+    const qx: Cell[][] = [['seq', 'Mã đơn', 'order_line_id', 'ProductID', 'Lớp lượng', 'SL gốc', 'ĐVT gốc', 'Nhà thuốc', 'POS', 'Hoàn tất (VN)', 'SL cơ sở', 'GMV (VND)']]
+    for (const x of i.excludedQty) {
+      const qc = x.quantityClass as keyof typeof CMS_QUANTITY_CLASS_LABEL | null | undefined
+      qx.push([x.seq, x.orderCode, x.orderLineId, x.productId, qc && qc in CMS_QUANTITY_CLASS_LABEL ? CMS_QUANTITY_CLASS_LABEL[qc] : (x.quantityClass ?? ''),
+        x.quantityRaw ?? null, x.uomRaw ?? null, store(x.storeId), x.posCode, vnTime(x.completedAt), cmsDecCell(x.baseQuantity), cmsDecCell(x.gmvAmount)])
+    }
+    add('Khong tinh luong', qx)
   }
   const bytes = new Uint8Array(XLSX.write(wb, { type: 'array', bookType: 'xlsx', compression: true }) as ArrayBuffer)
   return { ok: true, bytes, lineCount: i.lines.length, amountVnd: sumRows }
@@ -203,7 +282,8 @@ export interface CmsExportDeps {
   header(programId: string): Promise<Read<CmsResultHeaderDto>>
   rows(programId: string, runId: string): Promise<Read<CmsResultRowsDto>>
   lines(programId: string, runId: string, maxRows: number): Promise<Read<CmsResultLineDto[]>>
-  excluded(programId: string, runId: string, afterSeq: number | null): Promise<Read<CmsExcludedPage>>
+  /** kind 'quantity' (P5.4) chỉ gọi cho run contract (reader v2). */
+  excluded(programId: string, runId: string, afterSeq: number | null, kind?: 'disposition' | 'quantity'): Promise<Read<CmsExcludedPage>>
   storeNames(ids: string[]): Promise<Map<string, string>>
   now(): Date
   returnsApproved: boolean
@@ -240,23 +320,34 @@ export async function handleCmsResultExport(req: Request, deps: CmsExportDeps): 
   const lines = await deps.lines(programId, runId, CMS_EXPORT_MAX_LINES)
   if (!lines.ok) return readFail(lines.error)
   let excluded: CmsExcludedLineDto[] | null = null
-  if (acc.manage) {
-    excluded = []
+  let excludedQty: CmsExcludedLineDto[] | null = null
+  const readAllExcluded = async (kind: 'disposition' | 'quantity'): Promise<CmsExcludedLineDto[] | Response> => {
+    const out: CmsExcludedLineDto[] = []
     let after: number | null = null
     for (;;) {
-      const page = await deps.excluded(programId, runId, after)
+      const page = await deps.excluded(programId, runId, after, kind)
       if (!page.ok) return readFail(page.error)
       if (page.data.runId !== runId) return readFail('RUN_GONE')
-      excluded.push(...page.data.rows)
-      if (excluded.length > CMS_EXPORT_MAX_EXCLUDED) return readFail('TOO_LARGE')
-      if (page.data.nextAfterSeq === null) break
+      out.push(...page.data.rows)
+      if (out.length > CMS_EXPORT_MAX_EXCLUDED) return readFail('TOO_LARGE')
+      if (page.data.nextAfterSeq === null) return out
       after = page.data.nextAfterSeq
     }
   }
+  if (acc.manage) {
+    const ex = await readAllExcluded('disposition')
+    if (ex instanceof Response) return ex
+    excluded = ex
+    if (!header.data.run.contract.legacy) {
+      const qx = await readAllExcluded('quantity')
+      if (qx instanceof Response) return qx
+      excludedQty = qx
+    }
+  }
   const storeIds = [...rows.data.results.map((r) => r.storeId), ...rows.data.users.flatMap((u) => (u.storeId ? [u.storeId] : [])),
-    ...lines.data.map((l) => l.storeId), ...(excluded ?? []).flatMap((x) => (x.storeId ? [x.storeId] : []))]
+    ...lines.data.map((l) => l.storeId), ...[...(excluded ?? []), ...(excludedQty ?? [])].flatMap((x) => (x.storeId ? [x.storeId] : []))]
   const built = buildCmsResultWorkbook({
-    program: prog.data.program, header: header.data, rows: rows.data, lines: lines.data, excluded, products: prog.data.products,
+    program: prog.data.program, header: header.data, rows: rows.data, lines: lines.data, excluded, excludedQty, products: prog.data.products,
     storeNames: await deps.storeNames([...new Set(storeIds)]), exportedAt: deps.now(), scope: acc.manage ? 'super' : 'sm', returnsApproved: deps.returnsApproved,
   })
   if (!built.ok) {
@@ -265,7 +356,7 @@ export async function handleCmsResultExport(req: Request, deps: CmsExportDeps): 
     return json(500, built.error, 'Số dòng / tổng tiền không khớp — không xuất file thiếu.')
   }
   // Vết kiểm toán (security review I3 P2-1): ai xuất phiên nào, bao nhiêu dòng — chỉ id / số đếm, không email / tên / tiền.
-  console.info(`[cms-export] OK user=${s.userId} program=${programId} run=${runId} scope=${acc.manage ? 'super' : 'sm'} lines=${built.lineCount} excluded=${excluded?.length ?? 0}`)
+  console.info(`[cms-export] OK user=${s.userId} program=${programId} run=${runId} scope=${acc.manage ? 'super' : 'sm'} lines=${built.lineCount} excluded=${excluded?.length ?? 0}${excludedQty ? ` excluded_qty=${excludedQty.length}` : ''}`)
   const stamp = new Date(deps.now().getTime() + 7 * 3600_000).toISOString().slice(0, 16).replace(/[-:T]/g, '')
   return new Response(built.bytes, {
     status: 200,

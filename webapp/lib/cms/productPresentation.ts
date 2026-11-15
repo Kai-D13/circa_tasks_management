@@ -30,8 +30,11 @@ export interface CmsQtyExplain {
   unmetGate: bigint
   /** Σ (Q − C) của người đã đạt gate nhưng vượt trần. */
   overCap: bigint
-  /** Σ phần lẻ chưa đủ 1 đơn vị CMS (scale 9, đơn vị cơ sở). */
+  /** Σ phần lẻ chưa đủ 1 đơn vị CMS (scale 9, đơn vị cơ sở) — tính trên B đủ. */
   fractionBase: bigint
+  /** P5.2: Σ (B thật − B đủ) — lượng bán không vào lượng thưởng (tính nguyên: khác đơn vị / số lẻ); run legacy / cộng dồn = 0. */
+  notCountedBase: bigint
+  notCountedStaff: number
   unmetStaff: number
   overCapStaff: number
   fractionStaff: number
@@ -40,23 +43,27 @@ export interface CmsQtyExplain {
 }
 
 /** Một dòng kết quả ⇒ phần tách; null khi dữ liệu âm / bất nhất (không bịa breakdown). */
-export function cmsQtyExplainRow(r: Pick<CmsResultRowDto, 'baseQuantity' | 'perUnit' | 'cmsQuantity' | 'rewardedQuantity' | 'capQuantity' | 'gateMet'>): CmsQtyExplain | null {
+export function cmsQtyExplainRow(r: Pick<CmsResultRowDto, 'baseQuantity' | 'perUnit' | 'cmsQuantity' | 'rewardedQuantity' | 'capQuantity' | 'gateMet'> & Partial<Pick<CmsResultRowDto, 'eligibleBase'>>): CmsQtyExplain | null {
   const b = dec(r.baseQuantity), k = dec(r.perUnit), q = big(r.cmsQuantity), rq = big(r.rewardedQuantity)
+  // P5.2: Q kiểm trên B đủ (run legacy: B đủ = B). B thật < B đủ ⇒ bất nhất ⇒ null (không bịa phần không tính).
+  const e = r.eligibleBase === undefined ? b : dec(r.eligibleBase)
   const cap = r.capQuantity === null ? null : big(r.capQuantity)
-  if (b === null || k === null || q === null || rq === null || (r.capQuantity !== null && cap === null)) return null
-  if (b < ZERO || k <= ZERO || q < ZERO || (cap !== null && cap < ZERO)) return null
-  if (q !== b / k) return null // Q = floor(B / K) (B ≥ 0)
+  if (b === null || e === null || k === null || q === null || rq === null || (r.capQuantity !== null && cap === null)) return null
+  if (b < ZERO || e < ZERO || e > b || k <= ZERO || q < ZERO || (cap !== null && cap < ZERO)) return null
+  if (q !== e / k) return null // Q = floor(B đủ / K) (B đủ ≥ 0)
   const c = cap === null || q < cap ? q : cap
   if (rq !== c) return null
-  const f = b - q * k
+  const f = e - q * k
+  const nc = b - e
   return {
     perUnit: k, baseUnits: b, rewarded: r.gateMet ? c : ZERO, unmetGate: r.gateMet ? ZERO : q, overCap: r.gateMet ? q - c : ZERO, fractionBase: f,
+    notCountedBase: nc, notCountedStaff: nc > ZERO ? 1 : 0,
     unmetStaff: !r.gateMet && q > ZERO ? 1 : 0, overCapStaff: r.gateMet && q > c ? 1 : 0, fractionStaff: f > ZERO ? 1 : 0, cap,
   }
 }
 
 /** Cộng nhiều dòng CÙNG K (một SP). Một dòng bất nhất / K khác ⇒ null. Bất biến ΣB đã kiểm. */
-export function cmsQtyExplain(rows: readonly Pick<CmsResultRowDto, 'baseQuantity' | 'perUnit' | 'cmsQuantity' | 'rewardedQuantity' | 'capQuantity' | 'gateMet'>[]): CmsQtyExplain | null {
+export function cmsQtyExplain(rows: readonly (Pick<CmsResultRowDto, 'baseQuantity' | 'perUnit' | 'cmsQuantity' | 'rewardedQuantity' | 'capQuantity' | 'gateMet'> & Partial<Pick<CmsResultRowDto, 'eligibleBase'>>)[]): CmsQtyExplain | null {
   let acc: CmsQtyExplain | null = null
   let capSame = true
   for (const r of rows) {
@@ -66,16 +73,17 @@ export function cmsQtyExplain(rows: readonly Pick<CmsResultRowDto, 'baseQuantity
     if (e.perUnit !== acc.perUnit) return null
     if (e.cap !== acc.cap) capSame = false
     acc.baseUnits += e.baseUnits; acc.rewarded += e.rewarded; acc.unmetGate += e.unmetGate; acc.overCap += e.overCap; acc.fractionBase += e.fractionBase
+    acc.notCountedBase += e.notCountedBase; acc.notCountedStaff += e.notCountedStaff
     acc.unmetStaff += e.unmetStaff; acc.overCapStaff += e.overCapStaff; acc.fractionStaff += e.fractionStaff
   }
   if (!acc) return null
   if (!capSame) acc.cap = null
-  if (acc.baseUnits !== (acc.rewarded + acc.unmetGate + acc.overCap) * acc.perUnit + acc.fractionBase) return null
+  if (acc.baseUnits !== (acc.rewarded + acc.unmetGate + acc.overCap) * acc.perUnit + acc.fractionBase + acc.notCountedBase) return null
   return acc
 }
 
 /** Lượng không tính CMS (đơn vị cơ sở, scale 9). */
-export const cmsQtyExcludedBase = (e: CmsQtyExplain): bigint => (e.unmetGate + e.overCap) * e.perUnit + e.fractionBase
+export const cmsQtyExcludedBase = (e: CmsQtyExplain): bigint => (e.unmetGate + e.overCap) * e.perUnit + e.fractionBase + e.notCountedBase
 
 /** Câu lý do phần không tính (theo đơn vị CMS); rỗng khi mọi lượng đều được tính. */
 export function cmsQtyReasons(e: CmsQtyExplain, unit: string, gate: CmsGmvBasis): string[] {
@@ -83,6 +91,7 @@ export function cmsQtyReasons(e: CmsQtyExplain, unit: string, gate: CmsGmvBasis)
   if (e.unmetGate > ZERO) out.push(`${e.unmetGate.toString()} ${unit} chưa đạt ${gate === 'catalog' ? 'target nhóm danh mục' : 'target'} (${e.unmetStaff} dược sĩ)`)
   if (e.overCap > ZERO) out.push(`${e.overCap.toString()} ${unit} vượt trần${e.cap !== null ? ` ${e.cap.toString()} ${unit}/dược sĩ` : ''} (${e.overCapStaff} dược sĩ)`)
   if (e.fractionBase > ZERO) out.push(`${cmsQtyText(e.fractionBase, e.perUnit)} ${unit} phần lẻ chưa đủ 1 ${unit} (${e.fractionStaff} dược sĩ)`)
+  if (e.notCountedBase > ZERO) out.push(`${cmsQtyText(e.notCountedBase, e.perUnit)} ${unit} không tính lượng — khác đơn vị CMS hoặc số lượng lẻ (${e.notCountedStaff} dược sĩ)`)
   return out
 }
 
@@ -151,7 +160,7 @@ export function cmsA3StaffRows(rows: readonly CmsResultRowDto[], o: { tiers: rea
     const g = cmsGateView(r, o.catalog)
     const qtyNote = !e ? null
       : !r.gateMet && BigInt(r.cmsQuantity) > ZERO ? 'chưa tính'
-        : e.overCap > ZERO || e.fractionBase > ZERO ? `tính ${e.rewarded.toString()}` : null
+        : e.overCap > ZERO || e.fractionBase > ZERO || e.notCountedBase > ZERO ? `tính ${e.rewarded.toString()}` : null
     const u = names.get(r.userId)
     const store = u?.storeId ?? r.storeId
     return {

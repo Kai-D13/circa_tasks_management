@@ -23,6 +23,10 @@
 // đối soát). elapsedMs tính SAU cleanup.
 // Mọi lỗi giữ pointer cũ (không công bố 0 thay dữ liệu lỗi). Đóng run thất bại KHÔNG bị nuốt ⇒ CLOSE_FAILED + cause.
 // Kết quả / log chỉ số đếm + mã cố định — không email, không giá trị dòng, không message thô của nguồn.
+// RUN CONTRACT (CMS-CALC-RET-2, migration 130): opts.calcFlags (CMS_CALC_MODES_ENABLED / CMS_RETURNS_ENABLED) bật ⇒ open khai
+//   `calc_contract`; DB ghim hợp đồng cho chương trình cms_unit / net_returns_v1 ⇒ nhánh contractSync.ts (provider một job + 13 bước
+//   seal + publish có ledger). Cờ OFF ⇒ open KHÔNG khai ⇒ DB đóng held CMS_WORKER_UNSUPPORTED (có vết, pointer giữ). Chương trình
+//   legacy (pos_base + sales_only_v1) đi đường dưới nguyên hành vi.
 
 import { cmsEncodeUnitIssueSummary, cmsSummarizeRowIssues, type CmsUnitIssueSummary } from './sourceDiagnostics'
 import { createHash } from 'node:crypto'
@@ -38,6 +42,10 @@ import {
   type CmsAnyStagePart, type CmsSalesSnapshot, type CmsStageExpect, type CmsStageRow,
 } from './resultStage'
 import { CMS_BQ_DEFAULT_DEADLINE_MS, fetchCmsSalesSnapshot, type CmsBqRunner } from './source/bigquery'
+import type { CmsContractSourceProvider } from './source/contractSource'
+import type { CmsContractPart } from './calc/contractStage'
+import { CMS_CALC_CONTRACT_VERSION } from './calc/policy'
+import { cmsIsContractSnapshot, runCmsContractPath, type CmsContractSummary } from './contractSync'
 import { vnProgramWindowMicros } from './time'
 
 /** Ngân sách tối thiểu còn lại để bắt đầu MỘT chương trình (đọc nguồn + stage). */
@@ -71,14 +79,19 @@ export interface CmsSalesSyncDeps {
   loadSnapshot(programId: string, io: CmsIo): Promise<unknown>
   /** rpc_cms_sales_run_open — throw Error(<mã CMS_*>) khi bận / không đủ điều kiện. */
   openRun(programId: string, detail: CmsSalesRunDetail, io: CmsIo): Promise<unknown>
-  stage(runId: string, part: CmsAnyStagePart, chunkNo: number, rows: CmsStageRow[], io: CmsIo): Promise<number>
-  sealBegin(runId: string, expect: CmsStageExpect, io: CmsIo): Promise<CmsSealReply>
+  stage(runId: string, part: CmsAnyStagePart | CmsContractPart, chunkNo: number, rows: CmsStageRow[], io: CmsIo): Promise<number>
+  /** expect: CmsStageExpect (legacy) hoặc khai báo run contract (calc/contractStage.ts). */
+  sealBegin(runId: string, expect: CmsStageExpect | Record<string, unknown>, io: CmsIo): Promise<CmsSealReply>
   sealStep(runId: string, step: number, io: CmsIo): Promise<CmsSealReply>
   publish(runId: string, io: CmsIo): Promise<{ published: boolean; already?: boolean; code?: string }>
   finish(runId: string, status: 'held' | 'error', detail: CmsSalesRunDetail, io: CmsIo): Promise<void>
   /** Một lô rpc_cms_sales_run_cleanup. */
   cleanup(programId: string, maxRows: number, io: CmsIo): Promise<{ purged: number; deleted: number; more: boolean }>
   now(): number
+  /** Nguồn run contract (một job bán + trả, ghim as_of). Thiếu ⇒ run contract error CONTRACT_PROVIDER_MISSING (không fallback). */
+  contractProvider?: CmsContractSourceProvider
+  /** Đồng hồ TƯỜNG (µs UTC) cho as_of của run contract; mặc định Date.now() (now() có thể là đồng hồ đơn điệu của writer QA). */
+  asOfMicros?: () => bigint
 }
 
 export type CmsSalesSyncStatus = 'published' | 'dry_run' | 'held' | 'error' | 'busy' | 'skipped' | 'config_missing'
@@ -123,6 +136,8 @@ export interface CmsSalesSyncResult {
   /** Đóng run thất bại: kết quả dự định trước bước đóng (status = 'error', code = 'CLOSE_FAILED'). */
   cause: { status: 'held' | 'error'; code: string } | null
   cleanup: CmsCleanupOutcome | null
+  /** Tóm tắt run contract (null / thiếu ⇔ run legacy). */
+  contract?: CmsContractSummary | null
 }
 
 /** Mã mở run không phải lỗi hệ thống: chương trình chưa / không còn đủ điều kiện tính. */
@@ -140,6 +155,8 @@ export type CmsSalesSyncOpts = {
   sourceCapture?: boolean
   /** CHỈ TEST: ép cổng kết quả về HOLD để kiểm nhánh đóng (chỉ ĐÓNG thêm — không mở được cổng). Route / script không truyền. */
   releaseHold?: boolean
+  /** Cờ CMS-CALC-RET-2 (lib/cms/flags.ts cmsCalcFlags) — mặc định cả hai OFF. Một cờ bật ⇒ open khai calc_contract. */
+  calcFlags?: { modes: boolean; returns: boolean }
 }
 
 /** Mã held: nguồn 'qa' trỏ vào chương trình thật (writer QA không bao giờ ghi chương trình thật — PM 06/11 AC08). */
@@ -261,7 +278,8 @@ async function runCmsSalesSyncInner(deps: CmsSalesSyncDeps, programId: string, o
     try { raw = await deps.loadSnapshot(programId, budget.work()) } catch (e) { return done({ status: 'error', code: cmsRpcCode(e, 'SNAPSHOT_FAILED') }) }
   } else {
     try {
-      raw = await deps.openRun(programId, { source: opts.source }, budget.work())
+      const declare = opts.calcFlags?.modes === true || opts.calcFlags?.returns === true
+      raw = await deps.openRun(programId, { source: opts.source, ...(declare ? { calc_contract: CMS_CALC_CONTRACT_VERSION } : {}) }, budget.work())
     } catch (e) {
       const code = cmsRpcCode(e, 'OPEN_FAILED')
       if (code === 'CMS_SYNC_BUSY') return done({ status: 'busy', code })
@@ -272,6 +290,17 @@ async function runCmsSalesSyncInner(deps: CmsSalesSyncDeps, programId: string, o
   // run_id lấy trước khi kiểm shape để vẫn đóng được run nếu snapshot hỏng.
   const rawRun = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>).run_id : undefined
   if (!opts.dryRun && typeof rawRun === 'string') res.runId = rawRun
+  // DB 130 đã đóng run held ngay ở open (worker không khai hợp đồng trên chương trình contract) ⇒ có vết, không đóng lần hai.
+  if (!opts.dryRun && typeof raw === 'object' && raw !== null && (raw as Record<string, unknown>).held === true) {
+    const ec = (raw as Record<string, unknown>).error_code
+    return done({ status: 'held', code: typeof ec === 'string' && /^[A-Z0-9_]{1,64}$/.test(ec) ? ec : 'OPEN_HELD' })
+  }
+  if (cmsIsContractSnapshot(raw, !opts.dryRun)) {
+    return runCmsContractPath({
+      deps, programId, opts, budget, res, raw, mode, stop, done, rpcCode: cmsRpcCode, qaRealProgramCode: CMS_QA_SOURCE_REAL_PROGRAM,
+      sealSteps: (rpc, steps) => runCmsSealSteps(rpc, steps),
+    })
+  }
   let snap: CmsSalesSnapshot
   try {
     snap = parseCmsSalesSnapshot(raw)
@@ -451,13 +480,14 @@ async function runCmsSalesSyncInner(deps: CmsSalesSyncDeps, programId: string, o
  * code} và DB đã đóng run (closed = true) — dừng ngay. `canContinue` false trước một RPC ⇒ dừng DEADLINE (closed = false,
  * lõi đóng run). Lỗi transport ⇒ ném (lõi đóng run error SEAL_FAILED).
  */
-export async function runCmsSealSteps(rpc: { begin(): Promise<CmsSealReply>; step(n: number): Promise<CmsSealReply>; canContinue?: () => boolean }):
+export async function runCmsSealSteps(rpc: { begin(): Promise<CmsSealReply>; step(n: number): Promise<CmsSealReply>; canContinue?: () => boolean },
+  steps: number = CMS_SEAL_STEPS):
   Promise<{ sealed: boolean; status?: string; code?: string; closed: boolean }> {
   const go = rpc.canContinue ?? (() => true)
   if (!go()) return { sealed: false, status: 'held', code: 'DEADLINE', closed: false }
   const b = await rpc.begin()
   if (!b?.ok) return { sealed: false, status: b?.status, code: b?.code ?? 'SEAL_FAILED', closed: true }
-  for (let i = 1; i <= CMS_SEAL_STEPS; i++) {
+  for (let i = 1; i <= steps; i++) {
     if (!go()) return { sealed: false, status: 'held', code: 'DEADLINE', closed: false }
     const r = await rpc.step(i)
     if (r?.sealed) return { sealed: true, closed: false }

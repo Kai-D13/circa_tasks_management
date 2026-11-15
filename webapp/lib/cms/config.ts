@@ -7,7 +7,7 @@ import { isSafeBqTableName } from '../care/config'
 
 type Env = Record<string, string | undefined>
 
-function tableFromEnv(env: Env, key: 'CMS_BQ_PRODUCTS_TABLE' | 'CMS_BQ_SALES_TABLE'): string | null {
+function tableFromEnv(env: Env, key: 'CMS_BQ_PRODUCTS_TABLE' | 'CMS_BQ_SALES_TABLE' | 'CMS_BQ_RETURNS_TABLE'): string | null {
   const raw = env[key]?.trim()
   if (!raw) return null
   if (!isSafeBqTableName(raw)) {
@@ -25,4 +25,24 @@ export function cmsBqProductsTable(env: Env): string | null {
 /** View dòng đơn theo cột chuẩn SPEC §1.2. */
 export function cmsBqSalesTable(env: Env): string | null {
   return tableFromEnv(env, 'CMS_BQ_SALES_TABLE')
+}
+
+/**
+ * View phiếu trả theo cột chuẩn CMS_RETURN_COLUMNS (CMS-CALC-RET-2 §2.1 — FQN BI chưa giao). Trống ⇒ null: chương trình
+ * net_returns_v1 bị held SOURCE_NOT_CONFIGURED (KHÔNG publish net với 0 phiếu trả giả); sales-only không cần.
+ */
+export function cmsBqReturnsTable(env: Env): string | null {
+  return tableFromEnv(env, 'CMS_BQ_RETURNS_TABLE')
+}
+
+/**
+ * Trần byte (maximumBytesBilled) cho job nguồn của run contract. Trống ⇒ undefined (không đặt — như nguồn bán hiện hành). Sai định
+ * dạng (không phải số nguyên dương) ⇒ throw (cấu hình hỏng phải lộ ngay).
+ */
+export function cmsBqContractMaxBytes(env: Env): number | undefined {
+  const raw = env.CMS_BQ_CONTRACT_MAX_BYTES?.trim()
+  if (!raw) return undefined
+  const n = Number(raw)
+  if (!/^[1-9][0-9]*$/.test(raw) || !Number.isSafeInteger(n)) throw new Error('CMS_BQ_CONTRACT_MAX_BYTES phải là số nguyên dương (byte)')
+  return n
 }

@@ -77,3 +77,30 @@ export function isCmsImportV2Enabled(): boolean {
 export function isCmsQaServer(): boolean {
   return cmsQaServerFromEnv(process.env)
 }
+
+/**
+ * CMS-CALC-RET-2 (thiết kế Dev r2 §2; plan PM 13/11 §1): hai cờ mới, mặc định OFF, chỉ đúng chuỗi 'true'; chỉ hiệu lực khi CẢ
+ * CMS_PROGRAM_ENABLED + CMS_EARNINGS_ENABLED bật.
+ *   CMS_CALC_MODES_ENABLED — chọn cách tính lượng cho chương trình mới (save_v2) + worker chạy run contract của chương trình cms_unit.
+ *   CMS_RETURNS_ENABLED    — pipeline trả hàng: worker chạy run net, chuyển policy, job báo cáo sau chốt.
+ * Cờ OFF không đổi dữ liệu: chương trình contract đã có ⇒ worker dừng held (giữ pointer), KHÔNG quay về publish đường legacy.
+ */
+export interface CmsCalcFlags { modes: boolean; returns: boolean }
+
+export function cmsCalcFlagsFromEnv(env: Env): CmsCalcFlags {
+  const f = cmsFlagsFromEnv(env)
+  const on = f.program && f.earnings
+  return { modes: on && env.CMS_CALC_MODES_ENABLED === 'true', returns: on && env.CMS_RETURNS_ENABLED === 'true' }
+}
+
+export function cmsCalcFlags(): CmsCalcFlags {
+  return cmsCalcFlagsFromEnv(process.env)
+}
+
+/**
+ * Trang / link / XLSX "Trả hàng" (đối soát + báo cáo sau chốt) — PM 14/11 phát hành CMS bán hàng trước: CHỈ mở khi pipeline trả bật
+ * (CMS_RETURNS_ENABLED cùng program + earnings). Cờ mode bật một mình KHÔNG mở thao tác / trang trả (trả hàng phát hành riêng).
+ */
+export function cmsReturnsPagesFromEnv(env: Env): boolean {
+  return cmsCalcFlagsFromEnv(env).returns
+}

@@ -6,7 +6,7 @@ import { EmptyState } from '@/components/ds/EmptyState'
 import { DataTableShell } from '@/components/ds/DataTableShell'
 import { ProgressBar } from '@/components/ds/ProgressBar'
 import { cmsDateTime, cmsVnd } from '@/lib/cms/display'
-import { cmsStaffRows, CMS_SALES_ONLY_NOTE, type CmsA3Stats, type CmsStaffRowView, type CmsUnassignedSummary } from '@/lib/cms/resultUi'
+import { cmsNetSummary, cmsResultScopeNote, cmsRunBasisText, cmsStaffRows, cmsTruncVnd, type CmsA3Stats, type CmsStaffRowView, type CmsUnassignedSummary } from '@/lib/cms/resultUi'
 import { cmsResultState, type CmsCatalogRowDto, type CmsResultHeaderDto, type CmsResultRowDto, type CmsResultUserDto } from '@/lib/cms/resultView'
 import type { CmsDisplayStatus } from '@/lib/cms/programStatus'
 
@@ -35,8 +35,12 @@ export function CmsA3StatCards({ stats, display = 'running' }: { stats: CmsA3Sta
 }
 
 /** Dòng cập nhật + trạng thái lần đồng bộ gần nhất (super thấy mã lỗi cố định để xử lý nguồn / mapping). */
-export function CmsA3SyncLine({ header, isSuper, display = 'running' }: { header: CmsResultHeaderDto; isSuper: boolean; display?: CmsDisplayStatus }) {
+export function CmsA3SyncLine({ header, isSuper, display = 'running', basisUi, rows }: { header: CmsResultHeaderDto; isSuper: boolean; display?: CmsDisplayStatus; basisUi?: boolean; rows?: readonly CmsResultRowDto[] }) {
   const last = header.lastAttempt
+  // P5.3: run net ⇒ tóm tắt phiếu trả đã trừ trong phạm vi người xem (GMV; lượng khác K giữa SP nên không cộng chung).
+  // Chỉ policy net_returns_v1: mig 130 ghi cột ròng (net_v = 1, return_count = 0) cho MỌI run contract, kể cả sales_only_v1 —
+  // không lọc theo policy thì chương trình chỉ tính bán hiện "Đã trừ 0 phiếu trả…" ngay dưới câu "chưa bao gồm xử lý trả hàng".
+  const ns = rows && header.run?.contract.returnsPolicy === 'net_returns_v1' ? cmsNetSummary(rows) : null
   const at = header.run ? cmsDateTime(header.run.publishedAt) : null
   return (
     <div className="space-y-2">
@@ -46,7 +50,9 @@ export function CmsA3SyncLine({ header, isSuper, display = 'running' }: { header
             : display === 'waiting_close' ? <>Số liệu cập nhật {at} · tạm tính, chờ chốt kỳ · Xuất Excel: toàn chương trình trong phạm vi của bạn</>
               : <>Số liệu cập nhật {at} · tạm tính, chưa chốt kỳ · Xuất Excel: toàn chương trình trong phạm vi của bạn</>}
       </p>
-      {header.run && display !== 'locked' && <p data-cms-sales-only className="text-[13px] text-muted-foreground">{CMS_SALES_ONLY_NOTE}</p>}
+      {header.run && cmsRunBasisText(header.run.contract, basisUi) && <p data-cms-run-basis={header.run.contract.quantityBasis} className="text-[13px] text-muted-foreground">{cmsRunBasisText(header.run.contract, basisUi)}</p>}
+      {header.run && display !== 'locked' && <p data-cms-sales-only={header.run.contract.returnsPolicy} className="text-[13px] text-muted-foreground">{cmsResultScopeNote(header.run.contract)}</p>}
+      {header.run && ns && <p data-cms-net-summary className="text-[13px] text-muted-foreground tabular-nums">Đã trừ {ns.returnCount} phiếu trả hàng hoàn tất · GMV trả {cmsVnd(cmsTruncVnd(ns.returnGmv))} · GMV ròng {cmsVnd(cmsTruncVnd(ns.saleGmv - ns.returnGmv))}</p>}
       {display !== 'locked' && last && !last.isCurrent && (last.status === 'held' || last.status === 'error') && (
         <Notice tone="warning" role="status" title="Lần đồng bộ gần nhất chưa công bố">
           {header.run ? 'Đang giữ số liệu của lần công bố trước.' : cmsResultState(header) === 'config_reset' ? 'Chưa có lần công bố nào theo cấu hình hiện tại.' : 'Chưa có lần công bố nào.'}

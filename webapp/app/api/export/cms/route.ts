@@ -33,8 +33,8 @@ export async function GET(request: Request) {
     header: (programId) => cmsLoadResultHeader(programId),
     rows: (programId, runId) => cmsLoadResultRows(programId, runId),
     lines: (programId, runId, maxRows) => cmsLoadAllResultLines({ programId, runId, maxRows }),
-    async excluded(programId, runId, afterSeq) {
-      const r = await cmsLoadResultExcluded({ programId, runId, afterSeq, limit: 500 })
+    async excluded(programId, runId, afterSeq, kind) {
+      const r = await cmsLoadResultExcluded({ programId, runId, afterSeq, limit: 500, kind })
       if (!r.ok) return r
       try {
         return { ok: true, data: parseCmsExcludedPage(r.data) }

@@ -11,6 +11,10 @@ import { Button, buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { CMS_PROGRAM_DATE_MAX, CMS_PROGRAM_DATE_MIN, normalizeCmsProgramInput } from '@/lib/cms/programInput'
 import type { CmsInvalidStore, CmsStoreOption } from '@/lib/cms/server/catalog'
+import {
+  CMS_BASIS_SOURCE_NOTE, CMS_QUANTITY_BASES, CMS_QUANTITY_BASIS_HINT, CMS_QUANTITY_BASIS_LABEL,
+  type CmsProgramBasis, type CmsQuantityBasis,
+} from '@/lib/cms/calc/basisUi'
 
 // CMS P1-c — bước "Thông tin" A2 (tạo) và màn sửa /[id]/edit (U3 / U17; SPEC §4.7). Không có ô target danh mục (đọc
 // từ Excel). is_test / trạng thái KHÔNG gửi từ client (server quyết — H9). Server action + RPC 121 kiểm lại mọi thứ;
@@ -20,6 +24,9 @@ import type { CmsInvalidStore, CmsStoreOption } from '@/lib/cms/server/catalog'
 // "Bỏ chọn" tường minh — không tự loại, không buộc chuyển "Tất cả"; còn mục không hợp lệ ⇒ chặn lưu kèm hướng dẫn.
 // `data-cms-pending-payload`: đúng dữ liệu sắp gửi (dữ liệu của chính người dùng) — để test fixture kiểm payload khi
 // boundary chặn action.
+// CMS-CALC-RET-2 P5.1 (spec §2 / §8.1): `basis.selectable` (cờ CMS_CALC_MODES_ENABLED + DB có đường program_modes) ⇒ fieldset radio
+// "Cách tính lượng" BẮT BUỘC, không chọn sẵn khi tạo / nháp chưa được admin chọn; chương trình đã kích hoạt chỉ hiện (gửi lại đúng
+// cách tính hiện tại — server + DB chặn đổi). Không selectable ⇒ không gửi khoá quantity_basis (đường 121 như cũ).
 
 export interface CmsProgramFormInitial {
   id: string
@@ -32,15 +39,23 @@ export interface CmsProgramFormInitial {
   active: boolean
 }
 
+export interface CmsProgramFormBasis {
+  /** Hiện lựa chọn cách tính (cờ + năng lực DB). */
+  selectable: boolean
+  /** Cách tính hiện tại khi sửa (undefined khi tạo; null = không đọc được). */
+  current?: CmsProgramBasis | null
+}
+
 const FIELD = 'h-[44px] md:h-[36px] w-full rounded-v2-control border border-input bg-card px-3 text-[16px] md:text-sm'
 
 const INVALID_REASON: Record<CmsInvalidStore['reason'], string> = {
   inactive: 'đã ngừng hoạt động', not_os: 'không phải nhà thuốc OS', unknown: 'không còn trong danh sách',
 }
 
-export function CmsProgramForm({ mode, initial, stores, storesError, invalidStores = [], today }: {
+export function CmsProgramForm({ mode, initial, stores, storesError, invalidStores = [], today, basis: basisCfg }: {
   mode: 'create' | 'edit'
   initial?: CmsProgramFormInitial
+  basis?: CmsProgramFormBasis
   stores: CmsStoreOption[]
   storesError: boolean
   /** Nhà thuốc đã chọn (sửa chương trình) nhưng không còn hợp lệ để chọn. */
@@ -58,6 +73,13 @@ export function CmsProgramForm({ mode, initial, stores, storesError, invalidStor
   const [storeQ, setStoreQ] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [pendingPayload, setPendingPayload] = useState<string | null>(null)
+  const selectable = basisCfg?.selectable === true
+  const cur = basisCfg?.current
+  // Đã kích hoạt: cách tính bất biến (chỉ hiện). Nháp: chọn sẵn CHỈ khi admin đã chọn trước đó (legacy / pending phải chọn lại).
+  const basisLocked = selectable && initial?.active === true
+  const [basis, setBasis] = useState<CmsQuantityBasis | null>(
+    basisLocked ? cur?.basis ?? null : cur && cur.source === 'admin' ? cur.basis : null,
+  )
   const invalidPicked = invalidStores.filter((x) => picked.has(x.id))
   const validPicked = stores.filter((x) => picked.has(x.id)).length
   const unpick = (id: string) => setPicked((prev) => { const n = new Set(prev); n.delete(id); return n })
@@ -79,10 +101,15 @@ export function CmsProgramForm({ mode, initial, stores, storesError, invalidStor
       setError('Chương trình đã kích hoạt chỉ được dời ngày bắt đầu sang một ngày sau hôm nay')
       return
     }
-    setPendingPayload(JSON.stringify(v.value))
+    if (selectable && !basis) {
+      setError(basisLocked ? 'Không đọc được cách tính của chương trình — tải lại trang' : 'Chọn cách tính lượng cho chương trình')
+      return
+    }
+    const payload = selectable ? { ...v.value, quantity_basis: basis } : v.value
+    setPendingPayload(JSON.stringify(payload))
     if (fixtureBlocked()) return
     startTransition(async () => {
-      const r = mode === 'create' ? await createCmsProgram(v.value) : await updateCmsProgram(initial!.id, v.value)
+      const r = mode === 'create' ? await createCmsProgram(payload) : await updateCmsProgram(initial!.id, payload)
       if (!r.ok) { setError(r.error); return }
       toast.success(mode === 'create' ? 'Đã lưu nháp chương trình' : 'Đã lưu thay đổi')
       router.push(next === 'upload' ? `/targets/campaigns/cms/${r.id}/import?from=new` : `/targets/campaigns/cms/${r.id}`)
@@ -172,6 +199,40 @@ export function CmsProgramForm({ mode, initial, stores, storesError, invalidStor
           )
         )}
       </fieldset>
+
+      {selectable && (
+        <fieldset data-cms-basis-field className="min-w-0 space-y-2">
+          <legend className="text-[13px] font-medium">Cách tính lượng <span aria-hidden="true" className="text-status-danger">*</span></legend>
+          {basisLocked ? (
+            <p data-cms-basis-locked={cur?.basis ?? 'unknown'} className="rounded-v2-control border bg-muted/40 p-3 text-[14px]">
+              {cur?.basis ? CMS_QUANTITY_BASIS_LABEL[cur.basis] : 'Không đọc được cách tính'}
+              <span className="mt-1 block text-[12px] text-muted-foreground">Chương trình đã kích hoạt — không đổi được cách tính.</span>
+            </p>
+          ) : (
+            <>
+              {cur && CMS_BASIS_SOURCE_NOTE[cur.source] && cur.source !== 'admin' && (
+                <p data-cms-basis-note={cur.source} className="text-[12px] text-muted-foreground">{CMS_BASIS_SOURCE_NOTE[cur.source]} — chọn một cách tính.</p>
+              )}
+              <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Cách tính lượng">
+                {CMS_QUANTITY_BASES.map((b) => (
+                  <label
+                    key={b}
+                    data-cms-basis-option={b}
+                    className={cn('flex min-h-[44px] cursor-pointer gap-2 rounded-v2-control border p-3 text-[14px]', basis === b && 'border-primary bg-primary/5')}
+                  >
+                    <input type="radio" name="quantity_basis" value={b} checked={basis === b} onChange={() => setBasis(b)} className="mt-0.5 size-4 shrink-0" />
+                    <span className="min-w-0">
+                      <span className="block font-medium">{CMS_QUANTITY_BASIS_LABEL[b]}</span>
+                      <span className="mt-0.5 block text-[12px] text-muted-foreground">{CMS_QUANTITY_BASIS_HINT[b]}</span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+              <p className="text-[12px] text-muted-foreground">Áp dụng cho mọi sản phẩm của chương trình; không đặt trong file Excel. Đổi cách tính khi còn nháp làm mất hiệu lực lần kiểm tra file trước đó. Sau khi kích hoạt không đổi được.</p>
+            </>
+          )}
+        </fieldset>
+      )}
 
       <p className="text-[13px] text-muted-foreground">Cách tính bậc: <span className="font-medium text-foreground">Lũy tiến</span> · target danh mục đọc từ file Excel.</p>
 

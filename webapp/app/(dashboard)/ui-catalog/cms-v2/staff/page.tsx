@@ -5,9 +5,10 @@ import { KpiFixtureBoundary } from '@/components/kpi/KpiFixtureBoundary'
 import { CmsStaffCatalogView } from '@/components/cms/staff/CmsStaffCatalogView'
 import { CMS_FX_STAFF_ENDED, CMS_FX_STAFF_PROGRAMS, CMS_FX_STAFF_SIMPLE, CMS_FX_TODAY, cmsFxStaffProducts } from '@/lib/cms/fixturesStaff'
 import { cmsPickStaffProgram } from '@/lib/cms/staffView'
-import { cmsFxParseScenario, cmsFxStaffResults, cmsFxStoreResults } from '@/lib/cms/fixturesResults'
+import { cmsFxParseScenario, cmsFxStaffResults, cmsFxStoreResults, withBasisUi } from '@/lib/cms/fixturesResults'
 import { cmsParseCardFilter } from '@/lib/cms/resultUi'
 import { cmsFixtureNav } from '@/lib/cms/fixtureNav'
+import { CMS_FX_STAFF_CONTRACT } from '@/lib/cms/fixturesContract'
 
 // Dev-only fixture D1 `/targets?tab=cms` — ĐÚNG CmsStaffCatalogView + cmsPickStaffProgram của route thật, dữ liệu giả (kịch bản
 // lib/cms/fixtureScenario — mỗi chương trình có danh mục / số engine của nó). Cổng: UI_CATALOG=1 + super admin. ?fx=
@@ -19,6 +20,9 @@ import { cmsFixtureNav } from '@/lib/cms/fixtureNav'
 // CMS-UI-1: &program=<id> (link bộ chọn / quay lại từ D2 / D3) — danh sách gồm cả chương trình đã kết thúc như route thật.
 // CMS đơn giản (PM r1 08/11 §6): fx=simple (PG10 đang chạy, mỗi SP một mức / hộp) · simple-manager (QLCH) · simple-upcoming (PG11) ·
 //   simple-ended (PG12 chờ chốt kỳ); &program=<PG10–12> cũng dùng danh sách này.
+// CMS-CALC-RET-2 P5: fx=contract (PG13 tính nguyên + trừ trả · PG14 tính nguyên chưa trừ trả · PG15 cộng dồn + trừ trả — run contract,
+//   số computeCmsNet) · contract-manager (QLCH); &program=<PG13–15> cũng dùng danh sách này. Không p2 ⇒ running.
+//   &bu=1 giả lập cờ mode / trả BẬT (loader gắn basisUi ⇒ run legacy cũng hiện dòng "Cách tính").
 export default async function CmsStaffFixture({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   if (process.env.UI_CATALOG !== '1') notFound()
   const { user, profile } = await getSessionProfile()
@@ -29,10 +33,11 @@ export default async function CmsStaffFixture({ searchParams }: { searchParams: 
   const fx = one('fx') ?? (one('as') === 'manager' ? 'manager' : 'many')
   const program = one('program')
   const simple = fx.startsWith('simple') || CMS_FX_STAFF_SIMPLE.some((p) => p.id === program)
-  const scenario = cmsFxParseScenario(one('p2'))
-  const manager = fx === 'manager' || fx === 'manager-nokpi' || fx === 'locked-manager' || fx === 'simple-manager' || (simple && one('as') === 'manager')
+  const contract = fx.startsWith('contract') || CMS_FX_STAFF_CONTRACT.some((p) => p.id === program)
+  const scenario = cmsFxParseScenario(one('p2')) ?? (contract ? 'running' : null)
+  const manager = fx === 'manager' || fx === 'manager-nokpi' || fx === 'locked-manager' || fx === 'simple-manager' || fx === 'contract-manager' || ((simple || contract) && one('as') === 'manager')
   const withEnded = fx === 'history' || fx === 'ended' || fx === 'locked' || fx === 'locked-manager' || program !== undefined
-  const programs = simple ? CMS_FX_STAFF_SIMPLE : fx === 'single' ? CMS_FX_STAFF_PROGRAMS.slice(0, 1) : withEnded ? [...CMS_FX_STAFF_PROGRAMS, ...CMS_FX_STAFF_ENDED] : CMS_FX_STAFF_PROGRAMS
+  const programs = contract ? CMS_FX_STAFF_CONTRACT : simple ? CMS_FX_STAFF_SIMPLE : fx === 'single' ? CMS_FX_STAFF_PROGRAMS.slice(0, 1) : withEnded ? [...CMS_FX_STAFF_PROGRAMS, ...CMS_FX_STAFF_ENDED] : CMS_FX_STAFF_PROGRAMS
   const forced = fx === 'simple-upcoming' ? CMS_FX_STAFF_SIMPLE[1].id : fx === 'simple-ended' ? CMS_FX_STAFF_SIMPLE[2].id : fx === 'upcoming' ? CMS_FX_STAFF_PROGRAMS[2].id : fx === 'ended' ? CMS_FX_STAFF_ENDED[0].id : fx === 'locked' || fx === 'locked-manager' ? CMS_FX_STAFF_ENDED[1].id : null
   const selected = fx === 'empty' || fx === 'no-store' || fx === 'error' ? null
     : cmsPickStaffProgram(programs, CMS_FX_TODAY, forced ?? program ?? null)
@@ -49,7 +54,7 @@ export default async function CmsStaffFixture({ searchParams }: { searchParams: 
           today={CMS_FX_TODAY}
           manager={manager}
           kpiTab={fx !== 'manager-nokpi'}
-          results={scenario && selected && selected.startDate <= CMS_FX_TODAY ? (manager ? cmsFxStoreResults(scenario, selected.id) : cmsFxStaffResults(scenario, selected.id)) : undefined}
+          results={withBasisUi(scenario && selected && selected.startDate <= CMS_FX_TODAY ? (manager ? cmsFxStoreResults(scenario, selected.id) : cmsFxStaffResults(scenario, selected.id)) : undefined, one('bu') === '1')}
           filter={cmsParseCardFilter(one('f'))}
           nav={nav}
         />

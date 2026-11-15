@@ -188,6 +188,23 @@ Engine chỉ có chế độ lũy tiến. `flat` không thuộc implementation r
 
 Phân bổ dòng: sắp theo `completed_at` (micro giây) rồi `order_line_id`; `Tiền dòng = A(B_sau) − A(B_trước)`, `A(B) = F(floor(max(0, B) / K))`; gate cuối chưa đạt ⇒ mọi dòng 0. Tổng tiền dòng = tổng dược sĩ × sản phẩm. Cùng đầu vào, khác thứ tự nhận ⇒ kết quả giống nhau.
 
+### 2.1. Luật cộng dồn đơn vị cơ sở (Q-227 — CMS-QTY-RET-1 phần A, 12/11/2026)
+
+- `quantity_raw` / `uom_raw` = lượng và đơn vị trên POS, **chỉ để đối soát** (lưu, hiển thị D3, XLSX "SL gốc" / "ĐVT gốc"); không lọc, không bắt nguyên, không bắt trùng `unit_CMS`.
+- `base_quantity` = lượng cơ sở đã quy đổi của **cả dòng**; engine cộng thẳng, **không nhân lại** `quantity_raw`.
+- Nhóm tính = dược sĩ × ProductID trong MỘT chương trình (engine chạy theo chương trình; dòng ngoài kỳ VN ⇒ `OUT_OF_WINDOW`). B = Σ base hợp lệ; **Q = floor(B / K)** một lần trên tổng; R = B − Q·K hiển thị là phần đang cộng dồn (đơn vị cơ sở), không thành tiền. Tổng QLCH / SM / A3 / XLSX "Theo san pham" = Σ Q và Σ tiền cá nhân — không floor / áp bậc lại trên tổng.
+- Số học: BigInt scale 9 (`lib/cms/decimal.ts`); K thiếu / ≤ 0 / > 9 chữ số lẻ ⇒ `BAD_BASE_QUANTITY`; base > 9 chữ số lẻ / số mũ ⇒ dòng lỗi nguồn `UNCONVERTED_UNITS` (giữ snapshot cũ). 99,999999999 / K 100 ⇒ Q 0.
+- Dòng âm: engine chỉ tính số học và gắn `ADJUSTMENT`; `max(0, B)` trong `cmsUnitsFloorDiv` / S9 là luật sales-only, **không** phải luật trả hàng. Chương trình thật có dòng âm ⇒ held `RETURNS_NOT_SUPPORTED_THIS_PHASE` (SO-2) tới khi phần B có hợp đồng nguồn; phần B không dùng `max(0, …)` để che trả vượt (DECISIONS §6 QR-1).
+- Trạng thái kiểm: theo mã `main` `19e6056` (= prod theo hồ sơ STATE); lượt 12/11 không kiểm prod.
+
+| Tầng | Chỗ bảo đảm | Bằng chứng |
+|---|---|---|
+| Nguồn | `lib/cms/source/bigquery.ts` đọc `base_quantity` nguyên văn; `contract.ts` `normalizeSalesRow` chỉ kiểm `base_quantity` (decimal9), `quantity_raw` / `uom_raw` là text tuỳ chọn | `e2e/cms-qty-part-a.spec.ts` A02 / A03 |
+| Engine | `engine/compute.ts` khoá nhóm `userId × productId`, `base += line.baseQuantityUnits`, `cmsQuantityOf` (tiers.ts) = `cmsUnitsFloorDiv` | A01–A04 + đột biến 16/16 (`C:/circa-gate-logs/cms-qty-20261112/mutate-a.json`) |
+| DB seal 122 | S8 `SEAL_RESULT_SUMS`: B nhóm = Σ `base_quantity` dòng; S9 `SEAL_TIER_AMOUNT`: Q·K ≤ max(0, B) < (Q+1)·K và F(Q); kiểm dòng `SEAL_LINE_ALLOC` | `scripts/qa-cms-122.mjs` 2 ca Q-227 (đột biến SQL 2/2) |
+| UI | `productPresentation.ts` `cmsQtyExplainRow` (Q = B / K, phần lẻ), `resultUi.ts` `cmsFractionText` / `cmsQtyText` (cắt, không làm tròn lên), `flat.ts` "Q × mức = tiền" khớp snapshot | A01 / A03 / A04 |
+| XLSX | `exportResults.ts` "SL bán (đv CMS)" = B / K, "SL tính CMS" = Q, "SL cơ sở" từng dòng nguyên văn | A04 |
+
 ## 3. Mô hình dữ liệu
 
 | Bảng | Trách nhiệm | Migration |

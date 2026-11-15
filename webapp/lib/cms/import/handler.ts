@@ -20,6 +20,8 @@ import {
   type CmsImportGroupOk, type CmsImportMode, type CmsImportValidation, type CmsProductMasterLite,
 } from './validate'
 import { buildCmsImportErrorXlsx, buildCmsSimpleErrorXlsx, type CmsRejectedGroupRaw } from './workbooks'
+import { cmsApplyBasisUnitCheck } from './basisCheck'
+import type { CmsProgramBasis, CmsQuantityBasis } from '../calc/basisUi'
 import { parseCmsSimpleXlsx } from './parseSimple'
 import { validateCmsSimpleImport } from './validateSimple'
 import {
@@ -70,6 +72,8 @@ export interface CmsStoredImportResult {
   kCheck?: { asOf: string | null; available: boolean; reason: string | null; products: CmsKResult[] }
   /** S2: xác nhận tay đã áp — actor từ phiên super, thời điểm server, nguồn căn cứ; commit đọc lại từ đây (không từ client). */
   kAcks?: CmsKAck[]
+  /** CMS-CALC-RET-2: cách tính của chương trình lúc preview (chỉ khi DB có khái niệm) — commit so lại (đổi ⇒ preview mới). */
+  basis?: CmsQuantityBasis
 }
 
 export interface CmsImportRunRow {
@@ -136,6 +140,11 @@ export interface CmsImportDeps {
   getAccess(): Promise<CmsAdminAccess>
   repo: CmsImportRepo
   now(): Date
+  /**
+   * CMS-CALC-RET-2: cách tính của chương trình. undefined = DB trước 130 (không có khái niệm — như cũ); null = DB 130 nhưng không đọc
+   * được / năng lực lệch (dừng 503, không đoán cộng dồn); object = đọc được. Không có hàm ⇒ coi như undefined.
+   */
+  getBasis?(programId: string): Promise<CmsProgramBasis | null | undefined>
 }
 
 export type CmsImportErrorCode =
@@ -146,6 +155,7 @@ export type CmsImportErrorCode =
   | 'SHA_MISMATCH' | 'PREVIEW_STALE' | 'NOTHING_TO_COMMIT' | 'PRODUCT_CONFLICT' | 'PRODUCT_EXISTS' | 'CATALOG_TARGET_CHANGED'
   | 'LOOKUP_FAILED' | 'PREVIEW_FAILED' | 'COMMIT_FAILED' | 'NO_ERRORS' | 'BUSY'
   | 'DUPLICATE_COLUMNS' | 'FORMAT_UNAVAILABLE' | 'K_ACK_INVALID'
+  | 'BASIS_NOT_SET' | 'BASIS_UNAVAILABLE' | 'UNIT_CMS_INVALID'
 
 export const CMS_IMPORT_ERROR_LABELS: Record<CmsImportErrorCode, string> = {
   NOT_FOUND: 'Không tìm thấy',
@@ -184,6 +194,10 @@ export const CMS_IMPORT_ERROR_LABELS: Record<CmsImportErrorCode, string> = {
   DUPLICATE_COLUMNS: 'Có hai cột cùng ý nghĩa trong dòng tiêu đề — giữ một cột',
   FORMAT_UNAVAILABLE: 'Mẫu mức cố định chưa được bật',
   K_ACK_INVALID: 'Xác nhận K không hợp lệ — mỗi dòng cần ProductID, đơn vị, K và nguồn căn cứ (3–200 ký tự)',
+  BASIS_COLUMN: 'File có cột Cách tính — cách tính chọn cho cả chương trình ở bước Thông tin, không đặt trong file. Xoá cột đó rồi nạp lại',
+  BASIS_NOT_SET: 'Chương trình chưa chọn cách tính — sửa thông tin, chọn cách tính rồi nạp file',
+  BASIS_UNAVAILABLE: 'Không đọc được cách tính của chương trình — thử lại sau',
+  UNIT_CMS_INVALID: 'Có sản phẩm có đơn vị CMS không hợp lệ cho cách tính nguyên — kiểm tra lại file',
 }
 
 const json = (status: number, body: unknown) =>
@@ -269,6 +283,8 @@ type Analysis =
 
 interface AnalyzeOpts {
   format: CmsImportFormat
+  /** Cách tính của chương trình (cms_unit ⇒ kiểm unit_CMS theo nhóm). */
+  basis: CmsQuantityBasis | null | undefined
   /** S2 bật (cờ v2): kiểm K. */
   kCheck: boolean
   /** Xác nhận tay: preview = ý định từ client (gắn actor / giờ server); commit = bản ĐÃ LƯU trong run. */
@@ -282,6 +298,7 @@ async function analyze(bytes: Uint8Array, program: CmsProgramRow, mode: CmsImpor
     const extra: Record<string, unknown> = {}
     if (parsed.missing) extra.missing = parsed.missing
     if ('duplicate' in parsed && parsed.duplicate) extra.duplicate = parsed.duplicate
+    if ('column' in parsed && parsed.column) extra.column = parsed.column
     return { ok: false, res: fail(422, parsed.error, extra) }
   }
   const ids = new Set<string>()
@@ -317,6 +334,7 @@ async function analyze(bytes: Uint8Array, program: CmsProgramRow, mode: CmsImpor
     v = cmsApplyKCheck(v, parsed.rows, results)
     k = { evidence, before, results, acks: results.flatMap((x) => (x.ack ? [x.ack] : [])) }
   }
+  v = cmsApplyBasisUnitCheck(v, parsed.rows, o.basis)
   const digest = await sha256Hex(new TextEncoder().encode(canonicalCmsImport(v, o.format)))
   return { ok: true, v, digest, ignoredFromRow: parsed.ignoredFromRow, supplement: sp && sp.ok ? sp.supplement : null, k }
 }
@@ -345,6 +363,24 @@ const normalizedLastTiers = (v: CmsImportValidation): NonNullable<CmsStoredImpor
     return [{ productId: g.productId, excelRow: row, from: last.from, originalTo: g.normalizedLastTo }]
   })
 
+/**
+ * Cách tính của chương trình cho import: DB trước 130 ⇒ undefined (như cũ); không đọc được ⇒ 503; nháp chưa chọn ⇒ 409 (chọn trước
+ * khi nạp — trigger SP của DB cũng chặn).
+ */
+async function basisOf(deps: CmsImportDeps, programId: string):
+  Promise<{ ok: true; basis: CmsQuantityBasis | undefined } | { ok: false; res: Response }> {
+  let b: CmsProgramBasis | null | undefined
+  try {
+    b = deps.getBasis ? await deps.getBasis(programId) : undefined
+  } catch {
+    b = null
+  }
+  if (b === undefined) return { ok: true, basis: undefined }
+  if (b === null) return { ok: false, res: fail(503, 'BASIS_UNAVAILABLE') }
+  if (b.basis === null) return { ok: false, res: fail(409, 'BASIS_NOT_SET') }
+  return { ok: true, basis: b.basis }
+}
+
 export async function handleCmsImportPreview(req: Request, deps: CmsImportDeps): Promise<Response> {
   const g = await guard(deps)
   if (!g.ok) return g.res
@@ -354,6 +390,8 @@ export async function handleCmsImportPreview(req: Request, deps: CmsImportDeps):
   if (!program) return fail(404, 'PROGRAM_NOT_FOUND')
   const mode = cmsImportModeFor(program, cmsVnToday(deps.now()))
   if (!mode) return fail(409, 'NOT_EDITABLE')
+  const b = await basisOf(deps, program.id)
+  if (!b.ok) return b.res
   const fmtRaw = String(f.form.get('format') ?? 'tiers')
   if (fmtRaw !== 'tiers' && fmtRaw !== 'simple') return fail(400, 'BAD_REQUEST')
   const format: CmsImportFormat = fmtRaw
@@ -362,7 +400,7 @@ export async function handleCmsImportPreview(req: Request, deps: CmsImportDeps):
   const inputs = cmsParseKAckInput(typeof ackRaw === 'string' ? ackRaw : null)
   if (inputs === null || (inputs.length > 0 && !deps.v2)) return fail(400, 'K_ACK_INVALID')
   const a = await analyze(f.bytes, program, mode, deps, {
-    format, kCheck: deps.v2 === true, acks: { kind: 'input', inputs, actor: g.actorId, at: deps.now().toISOString() },
+    format, kCheck: deps.v2 === true, acks: { kind: 'input', inputs, actor: g.actorId, at: deps.now().toISOString() }, basis: b.basis,
   })
   if (!a.ok) return a.res
   const sha = await sha256Hex(f.bytes)
@@ -376,6 +414,7 @@ export async function handleCmsImportPreview(req: Request, deps: CmsImportDeps):
         digest: a.digest, ignoredFromRow: a.ignoredFromRow, rejected: rejectedRaw(a.v),
         tierPolicy: CMS_TIER_POLICY, normalizedLastTiers: normalizedLastTiers(a.v),
         ...(format === 'simple' ? { format: 'simple' as const } : {}),
+        ...(b.basis ? { basis: b.basis } : {}),
         ...(a.k ? {
           kCheck: { asOf: a.k.evidence.ok ? a.k.evidence.asOf : null, available: a.k.evidence.ok, reason: a.k.evidence.ok ? null : a.k.evidence.reason, products: a.k.results },
           kAcks: a.k.acks,
@@ -391,7 +430,7 @@ export async function handleCmsImportPreview(req: Request, deps: CmsImportDeps):
   }
   return json(200, {
     ok: true, runId, sha256: sha, mode, configVersion: program.configVersion, catalogTarget: a.v.catalogTarget, tierPolicy: CMS_TIER_POLICY,
-    ignoredFromRow: a.ignoredFromRow, stats: a.v.stats, format,
+    ignoredFromRow: a.ignoredFromRow, stats: a.v.stats, format, quantityBasis: b.basis ?? null,
     ...(a.supplement ? { supplement: a.supplement } : {}),
     ...(a.k ? { kCheck: {
       asOf: a.k.evidence.ok ? a.k.evidence.asOf : null, available: a.k.evidence.ok, reason: a.k.evidence.ok ? null : a.k.evidence.reason,
@@ -419,6 +458,9 @@ const COMMIT_ERRORS: Record<string, [number, CmsImportErrorCode]> = {
   CMS_IMPORT_TIER_LAST_FINITE: [409, 'PREVIEW_STALE'],
   // Guard deferred 125 lúc COMMIT (RPC bản cũ đang chạy dở khi áp 125 — db-reviewer 125 P2-9) ⇒ kiểm lại file.
   CMS_TIER_LAST_FINITE: [409, 'PREVIEW_STALE'],
+  // CMS-CALC-RET-2 (trigger 130): chương trình về pending / đơn vị CMS không có khoá hợp lệ ở chương trình cms_unit.
+  CMS_BASIS_NOT_SET: [409, 'BASIS_NOT_SET'],
+  CMS_UNIT_CMS_INVALID: [422, 'UNIT_CMS_INVALID'],
   BUSY: [503, 'BUSY'],
 }
 
@@ -440,13 +482,17 @@ export async function handleCmsImportCommit(req: Request, deps: CmsImportDeps): 
   const mode = cmsImportModeFor(program, cmsVnToday(deps.now()))
   if (!mode) return fail(409, 'NOT_EDITABLE')
   if (mode !== run.mode || program.configVersion !== run.configVersionAtPreview) return fail(409, 'PREVIEW_STALE')
+  const b = await basisOf(deps, program.id)
+  if (!b.ok) return b.res
+  // Cách tính đổi giữa preview và commit (config_version cũng đổi — kiểm thêm theo run đã lưu) ⇒ xem preview mới.
+  if ((run.result?.basis ?? null) !== (b.basis ?? null)) return fail(409, 'PREVIEW_STALE')
   // Loại file + kiểm K theo CHÍNH run đã lưu ở server. Client gửi format khác / cờ v2 đổi giữa preview và commit ⇒ xem preview mới.
   const format: CmsImportFormat = run.result?.format === 'simple' ? 'simple' : 'tiers'
   const clientFormat = f.form.get('format')
   if (clientFormat !== null && clientFormat !== format) return fail(409, 'PREVIEW_STALE')
   const kStored = run.result?.kCheck !== undefined
   if (kStored !== (deps.v2 === true) || (format === 'simple' && !deps.v2)) return fail(409, 'PREVIEW_STALE')
-  const a = await analyze(f.bytes, program, mode, deps, { format, kCheck: kStored, acks: { kind: 'stored', acks: cmsStoredKAcks(run.result?.kAcks) } })
+  const a = await analyze(f.bytes, program, mode, deps, { format, kCheck: kStored, acks: { kind: 'stored', acks: cmsStoredKAcks(run.result?.kAcks) }, basis: b.basis })
   if (!a.ok) return a.res
   // Nguồn / trùng / cấu hình đổi sau preview ⇒ kết quả khác ⇒ yêu cầu xem preview mới (SPEC §4.5).
   if (a.digest !== run.result.digest) return fail(409, 'PREVIEW_STALE')

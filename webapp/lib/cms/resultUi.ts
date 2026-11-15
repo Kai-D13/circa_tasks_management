@@ -12,9 +12,12 @@ import type { CmsEngineTier } from './engine/config'
 import {
   cmsFractionUnits, cmsResultState, cmsResultSummary,
   type CmsCatalogRowDto, type CmsLineStatus, type CmsResultHeaderDto, type CmsResultRowDto, type CmsResultRowsDto, type CmsResultState,
-  type CmsResultLineDto, type CmsResultUserDto,
+  type CmsResultLineDto, type CmsResultUserDto, type CmsQuantityClass,
 } from './resultView'
 import type { StatusTone } from '@/components/ds/StatusBadge'
+import { cmsDateTime } from './display'
+import { CMS_QUANTITY_BASIS_LABEL } from './calc/policy'
+import type { CmsRunContractDto } from './resultView'
 
 const ZERO = BigInt(0)
 const ONE = BigInt(1)
@@ -29,7 +32,7 @@ export type CmsResultsLoad =
   | { kind: 'upcoming' }
   | { kind: 'error' }
   | { kind: 'gone' }
-  | { kind: 'loaded'; header: CmsResultHeaderDto; rows: CmsResultRowsDto }
+  | { kind: 'loaded'; header: CmsResultHeaderDto; rows: CmsResultRowsDto; /** P5.2: hiện dòng cách tính cả với run legacy (cờ mode / trả bật). */ basisUi?: boolean }
 
 /** Deps đọc kết quả (route thật: lib/cms/server/resultLoad — RPC 122 qua session client; test: giả). */
 export interface CmsPinDeps {
@@ -37,6 +40,8 @@ export interface CmsPinDeps {
   enabled: boolean
   header(programId: string): Promise<{ ok: true; data: CmsResultHeaderDto } | { ok: false; error: string }>
   rows(programId: string, runId: string): Promise<{ ok: true; data: CmsResultRowsDto } | { ok: false; error: string }>
+  /** P5.2: cờ mode / trả đang bật ⇒ màn hiện cách tính cả với run legacy (cờ OFF ⇒ T11 nguyên trạng). */
+  basisUi?: boolean
 }
 
 /**
@@ -50,9 +55,10 @@ export async function cmsPinnedResults(d: CmsPinDeps, programId: string, o: { st
   for (let attempt = 0; attempt < 2; attempt++) {
     const h = await d.header(programId)
     if (!h.ok) return { kind: h.error === 'RUN_GONE' ? 'gone' : 'error' }
-    if (!h.data.run) return { kind: 'loaded', header: h.data, rows: { runId: null, results: [], catalog: [], users: [] } }
+    const extra = d.basisUi ? { basisUi: true } : {}
+    if (!h.data.run) return { kind: 'loaded', header: h.data, rows: { runId: null, results: [], catalog: [], users: [], contract: null }, ...extra }
     const r = await d.rows(programId, h.data.run.id)
-    if (r.ok && r.data.runId === h.data.run.id) return { kind: 'loaded', header: h.data, rows: r.data }
+    if (r.ok && r.data.runId === h.data.run.id) return { kind: 'loaded', header: h.data, rows: r.data, ...extra }
     if (r.ok || r.error !== 'RUN_GONE') return { kind: 'error' }
   }
   return { kind: 'gone' }
@@ -205,7 +211,7 @@ export function cmsQtyText(baseUnits: bigint, perUnitUnits: bigint): string {
 }
 
 /** Phần đang cộng dồn (lượng cơ sở chưa đủ một đơn vị CMS), dạng "12 / 24 đơn vị cơ sở"; 0 ⇒ null. */
-export function cmsFractionText(r: Pick<CmsResultRowDto, 'baseQuantity' | 'perUnit' | 'cmsQuantity'>): string | null {
+export function cmsFractionText(r: Pick<CmsResultRowDto, 'baseQuantity' | 'perUnit' | 'cmsQuantity'> & Partial<Pick<CmsResultRowDto, 'eligibleBase'>>): string | null {
   const f = cmsFractionUnits(r)
   if (f <= ZERO) return null
   return `${formatCmsDecimal(f).replace('.', ',')} / ${formatCmsDecimal(dec(r.perUnit)).replace('.', ',')} đơn vị cơ sở`
@@ -418,11 +424,74 @@ export function cmsStaffRows(rows: readonly CmsResultRowDto[], users: readonly C
  */
 export const CMS_SALES_ONLY_NOTE = 'CMS tạm tính theo dữ liệu bán hiện có; chưa bao gồm xử lý trả hàng.'
 
+/**
+ * P5.2 — câu phạm vi số liệu theo hợp đồng GHIM từ run (không theo cờ hay cấu hình hiện tại). Run legacy / sales_only ⇒ câu cũ nguyên văn
+ * (T11 không đổi chữ); run net ⇒ đã trừ phiếu trả hoàn tất tới as_of của snapshot trả. Khoản giảm là CMS tính lại, không phải tiền hoàn khách.
+ */
+export function cmsResultScopeNote(c: CmsRunContractDto | null | undefined): string {
+  if (!c || c.returnsPolicy !== 'net_returns_v1') return CMS_SALES_ONLY_NOTE
+  return `CMS tạm tính theo dữ liệu bán đã trừ phiếu trả hàng hoàn tất (dữ liệu trả đến ${cmsDateTime(c.returnsAsOf)}).`
+}
+
+/**
+ * PM P5-04 — câu phạm vi của chương trình ĐÃ CHỐT trong XLSX (UI ẩn câu "tạm tính" khi locked; file không được ghi "tạm tính" cho số
+ * đóng băng). Cùng phạm vi trả của run: sales-only ⇒ chưa gồm trả hàng; net ⇒ đã trừ phiếu trả hoàn tất tới as_of của snapshot.
+ */
+export function cmsLockedScopeNote(c: CmsRunContractDto | null | undefined): string {
+  if (!c || c.returnsPolicy !== 'net_returns_v1') return 'Số đã chốt theo dữ liệu bán của phiên đóng băng; chưa bao gồm xử lý trả hàng.'
+  return `Số đã chốt theo dữ liệu bán đã trừ phiếu trả hàng hoàn tất (dữ liệu trả đến ${cmsDateTime(c.returnsAsOf)}).`
+}
+
+/** P5.2 — "Cách tính: …" của run. Run legacy chỉ hiện khi `basisUi` (cờ mode / trả bật); null ⇒ không hiện dòng. */
+export function cmsRunBasisText(c: CmsRunContractDto | null | undefined, basisUi: boolean | undefined): string | null {
+  if (!c || (c.legacy && !basisUi)) return null
+  return `Cách tính: ${CMS_QUANTITY_BASIS_LABEL[c.quantityBasis]}`
+}
+
 export const CMS_LINE_LABEL: Record<CmsLineStatus, string> = {
   WAITING_GATE: 'Chờ đạt target', ACCUMULATING: 'Đang cộng dồn', RECORDED: 'Đã ghi nhận', AT_CAP: 'Đã đạt trần', ADJUSTMENT: 'Điều chỉnh',
+  // CMS-CALC-RET-2 (run contract): dòng bán không vào lượng thưởng; phiếu trả hoàn tất làm giảm / không đổi CMS.
+  NOT_COUNTED: 'Không tính lượng', RETURN_REDUCED: 'Trả hàng — giảm CMS', RETURN_NO_CHANGE: 'Trả hàng — CMS không đổi',
 }
 export const CMS_LINE_TONE: Record<CmsLineStatus, StatusTone> = {
   WAITING_GATE: 'neutral', ACCUMULATING: 'neutral', RECORDED: 'info', AT_CAP: 'info', ADJUSTMENT: 'warning',
+  NOT_COUNTED: 'neutral', RETURN_REDUCED: 'warning', RETURN_NO_CHANGE: 'neutral',
+}
+
+/** P5.3 — tổng gộp / trả của các dòng có cột ròng (run net). Không dòng nào có net ⇒ null (UI không hiện khối trả). */
+export interface CmsNetSummary { saleBase: bigint; returnBase: bigint; saleGmv: bigint; returnGmv: bigint; returnCount: number }
+export function cmsNetSummary(rows: readonly Pick<CmsResultRowDto, 'net'>[]): CmsNetSummary | null {
+  let s: CmsNetSummary | null = null
+  for (const r of rows) {
+    if (!r.net) continue
+    s ??= { saleBase: ZERO, returnBase: ZERO, saleGmv: ZERO, returnGmv: ZERO, returnCount: 0 }
+    s.saleBase += dec(r.net.saleBase); s.returnBase += dec(r.net.returnBase)
+    s.saleGmv += dec(r.net.saleGmv); s.returnGmv += dec(r.net.returnGmv); s.returnCount += r.net.returnCount
+  }
+  return s
+}
+/** "Đã bán 3 · đã trả 1 · còn 2 hộp" — chỉ khi có phiếu trả (run net); không phiếu ⇒ null (giữ một dòng "Đã bán" như cũ). */
+export function cmsNetQtyText(s: CmsNetSummary | null, perUnit: string, unit: string): string | null {
+  if (!s || (s.returnCount === 0 && s.returnBase === ZERO)) return null
+  const k = dec(perUnit)
+  return `Đã bán ${cmsQtyText(s.saleBase, k)} · đã trả ${cmsQtyText(s.returnBase, k)} · còn ${cmsQtyText(s.saleBase - s.returnBase, k)} ${unit}`
+}
+
+/** P5.2 — dòng mở đầu của một sự kiện: bán ⇒ "Đơn #…"; phiếu trả ⇒ "Trả hàng · đơn gốc #…" (không trình bày như đơn bán). */
+export const cmsLineOrderText = (l: Pick<CmsResultLineDto, 'orderCode'> & Partial<Pick<CmsResultLineDto, 'kind'>>): string =>
+  l.kind === 'RETURN' ? `Trả hàng · đơn gốc #${l.orderCode}` : `Đơn #${l.orderCode}`
+
+/** P5.4 — tên lớp lượng của dòng (XLSX / màn super). */
+export const CMS_QUANTITY_CLASS_LABEL: Record<CmsQuantityClass, string> = {
+  POS_BASE: 'Cộng dồn quy đổi', COUNTED: 'Đúng đơn vị, số nguyên', OTHER_UNIT: 'Khác đơn vị CMS', FRACTIONAL_QUANTITY: 'Số lượng lẻ', ZERO_QUANTITY: 'Số lượng 0',
+}
+
+/** Lý do dòng bán không vào lượng thưởng (cách tính nguyên) — chữ cố định, không suy thêm. */
+export const CMS_QUANTITY_CLASS_NOTE: Record<CmsQuantityClass, string | null> = {
+  POS_BASE: null, COUNTED: null,
+  OTHER_UNIT: 'Khác đơn vị CMS — không tính lượng thưởng, vẫn tính GMV',
+  FRACTIONAL_QUANTITY: 'Số lượng lẻ — cả dòng không tính lượng thưởng, vẫn tính GMV',
+  ZERO_QUANTITY: 'Số lượng 0 — không tính',
 }
 
 /** Lượng đơn vị CMS dòng này đẩy thêm (qty_after − qty_before) — chỉ trình bày, tiền dòng lấy từ snapshot. */
@@ -443,10 +512,23 @@ export interface CmsLineView {
  * Trình bày một dòng lịch sử. `returnsApproved` = hợp đồng trả hàng Q-206 đã chốt (lib/cms/releaseGate) — chưa chốt thì KHÔNG
  * hiện nhãn "Điều chỉnh" / số âm (U18): dòng ADJUSTMENT (chỉ có thể xuất hiện ở dữ liệu QA) hiện "Chờ xác nhận", tiền '—'.
  */
-export function cmsLineView(l: Pick<CmsResultLineDto, 'status' | 'amountVnd' | 'baseQuantity' | 'qtyBefore' | 'qtyAfter'>, perUnit: string, unit: string, returnsApproved: boolean): CmsLineView {
+export function cmsLineView(l: Pick<CmsResultLineDto, 'status' | 'amountVnd' | 'baseQuantity' | 'qtyBefore' | 'qtyAfter'> & Partial<Pick<CmsResultLineDto, 'kind' | 'quantityClass' | 'returnCode'>>, perUnit: string, unit: string, returnsApproved: boolean): CmsLineView {
   const qtyText = cmsQtyText(dec(l.baseQuantity), dec(perUnit))
   if (l.status === 'ADJUSTMENT' && !returnsApproved) return { label: 'Chờ xác nhận', tone: 'neutral', amountVnd: null, qtyText, note: 'Dòng điều chỉnh chưa được công bố' }
   const units = cmsLineUnits(l)
+  // Run contract: phiếu trả hoàn tất (khoản giảm là TÍNH LẠI CMS, không phải tiền hoàn khách) / dòng bán không vào lượng.
+  if (l.kind === 'RETURN') {
+    const code = l.returnCode ? ` ${l.returnCode}` : ''
+    const back = cmsQtyText(-dec(l.baseQuantity), dec(perUnit))
+    const note = l.status === 'RETURN_REDUCED' ? `Phiếu trả${code}: ${units} ${unit} tính CMS · CMS tính lại theo lượng còn lại`
+      : l.status === 'WAITING_GATE' ? `Phiếu trả${code} · chưa đạt target`
+        : `Phiếu trả${code}: lượng tính CMS không đổi`
+    return { label: CMS_LINE_LABEL[l.status], tone: CMS_LINE_TONE[l.status], amountVnd: BigInt(l.amountVnd), qtyText: back, note }
+  }
+  if (l.status === 'NOT_COUNTED') {
+    return { label: CMS_LINE_LABEL.NOT_COUNTED, tone: CMS_LINE_TONE.NOT_COUNTED, amountVnd: BigInt(l.amountVnd), qtyText,
+      note: (l.quantityClass && CMS_QUANTITY_CLASS_NOTE[l.quantityClass]) ?? 'Không tính lượng thưởng' }
+  }
   const note = l.status === 'WAITING_GATE' ? 'Chưa đạt target — CMS tính khi đạt'
     : l.status === 'ACCUMULATING' ? `Cộng dồn, chưa đủ thêm 1 ${unit}`
       : l.status === 'AT_CAP' ? (units > ZERO ? `+${units} ${unit} tính CMS · chạm trần` : 'Vượt trần — không thêm CMS')

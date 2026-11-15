@@ -6,6 +6,7 @@ import { cmsBqSalesTable } from '@/lib/cms/config'
 import { runBigQueryDryRun, runBigQueryPaged } from '@/lib/bigquery/client'
 import { getCmsAdminAccess } from './access'
 import { supabaseCmsImportRepo } from './importRepo'
+import { cmsLoadProgramBasis, cmsProgramModesPath, getCmsCapabilityState } from './capabilities'
 
 // Nối dependency thật cho route import CMS (cờ, session super admin + marker QA, repo service role).
 export function cmsImportDeps(): CmsImportDeps {
@@ -21,5 +22,13 @@ export function cmsImportDeps(): CmsImportDeps {
     getAccess: getCmsAdminAccess,
     repo: supabaseCmsImportRepo,
     now: () => new Date(),
+    // CMS-CALC-RET-2: DB trước 130 ⇒ undefined; 130 mà năng lực lệch / lỗi đọc ⇒ null (route dừng 503).
+    getBasis: async (programId) => {
+      const s = await getCmsCapabilityState()
+      if (s.kind === 'pre130') return undefined
+      if (!cmsProgramModesPath(s)) return null
+      const r = await cmsLoadProgramBasis([programId])
+      return r.ok ? r.data.get(programId) ?? null : null
+    },
   }
 }

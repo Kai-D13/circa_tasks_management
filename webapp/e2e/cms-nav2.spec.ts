@@ -4,6 +4,7 @@ import { MANAGER_STATE, STAFF_STATE, SUPER_STATE } from './authState'
 import { sessionDb } from './dbFixtures'
 import { trapWrites, type TrappedRequest } from './fixtureGuard'
 import { NAV_WATCHDOG_MS } from '../lib/nav/watchdog'
+import { replayRscAfter, routerNavigate } from './rscReplay'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // NAV-2 (PM 08/11/2026 — planning/research/cms-nav2-guides-next-actions-2026-11-08.md §1–3, AC NAV2-01…10): segment
@@ -17,6 +18,23 @@ import { NAV_WATCHDOG_MS } from '../lib/nav/watchdog'
 // Đếm tải cứng = số request document tới đúng đích. Route thật cần server bật CMS_PROGRAM_ENABLED (E2E_CMS_ENABLED=1); chỉ
 // đọc — mọi request ghi của app bị chặn + ghi nhận (trapWrites) và phải bằng 0. Fixture /ui-catalog/cms-v2 (super, UI_CATALOG=1,
 // không DB) dùng cho các ca cần thời gian tất định chiều CMS→KPI.
+// NAV2-04 kpi2cms (route thật, PM 14/11 SALES-CONT-01 / SALES-R3O-02): payload THẬT chuẩn bị trước cửa sổ đo trên trang riêng cùng context
+// (e2e/rscReplay.ts), cấp khi đủ 3 s kể từ lúc chặn (mốc thực tế ghi lại); request ghi tới URL đích bị chính handler replay chặn trước mạng.
+//
+// NAV-REPEAT-1 (PM 15/11, AC NAVR-06 — map theo hợp đồng điều hướng mới): link "CMS sản phẩm" trên trang KPI là <a> thường
+// (document navigation chủ động, data-cms-nav="document"); không còn transition RSC / watchdog ở hướng KPI → CMS. Hướng CMS → KPI
+// giữ <Link> + NavWatchdog. Map ca cũ (không ca nào bị bỏ; ca document KHÔNG được gọi là "điều hướng mềm đạt"):
+//   NAV2-01            giữ; thêm data-cms-nav (chỉ link CMS trên trang KPI = "document").
+//   NAV2-02 kpi2cms    → NAVR-01/02 (cms-nav-repeat.spec): đúng MỘT document bắt đầu ≤ 1,5 s, 0 RSC điều hướng; NAV2-02 cms2kpi giữ.
+//   NAV2-03 kpi2cms    → không áp dụng (không còn RSC để treo); NAVR-01 kiểm không document thứ hai tới 8 s; NAV2-08 (nội dung
+//                        như tải trực tiếp) → NAVR-03. NAV2-03 cms2kpi cold / warm giữ (watchdog chiều về).
+//   NAV2-04 kpi2cms    → chuyển sang cms2kpi (route thật, replayRscAfter, payload thật cấp sau 3 s ⇒ huỷ timer, 0 tải cứng);
+//                        "bắt đầu ngay" của chiều document → NAVR-02 + ca điều khiển cố tình chờ 6 s.
+//   NAV2-05 / 06 / 07  (luồng huỷ / đổi hướng / tab ẩn / Back / phiên thu hồi / phím bổ trợ) đổi chiều sang CMS → KPI — chỗ
+//                        watchdog còn dùng; Back thành Back khác tài liệu (CMS mở bằng document). Phím bổ trợ của link document
+//                        → NAVR-04 (tab mới thật). Bản tổng quát của các luồng này vẫn ở nav-watchdog.spec (thẻ chiến dịch).
+//   NAV2-07 phiên hết hạn thật ×4 kpi2cms → giữ chiều KPI → CMS: mỗi lượt đúng MỘT document bắt đầu ≤ 1,5 s, tới CMS, không /login.
+//   Fixture CMS → KPI  giữ nguyên.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const RUN_PROJECT = 'mobile-390'   // viewport do test đặt — một project là đủ (cùng lý do nav-watchdog.spec)
@@ -89,7 +107,9 @@ async function reach(page: Page, isTarget: (u: URL) => boolean, timeout: number,
 }
 /**
  * Giữ RSC tới đích. mode 'cold' = đích chưa prefetch: prefetch không bao giờ trả; 'warm' = prefetch qua bình thường; 'inflight' =
- * prefetch cũng chậm như RSC điều hướng (về GIỮA lúc điều hướng). Không delayMs ⇒ RSC điều hướng treo; delayMs ⇒ chậm rồi cho qua.
+ * prefetch cũng chậm như RSC điều hướng (về GIỮA lúc điều hướng). Không delayMs ⇒ RSC điều hướng treo; delayMs ⇒ chậm TỐI THIỂU
+ * delayMs rồi cho qua (sàn, không chặn trên — xem chú thích trong hàm). Chỉ dùng delayMs cho fixture /ui-catalog (không DB, nguồn
+ * nhanh); ca route thật NAV2-04 kpi2cms dùng replayRscAfter (e2e/rscReplay.ts) — phản hồi đúng delayMs.
  * Trả `prefetched()` — đã có ít nhất một phản hồi prefetch tới đích chưa.
  */
 async function holdRsc(page: Page, isTarget: (u: URL) => boolean, mode: 'cold' | 'warm' | 'inflight', delayMs?: number) {
@@ -101,8 +121,8 @@ async function holdRsc(page: Page, isTarget: (u: URL) => boolean, mode: 'cold' |
     if (mode === 'warm' && isPrefetch(r)) return route.continue()
     if (mode === 'cold' && isPrefetch(r)) return   // đích chưa bao giờ prefetch xong
     if (delayMs === undefined) return   // không trả ⇒ treo
-    // "Chậm delayMs rồi xong" = phản hồi hoàn tất đúng delayMs sau khi request đi (đã gồm thời gian render của server — route thật
-    // đọc DB prod dao động 1–2,5 s, cộng dồn sẽ làm ca không tất định).
+    // delayMs là SÀN: route.fetch() tới server thật (trong lúc đo) rồi chờ thêm max(0, delayMs − thời_gian_fetch) ⇒ nguồn chậm hơn
+    // delayMs thì phản hồi trễ theo nguồn (continuation r3: 5.766 ms — PM 14/11 SALES-CONT-01). Tất định chỉ khi nguồn nhanh hơn delayMs.
     const t = Date.now()
     try {
       const res = await route.fetch()
@@ -136,19 +156,7 @@ async function setVisibility(page: Page, state: 'hidden' | 'visible') {
     document.dispatchEvent(new Event('visibilitychange'))
   }, state)
 }
-/** Dấu hiệu nội dung CMS (để so tải cứng với tải trực tiếp — cùng chương trình / phạm vi / run, không 0 giả). */
-async function cmsSignature(page: Page) {
-  const root = page.locator('main [data-cms-staff]')
-  await expect(root).toBeVisible({ timeout: 30_000 })
-  return {
-    kind: await root.getAttribute('data-cms-staff'),
-    results: await root.getAttribute('data-cms-results'),
-    program: (await page.locator('main [data-cms-program-label], main [data-cms-program-picker]').first().innerText().catch(() => '')).trim(),
-    hero: (await page.locator('main [data-cms-hero-amount]').allInnerTexts()).join('|'),
-    store: (await page.locator('main [data-cms-store-amount]').allInnerTexts()).join('|'),
-    cards: await page.locator('main [data-cms-staff-product]').count(),
-  }
-}
+// cmsSignature (NAV2-08) chuyển sang e2e/cms-nav-repeat.spec.ts (NAVR-03) cùng ca KPI → CMS.
 function noWrites(seen: TrappedRequest[]) {
   expect(seen, 'request ghi của app trong luồng điều hướng chỉ đọc').toEqual([])
 }
@@ -175,16 +183,18 @@ for (const role of ROLES) {
         const nav = await openSegment(page, d.from, d.seg)
         const links = nav.locator('a')
         await expect(links).toHaveCount(2)
-        expect(await links.evaluateAll((as) => as.map((a) => ({ href: a.getAttribute('href'), text: a.textContent, kids: a.childElementCount, cur: a.getAttribute('aria-current') }))))
+        expect(await links.evaluateAll((as) => as.map((a) => ({ href: a.getAttribute('href'), text: a.textContent, kids: a.childElementCount, cur: a.getAttribute('aria-current'), doc: a.getAttribute('data-cms-nav') }))))
           .toEqual([
-            { href: '/targets', text: 'KPI chiến dịch', kids: 0, cur: active === 'KPI chiến dịch' ? 'page' : null },
-            { href: '/targets?tab=cms', text: 'CMS sản phẩm', kids: 0, cur: active === 'CMS sản phẩm' ? 'page' : null },
+            { href: '/targets', text: 'KPI chiến dịch', kids: 0, cur: active === 'KPI chiến dịch' ? 'page' : null, doc: null },
+            // NAV-REPEAT-1: chỉ link CMS trên trang KPI là document navigation.
+            { href: '/targets?tab=cms', text: 'CMS sản phẩm', kids: 0, cur: active === 'CMS sản phẩm' ? 'page' : null, doc: dir === 'kpi2cms' ? 'document' : null },
           ])
       }
       noWrites(seen)
     })
 
-    for (const dir of ['kpi2cms', 'cms2kpi'] as const) {
+    // NAV-REPEAT-1: kpi2cms là document navigation (NAVR-01…03 ở cms-nav-repeat.spec) — chỉ chiều mềm cms2kpi ở đây.
+    for (const dir of ['cms2kpi'] as const) {
       const d = DIRS[dir]
       test(`NAV2-02 ${dir}: điều hướng mềm bình thường tới đúng URL + nội dung, 0 tải cứng`, async ({ page }) => {
         const seen = await trapWrites(page)
@@ -226,44 +236,56 @@ for (const role of ROLES) {
           await page.waitForTimeout(2_000)
           expect(loads.at.length, `phải đúng một tải cứng (${loads.at.join(', ')} ms)`).toBe(1)
           expect(loads.at[0], 'tải cứng trước mốc').toBeGreaterThanOrEqual(NAV_WATCHDOG_MS - 200)
-          if (dir === 'kpi2cms') {
-            // NAV2-08: tải cứng cho đúng màn CMS như tải trực tiếp (cùng chương trình / phạm vi / run, không 0 giả).
-            const viaWatchdog = await cmsSignature(page)
-            await page.goto('/targets?tab=cms')
-            expect(viaWatchdog, 'màn CMS sau tải cứng khác tải trực tiếp').toEqual(await cmsSignature(page))
-            expect(viaWatchdog.results, 'kết quả CMS lỗi').not.toBe('error')
-          }
+          // NAV2-08 (màn CMS sau tải cứng = tải trực tiếp) thuộc chiều kpi2cms cũ → NAVR-03 (cms-nav-repeat.spec).
           noWrites(seen)
         })
       }
     }
 
     for (const mode of ['cold', 'warm'] as const) {
-      test(`NAV2-04 kpi2cms ${mode}: RSC chậm 3 s rồi xong ⇒ huỷ timer, không tải cứng trễ`, async ({ page }) => {
-        const d = DIRS.kpi2cms
+      // PM 14/11 SALES-CONT-01: phản hồi điều hướng cấp sau 3 s kể từ lúc chặn (payload thật lấy trước cửa sổ đo trên trang riêng) — thay sàn 3 s của holdRsc.
+      // NAV-REPEAT-1: kpi2cms không còn RSC ⇒ oracle chuyển sang chiều mềm còn watchdog (cms2kpi), cùng cơ chế replay.
+      test(`NAV2-04 cms2kpi ${mode}: RSC trả sau 3 s (payload thật chuẩn bị trước) ⇒ huỷ timer, không tải cứng trễ`, async ({ page }, testInfo) => {
+        const d = DIRS.cms2kpi
         const seen = await trapWrites(page)
         const timers = await timerTrace(page)
-        const h = await holdRsc(page, d.isTarget, mode, 3_000)
+        const h = await replayRscAfter(page, d.isTarget, mode, 3_000)
+        // Chuẩn bị TRƯỚC cửa sổ đo, trang riêng cùng context (Router Cache riêng — trang kiểm vẫn cold / warm đúng nghĩa); lỗi ⇒ đỏ 'CHUẨN BỊ RSC LỖI'.
+        // PM 15/11 §7.3: chuẩn bị CẢ chuỗi request điều hướng của một lần chạm (chốt khi nội dung đích hiện + lặng); 3 s là hạn chung từ request đầu.
+        // PM 15/11 §8.3: trang chuẩn bị điều hướng bằng router client tới ĐÚNG href của link (đọc từ DOM) — không qua <Link> nên không
+        // gắn watchdog 6 s; nguồn chậm vẫn chuẩn bị trong hạn 45 s. Trang kiểm vẫn chạm link thật; khoá request phải trùng chuỗi.
+        const prep = await h.prepare({ open: (p) => openSegment(p, d.from, d.seg), click: async (p) => { const href = await segLink(p, d.seg, d.label).getAttribute('href'); if (href !== d.href) throw new Error(`href link ${d.label} = ${href} (phải ${d.href})`); await routerNavigate(p, href) }, ready: (p) => p.locator(d.done).first().waitFor({ state: 'visible', timeout: 20_000 }) })
         const loads = hardLoads(page, d.isTarget)
         await openSegment(page, d.from, d.seg)
         if (mode === 'warm') await waitPrefetch(page, h)
+        else expect(h.prefetchResponses(), 'cold mà trang kiểm đã nhận prefetch đích').toBe(0)
+        expect(await h.buildReady(), 'không đọc được build tài liệu trang kiểm trước t0').toBe(true)
         loads.start()
         const t0 = Date.now()
         await segLink(page, d.seg, d.label).click()
-        await reach(page, d.isTarget, 15_000, loads, timers)
+        await reach(page, d.isTarget, 15_000, loads, async () => `${await timers()} · ${h.describe(t0)}`)
         const dt = Date.now() - t0
+        testInfo.annotations.push({ type: 'nav2-04 phản hồi chuẩn bị', description: `${mode} · chuẩn bị qua router client (không watchdog link) ${prep.prepMs} ms ngoài cửa sổ đo (chuỗi ${prep.chain} · fetch thật ${prep.fetchMsEach.join(' + ')} ms · ${prep.bytesEach.join(' + ')} B) · ${h.describe(t0)} · URL đổi +${dt} ms` })
+        expect(h.problems(), `CHUẨN BỊ / CẤP RSC LỖI · ${h.describe(t0)}`).toEqual([])
+        expect(h.served().filter((s) => s.fulfilledAt !== null).length, `không request điều hướng nào nhận payload chuẩn bị · ${h.describe(t0)}`).toBeGreaterThanOrEqual(1)
         expect(dt, 'RSC chậm 3 s mà URL đổi sớm hơn — không chậm thật').toBeGreaterThanOrEqual(3_000)
         expect(dt, `điều hướng mềm mất ${dt} ms — chạm mốc watchdog, ca không kiểm được huỷ timer`).toBeLessThan(NAV_WATCHDOG_MS - 500)
         await expect(page.locator(d.done)).toBeVisible({ timeout: 20_000 })
         await page.waitForTimeout(NAV_WATCHDOG_MS + 2_000 - dt)
         expect(loads.at, 'đã tới đích bằng điều hướng mềm mà vẫn tải cứng').toEqual([])
+        // Sau mốc watchdog: đúng số request của chuỗi chuẩn bị, mỗi request đã cấp, không request ngoài chuỗi / lệch thứ tự (bắt thiếu response).
+        testInfo.annotations.push({ type: 'nav2-04 chuỗi sau mốc watchdog', description: h.describe(t0) })
+        expect(h.problems(), `request ngoài chuỗi / lệch sau khi tới đích · ${h.describe(t0)}`).toEqual([])
+        expect(h.served().length, `số request điều hướng ≠ chuỗi chuẩn bị (${h.chainLength()}) · ${h.describe(t0)}`).toBe(h.chainLength())
+        expect(h.complete(), `chuỗi chuẩn bị chưa được cấp đủ / đúng thứ tự · ${h.describe(t0)}`).toBe(true)
         noWrites(seen)
       })
     }
   })
 }
 
-test.describe('NAV-2 segment — luồng hủy / đổi hướng / tab ẩn / Back / phiên (staff) @mobile', () => {
+// NAV-REPEAT-1: các luồng watchdog của segment chạy ở chiều CÒN watchdog (CMS → KPI): mở CMS, giữ RSC tới KPI.
+test.describe('NAV-2 segment — luồng hủy / đổi hướng / tab ẩn / Back / phiên (staff, chiều CMS → KPI) @mobile', () => {
   test.use({ storageState: STAFF_STATE, viewport: VW.m390, isMobile: true, hasTouch: true })
   test.skip(!CMS_ON, 'server chưa bật CMS_PROGRAM_ENABLED (E2E_CMS_ENABLED=1)')
   test.skip(!fs.existsSync(STAFF_STATE), 'chưa có phiên staff')
@@ -271,49 +293,49 @@ test.describe('NAV-2 segment — luồng hủy / đổi hướng / tab ẩn / Ba
     testInfo.skip(testInfo.project.name !== RUN_PROJECT, `chỉ chạy dưới project ${RUN_PROJECT}`)
     testInfo.setTimeout(120_000)
   })
-  const d = DIRS.kpi2cms
+  const d = DIRS.cms2kpi
 
-  test('NAV2-05 chạm CMS (treo) rồi chạm lại KPI đang chọn ⇒ không tải cứng CMS, không tải lại KPI', async ({ page }) => {
+  test('NAV2-05 chạm KPI (treo) rồi chạm lại CMS đang chọn ⇒ không tải cứng KPI, không tải lại CMS', async ({ page }) => {
     const seen = await trapWrites(page)
     await holdRsc(page, d.isTarget, 'cold')
-    const toCms = hardLoads(page, d.isTarget)
-    const toKpi = hardLoads(page, DIRS.cms2kpi.isTarget)
+    const toKpi = hardLoads(page, d.isTarget)
+    const toCms = hardLoads(page, DIRS.kpi2cms.isTarget)
     await openSegment(page, d.from, d.seg)
-    toCms.start(); toKpi.start()
-    await segLink(page, 'kpi', 'CMS sản phẩm').click()
+    toKpi.start(); toCms.start()
+    await segLink(page, 'cms', 'KPI chiến dịch').click()
     await page.waitForTimeout(1_500)
-    await segLink(page, 'kpi', 'KPI chiến dịch').click()
+    await segLink(page, 'cms', 'CMS sản phẩm').click()
     await page.waitForTimeout(NAV_WATCHDOG_MS + 3_000)
-    expect(toCms.at, 'link bị bỏ vẫn kéo về CMS').toEqual([])
-    expect(toKpi.at, 'nhấn tab đang chọn mà tải lại trang').toEqual([])
-    await expect(page).toHaveURL(/\/targets$/)
-    await expect(page.locator('main [data-cms-targets-segment="kpi"]')).toBeVisible()
+    expect(toKpi.at, 'link bị bỏ vẫn kéo về KPI').toEqual([])
+    expect(toCms.at, 'nhấn tab đang chọn mà tải lại trang').toEqual([])
+    await expect(page).toHaveURL((u) => DIRS.kpi2cms.isTarget(u))
+    await expect(page.locator('main [data-cms-targets-segment="cms"]')).toBeVisible()
     noWrites(seen)
   })
 
-  test('NAV2-05 chạm CMS (treo) rồi đổi hướng sang Tasks ⇒ chỉ đích cuối, timer cũ không kéo về CMS', async ({ page }) => {
+  test('NAV2-05 chạm KPI (treo) rồi đổi hướng sang Tasks ⇒ chỉ đích cuối, timer cũ không kéo về KPI', async ({ page }) => {
     const seen = await trapWrites(page)
     await holdRsc(page, d.isTarget, 'cold')
-    const toCms = hardLoads(page, d.isTarget)
+    const toKpi = hardLoads(page, d.isTarget)
     await openSegment(page, d.from, d.seg)
-    toCms.start()
-    await segLink(page, 'kpi', 'CMS sản phẩm').click()
+    toKpi.start()
+    await segLink(page, 'cms', 'KPI chiến dịch').click()
     await page.waitForTimeout(1_500)
     await page.locator('[data-bottom-nav] a[href="/tasks"]').first().click()
     await expect(page).toHaveURL(/\/tasks(\?|$)/, { timeout: 15_000 })
     await page.waitForTimeout(NAV_WATCHDOG_MS + 2_000)
-    expect(toCms.at, 'timer cũ kéo về CMS sau khi đã đổi hướng').toEqual([])
+    expect(toKpi.at, 'timer cũ kéo về KPI sau khi đã đổi hướng').toEqual([])
     await expect(page).toHaveURL(/\/tasks(\?|$)/)
     noWrites(seen)
   })
 
-  test('NAV2-05 nhấn tab CMS đang chọn khi RSC treo ⇒ không tải lại oan', async ({ page }) => {
+  test('NAV2-05 nhấn tab KPI đang chọn khi RSC treo ⇒ không tải lại oan', async ({ page }) => {
     const seen = await trapWrites(page)
     await holdRsc(page, d.isTarget, 'cold')
     const loads = hardLoads(page, d.isTarget)
-    await openSegment(page, DIRS.cms2kpi.from, 'cms')
+    await openSegment(page, DIRS.kpi2cms.from, 'kpi')
     loads.start()
-    await segLink(page, 'cms', 'CMS sản phẩm').click()
+    await segLink(page, 'kpi', 'KPI chiến dịch').click()
     await page.waitForTimeout(NAV_WATCHDOG_MS + 3_000)
     expect(loads.at, 'đã ở đích mà vẫn tải cứng').toEqual([])
     noWrites(seen)
@@ -325,7 +347,7 @@ test.describe('NAV-2 segment — luồng hủy / đổi hướng / tab ẩn / Ba
     const loads = hardLoads(page, d.isTarget)
     await openSegment(page, d.from, d.seg)
     loads.start()
-    await segLink(page, 'kpi', 'CMS sản phẩm').click()
+    await segLink(page, 'cms', 'KPI chiến dịch').click()
     await page.waitForTimeout(1_000)
     await setVisibility(page, 'hidden')
     await page.waitForTimeout(NAV_WATCHDOG_MS + 1_000)
@@ -338,8 +360,8 @@ test.describe('NAV-2 segment — luồng hủy / đổi hướng / tab ẩn / Ba
     await page.waitForTimeout(1_500)
     expect(loads.at.length).toBe(1)
     await page.goBack()
-    await expect(page).toHaveURL(/\/targets$/, { timeout: 15_000 })
-    await expect(page.locator('main [data-cms-targets-segment="kpi"]')).toBeVisible({ timeout: 20_000 })
+    await expect(page).toHaveURL((u) => DIRS.kpi2cms.isTarget(u), { timeout: 15_000 })
+    await expect(page.locator('main [data-cms-targets-segment="cms"]')).toBeVisible({ timeout: 20_000 })
     await page.goForward()
     await expect(page).toHaveURL((u) => d.isTarget(u), { timeout: 15_000 })
     await expect(page.locator(d.done)).toBeVisible({ timeout: 20_000 })
@@ -349,23 +371,22 @@ test.describe('NAV-2 segment — luồng hủy / đổi hướng / tab ẩn / Ba
     noWrites(seen)
   })
 
-  test('NAV2-06 chạm CMS (treo) rồi Back về trang trước ⇒ segment unmount, không tải cứng CMS', async ({ page }) => {
+  // CMS giờ mở bằng document (như đi từ KPI sau NAV-REPEAT-1) ⇒ Back là quay về tài liệu trước; bản Back traverse trong app của
+  // useNavWatchdog vẫn ở nav-watchdog.spec.
+  test('NAV2-06 chạm KPI (treo) rồi Back về trang trước ⇒ rời CMS, không tải cứng KPI', async ({ page }) => {
     const seen = await trapWrites(page)
     await holdRsc(page, d.isTarget, 'cold')
     const loads = hardLoads(page, d.isTarget)
     await page.goto('/tasks')
     await expect(page, 'bị đẩy về /login ⇒ storageState hết hạn').toHaveURL(/\/tasks(\?|$)/)
-    await page.waitForFunction(() => { const a = document.querySelector('[data-bottom-nav] a[href="/targets"]'); return !!a && Object.keys(a).some((k) => k.startsWith('__reactProps')) }, null, { timeout: 30_000 })
-    await page.locator('[data-bottom-nav] a[href="/targets"]').first().click()   // vào /targets bằng điều hướng mềm ⇒ Back là traverse trong app
-    await expect(page).toHaveURL(/\/targets$/, { timeout: 20_000 })
-    await segmentReady(page, 'kpi', '/targets (từ BottomNav)')
+    await openSegment(page, d.from, d.seg)
     loads.start()
-    await segLink(page, 'kpi', 'CMS sản phẩm').click()
+    await segLink(page, 'cms', 'KPI chiến dịch').click()
     await page.waitForTimeout(1_000)
     await page.goBack()
     await expect(page).toHaveURL(/\/tasks(\?|$)/, { timeout: 15_000 })
     await page.waitForTimeout(NAV_WATCHDOG_MS + 2_000)
-    expect(loads.at, 'đã Back mà timer vẫn tải cứng CMS').toEqual([])
+    expect(loads.at, 'đã Back mà timer vẫn tải cứng KPI').toEqual([])
     await expect(page).toHaveURL(/\/tasks(\?|$)/)
     noWrites(seen)
   })
@@ -377,7 +398,7 @@ test.describe('NAV-2 segment — luồng hủy / đổi hướng / tab ẩn / Ba
     page.on('request', (r) => { if (r.resourceType() === 'document' && urlOf(r.url()).pathname === '/login') logins.push(r.url()) })
     await openSegment(page, d.from, d.seg)
     loads.start()
-    await segLink(page, 'kpi', 'CMS sản phẩm').click()
+    await segLink(page, 'cms', 'KPI chiến dịch').click()
     await page.waitForTimeout(1_000)
     await page.context().clearCookies()
     await expect(page).toHaveURL(/\/login/, { timeout: NAV_WATCHDOG_MS + 15_000 })
@@ -387,24 +408,25 @@ test.describe('NAV-2 segment — luồng hủy / đổi hướng / tab ẩn / Ba
     await expect(page).toHaveURL(/\/login/)
   })
 
-  test('NAV2-07 chạm có phím bổ trợ (tab mới) ⇒ tab gốc không bị kéo sau mốc', async ({ page, context }) => {
+  // Link document (KPI → CMS) với phím bổ trợ: NAVR-04 (cms-nav-repeat.spec, tab mới thật). Ở đây: <Link> còn watchdog.
+  test('NAV2-07 chạm KPI có phím bổ trợ (tab mới) ⇒ tab gốc không bị kéo sau mốc', async ({ page, context }) => {
     const seen = await trapWrites(page)
     const loads = hardLoads(page, d.isTarget)
     await openSegment(page, d.from, d.seg)
     loads.start()
     const popup = context.waitForEvent('page', { timeout: 10_000 }).catch(() => null)
-    await segLink(page, 'kpi', 'CMS sản phẩm').click({ modifiers: ['Control'] })
+    await segLink(page, 'cms', 'KPI chiến dịch').click({ modifiers: ['Control'] })
     const p2 = await popup
     await p2?.close().catch(() => {})
     await page.waitForTimeout(NAV_WATCHDOG_MS + 2_000)
     expect(loads.at, 'tab gốc bị tải cứng sau chạm có phím bổ trợ').toEqual([])
-    await expect(page).toHaveURL(/\/targets$/)
+    await expect(page).toHaveURL((u) => DIRS.kpi2cms.isTarget(u))
     noWrites(seen)
   })
 })
 
 // Lỗi THẬT (không giữ RSC): phiên đánh dấu hết hạn (expires_at quá khứ) — điều kiện NAV-1 làm treo tăng mạnh. Mỗi lượt context
-// mới; chạm một lần phải tới CMS (mềm, hoặc watchdog gỡ treo đúng một lần), không lặp /login.
+// mới; chạm một lần phải tới CMS — từ NAV-REPEAT-1 bằng đúng MỘT document bắt đầu ngay — không lặp /login.
 test.describe('NAV2-07 phiên hết hạn thật — chạm segment một lần luôn tới CMS @mobile', () => {
   test.skip(!CMS_ON, 'server chưa bật CMS_PROGRAM_ENABLED (E2E_CMS_ENABLED=1)')
   test.skip(!STAFF.email || !STAFF.password, 'E2E_STAFF_* chưa set')
@@ -443,12 +465,14 @@ test.describe('NAV2-07 phiên hết hạn thật — chạm segment một lần 
       await expect(page, `lượt ${i + 1}: chạm không tới CMS`).toHaveURL((u) => d.isTarget(u), { timeout: NAV_WATCHDOG_MS + 15_000 })
       const dt = Date.now() - t0
       await expect(page.locator(d.done)).toBeVisible({ timeout: 20_000 })
-      await page.waitForTimeout(1_500)
-      if (dt < NAV_WATCHDOG_MS) expect(loads.at, `lượt ${i + 1}: điều hướng mềm ${dt} ms mà vẫn tải cứng`).toEqual([])
-      else expect(loads.at.length, `lượt ${i + 1}: treo ${dt} ms — phải đúng một tải cứng`).toBe(1)
+      // NAV-REPEAT-1: KPI → CMS là document navigation ⇒ đúng MỘT document bắt đầu ngay (proxy làm mới phiên phía server),
+      // không document thứ hai tới hết mốc watchdog + 2 s.
+      await page.waitForTimeout(Math.max(1_500, NAV_WATCHDOG_MS + 2_000 - (Date.now() - t0)))
+      expect(loads.at.length, `lượt ${i + 1}: phải đúng một document (${loads.at.join(', ')} ms)`).toBe(1)
+      expect(loads.at[0], `lượt ${i + 1}: document bắt đầu muộn`).toBeLessThanOrEqual(1_500)
       expect(logins, `lượt ${i + 1}: bị đẩy /login`).toEqual([])
       noWrites(seen)
-      rounds.push(`${dt}ms${loads.at.length ? '+tải cứng' : ''}`)
+      rounds.push(`URL ${dt}ms · doc +${loads.at[0]}ms`)
       await ctx.close()
     }
     testInfo.annotations.push({ type: 'nav-2 phiên hết hạn', description: rounds.join(' · ') })

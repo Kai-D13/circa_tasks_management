@@ -4,7 +4,7 @@ import { Notice } from '@/components/ds/Notice'
 import { ProgressBar } from '@/components/ds/ProgressBar'
 import { cn } from '@/lib/utils'
 import { cmsAmountPerUnit, cmsDateTime, cmsVnd } from '@/lib/cms/display'
-import { cmsHistoryHref, cmsLoadState, CMS_SALES_ONLY_NOTE, type CmsCardFilter, type CmsGateView, type CmsNearGate, type CmsResultsLoad, type CmsStaffCard, type CmsStaffSummary, type CmsStoreSummary, type CmsUiTier } from '@/lib/cms/resultUi'
+import { cmsHistoryHref, cmsLoadState, cmsResultScopeNote, cmsRunBasisText, type CmsCardFilter, type CmsGateView, type CmsNearGate, type CmsResultsLoad, type CmsStaffCard, type CmsStaffSummary, type CmsStoreSummary, type CmsUiTier } from '@/lib/cms/resultUi'
 import { cmsNoRunText, cmsResultState, type CmsResultHeaderDto } from '@/lib/cms/resultView'
 import type { CmsDisplayStatus } from '@/lib/cms/programStatus'
 import { cmsStaffAmountTitle, cmsStaffUpdatedText } from '@/lib/cms/staffView'
@@ -43,9 +43,18 @@ export function CmsResultsNotice({ results, reloadHref }: { results: CmsResultsL
   return null
 }
 
-/** Ghi chú sales-only (PM 06/11 §4.3) — một dòng dưới số tiền hero; chỉ khi có snapshot đã công bố và chưa chốt. */
-function SalesOnlyNote({ header, display, className }: { header: CmsResultHeaderDto; display: CmsDisplayStatus | null; className: string }) {
-  return header.run && display !== 'locked' ? <p data-cms-sales-only className={className}>{CMS_SALES_ONLY_NOTE}</p> : null
+/** Ghi chú sales-only (PM 06/11 §4.3) — một dòng dưới số tiền hero; chỉ khi có snapshot đã công bố và chưa chốt.
+ *  P5.2: chữ theo hợp đồng GHIM từ run (net ⇒ đã trừ phiếu trả hoàn tất tới as_of) + dòng cách tính (run contract, hoặc cờ bật). */
+function SalesOnlyNote({ header, display, className, basisUi }: { header: CmsResultHeaderDto; display: CmsDisplayStatus | null; className: string; basisUi?: boolean }) {
+  if (!header.run) return null
+  const c = header.run.contract
+  const basis = cmsRunBasisText(c, basisUi)
+  return (
+    <>
+      {basis && <p data-cms-run-basis={c.quantityBasis} className={className}>{basis}</p>}
+      {display !== 'locked' && <p data-cms-sales-only={c.returnsPolicy} className={className}>{cmsResultScopeNote(c)}</p>}
+    </>
+  )
 }
 
 function UpdatedLine({ header, display }: { header: CmsResultHeaderDto; display: CmsDisplayStatus | null }) {
@@ -65,14 +74,14 @@ function Tile({ label, value }: { label: string; value: React.ReactNode }) {
 
 /** Hero staff "CMS tạm tính của bạn". CMS đơn giản S3 (PM r1 08/11 §6 — thay "thẻ đen" UI §4.1): nền selected nhạt `bg-accent`
  *  (v2 #FFF1EA / tối #2A1E17) + viền `border-v2-selected-line`, chữ `text-foreground`, nhãn `text-accent-foreground`; ô con `bg-card`. */
-export function CmsStaffHero({ summary, header, programId, display = null, nav }: { summary: CmsStaffSummary | null; header: CmsResultHeaderDto; programId: string; display?: CmsDisplayStatus | null; nav?: CmsNav }) {
+export function CmsStaffHero({ summary, header, programId, display = null, nav, basisUi }: { summary: CmsStaffSummary | null; header: CmsResultHeaderDto; programId: string; display?: CmsDisplayStatus | null; nav?: CmsNav; basisUi?: boolean }) {
   const has = header.run !== null && summary !== null
   return (
     <section data-cms-hero={has ? 'ok' : 'none'} className="space-y-3 rounded-v2-panel border border-v2-selected-line bg-accent p-4 text-foreground">
       <div>
         <p data-cms-hero-title className="text-[13px] font-medium text-accent-foreground">{cmsStaffAmountTitle(display, 'own')}</p>
         <p data-cms-hero-amount className="text-[30px] font-bold leading-tight tabular-nums [overflow-wrap:anywhere]">{has ? cmsVnd(summary.amountVnd) : '—'}</p>
-        <SalesOnlyNote header={header} display={display} className="text-[12px] text-muted-foreground" />
+        <SalesOnlyNote header={header} display={display} className="text-[12px] text-muted-foreground" basisUi={basisUi} />
       </div>
       {/* Ô GMV rộng hơn (số tiền dài nhất) — số lớn không gãy giữa chữ số ở 360 / 390. */}
       <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.6fr)] gap-2">
@@ -94,7 +103,7 @@ export function CmsStaffHero({ summary, header, programId, display = null, nav }
 
 /** QLCH (U19): tổng nhà thuốc = cộng kết quả cá nhân của staff HIỆN thuộc nhà thuốc; không "của bạn", không gợi ý.
  *  CMS đơn giản S3: cùng kiểu nền selected nhạt + viền như hero staff; `simple` (mọi SP mức cố định) ⇒ bỏ câu "tính bậc riêng". */
-export function CmsStoreHero({ summary, header, programId, display = null, simple = false, nav }: { summary: CmsStoreSummary | null; header: CmsResultHeaderDto; programId: string; display?: CmsDisplayStatus | null; simple?: boolean; nav?: CmsNav }) {
+export function CmsStoreHero({ summary, header, programId, display = null, simple = false, nav, basisUi }: { summary: CmsStoreSummary | null; header: CmsResultHeaderDto; programId: string; display?: CmsDisplayStatus | null; simple?: boolean; nav?: CmsNav; basisUi?: boolean }) {
   const has = header.run !== null && summary !== null
   return (
     <section data-cms-store-hero={has ? 'ok' : 'none'} className="space-y-3 rounded-v2-panel border border-v2-selected-line bg-accent p-4 text-foreground">
@@ -102,7 +111,7 @@ export function CmsStoreHero({ summary, header, programId, display = null, simpl
         <p data-cms-store-title className="text-[13px] font-medium text-accent-foreground">{cmsStaffAmountTitle(display, 'store')}</p>
         <p data-cms-store-amount className="text-[26px] font-bold leading-tight tabular-nums [overflow-wrap:anywhere]">{has ? cmsVnd(summary.amountVnd) : '—'}</p>
         <p data-cms-store-note className="text-[12px] text-muted-foreground">{simple ? 'Cộng CMS từng dược sĩ hiện thuộc nhà thuốc.' : 'Cộng CMS từng dược sĩ hiện thuộc nhà thuốc — mỗi người tính bậc riêng.'}</p>
-        <SalesOnlyNote header={header} display={display} className="text-[12px] text-muted-foreground" />
+        <SalesOnlyNote header={header} display={display} className="text-[12px] text-muted-foreground" basisUi={basisUi} />
       </div>
       <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.6fr)] gap-2 text-[12px]">
         {/* Mẫu số ở đây là dược sĩ CÓ BÁN (RPC chỉ trả người có dòng kết quả) — ghi rõ, không lẫn mẫu số Q-212 (mọi staff). */}
@@ -177,7 +186,7 @@ export function cmsCardTierText(card: CmsStaffCard, tiers: readonly CmsUiTier[],
 export function cmsCardCountedNote(card: CmsStaffCard): string | null {
   if (!card.row || (card.gate && !card.gate.met)) return null
   const e = cmsQtyExplainRow(card.row)
-  if (!e || (e.fractionBase === BigInt(0) && e.overCap === BigInt(0))) return null
+  if (!e || (e.fractionBase === BigInt(0) && e.overCap === BigInt(0) && e.notCountedBase === BigInt(0))) return null
   return `tính ${e.rewarded.toString()}`
 }
 

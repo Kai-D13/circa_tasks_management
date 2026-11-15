@@ -14,7 +14,7 @@
 //    có gì để ghi. KHÔNG tự đặt K = 1, không suy K từ tên / quy cách, không điền chữ tư vấn giả.
 import * as XLSX from 'xlsx'
 import { cmsZipGuard } from './zipGuard'
-import { CMS_IMPORT_MAX_ROWS, cellOf, isBlank, readCell, type CmsCell, type CmsImportColumn, type CmsImportRawRow } from './parse'
+import { CMS_IMPORT_MAX_ROWS, cellOf, cmsFindBasisHeader, isBlank, readCell, type CmsCell, type CmsImportColumn, type CmsImportRawRow } from './parse'
 import { CMS_SIMPLE_HEADER, type CmsSimpleField } from './simpleColumns'
 
 export { CMS_SIMPLE_COLUMN_OF, CMS_SIMPLE_HEADER, type CmsSimpleField } from './simpleColumns'
@@ -48,7 +48,7 @@ export const cmsSimpleFieldOf = (header: string): CmsSimpleField | null => {
   return FIELDS.find((f) => ALIASES[f](h)) ?? null
 }
 
-export type CmsSimpleParseError = 'NOT_XLSX' | 'FILE_TOO_COMPLEX' | 'NO_SHEET' | 'MISSING_COLUMNS' | 'DUPLICATE_COLUMNS' | 'TOO_MANY_ROWS' | 'NO_DATA'
+export type CmsSimpleParseError = 'NOT_XLSX' | 'FILE_TOO_COMPLEX' | 'NO_SHEET' | 'MISSING_COLUMNS' | 'DUPLICATE_COLUMNS' | 'TOO_MANY_ROWS' | 'NO_DATA' | 'BASIS_COLUMN'
 
 export type CmsSimpleParseResult =
   | {
@@ -59,7 +59,7 @@ export type CmsSimpleParseResult =
     /** File có cột bổ sung K / tư vấn không (thiếu ⇒ mọi nhóm thiếu K / tư vấn ⇒ không ghi được). */
     supplement: { baseQuantity: boolean; advice: boolean }
   }
-  | { ok: false; error: CmsSimpleParseError; missing?: string[]; duplicate?: string[] }
+  | { ok: false; error: CmsSimpleParseError; missing?: string[]; duplicate?: string[]; column?: string }
 
 const EMPTY: CmsCell = { kind: 'empty' }
 
@@ -118,6 +118,9 @@ export function parseCmsSimpleXlsx(bytes: Uint8Array): CmsSimpleParseResult {
   }
   if (headerRow < 0) return { ok: false, error: 'MISSING_COLUMNS', missing: CMS_SIMPLE_REQUIRED.map((f) => CMS_SIMPLE_HEADER[f]) }
   if (dup.size) return { ok: false, error: 'DUPLICATE_COLUMNS', duplicate: [...dup] }
+  // CMS-CALC-RET-2: cột "Cách tính" tự thêm ⇒ chặn cả file (spec §8.5), như mẫu 9 cột.
+  const basisCol = cmsFindBasisHeader(ws, headerRow, range.s.c, range.e.c)
+  if (basisCol !== null) return { ok: false, error: 'BASIS_COLUMN', column: basisCol }
   const missing = CMS_SIMPLE_REQUIRED.filter((f) => !col.has(f))
   if (missing.length) return { ok: false, error: 'MISSING_COLUMNS', missing: missing.map((f) => CMS_SIMPLE_HEADER[f]) }
 

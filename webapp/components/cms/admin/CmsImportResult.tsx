@@ -9,6 +9,7 @@ import { CmsProductImage } from '@/components/cms/CmsProductImage'
 import { CmsTierChips } from '@/components/cms/CmsTierChips'
 import { CmsDownloadLink } from '@/components/cms/CmsDownloadLink'
 import { cn } from '@/lib/utils'
+import { CMS_QUANTITY_BASIS_LABEL } from '@/lib/cms/calc/basisUi'
 import { CMS_GATE_HUE, CMS_GATE_LABEL, cmsBaseQtyLine, cmsPrice, cmsVnd } from '@/lib/cms/display'
 import { cmsSimpleSummary, type CmsPreviewResult } from '@/lib/cms/importView'
 import { cmsImportColumnLabel } from '@/lib/cms/import/simpleColumns'
@@ -43,6 +44,9 @@ export function CmsImportResult({ result }: { result: CmsPreviewResult }) {
         <Box label="Lỗi (đã loại)" value={s.rowsRejected} tone="danger" />
         <Box label="Cảnh báo" value={s.warnings} tone="warning" />
       </div>
+      {result.quantityBasis && (
+        <p data-cms-import-result-basis={result.quantityBasis} className="text-[13px] text-muted-foreground">Kiểm theo cách tính: <span className="font-medium text-foreground">{CMS_QUANTITY_BASIS_LABEL[result.quantityBasis]}</span> · đổi cách tính sau lần kiểm này ⇒ phải kiểm lại file.</p>
+      )}
       {result.format === 'simple' && (
         <Notice tone="info" role="status">
           <span data-cms-simple-summary>{cmsSimpleSummary(result.groupsOk.length + result.groupsRejected.length)}</span>
