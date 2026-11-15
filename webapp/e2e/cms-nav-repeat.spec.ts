@@ -64,18 +64,52 @@ async function openKpi(page: Page) {
   await expect(page, 'bị đẩy về /login ⇒ storageState hết hạn').not.toHaveURL(/\/login/)
   await segmentReady(page, 'kpi')
 }
-/** Dấu hiệu nội dung CMS — so điều hướng document với tải trực tiếp (cùng chương trình / phạm vi / run, không 0 giả). */
+/** Dấu hiệu nội dung CMS — so điều hướng document với tải trực tiếp (cùng chương trình / phạm vi / run / số tiền). Đọc sau khi hết
+ *  skeleton. `updated` = chữ "Cập nhật <giờ>" của run đang hiện ⇒ lệch do run mới công bố giữa lượt hiện rõ trong thông báo lỗi. */
 async function cmsSignature(page: Page) {
   const root = page.locator('main [data-cms-staff]')
   await expect(root).toBeVisible({ timeout: 30_000 })
+  await expect(page.locator('main [data-cms-skeleton]'), 'màn CMS còn skeleton').toHaveCount(0, { timeout: 30_000 })
+  const attrs = (sel: string, name: string) => page.locator(sel).evaluateAll((els, n) => els.map((e) => e.getAttribute(n) ?? '').join('|'), name)
+  const texts = async (sel: string) => (await page.locator(sel).allInnerTexts()).map((t) => t.trim()).join('|')
   return {
     kind: await root.getAttribute('data-cms-staff'),
     results: await root.getAttribute('data-cms-results'),
-    program: (await page.locator('main [data-cms-program-label], main [data-cms-program-picker]').first().innerText().catch(() => '')).trim(),
-    hero: (await page.locator('main [data-cms-hero-amount]').allInnerTexts()).join('|'),
-    store: (await page.locator('main [data-cms-store-amount]').allInnerTexts()).join('|'),
+    program: await texts('main [data-cms-program-label], main [data-cms-program-picker]'),
+    heroState: await attrs('main [data-cms-hero]', 'data-cms-hero'),
+    hero: await texts('main [data-cms-hero-amount]'),
+    storeState: await attrs('main [data-cms-store-hero]', 'data-cms-store-hero'),
+    store: await texts('main [data-cms-store-amount]'),
+    updated: await texts('main [data-cms-updated]'),
+    noRun: await attrs('main [data-cms-no-run]', 'data-cms-no-run'),
     cards: await page.locator('main [data-cms-staff-product]').count(),
+    adminLinks: await page.locator('main a[href^="/targets/campaigns/cms"]').count(),
   }
+}
+type CmsSig = Awaited<ReturnType<typeof cmsSignature>>
+/** NAVR-03 — bất biến nội dung một màn CMS dược sĩ / QLCH (không phụ thuộc số liệu prod): không lỗi; có run ⇒ số tiền thật (chữ số + ₫)
+ *  kèm dòng cập nhật; không run ⇒ "—" kèm lý do, KHÔNG hiện 0; chương trình đọc được ⇒ có tên + thẻ sản phẩm; không link quản trị CMS;
+ *  không nhãn QA / is_test ở tên chương trình / số tiền / dòng cập nhật. Trả danh sách vi phạm (rỗng = đạt). */
+function cmsContentProblems(s: CmsSig): string[] {
+  const p: string[] = []
+  if (s.kind === 'error') p.push('màn CMS báo lỗi (data-cms-staff=error)')
+  if (s.results === 'error') p.push('kết quả CMS lỗi (data-cms-results=error)')
+  const money = /^-?\d[\d.]*\s?₫$/   // cmsVnd: "31.500₫"; giá trị hỏng ⇒ "—" (bị bắt khi state = ok)
+  const heroStates = s.heroState ? s.heroState.split('|') : []
+  const heroes = s.hero ? s.hero.split('|') : []
+  heroStates.forEach((st, i) => {
+    if (st === 'ok' && !money.test(heroes[i] ?? '')) p.push(`hero có run nhưng số tiền "${heroes[i]}" không phải số ₫`)
+    if (st === 'none' && heroes[i] !== '—') p.push(`hero không run nhưng hiện "${heroes[i]}" (phải là —, không 0 giả)`)
+  })
+  if (heroStates.includes('ok') && !s.updated) p.push('hero có run nhưng thiếu dòng cập nhật')
+  if (heroStates.includes('none') && !s.noRun) p.push('hero không run nhưng thiếu lý do (data-cms-no-run)')
+  if (s.storeState.split('|').includes('ok') && !s.store.split('|').every((t) => money.test(t))) p.push(`số cửa hàng "${s.store}" không phải số ₫`)
+  if (s.storeState === 'none' && s.store !== '—') p.push(`số cửa hàng không run nhưng hiện "${s.store}" (phải là —, không 0 giả)`)
+  if (s.kind === 'ok' && !s.program) p.push('chương trình đọc được nhưng thiếu tên chương trình')
+  if (s.kind === 'ok' && s.cards === 0) p.push('chương trình đọc được nhưng 0 thẻ sản phẩm')
+  if (s.adminLinks) p.push(`màn dược sĩ / QLCH có ${s.adminLinks} link quản trị CMS`)
+  if (/\b(QA|is_test)\b/i.test(`${s.program}|${s.hero}|${s.store}|${s.updated}`)) p.push('có nhãn QA / is_test trên màn dược sĩ / QLCH')
+  return p
 }
 function noWrites(seen: TrappedRequest[]) {
   expect(seen, 'request ghi của app trong luồng điều hướng chỉ đọc').toEqual([])
@@ -134,11 +168,11 @@ for (const c of COMBOS) {
       await openKpi(page)
       log.mark()
       const out: string[] = []
-      let viaDoc: Awaited<ReturnType<typeof cmsSignature>> | null = null
+      const viaDoc: CmsSig[] = []
       for (let i = 1; i <= ROUNDS; i++) {
         const r = await kpiToCms(page, log, () => cmsLink(page).click())
         expect(r.problems, `vòng ${i} KPI → CMS · ${log.text()}`).toEqual([])
-        if (i === 1) viaDoc = await cmsSignature(page)
+        viaDoc.push(await cmsSignature(page))
         await noOverflow(page, `vòng ${i} CMS`)
         await segmentReady(page, 'cms')
         const back = log.mark()
@@ -154,12 +188,16 @@ for (const c of COMBOS) {
       expect(log.count('doc', 'cms'), `số document tới CMS · ${log.text()}`).toBe(ROUNDS)
       expect(log.count('doc', 'kpi'), `có tải cứng về KPI · ${log.text()}`).toBe(0)
       expect(log.count('rsc', 'cms'), `có RSC điều hướng tới CMS · ${log.text()}`).toBe(0)
-      // NAVR-03: nội dung sau document navigation = tải trực tiếp (cùng chương trình / phạm vi / run), không lỗi / không 0 giả.
+      // NAVR-03: nội dung sau document navigation ở MỌI vòng = tải trực tiếp (cùng chương trình / phạm vi / run / số tiền), và mọi màn
+      // đạt bất biến nội dung (không lỗi, không 0 giả, không link quản trị / nhãn QA).
       await page.goto(CMS)
       const direct = await cmsSignature(page)
-      expect(viaDoc, 'màn CMS qua segment khác tải trực tiếp').toEqual(direct)
-      expect(direct.results, 'kết quả CMS lỗi').not.toBe('error')
-      expect(direct.kind, 'màn CMS không ở trạng thái đọc được').not.toBe('error')
+      expect(cmsContentProblems(direct), `tải trực tiếp CMS · ${JSON.stringify(direct)}`).toEqual([])
+      viaDoc.forEach((v, k) => {
+        expect(cmsContentProblems(v), `vòng ${k + 1} qua segment · ${JSON.stringify(v)}`).toEqual([])
+        expect(v, `vòng ${k + 1}: màn CMS qua segment khác tải trực tiếp`).toEqual(direct)
+      })
+      testInfo.annotations.push({ type: 'nav-repeat-1-content', description: `${c.who} @${c.vw.width} · kind=${direct.kind} results=${direct.results} hero=${direct.heroState} store=${direct.storeState} cards=${direct.cards} noRun=${direct.noRun}` })
       noWrites(seen)
       testInfo.annotations.push({ type: 'nav-repeat-1', description: `${c.who} @${c.vw.width} · ${out.join(' · ')}` })
     })
