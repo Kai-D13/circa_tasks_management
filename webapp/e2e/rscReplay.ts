@@ -1,9 +1,10 @@
 import type { Page, Request, Response, Route } from '@playwright/test'
 
 // ─────────────────────────────────────────────────────────────────────────────
-// NAV2-04 kpi2cms (route thật) — phản hồi RSC điều hướng ĐIỀU KHIỂN: cấp payload thật delayMs sau lúc chặn (PM 14/11/2026
+// NAV2-04 (route thật) — phản hồi RSC điều hướng ĐIỀU KHIỂN: cấp payload thật delayMs sau lúc chặn (PM 14/11/2026
 // SALES-CONT-01, planning/reviews/2026-11-14-cms-sales-cont-r3-result-next-pm.md §3.3; sửa guard ghi theo
-// planning/reviews/2026-11-14-cms-sales-r3o-package-pm.md SALES-R3O-02).
+// planning/reviews/2026-11-14-cms-sales-r3o-package-pm.md SALES-R3O-02). Từ NAV-REPEAT-1 (15/11) dùng cho chiều cms2kpi —
+// kpi2cms là document navigation, không còn RSC điều hướng.
 //
 // Vì sao không dùng holdRsc(delayMs) của cms-nav2.spec: holdRsc gọi route.fetch() TRONG cửa sổ đo rồi chờ thêm
 // max(0, delayMs − thời_gian_fetch) ⇒ delayMs chỉ là SÀN; nguồn thật chậm hơn delayMs (continuation r3: fetch 5.766 ms) thì phản hồi
