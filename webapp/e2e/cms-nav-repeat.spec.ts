@@ -3,6 +3,7 @@ import { test, expect, type Locator, type Page } from '@playwright/test'
 import { MANAGER_STATE, STAFF_STATE } from './authState'
 import { trapWrites, type TrappedRequest } from './fixtureGuard'
 import { NAV_WATCHDOG_MS } from '../lib/nav/watchdog'
+import { cmsToKpiSplit, kpiToCmsSplit, navTimeline } from './navRepeatOracle'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // NAV-REPEAT-1 (PM 15/11/2026 — planning/reviews/2026-11-15-nav-repeat-1-work-order-pm.md, AC NAVR-01…06; gộp vào CMS-SALES-FINAL):
@@ -14,6 +15,12 @@ import { NAV_WATCHDOG_MS } from '../lib/nav/watchdog'
 // mềm đạt". Mọi đo đạc tính từ ngay trước click; "bắt đầu" = thời điểm request document được gửi (không gồm độ trễ server / Supabase).
 // Route thật cần server bật CMS_PROGRAM_ENABLED (E2E_CMS_ENABLED=1), chỉ đọc: mọi request ghi của app bị chặn + đếm (trapWrites) = 0.
 // NAVR-05 chạy ở lượt server CMS OFF. Map các ca NAV2 cũ: đầu e2e/cms-nav2.spec.ts.
+//
+// PM 15/11 (work order gộp §8.1–§8.2): NAVR-01/03 PHIÊN BẢN MỚI = ca CHỨC NĂNG 3 vòng, oracle tách URL / nội dung / load
+// (e2e/navRepeatOracle.ts). Thay ca cũ "… CMS → KPI mềm" (lịch sử timing giữ FAIL / EXCEPTION trong report, không đổi thành PASS):
+// KPI → CMS giữ HARD (một document ≤ 1,5 s, 0 RSC, không document thứ hai tới watchdog + 2 s, nội dung = tải trực tiếp mọi vòng);
+// CMS → KPI HARD về chức năng (đúng KPI + nội dung = tải trực tiếp, ≤ 1 tải cứng dự phòng của watchdog, 0 vòng tải lại, 0 ghi),
+// THỜI GIAN chiều về là số đo (annotation; ≥ 6 s hoặc có tải cứng dự phòng ⇒ EXCEPTION), không ném sớm. NAVR-02 / 04 / 05 không đổi.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const RUN_PROJECT = 'mobile-390'   // viewport do test đặt — một project là đủ (cùng lý do cms-nav2 / nav-watchdog)
@@ -111,6 +118,31 @@ function cmsContentProblems(s: CmsSig): string[] {
   if (/\b(QA|is_test)\b/i.test(`${s.program}|${s.hero}|${s.store}|${s.updated}`)) p.push('có nhãn QA / is_test trên màn dược sĩ / QLCH')
   return p
 }
+/** Dấu hiệu màn KPI (NAVR-01/03 mới, chiều về): segment KPI đang chọn + hydrate, hết khung chờ route, không còn màn CMS, số khối KPI
+ *  chính. Trang KPI không có Suspense riêng ⇒ có segment + hết khung chờ là đủ nội dung để so với tải trực tiếp. */
+async function kpiSignature(page: Page) {
+  await segmentReady(page, 'kpi')
+  await expect(page.locator('[data-route-loading]'), 'màn KPI còn khung chờ').toHaveCount(0, { timeout: 30_000 })
+  return {
+    current: (await page.locator('main [data-cms-targets-segment] a[aria-current="page"]').allInnerTexts()).map((t) => t.trim()).join('|'),
+    cms: await page.locator('main [data-cms-staff]').count(),
+    lists: await page.locator('main [data-campaign-card-list], main [data-campaign-cards]').count(),
+    cards: await page.locator('main [data-campaign-card]').count(),
+    meters: await page.locator('main [data-kpi-meter]').count(),
+  }
+}
+type KpiSig = Awaited<ReturnType<typeof kpiSignature>>
+function kpiContentProblems(k: KpiSig): string[] {
+  const p: string[] = []
+  if (k.current !== 'KPI chiến dịch') p.push(`segment đang chọn "${k.current}" (phải là KPI chiến dịch)`)
+  if (k.cms) p.push('màn KPI còn nội dung CMS (data-cms-staff)')
+  return p
+}
+/** Mở trang bằng goto chỉ chờ commit (không chờ load — PM §8.2), loại /login. */
+async function gotoCommit(page: Page, path: string) {
+  await page.goto(path, { waitUntil: 'commit' })
+  expect(new URL(page.url()).pathname, 'bị đẩy về /login ⇒ storageState hết hạn').not.toBe('/login')
+}
 function noWrites(seen: TrappedRequest[]) {
   expect(seen, 'request ghi của app trong luồng điều hướng chỉ đọc').toEqual([])
 }
@@ -162,44 +194,59 @@ for (const c of COMBOS) {
       testInfo.setTimeout(300_000)
     })
 
-    test(`NAVR-01/03 ${c.who} @${c.vw.width}: ${ROUNDS} vòng KPI → CMS → KPI — mỗi lần KPI → CMS đúng một document chủ động, nội dung đúng, CMS → KPI mềm`, async ({ page }, testInfo) => {
+    test(`NAVR-01/03 chức năng ${c.who} @${c.vw.width}: ${ROUNDS} vòng — KPI → CMS một document chủ động + URL + nội dung = tải trực tiếp; CMS → KPI đúng KPI + nội dung, ≤ 1 tải cứng dự phòng, thời gian chiều về là số đo`, async ({ page }, testInfo) => {
       const seen = await trapWrites(page)
-      const log = navLog(page)
-      await openKpi(page)
+      const log = navTimeline(page)
+      await gotoCommit(page, KPI)
+      await segmentReady(page, 'kpi')
       log.mark()
       const out: string[] = []
+      const exc: string[] = []
       const viaDoc: CmsSig[] = []
-      for (let i = 1; i <= ROUNDS; i++) {
-        const r = await kpiToCms(page, log, () => cmsLink(page).click())
-        expect(r.problems, `vòng ${i} KPI → CMS · ${log.text()}`).toEqual([])
-        viaDoc.push(await cmsSignature(page))
-        await noOverflow(page, `vòng ${i} CMS`)
-        await segmentReady(page, 'cms')
-        const back = log.mark()
-        await kpiLink(page).click()
-        await expect(page, `vòng ${i} CMS → KPI không tới KPI · ${log.text()}`).toHaveURL((u) => isKpi(u), { timeout: NAV_WATCHDOG_MS + 10_000 })
-        const dt = log.mark() - back
-        await segmentReady(page, 'kpi')
-        expect(dt, `vòng ${i} CMS → KPI mất ${dt} ms — chạm mốc watchdog`).toBeLessThan(NAV_WATCHDOG_MS)
-        out.push(`v${i}: KPI→CMS doc +${r.docStart} ms / URL +${r.url} ms · CMS→KPI mềm ${dt} ms`)
+      const viaBack: KpiSig[] = []
+      let fallbackTotal = 0
+      try {
+        for (let i = 1; i <= ROUNDS; i++) {
+          const r = await kpiToCmsSplit(page, log, () => cmsLink(page).click(),
+            async () => { const s = await cmsSignature(page); viaDoc.push(s); return cmsContentProblems(s) },
+            { urlBudgetMs: 20_000, docStartMax: DOC_START_MAX, quietUntil: QUIET_UNTIL })
+          expect(r.problems, `vòng ${i} KPI → CMS · ${log.text()}`).toEqual([])
+          await noOverflow(page, `vòng ${i} CMS`)
+          await segmentReady(page, 'cms')
+          const b = await cmsToKpiSplit(page, log, () => kpiLink(page).click(),
+            async () => { const k = await kpiSignature(page); viaBack.push(k); return kpiContentProblems(k) },
+            { urlBudgetMs: NAV_WATCHDOG_MS + 10_000, watchdogMs: NAV_WATCHDOG_MS, maxFallback: 1 })
+          expect(b.problems, `vòng ${i} CMS → KPI · ${log.text()}`).toEqual([])
+          fallbackTotal += b.fallbacks.length
+          if (!b.timing.startsWith('mềm')) exc.push(`v${i} ${b.timing}`)
+          out.push(`v${i}: KPI→CMS doc +${r.docStart} · URL +${r.url} · nội dung +${r.ready} · load ${r.load ?? 'chưa'} ms | CMS→KPI URL +${b.url} · nội dung +${b.ready} · load ${b.load ?? '—'} ms · ${b.timing}`)
+        }
+      } finally {
+        testInfo.annotations.push({ type: 'nav-repeat-1 chức năng (mốc)', description: `${c.who} @${c.vw.width} · ${out.join(' · ') || 'chưa xong vòng nào'} · timeline ${log.text()}` })
+        testInfo.annotations.push({ type: 'nav-repeat-1 thời gian chiều về', description: `${c.who} @${c.vw.width} · ${exc.length ? exc.join(' · ') : out.length === ROUNDS ? `mọi vòng mềm < ${NAV_WATCHDOG_MS} ms` : 'chưa đủ vòng'}` })
       }
-      // Toàn lượt: đúng ROUNDS document tới CMS, 0 document tới KPI (chiều về luôn mềm, không watchdog trễ), 0 RSC điều hướng tới CMS.
+      // Toàn lượt: đúng ROUNDS document tới CMS, 0 RSC điều hướng tới CMS; tải cứng về KPI chỉ là các lần dự phòng đã ghi ở từng vòng.
       await page.waitForTimeout(1_500)
       expect(log.count('doc', 'cms'), `số document tới CMS · ${log.text()}`).toBe(ROUNDS)
-      expect(log.count('doc', 'kpi'), `có tải cứng về KPI · ${log.text()}`).toBe(0)
       expect(log.count('rsc', 'cms'), `có RSC điều hướng tới CMS · ${log.text()}`).toBe(0)
-      // NAVR-03: nội dung sau document navigation ở MỌI vòng = tải trực tiếp (cùng chương trình / phạm vi / run / số tiền), và mọi màn
-      // đạt bất biến nội dung (không lỗi, không 0 giả, không link quản trị / nhãn QA).
-      await page.goto(CMS)
+      expect(log.count('doc', 'kpi'), `tải cứng về KPI ngoài các lần dự phòng đã ghi (${fallbackTotal}) · ${log.text()}`).toBe(fallbackTotal)
+      // NAVR-03: nội dung CMS sau document navigation ở MỌI vòng = tải trực tiếp (cùng chương trình / phạm vi / run / số tiền) + bất biến
+      // nội dung; chiều về: màn KPI ở MỌI vòng = tải trực tiếp KPI. goto chỉ chờ commit, nội dung kiểm bằng chữ ký.
+      await gotoCommit(page, CMS)
       const direct = await cmsSignature(page)
       expect(cmsContentProblems(direct), `tải trực tiếp CMS · ${JSON.stringify(direct)}`).toEqual([])
+      expect(viaDoc.length, 'số màn CMS đã kiểm').toBe(ROUNDS)
       viaDoc.forEach((v, k) => {
         expect(cmsContentProblems(v), `vòng ${k + 1} qua segment · ${JSON.stringify(v)}`).toEqual([])
         expect(v, `vòng ${k + 1}: màn CMS qua segment khác tải trực tiếp`).toEqual(direct)
       })
-      testInfo.annotations.push({ type: 'nav-repeat-1-content', description: `${c.who} @${c.vw.width} · kind=${direct.kind} results=${direct.results} hero=${direct.heroState} store=${direct.storeState} cards=${direct.cards} noRun=${direct.noRun}` })
+      await gotoCommit(page, KPI)
+      const kpiDirect = await kpiSignature(page)
+      expect(kpiContentProblems(kpiDirect), `tải trực tiếp KPI · ${JSON.stringify(kpiDirect)}`).toEqual([])
+      expect(viaBack.length, 'số màn KPI chiều về đã kiểm').toBe(ROUNDS)
+      viaBack.forEach((v, k) => expect(v, `vòng ${k + 1}: màn KPI chiều về khác tải trực tiếp`).toEqual(kpiDirect))
+      testInfo.annotations.push({ type: 'nav-repeat-1-content', description: `${c.who} @${c.vw.width} · kind=${direct.kind} results=${direct.results} hero=${direct.heroState} store=${direct.storeState} cards=${direct.cards} noRun=${direct.noRun} · KPI ${JSON.stringify(kpiDirect)}` })
       noWrites(seen)
-      testInfo.annotations.push({ type: 'nav-repeat-1', description: `${c.who} @${c.vw.width} · ${out.join(' · ')}` })
     })
   })
 }

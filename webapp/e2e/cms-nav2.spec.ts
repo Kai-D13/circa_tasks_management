@@ -4,7 +4,7 @@ import { MANAGER_STATE, STAFF_STATE, SUPER_STATE } from './authState'
 import { sessionDb } from './dbFixtures'
 import { trapWrites, type TrappedRequest } from './fixtureGuard'
 import { NAV_WATCHDOG_MS } from '../lib/nav/watchdog'
-import { replayRscAfter } from './rscReplay'
+import { replayRscAfter, routerNavigate } from './rscReplay'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // NAV-2 (PM 08/11/2026 — planning/research/cms-nav2-guides-next-actions-2026-11-08.md §1–3, AC NAV2-01…10): segment
@@ -252,7 +252,9 @@ for (const role of ROLES) {
         const h = await replayRscAfter(page, d.isTarget, mode, 3_000)
         // Chuẩn bị TRƯỚC cửa sổ đo, trang riêng cùng context (Router Cache riêng — trang kiểm vẫn cold / warm đúng nghĩa); lỗi ⇒ đỏ 'CHUẨN BỊ RSC LỖI'.
         // PM 15/11 §7.3: chuẩn bị CẢ chuỗi request điều hướng của một lần chạm (chốt khi nội dung đích hiện + lặng); 3 s là hạn chung từ request đầu.
-        const prep = await h.prepare({ open: (p) => openSegment(p, d.from, d.seg), click: (p) => segLink(p, d.seg, d.label).click(), ready: (p) => p.locator(d.done).first().waitFor({ state: 'visible', timeout: 20_000 }) })
+        // PM 15/11 §8.3: trang chuẩn bị điều hướng bằng router client tới ĐÚNG href của link (đọc từ DOM) — không qua <Link> nên không
+        // gắn watchdog 6 s; nguồn chậm vẫn chuẩn bị trong hạn 45 s. Trang kiểm vẫn chạm link thật; khoá request phải trùng chuỗi.
+        const prep = await h.prepare({ open: (p) => openSegment(p, d.from, d.seg), click: async (p) => { const href = await segLink(p, d.seg, d.label).getAttribute('href'); if (href !== d.href) throw new Error(`href link ${d.label} = ${href} (phải ${d.href})`); await routerNavigate(p, href) }, ready: (p) => p.locator(d.done).first().waitFor({ state: 'visible', timeout: 20_000 }) })
         const loads = hardLoads(page, d.isTarget)
         await openSegment(page, d.from, d.seg)
         if (mode === 'warm') await waitPrefetch(page, h)
@@ -263,7 +265,7 @@ for (const role of ROLES) {
         await segLink(page, d.seg, d.label).click()
         await reach(page, d.isTarget, 15_000, loads, async () => `${await timers()} · ${h.describe(t0)}`)
         const dt = Date.now() - t0
-        testInfo.annotations.push({ type: 'nav2-04 phản hồi chuẩn bị', description: `${mode} · chuẩn bị ${prep.prepMs} ms (chuỗi ${prep.chain} · fetch thật ${prep.fetchMsEach.join(' + ')} ms · ${prep.bytesEach.join(' + ')} B) · ${h.describe(t0)} · URL đổi +${dt} ms` })
+        testInfo.annotations.push({ type: 'nav2-04 phản hồi chuẩn bị', description: `${mode} · chuẩn bị qua router client (không watchdog link) ${prep.prepMs} ms ngoài cửa sổ đo (chuỗi ${prep.chain} · fetch thật ${prep.fetchMsEach.join(' + ')} ms · ${prep.bytesEach.join(' + ')} B) · ${h.describe(t0)} · URL đổi +${dt} ms` })
         expect(h.problems(), `CHUẨN BỊ / CẤP RSC LỖI · ${h.describe(t0)}`).toEqual([])
         expect(h.served().filter((s) => s.fulfilledAt !== null).length, `không request điều hướng nào nhận payload chuẩn bị · ${h.describe(t0)}`).toBeGreaterThanOrEqual(1)
         expect(dt, 'RSC chậm 3 s mà URL đổi sớm hơn — không chậm thật').toBeGreaterThanOrEqual(3_000)

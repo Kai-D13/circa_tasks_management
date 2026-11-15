@@ -31,6 +31,11 @@ import type { Page, Request, Response, Route } from '@playwright/test'
 //      Kiểm TỪNG phần tử: 200 · text/x-component · body ≠ rỗng · không Location / NEXT_REDIRECT · build trong payload ("b") = build tài
 //      liệu trang chuẩn bị · 0 request ghi tới đích. Lỗi ⇒ ném 'CHUẨN BỊ RSC LỖI (<mode>): …' — test đỏ, không skip, không số 0 giả.
 //      Payload chỉ giữ trong bộ nhớ.
+//      PM 15/11 §8.3 — chuẩn bị KHÔNG phải phép thử SLA 6 s: trên trang chuẩn bị, spec khởi động điều hướng bằng routerNavigate()
+//      (router client của Next, đúng href đọc từ link) — KHÔNG qua <Link> nên KHÔNG gắn NavWatchdog của link ⇒ nguồn thật chậm
+//      (vd. 7,9–8 s ở continuation final) vẫn chuẩn bị được trong hạn hữu hạn navTimeoutMs (45 s; route.fetch cùng hạn). Watchdog của
+//      TRANG KIỂM / app không đổi: trang kiểm vẫn CHẠM link thật; mỗi request điều hướng ở trang kiểm phải trùng khoá phần tử chuỗi
+//      (khác cách khởi động ⇒ lệch khoá ⇒ đỏ, không cấp payload). Thời gian chuẩn bị nằm NGOÀI cửa sổ đo (không cộng vào hạn 3 s).
 //   2. Trang kiểm: test chờ build tài liệu trang kiểm đọc xong TRƯỚC t0 (buildReady). Request điều hướng RSC thứ i tới đích bị chặn; khoá
 //      định tuyến phải trùng phần tử i của chuỗi (đúng thứ tự) + build tài liệu trùng payload ⇒ cấp payload i tại max(lúc chặn, HẠN CHUNG)
 //      với HẠN CHUNG = lúc chặn request điều hướng ĐẦU + delayMs (một mốc cho cả lần điều hướng — không cộng delayMs cho từng request;
@@ -44,7 +49,7 @@ export type RscMode = 'cold' | 'warm'
 export type RscPrepareSteps = {
   /** Mở trang nguồn trên trang chuẩn bị + chờ hydrate (dùng đúng hàm mở của test). */
   open: (p: Page) => Promise<unknown>
-  /** Chạm link đích trên trang chuẩn bị. */
+  /** Khởi động điều hướng tới đích trên trang chuẩn bị — từ §8.3 dùng routerNavigate() (không qua link có watchdog). */
   click: (p: Page) => Promise<unknown>
   /** Chờ nội dung đích hiện trên trang chuẩn bị (kết thúc lần điều hướng) — chuỗi chỉ chốt sau bước này + quãng lặng. */
   ready: (p: Page) => Promise<unknown>
@@ -113,6 +118,20 @@ export function rscKeyDiff(a: string, b: string): string {
 }
 export const buildInPayload = (body: Buffer) => /"b":"([\w-]+)"/.exec(body.toString('utf8'))?.[1] ?? ''
 export const buildInHtml = (html: string) => /\\"b\\":\\"([\w-]+)\\"/.exec(html)?.[1] ?? ''
+
+/**
+ * §8.3 — điều hướng client bằng router App Router của Next (`window.next.router.push`, cùng dispatchNavigateAction mà <Link> dùng,
+ * chỉ khác KHÔNG gắn trạng thái pending của link ⇒ NavWatchdog của link không đếm). Chỉ dùng cho TRANG CHUẨN BỊ; không có router ⇒ ném.
+ */
+export async function routerNavigate(p: Page, href: string): Promise<void> {
+  const ok = await p.evaluate((h) => {
+    const r = (window as unknown as { next?: { router?: { push?: (x: string) => void } } }).next?.router
+    if (!r || typeof r.push !== 'function') return false
+    r.push(h)
+    return true
+  }, href)
+  if (!ok) throw new Error('không có router client (window.next.router.push) trên trang chuẩn bị')
+}
 
 /** Build của tài liệu (HTML) mới nhất trong khung chính của trang — đọc từ dữ liệu flight nhúng (\"b\":\"…\"). */
 function docBuild(p: Page) {
@@ -206,7 +225,7 @@ export async function replayRscAfter(page: Page, isTarget: (u: URL) => boolean, 
         if (i >= RSC_CHAIN_MAX) { slot.err = `chuỗi vượt ${RSC_CHAIN_MAX} request điều hướng`; return route.abort().catch(() => {}) }
         const tf = Date.now()
         try {
-          const res = await route.fetch({ maxRedirects: 0 })
+          const res = await route.fetch({ maxRedirects: 0, timeout: navTimeout })
           const body = await res.body()
           slot.got = { key: slot.key, status: res.status(), headers: res.headers(), body, fetchMs: Date.now() - tf, buildId: buildInPayload(body) }
           await route.fulfill({ status: slot.got.status, headers: slot.got.headers, body })
