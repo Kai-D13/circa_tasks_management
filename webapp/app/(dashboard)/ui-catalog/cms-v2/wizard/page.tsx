@@ -9,6 +9,7 @@ import { CmsImportFlow } from '@/components/cms/admin/CmsImportFlow'
 import { CMS_FX_PREVIEW, CMS_FX_PREVIEW_SIMPLE, CMS_FX_PREVIEW_SIMPLE_NOSUPP, CMS_FX_PREVIEW_SIMPLE_UNAVAILABLE, CMS_FX_TODAY } from '@/lib/cms/fixtures'
 import { CMS_FX_PG, cmsFxProgram } from '@/lib/cms/fixtureScenario'
 import type { CmsInvalidStore } from '@/lib/cms/server/catalog'
+import type { CmsProgramBasis } from '@/lib/cms/calc/basisUi'
 
 // Dev-only fixture A2 / sửa / import — ĐÚNG CmsProgramForm + CmsImportFlow của route thật, dữ liệu giả. Mọi lưu / kiểm tra
 // file / ghi / tải file lỗi đi qua useFixtureActionBlocked ⇒ 0 request ghi. Cổng: UI_CATALOG=1 + super admin. ?fx=
@@ -26,6 +27,17 @@ const INVALID: CmsInvalidStore[] = [
   { id: '00000000-0000-4000-8000-000000000191', name: 'Nhà thuốc mẫu FS', code: 'QAFS91', reason: 'not_os' },
 ]
 const EDIT_FX = ['edit-active', 'edit-invalid', 'edit-active-invalid', 'edit-invalid-only']
+// CMS-CALC-RET-2 P5.1 (browser gate): &b= giả lập cờ CMS_CALC_MODES_ENABLED + DB có đường program_modes. Form: b=on (tạo — radio bắt buộc)
+//   hoặc cách tính hiện tại khi sửa: unit · pos · net (tính nguyên + trừ trả) · legacy (có trước lựa chọn) · compat (tạo khi cờ tắt) ·
+//   pending (nháp chưa chọn). Màn nạp file: cùng giá trị ⇒ badge cách tính / chính sách trả; pending ⇒ khoá "Chạy xử lý" + đường "Sửa thông tin".
+const BASIS_FX: Record<string, CmsProgramBasis> = {
+  unit: { basis: 'cms_unit', source: 'admin', returnsPolicy: 'sales_only_v1' },
+  pos: { basis: 'pos_base', source: 'admin', returnsPolicy: 'sales_only_v1' },
+  net: { basis: 'cms_unit', source: 'admin', returnsPolicy: 'net_returns_v1' },
+  legacy: { basis: 'pos_base', source: 'legacy_migration', returnsPolicy: 'sales_only_v1' },
+  compat: { basis: 'pos_base', source: 'legacy_compat', returnsPolicy: 'sales_only_v1' },
+  pending: { basis: null, source: 'pending', returnsPolicy: 'sales_only_v1' },
+}
 
 function formFor(fx: string, PROGRAM: { id: string; name: string }): { initial?: CmsProgramFormInitial; invalid: CmsInvalidStore[] } {
   const base = { id: PROGRAM.id, name: PROGRAM.name, startDate: '2026-11-20', endDate: '2026-12-20', scope: 'stores' as const }
@@ -37,12 +49,13 @@ function formFor(fx: string, PROGRAM: { id: string; name: string }): { initial?:
   return { invalid: [] }
 }
 
-export default async function CmsWizardFixture({ searchParams }: { searchParams: Promise<{ fx?: string; program?: string }> }) {
+export default async function CmsWizardFixture({ searchParams }: { searchParams: Promise<{ fx?: string; program?: string; b?: string }> }) {
   if (process.env.UI_CATALOG !== '1') notFound()
   const { user, profile } = await getSessionProfile()
   if (!user) redirect('/login')
   if (!(profile?.role === 'admin' && isSuperAdminEmail(user.email))) notFound()
-  const { fx = 'info', program } = await searchParams
+  const { fx = 'info', program, b } = await searchParams
+  const basisFx = b ? BASIS_FX[b] : undefined
   const PROGRAM = programOf(program)
   const isEdit = EDIT_FX.includes(fx)
   const isForm = isEdit || fx === 'info' || fx === 'stores'
@@ -53,9 +66,10 @@ export default async function CmsWizardFixture({ searchParams }: { searchParams:
   const result = simple ?? (fx === 'result-append' ? { ...CMS_FX_PREVIEW, mode: 'append' as const, ignoredFromRow: null }
     : fx === 'result-none' ? { ...CMS_FX_PREVIEW, groupsOk: [], stats: { ...CMS_FX_PREVIEW.stats, rowsOk: 0, productsOk: 0, warnings: 0 } }
     : CMS_FX_PREVIEW)
+  const resultB = basisFx?.basis ? { ...result, quantityBasis: basisFx.basis } : result
   return (
     <KpiFixtureBoundary>
-      <div data-testid="ui-catalog-cms-wizard" data-fx={fx}>
+      <div data-testid="ui-catalog-cms-wizard" data-fx={fx} data-b={b ?? undefined}>
         <CmsWizardShell
           title={isEdit ? 'Sửa thông tin chương trình' : 'Tạo chương trình CMS'}
           subtitle={isForm && !isEdit ? undefined : PROGRAM.name}
@@ -73,6 +87,7 @@ export default async function CmsWizardFixture({ searchParams }: { searchParams:
                 storesError={false}
                 invalidStores={form.invalid}
                 today={CMS_FX_TODAY}
+                basis={b === 'on' || basisFx ? { selectable: true, current: isEdit ? basisFx ?? null : undefined } : undefined}
               />
             </>
           ) : (
@@ -80,8 +95,9 @@ export default async function CmsWizardFixture({ searchParams }: { searchParams:
               program={PROGRAM}
               mode={fx === 'result-append' ? 'append' : 'replace'}
               fromNew={fx !== 'result-append'}
-              fixture={{ step: fx === 'upload' || fx === 'upload-v2' || fx === 'upload-simple' ? 'upload' : fx === 'running' ? 'running' : 'result', result, fileName: simple || fx === 'upload-simple' ? 'CMS_muc_co_dinh_thang12.xlsx' : 'Circa_Import_CMS_thang11.xlsx', fileBytes: 48_213, format: simple || fx === 'upload-simple' ? 'simple' : 'tiers' }}
+              fixture={{ step: fx === 'upload' || fx === 'upload-v2' || fx === 'upload-simple' ? 'upload' : fx === 'running' ? 'running' : 'result', result: resultB, fileName: simple || fx === 'upload-simple' ? 'CMS_muc_co_dinh_thang12.xlsx' : 'Circa_Import_CMS_thang11.xlsx', fileBytes: 48_213, format: simple || fx === 'upload-simple' ? 'simple' : 'tiers' }}
               v2={v2}
+              basis={basisFx}
             />
           )}
         </CmsWizardShell>

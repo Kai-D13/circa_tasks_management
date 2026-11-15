@@ -127,7 +127,7 @@ test.describe('CMS-UI-1 — fixture một nguồn, sinh bằng engine @desktop',
 const row = (o: Partial<CmsResultRowDto>): CmsResultRowDto => ({
   userId: '00000000-0000-4000-8000-000000000001', storeId: '00000000-0000-4000-8000-000000008001', programProductId: 'pp', productId: '900001', gmvBasis: 'none',
   baseQuantity: '0', perUnit: '1', cmsQuantity: '0', rewardedQuantity: '0', capQuantity: null, atCap: false, gmvAmount: '0', gateGmv: null, targetGmv: null,
-  gateMet: true, gateMetAt: null, potentialAmount: '0', amountVnd: '0', lineCount: 1, ...o,
+  gateMet: true, gateMetAt: null, potentialAmount: '0', amountVnd: '0', lineCount: 1, net: null, ...o, eligibleBase: o.eligibleBase ?? o.baseQuantity ?? '0',
 })
 
 test.describe('CMS-UI-1 — giải thích SL bán / SL được CMS (PM §5) @desktop', () => {

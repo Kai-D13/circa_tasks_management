@@ -8,7 +8,7 @@ export type CmsNav = { mode: 'real' } | { mode: 'fixture'; keep: Record<string, 
 export const CMS_NAV_REAL: CmsNav = { mode: 'real' }
 
 /** Tham số kịch bản được giữ khi đi giữa các trang fixture. */
-export const CMS_NAV_KEEP_KEYS = ['p2', 'as'] as const
+export const CMS_NAV_KEEP_KEYS = ['p2', 'as', 'rs'] as const
 
 export function cmsFixtureNav(sp: Record<string, string | string[] | undefined>, extra: Record<string, string> = {}): CmsNav {
   const keep: Record<string, string> = {}
@@ -31,6 +31,7 @@ export function cmsNavHref(nav: CmsNav | null | undefined, href: string): string
   if (p === '/targets/campaigns/cms') { path = `${CAT}/list`; add('status', u.searchParams.get('status')); add('q', u.searchParams.get('q')) }
   else if (p === '/targets/campaigns/cms/new') { path = `${CAT}/wizard`; add('fx', 'info') }
   else if ((m = /^\/targets\/campaigns\/cms\/([^/]+)\/(edit|import)$/.exec(p))) { path = `${CAT}/wizard`; add('fx', m[2] === 'edit' ? 'edit-active' : 'upload'); add('program', dec(m[1])) }
+  else if ((m = /^\/targets\/campaigns\/cms\/([^/]+)\/returns(?:\/([^/]+))?$/.exec(p))) { path = `${CAT}/returns`; add('program', dec(m[1])); add('report', m[2] ? dec(m[2]) : null) }
   else if ((m = /^\/targets\/campaigns\/cms\/([^/]+)$/.exec(p))) { path = `${CAT}/detail`; add('program', dec(m[1])); add('view', u.searchParams.get('view')); add('page', u.searchParams.get('page')) }
   else if (p === '/targets' && u.searchParams.get('tab') === 'cms') { path = `${CAT}/staff`; add('program', u.searchParams.get('program')); add('f', u.searchParams.get('f')) }
   else if ((m = /^\/targets\/cms\/products\/([^/]+)$/.exec(p))) { path = `${CAT}/product`; add('pp', dec(m[1])) }

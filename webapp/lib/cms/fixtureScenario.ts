@@ -79,6 +79,12 @@ const SELLERS = buildSellerIndex(
   ],
 )
 
+/** CMS-CALC-RET-2 P5 — dùng chung cho fixture run contract (lib/cms/fixturesContract): cùng tài khoản / nhà thuốc giả. */
+export const CMS_FX_SELLERS = SELLERS
+export const cmsFxUserName = (id: string): string | null => USER_BY_ID.get(id)?.name ?? null
+export const cmsFxUserStore = (id: string): string | null => USER_BY_ID.get(id)?.store ?? null
+export const cmsFxSellerEmail = (key: UserKey): string => email(key)
+
 /** Mẫu số Q-212 của fixture: staff hiện thuộc phạm vi chương trình ∩ phạm vi người xem (gồm M — chưa bán). SM: S1 + S2. */
 export function cmsFxEligibleStaff(viewer: 'super' | 'sm', programStoreIds?: readonly string[]): string[] {
   return USER_DEFS.filter((u) => (viewer === 'super' || CMS_FX_SM_STORES.includes(u.store)) && (!programStoreIds || programStoreIds.includes(u.store))).map((u) => CMS_FX_USERS[u.key])
@@ -439,7 +445,7 @@ export function cmsFxHeader(p: CmsFxProgram, v: CmsFxViewer, o: CmsFxHeaderOpts 
 
 export function cmsFxRows(p: CmsFxProgram, v: CmsFxViewer): CmsResultRowsDto {
   const out = p.out
-  if (!p.run || !out) return { runId: null, results: [], catalog: [], users: [] }
+  if (!p.run || !out) return { runId: null, results: [], catalog: [], users: [], contract: null }
   const results = out.results.filter((r) => visibleUser(v, r.userId))
   const catalog = out.catalog.filter((c) => visibleUser(v, c.userId))
   const userIds = [...new Set(results.map((r) => r.userId))]

@@ -378,7 +378,8 @@ test.describe('CMS P2-c — handler export @desktop', () => {
 test.describe('CMS P2-c — cổng route & cờ @desktop', () => {
   test('cờ earnings OFF ⇒ không gọi RPC kết quả; D3 404; route không service role', () => {
     const rl = read('lib/cms/server/resultLoad.ts')
-    expect(rl).toContain('cmsPinnedResults({ enabled: isCmsEarningsEnabled(), header: cmsLoadResultHeader, rows: cmsLoadResultRows }, programId, o)')
+    // CMS-CALC-RET-2 P5.2: thêm basisUi (cờ mode / trả ⇒ chỉ đổi nhãn cách tính); cổng earnings giữ nguyên.
+    expect(rl).toContain('cmsPinnedResults({ enabled: isCmsEarningsEnabled(), header: cmsLoadResultHeader, rows: cmsLoadResultRows, basisUi: f.modes || f.returns }, programId, o)')
     expect(rl).not.toContain('supabaseAdmin')
     const d3 = read('app/(dashboard)/targets/cms/history/page.tsx')
     const order = ["redirect('/login')", 'await redirectIfFsStaff(', 'if (!isCmsEarningsEnabled()) notFound()', "profile?.role === 'staff' || profile?.role === 'store_manager'", 'cmsLoadHistoryPrograms(']

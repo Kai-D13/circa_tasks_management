@@ -2,6 +2,7 @@
 // trình / SP lấy từ CÙNG kịch bản (lib/cms/fixtureScenario) với A1 / A3 — mỗi chương trình có danh mục riêng của nó.
 import { CMS_FX_ADVICE_4000, CMS_FX_PG, CMS_FX_PG_SIMPLE, CMS_FX_TODAY, cmsFxProgram, cmsFxRowView } from './fixtureScenario'
 import type { CmsProductView, CmsProgramRowView } from './server/catalog'
+import { cmsFxContract } from './fixturesContract'
 
 export { CMS_FX_TODAY }
 const row = (id: string): CmsProgramRowView => { const p = cmsFxProgram(id); if (!p) throw new Error('fx program'); return cmsFxRowView(p.row) }
@@ -28,5 +29,5 @@ export { CMS_FX_ADVICE_4000 }
 
 /** Danh mục của CHÍNH chương trình (không gán chung một bộ SP cho mọi program_id). */
 export function cmsFxStaffProducts(programId: string): CmsProductView[] {
-  return cmsFxProgram(programId)?.products ?? []
+  return cmsFxProgram(programId)?.products ?? cmsFxContract(programId)?.fx.products ?? []
 }

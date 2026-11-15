@@ -1,6 +1,6 @@
 import 'server-only'
 import { createClient } from '@/lib/supabase/server'
-import { isCmsEarningsEnabled } from '@/lib/cms/flags'
+import { cmsCalcFlags, isCmsEarningsEnabled } from '@/lib/cms/flags'
 import { cmsLoadResultHeader, cmsLoadResultRows } from '@/lib/cms/server/results'
 import { CmsQueryError, cmsQueryFailLine } from '@/lib/cms/queryLog'
 import { cmsPinnedResults, type CmsResultsLoad } from '@/lib/cms/resultUi'
@@ -17,7 +17,8 @@ import type { CmsProgramDbStatus } from '@/lib/cms/programStatus'
  * gọi ⇒ đọc lại một lần; vẫn đổi ⇒ 'gone' (UI: dữ liệu vừa đổi, tải lại). Cờ OFF ⇒ 'off', không gọi RPC.
  */
 export function cmsLoadResults(programId: string, o: { started: boolean }): Promise<CmsResultsLoad> {
-  return cmsPinnedResults({ enabled: isCmsEarningsEnabled(), header: cmsLoadResultHeader, rows: cmsLoadResultRows }, programId, o)
+  const f = cmsCalcFlags()
+  return cmsPinnedResults({ enabled: isCmsEarningsEnabled(), header: cmsLoadResultHeader, rows: cmsLoadResultRows, basisUi: f.modes || f.returns }, programId, o)
 }
 
 // ── Mẫu số Q-212: tài khoản staff hiện thuộc nhà thuốc hợp lệ trong phạm vi chương trình ∩ phạm vi người xem ──────────

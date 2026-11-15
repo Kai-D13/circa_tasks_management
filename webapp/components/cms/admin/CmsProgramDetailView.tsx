@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { ArrowLeft, Download, Pencil, Upload } from 'lucide-react'
+import { ArrowLeft, Download, Pencil, RotateCcw, Upload } from 'lucide-react'
 import { StatusBadge } from '@/components/ds/StatusBadge'
 import { Notice } from '@/components/ds/Notice'
 import { EmptyState } from '@/components/ds/EmptyState'
@@ -12,6 +12,8 @@ import { CmsLockPanel } from '@/components/cms/admin/CmsLockPanel'
 import { CmsPayoutPanel } from '@/components/cms/admin/CmsPayoutPanel'
 import { CmsClampTitle } from '@/components/cms/CmsClampTitle'
 import { CmsDownloadLink } from '@/components/cms/CmsDownloadLink'
+import { CmsBasisBadges } from '@/components/cms/CmsBasisBadges'
+import type { CmsProgramBasis } from '@/lib/cms/calc/basisUi'
 import type { CmsLockPreviewDto, CmsPayoutDto } from '@/lib/cms/payoutView'
 import { cn } from '@/lib/utils'
 import { cmsDate, cmsDateRange, cmsDateTime, cmsPrice, cmsVnd } from '@/lib/cms/display'
@@ -40,8 +42,12 @@ export type CmsDetailView = 'products' | 'staff' | 'runs'
 
 const BTN = 'h-[44px] md:h-[36px] gap-1.5 text-[13px]'
 
-export function CmsProgramDetailView({ detail, today, canManage, view, results = { kind: 'off' }, eligibleStaffIds = null, storeNames = new Map(), staffPage = 1, lock = null, payout = null, nav }: {
+export function CmsProgramDetailView({ detail, today, canManage, view, results = { kind: 'off' }, eligibleStaffIds = null, storeNames = new Map(), staffPage = 1, lock = null, payout = null, nav, basis, returnsHref = null }: {
   detail: CmsProgramDetail
+  /** CMS-CALC-RET-2 P5.5: link trang Trả hàng (chỉ super + DB có đường returns_ledger); null ⇒ ẩn. */
+  returnsHref?: string | null
+  /** CMS-CALC-RET-2 P5.1: cách tính + chính sách trả hiện tại (undefined = DB trước 130 ⇒ không hiện). */
+  basis?: CmsProgramBasis | null
   today: string
   canManage: boolean
   view: CmsDetailView
@@ -84,7 +90,7 @@ export function CmsProgramDetailView({ detail, today, canManage, view, results =
     catalogTargetGmv: p.catalogTargetGmv, priceText: cmsPrice,
     results: run && loaded ? { rows: rowsByPp.get(x.id) ?? [], catalog: loaded.rows.catalog, users: loaded.rows.users, storeNames } : null,
   }))
-  const showActions = canManage && (actions.edit || actions.importMode || actions.activate)
+  const showActions = canManage && (actions.edit || actions.importMode || actions.activate || !!returnsHref)
 
   return (
     <div data-ui-v2="page" data-layout-width="fluid" data-cms-detail={display} className="p-4 md:p-6 space-y-4 md:space-y-[18px]">
@@ -98,6 +104,7 @@ export function CmsProgramDetailView({ detail, today, canManage, view, results =
           <div className="flex flex-wrap items-center gap-1.5">
             <StatusBadge tone={CMS_STATUS_TONE[display]}>{CMS_STATUS_LABEL[display]}</StatusBadge>
             {p.isTest && <StatusBadge tone="warning">QA</StatusBadge>}
+            <CmsBasisBadges basis={basis} withNote={canManage} />
           </div>
           <p data-cms-detail-meta className="text-[13px] text-muted-foreground tabular-nums break-words">
             {cmsDateRange(p.startDate, p.endDate)}
@@ -123,6 +130,11 @@ export function CmsProgramDetailView({ detail, today, canManage, view, results =
                 <Upload className="h-4 w-4" /> {actions.importMode === 'replace' ? (detail.products.length ? 'Nạp lại danh mục' : 'Nạp danh mục') : 'Import bổ sung'}
               </Link>
             )}
+            {canManage && returnsHref && (
+              <Link href={href(returnsHref)} data-cms-returns-link className={cn(buttonVariants({ variant: 'outline' }), BTN)}>
+                <RotateCcw className="h-4 w-4" /> Trả hàng
+              </Link>
+            )}
             {exportHref && (
               <CmsDownloadLink href={exportHref} data-cms-export className={cn(buttonVariants({ variant: 'outline' }), BTN)}>
                 <Download className="h-4 w-4" /> Xuất Excel
@@ -139,7 +151,7 @@ export function CmsProgramDetailView({ detail, today, canManage, view, results =
 
       {payout && <CmsPayoutPanel programId={p.id} payout={payout.data} error={payout.error} />}
       {lock && <CmsLockPanel programId={p.id} preview={lock.preview} loadError={lock.error} qaReadonly={lock.qaReadonly === true} />}
-      {loaded && <CmsA3SyncLine header={loaded.header} isSuper={canManage} display={display} />}
+      {loaded && <CmsA3SyncLine header={loaded.header} isSuper={canManage} display={display} basisUi={loaded.basisUi} rows={loaded.rows.results} />}
       {loaded && <CmsA3StatCards stats={stats} display={display} />}
       {run && loaded && hasCatalog && loaded.rows.catalog.length > 0 && <CmsA3CatalogBlock catalog={loaded.rows.catalog} target={p.catalogTargetGmv} />}
       {(results.kind === 'error' || results.kind === 'gone') && (

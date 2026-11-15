@@ -10,6 +10,9 @@ import { cmsLoadEligibleStaffIds, cmsLoadResults, cmsLoadStoreNames } from '@/li
 import { cmsTodayVn } from '@/lib/cms/programStatus'
 import { ErrorState } from '@/components/ds/ErrorState'
 import { CmsProgramDetailView, type CmsDetailView } from '@/components/cms/admin/CmsProgramDetailView'
+import { cmsBasisEnv, cmsProgramBasisFor } from '@/lib/cms/server/basisEnv'
+import { getCmsCapabilityState } from '@/lib/cms/server/capabilities'
+import { cmsReturnsPageEnabled } from '@/lib/cms/server/returnsLoad'
 
 // CMS P1-c · A3 /targets/campaigns/cms/[id]. Cổng như A1 (cờ + super / SM). Chương trình ngoài phạm vi RLS (kể cả QA không
 // marker — H9b) ⇒ 404 như không tồn tại. SM chỉ đọc. Lỗi truy vấn ⇒ ErrorState (không danh mục rỗng giả).
@@ -65,9 +68,15 @@ export default async function CmsProgramPage({ params, searchParams }: {
   }
   const v: CmsDetailView = view === 'runs' ? 'runs' : view === 'staff' ? 'staff' : 'products'
   const pageNum = Number(page)
+  // Cách tính / chính sách trả: đọc SAU khi RLS đã cho thấy chương trình (service role chỉ đọc 3 cột cấu hình).
+  const basisMap = await cmsProgramBasisFor(await cmsBasisEnv(), [prog.id])
+  const basis = basisMap === undefined ? undefined : basisMap.get(prog.id) ?? null
+  // P5.5: trang Trả hàng (đối soát + báo cáo sau chốt) — chỉ super, cờ đọc kết quả, DB có đường returns_ledger.
+  const caps = canManage && cmsReturnsPageEnabled() ? await getCmsCapabilityState() : null
+  const returnsHref = caps?.kind === 'ok' && caps.caps.paths.returns_ledger ? `/targets/campaigns/cms/${prog.id}/returns` : null
   return (
     <CmsProgramDetailView detail={res.data} today={today} canManage={canManage} view={v} results={results}
       eligibleStaffIds={eligible} storeNames={storeNames} staffPage={Number.isInteger(pageNum) && pageNum > 0 ? pageNum : 1}
-      lock={lock} payout={payout} />
+      lock={lock} payout={payout} basis={basis} returnsHref={returnsHref} />
   )
 }

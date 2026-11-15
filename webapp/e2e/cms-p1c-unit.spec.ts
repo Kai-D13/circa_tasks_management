@@ -140,9 +140,10 @@ test.describe('CMS P1-c · kiểm tĩnh @desktop', () => {
   })
   test('route thật không bọc boundary fixture; fixture cms-v2 bọc đủ', () => {
     const routes = walk('app/(dashboard)/targets/campaigns/cms').filter((f) => f.endsWith('page.tsx'))
-    expect(routes.length).toBe(5)
+    // CMS-CALC-RET-2 P5.5: +2 route super "Trả hàng" ([id]/returns, [id]/returns/[reportId]).
+    expect(routes.length).toBe(7)
     expectBoundaryOnlyInCatalog(routes)
-    for (const f of ['list', 'wizard', 'detail']) expectCatalogWrapped(`app/(dashboard)/ui-catalog/cms-v2/${f}/page.tsx`)
+    for (const f of ['list', 'wizard', 'detail', 'returns']) expectCatalogWrapped(`app/(dashboard)/ui-catalog/cms-v2/${f}/page.tsx`)
   })
   test('mọi route CMS chặn bởi cờ CMS_PROGRAM_ENABLED + quyền; trang quản lý chỉ super', () => {
     const dir = 'app/(dashboard)/targets/campaigns/cms'
@@ -153,6 +154,12 @@ test.describe('CMS P1-c · kiểm tĩnh @desktop', () => {
     for (const f of ['new/page.tsx', '[id]/edit/page.tsx', '[id]/import/page.tsx']) {
       const s = fs.readFileSync(path.join(ROOT, dir, f), 'utf8')
       expect(s, f).toContain('isCmsProgramEnabled() && canManageCms(')
+    }
+    // P5.5: trang Trả hàng — cờ program + earnings (cmsReturnsPageEnabled) + super, rồi năng lực DB; sai ⇒ 404.
+    for (const f of ['[id]/returns/page.tsx', '[id]/returns/[reportId]/page.tsx']) {
+      const s = fs.readFileSync(path.join(ROOT, dir, f), 'utf8')
+      expect(s, f).toContain('if (!cmsReturnsPageEnabled() || !canManageCms(profile?.role, user.email)) notFound()')
+      expect(s, f).toContain("caps.kind !== 'ok'")
     }
   })
   test('remotePatterns ảnh CMS đúng host + prefix, không wildcard host', () => {

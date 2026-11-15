@@ -12,7 +12,7 @@ import { CMS_GATE_HUE, CMS_GATE_LABEL, cmsAmountPerUnit, cmsBaseQtyLine, cmsDate
 import { CMS_STATUS_LABEL, CMS_STATUS_TONE, cmsDisplayStatus } from '@/lib/cms/programStatus'
 import { cmsIsClosedDisplay, cmsProductHref, cmsStaffAmountTitle, cmsStaffHref, cmsStaffUpdatedText } from '@/lib/cms/staffView'
 import {
-  cmsHistoryHref, cmsLineView, cmsProductTotals, cmsQtyText, cmsStaffCard, cmsStaffRows, cmsTierBreakdown, type CmsResultsLoad,
+  cmsHistoryHref, cmsLineOrderText, cmsLineView, cmsNetQtyText, cmsNetSummary, cmsProductTotals, cmsQtyText, cmsResultScopeNote, cmsRunBasisText, cmsStaffCard, cmsStaffRows, cmsTierBreakdown, type CmsResultsLoad,
 } from '@/lib/cms/resultUi'
 import { CMS_NO_RUN_TEXT, cmsNoRunText, type CmsResultLineDto } from '@/lib/cms/resultView'
 import type { CmsStaffProduct } from '@/lib/cms/server/staffCatalog'
@@ -60,6 +60,13 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
   const storeStaff = withNumbers && manager ? cmsStaffRows(rows, loaded.rows.users) : []
   const tierUnitsDone = (i: number) => (slices ? slices[i].units : BigInt(0))
   const qty = card?.row ? cmsQtyExplainRow(card.row) : null
+  // P5.2: hợp đồng GHIM từ run đang xem (không theo cờ) — cách tính nguyên không "cộng dồn" phần lẻ của dòng bán.
+  const contract = loaded?.header.run?.contract ?? null
+  const unitBasis = contract?.quantityBasis === 'cms_unit'
+  const basisText = cmsRunBasisText(contract, loaded?.basisUi)
+  // P5.3: gộp / đã trả / ròng — chỉ run net có phiếu trả.
+  const netText = card?.row ? cmsNetQtyText(cmsNetSummary([card.row]), card.row.perUnit, p.unitCms) : null
+  const storeNetText = withNumbers && manager ? cmsNetQtyText(cmsNetSummary(rows), p.baseQuantityCms, p.unitCms) : null
   const rate = cmsFlatRate(p)
   const eq = card && rate ? cmsFlatEquation(p, card.row) : null
 
@@ -106,11 +113,15 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
                   Đã bán {card.soldText} {p.unitCms} · {gateOpen ? <>được tính CMS {(qty?.rewarded ?? card.cmsQuantity).toString()} {p.unitCms}</> : <>chưa tính CMS {card.cmsQuantity.toString()} {p.unitCms} (chờ đạt target)</>}
                 </p>
               )}
+              {netText && <p data-cms-net-line className="text-[12px] text-muted-foreground tabular-nums">{netText} (trừ phiếu trả hàng hoàn tất)</p>}
               {/* CMS-Q-220: overCap / atCap chỉ khác 0 với run LỊCH SỬ có trần (cấu hình cũ đã đóng băng); run mới luôn 0 / false. */}
-              {qty && (qty.overCap > BigInt(0) || qty.fractionBase > BigInt(0)) && (
+              {qty && (qty.overCap > BigInt(0) || qty.fractionBase > BigInt(0) || qty.notCountedBase > BigInt(0)) && (
                 <ul data-cms-qty-explain className="space-y-0.5 text-[12px] text-muted-foreground tabular-nums">
                   {qty.overCap > BigInt(0) && <li>Vượt trần {qty.cap?.toString()} {p.unitCms}: {qty.overCap.toString()} {p.unitCms} không thêm CMS (vẫn tính vào số đã bán).</li>}
-                  {qty.fractionBase > BigInt(0) && <li>Phần lẻ {cmsQtyText(qty.fractionBase, qty.perUnit)} {p.unitCms} chưa đủ 1 {p.unitCms} — đang cộng dồn ({card.fraction}).</li>}
+                  {qty.notCountedBase > BigInt(0) && <li data-cms-qty-not-counted>Không tính lượng {cmsQtyText(qty.notCountedBase, qty.perUnit)} {p.unitCms}: dòng bán khác đơn vị {p.unitCms} hoặc số lượng lẻ (vẫn tính GMV).</li>}
+                  {qty.fractionBase > BigInt(0) && (unitBasis
+                    ? <li>Còn {cmsQtyText(qty.fractionBase, qty.perUnit)} {p.unitCms} chưa đủ 1 {p.unitCms} sau trả hàng ({card.fraction}).</li>
+                    : <li>Phần lẻ {cmsQtyText(qty.fractionBase, qty.perUnit)} {p.unitCms} chưa đủ 1 {p.unitCms} — đang cộng dồn ({card.fraction}).</li>)}
                 </ul>
               )}
               {card.position.atCap && !(qty && qty.overCap > BigInt(0)) && <p className="text-[12px] text-muted-foreground">Đã đạt mức trần {p.tiers[p.tiers.length - 1]?.to} {p.unitCms} — bán thêm không thêm CMS.</p>}
@@ -125,6 +136,8 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
                 </ul>
               )}
               <p className="text-[12px] text-muted-foreground" data-cms-updated={display}>{cmsStaffUpdatedText(display, loaded.header.run?.publishedAt)}</p>
+              {basisText && <p data-cms-run-basis={contract?.quantityBasis} className="text-[12px] text-muted-foreground">{basisText}</p>}
+              {contract && display !== 'locked' && <p data-cms-sales-only={contract.returnsPolicy} className="text-[12px] text-muted-foreground">{cmsResultScopeNote(contract)}</p>}
             </>
           ) : (
             <p className="text-[13px] text-muted-foreground">{loaded ? `${cmsNoRunText(loaded.header)}.` : `${CMS_NO_RUN_TEXT}.`}</p>
@@ -141,6 +154,7 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
           {storeTot ? (
             <>
               <p className="text-[13px] text-muted-foreground tabular-nums">Đã bán {storeTot.soldText} {p.unitCms} · {storeTot.staffAchieved}/{storeTot.staffWithSales} dược sĩ có bán đã có CMS</p>
+              {storeNetText && <p data-cms-net-line className="text-[12px] text-muted-foreground tabular-nums">{storeNetText} (trừ phiếu trả hàng hoàn tất)</p>}
               {storeStaff.length > 0 && (
                 <ul data-cms-store-staff className="divide-y border-t text-[13px]">
                   {storeStaff.map((s) => (
@@ -152,6 +166,8 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
                 </ul>
               )}
               <p className="text-[12px] text-muted-foreground" data-cms-updated={display}>{rate ? '' : 'Mỗi dược sĩ tính bậc riêng · '}{cmsStaffUpdatedText(display, loaded.header.run?.publishedAt)}</p>
+              {basisText && <p data-cms-run-basis={contract?.quantityBasis} className="text-[12px] text-muted-foreground">{basisText}</p>}
+              {contract && display !== 'locked' && <p data-cms-sales-only={contract.returnsPolicy} className="text-[12px] text-muted-foreground">{cmsResultScopeNote(contract)}</p>}
             </>
           ) : (
             <p className="text-[13px] text-muted-foreground">{loaded ? `${cmsNoRunText(loaded.header)}.` : `${CMS_NO_RUN_TEXT}.`}</p>
@@ -219,7 +235,7 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
 
       {!rate && card?.row && !card.position.atCap && display === 'running' && (
         <CmsWhatIf
-          baseQuantity={card.row.baseQuantity}
+          baseQuantity={card.row.eligibleBase}
           perUnit={card.row.perUnit}
           tiers={p.tiers}
           unit={p.unitCms}
@@ -249,9 +265,9 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
               {recent.map((l) => {
                 const v = cmsLineView(l, p.baseQuantityCms, p.unitCms, returnsApproved)
                 return (
-                  <li key={l.seq} data-cms-line={l.status} className="flex items-start justify-between gap-3 py-2">
+                  <li key={l.seq} data-cms-line={l.status} data-cms-line-kind={l.kind} className="flex items-start justify-between gap-3 py-2">
                     <span className="min-w-0">
-                      <span className="block tabular-nums">Đơn #{l.orderCode} · {cmsDateTime(l.completedAt)}</span>
+                      <span className="block tabular-nums">{cmsLineOrderText(l)} · {cmsDateTime(l.completedAt)}</span>
                       <span className="block text-[12px] text-muted-foreground tabular-nums">{v.qtyText} {p.unitCms}{v.note ? ` · ${v.note}` : ''}</span>
                     </span>
                     <span className="shrink-0 text-right">

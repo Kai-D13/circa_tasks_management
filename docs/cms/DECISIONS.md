@@ -109,3 +109,19 @@ Nguồn: `planning/research/cms-quantity-policy-decision-2026-11-12.md` (Q-227),
 - **T11 hiện hành:** migration 127 (prod) đã thay bậc mẫu 1–9 @15.000 · 10–19 @20.000 · từ 20 @25.000 của SO-6 bằng **17 mức cố định / hộp** (một bậc mở). Q-227 không đổi 17 mức, K, phạm vi hay kỳ T11; bậc 15k / 20k / 25k chỉ còn là dữ liệu test.
 - **Phần A — bằng chứng (12/11):** runtime không có gap; spec `e2e/cms-qty-part-a.spec.ts` (nguồn thô → engine → stage → DTO → UI → XLSX, oracle bảng PM) + 2 ca seal Q-227 trong `scripts/qa-cms-122.mjs`; báo cáo `planning/reports/2026-11-12-cms-quantity-returns-part-a.md`.
 - File 83 SP (`83 high margin.xlsx`) chỉ là ví dụ minh hoạ luật — không phải lệnh import / thay 17 SP T11; K trống 83/83 và 30 mức không nguyên phải xử lý riêng khi được giao import.
+
+## 7. CMS-CALC-RET-2 — hai cách tính lượng + trả hàng (13–14/11/2026)
+
+Nguồn: spec `planning/research/cms-calculation-modes-returns-spec-2026-11-13.md` (bảng quyết định §2), review PM `planning/reviews/2026-11-14-cms-calc-ret2-p5-candidate-pm.md` §2 và work order `planning/reviews/2026-11-14-cms-sales-first-release-pm.md`. Mã Q do PM cấp; mã kế tiếp ghi ở khối hiện trạng sống `planning/STATE.md`.
+
+| Mã | Quyết định | Trạng thái |
+|---|---|---|
+| **Q-229** | Không có huỷ trả đã hoàn tất; không triển khai tự khôi phục tiền do huỷ phiếu. | Đã chốt — release trả hàng |
+| **Q-230** | Chỉ `H.status = COMPLETED`, thời điểm `H.completed_at`; lượng trả = `I.base_quantity` tổng dòng, GMV trả = `I.refund_amount` (spec 13/11 §2: thay căn cứ GMV đề xuất trước đó). | Đã chốt — release trả hàng |
+| **Q-231** | Một cách tính cho cả chương trình: `pos_base` "Tính lẻ — cộng dồn quy đổi" / `cms_unit` "Tính nguyên — đúng đơn vị CMS" (bỏ cả dòng có số lượng lẻ khỏi lượng thưởng, vẫn tính GMV). T11 giữ cộng dồn; lựa chọn dùng cho chương trình mới. | Đã chốt operator 13/11 — **thuộc release CMS bán hàng** |
+| **Q-232** | Tính nguyên: bán 2 hộp, K 100, trả 5 viên ⇒ còn 1 hộp được CMS; trả không bắt buộc đúng đơn vị bán. | Đã chốt — release trả hàng |
+| **Q-233** | Job theo dõi trả sau chốt trong **30 ngày sau kết thúc kỳ** (không phải 45; không phải TTL sổ / báo cáo). Phiếu hoàn tất sau ngày 30 vẫn xử lý riêng theo chương trình bằng báo cáo sau chốt có kiểm soát; không sửa số đóng băng, không tự thu / chi / trừ kỳ khác. | Đã chốt operator 14/11 — **hoãn** cùng release trả hàng (mã hiện còn mặc định 45 trong job đang tắt) |
+| **Q-234** | Khi BI giao nguồn và đối chiếu / gate đạt, **áp trừ trả cho T11** gắn với đơn bán từ 01/11/2026; giữ cộng dồn. Không phải lệnh đổi policy / prod / deploy. | Đã chốt operator 14/11 — **hoãn** cùng release trả hàng |
+
+- **Phát hành bán hàng trước (PM 14/11, chỉ đạo operator):** đợt gần nhất = admin tạo / nạp 2 mẫu / xem trước / ghi / kích hoạt + chọn cách tính + đồng bộ / tính sales-only + dược sĩ / QLCH / SM theo dõi + XLSX + guide bán hàng. `CMS_RETURNS_ENABLED=false` suốt cửa sổ; không chuyển policy T11; không task trả hàng; không chờ BI. Trang / link / XLSX Trả hàng chỉ mở khi `CMS_RETURNS_ENABLED`. Migration 130 giữ nguyên (hạ tầng dùng chung, phần trả chưa mở) — không cắt / đánh số lại.
+- Runbook: `planning/research/cms-sales-release-runbook-2026-11-14.md` (bán hàng), `planning/research/cms-calc-ret2-runbook-2026-11-14.md` (trả hàng — release sau).

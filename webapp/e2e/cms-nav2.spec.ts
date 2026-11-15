@@ -4,6 +4,7 @@ import { MANAGER_STATE, STAFF_STATE, SUPER_STATE } from './authState'
 import { sessionDb } from './dbFixtures'
 import { trapWrites, type TrappedRequest } from './fixtureGuard'
 import { NAV_WATCHDOG_MS } from '../lib/nav/watchdog'
+import { replayRscAfter } from './rscReplay'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // NAV-2 (PM 08/11/2026 — planning/research/cms-nav2-guides-next-actions-2026-11-08.md §1–3, AC NAV2-01…10): segment
@@ -17,6 +18,8 @@ import { NAV_WATCHDOG_MS } from '../lib/nav/watchdog'
 // Đếm tải cứng = số request document tới đúng đích. Route thật cần server bật CMS_PROGRAM_ENABLED (E2E_CMS_ENABLED=1); chỉ
 // đọc — mọi request ghi của app bị chặn + ghi nhận (trapWrites) và phải bằng 0. Fixture /ui-catalog/cms-v2 (super, UI_CATALOG=1,
 // không DB) dùng cho các ca cần thời gian tất định chiều CMS→KPI.
+// NAV2-04 kpi2cms (route thật, PM 14/11 SALES-CONT-01 / SALES-R3O-02): payload THẬT chuẩn bị trước cửa sổ đo trên trang riêng cùng context
+// (e2e/rscReplay.ts), cấp khi đủ 3 s kể từ lúc chặn (mốc thực tế ghi lại); request ghi tới URL đích bị chính handler replay chặn trước mạng.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const RUN_PROJECT = 'mobile-390'   // viewport do test đặt — một project là đủ (cùng lý do nav-watchdog.spec)
@@ -89,7 +92,9 @@ async function reach(page: Page, isTarget: (u: URL) => boolean, timeout: number,
 }
 /**
  * Giữ RSC tới đích. mode 'cold' = đích chưa prefetch: prefetch không bao giờ trả; 'warm' = prefetch qua bình thường; 'inflight' =
- * prefetch cũng chậm như RSC điều hướng (về GIỮA lúc điều hướng). Không delayMs ⇒ RSC điều hướng treo; delayMs ⇒ chậm rồi cho qua.
+ * prefetch cũng chậm như RSC điều hướng (về GIỮA lúc điều hướng). Không delayMs ⇒ RSC điều hướng treo; delayMs ⇒ chậm TỐI THIỂU
+ * delayMs rồi cho qua (sàn, không chặn trên — xem chú thích trong hàm). Chỉ dùng delayMs cho fixture /ui-catalog (không DB, nguồn
+ * nhanh); ca route thật NAV2-04 kpi2cms dùng replayRscAfter (e2e/rscReplay.ts) — phản hồi đúng delayMs.
  * Trả `prefetched()` — đã có ít nhất một phản hồi prefetch tới đích chưa.
  */
 async function holdRsc(page: Page, isTarget: (u: URL) => boolean, mode: 'cold' | 'warm' | 'inflight', delayMs?: number) {
@@ -101,8 +106,8 @@ async function holdRsc(page: Page, isTarget: (u: URL) => boolean, mode: 'cold' |
     if (mode === 'warm' && isPrefetch(r)) return route.continue()
     if (mode === 'cold' && isPrefetch(r)) return   // đích chưa bao giờ prefetch xong
     if (delayMs === undefined) return   // không trả ⇒ treo
-    // "Chậm delayMs rồi xong" = phản hồi hoàn tất đúng delayMs sau khi request đi (đã gồm thời gian render của server — route thật
-    // đọc DB prod dao động 1–2,5 s, cộng dồn sẽ làm ca không tất định).
+    // delayMs là SÀN: route.fetch() tới server thật (trong lúc đo) rồi chờ thêm max(0, delayMs − thời_gian_fetch) ⇒ nguồn chậm hơn
+    // delayMs thì phản hồi trễ theo nguồn (continuation r3: 5.766 ms — PM 14/11 SALES-CONT-01). Tất định chỉ khi nguồn nhanh hơn delayMs.
     const t = Date.now()
     try {
       const res = await route.fetch()
@@ -239,19 +244,27 @@ for (const role of ROLES) {
     }
 
     for (const mode of ['cold', 'warm'] as const) {
-      test(`NAV2-04 kpi2cms ${mode}: RSC chậm 3 s rồi xong ⇒ huỷ timer, không tải cứng trễ`, async ({ page }) => {
+      // PM 14/11 SALES-CONT-01: phản hồi điều hướng cấp sau 3 s kể từ lúc chặn (payload thật lấy trước cửa sổ đo trên trang riêng) — thay sàn 3 s của holdRsc.
+      test(`NAV2-04 kpi2cms ${mode}: RSC trả sau 3 s (payload thật chuẩn bị trước) ⇒ huỷ timer, không tải cứng trễ`, async ({ page }, testInfo) => {
         const d = DIRS.kpi2cms
         const seen = await trapWrites(page)
         const timers = await timerTrace(page)
-        const h = await holdRsc(page, d.isTarget, mode, 3_000)
+        const h = await replayRscAfter(page, d.isTarget, mode, 3_000)
+        // Chuẩn bị TRƯỚC cửa sổ đo, trang riêng cùng context (Router Cache riêng — trang kiểm vẫn cold / warm đúng nghĩa); lỗi ⇒ đỏ 'CHUẨN BỊ RSC LỖI'.
+        const prep = await h.prepare({ open: (p) => openSegment(p, d.from, d.seg), click: (p) => segLink(p, d.seg, d.label).click() })
         const loads = hardLoads(page, d.isTarget)
         await openSegment(page, d.from, d.seg)
         if (mode === 'warm') await waitPrefetch(page, h)
+        else expect(h.prefetchResponses(), 'cold mà trang kiểm đã nhận prefetch đích').toBe(0)
+        expect(await h.buildReady(), 'không đọc được build tài liệu trang kiểm trước t0').toBe(true)
         loads.start()
         const t0 = Date.now()
         await segLink(page, d.seg, d.label).click()
-        await reach(page, d.isTarget, 15_000, loads, timers)
+        await reach(page, d.isTarget, 15_000, loads, async () => `${await timers()} · ${h.describe(t0)}`)
         const dt = Date.now() - t0
+        testInfo.annotations.push({ type: 'nav2-04 phản hồi chuẩn bị', description: `${mode} · chuẩn bị ${prep.prepMs} ms (fetch thật ${prep.fetchMs} ms · ${prep.bytes} B) · ${h.describe(t0)} · URL đổi +${dt} ms` })
+        expect(h.problems(), `CHUẨN BỊ / CẤP RSC LỖI · ${h.describe(t0)}`).toEqual([])
+        expect(h.served().filter((s) => s.fulfilledAt !== null).length, `không request điều hướng nào nhận payload chuẩn bị · ${h.describe(t0)}`).toBeGreaterThanOrEqual(1)
         expect(dt, 'RSC chậm 3 s mà URL đổi sớm hơn — không chậm thật').toBeGreaterThanOrEqual(3_000)
         expect(dt, `điều hướng mềm mất ${dt} ms — chạm mốc watchdog, ca không kiểm được huỷ timer`).toBeLessThan(NAV_WATCHDOG_MS - 500)
         await expect(page.locator(d.done)).toBeVisible({ timeout: 20_000 })

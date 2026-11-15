@@ -9,6 +9,7 @@ import {
   cmsFxProgramOfProduct, cmsFxRows, type CmsFxProgram, type CmsFxViewer,
 } from './fixtureScenario'
 import { CMS_FX_TODAY } from './fixtureScenario'
+import { cmsFxContractLines, cmsFxContractResultsOf } from './fixturesContract'
 import type { CmsResultsLoad } from './resultUi'
 import type { CmsResultLineDto, CmsResultRowDto } from './resultView'
 
@@ -23,12 +24,15 @@ export const CMS_FX_RESULT_SCENARIOS: CmsFxResultScenario[] = ['running', 'top',
 
 /** Kết quả của một chương trình theo người xem + kịch bản hiển thị. Chương trình chưa bắt đầu / nháp ⇒ 'upcoming' / 'off'. */
 export function cmsFxResultsOf(programId: string, s: CmsFxResultScenario, v: CmsFxViewer): CmsResultsLoad {
+  // CMS-CALC-RET-2 P5: chương trình run contract (PG13–15) ⇒ reader v2 giả lập trên đầu ra computeCmsNet.
+  const contract = cmsFxContractResultsOf(programId, s, v)
+  if (contract) return contract
   const p = cmsFxProgram(programId)
   if (!p || p.row.status === 'draft') return { kind: 'off' }
   if (p.row.startDate > CMS_FX_TODAY) return { kind: 'upcoming' }
   if (s === 'error' || s === 'gone') return { kind: s }
-  if (s === 'none' || !p.run) return { kind: 'loaded', header: cmsFxHeader({ ...p, run: null, out: null } as CmsFxProgram, v), rows: { runId: null, results: [], catalog: [], users: [] } }
-  if (s === 'reset') return { kind: 'loaded', header: cmsFxHeader(p, v, { reset: true }), rows: { runId: null, results: [], catalog: [], users: [] } }
+  if (s === 'none' || !p.run) return { kind: 'loaded', header: cmsFxHeader({ ...p, run: null, out: null } as CmsFxProgram, v), rows: { runId: null, results: [], catalog: [], users: [], contract: null } }
+  if (s === 'reset') return { kind: 'loaded', header: cmsFxHeader(p, v, { reset: true }), rows: { runId: null, results: [], catalog: [], users: [], contract: null } }
   return { kind: 'loaded', header: cmsFxHeader(p, v, { held: s === 'held', configChanged: s === 'config' }), rows: cmsFxRows(p, v) }
 }
 
@@ -67,9 +71,16 @@ export function cmsFxCorruptResults(): CmsResultsLoad {
  */
 export function cmsFxLines(rows: readonly CmsResultRowDto[]): CmsResultLineDto[] {
   if (rows.length === 0) return []
+  const contract = cmsFxContractLines(rows)
+  if (contract) return contract
   const p = cmsFxProgramOfProduct(rows[0].programProductId)
   if (!p) return []
   return cmsFxLinesOf(p, new Set(rows.map((r) => `${r.userId}|${r.programProductId}`)))
+}
+
+/** CMS-CALC-RET-2 P5.2: giả lập loader route thật khi cờ mode / trả BẬT (cmsPinnedResults gắn basisUi) — chỉ đổi cờ trình bày, không đổi số. */
+export function withBasisUi(l: CmsResultsLoad | undefined, on: boolean): CmsResultsLoad | undefined {
+  return on && l?.kind === 'loaded' ? { ...l, basisUi: true } : l
 }
 
 export const cmsFxParseScenario = (v: string | undefined): CmsFxResultScenario | null =>

@@ -80,7 +80,8 @@ export function buildCmsSimpleTemplateXlsx(): Uint8Array<ArrayBuffer> {
     ['CMS proposal', 'Mức CMS cố định cho MỖI đơn vị CMS (VND, số nguyên)', 'Bắt buộc; nhập ô số; không target, không bậc'],
     ['base_quantity_CMS', 'Số đơn vị cơ sở = 1 đơn vị CMS (K)', 'Bắt buộc để ghi; KHÔNG mặc định 1; hệ thống đối chiếu với dữ liệu bán khi kiểm tra'],
     ['Noi_dung_tu_van', 'Nội dung tư vấn đã kiểm duyệt', 'Bắt buộc để ghi; tối đa 4.000 ký tự'],
-    ['CÁCH TÍNH', 'CMS = floor(tổng lượng cơ sở bán / K) × CMS proposal, theo từng dược sĩ × sản phẩm trong kỳ', ''],
+    ['CÁCH TÍNH', 'CMS = floor(lượng tính CMS / K) × CMS proposal, theo từng dược sĩ × sản phẩm trong kỳ; "lượng tính CMS" theo cách tính của chương trình (dòng dưới)', ''],
+    ...CMS_TEMPLATE_BASIS_GUIDE.map((r) => [...r]),
   ])
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, CMS_SIMPLE_SHEET)
@@ -89,6 +90,18 @@ export function buildCmsSimpleTemplateXlsx(): Uint8Array<ArrayBuffer> {
 }
 
 export const CMS_TEMPLATE_EXAMPLE_IDS = ['999001', '999002', '999003'] as const
+
+/**
+ * CMS-CALC-RET-2 P5.6 — dòng hướng dẫn chung hai mẫu: cách tính lượng là thuộc tính CHƯƠNG TRÌNH (chọn ở bước Thông tin chương trình),
+ * KHÔNG phải cột Excel — file có cột "Cách tính" bị từ chối (BASIS_COLUMN). Chính sách trả hàng cũng theo chương trình; chữ trung tính,
+ * không khẳng định đã trừ trả (public trước mốc B không nói đã trừ trả).
+ */
+export const CMS_TEMPLATE_BASIS_GUIDE: readonly (readonly [string, string, string])[] = [
+  ['CÁCH TÍNH LƯỢNG', 'Chọn ở bước Thông tin chương trình (một cách tính cho cả chương trình), không nhập trong file', 'File có cột "Cách tính" / "Basis" bị từ chối cả file; loại file (nhiều bậc / mức cố định) và cách tính độc lập nhau'],
+  ['· Tính lẻ — cộng dồn quy đổi', 'Cộng mọi lượng bán quy đổi ra đơn vị cơ sở của dược sĩ trong kỳ rồi chia K', 'Ví dụ K = 100 viên/hộp: 20 đơn × 5 viên = 100 viên ⇒ 1 hộp được tính'],
+  ['· Tính nguyên — đúng đơn vị CMS', 'Chỉ dòng bán đúng unit_CMS với số lượng nguyên được tính lượng', 'Dòng khác đơn vị hoặc số lẻ (1,5 hộp) không tính lượng — cả dòng — nhưng vẫn vào GMV; unit_CMS phải đúng tên đơn vị trên đơn bán'],
+  ['TRẢ HÀNG', 'Theo chính sách trả của chương trình (ghi trên màn kết quả)', '"Chưa trừ trả hàng" ⇒ CMS tạm tính theo dòng bán; không nhập trả hàng trong file'],
+]
 
 export function buildCmsImportTemplateXlsx(): Uint8Array<ArrayBuffer> {
   const [a, b, c] = CMS_TEMPLATE_EXAMPLE_IDS
@@ -117,6 +130,7 @@ export function buildCmsImportTemplateXlsx(): Uint8Array<ArrayBuffer> {
     ['unit_CMS', 'Đơn vị hưởng CMS', 'hộp', 'Bắt buộc; nhãn hiển thị'],
     ['base_quantity_CMS', 'Số đơn vị cơ sở = 1 đơn vị CMS', '24', 'Số dương, dấu chấm thập phân, tối đa 9 chữ số sau dấu chấm; KHÔNG mặc định 1'],
     ['THAO TÁC', 'Upload → Kiểm tra → Xác nhận ghi → Kích hoạt', '', 'Dòng lỗi làm loại cả nhóm ProductID; tải file lỗi để sửa'],
+    ...CMS_TEMPLATE_BASIS_GUIDE.map((r) => [r[0], r[1], '', r[2]]),
   ])
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, ws, CMS_IMPORT_SHEET)

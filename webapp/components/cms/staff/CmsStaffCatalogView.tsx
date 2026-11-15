@@ -101,8 +101,8 @@ export function CmsStaffCatalogView({ kind, programs, selected, products, today,
           </p>
 
           <CmsResultsNotice results={results} reloadHref={cmsNavHref(nav, cmsStaffHref(selected.id))} />
-          {loaded && !manager && <CmsStaffHero summary={withNumbers ? cmsStaffSummary(rows, products.length) : null} header={loaded.header} programId={selected.id} display={display} nav={nav} />}
-          {loaded && manager && <CmsStoreHero summary={withNumbers ? cmsStoreSummary(rows, products.length) : null} header={loaded.header} programId={selected.id} display={display} simple={cmsIsSimpleProgram(products)} nav={nav} />}
+          {loaded && !manager && <CmsStaffHero summary={withNumbers ? cmsStaffSummary(rows, products.length) : null} header={loaded.header} programId={selected.id} display={display} nav={nav} basisUi={loaded.basisUi} />}
+          {loaded && manager && <CmsStoreHero summary={withNumbers ? cmsStoreSummary(rows, products.length) : null} header={loaded.header} programId={selected.id} display={display} simple={cmsIsSimpleProgram(products)} nav={nav} basisUi={loaded.basisUi} />}
           {near && nearProduct && <CmsNearGateCard near={near} productName={nearProduct.nameSnapshot} unit={nearProduct.unitCms} />}
 
           {catalog.length > 0 && (

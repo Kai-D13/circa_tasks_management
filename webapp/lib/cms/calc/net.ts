@@ -38,6 +38,7 @@ import {
 } from './policy'
 import { compareCmsCalcEvents, compareCmsContractLineId, compareCmsContractLines, compareUtf8Bytes } from './order'
 import type { CmsReturnCompleted, CmsReturnRecord } from './returns'
+import { cmsSameCapture } from './src'
 
 const ZERO = BigInt(0)
 
@@ -410,8 +411,9 @@ export function computeCmsNet(input: CmsCalcInput): CmsCalcOutput {
       if (sale.baseQuantityUnits !== o.baseQuantityUnits) bad.push('original_base_quantity')
       if (sale.gmvUnits !== o.gmvUnits) bad.push('original_gmv_amount')
       if (basis === 'cms_unit') {
-        if (sale.raw.quantityRaw !== o.quantityRaw) bad.push('original_quantity_raw')
-        if (sale.raw.uomRaw !== o.uomRaw) bad.push('original_uom_raw')
+        // So giá trị LƯU ĐƯỢC ở DB (src + cờ) — cùng seal N2; hai chuỗi > CMS_SRC_MAX khác nhau đều là OVERSIZE.
+        if (!cmsSameCapture(sale.raw.quantityRaw, o.quantityRaw)) bad.push('original_quantity_raw')
+        if (!cmsSameCapture(sale.raw.uomRaw, o.uomRaw)) bad.push('original_uom_raw')
       }
       if (bad.length) { holds.push({ code: 'RETURN_CONTEXT_MISMATCH', ref, fields: bad }); continue }
     }

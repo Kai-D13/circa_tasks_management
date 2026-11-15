@@ -17,6 +17,8 @@ import {
   CMS_IMPORT_CHECKS, CMS_IMPORT_COLUMN_HELP, CMS_REUPLOAD_CODES, CMS_SIMPLE_CHECKS, CMS_SIMPLE_COLUMN_HELP, cmsCommitLabel, cmsKAckable,
   type CmsPreviewResult, type CmsRouteError,
 } from '@/lib/cms/importView'
+import { CmsBasisBadges } from '@/components/cms/CmsBasisBadges'
+import type { CmsProgramBasis } from '@/lib/cms/calc/basisUi'
 
 // CMS P1-c — A2 bước 2–4 + /[id]/import (UI §3.2; r2 U4 / U16; SPEC §4.5–§4.7). Hai bước qua Route Handler P1-b:
 //   (1) "Chạy xử lý" = POST /api/cms/import/preview ⇒ lưu import run, hiện Kết quả (KHÔNG ghi danh mục);
@@ -38,11 +40,14 @@ function errorText(body: CmsRouteError | null): string {
   if (!body) return 'Máy chủ không phản hồi đúng — thử lại'
   const base = body.message ?? 'Không xử lý được file'
   if (body.missing?.length) return `${base}: ${body.missing.join(', ')}`
+  if (body.column) return `${base} (cột "${body.column}")`
   return body.duplicate?.length ? `${base}: ${body.duplicate.join(', ')}` : base
 }
 
-export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false }: {
+export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false, basis }: {
   program: { id: string; name: string }
+  /** CMS-CALC-RET-2 P5.1: cách tính của chương trình (undefined = DB trước 130 ⇒ không hiện; null = không đọc được). */
+  basis?: CmsProgramBasis | null
   mode: 'replace' | 'append'
   fromNew: boolean
   /** Chỉ fixture /ui-catalog: bắt đầu ở bước / kết quả dựng sẵn. */
@@ -63,6 +68,8 @@ export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false }: {
   const abort = useRef<AbortController | null>(null)
   const fileName = file?.name ?? fixture?.fileName ?? null
   const fileBytes = file?.size ?? fixture?.fileBytes ?? null
+  // P5.1: nháp chưa chọn cách tính ⇒ không chạy xử lý (route cũng trả 409 BASIS_NOT_SET).
+  const basisPending = basis !== undefined && basis !== null && basis.basis === null
 
   function pick(f: File | null) {
     setError(null)
@@ -170,6 +177,20 @@ export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false }: {
           : 'Chương trình đã bắt đầu: chỉ thêm sản phẩm mới (tính hồi tố từ ngày bắt đầu); sản phẩm đã có không sửa được.'}
       </Notice>
       {error && <Notice tone="danger" role="alert">{error}</Notice>}
+      {basis !== undefined && (
+        <div data-cms-import-basis={basis?.basis ?? (basis ? 'pending' : 'unknown')} className="flex flex-wrap items-center gap-1.5 text-[13px]">
+          <span className="text-muted-foreground">Cách tính của chương trình:</span>
+          <CmsBasisBadges basis={basis} />
+          {basis?.basis === 'cms_unit' && (
+            <span className="basis-full text-[12px] text-muted-foreground">Tính nguyên: unit_CMS phải đúng tên đơn vị trên đơn bán (không phân biệt hoa thường). Loại file và cách tính độc lập nhau.</span>
+          )}
+        </div>
+      )}
+      {basis !== undefined && basis !== null && basis.basis === null && (
+        <Notice tone="danger" role="alert" title="Chương trình chưa chọn cách tính">
+          Mở <Link href={`/targets/campaigns/cms/${program.id}/edit`} className="underline">Sửa thông tin</Link>, chọn cách tính rồi quay lại nạp file.
+        </Notice>
+      )}
 
       {step === 'upload' && (
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
@@ -239,7 +260,7 @@ export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false }: {
           </div>
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end lg:col-span-2">
             <Link href={`/targets/campaigns/cms/${program.id}`} className={cn(buttonVariants({ variant: 'ghost' }), 'h-[44px] md:h-[36px]')}>Quay lại</Link>
-            <Button type="button" disabled={!file} onClick={() => runPreview(false)} className="h-[44px] md:h-[36px] font-semibold">Chạy xử lý</Button>
+            <Button type="button" disabled={!file || basisPending} onClick={() => runPreview(false)} className="h-[44px] md:h-[36px] font-semibold">Chạy xử lý</Button>
           </div>
         </div>
       )}

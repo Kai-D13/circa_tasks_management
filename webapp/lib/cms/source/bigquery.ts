@@ -51,7 +51,8 @@ export const CMS_BQ_DEFAULT_DEADLINE_MS = 120_000
 export type CmsBqRunner = (
   sql: string,
   params: BqParam[],
-  opts: { maxRows: number; deadlineMs?: number },
+  /** maximumBytesBilled: trần byte BigQuery tự chặn (chỉ provider contract đặt khi cấu hình — CMS-CALC-RET-2 P3). */
+  opts: { maxRows: number; deadlineMs?: number; maximumBytesBilled?: number },
 ) => Promise<BqQueryResult>
 
 export type CmsSourceFailure =

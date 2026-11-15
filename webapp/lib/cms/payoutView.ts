@@ -304,6 +304,10 @@ export const CMS_LOCK_CODE_LABEL: Record<string, string> = {
   CMS_LOCK_POLICY_DATA: 'Số liệu dòng chưa gán không hợp lệ — cần kiểm tra',
   CMS_LOCK_UNASSIGNED_OVER: 'Dòng chưa gán vượt ngưỡng cho phép — xử lý mapping trước khi chốt',
   CMS_LOCK_ACK_REQUIRED: 'Cần nhập lý do xác nhận (10–1.000 ký tự) cho các dòng chưa gán',
+  // 130 (CMS-CALC-RET-2)
+  CMS_LOCK_CONTRACT_UNSUPPORTED: 'Kết quả tính theo cách mới (đơn vị CMS / trừ trả hàng) chưa hỗ trợ chốt trong đợt này',
+  CMS_LOCK_POLICY_POINTER_MISMATCH: 'Cách tính của chương trình đã đổi nhưng kết quả đang công bố vẫn theo cách cũ — cần đồng bộ lại',
+  CMS_LOCK_RETURN_CONFLICT: 'Có phiếu trả hàng đã nhận bị nguồn đổi / mất — cần xử lý trước khi chốt',
   CMS_LOCK_BAD_INPUT: 'Yêu cầu chốt không hợp lệ',
   CMS_ISOLATION: 'Phiên cơ sở dữ liệu không hợp lệ — thử lại',
 }

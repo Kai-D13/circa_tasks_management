@@ -18,6 +18,7 @@
 import { CMS_DEC_FACTOR } from '../decimal'
 import { cmsUnitKey, cmsUnitQuantity, cmsUnitRawFlags } from '../unitKey'
 import type { CmsQuantityBasis } from './policy'
+import { cmsCaptureSrc } from './src'
 
 const ZERO = BigInt(0)
 /** Trần INT64 cho số đơn vị CMS đếm được (cùng miền bigint DB). */
@@ -74,11 +75,14 @@ export function classifyCmsSale(
   if (product.perUnitUnits <= ZERO) throw new RangeError('CMS calc: K phải > 0')
 
   const { uomRaw, quantityRaw } = line.raw
+  // Chuỗi không lưu được ở DB (U+0000 / > CMS_SRC_MAX code point ⇒ cờ NUL / OVERSIZE) ⇒ không hợp lệ, cùng seal N1 (r2 §4.1, D2).
+  if (cmsCaptureSrc(uomRaw).flag !== null) return { ok: false, reason: 'UNIT_INVALID' }
   const uf = cmsUnitRawFlags(uomRaw)
   if (uf.control || uf.invisible) return { ok: false, reason: 'UNIT_INVALID' }
   if (uomRaw === null || uomRaw === '') return { ok: false, reason: 'UNIT_MISSING' }
   const key = cmsUnitKey(uomRaw)
   if (key === null) return { ok: false, reason: 'UNIT_INVALID' }
+  if (cmsCaptureSrc(quantityRaw).flag !== null) return { ok: false, reason: 'QTY_INVALID' }
   const qf = cmsUnitRawFlags(quantityRaw)
   if (qf.control || qf.invisible) return { ok: false, reason: 'QTY_INVALID' }
   const q = cmsUnitQuantity(quantityRaw)

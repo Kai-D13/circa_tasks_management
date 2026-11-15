@@ -6,7 +6,7 @@ import { normalizeSalesRow, type CmsRawRow, type CmsSalesLine } from '../lib/cms
 import { assessSalesSnapshot } from '../lib/cms/quality'
 import { CMS_Q206_RETURNS_CONTRACT, cmsAdjustmentBlocksRelease } from '../lib/cms/releaseGate'
 import { buildCmsStagePayload, cmsSnapshotToEngineInput, parseCmsSalesSnapshot } from '../lib/cms/resultStage'
-import { parseCmsResultLines, parseCmsResultRows, type CmsResultLineDto, type CmsResultRowDto } from '../lib/cms/resultView'
+import { CMS_LEGACY_RUN_CONTRACT, parseCmsResultLines, parseCmsResultRows, type CmsResultLineDto, type CmsResultRowDto } from '../lib/cms/resultView'
 import { cmsFractionText, cmsQtyText } from '../lib/cms/resultUi'
 import { cmsQtyExplainRow } from '../lib/cms/productPresentation'
 import { cmsFlatEquation, cmsFlatEquationText } from '../lib/cms/flat'
@@ -342,7 +342,7 @@ test.describe('CMS-QTY-RET-1 A04 — một mức / nhiều bậc / target; UI v�
     if (fx.kind !== 'loaded') throw new Error(fx.kind)
     const b = buildCmsResultWorkbook({
       program: { id: PROGRAM, name: 'QA phần A', startDate: '2026-11-01', endDate: '2026-11-30', configVersion: 1 },
-      header: fx.header, rows: { runId: p.runId, results: p.rows, catalog: [], users: [{ id: USER_A, fullName: 'Dược sĩ A', storeId: S1 }, { id: USER_B, fullName: 'Dược sĩ B', storeId: S2 }] },
+      header: fx.header, rows: { runId: p.runId, contract: CMS_LEGACY_RUN_CONTRACT, results: p.rows, catalog: [], users: [{ id: USER_A, fullName: 'Dược sĩ A', storeId: S1 }, { id: USER_B, fullName: 'Dược sĩ B', storeId: S2 }] },
       lines: p.lineDtos, excluded: [], products: [{ id: BOX().id, productId: '900101', nameSnapshot: 'SP QA', unitCms: 'hộp', baseQuantityCms: '100', gmvBasis: 'none' }],
       storeNames: new Map([[S1, 'NT 1'], [S2, 'NT 2']]), exportedAt: new Date('2026-11-12T03:00:00Z'), scope: 'super', returnsApproved: false,
     })

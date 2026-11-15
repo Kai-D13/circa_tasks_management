@@ -7,6 +7,7 @@ import { CMS_FX_LONG_ADVICE, CMS_FX_STAFF_ENDED, CMS_FX_STAFF_PROGRAMS, CMS_FX_T
 import { cmsFxProgramOfProduct, cmsFxRowView } from '@/lib/cms/fixtureScenario'
 import { cmsFxLines, cmsFxParseScenario, cmsFxStaffResults, cmsFxStoreResults } from '@/lib/cms/fixturesResults'
 import { cmsFixtureNav } from '@/lib/cms/fixtureNav'
+import { cmsFxContractOfProduct } from '@/lib/cms/fixturesContract'
 
 // Dev-only fixture D2 `/targets/cms/products/[id]` — ĐÚNG CmsStaffProductView của route thật, dữ liệu giả (kịch bản
 // lib/cms/fixtureScenario). Cổng: UI_CATALOG=1 + super admin. &pp=<program_product_id> (link từ thẻ D1) hoặc ?fx=
@@ -15,6 +16,7 @@ import { cmsFixtureNav } from '@/lib/cms/fixtureNav'
 // P2-c: &p2=running|top|held|none|error|gone|config (&role=manager hoặc &as=manager ⇒ tổng nhà thuốc) — số engine + 3 ghi nhận.
 // P3a r2: fx=ended (Chờ chốt kỳ) · fx=locked (Đã chốt — không "Nếu bán thêm", nhãn đã chốt).
 // CMS đơn giản (PM r1 08/11 §6): &pp=<SP của PG10–12> (mức cố định / hộp); p2=reset ⇒ config_reset.
+// CMS-CALC-RET-2 P5: &pp=<SP của PG13–15> (run contract — "Không tính lượng", "Đã bán · đã trả · còn"); không p2 ⇒ running.
 export default async function CmsProductFixture({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   if (process.env.UI_CATALOG !== '1') notFound()
   const { user, profile } = await getSessionProfile()
@@ -23,9 +25,10 @@ export default async function CmsProductFixture({ searchParams }: { searchParams
   const sp = await searchParams
   const one = (k: string) => (typeof sp[k] === 'string' ? (sp[k] as string) : undefined)
   const fx = one('fx') ?? 'product'
-  const scenario = cmsFxParseScenario(one('p2'))
+  const contractPp = cmsFxContractOfProduct(one('pp'))
+  const scenario = cmsFxParseScenario(one('p2')) ?? (contractPp ? 'running' : null)
   const manager = one('role') === 'manager' || one('as') === 'manager'
-  const byPp = cmsFxProgramOfProduct(one('pp'))
+  const byPp = cmsFxProgramOfProduct(one('pp')) ?? contractPp?.fx ?? null
   if (one('pp') && !byPp) notFound()
   const program = byPp ? cmsFxRowView(byPp.row)
     : fx === 'upcoming' ? CMS_FX_STAFF_PROGRAMS[2] : fx === 'ended' ? CMS_FX_STAFF_ENDED[0] : fx === 'locked' ? CMS_FX_STAFF_ENDED[1] : CMS_FX_STAFF_PROGRAMS[0]

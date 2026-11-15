@@ -1,6 +1,7 @@
 import 'server-only'
 import { supabaseAdmin } from '@/lib/supabase/admin'
-import { cmsBqSalesTable } from '@/lib/cms/config'
+import { cmsBqContractMaxBytes, cmsBqReturnsTable, cmsBqSalesTable } from '@/lib/cms/config'
+import { createCmsBqContractProvider } from '@/lib/cms/source/contractSource'
 import { cmsBqRunner } from '@/lib/cms/source/bigqueryRunner'
 import type { CmsSalesCronDeps } from '@/lib/cms/cronSales'
 import type { CmsIo } from '@/lib/cms/salesSync'
@@ -22,9 +23,14 @@ async function rpc<T>(fn: string, args: Record<string, unknown>, io: CmsIo, fall
 }
 
 export function cmsSalesSyncDeps(env: Record<string, string | undefined> = process.env): CmsSalesCronDeps {
+  const table = cmsBqSalesTable(env)
   return {
-    table: cmsBqSalesTable(env),
+    table,
     runner: cmsBqRunner,
+    // Run contract (CMS-CALC-RET-2): MỘT job bán + trả. View trả chưa cấu hình ⇒ chương trình net held SOURCE_NOT_CONFIGURED.
+    contractProvider: createCmsBqContractProvider({
+      runner: cmsBqRunner, salesTable: table, returnsTable: cmsBqReturnsTable(env), maxBytesBilled: cmsBqContractMaxBytes(env),
+    }),
     loadSnapshot: (programId, io) => rpc('rpc_cms_sales_snapshot', { p_program_id: programId }, io, 'SNAPSHOT_FAILED'),
     openRun: (programId, detail, io) => rpc('rpc_cms_sales_run_open', { p_program_id: programId, p_detail: detail }, io, 'OPEN_FAILED'),
     stage: async (runId, part, chunkNo, rows, io) => Number(await rpc('rpc_cms_sales_run_stage',
