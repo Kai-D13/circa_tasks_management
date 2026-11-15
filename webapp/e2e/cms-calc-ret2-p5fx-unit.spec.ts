@@ -159,6 +159,29 @@ test.describe('CMS-CALC-RET-2 P5 fixture run contract @desktop', () => {
     expect(cmsFxStaffProducts(PG13).map((p) => p.productId)).toEqual(['900201', '900202', '900203'])
   })
 
+  test('FINAL-QA7-01: fixture ledger đúng hình dạng DB 130 — super run contract sales-only CLEAN + eval_seq null; net có số; vai khác / legacy không có khối', () => {
+    // PG14 = cms_unit + sales-only (run contract): super nhận ledger CLEAN, eval_seq null (không lần kiểm sổ), set_hash 64 hex.
+    const su14 = loaded(cmsFxAdminResults('running', 'super', PG14))
+    expect(su14.header.run!.contract).toMatchObject({ legacy: false, quantityBasis: 'cms_unit', returnsPolicy: 'sales_only_v1' })
+    expect(su14.header.run!.ledger).toMatchObject({ verdict: 'CLEAN', evalSeq: null })
+    expect(su14.header.run!.ledger!.setHash).toMatch(/^[0-9a-f]{64}$/)
+    expect(su14.header.run!.returnsRowsRead).toBeNull()
+    // Tiền super = Σ dòng kết quả cùng run (không đổi bởi khối ledger).
+    expect(BigInt(su14.header.run!.amountVnd!)).toBe(su14.rows.results.reduce((a, r) => a + BigInt(r.amountVnd), BigInt(0)))
+    // Net (PG13 / PG15) giữ lần kiểm sổ có số.
+    for (const id of [PG13, PG15]) expect(loaded(cmsFxAdminResults('running', 'super', id)).header.run!.ledger, id).toMatchObject({ verdict: 'CLEAN', evalSeq: 3 })
+    // Vai không super: không có khối riêng của super ở mọi chương trình contract.
+    for (const id of [PG13, PG14, PG15]) {
+      expect(loaded(cmsFxAdminResults('running', 'sm', id)).header.run!.ledger ?? null, `sm ${id}`).toBeNull()
+      expect(loaded(cmsFxStaffResults('running', id)).header.run!.ledger ?? null, `staff ${id}`).toBeNull()
+      expect(loaded(cmsFxStoreResults('running', id)).header.run!.ledger ?? null, `qlch ${id}`).toBeNull()
+    }
+    // PG16 (pos_base + sales-only ⇒ run LEGACY): không khối ledger kể cả super.
+    expect(loaded(cmsFxAdminResults('running', 'super', PG16)).header.run!.ledger ?? null).toBeNull()
+    // held / config vẫn dựng được (parser thật) với ledger null tường minh.
+    for (const s of ['held', 'config'] as const) expect(loaded(cmsFxContractResultsOf(PG14, s, { kind: 'super' })).header.run!.ledger?.evalSeq, s).toBeNull()
+  })
+
   test('held: giữ số cũ (held_old) với mã sổ trả lệch ở chương trình net; none / reset / error như fixture legacy', () => {
     const h = loaded(cmsFxContractResultsOf(PG13, 'held', { kind: 'super' }))
     expect(cmsResultState(h.header)).toBe('held_old')

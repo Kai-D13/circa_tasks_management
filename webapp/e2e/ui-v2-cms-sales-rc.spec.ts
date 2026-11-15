@@ -283,6 +283,42 @@ test.describe('ui v2 CMS bán hàng RC — số dược sĩ / QLCH / quản tr�
     expect(writes).toEqual([])
   })
 
+  // FINAL-QA7-01 (PM work order qa7-fix §3): A3 super / SM dựng từ header fixture ĐÃ SỬA (super run contract sales-only mang ledger CLEAN +
+  // eval_seq null như DB 130 — parse thật lúc render). Số thẻ "CMS tạm tính" và từng hàng tab "Theo dược sĩ" = Σ engine của cùng run;
+  // không hộp lỗi kết quả. PG14 = contract sales-only, PG16 = legacy sales-only (cờ mode OFF / BẬT). XLSX của fixture bị guard chặn tải ⇒
+  // XLSX kiểm ở harness PGlite §7 mục 16b (handler thật trên RPC v2).
+  test('FINAL-QA7-01 A3 super / SM PG14 (contract sales-only) + PG16 (legacy, cờ mode OFF / BẬT): thẻ CMS tạm tính + tab Theo dược sĩ = Σ engine cùng run; không hộp lỗi', async ({ page }) => {
+    const writes = await trapWrites(page)
+    const byStaff = (l: CmsResultsLoad) => {
+      if (l.kind !== 'loaded') throw new Error('fx')
+      const m = new Map<string, bigint>()
+      for (const r of l.rows.results) m.set(r.userId, (m.get(r.userId) ?? BigInt(0)) + BigInt(r.amountVnd))
+      return [...m.values()].map((v) => cmsVnd(v).replace(/\s/g, '')).sort()
+    }
+    const cases = [[PG14, '', 'super'], [PG14, '&as=sm', 'sm'], [PG16, '', 'super'], [PG16, '&bu=1', 'super'], [PG16, '&as=sm', 'sm']] as const
+    for (const [id, qs, who] of cases) {
+      const where = `${id === PG14 ? 'PG14' : 'PG16'}${qs}`
+      const load = cmsFxAdminResults('running', who, id)
+      if (load.kind !== 'loaded') throw new Error('fx')
+      if (id === PG14 && who === 'super') expect(load.header.run?.ledger, `${where}: header fixture super mang ledger sales-only`).toMatchObject({ verdict: 'CLEAN', evalSeq: null })
+      if (who === 'sm' || id === PG16) expect(load.header.run?.ledger ?? null, `${where}: không khối ledger`).toBeNull()
+      await open(page, 'detail', `program=${id}&p2=running${qs}`)
+      const main = page.locator('main [data-testid="ui-catalog-cms-detail"]')
+      const stats = main.locator('[data-cms-detail-results]')
+      await expect(stats, where).toBeVisible()
+      await expect(main.locator('[data-cms-results-error]'), `${where}: không hộp lỗi`).toHaveCount(0)
+      const statText = await stats.innerText()
+      expect(/CMS tạm tính\s*([\d.]+\s?₫)/.exec(statText)?.[1]?.replace(/\s/g, ''), `${where}: thẻ CMS tạm tính`).toBe(cmsVnd(sum(load)).replace(/\s/g, ''))
+      await open(page, 'detail', `program=${id}&p2=running&view=staff${qs}`)
+      const rows = page.locator('main [data-cms-staff-row]')
+      await expect(rows.first(), where).toBeVisible()
+      const amounts = await rows.evaluateAll((els) => els.map((r) => { const c = r.querySelectorAll('td'); return (c[c.length - 1]?.textContent ?? '').trim() }))
+      expect(amounts.map((x) => x.replace(/\s/g, '')).sort(), `${where}: tab Theo dược sĩ`).toEqual(byStaff(load))
+      await expect(page.locator('main [data-cms-results-error]'), `${where}: tab không hộp lỗi`).toHaveCount(0)
+    }
+    expect(writes).toEqual([])
+  })
+
   test('T11 / run legacy PG1: cờ mode OFF ⇒ câu T11 nguyên văn, không dòng cách tính; cờ BẬT ⇒ "Tính lẻ — cộng dồn"; A3 không nút Trả hàng', async ({ page }) => {
     await open(page, 'staff', `program=${PG1}&p2=running`)
     const main = page.locator('main [data-testid="ui-catalog-cms-staff"]')
