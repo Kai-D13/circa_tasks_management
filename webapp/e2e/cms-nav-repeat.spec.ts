@@ -300,12 +300,10 @@ test.describe('NAV-REPEAT-1 — ca điều khiển NAVR-02 (staff) @mobile', () 
   })
 })
 
-// NAVR-05: server CMS OFF (lượt A của runner) — /targets không có segment / link CMS, không thêm entry so với hành vi cũ.
-test.describe('NAV-REPEAT-1 — cờ CMS OFF @mobile', () => {
+// NAVR-05: server CMS OFF (lượt A của runner — chỉ project desktop-chromium ⇒ tag @desktop; viewport mobile đặt bằng test.use) —
+// /targets không có segment / link CMS, không thêm entry so với hành vi cũ.
+test.describe('NAV-REPEAT-1 — cờ CMS OFF @desktop', () => {
   test.skip(CMS_ON, 'chỉ chạy khi server tắt CMS_PROGRAM_ENABLED')
-  test.beforeEach(async ({}, testInfo) => {
-    testInfo.skip(testInfo.project.name !== RUN_PROJECT, `chỉ chạy dưới project ${RUN_PROJECT}`)
-  })
   for (const role of [{ who: 'staff', state: STAFF_STATE }, { who: 'QLCH', state: MANAGER_STATE }] as const) {
     test.describe(role.who, () => {
       test.use({ storageState: role.state, viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
