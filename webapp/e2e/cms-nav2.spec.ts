@@ -251,7 +251,8 @@ for (const role of ROLES) {
         const timers = await timerTrace(page)
         const h = await replayRscAfter(page, d.isTarget, mode, 3_000)
         // Chuẩn bị TRƯỚC cửa sổ đo, trang riêng cùng context (Router Cache riêng — trang kiểm vẫn cold / warm đúng nghĩa); lỗi ⇒ đỏ 'CHUẨN BỊ RSC LỖI'.
-        const prep = await h.prepare({ open: (p) => openSegment(p, d.from, d.seg), click: (p) => segLink(p, d.seg, d.label).click() })
+        // PM 15/11 §7.3: chuẩn bị CẢ chuỗi request điều hướng của một lần chạm (chốt khi nội dung đích hiện + lặng); 3 s là hạn chung từ request đầu.
+        const prep = await h.prepare({ open: (p) => openSegment(p, d.from, d.seg), click: (p) => segLink(p, d.seg, d.label).click(), ready: (p) => p.locator(d.done).first().waitFor({ state: 'visible', timeout: 20_000 }) })
         const loads = hardLoads(page, d.isTarget)
         await openSegment(page, d.from, d.seg)
         if (mode === 'warm') await waitPrefetch(page, h)
@@ -262,7 +263,7 @@ for (const role of ROLES) {
         await segLink(page, d.seg, d.label).click()
         await reach(page, d.isTarget, 15_000, loads, async () => `${await timers()} · ${h.describe(t0)}`)
         const dt = Date.now() - t0
-        testInfo.annotations.push({ type: 'nav2-04 phản hồi chuẩn bị', description: `${mode} · chuẩn bị ${prep.prepMs} ms (fetch thật ${prep.fetchMs} ms · ${prep.bytes} B) · ${h.describe(t0)} · URL đổi +${dt} ms` })
+        testInfo.annotations.push({ type: 'nav2-04 phản hồi chuẩn bị', description: `${mode} · chuẩn bị ${prep.prepMs} ms (chuỗi ${prep.chain} · fetch thật ${prep.fetchMsEach.join(' + ')} ms · ${prep.bytesEach.join(' + ')} B) · ${h.describe(t0)} · URL đổi +${dt} ms` })
         expect(h.problems(), `CHUẨN BỊ / CẤP RSC LỖI · ${h.describe(t0)}`).toEqual([])
         expect(h.served().filter((s) => s.fulfilledAt !== null).length, `không request điều hướng nào nhận payload chuẩn bị · ${h.describe(t0)}`).toBeGreaterThanOrEqual(1)
         expect(dt, 'RSC chậm 3 s mà URL đổi sớm hơn — không chậm thật').toBeGreaterThanOrEqual(3_000)
@@ -270,6 +271,11 @@ for (const role of ROLES) {
         await expect(page.locator(d.done)).toBeVisible({ timeout: 20_000 })
         await page.waitForTimeout(NAV_WATCHDOG_MS + 2_000 - dt)
         expect(loads.at, 'đã tới đích bằng điều hướng mềm mà vẫn tải cứng').toEqual([])
+        // Sau mốc watchdog: đúng số request của chuỗi chuẩn bị, mỗi request đã cấp, không request ngoài chuỗi / lệch thứ tự (bắt thiếu response).
+        testInfo.annotations.push({ type: 'nav2-04 chuỗi sau mốc watchdog', description: h.describe(t0) })
+        expect(h.problems(), `request ngoài chuỗi / lệch sau khi tới đích · ${h.describe(t0)}`).toEqual([])
+        expect(h.served().length, `số request điều hướng ≠ chuỗi chuẩn bị (${h.chainLength()}) · ${h.describe(t0)}`).toBe(h.chainLength())
+        expect(h.complete(), `chuỗi chuẩn bị chưa được cấp đủ / đúng thứ tự · ${h.describe(t0)}`).toBe(true)
         noWrites(seen)
       })
     }
