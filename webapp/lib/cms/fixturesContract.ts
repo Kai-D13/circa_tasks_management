@@ -236,7 +236,9 @@ function header(c: CmsFxContractProgram, v: CmsFxViewer, o: { held?: boolean; co
         return_gmv_applied: fmt(t.returnGmvAppliedUnits), class_counts: { ...t.classCounts } } : null,
       contract: contractJson(c),
       returns_rows_read: su && net ? t.returnsRead : null,
-      ledger: su && net ? { verdict: 'CLEAN', eval_seq: 3, set_hash: hex(`ledger-${c.fx.row.id}`) } : null,
+      // Đúng hình dạng DB 130 (FINAL-QA7-01): `cms__publish_contract` ghi verdict CLEAN + set_hash cho MỌI run contract của super; chỉ run
+      // net có lần kiểm sổ ⇒ sales-only `eval_seq: null` tường minh. Vai khác không nhận khối riêng của super (header v2 chỉ trả cho super).
+      ledger: su ? { verdict: 'CLEAN', eval_seq: net ? 3 : null, set_hash: hex(`ledger-${c.fx.row.id}`) } : null,
     } : null,
     last_attempt: o.reset
       ? { status: 'ok', started_at: STARTED, finished_at: PUBLISHED, is_current: false, error_code: null }

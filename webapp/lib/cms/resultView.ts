@@ -119,8 +119,13 @@ export interface CmsResultRunDto {
   contract: CmsRunContractDto
   /** P5.2 (super, run net): số dòng phiếu trả đã đọc + kết luận sổ trả của lượt. */
   returnsRowsRead?: number | null
-  ledger?: { verdict: string; evalSeq: number; setHash: string | null } | null
+  ledger?: CmsRunLedgerDto | null
 }
+/**
+ * Khối sổ trả của run (chỉ super, reader v2). Mig 130 `cms__publish_contract` ghi verdict CLEAN + set_hash cho MỌI run contract, nhưng chỉ
+ * run `net_returns_v1` có lần kiểm sổ (`ledger_eval_seq`) ⇒ run contract `sales_only_v1` trả `eval_seq: null` TƯỜNG MINH (FINAL-QA7-01).
+ */
+export interface CmsRunLedgerDto { verdict: string; evalSeq: number | null; setHash: string | null }
 export interface CmsResultAttemptDto { status: 'running' | 'ok' | 'held' | 'error'; startedAt: string | null; finishedAt: string | null; isCurrent: boolean; errorCode: string | null }
 export interface CmsResultHeaderDto {
   programId: string
@@ -130,6 +135,20 @@ export interface CmsResultHeaderDto {
   lastAttempt: CmsResultAttemptDto | null
   /** Chỉ super. */
   recentRuns: Array<{ id: string; status: string; errorCode: string | null; startedAt: string | null; finishedAt: string | null; rowsRead: number | null; amountVnd: string | null; configVersion: number; purged: boolean }> | null
+}
+
+/**
+ * Khối `run.ledger` của header v2 (FINAL-QA7-01). Vắng / null ⇒ null (run legacy, vai không super — hợp đồng cũ). Có khối ⇒ trường
+ * `eval_seq` PHẢI có mặt; null chỉ hợp lệ khi run là contract `sales_only_v1` (hình dạng DB 130: CLEAN + set_hash, không lần kiểm sổ).
+ * Run net / legacy có null, thiếu trường, số âm / lẻ / chuỗi ⇒ lỗi DTO như trước — không đổi null thành 0, không bỏ khối để né parse.
+ */
+function parseRunLedger(raw: unknown, contract: CmsRunContractDto): CmsRunLedgerDto | null {
+  if (raw === null || raw === undefined) return null
+  if (!isObj(raw)) throw new CmsResultDtoError('run.ledger')
+  if (!Object.prototype.hasOwnProperty.call(raw, 'eval_seq')) throw new CmsResultDtoError('eval_seq')
+  const salesOnlyContract = !contract.legacy && contract.returnsPolicy === 'sales_only_v1'
+  const evalSeq = raw.eval_seq === null && salesOnlyContract ? null : n(raw, 'eval_seq')
+  return { verdict: s(raw, 'verdict'), evalSeq, setHash: sn(raw, 'set_hash') }
 }
 
 /** `v` = phiên bản reader (1 = RPC 122, 2 = rpc_cms_result_header_v2). */
@@ -146,17 +165,16 @@ export function parseCmsResultHeader(raw: unknown, v: 1 | 2 = 1): CmsResultHeade
     viewer: viewer as CmsResultViewer,
     run: run === null || run === undefined ? null : (() => {
       if (!isObj(run)) throw new CmsResultDtoError('run')
+      // Hợp đồng của CHÍNH run parse trước — khối ledger kiểm theo hợp đồng đó (không theo cờ / cấu hình chương trình hiện tại).
+      const contract = v === 2 ? parseCmsRunContract(run.contract) : CMS_LEGACY_RUN_CONTRACT
       return {
         id: s(run, 'id', UUID_RE), configVersion: n(run, 'config_version'), publishedAt: sn(run, 'published_at', TS_RE),
         sourceMaxUpdatedAt: sn(run, 'source_max_updated_at', TS_RE), startedAt: sn(run, 'started_at', TS_RE),
         amountVnd: sn(run, 'amount_vnd', INT_RE), rowsRead: nn(run, 'rows_read'), totals: isObj(run.totals) ? run.totals : null,
-        contract: v === 2 ? parseCmsRunContract(run.contract) : CMS_LEGACY_RUN_CONTRACT,
+        contract,
         ...(v === 2 ? {
           returnsRowsRead: nn(run, 'returns_rows_read'),
-          ledger: run.ledger === null || run.ledger === undefined ? null : (() => {
-            if (!isObj(run.ledger)) throw new CmsResultDtoError('run.ledger')
-            return { verdict: s(run.ledger, 'verdict'), evalSeq: n(run.ledger, 'eval_seq'), setHash: sn(run.ledger, 'set_hash') }
-          })(),
+          ledger: parseRunLedger(run.ledger, contract),
         } : {}),
       }
     })(),

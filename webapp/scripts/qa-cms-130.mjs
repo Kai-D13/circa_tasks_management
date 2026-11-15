@@ -16,6 +16,7 @@
 //   npm i --no-save @electric-sql/pglite@0.2.17 ; node scripts/qa-cms-130.mjs
 import fs from 'node:fs'
 import path from 'node:path'
+import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
 import { createJiti } from 'jiti'
 import * as L from './lib-care-pglite.mjs'
@@ -1236,6 +1237,145 @@ async function contractSection() {
     const cvEnd = await asU(U.super, `SELECT public.rpc_cms_return_conflicts($1) r`, [CL.id])
     ok(deny.every((x) => x.err === 'CMS_RESULT_FORBIDDEN') && cvEnd.proof === null && cvEnd.open_count === 1 && cvEnd.restorations.length === 1,
       'excluded / returns / conflicts chỉ super; sau lệch lại không có proof ứng viên', JSON.stringify({ deny: deny.map((x) => x.err), proof: cvEnd.proof }))
+
+    // 16b. FINAL-QA7-01 (PM work order 2026-11-15-cms-sales-final-qa7-fix-pm.md §2.5): DB → RPC reader v2 → parser THẬT của app (không dựng DTO
+    //      kỳ vọng bằng fixture) cho run contract SALES-ONLY đã công bố qua pipeline thật (CU, cms_unit, mục 15) theo vai super / SM / staff / QLCH.
+    //      Header super mang ledger CLEAN + eval_seq null TƯỜNG MINH (hình dạng làm A3 / XLSX super lỗi DTO_INVALID ở QA 15/11); vai khác không có
+    //      khối / trường riêng của super; phạm vi dòng đúng vai; Σ tiền = DB. Đối chứng: run legacy (LIVE) đọc như cũ.
+    {
+      const RV = await lib('lib/cms/resultView.ts')
+      const EXR = await lib('lib/cms/exportResults.ts')
+      const tryParse = (f) => { try { return { ok: true, v: f() } } catch (e) { return { ok: false, err: String(e?.message ?? e) } } }
+      // CU là chương trình is_test ⇒ vai không super cần marker QA (như prod); super đã có marker từ env().
+      for (const uid of [U.A, U.C, U.sm, U.qlch1]) {
+        await X.db.query(`INSERT INTO public.cms_qa_access (user_id, granted_by, expires_at) VALUES ($1, 'qa-script:cms-130-qa7', now() + interval '6 hours')
+          ON CONFLICT (user_id) DO NOTHING`, [uid])
+      }
+      const cur = (await X.one(`SELECT current_result_run_id::text r FROM public.cms_programs WHERE id = $1`, [CU.id])).r
+      const runAmt = (await runRow(cur)).amt
+      const dbBy = await X.all(`SELECT user_id::text u, sum(amount_vnd)::text a FROM public.cms_results WHERE run_id = $1 GROUP BY user_id`, [cur])
+      const dbEv = await X.all(`SELECT user_id::text u, count(*)::int n FROM public.cms_result_events WHERE run_id = $1 GROUP BY user_id`, [cur])
+      const VIEW = { super: [U.super, null], sm: [U.sm, [U.A, U.B]], staffA: [U.A, [U.A]], staffC: [U.C, []], qlch: [U.qlch1, [U.A, U.B]] }
+      const sumOf = (us) => dbBy.filter((x) => us === null || us.includes(x.u)).reduce((a, x) => a + BigInt(x.a), BigInt(0)).toString()
+      const evOf = (us) => dbEv.filter((x) => us === null || us.includes(x.u)).reduce((a, x) => a + x.n, 0)
+      const got = {}
+      for (const [k, [uid]] of Object.entries(VIEW)) {
+        const h = await asU(uid, `SELECT public.rpc_cms_result_header_v2($1) r`, [CU.id])
+        const rw = await asU(uid, `SELECT public.rpc_cms_result_rows_v2($1, $2) r`, [CU.id, cur])
+        const ev = await asU(uid, `SELECT public.rpc_cms_result_events_v2($1, $2, NULL, NULL, NULL, 500) r`, [CU.id, cur])
+        got[k] = { h, ph: tryParse(() => RV.parseCmsResultHeader(h, 2)), pr: tryParse(() => RV.parseCmsResultRows(rw, 2)), pe: tryParse(() => RV.parseCmsResultEvents(ev)) }
+      }
+      const su = got.super
+      const L0 = su.h.run?.ledger
+      ok(!!cur && runAmt !== '0' && L0 && Object.prototype.hasOwnProperty.call(L0, 'eval_seq') && L0.eval_seq === null && L0.verdict === 'CLEAN'
+        && /^[0-9a-f]{64}$/.test(L0.set_hash ?? '') && su.h.run.contract?.legacy === false && su.h.run.contract.returns_policy === 'sales_only_v1',
+        'QA7 DB: header_v2 super của run contract sales-only trả ledger CLEAN + eval_seq null TƯỜNG MINH + set_hash (hình dạng gây FINAL-QA7-01)',
+        JSON.stringify({ ledger: L0, contract: su.h.run?.contract, runAmt }))
+      ok(su.ph.ok && su.ph.v.viewer === 'super' && su.ph.v.run?.id === cur && su.ph.v.run.ledger?.evalSeq === null && su.ph.v.run.ledger.verdict === 'CLEAN'
+        && su.ph.v.run.ledger.setHash === L0?.set_hash && su.ph.v.run.contract.quantityBasis === 'cms_unit' && su.ph.v.run.contract.returnsPolicy === 'sales_only_v1'
+        && su.ph.v.run.amountVnd === runAmt && RV.cmsResultState(su.ph.v) === 'ok',
+        'QA7 parser thật: parseCmsResultHeader(v2) super nhận ledger evalSeq null (không đổi thành 0); contract cms_unit + sales_only_v1; amountVnd = tiền run; trạng thái ok',
+        JSON.stringify(su.ph.ok ? su.ph.v.run : su.ph.err))
+      const parsed = Object.fromEntries(Object.entries(got).map(([k, g]) => [k, [g.ph.ok || g.ph.err, g.pr.ok || g.pr.err, g.pe.ok || g.pe.err]]))
+      ok(Object.values(got).every((g) => g.ph.ok && g.pr.ok && g.pe.ok), 'QA7 parser thật: header / rows / events v2 parse được ở cả 5 người xem (super · SM · staff A · staff C · QLCH)', JSON.stringify(parsed))
+      const scope = {}
+      for (const [k, [, us]] of Object.entries(VIEW)) {
+        const g = got[k]
+        if (!g.pr.ok || !g.pe.ok || !g.ph.ok) { scope[k] = 'PARSE'; continue }
+        const uSeen = [...new Set(g.pr.v.results.map((r) => r.userId))].sort()
+        const want = (us ?? dbBy.map((x) => x.u)).slice().sort()
+        const sum = g.pr.v.results.reduce((a, r) => a + BigInt(r.amountVnd), BigInt(0)).toString()
+        scope[k] = { users: JSON.stringify(uSeen) === JSON.stringify(want), sum: sum === sumOf(us), ev: g.pe.v.rows.length === evOf(us) && g.pe.v.nextAfterSeq === null,
+          run: g.pr.v.runId === cur && g.ph.v.run?.id === cur, contract: g.pr.v.contract?.returnsPolicy === 'sales_only_v1' && g.pr.v.contract.quantityBasis === 'cms_unit' }
+      }
+      ok(Object.values(scope).every((x) => typeof x === 'object' && Object.values(x).every(Boolean)) && sumOf(null) === runAmt && evOf([U.A]) > 0,
+        'QA7 phạm vi: super / SM / QLCH thấy A + B, staff A chỉ mình, staff C (nhà thuốc 2) rỗng; Σ tiền / số sự kiện mỗi vai = DB cùng run; Σ super = tiền run',
+        JSON.stringify({ scope, runAmt, dbBy: dbBy.length }))
+      const SUPER_ONLY = ['ledger', 'amount_vnd', 'rows_read', 'totals', 'returns_rows_read']
+      const leak = {}
+      for (const k of ['sm', 'staffA', 'staffC', 'qlch']) {
+        const g = got[k]
+        const keys = SUPER_ONLY.filter((x) => g.h.run && Object.prototype.hasOwnProperty.call(g.h.run, x))
+        const extra = [g.h.recent_runs !== null ? 'recent_runs' : null, g.h.ledger !== null && g.h.ledger !== undefined ? 'ledger(program)' : null,
+          g.h.last_attempt && ('id' in g.h.last_attempt || 'error_code' in g.h.last_attempt) ? 'last_attempt.super' : null].filter(Boolean)
+        const dto = g.ph.ok ? [g.ph.v.run?.ledger ?? null, g.ph.v.run?.amountVnd ?? null, g.ph.v.recentRuns] : ['PARSE']
+        if (keys.length || extra.length || dto.some((x) => x !== null) || g.ph.v?.viewer === 'super') leak[k] = { keys, extra, dto, viewer: g.ph.v?.viewer }
+      }
+      ok(Object.keys(leak).length === 0, 'QA7 vai không super: header không có ledger / amount_vnd / rows_read / totals / returns_rows_read / recent_runs; DTO ledger + amountVnd null', JSON.stringify(leak))
+      // Excluded v2 (XLSX super sheet "Khong tinh luong" / dòng chưa gán) parse bằng parser export thật; vai khác bị từ chối như cũ.
+      const exS = {}
+      for (const kind of ['disposition', 'quantity']) {
+        const raw = await asU(U.super, `SELECT public.rpc_cms_result_excluded_v2($1, $2, $3, NULL, 500) r`, [CU.id, cur, kind])
+        const p = tryParse(() => EXR.parseCmsExcludedPage(raw))
+        exS[kind] = p.ok ? 'OK' : p.err
+      }
+      const exDeny = []
+      for (const uid of [U.sm, U.A, U.qlch1]) exDeny.push((await asU(uid, `SELECT public.rpc_cms_result_excluded_v2($1, $2, 'quantity', NULL, 500) r`, [CU.id, cur])).err ?? 'OK')
+      ok(exS.disposition === 'OK' && exS.quantity === 'OK' && exDeny.every((x) => x === 'CMS_RESULT_FORBIDDEN'),
+        'QA7 excluded_v2 (disposition / quantity) super parse bằng parseCmsExcludedPage thật; SM / staff / QLCH ⇒ CMS_RESULT_FORBIDDEN', JSON.stringify({ exS, exDeny }))
+      // XLSX: handler THẬT `handleCmsResultExport` (route /api/export/cms) với deps đọc RPC v2 trên DB này qua parser thật — như
+      // lib/cms/server/results.ts (`call`: parse lỗi ⇒ QUERY_FAILED ⇒ 500, đúng triệu chứng QA 15/11). Super (manage) + SM (phạm vi cửa hàng).
+      const XL = createRequire(path.join(HERE, '..', 'package.json'))('xlsx')
+      const prodRows = await X.all(`SELECT id::text id, product_id, name_snapshot, unit_cms, base_quantity_cms::text k, gmv_basis FROM public.cms_program_products
+        WHERE program_id = $1 ORDER BY product_id`, [CU.id])
+      const progRow = await X.one(`SELECT id::text id, name, start_date::text s, end_date::text e, config_version v, status FROM public.cms_programs WHERE id = $1`, [CU.id])
+      const storeRows = await X.all(`SELECT id::text id, name FROM public.stores`)
+      const readP = async (uid, sql, params, parse) => {
+        const raw = await asU(uid, sql, params)
+        if (raw && typeof raw === 'object' && 'err' in raw && Object.keys(raw).length === 1) return { ok: false, error: raw.err === 'CMS_RESULT_FORBIDDEN' ? 'FORBIDDEN' : 'QUERY_FAILED' }
+        try { return { ok: true, data: parse(raw) } } catch { return { ok: false, error: 'QUERY_FAILED' } }
+      }
+      const xdeps = (uid, manage) => ({
+        session: async () => ({ userId: uid, role: manage ? 'admin' : 'sm', email: null }),
+        flags: () => ({ program: true, earnings: true }),
+        access: () => ({ view: true, manage }),
+        program: async () => ({ ok: true, data: { program: { id: progRow.id, name: progRow.name, startDate: progRow.s, endDate: progRow.e, configVersion: progRow.v, status: progRow.status },
+          products: prodRows.map((x) => ({ id: x.id, productId: x.product_id, nameSnapshot: x.name_snapshot, unitCms: x.unit_cms, baseQuantityCms: x.k, gmvBasis: x.gmv_basis })) } }),
+        header: (pid) => readP(uid, `SELECT public.rpc_cms_result_header_v2($1) r`, [pid], (x) => RV.parseCmsResultHeader(x, 2)),
+        rows: (pid, rid) => readP(uid, `SELECT public.rpc_cms_result_rows_v2($1, $2) r`, [pid, rid], (x) => RV.parseCmsResultRows(x, 2)),
+        lines: async (pid, rid) => {
+          const out = []
+          let after = null
+          for (let i = 0; i < 50; i++) {
+            const pg = await readP(uid, `SELECT public.rpc_cms_result_events_v2($1, $2, NULL, NULL, $3, 500) r`, [pid, rid, after], RV.parseCmsResultEvents)
+            if (!pg.ok) return pg
+            out.push(...pg.data.rows)
+            if (pg.data.nextAfterSeq === null) return { ok: true, data: out }
+            after = pg.data.nextAfterSeq
+          }
+          return { ok: false, error: 'TOO_LARGE' }
+        },
+        excluded: (pid, rid, after, kind) => readP(uid, `SELECT public.rpc_cms_result_excluded_v2($1, $2, $3, $4, 500) r`, [pid, rid, kind ?? 'disposition', after], EXR.parseCmsExcludedPage),
+        storeNames: async (ids) => new Map(storeRows.filter((s) => ids.includes(s.id)).map((s) => [s.id, s.name])),
+        now: () => new Date('2026-11-15T13:00:00Z'),
+        returnsApproved: false,
+      })
+      const xlsxOf = async (uid, manage) => {
+        const res = await EXR.handleCmsResultExport(new Request(`http://qa.local/api/export/cms?program=${CU.id}&run=${cur}`), xdeps(uid, manage))
+        if (res.status !== 200) return { status: res.status, body: (await res.text()).slice(0, 200) }
+        const wb = XL.read(Buffer.from(await res.arrayBuffer()), { type: 'buffer' })
+        const prodSheet = XL.utils.sheet_to_json(wb.Sheets['Theo san pham'], { header: 1, raw: true })
+        const total = prodSheet.find((r) => r[0] === 'Tổng')
+        const st = XL.utils.sheet_to_json(wb.Sheets['Theo duoc si'], { header: 1, raw: true })
+        const ai = st[0].indexOf('CMS tạm tính (VND)'), ui = st[0].indexOf('user_id')
+        const byUser = {}
+        for (const r of st.slice(1)) byUser[r[ui]] = (BigInt(byUser[r[ui]] ?? 0) + BigInt(r[ai] ?? 0)).toString()
+        return { status: 200, sheets: wb.SheetNames, total: total ? String(total[9]) : null, byUser, ctype: res.headers.get('content-type') }
+      }
+      const xs = await xlsxOf(U.super, true)
+      const xm = await xlsxOf(U.sm, false)
+      const dbMap = (us) => Object.fromEntries(dbBy.filter((x) => us === null || us.includes(x.u)).map((x) => [x.u, x.a]))
+      const sortObj = (o) => JSON.stringify(Object.fromEntries(Object.entries(o ?? {}).sort()))
+      ok(xs.status === 200 && /spreadsheetml/.test(xs.ctype ?? '') && xs.total === runAmt && sortObj(xs.byUser) === sortObj(dbMap(null)) && xs.sheets.includes('Khong tinh luong')
+        && xm.status === 200 && xm.total === sumOf([U.A, U.B]) && sortObj(xm.byUser) === sortObj(dbMap([U.A, U.B])) && !xm.sheets.includes('Khong tinh luong') && !xm.sheets.includes('Chua gan'),
+        'QA7 XLSX: handleCmsResultExport thật trên RPC v2 của DB ⇒ super 200 xlsx, dòng Tổng (cột index 9) = tiền run, "Theo duoc si" = DB từng người, có sheet "Khong tinh luong"; SM 200, Tổng / từng người = phạm vi cửa hàng SM, không sheet riêng super',
+        JSON.stringify({ xs: { ...xs, sheets: xs.sheets }, xm: { status: xm.status, total: xm.total, sheets: xm.sheets, body: xm.body }, runAmt }))
+      // Đối chứng không đổi: run legacy (LIVE) — ledger vắng / null, parser v2 nhận như trước (T11 đọc đường này).
+      const hL = await asU(U.super, `SELECT public.rpc_cms_result_header_v2($1) r`, [X.LIVE.id])
+      const pL = tryParse(() => RV.parseCmsResultHeader(hL, 2))
+      ok(pL.ok && pL.v.run?.contract.legacy === true && (pL.v.run.ledger ?? null) === null && (hL.run?.ledger ?? null) === null,
+        'QA7 đối chứng: header_v2 run legacy (super) ⇒ ledger null, parser v2 nhận như cũ', JSON.stringify(pL.ok ? { c: pL.v.run?.contract, l: pL.v.run?.ledger } : pL.err))
+    }
   }
 
   // ── NULL probe trực tiếp (RET2-R2-03): mọi CHECK của 130 từ chối NULL ở cột bắt buộc theo nhánh ──

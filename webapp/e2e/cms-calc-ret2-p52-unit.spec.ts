@@ -92,6 +92,51 @@ test.describe('CMS-CALC-RET-2 P5.2 — hợp đồng run @desktop', () => {
     expect(parseCmsResultHeader(header(contract()), 2).run?.ledger).toBeNull()
     expect(() => parseCmsResultHeader(header({ ...C_LEGACY, legacy: 'yes' }), 2)).toThrow(CmsResultDtoError)
   })
+  // FINAL-QA7-01 (PM work order 2026-11-15-cms-sales-final-qa7-fix-pm.md §2): DB 130 `cms__publish_contract` ghi verdict CLEAN + set_hash cho
+  // MỌI run contract, chỉ run net có `ledger_eval_seq` ⇒ header v2 của super trả `eval_seq: null` TƯỜNG MINH ở run contract sales-only.
+  test('FINAL-QA7-01 ledger super: null tường minh CHỈ hợp lệ ở run contract sales-only; net / legacy / thiếu trường / số sai ⇒ lỗi DTO', () => {
+    const HASH = 'a'.repeat(64)
+    const su = (c: unknown, ledger: unknown) => ({ ...header(c), viewer: 'super',
+      run: { ...header(c).run, amount_vnd: '315000', rows_read: 60, totals: { amount_vnd: '315000' }, returns_rows_read: null, ledger } })
+    // Hình dạng DB thật (run QA 829f1911 / c039f629, dto-repro.txt): cms_unit + sales-only, CLEAN, eval_seq null, set_hash.
+    const ok = parseCmsResultHeader(su(contract(), { verdict: 'CLEAN', eval_seq: null, set_hash: HASH }), 2)
+    expect(ok.run?.ledger).toEqual({ verdict: 'CLEAN', evalSeq: null, setHash: HASH })
+    expect(ok.run).toMatchObject({ amountVnd: '315000', rowsRead: 60, returnsRowsRead: null })
+    expect(ok.run?.contract).toMatchObject({ legacy: false, quantityBasis: 'cms_unit', returnsPolicy: 'sales_only_v1' })
+    // Số hợp lệ ở sales-only vẫn nhận như trước (không đổi hợp đồng cũ).
+    expect(parseCmsResultHeader(su(contract(), { verdict: 'CLEAN', eval_seq: 4, set_hash: HASH }), 2).run?.ledger?.evalSeq).toBe(4)
+    // Net: có số ⇒ đọc; null / thiếu ⇒ lỗi (run net luôn có lần kiểm sổ).
+    expect(parseCmsResultHeader(su(C_NET, { verdict: 'CLEAN', eval_seq: 7, set_hash: HASH }), 2).run?.ledger?.evalSeq).toBe(7)
+    const bad: Array<[string, unknown, unknown]> = [
+      ['net eval_seq null', C_NET, { verdict: 'CLEAN', eval_seq: null, set_hash: HASH }],
+      ['net thiếu eval_seq', C_NET, { verdict: 'CLEAN', set_hash: HASH }],
+      ['net eval_seq undefined', C_NET, { verdict: 'CLEAN', eval_seq: undefined, set_hash: HASH }],
+      // Thiếu trường ≠ null tường minh, kể cả sales-only.
+      ['sales-only thiếu eval_seq', contract(), { verdict: 'CLEAN', set_hash: HASH }],
+      ['sales-only eval_seq undefined', contract(), { verdict: 'CLEAN', eval_seq: undefined, set_hash: HASH }],
+      // Run legacy (v2) không có lần kiểm sổ hợp lệ nào kèm null.
+      ['legacy eval_seq null', C_LEGACY, { verdict: 'CLEAN', eval_seq: null, set_hash: HASH }],
+      // Kiểu số sai — cả sales-only lẫn net.
+      ...(['3', -1, 1.5, Number.MAX_SAFE_INTEGER + 1, true, {}] as unknown[]).flatMap((x): Array<[string, unknown, unknown]> => [
+        [`sales-only eval_seq ${JSON.stringify(x)}`, contract(), { verdict: 'CLEAN', eval_seq: x, set_hash: HASH }],
+        [`net eval_seq ${JSON.stringify(x)}`, C_NET, { verdict: 'CLEAN', eval_seq: x, set_hash: HASH }],
+      ]),
+      // Khối / trường khác vẫn kiểm như cũ.
+      ['ledger không phải object', contract(), 'x'],
+      ['ledger là mảng', contract(), []],
+      ['verdict thiếu', contract(), { eval_seq: null, set_hash: HASH }],
+      ['set_hash sai kiểu', contract(), { verdict: 'CLEAN', eval_seq: null, set_hash: 5 }],
+    ]
+    for (const [name, c, ledger] of bad) expect(() => parseCmsResultHeader(su(c, ledger), 2), name).toThrow(CmsResultDtoError)
+    // Vai không super / run legacy: không có khối (vắng hoặc null) ⇒ null như cũ.
+    expect(parseCmsResultHeader(header(contract()), 2).run?.ledger).toBeNull()
+    expect(parseCmsResultHeader(su(C_LEGACY, null), 2).run?.ledger).toBeNull()
+    expect(parseCmsResultHeader(su(contract(), undefined), 2).run?.ledger).toBeNull()
+    // v1 (reader 122) không đọc khối ledger — giữ nguyên.
+    const v1 = parseCmsResultHeader(su(contract(), { verdict: 'CLEAN', eval_seq: null, set_hash: HASH }), 1)
+    expect(v1.run?.contract).toEqual(CMS_LEGACY_RUN_CONTRACT)
+    expect(v1.run && 'ledger' in v1.run).toBe(false)
+  })
 })
 
 test.describe('CMS-CALC-RET-2 P5.2 — rows v2 @desktop', () => {
