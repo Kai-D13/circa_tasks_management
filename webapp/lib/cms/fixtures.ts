@@ -95,6 +95,66 @@ export const CMS_FX_PREVIEW_SIMPLE_UNAVAILABLE: CmsPreviewResult = {
   groupsRejected: [0, 5].map((i) => ({ key: S[i].productId, excelRows: [i + 2], errors: [KIS(i + 2, 'K_UNAVAILABLE', 'Kiểm K — KHÔNG KIỂM ĐƯỢC: Không đọc được nguồn bán để đối chiếu K', 'Thử kiểm tra lại sau, hoặc super xác nhận K kèm nguồn căn cứ')] })),
   kCheck: { asOf: null, available: false, reason: 'SOURCE_TIMEOUT', products: [0, 5].map((i) => kr(i, 'UNAVAILABLE', { note: 'Không đọc được nguồn bán để đối chiếu K' })) },
 }
+// ── UX-KACK-1 (PM 15/11 §4) — file mức cố định 83 SP GIẢ (ProductID 9183xx, không tên / tiền / PII thật) ───────────────────────
+// 48 KHỚP + 2 đã xác nhận tay (ghi được) · 18 CHƯA CÓ BẰNG CHỨNG chỉ lỗi K (xác nhận tay được) · 6 LỆCH + 4 NGUỒN LỖI (không xác nhận
+// được) · 3 ĐỀ XUẤT K (thiếu K ⇒ lỗi file) · 2 CHƯA CÓ BẰNG CHỨNG kèm lỗi tư vấn (xác nhận K chưa đủ để ghi).
+const K83_N = 83
+const k83Id = (i: number) => `9183${String(i).padStart(2, '0')}`
+type K83Kind = 'MATCH' | 'ACKED' | 'NO_EVIDENCE' | 'MISMATCH' | 'SOURCE_ERROR' | 'PROPOSED' | 'NO_EVIDENCE_FILE' | 'ACKED_FILE'
+const k83Kind = (i: number): K83Kind =>
+  i < 48 ? 'MATCH' : i < 50 ? 'ACKED' : i < 68 ? 'NO_EVIDENCE' : i < 74 ? 'MISMATCH' : i < 78 ? 'SOURCE_ERROR' : i < 81 ? 'PROPOSED' : 'NO_EVIDENCE_FILE'
+const k83Ok = (i: number): CmsPreviewResult['groupsOk'][number] => ({
+  productId: k83Id(i), gmvBasis: 'none', targetGmv: null, unitCms: 'hộp', baseQuantityCms: '10', nameSnapshot: `Sản phẩm mẫu K83 số ${i + 1}`,
+  imageUrlSnapshot: null, priceSnapshot: null, tiers: [{ order: 1, from: 1, to: null, amount: '5000' }], excelRows: [i + 2], warnings: [],
+  advicePreview: 'Nội dung tư vấn mẫu',
+})
+const K83_ACK_AT = '2026-11-16T02:00:00.000Z'
+function k83Row(i: number, kind: K83Kind, ackSource: string | null = null): CmsPreviewKResult {
+  const base: CmsPreviewKResult = { productId: k83Id(i), unit: 'hộp', k: '10', status: 'MATCH', proposedK: null, seen: [], note: '', ack: null, ok: false }
+  if (kind === 'MATCH') return { ...base, note: 'Theo 4 dòng bán "hộp" (từng cặp lượng gốc)', seen: [{ unit: 'hộp', ratio: '10', lines: 4 }], ok: true }
+  if (kind === 'ACKED' || kind === 'ACKED_FILE') return { ...base, status: 'NO_EVIDENCE', note: 'Chưa có dòng bán', ack: { source: ackSource ?? 'Quy cách nhà cung cấp (mẫu)', at: K83_ACK_AT }, ok: true }
+  if (kind === 'NO_EVIDENCE' || kind === 'NO_EVIDENCE_FILE') return { ...base, status: 'NO_EVIDENCE', note: i % 2 ? 'Chưa có dòng bán' : 'Chưa bán theo "hộp" (đã bán: vỉ)' }
+  if (kind === 'MISMATCH') return { ...base, status: 'MISMATCH', k: '12', note: 'POS: 1 hộp = 10; file K = 12', seen: [{ unit: 'hộp', ratio: '10', lines: 3 }] }
+  if (kind === 'SOURCE_ERROR') return { ...base, status: 'SOURCE_ERROR', note: '"hộp" có 1 dòng không tính được tỷ lệ', seen: [{ unit: 'hộp', ratio: null, lines: 2 }] }
+  return { ...base, status: 'PROPOSED', k: null, proposedK: '10', note: 'Theo 5 dòng bán "hộp": 1 hộp = 10', seen: [{ unit: 'hộp', ratio: '10', lines: 5 }] }
+}
+const k83Rejected = (i: number, kind: K83Kind): CmsPreviewResult['groupsRejected'][number] => {
+  const r = i + 2
+  const errors = kind === 'NO_EVIDENCE' ? [KIS(r, 'K_NO_EVIDENCE', 'Kiểm K — CHƯA CÓ BẰNG CHỨNG: Chưa có dòng bán', 'Super xác nhận K kèm nguồn căn cứ (vd. quy cách nhà cung cấp) ở bước kiểm tra')]
+    : kind === 'MISMATCH' ? [KIS(r, 'K_MISMATCH', 'Kiểm K — LỆCH: POS: 1 hộp = 10; file K = 12', 'Sửa base_quantity_CMS theo quy đổi POS hoặc kiểm lại đơn vị CMS — không xác nhận tay được')]
+    : kind === 'SOURCE_ERROR' ? [KIS(r, 'K_SOURCE_ERROR', 'Kiểm K — NGUỒN LỖI: "hộp" có 1 dòng không tính được tỷ lệ', 'Nguồn bán có dòng lỗi — làm việc với BI; không xác nhận tay được')]
+    : kind === 'PROPOSED' ? [
+      { excelRow: r, column: 'base_quantity_CMS', code: 'BASE_QTY_REQUIRED', message: 'Thiếu base_quantity_CMS', fix: 'Nhập số đơn vị cơ sở tương ứng 1 đơn vị CMS' },
+      KIS(r, 'K_PROPOSED', 'Kiểm K — ĐỀ XUẤT K: Theo 5 dòng bán "hộp": 1 hộp = 10 · đề xuất K = 10', 'Nếu đúng, nhập K đề xuất vào base_quantity_CMS rồi kiểm tra lại (hệ thống không tự điền)')]
+    : kind === 'ACKED_FILE' ? [{ excelRow: r, column: 'Noi_dung_tu_van', code: 'ADVICE_REQUIRED', message: 'Thiếu nội dung tư vấn', fix: 'Nhập nội dung tư vấn đã kiểm duyệt' }]
+    : [
+      { excelRow: r, column: 'Noi_dung_tu_van', code: 'ADVICE_REQUIRED', message: 'Thiếu nội dung tư vấn', fix: 'Nhập nội dung tư vấn đã kiểm duyệt' },
+      KIS(r, 'K_NO_EVIDENCE', 'Kiểm K — CHƯA CÓ BẰNG CHỨNG: Chưa có dòng bán', 'Super xác nhận K kèm nguồn căn cứ (vd. quy cách nhà cung cấp) ở bước kiểm tra')]
+  return { key: k83Id(i), excelRows: [r], errors }
+}
+function k83Preview(runNo: number, kinds: (i: number) => K83Kind, ackSource: string | null = null): CmsPreviewResult {
+  const idx = Array.from({ length: K83_N }, (_, i) => i)
+  const okIdx = idx.filter((i) => kinds(i) === 'MATCH' || kinds(i) === 'ACKED')
+  const rej = idx.filter((i) => !okIdx.includes(i))
+  return {
+    ok: true, runId: cmsFxUid(runNo), sha256: 'c'.repeat(64), mode: 'replace', configVersion: 1, catalogTarget: null, ignoredFromRow: null, format: 'simple',
+    supplement: { baseQuantity: true, advice: true },
+    stats: { rowsTotal: K83_N, rowsOk: okIdx.length, rowsRejected: rej.length, productsOk: okIdx.length, productsRejected: rej.length, warnings: 0 },
+    groupsOk: okIdx.map(k83Ok),
+    groupsRejected: rej.map((i) => k83Rejected(i, kinds(i))),
+    kCheck: { asOf: '2026-11-16T01:55:00.000Z', available: true, reason: null, products: idx.map((i) => k83Row(i, kinds(i), (kinds(i) === 'ACKED' || kinds(i) === 'ACKED_FILE') && i >= 50 ? ackSource : null)) },
+  }
+}
+/** fx=result-k83*: kết quả kiểm 83 SP (xem chú thích trên). */
+export const CMS_FX_PREVIEW_K83: CmsPreviewResult = k83Preview(9183, k83Kind)
+/**
+ * Kết quả MÔ PHỎNG sau "Kiểm tra lại với xác nhận" thành công (chọn cả 20): 17 / 18 SP chỉ lỗi K được gắn xác nhận ⇒ ghi được; SP 918367
+ * đổi sang LỆCH ở lần kiểm này ⇒ không áp; 918381 / 918382 được gắn xác nhận nhưng vẫn bị loại vì thiếu nội dung tư vấn.
+ */
+export const CMS_FX_PREVIEW_K83_ACKED: CmsPreviewResult = k83Preview(9184,
+  (i) => (i >= 50 && i < 67 ? 'ACKED' : i === 67 ? 'MISMATCH' : i >= 81 ? 'ACKED_FILE' : k83Kind(i)), 'Quy cách NCC (mẫu, nguồn chung)')
+export const CMS_FX_K83_ID = k83Id
+
 /** fx=result-simple-nok: file 7 cột chưa có cột K / tư vấn ⇒ đọc được, 0 ghi được. */
 export const CMS_FX_PREVIEW_SIMPLE_NOSUPP: CmsPreviewResult = {
   ...CMS_FX_PREVIEW_SIMPLE, runId: cmsFxUid(9103), groupsOk: [], supplement: { baseQuantity: false, advice: false },
