@@ -227,7 +227,11 @@ test.describe('ui v2 CMS P1-c — A2 wizard / import (fixture, 0 ghi) @desktop',
     await expect(main.locator('[data-cms-preview-errors]')).toContainText('SKU-ABC')
     await main.getByRole('button', { name: /Tải file dòng lỗi/ }).click() // r2: fixture là nút, không href endpoint thật
     await expectBlocked(page, 1, 'Tải file dòng lỗi')
-    await main.getByRole('button', { name: 'Nạp danh mục (thay toàn bộ, 3 sản phẩm)' }).click()
+    // UX-KACK-1 AC2: ghi một phần (3 ghi / 2 bị loại) ⇒ nút ghi khoá tới khi xác nhận số SP bị bỏ
+    const commitBtn = main.getByRole('button', { name: 'Nạp danh mục (thay toàn bộ, 3 sản phẩm)' })
+    await expect(commitBtn).toBeDisabled()
+    await main.locator('[data-cms-partial-ack]').check()
+    await commitBtn.click()
     await expectBlocked(page, 2, 'Xác nhận ghi')
     expect(seen).toEqual([])
   })

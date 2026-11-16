@@ -6,7 +6,10 @@ import { CmsWizardShell } from '@/components/cms/admin/CmsWizardShell'
 import { CmsStepper } from '@/components/cms/admin/CmsStepper'
 import { CmsProgramForm, type CmsProgramFormInitial } from '@/components/cms/admin/CmsProgramForm'
 import { CmsImportFlow } from '@/components/cms/admin/CmsImportFlow'
-import { CMS_FX_PREVIEW, CMS_FX_PREVIEW_SIMPLE, CMS_FX_PREVIEW_SIMPLE_NOSUPP, CMS_FX_PREVIEW_SIMPLE_UNAVAILABLE, CMS_FX_TODAY } from '@/lib/cms/fixtures'
+import {
+  CMS_FX_PREVIEW, CMS_FX_PREVIEW_K83, CMS_FX_PREVIEW_K83_ACKED, CMS_FX_PREVIEW_SIMPLE, CMS_FX_PREVIEW_SIMPLE_NOSUPP, CMS_FX_PREVIEW_SIMPLE_UNAVAILABLE,
+  CMS_FX_TODAY,
+} from '@/lib/cms/fixtures'
 import { CMS_FX_PG, cmsFxProgram } from '@/lib/cms/fixtureScenario'
 import type { CmsInvalidStore } from '@/lib/cms/server/catalog'
 import type { CmsProgramBasis } from '@/lib/cms/calc/basisUi'
@@ -19,6 +22,15 @@ import type { CmsProgramBasis } from '@/lib/cms/calc/basisUi'
 //   cảnh báo + nội dung sau điểm dừng) · result-append · result-none (0 hợp lệ)
 // CMS đơn giản S1 / S2 (cờ v2 giả lập bật): upload-v2 (bộ chọn loại file) · upload-simple (đã chọn mức cố định) · result-simple
 //   (7 trạng thái kiểm K, ô xác nhận tay) · result-simple-unavailable (KHÔNG KIỂM ĐƯỢC) · result-simple-nok (thiếu cột K / tư vấn).
+// UX-KACK-1 (83 SP giả): result-k83 (nạp toàn bộ; "Kiểm tra lại với xác nhận" MÔ PHỎNG thành công — 17 / 18 gắn được) ·
+//   result-k83-fail (mô phỏng lỗi HTTP) · result-k83-timeout (mô phỏng quá hạn chờ phía client) · result-k83-append (chương trình đã
+//   bắt đầu; mô phỏng mất kết nối). Mô phỏng chạy SAU useFixtureActionBlocked (đếm chặn, 0 request).
+const K83_FX: Record<string, { mode: 'replace' | 'append'; recheck: NonNullable<Parameters<typeof CmsImportFlow>[0]['fixture']>['recheck'] }> = {
+  'result-k83': { mode: 'replace', recheck: { kind: 'ok', result: CMS_FX_PREVIEW_K83_ACKED } },
+  'result-k83-fail': { mode: 'replace', recheck: { kind: 'http-error' } },
+  'result-k83-timeout': { mode: 'replace', recheck: { kind: 'timeout' } },
+  'result-k83-append': { mode: 'append', recheck: { kind: 'network' } },
+}
 const STORES = Array.from({ length: 12 }, (_, i) => ({ id: `00000000-0000-4000-8000-0000000001${String(i).padStart(2, '0')}`, name: `Nhà thuốc mẫu ${i + 1}`, code: `QAOS${String(i + 1).padStart(2, '0')}` }))
 // CMS-UI-1: chương trình của kịch bản (lib/cms/fixtureScenario); &program=<id> (link Sửa / Import từ A3 fixture) — mặc định PG1.
 const programOf = (id: string | undefined) => { const p = cmsFxProgram(id) ?? cmsFxProgram(CMS_FX_PG.PG1)!; return { id: p.row.id, name: p.row.name } }
@@ -60,8 +72,10 @@ export default async function CmsWizardFixture({ searchParams }: { searchParams:
   const isEdit = EDIT_FX.includes(fx)
   const isForm = isEdit || fx === 'info' || fx === 'stores'
   const form = formFor(fx, PROGRAM)
+  const k83 = K83_FX[fx]
   const simple = fx === 'result-simple' ? CMS_FX_PREVIEW_SIMPLE : fx === 'result-simple-unavailable' ? CMS_FX_PREVIEW_SIMPLE_UNAVAILABLE
-    : fx === 'result-simple-nok' ? CMS_FX_PREVIEW_SIMPLE_NOSUPP : null
+    : fx === 'result-simple-nok' ? CMS_FX_PREVIEW_SIMPLE_NOSUPP
+    : k83 ? { ...CMS_FX_PREVIEW_K83, mode: k83.mode } : null
   const v2 = simple !== null || fx === 'upload-v2' || fx === 'upload-simple'
   const result = simple ?? (fx === 'result-append' ? { ...CMS_FX_PREVIEW, mode: 'append' as const, ignoredFromRow: null }
     : fx === 'result-none' ? { ...CMS_FX_PREVIEW, groupsOk: [], stats: { ...CMS_FX_PREVIEW.stats, rowsOk: 0, productsOk: 0, warnings: 0 } }
@@ -93,9 +107,14 @@ export default async function CmsWizardFixture({ searchParams }: { searchParams:
           ) : (
             <CmsImportFlow
               program={PROGRAM}
-              mode={fx === 'result-append' ? 'append' : 'replace'}
-              fromNew={fx !== 'result-append'}
-              fixture={{ step: fx === 'upload' || fx === 'upload-v2' || fx === 'upload-simple' ? 'upload' : fx === 'running' ? 'running' : 'result', result: resultB, fileName: simple || fx === 'upload-simple' ? 'CMS_muc_co_dinh_thang12.xlsx' : 'Circa_Import_CMS_thang11.xlsx', fileBytes: 48_213, format: simple || fx === 'upload-simple' ? 'simple' : 'tiers' }}
+              mode={fx === 'result-append' || k83?.mode === 'append' ? 'append' : 'replace'}
+              fromNew={fx !== 'result-append' && k83?.mode !== 'append'}
+              fixture={{
+                step: fx === 'upload' || fx === 'upload-v2' || fx === 'upload-simple' ? 'upload' : fx === 'running' ? 'running' : 'result', result: resultB,
+                fileName: simple || fx === 'upload-simple' ? 'CMS_muc_co_dinh_thang12.xlsx' : 'Circa_Import_CMS_thang11.xlsx', fileBytes: 48_213,
+                format: simple || fx === 'upload-simple' ? 'simple' : 'tiers',
+                ...(k83 ? { recheck: k83.recheck } : {}),
+              }}
               v2={v2}
               basis={basisFx}
             />

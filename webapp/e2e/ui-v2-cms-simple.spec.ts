@@ -301,6 +301,9 @@ test.describe('ui v2 CMS đơn giản — import mức cố định + kiểm K (
     await recheck.click()
     await expect(page.locator('[data-kpi-fixture-blocked]')).toHaveAttribute('data-kpi-fixture-blocked', /[1-9]/)
     await expect(main.locator('[data-cms-commit]')).toHaveText('Nạp danh mục (thay toàn bộ, 2 sản phẩm)')
+    // UX-KACK-1 AC1: kiểm tra lại chưa được preview nhận (fixture chặn) ⇒ ý định vẫn chờ, nút ghi khoá
+    await expect(main.locator('[data-cms-commit]')).toHaveAttribute('data-cms-commit-block', 'DIRTY')
+    await expect(main.locator('[data-cms-commit]')).toBeDisabled()
     expect(writes).toEqual([])
   })
 
@@ -308,7 +311,7 @@ test.describe('ui v2 CMS đơn giản — import mức cố định + kiểm K (
     await openWizard(page, 'result-simple-unavailable')
     let main = page.locator('main [data-cms-import-flow]')
     await expect(main.locator('[data-cms-kcheck="unavailable"]')).toContainText('Chưa kiểm được K')
-    await expect(main.locator('[data-cms-kcheck] input[type="checkbox"]')).toHaveCount(2)
+    await expect(main.locator('[data-cms-kcheck] [data-cms-k-row] input[type="checkbox"]')).toHaveCount(2)
     await expect(main.locator('[data-cms-commit]')).toHaveCount(0)
     await openWizard(page, 'result-simple-nok')
     main = page.locator('main [data-cms-import-flow]')

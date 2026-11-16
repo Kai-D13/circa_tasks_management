@@ -10,13 +10,17 @@ import { Notice } from '@/components/ds/Notice'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { CmsStepper } from '@/components/cms/admin/CmsStepper'
 import { CmsImportResult } from '@/components/cms/admin/CmsImportResult'
-import { CmsKCheckPanel, type CmsKAckDraft } from '@/components/cms/admin/CmsKCheckPanel'
+import { CmsKCheckPanel } from '@/components/cms/admin/CmsKCheckPanel'
+import { CmsImportCommitSummary } from '@/components/cms/admin/CmsImportCommitSummary'
 import { cn } from '@/lib/utils'
 import { cmsFileSize } from '@/lib/cms/display'
 import {
-  CMS_IMPORT_CHECKS, CMS_IMPORT_COLUMN_HELP, CMS_REUPLOAD_CODES, CMS_SIMPLE_CHECKS, CMS_SIMPLE_COLUMN_HELP, cmsCommitLabel, cmsKAckable,
+  CMS_IMPORT_CHECKS, CMS_IMPORT_COLUMN_HELP, CMS_REUPLOAD_CODES, CMS_SIMPLE_CHECKS, CMS_SIMPLE_COLUMN_HELP, cmsCommitLabel,
   type CmsPreviewResult, type CmsRouteError,
 } from '@/lib/cms/importView'
+import {
+  cmsCommitGate, cmsImportPlan, cmsKAckPayload, cmsKDirty, cmsKNotApplied, cmsKPending, type CmsKAckDraft, type CmsKAckPayloadItem,
+} from '@/lib/cms/kAckPlan'
 import { CmsBasisBadges } from '@/components/cms/CmsBasisBadges'
 import type { CmsProgramBasis } from '@/lib/cms/calc/basisUi'
 
@@ -29,12 +33,18 @@ import type { CmsProgramBasis } from '@/lib/cms/calc/basisUi'
 // CMS đơn giản S1 / S2 (PM r1 08/11 §4–§5; chỉ khi `v2` = cờ CMS_IMPORT_V2_ENABLED): chọn TƯỜNG MINH loại file (9 cột nhiều bậc /
 // 7 cột mức cố định) — server parse + kiểm theo loại đã lưu trong lần kiểm, commit không nhận loại khác; bảng kiểm K + xác nhận tay
 // (gửi lại preview kèm ý định, server gắn người / giờ). v2 OFF ⇒ request y như trước (không gửi format / k_acks).
+// UX-KACK-1 (PM 15/11 §4): còn ý định xác nhận K đã tick mà preview chưa nhận lại ⇒ KHOÁ nút ghi (không ghi preview cũ); gửi lại lỗi /
+// hết giờ GIỮ nguyên nháp (vẫn khoá); gửi lại thành công ⇒ nháp bỏ, báo ý định server không gắn được. Ghi một phần ⇒ phải tick xác nhận
+// đúng số SP bị bỏ (theo kết quả server) trước khi nút ghi mở. Server commit vẫn tự kiểm (không đổi hợp đồng).
 
 const MAX_FILE = 5 * 1024 * 1024
 type Step = 'upload' | 'running' | 'result'
 const RUN_STEPS = ['Đọc file và sheet IMPORT_CMS', 'Kiểm tra cột và kiểu ô', 'Tra Product Master', 'Kiểm tra nhóm và thang bậc', 'Kiểm tra trùng chương trình đang chạy']
 const RUN_STEPS_SIMPLE = ['Đọc file mức cố định (sheet đầu tiên)', 'Kiểm tra 7 cột và kiểu ô', 'Tra Product Master', 'Kiểm tra mỗi sản phẩm một mức', 'Kiểm tra trùng chương trình đang chạy']
 type Format = 'tiers' | 'simple'
+// Hạn chờ "Kiểm tra lại với xác nhận" phía client: > hạn đọc nguồn bán của server (CMS_BQ_DEFAULT_DEADLINE_MS 120 s) + đọc / kiểm file.
+const RECHECK_TIMEOUT_MS = 180_000
+const RECHECK_TIMEOUT_TEXT = 'Kiểm tra lại quá thời gian chờ — xác nhận đã tick vẫn giữ, thử lại sau'
 
 function errorText(body: CmsRouteError | null): string {
   if (!body) return 'Máy chủ không phản hồi đúng — thử lại'
@@ -50,8 +60,15 @@ export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false, bas
   basis?: CmsProgramBasis | null
   mode: 'replace' | 'append'
   fromNew: boolean
-  /** Chỉ fixture /ui-catalog: bắt đầu ở bước / kết quả dựng sẵn. */
-  fixture?: { step: Step; result?: CmsPreviewResult; fileName?: string; fileBytes?: number; format?: Format }
+  /**
+   * Chỉ fixture /ui-catalog: bắt đầu ở bước / kết quả dựng sẵn. `recheck` (UX-KACK-1): MÔ PHỎNG kết quả "Kiểm tra lại với xác nhận"
+   * SAU khi useFixtureActionBlocked đã chặn (0 request) — lỗi HTTP / mất kết nối / thành công với kết quả dựng sẵn — để kiểm luồng
+   * giữ / bỏ nháp. Route thật không truyền.
+   */
+  fixture?: {
+    step: Step; result?: CmsPreviewResult; fileName?: string; fileBytes?: number; format?: Format
+    recheck?: { kind: 'http-error' } | { kind: 'network' } | { kind: 'timeout' } | { kind: 'ok'; result: CmsPreviewResult }
+  }
   /** Cờ CMS_IMPORT_V2_ENABLED (server quyết; page truyền xuống). */
   v2?: boolean
 }) {
@@ -65,6 +82,10 @@ export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false, bas
   const [format, setFormat] = useState<Format>(fixture?.format ?? fixture?.result?.format ?? 'tiers')
   const [drafts, setDrafts] = useState<CmsKAckDraft>({})
   const [rechecking, setRechecking] = useState(false)
+  // Xác nhận "U SP sẽ không được ghi" — gắn với MỘT kết quả preview (mỗi preview mới ⇒ phải xác nhận lại).
+  const [partialConfirmed, setPartialConfirmed] = useState(false)
+  // Ý định đã gửi ở lần kiểm tra lại gần nhất mà server không gắn được (null = chưa gửi lại).
+  const [notApplied, setNotApplied] = useState<string[] | null>(null)
   const abort = useRef<AbortController | null>(null)
   const fileName = file?.name ?? fixture?.fileName ?? null
   const fileBytes = file?.size ?? fixture?.fileBytes ?? null
@@ -83,6 +104,8 @@ export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false, bas
     abort.current?.abort()
     setResult(null)
     setDrafts({})
+    setPartialConfirmed(false)
+    setNotApplied(null)
     setStep('upload')
     if (!keepFile) setFile(null)
   }
@@ -92,47 +115,65 @@ export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false, bas
     setFormat(f)
     setResult(null)
     setDrafts({})
+    setPartialConfirmed(false)
+    setNotApplied(null)
   }
 
-  /** `withAcks`: gửi lại CHÍNH file kèm ý định xác nhận K (chỉ SP được phép xác nhận + có nguồn). */
+  /** Preview mới từ server ⇒ nháp / xác nhận ghi một phần của preview cũ không còn đúng (AC6). `sent` = ý định vừa gửi lại. */
+  function acceptPreview(body: CmsPreviewResult, sent: CmsKAckPayloadItem[] | null) {
+    setResult(body)
+    setDrafts({})
+    setPartialConfirmed(false)
+    setNotApplied(sent ? cmsKNotApplied(sent, body) : null)
+    setStep('result')
+  }
+
+  /** `withAcks`: gửi lại CHÍNH file kèm ý định xác nhận K (chỉ SP được phép xác nhận + có nguồn). Lỗi ⇒ GIỮ nháp (nút ghi vẫn khoá). */
   async function runPreview(withAcks = false) {
-    if (fixtureBlocked()) return
+    const sent = v2 && withAcks && result?.kCheck ? cmsKAckPayload(result.kCheck.products, drafts) : null
+    if (fixtureBlocked()) {
+      const sim = withAcks ? fixture?.recheck : undefined
+      if (sim?.kind === 'ok') acceptPreview(sim.result, sent)
+      else if (sim?.kind === 'http-error') setError(errorText(null))
+      else if (sim?.kind === 'network') setError('Không kết nối được máy chủ — thử lại')
+      else if (sim?.kind === 'timeout') setError(RECHECK_TIMEOUT_TEXT)
+      return
+    }
     if (!file) { if (withAcks) setError('Chọn lại file để kiểm tra lại'); return }
     setError(null)
     if (withAcks) setRechecking(true); else setStep('running')
     const ac = new AbortController()
     abort.current = ac
+    // Kiểm tra lại có hạn chờ phía client (nút Hủy / Upload khác bị khoá khi đang gửi): hết giờ ⇒ báo lỗi, GIỮ nháp (AC1).
+    let timedOut = false
+    const timer = withAcks ? setTimeout(() => { timedOut = true; ac.abort() }, RECHECK_TIMEOUT_MS) : null
     const fd = new FormData()
     fd.append('program_id', program.id)
     fd.append('file', file)
     if (v2) fd.append('format', format)
-    if (v2 && withAcks && result?.kCheck) {
-      const kept = result.kCheck.products.filter((x) => x.ack !== null && x.k !== null).map((x) => ({ product_id: x.productId, unit: x.unit, k: x.k, source: x.ack!.source }))
-      const added = result.kCheck.products
-        .filter((x) => cmsKAckable(x) && drafts[x.productId]?.checked && drafts[x.productId].source.trim().length >= 3)
-        .map((x) => ({ product_id: x.productId, unit: x.unit, k: x.k, source: drafts[x.productId].source.trim() }))
-      const acks = [...kept, ...added]
-      fd.append('k_acks', JSON.stringify(acks))
-    }
+    if (sent) fd.append('k_acks', JSON.stringify(sent))
     try {
       const res = await fetch('/api/cms/import/preview', { method: 'POST', body: fd, signal: ac.signal })
       const body = (await res.json().catch(() => null)) as CmsPreviewResult | CmsRouteError | null
+      if (timedOut) { setError(RECHECK_TIMEOUT_TEXT); return }
       if (ac.signal.aborted) return
       if (!res.ok || !body || !body.ok) { setError(errorText(body as CmsRouteError | null)); if (!withAcks) setStep('upload'); return }
-      setResult(body)
-      setDrafts({})
-      setStep('result')
+      acceptPreview(body, sent)
     } catch {
+      if (timedOut) { setError(RECHECK_TIMEOUT_TEXT); return }
       if (ac.signal.aborted) return
       setError('Không kết nối được máy chủ — thử lại')
       if (!withAcks) setStep('upload')
     } finally {
+      if (timer) clearTimeout(timer)
       if (withAcks) setRechecking(false)
     }
   }
 
   async function commit() {
     if (!result) return
+    // Phòng thủ (nút đã khoá): còn ý định chưa gửi / chưa xác nhận số SP bị bỏ ⇒ không ghi preview này.
+    if (commitBlock !== 'NONE') return
     if (fixtureBlocked()) return
     if (!file) { setError('Chọn lại file để xác nhận ghi'); reset(false); return }
     setError(null)
@@ -167,6 +208,12 @@ export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false, bas
 
   const current = step === 'upload' ? 1 : step === 'running' ? 2 : 3
   const commitLabel = result ? cmsCommitLabel(result.mode, result.groupsOk.length) : null
+  const kRows = result?.kCheck?.products ?? []
+  const plan = result ? cmsImportPlan(result) : null
+  const pendingCount = (() => { const p = cmsKPending(kRows, drafts); return p.ready.length + p.incomplete.length })()
+  const commitBlock = plan
+    ? cmsCommitGate({ write: plan.write, skip: plan.skip, dirty: cmsKDirty(kRows, drafts), busy: committing || rechecking, partialConfirmed })
+    : 'NOTHING'
 
   return (
     <div data-cms-import-flow={step} className="space-y-4">
@@ -288,23 +335,45 @@ export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false, bas
       {step === 'result' && result && (
         <div className="space-y-4">
           <CmsImportResult result={result} />
+          {notApplied !== null && notApplied.length > 0 && (
+            <Notice tone="warning" role="status">
+              <span data-cms-k-not-applied={notApplied.length}>
+                {notApplied.length} xác nhận vừa gửi không được áp vì trạng thái K của sản phẩm đã đổi ở lần kiểm này: {notApplied.join(', ')}. Xem lại bảng Kiểm K.
+              </span>
+            </Notice>
+          )}
           {result.kCheck && (
             <CmsKCheckPanel
+              // Preview mới ⇒ dựng lại bảng: bộ lọc / nguồn chung / xác nhận áp của lần kiểm trước không mang sang (AC5 / AC6).
+              key={result.runId}
               kCheck={result.kCheck}
               drafts={drafts}
-              onDraft={(id, d) => setDrafts((x) => ({ ...x, [id]: d }))}
+              onDrafts={setDrafts}
               onRecheck={() => runPreview(true)}
               busy={rechecking || committing}
+              otherErrorIds={plan?.ackableWithOtherErrors}
             />
           )}
-          {result.groupsOk.length === 0 && (
-            <Notice tone="warning">Không có sản phẩm hợp lệ để ghi — sửa file theo danh sách lỗi rồi kiểm tra lại.</Notice>
+          {plan && (
+            <CmsImportCommitSummary
+              plan={plan}
+              mode={result.mode}
+              block={commitBlock}
+              pendingCount={pendingCount}
+              partialConfirmed={partialConfirmed}
+              onPartialConfirmed={setPartialConfirmed}
+              hasKCheck={!!result.kCheck}
+              busy={committing || rechecking}
+            />
           )}
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
             <Button type="button" variant="ghost" onClick={() => reset(false)} disabled={committing || rechecking} className="h-[44px] md:h-[36px]">Hủy lần chạy</Button>
             <Button type="button" variant="outline" onClick={() => reset(false)} disabled={committing || rechecking} className="h-[44px] md:h-[36px]">Upload file khác</Button>
             {commitLabel && (
-              <Button type="button" onClick={commit} disabled={committing || rechecking} data-cms-commit={result.mode} className="h-[44px] md:h-[36px] font-semibold">
+              <Button
+                type="button" onClick={commit} disabled={commitBlock !== 'NONE'} data-cms-commit={result.mode} data-cms-commit-block={commitBlock}
+                className="h-[44px] md:h-[36px] font-semibold"
+              >
                 {committing && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}{commitLabel}
               </Button>
             )}
