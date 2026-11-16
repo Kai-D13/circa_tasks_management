@@ -155,6 +155,39 @@ export const CMS_FX_PREVIEW_K83_ACKED: CmsPreviewResult = k83Preview(9184,
   (i) => (i >= 50 && i < 67 ? 'ACKED' : i === 67 ? 'MISMATCH' : i >= 81 ? 'ACKED_FILE' : k83Kind(i)), 'Quy cách NCC (mẫu, nguồn chung)')
 export const CMS_FX_K83_ID = k83Id
 
+// ── KACK-LAYOUT-01 (PM 16/11 run3) — chỉ dòng ĐÃ XÁC NHẬN TAY (ProductID 9185xx giả): nguồn ngắn · nguồn dài có khoảng trắng · chuỗi liền
+// không khoảng trắng; một bản CHƯA CÓ BẰNG CHỨNG (đọc được dữ liệu bán) + một bản KHÔNG KIỂM ĐƯỢC (không đọc được). Kiểm nhãn trạng thái
+// + nguồn hiển thị đủ, không bị cắt / chồng ở thẻ mobile và lưới desktop. Nguồn ≤ CMS_K_ACK_SOURCE_MAX_CLIENT (200).
+export const CMS_FX_K_ACK_LONG_SOURCES = [
+  'Quy cách nhà cung cấp (mẫu)',
+  'Quy cách nhà cung cấp theo hợp đồng mẫu số 01/2026: 1 hộp = 10 vỉ, đối chiếu cột SL quy đổi trên POS và phiếu nhập kho mẫu tháng 11 (dữ liệu giả)',
+  `https://ncc-mau.example.invalid/quy-cach/${'HOP10VI-'.repeat(19)}END-200`, // chuỗi liền ĐÚNG 200 ký tự (trần client)
+] as const
+const kAckLongId = (i: number) => `9185${String(i).padStart(2, '0')}`
+function kAckLongPreview(runNo: number, status: 'NO_EVIDENCE' | 'UNAVAILABLE'): CmsPreviewResult {
+  const idx = CMS_FX_K_ACK_LONG_SOURCES.map((_, i) => i)
+  const unavailable = status === 'UNAVAILABLE'
+  return {
+    ok: true, runId: cmsFxUid(runNo), sha256: 'd'.repeat(64), mode: 'replace', configVersion: 1, catalogTarget: null, ignoredFromRow: null, format: 'simple',
+    supplement: { baseQuantity: true, advice: true },
+    stats: { rowsTotal: idx.length, rowsOk: idx.length, rowsRejected: 0, productsOk: idx.length, productsRejected: 0, warnings: 0 },
+    groupsOk: idx.map((i) => ({ ...k83Ok(i), productId: kAckLongId(i), nameSnapshot: `Sản phẩm mẫu xác nhận tay số ${i + 1}` })),
+    groupsRejected: [],
+    kCheck: {
+      asOf: unavailable ? null : '2026-11-16T01:55:00.000Z', available: !unavailable, reason: unavailable ? 'SOURCE_TIMEOUT' : null,
+      products: idx.map((i) => ({
+        productId: kAckLongId(i), unit: 'hộp', k: '10', status, proposedK: null, seen: [],
+        note: unavailable ? 'Không đọc được nguồn bán để đối chiếu K' : 'Chưa có dòng bán', ack: { source: CMS_FX_K_ACK_LONG_SOURCES[i], at: K83_ACK_AT }, ok: true,
+      })),
+    },
+  }
+}
+/** fx=result-k-ack-long: 3 SP CHƯA CÓ BẰNG CHỨNG · ĐÃ XÁC NHẬN TAY (nguồn ngắn / dài / chuỗi liền). */
+export const CMS_FX_PREVIEW_K_ACK_LONG: CmsPreviewResult = kAckLongPreview(9185, 'NO_EVIDENCE')
+/** fx=result-k-ack-long-unavailable: như trên nhưng KHÔNG KIỂM ĐƯỢC · ĐÃ XÁC NHẬN TAY (không đọc được dữ liệu bán). */
+export const CMS_FX_PREVIEW_K_ACK_LONG_UNAVAILABLE: CmsPreviewResult = kAckLongPreview(9186, 'UNAVAILABLE')
+export const CMS_FX_K_ACK_LONG_ID = kAckLongId
+
 /** fx=result-simple-nok: file 7 cột chưa có cột K / tư vấn ⇒ đọc được, 0 ghi được. */
 export const CMS_FX_PREVIEW_SIMPLE_NOSUPP: CmsPreviewResult = {
   ...CMS_FX_PREVIEW_SIMPLE, runId: cmsFxUid(9103), groupsOk: [], supplement: { baseQuantity: false, advice: false },

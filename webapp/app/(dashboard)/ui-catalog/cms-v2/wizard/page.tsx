@@ -7,8 +7,8 @@ import { CmsStepper } from '@/components/cms/admin/CmsStepper'
 import { CmsProgramForm, type CmsProgramFormInitial } from '@/components/cms/admin/CmsProgramForm'
 import { CmsImportFlow } from '@/components/cms/admin/CmsImportFlow'
 import {
-  CMS_FX_PREVIEW, CMS_FX_PREVIEW_K83, CMS_FX_PREVIEW_K83_ACKED, CMS_FX_PREVIEW_SIMPLE, CMS_FX_PREVIEW_SIMPLE_NOSUPP, CMS_FX_PREVIEW_SIMPLE_UNAVAILABLE,
-  CMS_FX_TODAY,
+  CMS_FX_PREVIEW, CMS_FX_PREVIEW_K83, CMS_FX_PREVIEW_K83_ACKED, CMS_FX_PREVIEW_K_ACK_LONG, CMS_FX_PREVIEW_K_ACK_LONG_UNAVAILABLE, CMS_FX_PREVIEW_SIMPLE,
+  CMS_FX_PREVIEW_SIMPLE_NOSUPP, CMS_FX_PREVIEW_SIMPLE_UNAVAILABLE, CMS_FX_TODAY,
 } from '@/lib/cms/fixtures'
 import { CMS_FX_PG, cmsFxProgram } from '@/lib/cms/fixtureScenario'
 import type { CmsInvalidStore } from '@/lib/cms/server/catalog'
@@ -25,6 +25,12 @@ import type { CmsProgramBasis } from '@/lib/cms/calc/basisUi'
 // UX-KACK-1 (83 SP giả): result-k83 (nạp toàn bộ; "Kiểm tra lại với xác nhận" MÔ PHỎNG thành công — 17 / 18 gắn được) ·
 //   result-k83-fail (mô phỏng lỗi HTTP) · result-k83-timeout (mô phỏng quá hạn chờ phía client) · result-k83-append (chương trình đã
 //   bắt đầu; mô phỏng mất kết nối). Mô phỏng chạy SAU useFixtureActionBlocked (đếm chặn, 0 request).
+// KACK-LAYOUT-01: result-k-ack-long (CHƯA CÓ BẰNG CHỨNG · ĐÃ XÁC NHẬN TAY, nguồn ngắn / dài / chuỗi liền) · result-k-ack-long-unavailable
+//   (KHÔNG KIỂM ĐƯỢC · ĐÃ XÁC NHẬN TAY).
+const K_ACK_LONG_FX: Record<string, typeof CMS_FX_PREVIEW_K_ACK_LONG> = {
+  'result-k-ack-long': CMS_FX_PREVIEW_K_ACK_LONG,
+  'result-k-ack-long-unavailable': CMS_FX_PREVIEW_K_ACK_LONG_UNAVAILABLE,
+}
 const K83_FX: Record<string, { mode: 'replace' | 'append'; recheck: NonNullable<Parameters<typeof CmsImportFlow>[0]['fixture']>['recheck'] }> = {
   'result-k83': { mode: 'replace', recheck: { kind: 'ok', result: CMS_FX_PREVIEW_K83_ACKED } },
   'result-k83-fail': { mode: 'replace', recheck: { kind: 'http-error' } },
@@ -75,7 +81,7 @@ export default async function CmsWizardFixture({ searchParams }: { searchParams:
   const k83 = K83_FX[fx]
   const simple = fx === 'result-simple' ? CMS_FX_PREVIEW_SIMPLE : fx === 'result-simple-unavailable' ? CMS_FX_PREVIEW_SIMPLE_UNAVAILABLE
     : fx === 'result-simple-nok' ? CMS_FX_PREVIEW_SIMPLE_NOSUPP
-    : k83 ? { ...CMS_FX_PREVIEW_K83, mode: k83.mode } : null
+    : k83 ? { ...CMS_FX_PREVIEW_K83, mode: k83.mode } : K_ACK_LONG_FX[fx] ?? null
   const v2 = simple !== null || fx === 'upload-v2' || fx === 'upload-simple'
   const result = simple ?? (fx === 'result-append' ? { ...CMS_FX_PREVIEW, mode: 'append' as const, ignoredFromRow: null }
     : fx === 'result-none' ? { ...CMS_FX_PREVIEW, groupsOk: [], stats: { ...CMS_FX_PREVIEW.stats, rowsOk: 0, productsOk: 0, warnings: 0 } }
