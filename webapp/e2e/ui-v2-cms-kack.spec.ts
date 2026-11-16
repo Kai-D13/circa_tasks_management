@@ -3,6 +3,8 @@ import path from 'node:path'
 import { test, expect, type Page } from '@playwright/test'
 import { SUPER_STATE } from './authState'
 import { expectBlocked, trapWrites } from './fixtureGuard'
+import { CMS_FX_K_ACK_LONG_ID, CMS_FX_K_ACK_LONG_SOURCES } from '../lib/cms/fixtures'
+import { CMS_K_ACK_LABEL, cmsKAckLongExpected, cmsKAckRowGeometry } from './cmsKackLayout'
 
 // UX-KACK-1 (PM 15/11 review đóng đợt §4) — bước xác nhận K khi nạp file CMS, fixture /ui-catalog/cms-v2/wizard (ĐÚNG CmsImportFlow +
 // CmsKCheckPanel của route thật, dữ liệu giả 83 SP 9183xx). Mọi kiểm tra lại / ghi đi qua useFixtureActionBlocked (0 request); kết quả
@@ -358,5 +360,52 @@ test.describe('UX-KACK-1 — khoá ghi, tóm tắt, chọn nhiều (fixture, 0 g
     f = flow(page)
     await expect(f.locator('[data-cms-commit-none]')).toContainText('sửa file theo danh sách lỗi')
     await expect(f.locator('[data-cms-commit-none-kack]')).toHaveCount(0)
+  })
+})
+
+// ── KACK-LAYOUT-01 (PM 16/11 run3 §3) — dòng ĐÃ XÁC NHẬN TAY: nhãn trạng thái dài + nguồn dài / chuỗi liền phải hiện đủ trong ô, không bị
+// khung overflow-hidden cắt, không đè lên ProductID / nguồn. Phép đo hình học dùng chung e2e/cmsKackLayout.ts (cả spec remote), KHÔNG chỉ
+// toContainText / scrollWidth trang (lỗi cũ: chữ có trong DOM, trang không tràn, nhưng nhãn nằm ngoài ô). 4 khổ × sáng / tối + 2 khổ hẹp
+// tương đương phóng chữ 125 % (360 ⇒ 288 px, 1024 ⇒ 819 px CSS) — cỡ chữ bảng tính bằng px nên phóng 125 % = khung CSS hẹp đi 1,25 lần.
+const ACK_DEVICES = { ...DEVICES, z360: { width: 288, height: 700 }, z1024: { width: 819, height: 700 } } as const
+type AckDev = keyof typeof ACK_DEVICES
+const ACK_FX = [
+  { fx: 'result-k-ack-long', label: CMS_K_ACK_LABEL.NO_EVIDENCE },
+  { fx: 'result-k-ack-long-unavailable', label: CMS_K_ACK_LABEL.UNAVAILABLE },
+] as const
+const kTable = (page: Page) => flow(page).locator('[data-cms-kcheck-table]')
+
+test.describe('KACK-LAYOUT-01 — nhãn + nguồn dòng ĐÃ XÁC NHẬN TAY không bị cắt / chồng (fixture, 0 ghi) @desktop', () => {
+  test.skip(!HAS_SUPER, 'chưa có phiên super')
+  test.use({ storageState: SUPER_STATE })
+
+  for (const theme of ['light', 'dark'] as Theme[]) for (const dev of Object.keys(ACK_DEVICES) as AckDev[]) {
+    test(`ack-long ${dev} ${theme}: CHƯA CÓ BẰNG CHỨNG + KHÔNG KIỂM ĐƯỢC · ĐÃ XÁC NHẬN TAY — đủ chữ, trong ô, không đè`, async ({ page }) => {
+      const writes = await trapWrites(page)
+      await page.setViewportSize(ACK_DEVICES[dev])
+      for (const f of ACK_FX) {
+        await openWizard(page, f.fx, theme)
+        const table = flow(page).locator('[data-cms-kcheck-table]')
+        await expect(table.locator('[data-cms-k-ack="yes"]')).toHaveCount(CMS_FX_K_ACK_LONG_SOURCES.length)
+        await expect(table).not.toContainText('KHỚP')
+        if (dev in DEVICES) await noPageOverflow(page, `${f.fx} ${dev} ${theme}`)
+        const geo = await cmsKAckRowGeometry(kTable(page), cmsKAckLongExpected(f.label))
+        expect(geo.filter((g) => g.problems.length > 0), `${f.fx} ${dev} ${theme}: nhãn / nguồn bị cắt hoặc chồng`).toEqual([])
+        // <main> tự cuộn ⇒ ảnh toàn trang chỉ có khung nhìn; chụp riêng bảng kiểm K để soát bằng mắt.
+        if (SHOTS) await table.screenshot({ path: path.join(SHOTS, `kack-ack-long-${f.fx === 'result-k-ack-long' ? 'ne' : 'un'}-${dev}-${theme}.png`) })
+      }
+      expect(writes).toEqual([])
+    })
+  }
+
+  test('đối chứng: hàm hình học BẮT được nhãn bị ép một dòng (nowrap như StatusBadge gốc) ở 288 (360 phóng 125 %) + 1024, cả hai trạng thái', async ({ page }) => {
+    await trapWrites(page)
+    for (const dev of ['z360', 'd1024'] as const) for (const f of ACK_FX) {
+      await page.setViewportSize(ACK_DEVICES[dev])
+      await openWizard(page, f.fx)
+      await page.addStyleTag({ content: '[data-cms-k-badge] > span { white-space: nowrap !important }' })
+      const geo = await cmsKAckRowGeometry(kTable(page), cmsKAckLongExpected(f.label))
+      expect(geo.filter((g) => g.problems.length > 0).map((g) => g.pid), `${f.fx} ${dev}: ép nowrap phải bị bắt ở mọi dòng`).toEqual(CMS_FX_K_ACK_LONG_SOURCES.map((_, i) => CMS_FX_K_ACK_LONG_ID(i)))
+    }
   })
 })

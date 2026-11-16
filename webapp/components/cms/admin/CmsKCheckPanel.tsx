@@ -24,6 +24,9 @@ import {
 export type { CmsKAckDraft } from '@/lib/cms/kAckPlan'
 
 const COLS = 'lg:grid lg:grid-cols-[7rem_10.5rem_minmax(0,1.4fr)_7.5rem_minmax(0,1fr)] lg:gap-x-3'
+// KACK-LAYOUT-01 (PM 16/11 run3): nhãn "… · ĐÃ XÁC NHẬN TAY" dài hơn cột 10.5rem / thẻ 360 — StatusBadge dùng chung để nowrap nên bị cắt
+// (thẻ trong khung overflow-hidden) hoặc đè lên cột nguồn (lưới). Chỉ ở bảng này: cho nhãn xuống dòng trong ô, không ellipsis / ẩn chữ.
+const K_BADGE_WRAP = 'max-w-full whitespace-normal text-left [overflow-wrap:anywhere]'
 const EXCLUDED_LABEL = (s: ReturnType<typeof cmsKExcluded>[number]['status']): string =>
   s === 'ACKED' ? 'đã xác nhận' : s === 'NO_K' ? 'thiếu K trong file' : CMS_K_VIEW[s].label
 
@@ -156,14 +159,14 @@ export function CmsKCheckPanel({ kCheck, drafts, onDrafts, onRecheck, busy, othe
                   key={key} role="row" data-cms-k-row={x.productId} data-cms-k-status={x.status} data-cms-k-ack={x.ack ? 'yes' : undefined} data-cms-k-pending={pend}
                   className={cn('grid gap-2 px-4 py-3 lg:items-start', COLS, pend && 'bg-status-warning-bg')}
                 >
-                  <div role="cell" className="flex items-center justify-between gap-2 lg:block">
-                    <span className="font-semibold tabular-nums lg:font-normal">{x.productId}</span>
-                    <span className="lg:hidden"><StatusBadge tone={v.tone} size="sm">{v.label}</StatusBadge></span>
+                  <div role="cell" className="flex min-w-0 flex-wrap items-start justify-between gap-x-2 gap-y-1 lg:block">
+                    <span data-cms-k-pid className="min-w-0 font-semibold tabular-nums [overflow-wrap:anywhere] lg:font-normal">{x.productId}</span>
+                    <span data-cms-k-badge="card" className="min-w-0 max-w-full lg:hidden"><StatusBadge tone={v.tone} size="sm" className={K_BADGE_WRAP}>{v.label}</StatusBadge></span>
                   </div>
-                  <div role="cell" className="hidden lg:block"><StatusBadge tone={v.tone} size="sm">{v.label}</StatusBadge></div>
+                  <div role="cell" data-cms-k-badge="grid" className="hidden min-w-0 lg:block"><StatusBadge tone={v.tone} size="sm" className={K_BADGE_WRAP}>{v.label}</StatusBadge></div>
                   <div role="cell" className="min-w-0">
                     {x.ack ? (
-                      <span data-cms-k-ack-info className="block text-[12px] text-muted-foreground break-words">Nguồn: {x.ack.source} · {cmsDateTime(x.ack.at)}</span>
+                      <span data-cms-k-ack-info className="block text-[12px] text-muted-foreground [overflow-wrap:anywhere]">Nguồn: {x.ack.source} · {cmsDateTime(x.ack.at)}</span>
                     ) : can ? (
                       <div className="flex min-w-0 flex-col gap-1.5">
                         <label className="inline-flex min-h-[44px] items-center gap-2">
