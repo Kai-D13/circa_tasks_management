@@ -81,11 +81,14 @@ test.describe('ui v2 KPI K-4 Doanh số Affiliate — fixture @desktop', () => {
     await expect(v.getByRole('alert')).toHaveCount(0)
   })
 
-  test('phòng ban (OS) / SM / QLCH: không tab, Loại ẩn, nhãn "Store có doanh số"; SM/QLCH có "← Doanh số"', async ({ page }, info) => {
+  // SM-CAMPAIGN-NAV-1 (PM 12/11): SM (os-assigned) có hàng tab module chung + giữ "← Doanh số"; phòng ban (os-all) / QLCH (os-own)
+  // không tab như cũ. Fixture không truyền tabsDesktopReplaced ⇒ hàng tab hiện cả desktop (route thật SM: chỉ mobile — xem dưới).
+  test('phòng ban (OS) / QLCH: không tab; SM: tab chung + "← Doanh số"; Loại ẩn, nhãn "Store có doanh số"', async ({ page }, info) => {
     await setup(page, 'd1280', info.project.use.baseURL!)
     await openFx(page, 'ops')
     let v = view(page)
     await expect(v.getByRole('link', { name: 'Affiliate' })).toHaveCount(0)
+    await expect(v.locator('[data-campaigns-tabs]')).toHaveCount(0)
     await expect(v.getByRole('link', { name: '← Doanh số' })).toHaveCount(0)
     await expect(v.locator('select[name="type"]')).toHaveCount(0)
     expect((await kpiValues(page))[2]).toBe('Store có doanh số 2/3')
@@ -94,6 +97,17 @@ test.describe('ui v2 KPI K-4 Doanh số Affiliate — fixture @desktop', () => {
       v = view(page)
       await expect(v.getByRole('link', { name: '← Doanh số' })).toHaveAttribute('href', '/targets')
       await expect(v.locator('select[name="type"]')).toHaveCount(0)
+      if (fx === 'sm') {
+        const tabs = v.locator('[data-campaigns-tabs]')
+        await expect(tabs, 'SM: hàng tab chung').toHaveCount(1)
+        expect(await tabs.locator('a').evaluateAll((as) => as.map((a) => [(a.textContent ?? '').trim(), a.getAttribute('href'), a.getAttribute('aria-current')])))
+          .toEqual([['Chiến dịch', '/targets/campaigns', null], ['Affiliate', ROUTE, 'page']])
+        // Back đứng trước hàng tab (thứ tự đọc: quay về tổng hợp → chuyển module).
+        expect(await v.evaluate((root) => {
+          const back = [...root.querySelectorAll('a')].find((a) => a.textContent?.trim() === '← Doanh số')!
+          return !!(back.compareDocumentPosition(root.querySelector('[data-campaigns-tabs]')!) & Node.DOCUMENT_POSITION_FOLLOWING)
+        })).toBe(true)
+      } else await expect(v.locator('[data-campaigns-tabs]'), 'QLCH: không tab').toHaveCount(0)
     }
     await expect(bodyRows(page)).toHaveCount(1)
   })
@@ -155,9 +169,24 @@ test.describe('ui v2 KPI K-4 Doanh số Affiliate — fixture @desktop', () => {
       test(`bố cục ${dev} ${theme}: không tràn, bảng cuộn trong khung, ô lọc 16px + chạm ≥44px ở mobile`, async ({ page }, info) => {
         await setup(page, dev, info.project.use.baseURL!)
         const mobile = dev.startsWith('m')
-        for (const fx of ['super', 'drill']) {
+        for (const fx of ['super', 'drill', 'sm']) {
           await openFx(page, fx, theme)
           await noPageOverflow(page, `${fx} ${dev} ${theme}`)
+          // SM-CAMPAIGN-NAV-1: SM có "← Doanh số" + hàng tab — mobile vùng chạm ≥ 44px, không chồng nhau.
+          if (fx === 'sm') {
+            const r = await view(page).evaluate((root) => {
+              const box = (el: Element) => { const b = el.getBoundingClientRect(); return { t: b.top, b: b.bottom, h: b.height, w: b.width } }
+              const back = [...root.querySelectorAll('a')].find((a) => a.textContent?.trim() === '← Doanh số')!
+              const tabs = [...root.querySelectorAll('[data-campaigns-tabs] a')]
+              return { back: box(back), tabs: tabs.map(box), row: box(root.querySelector('[data-campaigns-tabs]')!) }
+            })
+            expect(r.tabs.length, `${dev} ${theme}: số tab SM`).toBe(2)
+            expect(r.back.b, `${dev} ${theme}: Back chồng hàng tab`).toBeLessThanOrEqual(r.row.t + 0.5)
+            if (mobile) {
+              expect(r.back.h, `${dev} ${theme}: Back cao ${r.back.h}`).toBeGreaterThanOrEqual(44)
+              for (const t of r.tabs) expect(Math.min(t.h, t.w), `${dev} ${theme}: tab < 44px`).toBeGreaterThanOrEqual(44)
+            }
+          }
           if (mobile && fx === 'super') {
             const sizes = await view(page).locator('form[data-affiliate-filter] input, form[data-affiliate-filter] select, form[data-affiliate-filter] button, [data-affiliate-table] button').evaluateAll((els) =>
               els.map((e) => { const r = e.getBoundingClientRect(); return { h: Math.round(r.height), w: Math.round(r.width), t: e.getAttribute('name') ?? e.getAttribute('aria-label') ?? e.textContent?.trim() } }))
@@ -372,8 +401,10 @@ test.describe('ui v2 KPI K-4 /targets/campaigns/affiliate route thật — SM @d
   test.skip(!HAS_SM, 'chưa có phiên SM')
   test.use({ storageState: SM_STATE })
 
-  test('SM: "← Doanh số", không tab quản trị, không chọn Loại (chỉ OS); hoặc 404 khi không có store OS (cổng cũ)', async ({ page }, info) => {
+  // SM-CAMPAIGN-NAV-1: desktop — Sidebar SM có đủ đích ⇒ hàng tab chỉ cho mobile (ẩn ≥ 768px); mobile 390 — tab hiện, Back còn.
+  test('SM: "← Doanh số", hàng tab chung chỉ hiện ở mobile, không chọn Loại (chỉ OS); hoặc 404 khi không có store OS (cổng cũ)', async ({ page }, info) => {
     await setup(page, 'd1280', info.project.use.baseURL!)
+    const writes = await trapWrites(page)
     await page.goto(ROUTE)
     const v = view(page)
     const nf = page.locator('main').getByText('This page could not be found.')
@@ -386,8 +417,17 @@ test.describe('ui v2 KPI K-4 /targets/campaigns/affiliate route thật — SM @d
     test.info().annotations.push({ type: 'nhánh', description: 'SM: có view' })
     await expect(v).toHaveAttribute('data-ui-v2', 'page')
     await expect(v.getByRole('link', { name: '← Doanh số' })).toHaveAttribute('href', '/targets')
+    const tabs = v.locator('[data-campaigns-tabs]')
+    await expect(tabs, 'SM: hàng tab trong DOM, chỉ cho mobile').toHaveAttribute('data-campaigns-tabs', 'mobile-only')
+    await expect(tabs, 'SM @1280: hàng tab ẩn (Sidebar thay thế)').toBeHidden()
     await expect(v.getByRole('link', { name: 'Affiliate' })).toHaveCount(0)
     await expect(v.locator('select[name="type"]')).toHaveCount(0)
     await noPageOverflow(page, 'SM affiliate 1280')
+    await page.setViewportSize(DEVICES.m390)
+    await expect(tabs, 'SM @390: hàng tab hiện').toBeVisible()
+    await expect(tabs.getByRole('link', { name: 'Affiliate' })).toHaveAttribute('aria-current', 'page')
+    await expect(v.getByRole('link', { name: '← Doanh số' })).toBeVisible()
+    await noPageOverflow(page, 'SM affiliate 390')
+    expect(writes, 'SM chỉ đọc').toEqual([])
   })
 })

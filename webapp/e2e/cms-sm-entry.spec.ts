@@ -6,11 +6,13 @@ import { trapWrites } from './fixtureGuard'
 import { SM_CMS_ENTRY_HREF, smCmsEntryVisible } from '../lib/cms/access'
 import { cmsFlagsFromEnv } from '../lib/cms/flags'
 import { SUPER_ADMIN_EMAILS } from '../lib/authz'
+import { campaignNavItems } from '../lib/layout/campaignNav'
 
 // SM-CMS-ENTRY-1 (work order PM 11/11 `planning/research/cms-sm-entry-work-order-2026-11-11.md`): nút "CMS sản phẩm" cạnh
 // "Lịch sử chiến dịch" ở header landing /targets của SM ⇒ /targets/campaigns/cms (A1 chỉ đọc, phạm vi RLS hiện có).
-// Phần thuần (không server): ma trận vai × cờ (AC01 / AC02 / AC06), khoá nguồn (chỉ landing SM, anchor thường, Sidebar /
-// BottomNav / campaignNav không đổi — D03). Fixture /ui-catalog/kpi-v2/sm `&cms=1` (opt-in): vị trí / href / trạng thái rỗng
+// Phần thuần (không server): ma trận vai × cờ (AC01 / AC02 / AC06), khoá nguồn (nút chỉ ở landing SM, anchor thường; Sidebar /
+// BottomNav / campaignNav không mang nút — nhóm Sidebar "Chiến dịch" của SM theo SM-NAV-D01, 12/11, thay nhánh SM của D03).
+// Fixture /ui-catalog/kpi-v2/sm `&cms=1` (opt-in): vị trí / href / trạng thái rỗng
 // / lỗi (AC01 / AC07), tương tác document + Back + bàn phím + tab mới (AC03), bố cục 360 / 390 / 1280 × sáng / tối (AC04).
 // Route thật theo phiên (AC05 / AC06): SM thấy nút theo cờ server, vào A1 chỉ đọc; staff / QLCH / super không có nút.
 // Fixture KHÔNG chứng minh RLS của tài khoản thật.
@@ -105,12 +107,27 @@ test.describe('SM-CMS-ENTRY-1 · phần thuần + nguồn @desktop', () => {
     expect(src('app/(dashboard)/ui-catalog/kpi-v2/sm/page.tsx')).toContain("const cmsEntry = cms === '1'")
   })
 
-  test('D03 giữ nguyên: Sidebar / BottomNav / campaignNav không nhận lối mới; nhóm Chiến dịch vẫn chỉ role admin', () => {
+  // SM-CAMPAIGN-NAV-1 (work order PM 12/11, SM-NAV-D01 thay nhánh SM của UI-NAV-D03): SM nhận nhóm Sidebar "Chiến dịch" theo cờ ∩
+  // quyền hiện có; nút landing vẫn chỉ ở SmTargetsLandingView. Kiểm HÀNH VI của model (không khoá chuỗi nguồn): SM dương, cờ tắt,
+  // vai âm. BottomNav không đổi (không mang nút / nhóm).
+  test('SM-NAV-D01: nút entry chỉ ở landing (Sidebar / BottomNav / campaignNav không mang nút); nhóm Chiến dịch cho SM theo cờ, vai khác không', () => {
     for (const f of ['components/layout/Sidebar.tsx', 'components/layout/BottomNav.tsx', 'lib/layout/campaignNav.ts', 'lib/layout/campaignNavServer.ts', 'app/(dashboard)/layout.tsx']) {
       const s = src(f)
       for (const needle of ['smCmsEntryVisible', 'SM_CMS_ENTRY_HREF', 'data-sm-cms-entry']) expect(s, `${f} chứa ${needle}`).not.toContain(needle)
     }
-    expect(src('lib/layout/campaignNav.ts')).toContain("if (p.role !== 'admin' || p.isFsStore) return []")
+    expect(src('components/layout/BottomNav.tsx'), 'BottomNav không nhận nhóm Chiến dịch').not.toContain('campaignNav')
+    const on = { isSuper: false, isFsStore: false, kpiCampaignEnabled: true, kpiAffiliateEnabled: true, cmsProgramEnabled: true, affiliateDeptAdmin: false }
+    const keysOf = (p: Parameters<typeof campaignNavItems>[0]) => campaignNavItems(p).map((i) => i.key)
+    // SM dương: đủ ba đích; cùng href nút landing cho CMS.
+    expect(keysOf({ ...on, role: 'sm', cmsAdminView: true })).toEqual(['kpi', 'affiliate', 'cms'])
+    expect(campaignNavItems({ ...on, role: 'sm', cmsAdminView: true }).find((i) => i.key === 'cms')?.href).toBe(SM_CMS_ENTRY_HREF)
+    // Cờ tắt: CMS_PROGRAM_ENABLED tắt ⇒ không mục CMS (giống nút landing); mọi cờ tắt ⇒ không nhóm.
+    expect(keysOf({ ...on, role: 'sm', cmsAdminView: true, cmsProgramEnabled: false })).toEqual(['kpi', 'affiliate'])
+    expect(keysOf({ ...on, role: 'sm', cmsAdminView: true, kpiCampaignEnabled: false, kpiAffiliateEnabled: false, cmsProgramEnabled: false })).toEqual([])
+    // Vai âm: staff / QLCH (OS hay FS) không nhận nhóm dù mọi cờ bật.
+    for (const role of ['staff', 'store_manager']) for (const isFsStore of [false, true]) {
+      expect(keysOf({ ...on, role, isFsStore, cmsAdminView: false }), `${role} fs=${isFsStore}`).toEqual([])
+    }
   })
 })
 

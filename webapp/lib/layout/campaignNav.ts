@@ -27,18 +27,33 @@ export interface CampaignNavInput {
   cmsProgramEnabled: boolean
   /** Kết quả `opsSidebarVisible` của layout (admin PHÒNG được cấp quyền Affiliate, không phải super, đã gồm cờ). */
   affiliateDeptAdmin: boolean
-  /** `canViewCmsAdmin(role, email)` — với role admin chỉ super (SM cũng true nhưng SM không nhận nhóm Sidebar). */
+  /** `canViewCmsAdmin(role, email)` — với role admin chỉ super; SM cũng true (A1 / A3 chỉ đọc theo vùng). */
   cmsAdminView: boolean
 }
 
 /**
- * Mục nhóm "Chiến dịch" theo thứ tự KPI → Affiliate → CMS, đã lọc theo quyền ∩ cờ. Chỉ role admin (SM / QLCH / staff / FS: rỗng).
+ * Mục nhóm "Chiến dịch" theo thứ tự KPI → Affiliate → CMS, đã lọc theo quyền ∩ cờ. Role admin và SM; QLCH / staff / FS: rỗng.
+ * Admin:
  * - Chiến dịch KPI: super + KPI_CAMPAIGN_ENABLED.
  * - Affiliate: super + KPI_CAMPAIGN_ENABLED + KPI_AFFILIATE_ENABLED; hoặc admin phòng được cấp quyền (đã gồm cờ).
  * - CMS sản phẩm: admin + canViewCmsAdmin + CMS_PROGRAM_ENABLED — ĐỘC LẬP cờ KPI / Affiliate.
+ * SM (SM-CAMPAIGN-NAV-1, SM-NAV-D01 — thay nhánh SM của UI-NAV-D03): cùng ba đích, CHỈ ĐỌC theo vùng. Đây chỉ là lối vào;
+ * route tự kiểm quyền / phạm vi như trước (canViewCampaignDashboard, overviewPageScope 'os-assigned', canViewCmsAdmin + RLS).
+ * Không suy từ isSuper / affiliateDeptAdmin (hai giá trị này không áp cho SM), không query thêm.
+ * - Chiến dịch KPI: KPI_CAMPAIGN_ENABLED.
+ * - Affiliate: KPI_CAMPAIGN_ENABLED + KPI_AFFILIATE_ENABLED (cùng cổng cờ của route).
+ * - CMS sản phẩm: canViewCmsAdmin + CMS_PROGRAM_ENABLED — ĐỘC LẬP cờ KPI / Affiliate.
  */
 export function campaignNavItems(p: CampaignNavInput): CampaignNavItem[] {
-  if (p.role !== 'admin' || p.isFsStore) return []
+  if (p.isFsStore) return []
+  if (p.role === 'sm') {
+    const sm: CampaignNavItem[] = []
+    if (p.kpiCampaignEnabled) sm.push(CAMPAIGN_NAV_ITEMS.kpi)
+    if (p.kpiCampaignEnabled && p.kpiAffiliateEnabled) sm.push(CAMPAIGN_NAV_ITEMS.affiliate)
+    if (p.cmsAdminView && p.cmsProgramEnabled) sm.push(CAMPAIGN_NAV_ITEMS.cms)
+    return sm
+  }
+  if (p.role !== 'admin') return []
   const out: CampaignNavItem[] = []
   if (p.isSuper && p.kpiCampaignEnabled) out.push(CAMPAIGN_NAV_ITEMS.kpi)
   if ((p.isSuper && p.kpiCampaignEnabled && p.kpiAffiliateEnabled) || (!p.isSuper && p.affiliateDeptAdmin)) out.push(CAMPAIGN_NAV_ITEMS.affiliate)
@@ -47,8 +62,9 @@ export function campaignNavItems(p: CampaignNavInput): CampaignNavItem[] {
 }
 
 /**
- * Hàng tab chuyển module trong trang (CampaignsTabs) có được ẩn ở desktop không: CHỈ khi người xem là admin và Sidebar đã có
+ * Hàng tab chuyển module trong trang (CampaignsTabs) có được ẩn ở desktop không: CHỈ khi Sidebar của người xem (admin / SM) đã có
  * ĐỦ mọi đích của hàng tab đó (tab "Chiến dịch" luôn có; Affiliate / CMS theo prop của trang). Thiếu một đích ⇒ giữ tabs.
+ * Mobile (< 768px, không Sidebar) luôn giữ tabs.
  */
 export function campaignTabsReplacedBySidebar(
   items: CampaignNavItem[],

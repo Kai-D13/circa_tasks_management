@@ -86,7 +86,7 @@ export function CampaignListView({
   hasAny: boolean
   campaignsError: string | null
   sideError: string | null
-  /** UI-NAV U1: ẩn hàng tab chuyển module ở desktop — page server tính (campaignTabsDesktopReplaced); mặc định false (fixture / SM). */
+  /** UI-NAV U1: ẩn hàng tab chuyển module ở desktop — page server tính (campaignTabsDesktopReplaced: super / SM); mặc định false (fixture). */
   tabsDesktopReplaced?: boolean
 }) {
   const tabHref = (k: string) => k === 'all' ? '/targets/campaigns' : `/targets/campaigns?status=${k}`

@@ -120,6 +120,47 @@ test.describe('UI-NAV fixture khung điều hướng — vai không có tài kho
       await open(page, 'as=fs-staff', false)
       await expect(page.locator('#sidebar-nav')).toHaveCount(0)
     })
+
+    // SM-CAMPAIGN-NAV-1 (work order PM 12/11, SM-NAV-D01): SM nhận nhóm "Chiến dịch" theo cờ ∩ quyền hiện có; Doanh số giữ nguyên.
+    // AC02: 0 mục ⇒ không nhóm rỗng · 1 mục ⇒ link đơn đúng tên · ≥ 2 ⇒ accordion. Bằng chứng TRÌNH BÀY (hồ sơ SM giả).
+    test('SM: nhóm "Chiến dịch" theo cờ — ≥ 2 mục accordion, 1 mục link đơn, 0 mục không nhóm; Doanh số luôn còn; rail có tên truy cập', async ({ page }) => {
+      const K = '/targets/campaigns', A = '/targets/campaigns/affiliate', C = '/targets/campaigns/cms'
+      const cases: [string, string[], 'group' | 'single' | 'none'][] = [
+        ['', [K, A, C], 'group'],
+        ['cms=0', [K, A], 'group'],
+        ['aff=0', [K, C], 'group'],
+        ['kpi=0', [C], 'single'], // Affiliate cần cả KPI ⇒ chỉ còn CMS
+        ['kpi=0&cms=0', [], 'none'],
+        ['kpi=0&aff=0&cms=0', [], 'none'],
+      ]
+      for (const [q, hrefs, kind] of cases) {
+        await open(page, `as=sm${q ? `&${q}` : ''}`, false)
+        const group = page.locator('#sidebar-nav [data-sidebar-group="campaigns"]')
+        await expect(page.locator('#sidebar-nav a[href="/targets"]'), `${q || 'mọi cờ bật'}: mục Doanh số phải còn`).toHaveCount(1)
+        if (kind === 'group') {
+          await expect(group, `${q || 'mọi cờ bật'}: accordion`).toHaveCount(1)
+          const btn = group.locator('button').first()
+          await expect(btn).toHaveText(/^Chiến dịch$/)
+          await expect(btn, 'trang ngoài module: nhóm đóng').toHaveAttribute('aria-expanded', 'false')
+          await btn.click()
+          await expect(btn).toHaveAttribute('aria-expanded', 'true')
+          expect(await page.locator('#sidebar-campaigns-sub a').evaluateAll((as) => as.map((a) => a.getAttribute('href'))), `${q || 'mọi cờ bật'}: mục con`).toEqual(hrefs)
+        } else {
+          await expect(group, `${q}: không accordion`).toHaveCount(0)
+          expect(await page.locator(`#sidebar-nav ${CAMP}`).evaluateAll((as) => as.map((a) => a.getAttribute('href'))), `${q}: link chiến dịch`).toEqual(hrefs)
+          if (kind === 'single') await expect(page.locator(`#sidebar-nav a[href="${C}"]`)).toHaveText(/^\s*CMS sản phẩm\s*$/)
+        }
+      }
+      // Rail 64 px: nút nhóm có tên truy cập; bấm ⇒ mở Sidebar + bung nhóm (không điều hướng).
+      await open(page, 'as=sm&collapsed=1', false)
+      const btn = page.locator('#sidebar-nav [data-sidebar-group="campaigns"] button').first()
+      await expect(btn).toHaveAttribute('aria-label', 'Chiến dịch')
+      const url = page.url()
+      await btn.click()
+      await expect(btn).toHaveAttribute('aria-expanded', 'true')
+      expect(page.url(), 'bấm nút nhóm không được điều hướng').toBe(url)
+      expect(await page.locator('#sidebar-campaigns-sub a').evaluateAll((as) => as.map((a) => a.getAttribute('href')))).toEqual([K, A, C])
+    })
   })
 
   test.describe('BottomNav + <main> mobile 390, safe-area 0 / 34', () => {

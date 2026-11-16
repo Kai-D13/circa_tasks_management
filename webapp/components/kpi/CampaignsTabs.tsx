@@ -9,8 +9,8 @@ import { cn } from '@/lib/utils'
 // bật ⇒ vẫn null như cũ (KPI giữ nguyên).
 // CMS-UI-1: `hrefs` (tuỳ chọn, chỉ fixture /ui-catalog) đổi đích link để demo không rời catalog; route thật không truyền ⇒ y cũ.
 // UI-NAV U1 (PM spec §3.3): `desktopSidebarReplacement` — prop TRÌNH BÀY do page server tính (campaignTabsDesktopReplaced:
-// admin + Sidebar có đủ mọi đích của hàng tab này). true ⇒ ẩn hàng tab từ breakpoint md (768px) — mobile (không Sidebar) vẫn có.
-// Mặc định false: fixture / SM / thiếu đích ⇒ giữ tabs.
+// admin / SM có Sidebar đủ mọi đích của hàng tab này). true ⇒ ẩn hàng tab từ breakpoint md (768px) — mobile (không Sidebar) vẫn có.
+// Mặc định false: fixture / thiếu đích ⇒ giữ tabs.
 export function CampaignsTabs({ active, affiliateEnabled, cmsEnabled = false, hrefs, desktopSidebarReplacement = false }: {
   active: 'campaigns' | 'affiliate' | 'cms'
   affiliateEnabled: boolean
