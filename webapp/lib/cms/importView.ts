@@ -3,6 +3,7 @@
 // CMS đơn giản S1 / S2 (PM r1 08/11 §4–§5): loại file 'simple' (7 cột mức cố định) + kết quả kiểm K theo dữ liệu bán (khi cờ
 // CMS_IMPORT_V2_ENABLED bật). Nhãn trạng thái K: xác nhận tay KHÔNG bao giờ hiện là "KHỚP".
 import type { StatusTone } from '@/components/ds/StatusBadge'
+import type { CmsImportIssueSummaryItem } from '@/lib/cms/import/issueSummary'
 
 export interface CmsPreviewIssue {
   excelRow: number | null
@@ -57,6 +58,8 @@ export interface CmsPreviewResult {
   supplement?: { baseQuantity: boolean; advice: boolean }
   /** S2: kết quả kiểm K (chỉ khi cờ v2). */
   kCheck?: CmsPreviewKCheck
+  /** F-C: tóm tắt lỗi theo (mã, cột) — server dẫn xuất từ groupsRejected (thiếu ở phản hồi cũ ⇒ không hiện tóm tắt). */
+  issueSummary?: CmsImportIssueSummaryItem[]
 }
 
 export type CmsKStatusView = 'MATCH' | 'PROPOSED' | 'MISMATCH' | 'SOURCE_CONFLICT' | 'SOURCE_ERROR' | 'NO_EVIDENCE' | 'UNAVAILABLE'
@@ -73,7 +76,11 @@ export interface CmsPreviewKResult {
 }
 export interface CmsPreviewKCheck { asOf: string | null; available: boolean; reason: string | null; products: CmsPreviewKResult[] }
 
-export interface CmsRouteError { ok: false; code: string; message: string | null; missing?: string[]; duplicate?: string[]; column?: string }
+export interface CmsRouteError {
+  ok: false; code: string; message: string | null; missing?: string[]; duplicate?: string[]; column?: string
+  /** F-B: loại file người dùng đã chọn / loại nhận diện chắc chắn (chỉ ở lỗi đọc file — WRONG_FORMAT có cả hai). */
+  expectedFormat?: 'tiers' | 'simple'; detectedFormat?: 'tiers' | 'simple'
+}
 
 export const CMS_K_VIEW: Record<CmsKStatusView, { label: string; tone: StatusTone }> = {
   MATCH: { label: 'KHỚP', tone: 'success' },

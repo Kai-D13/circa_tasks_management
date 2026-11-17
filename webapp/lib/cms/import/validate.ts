@@ -226,7 +226,6 @@ export function validateCmsImport(rows: readonly CmsImportRawRow[], ctx: CmsImpo
     const pRow = items[0].row.excelRow
     const p: Pending = { key, items, errors }
     pend.push(p)
-    if (errors.length) continue
     // Nhất quán trong nhóm.
     const checks: [CmsImportColumn, unknown[]][] = [
       ['KPI_Target_GMV_VND', items.map((i) => i.target?.toString() ?? null)],
@@ -235,34 +234,59 @@ export function validateCmsImport(rows: readonly CmsImportRawRow[], ctx: CmsImpo
       ['base_quantity_CMS', items.map((i) => i.baseQty?.toString() ?? null)],
       ['Noi_dung_tu_van', items.map((i) => i.advice)],
     ]
-    for (const [col, vals] of checks) {
-      if (!sameAll(vals)) errors.push(ISSUE(pRow, col, 'GROUP_INCONSISTENT', `Các dòng cùng ProductID khác nhau ở cột ${col}`, `Thống nhất ${col} cho mọi bậc của sản phẩm`))
-    }
-    // Gate.
-    const { target, type } = items[0]
-    let gmvBasis: CmsGmvBasis = 'none'
-    if (target !== null && type === 'GMV_THEO_PRODUCTID') gmvBasis = 'product'
-    else if (target !== null && type === 'GMV_TOAN_DANH_MUC') gmvBasis = 'catalog'
-    else if (target === null && type !== null) errors.push(ISSUE(pRow, 'KPI_Target_GMV_VND', 'GATE_MISSING_TARGET', 'Có loại CMS GMV nhưng thiếu target', 'Nhập KPI_Target_GMV_VND hoặc để trống cả hai cột'))
-    else if (target !== null && type === null) errors.push(ISSUE(pRow, 'Loai_CMS_GMV', 'GATE_MISSING_TYPE', 'Có target nhưng thiếu loại CMS GMV', 'Chọn GMV_THEO_PRODUCTID hoặc GMV_TOAN_DANH_MUC'))
-    // Bậc.
-    const tiers = [...items].sort((a, b) => (a.from! < b.from! ? -1 : a.from! > b.from! ? 1 : 0))
-    if (tiers[0].from !== BigInt(1)) errors.push(ISSUE(tiers[0].row.excelRow, 'Tu_SL_ban', 'TIER_NOT_FROM_ONE', 'Bậc đầu phải bắt đầu từ 1', 'Sửa Tu_SL_ban của bậc đầu = 1'))
-    tiers.forEach((t, i) => {
-      const last = i === tiers.length - 1
-      if (!last && t.to === null) errors.push(ISSUE(t.row.excelRow, 'Den_SL_ban', 'TIER_OPEN_NOT_LAST', 'Chỉ bậc cuối được để trống Den_SL_ban', 'Nhập Den_SL_ban cho bậc này'))
-      if (!last && t.to !== null) {
-        const next = tiers[i + 1].from!
-        if (next <= t.to) errors.push(ISSUE(tiers[i + 1].row.excelRow, 'Tu_SL_ban', 'TIER_OVERLAP', 'Bậc chồng lên bậc trước', `Sửa Tu_SL_ban = ${t.to + BigInt(1)}`))
-        else if (next > t.to + BigInt(1)) errors.push(ISSUE(tiers[i + 1].row.excelRow, 'Tu_SL_ban', 'TIER_GAP', 'Bậc bị hở so với bậc trước', `Sửa Tu_SL_ban = ${t.to + BigInt(1)}`))
+    const consistency = (skip: ReadonlySet<CmsImportColumn | null>) => {
+      for (const [col, vals] of checks) {
+        if (!skip.has(col) && !sameAll(vals)) errors.push(ISSUE(pRow, col, 'GROUP_INCONSISTENT', `Các dòng cùng ProductID khác nhau ở cột ${col}`, `Thống nhất ${col} cho mọi bậc của sản phẩm`))
       }
-    })
+    }
+    // Gate. F-C (PM 17/11 §5): cách sửa có điều kiện — không kết luận mọi file phải bỏ target.
+    const gate = (): CmsGmvBasis => {
+      const { target, type } = items[0]
+      if (target !== null && type === 'GMV_THEO_PRODUCTID') return 'product'
+      if (target !== null && type === 'GMV_TOAN_DANH_MUC') return 'catalog'
+      if (target === null && type !== null) errors.push(ISSUE(pRow, 'KPI_Target_GMV_VND', 'GATE_MISSING_TARGET', 'Có loại CMS GMV nhưng thiếu target', 'Nếu chương trình không xét target: để trống cả hai cột KPI_Target_GMV_VND và Loai_CMS_GMV; nếu có target: nhập KPI_Target_GMV_VND hợp lệ'))
+      else if (target !== null && type === null) errors.push(ISSUE(pRow, 'Loai_CMS_GMV', 'GATE_MISSING_TYPE', 'Có target nhưng thiếu loại CMS GMV', 'Chọn GMV_THEO_PRODUCTID hoặc GMV_TOAN_DANH_MUC'))
+      return 'none'
+    }
+    // Bậc.
+    const tierChecks = () => {
+      const tiers = [...items].sort((a, b) => (a.from! < b.from! ? -1 : a.from! > b.from! ? 1 : 0))
+      if (tiers[0].from !== BigInt(1)) errors.push(ISSUE(tiers[0].row.excelRow, 'Tu_SL_ban', 'TIER_NOT_FROM_ONE', 'Bậc đầu phải bắt đầu từ 1', 'Sửa Tu_SL_ban của bậc đầu = 1'))
+      tiers.forEach((t, i) => {
+        const last = i === tiers.length - 1
+        if (!last && t.to === null) errors.push(ISSUE(t.row.excelRow, 'Den_SL_ban', 'TIER_OPEN_NOT_LAST', 'Chỉ bậc cuối được để trống Den_SL_ban', 'Nhập Den_SL_ban cho bậc này'))
+        if (!last && t.to !== null) {
+          const next = tiers[i + 1].from!
+          if (next <= t.to) errors.push(ISSUE(tiers[i + 1].row.excelRow, 'Tu_SL_ban', 'TIER_OVERLAP', 'Bậc chồng lên bậc trước', `Sửa Tu_SL_ban = ${t.to + BigInt(1)}`))
+          else if (next > t.to + BigInt(1)) errors.push(ISSUE(tiers[i + 1].row.excelRow, 'Tu_SL_ban', 'TIER_GAP', 'Bậc bị hở so với bậc trước', `Sửa Tu_SL_ban = ${t.to + BigInt(1)}`))
+        }
+      })
+      return tiers
+    }
     // Nguồn / phạm vi.
+    const sourceChecks = (pid: string) => {
+      const pm = ctx.productMaster.get(pid)
+      if (!pm) errors.push(ISSUE(pRow, 'ProductID', 'PRODUCT_NOT_FOUND', 'ProductID không có trên Product Master', 'Kiểm tra lại mã hoặc chờ Product Master đồng bộ'))
+      if (ctx.conflictProductIds.has(pid)) errors.push(ISSUE(pRow, 'ProductID', 'PRODUCT_CONFLICT', 'ProductID đã thuộc chương trình khác đã kích hoạt có ngày giao nhau', 'Bỏ sản phẩm này hoặc đổi khoảng ngày chương trình'))
+      if (ctx.mode === 'append' && ctx.existingProductIds.has(pid)) errors.push(ISSUE(pRow, 'ProductID', 'PRODUCT_EXISTS_STARTED', 'Chương trình đã bắt đầu: không sửa / nạp lại sản phẩm đã có', 'Chỉ thêm ProductID mới'))
+      return pm
+    }
+    if (errors.length) {
+      // F-C (PM 17/11 §5): nhóm đã có lỗi ô vẫn chạy các kiểm ĐỘC LẬP trên cột KHÔNG có lỗi ô (vd. 64 ô K công thức VÀ 83 dòng thiếu
+      // target cùng hiện). Nhóm vẫn bị loại ⇒ không đổi payload / digest / stats; không tự sửa ô nào.
+      const bad = new Set(errors.map((e) => e.column))
+      consistency(bad)
+      if (!bad.has('KPI_Target_GMV_VND') && !bad.has('Loai_CMS_GMV') && sameAll(checks[0][1]) && sameAll(checks[1][1])) gate()
+      if (!bad.has('Tu_SL_ban') && !bad.has('Den_SL_ban') && items.every((i) => i.from !== null)) tierChecks()
+      if (!bad.has('ProductID') && items[0].productId) sourceChecks(items[0].productId)
+      continue
+    }
+    consistency(new Set())
+    const gmvBasis = gate()
+    const { target } = items[0]
+    const tiers = tierChecks()
     const pid = items[0].productId!
-    const pm = ctx.productMaster.get(pid)
-    if (!pm) errors.push(ISSUE(pRow, 'ProductID', 'PRODUCT_NOT_FOUND', 'ProductID không có trên Product Master', 'Kiểm tra lại mã hoặc chờ Product Master đồng bộ'))
-    if (ctx.conflictProductIds.has(pid)) errors.push(ISSUE(pRow, 'ProductID', 'PRODUCT_CONFLICT', 'ProductID đã thuộc chương trình khác đã kích hoạt có ngày giao nhau', 'Bỏ sản phẩm này hoặc đổi khoảng ngày chương trình'))
-    if (ctx.mode === 'append' && ctx.existingProductIds.has(pid)) errors.push(ISSUE(pRow, 'ProductID', 'PRODUCT_EXISTS_STARTED', 'Chương trình đã bắt đầu: không sửa / nạp lại sản phẩm đã có', 'Chỉ thêm ProductID mới'))
+    const pm = sourceChecks(pid)
     if (errors.length || !pm) continue
     // Cảnh báo.
     const warnings: CmsImportIssue[] = []

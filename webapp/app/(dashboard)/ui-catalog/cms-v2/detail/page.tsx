@@ -12,6 +12,7 @@ import { cmsDisplayStatus } from '@/lib/cms/programStatus'
 import { cmsFixtureNav } from '@/lib/cms/fixtureNav'
 import type { CmsResultsLoad } from '@/lib/cms/resultUi'
 import { CMS_FX_REPORT_PROGRAM, cmsFxContract, cmsFxContractBasis } from '@/lib/cms/fixturesContract'
+import { cmsRevisionDetailLinks } from '@/lib/cms/revision/model'
 
 // Dev-only fixture A3 — ĐÚNG CmsProgramDetailView của route thật, dữ liệu giả (kịch bản lib/cms/fixtureScenario — số do engine
 // tính). Kích hoạt / tải file đi qua useFixtureActionBlocked ⇒ 0 request ghi / export. Cổng: UI_CATALOG=1 + super admin.
@@ -59,6 +60,14 @@ export default async function CmsDetailFixture({ searchParams }: { searchParams:
     ? { data: cmsFxPayout(p3, prog.id), error: p3 === 'locked-error' ? 'QUERY_FAILED' : null }
     : !p3 && scenario && display === 'locked' ? { data: cmsFxPayout(sm ? 'locked-sm' : 'locked', prog.id), error: null } : null
   const nav = cmsFixtureNav(sp, sm ? { as: 'sm' } : {})
+  // r3 (PM P1-02): &rev= giả lập cổng ĐỌC mở (DB 131) qua ĐÚNG hàm dựng link của route thật — write-off (đã sửa + đang che số, cờ ghi
+  // TẮT ⇒ có Lịch sử, KHÔNG nút Sửa) · write-on (cờ ghi bật, chưa sửa ⇒ chỉ nút Sửa) · state-error (không đọc được trạng thái ⇒ vẫn có Lịch sử).
+  const revFx = one('rev')
+  const revision = sm || !revFx ? null : revFx === 'write-off'
+    ? cmsRevisionDetailLinks({ programId: prog.id, status: prog.status, writable: false, state: { ok: true, data: { revised: true, masked: true, lastRevisedAt: '2026-11-17T08:05:00.000Z' } } })
+    : revFx === 'write-on'
+      ? cmsRevisionDetailLinks({ programId: prog.id, status: prog.status, writable: true, state: { ok: true, data: { revised: false, masked: false, lastRevisedAt: null } } })
+      : revFx === 'state-error' ? cmsRevisionDetailLinks({ programId: prog.id, status: prog.status, writable: false, state: { ok: false } }) : null
   const page = Number(one('page'))
   return (
     <KpiFixtureBoundary>
@@ -68,7 +77,8 @@ export default async function CmsDetailFixture({ searchParams }: { searchParams:
             eligibleStaffIds={results ? cmsFxEligibleStaff(viewer, detail.storeIds) : null} storeNames={CMS_FX_STORE_NAMES} staffPage={page > 0 ? page : 1}
             lock={lock} payout={payout} nav={nav}
             basis={contractFx ? cmsFxContractBasis(contractFx.fx.row.id) : undefined}
-            returnsHref={!sm && one('ret') === '1' && (contractFx || prog.id === CMS_FX_REPORT_PROGRAM) ? `/targets/campaigns/cms/${prog.id}/returns` : null} />
+            returnsHref={!sm && one('ret') === '1' && (contractFx || prog.id === CMS_FX_REPORT_PROGRAM) ? `/targets/campaigns/cms/${prog.id}/returns` : null}
+            revision={revision} />
         )}
       </div>
     </KpiFixtureBoundary>

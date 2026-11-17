@@ -13,6 +13,9 @@ import { CmsProgramDetailView, type CmsDetailView } from '@/components/cms/admin
 import { cmsBasisEnv, cmsProgramBasisFor } from '@/lib/cms/server/basisEnv'
 import { getCmsCapabilityState } from '@/lib/cms/server/capabilities'
 import { cmsReturnsPageEnabled } from '@/lib/cms/server/returnsLoad'
+import { cmsRevisionEnabled, cmsRevisionReadable } from '@/lib/cms/server/revisionCaps'
+import { cmsLoadRevisionState } from '@/lib/cms/server/revisionLoad'
+import { cmsRevisionDetailLinks, type CmsRevisionDetailLinks } from '@/lib/cms/revision/model'
 
 // CMS P1-c · A3 /targets/campaigns/cms/[id]. Cổng như A1 (cờ + super / SM). Chương trình ngoài phạm vi RLS (kể cả QA không
 // marker — H9b) ⇒ 404 như không tồn tại. SM chỉ đọc. Lỗi truy vấn ⇒ ErrorState (không danh mục rỗng giả).
@@ -74,9 +77,17 @@ export default async function CmsProgramPage({ params, searchParams }: {
   // P5.5: trang Trả hàng (đối soát + báo cáo sau chốt) — chỉ super, cờ đọc kết quả, DB có đường returns_ledger.
   const caps = canManage && cmsReturnsPageEnabled() ? await getCmsCapabilityState() : null
   const returnsHref = caps?.kind === 'ok' && caps.caps.paths.returns_ledger ? `/targets/campaigns/cms/${prog.id}/returns` : null
+  // F-A: sửa có version. r3 (PM P1-02): tách cổng — ĐỌC (trạng thái che số + link Lịch sử sửa) = super + module CMS + DB 131, không phụ
+  // thuộc cờ ghi; GHI (nút Sửa) = thêm cờ CMS_PROGRAM_REVISION_ENABLED. DB 130 ⇒ cả hai false, không gọi RPC 131. Trạng thái đọc bằng
+  // session; lỗi đọc ⇒ vẫn hiện link Lịch sử sửa (trang lịch sử tự báo lỗi, không giả "chưa sửa").
+  let revision: CmsRevisionDetailLinks | null = null
+  if (canManage && (await cmsRevisionReadable())) {
+    const [st, writable] = await Promise.all([cmsLoadRevisionState(prog.id), cmsRevisionEnabled()])
+    revision = cmsRevisionDetailLinks({ programId: prog.id, status: prog.status, writable, state: st.ok ? { ok: true, data: st.data } : { ok: false } })
+  }
   return (
     <CmsProgramDetailView detail={res.data} today={today} canManage={canManage} view={v} results={results}
       eligibleStaffIds={eligible} storeNames={storeNames} staffPage={Number.isInteger(pageNum) && pageNum > 0 ? pageNum : 1}
-      lock={lock} payout={payout} basis={basis} returnsHref={returnsHref} />
+      lock={lock} payout={payout} basis={basis} returnsHref={returnsHref} revision={revision} />
   )
 }

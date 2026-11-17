@@ -104,3 +104,16 @@ export function cmsCalcFlags(): CmsCalcFlags {
 export function cmsReturnsPagesFromEnv(env: Env): boolean {
   return cmsCalcFlagsFromEnv(env).returns
 }
+
+/**
+ * F-A sửa chương trình đang chạy có version (PM spec 17/11 §1, Q-235): mặc định OFF, chỉ đúng chuỗi 'true' mới bật; cần
+ * CMS_PROGRAM_ENABLED. Cờ là rollout APP (ẩn entry + route từ chối 404) — KHÔNG thay quyền DB: RPC 131 tự kiểm super và không đọc
+ * được env app, nên cờ OFF không có nghĩa DB cấm super gọi RPC (runbook ghi rõ giới hạn này).
+ */
+export function cmsProgramRevisionFromEnv(env: Env): boolean {
+  return cmsFlagsFromEnv(env).program && env.CMS_PROGRAM_REVISION_ENABLED === 'true'
+}
+
+export function isCmsProgramRevisionEnabled(): boolean {
+  return cmsProgramRevisionFromEnv(process.env)
+}

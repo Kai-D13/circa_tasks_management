@@ -7,7 +7,7 @@ export function CmsWizardShell({ title, subtitle, backHref, backLabel, kind, chi
   subtitle?: string
   backHref: string
   backLabel: string
-  kind: 'new' | 'edit' | 'import'
+  kind: 'new' | 'edit' | 'import' | 'revision'
   children: React.ReactNode
 }) {
   return (
