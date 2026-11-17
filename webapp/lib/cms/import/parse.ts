@@ -45,6 +45,8 @@ export type CmsParseResult =
 
 const canonHeader = (s: string) => s.replace(/\s+/g, ' ').trim().toLowerCase()
 const CANON_TO_COL = new Map(CMS_IMPORT_COLUMNS.map((c) => [canonHeader(c), c]))
+/** Cột hợp đồng 9 cột khớp một ô tiêu đề (cùng chuẩn hoá với parser) — dùng cho nhận diện mẫu (detectFormat.ts). */
+export const cmsImportColumnOf = (header: string): CmsImportColumn | null => CANON_TO_COL.get(canonHeader(header)) ?? null
 
 export function cellOf(ws: XLSX.WorkSheet, r: number, c: number): XLSX.CellObject | undefined {
   return ws[XLSX.utils.encode_cell({ r, c })] as XLSX.CellObject | undefined

@@ -4,6 +4,7 @@ import {
   CmsRepoError, type CmsImportContextData, type CmsImportRepo, type CmsImportRunRow, type CmsProgramRow,
 } from '@/lib/cms/import/handler'
 import type { CmsProductMasterLite } from '@/lib/cms/import/validate'
+import { getCmsRevisionCapState } from './revisionCaps'
 
 // Repo import CMS bằng service role — CHỈ gọi sau khi lõi route đã kiểm cờ + super admin + namespace QA.
 // Ghi qua RPC 121 (atomic, kiểm lại trong transaction); đọc tra cứu trực tiếp. Lỗi chỉ trả MÃ (RAISE CMS_* hoặc mã
@@ -76,11 +77,16 @@ export const supabaseCmsImportRepo: CmsImportRepo = {
       .in('status', ['active', 'locked']).eq('is_test', program.isTest).neq('id', program.id)
       .lte('start_date', program.endDate).gte('end_date', program.startDate)
       .order('id').range(from, to).abortSignal(sig()))).map((r) => r.id)
+    // F-A (131): SP đã retire ở chương trình khác không còn hiệu lực ⇒ không tính trùng (cùng cms__conflicts 131). DB chưa có / năng lực
+    // lệch ⇒ không lọc (chặt hơn DB — chỉ có thể báo trùng thừa; RPC kiểm lại dưới khoá).
+    const effectiveOnly = otherIds.length > 0 && (await getCmsRevisionCapState()) === 'ok'
     const conflictProductIds = new Set<string>()
     for (const progs of chunks(otherIds, ID_CHUNK)) {
       for (const ids of chunks(productIds, ID_CHUNK)) {
-        const rows = await readAll<{ product_id: string }>((from, to) => supabaseAdmin.from('cms_program_products').select('product_id')
-          .in('program_id', progs).in('product_id', ids).order('program_id').order('product_id').range(from, to).abortSignal(sig()))
+        const rows = await readAll<{ product_id: string }>((from, to) => {
+          const q = supabaseAdmin.from('cms_program_products').select('product_id').in('program_id', progs).in('product_id', ids)
+          return (effectiveOnly ? q.is('retired_at', null) : q).order('program_id').order('product_id').range(from, to).abortSignal(sig())
+        })
         for (const r of rows) conflictProductIds.add(r.product_id)
       }
     }

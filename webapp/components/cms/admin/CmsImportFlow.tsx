@@ -68,6 +68,8 @@ export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false, bas
   fixture?: {
     step: Step; result?: CmsPreviewResult; fileName?: string; fileBytes?: number; format?: Format
     recheck?: { kind: 'http-error' } | { kind: 'network' } | { kind: 'timeout' } | { kind: 'ok'; result: CmsPreviewResult }
+    /** F-B: lỗi route dựng sẵn (vd. WRONG_FORMAT) — hiện như phản hồi lỗi thật ở bước tải file. */
+    error?: CmsRouteError
   }
   /** Cờ CMS_IMPORT_V2_ENABLED (server quyết; page truyền xuống). */
   v2?: boolean
@@ -77,7 +79,7 @@ export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false, bas
   const [step, setStep] = useState<Step>(fixture?.step ?? 'upload')
   const [file, setFile] = useState<File | null>(null)
   const [result, setResult] = useState<CmsPreviewResult | null>(fixture?.result ?? null)
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(fixture?.error ? errorText(fixture.error) : null)
   const [committing, setCommitting] = useState(false)
   const [format, setFormat] = useState<Format>(fixture?.format ?? fixture?.result?.format ?? 'tiers')
   const [drafts, setDrafts] = useState<CmsKAckDraft>({})

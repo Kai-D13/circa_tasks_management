@@ -11,6 +11,7 @@ import {
   CMS_FX_PREVIEW_SIMPLE_NOSUPP, CMS_FX_PREVIEW_SIMPLE_UNAVAILABLE, CMS_FX_TODAY,
 } from '@/lib/cms/fixtures'
 import { CMS_FX_PG, cmsFxProgram } from '@/lib/cms/fixtureScenario'
+import { CMS_FX_WRONG_FORMAT_SIMPLE, CMS_FX_WRONG_FORMAT_TIERS, cmsFxPreviewIssues, cmsFxPreviewIssuesPartial } from '@/lib/cms/revision/fixtures'
 import type { CmsInvalidStore } from '@/lib/cms/server/catalog'
 import type { CmsProgramBasis } from '@/lib/cms/calc/basisUi'
 
@@ -27,6 +28,8 @@ import type { CmsProgramBasis } from '@/lib/cms/calc/basisUi'
 //   bắt đầu; mô phỏng mất kết nối). Mô phỏng chạy SAU useFixtureActionBlocked (đếm chặn, 0 request).
 // KACK-LAYOUT-01: result-k-ack-long (CHƯA CÓ BẰNG CHỨNG · ĐÃ XÁC NHẬN TAY, nguồn ngắn / dài / chuỗi liền) · result-k-ack-long-unavailable
 //   (KHÔNG KIỂM ĐƯỢC · ĐÃ XÁC NHẬN TAY).
+// F-B / F-C (PM spec 17/11 §4–§5): upload-wrong-format (chọn "Mức cố định" cho file 9 cột) · upload-wrong-format-simple (ngược lại) ·
+//   result-issues (83 SP: 64 ô K công thức + 83 dòng loại GMV thiếu target cùng hiện) · result-issues-partial (ghi một phần, không tick sẵn).
 const K_ACK_LONG_FX: Record<string, typeof CMS_FX_PREVIEW_K_ACK_LONG> = {
   'result-k-ack-long': CMS_FX_PREVIEW_K_ACK_LONG,
   'result-k-ack-long-unavailable': CMS_FX_PREVIEW_K_ACK_LONG_UNAVAILABLE,
@@ -82,9 +85,12 @@ export default async function CmsWizardFixture({ searchParams }: { searchParams:
   const simple = fx === 'result-simple' ? CMS_FX_PREVIEW_SIMPLE : fx === 'result-simple-unavailable' ? CMS_FX_PREVIEW_SIMPLE_UNAVAILABLE
     : fx === 'result-simple-nok' ? CMS_FX_PREVIEW_SIMPLE_NOSUPP
     : k83 ? { ...CMS_FX_PREVIEW_K83, mode: k83.mode } : K_ACK_LONG_FX[fx] ?? null
-  const v2 = simple !== null || fx === 'upload-v2' || fx === 'upload-simple'
+  const wrong = fx === 'upload-wrong-format' ? CMS_FX_WRONG_FORMAT_TIERS : fx === 'upload-wrong-format-simple' ? CMS_FX_WRONG_FORMAT_SIMPLE : null
+  const v2 = simple !== null || fx === 'upload-v2' || fx === 'upload-simple' || wrong !== null
   const result = simple ?? (fx === 'result-append' ? { ...CMS_FX_PREVIEW, mode: 'append' as const, ignoredFromRow: null }
     : fx === 'result-none' ? { ...CMS_FX_PREVIEW, groupsOk: [], stats: { ...CMS_FX_PREVIEW.stats, rowsOk: 0, productsOk: 0, warnings: 0 } }
+    : fx === 'result-issues' ? cmsFxPreviewIssues(CMS_FX_PREVIEW)
+    : fx === 'result-issues-partial' ? cmsFxPreviewIssuesPartial(CMS_FX_PREVIEW)
     : CMS_FX_PREVIEW)
   const resultB = basisFx?.basis ? { ...result, quantityBasis: basisFx.basis } : result
   return (
@@ -116,10 +122,11 @@ export default async function CmsWizardFixture({ searchParams }: { searchParams:
               mode={fx === 'result-append' || k83?.mode === 'append' ? 'append' : 'replace'}
               fromNew={fx !== 'result-append' && k83?.mode !== 'append'}
               fixture={{
-                step: fx === 'upload' || fx === 'upload-v2' || fx === 'upload-simple' ? 'upload' : fx === 'running' ? 'running' : 'result', result: resultB,
+                step: fx === 'upload' || fx === 'upload-v2' || fx === 'upload-simple' || wrong ? 'upload' : fx === 'running' ? 'running' : 'result', result: resultB,
                 fileName: simple || fx === 'upload-simple' ? 'CMS_muc_co_dinh_thang12.xlsx' : 'Circa_Import_CMS_thang11.xlsx', fileBytes: 48_213,
-                format: simple || fx === 'upload-simple' ? 'simple' : 'tiers',
+                format: simple || fx === 'upload-simple' || fx === 'upload-wrong-format' ? 'simple' : 'tiers',
                 ...(k83 ? { recheck: k83.recheck } : {}),
+                ...(wrong ? { error: wrong } : {}),
               }}
               v2={v2}
               basis={basisFx}

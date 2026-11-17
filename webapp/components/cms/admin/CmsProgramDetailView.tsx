@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { ArrowLeft, Download, Pencil, RotateCcw, Upload } from 'lucide-react'
+import { ArrowLeft, Download, FilePenLine, History, Pencil, RotateCcw, Upload } from 'lucide-react'
 import { StatusBadge } from '@/components/ds/StatusBadge'
 import { Notice } from '@/components/ds/Notice'
 import { EmptyState } from '@/components/ds/EmptyState'
@@ -25,6 +25,7 @@ import { cmsA3Stats, cmsUnassignedSummary, type CmsResultsLoad } from '@/lib/cms
 import { cmsA3ProductVM } from '@/lib/cms/productPresentation'
 import { cmsNavHref, type CmsNav } from '@/lib/cms/fixtureNav'
 import type { CmsResultRowDto } from '@/lib/cms/resultView'
+import type { CmsRevisionState } from '@/lib/cms/revision/model'
 
 // CMS P1-c · A3 /targets/campaigns/cms/[id] (UI §3.3; r2 U1 / U6 / U8 / U17). P1: CHỈ cấu hình — số SP, target, bậc,
 // mức CMS / đơn vị, quy cách, phạm vi, lịch sử import. KHÔNG có ô / cột kết quả thực tế (CMS tạm tính, GMV / SL bán,
@@ -42,8 +43,11 @@ export type CmsDetailView = 'products' | 'staff' | 'runs'
 
 const BTN = 'h-[44px] md:h-[36px] gap-1.5 text-[13px]'
 
-export function CmsProgramDetailView({ detail, today, canManage, view, results = { kind: 'off' }, eligibleStaffIds = null, storeNames = new Map(), staffPage = 1, lock = null, payout = null, nav, basis, returnsHref = null }: {
+export function CmsProgramDetailView({ detail, today, canManage, view, results = { kind: 'off' }, eligibleStaffIds = null, storeNames = new Map(), staffPage = 1, lock = null, payout = null, nav, basis, returnsHref = null, revision = null }: {
   detail: CmsProgramDetail
+  /** F-A: sửa có version (super + DB 131). r3 P1-02: editHref chỉ khi cờ GHI bật + chương trình sửa được; link Lịch sử sửa theo cổng ĐỌC
+   *  (đã có revision, hoặc không đọc được trạng thái ⇒ vẫn hiện để trang lịch sử tự báo lỗi); null ⇒ ẩn hẳn. */
+  revision?: { editHref: string | null; historyHref: string; state: CmsRevisionState | null; stateError?: boolean } | null
   /** CMS-CALC-RET-2 P5.5: link trang Trả hàng (chỉ super + DB có đường returns_ledger); null ⇒ ẩn. */
   returnsHref?: string | null
   /** CMS-CALC-RET-2 P5.1: cách tính + chính sách trả hiện tại (undefined = DB trước 130 ⇒ không hiện). */
@@ -90,7 +94,8 @@ export function CmsProgramDetailView({ detail, today, canManage, view, results =
     catalogTargetGmv: p.catalogTargetGmv, priceText: cmsPrice,
     results: run && loaded ? { rows: rowsByPp.get(x.id) ?? [], catalog: loaded.rows.catalog, users: loaded.rows.users, storeNames } : null,
   }))
-  const showActions = canManage && (actions.edit || actions.importMode || actions.activate || !!returnsHref)
+  const showHistory = !!revision && (!!revision.state?.revised || revision.stateError === true)
+  const showActions = canManage && (actions.edit || actions.importMode || actions.activate || !!returnsHref || !!revision?.editHref || showHistory)
 
   return (
     <div data-ui-v2="page" data-layout-width="fluid" data-cms-detail={display} className="p-4 md:p-6 space-y-4 md:space-y-[18px]">
@@ -130,6 +135,16 @@ export function CmsProgramDetailView({ detail, today, canManage, view, results =
                 <Upload className="h-4 w-4" /> {actions.importMode === 'replace' ? (detail.products.length ? 'Nạp lại danh mục' : 'Nạp danh mục') : 'Import bổ sung'}
               </Link>
             )}
+            {canManage && revision?.editHref && (
+              <Link href={href(revision.editHref)} data-cms-revision-link className={cn(buttonVariants({ variant: 'outline' }), BTN)}>
+                <FilePenLine className="h-4 w-4" /> Sửa danh mục / mức CMS
+              </Link>
+            )}
+            {canManage && revision && showHistory && (
+              <Link href={href(revision.historyHref)} data-cms-revisions-link className={cn(buttonVariants({ variant: 'outline' }), BTN)}>
+                <History className="h-4 w-4" /> Lịch sử sửa
+              </Link>
+            )}
             {canManage && returnsHref && (
               <Link href={href(returnsHref)} data-cms-returns-link className={cn(buttonVariants({ variant: 'outline' }), BTN)}>
                 <RotateCcw className="h-4 w-4" /> Trả hàng
@@ -149,6 +164,14 @@ export function CmsProgramDetailView({ detail, today, canManage, view, results =
         )}
       </div>
 
+      {canManage && revision?.state?.masked && (
+        <Notice tone="info" role="status" title="Đang tính lại sau khi sửa cấu hình">
+          <span data-cms-revision-masked>
+            Chương trình được sửa lúc {cmsDateTime(revision.state.lastRevisedAt)}. Số theo cấu hình cũ không còn hiện hành; hệ thống tính lại cả kỳ ở lượt
+            đồng bộ kế tiếp. Số trước sửa xem trong <Link href={href(revision.historyHref)} className="underline">Lịch sử sửa</Link>.
+          </span>
+        </Notice>
+      )}
       {payout && <CmsPayoutPanel programId={p.id} payout={payout.data} error={payout.error} />}
       {lock && <CmsLockPanel programId={p.id} preview={lock.preview} loadError={lock.error} qaReadonly={lock.qaReadonly === true} />}
       {loaded && <CmsA3SyncLine header={loaded.header} isSuper={canManage} display={display} basisUi={loaded.basisUi} rows={loaded.rows.results} />}

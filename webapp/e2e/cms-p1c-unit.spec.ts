@@ -141,9 +141,10 @@ test.describe('CMS P1-c · kiểm tĩnh @desktop', () => {
   test('route thật không bọc boundary fixture; fixture cms-v2 bọc đủ', () => {
     const routes = walk('app/(dashboard)/targets/campaigns/cms').filter((f) => f.endsWith('page.tsx'))
     // CMS-CALC-RET-2 P5.5: +2 route super "Trả hàng" ([id]/returns, [id]/returns/[reportId]).
-    expect(routes.length).toBe(7)
+    // F-A (17/11): +2 route super sửa chương trình ([id]/revision, [id]/revisions) + 2 fixture tương ứng.
+    expect(routes.length).toBe(9)
     expectBoundaryOnlyInCatalog(routes)
-    for (const f of ['list', 'wizard', 'detail', 'returns']) expectCatalogWrapped(`app/(dashboard)/ui-catalog/cms-v2/${f}/page.tsx`)
+    for (const f of ['list', 'wizard', 'detail', 'returns', 'revision', 'revisions']) expectCatalogWrapped(`app/(dashboard)/ui-catalog/cms-v2/${f}/page.tsx`)
   })
   test('mọi route CMS chặn bởi cờ CMS_PROGRAM_ENABLED + quyền; trang quản lý chỉ super', () => {
     const dir = 'app/(dashboard)/targets/campaigns/cms'
@@ -161,6 +162,28 @@ test.describe('CMS P1-c · kiểm tĩnh @desktop', () => {
       expect(s, f).toContain('if (!cmsReturnsPageEnabled() || !canManageCms(profile?.role, user.email)) notFound()')
       expect(s, f).toContain("caps.kind !== 'ok'")
     }
+    // F-A: sửa chương trình / lịch sử sửa — cờ program + super trước. r3 (PM P1-02): trang SỬA dùng cổng GHI (cờ revision + năng lực 131,
+    // cmsRevisionEnabled); trang LỊCH SỬ dùng cổng ĐỌC (module + năng lực 131, cmsRevisionReadable) — KHÔNG phụ thuộc cờ ghi; sai ⇒ 404.
+    for (const f of ['[id]/revision/page.tsx', '[id]/revisions/page.tsx']) {
+      const s = fs.readFileSync(path.join(ROOT, dir, f), 'utf8')
+      expect(s, f).toContain('if (!(isCmsProgramEnabled() && canManageCms(profile?.role, user.email))) notFound()')
+    }
+    const edit = fs.readFileSync(path.join(ROOT, dir, '[id]/revision/page.tsx'), 'utf8')
+    expect(edit).toContain('if (!(await cmsRevisionEnabled())) notFound()')
+    expect(edit).not.toContain('cmsRevisionReadable')
+    const hist = fs.readFileSync(path.join(ROOT, dir, '[id]/revisions/page.tsx'), 'utf8')
+    expect(hist).toContain('if (!(await cmsRevisionReadable())) notFound()')
+    expect(hist).not.toContain('cmsRevisionEnabled')
+    // Chi tiết: link Lịch sử theo cổng đọc; nút Sửa chỉ khi cổng ghi (writable) — không gộp hai cổng.
+    const detail = fs.readFileSync(path.join(ROOT, dir, '[id]/page.tsx'), 'utf8')
+    expect(detail).toContain('if (canManage && (await cmsRevisionReadable())) {')
+    expect(detail).toContain('cmsRevisionDetailLinks({ programId: prog.id, status: prog.status, writable,')
+    // Cổng đọc / ghi nối đúng hàm thuần cmsRevisionGate (ma trận cờ × năng lực test hành vi ở cms-revision-unit).
+    const caps = fs.readFileSync(path.join(ROOT, 'lib/cms/server/revisionCaps.ts'), 'utf8')
+    expect(caps).toContain("return cmsRevisionGate('read', flagEnv(), getCmsRevisionCapState)")
+    expect(caps).toContain("return cmsRevisionGate('write', flagEnv(), getCmsRevisionCapState)")
+    // Route preview / commit vẫn cổng GHI.
+    expect(fs.readFileSync(path.join(ROOT, 'lib/cms/server/revisionDeps.ts'), 'utf8')).toContain('enabled: cmsRevisionEnabled,')
   })
   test('remotePatterns ảnh CMS đúng host + prefix, không wildcard host', () => {
     const s = fs.readFileSync(path.join(ROOT, 'next.config.ts'), 'utf8')

@@ -14,6 +14,7 @@ import { CMS_GATE_HUE, CMS_GATE_LABEL, cmsBaseQtyLine, cmsPrice, cmsVnd } from '
 import { cmsSimpleSummary, type CmsPreviewResult } from '@/lib/cms/importView'
 import { cmsImportColumnLabel } from '@/lib/cms/import/simpleColumns'
 import { cmsFlatRate, cmsFlatRateText } from '@/lib/cms/flat'
+import { CmsImportIssueSummary } from '@/components/cms/admin/CmsImportIssueSummary'
 
 // CMS P1-c — bước "Kết quả" A2 (UI §3.2 bước 4; r2 U5 / U16): 4 ô, tab hợp lệ / lỗi & cảnh báo, file dòng lỗi, thông
 // báo nội dung sau điểm dừng. Chỉ trình bày kết quả kiểm tra (preview) — không ghi gì. Link file lỗi là GET export ⇒
@@ -54,6 +55,9 @@ export function CmsImportResult({ result }: { result: CmsPreviewResult }) {
             <span data-cms-simple-missing className="mt-1 block">File chưa có cột {[!result.supplement.baseQuantity && 'base_quantity_CMS', !result.supplement.advice && 'Noi_dung_tu_van'].filter(Boolean).join(' và ')} — đọc được nhưng chưa ghi được; thêm cột rồi kiểm tra lại.</span>
           )}
         </Notice>
+      )}
+      {result.issueSummary && result.issueSummary.length > 0 && (
+        <CmsImportIssueSummary items={result.issueSummary} format={result.format} onDetail={() => setTab('errors')} />
       )}
       {result.ignoredFromRow !== null && (
         <Notice tone="warning" icon={AlertTriangle}>Nội dung từ dòng {result.ignoredFromRow} trở đi không được nhập (sau dòng ProductID trống đầu tiên).</Notice>

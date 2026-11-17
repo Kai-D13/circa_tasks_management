@@ -24,6 +24,8 @@ import { cmsApplyBasisUnitCheck } from './basisCheck'
 import type { CmsProgramBasis, CmsQuantityBasis } from '../calc/basisUi'
 import { parseCmsSimpleXlsx } from './parseSimple'
 import { validateCmsSimpleImport } from './validateSimple'
+import { detectCmsImportFormat } from './detectFormat'
+import { cmsImportIssueSummary } from './issueSummary'
 import {
   cmsApplyKCheck, cmsBindKAcks, cmsKClassify, cmsKTargets, cmsParseKAckInput, cmsStoredKAcks,
   type CmsKAck, type CmsKAckInput, type CmsKEvidence, type CmsKResult,
@@ -154,7 +156,7 @@ export type CmsImportErrorCode =
   | CmsParseError
   | 'SHA_MISMATCH' | 'PREVIEW_STALE' | 'NOTHING_TO_COMMIT' | 'PRODUCT_CONFLICT' | 'PRODUCT_EXISTS' | 'CATALOG_TARGET_CHANGED'
   | 'LOOKUP_FAILED' | 'PREVIEW_FAILED' | 'COMMIT_FAILED' | 'NO_ERRORS' | 'BUSY'
-  | 'DUPLICATE_COLUMNS' | 'FORMAT_UNAVAILABLE' | 'K_ACK_INVALID'
+  | 'DUPLICATE_COLUMNS' | 'FORMAT_UNAVAILABLE' | 'K_ACK_INVALID' | 'WRONG_FORMAT'
   | 'BASIS_NOT_SET' | 'BASIS_UNAVAILABLE' | 'UNIT_CMS_INVALID'
 
 export const CMS_IMPORT_ERROR_LABELS: Record<CmsImportErrorCode, string> = {
@@ -174,10 +176,11 @@ export const CMS_IMPORT_ERROR_LABELS: Record<CmsImportErrorCode, string> = {
   RUN_NOT_FOUND: 'Không tìm thấy lần kiểm tra file',
   NOT_EDITABLE: 'Chương trình đã chốt — không nạp thêm',
   NOT_XLSX: 'File không phải .xlsx hợp lệ',
-  FILE_TOO_COMPLEX: 'File giải nén quá lớn hoặc quá nhiều thành phần — lưu lại từ mẫu 9 cột',
+  FILE_TOO_COMPLEX: 'File giải nén quá lớn hoặc quá nhiều thành phần — lưu lại từ file mẫu tải về',
   CROSS_SITE: 'Request không hợp lệ',
   NO_SHEET: 'Không có sheet IMPORT_CMS',
   MISSING_COLUMNS: 'Thiếu cột bắt buộc (mẫu cũ thiếu unit_CMS / base_quantity_CMS?) — tải mẫu mới',
+  WRONG_FORMAT: 'File không đúng loại file đã chọn — chọn lại loại file rồi kiểm tra lại',
   TOO_MANY_ROWS: 'Vượt 2.000 dòng dữ liệu',
   NO_DATA: 'Không có dòng dữ liệu nào sau dòng tiêu đề',
   SHA_MISMATCH: 'File khác file đã kiểm tra — kiểm tra lại',
@@ -204,6 +207,32 @@ const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' } })
 const fail = (status: number, code: CmsImportErrorCode, extra: Record<string, unknown> = {}) =>
   json(status, { ok: false, code, message: CMS_IMPORT_ERROR_LABELS[code] ?? null, ...extra })
+
+/** Tên loại file người dùng thấy (đúng nhãn ô chọn ở bước Nạp file). */
+export const CMS_IMPORT_FORMAT_NAME: Record<CmsImportFormat, string> = { tiers: 'Nhiều bậc / có target', simple: 'Mức cố định' }
+
+/**
+ * F-B (PM spec 17/11 §4): câu báo lỗi đọc file THEO loại file đã chọn (không dùng câu "mẫu 9 cột" cho mọi loại). `detected` chỉ có khi
+ * nhận diện CHẮC CHẮN loại còn lại (WRONG_FORMAT). Không lộ đường dẫn / tên file.
+ */
+export function cmsImportFormatMessage(code: CmsImportErrorCode, format: CmsImportFormat, detected?: CmsImportFormat): string {
+  if (code === 'WRONG_FORMAT' && detected === 'tiers') {
+    return `File thuộc mẫu "${CMS_IMPORT_FORMAT_NAME.tiers}" (9 cột, sheet IMPORT_CMS) — chọn lại loại file "${CMS_IMPORT_FORMAT_NAME.tiers}" rồi kiểm tra lại.`
+      + ' Đây là ĐỊNH DẠNG file, không phải yêu cầu chương trình có target: chương trình không xét target vẫn dùng mẫu này, để trống hai cột KPI_Target_GMV_VND và Loai_CMS_GMV.'
+  }
+  if (code === 'WRONG_FORMAT' && detected === 'simple') {
+    return `File thuộc mẫu "${CMS_IMPORT_FORMAT_NAME.simple}" (7 cột: product_id · ĐV tính CMS · CMS proposal…) — chọn lại loại file "${CMS_IMPORT_FORMAT_NAME.simple}" rồi kiểm tra lại.`
+  }
+  if (code === 'NO_SHEET') {
+    return format === 'simple' ? `File không có sheet dữ liệu — mẫu "${CMS_IMPORT_FORMAT_NAME.simple}" đọc sheet đầu tiên`
+      : `Không có sheet IMPORT_CMS — mẫu "${CMS_IMPORT_FORMAT_NAME.tiers}" đọc sheet IMPORT_CMS`
+  }
+  if (code === 'MISSING_COLUMNS') {
+    return format === 'simple' ? `Thiếu cột bắt buộc của mẫu "${CMS_IMPORT_FORMAT_NAME.simple}" (7 cột) — tải mẫu mức cố định`
+      : `Thiếu cột bắt buộc của mẫu "${CMS_IMPORT_FORMAT_NAME.tiers}" (9 cột; mẫu cũ thiếu unit_CMS / base_quantity_CMS?) — tải mẫu mới`
+  }
+  return CMS_IMPORT_ERROR_LABELS[code]
+}
 
 /** Ngày VN (UTC+7, không DST) dạng YYYY-MM-DD. */
 export function cmsVnToday(now: Date): string {
@@ -295,11 +324,22 @@ async function analyze(bytes: Uint8Array, program: CmsProgramRow, mode: CmsImpor
   const sp = o.format === 'simple' ? parseCmsSimpleXlsx(bytes) : null
   const parsed = sp ?? parseCmsImportXlsx(bytes)
   if (!parsed.ok) {
-    const extra: Record<string, unknown> = {}
+    // F-B: loại đã chọn không đọc được sheet / cột ⇒ nhận diện mẫu theo chữ ký tiêu đề. CHẮC CHẮN là loại còn lại ⇒ WRONG_FORMAT (không
+    // tự đổi loại / không parse bằng parser khác). Mẫu đơn giản đang tắt cờ ⇒ giữ FORMAT_UNAVAILABLE (nhận diện không mở tính năng).
+    if (parsed.error === 'NO_SHEET' || parsed.error === 'MISSING_COLUMNS') {
+      const detected = detectCmsImportFormat(bytes)
+      const other: CmsImportFormat = o.format === 'simple' ? 'tiers' : 'simple'
+      if (detected === other) {
+        const meta = { expectedFormat: o.format, detectedFormat: detected }
+        if (detected === 'simple' && !deps.v2) return { ok: false, res: fail(400, 'FORMAT_UNAVAILABLE', meta) }
+        return { ok: false, res: json(422, { ok: false, code: 'WRONG_FORMAT', message: cmsImportFormatMessage('WRONG_FORMAT', o.format, detected), ...meta }) }
+      }
+    }
+    const extra: Record<string, unknown> = { expectedFormat: o.format }
     if (parsed.missing) extra.missing = parsed.missing
     if ('duplicate' in parsed && parsed.duplicate) extra.duplicate = parsed.duplicate
     if ('column' in parsed && parsed.column) extra.column = parsed.column
-    return { ok: false, res: fail(422, parsed.error, extra) }
+    return { ok: false, res: json(422, { ok: false, code: parsed.error, message: cmsImportFormatMessage(parsed.error, o.format), ...extra }) }
   }
   const ids = new Set<string>()
   for (const r of parsed.rows) {
@@ -441,6 +481,8 @@ export async function handleCmsImportPreview(req: Request, deps: CmsImportDeps):
       ...rest, advicePreview: adviceText.length > ADVICE_PREVIEW_CHARS ? `${adviceText.slice(0, ADVICE_PREVIEW_CHARS)}…` : adviceText,
     })),
     groupsRejected: a.v.groupsRejected.map((r) => ({ key: r.key, excelRows: r.rows.map((x) => x.excelRow), errors: r.errors })),
+    // F-C: tóm tắt theo (mã, cột) dẫn xuất từ cùng groupsRejected — chi tiết đầy đủ vẫn ở groupsRejected / file lỗi.
+    issueSummary: cmsImportIssueSummary(a.v.groupsRejected),
   })
 }
 
@@ -527,3 +569,9 @@ export async function handleCmsImportErrors(req: Request, deps: CmsImportDeps): 
     },
   })
 }
+
+/**
+ * F-A (PM spec 17/11 §2.3): route sửa chương trình dùng lại CHÍNH quyền / byte-cap / multipart / parser / validator / kiểm K / kiểm đơn vị
+ * của import — không bản sao luật. Revision là hành động riêng (RPC 131), không giả append / replace nháp: chỉ mượn kiểm file.
+ */
+export const cmsImportInternals = { guard, readForm, programFor, analyze, basisOf, json, fail, rejectedRaw, ADVICE_PREVIEW_CHARS }
