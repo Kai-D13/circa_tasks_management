@@ -11,7 +11,7 @@ import { cmsFxIsPayoutScenario, cmsFxLockPreview, cmsFxP3Program, cmsFxParseP3, 
 import { cmsDisplayStatus } from '@/lib/cms/programStatus'
 import { cmsFixtureNav } from '@/lib/cms/fixtureNav'
 import type { CmsResultsLoad } from '@/lib/cms/resultUi'
-import { CMS_FX_REPORT_PROGRAM, cmsFxContract, cmsFxContractBasis } from '@/lib/cms/fixturesContract'
+import { CMS_FX_REPORT_PROGRAM, cmsFxContract, cmsFxContractBasis, cmsFxContractPayout } from '@/lib/cms/fixturesContract'
 import { cmsRevisionDetailLinks } from '@/lib/cms/revision/model'
 
 // Dev-only fixture A3 — ĐÚNG CmsProgramDetailView của route thật, dữ liệu giả (kịch bản lib/cms/fixtureScenario — số do engine
@@ -56,9 +56,12 @@ export default async function CmsDetailFixture({ searchParams }: { searchParams:
   const lock = p3 && !cmsFxIsPayoutScenario(p3)
     ? { preview: cmsFxLockPreview(p3, prog.id), error: p3 === 'error' ? 'QUERY_FAILED' : null, qaReadonly: p3 === 'qa-readonly' }
     : !p3 && scenario && !sm && display === 'waiting_close' ? { preview: cmsFxLockPreview(prog.isTest ? 'ready' : 'pending', prog.id), error: null } : null
+  // 132 r1: chương trình full_line đã chốt run contract (PG18) ⇒ số RÒNG + khối hợp đồng (fixturesContract.cmsFxContractPayout).
+  const contractLocked = contractFx?.fx.row.status === 'locked'
   const payout = p3 && cmsFxIsPayoutScenario(p3)
     ? { data: cmsFxPayout(p3, prog.id), error: p3 === 'locked-error' ? 'QUERY_FAILED' : null }
-    : !p3 && scenario && display === 'locked' ? { data: cmsFxPayout(sm ? 'locked-sm' : 'locked', prog.id), error: null } : null
+    : !p3 && scenario && display === 'locked'
+      ? { data: contractLocked ? cmsFxContractPayout(sm ? 'sm' : 'super') : cmsFxPayout(sm ? 'locked-sm' : 'locked', prog.id), error: null } : null
   const nav = cmsFixtureNav(sp, sm ? { as: 'sm' } : {})
   // r3 (PM P1-02): &rev= giả lập cổng ĐỌC mở (DB 131) qua ĐÚNG hàm dựng link của route thật — write-off (đã sửa + đang che số, cờ ghi
   // TẮT ⇒ có Lịch sử, KHÔNG nút Sửa) · write-on (cờ ghi bật, chưa sửa ⇒ chỉ nút Sửa) · state-error (không đọc được trạng thái ⇒ vẫn có Lịch sử).

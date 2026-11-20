@@ -2,7 +2,7 @@
 // Thuần: nhận runner BigQuery tiêm vào (thật: source/bigqueryRunner.ts; test: transport giả đi qua bqQueryAll). Nguyên tắc:
 //  · MỘT query job: `(bán 'S') UNION ALL (trả 'R')`, cùng một bố cục cột chuỗi ⇒ bán + trả cùng snapshot của chính job đó (không query
 //    hai lần rồi coi là cùng snapshot). Mọi trang đọc từ kết quả của job (bqQueryAll theo jobId + pageToken, đếm = totalRows).
-//  · Chỉ chương trình net_returns_v1 mới đọc phần 'R'. Sales-only ⇒ job chỉ có phần 'S', kết quả `returnsRaw = null` (không phải []).
+//  · Chỉ chương trình đọc trả (net_returns_v1 / full_line_qty_refund_v1 — Q-236, cùng projection 20 cột) mới đọc phần 'R'. Sales-only ⇒ job chỉ có phần 'S', kết quả `returnsRaw = null` (không phải []).
 //  · Lọc: bán theo kỳ + ProductID + completed_at ≤ as_of; trả theo NGÀY BÁN GỐC + ProductID + (recorded_at NULL hoặc ≤ as_of). Phiếu
 //    APPROVED (recorded_at NULL) vẫn đọc — engine biết là chưa hiệu lực; trạng thái lạ để normalizer HOLD, không lọc ở SQL.
 //  · RET2-SRC-01 (PM audit r4 14/11): phiếu THIẾU ngữ cảnh phạm vi (ngày bán gốc NULL và / hoặc ProductID NULL / rỗng) KHÔNG bị WHERE
@@ -20,7 +20,8 @@
 
 import { BigQueryError, type BqParam, type BqQueryResult } from '../../bigquery/query'
 import { isSafeBqTableName } from '../../care/config'
-import { CMS_RETURN_COLUMNS, CMS_RETURN_STATUS_DICTIONARY } from '../calc/returns'
+import type { CmsReturnProfile } from '../calc/policy'
+import { CMS_RETURN_COLUMNS, CMS_RETURN_STATUS_DICTIONARY, cmsReturnNotEffectiveStatuses } from '../calc/returns'
 import { CMS_SALES_ROW_CAP } from '../quality'
 import { formatUtcMicros, parseUtcMicros } from '../time'
 import { CMS_BQ_DEFAULT_DEADLINE_MS, CMS_SALES_SOURCE_COLUMN, type CmsBqRunner } from './bigquery'
@@ -73,8 +74,13 @@ export interface CmsContractScope {
   productIds: readonly string[]
   /** Mốc snapshot (µs UTC) — worker chọn TRƯỚC khi gửi job; phiếu trả sau mốc không đọc. */
   asOfMicros: bigint
-  /** true ⇔ chương trình net_returns_v1. */
+  /** true ⇔ chương trình đọc trả (net_returns_v1 / full_line_qty_refund_v1). */
   withReturns: boolean
+  /**
+   * Profile của phần trả (từ điển trạng thái dùng trong luật phạm vi RET2-SRC-01). Bỏ trống ⇒ net_returns_v1 (từ điển v1). Projection
+   * không đổi theo profile.
+   */
+  returnsProfile?: CmsReturnProfile
   deadlineMs?: number
 }
 
@@ -109,6 +115,8 @@ export interface CmsContractQueryArgs {
   asOfMicros: bigint
   salesCap?: number
   returnsCap?: number
+  /** Trạng thái chưa hiệu lực đã biết của từ điển run (RET2-SRC-01). Bỏ trống ⇒ từ điển v1. */
+  notEffectiveStatuses?: readonly string[]
 }
 
 const TS = (expr: string, as: string) => `FORMAT_TIMESTAMP('%Y-%m-%dT%H:%M:%E6SZ', ${expr}, 'UTC') AS ${as}`
@@ -181,7 +189,8 @@ export function buildCmsContractQuery(a: CmsContractQueryArgs): { sql: string; p
   ]
   if (a.returnsTable !== null) {
     params.push({ name: 'returns_limit', type: 'INT64', value: returnsCap + 1 },
-      { name: 'not_effective_statuses', type: 'ARRAY', arrayType: 'STRING', values: [...CMS_RETURN_NOT_EFFECTIVE_STATUSES] })
+      { name: 'not_effective_statuses', type: 'ARRAY', arrayType: 'STRING',
+        values: [...(a.notEffectiveStatuses ?? CMS_RETURN_NOT_EFFECTIVE_STATUSES)].sort() })
   }
   return { sql: parts.join('\n'), params, salesCap, returnsCap }
 }
@@ -192,7 +201,8 @@ export function buildCmsContractQuery(a: CmsContractQueryArgs): { sql: string; p
  * chưa biết (fail-closed: vẫn đọc để normalizer HOLD).
  */
 export function cmsContractReturnInScope(
-  r: CmsRawRow, s: { fromMicros: bigint; toMicrosExclusive: bigint; asOfMicros: bigint; productIds: ReadonlySet<string> },
+  r: CmsRawRow, s: { fromMicros: bigint; toMicrosExclusive: bigint; asOfMicros: bigint; productIds: ReadonlySet<string>;
+    returnsProfile?: CmsReturnProfile },
 ): boolean {
   const at = (v: unknown): bigint | null => (v === null || v === undefined ? null : parseUtcMicros(String(v)))
   const rec = at(r.return_recorded_at), oc = at(r.original_completed_at)
@@ -207,7 +217,8 @@ export function cmsContractReturnInScope(
   if (oc !== null && !inWin) return false
   if (rec !== null && rec < s.fromMicros) return false
   const st = r.return_status === null || r.return_status === undefined ? null : String(r.return_status)
-  return st === null || !CMS_RETURN_NOT_EFFECTIVE_STATUSES.includes(st)
+  const ne = s.returnsProfile ? cmsReturnNotEffectiveStatuses(s.returnsProfile) : CMS_RETURN_NOT_EFFECTIVE_STATUSES
+  return st === null || !ne.includes(st)
 }
 
 // Token `reason` cố định trong body lỗi 400 của BigQuery (không đọc / không trả phần còn lại của message).
@@ -281,6 +292,7 @@ export function createCmsBqContractProvider(cfg: CmsBqContractProviderConfig): C
           salesTable: cfg.salesTable, returnsTable: scope.withReturns ? cfg.returnsTable : null, fromMicros: scope.fromMicros,
           toMicrosExclusive: scope.toMicrosExclusive, productIds: scope.productIds, asOfMicros: scope.asOfMicros,
           salesCap: cfg.salesCap, returnsCap: cfg.returnsCap,
+          notEffectiveStatuses: cmsReturnNotEffectiveStatuses(scope.returnsProfile ?? 'net_returns_v1'),
         })
       } catch {
         return { ok: false, code: 'NOT_CONFIGURED', part: 'job' }

@@ -65,8 +65,8 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
   const unitBasis = contract?.quantityBasis === 'cms_unit'
   const basisText = cmsRunBasisText(contract, loaded?.basisUi)
   // P5.3: gộp / đã trả / ròng — chỉ run net có phiếu trả.
-  const netText = card?.row ? cmsNetQtyText(cmsNetSummary([card.row]), card.row.perUnit, p.unitCms) : null
-  const storeNetText = withNumbers && manager ? cmsNetQtyText(cmsNetSummary(rows), p.baseQuantityCms, p.unitCms) : null
+  const netText = card?.row ? cmsNetQtyText(cmsNetSummary([card.row]), card.row.perUnit, p.unitCms, contract?.returnsPolicy) : null
+  const storeNetText = withNumbers && manager ? cmsNetQtyText(cmsNetSummary(rows), p.baseQuantityCms, p.unitCms, contract?.returnsPolicy) : null
   const rate = cmsFlatRate(p)
   const eq = card && rate ? cmsFlatEquation(p, card.row) : null
 
@@ -263,7 +263,7 @@ export function CmsStaffProductView({ data, today, results = { kind: 'off' }, ma
           {recent && recent.length > 0 ? (
             <ul className="divide-y text-[13px]">
               {recent.map((l) => {
-                const v = cmsLineView(l, p.baseQuantityCms, p.unitCms, returnsApproved)
+                const v = cmsLineView(l, p.baseQuantityCms, p.unitCms, returnsApproved, contract?.returnsPolicy)
                 return (
                   <li key={l.seq} data-cms-line={l.status} data-cms-line-kind={l.kind} className="flex items-start justify-between gap-3 py-2">
                     <span className="min-w-0">

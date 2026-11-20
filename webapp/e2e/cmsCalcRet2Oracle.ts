@@ -11,6 +11,11 @@
 //  · trạng thái phiếu trả (D13): từ điển cố định { COMPLETED: hiệu lực, APPROVED: chưa hiệu lực }; giá trị khác / rỗng ⇒ lỗi dòng nguồn.
 //    Mọi lỗi dòng nguồn trả ⇒ cả lượt chỉ còn SOURCE_ROW_INVALID (cùng mức với app: lỗi chuẩn hoá chặn trước khi tính).
 // Đầu vào là FIXTURE THÔ (chuỗi như nguồn) — cùng fixture app đọc qua normalizer của nó.
+// Q-236 (full_line_qty_refund_v1) — viết theo câu chữ quyết định, KHÔNG theo net.ts / seal SQL:
+//  · từ điển v2: COMPLETED hiệu lực; APPROVED / CANCELED / PENDING / REJECTED / WAITING_APPROVAL bỏ qua; khác ⇒ lỗi dòng nguồn;
+//  · lượng BI / người / POS / B / G / q·u gốc trên phiếu KHÔNG đọc (không bắt buộc, không so ngữ cảnh); ngữ cảnh 5 trường;
+//  · mỗi dòng bán có ≥ 1 phiếu áp dụng bị trừ ĐỦ B (và lượng đủ ĐK của dòng) MỘT lần — tại phiếu sớm nhất (µs, rồi byte UTF-8 ID);
+//    GMV trừ Σ refund mọi phiếu; không còn HOLD vượt lượng (vẫn HOLD Σ refund > GMV dòng).
 
 export interface OracleSaleRow {
   id: string; order: string; code?: string; pid: string; email: string | null; pos?: string | null
@@ -27,7 +32,7 @@ export interface OracleUser { id: string; email: string; role: string; store: st
 export interface OracleStore { id: string; type: string; active: boolean }
 export interface OracleCase {
   quantityBasis: 'pos_base' | 'cms_unit'
-  returnsPolicy: 'sales_only_v1' | 'net_returns_v1'
+  returnsPolicy: 'sales_only_v1' | 'net_returns_v1' | 'full_line_qty_refund_v1'
   start: string; end: string; catalogTarget: string | null; stores: string[]
   products: OracleProduct[]; users: OracleUser[]; storeRefs: OracleStore[]
   sales: OracleSaleRow[]; returns: OracleReturnRow[]; asOf: string
@@ -182,6 +187,8 @@ export function oracleCompute(c: OracleCase): OracleResult {
     sales.set(s.id, { row: s, b, g, at, candidate, cls, elig, who, inScope: !!who && c.stores.includes(who.store) })
   }
   if (c.returnsPolicy === 'sales_only_v1' && c.returns.length) throw new Error('oracle: sales_only không nhận trả')
+  const full = c.returnsPolicy === 'full_line_qty_refund_v1'
+  const NOT_YET = full ? ['APPROVED', 'CANCELED', 'PENDING', 'REJECTED', 'WAITING_APPROVAL'] : ['APPROVED']
 
   const ids = new Map<string, number>()
   for (const r of c.returns) ids.set(r.id, (ids.get(r.id) ?? 0) + 1)
@@ -194,23 +201,30 @@ export function oracleCompute(c: OracleCase): OracleResult {
   }
   // Lượt 1 — từng dòng nguồn trả phải hợp lệ theo hợp đồng trước khi tính bất cứ gì.
   for (const r of c.returns) {
-    if (r.status === 'APPROVED') continue
+    if (NOT_YET.includes(r.status)) continue
     if (r.status !== 'COMPLETED') return { hold: ['SOURCE_ROW_INVALID'] }
-    if (r.at === null || r.ref === null || r.order === null || r.pid === null || r.r === null || r.h === null || ctxOf(r) === null) return { hold: ['SOURCE_ROW_INVALID'] }
-    const rq = dec(r.r), rh = dec(r.h)
-    if (rq === null || !/^\d+$/.test(r.r) || rq <= Z || rh === null || rh < Z) return { hold: ['SOURCE_ROW_INVALID'] }
+    if (r.at === null || r.ref === null || r.order === null || r.pid === null || r.h === null || ctxOf(r) === null) return { hold: ['SOURCE_ROW_INVALID'] }
+    const rh = dec(r.h)
+    if (rh === null || rh < Z) return { hold: ['SOURCE_ROW_INVALID'] }
+    if (full) continue
+    const rq = r.r === null ? null : dec(r.r)
+    if (rq === null || !/^\d+$/.test(r.r!) || rq <= Z) return { hold: ['SOURCE_ROW_INVALID'] }
   }
   for (const r of c.returns) {
     if (ids.get(r.id)! > 1) { hold.add('RETURN_DUPLICATE_ID'); continue }
     if (r.status !== 'COMPLETED') continue
-    const rq = dec(r.r)!, rh = dec(r.h)!
+    const rq = full ? Z : dec(r.r)!, rh = dec(r.h)!
     const at = micros(r.at!)
     const sale = sales.get(r.ref!)
     const o = ctxOf(r)
     if (!o) throw new Error('oracle: ngữ cảnh gốc đã kiểm ở lượt 1')
     if (at > asOf) hold.add('RETURN_AFTER_AS_OF')
     if (at < micros(o.at)) hold.add('RETURN_BEFORE_SALE')
-    if (sale) {
+    if (sale && full) {
+      const same = r.order === sale.row.order && r.pid === sale.row.pid && micros(o.at) === sale.at && o.type === (sale.row.type ?? 'OFFLINE')
+        && o.status === (sale.row.status ?? 'COMPLETED')
+      if (!same) { hold.add('RETURN_CONTEXT_MISMATCH'); continue }
+    } else if (sale) {
       const same = r.order === sale.row.order && r.pid === sale.row.pid && micros(o.at) === sale.at && o.type === (sale.row.type ?? 'OFFLINE')
         && o.status === (sale.row.status ?? 'COMPLETED') && (o.email?.trim().toLowerCase() ?? null) === (sale.row.email?.trim().toLowerCase() ?? null)
         && o.pos === (sale.row.pos ?? null) && dec(o.b) === sale.b && dec(o.g) === sale.g
@@ -228,7 +242,7 @@ export function oracleCompute(c: OracleCase): OracleResult {
   }
   for (const [ref, acc] of sumR) {
     const s = sales.get(ref)!
-    if (acc.r > s.b) hold.add('RETURN_EXCEEDS_SALE_BASE')
+    if (!full && acc.r > s.b) hold.add('RETURN_EXCEEDS_SALE_BASE')
     if (acc.h > s.g) hold.add('RETURN_EXCEEDS_SALE_GMV')
   }
   if (hold.size) return { hold: [...hold].sort() }
@@ -248,9 +262,22 @@ export function oracleCompute(c: OracleCase): OracleResult {
     const g = grp(s)
     g.saleBase += s.b; g.eligSale += s.elig; g.saleGmv += s.g
   }
+  // full_line: phiếu mang lượng của dòng = phiếu sớm nhất (µs, rồi byte ID) — chọn bằng vòng so tay, không sort chung với bán.
+  const carrier = new Map<string, { id: string; at: bigint }>()
+  if (full) {
+    for (const a of applied) {
+      const cur = carrier.get(a.sale.row.id)
+      if (!cur || a.at < cur.at || (a.at === cur.at && bytesCmp(a.id, cur.id) < 0)) carrier.set(a.sale.row.id, { id: a.id, at: a.at })
+    }
+  }
   for (const a of applied) {
     const g = grp(a.sale)
-    g.retBase += a.r; g.retGmv += a.h
+    g.retGmv += a.h
+    if (full) {
+      if (carrier.get(a.sale.row.id)!.id === a.id) { g.retBase += a.sale.b; g.eligRet += a.sale.elig }
+      continue
+    }
+    g.retBase += a.r
     if (a.sale.cls === 'POS_BASE' || a.sale.cls === 'COUNTED') g.eligRet += a.r
   }
   const catalogGmv = new Map<string, bigint>()
@@ -278,7 +305,8 @@ export function oracleCompute(c: OracleCase): OracleResult {
   }
   for (const a of applied) {
     const contributes = a.sale.cls === 'POS_BASE' || a.sale.cls === 'COUNTED'
-    evs.push({ kind: 'RETURN', id: a.id, at: a.at, user: a.sale.who!.user, pid: a.sale.row.pid, dElig: contributes ? -a.r : Z, dGmv: -a.h })
+    const dElig = full ? (carrier.get(a.sale.row.id)!.id === a.id ? -a.sale.elig : Z) : contributes ? -a.r : Z
+    evs.push({ kind: 'RETURN', id: a.id, at: a.at, user: a.sale.who!.user, pid: a.sale.row.pid, dElig, dGmv: -a.h })
   }
   evs.sort(evCmp)
   const catalog: OracleCatalog[] = []

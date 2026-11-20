@@ -6,7 +6,8 @@ import { CmsReturnsAdminView } from '@/components/cms/admin/CmsReturnsAdminView'
 import { CmsCloseReportView } from '@/components/cms/admin/CmsCloseReportView'
 import { cmsFxProgram } from '@/lib/cms/fixtureScenario'
 import {
-  CMS_FX_PG_CONTRACT, CMS_FX_REPORT_PROGRAM, cmsFxCloseReport, cmsFxCloseReports, cmsFxContract, cmsFxParseReturnsScenario, cmsFxReturnConflicts,
+  CMS_FX_PG_CONTRACT, CMS_FX_REPORT_PROGRAM, cmsFxCloseReport, cmsFxCloseReports, cmsFxContract, cmsFxContractCloseReport, cmsFxContractCloseReports,
+  cmsFxParseReturnsScenario, cmsFxReturnConflicts,
 } from '@/lib/cms/fixturesContract'
 import { cmsFixtureNav } from '@/lib/cms/fixtureNav'
 
@@ -16,6 +17,8 @@ import { cmsFixtureNav } from '@/lib/cms/fixtureNav'
 //   &program=<id> (mặc định PG13 — tính nguyên + trừ trả) · &rs=clean | conflict | proof | restored | error (sổ trả của chương trình net)
 //   · &off=1 (cờ returns OFF ⇒ nút khoá "Pipeline trả hàng đang tắt") · &program=<PG9> (QA đã chốt — khối Báo cáo sau chốt)
 //   · &report=<id> (chi tiết báo cáo sau chốt của PG9).
+//   · 132 r1: &manual=choose | pinned | off | error (form lập tay ngày 31 trên chương trình đã chốt; mặc định choose — PG18 full_line đã
+//     ghim ⇒ pinned) · &program=<PG17 / PG18> (full_line; PG18 đã chốt run contract — báo cáo lập tay có lý do).
 export default async function CmsReturnsFixture({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   if (process.env.UI_CATALOG !== '1') notFound()
   const { user, profile } = await getSessionProfile()
@@ -32,7 +35,7 @@ export default async function CmsReturnsFixture({ searchParams }: { searchParams
   const nav = cmsFixtureNav(sp)
   const reportId = one('report')
   if (reportId) {
-    const page = cmsFxCloseReport(fx.row.id, reportId)
+    const page = cmsFxCloseReport(fx.row.id, reportId) ?? cmsFxContractCloseReport(fx.row.id, reportId)
     if (!page) notFound()
     return (
       <KpiFixtureBoundary>
@@ -45,8 +48,14 @@ export default async function CmsReturnsFixture({ searchParams }: { searchParams
   // Route thật: conflicts đọc mọi chương trình (RPC trả policy hiện tại); chương trình chưa trừ trả ⇒ chưa có baseline / lần kiểm sổ.
   // Fixture: chương trình net dùng kịch bản rs; chương trình khác ⇒ sổ rỗng (baselines 0, chưa lần kiểm).
   const conflicts = cmsFxReturnConflicts(fx.row.id, rs)
-  const reports = fx.row.status === 'locked' ? cmsFxCloseReports(fx.row.id) ?? [] : null
+  const reports = fx.row.status === 'locked' ? cmsFxCloseReports(fx.row.id) ?? cmsFxContractCloseReports(fx.row.id) ?? [] : null
   const disabledReason = one('off') === '1' ? 'Pipeline trả hàng đang tắt (CMS_RETURNS_ENABLED).' : null
+  const mq = one('manual') ?? (contract?.policy === 'full_line_qty_refund_v1' ? 'pinned' : 'choose')
+  const manual = reports === null ? null : mq === 'error' ? { ok: false as const } : {
+    ok: true as const, payoutRunId: '00000000-0000-4000-8000-000000009981', idem: '00000000-0000-4000-8000-000000009982',
+    choice: mq === 'pinned' ? { kind: 'pinned' as const, profile: 'full_line_qty_refund_v1' as const } : { kind: 'choose' as const },
+    disabledReason: mq === 'off' ? 'Cơ sở dữ liệu chưa hỗ trợ lập tay (migration 132).' : disabledReason,
+  }
   return (
     <KpiFixtureBoundary>
       <div data-testid="ui-catalog-cms-returns" data-fx={rs} data-program={fx.row.id === CMS_FX_REPORT_PROGRAM ? 'report' : undefined}>
@@ -55,6 +64,7 @@ export default async function CmsReturnsFixture({ searchParams }: { searchParams
           conflicts={rs === 'error' ? { ok: false } : conflicts ? { ok: true, data: conflicts } : { ok: true, data: emptyLedger(fx.row.id, fx.row.configVersion) }}
           reports={reports === null ? null : { ok: true, data: reports }}
           confirm={{ idem: '00000000-0000-4000-8000-000000009990', disabledReason }}
+          manual={manual}
           nav={nav}
         />
       </div>

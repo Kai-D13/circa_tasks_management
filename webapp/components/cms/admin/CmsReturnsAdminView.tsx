@@ -7,12 +7,13 @@ import { EmptyState } from '@/components/ds/EmptyState'
 import { DataTableShell } from '@/components/ds/DataTableShell'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { CmsConfirmRestoredForm } from '@/components/cms/admin/CmsConfirmRestoredForm'
+import { CmsManualReportForm, type CmsManualProfileChoice } from '@/components/cms/admin/CmsManualReportForm'
 import { cmsDateTime, cmsVnd } from '@/lib/cms/display'
 import { formatCmsDecimal, parseCmsDecimal } from '@/lib/cms/decimal'
 import { CMS_RETURNS_POLICY_LABEL } from '@/lib/cms/calc/basisUi'
 import { cmsNavHref, type CmsNav } from '@/lib/cms/fixtureNav'
 import {
-  CMS_CLOSE_REPORT_NOTE, CMS_LEDGER_VERDICT_LABEL, CMS_OBSERVATION_LABEL,
+  CMS_CLOSE_REPORT_NOTE, CMS_LEDGER_VERDICT_LABEL, CMS_OBSERVATION_LABEL, cmsCloseReportViaLabel,
   type CmsCloseReportSummary, type CmsReturnConflictsDto,
 } from '@/lib/cms/returnsView'
 
@@ -20,17 +21,21 @@ import {
 //  · Đối soát nguồn trả: chính sách, lần kiểm sổ mới nhất, conflict mở (baseline đã nhận ↔ quan sát mới nhất), lịch sử xác nhận. Nút
 //    "Xác nhận nguồn đã phục hồi" CHỈ khi DB trả proof. Không có nút nhận số mới / sửa tiền.
 //  · Báo cáo sau chốt (chương trình đã chốt): danh sách báo cáo tham khảo, không phải lệnh thu / chi.
+//  · 132 r1: lập tay ngày 31 bằng PHIÊN super (CmsManualReportForm — chọn quy tắc lần đầu nếu chưa ghim); danh sách ghi người lập + lý do.
 
 const VERDICT_TONE: Record<string, StatusTone> = { CLEAN: 'success', MISMATCH: 'danger', OPEN_CONFLICT_MATCH: 'warning' }
-const dec = (v: string) => { const r = parseCmsDecimal(v, { allowNegative: true }); return r.ok ? formatCmsDecimal(r.units).replace('.', ',') : '—' }
+/** null = baseline fp v2 (Q-236 full_line — lượng không thuộc vân tay sổ). */
+const dec = (v: string | null) => { if (v === null) return '—'; const r = parseCmsDecimal(v, { allowNegative: true }); return r.ok ? formatCmsDecimal(r.units).replace('.', ',') : '—' }
 const vndDec = (v: string) => { const r = parseCmsDecimal(v, { allowNegative: true }); return r.ok ? cmsVnd(r.units / BigInt(1_000_000_000)) : '—' }
 
-export function CmsReturnsAdminView({ program, conflicts, reports, confirm, nav }: {
+export function CmsReturnsAdminView({ program, conflicts, reports, confirm, manual, nav }: {
   program: { id: string; name: string; status: string }
   conflicts: { ok: true; data: CmsReturnConflictsDto } | { ok: false }
   reports: { ok: true; data: CmsCloseReportSummary[] } | { ok: false } | null
   /** idem sinh ở server lúc render + lý do khoá nút (cờ returns OFF / server QA). */
   confirm: { idem: string; disabledReason: string | null }
+  /** 132 r1: form lập tay (chỉ chương trình đã chốt); null = không hiện (chưa chốt / DB thiếu đường báo cáo); ok:false = không đọc được run chốt. */
+  manual?: { ok: true; payoutRunId: string; choice: CmsManualProfileChoice; idem: string; disabledReason: string | null } | { ok: false } | null
   /** Fixture /ui-catalog: link CMS ở lại catalog (mặc định href thật). */
   nav?: CmsNav
 }) {
@@ -90,7 +95,7 @@ export function CmsReturnsAdminView({ program, conflicts, reports, confirm, nav 
                     <TableRow>
                       <TableHead>Phiếu</TableHead>
                       <TableHead>Lý do mở</TableHead>
-                      <TableHead className="text-right">Baseline (SL cơ sở · tiền)</TableHead>
+                      <TableHead className="text-right">Baseline (SL cơ sở · tiền hoàn)</TableHead>
                       <TableHead>Quan sát mới nhất</TableHead>
                     </TableRow>
                   </TableHeader>
@@ -141,6 +146,12 @@ export function CmsReturnsAdminView({ program, conflicts, reports, confirm, nav 
         <Panel title="Báo cáo sau chốt" className="v2:rounded-v2-panel">
           <div className="space-y-3">
             <p className="text-[13px] text-muted-foreground" data-cms-close-report-note>{CMS_CLOSE_REPORT_NOTE}</p>
+            {manual && (manual.ok ? (
+              <CmsManualReportForm programId={program.id} payoutRunId={manual.payoutRunId} choice={manual.choice} idem={manual.idem}
+                disabledReason={manual.disabledReason} />
+            ) : (
+              <Notice tone="warning" role="status" title="Không đọc được lần chốt">Chưa lập tay được báo cáo — thử tải lại trang.</Notice>
+            ))}
             {!reports.ok ? (
               <Notice tone="danger" role="alert" title="Không tải được báo cáo">Thử tải lại trang.</Notice>
             ) : reports.data.length === 0 ? (
@@ -161,7 +172,10 @@ export function CmsReturnsAdminView({ program, conflicts, reports, confirm, nav 
                   <TableBody>
                     {reports.data.map((r) => (
                       <TableRow key={r.id} data-cms-close-report={r.id}>
-                        <TableCell className="tabular-nums">{cmsDateTime(r.returnsAsOf)}<span className="block text-[12px] text-muted-foreground">{r.createdVia === 'cron' ? 'Job định kỳ' : 'Super'}</span></TableCell>
+                        <TableCell className="tabular-nums">{cmsDateTime(r.returnsAsOf)}
+                          <span className="block text-[12px] text-muted-foreground" data-cms-close-report-via={r.createdVia}>{cmsCloseReportViaLabel(r)}{r.returnsProfile === 'full_line_qty_refund_v1' ? ' · trừ đủ dòng bán' : ' · quy tắc cũ'}</span>
+                          {r.manualReason && <span className="block max-w-[260px] text-[12px] text-muted-foreground line-clamp-2 break-words" data-cms-close-report-reason>Lý do: {r.manualReason}</span>}
+                        </TableCell>
                         <TableCell className="text-right tabular-nums">{r.returnEvents.toLocaleString('vi-VN')}</TableCell>
                         <TableCell className="text-right tabular-nums">{cmsVnd(r.frozenAmount)}</TableCell>
                         <TableCell className="text-right tabular-nums">{cmsVnd(r.recomputedAmount)}</TableCell>

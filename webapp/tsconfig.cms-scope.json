@@ -1,0 +1,7 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "incremental": false, "plugins": [] },
+  "include": ["next-env.d.ts", "lib/cms/**/*.ts", "app/api/cron/cms-*/**/*.ts", "app/api/export/cms/**/*.ts", "components/cms/**/*.tsx",
+    "app/(dashboard)/targets/campaigns/cms/**/*.tsx", "app/(dashboard)/ui-catalog/cms*/**/*.tsx", "app/actions/cms*.ts",
+    "e2e/cms*.ts", "e2e/cms-calc-ret2-*.spec.ts", "e2e/cms-sales-rc-unit.spec.ts", "e2e/cms-revision-unit.spec.ts", "e2e/cms-ret-q236-unit.spec.ts", "e2e/cmsContractFixture.ts", "e2e/ui-v2-cms-*.spec.ts"]
+}

@@ -985,13 +985,17 @@ SELECT count(*)::int AS n, count(*) FILTER (WHERE x.ok IS NOT TRUE)::int AS bad,
   FROM (SELECT p.id, public.rpc_cms_lock_preview(p.id) -> 'blockers' AS b FROM public.cms_programs p WHERE NOT p.is_test) x`,
   // 124: mọi payout chốt bằng chứng nhận phải trỏ chứng nhận decision10 CỦA ĐÚNG chương trình + run, đã bị thay / thu hồi thì không
   // (bất biến sau chốt); payout khác basis không được mang id. 0 payout operator_reconciliation ⇒ CHƯA CHỨNG MINH.
+  // 132 r2 (Q-238 b): bộ trường theo cách tính của run chốt — cms_unit ⇒ decision_unit14, còn lại decision10 (to_jsonb: DB trước 130
+  // không có cột quantity_basis ⇒ decision10).
   invAttest: `SELECT count(*) FILTER (WHERE p.source_complete_basis = 'operator_reconciliation')::int AS n,
        count(*) FILTER (WHERE (p.source_complete_basis = 'operator_reconciliation') IS DISTINCT FROM (p.source_attestation_id IS NOT NULL)
          OR (p.source_attestation_id IS NOT NULL AND (a.id IS NULL OR a.program_id <> p.program_id OR a.run_id <> p.run_id
-             OR a.field_set <> 'decision10' OR a.reference_rows_fp <> a.run_rows_fp OR a.revoked_at IS NOT NULL OR a.superseded_by IS NOT NULL)))::int AS bad,
+             OR a.field_set IS DISTINCT FROM (CASE WHEN (to_jsonb(r) ->> 'quantity_basis') = 'cms_unit' THEN 'decision_unit14' ELSE 'decision10' END)
+             OR a.reference_rows_fp <> a.run_rows_fp OR a.revoked_at IS NOT NULL OR a.superseded_by IS NOT NULL)))::int AS bad,
        coalesce(string_agg(p.program_id::text, ',' ORDER BY p.program_id) FILTER (WHERE p.source_attestation_id IS NOT NULL AND (a.id IS NULL
          OR a.run_id <> p.run_id OR a.revoked_at IS NOT NULL OR a.superseded_by IS NOT NULL)), '') AS bad_ids
-  FROM public.cms_payouts p LEFT JOIN public.cms_source_attestations a ON a.id = p.source_attestation_id`,
+  FROM public.cms_payouts p LEFT JOIN public.cms_source_attestations a ON a.id = p.source_attestation_id
+  LEFT JOIN public.cms_sync_runs r ON r.id = p.run_id`,
   // ── 125 (CMS-Q-220, chỉ phase ≥ 125) — bất biến KHÔNG áp toàn bảng lịch sử (QA đã chốt có trần cũ giữ nguyên, không đỏ oan) ──
   // Cấu hình CHƯA CHỐT (draft / active) có bậc cuối hữu hạn (kỳ vọng 0 dòng). Bậc cuối = tier_order lớn nhất (PK).
   inv125LastTier: `SELECT g.id::text AS id, g.status, count(*)::int AS products FROM public.cms_programs g JOIN public.cms_program_products pp ON pp.program_id = g.id

@@ -9,6 +9,7 @@ import { cmsDateTime, cmsVnd } from '@/lib/cms/display'
 import { cmsNetSummary, cmsResultScopeNote, cmsRunBasisText, cmsStaffRows, cmsTruncVnd, type CmsA3Stats, type CmsStaffRowView, type CmsUnassignedSummary } from '@/lib/cms/resultUi'
 import { cmsResultState, type CmsCatalogRowDto, type CmsResultHeaderDto, type CmsResultRowDto, type CmsResultUserDto } from '@/lib/cms/resultView'
 import type { CmsDisplayStatus } from '@/lib/cms/programStatus'
+import { cmsPolicyReadsReturns } from '@/lib/cms/calc/policy'
 
 // CMS P2-c (I3) · khối kết quả A3 /targets/campaigns/cms/[id] (UI §3.3; U11 / U12 / U20; Q-212). Chỉ TRÌNH BÀY số đã cộng
 // từ snapshot (lib/cms/resultUi) — mỗi dược sĩ đã áp gate / bậc riêng, tổng không áp lại bậc. Chưa có snapshot ⇒ '—'.
@@ -40,7 +41,8 @@ export function CmsA3SyncLine({ header, isSuper, display = 'running', basisUi, r
   // P5.3: run net ⇒ tóm tắt phiếu trả đã trừ trong phạm vi người xem (GMV; lượng khác K giữa SP nên không cộng chung).
   // Chỉ policy net_returns_v1: mig 130 ghi cột ròng (net_v = 1, return_count = 0) cho MỌI run contract, kể cả sales_only_v1 —
   // không lọc theo policy thì chương trình chỉ tính bán hiện "Đã trừ 0 phiếu trả…" ngay dưới câu "chưa bao gồm xử lý trả hàng".
-  const ns = rows && header.run?.contract.returnsPolicy === 'net_returns_v1' ? cmsNetSummary(rows) : null
+  // Q-236: full_line cũng đọc trả ⇒ cùng tóm tắt (nhãn lượng do cmsNetQtyText / câu phạm vi quyết theo policy).
+  const ns = rows && header.run && cmsPolicyReadsReturns(header.run.contract.returnsPolicy) ? cmsNetSummary(rows) : null
   const at = header.run ? cmsDateTime(header.run.publishedAt) : null
   return (
     <div className="space-y-2">
@@ -52,7 +54,7 @@ export function CmsA3SyncLine({ header, isSuper, display = 'running', basisUi, r
       </p>
       {header.run && cmsRunBasisText(header.run.contract, basisUi) && <p data-cms-run-basis={header.run.contract.quantityBasis} className="text-[13px] text-muted-foreground">{cmsRunBasisText(header.run.contract, basisUi)}</p>}
       {header.run && display !== 'locked' && <p data-cms-sales-only={header.run.contract.returnsPolicy} className="text-[13px] text-muted-foreground">{cmsResultScopeNote(header.run.contract)}</p>}
-      {header.run && ns && <p data-cms-net-summary className="text-[13px] text-muted-foreground tabular-nums">Đã trừ {ns.returnCount} phiếu trả hàng hoàn tất · GMV trả {cmsVnd(cmsTruncVnd(ns.returnGmv))} · GMV ròng {cmsVnd(cmsTruncVnd(ns.saleGmv - ns.returnGmv))}</p>}
+      {header.run && ns && <p data-cms-net-summary className="text-[13px] text-muted-foreground tabular-nums">Đã trừ {ns.returnCount} phiếu trả hàng hoàn tất · {header.run.contract.returnsPolicy === 'full_line_qty_refund_v1' ? 'GMV trừ theo tiền hoàn' : 'GMV trả'} {cmsVnd(cmsTruncVnd(ns.returnGmv))} · GMV ròng {cmsVnd(cmsTruncVnd(ns.saleGmv - ns.returnGmv))}</p>}
       {display !== 'locked' && last && !last.isCurrent && (last.status === 'held' || last.status === 'error') && (
         <Notice tone="warning" role="status" title="Lần đồng bộ gần nhất chưa công bố">
           {header.run ? 'Đang giữ số liệu của lần công bố trước.' : cmsResultState(header) === 'config_reset' ? 'Chưa có lần công bố nào theo cấu hình hiện tại.' : 'Chưa có lần công bố nào.'}

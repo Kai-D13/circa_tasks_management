@@ -3,7 +3,7 @@
 // đầu vào của form (radio bắt buộc — không checkbox, không cột Excel).
 
 import {
-  CMS_QUANTITY_BASIS_LABEL, CMS_QUANTITY_BASES, parseCmsQuantityBasis,
+  CMS_QUANTITY_BASIS_LABEL, CMS_QUANTITY_BASES, parseCmsQuantityBasis, parseCmsReturnsPolicy,
   type CmsQuantityBasis, type CmsReturnsPolicy,
 } from './policy'
 
@@ -39,6 +39,8 @@ export const CMS_BASIS_SOURCE_NOTE: Readonly<Record<CmsBasisSource, string | nul
 export const CMS_RETURNS_POLICY_LABEL: Readonly<Record<CmsReturnsPolicy, string>> = {
   sales_only_v1: 'Chưa trừ trả hàng',
   net_returns_v1: 'Trừ trả hàng hoàn tất',
+  // Q-236 / BR12 — nhãn PM chốt; không mô tả là số hàng thực nhập lại kho.
+  full_line_qty_refund_v1: 'Trừ đủ lượng dòng bán khi có trả; GMV theo tiền hoàn',
 }
 
 export function parseCmsBasisSource(v: unknown): CmsBasisSource | null {
@@ -52,7 +54,7 @@ export function parseCmsProgramBasisRow(r: { quantity_basis?: unknown; quantity_
   const basis = r.quantity_basis === null ? null : parseCmsQuantityBasis(r.quantity_basis)
   if ((source === 'pending') !== (basis === null)) return null
   if (r.quantity_basis !== null && basis === null) return null
-  const rp = r.returns_policy === 'sales_only_v1' || r.returns_policy === 'net_returns_v1' ? r.returns_policy : null
+  const rp = parseCmsReturnsPolicy(r.returns_policy)
   if (!rp) return null
   return { basis, source, returnsPolicy: rp }
 }

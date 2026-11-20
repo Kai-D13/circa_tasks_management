@@ -2,6 +2,7 @@ import { StatusBadge } from '@/components/ds/StatusBadge'
 import {
   CMS_BASIS_SOURCE_NOTE, CMS_QUANTITY_BASIS_LABEL, CMS_RETURNS_POLICY_LABEL, type CmsProgramBasis,
 } from '@/lib/cms/calc/basisUi'
+import { cmsPolicyReadsReturns } from '@/lib/cms/calc/policy'
 
 // CMS-CALC-RET-2 P5.1 (spec §8.1) — badge cách tính lượng + chính sách trả của CHƯƠNG TRÌNH (cấu hình hiện tại; nhãn của một run lịch
 // sử đọc từ run đã ghim, không từ đây). undefined = DB trước 130 ⇒ không hiện gì (như cũ); null = không đọc được ⇒ nói rõ, không giả
@@ -17,7 +18,7 @@ export function CmsBasisBadges({ basis, withNote = false }: { basis: CmsProgramB
       {basis.basis
         ? <StatusBadge tone="info">{CMS_QUANTITY_BASIS_LABEL[basis.basis]}</StatusBadge>
         : <StatusBadge tone="warning">Chưa chọn cách tính</StatusBadge>}
-      <StatusBadge tone={basis.returnsPolicy === 'net_returns_v1' ? 'info' : 'neutral'}>{CMS_RETURNS_POLICY_LABEL[basis.returnsPolicy]}</StatusBadge>
+      <StatusBadge tone={cmsPolicyReadsReturns(basis.returnsPolicy) ? 'info' : 'neutral'}>{CMS_RETURNS_POLICY_LABEL[basis.returnsPolicy]}</StatusBadge>
       {note && basis.basis !== null && <span className="text-[12px] text-muted-foreground">{note}</span>}
     </span>
   )

@@ -44,7 +44,7 @@ import {
 import { CMS_BQ_DEFAULT_DEADLINE_MS, fetchCmsSalesSnapshot, type CmsBqRunner } from './source/bigquery'
 import type { CmsContractSourceProvider } from './source/contractSource'
 import type { CmsContractPart } from './calc/contractStage'
-import { CMS_CALC_CONTRACT_VERSION } from './calc/policy'
+import { CMS_CALC_CONTRACT_VERSION, CMS_CALC_CONTRACT_VERSIONS } from './calc/policy'
 import { cmsIsContractSnapshot, runCmsContractPath, type CmsContractSummary } from './contractSync'
 import { vnProgramWindowMicros } from './time'
 
@@ -67,6 +67,7 @@ export const CMS_CLEANUP_MAX_CALLS = 20
 export const CMS_SEAL_STEPS = 10
 
 export type CmsSalesRunDetail = Record<string, string | number | boolean | null>
+export type CmsSalesOpenDetail = Record<string, string | number | boolean | null | readonly string[]>
 /** Tuỳ chọn I/O của một RPC: timeout tính từ ngân sách còn lại — số NGUYÊN ms dương (AbortSignal.timeout từ chối số lẻ). */
 export interface CmsIo { timeoutMs: number }
 export type CmsSealReply = { ok?: boolean; sealed?: boolean; status?: string; code?: string; already?: boolean }
@@ -78,7 +79,8 @@ export interface CmsSalesSyncDeps {
   /** rpc_cms_sales_snapshot — CHỈ ĐỌC (dry-run). */
   loadSnapshot(programId: string, io: CmsIo): Promise<unknown>
   /** rpc_cms_sales_run_open — throw Error(<mã CMS_*>) khi bận / không đủ điều kiện. */
-  openRun(programId: string, detail: CmsSalesRunDetail, io: CmsIo): Promise<unknown>
+  /** detail open: như CmsSalesRunDetail + `calc_contracts` (mảng hợp đồng worker hiểu — 132). */
+  openRun(programId: string, detail: CmsSalesOpenDetail, io: CmsIo): Promise<unknown>
   stage(runId: string, part: CmsAnyStagePart | CmsContractPart, chunkNo: number, rows: CmsStageRow[], io: CmsIo): Promise<number>
   /** expect: CmsStageExpect (legacy) hoặc khai báo run contract (calc/contractStage.ts). */
   sealBegin(runId: string, expect: CmsStageExpect | Record<string, unknown>, io: CmsIo): Promise<CmsSealReply>
@@ -279,7 +281,11 @@ async function runCmsSalesSyncInner(deps: CmsSalesSyncDeps, programId: string, o
   } else {
     try {
       const declare = opts.calcFlags?.modes === true || opts.calcFlags?.returns === true
-      raw = await deps.openRun(programId, { source: opts.source, ...(declare ? { calc_contract: CMS_CALC_CONTRACT_VERSION } : {}) }, budget.work())
+      // `calc_contract` (130) + `calc_contracts` (132): DB chọn hợp đồng theo policy chương trình; worker không hiểu ⇒ held ở open.
+      raw = await deps.openRun(programId, {
+        source: opts.source,
+        ...(declare ? { calc_contract: CMS_CALC_CONTRACT_VERSION, calc_contracts: [...CMS_CALC_CONTRACT_VERSIONS] } : {}),
+      }, budget.work())
     } catch (e) {
       const code = cmsRpcCode(e, 'OPEN_FAILED')
       if (code === 'CMS_SYNC_BUSY') return done({ status: 'busy', code })

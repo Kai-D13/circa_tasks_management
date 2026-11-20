@@ -63,9 +63,10 @@ test.describe('CMS bán hàng RC — modes ON / returns OFF / thiếu FQN trả 
     expect(q.sql).not.toContain("'R' AS src_kind")
     expect(q.sql.match(/FROM `[^`]+`/g)).toEqual(['FROM `qa-proj.qa_ds.cms_order_view`'])
     expect(q.params.map((p) => p.name).filter((n) => /return|not_effective/.test(n))).toEqual([])
-    // Worker: chương trình sales_only ⇒ withReturns = false (contractSync — chính sách run, không theo cờ).
-    expect(src('lib/cms/contractSync.ts')).toContain("const net = snap.returnsPolicy === 'net_returns_v1'")
-    expect(src('lib/cms/contractSync.ts')).toContain('asOfMicros: asOf, withReturns: net, deadlineMs: budget.sourceMs(),')
+    // Worker: chương trình sales_only ⇒ withReturns = false (contractSync — chính sách run, không theo cờ). Q-236: policy đọc trả =
+    // net_returns_v1 / full_line_qty_refund_v1 (cmsPolicyReadsReturns — sales_only_v1 ⇒ false, kiểm ở cms-ret-q236-unit).
+    expect(src('lib/cms/contractSync.ts')).toContain('const net = cmsPolicyReadsReturns(snap.returnsPolicy)')
+    expect(src('lib/cms/contractSync.ts')).toContain('asOfMicros: asOf, withReturns: net, ...(profile ? { returnsProfile: profile } : {}), deadlineMs: budget.sourceMs(),')
   })
 
   test('cron sau chốt: returns OFF ⇒ 200 DISABLED, không dựng deps; xác nhận phục hồi ⇒ RETURNS_DISABLED trước mọi quyền / RPC', async () => {
@@ -255,6 +256,26 @@ test.describe('CMS bán hàng RC — XLSX nhãn theo trạng thái + đếm sự
     expect(m.has('Số dòng bán ghi nhận (gồm dòng không tính lượng)')).toBe(false)
     expect(String(m.get('Định nghĩa lượng'))).toContain('ĐỦ ĐIỀU KIỆN ròng')
     expect(objs(wb, 'Theo duoc si').reduce((a, r) => a + Number(r['Dòng trả hàng']), 0)).toBe(ret)
+  })
+
+  // Q-236: full_line dùng CÙNG bố cục net (cột ròng / trả / sự kiện trả), chỉ đổi NHÃN lượng / GMV trừ + thêm dòng "Quy tắc trừ trả".
+  // Dựng từ PG13 bằng cách đổi chính sách GHIM của run (header + rows cùng hợp đồng) — số / dòng không đổi.
+  test('Q-236 full_line (PG13 đổi chính sách ghim của run): nhãn "Lượng trừ theo quy ước CMS" / "GMV trừ theo tiền hoàn" + dòng Quy tắc trừ trả; net giữ nhãn cũ', () => {
+    const base = inputOf(CMS_FX_PG_CONTRACT.PG13, 'active')
+    const run = base.header.run
+    if (!run) throw new Error('fx run')
+    const contract = { ...run.contract, returnsPolicy: 'full_line_qty_refund_v1' as const, calcContractVersion: 'cms-calc-ret2-v2', statusDictionaryVersion: 'cms-return-status-v2' }
+    const i: CmsExportInput = { ...base, header: { ...base.header, run: { ...run, contract } }, rows: { ...base.rows, ...(base.rows.contract ? { contract } : {}) } }
+    const fl = buildCmsResultWorkbook(i), nt = buildCmsResultWorkbook(base)
+    const wb = wbOf(fl), wn = wbOf(nt)
+    const RQ = 'Lượng trừ theo quy ước CMS (đv CMS)', RG = 'GMV trừ theo tiền hoàn (VND)'
+    expect(head(wb, 'Theo san pham').slice(10)).toEqual(['K (cơ sở / 1 đv CMS)', 'SL đủ điều kiện (đv CMS)', 'SL bán gộp (đv CMS)', RQ, 'GMV bán gộp (VND)', RG, 'Dòng trả hàng'])
+    expect(head(wb, 'Theo duoc si').slice(-5)).toEqual(['SL đủ điều kiện (đv CMS)', 'SL bán gộp (đv CMS)', RQ, RG, 'Dòng trả hàng'])
+    expect(String(info(wb).get('Quy tắc trừ trả'))).toBe('Phiếu trả hoàn tất trừ đủ lượng của dòng bán được tham chiếu (một lần cho mỗi dòng, kể cả khi có nhiều phiếu); GMV trừ theo tiền hoàn thực tế của từng phiếu.')
+    // Net giữ nhãn cũ, không có dòng quy tắc; cùng số / số dòng (chỉ đổi nhãn).
+    expect(info(wn).has('Quy tắc trừ trả')).toBe(false)
+    expect(head(wn, 'Theo san pham')).not.toContain(RQ)
+    expect(fl.ok && nt.ok && fl.amountVnd === nt.amountVnd && fl.lineCount === nt.lineCount).toBe(true)
   })
 
   test('contract net (PG13, đợt trả sau): đã chốt mới nhắc báo cáo sau chốt; dòng trả = số sự kiện trả (3), không phải số chứng từ', () => {

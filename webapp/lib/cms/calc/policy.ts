@@ -5,7 +5,9 @@
 //      cms_unit  "Tính nguyên — đúng đơn vị CMS" chỉ dòng đúng ĐV CMS + lượng nguyên dương; dòng lẻ bỏ cả dòng khỏi lượng (Q-231)
 //  · Chính sách trả hàng của run (returns_policy):
 //      sales_only_v1   lịch sử — run chỉ đọc nguồn bán (nhãn results_basis của migration 126)
-//      net_returns_v1  mới — run đọc cả nguồn trả COMPLETED, tính ròng theo người / kỳ bán gốc (Q-230 / Q-232)
+//      net_returns_v1  run đọc cả nguồn trả COMPLETED, tính ròng theo người / kỳ bán gốc (Q-230 / Q-232) — lượng trả = lượng BI
+//      full_line_qty_refund_v1  Q-236 (18/11): phiếu COMPLETED hợp lệ trỏ dòng bán i ⇒ trừ ĐỦ B_i / E_i của dòng đó MỘT lần (bỏ qua lượng
+//                      BI), GMV trừ refund_amount TỪNG phiếu; hợp đồng run v2 + từ điển trạng thái v2 (design r1 §1–§3)
 // Ba trục KHÁC NHAU, không dùng chung tên biến `mode`: import mode (replace / append), format file (tiers / simple) và quantity_basis.
 // Parse CHÍNH XÁC (không trim / hạ chữ): giá trị lạ ⇒ null để caller fail-closed (không fallback pos_base / sales_only).
 // Hàm thuần, không I/O.
@@ -28,11 +30,24 @@ export const CMS_QUANTITY_POLICY_VERSION: Readonly<Record<CmsQuantityBasis, stri
   cms_unit: 'cms_unit_v2',
 }
 
-export const CMS_RETURNS_POLICIES = ['sales_only_v1', 'net_returns_v1'] as const
+export const CMS_RETURNS_POLICIES = ['sales_only_v1', 'net_returns_v1', 'full_line_qty_refund_v1'] as const
 export type CmsReturnsPolicy = (typeof CMS_RETURNS_POLICIES)[number]
+/** Policy có đọc nguồn trả (khác sales-only). */
+export type CmsReturnProfile = Exclude<CmsReturnsPolicy, 'sales_only_v1'>
+export const cmsPolicyReadsReturns = (p: CmsReturnsPolicy): p is CmsReturnProfile => p !== 'sales_only_v1'
 
-/** Phiên bản hợp đồng phép tính ròng (lib/cms/calc/net.ts) — ghim vào run cùng hai trục trên. */
+/**
+ * Phiên bản hợp đồng phép tính ròng (lib/cms/calc/net.ts) — ghim vào run cùng hai trục trên. v1 = run contract 130 (sales-only cms_unit /
+ * net_returns_v1, KHÔNG đổi nghĩa); v2 = run của chương trình full_line_qty_refund_v1 (migration 132). Bộ (policy, hợp đồng, từ điển) cố
+ * định theo policy — CHECK cms_sync_runs_contract_shape ép cùng bộ.
+ */
 export const CMS_CALC_CONTRACT_VERSION = 'cms-calc-ret2-v1'
+export const CMS_CALC_CONTRACT_VERSION_V2 = 'cms-calc-ret2-v2'
+/** Mọi hợp đồng run app này hiểu (khai ở open: `calc_contracts`). */
+export const CMS_CALC_CONTRACT_VERSIONS = [CMS_CALC_CONTRACT_VERSION, CMS_CALC_CONTRACT_VERSION_V2] as const
+export type CmsCalcContractVersion = (typeof CMS_CALC_CONTRACT_VERSIONS)[number]
+export const cmsCalcContractVersionFor = (p: CmsReturnsPolicy): CmsCalcContractVersion =>
+  p === 'full_line_qty_refund_v1' ? CMS_CALC_CONTRACT_VERSION_V2 : CMS_CALC_CONTRACT_VERSION
 
 export function parseCmsQuantityBasis(v: unknown): CmsQuantityBasis | null {
   return typeof v === 'string' && (CMS_QUANTITY_BASES as readonly string[]).includes(v) ? (v as CmsQuantityBasis) : null

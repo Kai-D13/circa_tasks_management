@@ -246,15 +246,16 @@ test.describe('COMP-INT — lõi CLI chứng nhận @desktop', () => {
     expect(A.cmsAttestExportCsv([row('a')]).split('\r\n')[0]).toBe('order_line_id,order_id,order_code,product_id,seller_email,pos_code,order_type,order_status,completed_at,quantity_raw,uom_raw,base_quantity,gmv_amount,source_updated_at')
   })
 
-  const prog: A.CmsAttestProgram = { id: P, isTest: true, status: 'active', startDate: '2026-10-01', endDate: '2026-10-31', productIds: ['901'], currentRunId: RUN }
+  const prog: A.CmsAttestProgram = { id: P, isTest: true, status: 'active', startDate: '2026-10-01', endDate: '2026-10-31', productIds: ['901'], currentRunId: RUN,
+    quantityBasis: 'pos_base', runQuantityBasis: null, runContractVersion: null }
   const scope = { startDate: '2026-10-01', endDate: '2026-10-31', productIds: ['901'] }
   const meta = (o: Partial<CmsI4EvidenceMeta['reference']> = {}, oa: Partial<CmsI4EvidenceMeta['app']> = {}): CmsI4EvidenceMeta => ({ version: 1,
     reference: { inputKind: 'reference_source', source: 'Nguồn độc lập QA', exportedAt: TS, asOf: TS, fileSha256: H('1'), scope, runId: null, ...o },
     app: { inputKind: 'published_run', source: 'rpc_cms_run_source_export', exportedAt: TS, asOf: TS, fileSha256: H('2'), scope, runId: RUN, ...oa } })
   const side = { inputKind: null, fileSha256: null, rowsRead: 5, rowIssues: 0, issues: {}, duplicateLineIds: 0, nonCanonicalProductId: 0, outOfScope: 0, inScope: 5,
-    candidates: 5, afterAsOf: 0, afterExportedAt: 0, rowsFp: H('c'), decisionFp: H('d') }
+    candidates: 5, afterAsOf: 0, afterExportedAt: 0, rowsFp: H('c'), decisionFp: H('d'), unitFp: null }
   const cmp = (o: Partial<CmsI4CompareResult> = {}): CmsI4CompareResult => ({
-    version: 'cms-i4-compare-v1', fpVersion: 'cms-rows-fp-v1', verdict: 'MATCH', dataIssues: [], notProven: [], limits: [],
+    version: 'cms-i4-compare-v1', fpVersion: 'cms-rows-fp-v1', mode: 'decision10', verdict: 'MATCH', dataIssues: [], notProven: [], limits: [],
     scope: { startDate: '2026-10-01', endDate: '2026-10-31', products: 1, scopeHash: '' }, asOf: TS,
     reference: { ...side, inputKind: 'reference_source' }, app: { ...side, inputKind: 'published_run' },
     compare: { matched: 5, missing: 0, extra: 0, changed: 0, changedByField: {}, infoDiffByField: {} },

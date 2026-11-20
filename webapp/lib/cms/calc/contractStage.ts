@@ -17,7 +17,10 @@ import {
 import { cmsClassContributes } from './classify'
 import type { CmsCalcInput, CmsCalcOutput, CmsCalcSaleLine } from './net'
 import { compareCmsContractLines, compareUtf8Bytes } from './order'
-import { CMS_CALC_CONTRACT_VERSION, parseCmsQuantityBasis, parseCmsReturnsPolicy, type CmsQuantityBasis, type CmsReturnsPolicy } from './policy'
+import {
+  cmsCalcContractVersionFor, cmsPolicyReadsReturns, parseCmsQuantityBasis, parseCmsReturnsPolicy, type CmsCalcContractVersion,
+  type CmsQuantityBasis, type CmsReturnsPolicy,
+} from './policy'
 import { CMS_RETURN_EFFECTIVE_STATUS, type CmsReturnRecord } from './returns'
 import { cmsCaptureSrc, cmsSrcClean } from './src'
 import { cmsDigestRowHash, cmsDigestSet, cmsProductsHash, cmsReturnDigestHash, cmsSalesDigestHash } from './srcDigest'
@@ -32,8 +35,8 @@ export const CMS_CONTRACT_SEAL_STEPS = 13
 export interface CmsContractSnapshot extends CmsSalesSnapshot {
   quantityBasis: CmsQuantityBasis
   returnsPolicy: CmsReturnsPolicy
-  /** Hợp đồng DB ghim cho run vừa mở; null ⇒ run legacy. */
-  calcContractVersion: string | null
+  /** Hợp đồng DB ghim cho run vừa mở; null ⇒ run legacy. Luôn = hợp đồng của policy (v2 ⇔ full_line). */
+  calcContractVersion: CmsCalcContractVersion | null
   /** unit_CMS theo ProductID. */
   unitCms: ReadonlyMap<string, string | null>
 }
@@ -47,7 +50,7 @@ export function parseCmsContractSnapshot(raw: unknown): CmsContractSnapshot {
   const policy = parseCmsReturnsPolicy(o.returns_policy)
   if (policy === null) throw new CmsSnapshotError('returns_policy')
   const cc = o.calc_contract_version
-  if (cc !== null && cc !== undefined && cc !== CMS_CALC_CONTRACT_VERSION) throw new CmsSnapshotError('calc_contract_version')
+  if (cc !== null && cc !== undefined && cc !== cmsCalcContractVersionFor(policy)) throw new CmsSnapshotError('calc_contract_version')
   const unitCms = new Map<string, string | null>()
   for (const p of o.products as unknown[]) {
     const r = p as Record<string, unknown>
@@ -55,7 +58,7 @@ export function parseCmsContractSnapshot(raw: unknown): CmsContractSnapshot {
     if (u !== null && u !== undefined && typeof u !== 'string') throw new CmsSnapshotError('products.unit_cms')
     unitCms.set(String(r.product_id), (u ?? null) as string | null)
   }
-  return { ...base, quantityBasis: basis, returnsPolicy: policy, calcContractVersion: (cc ?? null) as string | null, unitCms }
+  return { ...base, quantityBasis: basis, returnsPolicy: policy, calcContractVersion: (cc ?? null) as CmsCalcContractVersion | null, unitCms }
 }
 
 /** Input computeCmsNet từ snapshot run contract. */
@@ -94,6 +97,7 @@ export interface CmsContractPayload {
 }
 
 const dec = (u: bigint) => formatCmsDecimal(u)
+const decN = (u: bigint | null) => (u === null ? null : formatCmsDecimal(u))
 const ts = (m: bigint | null) => (m === null ? null : formatUtcMicros(m))
 
 /** Thô q / u của dòng bán ⇒ cột *_raw / *_src / *_src_flag (cùng quy tắc CHECK 130 + seal N1). */
@@ -113,8 +117,12 @@ function srcCols(l: CmsCalcSaleLine) {
  */
 export function buildCmsContractStagePayload(snap: CmsContractSnapshot, sales: readonly CmsCalcSaleLine[], returns: readonly CmsReturnRecord[],
   out: Extract<CmsCalcOutput, { ok: true }>, meta: CmsContractMeta): CmsContractPayload {
-  const net = snap.returnsPolicy === 'net_returns_v1'
+  // `net` = run đọc nguồn trả (net_returns_v1 hoặc full_line_qty_refund_v1): có part return_lines + pin.returns.
+  const net = cmsPolicyReadsReturns(snap.returnsPolicy)
   if (!net && returns.length) throw new Error('CMS contract: chương trình sales-only không nhận phiếu trả')
+  for (const r of returns) {
+    if (r.kind === 'COMPLETED' && r.profile !== snap.returnsPolicy) throw new Error('CMS contract: phiếu chuẩn hoá khác policy run')
+  }
   if (meta.rowsRead !== sales.length + meta.rowsRejected) throw new Error('CMS contract: rows_read ≠ dòng hợp lệ + dòng từ chối')
   if ((meta.jobId === undefined) === (meta.snapshotId === undefined)) throw new Error('CMS contract: pin cần đúng một job_id / snapshot_id')
   const ppId = new Map(snap.products.map((p) => [p.productId, p.id]))
@@ -192,11 +200,11 @@ export function buildCmsContractStagePayload(snap: CmsContractSnapshot, sales: r
     return {
       return_event_id: r.returnEventId, seq: String(seq), return_status: CMS_RETURN_EFFECTIVE_STATUS, return_document_id: r.returnDocumentId,
       return_code: r.returnCode, recorded_at: formatUtcMicros(r.recordedAtMicros), original_order_line_id: r.originalOrderLineId,
-      original_order_id: r.originalOrderId, product_id: r.productId, return_base_quantity: dec(r.baseQuantityUnits),
+      original_order_id: r.originalOrderId, product_id: r.productId, return_base_quantity: decN(r.baseQuantityUnits),
       return_gmv_amount: dec(r.gmvUnits), original_completed_at: formatUtcMicros(r.original.completedAtMicros),
       original_order_type: r.original.orderType, original_order_status: r.original.orderStatus,
       original_seller_email: r.original.sellerEmail, original_pos_code: r.original.posCode,
-      original_base_quantity: dec(r.original.baseQuantityUnits), original_gmv_amount: dec(r.original.gmvUnits),
+      original_base_quantity: decN(r.original.baseQuantityUnits), original_gmv_amount: decN(r.original.gmvUnits),
       original_quantity_src: q.src, original_uom_src: u.src, original_quantity_src_flag: q.flag, original_uom_src_flag: u.flag,
       source_updated_at: ts(r.sourceUpdatedAtMicros), disposition,
       sale_ref_line_id: ['APPLIED', 'ORIGIN_UNASSIGNED', 'ORIGIN_OUT_OF_SCOPE'].includes(disposition) ? r.originalOrderLineId : null,

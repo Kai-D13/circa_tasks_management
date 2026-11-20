@@ -20,14 +20,22 @@
 //       ⇒ kết quả / dòng / XLSX của PG16 = engine legacy (computeCmsProgram, như T11) trên CÙNG dòng bán ⇒ DTO legacy (contract legacy,
 //       không cột ròng); `out` (computeCmsNet pos_base + sales_only) chỉ giữ để đối chứng tiền / Q với đường legacy, KHÔNG dựng DTO.
 // Khối `contract` của run contract khớp cms__run_contract + CHECK 130: unit_key_version / status_dictionary_version LUÔN có (kể cả
-// sales-only / pos_base net); returns_as_of chỉ run net.
+// sales-only / pos_base net); returns_as_of chỉ run đọc trả (net / full_line).
+//  132 r1 (Q-236 / Q-237, PM r0 P1-03) — danh sách RIÊNG (không đổi 4 chương trình trên):
+//  PG17 Cộng dồn + trừ đủ dòng bán (pos_base · full_line_qty_refund_v1, hợp đồng cms-calc-ret2-v2 / từ điển status-v2) — đang chạy.
+//  PG18 Tính nguyên + trừ đủ dòng bán (cms_unit · full_line) — ĐÃ HẾT KỲ + ĐÃ CHỐT run contract: payout = số RÒNG (3 phiếu trước chốt
+//       đã trừ); báo cáo sau chốt lập tay ngày 31 (phiên super + lý do) với 1 phiếu SAU chốt trên dòng vitamin của B ⇒ tính lại từ số gộp
+//       đóng băng trừ MỌI phiếu (phiếu đã trừ trước chốt không trừ lại).
 import { buildSellerIndex } from './mapping'
 import { computeCmsProgram, type CmsEngineOutput } from './engine/compute'
 import type { CmsEngineProgramInput } from './engine/config'
 import { normalizeSalesRow, type CmsRawRow, type CmsSalesLine } from './source/contract'
-import { CMS_RETURN_STATUS_DICTIONARY_VERSION, normalizeReturnRow, type CmsReturnRecord } from './calc/returns'
+import { cmsReturnStatusDictionaryVersion, normalizeReturnRow, type CmsReturnRecord } from './calc/returns'
 import { cmsCalcSaleLine, computeCmsNet, type CmsCalcOutput, type CmsCalcSaleLine } from './calc/net'
-import { CMS_CALC_CONTRACT_VERSION, CMS_QUANTITY_POLICY_VERSION, type CmsQuantityBasis, type CmsReturnsPolicy } from './calc/policy'
+import {
+  CMS_QUANTITY_POLICY_VERSION, cmsCalcContractVersionFor, cmsPolicyReadsReturns, type CmsQuantityBasis, type CmsReturnProfile, type CmsReturnsPolicy,
+} from './calc/policy'
+import { parseCmsPayout, type CmsPayoutDto } from './payoutView'
 import type { CmsProgramBasis } from './calc/basisUi'
 import { CMS_UNIT_KEY_VERSION } from './unitKey'
 import { formatCmsDecimal, parseCmsDecimal } from './decimal'
@@ -82,7 +90,9 @@ type ReturnDef = [string, string, string, string, number, number]
 const RETURNS: ReturnDef[] = [['01', '01', '5', '16000', 8, 10], ['02', '04', '1', '85000', 9, 15], ['03', '08', '10', '92500', 10, 11]]
 
 /** `run` = loại run DB SINH RA cho cấu hình chương trình (mig 130: chỉ pos_base + sales_only_v1 là legacy) — không phải lựa chọn tự do. */
-interface CDef { n: number; name: string; basis: CmsQuantityBasis; policy: CmsReturnsPolicy; withReturns: boolean; run: 'contract' | 'legacy' }
+interface CDef { n: number; name: string; basis: CmsQuantityBasis; policy: CmsReturnsPolicy; withReturns: boolean; run: 'contract' | 'legacy'; locked?: boolean
+  /** Phiếu thêm chỉ của chương trình này (sau RETURNS). */
+  extraReturns?: ReturnDef[] }
 /** Luật DB (cms__open run v_ct + CHECK contract_shape): run contract ⇔ cms_unit HOẶC net_returns_v1. */
 export const cmsFxRunIsContract = (basis: CmsQuantityBasis, policy: CmsReturnsPolicy): boolean => basis !== 'pos_base' || policy !== 'sales_only_v1'
 const DEFS: CDef[] = [
@@ -91,9 +101,22 @@ const DEFS: CDef[] = [
   { n: 15, name: 'CMS mẫu cộng dồn + trừ trả hàng', basis: 'pos_base', policy: 'net_returns_v1', withReturns: true, run: 'contract' },
   { n: 16, name: 'CMS mẫu cộng dồn, chưa trừ trả hàng', basis: 'pos_base', policy: 'sales_only_v1', withReturns: false, run: 'legacy' },
 ]
-for (const d of DEFS) if ((d.run === 'contract') !== cmsFxRunIsContract(d.basis, d.policy)) throw new Error(`fx PG${d.n}: loại run trái luật DB`)
+/** 132 r1: chương trình full_line (danh sách riêng — không đổi các trang / test đang dùng 4 chương trình trên). */
+const DEFS_FULL: CDef[] = [
+  // PM 18/11 P1-03: phiếu thứ hai CÙNG dòng bán 01 (ghi nhận sau phiếu 01) ⇒ lượng 0 (dòng đã trừ đủ ở phiếu trước), GMV vẫn trừ 9.000 tiền hoàn.
+  { n: 17, name: 'CMS mẫu cộng dồn + trừ đủ dòng bán khi có trả', basis: 'pos_base', policy: 'full_line_qty_refund_v1', withReturns: true, run: 'contract',
+    extraReturns: [['05', '01', '3', '9000', 10, 16]] },
+  { n: 18, name: 'CMS mẫu tính nguyên + trừ đủ dòng bán — đã chốt', basis: 'cms_unit', policy: 'full_line_qty_refund_v1', withReturns: true, run: 'contract', locked: true },
+]
+for (const d of [...DEFS, ...DEFS_FULL]) if ((d.run === 'contract') !== cmsFxRunIsContract(d.basis, d.policy)) throw new Error(`fx PG${d.n}: loại run trái luật DB`)
+/** Profile phiếu trả của chương trình (sales-only không đọc phiếu — normalizer mặc định). */
+const profileOf = (p: CmsReturnsPolicy): CmsReturnProfile => (cmsPolicyReadsReturns(p) ? p : 'net_returns_v1')
 const START = cmsFxDay(-14)
 const END = cmsFxDay(15)
+/** Chương trình đã hết kỳ + đã chốt (PG18). */
+const START_LOCKED = cmsFxDay(-40)
+const END_LOCKED = cmsFxDay(-10)
+const periodOf = (d: CDef) => (d.locked ? { start: START_LOCKED, end: END_LOCKED } : { start: START, end: END })
 const STORES = [CMS_FX_STORES.S1, CMS_FX_STORES.S2]
 const AS_OF = '2026-11-15T00:30:00.000000Z'
 const PUBLISHED = '2026-11-15T01:05:00.000000Z'
@@ -101,11 +124,11 @@ const STARTED = '2026-11-15T01:00:00.000000Z'
 const addDays = (d: string, n: number) => { const x = new Date(`${d}T00:00:00Z`); x.setUTCDate(x.getUTCDate() + n); return x.toISOString().slice(0, 10) }
 const hex = (seed: string) => Array.from({ length: 64 }, (_, i) => '0123456789abcdef'[(seed.charCodeAt(i % seed.length) * 7 + i * 13) % 16]).join('')
 
-function rawSale(n: number, s: SaleDef): CmsRawRow {
+function rawSale(n: number, s: SaleDef, start: string = START): CmsRawRow {
   const [code, u, pi, q, uom, b, day, h] = s
   const p = PRODUCTS[pi]
   const id = String(n * 100_000 + Number(code))
-  const at = vnAt(addDays(START, day), h, Number(code) * 3)
+  const at = vnAt(addDays(start, day), h, Number(code) * 3)
   const store = cmsFxUserStore(CMS_FX_USERS[u])!
   return {
     order_line_id: id, order_id: `HD${id}`, order_code: `HD${id}`, product_id: p.productId, seller_email: cmsFxSellerEmail(u),
@@ -113,12 +136,12 @@ function rawSale(n: number, s: SaleDef): CmsRawRow {
     base_quantity: b, gmv_amount: fmt(units(b) * BigInt(p.pricePerBase)), source_updated_at: at,
   }
 }
-function rawReturn(n: number, r: ReturnDef, sale: CmsRawRow): CmsRawRow {
+function rawReturn(n: number, r: ReturnDef, sale: CmsRawRow, start: string = START): CmsRawRow {
   const [code, , rb, rh, day, h] = r
   const id = `${n}-RT${code}`
   return {
     return_event_id: id, return_document_id: `PT${n}${code}`, return_code: `PT${n}${code}`, return_status: 'COMPLETED',
-    return_recorded_at: vnAt(addDays(START, day), h, 5), original_order_line_id: sale.order_line_id, original_order_id: sale.order_id,
+    return_recorded_at: vnAt(addDays(start, day), h, 5), original_order_line_id: sale.order_line_id, original_order_id: sale.order_id,
     product_id: sale.product_id, return_base_quantity: rb, return_gmv_amount: rh,
     original_completed_at: sale.completed_at, original_order_type: sale.order_type, original_order_status: sale.order_status,
     original_seller_email: sale.seller_email, original_pos_code: sale.pos_code, original_base_quantity: sale.base_quantity,
@@ -141,15 +164,17 @@ export interface CmsFxContractProgram {
 }
 
 function buildContract(d: CDef): CmsFxContractProgram {
-  const rawSales = SALES.map((s) => rawSale(d.n, s))
+  const { start, end } = periodOf(d)
+  const profile = profileOf(d.policy)
+  const rawSales = SALES.map((s) => rawSale(d.n, s, start))
   const sales = rawSales.map((raw) => {
     const r = normalizeSalesRow(raw)
     if (!r.ok) throw new Error(`fx contract sale ${raw.order_line_id}: ${JSON.stringify(r.issues)}`)
     return cmsCalcSaleLine(raw, r.value)
   })
-  const rawReturns = d.withReturns ? RETURNS.map((r) => rawReturn(d.n, r, rawSales.find((x) => x.order_line_id === String(d.n * 100_000 + Number(r[1])))!)) : []
+  const rawReturns = d.withReturns ? [...RETURNS, ...(d.extraReturns ?? [])].map((r) => rawReturn(d.n, r, rawSales.find((x) => x.order_line_id === String(d.n * 100_000 + Number(r[1])))!, start)) : []
   const returns = rawReturns.map((raw) => {
-    const r = normalizeReturnRow(raw)
+    const r = normalizeReturnRow(raw, profile)
     if (!r.ok) throw new Error(`fx contract return ${raw.return_event_id}`)
     return r.value
   })
@@ -160,7 +185,7 @@ function buildContract(d: CDef): CmsFxContractProgram {
   }))
   const out = computeCmsNet({
     program: {
-      startDate: START, endDate: END, catalogTargetGmv: null, storeIds: STORES, quantityBasis: d.basis, returnsPolicy: d.policy,
+      startDate: start, endDate: end, catalogTargetGmv: null, storeIds: STORES, quantityBasis: d.basis, returnsPolicy: d.policy,
       products: PRODUCTS.map((p) => ({ productId: p.productId, gmvBasis: p.gmvBasis, targetGmv: p.targetGmv, baseQuantityCms: p.k, unitCms: p.unit,
         tiers: p.tiers.map((t) => ({ from: t.from, to: t.to, amount: t.amount })) })),
     },
@@ -168,7 +193,7 @@ function buildContract(d: CDef): CmsFxContractProgram {
   })
   if (!out.ok) throw new Error(`fx contract PG${d.n} HOLD ${out.holds.map((h) => h.code).join(',')}`)
   const row: CmsAdminListItem = {
-    id: cmsFxUid(d.n), name: d.name, status: 'active', startDate: START, endDate: END, scope: 'stores', isTest: false, catalogTargetGmv: null,
+    id: cmsFxUid(d.n), name: d.name, status: d.locked ? 'locked' : 'active', startDate: start, endDate: end, scope: 'stores', isTest: false, catalogTargetGmv: null,
     configVersion: 2, activatedAt: '2026-10-31T02:00:00Z', createdAt: '2026-10-28T02:00:00Z', productCount: products.length,
     productIds: products.map((p) => p.productId), lastImport: null,
   }
@@ -190,11 +215,17 @@ function buildContract(d: CDef): CmsFxContractProgram {
 
 export const CMS_FX_CONTRACT_PROGRAMS: readonly CmsFxContractProgram[] = DEFS.map(buildContract)
 export const CMS_FX_PG_CONTRACT = Object.fromEntries(CMS_FX_CONTRACT_PROGRAMS.map((p, i) => [`PG${DEFS[i].n}`, p.fx.row.id])) as Record<'PG13' | 'PG14' | 'PG15' | 'PG16', string>
-export const cmsFxContract = (id: string | null | undefined): CmsFxContractProgram | null => CMS_FX_CONTRACT_PROGRAMS.find((p) => p.fx.row.id === id) ?? null
+/** 132 r1: chương trình full_line (PG17 đang chạy · PG18 đã chốt run contract). */
+export const CMS_FX_FULL_LINE_PROGRAMS: readonly CmsFxContractProgram[] = DEFS_FULL.map(buildContract)
+export const CMS_FX_PG_FULL_LINE = Object.fromEntries(CMS_FX_FULL_LINE_PROGRAMS.map((p, i) => [`PG${DEFS_FULL[i].n}`, p.fx.row.id])) as Record<'PG17' | 'PG18', string>
+const ALL_CONTRACT = [...CMS_FX_CONTRACT_PROGRAMS, ...CMS_FX_FULL_LINE_PROGRAMS]
+export const cmsFxContract = (id: string | null | undefined): CmsFxContractProgram | null => ALL_CONTRACT.find((p) => p.fx.row.id === id) ?? null
 export const cmsFxContractOfProduct = (ppId: string | null | undefined): CmsFxContractProgram | null =>
-  CMS_FX_CONTRACT_PROGRAMS.find((p) => p.fx.products.some((x) => x.id === ppId)) ?? null
+  ALL_CONTRACT.find((p) => p.fx.products.some((x) => x.id === ppId)) ?? null
 /** Danh sách D1 / D3 (fx=contract): bốn chương trình mới (PG13–15 run contract, PG16 run legacy do admin chọn Tính lẻ) đang chạy. */
 export const CMS_FX_STAFF_CONTRACT: CmsProgramRowView[] = CMS_FX_CONTRACT_PROGRAMS.map((p) => cmsFxRowView(p.fx.row))
+/** Danh sách D1 / D3 (fx=full): chương trình full_line (PG17 đang chạy, PG18 đã chốt). */
+export const CMS_FX_STAFF_FULL_LINE: CmsProgramRowView[] = CMS_FX_FULL_LINE_PROGRAMS.map((p) => cmsFxRowView(p.fx.row))
 /** Badge cách tính / chính sách trả (A3) — chương trình mới do admin chọn. */
 export function cmsFxContractBasis(id: string): CmsProgramBasis | null {
   const c = cmsFxContract(id)
@@ -212,16 +243,16 @@ function visible(v: CmsFxViewer, userId: string): boolean {
 const contractJson = (c: CmsFxContractProgram) => {
   if (c.runKind !== 'contract') throw new Error('fx contractJson: run legacy không có khối hợp đồng contract')
   return {
-    legacy: false, calc_contract_version: CMS_CALC_CONTRACT_VERSION, quantity_basis: c.basis, quantity_policy_version: CMS_QUANTITY_POLICY_VERSION[c.basis],
-    returns_policy: c.policy, unit_key_version: CMS_UNIT_KEY_VERSION, status_dictionary_version: CMS_RETURN_STATUS_DICTIONARY_VERSION,
-    returns_as_of: c.policy === 'net_returns_v1' ? AS_OF : null,
+    legacy: false, calc_contract_version: cmsCalcContractVersionFor(c.policy), quantity_basis: c.basis, quantity_policy_version: CMS_QUANTITY_POLICY_VERSION[c.basis],
+    returns_policy: c.policy, unit_key_version: CMS_UNIT_KEY_VERSION, status_dictionary_version: cmsReturnStatusDictionaryVersion(profileOf(c.policy)),
+    returns_as_of: cmsPolicyReadsReturns(c.policy) ? AS_OF : null,
   }
 }
 export type CmsFxContractScenario = 'running' | 'top' | 'held' | 'none' | 'error' | 'gone' | 'config' | 'reset'
 
 function header(c: CmsFxContractProgram, v: CmsFxViewer, o: { held?: boolean; configChanged?: boolean; reset?: boolean }): CmsResultHeaderDto {
   const su = v.kind === 'super'
-  const net = c.policy === 'net_returns_v1'
+  const net = cmsPolicyReadsReturns(c.policy)
   const t = c.out.totals
   const run = o.reset ? null : c.fx.run!
   return parseCmsResultHeader({
@@ -330,14 +361,16 @@ export const cmsFxParseReturnsScenario = (v: string | undefined): CmsFxReturnsSc
 /** Trạng thái sổ trả của chương trình net (DB) ⇒ parser thật. Baseline = các phiếu đã áp ở run hiện hành (dữ liệu giả ở trên). */
 export function cmsFxReturnConflicts(programId: string, s: CmsFxReturnsScenario): CmsReturnConflictsDto | null {
   const c = cmsFxContract(programId) ?? null
-  if (!c || c.policy !== 'net_returns_v1' || s === 'error') return null
+  if (!c || !cmsPolicyReadsReturns(c.policy) || s === 'error') return null
+  // Q-236: baseline fp v2 (full_line) không có lượng.
+  const fl = c.policy === 'full_line_qty_refund_v1'
   const target = c.rawReturns[1]
   const hasOpen = s === 'conflict' || s === 'proof'
   const openHash = hex(hasOpen ? `open-${target.return_event_id}` : 'open-empty')
   const evalSeq = s === 'clean' ? 3 : s === 'conflict' ? 4 : s === 'proof' ? 5 : 6
   const verdict = s === 'conflict' ? 'MISMATCH' : s === 'proof' ? 'OPEN_CONFLICT_MATCH' : 'CLEAN'
   const observed = { return_document_id: target.return_document_id, original_order_line_id: target.original_order_line_id, product_id: target.product_id,
-    base_quantity: target.return_base_quantity, refund_amount: target.return_gmv_amount }
+    base_quantity: fl ? null : target.return_base_quantity, refund_amount: target.return_gmv_amount }
   return parseCmsReturnConflicts({
     program_id: c.fx.row.id, returns_policy: c.policy, config_version: c.fx.row.configVersion, baselines: c.rawReturns.length,
     open_set_hash: openHash, open_count: hasOpen ? 1 : 0, open_truncated: false,
@@ -437,4 +470,113 @@ export function cmsFxCloseReports(programId: string): CmsCloseReportSummary[] | 
 }
 export function cmsFxCloseReport(programId: string, reportId: string): CmsCloseReportPage | null {
   return programId === CMS_FX_REPORT_PROGRAM && reportId === REPORT_ID ? buildReport().page : null
+}
+
+// ── 132 r1: PG18 đã chốt run CONTRACT (full_line) — payout RÒNG + báo cáo sau chốt lập tay ngày 31 ─────────────────────────────────
+const PG18_REPORT_ID = cmsFxUid(9981)
+const PG18_REPORT_AS_OF = '2026-11-14T21:00:00.000000Z'
+const FX_SUPER_ID = '00000000-0000-4000-8000-000000000001'
+export const CMS_FX_CONTRACT_REPORT_ID = PG18_REPORT_ID
+let pg18Cache: { summary: CmsCloseReportSummary; page: CmsCloseReportPage } | null = null
+
+function buildContractReport() {
+  if (pg18Cache) return pg18Cache
+  const c = cmsFxContract(CMS_FX_PG_FULL_LINE.PG18)
+  if (!c) throw new Error('fx PG18')
+  const row = c.fx.row
+  // Phiếu SAU chốt (ghi nhận sau ngày kết thúc): dòng vitamin 3 hộp của B (đơn vị CMS) ⇒ trừ đủ E của dòng; dòng khác không đổi.
+  const sale = c.sales.find((l) => l.orderLineId === String(18 * 100_000 + 7))!
+  const raw: CmsRawRow = {
+    return_event_id: '18-RT04', return_document_id: 'PT1804', return_code: 'PT1804', return_status: 'COMPLETED',
+    return_recorded_at: vnAt(addDays(row.endDate, 3), 10, 15), original_order_line_id: sale.orderLineId, original_order_id: sale.orderId,
+    product_id: sale.productId, return_base_quantity: '0', return_gmv_amount: '320000', original_completed_at: formatUtcMicros(sale.completedAtMicros),
+    original_order_type: sale.orderType, original_order_status: sale.orderStatus, original_seller_email: sale.sellerEmail, original_pos_code: sale.posCode,
+    original_base_quantity: fmt(sale.baseQuantityUnits), original_gmv_amount: fmt(sale.gmvUnits), original_quantity_raw: sale.quantityRaw,
+    original_uom_raw: sale.uomRaw, source_updated_at: null,
+  }
+  const late = normalizeReturnRow(raw, 'full_line_qty_refund_v1')
+  if (!late.ok) throw new Error('fx PG18 phiếu sau chốt')
+  const re = computeCmsNet({
+    program: {
+      startDate: row.startDate, endDate: row.endDate, catalogTargetGmv: null, storeIds: STORES, quantityBasis: c.basis, returnsPolicy: c.policy,
+      products: PRODUCTS.map((p) => ({ productId: p.productId, gmvBasis: p.gmvBasis, targetGmv: p.targetGmv, baseQuantityCms: p.k, unitCms: p.unit,
+        tiers: p.tiers.map((t) => ({ from: t.from, to: t.to, amount: t.amount })) })),
+    },
+    sales: c.sales, returns: [...c.returns, late.value], sellers: CMS_FX_SELLERS, asOfMicros: parseUtcMicros(PG18_REPORT_AS_OF)!,
+  })
+  if (!re.ok) throw new Error(`fx PG18 report HOLD ${re.holds.map((h) => h.code).join(',')}`)
+  const reBy = new Map(re.results.map((r) => [`${r.userId}|${r.productId}`, r]))
+  const frozen = [...c.out.results].sort((a, b) => (`${a.userId}|${a.productId}` < `${b.userId}|${b.productId}` ? -1 : 1))
+  // Hình dạng dòng báo cáo run CONTRACT (132 r1): frozen_base = số GỘP đủ điều kiện đóng băng; return_* = MỌI phiếu hiệu lực của snapshot;
+  // frozen_return_* = phần đã trừ trong số chốt; frozen_amount = số RÒNG đã chốt.
+  const lines = frozen.map((f, i) => {
+    const g = reBy.get(`${f.userId}|${f.productId}`)
+    if (!g) throw new Error('fx PG18 pair')
+    return {
+      line_no: i + 1, user_id: f.userId, full_name: cmsFxUserName(f.userId), program_product_id: c.fx.pp.get(f.productId), product_id: f.productId,
+      gmv_basis: f.gmvBasis, per_unit: fmt(f.perUnitUnits), frozen_base: fmt(f.eligibleSaleBaseUnits), frozen_qty: f.cmsQuantity.toString(),
+      frozen_gmv: fmt(f.saleGmvUnits), frozen_gate_met: f.gate.met, frozen_amount: f.amountVnd.toString(),
+      return_base: fmt(g.eligibleReturnBaseUnits), return_gmv: fmt(g.returnGmvUnits), return_events: g.returnEvents, eligible_base: fmt(g.eligibleNetBaseUnits),
+      net_gmv: fmt(g.netGmvUnits), gate_met: g.gate.met, recomputed_qty: g.cmsQuantity.toString(), recomputed_amount: g.amountVnd.toString(),
+      delta: (g.amountVnd - f.amountVnd).toString(),
+      frozen_return_base: fmt(f.eligibleReturnBaseUnits), frozen_return_gmv: fmt(f.returnGmvUnits),
+    }
+  })
+  const frozenAmount = frozen.reduce((a, f) => a + f.amountVnd, ZERO)
+  const recomputed = lines.reduce((a, l) => a + BigInt(l.recomputed_amount), ZERO)
+  const report = {
+    id: PG18_REPORT_ID, program_id: row.id, payout_run_id: c.fx.run!.id, eval_seq: 4, returns_as_of: PG18_REPORT_AS_OF, returns_digest: hex('report-digest-pg18'),
+    frozen_amount: frozenAmount.toString(), recomputed_amount: recomputed.toString(), delta_amount: (recomputed - frozenAmount).toString(),
+    return_events: lines.reduce((a, l) => a + l.return_events, 0), line_count: lines.length, created_via: 'super', created_at: '2026-11-14T21:05:00.000000Z',
+    created_by: FX_SUPER_ID, created_by_name: 'Super mẫu', manual_reason: 'Phiếu PT1804 hoàn tất sau ngày 30 — đối soát ngày 31 (dữ liệu minh hoạ).',
+    returns_profile: 'full_line_qty_refund_v1', not_a_payment_order: true,
+  }
+  const page = parseCmsCloseReportPage({ report, lines, next_after: null })
+  const summary = parseCmsCloseReports({ program_id: row.id, reports: [report] }).reports[0]
+  pg18Cache = { summary, page }
+  return pg18Cache
+}
+/** Báo cáo sau chốt của PG18 (run contract); chương trình khác ⇒ null. */
+export function cmsFxContractCloseReports(programId: string): CmsCloseReportSummary[] | null {
+  return programId === CMS_FX_PG_FULL_LINE.PG18 ? [buildContractReport().summary] : null
+}
+export function cmsFxContractCloseReport(programId: string, reportId: string): CmsCloseReportPage | null {
+  return programId === CMS_FX_PG_FULL_LINE.PG18 && reportId === PG18_REPORT_ID ? buildContractReport().page : null
+}
+
+/** Số đã chốt của PG18 (run contract — số RÒNG) theo vai: super (khối hợp đồng + tổng trả đã trừ) · SM (phạm vi, chỉ khối hợp đồng). */
+export function cmsFxContractPayout(viewer: 'super' | 'sm'): CmsPayoutDto {
+  const c = cmsFxContract(CMS_FX_PG_FULL_LINE.PG18)
+  if (!c) throw new Error('fx PG18')
+  const isSuper = viewer === 'super'
+  const per = (v: CmsFxViewer) => {
+    const by = new Map<string, { storeId: string; amount: bigint; np: number }>()
+    for (const r of c.out.results.filter((x) => visible(v, x.userId))) {
+      const cur = by.get(r.userId) ?? { storeId: r.storeId, amount: ZERO, np: 0 }
+      cur.amount += r.amountVnd
+      if (r.amountVnd > ZERO) cur.np += 1
+      by.set(r.userId, cur)
+    }
+    return [...by.entries()].map(([userId, x]) => ({ userId, ...x })).sort((a, b) => (a.amount === b.amount ? a.userId.localeCompare(b.userId) : a.amount > b.amount ? -1 : 1))
+  }
+  const all = per({ kind: 'super' } as CmsFxViewer)
+  const users = isSuper ? all : per({ kind: 'sm' } as CmsFxViewer)
+  const total = all.reduce((a, u) => a + u.amount, ZERO)
+  const scope = users.reduce((a, u) => a + u.amount, ZERO)
+  const t = c.out.totals
+  const sumRet = (k: 'eligibleReturnBaseUnits' | 'returnGmvUnits') => c.out.results.reduce((a, r) => a + r[k], ZERO)
+  return parseCmsPayout({
+    program_id: c.fx.row.id, run_id: c.fx.run!.id, is_test: false, locked_at: '2026-11-08T03:20:00.000000Z', policy_version: 1, viewer,
+    ...(isSuper ? { program_total: total.toString() } : {}), scope_total: scope.toString(),
+    rows: users.map((u, i) => ({ user_id: u.userId, store_id: u.storeId, name: cmsFxUserName(u.userId), store_name: null, amount_vnd: u.amount.toString(),
+      products_with_cms: u.np, ...(isSuper ? { email: `duoc.si.mau.${i + 1}@example.invalid` } : {}) })),
+    contract: { calc_contract_version: cmsCalcContractVersionFor(c.policy), quantity_basis: c.basis, returns_policy: c.policy, returns_as_of: AS_OF },
+    ...(isSuper ? {
+      locked_by: FX_SUPER_ID, staff_rows: all.length, staff_paid: all.filter((u) => u.amount > ZERO).length,
+      candidate_lines: t.candidates, candidate_gmv: fmt(t.candidateGmvUnits), unassigned_lines: t.unassigned, unassigned_gmv: fmt(t.unassignedGmvUnits),
+      ack_reason: null, policy: { label: null, ready: true, pending: [], unassigned_max_gmv_bp: 200, unassigned_max_lines: 20, wait_hours: 48, completeness: 'source_complete' },
+      source_complete_basis: 'source_complete', source_complete_through: null, run_started_at: STARTED,
+      returns: { return_count: c.out.results.reduce((a, r) => a + r.returnEvents, 0), return_gmv: fmt(sumRet('returnGmvUnits')), eligible_return_base: fmt(sumRet('eligibleReturnBaseUnits')) },
+    } : {}),
+  })
 }

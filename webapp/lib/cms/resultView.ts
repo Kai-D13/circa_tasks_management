@@ -10,8 +10,11 @@ import type { CmsEngineProductResult } from './engine/compute'
 import { summarizeCmsProgram, type CmsProgramSummary } from './engine/summary'
 import { parsePositiveInt, type CmsEngineTier } from './engine/config'
 import { cmsProgressiveAmount, cmsQuantityOf } from './engine/tiers'
-import { CMS_CALC_CONTRACT_VERSION, CMS_QUANTITY_POLICY_VERSION, type CmsQuantityBasis, type CmsReturnsPolicy } from './calc/policy'
-import { CMS_RETURN_STATUS_DICTIONARY_VERSION } from './calc/returns'
+import {
+  CMS_QUANTITY_POLICY_VERSION, cmsCalcContractVersionFor, cmsPolicyReadsReturns, parseCmsReturnsPolicy, type CmsQuantityBasis,
+  type CmsReturnsPolicy,
+} from './calc/policy'
+import { CMS_RETURN_STATUS_DICTIONARY_VERSION, cmsReturnStatusDictionaryVersion } from './calc/returns'
 import { CMS_UNIT_KEY_VERSION } from './unitKey'
 
 const ZERO = BigInt(0)
@@ -71,7 +74,7 @@ export interface CmsRunContractDto {
   returnsPolicy: CmsReturnsPolicy
   unitKeyVersion: string | null
   statusDictionaryVersion: string | null
-  /** µs UTC — as_of của snapshot trả (chỉ run net). */
+  /** µs UTC — as_of của snapshot trả (chỉ run đọc trả: net_returns_v1 / full_line_qty_refund_v1). */
   returnsAsOf: string | null
 }
 export const CMS_LEGACY_RUN_CONTRACT: CmsRunContractDto = Object.freeze({
@@ -89,22 +92,26 @@ export function parseCmsRunContract(raw: unknown): CmsRunContractDto {
     return CMS_LEGACY_RUN_CONTRACT
   }
   if (basis !== 'pos_base' && basis !== 'cms_unit') throw new CmsResultDtoError('contract.quantity_basis')
-  if (policy !== 'sales_only_v1' && policy !== 'net_returns_v1') throw new CmsResultDtoError('contract.returns_policy')
-  // CHECK cms_sync_runs_contract_shape (130): run contract ⇔ cms_unit HOẶC net_returns_v1 — pos_base + sales_only chỉ có run legacy.
-  if (basis === 'pos_base' && policy === 'sales_only_v1') throw new CmsResultDtoError('contract.legacy_shape')
+  const rp = parseCmsReturnsPolicy(policy)
+  if (rp === null) throw new CmsResultDtoError('contract.returns_policy')
+  // CHECK cms_sync_runs_contract_shape (130 / 132): run contract ⇔ cms_unit HOẶC policy đọc trả — pos_base + sales_only chỉ có run legacy.
+  if (basis === 'pos_base' && rp === 'sales_only_v1') throw new CmsResultDtoError('contract.legacy_shape')
+  // Bộ (policy, hợp đồng, từ điển) cố định theo policy (132: full_line ⇔ cms-calc-ret2-v2 + cms-return-status-v2) — lệch cặp ⇒ DTO_INVALID.
   const ccv = s(raw, 'calc_contract_version')
-  if (ccv !== CMS_CALC_CONTRACT_VERSION) throw new CmsResultDtoError('contract.calc_contract_version')
+  if (ccv !== cmsCalcContractVersionFor(rp)) throw new CmsResultDtoError('contract.calc_contract_version')
   const qpv = s(raw, 'quantity_policy_version')
   if (qpv !== CMS_QUANTITY_POLICY_VERSION[basis]) throw new CmsResultDtoError('contract.quantity_policy_version')
   // Cùng CHECK: mọi run contract (kể cả sales-only / pos_base net) ghi đủ unit_key_version + status_dictionary_version.
   const ukv = sn(raw, 'unit_key_version')
   if (ukv !== CMS_UNIT_KEY_VERSION) throw new CmsResultDtoError('contract.unit_key_version')
   const sdv = sn(raw, 'status_dictionary_version')
-  if (sdv !== CMS_RETURN_STATUS_DICTIONARY_VERSION) throw new CmsResultDtoError('contract.status_dictionary_version')
+  if (sdv !== (cmsPolicyReadsReturns(rp) ? cmsReturnStatusDictionaryVersion(rp) : CMS_RETURN_STATUS_DICTIONARY_VERSION)) {
+    throw new CmsResultDtoError('contract.status_dictionary_version')
+  }
   const asOf = sn(raw, 'returns_as_of', TS_RE)
-  if ((policy === 'net_returns_v1') !== (asOf !== null)) throw new CmsResultDtoError('contract.returns_as_of')
+  if (cmsPolicyReadsReturns(rp) !== (asOf !== null)) throw new CmsResultDtoError('contract.returns_as_of')
   return {
-    legacy: false, calcContractVersion: ccv, quantityBasis: basis, quantityPolicyVersion: qpv, returnsPolicy: policy,
+    legacy: false, calcContractVersion: ccv, quantityBasis: basis, quantityPolicyVersion: qpv, returnsPolicy: rp,
     unitKeyVersion: ukv, statusDictionaryVersion: sdv, returnsAsOf: asOf,
   }
 }
