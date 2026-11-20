@@ -11,6 +11,12 @@
 import { createHash } from 'node:crypto'
 
 export const CMS_RETURN_FP_VERSION = 'cms-return-fp-v1'
+/**
+ * Q-236 (migration 132 `cms__return_fp` nhánh v2): vân tay của phiếu THÔ cho profile full_line_qty_refund_v1 = v1 BỎ trường lượng (lượng
+ * BI không thuộc hợp đồng; lượng trừ là B_i của dòng gốc, không phải thuộc tính phiếu ⇒ đổi lượng BI không được tạo conflict giả). Không
+ * chứa phân bổ hiệu lực lượng (phiếu sớm hơn đến muộn không đổi vân tay phiếu đã nhận).
+ */
+export const CMS_RETURN_FP_VERSION_V2 = 'cms-return-fp-v2'
 // Capture / làm sạch chuỗi thô ở module thuần ./src (classify.ts dùng được không kéo node:crypto); re-export giữ API cũ.
 export { CMS_SRC_MAX, cmsCaptureSrc, cmsSrcClean, type CmsSrcCapture, type CmsSrcFlag } from './src'
 
@@ -34,6 +40,17 @@ export interface CmsReturnFpInput {
   /** refund_amount × 10⁹. */
   refundUnits: bigint
   recordedAtMicros: bigint
+}
+
+/** v2: như CmsReturnFpInput nhưng không có lượng. */
+export type CmsReturnFpInputV2 = Omit<CmsReturnFpInput, 'baseUnits'>
+
+export function cmsReturnFinancialFpV2(x: CmsReturnFpInputV2): string {
+  const canon = cmsLenPrefixed([
+    CMS_RETURN_FP_VERSION_V2, x.programId, x.returnEventId, x.returnDocumentId, x.originalOrderLineId, x.originalOrderId, x.productId,
+    x.refundUnits.toString(), x.recordedAtMicros.toString(),
+  ])
+  return createHash('sha256').update(canon, 'utf8').digest('hex')
 }
 
 export function cmsReturnFinancialFp(x: CmsReturnFpInput): string {

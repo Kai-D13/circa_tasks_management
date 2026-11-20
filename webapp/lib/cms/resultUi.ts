@@ -16,7 +16,7 @@ import {
 } from './resultView'
 import type { StatusTone } from '@/components/ds/StatusBadge'
 import { cmsDateTime } from './display'
-import { CMS_QUANTITY_BASIS_LABEL } from './calc/policy'
+import { CMS_QUANTITY_BASIS_LABEL, cmsPolicyReadsReturns, type CmsReturnsPolicy } from './calc/policy'
 import type { CmsRunContractDto } from './resultView'
 
 const ZERO = BigInt(0)
@@ -429,7 +429,10 @@ export const CMS_SALES_ONLY_NOTE = 'CMS tạm tính theo dữ liệu bán hiện
  * (T11 không đổi chữ); run net ⇒ đã trừ phiếu trả hoàn tất tới as_of của snapshot trả. Khoản giảm là CMS tính lại, không phải tiền hoàn khách.
  */
 export function cmsResultScopeNote(c: CmsRunContractDto | null | undefined): string {
-  if (!c || c.returnsPolicy !== 'net_returns_v1') return CMS_SALES_ONLY_NOTE
+  if (!c || !cmsPolicyReadsReturns(c.returnsPolicy)) return CMS_SALES_ONLY_NOTE
+  if (c.returnsPolicy === 'full_line_qty_refund_v1') {
+    return `CMS tạm tính theo dữ liệu bán đã trừ phiếu trả hàng hoàn tất: dòng bán có phiếu trả bị trừ đủ lượng của dòng, GMV trừ theo tiền hoàn (dữ liệu trả đến ${cmsDateTime(c.returnsAsOf)}).`
+  }
   return `CMS tạm tính theo dữ liệu bán đã trừ phiếu trả hàng hoàn tất (dữ liệu trả đến ${cmsDateTime(c.returnsAsOf)}).`
 }
 
@@ -438,7 +441,10 @@ export function cmsResultScopeNote(c: CmsRunContractDto | null | undefined): str
  * đóng băng). Cùng phạm vi trả của run: sales-only ⇒ chưa gồm trả hàng; net ⇒ đã trừ phiếu trả hoàn tất tới as_of của snapshot.
  */
 export function cmsLockedScopeNote(c: CmsRunContractDto | null | undefined): string {
-  if (!c || c.returnsPolicy !== 'net_returns_v1') return 'Số đã chốt theo dữ liệu bán của phiên đóng băng; chưa bao gồm xử lý trả hàng.'
+  if (!c || !cmsPolicyReadsReturns(c.returnsPolicy)) return 'Số đã chốt theo dữ liệu bán của phiên đóng băng; chưa bao gồm xử lý trả hàng.'
+  if (c.returnsPolicy === 'full_line_qty_refund_v1') {
+    return `Số đã chốt theo dữ liệu bán đã trừ phiếu trả hàng hoàn tất — trừ đủ lượng dòng bán có phiếu, GMV theo tiền hoàn (dữ liệu trả đến ${cmsDateTime(c.returnsAsOf)}).`
+  }
   return `Số đã chốt theo dữ liệu bán đã trừ phiếu trả hàng hoàn tất (dữ liệu trả đến ${cmsDateTime(c.returnsAsOf)}).`
 }
 
@@ -470,11 +476,15 @@ export function cmsNetSummary(rows: readonly Pick<CmsResultRowDto, 'net'>[]): Cm
   }
   return s
 }
-/** "Đã bán 3 · đã trả 1 · còn 2 hộp" — chỉ khi có phiếu trả (run net); không phiếu ⇒ null (giữ một dòng "Đã bán" như cũ). */
-export function cmsNetQtyText(s: CmsNetSummary | null, perUnit: string, unit: string): string | null {
+/**
+ * "Đã bán 3 · đã trả 1 · còn 2 hộp" — chỉ khi có phiếu trả (run net); không phiếu ⇒ null (giữ một dòng "Đã bán" như cũ).
+ * Q-236 full_line: "trừ do trả hàng" (lượng trừ theo quy ước CMS — đủ lượng dòng bán có phiếu, có thể khác lượng khách trả thực tế).
+ */
+export function cmsNetQtyText(s: CmsNetSummary | null, perUnit: string, unit: string, policy?: CmsReturnsPolicy): string | null {
   if (!s || (s.returnCount === 0 && s.returnBase === ZERO)) return null
   const k = dec(perUnit)
-  return `Đã bán ${cmsQtyText(s.saleBase, k)} · đã trả ${cmsQtyText(s.returnBase, k)} · còn ${cmsQtyText(s.saleBase - s.returnBase, k)} ${unit}`
+  const verb = policy === 'full_line_qty_refund_v1' ? 'trừ do trả hàng' : 'đã trả'
+  return `Đã bán ${cmsQtyText(s.saleBase, k)} · ${verb} ${cmsQtyText(s.returnBase, k)} · còn ${cmsQtyText(s.saleBase - s.returnBase, k)} ${unit}`
 }
 
 /** P5.2 — dòng mở đầu của một sự kiện: bán ⇒ "Đơn #…"; phiếu trả ⇒ "Trả hàng · đơn gốc #…" (không trình bày như đơn bán). */
@@ -512,7 +522,8 @@ export interface CmsLineView {
  * Trình bày một dòng lịch sử. `returnsApproved` = hợp đồng trả hàng Q-206 đã chốt (lib/cms/releaseGate) — chưa chốt thì KHÔNG
  * hiện nhãn "Điều chỉnh" / số âm (U18): dòng ADJUSTMENT (chỉ có thể xuất hiện ở dữ liệu QA) hiện "Chờ xác nhận", tiền '—'.
  */
-export function cmsLineView(l: Pick<CmsResultLineDto, 'status' | 'amountVnd' | 'baseQuantity' | 'qtyBefore' | 'qtyAfter'> & Partial<Pick<CmsResultLineDto, 'kind' | 'quantityClass' | 'returnCode'>>, perUnit: string, unit: string, returnsApproved: boolean): CmsLineView {
+export function cmsLineView(l: Pick<CmsResultLineDto, 'status' | 'amountVnd' | 'baseQuantity' | 'qtyBefore' | 'qtyAfter'> & Partial<Pick<CmsResultLineDto, 'kind' | 'quantityClass' | 'returnCode'>>, perUnit: string, unit: string, returnsApproved: boolean,
+  policy?: CmsReturnsPolicy): CmsLineView {
   const qtyText = cmsQtyText(dec(l.baseQuantity), dec(perUnit))
   if (l.status === 'ADJUSTMENT' && !returnsApproved) return { label: 'Chờ xác nhận', tone: 'neutral', amountVnd: null, qtyText, note: 'Dòng điều chỉnh chưa được công bố' }
   const units = cmsLineUnits(l)
@@ -520,7 +531,13 @@ export function cmsLineView(l: Pick<CmsResultLineDto, 'status' | 'amountVnd' | '
   if (l.kind === 'RETURN') {
     const code = l.returnCode ? ` ${l.returnCode}` : ''
     const back = cmsQtyText(-dec(l.baseQuantity), dec(perUnit))
-    const note = l.status === 'RETURN_REDUCED' ? `Phiếu trả${code}: ${units} ${unit} tính CMS · CMS tính lại theo lượng còn lại`
+    // Q-236 (full_line): phiếu sớm nhất của dòng bán trừ ĐỦ lượng dòng; phiếu sau của cùng dòng lượng 0 — GMV vẫn trừ theo tiền hoàn.
+    if (policy === 'full_line_qty_refund_v1' && dec(l.baseQuantity) === ZERO) {
+      return { label: CMS_LINE_LABEL[l.status], tone: CMS_LINE_TONE[l.status], amountVnd: BigInt(l.amountVnd), qtyText: back,
+        note: `Phiếu trả${code}: lượng của dòng bán đã trừ ở phiếu trước · GMV trừ theo tiền hoàn` }
+    }
+    const full = policy === 'full_line_qty_refund_v1' ? 'trừ đủ lượng dòng bán · ' : ''
+    const note = l.status === 'RETURN_REDUCED' ? `Phiếu trả${code}: ${full}${units} ${unit} tính CMS · CMS tính lại theo lượng còn lại`
       : l.status === 'WAITING_GATE' ? `Phiếu trả${code} · chưa đạt target`
         : `Phiếu trả${code}: lượng tính CMS không đổi`
     return { label: CMS_LINE_LABEL[l.status], tone: CMS_LINE_TONE[l.status], amountVnd: BigInt(l.amountVnd), qtyText: back, note }

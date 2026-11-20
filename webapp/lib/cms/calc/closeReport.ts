@@ -8,17 +8,34 @@ import { formatCmsDecimal } from '../decimal'
 import { formatUtcMicros } from '../time'
 import { CMS_SOURCE_PIN_VERSION } from './contractStage'
 import { compareUtf8Bytes } from './order'
+import type { CmsReturnProfile } from './policy'
 import { CMS_RETURN_EFFECTIVE_STATUS, type CmsReturnRecord } from './returns'
 import { cmsCaptureSrc } from './src'
 import { cmsDigestSet, cmsProductsHash, cmsReturnDigestHash } from './srcDigest'
 
-/** Trần số phiếu / lượt (= DB `CMS_REPORT_TOO_LARGE`). */
+/** Trần số phiếu / lượt của profile v1 (= DB `CMS_REPORT_TOO_LARGE`, 130 — giữ hợp đồng cũ). */
 export const CMS_CLOSE_REPORT_MAX_RETURNS = 100_000
+/**
+ * Trần phiếu / báo cáo của profile full_line VÀ mọi run chốt contract, cùng DB. PM 18/11 audit r0 §3.3 đặt 20.000 kèm điều kiện bench
+ * < 8 s; bench PG15 r1 (200.000 dòng bán, statement_timeout prod 8 s của authenticated / authenticator) đo 20.000 phiếu = 8,0–9,6 s ⇒ Dev
+ * đề xuất 10.000 (TODO(Q-238): PM chốt; đổi hằng này + 2 chỗ SQL trong gen-cms-132.mjs). Vượt ⇒ dừng rõ `CMS_REPORT_TOO_LARGE`, 0 ghi —
+ * KHÔNG cắt N đầu, không chia báo cáo (baseline sẽ thiếu).
+ */
+export const CMS_CLOSE_REPORT_MAX_RETURNS_FULL_LINE = 10_000
+export const cmsCloseReportMaxReturns = (p: CmsReturnProfile): number =>
+  p === 'full_line_qty_refund_v1' ? CMS_CLOSE_REPORT_MAX_RETURNS_FULL_LINE : CMS_CLOSE_REPORT_MAX_RETURNS
+
+/** Quá trần phiếu / lượt của profile — người gọi map sang `CMS_REPORT_TOO_LARGE` (held, 0 ghi). */
+export class CmsCloseReportTooLargeError extends Error {
+  constructor(readonly rows: number, readonly max: number) { super('CMS close report: quá trần phiếu / lượt') }
+}
 
 /** 22 trường phiếu theo đúng tên cột `cms_return_lines` (không seq / disposition / sale_ref — DB tự suy). */
 export type CmsCloseReportRow = Record<string, string | null>
 
 const dec = (u: bigint) => formatCmsDecimal(u)
+/** full_line: lượng BI / B / G gốc không thuộc hợp đồng ⇒ NULL (CHECK hình dạng 132). */
+const decN = (u: bigint | null) => (u === null ? null : formatCmsDecimal(u))
 
 /** Phiếu ↦ dòng payload. Chưa hiệu lực ⇒ chỉ ID + trạng thái thô (CHECK hình dạng của DB). */
 export function cmsCloseReportReturnRow(r: CmsReturnRecord): CmsCloseReportRow {
@@ -36,10 +53,10 @@ export function cmsCloseReportReturnRow(r: CmsReturnRecord): CmsCloseReportRow {
   return {
     return_event_id: r.returnEventId, return_status: CMS_RETURN_EFFECTIVE_STATUS, return_document_id: r.returnDocumentId, return_code: r.returnCode,
     recorded_at: formatUtcMicros(r.recordedAtMicros), original_order_line_id: r.originalOrderLineId, original_order_id: r.originalOrderId,
-    product_id: r.productId, return_base_quantity: dec(r.baseQuantityUnits), return_gmv_amount: dec(r.gmvUnits),
+    product_id: r.productId, return_base_quantity: decN(r.baseQuantityUnits), return_gmv_amount: dec(r.gmvUnits),
     original_completed_at: formatUtcMicros(r.original.completedAtMicros), original_order_type: r.original.orderType,
     original_order_status: r.original.orderStatus, original_seller_email: r.original.sellerEmail, original_pos_code: r.original.posCode,
-    original_base_quantity: dec(r.original.baseQuantityUnits), original_gmv_amount: dec(r.original.gmvUnits),
+    original_base_quantity: decN(r.original.baseQuantityUnits), original_gmv_amount: decN(r.original.gmvUnits),
     original_quantity_src: q.src, original_uom_src: u.src, original_quantity_src_flag: q.flag, original_uom_src_flag: u.flag,
     source_updated_at: r.sourceUpdatedAtMicros === null ? null : formatUtcMicros(r.sourceUpdatedAtMicros),
   }
@@ -82,12 +99,18 @@ export interface CmsCloseReportMeta {
   asOfMicros: bigint
   /** Super bấm tay (server action đã kiểm quyền); job định kỳ để trống ⇒ created_via cron. */
   actor?: string | null
+  /**
+   * Profile báo cáo (migration 132). Bỏ trống ⇒ net_returns_v1 (payload như 130, không có khoá `profile`). full_line ⇒ khoá `profile`
+   * — chỉ gửi khi đường năng lực `full_line` bật (DB 130 không biết khoá này).
+   */
+  profile?: CmsReturnProfile
 }
 
 export interface CmsCloseReportPayload {
   pin: Record<string, unknown>
   returns: CmsCloseReportRow[]
   actor?: string
+  profile?: 'full_line_qty_refund_v1'
 }
 
 /**
@@ -97,10 +120,15 @@ export interface CmsCloseReportPayload {
 export function buildCmsCloseReportPayload(program: CmsCloseReportProgram, returns: readonly CmsReturnRecord[],
   meta: CmsCloseReportMeta): CmsCloseReportPayload {
   if ((meta.jobId === undefined) === (meta.snapshotId === undefined)) throw new Error('CMS close report: cần đúng một job_id / snapshot_id')
-  if (returns.length > CMS_CLOSE_REPORT_MAX_RETURNS) throw new Error('CMS close report: quá trần phiếu / lượt')
+  const profile: CmsReturnProfile = meta.profile ?? 'net_returns_v1'
+  const max = cmsCloseReportMaxReturns(profile)
+  if (returns.length > max) throw new CmsCloseReportTooLargeError(returns.length, max)
   const sorted = [...returns].sort((a, b) => compareUtf8Bytes(a.returnEventId, b.returnEventId))
   for (let i = 1; i < sorted.length; i++) {
     if (sorted[i].returnEventId === sorted[i - 1].returnEventId) throw new Error('CMS close report: trùng ID phiếu')
+  }
+  for (const r of sorted) {
+    if (r.kind === 'COMPLETED' && r.profile !== profile) throw new Error('CMS close report: phiếu chuẩn hoá khác profile báo cáo')
   }
   const pin: Record<string, unknown> = {
     protocol: CMS_SOURCE_PIN_VERSION, provider: meta.provider,
@@ -109,5 +137,8 @@ export function buildCmsCloseReportPayload(program: CmsCloseReportProgram, retur
     scope: { from: program.startDate, to: program.endDate, products_hash: cmsProductsHash(program.productIds) },
     returns: { rows: sorted.length, digest: cmsDigestSet('returns', sorted.map((r) => ({ id: r.returnEventId, hash: cmsCloseReportRowHash(r) }))) },
   }
-  return { pin, returns: sorted.map(cmsCloseReportReturnRow), ...(meta.actor ? { actor: meta.actor } : {}) }
+  return {
+    pin, returns: sorted.map(cmsCloseReportReturnRow), ...(meta.actor ? { actor: meta.actor } : {}),
+    ...(profile === 'full_line_qty_refund_v1' ? { profile } : {}),
+  }
 }

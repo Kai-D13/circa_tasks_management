@@ -12,11 +12,22 @@ import { CMS_SALES_COLUMNS, isEligibleOrder, normalizeSalesRow, type CmsRawRow, 
 import { isCmsIsoDate, parseUtcMicros, vnProgramWindowMicros } from '../lib/cms/time'
 import { canonicalProductId } from '../lib/cms/productId'
 import { maskCmsEmail } from '../lib/cms/mapping'
+import { CMS_SRC_MAX, cmsCaptureSrc, cmsSrcClean, type CmsSrcFlag } from '../lib/cms/calc/src'
 import { cmsI4CheckSales, type CmsI4Context } from './cmsI4Offline'
 
 export const CMS_I4_COMPARE_VERSION = 'cms-i4-compare-v1'
 /** Phiên bản định dạng vân tay dòng (đổi bất kỳ quy tắc §FP ⇒ tăng version, không đổi nghĩa bản cũ). */
 export const CMS_I4_ROWS_FP_VERSION = 'cms-rows-fp-v1'
+/**
+ * 132 r2 (PM 19/11 RET-R2-01 · Q-238 b): chứng nhận nguồn cho chương trình `cms_unit`. Bộ `decision_unit14` = decision10 + chuỗi THÔ q / u
+ * (capture TRƯỚC làm sạch — đúng đầu vào classify.ts / seal N1(c)) + cờ NUL / OVERSIZE. Phiên bản riêng, không đổi nghĩa v1: so
+ * `cms-i4-compare-v2`, vân tay `cms-rows-fp-v2` (header + 4 trường). pos_base / run legacy giữ decision10 / v1.
+ */
+export const CMS_I4_COMPARE_VERSION_UNIT = 'cms-i4-compare-v2'
+export const CMS_I4_ROWS_FP_VERSION_UNIT = 'cms-rows-fp-v2'
+export type CmsI4AttestMode = 'decision10' | 'unit14'
+/** Tên bộ trường DB (cms_source_attestations.field_set) theo chế độ. */
+export const CMS_I4_FIELD_SET: Readonly<Record<CmsI4AttestMode, string>> = { decision10: 'decision10', unit14: 'decision_unit14' }
 
 const sha = (s: string | Uint8Array) => crypto.createHash('sha256').update(s).digest('hex')
 const HEX64 = /^[0-9a-f]{64}$/
@@ -72,6 +83,71 @@ export function cmsI4RowsFpText(lines: readonly CmsSalesLine[], fields: readonly
 export const cmsI4RowsFp = (lines: readonly CmsSalesLine[], fields: readonly CmsI4FpField[], num?: (u: bigint) => string) =>
   sha(Buffer.from(cmsI4RowsFpText(lines, fields, num), 'utf8'))
 export const CMS_I4_FULL_FIELDS: readonly CmsI4FpField[] = [...CMS_I4_DECISION_FIELDS, ...CMS_I4_INFO_FIELDS]
+
+// ── 132 r2: bộ decision_unit14 (cms-rows-fp-v2) ─────────────────────────────
+// Quan hệ trường (design r2 §2): *_src = chuỗi THÔ nguồn (BQ CAST AS STRING) capture TRƯỚC làm sạch (cmsCaptureSrc: U+0000 ⇒ null + cờ NUL;
+// > CMS_SRC_MAX code point ⇒ null + cờ OVERSIZE); *_raw = cmsSrcClean(*_src) (điều khiển → space, trim, rỗng ⇒ null; cờ ⇒ null) — DẪN XUẤT,
+// không vào vân tay unit. classify.ts / seal N1(c) phân loại COUNTED / FRACTIONAL / OTHER_UNIT / E từ *_src + cờ + B / G + cấu hình (K,
+// unit_CMS ghim bằng config_version). Dạng canonical DUY NHẤT: thô rỗng ⇒ null (CSV I4 đọc ô rỗng thành null; classify + seal coi '' như
+// null = MISSING). KHÔNG trim / lower / NFC / đổi số ("2" ≠ "2.0" ⇒ lệch — fail-closed).
+
+/** 4 trường THÔ q / u + cờ (thứ tự cố định — khớp SQL cms__run_unit_fp_text). */
+export const CMS_I4_UNIT_SRC_FIELDS = ['quantity_src', 'quantity_src_flag', 'uom_src', 'uom_src_flag'] as const
+export type CmsI4UnitSrcField = (typeof CMS_I4_UNIT_SRC_FIELDS)[number]
+/** Tên trường của văn bản vân tay decision_unit14 (header dòng 2). */
+export const CMS_I4_UNIT_FIELDS: readonly string[] = [...CMS_I4_DECISION_FIELDS, ...CMS_I4_UNIT_SRC_FIELDS]
+/** Cột THÊM của file run xuất cho decision_unit14 (rpc_cms_run_source_export 132 r2). */
+export const CMS_I4_UNIT_APP_COLUMNS: readonly string[] = CMS_I4_UNIT_SRC_FIELDS
+export interface CmsI4UnitSrc { quantitySrc: string | null; quantitySrcFlag: CmsSrcFlag | null; uomSrc: string | null; uomSrcFlag: CmsSrcFlag | null }
+
+/** Giá trị canonical của trường unit (thô rỗng ⇒ null; cờ nguyên văn). */
+export function cmsI4UnitFpValue(u: CmsI4UnitSrc, f: CmsI4UnitSrcField): string | null {
+  switch (f) {
+    case 'quantity_src': return u.quantitySrc === '' ? null : u.quantitySrc
+    case 'quantity_src_flag': return u.quantitySrcFlag
+    case 'uom_src': return u.uomSrc === '' ? null : u.uomSrc
+    case 'uom_src_flag': return u.uomSrcFlag
+  }
+}
+
+/** Phía THAM CHIẾU (CSV 14 cột BQ): ô quantity_raw / uom_raw = chuỗi THÔ nguồn ⇒ capture như adapter (không làm sạch). */
+export function cmsI4UnitSrcFromReference(row: CmsRawRow): CmsI4UnitSrc {
+  const q = cmsCaptureSrc(row.quantity_raw ?? null)
+  const u = cmsCaptureSrc(row.uom_raw ?? null)
+  return { quantitySrc: q.src, quantitySrcFlag: q.flag, uomSrc: u.src, uomSrcFlag: u.flag }
+}
+
+const SRC_FLAGS: readonly string[] = ['NUL', 'OVERSIZE']
+/**
+ * Phía RUN (CSV 18 cột rpc_cms_run_source_export 132 r2): đọc thô / cờ từ cột riêng và KIỂM dẫn xuất như CHECK 130 + seal N1(a): cờ ∈
+ * {NUL, OVERSIZE} ⇒ thô null + raw null; thô ≤ CMS_SRC_MAX code point, không U+0000; không cờ ⇒ raw = cmsSrcClean(thô). Lệch ⇒ null (lỗi dữ liệu).
+ */
+export function cmsI4UnitSrcFromApp(row: CmsRawRow): CmsI4UnitSrc | null {
+  const one = (src: string | null | undefined, flag: string | null | undefined, raw: string | null | undefined) => {
+    const s = src ?? null, f = flag ?? null, r = raw ?? null
+    if (f !== null && (!SRC_FLAGS.includes(f) || s !== null || r !== null)) return null
+    if (s !== null && (s.includes('\u0000') || [...s].length > CMS_SRC_MAX)) return null
+    if (f === null && cmsSrcClean(s) !== r) return null
+    return { src: s, flag: f as CmsSrcFlag | null }
+  }
+  const q = one(row.quantity_src, row.quantity_src_flag, row.quantity_raw)
+  const u = one(row.uom_src, row.uom_src_flag, row.uom_raw)
+  if (!q || !u) return null
+  return { quantitySrc: q.src, quantitySrcFlag: q.flag, uomSrc: u.src, uomSrcFlag: u.flag }
+}
+
+/** Văn bản chuẩn cms-rows-fp-v2 (decision_unit14) — cùng quy tắc cmsI4RowsFpText + 4 trường thô / cờ. */
+export function cmsI4UnitRowsFpText(lines: readonly CmsSalesLine[], unitOf: (l: CmsSalesLine) => CmsI4UnitSrc,
+  num: (u: bigint) => string = (u) => u.toString()): string {
+  const rows = lines.map((l) => {
+    const u = unitOf(l)
+    return { id: l.orderLineId, json: JSON.stringify([...CMS_I4_DECISION_FIELDS.map((f) => cmsI4FpValue(l, f, num)), ...CMS_I4_UNIT_SRC_FIELDS.map((f) => cmsI4UnitFpValue(u, f))]) }
+  })
+  rows.sort((a, b) => byteCmp(a.id, b.id) || byteCmp(a.json, b.json))
+  return `${CMS_I4_ROWS_FP_VERSION_UNIT}\n${CMS_I4_UNIT_FIELDS.join(',')}\n${rows.map((r) => `${r.json}\n`).join('')}`
+}
+export const cmsI4UnitRowsFp = (lines: readonly CmsSalesLine[], unitOf: (l: CmsSalesLine) => CmsI4UnitSrc, num?: (u: bigint) => string) =>
+  sha(Buffer.from(cmsI4UnitRowsFpText(lines, unitOf, num), 'utf8'))
 
 /** Vân tay phạm vi: version + kỳ VN + ProductID canonical đã sắp (byte). */
 export function cmsI4ScopeHash(s: { startDate: string; endDate: string; productIds: readonly string[] }): string {
@@ -146,8 +222,11 @@ export interface CmsI4CompareSteps {
   diff(a: CmsSalesLine, b: CmsSalesLine): string[]
   /** Biểu diễn số trong so / vân tay. */
   num(units: bigint): string
+  /** 132 r2: tên trường THÔ q / u / cờ khác nhau (chỉ chế độ unit14). */
+  unitDiff(a: CmsI4UnitSrc, b: CmsI4UnitSrc): string[]
 }
 export const CMS_I4_COMPARE_STEPS: CmsI4CompareSteps = {
+  unitDiff: (a, b) => CMS_I4_UNIT_SRC_FIELDS.filter((f) => cmsI4UnitFpValue(a, f) !== cmsI4UnitFpValue(b, f)),
   select: (inScope) => [...inScope],
   index(lines) {
     const byId = new Map<string, CmsSalesLine>()
@@ -188,11 +267,15 @@ export interface CmsI4SideSummary {
   afterExportedAt: number | null
   rowsFp: string
   decisionFp: string
+  /** 132 r2: vân tay decision_unit14 (cms-rows-fp-v2) — chỉ chế độ unit14, còn lại null. */
+  unitFp: string | null
 }
 export interface CmsI4Totals { lines: number; baseUnits: string; gmvUnits: string }
 export interface CmsI4CompareResult {
   version: string
   fpVersion: string
+  /** 132 r2: chế độ so (decision10 = pos_base / legacy; unit14 = cms_unit). */
+  mode: CmsI4AttestMode
   verdict: 'MATCH' | 'MISMATCH' | 'NOT_PROVEN'
   /** Lỗi dữ liệu (⇒ MISMATCH). */
   dataIssues: string[]
@@ -220,6 +303,8 @@ export interface CmsI4CompareInput {
   reference: { rows: readonly CmsRawRow[]; fileSha256?: string | null }
   app: { rows: readonly CmsRawRow[]; fileSha256?: string | null }
   meta?: CmsI4EvidenceMeta | null
+  /** 132 r2: unit14 ⇒ so thêm thô q / u / cờ (tham chiếu: capture ô *_raw; run: cột *_src / *_src_flag). Mặc định decision10. */
+  mode?: CmsI4AttestMode
 }
 
 const sum = (ls: readonly CmsSalesLine[]): CmsI4Totals => ({
@@ -229,19 +314,34 @@ const sum = (ls: readonly CmsSalesLine[]): CmsI4Totals => ({
 })
 const eqT = (a: CmsI4Totals, b: CmsI4Totals) => a.lines === b.lines && a.baseUnits === b.baseUnits && a.gmvUnits === b.gmvUnits
 
-interface Prepared { summary: CmsI4SideSummary; byId: Map<string, CmsSalesLine>; inScope: CmsSalesLine[]; dupIds: string[]; dataIssues: string[] }
+interface Prepared {
+  summary: CmsI4SideSummary; byId: Map<string, CmsSalesLine>; inScope: CmsSalesLine[]; dupIds: string[]; dataIssues: string[]
+  /** 132 r2: thô q / u / cờ của từng dòng hợp lệ (chỉ chế độ unit14). */
+  unit: Map<CmsSalesLine, CmsI4UnitSrc>
+}
+const NO_UNIT: CmsI4UnitSrc = { quantitySrc: null, quantitySrcFlag: null, uomSrc: null, uomSrcFlag: null }
 
 function prepare(name: 'reference' | 'app', rows: readonly CmsRawRow[], fileSha: string | null, kind: CmsI4InputKind | null,
-  win: { fromMicros: bigint; toMicrosExclusive: bigint }, products: ReadonlySet<string>, steps: CmsI4CompareSteps): Prepared {
+  win: { fromMicros: bigint; toMicrosExclusive: bigint }, products: ReadonlySet<string>, steps: CmsI4CompareSteps, mode: CmsI4AttestMode): Prepared {
   // Gate hợp đồng I4 (ROW_ISSUES, DUPLICATE_LINE_ID, ProductID không canonical …) — cùng kết luận với check-sales, không tự nới.
   const check = cmsI4CheckSales(rows)
   const lines: CmsSalesLine[] = []
   const issues: Record<string, number> = {}
+  const unit = new Map<CmsSalesLine, CmsI4UnitSrc>()
+  let unitBad = 0
   for (const r of rows) {
     const n = normalizeSalesRow(r)
-    if (n.ok) lines.push(n.value)
-    else for (const i of n.issues as CmsRowIssue[]) issues[`${i.kind}:${i.field}`] = (issues[`${i.kind}:${i.field}`] ?? 0) + 1
+    if (n.ok) {
+      lines.push(n.value)
+      if (mode === 'unit14') {
+        // Tham chiếu: ô *_raw là chuỗi THÔ nguồn ⇒ capture. Run: cột thô / cờ riêng + kiểm dẫn xuất raw = làm sạch(thô).
+        const u = name === 'reference' ? cmsI4UnitSrcFromReference(r) : cmsI4UnitSrcFromApp(r)
+        if (u) unit.set(n.value, u)
+        else { unitBad++; unit.set(n.value, NO_UNIT) }
+      }
+    } else for (const i of n.issues as CmsRowIssue[]) issues[`${i.kind}:${i.field}`] = (issues[`${i.kind}:${i.field}`] ?? 0) + 1
   }
+  if (unitBad) issues['UNIT_SRC_INCONSISTENT'] = unitBad
   const inScope = steps.select(lines.filter((l) => l.completedAtMicros >= win.fromMicros && l.completedAtMicros < win.toMicrosExclusive && products.has(l.productId)))
   // ID trùng KHÔNG được so (không DISTINCT để xanh) — báo lỗi riêng.
   const { byId, dupIds } = steps.index(inScope)
@@ -252,8 +352,10 @@ function prepare(name: 'reference' | 'app', rows: readonly CmsRawRow[], fileSha:
   for (const h of held) dataIssues.push(`${h}:${name}`)
   if (dupIds.length && !held.includes('DUPLICATE_LINE_ID')) dataIssues.push(`DUPLICATE_LINE_ID:${name}`)
   for (const c of check.readiness.contract) dataIssues.push(`${c}:${name}`)
+  // 132 r2: file run thiếu cột thô / cờ, cờ lạ hoặc raw ≠ làm sạch(thô) ⇒ lỗi dữ liệu (không đoán, không bỏ qua dòng).
+  if (unitBad) dataIssues.push(`UNIT_SRC_INCONSISTENT:${name}`)
   return {
-    byId, inScope, dupIds, dataIssues,
+    byId, inScope, dupIds, dataIssues, unit,
     summary: {
       inputKind: kind, fileSha256: fileSha, rowsRead: rows.length, rowIssues: rows.length - lines.length, issues,
       duplicateLineIds: dupIds.length, nonCanonicalProductId: check.nonCanonicalProductId,
@@ -261,6 +363,7 @@ function prepare(name: 'reference' | 'app', rows: readonly CmsRawRow[], fileSha:
       afterAsOf: null, afterExportedAt: null,
       rowsFp: cmsI4RowsFp(inScope, CMS_I4_FULL_FIELDS, steps.num),
       decisionFp: cmsI4RowsFp(inScope, CMS_I4_DECISION_FIELDS, steps.num),
+      unitFp: mode === 'unit14' ? cmsI4UnitRowsFp(inScope, (l) => unit.get(l) ?? NO_UNIT, steps.num) : null,
     },
   }
 }
@@ -276,8 +379,9 @@ export function cmsI4CompareSource(input: CmsI4CompareInput, steps: CmsI4Compare
   const productIds = p.products.map((x) => (canonicalProductId(String(x.productId)) as { ok: boolean; id: string }).id)
   const products = new Set(productIds)
   const meta = input.meta ?? null
-  const ref = prepare('reference', input.reference.rows, input.reference.fileSha256 ?? null, meta?.reference.inputKind ?? null, win, products, steps)
-  const app = prepare('app', input.app.rows, input.app.fileSha256 ?? null, meta?.app.inputKind ?? null, win, products, steps)
+  const mode: CmsI4AttestMode = input.mode ?? 'decision10'
+  const ref = prepare('reference', input.reference.rows, input.reference.fileSha256 ?? null, meta?.reference.inputKind ?? null, win, products, steps, mode)
+  const app = prepare('app', input.app.rows, input.app.fileSha256 ?? null, meta?.app.inputKind ?? null, win, products, steps, mode)
 
   const dataIssues = [...ref.dataIssues, ...app.dataIssues]
   const { missing, extra } = steps.antiJoin(ref.byId, app.byId)
@@ -294,6 +398,8 @@ export function cmsI4CompareSource(input: CmsI4CompareInput, steps: CmsI4Compare
       if (x === 'gmv_amount_e9') return steps.num(a.gmvUnits) !== steps.num(b.gmvUnits)
       return true
     })
+    // 132 r2: chế độ unit14 — thô q / u / cờ là trường QUYẾT ĐỊNH (đổi được COUNTED / FRACTIONAL / OTHER_UNIT / E dù B / G bằng nhau).
+    if (mode === 'unit14') f.push(...steps.unitDiff(ref.unit.get(a) ?? NO_UNIT, app.unit.get(b) ?? NO_UNIT))
     if (f.length) { changed.push({ orderLineId: id, fields: f }); for (const x of f) changedByField[x] = (changedByField[x] ?? 0) + 1 }
     for (const x of CMS_I4_INFO_FIELDS) if (cmsI4FpValue(a, x) !== cmsI4FpValue(b, x)) infoDiffByField[x] = (infoDiffByField[x] ?? 0) + 1
   }
@@ -338,7 +444,8 @@ export function cmsI4CompareSource(input: CmsI4CompareInput, steps: CmsI4Compare
   const allR = sum(ref.inScope), allA = sum(app.inScope)
   const candR = sum(ref.inScope.filter((l) => isEligibleOrder(l))), candA = sum(app.inScope.filter((l) => isEligibleOrder(l)))
   return {
-    version: CMS_I4_COMPARE_VERSION, fpVersion: CMS_I4_ROWS_FP_VERSION, verdict, dataIssues, notProven, limits,
+    version: mode === 'unit14' ? CMS_I4_COMPARE_VERSION_UNIT : CMS_I4_COMPARE_VERSION,
+    fpVersion: mode === 'unit14' ? CMS_I4_ROWS_FP_VERSION_UNIT : CMS_I4_ROWS_FP_VERSION, mode, verdict, dataIssues, notProven, limits,
     scope: { startDate: p.startDate, endDate: p.endDate, products: products.size, scopeHash },
     asOf: meta ? meta.reference.asOf : null,
     reference: ref.summary, app: app.summary,
@@ -374,6 +481,7 @@ export function cmsI4CompareMarkdown(r: CmsI4CompareResult, refLines?: ReadonlyM
     `| trong scope / ngoài scope / ứng viên | ${r.reference.inScope} / ${r.reference.outOfScope} / ${r.reference.candidates} | ${r.app.inScope} / ${r.app.outOfScope} / ${r.app.candidates} |`,
     `| dòng trong scope sau mốc M / sau lúc xuất | ${r.reference.afterAsOf ?? '—'} / ${r.reference.afterExportedAt ?? '—'} | ${r.app.afterAsOf ?? '—'} / ${r.app.afterExportedAt ?? '—'} |`,
     `| vân tay quyết định | \`${r.reference.decisionFp}\` | \`${r.app.decisionFp}\` |`,
+    ...(r.mode === 'unit14' ? [`| vân tay decision_unit14 (thô q / u + cờ) | \`${r.reference.unitFp}\` | \`${r.app.unitFp}\` |`] : []),
     `| vân tay 14 trường (audit) | \`${r.reference.rowsFp}\` | \`${r.app.rowsFp}\` |`, '',
     `So theo order_line_id: khớp ID ${r.compare.matched} · thiếu ở app ${r.compare.missing} · thừa ở app ${r.compare.extra} · lệch trường quyết định ${r.compare.changed}.`,
     `Lệch theo trường: ${Object.entries(r.compare.changedByField).map(([k, v]) => `${k} ${v}`).join(', ') || '—'}. Khác trường audit (không làm lệch): ${Object.entries(r.compare.infoDiffByField).map(([k, v]) => `${k} ${v}`).join(', ') || '—'}.`, '',

@@ -11,8 +11,10 @@
 // 124 (COMP-INT): `expectedAttestationId` = id chứng nhận preview đã thấy (payoutView.cmsLockExpectedAttestation). Chuỗi ⇒ gửi
 // p_expected_attestation_id (lock 6 tham số); null / không có ⇒ KHÔNG gửi tham số (DB 124 mặc định NULL; DB trước 124 chỉ có lock
 // 5 tham số). Phản hồi phải nói đúng chứng nhận đã dùng — lệch ⇒ không kết luận thành công.
+// 132 r1 (Q-237): run hiện hành là CONTRACT ⇒ app phải có đường chốt contract (capability lock_contract, đúng khoá v2) VÀ hiểu phiên bản
+// hợp đồng; thiếu ⇒ preview thêm blocker CMS_LOCK_APP_CONTRACT_UNSUPPORTED và chốt bị từ chối TRƯỚC RPC chốt (chỉ đọc preview để biết).
 
-import { cmsNormalizeAck, parseCmsLockPreview, type CmsLockPreviewDto } from './payoutView'
+import { cmsKnownContractVersion, cmsNormalizeAck, parseCmsLockPreview, type CmsLockPreviewDto } from './payoutView'
 
 export type CmsAdminAccessLike =
   | { kind: 'ok'; actorId: string; qa: boolean }
@@ -27,6 +29,8 @@ export interface CmsLockDeps {
   /** Chương trình có tồn tại + isTest — null nếu không có. Lỗi tra ⇒ throw. */
   program(id: string): Promise<{ isTest: boolean } | null>
   rpc(fn: 'rpc_cms_lock_preview' | 'rpc_cms_program_lock', args: Record<string, unknown>): Promise<{ data: unknown; error: CmsRpcError | null }>
+  /** 132 r1: DB có đường chốt run contract (capability lock_contract). Không khai báo ⇒ không kiểm thêm (DB vẫn tự chặn). */
+  contractLockOk?(): Promise<boolean>
 }
 
 export type CmsLockResult =
@@ -75,7 +79,18 @@ export async function runCmsLockPreview(deps: CmsLockDeps, programId: unknown): 
     const c = cmsLockRpcCode(res.error)
     return { ok: false, code: c === 'UNKNOWN_OUTCOME' ? 'QUERY_FAILED' : c } // preview chỉ đọc ⇒ không có "kết quả không rõ"
   }
-  try { return { ok: true, preview: parseCmsLockPreview(res.data) } } catch { return { ok: false, code: 'QUERY_FAILED' } }
+  let preview: CmsLockPreviewDto
+  try { preview = parseCmsLockPreview(res.data) } catch { return { ok: false, code: 'QUERY_FAILED' } }
+  if (!(await contractLockSupported(deps, preview))) preview = { ...preview, blockers: [...preview.blockers, 'CMS_LOCK_APP_CONTRACT_UNSUPPORTED'] }
+  return { ok: true, preview }
+}
+
+/** Run contract ⇒ cần capability lock_contract + phiên bản hợp đồng app hiểu. Run legacy ⇒ luôn được. Lỗi đọc capability ⇒ không được. */
+async function contractLockSupported(deps: CmsLockDeps, p: CmsLockPreviewDto): Promise<boolean> {
+  if (p.contract === null) return true
+  if (!cmsKnownContractVersion(p.contract.calcContractVersion)) return false
+  if (!deps.contractLockOk) return true
+  try { return await deps.contractLockOk() } catch { return false }
 }
 
 export async function runCmsLock(deps: CmsLockDeps, input: unknown): Promise<CmsLockResult> {
@@ -99,6 +114,19 @@ export async function runCmsLock(deps: CmsLockDeps, input: unknown): Promise<Cms
   }
   const att = i.expectedAttestationId
   if (att !== undefined && att !== null && (typeof att !== 'string' || !UUID_RE.test(att))) return { ok: false, code: 'BAD_INPUT' }
+  // 132 r1: app thiếu đường chốt contract ⇒ đọc preview (chỉ đọc) để biết run hiện hành có phải contract; phải ⇒ từ chối trước RPC chốt.
+  if (deps.contractLockOk) {
+    let capOk = false
+    try { capOk = await deps.contractLockOk() } catch { capOk = false }
+    if (!capOk) {
+      let pv: { data: unknown; error: CmsRpcError | null }
+      try { pv = await deps.rpc('rpc_cms_lock_preview', { p_program_id: i.programId }) } catch { return { ok: false, code: 'QUERY_FAILED' } }
+      if (pv.error) return { ok: false, code: 'QUERY_FAILED' }
+      let p: CmsLockPreviewDto
+      try { p = parseCmsLockPreview(pv.data) } catch { return { ok: false, code: 'QUERY_FAILED' } }
+      if (p.contract !== null) return { ok: false, code: 'CMS_LOCK_APP_CONTRACT_UNSUPPORTED' }
+    }
+  }
   let res: { data: unknown; error: CmsRpcError | null }
   try {
     res = await deps.rpc('rpc_cms_program_lock', {

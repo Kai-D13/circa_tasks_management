@@ -18,6 +18,11 @@
 //   D9 phiếu COMPLETED sau as_of ⇒ HOLD (snapshot không nhất quán) thay vì loại;  D10 dòng BÁN âm ⇒ HOLD cả hai mode (classify.ts).
 // Phiếu ngoài chương trình / chưa COMPLETED / gắn dòng chưa gán · ngoài phạm vi ⇒ loại có lý do.
 //
+// Q-236 — profile full_line_qty_refund_v1 (hợp đồng run cms-calc-ret2-v2, design r1 §3): T_i = phiếu COMPLETED APPLIED trỏ đúng dòng bán i.
+//   T_i ≠ ∅ ⇒ lượng trừ = B_i, đủ điều kiện trừ = E_i MỘT lần (gán cho phiếu đầu theo recorded_at µs rồi byte UTF-8 return_event_id — cùng
+//   thứ tự lịch sử); phiếu sau base / eligible delta 0; GMV trừ refund TỪNG phiếu. Lượng BI không đọc. Ngữ cảnh so 5 trường khoá (đơn /
+//   SP / ngày / loại / trạng thái đơn gốc). Bỏ RETURN_EXCEEDS_SALE_BASE (SQL N3 ép Σ lượng = B_i); giữ EXCEEDS_SALE_GMV và mọi guard khác.
+//
 // Thứ tự lịch sử (chỉ phục vụ phân bổ dòng / mốc gate — số cuối bất biến với thứ tự phiếu trả): mốc µs; cùng mốc SALE trước RETURN;
 // SALE–SALE theo compareCmsContractLineId (ID số theo giá trị trước, text theo byte UTF-8 — order.ts, PM D1; ID ASCII trùng thứ tự engine
 // legacy ⇒ parity pos_base); RETURN–RETURN theo byte UTF-8 của return_event_id (khớp SQL COLLATE "C"). Khoá lịch sử namespaced
@@ -33,7 +38,7 @@ import { CMS_DEC_FACTOR } from '../decimal'
 import { cmsUnitKey } from '../unitKey'
 import { classifyCmsSale, cmsClassContributes, type CmsQuantityClass, type CmsSaleHoldReason, type CmsSaleRawQtyUnit } from './classify'
 import {
-  CMS_CALC_CONTRACT_VERSION, CMS_QUANTITY_POLICY_VERSION, parseCmsQuantityBasis, parseCmsReturnsPolicy,
+  CMS_QUANTITY_POLICY_VERSION, cmsCalcContractVersionFor, parseCmsQuantityBasis, parseCmsReturnsPolicy,
   type CmsQuantityBasis, type CmsReturnsPolicy,
 } from './policy'
 import { compareCmsCalcEvents, compareCmsContractLineId, compareCmsContractLines, compareUtf8Bytes } from './order'
@@ -76,7 +81,7 @@ export interface CmsCalcInput {
   asOfMicros: bigint
 }
 
-export type CmsCalcConfigErrorCode = 'BAD_QUANTITY_BASIS' | 'BAD_RETURNS_POLICY' | 'UNIT_CMS_INVALID' | 'RETURNS_NOT_ALLOWED'
+export type CmsCalcConfigErrorCode = 'BAD_QUANTITY_BASIS' | 'BAD_RETURNS_POLICY' | 'UNIT_CMS_INVALID' | 'RETURNS_NOT_ALLOWED' | 'RETURN_PROFILE_MISMATCH'
 
 export class CmsCalcConfigError extends Error {
   readonly code: CmsCalcConfigErrorCode
@@ -98,7 +103,7 @@ export type CmsCalcHoldCode =
   | 'RETURN_BEFORE_SALE'        // ngày trả trước ngày bán gốc
   | 'RETURN_ORIGIN_MISSING'     // gốc thuộc chương trình nhưng không có trong lớp bán của snapshot
   | 'RETURN_CONTEXT_MISMATCH'   // ngữ cảnh gốc trên phiếu ≠ dòng bán đã lưu (đơn / SP / ngày / người / B / G / q·u)
-  | 'RETURN_EXCEEDS_SALE_BASE'  // Σ base trả của một dòng gốc > b_i
+  | 'RETURN_EXCEEDS_SALE_BASE'  // Σ base trả của một dòng gốc > b_i (chỉ net_returns_v1)
   | 'RETURN_EXCEEDS_SALE_GMV'   // Σ refund của một dòng gốc > g_i
 
 export interface CmsCalcHold {
@@ -300,7 +305,15 @@ export function computeCmsNet(input: CmsCalcInput): CmsCalcOutput {
     throw new CmsCalcConfigError('RETURNS_NOT_ALLOWED', 'run sales_only_v1 không nhận bản ghi trả')
   }
   const policy: CmsCalcPolicyPin = {
-    quantityBasis: basis, quantityPolicyVersion: CMS_QUANTITY_POLICY_VERSION[basis], returnsPolicy, contractVersion: CMS_CALC_CONTRACT_VERSION,
+    quantityBasis: basis, quantityPolicyVersion: CMS_QUANTITY_POLICY_VERSION[basis], returnsPolicy,
+    contractVersion: cmsCalcContractVersionFor(returnsPolicy),
+  }
+  const full = returnsPolicy === 'full_line_qty_refund_v1'
+  // Phiếu phải được chuẩn hoá đúng profile của run (lượng / ngữ cảnh có thuộc hợp đồng hay không) — lệch là lỗi lập trình, không HOLD.
+  for (const r of input.returns) {
+    if (r.kind === 'COMPLETED' && r.profile !== returnsPolicy) {
+      throw new CmsCalcConfigError('RETURN_PROFILE_MISMATCH', `phiếu chuẩn hoá theo ${r.profile}, run ${returnsPolicy}`)
+    }
   }
 
   const program = parseCmsEngineProgram({ ...input.program, products: input.program.products.map(({ unitCms: _u, ...p }) => p) })
@@ -406,11 +419,13 @@ export function computeCmsNet(input: CmsCalcInput): CmsCalcOutput {
       if (sale.completedAtMicros !== o.completedAtMicros) bad.push('original_completed_at')
       if (sale.orderType !== o.orderType) bad.push('original_order_type')
       if (sale.orderStatus !== o.orderStatus) bad.push('original_order_status')
-      if (sale.sellerEmail !== o.sellerEmail) bad.push('original_seller_email')
-      if (sale.posCode !== o.posCode) bad.push('original_pos_code')
-      if (sale.baseQuantityUnits !== o.baseQuantityUnits) bad.push('original_base_quantity')
-      if (sale.gmvUnits !== o.gmvUnits) bad.push('original_gmv_amount')
-      if (basis === 'cms_unit') {
+      // full_line: người / POS / B / G / q·u lấy từ dòng bán của snapshot — không so với phiếu (Q-236 SPEC §2).
+      if (full) { /* chỉ 5 trường khoá ở trên */ }
+      else if (sale.sellerEmail !== o.sellerEmail) bad.push('original_seller_email')
+      if (!full && sale.posCode !== o.posCode) bad.push('original_pos_code')
+      if (!full && sale.baseQuantityUnits !== o.baseQuantityUnits) bad.push('original_base_quantity')
+      if (!full && sale.gmvUnits !== o.gmvUnits) bad.push('original_gmv_amount')
+      if (!full && basis === 'cms_unit') {
         // So giá trị LƯU ĐƯỢC ở DB (src + cờ) — cùng seal N2; hai chuỗi > CMS_SRC_MAX khác nhau đều là OVERSIZE.
         if (!cmsSameCapture(sale.raw.quantityRaw, o.quantityRaw)) bad.push('original_quantity_raw')
         if (!cmsSameCapture(sale.raw.uomRaw, o.uomRaw)) bad.push('original_uom_raw')
@@ -422,7 +437,7 @@ export function computeCmsNet(input: CmsCalcInput): CmsCalcOutput {
     if (!program.products.has(r.productId)) { exReturn(r, 'ORIGIN_NOT_IN_PROGRAM'); continue }
     if (!sale) { holds.push({ code: 'RETURN_ORIGIN_MISSING', ref }); continue }
     const acc = perSale.get(sale.orderLineId) ?? { r: ZERO, h: ZERO }
-    acc.r += r.baseQuantityUnits
+    if (!full) acc.r += r.baseQuantityUnits!
     acc.h += r.gmvUnits
     perSale.set(sale.orderLineId, acc)
     const st = saleState.get(sale.orderLineId)!
@@ -435,7 +450,7 @@ export function computeCmsNet(input: CmsCalcInput): CmsCalcOutput {
   excludedReturns.sort((a, b) => compareUtf8Bytes(a.returnEventId, b.returnEventId))
   for (const [id, acc] of perSale) {
     const sale = saleById.get(id)!
-    if (acc.r > sale.baseQuantityUnits) holds.push({ code: 'RETURN_EXCEEDS_SALE_BASE', ref: `SALE:${id}` })
+    if (!full && acc.r > sale.baseQuantityUnits) holds.push({ code: 'RETURN_EXCEEDS_SALE_BASE', ref: `SALE:${id}` })
     // TODO(D6, chờ PM): HOLD theo từng dòng gốc; chờ BI nêu ca refund hợp lệ vượt GMV gốc (spec §4.4) trước khi đổi.
     if (acc.h > sale.gmvUnits) holds.push({ code: 'RETURN_EXCEEDS_SALE_GMV', ref: `SALE:${id}` })
   }
@@ -472,18 +487,35 @@ export function computeCmsNet(input: CmsCalcInput): CmsCalcOutput {
     if (g.counted !== null && st.counted !== null) g.counted += st.counted
     pushEv(g, { kind: 'SALE', at: line.completedAtMicros, sale: line, ret: null, cls: st.cls, baseDelta: line.baseQuantityUnits, eligibleDelta: st.eligible, gmvDelta: line.gmvUnits })
   }
+  // full_line: phiếu mang hiệu lực lượng của mỗi dòng = phiếu đầu theo thứ tự lịch sử (µs, rồi byte UTF-8 ID — compareCmsCalcEvents giữa
+  // hai RETURN); không phụ thuộc thứ tự nguồn trả về.
+  const qtyCarrier = new Map<string, CmsReturnCompleted>()
+  if (full) {
+    const ord = (r: CmsReturnCompleted) => ({ kind: 'RETURN' as const, at: r.recordedAtMicros, id: r.returnEventId })
+    for (const r of applied) {
+      const cur = qtyCarrier.get(r.originalOrderLineId)
+      if (!cur || compareCmsCalcEvents(ord(r), ord(cur)) < 0) qtyCarrier.set(r.originalOrderLineId, r)
+    }
+  }
   for (const r of applied) {
     const sale = saleById.get(r.originalOrderLineId)!
     const st = saleState.get(sale.orderLineId) as Extract<SaleState, { candidate: true }>
     const g = groupOf(st.included!.userId, st.included!.storeId, program.products.get(sale.productId)!)
     const contributes = cmsClassContributes(st.cls!)
     totals.returnsApplied += 1
-    totals.returnBaseAppliedUnits += r.baseQuantityUnits
     totals.returnGmvAppliedUnits += r.gmvUnits
-    pushEv(g, {
-      kind: 'RETURN', at: r.recordedAtMicros, sale, ret: r, cls: st.cls!, baseDelta: -r.baseQuantityUnits,
-      eligibleDelta: contributes ? -r.baseQuantityUnits : ZERO, gmvDelta: -r.gmvUnits,
-    })
+    let baseDelta: bigint, eligibleDelta: bigint
+    if (full) {
+      const carrier = qtyCarrier.get(sale.orderLineId) === r
+      baseDelta = carrier ? -sale.baseQuantityUnits : ZERO
+      eligibleDelta = carrier ? -st.eligible : ZERO
+      if (carrier) totals.returnBaseAppliedUnits += sale.baseQuantityUnits
+    } else {
+      baseDelta = -r.baseQuantityUnits!
+      eligibleDelta = contributes ? -r.baseQuantityUnits! : ZERO
+      totals.returnBaseAppliedUnits += r.baseQuantityUnits!
+    }
+    pushEv(g, { kind: 'RETURN', at: r.recordedAtMicros, sale, ret: r, cls: st.cls!, baseDelta, eligibleDelta, gmvDelta: -r.gmvUnits })
   }
 
   const catalog: CmsCalcCatalogResult[] = []

@@ -1,4 +1,4 @@
-// CMS-CALC-RET-2 P4 — nhánh RUN CONTRACT (`cms-calc-ret2-v1`) của lõi đồng bộ bán (salesSync.ts). Gọi khi DB ghim hợp đồng cho run
+// CMS-CALC-RET-2 P4 — nhánh RUN CONTRACT (`cms-calc-ret2-v1`; Q-236: `cms-calc-ret2-v2` cho full_line_qty_refund_v1) của lõi đồng bộ bán (salesSync.ts). Gọi khi DB ghim hợp đồng cho run
 // vừa mở (open 130 trả calc_contract_version) hoặc — dry-run — khi chương trình không còn là legacy (cms_unit / net_returns_v1).
 // Thuần: mọi I/O qua deps của salesSync + provider nguồn tiêm vào (source/contractSource.ts; QA: e2e/cmsContractFixture.ts).
 // Luồng (fail-closed, không giữ transaction DB khi gọi nguồn; cùng ngân sách / quy ước mã với đường legacy):
@@ -14,7 +14,7 @@ import { createHash } from 'node:crypto'
 import { cmsContractCalcInput, buildCmsContractStagePayload, cmsRejectedDigest, parseCmsContractSnapshot, CMS_CONTRACT_SEAL_STEPS,
   type CmsContractPayload, type CmsContractSnapshot } from './calc/contractStage'
 import { computeCmsNet, cmsCalcSaleLine, CmsCalcConfigError, type CmsCalcOutput, type CmsCalcSaleLine } from './calc/net'
-import { CMS_CALC_CONTRACT_VERSION } from './calc/policy'
+import { cmsCalcContractVersionFor, cmsPolicyReadsReturns } from './calc/policy'
 import { normalizeReturnRow, type CmsReturnRecord } from './calc/returns'
 import { CmsEngineInputError } from './engine/compute'
 import { CmsEngineConfigError } from './engine/config'
@@ -84,12 +84,15 @@ export async function runCmsContractPath(c: CmsContractPathCtx): Promise<CmsSale
   try {
     snap = parseCmsContractSnapshot(c.raw)
     if (snap.programId !== c.programId) throw new Error('mismatch')
-    if (!opts.dryRun && (snap.runId === null || snap.calcContractVersion !== CMS_CALC_CONTRACT_VERSION)) throw new Error('mismatch')
+    // DB ghim hợp đồng theo policy (132: full_line ⇒ v2); app phải tính đúng hợp đồng đó, không tự hạ về v1.
+    if (!opts.dryRun && (snap.runId === null || snap.calcContractVersion !== cmsCalcContractVersionFor(snap.returnsPolicy))) throw new Error('mismatch')
   } catch {
     return c.stop('error', 'SNAPSHOT_INVALID')
   }
   res.isTest = snap.isTest
-  const net = snap.returnsPolicy === 'net_returns_v1'
+  // `net` = chương trình đọc nguồn trả (net_returns_v1 hoặc full_line_qty_refund_v1); cùng cờ CMS_RETURNS_ENABLED.
+  const net = cmsPolicyReadsReturns(snap.returnsPolicy)
+  const profile = cmsPolicyReadsReturns(snap.returnsPolicy) ? snap.returnsPolicy : null
   const summary: CmsContractSummary = {
     quantityBasis: snap.quantityBasis, returnsPolicy: snap.returnsPolicy, provider: null, asOfMicros: null, returnsRead: null,
     returnsApplied: null, returnsNotEffective: null, holdCodes: [],
@@ -112,7 +115,7 @@ export async function runCmsContractPath(c: CmsContractPathCtx): Promise<CmsSale
   const asOf = deps.asOfMicros ? deps.asOfMicros() : BigInt(Date.now()) * BigInt(1000)
   const read = await provider.read({
     fromMicros: win.fromMicros, toMicrosExclusive: win.toMicrosExclusive, productIds: snap.products.map((p) => p.productId),
-    asOfMicros: asOf, withReturns: net, deadlineMs: budget.sourceMs(),
+    asOfMicros: asOf, withReturns: net, ...(profile ? { returnsProfile: profile } : {}), deadlineMs: budget.sourceMs(),
   })
   if (!read.ok) {
     const extra: CmsSalesRunDetail = {}
@@ -148,7 +151,7 @@ export async function runCmsContractPath(c: CmsContractPathCtx): Promise<CmsSale
   const retKinds = new Set<string>()
   let retBad = 0
   for (const r of read.returnsRaw ?? []) {
-    const n = normalizeReturnRow(r)
+    const n = normalizeReturnRow(r, profile ?? 'net_returns_v1')
     if (n.ok) returns.push(n.value)
     else { retBad++; for (const i of n.issues) retKinds.add(`${i.kind}:${i.field}`) }
   }

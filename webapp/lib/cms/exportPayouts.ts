@@ -9,7 +9,10 @@
 //  · 124: super có thêm metadata chứng nhận đối soát nguồn đã dùng chốt (id, bộ trường decision10, mốc dữ liệu, nhãn nguồn tham
 //    chiếu, số dòng, vân tay decision10) — không actor / email / hash file. SM không có các dòng này.
 //  · Ô: chuỗi ghi kiểu text (không công thức); tiền nguyên trong miền an toàn ⇒ số, ngoài miền ⇒ text đủ chữ số.
+//  · 132 r1 (Q-237): chốt run contract ⇒ sheet thông tin ghi cách tính / chính sách trả / mốc trả đã trừ + lưu ý số RÒNG (mọi vai — không
+//    PII); super thêm tổng trả ĐÃ TRỪ (số phiếu, tiền hoàn, lượng đủ điều kiện). Chốt run legacy ⇒ file giữ nguyên như trước.
 import * as XLSX from 'xlsx'
+import { CMS_QUANTITY_BASIS_LABEL, CMS_RETURNS_POLICY_LABEL } from './calc/basisUi'
 import { cmsDecCell, cmsIntCell } from './exportResults'
 import { cmsSourceBasisLabel, cmsUnassignedRatioText, type CmsPayoutDto } from './payoutView'
 
@@ -74,6 +77,20 @@ export function buildCmsPayoutWorkbook(i: CmsPayoutExportInput): CmsPayoutBuild 
     ['Lưu ý', 'File đối soát chi trả — KHÔNG phải lệnh chuyển tiền.'],
   ]
   if (p.isTest) info.splice(2, 0, ['Loại', 'Chương trình QA (dữ liệu thử) — KHÔNG chi trả'])
+  if (p.contract) {
+    const c = p.contract
+    info.push(
+      ['Cách tính số lượng', CMS_QUANTITY_BASIS_LABEL[c.quantityBasis]],
+      ['Chính sách trả hàng', CMS_RETURNS_POLICY_LABEL[c.returnsPolicy]],
+      ['Phiên bản hợp đồng tính', c.calcContractVersion],
+    )
+    if (c.returnsAsOf) {
+      info.push(
+        ['Trả hàng đã trừ tới mốc (VN)', vnTime(c.returnsAsOf)],
+        ['Lưu ý trả hàng', 'Số chi là số RÒNG: phiếu trả hàng tới mốc trên đã trừ. Phiếu phát sinh sau chốt chỉ ở báo cáo sau chốt — không đổi số này.'],
+      )
+    }
+  }
   if (isSuper && p.super) {
     const s = p.super
     info.push(
@@ -90,6 +107,13 @@ export function buildCmsPayoutWorkbook(i: CmsPayoutExportInput): CmsPayoutBuild 
       ['Cơ sở nguồn đầy đủ', cmsSourceBasisLabel(s.sourceCompleteBasis)],
       ['Nguồn đủ tới ngày', s.sourceCompleteThrough ? vnDate(s.sourceCompleteThrough) : ''],
     )
+    if (s.returns) {
+      info.push(
+        ['Phiếu trả đã trừ trong số chốt', s.returns.returnCount],
+        ['Tiền hoàn đã trừ khỏi GMV (VND)', cmsDecCell(s.returns.returnGmv)],
+        ['Lượng đủ điều kiện đã trừ', cmsDecCell(s.returns.eligibleReturnBase)],
+      )
+    }
     if (s.sourceAttestationId && s.sourceAttestation) {
       const a = s.sourceAttestation
       info.push(
@@ -99,7 +123,7 @@ export function buildCmsPayoutWorkbook(i: CmsPayoutExportInput): CmsPayoutBuild 
         ['Nguồn tham chiếu', a.referenceLabel],
         ['Số dòng đã đối soát', a.linesCompared],
         ['Chứng nhận lúc (VN)', vnTime(a.attestedAt)],
-        ['Vân tay decision10 của lần tính', a.runRowsFp],
+        [`Vân tay ${a.fieldSet} của lần tính`, a.runRowsFp],
       )
     }
   }

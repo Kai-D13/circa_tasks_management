@@ -7,12 +7,18 @@ import { buttonVariants } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { cmsDateTime, cmsVnd } from '@/lib/cms/display'
 import { cmsUnassignedRatioText, type CmsPayoutDto } from '@/lib/cms/payoutView'
+import { CMS_QUANTITY_BASIS_LABEL, CMS_RETURNS_POLICY_LABEL } from '@/lib/cms/calc/basisUi'
+import { formatCmsDecimal, parseCmsDecimal } from '@/lib/cms/decimal'
 import { CmsDownloadLink } from '@/components/cms/CmsDownloadLink'
 
 // CMS P3a — số ĐÃ CHỐT trên A3 (rpc_cms_payout, SESSION — phạm vi hiện tại theo Q-208 / Q-217). Super: tổng toàn chương trình,
 // thông tin chốt (Q-213, lý do, quy tắc); SM: chỉ tổng trong phạm vi được phân công, không email. Danh sách = định danh SNAPSHOT
 // lúc chốt. Lỗi ⇒ thông báo, không 0 giả. Nút xuất file chi trả (cùng run đã chốt).
+// 132 r1 (Q-237): chốt run contract ⇒ dòng cách tính / chính sách trả / mốc trả đã trừ (mọi vai) + câu "số RÒNG"; super thêm tổng trả đã
+// trừ (số phiếu, tiền hoàn). Chốt run legacy ⇒ không đổi.
 const BTN = 'h-[44px] md:h-[36px] gap-1.5 text-[13px]'
+const vndDec = (v: string) => { const r = parseCmsDecimal(v, { allowNegative: true }); return r.ok ? cmsVnd(r.units / BigInt(1_000_000_000)) : '—' }
+const qty = (v: string) => { const r = parseCmsDecimal(v, { allowNegative: true }); return r.ok ? formatCmsDecimal(r.units).replace('.', ',') : '—' }
 
 export function CmsPayoutPanel({ programId, payout, error }: { programId: string; payout: CmsPayoutDto | null; error: string | null }) {
   if (!payout) {
@@ -47,6 +53,28 @@ export function CmsPayoutPanel({ programId, payout, error }: { programId: string
           <dd data-cms-payout-total className="font-semibold tabular-nums">{cmsVnd(payout.scopeTotal)}</dd>
           <dt className="text-muted-foreground">Số dược sĩ{isSuper ? '' : ' trong phạm vi'}</dt>
           <dd className="tabular-nums">{payout.rows.length}{isSuper && payout.super ? ` (có tiền ${payout.super.staffPaid})` : ''}</dd>
+          {payout.contract && (
+            <>
+              <dt className="text-muted-foreground">Cách tính</dt>
+              <dd data-cms-payout-contract={payout.contract.returnsPolicy}>
+                {CMS_QUANTITY_BASIS_LABEL[payout.contract.quantityBasis]} · {CMS_RETURNS_POLICY_LABEL[payout.contract.returnsPolicy]}
+              </dd>
+              {payout.contract.returnsAsOf && (
+                <>
+                  <dt className="text-muted-foreground">Trả hàng đã trừ tới</dt>
+                  <dd className="tabular-nums">{cmsDateTime(payout.contract.returnsAsOf)}</dd>
+                </>
+              )}
+            </>
+          )}
+          {isSuper && payout.super?.returns && (
+            <>
+              <dt className="text-muted-foreground">Phiếu trả đã trừ</dt>
+              <dd className="tabular-nums" data-cms-payout-returns={payout.super.returns.returnCount}>
+                {payout.super.returns.returnCount.toLocaleString('vi-VN')} phiếu · {vndDec(payout.super.returns.returnGmv)} tiền hoàn · lượng {qty(payout.super.returns.eligibleReturnBase)}
+              </dd>
+            </>
+          )}
           {isSuper && payout.super && (
             <>
               <dt className="text-muted-foreground">Dòng chưa gán lúc chốt</dt>
@@ -57,6 +85,11 @@ export function CmsPayoutPanel({ programId, payout, error }: { programId: string
             </>
           )}
         </dl>
+        {payout.contract?.returnsAsOf && (
+          <p className="text-[12px] text-muted-foreground" data-cms-payout-net-note>
+            Số đã chốt là số RÒNG — phiếu trả tới mốc trên đã trừ. Phiếu phát sinh sau chốt chỉ ở báo cáo sau chốt, không đổi số này.
+          </p>
+        )}
         {payout.rows.length > 0 && (
           <details data-cms-payout-rows className="group">
             <summary className="flex min-h-[44px] cursor-pointer list-none items-center gap-1 text-[13px] font-medium [&::-webkit-details-marker]:hidden">

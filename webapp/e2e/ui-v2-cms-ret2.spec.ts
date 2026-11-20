@@ -36,6 +36,17 @@ async function open(page: Page, screen: Screen, qs: string, theme: Theme = 'ligh
   await page.waitForFunction((t) => document.documentElement.classList.contains('dark') === (t === 'dark'), theme, { timeout: 10_000 })
   await page.locator(`main [data-testid="ui-catalog-cms-${screen}"]`).waitFor({ state: 'visible', timeout: 20_000 })
   await page.evaluate(() => document.fonts.ready)
+  await hydrated(page)
+}
+// r3 (PM 20/11 §3 RET-R3-02): chụp ảnh (`caret: 'hide'`) đặt style caret-color lên input — nếu chen vào TRƯỚC khi React hydrate xong,
+// React dev báo hydration mismatch và overlay gửi POST /__nextjs_original-stack-frames (guard 0-ghi bắt đúng). Chờ MỌI phần tử tương tác
+// hiển thị trong <main> đã được React nhận (khoá nội bộ __reactProps$ gắn lúc hydrate phần tử) rồi mới kiểm / chụp. Guard ghi giữ nguyên.
+async function hydrated(page: Page) {
+  await page.waitForFunction(() => {
+    const els = Array.from(document.querySelectorAll('main input, main button, main a, main select, main textarea'))
+      .filter((e) => !e.closest('[hidden]'))
+    return els.length > 0 && els.every((e) => Object.keys(e).some((k) => k.startsWith('__reactProps$')))
+  }, undefined, { timeout: 20_000 })
 }
 async function noPageOverflow(page: Page, where: string) {
   const g = await page.evaluate(() => {

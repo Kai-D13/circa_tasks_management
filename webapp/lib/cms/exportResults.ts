@@ -11,7 +11,7 @@
 import * as XLSX from 'xlsx'
 import { formatCmsDecimal, parseCmsDecimal } from './decimal'
 import { CMS_LINE_LABEL, CMS_QUANTITY_CLASS_LABEL, cmsLockedScopeNote, cmsNetSummary, cmsProductSalesStats, cmsQtyText, cmsResultScopeNote } from './resultUi'
-import { CMS_QUANTITY_BASIS_LABEL } from './calc/policy'
+import { CMS_QUANTITY_BASIS_LABEL, cmsPolicyReadsReturns } from './calc/policy'
 import { CMS_RETURNS_POLICY_LABEL } from './calc/basisUi'
 import { cmsRunHasLegacyCap, type CmsResultHeaderDto, type CmsResultLineDto, type CmsResultRowsDto } from './resultView'
 
@@ -122,7 +122,12 @@ export function buildCmsResultWorkbook(i: CmsExportInput): CmsExportBuild {
   // PM RC r2 SALES-RC-03: bố cục theo CHÍNH SÁCH TRẢ GHIM của run (không theo cờ hiện tại, không theo `!legacy` hay object net):
   //   · legacy — như cũ · contract net_returns_v1 — cột ròng / trả / sự kiện bán + trả như P5.4
   //   · contract sales_only_v1 (DB: chỉ cms_unit) — "SL bán / GMV", KHÔNG cột / dòng trả; giữ K + lượng đủ điều kiện + lớp lượng.
-  const netRun = contractRun && c.returnsPolicy === 'net_returns_v1'
+  // Q-236: full_line_qty_refund_v1 cùng bố cục net (cột ròng / trả / sự kiện trả) — chỉ đổi NHÃN lượng / GMV trừ (lượng = quy ước CMS,
+  // không phải lượng BI; GMV = tiền hoàn thực tế từng phiếu).
+  const netRun = contractRun && cmsPolicyReadsReturns(c.returnsPolicy)
+  const fullLine = contractRun && c.returnsPolicy === 'full_line_qty_refund_v1'
+  const RET_QTY = fullLine ? 'Lượng trừ theo quy ước CMS (đv CMS)' : 'SL trả (đv CMS)'
+  const RET_GMV = fullLine ? 'GMV trừ theo tiền hoàn (VND)' : 'GMV trả (VND)'
   const salesContract = contractRun && !netRun
   // Run contract: line_count = số sự kiện BÁN, return_count = số DÒNG trả (sự kiện theo item — không phải số chứng từ; seal 130
   // SEAL_RESULT_SUMS) ⇒ đủ dòng = bán + trả.
@@ -159,9 +164,10 @@ export function buildCmsResultWorkbook(i: CmsExportInput): CmsExportBuild {
     ...(contractRun ? [
       ['Cách tính lượng (ghim theo phiên)', CMS_QUANTITY_BASIS_LABEL[c.quantityBasis]],
       ['Chính sách trả hàng (ghim theo phiên)', CMS_RETURNS_POLICY_LABEL[c.returnsPolicy]],
+      ...(fullLine ? [['Quy tắc trừ trả', 'Phiếu trả hoàn tất trừ đủ lượng của dòng bán được tham chiếu (một lần cho mỗi dòng, kể cả khi có nhiều phiếu); GMV trừ theo tiền hoàn thực tế của từng phiếu.']] : []),
       ...(c.returnsAsOf ? [['Dữ liệu trả đến (VN)', vnTime(c.returnsAsOf)]] : []),
       ['Hợp đồng tính', `${c.calcContractVersion} · ${c.quantityPolicyVersion}${c.unitKeyVersion ? ` · ${c.unitKeyVersion}` : ''}`],
-      ['Loại số liệu', locked && c.returnsPolicy === 'net_returns_v1' ? `${kindNote} (phiếu trả sau chốt xem ở báo cáo sau chốt, không sửa số này)` : kindNote],
+      ['Loại số liệu', locked && netRun ? `${kindNote} (phiếu trả sau chốt xem ở báo cáo sau chốt, không sửa số này)` : kindNote],
       ['Định nghĩa lượng', c.quantityBasis === 'cms_unit'
         ? `SL tính CMS = floor(lượng cơ sở ĐỦ ĐIỀU KIỆN${netRun ? ' ròng' : ''} / K). Chỉ dòng bán đúng đơn vị CMS, số lượng nguyên được tính lượng; dòng khác đơn vị / số lẻ vẫn vào GMV.`
         : 'SL tính CMS = floor(lượng cơ sở ròng cộng dồn / K).'],
@@ -189,7 +195,7 @@ export function buildCmsResultWorkbook(i: CmsExportInput): CmsExportBuild {
   // P5.4: run NET thêm cột CUỐI (cột cũ giữ vị trí): K, đủ điều kiện, gộp / trả / số dòng trả. SL bán / GMV ở cột cũ = RÒNG.
   // Run sales-only (RC r2 SALES-RC-03): cột cũ là "SL bán / GMV" (chưa trừ trả), cột cuối chỉ K + đủ điều kiện.
   // "Dòng trả hàng" = số sự kiện trả theo item (PM P5-04) — một phiếu nhiều item là nhiều dòng; không gọi là số phiếu.
-  const NET_PROD_COLS = ['K (cơ sở / 1 đv CMS)', 'SL đủ điều kiện (đv CMS)', 'SL bán gộp (đv CMS)', 'SL trả (đv CMS)', 'GMV bán gộp (VND)', 'GMV trả (VND)', 'Dòng trả hàng']
+  const NET_PROD_COLS = ['K (cơ sở / 1 đv CMS)', 'SL đủ điều kiện (đv CMS)', 'SL bán gộp (đv CMS)', RET_QTY, 'GMV bán gộp (VND)', RET_GMV, 'Dòng trả hàng']
   // Sales-only: chỉ K + lượng đủ điều kiện (căn cứ Q tính nguyên); "gộp" / trả trùng hoặc bằng 0 ⇒ không xuất.
   const SALES_PROD_COLS = ['K (cơ sở / 1 đv CMS)', 'SL đủ điều kiện (đv CMS)']
   const extraProd = netRun ? NET_PROD_COLS : salesContract ? SALES_PROD_COLS : []
@@ -216,7 +222,7 @@ export function buildCmsResultWorkbook(i: CmsExportInput): CmsExportBuild {
   const staffSheet: Cell[][] = [['Dược sĩ', 'user_id', 'Nhà thuốc hiện tại', 'Nhà thuốc lúc bán', 'ProductID', 'Tên sản phẩm', netRun ? 'SL bán ròng (đv CMS)' : 'SL bán (đv CMS)', 'SL tính CMS',
     ...(legacyCap ? ['SL hưởng (sau trần)', 'Trần', 'Đạt trần'] : []),
     netRun ? 'GMV ròng (VND)' : 'GMV (VND)', 'Target (VND)', 'Đạt target', 'Đạt từ (VN)', 'CMS khi đạt (VND)', amtHead, contractRun ? 'Số dòng bán' : 'Số dòng',
-    ...(netRun ? ['SL đủ điều kiện (đv CMS)', 'SL bán gộp (đv CMS)', 'SL trả (đv CMS)', 'GMV trả (VND)', 'Dòng trả hàng'] : salesContract ? ['SL đủ điều kiện (đv CMS)'] : [])]]
+    ...(netRun ? ['SL đủ điều kiện (đv CMS)', 'SL bán gộp (đv CMS)', RET_QTY, RET_GMV, 'Dòng trả hàng'] : salesContract ? ['SL đủ điều kiện (đv CMS)'] : [])]]
   const sorted = [...i.rows.results].sort((a, b) => (names.get(a.userId)?.fullName ?? '').localeCompare(names.get(b.userId)?.fullName ?? '', 'vi')
     || a.userId.localeCompare(b.userId) || (prod.get(a.programProductId)?.productId ?? '').localeCompare(prod.get(b.programProductId)?.productId ?? ''))
   for (const r of sorted) {

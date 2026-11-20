@@ -9,6 +9,8 @@
 //    total trang đầu; file chỉ hoàn tất khi đủ (ghi .partial rồi đổi tên).
 //  · Attest: TÍNH LẠI compare-source từ ĐÚNG hai file + metadata (hash byte từ cùng buffer) — không nhận một JSON "MATCH" tự khai.
 //    Bằng chứng = decision10 (PM COMP-P1-1): reference_rows_fp = run_rows_fp = decision10 của file run; DB tính lại từ lớp nguồn.
+//    132 r2 (Q-238 b): run cms_unit ⇒ bộ decision_unit14 (cms-rows-fp-v2 / cms-i4-compare-v2: + chuỗi THÔ q / u + cờ); file run xuất 18
+//    cột; chế độ lấy theo cách tính của RUN hiện hành (cmsAttestModeOf) — DB chặn bộ lệch cách tính (CMS_ATTEST_BASIS_MISMATCH).
 //  · Mặc định dry-run; ghi cần --write + --idem (do operator cấp, không tự sinh) + --expect-host đúng. Ý ĐỊNH vào sổ TRƯỚC request;
 //    mất phản hồi ⇒ "chưa xác định" — reconcile đọc DB theo ĐÚNG khoá idem; gọi lại chỉ bằng CÙNG khoá + cùng payload.
 //  · Run QA: thao tác chương trình is_test chỉ BÊN TRONG run QA đang mở (manifest / launcher / host / marker / sổ của run); close
@@ -18,7 +20,10 @@ import { createHash } from 'node:crypto'
 import { toCareCsv } from '../lib/care/import/csvCore'
 import { cmsNormalizeAck } from '../lib/cms/payoutView'
 import { CMS_SALES_COLUMNS, type CmsRawRow } from '../lib/cms/source/contract'
-import { cmsI4ScopeHash, CMS_I4_COMPARE_VERSION, CMS_I4_ROWS_FP_VERSION, type CmsI4CompareResult, type CmsI4EvidenceMeta } from './cmsI4CompareSource'
+import {
+  cmsI4ScopeHash, CMS_I4_COMPARE_VERSION, CMS_I4_COMPARE_VERSION_UNIT, CMS_I4_FIELD_SET, CMS_I4_ROWS_FP_VERSION, CMS_I4_ROWS_FP_VERSION_UNIT,
+  CMS_I4_UNIT_APP_COLUMNS, type CmsI4AttestMode, type CmsI4CompareResult, type CmsI4EvidenceMeta,
+} from './cmsI4CompareSource'
 import type { CmsI4Context } from './cmsI4Offline'
 import {
   cmsQaAgeStatusRows, cmsQaIoTimeoutMs, cmsQaLockLocalCheck, cmsQaWriterDbCheck, cmsQaWriterProgramSql, type CmsQaWriterProgramRow,
@@ -95,9 +100,16 @@ export function cmsUtf8Compare(a: string, b: string): number {
   return Buffer.compare(x, y)
 }
 
-export interface CmsAttestExportState { programId: string; runId: string; rows: CmsRawRow[]; lastId: string | null; total: number | null; pages: number }
+export interface CmsAttestExportState {
+  programId: string; runId: string; rows: CmsRawRow[]; lastId: string | null; total: number | null; pages: number
+  /** 132 r2: trang có 4 khoá thô / cờ (DB có rpc_cms_run_source_export r2) — mọi trang phải cùng dạng; null = chưa có trang. */
+  unitCols: boolean | null
+}
 export const newCmsAttestExportState = (programId: string, runId: string): CmsAttestExportState =>
-  ({ programId, runId, rows: [], lastId: null, total: null, pages: 0 })
+  ({ programId, runId, rows: [], lastId: null, total: null, pages: 0, unitCols: null })
+/** 132 r2: 18 khoá của trang xuất (14 cột CSV chuẩn + thô / cờ q / u). */
+const EXPORT_KEYS_14 = JSON.stringify([...CMS_SALES_COLUMNS].sort())
+const EXPORT_KEYS_18 = JSON.stringify([...CMS_SALES_COLUMNS, ...CMS_I4_UNIT_APP_COLUMNS].sort())
 
 /**
  * Kiểm + gộp MỘT trang rpc_cms_run_source_export. Sai ⇒ mã cố định (không file dở mang nhãn hoàn chỉnh):
@@ -116,13 +128,17 @@ export function cmsAttestExportPage(s: CmsAttestExportState, page: unknown, limi
   } else if (p.total !== null && p.total !== undefined) return { ok: false, code: 'EXPORT_SHAPE' }
   const rows: CmsRawRow[] = []
   let last = s.lastId
+  let unitCols = s.unitCols
   for (const r of p.rows) {
     if (typeof r !== 'object' || r === null || Array.isArray(r)) return { ok: false, code: 'EXPORT_SHAPE' }
     const o = r as Record<string, unknown>
-    const keys = Object.keys(o).sort()
-    if (JSON.stringify(keys) !== JSON.stringify([...CMS_SALES_COLUMNS].sort())) return { ok: false, code: 'EXPORT_SHAPE' }
+    const keys = JSON.stringify(Object.keys(o).sort())
+    // 14 khoá (DB trước 132 r2) hoặc 18 khoá (132 r2: + thô / cờ q / u); mọi dòng / trang cùng một dạng.
+    const u = keys === EXPORT_KEYS_18 ? true : keys === EXPORT_KEYS_14 ? false : null
+    if (u === null || (unitCols !== null && unitCols !== u)) return { ok: false, code: 'EXPORT_SHAPE' }
+    unitCols = u
     const row: CmsRawRow = {}
-    for (const k of CMS_SALES_COLUMNS) {
+    for (const k of u ? [...CMS_SALES_COLUMNS, ...CMS_I4_UNIT_APP_COLUMNS] : CMS_SALES_COLUMNS) {
       const v = o[k]
       if (v !== null && typeof v !== 'string') return { ok: false, code: 'EXPORT_SHAPE' }
       row[k] = v as string | null
@@ -135,16 +151,20 @@ export function cmsAttestExportPage(s: CmsAttestExportState, page: unknown, limi
   }
   const full = p.rows.length === limit
   if (full ? p.next_after !== last : p.next_after !== null && p.next_after !== undefined) return { ok: false, code: 'EXPORT_PAGING' }
-  const state: CmsAttestExportState = { ...s, rows: [...s.rows, ...rows], lastId: last, total: first ? (p.total as number) : s.total, pages: s.pages + 1 }
+  const state: CmsAttestExportState = { ...s, rows: [...s.rows, ...rows], lastId: last, total: first ? (p.total as number) : s.total, pages: s.pages + 1, unitCols }
   if (state.total !== null && state.rows.length > state.total) return { ok: false, code: 'EXPORT_COUNT' }
   const done = !full
   if (done && state.rows.length !== state.total) return { ok: false, code: 'EXPORT_COUNT' }
   return { ok: true, state, done }
 }
 
-/** CSV chuẩn I4 (header 14 cột CMS_SALES_COLUMNS, RFC 4180, CRLF, không BOM; NULL = ô rỗng). */
-export function cmsAttestExportCsv(rows: readonly CmsRawRow[]): string {
-  return toCareCsv([[...CMS_SALES_COLUMNS], ...rows.map((r) => CMS_SALES_COLUMNS.map((k) => r[k] ?? ''))], false)
+/**
+ * CSV chuẩn I4 (header 14 cột CMS_SALES_COLUMNS, RFC 4180, CRLF, không BOM; NULL = ô rỗng). 132 r2: `unit` ⇒ file run 18 cột (+ thô / cờ
+ * q / u) cho decision_unit14 — ô thô giữ NGUYÊN VĂN (csvField bọc nháy khi có khoảng trắng đầu / cuối, dấu phẩy, nháy, xuống dòng).
+ */
+export function cmsAttestExportCsv(rows: readonly CmsRawRow[], unit = false): string {
+  const cols = unit ? [...CMS_SALES_COLUMNS, ...CMS_I4_UNIT_APP_COLUMNS] : [...CMS_SALES_COLUMNS]
+  return toCareCsv([cols, ...rows.map((r) => cols.map((k) => r[k] ?? ''))], false)
 }
 
 /** Phần `app` của evidence-meta cho file vừa xuất (operator ghép với phần `reference`; asOf = mốc M CỦA reference). */
@@ -159,13 +179,25 @@ export function cmsAttestAppSide(i: { runId: string; exportedAt: string; fileSha
 
 export interface CmsAttestProgram {
   id: string; isTest: boolean; status: string; startDate: string; endDate: string; productIds: string[]; currentRunId: string | null
+  /** 132 r2: cách tính của chương trình (130; thiếu ⇒ pos_base) và của run hiện hành (null ⇔ run legacy / chưa có run). */
+  quantityBasis: 'pos_base' | 'cms_unit'
+  runQuantityBasis: string | null
+  runContractVersion: string | null
 }
 
+/**
+ * Chương trình + phạm vi chứng nhận. `product_ids` = SP HIỆU LỰC (`retired_at IS NULL`) — cùng tập `cms__program_scope_hash` (131) và
+ * worker đọc nguồn; thiếu lọc ⇒ chương trình đã bỏ SP qua revision không bao giờ chứng nhận được (STALE_SCOPE / MISMATCH — db-reviewer
+ * r2 P1-1). Đọc cột qua `to_jsonb(pp)` để chạy được cả trên DB chưa có 131 (chưa có cột ⇒ NULL ⇒ mọi SP hiệu lực, đúng nghĩa 124).
+ */
 export function cmsAttestProgramSql(programId: string): string {
   if (!UUID_RE.test(programId)) throw new Error('programId không phải UUID')
   return `SELECT p.id::text AS id, p.is_test, p.status::text AS status, p.start_date::text AS start_date, p.end_date::text AS end_date,
-       p.current_result_run_id::text AS current_run_id,
-       COALESCE((SELECT array_agg(pp.product_id ORDER BY pp.product_id) FROM public.cms_program_products pp WHERE pp.program_id = p.id), '{}') AS product_ids
+       p.current_result_run_id::text AS current_run_id, to_jsonb(p) ->> 'quantity_basis' AS quantity_basis,
+       (SELECT to_jsonb(r) ->> 'quantity_basis' FROM public.cms_sync_runs r WHERE r.id = p.current_result_run_id) AS run_quantity_basis,
+       (SELECT to_jsonb(r) ->> 'calc_contract_version' FROM public.cms_sync_runs r WHERE r.id = p.current_result_run_id) AS run_contract_version,
+       COALESCE((SELECT array_agg(pp.product_id ORDER BY pp.product_id) FROM public.cms_program_products pp WHERE pp.program_id = p.id
+                   AND (to_jsonb(pp) ->> 'retired_at') IS NULL), '{}') AS product_ids
   FROM public.cms_programs p WHERE p.id = '${programId}'::uuid`
 }
 
@@ -174,10 +206,28 @@ export function parseCmsAttestProgram(row: unknown): CmsAttestProgram | null {
   const r = row as Record<string, unknown>
   if (typeof r.id !== 'string' || !UUID_RE.test(r.id) || typeof r.is_test !== 'boolean' || typeof r.status !== 'string') return null
   if (typeof r.start_date !== 'string' || typeof r.end_date !== 'string' || !Array.isArray(r.product_ids)) return null
+  const qb = r.quantity_basis ?? null
+  if (qb !== null && qb !== 'pos_base' && qb !== 'cms_unit') return null
+  const sOrNull = (v: unknown) => (typeof v === 'string' ? v : null)
   return {
     id: r.id, isTest: r.is_test, status: r.status, startDate: r.start_date, endDate: r.end_date,
     productIds: (r.product_ids as unknown[]).map(String).sort(), currentRunId: typeof r.current_run_id === 'string' ? r.current_run_id : null,
+    quantityBasis: (qb ?? 'pos_base') as 'pos_base' | 'cms_unit',
+    runQuantityBasis: sOrNull(r.run_quantity_basis), runContractVersion: sOrNull(r.run_contract_version),
   }
+}
+
+/**
+ * 132 r2 (Q-238 b): chế độ chứng nhận theo cách tính của RUN hiện hành (DB kiểm cùng luật — rpc_cms_source_attest / cms__attest_eval):
+ * run cms_unit ⇒ unit14 (decision_unit14); run pos_base / legacy ⇒ decision10. Chương trình đã đổi cách tính mà run hiện hành còn theo
+ * cách cũ ⇒ không chứng nhận (đồng bộ lại trước).
+ */
+export function cmsAttestModeOf(p: CmsAttestProgram): { ok: true; mode: CmsI4AttestMode } | { ok: false; reason: string } {
+  const runBasis = p.runQuantityBasis ?? 'pos_base'
+  if (runBasis !== 'pos_base' && runBasis !== 'cms_unit') return { ok: false, reason: `cách tính của run lạ (${runBasis})` }
+  if (runBasis !== p.quantityBasis) return { ok: false, reason: 'chương trình đã đổi cách tính nhưng run hiện hành còn theo cách cũ — đồng bộ lại rồi xuất / chứng nhận' }
+  if (runBasis === 'cms_unit' && p.runContractVersion === null) return { ok: false, reason: 'run cms_unit không có hợp đồng tính (thiếu chuỗi thô q / u)' }
+  return { ok: true, mode: runBasis === 'cms_unit' ? 'unit14' : 'decision10' }
 }
 
 /** Context compare-source chỉ cần kỳ + ProductID (không mapping — so nguồn không đánh giá gán người bán). */
@@ -235,23 +285,36 @@ export function cmsAttestRevokeHistoryCheck(target: CmsAttestTarget, history: un
   return { ok: true }
 }
 
-// ── Payload chứng nhận (decision10) ─────────────────────────────────────────
+// ── Payload chứng nhận (decision10 | decision_unit14 — 132 r2) ──────────────
 
 export type CmsAttestPayload = Record<string, string>
 
-/** Payload rpc_cms_source_attest từ kết quả compare-source TÍNH LẠI trên hai file + metadata. Sai ⇒ lý do (chưa gọi DB). */
+/**
+ * Payload rpc_cms_source_attest từ kết quả compare-source TÍNH LẠI trên hai file + metadata. Sai ⇒ lý do (chưa gọi DB). 132 r2: chế độ
+ * theo cách tính của run (cmsAttestModeOf) — compare phải chạy ĐÚNG chế độ đó (version / vân tay tương ứng); cms_unit ⇒ bộ decision_unit14
+ * (vân tay v2 hai bên trùng), pos_base / legacy ⇒ decision10 như 124.
+ */
 export function cmsAttestBuildPayload(i: {
   program: CmsAttestProgram; runId: string; compare: CmsI4CompareResult; meta: CmsI4EvidenceMeta
   refSha: string; appSha: string; ack: string | undefined
 }): { ok: true; payload: CmsAttestPayload; payloadSha256: string } | { ok: false; reasons: string[] } {
   const r: string[] = []
   const { program: p, compare: c, meta: m } = i
+  const md = cmsAttestModeOf(p)
+  if (!md.ok) r.push(md.reason)
+  const unit = md.ok && md.mode === 'unit14'
   if (!UUID_RE.test(i.runId)) r.push('run không phải UUID')
   if (p.status !== 'active') r.push(`chương trình ${p.status} — chỉ chứng nhận chương trình đang chạy chưa chốt`)
   if (p.currentRunId !== i.runId) r.push('run không phải run hiện hành của chương trình (đã có run mới công bố?) — xuất lại')
   if (c.verdict !== 'MATCH' || c.dataIssues.length || c.notProven.length) r.push(`compare-source không MATCH (${c.verdict}${[...c.dataIssues, ...c.notProven].length ? `: ${[...c.dataIssues, ...c.notProven].slice(0, 5).join(', ')}` : ''})`)
   if (c.compare.missing || c.compare.extra || c.compare.changed) r.push('còn dòng thiếu / thừa / lệch trường quyết định')
-  if (c.version !== CMS_I4_COMPARE_VERSION || c.fpVersion !== CMS_I4_ROWS_FP_VERSION) r.push('phiên bản công cụ / vân tay khác bản DB nhận')
+  if (md.ok && c.mode !== md.mode) r.push(`compare chạy chế độ ${c.mode} nhưng run tính theo ${md.mode} — so lại đúng chế độ`)
+  const wantVer = unit ? CMS_I4_COMPARE_VERSION_UNIT : CMS_I4_COMPARE_VERSION
+  const wantFp = unit ? CMS_I4_ROWS_FP_VERSION_UNIT : CMS_I4_ROWS_FP_VERSION
+  if (c.version !== wantVer || c.fpVersion !== wantFp) r.push('phiên bản công cụ / vân tay khác bản DB nhận cho cách tính này')
+  if (unit && (c.reference.unitFp === null || c.reference.unitFp !== c.app.unitFp || !HEX64.test(c.app.unitFp ?? ''))) {
+    r.push('vân tay decision_unit14 (thô q / u + cờ) hai bên khác nhau')
+  }
   if (m.app.inputKind !== 'published_run' || m.app.runId !== i.runId) r.push('metadata app phải là published_run của đúng run')
   if (m.reference.inputKind !== 'reference_source') r.push('metadata reference phải là reference_source (nguồn độc lập)')
   const scopeOk = (s: CmsI4EvidenceMeta['reference']['scope']) => s.startDate === p.startDate && s.endDate === p.endDate
@@ -271,11 +334,12 @@ export function cmsAttestBuildPayload(i: {
   }
   if (r.length) return { ok: false, reasons: r }
   const payload: CmsAttestPayload = {
-    fp_version: CMS_I4_ROWS_FP_VERSION, field_set: 'decision10', scope_from: p.startDate, scope_to: p.endDate, scope_hash: scopeHash,
-    run_rows_fp: c.app.decisionFp, run_file_sha256: i.appSha, reference_rows_fp: c.reference.decisionFp, reference_file_sha256: i.refSha,
+    fp_version: wantFp, field_set: CMS_I4_FIELD_SET[unit ? 'unit14' : 'decision10'], scope_from: p.startDate, scope_to: p.endDate, scope_hash: scopeHash,
+    run_rows_fp: unit ? c.app.unitFp as string : c.app.decisionFp, run_file_sha256: i.appSha,
+    reference_rows_fp: unit ? c.reference.unitFp as string : c.reference.decisionFp, reference_file_sha256: i.refSha,
     reference_label: label, as_of: m.reference.asOf, reference_exported_at: m.reference.exportedAt, run_exported_at: m.app.exportedAt,
     lines_compared: String(c.compare.matched), missing_lines: '0', extra_lines: '0', changed_lines: '0',
-    tool_version: CMS_I4_COMPARE_VERSION, ack_reason: ack as string,
+    tool_version: wantVer, ack_reason: ack as string,
   }
   return { ok: true, payload, payloadSha256: cmsAttestPayloadSha(i.program.id, i.runId, payload) }
 }
@@ -288,18 +352,63 @@ export function cmsAttestPayloadSha(programId: string, runId: string, payload: C
 
 /** Phản hồi attest / revoke phải nói đúng thao tác vừa yêu cầu — lệch ⇒ không kết luận thành công. */
 export function cmsAttestCheckReply(op: 'attest' | 'revoke', data: unknown, expect: { runId?: string; attestationId?: string }):
-  { ok: true; id: string; already: boolean } | { ok: false } {
+  { ok: true; id: string; already: boolean; live: boolean | null } | { ok: false } {
   if (typeof data !== 'object' || data === null) return { ok: false }
   const d = data as Record<string, unknown>
   if (typeof d.id !== 'string' || !UUID_RE.test(d.id) || typeof d.already !== 'boolean') return { ok: false }
-  if (op === 'attest' && (d.attested !== true || d.run_id !== expect.runId)) return { ok: false }
+  if (op === 'attest' && (d.attested !== true || d.run_id !== expect.runId || typeof d.live !== 'boolean')) return { ok: false }
   if (op === 'revoke' && (d.revoked !== true || d.id !== expect.attestationId)) return { ok: false }
-  return { ok: true, id: d.id, already: d.already }
+  return { ok: true, id: d.id, already: d.already, live: op === 'attest' ? (d.live as boolean) : null }
+}
+
+/**
+ * r3 (PM 20/11 §4.1.3): DB trả `already` (cùng --idem + cùng nội dung) chỉ nói chứng nhận ĐÃ CÓ, không nói còn dùng được. Hiệu lực HIỆN TẠI
+ * đọc qua pg-meta CHỈ ĐỌC (như reconcile — rpc_cms_lock_preview chỉ cấp service_role): dòng chứng nhận (còn sống = chưa thu hồi / chưa bị
+ * thay), run hiện hành của chương trình, và cms__attest_eval(chương trình, run) — cùng hàm lock_eval dùng khi chốt. Đúng id + code NULL ⇒
+ * done; thu hồi / bị thay ⇒ ATTEST_NOT_LIVE; run hiện hành khác run của chứng nhận ⇒ ATTEST_NOT_CURRENT; eval lệch (cấu hình / mapping /
+ * phạm vi / mốc as_of — hết hạn / số dòng / vân tay…) ⇒ ATTEST_<mã>; không đọc được / dạng lạ / mâu thuẫn ⇒ VALIDITY_UNKNOWN (không báo
+ * thành công). Hàm thuần — không tạo / thu hồi chứng nhận, không đổi idempotency.
+ */
+export function cmsAttestValiditySql(programId: string, attestationId: string): string {
+  if (!UUID_RE.test(programId) || !UUID_RE.test(attestationId)) throw new Error('UUID sai')
+  return `SELECT a.id::text AS id, a.run_id::text AS run_id, (a.revoked_at IS NULL AND a.superseded_by IS NULL) AS live,
+       p.current_result_run_id::text AS current_run_id,
+       CASE WHEN p.current_result_run_id = a.run_id THEN public.cms__attest_eval(p.id, a.run_id) END AS eval
+  FROM public.cms_source_attestations a JOIN public.cms_programs p ON p.id = a.program_id
+ WHERE a.id = '${attestationId}' AND a.program_id = '${programId}'`
+}
+export interface CmsAttestValidityRow { id: string; runId: string; live: boolean; currentRunId: string | null; eval: unknown }
+/** Dòng pg-meta ⇒ CmsAttestValidityRow; thiếu / sai dạng ⇒ null (⇒ VALIDITY_UNKNOWN). */
+export function parseCmsAttestValidityRow(raw: unknown): CmsAttestValidityRow | null {
+  if (typeof raw !== 'object' || raw === null) return null
+  const r = raw as Record<string, unknown>
+  if (typeof r.id !== 'string' || !UUID_RE.test(r.id) || typeof r.run_id !== 'string' || !UUID_RE.test(r.run_id) || typeof r.live !== 'boolean') return null
+  if (r.current_run_id !== null && !(typeof r.current_run_id === 'string' && UUID_RE.test(r.current_run_id))) return null
+  let ev = r.eval
+  if (typeof ev === 'string') { try { ev = JSON.parse(ev) } catch { return null } }
+  return { id: r.id, runId: r.run_id, live: r.live, currentRunId: r.current_run_id as string | null, eval: ev ?? null }
+}
+export type CmsAttestReplayVerdict = { status: 'done' } | { status: 'already_dead'; code: string } | { status: 'unknown'; code: 'VALIDITY_UNKNOWN' }
+export function cmsAttestReplayVerdict(reply: { id: string; live: boolean | null }, row: CmsAttestValidityRow | null): CmsAttestReplayVerdict {
+  const unknown = { status: 'unknown', code: 'VALIDITY_UNKNOWN' } as const
+  if (reply.live === false) return { status: 'already_dead', code: 'ATTEST_NOT_LIVE' }
+  if (reply.live !== true || row === null || row.id !== reply.id) return unknown
+  if (!row.live) return { status: 'already_dead', code: 'ATTEST_NOT_LIVE' }
+  if (row.currentRunId !== row.runId) return { status: 'already_dead', code: 'ATTEST_NOT_CURRENT' }
+  const e = row.eval
+  if (typeof e !== 'object' || e === null) return unknown
+  const x = e as Record<string, unknown>
+  // Chứng nhận còn sống của run hiện hành mà eval NONE / id khác ⇒ mâu thuẫn ⇒ không kết luận.
+  if (x.code === 'NONE' || x.id !== reply.id) return unknown
+  if (x.code === null) return { status: 'done' }
+  if (typeof x.code === 'string' && /^[A-Z][A-Z0-9_]{1,40}$/.test(x.code)) return { status: 'already_dead', code: `ATTEST_${x.code}` }
+  return unknown
 }
 
 // ── Sổ thao tác (a-….json, ghi độc quyền + atomic) ──────────────────────────
 
-export type CmsAttestOpStatus = 'intent' | 'done' | 'rejected' | 'unknown' | 'reconciled'
+/** already_dead (r3): gọi lại `already` nhưng chứng nhận không còn hiệu lực — đã khép (không chờ reconcile), không phải thành công. */
+export type CmsAttestOpStatus = 'intent' | 'done' | 'rejected' | 'unknown' | 'reconciled' | 'already_dead'
 export interface CmsAttestOp {
   kind: 'cms-source-attest-op'
   version: 1
@@ -346,13 +455,15 @@ export function parseCmsAttestOp(text: string): { ok: true; value: CmsAttestOp }
   for (const k of ['runId', 'attestationId'] as const) if (o[k] !== null && !(typeof o[k] === 'string' && UUID_RE.test(o[k] as string))) return { ok: false, reason: `${k} sai` }
   if (!Number.isInteger(o.pid) || (o.pid as number) <= 0) return { ok: false, reason: 'pid sai' }
   if (typeof o.startedAt !== 'string' || Number.isNaN(Date.parse(o.startedAt))) return { ok: false, reason: 'startedAt sai' }
-  if (!['intent', 'done', 'rejected', 'unknown', 'reconciled'].includes(o.status as string)) return { ok: false, reason: 'trạng thái sai' }
-  if ((o.status === 'done' || o.status === 'rejected' || o.status === 'unknown') && !o.result) return { ok: false, reason: 'thiếu kết quả' }
+  if (!['intent', 'done', 'rejected', 'unknown', 'reconciled', 'already_dead'].includes(o.status as string)) return { ok: false, reason: 'trạng thái sai' }
+  if ((o.status === 'done' || o.status === 'rejected' || o.status === 'unknown' || o.status === 'already_dead') && !o.result) return { ok: false, reason: 'thiếu kết quả' }
+  if (o.status === 'already_dead' && (o.op !== 'attest' || o.result?.already !== true || typeof o.result?.code !== 'string')) return { ok: false, reason: 'already_dead sai dạng' }
   if (o.status === 'reconciled' && (!o.reconcile || typeof o.reconcile.found !== 'boolean')) return { ok: false, reason: 'thiếu đối chiếu' }
   return { ok: true, value: o as CmsAttestOp }
 }
 
 export function cmsAttestOpOutcome(o: CmsAttestRpcOutcome, replyOk: boolean): 'done' | 'rejected' | 'unknown' {
+  // r3: gọi lại `already` của attest còn qua cmsAttestReplayVerdict ở CLI (done ⇒ có thể thành already_dead / unknown).
   if (o.kind === 'ok') return replyOk ? 'done' : 'unknown'
   return o.kind === 'rejected' ? 'rejected' : 'unknown'
 }
@@ -395,7 +506,7 @@ export interface CmsAttestReconcileRow { id: string; program_id: string; run_id:
 export function cmsAttestReconcileCheck(e: CmsAttestOp, rows: readonly CmsAttestReconcileRow[],
   o: { nowMs: number; pidAlive: boolean; probe: { can_see_all: boolean; hidden: number; inflight: number } | undefined }):
   { ok: true; found: boolean; attestationId: string | null } | { ok: false; wait?: true; reason: string } {
-  if (e.status === 'done' || e.status === 'rejected' || e.status === 'reconciled') return { ok: false, reason: `thao tác ${e.operationId} đã có kết quả (${e.status}) — không cần reconcile` }
+  if (e.status === 'done' || e.status === 'rejected' || e.status === 'reconciled' || e.status === 'already_dead') return { ok: false, reason: `thao tác ${e.operationId} đã có kết quả (${e.status}) — không cần reconcile` }
   if (e.status === 'intent' && o.pidAlive) return { ok: false, wait: true, reason: `thao tác ${e.operationId} (pid ${e.pid}) còn chạy — chờ xong` }
   const row = rows[0]
   if (row) {

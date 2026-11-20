@@ -7,6 +7,10 @@
 //  · 124 (COMP-INT): preview có `source_attestation` (chứng nhận đối soát nguồn decision10 của run hiện hành, DB kiểm lại tại lúc
 //    gọi); payout super có id + tóm tắt chứng nhận đã dùng. DB trước 124 không có các khoá này ⇒ 'unsupported' / null (app mới
 //    chạy được trên DB cũ — không gửi p_expected_attestation_id).
+//  · 132 r2 (Q-238 b): chứng nhận có version theo cách tính — decision10 (pos_base / legacy) | decision_unit14 (cms_unit: + chuỗi thô
+//    q / u + cờ). DB chặn bộ lệch cách tính (FIELD_SET_BASIS); app chỉ hiển thị.
+//  · 132 r1 (Q-237): preview có `contract` (hợp đồng run hiện hành; null = run legacy); payout có `contract` (hợp đồng của lần chốt —
+//    số chi là RÒNG đã seal) và super có `returns` (tổng trả ĐÃ TRỪ trong số chốt). DB trước 132 không có khoá ⇒ null.
 
 export class CmsPayoutDtoError extends Error {
   constructor(detail: string) {
@@ -94,6 +98,34 @@ function parseAttestationState(raw: Obj): CmsSourceAttestationState {
   return { state: 'invalid', id, code: str(a, 'code', ATTEST_CODE_RE) }
 }
 
+// ── Hợp đồng tính của run (130 cms__run_contract / 132 cms_payouts) ─────────────────
+const CONTRACT_VERSIONS = ['cms-calc-ret2-v1', 'cms-calc-ret2-v2'] as const
+const RETURNS_POLICIES = ['sales_only_v1', 'net_returns_v1', 'full_line_qty_refund_v1'] as const
+export type CmsRunReturnsPolicy = typeof RETURNS_POLICIES[number]
+export interface CmsRunContractDto {
+  calcContractVersion: string
+  quantityBasis: 'pos_base' | 'cms_unit'
+  returnsPolicy: CmsRunReturnsPolicy
+  /** Mốc dữ liệu trả của run (null ⇔ sales-only). */
+  returnsAsOf: string | null
+}
+/** Khối hợp đồng; legacy (130 trả legacy:true) / thiếu khoá ⇒ null. Version lạ được giữ nguyên chuỗi để app tự chặn (không đoán). */
+function parseRunContract(raw: unknown): CmsRunContractDto | null {
+  if (raw === null || raw === undefined) return null
+  if (!isObj(raw)) throw new CmsPayoutDtoError('contract')
+  if (raw.legacy === true) return null
+  const v = str(raw, 'calc_contract_version', /^[a-z0-9-]{1,40}$/)
+  const qb = raw.quantity_basis
+  if (qb !== 'pos_base' && qb !== 'cms_unit') throw new CmsPayoutDtoError('contract.quantity_basis')
+  const rp = raw.returns_policy
+  if (!RETURNS_POLICIES.includes(rp as CmsRunReturnsPolicy)) throw new CmsPayoutDtoError('contract.returns_policy')
+  const asOf = strN(raw, 'returns_as_of', TS_RE)
+  if ((rp === 'sales_only_v1') !== (asOf === null)) throw new CmsPayoutDtoError('contract.returns_as_of')
+  return { calcContractVersion: v, quantityBasis: qb, returnsPolicy: rp as CmsRunReturnsPolicy, returnsAsOf: asOf }
+}
+/** App hiểu hợp đồng này (đã có đường chốt contract đúng phiên bản). */
+export const cmsKnownContractVersion = (v: string): boolean => (CONTRACT_VERSIONS as readonly string[]).includes(v)
+
 // ── Preview chốt (rpc_cms_lock_preview — service_role, server đã kiểm super + cờ) ─────
 export interface CmsLockPreviewDto {
   programId: string
@@ -122,6 +154,8 @@ export interface CmsLockPreviewDto {
   blockers: string[]
   /** 124: chứng nhận đối soát nguồn của run hiện hành ('unsupported' = DB trước 124). */
   sourceAttestation: CmsSourceAttestationState
+  /** 132 r1: hợp đồng run hiện hành (null = run legacy / DB trước 132). */
+  contract: CmsRunContractDto | null
 }
 
 export function parseCmsLockPreview(raw: unknown): CmsLockPreviewDto {
@@ -135,7 +169,7 @@ export function parseCmsLockPreview(raw: unknown): CmsLockPreviewDto {
       programId, found: false, status: null, isTest: null, endDate: null, configVersion: null, runId: null, runStartedAt: null,
       amountVnd: null, resultsAmountVnd: null, staffRows: null, staffPaid: null, candidateLines: 0, candidateGmv: '0',
       unassignedLines: 0, unassignedGmv: '0', unassignedOver: false, needsAck: false, policy: parsePolicy(null), policyVersion: null,
-      mappingChanged: false, sourceCompleteBasis: null, earliestLockAt: null, blockers, sourceAttestation: { state: 'unsupported' },
+      mappingChanged: false, sourceCompleteBasis: null, earliestLockAt: null, blockers, sourceAttestation: { state: 'unsupported' }, contract: null,
     }
   }
   if (raw.found !== true) throw new CmsPayoutDtoError('found')
@@ -166,6 +200,7 @@ export function parseCmsLockPreview(raw: unknown): CmsLockPreviewDto {
     earliestLockAt: strN(raw, 'earliest_lock_at', TS_RE),
     blockers,
     sourceAttestation: parseAttestationState(raw),
+    contract: parseRunContract(raw.contract),
   }
   // basis operator_reconciliation chỉ có khi DB dùng chứng nhận hợp lệ — lệch ⇒ DTO hỏng (không đoán).
   if (out.sourceCompleteBasis === 'operator_reconciliation' && out.sourceAttestation.state !== 'valid') throw new CmsPayoutDtoError('source_attestation≠basis')
@@ -216,6 +251,8 @@ export interface CmsPayoutSuperDto {
   sourceAttestationId: string | null
   /** 124: tóm tắt chứng nhận (không actor / email / hash file). */
   sourceAttestation: { fieldSet: string; asOf: string; referenceLabel: string; linesCompared: number; attestedAt: string; runRowsFp: string } | null
+  /** 132 r1: tổng trả ĐÃ TRỪ trong số chốt (run contract đọc trả); null = không đọc trả / legacy / DB trước 132. */
+  returns: { returnCount: number; returnGmv: string; eligibleReturnBase: string } | null
 }
 export interface CmsPayoutDto {
   programId: string
@@ -229,6 +266,8 @@ export interface CmsPayoutDto {
   scopeTotal: string
   rows: CmsPayoutRowDto[]
   super: CmsPayoutSuperDto | null
+  /** 132 r1: hợp đồng của lần chốt (số chi = RÒNG đã seal); null = chốt run legacy / DB trước 132. */
+  contract: CmsRunContractDto | null
 }
 
 export function parseCmsPayout(raw: unknown): CmsPayoutDto {
@@ -263,11 +302,16 @@ export function parseCmsPayout(raw: unknown): CmsPayoutDto {
       runStartedAt: str(raw, 'run_started_at', TS_RE),
       sourceAttestationId: strN(raw, 'source_attestation_id', UUID_RE),
       sourceAttestation: null,
+      returns: null,
+    }
+    const ret = objN(raw, 'returns')
+    if (ret) {
+      sup.returns = { returnCount: int(ret, 'return_count'), returnGmv: str(ret, 'return_gmv', DEC_RE), eligibleReturnBase: str(ret, 'eligible_return_base', DEC_RE) }
     }
     const att = objN(raw, 'source_attestation')
     if (att) {
       sup.sourceAttestation = {
-        fieldSet: str(att, 'field_set', /^decision10$/), asOf: str(att, 'as_of', TS_RE), referenceLabel: str(att, 'reference_label'),
+        fieldSet: str(att, 'field_set', /^(decision10|decision_unit14)$/), asOf: str(att, 'as_of', TS_RE), referenceLabel: str(att, 'reference_label'),
         linesCompared: int(att, 'lines_compared'), attestedAt: str(att, 'attested_at', TS_RE), runRowsFp: str(att, 'run_rows_fp', /^[0-9a-f]{64}$/),
       }
     }
@@ -279,8 +323,14 @@ export function parseCmsPayout(raw: unknown): CmsPayoutDto {
   return {
     programId: str(raw, 'program_id', UUID_RE), runId: str(raw, 'run_id', UUID_RE), isTest: bool(raw, 'is_test'),
     lockedAt: str(raw, 'locked_at', TS_RE), policyVersion: int(raw, 'policy_version'), viewer: viewer as CmsPayoutViewer,
-    programTotal, scopeTotal, rows, super: sup,
+    programTotal, scopeTotal, rows, super: sup, ...contractOf(raw, sup),
   }
+}
+/** Khối hợp đồng payout + nhất quán với tổng trả super (run đọc trả ⇔ có mốc trả ⇔ super có tổng trả). */
+function contractOf(raw: Obj, sup: CmsPayoutSuperDto | null): { contract: CmsRunContractDto | null } {
+  const contract = parseRunContract(raw.contract)
+  if (sup && 'contract' in raw && (sup.returns !== null) !== (contract !== null && contract.returnsAsOf !== null)) throw new CmsPayoutDtoError('returns≠contract')
+  return { contract }
 }
 
 // ── Nhãn ─────────────────────────────────────────────────────────────────────
@@ -305,7 +355,11 @@ export const CMS_LOCK_CODE_LABEL: Record<string, string> = {
   CMS_LOCK_UNASSIGNED_OVER: 'Dòng chưa gán vượt ngưỡng cho phép — xử lý mapping trước khi chốt',
   CMS_LOCK_ACK_REQUIRED: 'Cần nhập lý do xác nhận (10–1.000 ký tự) cho các dòng chưa gán',
   // 130 (CMS-CALC-RET-2)
-  CMS_LOCK_CONTRACT_UNSUPPORTED: 'Kết quả tính theo cách mới (đơn vị CMS / trừ trả hàng) chưa hỗ trợ chốt trong đợt này',
+  CMS_LOCK_CONTRACT_UNSUPPORTED: 'Kết quả tính theo hợp đồng mà cơ sở dữ liệu chưa hỗ trợ chốt — báo Dev',
+  // 132 r1 (Q-237): chốt run contract
+  CMS_LOCK_RETURNS_TOO_EARLY: 'Dữ liệu trả hàng của lần tính chụp trước mốc chốt — cần đồng bộ lại sau ngày kết thúc (+ thời gian chờ)',
+  CMS_LOCK_LEDGER_DRIFT: 'Sổ phiếu trả hàng đã đổi sau lần tính (hoặc lần tính có cảnh báo sổ) — cần đồng bộ lại trước khi chốt',
+  CMS_LOCK_APP_CONTRACT_UNSUPPORTED: 'Ứng dụng chưa hỗ trợ chốt kết quả tính theo cách này (thiếu năng lực chốt hợp đồng mới) — báo Dev',
   CMS_LOCK_POLICY_POINTER_MISMATCH: 'Cách tính của chương trình đã đổi nhưng kết quả đang công bố vẫn theo cách cũ — cần đồng bộ lại',
   CMS_LOCK_RETURN_CONFLICT: 'Có phiếu trả hàng đã nhận bị nguồn đổi / mất — cần xử lý trước khi chốt',
   CMS_LOCK_BAD_INPUT: 'Yêu cầu chốt không hợp lệ',
@@ -316,7 +370,7 @@ export const cmsLockCodeLabel = (code: string): string => CMS_LOCK_CODE_LABEL[co
 /** Cơ sở "nguồn đầy đủ" (payout / preview) ⇒ nhãn. */
 export function cmsSourceBasisLabel(basis: string | null): string {
   if (basis === 'qa_assumption') return 'Giả định QA (không phải xác nhận nguồn thật)'
-  if (basis === 'operator_reconciliation') return 'Đối soát nguồn độc lập (chứng nhận decision10)'
+  if (basis === 'operator_reconciliation') return 'Đối soát nguồn độc lập (chứng nhận decision10 / decision_unit14 theo cách tính)'
   if (basis === 'bi_watermark') return 'Mốc dữ liệu BI'
   if (basis === 'lag_commitment') return 'Cam kết độ trễ nguồn'
   return basis ?? '—'
@@ -331,7 +385,15 @@ export const CMS_ATTEST_STATE_LABEL: Record<string, string> = {
   AS_OF: 'mốc dữ liệu đối soát trước khi kỳ kết thúc',
   COUNT: 'số dòng đã đối soát khác lớp nguồn của lần tính',
   SOURCE_REJECTED: 'lần tính có dòng nguồn bị từ chối (không coi là đủ)',
-  FIELD_SET: 'chứng nhận không dùng bộ trường quyết định (decision10)',
+  FIELD_SET: 'chứng nhận không dùng bộ trường quyết định đã duyệt (decision10 / decision_unit14)',
+  // 132 r2 (Q-238 b): bộ trường phải đúng cách tính của lần tính; cms_unit có kiểm riêng chuỗi thô q / u + phân loại.
+  FIELD_SET_BASIS: 'bộ trường chứng nhận không đúng cách tính của chương trình (tính lẻ ⇒ decision10, tính nguyên ⇒ decision_unit14) — chứng nhận lại',
+  UNIT_CONTRACT: 'lần tính không phải kết quả tính nguyên theo hợp đồng đã biết — đồng bộ lại rồi chứng nhận',
+  UNIT_SRC_V: 'lần tính thiếu số lượng / đơn vị gốc (chuỗi thô) — đồng bộ lại rồi chứng nhận',
+  UNIT_SRC_CLEAN: 'số lượng / đơn vị gốc của lớp nguồn không khớp bản đã làm sạch',
+  UNIT_SRC_ENGINE: 'số lượng / đơn vị gốc của dữ liệu đã tính khác lớp nguồn',
+  UNIT_CLASS: 'phân loại tính nguyên (đếm / lẻ / khác đơn vị) của dữ liệu đã tính khác cách tính lại',
+  UNIT_CLASS_HOLD: 'dữ liệu đã tính có dòng phải tạm giữ khi tính lại theo đơn vị CMS',
   SOURCE_COUNT: 'lớp nguồn của lần tính thiếu / thừa dòng',
   SOURCE_SCOPE: 'lớp nguồn có dòng ngoài kỳ / sản phẩm',
   SOURCE_ENGINE_MISMATCH: 'lớp nguồn không khớp dữ liệu đã tính',
@@ -340,6 +402,8 @@ export const CMS_ATTEST_STATE_LABEL: Record<string, string> = {
   NOT_SEALED: 'lần tính chưa hoàn tất',
   RUN_GONE: 'dữ liệu lần tính đã được dọn',
   RUN_NOT_FOUND: 'không tìm thấy lần tính',
+  // 132: version hợp đồng lạ. (r1 BASIS_UNSUPPORTED đã bỏ ở r2 — cms_unit dùng bộ decision_unit14.)
+  CONTRACT_UNSUPPORTED: 'kết quả tính theo hợp đồng chưa hỗ trợ chứng nhận',
 }
 export const cmsAttestStateLabel = (code: string): string => CMS_ATTEST_STATE_LABEL[code] ?? `chứng nhận không dùng được (${code})`
 

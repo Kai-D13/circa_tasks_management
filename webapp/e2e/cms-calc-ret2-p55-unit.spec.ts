@@ -23,6 +23,8 @@ const retRow = (o: Record<string, string | null> = {}) => ({
   original_order_status: 'COMPLETED', original_seller_email: 'ds1@example.invalid', original_pos_code: 'QAOS01', original_base_quantity: '20',
   original_gmv_amount: '200000', original_quantity_raw: '2', original_uom_raw: 'Hộp', source_updated_at: null, ...o,
 })
+// Run chốt legacy + báo cáo net đã ghim (profile lựa chọn — PM r0 §3.1).
+const LEGACY_NET = { ok: true as const, runId: RUN, legacy: true, runPolicy: 'sales_only_v1' as const, reportProfile: 'net_returns_v1' as const }
 const prog = (o: Partial<CmsAfterCloseProgram> = {}): CmsAfterCloseProgram => ({ id: PROG, startDate: '2026-11-01', endDate: '2026-11-30', isTest: true, productIds: [P1], ...o })
 
 function deps(o: Partial<CmsAfterCloseDeps> & { returns?: Record<string, string | null>[] } = {}, calls: string[] = [], saves: CmsCloseReportPayload[] = []): CmsAfterCloseDeps {
@@ -31,7 +33,7 @@ function deps(o: Partial<CmsAfterCloseDeps> & { returns?: Record<string, string 
   return {
     capsOk: async () => { calls.push('caps'); return true },
     listPrograms: async () => { calls.push('list'); return [prog()] },
-    payoutRun: async (id) => { calls.push(`payout:${id}`); return { ok: true, runId: RUN, legacy: true } },
+    payoutRun: async (id) => { calls.push(`payout:${id}`); return LEGACY_NET },
     provider: { kind: provider.kind, read: async (s) => { calls.push('read'); return provider.read(s) } },
     save: async (_id, runId, payload) => { calls.push(`save:${runId}`); saves.push(payload); return { ok: true, data: { saved: true, already: false, report_id: uid(90) } } },
     nowMicros: () => ASOF,
@@ -60,7 +62,8 @@ test.describe('CMS-CALC-RET-2 P5.5 — job báo cáo sau chốt @desktop', () =>
     const saves: CmsCloseReportPayload[] = []
     const s = await runCmsReturnsAfterClose(deps({}, calls, saves), { maxPrograms: 5 })
     expect(s.results).toEqual([{ programId: PROG, status: 'saved', code: null, reportId: uid(90), returnsRead: 1 }])
-    expect(calls).toEqual(['caps', 'list', `payout:${PROG}`, 'read', `save:${RUN}`])
+    // caps lượt (close_report) + caps theo profile của chương trình.
+    expect(calls).toEqual(['caps', 'list', `payout:${PROG}`, 'caps', 'read', `save:${RUN}`])
     expect(Object.keys(saves[0]).sort()).toEqual(['pin', 'returns'])
     expect(saves[0].pin).toMatchObject({ protocol: 'cms-source-pin-v1', provider: 'fixture', snapshot_id: 'qa-snap-1', as_of: '2026-12-03T03:00:00.000000Z',
       scope: { from: '2026-11-01', to: '2026-11-30' }, returns: { rows: 1 } })
@@ -105,7 +108,7 @@ test.describe('CMS-CALC-RET-2 P5.5 — job báo cáo sau chốt @desktop', () =>
       expect(calls.some((c) => c.startsWith('save'))).toBe(false)
     }
   })
-  test('fixture trên chương trình thật / chưa chốt / run chốt contract ⇒ không đọc nguồn', async () => {
+  test('fixture trên chương trình thật / chưa chốt / run contract sales-only chưa chọn profile ⇒ không đọc nguồn; run contract net ⇒ đọc profile net', async () => {
     const c1: string[] = []
     const a = await runCmsReturnsAfterClose(deps({ listPrograms: async () => [prog({ isTest: false })] }, c1), { maxPrograms: 5 })
     expect(a.results[0]).toMatchObject({ status: 'held', code: 'FIXTURE_REAL_PROGRAM' })
@@ -114,9 +117,14 @@ test.describe('CMS-CALC-RET-2 P5.5 — job báo cáo sau chốt @desktop', () =>
     const b = await runCmsReturnsAfterClose(deps({ payoutRun: async () => ({ ok: false, code: 'CMS_REPORT_NOT_LOCKED' }) }, c2), { maxPrograms: 5 })
     expect(b.results[0]).toMatchObject({ status: 'skipped', code: 'CMS_REPORT_NOT_LOCKED' })
     const c3: string[] = []
-    const c = await runCmsReturnsAfterClose(deps({ payoutRun: async () => ({ ok: true, runId: RUN, legacy: false }) }, c3), { maxPrograms: 5 })
-    expect(c.results[0]).toMatchObject({ status: 'skipped', code: 'CMS_REPORT_CONTRACT_UNSUPPORTED' })
+    const c = await runCmsReturnsAfterClose(deps({ payoutRun: async () => ({ ok: true, runId: RUN, legacy: false, runPolicy: 'sales_only_v1', reportProfile: null }) }, c3), { maxPrograms: 5 })
+    expect(c.results[0]).toMatchObject({ status: 'skipped', code: 'REPORT_POLICY_UNSELECTED' })
     expect(c3.includes('read')).toBe(false)
+    const c4: string[] = []
+    const saves: CmsCloseReportPayload[] = []
+    const n = await runCmsReturnsAfterClose(deps({ payoutRun: async () => ({ ok: true, runId: RUN, legacy: false, runPolicy: 'net_returns_v1', reportProfile: null }) }, c4, saves), { maxPrograms: 5 })
+    expect(n.results[0]).toMatchObject({ status: 'saved' })
+    expect('profile' in saves[0]).toBe(false)
     const d = await runCmsReturnsAfterClose(deps({ provider: null }), { maxPrograms: 5 })
     expect(d.results[0]).toMatchObject({ status: 'error', code: 'PROVIDER_MISSING' })
   })
@@ -136,7 +144,7 @@ test.describe('CMS-CALC-RET-2 P5.5 — job báo cáo sau chốt @desktop', () =>
     const t = await runCmsReturnsAfterClose(deps({ listPrograms: async () => many, remainingMs: () => 5_000 }), { maxPrograms: 5 })
     expect(t.results).toEqual([])
     expect(t.pending.length).toBe(3)
-    const boom = await runCmsReturnsAfterClose(deps({ listPrograms: async () => many, payoutRun: async (id) => { if (id === uid(2)) throw new Error('x'); return { ok: true, runId: RUN, legacy: true } } }), { maxPrograms: 5 })
+    const boom = await runCmsReturnsAfterClose(deps({ listPrograms: async () => many, payoutRun: async (id) => { if (id === uid(2)) throw new Error('x'); return LEGACY_NET } }), { maxPrograms: 5 })
     expect(boom.results.map((r) => r.status)).toEqual(['saved', 'error', 'saved'])
     expect(cmsAfterCloseHttpStatus(boom)).toBe(207)
   })
@@ -154,7 +162,7 @@ test.describe('CMS-CALC-RET-2 P5.5 — job báo cáo sau chốt @desktop', () =>
     const d = fs.readFileSync(path.join(__dirname, '..', 'lib/cms/server/returnsAfterCloseDeps.ts'), 'utf8')
     expect(d).toContain('cmsAfterCloseRefs((error as { details?: unknown }).details)')
     // SP đọc theo từng chương trình, phân trang (không một .in() bị trần 1.000 dòng cắt).
-    expect(d).toContain(".eq('program_id', p.id).order('id')")
+    expect(d).toContain(".eq('program_id', programId).is('retired_at', null).order('id')")
     expect(d).toContain('.range(from, from + PRODUCT_PAGE - 1)')
     expect(d).not.toContain(".in('program_id'")
     // DETAIL refs của report_save chỉ dựng từ ID kỹ thuật (return_event_id / original_order_line_id qua acc.id) — không order_code / tên /

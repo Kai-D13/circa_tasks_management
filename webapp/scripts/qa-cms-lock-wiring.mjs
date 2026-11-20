@@ -8,6 +8,8 @@
 //   · app thường (không CMS_QA_SERVER) ⇒ chốt gọi RPC đúng 1 lần, revalidate 1 lần;
 //   · revalidatePath ném SAU commit ⇒ action vẫn trả ok (không biến đã chốt thành lỗi / Promise reject);
 //   · cờ OFF ⇒ LOCK_DISABLED, 0 RPC.
+//   · 132 r1 (Q-237): đọc capability (chỉ đọc) trước khi chốt; DB có lock_contract ⇒ vẫn đúng 1 RPC GHI; DB thiếu lock_contract (131) ⇒
+//     run contract bị từ chối CMS_LOCK_APP_CONTRACT_UNSUPPORTED TRƯỚC RPC chốt (chỉ đọc preview), run legacy vẫn chốt được.
 //   node scripts/qa-cms-lock-wiring.mjs      # kỳ vọng: N đạt · 0 lỗi
 import fs from 'node:fs'
 import os from 'node:os'
@@ -35,7 +37,8 @@ const aliases = {
   '@/lib/supabase/admin': stub('admin', `
 export const supabaseAdmin = { rpc: async (fn, args) => {
   globalThis.__cmsWiring.rpc.push(fn)
-  if (fn === 'rpc_cms_lock_preview') return { data: ${JSON.stringify(PREVIEW)}, error: null }
+  if (fn === 'rpc_cms_capabilities') return { data: globalThis.__cmsCaps, error: null }
+  if (fn === 'rpc_cms_lock_preview') return { data: { ...${JSON.stringify(PREVIEW)}, contract: globalThis.__cmsWiring.contract ?? null }, error: null }
   return { data: { locked: true, already: false, program_id: args.p_program_id, run_id: args.p_expected_run_id, amount_vnd: '42000', policy_version: 1 }, error: null }
 } }`),
   '@/lib/supabase/server': stub('server', `export async function createClient() { throw new Error('không dùng session client trong đường chốt') }`),
@@ -46,8 +49,15 @@ export const supabaseAdmin = { rpc: async (fn, args) => {
   '@': ROOT,
 }
 try {
-  const jiti = createJiti(import.meta.url, { alias: aliases, interopDefault: true, moduleCache: false })
-  const action = await jiti.import(path.join(ROOT, 'app/actions/cmsPayouts.ts'))
+  const CAPM = await createJiti(import.meta.url, { alias: { '@': ROOT }, interopDefault: true }).import(path.join(ROOT, 'lib/cms/calc/capabilities.ts'))
+  // Capability DB 132 (mọi đường ok) / DB 131 (không đường 132). Bộ nhớ capability 60 s theo tiến trình ⇒ mỗi kịch bản nạp module MỚI.
+  const caps = (v2) => ({ ...CAPM.CMS_CAPABILITY_VERSIONS, ...(v2 ? CAPM.CMS_CAPABILITY_VERSIONS_V2 : {}),
+    paths: Object.fromEntries(Object.entries(CAPM.CMS_CAPABILITY_RPCS).filter(([p]) => v2 || !['full_line', 'lock_contract', 'manual_report', 'unit_attest'].includes(p))
+      .map(([p, rpcs]) => [p, { ok: true, rpcs: [...rpcs] }])) })
+  globalThis.__cmsCaps = caps(true)
+  const load = () => createJiti(import.meta.url, { alias: aliases, interopDefault: true, moduleCache: false }).import(path.join(ROOT, 'app/actions/cmsPayouts.ts'))
+  const action = await load()
+  const writes = () => globalThis.__cmsWiring.rpc.filter((x) => x !== 'rpc_cms_capabilities' && x !== 'rpc_cms_lock_preview')
   const INPUT = { programId: P, expectedRunId: R, expectedPolicyVersion: 1 }
   const reset = () => { globalThis.__cmsWiring = { rpc: [], reval: 0, revalThrow: false } }
   const setEnv = (o) => {
@@ -67,13 +77,30 @@ try {
 
   reset(); setEnv(ON)
   r = await action.lockCmsProgram(INPUT)
-  ok(r.ok === true && globalThis.__cmsWiring.rpc.join() === 'rpc_cms_program_lock' && globalThis.__cmsWiring.reval === 1,
-    'app thường (không CMS_QA_SERVER) ⇒ chốt: 1 RPC rpc_cms_program_lock, revalidate 1 lần', JSON.stringify({ r, w: globalThis.__cmsWiring }))
+  ok(r.ok === true && globalThis.__cmsWiring.rpc.join() === 'rpc_cms_capabilities,rpc_cms_program_lock' && globalThis.__cmsWiring.reval === 1,
+    'app thường (không CMS_QA_SERVER) + DB 132 ⇒ chốt: đọc capability + 1 RPC ghi rpc_cms_program_lock, revalidate 1 lần', JSON.stringify({ r, w: globalThis.__cmsWiring }))
 
   reset(); setEnv(ON); globalThis.__cmsWiring.revalThrow = true
   let rejected = false
   try { r = await action.lockCmsProgram(INPUT) } catch { rejected = true }
-  ok(!rejected && r.ok === true && globalThis.__cmsWiring.rpc.length === 1, 'revalidatePath ném SAU commit ⇒ action vẫn trả ok (không reject, không thành lỗi)', JSON.stringify({ rejected, r }))
+  ok(!rejected && r.ok === true && writes().length === 1, 'revalidatePath ném SAU commit ⇒ action vẫn trả ok (không reject, không thành lỗi)', JSON.stringify({ rejected, r }))
+
+  // 132 r1: DB 131 (không đường lock_contract) — module mới (bộ nhớ capability riêng).
+  globalThis.__cmsCaps = caps(false)
+  const action131 = await load()
+  reset(); setEnv(ON); globalThis.__cmsWiring.contract = { legacy: false, calc_contract_version: 'cms-calc-ret2-v1', quantity_basis: 'cms_unit',
+    returns_policy: 'net_returns_v1', returns_as_of: '2026-11-15T00:30:00.000000Z' }
+  r = await action131.lockCmsProgram(INPUT)
+  ok(!r.ok && r.code === 'CMS_LOCK_APP_CONTRACT_UNSUPPORTED' && writes().length === 0 && globalThis.__cmsWiring.reval === 0,
+    'DB thiếu lock_contract + run contract ⇒ CMS_LOCK_APP_CONTRACT_UNSUPPORTED, 0 RPC ghi, 0 revalidate', JSON.stringify({ r, w: globalThis.__cmsWiring }))
+  const ct = globalThis.__cmsWiring.contract
+  reset(); setEnv(ON); globalThis.__cmsWiring.contract = ct
+  const pv131 = await action131.previewCmsLock(P)
+  globalThis.__cmsWiring.contract = null
+  ok(pv131.ok === true && pv131.preview.blockers.includes('CMS_LOCK_APP_CONTRACT_UNSUPPORTED'), 'DB thiếu lock_contract: preview run contract có blocker APP_CONTRACT_UNSUPPORTED', JSON.stringify(pv131))
+  reset(); setEnv(ON)
+  r = await action131.lockCmsProgram(INPUT)
+  ok(r.ok === true && writes().join() === 'rpc_cms_program_lock', 'DB thiếu lock_contract + run legacy ⇒ chốt được (đọc preview rồi 1 RPC ghi)', JSON.stringify({ r, w: globalThis.__cmsWiring }))
 
   reset(); setEnv({ CMS_PROGRAM_ENABLED: 'true', CMS_EARNINGS_ENABLED: 'true', CMS_QA_SERVER: '1' })
   r = await action.lockCmsProgram(INPUT)

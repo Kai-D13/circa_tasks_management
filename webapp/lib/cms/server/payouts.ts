@@ -7,6 +7,7 @@ import { supabaseCmsImportRepo } from '@/lib/cms/server/importRepo'
 import { cmsSafeErrorCode } from '@/lib/cms/server/results'
 import type { CmsLockDeps } from '@/lib/cms/lockAction'
 import { parseCmsPayout, type CmsPayoutDto } from '@/lib/cms/payoutView'
+import { getCmsCapabilityState } from '@/lib/cms/server/capabilities'
 
 // CMS P3a — đọc số đã chốt bằng SESSION client qua rpc_cms_payout (123: authenticated, SECDEF lọc phạm vi HIỆN TẠI theo
 // Q-208 / Q-217 + marker QA trong DB; email / program_total chỉ super). Không service role. Lỗi ⇒ mã chung, không message DB:
@@ -55,5 +56,10 @@ export const cmsLockDeps: CmsLockDeps = {
   rpc: async (fn, args) => {
     const { data, error } = await supabaseAdmin.rpc(fn, args)
     return { data, error: error ? { code: error.code, message: error.message } : null }
+  },
+  // 132 r1: đường chốt run contract (rpc_cms_capabilities.paths.lock_contract, khoá v2 đúng) — thiếu ⇒ app không chốt run contract.
+  contractLockOk: async () => {
+    const s = await getCmsCapabilityState()
+    return s.kind === 'ok' && s.caps.paths.lock_contract
   },
 }

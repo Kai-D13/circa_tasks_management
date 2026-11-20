@@ -166,7 +166,7 @@ export function CmsStaffHistoryView({ programs, selected, products, results, lin
                   {lines.rows.map((l) => {
                     const p = byId.get(l.programProductId)
                     const unit = p?.unitCms ?? ''
-                    const v = cmsLineView(l, p?.baseQuantityCms ?? '1', unit, returnsApproved)
+                    const v = cmsLineView(l, p?.baseQuantityCms ?? '1', unit, returnsApproved, run?.contract.returnsPolicy)
                     return (
                       <li key={l.seq} data-cms-line={l.status} data-cms-line-kind={l.kind} className="flex items-start justify-between gap-3 rounded-v2-panel border bg-card p-3 text-[13px]">
                         <span className="min-w-0 space-y-0.5">

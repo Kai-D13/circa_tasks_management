@@ -516,7 +516,9 @@ section('7. CLI scripts/cms-source-attest.mjs đầu-cuối qua shim HTTP (pg-me
         counts.pg++
         const q = JSON.parse(body).query
         const rows = lastRows(await db2.exec(q))
-        if (pgHook && (await pgHook(q, rows)) === 'hold') { held.push(res); return }
+        const hk = pgHook ? await pgHook(q, rows) : null
+        if (hk === 'hold') { held.push(res); return }
+        if (hk === 'drop') { req.socket.destroy(); return }   // r3: mất kết nối SAU khi DB đã chạy câu
         return send(200, rows)
       }
       const m = /^\/rest\/v1\/rpc\/([a-z_]+)$/.exec(req.url ?? '')
@@ -609,6 +611,82 @@ section('7. CLI scripts/cms-source-attest.mjs đầu-cuối qua shim HTTP (pg-me
     await db2.exec(polOrig)
     ok(pv.source_complete_basis === null && pv.blockers.includes('CMS_LOCK_SOURCE_INCOMPLETE') && pv.source_attestation.code === 'NONE',
       'policy thật khai operator_reconciliation nhưng chứng nhận đã thu hồi ⇒ basis NULL (không báo nhầm) + SOURCE_INCOMPLETE (db-reviewer r2 P2-9)', JSON.stringify([pv.source_complete_basis, pv.blockers]))
+  }
+
+  // ════ §7r3 (PM 20/11 `planning/reviews/2026-11-20-cms-returns-r2-audit-pm.md` §4.1.3): gọi lại `already` (cùng --idem + cùng nội dung)
+  // phải đọc hiệu lực HIỆN TẠI — chứng nhận đã chết ⇒ sổ already_dead, rc 1 (không ghi done); hiệu lực không đọc được ⇒ unknown, rc 1.
+  // Mọi lượt gọi lại: 0 chứng nhận mới, không thu hồi / không đổi dòng nào (so ảnh chụp bảng trước / sau). Ghi thẳng dữ liệu để dựng ca
+  // (as_of / config) rồi HOÀN LẠI ngay — pg-meta của CLI tự BEGIN … ROLLBACK trên cùng phiên PGlite nên không bọc transaction được.
+  // Ca run đổi chạy SAU §8 (§8 dùng run hiện hành của P).
+  const r3 = {}
+  {
+    const attRows = async () => JSON.stringify((await db2.query(`SELECT id::text, revoked_at IS NOT NULL rv, superseded_by::text sb, idem_key::text ik,
+        public.cms__ts(as_of) ao FROM public.cms_source_attestations WHERE program_id = $1 ORDER BY attested_at, id`, [P.id])).rows)
+    const opOf = (ik) => fs.readdirSync(ledger).filter((x) => /^a-[0-9a-f]{12}\.json$/.test(x)).map((x) => JSON.parse(fs.readFileSync(path.join(ledger, x), 'utf8')))
+      .filter((e) => e.idemKey === ik && e.op === 'attest').sort((x, y) => x.startedAt.localeCompare(y.startedAt)).pop()
+    const W = (ik, b = base) => cli([...b, '--write', `--idem=${ik}`, `--expect-host=${host}`])
+    const replay = async (why, ik, want, b = base, frozen = null) => {
+      const before = frozen ?? await attRows()
+      const r = await W(ik, b)
+      const e = opOf(ik)
+      const after = await attRows()
+      const st = want === 'done' ? 'done' : want === 'VALIDITY_UNKNOWN' ? 'unknown' : 'already_dead'
+      const good = (want === 'done' ? r.code === 0 : r.code === 1) && e?.status === st && e.result?.already === true
+        && (want === 'done' ? e.result.code === null : e.result.code === want) && after === before
+      ok(good, `r3 CLI gọi lại already — ${why} ⇒ sổ ${st}${want === 'done' ? '' : ` (${want})`}, rc ${want === 'done' ? 0 : 1}; 0 chứng nhận mới, không thu hồi / đổi dòng`,
+        JSON.stringify({ rc: r.code, e: e && { status: e.status, result: e.result }, same: after === before, out: r.out.slice(-300) }))
+      return e
+    }
+    const n0 = (await one(db2, `SELECT count(*)::int n FROM public.cms_source_attestations WHERE program_id = $1`, [P.id])).n
+    // (1) đã thu hồi — khoá đầu (chứng nhận đã revoke ở trên).
+    await replay('đã thu hồi', idem, 'ATTEST_NOT_LIVE')
+    // (2) còn hiệu lực — chứng nhận mới bằng khoá mới, gọi lại đúng khoá.
+    const idem2 = crypto.randomUUID()
+    const a2 = await W(idem2)
+    ok(a2.code === 0 && /"status":"done"/.test(a2.out) && /"already":false/.test(a2.out), 'r3 nền: chứng nhận mới bằng khoá mới ⇒ done', a2.out.slice(-200))
+    await replay('còn hiệu lực (sống, run hiện hành, eval NULL)', idem2, 'done')
+    const a2id = (await one(db2, `SELECT id::text FROM public.cms_source_attestations WHERE idem_key = $1`, [idem2]))?.id
+    // (3) hết hạn — mốc dữ liệu chứng nhận lùi trước hết kỳ (ghi thẳng, guard bất biến tắt đúng 1 câu) ⇒ eval AS_OF; hoàn lại ngay.
+    const shiftAsOf = async (sign) => {
+      await db2.exec('ALTER TABLE public.cms_source_attestations DISABLE TRIGGER USER')
+      try { await db2.query(`UPDATE public.cms_source_attestations SET as_of = as_of ${sign} interval '400 days' WHERE id = $1`, [a2id]) }
+      finally { await db2.exec('ALTER TABLE public.cms_source_attestations ENABLE TRIGGER USER') }
+    }
+    const rows0 = await attRows()
+    await shiftAsOf('-')
+    try { await replay('hết hạn (mốc dữ liệu trước hết kỳ)', idem2, 'ATTEST_AS_OF') } finally { await shiftAsOf('+') }
+    ok((await attRows()) === rows0, 'r3: hoàn mốc as_of sau ca hết hạn (dữ liệu như trước)')
+    // (4) cấu hình chương trình đổi sau chứng nhận ⇒ STALE_CONFIG; hoàn lại ngay.
+    const bumpCfg = async (d) => {
+      await db2.exec('SET session_replication_role = replica')
+      try { await db2.query(`UPDATE public.cms_programs SET config_version = config_version + ($2)::int WHERE id = $1`, [P.id, d]) }
+      finally { await db2.exec('SET session_replication_role = origin') }
+    }
+    await bumpCfg(1)
+    try { await replay('cấu hình chương trình đổi', idem2, 'ATTEST_STALE_CONFIG') } finally { await bumpCfg(-1) }
+    // (5) mất kết nối ở câu đọc hiệu lực (DB đã chạy câu, phản hồi mất) ⇒ unknown VALIDITY_UNKNOWN; reconcile khép sổ (đã ghi).
+    pgHook = (q) => { if (q.includes('public.cms__attest_eval(p.id, a.run_id)')) { pgHook = null; return 'drop' } return null }
+    const e5 = await replay('mất kết nối khi đọc hiệu lực', idem2, 'VALIDITY_UNKNOWN')
+    pgHook = null
+    const rec5 = e5 ? await cli(['reconcile', `--op=${e5.operationId}`, `--ledger-dir=${ledger}`]) : { code: -1, out: '' }
+    const e5r = e5 ? JSON.parse(fs.readFileSync(path.join(ledger, `${e5.operationId}.json`), 'utf8')) : null
+    ok(rec5.code === 0 && e5r?.status === 'reconciled' && e5r.reconcile?.found === true && e5r.reconcile.attestationId === a2id,
+      'r3: sổ unknown (hiệu lực không đọc được) ⇒ reconcile đọc DB theo khoá idem ⇒ reconciled (đã ghi), không tự tạo / thu hồi', rec5.out.slice(-200))
+    // (6) bị thay — chứng nhận mới (khoá 3, meta mới ⇒ nội dung khác) cho CÙNG run ⇒ chứng nhận khoá 2 superseded.
+    const at3 = (await one(db2, `SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') t`)).t
+    const meta3 = path.join(tmp, 'meta3.json')
+    fs.writeFileSync(meta3, JSON.stringify({ version: 1, reference: { inputKind: 'reference_source', source: 'Nguồn độc lập giả — CLI r3', exportedAt: at3, asOf: at3,
+      fileSha256: refSha, scope: appSide.scope }, app: { ...appSide, asOf: at3, exportedAt: at3 > appSide.exportedAt ? at3 : appSide.exportedAt } }))
+    const base3 = base.map((x) => (x.startsWith('--evidence-meta=') ? `--evidence-meta=${meta3}` : x))
+    const idem3 = crypto.randomUUID()
+    const a3 = await W(idem3, base3)
+    const sup = (await one(db2, `SELECT superseded_by::text sb FROM public.cms_source_attestations WHERE id = $1`, [a2id]))?.sb
+    ok(a3.code === 0 && /"status":"done"/.test(a3.out) && sup !== null, 'r3 nền: chứng nhận khoá 3 (nội dung mới, cùng run) ⇒ thay chứng nhận khoá 2', a3.out.slice(-200))
+    await replay('bị thay (superseded)', idem2, 'ATTEST_NOT_LIVE')
+    await replay('chứng nhận thay thế còn hiệu lực', idem3, 'done', base3)
+    const n1 = (await one(db2, `SELECT count(*)::int n FROM public.cms_source_attestations WHERE program_id = $1`, [P.id])).n
+    ok(n1 === n0 + 2, `r3: chỉ 2 chứng nhận mới (khoá 2, khoá 3 — ghi chủ đích); 7 lượt gọi lại không tạo dòng nào (${n0} → ${n1})`)
+    Object.assign(r3, { attRows, W, replay, base3 })
   }
 
   // ════ §8 (r4) — chế độ run QA đầu-cuối + revoke đúng chương trình + biên lỗi entrypoint ════
@@ -902,6 +980,28 @@ section('7. CLI scripts/cms-source-attest.mjs đầu-cuối qua shim HTTP (pg-me
     if (portSrv) await new Promise((r) => portSrv.close(() => r()))
     // Chỉ dọn đúng đường dẫn do lượt này tạo (bản sao s8-… gồm marker + sổ của run giả).
     if (S8) fs.rmSync(S8, { recursive: true, force: true })
+  }
+  // ════ §7r3 (cuối — sau §8, vì §8 dùng run hiện hành của P): run đổi trong lúc gọi / trước khi gọi.
+  if (r3.replay) {
+    // §8 ghi thêm chứng nhận cho P ⇒ chứng nhận khoá 3 có thể đã bị thay ⇒ chứng nhận MỚI (khoá 4) làm nền cho ca run đổi.
+    const nb = (await one(db2, `SELECT count(*)::int n FROM public.cms_source_attestations WHERE program_id = $1`, [P.id])).n
+    const idem4 = crypto.randomUUID()
+    const a4 = await r3.W(idem4, r3.base3)
+    ok(a4.code === 0 && /"status":"done"/.test(a4.out) && /"already":false/.test(a4.out), 'r3 nền (sau §8): chứng nhận khoá 4 ⇒ done', a4.out.slice(-200))
+    // (7a) run đổi TRONG lúc gọi — run mới công bố sau khi RPC ghi đã trả `already` (móc shim), trước khi CLI đọc hiệu lực ⇒ ATTEST_NOT_CURRENT.
+    let sync2 = null
+    rpcHook = async (fn) => { if (fn === 'rpc_cms_source_attest') { rpcHook = null; sync2 = await publishDirect(P, rws) } }
+    await r3.replay('run hiện hành đổi trong lúc gọi', idem4, 'ATTEST_NOT_CURRENT', r3.base3)
+    rpcHook = null
+    const ptr = (await one(db2, `SELECT current_result_run_id::text p FROM public.cms_programs WHERE id = $1`, [P.id])).p
+    ok(sync2 !== null && ptr === sync2.runId && ptr !== sync.runId, 'r3 nền: run mới công bố (trong lúc gọi) là run hiện hành')
+    // (7b) run đã đổi TRƯỚC khi gọi ⇒ CLI dừng trước RPC (rc 1, không mục sổ mới, DB không đổi).
+    const before = await r3.attRows(), nOps = fs.readdirSync(ledger).filter((x) => x.startsWith('a-')).length
+    const r = await r3.W(idem4, r3.base3)
+    ok(r.code === 1 && /run không phải run hiện hành/.test(r.out) && fs.readdirSync(ledger).filter((x) => x.startsWith('a-')).length === nOps && (await r3.attRows()) === before,
+      'r3 CLI: run đã đổi TRƯỚC khi gọi ⇒ dừng trước RPC (rc 1), không mục sổ mới, DB không đổi', r.out.slice(-200))
+    const n2 = (await one(db2, `SELECT count(*)::int n FROM public.cms_source_attestations WHERE program_id = $1`, [P.id])).n
+    ok(n2 === nb + 1, `r3: chỉ 1 chứng nhận mới (khoá 4 — ghi chủ đích); 2 lượt gọi lại không tạo dòng nào (${nb} → ${n2})`)
   }
   server.close()
   fs.rmSync(tmp, { recursive: true, force: true })

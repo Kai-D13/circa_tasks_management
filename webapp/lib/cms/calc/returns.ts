@@ -13,12 +13,16 @@
 //  · GMV trả = item.refund_amount — decimal ≥ 0, ≤ 9 chữ số lẻ; không amount / base_amount / header total, không phân bổ giá gốc.
 //  · Ngữ cảnh dòng gốc (original_*) chỉ để kiểm lineage / nhất quán snapshot với lớp bán; người hưởng = người bán GỐC — không có cột
 //    người xử lý phiếu trả (created_by / approved_by) trong hợp đồng.
+//  · Q-236 (profile full_line_qty_refund_v1, design r1 §2): từ điển trạng thái v2; KHÔNG đọc return_base_quantity (0 / NULL / hỏng không
+//    thành lỗi) và KHÔNG đọc ngữ cảnh người / POS / B / G / q·u của dòng gốc (lấy từ dòng bán của snapshot). Vẫn bắt buộc ID / chứng từ /
+//    ngày ghi nhận / tham chiếu dòng / đơn / SP / refund / ngày + loại + trạng thái đơn gốc (quyết định ORIGIN_MISSING hay loại).
 // Issue chỉ mang TÊN trường, không mang giá trị. Hàm thuần, không I/O.
 
 import { CMS_DEC_FACTOR, parseCmsDecimal, type CmsDecError } from '../decimal'
 import { canonicalProductId } from '../productId'
 import type { CmsRawRow } from '../source/contract'
 import { parseUtcMicros } from '../time'
+import type { CmsReturnProfile } from './policy'
 
 const ZERO = BigInt(0)
 
@@ -41,11 +45,39 @@ export const CMS_RETURN_STATUS_DICTIONARY: ReadonlyMap<string, CmsReturnStatusEf
   ['APPROVED', 'NOT_EFFECTIVE'],
 ])
 
+/**
+ * Từ điển v2 (readiness RET-IN-01, Q-236 SPEC §1) — chỉ run full_line_qty_refund_v1. CANCELED là chưa / không hiệu lực đã biết, KHÔNG phải
+ * lệnh huỷ phiếu COMPLETED đã nhận (phiếu đã nhận đổi trạng thái ⇒ ledger NOT_EFFECTIVE ⇒ conflict, Q-229).
+ */
+export const CMS_RETURN_STATUS_DICTIONARY_VERSION_V2 = 'cms-return-status-v2'
+export const CMS_RETURN_STATUS_DICTIONARY_V2: ReadonlyMap<string, CmsReturnStatusEffect> = new Map<string, CmsReturnStatusEffect>([
+  [CMS_RETURN_EFFECTIVE_STATUS, 'EFFECTIVE'],
+  ['APPROVED', 'NOT_EFFECTIVE'],
+  ['CANCELED', 'NOT_EFFECTIVE'],
+  ['PENDING', 'NOT_EFFECTIVE'],
+  ['REJECTED', 'NOT_EFFECTIVE'],
+  ['WAITING_APPROVAL', 'NOT_EFFECTIVE'],
+])
+export const cmsReturnStatusDictionary = (p: CmsReturnProfile): ReadonlyMap<string, CmsReturnStatusEffect> =>
+  p === 'full_line_qty_refund_v1' ? CMS_RETURN_STATUS_DICTIONARY_V2 : CMS_RETURN_STATUS_DICTIONARY
+export const cmsReturnStatusDictionaryVersion = (p: CmsReturnProfile): string =>
+  p === 'full_line_qty_refund_v1' ? CMS_RETURN_STATUS_DICTIONARY_VERSION_V2 : CMS_RETURN_STATUS_DICTIONARY_VERSION
+/** Trạng thái đã biết là chưa hiệu lực của một từ điển (sắp xếp). */
+export const cmsReturnNotEffectiveStatuses = (p: CmsReturnProfile): string[] =>
+  [...cmsReturnStatusDictionary(p)].filter(([, e]) => e === 'NOT_EFFECTIVE').map(([x]) => x).sort()
+
 const COMPLETED_REQUIRED = [
   'return_document_id', 'return_recorded_at', 'original_order_line_id', 'original_order_id', 'product_id',
   'return_base_quantity', 'return_gmv_amount', 'original_completed_at', 'original_order_type', 'original_order_status',
   'original_base_quantity', 'original_gmv_amount',
 ] as const
+
+/** full_line: lượng BI và ngữ cảnh người / B / G gốc không thuộc hợp đồng (design r1 §2). */
+const COMPLETED_REQUIRED_FULL_LINE = [
+  'return_document_id', 'return_recorded_at', 'original_order_line_id', 'original_order_id', 'product_id', 'return_gmv_amount',
+  'original_completed_at', 'original_order_type', 'original_order_status',
+] as const
+const FULL_LINE_IGNORED = new Set(['original_seller_email', 'original_pos_code'])
 
 const TEXT_MAX: Record<string, number> = {
   return_event_id: 100, return_document_id: 100, return_code: 100, return_status: 30, original_order_line_id: 100,
@@ -73,18 +105,21 @@ export interface CmsReturnOriginalContext {
   completedAtMicros: bigint
   orderType: string
   orderStatus: string
-  /** trim + lowercase; null ⇒ không có email người bán gốc. */
+  /** trim + lowercase; null ⇒ không có email người bán gốc. full_line ⇒ luôn null (không đọc). */
   sellerEmail: string | null
   posCode: string | null
-  baseQuantityUnits: bigint
-  gmvUnits: bigint
-  /** Chuỗi THÔ (chỉ so ở mode cms_unit). */
+  /** full_line ⇒ null (không đọc — B / G lấy từ dòng bán của snapshot). */
+  baseQuantityUnits: bigint | null
+  gmvUnits: bigint | null
+  /** Chuỗi THÔ (chỉ so ở mode cms_unit, profile net). full_line ⇒ null. */
   quantityRaw: string | null
   uomRaw: string | null
 }
 
 export interface CmsReturnCompleted {
   kind: 'COMPLETED'
+  /** Profile chuẩn hoá phiếu (quyết định trường nào thuộc hợp đồng). */
+  profile: CmsReturnProfile
   returnEventId: string
   returnDocumentId: string
   returnCode: string | null
@@ -92,8 +127,8 @@ export interface CmsReturnCompleted {
   originalOrderLineId: string
   originalOrderId: string
   productId: string
-  /** Tổng base trả của dòng, scale 9 (nguồn INT64 × 10^9). */
-  baseQuantityUnits: bigint
+  /** Tổng base trả của dòng, scale 9 (nguồn INT64 × 10^9). full_line ⇒ null (lượng trừ = B_i của dòng gốc, net.ts). */
+  baseQuantityUnits: bigint | null
   /** refund_amount, scale 9, ≥ 0. */
   gmvUnits: bigint
   original: CmsReturnOriginalContext
@@ -112,10 +147,12 @@ export type CmsReturnNormalizeResult = { ok: true; value: CmsReturnRecord } | { 
 
 const INT_RE = /^-?[0-9]+$/
 
-export function normalizeReturnRow(raw: CmsRawRow): CmsReturnNormalizeResult {
+export function normalizeReturnRow(raw: CmsRawRow, profile: CmsReturnProfile = 'net_returns_v1'): CmsReturnNormalizeResult {
+  const full = profile === 'full_line_qty_refund_v1'
   const issues: CmsReturnIssue[] = []
   const t: Record<string, string | null> = {}
   for (const [f, max] of Object.entries(TEXT_MAX)) {
+    if (full && FULL_LINE_IGNORED.has(f)) { t[f] = null; continue }
     const v = text(raw[f])
     if (v !== null && v.length > max) { issues.push({ kind: 'BAD_TEXT', field: f }); t[f] = null } else t[f] = v
   }
@@ -124,11 +161,11 @@ export function normalizeReturnRow(raw: CmsRawRow): CmsReturnNormalizeResult {
   // So chuỗi THÔ với từ điển: `Completed`, ` COMPLETED`, `COMPLETED\u0000`, `REJECTED`… đều là lỗi nguồn — không im lặng thành "không có
   // trả" (bỏ sót trả làm CMS cao hơn).
   const status = raw.return_status as string
-  const effect = CMS_RETURN_STATUS_DICTIONARY.get(status)
+  const effect = cmsReturnStatusDictionary(profile).get(status)
   if (effect === undefined) return { ok: false, issues: [{ kind: 'UNKNOWN_STATUS', field: 'return_status' }] }
   if (effect === 'NOT_EFFECTIVE') return { ok: true, value: { kind: 'NOT_EFFECTIVE', returnEventId: t.return_event_id!, status } }
 
-  for (const f of COMPLETED_REQUIRED) if (text(raw[f]) === null) issues.push({ kind: 'MISSING_FIELD', field: f })
+  for (const f of full ? COMPLETED_REQUIRED_FULL_LINE : COMPLETED_REQUIRED) if (text(raw[f]) === null) issues.push({ kind: 'MISSING_FIELD', field: f })
   if (issues.length) return { ok: false, issues }
 
   const pid = canonicalProductId(text(raw.product_id))
@@ -141,9 +178,11 @@ export function normalizeReturnRow(raw: CmsRawRow): CmsReturnNormalizeResult {
   const updated = updText === null ? null : parseUtcMicros(updText)
   if (updText !== null && updated === null) issues.push({ kind: 'BAD_TIMESTAMP', field: 'source_updated_at' })
 
-  let baseUnits = ZERO
-  const bqText = text(raw.return_base_quantity)!
-  if (!INT_RE.test(bqText)) issues.push({ kind: 'BAD_NUMBER', field: 'return_base_quantity', error: 'NOT_INTEGER' })
+  // full_line: lượng BI không thuộc hợp đồng (Q-236) — không parse, không thành issue.
+  let baseUnits: bigint | null = full ? null : ZERO
+  const bqText = full ? '' : text(raw.return_base_quantity)!
+  if (full) baseUnits = null
+  else if (!INT_RE.test(bqText)) issues.push({ kind: 'BAD_NUMBER', field: 'return_base_quantity', error: 'NOT_INTEGER' })
   else {
     const bq = parseCmsDecimal(bqText, { allowNegative: true })
     if (!bq.ok) issues.push({ kind: 'BAD_NUMBER', field: 'return_base_quantity', error: bq.error })
@@ -152,9 +191,10 @@ export function normalizeReturnRow(raw: CmsRawRow): CmsReturnNormalizeResult {
   }
   const refund = parseCmsDecimal(text(raw.return_gmv_amount)!)
   if (!refund.ok) issues.push({ kind: 'BAD_NUMBER', field: 'return_gmv_amount', error: refund.error })
-  const ob = parseCmsDecimal(text(raw.original_base_quantity)!, { allowNegative: true })
+  const NA = { ok: true as const, units: null }
+  const ob = full ? NA : parseCmsDecimal(text(raw.original_base_quantity)!, { allowNegative: true })
   if (!ob.ok) issues.push({ kind: 'BAD_NUMBER', field: 'original_base_quantity', error: ob.error })
-  const og = parseCmsDecimal(text(raw.original_gmv_amount)!, { allowNegative: true })
+  const og = full ? NA : parseCmsDecimal(text(raw.original_gmv_amount)!, { allowNegative: true })
   if (!og.ok) issues.push({ kind: 'BAD_NUMBER', field: 'original_gmv_amount', error: og.error })
 
   // Không đặt trần độ dài ở đây: q / u gốc chỉ được so ở mode cms_unit (net.ts, so bằng chuỗi thô của lớp bán — lớp bán đã giới hạn 50
@@ -163,14 +203,15 @@ export function normalizeReturnRow(raw: CmsRawRow): CmsReturnNormalizeResult {
     const v = raw[f]
     return v === null || v === undefined ? null : v
   }
-  const qRaw = rawStr('original_quantity_raw')
-  const uRaw = rawStr('original_uom_raw')
+  const qRaw = full ? null : rawStr('original_quantity_raw')
+  const uRaw = full ? null : rawStr('original_uom_raw')
 
   if (issues.length || !pid.ok || recorded === null || origAt === null || !refund.ok || !ob.ok || !og.ok) return { ok: false, issues }
   return {
     ok: true,
     value: {
       kind: 'COMPLETED',
+      profile,
       returnEventId: t.return_event_id!,
       returnDocumentId: t.return_document_id!,
       returnCode: t.return_code,

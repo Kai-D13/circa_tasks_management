@@ -17,6 +17,9 @@
 //   của evidence-meta (<out>.app-side.json). Đây là SNAPSHOT, không phải chứng nhận. CSV CÓ EMAIL nhân viên ⇒ mỗi lần xuất ghi sổ x-….json
 //   (uid phiên, chương trình, run, số dòng, sha256 — không email) TRƯỚC trang đầu và cập nhật khi xong / lỗi (security review P1-1);
 //   cần --expect-host; không ghi đè file có sẵn (link độc quyền, không rename); xoá file sau khi đối soát.
+// · 132 r2 (Q-238 b): chế độ theo cách tính của RUN hiện hành — cms_unit ⇒ bộ decision_unit14 (vân tay cms-rows-fp-v2, so
+//   cms-i4-compare-v2): export-run ghi file run 18 cột (+ quantity_src / quantity_src_flag / uom_src / uom_src_flag), tham chiếu vẫn 14 cột
+//   BQ với ô quantity_raw / uom_raw là chuỗi THÔ nguồn (KHÔNG trim / chuẩn hoá); pos_base / legacy ⇒ decision10 như 124.
 // · attest: TÍNH LẠI compare-source trên ĐÚNG hai file (hash byte từ cùng buffer) + metadata; chỉ MATCH decision10 toàn kỳ / toàn SP
 //   mới dựng payload. Mặc định DRY-RUN (in payload tóm tắt, không gọi DB ghi). --write: cần --idem do operator cấp (KHÔNG tự sinh) +
 //   --expect-host đúng; ghi Ý ĐỊNH vào sổ (a-….json, độc quyền) TRƯỚC request; mất phản hồi ⇒ KHÔNG RÕ (rc 1) — reconcile đọc DB theo
@@ -273,6 +276,9 @@ async function main() {
     const partial = `${out}.partial`
     if (fs.existsSync(out) || fs.existsSync(partial) || fs.existsSync(`${out}.app-side.json`)) die2('--out: file đã tồn tại — không ghi đè, chọn tên mới')
     if (runId !== prog.currentRunId) console.log('LƯU Ý: run không phải run hiện hành — chứng nhận chỉ nhận run hiện hành')
+    // 132 r2: chế độ theo cách tính của run hiện hành (cms_unit ⇒ file run 18 cột cho decision_unit14).
+    const md = A.cmsAttestModeOf(prog)
+    if (!md.ok) die2(`không xuất: ${md.reason}`)
     // Sổ xuất x-….json ghi TRƯỚC trang đầu (dấu vết cả khi lỗi giữa chừng) — security review P1-1.
     fs.mkdirSync(ledgerDir, { recursive: true })
     const exportId = `x-${crypto.randomBytes(6).toString('hex')}`
@@ -299,7 +305,13 @@ async function main() {
       if (pg.done) break
       after = st.lastId
     }
-    const csv = A.cmsAttestExportCsv(st.rows)
+    // 132 r2: cms_unit cần trang có thô / cờ q / u (DB có rpc_cms_run_source_export r2) — thiếu ⇒ không ghi file (fail-closed).
+    if (md.mode === 'unit14' && st.unitCols !== true) {
+      xFail('EXPORT_NO_UNIT_SRC')
+      console.log('LỖI XUẤT: EXPORT_NO_UNIT_SRC — DB chưa trả chuỗi thô q / u (thiếu 132 r2?) — không có file')
+      return 1
+    }
+    const csv = A.cmsAttestExportCsv(st.rows, md.mode === 'unit14')
     const exportedAt = new Date().toISOString().replace(/(\.\d{3})Z$/, '$1000Z')
     try {
       fs.writeFileSync(partial, csv, { flag: 'wx', mode: 0o600 })
@@ -318,7 +330,7 @@ async function main() {
     xRec = { ...xRec, status: 'done', finishedAt: new Date().toISOString(), rows: st.rows.length, sha256: sha }
     let xSaved = true
     try { writeAtomic(xFile, xRec) } catch (e) { rethrowCliExit(e); xSaved = false }
-    console.log(JSON.stringify({ export: 'ok', program: mask(programId), run: mask(runId), rows: st.rows.length, pages: st.pages, sha256: sha,
+    console.log(JSON.stringify({ export: 'ok', program: mask(programId), run: mask(runId), mode: md.mode, rows: st.rows.length, pages: st.pages, sha256: sha,
       out: path.basename(out), appSide: path.basename(`${out}.app-side.json`), ledger: xSaved ? exportId : 'NOT_SAVED' }))
     // security review P2-2: mode 0o600 không có tác dụng trên Windows.
     console.log('LƯU Ý: file CSV có email nhân viên — chỉ để ở thư mục riêng (không OneDrive / Downloads / thư mục đồng bộ), XOÁ sau khi đối soát xong')
@@ -349,23 +361,27 @@ async function main() {
     if (!runId || !UUID_RE.test(runId)) die2('cần --run=<uuid run hiện hành đã xuất>')
     const I = await jiti.import(path.join(ROOT, 'e2e', 'cmsI4Offline.ts'))
     const C = await jiti.import(path.join(ROOT, 'e2e', 'cmsI4CompareSource.ts'))
-    const readOnce = (flag) => {
+    // 132 r2: chế độ theo cách tính của run hiện hành; cms_unit ⇒ file run phải có đủ 4 cột thô / cờ (tham chiếu giữ 14 cột BQ).
+    const md = A.cmsAttestModeOf(prog)
+    if (!md.ok) die2(`không chứng nhận: ${md.reason}`)
+    const readOnce = (flag, unitCols) => {
       const buf = fs.readFileSync(inputFile(flag, a.values[flag]))
-      const r = I.cmsI4ReadCsv(new Uint8Array(buf), I.CMS_SALES_COLUMNS)
+      const r = I.cmsI4ReadCsv(new Uint8Array(buf), unitCols ? [...I.CMS_SALES_COLUMNS, ...C.CMS_I4_UNIT_APP_COLUMNS] : I.CMS_SALES_COLUMNS)
       if (!r.ok) die2(`${flag}: ${r.reason}`)
       return { rows: r.rows, sha256: crypto.createHash('sha256').update(buf).digest('hex') }
     }
-    const ref = readOnce('--reference')
-    const app = readOnce('--app')
+    const ref = readOnce('--reference', false)
+    const app = readOnce('--app', md.mode === 'unit14')
     let metaJson
     try { metaJson = JSON.parse(fs.readFileSync(inputFile('--evidence-meta', a.values['--evidence-meta']), 'utf8')) } catch (e) { rethrowCliExit(e); die2('--evidence-meta: JSON không hợp lệ') }
     const meta = C.cmsI4ParseEvidenceMeta(metaJson)
     if (!meta.ok) die2(`--evidence-meta: ${meta.reason}`)
     const compare = C.cmsI4CompareSource({ context: A.cmsAttestContext(prog), reference: { rows: ref.rows, fileSha256: ref.sha256 },
-      app: { rows: app.rows, fileSha256: app.sha256 }, meta: meta.value })
+      app: { rows: app.rows, fileSha256: app.sha256 }, meta: meta.value, mode: md.mode })
     const built = A.cmsAttestBuildPayload({ program: prog, runId, compare, meta: meta.value, refSha: ref.sha256, appSha: app.sha256, ack: a.values['--ack'] })
     console.log(JSON.stringify({ verdict: compare.verdict, matched: compare.compare.matched, missing: compare.compare.missing, extra: compare.compare.extra,
-      changed: compare.compare.changed, decisionFp: compare.app.decisionFp, program: mask(programId), run: mask(runId), fieldSet: 'decision10' }))
+      changed: compare.compare.changed, decisionFp: compare.app.decisionFp, unitFp: compare.app.unitFp, program: mask(programId), run: mask(runId),
+      fieldSet: C.CMS_I4_FIELD_SET[md.mode] }))
     if (!built.ok) { for (const r of built.reasons) console.log(`KHÔNG CHỨNG NHẬN: ${r}`); return 1 }
     payloadSha = built.payloadSha256
     if (!write) {
@@ -412,15 +428,35 @@ async function main() {
   console.log(`${op === 'attest' ? 'CHỨNG NHẬN' : 'THU HỒI'} · ${m ? `run QA ${m.runId}` : 'vận hành'} · đích ${host} · chương trình ${mask(programId)} · thao tác ${operationId}`)
   const o = await sent
   const reply = o.kind === 'ok' ? A.cmsAttestCheckReply(op, o.data, expect) : { ok: false }
-  const outcome = A.cmsAttestOpOutcome(o, reply.ok)
+  let outcome = A.cmsAttestOpOutcome(o, reply.ok)
+  // r3 (PM 20/11 §4.1.3): `already` chỉ nói chứng nhận ĐÃ CÓ ⇒ đọc hiệu lực HIỆN TẠI (pg-meta CHỈ ĐỌC: còn sống, run hiện hành,
+  // cms__attest_eval) trước khi báo done. Chết ⇒ already_dead (rc 1); không đọc được ⇒ unknown (rc 1, reconcile khép sổ). Không tạo chứng
+  // nhận mới, không thu hồi, không đổi khoá. Mọi lỗi đọc (kể cả thoát chủ đích) ⇒ unknown — sổ vẫn được khép, không bỏ dở ý định.
+  let vcode = null
+  if (op === 'attest' && outcome === 'done' && reply.already) {
+    let row = null
+    if (reply.live === true) {
+      try { row = A.parseCmsAttestValidityRow((await ro(A.cmsAttestValiditySql(programId, reply.id)))?.[0]) } catch { row = null }
+    }
+    const v = A.cmsAttestReplayVerdict(reply, row)
+    if (v.status !== 'done') { outcome = v.status; vcode = v.code }
+  }
   entry = { ...entry, status: outcome, finishedAt: new Date().toISOString(),
-    result: { code: o.kind === 'ok' ? (reply.ok ? null : 'REPLY_MISMATCH') : o.code, attestationId: reply.ok ? reply.id : null, already: reply.ok ? reply.already : false } }
+    result: { code: vcode ?? (o.kind === 'ok' ? (reply.ok ? null : 'REPLY_MISMATCH') : o.code), attestationId: reply.ok ? reply.id : null, already: reply.ok ? reply.already : false } }
   let saved = true
   try { writeAtomic(file, entry) } catch (e) { rethrowCliExit(e); saved = false }
   if (saved) pendingIntent = null
   console.log(JSON.stringify({ status: outcome, code: entry.result.code, id: reply.ok ? mask(reply.id) : null, already: reply.ok ? reply.already : undefined,
     operation: operationId, ledger: saved ? outcome : 'NOT_SAVED' }))
   if (!saved) { console.log(`SỔ CHƯA ĐÓNG: không ghi được kết quả ${operationId} (sổ còn ý định) — có thể đã ghi; chạy reconcile --op=${operationId}`); return 1 }
+  if (outcome === 'already_dead') {
+    console.log(`CHỨNG NHẬN ĐÃ CÓ NHƯNG HẾT HIỆU LỰC (${vcode}) — KHÔNG dùng cho chốt; đối soát lại rồi chứng nhận bằng --idem MỚI (công cụ không tự tạo / thu hồi)`)
+    return 1
+  }
+  if (outcome === 'unknown' && vcode === 'VALIDITY_UNKNOWN') {
+    console.log(`CHỨNG NHẬN ĐÃ CÓ NHƯNG KHÔNG ĐỌC ĐƯỢC HIỆU LỰC HIỆN TẠI (${vcode}) — KHÔNG coi là đạt; chạy reconcile --op=${operationId} rồi gọi lại cùng --idem khi kết nối ổn`)
+    return 1
+  }
   if (outcome === 'unknown') { console.log(`KẾT QUẢ KHÔNG RÕ (${entry.result.code}) — có thể đã ghi; KHÔNG dùng khoá mới; chạy reconcile --op=${operationId} rồi (nếu chưa ghi) gọi lại cùng --idem`); return 1 }
   return outcome === 'done' ? 0 : 1
   } finally {
