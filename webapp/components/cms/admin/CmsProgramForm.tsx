@@ -27,6 +27,8 @@ import {
 // CMS-CALC-RET-2 P5.1 (spec §2 / §8.1): `basis.selectable` (cờ CMS_CALC_MODES_ENABLED + DB có đường program_modes) ⇒ fieldset radio
 // "Cách tính lượng" BẮT BUỘC, không chọn sẵn khi tạo / nháp chưa được admin chọn; chương trình đã kích hoạt chỉ hiện (gửi lại đúng
 // cách tính hiện tại — server + DB chặn đổi). Không selectable ⇒ không gửi khoá quantity_basis (đường 121 như cũ).
+// CMS-IMPORT-UI-1 (PM 22/11 §3.2): MỘT <form>, hai nhóm "Thông tin chương trình" | "Cách tính CMS" — hai cột khi nội dung của khung
+// (container cms-wizard) ≥ 960px, một cột bên dưới; radio cách tính xếp dọc; footer trong luồng trang. Chỉ đổi bố cục.
 
 export interface CmsProgramFormInitial {
   id: string
@@ -47,6 +49,14 @@ export interface CmsProgramFormBasis {
 }
 
 const FIELD = 'h-[44px] md:h-[36px] w-full rounded-v2-control border border-input bg-card px-3 text-[16px] md:text-sm'
+
+// Nhóm của form: panel v2, tiêu đề nhóm cùng cỡ với các panel CMS khác.
+// r1 (PM UI-R1-01): radius nhóm mới = 8px (circa-ui: card ≤ 8px), không dùng panel 12px.
+const GROUP = 'min-w-0 space-y-4 rounded-lg border bg-card p-4 md:p-5'
+// Không có lựa chọn cách tính ⇒ chỉ MỘT nhóm: tên + ngày | phạm vi chia hai cột trong nhóm khi nội dung ≥ 960px (không card rỗng, không cap trang).
+const INFO_SPLIT = 'grid min-w-0 gap-4 @min-[960px]/cms-wizard:grid-cols-2 @min-[960px]/cms-wizard:gap-[24px] @min-[960px]/cms-wizard:items-start'
+const TIER_NOTE = 'text-[13px] text-muted-foreground'
+const GROUP_TITLE = 'text-[14px] font-semibold'
 
 const INVALID_REASON: Record<CmsInvalidStore['reason'], string> = {
   inactive: 'đã ngừng hoạt động', not_os: 'không phải nhà thuốc OS', unknown: 'không còn trong danh sách',
@@ -121,9 +131,14 @@ export function CmsProgramForm({ mode, initial, stores, storesError, invalidStor
     <form
       data-cms-program-form={mode}
       data-cms-pending-payload={pendingPayload ?? undefined}
-      className="space-y-4 rounded-v2-panel border bg-card p-4 md:p-5"
+      className="min-w-0 space-y-[16px] md:space-y-[24px]"
       onSubmit={(e) => { e.preventDefault(); submit(mode === 'create' ? 'upload' : 'detail') }}
     >
+      <div data-cms-form-grid={selectable ? 'two' : 'one'} className={cn('grid min-w-0 gap-[16px] md:gap-[24px]', selectable && '@min-[960px]/cms-wizard:grid-cols-2 @min-[960px]/cms-wizard:items-start')}>
+      <section data-cms-form-group="info" aria-labelledby="cms-form-info-h" className={GROUP}>
+      <h2 id="cms-form-info-h" className={GROUP_TITLE}>Thông tin chương trình</h2>
+      <div data-cms-form-info-body className={selectable ? 'space-y-4' : INFO_SPLIT}>
+      <div className="min-w-0 space-y-4">
       <label className="block space-y-1.5">
         <span className="text-[13px] font-medium">Tên chương trình <span aria-hidden="true" className="text-status-danger">*</span></span>
         <input className={FIELD} value={name} maxLength={200} required onChange={(e) => setName(e.target.value)} />
@@ -142,6 +157,7 @@ export function CmsProgramForm({ mode, initial, stores, storesError, invalidStor
         <p className="text-[12px] text-muted-foreground">Chương trình đã kích hoạt: ngày bắt đầu mới phải sau hôm nay. Muốn áp dụng hồi tố, tạo chương trình nháp rồi kích hoạt có xác nhận.</p>
       )}
 
+      </div>
       <fieldset className="min-w-0 space-y-2">
         <legend className="text-[13px] font-medium">Phạm vi</legend>
         <div className="flex flex-col gap-1 sm:flex-row sm:gap-4">
@@ -199,8 +215,13 @@ export function CmsProgramForm({ mode, initial, stores, storesError, invalidStor
           )
         )}
       </fieldset>
+      </div>
+      {!selectable && <p data-cms-tier-note className={TIER_NOTE}>Cách tính bậc: <span className="font-medium text-foreground">Lũy tiến</span> · target danh mục đọc từ file Excel.</p>}
+      </section>
 
       {selectable && (
+      <section data-cms-form-group="basis" aria-labelledby="cms-form-basis-h" className={GROUP}>
+      <h2 id="cms-form-basis-h" className={GROUP_TITLE}>Cách tính CMS</h2>
         <fieldset data-cms-basis-field className="min-w-0 space-y-2">
           <legend className="text-[13px] font-medium">Cách tính lượng <span aria-hidden="true" className="text-status-danger">*</span></legend>
           {basisLocked ? (
@@ -213,32 +234,33 @@ export function CmsProgramForm({ mode, initial, stores, storesError, invalidStor
               {cur && CMS_BASIS_SOURCE_NOTE[cur.source] && cur.source !== 'admin' && (
                 <p data-cms-basis-note={cur.source} className="text-[12px] text-muted-foreground">{CMS_BASIS_SOURCE_NOTE[cur.source]} — chọn một cách tính.</p>
               )}
-              <div className="grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Cách tính lượng">
+              <div className="grid gap-2" role="radiogroup" aria-label="Cách tính lượng">
                 {CMS_QUANTITY_BASES.map((b) => (
                   <label
                     key={b}
                     data-cms-basis-option={b}
-                    className={cn('flex min-h-[44px] cursor-pointer gap-2 rounded-v2-control border p-3 text-[14px]', basis === b && 'border-primary bg-primary/5')}
+                    className={cn('flex min-h-[44px] cursor-pointer gap-2.5 rounded-v2-control border bg-card p-3 text-[14px] has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring', basis === b && 'border-primary bg-primary/5')}
                   >
                     <input type="radio" name="quantity_basis" value={b} checked={basis === b} onChange={() => setBasis(b)} className="mt-0.5 size-4 shrink-0" />
                     <span className="min-w-0">
                       <span className="block font-medium">{CMS_QUANTITY_BASIS_LABEL[b]}</span>
-                      <span className="mt-0.5 block text-[12px] text-muted-foreground">{CMS_QUANTITY_BASIS_HINT[b]}</span>
+                      <span className="mt-0.5 block max-w-[68ch] text-[12px] text-muted-foreground">{CMS_QUANTITY_BASIS_HINT[b]}</span>
                     </span>
                   </label>
                 ))}
               </div>
-              <p className="text-[12px] text-muted-foreground">Áp dụng cho mọi sản phẩm của chương trình; không đặt trong file Excel. Đổi cách tính khi còn nháp làm mất hiệu lực lần kiểm tra file trước đó. Sau khi kích hoạt không đổi được.</p>
+              <p className="max-w-[68ch] text-[12px] text-muted-foreground">Áp dụng cho mọi sản phẩm của chương trình; không đặt trong file Excel. Đổi cách tính khi còn nháp làm mất hiệu lực lần kiểm tra file trước đó. Sau khi kích hoạt không đổi được.</p>
             </>
           )}
         </fieldset>
+      <p data-cms-tier-note className={TIER_NOTE}>Cách tính bậc: <span className="font-medium text-foreground">Lũy tiến</span> · target danh mục đọc từ file Excel.</p>
+      </section>
       )}
-
-      <p className="text-[13px] text-muted-foreground">Cách tính bậc: <span className="font-medium text-foreground">Lũy tiến</span> · target danh mục đọc từ file Excel.</p>
+      </div>
 
       {error && <Notice tone="danger" role="alert">{error}</Notice>}
 
-      <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+      <div data-cms-form-actions className="flex flex-col gap-2 sm:flex-row sm:justify-end">
         <Link
           href={mode === 'edit' && initial ? `/targets/campaigns/cms/${initial.id}` : '/targets/campaigns/cms'}
           className={cn(buttonVariants({ variant: 'ghost' }), 'h-[44px] md:h-[36px]')}
