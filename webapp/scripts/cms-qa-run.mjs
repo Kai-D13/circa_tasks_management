@@ -50,14 +50,15 @@ import { execFileSync, spawn } from 'node:child_process'
 import { ROOT, die2, heartbeatFile, loadTooling, mergedEnv, parseArgs, pgMeta, readEnvFileText, rethrowCliExit, runCli, runLiveness, supabaseHost } from './lib-cms-ops.mjs'
 
 async function main() {
-const a = parseArgs(process.argv.slice(2), { flags: ['--no-server', '--with-lock', '--headless'], values: ['--users', '--port', '--min-ttl-minutes', '--guard-minutes', '--ack-warnings'] })
+const a = parseArgs(process.argv.slice(2), { flags: ['--no-server', '--with-lock', '--headless'], values: ['--users', '--port', '--min-ttl-minutes', '--guard-minutes', '--ack-warnings', '--continue-from', '--expect-archive-sha', '--expect-programs'] })
 if (!['start', 'status', 'close'].includes(a.cmd) || a.bad.length) {
-  console.log('dùng: node scripts/cms-qa-run.mjs <start --users=<uuid,…> [--port=N] [--min-ttl-minutes=N] [--guard-minutes=N] [--no-server | --headless] [--with-lock] | status | close [--ack-warnings=<8 ký tự id>,…]>')
+  console.log('dùng: node scripts/cms-qa-run.mjs <start --users=<uuid,…> [--port=N] [--min-ttl-minutes=N] [--guard-minutes=N] [--no-server | --headless] [--with-lock] [--continue-from=<runId đã đóng> --expect-archive-sha=<sha256 tệp archive> --expect-programs=<uuid,…>] | status | close [--ack-warnings=<8 ký tự id>,…]>')
   return 2
 }
 if (a.values['--ack-warnings'] !== undefined && a.cmd !== 'close') die2('--ack-warnings chỉ dùng với close')
 if (a.flags.has('--with-lock') && a.cmd !== 'start') die2('--with-lock chỉ dùng với start')
 if (a.flags.has('--headless') && a.cmd !== 'start') die2('--headless chỉ dùng với start')
+for (const k of ['--continue-from', '--expect-archive-sha', '--expect-programs']) if (a.values[k] !== undefined && a.cmd !== 'start') die2(`${k} chỉ dùng với start`)
 const { T, G, R, A, P } = await loadTooling()
 const MARKER = path.join(ROOT, G.CMS_QA_MARKER)
 const envFileText = readEnvFileText()
@@ -97,6 +98,7 @@ if (a.cmd === 'status') {
   if (!m) { console.log('không có run QA CMS đang mở'); return 0 }
   console.log(`run ${m.runId} · ${m.status} · ${m.mode} · đích ${m.host} · bắt đầu ${m.startedAt} (giờ DB) · HEAD ${m.gitHead.slice(0, 7)} · build ${m.buildId ?? '—'} · cổng ${m.port ?? '—'}`)
   for (const u of m.users) console.log(`  QA ${mask(u.id)} ${u.role ?? '?'} · marker hết ${u.markerExpiresAt}`)
+  if (m.continuedFrom) console.log(`  tiếp tục từ ${m.continuedFrom.runId} (archive sha256 ${m.continuedFrom.sha256}) · nhận ${m.continuedFrom.programs.map(mask).join(', ')}`)
   const live = await runLiveness(T, m)
   console.log(`launcher: ${live.alive ? 'CÒN SỐNG + còn canh marker' : `KHÔNG sống (${live.reason})`}`)
   console.log(`sha256 manifest ${sha(fs.readFileSync(MARKER))}`)
@@ -223,6 +225,30 @@ if (!env.SUPABASE_SERVICE_ROLE_KEY) die2('thiếu SUPABASE_SERVICE_ROLE_KEY')
 const lm = T.cmsQaLauncherMode({ noServer: a.flags.has('--no-server'), headless: a.flags.has('--headless') })
 if (!lm.ok) die2(lm.reason)
 const headless = lm.value === 'manual-headless'
+// P4-B (PM 22/11): tiếp tục từ archive ĐÃ ĐÓNG — chỉ headless; đọc tệp + kiểm thuần ở đây, kiểm DB sau preflight marker.
+const contArgs = T.parseCmsQaContinueArgs({ from: a.values['--continue-from'], sha: a.values['--expect-archive-sha'], programs: a.values['--expect-programs'], headless })
+if (!contArgs.ok) die2(contArgs.reason)
+let donor = null
+if (contArgs.value) {
+  const dir = path.join(ROOT, 'qa-artifacts', 'cms-qa')
+  const file = path.join(dir, `${contArgs.value.runId}.json`)
+  let buf
+  try {
+    // Đường dẫn THẬT trước khi đọc: tệp thường (không symlink / junction), nằm trực tiếp trong kho archive sau khi phân giải.
+    // security review P2-1: bản thân kho archive (và thư mục cha qa-artifacts) phải là thư mục THẬT, không symlink / junction.
+    for (const d of [path.dirname(dir), dir]) { const ds = fs.lstatSync(d); if (!ds.isDirectory() || ds.isSymbolicLink()) die2('kho archive qa-artifacts/cms-qa không phải thư mục thường (symlink / junction) — từ chối') }
+    const st = fs.lstatSync(file)
+    if (!st.isFile() || st.isSymbolicLink()) die2('archive donor không phải tệp thường (symlink / thư mục) — từ chối')
+    const realDir = fs.realpathSync(dir), realFile = fs.realpathSync(file)
+    if (path.dirname(realFile) !== realDir || path.basename(realFile) !== `${contArgs.value.runId}.json`) die2('archive donor phân giải ra ngoài kho archive — từ chối')
+    if (st.size > 4 * 1024 * 1024) die2('archive donor quá lớn')
+    buf = fs.readFileSync(realFile)
+    if (buf.length > 4 * 1024 * 1024) die2('archive donor quá lớn')
+  } catch (e) { rethrowCliExit(e); die2(`không đọc được archive donor ${contArgs.value.runId}.json trong qa-artifacts/cms-qa (${e?.code ?? 'lỗi'})`) }
+  const dc = T.cmsQaContinuationDonorCheck({ want: contArgs.value, text: buf.toString('utf8'), fileSha256: sha(buf), host: gate.host, userIds: users.value })
+  if (!dc.ok) die2(dc.reason)
+  donor = dc.value
+}
 if (headless && a.values['--port'] !== undefined) die2('--headless không dựng web server — bỏ --port')
 const server = lm.value === 'manual-localhost'
 // P3a (security review P1-1): CMS_LOCK_ENABLED của shell mở nút "Chốt kỳ" trên UI server QA ⇒ chỉ khi opt-in --with-lock.
@@ -273,6 +299,21 @@ if (!pre.ok) {
   console.log('cấp / gia hạn marker bằng scripts/cms-qa-access.mjs grant (operator) rồi chạy lại')
   return 1
 }
+if (donor) {
+  // Đọc DB MỚI: chương trình donor còn đúng trạng thái đã đối soát. Lệch ⇒ dừng báo; launcher không publish / sửa gì để "khớp lại".
+  try {
+    const cc = T.cmsQaContinuationDbCheck(donor, await pgMeta(env, T.pgMetaReadOnly(T.cmsQaContinuationSql(donor, users.value))))
+    if (!cc.ok) {
+      for (const r of cc.reasons) console.log(`CHẶN TIẾP TỤC: ${r}`)
+      console.log('không mở run — báo PM / operator; không sửa manifest / archive tay, không publish lại để đổi kỳ vọng')
+      return 1
+    }
+  } catch (e) {
+    rethrowCliExit(e)
+    console.log(`LỖI DB: ${e instanceof Error ? e.message : String(e)}`)
+    return 1
+  }
+}
 const runId = `cms-qa-${pre.dbNow.replace(/[-:]/g, '').replace(/\..*$/, '')}-${crypto.randomBytes(2).toString('hex')}`
 let manifest = T.newCmsQaManifest({
   runId, mode: headless ? 'manual-headless' : 'manual-localhost', host: gate.host, dbNow: pre.dbNow, gitHead, gitTree, buildId, port: server ? port : null, users: pre.users,
@@ -283,11 +324,14 @@ if (headless) manifest = { ...manifest, headless: { nonce: hbNonce } }
 // pid CỦA LAUNCHER (nơi chạy canh marker) — writer kết quả QA đòi pid này còn sống, không chỉ server con (security review 03/11 P1-1).
 // lockUi: server QA có cờ LOCK (opt-in --with-lock) — bằng chứng cho close / report.
 manifest = { ...manifest, launcherPid: process.pid, lockUi: lockGate.lock }
+// P4-B: nhận chương trình donor vào manifest MỚI (runId / startedAt / pid / nonce mới) — sau launcherPid để dạng headless đã đủ.
+if (donor) manifest = T.cmsQaManifestContinue(manifest, donor)
 try {
   fs.writeFileSync(MARKER, json(manifest), { flag: 'wx' }) // độc quyền: hai launcher song song ⇒ cái sau thất bại
 } catch { die2(`${G.CMS_QA_MARKER} vừa được run khác tạo — không ghi đè`) }
 console.log(`MỞ run ${runId} · đích ${gate.host} · HEAD ${gitHead.slice(0, 7)} · tree ${gitTree.slice(0, 7)} · build ${buildId ?? '—'} · manifest ${G.CMS_QA_MARKER} sha256 ${sha(fs.readFileSync(MARKER))}`)
 for (const u of pre.users) console.log(`  QA ${mask(u.id)} ${u.role ?? '?'} · marker còn ${Math.floor(u.remainingS / 60)} phút`)
+if (donor) console.log(`TIẾP TỤC từ ${donor.runId} (đóng ${donor.closedAt}, archive sha256 ${donor.sha256}) · nhận ${donor.programIds.length} chương trình QA: ${donor.programIds.map(mask).join(', ')} — sổ / run cũ là bằng chứng đầu vào, không phải writer của run này`)
 console.log('QA chỉ thao tác chương trình is_test; kết thúc: dừng server rồi `node scripts/cms-qa-run.mjs close`')
 if (headless) {
   // ── P4-A: launcher headless — không tiến trình con; canh marker + heartbeat của lượt (T.runCmsQaHeadlessLifecycle). ──

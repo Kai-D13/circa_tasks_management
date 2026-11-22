@@ -558,6 +558,8 @@ export interface CmsQaRunManifest {
    */
   serverNotStopped?: { pid: number | null; at: string } | null
   users: { id: string; role: string | null; markerExpiresAt: string }[]
+  /** P4-B: run tiếp tục — archive donor ĐÃ ĐÓNG (runId + sha256 tệp) và các chương trình nhận lại; chỉ launcher ghi lúc start. */
+  continuedFrom?: { runId: string; sha256: string; programs: string[]; closedAt: string } | null
   /** Spec tự động: ghi NGAY khi tạo. Khi đóng: mọi chương trình is_test tạo / sửa trong run (để lại, ẩn — H8). */
   programs: { id: string; status: string; isTest: boolean }[]
   closedAt: string | null
@@ -2549,4 +2551,136 @@ export function evaluateCmsV8(
     add(`v8-require-proven:${k}`, !!t && t.ok && t.proven === true, t ? (t.proven ? 'đã chứng minh RLS cắt' : 'CHƯA chứng minh (tổng = kỳ vọng)') : 'bảng không hợp lệ cho phase này')
   }
   return out
+}
+
+// ───────────────────────── P4-B (PM 22/11 review cửa sổ 1 §4): tiếp tục từ archive ĐÃ ĐÓNG ─────────────────────────
+// Cửa sổ 2 phải thao tác đúng các chương trình QA tạo ở cửa sổ 1 (đã đóng). Launcher mới có runId / startedAt / pid / nonce / marker MỚI;
+// chương trình chỉ được nhận khi: archive donor đóng + đúng hash ghim + đúng danh sách UUID operator gõ lại + đọc DB mới cho thấy
+// chương trình còn is_test / active / do tài khoản QA tạo trong cửa sổ donor / con trỏ kết quả = run mới nhất donor đã đối soát / cv + cách
+// tính + policy = hợp đồng của chính run đó. Không lùi startedAt, không mở lại archive, không chép sổ cũ. Chỉ dùng với --headless.
+
+export const CMS_QA_RUN_ID_RE = /^cms-qa-\d{8}T\d{6}-[0-9a-f]{4}$/
+const SHA256_RE = /^[0-9a-f]{64}$/
+
+export interface CmsQaContinuedFrom { runId: string; sha256: string; programs: string[]; closedAt: string }
+export interface CmsQaContinuationDonor { runId: string; sha256: string; startedAt: string; closedAt: string; programIds: string[]; runIdsByProgram: Record<string, string[]> }
+
+/** Tham số CLI của đường tiếp tục: cả ba hoặc không cái nào; chỉ ở mode headless. */
+export function parseCmsQaContinueArgs(i: { from: string | undefined; sha: string | undefined; programs: string | undefined; headless: boolean }):
+  Parsed<{ runId: string; sha256: string; programIds: string[] } | null> {
+  const given = [i.from, i.sha, i.programs].filter((v) => v !== undefined).length
+  if (given === 0) return { ok: true, value: null }
+  if (given !== 3) return { ok: false, reason: 'tiếp tục cần ĐỦ --continue-from=<runId> --expect-archive-sha=<64 hex> --expect-programs=<uuid,…>' }
+  if (!i.headless) return { ok: false, reason: '--continue-from chỉ dùng với --headless' }
+  if (!CMS_QA_RUN_ID_RE.test(i.from!)) return { ok: false, reason: '--continue-from không phải runId cms-qa-…' }
+  if (!SHA256_RE.test(i.sha!)) return { ok: false, reason: '--expect-archive-sha phải là 64 hex thường' }
+  const ids = i.programs!.split(',').map((s) => s.trim())
+  if (ids.length === 0 || ids.length > 4 || !ids.every((x) => isCmsUuid(x)) || new Set(ids).size !== ids.length) return { ok: false, reason: '--expect-programs: 1…4 UUID thường, không trùng' }
+  return { ok: true, value: { runId: i.from!, sha256: i.sha!, programIds: [...ids].sort() } }
+}
+
+/** Archive donor (thuần): đúng hash ghim, parse được, ĐÃ ĐÓNG sạch, cùng host + cùng bộ tài khoản QA, đúng danh sách chương trình gõ lại. */
+export function cmsQaContinuationDonorCheck(i: {
+  want: { runId: string; sha256: string; programIds: readonly string[] }
+  text: string; fileSha256: string; host: string; userIds: readonly string[]
+}): Parsed<CmsQaContinuationDonor> {
+  const no = (reason: string): Parsed<CmsQaContinuationDonor> => ({ ok: false, reason: `archive donor: ${reason}` })
+  if (i.fileSha256 !== i.want.sha256) return no('sha256 tệp khác --expect-archive-sha')
+  const parsed = parseCmsQaManifest(i.text)
+  if (!parsed.ok) return no(parsed.reason)
+  const d = parsed.value as CmsQaRunManifest & { writers?: unknown; locks?: unknown; payouts?: unknown; closeReports?: unknown; continuedFrom?: unknown }
+  if (d.status !== 'closed' || typeof d.closedAt !== 'string' || !ISO_UTC_RE.test(d.closedAt)) return no('chưa đóng (chỉ nhận archive closed có closedAt)')
+  // security review P2-4: cửa sổ donor phải hợp lệ (mốc mở TRƯỚC mốc đóng) và server QA của donor đã dừng có bằng chứng.
+  if (!(Date.parse(d.startedAt) < Date.parse(d.closedAt))) return no('mốc mở không trước mốc đóng')
+  if (d.serverNotStopped !== undefined && d.serverNotStopped !== null) return no('còn cờ server QA chưa dừng')
+  if (d.runId !== i.want.runId) return no('runId trong tệp khác --continue-from')
+  if (d.host !== i.host) return no('khác host đích')
+  if (d.mode !== 'manual-headless') return no('không phải run headless')
+  if (d.continuedFrom !== undefined && d.continuedFrom !== null) return no('đã là run tiếp tục — chỉ nhận donor gốc')
+  const du = d.users.map((u) => u.id).sort(), wu = [...i.userIds].sort()
+  if (JSON.stringify(du) !== JSON.stringify(wu)) return no('bộ tài khoản QA khác run mới')
+  const cc = d.closeCheck as { realProgramsTouchedByQaUsers?: unknown } | null
+  if (!cc || !Array.isArray(cc.realProgramsTouchedByQaUsers) || cc.realProgramsTouchedByQaUsers.length !== 0) return no('closeCheck không sạch (chương trình thật bị tài khoản QA chạm / thiếu closeCheck)')
+  const dp = d.programs.map((p) => p.id).sort()
+  if (!d.programs.every((p) => p.isTest === true)) return no('có chương trình không đánh dấu is_test')
+  if (JSON.stringify(dp) !== JSON.stringify([...i.want.programIds].sort())) return no('danh sách chương trình khác --expect-programs (không nhận UUID thêm / thiếu)')
+  for (const k of ['locks', 'payouts', 'closeReports'] as const) if (Array.isArray(d[k]) && (d[k] as unknown[]).length) return no(`đã có ${k} — đường tiếp tục chỉ nhận donor chưa chốt`)
+  if (!Array.isArray(d.writers) || d.writers.length === 0) return no('không có writer kết quả')
+  const runIdsByProgram: Record<string, string[]> = {}
+  const seenRuns = new Set<string>()
+  for (const w of d.writers as { programId?: unknown; status?: unknown; runId?: unknown }[]) {
+    if (w.status !== 'done' || typeof w.runId !== 'string' || !isCmsUuid(w.runId) || typeof w.programId !== 'string' || !dp.includes(w.programId)) return no('có writer chưa done / thiếu run / ngoài danh sách chương trình')
+    if (seenRuns.has(w.runId)) return no('một run xuất hiện ở hai writer')
+    seenRuns.add(w.runId)
+    ;(runIdsByProgram[w.programId] ??= []).push(w.runId)
+  }
+  if (!dp.every((p) => (runIdsByProgram[p] ?? []).length > 0)) return no('có chương trình chưa có run đã công bố')
+  return { ok: true, value: { runId: d.runId, sha256: i.fileSha256, startedAt: d.startedAt, closedAt: d.closedAt, programIds: dp, runIdsByProgram } }
+}
+
+/** Một câu SELECT chỉ đọc: trạng thái hiện tại của các chương trình donor + các run donor đã công bố. */
+export function cmsQaContinuationSql(donor: CmsQaContinuationDonor, userIds: readonly string[]): string {
+  const runIds = Object.values(donor.runIdsByProgram).flat()
+  return `SELECT p.id::text AS id, p.is_test, p.status, (p.created_by = ANY(${uuidArrayLiteral(userIds)})) AS qa_created,
+       (p.created_at >= ${isoUtcLiteral(donor.startedAt)} AND p.created_at <= ${isoUtcLiteral(donor.closedAt)}) AS created_in_donor,
+       p.config_version, to_jsonb(p) ->> 'quantity_basis' AS quantity_basis, to_jsonb(p) ->> 'returns_policy' AS returns_policy,
+       p.current_result_run_id::text AS current_run_id, (p.locked_at IS NULL) AS not_locked,
+       (p.updated_at <= ${isoUtcLiteral(donor.closedAt)}) AS unchanged_since_close,
+       (SELECT count(*) FROM public.cms_sync_runs r WHERE r.program_id = p.id AND r.status = 'running')::int AS running,
+       coalesce((SELECT jsonb_agg(jsonb_build_object('id', r.id::text, 'status', r.status, 'is_test', r.is_test, 'cv', r.config_version,
+                 'basis', r.quantity_basis, 'policy', r.returns_policy, 'kind', r.kind, 'qa_run_id', r.detail ->> 'qa_run_id',
+                 'started_us', (extract(epoch FROM r.started_at) * 1000000)::bigint::text) ORDER BY r.started_at)
+          FROM public.cms_sync_runs r WHERE r.program_id = p.id AND r.id = ANY(${uuidArrayLiteral(runIds)})), '[]'::jsonb) AS donor_runs
+  FROM public.cms_programs p WHERE p.id = ANY(${uuidArrayLiteral(donor.programIds)}) ORDER BY 1`
+}
+
+export interface CmsQaContinuationRunRow { id: string; status: string; is_test: unknown; cv: unknown; basis: unknown; policy: unknown; kind: unknown; qa_run_id: unknown; started_us: string }
+export interface CmsQaContinuationRow {
+  id: string; is_test: unknown; status: unknown; qa_created: unknown; created_in_donor: unknown; config_version: unknown
+  quantity_basis: unknown; returns_policy: unknown; current_run_id: unknown; running: unknown; not_locked: unknown; unchanged_since_close: unknown
+  donor_runs: CmsQaContinuationRunRow[] | unknown
+}
+
+/** Trạng thái DB HIỆN TẠI phải khớp donor — lệch bất kỳ ⇒ dừng báo, không tự publish lại để "sửa" kỳ vọng. */
+export function cmsQaContinuationDbCheck(donor: CmsQaContinuationDonor, rows: readonly CmsQaContinuationRow[]): { ok: true } | { ok: false; reasons: string[] } {
+  const reasons: string[] = []
+  if (rows.length !== donor.programIds.length) reasons.push(`DB trả ${rows.length} chương trình, donor có ${donor.programIds.length}`)
+  for (const id of donor.programIds) {
+    const m = maskCmsUuid(id)
+    const p = rows.find((r) => r.id === id)
+    if (!p) { reasons.push(`${m}: không còn trong DB`); continue }
+    if (p.is_test !== true) reasons.push(`${m}: chương trình THẬT (is_test = false) — CẤM tiếp nhận`)
+    if (p.status !== 'active') reasons.push(`${m}: trạng thái ${String(p.status)} (chỉ nhận active — chưa chốt)`)
+    if (p.qa_created !== true || p.created_in_donor !== true) reasons.push(`${m}: không do tài khoản QA tạo trong cửa sổ donor`)
+    if (p.running !== 0) reasons.push(`${m}: đang có run chạy / không đọc được số run đang chạy`)
+    const want = donor.runIdsByProgram[id] ?? []
+    if (p.not_locked !== true) reasons.push(`${m}: đã chốt kỳ`)
+    if (p.unchanged_since_close !== true) reasons.push(`${m}: chương trình bị sửa sau khi cửa sổ donor đóng`)
+    const runs = Array.isArray(p.donor_runs) ? (p.donor_runs as CmsQaContinuationRunRow[]) : []
+    if (runs.length !== want.length || !want.every((w) => runs.some((r) => r.id === w))) { reasons.push(`${m}: không đọc đủ run donor trong DB`); continue }
+    if (!runs.every((r) => r.status === 'ok' && r.is_test === true && r.kind === 'sales' && r.qa_run_id === donor.runId && /^\d+$/.test(String(r.started_us)))) { reasons.push(`${m}: có run donor không còn ok / is_test / đúng tag run donor`); continue }
+    const last = runs.reduce((a, b) => (BigInt(b.started_us) > BigInt(a.started_us) ? b : a))
+    if (p.current_run_id !== last.id) reasons.push(`${m}: con trỏ kết quả hiện tại không phải run mới nhất donor đã đối soát`)
+    // security review P2-3: không so null với null — cv phải là số nguyên ≥ 1, cách tính / policy phải là chuỗi có nội dung ở CẢ chương trình và run.
+    const cvP = Number(p.config_version), cvR = Number(last.cv)
+    const str = (v: unknown): v is string => typeof v === 'string' && v.length > 0
+    if (!Number.isInteger(cvP) || cvP < 1 || p.config_version === null || last.cv === null || !str(p.quantity_basis) || !str(p.returns_policy) || !str(last.basis) || !str(last.policy)) {
+      reasons.push(`${m}: thiếu cấu hình / cách tính / policy ở chương trình hoặc run (không so được hợp đồng)`)
+    } else if (cvP !== cvR || p.quantity_basis !== last.basis || p.returns_policy !== last.policy) {
+      reasons.push(`${m}: cấu hình / cách tính / policy hiện tại khác hợp đồng của run đã đối soát (đã bị sửa sau cửa sổ donor)`)
+    }
+  }
+  return reasons.length ? { ok: false, reasons } : { ok: true }
+}
+
+/** Manifest cửa sổ mới nhận chương trình donor: chỉ launcher gọi, sau khi cả hai phép kiểm trên đạt. */
+export function cmsQaManifestContinue(m: CmsQaRunManifest, donor: CmsQaContinuationDonor): CmsQaRunManifest & { continuedFrom: CmsQaContinuedFrom } {
+  if (m.status !== 'open' || m.programs.length !== 0) throw new Error('chỉ tiếp nhận vào manifest mới mở, chưa có chương trình')
+  if (m.mode !== 'manual-headless') throw new Error('tiếp tục chỉ cho run headless')
+  if (m.runId === donor.runId) throw new Error('run mới trùng runId donor')
+  if (!(Date.parse(m.startedAt) > Date.parse(donor.closedAt))) throw new Error('mốc run mới phải SAU mốc đóng donor (không lùi startedAt)')
+  let out = m
+  for (const id of donor.programIds) out = cmsQaManifestAddProgram(out, id)
+  out = { ...out, programs: out.programs.map((p) => ({ ...p, status: 'adopted' })) }
+  return { ...out, continuedFrom: { runId: donor.runId, sha256: donor.sha256, programs: [...donor.programIds], closedAt: donor.closedAt } }
 }
