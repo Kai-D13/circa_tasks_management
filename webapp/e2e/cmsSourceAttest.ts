@@ -28,7 +28,7 @@ import type { CmsI4Context } from './cmsI4Offline'
 import {
   cmsQaAgeStatusRows, cmsQaIoTimeoutMs, cmsQaLockLocalCheck, cmsQaWriterDbCheck, cmsQaWriterProgramSql, type CmsQaWriterProgramRow,
 } from './cmsQaResults'
-import { CMS_QA_GUARD_MINUTES_MIN, cmsQaStatusSql, type CmsQaRunManifest, type CmsQaStatusRow } from './cmsQaTooling'
+import { CMS_QA_GUARD_MINUTES_MIN, cmsQaRunLiveness, cmsQaStatusSql, type CmsQaRunManifest, type CmsQaStatusRow } from './cmsQaTooling'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const ISO_UTC_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/
@@ -560,6 +560,10 @@ export interface CmsAttestGuardDeps {
   git(): { treeClean: boolean; gitHead: string; gitTree: string } | null
   pidAlive(pid: number): boolean
   portOpen(port: number): Promise<boolean>
+  /** P4-A (manual-headless): nội dung heartbeat của run, đọc ĐỒNG BỘ; null = không có. Vắng hàm ⇒ coi như không có heartbeat. */
+  heartbeatText?(runId: string): string | null
+  /** P4-A: đồng hồ TƯỜNG (epoch ms) để tính tuổi heartbeat; vắng ⇒ Date.now(). */
+  wallNow?(): number
   /** Một câu SELECT chỉ đọc qua pg-meta với timeout cho trước (ms nguyên). */
   read(sql: string, timeoutMs: number): Promise<unknown[]>
 }
@@ -573,6 +577,8 @@ export interface CmsAttestGuardInput {
   actorId: string
   programId: string
   deadlineAt: number
+  /** Trạng thái chương trình được phép (mặc định 'active'); báo cáo sau chốt QA truyền ['locked']. */
+  statuses?: readonly string[]
 }
 
 function cmsAttestGuardLocal(d: CmsAttestGuardDeps, i: CmsAttestGuardInput, portUp: boolean): string[] {
@@ -582,9 +588,10 @@ function cmsAttestGuardLocal(d: CmsAttestGuardDeps, i: CmsAttestGuardInput, port
   if (!cur || cur.status !== 'open') return ['manifest run QA không còn mở']
   const g = d.git()
   if (!g) return ['không đọc được Git']
-  const c = cur as CmsQaRunManifest & { launcherPid?: unknown }
-  const launcherAlive = portUp && c.port !== null && c.serverPid !== null && !c.serverNotStopped && Number.isInteger(c.launcherPid)
-    && d.pidAlive(c.launcherPid as number) && d.pidAlive(c.serverPid as number)
+  // Liveness qua helper CHUNG (localhost: pid + cổng đã thăm; headless: heartbeat của lượt đọc đồng bộ NGAY lúc này).
+  let hbText: string | null = null
+  if (cur.mode === 'manual-headless') { try { hbText = d.heartbeatText ? d.heartbeatText(cur.runId) : null } catch { hbText = null } }
+  const launcherAlive = cmsQaRunLiveness(cur, { pidAlive: d.pidAlive, portUp, heartbeatText: hbText, nowMs: d.wallNow ? d.wallNow() : Date.now() }).alive
   const local = cmsQaLockLocalCheck({ manifest: cur, confirmRun: i.confirmRun, host: i.host, ...g, launcherAlive, actorId: i.actorId })
   return local.ok ? [] : local.reasons
 }
@@ -622,7 +629,7 @@ export async function cmsAttestQaGuard(d: CmsAttestGuardDeps, i: CmsAttestGuardI
         if (!reasons.length) {
           const aged = cmsQaAgeStatusRows(statusRows as CmsQaStatusRow[], d.now() - t0)
           const c = cmsQaWriterDbCheck({ manifest: i.manifest, programId: i.programId, programRows: programRows as CmsQaWriterProgramRow[], statusRows: aged,
-            guardMinutes: CMS_QA_GUARD_MINUTES_MIN })
+            guardMinutes: CMS_QA_GUARD_MINUTES_MIN, ...(i.statuses ? { statuses: i.statuses } : {}) })
           if (!c.ok) reasons.push(...c.reasons)
         }
         if (reasons.length) return { ok: false, code: 'GUARD_BLOCKED', reasons }

@@ -761,6 +761,105 @@ async function main() {
   ok(!fs.existsSync(markerFile) && !fs.existsSync(writersDir2) && !fs.existsSync(writersDir3) && !fs.existsSync(archived2), `§7: không để lại ${G.CMS_QA_MARKER} / sổ`)
   if (REAL_GIT) ok(git('status', '--porcelain', '--untracked-files=all') === '' && git('rev-parse', 'HEAD') === head, 'Git thật: cây vẫn sạch, HEAD không đổi sau §7')
 
+  // ── §8 (P4-A, PM 22/11 §3 A1 / §4): launcher HEADLESS chạy THẬT thành tiến trình con — manifest + heartbeat + liveness chung ──
+  section(`8. Launcher headless (P4-A): tiến trình thật — heartbeat của lượt, writer trong run headless, close, launcher chết / nhịp giả / canh marker dừng · Git ${REAL_GIT ? 'THẬT' : 'giả qua preload'}`)
+  {
+    await db.exec(`UPDATE public.cms_qa_access SET expires_at = now() + interval '3 hours' WHERE true`)
+    const hbOf = (rid) => path.join(ROOT, 'qa-artifacts', 'cms-qa', `${rid}.heartbeat.json`)
+    const readHb = (rid) => { try { const p = T.parseCmsQaHeartbeat(fs.readFileSync(hbOf(rid), 'utf8')); return p.ok ? p.value : null } catch { return null } }
+    const startHeadless = (extra = []) => {
+      const ch = spawn(process.execPath, [...PRE, path.join(ROOT, 'scripts', 'cms-qa-run.mjs'), 'start', `--users=${U.A},${SUPER}`, '--headless', ...extra], { cwd: ROOT, env: childEnv(WG) })
+      const st = { ch, out: '', code: undefined, signal: undefined }
+      ch.stdout.on('data', (d) => { st.out += d }); ch.stderr.on('data', (d) => { st.out += d })
+      st.closed = new Promise((res) => ch.on('close', (code, signal) => { st.code = code; st.signal = signal; res() }))
+      return st
+    }
+    const waitFor = async (fn, ms) => { for (let t = 0; t < ms; t += 100) { if (fn()) return true; await sleep(100) } return fn() }
+    const curManifest = () => { try { const p = T.parseCmsQaManifest(fs.readFileSync(markerFile, 'utf8')); return p.ok ? p.value : null } catch { return null } }
+    const toClean = []
+
+    // 8a — start thật: manifest mode headless + heartbeat active của đúng lượt
+    const L1 = startHeadless()
+    const up = await waitFor(() => { const m = curManifest(); return !!m && readHb(m.runId)?.state === 'active' }, 90_000)
+    const m4 = curManifest()
+    const rid4 = m4?.runId ?? 'cms-qa-00000000-0000'
+    const wdir4 = path.join(ROOT, 'qa-artifacts', 'cms-qa', `${rid4}.writers`), arch4 = path.join(ROOT, 'qa-artifacts', 'cms-qa', `${rid4}.json`)
+    toClean.push(wdir4, arch4, hbOf(rid4))
+    const hb1 = readHb(rid4)
+    ok(up && m4?.mode === 'manual-headless' && m4.port === null && (m4.serverPid ?? null) === null && m4.launcherPid === L1.ch.pid && /^[0-9a-f]{32}$/.test(m4.headless?.nonce ?? '')
+      && hb1?.nonce === m4.headless.nonce && hb1.launcherPid === L1.ch.pid && hb1.runId === rid4 && L1.code === undefined,
+    'start --headless: manifest manual-headless (không cổng / server, pid launcher + nonce lượt) + heartbeat active của đúng lượt; launcher còn chạy', L1.out.slice(-500))
+    ok(!/build|standalone|BUILD_ID/i.test(L1.out.split('\n').filter((l) => /^(CHẶN|LỖI|FAIL)/.test(l)).join('\n')) && /launcher HEADLESS \(không web server/.test(L1.out), 'không đòi build standalone / cổng; in rõ mode headless')
+    await sleep(6_000)
+    const hb2 = readHb(rid4)
+    ok(hb2 && hb1 && hb2.seq > hb1.seq && hb2.at > hb1.at, 'heartbeat tăng nhịp theo thời gian (seq / at)', JSON.stringify({ a: hb1?.seq, b: hb2?.seq }))
+    r = await run('cms-qa-run.mjs', ['status'])
+    exp(r, 0, 'status: launcher CÒN SỐNG + còn canh', /launcher: CÒN SỐNG/.test(r.out) && /manual-headless|headless/.test(JSON.stringify(m4)))
+
+    // 8b — lệnh ghi QA trong run headless (writer nguồn giả — hồi quy đường cũ trên mode mới) + close bị chặn khi launcher còn chạy
+    const QH = uid(5107)
+    await db.exec(mkProg(QH, 7, false))
+    const pubH = (rid = rid4) => run('cms-qa-results.mjs', ['publish', `--program=${QH}`, `--staff=${U.A}`, `--confirm-run=${rid}`, '--lines-per-staff=60'], WG, PRE)
+    const ledgersH = () => (fs.existsSync(wdir4) ? fs.readdirSync(wdir4).filter((f) => /^w-[0-9a-f]{12}\.json$/.test(f)) : [])
+    r = await pubH()
+    exp(r, 0, 'publish (nguồn giả) TRONG run headless ⇒ đạt — liveness theo heartbeat, không cần cổng', ledgersH().length === 1 && /"status":"published"/.test(r.out))
+    r = await run('cms-qa-results.mjs', ['publish', `--program=${QH}`, `--confirm-run=${rid4}`, '--source=bq', '--expect-cv=1', '--expect-basis=pos_base', '--expect-policy=sales_only_v1'], WG, PRE)
+    exp(r, 2, 'publish --source=bq thiếu cờ / view PROCESS trong run headless ⇒ chặn trước IO, không sổ', r.reqs === 0 && ledgersH().length === 1 && /biến PROCESS/.test(r.out))
+    r = await closeRun()
+    exp(r, 2, 'close khi launcher headless CÒN CHẠY ⇒ chặn (manifest giữ)', fs.existsSync(markerFile) && /launcher headless của run còn chạy/.test(r.out))
+
+    // 8c — launcher CHẾT đột ngột (không kịp ghi nhịp stopped): pid không còn ⇒ mọi lệnh ghi bị chặn NGAY, không sổ mới
+    L1.ch.kill('SIGKILL')
+    await L1.closed
+    r = await run('cms-qa-run.mjs', ['status'])
+    exp(r, 0, 'launcher bị giết ⇒ status: KHÔNG sống (pid launcher không còn)', /launcher: KHÔNG sống \(pid launcher không còn\)/.test(r.out))
+    r = await pubH()
+    exp(r, 2, 'ĐỐI CHỨNG ÂM launcher chết: publish bị chặn trước IO, không sổ mới', r.reqs === 0 && ledgersH().length === 1 && /launcher \/ server QA của run không còn chạy/.test(r.out))
+    // 8d — ĐỐI CHỨNG ÂM headless giả sống: pid "sống" (tiến trình KHÁC — pid tái sử dụng) nhưng nhịp không thuộc lượt / đã cũ
+    const realText = fs.readFileSync(markerFile, 'utf8')
+    fs.writeFileSync(markerFile, JSON.stringify({ ...m4, launcherPid: process.pid }, null, 2))
+    r = await run('cms-qa-run.mjs', ['status'])
+    exp(r, 0, 'pid launcher bị tiến trình khác dùng lại (pid sống), nhịp cũ của launcher chết ⇒ KHÔNG sống (nhịp không thuộc lượt)', /launcher: KHÔNG sống \(heartbeat không thuộc lượt launcher/.test(r.out))
+    const forge = (o) => fs.writeFileSync(hbOf(rid4), JSON.stringify({ kind: 'cms-qa-heartbeat', version: 1, runId: rid4, launcherPid: process.pid, nonce: m4.headless.nonce, seq: 999, at: Date.now(), state: 'active', reason: null, ...o }))
+    forge({ nonce: 'f'.repeat(32) })
+    r = await pubH()
+    exp(r, 2, 'nhịp mới nhưng SAI nonce lượt ⇒ publish bị chặn', r.reqs === 0 && ledgersH().length === 1)
+    forge({ at: Date.now() - 60_000 })
+    r = await run('cms-qa-run.mjs', ['status'])
+    exp(r, 0, 'nhịp đúng nonce nhưng CŨ 60 s (launcher treo) ⇒ KHÔNG sống', /launcher: KHÔNG sống \(heartbeat cũ/.test(r.out))
+    forge({ state: 'stopped', reason: 'Ctrl+C' })
+    r = await pubH()
+    exp(r, 2, 'nhịp stopped ⇒ publish bị chặn', r.reqs === 0 && ledgersH().length === 1)
+    fs.writeFileSync(markerFile, realText)
+    // 8e — close sau khi launcher đã dừng: đối chiếu đủ chương trình / run sales / sổ như mode có server
+    r = await closeRun()
+    const a4 = readJson(arch4)
+    exp(r, 0, 'close run headless: đối chiếu đạt, manifest lưu trữ giữ mode manual-headless', !fs.existsSync(markerFile) && a4?.mode === 'manual-headless' && a4.status === 'closed', r.out.slice(-600))
+
+    // 8f — canh marker dừng THẬT (marker bị thu giữa run): launcher tự thoát mã 1, nhịp cuối = stopped, lệnh ghi bị chặn
+    const L2 = startHeadless()
+    const up2 = await waitFor(() => { const m = curManifest(); return !!m && m.runId !== rid4 && readHb(m.runId)?.state === 'active' }, 90_000)
+    const m5 = curManifest()
+    const rid5 = m5?.runId ?? 'cms-qa-00000000-0001'
+    toClean.push(path.join(ROOT, 'qa-artifacts', 'cms-qa', `${rid5}.writers`), path.join(ROOT, 'qa-artifacts', 'cms-qa', `${rid5}.json`), hbOf(rid5))
+    await db.exec(`DELETE FROM public.cms_qa_access WHERE user_id = '${U.A}'`)
+    const exited = await Promise.race([L2.closed.then(() => true), sleep(150_000).then(() => false)])
+    if (!exited) { L2.ch.kill('SIGKILL'); await L2.closed }
+    const hb5 = readHb(rid5)
+    ok(up2 && exited && L2.code === 1 && L2.signal === null && hb5?.state === 'stopped' && /DỪNG launcher headless/.test(L2.out) && !/Assertion failed|UV_HANDLE_CLOSING/.test(L2.out),
+      'marker bị thu giữa run ⇒ canh marker dừng: launcher TỰ thoát mã 1, nhịp cuối stopped, báo DỪNG MỌI THAO TÁC', JSON.stringify({ up2, exited, code: L2.code, hb: hb5?.state }) + L2.out.slice(-400))
+    r = await run('cms-qa-run.mjs', ['status'])
+    exp(r, 0, 'sau khi canh dừng ⇒ status: KHÔNG sống', /launcher: KHÔNG sống/.test(r.out))
+    r = await pubH(rid5)
+    exp(r, 2, 'sau khi canh dừng ⇒ publish bị chặn trước IO', r.reqs === 0)
+    // Dọn ĐÚNG đường dẫn §8 tạo (run 5 cố ý không close: marker đã thu).
+    await db.exec(`INSERT INTO public.cms_qa_access (user_id, granted_by, expires_at) VALUES ('${U.A}', 'qa-script:harness', now() + interval '2 hours') ON CONFLICT (user_id) DO UPDATE SET expires_at = EXCLUDED.expires_at`)
+    fs.rmSync(markerFile, { force: true })
+    for (const p of toClean) fs.rmSync(p, { recursive: true, force: true })
+    ok(!fs.existsSync(markerFile) && toClean.every((p) => !fs.existsSync(p)), `§8: không để lại ${G.CMS_QA_MARKER} / sổ / heartbeat`)
+    if (REAL_GIT) ok(git('status', '--porcelain', '--untracked-files=all') === '' && git('rev-parse', 'HEAD') === head, 'Git thật: cây vẫn sạch, HEAD không đổi sau §8')
+  }
+
   await new Promise((res) => server.close(res))
   await db.close()
   fs.rmSync(tmp, { recursive: true, force: true })

@@ -537,7 +537,12 @@ export interface CmsQaRunManifest {
   version: 1
   runId: string
   status: 'open' | 'closed'
-  mode: 'manual-localhost' | 'automated'
+  /** manual-headless (P4-A): launcher có canh marker nhưng KHÔNG dựng web server — chỉ cho các CLI QA có sổ; liveness theo heartbeat. */
+  mode: 'manual-localhost' | 'manual-headless' | 'automated'
+  /** pid của launcher (nơi chạy canh marker). Manifest cũ không có ⇒ writer từ chối. */
+  launcherPid?: number
+  /** manual-headless: nhận diện LƯỢT launcher (ngẫu nhiên, 32 hex) — heartbeat phải mang đúng nonce này (pid tái sử dụng không giả được). */
+  headless?: { nonce: string } | null
   host: string
   /** Giờ DB lúc preflight (ISO UTC) — mốc lọc chương trình khi đóng run. */
   startedAt: string
@@ -614,7 +619,230 @@ export function parseCmsQaManifest(text: string): Parsed<CmsQaRunManifest> {
   if (ns !== undefined && ns !== null && !(typeof ns === 'object' && (ns.pid === null || (Number.isInteger(ns.pid) && (ns.pid as number) > 0 && (ns.pid as number) <= 2_147_483_647)) && typeof ns.at === 'string')) {
     return { ok: false, reason: 'manifest sai serverNotStopped' }
   }
+  // manual-headless: dạng chặt — không cổng / server, có pid launcher + nonce lượt (thiếu ⇒ hỏng, không suy diễn thành mode khác).
+  if (o.mode === 'manual-headless') {
+    if (o.port !== null || (o.serverPid ?? null) !== null) return { ok: false, reason: 'manifest headless không được có port / serverPid' }
+    if (!Number.isInteger(o.launcherPid) || (o.launcherPid as number) <= 0) return { ok: false, reason: 'manifest headless thiếu launcherPid' }
+    if (!o.headless || typeof o.headless.nonce !== 'string' || !CMS_QA_NONCE_RE.test(o.headless.nonce)) return { ok: false, reason: 'manifest headless thiếu nonce lượt' }
+  } else if (o.headless !== undefined && o.headless !== null) {
+    return { ok: false, reason: 'manifest không phải headless nhưng có khối headless' }
+  }
   return { ok: true, value: o as CmsQaRunManifest }
+}
+
+// ── Mode launcher + liveness dùng chung (P4-A — PM 22/11 §3 A1) ──────────────────────────────────────────────────────────────
+// MỘT helper cho mọi CLI ghi trong run (writer kết quả, chốt, chứng nhận, báo cáo sau chốt) và cho close: không CLI nào tự suy
+// "launcher còn sống" bằng điều kiện riêng. Hai mode thủ công hợp lệ:
+//  · manual-localhost: như cũ — pid launcher + pid server con + cổng còn nhận kết nối, không cờ serverNotStopped;
+//  · manual-headless: KHÔNG web server ⇒ không có cổng để thăm. Bằng chứng sống = pid launcher + HEARTBEAT của đúng lượt (runId + pid +
+//    nonce ngẫu nhiên ghi trong manifest), trạng thái active, tuổi ≤ CMS_QA_HEARTBEAT_MAX_AGE_MS. Launcher chỉ ghi nhịp khi canh marker
+//    chưa dừng; treo / chết / Ctrl+C ⇒ nhịp cũ hoặc 'stopped' ⇒ không sống. pid bị tiến trình khác dùng lại không ghi được nhịp mới.
+// `--no-server` / automated KHÔNG BAO GIỜ sống (không canh marker) — port null không phải bằng chứng gì.
+
+export const CMS_QA_NONCE_RE = /^[0-9a-f]{32}$/
+/** Nhịp heartbeat của launcher headless (cùng nhịp tick canh marker). */
+export const CMS_QA_HEARTBEAT_MS = 5_000
+/** Heartbeat cũ hơn chừng này ⇒ launcher coi như không còn canh (4 nhịp). */
+export const CMS_QA_HEARTBEAT_MAX_AGE_MS = 20_000
+/** Heartbeat "ở tương lai" quá chừng này (đồng hồ bị chỉnh) ⇒ không tin. */
+export const CMS_QA_HEARTBEAT_FUTURE_MS = 5_000
+
+export type CmsQaLauncherMode = 'manual-localhost' | 'manual-headless' | 'no-server'
+
+/** Cờ dòng lệnh của `start` ⇒ mode. `--headless` và `--no-server` không đi cùng nhau. */
+export function cmsQaLauncherMode(i: { noServer: boolean; headless: boolean }): Parsed<CmsQaLauncherMode> {
+  if (i.noServer && i.headless) return { ok: false, reason: '--headless không dùng cùng --no-server (headless có canh marker, --no-server thì không)' }
+  return { ok: true, value: i.headless ? 'manual-headless' : i.noServer ? 'no-server' : 'manual-localhost' }
+}
+
+/** Mode có canh marker của launcher (điều kiện cho mọi lệnh ghi QA có sổ và cho --with-lock). */
+export function cmsQaModeWatched(mode: CmsQaLauncherMode | CmsQaRunManifest['mode']): boolean {
+  return mode === 'manual-localhost' || mode === 'manual-headless'
+}
+
+export interface CmsQaHeartbeat {
+  kind: 'cms-qa-heartbeat'
+  version: 1
+  runId: string
+  launcherPid: number
+  nonce: string
+  seq: number
+  /** Đồng hồ tường của máy launcher (epoch ms) lúc ghi. */
+  at: number
+  state: 'active' | 'stopped'
+  reason: string | null
+}
+
+export function newCmsQaHeartbeat(i: Omit<CmsQaHeartbeat, 'kind' | 'version'>): CmsQaHeartbeat {
+  const hb: CmsQaHeartbeat = { kind: 'cms-qa-heartbeat', version: 1, ...i }
+  const p = parseCmsQaHeartbeat(JSON.stringify(hb))
+  if (!p.ok) throw new Error(`heartbeat không hợp lệ (${p.reason})`)
+  return hb
+}
+
+export function parseCmsQaHeartbeat(text: string): Parsed<CmsQaHeartbeat> {
+  let o: Partial<CmsQaHeartbeat>
+  try { o = JSON.parse(text) } catch { return { ok: false, reason: 'heartbeat không phải JSON' } }
+  if (!o || typeof o !== 'object' || o.kind !== 'cms-qa-heartbeat' || o.version !== 1) return { ok: false, reason: 'heartbeat sai loại / phiên bản' }
+  if (typeof o.runId !== 'string' || !o.runId) return { ok: false, reason: 'heartbeat thiếu runId' }
+  if (!Number.isInteger(o.launcherPid) || (o.launcherPid as number) <= 0) return { ok: false, reason: 'heartbeat sai pid' }
+  if (typeof o.nonce !== 'string' || !CMS_QA_NONCE_RE.test(o.nonce)) return { ok: false, reason: 'heartbeat sai nonce' }
+  if (!Number.isInteger(o.seq) || (o.seq as number) < 0) return { ok: false, reason: 'heartbeat sai seq' }
+  if (!Number.isSafeInteger(o.at) || (o.at as number) <= 0) return { ok: false, reason: 'heartbeat sai thời điểm' }
+  if (o.state !== 'active' && o.state !== 'stopped') return { ok: false, reason: 'heartbeat sai trạng thái' }
+  if (o.reason !== null && typeof o.reason !== 'string') return { ok: false, reason: 'heartbeat sai lý do' }
+  return { ok: true, value: o as CmsQaHeartbeat }
+}
+
+/** Dạng TĨNH của manifest có hợp lệ cho lệnh ghi QA không (chưa nói còn sống). null = hợp lệ; chuỗi = lý do chặn. */
+export function cmsQaWatchedShapeReason(m: CmsQaRunManifest): string | null {
+  if (m.mode === 'manual-localhost') return m.port === null ? 'run không có server QA (--no-server) — lệnh ghi QA chỉ chạy trong run launcher có canh marker' : null
+  if (m.mode === 'manual-headless') {
+    return m.port === null && !!m.headless && CMS_QA_NONCE_RE.test(m.headless.nonce) ? null : 'manifest headless sai dạng (port / nonce) — mở run mới bằng launcher hiện hành'
+  }
+  return 'run không có server QA / canh marker (automated) — lệnh ghi QA chỉ chạy trong run launcher có canh marker'
+}
+
+export interface CmsQaLivenessProbes {
+  pidAlive(pid: number): boolean
+  /** manual-localhost: cổng server QA còn nhận kết nối (đã thăm trước, async). Mode khác: bỏ qua. */
+  portUp: boolean
+  /** manual-headless: nội dung tệp heartbeat của run đọc NGAY lúc kiểm (đồng bộ); null = không có / không đọc được. */
+  heartbeatText: string | null
+  /** Đồng hồ tường (epoch ms) — cùng máy với launcher. */
+  nowMs: number
+}
+
+/**
+ * P4-A r1 (PM 22/11 R2-c) — `close` của run headless: "launcher ĐÃ THOÁT chưa" là câu hỏi KHÁC với "launcher đủ khoẻ để được ghi"
+ * (cmsQaRunLiveness cố ý trả không-sống khi nhịp cũ / stopped). Nhịp cũ / stopped KHÔNG phải bằng chứng tiến trình đã thoát ⇒ pid launcher
+ * còn sống là CHƯA close, bất kể heartbeat. Pid không xác định / không kiểm được ⇒ dừng để operator xác minh. Không tự kill, không sửa
+ * manifest. null = được đi tiếp (pid không còn); chuỗi = lý do chặn. Mode khác headless ⇒ null (giữ kiểm cổng / serverNotStopped cũ).
+ */
+export function cmsQaHeadlessCloseBlock(m: CmsQaRunManifest, pidAlive: (pid: number) => boolean): string | null {
+  if (m.mode !== 'manual-headless') return null
+  const lp = m.launcherPid
+  if (!Number.isInteger(lp) || (lp as number) <= 0) return 'manifest headless không ghi pid launcher — không xác định được launcher đã thoát; báo PM / operator, không sửa manifest tay'
+  let alive: boolean
+  try { alive = pidAlive(lp as number) } catch { return `không kiểm được pid launcher ${lp} — xác minh bằng tasklist rồi chạy lại close; không sửa manifest tay` }
+  if (!alive) return null
+  return `pid launcher headless ${lp} CÒN SỐNG — Ctrl+C ở cửa sổ launcher và chờ tiến trình thoát rồi mới close (heartbeat cũ / stopped KHÔNG phải bằng chứng đã thoát). Launcher treo ⇒ operator tự dừng đúng pid đó sau khi xác minh bằng tasklist; nếu pid ${lp} nay là tiến trình KHÁC (pid bị dùng lại) ⇒ dừng, báo PM / operator — công cụ không tự kill, không sửa manifest`
+}
+
+/** Launcher của run còn sống VÀ còn canh marker? Mọi CLI ghi và close dùng CHUNG hàm này. Không ném. */
+export function cmsQaRunLiveness(m: CmsQaRunManifest, p: CmsQaLivenessProbes): { alive: true } | { alive: false; reason: string } {
+  const dead = (reason: string) => ({ alive: false as const, reason })
+  if (m.status !== 'open') return dead('manifest run không còn mở')
+  const shape = cmsQaWatchedShapeReason(m)
+  if (shape !== null) return dead(shape)
+  const lp = m.launcherPid
+  if (!Number.isInteger(lp) || (lp as number) <= 0) return dead('manifest không ghi launcherPid (launcher cũ)')
+  let lpAlive = false
+  try { lpAlive = p.pidAlive(lp as number) } catch { lpAlive = false }
+  if (!lpAlive) return dead('pid launcher không còn')
+  if (m.mode === 'manual-localhost') {
+    if (m.serverNotStopped) return dead('launcher đã ghi server CHƯA DỪNG')
+    if (m.serverPid === null || m.serverPid === undefined) return dead('manifest chưa ghi pid server QA')
+    let spAlive = false
+    try { spAlive = p.pidAlive(m.serverPid) } catch { spAlive = false }
+    if (!spAlive) return dead('pid server QA không còn')
+    return p.portUp === true ? { alive: true } : dead('cổng server QA không còn mở')
+  }
+  // manual-headless
+  if (p.heartbeatText === null) return dead('không có heartbeat của launcher headless')
+  const hb = parseCmsQaHeartbeat(p.heartbeatText)
+  if (!hb.ok) return dead(hb.reason)
+  const h = hb.value
+  if (h.runId !== m.runId || h.launcherPid !== lp || h.nonce !== m.headless?.nonce) return dead('heartbeat không thuộc lượt launcher của run (runId / pid / nonce lệch)')
+  if (h.state !== 'active') return dead(`launcher headless đã dừng canh (${(h.reason ?? '—').slice(0, 120)})`)
+  if (!Number.isFinite(p.nowMs)) return dead('không đọc được đồng hồ')
+  const age = p.nowMs - h.at
+  if (age > CMS_QA_HEARTBEAT_MAX_AGE_MS) return dead(`heartbeat cũ ${Math.floor(age / 1000)} s > ${CMS_QA_HEARTBEAT_MAX_AGE_MS / 1000} s — launcher treo / đã chết`)
+  if (age < -CMS_QA_HEARTBEAT_FUTURE_MS) return dead('heartbeat ở tương lai (đồng hồ máy bị chỉnh) — không tin')
+  return { alive: true }
+}
+
+/**
+ * Vòng đời launcher HEADLESS (không tiến trình con): canh marker như launcher có server (cùng createCmsQaWatchdog + loop poll / deadline
+ * độc lập) và ghi heartbeat mỗi nhịp. Thứ tự MỖI nhịp: `check()` (manifest còn của lượt, cây Git không đổi — chuỗi ⇒ dừng) → hạn dừng
+ * độc lập của canh marker → mới ghi nhịp 'active'. Bất kỳ điều kiện dừng nào ⇒ KHÔNG ghi nhịp active nữa, cố ghi 'stopped' (lỗi ghi ⇒
+ * nhịp cũ tự quá hạn). Không ghi được nhịp ⇒ dừng (fail-closed). Mã: operator (Ctrl+C / SIGTERM) 0 · canh marker / lỗi 1.
+ * Mọi phụ thuộc tiêm vào ⇒ test bằng đồng hồ / timer giả.
+ */
+export async function runCmsQaHeadlessLifecycle(d: {
+  watchdog: CmsQaWatchdog
+  preRows: readonly CmsQaStatusRow[]
+  preStartedAt: number
+  poll: (signal: AbortSignal) => Promise<CmsQaStatusRow[]>
+  /** Ghi heartbeat ĐỒNG BỘ; ném khi không ghi được. */
+  beat: (state: 'active' | 'stopped', reason: string | null) => void
+  /** Kiểm đồng bộ mỗi nhịp; chuỗi = lý do dừng. Ném ⇒ dừng. */
+  check?: () => string | null
+  now: () => number
+  setInterval: (fn: () => void, ms: number) => unknown
+  clearInterval: (h: unknown) => void
+  onSignal: (sig: 'SIGINT' | 'SIGTERM', fn: () => void) => void
+  offSignal: (sig: 'SIGINT' | 'SIGTERM', fn: () => void) => void
+  log: (line: string) => void
+  pollMs?: number
+  tickMs?: number
+  beatMs?: number
+}): Promise<{ rc: 0 | 1; stopKind: Exclude<CmsQaStopKind, null>; reason: string; beats: number }> {
+  const short = (e: unknown) => String((e as Error)?.message ?? e).split('\n')[0].slice(0, 200)
+  let done: { kind: Exclude<CmsQaStopKind, null>; reason: string } | null = null
+  let wake: () => void = () => {}
+  const settled = new Promise<void>((r) => { wake = r })
+  const pollAbort = new AbortController()
+  let loop: { stop(): void; dispose(): void } | null = null
+  let beatTimer: unknown = null
+  let beats = 0
+  let signalsOn = false
+  const onSigint = () => stop('operator', 'Ctrl+C')
+  const onSigterm = () => stop('operator', 'SIGTERM')
+  function stop(kind: Exclude<CmsQaStopKind, null>, reason: string) {
+    if (done) return
+    done = { kind, reason }
+    loop?.dispose()
+    pollAbort.abort()
+    if (beatTimer !== null) { d.clearInterval(beatTimer); beatTimer = null }
+    d.log(`DỪNG launcher headless: ${reason} — DỪNG MỌI THAO TÁC QA; lệnh ghi QA mới sẽ bị chặn`)
+    try { d.beat('stopped', reason) } catch (e) { d.log(`không ghi được heartbeat 'stopped' (${short(e)}) — nhịp cũ tự quá hạn sau ${CMS_QA_HEARTBEAT_MAX_AGE_MS / 1000} s`) }
+    if (signalsOn) { d.offSignal('SIGINT', onSigint); d.offSignal('SIGTERM', onSigterm); signalsOn = false }
+    wake()
+  }
+  const pulse = () => {
+    if (done) return
+    let bad: string | null
+    try { bad = d.check ? d.check() : null } catch (e) { bad = `kiểm lượt lỗi: ${short(e)}` }
+    if (bad !== null) return stop('error', bad)
+    const v = d.watchdog.tick(d.now())
+    if (v.stop) return stop('watchdog', v.reason ?? 'canh marker dừng')
+    try { d.beat('active', null); beats++ } catch (e) { stop('error', `không ghi được heartbeat (${short(e)})`) }
+  }
+  try {
+    const first = d.watchdog.onResult(d.preRows, d.preStartedAt)
+    if (first.stop) stop('watchdog', first.reason ?? 'marker không đủ hạn')
+    else {
+      if (d.watchdog.stopAt !== null) d.log(`canh marker: hạn dừng độc lập ${new Date(d.watchdog.stopAt).toISOString()}`)
+      d.onSignal('SIGINT', onSigint)
+      d.onSignal('SIGTERM', onSigterm)
+      signalsOn = true
+      pulse() // nhịp đầu: sau nó các CLI mới thấy launcher sống
+      if (!done) {
+        loop = startCmsQaWatchdogLoop({
+          watchdog: d.watchdog, poll: () => d.poll(pollAbort.signal), now: d.now,
+          setInterval: d.setInterval, clearInterval: d.clearInterval, onStop: (why) => stop('watchdog', why),
+          pollMs: d.pollMs, tickMs: d.tickMs,
+        })
+        beatTimer = d.setInterval(pulse, d.beatMs ?? CMS_QA_HEARTBEAT_MS)
+      }
+    }
+  } catch (e) {
+    stop('error', `lỗi dựng canh marker: ${short(e)}`)
+  }
+  await settled
+  const fin = done as unknown as { kind: Exclude<CmsQaStopKind, null>; reason: string }
+  return { rc: cmsQaServerExitCode(fin.kind), stopKind: fin.kind, reason: fin.reason, beats }
 }
 
 /**

@@ -13,7 +13,7 @@
 // chạy / không rõ kết thúc ⇒ close từ chối; mọi run sales QA trong cửa sổ phải đi qua writer; run sales của chương trình
 // thật trong cửa sổ ⇒ ĐỎ khi cổng kết quả HOLD (SALES_ONLY_V1 ⇒ cảnh báo).
 
-import type { CmsQaRunManifest, CmsQaStatusRow } from './cmsQaTooling'
+import { cmsQaModeWatched, cmsQaWatchedShapeReason, type CmsQaLauncherMode, type CmsQaRunManifest, type CmsQaStatusRow } from './cmsQaTooling'
 import { cmsCanPublishResults } from '../lib/cms/releaseGate'
 import { CMS_DEC_FACTOR, formatCmsDecimal, parseCmsDecimal } from '../lib/cms/decimal'
 import type { CmsSalesSyncDeps } from '../lib/cms/salesSync'
@@ -174,6 +174,13 @@ export function cmsQaWriterLocalCheck(i: CmsQaRunLocalInput & { staffIds: readon
   return reasons.length ? { ok: false, reasons } : { ok: true }
 }
 
+/** P4-A: điều kiện cục bộ của writer nguồn bq / lệnh báo cáo sau chốt — như writer giả nhưng KHÔNG cần tài khoản staff QA. */
+export function cmsQaBqLocalCheck(i: CmsQaRunLocalInput): { ok: true } | { ok: false; reasons: string[] } {
+  const base = cmsQaRunLocalReasons(i)
+  if (base === null) return { ok: false, reasons: ['không có run QA đang mở'] }
+  return base.length ? { ok: false, reasons: base } : { ok: true }
+}
+
 /** Điều kiện cục bộ chung của mọi lệnh GHI trong run (writer kết quả, thao tác chốt). null ⇒ không có run mở. */
 function cmsQaRunLocalReasons(i: CmsQaRunLocalInput): string[] | null {
   const m = i.manifest
@@ -182,11 +189,14 @@ function cmsQaRunLocalReasons(i: CmsQaRunLocalInput): string[] | null {
   if (!i.confirmRun) reasons.push(`thiếu --confirm-run=<runId> (run đang mở: ${m.runId}) — gõ lại runId để xác nhận ghi`)
   else if (i.confirmRun !== m.runId) reasons.push(`--confirm-run (${i.confirmRun}) khác run đang mở (${m.runId})`)
   if (!i.host || i.host !== m.host) reasons.push(`host hiện tại (${i.host ?? '—'}) khác host của run (${m.host})`)
-  if (m.mode !== 'manual-localhost' || m.port === null) reasons.push('run không có server QA (--no-server / automated) — writer chỉ chạy trong run launcher có canh marker')
+  // Dạng mode qua helper CHUNG (cmsQaTooling.cmsQaWatchedShapeReason): manual-localhost có cổng hoặc manual-headless có nonce lượt;
+  // --no-server / automated không bao giờ hợp lệ. `launcherAlive` do bên gọi tính bằng cmsQaRunLiveness (cùng helper cho mọi CLI).
+  const shape = cmsQaWatchedShapeReason(m)
+  if (shape !== null) reasons.push(shape)
   const launcherPid = (m as CmsQaRunManifest & { launcherPid?: unknown }).launcherPid
   if (!Number.isInteger(launcherPid) || (launcherPid as number) <= 0) reasons.push('manifest không ghi launcherPid (launcher cũ) — mở run mới bằng launcher hiện hành')
   if (m.serverNotStopped) reasons.push('launcher đã ghi server CHƯA DỪNG — run không còn hợp lệ cho ghi mới')
-  else if (!i.launcherAlive) reasons.push('launcher / server QA của run không còn chạy (pid launcher, pid server hoặc cổng) — canh marker không còn hiệu lực, không ghi')
+  else if (!i.launcherAlive) reasons.push('launcher / server QA của run không còn chạy hoặc không còn canh (pid launcher; pid server + cổng, hoặc heartbeat của lượt headless) — canh marker không còn hiệu lực, không ghi')
   if (!i.treeClean) reasons.push('cây Git không sạch — writer phải chạy trên đúng candidate của run')
   if (i.gitHead !== m.gitHead || i.gitTree !== m.gitTree) reasons.push('HEAD / tree hiện tại khác candidate của run')
   return reasons
@@ -214,13 +224,18 @@ export function cmsQaWriterDbCheck(i: {
   programRows: readonly CmsQaWriterProgramRow[]
   statusRows: readonly CmsQaStatusRow[]
   guardMinutes: number
+  /** Trạng thái chương trình được phép (mặc định chỉ 'active'). Báo cáo sau chốt QA dùng ['locked'] — không nới cho lệnh khác. */
+  statuses?: readonly string[]
 }): { ok: true } | { ok: false; reasons: string[] } {
   const reasons: string[] = []
+  const allowed = i.statuses ?? ['active']
   const p = i.programRows.find((r) => r.id === i.programId)
   if (!p) reasons.push(`${mask(i.programId)}: không có chương trình`)
   else {
     if (p.is_test !== true) reasons.push(`${mask(i.programId)}: chương trình THẬT (is_test = false) — CẤM ghi kết quả QA`)
-    if (p.status !== 'active') reasons.push(`${mask(i.programId)}: chương trình chưa kích hoạt / đã chốt (${p.status})`)
+    if (!allowed.includes(p.status)) reasons.push(allowed.length === 1 && allowed[0] === 'active'
+      ? `${mask(i.programId)}: chương trình chưa kích hoạt / đã chốt (${p.status})`
+      : `${mask(i.programId)}: trạng thái ${p.status} không thuộc [${allowed.join(', ')}]`)
     const inManifest = i.manifest.programs.some((x) => x.id === i.programId)
     if (!inManifest && p.qa_created_in_run !== true) reasons.push(`${mask(i.programId)}: không thuộc run (không ghi trong manifest, không do tài khoản QA của run tạo sau mốc run)`)
   }
@@ -326,14 +341,201 @@ export interface CmsQaWriterEntry {
     sourceRows?: number | null
   } | null
   /** reconcile: run sales LIÊN KẾT với writer (detail.qa_writer_id) trong DB lúc đối chiếu. */
-  reconcile?: { at: string; runs: { id: string; status: string; errorCode: string | null }[]; finishedOrphan: string | null } | null
+  reconcile?: { at: string; runs: { id: string; status: string; errorCode: string | null }[]; finishedOrphan: string | null
+    /** P4-A r1 (nguồn bq): kết quả đối chiếu metadata ĐÃ GHIM của từng run DB liên kết với `expect` của sổ. Vắng ⇒ chưa kiểm. */
+    contract?: CmsQaBqRunVerdict[] } | null
+  /** P4-A: nguồn của lượt. Vắng ⇒ 'fixture' (sổ cũ). 'bq' = pipeline contract với BigQuery thật (không dòng giả). */
+  source?: CmsQaWriterSourceKind
+  /** P4-A (nguồn bq): cấu hình operator đã ghim cho lượt (cv / cách tính / policy) — đối chiếu trước ghi và với hợp đồng run. */
+  expect?: CmsQaBqExpect | null
+  /** P4-A (nguồn bq): tóm tắt để so replay (tiền, hash kết quả, hợp đồng run). Không email / dòng. */
+  net?: { amountVnd: string | null; resultHash: string | null; contract: unknown; expectMatch: boolean | null } | null
 }
 
-export function newCmsQaWriterEntry(i: { writerId: string; qaRunId: string; pid: number; programId: string; staff: readonly string[]; lines: number; now: string }): CmsQaWriterEntry {
+// ── P4-A: writer đi pipeline contract với nguồn BigQuery THẬT ────────────────────────────────────────────────────────────────
+// `publish --source=bq`: cùng gate / candidate / launcher / marker / sổ / tag qa_run_id + qa_writer_id của writer giả, nhưng KHÔNG thay
+// runner / table / provider — dùng nguyên deps thật (một job bán + trả ghim as_of) và khai calc_contract theo cờ của PROCESS. Nguồn run
+// vẫn là 'qa' ⇒ lõi tự chặn chương trình thật (QA_SOURCE_REAL_PROGRAM) và close nhận run theo liên kết writer như cũ. Không fallback
+// sang fixture / legacy; mặc định của writer (fixture) không đổi.
+
+export type CmsQaWriterSourceKind = 'fixture' | 'bq'
+export function parseCmsQaWriterSource(raw: string | undefined): { ok: true; value: CmsQaWriterSourceKind } | { ok: false; reason: string } {
+  if (raw === undefined || raw === 'fixture') return { ok: true, value: 'fixture' }
+  if (raw === 'bq') return { ok: true, value: 'bq' }
+  return { ok: false, reason: '--source chỉ nhận fixture (mặc định) | bq' }
+}
+
+export const CMS_QA_BQ_BASES = ['pos_base', 'cms_unit'] as const
+export const CMS_QA_BQ_POLICIES = ['sales_only_v1', 'net_returns_v1', 'full_line_qty_refund_v1'] as const
+export interface CmsQaBqExpect { cv: number; basis: (typeof CMS_QA_BQ_BASES)[number]; policy: (typeof CMS_QA_BQ_POLICIES)[number] }
+
+/** --expect-cv / --expect-basis / --expect-policy: bắt buộc cả ba với --source=bq (operator gõ lại cấu hình đã ghim). */
+export function parseCmsQaBqExpect(i: { cv: string | undefined; basis: string | undefined; policy: string | undefined }):
+  { ok: true; value: CmsQaBqExpect } | { ok: false; reason: string } {
+  if (i.cv === undefined || i.basis === undefined || i.policy === undefined) return { ok: false, reason: '--source=bq cần đủ --expect-cv=<N> --expect-basis=<pos_base|cms_unit> --expect-policy=<policy>' }
+  if (!/^[1-9][0-9]{0,8}$/.test(i.cv)) return { ok: false, reason: '--expect-cv phải là số nguyên dương' }
+  if (!(CMS_QA_BQ_BASES as readonly string[]).includes(i.basis)) return { ok: false, reason: `--expect-basis chỉ nhận ${CMS_QA_BQ_BASES.join(' | ')}` }
+  if (!(CMS_QA_BQ_POLICIES as readonly string[]).includes(i.policy)) return { ok: false, reason: `--expect-policy chỉ nhận ${CMS_QA_BQ_POLICIES.join(' | ')}` }
+  return { ok: true, value: { cv: Number(i.cv), basis: i.basis as CmsQaBqExpect['basis'], policy: i.policy as CmsQaBqExpect['policy'] } }
+}
+
+/** Biến PROCESS bắt buộc của lượt nguồn bq (không lấy từ .env.local — cờ / view của lượt QA chỉ sống trong tiến trình của lệnh). */
+export const CMS_QA_BQ_PROCESS_VARS = ['CMS_CALC_MODES_ENABLED', 'CMS_RETURNS_ENABLED', 'CMS_BQ_SALES_TABLE', 'CMS_BQ_RETURNS_TABLE'] as const
+
+export function cmsQaBqSourceEnvCheck(processEnv: Record<string, string | undefined>, envFileText: string | null): { ok: true } | { ok: false; reason: string } {
+  for (const k of ['CMS_CALC_MODES_ENABLED', 'CMS_RETURNS_ENABLED'] as const) {
+    if (processEnv[k] !== 'true') return { ok: false, reason: `--source=bq cần ${k}=true là biến PROCESS của lệnh (không lấy từ .env.local, không đổi cờ container)` }
+    if (envFileText !== null && new RegExp(`^\\s*(?:export\\s+)?${k}\\s*=\\s*["']?true["']?\\s*(?:#.*)?$`, 'm').test(envFileText)) {
+      return { ok: false, reason: `${k}=true đang nằm trong .env.local — cờ của lượt QA chỉ đặt bằng biến PROCESS; xoá khỏi .env.local` }
+    }
+  }
+  for (const k of ['CMS_BQ_SALES_TABLE', 'CMS_BQ_RETURNS_TABLE'] as const) {
+    if (!processEnv[k]) return { ok: false, reason: `--source=bq cần ${k} là biến PROCESS của lệnh (view nguồn của lượt — ghi rõ, không ngầm định)` }
+  }
+  return { ok: true }
+}
+
+/** Cấu hình hiện tại của chương trình (một câu SELECT chỉ đọc) để đối chiếu với --expect-*. */
+export function cmsQaWriterProfileSql(programId: string): string {
+  if (!UUID_RE.test(programId)) throw new Error('programId không phải UUID')
+  return `SELECT p.id::text AS id, p.config_version, p.quantity_basis, p.returns_policy FROM public.cms_programs p WHERE p.id = '${programId}'::uuid`
+}
+
+/** Cấu hình DB = cấu hình operator đã gõ lại. Lệch / không đọc được ⇒ lý do (không ghi). */
+export function cmsQaBqProfileCheck(row: unknown, e: CmsQaBqExpect): string[] {
+  if (typeof row !== 'object' || row === null) return ['không đọc được cấu hình chương trình (config_version / cách tính / policy)']
+  const o = row as Record<string, unknown>
+  const reasons: string[] = []
+  if (Number(o.config_version) !== e.cv || !Number.isInteger(Number(o.config_version))) reasons.push(`config_version hiện tại (${String(o.config_version)}) khác --expect-cv (${e.cv})`)
+  if (o.quantity_basis !== e.basis) reasons.push(`cách tính hiện tại (${String(o.quantity_basis)}) khác --expect-basis (${e.basis})`)
+  if (o.returns_policy !== e.policy) reasons.push(`policy trả hiện tại (${String(o.returns_policy)}) khác --expect-policy (${e.policy})`)
+  return reasons
+}
+
+/**
+ * Hợp đồng run mà DB ghim lúc open (tóm tắt lõi trả) so với kỳ vọng. null = lõi không trả hợp đồng (run legacy) ⇒ chỉ khớp khi kỳ vọng là
+ * pos_base + sales_only_v1. Lệch ⇒ lượt KHÔNG được báo đạt (run đã ghi vẫn nằm trong sổ để close / reconcile).
+ */
+export function cmsQaBqContractMatch(contract: unknown, e: CmsQaBqExpect): boolean {
+  if (contract === null || contract === undefined) return e.basis === 'pos_base' && e.policy === 'sales_only_v1'
+  if (typeof contract !== 'object') return false
+  const c = contract as Record<string, unknown>
+  return c.quantityBasis === e.basis && c.returnsPolicy === e.policy && c.provider === 'bq'
+}
+
+// ── P4-A r1 (PM 22/11 R2-b): hợp đồng của RUN TRONG DB so với kỳ vọng đã ghim trong sổ ──────────────────────────────────────
+// Tóm tắt lõi trả (`net.contract`) chỉ có khi lệnh nhận được phản hồi; mất phản hồi ⇒ sổ `unknown`, `net` vắng. "Tìm thấy run đúng tag"
+// KHÔNG đồng nghĩa "run đúng hợp đồng": reconcile và close đọc metadata run ĐÃ GHIM trong DB (không dùng cấu hình chương trình hiện tại)
+// và so với `expect` sổ ghi TRƯỚC khi gửi. Lượt trả bình thường dùng CÙNG phép so này.
+
+/** Metadata đã ghim của run sales (một câu SELECT chỉ đọc; cột contract có từ 130 — chỉ gọi cho writer nguồn bq). */
+export function cmsQaBqRunContractSql(runIds: readonly string[]): string {
+  if (!runIds.length || !runIds.every((x) => UUID_RE.test(x))) throw new Error('runIds không hợp lệ')
+  return `SELECT r.id::text AS id, r.program_id::text AS program_id, r.is_test, r.status, r.config_version, r.quantity_basis, r.returns_policy,
+       r.calc_contract_version, r.status_dictionary_version, r.source_pin ->> 'provider' AS pin_provider,
+       r.detail ->> 'source' AS source, r.detail ->> 'qa_run_id' AS qa_run_id, r.detail ->> 'qa_writer_id' AS qa_writer_id
+  FROM public.cms_sync_runs r WHERE r.kind = 'sales' AND r.id IN (${runIds.map((x) => `'${x}'::uuid`).join(', ')}) ORDER BY r.started_at, r.id`
+}
+
+export interface CmsQaBqRunContractRow {
+  id: string; program_id: string; is_test: boolean; status: string; config_version: number | string | null
+  quantity_basis: string | null; returns_policy: string | null; calc_contract_version: string | null; status_dictionary_version: string | null
+  pin_provider: string | null; source: string | null; qa_run_id: string | null; qa_writer_id: string | null
+}
+
+export interface CmsQaBqRunVerdict { runId: string; status: string; match: boolean; reasons: string[] }
+
+/** Phiên bản hợp đồng / từ điển trạng thái mà DB ghim theo policy (ràng buộc cms_sync_runs_contract_shape của 132). */
+function cmsQaBqContractVersions(policy: CmsQaBqExpect['policy']): { calc: string; dict: string } {
+  return policy === 'full_line_qty_refund_v1' ? { calc: 'cms-calc-ret2-v2', dict: 'cms-return-status-v2' } : { calc: 'cms-calc-ret2-v1', dict: 'cms-return-status-v1' }
+}
+
+/**
+ * Một run ĐÃ CÔNG BỐ (status ok) của writer nguồn bq: tag + is_test + cv + cách tính + policy + phiên bản hợp đồng / từ điển + provider
+ * của pin nguồn phải đúng bộ sổ đã ghim. Thiếu dòng / thiếu trường ⇒ KHÔNG khớp (fail-closed). Kỳ vọng pos_base + sales_only_v1 = run
+ * legacy (DB không ghim hợp đồng, không có pin provider) ⇒ khớp khi mọi cột hợp đồng NULL.
+ */
+export function cmsQaBqRunContractCheck(row: CmsQaBqRunContractRow | undefined, e: Pick<CmsQaWriterEntry, 'writerId' | 'qaRunId' | 'programId' | 'expect'>, runId: string): CmsQaBqRunVerdict {
+  if (!row) return { runId, status: '—', match: false, reasons: ['không đọc được metadata run trong DB'] }
+  const reasons: string[] = []
+  const x = e.expect
+  if (!x) return { runId, status: row.status, match: false, reasons: ['sổ không có kỳ vọng (--expect-*)'] }
+  if (row.id !== runId) reasons.push('dòng DB khác run')
+  if (row.is_test !== true) reasons.push('run không phải is_test')
+  if (row.program_id !== e.programId) reasons.push('run khác chương trình của sổ')
+  if (row.source !== CMS_QA_WRITER_SOURCE || row.qa_run_id !== e.qaRunId || row.qa_writer_id !== e.writerId) reasons.push('tag run (source / qa_run_id / qa_writer_id) khác sổ')
+  if (row.config_version === null || row.config_version === undefined || !Number.isInteger(Number(row.config_version)) || Number(row.config_version) !== x.cv) {
+    reasons.push(`config_version của run (${String(row.config_version)}) khác --expect-cv (${x.cv})`)
+  }
+  const legacy = x.basis === 'pos_base' && x.policy === 'sales_only_v1'
+  if (legacy) {
+    if (row.quantity_basis !== null || row.returns_policy !== null || row.calc_contract_version !== null || row.status_dictionary_version !== null) {
+      reasons.push('kỳ vọng run legacy (pos_base + sales_only_v1) nhưng run mang hợp đồng')
+    }
+  } else {
+    const v = cmsQaBqContractVersions(x.policy)
+    if (row.quantity_basis !== x.basis) reasons.push(`cách tính của run (${String(row.quantity_basis)}) khác --expect-basis (${x.basis})`)
+    if (row.returns_policy !== x.policy) reasons.push(`policy trả của run (${String(row.returns_policy)}) khác --expect-policy (${x.policy})`)
+    if (row.calc_contract_version !== v.calc) reasons.push(`calc_contract_version của run (${String(row.calc_contract_version)}) khác ${v.calc}`)
+    if (row.status_dictionary_version !== v.dict) reasons.push(`status_dictionary_version của run (${String(row.status_dictionary_version)}) khác ${v.dict}`)
+    if (row.pin_provider !== 'bq') reasons.push(`provider của pin nguồn (${String(row.pin_provider)}) không phải bq`)
+  }
+  return { runId, status: row.status, match: reasons.length === 0, reasons }
+}
+
+/** Đối chiếu MỌI run liên kết của một writer nguồn bq; chỉ run `ok` (đã công bố) mới bị đòi đủ hợp đồng — run lỗi / held giữ luồng cũ. */
+export function cmsQaBqRunsVerdicts(e: Pick<CmsQaWriterEntry, 'writerId' | 'qaRunId' | 'programId' | 'expect'>, runs: readonly { id: string; status: string }[],
+  rows: readonly CmsQaBqRunContractRow[]): CmsQaBqRunVerdict[] {
+  const by = new Map(rows.map((r) => [r.id, r]))
+  return runs.filter((r) => r.status === 'ok').map((r) => cmsQaBqRunContractCheck(by.get(r.id), e, r.id))
+}
+
+/**
+ * Hợp đồng "hiệu lực" của một mục sổ nguồn bq cho close: true = có run công bố và mọi run công bố khớp · false = có run công bố lệch /
+ * chưa được kiểm · null = không có run công bố. `done` + published ⇒ theo `net.expectMatch` (đã gồm phép so DB của lượt); `reconciled` ⇒
+ * theo `reconcile.contract` (run ok mà thiếu kết quả kiểm ⇒ false — không suy "đúng" từ việc tìm thấy run).
+ */
+export function cmsQaBqEntryMatch(e: CmsQaWriterEntry): boolean | null {
+  if (e.source !== 'bq') return null
+  if (e.status === 'reconciled') {
+    const okRuns = (e.reconcile?.runs ?? []).filter((r) => r.status === 'ok')
+    if (!okRuns.length) return null
+    const v = e.reconcile?.contract
+    if (!Array.isArray(v)) return false
+    return okRuns.every((r) => v.some((c) => c.runId === r.id && c.match === true))
+  }
+  if (e.result?.status === 'published') return e.net?.expectMatch === true
+  return null
+}
+
+/**
+ * Close đọc DB: mọi run `ok` trong cửa sổ gắn writer nguồn bq phải khớp `expect` của sổ writer đó. Run lệch ⇒ ĐỎ tới khi CÙNG chương trình
+ * có run bq công bố SAU nó (theo thứ tự started_at của DB) khớp hợp đồng — cùng nghĩa cho lượt trả bình thường và lượt reconcile.
+ */
+export function cmsQaBqRunsCloseCheck(writers: readonly CmsQaWriterEntry[], salesRows: readonly CmsQaSalesRunRow[], contractRows: readonly CmsQaBqRunContractRow[]): string[] {
+  const bq = new Map(writers.filter((w) => w.source === 'bq').map((w) => [w.writerId, w]))
+  const by = new Map(contractRows.map((r) => [r.id, r]))
+  const seq = salesRows.filter((r) => r.status === 'ok' && !!r.qa_writer_id && bq.has(r.qa_writer_id))
+    .map((r) => ({ r, v: cmsQaBqRunContractCheck(by.get(r.id), bq.get(r.qa_writer_id as string) as CmsQaWriterEntry, r.id) }))
+  const reasons: string[] = []
+  seq.forEach((x, i) => {
+    if (x.v.match) return
+    if (seq.slice(i + 1).some((y) => y.r.program_id === x.r.program_id && y.v.match)) return
+    reasons.push(`run sales QA ${mask(x.r.id)} (writer ${x.r.qa_writer_id}, nguồn bq) đã công bố nhưng metadata run trong DB LỆCH kỳ vọng của sổ: ${x.v.reasons.join('; ')} — chưa có run bq khớp sau đó trên cùng chương trình; báo PM / operator, không coi là đạt`)
+  })
+  return reasons
+}
+
+export function newCmsQaWriterEntry(i: { writerId: string; qaRunId: string; pid: number; programId: string; staff: readonly string[]; lines: number; now: string
+  source?: CmsQaWriterSourceKind; expect?: CmsQaBqExpect | null }): CmsQaWriterEntry {
   if (!WRITER_ID_RE.test(i.writerId) || !RUN_ID_RE.test(i.qaRunId) || !UUID_RE.test(i.programId) || !Number.isInteger(i.pid) || i.pid <= 0) throw new Error('mục sổ writer không hợp lệ')
+  // Nguồn bq: không staff / dòng giả, BẮT BUỘC có kỳ vọng; nguồn fixture: không mang kỳ vọng (sổ giữ dạng cũ).
+  if (i.source === 'bq' && (!i.expect || i.staff.length !== 0 || i.lines !== 0)) throw new Error('mục sổ writer nguồn bq không hợp lệ')
+  if (i.source !== 'bq' && i.expect) throw new Error('mục sổ writer nguồn giả không mang kỳ vọng')
   return {
     kind: 'cms-qa-writer', version: 1, writerId: i.writerId, qaRunId: i.qaRunId, pid: i.pid, programId: i.programId,
     staff: [...i.staff], lines: i.lines, startedAt: i.now, status: 'running', openedRunId: null, finishedAt: null, result: null,
+    ...(i.source === 'bq' ? { source: 'bq' as const, expect: i.expect, net: null } : {}),
   }
 }
 
@@ -352,6 +554,8 @@ export function parseCmsQaWriterEntry(text: string): { ok: true; value: CmsQaWri
   if (!Number.isInteger(o.pid) || (o.pid as number) <= 0) return { ok: false, reason: 'pid sai' }
   if (!['running', 'done', 'unknown', 'reconciled'].includes(o.status as string)) return { ok: false, reason: 'trạng thái sai' }
   if (o.openedRunId !== null && o.openedRunId !== undefined && !(typeof o.openedRunId === 'string' && UUID_RE.test(o.openedRunId))) return { ok: false, reason: 'openedRunId sai' }
+  if (o.source !== undefined && o.source !== 'fixture' && o.source !== 'bq') return { ok: false, reason: 'source sai' }
+  if (o.source === 'bq' && (typeof o.expect !== 'object' || o.expect === null)) return { ok: false, reason: 'sổ nguồn bq thiếu kỳ vọng' }
   return { ok: true, value: { ...o, openedRunId: o.openedRunId ?? null } as CmsQaWriterEntry }
 }
 
@@ -383,6 +587,17 @@ export function cmsQaWritersCloseCheck(
       reasons.push(`writer ${e.writerId} kết thúc KHÔNG RÕ (${e.result?.code ?? '—'}; run có thể đã ghi / công bố) — ${rec(e.writerId)}`)
     }
     entries.push(e)
+  }
+  // P4-A (security review P2-4): lượt nguồn bq ĐÃ CÔNG BỐ mà hợp đồng run lệch bộ --expect-* (lệnh đã trả rc 1) không được trôi qua close:
+  // ĐỎ tới khi CÙNG chương trình có lượt bq công bố SAU đó khớp hợp đồng (run lệch không còn là kết quả hiện hành).
+  // P4-A r1 (PM 22/11 R2-b): lượt `reconciled` cũng phải có kết quả kiểm hợp đồng run DB — run công bố mà chưa kiểm / lệch ⇒ ĐỎ như lượt lệch.
+  const bqPublished = entries.map((e) => ({ e, m: cmsQaBqEntryMatch(e) })).filter((x) => x.m !== null && typeof x.e.finishedAt === 'string')
+  for (const { e, m } of bqPublished) {
+    if (m !== false) continue
+    const fixed = bqPublished.some((x) => x.e.programId === e.programId && x.m === true && (x.e.finishedAt as string) > (e.finishedAt as string))
+    if (!fixed) reasons.push(e.status === 'reconciled'
+      ? `writer ${e.writerId} (nguồn bq) reconciled có run đã công bố nhưng hợp đồng run trong DB ${Array.isArray(e.reconcile?.contract) ? 'LỆCH kỳ vọng của sổ' : 'CHƯA được kiểm'} và chưa có lượt bq khớp sau đó trên cùng chương trình — báo PM / operator, không coi là đạt`
+      : `writer ${e.writerId} (nguồn bq) đã công bố run LỆCH hợp đồng kỳ vọng (EXPECT_MISMATCH) và chưa có lượt bq khớp sau đó trên cùng chương trình — báo PM / operator, không coi là đạt`)
   }
   return { reasons, entries }
 }
@@ -495,14 +710,15 @@ export function cmsQaLockFlagsOk(processEnv: Record<string, string | undefined>)
  * UI (đường action không có guard run / sổ của công cụ). Chỉ cho khi operator opt-in `start --with-lock` (QA chốt — runbook
  * §4.4) cùng EARNINGS; ngược lại chặn trước IO. Opt-in còn phải qua cmsQaLauncherLockDbCheck (policy chốt THẬT còn khoá).
  */
-export function cmsQaLauncherLockCheck(i: { processEnv: Record<string, string | undefined>; withLock: boolean; server: boolean }):
+export function cmsQaLauncherLockCheck(i: { processEnv: Record<string, string | undefined>; withLock: boolean; mode: CmsQaLauncherMode }):
   { ok: true; lock: boolean } | { ok: false; reason: string } {
   const on = i.processEnv.CMS_LOCK_ENABLED === 'true'
   if (on && !i.withLock) {
     return { ok: false, reason: 'CMS_LOCK_ENABLED=true đang ở process — server QA sẽ mở nút "Chốt kỳ" trên UI. Chỉ dùng cho QA chốt (runbook §4.4) bằng `start --with-lock`; còn lại bỏ biến này khỏi shell rồi chạy lại' }
   }
   if (!i.withLock) return { ok: true, lock: false }
-  if (!i.server) return { ok: false, reason: '--with-lock chỉ dùng khi dựng server QA (không kèm --no-server)' }
+  // P4-A: hợp lệ cho ĐÚNG hai mode thủ công có canh marker (helper chung); --no-server không bao giờ.
+  if (!cmsQaModeWatched(i.mode)) return { ok: false, reason: '--with-lock chỉ dùng với launcher có canh marker (có server QA hoặc --headless) — không kèm --no-server' }
   if (!on || i.processEnv.CMS_EARNINGS_ENABLED !== 'true') return { ok: false, reason: '--with-lock cần CMS_EARNINGS_ENABLED=true và CMS_LOCK_ENABLED=true là biến PROCESS của lệnh start' }
   return { ok: true, lock: true }
 }
@@ -782,14 +998,15 @@ export function cmsQaPayoutsCloseCheck(
 }
 
 /** Phân loại tệp trong thư mục sổ của run: writer (w-…), chốt (l-…), chứng nhận nguồn 124 (a-…), xuất lớp nguồn 124 (x-…), lạ (từ chối — không tự bỏ qua). */
-export function cmsQaLedgerPartition(names: readonly string[]): { writers: string[]; locks: string[]; attests: string[]; exports: string[]; other: string[] } {
-  const writers: string[] = [], locks: string[] = [], attests: string[] = [], exports: string[] = [], other: string[] = []
+export function cmsQaLedgerPartition(names: readonly string[]): { writers: string[]; locks: string[]; attests: string[]; exports: string[]; reports: string[]; other: string[] } {
+  const writers: string[] = [], locks: string[] = [], attests: string[] = [], exports: string[] = [], reports: string[] = [], other: string[] = []
   for (const n of names) {
     if (/^w-[0-9a-f]{12}\.json$/.test(n)) writers.push(n)
     else if (/^l-[0-9a-f]{12}\.json$/.test(n)) locks.push(n)
     else if (/^a-[0-9a-f]{12}\.json$/.test(n)) attests.push(n)
     else if (/^x-[0-9a-f]{12}\.json$/.test(n)) exports.push(n)
+    else if (/^r-[0-9a-f]{12}\.json$/.test(n)) reports.push(n)
     else other.push(n)
   }
-  return { writers, locks, attests, exports, other }
+  return { writers, locks, attests, exports, reports, other }
 }

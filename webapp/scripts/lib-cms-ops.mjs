@@ -56,7 +56,30 @@ export async function loadTooling() {
   const R = await jiti.import(path.join(ROOT, 'e2e', 'cmsQaResults.ts'))
   // 124 (COMP-INT): sổ chứng nhận đối soát nguồn (scripts/cms-source-attest.mjs) — close đối chiếu.
   const A = await jiti.import(path.join(ROOT, 'e2e', 'cmsSourceAttest.ts'))
-  return { T, G, R, A }
+  // P4-A: sổ báo cáo trả hàng sau chốt QA (scripts/cms-qa-report.mjs) — close đối chiếu.
+  const P = await jiti.import(path.join(ROOT, 'e2e', 'cmsQaReport.ts'))
+  return { T, G, R, A, P }
+}
+
+// ── P4-A: heartbeat của launcher headless + liveness CHUNG ───────────────────────────────────────────────────────────────────
+// Tệp heartbeat nằm trong qa-artifacts/ (đã ignore ⇒ cây Git vẫn sạch), tách khỏi manifest (.qa-cms.json không đổi sau start —
+// guard chứng nhận so byte manifest). Mọi CLI ghi và close gọi runLiveness(); không CLI nào tự viết điều kiện "launcher sống".
+
+export function heartbeatFile(runId) {
+  if (!/^cms-qa-[0-9A-Za-z]{8,20}-[0-9a-f]{4}$/.test(String(runId))) throw new Error('runId không hợp lệ')
+  return path.join(ROOT, 'qa-artifacts', 'cms-qa', `${runId}.heartbeat.json`)
+}
+
+/** Đọc heartbeat ĐỒNG BỘ; null khi không có / không đọc được (không ném). */
+export function readHeartbeatText(runId) {
+  try { const f = heartbeatFile(runId); return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null } catch { return null }
+}
+
+/** Launcher của run còn sống + còn canh? (T = e2e/cmsQaTooling.ts.) Localhost: thăm cổng rồi kiểm pid; headless: heartbeat của lượt. */
+export async function runLiveness(T, m) {
+  let portUp = false
+  if (m.mode === 'manual-localhost' && m.port !== null) { try { portUp = await portOpen(m.port) } catch { portUp = false } }
+  return T.cmsQaRunLiveness(m, { pidAlive, portUp, heartbeatText: m.mode === 'manual-headless' ? readHeartbeatText(m.runId) : null, nowMs: Date.now() })
 }
 
 /**
