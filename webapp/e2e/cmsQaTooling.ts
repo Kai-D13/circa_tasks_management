@@ -537,7 +537,12 @@ export interface CmsQaRunManifest {
   version: 1
   runId: string
   status: 'open' | 'closed'
-  mode: 'manual-localhost' | 'automated'
+  /** manual-headless (P4-A): launcher có canh marker nhưng KHÔNG dựng web server — chỉ cho các CLI QA có sổ; liveness theo heartbeat. */
+  mode: 'manual-localhost' | 'manual-headless' | 'automated'
+  /** pid của launcher (nơi chạy canh marker). Manifest cũ không có ⇒ writer từ chối. */
+  launcherPid?: number
+  /** manual-headless: nhận diện LƯỢT launcher (ngẫu nhiên, 32 hex) — heartbeat phải mang đúng nonce này (pid tái sử dụng không giả được). */
+  headless?: { nonce: string } | null
   host: string
   /** Giờ DB lúc preflight (ISO UTC) — mốc lọc chương trình khi đóng run. */
   startedAt: string
@@ -553,6 +558,8 @@ export interface CmsQaRunManifest {
    */
   serverNotStopped?: { pid: number | null; at: string } | null
   users: { id: string; role: string | null; markerExpiresAt: string }[]
+  /** P4-B: run tiếp tục — archive donor ĐÃ ĐÓNG (runId + sha256 tệp) và các chương trình nhận lại; chỉ launcher ghi lúc start. */
+  continuedFrom?: { runId: string; sha256: string; programs: string[]; closedAt: string } | null
   /** Spec tự động: ghi NGAY khi tạo. Khi đóng: mọi chương trình is_test tạo / sửa trong run (để lại, ẩn — H8). */
   programs: { id: string; status: string; isTest: boolean }[]
   closedAt: string | null
@@ -614,7 +621,230 @@ export function parseCmsQaManifest(text: string): Parsed<CmsQaRunManifest> {
   if (ns !== undefined && ns !== null && !(typeof ns === 'object' && (ns.pid === null || (Number.isInteger(ns.pid) && (ns.pid as number) > 0 && (ns.pid as number) <= 2_147_483_647)) && typeof ns.at === 'string')) {
     return { ok: false, reason: 'manifest sai serverNotStopped' }
   }
+  // manual-headless: dạng chặt — không cổng / server, có pid launcher + nonce lượt (thiếu ⇒ hỏng, không suy diễn thành mode khác).
+  if (o.mode === 'manual-headless') {
+    if (o.port !== null || (o.serverPid ?? null) !== null) return { ok: false, reason: 'manifest headless không được có port / serverPid' }
+    if (!Number.isInteger(o.launcherPid) || (o.launcherPid as number) <= 0) return { ok: false, reason: 'manifest headless thiếu launcherPid' }
+    if (!o.headless || typeof o.headless.nonce !== 'string' || !CMS_QA_NONCE_RE.test(o.headless.nonce)) return { ok: false, reason: 'manifest headless thiếu nonce lượt' }
+  } else if (o.headless !== undefined && o.headless !== null) {
+    return { ok: false, reason: 'manifest không phải headless nhưng có khối headless' }
+  }
   return { ok: true, value: o as CmsQaRunManifest }
+}
+
+// ── Mode launcher + liveness dùng chung (P4-A — PM 22/11 §3 A1) ──────────────────────────────────────────────────────────────
+// MỘT helper cho mọi CLI ghi trong run (writer kết quả, chốt, chứng nhận, báo cáo sau chốt) và cho close: không CLI nào tự suy
+// "launcher còn sống" bằng điều kiện riêng. Hai mode thủ công hợp lệ:
+//  · manual-localhost: như cũ — pid launcher + pid server con + cổng còn nhận kết nối, không cờ serverNotStopped;
+//  · manual-headless: KHÔNG web server ⇒ không có cổng để thăm. Bằng chứng sống = pid launcher + HEARTBEAT của đúng lượt (runId + pid +
+//    nonce ngẫu nhiên ghi trong manifest), trạng thái active, tuổi ≤ CMS_QA_HEARTBEAT_MAX_AGE_MS. Launcher chỉ ghi nhịp khi canh marker
+//    chưa dừng; treo / chết / Ctrl+C ⇒ nhịp cũ hoặc 'stopped' ⇒ không sống. pid bị tiến trình khác dùng lại không ghi được nhịp mới.
+// `--no-server` / automated KHÔNG BAO GIỜ sống (không canh marker) — port null không phải bằng chứng gì.
+
+export const CMS_QA_NONCE_RE = /^[0-9a-f]{32}$/
+/** Nhịp heartbeat của launcher headless (cùng nhịp tick canh marker). */
+export const CMS_QA_HEARTBEAT_MS = 5_000
+/** Heartbeat cũ hơn chừng này ⇒ launcher coi như không còn canh (4 nhịp). */
+export const CMS_QA_HEARTBEAT_MAX_AGE_MS = 20_000
+/** Heartbeat "ở tương lai" quá chừng này (đồng hồ bị chỉnh) ⇒ không tin. */
+export const CMS_QA_HEARTBEAT_FUTURE_MS = 5_000
+
+export type CmsQaLauncherMode = 'manual-localhost' | 'manual-headless' | 'no-server'
+
+/** Cờ dòng lệnh của `start` ⇒ mode. `--headless` và `--no-server` không đi cùng nhau. */
+export function cmsQaLauncherMode(i: { noServer: boolean; headless: boolean }): Parsed<CmsQaLauncherMode> {
+  if (i.noServer && i.headless) return { ok: false, reason: '--headless không dùng cùng --no-server (headless có canh marker, --no-server thì không)' }
+  return { ok: true, value: i.headless ? 'manual-headless' : i.noServer ? 'no-server' : 'manual-localhost' }
+}
+
+/** Mode có canh marker của launcher (điều kiện cho mọi lệnh ghi QA có sổ và cho --with-lock). */
+export function cmsQaModeWatched(mode: CmsQaLauncherMode | CmsQaRunManifest['mode']): boolean {
+  return mode === 'manual-localhost' || mode === 'manual-headless'
+}
+
+export interface CmsQaHeartbeat {
+  kind: 'cms-qa-heartbeat'
+  version: 1
+  runId: string
+  launcherPid: number
+  nonce: string
+  seq: number
+  /** Đồng hồ tường của máy launcher (epoch ms) lúc ghi. */
+  at: number
+  state: 'active' | 'stopped'
+  reason: string | null
+}
+
+export function newCmsQaHeartbeat(i: Omit<CmsQaHeartbeat, 'kind' | 'version'>): CmsQaHeartbeat {
+  const hb: CmsQaHeartbeat = { kind: 'cms-qa-heartbeat', version: 1, ...i }
+  const p = parseCmsQaHeartbeat(JSON.stringify(hb))
+  if (!p.ok) throw new Error(`heartbeat không hợp lệ (${p.reason})`)
+  return hb
+}
+
+export function parseCmsQaHeartbeat(text: string): Parsed<CmsQaHeartbeat> {
+  let o: Partial<CmsQaHeartbeat>
+  try { o = JSON.parse(text) } catch { return { ok: false, reason: 'heartbeat không phải JSON' } }
+  if (!o || typeof o !== 'object' || o.kind !== 'cms-qa-heartbeat' || o.version !== 1) return { ok: false, reason: 'heartbeat sai loại / phiên bản' }
+  if (typeof o.runId !== 'string' || !o.runId) return { ok: false, reason: 'heartbeat thiếu runId' }
+  if (!Number.isInteger(o.launcherPid) || (o.launcherPid as number) <= 0) return { ok: false, reason: 'heartbeat sai pid' }
+  if (typeof o.nonce !== 'string' || !CMS_QA_NONCE_RE.test(o.nonce)) return { ok: false, reason: 'heartbeat sai nonce' }
+  if (!Number.isInteger(o.seq) || (o.seq as number) < 0) return { ok: false, reason: 'heartbeat sai seq' }
+  if (!Number.isSafeInteger(o.at) || (o.at as number) <= 0) return { ok: false, reason: 'heartbeat sai thời điểm' }
+  if (o.state !== 'active' && o.state !== 'stopped') return { ok: false, reason: 'heartbeat sai trạng thái' }
+  if (o.reason !== null && typeof o.reason !== 'string') return { ok: false, reason: 'heartbeat sai lý do' }
+  return { ok: true, value: o as CmsQaHeartbeat }
+}
+
+/** Dạng TĨNH của manifest có hợp lệ cho lệnh ghi QA không (chưa nói còn sống). null = hợp lệ; chuỗi = lý do chặn. */
+export function cmsQaWatchedShapeReason(m: CmsQaRunManifest): string | null {
+  if (m.mode === 'manual-localhost') return m.port === null ? 'run không có server QA (--no-server) — lệnh ghi QA chỉ chạy trong run launcher có canh marker' : null
+  if (m.mode === 'manual-headless') {
+    return m.port === null && !!m.headless && CMS_QA_NONCE_RE.test(m.headless.nonce) ? null : 'manifest headless sai dạng (port / nonce) — mở run mới bằng launcher hiện hành'
+  }
+  return 'run không có server QA / canh marker (automated) — lệnh ghi QA chỉ chạy trong run launcher có canh marker'
+}
+
+export interface CmsQaLivenessProbes {
+  pidAlive(pid: number): boolean
+  /** manual-localhost: cổng server QA còn nhận kết nối (đã thăm trước, async). Mode khác: bỏ qua. */
+  portUp: boolean
+  /** manual-headless: nội dung tệp heartbeat của run đọc NGAY lúc kiểm (đồng bộ); null = không có / không đọc được. */
+  heartbeatText: string | null
+  /** Đồng hồ tường (epoch ms) — cùng máy với launcher. */
+  nowMs: number
+}
+
+/**
+ * P4-A r1 (PM 22/11 R2-c) — `close` của run headless: "launcher ĐÃ THOÁT chưa" là câu hỏi KHÁC với "launcher đủ khoẻ để được ghi"
+ * (cmsQaRunLiveness cố ý trả không-sống khi nhịp cũ / stopped). Nhịp cũ / stopped KHÔNG phải bằng chứng tiến trình đã thoát ⇒ pid launcher
+ * còn sống là CHƯA close, bất kể heartbeat. Pid không xác định / không kiểm được ⇒ dừng để operator xác minh. Không tự kill, không sửa
+ * manifest. null = được đi tiếp (pid không còn); chuỗi = lý do chặn. Mode khác headless ⇒ null (giữ kiểm cổng / serverNotStopped cũ).
+ */
+export function cmsQaHeadlessCloseBlock(m: CmsQaRunManifest, pidAlive: (pid: number) => boolean): string | null {
+  if (m.mode !== 'manual-headless') return null
+  const lp = m.launcherPid
+  if (!Number.isInteger(lp) || (lp as number) <= 0) return 'manifest headless không ghi pid launcher — không xác định được launcher đã thoát; báo PM / operator, không sửa manifest tay'
+  let alive: boolean
+  try { alive = pidAlive(lp as number) } catch { return `không kiểm được pid launcher ${lp} — xác minh bằng tasklist rồi chạy lại close; không sửa manifest tay` }
+  if (!alive) return null
+  return `pid launcher headless ${lp} CÒN SỐNG — Ctrl+C ở cửa sổ launcher và chờ tiến trình thoát rồi mới close (heartbeat cũ / stopped KHÔNG phải bằng chứng đã thoát). Launcher treo ⇒ operator tự dừng đúng pid đó sau khi xác minh bằng tasklist; nếu pid ${lp} nay là tiến trình KHÁC (pid bị dùng lại) ⇒ dừng, báo PM / operator — công cụ không tự kill, không sửa manifest`
+}
+
+/** Launcher của run còn sống VÀ còn canh marker? Mọi CLI ghi và close dùng CHUNG hàm này. Không ném. */
+export function cmsQaRunLiveness(m: CmsQaRunManifest, p: CmsQaLivenessProbes): { alive: true } | { alive: false; reason: string } {
+  const dead = (reason: string) => ({ alive: false as const, reason })
+  if (m.status !== 'open') return dead('manifest run không còn mở')
+  const shape = cmsQaWatchedShapeReason(m)
+  if (shape !== null) return dead(shape)
+  const lp = m.launcherPid
+  if (!Number.isInteger(lp) || (lp as number) <= 0) return dead('manifest không ghi launcherPid (launcher cũ)')
+  let lpAlive = false
+  try { lpAlive = p.pidAlive(lp as number) } catch { lpAlive = false }
+  if (!lpAlive) return dead('pid launcher không còn')
+  if (m.mode === 'manual-localhost') {
+    if (m.serverNotStopped) return dead('launcher đã ghi server CHƯA DỪNG')
+    if (m.serverPid === null || m.serverPid === undefined) return dead('manifest chưa ghi pid server QA')
+    let spAlive = false
+    try { spAlive = p.pidAlive(m.serverPid) } catch { spAlive = false }
+    if (!spAlive) return dead('pid server QA không còn')
+    return p.portUp === true ? { alive: true } : dead('cổng server QA không còn mở')
+  }
+  // manual-headless
+  if (p.heartbeatText === null) return dead('không có heartbeat của launcher headless')
+  const hb = parseCmsQaHeartbeat(p.heartbeatText)
+  if (!hb.ok) return dead(hb.reason)
+  const h = hb.value
+  if (h.runId !== m.runId || h.launcherPid !== lp || h.nonce !== m.headless?.nonce) return dead('heartbeat không thuộc lượt launcher của run (runId / pid / nonce lệch)')
+  if (h.state !== 'active') return dead(`launcher headless đã dừng canh (${(h.reason ?? '—').slice(0, 120)})`)
+  if (!Number.isFinite(p.nowMs)) return dead('không đọc được đồng hồ')
+  const age = p.nowMs - h.at
+  if (age > CMS_QA_HEARTBEAT_MAX_AGE_MS) return dead(`heartbeat cũ ${Math.floor(age / 1000)} s > ${CMS_QA_HEARTBEAT_MAX_AGE_MS / 1000} s — launcher treo / đã chết`)
+  if (age < -CMS_QA_HEARTBEAT_FUTURE_MS) return dead('heartbeat ở tương lai (đồng hồ máy bị chỉnh) — không tin')
+  return { alive: true }
+}
+
+/**
+ * Vòng đời launcher HEADLESS (không tiến trình con): canh marker như launcher có server (cùng createCmsQaWatchdog + loop poll / deadline
+ * độc lập) và ghi heartbeat mỗi nhịp. Thứ tự MỖI nhịp: `check()` (manifest còn của lượt, cây Git không đổi — chuỗi ⇒ dừng) → hạn dừng
+ * độc lập của canh marker → mới ghi nhịp 'active'. Bất kỳ điều kiện dừng nào ⇒ KHÔNG ghi nhịp active nữa, cố ghi 'stopped' (lỗi ghi ⇒
+ * nhịp cũ tự quá hạn). Không ghi được nhịp ⇒ dừng (fail-closed). Mã: operator (Ctrl+C / SIGTERM) 0 · canh marker / lỗi 1.
+ * Mọi phụ thuộc tiêm vào ⇒ test bằng đồng hồ / timer giả.
+ */
+export async function runCmsQaHeadlessLifecycle(d: {
+  watchdog: CmsQaWatchdog
+  preRows: readonly CmsQaStatusRow[]
+  preStartedAt: number
+  poll: (signal: AbortSignal) => Promise<CmsQaStatusRow[]>
+  /** Ghi heartbeat ĐỒNG BỘ; ném khi không ghi được. */
+  beat: (state: 'active' | 'stopped', reason: string | null) => void
+  /** Kiểm đồng bộ mỗi nhịp; chuỗi = lý do dừng. Ném ⇒ dừng. */
+  check?: () => string | null
+  now: () => number
+  setInterval: (fn: () => void, ms: number) => unknown
+  clearInterval: (h: unknown) => void
+  onSignal: (sig: 'SIGINT' | 'SIGTERM', fn: () => void) => void
+  offSignal: (sig: 'SIGINT' | 'SIGTERM', fn: () => void) => void
+  log: (line: string) => void
+  pollMs?: number
+  tickMs?: number
+  beatMs?: number
+}): Promise<{ rc: 0 | 1; stopKind: Exclude<CmsQaStopKind, null>; reason: string; beats: number }> {
+  const short = (e: unknown) => String((e as Error)?.message ?? e).split('\n')[0].slice(0, 200)
+  let done: { kind: Exclude<CmsQaStopKind, null>; reason: string } | null = null
+  let wake: () => void = () => {}
+  const settled = new Promise<void>((r) => { wake = r })
+  const pollAbort = new AbortController()
+  let loop: { stop(): void; dispose(): void } | null = null
+  let beatTimer: unknown = null
+  let beats = 0
+  let signalsOn = false
+  const onSigint = () => stop('operator', 'Ctrl+C')
+  const onSigterm = () => stop('operator', 'SIGTERM')
+  function stop(kind: Exclude<CmsQaStopKind, null>, reason: string) {
+    if (done) return
+    done = { kind, reason }
+    loop?.dispose()
+    pollAbort.abort()
+    if (beatTimer !== null) { d.clearInterval(beatTimer); beatTimer = null }
+    d.log(`DỪNG launcher headless: ${reason} — DỪNG MỌI THAO TÁC QA; lệnh ghi QA mới sẽ bị chặn`)
+    try { d.beat('stopped', reason) } catch (e) { d.log(`không ghi được heartbeat 'stopped' (${short(e)}) — nhịp cũ tự quá hạn sau ${CMS_QA_HEARTBEAT_MAX_AGE_MS / 1000} s`) }
+    if (signalsOn) { d.offSignal('SIGINT', onSigint); d.offSignal('SIGTERM', onSigterm); signalsOn = false }
+    wake()
+  }
+  const pulse = () => {
+    if (done) return
+    let bad: string | null
+    try { bad = d.check ? d.check() : null } catch (e) { bad = `kiểm lượt lỗi: ${short(e)}` }
+    if (bad !== null) return stop('error', bad)
+    const v = d.watchdog.tick(d.now())
+    if (v.stop) return stop('watchdog', v.reason ?? 'canh marker dừng')
+    try { d.beat('active', null); beats++ } catch (e) { stop('error', `không ghi được heartbeat (${short(e)})`) }
+  }
+  try {
+    const first = d.watchdog.onResult(d.preRows, d.preStartedAt)
+    if (first.stop) stop('watchdog', first.reason ?? 'marker không đủ hạn')
+    else {
+      if (d.watchdog.stopAt !== null) d.log(`canh marker: hạn dừng độc lập ${new Date(d.watchdog.stopAt).toISOString()}`)
+      d.onSignal('SIGINT', onSigint)
+      d.onSignal('SIGTERM', onSigterm)
+      signalsOn = true
+      pulse() // nhịp đầu: sau nó các CLI mới thấy launcher sống
+      if (!done) {
+        loop = startCmsQaWatchdogLoop({
+          watchdog: d.watchdog, poll: () => d.poll(pollAbort.signal), now: d.now,
+          setInterval: d.setInterval, clearInterval: d.clearInterval, onStop: (why) => stop('watchdog', why),
+          pollMs: d.pollMs, tickMs: d.tickMs,
+        })
+        beatTimer = d.setInterval(pulse, d.beatMs ?? CMS_QA_HEARTBEAT_MS)
+      }
+    }
+  } catch (e) {
+    stop('error', `lỗi dựng canh marker: ${short(e)}`)
+  }
+  await settled
+  const fin = done as unknown as { kind: Exclude<CmsQaStopKind, null>; reason: string }
+  return { rc: cmsQaServerExitCode(fin.kind), stopKind: fin.kind, reason: fin.reason, beats }
 }
 
 /**
@@ -2321,4 +2551,136 @@ export function evaluateCmsV8(
     add(`v8-require-proven:${k}`, !!t && t.ok && t.proven === true, t ? (t.proven ? 'đã chứng minh RLS cắt' : 'CHƯA chứng minh (tổng = kỳ vọng)') : 'bảng không hợp lệ cho phase này')
   }
   return out
+}
+
+// ───────────────────────── P4-B (PM 22/11 review cửa sổ 1 §4): tiếp tục từ archive ĐÃ ĐÓNG ─────────────────────────
+// Cửa sổ 2 phải thao tác đúng các chương trình QA tạo ở cửa sổ 1 (đã đóng). Launcher mới có runId / startedAt / pid / nonce / marker MỚI;
+// chương trình chỉ được nhận khi: archive donor đóng + đúng hash ghim + đúng danh sách UUID operator gõ lại + đọc DB mới cho thấy
+// chương trình còn is_test / active / do tài khoản QA tạo trong cửa sổ donor / con trỏ kết quả = run mới nhất donor đã đối soát / cv + cách
+// tính + policy = hợp đồng của chính run đó. Không lùi startedAt, không mở lại archive, không chép sổ cũ. Chỉ dùng với --headless.
+
+export const CMS_QA_RUN_ID_RE = /^cms-qa-\d{8}T\d{6}-[0-9a-f]{4}$/
+const SHA256_RE = /^[0-9a-f]{64}$/
+
+export interface CmsQaContinuedFrom { runId: string; sha256: string; programs: string[]; closedAt: string }
+export interface CmsQaContinuationDonor { runId: string; sha256: string; startedAt: string; closedAt: string; programIds: string[]; runIdsByProgram: Record<string, string[]> }
+
+/** Tham số CLI của đường tiếp tục: cả ba hoặc không cái nào; chỉ ở mode headless. */
+export function parseCmsQaContinueArgs(i: { from: string | undefined; sha: string | undefined; programs: string | undefined; headless: boolean }):
+  Parsed<{ runId: string; sha256: string; programIds: string[] } | null> {
+  const given = [i.from, i.sha, i.programs].filter((v) => v !== undefined).length
+  if (given === 0) return { ok: true, value: null }
+  if (given !== 3) return { ok: false, reason: 'tiếp tục cần ĐỦ --continue-from=<runId> --expect-archive-sha=<64 hex> --expect-programs=<uuid,…>' }
+  if (!i.headless) return { ok: false, reason: '--continue-from chỉ dùng với --headless' }
+  if (!CMS_QA_RUN_ID_RE.test(i.from!)) return { ok: false, reason: '--continue-from không phải runId cms-qa-…' }
+  if (!SHA256_RE.test(i.sha!)) return { ok: false, reason: '--expect-archive-sha phải là 64 hex thường' }
+  const ids = i.programs!.split(',').map((s) => s.trim())
+  if (ids.length === 0 || ids.length > 4 || !ids.every((x) => isCmsUuid(x)) || new Set(ids).size !== ids.length) return { ok: false, reason: '--expect-programs: 1…4 UUID thường, không trùng' }
+  return { ok: true, value: { runId: i.from!, sha256: i.sha!, programIds: [...ids].sort() } }
+}
+
+/** Archive donor (thuần): đúng hash ghim, parse được, ĐÃ ĐÓNG sạch, cùng host + cùng bộ tài khoản QA, đúng danh sách chương trình gõ lại. */
+export function cmsQaContinuationDonorCheck(i: {
+  want: { runId: string; sha256: string; programIds: readonly string[] }
+  text: string; fileSha256: string; host: string; userIds: readonly string[]
+}): Parsed<CmsQaContinuationDonor> {
+  const no = (reason: string): Parsed<CmsQaContinuationDonor> => ({ ok: false, reason: `archive donor: ${reason}` })
+  if (i.fileSha256 !== i.want.sha256) return no('sha256 tệp khác --expect-archive-sha')
+  const parsed = parseCmsQaManifest(i.text)
+  if (!parsed.ok) return no(parsed.reason)
+  const d = parsed.value as CmsQaRunManifest & { writers?: unknown; locks?: unknown; payouts?: unknown; closeReports?: unknown; continuedFrom?: unknown }
+  if (d.status !== 'closed' || typeof d.closedAt !== 'string' || !ISO_UTC_RE.test(d.closedAt)) return no('chưa đóng (chỉ nhận archive closed có closedAt)')
+  // security review P2-4: cửa sổ donor phải hợp lệ (mốc mở TRƯỚC mốc đóng) và server QA của donor đã dừng có bằng chứng.
+  if (!(Date.parse(d.startedAt) < Date.parse(d.closedAt))) return no('mốc mở không trước mốc đóng')
+  if (d.serverNotStopped !== undefined && d.serverNotStopped !== null) return no('còn cờ server QA chưa dừng')
+  if (d.runId !== i.want.runId) return no('runId trong tệp khác --continue-from')
+  if (d.host !== i.host) return no('khác host đích')
+  if (d.mode !== 'manual-headless') return no('không phải run headless')
+  if (d.continuedFrom !== undefined && d.continuedFrom !== null) return no('đã là run tiếp tục — chỉ nhận donor gốc')
+  const du = d.users.map((u) => u.id).sort(), wu = [...i.userIds].sort()
+  if (JSON.stringify(du) !== JSON.stringify(wu)) return no('bộ tài khoản QA khác run mới')
+  const cc = d.closeCheck as { realProgramsTouchedByQaUsers?: unknown } | null
+  if (!cc || !Array.isArray(cc.realProgramsTouchedByQaUsers) || cc.realProgramsTouchedByQaUsers.length !== 0) return no('closeCheck không sạch (chương trình thật bị tài khoản QA chạm / thiếu closeCheck)')
+  const dp = d.programs.map((p) => p.id).sort()
+  if (!d.programs.every((p) => p.isTest === true)) return no('có chương trình không đánh dấu is_test')
+  if (JSON.stringify(dp) !== JSON.stringify([...i.want.programIds].sort())) return no('danh sách chương trình khác --expect-programs (không nhận UUID thêm / thiếu)')
+  for (const k of ['locks', 'payouts', 'closeReports'] as const) if (Array.isArray(d[k]) && (d[k] as unknown[]).length) return no(`đã có ${k} — đường tiếp tục chỉ nhận donor chưa chốt`)
+  if (!Array.isArray(d.writers) || d.writers.length === 0) return no('không có writer kết quả')
+  const runIdsByProgram: Record<string, string[]> = {}
+  const seenRuns = new Set<string>()
+  for (const w of d.writers as { programId?: unknown; status?: unknown; runId?: unknown }[]) {
+    if (w.status !== 'done' || typeof w.runId !== 'string' || !isCmsUuid(w.runId) || typeof w.programId !== 'string' || !dp.includes(w.programId)) return no('có writer chưa done / thiếu run / ngoài danh sách chương trình')
+    if (seenRuns.has(w.runId)) return no('một run xuất hiện ở hai writer')
+    seenRuns.add(w.runId)
+    ;(runIdsByProgram[w.programId] ??= []).push(w.runId)
+  }
+  if (!dp.every((p) => (runIdsByProgram[p] ?? []).length > 0)) return no('có chương trình chưa có run đã công bố')
+  return { ok: true, value: { runId: d.runId, sha256: i.fileSha256, startedAt: d.startedAt, closedAt: d.closedAt, programIds: dp, runIdsByProgram } }
+}
+
+/** Một câu SELECT chỉ đọc: trạng thái hiện tại của các chương trình donor + các run donor đã công bố. */
+export function cmsQaContinuationSql(donor: CmsQaContinuationDonor, userIds: readonly string[]): string {
+  const runIds = Object.values(donor.runIdsByProgram).flat()
+  return `SELECT p.id::text AS id, p.is_test, p.status, (p.created_by = ANY(${uuidArrayLiteral(userIds)})) AS qa_created,
+       (p.created_at >= ${isoUtcLiteral(donor.startedAt)} AND p.created_at <= ${isoUtcLiteral(donor.closedAt)}) AS created_in_donor,
+       p.config_version, to_jsonb(p) ->> 'quantity_basis' AS quantity_basis, to_jsonb(p) ->> 'returns_policy' AS returns_policy,
+       p.current_result_run_id::text AS current_run_id, (p.locked_at IS NULL) AS not_locked,
+       (p.updated_at <= ${isoUtcLiteral(donor.closedAt)}) AS unchanged_since_close,
+       (SELECT count(*) FROM public.cms_sync_runs r WHERE r.program_id = p.id AND r.status = 'running')::int AS running,
+       coalesce((SELECT jsonb_agg(jsonb_build_object('id', r.id::text, 'status', r.status, 'is_test', r.is_test, 'cv', r.config_version,
+                 'basis', r.quantity_basis, 'policy', r.returns_policy, 'kind', r.kind, 'qa_run_id', r.detail ->> 'qa_run_id',
+                 'started_us', (extract(epoch FROM r.started_at) * 1000000)::bigint::text) ORDER BY r.started_at)
+          FROM public.cms_sync_runs r WHERE r.program_id = p.id AND r.id = ANY(${uuidArrayLiteral(runIds)})), '[]'::jsonb) AS donor_runs
+  FROM public.cms_programs p WHERE p.id = ANY(${uuidArrayLiteral(donor.programIds)}) ORDER BY 1`
+}
+
+export interface CmsQaContinuationRunRow { id: string; status: string; is_test: unknown; cv: unknown; basis: unknown; policy: unknown; kind: unknown; qa_run_id: unknown; started_us: string }
+export interface CmsQaContinuationRow {
+  id: string; is_test: unknown; status: unknown; qa_created: unknown; created_in_donor: unknown; config_version: unknown
+  quantity_basis: unknown; returns_policy: unknown; current_run_id: unknown; running: unknown; not_locked: unknown; unchanged_since_close: unknown
+  donor_runs: CmsQaContinuationRunRow[] | unknown
+}
+
+/** Trạng thái DB HIỆN TẠI phải khớp donor — lệch bất kỳ ⇒ dừng báo, không tự publish lại để "sửa" kỳ vọng. */
+export function cmsQaContinuationDbCheck(donor: CmsQaContinuationDonor, rows: readonly CmsQaContinuationRow[]): { ok: true } | { ok: false; reasons: string[] } {
+  const reasons: string[] = []
+  if (rows.length !== donor.programIds.length) reasons.push(`DB trả ${rows.length} chương trình, donor có ${donor.programIds.length}`)
+  for (const id of donor.programIds) {
+    const m = maskCmsUuid(id)
+    const p = rows.find((r) => r.id === id)
+    if (!p) { reasons.push(`${m}: không còn trong DB`); continue }
+    if (p.is_test !== true) reasons.push(`${m}: chương trình THẬT (is_test = false) — CẤM tiếp nhận`)
+    if (p.status !== 'active') reasons.push(`${m}: trạng thái ${String(p.status)} (chỉ nhận active — chưa chốt)`)
+    if (p.qa_created !== true || p.created_in_donor !== true) reasons.push(`${m}: không do tài khoản QA tạo trong cửa sổ donor`)
+    if (p.running !== 0) reasons.push(`${m}: đang có run chạy / không đọc được số run đang chạy`)
+    const want = donor.runIdsByProgram[id] ?? []
+    if (p.not_locked !== true) reasons.push(`${m}: đã chốt kỳ`)
+    if (p.unchanged_since_close !== true) reasons.push(`${m}: chương trình bị sửa sau khi cửa sổ donor đóng`)
+    const runs = Array.isArray(p.donor_runs) ? (p.donor_runs as CmsQaContinuationRunRow[]) : []
+    if (runs.length !== want.length || !want.every((w) => runs.some((r) => r.id === w))) { reasons.push(`${m}: không đọc đủ run donor trong DB`); continue }
+    if (!runs.every((r) => r.status === 'ok' && r.is_test === true && r.kind === 'sales' && r.qa_run_id === donor.runId && /^\d+$/.test(String(r.started_us)))) { reasons.push(`${m}: có run donor không còn ok / is_test / đúng tag run donor`); continue }
+    const last = runs.reduce((a, b) => (BigInt(b.started_us) > BigInt(a.started_us) ? b : a))
+    if (p.current_run_id !== last.id) reasons.push(`${m}: con trỏ kết quả hiện tại không phải run mới nhất donor đã đối soát`)
+    // security review P2-3: không so null với null — cv phải là số nguyên ≥ 1, cách tính / policy phải là chuỗi có nội dung ở CẢ chương trình và run.
+    const cvP = Number(p.config_version), cvR = Number(last.cv)
+    const str = (v: unknown): v is string => typeof v === 'string' && v.length > 0
+    if (!Number.isInteger(cvP) || cvP < 1 || p.config_version === null || last.cv === null || !str(p.quantity_basis) || !str(p.returns_policy) || !str(last.basis) || !str(last.policy)) {
+      reasons.push(`${m}: thiếu cấu hình / cách tính / policy ở chương trình hoặc run (không so được hợp đồng)`)
+    } else if (cvP !== cvR || p.quantity_basis !== last.basis || p.returns_policy !== last.policy) {
+      reasons.push(`${m}: cấu hình / cách tính / policy hiện tại khác hợp đồng của run đã đối soát (đã bị sửa sau cửa sổ donor)`)
+    }
+  }
+  return reasons.length ? { ok: false, reasons } : { ok: true }
+}
+
+/** Manifest cửa sổ mới nhận chương trình donor: chỉ launcher gọi, sau khi cả hai phép kiểm trên đạt. */
+export function cmsQaManifestContinue(m: CmsQaRunManifest, donor: CmsQaContinuationDonor): CmsQaRunManifest & { continuedFrom: CmsQaContinuedFrom } {
+  if (m.status !== 'open' || m.programs.length !== 0) throw new Error('chỉ tiếp nhận vào manifest mới mở, chưa có chương trình')
+  if (m.mode !== 'manual-headless') throw new Error('tiếp tục chỉ cho run headless')
+  if (m.runId === donor.runId) throw new Error('run mới trùng runId donor')
+  if (!(Date.parse(m.startedAt) > Date.parse(donor.closedAt))) throw new Error('mốc run mới phải SAU mốc đóng donor (không lùi startedAt)')
+  let out = m
+  for (const id of donor.programIds) out = cmsQaManifestAddProgram(out, id)
+  out = { ...out, programs: out.programs.map((p) => ({ ...p, status: 'adopted' })) }
+  return { ...out, continuedFrom: { runId: donor.runId, sha256: donor.sha256, programs: [...donor.programIds], closedAt: donor.closedAt } }
 }

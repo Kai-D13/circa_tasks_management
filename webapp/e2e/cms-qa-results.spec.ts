@@ -389,6 +389,16 @@ test.describe('CMS QA kết quả — sổ writer và đối chiếu close @desk
     expect(R.cmsQaWritersCloseCheck(RUN, [file(entry({ status: 'unknown', result: res(null, 'OPEN_FAILED') }))], () => false).reasons.join()).toMatch(/KHÔNG RÕ \(OPEN_FAILED/)
     expect(R.cmsQaWritersCloseCheck(RUN, [{ name: `${WID}.json`, text: '{' }], alive).reasons.join()).toMatch(/hỏng/)
     expect(R.cmsQaWritersCloseCheck(RUN, [file(entry({ qaRunId: 'cms-qa-20261102T101500-cd34' }))], alive).reasons.join()).toMatch(/thuộc run khác/)
+    // P4-A (security review P2-4): lượt bq công bố lệch hợp đồng ⇒ ĐỎ; có lượt bq khớp SAU đó trên cùng chương trình ⇒ hết đỏ; held lệch không tính.
+    const bqE = (o: Record<string, unknown>) => entry({ status: 'done', source: 'bq', expect: { cv: 1, basis: 'pos_base', policy: 'full_line_qty_refund_v1' }, finishedAt: '2026-11-22T03:00:00.000Z', result: res(uid(91)), ...o })
+    const net = (m: boolean | null) => ({ amountVnd: '1', resultHash: 'h', contract: null, expectMatch: m })
+    const bad = bqE({ net: net(false) })
+    expect(R.cmsQaWritersCloseCheck(RUN, [file(bad)], alive).reasons.join()).toMatch(/LỆCH hợp đồng kỳ vọng/)
+    const good = bqE({ writerId: 'w-ffffffffffff', net: net(true), finishedAt: '2026-11-22T03:05:00.000Z' })
+    expect(R.cmsQaWritersCloseCheck(RUN, [file(bad), file(good, 'w-ffffffffffff.json')], alive).reasons).toEqual([])
+    expect(R.cmsQaWritersCloseCheck(RUN, [file(bad), file({ ...good, finishedAt: '2026-11-22T02:00:00.000Z' }, 'w-ffffffffffff.json')], alive).reasons.join()).toMatch(/LỆCH hợp đồng/)
+    expect(R.cmsQaWritersCloseCheck(RUN, [file(bqE({ net: net(false), result: { ...res(uid(91)), status: 'held', code: 'RETURNS_DISABLED' } }))], alive).reasons).toEqual([])
+    expect(R.cmsQaWritersCloseCheck(RUN, [file(bqE({ net: net(true) }))], alive).reasons).toEqual([])
     expect(R.cmsQaWritersCloseCheck(RUN, [file(entry({ status: 'done' }), 'w-ffffffffffff.json')], alive).reasons.join()).toMatch(/sai tên file/)
     expect(R.parseCmsQaWriterEntry(JSON.stringify({ ...entry(), openedRunId: 'x' })).ok).toBe(false)
     expect(R.parseCmsQaWriterEntry(JSON.stringify({ ...entry(), status: 'lạ' })).ok).toBe(false)
@@ -607,13 +617,16 @@ test.describe('CMS QA chốt (P3a) — tham số, cờ process, sổ ý định,
     expect(w.reasons).toEqual([])
     expect(w.warningProgramIds).toEqual([uid(95)])
     expect(R.cmsQaLedgerPartition(['w-0123456789ab.json', 'l-0123456789ab.json', 'a-0123456789ab.json', 'x.json', 'l-xyz.json', 'a-xyz.json']))
-      .toEqual({ writers: ['w-0123456789ab.json'], locks: ['l-0123456789ab.json'], attests: ['a-0123456789ab.json'], exports: [], other: ['x.json', 'l-xyz.json', 'a-xyz.json'] })
+      .toEqual({ writers: ['w-0123456789ab.json'], locks: ['l-0123456789ab.json'], attests: ['a-0123456789ab.json'], exports: [], reports: [], other: ['x.json', 'l-xyz.json', 'a-xyz.json'] })
+    // P4-A: sổ báo cáo sau chốt r-… là loại riêng; tên gần giống vẫn là tệp lạ.
+    expect(R.cmsQaLedgerPartition(['r-0123456789ab.json', 'r-xyz.json', 'r-0123456789ab.json.tmp'])).toMatchObject({ reports: ['r-0123456789ab.json'], other: ['r-xyz.json', 'r-0123456789ab.json.tmp'] })
   })
 })
 
 test.describe('CMS QA chốt (P3a) — launcher chỉ mở cờ LOCK cho server QA khi opt-in (security review P1-1) @desktop', () => {
   test('LOCK ở shell không opt-in ⇒ chặn; --with-lock cần EARNINGS + LOCK + server; DB phải có 123 và policy thật còn khoá', () => {
-    const L = (env: Record<string, string | undefined>, withLock: boolean, server = true) => R.cmsQaLauncherLockCheck({ processEnv: env, withLock, server })
+    const L = (env: Record<string, string | undefined>, withLock: boolean, server = true, mode?: 'manual-headless') =>
+      R.cmsQaLauncherLockCheck({ processEnv: env, withLock, mode: mode ?? (server ? 'manual-localhost' : 'no-server') })
     expect(L({}, false)).toEqual({ ok: true, lock: false })
     expect(L({ CMS_LOCK_ENABLED: 'false', CMS_EARNINGS_ENABLED: 'true' }, false)).toEqual({ ok: true, lock: false })
     const no = (r: ReturnType<typeof L>) => (r.ok ? '' : r.reason)
@@ -622,6 +635,10 @@ test.describe('CMS QA chốt (P3a) — launcher chỉ mở cờ LOCK cho server 
     expect(no(L({ CMS_LOCK_ENABLED: 'true' }, true))).toMatch(/CMS_EARNINGS_ENABLED=true/)
     expect(no(L({ CMS_LOCK_ENABLED: 'true', CMS_EARNINGS_ENABLED: 'true' }, true, false))).toMatch(/--no-server/)
     expect(L({ CMS_LOCK_ENABLED: 'true', CMS_EARNINGS_ENABLED: 'true' }, true)).toEqual({ ok: true, lock: true })
+    // P4-A: launcher headless là mode thủ công có canh ⇒ nhận --with-lock với ĐÚNG cùng điều kiện cờ; không opt-in vẫn chặn.
+    expect(L({ CMS_LOCK_ENABLED: 'true', CMS_EARNINGS_ENABLED: 'true' }, true, true, 'manual-headless')).toEqual({ ok: true, lock: true })
+    expect(no(L({ CMS_LOCK_ENABLED: 'true' }, true, true, 'manual-headless'))).toMatch(/CMS_EARNINGS_ENABLED=true/)
+    expect(no(L({ CMS_LOCK_ENABLED: 'true', CMS_EARNINGS_ENABLED: 'true' }, false, true, 'manual-headless'))).toMatch(/start --with-lock/)
     expect(R.cmsQaLauncherLockDbCheck(true, 'false')).toEqual({ ok: true })
     const db = (h: unknown, r: unknown) => { const c = R.cmsQaLauncherLockDbCheck(h, r); return c.ok ? '' : c.reason }
     expect(db(false, null)).toMatch(/chưa có migration 123/)

@@ -1136,8 +1136,8 @@ test.describe('CMS QA tooling · mã thoát CLI (B3 rc 127) @desktop', () => {
   })
 
   test('cms-verify / cms-qa-access / cms-qa-run thành tiến trình con: đúng mã 0 / 1 / 2, tự kết thúc, không UV_HANDLE_CLOSING', () => {
-    test.setTimeout(180_000)
-    const r = spawnSync(process.execPath, [path.join(WEBAPP, 'scripts', 'qa-cms-cli-exit.mjs')], { encoding: 'utf8', timeout: 170_000 })
+    test.setTimeout(420_000) // §8 (P4-A) chạy launcher headless thật, chờ canh marker tự dừng (poll 60 s)
+    const r = spawnSync(process.execPath, [path.join(WEBAPP, 'scripts', 'qa-cms-cli-exit.mjs')], { encoding: 'utf8', timeout: 400_000 })
     const out = `${r.stdout}\n${r.stderr}`
     expect(out, out.slice(-2500)).toMatch(/\n\d+ đạt · 0 lỗi/)
     expect(out).not.toMatch(/Assertion failed|UV_HANDLE_CLOSING/)

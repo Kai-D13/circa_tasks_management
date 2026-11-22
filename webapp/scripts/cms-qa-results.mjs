@@ -7,6 +7,10 @@
 //
 //   E2E_CMS_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> node scripts/cms-qa-results.mjs publish --program=<uuid QA>
 //       --staff=<uuid staff QA,…> --confirm-run=<runId đang mở> [--lines-per-staff=30] [--unassigned]
+//   (P4-A — nguồn BigQuery THẬT qua pipeline contract; cờ + view là biến PROCESS của lệnh)
+//   E2E_CMS_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> CMS_CALC_MODES_ENABLED=true CMS_RETURNS_ENABLED=true CMS_BQ_SALES_TABLE=<view bán>
+//       CMS_BQ_RETURNS_TABLE=<view trả> node scripts/cms-qa-results.mjs publish --source=bq --program=<uuid QA> --confirm-run=<runId>
+//       --expect-cv=<N> --expect-basis=<pos_base|cms_unit> --expect-policy=<policy> [--dry-run]
 //   node scripts/cms-qa-results.mjs status
 //   E2E_CMS_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> node scripts/cms-qa-results.mjs reconcile --writer=<w-…|l-…> [--finish-orphan]
 //   E2E_CMS_WRITE_QA=YES E2E_EXPECTED_SUPABASE_HOST=<host> CMS_PROGRAM_ENABLED=true CMS_EARNINGS_ENABLED=true CMS_LOCK_ENABLED=true
@@ -29,6 +33,11 @@
 //   is_test, active, thuộc run; marker mọi tài khoản QA còn ≥ 10 phút) → sổ writer (ghi độc quyền) → lõi với guard trước
 //   open / stage / seal / publish / cleanup → cập nhật sổ (atomic). Mất điều kiện giữa chừng ⇒ CMS_QA_GUARD_LOST: lõi đóng run
 //   error (finish — đường thu hồi lỗi tối thiểu), pointer giữ nguyên.
+// publish --source=bq (P4-A, PM 22/11 §3 A2): cùng gate / candidate / launcher / marker / sổ / tag của writer giả, nhưng KHÔNG thay nguồn —
+//   deps thật (một job bán + trả ghim as_of) + calc_contract theo cờ PROCESS; nguồn run vẫn 'qa' (lõi chặn chương trình thật, close nhận
+//   theo liên kết writer). Bắt buộc --expect-cv / --expect-basis / --expect-policy: guard so với DB trước MỖI bước ghi; hợp đồng run DB
+//   ghim lúc open phải khớp, lệch ⇒ rc 1 (EXPECT_MISMATCH). --dry-run: snapshot chỉ đọc + nguồn + engine, KHÔNG mở run / sổ / pointer.
+//   Không fallback fixture / legacy; không tự publish lại. Mặc định (--source vắng) vẫn là nguồn giả như cũ.
 // reconcile: writer chết khi sổ còn running (pid không còn) ⇒ đọc run sales của chương trình trong cửa sổ; còn run running ⇒
 //   cần --finish-orphan (đóng error QA_WRITER_ABORTED — chỉ chương trình is_test) ⇒ ghi sổ 'reconciled'. close của launcher
 //   từ chối khi còn writer chạy / không rõ.
@@ -39,15 +48,16 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
-import { ROOT, die2, loadTooling, mergedEnv, parseArgs, pgMeta, pidAlive, portOpen, readEnvFileText, rethrowCliExit, runCli, supabaseHost } from './lib-cms-ops.mjs'
+import { ROOT, die2, loadTooling, mergedEnv, parseArgs, pgMeta, pidAlive, readEnvFileText, rethrowCliExit, runCli, runLiveness, supabaseHost } from './lib-cms-ops.mjs'
 
 const HERE = path.dirname(fileURLToPath(import.meta.url))
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 async function main() {
   const a = parseArgs(process.argv.slice(2), {
-    flags: ['--unassigned', '--finish-orphan'],
-    values: ['--program', '--staff', '--lines-per-staff', '--confirm-run', '--writer', '--actor', '--expect-run', '--policy-version', '--ack', '--expect-attestation'],
+    flags: ['--unassigned', '--finish-orphan', '--dry-run'],
+    values: ['--program', '--staff', '--lines-per-staff', '--confirm-run', '--writer', '--actor', '--expect-run', '--policy-version', '--ack', '--expect-attestation',
+      '--source', '--expect-cv', '--expect-basis', '--expect-policy'],
   })
   const lockCmd = a.cmd === 'lock' || a.cmd === 'lock-preview'
   const lockOnly = ['--actor', '--expect-run', '--policy-version', '--ack', '--expect-attestation'].filter((k) => a.values[k] !== undefined)
@@ -56,7 +66,27 @@ async function main() {
     return 2
   }
   const { T, G, R } = await loadTooling()
+  // P4-A: nguồn của publish — tham số nguồn bq chỉ đi với publish --source=bq; kiểm TRƯỚC mọi IO (rc 2).
+  const bqOnly = ['--expect-cv', '--expect-basis', '--expect-policy'].filter((k) => a.values[k] !== undefined)
+  if (a.cmd !== 'publish' && (a.values['--source'] !== undefined || bqOnly.length || a.flags.has('--dry-run'))) die2('--source / --expect-* / --dry-run chỉ dùng với publish')
+  const srcKind = R.parseCmsQaWriterSource(a.values['--source'])
+  if (!srcKind.ok) die2(srcKind.reason)
+  const bq = a.cmd === 'publish' && srcKind.value === 'bq'
+  if (a.cmd === 'publish' && !bq && (bqOnly.length || a.flags.has('--dry-run'))) die2('--expect-* / --dry-run chỉ dùng với --source=bq')
   const envFileText = readEnvFileText()
+  let bqExpect = null
+  // Security review P2-3: capture lớp nguồn (có email nhân viên) của lượt bq CHỈ bật bằng biến PROCESS — chốt giá trị ở đây, trước loadCore.
+  let bqSourceCapture = false
+  if (bq) {
+    const ex = R.parseCmsQaBqExpect({ cv: a.values['--expect-cv'], basis: a.values['--expect-basis'], policy: a.values['--expect-policy'] })
+    if (!ex.ok) die2(ex.reason)
+    bqExpect = ex.value
+    // Cờ + view của lượt phải là biến PROCESS của chính lệnh (kiểm trước khi chép .env.local vào process ở loadCore).
+    const pe = R.cmsQaBqSourceEnvCheck(process.env, envFileText)
+    if (!pe.ok) die2(pe.reason)
+    bqSourceCapture = process.env.CMS_SOURCE_CAPTURE_ENABLED === 'true'
+    if (a.values['--staff'] !== undefined || a.values['--lines-per-staff'] !== undefined || a.flags.has('--unassigned')) die2('--source=bq không nhận --staff / --lines-per-staff / --unassigned (không sinh dòng giả)')
+  }
   const env = mergedEnv(envFileText)
   const MARKER = path.join(ROOT, G.CMS_QA_MARKER)
   const mask = T.maskCmsUuid
@@ -101,6 +131,8 @@ async function main() {
   // ── Gate chung (publish / reconcile): biến PROCESS, host, .env.local, manifest PHẢI mở ──
   const gate = G.cmsQaWriterGate({ env, envFileText, markerExists: fs.existsSync(MARKER) })
   if (!gate.ok) die2(gate.reason)
+  const manifestText0 = fs.existsSync(MARKER) ? fs.readFileSync(MARKER, 'utf8') : null
+  const manifestUnchanged = () => { try { return manifestText0 !== null && fs.readFileSync(MARKER, 'utf8') === manifestText0 } catch { return false } }
   const m = readManifest()
   if (!m || m.status !== 'open') die2(`${G.CMS_QA_MARKER} hỏng hoặc không ở trạng thái mở — không xoá tay; báo PM / operator`)
   if (gate.host !== m.host) die2(`host hiện tại (${gate.host}) khác host của run (${m.host})`)
@@ -196,16 +228,116 @@ async function main() {
       const linked = finishedOrphan
         ? (await pgMeta(env, T.pgMetaReadOnly(R.cmsQaRunSalesRunsSql(m.startedAt)))).filter((r) => r.qa_writer_id === wid)
         : plan.linked
+      // P4-A r1 (PM 22/11 R2-b) — writer nguồn bq: "tìm thấy run" ≠ "run đúng hợp đồng". Đọc metadata ĐÃ GHIM của từng run liên kết đã
+      // công bố và so với `expect` sổ ghi TRƯỚC khi gửi (không dùng cấu hình chương trình hiện tại). Không đọc được ⇒ KHÔNG reconcile.
+      let contract
+      if (e.source === 'bq') {
+        const okRuns = linked.filter((r) => r.status === 'ok')
+        const crow = okRuns.length ? await pgMeta(env, T.pgMetaReadOnly(R.cmsQaBqRunContractSql(okRuns.map((r) => r.id)))) : []
+        contract = R.cmsQaBqRunsVerdicts(e, linked, crow)
+      }
       const done = { ...e, status: 'reconciled', finishedAt: new Date().toISOString(),
-        reconcile: { at: new Date().toISOString(), runs: linked.map((r) => ({ id: r.id, status: r.status, errorCode: r.error_code })), finishedOrphan } }
+        reconcile: { at: new Date().toISOString(), runs: linked.map((r) => ({ id: r.id, status: r.status, errorCode: r.error_code })), finishedOrphan,
+          ...(contract ? { contract } : {}) } }
       writeAtomic(file, done)
       console.log(`writer ${wid} ⇒ reconciled · ${linked.length} run sales liên kết (${linked.map((r) => `${mask(r.id)} ${r.status}`).join(', ') || '—'})`)
+      if (contract) {
+        for (const v of contract) console.log(`  run ${mask(v.runId)} ${v.status} · hợp đồng run DB ${v.match ? 'KHỚP kỳ vọng của sổ' : `LỆCH: ${v.reasons.join('; ')}`}`)
+        if (contract.some((v) => !v.match)) {
+          console.log('ĐÃ COMMIT NHƯNG LỆCH HỢP ĐỒNG (EXPECT_MISMATCH): run đã công bố không đúng bộ --expect-* của sổ — KHÔNG coi là đạt; close sẽ ĐỎ tới khi có lượt bq khớp sau đó; báo PM / operator')
+          return 1
+        }
+        if (!contract.length) console.log('  không có run nào đã công bố của writer này — KHÔNG có kết quả để nghiệm thu')
+      }
       return 0
     } catch (e) {
       rethrowCliExit(e)
       console.log(`LỖI: ${e instanceof Error ? e.message.split('\n')[0] : String(e)}`)
       return 1
     }
+  }
+
+  // ── P4-A: publish --source=bq — pipeline contract với nguồn THẬT, cùng guard / sổ / tag; không runner / table / dòng giả. ──
+  async function publishBq({ core, real }) {
+    // Cờ lấy từ process.env SAU loadCore vẫn là giá trị PROCESS đã kiểm (loadCore chỉ chép biến CHƯA có) — cmsQaBqSourceEnvCheck đã ép 'true'.
+    const calcFlags = { modes: process.env.CMS_CALC_MODES_ENABLED === 'true', returns: process.env.CMS_RETURNS_ENABLED === 'true' }
+    const sourceCapture = bqSourceCapture
+    const view = (r) => ({ status: r.status, code: r.code, reasons: r.reasons, runId: r.runId, isTest: r.isTest, rowsRead: r.rowsRead, rowsRejected: r.rowsRejected,
+      candidates: r.candidates, included: r.included, unassigned: r.unassigned, outOfScope: r.outOfScope, amountVnd: r.amountVnd, stagedRows: r.stagedRows,
+      sourceRows: r.sourceRows ?? null, bytesProcessed: r.bytesProcessed, resultHash: r.resultHash, contract: r.contract ?? null })
+    if (!real.table || !real.contractProvider) { console.log('CHẶN: thiếu view nguồn / provider contract (CMS_BQ_SALES_TABLE / CMS_BQ_RETURNS_TABLE)'); return 2 }
+    if (a.flags.has('--dry-run')) {
+      // KHÔNG sổ, KHÔNG open: lõi dryRun chỉ gọi loadSnapshot (đọc) + nguồn + engine. Bọc các bước ghi bằng hàm ném để chứng minh 0 ghi.
+      const noWrite = (k) => async () => { throw new Error(`CMS_QA_DRY_RUN_WRITE_${k}`) }
+      const dryDeps = { ...real, now: mono, openRun: noWrite('OPEN'), stage: noWrite('STAGE'), sealBegin: noWrite('SEAL'), sealStep: noWrite('SEAL'),
+        publish: noWrite('PUBLISH'), finish: noWrite('FINISH'), cleanup: noWrite('CLEANUP') }
+      console.log(`QA kết quả · DRY-RUN nguồn BigQuery THẬT · run ${m.runId} · đích ${m.host} · chương trình ${mask(programId)} · kỳ vọng cv ${bqExpect.cv} / ${bqExpect.basis} / ${bqExpect.policy}`)
+      let r
+      try { r = await core.runCmsSalesSync(dryDeps, programId, { dryRun: true, source: R.CMS_QA_WRITER_SOURCE, deadlineAt: mono() + R.CMS_QA_WRITER_BUDGET_MS, sourceCapture: false, calcFlags }) }
+      catch (e) { rethrowCliExit(e); console.log('LỖI: dry-run lỗi ngoài dự kiến (không ghi gì)'); return 1 }
+      const expectMatch = R.cmsQaBqContractMatch(r.contract ?? null, bqExpect)
+      console.log(JSON.stringify({ ...view(r), dryRun: true, expectMatch }))
+      if (!expectMatch) console.log('EXPECT_MISMATCH: hợp đồng lõi đọc được khác --expect-basis / --expect-policy hoặc không phải provider bq — không publish')
+      return r.status === 'dry_run' && r.code === null && expectMatch ? 0 : 1
+    }
+    fs.mkdirSync(ledgerDir, { recursive: true })
+    const writerId = `w-${crypto.randomBytes(6).toString('hex')}`
+    const ledgerFile = path.join(ledgerDir, `${writerId}.json`)
+    let entry = R.newCmsQaWriterEntry({ writerId, qaRunId: m.runId, pid: process.pid, programId, staff: [], lines: 0, now: new Date().toISOString(), source: 'bq', expect: bqExpect })
+    try { fs.writeFileSync(ledgerFile, json(entry), { flag: 'wx' }) } catch { die2(`sổ writer ${writerId} đã tồn tại — chạy lại`) }
+    console.log(`QA kết quả · nguồn BigQuery THẬT (contract) · run ${m.runId} · đích ${m.host} · chương trình ${mask(programId)} · kỳ vọng cv ${bqExpect.cv} / ${bqExpect.basis} / ${bqExpect.policy} · writer ${writerId}`)
+    const deadlineAt = mono() + R.CMS_QA_WRITER_BUDGET_MS
+    const clock = { now: mono, workUntil: deadlineAt - core.CMS_SALES_STOP_RESERVE_MS, minStartMs: core.CMS_RPC_START_MIN_MS }
+    // deps THẬT nguyên vẹn (table / runner / contractProvider) — chỉ đổi đồng hồ ngân sách và bọc guard + tag + sổ như writer giả.
+    const deps = R.cmsQaGuardedDeps({ ...real, now: mono }, guard, {
+      clock, tag: { qaRunId: m.runId, writerId },
+      onOpened: async (runId) => { entry = { ...entry, openedRunId: runId }; writeAtomic(ledgerFile, entry) },
+    })
+    let r
+    try {
+      r = await core.runCmsSalesSync(deps, programId, { dryRun: false, source: R.CMS_QA_WRITER_SOURCE, deadlineAt, sourceCapture, calcFlags })
+    } catch (e) {
+      rethrowCliExit(e)
+      r = { status: 'error', code: 'INTERNAL', reasons: [], runId: null, isTest: null, stagedRows: 0, rowsRead: null, rowsRejected: null, candidates: null, included: null,
+        unassigned: null, outOfScope: null, amountVnd: null, bytesProcessed: null, resultHash: null }
+    }
+    const outcome = R.cmsQaWriterOutcome(r)
+    // Hợp đồng run DB ghim lúc open phải đúng kỳ vọng — chỉ xét khi lõi đã tới hợp đồng (published / held sau open).
+    let expectMatch = r.runId === null ? null : R.cmsQaBqContractMatch(r.contract ?? null, bqExpect)
+    // P4-A r1 (PM 22/11 R2-b): run ĐÃ CÔNG BỐ ⇒ thêm phép so metadata đã ghim của run TRONG DB (cv / cách tính / policy / phiên bản hợp
+    // đồng + từ điển / provider của pin / tag) — CÙNG phép so reconcile và close dùng. Không đọc được ⇒ không báo khớp (fail-closed).
+    let dbContract = null
+    if (r.runId !== null && r.status === 'published' && outcome === 'done') {
+      try {
+        const crow = await pgMeta(env, T.pgMetaReadOnly(R.cmsQaBqRunContractSql([r.runId])), { signal: AbortSignal.timeout(30_000) })
+        dbContract = R.cmsQaBqRunContractCheck(crow[0], entry, r.runId)
+      } catch (e) { rethrowCliExit(e); dbContract = { runId: r.runId, status: '—', match: false, reasons: ['không đọc được metadata run trong DB'] } }
+      if (!dbContract.match) { expectMatch = false; console.log(`hợp đồng run DB LỆCH kỳ vọng: ${dbContract.reasons.join('; ')}`) }
+    } else if (expectMatch === true) {
+      // Chưa xác nhận công bố (unknown / held / error): KHÔNG ghi "khớp" vào sổ — hợp đồng run chỉ được nhận sau khi đọc metadata run DB
+      // (lượt thường ở nhánh trên, lượt mất phản hồi ở `reconcile`). Lệch (false) vẫn giữ để báo.
+      expectMatch = null
+    }
+    entry = { ...entry, status: outcome, finishedAt: new Date().toISOString(),
+      result: { status: r.status, code: r.code, runId: r.runId, stagedRows: r.stagedRows, rowsRead: r.rowsRead, candidates: r.candidates, included: r.included,
+        unassigned: r.unassigned, sourceRows: r.sourceRows ?? null },
+      net: { amountVnd: r.amountVnd ?? null, resultHash: r.resultHash ?? null, contract: r.contract ?? null, expectMatch, ...(dbContract ? { dbContract } : {}) } }
+    let saved = true
+    try { writeAtomic(ledgerFile, entry) } catch (e) { rethrowCliExit(e); saved = false }
+    console.log(JSON.stringify({ ...view(r), expectMatch, writer: writerId, ledger: saved ? outcome : 'NOT_SAVED', guard: r.code === R.CMS_QA_GUARD_LOST ? guardReasons : undefined }))
+    if (!saved) {
+      console.log(`SỔ WRITER CHƯA ĐÓNG: không ghi được ${writerId} (vẫn running trên đĩa) — kết quả ${r.status}${r.code ? ` ${r.code}` : ''} có thể đã công bố; KHÔNG publish lại; close sẽ đòi \`reconcile --writer=${writerId}\``)
+      return 1
+    }
+    if (outcome === 'unknown') {
+      console.log(`KẾT QUẢ KHÔNG RÕ (${r.code}) — run có thể đã ghi / công bố; KHÔNG publish lại; chạy \`node scripts/cms-qa-results.mjs reconcile --writer=${writerId}\` trước close`)
+      return 1
+    }
+    if (expectMatch === false) {
+      console.log('EXPECT_MISMATCH: hợp đồng của run khác --expect-basis / --expect-policy hoặc không phải provider bq — KHÔNG coi là đạt; run đã nằm trong sổ, báo PM / operator')
+      return 1
+    }
+    return r.status === 'published' && r.code === null ? 0 : 1
   }
 
   // ── publish / lock-preview / lock: tham số → Git → điều kiện cục bộ → guard DB (chung) ──
@@ -219,6 +351,8 @@ async function main() {
     la = R.parseCmsQaLockArgs({ actor: a.values['--actor'], expectRun: a.values['--expect-run'], policyVersion: a.values['--policy-version'], ack: a.values['--ack'],
       expectAttestation: a.values['--expect-attestation'] }, a.cmd === 'lock')
     if (!la.ok) die2(la.reason)
+  } else if (bq) {
+    staff = { ok: true, value: [] } // nguồn thật: không tài khoản staff QA, không dòng giả
   } else {
     staff = R.parseCmsQaStaffIds(a.values['--staff'])
     if (!staff.ok) die2(staff.reason)
@@ -232,14 +366,15 @@ async function main() {
     gitHead = git('rev-parse', 'HEAD')
     gitTree = git('rev-parse', 'HEAD^{tree}')
   } catch (e) { rethrowCliExit(e); die2('không đọc được Git') }
-  // Launcher sống = pid LAUNCHER (nơi chạy canh marker) + pid server con + cổng (security review 03/11 P1-1).
-  const launcherAlive = async () => m.port !== null && m.serverPid !== null && !m.serverNotStopped
-    && Number.isInteger(m.launcherPid) && pidAlive(m.launcherPid) && pidAlive(m.serverPid) && await portOpen(m.port)
+  // Launcher sống qua helper CHUNG (lib-cms-ops runLiveness → e2e/cmsQaTooling.ts cmsQaRunLiveness): localhost = pid launcher + pid server
+  // con + cổng (security review 03/11 P1-1); headless (P4-A) = pid launcher + heartbeat của lượt còn mới. Tham số = manifest ĐANG đọc.
+  const launcherAlive = async (cur = m) => (await runLiveness(T, cur)).alive
   const localIn = {
     manifest: m, confirmRun: a.values['--confirm-run'], host: supabaseHost(env), treeClean, gitHead, gitTree,
     launcherAlive: await launcherAlive(),
   }
-  const local = lockCmd ? R.cmsQaLockLocalCheck({ ...localIn, actorId: la.value.actorId }) : R.cmsQaWriterLocalCheck({ ...localIn, staffIds: staff.value })
+  const local = lockCmd ? R.cmsQaLockLocalCheck({ ...localIn, actorId: la.value.actorId })
+    : bq ? R.cmsQaBqLocalCheck(localIn) : R.cmsQaWriterLocalCheck({ ...localIn, staffIds: staff.value })
   if (!local.ok) { for (const r of local.reasons) console.log(`CHẶN: ${r}`); return 2 }
 
   // Đồng hồ đơn điệu (performance) theo thang epoch ms, số NGUYÊN — dùng chung cho lõi (deps.now) và guard: ngân sách guard + ghi.
@@ -253,13 +388,16 @@ async function main() {
     const sig = () => AbortSignal.timeout(R.cmsQaIoTimeoutMs(30_000, budgetMs - (mono() - t0), 1_000))
     const programRows = await pgMeta(env, T.pgMetaReadOnly(R.cmsQaWriterProgramSql(programId, m.startedAt, uids)), { signal: sig() })
     const statusRows = await pgMeta(env, T.pgMetaReadOnly(T.cmsQaStatusSql(uids)), { signal: sig() })
+    // Nguồn bq: cấu hình chương trình phải còn đúng bộ operator đã gõ lại (cv / cách tính / policy) trước MỖI bước ghi.
+    const profileRows = bq ? await pgMeta(env, T.pgMetaReadOnly(R.cmsQaWriterProfileSql(programId)), { signal: sig() }) : null
     const cur = readManifest()
-    if (!cur || cur.status !== 'open' || cur.runId !== m.runId || cur.serverNotStopped) guardReasons.push('manifest run không còn mở / đã đổi')
-    else if (!(await launcherAlive())) guardReasons.push('launcher / server QA không còn chạy')
+    if (!cur || cur.status !== 'open' || cur.runId !== m.runId || cur.serverNotStopped || !manifestUnchanged()) guardReasons.push('manifest run không còn mở / đã đổi')
+    else if (!(await launcherAlive(cur))) guardReasons.push('launcher / server QA không còn chạy (hoặc launcher headless không còn canh marker)')
     else {
       const aged = R.cmsQaAgeStatusRows(statusRows, mono() - t0)
       const c = R.cmsQaWriterDbCheck({ manifest: cur, programId, programRows, statusRows: aged, guardMinutes: T.CMS_QA_GUARD_MINUTES_MIN })
       if (!c.ok) guardReasons.push(...c.reasons)
+      if (bq) guardReasons.push(...R.cmsQaBqProfileCheck(profileRows?.[0], bqExpect))
     }
     if (guardReasons.length) throw new Error(`guard ${step}`)
   }
@@ -364,6 +502,7 @@ async function main() {
 
   const { core, stage, depsMod, fixture } = await loadCore()
   const real = depsMod.cmsSalesSyncDeps(process.env)
+  if (bq) return await publishBq({ core, real })
   // Nguồn giả: sinh từ snapshot CHỈ ĐỌC (email staff QA lấy từ snapshot, không in) — trước khi mở sổ / ghi.
   let rows
   try {

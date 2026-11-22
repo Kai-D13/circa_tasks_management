@@ -40,7 +40,7 @@ import crypto from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
-import { CliExit, ROOT, die2, loadTooling, mergedEnv, parseArgs, pgMeta, pidAlive, portOpen, readEnvFileText, rethrowCliExit, runCli, supabaseHost } from './lib-cms-ops.mjs'
+import { CliExit, ROOT, die2, loadTooling, mergedEnv, parseArgs, pgMeta, pidAlive, portOpen, readEnvFileText, readHeartbeatText, rethrowCliExit, runCli, supabaseHost } from './lib-cms-ops.mjs'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const INTERNAL = 'CMS_ATTEST_INTERNAL' // = A.CMS_ATTEST_INTERNAL (lõi có thể chưa nạp khi lỗi xảy ra)
@@ -221,6 +221,9 @@ async function main() {
     },
     pidAlive,
     portOpen,
+    // P4-A: run headless ⇒ liveness theo heartbeat của lượt (lõi cmsQaRunLiveness — cùng helper với writer / chốt / close).
+    heartbeatText: readHeartbeatText,
+    wallNow: () => Date.now(),
     read: (sql, timeoutMs) => ro(sql, { signal: AbortSignal.timeout(timeoutMs) }),
   }
   /** Pha IO của guard với ngân sách đặt TRƯỚC guard; trả `final()` đồng bộ — gọi ngay trước bước gửi. */
