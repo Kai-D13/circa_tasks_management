@@ -36,6 +36,9 @@ import type { CmsProgramBasis } from '@/lib/cms/calc/basisUi'
 // UX-KACK-1 (PM 15/11 §4): còn ý định xác nhận K đã tick mà preview chưa nhận lại ⇒ KHOÁ nút ghi (không ghi preview cũ); gửi lại lỗi /
 // hết giờ GIỮ nguyên nháp (vẫn khoá); gửi lại thành công ⇒ nháp bỏ, báo ý định server không gắn được. Ghi một phần ⇒ phải tick xác nhận
 // đúng số SP bị bỏ (theo kết quả server) trước khi nút ghi mở. Server commit vẫn tự kiểm (không đổi hợp đồng).
+// CMS-IMPORT-UI-1 (PM 22/11 §3.3–§3.4): Upload = cột thao tác (loại file, chọn file, tên / kích thước, file mẫu) 2 phần | cột hướng dẫn
+// (cấu trúc cột + các kiểm tra) 1 phần khi nội dung khung ≥ 960px, xếp dọc bên dưới; Kết quả không có cột hướng dẫn — bảng dùng toàn
+// chiều ngang, tóm tắt trước khi ghi nằm sát nút ghi. Chỉ đổi bố cục; không thêm request.
 
 const MAX_FILE = 5 * 1024 * 1024
 type Step = 'upload' | 'running' | 'result'
@@ -218,7 +221,7 @@ export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false, bas
     : 'NOTHING'
 
   return (
-    <div data-cms-import-flow={step} className="space-y-4">
+    <div data-cms-import-flow={step} className="min-w-0 space-y-[16px]">
       <CmsStepper current={current} skipFirst={!fromNew} />
       <Notice tone="info">
         {mode === 'replace'
@@ -237,13 +240,13 @@ export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false, bas
       )}
       {basis !== undefined && basis !== null && basis.basis === null && (
         <Notice tone="danger" role="alert" title="Chương trình chưa chọn cách tính">
-          Mở <Link href={`/targets/campaigns/cms/${program.id}/edit`} className="underline">Sửa thông tin</Link>, chọn cách tính rồi quay lại nạp file.
+          Mở <Link href={`/targets/campaigns/cms/${program.id}/edit`} className="inline-flex min-h-[44px] min-w-[44px] items-center underline md:inline md:min-h-0 md:min-w-0">Sửa thông tin</Link>, chọn cách tính rồi quay lại nạp file.
         </Notice>
       )}
 
       {step === 'upload' && (
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1.5fr)_minmax(0,1fr)]">
-          <div className="min-w-0 space-y-3">
+        <div data-cms-upload-grid className="grid min-w-0 gap-[16px] md:gap-[24px] @min-[960px]/cms-wizard:grid-cols-[minmax(0,2fr)_minmax(0,1fr)] @min-[960px]/cms-wizard:items-start">
+          <div data-cms-upload-main className="min-w-0 space-y-3">
             {v2 && (
               <fieldset data-cms-import-format={format} className="space-y-1.5">
                 <legend className="text-[13px] font-semibold">Loại file</legend>
@@ -257,7 +260,7 @@ export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false, bas
                 </div>
               </fieldset>
             )}
-            <label className="flex min-h-[160px] cursor-pointer flex-col items-center justify-center gap-2 rounded-v2-panel border border-dashed border-input bg-card p-6 text-center">
+            <label data-cms-file-pick className="flex min-h-[160px] cursor-pointer flex-col items-center justify-center gap-2 rounded-v2-panel border border-dashed border-input bg-card p-6 text-center hover:border-primary has-[:focus-visible]:border-primary has-[:focus-visible]:ring-2 has-[:focus-visible]:ring-ring">
               <Upload aria-hidden="true" className="h-6 w-6 text-muted-foreground" />
               <span className="font-semibold">{format === 'simple' ? 'Chọn file .xlsx mức cố định (sheet đầu tiên)' : 'Chọn file .xlsx (sheet IMPORT_CMS)'}</span>
               <span className="text-[12px] text-muted-foreground">{format === 'simple' ? 'Tối đa 5 MiB · 2.000 dòng · 7 cột + 2 cột bổ sung' : 'Tối đa 5 MiB · 2.000 dòng · 9 cột'}</span>
@@ -278,27 +281,14 @@ export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false, bas
               </a>
             )}
             {fileName && (
-              <div data-cms-file className="flex items-center gap-3 rounded-v2-panel border bg-card p-3">
-                <FileSpreadsheet aria-hidden="true" className="h-5 w-5 shrink-0 text-muted-foreground" />
-                <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{fileName}</span>
+              <div data-cms-file className="flex items-start gap-3 rounded-v2-panel border bg-card p-3">
+                <FileSpreadsheet aria-hidden="true" className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
+                <span className="min-w-0 flex-1 text-[13px] font-medium [overflow-wrap:anywhere]">{fileName}</span>
                 {fileBytes !== null && <span className="shrink-0 text-[12px] text-muted-foreground tabular-nums">{cmsFileSize(fileBytes)}</span>}
               </div>
             )}
-            <div className="overflow-hidden rounded-v2-panel border bg-card">
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[480px] text-[13px]">
-                  <thead className="bg-muted">
-                    <tr className="text-left"><th className="pl-4 pr-3 py-2 text-[12px] font-medium text-muted-foreground">Cột</th><th className="pl-3 pr-4 py-2 text-[12px] font-medium text-muted-foreground">Ý nghĩa</th></tr>
-                  </thead>
-                  <tbody>
-                    {(format === 'simple' ? CMS_SIMPLE_COLUMN_HELP : CMS_IMPORT_COLUMN_HELP).map(([c, m]) => (
-                      <tr key={c} className="border-t"><td className="pl-4 pr-3 py-2 font-mono text-[12px] whitespace-nowrap">{c}</td><td className="pl-3 pr-4 py-2 text-muted-foreground">{m}</td></tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
           </div>
+          <div data-cms-upload-guide className="min-w-0 space-y-[16px]">
           <div className="min-w-0 space-y-2 rounded-v2-panel border bg-card p-4">
             <p className="text-[13px] font-semibold">Hệ thống sẽ kiểm tra</p>
             <ul className="list-disc space-y-1 pl-5 text-[13px] text-muted-foreground">
@@ -307,7 +297,22 @@ export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false, bas
             </ul>
             <p className="text-[12px] text-muted-foreground">Một dòng lỗi làm loại cả nhóm ProductID; nhóm hợp lệ khác vẫn được nạp.</p>
           </div>
-          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end lg:col-span-2">
+            <div className="overflow-hidden rounded-v2-panel border bg-card">
+              <div className="overflow-x-auto">
+                <table data-cms-column-help className="w-full min-w-[320px] text-[13px]">
+                  <thead className="bg-muted">
+                    <tr className="text-left"><th className="pl-4 pr-3 py-2 text-[12px] font-medium text-muted-foreground">Cột</th><th className="pl-3 pr-4 py-2 text-[12px] font-medium text-muted-foreground">Ý nghĩa</th></tr>
+                  </thead>
+                  <tbody>
+                    {(format === 'simple' ? CMS_SIMPLE_COLUMN_HELP : CMS_IMPORT_COLUMN_HELP).map(([c, m]) => (
+                      <tr key={c} className="border-t"><td className="pl-4 pr-3 py-2 align-top font-mono text-[12px] whitespace-nowrap">{c}</td><td className="pl-3 pr-4 py-2 text-muted-foreground">{m}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+          <div data-cms-flow-actions className="flex flex-col gap-2 sm:flex-row sm:justify-end @min-[960px]/cms-wizard:col-span-2">
             <Link href={`/targets/campaigns/cms/${program.id}`} className={cn(buttonVariants({ variant: 'ghost' }), 'h-[44px] md:h-[36px]')}>Quay lại</Link>
             <Button type="button" disabled={!file || basisPending} onClick={() => runPreview(false)} className="h-[44px] md:h-[36px] font-semibold">Chạy xử lý</Button>
           </div>
@@ -368,7 +373,7 @@ export function CmsImportFlow({ program, mode, fromNew, fixture, v2 = false, bas
               busy={committing || rechecking}
             />
           )}
-          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+          <div data-cms-flow-actions className="flex flex-col gap-2 sm:flex-row sm:justify-end">
             <Button type="button" variant="ghost" onClick={() => reset(false)} disabled={committing || rechecking} className="h-[44px] md:h-[36px]">Hủy lần chạy</Button>
             <Button type="button" variant="outline" onClick={() => reset(false)} disabled={committing || rechecking} className="h-[44px] md:h-[36px]">Upload file khác</Button>
             {commitLabel && (

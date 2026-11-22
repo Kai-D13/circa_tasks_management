@@ -18,7 +18,8 @@ export function CmsStepper({ current, skipFirst = false }: { current: 0 | 1 | 2 
               className={cn(
                 'inline-flex size-6 items-center justify-center rounded-full border text-[12px] font-semibold tabular-nums',
                 done && 'border-v2-ok bg-v2-ok text-white',
-                active && 'border-foreground bg-foreground text-background',
+                // CMS-IMPORT-UI-1 §3.3: bước hiện tại dùng màu thao tác (coral v2), còn lại trung tính.
+                active && 'border-primary bg-primary text-primary-foreground',
                 !done && !active && 'border-input text-muted-foreground',
               )}
             >
