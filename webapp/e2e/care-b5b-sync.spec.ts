@@ -110,7 +110,7 @@ test.describe('care B5b.2 — end-to-end PGlite (RPC 114 thật + BigQuery giả
     test.setTimeout(300_000)
     const { PGlite } = await import('@electric-sql/pglite')
     const L: any = await import(pathToFileURL(path.join(ROOT, 'scripts', 'lib-care-pglite.mjs')).href)
-    const db: any = await L.freshDb(PGlite)
+    const db: any = await L.freshDbLatest(PGlite)
     const U = L.U, P10 = '2026-10-01'
     const svc = async (sql: string, params: unknown[] = []) => L.as(db, null, async () => (await db.query(sql, params)).rows[0].r, 'service_role')
     expect((await L.finalize(db, await L.stage(db, [L.row('QA-S1', 'QAOS01', L.EA, 'P1'), L.row('QA-S2', 'QAOS01', L.EA, 'P1'), L.row('QA-S3', 'QAOS02', L.EC, 'P1')], { period: P10 }), U.mkt, '2026-10-01')).status).toBe('committed')

@@ -861,8 +861,9 @@ export async function cmdVerify({ gw, env, envFileText, markerPath }) {
     const r = await staff.rpc('care_record_interaction', { p_task_id: t1, p_outcome: 'CALLBACK', p_note: 'QA B6 verify', p_next_action_date: today, p_proof: [] })
     return r?.status === 'open' ? { result: 'PASS' } : { result: 'FAIL', reason: `task ${r?.status ?? '?'} — kỳ vọng open` }
   })
-  await check('staff: ghi lượt kết thúc NO_NEED (proof=[]) + hàng đợi đối soát', async () => {
-    const r = await staff.rpc('care_record_interaction', { p_task_id: t2, p_outcome: 'NO_NEED', p_note: 'QA B6 verify', p_next_action_date: null, p_proof: [] })
+  // PM 22/11 (133): NO_NEED không còn kết thúc ⇒ dùng INTERESTED (kết thúc cả trước lẫn sau 133).
+  await check('staff: ghi lượt kết thúc INTERESTED (proof=[]) + hàng đợi đối soát', async () => {
+    const r = await staff.rpc('care_record_interaction', { p_task_id: t2, p_outcome: 'INTERESTED', p_note: 'QA B6 verify', p_next_action_date: null, p_proof: [] })
     const q = await gw.svc.count('care_reconcile_queue', [['customer_id', 'in', [m.customerIds[1]]]])
     return r?.status === 'completed' && q === 1 ? { result: 'PASS' } : { result: 'FAIL', reason: `task ${r?.status ?? '?'}, queue ${q} — kỳ vọng completed, 1` }
   })

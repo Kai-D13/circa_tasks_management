@@ -27,6 +27,13 @@ function fnBody(name: string): string {
   return SQL.slice(i, j + 3)
 }
 const quoted = (s: string) => [...s.matchAll(/'([A-Z_]+)'/g)].map((m) => m[1]).sort()
+// PM 22/11/2026: 133 CREATE OR REPLACE hai helper outcome ⇒ định nghĩa hiệu lực = bản trong 133 (114 giữ nguyên văn lịch sử).
+const SQL133 = fs.readFileSync(path.join(ROOT, '..', 'supabase', 'migrations', '133_care_no_need_callback.sql'), 'utf8').replace(/\r\n/g, '\n')
+function fnBody133(name: string): string {
+  const i = SQL133.indexOf(`CREATE OR REPLACE FUNCTION public.${name}(`)
+  expect(i, `133 không thấy ${name}`).toBeGreaterThan(-1)
+  return SQL133.slice(i, SQL133.indexOf('$$;', SQL133.indexOf('$$', i) + 2) + 3)
+}
 
 test.describe('mig 114 source contract @desktop', () => {
   test('khung migration: header, preflight 113, BEGIN…COMMIT, marker 114 cuối transaction, rollback', () => {
@@ -223,8 +230,14 @@ test.describe('mig 114 source contract @desktop', () => {
 
   test('outcome SQL ↔ lib/care/outcome.ts (6 mã, terminal, ngày hẹn, DNC)', () => {
     expect(quoted(fnBody('care_is_outcome'))).toEqual([...CARE_OUTCOMES].sort())
-    expect(quoted(fnBody('care_is_terminal_outcome'))).toEqual(CARE_OUTCOMES.filter((o) => CARE_OUTCOME_META[o].terminal).sort())
-    expect(quoted(fnBody('care_outcome_requires_date'))).toEqual(CARE_OUTCOMES.filter((o) => CARE_OUTCOME_META[o].requiresNextActionDate).sort())
+    expect(quoted(fnBody133('care_is_terminal_outcome'))).toEqual(CARE_OUTCOMES.filter((o) => CARE_OUTCOME_META[o].terminal).sort())
+    expect(quoted(fnBody133('care_outcome_requires_date'))).toEqual(CARE_OUTCOMES.filter((o) => CARE_OUTCOME_META[o].requiresNextActionDate).sort())
+    // 114 nguyên văn (rollback 133 trả về đúng bản này): NO_NEED kết thúc, không ngày hẹn.
+    expect(quoted(fnBody('care_is_terminal_outcome'))).toEqual(['INTERESTED', 'NO_NEED', 'ORDERED', 'REFUSED'])
+    expect(quoted(fnBody('care_outcome_requires_date'))).toEqual(['CALLBACK', 'UNREACHABLE'])
+    // 133 không sửa thân hàm ghi lượt — nó đọc hai helper.
+    expect(SQL133).not.toMatch(/FUNCTION public\.care__record_interaction_at|FUNCTION public\.care_record_interaction\(/)
+    for (const h of ['care_is_terminal_outcome(p_outcome)', 'care_outcome_requires_date(p_outcome)']) expect(fnBody('care__record_interaction_at'), h).toContain(h)
     expect(quoted(fnBody('care_outcome_records_refusal'))).toEqual(CARE_OUTCOMES.filter((o) => CARE_OUTCOME_META[o].recordsStoreRefusal).sort())
     expect(SQL).toContain('TODO(Q-02)')
     expect(SQL).toContain('TODO(Q-03)')

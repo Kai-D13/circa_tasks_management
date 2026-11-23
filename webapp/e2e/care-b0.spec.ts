@@ -120,8 +120,12 @@ test.describe('care B0 — outcome một nguồn TS @desktop', () => {
     ])
   })
 
-  test('tập kết thúc = NO_NEED, INTERESTED, ORDERED, REFUSED; còn mở cần ngày hẹn', () => {
-    expect([...CARE_TERMINAL_OUTCOMES].sort()).toEqual(['INTERESTED', 'NO_NEED', 'ORDERED', 'REFUSED'])
+  test('tập kết thúc = INTERESTED, ORDERED, REFUSED; còn mở cần ngày hẹn = UNREACHABLE, NO_NEED, CALLBACK (PM 22/11)', () => {
+    expect([...CARE_TERMINAL_OUTCOMES].sort()).toEqual(['INTERESTED', 'ORDERED', 'REFUSED'])
+    // PM 22/11/2026: "Đã liên hệ – chưa có nhu cầu" chuyển sang nhóm cần liên hệ lại — còn mở + bắt buộc ngày hẹn.
+    expect(isTerminalOutcome('NO_NEED')).toBe(false)
+    expect(requiresNextActionDate('NO_NEED')).toBe(true)
+    expect(CARE_OUTCOMES.filter((o) => requiresNextActionDate(o))).toEqual(['UNREACHABLE', 'NO_NEED', 'CALLBACK'])
     // Đã chốt: INTERESTED kết thúc, CALLBACK còn mở + bắt buộc ngày hẹn (Q-03/Q-48).
     expect(isTerminalOutcome('INTERESTED')).toBe(true)
     expect(isTerminalOutcome('CALLBACK')).toBe(false)

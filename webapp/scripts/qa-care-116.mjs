@@ -28,6 +28,7 @@ const ok = (cond, name, extra = '') => {
 }
 const section = (t) => console.log('\n' + t)
 const { U, one, count, raises, setUid, as, stage, finalize, row, taskOf, EA, EB, EC, storeId } = L
+L.useThrough('116')   // bộ QA của chính 116 (chạy lại / rollback 116) — 133 kiểm ở qa-care-133.mjs
 const S1 = L.STORES[0].code, S2 = L.STORES[1].code
 
 const sha256 = (s) => crypto.createHash('sha256').update(s, 'utf8').digest('hex')

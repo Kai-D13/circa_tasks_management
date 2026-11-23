@@ -393,7 +393,7 @@ test.describe('care B5a r1.1 — PGlite 114: parser → care_orders → attribut
     test.setTimeout(300_000)
     const { PGlite } = await import('@electric-sql/pglite')
     const L: any = await import(pathToFileURL(path.join(ROOT, 'scripts', 'lib-care-pglite.mjs')).href)
-    const db: any = await L.freshDb(PGlite)
+    const db: any = await L.freshDbLatest(PGlite)
     const U = L.U, P10 = '2026-10-01'
     expect((await L.finalize(db, await L.stage(db, buildCareImportRows({ stores: defaultFixtureStores(2), customersPerStore: 2 }) as any, { period: P10 }), U.mkt, '2026-10-01')).status).toBe('committed')
     const tasks = (await db.query(`SELECT t.id, c.external_id, t.store_id FROM public.care_tasks t JOIN public.care_customers c ON c.id = t.customer_id ORDER BY c.external_id`)).rows

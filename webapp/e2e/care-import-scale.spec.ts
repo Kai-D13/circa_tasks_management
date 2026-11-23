@@ -41,7 +41,7 @@ test.describe('care Q-121 — finalize 114 ở quy mô 20.000 dòng / 8.000 khá
   test('đầu kỳ → trùng file → file sửa trong kỳ (mới/vắng/đã có lượt/đã chuyển giao) → kỳ sau: đếm, sản phẩm hiện hành, lịch sử, owner', async () => {
     const { PGlite } = await import('@electric-sql/pglite')
     const L: any = await import(pathToFileURL(path.join(ROOT, 'scripts', 'lib-care-pglite.mjs')).href)
-    const db: any = await L.freshDb(PGlite)
+    const db: any = await L.freshDbLatest(PGlite)
     await db.exec('SET enable_seqscan = on')
     const n = async (sql: string, p: unknown[] = []) => Number(Object.values((await db.query(sql, p)).rows[0])[0])
     /** Staging như route B2: khối 2.000 dòng, row_no = số bản ghi CSV liền mạch; sha theo nội dung (file trùng ⇒ cùng sha). */
@@ -82,7 +82,7 @@ test.describe('care Q-121 — finalize 114 ở quy mô 20.000 dòng / 8.000 khá
     const t1 = await task(1), t2 = await task(2), t4 = await task(4)
     expect(t1.assignee_id).toBe(staffOf(1))
     await L.record(db, D1, staffOf(1), t1.id, 'CALLBACK', 'hẹn gọi lại', '2026-10-12')
-    await L.record(db, D1, staffOf(2), t2.id, 'NO_NEED', 'không cần')
+    await L.record(db, D1, staffOf(2), t2.id, 'INTERESTED', 'quan tâm')
     await L.transfer(db, D1, L.U.super, [t4.id], L.U.C, 'chuyển')
     const t4moved = await task(4)
     expect([t4moved.assignee_id, t4moved.store_id]).toEqual([L.U.C, L.storeId(2)])

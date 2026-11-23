@@ -38,6 +38,7 @@ const nowTs = new Date().toISOString()
 
 // E (116): gate huỷ đòi đơn N3 đã đối chiếu sau import ⇒ trước mỗi lần huỷ / xem trước chạy một lượt thường 0 đơn (no-op trên 115).
 const V116 = L.THROUGH_DEFAULT === '116'
+L.useThrough(L.THROUGH_DEFAULT)
 const synced = (db) => (V116 ? L.syncOrders116(db) : null)
 const cancel = async (db, b, actor, expected, { today = todayVN, now = nowTs } = {}) => (await synced(db),
   (await one(db, `SELECT public.care__import_cancel_at($1, $2, $3::bigint, $4::date, $5::timestamptz) AS r`, [b, actor, expected, today, now])).r)

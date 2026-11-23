@@ -95,6 +95,16 @@ export interface CarePreview {
   counts: CarePreviewCounts
   assignments: CareAssignmentGroup[]
   customers: CarePreviewCustomer[]
+  /**
+   * PM 22/11/2026 — phục vụ thao tác "Loại khỏi lần nhập": TOÀN BỘ số thứ tự bản ghi (đánh số của parser, tăng dần) của các khách
+   * dính REFUSED_AT_STORE — đúng phép kiểm bên dưới, không cắt ở 500 như danh sách lỗi chi tiết. Chỉ số dòng, không dữ liệu khách.
+   *
+   * PM 23/11/2026 (Q-241 r1.1, P1): `customerCount` / `rows` CHỈ gồm nhóm ĐƯỢC PHÉP LOẠI = khách nhất quán giữa các dòng. Khách
+   * dính INCONSISTENT_CUSTOMER (vd cùng mã khách ở hai cửa hàng, chỉ một nơi đã từ chối) phải Ở LẠI file để admin sửa — không
+   * suy cửa hàng từ dòng đầu rồi loại cả nhóm. `inconsistentCustomerCount` = số khách như vậy có dấu từ chối ở ÍT NHẤT MỘT mã
+   * cửa hàng của nhóm (không phụ thuộc thứ tự dòng) — chỉ để giao diện nói rõ vì sao không loại.
+   */
+  refused: { customerCount: number; rows: number[]; inconsistentCustomerCount: number }
 }
 
 const sameProducts = (a: CareImportProduct[], b: CareImportProduct[]) => {
@@ -126,6 +136,9 @@ export function buildCarePreview(input: {
   const matchedTaskIds = new Set<string>()
   // Dòng của khách không nhất quán: mã cửa hàng có thể khác nhau giữa các dòng ⇒ không khẳng định cột (Q-110).
   const inconsistentRows = new Set(validated.errors.filter((e) => e.code === 'INCONSISTENT_CUSTOMER').map((e) => e.row))
+  const refusedRows = new Set<number>()
+  let refusedCustomers = 0
+  let refusedInconsistent = 0
 
   for (const c of validated.customers) {
     // Q-110: chỉ STORE_INVALID có cột chắc chắn. ASSIGNEE_* (email × cửa hàng), REFUSED_AT_STORE (khách ×
@@ -144,7 +157,19 @@ export function buildCarePreview(input: {
     }
     const existing = lookups.customers.get(c.externalId) ?? null
     const task = existing ? lookups.currentTasks.get(existing.id) ?? null : null
-    if (existing && store && !task && lookups.refusals.has(`${existing.id}|${store.id}`)) rowErr('REFUSED_AT_STORE')
+    // Mã lỗi giữ nguyên phép kiểm cũ (parity finalize). Danh sách ĐƯỢC LOẠI thì chỉ nhận nhóm nhất quán (PM 23/11 P1).
+    const refusedHere = !!existing && !!store && !task && lookups.refusals.has(`${existing.id}|${store.id}`)
+    if (refusedHere) rowErr('REFUSED_AT_STORE')
+    if (c.inconsistent) {
+      const anyStoreRefused = !!existing && !task && c.storeCodes.some((code) => {
+        const s = lookups.storesByCode.get(code)
+        return !!s && lookups.refusals.has(`${existing.id}|${s.id}`)
+      })
+      if (anyStoreRefused) refusedInconsistent++
+    } else if (refusedHere) {
+      refusedCustomers++
+      for (const row of c.rows) refusedRows.add(row)
+    }
     if (existing && (existing.isTest !== isTest || (task && task.isTest !== isTest))) rowErr('TEST_FLAG_MISMATCH')
 
     let action: CareCustomerAction
@@ -209,6 +234,7 @@ export function buildCarePreview(input: {
     counts,
     assignments: [...groups.values()].sort((a, b) => a.storeCode.localeCompare(b.storeCode)),
     customers: out,
+    refused: { customerCount: refusedCustomers, rows: [...refusedRows].sort((a, b) => a - b), inconsistentCustomerCount: refusedInconsistent },
   }
 }
 

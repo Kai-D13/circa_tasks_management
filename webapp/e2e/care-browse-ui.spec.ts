@@ -910,3 +910,69 @@ test.describe('care B8.5 — Lịch sử chuyển giao drawer mobile @mobile', (
     await page.screenshot({ path: path.join(SHOTS_B85, `mobile-${w}-drawer.png`) })
   })
 })
+
+// ── PM 22/11/2026 — nhãn + lọc "Lý do" trên /care/tasks (frame, dữ liệu giả) ──────────────────────────────────────
+test.describe('care PM 22/11 — /care/tasks: nhãn + lọc Lý do (frame, dữ liệu giả) @desktop', () => {
+  test.skip(!HAS_STATE, 'chưa có storageState super')
+  test.use({ storageState: SUPER_STATE })
+
+  test('nhãn: hai lý do ⇒ hai nhãn, ngoài mẫu hiện theo file; lọc đơn chọn có "Tất cả lý do"; chọn ⇒ URL reason=…, về trang 1', async ({ page }) => {
+    const fr = await openFrame(page)
+    const table = fr.getByTestId('care-task-table')
+    const tags = (name: string) => table.getByRole('row').filter({ hasText: name }).getByTestId('care-task-reasons')
+    await expect(tags('KH QA 00002')).toHaveText(/Khuyến mãi\s*Mãn tính/)
+    await expect(tags('KH QA 00002').locator('> *')).toHaveCount(2)
+    await expect(tags('KH QA 00005')).toHaveText('Tái khám')
+    await expect(table.getByTestId('care-task-reasons')).toHaveCount(6)
+    const select = fr.locator('button[aria-haspopup="listbox"]').filter({ hasText: /lý do/i })
+    await expect(select).toBeVisible()
+    await select.click()
+    await expect(page.getByRole('textbox', { name: 'Tìm lý do…' })).toBeVisible()
+    const opts = page.locator('div.max-h-56 > div')
+    await expect(opts.filter({ hasText: /^Tất cả lý do$/ })).toHaveCount(1)
+    await expect(opts).toHaveCount(4)
+    for (const l of ['Khuyến mãi', 'Mãn tính', 'Tái khám']) await expect(opts.filter({ hasText: new RegExp(`^${l}$`) })).toHaveCount(1)
+    await opts.filter({ hasText: /^Mãn tính$/ }).click()
+    await page.waitForURL(/reason=chronic/)
+    expect(page.url()).not.toMatch(/page=|q=/)
+  })
+
+  test('đang lọc ?reason=chronic: chỉ khách có sản phẩm hiện hành thuộc lý do; chip trạng thái giữ lý do; "Xoá lọc" bỏ lý do', async ({ page }) => {
+    const fr = await openFrame(page, 'light', '&reason=Chronic')                       // hoa / thường ⇒ cùng một lý do
+    const table = fr.getByTestId('care-task-table')
+    const rows = table.getByTestId('care-task-reasons')
+    const n = await rows.count()
+    expect(n).toBeGreaterThan(0)
+    expect(n).toBeLessThan(6)
+    for (const r of await rows.all()) await expect(r).toContainText('Mãn tính')
+    // Khách hai lý do vẫn hiện ĐỦ hai nhãn khi lọc theo một lý do.
+    await expect(table.getByRole('row').filter({ hasText: 'KH QA 00002' }).getByTestId('care-task-reasons')).toHaveText(/Khuyến mãi\s*Mãn tính/)
+    for (const a of await fr.getByRole('navigation', { name: 'Lọc theo trạng thái' }).getByRole('link').all()) {
+      expect(await a.getAttribute('href')).toContain('reason=chronic')
+    }
+    await expect(fr.locator('button[aria-haspopup="listbox"]').filter({ hasText: 'Mãn tính' })).toHaveCount(1)
+    await fr.getByRole('button', { name: /Xoá lọc/ }).click()
+    await page.waitForURL((u) => !u.search.includes('reason='))
+  })
+})
+
+test.describe('care PM 22/11 — /care/tasks mobile: nhãn Lý do xuống dòng @mobile', () => {
+  test.skip(!HAS_STATE, 'chưa có storageState super')
+  test.use({ storageState: SUPER_STATE })
+
+  test('360/393: nhãn lý do nằm trong ô, không tràn ngang trang; bộ lọc Lý do bấm được (≥ 44px)', async ({ page }) => {
+    const fr = await openFrame(page)
+    expect(await noPageOverflow(page)).toBe(true)
+    const tags = fr.getByTestId('care-task-reasons').first()
+    await expect(tags).toBeVisible()
+    const vw = page.viewportSize()!.width
+    for (const t of await fr.getByTestId('care-task-reasons').all()) {
+      const b = await t.boundingBox()
+      if (b) expect(b.width).toBeLessThanOrEqual(vw)
+    }
+    const select = fr.locator('button[aria-haspopup="listbox"]').filter({ hasText: /lý do/i })
+    await select.scrollIntoViewIfNeeded()
+    expect((await select.boundingBox())!.height).toBeGreaterThanOrEqual(44)
+    expect(await noPageOverflow(page)).toBe(true)
+  })
+})

@@ -1,8 +1,9 @@
 'use client'
 
 import { useState } from 'react'
-import { CalendarDays, Check, ChevronLeft, ChevronRight, Download, Info } from 'lucide-react'
+import { CalendarDays, Check, ChevronLeft, ChevronRight, Download, Info, Loader2 } from 'lucide-react'
 import { Button, buttonVariants } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Table, TableBody, TableCell, TableFooter, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { DataTableShell } from '@/components/ds/DataTableShell'
@@ -158,12 +159,27 @@ export function CareErrorColumn({ e }: { e: CareRowError }) {
   )
 }
 
-export function CareImportIssues({ errors, total, counts, onPick }: {
+/** PM 22/11: thao tác loại khách đã từ chối khỏi lần nhập — số đếm lấy từ preview của server (toàn bộ file, không cắt 500). */
+export interface CareRefusedExclude {
+  customers: number
+  rows: number
+  /** Số dòng sản phẩm còn lại sau khi loại. */
+  remainingRows: number
+  remainingCustomers: number
+  /** PM 23/11 (r1.1): khách có dấu từ chối nhưng dữ liệu lệch giữa các dòng (vd hai mã cửa hàng) — KHÔNG loại, phải sửa file. */
+  inconsistentCustomers: number
+  busy: boolean
+  onExclude: () => void
+}
+
+export function CareImportIssues({ errors, total, counts, onPick, refused }: {
   errors: CareRowError[]
   total: number
   counts?: Partial<Record<CareRowErrorCode, number>> | null
   onPick?: (row: number) => void
+  refused?: CareRefusedExclude | null
 }) {
+  const [confirm, setConfirm] = useState(false)
   const [code, setCode] = useState<CareRowErrorCode | ''>('')
   const [page, setPage] = useState(1)
   const exact = careErrorCodeCounts(errors, total, counts)
@@ -187,6 +203,57 @@ export function CareImportIssues({ errors, total, counts, onPick }: {
           </Chip>
         ))}
       </div>
+      {code === 'REFUSED_AT_STORE' && refused && refused.rows > 0 && (
+        <div data-testid="care-import-refused-action" className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-status-info/30 bg-status-info-bg p-3 text-sm">
+          <span className="min-w-0 flex-1 break-words">
+            <b>{fmt(refused.customers)} khách</b> ({fmt(refused.rows)} dòng sản phẩm) đã từ chối chăm sóc tại cửa hàng trong file.
+            Có thể loại các khách này khỏi lần nhập — dữ liệu khách, lịch sử và dấu từ chối trong hệ thống giữ nguyên.
+          </span>
+          <Button type="button" className="min-h-[44px] md:min-h-0" disabled={refused.busy} onClick={() => setConfirm(true)}>
+            {refused.busy ? <Loader2 className="size-4 animate-spin" /> : null} Loại khỏi lần nhập
+          </Button>
+        </div>
+      )}
+      {(code === 'REFUSED_AT_STORE' || code === 'INCONSISTENT_CUSTOMER') && refused && refused.inconsistentCustomers > 0 && (
+        <p role="note" data-testid="care-import-refused-inconsistent" className="break-words rounded-lg border border-status-warning/40 bg-status-warning-bg p-3 text-sm">
+          <b>{fmt(refused.inconsistentCustomers)} khách</b> có dấu từ chối nhưng thông tin không giống nhau giữa các dòng (ví dụ cùng mã khách ở hai cửa hàng)
+          — <b>không loại tự động</b>. Sửa các dòng đó trong file gốc rồi kiểm tra lại.
+        </p>
+      )}
+      {refused && (
+        <Dialog open={confirm} onOpenChange={(o) => { if (!refused.busy) setConfirm(o) }}>
+          <DialogContent className="sm:max-w-md" data-testid="care-import-refused-dialog">
+            <DialogHeader>
+              <DialogTitle>Loại khách đã từ chối khỏi lần nhập?</DialogTitle>
+              <DialogDescription>
+                Trình duyệt tạo một bản làm việc tạm không có các khách này rồi kiểm tra lại. File gốc trên máy không bị sửa; dữ liệu khách và dấu từ chối trong hệ thống giữ nguyên.
+              </DialogDescription>
+            </DialogHeader>
+            <dl className="grid grid-cols-[minmax(0,1fr)_auto] gap-x-4 gap-y-2 text-sm">
+              <dt className="text-muted-foreground">Khách bị loại</dt><dd className="text-right font-semibold tabular-nums" data-testid="refused-customers">{fmt(refused.customers)}</dd>
+              <dt className="text-muted-foreground">Dòng sản phẩm bị loại</dt><dd className="text-right font-semibold tabular-nums" data-testid="refused-rows">{fmt(refused.rows)}</dd>
+              <dt className="text-muted-foreground">Còn lại sau khi loại</dt>
+              <dd className="text-right font-semibold tabular-nums" data-testid="refused-remaining">{fmt(refused.remainingCustomers)} khách · {fmt(refused.remainingRows)} dòng</dd>
+              {refused.inconsistentCustomers > 0 && (
+                <>
+                  <dt className="text-muted-foreground">Giữ lại để sửa (thông tin không nhất quán)</dt>
+                  <dd className="text-right font-semibold tabular-nums" data-testid="refused-inconsistent">{fmt(refused.inconsistentCustomers)} khách</dd>
+                </>
+              )}
+            </dl>
+            {refused.remainingRows === 0 && (
+              <p role="alert" className="rounded-lg border border-status-danger/40 bg-status-danger-bg p-3 text-sm">Loại xong thì file không còn dòng nào — chọn file khác thay vì loại.</p>
+            )}
+            <DialogFooter>
+              <Button type="button" variant="outline" className="min-h-[44px] md:min-h-0" onClick={() => setConfirm(false)}>Không loại</Button>
+              <Button type="button" className="min-h-[44px] md:min-h-0" disabled={refused.busy || refused.remainingRows === 0}
+                onClick={() => { setConfirm(false); refused.onExclude() }}>
+                Loại {fmt(refused.customers)} khách và kiểm tra lại
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
       {code && codeTotal !== null && codeTotal > list.length && (
         <p className="text-xs text-muted-foreground">Đang hiện {fmt(list.length)}/{fmt(codeTotal)} lỗi loại này (chi tiết giới hạn {fmt(errors.length)} lỗi đầu).</p>
       )}

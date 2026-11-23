@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils'
 import { uploadViaGcs } from '@/lib/storage/uploadClient'
 
 // Form ghi một lượt chăm sóc (SPEC B4 §3). Sáu outcome từ lib/care/outcome.ts; ghi chú
-// 1–500 bắt buộc; UNREACHABLE/CALLBACK bắt buộc ngày hẹn hôm nay..hết tháng task (giờ VN);
+// 1–500 bắt buộc; UNREACHABLE/NO_NEED/CALLBACK (PM 22/11) bắt buộc ngày hẹn hôm nay..hết tháng task (giờ VN);
 // outcome kết thúc không nhận ngày. Ảnh TÙY CHỌN (≤5), upload lỗi vẫn cho bỏ ảnh và lưu.
 // Chống gửi đôi bằng ref; RPC lỗi ⇒ giữ nguyên nội dung form. Server/RPC 114 quyết cuối.
 // B7-ui (M05/M01): outcome chia 2 nhóm hiển thị (vẫn MỘT radiogroup) theo `terminal`; ngày hẹn

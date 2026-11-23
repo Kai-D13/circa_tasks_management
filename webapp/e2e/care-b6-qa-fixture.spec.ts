@@ -26,7 +26,7 @@ test.describe('care B6-qa — scripts/care-qa-fixture.mjs trên PGlite (114 th�
     const { PGlite } = await import('@electric-sql/pglite')
     const L: any = await import(pathToFileURL(path.join(ROOT, 'scripts', 'lib-care-pglite.mjs')).href)
     const F: any = await import(pathToFileURL(path.join(ROOT, 'scripts', 'care-qa-fixture.mjs')).href)
-    const db: any = await L.freshDb(PGlite)
+    const db: any = await L.freshDbLatest(PGlite)
     await db.query(`INSERT INTO public.app_migrations (version, name) VALUES ('114', 'care_crm_foundation') ON CONFLICT DO NOTHING`)
     const env = { ...ENV_BASE, E2E_STAFF_EMAIL: L.EA, E2E_SUPER_EMAIL: L.SUPER_EMAIL, E2E_QLCH_EMAIL: 'qa.qlch1@example.invalid', E2E_SM_EMAIL: 'qa.sm@example.invalid', E2E_CARE_TRANSFER_TO_EMAIL: L.EB }
     const roles = { staff: L.U.A, super: L.U.super, qlch: L.U.qlch1, sm: L.U.sm }
@@ -60,7 +60,7 @@ test.describe('care B6-qa — scripts/care-qa-fixture.mjs trên PGlite (114 th�
     expect(v).toMatchObject({ ok: true, failed: 0, notVerified: 0 })
     expect(closed.sort()).toEqual(['qlch', 'sm', 'staff', 'super']) // mọi phiên đăng nhập E2E đều signOut
     expect(v.results.map((r: any) => r.check)).toEqual(expect.arrayContaining([
-      'staff: ghi lượt không kết thúc CALLBACK (proof=[])', 'staff: ghi lượt kết thúc NO_NEED (proof=[]) + hàng đợi đối soát',
+      'staff: ghi lượt không kết thúc CALLBACK (proof=[])', 'staff: ghi lượt kết thúc INTERESTED (proof=[]) + hàng đợi đối soát',
       'QLCH: 0 task CRM (Q-76/77)', 'super: care_report gồm test − không test = số task fixture', 'SM: chuyển giao 1 task có ghi chú',
     ]))
     // Lượt ghi không kèm ảnh (proof rỗng ⇒ không có object GCS).

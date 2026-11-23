@@ -245,7 +245,7 @@ test.describe('care E2 — đầu–cuối PGlite (RPC 116 thật + BigQuery gi�
     test.setTimeout(300_000)
     const { PGlite } = await import('@electric-sql/pglite')
     const L: any = await import(pathToFileURL(path.join(ROOT, 'scripts', 'lib-care-pglite.mjs')).href)
-    const db: any = await L.freshDb(PGlite)
+    const db: any = await L.freshDbLatest(PGlite)
     const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date())
     const P = `${todayVN.slice(0, 7)}-01`
     expect((await L.finalize(db, await L.stage(db, [L.row('QA-E1', 'QAOS01', L.EA, 'P1'), L.row('QA-E2', 'QAOS01', L.EA, 'P1'), L.row('QA-E3', 'QAOS02', L.EC, 'P1')], { period: P }), L.U.mkt, todayVN)).status).toBe('committed')
@@ -419,7 +419,7 @@ test.describe('care E3 r1.1 — chip "Có đơn xác thực" của dược sĩ: 
     test.setTimeout(300_000)
     const { PGlite } = await import('@electric-sql/pglite')
     const L: any = await import(pathToFileURL(path.join(ROOT, 'scripts', 'lib-care-pglite.mjs')).href)
-    const db: any = await L.freshDb(PGlite)
+    const db: any = await L.freshDbLatest(PGlite)
     const todayVN = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date())
     const P = `${todayVN.slice(0, 7)}-01`
     const pad = (i: number) => String(i).padStart(2, '0')

@@ -105,7 +105,7 @@ test.describe('care B2 — parity preview TS ↔ finalize SQL 114 (PGlite) @desk
     test.setTimeout(240_000)
     const { PGlite } = await import('@electric-sql/pglite')
     const L: Lib = await import(pathToFileURL(path.join(ROOT, 'scripts', 'lib-care-pglite.mjs')).href)
-    const db = await L.freshDb(PGlite)
+    const db = await L.freshDbLatest(PGlite)
     const P10 = '2026-10-01'
     const stores = L.STORES as { code: string; assigneeEmails: string[] }[]
     const EA = stores[0].assigneeEmails[0], EB = stores[0].assigneeEmails[1]
@@ -171,7 +171,7 @@ test.describe('care B2 — parity preview TS ↔ finalize SQL 114 (PGlite) @desk
     test.setTimeout(240_000)
     const { PGlite } = await import('@electric-sql/pglite')
     const L: Lib = await import(pathToFileURL(path.join(ROOT, 'scripts', 'lib-care-pglite.mjs')).href)
-    const db = await L.freshDb(PGlite)
+    const db = await L.freshDbLatest(PGlite)
     const EA = (L.STORES as { assigneeEmails: string[] }[])[0].assigneeEmails[0]
     // Xuống dòng TRONG ô dùng LF ⇒ lượt "CRLF ⇒ LF" dưới đây chỉ đổi dấu xuống dòng giữa các bản ghi, không đổi nội dung ô.
     const NL = String.fromCharCode(10)

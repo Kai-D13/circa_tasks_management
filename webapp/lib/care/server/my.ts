@@ -79,6 +79,22 @@ export async function loadMySummary(me?: { userId: string; storeId: string }): P
   return { assigned: r?.assigned ?? 0, notCared: r?.not_cared ?? 0, completed: r?.completed ?? 0, overdueLive: r?.overdue_live ?? 0 }
 }
 
+/**
+ * PM 22/11 — số khách hẹn liên hệ lại HÔM NAY (VN) của chính dược sĩ: cùng applyMyTaskFilters('due_today') với danh sách
+ * /care/my?filter=due_today ⇒ số đếm và danh sách không thể lệch điều kiện. Session + RLS, chỉ đếm (head). Lỗi đọc ⇒ null
+ * (nơi gọi KHÔNG hiện số 0 giả).
+ */
+export async function loadMyDueTodayCount(me: { userId: string; storeId: string }): Promise<number | null> {
+  try {
+    const now = new Date()
+    const supabase = await createClient()
+    const { count, error } = await withMyFilters(supabase.from('care_tasks').select('id', { count: 'exact', head: true }), me, carePeriodOf(now), 'due_today', vnDateISO(now))
+    return error || typeof count !== 'number' ? null : count
+  } catch {
+    return null
+  }
+}
+
 export interface CareMyTaskRow {
   id: string
   customer_name: string

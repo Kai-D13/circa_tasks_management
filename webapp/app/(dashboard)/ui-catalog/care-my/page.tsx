@@ -4,6 +4,7 @@ import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { isSuperAdminEmail } from '@/lib/authz'
 import { PageHeader } from '@/components/ds/PageHeader'
 import { CareMyHome, type CareMyRow } from '@/components/care/CareMyHome'
+import { CareDueTodayLink } from '@/components/care/CareDueTodayBanner'
 import { CareMyTaskDetail } from '@/components/care/CareMyTaskDetail'
 import { CareInteractionForm } from '@/components/care/CareInteractionForm'
 import { CareMyHeader } from '@/components/care/CareMyHeader'
@@ -91,7 +92,7 @@ const QA_DETAIL: CareMyDetailData = {
     store: { code: 'QAOS01', name: 'QA store 1' }, assignee: { full_name: 'QA Dược sĩ 01a' } },
   products: [], interactions: { rows: [], hasMore: false, nextBefore: null }, events: [],
 }
-const SUMMARY = { assigned: 5, notCared: 1, completed: 1, overdueLive: 1 }
+const SUMMARY = { assigned: 5, notCared: 1, completed: 1, overdueLive: 1, dueToday: 1 }
 const orderRows = (n: number): CareMyRow[] => Array.from({ length: n }, (_, i) => ({
   id: S(800 + i), customer_name: `KH có đơn ${String(i + 1).padStart(2, '0')}`, phone_masked: maskVnPhone(`039000${String(2000 + i)}`),
   status: i % 3 === 0 ? 'completed' : 'open', last_outcome: i % 3 === 0 ? 'ORDERED' : 'CALLBACK',
@@ -219,6 +220,8 @@ export default async function CareMyCatalogPage({ searchParams }: { searchParams
   return (
     <div data-layout-width="fluid" className="space-y-8 p-4 md:p-6">
       <PageHeader title="Khách hàng của tôi" subtitle="UI catalog — dữ liệu giả" icon={HeartHandshake} />
+      {/* PM 22/11: lời nhắc trên /tasks (số giả) — bấm ra tab "Hẹn hôm nay". */}
+      <section className="max-w-md" data-testid="catalog-care-due-today"><CareDueTodayLink n={3} /></section>
       <section className="space-y-3" data-testid="catalog-care-my-home">
         <CareMyHome summary={SUMMARY} rows={ROWS} total={ROWS.length} filter="all" page={1}
           pageSize={20} todayISO="2026-10-10" search={fakeSearch} basePath="/ui-catalog/care-my" />

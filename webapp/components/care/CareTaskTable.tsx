@@ -13,7 +13,7 @@ import { ErrorState } from '@/components/ds/ErrorState'
 import { StatusBadge, type StatusTone } from '@/components/ds/StatusBadge'
 import {
   careApptHint, careFilterHref, careSearchTerm, careShortDateTime, careTaskState, CARE_STATUS_LABELS, CARE_TRANSFER_MAX_TASKS,
-  type CareFilters,
+  type CareFilters, type CareReasonTag,
 } from '@/lib/care/browse'
 import { CARE_OUTCOME_META, isCareOutcome } from '@/lib/care/outcome'
 import { cn } from '@/lib/utils'
@@ -42,6 +42,8 @@ export interface CareTaskListRow {
   assignee: { full_name: string } | null
   /** B8.1: số sản phẩm hiện hành (is_current) — chỉ số đếm. */
   product_count: number
+  /** PM 22/11: nhãn lý do của sản phẩm hiện hành (mỗi khoá một nhãn; đã chuẩn hoá ở server). */
+  reasons?: CareReasonTag[]
 }
 
 type SearchResult = { ok: true; rows: CareTaskListRow[]; total: number } | { ok: false; message: string }
@@ -92,7 +94,7 @@ export function CareTaskTable({
   const canSelect = canTransfer && isCurrentPeriod
   const transferable = (r: CareTaskListRow) => canSelect && r.status === 'open'
   const params: Record<string, string> = Object.fromEntries(Object.entries({
-    month: filters.month, store: filters.storeId ?? '', assignee: filters.assigneeId ?? '', status: filters.status ?? '',
+    month: filters.month, store: filters.storeId ?? '', assignee: filters.assigneeId ?? '', status: filters.status ?? '', reason: filters.reason ?? '',
   }).filter(([, v]) => v))
 
   const clearTimer = () => { if (timer.current) { clearTimeout(timer.current); timer.current = null } }
@@ -251,6 +253,11 @@ export function CareTaskTable({
                           {r.customer_name}
                         </Link>
                         <span className="block text-xs text-muted-foreground">{r.product_count} sản phẩm</span>
+                        {!!r.reasons?.length && (
+                          <span className="mt-1 flex flex-wrap gap-1" data-testid="care-task-reasons" aria-label="Lý do chăm sóc">
+                            {r.reasons.map((x) => <StatusBadge key={x.key} tone="info" size="sm" className="max-w-full break-words whitespace-normal">{x.label}</StatusBadge>)}
+                          </span>
+                        )}
                       </TableCell>
                       <TableCell className="whitespace-nowrap tabular-nums">{r.phone_masked}</TableCell>
                       <TableCell className="whitespace-nowrap" title={r.store?.name}>{r.store?.code ?? '—'}</TableCell>

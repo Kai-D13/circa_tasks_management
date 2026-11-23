@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import { Suspense } from 'react'
 import { createClient } from '@/lib/supabase/server'
 import { getSessionProfile } from '@/lib/auth/getSessionProfile'
 import { redirectIfFsStaff } from '@/lib/fs/isolation'
@@ -19,6 +20,7 @@ import { Plus, ChevronLeft, ChevronRight, ClipboardList, HeartHandshake } from '
 import { canCreateTask } from '@/lib/tasks/smScope'
 import { cn } from '@/lib/utils'
 import { isCareEnabled } from '@/lib/care/flags'
+import { CareDueTodayBanner } from '@/components/care/CareDueTodayBanner'
 import { isTasksArchiveRpcEnabled } from '@/lib/tasks/flags'
 
 const PAGE_SIZE = 30
@@ -1017,6 +1019,10 @@ export default async function TasksPage({
           <HeartHandshake className="size-4" aria-hidden />
           <span className="flex-1">Chăm sóc khách hàng →</span>
         </Link>
+      )}
+      {/* PM 22/11: lời nhắc khách hẹn hôm nay — component server tự đọc trong Suspense (không chặn render /tasks; lỗi / 0 ⇒ ẩn). */}
+      {isStaff && isCareEnabled() && (
+        <Suspense fallback={null}><CareDueTodayBanner /></Suspense>
       )}
 
       <TaskFilters
