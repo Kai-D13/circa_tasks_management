@@ -195,7 +195,9 @@ export async function loadCareTaskPage(f: CareFilters, todayISO: string, q?: str
   const args = reasonArgs(f)
   if (args) {
     // Bước 1: id của ĐÚNG trang + tổng, lọc / tìm / sắp trên kết quả RPC. Bước 2: đọc cột hiển thị của các id đó (≤ 30) qua bảng + RLS.
-    let ids = withCareFilters(supabase.rpc('care_tasks_by_reason', args, { count: 'exact' }).select('id'), f, todayISO)
+    // select PHẢI chứa mọi cột dùng để sắp xếp: PostgREST prod trả 42703 "column care_tasks.created_at does not exist" khi RPC SETOF
+    // chỉ select=id mà order=created_at (smoke prod 23/11 sau 133; lọc theo cột ngoài select thì vẫn chạy).
+    let ids = withCareFilters(supabase.rpc('care_tasks_by_reason', args, { count: 'exact' }).select('id, created_at'), f, todayISO)
     if (term) ids = term.phone ? ids.or(`customer_name.ilike.*${term.name}*,phone_norm.like.*${term.phone}*`) : ids.ilike('customer_name', `%${term.name}%`)
     const page = await ids.order('created_at', { ascending: false }).order('id', { ascending: false }).range(from, from + CARE_TASK_PAGE_SIZE - 1)
     if (page.error || page.count === null) throw new Error('care_tasks_failed')

@@ -328,7 +328,7 @@ test.describe('care B3 — source: cờ, session/RPC, không service role @deskt
     // Lọc Lý do TRƯỚC phân trang: RPC 133 care_tasks_by_reason (phạm vi tính một lần) — KHÔNG embed !inner (RLS sản phẩm theo từng dòng với SM).
     expect(src.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '')).not.toMatch(/!inner|imatch/)
     expect(src.match(/supabase\.rpc\('care_tasks_by_reason', args, /g)).toHaveLength(2)        // danh sách (id của trang + tổng) và 6 count chip
-    expect(src).toContain("withCareFilters(supabase.rpc('care_tasks_by_reason', args, { count: 'exact' }).select('id'), f, todayISO)")
+    expect(src).toContain("withCareFilters(supabase.rpc('care_tasks_by_reason', args, { count: 'exact' }).select('id, created_at'), f, todayISO)")
     expect(src).toContain("await supabase.from('care_tasks').select(TASK_LIST_SELECT).in('id', order)")   // cột hiển thị + SĐT che vẫn đọc qua bảng + RLS
     expect(src).toContain("supabase.rpc('care_reason_options', { p_period: month, p_is_test: careDataScope().kind === 'qa' })")
     // B8.1 chip: count head:true song song, cùng withCareFilters (kỳ/store/dược sĩ + careDataScope), "Tất cả" = count riêng.
