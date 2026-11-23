@@ -15,6 +15,7 @@ import {
 import { CARE_ERROR_LABELS, type CareRowError, type CareRowErrorCode } from '@/lib/care/import/contract'
 import type { CarePreview, CarePreviewCounts } from '@/lib/care/import/preview'
 import { careAssignmentTable } from '@/lib/care/import/review'
+import { excludeCareCsvRows } from '@/lib/care/import/exclude'
 import { CARE_QA_ISSUE_LABELS } from '@/lib/care/qa/labels'
 import { cn } from '@/lib/utils'
 
@@ -22,6 +23,9 @@ import { cn } from '@/lib/utils'
 // Preview CHỈ ĐỌC; commit gửi lại đúng file + sha256 + kỳ, server tính lại và RPC finalize (114) quyết định kết
 // quả. Q-110: lỗi bất kỳ chặn CẢ file (không import phần hợp lệ), bảng lỗi có cột chỉ khi chắc chắn, không giá trị
 // ô. Không dò gần đúng dược sĩ, không ghi chú lần import. Tên/SĐT chỉ hiện trên màn hình người có quyền import.
+// PM 22/11/2026 — "Loại khỏi lần nhập": khách đã từ chối tại cửa hàng đích được bỏ khỏi FILE LÀM VIỆC (dựng ở trình duyệt từ đúng
+// file đã kiểm tra + danh sách số dòng của preview), bỏ preview cũ rồi gọi lại preview; commit gửi bytes + sha256 + kỳ của file làm
+// việc, server vẫn kiểm lại và finalize nguyên tử. Lỗi khác còn trong file vẫn chặn. Chọn file khác / bỏ file ⇒ xoá trạng thái đã loại.
 
 type PreviewPayload = Omit<CarePreview, 'errors'> & {
   errorCount: number
@@ -84,6 +88,8 @@ export function CareImportWizard({ maxBytes, period, tasksHref = null }: {
   const [sha, setSha] = useState<string>('')
   const [result, setResult] = useState<CommitResult | null>(null)
   const [focusRow, setFocusRow] = useState<number | null>(null)
+  /** Tổng đã loại khỏi lần nhập này (cộng dồn nếu loại nhiều lượt); null = chưa loại gì. */
+  const [excluded, setExcluded] = useState<{ customers: number; rows: number } | null>(null)
   const committing = useRef(false)
   const inputRef = useRef<HTMLInputElement>(null)
   // PM B8.3 R1-01: mỗi lần chọn/bỏ file hoặc gửi kiểm tra là một "thế hệ" mới. Phản hồi preview chỉ được áp dụng
@@ -96,16 +102,17 @@ export function CareImportWizard({ maxBytes, period, tasksHref = null }: {
 
   const reset = () => {
     invalidate()
-    setStep(0); setFile(null); setPreview(null); setQa(null); setSha(''); setResult(null); setError(null); setFocusRow(null); setCheckedAt(null); setBusy(false)
+    setStep(0); setFile(null); setPreview(null); setQa(null); setSha(''); setResult(null); setError(null); setFocusRow(null); setCheckedAt(null); setBusy(false); setExcluded(null)
     if (inputRef.current) inputRef.current.value = ''
   }
   const choose = (f: File | null) => {
     invalidate()
-    setFile(f); setPreview(null); setResult(null); setFocusRow(null); setBusy(false)
+    setFile(f); setPreview(null); setResult(null); setFocusRow(null); setBusy(false); setExcluded(null)
     setError(f && f.size > fileLimit ? `File ${sizeLabel(f.size)} vượt giới hạn ${limitLabel}.` : null)
   }
 
-  async function runPreview() {
+  async function runPreview(target: File | null = file) {
+    const file = target
     if (!file) return
     if (file.size > fileLimit) { setError(`File ${sizeLabel(file.size)} vượt giới hạn ${limitLabel}.`); return }
     invalidate()
@@ -127,6 +134,42 @@ export function CareImportWizard({ maxBytes, period, tasksHref = null }: {
     } finally {
       if (my === gen.current) { inflight.current = null; setBusy(false) }
     }
+  }
+
+  /**
+   * Loại mọi khách đã từ chối tại cửa hàng đích khỏi lần nhập: kiểm file vẫn đúng bản đã kiểm tra (sha256 của preview), dựng file
+   * làm việc từ các bản ghi còn lại, BỎ preview cũ rồi kiểm tra lại. Thất bại ⇒ giữ nguyên file + preview hiện tại, báo lỗi.
+   */
+  async function excludeRefused() {
+    const rows = preview?.refused?.rows ?? []
+    if (!file || !preview || busy || rows.length === 0) return
+    const customers = preview.refused.customerCount
+    // Thế hệ mới: huỷ preview đang chạy; nếu người dùng đổi / bỏ file trong lúc đọc file thì bỏ qua kết quả của lượt này.
+    invalidate()
+    const my = gen.current
+    setBusy(true); setError(null)
+    let next: File
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      const digest = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((b) => b.toString(16).padStart(2, '0')).join('')
+      if (my !== gen.current) return
+      if (digest !== sha) { setError(messageFor('SHA_MISMATCH')); setBusy(false); return }
+      const r = excludeCareCsvRows(bytes, rows)
+      if (!r.ok) {
+        setError(r.reason === 'EMPTY' ? 'Loại xong thì file không còn dòng nào — chọn file khác.' : 'Không dựng được file làm việc từ file đã kiểm tra — chọn lại file rồi kiểm tra lại.')
+        setBusy(false)
+        return
+      }
+      next = new File([r.bytes], file.name, { type: 'text/csv' })
+    } catch {
+      if (my !== gen.current) return
+      setError('Không đọc được file trên máy — chọn lại file rồi kiểm tra lại.')
+      setBusy(false)
+      return
+    }
+    setExcluded((cur) => ({ customers: (cur?.customers ?? 0) + customers, rows: (cur?.rows ?? 0) + rows.length }))
+    setFile(next); setPreview(null); setQa(null); setSha(''); setFocusRow(null)
+    await runPreview(next)
   }
 
   async function runCommit() {
@@ -213,7 +256,7 @@ export function CareImportWizard({ maxBytes, period, tasksHref = null }: {
                 </div>
               )}
               <div className="flex justify-end">
-                <Button className={BTN} disabled={!file || busy || file.size > fileLimit} onClick={runPreview}>
+                <Button className={BTN} disabled={!file || busy || file.size > fileLimit} onClick={() => runPreview()}>
                   {busy ? <Loader2 className="size-4 animate-spin" /> : null} Kiểm tra file {!busy && <ArrowRight className="size-4" />}
                 </Button>
               </div>
@@ -222,8 +265,31 @@ export function CareImportWizard({ maxBytes, period, tasksHref = null }: {
           </div>
         )}
 
+        {step === 1 && !preview && (
+          // Đang kiểm tra lại file làm việc (sau "Loại khỏi lần nhập") hoặc lượt kiểm tra lại vừa lỗi — preview cũ đã bỏ.
+          <div className="space-y-3" data-testid="care-import-recheck">
+            {busy
+              ? <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" aria-hidden /> Đang kiểm tra lại file sau khi loại khách đã từ chối…</p>
+              : (
+                <div className="flex flex-wrap justify-between gap-2">
+                  <Button variant="outline" className={BTN} onClick={reset}>Chọn file khác</Button>
+                  <Button className={BTN} disabled={!file} onClick={() => runPreview()}>Kiểm tra lại</Button>
+                </div>
+              )}
+          </div>
+        )}
+
         {step === 1 && preview && (
           <div className="space-y-4">
+            {excluded && (
+              <p role="status" data-testid="care-import-excluded" className="flex gap-2.5 rounded-lg border border-status-info/30 bg-status-info-bg p-3 text-sm">
+                <Info className="mt-0.5 size-4 shrink-0 text-status-info" aria-hidden />
+                <span>
+                  Đã loại <b>{fmt(excluded.customers)} khách</b> đã từ chối ({fmt(excluded.rows)} dòng sản phẩm) khỏi lần nhập này. Số liệu dưới đây là của phần còn lại;
+                  file gốc trên máy không đổi.
+                </span>
+              </p>
+            )}
             <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
               <FileSpreadsheet className="size-4" aria-hidden />
               {file && <span className="max-w-[260px] truncate font-medium text-foreground" title={file.name}>{file.name}</span>}
@@ -262,7 +328,13 @@ export function CareImportWizard({ maxBytes, period, tasksHref = null }: {
                     Sửa file gốc theo bảng dưới rồi chọn lại file để kiểm tra.
                   </span>
                 </div>
-                <CareImportIssues errors={preview.errors} total={preview.errorCount} counts={preview.errorCounts} onPick={setFocusRow} />
+                <CareImportIssues errors={preview.errors} total={preview.errorCount} counts={preview.errorCounts} onPick={setFocusRow}
+                  refused={preview.refused && (preview.refused.rows.length > 0 || (preview.refused.inconsistentCustomerCount ?? 0) > 0) ? {
+                    customers: preview.refused.customerCount, rows: preview.refused.rows.length,
+                    inconsistentCustomers: preview.refused.inconsistentCustomerCount ?? 0,
+                    remainingRows: preview.rowCount - preview.refused.rows.length, remainingCustomers: preview.customerCount - preview.refused.customerCount,
+                    busy, onExclude: excludeRefused,
+                  } : null} />
               </>
             )}
             <CareImportCustomers customers={preview.customers} focusRow={focusRow} onClearFocus={() => setFocusRow(null)} />
@@ -300,6 +372,7 @@ export function CareImportWizard({ maxBytes, period, tasksHref = null }: {
                   </dd>
                   <dt className="text-muted-foreground">Dược sĩ nhận</dt><dd className="font-medium">{fmt(assign?.assignees ?? 0)} dược sĩ</dd>
                   <dt className="text-muted-foreground">File</dt><dd className="font-medium">{fmt(preview.rowCount)} dòng · {fmt(preview.customerCount)} khách</dd>
+                  {excluded && (<><dt className="text-muted-foreground">Đã loại</dt><dd className="font-medium" data-testid="care-import-excluded-summary">{fmt(excluded.customers)} khách đã từ chối · {fmt(excluded.rows)} dòng</dd></>)}
                 </dl>
               </section>
               <CareImportChanges counts={preview.counts} />

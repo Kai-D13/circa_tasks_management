@@ -1,7 +1,7 @@
 // Dựng DB PGlite cho QA CRM (dùng chung: scripts/qa-care-114.mjs, scripts/qa-care-115.mjs, e2e/care-*.spec.ts).
 // Postgres 16 WASM + schema nền giống prod (đọc qua pg-meta 07/10/2026) + nguyên file migration 114, rồi 115
-// (huỷ import, D1), rồi 116 (đơn N3 sau import, E). Mặc định nạp tới migration MỚI NHẤT; freshDb(PGlite, { through: '114' | '115' })
-// hoặc env CARE_PGLITE_THROUGH=114|115 để dừng sớm hơn. Tự chứa (không import .ts) để chạy được từ Node lẫn Playwright.
+// (huỷ import, D1), rồi 116 (đơn N3 sau import, E), rồi 133 (NO_NEED hẹn lại + lựa chọn lý do). freshDb mặc định dừng ở 116 (nền chung cho harness CMS / tasks), freshDbLatest nạp tới bản CRM mới nhất;
+// freshDb(PGlite, { through: '114' | '115' | '116' }) hoặc env CARE_PGLITE_THROUGH=114|115|116 để dừng sớm hơn. Tự chứa (không import .ts) để chạy được từ Node lẫn Playwright.
 import fs from 'node:fs'
 import path from 'node:path'
 import crypto from 'node:crypto'
@@ -15,7 +15,25 @@ export const ROLLBACK_115 = fs.readFileSync(path.join(MIG_DIR, 'rollback', '115_
 export const MIGRATION_116 = fs.readFileSync(path.join(MIG_DIR, '116_care_order_links.sql'), 'utf8')
 export const ROLLBACK_116_L1 = fs.readFileSync(path.join(MIG_DIR, 'rollback', '116_care_order_links_rollback_level1.sql'), 'utf8')
 export const ROLLBACK_116_L2 = fs.readFileSync(path.join(MIG_DIR, 'rollback', '116_care_order_links_rollback_level2.sql'), 'utf8')
+export const MIGRATION_133 = fs.readFileSync(path.join(MIG_DIR, '133_care_no_need_callback.sql'), 'utf8')
+export const ROLLBACK_133 = fs.readFileSync(path.join(MIG_DIR, 'rollback', '133_care_no_need_callback_rollback.sql'), 'utf8')
+// 133 (PM 22/11/2026: NO_NEED sang nhóm cần liên hệ lại + care_reason_options) là bản CRM mới nhất. Giữa 116 và 133 là migration của module khác
+// (117–132, không đụng care_*) ⇒ harness chỉ chèn marker '132' cho preflight của 133.
+// THROUGH_DEFAULT = mức của BỘ QA 114 / 115 / 116 (chúng kiểm chạy lại / rollback của chính 114–116, vốn đòi DB dừng ở 116 — trên prod
+// cũng không chạy lại được 116 sau 117+). Spec e2e CRM và qa-care-133 gọi freshDbLatest; bộ QA cũ gọi useThrough(THROUGH_DEFAULT).
 export const THROUGH_DEFAULT = ['114', '115'].includes(process.env.CARE_PGLITE_THROUGH) ? process.env.CARE_PGLITE_THROUGH : '116'
+export const THROUGH_LATEST = '133'
+// Mặc định của freshDb GIỮ ở mức 116 như trước batch 133: harness CMS / tasks (qa-cms-*, qa-tasks-archive-117…) dựng nền bằng freshDb rồi
+// chạy migration 117+ của mình — marker 132 / 133 sẽ làm preflight của chúng dừng. Spec / QA CRM cần bản mới nhất gọi freshDbLatest.
+let defaultThrough = THROUGH_DEFAULT
+export function useThrough(v) { if (!THROUGH_ORDER.includes(v)) throw new Error('useThrough: ' + v); defaultThrough = v }
+/** DB đang dừng ở mức nào (so theo thứ tự) — bộ QA 114 / 115 / 116 rẽ nhánh theo đây thay vì so chuỗi đúng bằng. */
+export const THROUGH_ORDER = ['114', '115', '116', '133']
+export const atLeast = (v, through = THROUGH_DEFAULT) => THROUGH_ORDER.indexOf(through) >= THROUGH_ORDER.indexOf(v)
+export async function apply133(db) {
+  await db.exec(`INSERT INTO public.app_migrations (version, name, notes) VALUES ('132', 'cms_returns_full_line', 'marker QA: 117–132 không thuộc CRM') ON CONFLICT (version) DO NOTHING`)
+  await db.exec(MIGRATION_133)
+}
 
 // is_super_admin(): trích nguyên văn từ migration MỚI NHẤT định nghĩa nó (113).
 export function latestSuperAdminFn() {
@@ -47,8 +65,9 @@ export const U = {
   A: staffId(1, 'a'), B: staffId(1, 'b'), C: staffId(2, 'a'), D: staffId(2, 'b'),
 }
 
-export async function freshDb(PGlite, { through = THROUGH_DEFAULT } = {}) {
-  if (!['114', '115', '116'].includes(through)) throw new Error(`freshDb: through phải là '114', '115' hoặc '116'`)
+export const freshDbLatest = (PGlite, opts = {}) => freshDb(PGlite, { through: THROUGH_LATEST, ...opts })
+export async function freshDb(PGlite, { through = defaultThrough } = {}) {
+  if (!THROUGH_ORDER.includes(through)) throw new Error(`freshDb: through phải là một trong ${THROUGH_ORDER.join(' / ')}`)
   const db = new PGlite()
   await db.exec(`
     CREATE ROLE anon NOLOGIN; CREATE ROLE authenticated NOLOGIN; CREATE ROLE service_role NOLOGIN BYPASSRLS;
@@ -116,7 +135,8 @@ export async function freshDb(PGlite, { through = THROUGH_DEFAULT } = {}) {
 
   await db.exec(MIGRATION)
   if (through !== '114') await db.exec(MIGRATION_115)
-  if (through === '116') await db.exec(MIGRATION_116)
+  if (atLeast('116', through)) await db.exec(MIGRATION_116)
+  if (atLeast('133', through)) await apply133(db)
   return db
 }
 

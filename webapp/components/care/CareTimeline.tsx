@@ -29,7 +29,7 @@ function InteractionItem({ i }: { i: CareInteractionRow }) {
   return (
     <div className="space-y-1">
       <div className="flex flex-wrap items-center gap-2">
-        <StatusBadge tone={isCareOutcome(i.outcome) && CARE_OUTCOME_META[i.outcome].terminal ? 'success' : 'info'}>
+        <StatusBadge tone={(typeof i.is_terminal === 'boolean' ? i.is_terminal : isCareOutcome(i.outcome) && CARE_OUTCOME_META[i.outcome].terminal) ? 'success' : 'info'}>
           {isCareOutcome(i.outcome) ? CARE_OUTCOME_META[i.outcome].label : i.outcome}
         </StatusBadge>
         {!i.isThisTask && <StatusBadge tone="neutral">Kỳ trước / dược sĩ trước</StatusBadge>}

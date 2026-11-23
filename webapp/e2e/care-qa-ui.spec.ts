@@ -346,7 +346,7 @@ test.describe('care B6-qa-ui — vòng đời prepare → import browser → 5 v
     const { PGlite } = await import('@electric-sql/pglite')
     const L: any = await import(pathToFileURL(path.join(ROOT, 'scripts', 'lib-care-pglite.mjs')).href)
     const F: any = await import(pathToFileURL(path.join(ROOT, 'scripts', 'care-qa-fixture.mjs')).href)
-    const db: any = await L.freshDb(PGlite)
+    const db: any = await L.freshDbLatest(PGlite)
     await db.query(`INSERT INTO public.app_migrations (version, name) VALUES ('114', 'care_crm_foundation') ON CONFLICT DO NOTHING`)
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'care-qa-ui-'))
     const markerPath = path.join(dir, CARE_QA_MARKER_FILE)
@@ -390,7 +390,7 @@ test.describe('care B6-qa-ui — vòng đời prepare → import browser → 5 v
     expect((await L.finalize(db, await L.stage(db, rows, { period }), L.U.mkt, today)).status).toBe('committed')
     const t = async (ext: string) => (await L.taskOf(db, ext, period)).id
     await L.record(db, today, L.U.A, await t('REAL-1'), 'CALLBACK', 'hẹn lại', today)
-    await L.record(db, today, L.U.C, await t('REAL-3'), 'NO_NEED', 'không cần')
+    await L.record(db, today, L.U.C, await t('REAL-3'), 'INTERESTED', 'quan tâm')
     await L.transfer(db, today, L.U.sm, [await t('REAL-4')], L.U.A, 'chuyển')
   }
 
@@ -482,7 +482,7 @@ test.describe('care B6-qa-ui — vòng đời prepare → import browser → 5 v
     expect((await L.transfer(db, today, L.U.sm, qaIds.slice(0, 4), L.U.C, 'QA chuyển'))?.transferred).toBe(4)
     expect({ duocsi2: await n(R.duocsi2, QA), duocsi3: await n(R.duocsi3, QA), sm: await n(R.sm, QA) }).toEqual({ duocsi2: 8, duocsi3: 4, sm: 12 })
     expect((await L.record(db, today, L.U.A, qaIds[4], 'CALLBACK', 'QA hẹn', today)).status).toBe('open')
-    expect((await L.record(db, today, L.U.A, qaIds[5], 'NO_NEED', 'QA xong')).status).toBe('completed')
+    expect((await L.record(db, today, L.U.A, qaIds[5], 'INTERESTED', 'QA xong')).status).toBe('completed')
     expect((await L.record(db, today, L.U.A, qaIds[6], 'REFUSED', 'QA từ chối')).status).toBe('completed')
     expect((await L.record(db, today, L.U.C, qaIds[0], 'CALLBACK', 'QA hẹn 2', today)).status).toBe('open')
     expect(Number((await db.query(`SELECT count(*) n FROM public.care_interactions WHERE is_test AND proof <> '[]'::jsonb`)).rows[0].n)).toBe(0)

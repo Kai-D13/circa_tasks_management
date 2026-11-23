@@ -31,7 +31,8 @@ export interface CareMyRow {
   next_action_date: string | null
   due_date: string
 }
-export interface CareMySummaryView { assigned: number; notCared: number; completed: number; overdueLive: number }
+/** `dueToday` (PM 22/11): số khách hẹn hôm nay — null / thiếu = không đọc được ⇒ chip không hiện số (không 0 giả). */
+export interface CareMySummaryView { assigned: number; notCared: number; completed: number; overdueLive: number; dueToday?: number | null }
 type SearchFn = (input: { filter: CareMyFilter; q: string; page: number; orders?: boolean }) =>
   Promise<{ ok: true; rows: CareMyRow[]; total: number } | { ok: false; message: string }>
 type MoreFn = (input: { cursor: string }) => Promise<{ ok: true; rows: CareMyRow[]; next: string | null } | { ok: false; message: string }>
@@ -85,7 +86,8 @@ function ProgressSummary({ summary, todayISO }: { summary: CareMySummaryView; to
   )
 }
 
-function filterCount(s: CareMySummaryView, k: CareMyFilter): number {
+function filterCount(s: CareMySummaryView, k: CareMyFilter): number | undefined {
+  if (k === 'due_today') return typeof s.dueToday === 'number' ? s.dueToday : undefined
   return k === 'all' ? s.assigned : k === 'not_cared' ? s.notCared : k === 'overdue' ? s.overdueLive : s.completed
 }
 

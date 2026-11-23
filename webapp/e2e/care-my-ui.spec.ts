@@ -462,3 +462,37 @@ test.describe('care B7-ui r1.1 — chế độ QA mở Gọi/Nhắn bằng số 
     await expect(prodDet.getByTestId('care-contact-qa')).toHaveCount(0)
   })
 })
+
+// ── PM 22/11/2026 — hẹn liên hệ lại: tab "Hẹn hôm nay" + lời nhắc + NO_NEED cần ngày hẹn ─────────────────────────────
+test.describe('care PM 22/11 — hẹn liên hệ lại (mock) @mobile', () => {
+  test.skip(!HAS_SUPER, 'chưa có storageState super')
+  test.use({ storageState: SUPER_STATE })
+
+  test('lời nhắc "Hôm nay có N khách hẹn liên hệ lại" ≥ 44px, trỏ tới tab "Hẹn hôm nay"; tab có số, đúng thứ tự', async ({ page }) => {
+    await openCatalog(page)
+    const due = page.getByTestId('catalog-care-due-today').getByTestId('care-due-today')
+    await expect(due).toHaveText(/Hôm nay có 3 khách hẹn liên hệ lại/)
+    await expect(due).toHaveAttribute('href', '/care/my?filter=due_today')
+    expect((await due.boundingBox())!.height).toBeGreaterThanOrEqual(44)
+    const home = page.getByTestId('catalog-care-my-home')
+    const tab = home.getByRole('link', { name: /^Hẹn hôm nay\s?1$/ })
+    await expect(tab).toBeVisible()
+    await expect(tab).toHaveAttribute('href', /filter=due_today/)
+    const labels = (await home.getByRole('navigation', { name: 'Lọc khách' }).first().getByRole('link').allInnerTexts()).map((t) => t.replace(/\s*\d+$/, '').trim())
+    expect(labels.slice(0, 5)).toEqual(['Tất cả', 'Chưa chăm sóc', 'Hẹn hôm nay', 'Quá hạn', 'Hoàn thành'])
+    expect(await noPageOverflow(page)).toBe(true)
+  })
+
+  test('form: "Đã liên hệ – chưa có nhu cầu" nằm ở nhóm cần liên hệ lại và BẮT BUỘC ngày hẹn; kết quả kết thúc thì không có ô ngày', async ({ page }) => {
+    await openCatalog(page)
+    const form = page.getByTestId('care-interaction-form').first()
+    await form.scrollIntoViewIfNeeded()
+    const noNeed = form.getByRole('radio', { name: /Đã liên hệ – chưa có nhu cầu/ })
+    await noNeed.click()
+    await expect(form.getByText(/Ngày hẹn/).first()).toBeVisible()
+    await form.getByRole('radio', { name: /Đã đặt đơn/ }).click()
+    await expect(form.locator('input[type="date"]')).toHaveCount(0)
+    await noNeed.click()
+    await expect(form.locator('input[type="date"]')).toHaveCount(1)
+  })
+})

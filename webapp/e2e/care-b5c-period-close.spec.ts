@@ -70,7 +70,7 @@ test.describe('care B5c — end-to-end PGlite (RPC 114 thật theo ngày cron) @
 
     // Kỳ T10: 3 khách; hẹn 30/10, hẹn 31/10, không hẹn — không ai gọi lại.
     const seed = async () => {
-      const db: any = await L.freshDb(PGlite)
+      const db: any = await L.freshDbLatest(PGlite)
       const b = await L.stage(db, [L.row(K.k30, 'QAOS01', L.EA, 'P1'), L.row(K.k31, 'QAOS01', L.EA, 'P1'), L.row(K.kNone, 'QAOS01', L.EA, 'P1')], { period: P10 })
       expect((await L.finalize(db, b, L.U.mkt, P10)).status).toBe('committed')
       await L.record(db, '2026-10-05', L.U.A, (await L.taskOf(db, K.k30, P10)).id, 'CALLBACK', 'QA hẹn', '2026-10-30')

@@ -11,6 +11,7 @@ import { CARE_CSV_BOM, decodeCareCsv, parseCsvRecords, toCareCsv } from '../lib/
 import { validateCareRows } from '../lib/care/import/validate'
 import { buildCarePreview, type CareExistingTask, type CareImportLookups, type CarePreviewCustomer } from '../lib/care/import/preview'
 import { careAssignmentTable, careErrorCodeCounts } from '../lib/care/import/review'
+import { excludeCareCsvRows } from '../lib/care/import/exclude'
 import {
   CARE_PREVIEW_ERROR_LIMIT, careErrorPayload, careServerTiming, handleCareCommit, handleCarePreview, handleCareTemplate,
   type CareFinalizeResult, type CareImportAccess, type CareImportDeps, type CareImportRepo,
@@ -930,7 +931,7 @@ test.describe('care B8.3 — Q-110 cột lỗi chắc chắn, tổng lỗi khôn
     expect(wiz).toContain('if (!file || !preview || committing.current || preview.errorCount > 0 || (qa && !qa.commitAllowed)) return')
     expect(wiz).toContain('<Button className={BTN} disabled={hasErrors} onClick={() => setStep(2)}>')
     // PM B8.3 R1-01: phản hồi preview cũ (đã đổi/bỏ file) không được áp vào màn hiện tại.
-    const run = /async function runPreview\(\) \{([\s\S]*?)\n {2}\}/.exec(wiz)![1]
+    const run = /async function runPreview\(target: File \| null = file\) \{([\s\S]*?)\n {2}\}/.exec(wiz)![1]
     expect(run.match(/if \(my !== gen\.current\) return/g)).toHaveLength(2)
     expect(run).toContain('if (my === gen.current) { inflight.current = null; setBusy(false) }')
     expect(run.indexOf('if (my !== gen.current) return')).toBeLessThan(run.indexOf('setPreview(body.preview)'))
@@ -944,5 +945,225 @@ test.describe('care B8.3 — Q-110 cột lỗi chắc chắn, tổng lỗi khôn
     const page = read('app/(dashboard)/care/assign/page.tsx')
     expect(page).toContain("tasksHref={access.canView ? '/care/tasks' : null}")
     expect(page).toMatch(/export default async function[\s\S]*?\{\s*if \(!isCareEnabled\(\)\) notFound\(\)/)
+  })
+})
+
+// ── PM 22/11/2026 — "Loại khỏi lần nhập" (khách đã từ chối chăm sóc tại cửa hàng đích) ──────────────────────────────
+test.describe('care PM 22/11 — loại khách đã từ chối khỏi lần nhập @desktop', () => {
+  const refusedLookups = (ids: string[], storeNo = 1) => {
+    const lk = lookups()
+    for (const id of ids) { lk.customers.set(id, { id: `c-${id}`, isTest: false }); lk.refusals.add(`c-${id}|${sid(storeNo)}`) }
+    return lk
+  }
+  const rawRecords = (bytes: Uint8Array) => {
+    const d = decodeCareCsv(bytes)
+    if (!d.ok) throw new Error('decode')
+    const p = parseCsvRecords(d.text)
+    if (!p.ok) throw new Error('parse')
+    return p.records
+  }
+
+  test('preview.refused: đủ MỌI dòng của khách bị từ chối (kể cả dòng không liền nhau), tăng dần; từ chối ở cửa hàng khác / khách đã có task trong kỳ không tính', () => {
+    const lk = refusedLookups(['K-REF', 'K-REF2'])
+    lk.customers.set('K-OTHER', { id: 'c-other', isTest: false }); lk.refusals.add(`c-other|${sid(2)}`)      // từ chối ở QAOS02, file nhập QAOS01
+    lk.customers.set('K-HAS', { id: 'c-has', isTest: false }); lk.refusals.add(`c-has|${sid(1)}`)            // đã có task kỳ này ⇒ phép kiểm hiện có bỏ qua
+    lk.currentTasks.set('c-has', { id: 't-has', customerId: 'c-has', status: 'open', storeId: sid(1), assigneeId: uidOf(EA), customerName: 'KH K-HAS', phoneNorm: '0390000999', phoneRaw: '0390000999', isTest: false, hasInteraction: false, products: [] } as CareExistingTask)
+    const p = previewOf(csv([
+      H,
+      r('K-REF', 'QAOS01', EA, 'P1'),            // 2
+      r('K-OK', 'QAOS01', EA, 'P1'),             // 3
+      r('K-REF', 'QAOS01', EA, 'P2'),            // 4 — cùng khách, không liền dòng 2
+      r('K-OTHER', 'QAOS01', EA, 'P1'),          // 5
+      r('K-REF2', 'QAOS01', EB, 'P1'),           // 6
+      r('K-HAS', 'QAOS01', EA, 'P1'),            // 7
+      r('K-REF', 'QAOS01', EA, 'P3'),            // 8
+    ]), lk)
+    expect(p.refused).toEqual({ customerCount: 2, rows: [2, 4, 6, 8], inconsistentCustomerCount: 0 })
+    expect(codes(p.errors.filter((e) => e.code === 'REFUSED_AT_STORE'))).toEqual(['2:REFUSED_AT_STORE', '4:REFUSED_AT_STORE', '6:REFUSED_AT_STORE', '8:REFUSED_AT_STORE'])
+    // Không lỗi từ chối ⇒ danh sách rỗng (không undefined).
+    expect(previewOf(csv([H, r('K-OK', 'QAOS01', EA, 'P1')])).refused).toEqual({ customerCount: 0, rows: [], inconsistentCustomerCount: 0 })
+  })
+
+  // PM 23/11/2026 (audit r1, P1): cùng mã khách ở HAI cửa hàng trong một file, chỉ cửa hàng A đã từ chối ⇒ nhóm mâu thuẫn phải Ở LẠI
+  // file (admin sửa); không được suy cửa hàng từ dòng đầu rồi loại cả dòng B. Kết quả không phụ thuộc thứ tự dòng A / B.
+  test('P1 r1.1: khách có hai cửa hàng trong file (chỉ A từ chối) KHÔNG bị loại, đổi thứ tự A / B cùng kết quả; khách từ chối hợp lệ rời file; lỗi không nhất quán vẫn chặn', () => {
+    const EC2 = STORES[1].assigneeEmails[0]
+    const mk = () => refusedLookups(['K-AB', 'K-REF'])                    // cả hai đã từ chối ở QAOS01; K-AB chưa từ chối ở QAOS02
+    const a = r('K-AB', 'QAOS01', EA, 'P1'), b = r('K-AB', 'QAOS02', EC2, 'P2')
+    const ref1 = r('K-REF', 'QAOS01', EA, 'P1'), ref2 = r('K-REF', 'QAOS01', EA, 'P2'), okRow = r('K-OK', 'QAOS01', EB, 'P1')
+    const kept: string[][] = []
+    for (const [name, rows, abRows, refRows] of [
+      ['A trước B', [H, a, ref1, b, okRow, ref2], [2, 4], [3, 6]],
+      ['B trước A', [H, b, ref1, a, okRow, ref2], [2, 4], [3, 6]],
+    ] as const) {
+      const bytes = csv(rows as unknown as Cell[][])
+      const before = previewOf(bytes, mk())
+      // Danh sách ĐƯỢC LOẠI: chỉ khách từ chối hợp lệ (nhiều sản phẩm CÙNG cửa hàng ⇒ loại hết các dòng của khách đó).
+      expect(before.refused, name).toEqual({ customerCount: 1, rows: [...refRows], inconsistentCustomerCount: 1 })
+      for (const row of abRows) expect(before.errors.some((e) => e.row === row && e.code === 'INCONSISTENT_CUSTOMER'), `${name} dòng ${row}`).toBe(true)
+      const ex = excludeCareCsvRows(bytes, before.refused.rows)
+      if (!ex.ok) throw new Error(ex.reason)
+      expect(ex, name).toMatchObject({ removed: 2, remaining: 3 })
+      const orig = rawRecords(bytes), next = rawRecords(ex.bytes)
+      expect(next, name).toEqual([orig[0], orig[1], orig[3], orig[4]])        // A, B, K-OK còn NGUYÊN VĂN, đúng thứ tự
+      const after = previewOf(ex.bytes, mk())
+      // Sau thao tác: preview KHÔNG sạch — lỗi không nhất quán vẫn chặn ghi, nhóm A / B không biến mất.
+      expect(after.errors.filter((e) => e.code === 'INCONSISTENT_CUSTOMER').map((e) => e.row), name).toEqual([2, 3])
+      expect(after.refused, name).toEqual({ customerCount: 0, rows: [], inconsistentCustomerCount: 1 })
+      expect(after.customers.map((c) => [c.externalId, c.action]), name).toEqual([['K-AB', 'error'], ['K-OK', 'create']])
+      expect(after.counts.created, name).toBe(1)
+      kept.push(next.slice(1).map((x) => `${x[0]}|${x[3]}|${x[7]}`).sort())
+    }
+    expect(kept[0]).toEqual(kept[1])                                      // cùng tập dòng còn lại dù A hay B đứng trước
+    expect(kept[0]).toEqual(['K-AB|QAOS01|P1', 'K-AB|QAOS02|P2', 'K-OK|QAOS01|P1'])
+
+    // Nhóm mâu thuẫn KHÔNG dính từ chối ở mã nào ⇒ không tính vào số "giữ lại để sửa" (vẫn lỗi INCONSISTENT_CUSTOMER).
+    const none = previewOf(csv([H, r('K-XY', 'QAOS01', EA, 'P1'), r('K-XY', 'QAOS02', EC2, 'P2')]), mk())
+    expect(none.refused).toEqual({ customerCount: 0, rows: [], inconsistentCustomerCount: 0 })
+    // Lệch TÊN (cùng cửa hàng đã từ chối) cũng là nhóm chưa nhất quán ⇒ ở lại, không loại.
+    const nameDiff = previewOf(csv([H, r('K-REF', 'QAOS01', EA, 'P1'), r('K-REF', 'QAOS01', EA, 'P2', { customer_name: 'Tên khác' })]), mk())
+    expect(nameDiff.refused).toEqual({ customerCount: 0, rows: [], inconsistentCustomerCount: 1 })
+    // Chỉ còn nhóm mâu thuẫn ⇒ không có dòng nào để loại ⇒ hàm loại từ chối danh sách rỗng (không đoán).
+    const only = csv([H, a, b, okRow])
+    expect(previewOf(only, mk()).refused).toEqual({ customerCount: 0, rows: [], inconsistentCustomerCount: 1 })
+    expect(excludeCareCsvRows(only, previewOf(only, mk()).refused.rows)).toEqual({ ok: false, reason: 'ROW_RANGE' })
+  })
+
+  test('P1 r1.1 — validate: storeCodes là mọi mã của nhóm (đã sắp, không theo thứ tự dòng), inconsistent trùng lỗi INCONSISTENT_CUSTOMER', () => {
+    const EC2 = STORES[1].assigneeEmails[0]
+    const parse = (rows: Cell[][]) => { const p = parseCareImportCsv(csv(rows)); if (!p.ok) throw new Error(p.fileError); return validateCareRows(p.rows) }
+    const v1 = parse([H, r('K', 'QAOS02', EC2, 'P1'), r('K', 'QAOS01', EA, 'P2'), r('Z', 'QAOS01', EA, 'P1'), r('Z', 'QAOS01', EA, 'P2')])
+    const k = v1.customers.find((c) => c.externalId === 'K')!, z = v1.customers.find((c) => c.externalId === 'Z')!
+    expect([k.storeCode, k.storeCodes, k.inconsistent]).toEqual(['QAOS02', ['QAOS01', 'QAOS02'], true])
+    expect([z.storeCode, z.storeCodes, z.inconsistent]).toEqual(['QAOS01', ['QAOS01'], false])
+    expect(v1.errors.filter((e) => e.code === 'INCONSISTENT_CUSTOMER').map((e) => e.row)).toEqual([2, 3])
+  })
+
+  test('excludeCareCsvRows: bỏ đúng bản ghi theo đánh số của parser (ô có xuống dòng vẫn là MỘT bản ghi); giá trị 10 cột của dòng còn lại y nguyên', () => {
+    const tricky = r('K-OK', 'QAOS01', EA, 'P1', { customer_name: 'Nguyễn Thị "Hoa", Q.1', customer_phone: '0390000123', reason_text: 'dòng 1\ndòng 2, có phẩy', product_name: ' SP có khoảng trắng đầu' })
+    const bytes = csv([
+      H,
+      tricky,                                    // 2 — ô có xuống dòng: một bản ghi, hai dòng văn bản
+      r('K-REF', 'QAOS01', EA, 'P1'),            // 3
+      r('K-OK2', 'QAOS01', EB, 'P1', { customer_phone: '0900000001' }), // 4
+      r('K-REF', 'QAOS01', EA, 'P2'),            // 5
+    ])
+    const lk = refusedLookups(['K-REF'])
+    const before = previewOf(bytes, lk)
+    expect(before.refused.rows).toEqual([3, 5])
+    const ex = excludeCareCsvRows(bytes, before.refused.rows)
+    if (!ex.ok) throw new Error(ex.reason)
+    expect(ex).toMatchObject({ removed: 2, remaining: 2 })
+    const orig = rawRecords(bytes), next = rawRecords(ex.bytes)
+    expect(next).toEqual([orig[0], orig[1], orig[3]])                // nguyên văn từng ô, đúng thứ tự
+    expect(next[1][1]).toBe('Nguyễn Thị "Hoa", Q.1')
+    expect(next[1][2]).toBe('0390000123')                            // số 0 đầu giữ nguyên
+    expect(next[1][6]).toBe('dòng 1\ndòng 2, có phẩy')
+    expect(next[1][8]).toBe(' SP có khoảng trắng đầu')
+    // File làm việc: UTF-8 có BOM, đọc lại bằng parser của app; preview lại sạch lỗi từ chối, số đếm giảm đúng.
+    expect([...ex.bytes.slice(0, 3)]).toEqual([0xef, 0xbb, 0xbf])
+    const after = previewOf(ex.bytes, lk)
+    expect(after.errors).toEqual([])
+    expect(after.refused).toEqual({ customerCount: 0, rows: [], inconsistentCustomerCount: 0 })
+    expect([after.rowCount, after.customerCount]).toEqual([before.rowCount - 2, before.customerCount - 1])
+    expect(after.customers.map((c) => c.externalId)).toEqual(['K-OK', 'K-OK2'])
+    // Chạy lại trên file đã loại với cùng danh sách cũ ⇒ số dòng không còn khớp file ⇒ từ chối (không đoán).
+    expect(excludeCareCsvRows(ex.bytes, [3, 5])).toEqual({ ok: false, reason: 'ROW_RANGE' })
+  })
+
+  test('excludeCareCsvRows fail-closed: dòng header / ngoài file / bản ghi trống / danh sách rỗng ⇒ ROW_RANGE; loại hết ⇒ EMPTY; file không đọc được ⇒ DECODE / PARSE', () => {
+    const bytes = csv([H, r('A', 'QAOS01', EA, 'P1'), ['', '', '', '', '', '', '', '', '', ''], r('B', 'QAOS01', EA, 'P1')])
+    for (const bad of [[1], [5], [0], [-1], [2.5], [3], []]) expect(excludeCareCsvRows(bytes, bad), JSON.stringify(bad)).toEqual({ ok: false, reason: 'ROW_RANGE' })
+    expect(excludeCareCsvRows(bytes, [2, 4])).toEqual({ ok: false, reason: 'EMPTY' })
+    const one = excludeCareCsvRows(bytes, [2])
+    expect(one.ok && [one.removed, one.remaining]).toEqual([1, 1])
+    const utf16 = new Uint8Array([0xff, 0xfe, 0x61, 0x00, 0x2c, 0x00])
+    expect(excludeCareCsvRows(utf16, [2])).toEqual({ ok: false, reason: 'DECODE' })
+    expect(excludeCareCsvRows(raw('a,"b' + CRLF), [2])).toEqual({ ok: false, reason: 'PARSE' })
+  })
+
+  test('file còn lỗi KHÁC: loại khách từ chối xong, lỗi khác vẫn chặn (không import phần hợp lệ)', () => {
+    const lk = refusedLookups(['K-REF'])
+    const bytes = csv([H, r('K-REF', 'QAOS01', EA, 'P1'), r('K-BAD', 'QAOS99', EA, 'P1'), r('K-OK', 'QAOS01', EA, 'P1')])
+    const before = previewOf(bytes, lk)
+    expect(codes(before.errors)).toEqual(['2:REFUSED_AT_STORE', '3:STORE_INVALID'])
+    const ex = excludeCareCsvRows(bytes, before.refused.rows)
+    if (!ex.ok) throw new Error(ex.reason)
+    const after = previewOf(ex.bytes, lk)
+    expect(codes(after.errors)).toEqual(['2:STORE_INVALID'])       // đánh số lại theo file làm việc
+    expect(after.refused.rows).toEqual([])
+  })
+
+  test('route: > 500 dòng từ chối ⇒ refused.rows phủ TOÀN BỘ file (chi tiết lỗi vẫn cắt 500); chỉ số dòng, không dữ liệu khách', async () => {
+    const ids = Array.from({ length: 620 }, (_, i) => `R${i}`)
+    const lk = refusedLookups(ids)
+    const rows = [H, ...ids.flatMap((id, i) => (i % 2 ? [r(id, 'QAOS01', EA, 'P1')] : [r(id, 'QAOS01', EA, 'P1'), r(id, 'QAOS01', EA, 'P2')])), r('K-OK', 'QAOS01', EA, 'P1')]
+    const bytes = csv(rows)
+    const s: Spy = { calls: [] }
+    const d = deps(s, { repo: fakeRepo(s, {}, () => lk) })
+    const m = await multipart({ file: { name: 'care.csv', bytes } })
+    const body = await (await handleCarePreview(req(m.body, m.contentType), d)).json()
+    expect(body.preview.errorCount).toBe(930)
+    expect(body.preview.errors).toHaveLength(CARE_PREVIEW_ERROR_LIMIT)
+    expect(body.preview.refused.customerCount).toBe(620)
+    expect(body.preview.refused.rows).toHaveLength(930)
+    expect(body.preview.refused.rows).toEqual(Array.from({ length: 930 }, (_, i) => i + 2))
+    expect(Object.keys(body.preview.refused).sort()).toEqual(['customerCount', 'inconsistentCustomerCount', 'rows'])
+    expect(writes(s)).toEqual([])
+
+    // File làm việc: preview lại sạch; commit gửi đúng bytes + sha + kỳ MỚI ⇒ staging không có khách đã loại.
+    const ex = excludeCareCsvRows(bytes, body.preview.refused.rows)
+    if (!ex.ok) throw new Error(ex.reason)
+    const m2 = await multipart({ file: { name: 'care.csv', bytes: ex.bytes } })
+    const body2 = await (await handleCarePreview(req(m2.body, m2.contentType), d)).json()
+    expect(body2.preview).toMatchObject({ errorCount: 0, rowCount: 1, customerCount: 1, refused: { customerCount: 0, rows: [] } })
+    expect(body2.sha256).not.toBe(body.sha256)
+    // Preview cũ (sha của file gốc) kèm bytes mới ⇒ 409, không ghi.
+    const stale = await multipart({ file: { name: 'care.csv', bytes: ex.bytes }, sha256: body.sha256, period: body.preview.period })
+    expect(await (await handleCareCommit(req(stale.body, stale.contentType), d)).json()).toMatchObject({ ok: false, code: 'SHA_MISMATCH' })
+    expect(writes(s)).toEqual([])
+    const c = await multipart({ file: { name: 'care.csv', bytes: ex.bytes }, sha256: body2.sha256, period: body2.preview.period })
+    const commit = await (await handleCareCommit(req(c.body, c.contentType), d)).json()
+    expect(commit).toMatchObject({ ok: true, result: { status: 'committed' } })
+    const staged = s.calls.filter((x) => x.fn === 'stageRows').flatMap((x) => x.args[1] as { row_no: number; payload: Record<string, string> }[])
+    expect(staged.map((x) => x.payload.customer_external_id)).toEqual(['K-OK'])
+    expect(s.calls.find((x) => x.fn === 'createBatch')!.args[0]).toMatchObject({ rowCount: 1, sha256: body2.sha256 })
+  })
+
+  test('từ chối MỚI phát sinh trong lúc chờ: commit file làm việc ⇒ 422 HAS_ERRORS (server kiểm lại), không ghi', async () => {
+    const lk0 = refusedLookups(['K-REF'])
+    const bytes = csv([H, r('K-REF', 'QAOS01', EA, 'P1'), r('K-LATE', 'QAOS01', EA, 'P1'), r('K-OK', 'QAOS01', EA, 'P1')])
+    const ex = excludeCareCsvRows(bytes, previewOf(bytes, lk0).refused.rows)
+    if (!ex.ok) throw new Error(ex.reason)
+    const s: Spy = { calls: [] }
+    const lk1 = refusedLookups(['K-REF', 'K-LATE'])                 // K-LATE vừa từ chối sau lần preview
+    const c = await multipart({ file: { name: 'care.csv', bytes: ex.bytes }, sha256: crypto.createHash('sha256').update(ex.bytes).digest('hex'), period: '2026-10-01' })
+    const body = await (await handleCareCommit(req(c.body, c.contentType), deps(s, { repo: fakeRepo(s, {}, () => lk1) }))).json()
+    expect(body).toMatchObject({ ok: false, code: 'HAS_ERRORS', errorCounts: { REFUSED_AT_STORE: 1 } })
+    expect(writes(s)).toEqual([])
+  })
+
+  test('nguồn: wizard dựng file làm việc bằng parser / serializer của app, bỏ preview cũ rồi preview lại; đổi / bỏ file xoá trạng thái đã loại; không loại khi còn 0 dòng', () => {
+    const wizard = fs.readFileSync(path.join(ROOT, 'components/care/CareImportWizard.tsx'), 'utf8')
+    const panels = fs.readFileSync(path.join(ROOT, 'components/care/CareImportPanels.tsx'), 'utf8')
+    const lib = fs.readFileSync(path.join(ROOT, 'lib/care/import/exclude.ts'), 'utf8')
+    expect(lib).toMatch(/parseCsvRecords\(/)
+    expect(lib).toMatch(/toCareCsv\(kept, true\)/)
+    expect(wizard).toMatch(/excludeCareCsvRows\(bytes, rows\)/)
+    expect(wizard).toMatch(/if \(digest !== sha\)/)                                   // file phải đúng bản đã kiểm tra
+    expect(wizard).toMatch(/setFile\(next\); setPreview\(null\); setQa\(null\); setSha\(''\)/)   // bỏ preview cũ
+    expect(wizard).toMatch(/await runPreview\(next\)/)
+    expect((wizard.match(/setExcluded\(null\)/g) ?? []).length).toBe(2)                 // reset() + choose()
+    expect(wizard).toMatch(/fd\.append\('sha256', sha\)/)                              // commit vẫn gửi sha của preview hiện hành
+    expect(panels).toMatch(/code === 'REFUSED_AT_STORE' && refused && refused\.rows > 0/)
+    expect(panels).toMatch(/Loại khỏi lần nhập/)
+    expect(panels).toMatch(/disabled=\{refused\.busy \|\| refused\.remainingRows === 0\}/)
+    for (const id of ['refused-customers', 'refused-rows', 'refused-remaining', 'refused-inconsistent', 'care-import-refused-inconsistent']) expect(panels).toContain(`data-testid="${id}"`)
+    // r1.1 (P1): nút loại chỉ khi có dòng ĐƯỢC loại; khách không nhất quán có dòng giải thích riêng, không có nút.
+    expect(panels).toMatch(/\(code === 'REFUSED_AT_STORE' \|\| code === 'INCONSISTENT_CUSTOMER'\) && refused && refused\.inconsistentCustomers > 0/)
+    expect(panels).toMatch(/không loại tự động/)
+    expect(wizard).toMatch(/inconsistentCustomers: preview\.refused\.inconsistentCustomerCount \?\? 0/)
+    const prev = fs.readFileSync(path.join(ROOT, 'lib/care/import/preview.ts'), 'utf8')
+    expect(prev).toMatch(/if \(c\.inconsistent\) \{[\s\S]{0,400}refusedInconsistent\+\+[\s\S]{0,80}\} else if \(refusedHere\) \{\s*refusedCustomers\+\+/)
   })
 })

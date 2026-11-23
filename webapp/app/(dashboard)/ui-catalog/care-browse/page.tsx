@@ -13,7 +13,7 @@ import { CareTaskTransferButton } from '@/components/care/CareTaskTransferButton
 import type { CareTaskPanelResult } from '@/components/care/CareTaskDrawer'
 import {
   CARE_INTERACTION_PAGE_SIZE, CARE_TRANSFER_MESSAGES, careInteractionPage, careOutcomeDistribution, careStatusChipTabs, parseCareOpenParam,
-  recentCarePeriods, type CareFilters, type CareStatusCounts, type CareTotals,
+  recentCarePeriods, type CareFilters, type CareStatusCounts, type CareTotals, parseCareReason,
 } from '@/lib/care/browse'
 import { maskVnPhone } from '@/lib/affiliate/phone'
 
@@ -42,7 +42,10 @@ const ROWS: CareTaskListRow[] = Array.from({ length: 6 }, (_, i) => ({
   store: i < 3 ? { code: 'QAOS01', name: 'QA store 1' } : { code: 'QAOS02', name: 'QA store 2' },
   assignee: { full_name: i < 3 ? 'QA Dược sĩ 01a' : 'QA Dược sĩ 02a' },
   product_count: i === 1 ? 2 : 1,
+  // PM 22/11: nhãn lý do — hàng 2 có hai lý do; hàng 5 lý do ngoài mẫu (hiện theo file).
+  reasons: i === 1 ? [{ key: 'promotion', label: 'Khuyến mãi' }, { key: 'chronic', label: 'Mãn tính' }] : i === 4 ? [{ key: 'tái khám', label: 'Tái khám' }] : [{ key: i % 2 ? 'promotion' : 'chronic', label: i % 2 ? 'Khuyến mãi' : 'Mãn tính' }],
 }))
+const REASONS = [{ key: 'promotion', label: 'Khuyến mãi' }, { key: 'chronic', label: 'Mãn tính' }, { key: 'tái khám', label: 'Tái khám' }]
 // B8.1: số chip NHẤT QUÁN với ROWS (today 2026-10-10): 4 nhóm rời nhau 2+2+1+1 = 6; quá hạn (1) nằm trong đang theo dõi.
 const COUNTS: CareStatusCounts = { all: 6, not_cared: 2, following: 2, overdue_open: 1, completed: 1, closed_unfinished: 1 }
 const STORES = [{ id: S(101), code: 'QAOS01', name: 'QA store 1' }, { id: S(102), code: 'QAOS02', name: 'QA store 2' }]
@@ -132,15 +135,17 @@ export default async function CareBrowseCatalogPage({ searchParams }: { searchPa
 
   // B8.1: `?frame=tasks[&open=<uuid>]` dựng ĐÚNG bố cục trang /care/tasks (header + chip + bảng + drawer) để test/chụp.
   if (sp.frame === 'tasks') {
+    const FF = { ...FRAME_FILTERS, reason: parseCareReason(sp) }
+    const FROWS = FF.reason ? ROWS.filter((r) => r.reasons?.some((x) => x.key === FF.reason)) : ROWS
     return (
       <div data-layout-width="fluid" data-care-browse className="space-y-4 p-4 md:p-6" data-testid="catalog-frame-tasks">
         <PageHeader title="Chăm sóc khách hàng" subtitle="Danh sách khách cần chăm sóc theo kỳ · hạn 31/10/2026" icon={ClipboardList}
-          actions={<CareFiltersBar path="/ui-catalog/care-browse" filters={FRAME_FILTERS} months={recentCarePeriods('2026-10-01')} />} />
-        <FilterTabs variant="chip" ariaLabel="Lọc theo trạng thái" activeKey="all" tabs={careStatusChipTabs('/ui-catalog/care-browse', FRAME_FILTERS, COUNTS)} />
-        <CareTaskTable rows={ROWS} total={ROWS.length} pageSize={30} path="/ui-catalog/care-browse" todayISO="2026-10-10" filters={FRAME_FILTERS}
+          actions={<CareFiltersBar path="/ui-catalog/care-browse" filters={FF} months={recentCarePeriods('2026-10-01')} />} />
+        <FilterTabs variant="chip" ariaLabel="Lọc theo trạng thái" activeKey="all" tabs={careStatusChipTabs('/ui-catalog/care-browse', FF, COUNTS)} />
+        <CareTaskTable rows={FROWS} total={FROWS.length} pageSize={30} path="/ui-catalog/care-browse" todayISO="2026-10-10" filters={FF}
           canTransfer isCurrentPeriod search={fakeSearch} loadTargets={fakeTargets} transfer={fakeTransfer} loadPanel={fakePanel} loadMore={fakeLoadMore}
           initialOpenId={parseCareOpenParam(sp)}
-          toolbar={<CareFiltersBar path="/ui-catalog/care-browse" filters={FRAME_FILTERS} stores={STORES} staff={STAFF} clearable />} />
+          toolbar={<CareFiltersBar path="/ui-catalog/care-browse" filters={FF} stores={STORES} staff={STAFF} reasons={REASONS} clearable />} />
       </div>
     )
   }

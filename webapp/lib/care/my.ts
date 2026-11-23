@@ -67,10 +67,10 @@ export function isProofExpired(createdAt: string, nowMs: number): boolean {
 }
 
 // ── Danh sách "Khách hàng của tôi" ─────────────────────────────────────────────
-export const CARE_MY_FILTERS = ['all', 'not_cared', 'overdue', 'completed'] as const
+export const CARE_MY_FILTERS = ['all', 'not_cared', 'due_today', 'overdue', 'completed'] as const
 export type CareMyFilter = (typeof CARE_MY_FILTERS)[number]
 export const CARE_MY_FILTER_LABELS: Record<CareMyFilter, string> = {
-  all: 'Tất cả', not_cared: 'Chưa chăm sóc', overdue: 'Quá hạn', completed: 'Hoàn thành',
+  all: 'Tất cả', not_cared: 'Chưa chăm sóc', due_today: 'Hẹn hôm nay', overdue: 'Quá hạn', completed: 'Hoàn thành',
 }
 export const CARE_MY_PAGE_SIZE = 20
 
@@ -154,12 +154,14 @@ export function careNextDatePresets(todayISO: string, dueISO: string): { label: 
  * Áp filter lên query task của CHÍNH dược sĩ (assignee + ĐÚNG store hiện tại — Q-82 + kỳ hiện
  * tại + phạm vi dữ liệu: production loại is_test · QA local chỉ batch QA). RLS 114 cũng chặn store
  * lệch; điều kiện ở đây giữ danh sách khớp care_my_summary. "Quá hạn" = còn mở + ngày hẹn < hôm nay
- * VN (task chưa gọi, chưa hẹn KHÔNG tự quá hạn).
+ * VN (task chưa gọi, chưa hẹn KHÔNG tự quá hạn). "Hẹn hôm nay" = còn mở + ngày hẹn = hôm nay VN.
  */
 export function applyMyTaskFilters<Q extends CareQueryBuilder<Q>>(q: Q, userId: string, storeId: string, period: string, filter: CareMyFilter, todayISO: string, scope: CareDataScope = CARE_PRODUCTION_SCOPE): Q {
   let r = applyCareScope(q.eq('assignee_id', userId).eq('store_id', storeId).eq('period_month', period), scope)
   switch (filter) {
     case 'not_cared': r = r.eq('status', 'open').is('last_interaction_at', null); break
+    // PM 22/11: lời nhắc trên /tasks và danh sách bấm vào dùng CHUNG điều kiện này (mọi kết quả có ngày hẹn).
+    case 'due_today': r = r.eq('status', 'open').eq('next_action_date', todayISO); break
     case 'overdue': r = r.eq('status', 'open').lt('next_action_date', todayISO); break
     case 'completed': r = r.eq('status', 'completed'); break
   }

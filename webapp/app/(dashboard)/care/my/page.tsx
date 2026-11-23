@@ -6,7 +6,7 @@ import { CareMyHeader } from '@/components/care/CareMyHeader'
 import { CareMyScreen } from '@/components/care/CareMyScreen'
 import { CARE_MY_PAGE_SIZE, parseMyFilters } from '@/lib/care/my'
 import { carePeriodOf, vnDateISO } from '@/lib/care/time'
-import { loadMySummary, loadMyTaskPage, loadMyTasksByIds, requireCareStaff } from '@/lib/care/server/my'
+import { loadMyDueTodayCount, loadMySummary, loadMyTaskPage, loadMyTasksByIds, requireCareStaff } from '@/lib/care/server/my'
 import { careOrderLinksUiOn, isCareOrderQaScope, loadImportOrderState, loadMyOrderSummary, loadMyOrderTaskIds } from '@/lib/care/server/orderLinks'
 import { careMyOrdersView } from '@/lib/care/orderLinks/view'
 import { isCareQaActive } from '@/lib/care/server/qaUi'
@@ -37,8 +37,9 @@ export default async function CareMyPage({ searchParams }: { searchParams: Promi
   try {
     // PM 22/10 F1: tóm tắt của mình + trạng thái lượt đồng bộ (RPC 116 care_import_order_state, session — không `chain`) đọc SONG
     // SONG; lỗi một nguồn KHÔNG làm hỏng trang (task vẫn dùng được) — chỉ phần số đơn fail-closed ('none').
-    const [summary, list, orderSummary, orderStatus] = await Promise.all([
+    const [summary, dueToday, list, orderSummary, orderStatus] = await Promise.all([
       loadMySummary(me),
+      loadMyDueTodayCount(me),                 // PM 22/11: số trên chip "Hẹn hôm nay" (null = lỗi đọc ⇒ không hiện số)
       ordersView
         ? loadMyOrderTaskIds(me.userId, period).then(async (o) => ({ rows: await loadMyTasksByIds(me, period, o.taskIds, today), total: null, next: o.next }))
         : loadMyTaskPage(me, period, f.filter, f.page, today).then((p) => ({ ...p, next: null })),
@@ -54,7 +55,7 @@ export default async function CareMyPage({ searchParams }: { searchParams: Promi
       <CareMyScreen screen="list">
         {header}
         <div className="px-4 pt-1 pb-4 md:p-0">
-          <CareMyHome key={`${ordersView ? 'orders' : f.filter}:${f.page}`} summary={summary} rows={list.rows}
+          <CareMyHome key={`${ordersView ? 'orders' : f.filter}:${f.page}`} summary={{ ...summary, dueToday }} rows={list.rows}
             total={list.total ?? ordersTotal ?? list.rows.length} filter={f.filter} page={ordersView ? 1 : f.page}
             pageSize={CARE_MY_PAGE_SIZE} todayISO={today} search={searchMyCareTasks}
             ordersChip={ui && ((orderSummary && ordersState !== 'none') || ordersView) ? { count: ordersTotal ?? undefined, active: ordersView } : undefined}

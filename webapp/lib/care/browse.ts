@@ -75,6 +75,11 @@ export interface CareFilters {
   assigneeId: string | null
   status: CareStatusFilter | null
   page: number
+  /**
+   * PM 22/11 — khoá lý do đã chuẩn hoá (careReasonKey). CHỈ /care/tasks đặt trường này (parseCareReason); parseCareFilters
+   * KHÔNG đọc ⇒ tổng quan / báo cáo / export không đổi số theo lọc lý do.
+   */
+  reason?: string | null
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -110,6 +115,7 @@ export function careFilterHref(path: string, f: Partial<CareFilters>, over: Part
   if (m.storeId) q.set('store', m.storeId)
   if (m.assigneeId) q.set('assignee', m.assigneeId)
   if (m.status) q.set('status', m.status)
+  if (m.reason) q.set('reason', m.reason)
   if (m.page && m.page > 1) q.set('page', String(m.page))
   const s = q.toString()
   return s ? `${path}?${s}` : path
@@ -132,11 +138,55 @@ export const CARE_STATUS_CHIP_LABELS: Record<CareStatusFilter, string> = {
 export type CareStatusCounts = { all: number } & Record<CareStatusFilter, number>
 
 export function careStatusChipTabs(path: string, f: CareFilters, counts: CareStatusCounts | null): { key: string; label: string; count?: number; href: string }[] {
-  const base = { month: f.month, storeId: f.storeId, assigneeId: f.assigneeId }
+  const base = { month: f.month, storeId: f.storeId, assigneeId: f.assigneeId, reason: f.reason ?? null }
   return [
     { key: 'all', label: 'Tất cả', count: counts?.all, href: careFilterHref(path, base) },
     ...CARE_STATUS_FILTERS.map((s) => ({ key: s, label: CARE_STATUS_CHIP_LABELS[s], count: counts?.[s], href: careFilterHref(path, { ...base, status: s }) })),
   ]
+}
+
+// ── Lý do chăm sóc trên /care/tasks (PM 22/11/2026) ──────────────────────────
+// Nguồn: care_task_products.reason_type của sản phẩm HIỆN HÀNH (is_current) — chữ tự do theo file import (≤ 50 ký tự).
+// MỘT phép chuẩn hoá cho nhãn, lọc và danh sách lựa chọn: khoá = bỏ khoảng trắng hai đầu + chữ thường
+// (SQL 133 care_reason_options: lower(btrim(reason_type))). Nhãn: hai khoá mẫu có tên tiếng Việt, còn lại hiện theo file.
+export const CARE_REASON_MAX = 50
+export const CARE_REASON_LABELS: Readonly<Record<string, string>> = { chronic: 'Mãn tính', promotion: 'Khuyến mãi' }
+
+/** Khoá chuẩn hoá của một lý do; rỗng / quá dài / không phải chuỗi ⇒ null. */
+export function careReasonKey(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const k = raw.trim().toLowerCase()
+  return k.length >= 1 && k.length <= CARE_REASON_MAX ? k : null
+}
+
+/** Nhãn hiển thị: tên tiếng Việt của khoá mẫu, ngược lại nguyên văn theo file (`raw`), thiếu thì chính khoá. */
+export function careReasonLabel(key: string, raw?: string | null): string {
+  return Object.prototype.hasOwnProperty.call(CARE_REASON_LABELS, key) ? CARE_REASON_LABELS[key] : (raw?.trim() || key)
+}
+
+export interface CareReasonTag { key: string; label: string }
+
+/**
+ * Nhãn lý do của MỘT task: mỗi khoá một nhãn (nhiều sản phẩm cùng lý do ⇒ một nhãn; khác lý do ⇒ đủ nhãn), chỉ sản phẩm
+ * is_current, thứ tự ổn định theo nhãn. Giá trị ngoài mẫu hiện theo biến thể đầu tiên (theo thứ tự chữ) trong file.
+ */
+export function careTaskReasons(products: { is_current: boolean; reason_type?: string | null }[] | null | undefined): CareReasonTag[] {
+  const raws = new Map<string, string>()
+  for (const p of products ?? []) {
+    if (p.is_current !== true) continue
+    const key = careReasonKey(p.reason_type)
+    if (!key) continue
+    const raw = (p.reason_type as string).trim()
+    const cur = raws.get(key)
+    if (cur === undefined || raw < cur) raws.set(key, raw)
+  }
+  return [...raws].map(([key, raw]) => ({ key, label: careReasonLabel(key, raw) })).sort((a, b) => a.label.localeCompare(b.label, 'vi') || (a.key < b.key ? -1 : 1))
+}
+
+/** `?reason=` của /care/tasks — cùng chuẩn hoá; sai / rỗng ⇒ null (không lọc). */
+export function parseCareReason(sp: Record<string, string | string[] | undefined>): string | null {
+  const v = sp.reason
+  return typeof v === 'string' ? careReasonKey(v.slice(0, 200)) : null
 }
 
 // ── Ô hiển thị 2 dòng /care/tasks (B8.1) ───────────────────────────────────
@@ -389,6 +439,8 @@ export const CARE_INTERACTION_PAGE_SIZE = 10
 
 export interface CareInteractionRow {
   id: number; outcome: string; note: string; next_action_date: string | null; created_at: string
+  /** Giá trị ĐÃ LƯU của lượt (PM 22/11: NO_NEED cũ là kết thúc, NO_NEED mới còn mở ⇒ không suy từ bảng outcome hiện hành). */
+  is_terminal?: boolean | null
   actor: { full_name: string } | null
   /** Lượt của chính task đang xem (ngược lại: kỳ trước / dược sĩ trước). */
   isThisTask: boolean
@@ -407,7 +459,7 @@ export interface CareInteractionPage { rows: CareInteractionRow[]; hasMore: bool
  * `nowMs` (server) quyết ảnh minh chứng đã hết hạn lưu chưa (Q-85) — không tính lúc render client.
  */
 export function careInteractionPage(
-  fetched: { id: number; outcome: string; note: string; next_action_date: string | null; created_at: string; task_id: string; actor: { full_name: string } | null; proof?: { url: string }[] | null }[] | null,
+  fetched: { id: number; outcome: string; note: string; next_action_date: string | null; created_at: string; task_id: string; is_terminal?: boolean | null; actor: { full_name: string } | null; proof?: { url: string }[] | null }[] | null,
   taskId: string, nowMs: number, size = CARE_INTERACTION_PAGE_SIZE,
 ): CareInteractionPage {
   const all = fetched ?? []

@@ -5,7 +5,7 @@ import { createClient } from '@/lib/supabase/server'
 import { isCareEnabled, isCareOrderLinksUiEnabled } from '@/lib/care/flags'
 import { loadTaskOrders } from '@/lib/care/server/orderLinks'
 import {
-  CARE_TRANSFER_MESSAGES, mapCareTransferError, parseCareFilters, validateTransferInput,
+  CARE_TRANSFER_MESSAGES, mapCareTransferError, parseCareFilters, parseCareReason, validateTransferInput,
   type CareInteractionPage, type CareTransferErrorCode,
 } from '@/lib/care/browse'
 import { carePeriodOf, vnDateISO } from '@/lib/care/time'
@@ -144,7 +144,8 @@ export async function searchCareTasks(input: { params: Record<string, string>; q
   const v = await getCareViewAccess()
   if (v.kind !== 'ok' || !v.perms.canView) return { ok: false, message: 'Không có quyền xem.' }
   const now = new Date()
-  const f = parseCareFilters({ ...input.params, page: String(input.page) }, carePeriodOf(now))
+  // PM 22/11: lý do (không PII) đi cùng các filter URL khác — tìm kiếm chỉ thu hẹp trong tập đã lọc lý do.
+  const f = { ...parseCareFilters({ ...input.params, page: String(input.page) }, carePeriodOf(now)), reason: parseCareReason(input.params ?? {}) }
   try {
     return { ok: true, ...(await loadCareTaskPage(f, vnDateISO(now), String(input.q ?? '').slice(0, 200))) }
   } catch {

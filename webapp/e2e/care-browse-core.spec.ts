@@ -322,10 +322,17 @@ test.describe('care B3 — source: cờ, session/RPC, không service role @deskt
     // Danh sách: SĐT che Ở SERVER (phone_norm không xuống client); không email dược sĩ.
     expect(src).toContain('phone_masked: maskVnPhone(phone_norm)')
     // B8.1: số sản phẩm — embed CHỈ cờ is_current qua FK tường minh, đếm hiện hành ở app (không tên/ảnh, không N+1).
-    expect(src).toContain("const TASK_PRODUCT_FLAGS = 'care_task_products!care_task_products_task_id_fkey(is_current)'")
-    expect(src).toContain('product_count: careCurrentProductCount(care_task_products)')
+    // PM 22/11: thêm reason_type (nhãn Lý do) — vẫn không tên / ảnh sản phẩm.
+    expect(src).toContain("const TASK_PRODUCT_FLAGS = 'care_task_products!care_task_products_task_id_fkey(is_current, reason_type)'")
+    expect(src).toContain('product_count: careCurrentProductCount(care_task_products), reasons: careTaskReasons(care_task_products)')
+    // Lọc Lý do TRƯỚC phân trang: RPC 133 care_tasks_by_reason (phạm vi tính một lần) — KHÔNG embed !inner (RLS sản phẩm theo từng dòng với SM).
+    expect(src.replace(/\/\*[\s\S]*?\*\/|\/\/.*$/gm, '')).not.toMatch(/!inner|imatch/)
+    expect(src.match(/supabase\.rpc\('care_tasks_by_reason', args, /g)).toHaveLength(2)        // danh sách (id của trang + tổng) và 6 count chip
+    expect(src).toContain("withCareFilters(supabase.rpc('care_tasks_by_reason', args, { count: 'exact' }).select('id'), f, todayISO)")
+    expect(src).toContain("await supabase.from('care_tasks').select(TASK_LIST_SELECT).in('id', order)")   // cột hiển thị + SĐT che vẫn đọc qua bảng + RLS
+    expect(src).toContain("supabase.rpc('care_reason_options', { p_period: month, p_is_test: careDataScope().kind === 'qa' })")
     // B8.1 chip: count head:true song song, cùng withCareFilters (kỳ/store/dược sĩ + careDataScope), "Tất cả" = count riêng.
-    expect(src).toMatch(/const keys = \[null, \.\.\.CARE_STATUS_FILTERS\] as const\s*const counts = await Promise\.all\(keys\.map\(async \(status\) => \{\s*const \{ count, error \} = await withCareFilters\(supabase\.from\('care_tasks'\)\.select\('id', \{ count: 'exact', head: true \}\), \{ \.\.\.f, status \}, todayISO\)/)
+    expect(src).toMatch(/const keys = \[null, \.\.\.CARE_STATUS_FILTERS\] as const\s*const args = reasonArgs\(f\)\s*const counts = await Promise\.all\(keys\.map\(async \(status\) => \{\s*const base = args\s*\? supabase\.rpc\('care_tasks_by_reason', args, \{ count: 'exact', head: true \}\)\s*: supabase\.from\('care_tasks'\)\.select\('id', \{ count: 'exact', head: true \}\)\s*const \{ count, error \} = await withCareFilters\(base, \{ \.\.\.f, status \}, todayISO\)/)
     expect(src).toMatch(/if \(error \|\| count === null\) throw new Error\('care_status_counts_failed'\)/)
     // B8.1 tải dược sĩ nhận (PM P1-1): QA local qua loadCareQaReportRows; production RPC care_report session; một lần đọc.
     expect(src).toMatch(/async function loadCareReportRowsScoped\(month: string\)[^{]*\{\s*if \(careDataScope\(\)\.kind === 'qa'\) return loadCareQaReportRows\(\{ month, storeId: null \}\)/)
@@ -415,7 +422,7 @@ test.describe('care B3 — parity browser ↔ migration 114 (PGlite) @desktop', 
     test.setTimeout(300_000)
     const { PGlite } = await import('@electric-sql/pglite')
     const L: any = await import(pathToFileURL(path.join(ROOT, 'scripts', 'lib-care-pglite.mjs')).href)
-    const db: Db = await L.freshDb(PGlite)
+    const db: Db = await L.freshDbLatest(PGlite)
     // Ghim "hôm nay VN" của DB vào kỳ fixture (helper lịch sử khách dùng care_vn_today()) ⇒ test không phụ thuộc ngày chạy thật.
     await db.exec(`CREATE OR REPLACE FUNCTION public.care_vn_today() RETURNS date LANGUAGE sql STABLE AS $$ SELECT DATE '2026-10-20' $$`)
     const U = L.U
@@ -459,7 +466,7 @@ test.describe('care B3 — parity browser ↔ migration 114 (PGlite) @desktop', 
     await L.record(db, '2026-10-05', U.A, a1.id, 'CALLBACK', 'QA hẹn sớm', '2026-10-10')
     await L.record(db, '2026-10-05', U.A, a2.id, 'INTERESTED', 'QA quan tâm')
     await L.record(db, '2026-10-06', U.B, b0.id, 'UNREACHABLE', 'QA không nghe', '2026-10-30')
-    await L.record(db, '2026-10-06', U.C, c0.id, 'NO_NEED', 'QA không cần')
+    await L.record(db, '2026-10-06', U.C, c0.id, 'NO_NEED', 'QA chưa có nhu cầu', '2026-10-31')   // PM 22/11: còn mở + ngày hẹn
     // Q-78: khách của a0 có 1 + 22 = 23 lượt ⇒ 3 trang (10 + 10 + 3).
     for (let k = 0; k < 22; k++) await L.record(db, '2026-10-06', U.A, a0.id, 'CALLBACK', `QA lượt thêm ${k}`, '2026-10-31')
     await db.query(`SELECT public.care__stamp_overdue_at('2026-10-31')`)
@@ -499,6 +506,7 @@ test.describe('care B3 — parity browser ↔ migration 114 (PGlite) @desktop', 
     expect(st(a2.id).key).toBe('completed')
     expect(st(b0.id)).toEqual({ key: 'following', overdueOpen: true })
     expect(st(c1.id)).toEqual({ key: 'not_cared', overdueOpen: false })
+    expect(st(c0.id)).toEqual({ key: 'following', overdueOpen: false })           // NO_NEED hẹn 31/10 ⇒ Đang theo dõi, không Hoàn thành
     // Phân bố outcome = đếm theo từng khoá (đúng cách server đếm head:true) — cộng lại đủ mẫu số.
     const oc: Record<string, number> = {}
     for (const k of CARE_OUTCOME_KEYS) {
@@ -763,8 +771,9 @@ test.describe('care B3 — parity browser ↔ migration 114 (PGlite) @desktop', 
     const old = await browse(U.super, { month: P10 }, '2026-11-01')
     const tot = careReportTotals(await report(U.super, P10))
     expect(tot).toEqual(derive(old, '2026-11-01'))
-    expect(tot.completed).toBe(2)
-    expect(tot.closedUnfinished).toBe(248)
+    // PM 22/11: c0 (NO_NEED hẹn 31/10) chưa có lượt kết thúc ⇒ hết kỳ đóng Không hoàn thành — không tính Hoàn thành / ghi công.
+    expect(tot.completed).toBe(1)
+    expect(tot.closedUnfinished).toBe(249)
     expect(tot.overdueInPeriod).toBeGreaterThanOrEqual(3)          // a1, b0 trễ trong kỳ; a0 hẹn 31/10 trễ khi đóng kỳ
     expect(tot.overdueInPeriod).toBeLessThan(tot.closedUnfinished)
     expect(await browse(U.super, { month: P10, status: 'overdue_open' }, '2026-11-01')).toHaveLength(0)

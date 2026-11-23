@@ -125,7 +125,7 @@ test.describe('care Q-121 — benchmark 20.000 dòng @desktop', () => {
       const L: any = await import(pathToFileURL(path.join(ROOT, 'scripts', 'lib-care-pglite.mjs')).href)
       report.pglite = JSON.parse(fs.readFileSync(path.join(ROOT, 'node_modules', '@electric-sql', 'pglite', 'package.json'), 'utf8')).version
       const once = async (rows: Record<string, string>[], settings: string) => {
-        const db: any = await L.freshDb(PGlite)
+        const db: any = await L.freshDbLatest(PGlite)
         await db.exec(settings)
         const batch = (await db.query(`INSERT INTO public.care_import_batches (period_month, file_name, file_sha256, row_count, created_by) VALUES ('2026-10-01', 'b.csv', $1, $2, $3) RETURNING id`,
           ['a'.repeat(64), rows.length, L.U.mkt])).rows[0].id

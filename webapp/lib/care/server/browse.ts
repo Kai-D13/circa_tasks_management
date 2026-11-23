@@ -5,8 +5,8 @@ import { isCareEnabled } from '@/lib/care/flags'
 import { fetchExact } from '@/lib/care/import/fetchExact'
 import { maskVnPhone } from '@/lib/affiliate/phone'
 import {
-  applyCareTaskFilters, careCurrentProductCount, careSearchTerm, carePermissions, careInteractionPage, careOpenLoadByAssignee, CARE_OUTCOME_KEYS, CARE_INTERACTION_PAGE_SIZE,
-  CARE_STATUS_FILTERS, type CareInteractionPage, type CareStatusCounts,
+  applyCareTaskFilters, careCurrentProductCount, careReasonKey, careReasonLabel, careTaskReasons, careSearchTerm, carePermissions, careInteractionPage, careOpenLoadByAssignee, CARE_OUTCOME_KEYS, CARE_INTERACTION_PAGE_SIZE,
+  CARE_STATUS_FILTERS, type CareInteractionPage, type CareReasonTag, type CareStatusCounts,
   type CareAccess, type CareOutcomeKey, type CareQueryBuilder, type CareFilters, type CarePermissions, type CareReportRow,
 } from '@/lib/care/browse'
 import { applyCareScope } from '@/lib/care/scope'
@@ -156,8 +156,9 @@ export interface CareTaskBase {
 /**
  * Hàng danh sách: SĐT đã che Ở SERVER — số đầy đủ chỉ ở trang/drawer chi tiết (Q-115).
  * B8.1: `product_count` = số sản phẩm HIỆN HÀNH (is_current) — chỉ đếm, không tải tên/ảnh.
+ * PM 22/11: `reasons` = nhãn lý do của sản phẩm hiện hành (mỗi khoá một nhãn).
  */
-export type CareTaskRow = CareTaskBase & { phone_masked: string; product_count: number }
+export type CareTaskRow = CareTaskBase & { phone_masked: string; product_count: number; reasons: CareReasonTag[] }
 
 export const CARE_TASK_PAGE_SIZE = 30
 
@@ -167,43 +168,97 @@ const TASK_COLUMNS = 'id, customer_name, period_month, due_date, status, last_ou
  * cùng request — đếm ở app (careCurrentProductCount) thay vì lọc embed, không phụ thuộc ngữ nghĩa
  * filter embed của PostgREST; dòng revision cũ (is_current=false) không được tính.
  */
-const TASK_PRODUCT_FLAGS = 'care_task_products!care_task_products_task_id_fkey(is_current)'
+const TASK_PRODUCT_FLAGS = 'care_task_products!care_task_products_task_id_fkey(is_current, reason_type)'
+const TASK_LIST_SELECT = `${TASK_COLUMNS}, phone_norm, ${TASK_PRODUCT_FLAGS}`
+/**
+ * PM 22/11 — lọc theo lý do TRƯỚC phân trang qua RPC 133 `care_tasks_by_reason` (SETOF care_tasks, STABLE): hàm trả đúng các
+ * task TRONG PHẠM VI người gọi (cùng điều kiện với policy care_tasks_select) có ≥ 1 sản phẩm hiện hành thuộc lý do; mỗi task
+ * một dòng ⇒ count exact đúng, các bộ lọc kỳ / cửa hàng / dược sĩ / trạng thái / tìm kiếm áp tiếp trên kết quả như trên bảng.
+ * KHÔNG lọc bằng embed `care_task_products!inner`: RLS của bảng sản phẩm chạy theo TỪNG DÒNG với SM (đo prod 22/11: ~18–20 s
+ * cho một lần đếm của SM 10 cửa hàng, so với ~35 ms khi phạm vi tính một lần).
+ */
+function reasonArgs(f: Pick<CareFilters, 'month' | 'reason'>): { p_period: string; p_reason: string; p_is_test: boolean } | null {
+  const key = careReasonKey(f.reason)
+  return key ? { p_period: f.month, p_reason: key, p_is_test: careDataScope().kind === 'qa' } : null
+}
+
+type TaskListRaw = CareTaskBase & { phone_norm: string; care_task_products: { is_current: boolean; reason_type: string | null }[] | null }
+const toTaskRow = ({ phone_norm, care_task_products, ...r }: TaskListRaw): CareTaskRow =>
+  ({ ...r, phone_masked: maskVnPhone(phone_norm), product_count: careCurrentProductCount(care_task_products), reasons: careTaskReasons(care_task_products) })
 
 /** Một trang danh sách task (server pagination, thứ tự ổn định created_at ↓, id ↓). */
 export async function loadCareTaskPage(f: CareFilters, todayISO: string, q?: string): Promise<{ rows: CareTaskRow[]; total: number }> {
   const supabase = await createClient()
-  let query = withCareFilters(supabase.from('care_tasks').select(`${TASK_COLUMNS}, phone_norm, ${TASK_PRODUCT_FLAGS}`, { count: 'exact' }), f, todayISO)
   const term = q ? careSearchTerm(q) : null
   if (q && !term) return { rows: [], total: 0 }
+  const from = (f.page - 1) * CARE_TASK_PAGE_SIZE
+  const args = reasonArgs(f)
+  if (args) {
+    // Bước 1: id của ĐÚNG trang + tổng, lọc / tìm / sắp trên kết quả RPC. Bước 2: đọc cột hiển thị của các id đó (≤ 30) qua bảng + RLS.
+    let ids = withCareFilters(supabase.rpc('care_tasks_by_reason', args, { count: 'exact' }).select('id'), f, todayISO)
+    if (term) ids = term.phone ? ids.or(`customer_name.ilike.*${term.name}*,phone_norm.like.*${term.phone}*`) : ids.ilike('customer_name', `%${term.name}%`)
+    const page = await ids.order('created_at', { ascending: false }).order('id', { ascending: false }).range(from, from + CARE_TASK_PAGE_SIZE - 1)
+    if (page.error || page.count === null) throw new Error('care_tasks_failed')
+    const order = ((page.data ?? []) as { id: string }[]).map((r) => r.id)
+    if (order.length === 0) return { rows: [], total: page.count }
+    const { data, error } = await supabase.from('care_tasks').select(TASK_LIST_SELECT).in('id', order)
+    if (error) throw new Error('care_tasks_failed')
+    const byId = new Map(((data ?? []) as unknown as TaskListRaw[]).map((r) => [r.id, r]))
+    return { rows: order.flatMap((id) => { const r = byId.get(id); return r ? [toTaskRow(r)] : [] }), total: page.count }
+  }
+  let query = withCareFilters(supabase.from('care_tasks').select(TASK_LIST_SELECT, { count: 'exact' }), f, todayISO)
   if (term) {
     query = term.phone
       ? query.or(`customer_name.ilike.*${term.name}*,phone_norm.like.*${term.phone}*`)
       : query.ilike('customer_name', `%${term.name}%`)
   }
-  const from = (f.page - 1) * CARE_TASK_PAGE_SIZE
   const { data, error, count } = await query
     .order('created_at', { ascending: false }).order('id', { ascending: false })
     .range(from, from + CARE_TASK_PAGE_SIZE - 1)
   if (error || count === null) throw new Error('care_tasks_failed')
-  const rows = ((data ?? []) as unknown as (CareTaskBase & { phone_norm: string; care_task_products: { is_current: boolean }[] | null })[])
-    .map(({ phone_norm, care_task_products, ...r }) => ({ ...r, phone_masked: maskVnPhone(phone_norm), product_count: careCurrentProductCount(care_task_products) }))
-  return { rows, total: count }
+  return { rows: ((data ?? []) as unknown as TaskListRaw[]).map(toTaskRow), total: count }
 }
 
 /**
  * B8.1: số đếm cho chip trạng thái — `all` là count RIÊNG (không cộng chip vì overdue_open giao
- * following). Cùng kỳ/store/dược sĩ + careDataScope + RLS session; KHÔNG áp từ khoá tìm. Chạy
+ * following). Cùng kỳ/store/dược sĩ + lý do (PM 22/11, cùng nguồn RPC care_tasks_by_reason với danh sách) + careDataScope + RLS session; KHÔNG áp từ khoá tìm. Chạy
  * song song, head:true (không tải dòng). Lỗi ⇒ throw (trang ẩn số, không hiện 0 giả).
  */
 export async function loadCareStatusCounts(f: CareFilters, todayISO: string): Promise<CareStatusCounts> {
   const supabase = await createClient()
   const keys = [null, ...CARE_STATUS_FILTERS] as const
+  const args = reasonArgs(f)
   const counts = await Promise.all(keys.map(async (status) => {
-    const { count, error } = await withCareFilters(supabase.from('care_tasks').select('id', { count: 'exact', head: true }), { ...f, status }, todayISO)
+    const base = args
+      ? supabase.rpc('care_tasks_by_reason', args, { count: 'exact', head: true })
+      : supabase.from('care_tasks').select('id', { count: 'exact', head: true })
+    const { count, error } = await withCareFilters(base, { ...f, status }, todayISO)
     if (error || count === null) throw new Error('care_status_counts_failed')
     return [status ?? 'all', count] as const
   }))
   return Object.fromEntries(counts) as CareStatusCounts
+}
+
+export interface CareReasonOption { key: string; label: string }
+/**
+ * PM 22/11 — lựa chọn của bộ lọc "Lý do": khoá phân biệt của sản phẩm hiện hành trong kỳ, trong phạm vi người xem
+ * (RPC 133 care_reason_options — phạm vi tính MỘT LẦN trong hàm, cùng điều kiện với policy care_tasks_select). Lỗi / DB chưa có 133 ⇒ null: trang vẫn
+ * dùng được, bộ lọc chỉ còn "Tất cả lý do" + lý do đang chọn (không dựng danh sách giả).
+ */
+export async function loadCareReasonOptions(month: string): Promise<CareReasonOption[] | null> {
+  try {
+    const supabase = await createClient()
+    const { data, error } = await supabase.rpc('care_reason_options', { p_period: month, p_is_test: careDataScope().kind === 'qa' })
+    if (error || !Array.isArray(data)) return null
+    const out = new Map<string, string>()
+    for (const r of data as { reason_key?: unknown; reason_label?: unknown }[]) {
+      const key = careReasonKey(r.reason_key)
+      if (key && !out.has(key)) out.set(key, careReasonLabel(key, typeof r.reason_label === 'string' ? r.reason_label : null))
+    }
+    return [...out].map(([key, label]) => ({ key, label })).sort((a, b) => a.label.localeCompare(b.label, 'vi'))
+  } catch {
+    return null
+  }
 }
 
 type CareReportScopeFilter = Pick<CareFilters, 'month' | 'storeId' | 'assigneeId'>
@@ -313,7 +368,7 @@ export async function loadCareInteractionsPage(taskId: string, beforeId: number 
     task = data as { id: string; customer_id: string }
   }
   let q = supabase.from('care_interactions')
-    .select('id, outcome, note, next_action_date, created_at, task_id, proof, actor:users!care_interactions_actor_id_fkey(full_name)')
+    .select('id, outcome, is_terminal, note, next_action_date, created_at, task_id, proof, actor:users!care_interactions_actor_id_fkey(full_name)')
     .eq('customer_id', task.customer_id)
   if (beforeId !== null) q = q.lt('id', beforeId)
   const { data, error } = await q.order('id', { ascending: false }).limit(CARE_INTERACTION_PAGE_SIZE + 1)

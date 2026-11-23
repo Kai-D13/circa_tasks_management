@@ -6,6 +6,8 @@ import { saveLocatorShot } from './qaShot'
 import { handleCarePreview, type CareImportDeps } from '../lib/care/import/handler'
 import type { CareImportLookups } from '../lib/care/import/preview'
 import { buildCareImportCsv, defaultFixtureStores } from './careImportFixture'
+import crypto from 'node:crypto'
+import { excludeCareCsvRows } from '../lib/care/import/exclude'
 
 // CRM-CSKH B2 — UI wizard Phân công + smoke API thật.
 //
@@ -502,5 +504,222 @@ test.describe('care B8.3 r1.1 — preview cũ về muộn sau khi đổi/bỏ fi
     await expect(page.getByTestId('care-import-wizard').getByRole('button', { name: 'Tiếp: xem phân công' })).toHaveCount(0)
     await expect(page.locator('li[aria-current="step"]')).toContainText('Tải file')
     expect(await seenA(page)).toEqual([])
+  })
+})
+
+// ── PM 22/11/2026 — "Loại khỏi lần nhập" (khách đã từ chối chăm sóc tại cửa hàng) ──────────────────────────────────
+// API giả nhưng TÍNH TỪ BYTES TRÌNH DUYỆT GỬI bằng handler thật ⇒ lượt kiểm tra lại phản ánh đúng file làm việc của wizard.
+async function refusedSetup() {
+  const base = await realPreviewJson(fixture)
+  const victims = (base.preview.customers as { externalId: string; storeCode: string; rows: number[] }[]).slice(0, 2)
+  const lk = lookups()
+  for (const v of victims) {
+    lk.customers.set(v.externalId, { id: `c-${v.externalId}`, isTest: false })
+    lk.refusals.add(`c-${v.externalId}|s${STORES.findIndex((s) => s.code === v.storeCode)}`)
+  }
+  const rows = victims.flatMap((v) => v.rows).sort((a, b) => a - b)
+  return { base, lk, rows }
+}
+async function previewOfPosted(route: Route, lk: CareImportLookups) {
+  const body = route.request().postDataBuffer()!
+  const deps: CareImportDeps = {
+    enabled: true, maxBytes: 8 * 1024 * 1024, getAccess: async () => ({ kind: 'ok', actorId: 'a' }),
+    repo: { loadLookups: async () => lk, createBatch: async () => 'b', stageRows: async () => {}, finalize: async () => { throw new Error('x') }, discardBatch: async () => {}, purgeStaleStaging: async () => {} },
+    now: () => new Date('2026-10-10T03:00:00Z'),
+  }
+  const res = await handleCarePreview(new Request('http://x/', {
+    method: 'POST', body: new Uint8Array(body), headers: { 'content-type': route.request().headers()['content-type'], 'content-length': String(body.byteLength) },
+  }), deps)
+  return { status: res.status, json: await res.json() }
+}
+
+test.describe('care PM 22/11 — wizard: loại khách đã từ chối khỏi lần nhập (API giả tính từ file gửi lên) @desktop', () => {
+  test.skip(!HAS_STATE, 'chưa có storageState super (E2E_SUPER_* + project setup)')
+  test.use({ storageState: SUPER_STATE })
+
+  test('chọn nhóm "Khách đã từ chối" → xác nhận số khách / dòng → kiểm tra lại sạch lỗi → commit gửi đúng file làm việc; chọn file khác xoá trạng thái', async ({ page }) => {
+    test.setTimeout(120_000)
+    const { base, lk, rows } = await refusedSetup()
+    const total = base.preview.rowCount as number, customers = base.preview.customerCount as number
+    const previews: any[] = []
+    let commitForm = ''
+    await page.route('**/api/care/import/preview', async (r) => { const p = await previewOfPosted(r, lk); previews.push(p.json); await fulfill(r, p.status, p.json) })
+    await page.route('**/api/care/import/commit', async (r) => {
+      commitForm = r.request().postDataBuffer()!.toString('latin1')
+      await fulfill(r, 200, { ok: true, result: { status: 'committed', batch_id: 'b', created: customers - 2, updated: 0, unchanged: 0, skipped_has_interaction: 0, closed_previous_period: 0 }, previewCounts: previews.at(-1).preview.counts })
+    })
+    await openWizard(page)
+    await upload(page)
+    const wiz = page.getByTestId('care-import-wizard')
+    const issues = wiz.getByTestId('care-import-issues')
+    await expect(issues).toContainText(`${rows.length} lỗi`)
+    await expect(wiz.getByRole('button', { name: 'Tiếp: xem phân công' })).toHaveCount(0)   // còn lỗi ⇒ không có đường đi tiếp
+    // Chưa chọn nhóm lỗi ⇒ chưa có nút loại (không loại nhầm khi đang xem lỗi khác).
+    await expect(wiz.getByTestId('care-import-refused-action')).toHaveCount(0)
+    await issues.getByRole('button', { name: /Khách đã từ chối/ }).click()
+    const action = wiz.getByTestId('care-import-refused-action')
+    await expect(action).toContainText(`2 khách (${rows.length} dòng sản phẩm)`)
+    await shot(page, 'refused-1-action')
+    await action.getByRole('button', { name: 'Loại khỏi lần nhập' }).click()
+    const dlg = page.getByTestId('care-import-refused-dialog')
+    await expect(dlg.getByTestId('refused-customers')).toHaveText('2')
+    await expect(dlg.getByTestId('refused-rows')).toHaveText(String(rows.length))
+    await expect(dlg.getByTestId('refused-remaining')).toHaveText(`${customers - 2} khách · ${total - rows.length} dòng`)
+    // "Không loại" ⇒ không gửi gì, lỗi còn nguyên.
+    await dlg.getByRole('button', { name: 'Không loại' }).click()
+    await expect(dlg).toHaveCount(0)
+    expect(previews).toHaveLength(1)
+    await action.getByRole('button', { name: 'Loại khỏi lần nhập' }).click()
+    await page.getByTestId('care-import-refused-dialog').getByRole('button', { name: 'Loại 2 khách và kiểm tra lại' }).click()
+
+    const note = wiz.getByTestId('care-import-excluded')
+    await expect(note).toContainText(`Đã loại 2 khách đã từ chối (${rows.length} dòng sản phẩm)`)
+    await expect(wiz.getByTestId('care-import-issues')).toHaveCount(0)
+    expect(previews).toHaveLength(2)
+    expect(previews[1].preview).toMatchObject({ errorCount: 0, rowCount: total - rows.length, customerCount: customers - 2, refused: { customerCount: 0, rows: [] } })
+    expect(previews[1].sha256).not.toBe(previews[0].sha256)
+    // File làm việc đúng bằng file gốc bỏ các dòng server chỉ ra (cùng hàm thuần).
+    const want = excludeCareCsvRows(new Uint8Array(fixture), rows)
+    if (!want.ok) throw new Error(want.reason)
+    expect(previews[1].sha256).toBe(crypto.createHash('sha256').update(want.bytes).digest('hex'))
+    await expect(wiz.getByRole('button', { name: new RegExp(`Tạo mới \\(${customers - 2}\\)`) })).toBeVisible()
+    await shot(page, 'refused-2-rechecked')
+
+    await wiz.getByRole('button', { name: 'Tiếp: xem phân công' }).click()
+    await wiz.getByRole('button', { name: 'Tiếp: xác nhận' }).click()
+    await expect(wiz.getByTestId('care-import-excluded-summary')).toHaveText(`2 khách đã từ chối · ${rows.length} dòng`)
+    await shot(page, 'refused-3-confirm')
+    await wiz.getByRole('button', { name: 'Xác nhận import' }).click()
+    await expect(page.getByTestId('care-import-result')).toContainText('Đã import')
+    expect(commitForm).toContain(previews[1].sha256)            // sha + bytes của file làm việc, không phải file gốc
+    expect(commitForm).not.toContain(previews[0].sha256)
+    expect(Buffer.from(commitForm, 'latin1').includes(Buffer.from(want.bytes))).toBe(true)
+  })
+
+  // PM 23/11/2026 (audit r1, P1): cùng mã khách ở HAI cửa hàng, chỉ một nơi đã từ chối ⇒ nhóm đó KHÔNG được loại; giao diện tách rõ
+  // "được loại" (số trong khối hành động + hộp xác nhận) với "giữ lại để sửa". Sau khi loại, lỗi không nhất quán vẫn chặn.
+  for (const order of ['A trước B', 'B trước A'] as const) {
+    test(`r1.1 — khách hai cửa hàng (${order}): chỉ khách từ chối hợp lệ bị loại, nhóm mâu thuẫn ở lại + có dòng giải thích, vẫn chặn ghi`, async ({ page }) => {
+      test.setTimeout(120_000)
+      const { base, lk, rows } = await refusedSetup()
+      const total = base.preview.rowCount as number, customers = base.preview.customerCount as number
+      // Hai dòng của MỘT mã khách mới ở hai cửa hàng khác nhau (email đúng cửa hàng từng dòng); đã từ chối ở cửa hàng A.
+      const rowOf = (storeIdx: number, pid: string) => ['QA-AB', 'KH QA-AB', '0390000777', STORES[storeIdx].code, STORES[storeIdx].assigneeEmails[0], 'chronic', 'QA', pid, `SP ${pid}`, ''].join(',')
+      const a = rowOf(3, 'PAB1'), b = rowOf(4, 'PAB2')
+      const text = fixture.toString('utf8').replace(/\s+$/, '')
+      const dirty = Buffer.from(`${text}\r\n${order === 'A trước B' ? `${a}\r\n${b}` : `${b}\r\n${a}`}\r\n`)
+      lk.customers.set('QA-AB', { id: 'c-QA-AB', isTest: false })
+      lk.refusals.add('c-QA-AB|s3')
+      const previews: any[] = []
+      await page.route('**/api/care/import/preview', async (r) => { const p = await previewOfPosted(r, lk); previews.push(p.json); await fulfill(r, p.status, p.json) })
+      await openWizard(page)
+      await upload(page, dirty)
+      const wiz = page.getByTestId('care-import-wizard')
+      expect(previews[0].preview.refused).toEqual({ customerCount: 2, rows, inconsistentCustomerCount: 1 })   // hai dòng QA-AB KHÔNG có trong danh sách loại
+      await wiz.getByTestId('care-import-issues').getByRole('button', { name: /Khách đã từ chối/ }).click()
+      const action = wiz.getByTestId('care-import-refused-action')
+      await expect(action).toContainText(`2 khách (${rows.length} dòng sản phẩm)`)
+      const held = wiz.getByTestId('care-import-refused-inconsistent')
+      await expect(held).toContainText('1 khách')
+      await expect(held).toContainText('không loại tự động')
+      await shot(page, `refused-r11-${order === 'A trước B' ? 'ab' : 'ba'}-1-action`)
+      await action.getByRole('button', { name: 'Loại khỏi lần nhập' }).click()
+      const dlg = page.getByTestId('care-import-refused-dialog')
+      await expect(dlg.getByTestId('refused-customers')).toHaveText('2')
+      await expect(dlg.getByTestId('refused-rows')).toHaveText(String(rows.length))
+      await expect(dlg.getByTestId('refused-inconsistent')).toHaveText('1 khách')
+      await expect(dlg.getByTestId('refused-remaining')).toHaveText(`${customers + 1 - 2} khách · ${total + 2 - rows.length} dòng`)
+      await dlg.getByRole('button', { name: 'Loại 2 khách và kiểm tra lại' }).click()
+      await expect(wiz.getByTestId('care-import-excluded')).toContainText(`Đã loại 2 khách đã từ chối (${rows.length} dòng sản phẩm)`)
+      // Kiểm tra lại: file làm việc = file gốc bỏ đúng các dòng server chỉ ra; hai dòng QA-AB còn nguyên; preview KHÔNG sạch.
+      expect(previews).toHaveLength(2)
+      const want = excludeCareCsvRows(new Uint8Array(dirty), rows)
+      if (!want.ok) throw new Error(want.reason)
+      expect(previews[1].sha256).toBe(crypto.createHash('sha256').update(want.bytes).digest('hex'))
+      const kept = Buffer.from(want.bytes).toString('utf8')
+      expect(kept).toContain(a); expect(kept).toContain(b)
+      expect(previews[1].preview).toMatchObject({ rowCount: total + 2 - rows.length, customerCount: customers + 1 - 2, refused: { customerCount: 0, rows: [], inconsistentCustomerCount: 1 } })
+      expect(previews[1].preview.errorCounts.INCONSISTENT_CUSTOMER).toBe(2)
+      const issues = wiz.getByTestId('care-import-issues')
+      await expect(issues).toBeVisible()
+      await expect(wiz.getByTestId('care-import-blocked')).toBeVisible()
+      await expect(wiz.getByRole('button', { name: 'Tiếp: xem phân công' })).toHaveCount(0)      // lỗi không nhất quán vẫn chặn
+      await expect(wiz.getByTestId('care-import-refused-action')).toHaveCount(0)                // không còn gì ĐƯỢC loại ⇒ không có nút
+      // Nhóm "Khách đã từ chối" chỉ còn khi dòng ĐẦU của nhóm mâu thuẫn là cửa hàng đã từ chối (mã lỗi theo phép kiểm của finalize).
+      const chip = issues.getByRole('button', { name: /Khách đã từ chối/ })
+      if (order === 'A trước B') {
+        await chip.click()
+        await expect(wiz.getByTestId('care-import-refused-inconsistent')).toContainText('1 khách')
+        await expect(wiz.getByTestId('care-import-refused-action')).toHaveCount(0)
+        await shot(page, 'refused-r11-ab-2-after')
+      } else {
+        await expect(chip).toHaveCount(0)
+      }
+      // Dù thứ tự nào, nhóm "Khách không nhất quán" cũng có dòng chỉ dẫn (không có nút loại).
+      await issues.getByRole('button', { name: /Khách không nhất quán/ }).click()
+      await expect(wiz.getByTestId('care-import-refused-inconsistent')).toContainText('không loại tự động')
+      await expect(wiz.getByTestId('care-import-refused-action')).toHaveCount(0)
+    })
+  }
+
+  test('còn lỗi KHÁC sau khi loại: vẫn chặn, nhóm "Khách đã từ chối" biến mất; đổi file ⇒ dòng "Đã loại" biến mất', async ({ page }) => {
+    test.setTimeout(120_000)
+    const { lk, rows } = await refusedSetup()
+    // Thêm một dòng sai mã cửa hàng vào cuối file.
+    const text = fixture.toString('utf8').replace(/\s+$/, '')
+    const last = text.split('\r\n').at(-1)!.split(',')
+    last[0] = 'QA-BAD-STORE'; last[3] = 'QAOS99'
+    const dirty = Buffer.from(`${text}\r\n${last.join(',')}\r\n`)
+    await page.route('**/api/care/import/preview', async (r) => { const p = await previewOfPosted(r, lk); await fulfill(r, p.status, p.json) })
+    await openWizard(page)
+    await upload(page, dirty)
+    const wiz = page.getByTestId('care-import-wizard')
+    await wiz.getByTestId('care-import-issues').getByRole('button', { name: /Khách đã từ chối/ }).click()
+    await wiz.getByTestId('care-import-refused-action').getByRole('button', { name: 'Loại khỏi lần nhập' }).click()
+    await page.getByTestId('care-import-refused-dialog').getByRole('button', { name: 'Loại 2 khách và kiểm tra lại' }).click()
+    await expect(wiz.getByTestId('care-import-excluded')).toContainText(`${rows.length} dòng sản phẩm`)
+    const issues = wiz.getByTestId('care-import-issues')
+    await expect(issues).toContainText('1 lỗi')
+    await expect(issues.getByRole('button', { name: /Khách đã từ chối/ })).toHaveCount(0)
+    await expect(wiz.getByTestId('care-import-refused-action')).toHaveCount(0)
+    await expect(wiz.getByRole('button', { name: 'Tiếp: xem phân công' })).toHaveCount(0)   // còn lỗi ⇒ không có đường đi tiếp
+    // Chọn file khác (file sạch) ⇒ trạng thái "đã loại" của file cũ không bám theo.
+    lk.refusals.clear()
+    await wiz.getByRole('button', { name: 'Chọn file đã sửa' }).click()
+    await expect(wiz.getByTestId('care-import-excluded')).toHaveCount(0)
+    await upload(page)
+    await expect(wiz.getByText('Khách (task)')).toBeVisible()
+    await expect(wiz.getByTestId('care-import-excluded')).toHaveCount(0)
+    await expect(wiz.getByRole('button', { name: 'Tiếp: xem phân công' })).toBeEnabled()
+  })
+})
+
+test.describe('care PM 22/11 — wizard mobile: loại khách đã từ chối @mobile', () => {
+  test.skip(!HAS_STATE, 'chưa có storageState super')
+  test.use({ storageState: SUPER_STATE })
+
+  test('360px: khối hành động + hộp xác nhận không tràn ngang, nút ≥ 44px; loại xong kiểm tra lại sạch', async ({ page }) => {
+    test.setTimeout(120_000)
+    const { lk, rows } = await refusedSetup()
+    await page.route('**/api/care/import/preview', async (r) => { const p = await previewOfPosted(r, lk); await fulfill(r, p.status, p.json) })
+    await openWizard(page)
+    await upload(page)
+    const wiz = page.getByTestId('care-import-wizard')
+    await wiz.getByTestId('care-import-issues').getByRole('button', { name: /Khách đã từ chối/ }).click()
+    const open = wiz.getByTestId('care-import-refused-action').getByRole('button', { name: 'Loại khỏi lần nhập' })
+    expect((await open.boundingBox())!.height).toBeGreaterThanOrEqual(44)
+    expect(await noPageOverflow(page)).toBe(true)
+    await shot(page, `refused-mobile-${page.viewportSize()!.width}-action`)
+    await open.click()
+    const dlg = page.getByTestId('care-import-refused-dialog')
+    await expect.poll(async () => (await dlg.getByRole('button', { name: 'Không loại' }).boundingBox())?.height ?? 0).toBeGreaterThanOrEqual(44)   // chờ hết hiệu ứng mở
+    const box = (await dlg.boundingBox())!
+    expect(box.x).toBeGreaterThanOrEqual(0)
+    expect(box.x + box.width).toBeLessThanOrEqual(page.viewportSize()!.width + 1)
+    for (const name of ['Không loại', 'Loại 2 khách và kiểm tra lại']) expect((await dlg.getByRole('button', { name }).boundingBox())!.height, name).toBeGreaterThanOrEqual(44)
+    await dlg.getByRole('button', { name: 'Loại 2 khách và kiểm tra lại' }).click()
+    await expect(wiz.getByTestId('care-import-excluded')).toContainText(`${rows.length} dòng sản phẩm`)
+    await expect(wiz.getByTestId('care-import-issues')).toHaveCount(0)
+    expect(await noPageOverflow(page)).toBe(true)
   })
 })

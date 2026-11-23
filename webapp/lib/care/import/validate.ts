@@ -25,6 +25,10 @@ export interface CareImportCustomer {
   /** Chuỗi gốc nhỏ nhất (như min(phone_raw) của SQL) — chỉ để hiển thị. */
   phoneRaw: string
   storeCode: string
+  /** PM 23/11/2026 (Q-241 r1.1): MỌI mã cửa hàng khác nhau của nhóm (đã sắp) — không phụ thuộc thứ tự dòng trong file. */
+  storeCodes: string[]
+  /** Nhóm dính INCONSISTENT_CUSTOMER (tên / SĐT / cửa hàng / email lệch giữa các dòng) ⇒ `storeCode` chỉ là của dòng đầu. */
+  inconsistent: boolean
   email: string
   rows: number[]
   products: CareImportProduct[]
@@ -90,6 +94,8 @@ export function validateCareRows(rows: CareImportRow[]): CareValidateResult {
       phoneNorm: phoneNorm(first) ?? '',
       phoneRaw: list.map((r) => r.customer_phone).sort()[0] ?? '',
       storeCode: first.target_store_code,
+      storeCodes: [...new Set(list.map((r) => r.target_store_code))].sort(),
+      inconsistent,
       email: email(first),
       rows: list.map((r) => r.rowNo),
       products: list

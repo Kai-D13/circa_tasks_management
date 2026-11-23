@@ -74,6 +74,11 @@ test.describe('care B4 — logic thuần (dược sĩ) @desktop', () => {
     expect(run('not_cared').slice(4)).toEqual(['eq status open', 'is last_interaction_at'])
     expect(run('overdue').slice(4)).toEqual(['eq status open', 'lt next_action_date 2026-10-10'])
     expect(run('completed').slice(4)).toEqual(['eq status completed'])
+    // PM 22/11: "Hẹn hôm nay" = còn mở + ngày hẹn ĐÚNG hôm nay (không gồm quá hạn / ngày mai / đã đóng).
+    expect(run('due_today').slice(4)).toEqual(['eq status open', 'eq next_action_date 2026-10-10'])
+    expect([...CARE_MY_FILTERS]).toEqual(['all', 'not_cared', 'due_today', 'overdue', 'completed'])
+    expect(parseMyFilters({ filter: 'due_today' })).toEqual({ filter: 'due_today', page: 1 })
+    expect(myFilterHref('due_today')).toBe('/care/my?filter=due_today')
     const t = (status: string, last: string | null, next: string | null) => ({ status, last_interaction_at: last, next_action_date: next })
     expect(careMyBadge(t('open', 'x', '2026-10-09'), '2026-10-10')).toEqual({ label: 'Quá hạn · hẹn 09/10', tone: 'danger' })
     expect(careMyBadge(t('open', 'x', '2026-10-10'), '2026-10-10')).toEqual({ label: 'Hẹn chăm sóc lại 10/10', tone: 'info' })   // hẹn hôm nay ≠ quá hạn
@@ -234,10 +239,15 @@ test.describe('care B4 — source: cờ, dược sĩ OS, session/RPC, upload, na
     const sels = [...src.matchAll(/from\('care_tasks'\)\.select\('([^']+)'/g)].map((m) => m[1])
     // + B6-qa-ui: thẻ tóm tắt ở chế độ QA local đếm từ task của mình (lib/care/qa/mirror.ts) — vẫn không PII/sản phẩm.
     // + E3: chip "Có đơn xác thực" đọc thẻ theo id (loadMyTasksByIds) — CÙNG cột hiển thị với trang danh sách.
-    expect(sels).toEqual(['status, last_interaction_at, next_action_date', 'id, status, next_action_date', 'id, customer_name, phone_norm, status, last_outcome, last_interaction_at, next_action_date, due_date',
+    // + PM 22/11: số "Hẹn hôm nay" = count head:true chỉ cột id (loadMyDueTodayCount) qua CÙNG withMyFilters('due_today').
+    expect(sels).toEqual(['status, last_interaction_at, next_action_date', 'id', 'id, status, next_action_date', 'id, customer_name, phone_norm, status, last_outcome, last_interaction_at, next_action_date, due_date',
       'id, customer_name, phone_norm, status, last_outcome, last_interaction_at, next_action_date, due_date'])
     for (const sel of sels) expect(sel).not.toMatch(/product|image|care_interactions|care_customers|proof/)
     expect(src).toContain('maskVnPhone(phone_norm)')
+    const due = /export async function loadMyDueTodayCount[\s\S]*?\n\}/.exec(src)![0]
+    expect(due).toContain("withMyFilters(supabase.from('care_tasks').select('id', { count: 'exact', head: true }), me, carePeriodOf(now), 'due_today', vnDateISO(now))")
+    expect(due).toContain("return error || typeof count !== 'number' ? null : count")   // lỗi ⇒ null (ẩn lời nhắc), không số 0 giả
+    expect(due).not.toMatch(/supabaseAdmin|rpc\(/)
     // Q-84: khoá sort của TOÀN TẬP (fetchExact, có tìm kiếm) → pageMyTasks → đọc đúng trang theo id.
     // E3 r1.1: phần đọc khoá tách thành loadMySortKeys (dùng chung với tìm trong nhóm "Có đơn xác thực").
     const keysFn = /async function loadMySortKeys[\s\S]*?\n\}/.exec(src)![0]
@@ -316,8 +326,11 @@ test.describe('care B4 — source: cờ, dược sĩ OS, session/RPC, upload, na
     expect(care).toContain('<AccountMenu tone="onSurface" />')
     expect(care).toMatch(/careBackMode\(previousEntryUrl\(\), back\.href, window\.location\.origin\) === 'back'/)
     const layout = read('app/(dashboard)/layout.tsx')
-    expect(layout).toContain('careEnabled={isStaff && !isFsStore && isCareEnabled()}')
-    expect(layout).toContain('<MobileHeader careOwnHeader={isStaff && !isFsStore && isCareEnabled()} />')
+    expect(layout).toContain('careEnabled={isCareEnabled()}')
+    const shell = read('components/layout/DashboardShell.tsx')
+    expect(shell).toContain('const staffCare = isStaff && !isFsStore && careEnabled')
+    expect(shell).toContain('<MobileHeader careOwnHeader={staffCare} />')
+    expect(shell).toMatch(/<BottomNav [^>]*careEnabled=\{staffCare\}/)
     // Mỗi trang render đúng 1 header CSKH; PageHeader chỉ từ md; gốc trang chung CareMyScreen.
     for (const [file, screen] of [['app/(dashboard)/care/my/page.tsx', 'list'], ['app/(dashboard)/care/my/[id]/page.tsx', 'detail'], ['app/(dashboard)/care/my/[id]/update/page.tsx', 'update']]) {
       const src = read(file)
@@ -335,6 +348,18 @@ test.describe('care B4 — source: cờ, dược sĩ OS, session/RPC, upload, na
     const tasks = read('app/(dashboard)/tasks/page.tsx')
     expect(tasks).toMatch(/\{isStaff && isCareEnabled\(\) && \(\s*<Link href="\/care\/my"/)
     expect(tasks).not.toMatch(/care_tasks|care_my_summary|rpc\('care|lib\/care\/server/)
+    // PM 22/11: lời nhắc "Hôm nay có N khách hẹn liên hệ lại" — component server tự đọc trong Suspense, page vẫn không query CRM.
+    expect(tasks).toMatch(/\{isStaff && isCareEnabled\(\) && \(\s*<Suspense fallback=\{null\}><CareDueTodayBanner \/><\/Suspense>\s*\)\}/)
+    const banner = read('components/care/CareDueTodayBanner.tsx')
+    expect(banner).not.toMatch(/'use client'|supabaseAdmin|service_role/)
+    expect(banner).toContain("const a = await getCareStaffAccess().catch(() => null)")
+    expect(banner).toContain("if (!a || a.kind !== 'ok') return null")
+    expect(banner).toContain('if (!n || n < 1) return null')                       // 0 / lỗi ⇒ không render, không số 0 giả
+    expect(banner).toContain("<Link href={myFilterHref('due_today')} prefetch={false} data-testid=\"care-due-today\"")
+    expect(banner).toContain('Hôm nay có {n} khách hẹn liên hệ lại')
+    expect(banner).not.toMatch(/customer_name|phone/)                              // chỉ số đếm, không PII
+    const myPage = read('app/(dashboard)/care/my/page.tsx')
+    expect(myPage).toContain('loadMyDueTodayCount(me)')
   })
 
   test('catalog care-my: UI_CATALOG + super; mỗi action giả tự kiểm cổng', () => {
@@ -367,7 +392,7 @@ test.describe('care B4 — PGlite 114: ghi lượt, quyền, proof, danh sách @
     test.setTimeout(300_000)
     const { PGlite } = await import('@electric-sql/pglite')
     const L: any = await import(pathToFileURL(path.join(ROOT, 'scripts', 'lib-care-pglite.mjs')).href)
-    const db: any = await L.freshDb(PGlite)
+    const db: any = await L.freshDbLatest(PGlite)
     await db.exec(`CREATE OR REPLACE FUNCTION public.care_vn_today() RETURNS date LANGUAGE sql STABLE AS $$ SELECT DATE '2026-10-20' $$`)
     const U = L.U, P10 = '2026-10-01'
     const res = await L.finalize(db, await L.stage(db, buildCareImportRows({ customersPerStore: 10 }) as any, { period: P10 }), U.mkt, '2026-10-01')
@@ -521,5 +546,27 @@ test.describe('care B4 — PGlite 114: ghi lượt, quyền, proof, danh sách @
     expect(pgf.map((p) => p.length)).toEqual([4, 4, 1, 0])
     // Bộ lọc Quá hạn cùng quy tắc: hôm qua trước quá hạn xa.
     expect(pageMyTasks(await listOf(E, 'overdue', ORD_ONLY), 1, '2026-10-20').pageIds).toEqual(ids(['QA-ORD-02', 'QA-ORD-04']))
+
+    // 8) PM 22/11 — "Hẹn hôm nay" (hôm nay 20/10): đúng người, đúng ngày; không lấy hôm qua / ngày mai / đã đóng.
+    const dueIds = async (who: string) => (await listOf(who, 'due_today')).map((r: any) => r.id).sort()
+    expect(await dueIds(E)).toEqual([o['QA-ORD-01']])
+    // NO_NEED (133): thiếu ngày / trước hôm nay / sau hạn task ⇒ từ chối, task nguyên; ngày hợp lệ ⇒ lưu, task CÒN MỞ.
+    const before = await L.one(db, `SELECT status, last_outcome, next_action_date::text FROM public.care_tasks WHERE id = $1`, [o['QA-ORD-06']])
+    expect(await rec('2026-10-20', E, o['QA-ORD-06'], 'NO_NEED', 'QA chưa có nhu cầu')).toBe('DATE_REQUIRED')
+    expect(await rec('2026-10-20', E, o['QA-ORD-06'], 'NO_NEED', 'QA chưa có nhu cầu', '2026-10-19')).toBe('DATE_RANGE')
+    expect(await rec('2026-10-20', E, o['QA-ORD-06'], 'NO_NEED', 'QA chưa có nhu cầu', '2026-11-01')).toBe('DATE_RANGE')
+    expect(await L.one(db, `SELECT status, last_outcome, next_action_date::text FROM public.care_tasks WHERE id = $1`, [o['QA-ORD-06']])).toEqual(before)
+    expect(await L.count(db, `SELECT count(*) FROM public.care_interactions WHERE task_id = $1`, [o['QA-ORD-06']])).toBe(0)
+    expect(await rec('2026-10-20', E, o['QA-ORD-06'], 'NO_NEED', 'QA chưa có nhu cầu', '2026-10-20')).toBe('OK')
+    expect(await rec('2026-10-20', E, o['QA-ORD-07'], 'NO_NEED', 'QA chưa có nhu cầu 2', '2026-10-21')).toBe('OK')
+    expect(await L.one(db, `SELECT status, last_outcome, next_action_date::text, completed_at FROM public.care_tasks WHERE id = $1`, [o['QA-ORD-06']]))
+      .toEqual({ status: 'open', last_outcome: 'NO_NEED', next_action_date: '2026-10-20', completed_at: null })
+    expect(await L.one(db, `SELECT is_terminal FROM public.care_interactions WHERE task_id = $1`, [o['QA-ORD-06']])).toEqual({ is_terminal: false })
+    expect(await dueIds(E)).toEqual([o['QA-ORD-01'], o['QA-ORD-06']].sort())          // ORD-07 hẹn ngày mai không vào
+    expect(await dueIds(U.A)).toEqual([])                                            // dược sĩ khác không thấy
+    expect(await dueIds(U.qlch1)).toEqual([])
+    // Ghi lượt kết thúc sau đó ⇒ rời danh sách hẹn hôm nay.
+    expect(await rec('2026-10-20', E, o['QA-ORD-06'], 'ORDERED', 'QA đã đặt')).toBe('OK')
+    expect(await dueIds(E)).toEqual([o['QA-ORD-01']])
   })
 })

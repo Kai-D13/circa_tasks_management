@@ -6,14 +6,15 @@ import { CareUnavailableState } from '@/components/care/CareUnavailableState'
 import { CareFiltersBar } from '@/components/care/CareFiltersBar'
 import { CareStatusChips, CareStatusChipsBare } from '@/components/care/CareStatusChips'
 import { CareTaskTable } from '@/components/care/CareTaskTable'
-import { careFilterHref, parseCareFilters, parseCareOpenParam, periodDue, recentCarePeriods } from '@/lib/care/browse'
+import { careFilterHref, parseCareFilters, parseCareOpenParam, parseCareReason, periodDue, recentCarePeriods } from '@/lib/care/browse'
 import { carePeriodOf, vnDateISO } from '@/lib/care/time'
-import { CARE_TASK_PAGE_SIZE, loadCareTaskPage, loadScopeStaff, loadScopeStores } from '@/lib/care/server/browse'
+import { CARE_TASK_PAGE_SIZE, loadCareReasonOptions, loadCareTaskPage, loadScopeStaff, loadScopeStores } from '@/lib/care/server/browse'
 import { requireCareViewer } from '@/lib/care/server/pageGuard'
 import { listCareTransferTargets, loadCareTaskPanel, loadMoreCareInteractions, searchCareTasks, transferCareTasks } from '@/app/actions/care'
 
 // /care/tasks — Chăm sóc (SPEC B3 §2–3; B8.1 theo artboard 12): danh sách task theo phạm vi RLS,
-// phân trang server; chip trạng thái có số (cùng kỳ/store/dược sĩ, không áp từ khoá tìm); drawer
+// phân trang server; chip trạng thái có số (cùng kỳ/store/dược sĩ/lý do, không áp từ khoá tìm); nhãn + lọc Lý do
+// (PM 22/11, sản phẩm hiện hành); drawer
 // chi tiết `?open=<uuid>`; chuyển giao có ghi chú cho SM/super (task đang mở kỳ hiện tại).
 export default async function CareTasksPage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
   const g = await requireCareViewer()
@@ -21,7 +22,8 @@ export default async function CareTasksPage({ searchParams }: { searchParams: Pr
   const now = new Date()
   const current = carePeriodOf(now)
   const today = vnDateISO(now)
-  const f = parseCareFilters(sp, current)
+  // PM 22/11: lọc lý do chỉ có ở trang này — đọc riêng, không nằm trong parseCareFilters dùng chung với tổng quan / báo cáo.
+  const f = { ...parseCareFilters(sp, current), reason: parseCareReason(sp) }
   const due = periodDue(f.month)
   const subtitle = `Danh sách khách cần chăm sóc theo kỳ · hạn ${due.slice(8, 10)}/${due.slice(5, 7)}/${due.slice(0, 4)}`
   if (g.kind === 'unavailable') {
@@ -38,7 +40,7 @@ export default async function CareTasksPage({ searchParams }: { searchParams: Pr
   try {
     // Danh sách + phạm vi store chạy song song; số đếm chip stream SAU (Suspense) để không tranh pool với danh sách.
     const [stores, page] = await Promise.all([loadScopeStores(g.perms), loadCareTaskPage(f, today)])
-    const staff = await loadScopeStaff(stores)
+    const [staff, reasons] = await Promise.all([loadScopeStaff(stores), loadCareReasonOptions(f.month)])
     chips = (
       <Suspense fallback={<CareStatusChipsBare path="/care/tasks" filters={f} />}>
         <CareStatusChips path="/care/tasks" filters={f} todayISO={today} />
@@ -61,7 +63,7 @@ export default async function CareTasksPage({ searchParams }: { searchParams: Pr
         loadPanel={loadCareTaskPanel}
         loadMore={loadMoreCareInteractions}
         initialOpenId={parseCareOpenParam(sp)}
-        toolbar={<CareFiltersBar path="/care/tasks" filters={f} stores={stores} staff={staff} clearable />}
+        toolbar={<CareFiltersBar path="/care/tasks" filters={f} stores={stores} staff={staff} reasons={reasons ?? []} clearable />}
       />
     )
   } catch {

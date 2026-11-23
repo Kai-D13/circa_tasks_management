@@ -52,6 +52,9 @@ if (JSON.stringify(L.STORES) !== JSON.stringify(STORES)) { console.error('FAIL: 
 // E: mặc định 114 + 115 + 116 (CARE_PGLITE_THROUGH=115 để dừng ở 115); kiểm 116 thay đổi CÓ CHỦ Ý ghi nhãn [116].
 const V115 = L.THROUGH_DEFAULT !== '114'
 const V116 = L.THROUGH_DEFAULT === '116'
+// [133] PM 22/11/2026: DB dựng tới 116 để kiểm chạy lại 114–116, RỒI nạp 133 (NO_NEED hẹn lại) — phần còn lại của bộ QA chạy trên 133.
+const V133 = V116
+L.useThrough(L.THROUGH_DEFAULT)
 console.log(`(chạy trên migration 114${V115 ? ' + 115' : ''}${V116 ? ' + 116' : ''})`)
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -74,6 +77,10 @@ if (V115) {
 } else {
   try { await db.exec(MIGRATION); ok(true, 'chạy lần 2 (idempotent) thành công') } catch (e) { ok(false, 'chạy lần 2', e.message) }
 }
+if (V133) {
+  await L.apply133(db)
+  ok(await count(db, `SELECT count(*) FROM public.app_migrations WHERE version = '133'`) === 1, '[133] nạp 133 sau 116 (marker 132) thành công')
+}
 ok(await count(db, `SELECT count(*) FROM public.app_migrations WHERE version = '114'`) === 1, 'app_migrations có đúng 1 dòng 114')
 ok(await count(db, `SELECT count(*) FROM public.care_access`) === 1, 'seed care_access đúng 1 dòng (không nhân đôi khi chạy lại)')
 ok(await count(db, `SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace AND relname LIKE 'care\\_%' AND relkind = 'r' AND relrowsecurity`) === (V116 ? 22 : V115 ? 15 : 13),
@@ -92,7 +99,7 @@ section('QUYỀN')
       has_function_privilege('authenticated', p.oid, 'EXECUTE') AS auth,
       has_function_privilege('service_role', p.oid, 'EXECUTE') AS svc
     FROM pg_proc p WHERE p.pronamespace = 'public'::regnamespace AND p.proname LIKE 'care%'`)).rows
-  ok(fns.length === (V116 ? 78 : V115 ? 51 : 41), (V116 ? '[116] 78 function care* (51 + 27 đơn sau import); ' : V115 ? '[115] 51 function care* (41 của 114 + 10 huỷ import); ' : '') + '41 function care* (gồm care_assignee_uid — Q-76/77; care_staff_reads_task/customer — Q-79; care_staff_store_id — Q-82; care_recompute_attribution + care_order_sync_status — B5a; care_order_sync_candidates/apply/fail — B5b.2)', String(fns.length))
+  ok(fns.length === (V133 ? 80 : V116 ? 78 : V115 ? 51 : 41), (V133 ? '[133] 80 function care* (78 + care_reason_options + care_tasks_by_reason); ' : V116 ? '[116] 78 function care* (51 + 27 đơn sau import); ' : V115 ? '[115] 51 function care* (41 của 114 + 10 huỷ import); ' : '') + '41 function care* (gồm care_assignee_uid — Q-76/77; care_staff_reads_task/customer — Q-79; care_staff_store_id — Q-82; care_recompute_attribution + care_order_sync_status — B5a; care_order_sync_candidates/apply/fail — B5b.2)', String(fns.length))
   const sid = fns.find((f) => f.fn === 'care_staff_store_id()')
   ok(sid && !sid.anon && sid.auth && sid.svc, 'care_staff_store_id(): authenticated + service_role, không anon (helper policy)', JSON.stringify(sid))
   ok(fns.every((f) => !f.anon), 'anon không EXECUTE function care* nào', fns.filter((f) => f.anon).map((f) => f.fn).join(', '))
@@ -359,13 +366,13 @@ ok(await raises(record(db, '2026-10-05', U.qlch1, tA0.id, 'NO_NEED'), 'chỉ dư
 ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'CALLBACK'), 'bắt buộc ngày hẹn') === true, 'CALLBACK thiếu ngày hẹn ⇒ từ chối')
 ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'UNREACHABLE', 'x', '2026-11-02'), 'tới hết tháng') === true, 'ngày hẹn sang tháng sau ⇒ từ chối (Q-48)')
 ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'CALLBACK', 'x', '2026-10-04'), 'tới hết tháng') === true, 'ngày hẹn trong quá khứ ⇒ từ chối')
-ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'NO_NEED', 'x', '2026-10-09'), 'không nhận ngày hẹn') === true, 'outcome kết thúc kèm ngày hẹn ⇒ từ chối')
+ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'ORDERED', 'x', '2026-10-09'), 'không nhận ngày hẹn') === true, 'outcome kết thúc kèm ngày hẹn ⇒ từ chối')
 ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'NO_NEED', '   '), 'ghi chú bắt buộc') === true, 'ghi chú rỗng ⇒ từ chối')
 ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'NO_NEED', 'x'.repeat(501)), '1–500') === true, 'ghi chú 501 ký tự ⇒ từ chối')
 ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'DONE'), 'kết quả không hợp lệ') === true, 'outcome lạ ⇒ từ chối')
-ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'NO_NEED', 'x', null, { url: 'a' }), 'proof phải là mảng') === true, 'proof không phải mảng ⇒ từ chối')
+ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'ORDERED', 'x', null, { url: 'a' }), 'proof phải là mảng') === true, 'proof không phải mảng ⇒ từ chối')
 for (const [bad, why] of [[[{ url: 'javascript:alert(1)' }], 'javascript:'], [[{ url: 'http://x.invalid/a.jpg' }], 'http'], [[{ url: 'https://x.invalid/a.jpg', extra: 1 }], 'key lạ'], [Array(6).fill({ url: 'https://x.invalid/a.jpg' }), '6 ảnh'], [[{ url: 'https://x.invalid/' + 'a'.repeat(5000) }], 'quá dài']]) {
-  ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'NO_NEED', 'x', null, bad), 'proof phải là mảng') === true, `proof ${why} ⇒ từ chối`)
+  ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'ORDERED', 'x', null, bad), 'proof phải là mảng') === true, `proof ${why} ⇒ từ chối`)
 }
 // B4: proof chỉ nhận object app cấp cho ĐÚNG task: <base>/care-proof/<task_id>/<khoá>.<ảnh>.
 const PB = 'https://storage.googleapis.com/duocsi-circa-vn/care-proof/'
@@ -387,9 +394,9 @@ for (const [url, why] of [
   [PB + tA0.id + '/１700000000000_abcd1234.jpg', 'chữ số fullwidth'],
   [PB + tA0.id + '/1700000000000_abcd1234.JPG', 'đuôi chữ hoa'],
 ]) {
-  ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'NO_NEED', 'x', null, [{ url }]), 'proof phải là mảng') === true, `proof ${why} ⇒ từ chối (RPC trực tiếp)`)
+  ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'ORDERED', 'x', null, [{ url }]), 'proof phải là mảng') === true, `proof ${why} ⇒ từ chối (RPC trực tiếp)`)
 }
-ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'NO_NEED', 'x', null, [{ url: PB + tA0.id + '/1700000000000_abcd1234.jpg' }, { url: PB + tA0.id + '/1700000000000_abcd1234.jpg' }]), 'proof phải là mảng') === true, 'proof trùng URL trong mảng ⇒ từ chối (khớp TS)')
+ok(await raises(record(db, '2026-10-05', U.A, tA0.id, 'ORDERED', 'x', null, [{ url: PB + tA0.id + '/1700000000000_abcd1234.jpg' }, { url: PB + tA0.id + '/1700000000000_abcd1234.jpg' }]), 'proof phải là mảng') === true, 'proof trùng URL trong mảng ⇒ từ chối (khớp TS)')
 // B4: chống ghi trùng khi retry — cùng người/task/kết quả/ghi chú/ngày hẹn trong 2 phút.
 {
   const tD = await taskOf(db, (await one(db, `SELECT c.external_id FROM public.care_tasks t JOIN public.care_customers c ON c.id = t.customer_id WHERE t.assignee_id = $1 AND t.status = 'open' AND t.id <> $2 ORDER BY t.id LIMIT 1`, [U.A, tA0.id])).external_id, P10)
@@ -425,7 +432,7 @@ ok(await raises(db.query(`DELETE FROM public.care_tasks WHERE id = $1`, [tA0.id]
 {
   const tA1 = await taskOf(db, custA[1], P10)
   await db.query(`INSERT INTO public.care_reconcile_queue (customer_id, from_ts) VALUES ($1, '2026-01-01T00:00:00Z')`, [tA1.customer_id])
-  await record(db, '2026-10-05', U.A, tA1.id, 'NO_NEED')
+  await record(db, '2026-10-05', U.A, tA1.id, 'ORDERED')
   const q = await one(db, `SELECT from_ts FROM public.care_reconcile_queue WHERE customer_id = $1`, [tA1.customer_id])
   ok(q.from_ts.toISOString() === '2026-01-01T00:00:00.000Z', 'queue gộp giữ MIN(from_ts)')
 }
@@ -702,7 +709,7 @@ section('BÁO CÁO = đếm qua session client; không nhân đôi; loại is_te
   await db.query(`INSERT INTO public.care_order_attributions (order_key, interaction_id, task_id, customer_id, assignee_id, store_id, period_month, is_test) VALUES
     ('QA-O1', $1, $2, $3, $4, $5, $6, false), ('QA-O2', $1, $2, $3, $4, $5, $6, false)`, [iH, tH.id, tH.customer_id, U.B, storeId(1), PC])
   await setUid(db, U.A)
-  const iT = (await db.query(`SELECT public.care__record_interaction_at($1, $2, 'NO_NEED', 'test', NULL, NULL) r`, [TODAY, tT1.id])).rows[0].r.interaction_id
+  const iT = (await db.query(`SELECT public.care__record_interaction_at($1, $2, 'ORDERED', 'test', NULL, NULL) r`, [TODAY, tT1.id])).rows[0].r.interaction_id
   await setUid(db, null)
   await db.query(`INSERT INTO public.care_order_attributions (order_key, interaction_id, task_id, customer_id, assignee_id, store_id, period_month, is_test) VALUES ('QA-O3', $1, $2, $3, $4, $5, $6, true)`, [iT, tT1.id, tT1.customer_id, U.A, storeId(1), PC])
   ok(tB1, 'fixture báo cáo sẵn sàng')
@@ -806,7 +813,7 @@ db = await freshDb()
   const v17b = verbatim('--    SELECT t.store_id, t.assignee_id, u.store_id AS user_store', 'GROUP BY 1, 2, 3;')
   const a17 = v17a && (await db.query(v17a)).rows[0]
   ok(a17 && a17.rpc_q82 === true && a17.policy_q82 === true && Number(a17.n_fn) === (V116 ? 78 : V115 ? 51 : 41) && a17.anon_x === false && a17.auth_x === true && a17.svc_x === true,
-     `VERIFY 17 (nguyên văn): đúng bản r1.1 — t, t, ${V116 ? '[116] 78' : V115 ? '[115] 51' : '41'}, f, t, t`, JSON.stringify(a17))
+     `VERIFY 17 (nguyên văn, DB mới dựng tới 116): đúng bản r1.1 — t, t, ${V116 ? '[116] 78' : V115 ? '[115] 51' : '41'}, f, t, t`, JSON.stringify(a17))
   const b17 = v17b ? (await db.query(v17b)).rows : null
   ok(b17 && b17.length === 1 && b17[0].assignee_id === U.A && b17[0].user_store === storeId(2) && Number(b17[0].count) === 3,
      'VERIFY 17 giám sát (nguyên văn) bắt đúng 3 task mở của A lệch store', JSON.stringify(b17))
